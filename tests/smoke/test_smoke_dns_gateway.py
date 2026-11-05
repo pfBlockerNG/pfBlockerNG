@@ -2371,19 +2371,24 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
                 answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
                 _say(f"VIP-only managed {transport} at {vips[0]}:{port}\n{raw}")
                 assert h.is_vip(answer), f"VIP-only {transport} failed: {answer}\n{raw}"
-        status = gui.get("/pfblockerng/pfblockerng_dns.php?refresh_ddr=1")
+        status = gui.get("/pfblockerng/pfblockerng_dns.php")
         assert status.status_code == 200, status.text
-        observations = [
-            _parse_reply(ET.fromstring(block).text or "")
-            for block in re.findall(r'<pre class="pfb-dns-ddr-stdout"[^>]*>.*?</pre>', status.text, re.DOTALL)
-        ]
-        for observation in observations:
-            _say(f"VIP-only DDR status observation:\n{observation.raw}")
+        from .ui.test_sync_status_panels import panel
+
+        section = panel(status.text, "pfb-dns-status-ddr")
+        assert section is not None, status.text
+        table = re.search(r"<table\b.*?</table>", section, re.DOTALL)
+        assert table, section
+        observations = {row.attrib["data-address"]: row for row in ET.fromstring(table.group()).findall("./tbody/tr")}
+        assert "<pre" not in section and "Refresh DDR advertisements" not in section, section
         for vip in vips:
-            expected = _expected_svcb(DDR_TARGET, doh_443=True, address=vip)
-            assert any(reply.rcode == "NOERROR" and _svcb_records(reply) == expected for reply in observations), (
-                f"DDR status did not observe managed VIP {vip}: {[_svcb_records(reply) for reply in observations]}"
-            )
+            endpoint = f"[{vip}]:53" if ":" in vip else f"{vip}:53"
+            row = observations.get(endpoint)
+            assert row is not None, f"DDR status omitted {endpoint}: {observations}"
+            _say(f"VIP-only DDR status {endpoint}: {ET.tostring(row, encoding='unicode')}")
+            assert row.attrib["data-state"] == "matched", ET.tostring(row, encoding="unicode")
+            name = "".join(row.findall("td")[2].itertext())
+            assert name.rstrip(".").lower() == DDR_TARGET.rstrip(".").lower(), name
     finally:
         gui.post(
             DNS_GENERAL_PAGE,

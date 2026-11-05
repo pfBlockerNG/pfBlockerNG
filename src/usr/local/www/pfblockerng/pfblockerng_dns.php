@@ -27,6 +27,19 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
+if (($_GET['ajax'] ?? '') === 'ddr') {
+	header('Cache-Control: no-store');
+	if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+		header('Allow: GET');
+		http_response_code(405);
+		exit;
+	}
+	session_write_close();
+	header('Content-Type: application/json');
+	echo json_encode(['html' => pfb_dns_ddr_status_panel(pfb_dns_ddr_status())]);
+	exit;
+}
+
 // issue #3538: the first load takes pfB-DNS's listener settings from the Resolver once, so a box that is already moved has
 // them without a save. A lock that stays taken skips the write: the form still shows the pending seed values.
 if (pfb_dns_proxy_seed_values() !== []) {
@@ -438,8 +451,67 @@ $form->add($section);
 
 print ($form);
 $status = pfb_dns_status();
-$status['ddr'] = pfb_dns_ddr_status(isset($_GET['refresh_ddr']) && $_GET['refresh_ddr'] === '1');
+$status['ddr'] = pfb_dns_ddr_status();
 print pfb_dns_status_panel($status);
 
 include('foot.inc');
 ?>
+<script>
+events.push(function() {
+	const body = document.getElementById('pfb-dns-status-ddr_panel-body');
+	if (!body) {
+		return;
+	}
+	let request = null;
+	let stopped = false;
+	async function refresh() {
+		if (request || stopped) {
+			return;
+		}
+		request = new AbortController();
+		const timeout = setTimeout(function() { request.abort(); }, 15000);
+		try {
+			const response = await fetch('pfblockerng_dns.php?ajax=ddr', {
+				cache: 'no-store',
+				credentials: 'same-origin',
+				signal: request.signal
+			});
+			if (!response.ok || response.redirected ||
+			    !(response.headers.get('Content-Type') || '').includes('application/json')) {
+				throw new Error('Invalid DDR response');
+			}
+			const result = await response.json();
+			if (!result || typeof result.html !== 'string') {
+				throw new Error('Invalid DDR panel');
+			}
+			const document = new DOMParser().parseFromString(result.html, 'text/html');
+			const panels = document.querySelectorAll('#pfb-dns-status-ddr > #pfb-dns-status-ddr_panel-body');
+			if (panels.length !== 1) {
+				throw new Error('Missing DDR panel');
+			}
+			if (!stopped) {
+				body.replaceChildren(...panels[0].childNodes);
+			}
+		} catch (error) {
+			if (!stopped) {
+				const message = window.document.createElement('p');
+				message.className = 'text-danger';
+				message.setAttribute('role', 'status');
+				message.textContent = 'DDR results unavailable. Automatic refresh failed.';
+				body.replaceChildren(message);
+			}
+		} finally {
+			clearTimeout(timeout);
+			request = null;
+		}
+	}
+	const timer = setInterval(refresh, 30000);
+	window.addEventListener('pagehide', function() {
+		stopped = true;
+		clearInterval(timer);
+		if (request) {
+			request.abort();
+		}
+	});
+});
+</script>

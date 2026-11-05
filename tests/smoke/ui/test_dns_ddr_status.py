@@ -1,9 +1,10 @@
-"""Live DDR status observations: reachable render, read-only refresh and browser layout."""
+"""Live DDR page checks: automatic semantic results, read-only polling and preserved form state."""
 
 from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import re
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
@@ -12,10 +13,12 @@ import pytest
 
 from .. import helpers
 from ..test_smoke_dns_gateway import (
+    DDR_DNS_NAME,
     DDR_TARGET,
     _ensure_ddr,
     _expected_svcb,
     _parse_reply,
+    _set_lists,
     _svcb_records,
 )
 from ..test_smoke_dns_gateway import (
@@ -31,9 +34,18 @@ from ..test_smoke_dns_gateway import (
     probe_binary as probe_binary,
 )
 from .test_browser_feeds import JS_TIMEOUT_MS, _open
+from .test_dns_ddr_refresh_client import (
+    test_ddr_ajax_dispatch_exits_before_seeding_and_releases_session as _check_dispatch,
+)
+from .test_dns_ddr_refresh_client import (
+    test_periodic_ddr_refresh_replaces_only_results_and_recovers as _check_refresh,
+)
 from .test_sync_status_panels import panel
+from .webui import looks_like_login_page
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from playwright.sync_api import Page
 
     from ..test_smoke_dns_gateway import Gateway
@@ -44,10 +56,24 @@ DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
 PANEL_ID = "pfb-dns-status-ddr"
 
 
-def _records(output: str) -> list[str]:
-    """Compare decoded answer records, not changing DNS IDs and query timestamps."""
-    section = output.partition(";; ANSWER SECTION:")[2].partition(";; AUTHORITY SECTION:")[0]
-    return sorted(" ".join(line.split()) for line in section.splitlines() if line and not line.startswith(";"))
+@pytest.mark.ui_browser
+@pytest.mark.parametrize("failure", ["timeout", "http", "redirect", "json", "missing", "duplicate"])
+def test_dns_ddr_refresh_failure_recovery(failure: str) -> None:
+    _check_refresh(failure)
+
+
+@pytest.mark.ui_render
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_dns_ddr_read_only_dispatch(method: str) -> None:
+    _check_dispatch(method)
+
+
+@pytest.mark.ui_render
+def test_dns_ddr_ajax_requires_the_web_session(webui: WebUI) -> None:
+    response = webui.get_unauthenticated(DNS_PAGE + "?ajax=ddr")
+    assert looks_like_login_page(response.text), response.text
+    assert "application/json" not in response.headers.get("Content-Type", ""), response.headers
+    assert "data-address=" not in response.text, response.text
 
 
 def _config_digest(vm: helpers.SmokeVM) -> str:
@@ -56,45 +82,60 @@ def _config_digest(vm: helpers.SmokeVM) -> str:
     return hashlib.sha256(result.stdout.encode()).hexdigest()
 
 
+def _status_rows(html: str) -> dict[str, ET.Element]:
+    section = panel(html, PANEL_ID)
+    assert section is not None, "pfB-DNS has no DDR Advertisements section"
+    assert "refresh_ddr" not in section and "Refresh DDR advertisements" not in section, section
+    assert "<pre" not in section and "STDOUT" not in section and "STDERR" not in section, section
+    assert re.search(r"Checked: \d{4}-\d{2}-\d{2}", section), section
+    table = re.search(r"<table\b.*?</table>", section, re.DOTALL)
+    assert table, section
+    root = ET.fromstring(table.group())
+    assert [cell.text for cell in root.findall("./thead/tr/th")] == ["Interface", "Address", "DNS Name", "State"]
+    rows = root.findall("./tbody/tr")
+    result = {row.attrib["data-address"]: row for row in rows}
+    assert len(result) == len(rows), f"duplicate addresses: {section}"
+    for row in rows:
+        state = row.findall("td")[3]
+        icon = state.find(".//i")
+        spoken = state.find(".//span[@class='sr-only']")
+        assert icon is not None and icon.attrib.get("title"), ET.tostring(row, encoding="unicode")
+        assert spoken is not None and spoken.text, ET.tostring(row, encoding="unicode")
+        assert ("text-success" in " ".join(node.attrib.get("class", "") for node in state.iter())) == (
+            row.attrib["data-state"] == "matched"
+        ), ET.tostring(row, encoding="unicode")
+    return result
+
+
 @pytest.mark.ui_render
-def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_config(
+def test_dns_ddr_page_load_checks_each_actual_listener_without_writing_config(
     gw: Gateway, gateway_on: State, webui: WebUI
 ) -> None:
-    """Each returned observation equals a real local-source drill query at that bound port."""
+    """Load/reload and AJAX agree with independent directed SVCB observations, without a refresh control."""
     _ensure_ddr(gw, on=True)
     before = _config_digest(gw.vm)
     initial = webui.get(DNS_PAGE)
     assert initial.status_code == 200, initial.text
-    section = panel(initial.text, PANEL_ID)
-    assert section is not None, "pfB-DNS has no DDR Advertisements section"
-    assert "Not yet queried" in section and "pfb-dns-ddr-stdout" not in section, section
-    assert "Refresh DDR advertisements" in section, section
-
+    rows = _status_rows(initial.text)
     listeners = helpers.php_eval(
         gw.vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');echo json_encode(pfb_dns_proxy_listener_list());",
     )
     assert listeners.returncode == 0, listeners.stderr
-    import json
-
     match = re.search(r'\{"listening":.*\}', listeners.stdout)
     assert match, listeners.stdout
     bound = json.loads(match.group())["listening"]["udp+tcp"]
-    assert bound, listeners.stdout
-    expected = {}
+    assert bound and set(rows) == set(bound), f"bound: {bound}; page: {rows}"
     loopback = gw.vm.ssh("/sbin/ifconfig", "lo0")
     assert loopback.returncode == 0, loopback.stderr
     loopback6 = {
         str(ipaddress.ip_address(address.split("%", 1)[0]))
         for address in re.findall(r"\binet6\s+(\S+)", loopback.stdout)
     }
-    expected_rcodes = {}
-    for listener in bound:
+    for listener, row in rows.items():
         host, _, port = listener.rpartition(":")
         host = str(ipaddress.ip_address(host.strip("[]")))
-        assert 1 <= int(port) <= 65535, listener
-        ipv6 = ":" in host
-        source = ("::1" if host in loopback6 else None) if ipv6 else "127.0.0.1"
+        source = ("::1" if host in loopback6 else None) if ":" in host else "127.0.0.1"
         arguments = [
             "/usr/bin/timeout",
             "-s",
@@ -103,7 +144,7 @@ def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_con
             "3",
             "/usr/bin/drill",
             "-b1232",
-            *(["-6"] if ipv6 else []),
+            *(["-6"] if ":" in host else []),
             *(["-I", source] if source is not None else []),
             "-p",
             port,
@@ -116,79 +157,114 @@ def test_dns_ddr_status_refresh_reports_each_actual_listener_without_writing_con
         assert result.returncode == 0, f"{listener}: {result.stdout}\n{result.stderr}"
         reply = _parse_reply(result.stdout)
         assert reply.rcode in {"NOERROR", "REFUSED"}, result.stdout
-        assert re.search(r"^;;\s*_dns\.resolver\.arpa\.\s+IN\s+SVCB\s*$", result.stdout, re.MULTILINE), result.stdout
-        expected[listener] = _records(result.stdout)
-        expected_rcodes[listener] = reply.rcode
-        if host in {"127.0.0.1", "::1"}:
-            assert reply.rcode == "NOERROR" and _svcb_records(reply) == _expected_svcb(
-                DDR_TARGET, doh_443=False, address=host
-            ), result.stdout
-
-    refreshed = webui.get(DNS_PAGE + "?refresh_ddr=1&host=203.0.113.99&port=9")
-    assert refreshed.status_code == 200, refreshed.text
-    section = panel(refreshed.text, PANEL_ID)
-    assert section is not None, "refresh lost the DDR section"
-    assert re.search(r"Queried: \d{4}-\d{2}-\d{2}", section), section
-    table = re.search(r"<table\b.*?</table>", section, re.DOTALL)
-    assert table, section
-    observations = {}
-    for row in ET.fromstring(table.group()).findall("./tbody/tr"):
         cells = row.findall("td")
-        address = cells[2].text or ""
-        stdout = cells[3].find(".//pre[@class='pfb-dns-ddr-stdout']")
-        assert stdout is not None, f"{address}: query output absent: {ET.tostring(row, encoding='unicode')}"
-        observations[address] = _records(stdout.text or "")
-        assert re.search(r"^;;\s*_dns\.resolver\.arpa\.\s+IN\s+SVCB\s*$", stdout.text or "", re.MULTILINE), stdout.text
-        print(f"DDR observed {address}:\n{stdout.text}")
-        assert _parse_reply(stdout.text or "").rcode == expected_rcodes[address], stdout.text
-        state = cells[3].find("strong")
-        expected_state = (
-            "Query error"
-            if expected_rcodes[address] == "REFUSED"
-            else ("Advertised" if expected[address] else "NOERROR, no advertisements")
-        )
-        assert state is not None and state.text == expected_state, ET.tostring(row, encoding="unicode")
-    assert observations == expected, f"bound targets {expected!r}; UI observations {observations!r}"
-    assert _config_digest(gw.vm) == before, "read-only DDR refresh changed config.xml"
-    assert "203.0.113.99" not in observations, observations
-    assert "does not prove" in section and "protocol default" in section, section
+        assert "".join(cells[1].itertext()) == listener, ET.tostring(row, encoding="unicode")
+        assert "".join(cells[2].itertext()).rstrip(".").lower() == DDR_TARGET.rstrip(".").lower()
+        state = row.attrib["data-state"]
+        if reply.rcode == "REFUSED":
+            assert state == "error", ET.tostring(row, encoding="unicode")
+        else:
+            assert _svcb_records(reply) == _expected_svcb(DDR_TARGET, doh_443=False, address=host), reply.raw
+            assert state in ({"matched", "unverified"} if host in {"127.0.0.1", "::1"} else {"matched"}), ET.tostring(
+                row, encoding="unicode"
+            )
+    reloaded = webui.get(DNS_PAGE)
+    assert reloaded.status_code == 200, reloaded.text
+    assert set(_status_rows(reloaded.text)) == set(rows)
+    refreshed = webui.get(DNS_PAGE + "?ajax=ddr&host=203.0.113.99&port=9")
+    assert refreshed.status_code == 200, refreshed.text
+    assert "no-store" in refreshed.headers.get("Cache-Control", ""), refreshed.headers
+    assert set(_status_rows(refreshed.json()["html"])) == set(rows)
+    assert _config_digest(gw.vm) == before, "read-only DDR checks changed config.xml"
+
+
+@pytest.mark.ui_render
+def test_dns_ddr_disabled_is_not_a_successful_match(gw: Gateway, gateway_on: State, webui: WebUI) -> None:
+    _ensure_ddr(gw, on=True)
+    assert any(row.attrib["data-state"] == "matched" for row in _status_rows(webui.get(DNS_PAGE).text).values())
+    try:
+        _ensure_ddr(gw, on=False)
+        rows = _status_rows(webui.get(DNS_PAGE).text)
+        assert rows and all(row.attrib["data-state"] == "off" for row in rows.values()), rows
+    finally:
+        _ensure_ddr(gw, on=True)
+
+
+@pytest.mark.ui_render
+def test_dns_ddr_stale_dns_name_is_a_mismatch(gw: Gateway, gateway_on: State, webui: WebUI) -> None:
+    """A valid advertisement for the old name must not bless the current configured name."""
+    _ensure_ddr(gw, on=True)
+    baseline = _status_rows(webui.get(DNS_PAGE).text)
+    verified = {address for address, row in baseline.items() if row.attrib["data-state"] == "matched"}
+    assert verified, baseline
+    replacement = helpers.unique_domain("ddr-stale")
+    try:
+        _set_lists(gw.vm, {"pfb_dns_name": replacement})
+        before = _config_digest(gw.vm)
+        rows = _status_rows(webui.get(DNS_PAGE).text)
+        assert set(rows) == set(baseline), rows
+        assert all(rows[address].attrib["data-state"] == "mismatch" for address in verified), rows
+        assert all(row.attrib["data-state"] != "matched" for row in rows.values()), rows
+        assert _config_digest(gw.vm) == before, "DDR mismatch check changed config.xml"
+    finally:
+        _set_lists(gw.vm, {"pfb_dns_name": DDR_DNS_NAME})
 
 
 @pytest.mark.ui_browser
-def test_dns_ddr_status_section_collapses_refreshes_and_scrolls_on_a_phone(
+def test_dns_ddr_checks_automatically_after_saving(
     gw: Gateway, gateway_on: State, browser_page: Page, webui: WebUI
 ) -> None:
-    """The real control refreshes the page and a complete decoded answer stays inside its panel."""
     _ensure_ddr(gw, on=True)
     page = browser_page
-    page.set_viewport_size({"width": 390, "height": 844})
+    _open(page, webui, DNS_PAGE)
+    assert any(row.attrib["data-state"] == "matched" for row in _status_rows(page.content()).values())
+    with page.expect_navigation(wait_until="domcontentloaded"):
+        page.get_by_role("button", name="Save", exact=True).click()
+    assert page.locator(".input-errors").count() == 0, page.locator("body").inner_text()
+    assert any(row.attrib["data-state"] == "matched" for row in _status_rows(page.content()).values())
+
+
+@pytest.mark.ui_browser
+@pytest.mark.parametrize("width", [320, 768, 1024, 1440])
+def test_dns_ddr_timer_preserves_unsaved_form_and_collapse(
+    gw: Gateway, gateway_on: State, browser_page: Page, webui: WebUI, width: int, screenshot_dir: Path
+) -> None:
+    """An automatic real request changes only panel children, including while collapsed, at every supported width."""
+    _ensure_ddr(gw, on=True)
+    page = browser_page
+    page.set_viewport_size({"width": width, "height": 900})
+    page.clock.install()
     _open(page, webui, DNS_PAGE)
     section = page.locator(f"#{PANEL_ID}")
-    assert section.count() == 1, "pfB-DNS has no DDR Advertisements section"
     body = section.locator(f"#{PANEL_ID}_panel-body")
+    assert section.locator("pre, #pfb-dns-ddr-refresh").count() == 0
+    assert section.locator("tr[data-address]").count() > 0
+    for icon in section.locator("td i").all():
+        assert icon.get_attribute("title"), icon.evaluate("el => el.outerHTML")
+        assert icon.locator("..").locator(".sr-only").inner_text()
+    before = _config_digest(gw.vm)
+    page.locator("#pfb_dns_name").fill("unsaved-ddr-name.com")
+    page.evaluate("window.ddrBody = document.getElementById('pfb-dns-status-ddr_panel-body')")
+    body.evaluate("el => el.insertAdjacentHTML('beforeend', '<span id=\"ddr-before-refresh\"></span>')")
     toggle = section.get_by_role("link", name="Toggle DDR Advertisements", exact=True)
     toggle.click()
     body.wait_for(state="hidden", timeout=JS_TIMEOUT_MS)
+    with page.expect_response(lambda response: "ajax=ddr" in response.url, timeout=30000) as refreshed:
+        page.clock.run_for(30000)
+    assert refreshed.value.status == 200, refreshed.value.text()
+    page.locator("#ddr-before-refresh").wait_for(state="detached", timeout=JS_TIMEOUT_MS)
+    assert page.locator("#pfb_dns_name").input_value() == "unsaved-ddr-name.com"
+    assert page.evaluate("window.ddrBody === document.getElementById('pfb-dns-status-ddr_panel-body')")
+    assert not body.is_visible(), "refresh expanded the collapsed panel"
     toggle.click()
     body.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
-    assert "Not yet queried" in body.inner_text(), body.inner_text()
-    before = _config_digest(gw.vm)
-    with page.expect_navigation(wait_until="domcontentloaded"):
-        section.get_by_role("link", name="Refresh DDR advertisements", exact=True).click()
-    section = page.locator(f"#{PANEL_ID}")
-    assert "Queried:" in section.inner_text(), section.inner_text()
-    raw = section.locator("pre.pfb-dns-ddr-stdout")
-    assert raw.count() > 0 and "rcode: NOERROR" in raw.first.inner_text(), section.inner_text()
-    assert _config_digest(gw.vm) == before, "browser refresh changed config.xml"
     dimensions = section.evaluate(
         "el => ({right: el.getBoundingClientRect().right, width: innerWidth, "
         "page: document.documentElement.scrollWidth, tables: [...el.querySelectorAll('.table-responsive')]"
-        ".map(n => getComputedStyle(n).overflowX), raw: [...el.querySelectorAll('pre')]"
-        ".map(n => ({overflow: getComputedStyle(n).overflowX, whiteSpace: getComputedStyle(n).whiteSpace}))})"
+        ".map(n => getComputedStyle(n).overflowX)})"
     )
     assert dimensions["right"] <= dimensions["width"], dimensions
     assert dimensions["page"] <= dimensions["width"], dimensions
     assert dimensions["tables"] and all(value in ("auto", "scroll") for value in dimensions["tables"]), dimensions
-    assert dimensions["raw"] and all(
-        value["overflow"] in ("auto", "scroll") and value["whiteSpace"] == "pre" for value in dimensions["raw"]
-    ), dimensions
+    assert _config_digest(gw.vm) == before, "browser refresh changed config.xml"
+    section.screenshot(path=str(screenshot_dir / f"pfb-dns-ddr-{width}.png"))

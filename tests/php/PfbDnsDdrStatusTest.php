@@ -6,141 +6,144 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-#[CoversFunction('pfb_dns_status_panel')]
 #[CoversFunction('pfb_dns_ddr_result')]
 #[CoversFunction('pfb_dns_ddr_probe')]
+#[CoversFunction('pfb_dns_ddr_status_panel')]
 final class PfbDnsDdrStatusTest extends TestCase
 {
-	private const ANSWERS = ";; ->>HEADER<<- opcode: QUERY, rcode: NOERROR, id: 29492\n"
-		. ";; flags: qr aa rd ra ; QUERY: 1, ANSWER: 3, AUTHORITY: 0, ADDITIONAL: 1\n"
-		. ";; QUESTION SECTION:\n;; _dns.resolver.arpa. IN SVCB\n"
-		. ";; ANSWER SECTION:\n"
-		. "_dns.resolver.arpa. 300 IN SVCB 1 dns.example.com. alpn=h2 port=4443 ipv4hint=192.0.2.53 dohpath=/dns-query{?dns}\n"
-		. "_dns.resolver.arpa. 300 IN SVCB 2 dns.example.com. alpn=dot ipv6hint=2001:db8::53\n"
-		. "_dns.resolver.arpa. 300 IN SVCB 3 dns.example.com. alpn=doq port=8853\n\n";
-
-	private function panel(array $ddr): DOMXPath
+	public static function response(array $answers, string $name = '_dns.resolver.arpa.', string $type = 'SVCB', array $authority = [], array $additional = []): string
 	{
-		$document = new DOMDocument();
-		$this->assertTrue($document->loadXML('<root>' . pfb_dns_status_panel([
-			'service' => 'Running', 'mode' => 'On', 'transports' => NULL, 'ddr' => $ddr,
-		]) . '</root>'));
-		return new DOMXPath($document);
+		$out = ";; ->>HEADER<<- opcode: QUERY, rcode: NOERROR, id: 1\n;; flags: qr aa rd ra ; QUERY: 1, ANSWER: " . count($answers)
+			. ', AUTHORITY: ' . count($authority) . ', ADDITIONAL: ' . count($additional) . "\n;; QUESTION SECTION:\n;; {$name} IN {$type}\n";
+		foreach (['ANSWER' => $answers, 'AUTHORITY' => $authority, 'ADDITIONAL' => $additional] as $section => $records) {
+			$out .= ";; {$section} SECTION:\n" . implode("\n", $records) . "\n";
+		}
+		return $out;
 	}
 
-	public function testAdvertisementsRetainExactDrillRecordsAndEscapeLabelsAndBothOutputStreams(): void
+	public static function record(string $host = '192.0.2.1', string $alpn = 'dot', int $port = 853): string
 	{
-		$hostile = '<script>alert("DDR")</script> & \'label\'';
-		$panel = $this->panel(['notice' => '', 'queried' => '2026-11-04 21:37:22 UTC', 'rows' => [[
-			'interface' => $hostile, 'identity' => 'Managed Resolver VIP', 'address' => '192.0.2.53:53',
-			'state' => 'advertised', 'stdout' => self::ANSWERS, 'stderr' => $hostile,
-		]]]);
-		$section = "//div[@id='pfb-dns-status-ddr']";
-		$this->assertSame(1, $panel->query($section)->length, 'the pfB-DNS status surface includes DDR observations');
-		$this->assertSame('DDR Advertisements', $panel->evaluate("string({$section}/div/h2)"));
-		$this->assertSame($hostile, $panel->evaluate("string({$section}//tbody/tr/td[1])"));
-		$this->assertSame('Managed Resolver VIP', $panel->evaluate("string({$section}//tbody/tr/td[2])"));
-		$this->assertSame('192.0.2.53:53', $panel->evaluate("string({$section}//tbody/tr/td[3])"));
-		$this->assertSame('Advertised', $panel->evaluate("string({$section}//tbody/tr/td[4]/strong)"));
-		$this->assertSame(self::ANSWERS, $panel->evaluate("string({$section}//pre[@class='pfb-dns-ddr-stdout'])"));
-		$this->assertSame($hostile, $panel->evaluate("string({$section}//pre[@class='pfb-dns-ddr-stderr'])"));
-		$this->assertSame(0, $panel->query("{$section}//script")->length);
-		$text = $panel->evaluate("string({$section})");
-		$this->assertStringContainsString('2026-11-04 21:37:22 UTC', $text);
-		$this->assertStringContainsString('protocol default', $text);
-		$this->assertStringContainsString('does not prove', $text);
-		$this->assertStringNotContainsString('endpoint working', strtolower($text));
+		$priority = ['h2' => 1, 'dot' => 2, 'doq' => 3][$alpn];
+		$hint = str_contains($host, ':') ? 'ipv6hint' : 'ipv4hint';
+		return "_dns.resolver.arpa. 300 IN SVCB {$priority} DNS.Example.COM. alpn=\"{$alpn}\" port={$port} {$hint}={$host}"
+			. ($alpn === 'h2' ? ' dohpath="/dns-query{?dns}"' : '');
 	}
 
-	public function testRefreshIsReadOnlyAndThePanelAndRawOutputScrollInsideTheSection(): void
+	public function testDecodedResponsesAreStructuredWithoutRawStreams(): void
 	{
-		$panel = $this->panel(['notice' => '', 'queried' => NULL, 'rows' => [[
-			'interface' => 'LAN', 'identity' => 'Interface', 'address' => '[2001:db8::1]:5353',
-			'state' => 'not_queried', 'stdout' => '', 'stderr' => '',
-		]]]);
-		$section = "//div[@id='pfb-dns-status-ddr']";
-		$this->assertSame('Toggle DDR Advertisements', $panel->evaluate("string({$section}//a[@data-toggle='collapse']/@aria-label)"));
-		$this->assertSame('#pfb-dns-status-ddr_panel-body', $panel->evaluate("string({$section}//a[@data-toggle='collapse']/@href)"));
-		$this->assertSame('pfblockerng_dns.php?refresh_ddr=1#pfb-dns-status-ddr', $panel->evaluate("string({$section}//a[@id='pfb-dns-ddr-refresh']/@href)"));
-		$this->assertSame('Refresh DDR advertisements', $panel->evaluate("string({$section}//a[@id='pfb-dns-ddr-refresh'])"));
-		$this->assertSame(1, $panel->query("{$section}//div[@class='table-responsive']/table")->length);
-		$this->assertStringContainsString('Not yet queried', $panel->evaluate("string({$section})"));
-		$this->assertSame(0, $panel->query("{$section}//form | {$section}//input")->length, 'refresh submits no configuration');
+		$result = pfb_dns_ddr_result(self::response([self::record()]), 0);
+		$this->assertSame('ok', $result['state']);
+		$this->assertArrayNotHasKey('stdout', $result);
+		$this->assertArrayNotHasKey('stderr', $result);
+		$this->assertSame([['priority' => 2, 'target' => 'dns.example.com', 'alpn' => 'dot', 'port' => 853,
+			'hint' => '192.0.2.1', 'path' => '']], $result['answers']);
 	}
 
-	/** @return array<string,array{string,string}> */
-	public static function outcomes(): array
+	public static function badResponses(): array
 	{
-		return [
-			'no refresh' => ['not_queried', 'Not yet queried'],
-			'whole-request budget' => ['budget', 'Not queried: request deadline reached'],
-			'drill timeout' => ['timeout', 'Query timed out'],
-			'drill failure' => ['error', 'Query error'],
-			'empty response' => ['empty', 'NOERROR, no advertisements'],
-		];
+		$good = self::response([self::record()]);
+		$bad = [];
+		foreach (['REFUSED', 'NXDOMAIN', 'SERVFAIL'] as $rcode) {
+			$bad[$rcode] = [str_replace('rcode: NOERROR', "rcode: {$rcode}", $good)];
+		}
+		foreach ([
+			'wrong owner' => ['_dns.resolver.arpa. 300', 'other.example. 300'],
+			'wrong type' => ['IN SVCB 2', 'IN TXT 2'],
+			'wrong question' => [';; _dns.resolver.arpa. IN', ';; other.example. IN'],
+			'truncated' => ['qr aa rd ra', 'qr tc aa rd ra'],
+			'count mismatch' => ['ANSWER: 1', 'ANSWER: 2'],
+			'duplicate parameter' => ['port=853', 'port=853 port=853'],
+			'empty parameter' => ['alpn="dot"', 'alpn=""'],
+			'unknown parameter' => ['alpn="dot"', 'alpn="dot" key99=bad'],
+			'HTML name' => ['DNS.Example.COM.', '<script>.example.'],
+			'nonASCII name' => ['DNS.Example.COM.', 'dñs.example.'],
+			'invalid hint' => ['192.0.2.1', '999.0.0.1'],
+			'port overflow' => ['port=853', 'port=65536'],
+			'broken quotes' => ['alpn="dot"', 'alpn="dot'],
+			'shell token' => ['alpn="dot"', 'alpn=dot;touch'],
+		] as $label => [$from, $to]) {
+			$bad[$label] = [str_replace($from, $to, $good)];
+		}
+		$bad['missing header'] = [substr($good, strpos($good, ';; flags:'))];
+		$bad['missing question'] = [str_replace(";; QUESTION SECTION:\n;; _dns.resolver.arpa. IN SVCB\n", '', $good)];
+		$bad['oversized'] = [$good . str_repeat('x', 65537)];
+		$bad['answer in authority'] = [self::response([], authority: [self::record()])];
+		$bad['unrelated additional'] = [self::response([self::record()], additional: ['other.example. 300 IN A 192.0.2.1'])];
+		return $bad;
 	}
 
-	#[DataProvider('outcomes')]
-	public function testEachNonAdvertisementOutcomeIsExplicit(string $state, string $meaning): void
+	#[DataProvider('badResponses')]
+	public function testMalformedResponsesNeverBecomeSuccessful(string $response): void
 	{
-		$panel = $this->panel(['notice' => '', 'queried' => NULL, 'rows' => [[
-			'interface' => 'OPT1', 'identity' => 'Manual VIP: guest', 'address' => '[2001:db8::53]:5353',
-			'state' => $state, 'stdout' => '', 'stderr' => '',
-		]]]);
-		$this->assertSame($meaning, $panel->evaluate("string(//div[@id='pfb-dns-status-ddr']//tbody/tr/td[4]/strong)"));
-		$this->assertSame('Manual VIP: guest', $panel->evaluate("string(//div[@id='pfb-dns-status-ddr']//tbody/tr/td[2])"));
+		$this->assertSame('error', pfb_dns_ddr_result($response, 0)['state']);
 	}
 
-	/** @return array<string,array{string,string,int,string}> */
-	public static function responses(): array
+	public function testWhitespaceAndDefaultPortsNormalizeSemantically(): void
 	{
-		return [
-			'actual advertisements' => [self::ANSWERS, '', 0, 'advertised'],
-			'NOERROR with no advertisements' => [";; ->>HEADER<<- opcode: QUERY, rcode: NOERROR, id: 1\n;; flags: qr ; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0\n;; QUESTION SECTION:\n;; _dns.resolver.arpa. IN SVCB\n", '', 0, 'empty'],
-			'refused is not empty' => [";; ->>HEADER<<- opcode: QUERY, rcode: REFUSED, id: 1\n;; flags: qr ; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0\n", '', 0, 'error'],
-			'NXDOMAIN is not empty' => [";; ->>HEADER<<- opcode: QUERY, rcode: NXDOMAIN, id: 1\n;; flags: qr ; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0\n", '', 0, 'error'],
-			'incomplete header is not success' => [';; ANSWER: 3', '', 0, 'error'],
-			'no header is not empty' => ['', '', 0, 'error'],
-			'process failed despite stdout' => [self::ANSWERS, 'socket failed\n', 1, 'error'],
-			'deadline' => ['', 'partial stderr\n', 124, 'timeout'],
-			'kill grace' => ['partial stdout\n', '', 137, 'timeout'],
-		];
+		$record = str_replace(' ', "\t  ", str_replace(' port=853', '', self::record()));
+		$result = pfb_dns_ddr_result(self::response([$record]), 0);
+		$this->assertSame('ok', $result['state']);
+		$this->assertSame(853, $result['answers'][0]['port']);
 	}
 
-	#[DataProvider('responses')]
-	public function testOnlySuccessfulNoerrorResponsesAreAdvertisementsOrEmpty(string $stdout, string $stderr, int $exit, string $state): void
+	public function testFailuresAndTimeoutsNeverExposeOutput(): void
 	{
-		$this->assertTrue(function_exists('pfb_dns_ddr_result'), 'DDR query results must distinguish advertisements, empty, errors and timeouts');
-		$result = pfb_dns_ddr_result($stdout, $stderr, $exit);
-		$this->assertSame($state, $result['state']);
-		$this->assertSame($stdout, $result['stdout'], 'complete stdout remains available for display');
-		$this->assertSame($stderr, $result['stderr'], 'complete stderr remains available for display');
+		foreach ([1 => 'error', 124 => 'timeout', 137 => 'timeout'] as $exit => $state) {
+			$result = pfb_dns_ddr_result(self::response([self::record()]), $exit);
+			$this->assertSame($state, $result['state']);
+			$this->assertArrayNotHasKey('stdout', $result);
+			$this->assertArrayNotHasKey('stderr', $result);
+		}
 	}
 
-	/** @return array<string,array{string}> */
 	public static function hostileListeners(): array
 	{
-		return [
-			'shell metacharacters' => ['127.0.0.1:53; touch /tmp/ddr'],
-			'host name' => ['dns.example.com:53'],
-			'zero port' => ['127.0.0.1:0'],
-			'oversized port' => ['127.0.0.1:65536'],
-			'noncanonical port' => ['127.0.0.1:053'],
-			'IPv6 without brackets' => ['::1:53'],
-			'IPv6 zone' => ['[fe80::1%em0]:53'],
-			'noncanonical IPv6' => ['[2001:0db8::1]:53'],
-			'mapped IPv6' => ['[::ffff:192.0.2.1]:53'],
-			'empty' => [''],
-		];
+		return array_map(static fn (string $at): array => [$at], ['127.0.0.1:53; touch /tmp/ddr', 'dns.example.com:53', '127.0.0.1:0',
+			'127.0.0.1:65536', '127.0.0.1:053', '127.0.0.1:', '::1:53', '[fe80::1%em0]:53', '[2001:0db8::1]:53', '[::ffff:192.0.2.1]:53', '']);
 	}
 
 	#[DataProvider('hostileListeners')]
 	public function testInvalidListenersCannotBecomeProbeTargets(string $listener): void
 	{
-		$this->assertTrue(function_exists('pfb_dns_ddr_probe'), 'DDR probes validate current listener addresses before launching drill');
 		$result = pfb_dns_ddr_probe($listener, 2.0);
 		$this->assertSame('error', $result['state']);
-		$this->assertSame('', $result['stdout']);
-		$this->assertStringContainsString('Invalid bound listener', $result['stderr']);
+		$this->assertStringContainsString('Invalid bound listener', $result['reason']);
+		$this->assertArrayNotHasKey('stdout', $result);
+	}
+
+	public function testAccessibleHouseTableEscapesAllValuesAndHasNoManualOrRawControl(): void
+	{
+		$hostile = '<script>" & label</script>';
+		$rows = [];
+		foreach (['matched', 'mismatch', 'error', 'timeout', 'budget', 'off', 'no_transport', 'unverified', 'unexpected'] as $state) {
+			$rows[] = ['interface' => $hostile, 'identity' => 'Interface', 'address' => '192.0.2.1:53', 'name' => $hostile,
+				'state' => $state, 'reason' => $hostile];
+		}
+		$doc = new DOMDocument();
+		$this->assertTrue($doc->loadXML('<root>' . pfb_dns_ddr_status_panel(['notice' => $hostile, 'queried' => 'now', 'rows' => $rows]) . '</root>'));
+		$xpath = new DOMXPath($doc);
+		$this->assertSame(0, $xpath->query('//script | //pre | //form | //a[@id="pfb-dns-ddr-refresh"]')->length);
+		$this->assertSame(9, $xpath->query('//tr[@data-address="192.0.2.1:53"]')->length);
+		$this->assertSame(1, $xpath->query('//i[contains(@class,"text-success")]')->length);
+		$this->assertSame(8, $xpath->query('//i[contains(@class,"text-danger")]')->length);
+		$this->assertSame(9, $xpath->query('//span[@class="sr-only"]')->length);
+		$this->assertSame($hostile, $xpath->evaluate('string(//tbody/tr/td[1])'));
+		$this->assertSame($hostile, $xpath->evaluate('string(//tbody/tr/td[3])'));
+		$this->assertSame(1, $xpath->query('//div[@class="table-responsive"]/table')->length);
+		$this->assertSame('#pfb-dns-status-ddr_panel-body', $xpath->evaluate('string(//a[@data-toggle="collapse"]/@href)'));
+	}
+
+	public function testSuccessfulRowsShowOnlyAnIconWithAccessibleDetails(): void
+	{
+		$reason = 'SVCB matched; name resolution not checked (no owned address mapping)';
+		$doc = new DOMDocument();
+		$doc->loadXML('<root>' . pfb_dns_ddr_status_panel(['notice' => '', 'queried' => NULL, 'rows' => [[
+			'interface' => 'Localhost', 'identity' => 'Interface', 'address' => '127.0.0.1:53',
+			'name' => 'dns.example.com', 'state' => 'matched', 'reason' => $reason,
+		]]]) . '</root>');
+		$xpath = new DOMXPath($doc);
+		$this->assertSame('', trim($xpath->evaluate('string(//tbody/tr/td[4]/text())')), 'Successful rows must not repeat prose');
+		$this->assertStringContainsString($reason, $xpath->evaluate('string(//tbody/tr/td[4]/i/@title)'));
+		$this->assertStringContainsString($reason, $xpath->evaluate('string(//tbody/tr/td[4]/span[@class="sr-only"])'));
 	}
 }
