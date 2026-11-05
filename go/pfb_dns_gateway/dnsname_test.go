@@ -54,8 +54,8 @@ var screenPaths = []struct {
 	plain, udp bool
 }{{"plain UDP", true, true}, {"plain TCP", true, false}, {"an encrypted transport", false, false}}
 
-// N5-N10: given a table entry, the answer is that entry's address of the family asked; an entry without it, and an address
-// with no entry, are the decider's.
+// N5-N10: a table entry answers its address of the family asked, or local NODATA when that family is absent.
+// An address with no entry remains the decider's.
 func TestNameAnswerIsTheEntryOfTheAddressTheQueryReachedInTheFamilyAsked(t *testing.T) {
 	r := newNameRig(t, mustNames(t, "fw.example.lan",
 		"10.0.0.1=10.0.0.1,2001:db8:1::1", // a LAN interface: its own two addresses
@@ -74,7 +74,6 @@ func TestNameAnswerIsTheEntryOfTheAddressTheQueryReachedInTheFamilyAsked(t *test
 		{"AAAA on the LAN IPv6 is the LAN's IPv6", "2001:db8:1::1", dnsmessage.TypeAAAA, "2001:db8:1::1"},
 		{"N8 A on the IPv4 VIP is the VIP", "10.0.0.53", dnsmessage.TypeA, "10.0.0.53"},
 		{"N9 AAAA on the IPv4 VIP is the IPv6 VIP", "10.0.0.53", dnsmessage.TypeAAAA, "2001:db8:53::53"},
-		{"N9 AAAA on a VIP with no IPv6 partner is the decider's", "10.0.0.54", dnsmessage.TypeAAAA, ""},
 		{"A on that same VIP is the VIP", "10.0.0.54", dnsmessage.TypeA, "10.0.0.54"},
 		{"N10 an address with no entry", "10.9.9.9", dnsmessage.TypeA, ""},
 		{"N10 an IPv6 address with no entry", "2001:db8:9::9", dnsmessage.TypeAAAA, ""},

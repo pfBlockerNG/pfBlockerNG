@@ -108,7 +108,7 @@ final class DnsVipOnlyModeTest extends TestCase
 		$this->vips([6]);
 		$this->assertSame([self::VIP6 => [self::VIP6], '127.0.0.1' => [self::VIP6], '::1' => [self::VIP6]], pfb_dns_proxy_name_answers());
 		$this->vips([]);
-		$this->assertSame([], pfb_dns_proxy_name_answers(), 'missing VIPs never leak interface answers');
+		$this->assertSame(['127.0.0.1' => [], '::1' => []], pfb_dns_proxy_name_answers(), 'missing VIPs keep loopback ownership without interface answers');
 	}
 
 	public function testStoredModeIsDormantWhenPfbDnsIsDisabled(): void

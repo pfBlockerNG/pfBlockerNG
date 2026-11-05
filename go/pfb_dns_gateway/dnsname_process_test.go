@@ -64,10 +64,8 @@ func TestDNSNameGatewayProcessAnswersTheNameDesignatesItAndTakesANewTableLive(t 
 	}
 	gw.waitLine("address table: 1 name answers")
 	requireNameAnswer(t, a, udpQuery(t, plain, a), "gw.example.lan.", "198.51.100.9")
-	if got := udpQuery(t, plain, aaaa); !bytes.Equal(got, deciders(aaaa)) {
-		t.Fatalf("AAAA after a table with no IPv6: got %x, want the decider's echo %x", got, deciders(aaaa))
-	}
-	if got := push(tableLine("127.0.0.1=198.51.100.10") + "\n" + tableLine("127.0.0.2=")); !strings.HasPrefix(got, "error: ") {
+	requireNameNODATA(t, aaaa, udpQuery(t, plain, aaaa))
+	if got := push(tableLine("127.0.0.1=198.51.100.10") + "\n" + tableLine("127.0.0.2=bad")); !strings.HasPrefix(got, "error: ") {
 		t.Fatalf("a table with a bad line: reply %q, want an error", got)
 	}
 	requireNameAnswer(t, a, udpQuery(t, plain, a), "gw.example.lan.", "198.51.100.9")

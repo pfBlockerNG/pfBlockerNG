@@ -47,7 +47,7 @@ func TestConfigDNSNameFlagsAreParsedAndOffByDefault(t *testing.T) {
 }
 
 // goodNameValue is one LOCAL=ADDR[,ADDR] value and what a query for the name is answered when it reached `at` (A, AAAA); an
-// empty address is no answer of that family, the decider's.
+// empty address is local NODATA for that family.
 type goodNameValue struct{ value, at, a, aaaa string }
 
 var goodNameValues = map[string]goodNameValue{
@@ -72,9 +72,7 @@ func requireValueAnswers(t *testing.T, ask func(local string, wire []byte) []byt
 		query := nameQuery(t, nameFQDN, c.typ)
 		reply := ask(v.at, query)
 		if c.want == "" {
-			if reply != nil {
-				t.Fatalf("%s: %v on %s got the reply %x, want none", v.value, c.typ, v.at, reply)
-			}
+			requireNameNODATA(t, query, reply)
 		} else if reply == nil {
 			t.Fatalf("%s: %v on %s got no reply, want %s", v.value, c.typ, v.at, c.want)
 		} else {

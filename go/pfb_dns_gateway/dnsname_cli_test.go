@@ -13,7 +13,6 @@ import (
 // badNameValues are LOCAL=ADDR[,ADDR] values that are errors, wherever the syntax is read: the flag, and a line of the
 // address table verb.
 var badNameValues = map[string]string{
-	"no address":         "10.0.0.1=",
 	"no LOCAL":           "=1.2.3.4",
 	"no equals sign":     "10.0.0.1",
 	"empty":              "",
@@ -56,7 +55,7 @@ func TestConfigRejectsBadDNSNameUsage(t *testing.T) {
 		"name over 253 characters":                             {[]string{"--dns-name", strings.Repeat(strings.Repeat("a", 60)+".", 4) + "example.lan"}, `--dns-name "`},
 		"the same LOCAL twice":                                 {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", "10.0.0.1=10.0.0.1", "--dns-name-answer", "10.0.0.1=10.0.0.2"}, `--dns-name-answer "`},
 		"the same LOCAL twice, once IPv4-mapped":               {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", "::ffff:10.0.0.1=10.0.0.1", "--dns-name-answer", "10.0.0.1=10.0.0.2"}, `--dns-name-answer "`},
-		"a good answer then a bad one":                         {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", answer, "--dns-name-answer", "10.0.0.2="}, `--dns-name-answer "`},
+		"a good answer then a bad one":                         {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", answer, "--dns-name-answer", "10.0.0.2=bad"}, `--dns-name-answer "`},
 	}
 	for label, value := range badNameValues {
 		cases["answer value: "+label] = struct {
