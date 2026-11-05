@@ -45,7 +45,6 @@ def test_dnsbl_renders_only_the_supported_resolver_cache_control(webui: WebUI) -
 def test_dnsbl_save_ignores_retired_cache_and_preserves_clear_cache_toggle(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready: None,
 ) -> None:
     cache = f"{SECTION}/pfb_cache"
     flush = f"{SECTION}/pfb_cache_flush"

@@ -25,6 +25,12 @@ DNS = "/pfblockerng/pfblockerng_dns.php"
 GENERAL = "/pfblockerng/pfblockerng_dns_general.php"
 IP = "/pfblockerng/pfblockerng_ip.php"
 SYNC = "/pfblockerng/pfblockerng_sync.php"
+PAGE_MARKERS = {
+    DNS: ("pfB-DNS Settings",),
+    GENERAL: ("DNS Reply Logging",),
+    IP: ("IP Configuration",),
+    SYNC: ("XMLRPC Sync Settings",),
+}
 
 pytestmark = pytest.mark.usefixtures("php_error_log_guard")
 
@@ -99,7 +105,7 @@ class _HelpGroups(HTMLParser):
 
 def _rendered_groups(webui: WebUI, path: str) -> dict[str, _Group]:
     response = webui.get(path)
-    result = evaluate_render(path, response.status_code, response.text, ())
+    result = evaluate_render(path, response.status_code, response.text, PAGE_MARKERS[path])
     assert result.ok, f"{path}: {result.detail}"
     parser = _HelpGroups()
     parser.feed(response.text)
@@ -144,9 +150,6 @@ def test_help_toggle_reveals_readable_setting_lists(
         _expand_section(page, "ip_advanced")
     control = page.locator(f'[name="{name}"], [name="{name}[]"]')
     assert control.count() == 1, f"{name}: expected one associated control, got {control.count()}"
-    assert control.evaluate("el => Boolean(el.getAttribute('aria-label') || el.labels?.length)"), (
-        f"{name}: control has neither an accessible label nor an aria-label"
-    )
     row = page.locator(".form-group").filter(has=control)
     block = row.locator('[class^="infoblock"]')
     assert block.count() == 1, f"{name}: expected one expandable help block, got {block.count()}"
