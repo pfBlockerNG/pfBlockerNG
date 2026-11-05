@@ -541,7 +541,9 @@ def test_dnsbl_webserver_defaults_closed_and_expands_without_changing_settings(
 
         toggle.click()
         expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(panel.get_by_text("Web Server Interface", exact=True)).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(panel.locator("label").get_by_text("Web Server Interface", exact=True)).to_be_visible(
+            timeout=JS_TIMEOUT_MS
+        )
         expect(interface).to_be_visible(timeout=JS_TIMEOUT_MS)
         expect(interface).to_be_enabled(timeout=JS_TIMEOUT_MS)
         expect(webpage).to_be_visible(timeout=JS_TIMEOUT_MS)
