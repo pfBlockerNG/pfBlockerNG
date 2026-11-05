@@ -116,6 +116,43 @@ final class DnsVipOnlyListenerPolicyTest extends TestCase
 		$this->assertSame($before, serialize($GLOBALS['config']), 'prospective automatic selection must not create VIPs during validation');
 	}
 
+	public function testVipOnlyKeepsPreexistingDnsAddressesAcrossEnableDisableAndVipRemoval(): void
+	{
+		PfbConfig::write('gen/pfb_dns_listen_vip_only', 'on');
+		PfbConfig::write('gen/pfb_dns_listen_vip4', '_vipv4');
+		PfbConfig::write('gen/pfb_dns_listen_vip6', '_vipv6');
+		$originals = [
+			'dhcpd/lan/dnsserver' => ['192.0.2.1'],
+			'dhcpdv6/lan/dnsserver' => ['2001:db8::1'],
+			'dhcpdv6/lan/radnsserver' => ['2001:db8::1'],
+		];
+		$withVips = [
+			'dhcpd/lan/dnsserver' => ['192.0.2.1', '172.16.53.53'],
+			'dhcpdv6/lan/dnsserver' => ['2001:db8::1', 'fd00:53::53'],
+			'dhcpdv6/lan/radnsserver' => ['2001:db8::1', 'fd00:53::53'],
+		];
+		foreach ($originals as $path => $servers) {
+			config_set_path($path, $servers);
+		}
+		$actual = [];
+		foreach (['enabled', 'disabled', 'vip-removed'] as $phase) {
+			if ($phase === 'disabled') {
+				PfbConfig::write('gen/pfb_dns_listen_vip_only', '');
+			} elseif ($phase === 'vip-removed') {
+				PfbConfig::write('gen/pfb_dns_listen_vip', '');
+			}
+			pfb_dns_listen_vips_apply();
+			foreach ($originals as $path => $_servers) {
+				$actual[$phase][$path] = config_get_path($path);
+			}
+		}
+		$this->assertSame(
+			['enabled' => $withVips, 'disabled' => $withVips, 'vip-removed' => $originals],
+			$actual,
+			'only package-added VIPs may be removed; pre-existing DNS addresses are never owned'
+		);
+	}
+
 	public function testApplyStillPreservesSelectedForeignFrozenListsAndTheirOwnershipRecords(): void
 	{
 		PfbConfig::write('gen/pfb_dns_listen_vip_only', 'on');
