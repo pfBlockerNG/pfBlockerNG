@@ -194,10 +194,10 @@ Authorization = property of **write**, not call site (generalises
     of `on` → `lists`, anything else or absent → `all`) and deletes it; a node with no saved
     Sync section takes the default. Both send transports read the stored leaf, never the
     default: an unstored or unknown value sends nothing.
-  - **Ten adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
-    `pfb_feed_internal_filter`, `pfb_syntax_highlight`, `pfb_cache`, `pfb_py_reply`,
+  - **Nine adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
+    `pfb_feed_internal_filter`, `pfb_syntax_highlight`, `pfb_py_reply`,
     `pfb_hsts`, `pfb_idn_block_malicious`, ip-section `suppression`, and (since #2123)
-    `global/alertrefresh`. For all ten,
+    `global/alertrefresh`. For all nine,
     absence reads On while stored `''` reads Off. Six former `'' => 'off'`
     grandfather arms (`pfb_keep`, `pfb_cache`, `pfb_py_reply`, `pfb_hsts`,
     `pfb_idn_block_malicious`, `suppression`) retired by #2120 because runtime
@@ -214,6 +214,9 @@ Authorization = property of **write**, not call site (generalises
     DNSBL off, `pfb_dns_proxy_service()` turns it into the proxy's `--reply-log`.
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables post-handshake full Unbound
     cache flush for bulk zero-downtime DNSBL data swaps.
+  - **`pfb_cache` retired (issue #3701):** the Resolver cache backup/restore option,
+    runtime mirror and reload argument are removed. The migration deletes only the current
+    DNSBL preference; saved settings-family snapshots, including 3.3, remain unchanged.
   - **`dns/pfb_dns` → `PfbToggle`** (issue #3515, pfB-DNS, mirror `$pfb['pfb_dns']`; section `dns` =
     `installedpackages/pfblockerngdns/config/0`, the pfB-DNS tab's own): default Off, sync `local`; opt-in,
     experimental pfBlockerNG DNS proxy in front of the DNS Resolver, with or without DNSBL. The feature is

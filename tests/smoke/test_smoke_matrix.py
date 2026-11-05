@@ -1259,8 +1259,8 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
       are cached and re-fetched only on a force (the ``reset``/force-update precedent —
       see ``test_dnsbl_temp_unlock_cleared_by_force_update``). A config-clean feed/cron
       update in python mode routes through the no-restart data fast path
-      (``pfb_update_unbound`` -> ``pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath)``,
-      inc:4151), so PHP flips the sentinel and the watcher swaps the snapshot. The bulk
+      (``pfb_update_unbound`` -> ``pfb_reload_unbound($mode, $pfbpython, $datapath)``),
+      so PHP flips the sentinel and the watcher swaps the snapshot. The bulk
       caller then clears the full resolver cache after the applied-generation handshake
       because this test explicitly enables the default-off cache-flush option.
     * AFTER: the name is BLOCKED (VIP), Unbound's pid is UNCHANGED (no restart), and the

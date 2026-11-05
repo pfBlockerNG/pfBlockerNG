@@ -577,8 +577,6 @@ Under **DNS Bypass Prevention**:
 
 ### DNS caching
 
-- **Resolver cache** (on by default) — Unbound’s cache is saved and restored
-  across DNSBL updates, so the whole resolver is not emptied every time
 - **Clear Resolver Cache** (off by default) — after a DNSBL update, wipe
   Unbound’s cache *without restarting Unbound*. Newly blocked names take
   effect even if they were cached as allowed, at the cost of extra upstream
@@ -586,7 +584,6 @@ Under **DNS Bypass Prevention**:
 - **Decision cache max entries** — how many domain decisions DNSBL remembers
   (default 10 000)
 
-- [ ] Leave Resolver cache **on**
 - [ ] Leave Clear Resolver Cache **off** for normal use
 - [ ] To see “on the fly” blocking of a previously allowed name: enable
       Clear Resolver Cache, add that name to a block list, update, resolve

@@ -3482,7 +3482,7 @@ def reload(
       either way (it just doesn't PROVE no-restart).
     * ``data_path=True``: this is a pure DNSBL-DATA update in python mode that the package
       routes through the ADR-10 zero-downtime fast path — ``pfb_update_unbound`` calls
-      ``pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath)`` (inc:4151), so a
+      ``pfb_reload_unbound($mode, $pfbpython, $datapath)``, so a
       config-clean feed/cron update flips the sentinel and swaps with NO restart. We
       capture the fast-path log baseline BEFORE the verb runs and afterwards wait on
       :func:`wait_zero_downtime_swap` (the swap-applied signal). The caller is asserting
@@ -4614,7 +4614,7 @@ def dnsbl_alert_lock_toggle(vm: SmokeVM, domain: str, action: str, *, timeout: f
     handler calls, so the smoke test exercises the real #51 path end-to-end.
 
     ZERO-DOWNTIME (ADR-10, #51): the handler reloads via the data fast path — it calls the
-    four-argument ``pfb_reload_unbound('enabled', FALSE, FALSE, TRUE)``. ``$datapath=TRUE``
+    ``pfb_reload_unbound('enabled', FALSE, TRUE)``. ``$datapath=TRUE``
     routes a #51 custom-list edit through the no-restart swap: PHP publishes the patched
     manifest and flips the generation sentinel. The handler then targeted-flushes the validated
     domain only for Lock (allow->block); Unlock needs no flush because blocked answers are not

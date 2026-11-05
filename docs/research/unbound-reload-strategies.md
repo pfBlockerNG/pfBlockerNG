@@ -6,6 +6,9 @@ This note explains how pfBlockerNG applies DNSBL changes today, how Unbound's th
 commands differ, and how resolver caches affect a future reload strategy. It records current
 behavior separately from proposed changes.
 
+**2026-11-05 update:** the package cache-handling description reflects the removal in
+issue #3701. The Unbound reload-command comparison retains the earlier verification date.
+
 ## What pfBlockerNG does today
 
 Saving DNSBL settings does not immediately touch Unbound. The page writes the settings and
@@ -29,8 +32,9 @@ refusing to start a second instance if the old process remains. Once Unbound is 
 adjusts chroot mounts and starts the daemon using `PFB_UNBOUND_START_CMD`. The
 [restart seams](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L11609-L11631) can be
 defined before the package is loaded so tests can substitute the command and wait budgets.
-[`pfb_reload_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L12326-L12404)
-can optionally dump and restore the resolver cache around that restart.
+[`pfb_reload_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc)
+does not save or restore resolver caches across restarts. Live data swaps keep the resolver
+running; optional bulk flushing and targeted Alerts flushing are described below.
 
 pfBlockerNG does **not** currently call `unbound-control reload`, `reload_keep_cache`, or
 `fast_reload`.
