@@ -559,8 +559,12 @@ four interface selectors, including stored-token recovery; administrator-managed
 The opt-in `gen/pfb_dns_listen_vip_only` policy, off by default, restricts pfB-DNS's client-facing listeners to the selected Resolver VIPs,
 without interface fallback for a missing VIP or family. Internal loopback remains. Its DNS Name answers use the available VIP pair,
 including queries on loopback. The mode is dormant with pfB-DNS off and does not restrict standalone Unbound.
-Activating it requires resolving configured foreign or frozen DHCP/RA DNS lists first; it never overwrites administrator-selected
-servers. Clients still using old DNS addresses may lose plain DNS and DDR until DHCP renewal, RA DNS refresh or manual reconfiguration.
+Activation checks both address families, including one without a selected VIP. Conflicting configured DHCP/RA DNS lists,
+even dormant or previously package-owned lists, must be resolved first; administrator data is never overwritten.
+An empty DNS list is not necessarily silent: active core DHCP/RA generation may advertise the ordinary interface or system DNS.
+Where that would advertise an unsupported family, select its Resolver VIP or deliberately disable the corresponding core advertisement
+before enabling VIP-only mode. Clients still using old DNS addresses may lose plain DNS and DDR until DHCP renewal,
+RA DNS refresh or manual reconfiguration.
 Static DNS can use DDR, but those clients must be reconfigured by their administrator. No leases are deleted.
 DNS redirection remains independent opt-in bypass prevention, not compatibility machinery, and is not enabled by this mode.
 DDR designates the receiving address where that address has bound encrypted listeners. Certificate warnings follow those sets and

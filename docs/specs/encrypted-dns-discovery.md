@@ -39,6 +39,13 @@ The existing interface-compatible behavior remains the default. Actual per-addre
 the pfB-DNS status panel, with explicit query errors and no claim that an advertised endpoint is reachable or accepted by a client.
 Current protocol details are in [dns-gateway-transports.md](../misc/dns-gateway-transports.md).
 
+Amended 2026-11-05 (single-family review corrections, #3699): a locally owned DNS Name with no address in the requested
+family returns authoritative NOERROR/NODATA with an SOA, rather than delegating to a public answer. Explicit owned-empty
+loopback entries preserve this rule if every selected VIP becomes unavailable. Unknown local addresses still delegate.
+VIP-only activation checks configured and effective automatic DHCP/RA DNS advertisements in both families. Empty core DNS lists
+can advertise ordinary or system addresses; where a family has no VIP, those advertisements must be deliberately disabled or a
+matching VIP selected. Conflicting stored lists, including dormant lists, are preserved and block activation rather than being migrated.
+
 ## Fixed constraints
 
 - ISC dhcpd is out of scope; only the Kea DHCP backend is considered.
