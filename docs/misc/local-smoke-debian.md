@@ -250,6 +250,19 @@ recent version ... is already installed") and `helpers.deploy` never switches a 
 installed code, printing `PFB_HA_BUILD node=<A|B> phase=... build=<previous|branch> pkg=... inc_sha256=...`
 for every node it touches; it restores the branch build on both nodes before and after every test.
 
+`tests/smoke/test_settings_family_lifecycle.py` (`scripts/local-smoke.sh --no-two-vm --filter test_settings_family_lifecycle`)
+installs the **shipped v3.3.13** `.pkg` too, to prove the 3.2 -> 4.x -> 3.3.13 settings round trip on a single VM
+(#3710). `smoke-on-box.sh` fetches it right after the previous-devel package and exports it as `SMOKE_LEGACY_PKG`;
+`smoke-single.yml` does the same in CI for the `smoke` marker. Those are the exact bytes of the public GitHub Release
+asset for the leg's edition and pfSense version (`pfSense-pkg-pfBlockerNG-3.3.13-<CE|Plus>-<major.minor>.pkg`),
+downloaded and checked against a sha256 pinned in one place, `scripts/fetch-legacy-pkg.sh` (`--print-tag` prints the
+tag); nothing is rebuilt. The log carries `fetch-legacy-pkg: tag=<t> leg=<L> pkg=<file> sha256=<h>`. A leg the release
+never shipped for, a failed download and a hash mismatch each stop the run before pytest. Fixture `legacy_pkg` fails,
+never skips, when a leg has `SMOKE_PKG` but no `SMOKE_LEGACY_PKG`. It is the stable port while the branch is `-edge`, so
+the module goes back with `pkg delete` of the branch build then `pkg add` of the shipped file: `pkg add -f` over the
+branch build would register both packages. It stages Netgate 3.2's unmarked settings after `pkg delete`, and puts the
+branch build, baseline config and snapshot files back after every test.
+
 ## Building the `.pkg` off-FreeBSD (CI reference)
 
 Portable Linux builder reproduces `make package` for these ports (`NO_BUILD`, except the
