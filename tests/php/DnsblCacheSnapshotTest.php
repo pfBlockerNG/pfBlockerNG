@@ -12,7 +12,8 @@ final class DnsblCacheSnapshotTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->saved = [$GLOBALS['pfb'], $GLOBALS['config'] ?? NULL];
+		$this->saved = [$GLOBALS['pfb'], $GLOBALS['config'] ?? NULL, $GLOBALS['pfb_test_write_config_calls'] ?? NULL];
+		$GLOBALS['pfb_test_write_config_calls'] = [];
 		$this->dir = sys_get_temp_dir() . '/pfb_snapshot_' . bin2hex(random_bytes(6));
 		foreach (['chroot', 'pkg', 'db', 'etc'] as $sub) {
 			mkdir("{$this->dir}/{$sub}", 0777, TRUE);
@@ -35,9 +36,12 @@ final class DnsblCacheSnapshotTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		[$GLOBALS['pfb'], $GLOBALS['config']] = $this->saved;
+		[$GLOBALS['pfb'], $GLOBALS['config'], $GLOBALS['pfb_test_write_config_calls']] = $this->saved;
 		if ($GLOBALS['config'] === NULL) {
 			unset($GLOBALS['config']);
+		}
+		if ($GLOBALS['pfb_test_write_config_calls'] === NULL) {
+			unset($GLOBALS['pfb_test_write_config_calls']);
 		}
 		rmdir_recursive($this->dir);
 	}
@@ -126,6 +130,7 @@ PHP;
 		(static function () use ($arm): void { eval($arm[1]); })();
 		$this->archive();
 		$this->assertLockReleased();
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'shutdown capture must not register restore hooks or write config.xml');
 	}
 
 	public function testUnavailablePublicationLockDoesNotSave(): void
