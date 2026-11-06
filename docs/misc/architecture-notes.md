@@ -2397,9 +2397,10 @@ per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helper
 
 The ledger rides issue #468's persist/restore set (added to `pfb_aliastables('update')`'s backup),
 so a **clean** reboot keeps the schedule; only a true RAM-disk wipe falls back to due-now-jittered.
-A missing aliastables or DNSBL cache archive is also written by every pass's `'conf'` step and by the
-`pfb_filter` / `pfb_dnsbl` rc `stop` that pfSense runs before a clean reboot (issue #3713), so static feeds
-that never reach a change still get one.
+A missing aliastables archive (when any of its files exists), or a missing DNSBL cache archive (when
+a DNSBL manifest exists), is also written by every pass's `'conf'` step and
+by the `pfb_filter` / `pfb_dnsbl` rc `stop` that pfSense runs before a GUI or console reboot or halt
+(issue #3713), so static feeds that never reach a change still get one.
 Legacy cadence knobs (`pfb_interval`, per-feed `freq`/`updatefreq`; `dcc` daily; `bl` daily/weekly)
 are read at the ADR-28/29 boundary and reinterpreted as ledger next-due intervals — **no `config.xml`
 migration**.
