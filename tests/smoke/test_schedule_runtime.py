@@ -135,7 +135,7 @@ $state_path = $state_dir . '/pfb_schedule_state.json';
 $cache_path = $pfb['dbdir'] . '/pfb_due_ledger.json';
 $state_before = is_file($state_path) ? file_get_contents($state_path) : NULL;
 $cache_before = is_file($cache_path) ? file_get_contents($cache_path) : NULL;
-$out = array();
+$out = array('marker_at_start' => pfb_pending_changes());
 try {
     // Cause the virgin-install image instead of inheriting it (issue #2900): the
     // cross-module baseline (conftest.py::_pfb_module_baseline) unsets these very
@@ -159,7 +159,7 @@ try {
     ));
     config_set_path($paths[1], array(array(
         'action' => 'Deny_Inbound', 'cron' => 'Weekly', 'dow' => '3',
-        'row' => array(array('header' => 'legacy', 'url' => '/var/db/pfblockerng/legacy.txt', 'state' => 'Enabled')),
+        'row' => array(array('header' => 'legacy', 'url' => '/var/db/pfblockerng/legacy.txt', 'state' => 'Enabled', 'format' => 'auto')),
     )));
     config_set_path($paths[2], array());
     config_set_path($paths[3], array());
@@ -188,19 +188,19 @@ try {
     ));
     config_set_path($paths[1], array(array(
         'action' => 'Deny_Inbound', 'cron' => '01hour', 'schedule_override' => '',
-        'row' => array(array('header' => 'smoke_hour', 'url' => '/var/db/pfblockerng/smoke_hour.txt', 'state' => 'Enabled')),
+        'row' => array(array('header' => 'smoke_hour', 'url' => '/var/db/pfblockerng/smoke_hour.txt', 'state' => 'Enabled', 'format' => 'auto')),
     )));
     config_set_path($paths[2], array(array(
         'action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'schedule_override' => 'on',
         'schedule_weekday' => $anchor->format('N'), 'schedule_hour' => $anchor->format('G'),
         'schedule_minute' => (string) $minute,
-        'row' => array(array('header' => 'smoke_daily', 'url' => '/var/db/pfblockerng/smoke_daily.txt', 'state' => 'Enabled')),
+        'row' => array(array('header' => 'smoke_daily', 'url' => '/var/db/pfblockerng/smoke_daily.txt', 'state' => 'Enabled', 'format' => 'auto')),
     )));
     config_set_path($paths[3], array(array(
         'action' => 'unbound', 'cron' => 'Weekly', 'schedule_override' => 'on',
         'schedule_weekday' => $anchor->format('N'), 'schedule_hour' => $anchor->format('G'),
         'schedule_minute' => (string) $minute,
-        'row' => array(array('header' => 'smoke_weekly', 'url' => '/var/db/pfblockerng/smoke_weekly.txt', 'state' => 'Enabled')),
+        'row' => array(array('header' => 'smoke_weekly', 'url' => '/var/db/pfblockerng/smoke_weekly.txt', 'state' => 'Enabled', 'format' => 'auto')),
     )));
     config_set_path($paths[4], array(
         'blacklist_enable' => 'Enable', 'blacklist_selected' => 'smoke', 'blacklist_freq' => 'Weekly',
@@ -223,6 +223,9 @@ try {
         $pfb['dbdir']
     );
 
+    // issue #3722: an earlier module's deferred pass can leave the marker, and the tick would then run a real manual apply.
+    // Cleared and not restored: a marker found here is that module's leak, not state this test owns.
+    pfb_clear_pending_changes();
     $order = array();
     $extra = static function (string $job, string $argument = '', bool &$changed = FALSE) use (&$order): bool {
         $order[] = $job;
@@ -282,6 +285,7 @@ echo '<<<SCHEDULE_RUNTIME>>>' . json_encode($out) . '<<<END>>>';
     assert result.returncode == 0, result.stderr or result.stdout
     raw = result.stdout.split("<<<SCHEDULE_RUNTIME>>>", 1)[1].split("<<<END>>>", 1)[0]
     data = json.loads(raw)
+    print(f"[#3722] pending-changes marker set when the test started: {data['marker_at_start']}", flush=True)
 
     assert data["fresh"] == {"master": "on", "skipfeed": "3", "weekday": "7"}
     assert data["migration"] == {

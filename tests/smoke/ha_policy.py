@@ -18,6 +18,7 @@ Guest work goes through ``/bin/sh`` (``SmokeVM.ssh``) or pfSsh snippets (``helpe
 
 from __future__ import annotations
 
+import contextlib
 import json
 import secrets
 import subprocess
@@ -28,7 +29,7 @@ from typing import Any, Literal
 
 from . import helpers as h
 from .conftest import SmokeVM
-from .ha_pair import HA_USER, SECONDARY_SYNC_IP, HaPair, _redact, clear_sshguard, xmlrpc_call
+from .ha_pair import HA_USER, SECONDARY_SYNC_IP, HaPair, _redact, clear_pending_marker, clear_sshguard, xmlrpc_call
 
 Transport = Literal["automatic", "manual"]
 TRANSPORTS: tuple[Transport, ...] = ("automatic", "manual")
@@ -58,6 +59,8 @@ APPLY_BANNER = "UPDATE PROCESS START"
 # Salvage caps for events whose only completion signal is a record: never assertions.
 SETTLE_TIMEOUT = 300.0
 FILTER_RELOAD_TIMEOUT = 120.0
+# How long a first pass may stay deferred while core's own package restart (rc.start_packages) holds the locks.
+CORE_RESTART_TIMEOUT = 300.0
 
 # The package's own pinned row-local leaves (pfb_sync_local_paths()['row']; 'infolists' is a retired tag).
 ROW_LOCAL_LEAVES = ("srcint", "script_pre", "script_post", "agateway_in", "agateway_out")
@@ -927,11 +930,17 @@ def arrange_baseline(pair: HaPair) -> Baseline:
         "config_set_path('virtualip/vip', $vips);",
         "pfBlockerNG smoke: HA node B VIP uniqid",
     )
-    for vm in (a, b):
-        h.set_dnsbl_enabled(vm, True)
-        h.reload(vm, "update")
-        settle(vm)
-        wait_filter_idle(vm)
+    try:
+        for vm in (a, b):
+            h.set_dnsbl_enabled(vm, True)
+            h.reload(vm, "update", retry_deferred=CORE_RESTART_TIMEOUT)
+            settle(vm)
+            wait_filter_idle(vm)
+    except BaseException:
+        for vm in (a, b):
+            with contextlib.suppress(Exception):  # the pass failure is the story; restore_node clears again, loudly
+                clear_pending_marker(vm)
+        raise
     assert_dnsbl_vip(a, "primary", h.SMOKE_VIP_UNIQID)
     assert_dnsbl_vip(b, "secondary", B_VIP_UNIQID)
     # Last write to B before the snapshots: the baseline both nodes return to must hold one policy projection.

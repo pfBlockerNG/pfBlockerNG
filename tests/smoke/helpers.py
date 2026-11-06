@@ -42,6 +42,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import ipaddress
+import math
 import os
 import re
 import shlex
@@ -3473,10 +3474,19 @@ _SCOPE_TO_PFBTRIGGER: dict[str, tuple[str, str, str]] = {
     "updatednsbl": ("dnsbl", "true", "force"),
 }
 
+# Gap between re-runs of a deferred pass (reload(retry_deferred=...)): the lock has no readiness signal to wait on.
+RELOAD_RETRY_INTERVAL = 5.0
+
 
 @timed_step(lambda vm, scope="update", **_k: f"reload:{scope}")
 def reload(
-    vm: SmokeVM, scope: str = "update", *, data_path: bool = False, wait_unbound: bool = True, timeout: float = 600.0
+    vm: SmokeVM,
+    scope: str = "update",
+    *,
+    data_path: bool = False,
+    wait_unbound: bool = True,
+    timeout: float = 600.0,
+    retry_deferred: float = 0.0,
 ) -> None:
     """Run a pfBlockerNG reload via the PHP CLI.
 
@@ -3515,19 +3525,35 @@ def reload(
     it must wait on the zero-downtime swap signal regardless.
 
     Feed-pass lock deferrals return 75 and fail immediately with the precise stderr
-    reason, before either readiness wait.
+    reason, before either readiness wait. ``retry_deferred`` (seconds, default none) re-runs a
+    deferred pass, and only a deferred one, until it is accepted or the budget is spent, then fails the same way
+    (naming the attempts and the time spent): for a caller whose first pass can land inside core's own package
+    restart (``rc.start_packages``). A retry that happened is printed with its attempt count and elapsed seconds.
     """
     if scope not in _SCOPE_TO_PFBTRIGGER and scope not in ("cron", "tick"):
         raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron/tick, got {scope!r}")
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
+    argv: tuple[str, ...]
     if scope in ("cron", "tick"):
-        result = vm.ssh(PHP_BIN, PFB_CLI, scope, timeout=timeout)
+        argv = (PHP_BIN, PFB_CLI, scope)
     else:
         s, f, t = _SCOPE_TO_PFBTRIGGER[scope]
-        result = vm.ssh(PHP_BIN, PFB_CLI, "pfb_trigger", f"scope={s}", f"force={f}", f"trigger={t}", timeout=timeout)
+        argv = (PHP_BIN, PFB_CLI, "pfb_trigger", f"scope={s}", f"force={f}", f"trigger={t}")
+    # One extra attempt per interval of the budget at most, so a stuck clock or sleep cannot keep this loop alive.
+    attempts = 1 + math.ceil(retry_deferred / RELOAD_RETRY_INTERVAL)
+    started = time.monotonic()
+    for attempt in range(1, attempts + 1):
+        result = vm.ssh(*argv, timeout=timeout)
+        if result.returncode != 75 or attempt == attempts or time.monotonic() - started >= retry_deferred:
+            break
+        time.sleep(RELOAD_RETRY_INTERVAL)
+    waited = f"{time.monotonic() - started:.0f}s"
+    if attempt > 1 and result.returncode != 75:
+        print(f"reload({scope}): ran on attempt {attempt} after {waited} of rc=75 deferrals", flush=True)
     if result.returncode == 75:
-        raise RuntimeError(f"reload({scope}) deferred (rc=75): {result.stderr.strip()}")
+        gave_up = f" [gave up after {attempt} attempts in {waited}]" if attempt > 1 else ""
+        raise RuntimeError(f"reload({scope}) deferred (rc=75): {result.stderr.strip()}{gave_up}")
     if result.returncode != 0:
         # Report STDOUT too, not just stderr: pfBlockerNG writes a PHP fatal (e.g. an uncaught
         # TypeError that aborts the verb) to stdout, while stderr may only carry incidental noise

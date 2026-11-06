@@ -35,6 +35,8 @@ CARP_VHID = "54"
 HA_USER = "pfbhasync"
 NOPRIV_USER = "pfbnopriv"
 BASELINE = "/root/pfb-smoke-ha-baseline.xml"
+# The package's deferred-settings marker (and its applied twin): a deferred pass sets it, only an apply clears it.
+PENDING_MARKER = "/usr/local/etc/pfb_pending_changes"
 
 _END = "<<<END>>>"
 
@@ -209,6 +211,11 @@ def clear_sshguard(vm: SmokeVM) -> None:
     _ssh_ok(vm, "pfctl -t sshguard -T flush")
 
 
+def clear_pending_marker(vm: SmokeVM) -> None:
+    """Drop the pending-changes marker: a pass deferred by core's package restart leaves it set for ever."""
+    _ssh_ok(vm, f"rm -f {PENDING_MARKER} {PENDING_MARKER}.applied")
+
+
 def _verify_baseline(vm: SmokeVM) -> None:
     state = _php_json(vm, "HARESTORE", _VERIFY_PHP)
     if state.get("protocol") != "http" or state.get(SYNC_IF):
@@ -232,6 +239,7 @@ def restore_node(vm: SmokeVM, node: str) -> None:
         ("sshguard-flush", lambda: clear_sshguard(vm)),
         ("webgui-restart", lambda: _ssh_ok(vm, "/etc/rc.restart_webgui", timeout=120.0)),
         ("filter-reload", lambda: helpers.apply_filter_sync(vm)),
+        ("pending-marker", lambda: clear_pending_marker(vm)),
         ("verify", lambda: _verify_baseline(vm)),
     )
     failures: list[str] = []
