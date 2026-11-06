@@ -2401,6 +2401,9 @@ A missing aliastables archive (when any of its files exists), or a missing DNSBL
 a DNSBL manifest exists), is also written by every pass's `'conf'` step and
 by the `pfb_filter` / `pfb_dnsbl` rc `stop` that pfSense runs before a GUI or console reboot or halt
 (issue #3713), so static feeds that never reach a change still get one.
+Known gap: the boot-restore `earlyshellcmd` hooks follow the `use_mfs_tmpvar` config flag, but only a
+pfBlockerNG pass registers them. A reboot right after RAM disks are first enabled, with no pass in between,
+restores nothing: IP uses pfSense core's `RAM_Disk_Store` copy and DNSBL stays down until the next pass.
 Legacy cadence knobs (`pfb_interval`, per-feed `freq`/`updatefreq`; `dcc` daily; `bl` daily/weekly)
 are read at the ADR-28/29 boundary and reinterpreted as ledger next-due intervals — **no `config.xml`
 migration**.
