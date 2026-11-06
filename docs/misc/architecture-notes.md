@@ -2238,9 +2238,9 @@ invalid files → one `C.UTF-8 sed` control-strip + per-line rtrim), keyed by
 `{header}.norm.src.xxhash128` (the xxh128 of the source `.orig`). Both parse loops read
 `.norm` (raw `.orig` on failure), and a fresh download whose `.norm` is byte-identical skips
 the reparse (`pfb_dnsbl_norm_reuse_skip` / `pfb_ip_norm_reuse_skip`; the IP gate never skips
-DNSBLIP on a Reload/Force pass, whose local-copy "download" reads fresh — #3726, so a changed
-Suppression CIDR Limit re-filters it). The wire-byte
-`.orig.xxhash128` sidecar and the #946 UTF-16 transcode are unchanged; the ADR-43 Force
+DNSBLIP on a Reuse-on pass, whose local-copy "download" always reads fresh, so a changed
+Suppression CIDR Limit re-filters it — #3726). The wire-byte `.orig.xxhash128` sidecar and
+the #946 UTF-16 transcode are unchanged; the ADR-43 Force
 clear-hashes sweep also removes the `.norm.src` baselines so a forced pass always reprocesses.
 Off-appliance pinned by `tests/php/FeedChangeHashHelpersTest.php` +
 `tests/php/ConditionalGetHelpersTest.php`; the live `304`/ETag + same-second detection legs are
