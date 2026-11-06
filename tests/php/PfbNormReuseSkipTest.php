@@ -13,6 +13,10 @@ use PHPUnit\Framework\TestCase;
  * a full reparse (Reload/Force semantics, custom re-synthesis, the
  * stale-.orig download-failure fallback of #1022/#1031, stale staging
  * generation of #1083, user pre/post scripts).
+ *
+ * issue #3726: DNSBLIP's "download" is a local copy that reads as fresh even on
+ * a Reload/Force pass, so that pass must reparse it too -- else a changed
+ * Suppression CIDR Limit never reaches pfB_DNSBLIP_v4.
  */
 #[CoversFunction('pfb_dnsbl_norm_reuse_skip')]
 #[CoversFunction('pfb_ip_norm_reuse_skip')]
@@ -45,25 +49,36 @@ final class PfbNormReuseSkipTest extends TestCase
 
 	public function testIpSkipsOnlyForAFreshUnchangedDownloadWithoutUserScripts(): void
 	{
-		$this->assertTrue(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE));
+		$this->assertTrue(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, FALSE));
 	}
 
-	/** @return array<string, array{bool,bool,bool,bool,bool,bool}> */
+	/** @return array<string, array{bool,bool,bool,bool,bool,bool,bool,bool}> */
 	public static function ipNoSkipRows(): array
 	{
 		return [
-			'no fresh download (Reload/Force reparses)' => [FALSE, FALSE, FALSE, FALSE, TRUE, FALSE],
-			'custom list (re-synthesized per pass)'     => [TRUE, TRUE, FALSE, FALSE, TRUE, FALSE],
-			'stale-.orig download-failure fallback'     => [TRUE, FALSE, TRUE, FALSE, TRUE, FALSE],
-			'normalized content changed'                => [TRUE, FALSE, FALSE, TRUE, TRUE, FALSE],
-			'no staged .txt to reuse'                   => [TRUE, FALSE, FALSE, FALSE, FALSE, FALSE],
-			'user pre/post script owns the full pass'   => [TRUE, FALSE, FALSE, FALSE, TRUE, TRUE],
+			'no fresh download (Reload/Force reparses)' => [FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, FALSE],
+			'custom list (re-synthesized per pass)'     => [TRUE, TRUE, FALSE, FALSE, TRUE, FALSE, FALSE, FALSE],
+			'stale-.orig download-failure fallback'     => [TRUE, FALSE, TRUE, FALSE, TRUE, FALSE, FALSE, FALSE],
+			'normalized content changed'                => [TRUE, FALSE, FALSE, TRUE, TRUE, FALSE, FALSE, FALSE],
+			'no staged .txt to reuse'                   => [TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE],
+			'user pre/post script owns the full pass'   => [TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE, FALSE],
+			'DNSBLIP local copy on a Reload/Force pass' => [TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE, TRUE],
 		];
 	}
 
 	#[DataProvider('ipNoSkipRows')]
-	public function testIpNeverSkipsWhenAnyGuardFails(bool $fresh, bool $custom, bool $stale, bool $changed, bool $txt, bool $script): void
+	public function testIpNeverSkipsWhenAnyGuardFails(bool $fresh, bool $custom, bool $stale, bool $changed, bool $txt, bool $script, bool $reuse, bool $dnsblip): void
 	{
-		$this->assertFalse(pfb_ip_norm_reuse_skip($fresh, $custom, $stale, $changed, $txt, $script));
+		$this->assertFalse(pfb_ip_norm_reuse_skip($fresh, $custom, $stale, $changed, $txt, $script, $reuse, $dnsblip));
+	}
+
+	public function testDnsblipStillSkipsAnUnchangedSourceOnAnOrdinaryPass(): void
+	{
+		$this->assertTrue(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, TRUE));
+	}
+
+	public function testRegularIpRowKeepsItsSkipWhenOnlyTheReusePassFlagIsOn(): void
+	{
+		$this->assertTrue(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE, FALSE));
 	}
 }

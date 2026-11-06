@@ -57,7 +57,7 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 
 	public function testUserScriptPreventsIpNormalizationReuse(): void
 	{
-		$this->assertFalse(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE));
+		$this->assertFalse(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE, FALSE));
 	}
 
 	public function testUserScriptPreventsDnsblNormalizationReuse(): void
@@ -67,7 +67,7 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 
 	public function testFreshNormalizedContentWithoutScriptStillTakesFastPath(): void
 	{
-		$this->assertTrue(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE));
+		$this->assertTrue(pfb_ip_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, FALSE));
 		$this->assertTrue(pfb_dnsbl_norm_reuse_skip(TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE));
 	}
 
@@ -108,7 +108,8 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 		$this->assertSame(1, preg_match(
 			'/pfb_ip_norm_reuse_skip\(\s*\$downloaded_fresh,\s*\(bool\)\s*\$custom,\s*'
 			. '\$orig_content_stale,\s*\$pfb_norm\[\x27changed\x27\],\s*'
-			. 'file_exists\(\s*"\{\$pfbfolder\}\/\{\$header\}\.txt"\s*\),\s*\$pfb_user_script\s*\)/',
+			. 'file_exists\(\s*"\{\$pfbfolder\}\/\{\$header\}\.txt"\s*\),\s*\$pfb_user_script,\s*'
+			. '\$pfbreuse_on,\s*isset\(\$list\[\x27dnsblip\x27\]\)\s*\)/',
 			$code
 		), 'IP normalization fast path must receive the seam effect');
 	}

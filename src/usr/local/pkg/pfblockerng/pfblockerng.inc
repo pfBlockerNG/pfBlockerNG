@@ -2989,12 +2989,15 @@ function pfb_dnsbl_norm_reuse_skip(bool $downloaded_fresh, bool $custom, bool $o
 
 // issue #1797: the IP-loop counterpart of pfb_dnsbl_norm_reuse_skip(). Feeds
 // carrying a user pre/post script never skip -- the scripts' contract is a
-// full pass over the downloaded file every run.
+// full pass over the downloaded file every run. issue #3726: DNSBLIP's local
+// copy reads as fresh even on a Reload/Force pass ($reuse_on), which regular
+// rows leave unfresh; it must reparse there or a changed Suppression CIDR Limit
+// never reaches pfB_DNSBLIP_v4.
 function pfb_ip_norm_reuse_skip(bool $downloaded_fresh, bool $custom, bool $orig_content_stale,
-	bool $norm_changed, bool $txt_exists, bool $has_user_script): bool
+	bool $norm_changed, bool $txt_exists, bool $has_user_script, bool $reuse_on, bool $is_dnsblip): bool
 {
 	return $downloaded_fresh && !$custom && !$orig_content_stale && !$norm_changed &&
-		$txt_exists && !$has_user_script;
+		$txt_exists && !$has_user_script && !($reuse_on && $is_dnsblip);
 }
 
 // issue #1083: a stale-generation rebuild ($stale_generation_rebuild, above) that

@@ -4216,7 +4216,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							// this normalized output, never on the raw download.
 							$pfb_norm = pfb_feed_normalize("{$file_dwn}.orig");
 							if (pfb_ip_norm_reuse_skip($downloaded_fresh, (bool) $custom, $orig_content_stale,
-							    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $pfb_user_script)) {
+							    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $pfb_user_script,
+							    $pfbreuse_on, isset($list['dnsblip']))) {
 								pfb_logger("\n[ {$header} ]{$logtab} unchanged after normalization.\n", 1);
 								unlink_if_exists("{$pfbfolder}/{$header}.update");
 								continue;
