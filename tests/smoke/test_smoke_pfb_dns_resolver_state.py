@@ -53,6 +53,7 @@ from .test_smoke_dns_proxy import (
     _apply,
     _capture,
     _diagnostics,
+    _listeners,
     _occupy,
     _php_ok,
     _query,
@@ -384,9 +385,8 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
             assert len(new) == 1 and "was turned off" in new[0] and "restored to its previous settings" in new[0], (
                 f"one failure notice must report the rollback: {new}"
             )
-            assert held <= {(s.proto, s.local) for s in after.listeners if s.command == "nc"}, (
-                f"both upstream holders must remain during recovery: {after.listeners}"
-            )
+            holders = {(s.proto, s.local) for s in _listeners(vm, connected=True) if s.command == "nc"}
+            assert held <= holders, f"both upstream holders must remain during recovery: {sorted(holders)}"
             assert after.unbound_dns() == before.unbound_dns(), (
                 f"native Resolver listeners must be restored: {after.unbound_dns()} != {before.unbound_dns()}"
             )

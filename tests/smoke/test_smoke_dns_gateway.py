@@ -2214,13 +2214,16 @@ def test_a_listener_on_a_wildcard_socket_has_no_port() -> None:
 
 
 class _SockstatBox:
-    """Stands in for the box: ``_listeners`` asks it for ``sockstat -46lw`` and nothing else."""
+    """Stands in for the box: ``_listeners`` asks it for ``sockstat -46lw`` or ``-46w`` and nothing else."""
 
-    def __init__(self, stdout: str) -> None:
-        self._stdout = stdout
+    def __init__(self, stdout: str, connected: str | None = None) -> None:
+        self._listening = stdout
+        self._all = stdout if connected is None else connected
 
     def ssh(self, *args: str, **kwargs: object) -> SimpleNamespace:
-        return SimpleNamespace(stdout=self._stdout)
+        command = " ".join(args)
+        assert command in ("sockstat -46lw", "sockstat -46w"), command
+        return SimpleNamespace(stdout=self._listening if command == "sockstat -46lw" else self._all)
 
 
 def test_an_ipv6_local_address_in_brackets_reads_as_the_bare_form() -> None:
@@ -2236,6 +2239,19 @@ def test_an_ipv6_local_address_in_brackets_reads_as_the_bare_form() -> None:
     listeners = _listeners(cast(SmokeVM, _SockstatBox(sockstat)))
     got = [(s.proto, s.local) for s in listeners]
     assert got == [("tcp6", "::1:53"), ("udp6", "::1:53"), ("tcp4", "127.0.0.1:53"), ("tcp4", "*:22")], got
+
+
+def test_a_udp_listener_that_connected_to_its_first_sender_still_holds_its_port() -> None:
+    """``nc -u -l`` connect()s to its first sender and ``sockstat -l`` then skips it; it still holds the port, so a
+    holder check reads the connected sockets too."""
+    header = "USER     COMMAND    PID   FD PROTO  LOCAL ADDRESS         FOREIGN ADDRESS\n"
+    listening = header + "root     nc         14564 3  tcp4   127.0.0.1:5353        *:*\n"
+    everything = listening + "root     nc         14868 3  udp4   127.0.0.1:5353        127.0.0.1:31701\n"
+    box = cast(SmokeVM, _SockstatBox(listening, everything))
+    held = ("udp4", "127.0.0.1:5353")
+
+    assert held not in {(s.proto, s.local) for s in _listeners(box)}, "before: sockstat -l hides the connected socket"
+    assert held in {(s.proto, s.local) for s in _listeners(box, connected=True)}
 
 
 @pytest.mark.timeout(1500)
