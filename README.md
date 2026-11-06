@@ -138,6 +138,17 @@ Pass `--channel stable` when deploying from the `main` branch.
 
 See [`scripts/deploy.sh`](scripts/deploy.sh) for full options.
 
+### RAM-disk alias archive (`system/use_mfs_tmpvar`)
+
+With `system/use_mfs_tmpvar` enabled, pfBlockerNG keeps one combined archive, `/usr/local/etc/aliastables.tar.bz2`, that is restored at boot.
+
+- Each pass writes the archive when it is missing, even when nothing changed. A changed-path update always rewrites it.
+- An existing archive is never rewritten on an unchanged pass.
+- Service stop writes a missing archive through a bounded `aliastables_save` CLI call. Stop never writes `config.xml`.
+- After the option is turned off, the next pass removes the archive and the boot hooks.
+
+**First enable:** the boot hooks are registered by a pfBlockerNG pass. Run an update or force reload before rebooting. A reboot right after enabling the option can start without the restore hooks.
+
 ---
 
 ## Updating pfSense's ports repository

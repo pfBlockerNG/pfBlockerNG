@@ -935,6 +935,7 @@ function pfb_pkg_ver() {
 
 // Firewall Filter Service
 function pfb_filter_service() {
+	global $pfb;
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
 
 	$rc		= array();
@@ -990,6 +991,12 @@ function pfb_filter_service() {
 EOF;
 	$rc['stop']	= <<<EOF
 
+	# Ramdisk installs restore the combined alias archive at boot: write it when missing, bounded, never touching config
+	if [ ! -f '{$pfb['aliasarchive']}' ] &&
+	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
+		/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc aliastables_save >/dev/null 2>&1 || :
+	fi
+
 	# clog is not required for pfSense 2.5 and above
 	filter_type='tail_pfb'
 	if [ -e "/usr/local/sbin/clog_pfb" ]; then
@@ -1013,6 +1020,7 @@ EOF;
 
 // DNSBL Service
 function pfb_dnsbl_service() {
+	global $pfb;
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
 
 	$rc		= array();
@@ -1046,6 +1054,12 @@ function pfb_dnsbl_service() {
 
 EOF;
 	$rc['stop']	= <<<EOF
+
+	# Ramdisk installs restore the combined alias archive at boot: write it when missing, bounded, never touching config
+	if [ ! -f '{$pfb['aliasarchive']}' ] &&
+	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
+		/usr/bin/timeout -s TERM -k 5 60 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc aliastables_save >/dev/null 2>&1 || :
+	fi
 
 	# Terminate DNSBL Lighttpd webserver, if found
 	/usr/bin/logger -p daemon.info -t lighttpd_pfb "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL Webserver stopped"
@@ -1126,6 +1140,13 @@ if (isset($argv[1])) {
 			}
 			pfb_daemon_filterlog();
 			exit;
+	}
+
+	// Save the RAM-disk aliastables archive when missing (rc stop path); never writes config.
+	elseif ($argv[1] == 'aliastables_save') {
+			pfb_global();
+			pfb_aliastables('save');
+			exit(0);
 	}
 }
 
@@ -5076,14 +5097,19 @@ function pfb_aliastables($mode) {
 	// Reload config.xml to get any recent changes
 	config_read_file(false, true);
 
+	// Stop-time save fills only a missing archive on a RAM-disk install and never touches config.
+	if ($mode == 'save' && (!config_path_enabled('system', 'use_mfs_tmpvar') || file_exists($pfb['aliasarchive']))) {
+		return;
+	}
+
 	$a_earlyshellcmd = config_get_path('system/earlyshellcmd', []);
 	$a_shellcmdsettings = config_get_path('installedpackages/shellcmdsettings/config', []);
 
 	// Only execute function if Ramdisks are used.
 	if (config_path_enabled('system', 'use_mfs_tmpvar')) {
 
-		// Archive aliastable folder
-		if ($mode == 'update') {
+		// Archive aliastable folder: update always refreshes; conf and save only fill a missing archive
+		if ($mode == 'update' || !file_exists($pfb['aliasarchive'])) {
 			pfb_logger("\nArchiving Aliastable folder", 1);
 
 			$files_to_backup = '';
@@ -5094,15 +5120,30 @@ function pfb_aliastables($mode) {
 
 			// Archive IP Aliastables/Unbound DNSBL Database as required.
 			if (!empty($files_to_backup)) {
-				exec("/usr/bin/tar -jcvf {$pfb['aliasarchive']} {$files_to_backup} >/dev/null 2>&1");
-				pfb_logger("\nArchiving selected pfBlockerNG files.\n", 1);
+				// Build beside the destination and rename on success, so a failed tar never replaces a good archive.
+				$archive_dir = dirname($pfb['aliasarchive']);
+				$tmp = is_dir($archive_dir) ? tempnam($archive_dir, 'aliastables.') : FALSE;
+				if ($tmp === FALSE) {
+					pfb_logger("\nAliastables archive not written: no temporary file in {$archive_dir}.\n", 1);
+				} else {
+					$cleanup = escapeshellarg('rm -f -- ' . escapeshellarg($tmp) . '; exit 143');
+					exec("trap {$cleanup} HUP INT TERM; /usr/bin/tar -jcvf " . escapeshellarg($tmp) . " {$files_to_backup} >/dev/null 2>&1", $tar_output, $status);
+					if ($status !== 0) {
+						pfb_logger("\nAliastables archive not updated: tar exited {$status}, previous archive kept.\n", 1);
+					} elseif (@rename($tmp, $pfb['aliasarchive'])) {
+						pfb_logger("\nArchiving selected pfBlockerNG files.\n", 1);
+					} else {
+						pfb_logger("\nAliastables archive not updated: could not replace {$pfb['aliasarchive']}.\n", 1);
+					}
+					@unlink($tmp);
+				}
 			} else {
 				pfb_logger("\nNo Files to archive.\n", 1);
 			}
 		}
 
 		// Check conf file for earlyshellcmd/shellcmd package settings
-		elseif ($mode == 'conf') {
+		if ($mode == 'conf') {
 
 			// Add earlyshellcmd settings
 			if (!empty($a_earlyshellcmd)) {
