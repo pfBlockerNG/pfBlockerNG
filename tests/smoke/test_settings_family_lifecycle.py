@@ -26,11 +26,13 @@ looks at the operation, so it can never be the install path under test. The lega
 the package is removed: ``pkg delete`` with Keep Settings on (the config survives), then the marker and every
 snapshot are stripped and the sentinel is seeded, and only then is the branch .pkg installed.
 
-DOWNGRADE SHAPE. The shipped 3.3.13 package is the STABLE port (``pfSense-pkg-pfBlockerNG``) and the branch is the
-``-edge`` one, so ``pkg add -f`` of the shipped file over the branch does not replace it: pkg ignores the file
-conflict "by forced mode" and registers BOTH packages (seen on a live VM). Going back is therefore modelled as the
-removal and install a package-manager switch to the stable port performs: ``pkg delete`` of the branch build (its
-pre-deinstall hook saves the 4.x snapshot), then ``pkg add`` of the shipped file.
+DOWNGRADE SHAPE. Published channel builds all carry the canonical package name (``pfSense-pkg-pfBlockerNG``), so a
+real 4.x -> 3.3.13 move is a same-name ``pkg install -f`` of the older build (install.sh step 9c). The smoke build is
+named for its channel (``-edge`` here), so a ``pkg add -f`` of the shipped file does not replace it: pkg ignores the
+file conflict "by forced mode" and registers BOTH packages (seen on a live VM). ``pkg delete`` of the branch build
+followed by ``pkg add`` of the shipped file is the closest shape the harness can reach. The snapshot save the restore
+relies on runs in the pre-deinstall hook before the operation is looked at, so it is the same in both shapes; a delete
+also runs the full teardown, which a same-name ``-f`` install skips.
 
 SENTINEL. An unknown key in an owned section is carried verbatim by the snapshot save and restore (a whole-tree
 write that bypasses the field adapters), so a unique value in ``pfblockerngdnsblsettings`` is a precise tracer.
@@ -69,7 +71,7 @@ BASELINE_COPY = "/root/pfb-smoke-3710-baseline.xml"
 SLOT_STASH = "/root/pfb-smoke-3710-slots"
 # pkg(8) can exit 0 after a package script failed (install-pkg.sh's matcher).
 _SCRIPT_FAILED = re.compile(r"pkg: .* script failed")
-_OWNED_OPEN, _OWNED_CLOSE = "<<<OWNED>>>", "<<<ENDOWNED>>>"
+_VALUE_OPEN, _VALUE_CLOSE = "<<<VALUE>>>", "<<<ENDVALUE>>>"
 
 
 # --------------------------------------------------------------------------- #
@@ -88,20 +90,33 @@ def _sh(vm: SmokeVM, command: str, *, what: str, timeout: float = 60.0) -> str:
     return result.stdout
 
 
+def _php_value(vm: SmokeVM, statements: str, expression: str, *, what: str) -> str:
+    """Run ``statements`` then evaluate ``expression`` in the guest's pfSense PHP shell; its string value.
+
+    pfSsh.php prints a startup banner, so the value is delimited.
+    """
+    snippet = f"{statements}\necho {h._php_str(_VALUE_OPEN)} . ({expression}) . {h._php_str(_VALUE_CLOSE)};"
+    result = h.php_eval(vm, snippet)
+    out = result.stdout
+    start, end = out.find(_VALUE_OPEN), out.find(_VALUE_CLOSE)
+    assert result.returncode == 0 and start != -1 and end != -1, (
+        f"{what} unreadable: rc={result.returncode} stdout={out[-500:]!r} stderr={result.stderr[-500:]!r}"
+    )
+    return out[start + len(_VALUE_OPEN) : end]
+
+
 def _owned_sections(vm: SmokeVM) -> list[str]:
     """The ``installedpackages/pfblockerng*`` section names in the live config (the sections a snapshot owns)."""
-    snippet = (
+    names = _php_value(
+        vm,
         "$names = array();\n"
         "foreach (array_keys(config_get_path('installedpackages', array())) as $k) {\n"
         "  if (strpos((string) $k, 'pfblockerng') === 0) { $names[] = $k; }\n"
-        "}\n"
-        f"echo {h._php_str(_OWNED_OPEN)} . implode(',', $names) . {h._php_str(_OWNED_CLOSE)};"
+        "}",
+        "implode(',', $names)",
+        what="the owned config sections",
     )
-    result = h.php_eval(vm, snippet)
-    out = result.stdout
-    start, end = out.find(_OWNED_OPEN), out.find(_OWNED_CLOSE)
-    assert result.returncode == 0 and start != -1 and end != -1, f"owned sections unreadable: {out!r} {result.stderr!r}"
-    return [name for name in out[start + len(_OWNED_OPEN) : end].split(",") if name]
+    return [name for name in names.split(",") if name]
 
 
 def _slots(vm: SmokeVM) -> list[str]:
@@ -133,18 +148,38 @@ def _marker(vm: SmokeVM) -> tuple[bool, str]:
     return h.config_get_state(vm, MARKER_PATH)
 
 
-def _branch_family(pkg: Path) -> str:
-    """The family the branch build records: its version's major.minor, or the nightly ceiling for a stamped version."""
+def _installed_nightly_family(vm: SmokeVM) -> str:
+    """``PFB_NIGHTLY_SETTINGS_FAMILY`` as the installed package defines it: what a stamped nightly build records."""
+    return _php_value(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');",
+        "PFB_NIGHTLY_SETTINGS_FAMILY",
+        what="the nightly settings family constant",
+    )
+
+
+def _branch_family(vm: SmokeVM, pkg: Path) -> str:
+    """The family the branch build records: its version's major.minor, or the installed package's nightly family.
+
+    A timestamp-stamped version (``YYYYMMDDHHMMSS.<sha7>``) maps to the ceiling constant the package itself defines, so
+    the constant is read from the box rather than copied here. It is read for every build, so a package that cannot
+    report it fails here, not only on a nightly channel.
+    """
+    nightly = _installed_nightly_family(vm)
     version = pkg.name.removesuffix(".pkg").rsplit("-", 1)[1]
     if re.fullmatch(r"\d{14}\.[0-9a-f]{7}", version):
-        return "4.1"
+        return nightly
     match = re.match(r"\d+\.\d+", version)
     assert match, f"cannot read a settings family from the branch package version {version!r} ({pkg.name})"
     return match.group(0)
 
 
 class Slot:
-    """One settings snapshot as it sits on the box: its file attributes and the decoded payload."""
+    """One settings snapshot as it sits on the box: its file attributes and the decoded payload.
+
+    The payload holds the whole owned config, credentials included, so it is never printed: the one thing read out of
+    it is the value stored under a named key.
+    """
 
     def __init__(self, vm: SmokeVM, family: str) -> None:
         path = f"{h.PFB_DBDIR}/settings-{family}.xml"
@@ -153,11 +188,14 @@ class Slot:
         self.attributes = _sh(vm, f"stat -f '%Lp %u %HT' {path}", what=f"stat {path}").strip()
         root = ET.fromstring(_sh(vm, f"cat {path}", what=f"read {path}"))
         self.family = (root.findtext("family") or "").strip()
-        self.payload = base64.b64decode((root.findtext("payload") or "").strip(), validate=True)
+        self._payload = base64.b64decode((root.findtext("payload") or "").strip(), validate=True)
 
-    def holds(self, key: str, value: str) -> bool:
-        """True when the serialized payload carries ``key => value`` as adjacent PHP strings."""
-        return f's:{len(key)}:"{key}";s:{len(value)}:"{value}";'.encode() in self.payload
+    def value_of(self, key: str) -> str | None:
+        """The string serialized under ``key`` (``s:<len>:"key";s:<len>:"value";``), ``None`` when the key is absent."""
+        head = re.search(rb's:%d:"%s";s:(\d+):"' % (len(key), re.escape(key.encode())), self._payload)
+        if head is None:
+            return None
+        return self._payload[head.end() : head.end() + int(head.group(1))].decode("utf-8", errors="replace")
 
 
 # --------------------------------------------------------------------------- #
@@ -170,9 +208,9 @@ def _pkg_add(vm: SmokeVM, pkg: Path, *, force: bool, what: str) -> None:
 
     Never ``-f`` over a differently named package: the shipped stable package and the branch's ``-edge`` one install the
     same files, and ``pkg add -f`` then registers BOTH and overwrites files ("conflicts with ... ignored by forced
-    mode") instead of replacing the old one, as ``pkg install`` does. The cron-disable flag is re-asserted before and
-    after, as ``helpers.deploy`` does; the ABI override matches ``install-pkg.sh``. The installer's own output is
-    printed, so the log carries the settings-family messages of a passing install too.
+    mode") instead of replacing the old one. The cron-disable flag is re-asserted before and after, as
+    ``helpers.deploy`` does; the ABI override matches ``install-pkg.sh``. The installer's own output is printed, so
+    the log carries the settings-family messages of a passing install too.
     """
     h._write_cron_disable_flag(vm)
     remote = f"/tmp/pfb-3710-{pkg.name}"
@@ -206,12 +244,19 @@ def _pkg_delete(vm: SmokeVM, pkg_id: str) -> None:
 def _stage_unmarked_legacy_settings(vm: SmokeVM) -> str:
     """Leave the box as Netgate's 3.2 does: owned settings, no marker, no snapshot, no package. Returns the sentinel.
 
-    Every part of the arrangement is read back, so a scenario that starts from the wrong state fails here, not as a
-    puzzling result later.
+    The owned sections are read before and after ``pkg delete``, and must be the same non-empty list: the snapshot
+    save does nothing without owned sections, so settings that did not survive the delete would make the install
+    under test the fresh-install path instead of the upgrade one. The sentinel is written after that comparison
+    (writing it creates its section when absent, which would make any later check vacuous). Every other part of the
+    arrangement is read back too, so a scenario that starts from the wrong state fails here, not as a puzzling
+    result later.
     """
     sentinel = f"legacy-3710-{uuid.uuid4().hex}"
     h.config_set(vm, KEEP_PATH, "on")
+    owned_before = _owned_sections(vm)
+    assert owned_before, "no pfblockerng* section in the config before pkg delete: there are no settings to keep"
     _pkg_delete(vm, _branch_pkg().name.removesuffix(".pkg"))
+    _expect("owned pfblockerng* sections after pkg delete (Keep Settings on)", owned_before, _owned_sections(vm))
     h.config_restore_state(vm, MARKER_PATH, (False, ""))
     _sh(vm, f"rm -f {h.PFB_DBDIR}/settings-*.xml", what="remove the settings snapshots")
     h.config_set(vm, SENTINEL_PATH, sentinel)
@@ -219,10 +264,6 @@ def _stage_unmarked_legacy_settings(vm: SmokeVM) -> str:
     _expect("package installed before the install under test", "", _installed(vm))
     _expect("settings_family marker (present, value)", (False, ""), _marker(vm))
     _expect("settings snapshots in /var/db/pfblockerng", [], _slots(vm))
-    owned = _owned_sections(vm)
-    assert "pfblockerngdnsblsettings" in owned, (
-        f"the legacy settings did not survive pkg delete: owned sections {owned}"
-    )
     _expect("sentinel in the live config (present, value)", (True, sentinel), h.config_get_state(vm, SENTINEL_PATH))
     return sentinel
 
@@ -311,13 +352,11 @@ def test_unmarked_legacy_settings_install_as_the_4x_family_with_a_3_3_snapshot(l
     _announce(vm, "branch installed over unmarked legacy settings")
 
     _expect("installed package", branch.name.removesuffix(".pkg"), _installed(vm))
-    _expect("settings_family marker (present, value)", (True, _branch_family(branch)), _marker(vm))
+    _expect("settings_family marker (present, value)", (True, _branch_family(vm, branch)), _marker(vm))
     slot = Slot(vm, "3.3")
     _expect(f"{slot.path} mode, owner and type", "600 0 Regular File", slot.attributes)
     _expect(f"{slot.path} family element", "3.3", slot.family)
-    assert slot.holds(SENTINEL_KEY, sentinel), (
-        f"{slot.path} payload does not hold {SENTINEL_KEY} => {sentinel!r}\n  decoded payload: {slot.payload[:2000]!r}"
-    )
+    _expect(f"{SENTINEL_KEY} in the {slot.path} payload", sentinel, slot.value_of(SENTINEL_KEY))
 
 
 @pytest.mark.timeout(1200)  # pkg delete + two installs + a fixture put-back that reinstalls the branch
@@ -330,7 +369,7 @@ def test_shipped_3_3_13_restores_the_3_3_settings_and_marker_after_the_4x_packag
     _pkg_add(vm, branch, force=False, what="install the branch package over unmarked legacy settings")
     edited = f"edited-on-4x-3710-{uuid.uuid4().hex}"
     h.config_set(vm, SENTINEL_PATH, edited)  # what an edit made while 4.x ran looks like
-    _expect("settings_family marker before the downgrade", (True, _branch_family(branch)), _marker(vm))
+    _expect("settings_family marker before the downgrade", (True, _branch_family(vm, branch)), _marker(vm))
     _expect("sentinel before the downgrade (present, value)", (True, edited), h.config_get_state(vm, SENTINEL_PATH))
 
     _pkg_delete(vm, branch.name.removesuffix(".pkg"))

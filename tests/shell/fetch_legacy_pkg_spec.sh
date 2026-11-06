@@ -42,22 +42,6 @@ Describe 'fetch-legacy-pkg.sh (issue #3710)'
   run_fetch() { sh "$FIXTURE_SCRIPT" "$@"; }
   asset() { printf '%s/pfSense-pkg-pfBlockerNG-3.3.13-%s.pkg' "$PFB_LEGACY_PKG_WORK" "$1"; }
 
-  # ── the pins ──────────────────────────────────────────────────────────────── #
-
-  It '--print-tag prints the one pinned release tag and nothing else'
-    When run sh "$SCRIPT" --print-tag
-    The status should be success
-    The output should equal 'v3.3.13'
-  End
-
-  It 'pins a 64-hex sha256 for every asset the v3.3.13 release ships, and no other leg'
-    count_pins() {
-      grep -Ecx " +(CE|Plus)-[0-9.]+\) printf '%s\\\\n' '[0-9a-f]{64}' ;;" "$SCRIPT"
-    }
-    When call count_pins
-    The output should equal '5'
-  End
-
   # ── resolving the leg from the image ref ──────────────────────────────────── #
 
   It 'prints only the absolute path of the verified package, and names tag, leg and hash on stderr'
@@ -113,9 +97,9 @@ Describe 'fetch-legacy-pkg.sh (issue #3710)'
     The path "$PFB_LEGACY_PKG_WORK" should not be exist
   End
 
-  It 'refuses a pfSense version v3.3.13 never shipped for, naming the leg'
+  It 'refuses a pfSense version v3.3.13 never shipped for, naming the leg, with the unpinned exit code'
     When call run_fetch --image-ref ghcr.io/pfblockerng/pfsense-ce:2.7
-    The status should be failure
+    The status should equal 3
     The output should equal ''
     The stderr should include 'fetch-legacy-pkg: no pinned package for leg CE-2.7'
     The path "$PFB_LEGACY_PKG_WORK" should not be exist
@@ -140,6 +124,26 @@ Describe 'fetch-legacy-pkg.sh (issue #3710)'
     The status should be failure
     The output should equal ''
     The stderr should include 'fetch-legacy-pkg: unknown argument: --bogus'
+  End
+
+  # Callers treat "the release has no asset for this leg" (3) as a leg to carry on without, and
+  # every other refusal, a download failure and a hash mismatch (1) as a stop, so the two must
+  # never be conflated.
+  code_of() { run_fetch "$@" >/dev/null 2>&1; printf '%s' "$?"; }
+  It 'exits 3 only for a leg the release has no asset for; every other refusal and failure exits 1'
+    codes() {
+      printf 'tampered\n' > "${RELEASE}/pfSense-pkg-pfBlockerNG-3.3.13-CE-2.9.pkg"
+      rm "${RELEASE}/pfSense-pkg-pfBlockerNG-3.3.13-Plus-25.11.pkg"
+      printf 'unpinned=%s unknown-image=%s no-version=%s missing-asset=%s bad-hash=%s no-ref=%s\n' \
+        "$(code_of --image-ref ghcr.io/o/pfsense-ce:2.7)" \
+        "$(code_of --image-ref ghcr.io/o/civm:v1 --pfsense-version 2.8)" \
+        "$(code_of --image-ref 'ghcr.io/o/pfsense-ce@sha256:abc' --pfsense-version '?')" \
+        "$(code_of --image-ref ghcr.io/o/pfsense-plus:25.11)" \
+        "$(code_of --image-ref ghcr.io/o/pfsense-ce:2.9)" \
+        "$(code_of --pfsense-version 2.8)"
+    }
+    When call codes
+    The output should equal 'unpinned=3 unknown-image=1 no-version=1 missing-asset=1 bad-hash=1 no-ref=1'
   End
 
   # ── the hash gate ─────────────────────────────────────────────────────────── #
@@ -191,5 +195,17 @@ Describe 'fetch-legacy-pkg.sh (issue #3710)'
     The output should equal "$(asset CE-2.8)"
     The stderr should be present
     The contents of file "$(asset CE-2.8)" should equal 'fixture bytes of CE-2.8'
+  End
+
+  # A relative scratch dir is resolved first: the package path is handed to scp and to run-smoke.sh
+  # from other working directories, so it must never be printed relative.
+  It 'prints an absolute path even when the scratch dir is given relative'
+    relative_work() (
+      cd "$WORK" && PFB_LEGACY_PKG_WORK='rel scratch' sh "$FIXTURE_SCRIPT" --image-ref ghcr.io/pfblockerng/pfsense-ce:2.8
+    )
+    When call relative_work
+    The status should be success
+    The output should equal "$(cd "$WORK" && pwd)/rel scratch/pfSense-pkg-pfBlockerNG-3.3.13-CE-2.8.pkg"
+    The stderr should include 'leg=CE-2.8'
   End
 End

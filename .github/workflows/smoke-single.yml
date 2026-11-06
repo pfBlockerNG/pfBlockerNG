@@ -736,12 +736,15 @@ jobs:
             --py-flavor  "$PY_FLAVOR")"
           echo "SMOKE_PREV_PKG=$PKG" >> "$GITHUB_ENV"
 
-      # Issue #3710: the settings-family lifecycle smoke installs the SHIPPED v3.3.13 package over
+      # Issue #3710: the settings-family lifecycle smoke installs the SHIPPED v3.3.13 package after
       # the branch build (SMOKE_LEGACY_PKG). scripts/fetch-legacy-pkg.sh owns the pinned tag and the
       # per-asset sha256, and picks the asset for the edition and pfSense version of the image ref
       # resolved above. The bytes are downloaded and verified, never rebuilt.
-      # Only the `smoke` marker collects the lifecycle module that reads it. A failed fetch or hash
-      # mismatch fails this step, so the job stops before pytest instead of failing the module.
+      # Only the `smoke` marker collects the lifecycle module that reads it. A failed download or
+      # hash mismatch fails this step, so the job stops before pytest instead of failing the module.
+      # A leg the release shipped no package for (exit 3) does not: only that module needs the
+      # package, so the job carries on without SMOKE_LEGACY_PKG and the module fails at its
+      # legacy_pkg fixture, never skipping.
       - name: Fetch the shipped v3.3.13 .pkg (settings-family lifecycle smoke)
         if: ${{ (inputs.pytest_marker || 'smoke') == 'smoke' }}
         env:
@@ -749,10 +752,15 @@ jobs:
           PFSENSE_VERSION: ${{ inputs.pfsense_version }}
         run: |
           set -eu
+          rc=0
           PKG="$(sh scripts/fetch-legacy-pkg.sh \
             --image-ref       "$IMAGE_REF" \
-            --pfsense-version "$PFSENSE_VERSION")"
-          echo "SMOKE_LEGACY_PKG=$PKG" >> "$GITHUB_ENV"
+            --pfsense-version "$PFSENSE_VERSION")" || rc=$?
+          case "$rc" in
+            0) echo "SMOKE_LEGACY_PKG=$PKG" >> "$GITHUB_ENV" ;;
+            3) echo "::warning::no shipped v3.3.13 package for this leg; continuing without SMOKE_LEGACY_PKG" ;;
+            *) exit "$rc" ;;
+          esac
 
       # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
       # uses the public pin (the `mac` input + the CE source-VM uuid). A non-CE

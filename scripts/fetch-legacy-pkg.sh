@@ -8,10 +8,8 @@
 # smoke-on-box.sh and smoke-single.yml call the script and carry neither the tag nor a hash.
 #
 # USAGE:
-#   fetch-legacy-pkg.sh --print-tag
 #   fetch-legacy-pkg.sh --image-ref REF [--pfsense-version V]
 #
-#   --print-tag          print the pinned release tag and exit.
 #   --image-ref REF      the leg's pfSense image ref. Its name, pfsense-ce or pfsense-plus, picks the
 #                        edition (a leading registry host, a port and a @digest are ignored); its tag
 #                        is the pfSense version unless --pfsense-version gives a usable one.
@@ -24,9 +22,13 @@
 # stderr. Every stage that fails exits non-zero naming itself, so a caller that runs this under
 # `set -e` stops instead of carrying on without the package.
 #
+# EXIT STATUS: 0 with the path printed. 3 when the release shipped no package for the leg: nothing is
+# downloaded or printed, and it is the one outcome a caller may carry on past. 1 for everything else (a
+# bad argument, an image that is not pfSense, a failed or timed-out download, a hash mismatch).
+#
 # ENV:
 #   TMPDIR   scratch root: the .pkg is kept in ${TMPDIR:-/tmp}/pfb-legacy-pkg and reused while it
-#            still matches its pin; a file that does not is deleted and downloaded again.
+#            still matches its pin; a file that does not is downloaded again.
 #
 # Test-only (env), never set on a box or in CI:
 #   PFB_LEGACY_PKG_WORK      replaces the scratch dir.
@@ -38,6 +40,8 @@
 set -eu
 
 _TAG=v3.3.13
+# Exit status for "the release shipped no package for this leg", distinct from every failure (1).
+_NO_PINNED_ASSET=3
 
 # sha256 of each .pkg the release ships, computed from the release's own assets. The leg is
 # <edition>-<pfSense major.minor>; a leg the release has no asset for has no pin and is refused.
@@ -66,10 +70,6 @@ _ref=''
 _version=''
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --print-tag)
-            printf '%s\n' "$_TAG"
-            exit 0
-            ;;
         --image-ref)
             [ "$#" -ge 2 ] || die '--image-ref requires a value'
             _ref="$2"
@@ -100,7 +100,10 @@ _mm="$(major_minor "$_version")"
 [ -n "$_mm" ] || _mm="$(major_minor "$_tag")"
 [ -n "$_mm" ] || die "no pfSense version in --pfsense-version '${_version}' or the tag of ${_ref}"
 _leg="${_edition}-${_mm}"
-_want="$(pinned_sha256 "$_leg")" || die "no pinned package for leg ${_leg}: ${_TAG} ships none"
+_want="$(pinned_sha256 "$_leg")" || {
+    printf 'fetch-legacy-pkg: no pinned package for leg %s: %s ships none\n' "$_leg" "$_TAG" >&2
+    exit "$_NO_PINNED_ASSET"
+}
 
 # ── Stage 2: the file, verified ───────────────────────────────────────────── #
 command -v sha256sum >/dev/null 2>&1 || die 'sha256sum not found'
@@ -111,9 +114,9 @@ _work="$(CDPATH='' cd "$_work" && pwd)"
 _dest="${_work}/${_file}"
 if [ "$(sha256_of "$_dest" 2>/dev/null)" != "$_want" ]; then
     _url="${PFB_LEGACY_PKG_BASE_URL:-https://github.com/pfBlockerNG/pfBlockerNG/releases/download/${_TAG}}/${_file}"
-    rm -f "$_dest" "${_dest}.part"
+    rm -f "${_dest}.part"
     printf 'fetch-legacy-pkg: downloading %s\n' "$_url" >&2
-    curl -fsSL --retry 3 -o "${_dest}.part" "$_url" >&2 || {
+    curl -fsSL --retry 3 --max-time 120 -o "${_dest}.part" "$_url" >&2 || {
         rm -f "${_dest}.part"
         die "download failed: ${_url}"
     }

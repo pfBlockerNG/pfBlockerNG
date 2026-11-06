@@ -67,7 +67,8 @@
 #   5a. Build the previous-devel .pkg via build-prev-pkg.sh → SMOKE_PREV_PKG (issue
 #      #3455); a failed build stops the run here.
 #   5a2. Fetch the shipped v3.3.13 .pkg via fetch-legacy-pkg.sh → SMOKE_LEGACY_PKG (issue
-#      #3710); a failed fetch stops the run here.
+#      #3710); a failed fetch stops the run here, a leg the release shipped no package for
+#      (exit 3) carries on without it.
 #   6. Sync the locked smoke + dependency-builder environment.
 #   7. Build this leg's extra_pkgs (per the CURRENT ref's version matrix) via
 #      build-dep-pkg-portable.py → SMOKE_DEP_PKGS (issue #1806 D2; empty when
@@ -408,17 +409,32 @@ export SMOKE_PREV_PKG
 printf 'smoke-on-box: previous pkg built: %s\n' "$SMOKE_PREV_PKG" >&2
 
 # ── Step 5a2: the shipped v3.3.13 .pkg (issue #3710) ───────────────────────── #
-# The settings-family lifecycle smoke installs it over the branch build (SMOKE_LEGACY_PKG). It
+# The settings-family lifecycle smoke installs it after the branch build (SMOKE_LEGACY_PKG). It
 # is the release asset for this leg's edition and pfSense version, downloaded and checked
-# against the hash pinned in fetch-legacy-pkg.sh, never rebuilt. A leg v3.3.13 never shipped for,
-# a failed download and a hash mismatch all stop the run before pytest starts.
+# against the hash pinned in fetch-legacy-pkg.sh, never rebuilt. A failed download and a hash
+# mismatch stop the run before pytest starts. A leg v3.3.13 shipped no package for (exit 3) does
+# not: only that one module needs the package, so SMOKE_LEGACY_PKG is left unset, every other
+# module still runs, and the module fails at its legacy_pkg fixture rather than skipping.
 printf 'smoke-on-box: fetching the shipped legacy .pkg...\n' >&2
-SMOKE_LEGACY_PKG="$(sh scripts/fetch-legacy-pkg.sh \
+_legacy_rc=0
+_legacy_out="$(sh scripts/fetch-legacy-pkg.sh \
     --image-ref        "$PFSENSE_REF" \
-    --pfsense-version  "$SMOKE_PFSENSE_VERSION")" \
-    || { printf 'smoke-on-box: fetch-legacy-pkg failed\n' >&2; exit 1; }
-export SMOKE_LEGACY_PKG
-printf 'smoke-on-box: legacy pkg fetched: %s\n' "$SMOKE_LEGACY_PKG" >&2
+    --pfsense-version  "$SMOKE_PFSENSE_VERSION")" || _legacy_rc=$?
+case "$_legacy_rc" in
+    0)
+        SMOKE_LEGACY_PKG="$_legacy_out"
+        export SMOKE_LEGACY_PKG
+        printf 'smoke-on-box: legacy pkg fetched: %s\n' "$SMOKE_LEGACY_PKG" >&2
+        ;;
+    3)
+        unset SMOKE_LEGACY_PKG
+        printf 'smoke-on-box: no shipped v3.3.13 package for this leg; continuing without SMOKE_LEGACY_PKG\n' >&2
+        ;;
+    *)
+        printf 'smoke-on-box: fetch-legacy-pkg failed\n' >&2
+        exit 1
+        ;;
+esac
 
 # ── Step 5b: provision the locked smoke + dep-builder venv ─────────────────── #
 # Both the extra_pkgs builder below and run-smoke.sh use this exact repo-root

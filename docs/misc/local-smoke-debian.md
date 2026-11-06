@@ -255,13 +255,18 @@ installs the **shipped v3.3.13** `.pkg` too, to prove the 3.2 -> 4.x -> 3.3.13 s
 (#3710). `smoke-on-box.sh` fetches it right after the previous-devel package and exports it as `SMOKE_LEGACY_PKG`;
 `smoke-single.yml` does the same in CI for the `smoke` marker. Those are the exact bytes of the public GitHub Release
 asset for the leg's edition and pfSense version (`pfSense-pkg-pfBlockerNG-3.3.13-<CE|Plus>-<major.minor>.pkg`),
-downloaded and checked against a sha256 pinned in one place, `scripts/fetch-legacy-pkg.sh` (`--print-tag` prints the
-tag); nothing is rebuilt. The log carries `fetch-legacy-pkg: tag=<t> leg=<L> pkg=<file> sha256=<h>`. A leg the release
-never shipped for, a failed download and a hash mismatch each stop the run before pytest. Fixture `legacy_pkg` fails,
-never skips, when a leg has `SMOKE_PKG` but no `SMOKE_LEGACY_PKG`. It is the stable port while the branch is `-edge`, so
-the module goes back with `pkg delete` of the branch build then `pkg add` of the shipped file: `pkg add -f` over the
-branch build would register both packages. It stages Netgate 3.2's unmarked settings after `pkg delete`, and puts the
-branch build, baseline config and snapshot files back after every test.
+downloaded and checked against a sha256 pinned in one place, `scripts/fetch-legacy-pkg.sh`; nothing is rebuilt. The log
+carries `fetch-legacy-pkg: tag=<t> leg=<L> pkg=<file> sha256=<h>`. A failed or timed-out download and a hash mismatch each
+stop the run before pytest. A leg the release shipped no package for (the script exits 3) does not: the run carries on
+without `SMOKE_LEGACY_PKG`, and only this module fails. Fixture `legacy_pkg` fails, never skips, when a leg has
+`SMOKE_PKG` but no `SMOKE_LEGACY_PKG`.
+
+Published channel builds all carry the canonical package name, so a real 4.x -> 3.3.13 move is a same-name
+`pkg install -f` (`scripts/install.sh` step 9c). The smoke build is named for its channel (`-edge`), so `pkg add -f` of
+the shipped file does not replace it: pkg ignores the file conflict "by forced mode" and registers both packages. The
+module therefore goes back with `pkg delete` of the branch build and then `pkg add` of the shipped file, the closest
+shape the harness can reach. It stages Netgate 3.2's unmarked settings after `pkg delete`, and puts the branch build,
+baseline config and snapshot files back after every test.
 
 ## Building the `.pkg` off-FreeBSD (CI reference)
 

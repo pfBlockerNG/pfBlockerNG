@@ -49,7 +49,7 @@ STUBEOF
     cat > "${FAKE_ROOT}/scripts/fetch-legacy-pkg.sh" <<'STUBEOF'
 #!/bin/sh
 printf '%s\n' "$*" > "${LEGACY_PKG_ARGV_LOG:-/dev/null}"
-[ "${LEGACY_PKG_EXIT:-0}" -eq 0 ] || { printf 'fetch-legacy-pkg: download failed\n' >&2; exit "$LEGACY_PKG_EXIT"; }
+[ "${LEGACY_PKG_EXIT:-0}" -eq 0 ] || { printf 'fetch-legacy-pkg: stub exit %s\n' "$LEGACY_PKG_EXIT" >&2; exit "$LEGACY_PKG_EXIT"; }
 printf '%s\n' "${LEGACY_PKG_OUT:-/tmp/fake-legacy.pkg}"
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/fetch-legacy-pkg.sh"
@@ -682,8 +682,9 @@ STUBEOF
 
   # ── the shipped legacy package (issue #3710) ─────────────────────────────── #
   # The settings-family lifecycle smoke installs the shipped v3.3.13 package over the branch
-  # build; the harness reads it from SMOKE_LEGACY_PKG, so a run that cannot fetch it must stop
-  # here, not start pytest.
+  # build; the harness reads it from SMOKE_LEGACY_PKG. A download or hash failure must stop the
+  # run here, not start pytest. A leg v3.3.13 never shipped for (exit 3 of fetch-legacy-pkg.sh)
+  # must not: every other module still runs, and only the lifecycle module fails, at its fixture.
 
   It 'fetches the shipped legacy package for this leg and runs smoke with SMOKE_LEGACY_PKG set'
     prev_pkg_leg
@@ -710,13 +711,26 @@ STUBEOF
 
   It 'stops before the smoke run, naming fetch-legacy-pkg, when the legacy package cannot be fetched'
     prev_pkg_leg
-    LEGACY_PKG_EXIT=3
+    LEGACY_PKG_EXIT=1
     export LEGACY_PKG_EXIT
     When run sh "$SCRIPT" --ref HEAD --no-two-vm
     The status should not equal 0
     The stdout should not include 'smoke_pkg='
     The stderr should include 'fetch-legacy-pkg failed'
     The stderr should not include 'running smoke'
+  End
+
+  It 'runs smoke without SMOKE_LEGACY_PKG, stale or not, on a leg v3.3.13 shipped no package for'
+    prev_pkg_leg
+    LEGACY_PKG_EXIT=3
+    SMOKE_LEGACY_PKG="${WORK}/stale.pkg"
+    export LEGACY_PKG_EXIT SMOKE_LEGACY_PKG
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The stderr should include 'no shipped v3.3.13 package'
+    The stdout should include 'smoke_pkg=/tmp/fake-branch.pkg'
+    The stdout should include 'smoke_legacy_pkg=<unset>'
   End
 
   # ── the Go toolchain for the pfB-DNS payload (issue #3513) ──────────────── #
