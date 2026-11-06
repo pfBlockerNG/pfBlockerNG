@@ -27,10 +27,10 @@ import secrets
 import shlex
 import socket
 import subprocess
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
-from typing import Any, NamedTuple, Self
+from typing import Any, Self
 
 from . import ha_policy as hp
 from . import helpers as h
@@ -44,12 +44,27 @@ SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 SYNC_PAGE_MARKER = "XMLRPC Sync Settings"
 # Section-relative path of the Sync page's own section, as ``flatten_sections`` spells it.
 SYNC_LEAVES = "pfblockerngsync/config/0"
+_SCOPE_LEAF = f"{SYNC_LEAVES}/syncscope"
+_TOGGLE_LEAF = f"{SYNC_LEAVES}/syncinterfaces"
 SYNCSCOPE = f"{hp.SYNC}/syncscope"
 SYNCINTERFACES = f"{hp.SYNC}/syncinterfaces"
+# The config path of every key the installed build's ``pfb_cfg_registry()`` stores, as ``flatten_sections`` spells it.
+REGISTRY_PATHS_EXPR = (
+    "array_map(function ($k) { [$s, $l] = explode('/', $k, 2); "
+    "return str_replace('installedpackages/', '', PFB_SECTIONS[$s]) . '/' . $l; }, array_keys(pfb_cfg_registry()))"
+)
+# What each legacy scope sends on the branch build beyond the previous build's payload: the "all" scope also carries
+# the DNS-settings section (#3649); the "lists" scope is unchanged.
+LEGACY_PAYLOAD_GROWTH: Mapping[str, frozenset[str]] = {
+    "lists": frozenset(),
+    "all": frozenset({"pfblockerngdnssettings"}),
+}
+# The package words a policy-scope send differently from a legacy one (pfblockerng.inc, pfblockerng_sync_on_changes()).
+_POLICY_SEND = " policy sync to [ "
 
-# The package's own processes log under their script path.
-_PACKAGE_SOURCE = "/usr/local/www/pfblockerng/"
-_SUCCESS = re.compile(r"XMLRPC reload data success with \S+ \(pfsense\.(\w+)\)")
+# What the package's own sender logs per target, at NOTICE or above: every CE release writes these to system.log.
+_SYNC_TARGET_MARK = " sync to [ "
+_PACKAGE_TAG = "[pfBlockerNG] XMLRPC "
 _MERGED = re.compile(
     r"Configuration Change: [^:]+: Merged in config \((?P<keys>[^)]*?) sections\) from XMLRPC client\."
 )
@@ -117,32 +132,60 @@ def legacy_sync_section(transport: hp.Transport, *, toggle: str, password: str) 
 
 
 def migration_delta(toggle: str, scope: str) -> dict[str, dict[str, Any]]:
-    """The only leaves an upgrade may move on a node's pfBlockerNG config: the legacy toggle becomes the scope leaf."""
+    """The leaves an upgrade moves on its own account: the legacy toggle becomes the scope leaf."""
+    return {"changed": {}, "removed": {_TOGGLE_LEAF: toggle}, "added": {_SCOPE_LEAF: scope}}
+
+
+def without_registry_moves(
+    delta: Mapping[str, Mapping[str, Any]], previous: Collection[str], branch: Collection[str]
+) -> dict[str, dict[str, Any]]:
+    """``delta`` minus what an upgrade moves because the two builds' registries differ.
+
+    Keys only the branch build knows arrive with their defaults and keys it retired go; each is excused only in its own
+    direction (an arrival is an addition, a retirement a removal). The toggle and scope leaves are ``migration_delta``'s
+    and stay; a changed value is never a registry move.
+
+    The VALUES of arrived and retired leaves are intentionally not checked: an arrival is not always its registry
+    default (``grandfather`` maps, install-time seeds and the #2308 schedule migration set it from what the node
+    stored), and a retired leaf's old value is whatever the node held. Those rules are pinned where they live
+    (``CfgRegistryGrandfatherGateTest``, ``InstallGrandfatherChokepointTest``).
+    """
+    arrived = set(branch) - set(previous) - {_SCOPE_LEAF}
+    retired = set(previous) - set(branch) - {_TOGGLE_LEAF}
     return {
-        "changed": {},
-        "removed": {f"{SYNC_LEAVES}/syncinterfaces": toggle},
-        "added": {f"{SYNC_LEAVES}/syncscope": scope},
+        "changed": dict(delta["changed"]),
+        "removed": {path: leaf for path, leaf in delta["removed"].items() if path not in retired},
+        "added": {path: leaf for path, leaf in delta["added"].items() if path not in arrived},
     }
 
 
-class PackageCalls(NamedTuple):
-    """The package's own XMLRPC client activity in a syslog window."""
+def assert_legacy_payload_growth(previous: Sequence[str], branch: Sequence[str], scope: str) -> None:
+    """The branch build's legacy ``scope`` payload keeps every section the previous build sent and adds only #3649's."""
+    dropped, added = set(previous) - set(branch), set(branch) - set(previous)
+    wanted = LEGACY_PAYLOAD_GROWTH[scope]
+    assert not dropped and added == wanted, (
+        f"legacy scope {scope!r}: the branch build dropped {sorted(dropped)} and added {sorted(added)}; "
+        f"expected it to add exactly {sorted(wanted)}"
+    )
 
-    begun: int
-    methods: list[str]
-    lines: list[str]
+
+def assert_one_send(calls: Sequence[str], *, policy: bool) -> None:
+    """Exactly one target was synced to, in the policy scope's wording (``policy``) or the legacy scope's."""
+    assert len(calls) == 1, f"expected one XMLRPC sync to B, got {list(calls)}"
+    assert (_POLICY_SEND in calls[0]) == policy, (
+        f"expected a {'policy' if policy else 'legacy'}-scope send, got {calls[0]!r}"
+    )
 
 
-def package_xmlrpc(window: str) -> PackageCalls:
-    """The calls pfBlockerNG's own processes made: how many began, which methods returned, and every such line.
+def package_xmlrpc(window: str) -> list[str]:
+    """The lines pfBlockerNG's own sender logged for each target it reported on: a send that went out, or a target it
+    refused for a bad setting. A transport failure logs nothing to syslog, so it never shows here.
 
-    Core's HA sync logs the same wording under ``/rc.filter_synchronize``; only lines from the package's script
-    path count here, so a sentinel alias riding the pfSense HA sync never reads as a package call.
+    CE 2.9 keeps core's ``Beginning XMLRPC sync data`` lines out of ``system.log``, so only the package's NOTICE lines
+    are common to every release. The method is proven by what the receiver merged, not by the sender's wording.
+    ``XMLRPC sync is starting.`` alone is no call: automatic mode logs it, then hands the send to pfSense HA sync.
     """
-    lines = [ln for ln in window.splitlines() if f"{_PACKAGE_SOURCE}" in ln and "XMLRPC" in ln]
-    begun = sum("Beginning XMLRPC sync data" in ln for ln in lines)
-    methods = [m.group(1) for ln in lines if (m := _SUCCESS.search(ln))]
-    return PackageCalls(begun, methods, lines)
+    return [ln for ln in window.splitlines() if _PACKAGE_TAG in ln and _SYNC_TARGET_MARK in ln]
 
 
 def merged_sections(window: str) -> list[list[str]]:
@@ -334,6 +377,17 @@ def sync_section_names(vm: SmokeVM, *, with_settings: bool) -> list[str]:
     """The sections the node's installed build syncs, in its own order (``pfblockerng_sync_sections``)."""
     flag = "TRUE" if with_settings else "FALSE"
     return [str(name) for name in hp.php_json(vm, hp.emit(f"pfblockerng_sync_sections({flag})"))]
+
+
+def legacy_section_names(vm: SmokeVM, scope: str) -> list[str]:
+    """The sections the branch build's legacy ``scope`` (``all`` or ``lists``) sends (``pfb_sync_legacy_sections``)."""
+    flag = "TRUE" if scope == "all" else "FALSE"
+    return [str(name) for name in hp.php_json(vm, hp.emit(f"pfb_sync_legacy_sections({flag})"))]
+
+
+def registry_paths(vm: SmokeVM) -> set[str]:
+    """Every config path the build installed on ``vm`` keeps a registry key for."""
+    return {str(path) for path in hp.php_json(vm, hp.emit(REGISTRY_PATHS_EXPR))}
 
 
 def assert_sections(actual: Mapping[str, Any], expected: Mapping[str, Any], what: str) -> None:

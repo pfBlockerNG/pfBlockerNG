@@ -69,8 +69,10 @@ def test_upgrade_from_previous_build_keeps_legacy_sync(ha_pair: HaPair, prev_pkg
     password = ha_pair.sync_password
 
     # Given both nodes run the previous build, A holding the legacy Sync page's values and B a legacy receiver's.
+    registry: dict[tuple[str, str], set[str]] = {}
     for node, vm in (("A", a), ("B", b)):
         hv.install_build(vm, prev_pkg, "previous", node=node, phase="before the upgrade")
+        registry[node, "previous"] = hv.registry_paths(vm)
     hp.set_leaves(
         a,
         {hp.SYNC: hv.legacy_sync_section("manual", toggle=toggle, password=password)},
@@ -99,9 +101,7 @@ def test_upgrade_from_previous_build_keeps_legacy_sync(ha_pair: HaPair, prev_pkg
             f"non-vacuity: the settings sections must differ so the unchecked box shows: {differing}"
         )
     calls = hv.package_xmlrpc(a_log.text)
-    assert (calls.begun, calls.methods, len(calls.lines)) == (1, ["merge_installedpackages_section"], 2), (
-        f"expected one merge_installedpackages_section call from the previous build, got {calls}"
-    )
+    hv.assert_one_send(calls, policy=False)
     assert hv.package_writes(b_log.text) == [payload], (
         f"B's merged sections: expected {[payload]!r}, got {hv.package_writes(b_log.text)!r}"
     )
@@ -116,7 +116,7 @@ def test_upgrade_from_previous_build_keeps_legacy_sync(ha_pair: HaPair, prev_pkg
     hv.evidence(
         "legacy-sync",
         variant=variant,
-        a_package_calls=calls.methods,
+        a_package_calls=calls,
         b_pfb_writes=hv.package_writes(b_log.text),
         payload=payload,
         differing_before=differing,
@@ -125,6 +125,7 @@ def test_upgrade_from_previous_build_keeps_legacy_sync(ha_pair: HaPair, prev_pkg
     # And both nodes upgrade to the branch build.
     for node, vm in (("A", a), ("B", b)):
         hv.install_build(vm, branch, "branch", node=node, phase="after the upgrade")
+        registry[node, "branch"] = hv.registry_paths(vm)
         # Read raw, with no package code run since the install: the install hook did the migration, not a later page.
         stored = (h.config_get_state(vm, hv.SYNCSCOPE), h.config_get_state(vm, hv.SYNCINTERFACES))
         assert stored == ((True, scope), (False, "")), (
@@ -132,17 +133,22 @@ def test_upgrade_from_previous_build_keeps_legacy_sync(ha_pair: HaPair, prev_pkg
         )
     a_up, b_up = hv.pfb_sections(a), hv.pfb_sections(b)
     for node, before, after in (("A", a_legacy, a_up), ("B", b_legacy, b_up)):
-        delta = hp.diff_leaves(hv.flatten_sections(before), hv.flatten_sections(after))
+        moved = hp.diff_leaves(hv.flatten_sections(before), hv.flatten_sections(after))
+        delta = hv.without_registry_moves(moved, registry[node, "previous"], registry[node, "branch"])
         assert delta == hv.migration_delta(toggle, scope), (
-            f"{node}: the upgrade must only turn the checkbox into syncscope; moved: {delta}"
+            f"{node}: the upgrade must only turn the checkbox into syncscope and follow the registries; moved: {moved}"
         )
-        hv.evidence("upgrade-delta", variant=variant, node=node, moved=delta)
+        hv.evidence("upgrade-delta", variant=variant, node=node, moved=moved, unexplained=delta)
+
+    # The branch build's legacy payload for the stored scope: the previous build's sections, plus only what #3649 added.
+    sent = [name for name in hv.legacy_section_names(a, scope) if a_up.get(name) is not None]
+    hv.assert_legacy_payload_growth(payload, sent, scope)
 
     # When A syncs again, with B back at the content it had before the first sync.
-    hp.write_sections(b, {name: b_start.get(name) for name in payload}, "pfBlockerNG smoke: B before the sync")
+    hp.write_sections(b, {name: b_start.get(name) for name in sent}, "pfBlockerNG smoke: B before the sync")
     hv.assert_sections(
-        {name: hv.pfb_sections(b).get(name) for name in payload},
-        {name: b_start.get(name) for name in payload},
+        {name: hv.pfb_sections(b).get(name) for name in sent},
+        {name: b_start.get(name) for name in sent},
         "B must start the second sync where it started the first",
     )
     hp.clear_sync_state(a)
@@ -155,26 +161,30 @@ def test_upgrade_from_previous_build_keeps_legacy_sync(ha_pair: HaPair, prev_pkg
     assert (attempt.get("target"), attempt.get("outcome")) == (TARGET, "sent"), f"A's send attempt: got {attempt!r}"
     assert "digest" not in attempt, f"a legacy scope carries no policy digest, got {attempt!r}"
     calls = hv.package_xmlrpc(a_log.text)
-    assert (calls.begun, calls.methods, len(calls.lines)) == (1, ["merge_installedpackages_section"], 2), (
-        f"expected the same merge_installedpackages_section call after the upgrade, got {calls}"
-    )
-    assert hv.package_writes(b_log.text) == [payload], (
-        f"B's merged sections after the upgrade: expected {[payload]!r}, got {hv.package_writes(b_log.text)!r}"
+    hv.assert_one_send(calls, policy=False)
+    assert hv.package_writes(b_log.text) == [sent], (
+        f"B's merged sections after the upgrade: expected {[sent]!r}, got {hv.package_writes(b_log.text)!r}"
     )
     a_new, b_new = hv.pfb_sections(a), hv.pfb_sections(b)
     hv.assert_sections(
-        {name: b_new.get(name) for name in payload},
-        {name: a_new[name] for name in payload},
+        {name: b_new.get(name) for name in sent},
+        {name: a_new[name] for name in sent},
         "the result on B after the upgrade: the synced sections are A's",
     )
-    hv.assert_sections(
-        {name: b_new.get(name) for name in payload},
-        {name: b_legacy.get(name) for name in payload},
-        "the receive result must be preserved across the upgrade",
+    kept = hv.without_registry_moves(
+        hp.diff_leaves(
+            hv.flatten_sections({name: b_legacy.get(name) for name in payload}),
+            hv.flatten_sections({name: b_new.get(name) for name in payload}),
+        ),
+        registry["B", "previous"],
+        registry["B", "branch"],
+    )
+    assert kept == {"changed": {}, "removed": {}, "added": {}}, (
+        f"the receive result must be preserved across the upgrade, bar the registries' own difference: {kept}"
     )
     hv.assert_sections(
-        {n: t for n, t in b_new.items() if n not in payload},
-        {n: t for n, t in b_up.items() if n not in payload},
+        {n: t for n, t in b_new.items() if n not in sent},
+        {n: t for n, t in b_up.items() if n not in sent},
         "B's sections outside the payload",
     )
     # A legacy receive records nothing and applies nothing; asserted after a drain, never before.
@@ -186,9 +196,9 @@ def test_upgrade_from_previous_build_keeps_legacy_sync(ha_pair: HaPair, prev_pkg
         "after-upgrade-sync",
         variant=variant,
         a_send_record=hp.send_state(a),
-        a_package_calls=calls.methods,
+        a_package_calls=calls,
         b_pfb_writes=hv.package_writes(b_log.text),
-        payload=payload,
+        payload=sent,
         b_receive_record=hp.receive_state(b),
         b_update_passes=hp.apply_banners(b) - banners,
     )
@@ -231,9 +241,7 @@ def test_new_policy_sender_leaves_previous_receiver_untouched(
     rows = hv.sender_panel_rows(a)
     assert len(rows) == 1 and rows[0][2] == digest, f"sender panel: expected one row carrying {digest!r}, got {rows!r}"
     if transport == "manual":
-        assert (calls.begun, calls.methods, len(calls.lines)) == (1, ["restore_config_section"], 2), (
-            f"the package must make exactly one restore_config_section call, got {calls}"
-        )
+        hv.assert_one_send(calls, policy=True)
         assert hv.package_writes(b_log.text) == [[]], (
             f"B must log one receive that merged no pfBlockerNG section, got {hv.package_writes(b_log.text)!r}"
         )
@@ -244,12 +252,11 @@ def test_new_policy_sender_leaves_previous_receiver_untouched(
         hv.wait_sync_idle(a)
         hp.wait_filter_idle(b)
     else:
-        assert calls.lines == [], f"in automatic mode core sends; the package made calls of its own: {calls}"
+        assert calls == [], f"in automatic mode core sends; the package made calls of its own: {calls}"
         assert (rows[0][0], rows[0][3]) == ("pfSense HA sync", "handed to pfSense HA sync"), f"panel row: {rows[0]!r}"
-        synced = [
-            ln for ln in a_log.text.splitlines() if "rc.filter_synchronize" in ln and "restore_config_section" in ln
-        ]
-        assert synced, "pfSense's own HA sync never reported a restore_config_section success towards B"
+        # CE 2.9 keeps core's own "XMLRPC reload data success" lines out of system.log: B's merge line is the proof.
+        core = [keys for keys in hv.merged_sections(b_log.text) if keys not in hv.package_writes(b_log.text)]
+        assert core, f"pfSense's own HA sync merged no core section on B; B merged {hv.merged_sections(b_log.text)!r}"
     assert h.guest_file_contains(b, hp.CONFIG, sentinel), (
         "B's other sections did not follow pfSense HA: no sentinel alias"
     )
@@ -259,7 +266,7 @@ def test_new_policy_sender_leaves_previous_receiver_untouched(
         "new-sender-previous-receiver",
         transport=transport,
         a_send_record=hp.send_state(a),
-        a_package_calls=calls.methods,
+        a_package_calls=calls,
         a_panel_row=rows[0],
         b_pfb_writes=hv.package_writes(b_log.text),
         b_pfb_sections_byte_identical=True,
@@ -305,15 +312,13 @@ def test_previous_sender_keeps_legacy_semantics_on_new_receiver(
     # Then B holds what the previous build's legacy merge stores, by the legacy call.
     calls = hv.package_xmlrpc(a_log.text)
     if transport == "manual":
-        assert (calls.begun, calls.methods, len(calls.lines)) == (1, ["merge_installedpackages_section"], 2), (
-            f"expected the previous build's one merge_installedpackages_section call, got {calls}"
-        )
+        hv.assert_one_send(calls, policy=False)
         assert hv.package_writes(b_log.text) == [payload], (
             f"B's merged sections: expected {[payload]!r}, got {hv.package_writes(b_log.text)!r}"
         )
         merged = {name: a_sent[name] for name in payload}
     else:
-        assert calls.lines == [], f"in automatic mode core sends; the previous build made calls of its own: {calls}"
+        assert calls == [], f"in automatic mode core sends; the previous build made calls of its own: {calls}"
         merged = {name: hv.legacy_auto_merge(b_start.get(name), a_sent[name]) for name in payload}
     expected = {**b_start, **merged}
     hv.assert_sections(hv.pfb_sections(b), expected, f"B after a legacy {transport} sync")
@@ -325,7 +330,7 @@ def test_previous_sender_keeps_legacy_semantics_on_new_receiver(
     hv.evidence(
         "previous-sender-new-receiver",
         transport=transport,
-        a_package_calls=calls.methods,
+        a_package_calls=calls,
         b_pfb_writes=hv.package_writes(b_log.text),
         payload=payload,
         b_receive_record=hp.receive_state(b),

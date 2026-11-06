@@ -136,30 +136,36 @@ def test_legacy_merge_leaves_a_section_empty_on_both_sides_exactly_as_stored(hv:
 
 
 # --------------------------------------------------------------------------- #
-# package_xmlrpc: only the package's own process counts as "the package made a call"
+# package_xmlrpc: only the package's own sender lines count as "the package made a call"
+# (the CE 2.9 shapes are pinned in tests/test_issue3730_ha_version_evidence.py)
 # --------------------------------------------------------------------------- #
 
 PKG = "/usr/local/www/pfblockerng/pfblockerng.php"
 BEGIN = "Beginning XMLRPC sync data to https://172.30.254.2:443/xmlrpc.php."
 OK = "XMLRPC reload data success with https://172.30.254.2:443/xmlrpc.php (pfsense.{method})."
+STARTING = "NOTICE [pfBlockerNG] XMLRPC sync is starting."
+SENT = "NOTICE [pfBlockerNG] XMLRPC sync to [ 172.30.254.2:443 ] completed successfully."
 
 
 def _line(source: str, text: str) -> str:
     return f"Oct 14 17:47:05 pfSense php[80264]: {source}: {text}"
 
 
-def test_package_calls_are_counted_by_method_from_the_package_process(hv: ModuleType) -> None:
+def _notice(text: str) -> str:
+    return f"Oct 14 17:47:05 pfSense php[80264]: {text}"
+
+
+def test_a_ce28_window_counts_each_target_once_not_once_per_core_line_the_package_also_wrote(hv: ModuleType) -> None:
     window = "\n".join(
         [
+            _notice(STARTING),
             _line(PKG, BEGIN),
-            _line(PKG, OK.format(method="restore_config_section")),
-            "Oct 14 17:47:05 pfSense php[80264]: NOTICE [pfBlockerNG] XMLRPC policy sync to [ 172.30.254.2:443 ] sent.",
+            _line(PKG, OK.format(method="merge_installedpackages_section")),
+            _notice(SENT),
         ]
     )
 
-    calls = hv.package_xmlrpc(window)
-
-    assert (calls.begun, calls.methods, len(calls.lines)) == (1, ["restore_config_section"], 2)
+    assert hv.package_xmlrpc(window) == [_notice(SENT)]
 
 
 def test_core_ha_sync_lines_are_never_a_package_call(hv: ModuleType) -> None:
@@ -171,28 +177,13 @@ def test_core_ha_sync_lines_are_never_a_package_call(hv: ModuleType) -> None:
         ]
     )
 
-    assert hv.package_xmlrpc(window) == (0, [], [])
+    assert hv.package_xmlrpc(window) == []
 
 
-def test_a_second_package_method_is_visible_to_the_exact_call_assertion(hv: ModuleType) -> None:
-    window = "\n".join(
-        [
-            _line(PKG, BEGIN),
-            _line(PKG, OK.format(method="restore_config_section")),
-            _line(PKG, BEGIN),
-            _line(PKG, OK.format(method="merge_installedpackages_section")),
-        ]
-    )
+def test_a_second_package_sync_is_visible_to_the_exact_call_assertion(hv: ModuleType) -> None:
+    window = "\n".join([_notice(STARTING), _notice(SENT), _notice(STARTING), _notice(SENT)])
 
-    calls = hv.package_xmlrpc(window)
-
-    assert (calls.begun, calls.methods) == (2, ["restore_config_section", "merge_installedpackages_section"])
-
-
-def test_a_call_that_began_but_never_returned_is_not_hidden(hv: ModuleType) -> None:
-    calls = hv.package_xmlrpc(_line(PKG, BEGIN))
-
-    assert (calls.begun, calls.methods, len(calls.lines)) == (1, [], 1)
+    assert hv.package_xmlrpc(window) == [_notice(SENT), _notice(SENT)]
 
 
 # --------------------------------------------------------------------------- #
