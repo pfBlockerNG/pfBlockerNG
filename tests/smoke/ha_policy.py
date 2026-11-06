@@ -887,6 +887,18 @@ def assert_dnsbl_vip(vm: SmokeVM, node: str, uniqid: str) -> None:
     assert state["dnsbl"] == "on", f"{node}: pfb_dnsbl: expected 'on', got {state['dnsbl']!r}"
 
 
+def copy_policy(source: SmokeVM, target: SmokeVM) -> None:
+    """Make ``target``'s stored policy projection equal ``source``'s: copy the differing leaves, delete the extra ones.
+
+    Local leaves are outside the projection and stay. A fresh install holds every registry default, while the long-lived
+    session VM had its defaults deleted by earlier modules' teardowns (``helpers.reset_pfb_baseline``).
+    """
+    wanted, held = node_state(source).projection, node_state(target).projection
+    moves = {p: v for p, v in wanted.items() if held.get(p) != v} | dict.fromkeys(held.keys() - wanted.keys())
+    if moves:
+        set_leaves(target, moves, "pfBlockerNG smoke: HA baseline policy")
+
+
 def arrange_baseline(pair: HaPair) -> Baseline:
     """Bring both nodes to one baseline: package on, DNSBL on, equal policy, different local values, one apply each.
 
@@ -922,6 +934,8 @@ def arrange_baseline(pair: HaPair) -> Baseline:
         wait_filter_idle(vm)
     assert_dnsbl_vip(a, "primary", h.SMOKE_VIP_UNIQID)
     assert_dnsbl_vip(b, "secondary", B_VIP_UNIQID)
+    # Last write to B before the snapshots: the baseline both nodes return to must hold one policy projection.
+    copy_policy(a, b)
     marker = str(php_json(b, emit("pfb_pending_changes_marker()")))
     digests: dict[str, str] = {}
     for name, vm in (("primary", a), ("secondary", b)):

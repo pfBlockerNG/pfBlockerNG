@@ -265,6 +265,7 @@ def test_the_baseline_names_every_sync_local_key_it_does_not_seed_and_why(
     monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda *_a: None)
     monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "/mark")
     monkeypatch.setattr(hp, "set_leaves", lambda *_a, **_k: None)
+    monkeypatch.setattr(hp, "copy_policy", lambda *_a: None)
     for fn in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled", "reload"):
         monkeypatch.setattr(hp.h, fn, lambda *_a, **_k: None)
     monkeypatch.setattr(hp.h, "pfb_config_digest", lambda _vm: "d")
@@ -1175,8 +1176,10 @@ def test_arrange_baseline_takes_core_sync_off_a_first_and_checks_both_vips_befor
     monkeypatch.setattr(hp, "wait_filter_idle", lambda vm: None)
     monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda vm, name, uniqid: log.append(f"{vm.name}:vip={uniqid}"))
     monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "/mark")
-    for fn in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled", "reload"):
+    monkeypatch.setattr(hp, "copy_policy", lambda src, dst: log.append(f"{src.name}->{dst.name}:copy"))
+    for fn in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled"):
         monkeypatch.setattr(hp.h, fn, lambda vm, *_a, **_k: log.append(f"{vm.name}:h"))
+    monkeypatch.setattr(hp.h, "reload", lambda vm, *_a, **_k: log.append(f"{vm.name}:reload"))
     monkeypatch.setattr(hp.h, "pfb_config_digest", lambda vm: f"digest-{vm.name}")
 
     baseline = hp.arrange_baseline(SimpleNamespace(primary=a, secondary=b))
@@ -1184,6 +1187,10 @@ def test_arrange_baseline_takes_core_sync_off_a_first_and_checks_both_vips_befor
     assert log[:2] == ["A:set ['hasync']", "A:settle"], f"core sync must be off before anything else: {log[:4]}"
     first_snapshot = next(i for i, line in enumerate(log) if "cp -p" in line)
     assert log.index("A:vip=pfbsmokevip") < first_snapshot and log.index("B:vip=pfbhaB3455") < first_snapshot
+    last_reload = max(i for i, line in enumerate(log) if line.endswith(":reload"))
+    assert last_reload < log.index("A->B:copy") < first_snapshot, (
+        f"B must hold A's policy once both passes are done and before the baseline is snapshotted: {log}"
+    )
     assert baseline.digests == {"primary": "digest-A", "secondary": "digest-B"} and baseline.marker == "/mark"
 
 
