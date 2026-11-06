@@ -2,8 +2,9 @@
 
 Proves on a real pfSense CE VM that:
 
-* Enable → the pfBlockerNG-owned sinkhole VIP (``pfB_AUTO_VIP_v4``) and DNSBL NAT
-  rule (``pfB DNSBL - DO NOT EDIT``) are created in config.xml. (The harness
+* Enable (needs VIP demand: a DNSBL group answering with the VIP, #3539) → the
+  pfBlockerNG-owned sinkhole VIP (``pfB_AUTO_VIP_v4``) and DNSBL NAT rule
+  (``pfB DNSBL - DO NOT EDIT``) are created in config.xml. (The harness
   provisions only the v4 auto-VIP; the symmetric v6 path is pinned off-box by
   ``DnsblMarkedVipTest``.)
 * Disable → the VIP and NAT are removed; no pfB-owned VIP of either family remains.
@@ -34,6 +35,7 @@ import pytest
 from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
 from .pkg_identity import branch_pkg_name
+from .test_smoke_dnsbl_policy_default_override import _group_php
 
 pytestmark = pytest.mark.smoke
 
@@ -132,6 +134,26 @@ def _nat_pfb_dnsbl_present(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
     )
     val = h._php_read_scalar(vm, pre, "$found ? 'yes' : 'no'", timeout=timeout)
     return val == "yes"
+
+
+def _set_vip_demand(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Make one DNSBL group answer with the VIP (``on``) or drop every group (#3539).
+
+    The auto-VIP and the DNSBL NAT exist only while an effective block answers with
+    the VIP (``pfb_dnsbl_vip_demand()``); enabling DNSBL + auto-VIP alone creates neither.
+    """
+    group = ""
+    if on:
+        feed = h.write_local_feed(vm, "smoke_managed_objects_demand.txt", f"{h.unique_domain('mobjdemand')}\n")
+        group = _group_php(aliasname="smokemobj", header="smokemobj", url=feed, logging="enabled")
+    snippet = (
+        f"config_set_path({h._php_str(h.CFG_DNSBL_LISTS)}, array({group}));\n"
+        "write_config('pfBlockerNG smoke #3539: managed-objects VIP demand');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_set_vip_demand({on}) failed: rc={result.returncode} {result.stderr!r}")
 
 
 def _pfb_sections_present(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
@@ -343,6 +365,7 @@ def test_managed_objects_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> Non
 
         # WHEN — set dnsbl_interface to 'lan' (NAT is only emitted when iface != 'lo0'),
         # enable auto-VIP + DNSBL, and run a full reload.
+        _set_vip_demand(vm, True)
         h.set_dnsbl_interface(vm, "lan")
         h.set_dnsvip_auto(vm, True)
         h.set_dnsbl_enabled(vm, True)
@@ -358,6 +381,7 @@ def test_managed_objects_enable_creates_vip_and_nat(deployed_vm: SmokeVM) -> Non
         )
     finally:
         # Restore to a known baseline so Scenario B and C start clean.
+        _set_vip_demand(vm, False)
         h.set_dnsbl_interface(vm, "lo0")
         h.set_dnsvip_auto(vm, False)
         h.set_dnsbl_enabled(vm, False)
@@ -388,6 +412,7 @@ def test_managed_objects_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> No
     try:
         # GIVEN — set dnsbl_interface to 'lan' (NAT is only emitted when iface != 'lo0'),
         # enable auto-VIP + DNSBL; assert both objects present (before-state).
+        _set_vip_demand(vm, True)
         h.set_dnsbl_interface(vm, "lan")
         h.set_dnsvip_auto(vm, True)
         h.set_dnsbl_enabled(vm, True)
@@ -413,6 +438,7 @@ def test_managed_objects_disable_removes_vip_and_nat(deployed_vm: SmokeVM) -> No
         )
         assert not _nat_pfb_dnsbl_present(vm), "pfB DNSBL NAT still present in nat/rule after disabling DNSBL"
     finally:
+        _set_vip_demand(vm, False)
         h.set_dnsbl_interface(vm, "lo0")
         h.set_dnsvip_auto(vm, False)
         h.set_dnsbl_enabled(vm, False)
@@ -455,6 +481,7 @@ def test_managed_objects_nonat_skips_nat(deployed_vm: SmokeVM) -> None:
         )
 
         # WHEN (opt-out OFF) — enable DNSBL on lan with auto-VIP: NAT must be created.
+        _set_vip_demand(vm, True)
         h.set_dnsbl_interface(vm, "lan")
         h.set_dnsvip_auto(vm, True)
         h.set_dnsbl_nonat(vm, False)
@@ -475,6 +502,7 @@ def test_managed_objects_nonat_skips_nat(deployed_vm: SmokeVM) -> None:
             " — expected: no pfB DNSBL nat/rule[]; actual:" + f"\n{h.fwobj_state_snapshot(vm)}"
         )
     finally:
+        _set_vip_demand(vm, False)
         h.set_dnsbl_nonat(vm, False)
         h.set_dnsbl_interface(vm, "lo0")
         h.set_dnsvip_auto(vm, False)
