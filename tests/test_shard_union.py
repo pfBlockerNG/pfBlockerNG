@@ -321,3 +321,19 @@ def test_committed_table_has_no_hostile_whitespace_keys() -> None:
     --deselect (double-run) or a nonexistent bare node ID (pytest exit 4) on some
     shard (issue #907, latent -- defensive pin on the committed data)."""
     _assert_committed_table_has_no_hostile_whitespace(_COMMITTED_DURATIONS_FILE)
+
+
+def test_every_smoke_module_has_a_duration_row(oracle_ids: set[str]) -> None:
+    """Every module with a `-m smoke` test must carry a module row in the COMMITTED table.
+
+    shard-modules.sh weights a row-less module at 0.01s, so all of them pile onto one shard and
+    overrun the job limit (issue #3721). The nightly refresh only runs after a green nightly, so a
+    new smoke module has to ship with its own row."""
+    rowed = {key for key in _parse_duration_table(_COMMITTED_DURATIONS_FILE) if "::" not in key}
+    modules = {nid.split("::", 1)[0].rsplit("/", 1)[-1] for nid in oracle_ids}
+    missing = sorted(modules - rowed)
+    assert not missing, (
+        f"smoke module(s) with no module row in {_COMMITTED_DURATIONS_FILE}.\n"
+        f"  add a '<module> <seconds>' row (scripts/module-durations.sh from a nightly log)\n"
+        f"  missing: {missing}"
+    )

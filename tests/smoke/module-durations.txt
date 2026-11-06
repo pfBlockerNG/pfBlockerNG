@@ -52,6 +52,7 @@ test_extras_dispatcher_deferral.py::test_verb_release_completes_deterministicall
 test_feed_pass_lock.py 8.36
 test_feed_pass_lock.py::test_cron_verb_proceeds_when_lock_free 3.75
 test_feed_pass_lock.py::test_cron_verb_skips_while_feed_pass_lock_held 4.61
+test_ha_auto_vip.py 170.00
 test_ha_policy_authority.py 554.00
 test_ha_policy_sync.py 411.00
 test_ha_policy_versions.py 441.00
@@ -68,6 +69,7 @@ test_release_version_oracle.py::test_supported_pkg_orders_every_release_channel 
 test_schedule_runtime.py 9.67
 test_schedule_runtime.py::test_persisted_schedule_runs_once_in_locked_runtime_order 7.83
 test_schedule_runtime.py::test_schedule_migration_planning_and_cache_regeneration 1.84
+test_settings_family_lifecycle.py 39.16
 test_smoke_3382_float_direction.py 22.43
 test_smoke_3382_float_direction.py::test_deny_inbound_on_wan_does_not_match_client_egress 2.40
 test_smoke_3382_float_direction.py::test_deny_outbound_blocks_client_egress_only_on_the_client_facing_interface[lan-floating-off] 2.96
@@ -159,8 +161,11 @@ test_smoke_autorule_immutable.py::test_user_rules_preserved_after_force_update 4
 test_smoke_boot.py 9.50
 test_smoke_boot.py::test_control_name_resolves 9.29
 test_smoke_boot.py::test_pfctl_ruleset_nonempty 0.21
+test_smoke_dns_gateway.py 259.48
 test_smoke_dns_isolation.py 43.35
 test_smoke_dns_isolation.py::test_restore_dns_config_returns_every_key_to_its_pre_mutation_value 43.35
+test_smoke_dns_name_single_family.py 42.78
+test_smoke_dns_proxy.py 698.46
 test_smoke_dnsbl_builtin_mechanism.py 58.72
 test_smoke_dnsbl_builtin_mechanism.py::test_dnsbl_builtin_mechanism_confusable_idn 29.35
 test_smoke_dnsbl_builtin_mechanism.py::test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist 18.57
@@ -185,6 +190,7 @@ test_smoke_dnsbl_policy_default_override.py::test_dnsbl_policy_install_preserves
 test_smoke_dnsbl_policy_default_override.py::test_dnsbl_policy_install_preserves_legacy_mechanisms[groups-without-settings] 8.70
 test_smoke_dnsbl_policy_default_override.py::test_dnsbl_policy_install_preserves_legacy_mechanisms[no-override-absent] 4.48
 test_smoke_dnsbl_policy_default_override.py::test_dnsbl_policy_install_preserves_legacy_mechanisms[no-override-empty] 4.51
+test_smoke_dnsbl_vip_demand.py 112.20
 test_smoke_doh_block.py 57.70
 test_smoke_doh_block.py::test_doh_block_scoped_not_global 20.52
 test_smoke_doh_block.py::test_doh_block_yandex_returns_nxdomain 37.18
@@ -398,6 +404,8 @@ test_smoke_matrix.py::test_dnsbl_whitelist_wildcard_not_demoted_by_www 8.12
 test_smoke_matrix.py::test_dnsblip_dual_stack_partition 3.61
 test_smoke_matrix.py::test_false_green_guard_vm 5.08
 test_smoke_matrix.py::test_ip_alias_table_and_rule 7.36
+test_smoke_metrics.py 25.60
+test_smoke_pfb_dns_resolver_state.py 283.61
 test_smoke_reply_log_escape.py 27.14
 test_smoke_reply_log_escape.py::TestDnsReplyLogEscape::test_a_reply_is_logged_unchanged 0.40
 test_smoke_reply_log_escape.py::TestDnsReplyLogEscape::test_cname_target_is_logged_escaped 0.50

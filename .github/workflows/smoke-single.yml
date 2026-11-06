@@ -397,6 +397,8 @@ jobs:
           sudo udevadm settle --timeout=10
 
       - name: Install host tools (qemu, dnsutils, iptables, zstd)
+        # A stalled mirror ate 24-27 min of the 45 on three legs (#3721): bound each attempt and the step.
+        timeout-minutes: 5
         # zstd: the ADR-17 `repo` flow re-versions the branch .pkg (a zstd tar) on
         # the runner to forge a lower+higher build for the pkg-upgrade transition
         # test; the re-version helper decodes/encodes the .pkg via the zstd binary.
@@ -405,8 +407,8 @@ jobs:
         # issue #2261) flips the runner's OUTPUT policy.
         run: |
           set -eu
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client iptables zstd
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
+          sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -y qemu-system-x86 qemu-utils dnsutils openssh-client iptables zstd
 
       - name: Install oras
         # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
