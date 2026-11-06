@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _TARGETS = {
     "build-image.yml": (("publish-image", 0), ("verify-image", 0)),
     "image-refresh.yml": (("refresh", 0),),
-    "smoke-single.yml": (("smoke", 4),),
+    "smoke-single.yml": (("smoke", 6),),
     "ui-tests.yml": (("ui", 2),),
     "version-tracker.yml": (("reconcile", 0),),
 }
