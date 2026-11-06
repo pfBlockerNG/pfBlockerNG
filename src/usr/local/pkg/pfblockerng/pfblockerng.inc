@@ -4362,6 +4362,7 @@ function pfb_pkg_ver() {
 
 // Firewall Filter Service
 function pfb_filter_service() {
+	global $pfb;
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
 
 	$rc		= array();
@@ -4428,6 +4429,12 @@ function pfb_filter_service() {
 EOF;
 	$rc['stop']	= <<<EOF
 
+	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet (#3713)
+	if [ ! -f '{$pfb['aliasarchive']}.zst' ] && [ ! -f '{$pfb['aliasarchive']}.bz2' ] &&
+	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
+		/usr/bin/timeout -s TERM -k 5 60 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc aliastables >/dev/null 2>&1
+	fi
+
 	# clog is not required for pfSense 2.5 and above
 	filter_type='tail_pfb'
 	if [ -e "/usr/local/sbin/clog_pfb" ]; then
@@ -4451,6 +4458,7 @@ EOF;
 
 // DNSBL Service
 function pfb_dnsbl_service() {
+	global $pfb;
 	$LOG_PREFIX_PKG_PFBLOCKERNG = LOG_PREFIX_PKG_PFBLOCKERNG;
 
 	$rc		= array();
@@ -4483,6 +4491,12 @@ function pfb_dnsbl_service() {
 
 EOF;
 	$rc['stop']	= <<<EOF
+
+	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet and DNSBL has a manifest (#3713)
+	if [ ! -f '{$pfb['dnsblarchive']}.zst' ] && [ ! -f '{$pfb['dnsblarchive']}.bz2' ] && [ -f '{$pfb['unbound_py_sources']}' ] &&
+	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
+		/usr/bin/timeout -s TERM -k 5 60 {$pfb['script']} dnsbl_cache save >/dev/null 2>&1
+	fi
 
 	# Terminate DNSBL Lighttpd webserver, if found, and wait for its exit (#3423):
 	# TERM at 0 s, KILL at 5 s, give up at 7 s. Exact-name match: a look-alike must not stall it.
@@ -7176,6 +7190,12 @@ if (isset($argv[1])) {
 			if (pfb_dns_proxy_saved() !== NULL) {
 				pfb_dns_proxy_confirm_ready($since);
 			}
+			exit(0);
+	}
+
+	// The pfb_filter rc stop: write the aliastables archive a RAM-disk /var restores at boot when none exists (issue #3713)
+	elseif ($argv[1] == 'aliastables') {
+			pfb_aliastables('update');
 			exit(0);
 	}
 }
@@ -23014,8 +23034,9 @@ function pfb_aliastables($mode) {
 	// Only execute function if Ramdisks are used.
 	if (config_path_enabled('system', 'use_mfs_tmpvar')) {
 
-		// Archive aliastable folder
-		if ($mode == 'update') {
+		// Archive aliastable folder. #3713: 'conf' runs on every pass, so it also writes a missing archive; lists that
+		// never change never reach 'update'.
+		if ($mode == 'update' || ($mode == 'conf' && !file_exists("{$pfb['aliasarchive']}.zst") && !file_exists("{$pfb['aliasarchive']}.bz2"))) {
 			pfb_logger("\nArchiving Aliastable folder", 1);
 
 			$files_to_backup = '';
@@ -23046,7 +23067,7 @@ function pfb_aliastables($mode) {
 		}
 
 		// Check conf file for earlyshellcmd/shellcmd package settings
-		elseif ($mode == 'conf') {
+		if ($mode == 'conf') {
 
 			// Add earlyshellcmd settings
 			if (!empty($a_earlyshellcmd)) {
@@ -23118,16 +23139,16 @@ function pfb_aliastables($mode) {
 // from pfb_aliastables() on purpose — the IP-alias archive and the DNSBL archive have different
 // lifecycles. All file ops live in 'pfblockerng.sh dnsbl_cache' (one home, in shell). 'conf':
 // register the boot 'dnsbl_cache restore' earlyshellcmd when DNSBL is enabled AND /var is a RAM
-// disk; otherwise remove it and delete the archive. 'save': archive the current generated DNSBL
-// state (called post-reload on a real DNSBL change; the caller gates on use_mfs_tmpvar + DNSBL
-// enabled).
+// disk, and write the archive when it is missing (#3713); otherwise remove it and delete the archive.
+// 'save': archive the current generated DNSBL state (called post-reload on a real DNSBL change; the caller
+// gates on use_mfs_tmpvar + DNSBL enabled).
 function pfb_dnsbl_cache($mode) {
 	global $pfb;
 
 	$earlyshellcmd = '/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache restore';
 
 	if ($mode == 'save') {
-		exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache save >/dev/null 2>&1');
+		exec(escapeshellarg($pfb['script']) . ' dnsbl_cache save >/dev/null 2>&1');
 		return;
 	}
 
@@ -23144,6 +23165,11 @@ function pfb_dnsbl_cache($mode) {
 	$want = (($pfb['dnsbl'] === PfbToggle::On || pfb_dns_wanted()) && config_path_enabled('system', 'use_mfs_tmpvar'));
 
 	if ($want) {
+		// #3713: 'save' runs only on a DNSBL change; write a missing archive on every pass once there is a manifest to restore.
+		if (is_file($pfb['unbound_py_sources']) && !file_exists("{$pfb['dnsblarchive']}.zst") && !file_exists("{$pfb['dnsblarchive']}.bz2")) {
+			pfb_dnsbl_cache('save');
+		}
+
 		// Add earlyshellcmd settings (distinct 'dnsbl_cache restore' string).
 		if (!empty($a_earlyshellcmd)) {
 			if (!preg_grep("/pfblockerng.sh dnsbl_cache restore/", $a_earlyshellcmd)) {

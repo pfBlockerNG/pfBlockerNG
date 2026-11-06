@@ -27,7 +27,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_service')]
 final class DnsblServiceRestartTest extends TestCase
 {
-	private const DOUBLES = ['pgrep', 'killall', 'sleep', 'logger', 'lighttpd_pfb', 'read_xml_tag.sh'];
+	private const DOUBLES = ['pgrep', 'killall', 'sleep', 'logger', 'lighttpd_pfb', 'read_xml_tag.sh', 'timeout', 'pfblockerng.sh'];
 
 	private const DOUBLE = <<<'SH'
 		#!/bin/sh
@@ -194,6 +194,13 @@ final class DnsblServiceRestartTest extends TestCase
 				if (preg_match('~^/(?:usr/local/sbin|usr/local/bin|usr/sbin|usr/bin|sbin|bin)/([\w.\-]+)$~', $path, $cmd) === 1) {
 					$this->assertFileExists("{$this->dir}/bin/{$cmd[1]}", "no command double for {$path}; refusing to run a host binary");
 					return "{$this->dir}/bin/{$cmd[1]}";
+				}
+				if (preg_match('~^/usr/local/etc/([\w.\-]+)$~', $path, $etc) === 1) {
+					return "{$this->dir}/etc/{$etc[1]}";
+				}
+				if ($path === '/usr/local/pkg/pfblockerng/pfblockerng.sh') {
+					$this->assertFileExists("{$this->dir}/bin/pfblockerng.sh", 'no command double for the packaged pfblockerng.sh');
+					return "{$this->dir}/bin/pfblockerng.sh";
 				}
 				if (preg_match('~^/var/unbound/([\w.\-]+)$~', $path, $file) === 1) {
 					return "{$this->dir}/var/{$file[1]}";
