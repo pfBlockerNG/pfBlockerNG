@@ -369,6 +369,7 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
                     flush=True,
                 )
 
+            vm.ssh("echo x | /usr/bin/nc -u -w1 127.0.0.1 5353")  # TEMPORARY poke
             after = _capture(vm)
             assert not _toggle_on_in_config(vm), f"failed upstream activation must turn pfB-DNS off: {after}"
             assert not _snapshot_present(vm), f"rollback must consume the Resolver snapshot: {after.marker!r}"
