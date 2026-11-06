@@ -347,7 +347,14 @@ pfb_archive_compress() {
 	# output (never the pre-existing .bz2 -- it was never touched above) and fall
 	# back to bzip2 ("who knows what the future holds").
 	rm -f "${_tartmp}" "${_ztmp}" "${_base}.zst"
-	"${pathtar}" -Pjcf "${_base}.bz2" "$@"
+	_btmp="$(mktemp "${_base}.XXXXXX")" || return 1
+	if "${pathtar}" -Pjcf "${_btmp}" "$@" && mv -f "${_btmp}" "${_base}.bz2"; then
+		return 0
+	else
+		_status=$?
+	fi
+	rm -f "${_btmp}"
+	return "${_status}"
 }
 
 # Extract "<base>.zst" (zstd) or "<base>.bz2" (bzip2) -- whichever exists. No reload.
@@ -381,9 +388,9 @@ aliastables() {
 # wiped on reboot, so DNSBL comes up dead; this keeps it alive across reboot with PURE FILE
 # OPS (no reload/restart), kept SEPARATE from the IP aliastables flow above (different
 # lifecycles). stage = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot
-# (re-run on every save/restore, never restored stale); teardown = remove the SHIPPED set;
-# save = stage then archive the
-# GENERATED set plus exact TOP1M detector sidecars; restore = boot earlyshellcmd, untar
+# (during the DNSBL pass and restore, never during save); teardown = remove the SHIPPED set;
+# save = archive the GENERATED set plus exact TOP1M detector sidecars, with the caller holding
+# the publication lock; restore = boot earlyshellcmd, untar
 # the cached files THEN stage. Naming contract: a new generated file MUST keep the
 # pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED (the port's plist
 # is GENERATED from the stagedir, so packaging needs nothing) -- dnsbl_psl rides
@@ -435,7 +442,6 @@ dnsbl_cache() {
 			dnsbl_cache_teardown
 			;;
 		save)
-			dnsbl_cache_stage
 			# Archive the generated chroot set plus exact TOP1M detector sidecars,
 			# EXCLUDING shipped files (PFB_PY_SHIPPED) -- those are re-staged from
 			# /usr/local on restore, so archiving them would reinstate stale code (e.g.

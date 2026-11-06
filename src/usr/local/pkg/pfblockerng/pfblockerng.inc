@@ -4495,7 +4495,7 @@ EOF;
 	# A RAM-disk install (use_mfs_tmpvar) restores this archive at boot: write it when none exists yet and DNSBL has a manifest (#3713)
 	if [ ! -f '{$pfb['dnsblarchive']}.zst' ] && [ ! -f '{$pfb['dnsblarchive']}.bz2' ] && [ -f '{$pfb['unbound_py_sources']}' ] &&
 	    [ "\$(/usr/local/sbin/read_xml_tag.sh boolean system/use_mfs_tmpvar)" = 'true' ]; then
-		/usr/bin/timeout -s TERM -k 5 60 {$pfb['script']} dnsbl_cache save >/dev/null 2>&1
+		/usr/bin/timeout -s TERM -k 5 60 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache >/dev/null 2>&1
 	fi
 
 	# Terminate DNSBL Lighttpd webserver, if found, and wait for its exit (#3423):
@@ -7196,6 +7196,12 @@ if (isset($argv[1])) {
 	// The pfb_filter rc stop: write the aliastables archive a RAM-disk /var restores at boot when none exists (issue #3713)
 	elseif ($argv[1] == 'aliastables') {
 			pfb_aliastables('update');
+			exit(0);
+	}
+
+	// Snapshot capture shares the manifest publication lock with updates and generation GC.
+	elseif ($argv[1] == 'dnsbl_cache') {
+			pfb_dnsbl_cache('save');
 			exit(0);
 	}
 }
@@ -23148,7 +23154,15 @@ function pfb_dnsbl_cache($mode) {
 	$earlyshellcmd = '/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache restore';
 
 	if ($mode == 'save') {
-		exec(escapeshellarg($pfb['script']) . ' dnsbl_cache save >/dev/null 2>&1');
+		$lock = pfb_unbound_py_publication_lock();
+		if ($lock === FALSE) {
+			return;
+		}
+		try {
+			exec(escapeshellarg($pfb['script']) . ' dnsbl_cache save >/dev/null 2>&1');
+		} finally {
+			pfb_unbound_py_publication_unlock($lock);
+		}
 		return;
 	}
 

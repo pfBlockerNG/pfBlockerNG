@@ -2401,6 +2401,11 @@ A missing aliastables archive (when any of its files exists), or a missing DNSBL
 a DNSBL manifest exists), is also written by every pass's `'conf'` step and
 by the `pfb_filter` / `pfb_dnsbl` rc `stop` that pfSense runs before a GUI or console reboot or halt
 (issue #3713), so static feeds that never reach a change still get one.
+DNSBL saves hold the existing manifest publication lock through archive capture, including the rc
+stop's PHP entry point, so publication and generation GC cannot split a snapshot. Saving does not
+stage shipped files before change detection; the normal DNSBL pass and restore still stage them.
+Both compression formats publish via a same-directory temporary file, so a failed fallback write
+cannot leave a partial archive that prevents a later missing-archive retry.
 Known gap: the boot-restore `earlyshellcmd` hooks follow the `use_mfs_tmpvar` config flag, but only a
 pfBlockerNG pass registers them. A reboot right after RAM disks are first enabled, with no pass in between,
 restores nothing: IP uses pfSense core's `RAM_Disk_Store` copy and DNSBL stays down until the next pass.

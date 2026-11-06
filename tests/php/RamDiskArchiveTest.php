@@ -466,9 +466,9 @@ final class RamDiskArchiveTest extends TestCase
 
 		// Then exactly one bounded `dnsbl_cache save` runs, and the stop still succeeds
 		$this->assertSame(0, $status, "rc stop failed: {$output}");
-		$this->assertSame(['pfblockerng.sh dnsbl_cache save'], $this->stateLines('calls'), 'the stop runs one DNSBL archive save');
+		$this->assertSame(['php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache'], $this->stateLines('calls'), 'the stop uses the publication-locked PHP save');
 		$this->assertSame(
-			["-s TERM -k 5 60 {$this->dir}/bin/pfblockerng.sh dnsbl_cache save"],
+			["-s TERM -k 5 60 {$this->dir}/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache"],
 			$this->stateLines('timeout.args'),
 			'the DNSBL archive save is bounded by timeout(1)'
 		);
@@ -527,7 +527,7 @@ final class RamDiskArchiveTest extends TestCase
 		[$status, $output] = $this->rcStop();
 
 		// Then the save is attempted once and the stop still exits 0
-		$this->assertSame(['pfblockerng.sh dnsbl_cache save'], $this->stateLines('calls'), 'the failing save is attempted once');
+		$this->assertSame(['php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dnsbl_cache'], $this->stateLines('calls'), 'the failing save is attempted once');
 		$this->assertSame(0, $status, "rc_start runs rc_stop || return 1: a failed save must not keep the web server down: {$output}");
 	}
 }
