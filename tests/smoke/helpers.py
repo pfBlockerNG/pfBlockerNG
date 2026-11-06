@@ -454,9 +454,11 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
         raise RuntimeError(f"suppression-off baseline pin failed: rc={pin.returncode} {pin.stderr!r} {pin.stdout!r}")
 
 
-# Leave the box as a fresh boot has it: the package's own DEINSTALL hooks drop the menu/config
-# registration, and the share directory goes with it. The next ``deploy()`` then registers from scratch.
+# Leave the box as a fresh boot has it. ``pkg delete -f`` empties pkg's database so the next ``deploy()``
+# registers the services from scratch (issue #3724: ``pkg add`` of a package pkg still lists registers nothing);
+# the DEINSTALL hooks also drop what install-from-repo.sh registered outside pkg.
 _UNDEPLOY_SH = r"""
+env ASSUME_ALWAYS_YES=yes pkg delete -fyg 'pfSense-pkg-pfBlockerNG*' >/dev/null 2>&1 || true
 php -f /etc/rc.packages pfSense-pkg-pfBlockerNG DEINSTALL >/dev/null 2>&1 || true
 php -f /etc/rc.packages pfSense-pkg-pfBlockerNG POST-DEINSTALL >/dev/null 2>&1 || true
 rm -rf /usr/local/share/pfSense-pkg-pfBlockerNG /usr/local/share/pfSense-pkg-pfBlockerNG-devel
