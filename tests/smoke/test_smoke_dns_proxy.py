@@ -1724,7 +1724,7 @@ while [ "$(/bin/date +%s)" -lt "$PROBE_END" ]; do
 		ans && $4 == "A" { a = a (a == "" ? "" : ",") $5 }
 		END { print (rc == "" ? "NONE" : rc) ":" (a == "" ? "-" : a) }')
 	printf '%s %s\n' "$(/bin/date +%s)" "$a" >>"$PROBE_LOG"
-	/bin/sleep 0.2
+	/bin/sleep 0.5
 done
 """
 
