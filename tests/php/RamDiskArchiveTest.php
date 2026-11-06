@@ -396,10 +396,11 @@ final class RamDiskArchiveTest extends TestCase
 			eval($arm[1]);
 		})(['pfblockerng.inc', 'aliastables']);
 
-		// Then the aliastables archive is written and lists the IP table
+		// Then the aliastables archive is written and lists the IP table, and config.xml is not written during shutdown
 		$archive = $this->archive($this->aliasBase);
 		$this->assertNotNull($archive, 'the aliastables arm writes the missing archive');
 		$this->assertContains('pfB_Test_v4.txt', $this->members($archive), 'the aliastables archive lists the IP table');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'the arm archives only; registering the restore (a config write) is the pass\'s job');
 	}
 
 	public function testFilterStopWritesTheMissingAliastablesArchiveOnARamDisk(): void
