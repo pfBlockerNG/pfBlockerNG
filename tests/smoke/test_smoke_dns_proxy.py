@@ -1808,12 +1808,25 @@ class _Probe:
         assert started.returncode == 0, f"starting the probe: rc={started.returncode} {started.stdout}{started.stderr}"
         h.wait_until(lambda: bool((_cat(self.vm, UPGRADE_PROBE_LOG) or "").strip()), timeout=30.0, interval=1.0)
 
-    def stop(self) -> list[str]:
-        """Kill the loop, read its log, delete its files; repeated calls return the first read."""
+    def stop(self, min_rows: int = 0) -> list[str]:
+        """Kill the loop, read its log, delete its files; repeated calls return the first read.
+
+        `min_rows` lets the loop run on until its log holds that many rows (30 s at most, then a RuntimeError, the loop
+        killed all the same): the rows of a window are the duration of whatever ran beside the probe, and an update
+        pass that takes 0.5 s on a fast runner leaves 4 (issue #3566). A cleanup stop passes none and never waits.
+        """
         if self.rows is None:
-            _sh(self.vm, f"pkill -KILL -f '{UPGRADE_PROBE_PROCESS}'; true")
-            self.rows = (_cat(self.vm, UPGRADE_PROBE_LOG) or "").splitlines()
-            _sh(self.vm, f"rm -rf {UPGRADE_PROBE_DIR}")
+            try:
+                if min_rows:
+                    h.wait_until(
+                        lambda: len((_cat(self.vm, UPGRADE_PROBE_LOG) or "").splitlines()) >= min_rows,
+                        timeout=30.0,
+                        interval=0.5,
+                    )
+            finally:
+                _sh(self.vm, f"pkill -KILL -f '{UPGRADE_PROBE_PROCESS}'; true")
+                self.rows = (_cat(self.vm, UPGRADE_PROBE_LOG) or "").splitlines()
+                _sh(self.vm, f"rm -rf {UPGRADE_PROBE_DIR}")
         return self.rows
 
 
@@ -1938,7 +1951,7 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
         size = int(logged.stdout)
         probe.start()
         h.reload(vm, "update")
-        rows = probe.stop()
+        rows = probe.stop(min_rows=UPGRADE_PROBE_MIN_ROWS)
         after = _settled_pids(vm)
         diagnostics = _diagnostics(vm)
         assert (after.gateway, after.supervisor) == (before.gateway, before.supervisor), (
