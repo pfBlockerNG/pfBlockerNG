@@ -1717,6 +1717,7 @@ UPGRADE_PROBE_LOG = f"{UPGRADE_PROBE_DIR}/log"
 UPGRADE_PROBE_PROCESS = "pfb3566_probe[.]sh"  # for pkill -f; the brackets keep it off its own command
 UPGRADE_PROBE_SPAN = 800  # s: the probe ends itself by then whatever happens
 UPGRADE_PROBE_MIN_ROWS = 5
+UPGRADE_PROBE_WAIT = 30.0
 
 # One row per answer: "<epoch> <RCODE>:<addresses>", NONE:- when nothing answered in 3 s.
 UPGRADE_PROBE_SCRIPT = r"""#!/bin/sh
@@ -1806,27 +1807,30 @@ class _Probe:
         )
         started = _sh(self.vm, script)
         assert started.returncode == 0, f"starting the probe: rc={started.returncode} {started.stdout}{started.stderr}"
-        h.wait_until(lambda: bool((_cat(self.vm, UPGRADE_PROBE_LOG) or "").strip()), timeout=30.0, interval=1.0)
+        h.wait_until(
+            lambda: bool((_cat(self.vm, UPGRADE_PROBE_LOG) or "").strip()), timeout=UPGRADE_PROBE_WAIT, interval=1.0
+        )
 
-    def stop(self, min_rows: int = 0) -> list[str]:
-        """Kill the loop, read its log, delete its files; repeated calls return the first read.
+    def stop(self) -> list[str]:
+        """Guarantee the minimum sample size, not coverage of the restart window; always clean up."""
+        try:
+            if self.rows is None:
+                h.wait_until(
+                    lambda: len((_cat(self.vm, UPGRADE_PROBE_LOG) or "").splitlines()) >= UPGRADE_PROBE_MIN_ROWS,
+                    timeout=UPGRADE_PROBE_WAIT,
+                    interval=0.5,
+                )
+        finally:
+            self.abort()
+        assert self.rows is not None
+        return self.rows
 
-        `min_rows` lets the loop run on until its log holds that many rows (30 s at most, then a RuntimeError, the loop
-        killed all the same): the rows of a window are the duration of whatever ran beside the probe, and an update
-        pass that takes 0.5 s on a fast runner leaves 4 (issue #3566). A cleanup stop passes none and never waits.
-        """
+    def abort(self) -> list[str]:
+        """Stop immediately; repeated calls return the first read."""
         if self.rows is None:
-            try:
-                if min_rows:
-                    h.wait_until(
-                        lambda: len((_cat(self.vm, UPGRADE_PROBE_LOG) or "").splitlines()) >= min_rows,
-                        timeout=30.0,
-                        interval=0.5,
-                    )
-            finally:
-                _sh(self.vm, f"pkill -KILL -f '{UPGRADE_PROBE_PROCESS}'; true")
-                self.rows = (_cat(self.vm, UPGRADE_PROBE_LOG) or "").splitlines()
-                _sh(self.vm, f"rm -rf {UPGRADE_PROBE_DIR}")
+            _sh(self.vm, f"pkill -KILL -f '{UPGRADE_PROBE_PROCESS}'; true")
+            self.rows = (_cat(self.vm, UPGRADE_PROBE_LOG) or "").splitlines()
+            _sh(self.vm, f"rm -rf {UPGRADE_PROBE_DIR}")
         return self.rows
 
 
@@ -1909,7 +1913,7 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
         assert not _restart_pending(vm), f"{RESTART_PENDING} exists after the next update: nothing was to be deferred"
     finally:
         try:
-            probe.stop()
+            probe.abort()
         finally:
             # the branch build again, at its own version, for the tests after this one
             h.deploy(vm)
@@ -1951,7 +1955,7 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
         size = int(logged.stdout)
         probe.start()
         h.reload(vm, "update")
-        rows = probe.stop(min_rows=UPGRADE_PROBE_MIN_ROWS)
+        rows = probe.stop()
         after = _settled_pids(vm)
         diagnostics = _diagnostics(vm)
         assert (after.gateway, after.supervisor) == (before.gateway, before.supervisor), (
@@ -1991,7 +1995,7 @@ def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: Sta
         _say(f"the decider restart's memory check read: {lines[0]}")
     finally:
         try:
-            probe.stop()
+            probe.abort()
         finally:
             restored = _sh(vm, f"cp -p {SAVE_DIR}/dnswire.py {target} && cmp {SAVE_DIR}/dnswire.py {target}")
             assert restored.returncode == 0, f"restoring {target}: rc={restored.returncode} {restored.stdout}"

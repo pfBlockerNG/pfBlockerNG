@@ -4,8 +4,7 @@ The live test asks the proxy for a listed name every 0.2 s while an update pass 
 UPGRADE_PROBE_MIN_ROWS answers so that "every probe got the VIP" means something. The probe window used to be the
 duration of the update pass, which is a property of the runner, not of the test: CI runs whose pass took 0.5-0.6 s
 logged 4 rows and failed the count, runs whose pass took 0.75-0.85 s logged 5-6 and passed. These cases pin that
-`_Probe.stop(min_rows=N)` lets the loop reach N rows however short the work beside it was, and that the cleanup stop
-never waits.
+`_Probe.stop()` guarantees a minimum sample size, not coverage of the restart window; cleanup via `abort()` never waits.
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ def test_the_loop_runs_on_until_it_has_the_rows_asked_for(guest: tuple[_Clock, _
     """An update pass of 0.55 s (a fast runner) leaves 3 rows; the stop waits for the 5 the assertion needs."""
     clock, _guest, probe = guest
     clock.now += 0.55  # the update pass
-    rows = probe.stop(min_rows=dns.UPGRADE_PROBE_MIN_ROWS)
+    rows = probe.stop()
     assert len(rows) >= dns.UPGRADE_PROBE_MIN_ROWS, rows
     dns._assert_probe_answered(rows, "the decider's restart")
 
@@ -82,7 +81,7 @@ def test_a_window_that_already_holds_the_rows_is_not_extended(guest: tuple[_Cloc
     clock, _guest, probe = guest
     clock.now += 2.0
     before = clock.now
-    rows = probe.stop(min_rows=dns.UPGRADE_PROBE_MIN_ROWS)
+    rows = probe.stop()
     assert len(rows) >= dns.UPGRADE_PROBE_MIN_ROWS
     assert clock.now - before < 1.0, "the stop waited although the loop had enough rows"
 
@@ -90,19 +89,20 @@ def test_a_window_that_already_holds_the_rows_is_not_extended(guest: tuple[_Cloc
 def test_the_cleanup_stop_kills_at_once(guest: tuple[_Clock, _Guest, dns._Probe]) -> None:
     """The `finally` of a failed test stops the probe without waiting; a second stop returns the first read."""
     clock, _guest, probe = guest
-    rows = probe.stop()
+    rows = probe.abort()
     assert clock.now == 0.0, "the cleanup stop waited on the clock"
     assert len(rows) == 1
     clock.now += 5.0
-    assert probe.stop() == rows
+    assert probe.abort() == rows
 
 
 def test_a_loop_that_never_reaches_the_rows_fails_loudly_and_is_still_killed(
     guest: tuple[_Clock, _Guest, dns._Probe],
 ) -> None:
     """A loop that cannot log (the guest hung) is a failure of the wait, not a silent short read; the loop is killed."""
-    _clock, guest_, probe = guest
+    clock, guest_, probe = guest
     guest_.log = lambda: ""  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="stuck/environment"):
-        probe.stop(min_rows=dns.UPGRADE_PROBE_MIN_ROWS)
+        probe.stop()
     assert guest_.killed is not None, "the probe loop was left running after the wait gave up"
+    assert 29.0 <= clock.now <= 31.0, f"expected the 30 s watchdog, got {clock.now} s"
