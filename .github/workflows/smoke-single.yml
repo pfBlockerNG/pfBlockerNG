@@ -400,10 +400,13 @@ jobs:
         id: aptkey
         run: |
           set -eu
-          echo "key=apt-debs-${ImageOS}-${ImageVersion}-$(sha256sum .github/workflows/smoke-single.yml | cut -c1-16)" >> "$GITHUB_OUTPUT"
-          echo "dir=$HOME/.cache/smoke-apt-archives" >> "$GITHUB_OUTPUT"
+          # Key on the install line only so unrelated edits stay warm; apt-g[e]t keeps the grep from matching itself.
+          install=$(grep -E '^ +sudo apt-g[e]t install ' .github/workflows/smoke-single.yml)
+          echo "key=apt-debs-${ImageOS}-${ImageVersion}-$(printf %s "$install" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          # /var/tmp, not $HOME: apt's _apt user must reach it, or the download runs unsandboxed as root.
+          echo "dir=/var/tmp/smoke-apt-archives" >> "$GITHUB_OUTPUT"
 
-      # A slow mirror only costs a cold cache (#3744); the key is the runner image + this file (it holds the package list).
+      # A slow mirror only costs a cold cache (#3744); the key is the runner image + the install line.
       - name: Restore cached apt downloads
         id: aptcache
         uses: actions/cache/restore@v6
@@ -426,6 +429,7 @@ jobs:
         run: |
           set -eu
           mkdir -p "$APT_ARCHIVES/partial"
+          chmod a+rwx "$APT_ARCHIVES" "$APT_ARCHIVES/partial"
           sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
           sudo apt-get install --no-install-recommends -o Dir::Cache::archives="$APT_ARCHIVES" -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -y qemu-system-x86 qemu-utils dnsutils openssh-client iptables zstd
           # apt ran as root: hand the files to the runner user so the cache action can read them.

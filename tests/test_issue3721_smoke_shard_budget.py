@@ -140,26 +140,27 @@ def _install_command() -> str:
 
 
 def _cache_steps() -> tuple[dict[str, Any], dict[str, Any]]:
-    """The cache restore step before the apt step and the cache save step after it."""
+    """The apt cache's restore step before the apt step and its save step after it."""
     steps = _job()["steps"]
     apt_at = steps.index(_apt_step())
-    restore = [s for s in steps[:apt_at] if str(s.get("uses", "")).startswith("actions/cache/restore@")]
-    assert restore, "no actions/cache/restore step before the apt step"
     archives = _apt_step().get("env", {}).get("APT_ARCHIVES")
-    apt_keys = [s for s in restore if s["with"]["path"] == archives]
-    assert len(apt_keys) == 1, f"actions/cache/restore steps caching APT_ARCHIVES {archives!r}: {apt_keys}"
+    restore = [
+        s
+        for s in steps[:apt_at]
+        if str(s.get("uses", "")).startswith("actions/cache/restore@") and s["with"]["path"] == archives
+    ]
+    assert len(restore) == 1, f"actions/cache/restore steps caching APT_ARCHIVES {archives!r}: {restore}"
     save = [
         s
         for s in steps[apt_at + 1 :]
-        if str(s.get("uses", "")).startswith("actions/cache/save@") and s["with"]["key"] == apt_keys[0]["with"]["key"]
+        if str(s.get("uses", "")).startswith("actions/cache/save@") and s["with"]["key"] == restore[0]["with"]["key"]
     ]
     assert len(save) == 1, f"actions/cache/save steps after the apt step on the apt key: {save}"
-    restore = apt_keys
     return restore[0], save[0]
 
 
-def _resolved_cache_key(image_version: str, workflow_text: str, tmp_path: Path) -> str:
-    """Run the key-resolving step the restore step's key points at, as the runner would."""
+def _key_outputs(*, image_os: str, image_version: str, workflow_text: str, tmp_path: Path) -> dict[str, str]:
+    """Run the key-resolving step the restore step's key points at, as the runner would, and return its outputs."""
     restore, _ = _cache_steps()
     match = re.fullmatch(r"\$\{\{ steps\.([\w-]+)\.outputs\.key \}\}", restore["with"]["key"])
     assert match, f"cache key must come from a step output, got {restore['with']['key']!r}"
@@ -171,14 +172,22 @@ def _resolved_cache_key(image_version: str, workflow_text: str, tmp_path: Path) 
     env = {
         **_job().get("env", {}),
         **step.get("env", {}),
-        "ImageOS": "ubuntu24",
+        "ImageOS": image_os,
         "ImageVersion": image_version,
         "GITHUB_OUTPUT": str(out),
         "HOME": str(tmp_path),
         "PATH": os.environ["PATH"],
     }
     subprocess.run(["sh", "-c", step["run"]], env=env, cwd=tmp_path, check=True, capture_output=True, text=True)
-    return dict(ln.split("=", 1) for ln in out.read_text().splitlines())["key"]
+    return dict(ln.split("=", 1) for ln in out.read_text().splitlines())
+
+
+def _chowns_archives_after_install(script: str) -> bool:
+    """True when a `chown` of "$APT_ARCHIVES" runs after the apt-get install command."""
+    lines = [ln.strip() for ln in script.splitlines()]
+    installs = [i for i, ln in enumerate(lines) if "apt-get install" in ln]
+    chowns = [i for i, ln in enumerate(lines) if "chown" in shlex.split(ln, comments=True) and '"$APT_ARCHIVES"' in ln]
+    return bool(installs and chowns) and max(chowns) > max(installs)
 
 
 def test_apt_install_skips_recommended_packages() -> None:
@@ -214,12 +223,66 @@ def test_the_downloaded_debs_are_restored_before_and_saved_after_the_install() -
     )
 
 
-def test_the_cache_key_follows_the_runner_image_and_the_package_list(tmp_path: Path) -> None:
-    # The package list lives in the workflow file's install line, so the key hashes that file.
+def test_a_cold_cache_is_saved_only_after_a_successful_install() -> None:
+    restore, save = _cache_steps()
+    condition = str(save.get("if", ""))
+
+    hit = f"steps.{restore['id']}.outputs.cache-hit != 'true'"
+    assert hit in condition, f"the apt cache save must run only on a miss ({hit!r}), got {condition!r}"
+    assert "always()" not in condition, f"the apt cache save must not run after a failed install: {condition!r}"
+
+
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [
+        ('sudo apt-get install -y x\nsudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"', True),
+        ("sudo apt-get install -y x", False),
+        ('sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"\nsudo apt-get install -y x', False),
+        ('sudo apt-get install -y x\nsudo chown -R "$(id -u):$(id -g)" /tmp/other', False),
+        ('sudo apt-get install -y x\n# sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"', False),
+    ],
+)
+def test_chown_detector_requires_the_archives_handed_back_after_the_install(script: str, expected: bool) -> None:
+    assert _chowns_archives_after_install(script) is expected, f"unexpected verdict for {script!r}"
+
+
+def test_the_apt_archives_are_handed_to_the_runner_user_after_the_install() -> None:
+    script = str(_apt_step()["run"])
+
+    assert _chowns_archives_after_install(script), (
+        f"root-owned .deb files must be chowned back after the install or the cache save cannot read them:\n{script}"
+    )
+
+
+def test_the_key_step_writes_the_cache_key_and_the_archive_dir(tmp_path: Path) -> None:
+    outputs = _key_outputs(
+        image_os="ubuntu24", image_version="20261101.1", workflow_text=WORKFLOW.read_text(), tmp_path=tmp_path
+    )
+
+    assert {"key", "dir"} <= outputs.keys(), f"key step outputs: {sorted(outputs)}"
+    assert outputs["key"] and outputs["dir"], f"empty key step output: {outputs}"
+
+
+def test_the_cache_key_follows_the_runner_image_and_the_install_line_only(tmp_path: Path) -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    install = _install_command()
 
-    base = _resolved_cache_key("20261101.1", workflow, tmp_path)
+    def key(*, image_os: str = "ubuntu24", image_version: str = "20261101.1", text: str = workflow) -> str:
+        return _key_outputs(image_os=image_os, image_version=image_version, workflow_text=text, tmp_path=tmp_path)[
+            "key"
+        ]
 
-    assert _resolved_cache_key("20261101.1", workflow, tmp_path) == base, "same inputs must reuse the entry"
-    assert _resolved_cache_key("20261102.1", workflow, tmp_path) != base, "a new runner image must miss"
-    assert _resolved_cache_key("20261101.1", workflow + " tcpdump", tmp_path) != base, "a new package must miss"
+    base = key()
+
+    assert key() == base, "same inputs must reuse the entry"
+    assert key(image_version="20261102.1") != base, "a new runner image version must miss"
+    assert key(image_os="ubuntu26") != base, "a new runner OS must miss"
+    assert key(text=workflow.replace(install, install + " tcpdump")) != base, "a new package must miss"
+    assert key(text=workflow + "\n# an unrelated edit\n") == base, "an unrelated workflow edit must stay warm"
+
+
+def test_a_workflow_without_an_install_line_cannot_resolve_a_key(tmp_path: Path) -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8").replace("apt-get install", "apt-get  install")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _key_outputs(image_os="ubuntu24", image_version="20261101.1", workflow_text=workflow, tmp_path=tmp_path)
