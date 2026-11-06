@@ -106,6 +106,8 @@ def _settle_alias(vm: SmokeVM, aliasname: str, inert_ip: str) -> h.IpCase:
     spec = h.IpCase(aliasname=aliasname, feed_url=feed, header=aliasname)
     h.inject(vm, spec)
     h.reload(vm, "update")
+    # issue #3728: the detached reload may not have built the table yet; block until it has.
+    h.apply_filter_sync(vm)
     assert h.wait_until(
         lambda: h.member_present(h.pfctl_table_members(vm, spec.alias), inert_ip),
         timeout=60.0,
