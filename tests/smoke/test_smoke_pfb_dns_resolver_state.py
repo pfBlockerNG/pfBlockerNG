@@ -385,8 +385,9 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
             assert len(new) == 1 and "was turned off" in new[0] and "restored to its previous settings" in new[0], (
                 f"one failure notice must report the rollback: {new}"
             )
-            holders = {(s.proto, s.local) for s in _listeners(vm, connected=True) if s.command == "nc"}
-            assert held <= holders, f"both upstream holders must remain during recovery: {sorted(holders)}"
+            sockets = [s for s in _listeners(vm, connected=True) if s.port == 5353]
+            holders = {(s.proto, s.local) for s in sockets if s.command == "nc"}
+            assert held <= holders, f"both upstream holders must remain during recovery; sockets on 5353: {sockets}"
             assert after.unbound_dns() == before.unbound_dns(), (
                 f"native Resolver listeners must be restored: {after.unbound_dns()} != {before.unbound_dns()}"
             )

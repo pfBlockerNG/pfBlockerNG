@@ -2218,7 +2218,7 @@ def _occupy(vm: SmokeVM, addresses: list[str], port: str) -> None:
     try:
         h.wait_until(held, timeout=30.0, interval=1.0)
     except RuntimeError as exc:
-        have = sorted((s.command, s.proto, s.local) for s in _listeners(vm) if s.port == int(port))
+        have = sorted((s.command, s.proto, s.local) for s in _listeners(vm, connected=True) if s.port == int(port))
         raise RuntimeError(f"{exc}\nthe listeners do not hold {sorted(wanted)}; sockets on {port}: {have}") from exc
 
 
