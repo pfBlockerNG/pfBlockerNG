@@ -22,10 +22,12 @@ Scenario: a fresh boot, no pfBlockerNG package present.
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
 
+from . import helpers
 from .conftest import SMOKE_DIR, SmokeVM
 
 pytestmark = pytest.mark.smoke
@@ -49,19 +51,22 @@ foreach ($pkgs as $p) { echo "REGISTERED=" . ($p["name"] ?? "") . "\n"; }
 '
 """
 
-# Leave the session VM as the fresh boot left it: the package's own DEINSTALL hooks drop
-# the menu/config registration, and the share directory goes with it. The next module's
-# ``pkg add`` then registers from scratch exactly as on a clean image.
-_CLEANUP_SH = r"""
-php -f /etc/rc.packages pfSense-pkg-pfBlockerNG DEINSTALL >/dev/null 2>&1 || true
-php -f /etc/rc.packages pfSense-pkg-pfBlockerNG POST-DEINSTALL >/dev/null 2>&1 || true
-rm -rf /usr/local/share/pfSense-pkg-pfBlockerNG /usr/local/share/pfSense-pkg-pfBlockerNG-devel
+_SERVICES_SH = r"""
+php -r '
+require_once "config.inc";
+foreach (config_get_path("installedpackages/service", []) as $s) { echo "SERVICE=" . ($s["name"] ?? "") . "\n"; }
+'
 """
 
 
-@pytest.mark.timeout(900)
-def test_install_from_repo_registers_canonical_package(smoke_vm: SmokeVM) -> None:
-    vm = smoke_vm
+def _run_on_guest(vm: SmokeVM, script: str, *, timeout: float = 120.0) -> str:
+    run = subprocess.run(
+        vm.ssh_argv("/bin/sh"), input=script, capture_output=True, text=True, timeout=timeout, check=False
+    )
+    return run.stdout + run.stderr
+
+
+def _install_from_repo(vm: SmokeVM) -> subprocess.CompletedProcess[str]:
     argv = [
         "sh",
         str(INSTALL_FROM_REPO_SH),
@@ -71,17 +76,21 @@ def test_install_from_repo_registers_canonical_package(smoke_vm: SmokeVM) -> Non
         "--ssh-key",
         vm.ssh_key_path,
     ]
+    return subprocess.run(argv, capture_output=True, text=True, timeout=780, check=False)
+
+
+@pytest.mark.timeout(900)
+def test_install_from_repo_registers_canonical_package(smoke_vm: SmokeVM) -> None:
+    vm = smoke_vm
     try:
-        run = subprocess.run(argv, capture_output=True, text=True, timeout=780, check=False)
+        run = _install_from_repo(vm)
         out = run.stdout + run.stderr
         probe = subprocess.run(
             vm.ssh_argv("/bin/sh"), input=_PROBE_SH, capture_output=True, text=True, timeout=60, check=False
         )
         state = probe.stdout + probe.stderr
     finally:
-        subprocess.run(
-            vm.ssh_argv("/bin/sh"), input=_CLEANUP_SH, capture_output=True, text=True, timeout=120, check=False
-        )
+        helpers.undeploy(vm)
 
     print(
         "\n\n##### INSTALL-FROM-REPO (#3277) #####\n"
@@ -100,3 +109,33 @@ def test_install_from_repo_registers_canonical_package(smoke_vm: SmokeVM) -> Non
     assert "<name>pfBlockerNG</name>" in state, f"info.xml <name> is not the short canonical name:\n{state}"
     assert "REGISTERED=pfBlockerNG" in state, f"pfBlockerNG not registered in config.xml under its short name:\n{state}"
     assert "REGISTERED=pfBlockerNG-devel" not in state, f"retired -devel identity registered:\n{state}"
+
+
+@pytest.mark.timeout(900)
+def test_cleanup_lets_the_next_deploy_register_the_services(smoke_vm: SmokeVM) -> None:
+    """The module cleanup must leave a box on which the next ``deploy()`` registers pfb_filter/pfb_dnsbl (#3724).
+
+    Given the branch package is installed and install-from-repo.sh registered it under its short name on top,
+    When this module's cleanup runs,
+    Then a following ``deploy()`` registers the package services again (a ``pkg add`` that finds the package
+    still in pkg's database says "already installed" and registers nothing, so every later module's
+    start_service/restart_service silently does nothing).
+    """
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    vm = smoke_vm
+    try:
+        helpers.deploy(vm)
+        _install_from_repo(vm)
+        overlaid = _run_on_guest(vm, _PROBE_SH)
+        assert "REGISTERED=pfBlockerNG\n" in overlaid + "\n", (
+            f"install-from-repo.sh did not register the package:\n{overlaid}"
+        )
+        helpers.undeploy(vm)
+        helpers.deploy(vm)
+        services = _run_on_guest(vm, _SERVICES_SH)
+    finally:
+        helpers.undeploy(vm)
+
+    missing = [name for name in ("pfb_filter", "pfb_dnsbl") if f"SERVICE={name}\n" not in services + "\n"]
+    assert not missing, f"services {missing} not registered after cleanup + deploy; box lists:\n{services}"

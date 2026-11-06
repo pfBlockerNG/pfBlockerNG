@@ -454,6 +454,22 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
         raise RuntimeError(f"suppression-off baseline pin failed: rc={pin.returncode} {pin.stderr!r} {pin.stdout!r}")
 
 
+# Leave the box as a fresh boot has it: the package's own DEINSTALL hooks drop the menu/config
+# registration, and the share directory goes with it. The next ``deploy()`` then registers from scratch.
+_UNDEPLOY_SH = r"""
+php -f /etc/rc.packages pfSense-pkg-pfBlockerNG DEINSTALL >/dev/null 2>&1 || true
+php -f /etc/rc.packages pfSense-pkg-pfBlockerNG POST-DEINSTALL >/dev/null 2>&1 || true
+rm -rf /usr/local/share/pfSense-pkg-pfBlockerNG /usr/local/share/pfSense-pkg-pfBlockerNG-devel
+"""
+
+
+def undeploy(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Return a box that took the package outside ``deploy()`` to its fresh-boot state."""
+    subprocess.run(
+        vm.ssh_argv("/bin/sh"), input=_UNDEPLOY_SH, capture_output=True, text=True, timeout=timeout, check=False
+    )
+
+
 def _write_cron_disable_flag(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Write the cron-disable sentinel on the guest, raising loudly on failure.
 
