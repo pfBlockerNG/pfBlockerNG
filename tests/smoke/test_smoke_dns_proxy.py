@@ -412,13 +412,17 @@ def _xml_text(root: ET.Element, path: str) -> str | None:
     return None if element is None else (element.text or "")
 
 
-def _listeners(vm: SmokeVM) -> list[Listener]:
+def _listeners(vm: SmokeVM, *, connected: bool = False) -> list[Listener]:
     """Every socket `sockstat -46lw` shows: USER COMMAND PID FD PROTO LOCAL FOREIGN.
 
     FreeBSD 16 cuts a long local address at 21 columns unless `-w` widens the columns. It also brackets an IPv6 local
     address (``[::1]:53``); the listener keeps it bare (``::1:53``), as IPv4 does.
+
+    `connected` adds the connected sockets (`-46w`): `nc -u -l` connect()s to its first sender, and `-l` then skips it
+    though it still holds the port.
     """
-    rows = (line.split() for line in vm.ssh("sockstat -46lw").stdout.splitlines()[1:])
+    flags = "-46w" if connected else "-46lw"
+    rows = (line.split() for line in vm.ssh(f"sockstat {flags}").stdout.splitlines()[1:])
     return [
         Listener(row[1], int(row[2]), row[4], re.sub(r"^\[(.+)\]:", r"\1:", row[5]))
         for row in rows
@@ -2209,7 +2213,7 @@ def _occupy(vm: SmokeVM, addresses: list[str], port: str) -> None:
     wanted = {(f"{proto}{'6' if ':' in a else '4'}", f"{a}:{port}") for a in addresses for proto in ("tcp", "udp")}
 
     def held() -> bool:
-        return wanted <= {(s.proto, s.local) for s in _listeners(vm) if s.command == "nc"}
+        return wanted <= {(s.proto, s.local) for s in _listeners(vm, connected=True) if s.command == "nc"}
 
     try:
         h.wait_until(held, timeout=30.0, interval=1.0)
