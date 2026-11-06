@@ -24,7 +24,7 @@ final class PfbSettingsFamilyInterruptedInstallTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		unset($GLOBALS['config'], $GLOBALS['pfb']['dbdir']);
+		unset($GLOBALS['config'], $GLOBALS['pfb']['dbdir'], $GLOBALS['pfb']['downgrade_context_path']);
 		if (!is_dir($this->root)) {
 			return;
 		}
@@ -51,6 +51,27 @@ final class PfbSettingsFamilyInterruptedInstallTest extends TestCase
 		$this->assertSame($before, file_get_contents($this->root . '/settings-3.3.xml'), 'retry must not rewrite the source snapshot');
 
 		$this->assertTrue(pfb_settings_family_replace('3.3'));
+		$this->assertSame('pristine', $GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['canary']);
+	}
+
+	public function testDowngradeAfterInterruptedInstallRestoresTheSourceSnapshot(): void
+	{
+		pfb_install_settings_family_capture_restore();
+		$before = file_get_contents($this->root . '/settings-3.3.xml');
+		$this->assertIsString($before, 'source snapshot must exist after the first capture');
+		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['canary'] = 'half-migrated';
+
+		// The outgoing package's pre-uninstall runs on the way back to 3.3.
+		$context = $this->root . '/context.json';
+		$GLOBALS['pfb']['downgrade_context_path'] = $context;
+		file_put_contents($context, json_encode(
+			['version' => 1, 'source_family' => '4.0', 'target_family' => '3.3', 'created_at' => time()],
+			JSON_THROW_ON_ERROR
+		));
+		chmod($context, 0600);
+		pfb_settings_family_pre_uninstall();
+
+		$this->assertSame($before, file_get_contents($this->root . '/settings-3.3.xml'), 'pre-uninstall must not rewrite the source snapshot');
 		$this->assertSame('pristine', $GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['canary']);
 	}
 }
