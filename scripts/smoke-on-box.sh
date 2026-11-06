@@ -67,8 +67,8 @@
 #   5a. Build the previous-devel .pkg via build-prev-pkg.sh → SMOKE_PREV_PKG (issue
 #      #3455); a failed build stops the run here.
 #   5a2. Fetch the shipped v3.3.13 .pkg via fetch-legacy-pkg.sh → SMOKE_LEGACY_PKG (issue
-#      #3710); a failed fetch stops the run here, a leg the release shipped no package for
-#      (exit 3) carries on without it.
+#      #3710); a failed fetch stops the run here, a leg with no pinned package (exit 3) carries
+#      on without it.
 #   6. Sync the locked smoke + dependency-builder environment.
 #   7. Build this leg's extra_pkgs (per the CURRENT ref's version matrix) via
 #      build-dep-pkg-portable.py → SMOKE_DEP_PKGS (issue #1806 D2; empty when
@@ -412,7 +412,7 @@ printf 'smoke-on-box: previous pkg built: %s\n' "$SMOKE_PREV_PKG" >&2
 # The settings-family lifecycle smoke installs it after the branch build (SMOKE_LEGACY_PKG). It
 # is the release asset for this leg's edition and pfSense version, downloaded and checked
 # against the hash pinned in fetch-legacy-pkg.sh, never rebuilt. A failed download and a hash
-# mismatch stop the run before pytest starts. A leg v3.3.13 shipped no package for (exit 3) does
+# mismatch stop the run before pytest starts. A leg with no pinned package (exit 3) does
 # not: only that one module needs the package, so SMOKE_LEGACY_PKG is left unset, every other
 # module still runs, and the module fails at its legacy_pkg fixture rather than skipping.
 printf 'smoke-on-box: fetching the shipped legacy .pkg...\n' >&2

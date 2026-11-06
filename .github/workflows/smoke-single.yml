@@ -742,7 +742,7 @@ jobs:
       # resolved above. The bytes are downloaded and verified, never rebuilt.
       # Only the `smoke` marker collects the lifecycle module that reads it. A failed download or
       # hash mismatch fails this step, so the job stops before pytest instead of failing the module.
-      # A leg the release shipped no package for (exit 3) does not: only that module needs the
+      # A leg with no pinned package (exit 3) does not: only that module needs the
       # package, so the job carries on without SMOKE_LEGACY_PKG and the module fails at its
       # legacy_pkg fixture, never skipping.
       - name: Fetch the shipped v3.3.13 .pkg (settings-family lifecycle smoke)

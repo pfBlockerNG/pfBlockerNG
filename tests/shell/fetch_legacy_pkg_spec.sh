@@ -105,9 +105,9 @@ Describe 'fetch-legacy-pkg.sh (issue #3710)'
     The path "$PFB_LEGACY_PKG_WORK" should not be exist
   End
 
-  It 'refuses a digest-only ref with no usable version, naming the version'
+  It 'treats a digest-only ref with no usable version as a leg with no pinned package (exit 3), naming the version'
     When call run_fetch --image-ref 'ghcr.io/pfblockerng/pfsense-ce@sha256:abc' --pfsense-version '?'
-    The status should be failure
+    The status should equal 3
     The output should equal ''
     The stderr should include 'fetch-legacy-pkg: no pfSense version'
   End
@@ -143,7 +143,7 @@ Describe 'fetch-legacy-pkg.sh (issue #3710)'
         "$(code_of --pfsense-version 2.8)"
     }
     When call codes
-    The output should equal 'unpinned=3 unknown-image=1 no-version=1 missing-asset=1 bad-hash=1 no-ref=1'
+    The output should equal 'unpinned=3 unknown-image=1 no-version=3 missing-asset=1 bad-hash=1 no-ref=1'
   End
 
   # ── the hash gate ─────────────────────────────────────────────────────────── #

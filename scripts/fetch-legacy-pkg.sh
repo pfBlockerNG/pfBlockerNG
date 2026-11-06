@@ -22,9 +22,10 @@
 # stderr. Every stage that fails exits non-zero naming itself, so a caller that runs this under
 # `set -e` stops instead of carrying on without the package.
 #
-# EXIT STATUS: 0 with the path printed. 3 when the release shipped no package for the leg: nothing is
-# downloaded or printed, and it is the one outcome a caller may carry on past. 1 for everything else (a
-# bad argument, an image that is not pfSense, a failed or timed-out download, a hash mismatch).
+# EXIT STATUS: 0 with the path printed. 3 when no pinned package can be chosen for the leg (the release
+# shipped none for it, or a digest-only ref names no pfSense version): nothing is downloaded or printed,
+# and it is the one outcome a caller may carry on past. 1 for everything else (a bad argument, an image
+# that is not pfSense, a failed or timed-out download, a hash mismatch).
 #
 # ENV:
 #   TMPDIR   scratch root: the .pkg is kept in ${TMPDIR:-/tmp}/pfb-legacy-pkg and reused while it
@@ -98,7 +99,10 @@ case "$_name" in
 esac
 _mm="$(major_minor "$_version")"
 [ -n "$_mm" ] || _mm="$(major_minor "$_tag")"
-[ -n "$_mm" ] || die "no pfSense version in --pfsense-version '${_version}' or the tag of ${_ref}"
+[ -n "$_mm" ] || {
+    printf 'fetch-legacy-pkg: no pfSense version in --pfsense-version %s or the tag of %s\n' "'${_version}'" "$_ref" >&2
+    exit "$_NO_PINNED_ASSET"
+}
 _leg="${_edition}-${_mm}"
 _want="$(pinned_sha256 "$_leg")" || {
     printf 'fetch-legacy-pkg: no pinned package for leg %s: %s ships none\n' "$_leg" "$_TAG" >&2
