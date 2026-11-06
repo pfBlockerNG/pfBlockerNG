@@ -396,6 +396,21 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           sudo udevadm settle --timeout=10
 
+      - name: Resolve apt download cache key
+        id: aptkey
+        run: |
+          set -eu
+          echo "key=apt-debs-${ImageOS}-${ImageVersion}-$(sha256sum .github/workflows/smoke-single.yml | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "dir=$HOME/.cache/smoke-apt-archives" >> "$GITHUB_OUTPUT"
+
+      # A slow mirror only costs a cold cache (#3744); the key is the runner image + this file (it holds the package list).
+      - name: Restore cached apt downloads
+        id: aptcache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.aptkey.outputs.dir }}
+          key: ${{ steps.aptkey.outputs.key }}
+
       - name: Install host tools (qemu, dnsutils, iptables, zstd)
         # A stalled mirror ate 24-27 min of the 45 on three legs (#3721): bound each attempt and the step.
         timeout-minutes: 5
@@ -405,10 +420,24 @@ jobs:
         # Harmless for the default `smoke` marker (the helper just isn't called).
         # iptables: the hermetic egress gate (tests/smoke/helpers.py block_egress,
         # issue #2261) flips the runner's OUTPUT policy.
+        # --no-install-recommends: the runner is headless; the recommends are GUI/audio/video (#3744).
+        env:
+          APT_ARCHIVES: ${{ steps.aptkey.outputs.dir }}
         run: |
           set -eu
+          mkdir -p "$APT_ARCHIVES/partial"
           sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
-          sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -y qemu-system-x86 qemu-utils dnsutils openssh-client iptables zstd
+          sudo apt-get install --no-install-recommends -o Dir::Cache::archives="$APT_ARCHIVES" -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -y qemu-system-x86 qemu-utils dnsutils openssh-client iptables zstd
+          # apt ran as root: hand the files to the runner user so the cache action can read them.
+          sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"
+
+      # A caller-named checkout_ref run must not write the cache trusted runs restore (issue #3489).
+      - name: Save apt downloads to cache
+        if: steps.aptcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.aptkey.outputs.dir }}
+          key: ${{ steps.aptkey.outputs.key }}
 
       - name: Install oras
         # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
