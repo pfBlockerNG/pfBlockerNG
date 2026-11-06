@@ -6392,44 +6392,50 @@ def get_lan_ipv6(vm: SmokeVM, *, timeout: float = 60.0) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _client_lan_nic_ipv6(client_vm: SmokeVM, *, timeout: float = 30.0) -> tuple[str, str]:
-    """civm's LAN NIC (the one holding its 192.168.1.x lease) and its usable global IPv6."""
+def pick_client_ipv6(ip6_addr_output: str, nic: str, lan_addr: str) -> str:
+    """The usable global IPv6 on ``nic`` that lies in the /64 of pfSense's LAN address ``lan_addr``.
+
+    ``ip6_addr_output`` is ``ip -6 -o addr``. SLAAC keeps the previous prefix after a LAN swap, so
+    the first global address can sit outside the LAN and hit "Default deny rule IPv6" (#3727).
+    """
+    lan = ipaddress.ip_network(f"{lan_addr}/64", strict=False)
+    for line in ip6_addr_output.splitlines():
+        fields = line.split()
+        if len(fields) > 3 and fields[1] == nic and fields[2] == "inet6" and "global" in fields:
+            if {"tentative", "dadfailed", "deprecated", "temporary"} & set(fields):
+                continue
+            addr = fields[3].split("/")[0]
+            if ipaddress.ip_address(addr) in lan:
+                return addr
+    raise RuntimeError(
+        f"civm NIC {nic} has no usable global IPv6 in {lan} (the /64 of {lan_addr}); "
+        f"`ip -6 -o addr`:\n{ip6_addr_output}"
+    )
+
+
+def _client_lan_nic_ipv6(client_vm: SmokeVM, via: str, *, timeout: float = 30.0) -> tuple[str, str]:
+    """civm's LAN NIC (the one holding its 192.168.1.x lease) and its usable IPv6 inside ``via``'s /64."""
     res = client_vm.ssh("ip -4 -o addr show | awk '/ 192\\.168\\.1\\./{print $2; exit}'", timeout=timeout)
     nic = res.stdout.strip()
     if res.returncode != 0 or not nic:
         raise RuntimeError(f"civm has no NIC holding 192.168.1.x: rc={res.returncode} {res.stdout!r} {res.stderr!r}")
     res = client_vm.ssh("ip", "-6", "-o", "addr", timeout=timeout)
-    for line in res.stdout.splitlines():
-        fields = line.split()
-        if len(fields) > 3 and fields[1] == nic and fields[2] == "inet6" and "global" in fields:
-            if not {"tentative", "dadfailed", "deprecated", "temporary"} & set(fields):
-                return nic, fields[3].split("/")[0]
-    raise RuntimeError(
-        f"civm LAN NIC {nic} has no usable global IPv6 address; `ip -6 -o addr` "
-        f"(rc={res.returncode}):\n{res.stdout}{res.stderr}"
-    )
-
-
-def client_lan_ipv6(client_vm: SmokeVM, *, timeout: float = 30.0) -> str:
-    """civm's global IPv6 address on its LAN NIC, discovered at runtime.
-
-    The NIC holds a SLAAC and a DHCPv6 address and the lease is dynamic, so this is the
-    first stable one ``ip -6 -o addr`` lists (DAD finished; not deprecated, not a privacy
-    address). :func:`pin_client_route6` makes it the source of every pinned probe. None
-    usable raises with the raw ``ip -6 -o addr`` output.
-    """
-    return _client_lan_nic_ipv6(client_vm, timeout=timeout)[1]
+    try:
+        return nic, pick_client_ipv6(res.stdout, nic, via)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} (rc={res.returncode} stderr={res.stderr!r})") from None
 
 
 def pin_client_route6(client_vm: SmokeVM, dst: str, via: str, *, timeout: float = 30.0) -> str:
     """Route civm's traffic for ``dst`` via ``via`` out its LAN NIC; return the pinned source.
 
-    A ``/128`` host route sourced from :func:`client_lan_ipv6`. Needed for destinations
-    outside the LAN prefix: civm's MGMT NIC can carry an IPv6 default route too, so such a
-    probe may otherwise leave through QEMU user networking instead of pfSense. The route's
-    ``src`` fixes which LAN address pfSense sees. Undo with :func:`unpin_client_route6`.
+    A ``/128`` host route sourced from civm's usable address in ``via``'s /64 (see
+    :func:`pick_client_ipv6`). Needed for destinations outside the LAN prefix: civm's MGMT NIC can
+    carry an IPv6 default route too, so such a probe may otherwise leave through QEMU user
+    networking instead of pfSense. The route's ``src`` fixes which LAN address pfSense sees. Undo
+    with :func:`unpin_client_route6`.
     """
-    nic, src = _client_lan_nic_ipv6(client_vm, timeout=timeout)
+    nic, src = _client_lan_nic_ipv6(client_vm, via, timeout=timeout)
     res = client_vm.ssh(
         "ip", "-6", "route", "replace", f"{dst}/128", "via", via, "dev", nic, "src", src, timeout=timeout
     )
