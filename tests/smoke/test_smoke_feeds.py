@@ -4977,6 +4977,7 @@ def test_scan_on_keeps_ut1_and_geoip_archives_ingesting(deployed_vm: SmokeVM, mo
         deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
 
 
+@pytest.mark.timeout(600)
 def test_ip_feed_turning_comment_only_clears_stale_entries(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """issue #3457: an IP feed that turns comment-only (Spamhaus EDROP: every line ``;``)
     is empty, so its previous entries leave the alias.
