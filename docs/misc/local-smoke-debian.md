@@ -21,7 +21,9 @@ Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
   `oras`, `python3`, `ssh`, `qemu-system-x86_64`, `qemu-img`, `dig`, `iptables`, `zstd`,
   `tar`, `unzip`. On Debian those come from `git`, `jq`, `curl`, `qemu-system-x86` +
   `qemu-utils`, `dnsutils` (`dig`), `iptables`, `openssh-client`, `zstd`, `tar`, `unzip`,
-  and `python3`. Dependency package builds use the repository's exact Python and
+  and `python3`. `rsync` is needed too, but only by `test_install_from_repo` (the host runs it in
+  `scripts/install-from-repo.sh`; CI runners install it), so `smoke-on-box.sh` does not preflight it.
+  Dependency package builds use the repository's exact Python and
   packaging toolchain rather than Debian's ambient pip; prepare it with
   `uv sync --locked --group smoke --group dep-pkg-build`.
 - Everything but `uv` and `oras` comes from apt. Those two are not packaged for Debian:

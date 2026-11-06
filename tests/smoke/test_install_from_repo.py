@@ -126,7 +126,11 @@ def test_cleanup_lets_the_next_deploy_register_the_services(smoke_vm: SmokeVM) -
     vm = smoke_vm
     try:
         helpers.deploy(vm)
-        _install_from_repo(vm)
+        installed = _install_from_repo(vm)
+        assert installed.returncode == 0, (
+            f"install-from-repo.sh exit={installed.returncode}\n"
+            f"stdout:\n{installed.stdout}\nstderr:\n{installed.stderr}"
+        )
         overlaid = _run_on_guest(vm, _PROBE_SH)
         assert "REGISTERED=pfBlockerNG\n" in overlaid + "\n", (
             f"install-from-repo.sh did not register the package:\n{overlaid}"

@@ -465,7 +465,7 @@ rm -rf /usr/local/share/pfSense-pkg-pfBlockerNG /usr/local/share/pfSense-pkg-pfB
 """
 
 
-def undeploy(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+def undeploy(vm: SmokeVM, *, timeout: float = 360.0) -> None:
     """Return a box that took the package outside ``deploy()`` to its fresh-boot state."""
     subprocess.run(
         vm.ssh_argv("/bin/sh"), input=_UNDEPLOY_SH, capture_output=True, text=True, timeout=timeout, check=False
