@@ -37,7 +37,7 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		@rmdir($this->root);
 	}
 
-	public function testPostInstallCapturesSourceBeforeTargetRestoreAndMigrations(): void
+	public function testPostInstallCapturesSourceBeforeTargetRestoreAndRecordsTarget(): void
 	{
 		$order = [];
 		$installed = pfb_install_settings_family_capture_restore(
@@ -60,11 +60,7 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 			static function (string $family) use (&$order): bool {
 				$order[] = "replace:{$family}";
 				return TRUE;
-			}
-		);
-		pfb_install_settings_family_finalize(
-			$installed,
-			static function () use (&$order): void { $order[] = 'migrations'; },
+			},
 			static function (string $family) use (&$order): bool {
 				$order[] = "record:{$family}";
 				return TRUE;
@@ -73,7 +69,7 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 
 		$this->assertSame('4.0', $installed);
 		$this->assertSame(
-			['current', 'version', 'from:4.0.0', 'save:3.3', 'replace:4.0', 'migrations', 'record:4.0'],
+			['current', 'version', 'from:4.0.0', 'save:3.3', 'replace:4.0', 'record:4.0'],
 			$order
 		);
 	}
@@ -100,10 +96,14 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 			static function (string $family) use (&$order): bool {
 				$order[] = "replace:{$family}";
 				return TRUE;
+			},
+			static function (string $family) use (&$order): bool {
+				$order[] = "record:{$family}";
+				return TRUE;
 			}
 		);
 		$this->assertSame('4.0', $installed);
-		$this->assertSame(['version', 'from:4.0.0.a1', 'save:3.3', 'replace:4.0'], $order);
+		$this->assertSame(['version', 'from:4.0.0.a1', 'save:3.3', 'replace:4.0', 'record:4.0'], $order);
 	}
 
 	public function testFirstInstallWithNoOwnedSectionsAndUnmappedVersionShapesDoNotThrow(): void
@@ -142,7 +142,6 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		// issue #3296 follow-up: an unmapped dev version records the nightly ceiling, not the legacy default.
 		$GLOBALS['config'] = ['installedpackages' => ['package' => []]];
 		$installed = pfb_install_settings_family_capture_restore();
-		pfb_install_settings_family_finalize($installed, static function (): void {});
 		$this->assertSame(PFB_NIGHTLY_SETTINGS_FAMILY, $installed);
 		$this->assertSame(PFB_NIGHTLY_SETTINGS_FAMILY, pfb_settings_family_current());
 
@@ -196,6 +195,10 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 					static function (string $family) use (&$order): bool {
 						$order[] = "replace:{$family}";
 						return $family === '3.3';
+					},
+					static function (string $family) use (&$order): bool {
+						$order[] = "record:{$family}";
+						return TRUE;
 					}
 				);
 				$this->fail('target failure must restore the saved source and fail closed');
@@ -210,21 +213,40 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		}
 	}
 
+	public function testRecordFailureThrowsAfterReplaceAndBeforeReturningTheFamily(): void
+	{
+		$order = [];
+		try {
+			pfb_install_settings_family_capture_restore(
+				static function () use (&$order): string { $order[] = 'current'; return '3.3'; },
+				static function (string $family) use (&$order): bool { $order[] = "save:{$family}"; return TRUE; },
+				static function () use (&$order): string { $order[] = 'version'; return '4.0.0'; },
+				static function (string $version) use (&$order): string { $order[] = "from:{$version}"; return '4.0'; },
+				static function (string $family) use (&$order): bool { $order[] = "replace:{$family}"; return TRUE; },
+				static function (string $family) use (&$order): bool { $order[] = "record:{$family}"; return FALSE; }
+			);
+			$this->fail('a failed record must stop capture before the family is returned');
+		} catch (RuntimeException $error) {
+			$this->assertSame('pfBlockerNG: unable to record settings family', $error->getMessage());
+		}
+		$this->assertSame(['current', 'version', 'from:4.0.0', 'save:3.3', 'replace:4.0', 'record:4.0'], $order);
+	}
+
 	/**
 	 * The installer performs appliance-only migrations and service changes, so a direct include
 	 * is destructive/off-appliance. php_strip_whitespace keeps this pin executable-code-only.
 	 */
-	public function testInstallerUsesCaptureRestoreThenFinalize(): void
+	public function testInstallerUsesCaptureRestoreThenMigrations(): void
 	{
 		$source = php_strip_whitespace(self::INSTALL);
 		$this->assertNotSame('', $source, 'installer source must be readable');
 		$capture = strpos($source, 'pfb_install_settings_family_capture_restore();');
 		$modes = strpos($source, '$pfb_registry_modes = pfb_registry_section_modes( $pfb_registry_sections,');
-		$finalize = strpos($source, 'pfb_install_settings_family_finalize($pfb_installed_family);');
+		$migrations = strpos($source, 'pfb_run_migrations();');
 		$this->assertNotFalse($capture, 'installer must capture and restore settings before migrations');
 		$this->assertNotFalse($modes, 'installer must capture registry modes from the restored settings family');
-		$this->assertNotFalse($finalize, 'installer must finalize settings after legacy migration');
+		$this->assertNotFalse($migrations, 'installer must run migrations after the settings family is recorded');
 		$this->assertLessThan($modes, $capture, 'target settings must be restored before registry modes are captured');
-		$this->assertLessThan($finalize, $modes, 'registry modes must be captured before migrations mutate sections');
+		$this->assertLessThan($migrations, $modes, 'registry modes must be captured before migrations mutate sections');
 	}
 }

@@ -399,17 +399,17 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 
 	// ---- installer wiring / no banner / feed stays log-only / no fold-back ------------
 
-	public function testInstallerDispatchesTheSeamAfterSettingsFamilyFinalize(): void
+	public function testInstallerDispatchesTheSeamAfterMigrations(): void
 	{
 		$source = php_strip_whitespace(self::INSTALL);
 		$this->assertNotSame('', $source, 'installer source must be readable');
-		$finalize = strpos($source, 'pfb_install_settings_family_finalize($pfb_installed_family);');
-		$this->assertNotFalse($finalize, 'positive control: settings-family finalize stays the upgrade seam');
+		$migrations = strpos($source, 'pfb_run_migrations();');
+		$this->assertNotFalse($migrations, 'positive control: the migration registry stays the upgrade seam');
 		$call = 'pfb_dnsbl_regex_upgrade_comment_out();';
 		$seam = strpos($source, $call);
 		$this->assertNotFalse($seam, 'installer must dispatch #3194 comment-out through pfb_dnsbl_regex_upgrade_comment_out()');
 		$this->assertSame(1, substr_count($source, $call));
-		$this->assertGreaterThan($finalize, $seam, 'comment-out must run after settings-family migrations');
+		$this->assertGreaterThan($migrations, $seam, 'comment-out must run after migrations');
 	}
 
 	public function testTheHelperUsesTheSaveTimePythonProbe(): void

@@ -41,20 +41,23 @@ if (!is_array($pfb)) {
 /**
  * Capture the installed settings family, then restore the package snapshot for the current
  * version. Install callers run migrations separately so the legacy VIP migration retains its
- * historical position between restore and migration.
+ * historical position between restore and migration. The installed family is recorded here,
+ * before any migration, so a retry after an interrupted install still sees the target family.
  */
 function pfb_install_settings_family_capture_restore(
 	?callable $current = NULL,
 	?callable $save = NULL,
 	?callable $version = NULL,
 	?callable $from_version = NULL,
-	?callable $replace = NULL
+	?callable $replace = NULL,
+	?callable $record = NULL
 ): string {
 	$current ??= 'pfb_settings_family_current';
 	$save ??= 'pfb_settings_family_save';
 	$version ??= 'pfb_pkg_ver';
 	$from_version ??= 'pfb_settings_family_from_version';
 	$replace ??= 'pfb_settings_family_replace';
+	$record ??= 'pfb_settings_family_record';
 	$source_family = $current();
 	$installed_family = $from_version((string) $version());
 	$owned_sections = pfb_settings_family_owned_sections();
@@ -68,26 +71,18 @@ function pfb_install_settings_family_capture_restore(
 		if (!$replace($source_family)) {
 			throw new RuntimeException('pfBlockerNG: unable to restore settings family');
 		}
-		return PFB_NIGHTLY_SETTINGS_FAMILY;
+		$family = PFB_NIGHTLY_SETTINGS_FAMILY;
+	} else {
+		if ($installed_family === NULL || !$replace($installed_family)) {
+			$replace($source_family);
+			throw new RuntimeException('pfBlockerNG: unable to restore settings family');
+		}
+		$family = $installed_family;
 	}
-	if ($installed_family === NULL || !$replace($installed_family)) {
-		$replace($source_family);
-		throw new RuntimeException('pfBlockerNG: unable to restore settings family');
-	}
-	return $installed_family;
-}
-
-function pfb_install_settings_family_finalize(
-	string $installed_family,
-	?callable $migrations = NULL,
-	?callable $record = NULL
-): void {
-	$migrations ??= 'pfb_run_migrations';
-	$record ??= 'pfb_settings_family_record';
-	$migrations();
-	if (!$record($installed_family)) {
+	if (!$record($family)) {
 		throw new RuntimeException('pfBlockerNG: unable to record settings family');
 	}
+	return $family;
 }
 
 function pfb_install_registry_writeback(

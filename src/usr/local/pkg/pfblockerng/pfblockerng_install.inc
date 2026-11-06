@@ -37,7 +37,7 @@ $pfb_psl_feed_policy_fresh_install = pfb_psl_feed_policy_is_fresh_install(
 	PfbConfig::readSection(PFB_SECTIONS['dnsbl'])
 );
 
-$pfb_installed_family = pfb_install_settings_family_capture_restore();
+pfb_install_settings_family_capture_restore();
 pfb_global();
 
 // issue #2372: capture modes from the restored target family before migrations mutate it.
@@ -145,7 +145,7 @@ if (
 // callable reads the section, returns the updated array or NULL (no-op), and the driver
 // writes back and calls write_config() only when a change is needed. Replaces the
 // hand-wired ADR-02/PFBL-03/#1898 blocks with a single ordered registry.
-pfb_install_settings_family_finalize($pfb_installed_family);
+pfb_run_migrations();
 
 // issue #3194: comment out stored Regex List lines Python would reject.
 pfb_dnsbl_regex_upgrade_comment_out();
@@ -606,7 +606,7 @@ update_status(" General Tab -> IP Tab settings...");
 $pfb_gen_section  = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 $pfb_ip_section   = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
 // issue #1772: gate on the 14 source keys, not operator-view emptiness.
-// pfb_schedule_migrate() (via pfb_install_settings_family_finalize, above)
+// pfb_schedule_migrate() (via pfb_run_migrations, above)
 // seeds schedule keys into General on a virgin box; those survive
 // pfb_gconfig_operator_view() and must not count as pre-existing IP settings.
 $settings = array(	'enable_dup', 'enable_agg', 'suppression', 'enable_log', 'maxmind_locale', 'database_cc',

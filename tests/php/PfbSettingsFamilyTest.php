@@ -281,7 +281,7 @@ final class PfbSettingsFamilyTest extends TestCase
 		$this->assertFileDoesNotExist($this->contextPath());
 	}
 
-	public function testLifecycleOrdersReplaceAndContextConsumptionBeforeMigrations(): void
+	public function testLifecycleOrdersSaveReplaceAndRecordInCapture(): void
 	{
 		$order = [];
 		$family = pfb_install_settings_family_capture_restore(
@@ -290,14 +290,10 @@ final class PfbSettingsFamilyTest extends TestCase
 			static function () use (&$order): string { $order[] = 'version'; return '4.0.0'; },
 			static function (string $value) use (&$order): string { $order[] = 'from-version'; return '4.0'; },
 			static function (string $value) use (&$order): bool { $order[] = 'replace'; return TRUE; },
-		);
-		pfb_install_settings_family_finalize(
-			$family,
-			static function () use (&$order): void { $order[] = 'migrations'; },
 			static function (string $value) use (&$order): bool { $order[] = 'record'; return TRUE; }
 		);
 		$this->assertSame('4.0', $family);
-		$this->assertSame(['current', 'version', 'from-version', 'save', 'replace', 'migrations', 'record'], $order);
+		$this->assertSame(['current', 'version', 'from-version', 'save', 'replace', 'record'], $order);
 	}
 
 	/**

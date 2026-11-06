@@ -190,10 +190,9 @@ final class PslFeedPolicyPipelineOrderingTest extends TestCase
 		$capture = strpos($source, 'pfb_psl_feed_policy_is_fresh_install(');
 		$this->assertNotFalse($capture, 'installer must capture freshness via pfb_psl_feed_policy_is_fresh_install()');
 
-		// Migrations run through pfb_install_settings_family_finalize()'s seam
-		// (its $migrations callable defaults to pfb_run_migrations).
-		$migrations = strpos($source, 'pfb_install_settings_family_finalize(');
-		$this->assertNotFalse($migrations, 'installer must run the migration registry via its finalize seam');
+		// Migrations run via pfb_run_migrations() in the installer, after the settings family is recorded.
+		$migrations = strpos($source, 'pfb_run_migrations();');
+		$this->assertNotFalse($migrations, 'installer must run the migration registry via pfb_run_migrations()');
 		$this->assertLessThan($migrations, $capture, 'freshness must be captured BEFORE any migration mutates a section');
 
 		$writeback = strpos($source,
