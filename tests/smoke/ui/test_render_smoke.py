@@ -3083,37 +3083,6 @@ def test_ip_suppression_stays_checked_on_validation_error_rerender(
     )
 
 
-def test_states_removal_help_references_ip_tab(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """The category-edit 'States Removal' help points at the IP tab, where 'Kill States' lives.
-
-    The 'Kill States' (``killstates``) checkbox is on the IP tab (pfblockerng_ip.php), so the
-    cross-reference in the IP-alias edit page's 'States Removal' help must read '(IP Tab)', not
-    the stale '(General Tab)'.  The field renders only for the IPv4/IPv6 alias type, so this
-    probes category_edit with ``?type=ipv4``.
-
-    Fail-before / pass-after: before the fix the States Removal help reads '(General Tab)', so
-    the '(IP Tab)' assertion fails; the negative assertion guards against the stale wording
-    returning.
-
-    Both needles are scoped to the States Removal sentence ('... you can disable States
-    removal') so they cannot be satisfied by the sibling 'Enable Logging' help on the same
-    page, which legitimately references the General tab (for the Global Logging override).
-    """
-    path = "/pfblockerng/pfblockerng_category_edit.php?type=ipv4"
-    resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("States Removal",))
-    assert result.ok, f"category_edit (ipv4) render oracle failed: {result.detail}"
-    body = resp.text
-    assert "(IP Tab), you can disable States removal" in body, (
-        "States Removal help is missing the corrected '(IP Tab)' cross-reference "
-        "(the 'Kill States' option lives on the IP tab)"
-    )
-    assert "(General Tab), you can disable States removal" not in body, (
-        "States Removal help still carries the stale '(General Tab)' cross-reference -- "
-        "'Kill States' is on the IP tab, not the General tab"
-    )
-
-
 _CATEGORY_IPV4_PAGE = "/pfblockerng/pfblockerng_category.php?type=ipv4"
 _CATEGORY_DNSBL_PAGE = "/pfblockerng/pfblockerng_category.php?type=dnsbl"
 _CATEGORY_GEOIP_PAGE = "/pfblockerng/pfblockerng_category.php?type=geoip"

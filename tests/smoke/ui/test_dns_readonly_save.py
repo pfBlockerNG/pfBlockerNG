@@ -1,4 +1,4 @@
-"""Tier B: real pfSense read-only users cannot save either DNS settings page.
+"""Tier B: real pfSense read-only users cannot save DNS General, transports or DNSBL.
 
 Reuse the scoped-operator account lifecycle: real auth.inc password/OS provisioning,
 real CSRF login, and user-config-readonly enforced by config.lib.inc::write_config().
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .render_oracle import PhpErrorLogGuard, evaluate_render
+from .render_oracle import PhpErrorLogGuard, evaluate_render, input_errors_block
 from .test_general_scoped_operator import _create_scoped_user, _delete_scoped_user
 from .webui import WebUI, looks_like_login_page, scrape_form_fields
 
@@ -45,12 +45,49 @@ def _write_state(vm: SmokeVM) -> dict[str, str | None]:
 def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
     smoke_vm: SmokeVM, deployed_vm: SmokeVM, webgui_protocol: str, webui: WebUI
 ) -> None:
-    """Both POSTs reach write_config's refusal, retain the submitted fields, and change no disk/marker bytes."""
+    """All POSTs reach write_config's refusal, retain submitted fields, and change no disk/marker bytes."""
     vm = smoke_vm
     username = f"pfbro{uuid.uuid4().hex[:10]}"
     password = uuid.uuid4().hex
-    original_reply = helpers.config_get_state(vm, _REPLY)
-    original_cache = helpers.config_get_state(vm, _CACHE)
+    seeded = {
+        _REPLY: "on",
+        _CACHE: "10000",
+        **{
+            "installedpackages/pfblockerng/config/0/" + key: value
+            for key, value in {
+                "pfb_dns_listen_vip": "",
+                "pfb_dns_listen_vip_only": "",
+                "pfb_dns_listen_vip4": "",
+                "pfb_dns_listen_vip6": "",
+                "pfb_dns_listen_interface": "lo0",
+            }.items()
+        },
+        **{
+            helpers.dns_config_path(key): value
+            for key, value in {
+                "pfb_dns": "on",
+                "pfb_dns_name": "",
+                "pfb_dns_dot": "",
+                "pfb_dns_doh": "",
+                "pfb_dns_doq": "",
+                "pfb_dns_ddr": "",
+                "pfb_dns_sslcertref": "",
+                "pfb_dns_doh_trusted": "",
+                "pfb_dns_ddr_doh_443_interfaces": "",
+                "pfb_dns_interface": "lo0",
+                "pfb_dns_dot_interface": "lo0",
+                "pfb_dns_doh_interface": "lo0",
+                "pfb_dns_doq_interface": "lo0",
+                "pfb_dns_dot_port": "853",
+                "pfb_dns_doh_port": "443",
+                "pfb_dns_doq_port": "853",
+                "pfb_dns_dot_port6": "",
+                "pfb_dns_doh_port6": "",
+                "pfb_dns_doq_port6": "",
+            }.items()
+        },
+    }
+    originals = {path: helpers.config_get_state(vm, path) for path in seeded}
     original_nextuid = helpers.config_get(vm, "system/nextuid")
     created = False
     try:
@@ -74,8 +111,11 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
             "echo 'PFB_READONLY_USER:OK';",
         )
         assert "PFB_READONLY_USER:OK" in result.stdout, f"read-only privilege setup failed: {result.stdout!r}"
-        helpers.config_set(vm, _REPLY, "on")
-        helpers.config_set(vm, _CACHE, "10000")
+        for path, value in seeded.items():
+            helpers.config_set(vm, path, value)
+        assert {path: helpers.config_get(vm, path) for path in seeded} == seeded, (
+            "read-only fixture must start with valid DNS General and transport siblings"
+        )
         scoped = WebUI(
             host=deployed_vm.host,
             port=deployed_vm.web_port,
@@ -88,7 +128,8 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
         guard = PhpErrorLogGuard(vm)
         guard.snapshot()
         for page, markers, field, original, submitted in (
-            ("/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings",), "pfb_py_reply", "on", ""),
+            ("/pfblockerng/pfblockerng_dns_general.php", ("DNS Reply Logging",), "pfb_py_reply", "on", ""),
+            ("/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings",), "pfb_dns", "on", ""),
             (
                 "/pfblockerng/pfblockerng_dnsbl.php",
                 ("DNSBL Webserver Configuration",),
@@ -107,7 +148,8 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
             response = scoped.post(page, {field: submitted}, allow_redirects=False, timeout=300.0)
             assert response.status_code == 200, f"{page} refused POST must render, not redirect: {response.status_code}"
             assert not looks_like_login_page(response.text), f"{page}: operator session lost"
-            assert "the configuration could not be written" in response.text, (
+            errors = input_errors_block(response.text)
+            assert errors and "the configuration could not be written" in errors, (
                 f"{page}: POST must reach the real write_config refusal, not an unrelated validation error: "
                 f"{response.text[-8000:]}"
             )
@@ -117,7 +159,7 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
             assert _write_state(vm) == before, f"{page}: refused save changed config.xml or a pending/apply marker"
         guard.assert_no_growth()
     finally:
-        helpers.config_restore_state(vm, _REPLY, original_reply)
-        helpers.config_restore_state(vm, _CACHE, original_cache)
+        for path, state in originals.items():
+            helpers.config_restore_state(vm, path, state)
         if created:
             _delete_scoped_user(vm, username, original_nextuid)

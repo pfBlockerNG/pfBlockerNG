@@ -42,7 +42,7 @@ def test_dns_general_owns_reply_logging_and_proxy_keeps_transport_order(smoke_vm
     shared = _Checkboxes()
     shared.feed(general.text)
     shared.close()
-    assert shared.names == ["pfb_py_reply", "pfb_dns_listen_vip"], shared.names
+    assert shared.names == ["pfb_py_reply", "pfb_dns_listen_vip", "pfb_dns_listen_vip_only"], shared.names
     response = webui.get(DNS_PAGE)
     rendered = evaluate_render(DNS_PAGE, response.status_code, response.text, ("pfB-DNS Settings",))
     assert rendered.ok, f"pfB-DNS GET: {rendered.detail}"

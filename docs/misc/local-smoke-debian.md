@@ -150,6 +150,21 @@ tier = false green). Put it (and optional `SMOKE_ADMIN_USER`, default `admin`) i
 `~/.ssh/environment` (needs `PermitUserEnvironment yes`) so on-box pytest inherits it; it
 must match password baked into pfSense image box pulls.
 
+All UI tiers also provision the civm LAN client for DDR gateway coverage; do not
+use `--no-two-vm` for a full UI run. In CI, `ui-tests.yml` resolves and caches the
+client by digest (variables `SMOKE_CLIENT_IMAGE_NAME` / `SMOKE_CLIENT_IMAGE_TAG`,
+default `civm:v1`) and exports `SMOKE_CLIENT_IMAGE_DIR`. Set the
+`SMOKE_CLIENT_MAC_ADDRESS` secret to the data-NIC MAC matching the image's static
+DHCP lease. It is masked and redacted on CE and Plus alike; Plus still requires
+its own `SMOKE_PLUS_MAC` / `SMOKE_PLUS_SMBIOS_UUID` secrets. Missing-client skips
+are not allowlisted.
+
+CI host apt downloads use `/var/tmp/ui-apt-archives`, keyed by runner image and
+the exact package-install line. Restore is available to caller-named
+`checkout_ref` runs, but only successful cache misses on the normal checkout
+save downloads. Host-tool installation omits recommended packages and has
+bounded apt retries/timeouts plus a five-minute step limit.
+
 ```sh
 # Explicit ref:
 scripts/local-smoke.sh --ref origin/devel

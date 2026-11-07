@@ -1981,7 +1981,7 @@ def _dns_page_settings_restored(vm: helpers.SmokeVM) -> Iterator[None]:
     paths = [
         helpers.dns_config_path(key) for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS, *DNS_PROXY_V6_KEYS)
     ]
-    paths += [CERT_CFG, DDR_CFG]
+    paths += [CERT_CFG, DDR_CFG, helpers.dns_config_path("pfb_dns")]
     originals = {path: helpers.config_get_state(vm, path) for path in paths}
     try:
         yield
@@ -2062,38 +2062,62 @@ def test_pfb_dns_name_is_saved_without_its_trailing_dot_and_ddr_needs_one(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """issue #3694: the DNS Name persists (trailing dot dropped, case kept); DDR with no name or a bad name is refused.
+    """Active pfB-DNS with DDR needs a DNS Name; valid names persist without the trailing dot, case kept.
 
-    Given DDR and the name stored empty (seeded directly, so the before-state does not depend on the save path under
-      test),
-    When Save posts DDR on with an empty name, Then the page shows `DDR needs a DNS name: ...` and nothing changes;
-    When it posts a name that is no valid name (one label, an IPv4 literal, under resolver.arpa, a wildcard), Then the
-      page names the field `DNS Name` and neither value changes;
-    When it posts ` FW.Example.LAN. ` with DDR on, Then `FW.Example.LAN` and `on` are stored.
+    Missing and malformed names produce DNS Name field errors without changing config.xml.
+    Disabled-service acceptance is covered by test_dns_settings_policy's browser transition test.
     """
+    from .test_dns_readonly_save import _write_state
+
     vm = smoke_vm
 
     def stored() -> tuple[str, str]:
         return helpers.config_get(vm, DNS_NAME_CFG), helpers.config_get(vm, DDR_CFG)
 
     with _dns_page_settings_restored(vm):
-        helpers.config_set(vm, DNS_NAME_CFG, "")
-        helpers.config_set(vm, DDR_CFG, "")
-        assert stored() == ("", ""), f"seed did not take: no name and DDR Off expected, got {stored()}"
+        seeded = {
+            "pfb_dns": "on",
+            "pfb_dns_name": "",
+            "pfb_dns_ddr": "",
+            "pfb_dns_dot": "",
+            "pfb_dns_doh": "",
+            "pfb_dns_doq": "",
+            "pfb_dns_sslcertref": "",
+            "pfb_dns_doh_trusted": "",
+            "pfb_dns_ddr_doh_443_interfaces": "",
+            "pfb_dns_interface": "lo0",
+            "pfb_dns_dot_interface": "lo0",
+            "pfb_dns_doh_interface": "lo0",
+            "pfb_dns_doq_interface": "lo0",
+            "pfb_dns_dot_port": "853",
+            "pfb_dns_doh_port": "443",
+            "pfb_dns_doq_port": "853",
+            "pfb_dns_dot_port6": "",
+            "pfb_dns_doh_port6": "",
+            "pfb_dns_doq_port6": "",
+        }
+        for key, value in seeded.items():
+            helpers.config_set(vm, helpers.dns_config_path(key), value)
+        assert {key: helpers.config_get(vm, helpers.dns_config_path(key)) for key in seeded} == seeded, (
+            "seed did not take: active pfB-DNS must have valid sibling controls, no Name and DDR Off"
+        )
+        before = _write_state(vm)
 
         refused = webui.post(DNS_PAGE, {"pfb_dns_ddr": "on", "pfb_dns_name": ""}, timeout=SAVE_TIMEOUT)
-        assert "DDR needs a DNS name: enter the name the certificate covers, or turn DDR off." in refused.text, (
+        assert input_errors_block(refused.text) and "DNS Name" in _input_errors_text(refused.text), (
             f"DDR on with no name must be refused; the page's input errors: {_input_errors_text(refused.text)}"
         )
         assert stored() == ("", ""), "a refused Save must leave config.xml unchanged"
+        assert _write_state(vm) == before, "missing DNS Name: a refused Save changed config.xml or apply markers"
 
         for bad in ("fw", "10.0.0.1", "fw.resolver.arpa", "*.example.lan"):
             rejected = webui.post(DNS_PAGE, {"pfb_dns_ddr": "", "pfb_dns_name": bad}, timeout=SAVE_TIMEOUT)
-            assert "DNS Name must be a fully qualified domain name" in rejected.text, (
+            assert input_errors_block(rejected.text) and "DNS Name" in _input_errors_text(rejected.text), (
                 f"{bad!r} must be refused naming the field; the page's input errors: "
                 f"{_input_errors_text(rejected.text)}"
             )
             assert stored() == ("", ""), f"{bad!r}: a refused Save must leave config.xml unchanged"
+            assert _write_state(vm) == before, f"{bad!r}: a refused Save changed config.xml or apply markers"
 
         saved = webui.post(DNS_PAGE, {"pfb_dns_ddr": "on", "pfb_dns_name": " FW.Example.LAN. "}, timeout=SAVE_TIMEOUT)
         assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"

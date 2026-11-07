@@ -1,8 +1,8 @@
 """Tier-A render proof for the DNS navigation regroup (issue #3593).
 
 Marker ``ui_render``. The old adjacent ``DNSBL`` and ``pfB-DNS`` top-level tabs are one ``DNS`` tab on
-``pfblockerng_dns.php``, selected on the DNS family only. The DNS family's second row holds the five DNS
-sub-tabs in order, and its breadcrumb's DNS parent links ``pfblockerng_dns.php``.
+``pfblockerng_dns_general.php``, selected on the DNS family only. The DNS family's second row holds six
+sub-tabs in order, and its breadcrumb's DNS parent links ``pfblockerng_dns_general.php``.
 
 Every assertion reads the HTML of a real GET. pfSense prints the tab rows as ``<ul class="nav nav-pills">``
 (``display_top_tabs``) and the breadcrumb as ``<ol class="breadcrumb">`` (``genhtmltitle``). Both are read into
@@ -29,6 +29,7 @@ pytestmark = pytest.mark.ui_render
 
 GENERAL = "/pfblockerng/pfblockerng_general.php"
 IP = "/pfblockerng/pfblockerng_ip.php"
+DNS_GENERAL = "/pfblockerng/pfblockerng_dns_general.php"
 DNS = "/pfblockerng/pfblockerng_dns.php"
 DNSBL = "/pfblockerng/pfblockerng_dnsbl.php"
 UPDATE = "/pfblockerng/pfblockerng_update.php"
@@ -160,7 +161,7 @@ def _top_tabs(reports: str, *, wizard: bool, software: bool = False) -> list[tup
     tabs = [
         ("General", GENERAL),
         ("IP", IP),
-        ("DNS", DNS),
+        ("DNS", DNS_GENERAL),
         ("Update", UPDATE),
         ("Reports", reports),
         ("Feeds", FEEDS),
@@ -175,6 +176,7 @@ def _top_tabs(reports: str, *, wizard: bool, software: bool = False) -> list[tup
 
 
 _DNS_FAMILY_ACTIVE = {
+    DNS_GENERAL: "General",
     DNS: "pfB-DNS",
     DNSBL: "DNSBL",
     GROUPS: "DNSBL Groups",
@@ -216,10 +218,11 @@ _UNRELATED_PAGES = (
     *_CONTINENT_PAGES,
 )
 TOP_ROW_PAGES = (*_DNS_FAMILY_ACTIVE, *_UNRELATED_PAGES)
-# The pages that print the Wizard tab: General's (outside its redirect) and the pfB-DNS page's.
-_WIZARD_PAGES = frozenset({GENERAL, DNS})
+# The pages that print the Wizard tab: package General (outside its redirect), DNS General and pfB-DNS.
+_WIZARD_PAGES = frozenset({GENERAL, DNS_GENERAL, DNS})
 
 _DNS_SUBTABS = (
+    ("General", DNS_GENERAL),
     ("pfB-DNS", DNS),
     ("DNSBL", DNSBL),
     ("DNSBL Groups", GROUPS),
@@ -235,6 +238,7 @@ _IP_SUBTABS = (
 )
 # (page, its second row, the one tab that row highlights; None when it highlights none)
 _SUBTAB_CASES: tuple[tuple[str, tuple[tuple[str, str], ...], str | None], ...] = (
+    (DNS_GENERAL, _DNS_SUBTABS, "General"),
     (DNS, _DNS_SUBTABS, "pfB-DNS"),
     (DNSBL, _DNS_SUBTABS, "DNSBL"),
     (GROUPS, _DNS_SUBTABS, "DNSBL Groups"),
@@ -253,10 +257,11 @@ _SUBTAB_CASES: tuple[tuple[str, tuple[tuple[str, str], ...], str | None], ...] =
     (REPUTATION, _IP_SUBTABS, "Reputation"),
 )
 
-_DNS_PARENT = Crumb("DNS", DNS)
+_DNS_PARENT = Crumb("DNS", DNS_GENERAL)
 _IP_PARENT = Crumb("IP", CATEGORY_IPV4)
 # (page, its last crumb, the parent crumb it must carry)
 _CRUMB_CASES: tuple[tuple[str, str, Crumb], ...] = (
+    (DNS_GENERAL, "General", _DNS_PARENT),
     (DNS, "pfB-DNS", _DNS_PARENT),
     (DNSBL, "DNSBL", _DNS_PARENT),
     (BLACKLIST, "DNSBL Category", _DNS_PARENT),
@@ -285,12 +290,13 @@ def reports_href(webui: WebUI) -> str:
 def test_top_row_offers_one_dns_tab_where_dnsbl_and_pfb_dns_were(path: str, webui: WebUI, reports_href: str) -> None:
     """Every page's top row has one DNS tab in the old DNSBL/pfB-DNS slot, and neither old tab.
 
-    DNS is selected on the six DNS-family pages and on no other page. The Reports tab keeps the Alerts query.
+    DNS is selected on the DNS-family pages and on no other page. The Reports tab keeps the Alerts query.
     """
     top = _top_row(_chrome(webui, path), path)
     hrefs = [tab.href for tab in top]
     labels = [tab.label for tab in top]
-    assert hrefs.count(DNS) == 1, f"{path}: the top row needs exactly one DNS tab (dns.php), got {hrefs.count(DNS)}"
+    assert hrefs.count(DNS_GENERAL) == 1, f"{path}: the top row needs exactly one DNS General landing link, got {hrefs}"
+    assert DNS not in hrefs, f"{path}: the top DNS tab must open General, not the pfB-DNS transport page"
     assert DNSBL not in hrefs, f"{path}: the old top-level DNSBL tab (dnsbl.php) is still in the top row"
     assert "pfB-DNS" not in labels and "DNSBL" not in labels, f"{path}: old top-level tab still present: {labels}"
     shown = [(tab.label, tab.href) for tab in top if tab.label != "Software"]
@@ -298,6 +304,19 @@ def test_top_row_offers_one_dns_tab_where_dnsbl_and_pfb_dns_were(path: str, webu
     active = [tab.label for tab in top if tab.active]
     if path in _DNS_FAMILY_ACTIVE:
         assert active == ["DNS"], f"{path}: the DNS family must select the DNS tab alone, got {active}"
+    elif path == GENERAL:
+        assert active == ["General"], f"{path}: General must be the sole active tab, got {active}"
+    elif path in {
+        IP,
+        CATEGORY_IPV4,
+        CATEGORY_IPV6,
+        CATEGORY_GEOIP,
+        EDITOR_IPV4,
+        EDITOR_IPV6,
+        REPUTATION,
+        *_CONTINENT_PAGES,
+    }:
+        assert active == ["IP"], f"{path}: IP must be the sole active tab, got {active}"
     else:
         assert "DNS" not in active, f"{path}: the DNS tab must not be selected off the DNS family"
 
@@ -317,7 +336,7 @@ def test_second_row_lists_the_family_subtabs_with_the_page_active(
 def test_breadcrumb_parent_is_dns_for_the_dns_family_and_ip_for_ip_pages(
     path: str, last: str, parent: Crumb, webui: WebUI
 ) -> None:
-    """The DNS children's parent crumb links dns.php and never dnsbl.php; the IP pages keep their IP parent."""
+    """The DNS children's parent crumb links DNS General; the IP pages keep their IP parent."""
     crumbs = _chrome(webui, path).crumbs
     assert [crumb.label for crumb in crumbs] == ["Firewall", "pfBlockerNG", parent.label, last], (
         f"{path}: breadcrumb is {crumbs}"
@@ -338,8 +357,22 @@ def test_editor_keeps_its_type_rowid_and_act_hidden_fields(path: str, gtype: str
 
 @pytest.mark.parametrize(
     ("path", "software"),
-    [(GENERAL, True), (GENERAL, False), (DNS, True), (DNS, False)],
-    ids=["general-software-shown", "general-software-hidden", "dns-software-shown", "dns-software-hidden"],
+    [
+        (GENERAL, True),
+        (GENERAL, False),
+        (DNS_GENERAL, True),
+        (DNS_GENERAL, False),
+        (DNS, True),
+        (DNS, False),
+    ],
+    ids=[
+        "general-software-shown",
+        "general-software-hidden",
+        "dns-general-software-shown",
+        "dns-general-software-hidden",
+        "dns-software-shown",
+        "dns-software-hidden",
+    ],
 )
 def test_software_tab_sits_between_sync_and_wizard_when_its_gate_is_open(
     path: str, software: bool, webui: WebUI, smoke_vm: SmokeVM, reports_href: str

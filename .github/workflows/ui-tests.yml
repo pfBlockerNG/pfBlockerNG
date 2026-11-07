@@ -44,9 +44,8 @@ name: UI tests fan-out (all CI legs, live pfSense VM)
 # PLUS IDENTITY + REDACTION (ADR-24): a non-CE (Plus) leg is LICENSE/NDI-keyed to a
 # SECRET source-VM identity (SMOKE_PLUS_MAC / SMOKE_PLUS_SMBIOS_UUID [/ NDI]); the
 # `ui` job resolves it exactly like smoke-single.yml (fail-closed, masked), feeds it to
-# pytest, and scrubs the diagnostics before upload. A CE leg uses the public pin
-# and an empty redaction set, so its `ui-diagnostics` artifact is byte-identical to
-# today.
+# pytest, and scrubs the diagnostics before upload. Both editions also mask and
+# redact the civm client data-NIC MAC (SMOKE_CLIENT_MAC_ADDRESS).
 #
 # Required config (Actions secrets/variables) — same set as smoke-single.yml, plus the
 # baked admin password the UI tier needs to log in:
@@ -59,6 +58,8 @@ name: UI tests fan-out (all CI legs, live pfSense VM)
 #   SMOKE_ADMIN_PASSWORD baked webConfigurator admin password (secret) — REQUIRED here:
 #                        the UI tier logs in over the CSRF form; without it the ui
 #                        fixtures FAIL (never skip — a skipped tier is a false pass).
+#   SMOKE_CLIENT_MAC_ADDRESS secret civm data-NIC MAC matching the baked static DHCP lease.
+#   SMOKE_CLIENT_IMAGE_NAME/_TAG optional variables (default civm:v1).
 # Optional:
 #   SMOKE_ADMIN_USER     webConfigurator user (var; default "admin")
 #   SMOKE_DNSBL_VIP4     baked pfb_dnsvip4 (the functional DNSBL flow injects the VIP); default 10.10.10.1
@@ -411,11 +412,42 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Install host tools (qemu, dnsutils)
+      - name: Resolve apt download cache key
+        id: aptkey
         run: |
           set -eu
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client
+          # Key on the install line only; unrelated workflow edits keep downloads warm.
+          install=$(grep -E '^ +sudo apt-g[e]t install ' .github/workflows/ui-tests.yml)
+          echo "key=apt-debs-${ImageOS}-${ImageVersion}-$(printf %s "$install" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          # apt's _apt user must be able to reach the archive directory.
+          echo "dir=/var/tmp/ui-apt-archives" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached apt downloads
+        id: aptcache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.aptkey.outputs.dir }}
+          key: ${{ steps.aptkey.outputs.key }}
+
+      - name: Install host tools (qemu, dnsutils)
+        timeout-minutes: 5
+        env:
+          APT_ARCHIVES: ${{ steps.aptkey.outputs.dir }}
+        run: |
+          set -eu
+          mkdir -p "$APT_ARCHIVES/partial"
+          chmod a+rwx "$APT_ARCHIVES" "$APT_ARCHIVES/partial"
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
+          sudo apt-get install --no-install-recommends -o Dir::Cache::archives="$APT_ARCHIVES" -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -y qemu-system-x86 qemu-utils dnsutils openssh-client
+          # apt ran as root; the cache action needs runner-owned downloads.
+          sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"
+
+      - name: Save apt downloads to cache
+        if: steps.aptcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.aptkey.outputs.dir }}
+          key: ${{ steps.aptkey.outputs.key }}
 
       - name: Install oras
         # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
@@ -483,11 +515,12 @@ jobs:
           PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
           PLUS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
           PLUS_NDI: ${{ secrets.SMOKE_PLUS_NDI }}
+          CLIENT_MAC: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
         run: |
           set -eu
           # ADR-47 P5: VM identity resolved by the shared script (writes RESOLVED_* to $GITHUB_ENV).
-          # UI job has no civm data-NIC MAC — no --civm-mac flag (deny-by-default: empty).
-          sh scripts/resolve-legs.sh vm-identity
+          # The client data-NIC MAC is secret on CE and Plus alike.
+          sh scripts/resolve-legs.sh vm-identity --civm-mac "${CLIENT_MAC:-}"
 
       - name: Resolve image digest (cache key)
         id: digest
@@ -526,6 +559,45 @@ jobs:
         with:
           path: image
           key: pfsense-img-${{ steps.digest.outputs.k }}
+
+      # DDR gateway tests use the same two-VM topology in every UI tier.
+      - name: Resolve civm image ref + digest (cache key)
+        id: civm
+        env:
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          CLIENT_NAME: ${{ vars.SMOKE_CLIENT_IMAGE_NAME }}
+          CLIENT_TAG: ${{ vars.SMOKE_CLIENT_IMAGE_TAG }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          NAME="${CLIENT_NAME:-civm}"
+          TAG="${CLIENT_TAG:-v1}"
+          REF="$(INPUT_IMAGE_NAME="$NAME" INPUT_VERSION="$TAG" sh scripts/resolve-legs.sh image-ref)"
+          sh scripts/resolve-legs.sh digest "$REF"
+
+      - name: Restore cached civm image
+        id: civmcache
+        uses: actions/cache/restore@v6
+        with:
+          path: client-image
+          key: civm-img-${{ steps.civm.outputs.k }}
+
+      - name: Pull civm image (by digest)
+        if: steps.civmcache.outputs.cache-hit != 'true'
+        env:
+          CIVM_REF: ${{ steps.civm.outputs.ref }}
+          DIGEST: ${{ steps.civm.outputs.digest }}
+        run: |
+          set -eu
+          sh scripts/resolve-legs.sh pull "$CIVM_REF" "$DIGEST" client-image
+
+      - name: Save civm image to cache
+        if: steps.civmcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
+        uses: actions/cache/save@v6
+        with:
+          path: client-image
+          key: civm-img-${{ steps.civm.outputs.k }}
 
       - name: Write private SSH key (mode 600)
         env:
@@ -655,13 +727,12 @@ jobs:
           SMOKE_DEP_PKGS: ${{ env.SMOKE_DEP_PKGS }}
           # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
           # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
-          # identity" step — the CE pin for a CE image (byte-identical to today),
-          # the SMOKE_PLUS_* secrets for a Plus image. SMOKE_REDACT_VALUES is the
-          # (masked) Plus identity the DOM/diagnostics scrubs value-redact; EMPTY
-          # for CE -> the scrub is a strict no-op (CE bundle/screenshots unchanged).
+          # identity" step — CE's public identity or the Plus secrets. The
+          # redaction set includes the client data-NIC MAC in both editions.
           SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
           SMOKE_VM_SMBIOS_UUID: ${{ env.RESOLVED_VM_SMBIOS_UUID }}
           SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
+          SMOKE_CLIENT_MAC_ADDRESS: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
           # The Phase-1 gap closed: the UI tier logs into the webConfigurator over
           # the CSRF form, so the baked admin password MUST reach pytest. Without
           # it the ui fixtures FAIL (never skip).
@@ -686,6 +757,7 @@ jobs:
           # Run-body exports, not env: map values — GitHub Actions never
           # shell-expands env-map values (issue #2231).
           export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"
+          export SMOKE_CLIENT_IMAGE_DIR="$GITHUB_WORKSPACE/client-image"
           export SMOKE_UI_SCREENSHOT_DIR="$GITHUB_WORKSPACE/test-results/ui-screenshots"
           # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
           # RUN_ID minted here (CI is the degenerate lease: runner IS the box).
@@ -721,13 +793,13 @@ jobs:
       # test-results/ui-screenshots/ are KEPT (masked in-browser at capture time,
       # see test_browser.py _shot). Then literal-redact each secret value (MAC +
       # uuid [+ NDI], from RESOLVED_REDACT) across every vm*.log and text file under
-      # smoke-diag/ AND test-results/. CE: RESOLVED_REDACT is empty -> no screenshots
-      # dropped, no redaction (the artifact is byte-identical to today). The literal
-      # escape mirrors smoke-single.yml's esc() (one -e per BRE metachar, NOT a bracket-class)
+      # smoke-diag/ AND test-results/. The client MAC is redacted on CE too.
+      # CE console screenshots are kept; Plus console screenshots are dropped.
+      # Literal escaping mirrors smoke-single.yml's esc() (one -e per BRE metachar, NOT a bracket-class)
       # so a regex-special value is matched literally; the `I` flag is case-insensitive.
       # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
       # resolve-legs.sh scrub --root "smoke-diag test-results" --keep ui-screenshots:
-      # non-CE QEMU screenshot deletion; literal redaction of RESOLVED_REDACT; CE no-op.
+      # non-CE QEMU screenshot deletion; literal redaction of RESOLVED_REDACT.
       # test-results/ui-screenshots/ is KEPT (DOM-masked at Playwright capture time).
       - name: Scrub Plus secret identity from diagnostics (runner side)
         if: always()

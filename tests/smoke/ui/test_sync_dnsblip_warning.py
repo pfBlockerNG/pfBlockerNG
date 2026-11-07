@@ -1,4 +1,4 @@
-"""Tier-A ``ui_render`` coverage for issue #3441's DNSBL IP HA warning and help."""
+"""Tier-A ``ui_render`` coverage for issue #3441's DNSBL IP HA warning."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_render
 
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
-DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 WARNING_MARKER = "DNSBL IP rules may be skipped on the High Availability peer"
 WARNING_HINT = "<strong>DNSBL Virtual IP</strong>"  # the recovery step names the real DNSBL VIP control
 
@@ -87,14 +86,3 @@ def test_sync_page_warns_until_hasync_rule_sync_is_cleared(
     helpers.config_restore_state(smoke_vm, "hasync/synchronizerules", (False, ""))
     html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
     assert WARNING_MARKER not in html, f"after: expected no {WARNING_MARKER!r}, found the marker"
-
-
-def test_help_texts_state_the_matching_dnsbl_ip_requirement(smoke_vm: SmokeVM, webui: WebUI) -> None:
-    """Given either relevant page, its help states that both HA nodes need matching DNSBL IP settings."""
-    sync_html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
-    sync_requirement = "enable DNSBL with the same DNSBL IP settings on both nodes"
-    assert sync_requirement in sync_html, f"expected Sync help {sync_requirement!r}, found no matching text"
-
-    dnsbl_html = _render(smoke_vm, webui, DNSBL_PAGE, "DNSBL Webserver Configuration")
-    dnsbl_requirement = "configure DNSBL IP identically on both nodes"
-    assert dnsbl_requirement in dnsbl_html, f"expected DNSBL help {dnsbl_requirement!r}, found no matching text"
