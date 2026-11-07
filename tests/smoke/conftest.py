@@ -1421,7 +1421,8 @@ class _StubDnsServer:
     This is the smoke matrix's upstream: pfSense forwards every non-local query to its
     System DNS server ``192.168.89.2`` (QEMU/libslirp's WAN host alias — see
     ``helpers.use_system_dns_upstream``), and libslirp NATs guest->192.168.89.2:53 straight
-    to this server on the RUNNER's loopback (``127.0.0.1:53``), port-preserving — the
+    to this server on the RUNNER's loopback (``127.0.0.1:53``), port-preserving (a server on any other
+    port, the UI tier's ephemeral one, is named in a forward-zone by that helper) — the
     same WAN host-alias path the mock-feed HTTP server already rides, and the runner's
     own ``/etc/resolv.conf`` is never touched. So what reaches this server is EXACTLY
     what Unbound did not answer locally. That makes

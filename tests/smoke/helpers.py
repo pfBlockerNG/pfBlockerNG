@@ -2426,7 +2426,7 @@ def restore_dns_config(*, timeout: float = 120.0) -> None:
 
 @timed_step("use_system_dns_upstream")
 def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
+    """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone on :53).
 
     The realistic wiring: pfSense forwards (forwarding mode) to its System DNS server
     ``192.168.89.2`` — QEMU/libslirp's WAN host alias — which NATs ``guest->192.168.89.2:53``
@@ -2440,7 +2440,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     DNS at 192.168.89.3 would read resolv.conf; the 192.168.89.2 host alias does not) — the runner's
     own resolver is left fully intact, so nothing on the host loses DNS during the run. The
     guest-side config change made here is restored at module end by :func:`restore_dns_config`
-    (no manual teardown here). No custom ``forward-zone`` and no guestfwd either. The
+    (no manual teardown here). No custom ``forward-zone`` (on :53) and no guestfwd either. The
     mock records every query (``stub.received(...)``), so blocking is read off the upstream.
     Loopback survives the per-case egress block (``-o lo ACCEPT``), so it stays hermetic.
 
@@ -2451,9 +2451,18 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
       * ``unbound/forwarding = on`` — forward to the System DNS server.
       * ``unset unbound/dnssec`` — the mock's answers are unsigned; a validator would
         mark them bogus (SERVFAIL).
-      * ``unset unbound/custom_options`` — drop any prior custom forward-zone.
+      * ``unset unbound/custom_options`` — drop any prior custom forward-zone. A stub NOT on :53 (the UI
+        tier gets an ephemeral port) is the exception: the System DNS list cannot carry a port, so
+        a catch-all ``forward-zone`` to ``192.168.89.2@<port>`` overrides pfSense's generated zone.
+        Forwarding stays ON (the gateway runs the upstream observer only then).
     """
     _remember_dns_baseline(vm)
+    port = vm.upstream_dns_port or 53
+    if port == 53:
+        custom_options = "unset($u['custom_options']);\n"
+    else:
+        zone = f'forward-zone:\n    name: "."\n    forward-addr: {GUEST_TO_HOST_ALIAS}@{port}\n'
+        custom_options = f"$u['custom_options'] = {_php_str(base64.b64encode(zone.encode()).decode())};\n"
     snippet = (
         "$s = config_get_path('system', array());\n"
         f"$s['dnsserver'] = array({_php_str(GUEST_TO_HOST_ALIAS)});\n"
@@ -2463,7 +2472,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         "$u = config_get_path('unbound', array());\n"
         "$u['forwarding'] = 'on';\n"
         "unset($u['dnssec']);\n"
-        "unset($u['custom_options']);\n"
+        f"{custom_options}"
         "config_set_path('unbound', $u);\n"
         "write_config('pfBlockerNG smoke: system-DNS upstream (SLIRP host alias -> mock)');\n"
         "services_unbound_configure();\n"
@@ -2486,7 +2495,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     if not resolves_to(ans, STUB_DNS_A):
         raise RuntimeError(
             f"System-DNS relay self-check FAILED: {probe} -> {ans} (expected the mock sentinel "
-            f"{STUB_DNS_A}). pfSense's 192.168.89.2 WAN alias -> runner 127.0.0.1:53 mock path is not "
+            f"{STUB_DNS_A}). pfSense's 192.168.89.2 WAN alias -> runner 127.0.0.1:{port} mock path is not "
             f"working (libslirp not NATing the WAN host alias to the mock, or unbound not forwarding)."
         )
 

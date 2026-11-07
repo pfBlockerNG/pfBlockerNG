@@ -344,15 +344,101 @@ jobs:
           printf 'leg_count=%s\n' "$(printf '%s' "$INCLUDE" | jq 'length')" >> "$GITHUB_OUTPUT"
           echo "tiers=[${TIERS}] legs=$(printf '%s' "$LEGS" | jq 'length') run=${RUN}"
 
+  # issue #3687 (CodeQL actions/cache-poisoning/direct-cache): the client (civm) image
+  # cache save is declared HERE and never in `ui`. A cache entry lives in the scope of the
+  # TRIGGERING ref, while `ui` checks out the caller-named `checkout_ref` and runs that
+  # ref's scripts (scripts/resolve-legs.sh builds the key and fills the directory) before
+  # any of its steps could save. CodeQL does not credit a step `if:` as a boundary, so the
+  # boundary is the job: this checkout names no ref, so the job executes only the code of
+  # the ref whose cache scope it writes. A run that names a checkout_ref (a release pins
+  # its SHA) skips the job, so no declared step saves this entry from that code; `ui`
+  # still restores the entry and pulls by digest on a miss. This isolates the DECLARED
+  # cache steps; it is not a capability boundary, since a named-ref `ui` job still holds
+  # the runner's cache credentials.
+  client-image:
+    name: Cache the client (civm) image
+    needs: prepare
+    if: needs.prepare.outputs.run == 'true' && inputs.checkout_ref == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Optional warm-up: ui pulls by digest itself when this job is skipped or fails, so a
+    # failure here must not turn the whole (called) workflow red.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install oras
+        # Same pin as the `ui` job: oras resolves and pulls the image by digest.
+        env:
+          ORAS_VERSION: 1.3.3
+          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
+          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
+          oras version
+
+      - name: Resolve civm image ref + digest (cache key)
+        id: civm
+        env:
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          CLIENT_NAME: ${{ vars.SMOKE_CLIENT_IMAGE_NAME }}
+          CLIENT_TAG: ${{ vars.SMOKE_CLIENT_IMAGE_TAG }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          NAME="${CLIENT_NAME:-civm}"
+          TAG="${CLIENT_TAG:-v1}"
+          REF="$(INPUT_IMAGE_NAME="$NAME" INPUT_VERSION="$TAG" sh scripts/resolve-legs.sh image-ref)"
+          sh scripts/resolve-legs.sh digest "$REF"
+
+      # lookup-only: this job only needs to know whether the entry exists (cache-hit is still
+      # set); `ui` downloads it, so a hit here must not download the image a second time.
+      - name: Restore cached civm image
+        id: civmcache
+        uses: actions/cache/restore@v6
+        with:
+          path: client-image
+          key: civm-img-${{ steps.civm.outputs.k }}
+          lookup-only: true
+
+      - name: Pull civm image (by digest)
+        if: steps.civmcache.outputs.cache-hit != 'true'
+        env:
+          CIVM_REF: ${{ steps.civm.outputs.ref }}
+          DIGEST: ${{ steps.civm.outputs.digest }}
+        run: |
+          set -eu
+          sh scripts/resolve-legs.sh pull "$CIVM_REF" "$DIGEST" client-image
+
+      # Key = the resolved digest, so an entry never serves stale. The clause is repeated
+      # from the job `if:` so every save in this workflow reads as skipped for a named ref.
+      - name: Save civm image to cache
+        if: steps.civmcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
+        uses: actions/cache/save@v6
+        with:
+          path: client-image
+          key: civm-img-${{ steps.civm.outputs.k }}
+
   ui:
     name: ${{ matrix.tier }} / ${{ matrix.variant }}-${{ matrix.version }} (live pfSense VM)
-    needs: [build-pkg, prepare]
+    needs: [build-pkg, prepare, client-image]
     # !cancelled() (not the implicit success() `needs` would impose) so a
     # cancelled/skipped build-pkg still lets a prefix-driven run through;
     # prepare must have genuinely succeeded (a failed prepare yields no matrix
     # to fromJSON); the nightly guard gates on run=='true'; build-pkg's result
     # only matters when it actually ran (pkg_artifact_prefix empty) -- with a
-    # prefix set it is skipped by design and that is fine.
+    # prefix set it is skipped by design and that is fine. client-image only orders
+    # the cache save before this job's restore: it is skipped for a named
+    # checkout_ref, and when it fails ui pulls the image by digest itself.
     if: >-
       !cancelled() && needs.prepare.result == 'success' &&
       needs.prepare.outputs.run == 'true' &&
@@ -576,6 +662,9 @@ jobs:
           REF="$(INPUT_IMAGE_NAME="$NAME" INPUT_VERSION="$TAG" sh scripts/resolve-legs.sh image-ref)"
           sh scripts/resolve-legs.sh digest "$REF"
 
+      # Restore only: the `client-image` job declares the save for this entry, never this
+      # job (a caller-named checkout_ref runs here). A miss pulls by digest and stays
+      # uncached. No lookup-only: this job boots from the downloaded directory.
       - name: Restore cached civm image
         id: civmcache
         uses: actions/cache/restore@v6
@@ -591,13 +680,6 @@ jobs:
         run: |
           set -eu
           sh scripts/resolve-legs.sh pull "$CIVM_REF" "$DIGEST" client-image
-
-      - name: Save civm image to cache
-        if: steps.civmcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
-        uses: actions/cache/save@v6
-        with:
-          path: client-image
-          key: civm-img-${{ steps.civm.outputs.k }}
 
       - name: Write private SSH key (mode 600)
         env:

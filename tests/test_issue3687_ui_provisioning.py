@@ -152,7 +152,7 @@ esac""",
 
 @pytest.mark.parametrize(
     "cache_id,key_id,path",
-    [("aptcache", "aptkey", "${{ steps.aptkey.outputs.dir }}"), ("civmcache", "civm", "client-image")],
+    [("aptcache", "aptkey", "${{ steps.aptkey.outputs.dir }}")],
 )
 def test_caches_restore_and_only_save_successful_trusted_misses(cache_id: str, key_id: str, path: str) -> None:
     restore = _step(cache_id)
@@ -170,8 +170,6 @@ def test_caches_restore_and_only_save_successful_trusted_misses(cache_id: str, k
     )
     assert restore["with"]["key"] == save["with"]["key"]
     assert f"steps.{key_id}.outputs." in save["with"]["key"]
-    if cache_id == "civmcache":
-        assert _step("Pull civm image")["if"] == "steps.civmcache.outputs.cache-hit != 'true'"
 
 
 def test_apt_key_tracks_only_runner_image_and_exact_install_line(tmp_path: Path) -> None:

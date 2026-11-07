@@ -20,7 +20,8 @@ WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 
 # (workflow, job) -> number of actions/cache/save steps. The counts are a vacuity guard:
 # a renamed or removed save step must fail here rather than leave nothing to check.
-SAVE_STEP_COUNTS = {("smoke-single.yml", "smoke"): 3, ("ui-tests.yml", "ui"): 3}
+# The client image is cached by the checkout-free `client-image` job, not by `ui` (#3687).
+SAVE_STEP_COUNTS = {("smoke-single.yml", "smoke"): 3, ("ui-tests.yml", "ui"): 2}
 JOBS = pytest.mark.parametrize(("workflow", "job"), list(SAVE_STEP_COUNTS), ids=lambda v: str(v))
 
 UNTRUSTED_REF_CLAUSE = "inputs.checkout_ref == ''"
