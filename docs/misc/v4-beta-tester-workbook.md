@@ -11,7 +11,7 @@ not need to be a developer. Tick the boxes as you go. If something looks
 wrong or just confusing, send us the notes at the end.
 
 **Please do the first pass on a non-live system.** Use a lab box, a spare
-firewall, or a VM with a hypervisor snapshot you can roll back. Going 3.3 →
+firewall, or a VM with a hypervisor snapshot you can roll back. Going v3 →
 v4 → 3.3 is meant to restore settings, but this is still beta: do not start
 on the only firewall that is carrying production traffic. If you later
 repeat the same steps on a live box, say so in the report.
@@ -27,7 +27,7 @@ to test). One problem per report.
 
 **How to tell it is working**
 
-After the 3.3 → v4 jump, and after each **Run Now**, you should still have:
+After the v3 → v4 jump, and after each **Run Now**, you should still have:
 
 - Your old IP and DNSBL groups listed (not wiped)
 - A name you already block still blocked (fail to resolve, sinkhole, or
@@ -54,7 +54,7 @@ too.
 ## Before you start
 
 1. Prefer a **lab / spare / VM**. If it is a VM, take a hypervisor snapshot
-   now (and again before you leave 3.3 for v4, and before you go back).
+   now (and again before you leave v3 for v4, and before you go back).
 2. Back up pfSense anyway: **Diagnostics → Backup & Restore → Download
    configuration**. Do this again before you go *back* from v4 to 3.3.
 3. On **Firewall → pfBlockerNG → General**, leave **Keep Settings** enabled
@@ -100,20 +100,19 @@ You do not need a lab benchmark. The three dashboard numbers are enough.
 
 ---
 
-## Step 1 — install 3.3.x (recommended for this walkthrough)
+## Step 1 — start on v3 (3.2.x or 3.3.x)
 
-You can go from the old Netgate **3.2.x** package straight to v4. v4 keeps a
-copy of your 3.2 settings, and installing 3.3 later restores that copy. If you
-go straight to v4, skip to Step 2 and use your 3.2 settings as **snapshot A**.
+v4 installs directly over the old Netgate **3.2.x** package or over **3.3.x**,
+the current v3 release (it carries fixes on top of 3.2). Either way, v4 keeps
+a copy of your v3 settings, and installing 3.3 later restores that copy.
 
-This walkthrough still starts on 3.3 so you can test the round trip back to a
-v3-style package before and after v4.
+If you are on **3.2.x**, you can stay there: write down idle memory and CPU,
+note snapshot A (below), and go to Step 2. Or move to 3.3 first with the
+**Stable** command; this walkthrough uses 3.3 for the trip back from v4 either
+way.
 
-If you are still on **3.2.x**, write down idle memory and CPU **before** you
-run the Stable installer.
-
-The 3.3.x package still **looks like v3**. That is on purpose. It saves a
-copy of your current settings so you can come back to them from v4.
+If you install 3.3, write down idle memory and CPU on 3.2 **before** you run
+the Stable installer.
 
 On the firewall, as root, copy the **Stable** command from
 [pkg.pfblockerng.com](https://pkg.pfblockerng.com/):
@@ -134,7 +133,7 @@ When it finishes:
 
 Write down two or three things you can recognise later (a feed name, a
 schedule, a custom domain). Call this **snapshot A** — “how my box looked on
-3.3.”
+v3.”
 
 ---
 
@@ -167,7 +166,7 @@ When it finishes:
 - [ ] Dashboard widget loads; no new pfBlockerNG error notices
 - [ ] **Status → System Logs → System** has no new pfBlockerNG / Unbound /
       PHP errors from the install
-- [ ] Idle memory and CPU written down (may be higher than 3.3; should
+- [ ] Idle memory and CPU written down (may be higher than on v3; should
       settle)
 
 Change one obvious setting so you can recognise this box as v4. Call that
