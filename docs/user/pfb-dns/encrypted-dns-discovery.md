@@ -63,6 +63,24 @@ DDR omits `port` when the listener uses the transport default (DoH 443, DoT/DoQ 
 that do not understand the port key. A non-default listener port is advertised unless the address is advertised on 443 under
 **Advertise DoH on port 443**.
 
+## Check which transport clients use
+
+Open **Firewall > pfBlockerNG > Reports**. The existing **DNSBL** and **DNS Reply** tables show a
+**Transport** column: **UDP**, **TCP**, **DoT**, **DoH**, or **DoQ**. Use the corresponding Transport
+filter to narrow the rows. Unified reports also retain this information.
+
+This is the transport the client used to reach pfB-DNS, not the connection pfB-DNS or Unbound used
+upstream. A trusted DoH reverse proxy can supply the originating client address; the transport remains
+**DoH**. Headers from an untrusted peer do not replace the client address.
+
+An em dash (**—**) means the original transport is unavailable, including historical rows and native
+Unbound events whose API does not supply that information. It does not mean UDP or unencrypted DNS.
+Existing DNSBL logging modes and **DNS > General > DNS Reply Logging** still determine which events
+are recorded; enabling a listener does not enable additional query collection.
+
+A DoT, DoH, or DoQ row confirms that query arrived over encrypted DNS. It does **not** establish that
+DDR caused the client to choose it.
+
 ## DNR with Kea
 
 **Checked against:** CE 2.8.1 [DHCP page and generator sources][ce-package]; Kea 2.6.2 and 3.0.2/3.0.3 containers;

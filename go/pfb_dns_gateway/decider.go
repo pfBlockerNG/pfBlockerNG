@@ -373,28 +373,28 @@ func (d *Decider) register(c *call) (uint32, error) {
 	return d.nextID, nil
 }
 
-// Transport byte of a QUERY: what kind of client asked. A datagram client (plain UDP) has a size limit the decider
-// holds its own answers to; every other client (TCP, DoT, DoH, DoQ) has none.
+// clientTransport names the accepted listener, not the upstream exchange.
+type clientTransport byte
+
 const (
-	clientStream   byte = 0
-	clientDatagram byte = 1
+	clientTCP clientTransport = iota
+	clientUDP
+	clientDoT
+	clientDoH
+	clientDoQ
 )
 
 // Decide sends the query to the decider and serves its FORWARDs through fwd until it answers: the ANSWER wire,
-// or nil for DROP. datagram says the client is a plain-UDP one. ctx ending abandons the query; the id stays reserved
+// or nil for DROP. ctx ending abandons the query; the id stays reserved
 // until the decider's final frame.
-func (d *Decider) Decide(ctx context.Context, client netip.Addr, datagram bool, wire []byte, fwd forwarder) ([]byte, error) {
+func (d *Decider) Decide(ctx context.Context, client netip.Addr, transport clientTransport, wire []byte, fwd forwarder) ([]byte, error) {
 	c := &call{forward: make(chan []byte, 1), final: make(chan []byte, 1)}
 	id, err := d.register(c)
 	if err != nil {
 		return nil, err
 	}
 	ip := client.String()
-	transport := clientStream
-	if datagram {
-		transport = clientDatagram
-	}
-	if err := d.send(frameQuery, id, append(append([]byte{transport, byte(len(ip))}, ip...), wire...)); err != nil {
+	if err := d.send(frameQuery, id, append(append([]byte{byte(transport), byte(len(ip))}, ip...), wire...)); err != nil {
 		return nil, err
 	}
 	for {

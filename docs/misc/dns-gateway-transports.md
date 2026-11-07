@@ -5,6 +5,10 @@ how a client address is decided on each, and what a front end such as HAProxy ca
 changing `tlsconfig.go`, `dot.go`, `doh.go`, `doq.go`, `pfb_doq_probe`, or putting a front end in front of the gateway.
 The decision protocol with the Python decider is in [dns-gateway-protocol.md](dns-gateway-protocol.md).
 
+Every QUERY identifies the accepted listener as TCP, UDP, DoT, DoH or DoQ, independently of the upstream
+UDP exchange or TCP fallback. DoH client attribution still follows the trusted-proxy rules below; a proxy header
+does not change the listener transport. Only UDP clients have the decider's UDP answer-size limit.
+
 ## Certificate
 
 DoT, DoH and DoQ serve the certificate selected on the pfB-DNS page (`dns/pfb_dns_sslcertref`): the certificate, the CAs after it nearest first, then its private key,

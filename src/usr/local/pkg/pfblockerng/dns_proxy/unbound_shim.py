@@ -292,9 +292,17 @@ class module_env:
 
 
 class module_qstate:
-    def __init__(self, qinfo: query_info, client_ip: str, client_port: int = 0, query_flags: int = 0) -> None:
+    def __init__(
+        self,
+        qinfo: query_info,
+        client_ip: str,
+        client_port: int = 0,
+        query_flags: int = 0,
+        transport: str = "Unknown",
+    ) -> None:
         self.qinfo = qinfo
         self.query_flags = query_flags
+        self.pfb_transport = transport
         self.return_msg: DnsMsg | None = None
         self.return_rcode = RCODE_NOERROR
         self.ext_state = [0] * _MODULE_COUNT

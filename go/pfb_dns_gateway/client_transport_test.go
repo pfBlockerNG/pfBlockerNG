@@ -14,8 +14,11 @@ import (
 // text, then the DNS wire.
 
 const (
-	transportStream   byte = 0 // TCP, DoT, DoH, DoQ: no UDP size limit
-	transportDatagram byte = 1 // plain UDP
+	transportTCP byte = 0
+	transportUDP byte = 1
+	transportDoT byte = 2
+	transportDoH byte = 3
+	transportDoQ byte = 4
 )
 
 type transportQuery struct {
@@ -32,8 +35,8 @@ func (r *rig) recvTransportQuery() transportQuery {
 	if typ != tQuery {
 		r.t.Fatalf("frame from the gateway: type %d, want QUERY", typ)
 	}
-	if len(payload) < 2 || payload[0] > transportDatagram || len(payload) < 2+int(payload[1]) {
-		r.t.Fatalf("QUERY payload %x does not start with a transport byte (0 stream, 1 datagram), the IP text length and the IP text", payload)
+	if len(payload) < 2 || payload[0] > transportDoQ || len(payload) < 2+int(payload[1]) {
+		r.t.Fatalf("QUERY payload %x does not start with a valid transport byte, the IP text length and the IP text", payload)
 	}
 	n := int(payload[1])
 	return transportQuery{id: id, transport: payload[0], ip: string(payload[2 : 2+n]), wire: payload[2+n:]}
@@ -69,9 +72,7 @@ func awaitClient(t *testing.T, ch <-chan clientResult) []byte {
 	}
 }
 
-// T1: every transport says what it is, and DoH and DoQ, which carry no UDP limit, are streams. Each case sends its
-// query from the test's goroutine where the transport lets it (a write does not wait for the reply) and from one
-// that only reports through a channel where it does not (DoH, DoQ).
+// Every listener supplies its original transport, independently of its upstream exchange.
 func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 	query := buildQuery(t, 0x0000, "allowed.example.", true)
 	cases := []struct {
@@ -79,7 +80,7 @@ func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 		want byte
 		ask  func(t *testing.T) (r *rig, reply func() []byte)
 	}{
-		{"udp", transportDatagram, func(t *testing.T) (*rig, func() []byte) {
+		{"udp", transportUDP, func(t *testing.T) (*rig, func() []byte) {
 			r := newRig(t, rigConfig{acl: aclMixed})
 			c := r.udpClient(clientAllowed)
 			if _, err := c.Write(query); err != nil {
@@ -87,20 +88,20 @@ func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 			}
 			return r, func() []byte { return udpReply(t, c) }
 		}},
-		{"tcp", transportStream, func(t *testing.T) (*rig, func() []byte) {
+		{"tcp", transportTCP, func(t *testing.T) (*rig, func() []byte) {
 			r := newRig(t, rigConfig{acl: aclMixed})
 			c := r.tcpClient(clientAllowed)
 			tcpSend(t, c, query)
 			return r, func() []byte { return tcpReply(t, c) }
 		}},
-		{"dot", transportStream, func(t *testing.T) (*rig, func() []byte) {
+		{"dot", transportDoT, func(t *testing.T) (*rig, func() []byte) {
 			r := newRig(t, rigConfig{acl: aclMixed})
 			m := newTLSMaterial(t)
 			c := dialDoT(t, r.serveDoT(m), m, clientAllowed)
 			tcpSend(t, c, query)
 			return r, func() []byte { return tcpReply(t, c) }
 		}},
-		{"doh", transportStream, func(t *testing.T) (*rig, func() []byte) {
+		{"doh", transportDoH, func(t *testing.T) (*rig, func() []byte) {
 			r := newRig(t, rigConfig{acl: aclMixed})
 			m := newTLSMaterial(t)
 			c := newDoHClient(t, r.serveDoH(m), m, dohOptions{source: clientAllowed})
@@ -118,7 +119,7 @@ func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 			}()
 			return r, func() []byte { return awaitClient(t, done) }
 		}},
-		{"doq", transportStream, func(t *testing.T) (*rig, func() []byte) {
+		{"doq", transportDoQ, func(t *testing.T) (*rig, func() []byte) {
 			r, m, addr := newDoQRig(t, rigConfig{})
 			c := dialDoQ(t, addr, m, clientAllowed)
 			wire := doqQuery(t, "allowed.example.")
@@ -171,7 +172,7 @@ func TestPlainUDPFirstForwardIsRelayedAsIsAndTheChaseIsRetriedOverTCPWhenTruncat
 		t.Fatal(err)
 	}
 	q := r.recvTransportQuery()
-	if q.transport != transportDatagram {
+	if q.transport != transportUDP {
 		t.Fatalf("QUERY transport %d, want datagram", q.transport)
 	}
 
@@ -235,7 +236,7 @@ func TestStreamClientForwardsGoOverUDPAndTruncatedOnesRetryOnItsOneUpstreamTCPCo
 	c := r.tcpClient("")
 	tcpSend(t, c, buildQuery(t, 0x3333, "duck.example.", true))
 	q := r.recvTransportQuery()
-	if q.transport != transportStream {
+	if q.transport != transportTCP {
 		t.Fatalf("QUERY transport %d, want stream", q.transport)
 	}
 	for _, name := range []string{"duck.example.", "safe.duck.example."} {

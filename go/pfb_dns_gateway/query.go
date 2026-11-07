@@ -229,17 +229,17 @@ func (g *gateway) screen(client, local netip.Addr, plain, udp bool, wire []byte)
 	return toDecider, nil
 }
 
-// resolve asks the decider and serves its FORWARDs through fwd. datagram says the client is a plain-UDP one. nil
+// resolve asks the decider and serves its FORWARDs through fwd. nil
 // means the decider dropped the query; a decider that fails or does not decide within 2 x timeout + grace gets
 // SERVFAIL built here.
-func (g *gateway) resolve(ctx context.Context, client netip.Addr, datagram bool, wire []byte, fwd forwarder) []byte {
+func (g *gateway) resolve(ctx context.Context, client netip.Addr, transport clientTransport, wire []byte, fwd forwarder) []byte {
 	ctx, cancel := context.WithTimeout(ctx, 2*g.timeout+g.grace)
 	defer cancel()
 	dec := g.dec.Load()
 	if g.deciderRead != nil {
 		g.deciderRead()
 	}
-	answer, err := g.decide(ctx, dec, client, datagram, wire, fwd)
+	answer, err := g.decide(ctx, dec, client, transport, wire, fwd)
 	if err != nil {
 		return buildServfail(wire)
 	}
@@ -248,17 +248,17 @@ func (g *gateway) resolve(ctx context.Context, client netip.Addr, datagram bool,
 
 // decide asks dec. A query that dec refused because a restart retired it before the query registered (nothing was sent
 // to it) is asked of the active decider, once; every other failure is the query's.
-func (g *gateway) decide(ctx context.Context, dec *Decider, client netip.Addr, datagram bool, wire []byte, fwd forwarder) ([]byte, error) {
-	answer, err := dec.Decide(ctx, client, datagram, wire, fwd)
+func (g *gateway) decide(ctx context.Context, dec *Decider, client netip.Addr, transport clientTransport, wire []byte, fwd forwarder) ([]byte, error) {
+	answer, err := dec.Decide(ctx, client, transport, wire, fwd)
 	if errors.Is(err, errDeciderRetired) {
-		return g.dec.Load().Decide(ctx, client, datagram, wire, fwd)
+		return g.dec.Load().Decide(ctx, client, transport, wire, fwd)
 	}
 	return answer, err
 }
 
 // resolveShared is resolve under the cap DoH and DoQ share: they carry many queries on one connection, so their
 // queries in flight (each holds an upstream socket) are counted apart from UDP's. ok is false over the cap.
-func (g *gateway) resolveShared(ctx context.Context, client netip.Addr, wire []byte, fwd forwarder) (reply []byte, ok bool) {
+func (g *gateway) resolveShared(ctx context.Context, client netip.Addr, transport clientTransport, wire []byte, fwd forwarder) (reply []byte, ok bool) {
 	if !g.muxAddrs.take(client, g.muxPerAddr, "DoH and DoQ queries", g.logf) {
 		return nil, false
 	}
@@ -275,5 +275,5 @@ func (g *gateway) resolveShared(ctx context.Context, client netip.Addr, wire []b
 			g.muxOverload.Store(false)
 		}
 	}()
-	return g.resolve(ctx, client, false, wire, fwd), true
+	return g.resolve(ctx, client, transport, wire, fwd), true
 }

@@ -94,17 +94,17 @@ def cache_calls(ss_booted: Booted) -> list[tuple[Any, ...]]:
 
 
 def _resolve_wire(
-    booted: Booted, wire: bytes, forward: Any, client: str = CLIENT, datagram: bool = False
+    booted: Booted, wire: bytes, forward: Any, client: str = CLIENT, transport: str = "Unknown"
 ) -> bytes | None:
-    """What the client is sent; `datagram` makes the client a plain-UDP one (see Frontend.resolve)."""
+    """What the client is sent; only UDP applies the client's advertised size."""
     frontend = pfb_dns_proxy.Frontend(booted.module)
-    return asyncio.run(frontend.resolve(wire, client, forward, datagram=datagram))
+    return asyncio.run(frontend.resolve(wire, client, forward, transport=transport))
 
 
 def _resolve(
-    booted: Booted, wire: bytes, forward: Any, client: str = CLIENT, datagram: bool = False
+    booted: Booted, wire: bytes, forward: Any, client: str = CLIENT, transport: str = "Unknown"
 ) -> dnswire.Message:
-    return dnswire.parse(_resolve_wire(booted, wire, forward, client, datagram) or b"")
+    return dnswire.parse(_resolve_wire(booted, wire, forward, client, transport) or b"")
 
 
 def _answers(reply: dnswire.Message) -> list[tuple[str, int, bytes]]:
@@ -239,7 +239,7 @@ def test_a_reply_the_proxy_builds_is_cut_to_the_udp_size_the_client_advertised(
     ss_booted: Booted, size: int | None, count: int, truncated: bool
 ) -> None:
     """Issue #3517 review: a no-EDNS client was sent 530 bytes and one advertising 512 was sent 796, TC clear."""
-    wire = _resolve_wire(ss_booted, _udp_query(size), FakeUnbound(_target_zone(count)), datagram=True)
+    wire = _resolve_wire(ss_booted, _udp_query(size), FakeUnbound(_target_zone(count)), transport="UDP")
     assert wire is not None
     reply = dnswire.parse(wire)
     limit = min(max(size or 512, 512), 1232)
@@ -263,7 +263,7 @@ def test_a_reply_exactly_as_big_as_the_clients_udp_size_is_not_truncated(ss_boot
     full = _resolve_wire(ss_booted, build_query(DUCK, edns=True, udp_size=4096), FakeUnbound(zone))  # TCP: no limit
     assert full is not None and 512 < len(full) < 1232
     for size, truncated in ((len(full), False), (len(full) - 1, True)):
-        reply = _resolve(ss_booted, build_query(DUCK, edns=True, udp_size=size), FakeUnbound(zone), datagram=True)
+        reply = _resolve(ss_booted, build_query(DUCK, edns=True, udp_size=size), FakeUnbound(zone), transport="UDP")
         assert (size, bool(reply.flags & dnswire.TC)) == (size, truncated)
 
 

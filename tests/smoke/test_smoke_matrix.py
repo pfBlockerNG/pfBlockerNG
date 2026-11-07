@@ -283,7 +283,7 @@ def test_dnsbl_python_vip_over_ipv6_transport(deployed_vm: SmokeVM, client_vm: S
                     )
                 # dnsbl.log is written off the DNS path: wait for both rows, then check who they name.
                 try:
-                    h.wait_until(lambda: {row[-1] for row in blocked_rows()} >= {"A", "AAAA"})
+                    h.wait_until(lambda: {row[10] for row in blocked_rows()} >= {"A", "AAAA"})
                 except RuntimeError:
                     raise AssertionError(
                         f"dnsbl.log rows for {domain}: expected A and AAAA from {src6}, got {blocked_rows()}"

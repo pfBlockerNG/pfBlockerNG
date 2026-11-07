@@ -84,7 +84,7 @@ def _log_reply(
 
     (raw,) = [line for path, line in lines if path.endswith("dns_reply.log")]
     fields = next(csv.reader([raw]))
-    assert len(fields) == 10, fields
+    assert len(fields) == 11 and fields[10] == "Unknown", fields
     return raw, fields
 
 

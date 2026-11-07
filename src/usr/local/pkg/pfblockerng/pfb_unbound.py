@@ -3133,6 +3133,14 @@ def pfb_db_enqueue(task: tuple) -> None:
     _db_apply(task)
 
 
+def get_q_transport(qstate: Any, kwargs: dict[str, Any] | None) -> str:
+    """Original listener transport, never inferred from upstream sockets or client ports."""
+    value = getattr(qstate, "pfb_transport", None)
+    if value is None and kwargs:
+        value = kwargs.get("pfb_transport")
+    return value if isinstance(value, str) and value in ("TCP", "UDP", "DoT", "DoH", "DoQ") else "Unknown"
+
+
 def get_details_dnsbl(
     m_type: str,
     qinfo: query_info | None,
@@ -3177,9 +3185,10 @@ def get_details_dnsbl(
         # back-to-back A+AAAA of one name collapses (dual-stack under-count) and Reports
         # cannot break down by record type. The decision path stays correct and untouched.
         q_type = get_q_type(qstate, qinfo)
+        transport = get_q_transport(qstate, kwargs)
 
         dupEntry = "+"
-        event_sig = (q_name_key, q_type, dnsbl)
+        event_sig = (q_name_key, q_type, dnsbl, transport)
         if _dnsbl_last_event is not None:
             if str(_dnsbl_last_event) == str(event_sig):
                 dupEntry = "-"
@@ -3210,6 +3219,7 @@ def get_details_dnsbl(
                 dnsbl.feed,
                 dupEntry,
                 q_type,
+                transport,
             )
         )
         pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
@@ -3217,7 +3227,9 @@ def get_details_dnsbl(
     return True
 
 
-def _log_idn_alert(q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_type: str) -> None:
+def _log_idn_alert(
+    q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_type: str, transport: str = "Unknown"
+) -> None:
     """Log an ADR-08 Confusable-mode ALERT (the name still resolves) -- same shape as a block.
 
     A suspicious/flagged homoglyph (or a malicious one with the block sub-toggle disabled)
@@ -3242,12 +3254,13 @@ def _log_idn_alert(q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_ty
             feed,
             "+",  # dupEntry
             q_type,
+            get_q_transport(None, {"pfb_transport": transport}),
         )
     )
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
 
 
-def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: str) -> None:
+def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: str, transport: str = "Unknown") -> None:
     """Log an issue #267 upstream/external DNS block -- same CSV shape as a DNSBL block.
 
     Mirrors ``_log_idn_alert``'s structure.  ``b_type`` is ``"Upstream_Block"`` so the
@@ -3271,6 +3284,7 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
             _log_text(result.provider) or "External",  # feed -- EDE EXTRA-TEXT is off the wire
             "+",  # dupEntry (dedup follow-up)
             q_type,
+            get_q_transport(None, {"pfb_transport": transport}),
         )
     )
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
@@ -3604,7 +3618,19 @@ def get_details_reply(
     timestamp = make_timestamp()
 
     csv_line = _csv_row(
-        ("DNS-reply", timestamp, m_type, o_type, q_type, ttl, _log_text(q_name), q_ip, _log_text(r_addr), iso_code)
+        (
+            "DNS-reply",
+            timestamp,
+            m_type,
+            o_type,
+            q_type,
+            ttl,
+            _log_text(q_name),
+            q_ip,
+            _log_text(r_addr),
+            iso_code,
+            get_q_transport(qstate, kwargs),
+        )
     )
     pfb_log("/var/log/pfblockerng/dns_reply.log", csv_line)
 
@@ -3898,7 +3924,7 @@ def inplace_cb_query_response(qstate: Any, response: Any, **kwargs: Any) -> bool
         q_name = get_q_name_qstate(qstate)
         q_type = get_q_type(qstate, None)
         q_ip = _client_ip_from_qstate(qstate)
-        _log_upstream_block(q_name, q_ip, result, q_type)
+        _log_upstream_block(q_name, q_ip, result, q_type, get_q_transport(qstate, kwargs))
     except Exception as e:
         sys.stderr.write("[pfBlockerNG] inplace_cb_query_response: {}\n".format(e))
     return True
@@ -7740,7 +7766,9 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # cached decision and is not re-logged (the name resolves normally).
                 # issue #1349: preserve block/alert exclusivity after cache retirement.
                 if dnsbl.idn_alert is not None and not (dnsbl.is_found and not dnsbl.in_whitelist):
-                    _log_idn_alert(q_name, q_ip, dnsbl.idn_alert, get_q_type(qstate, None))
+                    _log_idn_alert(
+                        q_name, q_ip, dnsbl.idn_alert, get_q_type(qstate, None), get_q_transport(qstate, None)
+                    )
             elif isCNAME and dnsbl.is_found and not dnsbl.in_whitelist:
                 # Memo hit on the CNAME *target*: re-evaluate in the original
                 # QNAME's CNAME-chain context so orig's whitelist still applies

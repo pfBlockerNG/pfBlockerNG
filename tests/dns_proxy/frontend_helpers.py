@@ -269,7 +269,6 @@ async def tcp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes
 # --- the gateway end of the decision socket, for tests that run the decider in this process ---------------------
 
 QUERY, FORWARD, REPLY, ANSWER, READY = 1, 2, 3, 4, 6  # the frame types of docs/misc/dns-gateway-protocol.md
-STREAM, DATAGRAM = 0, 1  # the QUERY's transport byte
 
 
 class DecisionGateway:
@@ -289,11 +288,12 @@ class DecisionGateway:
         return ftype, fid, body[5:]
 
     async def ask(
-        self, wire: bytes, unbound: FakeUnbound, *, client: str = "127.0.0.2", datagram: bool = True, fid: int = 1
+        self, wire: bytes, unbound: FakeUnbound, *, client: str = "127.0.0.2", transport: str = "UDP", fid: int = 1
     ) -> bytes:
         """QUERY `wire` as `client`, answer every FORWARD from `unbound`, and return the final ANSWER's wire."""
         text = client.encode("ascii")
-        await self.send(QUERY, fid, bytes([DATAGRAM if datagram else STREAM, len(text)]) + text + wire)
+        byte = ("TCP", "UDP", "DoT", "DoH", "DoQ").index(transport)
+        await self.send(QUERY, fid, bytes([byte, len(text)]) + text + wire)
         while True:
             ftype, got, payload = await self.recv()
             assert got == fid

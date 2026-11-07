@@ -65,7 +65,9 @@ DESELECTED from the default ``python -m pytest``. Run it on the pool::
 from __future__ import annotations
 
 import contextlib
+import csv
 import hashlib
+import html
 import ipaddress
 import json
 import os
@@ -93,6 +95,7 @@ from .test_smoke_dns_proxy import (
     CERT_CLIENT,
     CERT_GUEST,
     CERT_NAME,
+    CFG_REPLY_LOG,
     DAEMON_PID_FILE,
     LAN_V6_ADDR,
     LAN_V6_ROW,
@@ -103,6 +106,7 @@ from .test_smoke_dns_proxy import (
     RESOLVER_LOG,
     SCRIPT_LINE,
     SNAPSHOT_PATHS,
+    UNIFIED_LOG,
     UPSTREAM_PORT,
     Listener,
     State,
@@ -121,6 +125,8 @@ from .test_smoke_dns_proxy import (
     _php_ok,
     _pid_file,
     _proxy_log,
+    _put_reply_logging,
+    _reply_rows,
     _set_proxy_toggle,
     _sh,
     _unbound_conf_report,
@@ -128,7 +134,7 @@ from .test_smoke_dns_proxy import (
     _wait_unbound_logged,
 )
 from .ui.credgate import admin_password_decision
-from .ui.webui import WebUI
+from .ui.webui import WebUI, row_containing
 
 pytestmark = [pytest.mark.smoke, pytest.mark.timeout(180)]
 
@@ -179,6 +185,8 @@ CONFIG_PATHS = tuple(
             CFG_DDR,
             CFG_DDR_DOH_443,
             CFG_DNS_NAME,
+            CFG_REPLY_LOG,
+            h.dns_config_path("pfb_dns_doh_trusted"),
             # DNS General's Resolver addresses: the tests switch them on, and the apply pass records the VIP row it adds
             f"{h.CFG_GLOBAL}/pfb_dns_listen_vip",
             f"{h.CFG_GLOBAL}/pfb_dns_listen_vip_only",
@@ -194,6 +202,46 @@ CONFIG_PATHS = tuple(
 )
 
 TRANSPORTS = ("udp", "tcp", "dot", "doh-post", "doh-get", "doq")
+LOG_TRANSPORT = {"udp": "UDP", "tcp": "TCP", "dot": "DoT", "doh-post": "DoH", "doh-get": "DoH", "doq": "DoQ"}
+
+
+def _drain_logs(gw: Gateway) -> None:
+    """A fresh completed reply drains the decider's earlier log writes."""
+    name = h.unique_domain("transport-log-barrier")
+    answer, raw = _ask(gw.client, "udp", name)
+    assert h.resolves_to(answer, STUB_DNS_A), f"log barrier {name}: {answer}\n{raw}"
+    h.wait_until(lambda: bool(_reply_rows(gw.vm, name, UNIFIED_LOG)), timeout=30.0)
+
+
+def _assert_unified_row(vm: SmokeVM, row: list[str], name: str, name_col: int) -> None:
+    feature = "dnsbl.log" if name_col == 2 else "dns_reply.log"
+    lines = h.read_log_file(vm, f"{h.PFB_LOGDIR}/{feature}").splitlines()
+    originals = [line for line in lines if next(csv.reader([line])) == row]
+    assert originals, f"{feature} lacks {name} row: {row}"
+    original = originals[0]
+    try:
+        h.wait_until(
+            lambda: h.read_log_file(vm, UNIFIED_LOG).splitlines().count(original) == len(originals), timeout=30.0
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"unified.log lacks byte-identical {name} row: {original!r}") from exc
+
+
+def _assert_report_row(gui: WebUI, name: str, client: str, transport: str) -> None:
+    response = gui.get("/pfblockerng/pfblockerng_alerts.php?view=unified")
+    assert response.status_code == 200, f"Reports GET: {response.status_code}"
+    row = row_containing(response.text, name)
+    cells = [
+        html.unescape(re.sub(r"<[^>]*>", "", cell)).strip()
+        for cell in re.findall(r"<td\b[^>]*>(.*?)</td>", row, re.DOTALL)
+    ]
+    assert re.search(r"<th\b[^>]*>\s*Transport\s*</th>", response.text), "Reports lacks a Transport column"
+    assert cells[-1:] == [transport], f"Reports Transport cell for {name}: expected {transport}, got {cells}"
+    assert len(cells) > 2 and re.search(rf"(?<![\d.:]){re.escape(client)}(?![\d.:])", cells[2]), (
+        f"Reports client cell for {name}: expected {client}, got {cells}"
+    )
+
+
 _TLS = (f"+tls-ca={CERT_CLIENT}", f"+tls-hostname={CERT_NAME}")
 # dig options and port per transport; DoQ has no dig (pfb_doq_probe). "doh-plain" is DoH spoken without TLS.
 DIG_TRANSPORTS: dict[str, tuple[tuple[str, ...], int | None]] = {
@@ -216,6 +264,7 @@ class Names:
 
     ready: str  # asked until the gateway serves
     blocked: dict[str, str]  # per transport
+    logged: dict[str, str]  # reserved for the one-query-per-transport log assertions
     refused: dict[str, str]  # per transport, asked while the ACL refuses the client
     denied: dict[str, str]  # per transport, asked while the ACL denies the client
     restored: dict[str, str]  # per transport, asked after the refuse row is gone
@@ -235,6 +284,7 @@ class Names:
 
     def listed(self) -> list[str]:
         per_transport = (
+            *self.logged.values(),
             *self.blocked.values(),
             *self.refused.values(),
             *self.denied.values(),
@@ -266,6 +316,7 @@ def _make_names() -> Names:
     return Names(
         ready=h.unique_domain("ready"),
         blocked=per_transport("blocked"),
+        logged=per_transport("logged"),
         refused=per_transport("refused"),
         denied=per_transport("denied"),
         restored=per_transport("restored"),
@@ -747,6 +798,7 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
         )
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
         _configure_resolver(vm, refid)
+        _put_reply_logging(vm, "on")
         h.inject(vm, h.DnsblCase(aliasname=feed_header, feed_url=feed_url, header=feed_header, mode=h.DnsblMode.VIP))
         _set_listeners(vm)
         _upload(client_vm, probe_binary, PROBE_BIN, "root:root")  # the gateway itself is the package's, never uploaded
@@ -1169,27 +1221,27 @@ def test_the_firewalls_own_lookup_of_a_listed_name_gets_the_vip_from_the_gateway
 
 @pytest.mark.parametrize("transport", TRANSPORTS)
 def test_a_listed_name_gets_the_vip_and_a_log_row_naming_the_client(
-    gw: Gateway, gateway_on: State, transport: str
+    gw: Gateway, gateway_on: State, transport: str, gui: WebUI
 ) -> None:
     """A listed name is answered by the gateway's decider: the VIP and a dnsbl.log row for the LAN client.
 
     When the LAN client asks over UDP, TCP, DoT, DoH (POST and GET) or DoQ,
     Then it gets the DNSBL VIP and dnsbl.log has a row for the name that names 192.168.1.10.
     """
-    name = gw.names.blocked[transport]
+    name = gw.names.logged[transport]
     answer, raw = _ask(gw.client, transport, name)
     _say(f"listed name, {transport}: {answer.rcode} {answer.records}")
     assert h.is_vip(answer), f"{transport} {name}: expected VIP {h.DEFAULT_DNSBL_VIP4}, got {answer}\n{raw}"
-    _wait_dnsbl_row(gw.vm, name)
-    clients = {row[3] for row in _dnsbl_rows(gw.vm, name)}
-    assert clients == {CLIENT_LAN_IP}, (
-        f"{transport}: dnsbl.log client for {name}: expected {CLIENT_LAN_IP}, got {clients}"
-    )
+    _drain_logs(gw)
+    [row] = _dnsbl_rows(gw.vm, name)
+    assert len(row) == 12 and row[3] == CLIENT_LAN_IP and row[11] == LOG_TRANSPORT[transport], row
+    _assert_unified_row(gw.vm, row, name, 2)
+    _assert_report_row(gui, name, CLIENT_LAN_IP, LOG_TRANSPORT[transport])
 
 
 @pytest.mark.parametrize("transport", TRANSPORTS)
 def test_an_allowed_name_is_answered_by_the_upstream_and_unbound_logs_the_client(
-    gw: Gateway, gateway_on: State, transport: str
+    gw: Gateway, gateway_on: State, transport: str, gui: WebUI, stub_dns: _StubDnsServer
 ) -> None:
     """An allowed name goes to Unbound behind a PROXYv2 header naming the LAN client, whatever the transport.
 
@@ -1200,11 +1252,92 @@ def test_an_allowed_name_is_answered_by_the_upstream_and_unbound_logs_the_client
     answer, raw = _ask(gw.client, transport, name)
     _say(f"allowed name, {transport}: {answer.rcode} {answer.records}")
     _assert_answered_by_upstream(gw, name, answer, raw, transport)
+    h.wait_until(lambda: len(_reply_rows(gw.vm, name)) == 1, timeout=30.0)
+    [forwarded] = _reply_rows(gw.vm, name)
+    upstream_queries = stub_dns.received(name, "A")
+    assert upstream_queries, f"fresh {name} never reached the upstream"
+    answer, raw = _ask(gw.client, transport, name)
+    assert h.resolves_to(answer, STUB_DNS_A), f"cached {transport} {name}: {answer}\n{raw}"
+    _drain_logs(gw)
+    assert stub_dns.received(name, "A") == upstream_queries, f"repeated {name} was not cached by Unbound"
+    rows = _reply_rows(gw.vm, name)
+    assert len(rows) == 2, f"one row per forwarded/cached query: {rows}"
+    assert rows[0] == forwarded, f"first forwarded row changed: {forwarded} -> {rows}"
+    # The gateway sees a forwarded reply for both; Unbound alone knows which it cached.
+    assert [row[2] for row in rows] == ["reply", "reply"], rows
+    for row in rows:
+        assert len(row) == 11 and row[3:5] == ["A", "A"] and row[5].isdigit(), row
+        assert row[6:9] == [name, CLIENT_LAN_IP, STUB_DNS_A], row
+        assert row[9] == forwarded[9] and row[9] in ("unk", "prv"), row
+        assert row[10] == LOG_TRANSPORT[transport], row
+        _assert_unified_row(gw.vm, row, name, 6)
+    _assert_report_row(gui, name, CLIENT_LAN_IP, LOG_TRANSPORT[transport])
 
 
 # --------------------------------------------------------------------------- #
 # Hostile clients
 # --------------------------------------------------------------------------- #
+
+
+def test_doh_forwarded_client_is_believed_only_from_a_trusted_front_end(
+    gw: Gateway, gateway_on: State, gui: WebUI
+) -> None:
+    """XFF changes attribution only for a trusted peer; it never changes DoH to TCP."""
+    path = h.dns_config_path("pfb_dns_doh_trusted")
+    present, prior = h.config_get_state(gw.vm, path)
+    try:
+        for trusted in (False, True):
+            _php_ok(
+                gw.vm,
+                f"config_set_path({h._php_str(path)}, {h._php_str(CLIENT_LAN_IP if trusted else '')});\n"
+                "write_config('pfBlockerNG smoke: trusted DoH front end');",
+                "DoH trusted front end",
+            )
+            _apply(gw.vm)
+            name = h.unique_domain("doh-trusted" if trusted else "doh-untrusted")
+            wire = bytes.fromhex("375101000001000000000000")
+            wire += b"".join(bytes([len(label)]) + label.encode() for label in name.split(".")) + b"\0\0\1\0\1"
+            args = [
+                "curl",
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--max-time",
+                "10",
+                "--noproxy",
+                "*",
+                "--cacert",
+                CERT_CLIENT,
+                "--resolve",
+                f"{CERT_NAME}:{DOH_PORT}:{PFSENSE_LAN_IP}",
+                "-H",
+                "Content-Type: application/dns-message",
+                "-H",
+                f"X-Forwarded-For: {BYPASSED_ALIAS_IP}",
+                "--data-binary",
+                "@-",
+                f"https://{CERT_NAME}:{DOH_PORT}/dns-query",
+            ]
+            result = subprocess.run(
+                gw.client.ssh_argv(shlex.join(args)), input=wire, capture_output=True, timeout=40, check=False
+            )
+            assert result.returncode == 0, f"DoH trusted={trusted}: {result.stderr!r}"
+            assert len(result.stdout) >= 12 and result.stdout[3] & 15 == 0, result.stdout.hex()
+            assert ipaddress.ip_address(STUB_DNS_A).packed in result.stdout, result.stdout.hex()
+            _drain_logs(gw)
+            [row] = _reply_rows(gw.vm, name)
+            client = BYPASSED_ALIAS_IP if trusted else CLIENT_LAN_IP
+            assert len(row) == 11 and row[7] == client and row[10] == "DoH", row
+            _assert_unified_row(gw.vm, row, name, 6)
+            _assert_report_row(gui, name, client, "DoH")
+    finally:
+        op = (
+            f"config_set_path({h._php_str(path)}, {h._php_str(prior)});"
+            if present
+            else f"config_del_path({h._php_str(path)});"
+        )
+        _php_ok(gw.vm, op + "\nwrite_config('pfBlockerNG smoke: restore DoH trust');", "restore DoH trust")
+        _apply(gw.vm)
 
 
 def test_doq_from_a_client_that_does_not_trust_the_certificate_gets_no_answer(gw: Gateway, gateway_on: State) -> None:
@@ -1361,6 +1494,13 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
         )
         if vm_reaches:
             assert logged_clients(list(names.v6.values())) == {ipaddress.ip_address(LAN_V6_CLIENT)}, "dnsbl.log: the VM"
+        for transport, name in zip(("udp", "tcp"), names.fw_v6):
+            [row] = _dnsbl_rows(vm, name)
+            assert len(row) == 12 and row[11] == LOG_TRANSPORT[transport], row
+        if vm_reaches:
+            for transport, name in names.v6.items():
+                [row] = _dnsbl_rows(vm, name)
+                assert len(row) == 12 and row[11] == LOG_TRANSPORT[transport], row
     _wait_udp(gw, names.nomatch_poll, h.is_vip, "the VIP again")
     _expect_everywhere("after the lists are back", _ask_all(gw, names.nomatch_restored), h.is_vip, "the VIP")
 

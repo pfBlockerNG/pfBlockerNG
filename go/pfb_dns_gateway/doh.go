@@ -204,7 +204,7 @@ func (g *gateway) serveDoHRequest(w http.ResponseWriter, r *http.Request, truste
 	case toDecider:
 		fwd := func(ctx context.Context, q []byte) []byte { return g.up.exchangeUDPThenTCP(ctx, src, dst, q) }
 		var ok bool
-		if reply, ok = g.resolveShared(r.Context(), src.Addr(), wire, fwd); !ok {
+		if reply, ok = g.resolveShared(r.Context(), src.Addr(), clientDoH, wire, fwd); !ok {
 			w.Header().Set("Retry-After", "1") // HTTP's own overload signal: a front end or client can try another server
 			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 			return

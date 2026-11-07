@@ -88,7 +88,7 @@ func dialDoT(t *testing.T, addr netip.AddrPort, m tlsMaterial, source string) *t
 	if source != "" {
 		d.LocalAddr = &net.TCPAddr{IP: net.ParseIP(source)}
 	}
-	c, err := (&tls.Dialer{NetDialer: &d, Config: m.clientConfig()}).Dial("tcp4", addr.String())
+	c, err := (&tls.Dialer{NetDialer: &d, Config: m.clientConfig()}).Dial(ipFamily("tcp", addr), addr.String())
 	if err != nil {
 		t.Fatalf("DoT connect: %v", err)
 	}
@@ -154,7 +154,7 @@ func newDoHClient(t *testing.T, addr netip.AddrPort, m tlsMaterial, o dohOptions
 		TLSClientConfig:   m.clientConfig(),
 		ForceAttemptHTTP2: o.h2,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			c, err := d.DialContext(ctx, "tcp4", addr.String())
+			c, err := d.DialContext(ctx, ipFamily("tcp", addr), addr.String())
 			if err != nil {
 				return nil, err
 			}
@@ -281,11 +281,11 @@ func tryDialDoQ(t *testing.T, addr netip.AddrPort, conf *tls.Config, source stri
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
 	defer cancel()
-	local := &net.UDPAddr{IP: net.IPv4zero}
+	local := &net.UDPAddr{}
 	if source != "" {
 		local.IP = net.ParseIP(source)
 	}
-	udp, err := net.ListenUDP("udp4", local)
+	udp, err := net.ListenUDP(ipFamily("udp", addr), local)
 	if err != nil {
 		t.Fatal(err)
 	}

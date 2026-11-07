@@ -251,7 +251,7 @@ func (g *gateway) startUDPQuery(conn *net.UDPConn, from, src, dst netip.AddrPort
 			}
 			return g.up.exchangeUDPThenTCP(ctx, src, dst, w)
 		}
-		reply := g.resolve(g.ctx, src.Addr(), true, wire, fwd)
+		reply := g.resolve(g.ctx, src.Addr(), clientUDP, wire, fwd)
 		g.udpAddrs.release(src.Addr())
 		if g.udpInflight.Add(-1) == 0 { // the slot is free before the reply goes out
 			g.udpOverload.Store(false)
@@ -383,6 +383,10 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 	}
 	src, dst := proxyEndpoints(peer, conn.LocalAddr().(*net.TCPAddr).AddrPort())
 	plain := tlsConf == nil // DDR designates on plain DNS only; the name is answered on every transport
+	transport := clientTCP
+	if !plain {
+		transport = clientDoT
+	}
 	header, err := proxyHeader(src, dst, true)
 	if err != nil {
 		return
@@ -444,7 +448,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 			go func() {
 				defer handlers.Done()
 				defer func() { <-slots }()
-				if reply := g.resolve(ctx, src.Addr(), false, wire, fwd); reply != nil {
+				if reply := g.resolve(ctx, src.Addr(), transport, wire, fwd); reply != nil {
 					write(reply)
 				}
 			}()

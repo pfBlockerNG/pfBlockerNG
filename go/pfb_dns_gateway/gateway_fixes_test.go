@@ -117,13 +117,13 @@ func TestChaseOfTwoSilentForwardsStillGetsItsAnswer(t *testing.T) {
 		ask  func(g *gateway, wire []byte, fwd forwarder) []byte
 	}{
 		{"udp", func(g *gateway, wire []byte, fwd forwarder) []byte {
-			return g.resolve(context.Background(), client, true, wire, fwd)
+			return g.resolve(context.Background(), client, clientUDP, wire, fwd)
 		}},
 		{"tcp", func(g *gateway, wire []byte, fwd forwarder) []byte {
-			return g.resolve(context.Background(), client, false, wire, fwd)
+			return g.resolve(context.Background(), client, clientTCP, wire, fwd)
 		}},
 		{"doh and doq", func(g *gateway, wire []byte, fwd forwarder) []byte {
-			reply, _ := g.resolveShared(context.Background(), client, wire, fwd)
+			reply, _ := g.resolveShared(context.Background(), client, clientDoH, wire, fwd)
 			return reply
 		}},
 	} {

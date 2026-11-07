@@ -96,19 +96,19 @@ class ReplyLog:
         finally:
             shim.uninstall()
 
-    def __call__(self, query: dnswire.Message, client_ip: str, reply: bytes | None) -> None:
+    def __call__(self, query: dnswire.Message, client_ip: str, reply: bytes | None, transport: str = "Unknown") -> None:
         """Log one answered query. Never raises: a log that fails costs a row and one error line, never the answer."""
         try:
-            self._log(query, client_ip, reply)
+            self._log(query, client_ip, reply, transport)
         except Exception:
             if not self._failed:
                 self._failed = True
                 shim.log_err(f"DNS Reply logging failed, further failures are silent: {traceback.format_exc()}")
 
-    def _log(self, query: dnswire.Message, client_ip: str, reply: bytes | None) -> None:
+    def _log(self, query: dnswire.Message, client_ip: str, reply: bytes | None, transport: str) -> None:
         question = query.questions[0]
         qstate = shim.module_qstate(
-            shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags
+            shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags, transport
         )
         if reply is None:  # Unbound did not answer: the proxy sends the client a SERVFAIL
             qstate.return_rcode = RCODE_SERVFAIL

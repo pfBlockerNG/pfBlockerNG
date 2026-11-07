@@ -3,7 +3,7 @@
 Scope: the wire protocol between the Go connectivity layer (`pfb-dns`, the *gateway*) and the Python DNSBL
 decider (`dns_proxy/pfb_dns_proxy.py --decision-fd N`, the *decider*): the only process besides the gateway that
 pfB-DNS runs. Load when: changing either side or the frame format. Normative: where code and this page disagree, one
-of them is a bug. Issues #3513, #3517.
+of them is a bug. Issues #3513, #3517, #3751.
 
 The gateway owns every client-facing and Unbound-facing socket. The decider owns the DNSBL decision: for each client
 query it either answers itself (block answer, FORMERR, SafeSearch rewrite) or asks the gateway to put a wire on the
@@ -41,7 +41,7 @@ All integers are big-endian. The stream is a sequence of frames, in both directi
 
 | type | direction | name | payload |
 |---|---|---|---|
-| `0x01` | gateway to decider | QUERY | `u8 transport` (0 stream, 1 datagram), `u8 n`, then `n` bytes of client IP text, then the client's DNS wire (may be empty) |
+| `0x01` | gateway to decider | QUERY | `u8 transport` (TCP=0, UDP=1, DoT=2, DoH=3, DoQ=4), `u8 n`, then `n` bytes of client IP text, then the client's DNS wire (may be empty) |
 | `0x02` | decider to gateway | FORWARD | DNS wire to send to Unbound on behalf of that client |
 | `0x03` | gateway to decider | REPLY | Unbound's reply wire for the last FORWARD of that id; empty = no reply (timeout, error) |
 | `0x04` | decider to gateway | ANSWER | the final DNS wire to send to the client |
@@ -99,9 +99,9 @@ A reply with TC set counts even when it has lost all or part of its question, bu
 Other unreadable questions count only when the bytes after the header exactly echo the query's; parsing limitations of a
 text-name library do not make a legal binary label unreadable.
 
-The transport byte tells the decider whether the client has a UDP size limit: for a datagram client an answer the decider
-builds itself is held to the UDP size the client advertised (512 without EDNS, at most the 1232 the decider advertises
-itself; over it the answer is the question alone with TC set, so the client asks again over TCP), for a stream client it is
+The transport byte identifies the original client-facing listener, not the gateway-to-Unbound connection. Only UDP
+has a size limit: an answer the decider builds itself is held to the client's advertised UDP size (512 without EDNS,
+at most the 1232 the decider advertises; over it the answer is the question alone with TC set). Other transports are
 sent whole up to 65535 bytes, the most one DNS message can carry; a longer one is the bare SERVFAIL, since the gateway
 cannot frame it. A relayed reply is never cut: it is Unbound's own. A SafeSearch chase longer than 65535 bytes (the
 client's EDNS options with a longer target name) is never forwarded: the client gets that same SERVFAIL.
@@ -139,7 +139,7 @@ These are fatal. The receiver logs the reason, closes the socket and stops; the 
 - an unknown type;
 - a type that is only valid in the other direction: FORWARD, ANSWER, DROP or READY from the gateway; QUERY or
   REPLY from the decider;
-- a QUERY whose payload is shorter than its two header bytes, has a transport byte other than 0 or 1, has `n = 0`, or has
+- a QUERY whose payload is shorter than its two header bytes, has a transport byte outside 0..4, has `n = 0`, or has
   fewer than `n` bytes after the `n` byte;
 - a QUERY whose id is already in flight;
 - READY more than once, or with an id other than 0 or a payload;
@@ -157,6 +157,21 @@ The `n` bytes are the canonical text of the address the gateway puts in the PROX
 RFC 5952 IPv6, an IPv4-mapped IPv6 address already unmapped to IPv4, no zone id, no port, no brackets, no prefix.
 The decider checks it with Python's `ipaddress.ip_address` and hands the text, unchanged, to the module as the
 client address (Group Policy bypass and DNSBL logging key on it).
+
+## Logged transport
+
+The decider passes the canonical name (`TCP`, `UDP`, `DoT`, `DoH`, `DoQ`) through the shim's `qstate.pfb_transport`.
+The existing DNSBL writers append it at index 11 (after qtype at 10), and DNS Reply appends it at index 10 (after ISO
+at 9). No prior column changes position. Readers accept historical rows without the column as `Unknown`; malformed
+metadata is also `Unknown`, never arbitrary CSV text. Helpers without original listener metadata default to `Unknown`.
+Consecutive DNSBL duplicate detection includes transport, so a different listener's block remains visible.
+
+Standalone native Unbound uses `Unknown`: the supported
+[`pythonmod/interface.i`](https://github.com/NLnetLabs/unbound/blob/master/pythonmod/interface.i) SWIG surface exposes
+`module_qstate.reply` and `mesh_info.reply_list.query_reply`, but `comm_reply` exports only client address/family/port,
+not `comm_point`, socket type, TLS or HTTP metadata. Neither client ports nor upstream connections prove the original
+listener. The upstream observer report likewise lacks original listener metadata and logs `Unknown`. No query
+correlation or port-based inference is performed.
 
 ## Timeouts
 

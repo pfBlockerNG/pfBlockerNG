@@ -556,7 +556,7 @@ async def _serve_raw(
 
 
 def test_a_resolve_that_raises_gets_a_drop_one_log_entry_and_the_session_goes_on() -> None:
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
         if wire == b"explode":
             raise RuntimeError("module crashed")
         return b"fine"
@@ -582,7 +582,7 @@ def test_a_burst_of_failing_queries_writes_one_log_line(monkeypatch: pytest.Monk
     clock = ManualClock()
     monkeypatch.setattr(decision_service, "monotonic", clock, raising=False)
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
         raise RuntimeError("module crashed")
 
     async def main() -> None:
@@ -603,7 +603,7 @@ def test_a_failure_after_the_thirty_second_window_is_logged_again(monkeypatch: p
     clock = ManualClock()
     monkeypatch.setattr(decision_service, "monotonic", clock, raising=False)
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
         raise RuntimeError("module crashed")
 
     async def main() -> None:
@@ -623,18 +623,18 @@ def test_a_failure_after_the_thirty_second_window_is_logged_again(monkeypatch: p
     asyncio.run(main())
 
 
-@pytest.mark.parametrize(("transport", "datagram"), [(STREAM, False), (DATAGRAM, True)], ids=["stream", "datagram"])
-def test_the_clients_transport_byte_reaches_resolve_as_the_datagram_flag(transport: int, datagram: bool) -> None:
-    seen: list[tuple[bytes, str, bool]] = []
+@pytest.mark.parametrize(("byte", "transport"), list(enumerate(("TCP", "UDP", "DoT", "DoH", "DoQ"))))
+def test_the_clients_transport_byte_reaches_resolve_as_its_name(byte: int, transport: str) -> None:
+    seen: list[tuple[bytes, str, str]] = []
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
-        seen.append((wire, ip, datagram))
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
+        seen.append((wire, ip, transport))
         return b"fine"
 
     async def main() -> None:
         gateway, service, problems = await _start_with(resolve)
         try:
-            await gateway.send(query_frame(7, b"query", transport=transport))
+            await gateway.send(query_frame(7, b"query", transport=byte))
             assert await gateway.recv() == (ANSWER, 7, b"fine")
         finally:
             gateway.close()
@@ -642,7 +642,7 @@ def test_the_clients_transport_byte_reaches_resolve_as_the_datagram_flag(transpo
         assert problems == []
 
     asyncio.run(main())
-    assert seen == [(b"query", CLIENT, datagram)]
+    assert seen == [(b"query", CLIENT, transport)]
 
 
 def test_a_gateway_that_stops_reading_makes_the_senders_wait_and_every_frame_arrives_whole_under_its_id() -> None:
@@ -657,7 +657,7 @@ def test_a_gateway_that_stops_reading_makes_the_senders_wait_and_every_frame_arr
         problems: list[str] = []
         all_resolved = asyncio.Event()
 
-        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
             task = asyncio.current_task()
             assert task is not None
             tasks.append(task)
@@ -703,7 +703,7 @@ def test_a_gateway_that_resets_the_connection_ends_the_session_quietly(monkeypat
 
     monkeypatch.setattr(asyncio.StreamReader, "readexactly", spy)
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
         return await forward(wire)
 
     async def main() -> None:
@@ -732,7 +732,7 @@ def test_an_answer_the_gateway_can_no_longer_receive_ends_its_query_without_an_e
         problems: list[str] = []
         started = asyncio.Event()
 
-        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, datagram: bool) -> bytes | None:
+        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
             task = asyncio.current_task()
             assert task is not None
             tasks.append(task)
@@ -770,7 +770,7 @@ PROTOCOL_ERRORS = {
     "ready-from-gateway": frame(READY, 0),
     "query-without-payload": frame(QUERY, 1),
     "query-with-a-transport-byte-only": frame(QUERY, 1, bytes([STREAM])),
-    "query-with-an-unknown-transport": frame(QUERY, 1, bytes([2, 10]) + b"192.0.2.10" + WIRE),
+    "query-with-an-unknown-transport": frame(QUERY, 1, bytes([5, 10]) + b"192.0.2.10" + WIRE),
     "query-ip-length-zero": frame(QUERY, 1, bytes([STREAM, 0]) + WIRE),
     "query-ip-length-beyond-payload": frame(QUERY, 1, bytes([STREAM, 10]) + b"1.2.3.4"),
     "query-ip-length-one-past-payload": frame(QUERY, 1, bytes([DATAGRAM, 8]) + b"1.2.3.4"),  # n = 8, 7 bytes follow

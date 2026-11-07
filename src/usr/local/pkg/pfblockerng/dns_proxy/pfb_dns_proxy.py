@@ -137,7 +137,7 @@ OBSERVER_RCVBUF = 256 * 1024  # bytes asked for the observer socket, so a burst 
 MAX_REPORT_QNAME = 1024  # a name in text form with every byte escaped as \DDD is at most 4 * 255
 MAX_DNS_MESSAGE = 65535  # one DNS message; a longer ANSWER is a protocol error at the gateway
 Forward = Callable[[bytes], Awaitable[bytes | None]]
-ReplyLogger = Callable[[dnswire.Message, str, bytes | None], None]  # query, client, Unbound's reply
+ReplyLogger = Callable[[dnswire.Message, str, bytes | None, str], None]  # query, client, reply, transport
 
 
 # --- module lifecycle ----------------------------------------------------------------------------
@@ -360,14 +360,16 @@ class Frontend:
         reply = await forward(wire)
         return _error(query, RCODE_SERVFAIL) if reply is None else reply
 
-    async def resolve(self, wire: bytes, client_ip: str, forward: Forward, *, datagram: bool = False) -> bytes | None:
+    async def resolve(
+        self, wire: bytes, client_ip: str, forward: Forward, *, transport: str = "Unknown"
+    ) -> bytes | None:
         """Answer one client query: parse it, let the module decide, forward to Unbound when it defers.
 
         None means the packet is dropped. `forward` has the gateway send the client's own bytes to Unbound as that
         client and returns Unbound's reply bytes, or None if there is none. The header is checked before anything is
-        parsed, so a hostile packet costs a constant, and every FORMERR is header-only. `datagram` is for a plain-UDP
-        client: a reply built here is held to the UDP size it advertised (a relayed reply already is: Unbound saw the
-        client's size). The gateway asks Unbound again over TCP for a truncated reply to a SafeSearch chase.
+        parsed, so a hostile packet costs a constant, and every FORMERR is header-only. Only `transport == "UDP"`
+        holds a built reply to the client's advertised size (a relayed reply already is: Unbound saw that size).
+        The gateway asks Unbound again over TCP for a truncated reply to a SafeSearch chase.
         A query Unbound answers itself (see _module_decides) is forwarded unchanged: its reply is the client's answer.
         """
         if len(wire) < 12 or wire[2] & 0x80:  # no header, or a response: never answered (no reflection loops)
@@ -390,10 +392,10 @@ class Frontend:
         if self.module is None:
             reply = await self._ask(forward, wire, question)
             if self.reply_log is not None:
-                self.reply_log(query, client_ip, reply)
+                self.reply_log(query, client_ip, reply, transport)
             return _error(query, RCODE_SERVFAIL) if reply is None else reply
         qstate = shim.module_qstate(
-            shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags
+            shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags, transport
         )
         relay: bytes | None = None
         try:
@@ -420,7 +422,7 @@ class Frontend:
             state = shim.MODULE_ERROR
         if state != shim.MODULE_FINISHED:
             qstate.return_msg, qstate.return_rcode, relay = None, RCODE_SERVFAIL, None
-        return self._send(query, qstate, relay, _udp_limit(query) if datagram else None)
+        return self._send(query, qstate, relay, _udp_limit(query) if transport == "UDP" else None)
 
     async def _chase_cname(self, query: dnswire.Message, qstate: shim.module_qstate, forward: Forward) -> int:
         """Emulate MODULE_RESTART_NEXT as the SafeSearch CNAME redirect uses it (safesearch_cname_redirect).

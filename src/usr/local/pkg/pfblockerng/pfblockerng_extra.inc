@@ -4630,6 +4630,9 @@ function pfb_syslog_format_dnsbl(array $fields): string
 
 	$parts[] = 'btype=' . pfb_syslog_escape((string) ($fields['b_type'] ?? ''));
 	$parts[] = 'eval='  . pfb_syslog_escape((string) ($fields['b_eval'] ?? ''));
+	if (array_key_exists('transport', $fields)) {
+		$parts[] = 'transport=' . pfb_dns_transport($fields['transport']);
+	}
 
 	return implode(' ', $parts);
 }
@@ -4652,6 +4655,12 @@ function pfb_unified_format_ip(array $fields): string
 		$fields['details']  ?? '',
 		$fields['dup']      ?? '',
 	]);
+}
+
+/** Canonical client transport only; never infer it from an upstream resolver. */
+function pfb_dns_transport(mixed $value): string
+{
+	return is_string($value) && in_array($value, ['TCP', 'UDP', 'DoT', 'DoH', 'DoQ'], TRUE) ? $value : 'Unknown';
 }
 
 /**
@@ -4682,35 +4691,6 @@ function pfb_unified_format_dnsbl(array $fields): string
 		$fields['feed']      ?? '',
 		$fields['dup']       ?? '',
 		$fields['q_type']    ?? '',
-	]);
-}
-
-/**
- * pfb_unified_format_dnsreply — render a DNS-reply unified.log row as a comma-joined string.
- *
- * Owns the 10-column schema for DNS-reply rows in unified.log.  Raw
- * passthrough — no escaping; the caller appends "\n".
- *
- * Column order: l_type, datetime, m_type, o_type, q_type, ttl, q_name,
- *               q_ip, r_addr, iso_code.
- *
- * @param array<string,string> $fields  Keys matching the column names above.
- *                                      Missing => ''.
- * @return string  Comma-joined, no trailing newline.
- */
-function pfb_unified_format_dnsreply(array $fields): string
-{
-	return implode(',', [
-		$fields['l_type']    ?? '',
-		$fields['datetime']  ?? '',
-		$fields['m_type']    ?? '',
-		$fields['o_type']    ?? '',
-		$fields['q_type']    ?? '',
-		$fields['ttl']       ?? '',
-		$fields['q_name']    ?? '',
-		$fields['q_ip']      ?? '',
-		$fields['r_addr']    ?? '',
-		$fields['iso_code']  ?? '',
 	]);
 }
 

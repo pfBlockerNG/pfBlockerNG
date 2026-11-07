@@ -120,7 +120,7 @@ class TestDnsReplyWriter:
 
         # Then r_addr holds the escaped payload in its own column
         fields = _row(lines, "dns_reply.log")
-        assert len(fields) == 10, fields
+        assert len(fields) == 11, fields
         assert fields[6] == "evil.example"
         assert fields[8] == PAYLOAD_ESCAPED
 

@@ -362,7 +362,7 @@ def _wait_for_unified_dnsbl(vm: SmokeVM, domain: str, *, baseline_len: int, dnsb
                 fields = next(csv.reader([line]))
             except csv.Error:
                 continue
-            if len(fields) == 11 and fields[2] == domain:
+            if len(fields) == 12 and fields[2] == domain:
                 found[0] = line
                 break
         marker_count = h.count_log_marker(vm, DNSBL_LOG, domain)

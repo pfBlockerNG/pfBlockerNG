@@ -113,7 +113,9 @@ def test_resolve_never_raises_and_its_reply_is_none_or_a_message(booted: Booted)
         for step in range(ITERATIONS):
             wire = _mutate(rng, rng.choice(seeds))
             try:
-                reply = await frontend.resolve(wire, CLIENT, forward, datagram=rng.random() < 0.5)
+                reply = await frontend.resolve(
+                    wire, CLIENT, forward, transport=rng.choice(("TCP", "UDP", "DoT", "DoH", "DoQ"))
+                )
             except Exception as exc:
                 raise AssertionError(f"seed {SEED} step {step}: resolve raised {exc!r} on {wire!r}") from exc
             if reply is not None:

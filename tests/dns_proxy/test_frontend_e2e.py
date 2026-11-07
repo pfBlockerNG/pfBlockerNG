@@ -110,7 +110,7 @@ def test_a_block_answer_never_claims_dnssec_authentication_whatever_the_client_a
 def test_block_is_logged_with_the_feed_and_the_client_address(booted: Booted) -> None:
     _resolve(booted, build_query(BLOCKED), FakeUnbound(ZONE))
     [row] = _log_rows(booted, "dnsbl.log")
-    assert (row[0], row[2], row[3], row[-1]) == ("DNSBL-python", "blocked.example", CLIENT, "A")
+    assert (row[0], row[2], row[3], row[10], row[11]) == ("DNSBL-python", "blocked.example", CLIENT, "A", "Unknown")
     assert "TestFeed" in row and "TestGroup" in row
 
 
@@ -411,7 +411,7 @@ def test_an_oversized_answer_is_servfail_for_a_stream_and_truncated_for_a_datagr
     monkeypatch.setattr(booted.module, "operate", finish_oversize)
     query = build_query(ALLOWED)
     frontend = pfb_dns_proxy.Frontend(booted.module)
-    wire = asyncio.run(frontend.resolve(query, CLIENT, FakeUnbound(ZONE), datagram=datagram))
+    wire = asyncio.run(frontend.resolve(query, CLIENT, FakeUnbound(ZONE), transport="UDP" if datagram else "TCP"))
     message = dnswire.parse(wire or b"")
     assert (message.rcode, message.flags & dnswire.TC, message.answers, message.authority) == (rcode, tc, [], [])
     assert seen == [(callback, rcode)], seen

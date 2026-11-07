@@ -14,7 +14,6 @@ use PHPUnit\Framework\TestCase;
  *   pfb_syslog_format_dnsbl(array $fields): string
  *   pfb_unified_format_ip(array $fields): string
  *   pfb_unified_format_dnsbl(array $fields): string
- *   pfb_unified_format_dnsreply(array $fields): string
  *   pfb_asn_blob_split(string $blob): array
  *   pfb_asn_csv_fields(string $blob): string
  *
@@ -385,105 +384,6 @@ final class UnifiedFormatTest extends TestCase
 
 		$this->assertSame(
 			'DNSBL-python,2026-07-08 14:30:45,ads.example.com,10.0.0.5,Python,VIP,ADs,ads.example.com,EasyList,+,A',
-			$result,
-			'the new ISO-8601 datetime must pass through unmodified -- zero further change needed'
-		);
-	}
-
-	// -----------------------------------------------------------------------
-	// pfb_unified_format_dnsreply
-	// -----------------------------------------------------------------------
-
-	/**
-	 * 10 named fields joined in DNS-reply column order.
-	 *
-	 * Scenario:
-	 *   Given the 10 fields from a representative DNS-reply row.
-	 *   When  pfb_unified_format_dnsreply($fields).
-	 *   Then  returns the exact golden CSV string (empty o_type renders as empty
-	 *   segment between commas).
-	 */
-	public function testUnifiedDnsreplyFidelity(): void
-	{
-		$fields = [
-			'l_type'   => 'DNS-reply',
-			'datetime' => '06/24/26 10:00:00',
-			'm_type'   => 'cache',
-			'o_type'   => '',
-			'q_type'   => 'A',
-			'ttl'      => '30',
-			'q_name'   => 'good.example.com',
-			'q_ip'     => '10.0.0.5',
-			'r_addr'   => '93.184.216.34',
-			'iso_code' => 'US',
-		];
-
-		$result = pfb_unified_format_dnsreply($fields);
-
-		$this->assertSame(
-			'DNS-reply,06/24/26 10:00:00,cache,,A,30,good.example.com,10.0.0.5,93.184.216.34,US',
-			$result,
-			'DNS-reply unified row: exact golden string (empty o_type = empty segment)'
-		);
-	}
-
-	/**
-	 * Missing keys coerce to '' — the empty o_type renders as an empty segment.
-	 *
-	 * Scenario:
-	 *   Given the DNS-reply fields with o_type absent from the array entirely.
-	 *   When  pfb_unified_format_dnsreply($fields).
-	 *   Then  the absent o_type renders as an empty segment (same as '').
-	 */
-	public function testUnifiedDnsreplyMissingKeyCoercesToEmpty(): void
-	{
-		$fields = [
-			'l_type'   => 'DNS-reply',
-			'datetime' => '06/24/26 10:00:00',
-			'm_type'   => 'cache',
-			// 'o_type' intentionally absent
-			'q_type'   => 'A',
-			'ttl'      => '30',
-			'q_name'   => 'good.example.com',
-			'q_ip'     => '10.0.0.5',
-			'r_addr'   => '93.184.216.34',
-			'iso_code' => 'US',
-		];
-
-		$result = pfb_unified_format_dnsreply($fields);
-
-		$this->assertSame(
-			'DNS-reply,06/24/26 10:00:00,cache,,A,30,good.example.com,10.0.0.5,93.184.216.34,US',
-			$result,
-			'absent o_type must coerce to empty and render as empty segment'
-		);
-	}
-
-	/**
-	 * ADR-60 P4: same "zero further change needed" verification as
-	 * testUnifiedDnsblPassesThroughNewIsoTimestampUnmodified, for the
-	 * DNS-reply formatter -- pfb_unified_format_dnsreply() is likewise a pure
-	 * comma-join with no timestamp-shape awareness.
-	 */
-	public function testUnifiedDnsreplyPassesThroughNewIsoTimestampUnmodified(): void
-	{
-		$fields = [
-			'l_type'   => 'DNS-reply',
-			'datetime' => '2026-07-08 14:30:45',
-			'm_type'   => 'cache',
-			'o_type'   => '',
-			'q_type'   => 'A',
-			'ttl'      => '30',
-			'q_name'   => 'good.example.com',
-			'q_ip'     => '10.0.0.5',
-			'r_addr'   => '93.184.216.34',
-			'iso_code' => 'US',
-		];
-
-		$result = pfb_unified_format_dnsreply($fields);
-
-		$this->assertSame(
-			'DNS-reply,2026-07-08 14:30:45,cache,,A,30,good.example.com,10.0.0.5,93.184.216.34,US',
 			$result,
 			'the new ISO-8601 datetime must pass through unmodified -- zero further change needed'
 		);

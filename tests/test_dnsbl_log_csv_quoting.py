@@ -14,10 +14,10 @@ the exact grammar the PHP readers parse) and assert the columns do NOT shift
 when the queried name embeds a comma.
 
 Writers under test (all four emitters of these logs):
-- ``get_details_dnsbl``   -> dnsbl.log     (11 columns)
-- ``_log_idn_alert``      -> dnsbl.log     (11 columns)
-- ``_log_upstream_block`` -> dnsbl.log     (11 columns)
-- ``get_details_reply``   -> dns_reply.log (10 columns)
+- ``get_details_dnsbl``   -> dnsbl.log     (12 columns)
+- ``_log_idn_alert``      -> dnsbl.log     (12 columns)
+- ``_log_upstream_block`` -> dnsbl.log     (12 columns)
+- ``get_details_reply``   -> dns_reply.log (11 columns)
 """
 
 from __future__ import annotations
@@ -110,7 +110,7 @@ class TestDnsblBlockWriterCommaInQName:
         # and the attribution columns unshifted.
         (raw,) = _dnsbl_lines(lines)
         fields = _parse(raw)
-        assert len(fields) == 11, f"expected 11 columns, got {len(fields)}: {fields!r}"
+        assert len(fields) == 12, f"expected 12 columns, got {len(fields)}: {fields!r}"
         assert fields[2] == COMMA_NAME, f"q_name column forged: expected {COMMA_NAME!r}, got {fields[2]!r}"
         assert fields[6] == "real_group", f"group column forged: expected 'real_group', got {fields[6]!r}"
         assert fields[8] == "real_feed", f"feed column forged: expected 'real_feed', got {fields[8]!r}"
@@ -125,7 +125,7 @@ class TestIdnAlertWriterCommaInQName:
 
         (raw,) = _dnsbl_lines(lines)
         fields = _parse(raw)
-        assert len(fields) == 11, f"expected 11 columns, got {len(fields)}: {fields!r}"
+        assert len(fields) == 12, f"expected 12 columns, got {len(fields)}: {fields!r}"
         assert fields[2] == COMMA_NAME, f"q_name column forged: expected {COMMA_NAME!r}, got {fields[2]!r}"
         assert fields[5] == "Homoglyph_Alert", f"b_type column forged: got {fields[5]!r}"
         assert fields[8] == "real_feed", f"feed column forged: expected 'real_feed', got {fields[8]!r}"
@@ -140,7 +140,7 @@ class TestUpstreamBlockWriterCommaInQName:
 
         (raw,) = _dnsbl_lines(lines)
         fields = _parse(raw)
-        assert len(fields) == 11, f"expected 11 columns, got {len(fields)}: {fields!r}"
+        assert len(fields) == 12, f"expected 12 columns, got {len(fields)}: {fields!r}"
         assert fields[2] == COMMA_NAME, f"q_name column forged: expected {COMMA_NAME!r}, got {fields[2]!r}"
         assert fields[5] == "Upstream_Block", f"b_type column forged: got {fields[5]!r}"
         assert fields[8] == "External", f"feed column forged: expected 'External', got {fields[8]!r}"
@@ -168,7 +168,7 @@ class TestDnsReplyWriterCommaInQName:
         # and the reply-address column unshifted.
         (raw,) = [line for path, line in lines if path.endswith("dns_reply.log")]
         fields = _parse(raw)
-        assert len(fields) == 10, f"expected 10 columns, got {len(fields)}: {fields!r}"
+        assert len(fields) == 11, f"expected 11 columns, got {len(fields)}: {fields!r}"
         assert fields[6] == COMMA_NAME, f"q_name column forged: expected {COMMA_NAME!r}, got {fields[6]!r}"
         assert fields[8] == "Unknown", f"r_addr column forged: expected 'Unknown', got {fields[8]!r}"
 
@@ -235,6 +235,7 @@ def test_hostile_qname_is_one_php_csv_row(
         "real_feed",
         "+",
         "A",
+        "Unknown",
     ], f"{label}: PHP fgetcsv fields shifted or changed: {actual!r}"
 
 

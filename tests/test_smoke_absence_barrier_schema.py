@@ -63,7 +63,7 @@ def test_syslog_unified_drain_expiry_reports_expected_and_observed(monkeypatch: 
 def test_syslog_unified_drain_matches_the_real_dnsbl_csv_schema(
     monkeypatch: pytest.MonkeyPatch, drain: str, encoded_drain: str
 ) -> None:
-    row = f"DNSBL-python,2026-08-01 12:00:00,{encoded_drain},192.168.1.10,A,VIP,group,{encoded_drain},feed,,A"
+    row = f"DNSBL-python,2026-08-01 12:00:00,{encoded_drain},192.168.1.10,A,VIP,group,{encoded_drain},feed,,A,UDP"
     monkeypatch.setattr(syslog.h, "read_log_file", lambda *_args, **_kwargs: row)
     monkeypatch.setattr(syslog.h, "count_log_marker", lambda *_args, **_kwargs: 1)
 

@@ -122,7 +122,7 @@ type decided struct {
 func decide(d *Decider, ctx context.Context, ip string, wire []byte, fwd forwarder) <-chan decided {
 	out := make(chan decided, 1)
 	go func() {
-		a, err := d.Decide(ctx, netip.MustParseAddr(ip), false, wire, fwd)
+		a, err := d.Decide(ctx, netip.MustParseAddr(ip), clientTCP, wire, fwd)
 		out <- decided{a, err}
 	}()
 	return out
@@ -577,7 +577,7 @@ func TestWriteThatCannotCompleteEndsTheSession(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = d.Decide(ctx, netip.MustParseAddr("192.0.2.10"), false, big, noForward(t))
+			_, _ = d.Decide(ctx, netip.MustParseAddr("192.0.2.10"), clientTCP, big, noForward(t))
 		}()
 	}
 	waitClosed(t, d.Done(), "session end after a write timeout")

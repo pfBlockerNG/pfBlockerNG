@@ -3,7 +3,7 @@ itself to a datagram client's UDP size and to nothing for a stream client.
 
 The REAL `pfb_dns_proxy.py --decision-fd` process runs with the shipped pfb_unbound.py (SafeSearch loaded) or with no
 module; this test plays the gateway on the other end of its socketpair. The QUERY payload is packed here from
-docs/misc/dns-gateway-protocol.md: u8 transport (0 stream, 1 datagram), u8 n, n bytes of client IP text, the DNS wire.
+docs/misc/dns-gateway-protocol.md: u8 transport (TCP=0, UDP=1, DoT=2, DoH=3, DoQ=4), u8 n, n IP bytes, DNS wire.
 """
 
 from __future__ import annotations
@@ -153,9 +153,12 @@ def test_a_datagram_clients_answer_is_cut_to_the_udp_size_it_advertised(
     assert [(rr.rtype, rr.rclass) for rr in reply.additional] == ([] if size is None else [(dnswire.TYPE_OPT, 1232)])
 
 
-def test_a_stream_clients_answer_is_sent_whole_however_big(safesearch_csv: None, module_dir: Path) -> None:
+@pytest.mark.parametrize("transport", [0, 2, 3, 4], ids=["TCP", "DoT", "DoH", "DoQ"])
+def test_a_stream_clients_answer_is_sent_whole_however_big(
+    safesearch_csv: None, module_dir: Path, transport: int
+) -> None:
     with running_decider(module_dir) as gateway:
-        wire = gateway.answer_to(build_query(DUCK), 1, STREAM, FakeUnbound(_target_zone(94)))
+        wire = gateway.answer_to(build_query(DUCK), 1, transport, FakeUnbound(_target_zone(94)))
     reply = dnswire.parse(wire)
     assert len(wire) > 1232
     assert (reply.flags & dnswire.TC, len(reply.answers)) == (0, 95)
@@ -252,7 +255,7 @@ def test_a_safesearch_chase_of_exactly_one_dns_message_is_forwarded(safesearch_c
     assert (reply.rcode, len(reply.answers)) == (0, 2)
 
 
-@pytest.mark.parametrize("transport", [STREAM, DATAGRAM], ids=["stream", "datagram"])
+@pytest.mark.parametrize("transport", range(5), ids=["TCP", "UDP", "DoT", "DoH", "DoQ"])
 def test_with_no_module_either_transport_gets_unbounds_reply_relayed_as_it_is(tmp_path: Path, transport: int) -> None:
     query = build_query(ALLOWED, qid=0x0A0A)
     unbound = FakeUnbound(ZONE)
@@ -263,8 +266,8 @@ def test_with_no_module_either_transport_gets_unbounds_reply_relayed_as_it_is(tm
         assert gateway.recv() == (ANSWER, 7, unbound.answer(query))
 
 
-@pytest.mark.parametrize("transport", [2, 255], ids=["two", "255"])
-def test_a_transport_byte_that_is_neither_stream_nor_datagram_is_a_protocol_error_and_exit_1(transport: int) -> None:
+@pytest.mark.parametrize("transport", [5, 255], ids=["five", "255"])
+def test_an_undefined_transport_byte_is_a_protocol_error_and_exit_1(transport: int) -> None:
     go, py = socket.socketpair()
     go.settimeout(WATCHDOG)
     child = subprocess.Popen(

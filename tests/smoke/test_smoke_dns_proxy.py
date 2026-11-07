@@ -183,6 +183,7 @@ SNAPSHOT_PATHS = (
     CFG_GROUP_POLICY,
     CFG_GROUP_POLICY_LIST,
     CFG_WHITELIST,
+    f"{h.CFG_DNSBL_SETTINGS}/pfb_py_reply",
     *(h.dns_config_path(key) for key in LISTENER_KEYS),
 )
 
@@ -547,7 +548,7 @@ def _wait_unbound_logged(vm: SmokeVM, name: str) -> list[str]:
 
 
 def _dnsbl_rows(vm: SmokeVM, name: str) -> list[list[str]]:
-    """dnsbl.log rows for `name`: DNSBL-python,timestamp,name,client,p_type,b_type,group,b_eval,feed,dup,qtype."""
+    """DNSBL rows retain the query type before the appended original-client transport."""
     return [row for row in csv.reader(io.StringIO(h.read_log_file(vm, DNSBL_LOG))) if row[2:3] == [name]]
 
 
@@ -1131,8 +1132,8 @@ def _reply_logging(rig: Rig, on: bool) -> Iterator[str]:
 
 
 def _reply_rows(vm: SmokeVM, name: str, path: str = REPLY_LOG) -> list[list[str]]:
-    """The DNS-reply rows of `name` in dns_reply.log (or unified.log, same ten columns):
-    DNS-reply,timestamp,type,orig_type,final_type,ttl,name,client,answer,geoip."""
+    """The DNS-reply rows of `name` in dns_reply.log (or unified.log, same eleven columns):
+    DNS-reply,timestamp,type,orig_type,final_type,ttl,name,client,answer,geoip,transport."""
     rows = csv.reader(io.StringIO(h.read_log_file(vm, path)))
     return [row for row in rows if row[:1] == ["DNS-reply"] and row[6:7] == [name]]
 
@@ -1163,6 +1164,7 @@ def test_pfb_dns_without_dnsbl_logs_replies_for_the_client_only_while_dns_reply_
             except RuntimeError as exc:
                 raise RuntimeError(f"{exc}\ndns_reply.log gained no row for {logged}:\n{_proxy_log(vm)}") from exc
             [row] = _reply_rows(vm, logged)
+            assert len(row) == 11 and row[10] == "UDP", row
             assert row[2:5] == ["reply", "A", "A"] and row[5].isdigit(), f"row: {row}"
             assert row[6:9] == [logged, CLIENT_LAN_IP, STUB_DNS_A], f"row: {row}"
             try:
@@ -1176,9 +1178,15 @@ def test_pfb_dns_without_dnsbl_logs_replies_for_the_client_only_while_dns_reply_
             answer, raw = _query(client, silent)
             assert h.resolves_to(answer, STUB_DNS_A), f"{silent} was not answered by the upstream: {answer}\n{raw}"
             assert set(_wait_unbound_logged(vm, silent)) == {CLIENT_LAN_IP}
-            assert _reply_rows(vm, silent) == [], "DNS Reply Logging is off: dns_reply.log must gain no row"
-            assert _reply_rows(vm, silent, UNIFIED_LOG) == [], "and neither must unified.log"
-            assert _dnsbl_rows(vm, silent) == [], "DNSBL is off: dnsbl.log must gain no row"
+            # Restarting with logging on and observing its later row drains the earlier silent query.
+            with _reply_logging(rig, True):
+                barrier = h.unique_domain("replylog-drain")
+                answer, raw = _query(client, barrier)
+                assert h.resolves_to(answer, STUB_DNS_A), f"logging barrier: {answer}\n{raw}"
+                h.wait_until(lambda: bool(_reply_rows(vm, barrier, UNIFIED_LOG)), timeout=30.0)
+                assert _reply_rows(vm, silent) == [], "DNS Reply Logging off: dns_reply.log must gain no row"
+                assert _reply_rows(vm, silent, UNIFIED_LOG) == [], "nor may unified.log gain a row"
+                assert _dnsbl_rows(vm, silent) == [], "DNSBL is off: dnsbl.log must gain no row"
 
 
 # --------------------------------------------------------------------------- #

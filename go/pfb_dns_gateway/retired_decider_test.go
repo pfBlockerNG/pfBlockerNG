@@ -13,7 +13,7 @@ import (
 // reason to ask another one.
 
 // answerOne plays the active decider for one QUERY: it answers with the query echoed and QR set, and hands back the
-// wire it was asked.
+// QUERY payload it was asked.
 func answerOne(p *peer) <-chan []byte {
 	asked := make(chan []byte, 1)
 	go func() {
@@ -27,7 +27,7 @@ func answerOne(p *peer) <-chan []byte {
 		answer := bytes.Clone(wire)
 		answer[2] |= 0x80
 		_, _ = p.conn.Write(pack(tAnswer, id, answer))
-		asked <- wire
+		asked <- payload
 	}()
 	return asked
 }
@@ -49,12 +49,12 @@ func TestAQueryThatReachesARetiredDeciderIsAskedOfTheActiveOne(t *testing.T) {
 	wire := buildQuery(t, 0x3566, "stale.example.", true)
 	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
 	defer cancel()
-	answer, err := g.decide(ctx, old, netip.MustParseAddr("192.0.2.1"), false, wire, noForward(t))
+	answer, err := g.decide(ctx, old, netip.MustParseAddr("192.0.2.1"), clientDoT, wire, noForward(t))
 	if want := echoWithQR(seenQuery{wire: wire})[0]; err != nil || !bytes.Equal(answer, want) {
 		t.Fatalf("query on a retired decider: got %x (err %v), want the active decider's answer %x", answer, err, want)
 	}
-	if got := <-asked; !bytes.Equal(got, wire) {
-		t.Fatalf("the active decider was asked %x, want %x", got, wire)
+	if got, want := <-asked, queryPayload(2, "192.0.2.1", wire); !bytes.Equal(got, want) {
+		t.Fatalf("the active decider was asked %x, want %x", got, want)
 	}
 	if n := registrations(old); n != 0 {
 		t.Fatalf("the retired decider took %d queries, want none", n)
@@ -71,7 +71,7 @@ func TestAQueryOnADeciderThatFailedOnItsOwnIsNotAskedOfAnother(t *testing.T) {
 	wire := buildQuery(t, 0x3567, "dead.example.", true)
 	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
 	defer cancel()
-	if answer, err := g.decide(ctx, dead, netip.MustParseAddr("192.0.2.1"), false, wire, noForward(t)); err == nil {
+	if answer, err := g.decide(ctx, dead, netip.MustParseAddr("192.0.2.1"), clientDoT, wire, noForward(t)); err == nil {
 		t.Fatalf("query on a decider that failed on its own: got %x and no error, want the failure (SERVFAIL)", answer)
 	}
 	if n := registrations(active); n != 0 {

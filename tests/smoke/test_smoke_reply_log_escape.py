@@ -119,7 +119,7 @@ class TestDnsReplyLogEscape:
         assert ans.records, f"TXT {name}: no TXT record delivered to the client: {ans}"
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 10, row
+            assert len(row) == 11 and row[10] == "Unknown", row
             assert row[8] == PAYLOAD_ESCAPED, row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if name in line]
         assert not any(c in line for line in raw for c in "<>\"'"), raw
@@ -136,7 +136,7 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR", f"CNAME {name}: {ans}"
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 10, row
+            assert len(row) == 11 and row[10] == "Unknown", row
             assert row[8] == HOSTILE_TARGET_ESCAPED, row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if name in line]
         assert not any(c in line for line in raw for c in "<>\"'"), raw
@@ -153,7 +153,7 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR" and ans.records == ["203.0.113.42"], ans
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", f".{suffix}", 6, suffix=True)
         for row in rows:
-            assert len(row) == 10, row
+            assert len(row) == 11 and row[10] == "Unknown", row
             # Unbound, not pfBlockerNG, rewrites the brackets (dname_str); the row sees "?".
             assert row[6] == f"a?b?.{suffix}", row
             assert row[8] == "203.0.113.42", row
@@ -170,7 +170,7 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR" and ans.records == ["203.0.113.41"], ans
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 10, row
+            assert len(row) == 11 and row[10] == "Unknown", row
             assert row[4] == "A", row
             assert row[8] == "203.0.113.41", row
 
@@ -184,6 +184,6 @@ class TestDnsReplyLogEscape:
         assert h.is_vip(ans), f"DNSBL seed {seed} expected VIP, got {ans}"
         rows = _wait_rows(vm, _DNSBL_LOG, "DNSBL-python,", seed, 2)
         for row in rows:
-            assert len(row) == 11, row
+            assert len(row) == 12 and row[11] == "Unknown", row
             assert row[2] == seed, row
             assert row[8] == "smokereplylog", row  # the header= of the fixture's feed

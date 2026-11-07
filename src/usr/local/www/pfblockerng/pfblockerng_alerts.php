@@ -125,12 +125,12 @@ foreach (array(0,2,6,7,8,9,10,12,13,15,16,17,18,99) as $field_0) {
 }
 
 $filterfieldsarray[1]	= array();
-foreach (array(2,7,8,13,15,17,19,20,99) as $field_1) {
+foreach (array(2,7,8,13,15,17,19,20,21,99) as $field_1) {
 	$filterfieldsarray[1][$field_1] = '';
 }
 
 $filterfieldsarray[2]	= array();
-foreach (array(81,82,83,84,85,86,87,88,89) as $field_2) {
+foreach (array(81,82,83,84,85,86,87,88,89,90) as $field_2) {
 	$filterfieldsarray[2][$field_2] = '';
 }
 
@@ -748,6 +748,7 @@ if (isset($_POST) && !empty($_POST)) {
 							17 => 'dnsblsrchostname',
 							19 => 'dnsbltype',
 							20 => 'dnsblmode',
+							21 => 'dnsbltransport',
 							99 => 'dnsbldate');
 					break;
 				case 're':
@@ -759,7 +760,8 @@ if (isset($_POST) && !empty($_POST)) {
 							86 => 'replysrcip',
 							87 => 'replydstip',
 							88 => 'replygeoip',
-							89 => 'replydate');
+							89 => 'replydate',
+							90 => 'replytransport');
 					break;
 			}
 
@@ -2388,6 +2390,11 @@ function convert_dnsbl_log($mode, $fields) {
 		[19]	= DNSBL Type 
 		[20]	= DNSBL Mode
 		[99]	= Date/Timestamp		*/
+	if (count($fields) < 10) {
+		return FALSE;
+	}
+	$transport = pfb_dns_transport($fields[11] ?? NULL);
+	$transport_display = $transport === 'Unknown' ? '—' : $transport;
 
 	// Remove 'Unknown' for Agent field
 	if ($fields[4] == 'Unknown') {
@@ -2522,6 +2529,7 @@ function convert_dnsbl_log($mode, $fields) {
 	}
 
 	$pfbalertdnsbl[20]	= pfb_hsc($fields[5]);
+	$pfbalertdnsbl[21]	= $transport_display;
 
 	$pfbalertdnsbl[99]	= pfb_hsc($fields[1]);	// Timestamp
 
@@ -2631,6 +2639,7 @@ function convert_dnsbl_log($mode, $fields) {
 			<td>{$pfbalertdnsbl[8]}<small>&emsp;[ {$pfbalertdnsbl[20]} ]</small> {$pfb_https}{$pfb_python}
 				<br /><small>{$pfbalertdnsbl[19]}</small></td>
 			<td title=\"{$f_g_title}\">{$feed_group_cell}</td>
+			<td>{$transport_display}</td>
 			</tr>");
 	}
 	else {
@@ -2656,6 +2665,7 @@ function convert_dnsbl_log($mode, $fields) {
 			<td>{$pfbalertdnsbl[8]}</td>
 			<td title=\"{$f_g_title}\">{$feed_group_cell}</td>
 			<td></td>
+			<td>{$transport_display}</td>
 			</tr>");
 	}
 	return FALSE;
@@ -2669,6 +2679,11 @@ function convert_dns_reply_log($mode, $fields) {
 	if ($dnsfilterlimit) {
 		return TRUE;
 	}
+	if (count($fields) < 10) {
+		return FALSE;
+	}
+	$transport = pfb_dns_transport($fields[10] ?? NULL);
+	$transport_display = $transport === 'Unknown' ? '—' : $transport;
 
 	$pfbalertreply		= array();
 	$pfbalertreply[81]	= $fields[2];	// DNS Reply Type
@@ -2680,6 +2695,7 @@ function convert_dns_reply_log($mode, $fields) {
 	$pfbalertreply[87]	= $fields[8];	// DNS Reply DST IP
 	$pfbalertreply[88]	= $fields[9];	// DNS Reply GeoIP
 	$pfbalertreply[89]	= $fields[1];   // DNS Reply Timestamp
+	$pfbalertreply[90]	= $transport_display;
 
 	// If alerts filtering is selected, process filters as required.
 	if ($pfb['filterlogentries']) {
@@ -2822,6 +2838,7 @@ function convert_dns_reply_log($mode, $fields) {
 			<td title=\"{$pfb_title5}\">{$fields[5]}</td>
 			<td title=\"{$pfb_title8}\">{$fields[8]}</td>
 			<td>{$fields[9]}</td>
+			<td>{$transport_display}</td>
 			</tr>");
 	}
 	else {
@@ -2846,6 +2863,7 @@ function convert_dns_reply_log($mode, $fields) {
 			<td title=\"{$pfb_title6}\">{$fields[6]}</td>
 			<td title=\"{$pfb_title8}\">{$fields[8]}</td>
 			<td>{$fields[9]}</td>
+			<td>{$transport_display}</td>
 			</tr>");
 	}
 	return FALSE;
@@ -3349,6 +3367,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			<td>{$fields[98]}{$dstport}&emsp;{$query_port}<br /><small>{$hostname['dst']}</small></td>
 			<td title=\"{$pfb_matchtitle}\">{$feed_match_cell}</td>
 			<td>{$fields[12]}<br />{$fields[18]}</td>
+			<td>—</td>
 			</tr>");
 	}
 
@@ -3968,6 +3987,12 @@ if (!$alert_summary && ($alert_title != 'DNS Reply')) {
 			'text',
 			$filterfieldsarray[1][20]
 		))->setAttribute('title', 'Enter filter \'DNSBL Blocking Mode (ie: DNSBL/TLD)\'.');
+		$group->add(new Form_Input(
+			'filterlogentries_dnsbltransport',
+			'DNSBL - Transport',
+			'text',
+			$filterfieldsarray[1][21]
+		))->setAttribute('title', 'Filter TCP, UDP, DoT, DoH, DoQ or —.');
 		$section->add($group);
 	}
 }
@@ -4042,6 +4067,14 @@ if (!$alert_summary && ($alert_title == 'DNS Reply' || $alert_title == 'Unified 
 		'text',
 		$filterfieldsarray[2][84]
 	))->setAttribute('title', 'Enter filter \'DNS Reply TTL\'.');
+	$section->add($group);
+	$group = new Form_Group(NULL);
+	$group->add(new Form_Input(
+		'filterlogentries_replytransport',
+		'Reply - Transport',
+		'text',
+		$filterfieldsarray[2][90]
+	))->setAttribute('title', 'Filter TCP, UDP, DoT, DoH, DoQ or —.');
 	$section->add($group);
 }
 
@@ -4290,6 +4323,7 @@ if (!$alert_summary):
 					<th style="max-width:20%;"><?=gettext("Destination")?></th>
 					<th style="max-width:20%;"><?=gettext("Resolved/Feed")?></th>
 					<th style="max-width:20%;"><?=gettext("GeoIP")?></th>
+					<th><?=gettext("Transport")?></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -4369,6 +4403,7 @@ if (!$alert_summary):
 					<th style="width: 5.3%;"><!----- Buttons -----></th>
 					<th><?=$logtype == 'DNSBL Python' ? gettext("Domain/Block mode") : gettext("Domain/Referer|URI|Agent")?></th>
 					<th><?=gettext("Feed/Group")?></th>
+					<th><?=gettext("Transport")?></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -4409,6 +4444,7 @@ if (!$alert_summary):
 					<th style="width:4%" title="TTL remaining"><?=gettext("TTL")?></th>
 					<th style="width:15%"><?=gettext("Resolved")?></th>
 					<th style="width:3%"><?=gettext("GeoIP")?></th>
+					<th><?=gettext("Transport")?></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -4647,12 +4683,12 @@ if (!$alert_summary):
 				$pfbfilterlimit = $dnsblfilterlimit;
 				break;
 			case 'DNS Reply':
-				$colspan = "colspan='7'";
+				$colspan = "colspan='11'";
 				$fcounter = $counter['DNS'];
 				$pfbfilterlimit = $dnsfilterlimit;
 				break;
 			case 'Unified':
-				$colspan = "colspan='9'";
+				$colspan = "colspan='10'";
 
 				if ($pfb['filterlogentries']) {
 					$pfbfilterlimit = FALSE;

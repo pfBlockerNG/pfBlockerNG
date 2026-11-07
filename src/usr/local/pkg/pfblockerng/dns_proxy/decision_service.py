@@ -18,10 +18,7 @@ from time import monotonic
 from typing import Protocol
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
-STREAM, DATAGRAM = (
-    0,
-    1,
-)  # the QUERY's transport byte: TCP, DoT, DoH and DoQ clients have no size limit, plain UDP has one
+TRANSPORTS = ("TCP", "UDP", "DoT", "DoH", "DoQ")  # wire values 0..4, no unknown value
 # type + id, then transport + n + up to 255 IP text bytes + up to 65535 DNS wire bytes
 MAX_FRAME_LEN = 5 + 1 + 1 + 255 + 65535
 FAILURE_LOG_INTERVAL = 30.0  # seconds between two "query N failed" lines: the decider's no-reply window
@@ -30,10 +27,9 @@ Forward = Callable[[bytes], Awaitable[bytes | None]]
 
 
 class Resolve(Protocol):
-    """Decide one client query: the answer to send it, or None to send nothing. `datagram`: the client is a plain-UDP
-    one, whose answer has to fit the UDP size it advertised."""
+    """Decide one client query, retaining its original listener transport."""
 
-    def __call__(self, wire: bytes, client_ip: str, forward: Forward, *, datagram: bool) -> Awaitable[bytes | None]: ...
+    def __call__(self, wire: bytes, client_ip: str, forward: Forward, *, transport: str) -> Awaitable[bytes | None]: ...
 
 
 class ProtocolError(Exception):
@@ -57,16 +53,13 @@ async def _read_frame(reader: asyncio.StreamReader) -> tuple[int, int, bytes] | 
     return ftype, fid, body[5:]
 
 
-def _split_query(payload: bytes) -> tuple[bool, bytes, bytes]:
-    """(client is a datagram one, client IP text, DNS wire) of a QUERY payload: u8 transport (STREAM or DATAGRAM), u8 n,
-    n IP text bytes, the rest is the wire."""
-    if len(payload) < 2 or payload[0] not in (STREAM, DATAGRAM):
-        raise ProtocolError(
-            "QUERY payload does not start with a transport byte (0 stream, 1 datagram) and an IP length"
-        )
+def _split_query(payload: bytes) -> tuple[str, bytes, bytes]:
+    """(canonical transport, client IP text, DNS wire) from a QUERY payload."""
+    if len(payload) < 2 or payload[0] >= len(TRANSPORTS):
+        raise ProtocolError("QUERY payload does not start with a transport byte (0..4) and an IP length")
     if payload[1] == 0 or payload[1] > len(payload) - 2:
         raise ProtocolError("QUERY payload does not hold a client IP of its stated length")
-    return payload[0] == DATAGRAM, payload[2 : 2 + payload[1]], payload[2 + payload[1] :]
+    return TRANSPORTS[payload[0]], payload[2 : 2 + payload[1]], payload[2 + payload[1] :]
 
 
 def _client_ip(text: bytes) -> str | None:
@@ -95,7 +88,7 @@ async def serve(sock: socket.socket, resolve: Resolve, timeout: float, log: Call
         writer.write(encode_frame(ftype, fid, payload))  # one write() per frame: tasks cannot interleave bytes
         await writer.drain()
 
-    async def decide(fid: int, datagram: bool, ip: str | None, wire: bytes) -> None:
+    async def decide(fid: int, transport: str, ip: str | None, wire: bytes) -> None:
         nonlocal failed_logged
 
         async def forward(request: bytes) -> bytes | None:
@@ -111,7 +104,7 @@ async def serve(sock: socket.socket, resolve: Resolve, timeout: float, log: Call
         answer: bytes | None = None
         try:
             if ip is not None:
-                answer = await resolve(wire, ip, forward, datagram=datagram)
+                answer = await resolve(wire, ip, forward, transport=transport)
         except Exception as exc:
             if (now := monotonic()) - failed_logged >= FAILURE_LOG_INTERVAL:
                 failed_logged = now
@@ -131,11 +124,11 @@ async def serve(sock: socket.socket, resolve: Resolve, timeout: float, log: Call
                 if waiter is not None and not waiter.done():
                     waiter.set_result(payload or None)
             elif ftype == QUERY:
-                datagram, ip_text, wire = _split_query(payload)
+                transport, ip_text, wire = _split_query(payload)
                 if fid in inflight:
                     raise ProtocolError(f"QUERY id {fid} is already in flight")
                 inflight.add(fid)
-                task = asyncio.ensure_future(decide(fid, datagram, _client_ip(ip_text), wire))
+                task = asyncio.ensure_future(decide(fid, transport, _client_ip(ip_text), wire))
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
             else:

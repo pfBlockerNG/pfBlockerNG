@@ -21,14 +21,20 @@ IP logs self-sufficient for rendering complete table; render-time pass is freshn
 
 | Log | Writer | Attribution filled at event time |
 | --- | ------ | -------------------------------- |
-| `dnsbl.log` | `pfb_unbound.py` (`_log_dnsbl` path) | full verdict: block type, group, evaluated domain/zone, feed, query type |
-| `dns_reply.log` | `pfb_unbound.py` | reply type/record, TTL, resolved address, GeoIP iso code |
+| `dnsbl.log` | `pfb_unbound.py` (`_log_dnsbl` path) | full verdict: block type, group, evaluated domain/zone, feed, query type, client transport |
+| `dns_reply.log` | `pfb_unbound.py` | reply type/record, TTL, resolved address, GeoIP iso code, client transport |
 | `ip_block/permit/match.log` | filterlog daemon (`pfb_daemon_filterlog`, `pfblockerng.inc`) | pf tracker → pfB rule/alias, matching feed + IP/CIDR entry (`find_reported_header()`), GeoIP (`mmdblookup`), rDNS, ASN (3 CSV columns, issue #1369 — see below) |
-| `unified.log` | filterlog daemon (sole writer, ADR-38 Amendments 1/4) | reformatted IP/DNS-reply rows; byte-identical RFC4180 DNSBL rows |
+| `unified.log` | filterlog daemon (sole writer, ADR-38 Amendments 1/4) | reformatted IP rows; byte-identical RFC4180 DNSBL and DNS-reply rows |
 
 Daemon reconstructs bare pf event into fully attributed record **once**, at event time, caches its lookups in `ipcache` SQLite table so repeated offenders cheap on write path.
 
 DNSBL webserver-hit (block-page load) attributed same way: `pfb_log_event()` (`pfblockerng.inc`) asks live matcher via `pfb_dnsbl_query($domain)` — read-only query channel ADR-65 added — for domain's current verdict, uses returned group/feed to build `dnsbl.log` line it appends, increments per-group widget counter (`UPDATE dnsbl SET counter = counter + 1`). Miss (`NULL` or `blocked=false`) renders every field `Unknown` rather than guessing. Issue #1349 retired unconsumed reports-cache SQLite writer/table; event log is sole durable per-block record.
+
+### DNS transport (issue #3751)
+
+Transport is append-only: DNSBL field **11** follows query type at 10; DNS reply field **10** follows GeoIP at 9 (zero-based). Historical DNSBL rows with 10/11 fields and reply rows with 10 fields retain every existing offset. Reports and Unified show a dedicated Transport column; only exact `TCP`, `UDP`, `DoT`, `DoH`, `DoQ` strings are accepted. Absent or invalid metadata stays internally `Unknown` and displays **—**, never a guessed UDP value. The existing regex filters use DNSBL key 21 and reply key 90 against the displayed transport; use `^—$` to select unavailable metadata.
+
+The daemon copies both DNS CSV rows verbatim into Unified, preserving quoted commas/quotes in names and answers. DNSBL's existing single syslog emission accepts both 11- and 12-field logical rows and adds a canonical `transport=` token only when the new field exists; DNS reply still never emits a syslog event. The retired DNS reply formatter is removed; the pre-existing DNSBL schema helper remains unchanged. Stats retain their old indexed fields, and raw log downloads retain original bytes.
 
 ### ASN CSV columns, no back-compat for log entries (issue #1369, ADR-38 Amendment 3)
 

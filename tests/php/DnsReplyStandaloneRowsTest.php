@@ -12,11 +12,9 @@ use PHPUnit\Framework\TestCase;
  * ones tests/dns_proxy/test_reply_log.py pins in both modes (tests/fixtures/dns_reply_standalone_rows.json), so a row the
  * proxy writes and the viewers fail to read would fail here, and a writer that drifts from the fixture would fail there.
  *
- * Two readers: the Reports tab (convert_dns_reply_log(), on a row parsed with fgetcsv's own arguments) and the filterlog
- * daemon's pass into unified.log (pfb_unified_format_dnsreply(), on the row split the way the daemon splits it).
+ * The Reports converter reads these historical rows with the same CSV arguments as the log reader.
  */
 #[CoversFunction('convert_dns_reply_log')]
-#[CoversFunction('pfb_unified_format_dnsreply')]
 final class DnsReplyStandaloneRowsTest extends TestCase
 {
 	private const FIXTURE = __DIR__ . '/../fixtures/dns_reply_standalone_rows.json';
@@ -105,26 +103,6 @@ final class DnsReplyStandaloneRowsTest extends TestCase
 		$this->assertStringNotContainsString('<d>', $html, "{$case}: a name's markup stays text");
 	}
 
-	#[DataProvider('rows')]
-	public function testTheDaemonsUnifiedLogRowIsTheRowItself(string $case, string $line): void
-	{
-		// Given the daemon's own split of a DNS-reply row (explode, not fgetcsv: a quoted name leaves the ten-column branch)
-		$rf = explode(',', $line);
-		if (count($rf) !== 10) {
-			$this->assertGreaterThan(10, count($rf), "{$case}: a name with a comma is the only way to leave ten columns");
-			return;  // the daemon appends such a row verbatim, the same in both modes
-		}
-
-		// When it is rendered for unified.log
-		$unified = pfb_unified_format_dnsreply([
-			'l_type' => $rf[0], 'datetime' => $rf[1], 'm_type' => $rf[2], 'o_type' => $rf[3], 'q_type' => $rf[4],
-			'ttl' => $rf[5], 'q_name' => $rf[6], 'q_ip' => $rf[7], 'r_addr' => $rf[8], 'iso_code' => $rf[9],
-		]);
-
-		// Then nothing is lost or reordered
-		$this->assertSame($line, $unified, "{$case}: unified.log keeps the row byte for byte");
-	}
-
 	public function testEveryCaseOfTheFixtureHasARowTheViewersCanReadAndTheNameThatSplitsItIsTheOnlyOneThatDoes(): void
 	{
 		// Given the fixture's cases, one of them a hostile name with a comma in it
@@ -138,7 +116,7 @@ final class DnsReplyStandaloneRowsTest extends TestCase
 			}
 		}
 
-		// Then only that one is quoted for fgetcsv and left to the daemon's verbatim branch
+		// Then only that one requires CSV quoting; the daemon copies all rows verbatim.
 		$this->assertSame(['hostile-name'], $splits);
 	}
 }

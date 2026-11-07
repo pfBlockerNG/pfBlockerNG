@@ -24579,7 +24579,7 @@ function pfb_daemon_filterlog() {
 							@file_put_contents("{$pfb['unilog']}", "{$dnsline}\n", FILE_APPEND | LOCK_EX);
 							// Emit syslog only for a well-formed logical row; raw unified.log
 							// preservation above covers malformed rows without corruption.
-							if (count($df) === 11) {
+							if (count($df) === 11 || count($df) === 12) {
 								// Every DNSBL block line syslogs uniformly (incl. the PHP-path
 								// block the old python-only emitter missed). pfb_syslog_event
 								// no-ops when the toggle is off. Refresh the daemon's config
@@ -24590,6 +24590,7 @@ function pfb_daemon_filterlog() {
 										'q_name' => $df[2], 'q_ip' => $df[3], 'q_type' => $df[10],
 										'group' => $df[6], 'feed' => $df[8], 'b_type' => $df[5],
 										'b_eval' => $df[7],
+										...(count($df) === 12 ? ['transport' => $df[11]] : []),
 									)));
 								}
 							}
@@ -24599,19 +24600,9 @@ function pfb_daemon_filterlog() {
 					if (strncmp($line, 'DNS-reply,', 10) === 0) {
 						$rpline = rtrim($line, "\r\n");
 						if ($rpline !== '') {
-							$rf = explode(',', $rpline);
+							// Preserve the RFC4180 row verbatim, including optional transport.
 							// DNS-reply -> unified.log ONLY (blocks-only syslog: never here).
-							if (count($rf) === 10) {
-								$uni = pfb_unified_format_dnsreply(array(
-									'l_type' => $rf[0], 'datetime' => $rf[1], 'm_type' => $rf[2],
-									'o_type' => $rf[3], 'q_type' => $rf[4], 'ttl' => $rf[5],
-									'q_name' => $rf[6], 'q_ip' => $rf[7], 'r_addr' => $rf[8],
-									'iso_code' => $rf[9],
-								));
-								@file_put_contents("{$pfb['unilog']}", "{$uni}\n", FILE_APPEND | LOCK_EX);
-							} else {
-								@file_put_contents("{$pfb['unilog']}", "{$rpline}\n", FILE_APPEND | LOCK_EX);
-							}
+							@file_put_contents("{$pfb['unilog']}", "{$rpline}\n", FILE_APPEND | LOCK_EX);
 						}
 						continue;
 					}

@@ -115,7 +115,7 @@ def test_with_the_reply_log_on_the_relayed_reply_is_one_row_the_reports_tab_read
     row = next(csv.reader([line]))
     assert STAMP.match(row[1]), f"the row is stamped as the module stamps: {row[1]!r}"
     [expected] = ROWS["rows"]["a"]
-    assert [*row[:1], *row[2:]] == [*expected.split(",")[:1], *expected.split(",")[2:]], (
+    assert [*row[:1], *row[2:]] == [*expected.split(",")[:1], *expected.split(",")[2:], "TCP"], (
         "the fixture's row for this reply"
     )
     assert row[7] == CLIENT == ROWS["client"], "the client of the row is the gateway's, not the decider's"
@@ -123,7 +123,7 @@ def test_with_the_reply_log_on_the_relayed_reply_is_one_row_the_reports_tab_read
     fields = json.loads(
         subprocess.run(["php", "-r", php], input=line, capture_output=True, check=True, text=True).stdout
     )
-    assert len(fields) == 10 and fields[:3] == ["DNS-reply", row[1], "reply"]
+    assert len(fields) == 11 and fields[:3] == ["DNS-reply", row[1], "reply"] and fields[10] == "TCP"
 
 
 def test_with_the_reply_log_off_nothing_is_logged_and_no_log_pipeline_is_made(
