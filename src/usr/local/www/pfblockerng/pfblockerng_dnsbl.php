@@ -1314,7 +1314,6 @@ $tld_list['gTLD'] = array(
 'health' => 'HEALTH',
 'healthcare' => 'HEALTHCARE',
 'help' => 'HELP',
-'helsinki' => '(eu) HELSINKI',
 'here' => 'HERE',
 'hiphop' => 'HIPHOP',
 'hiv' => 'HIV',
