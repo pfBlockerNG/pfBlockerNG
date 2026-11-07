@@ -2685,6 +2685,24 @@ def get_q_type(qstate: module_qstate | None, qinfo: query_info | None) -> str:
     return is_unknown(q_type)
 
 
+def _metric_qtype(qstate: module_qstate | None, qinfo: query_info | None, q_type: str) -> str:
+    if q_type != "Unknown":
+        return q_type
+    for info in (getattr(qstate, "qinfo", None), qinfo):
+        number = getattr(info, "qtype", None)
+        if isinstance(number, int) and 0 <= number <= 65535:
+            return "TYPE{}".format(number)
+    return q_type
+
+
+def get_q_transport(qstate: module_qstate | None, kwargs: dict[str, Any] | None) -> str:
+    """Use only original-client transport supplied by the proxy; never infer from a listener."""
+    for transport in (getattr(qstate, "pfb_transport", None), (kwargs or {}).get("pfb_transport")):
+        if isinstance(transport, str) and transport in ("UDP", "TCP", "DoT", "DoH", "DoQ"):
+            return transport
+    return ""
+
+
 def get_o_type(qstate: module_qstate | None, rep: reply_info | None) -> str:
     o_type = ""
     if qstate:
@@ -2890,11 +2908,21 @@ def _db_create(db: int, cursor: Any) -> None:
             "INSERT INTO resolver ( row, totalqueries, queries ) "
             "SELECT 0, 0, 0 WHERE NOT EXISTS (SELECT 1 FROM resolver)"
         )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dns_metric_queries ("
+            "qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(qtype, transport))"
+        )
     elif db == DB_DNSBL:
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
         )
         _db_seed_upstream_row(cursor)
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dns_metric_blocks ("
+            "groupname TEXT NOT NULL, qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, "
+            "PRIMARY KEY(groupname, qtype, transport))"
+        )
+        cursor.execute("CREATE TABLE IF NOT EXISTS dns_metric_removed_groups (groupname TEXT PRIMARY KEY)")
 
 
 def _db_connect(db: int) -> Any:
@@ -2954,16 +2982,24 @@ def _db_run(db: int, work: Callable[[Any], None]) -> bool:
         return False
 
 
-def _db_flush_resolver(delta: int) -> bool:
+def _db_flush_resolver(delta: int, details: dict[tuple[str, str], int] | None = None) -> bool:
     if not delta or not pfb["sqlite3_resolver_con"]:
         return True
-    return _db_run(
-        DB_RESOLVER,
-        lambda con: con.execute("UPDATE resolver SET totalqueries = totalqueries + ? WHERE row = 0", (delta,)),
-    )
+
+    def _flush(con: Any) -> None:
+        con.execute("UPDATE resolver SET totalqueries = totalqueries + ? WHERE row = 0", (delta,))
+        if details:
+            con.executemany(
+                "INSERT INTO dns_metric_queries (qtype, transport, count) "
+                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM resolver WHERE row = 0) "
+                "ON CONFLICT(qtype, transport) DO UPDATE SET count = count + excluded.count",
+                [(qtype, transport, count) for (qtype, transport), count in details.items()],
+            )
+
+    return _db_run(DB_RESOLVER, _flush)
 
 
-def _db_flush_dnsbl(deltas: dict[str, int]) -> bool:
+def _db_flush_dnsbl(deltas: dict[str, int], details: dict[tuple[str, str, str], int] | None = None) -> bool:
     if not deltas or not pfb["sqlite3_dnsbl_con"]:
         return True
     rows = [(d, g) for g, d in deltas.items()]
@@ -2975,6 +3011,18 @@ def _db_flush_dnsbl(deltas: dict[str, int]) -> bool:
             # actual Upstream delta so a feed-only flush doesn't pay for it.
             _db_seed_upstream_row(con.cursor())
         con.executemany("UPDATE dnsbl SET counter = counter + ? WHERE groupname = ?", rows)
+        if details:
+            # Queued events for a removed group must not recreate its metric series.
+            con.executemany(
+                "INSERT INTO dns_metric_blocks (groupname, qtype, transport, count) "
+                "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM dnsbl WHERE groupname = ?) "
+                "AND NOT EXISTS (SELECT 1 FROM dns_metric_removed_groups WHERE groupname = ?) "
+                "ON CONFLICT(groupname, qtype, transport) DO UPDATE SET count = count + excluded.count",
+                [
+                    (group, qtype, transport, count, group, group)
+                    for (group, qtype, transport), count in details.items()
+                ],
+            )
 
     return _db_run(DB_DNSBL, _flush)
 
@@ -3054,9 +3102,11 @@ def _db_apply(task: tuple) -> None:
     # Synchronous fallback when no DB worker is running (init, tests).
     kind = task[0]
     if kind == "resolver":
-        _db_flush_resolver(1)
+        details = {(task[1], task[2]): 1} if len(task) == 3 else None
+        _db_flush_resolver(1, details)
     elif kind == "dnsbl":
-        _db_flush_dnsbl({task[1]: 1})
+        details = {(task[1], task[2], task[3]): 1} if len(task) == 4 else None
+        _db_flush_dnsbl({task[1]: 1}, details)
 
 
 def pfb_db_worker() -> None:
@@ -3065,6 +3115,8 @@ def pfb_db_worker() -> None:
     # on stop.
     resolver_delta = 0
     dnsbl_deltas: dict[str, int] = {}
+    resolver_details: dict[tuple[str, str], int] = {}
+    dnsbl_details: dict[tuple[str, str, str], int] = {}
     last_flush = time.monotonic()
     stop = False
 
@@ -3072,15 +3124,23 @@ def pfb_db_worker() -> None:
         nonlocal resolver_delta
         if t[0] == "resolver":
             resolver_delta += 1
+            if len(t) == 3:
+                key = (t[1], t[2])
+                resolver_details[key] = resolver_details.get(key, 0) + 1
         elif t[0] == "dnsbl":
             dnsbl_deltas[t[1]] = dnsbl_deltas.get(t[1], 0) + 1
+            if len(t) == 4:
+                block_key = (t[1], t[2], t[3])
+                dnsbl_details[block_key] = dnsbl_details.get(block_key, 0) + 1
 
     def flush() -> None:
         nonlocal resolver_delta, dnsbl_deltas, last_flush
-        if resolver_delta and _db_flush_resolver(resolver_delta):
+        if resolver_delta and _db_flush_resolver(resolver_delta, resolver_details):
             resolver_delta = 0
-        if dnsbl_deltas and _db_flush_dnsbl(dnsbl_deltas):
+            resolver_details.clear()
+        if dnsbl_deltas and _db_flush_dnsbl(dnsbl_deltas, dnsbl_details):
             dnsbl_deltas = {}
+            dnsbl_details.clear()
         last_flush = time.monotonic()
 
     while True:
@@ -3149,9 +3209,13 @@ def get_details_dnsbl(
     else:
         return True
 
+    q_type = get_q_type(qstate, qinfo)
+    metric_qtype = _metric_qtype(qstate, qinfo, q_type)
+    transport = get_q_transport(qstate, kwargs)
+
     # Increment totalqueries counter
     if pfb["sqlite3_resolver_con"]:
-        pfb_db_enqueue(("resolver",))
+        pfb_db_enqueue(("resolver", metric_qtype, transport))
 
     # issue #1094: the served verdict rides in BY VALUE from operate() -- never
     # re-read the shared decisionDB memo, else a concurrent thread on another
@@ -3165,7 +3229,7 @@ def get_details_dnsbl(
 
         # Increment dnsblgroup counter
         if pfb["sqlite3_dnsbl_con"] and dnsbl.group != "":
-            pfb_db_enqueue(("dnsbl", dnsbl.group))
+            pfb_db_enqueue(("dnsbl", dnsbl.group, metric_qtype, transport))
 
         # The cached DnsblDecision is both name- and qtype-independent for some block
         # kinds -- two subdomains of one blocked zone share an identical payload (same
@@ -3176,7 +3240,6 @@ def get_details_dnsbl(
         # folded in implicitly, which DnsblDecision does not. Without q_type, a client's
         # back-to-back A+AAAA of one name collapses (dual-stack under-count) and Reports
         # cannot break down by record type. The decision path stays correct and untouched.
-        q_type = get_q_type(qstate, qinfo)
 
         dupEntry = "+"
         event_sig = (q_name_key, q_type, dnsbl)
@@ -3247,7 +3310,9 @@ def _log_idn_alert(q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_ty
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
 
 
-def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: str) -> None:
+def _log_upstream_block(
+    q_name: str, q_ip: str, result: UpstreamBlock, q_type: str, transport: str = "", metric_qtype: str | None = None
+) -> None:
     """Log an issue #267 upstream/external DNS block -- same CSV shape as a DNSBL block.
 
     Mirrors ``_log_idn_alert``'s structure.  ``b_type`` is ``"Upstream_Block"`` so the
@@ -3274,9 +3339,9 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
         )
     )
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
-    # Increment the aggregate Upstream group counter (parity with per-feed DNSBL blocks).
+    # Increment the Upstream aggregate and dimensions together.
     if pfb["sqlite3_dnsbl_con"]:
-        pfb_db_enqueue(("dnsbl", "Upstream"))
+        pfb_db_enqueue(("dnsbl", "Upstream", metric_qtype or q_type, transport))
 
 
 def make_timestamp() -> str:
@@ -3477,7 +3542,7 @@ def get_details_reply(
 
     # Increment totalqueries counter (Don't include the Resolver DNS requests)
     if pfb["sqlite3_resolver_con"] and q_ip != "127.0.0.1":
-        pfb_db_enqueue(("resolver",))
+        pfb_db_enqueue(("resolver", _metric_qtype(qstate, qinfo, o_type), get_q_transport(qstate, kwargs)))
 
     # Do not log Replies, if disabled
     if not pfb["python_reply"]:
@@ -3898,7 +3963,9 @@ def inplace_cb_query_response(qstate: Any, response: Any, **kwargs: Any) -> bool
         q_name = get_q_name_qstate(qstate)
         q_type = get_q_type(qstate, None)
         q_ip = _client_ip_from_qstate(qstate)
-        _log_upstream_block(q_name, q_ip, result, q_type)
+        _log_upstream_block(
+            q_name, q_ip, result, q_type, get_q_transport(qstate, kwargs), _metric_qtype(qstate, None, q_type)
+        )
     except Exception as e:
         sys.stderr.write("[pfBlockerNG] inplace_cb_query_response: {}\n".format(e))
     return True

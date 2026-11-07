@@ -11021,10 +11021,22 @@ function pfb_metrics_render(array $s): string {
 	}
 	$family('pfblockerng_ip_rule_packets_total', 'Packets matched by pfB firewall rules, per alias.', $rows);
 
+	$dnsbl_detail = array();
+	foreach ($s['dnsbl_detail'] ?? array() as $row) {
+		$dnsbl_detail[$row['group']][] = $row;
+	}
 	$blocked = array();
 	$group_entries = array();
 	foreach ($s['dnsbl_groups'] ?? array() as $g) {
-		$blocked[] = array(array('group' => $g['group']), $g['counter']);
+		$details = $dnsbl_detail[$g['group']] ?? array();
+		$blocked[] = array(array('group' => $g['group']), $g['counter'] - array_sum(array_column($details, 'count')));
+		foreach ($details as $row) {
+			$labels = array('group' => $g['group'], 'qtype' => $row['qtype']);
+			if ($row['transport'] !== '') {
+				$labels['transport'] = $row['transport'];
+			}
+			$blocked[] = array($labels, $row['count']);
+		}
 		if ($g['entries'] !== NULL) {
 			$group_entries[] = array(array('group' => $g['group']), $g['entries']);
 		}
@@ -11033,7 +11045,18 @@ function pfb_metrics_render(array $s): string {
 	$family('pfblockerng_dnsbl_group_entries', 'Entries in each enabled DNSBL group.', $group_entries);
 
 	$rq = $s['resolver_queries'] ?? NULL;
-	$family('pfblockerng_dnsbl_resolver_queries_total', 'DNS queries handled by the pfB resolver.', $rq === NULL ? array() : array(array(array(), $rq)));
+	$details = $s['resolver_detail'] ?? array();
+	$rows = $rq === NULL ? array() : array(array(array(), $rq - array_sum(array_column($details, 'count'))));
+	if ($rq !== NULL) {
+		foreach ($details as $row) {
+			$labels = array('qtype' => $row['qtype']);
+			if ($row['transport'] !== '') {
+				$labels['transport'] = $row['transport'];
+			}
+			$rows[] = array($labels, $row['count']);
+		}
+	}
+	$family('pfblockerng_dnsbl_resolver_queries_total', 'DNS queries handled by the pfB resolver.', $rows);
 
 	$rows = array();
 	foreach ($s['feed_success'] ?? array() as $feed => $ts) {
@@ -11060,27 +11083,51 @@ function pfb_metrics_render(array $s): string {
 	return $out;
 }
 
-// Read-only query for the metrics collector: pfb_open_sqlite() can create or repair tables, which a scrape must never do.
-// A missing file reads as no rows; an open or query failure reads as NULL.
-function pfb_metrics_sqlite_rows(string $path, string $sql): ?array {
+// Aggregate and optional upgrade-era detail tables must be read from the same SQLite snapshot.
+function pfb_metrics_sqlite_snapshot(string $path, string $sql, string $detail_table, string $detail_sql, bool $filter_removed = FALSE): ?array {
 	global $pfb;
 	if (!is_file($path)) {
-		return array();
+		return array('aggregate' => array(), 'detail' => array());
 	}
+	$db = NULL;
 	try {
 		$db = new SQLite3($path, SQLITE3_OPEN_READONLY);
 		$db->enableExceptions(TRUE);
-		// Waits out the DNSBL writer's lock like pfb_open_sqlite(), but capped: its 100 s would outlast the cron's 50 s kill and lose every source, not just this one.
+		// A scrape must not inherit the writer's 100-second wait.
 		$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
-		$rows = array();
+		$db->exec('BEGIN');
+		$rows = array('aggregate' => array(), 'detail' => array());
 		$result = $db->query($sql);
 		while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-			$rows[] = $row;
+			$rows['aggregate'][] = $row;
 		}
-		$db->close();
+		$result->finalize();
+		$table = SQLite3::escapeString($detail_table);
+		if ($db->querySingle("SELECT count(*) FROM sqlite_master WHERE name = '{$table}'") > 0) {
+			$result = $db->query($detail_sql);
+			while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+				$rows['detail'][] = $row;
+			}
+			$result->finalize();
+		}
+		if ($filter_removed && $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'dns_metric_removed_groups'") > 0) {
+			$removed = array();
+			$result = $db->query('SELECT groupname FROM dns_metric_removed_groups');
+			while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+				$removed[$row['groupname']] = TRUE;
+			}
+			$result->finalize();
+			$rows['aggregate'] = array_values(array_filter($rows['aggregate'], static fn ($row): bool => !isset($removed[$row['groupname']])));
+			$rows['detail'] = array_values(array_filter($rows['detail'], static fn ($row): bool => !isset($removed[$row['group']])));
+		}
+		$db->exec('COMMIT');
 		return $rows;
 	} catch (Throwable) {
 		return NULL;
+	} finally {
+		if ($db !== NULL) {
+			$db->close();
+		}
 	}
 }
 
@@ -11089,6 +11136,31 @@ function pfb_metrics_collect(): array {
 	global $pfb;
 	$up = array();
 	$num = static fn ($v): int => is_numeric($v) ? (int) $v : 0;
+	$counter = static function ($value): int {
+		if ((!is_int($value) && !is_string($value))
+		    || filter_var($value, FILTER_VALIDATE_INT, array('options' => array('min_range' => 0))) === FALSE) {
+			throw new UnexpectedValueException('Invalid DNS metric counter');
+		}
+		return (int) $value;
+	};
+	$details = static function (array $rows, array $totals) use ($counter): array {
+		$seen = array();
+		foreach ($rows as &$row) {
+			$group = $row['group'] ?? '';
+			if (!isset($totals[$group]) || !is_string($row['qtype']) || $row['qtype'] === '' || !is_string($row['transport'])) {
+				throw new UnexpectedValueException('Invalid DNS metric labels');
+			}
+			$key = json_encode(array($group, $row['qtype'], $row['transport']), JSON_THROW_ON_ERROR);
+			$row['count'] = $counter($row['count']);
+			if (isset($seen[$key]) || $row['count'] > $totals[$group]) {
+				throw new UnexpectedValueException('Inconsistent DNS metric detail');
+			}
+			$seen[$key] = TRUE;
+			$totals[$group] -= $row['count'];
+		}
+		unset($row);
+		return $rows;
+	};
 	$guard = static function (string $source, callable $read) use (&$up): mixed {
 		try {
 			return $read();
@@ -11135,32 +11207,59 @@ function pfb_metrics_collect(): array {
 	});
 
 	// With DNSBL off the databases hold nothing to export (the widget shows none either): both sources are up with no series.
-	$dnsbl_groups = NULL;
-	$resolver_queries = NULL;
+	$dnsbl_groups = $dnsbl_detail = NULL;
+	$resolver_queries = $resolver_detail = NULL;
 	if ($pfb['dnsbl'] === PfbToggle::On) {
-		$dnsbl_groups = $guard('dnsbl_db', function () use (&$up, $pfb, $num): ?array {
-			$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl ORDER BY rowid');
-			$up['dnsbl_db'] = $groups !== NULL;
-			if ($groups === NULL) {
+		$dnsbl_snapshot = $guard('dnsbl_db', function () use (&$up, $pfb, $num, $counter, $details): ?array {
+			$snapshot = pfb_metrics_sqlite_snapshot($pfb['dnsbl_info'],
+				'SELECT groupname, entries, counter FROM dnsbl ORDER BY rowid',
+				'dns_metric_blocks',
+				'SELECT d.groupname AS "group", d.qtype, d.transport, d.count FROM dns_metric_blocks d WHERE EXISTS (SELECT 1 FROM dnsbl g WHERE g.groupname = d.groupname)', TRUE);
+			$up['dnsbl_db'] = $snapshot !== NULL;
+			if ($snapshot === NULL) {
 				return NULL;
 			}
-			// One sample per group: a repeated label set rejects the whole file. The last row wins; summing would double count.
-			$out = array();
-			foreach ($groups as $row) {
-				$out[(string) $row['groupname']] = array(
-					'group'   => (string) $row['groupname'],
+			// Legacy databases can have repeated groups; the last aggregate row wins.
+			$out = $totals = array();
+			foreach ($snapshot['aggregate'] as $row) {
+				$group = (string) $row['groupname'];
+				$totals[$group] = $counter($row['counter']);
+				$out[$group] = array(
+					'group'   => $group,
 					'entries' => $row['entries'] === 'disabled' ? NULL : $num($row['entries']),
-					'counter' => $num($row['counter']),
+					'counter' => $totals[$group],
 				);
 			}
-			return array_values($out);
+			return array(array_values($out), $details($snapshot['detail'], $totals));
 		});
+		if ($dnsbl_snapshot !== NULL) {
+			[$dnsbl_groups, $dnsbl_detail] = $dnsbl_snapshot;
+		}
 
-		$resolver_queries = $guard('resolver_db', function () use (&$up, $pfb, $num): ?int {
-			$resolver = pfb_metrics_sqlite_rows($pfb['dnsbl_resolver'], 'SELECT totalqueries, queries FROM resolver WHERE row = 0');
-			$up['resolver_db'] = $resolver !== NULL;
-			return empty($resolver) ? NULL : $num($resolver[0]['totalqueries']) + $num($resolver[0]['queries']);
+		$resolver_snapshot = $guard('resolver_db', function () use (&$up, $pfb, $counter, $details): ?array {
+			$snapshot = pfb_metrics_sqlite_snapshot($pfb['dnsbl_resolver'],
+				'SELECT totalqueries, queries FROM resolver WHERE row = 0',
+				'dns_metric_queries', 'SELECT qtype, transport, count FROM dns_metric_queries');
+			$up['resolver_db'] = $snapshot !== NULL;
+			if ($snapshot === NULL) {
+				return NULL;
+			}
+			if ($snapshot['aggregate'] === array()) {
+				if ($snapshot['detail'] !== array()) {
+					throw new UnexpectedValueException('DNS details without resolver aggregate');
+				}
+				return array(NULL, array());
+			}
+			if (count($snapshot['aggregate']) !== 1) {
+				throw new UnexpectedValueException('Duplicate resolver aggregate');
+			}
+			$row = $snapshot['aggregate'][0];
+			$total = $counter($row['totalqueries']) + $counter($row['queries']);
+			return array($counter($total), $details($snapshot['detail'], array('' => $total)));
 		});
+		if ($resolver_snapshot !== NULL) {
+			[$resolver_queries, $resolver_detail] = $resolver_snapshot;
+		}
 	} else {
 		$up['dnsbl_db'] = $up['resolver_db'] = TRUE;
 	}
@@ -11218,6 +11317,8 @@ function pfb_metrics_collect(): array {
 		'ip_rule_packets'  => $ip_rule_packets,
 		'dnsbl_groups'     => $dnsbl_groups,
 		'resolver_queries' => $resolver_queries,
+		'dnsbl_detail'     => $dnsbl_detail,
+		'resolver_detail'  => $resolver_detail,
 		'feed_success'     => $feed_success,
 		'feed_failing'     => $feed_failing,
 		'pass'             => $pass,
@@ -12742,85 +12843,103 @@ function dnsbl_stats_update($mode, $alias, $alias_cnt) {
 }
 
 
-// Function to save DNSBL Group statistics
-function dnsbl_save_stats() {
+// Save DNSBL statistics; metrics-only applies leave the legacy Reports save/reset policy untouched.
+function dnsbl_save_stats(bool $metrics_only = FALSE) {
 	global $pfb;
 
-	// Save group statistics to SQLite3 database (Remove any feeds that are not referenced)
-	$db_update = $db_delete = '';
 	pfb_logger("\nSaving DNSBL statistics...", 1);
-
-	// Collect existing SQL group names
-	$sql_groupnames = array();
-	$db_handle = pfb_open_sqlite(1, 'Collect Group');
-	if ($db_handle) {
-		$result = $db_handle->query("SELECT * FROM dnsbl;");
-		if ($result) {
-			while ($res = $result->fetchArray(SQLITE3_ASSOC)) {
-				$sql_groupnames[$res['groupname']] = '';
+	$db_handle = pfb_open_sqlite(1, 'Save DNSBL stats');
+	if (!$db_handle) {
+		return;
+	}
+	$transaction = FALSE;
+	try {
+		$db_handle->enableExceptions(TRUE);
+		// Serialize membership changes with counter writers, including detail cleanup.
+		$db_handle->exec('BEGIN IMMEDIATE');
+		$transaction = TRUE;
+		$has_detail = $db_handle->querySingle("SELECT count(*) FROM sqlite_master WHERE name = 'dns_metric_blocks'") > 0;
+		// Only a complete apply-time membership set can prove removal; active aliases omit disabled groups.
+		if (isset($pfb['alias_dnsbl_configured']) && is_array($pfb['alias_dnsbl_configured'])) {
+			$members = array_fill_keys(array_merge($pfb['alias_dnsbl_configured'], $pfb['alias_dnsbl_all'] ?? array(), array('Upstream')), TRUE);
+			$db_handle->exec('CREATE TABLE IF NOT EXISTS dns_metric_removed_groups (groupname TEXT PRIMARY KEY)');
+			$candidates = array();
+			$sql = 'SELECT groupname FROM dnsbl';
+			if ($has_detail) {
+				$sql .= ' UNION SELECT groupname FROM dns_metric_blocks';
+			}
+			$result = $db_handle->query($sql);
+			while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+				$candidates[$row['groupname']] = TRUE;
+			}
+			$result->finalize();
+			foreach ($pfb['dnsbl_info_stats'] ?? array() as $group) {
+				$candidates[$group['groupname']] = TRUE;
+			}
+			$remove = $db_handle->prepare('INSERT OR IGNORE INTO dns_metric_removed_groups (groupname) VALUES (:groupname)');
+			foreach (array_diff_key($candidates, $members) as $groupname => $_) {
+				$remove->bindValue(':groupname', $groupname, SQLITE3_TEXT);
+				$remove->execute()->finalize();
+			}
+			$restore = $db_handle->prepare('DELETE FROM dns_metric_removed_groups WHERE groupname = :groupname');
+			foreach ($members as $groupname => $_) {
+				$restore->bindValue(':groupname', $groupname, SQLITE3_TEXT);
+				$restore->execute()->finalize();
+			}
+			if ($has_detail) {
+				$db_handle->exec('DELETE FROM dns_metric_blocks WHERE EXISTS (SELECT 1 FROM dns_metric_removed_groups r WHERE r.groupname = dns_metric_blocks.groupname)');
 			}
 		}
-	}
-	pfb_close_sqlite($db_handle);
-
-	// Compare SQL database Group names to latest Group names
-	if (!empty($pfb['dnsbl_info_stats'])) {
-
-		$db_handle = pfb_open_sqlite(1, 'Save DNSBL stats');
-		if ($db_handle) {
-
+		if (!$metrics_only && !empty($pfb['dnsbl_info_stats'])) {
+			$sql_groupnames = array();
+			$result = $db_handle->query('SELECT groupname FROM dnsbl');
+			while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+				$sql_groupnames[$row['groupname']] = TRUE;
+			}
+			$result->finalize();
 			foreach ($pfb['dnsbl_info_stats'] as $group) {
-
-				// Keep row
-				$pfb_delete = FALSE;
-				if (in_array($group['groupname'], $pfb['alias_dnsbl_all'])) {
-
-					// Update existing row
-					if (isset($sql_groupnames[$group['groupname']])) {
-						$db_update 	= "UPDATE dnsbl SET timestamp = :timestamp, entries = :entries"
-								. " WHERE groupname = :groupname;\n";
-					}
-
-					// Add new row
-					else {
-						$db_update	= "INSERT INTO dnsbl (groupname, timestamp, entries, counter)"
-								. " VALUES (:groupname, :timestamp, :entries, 0);\n";
-					}
+				$pfb_delete = !in_array($group['groupname'], $pfb['alias_dnsbl_all']);
+				$groupname = pfb_filter($group['groupname'], PFB_FILTER_HTML, 'dnsbl_save_stats');
+				// Keep the existing reporting policy for disabled/non-numeric rows.
+				if (!is_numeric($group['entries'])) {
+					continue;
 				}
-
-				// Remove row
-				else {
-					$db_update	= "DELETE FROM dnsbl WHERE groupname = :groupname;\n";
-					$pfb_delete	= TRUE;
-				}
-
-				if (is_numeric($group['entries'])) {
-					$group['groupname'] = pfb_filter($group['groupname'], PFB_FILTER_HTML, 'dnsbl_save_stats');
-
-					$stmt = $db_handle->prepare($db_update);
-					if ($stmt) {
-						$stmt->bindValue(':groupname', $group['groupname'], SQLITE3_TEXT);
-						if (!$pfb_delete) {
-							$group['timestamp'] = pfb_filter($group['timestamp'], PFB_FILTER_HTML, 'dnsbl_save_stats');
-
-							$stmt->bindValue(':timestamp', $group['timestamp'], SQLITE3_TEXT);
-							$stmt->bindValue(':entries', $group['entries'], SQLITE3_TEXT);
-						}
-						$stmt->execute();
+				if ($pfb_delete) {
+					$sql = 'DELETE FROM dnsbl WHERE groupname = :groupname';
+					// Match the legacy aggregate reset, not merely an inactive group's membership.
+					if ($has_detail) {
+						$stmt = $db_handle->prepare('DELETE FROM dns_metric_blocks WHERE groupname = :groupname');
+						$stmt->bindValue(':groupname', $groupname, SQLITE3_TEXT);
+						$stmt->execute()->finalize();
 					}
+				} elseif (isset($sql_groupnames[$group['groupname']])) {
+					$sql = 'UPDATE dnsbl SET timestamp = :timestamp, entries = :entries WHERE groupname = :groupname';
+				} else {
+					$sql = 'INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES (:groupname, :timestamp, :entries, 0)';
 				}
+				$stmt = $db_handle->prepare($sql);
+				$stmt->bindValue(':groupname', $groupname, SQLITE3_TEXT);
+				if (!$pfb_delete) {
+					$timestamp = pfb_filter($group['timestamp'], PFB_FILTER_HTML, 'dnsbl_save_stats');
+					$stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
+					$stmt->bindValue(':entries', $group['entries'], SQLITE3_TEXT);
+				}
+				$stmt->execute()->finalize();
 			}
+		} elseif (!$metrics_only) {
+			if ($has_detail) {
+				$db_handle->exec('DELETE FROM dns_metric_blocks');
+			}
+			$db_handle->exec('DROP TABLE dnsbl');
 		}
-		pfb_close_sqlite($db_handle);
-	}
-	else {
-		$db_delete = 'DROP TABLE dnsbl;';
-		$db_handle = pfb_open_sqlite(1, 'Delete table');
-		if ($db_handle) {
-			$db_handle->exec("BEGIN TRANSACTION;"
-				. "{$db_delete}"
-				. "END TRANSACTION;");
+		$db_handle->exec('COMMIT');
+	} catch (Throwable $e) {
+		if ($transaction) {
+			$db_handle->exec('ROLLBACK');
 		}
+		pfb_logger("\nDNSBL statistics save failed: {$e->getMessage()}\n", 2);
+		return;
+	} finally {
 		pfb_close_sqlite($db_handle);
 	}
 	pfb_logger(" completed", 1);
@@ -26113,10 +26232,27 @@ function pfBlockerNG_clearsqlite($mode, $totalqueries = 0) {
 					}
 				}
 				elseif ($mode == 'cleardnsbl') {
-					$stmt = $db_handle->prepare($data[2]);
-					if ($stmt) {
-						$stmt->bindValue(':lastdnsblclear', $lastdnsblclear, SQLITE3_TEXT);
-						$stmt->execute();
+					$transaction = FALSE;
+					try {
+						$db_handle->enableExceptions(TRUE);
+						$db_handle->exec('BEGIN IMMEDIATE');
+						$transaction = TRUE;
+						$stmt = $db_handle->prepare($data[2]);
+						if ($data[0] === 6) {
+							$stmt->bindValue(':lastdnsblclear', $lastdnsblclear, SQLITE3_TEXT);
+						}
+						$stmt->execute()->finalize();
+						$detail_table = $data[0] === 1 ? 'dns_metric_blocks' : ($data[0] === 3 ? 'dns_metric_queries' : '');
+						if ($detail_table !== ''
+						    && $db_handle->querySingle("SELECT count(*) FROM sqlite_master WHERE name = '{$detail_table}'") > 0) {
+							$db_handle->exec("DELETE FROM {$detail_table}");
+						}
+						$db_handle->exec('COMMIT');
+					} catch (Throwable $e) {
+						if ($transaction) {
+							$db_handle->exec('ROLLBACK');
+						}
+						pfb_logger("\nDNSBL counter clear failed: {$e->getMessage()}\n", 2);
 					}
 				}
 				else {

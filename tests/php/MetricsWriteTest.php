@@ -14,7 +14,9 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_metrics_write')]
 #[CoversFunction('pfb_metrics_configure_cron')]
 #[CoversFunction('pfb_pfctl_tables_raw')]
-#[CoversFunction('pfb_metrics_sqlite_rows')]
+#[CoversFunction('pfb_metrics_sqlite_snapshot')]
+#[CoversFunction('dnsbl_save_stats')]
+#[CoversFunction('pfBlockerNG_clearsqlite')]
 final class MetricsWriteTest extends TestCase
 {
 	private const CRON_CMD    = '/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
@@ -43,6 +45,7 @@ final class MetricsWriteTest extends TestCase
 		$pfb['aliasdir']           = "{$this->root}/alias";
 		$pfb['dnsbl_info']         = "{$this->root}/db/pfb_py_dnsbl.sqlite";
 		$pfb['dnsbl_resolver']     = "{$this->root}/db/pfb_py_resolver.sqlite";
+		$pfb['sqlite_timeout']     = 5000;
 		$pfb['log']                = "{$this->root}/log/pfblockerng.log";
 		$pfb['errlog']             = "{$this->root}/log/error.log";
 		$pfb['pfctl']              = "{$this->root}/pfctl";
@@ -115,6 +118,408 @@ final class MetricsWriteTest extends TestCase
 	{
 		$this->wantExport(PfbToggle::On, 'on');
 		pfb_metrics_configure_cron(TRUE, $dir);
+	}
+
+	public function testDetailCountersShareTheAggregateSnapshotAndExcludeRemovedGroups(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Ads', '', 5, 12);",
+			'CREATE TABLE dns_metric_blocks (groupname TEXT NOT NULL, qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(groupname,qtype,transport));',
+			"INSERT INTO dns_metric_blocks VALUES ('Ads', 'AAAA', 'DoH', 3), ('Ads', 'MX', '', 2), ('Removed', 'A', 'UDP', 99);",
+		]);
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0, 18, 2);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(qtype,transport));',
+			"INSERT INTO dns_metric_queries VALUES ('AAAA', 'DoH', 4), ('HTTPS', '', 3);",
+		]);
+
+		$s = pfb_metrics_collect();
+		$this->assertTrue($s['source_up']['dnsbl_db']);
+		$this->assertTrue($s['source_up']['resolver_db']);
+		$this->assertCount(2, $s['dnsbl_detail']);
+		$this->assertCount(2, $s['resolver_detail']);
+		$body = pfb_metrics_render($s);
+		$this->assertStringNotContainsString('Removed', $body);
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"Ads\"} 7\n", $body);
+		$this->assertStringContainsString("pfblockerng_dnsbl_resolver_queries_total 13\n", $body);
+		$this->assertStringContainsString("pfblockerng_dnsbl_resolver_queries_total{qtype=\"HTTPS\"} 3\n", $body);
+	}
+
+	/** @return array<string,array{0:string}> */
+	public static function invalidDetailProvider(): array
+	{
+		return [
+			'negative count' => ["('A', 'UDP', -1)"],
+			'noninteger count' => ["('A', 'UDP', 'bad')"],
+			'exceeds aggregate' => ["('A', 'UDP', 21)"],
+			'combined exceeds aggregate' => ["('A', 'UDP', 12), ('AAAA', '', 9)"],
+			'duplicate series' => ["('A', 'UDP', 2), ('A', 'UDP', 3)"],
+			'empty qtype' => ["('', 'UDP', 1)"],
+			'null qtype' => ["(NULL, 'UDP', 1)"],
+			'null transport' => ["('A', NULL, 1)"],
+			'null count' => ["('A', 'UDP', NULL)"],
+		];
+	}
+
+	#[DataProvider('invalidDetailProvider')]
+	public function testInvalidDetailsFailTheSourceInsteadOfExportingFabricatedTotals(string $values): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0, 18, 2);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES {$values};",
+		]);
+
+		$s = pfb_metrics_collect();
+		$this->assertFalse($s['source_up']['resolver_db']);
+		$this->assertNull($s['resolver_queries']);
+		$this->assertNull($s['resolver_detail']);
+		$this->assertStringNotContainsString('pfblockerng_dnsbl_resolver_queries_total', pfb_metrics_render($s));
+	}
+
+	public function testMalformedDetailTableIsNotTreatedAsALegacyDatabase(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Ads', 5, 12);",
+			'CREATE TABLE dns_metric_blocks (wrong TEXT);',
+		]);
+		$s = pfb_metrics_collect();
+		$this->assertFalse($s['source_up']['dnsbl_db']);
+		$this->assertNull($s['dnsbl_groups']);
+		$this->assertNull($s['dnsbl_detail']);
+	}
+
+	public function testExplicitClearResetsDetailsButResolverRolloverRetainsThem(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Ads', '', 5, 12);",
+			'CREATE TABLE dns_metric_blocks (groupname TEXT, qtype TEXT, transport TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('Ads', 'A', 'UDP', 2);",
+		]);
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0, 18, 2);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES ('A', 'UDP', 4);",
+		]);
+		$this->assertCount(1, pfb_metrics_collect()['resolver_detail']);
+		pfBlockerNG_clearsqlite('update_totalqueries', 20);
+		$this->assertCount(1, pfb_metrics_collect()['resolver_detail']);
+		pfBlockerNG_clearsqlite('cleardnsbl');
+		$s = pfb_metrics_collect();
+		$this->assertSame([], $s['dnsbl_detail']);
+		$this->assertSame([], $s['resolver_detail']);
+		$this->assertSame(0, $s['dnsbl_groups'][0]['counter']);
+		$this->assertSame(0, $s['resolver_queries']);
+		$this->assertTrue($s['source_up']['dnsbl_db']);
+		$this->assertTrue($s['source_up']['resolver_db']);
+	}
+
+	public function testGroupRemovalDeletesOnlyItsDetailsAndPreservesOtherCounters(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Ads', '', 5, 12), ('Removed', '', 3, 9), ('Off', '', 'disabled', 8), ('Upstream', '', 0, 3);",
+			'CREATE TABLE dns_metric_blocks (groupname TEXT, qtype TEXT, transport TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('Ads', 'A', 'UDP', 2), ('Removed', 'MX', '', 4), ('Off', 'AAAA', 'TCP', 1), ('Upstream', 'A', '', 3);",
+		]);
+		$this->assertCount(4, pfb_metrics_collect()['dnsbl_detail']);
+		$GLOBALS['pfb']['alias_dnsbl_all'] = ['Ads', 'Off'];
+		$GLOBALS['pfb']['alias_dnsbl_configured'] = ['Ads', 'Off'];
+		$GLOBALS['pfb']['dnsbl_info_stats'] = [
+			['groupname' => 'Ads', 'timestamp' => '', 'entries' => 6],
+			['groupname' => 'Off', 'timestamp' => '', 'entries' => 'disabled'],
+			['groupname' => 'Removed', 'timestamp' => '', 'entries' => 3],
+		];
+		dnsbl_save_stats();
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		$this->assertSame(0, $db->querySingle("SELECT count(*) FROM dns_metric_blocks WHERE groupname = 'Removed'"));
+		$this->assertSame(3, $db->querySingle('SELECT count(*) FROM dns_metric_blocks'));
+		$db->close();
+		$s = pfb_metrics_collect();
+		$this->assertTrue($s['source_up']['dnsbl_db']);
+		$this->assertSame(['Ads', 'Off', 'Upstream'], array_column($s['dnsbl_groups'], 'group'));
+		$this->assertSame([12, 8, 3], array_column($s['dnsbl_groups'], 'counter'));
+		$this->assertSame([6, NULL, 0], array_column($s['dnsbl_groups'], 'entries'));
+	}
+
+	/** Given a removed disabled group and a still-configured disabled group with historical counters. */
+	private function arrangeDisabledGroupRemoval(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('DNSBL_Ads', '', 5, 12), ('DNSBL_Removed', '', 'disabled', 9), ('DNSBL_Off', '', 'disabled', 8), ('Upstream', '', 0, 3);",
+			'CREATE TABLE dns_metric_blocks (groupname TEXT, qtype TEXT, transport TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('DNSBL_Ads', 'A', 'UDP', 2), ('DNSBL_Removed', 'MX', '', 4), ('DNSBL_Off', 'AAAA', 'TCP', 1), ('Upstream', 'A', '', 3);",
+		]);
+		// Complete applied membership includes disabled groups, unlike active aliases.
+		$GLOBALS['pfb']['alias_dnsbl_configured'] = ['DNSBL_Ads', 'DNSBL_Off'];
+		$GLOBALS['pfb']['alias_dnsbl_all'] = ['DNSBL_Ads'];
+		$GLOBALS['pfb']['dnsbl_info_stats'] = [
+			['groupname' => 'DNSBL_Ads', 'timestamp' => '', 'entries' => 6],
+			['groupname' => 'DNSBL_Off', 'timestamp' => '', 'entries' => 'disabled'],
+			['groupname' => 'DNSBL_Removed', 'timestamp' => '', 'entries' => 'disabled'],
+		];
+	}
+
+	public function testRemovedDisabledGroupIsTombstonedButConfiguredDisabledGroupAndReportsSurvive(): void
+	{
+		$this->arrangeDisabledGroupRemoval();
+		$before = pfb_metrics_collect();
+		$this->assertCount(4, $before['dnsbl_detail']);
+		$this->assertContains('DNSBL_Removed', array_column($before['dnsbl_groups'], 'group'));
+
+		dnsbl_save_stats();
+
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		try {
+			$this->assertSame(1, $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'dns_metric_removed_groups'"),
+				'applying removal must create persistent tombstones even in a legacy database');
+			$this->assertSame('DNSBL_Removed', $db->querySingle('SELECT groupname FROM dns_metric_removed_groups'));
+			$this->assertSame(1, $db->querySingle('SELECT count(*) FROM dns_metric_removed_groups'),
+				'configured Off and synthetic Upstream are not removed groups');
+			$this->assertSame('disabled', $db->querySingle("SELECT entries FROM dnsbl WHERE groupname = 'DNSBL_Removed'"));
+			$this->assertSame(9, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname = 'DNSBL_Removed'"),
+				'Reports retain the legacy disabled aggregate row and counter');
+			$this->assertSame(0, $db->querySingle("SELECT count(*) FROM dns_metric_blocks WHERE groupname = 'DNSBL_Removed'"));
+			$this->assertSame(3, $db->querySingle('SELECT count(*) FROM dns_metric_blocks'));
+			$this->assertSame(1, $db->querySingle("SELECT count FROM dns_metric_blocks WHERE groupname = 'DNSBL_Off'"));
+			$this->assertSame(2, $db->querySingle("SELECT count FROM dns_metric_blocks WHERE groupname = 'DNSBL_Ads'"));
+		} finally {
+			$db->close();
+		}
+		$after = pfb_metrics_collect();
+		$this->assertTrue($after['source_up']['dnsbl_db']);
+		$this->assertSame(['DNSBL_Ads', 'DNSBL_Off', 'Upstream'], array_column($after['dnsbl_groups'], 'group'));
+		$this->assertSame([12, 8, 3], array_column($after['dnsbl_groups'], 'counter'));
+		$this->assertStringNotContainsString('group="DNSBL_Removed"', pfb_metrics_render($after));
+	}
+
+	public function testFailedDetailPruneRollsBackTheRemovalTombstoneAndAggregateChanges(): void
+	{
+		$this->arrangeDisabledGroupRemoval();
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_removed_groups (groupname TEXT PRIMARY KEY);',
+			"CREATE TRIGGER refuse_removed_prune BEFORE DELETE ON dns_metric_blocks WHEN OLD.groupname = 'DNSBL_Removed' BEGIN SELECT RAISE(ABORT, 'test refuses detail prune'); END;",
+		]);
+		$this->assertCount(4, pfb_metrics_collect()['dnsbl_detail']);
+
+		dnsbl_save_stats();
+
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		try {
+			$this->assertSame(1, $this->logCount('test refuses detail prune'),
+				'the production transaction must actually attempt the failing detail deletion');
+			$this->assertSame(0, $db->querySingle('SELECT count(*) FROM dns_metric_removed_groups'),
+				'a failed prune cannot commit a tombstone separately');
+			$this->assertSame(4, $db->querySingle('SELECT count(*) FROM dns_metric_blocks'));
+			$this->assertSame(5, $db->querySingle("SELECT entries FROM dnsbl WHERE groupname = 'DNSBL_Ads'"),
+				'aggregate updates must roll back with the failed removal');
+			$this->assertSame(9, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname = 'DNSBL_Removed'"));
+		} finally {
+			$db->close();
+		}
+		$this->assertContains('DNSBL_Removed', array_column(pfb_metrics_collect()['dnsbl_groups'], 'group'));
+	}
+
+	public function testExplicitReaddClearsOnlyThatGroupsTombstoneWithoutResettingItsAggregate(): void
+	{
+		$this->arrangeDisabledGroupRemoval();
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_removed_groups (groupname TEXT PRIMARY KEY);',
+			"INSERT INTO dns_metric_removed_groups VALUES ('DNSBL_Removed'), ('DNSBL_StillRemoved');",
+			"DELETE FROM dns_metric_blocks WHERE groupname = 'DNSBL_Removed';",
+		]);
+		$this->assertNotContains('DNSBL_Removed', array_column(pfb_metrics_collect()['dnsbl_groups'], 'group'));
+
+		$GLOBALS['pfb']['alias_dnsbl_configured'][] = 'DNSBL_Removed';
+		$GLOBALS['pfb']['alias_dnsbl_all'][] = 'DNSBL_Removed';
+		$GLOBALS['pfb']['dnsbl_info_stats'][2]['entries'] = 4;
+		dnsbl_save_stats();
+
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		try {
+			$this->assertSame(0, $db->querySingle("SELECT count(*) FROM dns_metric_removed_groups WHERE groupname = 'DNSBL_Removed'"));
+			$this->assertSame('DNSBL_StillRemoved', $db->querySingle('SELECT groupname FROM dns_metric_removed_groups'));
+			$this->assertSame(9, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname = 'DNSBL_Removed'"));
+			$this->assertSame(4, $db->querySingle("SELECT entries FROM dnsbl WHERE groupname = 'DNSBL_Removed'"));
+			$this->assertSame(0, $db->querySingle("SELECT count(*) FROM dns_metric_blocks WHERE groupname = 'DNSBL_Removed'"),
+				're-adding does not resurrect historical details');
+		} finally {
+			$db->close();
+		}
+		$after = pfb_metrics_collect();
+		$this->assertTrue($after['source_up']['dnsbl_db']);
+		$this->assertContains('DNSBL_Removed', array_column($after['dnsbl_groups'], 'group'));
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"DNSBL_Removed\"} 9\n", pfb_metrics_render($after));
+	}
+
+	public function testPersistedRemovalTombstoneSuppressesEverySeriesDespiteLegacyAggregateAndStaleDetails(): void
+	{
+		$this->arrangeDisabledGroupRemoval();
+		$this->assertStringContainsString('group="DNSBL_Removed"', pfb_metrics_render(pfb_metrics_collect()));
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_removed_groups (groupname TEXT PRIMARY KEY);',
+			"INSERT INTO dns_metric_removed_groups VALUES ('DNSBL_Removed');",
+		]);
+
+		// A new collector connection sees durable removal even if legacy/stale rows survive.
+		$after = pfb_metrics_collect();
+		$this->assertTrue($after['source_up']['dnsbl_db']);
+		$this->assertSame(['DNSBL_Ads', 'DNSBL_Off', 'Upstream'], array_column($after['dnsbl_groups'], 'group'));
+		$this->assertSame(['DNSBL_Ads', 'DNSBL_Off', 'Upstream'], array_column($after['dnsbl_detail'], 'group'));
+		$body = pfb_metrics_render($after);
+		$this->assertStringNotContainsString('group="DNSBL_Removed"', $body);
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"DNSBL_Off\"} 7\n", $body);
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		try {
+			$this->assertSame('disabled', $db->querySingle("SELECT entries FROM dnsbl WHERE groupname = 'DNSBL_Removed'"));
+			$this->assertSame(9, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname = 'DNSBL_Removed'"));
+			$this->assertSame(4, $db->querySingle("SELECT count FROM dns_metric_blocks WHERE groupname = 'DNSBL_Removed'"));
+		} finally {
+			$db->close();
+		}
+	}
+
+	/** @return array<string,array{0:bool}> */
+	public static function unavailableConfiguredMembershipProvider(): array
+	{
+		return ['absent' => [FALSE], 'null' => [TRUE]];
+	}
+
+	#[DataProvider('unavailableConfiguredMembershipProvider')]
+	public function testUnavailableConfiguredMembershipDoesNotPruneDetailsOrInventTombstones(bool $present): void
+	{
+		$this->arrangeDisabledGroupRemoval();
+		unset($GLOBALS['pfb']['alias_dnsbl_configured']);
+		if ($present) {
+			$GLOBALS['pfb']['alias_dnsbl_configured'] = NULL;
+		}
+		$this->assertCount(4, pfb_metrics_collect()['dnsbl_detail']);
+
+		dnsbl_save_stats();
+
+		$after = pfb_metrics_collect();
+		$this->assertTrue($after['source_up']['dnsbl_db']);
+		$this->assertCount(4, $after['dnsbl_detail'],
+			'unknown configured membership is not evidence that a group was removed');
+		$this->assertContains('DNSBL_Removed', array_column($after['dnsbl_groups'], 'group'));
+	}
+
+	public function testExplicitlyEmptyConfiguredMembershipRemovesConfiguredGroupsButNotSyntheticUpstream(): void
+	{
+		$this->arrangeDisabledGroupRemoval();
+		$GLOBALS['pfb']['alias_dnsbl_configured'] = [];
+		$GLOBALS['pfb']['alias_dnsbl_all'] = [];
+		$this->assertCount(4, pfb_metrics_collect()['dnsbl_detail']);
+
+		dnsbl_save_stats();
+
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		try {
+			$this->assertSame(1, $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'dns_metric_removed_groups'"));
+			$this->assertSame(3, $db->querySingle('SELECT count(*) FROM dns_metric_removed_groups'));
+			$this->assertSame(0, $db->querySingle("SELECT count(*) FROM dns_metric_removed_groups WHERE groupname = 'Upstream'"));
+			$this->assertSame(1, $db->querySingle('SELECT count(*) FROM dns_metric_blocks'));
+			$this->assertSame('Upstream', $db->querySingle('SELECT groupname FROM dns_metric_blocks'));
+			$this->assertSame(8, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname = 'DNSBL_Off'"));
+		} finally {
+			$db->close();
+		}
+		$this->assertSame(['Upstream'], array_column(pfb_metrics_collect()['dnsbl_groups'], 'group'));
+	}
+
+	public function testGroupRemovalAndExplicitClearAlsoWorkBeforeDetailTablesExist(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Ads', '', 5, 12), ('Removed', '', 3, 9);",
+		]);
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0, 18, 2);',
+		]);
+		$GLOBALS['pfb']['alias_dnsbl_all'] = ['Ads'];
+		$GLOBALS['pfb']['alias_dnsbl_configured'] = ['Ads'];
+		$GLOBALS['pfb']['dnsbl_info_stats'] = [
+			['groupname' => 'Ads', 'timestamp' => '', 'entries' => 5],
+			['groupname' => 'Removed', 'timestamp' => '', 'entries' => 3],
+		];
+		dnsbl_save_stats();
+		$this->assertSame(['Ads'], array_column(pfb_metrics_collect()['dnsbl_groups'], 'group'));
+		pfBlockerNG_clearsqlite('cleardnsbl');
+		$s = pfb_metrics_collect();
+		$this->assertTrue($s['source_up']['dnsbl_db']);
+		$this->assertTrue($s['source_up']['resolver_db']);
+		$this->assertSame(0, $s['dnsbl_groups'][0]['counter']);
+		$this->assertSame(0, $s['resolver_queries']);
+		$this->assertSame([], $s['dnsbl_detail']);
+		$this->assertSame([], $s['resolver_detail']);
+	}
+
+	public function testCollectorReadsCommittedCounterPairsWhileAnotherWriterHasAPendingUpdate(): void
+	{
+		$path = $GLOBALS['pfb']['dnsbl_resolver'];
+		$this->sqlite($path, [
+			'PRAGMA journal_mode = WAL;',
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0, 18, 2);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES ('A', 'UDP', 4);",
+		]);
+		$writer = new SQLite3($path);
+		try {
+			$writer->exec('BEGIN IMMEDIATE');
+			$writer->exec('UPDATE resolver SET queries = 3 WHERE row = 0');
+			$pending = pfb_metrics_collect();
+			$this->assertTrue($pending['source_up']['resolver_db']);
+			$this->assertSame(20, $pending['resolver_queries']);
+			$this->assertSame(4, $pending['resolver_detail'][0]['count']);
+			$writer->exec('UPDATE dns_metric_queries SET count = 5');
+			$writer->exec('COMMIT');
+		} finally {
+			$writer->close();
+		}
+		$committed = pfb_metrics_collect();
+		$this->assertSame(21, $committed['resolver_queries']);
+		$this->assertSame(5, $committed['resolver_detail'][0]['count']);
+	}
+
+	public function testFailedGroupDetailCleanupRollsBackAggregateRemoval(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Removed', '', 5, 12);",
+			'CREATE TABLE dns_metric_blocks (wrong TEXT);',
+		]);
+		$GLOBALS['pfb']['alias_dnsbl_all'] = [];
+		$GLOBALS['pfb']['alias_dnsbl_configured'] = [];
+		$GLOBALS['pfb']['dnsbl_info_stats'] = [['groupname' => 'Removed', 'timestamp' => '', 'entries' => 5]];
+		dnsbl_save_stats();
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		$this->assertSame(12, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname = 'Removed'"));
+		$db->close();
+	}
+
+	public function testEmptyStatsStillDropsTheAggregateTableAndClearsAllDetails(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Upstream', '', 0, 3);",
+			'CREATE TABLE dns_metric_blocks (groupname TEXT, qtype TEXT, transport TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('Upstream', 'A', '', 3);",
+		]);
+		$GLOBALS['pfb']['dnsbl_info_stats'] = [];
+		dnsbl_save_stats();
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info'], SQLITE3_OPEN_READONLY);
+		$this->assertSame(0, $db->querySingle("SELECT count(*) FROM sqlite_master WHERE name = 'dnsbl'"));
+		$this->assertSame(0, $db->querySingle('SELECT count(*) FROM dns_metric_blocks'));
+		$db->close();
 	}
 
 	public function testCollectReadsDnsblGroupsAndResolverTotals(): void

@@ -5,6 +5,7 @@ import json
 import queue
 import random
 import re
+import sqlite3
 import sys
 import threading
 import types
@@ -65,6 +66,18 @@ from pfb_unbound import (
     tld_wildcard_classify,
     whitelist_check_domain,
 )
+
+
+@pytest.fixture
+def dnsbl_counter_db(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[sqlite3.Connection]:
+    pfb_unbound.pfb.update(pfb_py_dnsbl=str(tmp_path / "dnsbl.sqlite"), sqlite3_dnsbl_con=True, db_worker=False)
+    monkeypatch.setattr(pfb_unbound, "pfb_db_queue", queue.Queue(), raising=False)
+    assert pfb_unbound.pfb_db_validate(pfb_unbound.DB_DNSBL), "failed to initialize DNSBL statistics"
+    try:
+        yield pfb_unbound._db_conns[pfb_unbound.DB_DNSBL]
+    finally:
+        pfb_unbound.pfb["db_worker"] = False
+        pfb_unbound._db_close(pfb_unbound.DB_DNSBL)
 
 
 def _psl_rules(lines: list[str], *_ignored: object) -> pfb_unbound.PslRules:
@@ -1143,24 +1156,28 @@ class TestGetDetailsDnsblNodata:
         lines = self._emit(monkeypatch, "6")
         assert lines == [], f"expected [], got {lines!r}"
 
-    def _counter_calls(self, monkeypatch: Any, log_type: str) -> list[Any]:
+    def _counter(self, monkeypatch: Any, log_type: str, con: sqlite3.Connection) -> int:
         monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
-        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", True)
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
-        calls: list[Any] = []
-        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda item: calls.append(item))
+        con.execute("INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES ('G', '', 0, 0)")
+        con.commit()
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G'").fetchall() == [(0,)]
         pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(), {"pfb_addr": "1.2.3.4"}, self._dnsbl(log_type))
-        return calls
+        return con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G'").fetchone()[0]
 
-    def test_nodata_logging_increments_group_counter(self, monkeypatch: Any) -> None:
-        calls = self._counter_calls(monkeypatch, "5")
-        assert ("dnsbl", "G") in calls, f"expected ('dnsbl', 'G') in {calls!r}"
+    def test_nodata_logging_increments_group_counter(
+        self, monkeypatch: Any, dnsbl_counter_db: sqlite3.Connection
+    ) -> None:
+        counter = self._counter(monkeypatch, "5", dnsbl_counter_db)
+        assert counter == 1, f"expected one logged NODATA block, got {counter}"
 
-    def test_nodata_no_logging_still_increments_group_counter(self, monkeypatch: Any) -> None:
+    def test_nodata_no_logging_still_increments_group_counter(
+        self, monkeypatch: Any, dnsbl_counter_db: sqlite3.Connection
+    ) -> None:
         # Silencing the log must not suppress the group counter.
-        calls = self._counter_calls(monkeypatch, "6")
-        assert ("dnsbl", "G") in calls, f"expected ('dnsbl', 'G') in {calls!r}"
+        counter = self._counter(monkeypatch, "6", dnsbl_counter_db)
+        assert counter == 1, f"expected one silent NODATA block, got {counter}"
 
 
 class TestGetDetailsDnsblUnsetGuard:
@@ -2708,10 +2725,23 @@ class TestAttributionSurvivesRace:
         monkeypatch: Any,
         name: str,
         foreign_action: Callable[[pfb_unbound._LruCache], None] | None,
-    ) -> tuple[bool, Any, list[list[str]], list[Any]]:
+        con: sqlite3.Connection,
+    ) -> tuple[bool, Any, list[list[str]]]:
         self._enable(monkeypatch)
         add_data(name, log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
+        con.executemany(
+            "INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES (?, '', 0, 0)",
+            [("TestGroup",), ("grp_gen2",)],
+        )
+        con.commit()
+        assert con.execute("SELECT groupname, counter FROM dnsbl ORDER BY groupname").fetchall() == [
+            ("TestGroup", 0),
+            ("Upstream", 0),
+            ("grp_gen2", 0),
+        ]
+        pfb_unbound.pfb["db_worker"] = True
+        enqueue = pfb_unbound.pfb_db_enqueue
 
         # Plain decisionDB stand-in -- foreign_action mutates it directly. The race
         # window is anchored on get_details_dnsbl()'s live per-group counter enqueue,
@@ -2724,11 +2754,10 @@ class TestAttributionSurvivesRace:
         fired = threading.Event()
 
         lines: list[tuple[str, str]] = []
-        enqueued: list[Any] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
 
         def enqueue_hook(item: Any) -> None:
-            enqueued.append(item)
+            enqueue(item)
             if not fired.is_set() and item[0] == "dnsbl":
                 fired.set()
                 window_q.put("window")
@@ -2759,7 +2788,18 @@ class TestAttributionSurvivesRace:
         assert fired.is_set(), "race window never opened -- foreign injection never engaged"
 
         dnsbl_fields = [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]
-        return rcd, qstate, dnsbl_fields, enqueued
+        pfb_unbound.pfb_db_queue.put(("stop",))
+        pfb_unbound.pfb_db_worker()
+        assert pfb_unbound.pfb_db_queue.unfinished_tasks == 0, "counter worker did not drain"
+        assert con.execute("SELECT groupname, counter FROM dnsbl ORDER BY groupname").fetchall() == [
+            ("TestGroup", 1),
+            ("Upstream", 0),
+            ("grp_gen2", 0),
+        ]
+        assert con.execute("SELECT groupname, SUM(count) FROM dns_metric_blocks GROUP BY groupname").fetchall() == [
+            ("TestGroup", 1)
+        ]
+        return rcd, qstate, dnsbl_fields
 
     @staticmethod
     def _assert_block_genuinely_served(rcd: bool, qstate: Any) -> None:
@@ -2771,7 +2811,9 @@ class TestAttributionSurvivesRace:
         answers = DNSMessage.instances[-1].answer
         assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers), answers
 
-    def test_attribution_survives_foreign_generation_block_overwrite(self, monkeypatch: Any) -> None:
+    def test_attribution_survives_foreign_generation_block_overwrite(
+        self, monkeypatch: Any, dnsbl_counter_db: sqlite3.Connection
+    ) -> None:
         # Scenario: a thread on a NEWER snapshot generation writes a DIFFERENT block
         # (different feed/group) for the SAME name into decisionDB while this query's
         # block is in flight. Given a served TestFeed/TestGroup block, When a foreign
@@ -2794,7 +2836,7 @@ class TestAttributionSurvivesRace:
                 snap_gen=live_gen + 1,
             )
 
-        rcd, qstate, dnsbl_fields, enqueued = self._run_race(monkeypatch, "race-r1.com", foreign_overwrite)
+        rcd, qstate, dnsbl_fields = self._run_race(monkeypatch, "race-r1.com", foreign_overwrite, dnsbl_counter_db)
         self._assert_block_genuinely_served(rcd, qstate)
 
         assert len(dnsbl_fields) == 1, f"expected exactly one dnsbl.log line, got {dnsbl_fields}"
@@ -2803,9 +2845,10 @@ class TestAttributionSurvivesRace:
             f"expected feed=TestFeed group=TestGroup (the SERVED verdict), got "
             f"feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup") in enqueued, enqueued
 
-    def test_attribution_survives_foreign_generation_allow_overwrite(self, monkeypatch: Any) -> None:
+    def test_attribution_survives_foreign_generation_allow_overwrite(
+        self, monkeypatch: Any, dnsbl_counter_db: sqlite3.Connection
+    ) -> None:
         # Scenario: a foreign-generation thread overwrites the same-name entry with an
         # ALLOW verdict (is_found False) mid-flight. Given a served TestFeed block,
         # When the foreign allow lands before attribution, Then the line must still be
@@ -2816,7 +2859,7 @@ class TestAttributionSurvivesRace:
         def foreign_allow(cache: pfb_unbound._LruCache) -> None:
             cache["race-r2.com"] = pfb_unbound.Decision(dnsbl=_dnsbl_decision(), snap_gen=live_gen + 1)
 
-        rcd, qstate, dnsbl_fields, enqueued = self._run_race(monkeypatch, "race-r2.com", foreign_allow)
+        rcd, qstate, dnsbl_fields = self._run_race(monkeypatch, "race-r2.com", foreign_allow, dnsbl_counter_db)
         self._assert_block_genuinely_served(rcd, qstate)
 
         assert len(dnsbl_fields) == 1, f"expected the block to still be logged, got {dnsbl_fields}"
@@ -2824,9 +2867,8 @@ class TestAttributionSurvivesRace:
         assert (feed, group) == ("TestFeed", "TestGroup"), (
             f"expected feed=TestFeed group=TestGroup, got feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup") in enqueued, enqueued
 
-    def test_attribution_survives_swap_clear(self, monkeypatch: Any) -> None:
+    def test_attribution_survives_swap_clear(self, monkeypatch: Any, dnsbl_counter_db: sqlite3.Connection) -> None:
         # Scenario: rebuild_and_swap()'s decisionDB.clear() (modelled here as a
         # single-entry delete) removes the same-name entry mid-flight. Given a served
         # TestFeed block, When the entry is deleted before attribution, Then the line
@@ -2835,7 +2877,7 @@ class TestAttributionSurvivesRace:
         def foreign_delete(cache: pfb_unbound._LruCache) -> None:
             del cache["race-r3.com"]
 
-        rcd, qstate, dnsbl_fields, enqueued = self._run_race(monkeypatch, "race-r3.com", foreign_delete)
+        rcd, qstate, dnsbl_fields = self._run_race(monkeypatch, "race-r3.com", foreign_delete, dnsbl_counter_db)
         self._assert_block_genuinely_served(rcd, qstate)
 
         assert len(dnsbl_fields) == 1, f"expected the block to still be logged, got {dnsbl_fields}"
@@ -2843,7 +2885,6 @@ class TestAttributionSurvivesRace:
         assert (feed, group) == ("TestFeed", "TestGroup"), (
             f"expected feed=TestFeed group=TestGroup, got feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup") in enqueued, enqueued
 
 
 class TestAttributionMemoPath:

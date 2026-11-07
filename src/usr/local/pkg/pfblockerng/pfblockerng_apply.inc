@@ -1755,6 +1755,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	// Define DNSBL arrays and variables
 	$pfb['alias_dnsbl_all']		= array();	// Array of all DNSBL aliases
+	$pfb['alias_dnsbl_configured']	= NULL;		// NULL until the applicable DNSBL configuration is collected
 	$dnsbl_tld_group_counts		= array();	// Deferred DNSBL group counts for TLD-mode statistics
 	$pfb['domain_update']		= FALSE;	// Flag to signal update Unbound
 	$pfb['dnsbl_publish_failed']	= FALSE;	// Fixed TOP1M/manifest publication failed; suppress reload
@@ -1776,6 +1777,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	}
 
 	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save'] && !$dnsbl_error) {
+		$pfb['alias_dnsbl_configured'] = array();
 		if ((config_get_path('installedpackages/pfblockerngdnsbl/config') != null) ||
 		    (config_get_path('installedpackages/pfblockerngblacklist/blacklist_enable') == 'Enable')) {
 
@@ -2238,6 +2240,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					pfb_logger("\n Invalid Aliasname:{$list['aliasname']}, *skipping*", 1);
 					continue;
 				}
+				$pfb['alias_dnsbl_configured'][] = $alias;
 				// issue #3648: the Group's "TOP1M Whitelist" box, carried into every feed's manifest row.
 				$filter_top1m = $list['filter_top1m'] ?? NULL;
 
@@ -3054,9 +3057,18 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			dnsbl_stats_update('update', 'DNSBL_Regex', $regex_cnt);
 		}
 
+		// TLD statistics are deferred, but its configured synthetic alias already exists.
+		if ($pfb['dnsbl_tld_wildcard'] && in_array('DNSBL_TLD', $pfb['existing']['dnsbl'] ?? array(), TRUE)) {
+			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD';
+		}
+
 		// Save DNSBL Alias statistics (Not for TLD mode)
 		if ($pfb['domain_update'] && !$pfb['dnsbl_tld_wildcard']) {
 			dnsbl_save_stats();
+		}
+		else {
+			// Removal-only applies must reconcile metrics without rewriting Reports statistics.
+			dnsbl_save_stats(TRUE);
 		}
 	}
 

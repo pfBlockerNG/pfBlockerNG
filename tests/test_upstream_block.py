@@ -388,68 +388,46 @@ class TestClassifyUpstreamBlockAAGuard:
 
 
 # ---------------------------------------------------------------------------
-# _log_upstream_block — sqlite3_dnsbl_con guard (counter enqueue)
+# _log_upstream_block — sqlite3_dnsbl_con guard
 # ---------------------------------------------------------------------------
 
 
 class TestLogUpstreamBlockCounterEnqueue:
-    """Scenario: _log_upstream_block enqueues a dnsbl counter task iff sqlite3_dnsbl_con is truthy.
-
-    Background:
-        The function writes CSV to dnsbl.log, then — when the SQLite
-        DNSBL connection is active — calls pfb_db_enqueue(("dnsbl", "Upstream")) to
-        increment the aggregate Upstream row counter.  The guard ``if pfb["sqlite3_dnsbl_con"]``
-        must be the discriminator: the enqueue fires when truthy and is suppressed when falsy.
-
-    Given:
-        A valid UpstreamBlock result (NXRA signal, no provider) and a monkeypatched
-        pfb_db_enqueue that records calls.  pfb_log is patched to a no-op so no real
-        file I/O occurs.
-    """
+    """Upstream blocks increment persistent counters only while statistics are enabled."""
 
     _RESULT = UpstreamBlock(signal="NXRA", label="NXRA", provider="")
 
-    def test_enqueues_upstream_counter_when_connection_active(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """
-        When sqlite3_dnsbl_con is truthy, _log_upstream_block enqueues ("dnsbl", "Upstream").
+    @staticmethod
+    def _connect(tmp_path: Any) -> sqlite3.Connection:
+        pfb_unbound.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+        assert pfb_db_validate(DB_DNSBL), "failed to initialize DNSBL statistics"
+        return pfb_unbound._db_conns[DB_DNSBL]
 
-        Before-state (con=False): no enqueue occurs (proven in the companion test).
-        After-state (con=True): exactly one ("dnsbl", "Upstream") task is enqueued.
-        """
-        calls: list[tuple[str, ...]] = []
-        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda task: calls.append(task))
+    def test_enqueues_upstream_counter_when_connection_active(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        con = self._connect(tmp_path)
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda _log, _line: None)
-
-        # Before: connection inactive -> no enqueue (verified in companion test; establish
-        # that the initial fixture state is falsy so the flip is meaningful).
-        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
-
-        # Flip to active.
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchall() == [(0,)]
         pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
 
-        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A")
+        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A", "DoH")
 
-        dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
-        assert dnsbl_tasks == [("dnsbl", "Upstream")], f"Expected exactly one ('dnsbl', 'Upstream') task; got: {calls}"
+        assert con.execute("SELECT groupname, counter FROM dnsbl").fetchall() == [("Upstream", 1)]
+        assert con.execute("SELECT groupname, qtype, transport, count FROM dns_metric_blocks").fetchall() == [
+            ("Upstream", "A", "DoH", 1)
+        ]
 
-    def test_no_enqueue_when_connection_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """
-        When sqlite3_dnsbl_con is falsy, _log_upstream_block does NOT enqueue any dnsbl task.
-
-        This is the discriminating before-state: same function call, con=False -> no task.
-        Proves the guard is real and the counter is not always incremented.
-        """
-        calls: list[tuple[str, ...]] = []
-        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda task: calls.append(task))
+    def test_no_enqueue_when_connection_inactive(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        con = self._connect(tmp_path)
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda _log, _line: None)
-
-        # Fixture default: sqlite3_dnsbl_con is False (see conftest reset_pfb_globals).
         assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchall() == [(0,)]
 
         _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A")
 
-        dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
-        assert dnsbl_tasks == [], f"Expected no dnsbl enqueue with sqlite3_dnsbl_con=False; got: {calls}"
+        assert con.execute("SELECT groupname, counter FROM dnsbl").fetchall() == [("Upstream", 0)]
+        assert con.execute("SELECT * FROM dns_metric_blocks").fetchall() == []
 
 
 # ---------------------------------------------------------------------------
