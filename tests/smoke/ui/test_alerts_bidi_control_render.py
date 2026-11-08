@@ -23,6 +23,7 @@ import pytest
 
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render
+from .test_dns_stats_review import _stats_data
 
 if TYPE_CHECKING:
     from ..helpers import SmokeVM
@@ -96,7 +97,7 @@ def test_bidi_override_does_not_reach_the_rendered_cell(
     result = evaluate_render(STATS_PAGE, resp.status_code, resp.text, ("Alert Settings",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
 
-    body = resp.text
+    body = "".join(panel["html"] for panel in _stats_data(webui, "dnsbl_stat")["panels"])
     # Fixture sanity first: a page that never rendered the row would pass the bidi
     # assertion vacuously.
     assert "evil-rv2041" in body, "the seeded dnsbl.log row did not render at all -- fixture broken, not a #2041 signal"

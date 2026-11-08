@@ -14,6 +14,7 @@ import pytest
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render
 from .test_alerts_render_verify import _backup_seeded_files, _restore_seeded_files
+from .test_dns_stats_review import _stats_data
 
 if TYPE_CHECKING:
     from ..conftest import SmokeVM
@@ -138,7 +139,7 @@ def test_dns_stats_csv_labels_and_exact_hour_counts(
     path = f"/var/log/pfblockerng/{log}"
     cfg = f"installedpackages/pfblockerngglobal/{preference}"
     original = helpers.config_get_state(vm, cfg)
-    backups = _backup_seeded_files(vm, (path, "/usr/local/www/pfblockerng/chart_stats.csv"))
+    backups = _backup_seeded_files(vm, (path,))
     guard = PhpErrorLogGuard(vm)
     guard.snapshot()
     try:
@@ -162,14 +163,16 @@ def test_dns_stats_csv_labels_and_exact_hour_counts(
         result = evaluate_render(page, response.status_code, response.text, (title,))
         assert result.ok, result.detail
         # Labels and their counts must survive CSV quoting, not split at the comma.
-        text = html.unescape(response.text)
+        payload = _stats_data(webui, view)
+        text = html.unescape("".join(panel["html"] for panel in payload["panels"]))
         assert label in text, f"CSV label {label!r} missing from {view}"
         assert re.search(r"<td[^>]*>\s*3\s*</td>\s*<td[^>]*>" + re.escape(label) + r"</td>", text), (
             f"CSV label {label!r} did not render an exact count of 3 in {view}"
         )
-        chart = vm.ssh("cat", "/usr/local/www/pfblockerng/chart_stats.csv", timeout=15)
-        assert chart.returncode == 0, chart.stderr
-        assert chart.stdout == "edate,ecount\n2031-02-15 (09),2\n2031-02-16 (10),1\n", chart.stdout
+        assert payload["timeline"] == [
+            {"edate": "2031-02-15 (09)", "ecount": 2},
+            {"edate": "2031-02-16 (10)", "ecount": 1},
+        ]
         guard.assert_no_growth()
     finally:
         errors = _restore_seeded_files(vm, backups)

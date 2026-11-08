@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .render_oracle import PhpErrorLogGuard, evaluate_render
+from .test_dns_stats_review import _stats_data
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -40,7 +41,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_render
 
 DNSBL_LOG = "/var/log/pfblockerng/dnsbl.log"
-CHART_STATS_CSV = "/usr/local/www/pfblockerng/chart_stats.csv"
 ALERTS_DNSBL_STAT_PAGE = "/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat"
 
 # Fixed, clearly-synthetic dates (never the wall clock, never helpers.unique_domain()
@@ -116,7 +116,8 @@ def test_alerts_dnsbl_stat_renders_iso_day_bucket_and_hourly_chart(
     result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("DNSBL Block Stats",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
 
-    body = resp.text
+    payload = _stats_data(webui, "dnsbl_stat")
+    body = "".join(panel["html"] for panel in payload["panels"])
     assert DAY_1 in body, f"day bucket {DAY_1!r} not rendered -- day-bucket grouping is broken"
     assert DAY_2 in body, f"day bucket {DAY_2!r} not rendered -- day-bucket grouping is broken"
     # The pre-fix bug ('cut -d \' \' -f1-2' on a 2-space-token ISO line) makes every
@@ -125,11 +126,8 @@ def test_alerts_dnsbl_stat_renders_iso_day_bucket_and_hourly_chart(
         "a full per-second timestamp rendered as its own row key -- the day-bucket field-selection regression is back"
     )
 
-    chart = smoke_vm.ssh("cat", CHART_STATS_CSV, timeout=15)
-    assert chart.returncode == 0, f"failed to read {CHART_STATS_CSV}: stderr={chart.stderr!r}"
-    assert f"{DAY_1} (09)," in chart.stdout, (
-        f"hourly chart label missing the correct hour for {DAY_1} 09:00 -- got: {chart.stdout!r}"
-    )
-    assert "()," not in chart.stdout, f"hourly chart shows an EMPTY hour field -- got: {chart.stdout!r}"
+    chart = payload["timeline"]
+    assert any(point["edate"] == f"{DAY_1} (09)" for point in chart), chart
+    assert all("()" not in point["edate"] for point in chart), chart
 
     guard.assert_no_growth()

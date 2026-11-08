@@ -581,6 +581,16 @@ class Capture:
     status: int
     body: str
     elapsed: float
+    stats: dict[str, Any] | None = None
+
+
+def _capture_stats(webui: WebUI, key: str, path: str) -> dict[str, Any] | None:
+    if key not in ("dnsbl_stat", "dnsbl_reply_stat"):
+        return None
+    response = webui.get(path + "&stats_data=1")
+    assert response.status_code == 200
+    assert "application/json" in response.headers.get("content-type", "")
+    return response.json()
 
 
 GET_MATRIX: list[tuple[str, str]] = [
@@ -635,6 +645,8 @@ def _write_diagnostics(baseline: dict[str, Capture], captures: dict[str, Capture
             tag = f"{label}_{key}"
             timings[tag] = cap.elapsed
             (bodies_dir / f"{tag}.html").write_text(cap.body, encoding="utf-8")
+            if cap.stats is not None:
+                (bodies_dir / f"{tag}.json").write_text(json.dumps(cap.stats, indent=2), encoding="utf-8")
             for idx, region in enumerate(_extract_tbody_regions(cap.body)):
                 region_bytes = region.encode("utf-8")
                 (regions_dir / f"{tag}_{idx}.html").write_bytes(region_bytes)
@@ -768,7 +780,9 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
             resp = webui.get(path)
             elapsed = time.perf_counter() - t0
             assert not looks_like_login_page(resp.text), f"baseline GET {path!r} returned the login form"
-            baseline[key] = Capture(status=resp.status_code, body=resp.text, elapsed=elapsed)
+            baseline[key] = Capture(
+                status=resp.status_code, body=resp.text, elapsed=elapsed, stats=_capture_stats(webui, key, path)
+            )
 
         # (2) SEED every log/file row this module's scenarios need.
         _seed_feed_files(vm)
@@ -789,7 +803,9 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
             resp = webui.get(path)
             elapsed = time.perf_counter() - t0
             assert not looks_like_login_page(resp.text), f"GET {path!r} returned the login form"
-            captures[key] = Capture(status=resp.status_code, body=resp.text, elapsed=elapsed)
+            captures[key] = Capture(
+                status=resp.status_code, body=resp.text, elapsed=elapsed, stats=_capture_stats(webui, key, path)
+            )
 
         _write_diagnostics(baseline, captures)
 
@@ -875,7 +891,7 @@ def test_baseline_excludes_seed_tokens(render_diff_state: dict[str, dict[str, Ca
         for token in (D1_DOMAIN, S1_ALIAS, D1_LOGGED_GROUP, FEED_A_NAME, "rv809"):
             if token in url_echoed.get(key, set()):
                 continue
-            assert token not in cap.body, (
+            assert token not in cap.body and token not in json.dumps(cap.stats), (
                 f"baseline capture {key!r} already contains {token!r} before any seeding -- "
                 f"cannot prove a later assertion is caused by this module's seed"
             )
@@ -1275,7 +1291,9 @@ def test_unified_filterip_narrows_ip_rows(render_diff_state: dict[str, dict[str,
 
 def test_dnsbl_stat_view_renders_seeded_token(render_diff_state: dict[str, dict[str, Capture]]) -> None:
     """?view=dnsbl_stat renders a panel containing a seeded DNSBL domain."""
-    body = render_diff_state["captures"]["dnsbl_stat"].body
+    stats = render_diff_state["captures"]["dnsbl_stat"].stats
+    assert stats is not None
+    body = "".join(panel["html"] for panel in stats["panels"])
     assert D1_DOMAIN in body, f"dnsbl_stat view missing the seeded domain {D1_DOMAIN!r}"
 
 
@@ -1299,7 +1317,9 @@ def test_ip_match_stat_view_renders_seeded_token(render_diff_state: dict[str, di
 
 def test_dnsbl_reply_stat_view_renders_seeded_token(render_diff_state: dict[str, dict[str, Capture]]) -> None:
     """?view=dnsbl_reply_stat renders a panel containing a seeded DNS Reply domain."""
-    body = render_diff_state["captures"]["dnsbl_reply_stat"].body
+    stats = render_diff_state["captures"]["dnsbl_reply_stat"].stats
+    assert stats is not None
+    body = "".join(panel["html"] for panel in stats["panels"])
     assert DNS_REPLY_1[4] in body, f"dnsbl_reply_stat view missing the seeded reply domain {DNS_REPLY_1[4]!r}"
 
 

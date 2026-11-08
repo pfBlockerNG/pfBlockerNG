@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .render_oracle import PhpErrorLogGuard, evaluate_render
+from .test_dns_stats_review import _stats_data
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -100,19 +101,14 @@ def test_alerts_total_event_count_matches_exact_seeded_line_count(webui: WebUI, 
     resp = webui.get(ALERTS_DNSBL_STAT_PAGE)
     result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("DNSBL Block Stats",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
-    assert "[ 3 ]" in resp.text, (
-        f'expected "Total event(s): [ 3 ]" for 3 seeded rows, not found in body (status={resp.status_code})'
-    )
+    assert _stats_data(webui, "dnsbl_stat")["total"] == 3
 
     # Scenario: + one dangling (unterminated) final row -> must still be counted.
     _write_log(vm, _ROW * 3 + _ROW.rstrip("\n"))
     resp = webui.get(ALERTS_DNSBL_STAT_PAGE)
     result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("DNSBL Block Stats",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
-    assert "[ 4 ]" in resp.text, (
-        'expected "Total event(s): [ 4 ]" (3 terminated + 1 dangling row) -- '
-        f"a dangling final line must still be counted, not found in body (status={resp.status_code})"
-    )
+    assert _stats_data(webui, "dnsbl_stat")["total"] == 4
 
     guard.assert_no_growth()
 
@@ -135,8 +131,6 @@ def test_alerts_total_event_count_is_zero_when_log_absent(webui: WebUI, _dnsbl_l
     resp = webui.get(ALERTS_DNSBL_STAT_PAGE)
     result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("DNSBL Block Stats",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
-    assert "[ 0 ]" in resp.text, (
-        f'expected "Total event(s): [ 0 ]" for a missing log, not found in body (status={resp.status_code})'
-    )
+    assert _stats_data(webui, "dnsbl_stat")["total"] == 0
 
     guard.assert_no_growth()

@@ -4807,6 +4807,15 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 	$stats = array_fill_keys(array_keys($stat_info), []);
 	$chart = [];
 	$total = 0;
+	$tld_levels = ['dnsbltld' => 1, 'replytld' => 1, 'replytld2' => 2, 'replytld3' => 3];
+	$tld_depths = array_intersect_key($stat_info, $tld_levels);
+	$tld_column = $tld_depths ? $stat_info[array_key_first($tld_depths)] - 1 : 0;
+	foreach ($tld_depths as $type => &$depth) {
+		$depth = $tld_levels[$type];
+	}
+	unset($depth);
+	arsort($tld_depths, SORT_NUMERIC);
+	$scan_info = array_diff_key($stat_info, $tld_depths);
 	$handle = $stat_info ? @fopen($path, 'r') : FALSE;
 	if ($handle !== FALSE) {
 		while (($line = fgets($handle)) !== FALSE) {
@@ -4835,8 +4844,7 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 			$is_iso = preg_match('/^[0-9]{4}-/', $date) === 1;
 			$date_parts = explode(':', $date, 3);
 			$hour = $date_parts[0];
-			$domain_parts = NULL;
-			foreach ($stat_info as $type => $column) {
+			foreach ($scan_info as $type => $column) {
 				$value = $fields[$column - 1] ?? '';
 				switch ($type) {
 					case 'dnsbldate':
@@ -4878,17 +4886,6 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 					case 'replysrcipd':
 						$value .= ',' . ($fields[7] ?? '');
 						break;
-					case 'dnsbltld':
-					case 'replytld':
-					case 'replytld2':
-					case 'replytld3':
-						$domain_parts ??= explode('.', $value);
-						$depth = $type === 'replytld3' ? 3 : ($type === 'replytld2' ? 2 : 1);
-						if (count($domain_parts) < max(2, $depth)) {
-							continue 2;
-						}
-						$value = implode('.', array_slice($domain_parts, -$depth));
-						break;
 				}
 				$value = trim($value);
 				if ($value === '-' || $value === '+' || str_ends_with($value, ' -') || str_ends_with($value, ' +')) {
@@ -4896,8 +4893,38 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 				}
 				$stats[$type][$value] = ($stats[$type][$value] ?? 0) + 1;
 			}
+			if ($tld_depths) {
+				$domain_parts = explode('.', $fields[$tld_column] ?? '');
+				$label_count = count($domain_parts);
+				if ($label_count >= 2) {
+					foreach ($tld_depths as $type => $depth) {
+						if ($label_count < $depth) {
+							continue;
+						}
+						$value = trim(implode('.', array_slice($domain_parts, -$depth)));
+						if ($value !== '-' && $value !== '+' && !str_ends_with($value, ' -') && !str_ends_with($value, ' +')) {
+							$stats[$type][$value] = ($stats[$type][$value] ?? 0) + 1;
+						}
+						break;
+					}
+				}
+			}
 		}
 		fclose($handle);
+	}
+	// Derive shallower selected levels from distinct suffixes, not every log row.
+	$previous_type = NULL;
+	foreach ($tld_depths as $type => $depth) {
+		if ($previous_type !== NULL) {
+			foreach ($stats[$previous_type] as $suffix => $frequency) {
+				$value = trim(implode('.', array_slice(explode('.', (string) $suffix), -$depth)));
+				if ($value === '-' || $value === '+' || str_ends_with($value, ' -') || str_ends_with($value, ' +')) {
+					continue;
+				}
+				$stats[$type][$value] = ($stats[$type][$value] ?? 0) + $frequency;
+			}
+		}
+		$previous_type = $type;
 	}
 	foreach ($stats as $type => &$buckets) {
 		if ($type === 'dnsbldate' || $type === 'replydate') {

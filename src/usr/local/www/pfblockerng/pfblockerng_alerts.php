@@ -26,7 +26,25 @@
 
 require_once('util.inc');
 require_once('guiconfig.inc');
+
+$stats_data = isset($_GET['stats_data']);
+if ($stats_data) {
+	header('Content-Type: application/json; charset=utf-8');
+	header('Cache-Control: no-store');
+	if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+		header('Allow: GET');
+		http_response_code(405);
+		echo json_encode(['error' => ['code' => 'method_not_allowed', 'message' => 'Statistics require a GET request.']]);
+		exit;
+	}
+	if ($_GET['stats_data'] !== '1' || !in_array($_GET['view'] ?? NULL, ['dnsbl_stat', 'dnsbl_reply_stat'], TRUE)) {
+		http_response_code(400);
+		echo json_encode(['error' => ['code' => 'invalid_view', 'message' => 'Unsupported statistics view.']]);
+		exit;
+	}
+}
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+require_once('/usr/local/pkg/pfblockerng/pfblockerng_stats.inc');
 
 global $g, $pfb;
 pfb_global();
@@ -340,8 +358,9 @@ $dnsbl_unlock	= pfb_unlock('read', 'dnsbl', '', '', '');
 
 // Collect all existing unlocked IPs
 $ip_unlock	= pfb_unlock('read', 'ip', '', '', '');
+$pfb['filterlogentries'] = FALSE;
 
-if (isset($_REQUEST)) {
+if (!$stats_data && isset($_REQUEST)) {
 
 	// Define alerts log filter rollup window variable and collect widget alert pivot details
 	if (isset($_REQUEST['filterip']) || isset($_REQUEST['filterdnsbl'])) {
@@ -1697,6 +1716,9 @@ foreach (config_get_path('interfaces', []) as $int) {
 $local_hosts = pfb_collect_localhosts();
 
 // Collect Alert Statistics
+if ($stats_data && session_status() === PHP_SESSION_ACTIVE) {
+	session_write_close();
+}
 if ($alert_summary) {
 
 	if ($alert_view == 'dnsbl_stat') {
@@ -1764,10 +1786,11 @@ if ($alert_summary) {
 	// than the old 3-token 'M j H:i:s' shape this pipeline used to assume.
 	// issue #1009: keep the parens UNescaped -- awk string literals need no
 	// paren escaping, and mawk prints a literal `\(` where gawk/onetrueawk strip it.
-	$chart_cmd = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" (\" \$3 \"),\" \$1}' >> /usr/local/www/pfblockerng/chart_stats.csv";
+	$chart_cmd = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" (\" \$3 \"),\" \$1}'";
 
 	$alert_stats = array();
 	$alert_stats[$alert_view] = array();
+	$stats_timeline = [];
 
 	// Skip processing hidden Stats
 	$stat_hidden = array();
@@ -1787,21 +1810,18 @@ if ($alert_summary) {
 	}
 
 	if ($alert_view == 'dnsbl_stat' || $alert_view == 'dnsbl_reply_stat') {
-		$visible_stats = array_diff_key($stat_info, $stat_hidden);
-		$unknown_msg = $alert_view == 'dnsbl_stat' ? pfb_dnsbl_mechanism_labels()['enabled'] : 'Unknown';
-		$dns_stats = pfb_dns_stats($alert_log, $visible_stats, $unknown_msg);
-		$alert_stats[$alert_view] = $dns_stats['stats'];
-		if ($visible_stats) {
-			$alert_stats['count'][$alert_view] = $dns_stats['count'];
-		}
-		$chart_type = $alert_view == 'dnsbl_stat' ? 'dnsblchart' : 'replychart';
-		if (isset($visible_stats[$chart_type])) {
-			$chart_csv = "edate,ecount\n";
+		if ($stats_data) {
+			$visible_stats = array_diff_key($stat_info, $stat_hidden);
+			$unknown_msg = $alert_view == 'dnsbl_stat' ? pfb_dnsbl_mechanism_labels()['enabled'] : 'Unknown';
+			$dns_stats = $visible_stats ? pfb_dns_stats($alert_log, $visible_stats, $unknown_msg) : ['stats' => [], 'chart' => []];
+			$alert_stats[$alert_view] = $dns_stats['stats'];
+			if ($visible_stats) {
+				$alert_stats['count'][$alert_view] = $dns_stats['count'];
+			}
 			foreach ($dns_stats['chart'] as $hour => $count) {
 				$date_hour = explode(' ', $hour, 2);
-				$chart_csv .= pfb_csv_field($date_hour[0] . ' (' . ($date_hour[1] ?? '') . ')') . ',' . $count . "\n";
+				$stats_timeline[] = ['edate' => $date_hour[0] . ' (' . ($date_hour[1] ?? '') . ')', 'ecount' => (int) $count];
 			}
-			@file_put_contents('/usr/local/www/pfblockerng/chart_stats.csv', $chart_csv);
 		}
 	} else {
 		// Total entry count for this view is constant across every $stat_info
@@ -1837,8 +1857,14 @@ if ($alert_summary) {
 						$stats = array_reverse($stats);
 						break;
 					case 'ipchart':
-						exec("{$lc_bytes}echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
-						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1");
+						$chart_rows = [];
+						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1", $chart_rows);
+						foreach ($chart_rows as $chart_row) {
+							$split = strrpos($chart_row, ',');
+							if ($split !== FALSE) {
+								$stats_timeline[] = ['edate' => substr($chart_row, 0, $split), 'ecount' => (int) substr($chart_row, $split + 1)];
+							}
+						}
 						break;
 					case 'ipsrcipin':
 						exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
@@ -1897,16 +1923,12 @@ if ($alert_summary) {
 			else {
 				$alert_stats[$alert_view][$stat_type]	= array();
 				$alert_stats['count'][$alert_view]	= 0;
-
-				if ($stat_type == 'ipchart') {
-					exec("{$lc_bytes}echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
-				}
 			}
 		}
 	}
 
 	// Collect DNSBL widget statistics
-	if ($alert_view == 'dnsbl_stat') {
+	if ($stats_data && $alert_view == 'dnsbl_stat') {
 		$alert_stats[$alert_view]['dnsblgptotal'] = array();
 		$alert_stats[$alert_view]['dnsblgpblock'] = array();
 
@@ -1937,6 +1959,17 @@ if ($alert_summary) {
 			unset($db_handle);
 		}
 	}
+}
+
+if ($stats_data) {
+	$stats_payload = [
+		'total' => $alert_stats['count'][$alert_view] ?? NULL,
+		'timeline' => $stats_timeline,
+		'panels' => pfb_stats_panels(pfb_stats_definitions($alert_view, $pfbchartcnt), $alert_stats[$alert_view],
+			$stat_hidden, $pfbmaxtable, $local_hosts, $options_pfbchartcnt),
+	];
+	echo json_encode($stats_payload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE);
+	exit;
 }
 
 
@@ -3391,26 +3424,6 @@ $pfb_unified_tint = $pfb_webgui_dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05
 }
 </style>
 
-<script type="text/javascript">
-//<![CDATA[
-/* Set a viewBox on the fixed-size d3pie SVG so CSS max-width scales it
-   without distorting the annotated labels. */
-function pfbPieFluid(id) {
-	var el = document.getElementById(id);
-	if (!el) { return; }
-	var svg = el.querySelector('svg');
-	if (!svg) { return; }
-	var w = svg.getAttribute('width');
-	var h = svg.getAttribute('height');
-	if (w && h && !svg.getAttribute('viewBox')) {
-		svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
-	}
-	svg.removeAttribute('width');
-	svg.removeAttribute('height');
-	svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-}
-//]]>
-</script>
 
 <?php
 // Define default Alerts Tab href link (Top row)
@@ -4739,381 +4752,71 @@ elseif ($alert_summary):
 // Print Statistics table/graphs
 if (!$pfb['filterlogentries']):?>
 
+<?php
+$stats_progressive = in_array($alert_view, ['dnsbl_stat', 'dnsbl_reply_stat'], TRUE);
+$stats = pfb_stats_definitions($alert_view, $pfbchartcnt);
+$stats_payload = $stats_progressive ? NULL : [
+	'total' => $alert_stats['count'][$alert_view] ?? NULL,
+	'timeline' => $stats_timeline,
+	'panels' => pfb_stats_panels($stats, $alert_stats[$alert_view], $stat_hidden, $pfbmaxtable, $local_hosts, $options_pfbchartcnt),
+];
+$stats_config = [
+	'url' => $stats_progressive ? '/pfblockerng/pfblockerng_alerts.php?view=' . $alert_view . '&stats_data=1' : NULL,
+	'payload' => $stats_payload,
+	'range' => (int) $pfbchartcnt, 'style' => $pfbchartstyle, 'color1' => $pfbchart1, 'color2' => $pfbchart2,
+];
+$stats_initial = [];
+foreach ($stats_payload['panels'] ?? [] as $index => $panel) {
+	$stats_initial[$panel['id']] = $panel['html'];
+	$stats_config['payload']['panels'][$index]['html'] = '';
+}
+?>
 <form action="/pfblockerng/pfblockerng_alerts.php" method="post" name="iform_stats" id="iform_stats" class="form-horizontal">
 <script src="../vendor/d3/d3.min.js?v=<?=pfb_file_mtime('/usr/local/www/vendor/d3/d3.min.js')?>"></script>
 <script src="../vendor/d3pie/d3pie.min.js"></script>
 <script src="../vendor/nvd3/nv.d3.min.js?v=<?=pfb_file_mtime('/usr/local/www/vendor/nvd3/nv.d3.min.js')?>"></script>
 <link href="../vendor/nvd3/nv.d3.min.css" media="screen, projection" rel="stylesheet" type="text/css">
-
 <div class="panel panel-default">
-<div class="panel-heading">
-	<h2 class="panel-title">
-		<?=$alert_title;?> Statistics&emsp;<small>Total event(s):
-		&emsp;[ <?=$alert_stats['count'][$alert_view];?> ]</small>
-	</h2>
+	<div class="panel-heading">
+		<h2 class="panel-title"><?=$alert_title;?> Statistics&emsp;<small>Total event(s):
+			&emsp;[ <span id="Alert_Stats_Total"><?=$stats_progressive ? '…' : ($stats_payload['total'] ?? '—')?></span> ]</small>
+		</h2>
+	</div>
 </div>
+<?php if ($stats_progressive): ?>
+<div id="Alert_Stats_Loading" aria-busy="true">
+	<p id="Alert_Stats_Status" role="status">Loading statistics…</p>
+	<button type="button" id="Alert_Stats_Retry" class="btn btn-default" hidden>Retry</button>
 </div>
-
+<?php endif; ?>
 <div class="panel-body">
-<?php
-$segcolors = array(	"#2484c1", "#65a620", "#7b6888", "#a05d56", "#961a1a", "#d8d23a", "#e98125", "#d0743c", "#635222", "#6ada6a",
-			"#0c6197", "#7d9058", "#207f33", "#44b9b0", "#bca44a", "#e4a14b", "#a3acb2", "#8cc3e9", "#69a6f9", "#5b388f" );
-
-if ($alert_summary && $alert_view == 'dnsbl_stat') {
-$stats = array( 'dnsblchart'	=> array("DNSBL Event Timeline&emsp;<small>(Last <span id=\"range\">{$pfbchartcnt}</span> hours)</small>",'','', FALSE, ''),
-		'dnsbldomain'	=> array('Top Blocked Domain',			'Found', 'Blocked Domain(s)',	TRUE, 'domain'),
-		'dnsblevald'	=> array('Top Blocked Evaluated Domain (TLD)',	'Found', 'Blocked Domain(s)',	TRUE, 'domain'),
-		'dnsblgptotal'	=> array('Top Group Count',			'Found', 'DNSBL Group(s)',	FALSE, ''),
-		'dnsblgpblock'	=> array('Top Blocked Group',			'Found', 'DNSBL Group(s)',	FALSE, ''),
-		'dnsblfeed'	=> array('Top Feed',				'Found', 'Feed(s)',		FALSE, ''),
-		'dnsblip'	=> array('Top Source IP',			'Found', 'Source IP(s)',	FALSE, ''),
-		'dnsblagent'	=> array('Blocking Type', 'Found',
-					'Type(s)',		FALSE, ''),
-		'dnsbltld'	=> array('Top TLD',				'Found', 'TLD(s)',		FALSE, ''),
-		'dnsblwebtype'	=> array('Top Blocked Webpage Types',		'Found', 'Blocked Webpage Type(s)',	FALSE, ''),
-		'dnsblmode'	=> array('Top DNSBL Modes',			'Found', 'Blocked DNSBL Mode(s)',	FALSE, ''),
-		'dnsbldatehr'	=> array('Top Date/Hr',				'Found', 'Date/Hr segment(s)',		FALSE, ''),
-		'dnsbldatehrmin'=> array('Top Date/Hr/Min',			'Found', 'Date/Hr/Min segment(s)',	FALSE, ''),
-		'dnsbldate'	=> array('Top Date',				'Found', 'day(s) of logs',		FALSE, '') );
-}
-elseif ($alert_summary && $alert_view == 'dnsbl_reply_stat') {
-$stats = array( 'replychart'	=> array("Reply Event Timeline&emsp;<small>(Last <span id=\"range\">{$pfbchartcnt}</span> hours)</small>",'','', FALSE, ''),
-			'replydomain'	=> array('Top Reply Domain',			'Found', 'Reply Domain(s)',	FALSE, 'domain'),
-			'replytld'	=> array('Top Reply TLD',			'Found', 'Reply TLD(s)',	FALSE, ''),
-			'replytld2'	=> array('Top Reply TLD 2nd level',		'Found', 'Reply TLD(s)',	FALSE, ''),
-			'replytld3'	=> array('Top Reply TLD 3rd level',		'Found', 'Reply TLD(s)',	FALSE, ''),
-			'replysrcip'	=> array('Top Reply SRC IP',			'Found', 'SRC IP(s)',		FALSE, ''),
-			'replydstip'	=> array('Top Reply DST IP',			'Found', 'IP(s)',		FALSE, 'host'),
-			'replysrcipd'	=> array('Top Reply SRC IP/Domain',		'Found', 'Domain/IP(s)',	FALSE, 'domain'),
-			'replytype'	=> array('Top Reply Type',			'Found', 'Reply Type(s)',	FALSE, ''),
-			'replyorec'	=> array('Top Reply Orig Record',		'Found', 'Reply Record(s)',	FALSE, ''),
-			'replyrec'	=> array('Top Reply Record',			'Found', 'Reply Record(s)',	FALSE, ''),
-			'replyttl'	=> array('Top Reply TTL',			'Found', 'Reply TTL(s)',	FALSE, ''),
-			'replygeoip'	=> array('Top Reply GeoIP',			'Found', 'Reply GeoIP(s)',	FALSE, ''),
-			'replydate'	=> array('Top Date',				'Found', 'day(s) of logs',	FALSE, ''));
-}
-else {
-	$stats = array(	'ipchart'	=> array("IP Event Timeline&emsp;<small>(Last <span id=\"range\">{$pfbchartcnt}</span> hours)</small>",'','', FALSE, ''),
-			'ipsrcipin'	=> array("Top SRC IP Inbound (by GeoIP)",	'Found', 'SRC IP(s)',		TRUE, 'host'),
-			'ipsrcipout'	=> array("Top SRC IP Outbound (by GeoIP)",	'Found', 'SRC IP(s)',		TRUE, 'host'),
-			'ipdstipin'	=> array("Top DST IP Inbound (by GeoIP)",	'Found', 'DST IP(s)',		TRUE, 'host'),
-			'ipdstipout'	=> array("Top DST IP Outbound (by GeoIP)",	'Found', 'DST IP(s)',		TRUE, 'host'),
-			'ipsrcport'	=> array("Top SRC Port (1-1024 only)",		'Found', 'SRC Port(s)',		FALSE, ''),
-			'ipdstport'	=> array("Top DST Port",			'Found', 'DST Port(s)',		FALSE, ''),
-			'ipgeoip'	=> array("Top GeoIP",				'Found', 'GeoIP(s)',		FALSE, ''),
-			'ipasn'		=> array("Top ASN",				'Found', 'ASN(s)',		FALSE, ''),
-			'ipaliasname'	=> array("Top Aliasname",			'Found', 'Aliasname(s)',	FALSE, ''),
-			'ipfeed'	=> array("Top Feed",				'Found', 'Feed{s)',		FALSE, ''),
-			'ipinterface'	=> array("Top Interface",			'Found', 'Interface(s)',	FALSE, ''),
-			'ipprotocol'	=> array("Top Protocol",			'Found', 'Protocol(s)',		FALSE, ''),
-			'ipdirection'	=> array("Top Direction",			'Found', 'Direction(s)',	FALSE, ''),
-			'ipdate'	=> array("Top Date",				'Found', 'day(s) of logs',	FALSE, ''));
-}
-
-foreach ($stats as $stat_type => $stype):
-
-	if ($stat_type == 'ipasn' && $pfb['asn_reporting'] == 'disabled') {
-		continue;
-	}
-
-
-	$topcount = $sumlines = 0;
-	if (!empty($alert_stats[$alert_view][$stat_type])) {
-		$topcount = count($alert_stats[$alert_view][$stat_type]);
-		$sumlines = array_sum($alert_stats[$alert_view][$stat_type]);
-	}
-
-	if (!is_numeric($topcount)) {
-		$topcount = 0;
-	}
-	if (!is_numeric($sumlines)) {
-		$sumlines = 0;
-	}
-
-	$height = 30;
-	if ($topcount > 0) {
-		$height = 390;
-	}
-
-	$collapse_status = 'in';
-	if (isset($stat_hidden[$stat_type])) {
-		$collapse_status = 'out';
+<?php foreach ($stats as $stat_type => $stype):
+	if (isset($stat_hidden[$stat_type]) || ($stat_type === 'ipasn' && $pfb['asn_reporting'] === 'disabled')) {
 		continue;
 	}
 ?>
-
 <div class="panel panel-default" id="Alert_Stats_<?=$stat_type?>" style="display: inline-block; width: 100%;">
 	<div class="panel-heading">
 		<h2 class="panel-title">
-			<? if ($alertrefresh === PfbToggle::On): ?>
-			<i class="fa-solid fa-pause-circle" id="PauseRefresh" " title="Pause Alerts Refresh"></i>&nbsp;
-			<? endif; ?>
-
+			<?php if ($alertrefresh === PfbToggle::On): ?>
+			<i class="fa-solid fa-pause-circle" id="PauseRefresh" title="Pause Alerts Refresh"></i>&nbsp;
+			<?php endif; ?>
 			<?=$stype[0]?>
 			<span class="widget-heading-icon pull-right">
-				<a data-toggle="collapse" href="#Alert_Stats_<?=$stat_type?>_panel-body" id="Alert_Stats_A_<?=$stat_type?>">
+				<a data-toggle="collapse" href="#Alert_Stats_<?=$stat_type?>_panel-body" id="Alert_Stats_A_<?=$stat_type?>" aria-expanded="true">
 					<i class="fa-solid fa-plus-circle"></i>
 				</a>
 			</span>
 		</h2>
-		</div>
-
-		<div class="panel-body collapse <?=$collapse_status?>" id="Alert_Stats_<?=$stat_type?>_panel-body" style="overflow-x: auto;">
-
-			<?php if ($stat_type == 'dnsblchart' || $stat_type == 'replychart' || $stat_type == 'ipchart'): ?>
-
-			<div id="chart" class="d3-chart" style="overflow: hidden;">
-
-				<!-- Date range dropdown menu -->
-				<div class="btn-group navbar-right" style="margin-right: 10px;">
-					<ul class="navbar-nav">
-						<a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-expanded="true">
-							Date Range <span class="caret"></span>
-						</a>
-						<ul class="dropdown-menu" role="menu" style="padding: 1px 1px 1px 1px; font-size: smaller;">
-							<?php foreach ($options_pfbchartcnt as $event => $type):?>
-							<li id="chartEvent" value="<?=$event?>">
-								<a href="#" class="navlnk"><?=$type?></a>
-							</li>
-							<?php endforeach;?>
-						</ul>
-					</ul>
-				</div>
-
-				<!-- Chart SVG -->
-				<svg></svg>
-			</div>
-			<?php d3_chart($pfbchartcnt, $pfbchartstyle, $pfbchart1, $pfbchart2); ?>
-
-			<?php else: ?>
-
-			<div class="pfb-stats-row">
-			<div class="pfb-stats-col" style="height: <?=$height;?>px; overflow-y: scroll;">
-			<table class="table table-responsive table-bordered table-striped table-hover table-compact sortable-theme-bootstrap" data-sortable>
-
-				<thead>
-					<tr>
-						<th style="width: 10%;"><!--  Action buttons --></th>
-						<th style="width: 10%; text-align: center;"><?=gettext("Count")?></th>
-
-						<?php if ($stype[3]): ?>
-						<th style="width: 2%; text-align: center;">
-							<?php
-							$column_title = 'GeoIP';
-							if ($stat_type == 'dnsbldomain' || $stat_type == 'dnsblevald') {
-								$column_title = 'Type';
-							} elseif ($stat_type == 'replysrcipd') {
-								$column_title = 'SRC IP';
-							}
-							?>
-							<?=gettext($column_title);?></th>
-						<?php endif; ?>
-
-						<th><small><?=$stype[1] . "&emsp;[ {$topcount} ]&emsp;" . $stype[2]?></th>
-					</tr>
-				</thead>
-				<tbody>
-					<?php
-					// issue #1495: default FALSE -- when the first non-chart stat category
-					// has no data (routine on a fresh install), the block below never runs,
-					// and $max_table_entries must still be defined for the tfoot check.
-					$max_table_entries = FALSE;
-					if (!empty($alert_stats[$alert_view][$stat_type])) {
-
-						$table_entries = 0;
-						foreach ($alert_stats[$alert_view][$stat_type] as $data => $data_count) {
-
-							if ($pfbmaxtable != 'max') {
-								if ($table_entries > $pfbmaxtable) {
-									$max_table_entries = TRUE;
-									break;
-								}
-								$table_entries++;
-							}
-
-							$alert_event = $btnsubmit = $query_port = $hostname = '';
-							$subdata = array();
-							// issue #1069: NULL until a trusted-literal branch below opts the
-							// final <td> out of escaping; otherwise it defaults to pfb_hsc($data).
-							$data_disp = NULL;
-
-							$filter_value = $data;
-							if ($stat_type == 'dnsbltld' || $stat_type == 'replytld' ||
-							    $stat_type == 'replytld2'|| $stat_type == 'replytld3' ) {
-								$filter_value = "\.{$data}$";
-							}
-							elseif ($stat_type == 'ipsrcport' || $stat_type == 'ipdstport' ||
-								$stat_type == 'replyorec' || $stat_type == 'replyrec') {
-								$filter_value = "^{$data}$";
-							}
-							elseif ($stat_type == 'replyttl') {
-								if (strlen($data) > 8) {
-									$filter_value = "^15\d{6,10}";
-								} else {
-									$filter_value = "^{$data}$";
-								}
-							}
-							elseif ($stat_type == 'ipasn') {
-								if ($data == 'null') {
-									continue;
-								} elseif ($data != 'Unknown' && !ctype_digit($data)) { 
-									if (strpos($data, '| ') !== FALSE) {
-										$ex		= explode('| ', $data, 3);
-										$filter_value	= $ex[1];
-										$data		= "{$ex[1]} | {$ex[2]}";
-									} else {
-										$ex		= explode(' ', $data, 2);
-										$filter_value	= $ex[0];
-										$data		= "{$ex[0]} | {$ex[1]}";
-									}
-								}
-							}
-							elseif ($stat_type == 'dnsbldomain') {
-								$split = strrpos($data, ',');
-								$subdata = [substr($data, 0, $split), substr($data, $split + 1)];
-								$filter_value = $subdata[0];
-							}
-							elseif ($stat_type == 'dnsblevald') {
-								$subdata = explode(',', $data, 2);
-								$filter_value = $subdata[1];
-							}
-
-							if ($stat_type != 'ipdirection') {
-								// issue #1069: filter_value/data are log-derived -- HTML-encode
-								// both attribute values.
-								$btnsubmit = '<button type="submit" class="fa-solid fa-filter button-icon"'
-										. " name=\"filterlogentries_submit_{$stat_type}\""
-										. " id=\"filterlogentries_submit_{$stat_type}\""
-										. " value=\"" . pfb_hsc($filter_value) . "\" title=\"Filter Alerts for [ "
-										. pfb_hsc($data) . " ]\"></button>";
-							}
-
-							// Collect GeoIP or DNSBL Type classification
-							if ($stype[3]) {
-								if (empty($subdata)) {
-									$subdata = explode(',', $data);
-								}
-								if ($stat_type == 'dnsblevald') {
-									$data		= $subdata[1];
-									$subdata[1]	= $subdata[0];
-								}
-								else {
-									$data = $subdata[0];
-								}
-
-								// issue #1069: $data rides a URL query segment -- rawurlencode,
-								// not HTML-encode.
-								$alert_event = '<a class="fa-solid fa-info icon-pointer"'
-										. ' title="Click for Threat Lookup." target="_blank" rel="noopener noreferrer"'
-										. ' href="/pfblockerng/pfblockerng_threats.php?' . $stype[4] . '=' . rawurlencode($data) . '"></a>';
-							}
-
-							if ($stat_type == 'dnsbldatehr' || $stat_type == 'dnsbldatehrmin') {
-								// ISO bucket key is 2 space-tokens (date, hour[:min]), not the
-								// old 3-token "Mon D HH" shape -- label as "date (hour[:min])".
-								// issue #1057: a truncated/corrupt key has no 2nd token.
-								$d = explode (' ', $data);
-								$data = isset($d[1]) ? "{$d[0]}&emsp;({$d[1]})" : $d[0];
-								$data_disp = $data;	// program-generated date/hour token, trusted
-							}
-
-							if (!empty($data) && $data != 'Not available for HTTPS alerts') {
-
-								// Report Local hostname if found
-								if ($stat_type == 'ipsrcipout' || $stat_type == 'ipdstipin') {
-									if (isset($local_hosts[$data])) {
-										$hostname = "&emsp;<small>( " . pfb_hsc($local_hosts[$data]) . " )</small>";
-									}
-								}
-
-								// Get external IP hostname and Resolved hostname
-								elseif ($stat_type == 'ipsrcipin' || $stat_type == 'ipdstipout') {
-									$hostname = pfb_stat_hostname_cell($subdata[2]);
-								}
-							}
-
-							if ($stat_type == 'dnsblagent' && $data == 'Unknown') {
-								$data = pfb_dnsbl_mechanism_labels()['enabled'];
-								$data_disp = $data;	// literal, trusted
-							}
-
-							if ($stat_type == 'ipdstport') {
-								// issue #1069: href segment rawurlencode'd; title HTML-encoded.
-								$query_port = '&nbsp;<a class="fa-solid fa-search icon-pointer" target="_blank" rel="noopener noreferrer"'
-										. ' href="/pfblockerng/pfblockerng_threats.php?port=' . rawurlencode($data)
-										. '" title="Click for Threat Port Lookup [ ' . pfb_hsc($data) . ' ]"></a>';
-							}
-
-							elseif ($stat_type == 'ipdirection') {
-								if ($data == 'in') {
-									$data = 'Inbound packets';
-								} else {
-									$data = 'Outbound packets';
-								}
-								$data_disp = $data;	// literal, trusted
-							}
-
-							if (empty($data)) {
-								$data = 'Unknown';
-								$data_disp = $data;	// literal, trusted
-							}
-
-							$td_type = '';
-							if ($stype[3]) {
-								$td_type = "<td style=\"text-align: center;\">" . pfb_hsc($subdata[1]) . "</td>";
-							}
-
-							// issue #1069: everything NOT opted into a trusted literal above is
-							// attacker-influenceable log/feed data -- HTML-encode it here.
-							if ($data_disp === NULL) {
-								$data_disp = pfb_hsc($data);
-							}
-
-							print ("<tr>
-								<td style=\"text-align: center; white-space: nowrap;\">{$alert_event}{$query_port}{$btnsubmit}</td>
-								<td style=\"text-align: right; padding-right: 15px;\">{$data_count}</td>
-								{$td_type}
-								<td style=\"white-space: nowrap;\">{$data_disp}{$hostname}</td></tr>");
-						}
-					}
-					?>
-				</tbody>
-			</table>
-			</div>
-
-			<div class="pfb-stats-col" style="height: <?=$height;?>px;">
-				<div id="pieChart_<?=$stat_type?>">
-				<?php
-					if ($topcount > 9) {
-						$alert_stats[$alert_view][$stat_type] = array_slice($alert_stats[$alert_view][$stat_type], 0, 10, TRUE);
-					}
-
-					if (!empty($alert_stats[$alert_view][$stat_type])) {
-						pie_block($alert_stats[$alert_view][$stat_type], $stat_type, $topcount, 10, $segcolors);
-					}
-				?>
-				</div>
-			</div>
-			</div><!-- /.pfb-stats-row -->
-
-			<!-- Display max table extry limit, if found -->
-			<?php if ($max_table_entries): ?>
-			<div>
-				&emsp;
-				<span class="text-warning" style="font-size:12px; background-color: #424242;"
-					title="Table limit reached! Change the limit in 'Alert Settings' on 'Reports'; a higher limit slows page refresh.">
-					<small>Displaying [ <?= $pfbmaxtable; ?> ] entries.</small>
-				</span>
-			</div>
-			<?php endif; ?>
-
-			<?php endif; ?>
-
-		</div>
 	</div>
-	<?php endforeach; ?>
+	<div class="panel-body collapse in" id="Alert_Stats_<?=$stat_type?>_panel-body" style="overflow-x: auto;<?=$stats_progressive ? 'min-height: 390px;' : ''?>">
+		<?=$stats_initial[$stat_type] ?? ''?>
 	</div>
 </div>
+<?php endforeach; ?>
+</div>
+<script type="application/json" id="Alert_Stats_Config"><?=json_encode($stats_config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE)?></script>
+<script defer src="/pfblockerng/pfblockerng_stats.js?v=<?=pfb_file_mtime('/usr/local/www/pfblockerng/pfblockerng_stats.js')?>"></script>
 </form>
 	<?php endif;
 endif;
@@ -5168,265 +4871,7 @@ if ($alertrefresh === PfbToggle::On) {
 	}
 }
 
-function pie_block($summary, $stat_type, $sumlines, $numsegments, $segcolors) {
-
 ?>
-<script type="text/javascript">
-//<![CDATA[
-
-var pieChart_<?=$stat_type?> = new d3pie("pieChart_<?=$stat_type?>", {
-	"size": {
-		"canvasHeight": 390,
-		"canvasWidth": 560,
-		"pieInnerRadius": 60,
-		"pieOuterRadius": "78%"
-	},
-	"data": {
-		"sortOrder": "value-asc",
-		"content": [
-<?php
-	uasort($summary, fn($a, $b) => $b <=> $a);
-	$k = array_keys($summary);
-	$numentries = 0;
-	for ($i = 0; $i < ($numsegments-1); $i++) {
-		if ($k[$i] ?? NULL) {
-			$numentries++;
-			if ($i > 0) {
-				print(",\r\n");
-			}
-
-			// Don't add 0 values
-			if ($summary[$k[$i]] == 0) {
-				$summary[$k[$i]] = 0.1;
-			}
-
-			print("{");
-			// issue #1069: log/feed-derived label into an inline <script>. pfb_js_string()
-			// JSON-encodes with JSON_HEX_* (quote/tag breakout) + JSON_INVALID_UTF8_SUBSTITUTE
-			// and a FALSE fallback, so a non-UTF8 byte can't emit invalid JS.
-			print('"label": ' . pfb_js_string((string) $k[$i]) . ', "value": ');
-			print((float) $summary[$k[$i]]);
-			print(', "color": "' . $segcolors[$i % $numsegments] . '"');
-			print("}");
-		}
-	}
-
-	$balance = $sumlines - $numentries;
-	if ($balance > 0) {
-		print(",\r\n");
-		print("{");
-		print('"label": "Other", "value": ');
-		print($balance);
-		print(', "color": "' . $segcolors[$i % $numsegments] . '"');
-		print("}");
-	}
-?>
-		]
-	},
-	"labels": {
-		"outer": {
-			"pieDistance": 25
-		},
-		"inner": {
-			"format": "percentage",
-			"hideWhenLessThanPercentage": 3
-		},
-		"mainLabel": {
-			"font": "verdana",
-			"fontSize": 14
-		},
-		"percentage": {
-			"color": "#ffffff",
-			"font": "verdana",
-			"fontSize": 10,
-			"decimalPlaces": 0
-		},
-		"value": {
-			"color": "#adadad",
-			"font": "verdana",
-			"fontSize": 15
-		},
-		"lines": {
-			"enabled": true,
-			"style": "curved",
-			"color": "segment"
-		},
-		"truncation": {
-			"enabled": true,
-			truncateLength: 15
-		}
-	},
-	"effects": {
-		"load": {
-			"speed": 300
-		},
-		"pullOutSegmentOnClick": {
-			"effect": "linear",
-			"speed": 400,
-			"size": 20
-		},
-		highlightSegmentOnMouseover: true,
-		highlightLuminosity: -0.7
-	},
-	tooltips: {
-		enabled: true,
-		type: "placeholder",
-		string: "{label}: {percentage}% ({value})",
-		placeholderParser: null,
-		styles: {
-			fadeInSpeed: 250,
-			backgroundColor: "#000000",
-			backgroundOpacity: 0.5,
-			color: "#f7f7f7",
-			borderRadius: 2,
-			font: "verdana",
-			fontSize: 14,
-			padding: 4
-		}
-	},
-	"misc": {
-		"gradient": {
-			"enabled": true,
-			"percentage": 50
-		},
-		"pieCenterOffset": {
-			"x": 0,
-			"y": 0
-		},
-		colors: {
-			background: null,
-			segmentStroke: "#ffffff"
-		}
-	}
-});
-pfbPieFluid("pieChart_<?=$stat_type?>");
-//]]>
-</script>
-<?php
-}
-
-function d3_chart($pfbchartcnt, $pfbchartstyle, $pfbchart1, $pfbchart2) {
-
-?>
-<script type="text/javascript">
-//<![CDATA[
-
-var max_entries = "<?=$pfbchartcnt;?>"
-var chart_style = "<?=$pfbchartstyle;?>"
-var chart_c1	= "<?=$pfbchart1;?>"
-var chart_c2	= "<?=$pfbchart2;?>"
-
-build_chart(max_entries);
-
-function build_chart(max_entries) {
-
-	d3.select('#range').text(max_entries);
-	d3.select("#svg").remove();
-	d3.select('#chart').append('svg').attr('id', 'svg');
-
-	var chart = new d3.csv('chart_stats.csv', function(error, data) {
-		series1 = []
-		data = data.slice(-max_entries);
-
-		// Add filler bars if under 24 bars 
-		var cnt = data.length
-		if (cnt != 0 && cnt < 24) {
-			for (i = (24 - cnt); i > 0; i--) {
-				var filler = { edate: "Placeholder " +i, ecount: "0", series: "0" }
-				data.push(filler)
-			}
-		}
-
-		data.forEach(function (d){
-			d.ecount = +d.ecount
-			series1.push(d)
-		})
-
-		var finalData = [{
-				key: "Series 1",
-				values: series1,
-				color: "#0000ff"
-				}];
-
-		nv.addGraph(function() {
-			var chart = nv.models.discreteBarChart()
-				.margin({top: 5, left: 65, right: 25, bottom: 60})
-				.x(function (d) { return d.edate })
-				.y(function (d) { return d.ecount })
-				.showYAxis(true)
-				.showXAxis(true);
-
-			chart.xAxis
-				.tickPadding(10)
-				.axisLabel('Date (Hr) [ Found: ' + cnt + ' hours ]');
-
-			chart.yAxis
-				.tickFormat(d3.format('.0f'))
-				.tickPadding(10)
-				.axisLabel('Event(s)');
-
-			//  Pantone Color Institute "Color of the Year"
-			if (chart_style == 'multi') {
-				var colors = [	"#9BB7D4", "#C74375", "#BF1932", "#7BC4C4", "#E2583E", "#53B0AE",
-						"#DECDBE", "#9B1B30", "#5A5B9F", "#F0C05A", "#45B5AA", "#D94F70",
-						"#DD4124", "#009473", "#B163A3", "#955251", "#F7CAC9", "#92A8D1",
-						"#88B04B", "#5F4B8B", "#FF6F61", "#2484C1", "#65A620", "#7B6888" ];
-			}
-
-			// Greyscale
-			else {
-				var colors = [	"#E0E0E0", "#DCDCDC", "#D8D8D8", "#D3D3D3", "#D0D0D0", "#C8C8C8",
-						"#C0C0C0", "#BEBEBE", "#B8B8B8", "#B0B0B0", "#A9A9A9", "#A8A8A8",
-						"#A0A0A0", "#989898", "#909090", "#888888", "#808080", "#787878",
-						"#707070", "#696969", "#686868", "#606060", "#585858", "#505050" ];
-			}
-
-			chart.color(function(d) {
-				if (chart_style == 'greyscale' || chart_style == 'multi') {
-					return colors[Number(d.edate.slice(-3,-1)).toString()];
-				}
-				else {
-					if (d.edate.slice(-3,-1) == '00') {
-						return chart_c1;
-					} else {
-						return chart_c2;
-					}
-				}
-			});
-
-			var svg = d3.select('#chart svg');
-			nv.utils.initSVG(svg);
-			var tick_measure = svg.append('g').attr('class', 'nvd3 nv-axis');
-			var tick_width = tick_measure.append('text')
-				.text(data.length ? data[0].edate : '')
-				.node().getComputedTextLength() + 16;
-			tick_measure.remove();
-
-			function update_ticks() {
-				var width = nv.utils.availableWidth(null, svg, chart.margin());
-				var step = Math.max(1, Math.ceil(data.length * tick_width / Math.max(1, width)));
-				chart.xAxis.tickValues(data.filter(function(d, i) {
-					return i % step == 0;
-				}).map(function(d) { return d.edate; }));
-			}
-
-			update_ticks();
-			svg
-				.datum(finalData)
-				.transition().duration(300)
-				.call(chart);
-
-			nv.utils.windowResize(function() {
-				update_ticks();
-				chart.update();
-			});
-			return chart;
-		});
-	})
-}
-//]]>
-</script>
-<?php } ?>
 
 <?php include('foot.inc');?>
 <script type="text/javascript">
@@ -5581,38 +5026,27 @@ function select_whitelist(mode, permit_list) {
 	$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
 }
 
-// Change filterfield input fields to lightgrey
-function pfb_chg_filerfields_bkgd() {
-	$("[id^='filterlogentries_']").each(function() {
-
-		if ($(this).attr("id").indexOf("submit") == -1 && $(this).val() != 'Apply Filter' && $(this).val() != 'Clear Filter') {
-			if ($(this).val() != '') {
-				$(this).css({"background-color": "#1976D2", "color": "white"});
-			} else {
-				$(this).css({"background-color": "", "color": "black"});
-			}
-		}
-	});
+function pfb_chg_filerfields_bkgd(field) {
+	field.style.backgroundColor = field.value !== '' ? '#1976D2' : '';
+	field.style.color = field.value !== '' ? 'white' : 'black';
 }
 
 events.push(function() {
 
-	pfb_chg_filerfields_bkgd();
-	$("[id^='filterlogentries_']").autocomplete({
-		change: function(event,ui) {
-			pfb_chg_filerfields_bkgd();
-		}
+	document.querySelectorAll('input[id^="filterlogentries_"], select[id^="filterlogentries_"]').forEach(function(field) {
+		field.setAttribute('autocomplete', 'off');
+		pfb_chg_filerfields_bkgd(field);
+	});
+	['input', 'change'].forEach(function(type) {
+		document.addEventListener(type, function(event) {
+			if (event.target.matches('input[id^="filterlogentries_"], select[id^="filterlogentries_"]')) {
+				pfb_chg_filerfields_bkgd(event.target);
+			}
+		});
 	});
 
-	// Rebuild D3 Chart on date range change
-	$('[id=chartEvent]').click(function() {
-		if (($.isNumeric($(this).attr('value'))) && $(this).attr('value') > 0 && $(this).attr('value') < 8065) {
-			build_chart($(this).attr('value'));
-		}
-	})
-
 	// Pause Alert tab auto-refresh 
-	$('[id=PauseRefresh]').click(function() {
+	$(document).on('click', '[id=PauseRefresh]', function() {
 		var metaId = $('meta[id=AlertRefresh]');
 		var pr = $('[id=PauseRefresh]');
 
@@ -5626,93 +5060,6 @@ events.push(function() {
 		}
 	})
 
-	// Redraw d3pie chart when table window was previously collapsed
-	$('[id^=Alert_Stats_A_]').click(function() {
-
-		// collect name of piechart to redraw
-		var pieChart = this.id.replace('Alert_Stats_A_', '');
-
-		if (pieChart == 'ipsrcipin') {
-			pieChart_ipsrcipin.redraw();
-		} else if (pieChart == 'ipsrcipout') {
-			pieChart_ipsrcipout.redraw();
-		} else if (pieChart == 'ipdstipin') {
-			pieChart_ipdstipin.redraw();
-		} else if (pieChart == 'ipdstipout') {
-			pieChart_ipdstipout.redraw();
-		} else if (pieChart == 'ipsrcport') {
-			pieChart_ipsrcport.redraw();
-		} else if (pieChart == 'ipdstport') {
-			pieChart_ipdstport.redraw();
-		} else if (pieChart == 'ipgeoip') {
-			pieChart_ipgeoip.redraw();
-		} else if (pieChart == 'ipasn') {
-			pieChart_ipasn.redraw();
-		} else if (pieChart == 'ipaliasname') {
-			pieChart_ipaliasname.redraw();
-		} else if (pieChart == 'ipfeed') {
-			pieChart_ipfeed.redraw();
-		} else if (pieChart == 'ipinterface') {
-			pieChart_ipinterface.redraw();
-		} else if (pieChart == 'ipprotocol') {
-			pieChart_ipprotocol.redraw();
-		} else if (pieChart == 'ipdirection') {
-			pieChart_ipdirection.redraw();
-		} else if (pieChart == 'ipdate') {
-			pieChart_ipdate.redraw();
-
-		} else if (pieChart == 'dnsbldomain') {
-			pieChart_dnsbldomain.redraw();
-		} else if (pieChart == 'dnsblevald') {
-			pieChart_dnsblevald.redraw();
-		} else if (pieChart == 'dnsblgptotal') {
-			pieChart_dnsblgptotal.redraw();
-		} else if (pieChart == 'dnsblgpblock') {
-			pieChart_dnsblgblock.redraw();
-		} else if (pieChart == 'dnsblfeed') {
-			pieChart_dnsblfeed.redraw();
-		} else if (pieChart == 'dnsblip') {
-			pieChart_dnsblip.redraw();
-		} else if (pieChart == 'dnsblagent') {
-			pieChart_dnsblagent.redraw();
-		} else if (pieChart == 'dnsbltld') {
-			pieChart_dnsbltld.redraw();
-		} else if (pieChart == 'dnsblwebtype') {
-			pieChart_dnsblwebtype.redraw();
-		} else if (pieChart == 'dnsblmode') {
-			pieChart_dnsblmode.redraw();
-		} else if (pieChart == 'dnsbldatehr') {
-			pieChart_dnsbldatehr.redraw();
-		} else if (pieChart == 'dnsbldatehrmin') {
-			pieChart_dnsbldatehrmin.redraw();
-
-		} else if (pieChart == 'replyorec') {
-			pieChart_replyorec.redraw();
-		} else if (pieChart == 'replyrec') {
-			pieChart_replyrec.redraw();
-		} else if (pieChart == 'replyttl') {
-			pieChart_replyttl.redraw();
-		} else if (pieChart == 'replydomain') {
-			pieChart_replydomain.redraw();
-		} else if (pieChart == 'replytld') {
-			pieChart_replytld.redraw();
-		} else if (pieChart == 'replytld2') {
-			pieChart_replytld2.redraw();
-		} else if (pieChart == 'replytld3') {
-			pieChart_replytld3.redraw();
-		} else if (pieChart == 'replysrcip') {
-			pieChart_replysrcip.redraw();
-		} else if (pieChart == 'replysrcipd') {
-			pieChart_replysrcipd.redraw();
-		} else if (pieChart == 'replydstip') {
-			pieChart_replydstip.redraw();
-		} else if (pieChart == 'replygeoip') {
-			pieChart_replygeoip.redraw();
-		} else if (pieChart == 'replydate') {
-			pieChart_replydate.redraw();
-		}
-		pfbPieFluid('pieChart_' + pieChart);
-	})
 
 	$('[id^=DNSBLWT]').click(function(event) {
 		if (confirm(event.target.title)) {

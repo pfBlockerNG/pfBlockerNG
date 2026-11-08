@@ -216,6 +216,7 @@ foreach (array($pfb['dnsbl_cache'], "{$pfb['dnsbl_cache']}-wal", "{$pfb['dnsbl_c
 	unlink_if_exists($legacy_cache);
 }
 rmdir_recursive("{$pfb['dbdir']}/dnsblalias");
+unlink_if_exists('/usr/local/www/pfblockerng/chart_stats.csv');
 
 // issue #1541: the pre-PSL chroot oracle copy is unowned after upgrade and its
 // basename matches the pfb_py_* cache-save glob -- remove it once here.

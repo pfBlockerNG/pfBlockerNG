@@ -68,8 +68,7 @@ IP_PIE_STAT_TYPE = "ipgeoip"
 DNSBL_PIE_STAT_TYPE = "dnsblip"
 
 # ── JS timeouts ───────────────────────────────────────────────────────────────
-# pfbPieFluid fires synchronously via <script> after d3pie; generous ceiling
-# for the page render + JS execution, not a functional wait knob.
+# Generous ceiling for the real data request and visible chart construction.
 JS_TIMEOUT_MS = 30_000
 
 # ── narrow viewport for responsive check ─────────────────────────────────────
@@ -84,8 +83,7 @@ def _open(page: Page, webui: WebUI, path: str) -> None:
     """Navigate the authenticated browser page to ``path`` and settle the DOM.
 
     Asserts the load did NOT bounce to the login form — proving the injected
-    session cookie authenticated the browser. Waits on ``networkidle`` so
-    inline ``<script>`` blocks (including ``pfbPieFluid``) have run.
+    session cookie authenticated the browser. Waits for real data requests to settle.
     """
     page.goto(webui.url(path), wait_until="domcontentloaded", timeout=JS_TIMEOUT_MS * 3)
     page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
@@ -159,14 +157,11 @@ def _restore(vm: helpers.SmokeVM, log_path: str, original_size: str | None, time
 
 
 def _assert_pie_fluid(page: Page, stat_type: str) -> None:
-    """Assert that ``pfbPieFluid`` ran on ``#pieChart_<stat_type> svg``.
-
-    Verifies the issue-#387 fix is active:
-    - the ``<svg>`` has a non-empty ``viewBox`` attribute (set by pfbPieFluid)
-    - the ``<svg>`` has NO ``width`` or ``height`` attribute (removed by pfbPieFluid)
-
-    Fails with a clear message if the pie SVG is absent (log seed yielded no data).
-    """
+    """Reveal the panel and assert its pie scales through viewBox, not fixed SVG dimensions."""
+    panel = page.locator(f"#Alert_Stats_{stat_type}")
+    panel.scroll_into_view_if_needed()
+    if not page.locator(f"#Alert_Stats_{stat_type}_panel-body").is_visible():
+        page.locator(f"#Alert_Stats_A_{stat_type}").click()
     container = f"#pieChart_{stat_type}"
     svg_sel = f"{container} svg"
 
@@ -180,24 +175,15 @@ def _assert_pie_fluid(page: Page, stat_type: str) -> None:
         f"Check that the seed lines produced data for stat_type={stat_type!r}."
     )
 
-    # viewBox must be non-empty (pfbPieFluid sets it from the SVG's natural size).
+    # Preserve the natural dimensions as a viewBox for responsive scaling.
     view_box = svg.first.get_attribute("viewBox")
-    assert view_box and view_box.strip(), (
-        f"{container} svg has no viewBox attribute — pfbPieFluid did not run "
-        f"(issue #387 fix is absent or the SVG rendered with zero size)."
-    )
+    assert view_box and view_box.strip(), f"{container} svg has no viewBox — issue #387 responsive scaling is absent"
 
-    # width and height must be absent (pfbPieFluid removes them so CSS scales the SVG).
+    # Fixed dimensions would prevent CSS from scaling the SVG.
     width_attr = svg.first.get_attribute("width")
     height_attr = svg.first.get_attribute("height")
-    assert width_attr is None, (
-        f"{container} svg still has width={width_attr!r} — pfbPieFluid did not "
-        f"remove the fixed width attribute (issue #387 fix not applied)."
-    )
-    assert height_attr is None, (
-        f"{container} svg still has height={height_attr!r} — pfbPieFluid did not "
-        f"remove the fixed height attribute (issue #387 fix not applied)."
-    )
+    assert width_attr is None, f"{container} svg still has fixed width={width_attr!r} (issue #387)"
+    assert height_attr is None, f"{container} svg still has fixed height={height_attr!r} (issue #387)"
 
 
 # ── test: IP Block Stats ──────────────────────────────────────────────────────

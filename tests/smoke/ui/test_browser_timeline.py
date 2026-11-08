@@ -87,6 +87,12 @@ def _rows(view: str, count: int) -> str:
     return "".join(rows)
 
 
+def _show_timeline(page: Page, view: str) -> None:
+    kind = {"dnsbl_stat": "dnsblchart", "dnsbl_reply_stat": "replychart"}.get(view, "ipchart")
+    page.locator(f"#Alert_Stats_{kind}").scroll_into_view_if_needed()
+    pytest.importorskip("playwright.sync_api").expect(page.locator("#chart")).to_be_attached()
+
+
 @pytest.mark.parametrize(
     "view,log,selection",
     [
@@ -107,7 +113,7 @@ def test_timeline_labels_fit_on_range_redraw_and_resize(
     """Every shared timeline keeps full tooltip dates and all nonzero bars."""
     vm, page = smoke_vm, browser_page
     path = f"/var/log/pfblockerng/{log}"
-    backups = _backup_seeded_files(vm, (path, "/usr/local/www/pfblockerng/chart_stats.csv"))
+    backups = _backup_seeded_files(vm, (path,))
     prefix = "installedpackages/pfblockerngglobal"
     keys = {f"{prefix}/{selection}": "", f"{prefix}/pfbchartcnt": "8064"}
     priors = {key: helpers.config_get_state(vm, key) for key in keys}
@@ -117,6 +123,7 @@ def test_timeline_labels_fit_on_range_redraw_and_resize(
         _put(vm, path, _rows(view, 8064))
         page.set_viewport_size({"width": 1440, "height": 1000})
         _open(page, webui, f"/pfblockerng/pfblockerng_alerts.php?view={view}")
+        _show_timeline(page, view)
         for count in (24, 168, 8064):
             page.locator("#chart .dropdown-toggle").click()
             page.locator(f'#chartEvent[value="{count}"] a').click()
@@ -135,6 +142,7 @@ def test_timeline_labels_fit_on_range_redraw_and_resize(
         for count in (1, 0):
             _put(vm, path, _rows(view, count))
             _open(page, webui, f"/pfblockerng/pfblockerng_alerts.php?view={view}")
+            _show_timeline(page, view)
             assert_timeline_geometry(page, count)
     finally:
         for key, prior in priors.items():

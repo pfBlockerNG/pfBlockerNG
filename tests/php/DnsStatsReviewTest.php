@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/DnsStatsAggregationTest.php';
 require_once __DIR__ . '/AlertsPageLoader.php';
+require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_stats.inc';
 
 final class DnsStatsReviewTest extends TestCase
 {
@@ -31,23 +32,9 @@ final class DnsStatsReviewTest extends TestCase
 		$domain = 'a,b.test';
 		$rows = [['DNSBL', '2030-01-15 09:00:00', $domain, '192.0.2.1', 'Python', 'TLD', 'group', $domain, 'feed', '+', 'A']];
 		[$all] = DnsStatsAggregationTest::aggregate('dnsbl_stat', DnsStatsAggregationTest::csv($rows));
-		$source = $this->pageSource();
-		$source = substr($source, strpos($source, '// issue #1495:'));
-		$start = strpos($source, 'if (!empty($alert_stats[$alert_view][$stat_type])) {');
-		$end = strpos($source, '?>', $start);
-		$render = substr($source, $start, $end - $start);
 		foreach (['dnsbldomain', 'dnsblevald'] as $stat_type) {
-			$alert_stats = $all;
-			$alert_view = 'dnsbl_stat';
-			$pfbmaxtable = 'max';
-			$stype = ['', '', '', TRUE, 'domain'];
-			ob_start();
-			try {
-				eval($render);
-				$html = ob_get_contents();
-			} finally {
-				ob_end_clean();
-			}
+			$panel = pfb_stats_panel($stat_type, ['', '', '', TRUE, 'domain'], $all['dnsbl_stat'][$stat_type], 'max', []);
+			$html = $panel['html'];
 			$this->assertStringContainsString('>' . $domain . '</td>', $html, $stat_type);
 			$this->assertStringContainsString('>TLD</td>', $html, $stat_type);
 			$this->assertStringContainsString('value="' . $domain . '"', $html, $stat_type);

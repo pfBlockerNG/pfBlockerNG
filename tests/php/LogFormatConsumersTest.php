@@ -532,17 +532,12 @@ EOT;
 		$this->assertStringContainsString('Undefined array key', $warnings[0] ?? '', "got: " . implode(', ', $warnings));
 	}
 
-	/**
-	 * Green: the NEW `isset($d[1])`-guarded render line, pinned by source
-	 * tripwire then reproduced verbatim, raises NO warning on a spaceless key
-	 * (falls back to the bare $d[0]) and keeps the normal "date (hour)" shape
-	 * for a well-formed key.
-	 */
+	/** Corrupt keys keep their bare label; valid keys retain the full date and hour. */
 	public function testBucketLabelIssetGuardPreventsWarningOnKeyWithoutSpace(): void
 	{
-		$source = $this->codeSource(self::ALERTS_PHP);
-		$needle = '$data = isset($d[1]) ? "{$d[0]}&emsp;({$d[1]})" : $d[0];';
-		$this->assertStringContainsString($needle, $source, 'the $d[1] render guard changed -- update this oracle');
+		require_once __DIR__ . '/AlertsPageLoader.php';
+		require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_stats.inc';
+		pfb_test_load_alerts_page_functions();
 
 		foreach (
 			[
@@ -556,14 +551,13 @@ EOT;
 				return true;
 			});
 			try {
-				$d = explode(' ', $data);
-				$data = isset($d[1]) ? "{$d[0]}&emsp;({$d[1]})" : $d[0]; // the NEW (guarded) shape, reproduced verbatim.
+				$panel = pfb_stats_panel('dnsbldatehr', ['', 'Found', 'hours', FALSE, ''], [$data => 1], 'max', []);
 			} finally {
 				restore_error_handler();
 			}
 
 			$this->assertSame([], $warnings, "{$label}: the guarded access must never warn; got: " . implode(', ', $warnings));
-			$this->assertSame($expected, $data, "{$label}: unexpected rendered bucket label");
+			$this->assertStringContainsString('>' . $expected . '</td>', $panel['html'], $label);
 		}
 	}
 

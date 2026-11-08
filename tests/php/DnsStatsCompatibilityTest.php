@@ -26,7 +26,7 @@ final class DnsStatsCompatibilityTest extends TestCase
 			] as $type => $expected) {
 				$this->assertSame($expected, $result[$view][$type], $view . '/' . $type);
 			}
-			$this->assertSame("edate,ecount\n2030-01-15 (09),1\n", $chart);
+			$this->assertSame([['edate' => '2030-01-15 (09)', 'ecount' => 1]], $chart);
 		}
 	}
 

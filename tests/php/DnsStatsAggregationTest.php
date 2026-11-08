@@ -11,7 +11,6 @@ final class DnsStatsAggregationTest extends TestCase
 		$dir = sys_get_temp_dir() . '/dnsstats_' . bin2hex(random_bytes(8));
 		mkdir($dir);
 		$alert_log = $dir . '/events.csv';
-		$chart = $dir . '/chart.csv';
 		if ($contents !== NULL) {
 			file_put_contents($alert_log, $contents);
 		}
@@ -19,14 +18,14 @@ final class DnsStatsAggregationTest extends TestCase
 		$start = strpos($source, '// Collect Alert Statistics');
 		$end = strpos($source, '// Collect DNSBL widget statistics', $start);
 		$code = substr($source, $start, $end - $start) . "\n}";
-		$code = str_replace('/usr/local/www/pfblockerng/chart_stats.csv', $chart, $code);
+		$stats_data = TRUE;
 		$alert_summary = TRUE;
 		$alert_view = $view;
 		$pfbdnsblstat = $pfbdnsblreplystat = $pfbblockstat = $pfbpermitstat = $pfbmatchstat = $hidden;
 		$pfb = ['cut' => 'cut', 'grep' => 'grep', 'sed' => 'sed', 'awk' => 'awk'];
 		try {
 			eval($code);
-			return [$alert_stats, file_exists($chart) ? file_get_contents($chart) : NULL];
+			return [$alert_stats, $stats_timeline];
 		} finally {
 			foreach (glob($dir . '/*') as $file) {
 				unlink($file);
@@ -68,7 +67,7 @@ final class DnsStatsAggregationTest extends TestCase
 		] as $type => $expected) {
 			$this->assertSame($expected, $s[$type], $type);
 		}
-		$this->assertSame("edate,ecount\n2030-01-15 (09),2\n2030-01-16 (10),1\n", $chart);
+		$this->assertSame([['edate' => '2030-01-15 (09)', 'ecount' => 2], ['edate' => '2030-01-16 (10)', 'ecount' => 1]], $chart);
 	}
 
 	public function testReplyAllCategoriesPreserveCacheTtlAndSuffixDepth(): void
@@ -92,7 +91,7 @@ final class DnsStatsAggregationTest extends TestCase
 			$this->assertSame($expected, $s[$type], $type);
 		}
 		$this->assertSame(3, $result['count']['dnsbl_reply_stat']);
-		$this->assertSame("edate,ecount\n2030-01-15 (09),2\n2030-01-16 (10),1\n", $chart);
+		$this->assertSame([['edate' => '2030-01-15 (09)', 'ecount' => 2], ['edate' => '2030-01-16 (10)', 'ecount' => 1]], $chart);
 	}
 
 	public function testEmptyZeroMarkersBytesLegacyDatesAndPhysicalLines(): void
@@ -115,13 +114,13 @@ final class DnsStatsAggregationTest extends TestCase
 			foreach ([NULL, ''] as $contents) {
 				[$result, $chart] = self::aggregate($view, $contents);
 				$this->assertSame(0, $result['count'][$view]);
-				$this->assertSame("edate,ecount\n", $chart);
+				$this->assertSame([], $chart);
 			}
 			[$baseline] = self::aggregate($view, '');
 			$hidden = array_keys($baseline[$view]);
 			[$result, $chart] = self::aggregate($view, '', $hidden);
 			$this->assertArrayNotHasKey('count', $result);
-			$this->assertNull($chart);
+			$this->assertSame([], $chart);
 			[$result] = self::aggregate($view, '', [$hidden[0]]);
 			$this->assertArrayNotHasKey($hidden[0], $result[$view]);
 		}

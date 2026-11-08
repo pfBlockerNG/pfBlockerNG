@@ -4,30 +4,8 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * issue #1777: two narrow diagnostic-only guards in pfblockerng_alerts.php,
- * each eval-extracted VERBATIM (pure array-index logic, no page state) and
- * run standalone -- guard-state-agnostic, so this file is red pre-fix and
- * green post-fix unchanged.
- *
- * (a) pie_block() (:4917-5052, mixed HTML/PHP template) segments the pie
- *     chart over `for ($i = 0; $i < ($numsegments-1); $i++) { if ($k[$i]) ...`
- *     -- $numsegments-1 can exceed count($k) (fewer real entries than pie
- *     segments), so $k[$i] undefined-key warns on every trailing iteration.
- *     The read is already effectively optional (falsy skips the segment) --
- *     `?? NULL` silences the warning without changing which iterations build
- *     a segment. The loop bound must NOT be shortened: $i survives the loop
- *     and is read again (`$segcolors[$i % $numsegments]`) to colour the
- *     trailing "Other" segment -- bounding the loop to count($k) would shift
- *     $i and silently change that colour.
- *
- * (b) The alert-summary day/hour stat loop (:1774-1785) splits a shell stat
- *     line on the first space (`explode(' ', trim($line), 2)`); a line with
- *     no space at all (a stray/short summary row) yields a single-element
- *     $data, so $data[1] is undefined -- `?? ''` keeps the existing `?:
- *     $unknown_msg` fallback semantics (both '' and NULL are falsy) while
- *     dropping the warning.
- */
+require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_stats.inc';
+
 final class AlertsPieBlockAndStatsGuardTest extends TestCase
 {
 	private const ALERTS_PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_alerts.php';
@@ -39,27 +17,6 @@ final class AlertsPieBlockAndStatsGuardTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng_alerts.php');
 		}
 
-		if (!function_exists('pfb_alerts_oracle_pie_segment_loop')) {
-			// Anchored on the for-loop header through the "Other" segment block's
-			// closing brace -- captures BOTH the guarded $k[$i] read and the
-			// post-loop $i re-use verbatim, in one extraction.
-			if (!preg_match(
-				'/(for \(\$i = 0; \$i < \(\$numsegments-1\); \$i\+\+\) \{\n.*?\n\t\}\n\n'
-				. '\t\$balance = \$sumlines - \$numentries;\n'
-				. '\tif \(\$balance > 0\) \{\n.*?\n\t\})\n\?>/s',
-				$src,
-				$m
-			)) {
-				throw new RuntimeException('test bootstrap: pie_block segment loop not found');
-			}
-			eval(
-				'function pfb_alerts_oracle_pie_segment_loop(array $summary, int $numsegments, array $segcolors, int $sumlines): array {'
-				. ' $k = array_keys($summary); $numentries = 0; ob_start();'
-				. $m[1]
-				. ' $out = (string) ob_get_clean();'
-				. ' return [$out, $numentries, $i]; }'
-			);
-		}
 
 		if (!function_exists('pfb_alerts_oracle_stat_bucket_key')) {
 			if (!preg_match(
@@ -101,47 +58,26 @@ final class AlertsPieBlockAndStatsGuardTest extends TestCase
 		return array_values(array_filter($diagnostics, static fn (string $d): bool => str_contains($d, 'Undefined array key')));
 	}
 
-	// -----------------------------------------------------------------------
-	// (a) pie_block() segment loop.
-	// -----------------------------------------------------------------------
-
 	public function testPieSegmentLoopEmitsNoUndefinedArrayKeyWhenFewerEntriesThanSegments(): void
 	{
-		// 2 real entries, 5 pie segments -> the loop runs $i=0..3, and $k[2]/$k[3]
-		// are undefined (only $k[0]/$k[1] exist).
-		[$result, $diagnostics] = $this->runCapturing(static fn () => pfb_alerts_oracle_pie_segment_loop(
-			['a.example' => 10, 'b.example' => 5],
-			5,
-			['#111', '#222', '#333', '#444', '#555'],
-			15
+		[$result, $diagnostics] = $this->runCapturing(static fn () => pfb_stats_pie(
+			['a.example' => 10, 'b.example' => 5], 2, 'test'
 		));
-
-		$undefined = self::undefinedKeyDiagnostics($diagnostics);
-		$this->assertSame([], $undefined, "pie_block()'s segment loop must emit zero 'Undefined array key' diagnostics, got:\n" . implode("\n", $undefined));
-
-		[$out, $numentries, ] = $result;
-		$this->assertSame(2, $numentries, 'only the 2 real entries must build a segment (behaviour-preserving)');
-		$this->assertStringContainsString('a.example', $out);
-		$this->assertStringContainsString('b.example', $out);
+		$this->assertSame([], self::undefinedKeyDiagnostics($diagnostics));
+		$this->assertSame([
+			['label' => 'a.example', 'value' => 10.0, 'color' => '#2484c1'],
+			['label' => 'b.example', 'value' => 5.0, 'color' => '#65a620'],
+		], $result['content']);
 	}
 
 	public function testPieSegmentLoopPostLoopIndexIsUnchangedByTheGuard(): void
 	{
-		// Pins the "Other" segment colour derivation: $i must equal the loop's
-		// natural post-condition value ($numsegments-1), NOT be shortened by a
-		// count($k)-based bound -- the exact regression this fix must avoid.
-		$numsegments = 5;
-		[$result, ] = $this->runCapturing(static fn () => pfb_alerts_oracle_pie_segment_loop(
-			['a.example' => 10, 'b.example' => 5],
-			$numsegments,
-			['#111', '#222', '#333', '#444', '#555'],
-			15
+		[$result, $diagnostics] = $this->runCapturing(static fn () => pfb_stats_pie(
+			array_combine(range('a', 'l'), range(12, 1)), 12, 'test'
 		));
-
-		[$out, , $finalI] = $result;
-		$this->assertSame($numsegments - 1, $finalI, '$i must survive the loop unshortened -- bounding to count($k) would change this');
-		// $segcolors[$i % $numsegments] with the unshortened $i=4 -> index 4 -> '#555'.
-		$this->assertStringContainsString('"color": "#555"', $out, 'the "Other" segment colour must use the UNSHORTENED post-loop $i');
+		$this->assertSame([], self::undefinedKeyDiagnostics($diagnostics));
+		$this->assertCount(10, $result['content']);
+		$this->assertSame(['label' => 'Other', 'value' => 3, 'color' => '#6ada6a'], $result['content'][9]);
 	}
 
 	// -----------------------------------------------------------------------
