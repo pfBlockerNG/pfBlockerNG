@@ -7,9 +7,9 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
+from urllib.parse import urlencode
 
 import pytest
-from requests import Request, Response
 
 from tests.smoke import helpers as h
 from tests.smoke import test_smoke_metrics as metrics
@@ -317,23 +317,19 @@ def test_privacy_refusal_helper_accepts_checked_and_unchecked_syslog(
     def ssh(_self: metrics.SmokeVM, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args, 0, "existing proxy command", "")
 
-    def get(_self: WebUI, _path: str) -> Response:
-        response = Response()
-        response.status_code = 200
-        response._content = html.encode()
-        return response
+    def get(_self: WebUI, _path: str) -> SimpleNamespace:
+        return SimpleNamespace(status_code=200, text=html)
 
     posted: list[dict[str, str]] = []
 
-    def post(_self: WebUI, path: str, fields: dict[str, str]) -> Response:
+    def post(_self: WebUI, _path: str, fields: dict[str, str]) -> SimpleNamespace:
         posted.append(dict(fields))
-        response = Response()
-        response.status_code = 200
-        response._content = b"privacy3757 refused Save; still enabled; No General settings were saved."
-        response.request = Request(
-            "POST", "https://fixture.invalid" + path, data={"save": "Save", **parsed, **fields}
-        ).prepare()
-        return response
+        return SimpleNamespace(
+            status_code=200,
+            text="privacy3757 refused Save; still enabled; No General settings were saved.",
+            history=[],
+            request=SimpleNamespace(method="POST", body=urlencode({"save": "Save", **parsed, **fields})),
+        )
 
     monkeypatch.setattr(metrics, "_php_ok", snapshot)
     monkeypatch.setattr(metrics.SmokeVM, "ssh", ssh)
