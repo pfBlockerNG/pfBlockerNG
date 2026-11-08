@@ -23,6 +23,7 @@ final class DnsMetricLifecycleTest extends TestCase
 			'dnsbl_resolver' => "{$this->root}/resolver.sqlite",
 			'log' => "{$this->root}/pfblockerng.log",
 			'errlog' => "{$this->root}/error.log",
+			'metrics_lock' => "{$this->root}/metrics.lock",
 			'sqlite_timeout' => 2000,
 			'alias_dnsbl_configured' => ['DNSBL_A', 'DNSBL_B'],
 			'alias_dnsbl_all' => ['DNSBL_A', 'DNSBL_B'],
