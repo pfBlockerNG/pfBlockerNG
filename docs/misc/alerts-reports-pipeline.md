@@ -81,7 +81,10 @@ Page level:
 
 - one full `tail -r` log copy per table per load;
 - Unified loop reads reversed log to EOF even after all row limits filled (converters no-op, but `fgetcsv` still parses every remaining line);
-- stat views (`*_stat`): ~14 `cut|sort|uniq|sed` pipelines over full log per view. Total no longer `grep -c ^` fork (issue #1261 — it is `pfb_count_lines()`, in-process), and computed once before per-stat loop, not recomputed per iteration (issue #809) — loop body only assigns precomputed value.
+- DNSBL and DNS Reply Stats aggregate enabled categories, physical-line totals and hourly timeline buckets in one streaming pass through `pfb_dns_stats()` (#3754). Unquoted rows use direct field splitting; any quoted record is read by PHP's native CSV parser, including embedded newlines. Counts are sorted after aggregation, and repeated hours are combined even when log rows are out of order.
+- IP stat views retain their per-category `cut|sort|uniq|sed` pipelines. Their total is computed once with `pfb_count_lines()`, not once per category.
+
+The shared Event Timeline selects native NVD3 x-axis ticks from the available chart width and measured label width, recalculating on resize and date-range changes. Fewer axis labels do not remove event bars or full timestamps from tooltips. The existing shared `chart_stats.csv` handoff remains unchanged (#1746).
 
 ## Why load time varies day to day
 

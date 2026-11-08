@@ -4801,6 +4801,120 @@ function pfb_csv_field(string $value): string
 	return '"' . str_replace('"', '""', $value) . '"';
 }
 
+/** Aggregate enabled DNS statistics in one CSV scan; count is physical log lines. */
+function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
+{
+	$stats = array_fill_keys(array_keys($stat_info), []);
+	$chart = [];
+	$total = 0;
+	$handle = $stat_info ? @fopen($path, 'r') : FALSE;
+	if ($handle !== FALSE) {
+		while (($line = fgets($handle)) !== FALSE) {
+			// Quoted records may span physical lines; let the native CSV reader frame them.
+			if (str_contains($line, '"')) {
+				fseek($handle, -strlen($line), SEEK_CUR);
+				$fields = fgetcsv($handle, 0, ',', '"', '');
+				if ($fields === FALSE) {
+					break;
+				}
+				$total++;
+				foreach ($fields as $field) {
+					$total += substr_count($field ?? '', "\n");
+				}
+			} else {
+				$fields = explode(',', rtrim($line, "\r\n"));
+				$total++;
+			}
+			$date = $fields[1] ?? '';
+			$is_iso = preg_match('/^[0-9]{4}-/', $date) === 1;
+			$date_parts = explode(':', $date, 3);
+			$hour = $date_parts[0];
+			$domain_parts = NULL;
+			foreach ($stat_info as $type => $column) {
+				$value = $fields[$column - 1] ?? '';
+				switch ($type) {
+					case 'dnsbldate':
+					case 'replydate':
+						if (!$is_iso) {
+							continue 2;
+						}
+						$value = explode(' ', $date, 2)[0];
+						break;
+					case 'dnsbldatehr':
+					case 'dnsbldatehrmin':
+						if (!$is_iso) {
+							continue 2;
+						}
+						$value = $hour;
+						if ($type === 'dnsbldatehrmin' && isset($date_parts[1])) {
+							$value .= ':' . $date_parts[1];
+						}
+						break;
+					case 'dnsblchart':
+					case 'replychart':
+						if ($is_iso) {
+							$chart[$hour] = ($chart[$hour] ?? 0) + 1;
+						}
+						continue 2;
+					case 'dnsblagent':
+						$agent_parts = explode('|', $value, 4);
+						$value = count($agent_parts) === 1 ? $value : ($agent_parts[2] ?? '');
+						break;
+					case 'dnsbldomain':
+						$value .= ',' . ($fields[5] ?? '');
+						break;
+					case 'dnsblevald':
+						$value = ($fields[5] ?? '') . ',' . $value;
+						if (!str_contains($value, 'TLD')) {
+							continue 2;
+						}
+						break;
+					case 'replysrcipd':
+						$value .= ',' . ($fields[7] ?? '');
+						break;
+					case 'dnsbltld':
+					case 'replytld':
+					case 'replytld2':
+					case 'replytld3':
+						$domain_parts ??= explode('.', $value);
+						$depth = $type === 'replytld3' ? 3 : ($type === 'replytld2' ? 2 : 1);
+						if (count($domain_parts) < max(2, $depth)) {
+							continue 2;
+						}
+						$value = implode('.', array_slice($domain_parts, -$depth));
+						break;
+				}
+				$value = trim($value);
+				if ($value === '-' || $value === '+' || str_ends_with($value, ' -') || str_ends_with($value, ' +')) {
+					continue;
+				}
+				$stats[$type][$value] = ($stats[$type][$value] ?? 0) + 1;
+			}
+		}
+		fclose($handle);
+	}
+	foreach ($stats as $type => &$buckets) {
+		if ($type === 'dnsbldate' || $type === 'replydate') {
+			krsort($buckets, SORT_STRING);
+		} else {
+			krsort($buckets, SORT_STRING);
+			arsort($buckets, SORT_NUMERIC);
+		}
+		if (isset($buckets[''])) {
+			$normalized = [];
+			foreach ($buckets as $label => $count) {
+				$label = $label === '' ? $unknown : $label;
+				$normalized[$label] = ($normalized[$label] ?? 0) + $count;
+			}
+			arsort($normalized, SORT_NUMERIC);
+			$buckets = $normalized;
+		}
+	}
+	unset($buckets);
+	ksort($chart, SORT_STRING);
+	return ['stats' => $stats, 'count' => $total, 'chart' => $chart];
+}
+
 /**
  * pfb_ip_log_row_schema_ok — exact field-count schema gate for a raw
  * (pre-timestamp-shift) IP feature-log row as delivered to convert_ip_log().

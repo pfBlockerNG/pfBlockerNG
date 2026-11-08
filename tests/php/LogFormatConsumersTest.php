@@ -355,29 +355,9 @@ EOT;
 		);
 	}
 
-	/**
-	 * Regression: `dnsbldatehr`/`dnsbldatehrmin` (`:'-split hour buckets) formula
-	 * ITSELF is genuinely unaffected by the ISO format change -- neither line was
-	 * rewritten this phase, and BOTH an old-format and a new-format sample bucket
-	 * to the same "<date> <hour[:min]>" shape at this cut stage alone. issue #1057
-	 * later gated this formula's INPUT (a `grep -E '^[0-9]{4}-'`, pinned below) so
-	 * an old-format sample no longer REACHES it in production -- LogFormatConsumersTest's
-	 * mixed-fixture tests below cover that full-pipeline behaviour.
-	 */
+	/** Historical colon-split compatibility; live DNS aggregation is covered by DnsStatsAggregationTest. */
 	public function testDnsblDateHrAndHrMinBucketsUnaffectedByFormatChange(): void
 	{
-		$source = $this->codeSource(self::ALERTS_PHP);
-		$this->assertStringContainsString(
-			"{\$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1 | sort | uniq -c | sort -nr",
-			$source,
-			'dnsbldatehr\'s cut formula changed -- update this oracle'
-		);
-		$this->assertStringContainsString(
-			"{\$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1,2 | sort | uniq -c | sort -nr",
-			$source,
-			'dnsbldatehrmin\'s cut formula changed -- update this oracle'
-		);
-
 		foreach (
 			[
 				'old-format' => 'Jan 5 14:30:45',

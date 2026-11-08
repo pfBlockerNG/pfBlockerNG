@@ -1784,151 +1784,121 @@ if ($alert_summary) {
 		$stat_hidden = array_flip($stat_hidden);
 	}
 
-	// Total entry count for this view is constant across every $stat_info
-	// iteration (the log doesn't change mid-loop), so compute it once here
-	// instead of once per iteration (issue #809). The per-iteration assignment
-	// below stays IN the loop body -- if every stat type is hidden the loop body
-	// never runs, so $alert_stats['count'] must stay unset for this view exactly
-	// as it does today.
-	// issue #1261: display-only total -- NULL (read failure) -> 0, same as the
-	// exec()-era `?: 0` fallback (a legitimately-empty file also yields 0).
-	$alert_log_total_count = file_exists($alert_log) ? (pfb_count_lines($alert_log) ?? 0) : 0;
-
-	foreach ($stat_info as $stat_type => $column) {
-		if (isset($stat_hidden[$stat_type])) {
-			continue;
+	if ($alert_view == 'dnsbl_stat' || $alert_view == 'dnsbl_reply_stat') {
+		$visible_stats = array_diff_key($stat_info, $stat_hidden);
+		$unknown_msg = $alert_view == 'dnsbl_stat' ? pfb_dnsbl_mechanism_labels()['enabled'] : 'Unknown';
+		$dns_stats = pfb_dns_stats($alert_log, $visible_stats, $unknown_msg);
+		$alert_stats[$alert_view] = $dns_stats['stats'];
+		if ($visible_stats) {
+			$alert_stats['count'][$alert_view] = $dns_stats['count'];
 		}
+		$chart_type = $alert_view == 'dnsbl_stat' ? 'dnsblchart' : 'replychart';
+		if (isset($visible_stats[$chart_type])) {
+			$chart_csv = "edate,ecount\n";
+			foreach ($dns_stats['chart'] as $hour => $count) {
+				$date_hour = explode(' ', $hour, 2);
+				$chart_csv .= pfb_csv_field($date_hour[0] . ' (' . ($date_hour[1] ?? '') . ')') . ',' . $count . "\n";
+			}
+			@file_put_contents('/usr/local/www/pfblockerng/chart_stats.csv', $chart_csv);
+		}
+	} else {
+		// Total entry count for this view is constant across every $stat_info
+		// iteration (the log doesn't change mid-loop), so compute it once here
+		// instead of once per iteration (issue #809). The per-iteration assignment
+		// below stays IN the loop body -- if every stat type is hidden the loop body
+		// never runs, so $alert_stats['count'] must stay unset for this view exactly
+		// as it does today.
+		// issue #1261: display-only total -- NULL (read failure) -> 0, same as the
+		// exec()-era `?: 0` fallback (a legitimately-empty file also yields 0).
+		$alert_log_total_count = file_exists($alert_log) ? (pfb_count_lines($alert_log) ?? 0) : 0;
 
-		if (file_exists($alert_log)) {
+		foreach ($stat_info as $stat_type => $column) {
+			if (isset($stat_hidden[$stat_type])) {
+				continue;
+			}
 
-			$cut_cmd = "{$pfb['cut']} -d ',' -f{$column}";
+			if (file_exists($alert_log)) {
 
-			if ($alert_view != 'dnsbl_stat') {
+				$cut_cmd = "{$pfb['cut']} -d ',' -f{$column}";
+
 				$unknown_msg = 'Unknown';
-			} else {
-				$unknown_msg = pfb_dnsbl_mechanism_labels()['enabled'];
-			}
 
-			$agent_cmd = '';
-			if ($stat_type == 'dnsblagent') {
-				$agent_cmd = "cut -d '|' -f3 | ";
-			}
+				$agent_cmd = '';
 
-			$stats = array();
-			switch ($stat_type) {
-				case 'ipdate':
-				case 'dnsbldate':
-				case 'replydate':
-					// ISO date/time has 1 space token (not the old 3-token
-					// 'M j H:i:s'); the day bucket is the date field alone.
-					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
-					$stats = array_reverse($stats);
-					break;
-				case 'dnsbldatehr':
-					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1 | sort | uniq -c | sort -nr 2>&1", $stats);
-					break;
-				case 'dnsbldatehrmin':
-					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1,2 | sort | uniq -c | sort -nr 2>&1", $stats);
-					break;
-				case 'dnsblchart':
-				case 'replychart':
-				case 'ipchart':
-					exec("{$lc_bytes}echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1");
-					break;
-				case 'ipsrcipin':
-					exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
-					break;
-				case 'ipsrcipout':
-					exec("{$lc_bytes}{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
- 					break;
-				case 'ipdstipin':
-					exec("{$lc_bytes}{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
-					break;
-				case 'ipdstipout':
-					exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
-					break;
-				case 'dnsbltld':
-				case 'replytld':
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | awk -F. 'NF>1' | rev | cut -d '.' -f1 | rev | sort | uniq -c | sort -nr 2>&1", $stats);
-					break;
-				case 'replytld2':
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | rev | cut -d '.' -f1,2 | awk -F. 'NF>1' | rev | sort | uniq -c | sort -nr 2>&1", $stats);
-					break;
-				case 'replytld3':
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | rev | cut -d '.' -f1,2,3 | awk -F. 'NF>2' | rev | sort | uniq -c | sort -nr 2>&1", $stats);
-					break;
-				case 'ipsrcport':
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$su_cmd} | {$pfb['awk']} -F ' ' '\$2 <= 1024 || \$2 ~ /[a-zA-Z]/' | sort -nr 2>&1", $stats);
-					break;
-				case 'replyttl':
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -v ',cache,' | {$su_cmd} | sort -nr 2>&1", $stats);
-					break;
-				case 'dnsbldomain':
-					exec("{$lc_bytes}{$cut_cmd},6 {$alert_log} | {$su_cmd} | sort -nr 2>&1", $stats);
-					break;
-				case 'dnsblevald':
-					exec("{$lc_bytes}{$cut_cmd},6 {$alert_log} | {$pfb['grep']} 'TLD' | {$su_cmd} | sort -nr 2>&1", $stats);
-					break;
-				case 'replysrcipd':
-					exec("{$lc_bytes}{$cut_cmd},8 {$alert_log} | {$su_cmd} | sort -nr 2>&1", $stats);
-					break;
-				case 'ipasn':
-					// issue #1369 (ADR-38 Amendment 3): no back-compat for log entries --
-					// only the new 23-field schema carries a plain ASN token at column 20
-					// (unchanged position: the 2 new columns were appended AFTER it). A
-					// pre-upgrade 21-field legacy row's column 20 is still the old
-					// pipe-blob text, and any other field count is malformed either way --
-					// gate on the exact new field count before extracting, so a legacy/
-					// malformed row is skipped silently instead of polluting the Top ASN
-					// count with blob noise.
-					exec("{$lc_bytes}{$pfb['awk']} -F',' 'NF == 23' {$alert_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
-					break;
-				default:
-					exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
-					break;
-			}
-
-			if (!empty($stats)) {
-				foreach($stats as $key => $line) {
-
-					// Remove last column for '-' and '+' indicator
-					$eol = substr($line, -2);
-					if ($eol == ' -' || $eol == ' +') {
-						continue;
-					}
-
-					$data = array_map('trim', explode(' ', trim($line), 2));
-					// issue #1792: a stat label of literally '0' is a real
-					// label -- only a MISSING/empty field reads "Unknown".
-					$alert_stats[$alert_view][$stat_type][pfb_is_empty($data[1] ?? NULL) ? $unknown_msg : $data[1]] = (int) $data[0];
+				$stats = array();
+				switch ($stat_type) {
+					case 'ipdate':
+						// ISO date/time has 1 space token (not the old 3-token
+						// 'M j H:i:s'); the day bucket is the date field alone.
+						// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
+						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
+						$stats = array_reverse($stats);
+						break;
+					case 'ipchart':
+						exec("{$lc_bytes}echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
+						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1");
+						break;
+					case 'ipsrcipin':
+						exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
+						break;
+					case 'ipsrcipout':
+						exec("{$lc_bytes}{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
+	 					break;
+					case 'ipdstipin':
+						exec("{$lc_bytes}{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
+						break;
+					case 'ipdstipout':
+						exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
+						break;
+					case 'ipsrcport':
+						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$su_cmd} | {$pfb['awk']} -F ' ' '\$2 <= 1024 || \$2 ~ /[a-zA-Z]/' | sort -nr 2>&1", $stats);
+						break;
+					case 'ipasn':
+						// issue #1369 (ADR-38 Amendment 3): no back-compat for log entries --
+						// only the new 23-field schema carries a plain ASN token at column 20
+						// (unchanged position: the 2 new columns were appended AFTER it). A
+						// pre-upgrade 21-field legacy row's column 20 is still the old
+						// pipe-blob text, and any other field count is malformed either way --
+						// gate on the exact new field count before extracting, so a legacy/
+						// malformed row is skipped silently instead of polluting the Top ASN
+						// count with blob noise.
+						exec("{$lc_bytes}{$pfb['awk']} -F',' 'NF == 23' {$alert_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+						break;
+					default:
+						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+						break;
 				}
+
+				if (!empty($stats)) {
+					foreach($stats as $key => $line) {
+
+						// Remove last column for '-' and '+' indicator
+						$eol = substr($line, -2);
+						if ($eol == ' -' || $eol == ' +') {
+							continue;
+						}
+
+						$data = array_map('trim', explode(' ', trim($line), 2));
+						// issue #1792: a stat label of literally '0' is a real
+						// label -- only a MISSING/empty field reads "Unknown".
+						$alert_stats[$alert_view][$stat_type][pfb_is_empty($data[1] ?? NULL) ? $unknown_msg : $data[1]] = (int) $data[0];
+					}
+				}
+				else {
+					$alert_stats[$alert_view][$stat_type] = array();
+				}
+				// The exec is hoisted above the loop (issue #809); this assignment
+				// stays here so an all-hidden $stat_info leaves $alert_stats['count']
+				// unset for this view, exactly as before.
+				$alert_stats['count'][$alert_view] = $alert_log_total_count;
 			}
 			else {
-				$alert_stats[$alert_view][$stat_type] = array();
-				if ($alert_view == 'dnsbl_stat') {
-					$alert_stats[$alert_view]['dnsblgptotal'] = array();
-					$alert_stats[$alert_view]['dnsblgpblock'] = array();
-				}
-			}
-			// The exec is hoisted above the loop (issue #809); this assignment
-			// stays here so an all-hidden $stat_info leaves $alert_stats['count']
-			// unset for this view, exactly as before.
-			$alert_stats['count'][$alert_view] = $alert_log_total_count;
-		}
-		else {
-			$alert_stats[$alert_view][$stat_type]	= array();
-			$alert_stats['count'][$alert_view]	= 0;
-			if ($alert_view == 'dnsbl_stat') {
-				$alert_stats[$alert_view]['dnsblgptotal'] = array();
-				$alert_stats[$alert_view]['dnsblgpblock'] = array();
-			}
+				$alert_stats[$alert_view][$stat_type]	= array();
+				$alert_stats['count'][$alert_view]	= 0;
 
-			if ($stat_type == 'dnsblchart' || $stat_type == 'replychart' || $stat_type == 'ipchart') {
-				exec("{$lc_bytes}echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
+				if ($stat_type == 'ipchart') {
+					exec("{$lc_bytes}echo 'edate,ecount' > /usr/local/www/pfblockerng/chart_stats.csv");
+				}
 			}
 		}
 	}
@@ -5419,22 +5389,32 @@ function build_chart(max_entries) {
 				}
 			});
 
-			d3.select('#chart svg')
+			var svg = d3.select('#chart svg');
+			nv.utils.initSVG(svg);
+			var tick_measure = svg.append('g').attr('class', 'nvd3 nv-axis');
+			var tick_width = tick_measure.append('text')
+				.text(data.length ? data[0].edate : '')
+				.node().getComputedTextLength() + 16;
+			tick_measure.remove();
+
+			function update_ticks() {
+				var width = nv.utils.availableWidth(null, svg, chart.margin());
+				var step = Math.max(1, Math.ceil(data.length * tick_width / Math.max(1, width)));
+				chart.xAxis.tickValues(data.filter(function(d, i) {
+					return i % step == 0;
+				}).map(function(d) { return d.edate; }));
+			}
+
+			update_ticks();
+			svg
 				.datum(finalData)
 				.transition().duration(300)
 				.call(chart);
 
-			// Hide xAxis Labels
-			xCnt = Math.max(3, Math.round((series1.length * 0.17) / 10) * 10)
-			d3.selectAll(".tick text").attr("class", function(d,i) {
-				if (isNaN(d) && i % xCnt != 0) {
-					d3.select(this).style("opacity", 0);
-				} else {
-					d3.select(this).style("opacity", 1);
-				}
+			nv.utils.windowResize(function() {
+				update_ticks();
+				chart.update();
 			});
-
-			nv.utils.windowResize(function() { chart.update() });
 			return chart;
 		});
 	})

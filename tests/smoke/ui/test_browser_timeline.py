@@ -50,6 +50,7 @@ def assert_timeline_geometry(page: Page, expected_bars: int) -> None:
     """Read only after the actual NVD3 transitions have drained."""
     if not expected_bars and not page.locator("#chart").count():
         return
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
     page.wait_for_function(
         """() => !nv.render.active && ![...document.querySelectorAll('#chart svg *')]
             .some(e => e.__transition__) && (document.querySelector('#chart .nv-bar') ||
