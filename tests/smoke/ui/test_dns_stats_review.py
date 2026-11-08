@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 @contextmanager
 def _stats_log(vm: helpers.SmokeVM, log: str, preference: str, contents: str) -> Iterator[None]:
+    if log == "dnsbl.log":
+        helpers.ensure_dnsbl_vip(vm)
     path = f"/var/log/pfblockerng/{log}"
     key = f"installedpackages/pfblockerngglobal/{preference}"
     prior = helpers.config_get_state(vm, key)
