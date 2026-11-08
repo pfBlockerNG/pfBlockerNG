@@ -286,7 +286,17 @@ class TestDecisionEqualityDirectContainers:
         containers = _containers()
         reply, oracle = _channel_and_oracle(monkeypatch, containers=containers, q_name=q, tld="com")
         assert oracle.is_found is False
-        assert reply == {"blocked": False, "b_type": "", "group": "", "b_eval": "", "feed": "", "p_type": ""}
+        assert reply == {
+            "blocked": False,
+            "b_type": "",
+            "group": "",
+            "b_eval": "",
+            "feed": "",
+            "p_type": "",
+            "group_owner": "",
+            "group_origin": "",
+            "group_epoch": "",
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -931,6 +941,9 @@ class TestHostileInputRows:
             "b_eval": "",
             "feed": "",
             "p_type": "",
+            "group_epoch": "",
+            "group_owner": "",
+            "group_origin": "",
         }
 
         h.publish({"id": "m2", "domain": ""})

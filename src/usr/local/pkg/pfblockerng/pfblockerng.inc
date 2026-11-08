@@ -11021,10 +11021,36 @@ function pfb_metrics_render(array $s): string {
 	}
 	$family('pfblockerng_ip_rule_packets_total', 'Packets matched by pfB firewall rules, per alias.', $rows);
 
+	$owned = $breakdown = array();
+	foreach ($s['dnsbl_totals'] ?? array() as $row) {
+		$owned[$row['group']][$row['origin']] = ($owned[$row['group']][$row['origin']] ?? 0) + $row['count'];
+	}
+	foreach ($s['dnsbl_detail'] ?? array() as $row) {
+		$key = serialize(array($row['origin'], $row['qtype'], $row['transport']));
+		$breakdown[$row['group']][$key] ??= $row + array('count' => 0);
+		$breakdown[$row['group']][$key]['count'] = ($breakdown[$row['group']][$key]['_sum'] ?? 0) + $row['count'];
+		$breakdown[$row['group']][$key]['_sum'] = $breakdown[$row['group']][$key]['count'];
+	}
 	$blocked = array();
 	$group_entries = array();
 	foreach ($s['dnsbl_groups'] ?? array() as $g) {
-		$blocked[] = array(array('group' => $g['group']), $g['counter']);
+		$origins = $owned[$g['group']] ?? array();
+		$blocked[] = array(array('group' => $g['group']), $g['counter'] - array_sum($origins));
+		foreach ($breakdown[$g['group']] ?? array() as $row) {
+			$origins[$row['origin']] -= $row['count'];
+		}
+		foreach ($origins as $origin => $count) {
+			if ($count > 0) {
+				$blocked[] = array(array('group' => $g['group'], 'origin' => $origin), $count);
+			}
+		}
+		foreach ($breakdown[$g['group']] ?? array() as $row) {
+			$labels = array('group' => $g['group'], 'origin' => $row['origin'], 'qtype' => $row['qtype']);
+			if ($row['transport'] !== '') {
+				$labels['transport'] = $row['transport'];
+			}
+			$blocked[] = array($labels, $row['count']);
+		}
 		if ($g['entries'] !== NULL) {
 			$group_entries[] = array(array('group' => $g['group']), $g['entries']);
 		}
@@ -11033,7 +11059,18 @@ function pfb_metrics_render(array $s): string {
 	$family('pfblockerng_dnsbl_group_entries', 'Entries in each enabled DNSBL group.', $group_entries);
 
 	$rq = $s['resolver_queries'] ?? NULL;
-	$family('pfblockerng_dnsbl_resolver_queries_total', 'DNS queries handled by the pfB resolver.', $rq === NULL ? array() : array(array(array(), $rq)));
+	$details = $s['resolver_detail'] ?? array();
+	$rows = $rq === NULL ? array() : array(array(array(), $rq - array_sum(array_column($details, 'count'))));
+	if ($rq !== NULL) {
+		foreach ($details as $row) {
+			$labels = array('qtype' => $row['qtype']);
+			if ($row['transport'] !== '') {
+				$labels['transport'] = $row['transport'];
+			}
+			$rows[] = array($labels, $row['count']);
+		}
+	}
+	$family('pfblockerng_dnsbl_resolver_queries_total', 'DNS queries handled by the pfB resolver.', $rows);
 
 	$rows = array();
 	foreach ($s['feed_success'] ?? array() as $feed => $ts) {
@@ -11060,27 +11097,52 @@ function pfb_metrics_render(array $s): string {
 	return $out;
 }
 
-// Read-only query for the metrics collector: pfb_open_sqlite() can create or repair tables, which a scrape must never do.
-// A missing file reads as no rows; an open or query failure reads as NULL.
-function pfb_metrics_sqlite_rows(string $path, string $sql): ?array {
+// Aggregate and optional upgrade-era detail tables must be read from the same SQLite snapshot.
+function pfb_metrics_sqlite_snapshot(string $path, string $sql, string $detail_table, string $detail_sql, ?callable $open = NULL, bool $owned = FALSE): ?array {
 	global $pfb;
 	if (!is_file($path)) {
-		return array();
+		return array('aggregate' => array(), 'detail' => array()) + ($owned ? array('totals' => array(), 'epochs' => array()) : array());
 	}
+	$db = NULL;
 	try {
-		$db = new SQLite3($path, SQLITE3_OPEN_READONLY);
+		$db = $open === NULL ? new SQLite3($path, SQLITE3_OPEN_READONLY) : $open($path);
 		$db->enableExceptions(TRUE);
-		// Waits out the DNSBL writer's lock like pfb_open_sqlite(), but capped: its 100 s would outlast the cron's 50 s kill and lose every source, not just this one.
+		// A scrape must not inherit the writer's 100-second wait.
 		$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
-		$rows = array();
+		$db->exec('BEGIN');
+		$rows = array('aggregate' => array(), 'detail' => array()) + ($owned ? array('totals' => array(), 'epochs' => array()) : array());
 		$result = $db->query($sql);
 		while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-			$rows[] = $row;
+			$rows['aggregate'][] = $row;
 		}
-		$db->close();
+		$result->finalize();
+		$table = SQLite3::escapeString($detail_table);
+		if ($db->querySingle("SELECT count(*) FROM sqlite_master WHERE name = '{$table}'") > 0) {
+			$result = $db->query($detail_sql);
+			while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+				$rows['detail'][] = $row;
+			}
+			$result->finalize();
+		}
+		if ($owned) {
+			foreach (array('totals' => 'dns_metric_totals', 'epochs' => 'dnsbl_group_epochs') as $key => $table) {
+				if ($db->querySingle("SELECT count(*) FROM sqlite_master WHERE name = '{$table}'")) {
+					$result = $db->query("SELECT * FROM {$table}");
+					while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+						$rows[$key][] = $row;
+					}
+					$result->finalize();
+				}
+			}
+		}
+		$db->exec('COMMIT');
 		return $rows;
 	} catch (Throwable) {
 		return NULL;
+	} finally {
+		if ($db !== NULL) {
+			$db->close();
+		}
 	}
 }
 
@@ -11089,6 +11151,32 @@ function pfb_metrics_collect(): array {
 	global $pfb;
 	$up = array();
 	$num = static fn ($v): int => is_numeric($v) ? (int) $v : 0;
+	$counter = static function ($value): int {
+		if ((!is_int($value) && !is_string($value))
+		    || filter_var($value, FILTER_VALIDATE_INT, array('options' => array('min_range' => 0))) === FALSE) {
+			throw new UnexpectedValueException('Invalid DNS metric counter');
+		}
+		return (int) $value;
+	};
+	$details = static function (array $rows, array $totals) use ($counter): array {
+		$seen = array();
+		foreach ($rows as &$row) {
+			$group = $row['group'] ?? '';
+			if (!isset($totals[$group]) || !is_string($row['qtype']) || !preg_match('/^(?:[A-Z][A-Z0-9-]{0,15}|TYPE[0-9]{1,5})$/D', $row['qtype']) || !in_array($row['transport'], array('', 'UDP', 'TCP', 'DoT', 'DoH', 'DoQ'), TRUE)
+			    || (str_starts_with($row['qtype'], 'TYPE') && (!ctype_digit(substr($row['qtype'], 4)) || (int) substr($row['qtype'], 4) > 65535))) {
+				throw new UnexpectedValueException('Invalid DNS metric labels');
+			}
+			$key = serialize(array($group, $row['qtype'], $row['transport']));
+			$row['count'] = $counter($row['count']);
+			if (isset($seen[$key]) || $row['count'] > $totals[$group]) {
+				throw new UnexpectedValueException('Inconsistent DNS metric detail');
+			}
+			$seen[$key] = TRUE;
+			$totals[$group] -= $row['count'];
+		}
+		unset($row);
+		return $rows;
+	};
 	$guard = static function (string $source, callable $read) use (&$up): mixed {
 		try {
 			return $read();
@@ -11135,32 +11223,98 @@ function pfb_metrics_collect(): array {
 	});
 
 	// With DNSBL off the databases hold nothing to export (the widget shows none either): both sources are up with no series.
-	$dnsbl_groups = NULL;
-	$resolver_queries = NULL;
+	$dnsbl_groups = $dnsbl_detail = $dnsbl_totals = NULL;
+	$resolver_queries = $resolver_detail = NULL;
 	if ($pfb['dnsbl'] === PfbToggle::On) {
-		$dnsbl_groups = $guard('dnsbl_db', function () use (&$up, $pfb, $num): ?array {
-			$groups = pfb_metrics_sqlite_rows($pfb['dnsbl_info'], 'SELECT groupname, entries, counter FROM dnsbl ORDER BY rowid');
-			$up['dnsbl_db'] = $groups !== NULL;
-			if ($groups === NULL) {
+		$dnsbl_snapshot = $guard('dnsbl_db', function () use (&$up, $pfb, $num, $counter, $details): ?array {
+			$snapshot = pfb_metrics_sqlite_snapshot($pfb['dnsbl_info'],
+				'SELECT groupname, entries, counter FROM dnsbl ORDER BY rowid',
+				'dns_metric_blocks',
+				'SELECT owner, origin, groupname AS "group", qtype, transport, count FROM dns_metric_blocks', NULL, TRUE);
+			$up['dnsbl_db'] = $snapshot !== NULL;
+			if ($snapshot === NULL) {
 				return NULL;
 			}
-			// One sample per group: a repeated label set rejects the whole file. The last row wins; summing would double count.
-			$out = array();
-			foreach ($groups as $row) {
-				$out[(string) $row['groupname']] = array(
-					'group'   => (string) $row['groupname'],
+			// Legacy databases can have repeated groups; the last aggregate row wins.
+			$out = $totals = array();
+			foreach ($snapshot['aggregate'] as $row) {
+				$group = (string) $row['groupname'];
+				$totals[$group] = $counter($row['counter']);
+				$out[$group] = array(
+					'group'   => $group,
 					'entries' => $row['entries'] === 'disabled' ? NULL : $num($row['entries']),
-					'counter' => $num($row['counter']),
+					'counter' => $totals[$group],
 				);
 			}
-			return array_values($out);
+			$epochs = $owned = array();
+			foreach ($snapshot['epochs'] as $row) {
+				if (!is_string($row['owner']) || $row['owner'] === '' || !in_array($row['origin'], array('custom', 'builtin'), TRUE)
+				    || !is_string($row['epoch']) || !preg_match('/^[0-9a-f]{32}$/D', $row['epoch'])) {
+					throw new UnexpectedValueException('Invalid DNS metric owner');
+				}
+				$key = serialize(array($row['owner'], $row['origin']));
+				if (isset($epochs[$key])) {
+					throw new UnexpectedValueException('Duplicate DNS metric owner');
+				}
+				$epochs[$key] = TRUE;
+			}
+			foreach ($snapshot['totals'] as &$row) {
+				$row['group'] = $row['groupname'];
+				$key = serialize(array($row['owner'], $row['origin'], $row['group']));
+				if (!isset($epochs[serialize(array($row['owner'], $row['origin']))], $totals[$row['group']]) || isset($owned[$key])) {
+					throw new UnexpectedValueException('Orphan DNS metric total');
+				}
+				$row['count'] = $counter($row['count']);
+				if ($row['count'] > $totals[$row['group']]) {
+					throw new UnexpectedValueException('DNS metric total exceeds aggregate');
+				}
+				$totals[$row['group']] -= $row['count'];
+				$owned[$key] = $row['count'];
+			}
+			unset($row);
+			$seen = array();
+			foreach ($snapshot['detail'] as &$row) {
+				$key = serialize(array($row['owner'], $row['origin'], $row['group']));
+				$detail_key = serialize(array($key, $row['qtype'], $row['transport']));
+				if (!isset($owned[$key]) || isset($seen[$detail_key])) {
+					throw new UnexpectedValueException('Orphan or duplicate DNS metric detail');
+				}
+				$validated = $details(array($row), array($row['group'] => $owned[$key]));
+				$row['count'] = $validated[0]['count'];
+				$owned[$key] -= $row['count'];
+				$seen[$detail_key] = TRUE;
+			}
+			unset($row);
+			return array(array_values($out), $snapshot['detail'], $snapshot['totals']);
 		});
+		if ($dnsbl_snapshot !== NULL) {
+			[$dnsbl_groups, $dnsbl_detail, $dnsbl_totals] = $dnsbl_snapshot;
+		}
 
-		$resolver_queries = $guard('resolver_db', function () use (&$up, $pfb, $num): ?int {
-			$resolver = pfb_metrics_sqlite_rows($pfb['dnsbl_resolver'], 'SELECT totalqueries, queries FROM resolver WHERE row = 0');
-			$up['resolver_db'] = $resolver !== NULL;
-			return empty($resolver) ? NULL : $num($resolver[0]['totalqueries']) + $num($resolver[0]['queries']);
+		$resolver_snapshot = $guard('resolver_db', function () use (&$up, $pfb, $counter, $details): ?array {
+			$snapshot = pfb_metrics_sqlite_snapshot($pfb['dnsbl_resolver'],
+				'SELECT totalqueries, queries FROM resolver WHERE row = 0',
+				'dns_metric_queries', 'SELECT qtype, transport, count FROM dns_metric_queries');
+			$up['resolver_db'] = $snapshot !== NULL;
+			if ($snapshot === NULL) {
+				return NULL;
+			}
+			if ($snapshot['aggregate'] === array()) {
+				if ($snapshot['detail'] !== array()) {
+					throw new UnexpectedValueException('DNS details without resolver aggregate');
+				}
+				return array(NULL, array());
+			}
+			if (count($snapshot['aggregate']) !== 1) {
+				throw new UnexpectedValueException('Duplicate resolver aggregate');
+			}
+			$row = $snapshot['aggregate'][0];
+			$total = $counter($row['totalqueries']) + $counter($row['queries']);
+			return array($counter($total), $details($snapshot['detail'], array('' => $total)));
 		});
+		if ($resolver_snapshot !== NULL) {
+			[$resolver_queries, $resolver_detail] = $resolver_snapshot;
+		}
 	} else {
 		$up['dnsbl_db'] = $up['resolver_db'] = TRUE;
 	}
@@ -11218,6 +11372,9 @@ function pfb_metrics_collect(): array {
 		'ip_rule_packets'  => $ip_rule_packets,
 		'dnsbl_groups'     => $dnsbl_groups,
 		'resolver_queries' => $resolver_queries,
+		'dnsbl_detail'     => $dnsbl_detail,
+		'dnsbl_totals'     => $dnsbl_totals,
+		'resolver_detail'  => $resolver_detail,
 		'feed_success'     => $feed_success,
 		'feed_failing'     => $feed_failing,
 		'pass'             => $pass,
@@ -12743,87 +12900,124 @@ function dnsbl_stats_update($mode, $alias, $alias_cnt) {
 
 
 // Function to save DNSBL Group statistics
-function dnsbl_save_stats() {
+function dnsbl_save_stats(): bool {
 	global $pfb;
 
-	// Save group statistics to SQLite3 database (Remove any feeds that are not referenced)
-	$db_update = $db_delete = '';
 	pfb_logger("\nSaving DNSBL statistics...", 1);
-
-	// Collect existing SQL group names
-	$sql_groupnames = array();
-	$db_handle = pfb_open_sqlite(1, 'Collect Group');
-	if ($db_handle) {
-		$result = $db_handle->query("SELECT * FROM dnsbl;");
-		if ($result) {
-			while ($res = $result->fetchArray(SQLITE3_ASSOC)) {
-				$sql_groupnames[$res['groupname']] = '';
-			}
-		}
+	$db_handle = pfb_open_sqlite(1, 'Save DNSBL stats');
+	if (!$db_handle) {
+		return FALSE;
 	}
-	pfb_close_sqlite($db_handle);
-
-	// Compare SQL database Group names to latest Group names
-	if (!empty($pfb['dnsbl_info_stats'])) {
-
-		$db_handle = pfb_open_sqlite(1, 'Save DNSBL stats');
-		if ($db_handle) {
-
-			foreach ($pfb['dnsbl_info_stats'] as $group) {
-
-				// Keep row
-				$pfb_delete = FALSE;
-				if (in_array($group['groupname'], $pfb['alias_dnsbl_all'])) {
-
-					// Update existing row
-					if (isset($sql_groupnames[$group['groupname']])) {
-						$db_update 	= "UPDATE dnsbl SET timestamp = :timestamp, entries = :entries"
-								. " WHERE groupname = :groupname;\n";
-					}
-
-					// Add new row
-					else {
-						$db_update	= "INSERT INTO dnsbl (groupname, timestamp, entries, counter)"
-								. " VALUES (:groupname, :timestamp, :entries, 0);\n";
-					}
+	try {
+		$exec = static function (string $sql) use ($db_handle): void {
+			if (!@$db_handle->exec($sql)) {
+				throw new RuntimeException($db_handle->lastErrorMsg());
+			}
+		};
+		$exec('BEGIN IMMEDIATE');
+		$exec('CREATE TABLE IF NOT EXISTS dnsbl_group_epochs (owner TEXT, origin TEXT, epoch TEXT NOT NULL, PRIMARY KEY(owner,origin))');
+		$exec('CREATE TABLE IF NOT EXISTS dns_metric_totals (owner TEXT, origin TEXT, groupname TEXT, count INTEGER, PRIMARY KEY(owner,origin,groupname))');
+		$existing = array();
+		$result = $db_handle->query('SELECT groupname FROM dnsbl');
+		if (!$result) {
+			throw new RuntimeException($db_handle->lastErrorMsg());
+		}
+		while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+			$existing[$row['groupname']] = TRUE;
+		}
+		$builtin = array_fill_keys(array('Upstream', 'DNSBL_IDN', 'DNSBL_Homoglyph',
+			'DNSBL_Homoglyph_Suspect', 'DNSBL_TLD_Allow', 'DNSBL_Regex', 'DNSBL_TLD'), TRUE);
+		$configured = $pfb['alias_dnsbl_configured'] ?? NULL;
+		$keep = is_array($configured) ? array_fill_keys($configured, TRUE) + $builtin : NULL;
+		$details = $db_handle->querySingle("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'dns_metric_blocks'");
+		if (is_array($configured)) {
+			$result = $db_handle->query("SELECT owner FROM dnsbl_group_epochs WHERE origin = 'custom'");
+			$deleted = array();
+			while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+				if (!in_array($row['owner'], $configured, TRUE)) {
+					$deleted[] = $row['owner'];
 				}
-
-				// Remove row
-				else {
-					$db_update	= "DELETE FROM dnsbl WHERE groupname = :groupname;\n";
-					$pfb_delete	= TRUE;
+			}
+			foreach ($deleted as $name) {
+				$quoted = "'" . SQLite3::escapeString($name) . "'";
+				$exec("UPDATE dnsbl SET counter = counter - COALESCE((SELECT count FROM dns_metric_totals WHERE owner = {$quoted} AND origin = 'custom' AND dns_metric_totals.groupname = dnsbl.groupname), 0)");
+				if ($details) {
+					$exec("DELETE FROM dns_metric_blocks WHERE owner = {$quoted} AND origin = 'custom'");
 				}
-
-				if (is_numeric($group['entries'])) {
-					$group['groupname'] = pfb_filter($group['groupname'], PFB_FILTER_HTML, 'dnsbl_save_stats');
-
-					$stmt = $db_handle->prepare($db_update);
-					if ($stmt) {
-						$stmt->bindValue(':groupname', $group['groupname'], SQLITE3_TEXT);
-						if (!$pfb_delete) {
-							$group['timestamp'] = pfb_filter($group['timestamp'], PFB_FILTER_HTML, 'dnsbl_save_stats');
-
-							$stmt->bindValue(':timestamp', $group['timestamp'], SQLITE3_TEXT);
-							$stmt->bindValue(':entries', $group['entries'], SQLITE3_TEXT);
-						}
-						$stmt->execute();
-					}
+				$exec("DELETE FROM dns_metric_totals WHERE owner = {$quoted} AND origin = 'custom'");
+				$exec("DELETE FROM dnsbl_group_epochs WHERE owner = {$quoted} AND origin = 'custom'");
+			}
+			foreach ($existing as $name => $_) {
+				if (!isset($keep[$name]) && str_starts_with($name, 'DNSBL_')) {
+					$quoted = "'" . SQLite3::escapeString($name) . "'";
+					$exec("DELETE FROM dnsbl WHERE groupname = {$quoted}");
+					unset($existing[$name]);
 				}
 			}
 		}
-		pfb_close_sqlite($db_handle);
-	}
-	else {
-		$db_delete = 'DROP TABLE dnsbl;';
-		$db_handle = pfb_open_sqlite(1, 'Delete table');
-		if ($db_handle) {
-			$db_handle->exec("BEGIN TRANSACTION;"
-				. "{$db_delete}"
-				. "END TRANSACTION;");
+		$stats = array();
+		foreach ($pfb['dnsbl_info_stats'] ?? array() as $group) {
+			$name = $group['groupname'];
+			if ($keep === NULL || isset($keep[$name])) {
+				$stats[$name] = $group;
+			}
 		}
+		foreach (is_array($configured) ? $configured : array() as $name) {
+			$stats[$name] ??= array('timestamp' => date('Y-m-d H:i:s'), 'entries' => 0);
+		}
+		if ($keep !== NULL) {
+			foreach ($existing as $name => $_) {
+				if (isset($builtin[$name]) && !in_array($name, $pfb['alias_dnsbl_all'] ?? array(), TRUE)) {
+					$stats[$name] = array('timestamp' => date('Y-m-d H:i:s'), 'entries' => 'disabled');
+				}
+			}
+		}
+		foreach ($stats as $name => $group) {
+			$entries = in_array($name, $pfb['alias_dnsbl_all'] ?? array(), TRUE)
+				? $group['entries'] : 'disabled';
+			$sql = isset($existing[$name])
+				? 'UPDATE dnsbl SET timestamp = :timestamp, entries = :entries WHERE groupname = :groupname'
+				: 'INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES (:groupname, :timestamp, :entries, 0)';
+			$stmt = $db_handle->prepare($sql);
+			if (!$stmt) {
+				throw new RuntimeException($db_handle->lastErrorMsg());
+			}
+			$stmt->bindValue(':groupname', $name, SQLITE3_TEXT);
+			$stmt->bindValue(':timestamp', $group['timestamp'], SQLITE3_TEXT);
+			$stmt->bindValue(':entries', $entries, SQLITE3_TEXT);
+			if (!@$stmt->execute()) {
+				throw new RuntimeException($db_handle->lastErrorMsg());
+			}
+			$existing[$name] = TRUE;
+		}
+		$owners = array();
+		foreach (array_keys($builtin) as $name) {
+			$owners[] = array($name, 'builtin');
+		}
+		foreach (is_array($configured) ? $configured : array_keys($existing) as $name) {
+			if (is_array($configured) || (str_starts_with($name, 'DNSBL_') && !isset($builtin[$name]))) {
+				$owners[] = array($name, 'custom');
+			}
+		}
+		foreach ($owners as [$name, $origin]) {
+			$quoted = "'" . SQLite3::escapeString($name) . "'";
+			if (!$db_handle->querySingle("SELECT count(*) FROM dnsbl_group_epochs WHERE owner = {$quoted} AND origin = '{$origin}'")) {
+				do {
+					$epoch = $db_handle->querySingle('SELECT lower(hex(randomblob(16)))');
+				} while ($db_handle->querySingle("SELECT count(*) FROM dnsbl_group_epochs WHERE epoch = '{$epoch}'"));
+				$exec("INSERT INTO dnsbl_group_epochs VALUES ({$quoted}, '{$origin}', '{$epoch}')");
+			}
+		}
+		$exec('COMMIT');
+		pfb_logger(" completed", 1);
+		return TRUE;
+	} catch (Throwable $e) {
+		@$db_handle->exec('ROLLBACK');
+		pfb_logger("\nSaving DNSBL statistics failed: " . $e->getMessage(), 2);
+		return FALSE;
+	} finally {
 		pfb_close_sqlite($db_handle);
 	}
-	pfb_logger(" completed", 1);
 }
 
 
@@ -17304,11 +17498,11 @@ function pfb_unbound_python_unmount() {
 
 
 // ADR-65: finalize TLD-mode widget stats from counts already collected by the feed loop.
-function pfb_dnsbl_tld_stats_finalize(array $group_counts): void {
+function pfb_dnsbl_tld_stats_finalize(array $group_counts): bool {
 	global $pfb;
 
 	if (!$pfb['domain_update']) {
-		return;
+		return TRUE;
 	}
 
 	// Collect TLD Blacklist(s). If configured the whole TLD will be blocked
@@ -17350,7 +17544,7 @@ function pfb_dnsbl_tld_stats_finalize(array $group_counts): void {
 	}
 
 	// Save DNSBL Alias statistics
-	dnsbl_save_stats();
+	return dnsbl_save_stats();
 }
 
 // Function to Start Unbound
@@ -18209,7 +18403,10 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save']) {
 		if ($pfb['dnsbl_tld_wildcard']) {
 			if ($pfb['domain_update']) {
-				pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts);
+				if (!pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts)) {
+					$pfb['dnsbl_publish_failed'] = TRUE;
+					return FALSE;
+				}
 			}
 		}
 	}
@@ -25509,6 +25706,8 @@ function pfb_log_event($type, $domain, $src_ip, $req_agent) {
 	$result		= pfb_dnsbl_lastevent('', "{$domain}{$src_ip}", '');
 	$p_entry	= $result['entry'];
 	$details	= $result['details'];
+	// Cached log details are not authority for a new accounting event.
+	$verdict = pfb_dnsbl_query($domain);
 
 	// Duplicate entry comparison: "Domain/SRC IP"
 	if ("{$domain}{$src_ip}" == $p_entry) {
@@ -25522,7 +25721,6 @@ function pfb_log_event($type, $domain, $src_ip, $req_agent) {
 
 		// ADR-65: attribute via the live query channel instead of grepping the
 		// retired interchange files; NULL and blocked=false are both "no verdict".
-		$verdict = pfb_dnsbl_query($domain);
 		if ($verdict !== NULL && $verdict['blocked']) {
 			$pfb_mode	= $verdict['b_type']	?: 'Unknown';
 			$pfb_group	= $verdict['group']	?: 'Unknown';
@@ -25546,18 +25744,31 @@ function pfb_log_event($type, $domain, $src_ip, $req_agent) {
 	@file_put_contents($pfb['dnslog'], "{$log}", FILE_APPEND | LOCK_EX);
 
 	// Increment DNSBL Widget counter
-	if (!empty($pfb_group)) {
+	if ($verdict !== NULL && $verdict['blocked'] && $verdict['group_epoch'] !== '') {
 
 		$db_handle = pfb_open_sqlite(1, 'Increment Counter');
 		if ($db_handle) {
 
-			$pfb_group	= pfb_filter($pfb_group, PFB_FILTER_HTML, 'pfb_log_event');
-			$db_update	= "UPDATE dnsbl SET counter = counter + 1 WHERE groupname = :pfb_group";
-
-			$stmt = $db_handle->prepare($db_update);
-			if ($stmt) {
-				$stmt->bindValue(':pfb_group', $pfb_group, SQLITE3_TEXT);
-				$stmt->execute();
+			try {
+				$db_handle->enableExceptions(TRUE);
+				$db_handle->exec('BEGIN IMMEDIATE');
+				$stmt = $db_handle->prepare('SELECT 1 FROM dnsbl_group_epochs WHERE owner = :owner AND origin = :origin AND epoch = :epoch');
+				$stmt->bindValue(':owner', $verdict['group_owner'], SQLITE3_TEXT);
+				$stmt->bindValue(':origin', $verdict['group_origin'], SQLITE3_TEXT);
+				$stmt->bindValue(':epoch', $verdict['group_epoch'], SQLITE3_TEXT);
+				$accepted = $stmt->execute()->fetchArray(SQLITE3_NUM);
+				if ($accepted) {
+					$group = SQLite3::escapeString($verdict['group']);
+					$owner = SQLite3::escapeString($verdict['group_owner']);
+					$origin = SQLite3::escapeString($verdict['group_origin']);
+					$db_handle->exec("INSERT INTO dnsbl(groupname,timestamp,entries,counter) SELECT '{$group}',datetime('now'),0,0 WHERE NOT EXISTS (SELECT 1 FROM dnsbl WHERE groupname='{$group}')");
+					$db_handle->exec("UPDATE dnsbl SET counter=counter+1 WHERE groupname='{$group}'");
+					$db_handle->exec("INSERT INTO dns_metric_totals VALUES ('{$owner}','{$origin}','{$group}',1) ON CONFLICT(owner,origin,groupname) DO UPDATE SET count=count+1");
+				}
+				$db_handle->exec('COMMIT');
+			} catch (Throwable $e) {
+				@$db_handle->exec('ROLLBACK');
+				pfb_logger("\nIncrement DNSBL counter failed: " . $e->getMessage(), 2);
 			}
 		}
 		pfb_close_sqlite($db_handle);
@@ -26104,10 +26315,34 @@ function pfBlockerNG_clearsqlite($mode, $totalqueries = 0) {
 					}
 				}
 				elseif ($mode == 'cleardnsbl') {
-					$stmt = $db_handle->prepare($data[2]);
-					if ($stmt) {
-						$stmt->bindValue(':lastdnsblclear', $lastdnsblclear, SQLITE3_TEXT);
-						$stmt->execute();
+					try {
+						if (!@$db_handle->exec('BEGIN IMMEDIATE')) {
+							throw new RuntimeException($db_handle->lastErrorMsg());
+						}
+						$detail = $data[0] === 1 ? 'dns_metric_blocks' : ($data[0] === 3 ? 'dns_metric_queries' : NULL);
+						if ($detail !== NULL && $db_handle->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{$detail}'")
+						    && !@$db_handle->exec("DELETE FROM {$detail}")) {
+							throw new RuntimeException($db_handle->lastErrorMsg());
+						}
+						if ($data[0] === 1 && $db_handle->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dns_metric_totals'")
+						    && !@$db_handle->exec('DELETE FROM dns_metric_totals')) {
+							throw new RuntimeException($db_handle->lastErrorMsg());
+						}
+						$stmt = $db_handle->prepare($data[2]);
+						if (!$stmt) {
+							throw new RuntimeException($db_handle->lastErrorMsg());
+						}
+						if ($data[0] === 6) {
+							$stmt->bindValue(':lastdnsblclear', $lastdnsblclear, SQLITE3_TEXT);
+						}
+						if (!@$stmt->execute() || !@$db_handle->exec('COMMIT')) {
+							throw new RuntimeException($db_handle->lastErrorMsg());
+						}
+					} catch (Throwable $e) {
+						@$db_handle->exec('ROLLBACK');
+						pfb_logger("\nClear DNSBL statistics failed: " . $e->getMessage(), 2);
+						pfb_close_sqlite($db_handle);
+						return FALSE;
 					}
 				}
 				else {
@@ -26116,9 +26351,13 @@ function pfBlockerNG_clearsqlite($mode, $totalqueries = 0) {
 							. "END TRANSACTION;");
 				}
 			}
+			else {
+				return FALSE;
+			}
 			pfb_close_sqlite($db_handle);
 		}
 	}
+	return TRUE;
 }
 
 

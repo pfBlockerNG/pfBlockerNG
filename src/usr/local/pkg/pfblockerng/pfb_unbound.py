@@ -846,6 +846,15 @@ def _build_swap_snapshot() -> Snapshot | None:
             sys.stderr.write("[pfBlockerNG]: reload: failed to load {}: {}".format(pfb["pfb_py_hsts"], e))
 
     return Snapshot(
+        group_epochs=_db_group_epochs(
+            _dnsbl_stats_wanted()
+            or bool(data_db or zone_db or regex_db or allow_regex_db or user_regex_db or user_allow_regex_db),
+            feed_group_index_db,
+            data_db,
+            zone_db,
+            regex_db,
+            user_regex_db,
+        ),
         data_db=data_db,
         zone_db=zone_db,
         white_db=white_db,
@@ -1231,7 +1240,18 @@ def _pfb_answer_query_request(rec: dict[str, Any]) -> None:
     domain = rec.get("domain")
     if not isinstance(domain, str) or domain.rstrip(".").strip() == "":
         _pfb_write_query_reply(
-            {"id": req_id, "blocked": False, "b_type": "", "group": "", "b_eval": "", "feed": "", "p_type": ""}
+            {
+                "id": req_id,
+                "blocked": False,
+                "b_type": "",
+                "group": "",
+                "b_eval": "",
+                "feed": "",
+                "p_type": "",
+                "group_owner": "",
+                "group_origin": "",
+                "group_epoch": "",
+            }
         )
         return
     answer = dnsbl_query_answer(domain, rec.get("qtype"))
@@ -2154,6 +2174,14 @@ def init_standard(id: int, env: module_env) -> bool:
     # caller uses the default emit_counts=True.
     def _init_build_snapshot() -> Snapshot:
         return Snapshot(
+            group_epochs=_db_group_epochs(
+                _dnsbl_stats_wanted(),
+                feedGroupIndexDB,
+                dataDB,
+                zoneDB,
+                regexDB,
+                userRegexDB,
+            ),
             data_db=dataDB,
             zone_db=zoneDB,
             white_db=whiteDB,
@@ -2685,6 +2713,16 @@ def get_q_type(qstate: module_qstate | None, qinfo: query_info | None) -> str:
     return is_unknown(q_type)
 
 
+def _metric_qtype(qstate: module_qstate | None, qinfo: query_info | None, q_type: str) -> str:
+    if q_type != "Unknown":
+        return q_type
+    for info in (getattr(qstate, "qinfo", None), qinfo):
+        number = getattr(info, "qtype", None)
+        if isinstance(number, int) and 0 <= number <= 65535:
+            return "TYPE{}".format(number)
+    return ""
+
+
 def get_o_type(qstate: module_qstate | None, rep: reply_info | None) -> str:
     o_type = ""
     if qstate:
@@ -2880,6 +2918,17 @@ def _db_seed_upstream_row(cursor: Any) -> None:
     )
 
 
+_DNSBL_BUILTIN_OWNERS = (
+    "Upstream",
+    "DNSBL_IDN",
+    "DNSBL_Homoglyph",
+    "DNSBL_Homoglyph_Suspect",
+    "DNSBL_TLD_Allow",
+    "DNSBL_Regex",
+    "DNSBL_TLD",
+)
+
+
 def _db_create(db: int, cursor: Any) -> None:
     if db == DB_RESOLVER:
         cursor.execute("CREATE TABLE IF NOT EXISTS resolver (row integer, totalqueries integer, queries integer)")
@@ -2890,11 +2939,43 @@ def _db_create(db: int, cursor: Any) -> None:
             "INSERT INTO resolver ( row, totalqueries, queries ) "
             "SELECT 0, 0, 0 WHERE NOT EXISTS (SELECT 1 FROM resolver)"
         )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dns_metric_queries ("
+            "qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(qtype, transport))"
+        )
     elif db == DB_DNSBL:
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
         )
         _db_seed_upstream_row(cursor)
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dns_metric_blocks ("
+            "owner TEXT NOT NULL, origin TEXT NOT NULL, groupname TEXT NOT NULL, "
+            "qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, "
+            "PRIMARY KEY(owner, origin, groupname, qtype, transport))"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dns_metric_totals ("
+            "owner TEXT NOT NULL, origin TEXT NOT NULL, groupname TEXT NOT NULL, count INTEGER NOT NULL, "
+            "PRIMARY KEY(owner, origin, groupname))"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dnsbl_group_epochs ("
+            "owner TEXT NOT NULL, origin TEXT NOT NULL, epoch TEXT NOT NULL, PRIMARY KEY(owner, origin))"
+        )
+        cursor.executemany(
+            "INSERT OR IGNORE INTO dnsbl_group_epochs VALUES (?, 'builtin', lower(hex(randomblob(16))))",
+            [(owner,) for owner in _DNSBL_BUILTIN_OWNERS],
+        )
+        # Legacy display names prove custom ownership only outside the synthetic namespace.
+        cursor.execute(
+            "INSERT OR IGNORE INTO dnsbl_group_epochs "
+            "SELECT DISTINCT groupname, 'custom', lower(hex(randomblob(16))) FROM dnsbl "
+            "WHERE substr(groupname, 1, 6) = 'DNSBL_' AND groupname NOT IN ({})".format(
+                ",".join("?" for _ in _DNSBL_BUILTIN_OWNERS)
+            ),
+            _DNSBL_BUILTIN_OWNERS,
+        )
 
 
 def _db_connect(db: int) -> Any:
@@ -2954,29 +3035,110 @@ def _db_run(db: int, work: Callable[[Any], None]) -> bool:
         return False
 
 
-def _db_flush_resolver(delta: int) -> bool:
+def _db_flush_resolver(delta: int, details: dict[tuple[str, str], int] | None = None) -> bool:
     if not delta or not pfb["sqlite3_resolver_con"]:
         return True
-    return _db_run(
-        DB_RESOLVER,
-        lambda con: con.execute("UPDATE resolver SET totalqueries = totalqueries + ? WHERE row = 0", (delta,)),
-    )
-
-
-def _db_flush_dnsbl(deltas: dict[str, int]) -> bool:
-    if not deltas or not pfb["sqlite3_dnsbl_con"]:
-        return True
-    rows = [(d, g) for g, d in deltas.items()]
 
     def _flush(con: Any) -> None:
-        if "Upstream" in deltas:
-            # Issue #858: re-seed a mid-connection-cleared 'Upstream' row before the
-            # UPDATE below, so the increment is never silently dropped. Gated on an
-            # actual Upstream delta so a feed-only flush doesn't pay for it.
-            _db_seed_upstream_row(con.cursor())
-        con.executemany("UPDATE dnsbl SET counter = counter + ? WHERE groupname = ?", rows)
+        con.execute("UPDATE resolver SET totalqueries = totalqueries + ? WHERE row = 0", (delta,))
+        if details:
+            con.executemany(
+                "INSERT INTO dns_metric_queries (qtype, transport, count) "
+                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM resolver WHERE row = 0) "
+                "ON CONFLICT(qtype, transport) DO UPDATE SET count = count + excluded.count",
+                [(qtype, transport, count) for (qtype, transport), count in details.items()],
+            )
+
+    return _db_run(DB_RESOLVER, _flush)
+
+
+def _db_flush_dnsbl(
+    deltas: dict[tuple[str, str, str, str], int],
+    details: dict[tuple[str, str, str, str, str, str], int] | None = None,
+) -> bool:
+    if not deltas or not pfb["sqlite3_dnsbl_con"]:
+        return True
+
+    def _flush(con: Any) -> None:
+        # Take the writer lock before checking authority; all three counters commit together.
+        con.execute("BEGIN IMMEDIATE")
+        for (group, owner, origin, epoch), count in deltas.items():
+            if (
+                origin not in ("custom", "builtin")
+                or not con.execute(
+                    "SELECT 1 FROM dnsbl_group_epochs WHERE owner=? AND origin=? AND epoch=?",
+                    (owner, origin, epoch),
+                ).fetchone()
+            ):
+                continue
+            con.execute(
+                "INSERT INTO dnsbl SELECT ?, '', 0, 0 WHERE NOT EXISTS (SELECT 1 FROM dnsbl WHERE groupname=?)",
+                (group, group),
+            )
+            con.execute("UPDATE dnsbl SET counter=counter+? WHERE groupname=?", (count, group))
+            con.execute(
+                "INSERT INTO dns_metric_totals VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(owner,origin,groupname) DO UPDATE SET count=count+excluded.count",
+                (owner, origin, group, count),
+            )
+        if details:
+            con.executemany(
+                "INSERT INTO dns_metric_blocks (owner,origin,groupname,qtype,transport,count) "
+                "SELECT ?,?,?,?,?,? WHERE EXISTS "
+                "(SELECT 1 FROM dnsbl_group_epochs WHERE owner=? AND origin=? AND epoch=?) "
+                "AND ? IN ('custom','builtin') "
+                "ON CONFLICT(owner,origin,groupname,qtype,transport) DO UPDATE SET count=count+excluded.count",
+                [
+                    (owner, origin, group, qtype, transport, count, owner, origin, epoch, origin)
+                    for (group, owner, origin, epoch, qtype, transport), count in details.items()
+                ],
+            )
 
     return _db_run(DB_DNSBL, _flush)
+
+
+def _db_group_epochs(
+    wanted: bool,
+    feed_groups: dict[int, Any],
+    *rule_dbs: dict[str, Any],
+) -> dict[tuple[str, str], str]:
+    """Capture available counter authority without making DNS depend on statistics."""
+    if not pfb["sqlite3_dnsbl_con"] and wanted and pfb["mod_sqlite3"]:
+        if _validate_db_with_recovery(DB_DNSBL):
+            pfb["sqlite3_dnsbl_con"] = True
+        else:
+            sys.stderr.write("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database after recovery attempt\n")
+    if not pfb["sqlite3_dnsbl_con"]:
+        return {}
+    with _db_lock:
+        try:
+            con = _db_conns.get(DB_DNSBL)
+            if con is None:
+                con = _db_connect(DB_DNSBL)
+                _db_conns[DB_DNSBL] = con
+            epochs = {
+                (owner, origin): epoch
+                for owner, origin, epoch in con.execute("SELECT owner, origin, epoch FROM dnsbl_group_epochs")
+            }
+        except sqlite3.Error as error:
+            _db_close(DB_DNSBL)
+            pfb["sqlite3_dnsbl_con"] = False
+            sys.stderr.write("[pfBlockerNG]: DNSBL accounting unavailable: {}\n".format(error))
+            return {}
+        missing: set[tuple[str, str]] = set()
+        for rules in rule_dbs:
+            for rule in rules.values():
+                while rule is not None:
+                    origin = rule.get("group_origin", "custom")
+                    owner = rule.get("group_owner")
+                    if owner is None and "index" in rule:
+                        owner = resolve_feed_group(rule["index"], feed_groups)[1]
+                    if owner and (owner, origin) not in epochs:
+                        missing.add((owner, origin))
+                    rule = rule.get("top1m_fallback")
+        if missing:
+            sys.stderr.write("[pfBlockerNG]: DNSBL accounting unavailable for owners: {}\n".format(sorted(missing)))
+        return epochs
 
 
 def pfb_db_validate(db: int) -> bool:
@@ -3054,9 +3216,9 @@ def _db_apply(task: tuple) -> None:
     # Synchronous fallback when no DB worker is running (init, tests).
     kind = task[0]
     if kind == "resolver":
-        _db_flush_resolver(1)
+        _db_flush_resolver(1, {task[1:3]: 1} if len(task) >= 3 else None)
     elif kind == "dnsbl":
-        _db_flush_dnsbl({task[1]: 1})
+        _db_flush_dnsbl({task[1:5]: 1}, {task[1:7]: 1})
 
 
 def pfb_db_worker() -> None:
@@ -3064,7 +3226,9 @@ def pfb_db_worker() -> None:
     # deltas (commutative). Flush on a timer, on a size threshold, when idle, and
     # on stop.
     resolver_delta = 0
-    dnsbl_deltas: dict[str, int] = {}
+    dnsbl_deltas: dict[tuple[str, str, str, str], int] = {}
+    resolver_details: dict[tuple[str, str], int] = {}
+    dnsbl_details: dict[tuple[str, str, str, str, str, str], int] = {}
     last_flush = time.monotonic()
     stop = False
 
@@ -3072,15 +3236,23 @@ def pfb_db_worker() -> None:
         nonlocal resolver_delta
         if t[0] == "resolver":
             resolver_delta += 1
+            if len(t) >= 3:
+                key = t[1:3]
+                resolver_details[key] = resolver_details.get(key, 0) + 1
         elif t[0] == "dnsbl":
-            dnsbl_deltas[t[1]] = dnsbl_deltas.get(t[1], 0) + 1
+            key = t[1:5]
+            dnsbl_deltas[key] = dnsbl_deltas.get(key, 0) + 1
+            block_key = t[1:7]
+            dnsbl_details[block_key] = dnsbl_details.get(block_key, 0) + 1
 
     def flush() -> None:
-        nonlocal resolver_delta, dnsbl_deltas, last_flush
-        if resolver_delta and _db_flush_resolver(resolver_delta):
+        nonlocal resolver_delta, dnsbl_deltas, resolver_details, dnsbl_details, last_flush
+        if resolver_delta and _db_flush_resolver(resolver_delta, resolver_details):
             resolver_delta = 0
-        if dnsbl_deltas and _db_flush_dnsbl(dnsbl_deltas):
+            resolver_details = {}
+        if dnsbl_deltas and _db_flush_dnsbl(dnsbl_deltas, dnsbl_details):
             dnsbl_deltas = {}
+            dnsbl_details = {}
         last_flush = time.monotonic()
 
     while True:
@@ -3147,6 +3319,7 @@ def get_details_dnsbl(
     qstate: module_qstate | None,
     kwargs: dict[str, Any] | None,
     dnsbl: Any,  # DnsblDecision operate() served; UNSET is a defensive no-op guard
+    group_epoch: str = "",
 ) -> bool:
     global _dnsbl_last_event
 
@@ -3157,9 +3330,14 @@ def get_details_dnsbl(
     else:
         return True
 
+    q_type = get_q_type(qstate, qinfo)
+    metric_qtype = _metric_qtype(qstate, qinfo, q_type)
+    transport = get_q_transport(qstate, kwargs)
+    metric_transport = "" if transport == "Unknown" else transport
+
     # Increment totalqueries counter
     if pfb["sqlite3_resolver_con"]:
-        pfb_db_enqueue(("resolver",))
+        pfb_db_enqueue(("resolver", metric_qtype, metric_transport))
 
     # issue #1094: the served verdict rides in BY VALUE from operate() -- never
     # re-read the shared decisionDB memo, else a concurrent thread on another
@@ -3172,8 +3350,18 @@ def get_details_dnsbl(
             return True
 
         # Increment dnsblgroup counter
-        if pfb["sqlite3_dnsbl_con"] and dnsbl.group != "":
-            pfb_db_enqueue(("dnsbl", dnsbl.group))
+        if pfb["sqlite3_dnsbl_con"] and dnsbl.group != "" and group_epoch:
+            pfb_db_enqueue(
+                (
+                    "dnsbl",
+                    dnsbl.group,
+                    dnsbl.group_owner,
+                    dnsbl.group_origin,
+                    group_epoch,
+                    metric_qtype,
+                    metric_transport,
+                )
+            )
 
         # The cached DnsblDecision is both name- and qtype-independent for some block
         # kinds -- two subdomains of one blocked zone share an identical payload (same
@@ -3184,8 +3372,6 @@ def get_details_dnsbl(
         # folded in implicitly, which DnsblDecision does not. Without q_type, a client's
         # back-to-back A+AAAA of one name collapses (dual-stack under-count) and Reports
         # cannot break down by record type. The decision path stays correct and untouched.
-        q_type = get_q_type(qstate, qinfo)
-        transport = get_q_transport(qstate, kwargs)
 
         dupEntry = "+"
         event_sig = (q_name_key, q_type, dnsbl, transport)
@@ -3260,7 +3446,15 @@ def _log_idn_alert(
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
 
 
-def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: str, transport: str = "Unknown") -> None:
+def _log_upstream_block(
+    q_name: str,
+    q_ip: str,
+    result: UpstreamBlock,
+    q_type: str,
+    transport: str = "Unknown",
+    metric_qtype: str | None = None,
+    group_epoch: str = "",
+) -> None:
     """Log an issue #267 upstream/external DNS block -- same CSV shape as a DNSBL block.
 
     Mirrors ``_log_idn_alert``'s structure.  ``b_type`` is ``"Upstream_Block"`` so the
@@ -3271,6 +3465,7 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
     """
     if q_ip == "Unknown":
         q_ip = "127.0.0.1"
+    transport = get_q_transport(None, {"pfb_transport": transport})
     csv_line = _csv_row(
         (
             "DNSBL-python",
@@ -3284,13 +3479,23 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
             _log_text(result.provider) or "External",  # feed -- EDE EXTRA-TEXT is off the wire
             "+",  # dupEntry (dedup follow-up)
             q_type,
-            get_q_transport(None, {"pfb_transport": transport}),
+            transport,
         )
     )
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
     # Increment the aggregate Upstream group counter (parity with per-feed DNSBL blocks).
-    if pfb["sqlite3_dnsbl_con"]:
-        pfb_db_enqueue(("dnsbl", "Upstream"))
+    if pfb["sqlite3_dnsbl_con"] and group_epoch:
+        pfb_db_enqueue(
+            (
+                "dnsbl",
+                "Upstream",
+                "Upstream",
+                "builtin",
+                group_epoch,
+                q_type if metric_qtype is None else metric_qtype,
+                "" if transport == "Unknown" else transport,
+            )
+        )
 
 
 def make_timestamp() -> str:
@@ -3472,6 +3677,7 @@ def get_details_reply(
         m_type = "resolver"
 
     o_type = get_q_type(qstate, qinfo)
+    transport = get_q_transport(qstate, kwargs)
     if m_type == "cache" or o_type == "PTR":
         q_type = o_type
     else:
@@ -3491,7 +3697,7 @@ def get_details_reply(
 
     # Increment totalqueries counter (Don't include the Resolver DNS requests)
     if pfb["sqlite3_resolver_con"] and q_ip != "127.0.0.1":
-        pfb_db_enqueue(("resolver",))
+        pfb_db_enqueue(("resolver", _metric_qtype(qstate, qinfo, o_type), "" if transport == "Unknown" else transport))
 
     # Do not log Replies, if disabled
     if not pfb["python_reply"]:
@@ -3629,7 +3835,7 @@ def get_details_reply(
             q_ip,
             _log_text(r_addr),
             iso_code,
-            get_q_transport(qstate, kwargs),
+            transport,
         )
     )
     pfb_log("/var/log/pfblockerng/dns_reply.log", csv_line)
@@ -3908,6 +4114,7 @@ def inplace_cb_query_response(qstate: Any, response: Any, **kwargs: Any) -> bool
     Only active in forwarding mode (pfb["forwarding"]). Observe-and-log only.
     """
     try:
+        snap = _snapshot
         if not pfb.get("forwarding"):
             return True
         rep = getattr(response, "rep", None)
@@ -3924,7 +4131,15 @@ def inplace_cb_query_response(qstate: Any, response: Any, **kwargs: Any) -> bool
         q_name = get_q_name_qstate(qstate)
         q_type = get_q_type(qstate, None)
         q_ip = _client_ip_from_qstate(qstate)
-        _log_upstream_block(q_name, q_ip, result, q_type, get_q_transport(qstate, kwargs))
+        _log_upstream_block(
+            q_name,
+            q_ip,
+            result,
+            q_type,
+            get_q_transport(qstate, kwargs),
+            _metric_qtype(qstate, None, q_type),
+            snap.group_epochs.get(("Upstream", "builtin"), ""),
+        )
     except Exception as e:
         sys.stderr.write("[pfBlockerNG] inplace_cb_query_response: {}\n".format(e))
     return True
@@ -4256,6 +4471,7 @@ class Snapshot:
     counts: int = 0
     regex_count: int = 0
     rejects: RejectTally = field(default_factory=dict)
+    group_epochs: dict[tuple[str, str], str] = field(default_factory=dict)
     psl_rules: PslRules = field(default_factory=PslRules)
     # ``None`` marks hand-built legacy fixtures; runtime swaps always capture a
     # tuple (including empty) and therefore never consult mutable pfb selection.
@@ -5493,7 +5709,13 @@ def _dnsbl_compile_regex_rules(
                 # rate-limit (P7).
                 name = "{}#{}".format(rule.feed or "DNSBL", seq)
                 seq += 1
-                db[name] = {"re": compiled, "important": rule.important, "band": rule.band}
+                db[name] = {
+                    "re": compiled,
+                    "important": rule.important,
+                    "band": rule.band,
+                    "group_owner": rule.group,
+                    "group_origin": "custom",
+                }
                 admitted += 1
         if failure is not None:
             log.write(failure)
@@ -5533,6 +5755,8 @@ def _dnsbl_compile_user_regex(entries: Iterable[tuple[str, str]], regex_cap: boo
                 "re": re.compile(compile_text, re.IGNORECASE),
                 "important": False,
                 "band": PRIO_USER_BLOCK,
+                "group_owner": "DNSBL_Regex",
+                "group_origin": "builtin",
             }
         except Exception as e:
             log.write(
@@ -5648,7 +5872,14 @@ def build(
         if not tld:
             continue
         idx = index_for("DNSBL_TLD", "DNSBL_TLD")
-        zone_db[tld] = {"log": builtin_log_flag, "index": idx, "important": False, "band": PRIO_FEED_BLOCK}
+        zone_db[tld] = {
+            "log": builtin_log_flag,
+            "index": idx,
+            "important": False,
+            "band": PRIO_FEED_BLOCK,
+            "group_owner": "DNSBL_TLD",
+            "group_origin": "builtin",
+        }
 
     # ADR-06 (#51): the temporary per-alert Unlock store (config.user_unlock, fed from
     # the pfb_unlock state by the alerts dnsbl_remove handler) loads into whiteDB
@@ -6598,6 +6829,8 @@ class DnsblDecision:
     # block; None means no IDN alert. Default None so a block/allow verdict (and every
     # pre-ADR construction site) is unchanged.
     idn_alert: Any = None
+    group_owner: str = ""
+    group_origin: str = ""
 
 
 class _Unset:
@@ -6747,7 +6980,7 @@ def _best_block_regex(
         if scan.search(key, rule, q_name):
             band = _block_entry_band(rule)
             if band > best:
-                best, best_meta = band, {"kind": "regex", "key": key}
+                best, best_meta = band, {"kind": "regex", "key": key, "entry": rule}
     scan.report()
     return best, best_meta
 
@@ -7027,6 +7260,8 @@ def evaluate_domain(
     p_type = "Python"
     feed: Any = "Unknown"
     group: Any = "Unknown"
+    group_owner = ""
+    group_origin = ""
     b_eval = ""
     # ADR-08: a Confusable-mode ALERT (non-blocking) records its attribution here
     # so operate() can log it while the name still resolves; None on the common path.
@@ -7061,6 +7296,7 @@ def evaluate_domain(
                 is_found = True
                 log_type = data_entry["log"]
                 feed, group = resolve_feed_group(data_entry["index"], feed_group_index_db)
+                group_owner, group_origin = group, "custom"
                 b_type = "DNSBL"
                 b_eval = q_name
                 block_band = _block_entry_band(data_entry)
@@ -7071,6 +7307,8 @@ def evaluate_domain(
                 is_found = True
                 log_type = zone_entry["log"]
                 feed, group = resolve_feed_group(zone_entry["index"], feed_group_index_db)
+                group_owner = zone_entry.get("group_owner", group)
+                group_origin = zone_entry.get("group_origin", "custom")
                 b_type = "TLD"
                 b_eval = matched_q
                 block_band = _block_entry_band(zone_entry)
@@ -7080,6 +7318,7 @@ def evaluate_domain(
             is_found = True
             feed = "TLD_Allow"
             group = "DNSBL_TLD_Allow"
+            group_owner, group_origin = "DNSBL_TLD_Allow", "builtin"
             # Feed-stratum block band (mirrors the IDN arms below): without it
             # block_band stays 0, and the numeric important_rules resolution
             # (_resolve_numeric_allow: blocked iff block_band > allow_band) would treat
@@ -7108,6 +7347,7 @@ def evaluate_domain(
                 is_found = True
                 feed = "IDN"
                 group = "DNSBL_IDN"
+                group_owner, group_origin = "DNSBL_IDN", "builtin"
                 # An IDN block is a feed-stratum block: give it the feed band so the
                 # numeric important_rules path doesn't treat block_band=0 as already
                 # overridden (allow_band >= 0 is always true) and resolve it anyway.
@@ -7134,6 +7374,7 @@ def evaluate_domain(
                     else:
                         feed = IDN_FEED_SUSPECT
                         group = IDN_GROUP_SUSPECT
+                    group_owner, group_origin = group, "builtin"
                     idn_block_b_eval = _idn_dual_form(verdict)
                 elif action == IDN_ACT_ALERT and verdict is not None:
                     # Suspicious/flagged (or malicious with block disabled) -> ALERT only:
@@ -7167,6 +7408,8 @@ def evaluate_domain(
                     feed = hit[0]
                     group = "DNSBL_Regex"
                     block_band = _block_entry_band(hit[1])
+                    group_owner = hit[1].get("group_owner", "")
+                    group_origin = hit[1].get("group_origin", "")
                     break
 
         if is_found:
@@ -7210,6 +7453,8 @@ def evaluate_domain(
                 if scan_meta["kind"] == "regex":
                     feed = scan_meta["key"]
                     group = "DNSBL_Regex"
+                    group_owner = scan_meta["entry"].get("group_owner", "")
+                    group_origin = scan_meta["entry"].get("group_origin", "")
                     log_type = cfg.get("builtin_log_flag", "0")  # issue #3291
                     b_type = "Python"
                     b_eval = q_name
@@ -7217,6 +7462,8 @@ def evaluate_domain(
                     entry = scan_meta["entry"]
                     log_type = entry["log"]
                     feed, group = resolve_feed_group(entry["index"], feed_group_index_db)
+                    group_owner = entry.get("group_owner", group)
+                    group_origin = entry.get("group_origin", "custom")
                     if scan_meta["kind"] == "zone":
                         b_type = "TLD"
                         b_eval = scan_meta["matched"]
@@ -7262,6 +7509,8 @@ def evaluate_domain(
         group=group,
         b_eval=b_eval,
         idn_alert=idn_alert,
+        group_owner=group_owner,
+        group_origin=group_origin,
     )
 
 
@@ -7339,12 +7588,25 @@ def dnsbl_query_answer(domain: str, qtype: Any) -> dict[str, Any]:
     _decision_for(q_name, snap.gen).dnsbl = dnsbl
 
     if not (dnsbl.is_found and not dnsbl.in_whitelist):
-        return {"blocked": False, "b_type": "", "group": "", "b_eval": "", "feed": "", "p_type": ""}
+        return {
+            "blocked": False,
+            "b_type": "",
+            "group": "",
+            "b_eval": "",
+            "feed": "",
+            "p_type": "",
+            "group_owner": "",
+            "group_origin": "",
+            "group_epoch": "",
+        }
     # Same "{}".format(v) str-coercion csv_line uses for these fields (:2829-2843).
     return {
         "blocked": True,
         "b_type": "{}".format(dnsbl.b_type),
         "group": "{}".format(dnsbl.group),
+        "group_owner": dnsbl.group_owner,
+        "group_origin": dnsbl.group_origin,
+        "group_epoch": snap.group_epochs.get((dnsbl.group_owner, dnsbl.group_origin), ""),
         "b_eval": "{}".format(dnsbl.b_eval),
         "feed": "{}".format(dnsbl.feed),
         "p_type": "{}".format(dnsbl.p_type),
@@ -7791,7 +8053,14 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # via get_details_dnsbl (which internally drops the log line for "4");
                 # not cached, for the same #43 reasons as the VIP/null path below.
                 if dnsbl.nxdomain:
-                    get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": q_ip}, dnsbl)
+                    get_details_dnsbl(
+                        "dnsbl",
+                        None,
+                        qstate,
+                        {"pfb_addr": q_ip},
+                        dnsbl,
+                        snap.group_epochs.get((dnsbl.group_owner, dnsbl.group_origin), ""),
+                    )
                     qstate.return_rcode = RCODE_NXDOMAIN
                     qstate.no_cache_store = 1
                     qstate.ext_state[id] = MODULE_FINISHED
@@ -7819,7 +8088,14 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
 
                 # Log entry
                 kwargs = {"pfb_addr": q_ip}
-                get_details_dnsbl("dnsbl", None, qstate, kwargs, dnsbl)
+                get_details_dnsbl(
+                    "dnsbl",
+                    None,
+                    qstate,
+                    kwargs,
+                    dnsbl,
+                    snap.group_epochs.get((dnsbl.group_owner, dnsbl.group_origin), ""),
+                )
 
                 qstate.return_rcode = RCODE_NOERROR
                 qstate.return_msg.rep.security = 2

@@ -9158,7 +9158,7 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
  * @param float  $timeout_s Bounded-wait budget in seconds (a deadline AND a hard poll
  *                          cap both bound the wait -- CLAUDE.md "No orphaned waits").
  * @param callable|null $now Monotonic clock seam for deterministic wait tests.
- * @return array{blocked:bool,b_type:string,group:string,b_eval:string,feed:string,p_type:string}|null
+ * @return array{blocked:bool,b_type:string,group:string,b_eval:string,feed:string,p_type:string,group_owner:string,group_origin:string,group_epoch:string}|null
  *         The matcher's verdict, or NULL when none was obtained (invalid domain,
  *         request-encode, lock open/acquire, or write failure; timeout; or a malformed reply)
  *         -- callers must treat NULL and blocked=false identically ("no block"),
@@ -9273,6 +9273,11 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 						&& is_string($rec['b_eval'] ?? NULL)
 						&& is_string($rec['feed'] ?? NULL)
 						&& is_string($rec['p_type'] ?? NULL)
+						&& is_string($rec['group_owner'] ?? NULL)
+						&& is_string($rec['group_origin'] ?? NULL)
+						&& in_array($rec['group_origin'], array('', 'custom', 'builtin'), TRUE)
+						&& is_string($rec['group_epoch'] ?? NULL)
+						&& ($rec['group_epoch'] === '' || preg_match('/^[0-9a-f]{32}$/D', $rec['group_epoch']) === 1)
 					) {
 						// A reply that becomes readable after the shared deadline is
 						// late even if this process was descheduled while reading it.
@@ -9286,6 +9291,9 @@ function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s =
 							'b_eval'  => $rec['b_eval'],
 							'feed'    => $rec['feed'],
 							'p_type'  => $rec['p_type'],
+							'group_epoch' => $rec['group_epoch'],
+							'group_owner' => $rec['group_owner'],
+							'group_origin' => $rec['group_origin'],
 						);
 						break;
 					}

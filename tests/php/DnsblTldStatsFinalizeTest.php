@@ -126,6 +126,7 @@ final class DnsblTldStatsFinalizeTest extends TestCase
 			'counter' => 4,
 		];
 		$this->configure('', true, $active);
+		$GLOBALS['pfb']['alias_dnsbl_configured'] = ['DNSBL_Group'];
 		$GLOBALS['pfb']['dnsbl_info_stats'][] = $stale;
 
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
@@ -158,6 +159,26 @@ final class DnsblTldStatsFinalizeTest extends TestCase
 		$this->assertSame('8', $persisted['entries']);
 		$this->assertSame(11, $persisted['counter']);
 		$this->assertSame(0, $staleCount);
+	}
+
+	public function testRealSaveFailureStopsTldReload(): void
+	{
+		$group = ['groupname'=>'DNSBL_A','timestamp'=>'old','entries'=>3,'counter'=>12];
+		$this->configure('', TRUE, $group);
+		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'], [
+			'enable'=>PfbToggle::On,'dnsbl'=>PfbToggle::On,'save'=>FALSE,'dnsbl_tld_wildcard'=>TRUE,
+			'alias_dnsbl_configured'=>['DNSBL_A'],'dnsbl_file'=>"{$this->tmp}/dnsbl",'dnsbl_publish_failed'=>FALSE,
+		]);
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$db->exec('CREATE TABLE dnsbl(groupname TEXT,timestamp TEXT,entries INTEGER,counter INTEGER)');
+		$db->exec("INSERT INTO dnsbl VALUES ('DNSBL_A','old',3,12)");
+		$db->exec("CREATE TRIGGER refuse BEFORE UPDATE ON dnsbl BEGIN SELECT RAISE(ABORT,'refuse'); END");
+		$this->assertFalse(pfb_update_unbound('enabled', TRUE, FALSE, ['DNSBL_A'=>4]));
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_publish_failed']);
+		$this->assertFileDoesNotExist("{$this->tmp}/dnsbl.sync");
+		$this->assertSame(12, $db->querySingle('SELECT counter FROM dnsbl'));
+		$this->assertSame(3, $db->querySingle('SELECT entries FROM dnsbl'));
+		$db->close();
 	}
 
 	private function runFinalize(string $blacklist): void

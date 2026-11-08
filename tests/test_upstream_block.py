@@ -397,9 +397,9 @@ class TestLogUpstreamBlockCounterEnqueue:
 
     Background:
         The function writes CSV to dnsbl.log, then — when the SQLite
-        DNSBL connection is active — calls pfb_db_enqueue(("dnsbl", "Upstream")) to
-        increment the aggregate Upstream row counter.  The guard ``if pfb["sqlite3_dnsbl_con"]``
-        must be the discriminator: the enqueue fires when truthy and is suppressed when falsy.
+        DNSBL connection is active — enqueues ("dnsbl", "Upstream", "Upstream", "builtin", epoch, qtype, transport)
+        to increment the aggregate and detail counters. Given a captured epoch,
+        the connection guard suppresses the enqueue when inactive.
 
     Given:
         A valid UpstreamBlock result (NXRA signal, no provider) and a monkeypatched
@@ -411,10 +411,10 @@ class TestLogUpstreamBlockCounterEnqueue:
 
     def test_enqueues_upstream_counter_when_connection_active(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """
-        When sqlite3_dnsbl_con is truthy, _log_upstream_block enqueues ("dnsbl", "Upstream").
+        With a captured epoch and active connection, enqueue the dimensional Upstream task.
 
         Before-state (con=False): no enqueue occurs (proven in the companion test).
-        After-state (con=True): exactly one ("dnsbl", "Upstream") task is enqueued.
+        After-state (con=True): exactly one epoch-tagged task is enqueued.
         """
         calls: list[tuple[str, ...]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda task: calls.append(task))
@@ -427,10 +427,10 @@ class TestLogUpstreamBlockCounterEnqueue:
         # Flip to active.
         pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
 
-        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A")
+        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A", group_epoch="fixture-epoch")
 
-        dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
-        assert dnsbl_tasks == [("dnsbl", "Upstream")], f"Expected exactly one ('dnsbl', 'Upstream') task; got: {calls}"
+        dnsbl_tasks = [t for t in calls if t[0] == "dnsbl"]
+        assert dnsbl_tasks == [("dnsbl", "Upstream", "Upstream", "builtin", "fixture-epoch", "A", "")], calls
 
     def test_no_enqueue_when_connection_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """
@@ -446,9 +446,9 @@ class TestLogUpstreamBlockCounterEnqueue:
         # Fixture default: sqlite3_dnsbl_con is False (see conftest reset_pfb_globals).
         assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
 
-        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A")
+        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A", group_epoch="fixture-epoch")
 
-        dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
+        dnsbl_tasks = [t for t in calls if t[0] == "dnsbl"]
         assert dnsbl_tasks == [], f"Expected no dnsbl enqueue with sqlite3_dnsbl_con=False; got: {calls}"
 
 
@@ -559,7 +559,8 @@ class TestDnsblFlushSelfHealsUpstreamRow:
         assert con.execute("SELECT * FROM dnsbl WHERE groupname = 'Upstream'").fetchone() is None
 
         # When: a flush carrying an Upstream delta runs.
-        assert _db_flush_dnsbl({"Upstream": 3})
+        epoch = pfb_unbound._db_group_epochs(True, {})[("Upstream", "builtin")]
+        assert _db_flush_dnsbl({("Upstream", "Upstream", "builtin", epoch): 3})
 
         # Then: the row exists again with the flushed delta -- not silently dropped.
         row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
@@ -576,7 +577,7 @@ class TestDnsblFlushSelfHealsUpstreamRow:
         con.execute("DELETE FROM dnsbl")
         con.commit()
 
-        assert _db_flush_dnsbl({"SomeFeed": 1})
+        assert _db_flush_dnsbl({("SomeFeed", "SomeFeed", "custom", "absent-epoch"): 1})
 
         assert con.execute("SELECT * FROM dnsbl WHERE groupname = 'Upstream'").fetchone() is None, (
             "a feed-only flush (no 'Upstream' delta) must not seed the Upstream row"
@@ -668,7 +669,8 @@ class TestDnsblDbOpensInForwardingMode:
         assert pfb_unbound.pfb["sqlite3_dnsbl_con"], "forwarding-only init must open the dnsbl stats DB (issue #860)"
 
         # When: an Upstream flush runs (as the DB worker would after _log_upstream_block).
-        assert _db_flush_dnsbl({"Upstream": 1})
+        epoch = pfb_unbound._db_group_epochs(True, {})[("Upstream", "builtin")]
+        assert _db_flush_dnsbl({("Upstream", "Upstream", "builtin", epoch): 1})
 
         # Then: the counter actually landed -- not silently dropped as before the fix.
         con = pfb_unbound._db_conns[DB_DNSBL]
@@ -686,5 +688,5 @@ class TestDnsblDbOpensInForwardingMode:
         assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
         assert DB_DNSBL not in pfb_unbound._db_conns
 
-        assert _db_flush_dnsbl({"Upstream": 1})
+        assert _db_flush_dnsbl({("Upstream", "Upstream", "builtin", "unavailable-epoch"): 1})
         assert DB_DNSBL not in pfb_unbound._db_conns, "guard must keep the DB closed with neither flag set"

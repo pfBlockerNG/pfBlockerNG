@@ -59,6 +59,9 @@ final class LogTimestampBaselineTest extends TestCase
 			if (is_file($f)) {
 				$this->assertTrue(unlink($f), "failed to remove temp file {$f}");
 			}
+			elseif (is_dir($f)) {
+				rmdir_recursive($f);
+			}
 		}
 		$this->tmpfiles = [];
 	}
@@ -470,6 +473,13 @@ final class LogTimestampBaselineTest extends TestCase
 		$GLOBALS['pfb']['dnsbl_info'] = $infoDb;
 		$GLOBALS['pfb']['sqlite_timeout'] = 2000;
 		$GLOBALS['pfb']['errlog'] = $this->tempFile('pfb_log_event_errlog_');
+		$GLOBALS['pfb']['log'] = $this->tempFile('pfb_log_event_log_');
+		$this->saved['dnsbldir'] = $GLOBALS['pfb']['dnsbldir'];
+		$querydir = sys_get_temp_dir() . '/pfb_timestamp_query_' . uniqid();
+		mkdir("{$querydir}/pfb_py_query.lock", 0700, TRUE);
+		$this->tmpfiles[] = $querydir;
+		// No accounting verdict is needed by these timestamp-only assertions.
+		$GLOBALS['pfb']['dnsbldir'] = $querydir;
 
 		$db = new SQLite3($resolverDb);
 		$db->exec('CREATE TABLE IF NOT EXISTS lastevent ( row INTEGER, groupname TEXT, entry TEXT, details TEXT )');

@@ -345,7 +345,10 @@ class TestScanBlockBand:
         }
         first = _scan_block_band("evil.com", cfg, {}, {}, regex_db, {})
         second = _scan_block_band("evil.com", cfg, {}, {}, regex_db, {})
-        assert first == second == (PRIO_FEED_BLOCK, {"kind": "regex", "key": "RX"})
+        for band, winner in (first, second):
+            assert band == PRIO_FEED_BLOCK
+            assert winner is not None
+            assert (winner["kind"], winner["key"]) == ("regex", "RX")
         assert "RX" in regex_db
 
 

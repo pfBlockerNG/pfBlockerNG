@@ -498,7 +498,8 @@ class TestSwapOpensDnsblStatsDb:
         assert P.pfb["sqlite3_dnsbl_con"], "a swap that newly wants stats must open the dnsbl DB (issue #862)"
 
         # ---- and a counter flush actually lands now (pre-fix: guarded no-op).
-        assert _db_flush_dnsbl({"Upstream": 1})
+        epoch = P._db_group_epochs(True, {})[("Upstream", "builtin")]
+        assert _db_flush_dnsbl({("Upstream", "Upstream", "builtin", epoch): 1})
         con = P._db_conns[P.DB_DNSBL]
         row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
         assert row == (1,), f"Upstream counter not incremented after the swap opened the DB: {row!r}"
@@ -586,7 +587,8 @@ class TestSwapOpensDnsblStatsDb:
         # ---- BEFORE: the DB is already open with an accumulated Upstream counter.
         P.pfb["python_blacklist"] = True
         P.pfb["sqlite3_dnsbl_con"] = True
-        assert _db_flush_dnsbl({"Upstream": 7})
+        epoch = P._db_group_epochs(True, {})[("Upstream", "builtin")]
+        assert _db_flush_dnsbl({("Upstream", "Upstream", "builtin", epoch): 7})
         first_con = P._db_conns[P.DB_DNSBL]
         assert first_con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (7,)
         P._snapshot = _snapshot(counts=0)

@@ -152,7 +152,8 @@ class TestControlEnableOpensDnsblStatsDb:
         )
 
         # And a counter flush actually lands now (pre-fix: guarded no-op).
-        assert P._db_flush_dnsbl({"Upstream": 1})
+        epoch = P._db_group_epochs(True, {})[("Upstream", "builtin")]
+        assert P._db_flush_dnsbl({("Upstream", "Upstream", "builtin", epoch): 1})
         con = P._db_conns[P.DB_DNSBL]
         row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
         assert row == (1,), f"Upstream counter not incremented after enable opened the DB: {row!r}"
@@ -211,7 +212,8 @@ class TestControlEnableOpensDnsblStatsDb:
         # Given: the DB is already open with an accumulated Upstream counter.
         P.pfb["python_blacklist"] = True
         P.pfb["sqlite3_dnsbl_con"] = True
-        assert P._db_flush_dnsbl({"Upstream": 7})
+        epoch = P._db_group_epochs(True, {})[("Upstream", "builtin")]
+        assert P._db_flush_dnsbl({("Upstream", "Upstream", "builtin", epoch): 7})
         first_con = P._db_conns[P.DB_DNSBL]
         assert first_con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (7,)
 
@@ -330,7 +332,8 @@ class TestCorruptDnsblStatsDbRecovery:
         )
 
         # ---- and a counter flush actually lands on the recovered DB.
-        assert P._db_flush_dnsbl({"Upstream": 1})
+        epoch = P._db_group_epochs(True, {})[("Upstream", "builtin")]
+        assert P._db_flush_dnsbl({("Upstream", "Upstream", "builtin", epoch): 1})
         con = P._db_conns[P.DB_DNSBL]
         row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
         assert row == (1,), f"Upstream counter not incremented after corrupt-DB recovery: {row!r}"
@@ -464,7 +467,8 @@ class TestCorruptDnsblStatsDbRecovery:
         # And: a flush lands AND is visible through a FRESH connection to the on-disk
         # path -- proving the cached connection's file IS the live on-disk file, not an
         # unlinked-inode ghost.
-        assert P._db_flush_dnsbl({"Upstream": 1})
+        epoch = P._db_group_epochs(True, {})[("Upstream", "builtin")]
+        assert P._db_flush_dnsbl({("Upstream", "Upstream", "builtin", epoch): 1})
         fresh = sqlite3.connect(str(db))
         try:
             row = fresh.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()

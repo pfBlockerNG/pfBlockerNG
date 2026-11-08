@@ -51,7 +51,7 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 			$this->source
 		);
 		$this->assertMatchesRegularExpression(
-			'/function pfb_dnsbl_tld_stats_finalize\(array \$group_counts\): void/',
+			'/function pfb_dnsbl_tld_stats_finalize\(array \$group_counts\): bool/',
 			$this->source
 		);
 
@@ -145,7 +145,7 @@ final class DnsblPlaintextSummaryRetirementTest extends TestCase
 		$enableGate = strpos($reloadBody, "if (\$pfb['enable'] === PfbToggle::On && \$pfb['dnsbl'] === PfbToggle::On && !\$pfb['save'])");
 		$toggleGate = strpos($reloadBody, "if (\$pfb['dnsbl_tld_wildcard'])", $enableGate);
 		$domainGate = strpos($reloadBody, "if (\$pfb['domain_update'])", $toggleGate);
-		$finalizeCall = strpos($reloadBody, 'pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts);', $domainGate);
+		$finalizeCall = strpos($reloadBody, 'if (!pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts))', $domainGate);
 		$this->assertNotFalse($enableGate);
 		$this->assertNotFalse($toggleGate);
 		$this->assertNotFalse($domainGate);

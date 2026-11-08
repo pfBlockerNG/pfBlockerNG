@@ -90,6 +90,30 @@ final class MetricsRenderTest extends TestCase
 		$this->assertSame($expected . "\n", $out);
 	}
 
+	public function testDnsBreakdownRetainsHistoricalTotalsWithoutDoubleCounting(): void
+	{
+		$out = pfb_metrics_render($this->minimal([
+			'dnsbl_groups' => [['group' => 'Ads', 'entries' => 5, 'counter' => 12]],
+			'resolver_queries' => 20,
+			'dnsbl_totals' => [['owner'=>'DNSBL_A','origin'=>'custom','group'=>'Ads','count'=>5]],
+			'dnsbl_detail' => [
+				['owner'=>'DNSBL_A','origin'=>'custom','group' => 'Ads', 'qtype' => 'AAAA', 'transport' => 'DoH', 'count' => 3],
+				['owner'=>'DNSBL_A','origin'=>'custom','group' => 'Ads', 'qtype' => 'MX', 'transport' => '', 'count' => 2],
+			],
+			'resolver_detail' => [
+				['qtype' => 'AAAA', 'transport' => 'DoH', 'count' => 4],
+				['qtype' => 'HTTPS', 'transport' => '', 'count' => 3],
+			],
+		]));
+
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"Ads\"} 7\n", $out);
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"Ads\",origin=\"custom\",qtype=\"AAAA\",transport=\"DoH\"} 3\n", $out);
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"Ads\",origin=\"custom\",qtype=\"MX\"} 2\n", $out);
+		$this->assertStringContainsString("pfblockerng_dnsbl_resolver_queries_total 13\n", $out);
+		$this->assertStringContainsString("pfblockerng_dnsbl_resolver_queries_total{qtype=\"AAAA\",transport=\"DoH\"} 4\n", $out);
+		$this->assertStringContainsString("pfblockerng_dnsbl_resolver_queries_total{qtype=\"HTTPS\"} 3\n", $out);
+	}
+
 	public function testHostileGroupLabel_IsEscapedOnOneLine(): void
 	{
 		$out = pfb_metrics_render($this->minimal([

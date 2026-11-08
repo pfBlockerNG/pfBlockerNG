@@ -363,9 +363,11 @@ class TestSlowRegexIsWarnedAndKept:
         regex_db = _slow_rule_db()
         cfg = _cfg(regexDB=True)
         _install_clock(monkeypatch, [SLOW_MS, SLOW_MS])
-        expected = (PRIO_FEED_BLOCK, {"kind": "regex", "key": "F#0"})
-        assert _scan_block_band("slow.example", cfg, {}, {}, regex_db, {}) == expected
-        assert _scan_block_band("slow.example", cfg, {}, {}, regex_db, {}) == expected
+        for _ in range(2):
+            band, winner = _scan_block_band("slow.example", cfg, {}, {}, regex_db, {})
+            assert band == PRIO_FEED_BLOCK
+            assert winner is not None
+            assert (winner["kind"], winner["key"]) == ("regex", "F#0")
         assert "F#0" in regex_db
         assert capsys.readouterr().err.count("slow DNSBL_Regex regex [ F#0 ]") == 1
 

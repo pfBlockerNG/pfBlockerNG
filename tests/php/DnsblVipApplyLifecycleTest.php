@@ -114,6 +114,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			'runlog' => "{$dir}/run.log", 'denydir' => "{$dir}/deny", 'dnsbldir' => $dir, 'dnsbl_conf' => "{$dir}/lighty.conf",
 			'dnsbl_cert' => "{$dir}/cert.pem", 'chroot_cmd' => '/bin/echo', 'php' => PHP_BINARY, 'dnsbl_python_unmount' => FALSE,
 			'install' => FALSE, 'domain_clear' => FALSE, 'save' => $o['save'], 'unbound_py_vip' => "{$dir}/pfb_py_vip",
+			'dnsbl_info' => "{$dir}/info.sqlite", 'dnsbl_resolver' => "{$dir}/resolver.sqlite",
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['g']['varrun_path']          = $dir;
@@ -259,6 +260,168 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$GLOBALS['pfb']['unbound_py_count']        = "{$dir}/pfb_py_count";
 		$GLOBALS['pfb']['unbound_py_regex_count']  = "{$dir}/pfb_py_regex_count";
 		$GLOBALS['pfb']['unbound_py_reject_stats'] = "{$dir}/pfb_py_reject_stats.json";
+	}
+
+	private function accountingDatabase(): SQLite3
+	{
+		foreach (['dnsdir', 'dnsorigdir', 'aliasdir', 'origdir', 'snapdir'] as $path) {
+			$GLOBALS['pfb'][$path] = "{$this->dir}/{$path}";
+			mkdir($GLOBALS['pfb'][$path]);
+		}
+		$GLOBALS['pfb']['dnsbl_info'] = "{$this->dir}/info.sqlite";
+		$GLOBALS['pfb']['dnsbl_resolver'] = "{$this->dir}/resolver.sqlite";
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$db->exec('CREATE TABLE dnsbl(groupname TEXT,timestamp TEXT,entries INTEGER,counter INTEGER)');
+		$db->exec("INSERT INTO dnsbl VALUES ('DNSBL_Kept','old',3,12),('DNSBL_Deleted','old',2,8)");
+		$db->exec('CREATE TABLE dnsbl_group_epochs(owner TEXT,origin TEXT,epoch TEXT,PRIMARY KEY(owner,origin))');
+		$db->exec("INSERT INTO dnsbl_group_epochs VALUES ('DNSBL_Kept','custom','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),('DNSBL_Deleted','custom','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')");
+		$db->exec('CREATE TABLE dns_metric_totals(owner TEXT,origin TEXT,groupname TEXT,count INTEGER,PRIMARY KEY(owner,origin,groupname))');
+		$db->exec("INSERT INTO dns_metric_totals VALUES ('DNSBL_Kept','custom','DNSBL_Kept',3),('DNSBL_Deleted','custom','DNSBL_Deleted',2)");
+		$db->exec('CREATE TABLE dns_metric_blocks(owner TEXT,origin TEXT,groupname TEXT,qtype TEXT,transport TEXT,count INTEGER)');
+		$db->exec("INSERT INTO dns_metric_blocks VALUES ('DNSBL_Kept','custom','DNSBL_Kept','A','UDP',3),('DNSBL_Deleted','custom','DNSBL_Deleted','A','UDP',2)");
+		return $db;
+	}
+
+	public static function accountingMembershipSources(): array
+	{
+		return ['regular disabled' => ['regular'], 'blacklist master disabled' => ['blacklist'], 'regular no data' => ['empty']];
+	}
+
+	#[DataProvider('accountingMembershipSources')]
+	public function testCompleteSourceMembershipSurvivesRuntimePruning(string $source): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		$db = $this->accountingDatabase();
+		config_set_path('installedpackages/pfblockerngdnsbl/config', $source === 'blacklist' ? [] : [[
+			'aliasname'=>'Kept','action'=>'unbound','order'=>'default','logging'=>'disabled_log',
+			'row'=>$source === 'empty' ? [] : [['url'=>'http://127.0.0.1:9/none','state'=>'Disabled','header'=>'Kept_a','format'=>'auto']],
+		]]);
+		if ($source === 'blacklist') {
+			config_set_path('installedpackages/pfblockerngblacklist/blacklist_selected', 'provider');
+			config_set_path('installedpackages/pfblockerngblacklist/item', [['xml'=>'provider','title'=>'Kept','selected'=>'category']]);
+		}
+		$this->runPass();
+		$this->assertSame(['DNSBL_Kept'], $GLOBALS['pfb']['alias_dnsbl_configured']);
+		$this->assertSame(12, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname='DNSBL_Kept'"));
+		$this->assertSame(3, $db->querySingle("SELECT count FROM dns_metric_totals WHERE owner='DNSBL_Kept'"));
+		$this->assertSame(0, $db->querySingle("SELECT count(*) FROM dnsbl WHERE groupname='DNSBL_Deleted'"));
+		$this->assertSame('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', $db->querySingle("SELECT epoch FROM dnsbl_group_epochs WHERE owner='DNSBL_Kept'"));
+		$db->close();
+	}
+
+	public function testMembershipOnlySecondPassReconcilesWithoutReload(): void
+	{
+		$this->arrange(['save'=>FALSE]);
+		$this->publishTo(TRUE);
+		$GLOBALS['pfb']['unbound_py_wh'] = "{$this->dir}/whitelist.txt";
+		$GLOBALS['pfb']['unbound_py_conf'] = "{$this->dir}/module.ini";
+		// The host cannot mount nullfs; model the already-mounted steady state.
+		$grep = "{$this->dir}/mounted-grep";
+		$real_grep = escapeshellarg($GLOBALS['pfb']['grep']);
+		$mounts = escapeshellarg("{$this->dir}/usr/local/bin") . '|' . escapeshellarg("{$this->dir}/usr/local/lib");
+		file_put_contents($grep, "#!/bin/sh\ncase \"\$1\" in\n{$mounts}) printf '%s\\n' \"\$1\" ;;\n*) exec {$real_grep} \"\$@\" ;;\nesac\n");
+		chmod($grep, 0755);
+		$GLOBALS['pfb']['grep'] = $grep;
+		$db = $this->accountingDatabase();
+		config_set_path('installedpackages/pfblockerngdnsbl/config', [[
+			'aliasname'=>'Kept','action'=>'unbound','order'=>'default','logging'=>'disabled_log','row'=>[],
+		]]);
+		$this->runPass();
+		$db->exec("INSERT INTO dnsbl VALUES ('DNSBL_Deleted','old',2,8)");
+		$db->exec("INSERT INTO dnsbl_group_epochs VALUES ('DNSBL_Deleted','custom','dddddddddddddddddddddddddddddddd')");
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->runPass();
+		$this->assertFalse($this->reloadFinished(), 'unchanged data need no reload');
+		$this->assertFalse($GLOBALS['pfb']['domain_update']);
+		$this->assertSame(['DNSBL_Kept'], $GLOBALS['pfb']['alias_dnsbl_configured']);
+		$this->assertSame(0, $db->querySingle("SELECT count(*) FROM dnsbl WHERE groupname='DNSBL_Deleted'"));
+		$this->assertSame(12, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname='DNSBL_Kept'"));
+		$db->close();
+	}
+
+	public function testReconcileFailurePreventsActivationAndRollsBack(): void
+	{
+		$this->arrange(['save'=>FALSE]);
+		$this->publishTo(TRUE);
+		$db = $this->accountingDatabase();
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		$db->exec("CREATE TRIGGER refuse BEFORE DELETE ON dnsbl_group_epochs BEGIN SELECT RAISE(ABORT,'refuse'); END");
+		$this->runPass();
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_publish_failed']);
+		$this->assertFalse($this->reloadFinished());
+		$this->assertSame(20, $db->querySingle('SELECT sum(counter) FROM dnsbl'));
+		$this->assertSame(5, $db->querySingle('SELECT sum(count) FROM dns_metric_totals'));
+		$this->assertSame(5, $db->querySingle('SELECT sum(count) FROM dns_metric_blocks'));
+		$db->close();
+	}
+
+	public function testSelectedProviderWithoutItemCannotDeleteAccounting(): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		config_set_path('installedpackages/pfblockerngblacklist/blacklist_selected', 'selected-provider');
+		config_set_path('installedpackages/pfblockerngblacklist/item', []);
+		$GLOBALS['pfb']['dnsbl_info'] = "{$this->dir}/info.sqlite";
+		$GLOBALS['pfb']['dnsbl_resolver'] = "{$this->dir}/resolver.sqlite";
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$db->exec('CREATE TABLE dnsbl(groupname TEXT,timestamp TEXT,entries INTEGER,counter INTEGER)');
+		$db->exec("INSERT INTO dnsbl VALUES ('DNSBL_Category','old',3,12)");
+		$db->exec('CREATE TABLE dnsbl_group_epochs(owner TEXT,origin TEXT,epoch TEXT,PRIMARY KEY(owner,origin))');
+		$db->exec("INSERT INTO dnsbl_group_epochs VALUES ('DNSBL_Category','custom','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')");
+		$db->exec('CREATE TABLE dns_metric_totals(owner TEXT,origin TEXT,groupname TEXT,count INTEGER,PRIMARY KEY(owner,origin,groupname))');
+		$db->exec("INSERT INTO dns_metric_totals VALUES ('DNSBL_Category','custom','DNSBL_Category',3)");
+		$db->exec('CREATE TABLE dns_metric_blocks(owner TEXT,origin TEXT,groupname TEXT,qtype TEXT,transport TEXT,count INTEGER)');
+		$db->exec("INSERT INTO dns_metric_blocks VALUES ('DNSBL_Category','custom','DNSBL_Category','A','UDP',3)");
+		$this->runPass();
+		$this->assertNull($GLOBALS['pfb']['alias_dnsbl_configured'], 'unrepresented selected provider is not complete authority');
+		$this->assertSame(12, $db->querySingle('SELECT counter FROM dnsbl'));
+		$this->assertSame(3, $db->querySingle('SELECT count FROM dns_metric_totals'));
+		$this->assertSame(3, $db->querySingle('SELECT count FROM dns_metric_blocks'));
+		$this->assertSame('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', $db->querySingle("SELECT epoch FROM dnsbl_group_epochs WHERE owner='DNSBL_Category'"));
+		$db->close();
+	}
+
+	public function testFailedPublicationKeepsAccountingBeforeReload(): void
+	{
+		$this->arrange(['save' => FALSE, 'served' => TRUE]);
+		$this->publishTo(TRUE);
+		foreach (['dnsdir', 'dnsorigdir', 'aliasdir', 'origdir', 'snapdir'] as $path) {
+			$GLOBALS['pfb'][$path] = "{$this->dir}/{$path}";
+			mkdir($GLOBALS['pfb'][$path]);
+		}
+		$GLOBALS['pfb']['dnsbl_info'] = "{$this->dir}/info.sqlite";
+		$GLOBALS['pfb']['dnsbl_resolver'] = "{$this->dir}/resolver.sqlite";
+		config_set_path('installedpackages/pfblockerngdnsbl/config', [[
+			'aliasname' => 'B', 'action' => 'unbound', 'order' => 'default', 'logging' => 'disabled_log',
+			'custom' => base64_encode("blocked.example\n"),
+		]]);
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$db->exec('CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER)');
+		$db->exec("INSERT INTO dnsbl VALUES ('DNSBL_A','old',5,12),('DNSBL_B','old',7,9)");
+		$db->exec('CREATE TABLE dns_metric_blocks (owner TEXT,origin TEXT,groupname TEXT,qtype TEXT,transport TEXT,count INTEGER)');
+		$db->exec("INSERT INTO dns_metric_blocks VALUES ('DNSBL_A','custom','DNSBL_A','A','UDP',3),('DNSBL_B','custom','DNSBL_B','AAAA','DoH',4)");
+		$db->exec('CREATE TABLE dnsbl_group_epochs (owner TEXT,origin TEXT,epoch TEXT NOT NULL,PRIMARY KEY(owner,origin))');
+		$db->exec("INSERT INTO dnsbl_group_epochs VALUES ('DNSBL_A','custom','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),('DNSBL_B','custom','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')");
+		$before = [];
+		foreach (['dnsbl', 'dns_metric_blocks', 'dnsbl_group_epochs'] as $table) {
+			$before[$table] = $db->querySingle("SELECT json_group_array(json_object('row', rowid, 'value', " . ($table === 'dnsbl_group_epochs' ? 'owner' : 'groupname') . ")) FROM {$table}");
+		}
+		mkdir($GLOBALS['pfb']['unbound_py_sources']);
+		$this->runPass();
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_publish_failed'], 'real manifest publication must fail');
+		$this->assertFalse($this->reloadFinished(), 'failed publication cannot activate generation');
+		$this->assertSame(12, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname='DNSBL_A'"));
+		$this->assertSame(9, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname='DNSBL_B'"));
+		$this->assertSame('old', $db->querySingle("SELECT timestamp FROM dnsbl WHERE groupname='DNSBL_B'"), 'failed publication must not save metadata either');
+		foreach ($before as $table => $rows) {
+			$this->assertSame($rows, $db->querySingle("SELECT json_group_array(json_object('row', rowid, 'value', " . ($table === 'dnsbl_group_epochs' ? 'owner' : 'groupname') . ")) FROM {$table}"));
+		}
+		$this->assertSame(7, $db->querySingle('SELECT sum(count) FROM dns_metric_blocks'));
+		$this->assertSame('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', $db->querySingle("SELECT epoch FROM dnsbl_group_epochs WHERE origin='custom' AND owner='DNSBL_A'"));
+		$this->assertSame('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', $db->querySingle("SELECT epoch FROM dnsbl_group_epochs WHERE origin='custom' AND owner='DNSBL_B'"));
+		$db->close();
 	}
 
 	// ------------------------------------------------------------------------------------------

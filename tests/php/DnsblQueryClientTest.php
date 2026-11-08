@@ -256,6 +256,8 @@ final class DnsblQueryClientTest extends TestCase
 		return (string) json_encode([
 			'id' => $id, 'blocked' => true, 'b_type' => 'dataDB', 'group' => $group,
 			'b_eval' => 'exact', 'feed' => "{$group}-feed", 'p_type' => 'A',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]);
 	}
 
@@ -502,6 +504,8 @@ final class DnsblQueryClientTest extends TestCase
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => false, 'b_type' => '', 'group' => '',
 			'b_eval' => '', 'feed' => '', 'p_type' => '',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 		$this->assertIsArray(pfb_dnsbl_query('write-fail-recovery.example', 'A', 2.0));
 	}
@@ -529,6 +533,8 @@ final class DnsblQueryClientTest extends TestCase
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => false, 'b_type' => '', 'group' => '',
 			'b_eval' => '', 'feed' => '', 'p_type' => '',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 
 		$this->assertIsArray(pfb_dnsbl_query('garbage-lock.example', 'A', 2.0));
@@ -663,12 +669,48 @@ final class DnsblQueryClientTest extends TestCase
 			$this->assertSame([
 				'blocked' => true, 'b_type' => 'dataDB', 'group' => 'boundary-group',
 				'b_eval' => 'exact', 'feed' => 'boundary-group-feed', 'p_type' => 'A',
+				'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+				'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 			], $result);
 			$this->assertStringNotContainsString('timed out waiting for a verdict', $logs);
 		}
 		clearstatcache();
 		$this->assertFileDoesNotExist($this->channel());
 		$this->assertFileDoesNotExist($this->replyPath());
+	}
+
+	public function testOwnerIdentityRequiredAndPassedThrough(): void
+	{
+		foreach (['group_owner', 'group_origin'] as $field) {
+			$reply = json_decode($this->verdictReply('__ID__', 'owner-group'), TRUE);
+			$reply['group_owner'] = 'DNSBL_Owner';
+			$reply['group_origin'] = 'custom';
+			unset($reply[$field]);
+			$this->spawnResponder(json_encode($reply));
+			$this->assertNull(pfb_dnsbl_query('owner-validation.example', 'A', 0.6));
+
+		}
+		$reply['group_owner'] = 'DNSBL_Owner';
+		$reply['group_origin'] = 'custom';
+		$this->spawnResponder(json_encode($reply));
+		$result = pfb_dnsbl_query('owner-validation.example', 'A', 1.0);
+		$this->assertSame('DNSBL_Owner', $result['group_owner']);
+		$this->assertSame('custom', $result['group_origin']);
+
+	}
+
+	public function testMissingOrMalformedGroupEpochIsRejected(): void
+	{
+		foreach ([NULL, 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'bad', 123] as $epoch) {
+			$reply = json_decode($this->verdictReply('__ID__', 'epoch-group'), TRUE);
+			if ($epoch === NULL) {
+				unset($reply['group_epoch']);
+			} else {
+				$reply['group_epoch'] = $epoch;
+			}
+			$this->spawnResponder(json_encode($reply));
+			$this->assertNull(pfb_dnsbl_query('epoch-validation.example', 'A', 0.6));
+		}
 	}
 
 	// --- happy path: blocked verdict, request schema + perms, cleanup -------
@@ -683,6 +725,8 @@ final class DnsblQueryClientTest extends TestCase
 			'b_eval'  => 'exact',
 			'feed'    => 'testfeed',
 			'p_type'  => 'A',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 
 		$result = pfb_dnsbl_query('blocked-case.example', 'A', 4.0);
@@ -694,6 +738,8 @@ final class DnsblQueryClientTest extends TestCase
 			'b_eval'  => 'exact',
 			'feed'    => 'testfeed',
 			'p_type'  => 'A',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		], $result, 'expected the responder-shaped verdict, got: ' . var_export($result, true));
 
 		// Independent-reader assertions: the request the client actually wrote.
@@ -727,6 +773,8 @@ final class DnsblQueryClientTest extends TestCase
 			'b_eval'  => '',
 			'feed'    => '',
 			'p_type'  => '',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 
 		$result = pfb_dnsbl_query('clean-case.example', 'A', 4.0);
@@ -842,6 +890,8 @@ final class DnsblQueryClientTest extends TestCase
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => false, 'b_type' => '', 'group' => '',
 			'b_eval' => '', 'feed' => '', 'p_type' => '',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 		pfb_dnsbl_query('fresh-id-case-one.example', 'A', 4.0);
 		$firstId = $this->readObserved()['request']['id'];
@@ -850,6 +900,8 @@ final class DnsblQueryClientTest extends TestCase
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => false, 'b_type' => '', 'group' => '',
 			'b_eval' => '', 'feed' => '', 'p_type' => '',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 		pfb_dnsbl_query('fresh-id-case-two.example', 'A', 4.0);
 		$secondId = $this->readObserved()['request']['id'];
@@ -932,6 +984,8 @@ final class DnsblQueryClientTest extends TestCase
 			'b_eval'  => 'exact',
 			'feed'    => 'testfeed',
 			'p_type'  => 'A',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 		$result = pfb_dnsbl_query('id-mismatch-case.example', 'A', 0.6);
 		$this->assertNull($result);
@@ -949,6 +1003,8 @@ final class DnsblQueryClientTest extends TestCase
 			'b_eval'  => 'exact',
 			'feed'    => 'testfeed',
 			'p_type'  => 'A',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 		$result = pfb_dnsbl_query('missing-field-case.example', 'A', 0.8);
 		$this->assertNull($result);
@@ -965,6 +1021,8 @@ final class DnsblQueryClientTest extends TestCase
 			'b_eval'  => 'exact',
 			'feed'    => 'testfeed',
 			'p_type'  => 'A',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 		$result = pfb_dnsbl_query('mistyped-blocked-case.example', 'A', 0.8);
 		$this->assertNull($result);
@@ -981,6 +1039,8 @@ final class DnsblQueryClientTest extends TestCase
 			'b_eval'  => 'exact',
 			'feed'    => 'testfeed',
 			'p_type'  => 'A',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'DNSBL_Test', 'group_origin' => 'custom',
 		]));
 		$result = pfb_dnsbl_query('mistyped-attribution-case.example', 'A', 0.8);
 		$this->assertNull($result);

@@ -116,6 +116,9 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 	{
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
 		$db->exec('CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )');
+		$db->exec('CREATE TABLE IF NOT EXISTS dnsbl_group_epochs (owner TEXT, origin TEXT, epoch TEXT NOT NULL, PRIMARY KEY(owner,origin))');
+		$db->exec('CREATE TABLE IF NOT EXISTS dns_metric_totals(owner TEXT,origin TEXT,groupname TEXT,count INTEGER,PRIMARY KEY(owner,origin,groupname))');
+		$db->exec("INSERT INTO dnsbl_group_epochs VALUES ('" . SQLite3::escapeString($groupname) . "', 'custom', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')");
 		$stmt = $db->prepare('INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES (:g, :t, :e, :c)');
 		$stmt->bindValue(':g', $groupname, SQLITE3_TEXT);
 		$stmt->bindValue(':t', '2026-01-01 00:00:00', SQLITE3_TEXT);
@@ -289,6 +292,8 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => true, 'b_type' => 'DNSBL',
 			'group' => 'LiveGroup', 'b_eval' => $domain, 'feed' => 'LiveFeed', 'p_type' => 'Python',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => 'LiveGroup', 'group_origin' => 'custom',
 		]));
 
 		$unexpected = $this->callCapturingUnexpectedWarnings(function () use ($domain) {
@@ -320,6 +325,8 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => false, 'b_type' => '', 'group' => '', 'b_eval' => '', 'feed' => '', 'p_type' => '',
+			'group_epoch' => '',
+			'group_owner' => '', 'group_origin' => '',
 		]));
 
 		pfb_log_event('DNSBL-HTTPS', $domain, '203.0.113.11', 'Mozilla/5.0');
@@ -368,6 +375,8 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => true, 'b_type' => '', 'group' => '', 'b_eval' => '', 'feed' => '', 'p_type' => '',
+			'group_epoch' => '',
+			'group_owner' => '', 'group_origin' => '',
 		]));
 
 		pfb_log_event('DNSBL-HTTPS', $domain, '203.0.113.13', 'Mozilla/5.0');
@@ -382,7 +391,7 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------
-	// hostile group -> PFB_FILTER_HTML-encoded in the log line and the counter bind
+	// hostile group -> HTML-encoded logs, exact verdict identity in accounting
 	// -------------------------------------------------------------------
 
 	public function testHostileGroupIsHtmlEncodedNeverRaw(): void
@@ -391,15 +400,13 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		$this->seedGrepRow($domain);
 
 		$hostileGroup = '"<Bad>&Grp';
-		// pfb_log_event's counter block re-filters $pfb_group a SECOND time (its own
-		// PFB_FILTER_HTML call, unchanged by this phase) -- the bound groupname is the
-		// DOUBLE-encoded form, so the pre-seeded row must key on that exact value.
-		$doubleEncoded = htmlspecialchars(htmlspecialchars($hostileGroup));
-		$this->seedCounterRow($doubleEncoded, 0);
+		$this->seedCounterRow($hostileGroup, 0);
 
 		$this->spawnResponder(json_encode([
 			'id' => '__ID__', 'blocked' => true, 'b_type' => 'DNSBL',
 			'group' => $hostileGroup, 'b_eval' => $domain, 'feed' => 'CleanFeed', 'p_type' => 'Python',
+			'group_epoch' => 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			'group_owner' => $hostileGroup, 'group_origin' => 'custom',
 		]));
 
 		pfb_log_event('DNSBL-HTTPS', $domain, '203.0.113.14', 'Mozilla/5.0');
@@ -408,12 +415,11 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		$fields = $this->logFields();
 		// (before) the raw responder value carries live HTML metacharacters.
 		$this->assertStringContainsString('<', $hostileGroup);
-		// The log line carries the SINGLE-encoded form (composed before the counter
-		// block's second pass) -- never the raw '<'/'"'.
+		// Only the log representation is HTML encoded.
 		$this->assertSame(htmlspecialchars($hostileGroup), $fields[6], "expected the HTML-encoded group in field(6), got: '{$fields[6]}'");
 		$this->assertStringNotContainsString('<Bad>', implode(',', $fields), 'no raw metacharacter may reach the log line');
 		$this->assertStringNotContainsString('GrepGroup', implode(',', $fields), 'the grep-path group must never appear');
 
-		$this->assertSame(1, $this->readCounter($doubleEncoded), 'expected the counter UPDATE to bind the (double-)filtered group as a TEXT param');
+		$this->assertSame(1, $this->readCounter($hostileGroup), 'accounting uses the original verdict identity');
 	}
 }

@@ -107,6 +107,7 @@ def add_hsts(domain: str) -> None:
 
 def set_feed_group(index: int, feed: str, group: str) -> None:
     pfb_unbound.feedGroupIndexDB[index] = {"feed": feed, "group": group}
+    pfb_unbound._snapshot.group_epochs.setdefault((group, "custom"), "fixture-epoch")
 
 
 def _is_block(dec: Any) -> bool:
@@ -134,6 +135,8 @@ def _dnsbl_decision(**kw: Any) -> Any:
         "b_eval": "",
     }
     fields.update(kw)
+    fields.setdefault("group_owner", fields["group"])
+    fields.setdefault("group_origin", "custom")
     return pfb_unbound.DnsblDecision(**fields)
 
 
@@ -550,10 +553,15 @@ class TestDbSubsystem:
         con = pfb_unbound._db_conns[pfb_unbound.DB_DNSBL]
         con.execute("INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES ('G1', '', 0, 0)")
         con.execute("INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES ('G2', '', 0, 0)")
+        pfb_unbound._db_create(pfb_unbound.DB_DNSBL, con.cursor())
+        con.executemany(
+            "INSERT INTO dnsbl_group_epochs VALUES (?, 'custom', lower(hex(randomblob(16))))", [("G1",), ("G2",)]
+        )
+        epochs = pfb_unbound._db_group_epochs(True, {})
         con.commit()
         for _ in range(3):
-            pfb_unbound.pfb_db_enqueue(("dnsbl", "G1"))
-        pfb_unbound.pfb_db_enqueue(("dnsbl", "G2"))
+            pfb_unbound.pfb_db_enqueue(("dnsbl", "G1", "G1", "custom", epochs[("G1", "custom")], "A", ""))
+        pfb_unbound.pfb_db_enqueue(("dnsbl", "G2", "G2", "custom", epochs[("G2", "custom")], "A", ""))
         assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0] == 3, (
             f"""expected 3"""
             f""", got {con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0]!r}"""
@@ -1150,17 +1158,19 @@ class TestGetDetailsDnsblNodata:
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
         calls: list[Any] = []
         monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda item: calls.append(item))
-        pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(), {"pfb_addr": "1.2.3.4"}, self._dnsbl(log_type))
+        pfb_unbound.get_details_dnsbl(
+            "dnsbl", None, self._qstate(), {"pfb_addr": "1.2.3.4"}, self._dnsbl(log_type), "fixture-epoch"
+        )
         return calls
 
     def test_nodata_logging_increments_group_counter(self, monkeypatch: Any) -> None:
         calls = self._counter_calls(monkeypatch, "5")
-        assert ("dnsbl", "G") in calls, f"expected ('dnsbl', 'G') in {calls!r}"
+        assert ("dnsbl", "G", "G", "custom", "fixture-epoch", "A", "") in calls, calls
 
     def test_nodata_no_logging_still_increments_group_counter(self, monkeypatch: Any) -> None:
         # Silencing the log must not suppress the group counter.
         calls = self._counter_calls(monkeypatch, "6")
-        assert ("dnsbl", "G") in calls, f"expected ('dnsbl', 'G') in {calls!r}"
+        assert ("dnsbl", "G", "G", "custom", "fixture-epoch", "A", "") in calls, calls
 
 
 class TestGetDetailsDnsblUnsetGuard:
@@ -2803,7 +2813,7 @@ class TestAttributionSurvivesRace:
             f"expected feed=TestFeed group=TestGroup (the SERVED verdict), got "
             f"feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup") in enqueued, enqueued
+        assert ("dnsbl", "TestGroup", "TestGroup", "custom", "fixture-epoch", "TYPE1", "") in enqueued, enqueued
 
     def test_attribution_survives_foreign_generation_allow_overwrite(self, monkeypatch: Any) -> None:
         # Scenario: a foreign-generation thread overwrites the same-name entry with an
@@ -2824,7 +2834,7 @@ class TestAttributionSurvivesRace:
         assert (feed, group) == ("TestFeed", "TestGroup"), (
             f"expected feed=TestFeed group=TestGroup, got feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup") in enqueued, enqueued
+        assert ("dnsbl", "TestGroup", "TestGroup", "custom", "fixture-epoch", "TYPE1", "") in enqueued, enqueued
 
     def test_attribution_survives_swap_clear(self, monkeypatch: Any) -> None:
         # Scenario: rebuild_and_swap()'s decisionDB.clear() (modelled here as a
@@ -2843,7 +2853,7 @@ class TestAttributionSurvivesRace:
         assert (feed, group) == ("TestFeed", "TestGroup"), (
             f"expected feed=TestFeed group=TestGroup, got feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup") in enqueued, enqueued
+        assert ("dnsbl", "TestGroup", "TestGroup", "custom", "fixture-epoch", "TYPE1", "") in enqueued, enqueued
 
 
 class TestAttributionMemoPath:

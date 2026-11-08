@@ -20,6 +20,7 @@ Tests:
     test_metrics_verb_publishes_nothing_while_disabled — the verb leaves no file while the option is off
     test_metrics_verb_ignores_a_stale_sentinel_while_the_option_is_off — a leftover sentinel cannot outvote a disable
     test_metrics_dir_missing_logs_once                — a missing textfile dir logs once, exits 0
+    test_dns_dimensions_and_group_lifecycle           — real DNS counter labels and independent owner transitions
 
 DESELECTED from the default ``python -m pytest`` (smoke-only). Run via::
 
@@ -28,7 +29,10 @@ DESELECTED from the default ``python -m pytest`` (smoke-only). Run via::
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import secrets
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
@@ -36,9 +40,19 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM
+from .test_smoke_dns_gateway import _ask, _dig
+from .test_smoke_dns_gateway import gateway_on as gateway_on
+from .test_smoke_dns_gateway import go_toolchain as go_toolchain
+from .test_smoke_dns_gateway import gw as gw
+from .test_smoke_dns_gateway import probe_binary as probe_binary
+from .test_smoke_dns_proxy import PROXY_RC, _apply, _capture, _php_ok, _set_proxy_toggle
 
 if TYPE_CHECKING:
     from prometheus_client.metrics_core import Metric
+
+    from .conftest import _StubDnsServer
+    from .test_smoke_dns_gateway import Gateway
+    from .test_smoke_dns_proxy import State
 
 _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 _TEXTFILE_DIR = "/var/tmp/node_exporter"
@@ -64,7 +78,7 @@ _FEED_ALIAS = "smokemetrics"
 _FEED_ADDRESSES = ("192.0.2.30", "192.0.2.31")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="module", autouse=True)
 def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg once, with one IPv4 feed so a pfB table exists to export."""
     if not os.environ.get("SMOKE_PKG"):
@@ -392,3 +406,366 @@ def test_metrics_dir_missing_logs_once(deployed_vm: SmokeVM) -> None:
 
     assert after - before == 1, f"two runs must log exactly one '{_ERROR_MARKER}' line: {before} -> {after}"
     assert not _exists(vm, _TEXTFILE_DIR), "the verb must never create the textfile directory"
+
+
+_BLOCKED = "pfblockerng_dnsbl_blocked_queries_total"
+_RESOLVER = "pfblockerng_dnsbl_resolver_queries_total"
+_ENTRIES = "pfblockerng_dnsbl_group_entries"
+_PKG = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+
+
+def _export(vm: SmokeVM) -> dict[str, Metric]:
+    _run_verb(vm)
+    families = _fetch_families(vm)
+    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    for family in families.values():
+        for sample in family.samples:
+            if sample.name in (_BLOCKED, _RESOLVER):
+                key = sample.name, tuple(sorted(sample.labels.items()))
+                assert key not in seen, f"duplicate DNS metric label set: {sample}"
+                seen.add(key)
+                allowed = (
+                    {"group", "origin", "qtype", "transport"} if sample.name == _BLOCKED else {"qtype", "transport"}
+                )
+                assert sample.labels.keys() <= allowed, f"unexpected DNS labels: {sample}"
+                assert sample.labels.get("transport", "UDP") in {"UDP", "TCP", "DoT", "DoH", "DoQ"}, sample
+                if "origin" in sample.labels:
+                    assert sample.labels["origin"] in {"custom", "builtin"}, sample
+    return families
+
+
+def _samples(families: dict[str, Metric], name: str) -> list[tuple[dict[str, str], float]]:
+    return [(s.labels, s.value) for family in families.values() for s in family.samples if s.name == name]
+
+
+def _show_dns_prom(vm: SmokeVM, stage: str) -> None:
+    fetched = vm.ssh("/bin/cat", _PROM)
+    assert fetched.returncode == 0, f"cannot record {_PROM}: {fetched.stderr!r}"
+    rows = [line for line in fetched.stdout.splitlines() if line.startswith((_BLOCKED, _RESOLVER))]
+    print(f"DNS_PROMETHEUS {stage}\n" + "\n".join(rows), flush=True)
+
+
+def _blocks(families: dict[str, Metric], group: str) -> dict[tuple[str, str], float]:
+    counts: dict[tuple[str, str], float] = {}
+    for labels, value in _samples(families, _BLOCKED):
+        if labels.get("group") == group and value != 0:
+            key = (labels.get("qtype", ""), labels.get("transport", ""))
+            counts[key] = counts.get(key, 0) + value
+    return counts
+
+
+def _origin_blocks(families: dict[str, Metric], origin: str) -> float:
+    return sum(
+        value
+        for labels, value in _samples(families, _BLOCKED)
+        if labels.get("group") == "DNSBL_Regex" and labels.get("origin") == origin
+    )
+
+
+def _wait_blocks(vm: SmokeVM, expected: dict[str, dict[tuple[str, str], float]]) -> dict[str, Metric]:
+    last: dict[str, Metric] = {}
+
+    def committed() -> bool:
+        nonlocal last
+        last = _export(vm)
+        return all(_blocks(last, group) == counts for group, counts in expected.items())
+
+    try:
+        h.wait_until(committed, timeout=60.0, interval=0.5)
+    except RuntimeError as exc:
+        actual = {group: _blocks(last, group) for group in expected}
+        raise AssertionError(f"DNS metric commit: expected {expected}, got {actual}") from exc
+    return last
+
+
+def _epochs(vm: SmokeVM) -> dict[tuple[str, str], str]:
+    output = _php_ok(
+        vm,
+        "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite', SQLITE3_OPEN_READONLY);"
+        "$rows = $db->query('SELECT owner, origin, epoch FROM dnsbl_group_epochs');"
+        "$epochs = array(); while ($row = $rows->fetchArray(SQLITE3_ASSOC)) { $epochs[] = $row; }"
+        "$owners = array(); foreach (array('dns_metric_totals', 'dns_metric_blocks') as $table) {"
+        "$rows = $db->query('SELECT DISTINCT owner, origin FROM ' . $table);"
+        "while ($row = $rows->fetchArray(SQLITE3_ASSOC)) { $owners[] = $row; } } $db->close();"
+        "echo '<<<EPOCHS>>>' . json_encode(array('epochs' => $epochs, 'owners' => $owners)) . '<<<END>>>';",
+        "read group incarnations",
+    )
+    match = re.search(r"<<<EPOCHS>>>(.*?)<<<END>>>", output, re.DOTALL)
+    assert match, f"missing epoch snapshot: {output!r}"
+    state = json.loads(match.group(1))
+    epochs = {(row["owner"], row["origin"]): row["epoch"] for row in state["epochs"]}
+    assert all((row["owner"], row["origin"]) in epochs for row in state["owners"]), f"orphan ownership: {state}"
+    return epochs
+
+
+def _group_action(vm: SmokeVM, alias: str, action: str) -> None:
+    _php_ok(
+        vm,
+        f"$lists = config_get_path({h._php_str(h.CFG_DNSBL_LISTS)}, array());"
+        f"foreach ($lists as &$list) {{ if ($list['aliasname'] === {h._php_str(alias)}) {{"
+        f"$list['action'] = {h._php_str(action)}; }} }} unset($list);"
+        f"config_set_path({h._php_str(h.CFG_DNSBL_LISTS)}, $lists);"
+        "write_config('pfBlockerNG smoke: metric group enabled state');",
+        "set group action",
+    )
+    _apply(vm)
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(1800)
+def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub_dns: _StubDnsServer) -> None:
+    """Real traffic survives disable/restart; deletion and explicit clear remove its counters.
+
+    Given two configured groups and five original client transports,
+    When A is disabled, re-enabled, deleted and recreated,
+    Then only deletion changes its incarnation and resets its counts, never B's.
+    Native Unbound traffic has no invented original-client transport label.
+    """
+    vm = gw.vm
+    token = secrets.token_hex(4)
+    aliases = [f"smmetric{token}{suffix}" for suffix in ("a", "b")]
+    groups = [f"DNSBL_{alias}" for alias in aliases]
+    # Five requests, not a type/transport Cartesian product. DoQ reuses the existing A-only probe.
+    cases = [
+        (0, "udp", "TXT", "UDP"),
+        (0, "tcp", "AAAA", "TCP"),
+        (0, "dot", "HTTPS", "DoT"),
+        (1, "doh-post", "TXT", "DoH"),
+        (1, "doq", "A", "DoQ"),
+    ]
+    names = [h.unique_domain(f"metric-{transport}") for _, transport, _, _ in cases]
+    recreated = h.unique_domain("metric-recreated")
+    native = h.unique_domain("metric-native")
+    feeds = [[names[i] for i, case in enumerate(cases) if case[0] == group] for group in (0, 1)]
+    feeds[0].extend([recreated, native])
+    specs = [
+        h.DnsblCase(
+            aliasname=alias,
+            header=alias,
+            mode=h.DnsblMode.VIP,
+            feed_url=h.write_local_feed(vm, f"{alias}.txt", "".join(f"{name}\n" for name in feed)),
+        )
+        for alias, feed in zip(aliases, feeds, strict=True)
+    ]
+    state_path = f"/var/tmp/{aliases[0]}-metrics-state.json"
+    paths = ", ".join(
+        h._php_str(path) for path in (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, f"{h.CFG_GLOBAL}/pfb_metrics_export")
+    )
+    _php_ok(
+        vm,
+        f"$state = array('config' => array(), 'directory' => is_dir('/var/tmp/node_exporter'));"
+        f"foreach (array({paths}) as $path) {{ $value = config_get_path($path, NULL);"
+        "$state['config'][$path] = array('present' => $value !== NULL, 'value' => $value); }"
+        "$file = '/var/tmp/node_exporter/pfblockerng.prom';"
+        "$state['prom'] = is_file($file) ? base64_encode(file_get_contents($file)) : NULL;"
+        "$state['mode'] = is_file($file) ? (fileperms($file) & 0777) : 0644;"
+        f"file_put_contents({h._php_str(state_path)}, json_encode($state));",
+        "save metric test state",
+    )
+    made = vm.ssh("/usr/bin/install", "-d", "-m", "0755", "/var/tmp/node_exporter")
+    assert made.returncode == 0, f"textfile directory: {made.stderr!r}"
+    try:
+        h.inject_dnsbl_lists(vm, [(spec, "Deny") for spec in specs])
+        _set_export(vm, True)
+        _apply(vm)
+        initial = _export(vm)
+        entries = {labels["group"]: value for labels, value in _samples(initial, _ENTRIES)}
+        assert {group: entries.get(group) for group in groups} == dict(zip(groups, map(len, feeds), strict=True)), (
+            entries
+        )
+        assert all(not _blocks(initial, group) for group in groups), initial
+        epochs = _epochs(vm)
+        assert all(re.fullmatch(r"[0-9a-f]{32}", epochs[group, "custom"]) for group in groups), epochs
+
+        wanted: dict[str, dict[tuple[str, str], float]] = {group: {} for group in groups}
+        resolver_before = {tuple(sorted(labels.items())): value for labels, value in _samples(initial, _RESOLVER)}
+        for name, (index, transport, qtype, label) in zip(names, cases, strict=True):
+            if transport == "doq":
+                answer, raw = _ask(gw.client, transport, name)
+                assert h.is_vip(answer), f"DoQ must really block {name}: {answer}\n{raw}"
+            else:
+                reply = _dig(gw.client, transport, qtype, name)
+                assert reply.rcode == "NOERROR", f"{transport}/{qtype}: {reply.raw}"
+            assert not stub_dns.received(name), f"blocked query reached upstream: {stub_dns.received(name)}"
+            wanted[groups[index]][qtype, label] = 1
+        counted = _wait_blocks(vm, wanted)
+        _show_dns_prom(vm, "after-five-transports")
+        resolver_after = {tuple(sorted(labels.items())): value for labels, value in _samples(counted, _RESOLVER)}
+        for _, _, qtype, transport in cases:
+            key = tuple(sorted({"qtype": qtype, "transport": transport}.items()))
+            assert resolver_after.get(key, 0) >= resolver_before.get(key, 0) + 1, (key, resolver_before, resolver_after)
+
+        _group_action(vm, aliases[0], "Disabled")
+        disabled = _export(vm)
+        _show_dns_prom(vm, "disabled-owner-retained")
+        assert not any(labels.get("group") == groups[0] for labels, _ in _samples(disabled, _ENTRIES)), disabled
+        assert _epochs(vm)[groups[0], "custom"] == epochs[groups[0], "custom"], "disable replaced A's incarnation"
+        assert {group: _blocks(disabled, group) for group in groups} == wanted, disabled
+        _group_action(vm, aliases[0], "unbound")
+        enabled = _export(vm)
+        assert any(labels.get("group") == groups[0] for labels, _ in _samples(enabled, _ENTRIES)), enabled
+        assert _epochs(vm)[groups[0], "custom"] == epochs[groups[0], "custom"], "re-enable replaced A's incarnation"
+        assert {group: _blocks(enabled, group) for group in groups} == wanted, enabled
+
+        h.inject_dnsbl_lists(vm, [(specs[1], "Deny")])
+        _apply(vm)
+        deleted = _export(vm)
+        _show_dns_prom(vm, "deleted-owner-removed")
+        assert (groups[0], "custom") not in _epochs(vm), "deleted A still has an incarnation"
+        assert not any(labels.get("group") == groups[0] for labels, _ in _samples(deleted, _BLOCKED)), deleted
+        assert not any(labels.get("group") == groups[0] for labels, _ in _samples(deleted, _ENTRIES)), deleted
+        assert _blocks(deleted, groups[1]) == wanted[groups[1]], deleted
+        h.inject_dnsbl_lists(vm, [(spec, "Deny") for spec in specs])
+        _apply(vm)
+        new_epochs = _epochs(vm)
+        assert new_epochs[groups[0], "custom"] != epochs[groups[0], "custom"], "recreated A reused deleted incarnation"
+        assert new_epochs[groups[1], "custom"] == epochs[groups[1], "custom"], "recreating A changed B"
+        wanted[groups[0]] = {}
+        _wait_blocks(vm, wanted)
+        answer, raw = _ask(gw.client, "udp", recreated)
+        assert h.is_vip(answer), f"recreated A did not block: {answer}\n{raw}"
+        wanted[groups[0]]["A", "UDP"] = 1
+        _wait_blocks(vm, wanted)
+        before_restart = _export(vm)
+        resolver_counts = {
+            tuple(sorted(labels.items())): value for labels, value in _samples(before_restart, _RESOLVER)
+        }
+
+        restarted = vm.ssh(PROXY_RC, "restart", timeout=180.0)
+        assert restarted.returncode == 0, f"ordinary service restart: {restarted.stdout}\n{restarted.stderr}"
+        h.wait_until(lambda: _capture(vm).service == "running", timeout=180.0, interval=0.5)
+        after_restart = _export(vm)
+        _show_dns_prom(vm, "ordinary-restart-retained")
+        assert {group: _blocks(after_restart, group) for group in groups} == wanted, after_restart
+        assert _epochs(vm) == new_epochs, "ordinary restart changed group incarnations"
+        restarted_counts = {
+            tuple(sorted(labels.items())): value for labels, value in _samples(after_restart, _RESOLVER)
+        }
+        assert all(restarted_counts.get(key, 0) >= value for key, value in resolver_counts.items()), (
+            resolver_counts,
+            restarted_counts,
+        )
+        _php_ok(vm, f"require_once('{_PKG}'); pfb_global(); pfBlockerNG_clearsqlite('cleardnsbl');", "clear counters")
+        cleared = _wait_blocks(vm, {group: {} for group in groups})
+        _show_dns_prom(vm, "explicit-clear")
+        doq_labels = {"qtype": "A", "transport": "DoQ"}
+        assert any(labels == doq_labels and value > 0 for labels, value in _samples(after_restart, _RESOLVER))
+        assert sum(value for labels, value in _samples(cleared, _RESOLVER) if labels == doq_labels) == 0, _samples(
+            cleared, _RESOLVER
+        )
+        assert _epochs(vm) == new_epochs, "explicit clear replaced group incarnations"
+
+        _set_proxy_toggle(vm, False)
+        _apply(vm)
+        before_native = _export(vm)
+        reply = _dig(gw.client, "udp", "TXT", native)
+        assert reply.rcode == "NOERROR", f"native TXT query: {reply.raw}"
+        assert not stub_dns.received(native), f"native query was not blocked: {stub_dns.received(native)}"
+        final = _wait_blocks(vm, {groups[0]: {("TXT", ""): 1}, groups[1]: {}})
+        native_key = {"qtype": "TYPE65280"}
+        before_value = sum(value for labels, value in _samples(before_native, _RESOLVER) if labels == native_key)
+        numeric = h.unique_domain("metric-numeric")
+        reply = _dig(gw.client, "udp", "TYPE65280", numeric)
+        assert reply.rcode == "NOERROR", f"native TYPE65280 query: {reply.raw}"
+        assert stub_dns.received(numeric), f"unlisted numeric query did not reach upstream: {reply.raw}"
+
+        def numeric_committed() -> bool:
+            nonlocal final
+            final = _export(vm)
+            return (
+                sum(value for labels, value in _samples(final, _RESOLVER) if labels == native_key) == before_value + 1
+            )
+
+        assert h.wait_until(numeric_committed, timeout=60.0, interval=0.5), (before_value, _samples(final, _RESOLVER))
+
+        # One collision phase: feed regex and global regex share the display group, never ownership.
+        collision_alias = f"smmetric{token}regex"
+        collision_owner = f"DNSBL_{collision_alias}"
+        suffix = h.unique_domain("metric-regex")
+        custom_name = f"feed1.{suffix}"
+        builtin_name = f"builtin1.{suffix}"
+        collision = h.DnsblCase(
+            aliasname=collision_alias,
+            header=collision_alias,
+            mode=h.DnsblMode.VIP,
+            feed_url=h.write_local_feed(vm, f"{collision_alias}.txt", rf"/^feed[0-9]+\.{re.escape(suffix)}$/" + "\n"),
+            user_regex=[rf"^builtin[0-9]+\.{re.escape(suffix)}$"],
+        )
+        h.inject_dnsbl_lists(vm, [(spec, "Deny") for spec in [collision, *specs]])
+        _php_ok(
+            vm,
+            f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS + '/global_log_mode')}, 'override');"
+            f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS + '/global_log')}, 'enabled');"
+            "write_config('pfBlockerNG smoke: explicit collision block mechanism');",
+            "set collision block mechanism",
+        )
+        _apply(vm)
+        collision_epochs = _epochs(vm)
+        original_custom = collision_epochs[collision_owner, "custom"]
+        original_builtin = collision_epochs["DNSBL_Regex", "builtin"]
+        baseline = _export(vm)
+        custom_before = _origin_blocks(baseline, "custom")
+        builtin_before = _origin_blocks(baseline, "builtin")
+        for name in (custom_name, builtin_name):
+            answer, raw = _ask(gw.client, "udp", name)
+            assert h.is_vip(answer), f"collision regex did not block {name}: {answer}\n{raw}"
+            assert not stub_dns.received(name), f"collision block reached upstream: {name}"
+
+        def collision_committed() -> bool:
+            current = _export(vm)
+            return (_origin_blocks(current, "custom"), _origin_blocks(current, "builtin")) == (
+                custom_before + 1,
+                builtin_before + 1,
+            )
+
+        assert h.wait_until(collision_committed, timeout=60.0, interval=0.5)
+        h.inject_dnsbl_lists(vm, [(spec, "Deny") for spec in specs])
+        _php_ok(
+            vm,
+            f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS + '/pfb_regex')}, '');"
+            "write_config('pfBlockerNG smoke: disable builtin regex after custom deletion');",
+            "disable builtin regex",
+        )
+        _apply(vm)
+        removed = _export(vm)
+        _show_dns_prom(vm, "custom-regex-deleted-builtin-retained")
+        assert _origin_blocks(removed, "custom") == custom_before, removed
+        assert _origin_blocks(removed, "builtin") == builtin_before + 1, removed
+        assert (collision_owner, "custom") not in _epochs(vm)
+        assert _epochs(vm)["DNSBL_Regex", "builtin"] == original_builtin
+        h.inject_dnsbl_lists(vm, [(spec, "Deny") for spec in [collision, *specs]])
+        _apply(vm)
+        assert _epochs(vm)[collision_owner, "custom"] != original_custom
+        assert _epochs(vm)["DNSBL_Regex", "builtin"] == original_builtin
+        assert _origin_blocks(_export(vm), "custom") == custom_before
+        fresh_name = f"feed2.{suffix}"
+        answer, raw = _ask(gw.client, "udp", fresh_name)
+        assert h.is_vip(answer), f"fresh custom regex did not block: {answer}\n{raw}"
+        assert not stub_dns.received(fresh_name)
+        assert h.wait_until(collision_committed, timeout=60.0, interval=0.5)
+    finally:
+        try:
+            try:
+                _set_export(vm, False)
+            finally:
+                _php_ok(
+                    vm,
+                    f"$state = json_decode(file_get_contents({h._php_str(state_path)}), TRUE);"
+                    "foreach ($state['config'] as $path => $entry) {"
+                    "if ($entry['present']) { config_set_path($path, $entry['value']); } "
+                    "else { config_del_path($path); } }"
+                    "write_config('pfBlockerNG smoke: restore metric test configuration');",
+                    "restore metric test configuration",
+                )
+                _apply(vm)
+        finally:
+            _php_ok(
+                vm,
+                f"$state = json_decode(file_get_contents({h._php_str(state_path)}), TRUE);"
+                "$file = '/var/tmp/node_exporter/pfblockerng.prom';"
+                "if ($state['prom'] !== NULL) { file_put_contents($file, base64_decode($state['prom']));"
+                "chmod($file, $state['mode']); } else { @unlink($file); }"
+                "if (!$state['directory']) { rmdir('/var/tmp/node_exporter'); }"
+                f"unlink({h._php_str(state_path)});",
+                "restore metric textfile state",
+            )

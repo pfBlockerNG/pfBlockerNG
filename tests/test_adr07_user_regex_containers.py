@@ -178,19 +178,19 @@ class TestUserRegexIsEvaluatedFirst:
         feed = {"F#0": _entry("evil", PRIO_FEED_BLOCK_IMPORTANT, important=True)}
         user = {"U#0": _entry("evil", PRIO_USER_BLOCK)}
         cfg = _cfg(regexDB=True, userRegexDB=True)
-        assert _scan_block_band("evil.example", cfg, {}, {}, feed, user) == (
-            PRIO_USER_BLOCK,
-            {"kind": "regex", "key": "U#0"},
-        )
-        assert _scan_block_band("evil.example", cfg, {}, {}, feed, {}) == (
-            PRIO_FEED_BLOCK_IMPORTANT,
-            {"kind": "regex", "key": "F#0"},
-        )
+        band, winner = _scan_block_band("evil.example", cfg, {}, {}, feed, user)
+        assert band == PRIO_USER_BLOCK
+        assert winner is not None
+        assert (winner["kind"], winner["key"]) == ("regex", "U#0")
+        band, winner = _scan_block_band("evil.example", cfg, {}, {}, feed, {})
+        assert band == PRIO_FEED_BLOCK_IMPORTANT
+        assert winner is not None
+        assert (winner["kind"], winner["key"]) == ("regex", "F#0")
         only_user = _cfg(userRegexDB=True)
-        assert _scan_block_band("evil.example", only_user, {}, {}, {}, user) == (
-            PRIO_USER_BLOCK,
-            {"kind": "regex", "key": "U#0"},
-        )
+        band, winner = _scan_block_band("evil.example", only_user, {}, {}, {}, user)
+        assert band == PRIO_USER_BLOCK
+        assert winner is not None
+        assert (winner["kind"], winner["key"]) == ("regex", "U#0")
 
     def test_the_allow_rescan_covers_both_allow_lists(self) -> None:
         feed = {"A#0": _entry("evil", PRIO_FEED_ALLOW_IMPORTANT, important=True)}
@@ -205,15 +205,16 @@ class TestUserRegexIsEvaluatedFirst:
         user = {"U#0": _entry("evil", PRIO_FEED_BLOCK)}
         cfg = _cfg(dataDB=True, regexDB=True, userRegexDB=True)
         # a data entry and a regex rule at one band: the data entry is scanned first
-        assert _scan_block_band("evil.example", cfg, data, {}, feed, {}) == (
-            PRIO_FEED_BLOCK,
-            {"kind": "data", "entry": data["evil.example"]},
-        )
+        band, winner = _scan_block_band("evil.example", cfg, data, {}, feed, {})
+        assert band == PRIO_FEED_BLOCK
+        assert winner is not None
+        assert winner["kind"] == "data"
+        assert winner["entry"] is data["evil.example"]
         # a user rule and a feed rule at one band: the user list is scanned first
-        assert _scan_block_band("evil.example", cfg, {}, {}, feed, user) == (
-            PRIO_FEED_BLOCK,
-            {"kind": "regex", "key": "U#0"},
-        )
+        band, winner = _scan_block_band("evil.example", cfg, {}, {}, feed, user)
+        assert band == PRIO_FEED_BLOCK
+        assert winner is not None
+        assert (winner["kind"], winner["key"]) == ("regex", "U#0")
 
     def test_the_user_and_the_feed_block_lists_report_a_slow_scan_separately(
         self, monkeypatch: Any, capsys: Any

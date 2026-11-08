@@ -136,9 +136,9 @@ Prometheus text format (`\\`, `\"`, `\n`).
 | `pfblockerng_info` | gauge (always 1) | `version` | `pfb_pkg_ver()` |
 | `pfblockerng_ip_table_entries` | gauge | `table` | `pfb_pfctl_tables_parse()` addresses, adjusted by `pfb_widget_alias_display_count()` (placeholder-only table = 0) |
 | `pfblockerng_ip_rule_packets_total` | counter | `table` | extracted per-rule helper (sum of `pfSense_get_pf_rules()` packets per pfB alias) |
-| `pfblockerng_dnsbl_blocked_queries_total` | counter | `group` | `dnsbl.counter` in `pfb_py_dnsbl.sqlite`, including the `Upstream` row |
+| `pfblockerng_dnsbl_blocked_queries_total` | counter | `group`; bounded `origin`, `qtype` and known `transport` for new counts | Historical group aggregate plus separately owned custom/built-in counters in `pfb_py_dnsbl.sqlite` |
 | `pfblockerng_dnsbl_group_entries` | gauge | `group` | `dnsbl.entries`; rows marked `disabled` are omitted |
-| `pfblockerng_dnsbl_resolver_queries_total` | counter | none | `pfb_py_resolver.sqlite` row 0, `totalqueries + queries` (same value the widget shows) |
+| `pfblockerng_dnsbl_resolver_queries_total` | counter | `qtype` and known `transport` for new counts | Resolver aggregate (`totalqueries + queries`) and query breakdowns in `pfb_py_resolver.sqlite` |
 | `pfblockerng_feed_last_success_timestamp_seconds` | gauge | `feed` | `last_successful_check` per item in `pfb_schedule_state.json`; `feed` is the schedule item ID (for example `ipv4:Alias_v4`, `dnsbl:Group`) |
 | `pfblockerng_feed_failing` | gauge (1) | `facility`, `feed`, `stage` | open entries in `pfb_sync_status.json` (PHP) and `/var/unbound/pfb_py_status.json` (Python); present only while a failure is open |
 | `pfblockerng_update_last_start_timestamp_seconds` | gauge | none | `pfb_pass_status.json` `last_start` |
@@ -153,6 +153,26 @@ Semantics operators rely on:
 - Counters reset to 0 when the operator clears statistics (widget "clear", or the
   scheduled `cleardnsbl` / `pfctl -z`). Prometheus `rate()` and `increase()` treat that
   as a counter reset.
+- DNS query breakdowns cover every query type; types without a known mnemonic use
+  `TYPE<number>`. Only known original client transports (`UDP`, `TCP`, `DoT`, `DoH`,
+  `DoQ`) receive a `transport` label. Unavailable/native observer metadata omits that
+  label; the upstream connection is never used to infer it. Accounting does not change
+  DNSBL's existing query-type eligibility or DNS decisions.
+- Each aggregate's pre-upgrade remainder is emitted without `origin`, query-type or
+  transport labels. New blocked series use only `origin="custom"` or `origin="builtin"`;
+  the existing display `group` stays unchanged. Multiple custom owners sharing a display
+  group (including feed regex under `DNSBL_Regex`) are summed into one series per complete
+  public label set. Owner identities and client/source IPs are never exported.
+- DNS counters persist across normal restarts. Disabling an owner retains its counters
+  and re-enabling resumes them. Deleting a configured group removes its provably owned
+  counters, including its feed-regex counts, without removing built-in counters. A
+  re-created group starts its owned counts from zero; old queued or in-flight events
+  cannot count toward the replacement.
+- Historical totals already commingled under a custom/built-in name remain unattributed:
+  their shares are never guessed from current settings. Deleting a custom group removes
+  only its provably owned new share from such a shared aggregate. Exclusively owned
+  historical group totals are removed on deletion. Summing all emitted series counts
+  each retained query once.
 - A pass is hung or was killed when `last_start > last_end`. A pass deferred by a
   MaxMind failure records its end, so a deferral does not read as unfinished.
 - Writer freshness comes from node_exporter's built-in `node_textfile_mtime_seconds`, so

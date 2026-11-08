@@ -1755,6 +1755,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	// Define DNSBL arrays and variables
 	$pfb['alias_dnsbl_all']		= array();	// Array of all DNSBL aliases
+	$pfb['alias_dnsbl_configured']	= NULL;		// Only a complete source configuration can prove deletion.
 	$dnsbl_tld_group_counts		= array();	// Deferred DNSBL group counts for TLD-mode statistics
 	$pfb['domain_update']		= FALSE;	// Flag to signal update Unbound
 	$pfb['dnsbl_publish_failed']	= FALSE;	// Fixed TOP1M/manifest publication failed; suppress reload
@@ -1776,6 +1777,55 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	}
 
 	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save'] && !$dnsbl_error) {
+		$configured = array();
+		$config_complete = TRUE;
+		$source_groups = config_get_path('installedpackages/pfblockerngdnsbl/config', array());
+		if (!is_array($source_groups)) {
+			$config_complete = FALSE;
+		} else {
+			foreach ($source_groups as $source_group) {
+				if (!is_array($source_group) || empty($source_group['aliasname'])
+				    || !pfb_group_action_valid($source_group['action'] ?? NULL, 'dnsbl')) {
+					$config_complete = FALSE;
+					break;
+				}
+				$configured[] = 'DNSBL_' . $source_group['aliasname'];
+			}
+		}
+		$blacklist = $pfb['blconfig'] ?? array();
+		if (!is_array($blacklist)) {
+			$config_complete = FALSE;
+		} elseif (!empty($blacklist['blacklist_selected'])) {
+			$selected = array_flip(explode(',', $blacklist['blacklist_selected']));
+			if (!is_array($blacklist['item'] ?? NULL)) {
+				$config_complete = FALSE;
+			} else {
+				foreach ($blacklist['item'] as $item) {
+					if (!is_array($item) || empty($item['xml'])) {
+						$config_complete = FALSE;
+						break;
+					}
+					if (isset($selected[$item['xml']])) {
+						unset($selected[$item['xml']]);
+					} else {
+						continue;
+					}
+					if (!empty($item['selected'])) {
+						if (empty($item['title'])) {
+							$config_complete = FALSE;
+							break;
+						}
+						$configured[] = 'DNSBL_' . $item['title'];
+					}
+				}
+				if ($selected !== array()) {
+					$config_complete = FALSE;
+				}
+			}
+		}
+		if ($config_complete) {
+			$pfb['alias_dnsbl_configured'] = array_values(array_unique($configured));
+		}
 		if ((config_get_path('installedpackages/pfblockerngdnsbl/config') != null) ||
 		    (config_get_path('installedpackages/pfblockerngblacklist/blacklist_enable') == 'Enable')) {
 
@@ -3054,10 +3104,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			dnsbl_stats_update('update', 'DNSBL_Regex', $regex_cnt);
 		}
 
-		// Save DNSBL Alias statistics (Not for TLD mode)
-		if ($pfb['domain_update'] && !$pfb['dnsbl_tld_wildcard']) {
-			dnsbl_save_stats();
-		}
 	}
 
 	// Collect all DNSBL IP feeds (IPv4 only) into DNSBLIP_v4.txt -- but ONLY when the source
@@ -3184,6 +3230,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				}
 			}
 			pfb_top1m_teardown_call();
+		}
+	}
+
+	// Reconcile only after publication, including membership-only passes with no reload.
+	if (is_array($pfb['alias_dnsbl_configured']) && empty($pfb['dnsbl_publish_failed'])
+	    && ($pfb_dnsbl_published || !$pfb['domain_update'])) {
+		if (!dnsbl_save_stats()) {
+			$pfb['dnsbl_publish_failed'] = TRUE;
 		}
 	}
 

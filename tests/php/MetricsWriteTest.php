@@ -14,7 +14,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_metrics_write')]
 #[CoversFunction('pfb_metrics_configure_cron')]
 #[CoversFunction('pfb_pfctl_tables_raw')]
-#[CoversFunction('pfb_metrics_sqlite_rows')]
+#[CoversFunction('pfb_metrics_sqlite_snapshot')]
 final class MetricsWriteTest extends TestCase
 {
 	private const CRON_CMD    = '/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
@@ -115,6 +115,189 @@ final class MetricsWriteTest extends TestCase
 	{
 		$this->wantExport(PfbToggle::On, 'on');
 		pfb_metrics_configure_cron(TRUE, $dir);
+	}
+
+
+	public function testDetailCountersPreserveLegacyResidual(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Ads', '', 5, 12);",
+			'CREATE TABLE dns_metric_blocks (owner TEXT, origin TEXT, groupname TEXT NOT NULL, qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(owner,origin,groupname,qtype,transport));',
+			'CREATE TABLE dnsbl_group_epochs(owner TEXT,origin TEXT,epoch TEXT);',
+			"INSERT INTO dnsbl_group_epochs VALUES ('DNSBL_A','custom','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+			'CREATE TABLE dns_metric_totals(owner TEXT,origin TEXT,groupname TEXT,count INTEGER);',
+			"INSERT INTO dns_metric_totals VALUES ('DNSBL_A','custom','Ads',5);",
+			"INSERT INTO dns_metric_blocks VALUES ('DNSBL_A','custom','Ads', 'AAAA', 'DoH', 3), ('DNSBL_A','custom','Ads', 'MX', '', 2);",
+		]);
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0, 18, 2);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(qtype,transport));',
+			"INSERT INTO dns_metric_queries VALUES ('AAAA', 'DoH', 4), ('HTTPS', '', 3);",
+		]);
+
+		$s = pfb_metrics_collect();
+		$this->assertTrue($s['source_up']['dnsbl_db']);
+		$this->assertTrue($s['source_up']['resolver_db']);
+		$this->assertCount(2, $s['dnsbl_detail']);
+		$this->assertCount(2, $s['resolver_detail']);
+		$body = pfb_metrics_render($s);
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"Ads\"} 7\n", $body);
+		$this->assertStringContainsString("pfblockerng_dnsbl_resolver_queries_total 13\n", $body);
+		$this->assertStringContainsString("pfblockerng_dnsbl_resolver_queries_total{qtype=\"HTTPS\"} 3\n", $body);
+	}
+
+	/** @return array<string,array{0:string}> */
+	public static function invalidDetailProvider(): array
+	{
+		return [
+			'negative count' => ["('A', 'UDP', -1)"],
+			'noninteger count' => ["('A', 'UDP', 'bad')"],
+			'exceeds aggregate' => ["('A', 'UDP', 21)"],
+			'combined exceeds aggregate' => ["('A', 'UDP', 12), ('AAAA', '', 9)"],
+			'duplicate series' => ["('A', 'UDP', 2), ('A', 'UDP', 3)"],
+			'unknown transport' => ["('A', 'QUIC', 1)"],
+			'invalid qtype' => ["('client.example', 'UDP', 1)"],
+			'out of range qtype' => ["('TYPE65536', 'UDP', 1)"],
+			'fractional count' => ["('A', 'UDP', 1.5)"],
+			'empty qtype' => ["('', 'UDP', 1)"],
+			'null qtype' => ["(NULL, 'UDP', 1)"],
+			'null transport' => ["('A', NULL, 1)"],
+			'null count' => ["('A', 'UDP', NULL)"],
+		];
+	}
+
+	#[DataProvider('invalidDetailProvider')]
+	public function testInvalidDetailsFailTheSourceInsteadOfExportingFabricatedTotals(string $values): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0, 18, 2);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES {$values};",
+		]);
+
+		$s = pfb_metrics_collect();
+		$this->assertFalse($s['source_up']['resolver_db']);
+		$this->assertNull($s['resolver_queries']);
+		$this->assertNull($s['resolver_detail']);
+		$this->assertStringNotContainsString('pfblockerng_dnsbl_resolver_queries_total', pfb_metrics_render($s));
+	}
+
+	public function testMalformedDetailTableIsNotTreatedAsALegacyDatabase(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Ads', 5, 12);",
+			'CREATE TABLE dns_metric_blocks (wrong TEXT);',
+		]);
+		$s = pfb_metrics_collect();
+		$this->assertFalse($s['source_up']['dnsbl_db']);
+		$this->assertNull($s['dnsbl_groups']);
+		$this->assertNull($s['dnsbl_detail']);
+	}
+
+	public function testAllTransportsNumericQtypeAndDisabledHostileGroupHaveExactSum(): void
+	{
+		$group = "bad\"\\group\n\xFF";
+		$quoted = SQLite3::escapeString($group);
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('{$quoted}', 'disabled', 20);",
+			'CREATE TABLE dns_metric_blocks (owner TEXT, origin TEXT, groupname TEXT, qtype TEXT, transport TEXT, count INTEGER);',
+			'CREATE TABLE dnsbl_group_epochs(owner TEXT,origin TEXT,epoch TEXT);',
+			"INSERT INTO dnsbl_group_epochs VALUES ('DNSBL_A','custom','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+			'CREATE TABLE dns_metric_totals(owner TEXT,origin TEXT,groupname TEXT,count INTEGER);',
+			"INSERT INTO dns_metric_totals VALUES ('DNSBL_A','custom','{$quoted}',12);",
+		]);
+		foreach (['UDP', 'TCP', 'DoT', 'DoH', 'DoQ', ''] as $transport) {
+			$this->sqlite($GLOBALS['pfb']['dnsbl_info'], ["INSERT INTO dns_metric_blocks VALUES ('DNSBL_A','custom','{$quoted}', 'TYPE65535', '{$transport}', 2);"]);
+		}
+		$s = pfb_metrics_collect();
+		$this->assertTrue($s['source_up']['dnsbl_db']);
+		$this->assertCount(6, $s['dnsbl_detail']);
+		$body = pfb_metrics_render($s);
+		$this->assertStringNotContainsString('pfblockerng_dnsbl_group_entries', $body);
+		$this->assertTrue(mb_check_encoding($body, 'UTF-8'));
+		preg_match_all('/^pfblockerng_dnsbl_blocked_queries_total[^\n]* ([0-9]+)$/m', $body, $samples);
+		$this->assertSame(20, array_sum(array_map('intval', $samples[1])));
+		$this->assertCount(7, $samples[1]);
+		foreach (['UDP', 'TCP', 'DoT', 'DoH', 'DoQ'] as $transport) {
+			$this->assertStringContainsString('qtype="TYPE65535",transport="' . $transport . '"} 2', $body);
+		}
+		$this->assertStringContainsString('qtype="TYPE65535"} 2', $body);
+	}
+
+	public function testOrphanBlockedDetailsFailOnlyDnsblSource(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dnsbl (groupname TEXT, entries INTEGER, counter INTEGER);',
+			"INSERT INTO dnsbl VALUES ('Ads', 1, 10);",
+			'CREATE TABLE dns_metric_blocks (owner TEXT, origin TEXT, groupname TEXT, qtype TEXT, transport TEXT, count INTEGER);',
+			'CREATE TABLE dnsbl_group_epochs(owner TEXT,origin TEXT,epoch TEXT);',
+			"INSERT INTO dnsbl_group_epochs VALUES ('DNSBL_A','custom','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+			'CREATE TABLE dns_metric_totals(owner TEXT,origin TEXT,groupname TEXT,count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('DNSBL_A','custom','Gone', 'A', 'UDP', 1);",
+		]);
+		$s = pfb_metrics_collect();
+		$this->assertFalse($s['source_up']['dnsbl_db']);
+		$this->assertTrue($s['source_up']['resolver_db']);
+		$this->assertNull($s['dnsbl_groups']);
+		$this->assertNull($s['dnsbl_detail']);
+		$this->assertStringNotContainsString('pfblockerng_dnsbl_blocked_queries_total', pfb_metrics_render($s));
+	}
+
+	public function testSnapshotIsReadonlyAndClosesFailedTransaction(): void
+	{
+		$path = $GLOBALS['pfb']['dnsbl_resolver'];
+		$this->sqlite($path, ['CREATE TABLE resolver (queries INTEGER);', 'INSERT INTO resolver VALUES (10);']);
+		$this->assertSame(['aggregate' => [['queries' => 10]], 'detail' => []], pfb_metrics_sqlite_snapshot($path, 'SELECT queries FROM resolver', 'absent', 'SELECT count FROM absent'));
+		$this->assertNull(pfb_metrics_sqlite_snapshot($path, 'UPDATE resolver SET queries = 99 RETURNING queries', 'absent', 'SELECT 1'));
+		$this->assertNull(pfb_metrics_sqlite_snapshot($path, 'SELECT queries FROM resolver', 'resolver', 'SELECT missing FROM resolver'));
+		$db = new SQLite3($path);
+		$this->assertSame(10, $db->querySingle('SELECT queries FROM resolver'));
+		$this->assertTrue($db->exec('BEGIN EXCLUSIVE'));
+		$this->assertTrue($db->exec('ROLLBACK'));
+		$this->assertSame(0, $db->querySingle("SELECT count(*) FROM sqlite_master WHERE name = 'absent'"));
+		$db->close();
+	}
+
+	public function testSnapshotKeepsAggregateAndDetailsTogetherAcrossWalCommit(): void
+	{
+		$path = $GLOBALS['pfb']['dnsbl_resolver'];
+		$this->sqlite($path, [
+			'PRAGMA journal_mode=WAL;',
+			'CREATE TABLE resolver (queries INTEGER);',
+			'INSERT INTO resolver VALUES (10);',
+			'CREATE TABLE dns_metric_queries (count INTEGER);',
+			'INSERT INTO dns_metric_queries VALUES (3);',
+		]);
+		$factory = static function (string $path): SQLite3 {
+			return new class($path, SQLITE3_OPEN_READONLY) extends SQLite3 {
+				public function __construct(private string $path, int $flags)
+				{
+					parent::__construct($path, $flags);
+				}
+
+				public function query(string $query): SQLite3Result|false
+				{
+					if ($query === 'SELECT count FROM dns_metric_queries') {
+						$writer = new SQLite3($this->path);
+						$writer->enableExceptions(TRUE);
+						$writer->exec('BEGIN IMMEDIATE; UPDATE resolver SET queries = 20; UPDATE dns_metric_queries SET count = 13; COMMIT;');
+						$writer->close();
+					}
+					return parent::query($query);
+				}
+			};
+		};
+		$snapshot = pfb_metrics_sqlite_snapshot($path, 'SELECT queries FROM resolver', 'dns_metric_queries', 'SELECT count FROM dns_metric_queries', $factory);
+		$this->assertSame(['aggregate' => [['queries' => 10]], 'detail' => [['count' => 3]]], $snapshot);
+		$db = new SQLite3($path);
+		$this->assertSame(20, $db->querySingle('SELECT queries FROM resolver'));
+		$this->assertSame(13, $db->querySingle('SELECT count FROM dns_metric_queries'));
+		$db->close();
 	}
 
 	public function testCollectReadsDnsblGroupsAndResolverTotals(): void
