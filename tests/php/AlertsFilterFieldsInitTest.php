@@ -61,14 +61,14 @@ final class AlertsFilterFieldsInitTest extends TestCase
 		$this->assertStringNotContainsString('Initialize filterfieldsarray', self::$initRegion);
 	}
 
-	public function testSlotTwoIsSeededWithItsOwn81Through90KeySet(): void
+	public function testSlotTwoIsSeededWithItsOwnReplyFilterKeySet(): void
 	{
 		$filterfieldsarray = pfb_alerts_oracle_filterfieldsarray_init();
 
 		$this->assertSame(
-			[81, 82, 83, 84, 85, 86, 87, 88, 89, 90],
+			[81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92],
 			array_keys($filterfieldsarray[2]),
-			'$filterfieldsarray[2] must include transport key 90 in its own slot'
+			'$filterfieldsarray[2] must retain reply fields, transport and receiving-endpoint keys in its own slot'
 		);
 	}
 
@@ -77,9 +77,9 @@ final class AlertsFilterFieldsInitTest extends TestCase
 		$filterfieldsarray = pfb_alerts_oracle_filterfieldsarray_init();
 
 		$this->assertSame(
-			[2, 7, 8, 13, 15, 17, 19, 20, 21, 99],
+			[2, 7, 8, 13, 15, 17, 19, 20, 21, 22, 23, 99],
 			array_keys($filterfieldsarray[1]),
-			'$filterfieldsarray[1] must keep ONLY its own key set -- no 81-89 junk leaking in from the slot-2 loop'
+			'$filterfieldsarray[1] must retain DNSBL fields and receiving-endpoint keys without reply-slot keys'
 		);
 	}
 

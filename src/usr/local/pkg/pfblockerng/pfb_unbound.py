@@ -1701,6 +1701,8 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["group_policy"] = False
     pfb["python_enable"] = False
     pfb["python_nolog"] = False
+    pfb["metrics_client_ip"] = False
+    pfb["metrics_privacy_epochs"] = {}
     pfb["python_control"] = False
     # PFBL-03: the legacy DNS-TXT control transport is OFF by default and gated behind
     # this separate opt-in. DNSBL control is CLI-driven (pfblockerng dnsbl-control ...) via
@@ -1874,6 +1876,8 @@ def init_standard(id: int, env: module_env) -> bool:
     config = _load_ini_config()
     if config is not None:
         if config.has_section("MAIN"):
+            if config.has_option("MAIN", "metrics_client_ip"):
+                pfb["metrics_client_ip"] = config.getboolean("MAIN", "metrics_client_ip")
             if config.has_option("MAIN", "python_enable"):
                 pfb["python_enable"] = config.getboolean("MAIN", "python_enable")
             if config.has_option("MAIN", "python_reply"):
@@ -2204,6 +2208,7 @@ def init_standard(id: int, env: module_env) -> bool:
         )
 
     rebuild_and_swap(_init_build_snapshot, emit_counts=False)
+    _db_capture_privacy_epochs()
 
     # Start background DB-write worker (persistent sqlite connection, batched)
     if pfb["mod_threading"] and not pfb.get("db_worker"):
@@ -2929,7 +2934,44 @@ _DNSBL_BUILTIN_OWNERS = (
 )
 
 
+def _db_metric_table(cursor: Any, table: str, labels: tuple[str, ...]) -> None:
+    columns = [row[1] for row in cursor.execute("PRAGMA table_info({})".format(table))]
+    dimensions = labels + ("listener_ip", "listener_interface", "client_ip")
+    if columns and columns != list(dimensions) + ["count"]:
+        if columns != list(labels) + ["count"]:
+            raise sqlite3.DatabaseError("Unsupported DNS metric schema: " + table)
+        cursor.execute("ALTER TABLE {} RENAME TO {}_old".format(table, table))
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS {} ({}, count INTEGER NOT NULL, PRIMARY KEY({}))".format(
+            table, ", ".join(label + " TEXT NOT NULL DEFAULT ''" for label in dimensions), ",".join(dimensions)
+        )
+    )
+    if columns == list(labels) + ["count"]:
+        cursor.execute(
+            "INSERT INTO {} ({},count) SELECT {},count FROM {}_old".format(
+                table, ",".join(labels), ",".join(labels), table
+            )
+        )
+        cursor.execute("DROP TABLE {}_old".format(table))
+
+
 def _db_create(db: int, cursor: Any) -> None:
+    cursor.execute("SAVEPOINT dns_metric_schema")
+    try:
+        _db_create_tables(db, cursor)
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS dns_metric_settings ("
+            "row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL)"
+        )
+        cursor.execute("INSERT OR IGNORE INTO dns_metric_settings VALUES (0,0,lower(hex(randomblob(16))))")
+        cursor.execute("RELEASE dns_metric_schema")
+    except Exception:
+        cursor.execute("ROLLBACK TO dns_metric_schema")
+        cursor.execute("RELEASE dns_metric_schema")
+        raise
+
+
+def _db_create_tables(db: int, cursor: Any) -> None:
     if db == DB_RESOLVER:
         cursor.execute("CREATE TABLE IF NOT EXISTS resolver (row integer, totalqueries integer, queries integer)")
         # Seed row 0 atomically (no-op once present) -- same singleton-seed shape as
@@ -2939,21 +2981,13 @@ def _db_create(db: int, cursor: Any) -> None:
             "INSERT INTO resolver ( row, totalqueries, queries ) "
             "SELECT 0, 0, 0 WHERE NOT EXISTS (SELECT 1 FROM resolver)"
         )
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS dns_metric_queries ("
-            "qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(qtype, transport))"
-        )
+        _db_metric_table(cursor, "dns_metric_queries", ("qtype", "transport"))
     elif db == DB_DNSBL:
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
         )
         _db_seed_upstream_row(cursor)
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS dns_metric_blocks ("
-            "owner TEXT NOT NULL, origin TEXT NOT NULL, groupname TEXT NOT NULL, "
-            "qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, "
-            "PRIMARY KEY(owner, origin, groupname, qtype, transport))"
-        )
+        _db_metric_table(cursor, "dns_metric_blocks", ("owner", "origin", "groupname", "qtype", "transport"))
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS dns_metric_totals ("
             "owner TEXT NOT NULL, origin TEXT NOT NULL, groupname TEXT NOT NULL, count INTEGER NOT NULL, "
@@ -3035,18 +3069,56 @@ def _db_run(db: int, work: Callable[[Any], None]) -> bool:
         return False
 
 
-def _db_flush_resolver(delta: int, details: dict[tuple[str, str], int] | None = None) -> bool:
+def _db_capture_privacy_epochs() -> None:
+    """Only init grants authority; a reload/reconnect cannot authorize old events."""
+    epochs: dict[int, str] = {}
+    if pfb.get("metrics_client_ip"):
+        with _db_lock:
+            for db, flag in ((DB_RESOLVER, "sqlite3_resolver_con"), (DB_DNSBL, "sqlite3_dnsbl_con")):
+                if not pfb.get(flag):
+                    continue
+                try:
+                    con = _db_conns.get(db)
+                    if con is None:
+                        con = _db_connect(db)
+                        _db_conns[db] = con
+                    row = con.execute("SELECT epoch FROM dns_metric_settings WHERE row=0 AND client_ip=1").fetchone()
+                    if row:
+                        epochs[db] = row[0]
+                except Exception as error:
+                    sys.stderr.write("[pfBlockerNG]: Client metric authority unavailable: {}\n".format(error))
+    pfb["metrics_privacy_epochs"] = epochs
+
+
+def _metric_client(db: int, q_ip: str) -> tuple[str, str]:
+    epoch = pfb.get("metrics_privacy_epochs", {}).get(db, "")
+    return (_metric_ip(q_ip), epoch) if epoch else ("", "")
+
+
+def _db_private_details(con: Any, details: dict[tuple, int]) -> dict[tuple, int]:
+    policy = con.execute("SELECT client_ip,epoch FROM dns_metric_settings WHERE row=0").fetchone()
+    rows: dict[tuple, int] = {}
+    for key, count in details.items():
+        client, epoch = key[-2:]
+        key = key[:-2] + (client if policy and policy[0] == 1 and epoch == policy[1] else "",)
+        rows[key] = rows.get(key, 0) + count
+    return rows
+
+
+def _db_flush_resolver(delta: int, details: dict[tuple, int] | None = None) -> bool:
     if not delta or not pfb["sqlite3_resolver_con"]:
         return True
 
     def _flush(con: Any) -> None:
+        con.execute("BEGIN IMMEDIATE")
         con.execute("UPDATE resolver SET totalqueries = totalqueries + ? WHERE row = 0", (delta,))
         if details:
             con.executemany(
-                "INSERT INTO dns_metric_queries (qtype, transport, count) "
-                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM resolver WHERE row = 0) "
-                "ON CONFLICT(qtype, transport) DO UPDATE SET count = count + excluded.count",
-                [(qtype, transport, count) for (qtype, transport), count in details.items()],
+                "INSERT INTO dns_metric_queries (qtype,transport,listener_ip,listener_interface,client_ip,count) "
+                "SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM resolver WHERE row = 0) "
+                "ON CONFLICT(qtype,transport,listener_ip,listener_interface,client_ip) "
+                "DO UPDATE SET count = count + excluded.count",
+                [(*key, count) for key, count in _db_private_details(con, details).items()],
             )
 
     return _db_run(DB_RESOLVER, _flush)
@@ -3054,7 +3126,7 @@ def _db_flush_resolver(delta: int, details: dict[tuple[str, str], int] | None = 
 
 def _db_flush_dnsbl(
     deltas: dict[tuple[str, str, str, str], int],
-    details: dict[tuple[str, str, str, str, str, str], int] | None = None,
+    details: dict[tuple, int] | None = None,
 ) -> bool:
     if not deltas or not pfb["sqlite3_dnsbl_con"]:
         return True
@@ -3083,14 +3155,26 @@ def _db_flush_dnsbl(
             )
         if details:
             con.executemany(
-                "INSERT INTO dns_metric_blocks (owner,origin,groupname,qtype,transport,count) "
-                "SELECT ?,?,?,?,?,? WHERE EXISTS "
+                "INSERT INTO dns_metric_blocks "
+                "(owner,origin,groupname,qtype,transport,listener_ip,listener_interface,client_ip,count) "
+                "SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS "
                 "(SELECT 1 FROM dnsbl_group_epochs WHERE owner=? AND origin=? AND epoch=?) "
                 "AND ? IN ('custom','builtin') "
-                "ON CONFLICT(owner,origin,groupname,qtype,transport) DO UPDATE SET count=count+excluded.count",
+                "ON CONFLICT(owner,origin,groupname,qtype,transport,listener_ip,listener_interface,client_ip) "
+                "DO UPDATE SET count=count+excluded.count",
                 [
-                    (owner, origin, group, qtype, transport, count, owner, origin, epoch, origin)
-                    for (group, owner, origin, epoch, qtype, transport), count in details.items()
+                    (owner, origin, group, qtype, transport, ip, interface, client, count, owner, origin, epoch, origin)
+                    for (
+                        group,
+                        owner,
+                        origin,
+                        epoch,
+                        qtype,
+                        transport,
+                        ip,
+                        interface,
+                        client,
+                    ), count in _db_private_details(con, details).items()
                 ],
             )
 
@@ -3216,9 +3300,9 @@ def _db_apply(task: tuple) -> None:
     # Synchronous fallback when no DB worker is running (init, tests).
     kind = task[0]
     if kind == "resolver":
-        _db_flush_resolver(1, {task[1:3]: 1} if len(task) >= 3 else None)
+        _db_flush_resolver(1, {task[1:]: 1})
     elif kind == "dnsbl":
-        _db_flush_dnsbl({task[1:5]: 1}, {task[1:7]: 1})
+        _db_flush_dnsbl({task[1:5]: 1}, {task[1:]: 1})
 
 
 def pfb_db_worker() -> None:
@@ -3227,8 +3311,8 @@ def pfb_db_worker() -> None:
     # on stop.
     resolver_delta = 0
     dnsbl_deltas: dict[tuple[str, str, str, str], int] = {}
-    resolver_details: dict[tuple[str, str], int] = {}
-    dnsbl_details: dict[tuple[str, str, str, str, str, str], int] = {}
+    resolver_details: dict[tuple, int] = {}
+    dnsbl_details: dict[tuple, int] = {}
     last_flush = time.monotonic()
     stop = False
 
@@ -3236,13 +3320,12 @@ def pfb_db_worker() -> None:
         nonlocal resolver_delta
         if t[0] == "resolver":
             resolver_delta += 1
-            if len(t) >= 3:
-                key = t[1:3]
-                resolver_details[key] = resolver_details.get(key, 0) + 1
+            key = t[1:]
+            resolver_details[key] = resolver_details.get(key, 0) + 1
         elif t[0] == "dnsbl":
             key = t[1:5]
             dnsbl_deltas[key] = dnsbl_deltas.get(key, 0) + 1
-            block_key = t[1:7]
+            block_key = t[1:]
             dnsbl_details[block_key] = dnsbl_details.get(block_key, 0) + 1
 
     def flush() -> None:
@@ -3313,6 +3396,33 @@ def get_q_transport(qstate: Any, kwargs: dict[str, Any] | None) -> str:
     return value if isinstance(value, str) and value in ("TCP", "UDP", "DoT", "DoH", "DoQ") else "Unknown"
 
 
+def _metric_ip(value: Any) -> str:
+    if not isinstance(value, str) or not value or "%" in value or not pfb.get("mod_ipaddress"):
+        return ""
+    try:
+        address = ipaddress.ip_address(value)
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+            address = address.ipv4_mapped
+        return "" if address.is_unspecified else str(address)
+    except ValueError:
+        return ""
+
+
+def get_q_listener(qstate: Any, kwargs: dict[str, Any] | None) -> tuple[str, str]:
+    values = kwargs or {}
+    listener_ip = _metric_ip(getattr(qstate, "pfb_listener_ip", values.get("pfb_listener_ip")))
+    label = getattr(qstate, "pfb_listener_interface", values.get("pfb_listener_interface", ""))
+    if not listener_ip:
+        return "", ""
+    if not isinstance(label, str) or any(unicodedata.category(c) in ("Cc", "Cf", "Cs", "Zl", "Zp") for c in label):
+        return listener_ip, ""
+    try:
+        label.encode("utf-8")
+    except UnicodeError:
+        return listener_ip, ""
+    return listener_ip, label
+
+
 def get_details_dnsbl(
     m_type: str,
     qinfo: query_info | None,
@@ -3334,10 +3444,21 @@ def get_details_dnsbl(
     metric_qtype = _metric_qtype(qstate, qinfo, q_type)
     transport = get_q_transport(qstate, kwargs)
     metric_transport = "" if transport == "Unknown" else transport
+    listener_ip, listener_interface = get_q_listener(qstate, kwargs)
+    q_ip = get_q_ip_comm(kwargs)
 
     # Increment totalqueries counter
     if pfb["sqlite3_resolver_con"]:
-        pfb_db_enqueue(("resolver", metric_qtype, metric_transport))
+        pfb_db_enqueue(
+            (
+                "resolver",
+                metric_qtype,
+                metric_transport,
+                listener_ip,
+                listener_interface,
+                *_metric_client(DB_RESOLVER, q_ip),
+            )
+        )
 
     # issue #1094: the served verdict rides in BY VALUE from operate() -- never
     # re-read the shared decisionDB memo, else a concurrent thread on another
@@ -3360,6 +3481,9 @@ def get_details_dnsbl(
                     group_epoch,
                     metric_qtype,
                     metric_transport,
+                    listener_ip,
+                    listener_interface,
+                    *_metric_client(DB_DNSBL, q_ip),
                 )
             )
 
@@ -3374,7 +3498,7 @@ def get_details_dnsbl(
         # cannot break down by record type. The decision path stays correct and untouched.
 
         dupEntry = "+"
-        event_sig = (q_name_key, q_type, dnsbl, transport)
+        event_sig = (q_name_key, q_type, dnsbl, transport, q_ip, listener_ip, listener_interface)
         if _dnsbl_last_event is not None:
             if str(_dnsbl_last_event) == str(event_sig):
                 dupEntry = "-"
@@ -3386,7 +3510,6 @@ def get_details_dnsbl(
         if dnsbl.log_type in ("2", "4", "6"):
             return True
 
-        q_ip = get_q_ip_comm(kwargs)
         if q_ip == "Unknown":
             q_ip = "127.0.0.1"
 
@@ -3406,6 +3529,8 @@ def get_details_dnsbl(
                 dupEntry,
                 q_type,
                 transport,
+                listener_ip,
+                listener_interface,
             )
         )
         pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
@@ -3414,7 +3539,14 @@ def get_details_dnsbl(
 
 
 def _log_idn_alert(
-    q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_type: str, transport: str = "Unknown"
+    q_name: str,
+    q_ip: str,
+    idn_alert: tuple[Any, Any, str],
+    q_type: str,
+    transport: str = "Unknown",
+    *,
+    listener_ip: str = "",
+    listener_interface: str = "",
 ) -> None:
     """Log an ADR-08 Confusable-mode ALERT (the name still resolves) -- same shape as a block.
 
@@ -3425,6 +3557,9 @@ def _log_idn_alert(
     alert, and ``b_eval`` carrying the dual form (``xn-- [decoded] script``).
     """
     feed, group, b_eval = idn_alert
+    listener_ip, listener_interface = get_q_listener(
+        None, {"pfb_listener_ip": listener_ip, "pfb_listener_interface": listener_interface}
+    )
     if q_ip == "Unknown":
         q_ip = "127.0.0.1"
     csv_line = _csv_row(
@@ -3441,6 +3576,8 @@ def _log_idn_alert(
             "+",  # dupEntry
             q_type,
             get_q_transport(None, {"pfb_transport": transport}),
+            listener_ip,
+            listener_interface,
         )
     )
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
@@ -3454,6 +3591,9 @@ def _log_upstream_block(
     transport: str = "Unknown",
     metric_qtype: str | None = None,
     group_epoch: str = "",
+    *,
+    listener_ip: str = "",
+    listener_interface: str = "",
 ) -> None:
     """Log an issue #267 upstream/external DNS block -- same CSV shape as a DNSBL block.
 
@@ -3463,15 +3603,17 @@ def _log_upstream_block(
     name from EDE EXTRA-TEXT, or ``"External"`` when the reply carried none.
     No consecutive-duplicate suppression for now (noted as a follow-up).
     """
-    if q_ip == "Unknown":
-        q_ip = "127.0.0.1"
+    listener_ip, listener_interface = get_q_listener(
+        None, {"pfb_listener_ip": listener_ip, "pfb_listener_interface": listener_interface}
+    )
+    log_ip = "127.0.0.1" if q_ip == "Unknown" else q_ip
     transport = get_q_transport(None, {"pfb_transport": transport})
     csv_line = _csv_row(
         (
             "DNSBL-python",
             make_timestamp(),
             _log_text(q_name),
-            q_ip,
+            log_ip,
             "Python",  # p_type
             "Upstream_Block",  # b_type -- greppable prefix, distinct from feed blocks
             "Upstream",  # group
@@ -3480,6 +3622,8 @@ def _log_upstream_block(
             "+",  # dupEntry (dedup follow-up)
             q_type,
             transport,
+            listener_ip,
+            listener_interface,
         )
     )
     pfb_log("/var/log/pfblockerng/dnsbl.log", csv_line)
@@ -3494,6 +3638,9 @@ def _log_upstream_block(
                 group_epoch,
                 q_type if metric_qtype is None else metric_qtype,
                 "" if transport == "Unknown" else transport,
+                listener_ip,
+                listener_interface,
+                *_metric_client(DB_DNSBL, q_ip),
             )
         )
 
@@ -3678,6 +3825,7 @@ def get_details_reply(
 
     o_type = get_q_type(qstate, qinfo)
     transport = get_q_transport(qstate, kwargs)
+    listener_ip, listener_interface = get_q_listener(qstate, kwargs)
     if m_type == "cache" or o_type == "PTR":
         q_type = o_type
     else:
@@ -3697,7 +3845,16 @@ def get_details_reply(
 
     # Increment totalqueries counter (Don't include the Resolver DNS requests)
     if pfb["sqlite3_resolver_con"] and q_ip != "127.0.0.1":
-        pfb_db_enqueue(("resolver", _metric_qtype(qstate, qinfo, o_type), "" if transport == "Unknown" else transport))
+        pfb_db_enqueue(
+            (
+                "resolver",
+                _metric_qtype(qstate, qinfo, o_type),
+                "" if transport == "Unknown" else transport,
+                listener_ip,
+                listener_interface,
+                *_metric_client(DB_RESOLVER, q_ip),
+            )
+        )
 
     # Do not log Replies, if disabled
     if not pfb["python_reply"]:
@@ -3836,6 +3993,8 @@ def get_details_reply(
             _log_text(r_addr),
             iso_code,
             transport,
+            listener_ip,
+            listener_interface,
         )
     )
     pfb_log("/var/log/pfblockerng/dns_reply.log", csv_line)
@@ -4131,6 +4290,7 @@ def inplace_cb_query_response(qstate: Any, response: Any, **kwargs: Any) -> bool
         q_name = get_q_name_qstate(qstate)
         q_type = get_q_type(qstate, None)
         q_ip = _client_ip_from_qstate(qstate)
+        listener_ip, listener_interface = get_q_listener(qstate, kwargs)
         _log_upstream_block(
             q_name,
             q_ip,
@@ -4139,6 +4299,8 @@ def inplace_cb_query_response(qstate: Any, response: Any, **kwargs: Any) -> bool
             get_q_transport(qstate, kwargs),
             _metric_qtype(qstate, None, q_type),
             snap.group_epochs.get(("Upstream", "builtin"), ""),
+            listener_ip=listener_ip,
+            listener_interface=listener_interface,
         )
     except Exception as e:
         sys.stderr.write("[pfBlockerNG] inplace_cb_query_response: {}\n".format(e))
@@ -8028,8 +8190,15 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # cached decision and is not re-logged (the name resolves normally).
                 # issue #1349: preserve block/alert exclusivity after cache retirement.
                 if dnsbl.idn_alert is not None and not (dnsbl.is_found and not dnsbl.in_whitelist):
+                    listener_ip, listener_interface = get_q_listener(qstate, None)
                     _log_idn_alert(
-                        q_name, q_ip, dnsbl.idn_alert, get_q_type(qstate, None), get_q_transport(qstate, None)
+                        q_name,
+                        q_ip,
+                        dnsbl.idn_alert,
+                        get_q_type(qstate, None),
+                        get_q_transport(qstate, None),
+                        listener_ip=listener_ip,
+                        listener_interface=listener_interface,
                     )
             elif isCNAME and dnsbl.is_found and not dnsbl.in_whitelist:
                 # Memo hit on the CNAME *target*: re-evaluate in the original

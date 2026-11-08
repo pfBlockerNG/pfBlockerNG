@@ -1223,6 +1223,14 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new #3522 field; \'\' = off = no exporter',
 		],
 
+		'gen/pfb_metrics_client_ip' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => 'new #3757 opt-in exposes client identities; absent is off',
+		],
+
 		// ADR-40: alias-table apply mode: 'auto' | 'delta' | 'replace'. New-install default 'auto'.
 		// 'auto' = delta for small churn (< ~5%), full replace for initial load / large churn;
 		// 'delta' = ALWAYS forward delta, NO large-churn replace fallback (power-user override);
@@ -4632,6 +4640,15 @@ function pfb_syslog_format_dnsbl(array $fields): string
 	$parts[] = 'eval='  . pfb_syslog_escape((string) ($fields['b_eval'] ?? ''));
 	if (array_key_exists('transport', $fields)) {
 		$parts[] = 'transport=' . pfb_dns_transport($fields['transport']);
+	}
+	$listener = $fields['listener_ip'] ?? '';
+	$packed = is_string($listener) ? @inet_pton($listener) : FALSE;
+	if ($packed !== FALSE && trim($packed, "\0") !== '') {
+		$parts[] = 'listener_ip=' . pfb_syslog_escape((string) inet_ntop($packed));
+		$interface = $fields['listener_interface'] ?? '';
+		if (is_string($interface) && $interface !== '' && mb_check_encoding($interface, 'UTF-8') && !preg_match('/\p{Cc}/u', $interface)) {
+			$parts[] = 'listener_interface=' . pfb_syslog_escape($interface);
+		}
 	}
 
 	return implode(' ', $parts);

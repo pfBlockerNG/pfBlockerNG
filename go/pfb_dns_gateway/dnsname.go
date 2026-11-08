@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
 	"sync/atomic"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -130,8 +133,9 @@ func parseNameIP(s string) (netip.Addr, error) {
 // addressTable is what the address table verb's body holds: the name answers by the address a query reached, and the addresses
 // DDR advertises DoH on without a port.
 type addressTable struct {
-	names  map[netip.Addr]nameAddrs
-	doh443 map[netip.Addr]struct{}
+	names      map[netip.Addr]nameAddrs
+	doh443     map[netip.Addr]struct{}
+	interfaces map[netip.Addr]string
 }
 
 // parseAddressTable reads the body of the address table verb: lines separated by \n, no line empty, each led by the word that
@@ -140,6 +144,7 @@ type addressTable struct {
 func parseAddressTable(body []byte) (addressTable, error) {
 	var answers []string
 	doh443 := map[netip.Addr]struct{}{}
+	interfaces := map[netip.Addr]string{}
 	if len(body) > 0 {
 		for i, line := range strings.Split(string(body), "\n") {
 			word, value, _ := strings.Cut(line, " ")
@@ -152,8 +157,12 @@ func parseAddressTable(body []byte) (addressTable, error) {
 					return addressTable{}, fmt.Errorf("line %d: %.64q: %w", i+1, line, err)
 				}
 				doh443[ip] = struct{}{}
+			case "listener-interface":
+				if err := addListenerInterface(interfaces, value); err != nil {
+					return addressTable{}, fmt.Errorf("line %d: listener-interface: %w", i+1, err)
+				}
 			default:
-				return addressTable{}, fmt.Errorf("line %d: %.64q does not start with dns-name-answer or ddr-doh-443", i+1, line)
+				return addressTable{}, fmt.Errorf("line %d: %.64q does not start with dns-name-answer, ddr-doh-443 or listener-interface", i+1, line)
 			}
 		}
 	}
@@ -161,7 +170,34 @@ func parseAddressTable(body []byte) (addressTable, error) {
 	if err != nil {
 		return addressTable{}, err
 	}
-	return addressTable{names: names, doh443: doh443}, nil
+	return addressTable{names: names, doh443: doh443, interfaces: interfaces}, nil
+}
+
+func addListenerInterface(table map[netip.Addr]string, value string) error {
+	text, encoded, found := strings.Cut(value, "=")
+	ip, err := netip.ParseAddr(text)
+	if !found || err != nil || ip.Zone() != "" || ip.IsUnspecified() || ip.Is4In6() || ip.String() != text {
+		return fmt.Errorf("invalid canonical listener IP %.64q", text)
+	}
+	if _, exists := table[ip]; exists {
+		return fmt.Errorf("duplicate listener IP %s", ip)
+	}
+	label, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil || base64.StdEncoding.EncodeToString(label) != encoded || len(label) > 65535 || !utf8.Valid(label) || strings.ContainsFunc(string(label), unicode.IsControl) {
+		return fmt.Errorf("invalid listener interface label for %s", ip)
+	}
+	table[ip] = string(label)
+	return nil
+}
+
+func listenerInterfaceTable(values []string) (map[netip.Addr]string, error) {
+	table := make(map[netip.Addr]string, len(values))
+	for _, value := range values {
+		if err := addListenerInterface(table, value); err != nil {
+			return nil, err
+		}
+	}
+	return table, nil
 }
 
 // answer replies to exactly one IN QUERY for the DNS name, A or AAAA, at an owned local address; an absent family gets

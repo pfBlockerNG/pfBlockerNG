@@ -114,6 +114,29 @@ final class MetricsRenderTest extends TestCase
 		$this->assertStringContainsString("pfblockerng_dnsbl_resolver_queries_total{qtype=\"HTTPS\"} 3\n", $out);
 	}
 
+	public function testEndpointDimensionsRemainDistinctAndOwnersCoalesce(): void
+	{
+		$base = ['origin' => 'custom', 'group' => 'Ads', 'qtype' => 'A', 'transport' => 'UDP',
+			'listener_ip' => '192.0.2.1', 'listener_interface' => 'Län,"\\', 'client_ip' => '198.51.100.1'];
+		$out = pfb_metrics_render($this->minimal([
+			'dnsbl_groups' => [['group' => 'Ads', 'entries' => 1, 'counter' => 10]],
+			'dnsbl_totals' => [
+				['owner' => 'one', 'origin' => 'custom', 'group' => 'Ads', 'count' => 2],
+				['owner' => 'two', 'origin' => 'custom', 'group' => 'Ads', 'count' => 3],
+				['owner' => 'three', 'origin' => 'custom', 'group' => 'Ads', 'count' => 1],
+			],
+			'dnsbl_detail' => [
+				['owner' => 'one', 'count' => 2] + $base,
+				['owner' => 'two', 'count' => 3] + $base,
+				['owner' => 'three', 'count' => 1, 'listener_ip' => '::1', 'listener_interface' => 'Localhost', 'client_ip' => ''] + $base,
+			],
+		]));
+		$this->assertStringContainsString("pfblockerng_dnsbl_blocked_queries_total{group=\"Ads\"} 4\n", $out);
+		$this->assertStringContainsString('listener_ip="192.0.2.1",listener_interface="Län,\\"\\\\",client_ip="198.51.100.1"} 5' . "\n", $out);
+		$this->assertStringContainsString('listener_ip="::1",listener_interface="Localhost"} 1' . "\n", $out);
+		$this->assertSame(1, substr_count($out, 'client_ip='));
+	}
+
 	public function testHostileGroupLabel_IsEscapedOnOneLine(): void
 	{
 		$out = pfb_metrics_render($this->minimal([

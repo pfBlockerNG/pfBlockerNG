@@ -61,7 +61,7 @@ while (TRUE) {
 	$head = bin2hex(substr($data, 0, 4));
 	$length = (strlen($data) >= 8) ? unpack('N', substr($data, 4, 4))[1] : 0;
 	// A list frame is its four head bytes alone: waiting for a length would cost the whole receive timeout
-	$want = ($head === 'fffffffc') ? 4 : 8 + min($length, 256);
+	$want = ($head === 'fffffffc') ? 4 : 8 + min($length, ($head === 'fffffffb') ? 65536 : 256);
 	while (strlen($data) < $want) {
 		$more = @socket_read($conn, $want - strlen($data));
 		if ($more === FALSE || $more === '') {

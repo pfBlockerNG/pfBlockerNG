@@ -36,8 +36,7 @@ func (r *rig) autoForward() {
 			}
 			switch typ {
 			case tQuery:
-				n := int(payload[1]) // payload[0] is the transport byte
-				q := decidedQuery{id: id, ip: string(payload[2 : 2+n]), wire: payload[2+n:]}
+				q := r.recvQueryPayload(id, payload)
 				r.queries <- q
 				_ = writeFrame(r.p.conn, tForward, id, q.wire)
 			case tReply:

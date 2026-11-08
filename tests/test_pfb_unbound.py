@@ -510,7 +510,7 @@ class TestDbSubsystem:
     def test_resolver_counter_accumulates(self, tmp_path: Any) -> None:
         self._resolver(tmp_path)
         for _ in range(5):
-            pfb_unbound.pfb_db_enqueue(("resolver",))
+            pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 5, (
             f"expected 5, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
@@ -520,7 +520,7 @@ class TestDbSubsystem:
         db = str(tmp_path / "resolver.sqlite")
         pfb_unbound.pfb["pfb_py_resolver"] = db
         pfb_unbound.pfb["sqlite3_resolver_con"] = False
-        pfb_unbound.pfb_db_enqueue(("resolver",))
+        pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))
         # Gated off -> no connection opened, nothing written.
         assert pfb_unbound.DB_RESOLVER not in pfb_unbound._db_conns, (
             f"expected {pfb_unbound.DB_RESOLVER!r} not in {pfb_unbound._db_conns!r}"
@@ -528,8 +528,8 @@ class TestDbSubsystem:
 
     def test_relative_increment_survives_concurrent_reset(self, tmp_path: Any) -> None:
         db = self._resolver(tmp_path)
-        pfb_unbound.pfb_db_enqueue(("resolver",))
-        pfb_unbound.pfb_db_enqueue(("resolver",))
+        pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))
+        pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))
         # Simulate a concurrent PHP pfBlockerNG_clearsqlite reset on a 2nd connection.
         import sqlite3
 
@@ -539,7 +539,7 @@ class TestDbSubsystem:
             other.commit()
         finally:
             other.close()
-        pfb_unbound.pfb_db_enqueue(("resolver",))  # relative += 1, must not clobber the reset
+        pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))  # relative += 1, must not clobber reset
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1, (
             f"expected 1, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
@@ -560,8 +560,10 @@ class TestDbSubsystem:
         epochs = pfb_unbound._db_group_epochs(True, {})
         con.commit()
         for _ in range(3):
-            pfb_unbound.pfb_db_enqueue(("dnsbl", "G1", "G1", "custom", epochs[("G1", "custom")], "A", ""))
-        pfb_unbound.pfb_db_enqueue(("dnsbl", "G2", "G2", "custom", epochs[("G2", "custom")], "A", ""))
+            pfb_unbound.pfb_db_enqueue(
+                ("dnsbl", "G1", "G1", "custom", epochs[("G1", "custom")], "A", "", "", "", "", "")
+            )
+        pfb_unbound.pfb_db_enqueue(("dnsbl", "G2", "G2", "custom", epochs[("G2", "custom")], "A", "", "", "", "", ""))
         assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0] == 3, (
             f"""expected 3"""
             f""", got {con.execute("SELECT counter FROM dnsbl WHERE groupname = 'G1'").fetchone()[0]!r}"""
@@ -578,11 +580,11 @@ class TestDbSubsystem:
         import os as _os
 
         db = self._resolver(tmp_path)
-        pfb_unbound.pfb_db_enqueue(("resolver",))
+        pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))
         pfb_unbound._db_close(pfb_unbound.DB_RESOLVER)
         if _os.path.isfile(db):
             _os.remove(db)
-        pfb_unbound.pfb_db_enqueue(("resolver",))  # reconnect + re-create + write
+        pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))  # reconnect + re-create + write
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 1, (
             f"expected 1, got {con.execute('SELECT totalqueries FROM resolver WHERE row = 0').fetchone()[0]!r}"
@@ -599,7 +601,7 @@ class TestDbSubsystem:
         th.start()
         try:
             for _ in range(10):
-                pfb_unbound.pfb_db_enqueue(("resolver",))
+                pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))
             pfb_unbound.pfb_db_queue.put(("stop",))
             th.join(timeout=5)
             assert not th.is_alive(), f"expected falsy, got {th.is_alive()!r}"
@@ -716,7 +718,7 @@ class TestDbConcurrencyAndPerf:
         def py_side() -> None:
             try:
                 for _ in range(n):
-                    pfb_unbound.pfb_db_enqueue(("resolver",))  # sync -> persistent WAL conn
+                    pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))  # sync persistent WAL conn
             except Exception as e:
                 errors.append(e)
 
@@ -763,7 +765,7 @@ class TestDbConcurrencyAndPerf:
 
         monkeypatch.setattr(pfb_unbound.sqlite3, "connect", counting_connect)
         for _ in range(20):
-            pfb_unbound.pfb_db_enqueue(("resolver",))
+            pfb_unbound.pfb_db_enqueue(("resolver", "", "", "", "", "", ""))
         # Persistent: one connect for 20 writes (the per-call design connected 20 times).
         assert count["n"] == 1, f"expected 1, got {count['n']!r}"
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
@@ -1165,12 +1167,12 @@ class TestGetDetailsDnsblNodata:
 
     def test_nodata_logging_increments_group_counter(self, monkeypatch: Any) -> None:
         calls = self._counter_calls(monkeypatch, "5")
-        assert ("dnsbl", "G", "G", "custom", "fixture-epoch", "A", "") in calls, calls
+        assert ("dnsbl", "G", "G", "custom", "fixture-epoch", "A", "", "", "", "", "") in calls, calls
 
     def test_nodata_no_logging_still_increments_group_counter(self, monkeypatch: Any) -> None:
         # Silencing the log must not suppress the group counter.
         calls = self._counter_calls(monkeypatch, "6")
-        assert ("dnsbl", "G", "G", "custom", "fixture-epoch", "A", "") in calls, calls
+        assert ("dnsbl", "G", "G", "custom", "fixture-epoch", "A", "", "", "", "", "") in calls, calls
 
 
 class TestGetDetailsDnsblUnsetGuard:
@@ -2813,7 +2815,19 @@ class TestAttributionSurvivesRace:
             f"expected feed=TestFeed group=TestGroup (the SERVED verdict), got "
             f"feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup", "TestGroup", "custom", "fixture-epoch", "TYPE1", "") in enqueued, enqueued
+        assert (
+            "dnsbl",
+            "TestGroup",
+            "TestGroup",
+            "custom",
+            "fixture-epoch",
+            "TYPE1",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ) in enqueued, enqueued
 
     def test_attribution_survives_foreign_generation_allow_overwrite(self, monkeypatch: Any) -> None:
         # Scenario: a foreign-generation thread overwrites the same-name entry with an
@@ -2834,7 +2848,19 @@ class TestAttributionSurvivesRace:
         assert (feed, group) == ("TestFeed", "TestGroup"), (
             f"expected feed=TestFeed group=TestGroup, got feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup", "TestGroup", "custom", "fixture-epoch", "TYPE1", "") in enqueued, enqueued
+        assert (
+            "dnsbl",
+            "TestGroup",
+            "TestGroup",
+            "custom",
+            "fixture-epoch",
+            "TYPE1",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ) in enqueued, enqueued
 
     def test_attribution_survives_swap_clear(self, monkeypatch: Any) -> None:
         # Scenario: rebuild_and_swap()'s decisionDB.clear() (modelled here as a
@@ -2853,7 +2879,19 @@ class TestAttributionSurvivesRace:
         assert (feed, group) == ("TestFeed", "TestGroup"), (
             f"expected feed=TestFeed group=TestGroup, got feed={feed} group={group} (line={dnsbl_fields[0]})"
         )
-        assert ("dnsbl", "TestGroup", "TestGroup", "custom", "fixture-epoch", "TYPE1", "") in enqueued, enqueued
+        assert (
+            "dnsbl",
+            "TestGroup",
+            "TestGroup",
+            "custom",
+            "fixture-epoch",
+            "TYPE1",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ) in enqueued, enqueued
 
 
 class TestAttributionMemoPath:

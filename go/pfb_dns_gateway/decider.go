@@ -25,7 +25,7 @@ const (
 )
 
 const (
-	maxFrameLen         = 5 + 1 + 1 + 255 + 65535 // type + id, then transport + n + IP text + DNS wire
+	maxFrameLen         = 5 + 1 + 1 + 255 + 1 + 255 + 2 + 65535 + 65535
 	maxWire             = 65535
 	defaultWriteTimeout = 10 * time.Second
 	// Ids reserved at once, in flight or abandoned until the decider's final frame. Live queries top out at 1536 (512 UDP,
@@ -387,14 +387,29 @@ const (
 // Decide sends the query to the decider and serves its FORWARDs through fwd until it answers: the ANSWER wire,
 // or nil for DROP. ctx ending abandons the query; the id stays reserved
 // until the decider's final frame.
-func (d *Decider) Decide(ctx context.Context, client netip.Addr, transport clientTransport, wire []byte, fwd forwarder) ([]byte, error) {
+func (d *Decider) Decide(ctx context.Context, client, listener netip.Addr, listenerInterface string, transport clientTransport, wire []byte, fwd forwarder) ([]byte, error) {
 	c := &call{forward: make(chan []byte, 1), final: make(chan []byte, 1)}
 	id, err := d.register(c)
 	if err != nil {
 		return nil, err
 	}
-	ip := client.String()
-	if err := d.send(frameQuery, id, append(append([]byte{byte(transport), byte(len(ip))}, ip...), wire...)); err != nil {
+	ip := client.Unmap().WithZone("").String()
+	local := ""
+	listener = listener.Unmap().WithZone("")
+	if listener.IsValid() && !listener.IsUnspecified() {
+		local = listener.String()
+	} else {
+		listenerInterface = ""
+	}
+	payload := make([]byte, 0, 2+len(ip)+1+len(local)+2+len(listenerInterface)+len(wire))
+	payload = append(payload, byte(transport), byte(len(ip)))
+	payload = append(payload, ip...)
+	payload = append(payload, byte(len(local)))
+	payload = append(payload, local...)
+	payload = binary.BigEndian.AppendUint16(payload, uint16(len(listenerInterface)))
+	payload = append(payload, listenerInterface...)
+	payload = append(payload, wire...)
+	if err := d.send(frameQuery, id, payload); err != nil {
 		return nil, err
 	}
 	for {

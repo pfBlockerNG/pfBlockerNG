@@ -120,7 +120,7 @@ func fakeDecider(mode string) int {
 			break
 		}
 		if typ == tQuery {
-			wire := payload[2+int(payload[1]):] // payload[0] is the transport byte
+			wire := queryDNSWire(payload)
 			answer := bytes.Clone(wire)
 			answer[2] |= 0x80
 			if mode == "forward-tagged" {

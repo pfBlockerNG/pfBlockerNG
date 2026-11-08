@@ -17,9 +17,9 @@ use PHPUnit\Framework\TestCase;
  * 4-byte big-endian length and the lines `dns-name-answer LOCAL=ADDR[,ADDR]` joined by "\n", and the gateway answers `ok` or
  * `error: <reason>`. A gateway that does not take it is the reason to restart the pair.
  *
- * The table is sent only while the command names a DNS Name (--dns-name) and no restart is pending: a restart in waiting means the rc
- * script may differ from the running gateway in more than the table. The stand-in gateway is support/ListenerControlServer.php, a
- * real process on a real Unix socket that records each frame before it replies.
+ * Name-answer rows are sent only while the command names a DNS Name (--dns-name). Independent listener ownership rows can be
+ * sent without one. No table is sent while a restart is pending: the rc script may differ from the running gateway in more than
+ * the table. The stand-in is a real Unix-socket process that records every frame before replying.
  */
 #[CoversFunction('pfb_dns_proxy_address_table')]
 #[CoversFunction('pfb_dns_proxy_listeners_sync')]
@@ -87,7 +87,7 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 	/** @return list<string> each frame the stand-in got after the list requests: "<head> <body>" */
 	private static function sent(string $record): array
 	{
-		return array_map(static fn (array $frame): string => "{$frame['head']} {$frame['body']}", self::changeFrames($record));
+		return array_map(static fn (array $frame): string => "{$frame['head']} {$frame['body']}", self::nameDdrFrames($record));
 	}
 
 	// -----------------------------------------------------------------------
@@ -102,6 +102,21 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		$this->assertNull(pfb_dns_proxy_address_table($lines, $this->socket));
 
 		$this->assertSame([self::TABLE . ' ' . implode("\n", $lines)], self::sent($record));
+	}
+
+	public function testTheStandInRecordsTheWholeOwnershipTableBeyondTheListenerBodyLimit(): void
+	{
+		$record = $this->gateway();
+		$lines = [
+			'listener-interface 192.0.2.1=' . base64_encode(str_repeat('LAN', 100)),
+			'listener-interface 2001:db8::1=' . base64_encode('IPv6 LAN'),
+		];
+		$body = implode("\n", $lines);
+		$this->assertGreaterThan(256, strlen($body), 'exercise the table beyond the listener-control body limit');
+
+		$this->assertNull(pfb_dns_proxy_address_table($lines, $this->socket));
+
+		$this->assertSame([['head' => self::TABLE, 'body' => $body, 'fds' => []]], self::frames($record));
 	}
 
 	public function testAnEmptyTableIsAFrameWithNoBody(): void
@@ -147,7 +162,8 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		// Given a ready proxy whose command names the DNS Name and one answer, and a gateway that serves the three listeners
 		$this->ready();
 		$record = $this->gateway();
-		$this->assertStringContainsString(" --dns-name '" . self::NAME . "' --dns-name-answer '192.0.2.1=192.0.2.1'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the command carries the table');
+		$this->assertStringContainsString(" --dns-name '" . self::NAME . "'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the command carries the name');
+		$this->assertStringContainsString(" --dns-name-answer '192.0.2.1=192.0.2.1'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the command carries the answer');
 		$this->assertSame([], self::sent($record), 'before: the gateway has been sent nothing');
 
 		// When the sync runs
@@ -201,7 +217,7 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		$this->assertCount(1, self::sent($record));
 	}
 
-	public function testNothingIsSentWhenTheCommandNamesNoDnsName(): void
+	public function testNoNameAnswersAreSentWhenTheCommandNamesNoDnsName(): void
 	{
 		// Given a ready proxy whose command names the DNS Name: the table is sent
 		$this->ready();
@@ -216,8 +232,12 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		$this->assertStringNotContainsString('--dns-name', (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'the command names no DNS Name');
 		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
 
-		// Then nothing more is sent: a gateway started without --dns-name would refuse the table
-		$this->assertCount(1, self::sent($record));
+		// Then name/DDR rows are absent, but the independent ownership snapshot still goes.
+		$this->assertSame([self::TABLE . ' dns-name-answer 192.0.2.1=192.0.2.1', self::TABLE . ' '], self::sent($record));
+		$table = self::changeFrames($record)[1];
+		$this->assertSame(self::TABLE, $table['head']);
+		$this->assertSame([], $table['fds'], 'metadata carries no listener descriptors');
+		$this->assertContains('listener-interface 192.0.2.1=', explode("\n", $table['body']), 'ownership is independent of the DNS Name');
 	}
 
 	// -----------------------------------------------------------------------

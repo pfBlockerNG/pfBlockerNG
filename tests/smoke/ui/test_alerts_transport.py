@@ -63,6 +63,7 @@ def test_transport_columns_filter_and_reset(smoke_vm: helpers.SmokeVM, webui: We
                 )
                 if transport is not None:
                     row.append(transport)
+                    row.extend(["2001:db8::53" if transport == "DoH" else "192.0.2.53", 'LAN, "旧" <b>event</b>'])
                 out = io.StringIO()
                 csv.writer(out, lineterminator="\n").writerow(row)
                 lines.append(out.getvalue())
@@ -92,13 +93,23 @@ def test_transport_columns_filter_and_reset(smoke_vm: helpers.SmokeVM, webui: We
             assert response.status_code == 200
             assert f'name="{field}"' in response.text, f"missing transport control: {view}"
             assert ">Transport</th>" in response.text, f"missing transport header: {view}"
+            prefix = "reply" if reply else "dnsbl"
+            for suffix in ("listenerip", "listenerinterface"):
+                assert f'name="filterlogentries_{prefix}{suffix}"' in response.text
+            assert ">Receiving IP</th>" in response.text
+            assert ">Receiving interface</th>" in response.text
             for name, value in zip(tokens[reply], ("TCP", "UDP", "DoT", "DoH", "DoQ", "—"), strict=True):
                 rendered = row_containing(response.text, name)
                 assert f"<td>{value}</td>" in rendered, (view, name, value, rendered)
-                assert rendered.count("<td") == (10 if view == "unified" else 11 if reply else 7), rendered
+                assert rendered.count("<td") == (12 if view == "unified" else 13 if reply else 9), rendered
+                expected_ip = "—" if value == "—" else "2001:db8::53" if value == "DoH" else "192.0.2.53"
+                assert f"<td>{expected_ip}</td>" in rendered, rendered
+                assert "<b>event</b>" not in rendered
+                if value != "—":
+                    assert "LAN, &quot;旧&quot; &lt;b&gt;event&lt;/b&gt;" in rendered
             if view == "unified":
                 ip_row = row_containing(response.text, ip)
-                assert ip_row.count("<td") == 10 and "<td>—</td>" in ip_row, ip_row
+                assert ip_row.count("<td") == 12 and ip_row.count("<td>—</td>") == 3, ip_row
             filtered = webui.post(path, {field: "^DoH$"}, submit=("filterlogentries_submit", "Apply Filter"))
             assert filtered.status_code == 200
             assert tokens[reply][3] in filtered.text
@@ -117,6 +128,24 @@ def test_transport_columns_filter_and_reset(smoke_vm: helpers.SmokeVM, webui: We
             assert reset.status_code == 200
             for name in tokens[reply]:
                 assert name in reset.text, f"clear unavailable filter failed to restore {name}"
+            for suffix, expression, selected in (
+                ("listenerip", "^2001:db8::53$", tokens[reply][3:4]),
+                ("listenerinterface", "^LAN,", tokens[reply][:-1]),
+                ("listenerip", "^—$", tokens[reply][-1:]),
+                ("listenerinterface", "^—$", tokens[reply][-1:]),
+                ("listenerinterface", "^not-this-interface$", []),
+            ):
+                filtered = webui.post(
+                    path,
+                    {f"filterlogentries_{prefix}{suffix}": expression},
+                    submit=("filterlogentries_submit", "Apply Filter"),
+                )
+                assert filtered.status_code == 200
+                for name in tokens[reply]:
+                    assert (name in filtered.text) == (name in selected), (view, suffix, name, filtered.text)
+                reset = webui.post(path, {}, submit=("filterlogentries_clear", "Clear Filter"))
+                assert reset.status_code == 200
+                assert all(name in reset.text for name in tokens[reply])
     finally:
         helpers.config_restore_state(vm, dnsbl_cfg, original)
         errors = _restore_seeded_files(vm, backups)

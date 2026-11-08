@@ -23,7 +23,7 @@ func answerOne(p *peer) <-chan []byte {
 			close(asked)
 			return
 		}
-		wire := payload[2+int(payload[1]):]
+		wire := queryDNSWire(payload)
 		answer := bytes.Clone(wire)
 		answer[2] |= 0x80
 		_, _ = p.conn.Write(pack(tAnswer, id, answer))
@@ -49,7 +49,7 @@ func TestAQueryThatReachesARetiredDeciderIsAskedOfTheActiveOne(t *testing.T) {
 	wire := buildQuery(t, 0x3566, "stale.example.", true)
 	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
 	defer cancel()
-	answer, err := g.decide(ctx, old, netip.MustParseAddr("192.0.2.1"), clientDoT, wire, noForward(t))
+	answer, err := g.decide(ctx, old, netip.MustParseAddr("192.0.2.1"), netip.Addr{}, "", clientDoT, wire, noForward(t))
 	if want := echoWithQR(seenQuery{wire: wire})[0]; err != nil || !bytes.Equal(answer, want) {
 		t.Fatalf("query on a retired decider: got %x (err %v), want the active decider's answer %x", answer, err, want)
 	}
@@ -71,10 +71,47 @@ func TestAQueryOnADeciderThatFailedOnItsOwnIsNotAskedOfAnother(t *testing.T) {
 	wire := buildQuery(t, 0x3567, "dead.example.", true)
 	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
 	defer cancel()
-	if answer, err := g.decide(ctx, dead, netip.MustParseAddr("192.0.2.1"), clientDoT, wire, noForward(t)); err == nil {
+	if answer, err := g.decide(ctx, dead, netip.MustParseAddr("192.0.2.1"), netip.Addr{}, "", clientDoT, wire, noForward(t)); err == nil {
 		t.Fatalf("query on a decider that failed on its own: got %x and no error, want the failure (SERVFAIL)", answer)
 	}
 	if n := registrations(active); n != 0 {
 		t.Fatalf("the active decider was asked %d queries for a decider that failed on its own, want none", n)
+	}
+}
+
+func TestListenerOwnerSnapshotSurvivesDeciderRetirement(t *testing.T) {
+	old, _, logs := readyPeer(t)
+	active, activePeer, _ := readyPeer(t)
+	g := newGateway(nil, old, nil, time.Second, logs.logf)
+	listener := netip.MustParseAddr("127.0.0.1")
+	table := map[netip.Addr]string{listener: "old owner"}
+	g.listenerInterfaces.Store(&table)
+	g.deciderRead = func() {
+		replacement := map[netip.Addr]string{listener: "new owner"}
+		g.listenerInterfaces.Store(&replacement)
+		g.dec.Store(active)
+		old.markRetired()
+		old.Close()
+	}
+	asked := answerOne(activePeer)
+	wire := buildQuery(t, 0x3757, "snapshot.example.", true)
+	got := g.resolve(context.Background(), netip.MustParseAddr("::ffff:192.0.2.1"), listener, clientDoH, wire, noForward(t))
+	if want := echoAnswer(decidedQuery{wire: wire}); !bytes.Equal(got, want) {
+		t.Fatalf("retired query answer=%x, want %x", got, want)
+	}
+	select {
+	case payload := <-asked:
+		ip := "192.0.2.1"
+		want := append([]byte{byte(clientDoH), byte(len(ip))}, ip...)
+		want = append(want, byte(len(listener.String())))
+		want = append(want, listener.String()...)
+		want = append(want, 0, byte(len("old owner")))
+		want = append(want, "old owner"...)
+		want = append(want, wire...)
+		if !bytes.Equal(payload, want) {
+			t.Fatalf("retried QUERY=%x, want original listener owner snapshot %x", payload, want)
+		}
+	case <-time.After(watchdog):
+		t.Fatal("STUCK/ENVIRONMENT: active decider did not receive retried query")
 	}
 }

@@ -178,13 +178,13 @@ def _written(handlers: list[_RecordingHandler]) -> list[str]:
 def test_module_mode_writes_these_rows(booted: Booted, monkeypatch: pytest.MonkeyPatch, case_id: str) -> None:
     monkeypatch.setattr(booted.module, "make_timestamp", lambda: STAMP)
     _resolve(booted.module, CASES[case_id])
-    assert _lines(booted.log) == [f"{row},Unknown" for row in ROWS["rows"][case_id]]
+    assert _lines(booted.log) == [f"{row},Unknown,," for row in ROWS["rows"][case_id]]
 
 
 @pytest.mark.parametrize("case_id", sorted(CASES))
 def test_without_the_module_the_same_rows_are_written(replylog: Logged, case_id: str) -> None:
     _resolve(None, CASES[case_id], replylog.log)
-    assert _lines(replylog.rows) == [f"{row},Unknown" for row in ROWS["rows"][case_id]]
+    assert _lines(replylog.rows) == [f"{row},Unknown,," for row in ROWS["rows"][case_id]]
 
 
 @pytest.mark.parametrize("case_id", sorted(CASES))
@@ -199,7 +199,9 @@ def test_the_client_address_in_the_row_is_the_clients_not_the_proxys(replylog: L
     assert next(csv.reader(_lines(replylog.rows)))[7] == CLIENT
 
 
-def test_a_row_is_one_physical_line_with_eleven_columns_for_the_php_readers_whatever_the_name(replylog: Logged) -> None:
+def test_a_row_is_one_physical_line_with_thirteen_columns_for_the_php_readers_whatever_the_name(
+    replylog: Logged,
+) -> None:
     _resolve(None, CASES["hostile-name"], replylog.log)
     [line] = _lines(replylog.rows)
     assert "\n" not in line and "\r" not in line
@@ -207,7 +209,7 @@ def test_a_row_is_one_physical_line_with_eleven_columns_for_the_php_readers_what
     fields = json.loads(
         subprocess.run(["php", "-r", script], input=line, capture_output=True, check=True, text=True).stdout
     )
-    assert len(fields) == 11 and fields[:2] == ["DNS-reply", STAMP]
+    assert len(fields) == 13 and fields[:2] == ["DNS-reply", STAMP]
     assert fields[7] == CLIENT
     assert not set("<>\"'&") & set(fields[6]), f"markup survives in the name column: {fields[6]!r}"
 

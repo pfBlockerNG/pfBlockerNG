@@ -24,8 +24,9 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
   helper can create, repair, or drop tables.
 - Language: PHP only, no appliance Python, matching the rest of the package's cron
   entry points.
-- Labels are bounded by configuration. No metric carries a per-domain, per-client, or
-  per-IP label.
+- DNS counters may label known receiving IPs and address-owner interfaces. Client IP labels are a separate,
+  explicit opt-in, off by default (#3757). Other metrics carry no per-client/IP labels; no metric uses hostnames
+  or per-domain labels.
 
 ## Decisions
 
@@ -48,6 +49,24 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
   - A disabled checkbox is not posted, so a General save with the option stored off
     leaves it off; a stored `on` is never rewritten by an unrelated save, because the
     enabled box posts it again.
+
+### DNS client labels (issue #3757)
+
+`gen/pfb_metrics_client_ip` is one local `PfbToggle`, default off, beside Metrics export on General.
+Receiving labels do not depend on it. Enabling client labels exposes identities to configured scrapers and increases
+series counts, especially with changing IPv6 privacy addresses. Logs keep their existing client fields and retention.
+
+Enabling collection takes effect through the existing settings apply/reload lifecycle. An explicit disable is
+reconciled at Save time: each counter database coalesces client dimensions while retaining listener, owner and
+aggregate totals, then rotates its privacy epoch before the setting is persisted. A required transition failure
+reports that the setting is unchanged; a partial two-database failure may stay more private but never restores
+purged identities or loses counts. Unrelated saves, missing databases and DNS startup are not gated by this operation.
+Optional apply-time initialization can seed a missing database; failure leaves client collection off without stopping DNS.
+
+The module captures eligible per-database epochs at initialization. Queued, in-flight and retried batches retain
+their captured authority; a mode/epoch mismatch strips the client dimension, including after off→on. A publisher
+also checks fresh saved policy and epochs before publishing client-bearing output. Normal restarts preserve counters;
+the existing explicit statistics clear remains the reset mechanism, with no arbitrary eviction or startup reset.
 
 ### Scheduling and lifecycle
 
@@ -136,9 +155,9 @@ Prometheus text format (`\\`, `\"`, `\n`).
 | `pfblockerng_info` | gauge (always 1) | `version` | `pfb_pkg_ver()` |
 | `pfblockerng_ip_table_entries` | gauge | `table` | `pfb_pfctl_tables_parse()` addresses, adjusted by `pfb_widget_alias_display_count()` (placeholder-only table = 0) |
 | `pfblockerng_ip_rule_packets_total` | counter | `table` | extracted per-rule helper (sum of `pfSense_get_pf_rules()` packets per pfB alias) |
-| `pfblockerng_dnsbl_blocked_queries_total` | counter | `group`; bounded `origin`, `qtype` and known `transport` for new counts | Historical group aggregate plus separately owned custom/built-in counters in `pfb_py_dnsbl.sqlite` |
+| `pfblockerng_dnsbl_blocked_queries_total` | counter | `group`, `origin`, `qtype`, known `transport`, `listener_ip`, `listener_interface`; opt-in `client_ip` | Historical group aggregate plus separately owned custom/built-in counters in `pfb_py_dnsbl.sqlite` |
 | `pfblockerng_dnsbl_group_entries` | gauge | `group` | `dnsbl.entries`; rows marked `disabled` are omitted |
-| `pfblockerng_dnsbl_resolver_queries_total` | counter | `qtype` and known `transport` for new counts | Resolver aggregate (`totalqueries + queries`) and query breakdowns in `pfb_py_resolver.sqlite` |
+| `pfblockerng_dnsbl_resolver_queries_total` | counter | `qtype`, known `transport`, `listener_ip`, `listener_interface`; opt-in `client_ip` | Resolver aggregate (`totalqueries + queries`) and query breakdowns in `pfb_py_resolver.sqlite` |
 | `pfblockerng_feed_last_success_timestamp_seconds` | gauge | `feed` | `last_successful_check` per item in `pfb_schedule_state.json`; `feed` is the schedule item ID (for example `ipv4:Alias_v4`, `dnsbl:Group`) |
 | `pfblockerng_feed_failing` | gauge (1) | `facility`, `feed`, `stage` | open entries in `pfb_sync_status.json` (PHP) and `/var/unbound/pfb_py_status.json` (Python); present only while a failure is open |
 | `pfblockerng_update_last_start_timestamp_seconds` | gauge | none | `pfb_pass_status.json` `last_start` |
@@ -155,14 +174,14 @@ Semantics operators rely on:
   as a counter reset.
 - DNS query breakdowns cover every query type; types without a known mnemonic use
   `TYPE<number>`. Only known original client transports (`UDP`, `TCP`, `DoT`, `DoH`,
-  `DoQ`) receive a `transport` label. Unavailable/native observer metadata omits that
-  label; the upstream connection is never used to infer it. Accounting does not change
-  DNSBL's existing query-type eligibility or DNS decisions.
-- Each aggregate's pre-upgrade remainder is emitted without `origin`, query-type or
-  transport labels. New blocked series use only `origin="custom"` or `origin="builtin"`;
-  the existing display `group` stays unchanged. Multiple custom owners sharing a display
-  group (including feed regex under `DNSBL_Regex`) are summed into one series per complete
-  public label set. Owner identities and client/source IPs are never exported.
+  `DoQ`) receive a `transport` label. Known receiving endpoints add `listener_ip` and their event-time address-owner
+  `listener_interface`; unavailable/native observer metadata omits these labels. Neither upstream sockets nor query
+  types infer an endpoint or transport. Accounting does not change DNSBL query-type eligibility or DNS decisions.
+- Each aggregate's pre-upgrade remainder is emitted without new breakdown labels. Existing detail rows retain their
+  qtype/transport but migrate with empty endpoint/client dimensions; current configuration never relabels history.
+  New blocked series use only `origin="custom"` or `origin="builtin"`; the existing display `group` stays unchanged.
+  Multiple custom owners sharing a display group (including feed regex under `DNSBL_Regex`) are summed into one
+  series per complete public label set. Owner identities are never exported; client IPs require the explicit opt-in.
 - DNS counters persist across normal restarts. Disabling an owner retains its counters
   and re-enabling resumes them. Deleting a configured group removes its provably owned
   counters, including its feed-regex counts, without removing built-in counters. A
@@ -289,7 +308,7 @@ Each behavior is proven red-before-green per `.agents/policy/testing.md`:
 - A configurable write interval.
 - Per-table pfctl in/out byte and packet counters. Whether pfB tables carry the pf
   counters flag is unverified, and per-rule packets already cover the widget's view.
-- Per-domain, per-client, or per-source-IP metrics.
+- Per-domain metrics and client/source-IP labels outside the explicitly opted-in DNS counters.
 - Unbound's own statistics (covered by dedicated Unbound exporters).
 - Grafana dashboards or alert rule files.
 

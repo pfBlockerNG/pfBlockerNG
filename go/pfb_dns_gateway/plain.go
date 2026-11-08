@@ -15,6 +15,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 // plainListener is one --listen address: UDP and TCP on the same port.
@@ -198,8 +201,42 @@ func (g *gateway) serveUDP(conn *net.UDPConn) {
 	defer g.wg.Done()
 	local := conn.LocalAddr().(*net.UDPAddr).AddrPort()
 	buf := make([]byte, 65535)
+	wildcard := local.Addr().IsUnspecified()
+	var oob []byte
+	var destination func([]byte) (netip.Addr, error)
+	if wildcard {
+		var err error
+		if local.Addr().Is4() {
+			err = ipv4.NewPacketConn(conn).SetControlMessage(ipv4.FlagDst, true)
+			destination = func(b []byte) (netip.Addr, error) {
+				var cm ipv4.ControlMessage
+				if err := cm.Parse(b); err != nil {
+					return netip.Addr{}, err
+				}
+				a, _ := netip.AddrFromSlice(cm.Dst)
+				return a.Unmap(), nil
+			}
+		} else {
+			err = ipv6.NewPacketConn(conn).SetControlMessage(ipv6.FlagDst, true)
+			destination = func(b []byte) (netip.Addr, error) {
+				var cm ipv6.ControlMessage
+				if err := cm.Parse(b); err != nil {
+					return netip.Addr{}, err
+				}
+				a, _ := netip.AddrFromSlice(cm.Dst)
+				return a.Unmap(), nil
+			}
+		}
+		if err != nil {
+			g.logf("UDP listener metadata unavailable on %s: %v", local, err)
+			destination = nil
+		} else {
+			oob = make([]byte, 128)
+		}
+	}
+	metadataLogged := false
 	for {
-		n, from, err := conn.ReadFromUDPAddrPort(buf)
+		n, oobn, flags, from, err := conn.ReadMsgUDPAddrPort(buf, oob)
 		if err != nil {
 			if g.shuttingDown(err) {
 				return
@@ -209,17 +246,30 @@ func (g *gateway) serveUDP(conn *net.UDPConn) {
 			continue
 		}
 		wire := bytes.Clone(buf[:n])
+		listener := local.Addr()
+		if wildcard {
+			listener = netip.Addr{}
+			if destination != nil {
+				a, err := destination(oob[:oobn])
+				if err == nil && flags&syscall.MSG_CTRUNC == 0 && a.IsValid() && !a.IsUnspecified() {
+					listener = a
+				} else if !metadataLogged {
+					g.logf("UDP listener metadata unavailable on %s: destination missing or malformed (%v)", local, err)
+					metadataLogged = true
+				}
+			}
+		}
 		src, dst := proxyEndpoints(from, local)
 		switch disp, reply := g.screen(src.Addr(), dst.Addr(), true, true, wire); disp {
 		case replyNow:
 			_, _ = conn.WriteToUDPAddrPort(reply, from)
 		case toDecider:
-			g.startUDPQuery(conn, from, src, dst, wire)
+			g.startUDPQuery(conn, from, src, dst, listener, wire)
 		}
 	}
 }
 
-func (g *gateway) startUDPQuery(conn *net.UDPConn, from, src, dst netip.AddrPort, wire []byte) {
+func (g *gateway) startUDPQuery(conn *net.UDPConn, from, src, dst netip.AddrPort, listener netip.Addr, wire []byte) {
 	header, err := proxyHeader(src, dst, false)
 	if err != nil {
 		return
@@ -251,7 +301,7 @@ func (g *gateway) startUDPQuery(conn *net.UDPConn, from, src, dst netip.AddrPort
 			}
 			return g.up.exchangeUDPThenTCP(ctx, src, dst, w)
 		}
-		reply := g.resolve(g.ctx, src.Addr(), clientUDP, wire, fwd)
+		reply := g.resolve(g.ctx, src.Addr(), listener, clientUDP, wire, fwd)
 		g.udpAddrs.release(src.Addr())
 		if g.udpInflight.Add(-1) == 0 { // the slot is free before the reply goes out
 			g.udpOverload.Store(false)
@@ -381,7 +431,8 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 		defer closeTLS(tc, conn, g.closeBound)
 		stream = tc
 	}
-	src, dst := proxyEndpoints(peer, conn.LocalAddr().(*net.TCPAddr).AddrPort())
+	listener := conn.LocalAddr().(*net.TCPAddr).AddrPort()
+	src, dst := proxyEndpoints(peer, listener)
 	plain := tlsConf == nil // DDR designates on plain DNS only; the name is answered on every transport
 	transport := clientTCP
 	if !plain {
@@ -448,7 +499,7 @@ func (g *gateway) serveConn(conn *net.TCPConn, peer netip.AddrPort, tlsConf *tls
 			go func() {
 				defer handlers.Done()
 				defer func() { <-slots }()
-				if reply := g.resolve(ctx, src.Addr(), transport, wire, fwd); reply != nil {
+				if reply := g.resolve(ctx, src.Addr(), listener.Addr(), transport, wire, fwd); reply != nil {
 					write(reply)
 				}
 			}()

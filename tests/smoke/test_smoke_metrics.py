@@ -1,15 +1,8 @@
-"""Metrics export (#3522) — live-VM smoke of the node_exporter textfile publisher.
+"""Metrics export (#3522, #3757) — live-VM smoke of the textfile publisher.
 
-The smoke image installs packages offline, so ``pfSense-pkg-node_exporter`` is absent and
-cannot be installed here. The tests therefore:
-
-* enable the option through the config gateway (the General page refuses ``on`` without the
-  package; that refusal is POSTed and checked by the ui-render test
-  ``test_general_metrics_export_save_is_refused_without_node_exporter``),
-* create ``/var/tmp/node_exporter`` themselves as the stand-in for node_exporter's textfile
-  directory, and remove it again,
-* validate the published file runner-side with the Prometheus Python client's text parser
-  (it replaces the ``node_textfile_scrape_error`` check node_exporter would give).
+Cases parse the real installed PHP writer's public textfile with the existing
+Prometheus parser. The receiving-endpoint matrix pins exact labels and sums
+without introducing a dependency on the upstream node_exporter service.
 
 Tests:
     test_metrics_toggle_installs_cron_and_publishes   — cron line + a parseable, complete file
@@ -29,6 +22,7 @@ DESELECTED from the default ``python -m pytest`` (smoke-only). Run via::
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -40,12 +34,25 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM
-from .test_smoke_dns_gateway import _ask, _dig
+from .test_smoke_dns_gateway import (
+    BYPASSED_ALIAS_IP,
+    CLIENT_LAN_IP,
+    LAN_DESCRIPTION,
+    LAN_V6_ADDR,
+    LOG_TRANSPORT,
+    PFSENSE_LAN_IP,
+    TRANSPORTS,
+    _ask,
+    _ask_from_alias,
+    _client_v6,
+    _dig,
+)
 from .test_smoke_dns_gateway import gateway_on as gateway_on
 from .test_smoke_dns_gateway import go_toolchain as go_toolchain
+from .test_smoke_dns_gateway import gui as gui
 from .test_smoke_dns_gateway import gw as gw
 from .test_smoke_dns_gateway import probe_binary as probe_binary
-from .test_smoke_dns_proxy import PROXY_RC, _apply, _capture, _php_ok, _set_proxy_toggle
+from .test_smoke_dns_proxy import PROXY_RC, _apply, _capture, _client_alias, _php_ok, _proxy_log, _set_proxy_toggle
 
 if TYPE_CHECKING:
     from prometheus_client.metrics_core import Metric
@@ -53,6 +60,7 @@ if TYPE_CHECKING:
     from .conftest import _StubDnsServer
     from .test_smoke_dns_gateway import Gateway
     from .test_smoke_dns_proxy import State
+    from .ui.webui import WebUI
 
 _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 _TEXTFILE_DIR = "/var/tmp/node_exporter"
@@ -97,7 +105,8 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 
 @pytest.fixture(autouse=True)
 def _textfile_dir(deployed_vm: SmokeVM) -> Iterator[None]:
-    """Stand in for node_exporter's textfile directory; leave the export off and the directory gone."""
+    """Use the textfile directory, preserving a pre-existing node_exporter installation."""
+    existed = deployed_vm.ssh("/bin/test", "-d", _TEXTFILE_DIR).returncode == 0
     made = deployed_vm.ssh("/usr/bin/install", "-d", "-m", "0755", _TEXTFILE_DIR)
     assert made.returncode == 0, f"could not create {_TEXTFILE_DIR}: {made.stderr!r}"
     try:
@@ -107,7 +116,9 @@ def _textfile_dir(deployed_vm: SmokeVM) -> Iterator[None]:
             _set_export(deployed_vm, False)
             h.reload(deployed_vm, "update", wait_unbound=False)
         finally:
-            deployed_vm.ssh("/bin/rm", "-rf", _TEXTFILE_DIR)
+            if not existed:
+                removed = deployed_vm.ssh("/bin/rmdir", _TEXTFILE_DIR)
+                assert removed.returncode == 0, removed.stderr
 
 
 def _set_export(vm: SmokeVM, on: bool) -> None:
@@ -427,6 +438,11 @@ def _export(vm: SmokeVM) -> dict[str, Metric]:
                 allowed = (
                     {"group", "origin", "qtype", "transport"} if sample.name == _BLOCKED else {"qtype", "transport"}
                 )
+                allowed |= {"listener_ip", "listener_interface", "client_ip"}
+                for dimension in ("listener_ip", "client_ip"):
+                    if dimension in sample.labels:
+                        assert str(ipaddress.ip_address(sample.labels[dimension])) == sample.labels[dimension], sample
+                assert "listener_interface" not in sample.labels or "listener_ip" in sample.labels, sample
                 assert sample.labels.keys() <= allowed, f"unexpected DNS labels: {sample}"
                 assert sample.labels.get("transport", "UDP") in {"UDP", "TCP", "DoT", "DoH", "DoQ"}, sample
                 if "origin" in sample.labels:
@@ -613,7 +629,16 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         _show_dns_prom(vm, "after-five-transports")
         resolver_after = {tuple(sorted(labels.items())): value for labels, value in _samples(counted, _RESOLVER)}
         for _, _, qtype, transport in cases:
-            key = tuple(sorted({"qtype": qtype, "transport": transport}.items()))
+            key = tuple(
+                sorted(
+                    {
+                        "qtype": qtype,
+                        "transport": transport,
+                        "listener_ip": PFSENSE_LAN_IP,
+                        "listener_interface": LAN_DESCRIPTION,
+                    }.items()
+                )
+            )
             assert resolver_after.get(key, 0) >= resolver_before.get(key, 0) + 1, (key, resolver_before, resolver_after)
 
         _group_action(vm, aliases[0], "Disabled")
@@ -716,7 +741,12 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         _php_ok(vm, f"require_once('{_PKG}'); pfb_global(); pfBlockerNG_clearsqlite('cleardnsbl');", "clear counters")
         cleared = _wait_blocks(vm, {group: {} for group in groups})
         _show_dns_prom(vm, "explicit-clear")
-        doq_labels = {"qtype": "A", "transport": "DoQ"}
+        doq_labels = {
+            "qtype": "A",
+            "transport": "DoQ",
+            "listener_ip": PFSENSE_LAN_IP,
+            "listener_interface": LAN_DESCRIPTION,
+        }
         assert any(labels == doq_labels and value > 0 for labels, value in _samples(after_restart, _RESOLVER))
         assert sum(value for labels, value in _samples(cleared, _RESOLVER) if labels == doq_labels) == 0, _samples(
             cleared, _RESOLVER
@@ -730,6 +760,11 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         assert reply.rcode == "NOERROR", f"native TXT query: {reply.raw}"
         assert not stub_dns.received(native), f"native query was not blocked: {stub_dns.received(native)}"
         final = _wait_blocks(vm, {groups[0]: {("TXT", ""): 1}, groups[1]: {}})
+        assert all(
+            "listener_ip" not in labels and "listener_interface" not in labels
+            for labels, value in _samples(final, _BLOCKED)
+            if labels.get("group") == groups[0] and labels.get("qtype") == "TXT" and value
+        ), _samples(final, _BLOCKED)
         native_key = {"qtype": "TYPE65280"}
         before_value = sum(value for labels, value in _samples(before_native, _RESOLVER) if labels == native_key)
         numeric = h.unique_domain("metric-numeric")
@@ -837,3 +872,159 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
                 f"unlink({h._php_str(state_path)});",
                 "restore metric textfile state",
             )
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(1800)
+def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
+    gw: Gateway, gateway_on: State, gui: WebUI
+) -> None:
+    """Actual two-client traffic, Save-time purge, enabled restart and failed-batch retry."""
+    vm = gw.vm
+    general = "/pfblockerng/pfblockerng_general.php"
+    client_path = f"{h.CFG_GLOBAL}/pfb_metrics_client_ip"
+    paths = (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, f"{h.CFG_GLOBAL}/pfb_metrics_export", client_path)
+    prior = {path: h.config_get_state(vm, path) for path in paths}
+    alias = f"smprivacy{secrets.token_hex(4)}"
+    group = f"DNSBL_{alias}"
+    names = [h.unique_domain("privacy") for _ in range(8)]
+    spec = h.DnsblCase(
+        aliasname=alias,
+        header=alias,
+        mode=h.DnsblMode.VIP,
+        feed_url=h.write_local_feed(vm, f"{alias}.txt", "".join(f"{name}\n" for name in names)),
+    )
+
+    def save(on: bool) -> None:
+        response = gui.post(general, {"pfb_metrics_client_ip": "on" if on else ""})
+        assert response.status_code == 200, response.text
+        assert h.config_get(vm, client_path) == ("on" if on else ""), response.text
+
+    def counted(total: int, clients: dict[str, float]) -> None:
+        current = _wait_blocks(vm, {group: {("A", "UDP"): total}})
+        rows = [(labels, value) for labels, value in _samples(current, _BLOCKED) if labels.get("group") == group]
+        assert rows, "privacy assertions require actual counted requests"
+        assert all(labels.get("listener_ip") == PFSENSE_LAN_IP for labels, _ in rows), rows
+        assert all(labels.get("listener_interface") == LAN_DESCRIPTION for labels, _ in rows), rows
+        actual: dict[str, float] = {}
+        for labels, value in rows:
+            if "client_ip" in labels:
+                actual[labels["client_ip"]] = actual.get(labels["client_ip"], 0) + value
+        assert actual == clients, rows
+
+    def ask(index: int, second: bool = False) -> None:
+        answer, raw = _ask_from_alias(gw, "udp", names[index]) if second else _ask(gw.client, "udp", names[index])
+        assert h.is_vip(answer), raw
+
+    try:
+        h.inject_dnsbl_lists(vm, [(spec, "Deny")])
+        _set_export(vm, True)
+        save(False)
+        h.config_restore_state(vm, client_path, (False, ""))
+        assert h.config_get_state(vm, client_path) == (False, ""), "default-OFF proof needs an absent setting"
+        _apply(vm)
+        with _client_alias(gw.client, BYPASSED_ALIAS_IP):
+            ask(0)
+            ask(1, True)
+            counted(2, {})
+            save(True)
+            _apply(vm)
+            ask(2)
+            ask(3, True)
+            counted(4, {CLIENT_LAN_IP: 1, BYPASSED_ALIAS_IP: 1})
+            restarted = vm.ssh(PROXY_RC, "restart", timeout=180.0)
+            assert restarted.returncode == 0, restarted.stdout + restarted.stderr
+            h.wait_until(lambda: _capture(vm).service == "running", timeout=180.0, interval=0.5)
+            counted(4, {CLIENT_LAN_IP: 1, BYPASSED_ALIAS_IP: 1})
+            # Fail a real client-bearing batch; OFF can still coalesce to blank client_ip.
+            _php_ok(
+                vm,
+                "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite'); $db->enableExceptions(TRUE);"
+                '$db->exec("CREATE TRIGGER privacy3757 BEFORE INSERT ON dns_metric_blocks '
+                "WHEN NEW.client_ip != '' BEGIN SELECT RAISE(ABORT,'privacy3757 retry'); END\"); $db->close();",
+                "hold client-bearing metric retry",
+            )
+            ask(4, True)
+            h.wait_until(lambda: "privacy3757 retry" in _proxy_log(vm, 100), timeout=60.0, interval=0.5)
+            save(False)
+            assert BYPASSED_ALIAS_IP not in vm.ssh("/bin/cat", _PROM).stdout, "OFF Save left old published client"
+            _php_ok(
+                vm,
+                "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite');"
+                "$db->exec('DROP TRIGGER privacy3757'); $db->close();",
+                "release old metric retry",
+            )
+            counted(5, {})
+            ask(5)  # Same worker still holds its old enabled epoch.
+            counted(6, {})
+            save(True)  # No Apply: stale enabled worker cannot acquire the new epoch.
+            ask(6)
+            counted(7, {})
+            _apply(vm)
+            ask(7)
+            counted(8, {CLIENT_LAN_IP: 1})
+            assert BYPASSED_ALIAS_IP not in vm.ssh("/bin/cat", _PROM).stdout, "purged old client reappeared"
+    finally:
+        _php_ok(
+            vm,
+            "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite');"
+            "$db->exec('DROP TRIGGER IF EXISTS privacy3757'); $db->close();",
+            "remove privacy retry fixture",
+        )
+        save(prior[client_path][1] == "on")
+        for path, state in prior.items():
+            h.config_restore_state(vm, path, state)
+        _apply(vm)
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(1800)
+def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gateway_on: State, gui: WebUI) -> None:
+    """Every original transport over both LAN families reaches the public metrics file with exact counts."""
+    vm = gw.vm
+    client_path = f"{h.CFG_GLOBAL}/pfb_metrics_client_ip"
+    paths = (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, f"{h.CFG_GLOBAL}/pfb_metrics_export", client_path)
+    prior = {path: h.config_get_state(vm, path) for path in paths}
+    alias = f"smendpoint{secrets.token_hex(4)}"
+    group = f"DNSBL_{alias}"
+    names = {
+        (address, transport): h.unique_domain("endpoint-metric")
+        for address in (PFSENSE_LAN_IP, LAN_V6_ADDR)
+        for transport in TRANSPORTS
+    }
+    spec = h.DnsblCase(
+        aliasname=alias,
+        header=alias,
+        mode=h.DnsblMode.VIP,
+        feed_url=h.write_local_feed(vm, f"{alias}.txt", "".join(f"{name}\n" for name in names.values())),
+    )
+    try:
+        h.inject_dnsbl_lists(vm, [(spec, "Deny")])
+        _set_export(vm, True)
+        response = gui.post("/pfblockerng/pfblockerng_general.php", {"pfb_metrics_client_ip": ""})
+        assert response.status_code == 200 and h.config_get(vm, client_path) == "", response.text
+        _apply(vm)
+        wanted: dict[tuple[str, str], float] = {}
+        exact: dict[tuple[str, str], float] = {}
+        with _client_v6(gw.client):
+            for (address, transport), name in names.items():
+                answer, raw = _ask(gw.client, transport, name, server=address)
+                assert h.is_vip(answer), raw
+                label = LOG_TRANSPORT[transport]
+                wanted["A", label] = wanted.get(("A", label), 0) + 1
+                exact[address, label] = exact.get((address, label), 0) + 1
+        families = _wait_blocks(vm, {group: wanted})
+        rows = [(labels, value) for labels, value in _samples(families, _BLOCKED) if labels.get("group") == group]
+        assert all(
+            "client_ip" not in labels and labels.get("listener_interface") == LAN_DESCRIPTION for labels, _ in rows
+        ), rows
+        assert {(labels["listener_ip"], labels["transport"]): value for labels, value in rows} == exact, rows
+        assert sum(value for _, value in rows) == len(names), rows
+    finally:
+        gui.post(
+            "/pfblockerng/pfblockerng_general.php",
+            {"pfb_metrics_client_ip": "on" if prior[client_path][1] == "on" else ""},
+        )
+        for path, state in prior.items():
+            h.config_restore_state(vm, path, state)
+        _apply(vm)

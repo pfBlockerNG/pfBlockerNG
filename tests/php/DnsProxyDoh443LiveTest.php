@@ -137,7 +137,7 @@ final class DnsProxyDoh443LiveTest extends TestCase
 	/** @return list<string> each frame that changes the gateway, as "<head> <body>" */
 	private static function sent(string $record): array
 	{
-		return array_map(static fn (array $frame): string => "{$frame['head']} {$frame['body']}", self::changeFrames($record));
+		return array_map(static fn (array $frame): string => "{$frame['head']} {$frame['body']}", self::nameDdrFrames($record));
 	}
 
 	private function rc(): string
@@ -265,7 +265,8 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		// Given lan selected for DoH on 443, DDR on with the name
 		$this->ready(self::ddrOn('lan'));
 		$record = $this->gateway($this->served());
-		$this->assertStringContainsString(" --ddr --ddr-doh-443 '192.0.2.1' --dns-name-answer '192.0.2.1=192.0.2.1'", $this->rc(), 'before: the command carries both');
+		$this->assertStringContainsString(" --ddr --ddr-doh-443 '192.0.2.1'", $this->rc(), 'before: the command carries the 443 selection');
+		$this->assertStringContainsString(" --dns-name-answer '192.0.2.1=192.0.2.1'", $this->rc(), 'before: the command carries the name answer');
 
 		// When the sync runs
 		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));

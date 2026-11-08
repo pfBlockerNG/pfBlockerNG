@@ -8,6 +8,7 @@ require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
 
 require_once __DIR__ . '/ConfigXmlDiskTrait.php';
 require_once __DIR__ . '/support/ProcessRunner.php';
+require_once __DIR__ . '/support/LiveListenerStandIn.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -54,6 +55,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 {
 	use DnsProxyReadySeedTrait;
 	use ConfigXmlDiskTrait;
+	use LiveListenerStandIn;
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const TOGGLE = 'installedpackages/pfblockerngdns/config/0/pfb_dns';
@@ -205,6 +207,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		$this->standInsStop();
 		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
 		@unlink(PFB_DNS_PROXY_RCFILE);
@@ -918,6 +921,32 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame([], $this->proxyCalls);
 		$this->assertSame('on', $this->toggleStored());
 		$this->assertSame([], $this->notices());
+	}
+
+	public function testOwnershipOnlyCommandChangeReconcilesLiveWithoutRestart(): void
+	{
+		$this->activate(TRUE);
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => 'LAN', 'opt1' => 'OPT'];
+		pfb_dns_proxy_service();
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
+		$served = [];
+		foreach (pfb_dns_proxy_command_listeners() as $kind => $addresses) {
+			foreach ($addresses as $at) {
+				$served[] = "{$kind} {$at}";
+			}
+		}
+		$record = $this->standIn($GLOBALS['pfb']['dns_proxy_ctl'], [], ['listening' => $served]);
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'before: gateway serves without changing its sockets');
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => 'Renamed,"\\', 'opt1' => 'OPT'];
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+		$this->assertSame([], $this->proxyCalls, 'ownership rename must not restart DNS');
+		$frames = self::changeFrames($record);
+		$this->assertNotEmpty($frames, 'ownership snapshot must be sent live');
+		$table = end($frames);
+		$this->assertSame('fffffffb', $table['head']);
+		$this->assertStringContainsString('listener-interface 192.0.2.1=' . base64_encode('Renamed,"\\'), $table['body']);
 	}
 
 	public function testALiveProxyThatNeverPublishedItsMarkerIsNotTakenForServing(): void

@@ -190,15 +190,14 @@ def test_delete_inflight_mixed_batch_retry_and_history(owned: Path, monkeypatch:
     block("feed3")
     # Drain genuine events into the same retained maps used by the worker.
     delta: dict[tuple[str, str, str, str], int] = {}
-    detail: dict[tuple[str, str, str, str, str, str], int] = {}
+    detail: dict[tuple, int] = {}
     while not P.pfb_db_queue.empty():
         event = P.pfb_db_queue.get_nowait()
         P.pfb_db_queue.task_done()
         if event[0] == "dnsbl":
-            group, owner, origin, epoch, qtype, transport = event[1:]
-            key = (group, owner, origin, epoch)
+            key = event[1:5]
             delta[key] = delta.get(key, 0) + 1
-            detail_key = (*key, qtype, transport)
+            detail_key = event[1:]
             detail[detail_key] = detail.get(detail_key, 0) + 1
     assert len(delta) == 3
     with sqlite3.connect(owned) as con:

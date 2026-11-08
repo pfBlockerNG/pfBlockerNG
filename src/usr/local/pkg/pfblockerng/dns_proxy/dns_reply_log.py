@@ -96,19 +96,41 @@ class ReplyLog:
         finally:
             shim.uninstall()
 
-    def __call__(self, query: dnswire.Message, client_ip: str, reply: bytes | None, transport: str = "Unknown") -> None:
+    def __call__(
+        self,
+        query: dnswire.Message,
+        client_ip: str,
+        reply: bytes | None,
+        transport: str = "Unknown",
+        listener_ip: str = "",
+        listener_interface: str = "",
+    ) -> None:
         """Log one answered query. Never raises: a log that fails costs a row and one error line, never the answer."""
         try:
-            self._log(query, client_ip, reply, transport)
+            self._log(query, client_ip, reply, transport, listener_ip, listener_interface)
         except Exception:
             if not self._failed:
                 self._failed = True
                 shim.log_err(f"DNS Reply logging failed, further failures are silent: {traceback.format_exc()}")
 
-    def _log(self, query: dnswire.Message, client_ip: str, reply: bytes | None, transport: str) -> None:
+    def _log(
+        self,
+        query: dnswire.Message,
+        client_ip: str,
+        reply: bytes | None,
+        transport: str,
+        listener_ip: str,
+        listener_interface: str,
+    ) -> None:
         question = query.questions[0]
         qstate = shim.module_qstate(
-            shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags, transport
+            shim.query_info(question.name, question.qtype, question.qclass),
+            client_ip,
+            0,
+            query.flags,
+            transport,
+            listener_ip,
+            listener_interface,
         )
         if reply is None:  # Unbound did not answer: the proxy sends the client a SERVFAIL
             qstate.return_rcode = RCODE_SERVFAIL
@@ -119,6 +141,16 @@ class ReplyLog:
         rcode = parsed.rcode if parsed.rcode not in (shim.RCODE_NOERROR, shim.RCODE_NXDOMAIN) else 0
         message = qstate.return_msg = shim.DnsMsg.from_message(parsed, question)
         qstate.return_rcode = rcode
-        self.module.get_details_reply("reply", None, qstate, message.rep, {"pfb_addr": client_ip})
+        self.module.get_details_reply(
+            "reply",
+            None,
+            qstate,
+            message.rep,
+            {
+                "pfb_addr": client_ip,
+                "pfb_listener_ip": listener_ip,
+                "pfb_listener_interface": listener_interface,
+            },
+        )
         if rcode == RCODE_SERVFAIL:
             shim.fire_reply_callback("reply_servfail", qstate, message.rep, rcode)

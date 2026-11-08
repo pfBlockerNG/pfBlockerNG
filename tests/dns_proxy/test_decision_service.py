@@ -36,7 +36,7 @@ from frontend_constants import (
 from frontend_helpers import WATCHDOG, FakeUnbound, ManualClock, build_query, watchdog, watched
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
-MAX_FRAME_LEN = 5 + 1 + 1 + 255 + 65535  # type + id + (transport + n + 255 IP text bytes + 65535 DNS wire bytes)
+MAX_FRAME_LEN = 5 + 1 + 1 + 255 + 1 + 255 + 2 + 65535 + 65535
 STREAM, DATAGRAM = 0, 1  # the QUERY's transport byte
 CLIENT = "192.0.2.10"
 VIP4 = bytes(int(octet) for octet in DNSBL_IPV4.split("."))
@@ -61,7 +61,7 @@ def frame(ftype: int, fid: int, payload: bytes = b"") -> bytes:
 
 def query_frame(fid: int, wire: bytes, ip: str | bytes = CLIENT, transport: int = STREAM) -> bytes:
     text = ip.encode("ascii") if isinstance(ip, str) else ip
-    return frame(QUERY, fid, bytes([transport, len(text)]) + text + wire)
+    return frame(QUERY, fid, bytes([transport, len(text)]) + text + b"\x00\x00\x00" + wire)
 
 
 def _answers(wire: bytes) -> list[tuple[str, int, bytes]]:
@@ -484,9 +484,8 @@ def test_a_reply_for_an_unknown_or_finished_id_is_ignored(booted: Booted, finish
 
 
 def test_a_query_of_exactly_the_maximum_frame_length_is_read_whole(booted: Booted) -> None:
-    payload = (
-        bytes([STREAM, 255]) + b"9" * 255 + bytes(65535)
-    )  # 255 IP text bytes (not an IP: a DROP) + a 65535 byte wire
+    # Maximum client/listener/interface fields and DNS wire; invalid addresses still get a semantic DROP.
+    payload = bytes([STREAM, 255]) + b"9" * 255 + b"\xff" + b"9" * 255 + b"\xff\xff" + b"L" * 65535 + bytes(65535)
     assert 5 + len(payload) == MAX_FRAME_LEN
 
     async def scenario(gateway: Gateway) -> None:
@@ -556,7 +555,9 @@ async def _serve_raw(
 
 
 def test_a_resolve_that_raises_gets_a_drop_one_log_entry_and_the_session_goes_on() -> None:
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
+    async def resolve(
+        wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str, **metadata: str
+    ) -> bytes | None:
         if wire == b"explode":
             raise RuntimeError("module crashed")
         return b"fine"
@@ -582,7 +583,9 @@ def test_a_burst_of_failing_queries_writes_one_log_line(monkeypatch: pytest.Monk
     clock = ManualClock()
     monkeypatch.setattr(decision_service, "monotonic", clock, raising=False)
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
+    async def resolve(
+        wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str, **metadata: str
+    ) -> bytes | None:
         raise RuntimeError("module crashed")
 
     async def main() -> None:
@@ -603,7 +606,9 @@ def test_a_failure_after_the_thirty_second_window_is_logged_again(monkeypatch: p
     clock = ManualClock()
     monkeypatch.setattr(decision_service, "monotonic", clock, raising=False)
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
+    async def resolve(
+        wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str, **metadata: str
+    ) -> bytes | None:
         raise RuntimeError("module crashed")
 
     async def main() -> None:
@@ -627,7 +632,9 @@ def test_a_failure_after_the_thirty_second_window_is_logged_again(monkeypatch: p
 def test_the_clients_transport_byte_reaches_resolve_as_its_name(byte: int, transport: str) -> None:
     seen: list[tuple[bytes, str, str]] = []
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
+    async def resolve(
+        wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str, **metadata: str
+    ) -> bytes | None:
         seen.append((wire, ip, transport))
         return b"fine"
 
@@ -657,7 +664,9 @@ def test_a_gateway_that_stops_reading_makes_the_senders_wait_and_every_frame_arr
         problems: list[str] = []
         all_resolved = asyncio.Event()
 
-        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
+        async def resolve(
+            wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str, **metadata: str
+        ) -> bytes | None:
             task = asyncio.current_task()
             assert task is not None
             tasks.append(task)
@@ -703,7 +712,9 @@ def test_a_gateway_that_resets_the_connection_ends_the_session_quietly(monkeypat
 
     monkeypatch.setattr(asyncio.StreamReader, "readexactly", spy)
 
-    async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
+    async def resolve(
+        wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str, **metadata: str
+    ) -> bytes | None:
         return await forward(wire)
 
     async def main() -> None:
@@ -732,7 +743,9 @@ def test_an_answer_the_gateway_can_no_longer_receive_ends_its_query_without_an_e
         problems: list[str] = []
         started = asyncio.Event()
 
-        async def resolve(wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str) -> bytes | None:
+        async def resolve(
+            wire: bytes, ip: str, forward: decision_service.Forward, *, transport: str, **metadata: str
+        ) -> bytes | None:
             task = asyncio.current_task()
             assert task is not None
             tasks.append(task)

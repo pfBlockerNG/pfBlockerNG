@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from types import SimpleNamespace
 from typing import Any, Callable, cast
 
@@ -76,3 +78,78 @@ def test_syslog_unified_drain_matches_the_real_dnsbl_csv_schema(
     assert (
         syslog._wait_for_unified_dnsbl(cast(syslog.SmokeVM, object()), drain, baseline_len=0, dnsbl_baseline=0) == row
     )
+
+
+@pytest.mark.parametrize("columns", [12, 14])
+@pytest.mark.parametrize("drain", ["drain.example.com", "drain,quoted.example.com", 'drain"quoted.example.com'])
+def test_syslog_unified_drain_selects_qname_and_transport_in_mixed_history(
+    monkeypatch: pytest.MonkeyPatch, columns: int, drain: str
+) -> None:
+    def row(qname: str, *, width: int, transport: str = "UDP", qtype: str = "A") -> str:
+        fields = [
+            "DNSBL-python",
+            "2026-08-01 12:00:00",
+            qname,
+            "192.168.1.10",
+            "A",
+            "VIP",
+            "group",
+            drain,
+            "feed",
+            "",
+            qtype,
+            transport,
+        ]
+        if width == 14:
+            fields.extend(["192.0.2.1", 'LAN, "trusted"'])
+        out = io.StringIO()
+        csv.writer(out, lineterminator="").writerow(fields)
+        return out.getvalue()
+
+    historical = row(drain, width=12)
+    wrong_name = row("other.example.com", width=14)
+    wrong_columns = row(drain, width=14, qtype="UDP", transport="A")
+    expected = row(drain, width=columns, transport="TCP")
+    history = "\n".join([historical, wrong_name, wrong_columns, expected])
+    monkeypatch.setattr(syslog.h, "read_log_file", lambda *_args, **_kwargs: history)
+    monkeypatch.setattr(syslog.h, "count_log_marker", lambda *_args, **_kwargs: 2)
+
+    def observe_once(predicate: Callable[[], bool], **_kwargs: Any) -> bool:
+        assert predicate()
+        return True
+
+    monkeypatch.setattr(syslog.h, "wait_until", observe_once)
+    result = syslog._wait_for_unified_dnsbl(cast(syslog.SmokeVM, object()), drain, baseline_len=1, dnsbl_baseline=1)
+
+    assert result == expected
+    fields = next(csv.reader([result]))
+    assert fields[2:4] == [drain, "192.168.1.10"]
+    assert fields[7] == drain
+    assert fields[10:12] == ["A", "TCP"]
+    assert fields[12:] == (["192.0.2.1", 'LAN, "trusted"'] if columns == 14 else [])
+
+
+@pytest.mark.parametrize(
+    ("row", "marker_count"),
+    [
+        ("DNSBL-python,time,other.example.com,192.168.1.10,A,VIP,group,drain.example.com,feed,,A,UDP", 2),
+        ("DNSBL-python,time,drain.example.com,192.168.1.10,A,VIP,group,other,feed,,UDP,A", 2),
+        ("DNSBL-python,time,drain.example.com,192.168.1.10,A,VIP,group,other,feed,,A,UDP,192.0.2.1", 2),
+        ("DNSBL-python,time,drain.example.com,192.168.1.10,A,VIP,group,other,feed,,A,UDP", 1),
+    ],
+)
+def test_syslog_unified_drain_rejects_wrong_fields_and_requires_a_later_input_marker(
+    monkeypatch: pytest.MonkeyPatch, row: str, marker_count: int
+) -> None:
+    monkeypatch.setattr(syslog.h, "read_log_file", lambda *_args, **_kwargs: row)
+    monkeypatch.setattr(syslog.h, "count_log_marker", lambda *_args, **_kwargs: marker_count)
+
+    def observe_once(predicate: Callable[[], bool], **_kwargs: Any) -> bool:
+        assert not predicate()
+        raise RuntimeError("condition not met before timeout")
+
+    monkeypatch.setattr(syslog.h, "wait_until", observe_once)
+    with pytest.raises(RuntimeError, match="salvage cap expired"):
+        syslog._wait_for_unified_dnsbl(
+            cast(syslog.SmokeVM, object()), "drain.example.com", baseline_len=0, dnsbl_baseline=1
+        )

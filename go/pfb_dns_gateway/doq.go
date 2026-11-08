@@ -270,7 +270,7 @@ func (g *gateway) serveDoQStream(conn *quic.Conn, s *quic.Stream, local netip.Ad
 		qctx, stopQuery := doqQueryContext(g.ctx, s.Context())
 		defer stopQuery()
 		var admitted bool
-		if reply, admitted = g.resolveShared(qctx, src.Addr(), clientDoQ, wire, fwd); !admitted {
+		if reply, admitted = g.resolveShared(qctx, src.Addr(), local.Addr(), clientDoQ, wire, fwd); !admitted {
 			reply = buildServfail(wire) // over the shared in-flight cap
 		} else if reply == nil {
 			reset(s, doqRequestCancelled) // the decider dropped the query

@@ -137,7 +137,7 @@ OBSERVER_RCVBUF = 256 * 1024  # bytes asked for the observer socket, so a burst 
 MAX_REPORT_QNAME = 1024  # a name in text form with every byte escaped as \DDD is at most 4 * 255
 MAX_DNS_MESSAGE = 65535  # one DNS message; a longer ANSWER is a protocol error at the gateway
 Forward = Callable[[bytes], Awaitable[bytes | None]]
-ReplyLogger = Callable[[dnswire.Message, str, bytes | None, str], None]  # query, client, reply, transport
+ReplyLogger = Callable[[dnswire.Message, str, bytes | None, str, str, str], None]
 
 
 # --- module lifecycle ----------------------------------------------------------------------------
@@ -361,7 +361,14 @@ class Frontend:
         return _error(query, RCODE_SERVFAIL) if reply is None else reply
 
     async def resolve(
-        self, wire: bytes, client_ip: str, forward: Forward, *, transport: str = "Unknown"
+        self,
+        wire: bytes,
+        client_ip: str,
+        forward: Forward,
+        *,
+        transport: str = "Unknown",
+        listener_ip: str = "",
+        listener_interface: str = "",
     ) -> bytes | None:
         """Answer one client query: parse it, let the module decide, forward to Unbound when it defers.
 
@@ -392,10 +399,16 @@ class Frontend:
         if self.module is None:
             reply = await self._ask(forward, wire, question)
             if self.reply_log is not None:
-                self.reply_log(query, client_ip, reply, transport)
+                self.reply_log(query, client_ip, reply, transport, listener_ip, listener_interface)
             return _error(query, RCODE_SERVFAIL) if reply is None else reply
         qstate = shim.module_qstate(
-            shim.query_info(question.name, question.qtype, question.qclass), client_ip, 0, query.flags, transport
+            shim.query_info(question.name, question.qtype, question.qclass),
+            client_ip,
+            0,
+            query.flags,
+            transport,
+            listener_ip,
+            listener_interface,
         )
         relay: bytes | None = None
         try:

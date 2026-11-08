@@ -166,7 +166,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		pfb_dns_proxy_service($this->krProxyDir);
 	}
 
-	/** @return list<string> each frame the stand-in got, the list requests too, in order: "list", "add <kind> <host:port>" or "remove <kind> <host:port>" */
+	/** @return list<string> listener-control requests in order, excluding independent address-table snapshots */
 	private static function requests(string $record): array
 	{
 		return array_map(
@@ -176,22 +176,22 @@ final class DnsProxyLiveListenersTest extends TestCase
 				'fffffffd' => "remove {$frame['body']}",
 				default => "{$frame['head']} {$frame['body']}",
 			},
-			self::frames($record)
+			array_values(array_filter(self::frames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffb'))
 		);
 	}
 
-	/** @return list<string> each frame that changes the gateway, as requests() writes it */
+	/** @return list<string> each listener change, as requests() writes it */
 	private static function verbs(string $record): array
 	{
 		return array_values(array_diff(self::requests($record), ['list']));
 	}
 
-	/** @return list<array{string,string,bool}> [type, host:port, listening] of each descriptor frame $index (of the frames that change the gateway) carried */
+	/** @return list<array{string,string,bool}> [type, host:port, listening] of each descriptor listener-change frame $index carried */
 	private static function fdsOf(string $record, int $index): array
 	{
 		return array_map(
 			static fn (array $fd): array => [$fd['type'], $fd['name'], $fd['listening']],
-			self::changeFrames($record)[$index]['fds'] ?? []
+			self::listenerFrames($record)[$index]['fds'] ?? []
 		);
 	}
 
@@ -440,7 +440,12 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertTrue($this->krEnsure());
 
 		// Then nothing is sent and nothing restarts
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
+		$tables = self::changeFrames($record);
+		$this->assertCount(1, $tables, 'a quiet box still sends its independent ownership snapshot');
+		$this->assertSame('fffffffb', $tables[0]['head']);
+		$this->assertContains('listener-interface 192.0.2.1=', explode("\n", $tables[0]['body']));
+		$this->assertSame([], $tables[0]['fds'], 'ownership metadata carries no listener descriptors');
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
@@ -576,7 +581,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then nothing is sent, logged or asked for: the next pass tries again
 		$this->assertNull($why);
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
 		$this->assertSame($logged, strlen($this->pfbLog()), 'nothing was logged about an address that is not there yet');
 		$this->assertSame([], $this->krProxyCalls());
 	}
@@ -600,7 +605,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then nothing is sent, logged or asked for: the next pass tries again
 		$this->assertNull($why);
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
 		$this->assertSame($logged, strlen($this->pfbLog()), 'nothing was logged about an address that is not there yet');
 		$this->assertSame([], $this->krProxyCalls());
 	}
@@ -619,7 +624,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// Then the proxy is left alone, and the startup check names the address as not served
 		$this->assertTrue($ready);
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
 		$this->assertStringContainsString("Plain DNS is not served on {$host}:{$this->port}", implode(' ', $this->startupNotices()));
 	}
 
@@ -637,7 +642,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then the failure is one line of the pfB log naming the transport, the address and the reason; nothing is sent, nothing restarts
 		$this->assertNull($why);
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
 		$this->assertSame(1, $this->linesWith("0.0.0.0:{$this->port}"));
 		$this->assertMatchesRegularExpression('/Plain DNS[^\n]*0\.0\.0\.0:' . $this->port . '[^\n]*in use/i', $this->pfbLog());
 		$this->assertSame([], $this->krProxyCalls());
@@ -676,7 +681,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then the proxy is left alone and no frame is sent
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
 	}
 
 	public function testAHostThatIsNoIpAddressIsNeverBound(): void
@@ -693,7 +698,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then nothing is sent and nothing is asked for: the host was never handed to a bind
 		$this->assertNull($why);
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
 	}
 
 	// -----------------------------------------------------------------------
@@ -749,7 +754,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->krTick();
 
 		// Then it is the same listener: nothing is removed or added, and nothing restarts
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
@@ -823,7 +828,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 			"remove doq 192.0.2.1:{$doq}", "add doq 127.0.0.1:{$doq}", "add doq [::1]:{$doq}",
 		], self::verbs($record));
 		$types = [];
-		foreach (self::changeFrames($record) as $index => $frame) {
+		foreach (self::listenerFrames($record) as $index => $frame) {
 			$types[$frame['body']] = implode(',', array_column(self::fdsOf($record, $index), 0));
 		}
 		$this->assertSame('dgram,stream', $types["udp+tcp [::1]:{$plain}"]);
@@ -950,7 +955,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then nothing is sent or restarted and the confirmation files the problem as it always did
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame([], self::changeFrames($record));
+		$this->assertSame([], self::listenerFrames($record));
 		$this->assertStringContainsString("Plain DNS is not served on 192.0.2.1:{$this->port}: bind: can't assign requested address", substr($this->pfbLog(), $logged));
 	}
 

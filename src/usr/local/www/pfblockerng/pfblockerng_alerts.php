@@ -143,12 +143,12 @@ foreach (array(0,2,6,7,8,9,10,12,13,15,16,17,18,99) as $field_0) {
 }
 
 $filterfieldsarray[1]	= array();
-foreach (array(2,7,8,13,15,17,19,20,21,99) as $field_1) {
+foreach (array(2,7,8,13,15,17,19,20,21,22,23,99) as $field_1) {
 	$filterfieldsarray[1][$field_1] = '';
 }
 
 $filterfieldsarray[2]	= array();
-foreach (array(81,82,83,84,85,86,87,88,89,90) as $field_2) {
+foreach (array(81,82,83,84,85,86,87,88,89,90,91,92) as $field_2) {
 	$filterfieldsarray[2][$field_2] = '';
 }
 
@@ -770,6 +770,8 @@ if (isset($_POST) && !empty($_POST)) {
 							19 => 'dnsbltype',
 							20 => 'dnsblmode',
 							21 => 'dnsbltransport',
+							22 => 'dnsbllistenerip',
+							23 => 'dnsbllistenerinterface',
 							99 => 'dnsbldate');
 					break;
 				case 're':
@@ -782,7 +784,9 @@ if (isset($_POST) && !empty($_POST)) {
 							87 => 'replydstip',
 							88 => 'replygeoip',
 							89 => 'replydate',
-							90 => 'replytransport');
+							90 => 'replytransport',
+							91 => 'replylistenerip',
+							92 => 'replylistenerinterface');
 					break;
 			}
 
@@ -2352,6 +2356,24 @@ function pfb_alerts_unlocked_entry_actions(string $kind, string $entry, string $
 }
 
 
+// Metadata is an event snapshot, never reconstructed from today's interface map.
+function pfb_report_listener($ip, $interface): array {
+	$packed = is_string($ip) ? @inet_pton($ip) : FALSE;
+	if ($packed === FALSE || trim($packed, "\0") === '') {
+		return array('—', '—');
+	}
+	$ip = inet_ntop($packed);
+	if (strlen($packed) === 16 && substr($packed, 0, 12) === str_repeat("\0", 10) . "\xff\xff") {
+		$ip = inet_ntop(substr($packed, 12));
+	}
+	if ($ip === '0.0.0.0') {
+		return array('—', '—');
+	}
+	$interface = is_string($interface) && $interface !== '' &&
+		preg_match('//u', $interface) === 1 && !preg_match('/\p{Cc}/u', $interface) ? $interface : '—';
+	return array($ip, $interface);
+}
+
 // Function to convert dnsbl.log -> Reports Tab
 function convert_dnsbl_log($mode, $fields) {
 	global $pfb, $pfb_webgui_dark, $local_hosts, $dnsbl_int, $filterfieldsarray, $clists, $dnsbl_unlock, $dup, $counter,
@@ -2400,6 +2422,9 @@ function convert_dnsbl_log($mode, $fields) {
 	}
 	$transport = pfb_dns_transport($fields[11] ?? NULL);
 	$transport_display = $transport === 'Unknown' ? '—' : $transport;
+	list($listener_ip, $listener_interface) = pfb_report_listener($fields[12] ?? NULL, $fields[13] ?? NULL);
+	$listener_ip_display = pfb_hsc($listener_ip);
+	$listener_interface_display = pfb_hsc($listener_interface);
 
 	// Remove 'Unknown' for Agent field
 	if ($fields[4] == 'Unknown') {
@@ -2535,6 +2560,8 @@ function convert_dnsbl_log($mode, $fields) {
 
 	$pfbalertdnsbl[20]	= pfb_hsc($fields[5]);
 	$pfbalertdnsbl[21]	= $transport_display;
+	$pfbalertdnsbl[22]	= $listener_ip;
+	$pfbalertdnsbl[23]	= $listener_interface;
 
 	$pfbalertdnsbl[99]	= pfb_hsc($fields[1]);	// Timestamp
 
@@ -2645,6 +2672,8 @@ function convert_dnsbl_log($mode, $fields) {
 				<br /><small>{$pfbalertdnsbl[19]}</small></td>
 			<td title=\"{$f_g_title}\">{$feed_group_cell}</td>
 			<td>{$transport_display}</td>
+			<td>{$listener_ip_display}</td>
+			<td>{$listener_interface_display}</td>
 			</tr>");
 	}
 	else {
@@ -2671,6 +2700,8 @@ function convert_dnsbl_log($mode, $fields) {
 			<td title=\"{$f_g_title}\">{$feed_group_cell}</td>
 			<td></td>
 			<td>{$transport_display}</td>
+			<td>{$listener_ip_display}</td>
+			<td>{$listener_interface_display}</td>
 			</tr>");
 	}
 	return FALSE;
@@ -2689,6 +2720,9 @@ function convert_dns_reply_log($mode, $fields) {
 	}
 	$transport = pfb_dns_transport($fields[10] ?? NULL);
 	$transport_display = $transport === 'Unknown' ? '—' : $transport;
+	list($listener_ip, $listener_interface) = pfb_report_listener($fields[11] ?? NULL, $fields[12] ?? NULL);
+	$listener_ip_display = pfb_hsc($listener_ip);
+	$listener_interface_display = pfb_hsc($listener_interface);
 
 	$pfbalertreply		= array();
 	$pfbalertreply[81]	= $fields[2];	// DNS Reply Type
@@ -2701,6 +2735,8 @@ function convert_dns_reply_log($mode, $fields) {
 	$pfbalertreply[88]	= $fields[9];	// DNS Reply GeoIP
 	$pfbalertreply[89]	= $fields[1];   // DNS Reply Timestamp
 	$pfbalertreply[90]	= $transport_display;
+	$pfbalertreply[91]	= $listener_ip;
+	$pfbalertreply[92]	= $listener_interface;
 
 	// If alerts filtering is selected, process filters as required.
 	if ($pfb['filterlogentries']) {
@@ -2844,6 +2880,8 @@ function convert_dns_reply_log($mode, $fields) {
 			<td title=\"{$pfb_title8}\">{$fields[8]}</td>
 			<td>{$fields[9]}</td>
 			<td>{$transport_display}</td>
+			<td>{$listener_ip_display}</td>
+			<td>{$listener_interface_display}</td>
 			</tr>");
 	}
 	else {
@@ -2869,6 +2907,8 @@ function convert_dns_reply_log($mode, $fields) {
 			<td title=\"{$pfb_title8}\">{$fields[8]}</td>
 			<td>{$fields[9]}</td>
 			<td>{$transport_display}</td>
+			<td>{$listener_ip_display}</td>
+			<td>{$listener_interface_display}</td>
 			</tr>");
 	}
 	return FALSE;
@@ -3372,6 +3412,8 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			<td>{$fields[98]}{$dstport}&emsp;{$query_port}<br /><small>{$hostname['dst']}</small></td>
 			<td title=\"{$pfb_matchtitle}\">{$feed_match_cell}</td>
 			<td>{$fields[12]}<br />{$fields[18]}</td>
+			<td>—</td>
+			<td>—</td>
 			<td>—</td>
 			</tr>");
 	}
@@ -3982,6 +4024,12 @@ if (!$alert_summary && ($alert_title != 'DNS Reply')) {
 			$filterfieldsarray[1][21]
 		))->setAttribute('title', 'Filter TCP, UDP, DoT, DoH, DoQ or —.');
 		$section->add($group);
+		$group = new Form_Group(NULL);
+		$group->add(new Form_Input('filterlogentries_dnsbllistenerip', 'DNSBL - Receiving IP', 'text', $filterfieldsarray[1][22]))
+			->setAttribute('title', 'Filter the receiving gateway IP at event time, or —.');
+		$group->add(new Form_Input('filterlogentries_dnsbllistenerinterface', 'DNSBL - Receiving interface', 'text', $filterfieldsarray[1][23]))
+			->setAttribute('title', 'Filter the owning interface at event time, not packet ingress, or —.');
+		$section->add($group);
 	}
 }
 
@@ -4063,6 +4111,12 @@ if (!$alert_summary && ($alert_title == 'DNS Reply' || $alert_title == 'Unified 
 		'text',
 		$filterfieldsarray[2][90]
 	))->setAttribute('title', 'Filter TCP, UDP, DoT, DoH, DoQ or —.');
+	$section->add($group);
+	$group = new Form_Group(NULL);
+	$group->add(new Form_Input('filterlogentries_replylistenerip', 'Reply - Receiving IP', 'text', $filterfieldsarray[2][91]))
+		->setAttribute('title', 'Filter the receiving gateway IP at event time, or —.');
+	$group->add(new Form_Input('filterlogentries_replylistenerinterface', 'Reply - Receiving interface', 'text', $filterfieldsarray[2][92]))
+		->setAttribute('title', 'Filter the owning interface at event time, not packet ingress, or —.');
 	$section->add($group);
 }
 
@@ -4312,6 +4366,8 @@ if (!$alert_summary):
 					<th style="max-width:20%;"><?=gettext("Resolved/Feed")?></th>
 					<th style="max-width:20%;"><?=gettext("GeoIP")?></th>
 					<th><?=gettext("Transport")?></th>
+					<th><?=gettext("Receiving IP")?></th>
+					<th title="Owning interface at event time, not packet ingress"><?=gettext("Receiving interface")?></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -4392,6 +4448,8 @@ if (!$alert_summary):
 					<th><?=$logtype == 'DNSBL Python' ? gettext("Domain/Block mode") : gettext("Domain/Referer|URI|Agent")?></th>
 					<th><?=gettext("Feed/Group")?></th>
 					<th><?=gettext("Transport")?></th>
+					<th><?=gettext("Receiving IP")?></th>
+					<th title="Owning interface at event time, not packet ingress"><?=gettext("Receiving interface")?></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -4433,6 +4491,8 @@ if (!$alert_summary):
 					<th style="width:15%"><?=gettext("Resolved")?></th>
 					<th style="width:3%"><?=gettext("GeoIP")?></th>
 					<th><?=gettext("Transport")?></th>
+					<th><?=gettext("Receiving IP")?></th>
+					<th title="Owning interface at event time, not packet ingress"><?=gettext("Receiving interface")?></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -4666,17 +4726,17 @@ if (!$alert_summary):
 				break;
 			case 'DNSBL Block':
 			case 'DNSBL Python':
-				$colspan = "colspan='7'";
+				$colspan = "colspan='9'";
 				$fcounter = $counter['DNSBL'];
 				$pfbfilterlimit = $dnsblfilterlimit;
 				break;
 			case 'DNS Reply':
-				$colspan = "colspan='11'";
+				$colspan = "colspan='13'";
 				$fcounter = $counter['DNS'];
 				$pfbfilterlimit = $dnsfilterlimit;
 				break;
 			case 'Unified':
-				$colspan = "colspan='10'";
+				$colspan = "colspan='12'";
 
 				if ($pfb['filterlogentries']) {
 					$pfbfilterlimit = FALSE;

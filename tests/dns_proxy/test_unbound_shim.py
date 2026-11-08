@@ -141,6 +141,25 @@ def test_reply_callback_gets_the_client_address_in_repinfo() -> None:
     assert (seen["kwargs"]["repinfo"].addr, seen["kwargs"]["repinfo"].port) == ("192.0.2.10", 40000)
 
 
+@pytest.mark.parametrize("kind", ["reply", "reply_cache", "reply_local", "reply_servfail"])
+@pytest.mark.parametrize(("listener", "interface"), [("", ""), ("2001:db8::53", '内网, "guest"\\vlan')])
+def test_reply_callbacks_pass_endpoint_keywords(kind: str, listener: str, interface: str) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def callback(*args: Any, **kwargs: Any) -> bool:
+        seen.append(kwargs)
+        return True
+
+    shim.callbacks[kind] = callback
+    qstate = _qstate()
+    qstate.pfb_listener_ip = listener
+    qstate.pfb_listener_interface = interface
+    shim.fire_reply_callback(kind, qstate, None, 2 if kind == "reply_servfail" else 0)
+    assert len(seen) == 1
+    assert seen[0].get("pfb_listener_ip", "<missing>") == listener
+    assert seen[0].get("pfb_listener_interface", "<missing>") == interface
+
+
 def test_a_raising_reply_callback_is_logged_not_propagated(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = io.StringIO()
     monkeypatch.setattr(sys, "__stderr__", captured)

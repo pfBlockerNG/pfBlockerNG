@@ -189,7 +189,7 @@ func TestOneAddressCannotHoldMoreThanItsShareOfTheDoHAndDoQBudget(t *testing.T) 
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if reply, ok := r.g.resolveShared(r.g.ctx, client, clientDoH, wire, noForward); !ok || len(reply) == 0 {
+				if reply, ok := r.g.resolveShared(r.g.ctx, client, netip.Addr{}, clientDoH, wire, noForward); !ok || len(reply) == 0 {
 					t.Errorf("%s %d: ok=%v, want it admitted and answered", client, i, ok)
 				}
 			}()
@@ -205,7 +205,7 @@ func TestOneAddressCannotHoldMoreThanItsShareOfTheDoHAndDoQBudget(t *testing.T) 
 	hold256(a, "a")
 	over := buildQuery(t, 1, "over.example.", true)
 	for range 2 {
-		if reply, ok := r.g.resolveShared(r.g.ctx, a, clientDoH, over, noForward); ok || reply != nil {
+		if reply, ok := r.g.resolveShared(r.g.ctx, a, netip.Addr{}, clientDoH, over, noForward); ok || reply != nil {
 			t.Fatalf("a 257th query of one address got ok=%v reply=%x, want it refused", ok, reply)
 		}
 	}
@@ -216,7 +216,7 @@ func TestOneAddressCannotHoldMoreThanItsShareOfTheDoHAndDoQBudget(t *testing.T) 
 		t.Fatalf("the log line must not name the client: %s", r.logs.joined())
 	}
 	hold256(b, "b") // the same /64: its own share, and the global budget is then full
-	if reply, ok := r.g.resolveShared(r.g.ctx, netip.MustParseAddr(otherClient), clientDoQ, over, noForward); ok || reply != nil {
+	if reply, ok := r.g.resolveShared(r.g.ctx, netip.MustParseAddr(otherClient), netip.Addr{}, clientDoQ, over, noForward); ok || reply != nil {
 		t.Fatalf("with the global budget full a third address got ok=%v, want it refused too", ok)
 	}
 	close(hold)
@@ -224,7 +224,7 @@ func TestOneAddressCannotHoldMoreThanItsShareOfTheDoHAndDoQBudget(t *testing.T) 
 	if n := r.g.muxInflight.Load(); n != 0 {
 		t.Fatalf("%d queries still counted after every one was answered", n)
 	}
-	if reply, ok := r.g.resolveShared(r.g.ctx, a, clientDoH, over, noForward); !ok || len(reply) == 0 {
+	if reply, ok := r.g.resolveShared(r.g.ctx, a, netip.Addr{}, clientDoH, over, noForward); !ok || len(reply) == 0 {
 		t.Fatalf("the address must have its share back after the drain: ok=%v", ok)
 	}
 }

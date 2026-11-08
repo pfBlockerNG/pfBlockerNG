@@ -119,4 +119,18 @@ final class DnsReplyStandaloneRowsTest extends TestCase
 		// Then only that one requires CSV quoting; the daemon copies all rows verbatim.
 		$this->assertSame(['hostile-name'], $splits);
 	}
+	public function testReceivingAddressCanonicalizationNeverTurnsAnUnspecifiedMappedAddressIntoAnEndpoint(): void
+	{
+		$base = str_getcsv(self::fixture()['rows'][array_key_first(self::fixture()['rows'])][0], ',', '"', '');
+		foreach (['::ffff:192.0.2.53' => '192.0.2.53', '2001:0db8:0:0::53' => '2001:db8::53', '::ffff:0.0.0.0' => '—'] as $input => $expected) {
+			ob_start();
+			convert_dns_reply_log('Reports', [...$base, 'UDP', $input, 'Localhost']);
+			$html = (string) ob_get_clean();
+			$this->assertStringContainsString('<td>' . $expected . '</td>', $html);
+			$this->assertSame(13, substr_count($html, '<td'));
+			if ($expected === '—') {
+				$this->assertSame(2, substr_count($html, '<td>—</td>'));
+			}
+		}
+	}
 }

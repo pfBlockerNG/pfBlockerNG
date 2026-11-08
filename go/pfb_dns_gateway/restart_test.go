@@ -147,7 +147,7 @@ func emptyReply(context.Context, []byte) []byte { return nil }
 func resolveVia(srv *server, wire []byte, fwd forwarder) []byte {
 	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
 	defer cancel()
-	return srv.g.resolve(ctx, netip.MustParseAddr("127.0.0.1"), clientTCP, wire, fwd)
+	return srv.g.resolve(ctx, netip.MustParseAddr("127.0.0.1"), netip.Addr{}, clientTCP, wire, fwd)
 }
 
 // taggedPid is the pid a forward-tagged decider put after the echoed query.

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -873,5 +874,38 @@ func TestStopClosesTheTLSListeners(t *testing.T) {
 			_ = c.Close()
 			t.Fatalf("%s %s still accepts connections after stop()", name, addr)
 		}
+	}
+}
+
+func TestDoHTrustedIPv4ClientKeepsIPv6ListenerEndpoint(t *testing.T) {
+	r := newRig(t, rigConfig{acl: aclMixed})
+	m := newTLSMaterial(t)
+	ln, err := bindTCP("::1", 0)
+	if err != nil {
+		t.Fatalf("IPv6 listener unavailable: %v", err)
+	}
+	addr := ln.Addr().(*net.TCPAddr).AddrPort()
+	r.g.serveDoH(ln, m.certs.doh(), parseTrusted([]string{"::1"}, r.logs.logf))
+	c := newDoHClient(t, addr, m, dohOptions{source: "::1"})
+	req := c.get(dnsParam(buildQuery(t, 0, "allowed.example.", true)))
+	req.Header.Set("X-Forwarded-For", "192.0.2.7")
+	done := make(chan clientResult, 1)
+	go func() {
+		resp, err := c.http.Do(req)
+		if err != nil {
+			done <- clientResult{err: err}
+			return
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		done <- clientResult{body: body, err: err}
+	}()
+	q := r.recvTransportQuery()
+	if q.ip != "192.0.2.7" || q.listenerIP != "::1" || q.listenerInterface != "" {
+		t.Fatalf("QUERY client=%q listener=%q interface=%q, want independently normalized 192.0.2.7 ::1 and empty interface", q.ip, q.listenerIP, q.listenerInterface)
+	}
+	r.p.send(tAnswer, q.id, echoAnswer(decidedQuery{wire: q.wire}))
+	if len(awaitClient(t, done)) == 0 {
+		t.Fatal("empty IPv6 socket answer")
 	}
 }

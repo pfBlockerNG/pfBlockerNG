@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"testing"
 	"time"
@@ -10,8 +11,8 @@ import (
 
 // issue #3517: the decider learns which kind of client asked (a datagram client has a UDP size limit, a stream
 // client has none), and a plain-UDP client's chase is asked again over TCP when Unbound truncated it. The QUERY
-// payload layout here is the one of docs/misc/dns-gateway-protocol.md: u8 transport, u8 n, n bytes of client IP
-// text, then the DNS wire.
+// payload layout is transport, length-prefixed client and listener IP text, a u16be-length-prefixed
+// listener interface description, then the DNS wire.
 
 const (
 	transportTCP byte = 0
@@ -22,10 +23,12 @@ const (
 )
 
 type transportQuery struct {
-	id        uint32
-	transport byte
-	ip        string
-	wire      []byte
+	id                uint32
+	transport         byte
+	ip                string
+	listenerIP        string
+	listenerInterface string
+	wire              []byte
 }
 
 // recvTransportQuery reads the next frame, which must be a QUERY, and splits its payload by the documented layout.
@@ -39,7 +42,28 @@ func (r *rig) recvTransportQuery() transportQuery {
 		r.t.Fatalf("QUERY payload %x does not start with a valid transport byte, the IP text length and the IP text", payload)
 	}
 	n := int(payload[1])
-	return transportQuery{id: id, transport: payload[0], ip: string(payload[2 : 2+n]), wire: payload[2+n:]}
+	pos := 2 + n
+	if len(payload) < pos+1 {
+		r.t.Fatalf("QUERY listener metadata missing: no listener IP length after client")
+	}
+	listenerLen := int(payload[pos])
+	pos++
+	if len(payload) < pos+listenerLen+2 {
+		r.t.Fatalf("QUERY listener metadata truncated: listener IP length=%d, remaining=%d", listenerLen, len(payload)-pos)
+	}
+	listenerIP := string(payload[pos : pos+listenerLen])
+	pos += listenerLen
+	interfaceLen := int(binary.BigEndian.Uint16(payload[pos : pos+2]))
+	pos += 2
+	if len(payload) < pos+interfaceLen+12 {
+		r.t.Fatalf("QUERY listener metadata truncated: interface length=%d, remaining=%d (need interface and DNS header)", interfaceLen, len(payload)-pos)
+	}
+	listenerInterface := string(payload[pos : pos+interfaceLen])
+	pos += interfaceLen
+	return transportQuery{
+		id: id, transport: payload[0], ip: string(payload[2 : 2+n]),
+		listenerIP: listenerIP, listenerInterface: listenerInterface, wire: payload[pos:],
+	}
 }
 
 func (r *rig) requireNoUpstreamQuery(what string) {

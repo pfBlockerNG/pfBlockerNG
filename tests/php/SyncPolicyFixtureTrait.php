@@ -46,6 +46,7 @@ trait SyncPolicyFixtureTrait
 			'gen/pfb_syntax_highlight',
 			'gen/log_syslog',
 			'gen/pfb_metrics_export',
+			'gen/pfb_metrics_client_ip',
 			'gen/pfb_dns_listen_interface',
 			'gen/pfb_dns_listen_added',
 

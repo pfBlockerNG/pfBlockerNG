@@ -21,8 +21,8 @@ IP logs self-sufficient for rendering complete table; render-time pass is freshn
 
 | Log | Writer | Attribution filled at event time |
 | --- | ------ | -------------------------------- |
-| `dnsbl.log` | `pfb_unbound.py` (`_log_dnsbl` path) | full verdict: block type, group, evaluated domain/zone, feed, query type, client transport |
-| `dns_reply.log` | `pfb_unbound.py` | reply type/record, TTL, resolved address, GeoIP iso code, client transport |
+| `dnsbl.log` | `pfb_unbound.py` (`_log_dnsbl` path) | full verdict: block type, group, evaluated domain/zone, feed, query type, client transport, receiving IP and address-owner interface |
+| `dns_reply.log` | `pfb_unbound.py` | reply type/record, TTL, resolved address, GeoIP iso code, client transport, receiving IP and address-owner interface |
 | `ip_block/permit/match.log` | filterlog daemon (`pfb_daemon_filterlog`, `pfblockerng.inc`) | pf tracker → pfB rule/alias, matching feed + IP/CIDR entry (`find_reported_header()`), GeoIP (`mmdblookup`), rDNS, ASN (3 CSV columns, issue #1369 — see below) |
 | `unified.log` | filterlog daemon (sole writer, ADR-38 Amendments 1/4) | reformatted IP rows; byte-identical RFC4180 DNSBL and DNS-reply rows |
 
@@ -34,7 +34,20 @@ DNSBL webserver-hit (block-page load) attributed same way: `pfb_log_event()` (`p
 
 Transport is append-only: DNSBL field **11** follows query type at 10; DNS reply field **10** follows GeoIP at 9 (zero-based). Historical DNSBL rows with 10/11 fields and reply rows with 10 fields retain every existing offset. Reports and Unified show a dedicated Transport column; only exact `TCP`, `UDP`, `DoT`, `DoH`, `DoQ` strings are accepted. Absent or invalid metadata stays internally `Unknown` and displays **—**, never a guessed UDP value. The existing regex filters use DNSBL key 21 and reply key 90 against the displayed transport; use `^—$` to select unavailable metadata.
 
-The daemon copies both DNS CSV rows verbatim into Unified, preserving quoted commas/quotes in names and answers. DNSBL's existing single syslog emission accepts both 11- and 12-field logical rows and adds a canonical `transport=` token only when the new field exists; DNS reply still never emits a syslog event. The retired DNS reply formatter is removed; the pre-existing DNSBL schema helper remains unchanged. Stats retain their old indexed fields, and raw log downloads retain original bytes.
+The daemon copies both DNS CSV rows verbatim into Unified, preserving quoted commas/quotes in names and answers. DNS reply still never emits a syslog event. Stats retain their old indexed fields, and raw log downloads retain original bytes.
+
+### Receiving endpoint (issue #3757)
+
+DNSBL appends receiving IP/interface at indexes **12/13** after transport; DNS Reply appends them at **11/12**.
+The existing client and Resolved IP columns keep their meanings. Reports and Unified show Receiving IP and Receiving
+interface columns; regex filter keys are DNSBL **22/23** and reply **91/92**. Missing or malformed metadata displays
+**—**, including historical rows and native/observer events without a supported endpoint API; `^—$` selects it.
+
+The gateway snapshots the actual receiving socket address and its pfSense address-owner description at query time.
+This is not the client-subnet-derived Interface column or packet ingress. A loopback-owned VIP is `Localhost`,
+and later VIP moves/renames do not reinterpret stored rows. DNSBL's existing syslog path accepts the new 14-field
+rows alongside older 11/12-field rows and adds known `listener_ip`/`listener_interface` tokens using existing escaping.
+The separate opt-in client-metrics setting does not remove client addresses from logs.
 
 ### ASN CSV columns, no back-compat for log entries (issue #1369, ADR-38 Amendment 3)
 

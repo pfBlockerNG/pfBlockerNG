@@ -293,7 +293,7 @@ class DecisionGateway:
         """QUERY `wire` as `client`, answer every FORWARD from `unbound`, and return the final ANSWER's wire."""
         text = client.encode("ascii")
         byte = ("TCP", "UDP", "DoT", "DoH", "DoQ").index(transport)
-        await self.send(QUERY, fid, bytes([byte, len(text)]) + text + wire)
+        await self.send(QUERY, fid, bytes([byte, len(text)]) + text + b"\x00\x00\x00" + wire)
         while True:
             ftype, got, payload = await self.recv()
             assert got == fid

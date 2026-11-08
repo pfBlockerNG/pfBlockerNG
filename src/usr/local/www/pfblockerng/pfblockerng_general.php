@@ -113,6 +113,7 @@ $pconfig['pfb_syntax_highlight']	= PfbConfig::read('gen/pfb_syntax_highlight')->
 
 // #3522: metrics export toggle (default off). Read here for the render; the save gate reads the POST.
 $pconfig['pfb_metrics_export']	= PfbConfig::read('gen/pfb_metrics_export')->value;
+$pconfig['pfb_metrics_client_ip'] = PfbConfig::read('gen/pfb_metrics_client_ip')->value;
 
 // Read once per request: the save gate and the render both depend on them.
 $metrics_export_pkg = is_pkg_installed('pfSense-pkg-node_exporter');
@@ -272,50 +273,57 @@ if ($_POST) {
 
 			// The gate above refuses a new 'on' without node_exporter, so only a valid value reaches here.
 			$pfb['gconfig']['pfb_metrics_export']	= $metrics_export_posted ?: '';
+			$pfb['gconfig']['pfb_metrics_client_ip'] = pfb_filter($_POST['pfb_metrics_client_ip'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
 
-			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
-			write_config('[pfBlockerNG] save General settings');
-			$runtime_model = pfb_schedule_runtime_config();
-			$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
-			$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();
-			try {
-				$runtime_timezone = $runtime_timezone instanceof DateTimeZone
-					? $runtime_timezone : new DateTimeZone((string) $runtime_timezone);
-			} catch (Throwable) {
-				$runtime_timezone = NULL;
-			}
-			$candidate_file = @tempnam(sys_get_temp_dir(), 'pfb_sched_');
-			$candidate_dir = $candidate_file === FALSE ? '' : $candidate_file . '.d';
-			if ($candidate_file !== FALSE) {
-				@unlink($candidate_file);
-				if (!@mkdir($candidate_dir, 0700)) {
-					$candidate_dir = '';
+			$privacy_error = pfb_metrics_client_save(pfb_cfg_toggle_read($pfb['gconfig']['pfb_metrics_client_ip']), static function () use (&$pfb): void {
+				PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
+				write_config('[pfBlockerNG] save General settings');
+			});
+			if ($privacy_error !== NULL) {
+				$input_errors[] = $privacy_error;
+			} else {
+				$runtime_model = pfb_schedule_runtime_config();
+				$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
+				$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();
+				try {
+					$runtime_timezone = $runtime_timezone instanceof DateTimeZone
+						? $runtime_timezone : new DateTimeZone((string) $runtime_timezone);
+				} catch (Throwable) {
+					$runtime_timezone = NULL;
 				}
-			}
-			// issue #2855: name the stage that failed instead of collapsing six checks into
-			// one boolean. pfb_schedule_runtime_config() logs the 'config' detail itself.
-			$cache_stage = pfb_schedule_cache_stage(
-				$runtime_model, $runtime_state, $runtime_timezone, $candidate_dir
-			);
-			$cache_ok = $cache_stage === '';
-			if ($candidate_dir !== '') {
-				foreach (scandir($candidate_dir) ?: [] as $candidate_artifact) {
-					if ($candidate_artifact !== '.' && $candidate_artifact !== '..') {
-						@unlink("{$candidate_dir}/{$candidate_artifact}");
+				$candidate_file = @tempnam(sys_get_temp_dir(), 'pfb_sched_');
+				$candidate_dir = $candidate_file === FALSE ? '' : $candidate_file . '.d';
+				if ($candidate_file !== FALSE) {
+					@unlink($candidate_file);
+					if (!@mkdir($candidate_dir, 0700)) {
+						$candidate_dir = '';
 					}
 				}
-				@rmdir($candidate_dir);
+				// issue #2855: name the stage that failed instead of collapsing six checks into
+				// one boolean. pfb_schedule_runtime_config() logs the 'config' detail itself.
+				$cache_stage = pfb_schedule_cache_stage(
+					$runtime_model, $runtime_state, $runtime_timezone, $candidate_dir
+				);
+				$cache_ok = $cache_stage === '';
+				if ($candidate_dir !== '') {
+					foreach (scandir($candidate_dir) ?: [] as $candidate_artifact) {
+						if ($candidate_artifact !== '.' && $candidate_artifact !== '..') {
+							@unlink("{$candidate_dir}/{$candidate_artifact}");
+						}
+					}
+					@rmdir($candidate_dir);
+				}
+				$pfb['save'] = TRUE;
+				sync_package_pfblockerng();
+				if (!$cache_ok) {
+					logger(LOG_NOTICE, localize_text('General save: schedule-cache generation failed - %s',
+						pfb_schedule_cache_stage_label($cache_stage)), LOG_PREFIX_PKG_PFBLOCKERNG);
+				}
+				header('Location: ' . pfb_general_schedule_save_redirect(
+					$cache_ok, '/pfblockerng/pfblockerng_general.php?schcache=failed&schstage=' . $cache_stage
+				));
+				exit;
 			}
-			$pfb['save'] = TRUE;
-			sync_package_pfblockerng();
-			if (!$cache_ok) {
-				logger(LOG_NOTICE, localize_text('General save: schedule-cache generation failed - %s',
-					pfb_schedule_cache_stage_label($cache_stage)), LOG_PREFIX_PKG_PFBLOCKERNG);
-			}
-			header('Location: ' . pfb_general_schedule_save_redirect(
-				$cache_ok, '/pfblockerng/pfblockerng_general.php?schcache=failed&schstage=' . $cache_stage
-			));
-			exit;
 		}
 	}
 }
@@ -440,6 +448,17 @@ if (pfb_metrics_export_box_disabled($metrics_export_pkg, $metrics_export_stored_
 $section->addInput($metrics_export_box)->setHelp(
 	'Publish Prometheus metrics through the node_exporter package\'s textfile collector (<code>/var/tmp/node_exporter/pfblockerng.prom</code>).'
 	. ($metrics_export_pkg ? '' : '<br /><span class="text-danger">Requires the <a href="/pkg_mgr_install.php?pkg=pfSense-pkg-node_exporter">node_exporter package</a>.</span>')
+);
+
+$section->addInput(new Form_Checkbox(
+	'pfb_metrics_client_ip',
+	'Client IP metrics',
+	gettext('Enable'),
+	pfb_cfg_toggle_read($pconfig['pfb_metrics_client_ip']) === PfbToggle::On,
+	'on'
+))->setHelp(
+	'Expose client identities to configured scrapers. This creates high-cardinality series, especially with changing IPv6 privacy addresses.'
+	. '<br />Enabling applies after Apply/reload. Disabling purges stored client metric identities at Save; existing logs keep their normal retention.'
 );
 
 $section->addInput(new Form_Select(

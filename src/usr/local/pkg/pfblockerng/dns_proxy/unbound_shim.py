@@ -299,10 +299,14 @@ class module_qstate:
         client_port: int = 0,
         query_flags: int = 0,
         transport: str = "Unknown",
+        listener_ip: str = "",
+        listener_interface: str = "",
     ) -> None:
         self.qinfo = qinfo
         self.query_flags = query_flags
         self.pfb_transport = transport
+        self.pfb_listener_ip = listener_ip
+        self.pfb_listener_interface = listener_interface
         self.return_msg: DnsMsg | None = None
         self.return_rcode = RCODE_NOERROR
         self.ext_state = [0] * _MODULE_COUNT
@@ -326,7 +330,18 @@ def fire_reply_callback(kind: str, qstate: module_qstate, rep: reply_info | None
         return
     assert qstate.mesh_info.reply_list is not None
     try:
-        callback(qstate.qinfo, qstate, rep, rcode, None, None, None, repinfo=qstate.mesh_info.reply_list.query_reply)
+        callback(
+            qstate.qinfo,
+            qstate,
+            rep,
+            rcode,
+            None,
+            None,
+            None,
+            repinfo=qstate.mesh_info.reply_list.query_reply,
+            pfb_listener_ip=qstate.pfb_listener_ip,
+            pfb_listener_interface=qstate.pfb_listener_interface,
+        )
     except Exception as exc:  # pythonmod logs a failing callback and still sends the reply
         log_err(f"inplace callback {kind} failed: {exc!r}")
 

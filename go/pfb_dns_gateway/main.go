@@ -52,37 +52,38 @@ const (
 )
 
 type config struct {
-	listen       []string
-	listen53     []string
-	port         int
-	upstream     string
-	timeout      time.Duration
-	unboundConf  string
-	user         string
-	dotPort      int
-	tlsPEM       string
-	ctlSocket    string
-	dotListen    []string
-	dotListen853 []string
-	dohListen    []string
-	dohPort      int
-	dohTrusted   []string
-	doqListen    []string
-	doqListen853 []string
-	doqPort      int
-	dotPort6     int // zero inherits the IPv4 port
-	dohPort6     int
-	doqPort6     int
-	noModule     bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
-	observer     bool
-	replyLog     bool
-	readyFile    string   // --ready-file: the gateway's pid is published here once it serves; "" = none
-	dnsName      string   // --dns-name: DDR's target and the name answered A and AAAA; "" = none
-	nameAnswers  []string // --dns-name-answer: LOCAL=ADDR[,ADDR] values, each parsed by newNameAnswers; need dnsName
-	ddr          bool     // --ddr: answer resolver.arpa. and designate the encrypted transports (RFC 9462); needs dnsName
-	ddrDoH443    []string // --ddr-doh-443: addresses DDR advertises DoH on without a port, each parsed by doh443Set; need ddr
-	dohListen443 []string // --doh-listen-443: addresses DoH is bound on port 443
-	decider      []string
+	listen             []string
+	listen53           []string
+	port               int
+	upstream           string
+	timeout            time.Duration
+	unboundConf        string
+	user               string
+	dotPort            int
+	tlsPEM             string
+	ctlSocket          string
+	dotListen          []string
+	dotListen853       []string
+	dohListen          []string
+	dohPort            int
+	dohTrusted         []string
+	doqListen          []string
+	doqListen853       []string
+	doqPort            int
+	dotPort6           int // zero inherits the IPv4 port
+	dohPort6           int
+	doqPort6           int
+	noModule           bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
+	observer           bool
+	replyLog           bool
+	readyFile          string   // --ready-file: the gateway's pid is published here once it serves; "" = none
+	dnsName            string   // --dns-name: DDR's target and the name answered A and AAAA; "" = none
+	nameAnswers        []string // --dns-name-answer: LOCAL=ADDR[,ADDR] values, each parsed by newNameAnswers; need dnsName
+	ddr                bool     // --ddr: answer resolver.arpa. and designate the encrypted transports (RFC 9462); needs dnsName
+	ddrDoH443          []string // --ddr-doh-443: addresses DDR advertises DoH on without a port, each parsed by doh443Set; need ddr
+	dohListen443       []string // --doh-listen-443: addresses DoH is bound on port 443
+	listenerInterfaces []string
+	decider            []string
 
 	// Test seams; the zero value is production.
 	drop           func() error      // replaces the privilege drop to --user
@@ -152,6 +153,8 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	var ddrDoH443, dohListen443 listFlag
 	fs.Var(&ddrDoH443, "ddr-doh-443", "ADDR, repeatable: DDR leaves the port out of the DoH record on ADDR, so clients use 443 (something on 443 in front of DoH); needs --ddr")
 	fs.Var(&dohListen443, "doh-listen-443", "DoH address on port 443, repeatable")
+	var interfaces listFlag
+	fs.Var(&interfaces, "listener-interface", "IP=BASE64UTF8 interface description for a listener address, repeatable")
 	if err := fs.Parse(args[:split]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
@@ -164,6 +167,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	}
 	cfg.listen, cfg.dotListen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dotListen, dohListen, dohTrusted, doqListen
 	cfg.nameAnswers, cfg.ddrDoH443, cfg.dohListen443 = answers, ddrDoH443, dohListen443
+	cfg.listenerInterfaces = interfaces
 	cfg.listen53, cfg.dotListen853, cfg.doqListen853 = listen53, dotListen853, doqListen853
 	if err := cfg.validate(); err != nil {
 		return config{}, err
@@ -255,6 +259,9 @@ func (c config) validate() error {
 	}
 	if _, err := doh443Set(c.ddrDoH443); err != nil {
 		return err
+	}
+	if _, err := listenerInterfaceTable(c.listenerInterfaces); err != nil {
+		return fmt.Errorf("--listener-interface: %w", err)
 	}
 	for _, fixed := range []struct {
 		flag   string
@@ -471,6 +478,11 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 
 	g := newGateway(acl, dec, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
 	g.ddr, g.names = ddrAnswers, names
+	interfaces, err := listenerInterfaceTable(cfg.listenerInterfaces)
+	if err != nil {
+		return abort(err)
+	}
+	g.listenerInterfaces.Store(&interfaces)
 	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{}),
 		swapped: make(chan struct{}), retiring: map[*child]*Decider{}}
 	set := newListenerSet(g, cfg, secure)

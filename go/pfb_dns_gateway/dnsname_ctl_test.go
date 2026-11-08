@@ -231,13 +231,16 @@ func TestAnAddressTableCutShortIsRefused(t *testing.T) {
 	k.requireInitialTable(t, "after a cut-short body")
 }
 
-// A gateway started without --dns-name has no table to replace.
-func TestTheAddressTableVerbNeedsADNSName(t *testing.T) {
+// DNS-name rows still require --dns-name; an empty owner snapshot does not.
+func TestTheAddressTableNameRowsNeedADNSName(t *testing.T) {
 	k := newCtlRig(t) // no names
-	for label, body := range map[string]string{"a table": tableLine("10.0.0.2=10.0.0.2"), "an empty table": ""} {
+	for label, body := range map[string]string{"a table": tableLine("10.0.0.2=10.0.0.2")} {
 		if got := k.send(t, addressTableFrame(body)); got != "error: started without --dns-name" {
 			t.Fatalf("%s: reply %q, want `error: started without --dns-name`", label, got)
 		}
+	}
+	if got := k.send(t, addressTableFrame("")); got != "ok" {
+		t.Fatalf("empty owner snapshot: reply %q, want ok", got)
 	}
 	if n := k.logsAbout("address table:"); n != 0 {
 		t.Fatalf("%d `address table:` log lines, want none", n)

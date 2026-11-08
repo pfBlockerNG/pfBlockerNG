@@ -236,6 +236,7 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerng/config/0/pfb_syntax_highlight',
 		// issue #3522: metrics export toggle (node_exporter textfile collector)
 		'installedpackages/pfblockerng/config/0/pfb_metrics_export',
+		'installedpackages/pfblockerng/config/0/pfb_metrics_client_ip',
 		// installedpackages/pfblockerngsafesearch (flat section, no /config/0)
 		'installedpackages/pfblockerngsafesearch/safesearch_enable',
 		'installedpackages/pfblockerngsafesearch/safesearch_youtube',

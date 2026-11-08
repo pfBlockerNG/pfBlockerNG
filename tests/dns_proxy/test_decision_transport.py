@@ -3,11 +3,12 @@ itself to a datagram client's UDP size and to nothing for a stream client.
 
 The REAL `pfb_dns_proxy.py --decision-fd` process runs with the shipped pfb_unbound.py (SafeSearch loaded) or with no
 module; this test plays the gateway on the other end of its socketpair. The QUERY payload is packed here from
-docs/misc/dns-gateway-protocol.md: u8 transport (TCP=0, UDP=1, DoT=2, DoH=3, DoQ=4), u8 n, n IP bytes, DNS wire.
+docs/misc/dns-gateway-protocol.md: transport, client IP, listener IP/interface, DNS wire.
 """
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import struct
 import subprocess
@@ -16,11 +17,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import decision_service
 import dnswire
 import pfb_dns_proxy
 import pytest
 from frontend_constants import ALLOWED, PROTO_DIR
-from frontend_helpers import WATCHDOG, FakeUnbound, build_query, watched
+from frontend_helpers import WATCHDOG, FakeUnbound, build_query, watchdog, watched
+from test_decision_service import _start_with
 
 QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6
 STREAM, DATAGRAM = 0, 1
@@ -43,7 +46,7 @@ def frame(ftype: int, fid: int, payload: bytes = b"") -> bytes:
 
 
 def query_frame(fid: int, wire: bytes, transport: int, ip: str = CLIENT) -> bytes:
-    return frame(QUERY, fid, bytes([transport, len(ip)]) + ip.encode("ascii") + wire)
+    return frame(QUERY, fid, bytes([transport, len(ip)]) + ip.encode("ascii") + b"\x00\x00\x00" + wire)
 
 
 class Gateway:
@@ -296,3 +299,161 @@ def test_an_undefined_transport_byte_is_a_protocol_error_and_exit_1(transport: i
     assert tail == b"", "a QUERY with an unknown transport gets no ANSWER and no DROP: the session is over"
     assert child.returncode == 1
     assert "decision protocol error:" in stderr
+
+
+def endpoint_payload(
+    client: bytes = b"192.0.2.10", listener: bytes = b"192.0.2.53", interface: bytes = b"", transport: int = 0
+) -> bytes:
+    """Pack the endpoint QUERY contract independently of the service parser."""
+    return (
+        bytes([transport, len(client)])
+        + client
+        + bytes([len(listener)])
+        + listener
+        + struct.pack("!H", len(interface))
+        + interface
+        + build_query(ALLOWED, qid=0x3757)
+    )
+
+
+def endpoint_exchange(payloads: list[bytes]) -> tuple[list[tuple[int, int, bytes]], list[tuple]]:
+    """Real socketpair → serve → resolve, draining each decision before sending the next."""
+    calls: list[tuple] = []
+
+    async def resolve(
+        wire: bytes,
+        client_ip: str,
+        forward: decision_service.Forward,
+        *,
+        transport: str,
+        listener_ip: str = "<missing>",
+        listener_interface: str = "<missing>",
+    ) -> bytes:
+        calls.append((wire, client_ip, transport, listener_ip, listener_interface))
+        return b"endpoint-answer"
+
+    async def scenario() -> list[tuple[int, int, bytes]]:
+        gateway, service, problems = await _start_with(resolve)
+        replies = []
+        try:
+            for fid, payload in enumerate(payloads, 1):
+                await gateway.send(frame(QUERY, fid, payload))
+                replies.append(await gateway.recv())
+        finally:
+            gateway.close()
+            await watchdog(service, "the endpoint decision service to end")
+        assert problems == []
+        return replies
+
+    return asyncio.run(scenario()), calls
+
+
+@pytest.mark.parametrize(("transport", "name"), list(enumerate(("TCP", "UDP", "DoT", "DoH", "DoQ"))))
+@pytest.mark.parametrize(
+    ("client", "listener", "want_client", "want_listener"),
+    [
+        ("2001:db8::10", "192.0.2.53", "2001:db8::10", "192.0.2.53"),
+        ("192.0.2.10", "2001:0DB8:0000::53", "192.0.2.10", "2001:db8::53"),
+        ("::ffff:192.0.2.10", "::ffff:192.0.2.53", "192.0.2.10", "192.0.2.53"),
+    ],
+    ids=["v4-listener-v6-client", "v6-listener-v4-client", "mapped-endpoints"],
+)
+def test_endpoint_query_preserves_wire_and_independent_endpoint_metadata(
+    transport: int, name: str, client: str, listener: str, want_client: str, want_listener: str
+) -> None:
+    interface = '内网, "guest"\\vlan'
+    replies, calls = endpoint_exchange(
+        [endpoint_payload(client.encode("ascii"), listener.encode("ascii"), interface.encode("utf-8"), transport)]
+    )
+    assert calls == [(build_query(ALLOWED, qid=0x3757), want_client, name, want_listener, interface)]
+    assert replies == [(ANSWER, 1, b"endpoint-answer")]
+
+
+@pytest.mark.parametrize(("listener", "want_listener"), [(b"", ""), (b"192.0.2.53", "192.0.2.53")])
+def test_endpoint_unavailable_metadata_is_empty_not_inferred(listener: bytes, want_listener: str) -> None:
+    replies, calls = endpoint_exchange([endpoint_payload(listener=listener)])
+    assert calls == [(build_query(ALLOWED, qid=0x3757), CLIENT, "TCP", want_listener, "")]
+    assert replies == [(ANSWER, 1, b"endpoint-answer")]
+
+
+BAD_ENDPOINT_IPS = [
+    pytest.param(b"\xff", id="non-ascii"),
+    pytest.param(b"not-an-ip", id="invalid-ip"),
+    pytest.param(b"192.0.2.53/24", id="cidr"),
+    pytest.param(b"fe80::53%em0", id="zone"),
+    pytest.param(b"[2001:db8::53]", id="brackets"),
+    pytest.param(b"192.0.2.53:53", id="port"),
+    pytest.param(b"0.0.0.0", id="unspecified-v4"),
+    pytest.param(b"::", id="unspecified-v6"),
+    pytest.param(b"::ffff:0.0.0.0", id="unspecified-mapped"),
+]
+
+
+@pytest.mark.parametrize("bad_ip", BAD_ENDPOINT_IPS)
+@pytest.mark.parametrize("field", ["client", "listener"])
+def test_endpoint_invalid_address_drops_only_that_query(field: str, bad_ip: bytes) -> None:
+    replies, calls = endpoint_exchange([endpoint_payload(**{field: bad_ip}), endpoint_payload()])
+    assert replies == [(DROP, 1, b""), (ANSWER, 2, b"endpoint-answer")]
+    assert calls == [(build_query(ALLOWED, qid=0x3757), CLIENT, "TCP", "192.0.2.53", "")]
+
+
+@pytest.mark.parametrize(
+    "interface",
+    [
+        pytest.param(b"\xff", id="invalid-utf8"),
+        pytest.param(b"lan\ninjected", id="newline"),
+        pytest.param(b"lan\x00", id="nul"),
+        pytest.param(b"lan\t", id="c0-tab"),
+        pytest.param(b"lan\x7f", id="delete"),
+        pytest.param("lan\u0085".encode(), id="c1"),
+    ],
+)
+def test_endpoint_invalid_interface_drops_only_that_query(interface: bytes) -> None:
+    replies, calls = endpoint_exchange([endpoint_payload(interface=interface), endpoint_payload()])
+    assert replies == [(DROP, 1, b""), (ANSWER, 2, b"endpoint-answer")]
+    assert calls == [(build_query(ALLOWED, qid=0x3757), CLIENT, "TCP", "192.0.2.53", "")]
+
+
+def test_endpoint_interface_without_listener_drops_only_that_query() -> None:
+    replies, calls = endpoint_exchange([endpoint_payload(listener=b"", interface=b"LAN"), endpoint_payload()])
+    assert replies == [(DROP, 1, b""), (ANSWER, 2, b"endpoint-answer")]
+    assert calls == [(build_query(ALLOWED, qid=0x3757), CLIENT, "TCP", "192.0.2.53", "")]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(b"", id="missing-transport"),
+        pytest.param(b"\x00", id="missing-client-length"),
+        pytest.param(b"\x00\x00", id="empty-client"),
+        pytest.param(b"\x00\x09short", id="short-client"),
+        pytest.param(b"\x00\x09192.0.2.1", id="missing-listener-length"),
+        pytest.param(b"\x00\x09192.0.2.1\x09short", id="short-listener"),
+        pytest.param(b"\x00\x09192.0.2.1\x00", id="empty-listener-missing-interface-length"),
+        pytest.param(b"\x00\x09192.0.2.1\x00\x00", id="empty-listener-short-interface-length"),
+        pytest.param(b"\x00\x09192.0.2.1\x0a192.0.2.53", id="listener-missing-interface-length"),
+        pytest.param(b"\x00\x09192.0.2.1\x0a192.0.2.53\x00", id="listener-short-interface-length"),
+        pytest.param(b"\x00\x09192.0.2.1\x00\x00\x05LAN", id="empty-listener-short-interface"),
+        pytest.param(b"\x00\x09192.0.2.1\x0a192.0.2.53\x00\x05LAN", id="listener-short-interface"),
+        pytest.param(endpoint_payload(transport=5), id="invalid-transport-five"),
+        pytest.param(endpoint_payload(transport=255), id="invalid-transport-255"),
+    ],
+)
+def test_endpoint_structural_errors_are_fatal(payload: bytes) -> None:
+    async def resolve(wire: bytes, client_ip: str, forward: decision_service.Forward, **metadata: object) -> None:
+        return None
+
+    async def scenario() -> None:
+        gateway, service, _ = await _start_with(resolve)
+        try:
+            await gateway.send(frame(QUERY, 1, payload))
+            gateway.writer.write_eof()
+            with pytest.raises(decision_service.ProtocolError):
+                await watchdog(service, "the malformed endpoint session to end")
+        finally:
+            gateway.close()
+            if not service.done():
+                service.cancel()
+                await asyncio.gather(service, return_exceptions=True)
+
+    asyncio.run(scenario())

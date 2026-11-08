@@ -98,4 +98,84 @@ final class AlertsTransportTest extends TestCase
 		}
 	}
 
+	public function testReceivingEndpointsPreserveEventSnapshotAndAnswerAcrossReportsAndFilters(): void
+	{
+		foreach ([false, true] as $reply) {
+			foreach (['Reports', 'Unified'] as $mode) {
+				foreach (['TCP', 'UDP', 'DoT', 'DoH', 'DoQ'] as $transport) {
+					foreach (['192.0.2.53', '2001:db8::53'] as $ip) {
+						$interface = 'LAN, "旧" <b>event</b>';
+						$row = [...$this->row($reply), $transport, $ip, $interface];
+						$stream = fopen('php://temp', 'w+');
+						fputcsv($stream, $row, ',', '"', '');
+						rewind($stream);
+						$fields = fgetcsv($stream, 0, ',', '"', '');
+						fclose($stream);
+						$GLOBALS['dnsbl_int'] = [$ip => 'renamed-today'];
+						$GLOBALS['pfb']['filterlogentries'] = true;
+						$keys = $reply ? [91, 92] : [22, 23];
+						$GLOBALS['filterfieldsarray'][$reply ? 2 : 1] = [$keys[0] => '^' . preg_quote($ip, '/') . '$', $keys[1] => '^' . preg_quote($interface, '/') . '$'];
+						$html = $this->render($reply, $mode, $fields);
+						$this->assertStringContainsString('<td>' . $ip . '</td>', $html);
+						$this->assertStringContainsString('<td>' . pfb_hsc($interface) . '</td>', $html);
+						$this->assertStringNotContainsString('<b>event</b>', $html);
+						$this->assertStringNotContainsString('renamed-today', $html);
+						$this->assertSame($mode === 'Unified' ? 12 : ($reply ? 13 : 9), substr_count($html, '<td'));
+						$this->assertStringContainsString('10.0.0.5', $html);
+						if ($reply) {
+							$this->assertStringContainsString('<td title="">1.2.3.4</td>', $html);
+						}
+						foreach ($keys as $key) {
+							$GLOBALS['filterfieldsarray'][$reply ? 2 : 1] = [$key => '^not-this-endpoint$'];
+							$this->assertSame('', $this->render($reply, $mode, $fields));
+						}
+					}
+				}
+			}
+		}
+	}
+
+	public function testHistoricalAndInvalidReceivingEndpointsRemainUnavailable(): void
+	{
+		foreach ([false, true] as $reply) {
+			foreach (['Reports', 'Unified'] as $mode) {
+				$base = $this->row($reply);
+				$rows = [$base, [...$base, 'UDP']];
+				if (!$reply) {
+					$rows[] = array_slice($base, 0, 10);
+				}
+				foreach (['', '0.0.0.0', '::', '192.0.2.1/32', '[::1]', 'fe80::1%em0', '<script>', []] as $bad) {
+					$rows[] = [...$base, 'UDP', $bad, 'LAN'];
+				}
+				$rows[] = [...$base, 'UDP', '192.0.2.53', "bad\ninterface"];
+				foreach ($rows as $row) {
+					$keys = $reply ? [91, 92] : [22, 23];
+					$GLOBALS['pfb']['filterlogentries'] = true;
+					$GLOBALS['filterfieldsarray'][$reply ? 2 : 1] = [$keys[1] => '^—$'];
+					$html = $this->render($reply, $mode, $row);
+					$this->assertStringContainsString('<td>—</td>', $html);
+					$this->assertSame($mode === 'Unified' ? 12 : ($reply ? 13 : 9), substr_count($html, '<td'));
+					$this->assertStringNotContainsString('<script>', $html);
+				}
+			}
+		}
+	}
+
+	public function testControlReceivingInterfaceIsUnavailableWithoutLosingListenerIp(): void
+	{
+		foreach ([FALSE, TRUE] as $reply) {
+			foreach (['Reports', 'Unified'] as $mode) {
+				foreach (["\u{0080}", "\u{0085}", "\u{009f}"] as $control) {
+					$row = [...$this->row($reply), 'UDP', '192.0.2.53', 'bad' . $control . 'interface'];
+					$GLOBALS['pfb']['filterlogentries'] = TRUE;
+					$GLOBALS['filterfieldsarray'][$reply ? 2 : 1] = [$reply ? 92 : 23 => '^—$'];
+					$html = $this->render($reply, $mode, $row);
+					$this->assertStringContainsString('<td>192.0.2.53</td>', $html);
+					$this->assertStringContainsString('<td>—</td>', $html);
+					$this->assertSame($mode === 'Unified' ? 12 : ($reply ? 13 : 9), substr_count($html, '<td'));
+				}
+			}
+		}
+	}
+
 }

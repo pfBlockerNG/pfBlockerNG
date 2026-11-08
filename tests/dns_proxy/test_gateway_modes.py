@@ -164,14 +164,14 @@ def test_with_dnsbl_off_and_reply_logging_on_the_reply_is_one_row_the_reports_ta
     fields = line.split(",")
     assert STAMP.match(fields[1]), f"stamped as the module stamps: {fields[1]!r}"
     [expected] = ROWS["rows"]["a"]  # the row the PHP viewer tests read, for a reply of this shape
-    shaped = [*expected.split(","), "UDP"]
+    shaped = [*expected.split(","), "UDP", pfb_dns.server[0], ""]
     shaped[1], shaped[6], shaped[7] = fields[1], name.rstrip("."), ALLOWED_CLIENT
     assert fields == shaped, "the existing row, with the name and the real client of this query"
     php = "echo json_encode(fgetcsv(STDIN, 0, ',', '\"', ''));"  # the Reports readers' own call
     parsed = json.loads(
         subprocess.run(["php", "-r", php], input=line, capture_output=True, check=True, text=True).stdout
     )
-    assert len(parsed) == 11 and parsed[0] == "DNS-reply" and parsed[10] == "UDP"
+    assert len(parsed) == 13 and parsed[0] == "DNS-reply" and parsed[10:] == ["UDP", pfb_dns.server[0], ""]
 
 
 def test_with_dnsbl_off_and_reply_logging_off_no_log_is_written(

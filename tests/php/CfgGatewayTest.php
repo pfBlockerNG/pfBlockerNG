@@ -1685,6 +1685,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_syntax_highlight',
 			// issue #3522: metrics export toggle (node_exporter textfile collector)
 			'pfb_metrics_export',
+			'pfb_metrics_client_ip',
 
 			// pfblockerngdnsblsettings/config/0 scalars
 			'pfb_dnsbl',

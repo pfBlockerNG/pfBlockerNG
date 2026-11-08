@@ -122,8 +122,9 @@ type gateway struct {
 	doqListenerClosed                                          func() // test seam: DoQ's closer calls it once ln.Close() has returned, before it waits for the accept loop
 	deciderRead                                                func() // test seam: resolve calls it between reading the active decider and asking it
 
-	ddr   *ddr         // issue #3583: answers resolver.arpa. itself, after the ACL and before the decider; nil = off
-	names *nameAnswers // issue #3694: answers A and AAAA for the DNS name, after the ACL and DDR; nil = no DNS name
+	ddr                *ddr         // issue #3583: answers resolver.arpa. itself, after the ACL and before the decider; nil = off
+	names              *nameAnswers // issue #3694: answers A and AAAA for the DNS name, after the ACL and DDR; nil = no DNS name
+	listenerInterfaces atomic.Pointer[map[netip.Addr]string]
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -232,14 +233,19 @@ func (g *gateway) screen(client, local netip.Addr, plain, udp bool, wire []byte)
 // resolve asks the decider and serves its FORWARDs through fwd. nil
 // means the decider dropped the query; a decider that fails or does not decide within 2 x timeout + grace gets
 // SERVFAIL built here.
-func (g *gateway) resolve(ctx context.Context, client netip.Addr, transport clientTransport, wire []byte, fwd forwarder) []byte {
+func (g *gateway) resolve(ctx context.Context, client, listener netip.Addr, transport clientTransport, wire []byte, fwd forwarder) []byte {
 	ctx, cancel := context.WithTimeout(ctx, 2*g.timeout+g.grace)
 	defer cancel()
+	listener = listener.Unmap().WithZone("")
+	label := ""
+	if table := g.listenerInterfaces.Load(); table != nil && listener.IsValid() && !listener.IsUnspecified() {
+		label = (*table)[listener]
+	}
 	dec := g.dec.Load()
 	if g.deciderRead != nil {
 		g.deciderRead()
 	}
-	answer, err := g.decide(ctx, dec, client, transport, wire, fwd)
+	answer, err := g.decide(ctx, dec, client, listener, label, transport, wire, fwd)
 	if err != nil {
 		return buildServfail(wire)
 	}
@@ -248,17 +254,17 @@ func (g *gateway) resolve(ctx context.Context, client netip.Addr, transport clie
 
 // decide asks dec. A query that dec refused because a restart retired it before the query registered (nothing was sent
 // to it) is asked of the active decider, once; every other failure is the query's.
-func (g *gateway) decide(ctx context.Context, dec *Decider, client netip.Addr, transport clientTransport, wire []byte, fwd forwarder) ([]byte, error) {
-	answer, err := dec.Decide(ctx, client, transport, wire, fwd)
+func (g *gateway) decide(ctx context.Context, dec *Decider, client, listener netip.Addr, label string, transport clientTransport, wire []byte, fwd forwarder) ([]byte, error) {
+	answer, err := dec.Decide(ctx, client, listener, label, transport, wire, fwd)
 	if errors.Is(err, errDeciderRetired) {
-		return g.dec.Load().Decide(ctx, client, transport, wire, fwd)
+		return g.dec.Load().Decide(ctx, client, listener, label, transport, wire, fwd)
 	}
 	return answer, err
 }
 
 // resolveShared is resolve under the cap DoH and DoQ share: they carry many queries on one connection, so their
 // queries in flight (each holds an upstream socket) are counted apart from UDP's. ok is false over the cap.
-func (g *gateway) resolveShared(ctx context.Context, client netip.Addr, transport clientTransport, wire []byte, fwd forwarder) (reply []byte, ok bool) {
+func (g *gateway) resolveShared(ctx context.Context, client, listener netip.Addr, transport clientTransport, wire []byte, fwd forwarder) (reply []byte, ok bool) {
 	if !g.muxAddrs.take(client, g.muxPerAddr, "DoH and DoQ queries", g.logf) {
 		return nil, false
 	}
@@ -275,5 +281,5 @@ func (g *gateway) resolveShared(ctx context.Context, client netip.Addr, transpor
 			g.muxOverload.Store(false)
 		}
 	}()
-	return g.resolve(ctx, client, transport, wire, fwd), true
+	return g.resolve(ctx, client, listener, transport, wire, fwd), true
 }

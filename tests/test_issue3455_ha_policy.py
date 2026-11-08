@@ -173,6 +173,16 @@ def test_every_seeded_leaf_both_nodes_hold_differs_between_them(hp: ModuleType) 
     assert same == [], f"seeded local leaves equal on both nodes (they would prove nothing): {same}"
 
 
+def test_client_identity_metrics_seeds_opposite_node_local_privacy_choices(hp: ModuleType) -> None:
+    path = f"{hp.GEN}/pfb_metrics_client_ip"
+
+    assert path in _registry_local_paths()
+    assert hp.node_local_leaves("A", vip_uniqid="u")[path] == "on"
+    assert hp.node_local_leaves("B", vip_uniqid="u")[path] == ""
+    assert path not in hp.UNSEEDED_LOCAL_KEYS
+    assert path not in hp.BASELINE_POLICY_LEAVES
+
+
 def test_every_sync_local_registry_key_is_seeded_on_a_node_or_excluded_with_its_reason(hp: ModuleType) -> None:
     registry = _registry_local_paths()
     seeded = (

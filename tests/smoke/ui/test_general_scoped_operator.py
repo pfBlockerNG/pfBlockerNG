@@ -61,7 +61,7 @@ import pytest
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render
 from .test_render_smoke import software_panel_forced
-from .webui import WebUI, looks_like_login_page
+from .webui import WebUI, looks_like_login_page, scrape_form_fields
 
 if TYPE_CHECKING:
     import requests
@@ -488,3 +488,53 @@ def test_cli_gateway_write_fails_closed_writesystem_succeeds(
         # Safety net: guarantee pfb_keep is back to its pre-test raw value even if
         # the snippet above raised before reaching its own writeSystem() restore.
         helpers.config_restore_state(vm, PFB_KEEP_CFG, orig_state)
+
+
+def _require_node_exporter_absent(vm: helpers.SmokeVM) -> None:
+    result = helpers.php_eval(
+        vm,
+        r"""
+require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+echo "\nPFB3757:NODE_EXPORTER:" . (is_pkg_installed('pfSense-pkg-node_exporter') ? 'present' : 'absent') . "\n";
+""",
+    )
+    assert result.returncode == 0, f"node_exporter package probe failed: {result.stdout!r} {result.stderr!r}"
+    actual = _extract_sentinel(result.stdout, "PFB3757:NODE_EXPORTER:")
+    assert actual == "absent", f"client metrics UI case requires node_exporter absent, found {actual!r}"
+
+
+@pytest.mark.ui_render
+def test_general_client_metrics_default_and_privacy_help(smoke_vm: helpers.SmokeVM, webui: WebUI) -> None:
+    """General exposes a default-off client identity opt-in and its Save/Apply boundaries."""
+    _require_node_exporter_absent(smoke_vm)
+    key = f"{GEN_CFG_SECTION}/pfb_metrics_client_ip"
+    original = helpers.config_get_state(smoke_vm, key)
+    try:
+        helpers.config_restore_state(smoke_vm, key, (False, ""))
+        response = webui.get(GENERAL_PAGE)
+        render = evaluate_render(GENERAL_PAGE, response.status_code, response.text, GENERAL_MARKERS)
+        assert render.ok, render.detail
+        assert 'name="pfb_metrics_client_ip"' in response.text, "client metrics checkbox missing"
+        assert "pfb_metrics_client_ip" not in scrape_form_fields(response.text), "client metrics must default off"
+        for text in ("configured scrapers", "IPv6 privacy addresses", "Apply/reload", "Save"):
+            assert text in response.text, f"missing client privacy help: {text}"
+    finally:
+        helpers.config_restore_state(smoke_vm, key, original)
+
+
+def test_general_client_metrics_save_on_off(smoke_vm: helpers.SmokeVM, webui: WebUI) -> None:
+    """A real General POST persists both directions without coupling collection to node_exporter."""
+    _require_node_exporter_absent(smoke_vm)
+    key = f"{GEN_CFG_SECTION}/pfb_metrics_client_ip"
+    original = helpers.config_get_state(smoke_vm, key)
+    try:
+        _set_config_value(smoke_vm, key, "")
+        assert helpers.config_get(smoke_vm, key) == "", "before: client metrics must be off"
+        for posted, expected in (("on", "on"), ("", "")):
+            response = webui.post(GENERAL_PAGE, {"pfb_metrics_client_ip": posted}, timeout=GENERAL_SAVE_TIMEOUT)
+            render = evaluate_render(GENERAL_PAGE, response.status_code, response.text, GENERAL_MARKERS)
+            assert render.ok, render.detail
+            assert helpers.config_get(smoke_vm, key) == expected, f"client metrics Save expected {expected!r}"
+            assert ("pfb_metrics_client_ip" in scrape_form_fields(response.text)) == (expected == "on")
+    finally:
+        helpers.config_restore_state(smoke_vm, key, original)

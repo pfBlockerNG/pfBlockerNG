@@ -22,6 +22,17 @@ final class MetricsExportToggleTest extends TestCase
 		$GLOBALS['config'] = [];
 	}
 
+	public function testClientMetricsDefaultOffRoundTripAndLocalOwnership(): void
+	{
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_metrics_client_ip'));
+		$this->assertSame('local', pfb_cfg_registry()['gen/pfb_metrics_client_ip']['sync']);
+		$this->assertNotEmpty(pfb_cfg_registry()['gen/pfb_metrics_client_ip']['no_grandfather']);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_metrics_client_ip'));
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_metrics_client_ip'));
+	}
+
 	public function testRegistryDefaultIsOff(): void
 	{
 		$this->assertSame('', pfb_cfg_registry()['gen/pfb_metrics_export']['default']);

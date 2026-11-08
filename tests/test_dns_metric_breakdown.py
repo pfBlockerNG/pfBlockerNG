@@ -241,7 +241,7 @@ def test_upstream_metrics_keep_transport_without_changing_csv(
         ("Upstream", "TXT", "TCP", 1),
         ("Upstream", "TXT", "UDP", 1),
     ]
-    assert lines[-1].rstrip().endswith(",TXT,Unknown")
+    assert lines[-1].rstrip().endswith(",TXT,Unknown,,")
 
 
 def test_local_resolver_requests_are_not_counted(
@@ -298,9 +298,21 @@ def test_detail_failure_rolls_back_aggregate_before_retry(
 
     monkeypatch.setattr(pfb_unbound.time, "sleep", release_trigger)
     task = (
-        ("resolver", "A", "UDP")
+        ("resolver", "A", "UDP", "", "", "", "")
         if database == pfb_unbound.DB_RESOLVER
-        else ("dnsbl", "First", "First", "custom", pfb_unbound._snapshot.group_epochs[("First", "custom")], "A", "UDP")
+        else (
+            "dnsbl",
+            "First",
+            "First",
+            "custom",
+            pfb_unbound._snapshot.group_epochs[("First", "custom")],
+            "A",
+            "UDP",
+            "",
+            "",
+            "",
+            "",
+        )
     )
     pfb_unbound.pfb_db_enqueue(task)
     with sqlite3.connect(path) as connection:
@@ -347,9 +359,21 @@ def test_worker_flushes_dimensions_once(
 
     work = FlushQueue()
     monkeypatch.setattr(pfb_unbound, "pfb_db_queue", work)
-    pfb_unbound.pfb_db_enqueue(("resolver", "A", "UDP"))
+    pfb_unbound.pfb_db_enqueue(("resolver", "A", "UDP", "", "", "", ""))
     pfb_unbound.pfb_db_enqueue(
-        ("dnsbl", "First", "First", "custom", pfb_unbound._snapshot.group_epochs[("First", "custom")], "A", "UDP")
+        (
+            "dnsbl",
+            "First",
+            "First",
+            "custom",
+            pfb_unbound._snapshot.group_epochs[("First", "custom")],
+            "A",
+            "UDP",
+            "",
+            "",
+            "",
+            "",
+        )
     )
     work.put(("stop",))
     pfb_unbound.pfb_db_worker()

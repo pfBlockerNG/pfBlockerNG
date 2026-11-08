@@ -35,9 +35,9 @@ def test_upstream_callback_keeps_numeric_metric_type_and_csv_unknown(
                 "SELECT qtype, transport, count FROM dns_metric_blocks ORDER BY qtype"
             ).fetchall() == [("A", "DoH", 1), ("TYPE65400", "DoH", 1), ("TYPE65401", "DoH", 1)]
         assert [next(csv.reader(io.StringIO(line)))[10:] for line in lines] == [
-            ["A", "DoH"],
-            ["Unknown", "DoH"],
-            ["Unknown", "DoH"],
+            ["A", "DoH", "", ""],
+            ["Unknown", "DoH", "", ""],
+            ["Unknown", "DoH", "", ""],
         ]
     finally:
         pfb_unbound._db_close(pfb_unbound.DB_DNSBL)

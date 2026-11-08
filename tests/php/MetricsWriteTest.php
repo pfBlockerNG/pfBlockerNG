@@ -117,6 +117,283 @@ final class MetricsWriteTest extends TestCase
 		pfb_metrics_configure_cron(TRUE, $dir);
 	}
 
+	public function testClientPrivacySaveCoalescesBothDatabasesAndRotatesEpochs(): void
+	{
+		foreach (['dnsbl_info' => 'dns_metric_blocks', 'dnsbl_resolver' => 'dns_metric_queries'] as $path => $table) {
+			$this->sqlite($GLOBALS['pfb'][$path], [
+				"CREATE TABLE {$table} (qtype TEXT, transport TEXT, listener_ip TEXT, listener_interface TEXT, client_ip TEXT, count INTEGER);",
+				"INSERT INTO {$table} VALUES ('A','UDP','192.0.2.1','LAN','198.51.100.1',2),('A','UDP','192.0.2.1','LAN','198.51.100.2',3);",
+				'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+				"INSERT INTO dns_metric_settings VALUES (0,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+			]);
+		}
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip', 'on');
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		}));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_metrics_client_ip'));
+		foreach (['dnsbl_info' => 'dns_metric_blocks', 'dnsbl_resolver' => 'dns_metric_queries'] as $path => $table) {
+			$db = new SQLite3($GLOBALS['pfb'][$path]);
+			$this->assertSame(5, $db->querySingle("SELECT sum(count) FROM {$table}"));
+			$this->assertSame(1, $db->querySingle("SELECT count(*) FROM {$table}"));
+			$this->assertSame('', $db->querySingle("SELECT client_ip FROM {$table}"));
+			$this->assertSame(0, $db->querySingle('SELECT client_ip FROM dns_metric_settings'));
+			$this->assertNotSame(str_repeat('a', 32), $db->querySingle('SELECT epoch FROM dns_metric_settings'));
+			$db->close();
+		}
+	}
+
+	public function testClientPrivacyFailedSecondDatabaseKeepsSettingAndExactFirstSum(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_blocks (qtype TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('A','198.51.100.1',2),('A','198.51.100.2',3);",
+		]);
+		file_put_contents($GLOBALS['pfb']['dnsbl_resolver'], 'corrupt');
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip', 'on');
+		$saved = FALSE;
+		$error = pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): void {
+			$saved = TRUE;
+		});
+		$this->assertStringContainsString('still enabled', $error);
+		$this->assertFalse($saved);
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_metrics_client_ip'));
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$this->assertSame(5, $db->querySingle('SELECT sum(count) FROM dns_metric_blocks'));
+		$this->assertSame('', $db->querySingle('SELECT client_ip FROM dns_metric_blocks'));
+		$db->close();
+		unlink($GLOBALS['pfb']['dnsbl_resolver']);
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		}));
+	}
+
+	public function testUnrelatedPrivacySaveDoesNotReadCorruptAccounting(): void
+	{
+		file_put_contents($GLOBALS['pfb']['dnsbl_info'], 'corrupt');
+		$saved = FALSE;
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): void {
+			$saved = TRUE;
+		}));
+		$this->assertTrue($saved);
+	}
+
+
+	public function testCurrentEndpointRowsCoalesceOnlySuppressedClients(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0,20,0);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, listener_ip TEXT, listener_interface TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES ('A','UDP','192.0.2.1','Län,\"\\','198.51.100.1',2),('A','UDP','192.0.2.1','Län,\"\\','198.51.100.2',3),('A','UDP','::1','Localhost','198.51.100.1',1);",
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER, epoch TEXT);',
+			"INSERT INTO dns_metric_settings VALUES (0,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		$s = pfb_metrics_collect();
+		$this->assertTrue($s['source_up']['resolver_db']);
+		$this->assertCount(2, $s['resolver_detail']);
+		$this->assertSame(6, array_sum(array_column($s['resolver_detail'], 'count')));
+		$this->assertSame(['', ''], array_column($s['resolver_detail'], 'client_ip'));
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip', 'on');
+		$s = pfb_metrics_collect();
+		$this->assertTrue($s['source_up']['resolver_db']);
+		$this->assertCount(3, $s['resolver_detail']);
+		$this->assertSame('198.51.100.1', $s['resolver_detail'][0]['client_ip']);
+		$this->assertSame(str_repeat('a', 32), $s['client_policy_epochs'][$GLOBALS['pfb']['dnsbl_resolver']]);
+	}
+
+	public function testOldClientPublisherCannotReturnAfterOffOnEpochRotation(): void
+	{
+		mkdir("{$this->root}/node");
+		$this->enableExport("{$this->root}/node");
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip', 'on');
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0,5,0);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, listener_ip TEXT, listener_interface TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES ('A','UDP','192.0.2.1','LAN','198.51.100.1',5);",
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER, epoch TEXT);',
+			"INSERT INTO dns_metric_settings VALUES (0,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		$snapshot = pfb_metrics_collect();
+		$body = pfb_metrics_render($snapshot);
+		$this->assertStringContainsString('client_ip="198.51.100.1"', $body);
+		$this->assertTrue(pfb_metrics_publish($body, "{$this->root}/node", 10.0, $snapshot['client_policy_epochs']));
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		}, "{$this->root}/node"));
+		$this->assertFileDoesNotExist("{$this->root}/node/pfblockerng.prom");
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function (): void {
+			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		}, "{$this->root}/node"));
+		$this->assertFalse(pfb_metrics_publish($body, "{$this->root}/node", 10.0, $snapshot['client_policy_epochs']));
+		$this->assertTrue(pfb_metrics_write("{$this->root}/node"));
+		$this->assertStringNotContainsString('client_ip=', (string) file_get_contents("{$this->root}/node/pfblockerng.prom"));
+	}
+
+	public function testPrivacyTransactionAbortRollsBackCountsAndPolicy(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_blocks (qtype TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('A','198.51.100.1',2),('A','198.51.100.2',3);",
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER, epoch TEXT);',
+			"INSERT INTO dns_metric_settings VALUES (0,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+			"CREATE TRIGGER refuse BEFORE INSERT ON dns_metric_blocks BEGIN SELECT RAISE(ABORT,'refuse'); END;",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$this->assertStringContainsString('refuse', pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+			self::fail('failed privacy transaction must not persist');
+		}));
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$this->assertSame(5, $db->querySingle('SELECT sum(count) FROM dns_metric_blocks'));
+		$this->assertSame(2, $db->querySingle('SELECT count(*) FROM dns_metric_blocks'));
+		$this->assertSame(2, $db->querySingle("SELECT count(*) FROM dns_metric_blocks WHERE client_ip<>''"));
+		$this->assertSame(str_repeat('a', 32), $db->querySingle('SELECT epoch FROM dns_metric_settings'));
+		$db->close();
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_metrics_client_ip'));
+	}
+
+	public function testLockedRequiredPrivacyTransitionDoesNotSaveFalseOff(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_blocks (qtype TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('A','198.51.100.1',5);",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$db->exec('BEGIN IMMEDIATE');
+		try {
+			$error = pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+				self::fail('locked privacy transaction must not persist');
+			});
+			$this->assertStringContainsString('still enabled', $error);
+			$this->assertSame(5, $db->querySingle('SELECT sum(count) FROM dns_metric_blocks'));
+			$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_metrics_client_ip'));
+		} finally {
+			$db->exec('ROLLBACK');
+			$db->close();
+		}
+	}
+
+	/** @return array<string,array{string,string}> */
+	public static function hostileEndpointLabels(): array
+	{
+		return [
+			'malformed listener' => ['listener_ip', 'bad'],
+			'unspecified v4' => ['listener_ip', '0.0.0.0'],
+			'unspecified v6' => ['listener_ip', '::'],
+			'brackets' => ['listener_ip', '[::1]'],
+			'zone' => ['listener_ip', 'fe80::1%lo0'],
+			'prefix' => ['listener_ip', '192.0.2.1/24'],
+			'client hostname' => ['client_ip', 'host.example'],
+			'client zone' => ['client_ip', 'fe80::1%lo0'],
+			'control interface' => ['listener_interface', "LAN\nforged"],
+			'C1 interface' => ['listener_interface', "LAN\u{0085}forged"],
+			'invalid UTF8 interface' => ['listener_interface', "LAN\xff"],
+		];
+	}
+
+	#[DataProvider('hostileEndpointLabels')]
+	public function testInvalidEndpointLabelDropsOnlyItsSource(string $field, string $value): void
+	{
+		$row = ['listener_ip' => '192.0.2.1', 'listener_interface' => 'LAN', 'client_ip' => '198.51.100.1'];
+		$row[$field] = $value;
+		$values = implode(',', array_map(static fn (string $text): string => "'" . SQLite3::escapeString($text) . "'", array_values($row)));
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0,5,0);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, listener_ip TEXT, listener_interface TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES ('A','UDP',{$values},5);",
+		]);
+		$s = pfb_metrics_collect();
+		$this->assertFalse($s['source_up']['resolver_db']);
+		$this->assertTrue($s['source_up']['dnsbl_db']);
+		$this->assertNull($s['resolver_queries']);
+	}
+
+	public function testPublisherReadsFreshSavedClientPermissionUnderLock(): void
+	{
+		mkdir("{$this->root}/node");
+		$this->enableExport("{$this->root}/node");
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER, epoch TEXT);',
+			"INSERT INTO dns_metric_settings VALUES (0,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		$GLOBALS['pfb_test_config_read_hook'] = static function (): void {
+			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		};
+		try {
+			$this->assertFalse(pfb_metrics_publish('counter{client_ip="198.51.100.1"} 5', "{$this->root}/node", 10.0,
+				[$GLOBALS['pfb']['dnsbl_resolver'] => str_repeat('a', 32)]));
+			$this->assertFileDoesNotExist("{$this->root}/node/pfblockerng.prom");
+		} finally {
+			unset($GLOBALS['pfb_test_config_read_hook']);
+		}
+	}
+
+	public function testClientPolicyFenceDoesNotMistakeInterfaceTextForClientLabel(): void
+	{
+		mkdir("{$this->root}/node");
+		$this->enableExport("{$this->root}/node");
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0,5,0);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, listener_ip TEXT, listener_interface TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES ('A','UDP','192.0.2.1','client_ip=lab','',5);",
+		]);
+		$snapshot = pfb_metrics_collect();
+		$body = pfb_metrics_render($snapshot);
+		$this->assertStringContainsString('listener_interface="client_ip=lab"', $body);
+		$this->assertStringNotContainsString(',client_ip="', $body);
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_metrics_client_ip'));
+		$this->assertTrue(pfb_metrics_publish($body, "{$this->root}/node", 10.0, $snapshot['client_policy_epochs']));
+		$this->assertSame($body, file_get_contents("{$this->root}/node/pfblockerng.prom"));
+	}
+
+	public function testMissingAccountingDoesNotGateExplicitPreferenceTransitions(): void
+	{
+		foreach ([PfbToggle::On, PfbToggle::Off] as $desired) {
+			$this->assertNull(pfb_metrics_client_save($desired, static function () use ($desired): void {
+				PfbConfig::write('gen/pfb_metrics_client_ip', $desired);
+			}));
+			$this->assertSame($desired, PfbConfig::read('gen/pfb_metrics_client_ip'));
+			$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_info']);
+			$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_resolver']);
+		}
+	}
+
+	public function testUnrelatedSaveWhileOnDoesNotReconcileUnavailableAccounting(): void
+	{
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		file_put_contents($GLOBALS['pfb']['dnsbl_info'], 'corrupt');
+		$saved = FALSE;
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function () use (&$saved): void {
+			$saved = TRUE;
+		}));
+		$this->assertTrue($saved);
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_metrics_client_ip'));
+	}
+
+	public function testDatabaseOffPolicySuppressesClientDespiteSavedOnPreference(): void
+	{
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$this->sqlite($GLOBALS['pfb']['dnsbl_resolver'], [
+			'CREATE TABLE resolver (row INTEGER, totalqueries INTEGER, queries INTEGER);',
+			'INSERT INTO resolver VALUES (0,5,0);',
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, listener_ip TEXT, listener_interface TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_queries VALUES ('A','UDP','192.0.2.1','LAN','198.51.100.1',2),('A','UDP','192.0.2.1','LAN','198.51.100.2',3);",
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER, epoch TEXT);',
+			"INSERT INTO dns_metric_settings VALUES (0,0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		$snapshot = pfb_metrics_collect();
+		$this->assertTrue($snapshot['source_up']['resolver_db']);
+		$this->assertSame([], $snapshot['client_policy_epochs']);
+		$this->assertCount(1, $snapshot['resolver_detail']);
+		$this->assertSame(5, $snapshot['resolver_detail'][0]['count']);
+		$this->assertStringNotContainsString(',client_ip="', pfb_metrics_render($snapshot));
+	}
 
 	public function testDetailCountersPreserveLegacyResidual(): void
 	{

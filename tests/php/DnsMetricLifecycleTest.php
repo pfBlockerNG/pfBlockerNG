@@ -76,8 +76,8 @@ final class DnsMetricLifecycleTest extends TestCase
 		$this->sql([
 			'CREATE TABLE dnsbl (groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER)',
 			"INSERT INTO dnsbl VALUES ('DNSBL_A', 'old', 5, 12), ('DNSBL_B', 'old', 7, 9)",
-			'CREATE TABLE dns_metric_blocks (owner TEXT, origin TEXT, groupname TEXT NOT NULL, qtype TEXT NOT NULL, transport TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(owner,origin,groupname,qtype,transport))',
-			"INSERT INTO dns_metric_blocks VALUES ('DNSBL_A', 'custom', 'DNSBL_A', 'A', 'UDP', 3), ('DNSBL_B', 'custom', 'DNSBL_B', 'AAAA', 'DoH', 4)",
+			"CREATE TABLE dns_metric_blocks (owner TEXT, origin TEXT, groupname TEXT NOT NULL, qtype TEXT NOT NULL, transport TEXT NOT NULL, listener_ip TEXT NOT NULL DEFAULT '', listener_interface TEXT NOT NULL DEFAULT '', client_ip TEXT NOT NULL DEFAULT '', count INTEGER NOT NULL, PRIMARY KEY(owner,origin,groupname,qtype,transport,listener_ip,listener_interface,client_ip))",
+			"INSERT INTO dns_metric_blocks VALUES ('DNSBL_A', 'custom', 'DNSBL_A', 'A', 'UDP', '192.0.2.1', 'LAN', '198.51.100.1', 3), ('DNSBL_B', 'custom', 'DNSBL_B', 'AAAA', 'DoH', '::1', 'Localhost', '', 4)",
 		]);
 		if ($epochs) {
 			$this->sql([
@@ -92,6 +92,47 @@ final class DnsMetricLifecycleTest extends TestCase
 		$this->assertSame(9, $this->value("SELECT counter FROM dnsbl WHERE groupname = 'DNSBL_B'"));
 		$this->assertSame(4, $this->value("SELECT count FROM dns_metric_blocks WHERE groupname = 'DNSBL_B'"));
 		$this->assertSame('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', $this->epoch('DNSBL_B'));
+	}
+
+	public function testClientPermissionApplySeedsMissingDatabasesWithoutChangingExistingEpoch(): void
+	{
+		$priorConfig = $GLOBALS['config'] ?? [];
+		try {
+			$GLOBALS['config'] = [];
+			$GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+			pfb_metrics_client_apply();
+			$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_info']);
+			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+			pfb_metrics_client_apply();
+			$this->assertSame(1, $this->value('SELECT client_ip FROM dns_metric_settings WHERE row=0'));
+			$this->assertSame(1, $this->value('SELECT client_ip FROM dns_metric_settings WHERE row=0', TRUE));
+			$epoch = $this->value('SELECT epoch FROM dns_metric_settings WHERE row=0');
+			pfb_metrics_client_apply();
+			$this->assertSame($epoch, $this->value('SELECT epoch FROM dns_metric_settings WHERE row=0'));
+		} finally {
+			$GLOBALS['config'] = $priorConfig;
+		}
+	}
+
+	public function testAppliedIniCarriesTheOneClientMetricsPreference(): void
+	{
+		$priorConfig = $GLOBALS['config'] ?? [];
+		$priorG = $GLOBALS['g'] ?? [];
+		try {
+			$GLOBALS['config'] = [];
+			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', ['pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443']);
+			config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '192.0.2.53');
+			config_set_path('installedpackages/pfblockerng/config/0/skipfeed', '');
+			$GLOBALS['g']['unbound_chroot_path'] = $this->root;
+			pfb_global();
+			pfb_dnsbl_ini_inputs();
+			$this->assertStringContainsString("metrics_client_ip\t= off\n", pfb_unbound_python_ini('enabled'));
+			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+			$this->assertStringContainsString("metrics_client_ip\t= on\n", pfb_unbound_python_ini('enabled'));
+		} finally {
+			$GLOBALS['config'] = $priorConfig;
+			$GLOBALS['g'] = $priorG;
+		}
 	}
 
 	public function testUpgradeSeedsStableTokensWithoutResettingLegacyCounters(): void
@@ -193,7 +234,7 @@ final class DnsMetricLifecycleTest extends TestCase
 		foreach ($synthetic as $group) {
 			$this->sql([
 				"INSERT INTO dnsbl VALUES ('{$group}', 'old', 2, 8)",
-				"INSERT INTO dns_metric_blocks VALUES ('{$group}', 'builtin', '{$group}', 'MX', '', 2)",
+				"INSERT INTO dns_metric_blocks (owner,origin,groupname,qtype,transport,count) VALUES ('{$group}', 'builtin', '{$group}', 'MX', '', 2)",
 				"INSERT INTO dnsbl_group_epochs VALUES ('{$group}', 'builtin', 'cccccccccccccccccccccccccccccccc')",
 			]);
 		}
@@ -238,8 +279,8 @@ final class DnsMetricLifecycleTest extends TestCase
 			'INSERT INTO resolver VALUES (0, 20, 5)',
 			'CREATE TABLE lastclear (row INTEGER, lastipclear TEXT, lastdnsblclear TEXT)',
 			"INSERT INTO lastclear VALUES (0, 'old', 'old')",
-			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, count INTEGER)',
-			"INSERT INTO dns_metric_queries VALUES ('A', 'UDP', 3)",
+			'CREATE TABLE dns_metric_queries (qtype TEXT, transport TEXT, listener_ip TEXT, listener_interface TEXT, client_ip TEXT, count INTEGER)',
+			"INSERT INTO dns_metric_queries VALUES ('A', 'UDP', '192.0.2.1', 'LAN', '198.51.100.1', 3)",
 		], TRUE);
 	}
 

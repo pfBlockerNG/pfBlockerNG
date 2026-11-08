@@ -48,7 +48,7 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   burst (`control socket: refused a connection from uid N: only uid 0 may push`; the next accepted root connection re-arms the
   line). The mode 0600 on the socket is a second wall, not the one relied on.
 - **Frame.** One message per connection, starting with 4 bytes. `FF FF FF FF`, with nothing after it, is the decider restart
-  below; `FF FF FF FE` and `FF FF FF FD` add and remove a listener, and `FF FF FF FB` replaces the name-answer table (both below).
+  below; `FF FF FF FE` and `FF FF FF FD` add and remove a listener, and `FF FF FF FB` replaces the address tables (below).
   `FF FF FF FC`, with nothing after it, lists the
   listeners: `listening <kind> <host:port>` for each one served, then `refused <kind> <host:port> <reason>` for each start-time
   bind not served since (keyed by kind, then address, so DoT and DoQ on :853 are two lines), then `ok`; a live add clears the
@@ -82,20 +82,19 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   without it; descriptors may ride with any byte of the frame. The shutdown closes every listener, added ones included, and a
   removed one is not closed again. A gateway older than the verbs answers `FF FF FF FE` with
   `error: a message of 4294967294 bytes is not between 1 and 65536`.
-- **Name-answer table** (issue #3694; see DNS name). `FF FF FF FB`, a 4-byte big-endian length 0 to 65536 (judged before the body is
-  read), then a body of lines joined by `\n` (no trailing newline, no empty line), each `dns-name-answer LOCAL=ADDR[,ADDR]` (the value of a `--dns-name-answer` flag)
-  or `ddr-doh-443 ADDR` (the value of a `--ddr-doh-443` flag). `dns-name-answer LOCAL=` explicitly owns the Name without either address family; it is not an empty table. The line kind is its first word. The whole body is checked first: one bad
-  line (an unknown first word, a bad value, a LOCAL named twice, a trailing space or a second address in a `ddr-doh-443` line, CRLF
-  line endings, a `ddr-doh-443` line on a gateway started without `--ddr`) is `error: <reason>` and nothing changes; otherwise both tables,
-  the name answers and the set of addresses DDR advertises DoH on 443 for, are replaced together, atomically, `address table: N name answers`
-  is logged and the reply is `ok`. An empty body empties both. A gateway started without
-  `--dns-name` answers `error: started without --dns-name`, and one older than the verb answers
-  `error: a message of 4294967291 bytes is not between 1 and 65536`. PHP sends it (`pfb_dns_proxy_address_table()`) from
-  `pfb_dns_proxy_listeners_sync()`, after the listener changes, on the update pass and the cron tick, while the rc script's command names
-  `--dns-name` and no restart is pending; a gateway that does not take it is the reason to restart the pair. The update pass masks
-  `--dns-name-answer`, `--ddr-doh-443` and all four fixed-port listen flags out of the rc script before comparison, as it does
-  the listen addresses, so a changed answer, a changed choice of advertised addresses or a Resolver VIP that comes or goes never restarts the
-  proxy; a changed `--dns-name` or DDR setting does. The lines are sent in the command's order.
+- **Address tables** (issues #3694, #3757). `FF FF FF FB`, a 4-byte big-endian length 0 to 65536, then lines joined by
+  `\n` with no trailing newline or empty line. Rows are `dns-name-answer LOCAL=ADDR[,ADDR]`, `ddr-doh-443 ADDR`,
+  or `listener-interface IP=BASE64UTF8`; the first two retain their corresponding flag formats.
+  `dns-name-answer LOCAL=` explicitly owns the Name without either address family. Interface values use canonical
+  standard base64 of valid UTF-8 descriptions without control characters; owner IPs are canonical, unscoped and
+  non-unspecified, and duplicate owner addresses are rejected. The complete body is validated before any table changes.
+  Ownership-only or empty updates work without `--dns-name` or DDR; name rows still require `--dns-name` and DoH 443
+  rows still require DDR. An empty body empties all tables. The gateway replaces each immutable table snapshot, logs
+  only a changed table, and replies `ok`; malformed rows leave the previous tables intact.
+  Repeatable `--listener-interface IP=BASE64UTF8` flags initialize the owner snapshot at startup. PHP uses the existing
+  address-table push after listener synchronization to refresh ownership as well as name/DDR rows; in-flight queries
+  retain their captured description. A gateway older than the verb answers
+  `error: a message of 4294967291 bytes is not between 1 and 65536`.
 - **Decider restart.** The gateway starts a new decider with the first one's command on a new decision socket and waits up to
   30 s for its READY. READY: the new decider takes every query from then on, the reply is `ok` and
   `decider restarted: pid N took over from pid M` is logged; the old one answers the queries it holds (for as long as a query
@@ -260,8 +259,9 @@ ignored; it never stops the gateway.
 
 PROXY header library behaviour (go-proxyproto v0.15.0), pinned by tests: version 1 and version 2 headers from a trusted
 peer are accepted; a LOCAL command and an AF_UNIX source leave the client as the TCP peer; a malformed header, or a
-PROXY command with an unspecified address family, ends the connection. The header sent on to Unbound always names the
-resolved client and the local listener, never the front end's own addresses.
+PROXY command with an unspecified address family, ends the connection. The header sent on to Unbound names the
+resolved client; a cross-family destination is normalized for PROXYv2 independently of the actual receiving IP
+carried to the decider. Neither a proxy header nor HTTP Host can supply the receiving endpoint or its interface.
 
 ## Hostile messages and fuzzing
 

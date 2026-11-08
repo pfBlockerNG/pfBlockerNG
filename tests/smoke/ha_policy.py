@@ -228,6 +228,7 @@ LOCAL_SEEDS: dict[str, tuple[str, str]] = {
     f"{GEN}/pfb_alias_delta_mode": ("replace", "auto"),
     f"{GEN}/pfb_alias_delta_batch": ("256", "1024"),
     f"{GEN}/log_syslog": ("on", ""),
+    f"{GEN}/pfb_metrics_client_ip": ("on", ""),
     # B's own scope is not the sender's: B stays a receiver whatever A sends (R14).
     f"{SYNC}/syncscope": ("policy", "lists"),
     **{f"{GEN}/log_max_{sink}": ("15000", "25000") for sink in _LOG_SINKS},

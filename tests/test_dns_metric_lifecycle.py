@@ -236,7 +236,7 @@ def test_retry_rejects_deleted_incarnation_atomically_and_counts_new_once(
     assert task[0] == "resolver"
     task = P.pfb_db_queue.get_nowait()
     P.pfb_db_queue.task_done()
-    assert task == ("dnsbl", "DNSBL_A", "DNSBL_A", "custom", token, "A", "DoH"), task
+    assert task == ("dnsbl", "DNSBL_A", "DNSBL_A", "custom", token, "A", "DoH", "", "", "", ""), task
     with sqlite3.connect(dnsbl) as con:
         con.execute(
             "CREATE TRIGGER fail_detail BEFORE INSERT ON dns_metric_blocks "
@@ -244,7 +244,7 @@ def test_retry_rejects_deleted_incarnation_atomically_and_counts_new_once(
         )
     monkeypatch.setattr(P.time, "sleep", lambda _: None)
     delta = {("DNSBL_A", "DNSBL_A", "custom", token): 1}
-    detail = {("DNSBL_A", "DNSBL_A", "custom", token, "A", "DoH"): 1}
+    detail = {task[1:]: 1}
     assert not P._db_flush_dnsbl(delta, detail)
     assert rows(dnsbl, "SELECT counter FROM dnsbl WHERE groupname='DNSBL_A'") == [(0,)]
     assert rows(dnsbl, "SELECT * FROM dns_metric_blocks") == []

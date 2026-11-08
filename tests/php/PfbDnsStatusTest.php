@@ -104,6 +104,63 @@ final class PfbDnsStatusTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
+	public function testOwnershipSnapshotIncludesVipInterfaceAndEscapedStartupRows(): void
+	{
+		$this->moved(FALSE);
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => 'Län,"\\', 'opt1' => 'Second'];
+		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '192.0.2.1'];
+		config_set_path('virtualip/vip', [
+			['interface' => 'lo0', 'subnet' => '127.0.0.2'],
+			['interface' => 'lan', 'subnet' => '2001:db8::2'],
+			['interface' => 'lan', 'subnet' => '192.0.2.9'],
+			['interface' => 'missing', 'subnet' => '192.0.2.10'],
+		]);
+		$map = pfb_dns_proxy_address_interfaces();
+		$this->assertSame('Localhost', $map['127.0.0.2']);
+		$this->assertSame('Län,"\\', $map['2001:db8::2']);
+		$this->assertSame('Län,"\\', $map['192.0.2.1']);
+		$this->assertArrayNotHasKey('192.0.2.10', $map);
+		pfb_dns_proxy_service();
+		$command = pfb_dns_proxy_rc_command();
+		$this->assertStringContainsString(' --listener-interface ' . escapeshellarg('2001:db8::2=' . base64_encode('Län,"\\')), $command);
+	}
+
+	public function testOwnershipOnlyHotApplyUsesCurrentSnapshotWithoutDnsName(): void
+	{
+		$this->moved(FALSE);
+		PfbConfig::write('dns/pfb_dns_name', '');
+		$GLOBALS['pfb']['dns_proxy_restart_pending'] = "{$this->dir}/pending";
+		pfb_dns_proxy_service();
+		$record = $this->standIn($GLOBALS['pfb']['dns_proxy_ctl']);
+		$served = ['listening' => array_map(static fn (array $addresses): array => array_fill_keys($addresses, TRUE), pfb_dns_proxy_command_listeners())];
+		$this->assertNull(pfb_dns_proxy_listeners_sync($served));
+		$frames = self::changeFrames($record);
+		$this->assertCount(1, $frames);
+		$this->assertSame('fffffffb', $frames[0]['head']);
+		$this->assertStringContainsString('listener-interface 192.0.2.1=' . base64_encode('LAN'), $frames[0]['body']);
+		$this->assertStringNotContainsString('dns-name-answer', $frames[0]['body']);
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => 'Renamed,"\\'];
+		$this->assertNull(pfb_dns_proxy_listeners_sync($served));
+		$frames = self::changeFrames($record);
+		$this->assertStringContainsString('listener-interface 192.0.2.1=' . base64_encode('Renamed,"\\'), $frames[1]['body']);
+	}
+
+	public function testUnspecifiedInterfaceAddressIsNotAnOwnershipEndpoint(): void
+	{
+		$this->moved(FALSE);
+		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '0.0.0.0'];
+		$map = pfb_dns_proxy_address_interfaces();
+		$this->assertArrayNotHasKey('0.0.0.0', $map);
+	}
+
+	public function testControlInterfaceDescriptionDoesNotReachGatewayFlags(): void
+	{
+		$this->moved(FALSE);
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => "LAN\u{0085}forged"];
+		pfb_dns_proxy_service();
+		$this->assertStringNotContainsString('192.0.2.1=' . base64_encode("LAN\u{0085}forged"), pfb_dns_proxy_rc_command());
+	}
+
 	/** The Resolver as pfB-DNS leaves it: the saved one listened on `lan` (192.0.2.1), with or without DoT. */
 	private function moved(bool $dot, bool $up = TRUE): void
 	{

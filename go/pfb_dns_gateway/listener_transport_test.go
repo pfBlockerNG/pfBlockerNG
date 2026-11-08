@@ -11,12 +11,31 @@ import (
 )
 
 func TestListenerTransportAndClientFamilies(t *testing.T) {
-	for _, host := range []string{"127.0.0.1", "::1"} {
+	testListenerEndpoints(t, false)
+}
+
+func TestWildcardListenerEndpoints(t *testing.T) {
+	testListenerEndpoints(t, true)
+}
+
+func testListenerEndpoints(t *testing.T, wildcard bool) {
+	t.Helper()
+	for _, host := range []string{"127.0.0.1", "127.0.0.2", "::1"} {
 		for _, tc := range []struct {
 			name      string
 			transport byte
 		}{{"tcp", 0}, {"udp", 1}, {"dot", 2}, {"doh", 3}, {"doq", 4}} {
 			t.Run(host+"/"+tc.name, func(t *testing.T) {
+				bindHost, source := host, clientAllowed
+				if netip.MustParseAddr(host).Is6() {
+					source = "::1"
+				}
+				if wildcard {
+					bindHost = "0.0.0.0"
+					if netip.MustParseAddr(host).Is6() {
+						bindHost = "::"
+					}
+				}
 				r := newRig(t, rigConfig{upstream: []upstreamOption{truncatedOverUDP()}})
 				m := newTLSMaterial(t)
 				query := buildQuery(t, 0, "allowed.example.", true)
@@ -24,32 +43,44 @@ func TestListenerTransportAndClientFamilies(t *testing.T) {
 				var ask func() []byte
 				switch tc.name {
 				case "udp":
-					l, err := bindPlain(host, 0)
+					l, err := bindPlain(bindHost, 0)
 					if err != nil {
 						t.Fatal(err)
 					}
 					r.g.serve(l)
-					c, err := net.DialUDP(ipFamily("udp", l.addr()), nil, net.UDPAddrFromAddrPort(l.addr()))
+					addr := netip.AddrPortFrom(netip.MustParseAddr(host), l.addr().Port())
+					var c *net.UDPConn
+					if wildcard {
+						// Reply source selection is outside this endpoint-metadata contract.
+						c, err = net.ListenUDP(ipFamily("udp", addr), &net.UDPAddr{IP: net.ParseIP(source)})
+					} else {
+						c, err = net.DialUDP(ipFamily("udp", addr), &net.UDPAddr{IP: net.ParseIP(source)}, net.UDPAddrFromAddrPort(addr))
+					}
 					if err != nil {
 						t.Fatal(err)
 					}
 					t.Cleanup(func() { _ = c.Close() })
-					if _, err := c.Write(query); err != nil {
+					if wildcard {
+						_, err = c.WriteToUDPAddrPort(query, addr)
+					} else {
+						_, err = c.Write(query)
+					}
+					if err != nil {
 						t.Fatal(err)
 					}
 					ask = func() []byte { return udpReply(t, c) }
 				case "tcp", "dot", "doh":
-					ln, err := bindTCP(host, 0)
+					ln, err := bindTCP(bindHost, 0)
 					if err != nil {
 						t.Fatal(err)
 					}
-					addr := ln.Addr().(*net.TCPAddr).AddrPort()
+					addr := netip.AddrPortFrom(netip.MustParseAddr(host), ln.Addr().(*net.TCPAddr).AddrPort().Port())
 					switch tc.name {
 					case "tcp":
 						r.g.wg.Add(1)
 						go r.g.serveTCP(ln, nil)
 						r.g.closeOnStop(func() { _ = ln.Close() })
-						c, err := net.DialTCP(ipFamily("tcp", addr), nil, net.TCPAddrFromAddrPort(addr))
+						c, err := net.DialTCP(ipFamily("tcp", addr), &net.TCPAddr{IP: net.ParseIP(source)}, net.TCPAddrFromAddrPort(addr))
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -58,12 +89,12 @@ func TestListenerTransportAndClientFamilies(t *testing.T) {
 						ask = func() []byte { return tcpReply(t, c) }
 					case "dot":
 						r.g.serveDoT(ln, m.certs.dot())
-						c := dialDoT(t, addr, m, "")
+						c := dialDoT(t, addr, m, source)
 						tcpSend(t, c, query)
 						ask = func() []byte { return tcpReply(t, c) }
 					case "doh":
 						r.g.serveDoH(ln, m.certs.doh(), nil)
-						c := newDoHClient(t, addr, m, dohOptions{})
+						c := newDoHClient(t, addr, m, dohOptions{source: source})
 						go func() {
 							resp, err := c.http.Do(c.post(dohPath, dohMediaType, query))
 							if err != nil {
@@ -77,14 +108,15 @@ func TestListenerTransportAndClientFamilies(t *testing.T) {
 						ask = func() []byte { return awaitClient(t, done) }
 					}
 				case "doq":
-					udp, err := bindUDP(host, 0)
+					udp, err := bindUDP(bindHost, 0)
 					if err != nil {
 						t.Fatal(err)
 					}
 					if _, err = r.g.serveDoQ(udp, m.certs.doq()); err != nil {
 						t.Fatal(err)
 					}
-					c := dialDoQ(t, udp.LocalAddr().(*net.UDPAddr).AddrPort(), m, "")
+					addr := netip.AddrPortFrom(netip.MustParseAddr(host), udp.LocalAddr().(*net.UDPAddr).AddrPort().Port())
+					c := dialDoQ(t, addr, m, source)
 					go func() {
 						ctx, cancel := context.WithTimeout(context.Background(), watchdog)
 						defer cancel()
@@ -108,8 +140,11 @@ func TestListenerTransportAndClientFamilies(t *testing.T) {
 					ask = func() []byte { return unframe(t, awaitClient(t, done)) }
 				}
 				q := r.recvTransportQuery()
-				if q.transport != tc.transport || netip.MustParseAddr(q.ip) != netip.MustParseAddr(host) {
-					t.Fatalf("QUERY transport=%d client=%s, want %d %s", q.transport, q.ip, tc.transport, host)
+				if q.transport != tc.transport || q.ip != source {
+					t.Fatalf("QUERY transport=%d client=%s, want %d socket client %s", q.transport, q.ip, tc.transport, source)
+				}
+				if q.listenerIP != host || q.listenerInterface != "" {
+					t.Fatalf("QUERY listener=%q interface=%q, want queried destination %q and empty interface without snapshot", q.listenerIP, q.listenerInterface, host)
 				}
 				r.p.send(tForward, q.id, q.wire)
 				seen := r.up.next()
@@ -123,8 +158,8 @@ func TestListenerTransportAndClientFamilies(t *testing.T) {
 				} else {
 					seen = r.up.next()
 					src, _, tcp := parsePP2(t, seen.header)
-					if !seen.tcp || !tcp || src.Addr().String() != host {
-						t.Fatalf("fallback tcp=%v source=%s, want TCP source %s", seen.tcp, src, host)
+					if !seen.tcp || !tcp || src.Addr().String() != source {
+						t.Fatalf("fallback tcp=%v source=%s, want TCP source %s", seen.tcp, src, source)
 					}
 					want = append(echoWithQR(seen)[0], "full-answer"...)
 				}
@@ -152,10 +187,13 @@ func TestDoHAttributionKeepsListenerTransport(t *testing.T) {
 		prefix                    []byte
 	}{
 		{"trusted XFF", "X-Forwarded-For", "2001:db8::7", "2001:db8::7", true, nil},
+		{"trusted mapped XFF", "X-Forwarded-For", "::ffff:192.0.2.7", "192.0.2.7", true, nil},
 		{"trusted Forwarded remains ignored", "Forwarded", "for=192.0.2.7", clientAllowed, true, nil},
 		{"trusted PROXY", "", "", "192.0.2.7", true, pp2TCP("192.0.2.7:51000", "192.0.2.1:443")},
 		{"untrusted XFF", "X-Forwarded-For", "192.0.2.7", clientAllowed, false, nil},
 		{"untrusted Forwarded", "Forwarded", "for=192.0.2.7", clientAllowed, false, nil},
+		{"untrusted Host destination", "Host", "192.0.2.1:443", clientAllowed, false, nil},
+		{"trusted Host destination", "Host", "[2001:db8::1]:443", clientAllowed, true, nil},
 		{"malformed XFF", "X-Forwarded-For", "not-an-address", clientAllowed, true, nil},
 		{"malformed Forwarded", "Forwarded", "for=unknown", clientAllowed, true, nil},
 	} {
@@ -166,10 +204,13 @@ func TestDoHAttributionKeepsListenerTransport(t *testing.T) {
 			if tc.trusted {
 				trusted = []string{"127.0.0.0/8"}
 			}
-			c := newDoHClient(t, r.serveDoH(m, trusted...), m, dohOptions{source: clientAllowed, prefix: tc.prefix})
+			addr := r.serveDoH(m, trusted...)
+			c := newDoHClient(t, addr, m, dohOptions{source: clientAllowed, prefix: tc.prefix})
 			query := buildQuery(t, 0, "allowed.example.", true)
 			req := c.get(dnsParam(query))
-			if tc.header != "" {
+			if tc.header == "Host" {
+				req.Host = tc.value
+			} else if tc.header != "" {
 				req.Header.Set(tc.header, tc.value)
 			}
 			done := make(chan clientResult, 1)
@@ -186,6 +227,9 @@ func TestDoHAttributionKeepsListenerTransport(t *testing.T) {
 			q := r.recvTransportQuery()
 			if q.transport != 3 || q.ip != tc.want {
 				t.Fatalf("QUERY transport=%d client=%s, want 3 %s", q.transport, q.ip, tc.want)
+			}
+			if q.listenerIP != addr.Addr().String() || q.listenerInterface != "" {
+				t.Fatalf("QUERY listener=%q interface=%q, want kernel listener %q and empty interface without snapshot", q.listenerIP, q.listenerInterface, addr.Addr())
 			}
 			r.p.send(tAnswer, q.id, echoAnswer(decidedQuery{wire: q.wire}))
 			if len(awaitClient(t, done)) == 0 {

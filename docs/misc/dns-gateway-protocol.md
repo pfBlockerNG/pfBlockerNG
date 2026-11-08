@@ -35,13 +35,13 @@ All integers are big-endian. The stream is a sequence of frames, in both directi
 | `id` | `u32` | the gateway's id for one client query; 0 for READY |
 | payload | `len - 5` bytes | per type |
 
-`len` is at least 5 and at most 65797 (5 + 1 + 1 + 255 + 65535).
+`len` is at least 5 and at most 131590 (5 + 1 + 1 + 255 + 1 + 255 + 2 + 65535 + 65535).
 
 ## Frame types
 
 | type | direction | name | payload |
 |---|---|---|---|
-| `0x01` | gateway to decider | QUERY | `u8 transport` (TCP=0, UDP=1, DoT=2, DoH=3, DoQ=4), `u8 n`, then `n` bytes of client IP text, then the client's DNS wire (may be empty) |
+| `0x01` | gateway to decider | QUERY | `u8 transport` (TCP=0, UDP=1, DoT=2, DoH=3, DoQ=4), `u8 n` and `n` client-IP bytes, `u8 m` and `m` listener-IP bytes, `u16 k` and `k` interface UTF-8 bytes, then the client's DNS wire (may be empty) |
 | `0x02` | decider to gateway | FORWARD | DNS wire to send to Unbound on behalf of that client |
 | `0x03` | gateway to decider | REPLY | Unbound's reply wire for the last FORWARD of that id; empty = no reply (timeout, error) |
 | `0x04` | decider to gateway | ANSWER | the final DNS wire to send to the client |
@@ -135,28 +135,36 @@ connection ends it the same way. EOF from the decider means it exited; the gatew
 These are fatal. The receiver logs the reason, closes the socket and stops; the decider exits 1 (its log line starts
 `decision protocol error:`), the gateway exits non-zero:
 
-- `len` below 5 or above 65797 (detected on the 4 length bytes, before any payload is read);
+- `len` below 5 or above 131590 (detected on the 4 length bytes, before any payload is read);
 - an unknown type;
 - a type that is only valid in the other direction: FORWARD, ANSWER, DROP or READY from the gateway; QUERY or
   REPLY from the decider;
-- a QUERY whose payload is shorter than its two header bytes, has a transport byte outside 0..4, has `n = 0`, or has
-  fewer than `n` bytes after the `n` byte;
+- a QUERY with a transport byte outside 0..4, an empty client IP, or a missing/truncated client, listener or interface length/body;
 - a QUERY whose id is already in flight;
 - READY more than once, or with an id other than 0 or a payload;
 - an ANSWER with an empty payload (a decider with nothing to send uses DROP);
 - a FORWARD or ANSWER whose DNS wire is longer than 65535 bytes.
 
-These are not, and the session goes on: a QUERY whose IP text is not a valid IP address (not ASCII, `999.1.1.1`,
-`192.0.2.10/24`) is answered with DROP for that id; a QUERY whose DNS wire is empty or shorter than a header gets
-DROP too, as a response or a packet that short is never answered; a FORWARD that arrives while the previous
-FORWARD of its id is still unanswered is ignored.
+These are not, and the session goes on: a QUERY with invalid endpoint metadata is answered with DROP for that id.
+This includes non-ASCII or invalid IP text, a prefix, zone, brackets, port or unspecified address; invalid UTF-8 or
+control characters in the interface; and a nonempty interface without a listener IP. An empty listener and interface
+mean unavailable. A QUERY whose DNS wire is empty or shorter than a header gets DROP too, as a response or a packet
+that short is never answered; a FORWARD that arrives while the previous FORWARD of its id is still unanswered is ignored.
 
-## Client IP text
+## Endpoint metadata
 
-The `n` bytes are the canonical text of the address the gateway puts in the PROXYv2 header: dotted-quad IPv4 or
-RFC 5952 IPv6, an IPv4-mapped IPv6 address already unmapped to IPv4, no zone id, no port, no brackets, no prefix.
-The decider checks it with Python's `ipaddress.ip_address` and hands the text, unchanged, to the module as the
-client address (Group Policy bypass and DNSBL logging key on it).
+Client and listener IPs are independent canonical addresses: dotted-quad IPv4 or RFC 5952 IPv6, with mapped IPv4
+unmapped, no zone, port, brackets or prefix. The decider validates and canonicalizes each with `ipaddress.ip_address`.
+The client address retains the existing Group Policy and DNSBL logging meaning, including trusted DoH attribution.
+
+The listener is the gateway's actual kernel receiving address, captured before PROXYv2 family normalization.
+TCP/DoT use the accepted socket, DoH uses the underlying connection rather than a proxy destination or HTTP Host,
+and DoQ uses QUIC's local address. Wildcard UDP sockets use destination ancillary data; unavailable destination
+metadata stays empty, never `0.0.0.0` or `::`. Upstream sockets and DNS answer addresses are not receiving endpoints.
+
+The interface is the description of the address owner, not packet ingress. Each query captures its label from an
+immutable gateway address-map snapshot; later VIP moves or interface renames cannot reinterpret that event.
+The root-owned configuration/control path supplies that map, including `Localhost` for loopback-owned VIPs.
 
 ## Logged transport
 
@@ -164,7 +172,7 @@ The decider passes the canonical name (`TCP`, `UDP`, `DoT`, `DoH`, `DoQ`) throug
 The existing DNSBL writers append it at index 11 (after qtype at 10), and DNS Reply appends it at index 10 (after ISO
 at 9). No prior column changes position. Readers accept historical rows without the column as `Unknown`; malformed
 metadata is also `Unknown`, never arbitrary CSV text. Helpers without original listener metadata default to `Unknown`.
-Consecutive DNSBL duplicate detection includes transport, so a different listener's block remains visible.
+Consecutive DNSBL duplicate detection includes client, transport and receiving metadata, so different endpoints remain visible.
 
 Standalone native Unbound uses `Unknown`: the supported
 [`pythonmod/interface.i`](https://github.com/NLnetLabs/unbound/blob/master/pythonmod/interface.i) SWIG surface exposes
@@ -172,6 +180,10 @@ Standalone native Unbound uses `Unknown`: the supported
 not `comm_point`, socket type, TLS or HTTP metadata. Neither client ports nor upstream connections prove the original
 listener. The upstream observer report likewise lacks original listener metadata and logs `Unknown`. No query
 correlation or port-based inference is performed.
+
+Receiving IP/interface metadata follows transport without moving prior columns: DNSBL indexes 12/13 and DNS Reply
+indexes 11/12. Unavailable values are empty in CSV and display **—** in Reports. Native Unbound and upstream observer
+paths also leave these fields unavailable: their supported APIs do not prove the original receiving endpoint.
 
 ## Timeouts
 
@@ -185,8 +197,7 @@ correlation or port-based inference is performed.
 
 ## Limits
 
-- Frames: 65797 bytes at most (above); the DNS wire in QUERY, FORWARD, REPLY and ANSWER is at most 65535 bytes, the
-  client IP text at most 255.
+- Frames: 131590 bytes at most (above); DNS wire at most 65535 bytes, each IP text at most 255 bytes, interface UTF-8 at most 65535 bytes.
 - In flight: the protocol sets no cap. The gateway bounds it through its own client limits; the decider starts one
   task per QUERY and keeps no queue.
 

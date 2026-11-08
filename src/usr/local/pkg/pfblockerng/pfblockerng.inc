@@ -4657,12 +4657,21 @@ function pfb_dns_proxy_address_interfaces(): array {
 	foreach (PFB_DNS_PROXY_LOOPBACK as $address) {
 		$labels[$address] = 'Localhost';
 	}
-	foreach ((array) get_configured_interface_with_descr() as $interface => $description) {
+	$interfaces = (array) get_configured_interface_with_descr();
+	foreach ($interfaces as $interface => $description) {
 		foreach ([get_interface_ip($interface), get_interface_ipv6($interface)] as $address) {
 			$packed = is_string($address) ? @inet_pton($address) : FALSE;
-			if ($packed !== FALSE) {
+			if ($packed !== FALSE && trim($packed, "\0") !== '') {
 				$labels[(string) inet_ntop($packed)] ??= (string) $description;
 			}
+		}
+	}
+	foreach (config_get_path('virtualip/vip', []) as $vip) {
+		$interface = $vip['interface'] ?? '';
+		$description = $interface === 'lo0' ? 'Localhost' : ($interfaces[$interface] ?? NULL);
+		$packed = @inet_pton((string) ($vip['subnet'] ?? ''));
+		if ($description !== NULL && $packed !== FALSE && trim($packed, "\0") !== '') {
+			$labels[(string) inet_ntop($packed)] ??= (string) $description;
 		}
 	}
 	return $labels;
@@ -5843,6 +5852,11 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	foreach ($managed as $vip) {
 		$addresses .= ' --listen-53 ' . escapeshellarg($vip);
 	}
+	foreach (pfb_dns_proxy_address_interfaces() as $address => $description) {
+		if (mb_check_encoding($description, 'UTF-8') && !preg_match('/\p{Cc}/u', $description)) {
+			$addresses .= ' --listener-interface ' . escapeshellarg($address . '=' . base64_encode($description));
+		}
+	}
 	$tls = ($saved !== NULL && pfb_dns_proxy_tls_wanted());
 	pfb_dns_proxy_certificate_refresh($tls);
 	$tlsFlags = ($saved === NULL) ? '' : pfb_dns_proxy_tls_flags($warnings);
@@ -6451,9 +6465,14 @@ function pfb_dns_proxy_listeners_sync(?array $served): ?string {
 			pfb_logger("\nDNS proxy: {$label} now listens on {$at} (added live, no restart)", 1);
 		}
 	}
-	// Last, and only for a command that names a DNS Name and with no restart pending (the script may then differ in more than the table):
-	// the whole name-answer table, which the gateway replaces atomically (issue #3694)
-	if (!$pending && ($table = pfb_dns_proxy_command_name_answers()) !== NULL) {
+	// Replace ownership independently of DNS Name/DDR; preserve their configured rows in the same atomic table.
+	if (!$pending) {
+		$table = pfb_dns_proxy_command_name_answers() ?? [];
+		foreach (pfb_dns_proxy_address_interfaces() as $address => $description) {
+			if (mb_check_encoding($description, 'UTF-8') && !preg_match('/\p{Cc}/u', $description)) {
+				$table[] = 'listener-interface ' . $address . '=' . base64_encode($description);
+			}
+		}
 		return pfb_dns_proxy_address_table($table);
 	}
 	return NULL;
@@ -6803,7 +6822,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	} else {
 		$after = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 		$rc_changed = $before !== $after;
-		$mask = "/ --(?:(?:dot|doh|doq)-)?listen(?:-(?:53|443|853))? '[^']*'| --(?:dns-name-answer|ddr-doh-443) '[^']*'/";
+		$mask = "/ --(?:(?:dot|doh|doq)-)?listen(?:-(?:53|443|853))? '[^']*'| --(?:dns-name-answer|ddr-doh-443|listener-interface) '[^']*'/";
 		$addresses_only = $rc_changed && preg_replace($mask, '', (string) $before) === preg_replace($mask, '', (string) $after);
 		if ($deferred) {
 			if ($rc_changed) {
@@ -7036,6 +7055,7 @@ function pfb_package_removal_recover(): array {
 		if (pfb_dnsbl_active()) {
 			// The apply pass's own ini inputs, from the settings config.xml stores
 			pfb_dnsbl_ini_inputs();
+			pfb_metrics_client_apply();
 			@file_put_contents($pfb['unbound_py_conf'], pfb_unbound_python_ini('enabled'), LOCK_EX);
 		}
 
@@ -11026,7 +11046,7 @@ function pfb_metrics_render(array $s): string {
 		$owned[$row['group']][$row['origin']] = ($owned[$row['group']][$row['origin']] ?? 0) + $row['count'];
 	}
 	foreach ($s['dnsbl_detail'] ?? array() as $row) {
-		$key = serialize(array($row['origin'], $row['qtype'], $row['transport']));
+		$key = serialize(array($row['origin'], $row['qtype'], $row['transport'], $row['listener_ip'] ?? '', $row['listener_interface'] ?? '', $row['client_ip'] ?? ''));
 		$breakdown[$row['group']][$key] ??= $row + array('count' => 0);
 		$breakdown[$row['group']][$key]['count'] = ($breakdown[$row['group']][$key]['_sum'] ?? 0) + $row['count'];
 		$breakdown[$row['group']][$key]['_sum'] = $breakdown[$row['group']][$key]['count'];
@@ -11049,6 +11069,11 @@ function pfb_metrics_render(array $s): string {
 			if ($row['transport'] !== '') {
 				$labels['transport'] = $row['transport'];
 			}
+			foreach (array('listener_ip', 'listener_interface', 'client_ip') as $dimension) {
+				if (($row[$dimension] ?? '') !== '') {
+					$labels[$dimension] = $row[$dimension];
+				}
+			}
 			$blocked[] = array($labels, $row['count']);
 		}
 		if ($g['entries'] !== NULL) {
@@ -11066,6 +11091,11 @@ function pfb_metrics_render(array $s): string {
 			$labels = array('qtype' => $row['qtype']);
 			if ($row['transport'] !== '') {
 				$labels['transport'] = $row['transport'];
+			}
+			foreach (array('listener_ip', 'listener_interface', 'client_ip') as $dimension) {
+				if (($row[$dimension] ?? '') !== '') {
+					$labels[$dimension] = $row[$dimension];
+				}
 			}
 			$rows[] = array($labels, $row['count']);
 		}
@@ -11124,6 +11154,15 @@ function pfb_metrics_sqlite_snapshot(string $path, string $sql, string $detail_t
 			}
 			$result->finalize();
 		}
+		if ($db->querySingle("SELECT count(*) FROM sqlite_master WHERE name = 'dns_metric_settings'")) {
+			$policy = $db->query('SELECT row, client_ip, epoch FROM dns_metric_settings')->fetchArray(SQLITE3_ASSOC);
+			if (!is_array($policy) || $policy['row'] !== 0 || !in_array($policy['client_ip'], array(0, 1), TRUE)
+			    || !is_string($policy['epoch']) || !preg_match('/^[0-9a-f]{32}$/D', $policy['epoch'])
+			    || $db->querySingle('SELECT count(*) FROM dns_metric_settings') !== 1) {
+				throw new UnexpectedValueException('Invalid DNS client metric policy');
+			}
+			$rows['client_policy'] = $policy;
+		}
 		if ($owned) {
 			foreach (array('totals' => 'dns_metric_totals', 'epochs' => 'dnsbl_group_epochs') as $key => $table) {
 				if ($db->querySingle("SELECT count(*) FROM sqlite_master WHERE name = '{$table}'")) {
@@ -11150,6 +11189,16 @@ function pfb_metrics_sqlite_snapshot(string $path, string $sql, string $detail_t
 function pfb_metrics_collect(): array {
 	global $pfb;
 	$up = array();
+	$client_policy_epochs = array();
+	$client_on = PfbConfig::read('gen/pfb_metrics_client_ip') === PfbToggle::On;
+	$permission = static function (array $snapshot, string $path) use ($client_on, &$client_policy_epochs): bool {
+		$policy = $snapshot['client_policy'] ?? NULL;
+		if ($client_on && ($policy['client_ip'] ?? 0) === 1) {
+			$client_policy_epochs[$path] = $policy['epoch'];
+			return TRUE;
+		}
+		return FALSE;
+	};
 	$num = static fn ($v): int => is_numeric($v) ? (int) $v : 0;
 	$counter = static function ($value): int {
 		if ((!is_int($value) && !is_string($value))
@@ -11158,24 +11207,50 @@ function pfb_metrics_collect(): array {
 		}
 		return (int) $value;
 	};
-	$details = static function (array $rows, array $totals) use ($counter): array {
-		$seen = array();
-		foreach ($rows as &$row) {
+	$details = static function (array $rows, array $totals, bool $clients = FALSE) use ($counter): array {
+		$seen = $out = array();
+		foreach ($rows as $row) {
 			$group = $row['group'] ?? '';
 			if (!isset($totals[$group]) || !is_string($row['qtype']) || !preg_match('/^(?:[A-Z][A-Z0-9-]{0,15}|TYPE[0-9]{1,5})$/D', $row['qtype']) || !in_array($row['transport'], array('', 'UDP', 'TCP', 'DoT', 'DoH', 'DoQ'), TRUE)
 			    || (str_starts_with($row['qtype'], 'TYPE') && (!ctype_digit(substr($row['qtype'], 4)) || (int) substr($row['qtype'], 4) > 65535))) {
 				throw new UnexpectedValueException('Invalid DNS metric labels');
 			}
-			$key = serialize(array($group, $row['qtype'], $row['transport']));
+			foreach (array('listener_ip', 'client_ip') as $label) {
+				$row[$label] ??= '';
+				if (!is_string($row[$label])) {
+					throw new UnexpectedValueException('Invalid DNS metric address');
+				}
+				if ($row[$label] !== '') {
+					$packed = @inet_pton($row[$label]);
+					if ($packed === FALSE || trim($packed, "\0") === '') {
+						throw new UnexpectedValueException('Invalid DNS metric address');
+					}
+					$row[$label] = (string) inet_ntop($packed);
+				}
+			}
+			$row['listener_interface'] ??= '';
+			if (!is_string($row['listener_interface']) || !mb_check_encoding($row['listener_interface'], 'UTF-8')
+			    || preg_match('/\p{Cc}/u', $row['listener_interface']) || ($row['listener_ip'] === '' && $row['listener_interface'] !== '')) {
+				throw new UnexpectedValueException('Invalid DNS metric interface');
+			}
+			$key = serialize(array($group, $row['qtype'], $row['transport'], $row['listener_ip'], $row['listener_interface'], $row['client_ip']));
 			$row['count'] = $counter($row['count']);
 			if (isset($seen[$key]) || $row['count'] > $totals[$group]) {
 				throw new UnexpectedValueException('Inconsistent DNS metric detail');
 			}
 			$seen[$key] = TRUE;
 			$totals[$group] -= $row['count'];
+			if (!$clients) {
+				$row['client_ip'] = '';
+			}
+			$public = serialize(array($group, $row['qtype'], $row['transport'], $row['listener_ip'], $row['listener_interface'], $row['client_ip']));
+			if (isset($out[$public])) {
+				$out[$public]['count'] += $row['count'];
+			} else {
+				$out[$public] = $row;
+			}
 		}
-		unset($row);
-		return $rows;
+		return array_values($out);
 	};
 	$guard = static function (string $source, callable $read) use (&$up): mixed {
 		try {
@@ -11226,15 +11301,16 @@ function pfb_metrics_collect(): array {
 	$dnsbl_groups = $dnsbl_detail = $dnsbl_totals = NULL;
 	$resolver_queries = $resolver_detail = NULL;
 	if ($pfb['dnsbl'] === PfbToggle::On) {
-		$dnsbl_snapshot = $guard('dnsbl_db', function () use (&$up, $pfb, $num, $counter, $details): ?array {
+		$dnsbl_snapshot = $guard('dnsbl_db', function () use (&$up, $pfb, $num, $counter, $details, $permission): ?array {
 			$snapshot = pfb_metrics_sqlite_snapshot($pfb['dnsbl_info'],
 				'SELECT groupname, entries, counter FROM dnsbl ORDER BY rowid',
 				'dns_metric_blocks',
-				'SELECT owner, origin, groupname AS "group", qtype, transport, count FROM dns_metric_blocks', NULL, TRUE);
+				'SELECT *, groupname AS "group" FROM dns_metric_blocks', NULL, TRUE);
 			$up['dnsbl_db'] = $snapshot !== NULL;
 			if ($snapshot === NULL) {
 				return NULL;
 			}
+			$clients = $permission($snapshot, $pfb['dnsbl_info']);
 			// Legacy databases can have repeated groups; the last aggregate row wins.
 			$out = $totals = array();
 			foreach ($snapshot['aggregate'] as $row) {
@@ -11275,12 +11351,12 @@ function pfb_metrics_collect(): array {
 			$seen = array();
 			foreach ($snapshot['detail'] as &$row) {
 				$key = serialize(array($row['owner'], $row['origin'], $row['group']));
-				$detail_key = serialize(array($key, $row['qtype'], $row['transport']));
+				$detail_key = serialize(array($key, $row['qtype'], $row['transport'], $row['listener_ip'] ?? '', $row['listener_interface'] ?? '', $row['client_ip'] ?? ''));
 				if (!isset($owned[$key]) || isset($seen[$detail_key])) {
 					throw new UnexpectedValueException('Orphan or duplicate DNS metric detail');
 				}
-				$validated = $details(array($row), array($row['group'] => $owned[$key]));
-				$row['count'] = $validated[0]['count'];
+				$validated = $details(array($row), array($row['group'] => $owned[$key]), $clients);
+				$row = $validated[0];
 				$owned[$key] -= $row['count'];
 				$seen[$detail_key] = TRUE;
 			}
@@ -11291,10 +11367,10 @@ function pfb_metrics_collect(): array {
 			[$dnsbl_groups, $dnsbl_detail, $dnsbl_totals] = $dnsbl_snapshot;
 		}
 
-		$resolver_snapshot = $guard('resolver_db', function () use (&$up, $pfb, $counter, $details): ?array {
+		$resolver_snapshot = $guard('resolver_db', function () use (&$up, $pfb, $counter, $details, $permission): ?array {
 			$snapshot = pfb_metrics_sqlite_snapshot($pfb['dnsbl_resolver'],
 				'SELECT totalqueries, queries FROM resolver WHERE row = 0',
-				'dns_metric_queries', 'SELECT qtype, transport, count FROM dns_metric_queries');
+				'dns_metric_queries', 'SELECT * FROM dns_metric_queries');
 			$up['resolver_db'] = $snapshot !== NULL;
 			if ($snapshot === NULL) {
 				return NULL;
@@ -11310,7 +11386,7 @@ function pfb_metrics_collect(): array {
 			}
 			$row = $snapshot['aggregate'][0];
 			$total = $counter($row['totalqueries']) + $counter($row['queries']);
-			return array($counter($total), $details($snapshot['detail'], array('' => $total)));
+			return array($counter($total), $details($snapshot['detail'], array('' => $total), $permission($snapshot, $pfb['dnsbl_resolver'])));
 		});
 		if ($resolver_snapshot !== NULL) {
 			[$resolver_queries, $resolver_detail] = $resolver_snapshot;
@@ -11375,6 +11451,7 @@ function pfb_metrics_collect(): array {
 		'dnsbl_detail'     => $dnsbl_detail,
 		'dnsbl_totals'     => $dnsbl_totals,
 		'resolver_detail'  => $resolver_detail,
+		'client_policy_epochs' => $client_policy_epochs,
 		'feed_success'     => $feed_success,
 		'feed_failing'     => $feed_failing,
 		'pass'             => $pass,
@@ -11397,6 +11474,123 @@ function pfb_metrics_lock(float $wait_s) {
 	return $lock;
 }
 
+// Each existing database commits independently: a failed retry never restores purged identities.
+function pfb_metrics_client_reconcile(bool $enabled, bool $rotate = TRUE): ?string {
+	global $pfb;
+	foreach (array('dnsbl_info' => 'dns_metric_blocks', 'dnsbl_resolver' => 'dns_metric_queries') as $key => $table) {
+		if (!is_file($pfb[$key])) {
+			continue;
+		}
+		$db = NULL;
+		try {
+			$db = new SQLite3($pfb[$key], SQLITE3_OPEN_READWRITE);
+			$db->enableExceptions(TRUE);
+			$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
+			$db->exec('BEGIN IMMEDIATE');
+			if (!$rotate && $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dns_metric_settings'")
+			    && $db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0') === 1) {
+				$db->exec('COMMIT');
+				continue;
+			}
+			if (!$enabled && $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{$table}'")) {
+				$columns = array();
+				$result = $db->query("PRAGMA table_info({$table})");
+				while ($column = $result->fetchArray(SQLITE3_ASSOC)) {
+					$columns[] = $column['name'];
+				}
+				$result->finalize();
+				if (in_array('client_ip', $columns, TRUE)) {
+					$dimensions = array_values(array_diff($columns, array('client_ip', 'count')));
+					$quoted = array_map(static fn ($name) => '"' . str_replace('"', '""', $name) . '"', $dimensions);
+					$group = implode(',', $quoted);
+					$db->exec("CREATE TEMP TABLE pfb_private_details AS SELECT {$group}, '' AS client_ip, SUM(count) AS count FROM {$table} GROUP BY {$group}");
+					$db->exec("DELETE FROM {$table}");
+					$db->exec("INSERT INTO {$table} ({$group},client_ip,count) SELECT {$group},client_ip,count FROM pfb_private_details");
+					$db->exec('DROP TABLE pfb_private_details');
+				}
+			}
+			$db->exec('CREATE TABLE IF NOT EXISTS dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL)');
+			$mode = $enabled ? 1 : 0;
+			$db->exec("INSERT OR REPLACE INTO dns_metric_settings VALUES (0,{$mode},lower(hex(randomblob(16))))");
+			$db->exec('COMMIT');
+		} catch (Throwable $e) {
+			if ($db !== NULL) {
+				try {
+					$db->exec('ROLLBACK');
+				} catch (Throwable) {
+					// A failed BEGIN has no transaction to roll back.
+				}
+			}
+			return basename($pfb[$key]) . ': ' . $e->getMessage();
+		} finally {
+			if ($db !== NULL) {
+				$db->close();
+			}
+		}
+	}
+	return NULL;
+}
+
+// Apply may initialize optional accounting, but a failure never prevents DNS from starting.
+function pfb_metrics_client_apply(): void {
+	global $pfb;
+	if ($pfb['dnsbl'] !== PfbToggle::On || PfbConfig::read('gen/pfb_metrics_client_ip') !== PfbToggle::On) {
+		return;
+	}
+	$lock = pfb_metrics_lock(10.0);
+	if ($lock === FALSE) {
+		pfb_logger("\nClient IP metrics permission could not be applied: metrics publication is busy.", 2);
+		return;
+	}
+	try {
+		if (config_read_file(FALSE, FALSE) !== TRUE || PfbConfig::read('gen/pfb_metrics_client_ip') !== PfbToggle::On) {
+			return;
+		}
+		foreach (array(1 => 'dnsbl_info', 3 => 'dnsbl_resolver') as $table => $key) {
+			if (!is_file($pfb[$key])) {
+				$db = pfb_open_sqlite($table, 'Initialize client metrics permission');
+				if (!$db) {
+					pfb_logger("\nClient IP metrics permission could not be applied: " . basename($pfb[$key]), 2);
+					return;
+				}
+				pfb_close_sqlite($db);
+			}
+		}
+		$error = pfb_metrics_client_reconcile(TRUE, FALSE);
+		if ($error !== NULL) {
+			pfb_logger("\nClient IP metrics permission could not be applied: {$error}", 2);
+		}
+	} finally {
+		fclose($lock);
+	}
+}
+
+// Save-time privacy is serialized with publication and config persistence, not with DNS service availability.
+function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $dir = '/var/tmp/node_exporter'): ?string {
+	$previous = PfbConfig::read('gen/pfb_metrics_client_ip');
+	if ($previous === $desired) {
+		$persist();
+		return NULL;
+	}
+	$lock = pfb_metrics_lock(10.0);
+	if ($lock === FALSE) {
+		return 'Client IP metrics could not be changed: metrics publication is busy. ' . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled.' : 'Client IP metrics remain disabled.');
+	}
+	try {
+		$error = pfb_metrics_client_reconcile($desired === PfbToggle::On);
+		if ($error !== NULL) {
+			return 'Client IP metrics could not be changed: ' . $error . '. ' . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled; retry Save.' : 'Client IP metrics remain disabled; retry Save.');
+		}
+		if ($desired === PfbToggle::Off && !is_link($dir)) {
+			unlink_if_exists("{$dir}/pfblockerng.prom");
+		}
+		$persist();
+		return NULL;
+	} finally {
+		fclose($lock);
+	}
+}
+
 // One log line per outage: $marker stays until a publish succeeds or the export is turned off.
 function pfb_metrics_log_once(string $marker, string $message): void {
 	if (!file_exists($marker)) {
@@ -11408,13 +11602,38 @@ function pfb_metrics_log_once(string $marker, string $message): void {
 // Publishes a rendered body atomically for node_exporter's textfile collector, only while the export is both enabled (the
 // sentinel) and still wanted (the settings this process loaded). A disable removes the sentinel under the same lock, so it
 // cannot be undone by a run already underway; the settings check covers a disable whose sync returned before it got there.
-function pfb_metrics_publish(string $body, string $dir, float $lock_wait_s = 10.0): bool {
+function pfb_metrics_publish(string $body, string $dir, float $lock_wait_s = 10.0, array $client_policy_epochs = array()): bool {
 	global $pfb;
 	$lock = pfb_metrics_lock($lock_wait_s);
 	if ($lock === FALSE) {
 		return FALSE;
 	}
 	try {
+		if (preg_match('/[{,]client_ip="/', $body) === 1) {
+			$valid = config_read_file(FALSE, FALSE) === TRUE
+			    && PfbConfig::read('gen/pfb_metrics_client_ip') === PfbToggle::On
+			    && $client_policy_epochs !== array();
+			foreach ($client_policy_epochs as $path => $epoch) {
+				$db = NULL;
+				try {
+					$db = new SQLite3($path, SQLITE3_OPEN_READONLY);
+					$db->enableExceptions(TRUE);
+					$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
+					$policy = $db->query('SELECT client_ip, epoch FROM dns_metric_settings WHERE row=0')->fetchArray(SQLITE3_ASSOC);
+					$valid = $valid && is_array($policy) && $policy['client_ip'] === 1 && $policy['epoch'] === $epoch;
+				} catch (Throwable) {
+					$valid = FALSE;
+				} finally {
+					if ($db !== NULL) {
+						$db->close();
+					}
+				}
+			}
+			if (!$valid) {
+				unlink_if_exists("{$dir}/pfblockerng.prom");
+				return FALSE;
+			}
+		}
 		$wanted = $pfb['enable'] === PfbToggle::On && PfbConfig::read('gen/pfb_metrics_export') === PfbToggle::On;
 		if (!file_exists($pfb['metrics_enabled'])) {
 			// Never recreated here: a disable removes it under this lock, and recreating it would undo the disable.
@@ -11464,7 +11683,8 @@ function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 		return FALSE;
 	}
 	// Collected and rendered before the lock: collection can take seconds and must not hold up an enable or disable.
-	return pfb_metrics_publish(pfb_metrics_render(pfb_metrics_collect()), $dir);
+	$snapshot = pfb_metrics_collect();
+	return pfb_metrics_publish(pfb_metrics_render($snapshot), $dir, 10.0, $snapshot['client_policy_epochs']);
 }
 
 // Runs the verb every minute while the option is on; turning it off removes the entry and the published file.
@@ -15748,6 +15968,7 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 	global $pfb;
 
 	$python_enable = ($mode == 'enabled') ? 'on' : 'off';
+	$metrics_client_ip = PfbConfig::read('gen/pfb_metrics_client_ip') === PfbToggle::On ? 'on' : 'off';
 	$python_reply = ($pfb['dnsbl_py_reply'] === PfbToggle::On) ? 'on' : 'off';
 	$python_blocking = 'on';
 	$python_hsts = ($pfb['dnsbl_hsts'] === PfbToggle::On) ? 'on' : 'off';
@@ -15795,6 +16016,7 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 dnsbl_ipv4	= {$pfb['dnsbl_vip4']}
 dnsbl_ipv6	= {$pfb['dnsbl_vip6']}
 python_enable	= {$python_enable}
+metrics_client_ip	= {$metrics_client_ip}
 python_reply	= {$python_reply}
 python_blocking	= {$python_blocking}
 python_hsts	= {$python_hsts}
@@ -17385,6 +17607,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 		$now = date('Y-m-d H:i:s', time());
 		pfb_dnsbl_ini_inputs();	// the apply's loader: a process that did not run the apply writes the stored decision cache cap too
+		pfb_metrics_client_apply();
 		$pfb_py_conf = pfb_unbound_python_ini($mode, $now);
 
 		// Compare previous ini file to new ini (bypass file timestamp string)
@@ -24795,7 +25018,7 @@ function pfb_daemon_filterlog() {
 							@file_put_contents("{$pfb['unilog']}", "{$dnsline}\n", FILE_APPEND | LOCK_EX);
 							// Emit syslog only for a well-formed logical row; raw unified.log
 							// preservation above covers malformed rows without corruption.
-							if (count($df) === 11 || count($df) === 12) {
+							if (in_array(count($df), array(11, 12, 14), TRUE)) {
 								// Every DNSBL block line syslogs uniformly (incl. the PHP-path
 								// block the old python-only emitter missed). pfb_syslog_event
 								// no-ops when the toggle is off. Refresh the daemon's config
@@ -24806,7 +25029,8 @@ function pfb_daemon_filterlog() {
 										'q_name' => $df[2], 'q_ip' => $df[3], 'q_type' => $df[10],
 										'group' => $df[6], 'feed' => $df[8], 'b_type' => $df[5],
 										'b_eval' => $df[7],
-										...(count($df) === 12 ? ['transport' => $df[11]] : []),
+										...(count($df) >= 12 ? ['transport' => $df[11]] : []),
+										...(count($df) === 14 ? ['listener_ip' => $df[12], 'listener_interface' => $df[13]] : []),
 									)));
 								}
 							}

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"maps"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,17 +48,18 @@ const (
 var ctlUID uint32
 
 type ctlServer struct {
-	ln        *net.UnixListener
-	path      string
-	certs     *certStore // nil when no TLS transport is served: a push is refused
-	logf      func(format string, args ...any)
-	peerUID   func(*net.UnixConn) (uint32, error) // the kernel's credential of the peer; a test replaces it
-	deadline  time.Duration                       // for reading the message, and again for writing the reply
-	refusing  atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
-	restart   func() error                        // the decider restart; start() sets it
-	listeners *listenerSet                        // what an add or remove changes; start() sets it. nil in a test of the PEM alone: no add or remove may be sent to it (a nil set would panic)
-	names     *nameAnswers                        // what the address table verb replaces; start() sets it. nil: the gateway started without --dns-name
-	ddr       *ddr                                // whose 443 set the verb replaces; start() sets it. nil: the gateway started without --ddr
+	ln         *net.UnixListener
+	path       string
+	certs      *certStore // nil when no TLS transport is served: a push is refused
+	logf       func(format string, args ...any)
+	peerUID    func(*net.UnixConn) (uint32, error) // the kernel's credential of the peer; a test replaces it
+	deadline   time.Duration                       // for reading the message, and again for writing the reply
+	refusing   atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
+	restart    func() error                        // the decider restart; start() sets it
+	listeners  *listenerSet                        // what an add or remove changes; start() sets it. nil in a test of the PEM alone: no add or remove may be sent to it (a nil set would panic)
+	names      *nameAnswers                        // what the address table verb replaces; start() sets it. nil: the gateway started without --dns-name
+	ddr        *ddr                                // whose 443 set the verb replaces; start() sets it. nil: the gateway started without --ddr
+	interfaces *atomic.Pointer[map[netip.Addr]string]
 }
 
 // bindCtl makes path's directory private to the user running the gateway (root), replaces what an earlier gateway left at
@@ -113,6 +115,7 @@ func privateDir(dir string) error {
 
 // serve takes pushes until stop(). One connection at a time: each is bounded by the deadline, and only root is let in.
 func (c *ctlServer) serve(g *gateway) {
+	c.interfaces = &g.listenerInterfaces
 	g.closeOnStop(func() { _ = c.ln.Close() })
 	g.wg.Add(1)
 	go func() {
@@ -214,17 +217,31 @@ func (c *ctlServer) addressTable(in io.Reader) string {
 	if got, err := io.ReadFull(in, body); err != nil {
 		return fmt.Sprintf("error: the message ended after %d of %d bytes: %v", got, n, reason(err))
 	}
-	if c.names == nil {
+	if c.names == nil && c.interfaces == nil {
 		return "error: started without --dns-name"
 	}
 	table, err := parseAddressTable(body)
 	if err != nil {
 		return "error: " + err.Error()
 	}
+	if c.names == nil && len(table.names) > 0 {
+		return "error: started without --dns-name"
+	}
 	if len(table.doh443) > 0 && c.ddr == nil {
 		return "error: started without --ddr"
 	}
-	changed := !maps.Equal(*c.names.table.Swap(&table.names), table.names) // PHP pushes on every sync: a push that changes nothing is not news
+	changed := false
+	if c.names != nil {
+		changed = !maps.Equal(*c.names.table.Swap(&table.names), table.names)
+	}
+	if c.interfaces != nil {
+		old := c.interfaces.Swap(&table.interfaces)
+		if old == nil {
+			changed = len(table.interfaces) > 0 || changed
+		} else {
+			changed = !maps.Equal(*old, table.interfaces) || changed
+		}
+	}
 	if c.ddr != nil {
 		changed = !maps.Equal(c.ddr.setDoH443(table.doh443), table.doh443) || changed
 	}

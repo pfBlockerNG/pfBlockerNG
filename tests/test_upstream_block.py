@@ -397,7 +397,7 @@ class TestLogUpstreamBlockCounterEnqueue:
 
     Background:
         The function writes CSV to dnsbl.log, then — when the SQLite
-        DNSBL connection is active — enqueues ("dnsbl", "Upstream", "Upstream", "builtin", epoch, qtype, transport)
+        DNSBL connection is active — enqueues owner/query fields followed by listener IP/interface and client IP/epoch
         to increment the aggregate and detail counters. Given a captured epoch,
         the connection guard suppresses the enqueue when inactive.
 
@@ -430,7 +430,9 @@ class TestLogUpstreamBlockCounterEnqueue:
         _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A", group_epoch="fixture-epoch")
 
         dnsbl_tasks = [t for t in calls if t[0] == "dnsbl"]
-        assert dnsbl_tasks == [("dnsbl", "Upstream", "Upstream", "builtin", "fixture-epoch", "A", "")], calls
+        assert dnsbl_tasks == [
+            ("dnsbl", "Upstream", "Upstream", "builtin", "fixture-epoch", "A", "", "", "", "", "")
+        ], calls
 
     def test_no_enqueue_when_connection_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """

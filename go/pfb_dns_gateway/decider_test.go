@@ -19,7 +19,7 @@ const watchdog = 10 * time.Second // stuck-run guard for waits; never asserted o
 
 const (
 	tQuery, tForward, tReply, tAnswer, tDrop, tReady byte = 1, 2, 3, 4, 5, 6
-	maxFrameBytes                                         = 5 + 1 + 1 + 255 + 65535
+	maxFrameBytes                                         = 5 + 1 + 1 + 255 + 1 + 255 + 2 + 65535 + 65535
 )
 
 // pack builds a frame from the protocol document alone: u32 len | u8 type | u32 id | payload.
@@ -31,9 +31,17 @@ func pack(typ byte, id uint32, payload []byte) []byte {
 	return append(b, payload...)
 }
 
-// queryPayload is a QUERY payload by the documented layout: u8 transport, u8 n, n bytes of IP text, the DNS wire.
+// queryPayload names an unavailable listener and interface when a decider test has no socket.
 func queryPayload(transport byte, ip string, wire []byte) []byte {
-	return append(append([]byte{transport, byte(len(ip))}, ip...), wire...)
+	payload := append([]byte{transport, byte(len(ip))}, ip...)
+	return append(append(payload, 0, 0, 0), wire...)
+}
+
+func queryDNSWire(payload []byte) []byte {
+	pos := 2 + int(payload[1])
+	pos += 1 + int(payload[pos])
+	n := int(binary.BigEndian.Uint16(payload[pos : pos+2]))
+	return payload[pos+2+n:]
 }
 
 // peer plays the decider (the Python side) on the other end of the socketpair.
@@ -122,7 +130,7 @@ type decided struct {
 func decide(d *Decider, ctx context.Context, ip string, wire []byte, fwd forwarder) <-chan decided {
 	out := make(chan decided, 1)
 	go func() {
-		a, err := d.Decide(ctx, netip.MustParseAddr(ip), clientTCP, wire, fwd)
+		a, err := d.Decide(ctx, netip.MustParseAddr(ip), netip.Addr{}, "", clientTCP, wire, fwd)
 		out <- decided{a, err}
 	}()
 	return out
@@ -153,7 +161,7 @@ func TestFrameCodecMatchesTheDocumentedLayout(t *testing.T) {
 		payload []byte
 		golden  string
 	}{
-		{"QUERY", tQuery, 7, queryPayload(1, "192.0.2.10", wire), "0000001501" + "00000007" + "01" + "0a" + hex.EncodeToString([]byte("192.0.2.10")) + "abcd0100"},
+		{"QUERY", tQuery, 7, queryPayload(1, "192.0.2.10", wire), "0000001801" + "00000007" + "01" + "0a" + hex.EncodeToString([]byte("192.0.2.10")) + "000000" + "abcd0100"},
 		{"FORWARD", tForward, 7, wire, "0000000902" + "00000007" + "abcd0100"},
 		{"REPLY", tReply, 258, wire, "0000000903" + "00000102" + "abcd0100"},
 		{"REPLY empty", tReply, 7, nil, "0000000503" + "00000007"},
@@ -577,7 +585,7 @@ func TestWriteThatCannotCompleteEndsTheSession(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = d.Decide(ctx, netip.MustParseAddr("192.0.2.10"), clientTCP, big, noForward(t))
+			_, _ = d.Decide(ctx, netip.MustParseAddr("192.0.2.10"), netip.Addr{}, "", clientTCP, big, noForward(t))
 		}()
 	}
 	waitClosed(t, d.Done(), "session end after a write timeout")

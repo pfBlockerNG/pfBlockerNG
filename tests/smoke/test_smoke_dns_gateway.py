@@ -158,6 +158,7 @@ LAN_V6_CLIENT = h.IPV6_LOCAL_HOST  # taken by the client inside the LAN's IPv6 /
 OTHER_ACL_NET = ("203.0.113.0", "24")  # TEST-NET-3: an access list that names nobody on the LAN
 AUTO_ROWS_OFF = "unbound/disable_auto_added_access_control"  # pfSense's switch for the LAN rows it adds by itself
 LOOPBACK = {"127.0.0.1", "::1"}  # DoH and DoQ always listen here too, whatever interfaces they are given
+LAN_DESCRIPTION = 'LAN, "旧" & owner'
 SNAPSHOT_FILE = "/tmp/pfb3513_cfg_snapshot.json"  # on the guest: survives a dead test process
 
 LISTENER_SETTINGS = {
@@ -186,6 +187,8 @@ CONFIG_PATHS = tuple(
             CFG_DDR_DOH_443,
             CFG_DNS_NAME,
             CFG_REPLY_LOG,
+            "interfaces/lan/descr",
+            "filter/rule",
             h.dns_config_path("pfb_dns_doh_trusted"),
             # DNS General's Resolver addresses: the tests switch them on, and the apply pass records the VIP row it adds
             f"{h.CFG_GLOBAL}/pfb_dns_listen_vip",
@@ -227,7 +230,9 @@ def _assert_unified_row(vm: SmokeVM, row: list[str], name: str, name_col: int) -
         raise RuntimeError(f"unified.log lacks byte-identical {name} row: {original!r}") from exc
 
 
-def _assert_report_row(gui: WebUI, name: str, client: str, transport: str) -> None:
+def _assert_report_row(
+    gui: WebUI, name: str, client: str, transport: str, listener: str = PFSENSE_LAN_IP, interface: str = LAN_DESCRIPTION
+) -> None:
     response = gui.get("/pfblockerng/pfblockerng_alerts.php?view=unified")
     assert response.status_code == 200, f"Reports GET: {response.status_code}"
     row = row_containing(response.text, name)
@@ -236,7 +241,10 @@ def _assert_report_row(gui: WebUI, name: str, client: str, transport: str) -> No
         for cell in re.findall(r"<td\b[^>]*>(.*?)</td>", row, re.DOTALL)
     ]
     assert re.search(r"<th\b[^>]*>\s*Transport\s*</th>", response.text), "Reports lacks a Transport column"
-    assert cells[-1:] == [transport], f"Reports Transport cell for {name}: expected {transport}, got {cells}"
+    assert cells[-3:] == [transport, listener, interface], f"Reports endpoint snapshot for {name}: {cells}"
+    assert len(cells) == 12, cells
+    assert re.search(r"<th\b[^>]*>\s*Receiving IP\s*</th>", response.text)
+    assert re.search(r"<th\b[^>]*>\s*Receiving interface\s*</th>", response.text)
     assert len(cells) > 2 and re.search(rf"(?<![\d.:]){re.escape(client)}(?![\d.:])", cells[2]), (
         f"Reports client cell for {name}: expected {client}, got {cells}"
     )
@@ -265,6 +273,7 @@ class Names:
     ready: str  # asked until the gateway serves
     blocked: dict[str, str]  # per transport
     logged: dict[str, str]  # reserved for the one-query-per-transport log assertions
+    logged_v6: dict[str, str]  # dedicated endpoint metadata coverage
     refused: dict[str, str]  # per transport, asked while the ACL refuses the client
     denied: dict[str, str]  # per transport, asked while the ACL denies the client
     restored: dict[str, str]  # per transport, asked after the refuse row is gone
@@ -285,6 +294,7 @@ class Names:
     def listed(self) -> list[str]:
         per_transport = (
             *self.logged.values(),
+            *self.logged_v6.values(),
             *self.blocked.values(),
             *self.refused.values(),
             *self.denied.values(),
@@ -317,6 +327,7 @@ def _make_names() -> Names:
         ready=h.unique_domain("ready"),
         blocked=per_transport("blocked"),
         logged=per_transport("logged"),
+        logged_v6=per_transport("logged-v6"),
         refused=per_transport("refused"),
         denied=per_transport("denied"),
         restored=per_transport("restored"),
@@ -791,6 +802,25 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
     lan_v6_prior: dict[str, str] | None = None
     try:
         lan_v6_prior = h.set_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, LAN_V6_ADDR, h.IPV6_LOCAL_BITS)
+        _php_ok(
+            vm,
+            f"config_set_path('interfaces/lan/descr', {h._php_str(LAN_DESCRIPTION)});"
+            "write_config('pfBlockerNG smoke: event interface description');",
+            "set known interface description",
+        )
+        _php_ok(
+            vm,
+            "$rules = config_get_path('filter/rule', array());"
+            "foreach (array('53', '853', '443', '4443', '1053', '1853', '1953', '5443', "
+            "'5543', '2853', '2953') as $port) {"
+            "$rules[] = array('type' => 'pass', 'interface' => 'lan', 'ipprotocol' => 'inet6',"
+            "'protocol' => 'tcp/udp', 'descr' => 'pfB leased endpoint smoke IPv6 DNS',"
+            f"'source' => array('address' => {h._php_str(h.IPV6_LOCAL_SUBNET)}),"
+            "'destination' => array('any' => '', 'port' => $port)); }"
+            "config_set_path('filter/rule', $rules); write_config('pfBlockerNG smoke: leased LAN IPv6 DNS');",
+            "allow leased IPv6 DNS traffic",
+        )
+        h.apply_filter_sync(vm)
         refid = _create_cert(vm)
         pem = _sh(vm, f"cat {CERT_GUEST}").stdout
         trusted = subprocess.run(
@@ -812,6 +842,7 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
             _say("gateway log:\n" + _proxy_log(vm, 80))
             try:
                 _restore(vm)
+                h.apply_filter_sync(vm)
                 _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (restore)")
                 h.wait_unbound_ready(vm)
                 on53 = {s.local for s in _listeners(vm) if s.command == "unbound" and s.port == 53}
@@ -1046,7 +1077,7 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
         assert loopback == [("Localhost", [f"127.0.0.1:{port}", f"[::1]:{port}"], "Listening")], (
             f"{transport}: the Localhost row is {loopback}; all rows: {rows}"
         )
-        lan = [row for row in rows if row[0] == "LAN" and f"{PFSENSE_LAN_IP}:{port}" in row[1]]
+        lan = [row for row in rows if row[0] == LAN_DESCRIPTION and f"{PFSENSE_LAN_IP}:{port}" in row[1]]
         assert lan and all(state == "Listening" for _, _, state in lan), (
             f"{transport}: no LAN row listening on {PFSENSE_LAN_IP}:{port}; all rows: {rows}"
         )
@@ -1212,11 +1243,75 @@ def test_the_firewalls_own_lookup_of_a_listed_name_gets_the_vip_from_the_gateway
     _wait_dnsbl_row(gw.vm, name)
     clients = {row[3] for row in _dnsbl_rows(gw.vm, name)}
     assert clients == {"127.0.0.1"}, f"dnsbl.log rows for {name} name {sorted(clients)}, not the firewall's 127.0.0.1"
+    assert all(row[12:14] == ["127.0.0.1", "Localhost"] for row in _dnsbl_rows(gw.vm, name))
 
 
 # --------------------------------------------------------------------------- #
 # From the LAN client, over every transport
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("transport", TRANSPORTS)
+def test_receiving_ipv6_endpoint_survives_logs_unified_and_reports(
+    gw: Gateway, gateway_on: State, transport: str, gui: WebUI
+) -> None:
+    """The leased LAN's IPv6 traffic is mandatory, not a reachability-dependent skip."""
+    with _client_v6(gw.client):
+        name = h.unique_domain("endpoint-v6")
+        answer, raw = _ask(gw.client, transport, name, server=LAN_V6_ADDR)
+        assert h.resolves_to(answer, STUB_DNS_A), raw
+        _drain_logs(gw)
+        [row] = _reply_rows(gw.vm, name)
+        assert len(row) == 13 and row[7] == LAN_V6_CLIENT and row[8] == STUB_DNS_A, row
+        assert row[10:13] == [LOG_TRANSPORT[transport], LAN_V6_ADDR, LAN_DESCRIPTION], row
+        _assert_unified_row(gw.vm, row, name, 6)
+        _assert_report_row(gui, name, LAN_V6_CLIENT, LOG_TRANSPORT[transport], LAN_V6_ADDR, LAN_DESCRIPTION)
+        blocked = gw.names.logged_v6[transport]
+        answer, raw = _ask(gw.client, transport, blocked, server=LAN_V6_ADDR)
+        assert h.is_vip(answer), raw
+        _drain_logs(gw)
+        [row] = _dnsbl_rows(gw.vm, blocked)
+        assert len(row) == 14 and row[3] == LAN_V6_CLIENT, row
+        assert row[11:14] == [LOG_TRANSPORT[transport], LAN_V6_ADDR, LAN_DESCRIPTION], row
+        _assert_unified_row(gw.vm, row, blocked, 2)
+        _assert_report_row(gui, blocked, LAN_V6_CLIENT, LOG_TRANSPORT[transport], LAN_V6_ADDR, LAN_DESCRIPTION)
+
+
+def test_receiving_interface_is_the_event_snapshot_after_interface_rename(
+    gw: Gateway, gateway_on: State, gui: WebUI
+) -> None:
+    old_name = h.unique_domain("before-interface-rename")
+    answer, raw = _ask(gw.client, "udp", old_name)
+    assert h.resolves_to(answer, STUB_DNS_A), raw
+    _drain_logs(gw)
+    [old_row] = _reply_rows(gw.vm, old_name)
+    assert old_row[11:13] == [PFSENSE_LAN_IP, LAN_DESCRIPTION], old_row
+    renamed = 'Renamed, "新" & owner'
+    try:
+        _php_ok(
+            gw.vm,
+            f"config_set_path('interfaces/lan/descr', {h._php_str(renamed)});"
+            "write_config('pfBlockerNG smoke: rename endpoint owner');",
+            "rename interface",
+        )
+        _apply(gw.vm)
+        new_name = h.unique_domain("after-interface-rename")
+        answer, raw = _ask(gw.client, "udp", new_name)
+        assert h.resolves_to(answer, STUB_DNS_A), raw
+        _drain_logs(gw)
+        [new_row] = _reply_rows(gw.vm, new_name)
+        assert new_row[11:13] == [PFSENSE_LAN_IP, renamed], new_row
+        assert _reply_rows(gw.vm, old_name) == [old_row], "interface rename rewrote historical metadata"
+        _assert_report_row(gui, old_name, CLIENT_LAN_IP, "UDP", PFSENSE_LAN_IP, LAN_DESCRIPTION)
+        _assert_report_row(gui, new_name, CLIENT_LAN_IP, "UDP", PFSENSE_LAN_IP, renamed)
+    finally:
+        _php_ok(
+            gw.vm,
+            f"config_set_path('interfaces/lan/descr', {h._php_str(LAN_DESCRIPTION)});"
+            "write_config('pfBlockerNG smoke: restore endpoint owner');",
+            "restore interface description",
+        )
+        _apply(gw.vm)
 
 
 @pytest.mark.parametrize("transport", TRANSPORTS)
@@ -1234,7 +1329,8 @@ def test_a_listed_name_gets_the_vip_and_a_log_row_naming_the_client(
     assert h.is_vip(answer), f"{transport} {name}: expected VIP {h.DEFAULT_DNSBL_VIP4}, got {answer}\n{raw}"
     _drain_logs(gw)
     [row] = _dnsbl_rows(gw.vm, name)
-    assert len(row) == 12 and row[3] == CLIENT_LAN_IP and row[11] == LOG_TRANSPORT[transport], row
+    assert len(row) == 14 and row[3] == CLIENT_LAN_IP and row[11] == LOG_TRANSPORT[transport], row
+    assert row[12:14] == [PFSENSE_LAN_IP, LAN_DESCRIPTION], row
     _assert_unified_row(gw.vm, row, name, 2)
     _assert_report_row(gui, name, CLIENT_LAN_IP, LOG_TRANSPORT[transport])
 
@@ -1266,10 +1362,11 @@ def test_an_allowed_name_is_answered_by_the_upstream_and_unbound_logs_the_client
     # The gateway sees a forwarded reply for both; Unbound alone knows which it cached.
     assert [row[2] for row in rows] == ["reply", "reply"], rows
     for row in rows:
-        assert len(row) == 11 and row[3:5] == ["A", "A"] and row[5].isdigit(), row
+        assert len(row) == 13 and row[3:5] == ["A", "A"] and row[5].isdigit(), row
         assert row[6:9] == [name, CLIENT_LAN_IP, STUB_DNS_A], row
         assert row[9] == forwarded[9] and row[9] in ("unk", "prv"), row
         assert row[10] == LOG_TRANSPORT[transport], row
+        assert row[11:13] == [PFSENSE_LAN_IP, LAN_DESCRIPTION], row
         _assert_unified_row(gw.vm, row, name, 6)
     _assert_report_row(gui, name, CLIENT_LAN_IP, LOG_TRANSPORT[transport])
 
@@ -1313,7 +1410,7 @@ def test_doh_forwarded_client_is_believed_only_from_a_trusted_front_end(
                 "-H",
                 "Content-Type: application/dns-message",
                 "-H",
-                f"X-Forwarded-For: {BYPASSED_ALIAS_IP}",
+                "X-Forwarded-For: 2001:db8::3757",
                 "--data-binary",
                 "@-",
                 f"https://{CERT_NAME}:{DOH_PORT}/dns-query",
@@ -1326,8 +1423,9 @@ def test_doh_forwarded_client_is_believed_only_from_a_trusted_front_end(
             assert ipaddress.ip_address(STUB_DNS_A).packed in result.stdout, result.stdout.hex()
             _drain_logs(gw)
             [row] = _reply_rows(gw.vm, name)
-            client = BYPASSED_ALIAS_IP if trusted else CLIENT_LAN_IP
-            assert len(row) == 11 and row[7] == client and row[10] == "DoH", row
+            client = "2001:db8::3757" if trusted else CLIENT_LAN_IP
+            assert len(row) == 13 and row[7] == client and row[10] == "DoH", row
+            assert row[11:13] == [PFSENSE_LAN_IP, LAN_DESCRIPTION], row
             _assert_unified_row(gw.vm, row, name, 6)
             _assert_report_row(gui, name, client, "DoH")
     finally:
@@ -1496,11 +1594,13 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
             assert logged_clients(list(names.v6.values())) == {ipaddress.ip_address(LAN_V6_CLIENT)}, "dnsbl.log: the VM"
         for transport, name in zip(("udp", "tcp"), names.fw_v6):
             [row] = _dnsbl_rows(vm, name)
-            assert len(row) == 12 and row[11] == LOG_TRANSPORT[transport], row
+            assert len(row) == 14 and row[11] == LOG_TRANSPORT[transport], row
+            assert row[12:14] == [LAN_V6_ADDR, LAN_DESCRIPTION], row
         if vm_reaches:
             for transport, name in names.v6.items():
                 [row] = _dnsbl_rows(vm, name)
-                assert len(row) == 12 and row[11] == LOG_TRANSPORT[transport], row
+                assert len(row) == 14 and row[11] == LOG_TRANSPORT[transport], row
+                assert row[12:14] == [LAN_V6_ADDR, LAN_DESCRIPTION], row
     _wait_udp(gw, names.nomatch_poll, h.is_vip, "the VIP again")
     _expect_everywhere("after the lists are back", _ask_all(gw, names.nomatch_restored), h.is_vip, "the VIP")
 
@@ -1954,12 +2054,16 @@ def _set_lists(vm: SmokeVM, lists: dict[str, str]) -> None:
 @contextlib.contextmanager
 def _client_route(client: SmokeVM, address: str) -> Iterator[None]:
     """A host route from the client to `address` through the firewall, which holds it on loopback."""
-    added = client.ssh(f"ip route replace {address}/32 via {PFSENSE_LAN_IP}")
+    v6 = ipaddress.ip_address(address).version == 6
+    route = f"{'-6 ' if v6 else ''}route"
+    destination = f"{address}/{128 if v6 else 32}"
+    via = LAN_V6_ADDR if v6 else PFSENSE_LAN_IP
+    added = client.ssh(f"ip {route} replace {destination} via {via}")
     assert added.returncode == 0, f"cannot route {address} through {PFSENSE_LAN_IP} on the client: {added.stderr!r}"
     try:
         yield
     finally:
-        client.ssh(f"ip route del {address}/32")
+        client.ssh(f"ip {route} del {destination}")
 
 
 def _sockets_on_dns_ports(vm: SmokeVM) -> str:
@@ -2481,6 +2585,26 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
                 answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
                 _say(f"managed {transport} at {vips[0]}:{port}\n{raw}")
                 assert h.is_vip(answer), f"managed {transport} on {port}: expected DNSBL VIP, got {answer}\n{raw}"
+                name = h.unique_domain("vip-endpoint")
+                answer, raw = _ask(client, transport, name, server=vips[0], port=port)
+                assert h.resolves_to(answer, STUB_DNS_A), raw
+                _drain_logs(gw)
+                [row] = _reply_rows(vm, name)
+                assert len(row) == 13 and row[7] == CLIENT_LAN_IP, row
+                assert row[10:13] == [LOG_TRANSPORT[transport], vips[0], "Localhost"], row
+                _assert_unified_row(vm, row, name, 6)
+                _assert_report_row(gui, name, CLIENT_LAN_IP, LOG_TRANSPORT[transport], vips[0], "Localhost")
+        with _client_v6(client), _client_route(client, vips[1]):
+            for transport, port in (("udp", 53), ("tcp", 53), ("dot", 853), ("doh-post", 443), ("doq", 853)):
+                name = h.unique_domain("vip-endpoint-v6")
+                answer, raw = _ask(client, transport, name, server=vips[1], port=port)
+                assert h.resolves_to(answer, STUB_DNS_A), raw
+                _drain_logs(gw)
+                [row] = _reply_rows(vm, name)
+                assert len(row) == 13 and row[7] == LAN_V6_CLIENT and row[8] == STUB_DNS_A, row
+                assert row[10:13] == [LOG_TRANSPORT[transport], vips[1], "Localhost"], row
+                _assert_unified_row(vm, row, name, 6)
+                _assert_report_row(gui, name, LAN_V6_CLIENT, LOG_TRANSPORT[transport], vips[1], "Localhost")
         gui.post(
             DNS_GENERAL_PAGE,
             {

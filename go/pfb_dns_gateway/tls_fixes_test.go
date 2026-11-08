@@ -336,7 +336,7 @@ func TestSharedInflightCapLogsEachFloodOnce(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if reply, ok := r.g.resolveShared(r.g.ctx, client, clientDoH, wire, noForward); !ok || !bytes.Equal(reply, echoAnswer(decidedQuery{wire: wire})) {
+				if reply, ok := r.g.resolveShared(r.g.ctx, client, netip.Addr{}, clientDoH, wire, noForward); !ok || !bytes.Equal(reply, echoAnswer(decidedQuery{wire: wire})) {
 					t.Errorf("flood %s, query %d: ok=%v reply=%x, want it admitted and echoed", tag, i, ok, reply)
 				}
 			}()
@@ -346,7 +346,7 @@ func TestSharedInflightCapLogsEachFloodOnce(t *testing.T) {
 		}
 		for range 2 {
 			over := buildQuery(t, 1, "over.example.", true)
-			if reply, ok := r.g.resolveShared(r.g.ctx, client, clientDoH, over, noForward); ok || reply != nil {
+			if reply, ok := r.g.resolveShared(r.g.ctx, client, netip.Addr{}, clientDoH, over, noForward); ok || reply != nil {
 				t.Fatalf("flood %s: a query over the cap got ok=%v reply=%x, want it refused", tag, ok, reply)
 			}
 		}

@@ -91,6 +91,24 @@ trait LiveListenerStandIn
 		return array_values(array_filter(self::frames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffc'));
 	}
 
+	/** @return list<array{head:string,body:string,fds:array}> listener-control changes, not independent address-table snapshots */
+	private static function listenerFrames(string $record): array
+	{
+		return array_values(array_filter(self::changeFrames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffb'));
+	}
+
+	/** @return list<array{head:string,body:string,fds:array}> frames with only the independent ownership rows projected out */
+	private static function nameDdrFrames(string $record): array
+	{
+		return array_map(static function (array $frame): array {
+			if ($frame['head'] === 'fffffffb') {
+				$frame['body'] = implode("\n", array_filter(explode("\n", $frame['body']),
+					static fn (string $line): bool => !str_starts_with($line, 'listener-interface ')));
+			}
+			return $frame;
+		}, self::changeFrames($record));
+	}
+
 	/**
 	 * Distinct ports above 1024 that a TCP and a UDP socket on loopback both bind now (a CI user that is not root binds them too).
 	 *
