@@ -94,6 +94,24 @@ final class DnsStatsAggregationTest extends TestCase
 		$this->assertSame([['edate' => '2030-01-15 (09)', 'ecount' => 2], ['edate' => '2030-01-16 (10)', 'ecount' => 1]], $chart);
 	}
 
+	public function testReceivingEndpointColumnsPreserveHistoricalDnsStatsMeanings(): void
+	{
+		$dnsbl = ['DNSBL', '2030-01-15 09:01:02', 'blocked.example', '192.0.2.10', 'x|y|agent', 'DNSBL', 'group', 'blocked.example', 'feed', '+', 'A', 'UDP'];
+		$reply = ['DNS-reply', '2030-01-15 09:01:02', 'reply', 'A', 'A', '60', 'allowed.example', '192.0.2.10', '203.0.113.7', 'US', 'UDP'];
+		[$blocked] = self::aggregate('dnsbl_stat', self::csv([
+			$dnsbl, array_merge($dnsbl, ['198.51.100.53', 'WAN, "旧" & OWNER'])
+		]));
+		$this->assertSame(2, $blocked['count']['dnsbl_stat']);
+		$this->assertSame(['192.0.2.10' => 2], $blocked['dnsbl_stat']['dnsblip']);
+		$this->assertSame(['blocked.example,DNSBL' => 2], $blocked['dnsbl_stat']['dnsbldomain']);
+		[$answered] = self::aggregate('dnsbl_reply_stat', self::csv([
+			$reply, array_merge($reply, ['2001:db8:1::53', 'LAN, "新" & OWNER'])
+		]));
+		$this->assertSame(2, $answered['count']['dnsbl_reply_stat']);
+		$this->assertSame(['192.0.2.10' => 2], $answered['dnsbl_reply_stat']['replysrcip']);
+		$this->assertSame(['203.0.113.7' => 2], $answered['dnsbl_reply_stat']['replydstip']);
+	}
+
 	public function testEmptyZeroMarkersBytesLegacyDatesAndPhysicalLines(): void
 	{
 		$rows = [];
