@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
+from requests import Request, Response
 
 from tests.smoke import helpers as h
+from tests.smoke import test_smoke_metrics as metrics
 from tests.smoke import test_smoke_upstream_block as upstream
 from tests.smoke import test_syslog_export as syslog
+from tests.smoke.ui.webui import WebUI
 
 
 class _DelayedUpstreamStub:
@@ -280,3 +284,60 @@ def test_raw_syslog_timeout_archives_partial_bytes_and_still_captures_the_other_
     assert sorted(path.read_bytes() for path in tmp_path.glob("*.raw")) == sorted([partial, dedicated])
     assert "system" in str(error.value) and "timeout" in str(error.value).lower()
     assert repr(stderr) in str(error.value)
+
+
+@pytest.mark.parametrize("checked", [False, True], ids=["syslog-off", "syslog-on"])
+def test_privacy_refusal_helper_accepts_checked_and_unchecked_syslog(
+    monkeypatch: pytest.MonkeyPatch, checked: bool
+) -> None:
+    html = (
+        '<form><input type="checkbox" name="log_syslog" value="on"'
+        + (" checked" if checked else "")
+        + '><input type="checkbox" name="pfb_metrics_client_ip" value="on" checked>'
+        '<input name="log_max_dnslog" value="20000"></form>'
+    )
+    parsed = metrics.scrape_form_fields(html)
+    assert ("log_syslog" in parsed) is checked
+    stored = {
+        "log_syslog": "on" if checked else "",
+        "pfb_metrics_client_ip": "on",
+        "log_max_dnslog": "20000",
+    }
+    state = {
+        "gen": stored,
+        "effectiveGen": {"log_max_dnslog": "20000"},
+        "foreignGen": {"fixture": "unchanged"},
+        "dnsbl": {"pfb_dnsbl": "on"},
+        "registry": {"enable_cb": "on", "pfb_dnsbl": "on", "active": True},
+    }
+
+    def snapshot(*_args: object, **_kwargs: object) -> str:
+        return "<<<CONTROLS>>>" + json.dumps(state) + "<<<END>>>"
+
+    def ssh(_self: metrics.SmokeVM, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, "existing proxy command", "")
+
+    def get(_self: WebUI, _path: str) -> Response:
+        response = Response()
+        response.status_code = 200
+        response._content = html.encode()
+        return response
+
+    posted: list[dict[str, str]] = []
+
+    def post(_self: WebUI, path: str, fields: dict[str, str]) -> Response:
+        posted.append(dict(fields))
+        response = Response()
+        response.status_code = 200
+        response._content = b"privacy3757 refused Save; still enabled; No General settings were saved."
+        response.request = Request(
+            "POST", "https://fixture.invalid" + path, data={"save": "Save", **parsed, **fields}
+        ).prepare()
+        return response
+
+    monkeypatch.setattr(metrics, "_php_ok", snapshot)
+    monkeypatch.setattr(metrics.SmokeVM, "ssh", ssh)
+    monkeypatch.setattr(WebUI, "get", get)
+    monkeypatch.setattr(WebUI, "post", post)
+    metrics._save_client_privacy(object.__new__(metrics.SmokeVM), object.__new__(WebUI), False, refused=True)
+    assert posted == [{"pfb_metrics_client_ip": "", "log_syslog": "" if checked else "on"}]

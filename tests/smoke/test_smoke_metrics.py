@@ -932,7 +932,7 @@ def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool, *, refused: bool = F
     posted = {"pfb_metrics_client_ip": "on" if on else ""}
     submitted_controls = dict(before_controls)
     if refused:
-        posted["log_syslog"] = "" if before_controls["log_syslog"] == "on" else "on"
+        posted["log_syslog"] = "" if before_controls.get("log_syslog", "") == "on" else "on"
         submitted_controls["log_syslog"] = posted["log_syslog"]
     response = gui.post(general, posted)
     submitted = None
