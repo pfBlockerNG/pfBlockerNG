@@ -260,9 +260,6 @@ func (c config) validate() error {
 	if _, err := doh443Set(c.ddrDoH443); err != nil {
 		return err
 	}
-	if _, err := listenerInterfaceTable(c.listenerInterfaces); err != nil {
-		return fmt.Errorf("--listener-interface: %w", err)
-	}
 	for _, fixed := range []struct {
 		flag   string
 		values []string
@@ -478,10 +475,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 
 	g := newGateway(acl, dec, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
 	g.ddr, g.names = ddrAnswers, names
-	interfaces, err := listenerInterfaceTable(cfg.listenerInterfaces)
-	if err != nil {
-		return abort(err)
-	}
+	interfaces := listenerInterfaceTable(cfg.listenerInterfaces, logf)
 	g.listenerInterfaces.Store(&interfaces)
 	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{}),
 		swapped: make(chan struct{}), retiring: map[*child]*Decider{}}

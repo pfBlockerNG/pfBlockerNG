@@ -2,8 +2,13 @@ package main
 
 import (
 	"encoding/base64"
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 func listenerRow(ip, label string) string {
@@ -50,40 +55,227 @@ func TestListenerInterfaceSnapshotOnOpenConnection(t *testing.T) {
 	answer(ask(""))
 }
 
-func TestListenerInterfaceInvalidUpdateKeepsSnapshot(t *testing.T) {
-	k := newCtlRig(t)
-	initial := listenerRow("127.0.0.1", "LAN")
-	if got := k.send(t, addressTableFrame(initial)); got != "ok" {
-		t.Fatalf("initial snapshot: %q, want ok", got)
+// listenerValue is one `IP=BASE64` listener-interface value: what a flag takes and a pushed row carries after its word.
+func listenerValue(ip, label string) string {
+	return ip + "=" + base64.StdEncoding.EncodeToString([]byte(label))
+}
+
+// badListenerInterfaces are the entries that are skipped, as a flag and as a pushed row, whatever else is given.
+var badListenerInterfaces = map[string]string{
+	"base64 that is not base64":             "127.0.0.1=%%%",
+	"base64 with its trailing bits set":     "127.0.0.1=TF==",
+	"base64 with a carriage return in it":   "127.0.0.1=TE\rFO",
+	"base64 of a label with a line feed":    "127.0.0.1=YmFkCg==",
+	"no equals sign":                        "127.0.0.1",
+	"no value at all":                       "",
+	"an unspecified IPv4 address":           listenerValue("0.0.0.0", "bad"),
+	"an unspecified IPv6 address":           listenerValue("::", "bad"),
+	"an IPv6 address with a zone":           listenerValue("fe80::1%lo", "bad"),
+	"an address in brackets":                listenerValue("[::1]", "bad"),
+	"an address with a port":                listenerValue("127.0.0.1:53", "bad"),
+	"an address with a prefix length":       listenerValue("127.0.0.1/8", "bad"),
+	"an IPv4-mapped IPv6 address":           listenerValue("::ffff:127.0.0.1", "bad"),
+	"an IPv6 address Go spells differently": listenerValue("::1.2.3.4", "bad"),
+	"an IPv6 address in upper case":         listenerValue("2001:DB8::1", "bad"),
+	"a label with a line feed":              listenerValue("127.0.0.1", "bad\nlabel"),
+	"a label with a NUL":                    listenerValue("127.0.0.1", "bad\x00label"),
+	"a label with a DEL":                    listenerValue("127.0.0.1", "bad\x7flabel"),
+	"a label with a C1 control":             listenerValue("127.0.0.1", "bad\u0085label"),
+	"a label that is not UTF-8":             listenerValue("127.0.0.1", string([]byte{0xff})),
+	"a label with a zero-width joiner":      listenerValue("127.0.0.1", "bad\u200dlabel"),
+	"a label with a left-to-right mark":     listenerValue("127.0.0.1", "bad\u200elabel"),
+	"a label with a line separator":         listenerValue("127.0.0.1", "bad\u2028label"),
+	"a label with a paragraph separator":    listenerValue("127.0.0.1", "bad\u2029label"),
+}
+
+// goodListenerLabels are text: the rule skips controls, format characters and line breaks, not what is not ASCII.
+var goodListenerLabels = map[string]string{
+	"ASCII":                  "LAN",
+	"Latin letters":          "Län",
+	"CJK":                    "日本",
+	"a no-break space":       "a\u00a0b",
+	"an empty label":         "",
+	"quotes and a backslash": "LAN, \"quoted\" \\ café",
+}
+
+func listenerSnapshot(k *ctlRig) map[string]string {
+	got := map[string]string{}
+	if table := k.r.g.listenerInterfaces.Load(); table != nil {
+		for ip, label := range *table {
+			got[ip.String()] = label
+		}
 	}
-	for _, bad := range []string{
-		"listener-interface 127.0.0.1=%%%", "listener-interface 127.0.0.1=TEFO\n", listenerRow("0.0.0.0", "bad"), listenerRow("::", "bad"), listenerRow("fe80::1%lo", "bad"), listenerRow("[::1]", "bad"), listenerRow("127.0.0.1:53", "bad"), listenerRow("127.0.0.1/8", "bad"), listenerRow("::ffff:127.0.0.1", "bad"), listenerRow("127.0.0.1", "bad\nlabel"), listenerRow("127.0.0.1", "bad\x00label"), listenerRow("127.0.0.1", string([]byte{0xff})), initial + "\n" + initial,
+	return got
+}
+
+func requireListenerSnapshot(t *testing.T, k *ctlRig, want map[string]string, when string) {
+	t.Helper()
+	if got := listenerSnapshot(k); !maps.Equal(got, want) {
+		t.Fatalf("%s: listener interfaces %q, want %q", when, got, want)
+	}
+}
+
+func pushTable(t *testing.T, k *ctlRig, body string) {
+	t.Helper()
+	if got := k.send(t, addressTableFrame(body)); got != "ok" {
+		t.Fatalf("push %q: reply %q, want ok", body, got)
+	}
+}
+
+// requireLogLine says the log has the line, whole.
+func requireLogLine(t *testing.T, log, want string) {
+	t.Helper()
+	if !slices.Contains(strings.Split(log, "\n"), want) {
+		t.Fatalf("the log has no line %q; log:\n%s", want, log)
+	}
+}
+
+// requireSkipped says the log skips exactly these entries, each on a line of its own.
+func requireSkipped(t *testing.T, log string, values ...string) {
+	t.Helper()
+	if n := strings.Count(log, "listener-interface "); n != len(values) {
+		t.Fatalf("%d `listener-interface` lines in the log, want %d; log:\n%s", n, len(values), log)
+	}
+	for _, v := range values {
+		if want := fmt.Sprintf("listener-interface %.64q skipped: ", v); !strings.Contains(log, want) {
+			t.Fatalf("the log has no line starting %q; log:\n%s", want, log)
+		}
+	}
+}
+
+// A listener-interface row that is not valid costs only itself: the push is answered ok and the good rows are applied.
+func TestABadListenerInterfaceRowIsSkippedAndTheGoodRowsAreApplied(t *testing.T) {
+	for name, value := range badListenerInterfaces {
+		t.Run(name, func(t *testing.T) {
+			k := newCtlRig(t)
+			pushTable(t, k, listenerRow("127.0.0.1", "LAN"))
+			requireListenerSnapshot(t, k, map[string]string{"127.0.0.1": "LAN"}, "before the push")
+			pushTable(t, k, listenerRow("127.0.0.2", "kept")+"\nlistener-interface "+value)
+			requireListenerSnapshot(t, k, map[string]string{"127.0.0.2": "kept"}, "after the push")
+			requireSkipped(t, k.r.logs.joined(), value)
+		})
+	}
+}
+
+// Bad rows are skipped wherever they stand among the good ones, and the log counts what was applied.
+func TestBadListenerInterfaceRowsBetweenGoodRowsAreAllSkipped(t *testing.T) {
+	k := newCtlRig(t)
+	rows := []string{listenerRow("127.0.0.2", "first")}
+	var values []string
+	for _, value := range badListenerInterfaces {
+		values = append(values, value)
+		rows = append(rows, "listener-interface "+value)
+	}
+	rows = append(rows, listenerRow("127.0.0.3", "last"))
+	pushTable(t, k, strings.Join(rows, "\n"))
+	requireListenerSnapshot(t, k, map[string]string{"127.0.0.2": "first", "127.0.0.3": "last"}, "after the push")
+	requireSkipped(t, k.r.logs.joined(), values...)
+	requireLogLine(t, k.r.logs.joined(), "address table: 0 name answers, 0 DoH 443 addresses, 2 listener interfaces")
+}
+
+// Labels that are text are applied, so that the skipped set above is not everything.
+func TestListenerInterfaceLabelsThatAreTextAreApplied(t *testing.T) {
+	for name, label := range goodListenerLabels {
+		t.Run(name, func(t *testing.T) {
+			k := newCtlRig(t)
+			pushTable(t, k, listenerRow("127.0.0.1", label))
+			requireListenerSnapshot(t, k, map[string]string{"127.0.0.1": label}, "after the push")
+			requireSkipped(t, k.r.logs.joined())
+		})
+	}
+}
+
+// Two rows for one address: the first is applied, the second is skipped and logged, whatever its label.
+func TestTheFirstOfTwoListenerInterfaceRowsForOneAddressWins(t *testing.T) {
+	initial := listenerRow("127.0.0.1", "LAN")
+	for name, second := range map[string]string{"the same row twice": initial, "a different label": listenerRow("127.0.0.1", "other")} {
+		t.Run(name, func(t *testing.T) {
+			k := newCtlRig(t)
+			pushTable(t, k, listenerRow("127.0.0.2", "kept")+"\n"+initial+"\n"+second)
+			requireListenerSnapshot(t, k, map[string]string{"127.0.0.2": "kept", "127.0.0.1": "LAN"}, "after the push")
+			requireSkipped(t, k.r.logs.joined(), strings.TrimPrefix(second, "listener-interface "))
+		})
+	}
+}
+
+// What still refuses the whole push: the framing of the body.
+func TestABodyThatIsNotFramedRightIsRefusedWholeAndKeepsTheListenerInterfaceSnapshot(t *testing.T) {
+	good := listenerRow("127.0.0.2", "must not leak")
+	for name, body := range map[string]string{
+		"a newline at the end":    good + "\n",
+		"an empty line":           good + "\n\n" + listenerRow("127.0.0.3", "must not leak"),
+		"an unknown word":         good + "\nsomething 127.0.0.3=TEFO",
+		"a bad row and a newline": good + "\nlistener-interface " + badListenerInterfaces["no equals sign"] + "\n",
 	} {
-		t.Run(bad, func(t *testing.T) {
-			body := listenerRow("127.0.0.2", "must not leak") + "\n" + bad
+		t.Run(name, func(t *testing.T) {
+			k := newCtlRig(t)
+			pushTable(t, k, listenerRow("127.0.0.1", "LAN"))
 			if got := k.send(t, addressTableFrame(body)); !strings.HasPrefix(got, "error:") {
-				t.Fatalf("bad update returned %q, want error", got)
+				t.Fatalf("reply %q, want an error", got)
 			}
-			table := k.r.g.listenerInterfaces.Load()
-			if table == nil || len(*table) != 1 {
-				t.Fatalf("snapshot=%v, want unchanged one-row table", table)
-			}
-			for ip, label := range *table {
-				if ip.String() != "127.0.0.1" || label != "LAN" {
-					t.Fatalf("snapshot contains %s=%q, want only 127.0.0.1=LAN", ip, label)
-				}
+			requireListenerSnapshot(t, k, map[string]string{"127.0.0.1": "LAN"}, "after the refused push")
+		})
+	}
+}
+
+// A good listener row does not rescue a body whose name row is bad: names and DDR are still validated whole.
+func TestABadNameRowStillRefusesTheWholePushWithGoodListenerInterfaceRows(t *testing.T) {
+	k := newInitialNamesCtlRig(t)
+	pushTable(t, k.ctlRig, tableLine("10.0.0.1=10.0.0.9")+"\n"+listenerRow("127.0.0.1", "LAN"))
+	k.requireAnswer(t, "10.0.0.1", dnsmessage.TypeA, "10.0.0.9", "before the refused push")
+	body := listenerRow("127.0.0.2", "must not leak") + "\n" + tableLine("10.0.0.3=bad")
+	if got := k.send(t, addressTableFrame(body)); !strings.HasPrefix(got, "error: ") {
+		t.Fatalf("reply %q, want an error", got)
+	}
+	requireListenerSnapshot(t, k.ctlRig, map[string]string{"127.0.0.1": "LAN"}, "after the refused push")
+	k.requireAnswer(t, "10.0.0.1", dnsmessage.TypeA, "10.0.0.9", "after the refused push")
+}
+
+// The log line says how many interfaces the push set, and an ownership-only change is logged too.
+func TestAnAddressTableLogLineCountsTheListenerInterfaces(t *testing.T) {
+	k := newCtlRig(t)
+	pushTable(t, k, listenerRow("127.0.0.1", "LAN"))
+	requireLogLine(t, k.r.logs.joined(), "address table: 0 name answers, 0 DoH 443 addresses, 1 listener interfaces")
+	n := newInitialNamesCtlRig(t)
+	pushTable(t, n.ctlRig, tableLine("10.0.0.2=10.0.0.2")+"\n"+listenerRow("127.0.0.1", "LAN")+"\n"+listenerRow("127.0.0.2", "WAN"))
+	requireLogLine(t, n.r.logs.joined(), "address table: 1 name answers, 0 DoH 443 addresses, 2 listener interfaces")
+}
+
+// An entry that is not valid is no reason to refuse the flags: the gateway starts and skips it, as a push does.
+func TestBadListenerInterfaceFlagsAreNotRefusedByParse(t *testing.T) {
+	for name, value := range badListenerInterfaces {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := parse(t, "--listener-interface", value, "--", "decider")
+			if err != nil || !slices.Equal(cfg.listenerInterfaces, []string{value}) {
+				t.Fatalf("flag %q: listenerInterfaces %q, error %v, want the flag kept and no error", value, cfg.listenerInterfaces, err)
 			}
 		})
 	}
 }
 
-func TestListenerInterfaceFlagWithoutDNSName(t *testing.T) {
-	if _, err := parse(t, "--listener-interface", "127.0.0.1=TEFO", "--", "decider"); err != nil {
-		t.Fatalf("owner flag without DNS name: %v", err)
+// At start the good flags are applied, the first flag for an address wins, and each skipped flag is logged.
+func TestStartSkipsBadListenerInterfaceFlagsAndAppliesTheGoodOnes(t *testing.T) {
+	cfg, logs := lifecycleConfig(t, "serve")
+	oversized := listenerValue("127.0.0.9", strings.Repeat("a", 65536))
+	second := listenerValue("127.0.0.1", "second")
+	cfg.listenerInterfaces = []string{listenerValue("127.0.0.1", "kept"), listenerValue("127.0.0.2", "Län"), listenerValue("127.0.0.3", "日本"), oversized}
+	skipped := []string{oversized, second}
+	for _, value := range badListenerInterfaces {
+		cfg.listenerInterfaces = append(cfg.listenerInterfaces, value)
+		skipped = append(skipped, value)
 	}
-	for _, row := range []string{"127.0.0.1=%%%", "0.0.0.0=TEFO", "127.0.0.1=YmFkCg=="} {
-		if _, err := parse(t, "--listener-interface", row, "--", "decider"); err == nil {
-			t.Fatalf("invalid owner flag %q accepted", row)
-		}
+	cfg.listenerInterfaces = append(cfg.listenerInterfaces, second)
+	srv, err := start(cfg, logs.logf)
+	if err != nil {
+		t.Fatalf("a bad listener-interface flag must not stop the gateway: %v", err)
 	}
+	defer srv.shutdown()
+	got := map[string]string{}
+	for ip, label := range *srv.g.listenerInterfaces.Load() {
+		got[ip.String()] = label
+	}
+	if want := map[string]string{"127.0.0.1": "kept", "127.0.0.2": "Län", "127.0.0.3": "日本"}; !maps.Equal(got, want) {
+		t.Fatalf("listener interfaces %q, want %q", got, want)
+	}
+	requireSkipped(t, logs.text(), skipped...)
 }

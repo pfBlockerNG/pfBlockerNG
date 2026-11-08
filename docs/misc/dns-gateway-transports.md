@@ -85,12 +85,18 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
 - **Address tables** (issues #3694, #3757). `FF FF FF FB`, a 4-byte big-endian length 0 to 65536, then lines joined by
   `\n` with no trailing newline or empty line. Rows are `dns-name-answer LOCAL=ADDR[,ADDR]`, `ddr-doh-443 ADDR`,
   or `listener-interface IP=BASE64UTF8`; the first two retain their corresponding flag formats.
-  `dns-name-answer LOCAL=` explicitly owns the Name without either address family. Interface values use canonical
-  standard base64 of valid UTF-8 descriptions without control characters; owner IPs are canonical, unscoped and
-  non-unspecified, and duplicate owner addresses are rejected. The complete body is validated before any table changes.
+  `dns-name-answer LOCAL=` explicitly owns the Name without either address family. A `listener-interface` entry (a row, or
+  a `--listener-interface` flag) is valid when its IP is canonical, unscoped and not unspecified, and its label is canonical
+  standard base64 of at most 65535 bytes of valid UTF-8 with no control, format, line-separator or paragraph-separator
+  character (so `Län` and `日本` are valid, a zero-width joiner or U+2028 is not; an empty label is valid). An entry that is
+  not valid is logged (`listener-interface "<entry>" skipped: <reason>`) and skipped, and the first of two entries for one
+  address wins; the others apply, in a push and at startup alike, and neither refuses the push nor stops the gateway. Name
+  and DDR rows and the framing of the body (no empty line, no trailing newline, a known first word) are still validated as a
+  whole before any table changes, and a body that fails them leaves the previous tables intact.
   Ownership-only or empty updates work without `--dns-name` or DDR; name rows still require `--dns-name` and DoH 443
   rows still require DDR. An empty body empties all tables. The gateway replaces each immutable table snapshot, logs
-  only a changed table, and replies `ok`; malformed rows leave the previous tables intact.
+  only a changed table as `address table: <N> name answers, <N> DoH 443 addresses, <N> listener interfaces` (an
+  ownership-only change too; the count is the entries applied), and replies `ok`.
   Repeatable `--listener-interface IP=BASE64UTF8` flags initialize the owner snapshot at startup. PHP uses the existing
   address-table push after listener synchronization to refresh ownership as well as name/DDR rows; in-flight queries
   retain their captured description. A gateway older than the verb answers

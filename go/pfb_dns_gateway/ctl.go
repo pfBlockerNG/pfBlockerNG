@@ -202,8 +202,9 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 }
 
 // addressTable is the reply to the address table verb: the body, read in full whatever it holds, is validated whole, so that a
-// bad line leaves both tables as they were; a good body replaces both, and is logged only when it differs from them. A query
-// reads one table, so no query sees one replaced and the other not.
+// bad line leaves both tables as they were; only a listener-interface entry that is not valid is skipped, with a log line, and
+// the rest applies. A good body replaces both, and is logged only when it differs from them. A query reads one table, so no
+// query sees one replaced and the other not.
 func (c *ctlServer) addressTable(in io.Reader) string {
 	var size [4]byte
 	if _, err := io.ReadFull(in, size[:]); err != nil {
@@ -220,7 +221,7 @@ func (c *ctlServer) addressTable(in io.Reader) string {
 	if c.names == nil && c.interfaces == nil {
 		return "error: started without --dns-name"
 	}
-	table, err := parseAddressTable(body)
+	table, err := parseAddressTable(body, c.logf)
 	if err != nil {
 		return "error: " + err.Error()
 	}
@@ -246,7 +247,7 @@ func (c *ctlServer) addressTable(in io.Reader) string {
 		changed = !maps.Equal(c.ddr.setDoH443(table.doh443), table.doh443) || changed
 	}
 	if changed {
-		c.logf("address table: %d name answers, %d DoH 443 addresses", len(table.names), len(table.doh443))
+		c.logf("address table: %d name answers, %d DoH 443 addresses, %d listener interfaces", len(table.names), len(table.doh443), len(table.interfaces))
 	}
 	return "ok"
 }

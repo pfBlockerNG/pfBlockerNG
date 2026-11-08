@@ -140,11 +140,11 @@ type addressTable struct {
 
 // parseAddressTable reads the body of the address table verb: lines separated by \n, no line empty, each led by the word that
 // says what it is. `dns-name-answer` carries a flag's value of --dns-name-answer, `ddr-doh-443` an address as --ddr-doh-443
-// takes it. The first bad line is the error, and no table is made of a body that has one.
-func parseAddressTable(body []byte) (addressTable, error) {
-	var answers []string
+// takes it, `listener-interface` a flag's value of --listener-interface. The first bad line is the error, and no table is made
+// of a body that has one; a listener-interface line that is not valid is no such error: it is logged and skipped.
+func parseAddressTable(body []byte, logf func(format string, args ...any)) (addressTable, error) {
+	var answers, listeners []string
 	doh443 := map[netip.Addr]struct{}{}
-	interfaces := map[netip.Addr]string{}
 	if len(body) > 0 {
 		for i, line := range strings.Split(string(body), "\n") {
 			word, value, _ := strings.Cut(line, " ")
@@ -158,9 +158,7 @@ func parseAddressTable(body []byte) (addressTable, error) {
 				}
 				doh443[ip] = struct{}{}
 			case "listener-interface":
-				if err := addListenerInterface(interfaces, value); err != nil {
-					return addressTable{}, fmt.Errorf("line %d: listener-interface: %w", i+1, err)
-				}
+				listeners = append(listeners, value)
 			default:
 				return addressTable{}, fmt.Errorf("line %d: %.64q does not start with dns-name-answer, ddr-doh-443 or listener-interface", i+1, line)
 			}
@@ -170,9 +168,12 @@ func parseAddressTable(body []byte) (addressTable, error) {
 	if err != nil {
 		return addressTable{}, err
 	}
-	return addressTable{names: names, doh443: doh443, interfaces: interfaces}, nil
+	return addressTable{names: names, doh443: doh443, interfaces: listenerInterfaceTable(listeners, logf)}, nil
 }
 
+// addListenerInterface adds an `IP=BASE64` value to table: the IP canonical, unscoped, not unspecified and new to table; the
+// label canonical base64 of at most 65535 bytes of UTF-8 with no control, format, line or paragraph separator character. An
+// empty label is valid.
 func addListenerInterface(table map[netip.Addr]string, value string) error {
 	text, encoded, found := strings.Cut(value, "=")
 	ip, err := netip.ParseAddr(text)
@@ -183,21 +184,25 @@ func addListenerInterface(table map[netip.Addr]string, value string) error {
 		return fmt.Errorf("duplicate listener IP %s", ip)
 	}
 	label, err := base64.StdEncoding.Strict().DecodeString(encoded)
-	if err != nil || base64.StdEncoding.EncodeToString(label) != encoded || len(label) > 65535 || !utf8.Valid(label) || strings.ContainsFunc(string(label), unicode.IsControl) {
+	if err != nil || base64.StdEncoding.EncodeToString(label) != encoded || len(label) > 65535 || !utf8.Valid(label) || strings.ContainsFunc(string(label), barredInLabel) {
 		return fmt.Errorf("invalid listener interface label for %s", ip)
 	}
 	table[ip] = string(label)
 	return nil
 }
 
-func listenerInterfaceTable(values []string) (map[netip.Addr]string, error) {
+func barredInLabel(r rune) bool { return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) }
+
+// listenerInterfaceTable is the table the values make. A value that is not valid costs the others nothing: it is logged and
+// skipped, and of two for one address the first wins.
+func listenerInterfaceTable(values []string, logf func(format string, args ...any)) map[netip.Addr]string {
 	table := make(map[netip.Addr]string, len(values))
 	for _, value := range values {
 		if err := addListenerInterface(table, value); err != nil {
-			return nil, err
+			logf("listener-interface %.64q skipped: %v", value, err)
 		}
 	}
-	return table, nil
+	return table
 }
 
 // answer replies to exactly one IN QUERY for the DNS name, A or AAAA, at an owned local address; an absent family gets
