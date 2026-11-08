@@ -28,7 +28,9 @@ import os
 import re
 import secrets
 from collections.abc import Iterator
+from contextlib import ExitStack
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs
 
 import pytest
 
@@ -53,6 +55,7 @@ from .test_smoke_dns_gateway import gui as gui
 from .test_smoke_dns_gateway import gw as gw
 from .test_smoke_dns_gateway import probe_binary as probe_binary
 from .test_smoke_dns_proxy import PROXY_RC, _apply, _capture, _client_alias, _php_ok, _proxy_log, _set_proxy_toggle
+from .ui.webui import CSRF_FIELD, scrape_form_fields
 
 if TYPE_CHECKING:
     from prometheus_client.metrics_core import Metric
@@ -118,7 +121,15 @@ def _textfile_dir(deployed_vm: SmokeVM) -> Iterator[None]:
         finally:
             if not existed:
                 removed = deployed_vm.ssh("/bin/rmdir", _TEXTFILE_DIR)
-                assert removed.returncode == 0, removed.stderr
+                if removed.returncode != 0:
+                    absent = deployed_vm.ssh(
+                        f"test -x /var/tmp && test ! -e {_TEXTFILE_DIR} && test ! -L {_TEXTFILE_DIR}"
+                    )
+                    assert (
+                        removed.returncode == 1
+                        and removed.stderr == f"rmdir: {_TEXTFILE_DIR}: No such file or directory\n"
+                        and absent.returncode == 0
+                    ), f"owned textfile directory cleanup failed: {removed!r}; absence probe: {absent!r}"
 
 
 def _set_export(vm: SmokeVM, on: bool) -> None:
@@ -874,6 +885,75 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
             )
 
 
+def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool) -> None:
+    """Record the real Save boundary without changing any nonprivacy control."""
+    general = "/pfblockerng/pfblockerng_general.php"
+
+    def snapshot(stage: str) -> dict[str, object]:
+        output = _php_ok(
+            vm,
+            f"require_once('{_PKG}'); pfb_global();"
+            f"$gen = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());"
+            "$effectiveGen = array(); $foreignGen = $gen;"
+            "foreach (pfb_cfg_registry() as $key => $entry) {"
+            "if (!str_starts_with($key, 'gen/')) { continue; }"
+            "$bare = substr($key, 4); $value = PfbConfig::read($key);"
+            "$effectiveGen[$bare] = $value instanceof PfbStoredEnum ? $value->toStored() : $value;"
+            "unset($foreignGen[$bare]); }"
+            "unset($effectiveGen['pfb_metrics_client_ip']);"
+            "$state = array('gen' => $gen, 'effectiveGen' => $effectiveGen, 'foreignGen' => $foreignGen,"
+            f"'dnsbl' => config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array()),"
+            "'registry' => array('enable_cb' => PfbConfig::read('gen/enable_cb')->value,"
+            "'pfb_dnsbl' => PfbConfig::read('dnsbl/pfb_dnsbl')->value,"
+            "'active' => pfb_dnsbl_active()));"
+            "echo '<<<CONTROLS>>>' . json_encode($state) . '<<<END>>>';",
+            "capture privacy Save controls",
+        )
+        match = re.search(r"<<<CONTROLS>>>(.*?)<<<END>>>", output, re.DOTALL)
+        assert match, output
+        state = json.loads(match.group(1))
+        script = vm.ssh("/bin/cat", PROXY_RC)
+        assert script.returncode == 0, script.stderr
+        print(f"PRIVACY_SAVE {stage} config={json.dumps(state, sort_keys=True)}\n{script.stdout}", flush=True)
+        return state
+
+    def controls() -> dict[str, str]:
+        page = gui.get(general)
+        assert page.status_code == 200, page.text
+        return {
+            key: value
+            for key, value in scrape_form_fields(page.text).items()
+            if key not in (CSRF_FIELD, "save", "pfb_metrics_client_ip")
+        }
+
+    before = snapshot("before")
+    before_controls = controls()
+    response = gui.post(general, {"pfb_metrics_client_ip": "on" if on else ""})
+    submitted = None
+    for reply in [*response.history, response]:
+        if reply.request.method == "POST":
+            body = reply.request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8")
+            assert isinstance(body, str), f"General Save did not submit an encoded form: {type(body)!r}"
+            submitted = parse_qs(body, keep_blank_values=True)
+            submitted.pop(CSRF_FIELD, None)
+            print(f"PRIVACY_SAVE submitted={json.dumps(submitted, sort_keys=True)}", flush=True)
+    assert submitted is not None, "real General Save did not expose a captured POST request"
+    after = snapshot("after")
+    after_controls = controls()
+    assert response.status_code == 200, response.text
+    assert h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_metrics_client_ip") == ("on" if on else ""), response.text
+    assert {key: values for key, values in submitted.items() if key not in ("save", "pfb_metrics_client_ip")} == {
+        key: [value] for key, value in before_controls.items()
+    }, (before_controls, submitted)
+    assert after["effectiveGen"] == before["effectiveGen"], (before, after)
+    assert after["foreignGen"] == before["foreignGen"], (before, after)
+    assert after["dnsbl"] == before["dnsbl"], (before, after)
+    assert after_controls == before_controls, (before_controls, after_controls, before, after)
+    assert after["registry"] == before["registry"], (before, after)
+
+
 @pytest.mark.smoke
 @pytest.mark.timeout(1800)
 def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
@@ -881,10 +961,11 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
 ) -> None:
     """Actual two-client traffic, Save-time purge, enabled restart and failed-batch retry."""
     vm = gw.vm
-    general = "/pfblockerng/pfblockerng_general.php"
+    # gateway_on can validly inherit DNSBL disabled; inject_dnsbl_lists enables both core and DNSBL below.
     client_path = f"{h.CFG_GLOBAL}/pfb_metrics_client_ip"
-    paths = (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, f"{h.CFG_GLOBAL}/pfb_metrics_export", client_path)
+    paths = (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, h.CFG_GLOBAL)
     prior = {path: h.config_get_state(vm, path) for path in paths}
+    prior_client = h.config_get_state(vm, client_path)
     alias = f"smprivacy{secrets.token_hex(4)}"
     group = f"DNSBL_{alias}"
     names = [h.unique_domain("privacy") for _ in range(8)]
@@ -895,22 +976,22 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
         feed_url=h.write_local_feed(vm, f"{alias}.txt", "".join(f"{name}\n" for name in names)),
     )
 
-    def save(on: bool) -> None:
-        response = gui.post(general, {"pfb_metrics_client_ip": "on" if on else ""})
-        assert response.status_code == 200, response.text
-        assert h.config_get(vm, client_path) == ("on" if on else ""), response.text
-
     def counted(total: int, clients: dict[str, float]) -> None:
         current = _wait_blocks(vm, {group: {("A", "UDP"): total}})
         rows = [(labels, value) for labels, value in _samples(current, _BLOCKED) if labels.get("group") == group]
         assert rows, "privacy assertions require actual counted requests"
-        assert all(labels.get("listener_ip") == PFSENSE_LAN_IP for labels, _ in rows), rows
-        assert all(labels.get("listener_interface") == LAN_DESCRIPTION for labels, _ in rows), rows
+        assert sum(value for _, value in rows) == total, rows
+        assert [value for labels, value in rows if labels == {"group": group}] == [0], rows
+        attributed = [(labels, value) for labels, value in rows if labels != {"group": group}]
+        assert all(labels.get("listener_ip") == PFSENSE_LAN_IP for labels, _ in attributed), rows
+        assert all(labels.get("listener_interface") == LAN_DESCRIPTION for labels, _ in attributed), rows
         actual: dict[str, float] = {}
         for labels, value in rows:
             if "client_ip" in labels:
                 actual[labels["client_ip"]] = actual.get(labels["client_ip"], 0) + value
         assert actual == clients, rows
+        if not clients:
+            assert all("client_ip" not in labels for labels, _ in rows), rows
 
     def ask(index: int, second: bool = False) -> None:
         answer, raw = _ask_from_alias(gw, "udp", names[index]) if second else _ask(gw.client, "udp", names[index])
@@ -919,16 +1000,18 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
     try:
         h.inject_dnsbl_lists(vm, [(spec, "Deny")])
         _set_export(vm, True)
-        save(False)
+        _save_client_privacy(vm, gui, False)
         h.config_restore_state(vm, client_path, (False, ""))
         assert h.config_get_state(vm, client_path) == (False, ""), "default-OFF proof needs an absent setting"
         _apply(vm)
+        print(f"PRIVACY_APPLY default-off={_capture(vm)!r}", flush=True)
         with _client_alias(gw.client, BYPASSED_ALIAS_IP):
             ask(0)
             ask(1, True)
             counted(2, {})
-            save(True)
+            _save_client_privacy(vm, gui, True)
             _apply(vm)
+            print(f"PRIVACY_APPLY enabled={_capture(vm)!r}", flush=True)
             ask(2)
             ask(3, True)
             counted(4, {CLIENT_LAN_IP: 1, BYPASSED_ALIAS_IP: 1})
@@ -946,7 +1029,7 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
             )
             ask(4, True)
             h.wait_until(lambda: "privacy3757 retry" in _proxy_log(vm, 100), timeout=60.0, interval=0.5)
-            save(False)
+            _save_client_privacy(vm, gui, False)
             assert BYPASSED_ALIAS_IP not in vm.ssh("/bin/cat", _PROM).stdout, "OFF Save left old published client"
             _php_ok(
                 vm,
@@ -957,7 +1040,7 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
             counted(5, {})
             ask(5)  # Same worker still holds its old enabled epoch.
             counted(6, {})
-            save(True)  # No Apply: stale enabled worker cannot acquire the new epoch.
+            _save_client_privacy(vm, gui, True)  # No Apply: stale worker cannot acquire the new epoch.
             ask(6)
             counted(7, {})
             _apply(vm)
@@ -965,16 +1048,23 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
             counted(8, {CLIENT_LAN_IP: 1})
             assert BYPASSED_ALIAS_IP not in vm.ssh("/bin/cat", _PROM).stdout, "purged old client reappeared"
     finally:
-        _php_ok(
-            vm,
-            "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite');"
-            "$db->exec('DROP TRIGGER IF EXISTS privacy3757'); $db->close();",
-            "remove privacy retry fixture",
-        )
-        save(prior[client_path][1] == "on")
-        for path, state in prior.items():
-            h.config_restore_state(vm, path, state)
-        _apply(vm)
+        try:
+            _php_ok(
+                vm,
+                "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite');"
+                "$db->exec('DROP TRIGGER IF EXISTS privacy3757'); $db->close();",
+                "remove privacy retry fixture",
+            )
+        finally:
+            try:
+                _save_client_privacy(vm, gui, prior_client[1] == "on")
+            finally:
+                try:
+                    with ExitStack() as restore:
+                        for path, state in reversed(prior.items()):
+                            restore.callback(h.config_restore_state, vm, path, state)
+                finally:
+                    _apply(vm)
 
 
 @pytest.mark.smoke
@@ -983,8 +1073,9 @@ def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gatew
     """Every original transport over both LAN families reaches the public metrics file with exact counts."""
     vm = gw.vm
     client_path = f"{h.CFG_GLOBAL}/pfb_metrics_client_ip"
-    paths = (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, f"{h.CFG_GLOBAL}/pfb_metrics_export", client_path)
+    paths = (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, h.CFG_GLOBAL)
     prior = {path: h.config_get_state(vm, path) for path in paths}
+    prior_client = h.config_get_state(vm, client_path)
     alias = f"smendpoint{secrets.token_hex(4)}"
     group = f"DNSBL_{alias}"
     names = {
@@ -1001,9 +1092,9 @@ def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gatew
     try:
         h.inject_dnsbl_lists(vm, [(spec, "Deny")])
         _set_export(vm, True)
-        response = gui.post("/pfblockerng/pfblockerng_general.php", {"pfb_metrics_client_ip": ""})
-        assert response.status_code == 200 and h.config_get(vm, client_path) == "", response.text
+        _save_client_privacy(vm, gui, False)
         _apply(vm)
+        print(f"ENDPOINT_MATRIX_APPLY {_capture(vm)!r}", flush=True)
         wanted: dict[tuple[str, str], float] = {}
         exact: dict[tuple[str, str], float] = {}
         with _client_v6(gw.client):
@@ -1015,16 +1106,35 @@ def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gatew
                 exact[address, label] = exact.get((address, label), 0) + 1
         families = _wait_blocks(vm, {group: wanted})
         rows = [(labels, value) for labels, value in _samples(families, _BLOCKED) if labels.get("group") == group]
-        assert all(
-            "client_ip" not in labels and labels.get("listener_interface") == LAN_DESCRIPTION for labels, _ in rows
-        ), rows
-        assert {(labels["listener_ip"], labels["transport"]): value for labels, value in rows} == exact, rows
+        assert all("client_ip" not in labels for labels, _ in rows), rows
         assert sum(value for _, value in rows) == len(names), rows
+        assert [value for labels, value in rows if labels == {"group": group}] == [0], rows
+        attributed = [(labels, value) for labels, value in rows if labels != {"group": group}]
+        assert all(labels.get("listener_interface") == LAN_DESCRIPTION for labels, _ in attributed), rows
+        expected_rows = [
+            (
+                {
+                    "group": group,
+                    "origin": "custom",
+                    "qtype": "A",
+                    "transport": transport,
+                    "listener_ip": address,
+                    "listener_interface": LAN_DESCRIPTION,
+                },
+                value,
+            )
+            for (address, transport), value in exact.items()
+        ]
+        assert sorted((tuple(sorted(labels.items())), value) for labels, value in attributed) == sorted(
+            (tuple(sorted(labels.items())), value) for labels, value in expected_rows
+        ), rows
     finally:
-        gui.post(
-            "/pfblockerng/pfblockerng_general.php",
-            {"pfb_metrics_client_ip": "on" if prior[client_path][1] == "on" else ""},
-        )
-        for path, state in prior.items():
-            h.config_restore_state(vm, path, state)
-        _apply(vm)
+        try:
+            _save_client_privacy(vm, gui, prior_client[1] == "on")
+        finally:
+            try:
+                with ExitStack() as restore:
+                    for path, state in reversed(prior.items()):
+                        restore.callback(h.config_restore_state, vm, path, state)
+            finally:
+                _apply(vm)

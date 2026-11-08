@@ -24,8 +24,8 @@ What it proves, in file order:
   ``pfb_dns_proxy.py --decision-fd 3``, both as ``unbound``; ``dns_proxy.log`` has the ``listening`` lines and
   ``ready upstream 127.0.0.1:5353 pid N``, N the gateway's; the gateway owns every client-facing socket (DoH and DoQ on
   loopback too, for a local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
-* the pfB-DNS tab's status panel is one table per transport with a Localhost row (127.0.0.1 and [::1] at the transport's
-  port) and a LAN row (the LAN address), each reading ``Listening`` for a screen reader (issue #3555);
+* the pfB-DNS tab's status panel is one table per transport with a Localhost row (loopbacks plus the served lo0 VIP
+  for plain DNS and DoT) and a LAN row (the LAN address), each reading ``Listening`` for a screen reader (issue #3555);
 * when Unbound stops under the live gateway (issue #3560), the status panel reads ``Starting`` and every table keeps its
   ``Listening`` rows; the Resolver is restored afterwards and an allowed name resolves again;
 * Unbound runs the upstream observer, an upstream EDE block is logged with the real client, and the firewall's own
@@ -133,6 +133,7 @@ from .test_smoke_dns_proxy import (
     _wait_dnsbl_row,
     _wait_unbound_logged,
 )
+from .test_syslog_export import CFG_GENERAL, PFB_SYSLOG_LOG, _capture_raw_syslog_history, _set_syslog_enabled
 from .ui.credgate import admin_password_decision
 from .ui.webui import WebUI, row_containing
 
@@ -158,7 +159,8 @@ LAN_V6_CLIENT = h.IPV6_LOCAL_HOST  # taken by the client inside the LAN's IPv6 /
 OTHER_ACL_NET = ("203.0.113.0", "24")  # TEST-NET-3: an access list that names nobody on the LAN
 AUTO_ROWS_OFF = "unbound/disable_auto_added_access_control"  # pfSense's switch for the LAN rows it adds by itself
 LOOPBACK = {"127.0.0.1", "::1"}  # DoH and DoQ always listen here too, whatever interfaces they are given
-LAN_DESCRIPTION = 'LAN, "旧" & owner'
+LAN_CONFIG_DESCRIPTION = 'LAN, "旧" & owner'
+LAN_DESCRIPTION = 'LAN, "旧" & OWNER'  # pfSense's interface API canonicalizes descriptions to uppercase
 SNAPSHOT_FILE = "/tmp/pfb3513_cfg_snapshot.json"  # on the guest: survives a dead test process
 
 LISTENER_SETTINGS = {
@@ -208,10 +210,10 @@ TRANSPORTS = ("udp", "tcp", "dot", "doh-post", "doh-get", "doq")
 LOG_TRANSPORT = {"udp": "UDP", "tcp": "TCP", "dot": "DoT", "doh-post": "DoH", "doh-get": "DoH", "doq": "DoQ"}
 
 
-def _drain_logs(gw: Gateway) -> None:
+def _drain_logs(gw: Gateway, *, port: int = 53) -> None:
     """A fresh completed reply drains the decider's earlier log writes."""
     name = h.unique_domain("transport-log-barrier")
-    answer, raw = _ask(gw.client, "udp", name)
+    answer, raw = _ask(gw.client, "udp", name, port=port)
     assert h.resolves_to(answer, STUB_DNS_A), f"log barrier {name}: {answer}\n{raw}"
     h.wait_until(lambda: bool(_reply_rows(gw.vm, name, UNIFIED_LOG)), timeout=30.0)
 
@@ -274,6 +276,7 @@ class Names:
     blocked: dict[str, str]  # per transport
     logged: dict[str, str]  # reserved for the one-query-per-transport log assertions
     logged_v6: dict[str, str]  # dedicated endpoint metadata coverage
+    syslog: dict[str, str]  # never reused: one exported endpoint event per transport
     refused: dict[str, str]  # per transport, asked while the ACL refuses the client
     denied: dict[str, str]  # per transport, asked while the ACL denies the client
     restored: dict[str, str]  # per transport, asked after the refuse row is gone
@@ -295,6 +298,7 @@ class Names:
         per_transport = (
             *self.logged.values(),
             *self.logged_v6.values(),
+            *self.syslog.values(),
             *self.blocked.values(),
             *self.refused.values(),
             *self.denied.values(),
@@ -328,6 +332,7 @@ def _make_names() -> Names:
         blocked=per_transport("blocked"),
         logged=per_transport("logged"),
         logged_v6=per_transport("logged-v6"),
+        syslog=per_transport("endpoint-syslog"),
         refused=per_transport("refused"),
         denied=per_transport("denied"),
         restored=per_transport("restored"),
@@ -804,7 +809,7 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
         lan_v6_prior = h.set_interface_ipv6(vm, h.IPV6_LOCAL_IFACE, LAN_V6_ADDR, h.IPV6_LOCAL_BITS)
         _php_ok(
             vm,
-            f"config_set_path('interfaces/lan/descr', {h._php_str(LAN_DESCRIPTION)});"
+            f"config_set_path('interfaces/lan/descr', {h._php_str(LAN_CONFIG_DESCRIPTION)});"
             "write_config('pfBlockerNG smoke: event interface description');",
             "set known interface description",
         )
@@ -1058,8 +1063,8 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
     """issue #3555: the status panel is one table per transport, a row per interface.
 
     Given the gateway serves plain DNS and DoT, DoH and DoQ (the toggles this module turns on, none off),
-    Then each table has a Localhost row that is exactly 127.0.0.1 and [::1] at the transport's port and a LAN row that
-      holds the LAN address at it, both reading `Listening` for a screen reader.
+    Then each table has a Localhost row with exactly its served lo0 VIP and loopbacks at the transport's port and a LAN
+      row that holds the LAN address at it, both reading `Listening` for a screen reader.
     """
     ports = {"plain": 53, "dot": DOT_PORT, "doh": DOH_PORT, "doq": DOQ_PORT}
     page = ""
@@ -1074,7 +1079,11 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
         rows = _status_rows(page, transport)
         _say(f"status panel, {transport}: {rows}")
         loopback = [row for row in rows if row[0] == "Localhost"]
-        assert loopback == [("Localhost", [f"127.0.0.1:{port}", f"[::1]:{port}"], "Listening")], (
+        localhost_addresses = [f"127.0.0.1:{port}", f"[::1]:{port}"]
+        # Plain DNS and DoT select all addresses; the LAN-only DoH/DoQ lists exclude the lo0 VIP.
+        if transport in ("plain", "dot"):
+            localhost_addresses.insert(0, f"{h.DEFAULT_DNSBL_VIP4}:{port}")
+        assert loopback == [("Localhost", localhost_addresses, "Listening")], (
             f"{transport}: the Localhost row is {loopback}; all rows: {rows}"
         )
         lan = [row for row in rows if row[0] == LAN_DESCRIPTION and f"{PFSENSE_LAN_IP}:{port}" in row[1]]
@@ -1251,6 +1260,200 @@ def test_the_firewalls_own_lookup_of_a_listed_name_gets_the_vip_from_the_gateway
 # --------------------------------------------------------------------------- #
 
 
+def test_receiving_endpoint_survives_dedicated_syslog_export(gw: Gateway, gateway_on: State) -> None:
+    """Own unique DNSBL queries retain the LAN endpoint and UTF-8 interface in syslog."""
+    vm = gw.vm
+    path = CFG_GENERAL + "/log_syslog"
+    prior = h.config_get_state(vm, path)
+    names = gw.names.syslog
+    tokens = {transport: f"qname={name} ".encode("ascii") for transport, name in names.items()}
+
+    def exported() -> bool:
+        # Observe bytes first: unrelated malformed records must not mask our event.
+        script = (
+            "set -e\n"
+            f"for file in {PFB_SYSLOG_LOG} {PFB_SYSLOG_LOG}.[0-9]*; do\n"
+            '  [ -f "$file" ] || continue\n'
+            '  /usr/bin/bsdcat "$file"\n'
+            "done\n"
+        )
+        result = subprocess.run(vm.ssh_argv("/bin/sh", "-c", script), capture_output=True, timeout=30, check=False)
+        assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+        lines = result.stdout.splitlines()
+        return all(any(b"act=dnsbl " in line and token in line for line in lines) for token in tokens.values())
+
+    try:
+        _set_syslog_enabled(vm, on=True)
+        for transport, name in names.items():
+            answer, raw = _ask(gw.client, transport, name)
+            assert h.is_vip(answer), f"{transport} {name}: expected DNSBL VIP, got {answer}\n{raw}"
+        _drain_logs(gw)
+        try:
+            h.wait_until(exported, timeout=30.0)
+        finally:
+            history = _capture_raw_syslog_history(vm, "gateway-owned-endpoint")
+        escaped_interface = '"' + LAN_DESCRIPTION.replace('"', '\\"') + '"'
+        for transport, name in names.items():
+            token = tokens[transport]
+            own = [line for line in history["dedicated"].splitlines() if b"act=dnsbl " in line and token in line]
+            assert len(own) == 1, f"{transport} {name}: expected exactly one dedicated event: {own!r}"
+            line = own[0].decode("utf-8")
+            body = line[line.index("act=dnsbl ") :]
+            fields = [part.split("=", 1) for part in shlex.split(body)]
+            for key, value in (
+                ("qname", name),
+                ("qip", CLIENT_LAN_IP),
+                ("listener_ip", PFSENSE_LAN_IP),
+                ("listener_interface", LAN_DESCRIPTION),
+                ("transport", LOG_TRANSPORT[transport]),
+            ):
+                assert [pair[1] for pair in fields if pair[0] == key] == [value], line
+            assert f"listener_interface={escaped_interface}" in body, line
+            leaks = [record for record in history["system"].splitlines() if b"act=dnsbl " in record and token in record]
+            assert not leaks, f"owned security event leaked to system destination: {leaks!r}"
+            [row] = _dnsbl_rows(vm, name)
+            assert len(row) == 14 and row[3] == CLIENT_LAN_IP, row
+            assert row[11:14] == [LOG_TRANSPORT[transport], PFSENSE_LAN_IP, LAN_DESCRIPTION], row
+    finally:
+        h.config_restore_state(vm, path, prior)
+
+
+def test_receiving_ipv6_packet_path_probe(gw: Gateway, gateway_on: State) -> None:
+    """Temporary discriminator: client route/NDP, PF, or a listener above PF."""
+    vm, client = gw.vm, gw.client
+    token = secrets.token_hex(8)
+    guest = f"/tmp/pfb-v6-path-{token}"
+    pcap, stderr, pidfile = (f"{guest}.{suffix}" for suffix in ("pcap", "stderr", "pid"))
+    destination = h.DIAG_DIR / f"v6-path-{token}"
+    destination.mkdir(parents=True, exist_ok=False)
+    evidence: list[str] = []
+    failures: list[str] = []
+    capture: subprocess.Popen[bytes] | None = None
+
+    def observe(machine: SmokeVM, command: str) -> str:
+        try:
+            result = machine.ssh(command, timeout=20.0)
+            evidence.append(
+                f"$ {command}\n[exit {result.returncode}]\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+            if result.returncode:
+                failures.append(command)
+            return result.stdout
+        except Exception as exc:
+            evidence.append(f"$ {command}\n{exc!r}")
+            failures.append(command)
+            return ""
+
+    def snapshot(phase: str) -> None:
+        evidence.append(f"\n=== {phase} guest LAN={lan} ===")
+        for command in (
+            f"ifconfig {shlex.quote(lan)}",
+            "netstat -rn -f inet6",
+            "ndp -an",
+            "sockstat -6 -l",
+            "pfctl -vvsr",
+        ):
+            observe(vm, command)
+        evidence.append(f"\n=== {phase} client ===")
+        observe(client, f"ip -6 route get {LAN_V6_ADDR}")
+        observe(client, "ip -6 route show table all")
+        observe(client, "ip -6 neigh show")
+
+    # Only a PID whose current command still names our unique pcap may be signalled.
+    stop = (
+        f"if [ -s {pidfile} ]; then "
+        f"pid=$(cat {pidfile}); case \"$pid\" in ''|*[!0-9]*) exit 1;; esac; "
+        'if kill -0 "$pid" 2>/dev/null; then '
+        'command=$(ps -p "$pid" -o command=) || exit 1; '
+        f'case "$command" in *tcpdump*" -w {pcap} "*) kill -INT "$pid";; '
+        '*) printf "refusing to signal PID %s: %s\\n" "$pid" "$command" >&2; exit 1;; esac; '
+        "fi; fi"
+    )
+    try:
+        lan = h.config_get(vm, "interfaces/lan/if").strip()
+        assert lan, "interfaces/lan/if is empty"
+        with _client_v6(client):
+            try:
+                snapshot("before")
+                tcpdump = observe(vm, "command -v tcpdump").strip()
+                timeout = observe(vm, "command -v timeout").strip()
+                assert tcpdump and timeout and not failures, f"probe prerequisites failed:\n{chr(10).join(evidence)}"
+                script = (
+                    f"{shlex.quote(tcpdump)} -U -n -i {shlex.quote(lan)} -w {pcap} "
+                    f"'ip6 and udp port 53 and host {LAN_V6_ADDR}' 2>{stderr} &\n"
+                    "owned=$!\n"
+                    f'echo "$owned" > {pidfile}\n'
+                    f"trap {shlex.quote(stop)} EXIT HUP INT TERM\n"
+                    'wait "$owned"\n'
+                )
+                command = [timeout, "-s", "TERM", "-k", "5", "60", "/bin/sh", "-c", script]
+                capture = subprocess.Popen(vm.ssh_argv(*command), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+                def listening() -> bool:
+                    output = observe(vm, f"if [ -f {stderr} ]; then cat {stderr}; fi")
+                    return f"listening on {lan}," in output
+
+                try:
+                    h.wait_until(listening, timeout=12.0, interval=0.25)
+                except Exception as exc:
+                    full_stderr = observe(vm, f"cat {stderr}")
+                    raise AssertionError(f"tcpdump never became ready:\n{full_stderr}") from exc
+                name = h.unique_domain("v6-path-allowed")
+                answer, raw = _ask(client, "udp", name, server=LAN_V6_ADDR)
+                evidence.append(f"\n=== single query {name} ===\n{raw}\n{answer!r}")
+                assert h.resolves_to(answer, STUB_DNS_A), raw
+            finally:
+                if capture is not None:
+                    observe(vm, stop)
+                    stdout, errors = b"", b""
+                    for action, seconds in ((None, 10.0), (capture.terminate, 5.0), (capture.kill, 5.0)):
+                        if action is not None:
+                            try:
+                                action()
+                            except Exception as exc:
+                                evidence.append(f"capture SSH {action.__name__}: {exc!r}")
+                                failures.append(f"capture SSH {action.__name__}")
+                        try:
+                            stdout, errors = capture.communicate(timeout=seconds)
+                            break
+                        except Exception as exc:
+                            evidence.append(f"capture SSH collection: {exc!r}")
+                            failures.append("capture SSH collection")
+                    evidence.append(f"capture SSH exit={capture.returncode}\nstdout={stdout!r}\nstderr={errors!r}")
+                try:
+                    snapshot("after")
+                finally:
+                    if capture is not None:
+                        observe(vm, f"cat {stderr}")
+                        observe(vm, f"tcpdump -nn -vvv -X -r {pcap}")
+                        try:
+                            raw_pcap = subprocess.run(
+                                vm.ssh_argv("cat", pcap), capture_output=True, timeout=30, check=False
+                            )
+                            evidence.append(f"raw pcap SSH exit={raw_pcap.returncode}\nstderr={raw_pcap.stderr!r}")
+                            if raw_pcap.returncode:
+                                failures.append("raw pcap fetch")
+                            else:
+                                (destination / "packets.pcap").write_bytes(raw_pcap.stdout)
+                        except Exception as exc:
+                            evidence.append(f"raw pcap fetch: {exc!r}")
+                            failures.append("raw pcap fetch")
+    except BaseException as exc:
+        evidence.append(f"probe failed: {exc!r}")
+        raise
+    finally:
+        try:
+            if capture is not None:
+                observe(vm, f"rm -f {pcap} {stderr} {pidfile}")
+            else:
+                evidence.append("no capture started; no raw pcap exists")
+        finally:
+            evidence.append(f"diagnostic failures: {failures!r}")
+            (destination / "evidence.txt").write_text("\n".join(evidence), encoding="utf-8")
+            _say(f"IPv6 causal probe evidence: {destination}")
+    assert not failures, f"native diagnostic failures: {failures}; evidence: {destination}"
+
+
 @pytest.mark.parametrize("transport", TRANSPORTS)
 def test_receiving_ipv6_endpoint_survives_logs_unified_and_reports(
     gw: Gateway, gateway_on: State, transport: str, gui: WebUI
@@ -1287,6 +1490,7 @@ def test_receiving_interface_is_the_event_snapshot_after_interface_rename(
     [old_row] = _reply_rows(gw.vm, old_name)
     assert old_row[11:13] == [PFSENSE_LAN_IP, LAN_DESCRIPTION], old_row
     renamed = 'Renamed, "新" & owner'
+    renamed_api = 'RENAMED, "新" & OWNER'
     try:
         _php_ok(
             gw.vm,
@@ -1300,14 +1504,14 @@ def test_receiving_interface_is_the_event_snapshot_after_interface_rename(
         assert h.resolves_to(answer, STUB_DNS_A), raw
         _drain_logs(gw)
         [new_row] = _reply_rows(gw.vm, new_name)
-        assert new_row[11:13] == [PFSENSE_LAN_IP, renamed], new_row
+        assert new_row[11:13] == [PFSENSE_LAN_IP, renamed_api], new_row
         assert _reply_rows(gw.vm, old_name) == [old_row], "interface rename rewrote historical metadata"
         _assert_report_row(gui, old_name, CLIENT_LAN_IP, "UDP", PFSENSE_LAN_IP, LAN_DESCRIPTION)
-        _assert_report_row(gui, new_name, CLIENT_LAN_IP, "UDP", PFSENSE_LAN_IP, renamed)
+        _assert_report_row(gui, new_name, CLIENT_LAN_IP, "UDP", PFSENSE_LAN_IP, renamed_api)
     finally:
         _php_ok(
             gw.vm,
-            f"config_set_path('interfaces/lan/descr', {h._php_str(LAN_DESCRIPTION)});"
+            f"config_set_path('interfaces/lan/descr', {h._php_str(LAN_CONFIG_DESCRIPTION)});"
             "write_config('pfBlockerNG smoke: restore endpoint owner');",
             "restore interface description",
         )
@@ -2588,7 +2792,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
                 name = h.unique_domain("vip-endpoint")
                 answer, raw = _ask(client, transport, name, server=vips[0], port=port)
                 assert h.resolves_to(answer, STUB_DNS_A), raw
-                _drain_logs(gw)
+                _drain_logs(gw, port=1053)
                 [row] = _reply_rows(vm, name)
                 assert len(row) == 13 and row[7] == CLIENT_LAN_IP, row
                 assert row[10:13] == [LOG_TRANSPORT[transport], vips[0], "Localhost"], row
@@ -2599,7 +2803,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
                 name = h.unique_domain("vip-endpoint-v6")
                 answer, raw = _ask(client, transport, name, server=vips[1], port=port)
                 assert h.resolves_to(answer, STUB_DNS_A), raw
-                _drain_logs(gw)
+                _drain_logs(gw, port=1053)
                 [row] = _reply_rows(vm, name)
                 assert len(row) == 13 and row[7] == LAN_V6_CLIENT and row[8] == STUB_DNS_A, row
                 assert row[10:13] == [LOG_TRANSPORT[transport], vips[1], "Localhost"], row
@@ -2663,10 +2867,10 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
         assert "<pre" not in section and "Refresh DDR advertisements" not in section, section
         for vip in vips:
             endpoint = f"[{vip}]:53" if ":" in vip else f"{vip}:53"
-            row = observations.get(endpoint)
-            assert row is not None, f"DDR status omitted {endpoint}: {observations}"
-            _say(f"VIP-only DDR status {endpoint}: {ET.tostring(row, encoding='unicode')}")
-            assert row.attrib["data-state"] == "pending", ET.tostring(row, encoding="unicode")
+            status_row = observations.get(endpoint)
+            assert status_row is not None, f"DDR status omitted {endpoint}: {observations}"
+            _say(f"VIP-only DDR status {endpoint}: {ET.tostring(status_row, encoding='unicode')}")
+            assert status_row.attrib["data-state"] == "pending", ET.tostring(status_row, encoding="unicode")
             checked = gui.get("/pfblockerng/pfblockerng_dns.php?ajax=ddr", params={"listener": endpoint})
             assert checked.status_code == 200, checked.text
             checked_section = panel(checked.json()["html"], "pfb-dns-status-ddr")

@@ -392,7 +392,8 @@ BAD_ENDPOINT_IPS = [
 @pytest.mark.parametrize("bad_ip", BAD_ENDPOINT_IPS)
 @pytest.mark.parametrize("field", ["client", "listener"])
 def test_endpoint_invalid_address_drops_only_that_query(field: str, bad_ip: bytes) -> None:
-    replies, calls = endpoint_exchange([endpoint_payload(**{field: bad_ip}), endpoint_payload()])
+    malformed = endpoint_payload(client=bad_ip) if field == "client" else endpoint_payload(listener=bad_ip)
+    replies, calls = endpoint_exchange([malformed, endpoint_payload()])
     assert replies == [(DROP, 1, b""), (ANSWER, 2, b"endpoint-answer")]
     assert calls == [(build_query(ALLOWED, qid=0x3757), CLIENT, "TCP", "192.0.2.53", "")]
 

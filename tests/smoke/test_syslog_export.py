@@ -33,8 +33,11 @@ the ``stub_dns`` fixture. Without these all cases skip cleanly.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
+import subprocess
+import tempfile
 import time
 from collections.abc import Iterator
 
@@ -304,6 +307,54 @@ def _pfb_event_history_lines(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]
     return [line for line in result.stdout.splitlines() if "act=" in line]
 
 
+def _capture_raw_syslog_history(vm: SmokeVM, label: str) -> dict[str, bytes]:
+    """Archive both syslog histories without letting SSH decode their bytes."""
+    directory = os.environ.get("PFB_DIAG_DIR") or tempfile.mkdtemp(prefix="pfb-raw-syslog-")
+    os.makedirs(directory, exist_ok=True)
+    safe_label = "".join(char if char.isascii() and (char.isalnum() or char in "-_") else "_" for char in label)
+    safe_label = safe_label[:80] or "capture"
+    histories: dict[str, bytes] = {}
+    failures: list[str] = []
+    for name, path in (("system", SYSTEM_LOG), ("dedicated", PFB_SYSLOG_LOG)):
+        script = (
+            "set -e\n"
+            f"base={path}\n"
+            'for file in "$base" "$base".[0-9]*; do\n'
+            '  [ -f "$file" ] || continue\n'
+            '  if [ "$file" != "$base" ]; then\n'
+            '    rotation=${file#"$base".}\n'
+            '    case "$rotation" in\n'
+            "      *.gz|*.bz2|*.xz|*.zst) rotation=${rotation%.*} ;;\n"
+            "    esac\n"
+            '    case "$rotation" in ""|*[!0-9]*) continue ;; esac\n'
+            "  fi\n"
+            '  /usr/bin/bsdcat "$file"\n'
+            "done\n"
+        )
+        result = subprocess.run(vm.ssh_argv("/bin/sh", "-c", script), capture_output=True, timeout=30, check=False)
+        histories[name] = result.stdout
+        with tempfile.NamedTemporaryFile(
+            prefix=f"{safe_label}-{name}-", suffix=".raw", dir=directory, delete=False
+        ) as archive:
+            archive.write(result.stdout)
+        print(
+            f"raw syslog {name}: path={archive.name} "
+            f"sha256={hashlib.sha256(result.stdout).hexdigest()} len={len(result.stdout)}"
+        )
+        if result.returncode != 0:
+            failures.append(f"{name}: rc={result.returncode} stderr={result.stderr!r} raw={archive.name}")
+    # Diagnose only after both full byte streams are safe; callers retain strict decoding.
+    for name, raw in histories.items():
+        for number, line in enumerate(raw.split(b"\n"), 1):
+            try:
+                line.decode("utf-8")
+            except UnicodeDecodeError as error:
+                print(f"raw syslog {name} invalid UTF-8 line={number}: {error}; repr={line!r} hex={line.hex()}")
+    if failures:
+        raise RuntimeError("raw syslog history capture failed: " + "; ".join(failures))
+    return histories
+
+
 def _system_log_export_leaks(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:
     """Export records that LEAKED into system.log (must always be empty).
 
@@ -311,6 +362,7 @@ def _system_log_export_leaks(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]
     The operational ``[pfBlockerNG]`` logs are program=php (no ``act=`` body), so
     they are not matched — only a genuine leak of an export event would show here.
     """
+    _capture_raw_syslog_history(vm, "system-log-export-leaks")
     content = h.read_log_file(vm, SYSTEM_LOG, timeout=timeout)
     return [ln for ln in content.splitlines() if "pfblockerng[" in ln and "act=" in ln]
 
