@@ -27,9 +27,13 @@ def _stats_log(vm: helpers.SmokeVM, log: str, preference: str, contents: str) ->
     path = f"/var/log/pfblockerng/{log}"
     key = f"installedpackages/pfblockerngglobal/{preference}"
     prior = helpers.config_get_state(vm, key)
+    dnsbl_key = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl"
+    dnsbl_prior = helpers.config_get_state(vm, dnsbl_key) if log == "dnsbl.log" else None
     backups = _backup_seeded_files(vm, (path,))
     try:
         helpers.config_set(vm, key, "")
+        if dnsbl_prior is not None:
+            helpers.config_set(vm, dnsbl_key, "on")
         seeded = subprocess.run(
             vm.ssh_argv("tee", path), input=contents, text=True, capture_output=True, timeout=30, check=False
         )
@@ -37,7 +41,11 @@ def _stats_log(vm: helpers.SmokeVM, log: str, preference: str, contents: str) ->
         yield
     finally:
         try:
-            helpers.config_restore_state(vm, key, prior)
+            try:
+                helpers.config_restore_state(vm, key, prior)
+            finally:
+                if dnsbl_prior is not None:
+                    helpers.config_restore_state(vm, dnsbl_key, dnsbl_prior)
         finally:
             errors = _restore_seeded_files(vm, backups)
             assert not errors, errors
