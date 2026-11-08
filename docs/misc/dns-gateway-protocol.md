@@ -172,7 +172,11 @@ The decider passes the canonical name (`TCP`, `UDP`, `DoT`, `DoH`, `DoQ`) throug
 The existing DNSBL writers append it at index 11 (after qtype at 10), and DNS Reply appends it at index 10 (after ISO
 at 9). No prior column changes position. Readers accept historical rows without the column as `Unknown`; malformed
 metadata is also `Unknown`, never arbitrary CSV text. Helpers without original listener metadata default to `Unknown`.
-Consecutive DNSBL duplicate detection includes client, transport and receiving metadata, so different endpoints remain visible.
+Consecutive DNSBL duplicate detection compares the name, qtype, decision, transport, client IP, listener IP and
+listener interface. A repeat of the previous event is still written to `dnsbl.log`, with `-` instead of `+` at index 9.
+Reports folds `-` rows into the "[N] additional duplicate events" count of the row they repeat, so a burst from several
+clients or endpoints shows one row per client and endpoint. The resolver and DNSBL group metric counters are incremented
+before this check, so it does not change them.
 
 Standalone native Unbound uses `Unknown`: the supported
 [`pythonmod/interface.i`](https://github.com/NLnetLabs/unbound/blob/master/pythonmod/interface.i) SWIG surface exposes
