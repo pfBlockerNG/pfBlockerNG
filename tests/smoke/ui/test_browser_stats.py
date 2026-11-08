@@ -2,7 +2,7 @@
 
 The fix in ``pfblockerng_alerts.php`` (issue #387) reworks the Reports stats
 panels to use a flex layout (``.pfb-stats-row`` / ``.pfb-stats-col``) and a
-``pfbPieFluid(id)`` JS helper that sets a ``viewBox`` on each d3pie ``<svg>``
+shared chart renderer that sets a ``viewBox`` on each d3pie ``<svg>``
 and strips its fixed ``width``/``height`` attributes, so the pie scales
 responsively with its column and stacks cleanly under ``@media print``.
 
@@ -11,7 +11,7 @@ These tests verify the fix is active on the live page by:
 1. Seeding realistic CSV lines into the relevant log so the PHP stats engine
    has data to render a pie (a pie only renders when the log has entries).
 2. Navigating the browser to the stats view.
-3. Asserting that ``pfbPieFluid`` ran: the ``<svg>`` inside
+3. Asserting responsive scaling: the ``<svg>`` inside
    ``#pieChart_<stat_type>`` has a non-empty ``viewBox`` attribute and
    NO ``width``/``height`` attribute — the exact DOM transformation the fix
    applies.
@@ -195,7 +195,7 @@ def test_stats_ip_block_pie_fluid_and_screenshots(
     smoke_vm: helpers.SmokeVM,
     screenshot_dir: Path,
 ) -> None:
-    """The IP Block Stats pie is viewBox-scaled (pfbPieFluid ran); three screenshots.
+    """The IP Block Stats pie is viewBox-scaled; three screenshots.
 
     Scenario: issue-#387 responsive/print fix is active on ip_block_stat.
       Background: pfBlockerNG deployed; webConfigurator authenticated;
@@ -205,7 +205,7 @@ def test_stats_ip_block_pie_fluid_and_screenshots(
     Given ip_block.log has diverse synthetic entries,
     When the browser navigates to ?view=ip_block_stat,
     Then pieChart_ipgeoip's <svg> has a viewBox and no width/height attributes
-      (pfbPieFluid ran — the fix is present);
+      so it scales responsively;
     And three screenshots capture the default, narrow, and print layouts.
 
     Cleanup: ip_block.log is restored to its pre-seed size in finally.
@@ -283,7 +283,7 @@ def test_stats_ip_block_pie_fluid_and_screenshots(
         # ── default viewport ──────────────────────────────────────────────────
         _open(page, webui, ALERTS_IP_STAT)
 
-        # THEN: pfbPieFluid ran — viewBox set, width/height removed.
+        # THEN: responsive scaling uses viewBox, not fixed width/height.
         _assert_pie_fluid(page, IP_PIE_STAT_TYPE)
 
         _shot(page, screenshot_dir, "stats_ip_block_screen")
@@ -315,7 +315,7 @@ def test_stats_dnsbl_pie_fluid_and_screenshots(
     smoke_vm: helpers.SmokeVM,
     screenshot_dir: Path,
 ) -> None:
-    """The DNSBL Block Stats pie is viewBox-scaled (pfbPieFluid ran); three screenshots.
+    """The DNSBL Block Stats pie is viewBox-scaled; three screenshots.
 
     Scenario: issue-#387 responsive/print fix is active on dnsbl_stat.
       Background: pfBlockerNG deployed; webConfigurator authenticated;
@@ -326,7 +326,7 @@ def test_stats_dnsbl_pie_fluid_and_screenshots(
     Given dnsbl.log has diverse synthetic entries,
     When the browser navigates to ?view=dnsbl_stat,
     Then pieChart_dnsblip's <svg> has a viewBox and no width/height attributes
-      (pfbPieFluid ran — the fix is present);
+      so it scales responsively;
     And three screenshots capture the default, narrow, and print layouts.
 
     Cleanup: dnsbl.log is restored to its pre-seed size in finally.
@@ -385,7 +385,7 @@ def test_stats_dnsbl_pie_fluid_and_screenshots(
         # ── default viewport ──────────────────────────────────────────────────
         _open(page, webui, ALERTS_DNSBL_STAT)
 
-        # THEN: pfbPieFluid ran — viewBox set, width/height removed.
+        # THEN: responsive scaling uses viewBox, not fixed width/height.
         _assert_pie_fluid(page, DNSBL_PIE_STAT_TYPE)
 
         _shot(page, screenshot_dir, "stats_dnsbl_screen")

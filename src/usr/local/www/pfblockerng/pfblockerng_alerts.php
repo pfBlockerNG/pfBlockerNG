@@ -3391,6 +3391,9 @@ $pfb_unified_tint = $pfb_webgui_dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05
 ?>
 
 <style>
+#Alert_Stats_Retry[hidden] {
+	display: none;
+}
 /* Stats panel: flex columns that shrink and wrap on narrow viewports */
 .pfb-stats-row {
 	display: flex;
