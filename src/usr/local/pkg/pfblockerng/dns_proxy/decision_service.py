@@ -13,6 +13,7 @@ import contextlib
 import ipaddress
 import socket
 import struct
+import unicodedata
 from collections.abc import Awaitable, Callable
 from time import monotonic
 from typing import Protocol
@@ -107,7 +108,8 @@ def _interface(text: bytes) -> str | None:
         interface = text.decode("utf-8")
     except UnicodeDecodeError:
         return None
-    if any(ord(char) < 32 or 0x7F <= ord(char) <= 0x9F for char in interface):
+    # Same rule as pfb_unbound.get_q_listener: a label it would blank must not reach it as a name.
+    if any(unicodedata.category(char) in ("Cc", "Cf", "Cs", "Zl", "Zp") for char in interface):
         return None
     return interface
 

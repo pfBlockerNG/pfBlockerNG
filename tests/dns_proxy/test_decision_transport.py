@@ -407,12 +407,23 @@ def test_endpoint_invalid_address_drops_only_that_query(field: str, bad_ip: byte
         pytest.param(b"lan\t", id="c0-tab"),
         pytest.param(b"lan\x7f", id="delete"),
         pytest.param("lan\u0085".encode(), id="c1"),
+        pytest.param("bad\u200dname".encode(), id="zero-width-joiner-format"),
+        pytest.param("bad\u200ename".encode(), id="left-to-right-mark-format"),
+        pytest.param("bad\u2028name".encode(), id="line-separator"),
+        pytest.param("bad\u2029name".encode(), id="paragraph-separator"),
     ],
 )
 def test_endpoint_invalid_interface_drops_only_that_query(interface: bytes) -> None:
     replies, calls = endpoint_exchange([endpoint_payload(interface=interface), endpoint_payload()])
     assert replies == [(DROP, 1, b""), (ANSWER, 2, b"endpoint-answer")]
     assert calls == [(build_query(ALLOWED, qid=0x3757), CLIENT, "TCP", "192.0.2.53", "")]
+
+
+@pytest.mark.parametrize("interface", ["LAN", "Län", "日本"])
+def test_endpoint_letter_interface_is_accepted(interface: str) -> None:
+    replies, calls = endpoint_exchange([endpoint_payload(interface=interface.encode())])
+    assert calls == [(build_query(ALLOWED, qid=0x3757), CLIENT, "TCP", "192.0.2.53", interface)]
+    assert replies == [(ANSWER, 1, b"endpoint-answer")]
 
 
 def test_endpoint_interface_without_listener_drops_only_that_query() -> None:

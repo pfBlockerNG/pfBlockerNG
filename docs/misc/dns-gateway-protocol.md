@@ -147,9 +147,10 @@ These are fatal. The receiver logs the reason, closes the socket and stops; the 
 
 These are not, and the session goes on: a QUERY with invalid endpoint metadata is answered with DROP for that id.
 This includes non-ASCII or invalid IP text, a prefix, zone, brackets, port or unspecified address; invalid UTF-8 or
-control characters in the interface; and a nonempty interface without a listener IP. An empty listener and interface
-mean unavailable. A QUERY whose DNS wire is empty or shorter than a header gets DROP too, as a response or a packet
-that short is never answered; a FORWARD that arrives while the previous FORWARD of its id is still unanswered is ignored.
+control, format, line separator or paragraph separator characters in the interface; and a nonempty interface without
+a listener IP. An empty listener and interface mean unavailable. A QUERY whose DNS wire is empty or shorter than a
+header gets DROP too, as a response or a packet that short is never answered; a FORWARD that arrives while the
+previous FORWARD of its id is still unanswered is ignored.
 
 ## Endpoint metadata
 
