@@ -19,7 +19,7 @@ from .. import helpers
 from .test_dns_stats_review import _stats_log
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Page, Route
+    from playwright.sync_api import Expect, Page, Route
 
     from .webui import WebUI
 
@@ -43,7 +43,7 @@ def _rows(prefix: str, domain: str, hours: int = 3) -> str:
     return stream.getvalue()
 
 
-def _expect():
+def _expect() -> Expect:
     return pytest.importorskip("playwright.sync_api").expect
 
 
