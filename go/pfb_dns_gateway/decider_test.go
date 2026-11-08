@@ -264,6 +264,42 @@ func TestDeciderDropMeansSendNothing(t *testing.T) {
 	}
 }
 
+// A wildcard listener is no address the decider can match, so the QUERY names neither it nor its interface label.
+func TestDeciderQueryWithholdsListenerAndInterfaceForAWildcardAddress(t *testing.T) {
+	wire := []byte{0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 1, 'a', 0, 0, 1, 0, 1}
+	const client = "192.0.2.10"
+	for _, tc := range []struct {
+		name, listener, wantListener, wantInterface string
+	}{
+		{"IPv6 wildcard", "::", "", ""},
+		{"IPv4 wildcard", "0.0.0.0", "", ""},
+		{"specified listener", "127.0.0.1", "127.0.0.1", "LAN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, p, _ := readyPeer(t)
+			out := make(chan decided, 1)
+			go func() {
+				a, err := d.Decide(context.Background(), netip.MustParseAddr(client), netip.MustParseAddr(tc.listener), "LAN", clientTCP, wire, noForward(t))
+				out <- decided{a, err}
+			}()
+			typ, id, payload := p.recv()
+			want := append([]byte{byte(clientTCP), byte(len(client))}, client...)
+			want = append(want, byte(len(tc.wantListener)))
+			want = append(want, tc.wantListener...)
+			want = append(want, 0, byte(len(tc.wantInterface)))
+			want = append(want, tc.wantInterface...)
+			want = append(want, wire...)
+			if typ != tQuery || !bytes.Equal(payload, want) {
+				t.Fatalf("QUERY frame: got type=%d payload=%x, want type=%d payload=%x", typ, payload, tQuery, want)
+			}
+			p.send(tDrop, id, nil)
+			if r := result(t, out); r.err != nil || r.answer != nil {
+				t.Fatalf("Decide after DROP: got answer=%q err=%v, want nil, nil", r.answer, r.err)
+			}
+		})
+	}
+}
+
 // G3: FORWARD hands the decider's bytes to the exchange and REPLY carries what it returned.
 func TestForwardThenReplyThenAnswer(t *testing.T) {
 	d, p, _ := readyPeer(t)

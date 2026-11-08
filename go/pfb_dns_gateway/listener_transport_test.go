@@ -238,3 +238,32 @@ func TestDoHAttributionKeepsListenerTransport(t *testing.T) {
 		})
 	}
 }
+
+// resolve looks the interface label up by the plain address: a 4-in-6 listener must find its IPv4 entry, and the
+// sockets already unmap, so only a direct call reaches the lookup.
+func TestResolveFindsTheInterfaceOfAMappedListener(t *testing.T) {
+	d, p, logs := readyPeer(t)
+	g := newGateway(nil, d, nil, time.Second, logs.logf)
+	table := map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "LAN"}
+	g.listenerInterfaces.Store(&table)
+	asked := answerOne(p)
+	wire := buildQuery(t, 0x3767, "mapped.example.", true)
+	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
+	defer cancel()
+	g.resolve(ctx, netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("::ffff:127.0.0.1"), clientTCP, wire, noForward(t))
+	select {
+	case payload := <-asked:
+		ip := "192.0.2.1"
+		want := append([]byte{byte(clientTCP), byte(len(ip))}, ip...)
+		want = append(want, byte(len("127.0.0.1")))
+		want = append(want, "127.0.0.1"...)
+		want = append(want, 0, byte(len("LAN")))
+		want = append(want, "LAN"...)
+		want = append(want, wire...)
+		if !bytes.Equal(payload, want) {
+			t.Fatalf("QUERY=%x, want listener 127.0.0.1 with interface LAN %x", payload, want)
+		}
+	case <-time.After(watchdog):
+		t.Fatal("STUCK/ENVIRONMENT: decider did not receive the query")
+	}
+}
