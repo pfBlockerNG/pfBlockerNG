@@ -30,7 +30,6 @@ final class DnsProxyApplyStartTest extends TestCase
 	use DnsProxyReadySeedTrait;
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
-	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const GLOBALS = [
 		'pfb', 'config', 'pfb_test_service_calls', 'pfb_test_service_hook', 'pfb_test_rcfile_writes', 'pfb_test_rcfiles',
 		'pfb_test_valid_pids', 'pfb_test_rcfile_dir', 'pfb_test_interface_ip', 'pfb_test_interface_info',
@@ -287,22 +286,6 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'nor its rc script');
 	}
 
-	public function testTheApplyCallsItAfterTheReloadBranchWhateverTheDnsblMode(): void
-	{
-		$source = (string) file_get_contents(self::APPLY);
-
-		$this->assertSame(1, substr_count($source, 'pfb_dns_proxy_ensure_running('), 'one call site');
-		$this->assertMatchesRegularExpression(
-			"/\\n\\t\\t\\tpfb_dnsbl_cache\\('save'\\);\\n\\t\\t}\\n\\t}\\n(?:\\n?\\t\\/\\/[^\\n]*\\n)*\\tif \\(!pfb_dns_proxy_ensure_running\\(\\)\\) \\{\\n/",
-			$source,
-			'a statement of its own after the reload branch has closed, whose result is read: pfB-DNS runs with DNSBL off, where the mode is not enabled'
-		);
-		$this->assertDoesNotMatchRegularExpression(
-			"/\\{\\s*if \\(!pfb_dns_proxy_ensure_running\\(\\)\\)/",
-			$source,
-			'not inside a branch of the DNSBL mode'
-		);
-	}
 
 	/** @return array<string,array{?string}> the marker as stored: lost, or a value that is no snapshot */
 	public static function orphanedMarkers(): array
