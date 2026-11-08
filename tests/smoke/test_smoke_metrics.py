@@ -1046,6 +1046,74 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
         assert match, output
         return json.loads(match.group(1))
 
+    def privacy_state(stage: str) -> dict:
+        output = _php_ok(
+            vm,
+            f"require_once('{_PKG}'); pfb_global();"
+            "$files = array_merge(pfb_dnsbl_loaded_input_paths($pfb), $pfb['dns_proxy_decider_src'],"
+            "array($pfb['unbound_py_conf'], $pfb['dns_proxy_decider_applied'],"
+            "$pfb['dns_proxy_gateway_applied'], $pfb['dnsbldir'].'/pfb_py_reload',"
+            "$pfb['dnsbldir'].'/pfb_py_reload.applied'));"
+            "$fence = function() use ($files) { $out = array(); foreach ($files as $file) {"
+            "clearstatcache(TRUE, $file); if (!is_file($file)) { $out[$file] = NULL; continue; }"
+            "$hash = hash_file('sha256',$file); $stat = stat($file);"
+            "$out[$file] = array('sha256'=>$hash, 'ino'=>$stat['ino'], 'size'=>$stat['size'],"
+            "'mtime'=>$stat['mtime'], 'ctime'=>$stat['ctime']); } return $out; };"
+            "$before = $fence();"
+            "$state = array('ready'=>pfb_dns_proxy_ready(),"
+            "'gateway_pid'=>trim((string)@file_get_contents($pfb['dns_proxy_ready'])),"
+            "'ini'=>parse_ini_file($pfb['unbound_py_conf'], FALSE, INI_SCANNER_RAW),"
+            "'reload'=>@file_get_contents($pfb['dnsbldir'].'/pfb_py_reload'),"
+            "'applied'=>@file_get_contents($pfb['dnsbldir'].'/pfb_py_reload.applied'),"
+            "'generation'=>pfb_unbound_py_marker_generation($pfb['dnsbldir'].'/pfb_py_reload'),"
+            "'applied_generation'=>pfb_unbound_py_marker_generation($pfb['dnsbldir'].'/pfb_py_reload.applied'),"
+            "'code'=>pfb_unbound_py_module_fingerprint($pfb['dns_proxy_decider_src']),"
+            "'code_applied'=>trim((string)@file_get_contents($pfb['dns_proxy_decider_applied'])),"
+            "'gateway_applied'=>trim((string)@file_get_contents($pfb['dns_proxy_gateway_applied'])),"
+            "'source_fingerprint'=>pfb_dnsbl_reload_fingerprint($pfb), 'db'=>array());"
+            "foreach (array('resolver'=>array($pfb['dnsbl_resolver'],'dns_metric_queries'),"
+            "'dnsbl'=>array($pfb['dnsbl_info'],'dns_metric_blocks')) as $kind=>$spec) {"
+            "$db = new SQLite3($spec[0], SQLITE3_OPEN_READONLY); $db->enableExceptions(TRUE);"
+            "$db->exec('BEGIN'); $rows = array();"
+            "$result = $db->query('SELECT client_ip,SUM(count) AS count FROM '.$spec[1].' GROUP BY client_ip');"
+            "while ($row = $result->fetchArray(SQLITE3_ASSOC)) { $rows[] = $row; }"
+            "$state['db'][$kind] = array('policy'=>$db->querySingle("
+            "'SELECT client_ip,epoch FROM dns_metric_settings WHERE row=0', TRUE), 'clients'=>$rows);"
+            "if ($kind === 'dnsbl') { $state['db'][$kind]['group_clients'] = array();"
+            '$result = $db->query("SELECT client_ip,SUM(count) AS count FROM dns_metric_blocks '
+            f"WHERE groupname='{group}' GROUP BY client_ip\");"
+            "while ($row = $result->fetchArray(SQLITE3_ASSOC)) { $state['db'][$kind]['group_clients'][] = $row; } }"
+            "$db->exec('COMMIT'); $db->close(); }"
+            "$state['fences'] = $before; $state['stable'] = $before === $fence();"
+            "echo '<<<PRIVACY>>>' . json_encode($state) . '<<<END>>>';",
+            "read privacy activation fences",
+        )
+        match = re.search(r"<<<PRIVACY>>>(.*?)<<<END>>>", output, re.DOTALL)
+        assert match, output
+        state = json.loads(match.group(1))
+        print(f"PRIVACY_STATE {stage}={json.dumps(state, sort_keys=True)}", flush=True)
+        assert state["stable"], state
+        assert state["ready"] and state["gateway_pid"].isdigit(), state
+        assert state["code"] and state["code"] == state["code_applied"], state
+        assert state["gateway_applied"], state
+        # These are observed file generations, not the in-process Snapshot.gen.
+        for raw_key, parsed_key in (("reload", "generation"), ("applied", "applied_generation")):
+            raw_marker = state[raw_key]
+            assert isinstance(raw_marker, str) and re.fullmatch(r"(?:0|[1-9][0-9]*)\n?", raw_marker), state
+            assert int(raw_marker) == state[parsed_key], state
+        assert state["generation"] == state["applied_generation"], state
+        return state
+
+    def raw_clients(state: dict, enabled: bool, total: int, clients: dict[str, int]) -> None:
+        for database in state["db"].values():
+            assert database["policy"]["client_ip"] == int(enabled), state
+            assert re.fullmatch(r"[0-9a-f]{32}", database["policy"]["epoch"]), state
+            assert all(row["client_ip"] != BYPASSED_ALIAS_IP for row in database["clients"]), state
+            if not enabled:
+                assert all(row["client_ip"] == "" for row in database["clients"]), state
+        actual = {row["client_ip"]: row["count"] for row in state["db"]["dnsbl"]["group_clients"]}
+        assert actual == {"": total - sum(clients.values()), **clients}, state
+
     try:
         h.inject_dnsbl_lists(vm, [(spec, "Deny")])
         _set_export(vm, True)
@@ -1104,6 +1172,12 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
             h.wait_until(failed_writer_held, timeout=60.0, interval=0.5)
             counted(4, {CLIENT_LAN_IP: 1, BYPASSED_ALIAS_IP: 1})
             _save_client_privacy(vm, gui, False)
+            off_saved = privacy_state("off-saved")
+            assert off_saved["ini"]["metrics_client_ip"] == "off", off_saved
+            # Save may already have committed the blank retry while restarting the service.
+            saved_total = sum(row["count"] for row in off_saved["db"]["dnsbl"]["group_clients"])
+            assert saved_total in (4, 5), off_saved
+            raw_clients(off_saved, False, saved_total, {})
             unpublished = vm.ssh("/bin/sh", "-c", f"test ! -e {_PROM} && test ! -L {_PROM}")
             assert unpublished.returncode in (0, 1), unpublished.stderr
             if unpublished.returncode != 0:
@@ -1119,14 +1193,46 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
                 "release old metric retry",
             )
             counted(5, {})
-            ask(5)  # Same worker still holds its old enabled epoch.
+            raw_clients(privacy_state("old-alias-retried"), False, 5, {})
+            ask(5)
             counted(6, {})
-            _save_client_privacy(vm, gui, True)  # No Apply: stale worker cannot acquire the new epoch.
+            before_on = privacy_state("off-six-before-on")
+            raw_clients(before_on, False, 6, {})
+            assert before_on["ini"]["metrics_client_ip"] == "off", before_on
+            assert _capture(vm).service == "running", before_on
+            assert {kind: db["policy"] for kind, db in before_on["db"].items()} == {
+                kind: db["policy"] for kind, db in off_saved["db"].items()
+            }, (off_saved, before_on)
+            _save_client_privacy(vm, gui, True)
+            activated = privacy_state("on-saved")
+            assert _capture(vm).service == "running", activated
+            assert activated["gateway_pid"] != before_on["gateway_pid"], (before_on, activated)
+            assert activated["ini"]["metrics_client_ip"] == "on", activated
+            assert activated["code"] == before_on["code"], (before_on, activated)
+            assert activated["gateway_applied"] == before_on["gateway_applied"], (before_on, activated)
+            assert activated["source_fingerprint"] == before_on["source_fingerprint"], (before_on, activated)
+            raw_clients(activated, True, 6, {})
+            for kind, database in activated["db"].items():
+                assert database["policy"]["epoch"] != before_on["db"][kind]["policy"]["epoch"], activated
+                assert database["policy"]["epoch"] != off_saved["db"][kind]["policy"]["epoch"], activated
+            # Gateway PID is not Python PID; fresh decider init/capture follows the source boot path [INFERENCE].
             ask(6)
-            counted(7, {})
+            counted(7, {CLIENT_LAN_IP: 1})
+            after_seven = privacy_state("on-seven")
+            raw_clients(after_seven, True, 7, {CLIENT_LAN_IP: 1})
+            assert after_seven["fences"] == activated["fences"], (activated, after_seven)
+            assert after_seven["gateway_pid"] == activated["gateway_pid"], (activated, after_seven)
+            assert {kind: db["policy"] for kind, db in after_seven["db"].items()} == {
+                kind: db["policy"] for kind, db in activated["db"].items()
+            }, (activated, after_seven)
             _apply(vm)
             ask(7)
-            counted(8, {CLIENT_LAN_IP: 1})
+            counted(8, {CLIENT_LAN_IP: 2})
+            after_eight = privacy_state("applied-eight")
+            raw_clients(after_eight, True, 8, {CLIENT_LAN_IP: 2})
+            assert {kind: db["policy"] for kind, db in after_eight["db"].items()} == {
+                kind: db["policy"] for kind, db in activated["db"].items()
+            }, (activated, after_eight)
             assert BYPASSED_ALIAS_IP not in vm.ssh("/bin/cat", _PROM).stdout, "purged old client reappeared"
     finally:
         try:

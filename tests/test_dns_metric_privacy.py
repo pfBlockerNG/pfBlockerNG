@@ -53,8 +53,9 @@ def detail(path: Any, table: str) -> list[tuple[Any, ...]]:
 
 
 @pytest.mark.parametrize("retained", ["queue", "batch", "failed-batch"])
+@pytest.mark.parametrize("activate_before_retry", [False, True], ids=["old-cache", "new-cache"])
 def test_old_queue_and_failed_transaction_cannot_resurrect_client_ips(
-    metric_databases: Any, monkeypatch: Any, retained: str
+    metric_databases: Any, monkeypatch: Any, retained: str, activate_before_retry: bool
 ) -> None:
     resolver, dnsbl = metric_databases
     P.pfb["metrics_client_ip"] = True
@@ -76,6 +77,12 @@ def test_old_queue_and_failed_transaction_cannot_resurrect_client_ips(
     P.pfb["db_worker"] = True
     emit("192.0.2.10")
     emit("2001:db8::10")
+    with P.pfb_db_queue.mutex:
+        emitted = tuple(P.pfb_db_queue.queue)
+    assert len(emitted) == 4
+    assert {task[0] for task in emitted} == {"resolver", "dnsbl"}
+    assert {task[-2] for task in emitted} == {"192.0.2.10", "2001:db8::10"}
+    assert {task[-1] for task in emitted} == {"a" * 32}
     snapshots: dict[int, dict[tuple, int]] = {P.DB_RESOLVER: {}, P.DB_DNSBL: {}}
     deltas: dict[tuple, int] = {}
     if retained != "queue":
@@ -87,6 +94,8 @@ def test_old_queue_and_failed_transaction_cannot_resurrect_client_ips(
             snapshots[db][key] = snapshots[db].get(key, 0) + 1
             if db == P.DB_DNSBL:
                 deltas[key[:4]] = deltas.get(key[:4], 0) + 1
+        retained_keys = {db: dict(rows) for db, rows in snapshots.items()}
+        retained_deltas = dict(deltas)
         if retained == "failed-batch":
             monkeypatch.setattr(P.time, "sleep", lambda _: None)
             for path, table in ((resolver, "dns_metric_queries"), (dnsbl, "dns_metric_blocks")):
@@ -98,13 +107,34 @@ def test_old_queue_and_failed_transaction_cannot_resurrect_client_ips(
             assert not P._db_flush_resolver(2, snapshots[P.DB_RESOLVER])
             assert not P._db_flush_dnsbl(deltas, snapshots[P.DB_DNSBL])
             assert sum(snapshots[P.DB_RESOLVER].values()) == sum(snapshots[P.DB_DNSBL].values()) == 2
+            assert snapshots == retained_keys
+            assert deltas == retained_deltas
             for path in (resolver, dnsbl):
                 with sqlite3.connect(path) as con:
                     con.execute("DROP TRIGGER reject_detail")
     for path, table in ((resolver, "dns_metric_queries"), (dnsbl, "dns_metric_blocks")):
         policy(path, False, "b" * 32)
         assert detail(path, table) == [("2001:db8::53", "LAN", "", 2)]
+        with sqlite3.connect(path) as con:
+            assert con.execute("SELECT client_ip,epoch FROM dns_metric_settings WHERE row=0").fetchall() == [
+                (0, "b" * 32)
+            ]
         policy(path, True, "c" * 32)
+        with sqlite3.connect(path) as con:
+            assert con.execute("SELECT client_ip,epoch FROM dns_metric_settings WHERE row=0").fetchall() == [
+                (1, "c" * 32)
+            ]
+    if activate_before_retry:
+        P._db_capture_privacy_epochs()
+    expected_epoch = ("c" if activate_before_retry else "a") * 32
+    assert P.pfb["metrics_privacy_epochs"] == {P.DB_RESOLVER: expected_epoch, P.DB_DNSBL: expected_epoch}
+    if retained == "queue":
+        with P.pfb_db_queue.mutex:
+            assert tuple(P.pfb_db_queue.queue) == emitted
+    else:
+        assert snapshots == retained_keys
+        assert deltas == retained_deltas
+        assert {key[-1] for rows in snapshots.values() for key in rows} == {"a" * 32}
     if retained == "queue":
         P.pfb_db_queue.put(("stop",))
         P.pfb_db_worker()
@@ -117,12 +147,21 @@ def test_old_queue_and_failed_transaction_cannot_resurrect_client_ips(
         assert con.execute("SELECT totalqueries FROM resolver").fetchall() == [(14,)]
     with sqlite3.connect(dnsbl) as con:
         assert con.execute("SELECT counter FROM dnsbl WHERE groupname='First'").fetchall() == [(11,)]
-    # Only a new initialization grants fresh queries the new authority; history stays blank.
-    P._db_capture_privacy_epochs()
+        assert con.execute("SELECT SUM(count) FROM dns_metric_totals WHERE groupname='First'").fetchall() == [(4,)]
+    # Fresh authority labels only new events, never the retained A tuples above.
+    if not activate_before_retry:
+        P._db_capture_privacy_epochs()
+    assert P.pfb["metrics_privacy_epochs"] == {P.DB_RESOLVER: "c" * 32, P.DB_DNSBL: "c" * 32}
     P.pfb["db_worker"] = False
     emit("192.0.2.99")
     for path, table in ((resolver, "dns_metric_queries"), (dnsbl, "dns_metric_blocks")):
         assert detail(path, table) == [("2001:db8::53", "LAN", "", 4), ("2001:db8::53", "LAN", "192.0.2.99", 1)]
+    with sqlite3.connect(resolver) as con:
+        assert con.execute("SELECT totalqueries FROM resolver").fetchall() == [(15,)]
+    with sqlite3.connect(dnsbl) as con:
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname='First'").fetchall() == [(12,)]
+        assert con.execute("SELECT SUM(count) FROM dns_metric_totals WHERE groupname='First'").fetchall() == [(5,)]
+    for path, table in ((resolver, "dns_metric_queries"), (dnsbl, "dns_metric_blocks")):
         with sqlite3.connect(path) as con:
             con.execute(f"DELETE FROM {table}")
     emit("192.0.2.99")

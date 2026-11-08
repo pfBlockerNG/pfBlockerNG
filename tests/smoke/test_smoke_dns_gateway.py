@@ -622,6 +622,109 @@ def _client_v6(client: SmokeVM) -> Iterator[None]:
         client.ssh(f"ip -6 addr del {address} dev {interface}")
 
 
+@contextlib.contextmanager
+def _vip6_udp_proof(vm: SmokeVM, client: SmokeVM, vip: str) -> Iterator[list[str]]:
+    """Temporary, bounded evidence around the existing first UDP query; never select its source."""
+    token = f"vip6-udp-{secrets.token_hex(8)}"
+    directory = h.DIAG_DIR / token
+    guest = f"/tmp/{token}"
+    capture = None
+    errors: list[str] = []
+    query_evidence: list[str] = []
+
+    def save(label: str, raw: bytes) -> None:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / label).write_bytes(raw)
+        except Exception as error:
+            errors.append(f"persist {label}: {error!r}")
+
+    def collect(machine: SmokeVM, label: str, command: str) -> subprocess.CompletedProcess[bytes] | None:
+        try:
+            result = subprocess.run(machine.ssh_argv(command), capture_output=True, timeout=15, check=False)
+            save(f"{label}.stdout", result.stdout)
+            save(f"{label}.stderr", result.stderr)
+            save(f"{label}.rc", str(result.returncode).encode())
+            return result
+        except subprocess.TimeoutExpired as error:
+            save(f"{label}.stdout", error.stdout or b"")
+            save(f"{label}.stderr", error.stderr or b"")
+            errors.append(f"{label}: {error!r}")
+        except Exception as error:
+            errors.append(f"{label}: {error!r}")
+        return None
+
+    client_state = "ip -6 addr show; ip -6 route show table all; ip -6 neigh show"
+    guest_state = (
+        "ifconfig -a; netstat -rn -f inet6; ndp -an; pfctl -vvsr; "
+        "sockstat -46lw; cat /var/unbound/access_lists.conf /var/unbound/unbound.conf"
+    )
+    try:
+        collect(client, "client-before", f"ip -6 route get {shlex.quote(vip)}; {client_state}")
+        collect(vm, "guest-before", guest_state)
+        try:
+            interface = h.config_get(vm, "interfaces/lan/if")
+            assert interface and re.fullmatch(r"[A-Za-z0-9_.:-]+", interface), f"invalid LAN device {interface!r}"
+            command = (
+                "command -v timeout >/dev/null && command -v tcpdump >/dev/null && "
+                f"timeout -s TERM -k 5 20 tcpdump -U -nn -s 0 -i {shlex.quote(interface)} "
+                f"-c 1 -w {guest}.pcap {shlex.quote(f'ip6 and udp dst port 53 and dst host {vip}')} "
+                f">{guest}.stdout 2>{guest}.stderr"
+            )
+            capture = subprocess.Popen(vm.ssh_argv(command), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # tcpdump emits this only after opening the actual LAN capture device.
+            def listening() -> bool:
+                result = subprocess.run(vm.ssh_argv(f"cat {guest}.stderr"), capture_output=True, timeout=3, check=False)
+                save("capture-readiness.stdout", result.stdout)
+                save("capture-readiness.stderr", result.stderr)
+                if capture.poll() is not None:
+                    raise RuntimeError(f"capture exited before readiness: {capture.returncode}")
+                return b"listening on " in result.stdout
+
+            h.wait_until(listening, timeout=5, interval=0.2)
+        except Exception as error:
+            errors.append(f"capture setup: {error!r}")
+            raise RuntimeError("VIP6 capture not ready; no diagnostic query sent") from error
+        try:
+            yield query_evidence
+        except BaseException as error:
+            query_evidence.append(f"query exception: {error!r}")
+            raise
+    finally:
+        save("query.txt", "\n".join(query_evidence).encode() if query_evidence else b"query not run")
+        # Diagnostic failures must not hide the original endpoint assertion/query result.
+        collect(client, "client-after", client_state)
+        collect(vm, "guest-after", guest_state)
+        if capture is not None:
+            try:
+                out, err = capture.communicate(timeout=30)
+                save("capture-ssh.stdout", out)
+                save("capture-ssh.stderr", err)
+                save("capture-ssh.rc", str(capture.returncode).encode())
+            except Exception as error:
+                errors.append(f"capture SSH: {error!r}")
+                try:
+                    capture.kill()  # only our SSH; guest timeout still owns tcpdump's hard deadline
+                    out, err = capture.communicate(timeout=5)
+                    save("capture-ssh.stdout", out)
+                    save("capture-ssh.stderr", err)
+                except Exception as stop_error:
+                    errors.append(f"capture SSH stop: {stop_error!r}")
+        for suffix in ("stdout", "stderr", "pcap"):
+            result = collect(vm, f"capture-{suffix}", f"cat {guest}.{suffix}")
+            if suffix == "pcap" and result is not None and result.returncode == 0:
+                save("capture.pcap", result.stdout)
+            elif suffix == "pcap":
+                errors.append("raw pcap unavailable; see capture-pcap stdout/stderr/rc")
+        if capture is None:
+            errors.append("no capture started; no raw pcap exists")
+        collect(vm, "packet-source", f"tcpdump -nn -vv -r {guest}.pcap")
+        collect(vm, "cleanup", f"rm -f {guest}.stdout {guest}.stderr {guest}.pcap")
+        save("errors.txt", "\n".join(errors).encode())
+        _say(f"VIP6 UDP evidence: {directory}; errors={errors!r}")
+
+
 def _firewall_ask(vm: SmokeVM, name: str, *, tcp: bool) -> tuple[h.DnsAnswer, str]:
     """`name` asked by the firewall itself of its own LAN IPv6 address, so the client is that address (drill)."""
     out = vm.ssh(f"drill {'-t ' if tcp else ''}@{LAN_V6_ADDR} {name} A 2>&1").stdout
@@ -1482,7 +1585,11 @@ def test_doh_forwarded_client_is_believed_only_from_a_trusted_front_end(
     path = h.dns_config_path("pfb_dns_doh_trusted")
     present, prior = h.config_get_state(gw.vm, path)
     try:
-        for trusted in (False, True):
+        for trusted, forwarded, denied in (
+            (False, "2001:db8::3757", False),
+            (True, LAN_V6_CLIENT, False),
+            (True, "2001:db8::3757", True),
+        ):
             _php_ok(
                 gw.vm,
                 f"config_set_path({h._php_str(path)}, {h._php_str(CLIENT_LAN_IP if trusted else '')});\n"
@@ -1490,7 +1597,7 @@ def test_doh_forwarded_client_is_believed_only_from_a_trusted_front_end(
                 "DoH trusted front end",
             )
             _apply(gw.vm)
-            name = h.unique_domain("doh-trusted" if trusted else "doh-untrusted")
+            name = h.unique_domain("doh-denied" if denied else "doh-trusted" if trusted else "doh-untrusted")
             wire = bytes.fromhex("375101000001000000000000")
             wire += b"".join(bytes([len(label)]) + label.encode() for label in name.split(".")) + b"\0\0\1\0\1"
             args = [
@@ -1509,7 +1616,7 @@ def test_doh_forwarded_client_is_believed_only_from_a_trusted_front_end(
                 "-H",
                 "Content-Type: application/dns-message",
                 "-H",
-                "X-Forwarded-For: 2001:db8::3757",
+                f"X-Forwarded-For: {forwarded}",
                 "--data-binary",
                 "@-",
                 f"https://{CERT_NAME}:{DOH_PORT}/dns-query",
@@ -1518,11 +1625,17 @@ def test_doh_forwarded_client_is_believed_only_from_a_trusted_front_end(
                 gw.client.ssh_argv(shlex.join(args)), input=wire, capture_output=True, timeout=40, check=False
             )
             assert result.returncode == 0, f"DoH trusted={trusted}: {result.stderr!r}"
-            assert len(result.stdout) >= 12 and result.stdout[3] & 15 == 0, result.stdout.hex()
+            assert len(result.stdout) >= 12 and result.stdout[3] & 15 == (5 if denied else 0), result.stdout.hex()
+            if denied:
+                assert result.stdout[6:8] == b"\0\0", result.stdout.hex()
+                _drain_logs(gw)
+                assert not _reply_rows(gw.vm, name), name
+                assert not _dnsbl_rows(gw.vm, name), name
+                continue
             assert ipaddress.ip_address(STUB_DNS_A).packed in result.stdout, result.stdout.hex()
             _drain_logs(gw)
             [row] = _reply_rows(gw.vm, name)
-            client = "2001:db8::3757" if trusted else CLIENT_LAN_IP
+            client = forwarded if trusted else CLIENT_LAN_IP
             assert len(row) == 13 and row[7] == client and row[10] == "DoH", row
             assert row[11:13] == [PFSENSE_LAN_IP, LAN_DESCRIPTION], row
             _assert_unified_row(gw.vm, row, name, 6)
@@ -2681,7 +2794,10 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
         with _client_v6(client), _client_route(client, vips[1]):
             for transport, port in (("udp", 53), ("tcp", 53), ("dot", 853), ("doh-post", 443), ("doq", 853)):
                 name = h.unique_domain("vip-endpoint-v6")
-                answer, raw = _ask(client, transport, name, server=vips[1], port=port)
+                with _vip6_udp_proof(vm, client, vips[1]) if transport == "udp" else contextlib.nullcontext() as proof:
+                    answer, raw = _ask(client, transport, name, server=vips[1], port=port)
+                    if proof is not None:
+                        proof.append(f"answer={answer!r}\nstdout/stderr:\n{raw}")
                 assert h.resolves_to(answer, STUB_DNS_A), raw
                 _drain_logs(gw, port=1053)
                 [row] = _reply_rows(vm, name)

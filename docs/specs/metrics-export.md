@@ -56,7 +56,9 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
 Receiving labels do not depend on it. Enabling client labels exposes identities to configured scrapers and increases
 series counts, especially with changing IPv6 privacy addresses. Logs keep their existing client fields and retention.
 
-Enabling collection takes effect through the existing settings apply/reload lifecycle. An explicit disable is
+Enabling collection takes effect through the existing settings apply/reload lifecycle. General Save runs that
+lifecycle automatically, so new traffic may acquire client labels as soon as the successful Save returns.
+An explicit disable is
 reconciled at Save time: each counter database coalesces client dimensions while retaining listener, owner and
 aggregate totals, then rotates its privacy epoch before the setting is persisted. A required transition failure
 reports that the setting is unchanged; a partial two-database failure may stay more private but never restores
