@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import queue
 import sqlite3
+import sys
+from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
+import unboundmodule
 
 import pfb_unbound as P
 from tests import test_dns_metric_breakdown as breakdown
@@ -176,6 +181,74 @@ def test_initial_ini_opt_in_cannot_promote_default_off_database(metric_databases
     emit("192.0.2.10")
     for path, table in zip(metric_databases, ("dns_metric_queries", "dns_metric_blocks"), strict=True):
         assert detail(path, table) == [("2001:db8::53", "LAN", "", 1)]
+
+
+OPTED_IN_EPOCH = "0123456789abcdef0123456789abcdef"
+
+
+@pytest.fixture
+def init_over_opted_in_databases(
+    tmp_path: Path, monkeypatch: Any
+) -> Iterator[Callable[[str | None], tuple[Path, Path]]]:
+    """Run the real init_standard over a real INI file and real metric databases already stored as client_ip=1."""
+    monkeypatch.chdir(tmp_path)
+    # init_standard() replaces sys.stderr; register monkeypatch's auto-restore.
+    monkeypatch.setattr(sys, "stderr", sys.stderr)
+    monkeypatch.setattr(P, "pfb_db_queue", queue.Queue(), raising=False)
+    resolver, dnsbl = tmp_path / "pfb_py_resolver.sqlite", tmp_path / "pfb_py_dnsbl.sqlite"
+    P.pfb.update(pfb_py_resolver=str(resolver), pfb_py_dnsbl=str(dnsbl), sqlite3_resolver_con=True)
+    P.pfb.update(sqlite3_dnsbl_con=True, db_worker=False, mod_threading=False)
+    for key in ("mod_threading_e", "mod_maxminddb_e"):
+        P.pfb[key] = "stub"
+    for database in (P.DB_RESOLVER, P.DB_DNSBL):
+        assert P.pfb_db_validate(database)
+        P._db_close(database)
+    with sqlite3.connect(dnsbl) as con:
+        con.execute("INSERT INTO dnsbl (groupname, timestamp, entries, counter) VALUES ('First', '', 1, 0)")
+        con.execute("INSERT INTO dnsbl_group_epochs VALUES ('First', 'custom', lower(hex(randomblob(16))))")
+    for path in (resolver, dnsbl):
+        policy(path, True, OPTED_IN_EPOCH)
+    started = []
+
+    def init(metrics_client_ip: str | None) -> tuple[Path, Path]:
+        # forwarding makes the DNSBL statistics database wanted without needing a feed manifest.
+        lines = ["[MAIN]", "python_enable = true", "forwarding = true"]
+        if metrics_client_ip is not None:
+            lines.append(f"metrics_client_ip = {metrics_client_ip}")
+        (tmp_path / "pfb_unbound.ini").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        started.append(True)
+        assert P.init_standard(0, unboundmodule.module_env()) is True
+        for path in (resolver, dnsbl):
+            with sqlite3.connect(path) as con:
+                assert con.execute("SELECT client_ip,epoch FROM dns_metric_settings").fetchall() == [
+                    (1, OPTED_IN_EPOCH)
+                ], "init must leave the stored policy opted in so only the INI gate can withhold client IPs"
+        return resolver, dnsbl
+
+    yield init
+    if started:
+        P.deinit(0)
+
+
+@pytest.mark.parametrize("ini_option", [None, "false"], ids=["ini-absent", "ini-false"])
+def test_ini_without_client_ip_opt_in_withholds_authority_from_opted_in_database(
+    init_over_opted_in_databases: Callable[[str | None], tuple[Path, Path]], ini_option: str | None
+) -> None:
+    databases = init_over_opted_in_databases(ini_option)
+    assert P.pfb["metrics_privacy_epochs"] == {}
+    emit("192.0.2.10")
+    for path, table in zip(databases, ("dns_metric_queries", "dns_metric_blocks"), strict=True):
+        assert detail(path, table) == [("2001:db8::53", "LAN", "", 1)]
+
+
+def test_ini_client_ip_opt_in_grants_authority_to_opted_in_database(
+    init_over_opted_in_databases: Callable[[str | None], tuple[Path, Path]],
+) -> None:
+    databases = init_over_opted_in_databases("true")
+    assert P.pfb["metrics_privacy_epochs"] == {P.DB_RESOLVER: OPTED_IN_EPOCH, P.DB_DNSBL: OPTED_IN_EPOCH}
+    emit("192.0.2.10")
+    for path, table in zip(databases, ("dns_metric_queries", "dns_metric_blocks"), strict=True):
+        assert detail(path, table) == [("2001:db8::53", "LAN", "192.0.2.10", 1)]
 
 
 @pytest.mark.parametrize("db", [P.DB_RESOLVER, P.DB_DNSBL])
