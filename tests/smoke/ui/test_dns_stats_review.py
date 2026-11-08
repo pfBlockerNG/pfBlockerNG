@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import csv
-import html
 import io
-import re
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -26,12 +24,18 @@ if TYPE_CHECKING:
 
 @contextmanager
 def _stats_log(vm: helpers.SmokeVM, log: str, preference: str, contents: str) -> Iterator[None]:
+    if log == "dnsbl.log":
+        helpers.ensure_dnsbl_vip(vm)
     path = f"/var/log/pfblockerng/{log}"
     key = f"installedpackages/pfblockerngglobal/{preference}"
     prior = helpers.config_get_state(vm, key)
-    backups = _backup_seeded_files(vm, (path, "/usr/local/www/pfblockerng/chart_stats.csv"))
+    dnsbl_key = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl"
+    dnsbl_prior = helpers.config_get_state(vm, dnsbl_key) if log == "dnsbl.log" else None
+    backups = _backup_seeded_files(vm, (path,))
     try:
         helpers.config_set(vm, key, "")
+        if dnsbl_prior is not None:
+            helpers.config_set(vm, dnsbl_key, "on")
         seeded = subprocess.run(
             vm.ssh_argv("tee", path), input=contents, text=True, capture_output=True, timeout=30, check=False
         )
@@ -39,7 +43,11 @@ def _stats_log(vm: helpers.SmokeVM, log: str, preference: str, contents: str) ->
         yield
     finally:
         try:
-            helpers.config_restore_state(vm, key, prior)
+            try:
+                helpers.config_restore_state(vm, key, prior)
+            finally:
+                if dnsbl_prior is not None:
+                    helpers.config_restore_state(vm, dnsbl_key, dnsbl_prior)
         finally:
             errors = _restore_seeded_files(vm, backups)
             assert not errors, errors
@@ -51,6 +59,22 @@ def _csv(row: list[str]) -> str:
     return stream.getvalue()
 
 
+def _stats_data(webui: WebUI, view: str) -> dict:
+    response = webui.get(f"/pfblockerng/pfblockerng_alerts.php?view={view}&stats_data=1")
+    assert response.status_code == 200
+    assert "application/json" in response.headers.get("content-type", ""), "Stats data returned HTML"
+    assert "no-store" in response.headers.get("cache-control", "")
+    return response.json()
+
+
+def _show_stats_panel(page: Page, stat: str) -> None:
+    page.locator(f"#Alert_Stats_{stat}").scroll_into_view_if_needed()
+    body = page.locator(f"#Alert_Stats_{stat}_panel-body")
+    if not body.is_visible():
+        page.locator(f"#Alert_Stats_A_{stat}").click()
+    pytest.importorskip("playwright.sync_api").expect(body.locator("tbody")).to_be_attached()
+
+
 @pytest.mark.ui_browser
 def test_dns_stats_comma_domain_cells_and_actions(browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
     domain = "a,b.test"
@@ -58,6 +82,7 @@ def test_dns_stats_comma_domain_cells_and_actions(browser_page: Page, webui: Web
     with _stats_log(smoke_vm, "dnsbl.log", "pfbdnsblstat", _csv(row)):
         _open(browser_page, webui, "/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat")
         for category in ("dnsbldomain", "dnsblevald"):
+            _show_stats_panel(browser_page, category)
             cells = browser_page.locator(f"#Alert_Stats_{category} tbody tr").first.locator("td")
             assert cells.last.inner_text() == domain
             assert cells.nth(2).inner_text() == "TLD"
@@ -76,6 +101,7 @@ def test_reply_stats_comma_domain_source_filter_round_trip(
     row = ["DNS-reply", "2030-01-15 09:00:00", "cache", "A", "A", "300", domain, source, "192.0.2.53", "US"]
     with _stats_log(smoke_vm, "dns_reply.log", "pfbdnsblreplystat", _csv(row)):
         _open(browser_page, webui, "/pfblockerng/pfblockerng_alerts.php?view=dnsbl_reply_stat")
+        _show_stats_panel(browser_page, "replysrcipd")
         button = browser_page.locator("#Alert_Stats_replysrcipd tbody button").first
         assert button.get_attribute("value") == f"{domain},{source}"
         with browser_page.expect_navigation(wait_until="domcontentloaded"):
@@ -93,6 +119,4 @@ def test_dns_stats_unterminated_csv_total(webui: WebUI, smoke_vm: helpers.SmokeV
         response = webui.get(path)
         result = evaluate_render(path, response.status_code, response.text, ("DNS Reply Stats",))
         assert result.ok, result.detail
-        total = re.search(r"Total event\(s\):\s*\[\s*(\d+)\s*\]", html.unescape(response.text))
-        assert total is not None, "Stats total heading missing"
-        assert int(total.group(1)) == lines, f"Expected {lines} physical lines, got {total.group(1)}"
+        assert _stats_data(webui, "dnsbl_reply_stat")["total"] == lines
