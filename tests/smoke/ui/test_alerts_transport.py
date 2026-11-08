@@ -150,3 +150,34 @@ def test_transport_columns_filter_and_reset(smoke_vm: helpers.SmokeVM, webui: We
         helpers.config_restore_state(vm, dnsbl_cfg, original)
         errors = _restore_seeded_files(vm, backups)
         assert not errors, errors
+
+
+def test_format_character_interface_renders_unavailable(smoke_vm: helpers.SmokeVM, webui: WebUI) -> None:
+    """A logged receiving interface with a Unicode format character renders as unavailable, as on the Status panel."""
+    vm = smoke_vm
+    dnsbl_cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl"
+    original = helpers.config_get_state(vm, dnsbl_cfg)
+    backups = _backup_seeded_files(vm, (DNSBL_LOG,))
+    try:
+        helpers.ensure_dnsbl_vip(vm)
+        helpers.set_dnsbl_enabled(vm, True)
+        names = {label: helpers.unique_domain() for label in ("LAN\u200dJOINED", "LANPLAIN")}
+        out = io.StringIO()
+        writer = csv.writer(out, lineterminator="\n")
+        for label, name in names.items():
+            row = ["DNSBL-python", "Jan 01 00:00:00", name, "10.0.0.5", "Python", "DNSBL", "Group", name, "Feed", "0"]
+            writer.writerow([*row, "A", "UDP", "192.0.2.53", label])
+        _append(vm, DNSBL_LOG, out.getvalue())
+
+        response = webui.get(f"{PAGE}?view=alert")
+        assert response.status_code == 200
+        plain = row_containing(response.text, names["LANPLAIN"])
+        assert "<td>LANPLAIN</td>" in plain and "<td>—</td>" not in plain, plain
+        joined = row_containing(response.text, names["LAN\u200dJOINED"])
+        assert "<td>192.0.2.53</td>" in joined, joined
+        assert joined.count("<td>—</td>") == 1, joined
+        assert "JOINED" not in joined, joined
+    finally:
+        helpers.config_restore_state(vm, dnsbl_cfg, original)
+        errors = _restore_seeded_files(vm, backups)
+        assert not errors, errors
