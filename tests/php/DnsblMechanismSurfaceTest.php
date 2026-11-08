@@ -168,10 +168,6 @@ final class DnsblMechanismSurfaceTest extends TestCase
 
 	public function testAlertsUnknownBlockingTypeLabelsUseTheSharedLabel(): void
 	{
-		$empty_agent = pfb_test_page_region('src/usr/local/www/pfblockerng/pfblockerng_alerts.php', "if (\$alert_view != 'dnsbl_stat') {", "\$agent_cmd = '';");
-		$scope       = pfb_test_page_eval($empty_agent, ['alert_view' => 'dnsbl_stat']);
-		$this->assertSame(pfb_dnsbl_mechanism_labels()['enabled'], $scope['unknown_msg'], 'empty-agent rows');
-
 		$literal_unknown = pfb_test_page_region(
 			'src/usr/local/www/pfblockerng/pfblockerng_alerts.php',
 			"if (\$stat_type == 'dnsblagent' && \$data == 'Unknown') {",

@@ -689,7 +689,9 @@ if (isset($_POST) && !empty($_POST)) {
 
 					// Split SRC/DST In/Outbound field into two filter fields (IP/GeoIP)
 					if ($submit_type == 'replysrcipd') {
-						$data = explode(',', $_POST['filterlogentries_submit_' . $submit_type]);
+						$filter_pair = $_POST['filterlogentries_submit_' . $submit_type];
+						$split = strrpos($filter_pair, ',');
+						$data = [substr($filter_pair, 0, $split), substr($filter_pair, $split + 1)];
 						$_POST['filterlogentries_' . $final_type]	= pfb_filter($data[0], PFB_FILTER_HTML, 'alerts filter');
 						$_POST['filterlogentries_replysrcip']		= pfb_filter($data[1], PFB_FILTER_HTML, 'alerts filter');
 					}
@@ -4967,12 +4969,13 @@ foreach ($stats as $stat_type => $stype):
 								}
 							}
 							elseif ($stat_type == 'dnsbldomain') {
-								$ex = explode(',', $data, 2);
-								$filter_value = $ex[0];
+								$split = strrpos($data, ',');
+								$subdata = [substr($data, 0, $split), substr($data, $split + 1)];
+								$filter_value = $subdata[0];
 							}
 							elseif ($stat_type == 'dnsblevald') {
-								$ex = explode(',', $data, 2);
-								$filter_value = $ex[1];
+								$subdata = explode(',', $data, 2);
+								$filter_value = $subdata[1];
 							}
 
 							if ($stat_type != 'ipdirection') {
@@ -4987,7 +4990,9 @@ foreach ($stats as $stat_type => $stype):
 
 							// Collect GeoIP or DNSBL Type classification
 							if ($stype[3]) {
-								$subdata = explode(',', $data);
+								if (empty($subdata)) {
+									$subdata = explode(',', $data);
+								}
 								if ($stat_type == 'dnsblevald') {
 									$data		= $subdata[1];
 									$subdata[1]	= $subdata[0];

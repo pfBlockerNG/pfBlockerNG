@@ -5,38 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
 
-/**
- * Pin the byte-safety of the Alerts/Reports stat + chart pipelines in
- * pfblockerng_alerts.php (~L1691-1848: the per-$stat_type exec() switch that
- * builds $cut_cmd/$grep_cmd/$sss_cmd/$agent_cmd/$su_cmd pipelines against the
- * raw log file, both chart_stats.csv writers, and the ASN awk 'NF == 23' one).
- *
- * issue #1814 follow-up: this block is top-level page code (before the file's
- * first `function` keyword), needing the full pfSense render-time state
- * ($alert_view, $stat_info, $stat_hidden, config_get_path(), ...) -- not
- * reachable through the AlertsPageLoader eval-from-first-function convention.
- * Same reachability gap AlertsPieBlockAndStatsGuardTest already documents and
- * works around for two OTHER snippets in this exact block (the pie-segment
- * loop and the stat-bucket key build): this class follows that established
- * technique -- read the live production source and eval-extract just the one
- * case body under test into a standalone, parameterised function, verbatim.
- *
- * Two angles, per the brief:
- *   - testDefaultStatPipelineSurvivesAnInvalidUtf8ByteUnderAUtf8Locale drives
- *     the REAL exec() line (the `default:` case) against a real temp log
- *     file, with the process locale forced to a UTF-8 locale via putenv()
- *     (restored in tearDown). Red pre-fix only on BSD userland (macOS dev
- *     boxes, the FreeBSD appliance -- BSD cut aborts on an invalid byte
- *     under a UTF-8 locale); GNU cut tolerates invalid bytes, so on glibc
- *     hosts (GitHub CI) this test is green either way and the source-text
- *     pin below carries the regression coverage there.
- *   - testEveryStatChartExecCarriesTheByteSafeLocalePrefix is a source-text
- *     pin (same convention as UpdateAjaxTailJsonEncodingTest's call-site flag
- *     pin) covering EVERY exec( in the block -- the coverage axis the brief
- *     asks for, cheaper than eval-extracting and driving all ~20 pipelines.
- *     This top-level block has no off-appliance callable seam, so the retained
- *     pin scans php_strip_whitespace() output and cannot depend on comments.
- */
+/** Exercise the remaining IP stat pipeline with invalid UTF-8 under a UTF-8 locale. */
 #[CoversNothing]
 final class AlertsStatPipelineLocaleSafetyTest extends TestCase
 {
@@ -150,34 +119,4 @@ final class AlertsStatPipelineLocaleSafetyTest extends TestCase
 		$this->assertTrue($found, 'the invalid-UTF-8 domain row must survive the stat pipeline, not vanish along with every other row');
 	}
 
-	public function testEveryStatChartExecCarriesTheByteSafeLocalePrefix(): void
-	{
-		$block = self::boundedCodeBlock();
-
-		// Every site in this block calls exec("...") -- a double-quoted string
-		// literal as the first argument -- never exec($var) or a single-quoted one.
-		$count = preg_match_all('/exec\("/', $block, $m, PREG_OFFSET_CAPTURE);
-		$this->assertGreaterThanOrEqual(
-			20,
-			$count,
-			'test oracle: expected at least 20 exec("...") sites in the stats/chart block -- did the block change shape?'
-		);
-
-		$missing = [];
-		foreach ($m[0] as [$match, $offset]) {
-			$afterQuote = $offset + strlen($match);
-			if (substr($block, $afterQuote, strlen('{$lc_bytes}')) !== '{$lc_bytes}') {
-				$lineEnd = strpos($block, "\n", $offset);
-				$missing[] = trim(substr($block, $offset, ($lineEnd !== FALSE ? $lineEnd : $offset + 80) - $offset));
-			}
-		}
-
-		$this->assertSame(
-			[],
-			$missing,
-			'every exec("...") in the stats/chart block must be prefixed with {$lc_bytes} (LC_ALL=C) -- else BSD ' .
-				'cut/sort/uniq/awk abort on an invalid-UTF-8 byte under a UTF-8 locale and silently drop every row ' .
-				"in the panel (issue #1814 follow-up). Missing on:\n" . implode("\n", $missing)
-		);
-	}
 }

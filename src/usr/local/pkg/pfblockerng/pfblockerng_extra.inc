@@ -4812,14 +4812,20 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 		while (($line = fgets($handle)) !== FALSE) {
 			// Quoted records may span physical lines; let the native CSV reader frame them.
 			if (str_contains($line, '"')) {
+				$next_line = ftell($handle);
 				fseek($handle, -strlen($line), SEEK_CUR);
 				$fields = fgetcsv($handle, 0, ',', '"', '');
 				if ($fields === FALSE) {
 					break;
 				}
 				$total++;
-				foreach ($fields as $field) {
-					$total += substr_count($field ?? '', "\n");
+				// Count raw line boundaries even when EOF leaves a quoted field open.
+				$record_end = ftell($handle);
+				if ($next_line < $record_end) {
+					fseek($handle, $next_line);
+					while (ftell($handle) < $record_end && fgets($handle) !== FALSE) {
+						$total++;
+					}
 				}
 			} else {
 				$fields = explode(',', rtrim($line, "\r\n"));
