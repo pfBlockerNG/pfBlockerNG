@@ -8,8 +8,8 @@ final class StatsGeneratedCsvCleanupTest extends TestCase
 {
 	public function testUpgradeRemovesTheFormerPublicStatsSnapshot(): void
 	{
-		$dir = '/var/tmp/agents/3759-ui/cleanup-' . bin2hex(random_bytes(8));
-		mkdir($dir, 0700, TRUE);
+		$dir = sys_get_temp_dir() . '/pfb-stats-cleanup-' . bin2hex(random_bytes(8));
+		mkdir($dir, 0700);
 		$csv = $dir . '/chart_stats.csv';
 		file_put_contents($csv, "edate,ecount\n2031-02-15 (09),1\n");
 		$source = file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');

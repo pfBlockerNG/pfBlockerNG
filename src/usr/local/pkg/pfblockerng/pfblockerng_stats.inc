@@ -64,7 +64,7 @@ else {
 			'ipgeoip'	=> array("Top GeoIP",				'Found', 'GeoIP(s)',		FALSE, ''),
 			'ipasn'		=> array("Top ASN",				'Found', 'ASN(s)',		FALSE, ''),
 			'ipaliasname'	=> array("Top Aliasname",			'Found', 'Aliasname(s)',	FALSE, ''),
-			'ipfeed'	=> array("Top Feed",				'Found', 'Feed{s)',		FALSE, ''),
+			'ipfeed'	=> array("Top Feed",				'Found', 'Feed(s)',		FALSE, ''),
 			'ipinterface'	=> array("Top Interface",			'Found', 'Interface(s)',	FALSE, ''),
 			'ipprotocol'	=> array("Top Protocol",			'Found', 'Protocol(s)',		FALSE, ''),
 			'ipdirection'	=> array("Top Direction",			'Found', 'Direction(s)',	FALSE, ''),
