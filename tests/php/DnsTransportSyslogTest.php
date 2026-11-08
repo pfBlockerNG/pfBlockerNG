@@ -16,21 +16,48 @@ final class DnsTransportSyslogTest extends TestCase
 			$this->assertSame($old . ' transport=' . $expected, pfb_syslog_format_dnsbl($base + ['transport' => $value]));
 		}
 	}
-	public function testEndpointSyslogAddsCanonicalEscapedTokensWithoutChangingOldRows(): void
+	public function testEndpointSyslogPreservesLegacyFieldsAndRoundTripsAsciiJsonInterface(): void
 	{
-		$base = ['q_name' => 'a.test', 'q_ip' => '198.51.100.1', 'transport' => 'UDP'];
+		$base = ['q_name' => 'a.test', 'q_ip' => '198.51.100.1', 'q_type' => 'AAAA', 'group' => 'Group', 'feed' => 'Feed', 'b_type' => 'DNSBL', 'b_eval' => 'a.test', 'transport' => 'UDP'];
 		$old = pfb_syslog_format_dnsbl($base);
 		$this->assertSame($old, pfb_syslog_format_dnsbl($base + ['listener_ip' => '', 'listener_interface' => '']));
-		$this->assertSame($old . ' listener_ip=2001:db8::1 listener_interface=' . pfb_syslog_escape('Län,"\\'),
-			pfb_syslog_format_dnsbl($base + ['listener_ip' => '2001:0db8::1', 'listener_interface' => 'Län,"\\']));
+		foreach ([
+			'旧漢字 Ελληνικά 😀',
+			'LAN',
+			'LAN east, "quoted" & west',
+			'LAN/uplink\\backslash=literal\\u0041',
+			"\u{00A0}\u{0100}\u{07FF}\u{0800}\u{10000}",
+		] as $interface) {
+			$body = pfb_syslog_format_dnsbl($base + ['listener_ip' => '2001:0db8::1', 'listener_interface' => $interface]);
+			$this->assertSame(0, preg_match('/[^\x00-\x7f]/', $body), 'Interface representation must survive an ASCII-only syslog transport');
+			preg_match_all('/(?:^| )([a-z_]+)=("(?:[^"\\\\]|\\\\.)*"|[^ ]*)(?= |$)/', $body, $matches, PREG_SET_ORDER);
+			$tokens = [];
+			foreach ($matches as $match) {
+				$tokens[$match[1]][] = $match[2];
+			}
+			foreach ([
+				'act' => 'dnsbl', 'qname' => 'a.test', 'qip' => '198.51.100.1', 'qtype' => 'AAAA',
+				'group' => 'Group', 'feed' => 'Feed', 'btype' => 'DNSBL', 'eval' => 'a.test', 'transport' => 'UDP',
+				'listener_ip' => '2001:db8::1',
+			] as $key => $value) {
+				$this->assertSame([$value], $tokens[$key] ?? [], $key . ' must retain its value as one field');
+			}
+			$this->assertCount(1, $tokens['listener_interface'] ?? [], 'Exactly one actual interface field must be emitted');
+			$token = $tokens['listener_interface'][0];
+			$this->assertJson($token, 'Interface must be a quoted JSON token');
+			$this->assertSame($interface, json_decode($token, TRUE, 512, JSON_THROW_ON_ERROR));
+		}
 		foreach (['bad', '0.0.0.0', '::', '[::1]', 'fe80::1%lo0', '192.0.2.1/24'] as $invalid) {
 			$this->assertSame($old, pfb_syslog_format_dnsbl($base + ['listener_ip' => $invalid, 'listener_interface' => 'LAN']));
 		}
 	}
-	public function testSyslogOmitsControlInterfaceButKeepsKnownEndpoint(): void
+	public function testSyslogOmitsInvalidInterfaceButKeepsKnownEndpoint(): void
 	{
 		$base = ['listener_ip' => '192.0.2.1'];
-		$this->assertSame(pfb_syslog_format_dnsbl($base),
-			pfb_syslog_format_dnsbl($base + ['listener_interface' => "LAN\u{0085}forged"]));
+		foreach (["LAN\u{0085}forged", "LAN\nforged", "LAN\0forged", "LAN\xff", [], FALSE, 42, null] as $interface) {
+			$body = pfb_syslog_format_dnsbl($base + ['listener_interface' => $interface]);
+			$this->assertMatchesRegularExpression('/(?:^| )listener_ip=192\.0\.2\.1(?: |$)/', $body);
+			$this->assertStringNotContainsString('listener_interface=', $body);
+		}
 	}
 }

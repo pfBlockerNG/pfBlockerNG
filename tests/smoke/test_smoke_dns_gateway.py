@@ -39,9 +39,7 @@ What it proves, in file order:
 * a client no row names (the automatic LAN rows off, the only list naming 203.0.113.0/24) gets REFUSED on every
   transport for a listed and for an unlisted name, as Unbound refuses it, while an IPv6 LAN client that only
   pfBlockerNG's marked clause in unbound.conf grants still gets the VIP (the firewall asking its own LAN IPv6 address
-  over UDP and TCP; the client VM too, on every transport, where its IPv6 address reaches the firewall: the smoke
-  pfSense's pf carries `block drop in log inet6 all` and no LAN pass rule, so there it does not and the diagnostics
-  are logged);
+  over UDP and TCP; the client VM too, on every transport, through the fixture's scoped leased IPv6 DNS pass rules);
 * DDR (issue #3583, its target name issue #3694), with ``dns_shared/pfb_dns_ddr`` on, the DNS name set
   (``dns/pfb_dns_name``) and the gateway restarted with ``--dns-name NAME --ddr``: ``_dns.resolver.arpa. SVCB``
   over UDP and TCP gets the DoH, DoT and DoQ records for the LAN address (alpn, ``port`` only off its default,
@@ -159,8 +157,9 @@ LAN_V6_CLIENT = h.IPV6_LOCAL_HOST  # taken by the client inside the LAN's IPv6 /
 OTHER_ACL_NET = ("203.0.113.0", "24")  # TEST-NET-3: an access list that names nobody on the LAN
 AUTO_ROWS_OFF = "unbound/disable_auto_added_access_control"  # pfSense's switch for the LAN rows it adds by itself
 LOOPBACK = {"127.0.0.1", "::1"}  # DoH and DoQ always listen here too, whatever interfaces they are given
-LAN_CONFIG_DESCRIPTION = 'LAN, "旧" & owner'
-LAN_DESCRIPTION = 'LAN, "旧" & OWNER'  # pfSense's interface API canonicalizes descriptions to uppercase
+LAN_CONFIG_DESCRIPTION = "PFB3757LAN"
+LAN_DESCRIPTION = "PFB3757LAN"  # pfSense's interface API canonicalizes descriptions to uppercase
+SYSLOG_OWNER_DESCRIPTION = 'LAN, "旧" & OWNER'
 SNAPSHOT_FILE = "/tmp/pfb3513_cfg_snapshot.json"  # on the guest: survives a dead test process
 
 LISTENER_SETTINGS = {
@@ -623,15 +622,6 @@ def _client_v6(client: SmokeVM) -> Iterator[None]:
         client.ssh(f"ip -6 addr del {address} dev {interface}")
 
 
-def _v6_diagnostics(gw: Gateway) -> str:
-    """Why the client VM may not reach the firewall's LAN IPv6 address: ping, neighbours and routes, the IPv6 rules."""
-    client = gw.client.ssh(
-        f"ping -6 -c 2 -W 3 -I {LAN_V6_CLIENT} {LAN_V6_ADDR} 2>&1; ip -6 neigh show; ip -6 route show"
-    ).stdout
-    firewall = gw.vm.ssh("ndp -an | grep 2001:db8; pfctl -sr 2>&1 | grep inet6 | head -20").stdout
-    return f"client VM:\n{client}\nfirewall:\n{firewall}"
-
-
 def _firewall_ask(vm: SmokeVM, name: str, *, tcp: bool) -> tuple[h.DnsAnswer, str]:
     """`name` asked by the firewall itself of its own LAN IPv6 address, so the client is that address (drill)."""
     out = vm.ssh(f"drill {'-t ' if tcp else ''}@{LAN_V6_ADDR} {name} A 2>&1").stdout
@@ -826,6 +816,15 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
             "allow leased IPv6 DNS traffic",
         )
         h.apply_filter_sync(vm)
+        syntax = vm.ssh("pfctl -nf /tmp/rules.debug")
+        assert syntax.returncode == 0, f"generated PF syntax is invalid:\n{syntax.stdout}\n{syntax.stderr}"
+        installed = vm.ssh("pfctl -sr")
+        assert installed.returncode == 0, f"cannot inspect installed PF rules: {installed.stderr}"
+        scoped = [line for line in installed.stdout.splitlines() if "pfB leased endpoint smoke IPv6 DNS" in line]
+        assert scoped, f"leased IPv6 DNS allow rule is not installed:\n{installed.stdout}"
+        assert all(
+            "pass in" in line and "inet6" in line and f"from {h.IPV6_LOCAL_SUBNET} " in line for line in scoped
+        ), f"leased IPv6 DNS rules must remain scoped to the client subnet: {scoped}"
         refid = _create_cert(vm)
         pem = _sh(vm, f"cat {CERT_GUEST}").stdout
         trusted = subprocess.run(
@@ -1260,8 +1259,30 @@ def test_the_firewalls_own_lookup_of_a_listed_name_gets_the_vip_from_the_gateway
 # --------------------------------------------------------------------------- #
 
 
-def test_receiving_endpoint_survives_dedicated_syslog_export(gw: Gateway, gateway_on: State) -> None:
-    """Own unique DNSBL queries retain the LAN endpoint and UTF-8 interface in syslog."""
+def _publish_listener_owner_table(vm: SmokeVM, overrides: dict[str, str] | None) -> None:
+    """Publish the full trusted table, or restore canonical owners when overrides is None."""
+    override = "".join(
+        f"if (!array_key_exists({h._php_str(address)}, $owners)) {{"
+        "throw new RuntimeException('override owner address is absent'); }"
+        f"$owners[{h._php_str(address)}] = {h._php_str(description)};"
+        for address, description in (overrides or {}).items()
+    )
+    _php_ok(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+        "pfb_global();"
+        "$table = pfb_dns_proxy_command_name_answers() ?? [];"
+        "$owners = pfb_dns_proxy_address_interfaces();" + override + "foreach ($owners as $ip => $descr) {"
+        "if (mb_check_encoding($descr, 'UTF-8') && !preg_match('/\\p{Cc}/u', $descr)) {"
+        "$table[] = 'listener-interface ' . $ip . '=' . base64_encode($descr); }}"
+        "$error = pfb_dns_proxy_address_table($table);"
+        "if ($error !== NULL) { throw new RuntimeException($error); }",
+        "replace trusted listener owner table",
+    )
+
+
+def test_receiving_endpoint_survives_dedicated_syslog_export(gw: Gateway, gateway_on: State, gui: WebUI) -> None:
+    """Trusted admin owner metadata tests control/log encoding, not physical interface API admission."""
     vm = gw.vm
     path = CFG_GENERAL + "/log_syslog"
     prior = h.config_get_state(vm, path)
@@ -1284,6 +1305,7 @@ def test_receiving_endpoint_survives_dedicated_syslog_export(gw: Gateway, gatewa
 
     try:
         _set_syslog_enabled(vm, on=True)
+        _publish_listener_owner_table(vm, {PFSENSE_LAN_IP: SYSLOG_OWNER_DESCRIPTION})
         for transport, name in names.items():
             answer, raw = _ask(gw.client, transport, name)
             assert h.is_vip(answer), f"{transport} {name}: expected DNSBL VIP, got {answer}\n{raw}"
@@ -1292,11 +1314,13 @@ def test_receiving_endpoint_survives_dedicated_syslog_export(gw: Gateway, gatewa
             h.wait_until(exported, timeout=30.0)
         finally:
             history = _capture_raw_syslog_history(vm, "gateway-owned-endpoint")
-        escaped_interface = '"' + LAN_DESCRIPTION.replace('"', '\\"') + '"'
         for transport, name in names.items():
             token = tokens[transport]
             own = [line for line in history["dedicated"].splitlines() if b"act=dnsbl " in line and token in line]
             assert len(own) == 1, f"{transport} {name}: expected exactly one dedicated event: {own!r}"
+            [interface_token] = re.findall(rb'(?:^| )listener_interface=("(?:\\.|[^"\\])*")(?= |$)', own[0])
+            serialized_interface = interface_token.decode("ascii")
+            assert json.loads(serialized_interface) == SYSLOG_OWNER_DESCRIPTION, interface_token
             line = own[0].decode("utf-8")
             body = line[line.index("act=dnsbl ") :]
             fields = [part.split("=", 1) for part in shlex.split(body)]
@@ -1304,154 +1328,25 @@ def test_receiving_endpoint_survives_dedicated_syslog_export(gw: Gateway, gatewa
                 ("qname", name),
                 ("qip", CLIENT_LAN_IP),
                 ("listener_ip", PFSENSE_LAN_IP),
-                ("listener_interface", LAN_DESCRIPTION),
+                # JSON string decoding above, not shell unquoting, owns listener_interface.
                 ("transport", LOG_TRANSPORT[transport]),
             ):
                 assert [pair[1] for pair in fields if pair[0] == key] == [value], line
-            assert f"listener_interface={escaped_interface}" in body, line
+            assert "listener_interface=" + serialized_interface in body, line
             leaks = [record for record in history["system"].splitlines() if b"act=dnsbl " in record and token in record]
             assert not leaks, f"owned security event leaked to system destination: {leaks!r}"
             [row] = _dnsbl_rows(vm, name)
             assert len(row) == 14 and row[3] == CLIENT_LAN_IP, row
-            assert row[11:14] == [LOG_TRANSPORT[transport], PFSENSE_LAN_IP, LAN_DESCRIPTION], row
-    finally:
-        h.config_restore_state(vm, path, prior)
-
-
-def test_receiving_ipv6_packet_path_probe(gw: Gateway, gateway_on: State) -> None:
-    """Temporary discriminator: client route/NDP, PF, or a listener above PF."""
-    vm, client = gw.vm, gw.client
-    token = secrets.token_hex(8)
-    guest = f"/tmp/pfb-v6-path-{token}"
-    pcap, stderr, pidfile = (f"{guest}.{suffix}" for suffix in ("pcap", "stderr", "pid"))
-    destination = h.DIAG_DIR / f"v6-path-{token}"
-    destination.mkdir(parents=True, exist_ok=False)
-    evidence: list[str] = []
-    failures: list[str] = []
-    capture: subprocess.Popen[bytes] | None = None
-
-    def observe(machine: SmokeVM, command: str) -> str:
-        try:
-            result = machine.ssh(command, timeout=20.0)
-            evidence.append(
-                f"$ {command}\n[exit {result.returncode}]\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            assert row[11:14] == [LOG_TRANSPORT[transport], PFSENSE_LAN_IP, SYSLOG_OWNER_DESCRIPTION], row
+            _assert_unified_row(vm, row, name, 2)
+            _assert_report_row(
+                gui, name, CLIENT_LAN_IP, LOG_TRANSPORT[transport], PFSENSE_LAN_IP, SYSLOG_OWNER_DESCRIPTION
             )
-            if result.returncode:
-                failures.append(command)
-            return result.stdout
-        except Exception as exc:
-            evidence.append(f"$ {command}\n{exc!r}")
-            failures.append(command)
-            return ""
-
-    def snapshot(phase: str) -> None:
-        evidence.append(f"\n=== {phase} guest LAN={lan} ===")
-        for command in (
-            f"ifconfig {shlex.quote(lan)}",
-            "netstat -rn -f inet6",
-            "ndp -an",
-            "sockstat -6 -l",
-            "pfctl -vvsr",
-        ):
-            observe(vm, command)
-        evidence.append(f"\n=== {phase} client ===")
-        observe(client, f"ip -6 route get {LAN_V6_ADDR}")
-        observe(client, "ip -6 route show table all")
-        observe(client, "ip -6 neigh show")
-
-    # Only a PID whose current command still names our unique pcap may be signalled.
-    stop = (
-        f"if [ -s {pidfile} ]; then "
-        f"pid=$(cat {pidfile}); case \"$pid\" in ''|*[!0-9]*) exit 1;; esac; "
-        'if kill -0 "$pid" 2>/dev/null; then '
-        'command=$(ps -p "$pid" -o command=) || exit 1; '
-        f'case "$command" in *tcpdump*" -w {pcap} "*) kill -INT "$pid";; '
-        '*) printf "refusing to signal PID %s: %s\\n" "$pid" "$command" >&2; exit 1;; esac; '
-        "fi; fi"
-    )
-    try:
-        lan = h.config_get(vm, "interfaces/lan/if").strip()
-        assert lan, "interfaces/lan/if is empty"
-        with _client_v6(client):
-            try:
-                snapshot("before")
-                tcpdump = observe(vm, "command -v tcpdump").strip()
-                timeout = observe(vm, "command -v timeout").strip()
-                assert tcpdump and timeout and not failures, f"probe prerequisites failed:\n{chr(10).join(evidence)}"
-                script = (
-                    f"{shlex.quote(tcpdump)} -U -n -i {shlex.quote(lan)} -w {pcap} "
-                    f"'ip6 and udp port 53 and host {LAN_V6_ADDR}' 2>{stderr} &\n"
-                    "owned=$!\n"
-                    f'echo "$owned" > {pidfile}\n'
-                    f"trap {shlex.quote(stop)} EXIT HUP INT TERM\n"
-                    'wait "$owned"\n'
-                )
-                command = [timeout, "-s", "TERM", "-k", "5", "60", "/bin/sh", "-c", script]
-                capture = subprocess.Popen(vm.ssh_argv(*command), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-                def listening() -> bool:
-                    output = observe(vm, f"if [ -f {stderr} ]; then cat {stderr}; fi")
-                    return f"listening on {lan}," in output
-
-                try:
-                    h.wait_until(listening, timeout=12.0, interval=0.25)
-                except Exception as exc:
-                    full_stderr = observe(vm, f"cat {stderr}")
-                    raise AssertionError(f"tcpdump never became ready:\n{full_stderr}") from exc
-                name = h.unique_domain("v6-path-allowed")
-                answer, raw = _ask(client, "udp", name, server=LAN_V6_ADDR)
-                evidence.append(f"\n=== single query {name} ===\n{raw}\n{answer!r}")
-                assert h.resolves_to(answer, STUB_DNS_A), raw
-            finally:
-                if capture is not None:
-                    observe(vm, stop)
-                    stdout, errors = b"", b""
-                    for action, seconds in ((None, 10.0), (capture.terminate, 5.0), (capture.kill, 5.0)):
-                        if action is not None:
-                            try:
-                                action()
-                            except Exception as exc:
-                                evidence.append(f"capture SSH {action.__name__}: {exc!r}")
-                                failures.append(f"capture SSH {action.__name__}")
-                        try:
-                            stdout, errors = capture.communicate(timeout=seconds)
-                            break
-                        except Exception as exc:
-                            evidence.append(f"capture SSH collection: {exc!r}")
-                            failures.append("capture SSH collection")
-                    evidence.append(f"capture SSH exit={capture.returncode}\nstdout={stdout!r}\nstderr={errors!r}")
-                try:
-                    snapshot("after")
-                finally:
-                    if capture is not None:
-                        observe(vm, f"cat {stderr}")
-                        observe(vm, f"tcpdump -nn -vvv -X -r {pcap}")
-                        try:
-                            raw_pcap = subprocess.run(
-                                vm.ssh_argv("cat", pcap), capture_output=True, timeout=30, check=False
-                            )
-                            evidence.append(f"raw pcap SSH exit={raw_pcap.returncode}\nstderr={raw_pcap.stderr!r}")
-                            if raw_pcap.returncode:
-                                failures.append("raw pcap fetch")
-                            else:
-                                (destination / "packets.pcap").write_bytes(raw_pcap.stdout)
-                        except Exception as exc:
-                            evidence.append(f"raw pcap fetch: {exc!r}")
-                            failures.append("raw pcap fetch")
-    except BaseException as exc:
-        evidence.append(f"probe failed: {exc!r}")
-        raise
     finally:
         try:
-            if capture is not None:
-                observe(vm, f"rm -f {pcap} {stderr} {pidfile}")
-            else:
-                evidence.append("no capture started; no raw pcap exists")
+            _publish_listener_owner_table(vm, None)
         finally:
-            evidence.append(f"diagnostic failures: {failures!r}")
-            (destination / "evidence.txt").write_text("\n".join(evidence), encoding="utf-8")
-            _say(f"IPv6 causal probe evidence: {destination}")
-    assert not failures, f"native diagnostic failures: {failures}; evidence: {destination}"
+            h.config_restore_state(vm, path, prior)
 
 
 @pytest.mark.parametrize("transport", TRANSPORTS)
@@ -1489,8 +1384,8 @@ def test_receiving_interface_is_the_event_snapshot_after_interface_rename(
     _drain_logs(gw)
     [old_row] = _reply_rows(gw.vm, old_name)
     assert old_row[11:13] == [PFSENSE_LAN_IP, LAN_DESCRIPTION], old_row
-    renamed = 'Renamed, "新" & owner'
-    renamed_api = 'RENAMED, "新" & OWNER'
+    renamed = "PFB3757RENAMED"
+    renamed_api = "PFB3757RENAMED"
     try:
         _php_ok(
             gw.vm,
@@ -1739,9 +1634,7 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
     Then once the gateway has re-read the config the client gets REFUSED on every transport, for a listed name and for
       an unlisted one, and dnsbl.log has no row for them; an IPv6 client of the LAN, which only the clause grants, still
       gets the VIP, logged with its address: the firewall itself asking its own LAN IPv6 address over UDP and TCP, and
-      the client VM on every transport when its IPv6 address reaches the firewall (this smoke pfSense's pf blocks IPv6
-      from the LAN: `block drop in log inet6 all` and no LAN pass rule, neighbour discovery works; the diagnostics
-      are logged then);
+      the client VM on every transport through the fixture's scoped leased IPv6 DNS pass rules;
     When the lists are put back,
     Then the IPv4 client gets the VIP on every transport again.
     """
@@ -1763,20 +1656,9 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
         with _client_v6(gw.client):
             via_vm = {
                 transport: _ask(gw.client, transport, names.v6[transport], source=LAN_V6_CLIENT, server=LAN_V6_ADDR)
-                for transport in ("udp", "tcp")
+                for transport in TRANSPORTS
             }
-            vm_reaches = not all(_no_answer(answer) for answer, _ in via_vm.values())
-            if vm_reaches:
-                for transport in TRANSPORTS[2:]:
-                    via_vm[transport] = _ask(
-                        gw.client, transport, names.v6[transport], source=LAN_V6_CLIENT, server=LAN_V6_ADDR
-                    )
-                _expect_everywhere("IPv6 LAN client, the client VM", via_vm, h.is_vip, "the VIP")
-            else:
-                _say(
-                    f"the client VM reaches nothing on {LAN_V6_ADDR}; no IPv6 client is asked from it:\n"
-                    + _v6_diagnostics(gw)
-                )
+            _expect_everywhere("IPv6 LAN client, the client VM", via_vm, h.is_vip, "the VIP")
         via_firewall = {
             transport: _firewall_ask(vm, name, tcp=transport == "tcp")
             for transport, name in zip(("udp", "tcp"), names.fw_v6)
@@ -1794,17 +1676,15 @@ def test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an
         assert logged_clients(list(names.fw_v6)) == {ipaddress.ip_address(LAN_V6_ADDR)}, (
             "dnsbl.log: the firewall's rows"
         )
-        if vm_reaches:
-            assert logged_clients(list(names.v6.values())) == {ipaddress.ip_address(LAN_V6_CLIENT)}, "dnsbl.log: the VM"
+        assert logged_clients(list(names.v6.values())) == {ipaddress.ip_address(LAN_V6_CLIENT)}, "dnsbl.log: the VM"
         for transport, name in zip(("udp", "tcp"), names.fw_v6):
             [row] = _dnsbl_rows(vm, name)
             assert len(row) == 14 and row[11] == LOG_TRANSPORT[transport], row
             assert row[12:14] == [LAN_V6_ADDR, LAN_DESCRIPTION], row
-        if vm_reaches:
-            for transport, name in names.v6.items():
-                [row] = _dnsbl_rows(vm, name)
-                assert len(row) == 14 and row[11] == LOG_TRANSPORT[transport], row
-                assert row[12:14] == [LAN_V6_ADDR, LAN_DESCRIPTION], row
+        for transport, name in names.v6.items():
+            [row] = _dnsbl_rows(vm, name)
+            assert len(row) == 14 and row[11] == LOG_TRANSPORT[transport], row
+            assert row[12:14] == [LAN_V6_ADDR, LAN_DESCRIPTION], row
     _wait_udp(gw, names.nomatch_poll, h.is_vip, "the VIP again")
     _expect_everywhere("after the lists are back", _ask_all(gw, names.nomatch_restored), h.is_vip, "the VIP")
 

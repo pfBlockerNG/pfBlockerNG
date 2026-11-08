@@ -28,7 +28,6 @@ import os
 import re
 import secrets
 from collections.abc import Iterator
-from contextlib import ExitStack
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs
 
@@ -48,13 +47,15 @@ from .test_smoke_dns_gateway import (
     _ask_from_alias,
     _client_v6,
     _dig,
+    _publish_listener_owner_table,
+    _wait_dnsbl_row,
 )
 from .test_smoke_dns_gateway import gateway_on as gateway_on
 from .test_smoke_dns_gateway import go_toolchain as go_toolchain
 from .test_smoke_dns_gateway import gui as gui
 from .test_smoke_dns_gateway import gw as gw
 from .test_smoke_dns_gateway import probe_binary as probe_binary
-from .test_smoke_dns_proxy import PROXY_RC, _apply, _capture, _client_alias, _php_ok, _proxy_log, _set_proxy_toggle
+from .test_smoke_dns_proxy import PROXY_RC, _apply, _capture, _client_alias, _dnsbl_rows, _php_ok, _set_proxy_toggle
 from .ui.webui import CSRF_FIELD, scrape_form_fields
 
 if TYPE_CHECKING:
@@ -954,6 +955,31 @@ def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool) -> None:
     assert after["registry"] == before["registry"], (before, after)
 
 
+def _snapshot_endpoint_metric_config(vm: SmokeVM, state_path: str) -> None:
+    paths = ", ".join(h._php_str(path) for path in (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, h.CFG_GLOBAL))
+    _php_ok(
+        vm,
+        "$state = array();"
+        f"foreach (array({paths}) as $path) {{ $value = config_get_path($path, NULL);"
+        "$state[$path] = array('present' => $value !== NULL, 'value' => $value); }"
+        f"file_put_contents({h._php_str(state_path)}, json_encode($state));",
+        "save endpoint metric configuration",
+    )
+
+
+def _restore_endpoint_metric_config(vm: SmokeVM, state_path: str) -> None:
+    _php_ok(
+        vm,
+        f"$state = json_decode(file_get_contents({h._php_str(state_path)}), TRUE);"
+        "foreach ($state as $path => $entry) {"
+        "if ($entry['present']) { config_set_path($path, $entry['value']); } "
+        "else { config_del_path($path); } }"
+        "write_config('pfBlockerNG smoke: restore endpoint metric configuration');"
+        f"unlink({h._php_str(state_path)});",
+        "restore endpoint metric configuration",
+    )
+
+
 @pytest.mark.smoke
 @pytest.mark.timeout(1800)
 def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
@@ -963,11 +989,11 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
     vm = gw.vm
     # gateway_on can validly inherit DNSBL disabled; inject_dnsbl_lists enables both core and DNSBL below.
     client_path = f"{h.CFG_GLOBAL}/pfb_metrics_client_ip"
-    paths = (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, h.CFG_GLOBAL)
-    prior = {path: h.config_get_state(vm, path) for path in paths}
     prior_client = h.config_get_state(vm, client_path)
     alias = f"smprivacy{secrets.token_hex(4)}"
     group = f"DNSBL_{alias}"
+    state_path = f"/var/tmp/{alias}-metrics-state.json"
+    _snapshot_endpoint_metric_config(vm, state_path)
     names = [h.unique_domain("privacy") for _ in range(8)]
     spec = h.DnsblCase(
         aliasname=alias,
@@ -997,6 +1023,29 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
         answer, raw = _ask_from_alias(gw, "udp", names[index]) if second else _ask(gw.client, "udp", names[index])
         assert h.is_vip(answer), raw
 
+    def writer_state() -> dict[str, int]:
+        queries = {
+            "policy": "SELECT client_ip FROM dns_metric_settings WHERE row=0",
+            "trigger": "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='privacy3757'",
+            "aggregate": f"SELECT SUM(count) FROM dns_metric_totals WHERE groupname='{group}'",
+            "detail": f"SELECT SUM(count) FROM dns_metric_blocks WHERE groupname='{group}'",
+            "legacy": f"SELECT SUM(counter) FROM dnsbl WHERE groupname='{group}'",
+        }
+        output = _php_ok(
+            vm,
+            "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite'); $db->enableExceptions(TRUE);"
+            "$db->exec('BEGIN'); $state = array();"
+            + "".join(
+                f"$state[{h._php_str(key)}] = $db->querySingle({h._php_str(query)});" for key, query in queries.items()
+            )
+            + "$db->exec('COMMIT'); $db->close();"
+            "echo '<<<WRITER>>>' . json_encode($state) . '<<<END>>>';",
+            "capture held metric writer state",
+        )
+        match = re.search(r"<<<WRITER>>>(.*?)<<<END>>>", output, re.DOTALL)
+        assert match, output
+        return json.loads(match.group(1))
+
     try:
         h.inject_dnsbl_lists(vm, [(spec, "Deny")])
         _set_export(vm, True)
@@ -1019,6 +1068,10 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
             assert restarted.returncode == 0, restarted.stdout + restarted.stderr
             h.wait_until(lambda: _capture(vm).service == "running", timeout=180.0, interval=0.5)
             counted(4, {CLIENT_LAN_IP: 1, BYPASSED_ALIAS_IP: 1})
+            expected_writer = {"policy": 1, "trigger": 0, "aggregate": 4, "detail": 4, "legacy": 4}
+            assert writer_state() == expected_writer
+            error_path = f"{h.PFB_LOGDIR}/py_error.log"
+            before_error = h.read_log_file(vm, error_path)
             # Fail a real client-bearing batch; OFF can still coalesce to blank client_ip.
             _php_ok(
                 vm,
@@ -1028,9 +1081,37 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
                 "hold client-bearing metric retry",
             )
             ask(4, True)
-            h.wait_until(lambda: "privacy3757 retry" in _proxy_log(vm, 100), timeout=60.0, interval=0.5)
+            expected_writer["trigger"] = 1
+
+            def failed_writer_held() -> bool:
+                assert writer_state() == expected_writer, "held writer changed policy, trigger or committed counts"
+                errors = h.read_log_file(vm, error_path)
+                assert errors.startswith(before_error), "module error log rotated during failed-writer proof"
+                fresh_error = re.search(
+                    r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+\|ERROR\|",
+                    errors[len(before_error) :],
+                    re.MULTILINE,
+                )
+                rows = _dnsbl_rows(vm, names[4])
+                if not fresh_error or not rows:
+                    return False
+                assert len(rows) == 1, rows
+                assert rows[0][3] == BYPASSED_ALIAS_IP and rows[0][11:14] == ["UDP", PFSENSE_LAN_IP, LAN_DESCRIPTION], (
+                    rows
+                )
+                return True
+
+            h.wait_until(failed_writer_held, timeout=60.0, interval=0.5)
+            counted(4, {CLIENT_LAN_IP: 1, BYPASSED_ALIAS_IP: 1})
             _save_client_privacy(vm, gui, False)
-            assert BYPASSED_ALIAS_IP not in vm.ssh("/bin/cat", _PROM).stdout, "OFF Save left old published client"
+            unpublished = vm.ssh("/bin/sh", "-c", f"test ! -e {_PROM} && test ! -L {_PROM}")
+            assert unpublished.returncode in (0, 1), unpublished.stderr
+            if unpublished.returncode != 0:
+                assert all(
+                    "client_ip" not in sample.labels
+                    for family in _fetch_families(vm).values()
+                    for sample in family.samples
+                ), "OFF Save left a published client label"
             _php_ok(
                 vm,
                 "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite');"
@@ -1060,9 +1141,7 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
                 _save_client_privacy(vm, gui, prior_client[1] == "on")
             finally:
                 try:
-                    with ExitStack() as restore:
-                        for path, state in reversed(prior.items()):
-                            restore.callback(h.config_restore_state, vm, path, state)
+                    _restore_endpoint_metric_config(vm, state_path)
                 finally:
                     _apply(vm)
 
@@ -1070,24 +1149,31 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
 @pytest.mark.smoke
 @pytest.mark.timeout(1800)
 def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gateway_on: State, gui: WebUI) -> None:
-    """Every original transport over both LAN families reaches the public metrics file with exact counts."""
+    """Native-valid physical owners cover 12 requests; isolated trusted Unicode metadata covers two.
+
+    The isolated control-table phase tests encoding, not pfSense interface UI admission.
+    """
     vm = gw.vm
     client_path = f"{h.CFG_GLOBAL}/pfb_metrics_client_ip"
-    paths = (h.CFG_DNSBL_LISTS, h.CFG_DNSBL_SETTINGS, h.CFG_GLOBAL)
-    prior = {path: h.config_get_state(vm, path) for path in paths}
     prior_client = h.config_get_state(vm, client_path)
     alias = f"smendpoint{secrets.token_hex(4)}"
     group = f"DNSBL_{alias}"
+    state_path = f"/var/tmp/{alias}-metrics-state.json"
+    _snapshot_endpoint_metric_config(vm, state_path)
     names = {
         (address, transport): h.unique_domain("endpoint-metric")
         for address in (PFSENSE_LAN_IP, LAN_V6_ADDR)
         for transport in TRANSPORTS
     }
+    unicode_owner = 'LAN, "旧" \\ & OWNER'
+    isolated_names = {address: h.unique_domain("endpoint-unicode") for address in (PFSENSE_LAN_IP, LAN_V6_ADDR)}
     spec = h.DnsblCase(
         aliasname=alias,
         header=alias,
         mode=h.DnsblMode.VIP,
-        feed_url=h.write_local_feed(vm, f"{alias}.txt", "".join(f"{name}\n" for name in names.values())),
+        feed_url=h.write_local_feed(
+            vm, f"{alias}.txt", "".join(f"{name}\n" for name in (*names.values(), *isolated_names.values()))
+        ),
     )
     try:
         h.inject_dnsbl_lists(vm, [(spec, "Deny")])
@@ -1096,21 +1182,30 @@ def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gatew
         _apply(vm)
         print(f"ENDPOINT_MATRIX_APPLY {_capture(vm)!r}", flush=True)
         wanted: dict[tuple[str, str], float] = {}
-        exact: dict[tuple[str, str], float] = {}
+        exact: dict[tuple[str, str, str], float] = {}
         with _client_v6(gw.client):
             for (address, transport), name in names.items():
                 answer, raw = _ask(gw.client, transport, name, server=address)
                 assert h.is_vip(answer), raw
                 label = LOG_TRANSPORT[transport]
                 wanted["A", label] = wanted.get(("A", label), 0) + 1
-                exact[address, label] = exact.get((address, label), 0) + 1
+                key = (address, label, LAN_DESCRIPTION)
+                exact[key] = exact.get(key, 0) + 1
+            try:
+                _publish_listener_owner_table(vm, dict.fromkeys(isolated_names, unicode_owner))
+                for address, name in isolated_names.items():
+                    answer, raw = _ask(gw.client, "udp", name, server=address)
+                    assert h.is_vip(answer), raw
+                    wanted["A", "UDP"] += 1
+                    exact[address, "UDP", unicode_owner] = 1
+            finally:
+                _publish_listener_owner_table(vm, None)
         families = _wait_blocks(vm, {group: wanted})
         rows = [(labels, value) for labels, value in _samples(families, _BLOCKED) if labels.get("group") == group]
         assert all("client_ip" not in labels for labels, _ in rows), rows
-        assert sum(value for _, value in rows) == len(names), rows
+        assert sum(value for _, value in rows) == 14, rows
         assert [value for labels, value in rows if labels == {"group": group}] == [0], rows
         attributed = [(labels, value) for labels, value in rows if labels != {"group": group}]
-        assert all(labels.get("listener_interface") == LAN_DESCRIPTION for labels, _ in attributed), rows
         expected_rows = [
             (
                 {
@@ -1119,22 +1214,39 @@ def test_dns_receiving_endpoint_matrix_reaches_public_metrics(gw: Gateway, gatew
                     "qtype": "A",
                     "transport": transport,
                     "listener_ip": address,
-                    "listener_interface": LAN_DESCRIPTION,
+                    "listener_interface": interface,
                 },
                 value,
             )
-            for (address, transport), value in exact.items()
+            for (address, transport, interface), value in exact.items()
         ]
         assert sorted((tuple(sorted(labels.items())), value) for labels, value in attributed) == sorted(
             (tuple(sorted(labels.items())), value) for labels, value in expected_rows
         ), rows
+        public_labelsets = [tuple(sorted(labels.items())) for labels, _ in rows]
+        assert len(public_labelsets) == len(set(public_labelsets)), rows
+        for address, name in isolated_names.items():
+            assert any(
+                labels
+                == {
+                    "group": group,
+                    "origin": "custom",
+                    "qtype": "A",
+                    "transport": "UDP",
+                    "listener_ip": address,
+                    "listener_interface": unicode_owner,
+                }
+                and value == 1
+                for labels, value in rows
+            ), rows
+            _wait_dnsbl_row(vm, name)
+            [row] = _dnsbl_rows(vm, name)
+            assert len(row) == 14 and row[11:14] == ["UDP", address, unicode_owner], row
     finally:
         try:
             _save_client_privacy(vm, gui, prior_client[1] == "on")
         finally:
             try:
-                with ExitStack() as restore:
-                    for path, state in reversed(prior.items()):
-                        restore.callback(h.config_restore_state, vm, path, state)
+                _restore_endpoint_metric_config(vm, state_path)
             finally:
                 _apply(vm)
