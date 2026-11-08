@@ -4677,6 +4677,20 @@ function pfb_dns_proxy_address_interfaces(): array {
 	return $labels;
 }
 
+/**
+ * The address=base64(description) entries shared by the startup flags and live ownership table.
+ * @return list<string>
+ */
+function pfb_dns_proxy_listener_interface_entries(): array {
+	$entries = [];
+	foreach (pfb_dns_proxy_address_interfaces() as $address => $description) {
+		if (mb_check_encoding($description, 'UTF-8') && !preg_match('/\p{Cc}/u', $description)) {
+			$entries[] = $address . '=' . base64_encode($description);
+		}
+	}
+	return $entries;
+}
+
 /** How a skipped-interface warning for an interface that is down or disabled ends: logged, never a notice (issue #3627). */
 const PFB_DNS_PROXY_DOWN_WARNING = 'is down or disabled; it adds no listener';
 
@@ -5852,10 +5866,8 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	foreach ($managed as $vip) {
 		$addresses .= ' --listen-53 ' . escapeshellarg($vip);
 	}
-	foreach (pfb_dns_proxy_address_interfaces() as $address => $description) {
-		if (mb_check_encoding($description, 'UTF-8') && !preg_match('/\p{Cc}/u', $description)) {
-			$addresses .= ' --listener-interface ' . escapeshellarg($address . '=' . base64_encode($description));
-		}
+	foreach (pfb_dns_proxy_listener_interface_entries() as $entry) {
+		$addresses .= ' --listener-interface ' . escapeshellarg($entry);
 	}
 	$tls = ($saved !== NULL && pfb_dns_proxy_tls_wanted());
 	pfb_dns_proxy_certificate_refresh($tls);
@@ -6468,10 +6480,8 @@ function pfb_dns_proxy_listeners_sync(?array $served): ?string {
 	// Replace ownership independently of DNS Name/DDR; preserve their configured rows in the same atomic table.
 	if (!$pending) {
 		$table = pfb_dns_proxy_command_name_answers() ?? [];
-		foreach (pfb_dns_proxy_address_interfaces() as $address => $description) {
-			if (mb_check_encoding($description, 'UTF-8') && !preg_match('/\p{Cc}/u', $description)) {
-				$table[] = 'listener-interface ' . $address . '=' . base64_encode($description);
-			}
+		foreach (pfb_dns_proxy_listener_interface_entries() as $entry) {
+			$table[] = 'listener-interface ' . $entry;
 		}
 		return pfb_dns_proxy_address_table($table);
 	}

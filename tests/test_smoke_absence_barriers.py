@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -223,3 +225,58 @@ def test_syslog_absence_controls_emit_a_distinct_off_state_drain_before_the_on_b
     monkeypatch: pytest.MonkeyPatch, method: Callable[..., None]
 ) -> None:
     _syslog_drain_order_case(monkeypatch, method)
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_raw_syslog_capture_reuses_the_owned_diagnostic_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool
+) -> None:
+    directory = tmp_path / "diagnostics"
+    monkeypatch.setattr(syslog.h, "DIAG_DIR", directory)
+    monkeypatch.setattr(syslog.tempfile, "tempdir", str(tmp_path))
+    if configured:
+        monkeypatch.setenv("PFB_DIAG_DIR", str(directory))
+    else:
+        monkeypatch.delenv("PFB_DIAG_DIR", raising=False)
+    vm = object.__new__(syslog.SmokeVM)
+    monkeypatch.setattr(vm, "ssh_argv", lambda *args: ["ssh", *args])
+    raw = [b"system\xff\n", b'act=dnsbl listener_interface="LAN"\n']
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, raw[(len(calls) - 1) % 2], b"")
+
+    monkeypatch.setattr(syslog.subprocess, "run", run)
+    for label in ("first", "second"):
+        assert syslog._capture_raw_syslog_history(vm, label) == dict(zip(("system", "dedicated"), raw, strict=True))
+    assert len(calls) == 4
+    assert sorted(path.read_bytes() for path in directory.glob("*.raw")) == sorted(raw * 2)
+    assert {path.name for path in tmp_path.iterdir()} == {"diagnostics"}
+
+
+def test_raw_syslog_timeout_archives_partial_bytes_and_still_captures_the_other_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(syslog.h, "DIAG_DIR", tmp_path)
+    monkeypatch.setenv("PFB_DIAG_DIR", str(tmp_path))
+    vm = object.__new__(syslog.SmokeVM)
+    monkeypatch.setattr(vm, "ssh_argv", lambda *args: ["ssh", *args])
+    partial = b"partial system\xff\n"
+    stderr = b"SSH diagnostic\xfe"
+    dedicated = b"complete dedicated\n"
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append(argv)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(argv, 30, output=partial, stderr=stderr)
+        return subprocess.CompletedProcess(argv, 0, dedicated, b"")
+
+    monkeypatch.setattr(syslog.subprocess, "run", run)
+    with pytest.raises(RuntimeError) as error:
+        syslog._capture_raw_syslog_history(vm, "timeout")
+    assert len(calls) == 2
+    assert sorted(path.read_bytes() for path in tmp_path.glob("*.raw")) == sorted([partial, dedicated])
+    assert "system" in str(error.value) and "timeout" in str(error.value).lower()
+    assert repr(stderr) in str(error.value)

@@ -309,8 +309,8 @@ def _pfb_event_history_lines(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]
 
 def _capture_raw_syslog_history(vm: SmokeVM, label: str) -> dict[str, bytes]:
     """Archive both syslog histories without letting SSH decode their bytes."""
-    directory = os.environ.get("PFB_DIAG_DIR") or tempfile.mkdtemp(prefix="pfb-raw-syslog-")
-    os.makedirs(directory, exist_ok=True)
+    directory = h.DIAG_DIR
+    directory.mkdir(parents=True, exist_ok=True)
     safe_label = "".join(char if char.isascii() and (char.isalnum() or char in "-_") else "_" for char in label)
     safe_label = safe_label[:80] or "capture"
     histories: dict[str, bytes] = {}
@@ -331,18 +331,23 @@ def _capture_raw_syslog_history(vm: SmokeVM, label: str) -> dict[str, bytes]:
             '  /usr/bin/bsdcat "$file"\n'
             "done\n"
         )
-        result = subprocess.run(vm.ssh_argv("/bin/sh", "-c", script), capture_output=True, timeout=30, check=False)
-        histories[name] = result.stdout
+        failure = ""
+        try:
+            result = subprocess.run(vm.ssh_argv("/bin/sh", "-c", script), capture_output=True, timeout=30, check=False)
+            raw = result.stdout
+            if result.returncode != 0:
+                failure = f"rc={result.returncode} stderr={result.stderr!r}"
+        except subprocess.TimeoutExpired as error:
+            raw = error.stdout or b""
+            failure = f"timeout={error.timeout}s stderr={error.stderr!r}"
+        histories[name] = raw
         with tempfile.NamedTemporaryFile(
             prefix=f"{safe_label}-{name}-", suffix=".raw", dir=directory, delete=False
         ) as archive:
-            archive.write(result.stdout)
-        print(
-            f"raw syslog {name}: path={archive.name} "
-            f"sha256={hashlib.sha256(result.stdout).hexdigest()} len={len(result.stdout)}"
-        )
-        if result.returncode != 0:
-            failures.append(f"{name}: rc={result.returncode} stderr={result.stderr!r} raw={archive.name}")
+            archive.write(raw)
+        print(f"raw syslog {name}: path={archive.name} sha256={hashlib.sha256(raw).hexdigest()} len={len(raw)}")
+        if failure:
+            failures.append(f"{name}: {failure} raw={archive.name}")
     # Diagnose only after both full byte streams are safe; callers retain strict decoding.
     for name, raw in histories.items():
         for number, line in enumerate(raw.split(b"\n"), 1):

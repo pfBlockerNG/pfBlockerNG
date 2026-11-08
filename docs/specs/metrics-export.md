@@ -179,6 +179,8 @@ Semantics operators rely on:
   `DoQ`) receive a `transport` label. Known receiving endpoints add `listener_ip` and their event-time address-owner
   `listener_interface`; unavailable/native observer metadata omits these labels. Neither upstream sockets nor query
   types infer an endpoint or transport. Accounting does not change DNSBL query-type eligibility or DNS decisions.
+  Missing upstream-client metadata omits `client_ip`, even where the legacy CSV row displays its loopback fallback;
+  an actual known loopback client remains a valid opt-in client identity.
 - Each aggregate's pre-upgrade remainder is emitted without new breakdown labels. Existing detail rows retain their
   qtype/transport but migrate with empty endpoint/client dimensions; current configuration never relabels history.
   New blocked series use only `origin="custom"` or `origin="builtin"`; the existing display `group` stays unchanged.

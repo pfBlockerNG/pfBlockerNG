@@ -4251,7 +4251,7 @@ def _upstream_edns_opts(qstate: Any) -> list[tuple[int, bytes]]:
 
 
 def _client_ip_from_qstate(qstate: Any) -> str:
-    """Best-effort client IP from ``qstate.mesh_info.reply_list``; fallback ``"127.0.0.1"``."""
+    """Best-effort client IP from ``qstate.mesh_info.reply_list``; fallback ``"Unknown"``."""
     try:
         rl = qstate.mesh_info.reply_list
         if rl is not None:
@@ -4262,7 +4262,7 @@ def _client_ip_from_qstate(qstate: Any) -> str:
                     return str(addr)
     except Exception:  # noqa: BLE001
         pass
-    return "127.0.0.1"
+    return "Unknown"
 
 
 def inplace_cb_query_response(qstate: Any, response: Any, **kwargs: Any) -> bool:

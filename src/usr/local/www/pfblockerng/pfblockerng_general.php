@@ -280,7 +280,7 @@ if ($_POST) {
 				write_config('[pfBlockerNG] save General settings');
 			});
 			if ($privacy_error !== NULL) {
-				$input_errors[] = $privacy_error;
+				$input_errors[] = $privacy_error . ' ' . gettext('No General settings were saved.');
 			} else {
 				$runtime_model = pfb_schedule_runtime_config();
 				$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');

@@ -886,8 +886,8 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
             )
 
 
-def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool) -> None:
-    """Record the real Save boundary without changing any nonprivacy control."""
+def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool, *, refused: bool = False) -> None:
+    """Record the real Save boundary and preserve unrelated controls on success or refusal."""
     general = "/pfblockerng/pfblockerng_general.php"
 
     def snapshot(stage: str) -> dict[str, object]:
@@ -929,7 +929,12 @@ def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool) -> None:
 
     before = snapshot("before")
     before_controls = controls()
-    response = gui.post(general, {"pfb_metrics_client_ip": "on" if on else ""})
+    posted = {"pfb_metrics_client_ip": "on" if on else ""}
+    submitted_controls = dict(before_controls)
+    if refused:
+        posted["log_syslog"] = "" if before_controls["log_syslog"] == "on" else "on"
+        submitted_controls["log_syslog"] = posted["log_syslog"]
+    response = gui.post(general, posted)
     submitted = None
     for reply in [*response.history, response]:
         if reply.request.method == "POST":
@@ -944,10 +949,16 @@ def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool) -> None:
     after = snapshot("after")
     after_controls = controls()
     assert response.status_code == 200, response.text
-    assert h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_metrics_client_ip") == ("on" if on else ""), response.text
+    if refused:
+        assert "privacy3757 refused Save" in response.text, response.text
+        assert "still enabled" in response.text, response.text
+        assert "No General settings were saved." in response.text, response.text
+        assert after["gen"] == before["gen"], (before, after)
+    else:
+        assert h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_metrics_client_ip") == ("on" if on else ""), response.text
     assert {key: values for key, values in submitted.items() if key not in ("save", "pfb_metrics_client_ip")} == {
-        key: [value] for key, value in before_controls.items()
-    }, (before_controls, submitted)
+        key: [value] for key, value in submitted_controls.items()
+    }, (submitted_controls, submitted)
     assert after["effectiveGen"] == before["effectiveGen"], (before, after)
     assert after["foreignGen"] == before["foreignGen"], (before, after)
     assert after["dnsbl"] == before["dnsbl"], (before, after)
@@ -1136,6 +1147,23 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
             assert restarted.returncode == 0, restarted.stdout + restarted.stderr
             h.wait_until(lambda: _capture(vm).service == "running", timeout=180.0, interval=0.5)
             counted(4, {CLIENT_LAN_IP: 1, BYPASSED_ALIAS_IP: 1})
+            _php_ok(
+                vm,
+                "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite'); $db->enableExceptions(TRUE);"
+                '$db->exec("CREATE TRIGGER privacy3757_save BEFORE DELETE ON dns_metric_blocks '
+                "BEGIN SELECT RAISE(ABORT,'privacy3757 refused Save'); END\"); $db->close();",
+                "refuse the required privacy transaction",
+            )
+            try:
+                _save_client_privacy(vm, gui, False, refused=True)
+                counted(4, {CLIENT_LAN_IP: 1, BYPASSED_ALIAS_IP: 1})
+            finally:
+                _php_ok(
+                    vm,
+                    "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite');"
+                    "$db->exec('DROP TRIGGER IF EXISTS privacy3757_save'); $db->close();",
+                    "release the refused privacy transaction",
+                )
             expected_writer = {"policy": 1, "trigger": 0, "aggregate": 4, "detail": 4, "legacy": 4}
             assert writer_state() == expected_writer
             error_path = f"{h.PFB_LOGDIR}/py_error.log"
