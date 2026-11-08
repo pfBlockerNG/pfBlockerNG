@@ -82,9 +82,14 @@ Page level:
 - one full `tail -r` log copy per table per load;
 - Unified loop reads reversed log to EOF even after all row limits filled (converters no-op, but `fgetcsv` still parses every remaining line);
 - DNSBL and DNS Reply Stats aggregate enabled categories, physical-line totals and hourly timeline buckets in one streaming pass through `pfb_dns_stats()` (#3754). Unquoted rows use direct field splitting; any quoted record is read by PHP's native CSV parser, including embedded newlines. Totals follow raw physical boundaries even if the final quoted record is truncated. Domain/type and domain/IP consumers preserve commas within domains. Counts are sorted after aggregation, and repeated hours are combined even when log rows are out of order.
+- Requested domain-suffix categories count each row at its deepest eligible selected depth, then propagate distinct bucket frequencies to shallower selected depths (#3759). This avoids repeated per-row suffix aggregation without caching domains or discarding history.
 - IP stat views retain their per-category `cut|sort|uniq|sed` pipelines. Their total is computed once with `pfb_count_lines()`, not once per category.
 
-The shared Event Timeline selects native NVD3 x-axis ticks from the available chart width and measured label width, recalculating on resize and date-range changes. Fewer axis labels do not remove event bars or full timestamps from tooltips. The existing shared `chart_stats.csv` handoff remains unchanged (#1746).
+Both DNS Stats views render a lightweight shell, then make one authenticated, read-only GET to `pfblockerng_alerts.php?view=<view>&stats_data=1`, where `<view>` is `dnsbl_stat` or `dnsbl_reply_stat` (#3759). Authorization remains native; the data request releases the session lock before aggregation and uses `Cache-Control: no-store`. The response contains `total`, request-local `timeline` points and escaped panel fragments with structured pie data. An uncomputed total (all log categories hidden) is `null`, distinct from an empty log's zero. Loading status and explicit failure/Retry states keep navigation usable; off-screen tables and charts mount only when visible or expanded. Range changes reuse the retained response rather than scan the log again.
+
+The package-side `pfblockerng_stats.inc` and feature asset `pfblockerng_stats.js` share panel/chart rendering across both DNS views and the three synchronous IP Stats views. Native filter-input change handlers preserve field feedback without creating autocomplete widgets for Stats submit buttons. Timelines no longer write or fetch the shared web-root `chart_stats.csv`; installation removes the obsolete generated file. IP aggregation retains its original consecutive-hour grouping and order.
+
+The shared Event Timeline selects native NVD3 x-axis ticks from the available chart width and measured label width, recalculating on resize and date-range changes. Fewer axis labels do not remove event bars or full timestamps from tooltips.
 
 ## Why load time varies day to day
 
