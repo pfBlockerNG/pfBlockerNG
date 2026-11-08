@@ -173,6 +173,14 @@ Semantics operators rely on:
   only its provably owned new share from such a shared aggregate. Exclusively owned
   historical group totals are removed on deletion. Summing all emitted series counts
   each retained query once.
+- A failed accounting reconciliation leaves the previous DNSBL generation and its
+  required VIP serving. The existing reload marker retains an accounting reason so
+  a later successful reconciliation activates even unchanged input files; while
+  DNSBL remains enabled, that reason is kept until the module converges. Optional
+  accounting unavailability during module initialization does not prevent DNS answers.
+- If the retry reason cannot be persisted, the apply fails, retains pending changes
+  and emits an operator notice to repair the marker or storage and run **Force Parse**.
+  That storage-failure path does not claim automatic recovery.
 - A pass is hung or was killed when `last_start > last_end`. A pass deferred by a
   MaxMind failure records its end, so a deferral does not read as unfinished.
 - Writer freshness comes from node_exporter's built-in `node_textfile_mtime_seconds`, so

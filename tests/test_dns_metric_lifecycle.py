@@ -303,3 +303,37 @@ def test_epoch_read_failure_keeps_dns_available_without_accounting(
     assert rows(dnsbl, "SELECT groupname,counter FROM dnsbl ORDER BY groupname") == before, (
         "a serving snapshot without authority must not invent or credit counter incarnations"
     )
+
+
+def test_owner_diagnostic_scan_does_not_block_counter_flush(
+    lifecycle: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    dnsbl, _ = lifecycle
+    expected = epochs(dnsbl)
+    entered, release = threading.Event(), threading.Event()
+    captured: dict[tuple[str, str], str] = {}
+
+    class PausedRules(dict[str, Any]):
+        def values(self) -> Any:
+            entered.set()
+            assert release.wait(5), "diagnostic barrier was not released"
+            return super().values()
+
+    rules = PausedRules({"slow.example": {"group_owner": "DNSBL_Missing"}})
+    reader = threading.Thread(target=lambda: captured.update(P._db_group_epochs(True, {}, rules)))
+    reader.start()
+    try:
+        assert entered.wait(5), "epoch capture never reached its diagnostic scan"
+        available = P._db_lock.acquire(blocking=False)
+        if available:
+            P._db_lock.release()
+        assert available, "the post-SQL diagnostic scan must not hold the counter writer's lock"
+        token = expected["DNSBL_A", "custom"]
+        assert P._db_flush_dnsbl({("DNSBL_A", "DNSBL_A", "custom", token): 1})
+        assert rows(dnsbl, "SELECT counter FROM dnsbl WHERE groupname='DNSBL_A'") == [(1,)]
+    finally:
+        release.set()
+        reader.join(5)
+    assert not reader.is_alive(), "epoch capture did not finish after releasing its diagnostic"
+    assert captured == expected
+    assert "DNSBL_Missing" in capsys.readouterr().err

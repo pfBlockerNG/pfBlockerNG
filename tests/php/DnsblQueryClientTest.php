@@ -679,6 +679,27 @@ final class DnsblQueryClientTest extends TestCase
 		$this->assertFileDoesNotExist($this->replyPath());
 	}
 
+	private function queryWithPublishedReply(array $reply, string $domain): ?array
+	{
+		$published = FALSE;
+		$reads = 0;
+		$now = function () use (&$published, &$reads, $reply, $domain): float {
+			if (!$published && file_exists($this->channel())) {
+				$request = json_decode((string) file_get_contents($this->channel()), TRUE, 512, JSON_THROW_ON_ERROR);
+				$this->assertSame($domain, $request['domain']);
+				$this->assertSame('A', $request['qtype']);
+				$reply['id'] = $request['id'];
+				$this->atomicWriteJson($this->replyPath(), $reply);
+				$this->assertSame($reply, json_decode((string) file_get_contents($this->replyPath()), TRUE, 512, JSON_THROW_ON_ERROR));
+				$published = TRUE;
+			}
+			return $published ? (++$reads < 3 ? 100.25 : 100.5) : 100.0;
+		};
+		$result = pfb_dnsbl_query($domain, 'A', 0.5, $now);
+		$this->assertTrue($published, 'the reply must exist before the validator can accept or reject it');
+		return $result;
+	}
+
 	public function testOwnerIdentityRequiredAndPassedThrough(): void
 	{
 		foreach (['group_owner', 'group_origin'] as $field) {
@@ -686,17 +707,14 @@ final class DnsblQueryClientTest extends TestCase
 			$reply['group_owner'] = 'DNSBL_Owner';
 			$reply['group_origin'] = 'custom';
 			unset($reply[$field]);
-			$this->spawnResponder(json_encode($reply));
-			$this->assertNull(pfb_dnsbl_query('owner-validation.example', 'A', 0.6));
-
+			$this->assertNull($this->queryWithPublishedReply($reply, 'owner-validation.example'));
 		}
+		$reply = json_decode($this->verdictReply('__ID__', 'owner-group'), TRUE);
 		$reply['group_owner'] = 'DNSBL_Owner';
 		$reply['group_origin'] = 'custom';
-		$this->spawnResponder(json_encode($reply));
-		$result = pfb_dnsbl_query('owner-validation.example', 'A', 1.0);
+		$result = $this->queryWithPublishedReply($reply, 'owner-validation.example');
 		$this->assertSame('DNSBL_Owner', $result['group_owner']);
 		$this->assertSame('custom', $result['group_origin']);
-
 	}
 
 	public function testMissingOrMalformedGroupEpochIsRejected(): void
@@ -708,9 +726,11 @@ final class DnsblQueryClientTest extends TestCase
 			} else {
 				$reply['group_epoch'] = $epoch;
 			}
-			$this->spawnResponder(json_encode($reply));
-			$this->assertNull(pfb_dnsbl_query('epoch-validation.example', 'A', 0.6));
+			$this->assertNull($this->queryWithPublishedReply($reply, 'epoch-validation.example'));
 		}
+		$reply = json_decode($this->verdictReply('__ID__', 'epoch-group'), TRUE);
+		$result = $this->queryWithPublishedReply($reply, 'epoch-validation.example');
+		$this->assertSame('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', $result['group_epoch']);
 	}
 
 	// --- happy path: blocked verdict, request schema + perms, cleanup -------

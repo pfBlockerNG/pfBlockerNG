@@ -115,6 +115,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			'dnsbl_cert' => "{$dir}/cert.pem", 'chroot_cmd' => '/bin/echo', 'php' => PHP_BINARY, 'dnsbl_python_unmount' => FALSE,
 			'install' => FALSE, 'domain_clear' => FALSE, 'save' => $o['save'], 'unbound_py_vip' => "{$dir}/pfb_py_vip",
 			'dnsbl_info' => "{$dir}/info.sqlite", 'dnsbl_resolver' => "{$dir}/resolver.sqlite",
+			'dnsbl_file' => "{$dir}/pfb_dnsbl", 'pending_marker' => "{$dir}/pending",
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['g']['varrun_path']          = $dir;
@@ -201,12 +202,12 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		];
 	}
 
-	private function runPass(): void
+	private function runPass(): bool
 	{
 		// The restart branch link()s the real lighttpd binary, which the sandbox lacks.
 		set_error_handler(static fn (int $no, string $message): bool => str_starts_with($message, 'link('));
 		try {
-			sync_package_pfblockerng();
+			return sync_package_pfblockerng();
 		} finally {
 			restore_error_handler();
 		}
@@ -262,6 +263,18 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$GLOBALS['pfb']['unbound_py_reject_stats'] = "{$dir}/pfb_py_reject_stats.json";
 	}
 
+	private function modelMountedModule(): void
+	{
+		$GLOBALS['pfb']['unbound_py_wh'] = "{$this->dir}/whitelist.txt";
+		$GLOBALS['pfb']['unbound_py_conf'] = "{$this->dir}/module.ini";
+		$grep = "{$this->dir}/mounted-grep";
+		$real_grep = escapeshellarg($GLOBALS['pfb']['grep']);
+		$mounts = escapeshellarg("{$this->dir}/usr/local/bin") . '|' . escapeshellarg("{$this->dir}/usr/local/lib");
+		file_put_contents($grep, "#!/bin/sh\ncase \"\$1\" in\n{$mounts}) printf '%s\\n' \"\$1\" ;;\n*) exec {$real_grep} \"\$@\" ;;\nesac\n");
+		chmod($grep, 0755);
+		$GLOBALS['pfb']['grep'] = $grep;
+	}
+
 	private function accountingDatabase(): SQLite3
 	{
 		foreach (['dnsdir', 'dnsorigdir', 'aliasdir', 'origdir', 'snapdir'] as $path) {
@@ -279,6 +292,33 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$db->exec("INSERT INTO dns_metric_totals VALUES ('DNSBL_Kept','custom','DNSBL_Kept',3),('DNSBL_Deleted','custom','DNSBL_Deleted',2)");
 		$db->exec('CREATE TABLE dns_metric_blocks(owner TEXT,origin TEXT,groupname TEXT,qtype TEXT,transport TEXT,count INTEGER)');
 		$db->exec("INSERT INTO dns_metric_blocks VALUES ('DNSBL_Kept','custom','DNSBL_Kept','A','UDP',3),('DNSBL_Deleted','custom','DNSBL_Deleted','A','UDP',2)");
+		return $db;
+	}
+
+	private function arrangeAccountingFailure(bool $served): SQLite3
+	{
+		$this->arrange(['save' => FALSE, 'served' => $served, 'demand' => FALSE, 'up' => TRUE]);
+		$this->publishTo(TRUE);
+		$this->modelMountedModule();
+		$GLOBALS['pfb']['filter_configure_sync'] = '/bin/true';
+		$db = $this->accountingDatabase();
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		file_put_contents("{$this->dir}/pfb_py_reload", "7\n");
+		file_put_contents("{$this->dir}/pfb_py_reload.applied", "7\n");
+		file_put_contents($GLOBALS['pfb']['unbound_py_vip'], '1');
+		$this->assertTrue(pfb_dnsbl_converged(), 'the prior live generation starts converged');
+		$this->assertTrue($db->exec("CREATE TRIGGER refuse BEFORE DELETE ON dnsbl_group_epochs BEGIN SELECT RAISE(ABORT,'real reconciliation refusal'); END"));
+		return $db;
+	}
+
+	private function arrangeUnrecordedAccountingFailure(): SQLite3
+	{
+		$db = $this->arrangeAccountingFailure(TRUE);
+		$this->assertTrue(mkdir("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
+		$this->assertFalse($this->runPass());
+		$this->assertServedStateIntact();
+		$this->assertSame('1', file_get_contents($GLOBALS['pfb']['unbound_py_vip']));
+		$this->assertTrue($db->exec('DROP TRIGGER refuse'));
 		return $db;
 	}
 
@@ -314,15 +354,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	{
 		$this->arrange(['save'=>FALSE]);
 		$this->publishTo(TRUE);
-		$GLOBALS['pfb']['unbound_py_wh'] = "{$this->dir}/whitelist.txt";
-		$GLOBALS['pfb']['unbound_py_conf'] = "{$this->dir}/module.ini";
-		// The host cannot mount nullfs; model the already-mounted steady state.
-		$grep = "{$this->dir}/mounted-grep";
-		$real_grep = escapeshellarg($GLOBALS['pfb']['grep']);
-		$mounts = escapeshellarg("{$this->dir}/usr/local/bin") . '|' . escapeshellarg("{$this->dir}/usr/local/lib");
-		file_put_contents($grep, "#!/bin/sh\ncase \"\$1\" in\n{$mounts}) printf '%s\\n' \"\$1\" ;;\n*) exec {$real_grep} \"\$@\" ;;\nesac\n");
-		chmod($grep, 0755);
-		$GLOBALS['pfb']['grep'] = $grep;
+		$this->modelMountedModule();
 		$db = $this->accountingDatabase();
 		config_set_path('installedpackages/pfblockerngdnsbl/config', [[
 			'aliasname'=>'Kept','action'=>'unbound','order'=>'default','logging'=>'disabled_log','row'=>[],
@@ -353,6 +385,240 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertSame(20, $db->querySingle('SELECT sum(counter) FROM dnsbl'));
 		$this->assertSame(5, $db->querySingle('SELECT sum(count) FROM dns_metric_totals'));
 		$this->assertSame(5, $db->querySingle('SELECT sum(count) FROM dns_metric_blocks'));
+		$db->close();
+	}
+
+	public function testAccountingFailureKeepsTheOldVipGenerationAndPendingApply(): void
+	{
+		$db = $this->arrangeAccountingFailure(TRUE);
+		$ok = $this->runPass();
+		$this->assertTrue($GLOBALS['pfb']['dnsbl_publish_failed']);
+		$this->assertFalse($this->reloadFinished());
+		$this->assertSame([], json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE)['feeds']);
+		$this->assertSame(20, $db->querySingle('SELECT sum(counter) FROM dnsbl'));
+		$this->assertServedStateIntact();
+		$this->assertSame('accounting', file_get_contents("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertFalse($ok);
+		$db->close();
+	}
+
+	public function testAccountingRecoveryReloadsAnIdenticalPublicationOnce(): void
+	{
+		$db = $this->arrangeAccountingFailure(FALSE);
+		$this->runPass();
+		$published = pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']);
+		$this->assertTrue($db->exec('DROP TRIGGER refuse'));
+		file_put_contents($GLOBALS['pfb']['log'], '');
+
+		$this->assertTrue($this->runPass());
+		$this->assertFalse($GLOBALS['pfb']['dnsbl_publish_failed']);
+		$this->assertSame($published, pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']));
+		$this->assertSame(0, $db->querySingle("SELECT count(*) FROM dnsbl_group_epochs WHERE origin='custom'"));
+		$this->assertTrue($this->reloadFinished(), 'successful reconciliation must activate the unchanged published files');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.reload");
+		$this->assertFalse(pfb_pending_changes());
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
+
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->assertTrue($this->runPass());
+		$this->assertFalse($this->reloadFinished(), 'a subsequent unchanged pass must not repeat the accounting retry');
+		$db->close();
+	}
+
+	public function testAccountingRetryKeepsItsMarkerAndVipUntilActivationConverges(): void
+	{
+		$db = $this->arrangeAccountingFailure(TRUE);
+		$this->runPass();
+		$this->assertTrue($db->exec('DROP TRIGGER refuse'));
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(FALSE);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+
+		$ok = $this->runPass();
+		$this->assertTrue($this->reloadFinished(), 'the retry must attempt activation before testing convergence');
+		$this->assertFalse(pfb_dnsbl_converged());
+		$this->assertServedStateIntact();
+		$this->assertSame('accounting', file_get_contents("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertFalse($ok);
+
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(TRUE);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->assertTrue($this->runPass());
+		$this->assertTrue($this->reloadFinished());
+		$this->assertTrue(pfb_dnsbl_converged());
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.reload");
+		$this->assertFalse(pfb_pending_changes());
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertCount(1, $this->events('stop_service'));
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf']);
+		$db->close();
+	}
+
+	public function testAccountingRetryWriteFailureIsVisibleAndKeepsTheVip(): void
+	{
+		$db = $this->arrangeAccountingFailure(TRUE);
+		$this->assertTrue(mkdir("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
+		$ok = $this->runPass();
+		$this->assertStringContainsString('DNSBL accounting retry could not be recorded', $this->passLog());
+		$this->assertStringContainsString('DNSBL accounting retry could not be recorded', json_encode($GLOBALS['pfb_test_file_notices']));
+		$this->assertServedStateIntact();
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertFalse($ok);
+		$db->close();
+	}
+
+	public function testUnrecordedAccountingRetryStaysPendingWhileMarkerIsUnwritable(): void
+	{
+		$db = $this->arrangeUnrecordedAccountingFailure();
+		$published = pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+
+		$this->assertFalse($this->runPass(), 'an unwritable retry path must not acknowledge an unactivated generation');
+		$this->assertFalse($this->reloadFinished());
+		$this->assertSame($published, pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']));
+		$this->assertServedStateIntact();
+		$this->assertSame('1', file_get_contents($GLOBALS['pfb']['unbound_py_vip']));
+		$this->assertSame(7, pfb_unbound_py_marker_generation("{$this->dir}/pfb_py_reload"));
+		$this->assertSame(7, pfb_unbound_py_marker_generation("{$this->dir}/pfb_py_reload.applied"));
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertStringContainsString('DNSBL accounting retry could not be recorded', $this->passLog());
+		$db->close();
+	}
+
+	public function testRepairedAccountingRetryActivatesBeforeEndingVipIntent(): void
+	{
+		$db = $this->arrangeUnrecordedAccountingFailure();
+		$this->assertTrue(rmdir("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
+		$published = pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+
+		$this->assertTrue($this->runPass());
+		$this->assertTrue($this->reloadFinished(), 'repairing the marker must not release the VIP without activation');
+		$this->assertSame($published, pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']));
+		$this->assertTrue(pfb_dnsbl_converged());
+		$this->assertSame('0', file_get_contents($GLOBALS['pfb']['unbound_py_vip']));
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.reload");
+		$this->assertFalse(pfb_pending_changes());
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf']);
+		$this->assertCount(1, $this->events('stop_service'));
+
+		$applied_ini = (string) file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertSame('172.16.53.1', parse_ini_string($applied_ini, TRUE, INI_SCANNER_RAW)['MAIN']['dnsbl_ipv4']);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->assertTrue($this->runPass());
+		$settled_ini = (string) file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertNotSame($applied_ini, $settled_ini, 'VIP teardown changes the selected module address');
+		$this->assertSame('', parse_ini_string($settled_ini, TRUE, INI_SCANNER_RAW)['MAIN']['dnsbl_ipv4']);
+		$this->assertTrue($this->reloadFinished(), 'changed module configuration still requires its ordinary reload');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.reload");
+		$this->assertFalse(pfb_pending_changes());
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
+
+		$settled_data = pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->assertTrue($this->runPass());
+		$this->assertSame($settled_ini, file_get_contents($GLOBALS['pfb']['unbound_py_conf']), 'the module input is truly unchanged');
+		$this->assertSame($settled_data, pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']), 'the data input is truly unchanged');
+		$this->assertFalse($this->reloadFinished(), 'a completed repaired retry must not force a genuine no-op pass');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.reload");
+		$this->assertFalse(pfb_pending_changes());
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
+		$db->close();
+	}
+
+	public function testRepairedAccountingRetryRetainsIntentDuringUnconfirmedActivation(): void
+	{
+		$db = $this->arrangeUnrecordedAccountingFailure();
+		$this->assertTrue(rmdir("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(FALSE);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+
+		$this->assertFalse($this->runPass());
+		$this->assertTrue($this->reloadFinished(), 'the repaired retry must request activation');
+		$this->assertFalse(pfb_dnsbl_converged());
+		$this->assertServedStateIntact();
+		$this->assertSame('accounting', file_get_contents("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
+
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(TRUE);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->assertTrue($this->runPass());
+		$this->assertTrue($this->reloadFinished());
+		$this->assertTrue(pfb_dnsbl_converged());
+		$this->assertSame('0', file_get_contents($GLOBALS['pfb']['unbound_py_vip']));
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.reload");
+		$this->assertFalse(pfb_pending_changes());
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf']);
+		$this->assertCount(1, $this->events('stop_service'));
+		$db->close();
+	}
+
+	public function testDeferredTldRetryActivatesThePreviousPublicationAndReleasesVip(): void
+	{
+		$db = $this->arrangeAccountingFailure(TRUE);
+		$this->assertTrue($db->exec('DROP TRIGGER refuse'));
+		config_set_path('installedpackages/pfblockerngdnsbl/config', [[
+			'aliasname' => 'Kept', 'action' => 'unbound', 'order' => 'default',
+			'logging' => 'disabled_log', 'custom' => base64_encode("blocked.example\n"),
+		]]);
+		config_set_path(self::DNSBL . '/tld_wildcard', 'on');
+		$this->assertTrue($db->exec("CREATE TRIGGER tld_refuse BEFORE UPDATE ON dnsbl WHEN NEW.entries != OLD.entries BEGIN SELECT RAISE(ABORT,'TLD deferred refusal'); END"));
+
+		$this->assertFalse($this->runPass());
+		$this->assertTrue($GLOBALS['pfb']['domain_update']);
+		$this->assertSame('on', $GLOBALS['pfb']['dnsbl_tld_wildcard']);
+		$this->assertStringContainsString('Saving DNSBL statistics... completed', $this->passLog());
+		$this->assertStringContainsString('TLD deferred refusal', $this->passLog());
+		$this->assertFalse($this->reloadFinished());
+		$this->assertServedStateIntact();
+		$this->assertSame('1', file_get_contents($GLOBALS['pfb']['unbound_py_vip']));
+		$this->assertSame('accounting', file_get_contents("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertNotEmpty(json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE)['feeds']);
+		$this->assertSame(12, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname='DNSBL_Kept'"));
+		$published = pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']);
+
+		$this->assertTrue($db->exec('DROP TRIGGER tld_refuse'));
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->assertTrue($this->runPass());
+		$this->assertTrue($this->reloadFinished());
+		$this->assertSame($published, pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']));
+		$this->assertTrue(pfb_dnsbl_converged());
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.reload");
+		$this->assertFalse(pfb_pending_changes());
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_conf'], 'the activated prior publication must release its no-VIP hold');
+		$this->assertSame('0', file_get_contents($GLOBALS['pfb']['unbound_py_vip']));
+		$this->assertCount(1, $this->events('stop_service'));
+		$this->assertSame([self::USER_NAT], config_get_path('nat/rule'));
+		$this->assertSame([], config_get_path('virtualip/vip', []));
+		$this->assertSame(12, $db->querySingle("SELECT counter FROM dnsbl WHERE groupname='DNSBL_Kept'"));
+
+		$applied_ini = (string) file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->assertTrue($this->runPass());
+		$settled_ini = (string) file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertNotSame($applied_ini, $settled_ini, 'VIP teardown changes the selected module address');
+		$this->assertSame('172.16.53.1', parse_ini_string($applied_ini, TRUE, INI_SCANNER_RAW)['MAIN']['dnsbl_ipv4']);
+		$this->assertSame('', parse_ini_string($settled_ini, TRUE, INI_SCANNER_RAW)['MAIN']['dnsbl_ipv4']);
+		$this->assertTrue($this->reloadFinished(), 'the changed module input requires its ordinary reload');
+		file_put_contents($GLOBALS['pfb']['log'], '');
+		$this->assertTrue($this->runPass());
+		$this->assertSame($settled_ini, file_get_contents($GLOBALS['pfb']['unbound_py_conf']));
+		$this->assertSame($published, pfb_dnsbl_reload_fingerprint($GLOBALS['pfb']));
+		$this->assertFalse($this->reloadFinished(), 'identical TLD data and module inputs must not repeat a completed retry');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.reload");
+		$this->assertFalse(pfb_pending_changes());
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
 		$db->close();
 	}
 

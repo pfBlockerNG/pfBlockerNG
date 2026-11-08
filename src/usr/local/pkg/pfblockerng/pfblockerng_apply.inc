@@ -1759,6 +1759,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$dnsbl_tld_group_counts		= array();	// Deferred DNSBL group counts for TLD-mode statistics
 	$pfb['domain_update']		= FALSE;	// Flag to signal update Unbound
 	$pfb['dnsbl_publish_failed']	= FALSE;	// Fixed TOP1M/manifest publication failed; suppress reload
+	$pfb['dnsbl_accounting_failed']	= FALSE;
+	$pfb_accounting_reconciled	= FALSE;
 	$pfb_dnsbl_published		= FALSE;	// issue #3539: this pass published a new DNSBL manifest
 	$pfb['updateip']		= FALSE;	// Flag to signal updates to DNSBL IP lists
 	$pfb_py_feeds			= array();	// ADR-06: per-feed manifest rows [header,group,log] for pfb_unbound_python_sources()
@@ -3236,17 +3238,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// Reconcile only after publication, including membership-only passes with no reload.
 	if (is_array($pfb['alias_dnsbl_configured']) && empty($pfb['dnsbl_publish_failed'])
 	    && ($pfb_dnsbl_published || !$pfb['domain_update'])) {
-		if (!dnsbl_save_stats()) {
-			$pfb['dnsbl_publish_failed'] = TRUE;
+		$pfb_accounting_reconciled = dnsbl_save_stats();
+		if (!$pfb_accounting_reconciled) {
+			pfb_dnsbl_accounting_failure();
 		}
 	}
 
-	// issue #3539: record whether the generation just published answers with the VIP, so a later converged pass can tell
-	// that the live generation no longer needs the held web server even when it publishes nothing itself. An unwritten
-	// record is removed rather than left stale: a missing record keeps the hold.
-	if ($pfb_dnsbl_published && @file_put_contents($pfb['unbound_py_vip'], empty($pfb['dnsbl_vip_demand']) ? '0' : '1') === FALSE) {
-		unlink_if_exists($pfb['unbound_py_vip']);
-	}
 
 	#################################
 	#	UNBOUND INTEGRATION	#
@@ -3537,15 +3534,22 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb_data_changed = ($pfb_fp_old === null || $pfb_fp_new === null)
 		? ($pfb['domain_update'] || $pfb['domain_clear'])
 		: ($pfb_fp_old !== $pfb_fp_new);
+	$pfb_accounting_retry = @file_get_contents("{$pfb['dnsbl_file']}.reload") === 'accounting';
+	if (!$pfb_accounting_retry && $pfb_accounting_reconciled && $pfb_dnsbl_published
+	    && $pfb_dnsbl_vip_hold && !$pfb_data_changed && @file_get_contents($pfb['unbound_py_vip']) !== '0') {
+		if (pfb_unbound_py_atomic_write_root("{$pfb['dnsbl_file']}.reload", 'accounting')) {
+			$pfb_accounting_retry = TRUE;
+		} else {
+			pfb_dnsbl_accounting_failure(FALSE);
+		}
+	}
 
 	// An explicit forced DNSBL reload (the updatednsbl trigger — Run Now with Force: Parse) bypasses
 	// fingerprint gating, and only yields while publication failed: the operator is applying a change
 	// the fingerprint can't see (e.g. an out-of-band edit to a chroot file outside the fingerprinted
-	// input set) or recovering from suspected runtime drift. reuse_dnsbl / the .reload marker can't
-	// serve as this signal — cron-reuse mode and the dnsbl-missing path also set them, which would
-	// reintroduce the every-pass reload this gate removes; $pfb['updatednsbl'] is set ONLY by the
-	// forced DNSBL reload path (scope=dnsbl + force=true in the normalization block).
-	if (!empty($pfb['updatednsbl'])) {
+	// input set) or recovering from suspected runtime drift. Empty .reload markers also come
+	// from routine reuse; the accounting payload instead retains a suppressed activation.
+	if (!empty($pfb['updatednsbl']) || ($pfb_accounting_retry && $pfb_accounting_reconciled)) {
 		$pfb_data_changed = TRUE;
 	}
 
@@ -3574,6 +3578,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 		pfb_update_unbound($mode, $pfbupdate, $pfbpython, $dnsbl_tld_group_counts);
 
+		// Only intent submitted for activation can later be trusted by the convergence gate.
+		if (($pfb_dnsbl_published || ($pfb_accounting_retry && $pfb_accounting_reconciled)) && empty($pfb['dnsbl_publish_failed'])
+		    && @file_put_contents($pfb['unbound_py_vip'], empty($pfb['dnsbl_vip_demand']) ? '0' : '1') === FALSE) {
+			unlink_if_exists($pfb['unbound_py_vip']);
+		}
+
 		// #468: DNSBL actually changed this pass and the reload above has applied (the
 		// zero-downtime swap waited / Unbound restarted). On a RAM-disk /var, re-archive
 		// the generated DNSBL state so the boot 'dnsbl_cache restore' brings it back after
@@ -3592,6 +3602,21 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 	}
 
+	if ($pfb_accounting_retry && empty($pfb['dnsbl_publish_failed'])
+	    && ($mode === 'disabled' || ($pfb_accounting_reconciled && pfb_dnsbl_converged()))) {
+		unlink_if_exists("{$pfb['dnsbl_file']}.reload");
+	}
+	$pfb_accounting_pending = !empty($pfb['dnsbl_accounting_failed'])
+		|| @file_get_contents("{$pfb['dnsbl_file']}.reload") === 'accounting';
+	if ($pfb_accounting_pending) {
+		if (!pfb_pending_changes()) {
+			pfb_mark_pending_changes();
+		}
+		if (!pfb_due_ledger_is_pending('cron', $pfb['dbdir'])) {
+			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+		}
+	}
+
 	// issue #3515: pfB-DNS serves with DNSBL on or off ($mode only says whether DNSBL is): bring up a proxy that died since
 	// the last pass, and restart one whose rc script changed. A reload above has already restarted a proxy that hosts the module.
 	// A proxy that does not become ready has failed its activation: it is rolled back (pfB-DNS turned off, the Resolver and the
@@ -3603,7 +3628,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// issue #3539: the conf means "the last published generation may still answer with the VIP". The hold is released once the
 	// last published generation is recorded as answering with no VIP and the resolver has converged on it -- by this pass or
 	// a later one. A failed publication leaves the previous record, and a missing record keeps the hold.
-	if ($pfb_dnsbl_vip_hold && @file_get_contents($pfb['unbound_py_vip']) === '0' && pfb_dnsbl_converged()) {
+	if ($pfb_dnsbl_vip_hold && empty($pfb['dnsbl_publish_failed'])
+	    && @file_get_contents($pfb['unbound_py_vip']) === '0' && pfb_dnsbl_converged()) {
 		pfb_create_dnsbl($mode);
 		$pfb_dnsbl_vip_hold = FALSE;
 	}
@@ -5505,7 +5531,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// or failed to launch (firewall state unknown; the pending mark must survive so the next tick re-applies).
 
 	if (!$pfb['save']) {
-		$pending_cleared = !pfb_due_ledger_is_pending('cron', $pfb['dbdir'])
+		$pending_cleared = !$pfb_accounting_pending && (
+			!pfb_due_ledger_is_pending('cron', $pfb['dbdir'])
 			|| pfb_due_ledger_update_entry(
 				'cron',
 				static function (?array $entry): array {
@@ -5514,7 +5541,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					return $entry;
 				},
 				$pfb['dbdir']
-			);
+			)
+		);
 		if ($pending_cleared && !$pfb_filter_reload_unknown) {
 			pfb_settle_pending_changes($pfb_pending_seen);
 			pfb_sync_apply_record('applied', $pfb['filter_configure'] ? 'update pass completed; firewall reload started' : 'update pass completed', $pfb['dbdir'], FALSE, $pfb_pass_started);
@@ -5522,7 +5550,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				pfb_sync_findings_record(pfb_sync_effective_findings(pfb_sync_effective_facts()), $pfb['dbdir']);
 			}
 		} else {
-			pfb_sync_apply_record('failed', 'firewall reload not confirmed; pending changes kept', $pfb['dbdir'], FALSE, $pfb_pass_started);
+			$reason = $pfb_accounting_pending ? 'DNSBL accounting or reload not confirmed; pending changes kept'
+				: 'firewall reload not confirmed; pending changes kept';
+			pfb_sync_apply_record('failed', $reason, $pfb['dbdir'], FALSE, $pfb_pass_started);
 		}
 
 		if ($pfb['enable'] === PfbToggle::On) {
@@ -5542,5 +5572,5 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	if ($pfb_dispatch_owner) {
 		pfb_schedule_dispatch_release();
 	}
-	return TRUE;
+	return !$pfb_accounting_pending;
 }

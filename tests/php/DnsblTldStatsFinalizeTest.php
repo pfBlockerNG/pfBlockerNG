@@ -168,6 +168,7 @@ final class DnsblTldStatsFinalizeTest extends TestCase
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'], [
 			'enable'=>PfbToggle::On,'dnsbl'=>PfbToggle::On,'save'=>FALSE,'dnsbl_tld_wildcard'=>TRUE,
 			'alias_dnsbl_configured'=>['DNSBL_A'],'dnsbl_file'=>"{$this->tmp}/dnsbl",'dnsbl_publish_failed'=>FALSE,
+			'dbdir' => $this->tmp, 'pending_marker' => "{$this->tmp}/pending",
 		]);
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
 		$db->exec('CREATE TABLE dnsbl(groupname TEXT,timestamp TEXT,entries INTEGER,counter INTEGER)');
@@ -178,6 +179,9 @@ final class DnsblTldStatsFinalizeTest extends TestCase
 		$this->assertFileDoesNotExist("{$this->tmp}/dnsbl.sync");
 		$this->assertSame(12, $db->querySingle('SELECT counter FROM dnsbl'));
 		$this->assertSame(3, $db->querySingle('SELECT entries FROM dnsbl'));
+		$this->assertSame('accounting', @file_get_contents("{$this->tmp}/dnsbl.reload"));
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->tmp));
 		$db->close();
 	}
 

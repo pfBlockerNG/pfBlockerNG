@@ -3125,20 +3125,20 @@ def _db_group_epochs(
             pfb["sqlite3_dnsbl_con"] = False
             sys.stderr.write("[pfBlockerNG]: DNSBL accounting unavailable: {}\n".format(error))
             return {}
-        missing: set[tuple[str, str]] = set()
-        for rules in rule_dbs:
-            for rule in rules.values():
-                while rule is not None:
-                    origin = rule.get("group_origin", "custom")
-                    owner = rule.get("group_owner")
-                    if owner is None and "index" in rule:
-                        owner = resolve_feed_group(rule["index"], feed_groups)[1]
-                    if owner and (owner, origin) not in epochs:
-                        missing.add((owner, origin))
-                    rule = rule.get("top1m_fallback")
-        if missing:
-            sys.stderr.write("[pfBlockerNG]: DNSBL accounting unavailable for owners: {}\n".format(sorted(missing)))
-        return epochs
+    missing: set[tuple[str, str]] = set()
+    for rules in rule_dbs:
+        for rule in rules.values():
+            while rule is not None:
+                origin = rule.get("group_origin", "custom")
+                owner = rule.get("group_owner")
+                if owner is None and "index" in rule:
+                    owner = resolve_feed_group(rule["index"], feed_groups)[1]
+                if owner and (owner, origin) not in epochs:
+                    missing.add((owner, origin))
+                rule = rule.get("top1m_fallback")
+    if missing:
+        sys.stderr.write("[pfBlockerNG]: DNSBL accounting unavailable for owners: {}\n".format(sorted(missing)))
+    return epochs
 
 
 def pfb_db_validate(db: int) -> bool:

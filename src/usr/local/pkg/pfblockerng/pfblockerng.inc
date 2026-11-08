@@ -17497,6 +17497,23 @@ function pfb_unbound_python_unmount() {
 }
 
 
+function pfb_dnsbl_accounting_failure(?bool $retry_recorded = NULL): void {
+	global $pfb;
+
+	$pfb['dnsbl_publish_failed'] = TRUE;
+	$pfb['dnsbl_accounting_failed'] = TRUE;
+	$retry = "{$pfb['dnsbl_file']}.reload";
+	$retry_recorded ??= (@file_get_contents($retry) === 'accounting' || pfb_unbound_py_atomic_write_root($retry, 'accounting'));
+	if (!$retry_recorded) {
+		$notice = "DNSBL accounting retry could not be recorded [ {$retry} ]. Repair the marker or storage, then run Force Parse.";
+		pfb_logger("\n{$notice}", 2);
+		file_notice('pfBlockerNG DNSBL', $notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
+	}
+	pfb_mark_pending_changes();
+	pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+}
+
+
 // ADR-65: finalize TLD-mode widget stats from counts already collected by the feed loop.
 function pfb_dnsbl_tld_stats_finalize(array $group_counts): bool {
 	global $pfb;
@@ -18404,7 +18421,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 		if ($pfb['dnsbl_tld_wildcard']) {
 			if ($pfb['domain_update']) {
 				if (!pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts)) {
-					$pfb['dnsbl_publish_failed'] = TRUE;
+					pfb_dnsbl_accounting_failure();
 					return FALSE;
 				}
 			}
@@ -18420,7 +18437,9 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	    file_exists("{$pfb['dnsbl_unlock']}")) {
 
 		$pfbupdate = TRUE;
-		unlink_if_exists("{$pfb['dnsbl_file']}.reload");
+		if (@file_get_contents("{$pfb['dnsbl_file']}.reload") !== 'accounting') {
+			unlink_if_exists("{$pfb['dnsbl_file']}.reload");
+		}
 
 		// ADR-06 (#51): re-lock the temporary unlocks on this reload (Cron/Force
 		// parity with main, which drops them from the regenerated whitelist). Under

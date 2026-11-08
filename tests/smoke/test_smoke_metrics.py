@@ -478,6 +478,24 @@ def _wait_blocks(vm: SmokeVM, expected: dict[str, dict[tuple[str, str], float]])
     return last
 
 
+def _accounting_apply_state(vm: SmokeVM) -> dict[str, object]:
+    output = _php_ok(
+        vm,
+        f"require_once('{_PKG}'); pfb_global();"
+        "$state = array('retry' => @file_get_contents($pfb['dnsbl_file'] . '.reload'),"
+        "'pending' => pfb_pending_changes(), 'converged' => pfb_dnsbl_converged(),"
+        "'vip_conf' => is_file($pfb['dnsbl_conf']), 'vip_service' => is_service_running('pfb_dnsbl'),"
+        "'generation' => pfb_unbound_py_marker_generation($pfb['dnsbldir'] . '/pfb_py_reload'),"
+        "'applied' => pfb_unbound_py_marker_generation($pfb['dnsbldir'] . '/pfb_py_reload.applied'),"
+        "'fingerprint' => pfb_dnsbl_reload_fingerprint($pfb));"
+        "echo '<<<ACCOUNTING>>>' . json_encode($state) . '<<<END>>>';",
+        "read accounting apply state",
+    )
+    match = re.search(r"<<<ACCOUNTING>>>(.*?)<<<END>>>", output, re.DOTALL)
+    assert match, f"missing accounting apply state: {output!r}"
+    return json.loads(match.group(1))
+
+
 def _epochs(vm: SmokeVM) -> dict[tuple[str, str], str]:
     output = _php_ok(
         vm,
@@ -536,8 +554,11 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
     names = [h.unique_domain(f"metric-{transport}") for _, transport, _, _ in cases]
     recreated = h.unique_domain("metric-recreated")
     native = h.unique_domain("metric-native")
+    held = h.unique_domain("metric-held")
+    released = h.unique_domain("metric-released")
     feeds = [[names[i] for i, case in enumerate(cases) if case[0] == group] for group in (0, 1)]
-    feeds[0].extend([recreated, native])
+    feeds[0].extend([recreated, native, held])
+    feeds[1].append(released)
     specs = [
         h.DnsblCase(
             aliasname=alias,
@@ -607,14 +628,61 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         assert _epochs(vm)[groups[0], "custom"] == epochs[groups[0], "custom"], "re-enable replaced A's incarnation"
         assert {group: _blocks(enabled, group) for group in groups} == wanted, enabled
 
-        h.inject_dnsbl_lists(vm, [(specs[1], "Deny")])
-        _apply(vm)
+        prior_apply = _accounting_apply_state(vm)
+        assert prior_apply["vip_conf"] and prior_apply["vip_service"], prior_apply
+        null_b = h.DnsblCase(aliasname=aliases[1], header=aliases[1], mode=h.DnsblMode.NULL, feed_url=specs[1].feed_url)
+        _php_ok(
+            vm,
+            "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite'); $db->enableExceptions(TRUE);"
+            '$db->exec("CREATE TRIGGER metric_accounting_refusal BEFORE DELETE ON dnsbl_group_epochs '
+            "BEGIN SELECT RAISE(ABORT,'metrics smoke accounting refusal'); END\"); $db->close();",
+            "refuse actual accounting deletion",
+        )
+        try:
+            h.inject_dnsbl_lists(vm, [(null_b, "Deny")])
+            failed = vm.ssh(
+                h.PHP_BIN, h.PFB_CLI, "pfb_trigger", "scope=dnsbl", "force=false", "trigger=cron", timeout=180.0
+            )
+            assert failed.returncode == 1, f"accounting failure must fail the apply: {failed.stdout}\n{failed.stderr}"
+            failed_apply = _accounting_apply_state(vm)
+            assert failed_apply["retry"] == "accounting" and failed_apply["pending"], failed_apply
+            assert failed_apply["vip_conf"] and failed_apply["vip_service"], failed_apply
+            assert (failed_apply["generation"], failed_apply["applied"]) == (
+                prior_apply["generation"],
+                prior_apply["applied"],
+            ), failed_apply
+            assert _epochs(vm) == epochs, "failed reconciliation changed authority"
+            answer, raw = _ask(gw.client, "udp", held)
+            assert h.is_vip(answer), f"the old generation must still serve its VIP: {answer}\n{raw}"
+            wanted[groups[0]]["A", "UDP"] = 1
+            _wait_blocks(vm, wanted)
+            _show_dns_prom(vm, "accounting-failure-old-generation-held")
+        finally:
+            _php_ok(
+                vm,
+                "$db = new SQLite3('/var/unbound/pfb_py_dnsbl.sqlite'); $db->enableExceptions(TRUE);"
+                "$db->exec('DROP TRIGGER IF EXISTS metric_accounting_refusal'); $db->close();",
+                "restore writable accounting",
+            )
+        recovered = vm.ssh(
+            h.PHP_BIN, h.PFB_CLI, "pfb_trigger", "scope=dnsbl", "force=false", "trigger=cron", timeout=180.0
+        )
+        assert recovered.returncode == 0, f"accounting retry failed: {recovered.stdout}\n{recovered.stderr}"
+        recovered_apply = _accounting_apply_state(vm)
+        assert recovered_apply["fingerprint"] == failed_apply["fingerprint"], (failed_apply, recovered_apply)
+        assert recovered_apply["retry"] is False and not recovered_apply["pending"], recovered_apply
+        assert recovered_apply["converged"], recovered_apply
+        assert not recovered_apply["vip_conf"] and not recovered_apply["vip_service"], recovered_apply
         deleted = _export(vm)
-        _show_dns_prom(vm, "deleted-owner-removed")
+        _show_dns_prom(vm, "accounting-recovered-identical-generation")
         assert (groups[0], "custom") not in _epochs(vm), "deleted A still has an incarnation"
         assert not any(labels.get("group") == groups[0] for labels, _ in _samples(deleted, _BLOCKED)), deleted
         assert not any(labels.get("group") == groups[0] for labels, _ in _samples(deleted, _ENTRIES)), deleted
         assert _blocks(deleted, groups[1]) == wanted[groups[1]], deleted
+        answer, raw = _ask(gw.client, "udp", released)
+        assert set(answer.records) == {"0.0.0.0"}, f"the new generation must apply NULL blocking: {answer}\n{raw}"
+        wanted[groups[1]]["A", "UDP"] = 1
+        _wait_blocks(vm, {groups[0]: {}, groups[1]: wanted[groups[1]]})
         h.inject_dnsbl_lists(vm, [(spec, "Deny") for spec in specs])
         _apply(vm)
         new_epochs = _epochs(vm)
