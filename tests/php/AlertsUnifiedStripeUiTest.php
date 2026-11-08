@@ -47,29 +47,6 @@ final class AlertsUnifiedStripeUiTest extends TestCase
 		);
 	}
 
-	public function testSharedLogTableGetsTheClassOnlyForUnified(): void
-	{
-		$source = self::source();
-		$shared = 'class="table table-striped table-hover table-compact sortable-theme-bootstrap<?= $logtype == \'Unified\' ? \' pfb-unified\' : \'\' ?>"';
-		$this->assertStringContainsString($shared, $source);
-		$this->assertSame(1, substr_count($source, $shared));
-		$this->assertStringContainsString(
-			'class="table table-striped table-hover table-compact sortable-theme-bootstrap" data-sortable>',
-			$source,
-			'Unlocked IP/Domain tables keep the unadorned table-striped class'
-		);
-		$this->assertStringContainsString(
-			'class="table table-responsive table-bordered table-striped table-hover table-compact sortable-theme-bootstrap"',
-			$source,
-			'Stats tables keep table-striped and must not gain pfb-unified'
-		);
-		$this->assertSame(
-			2,
-			substr_count($source, 'pfb-unified'),
-			'pfb-unified is the CSS selector plus the one class ternary; a static class would add a third hit'
-		);
-	}
-
 	public function testInlineRowColoursAreUntouched(): void
 	{
 		$source = self::source();

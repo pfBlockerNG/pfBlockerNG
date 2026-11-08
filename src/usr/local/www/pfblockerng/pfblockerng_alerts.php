@@ -1716,6 +1716,8 @@ foreach (config_get_path('interfaces', []) as $int) {
 $local_hosts = pfb_collect_localhosts();
 
 // Collect Alert Statistics
+$stats_timeline = [];
+$stat_hidden = array();
 if ($stats_data && session_status() === PHP_SESSION_ACTIVE) {
 	session_write_close();
 }
@@ -1790,10 +1792,8 @@ if ($alert_summary) {
 
 	$alert_stats = array();
 	$alert_stats[$alert_view] = array();
-	$stats_timeline = [];
 
 	// Skip processing hidden Stats
-	$stat_hidden = array();
 	if ($alert_view == 'dnsbl_stat') {
 		$stat_hidden = $pfbdnsblstat;
 	} elseif ($alert_view == 'dnsbl_reply_stat') {

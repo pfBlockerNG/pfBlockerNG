@@ -230,7 +230,7 @@ function pfb_stats_panel(string $stat_type, array $stype, array $summary, $pfbma
 								$data_disp = $data;	// program-generated date/hour token, trusted
 							}
 
-							if (!empty($data) && $data != 'Not available for HTTPS alerts') {
+							if ($data !== '' && $data !== '0' && $data != 'Not available for HTTPS alerts') {
 
 								// Report Local hostname if found
 								if ($stat_type == 'ipsrcipout' || $stat_type == 'ipdstipin') {
