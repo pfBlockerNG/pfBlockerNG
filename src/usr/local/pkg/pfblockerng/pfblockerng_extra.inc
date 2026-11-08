@@ -4647,7 +4647,8 @@ function pfb_syslog_format_dnsbl(array $fields): string
 		$parts[] = 'listener_ip=' . pfb_syslog_escape((string) inet_ntop($packed));
 		$interface = $fields['listener_interface'] ?? '';
 		if (is_string($interface) && $interface !== '' && mb_check_encoding($interface, 'UTF-8') && !preg_match('/\p{Cc}/u', $interface)) {
-			$parts[] = 'listener_interface=' . pfb_syslog_escape($interface);
+			// ASCII JSON preserves UTF-8 through FreeBSD syslogd's byte-oriented C1 escaping.
+			$parts[] = 'listener_interface=' . json_encode($interface, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 		}
 	}
 
