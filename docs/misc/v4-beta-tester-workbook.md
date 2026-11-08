@@ -80,7 +80,7 @@ Record three stages if you can:
 | --- | --- | --- | --- | --- |
 | v3 (3.2.x, if that is where you start) | Before installing 3.3 or v4 | | | |
 | 3.3.x (if used) | After Stable install, lists still loaded | | | |
-| v4 Nightly | After Nightly install, then after a Run Now | | | |
+| v4 (Edge) | After the Edge install, then after a Run Now | | | |
 
 **What “fine” looks like**
 
@@ -137,26 +137,28 @@ v3.”
 
 ---
 
-## Step 2 — install v4 (Nightly)
+## Step 2 — install v4 (Edge)
 
-v4 is not a Stable release yet. For now, use **Nightly** from
-[pkg.pfblockerng.com](https://pkg.pfblockerng.com/) (the site labels Nightly
-“not for daily use”). Until tagged v4 previews appear on Edge, Nightly is the
-only channel that carries v4 (Edge currently lists 3.3.x builds).
+v4 is not a Stable release yet. Its tagged betas are published on the **Edge**
+channel of [pkg.pfblockerng.com](https://pkg.pfblockerng.com/): 4.0.0.b1 first,
+then later betas and release candidates. Install whatever v4 version Edge
+currently lists.
 
-Tagged v4 previews (release tags like `v4.0.0.a1`) will be published on the
-**Edge** channel. When the install page shows a v4 version under Edge,
-switch to Edge (same command with `--channel edge`).
-
-On the firewall, as root, copy the **Nightly** command from that page:
+On the firewall, as root, copy the **Edge** command from that page:
 
 ```sh
-fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel nightly
+fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel edge
 ```
 
-Nightly versions look like a timestamp (`20260905123014.713025f`), not
-`4.0.0`. That is still v4. Nightly keeps its **own** saved-settings copy,
-separate from a later 4.0 release.
+Edge versions look like `4.0.0.b1`. Running the same command later moves you
+to the newest beta. Every 4.0 beta, release candidate and the final 4.0.0
+share one saved-settings copy.
+
+**Nightly** (`--channel nightly`) is the development tip between betas,
+rebuilt from every change; the site labels it “not for daily use”. Use it only
+when we ask you to check a fix. Nightly versions look like a timestamp
+(`20260905123014.713025f`), not `4.0.0`, and Nightly keeps its **own**
+saved-settings copy, separate from the Edge betas.
 
 When it finishes:
 
@@ -200,19 +202,19 @@ if something looks wrong.
 - Anything you only set up on v4 (snapshot B) will not show on the 3.3
   screens.
 
-**If you then return to v4** (Nightly again):
+**If you then return to v4** (the Edge command again):
 
-- You get **snapshot B** — Nightly as you left it — not the extra tweaks you
+- You get **snapshot B** — v4 as you left it — not the extra tweaks you
   made during the 3.3 visit.
 
-The two copies are never mixed. A later **4.0** package is a *third* copy, not
-snapshot B.
+The two copies are never mixed. A later 4.0 beta or the final 4.0.0 continues
+from snapshot B; **Nightly** is a *third* copy of its own.
 
 To try that round trip:
 
 - [ ] From v4, take a fresh backup, then run the **stable** command again
 - [ ] Confirm the GUI looks like v3 and matches snapshot A (not B)
-- [ ] Run the **nightly** command again
+- [ ] Run the **edge** command again
 - [ ] Confirm it matches snapshot B (not the 3.3 visit)
 
 Leave **Keep Settings** on. Do not send us the files under
