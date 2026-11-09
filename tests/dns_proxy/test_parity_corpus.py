@@ -7,17 +7,21 @@ The expectations in fixtures/parity/ are frozen literals derived from the source
 families.json, never captured from a run. A fixture the loader refuses is an error naming file, case and field.
 
 Schema 1, the contract a Go runner implements too (every key is required unless marked optional; any other key, a
-duplicate JSON key, a wrong JSON type or an unknown value is a refusal, never a skip):
+duplicate JSON key, NaN/Infinity, a wrong JSON type or an unknown value is a refusal, never a skip; every file in
+fixtures/parity/ is a .json document the runner loads):
 
   families.json  {"schema": 1, "families": {"<family>": "<source branch>", ...}}: the closed family list.
   <scenario>.json  {"schema": 1, "description", "module", "upstream", "cases"}
-    module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order.
+    module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order; no line
+                     break anywhere, no bracket in a section name, no "=" or ":" in a key.
     module.manifest  written verbatim as pfb_py_sources.json.
-    module.files     {relative path: [lines]}, written joined by newlines plus a trailing one; no "..", no absolute
-                     path, and none of the names the runner writes (the shipped pfb_unbound.py and
+    module.files     {relative path: [lines]}, written joined by newlines plus a trailing one; no "..", NUL or absolute
+                     path, no path listed twice ("./x" is "x"), no file that is also another one's directory, and
+                     nothing at or under the names the runner writes (the shipped pfb_unbound.py and
                      pfb_dnsbl_regex_rules.py are linked in by the runner, never by a fixture).
     upstream         {"<lower-case absolute name> <TYPE>": [RR texts]}, Unbound's stand-in (FakeUnbound): a listed
-                     question gets NOERROR with those records (an empty list: none at all), any other NXDOMAIN.
+                     question gets NOERROR with those records (an empty list: none at all), any other NXDOMAIN; one
+                     question is listed once, whichever spelling of its type.
     cases            non-empty list, run IN FILE ORDER against one booted decider (its per-name memo carries over).
       id, description   non-empty strings; id unique within the file.
       family            a families.json key.
@@ -135,17 +139,23 @@ def _fail(where: str, field: str, why: str) -> NoReturn:
 
 
 def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    keys = [key for key, _ in pairs]
-    for key in keys:
-        if keys.count(key) > 1:
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
             raise ValueError(f"duplicate JSON key {key!r}")
+        seen.add(key)
     return dict(pairs)
+
+
+def _no_constant(name: str) -> NoReturn:
+    raise ValueError(f"{name} is not JSON")  # Python's json reads NaN/Infinity; other languages do not
 
 
 def _read_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_no_duplicate_keys)
-    except ValueError as exc:  # JSONDecodeError, a duplicate key, bad UTF-8
+        text = path.read_text(encoding="utf-8")
+        return json.loads(text, object_pairs_hook=_no_duplicate_keys, parse_constant=_no_constant)
+    except (ValueError, RecursionError) as exc:  # JSONDecodeError, a duplicate key, NaN, bad UTF-8, absurd nesting
         raise FixtureError(f"{path.name}: not a readable JSON document: {exc}") from exc
 
 
@@ -184,6 +194,12 @@ def _choice(value: object, where: str, field: str, allowed: Collection[str]) -> 
     return text
 
 
+def _ini_text(text: str, where: str, field: str, forbidden: str) -> str:
+    if any(char in text for char in forbidden):
+        _fail(where, field, f"{text!r} must not contain any of {forbidden!r}")
+    return text
+
+
 def _schema(doc: dict[str, Any], where: str) -> None:
     if type(doc["schema"]) is not int or doc["schema"] != 1:  # a bool or 1.0 is not the integer 1
         _fail(where, "schema", f"must be the integer 1, got {doc['schema']!r}")
@@ -192,7 +208,7 @@ def _schema(doc: dict[str, Any], where: str) -> None:
 def _qtype(text: str, where: str, field: str) -> int:
     if text in QTYPES:
         return QTYPES[text]
-    numbered = re.fullmatch(r"TYPE([0-9]+)", text)
+    numbered = re.fullmatch(r"TYPE([0-9]{1,5})", text)
     if numbered and int(numbered[1]) <= 0xFFFF:
         return int(numbered[1])
     return _fail(where, field, f"unknown query type {text!r}")
@@ -246,9 +262,17 @@ def _module(value: object, where: str) -> Module:
         _fail(where, "module.ini", "must be a JSON object of sections")
     ini: dict[str, dict[str, str]] = {}
     for section, rows in obj["ini"].items():
+        field = f"module.ini.{section}"
         if not isinstance(rows, dict):
-            _fail(where, f"module.ini.{section}", "must be a JSON object of key/value strings")
-        ini[section] = {key: _string(text, where, f"module.ini.{section}.{key}") for key, text in rows.items()}
+            _fail(where, field, "must be a JSON object of key/value strings")
+        # A line break, or a bracket/separator in the wrong place, would write a different ini than the fixture says.
+        _ini_text(section, where, field, "\r\n[]")
+        ini[section] = {
+            _ini_text(key, where, f"{field}.{key}", "\r\n=:"): _ini_text(
+                _string(text, where, f"{field}.{key}"), where, f"{field}.{key}", "\r\n"
+            )
+            for key, text in rows.items()
+        }
     if not isinstance(obj["manifest"], dict):
         _fail(where, "module.manifest", "must be a JSON object")
     if not isinstance(obj["files"], dict):
@@ -256,11 +280,17 @@ def _module(value: object, where: str) -> Module:
     files: dict[str, list[str]] = {}
     for rel, lines in obj["files"].items():
         path = PurePosixPath(rel)
-        if not path.parts or path.is_absolute() or ".." in path.parts:
+        if not path.parts or path.is_absolute() or ".." in path.parts or "\0" in rel:
             _fail(where, "module.files", f"unsafe path {rel!r}: must be relative and stay inside the module directory")
-        if path.as_posix() in RUNNER_WRITES:  # a write would follow the shipped-code link into src/
+        if path.parts[0] in RUNNER_WRITES:  # a write would follow the shipped-code link into src/
             _fail(where, "module.files", f"{rel!r} is written by the runner, never by a fixture")
-        files[rel] = _strings(lines, where, f"module.files[{rel!r}]")
+        if path.as_posix() in files:
+            _fail(where, "module.files", f"{rel!r} names a file already listed")
+        files[path.as_posix()] = _strings(lines, where, f"module.files[{rel!r}]")
+    folders = {parent.as_posix() for name in files for parent in PurePosixPath(name).parents}
+    for name in files:
+        if name in folders:
+            _fail(where, "module.files", f"{name!r} is both a file and the directory of another listed file")
     return Module(ini, obj["manifest"], files)
 
 
@@ -273,6 +303,8 @@ def _upstream(value: object, where: str) -> dict[tuple[str, int], list[str]]:
         if name != name.lower():
             _fail(where, f"upstream[{key!r}]", "the name must be lower case")
         _rrs(texts, where, f"upstream[{key!r}]")  # rr_from_text must accept every record
+        if (name, qtype) in zone:
+            _fail(where, f"upstream[{key!r}]", "the same question is already listed under another spelling")
         zone[(name, qtype)] = list(texts)
     return zone
 
@@ -509,6 +541,53 @@ HOSTILE: list[tuple[str, Callable[[dict[str, Any]], object], tuple[str, ...]]] =
     ("schema 2", lambda d: d.update(schema=2), ("bad.json", "schema")),
     ("schema as a string", lambda d: d.update(schema="1"), ("bad.json", "schema")),
     ("schema missing", lambda d: d.pop("schema"), ("bad.json", "schema")),
+    ("schema true", lambda d: d.update(schema=True), ("bad.json", "schema")),
+    ("schema 1.0", lambda d: d.update(schema=1.0), ("bad.json", "schema")),
+    ("NaN, which only Python reads", lambda d: d["module"]["manifest"].update(x=float("nan")), ("bad.json", "NaN")),
+    ("no cases", lambda d: d.update(cases=[]), ("bad.json", "cases")),
+    ("empty case id", lambda d: d["cases"][0].update(id=""), ("bad.json", "cases[0]", "id")),
+    ("empty case description", lambda d: d["cases"][0].update(description=""), ("bad.json", "'good'", "description")),
+    ("client not an IP", lambda d: d["cases"][0]["query"].update(client="host.example"), ("'good'", "query.client")),
+    ("unknown transport", lambda d: d["cases"][0]["query"].update(transport="QUIC"), ("'good'", "query.transport")),
+    ("TYPE65536", lambda d: d["cases"][0]["query"].update(type="TYPE65536"), ("'good'", "query.type")),
+    ("TYPE with 5000 digits", lambda d: d["cases"][0]["query"].update(type="TYPE" + "9" * 5000), ("query.type",)),
+    ("unknown rcode", lambda d: d["cases"][0]["expect"].update(rcode="NOPE"), ("'good'", "expect.rcode")),
+    (
+        "upstream name without the trailing dot",
+        lambda d: d.update(upstream={"allowed.example A": []}),
+        ("bad.json", "upstream['allowed.example A']"),
+    ),
+    (
+        "upstream name in upper case",
+        lambda d: d.update(upstream={"Allowed.example. A": []}),
+        ("bad.json", "upstream['Allowed.example. A']", "lower case"),
+    ),
+    (
+        "one upstream question under two spellings",
+        lambda d: d["upstream"].update({"allowed.example. TYPE1": []}),
+        ("bad.json", "upstream['allowed.example. TYPE1']", "already listed"),
+    ),
+    (
+        "ini value carrying a new section",
+        lambda d: d["module"]["ini"]["MAIN"].update(python_enable="true\n[X]"),
+        ("bad.json", "module.ini.MAIN.python_enable"),
+    ),
+    (
+        "files under the shipped decider's link",
+        lambda d: d["module"]["files"].update({"pfb_unbound.py/x": ["x"]}),
+        ("bad.json", "module.files", "runner"),
+    ),
+    (
+        "files naming one file twice",
+        lambda d: d["module"]["files"].update({"./pfb_py_raw/feed.txt": ["x"]}),
+        ("bad.json", "module.files", "already listed"),
+    ),
+    (
+        "files using a file as a directory",
+        lambda d: d["module"]["files"].update({"pfb_py_raw/feed.txt/x": ["x"]}),
+        ("bad.json", "module.files", "directory"),
+    ),
+    ("files path with a NUL", lambda d: d["module"]["files"].update({"a\0b": ["x"]}), ("bad.json", "module.files")),
     ("unknown family", lambda d: d["cases"][0].update(family="nonesuch"), ("bad.json", "'good'", "family")),
     ("unknown top-level key", lambda d: d.update(extra=1), ("bad.json", "extra")),
     ("unknown key in a case", lambda d: d["cases"][0].update(extra=1), ("bad.json", "'good'", "extra")),
@@ -579,10 +658,17 @@ def test_the_loader_refuses_a_bad_scenario_naming_file_case_and_field(
     assert all(name in message for name in names), f"{message!r} must name {names}"
 
 
-def test_the_loader_refuses_a_json_key_written_twice_rather_than_keeping_the_last(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("document", "reason"),
+    [('{"schema": 1, "schema": 2}', "duplicate JSON key 'schema'"), ("[" * 100_000, "recursion")],
+    ids=["key written twice", "nesting too deep to read"],
+)
+def test_the_loader_refuses_an_unreadable_document_as_a_fixture_error(
+    tmp_path: Path, document: str, reason: str
+) -> None:
     path = tmp_path / "bad.json"
-    path.write_text('{"schema": 1, "schema": 2}', encoding="utf-8")
-    with pytest.raises(FixtureError, match=r"bad\.json.*duplicate JSON key 'schema'"):
+    path.write_text(document, encoding="utf-8")
+    with pytest.raises(FixtureError, match=rf"bad\.json: not a readable JSON document: .*{reason}"):
         load_scenario(path, FAMILIES)
 
 
@@ -601,14 +687,28 @@ def test_the_loader_refuses_a_bad_families_index(tmp_path: Path, document: str) 
 # --- the corpus covers every family -------------------------------------------------------------------------------
 
 
-def test_every_family_has_at_least_one_case() -> None:
+def _family_counts() -> dict[str, int]:
+    """Cases per family over every scenario the loader accepts (a refused one fails its own scenario test)."""
     counts = dict.fromkeys(FAMILIES, 0)
     for path in SCENARIO_FILES:
-        for case in load_scenario(path, FAMILIES).cases:
+        try:
+            cases = load_scenario(path, FAMILIES).cases
+        except FixtureError:
+            continue
+        for case in cases:
             counts[case.family] += 1
-    print("family  count")
-    for family, count in counts.items():
-        print(f"{family}  {count}")
-    print(f"total  {sum(counts.values())}")
-    missing = sorted(family for family, count in counts.items() if count == 0)
-    assert not missing, f"families with no case: {' '.join(missing)}"
+    return counts
+
+
+FAMILY_COUNTS = _family_counts()
+
+
+# The count is in the test id, so the default verbose run lists the cases per family.
+@pytest.mark.parametrize("family", list(FAMILY_COUNTS), ids=[f"{name}={n}" for name, n in FAMILY_COUNTS.items()])
+def test_every_family_has_cases(family: str) -> None:
+    assert FAMILY_COUNTS[family], f"family {family} has no case"
+
+
+def test_every_file_in_the_corpus_is_a_json_document_the_runner_loads() -> None:
+    strays = sorted(path.name for path in FIXTURES.iterdir() if path.suffix != ".json")
+    assert not strays, f"never loaded, so never run: {strays}"
