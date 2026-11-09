@@ -13,9 +13,27 @@ import (
 )
 
 // translated lists the families whose decisions the Go decider makes; the others are reported, never passed.
-var translated = map[string]bool{"relay": true}
+var translated = map[string]bool{
+	"relay": true, "zone_exact": true, "zone_wildcard": true, "tld_block": true, "tld_allow": true, "psl": true,
+	"idn": true, "regex": true, "abp": true, "allow": true, "allow_band": true, "hsts": true, "response": true,
+	"qtype": true, "in_addr_arpa": true, "group_policy": true, "cname": true, "noaaaa": true, "safesearch": true,
+	"top1m": true,
+}
 
-type tally struct{ passed, failed, notImplemented int }
+// divergent lists the cases of translated families where the Go decider differs from the Python oracle by an owner
+// decision (IDNA2003 vs UTS46, Python's Unicode tables vs Go's), as "<scenario file stem>/<case id>" -> the #3511
+// comment that tables the row for the owner's sign-off. Such a case is reported as divergent, never as a pass and
+// never skipped, and it must still differ: one that starts to match fails until it is taken off this list.
+var divergent = map[string]string{
+	"regex-cname-target-octets/latin1-letter-matches-backslash-w":                re2LatinClasses,
+	"regex-cname-target-octets/latin1-no-break-space-matches-backslash-s":        re2LatinClasses,
+	"regex-cname-target-octets/latin1-letter-does-not-match-backslash-capital-w": re2LatinClasses,
+}
+
+// re2LatinClasses: RE2 reads \w \s \W as ASCII classes, Python re as Unicode ones, on a Latin-1 CNAME target.
+const re2LatinClasses = "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6752661597"
+
+type tally struct{ passed, failed, divergent, notImplemented int }
 
 func TestParityCorpus(t *testing.T) {
 	fixtures := paritycorpus.Fixtures()
@@ -47,9 +65,18 @@ func TestParityCorpus(t *testing.T) {
 	}
 	for _, name := range names {
 		if translated[name] {
-			t.Logf("%s: %d passed, %d failed", name, counts[name].passed, counts[name].failed)
+			t.Logf("%s: %d passed, %d failed, %d divergent", name, counts[name].passed, counts[name].failed, counts[name].divergent)
 		} else {
 			t.Logf("%s: %d not implemented", name, counts[name].notImplemented)
+		}
+	}
+	stems := map[string]bool{}
+	for _, file := range files {
+		stems[strings.TrimSuffix(filepath.Base(file), ".json")] = true
+	}
+	for key := range divergent {
+		if !stems[strings.SplitN(key, "/", 2)[0]] {
+			t.Errorf("divergent case %q names no scenario file", key)
 		}
 	}
 }
@@ -68,9 +95,11 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 		t.Fatalf("boot: %v", err)
 	}
 	f := newFrontend(module)
+	stem := strings.TrimSuffix(filepath.Base(file), ".json")
 	for i := range s.Cases {
 		c := &s.Cases[i]
 		skipped := false
+		reason, isDivergent := divergent[stem+"/"+c.ID]
 		ok := t.Run(c.ID, func(t *testing.T) {
 			u := paritycorpus.NewFakeUnbound(s.Upstream)
 			// Every case is resolved, translated or not: the decider's per-name memo carries across the cases in file order.
@@ -86,13 +115,25 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 				skipped = true
 				t.Skipf("family %s: not implemented in Go yet", c.Family)
 			}
-			for _, line := range paritycorpus.Mismatches(s, c, c.Query.Wire, u, answer) {
+			lines := paritycorpus.Mismatches(s, c, c.Query.Wire, u, answer)
+			if isDivergent {
+				if len(lines) == 0 {
+					t.Errorf("listed as divergent (%s) but the Go decider now matches the oracle: take it off the list", reason)
+				}
+				for _, line := range lines {
+					t.Logf("divergent (%s): %s", reason, line)
+				}
+				return
+			}
+			for _, line := range lines {
 				t.Error(line)
 			}
 		})
 		switch {
 		case skipped:
 			counts[c.Family].notImplemented++
+		case ok && isDivergent:
+			counts[c.Family].divergent++
 		case ok:
 			counts[c.Family].passed++
 		default:
