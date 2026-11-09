@@ -142,8 +142,9 @@
 		const title = button.getAttribute('aria-label');
 		const modal = $('<div class="modal fade" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg pfb-pie-zoom-dialog" role="document"><div class="modal-content">'
 			+ '<div class="modal-header"><button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>'
-			+ '<h4 class="modal-title"></h4></div><div class="modal-body"><div class="pfb-pie-zoomed" id="' + data.id + '_zoom"></div></div></div></div></div>');
+			+ '<h4 class="modal-title"></h4></div><div class="modal-body"><div class="pfb-pie-zoomed"></div></div></div></div></div>');
 		modal.find('.modal-title').text(title);
+		modal.find('.pfb-pie-zoomed').attr('id', data.id + '_zoom');
 		let zoomed = null;
 		modal.on('shown.bs.modal', function () { zoomed = renderPie(data, data.id + '_zoom', {canvasHeight: 600, canvasWidth: 860, pieInnerRadius: 90}); });
 		modal.on('hidden.bs.modal', function () { if (zoomed) { zoomed.destroy(); } modal.remove(); button.focus(); });
