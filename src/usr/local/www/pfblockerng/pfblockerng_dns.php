@@ -22,6 +22,6 @@
 
 require_once('guiconfig.inc');
 
-// issue #3771: the pfB-DNS settings moved to DNS > General; this URL stays so old bookmarks, and the privilege match that authenticates it, keep working.
+// Old bookmarks and the privilege match that authenticates this URL keep working: the pfB-DNS settings are on DNS > General.
 header('Location: /pfblockerng/pfblockerng_dns_general.php');
 exit;

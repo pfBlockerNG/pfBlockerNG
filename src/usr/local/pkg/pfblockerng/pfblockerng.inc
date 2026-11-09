@@ -4890,7 +4890,7 @@ function pfb_dns_proxy_interface_options(): array {
 }
 
 /**
- * Save-time input errors of pfB-DNS's listener settings on its page. Every posted value was already sanitized at
+ * Save-time input errors of pfB-DNS's listener settings on DNS > General. Every posted value was already sanitized at
  * ingestion. A port is a whole number 1-65535, each of the four interface lists (DNS, DoT, DoH, DoQ) an array of at
  * least one entry of $valid_iface_list, a trusted entry an IP or CIDR prefix, the certificate one of $valid_cert_refs
  * (the refids the page's selector offers) and required once DoT, DoH or DoQ is on, the DNS Name empty or a valid name
