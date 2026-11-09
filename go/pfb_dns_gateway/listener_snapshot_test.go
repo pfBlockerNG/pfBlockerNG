@@ -260,9 +260,12 @@ func TestAnAddressTableLogLineCountsTheListenerInterfaces(t *testing.T) {
 	requireLogLine(t, n.r.logs.joined(), "address table: 1 name answers, 0 DoH 443 addresses, 2 listener interfaces")
 }
 
-// An entry that is not valid is no reason to refuse the flags: the gateway starts and skips it, as a push does.
+// An entry that is not valid is no reason to refuse the flags: the gateway starts and skips it, as a push does. A good one needs no
+// --dns-name either.
 func TestBadListenerInterfaceFlagsAreNotRefusedByParse(t *testing.T) {
-	for name, value := range badListenerInterfaces {
+	values := maps.Clone(badListenerInterfaces)
+	values["a good entry"] = listenerValue("127.0.0.1", "LAN")
+	for name, value := range values {
 		t.Run(name, func(t *testing.T) {
 			cfg, err := parse(t, "--listener-interface", value, "--", "decider")
 			if err != nil || !slices.Equal(cfg.listenerInterfaces, []string{value}) {
