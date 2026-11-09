@@ -1050,23 +1050,39 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		];
 	}
 
+	/**
+	 * A full update pass whose DNSBL IP action builds the two DNSBL IP aliases.
+	 *
+	 * @param array<string,bool> $state
+	 */
+	private function arrangeDnsblIpPass(array $state = []): void
+	{
+		$this->arrange(['save' => FALSE, 'demand' => FALSE] + $state);
+		PfbConfig::write('dnsbl/action', 'Deny_Both');
+		$this->publishTo(TRUE);
+	}
+
+	/** @return list<string> */
+	private function dnsblIpAliasNames(): array
+	{
+		return array_values(array_filter(
+			array_column(config_get_path('aliases/alias', []), 'name'),
+			static fn (string $name): bool => str_starts_with($name, 'pfB_DNSBLIP_')
+		));
+	}
+
 	/** @param array<string,bool> $state */
 	#[DataProvider('parentRows')]
 	public function testTheDnsblIpAliasesExistOnlyWhileDnsblRuns(array $state, bool $runs): void
 	{
 		// GIVEN a full update pass and a DNSBL IP action that builds the two DNSBL IP aliases
-		$this->arrange(['save' => FALSE, 'demand' => FALSE] + $state);
-		PfbConfig::write('dnsbl/action', 'Deny_Both');
-		$this->publishTo(TRUE);
+		$this->arrangeDnsblIpPass($state);
 
 		// WHEN the pass runs
 		$this->runPass();
 
 		// THEN the aliases exist exactly while DNSBL runs: DNSBL stored On with pfB-DNS Off builds none, as with the package off
-		$aliases = array_values(array_filter(
-			array_column(config_get_path('aliases/alias', []), 'name'),
-			static fn (string $name): bool => str_starts_with($name, 'pfB_DNSBLIP_')
-		));
+		$aliases = $this->dnsblIpAliasNames();
 		$this->assertSame($runs ? ['pfB_DNSBLIP_v4', 'pfB_DNSBLIP_v6'] : [], $aliases, 'the DNSBL IP aliases');
 	}
 
@@ -1075,9 +1091,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	public function testTheIpPassLoadsTheDnsblIpListOnlyWhileDnsblRuns(array $state, bool $runs): void
 	{
 		// GIVEN a full update pass, a DNSBL IP action, and no IP list of its own
-		$this->arrange(['save' => FALSE, 'demand' => FALSE] + $state);
-		PfbConfig::write('dnsbl/action', 'Deny_Both');
-		$this->publishTo(TRUE);
+		$this->arrangeDnsblIpPass($state);
 
 		// WHEN the pass runs
 		$this->runPass();
@@ -1089,22 +1103,16 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	public function testTurningPfbDnsOffRemovesTheDnsblIpAliasesTheLastPassBuilt(): void
 	{
 		// GIVEN pass 1, everything on: the aliases and their member files exist
-		$this->arrange(['save' => FALSE, 'demand' => FALSE]);
-		PfbConfig::write('dnsbl/action', 'Deny_Both');
-		$this->publishTo(TRUE);
+		$this->arrangeDnsblIpPass();
 		$this->runPass();
-		$aliases = static fn (): array => array_values(array_filter(
-			array_column(config_get_path('aliases/alias', []), 'name'),
-			static fn (string $name): bool => str_starts_with($name, 'pfB_DNSBLIP_')
-		));
-		$this->assertSame(['pfB_DNSBLIP_v4', 'pfB_DNSBLIP_v6'], $aliases(), 'before: pass 1 built the aliases');
+		$this->assertSame(['pfB_DNSBLIP_v4', 'pfB_DNSBLIP_v6'], $this->dnsblIpAliasNames(), 'before: pass 1 built the aliases');
 
 		// WHEN pfB-DNS is turned off and pass 2 runs
 		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
 		$this->runPass();
 
 		// THEN the aliases are gone with it, as with DNSBL not running from the start
-		$this->assertSame([], $aliases(), 'the DNSBL IP aliases after pass 2');
+		$this->assertSame([], $this->dnsblIpAliasNames(), 'the DNSBL IP aliases after pass 2');
 	}
 
 	/** @param array<string,bool> $state */
@@ -1144,6 +1152,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	{
 		// GIVEN a group answering with the VIP, web server ports and an allowed interface
 		$this->arrange(['demand' => TRUE] + $state);
+		$this->publishTo(TRUE);
 
 		// WHEN the apply pass runs
 		$this->runPass();
