@@ -92,7 +92,8 @@ func invalidSubpartLen(data []byte) int {
 	return n
 }
 
-// pyOSError is str(OSError): "[Errno 2] No such file or directory: 'path'".
+// pyOSError is str(OSError): "[Errno 2] No such file or directory: 'path'". An empty filename is an OSError that carries
+// none, as the ones raised by read(2) do: "[Errno 5] Input/output error".
 // shortcut: the text is Go's errno table with its first letter capitalised, which is libc's strerror for the errnos a
 // path can raise; it only shapes the logged and ledger message.
 func pyOSError(err error, filename string) string {
@@ -103,6 +104,9 @@ func pyOSError(err error, filename string) string {
 	text := errno.Error()
 	if text != "" {
 		text = strings.ToUpper(text[:1]) + text[1:]
+	}
+	if filename == "" {
+		return fmt.Sprintf("[Errno %d] %s", int(errno), text)
 	}
 	return fmt.Sprintf("[Errno %d] %s: %s", int(errno), text, pysem.Repr(filename))
 }
@@ -1004,6 +1008,22 @@ func dnsblValidateManifestRaws(manifest any, baseDir string) error {
 	return nil
 }
 
+// feedFile is what dnsblFileLineReader needs of an open feed.
+type feedFile interface {
+	io.ReadCloser
+	Stat() (os.FileInfo, error)
+}
+
+// openFeedFile opens one feed. It is a variable so a test can make the open or a read fail after the manifest
+// validated, which cannot be staged on disk (root reads anything, and validation refuses a missing file).
+var openFeedFile = func(path string) (feedFile, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
 // dnsblFileLineReader is a file-backed lineReader for build(): it maps a feed row's raw reference to its raw lines,
 // streamed lazily so peak RAM stays at the dict floor. raw may be an absolute path or a name relative to baseDir (the
 // directory holding the manifest). LF is the only record delimiter and actual CR characters are removed from yielded
@@ -1026,7 +1046,7 @@ func dnsblFileLineReader(baseDir string, failClosed bool) lineReader {
 				fail(fmt.Sprintf("Refusing DNSBL feed outside base dir: '%s'", path))
 				return
 			}
-			fh, err := os.Open(path)
+			fh, err := openFeedFile(path)
 			if err == nil {
 				if info, statErr := fh.Stat(); statErr == nil && info.IsDir() {
 					fh.Close()
@@ -1059,7 +1079,7 @@ func dnsblFileLineReader(baseDir string, failClosed bool) lineReader {
 					if errors.As(readErr, &pathErr) {
 						readErr = pathErr.Err
 					}
-					fail(fmt.Sprintf("Failed while reading DNSBL feed '%s': %s", path, pyOSError(readErr, path)))
+					fail(fmt.Sprintf("Failed while reading DNSBL feed '%s': %s", path, pyOSError(readErr, "")))
 					return
 				}
 			}
