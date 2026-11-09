@@ -316,8 +316,6 @@ $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
 $pfb['unbound_py_psl']	= '/var/unbound/dnsbl_psl';	// SHIPPED PSL authority, staged/fingerprinted exactly like unbound_py_hsts above
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
-$pfb['unbound_py_module_src']= array('/usr/local/pkg/pfblockerng/pfb_unbound.py', '/usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py');	// issue #3125: SHIPPED code pair, in this order -- see pfb_unbound_py_module_fingerprint()
-$pfb['unbound_py_module_applied']= '/var/unbound/pfb_py_module.applied';	// issue #3125: python-written fingerprint of the staged pair at init
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted admitted feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
@@ -13794,14 +13792,12 @@ function pfb_unbound_dnsbl($mode) {
 	$pfbupdate = FALSE;
 	$log = '';
 
-	// issue #3515: Unbound loads the DNSBL module unless the DNS proxy owns the Resolver (a valid snapshot, or our block with
-	// none), and that is the EFFECTIVE takeover, never the requested toggle: a takeover that did not happen (move refused,
-	// config locked) leaves the module where it was. pfb_unbound_python() decides the same way. While the proxy owns the
-	// Resolver, Unbound is given its upstream observer in every mode (inert unless the proxy listens for it; it is what makes
-	// pfSense run the boot hook), else nothing.
+	// issue #3515: pfB-DNS asks for the Resolver whenever it is wanted. issue #3770: Unbound never loads the DNSBL module (the DNS
+	// proxy hosts it); only while the proxy owns the Resolver (a valid snapshot, or our block with none) is Unbound given the
+	// upstream observer, in every mode (inert unless the proxy listens for it; it is what makes pfSense run the boot hook), else
+	// nothing. pfb_unbound_python() decides the same way.
 	$owned = pfb_dns_proxy_owns_resolver();
-	$module = $mode == 'enabled' && !$owned;
-	$script = $module ? 'pfb_unbound.py' : ($owned ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL);
+	$script = $owned ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL;
 	// config.xml still names our script when its removal was refused (pfb_unbound_python()): unbound.conf and the staged files keep it
 	$stored = config_get_path('unbound/python_script', '');
 	if ($script === NULL && !empty($pfb['python_removal_failed']) && in_array($stored, ['pfb_unbound', PFB_DNS_PROXY_OBSERVER], TRUE)) {
@@ -17538,9 +17534,10 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	$pfb['python_removal_failed'] = FALSE;
 
 	// issue #3515: pfB-DNS asks for the Resolver whenever it is wanted, DNSBL on or off ($mode only says whether DNSBL is).
-	// Unbound loads the DNSBL module only while nothing owns the Resolver (a valid snapshot, or our block with none); while the
-	// proxy owns it, Unbound runs the observer in every mode: inert unless the proxy hosts the module and the Resolver forwards,
-	// and the one script that makes pfSense run the boot hook (pfb_upstream_observer_include.inc) which starts pfB-DNS early.
+	// issue #3770: Unbound never loads the DNSBL module (the proxy hosts it). While the proxy owns the Resolver (a valid snapshot,
+	// or our block with none) Unbound runs the observer in every mode: inert unless the proxy hosts the module and the Resolver
+	// forwards, and the one script that makes pfSense run the boot hook (pfb_upstream_observer_include.inc) which starts pfB-DNS
+	// early. Without that ownership Unbound runs no pfBlockerNG python at all, and a stored 'pfb_unbound' is removed below.
 	// A Resolver disabled under pfB-DNS is stood down first (pfb_dns_proxy_stand_down()); an unsafe Custom Options line or Listen
 	// Port set after the move is rolled back like a failed activation, which regenerates unbound.conf and restarts Unbound itself.
 	$unsafe_line = NULL;
@@ -17561,8 +17558,6 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 		$moved = FALSE;
 	}
 	$owned = pfb_dns_proxy_owns_resolver();
-	$module = $mode == 'enabled' && !$owned;
-	$observer = $owned;
 
 	// Ensure log file permissions are set as 'unbound:unbound' (unified.log excluded:
 	// the host daemon is now its sole writer, as root — ADR-38 Amendment 1).
@@ -17576,8 +17571,8 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 		@chgrp("{$pfb['logdir']}/{$logfile}", 'unbound');
 	}
 
-	// Add python settings to DNS Resolver configuration: the DNSBL module, or the proxy mode's upstream observer
-	$script = $module ? 'pfb_unbound' : ($observer ? PFB_DNS_PROXY_OBSERVER : NULL);
+	// Add the proxy mode's upstream observer to the DNS Resolver configuration
+	$script = $owned ? PFB_DNS_PROXY_OBSERVER : NULL;
 	if ($script !== NULL) {
 		if (!config_path_enabled('unbound', 'python') ||
 		    config_get_path('unbound/python_script') != $script) {
@@ -17587,13 +17582,13 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 			config_set_path('unbound/python_script', $script);
 
 			$pfbpython = TRUE;
-			$log = $module ? 'Added DNSBL Unbound python integration settings' : 'Added DNSBL Unbound upstream observer settings';
+			$log = 'Added DNSBL Unbound upstream observer settings';
 			pfb_logger("\n{$log}", 1);
 			write_config("pfBlockerNG: {$log}");
 		}
 	}
 
-	// Remove python settings from DNS Resolver configuration (only ours: the module or the observer)
+	// Remove python settings from DNS Resolver configuration (only ours: the observer, or the module an upgraded box still stores)
 	elseif (config_path_enabled('unbound', 'python') &&
 	    in_array(config_get_path('unbound/python_script'), ['pfb_unbound', PFB_DNS_PROXY_OBSERVER], TRUE)) {
 		config_del_path('unbound/python');
@@ -17610,7 +17605,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	}
 
 	if ($mode == 'enabled') {
-		// If DNSBL python blocking mode enabled (the DNS proxy loads the module from these inputs too)
+		// DNSBL on: the inputs the DNS proxy's decider loads the module from
 
 		// Create DNSBL Whitelist
 		$dnsbl_whitelist = pfb_unbound_python_whitelist();
@@ -17640,17 +17635,6 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 			$pfbpython = TRUE;
 			@file_put_contents($pfb['unbound_py_conf'], $pfb_py_conf, LOCK_EX);
 		}
-
-		// issue #3125: a package upgrade re-stages the shipped python modules; signal a
-		// restart when the applied fingerprint (written by the module at init) differs --
-		// absent/stale/junk marker = drift, unreadable shipped file = no signal. Only while Unbound hosts the module:
-		// the proxy's decider record (pfb_dns_proxy_decider_changed()) judges its code, so one restart is not asked twice.
-		$pfb_py_module_fp = pfb_unbound_py_module_fingerprint($pfb['unbound_py_module_src']);
-		if ($module && $pfb_py_module_fp !== FALSE &&
-			trim((string) @file_get_contents($pfb['unbound_py_module_applied'])) !== $pfb_py_module_fp) {
-			$pfbpython = TRUE;
-			pfb_logger("\nDNSBL Unbound python module changed -- Resolver restart required", 1);
-		}
 	}
 
 	else {
@@ -17664,7 +17648,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	foreach (array('/bin', '/lib') as $dir) {
 		$validate = exec("/sbin/mount | {$pfb['grep']} " . escapeshellarg("{$pfb['dnsbldir']}{$base_py}{$dir}") . " 2>&1");
 
-		if (($module || $observer) && empty($validate)) {
+		if ($owned && empty($validate)) {
 			if (!is_dir("{$pfb['dnsbldir']}{$base_py}{$dir}")) {
 				$log .= "\n  Creating: {$pfb['dnsbldir']}{$base_py}{$dir}";
 				safe_mkdir("{$pfb['dnsbldir']}{$base_py}{$dir}");
@@ -17684,7 +17668,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	}
 
 	// The Resolver move/restore changed what unbound.conf is generated from: regenerate it now that the
-	// python keys are final and the module's mounts exist.
+	// python keys are final and the observer's mounts exist.
 	if ($moved) {
 		// A proxy that now owns the Resolver: its rc script names the snapshot before pfSense's boot hook runs it, and the
 		// observer the hook loads is staged before pfSense regenerates Unbound with it
@@ -17698,7 +17682,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 	// Set flag to unmount python folders after the next reboot is completed to avoid crashing Unbound (the observer,
 	// while pfB-DNS fronts the Resolver, still runs in it)
-	if ($mode == 'disabled' && !$observer && empty($pfb['python_removal_failed'])) {
+	if ($mode == 'disabled' && !$owned && empty($pfb['python_removal_failed'])) {
 		$pfb['dnsbl_python_unmount'] = TRUE;
 	}
 	return $pfbpython;

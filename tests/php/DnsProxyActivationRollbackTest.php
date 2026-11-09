@@ -103,8 +103,6 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			'unbound_py_conf' => "{$this->tmp}/pfb_unbound.ini", 'unbound_py_wh' => "{$this->tmp}/pfb_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmp}/pfb_sources.json", 'unbound_py_count' => "{$this->tmp}/pfb_py_count",
 			'unbound_py_rawdir' => "{$this->tmp}/pfb_py_raw", 'unbound_py_reject_stats' => "{$this->tmp}/pfb_py_reject_stats.json",
-			'unbound_py_module_src' => ["{$this->tmp}/absent_a.py", "{$this->tmp}/absent_b.py"],
-			'unbound_py_module_applied' => "{$this->tmp}/pfb_py_module.applied",
 			'chroot_cmd' => '/bin/echo', 'php' => PHP_BINARY,
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'keep' => PfbToggle::On,
@@ -255,8 +253,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	/**
 	 * The box as a first activation leaves it just before the proxy has to answer: pfBlockerNG on, DNSBL on or off, pfB-DNS
-	 * on, the Resolver moved aside by the real pass (so the snapshot is the one the real writer made), the DNSBL module
-	 * loaded by Unbound before that when DNSBL is on.
+	 * on, the Resolver moved aside by the real pass (so the snapshot is the one the real writer made); with DNSBL on, Unbound
+	 * stored the legacy DNSBL module keys before that, as an upgraded box does (the pass takes them out).
 	 */
 	private function activate(bool $dnsbl): void
 	{
@@ -336,7 +334,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	// A -- a proxy that never becomes ready is rolled back to the old integration
 	// -----------------------------------------------------------------------
 
-	public function testAProxyThatNeverServesTurnsPfbDnsOffAndPutsTheDnsblModuleBackIntoUnbound(): void
+	public function testAProxyThatNeverServesTurnsPfbDnsOffAndRestoresTheResolverWithNoPythonScriptInUnbound(): void
 	{
 		// Given a first activation with DNSBL on: the Resolver is moved, and the proxy lives but never publishes its marker
 		$this->activate(TRUE);
@@ -355,19 +353,18 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// ... the Resolver has exactly its saved settings back ...
 		$this->assertResolverIsTheOriginal('rolled back');
 
-		// ... the DNSBL module is back in Unbound, which is regenerated from the restored settings and restarted ...
-		$this->assertTrue(config_path_enabled('unbound', 'python'));
-		$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'));
-		$this->assertSame('pre_validator', config_get_path('unbound/python_order'));
+		// ... Unbound runs no python script at all (it never loads the DNSBL module), is regenerated from the restored settings and restarted ...
+		$this->assertFalse(config_path_enabled('unbound', 'python'));
+		$this->assertSame('', (string) config_get_path('unbound/python_script', ''));
 		$seen = $GLOBALS['pfb_test_unbound_configure_resolver'];
 		$this->assertNotEmpty($seen, 'unbound.conf was regenerated');
 		$last = end($seen);
 		$this->assertSame('lan,opt1', $last['active_interface'], 'rendered from the restored Resolver');
-		$this->assertSame('pfb_unbound', $last['python_script'], 'with the module loaded by Unbound again');
+		$this->assertSame('', (string) ($last['python_script'] ?? ''), 'with no python script rendered');
 		$this->assertSame($before + 1, $this->startAttempts(), 'and Unbound was started once with it');
 		$conf = (string) file_get_contents("{$this->tmp}/unbound.conf");
-		$this->assertStringContainsString('python-script: pfb_unbound.py', $conf, 'the file Unbound starts from names the DNSBL module again');
-		$this->assertStringNotContainsString('pfb_upstream_observer', $conf, 'and no longer the observer');
+		$this->assertStringNotContainsString('python-script', $conf, 'the file Unbound starts from names no python script');
+		$this->assertStringContainsString('module-config: "validator iterator"', $conf);
 
 		// ... the proxy was started once, then stopped, and never restarted or started again ...
 		$this->assertSame(['start_service', 'rc stop'], $this->proxyCalls);
@@ -440,7 +437,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertFalse(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'the failed activation leaves no live supervisor');
 		$this->assertFileDoesNotExist($this->proxyPidfile(), 'the gateway child pidfile is removed');
 		$this->assertFileDoesNotExist($this->proxyMarker(), 'the stopped gateway leaves no ready marker');
-		$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'), 'DNSBL is back in the original Resolver');
+		$this->assertSame('', (string) config_get_path('unbound/python_script', ''), 'Unbound runs no python script in the original Resolver');
 		$this->assertStringContainsString('DNS Resolver was restored', implode("\n", array_column($this->notices(), 'notice')));
 		$this->assertStringContainsString('did not become ready', $this->pfbLog());
 	}
@@ -485,7 +482,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Then the activation is rolled back, as above ...
 		$this->assertSame('', $this->toggleStored());
 		$this->assertResolverIsTheOriginal('rolled back');
-		$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'));
+		$this->assertSame('', (string) config_get_path('unbound/python_script', ''));
 
 		// ... the proxy was restarted once and stopped once: the rollback's own Resolver restart does not restart the proxy ...
 		$this->assertSame(['restart_service', 'rc stop'], $this->proxyCalls);
@@ -1045,9 +1042,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame(['do-ip6: no', 'prefetch: yes', 'server:', $line], $this->customLines(), "the admin's line is kept, in their own text");
 		$this->assertStringNotContainsString('pfBlockerNG DNS proxy', $this->customText(), 'our block is gone');
 
-		// ... the proxy was stopped once, the DNSBL module is back in Unbound, which was regenerated and restarted once ...
+		// ... the proxy was stopped once, Unbound runs no python script, and was regenerated and restarted once ...
 		$this->assertSame(['rc stop'], $this->proxyCalls);
-		$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'));
+		$this->assertSame('', (string) config_get_path('unbound/python_script', ''));
 		$last = end($GLOBALS['pfb_test_unbound_configure_resolver']);
 		$this->assertSame('lan,opt1', $last['active_interface'], 'unbound.conf is rendered from the restored Resolver');
 		$this->assertSame($before + 1, $this->startAttempts(), 'Unbound was started once with it');
@@ -1201,13 +1198,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		unset($unbound['python'], $unbound['python_order'], $unbound['python_script']);
 		$this->assertSame(self::sorted($expected), self::sorted($unbound), 'the saved keys are back and the Listen Port stays as the admin set it');
 
-		// And DNSBL is back in the Resolver only when it is on; Unbound was regenerated and started once, and no regenerated
+		// And Unbound runs no python script, with DNSBL on or off; it was regenerated and started once, and no regenerated
 		// config carries the proxy's clause or the proxy's rc script is written again
-		if ($dnsbl) {
-			$this->assertSame('pfb_unbound', config_get_path('unbound/python_script'));
-		} else {
-			$this->assertFalse(config_path_enabled('unbound', 'python'));
-		}
+		$this->assertFalse(config_path_enabled('unbound', 'python'));
 		$this->assertSame($before + 1, $this->startAttempts(), 'Unbound was started once');
 		$this->assertNotEmpty($GLOBALS['pfb_test_unbound_configure_resolver']);
 		foreach ($GLOBALS['pfb_test_unbound_configure_resolver'] as $rendered) {

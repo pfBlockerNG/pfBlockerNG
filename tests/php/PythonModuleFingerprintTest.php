@@ -2,18 +2,12 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3125 -- the DNSBL module fingerprint drives a Resolver restart signal.
- *
- * pfb_unbound_py_module_fingerprint() digests the SHIPPED python module pair
- * (md5 concat, pfb_unbound.py first, no separator); pfb_unbound_python('enabled')
- * signals a restart whenever the applied marker (pfb_py_module.applied, written by
- * the python module at init) trims to anything else -- and stays silent when the
- * marker matches. The PARITY_FP literal is pinned identically in
- * tests/test_module_fingerprint.py; a digest-recipe change in either language
+ * issue #3125 -- the python code fingerprint: pfb_unbound_py_module_fingerprint() digests the shipped module pair (md5
+ * concat, pfb_unbound.py first, no separator), which the DNS proxy's decider record compares (pfb_dns_proxy_decider_changed()).
+ * The PARITY_FP literal is pinned identically in tests/test_module_fingerprint.py; a digest-recipe change in either language
  * fails one of the two pins.
  */
 final class PythonModuleFingerprintTest extends TestCase
@@ -24,111 +18,32 @@ final class PythonModuleFingerprintTest extends TestCase
 		. 'd41d8cd98f00b204e9800998ecf8427e';
 
 	private string $tmp;
-	private bool $hadPfb = FALSE;
-	private bool $hadConfig = FALSE;
-	private bool $hadG = FALSE;
-	private array $originalPfb = [];
-	private array $originalConfig = [];
-	private array $originalG = [];
+	/** @var list<string> the module pair, in the digest's order */
+	private array $pair = [];
 
 	protected function setUp(): void
 	{
-		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
-		$this->hadConfig = array_key_exists('config', $GLOBALS);
-		$this->hadG = array_key_exists('g', $GLOBALS);
-		$this->originalPfb = $GLOBALS['pfb'] ?? [];
-		$this->originalConfig = $GLOBALS['config'] ?? [];
-		$this->originalG = $GLOBALS['g'] ?? [];
-		$GLOBALS['config'] = [];
-		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		$this->tmp = sys_get_temp_dir() . '/pfb_py_module_' . uniqid('', TRUE);
 		mkdir($this->tmp, 0777, TRUE);
-		$GLOBALS['pfb'] = array_merge($this->originalPfb, [
-			'logdir'          => $this->tmp,
-			'log'             => "{$this->tmp}/pfb.log",
-			'errlog'          => "{$this->tmp}/pfb.err",
-			'dnsbldir'        => $this->tmp,
-			'unbound_py_conf' => "{$this->tmp}/pfb_unbound.ini",
-			'unbound_py_wh'   => "{$this->tmp}/pfb_whitelist.txt",
-			'unbound_py_sources' => "{$this->tmp}/pfb_sources.json",
-			'unbound_py_module_src' => [
-				"{$this->tmp}/pfb_unbound.py",
-				"{$this->tmp}/pfb_dnsbl_regex_rules.py",
-			],
-			'unbound_py_module_applied' => "{$this->tmp}/pfb_py_module.applied",
-		]);
-		// The mount validate in pfb_unbound_python() is appliance runtime (nullfs);
-		// this double answers "already mounted" so the return value reflects ONLY the
-		// ini/whitelist/module compares, exactly the steady state these rows assume.
-		file_put_contents("{$this->tmp}/mounted_grep", "#!/bin/sh\nprintf '%s\\n' mounted\n");
-		chmod("{$this->tmp}/mounted_grep", 0755);
-		$GLOBALS['pfb']['grep'] = "{$this->tmp}/mounted_grep";
-		$this->seedConfig();
+		$this->pair = ["{$this->tmp}/pfb_unbound.py", "{$this->tmp}/pfb_dnsbl_regex_rules.py"];
 	}
 
 	protected function tearDown(): void
 	{
-		if ($this->hadPfb) {
-			$GLOBALS['pfb'] = $this->originalPfb;
-		} else {
-			unset($GLOBALS['pfb']);
-		}
-		if ($this->hadConfig) {
-			$GLOBALS['config'] = $this->originalConfig;
-		} else {
-			unset($GLOBALS['config']);
-		}
-		if ($this->hadG) {
-			$GLOBALS['g'] = $this->originalG;
-		} else {
-			unset($GLOBALS['g']);
-		}
 		rmdir_recursive($this->tmp);
-	}
-
-	private function seedConfig(): void
-	{
-		$gen = 'installedpackages/pfblockerng/config/0';
-		$ip = 'installedpackages/pfblockerngipsettings/config/0';
-		$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
-		PfbConfig::writeSectionSystem($gen, ['pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'skipfeed' => '0']);
-		PfbConfig::writeSectionSystem($ip, [
-			'suppression' => '', 'database_cc' => '', 'asn_token' => '', 'maxmind_account' => '',
-			'maxmind_key' => '', 'maxmind_locale' => 'en', 'asn_reporting' => 'disabled',
-		]);
-		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
-		PfbConfig::writeSectionSystem($dnsbl, [
-			'pfb_dnsvip4' => '', 'pfb_dnsvip6' => '', 'pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443',
-			'top1m_enable' => '', 'pfb_py_reply' => '', 'pfb_regex' => '', 'pfb_regex_list' => '',
-			'pfb_cname' => '', 'tld_allow' => '', 'tld_wildcard' => '',
-			'pfb_gp' => '', 'pfb_gp_bypass_list' => '', 'whitelist' => '', 'pfb_py_nolog' => '', 'pfb_noaaaa' => '', 'pfb_noaaaa_list' => '',
-			'pfb_dnsbl' => '', 'pfb_dnsvip_auto' => '', 'dnsbl_interface' => 'lo0',
-		]);
-		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
-		$GLOBALS['pfb']['dnsbl_control'] = PfbToggle::Off;
-		$GLOBALS['pfb']['dnsbl_control_legacy'] = PfbToggle::Off;
 	}
 
 	private function shipFiles(string $a = 'a', string $b = 'b'): void
 	{
-		file_put_contents($GLOBALS['pfb']['unbound_py_module_src'][0], $a);
-		file_put_contents($GLOBALS['pfb']['unbound_py_module_src'][1], $b);
+		file_put_contents($this->pair[0], $a);
+		file_put_contents($this->pair[1], $b);
 	}
-
-	private function markerPath(): string
-	{
-		return $GLOBALS['pfb']['unbound_py_module_applied'];
-	}
-
-	// -----------------------------------------------------------------------
-	// pfb_unbound_py_module_fingerprint() -- direct contract
-	// -----------------------------------------------------------------------
 
 	public function testFingerprintTwoFilesMatchesParityLiteral(): void
 	{
 		// for file bytes "a" and "b" the digest is the cross-language constant.
 		$this->shipFiles();
-		$this->assertSame(self::PARITY_FP, pfb_unbound_py_module_fingerprint($GLOBALS['pfb']['unbound_py_module_src']));
+		$this->assertSame(self::PARITY_FP, pfb_unbound_py_module_fingerprint($this->pair));
 	}
 
 	public function testFingerprintUnreadableOrMissingPathIsFalse(): void
@@ -138,7 +53,7 @@ final class PythonModuleFingerprintTest extends TestCase
 		// shape runs under every uid; the chmod'd shape only when permissions bite.
 		$this->shipFiles();
 		$missing = "{$this->tmp}/absent.py";
-		$this->assertFalse(pfb_unbound_py_module_fingerprint([$missing, $GLOBALS['pfb']['unbound_py_module_src'][1]]));
+		$this->assertFalse(pfb_unbound_py_module_fingerprint([$missing, $this->pair[1]]));
 
 		if (function_exists('posix_getuid') && posix_getuid() === 0) {
 			return;
@@ -147,109 +62,10 @@ final class PythonModuleFingerprintTest extends TestCase
 		file_put_contents($locked, 'secret');
 		chmod($locked, 0000);
 		try {
-			$this->assertFalse(pfb_unbound_py_module_fingerprint([$locked, $GLOBALS['pfb']['unbound_py_module_src'][1]]));
+			$this->assertFalse(pfb_unbound_py_module_fingerprint([$locked, $this->pair[1]]));
 		} finally {
 			chmod($locked, 0644);
 		}
-	}
-
-	// -----------------------------------------------------------------------
-	// pfb_unbound_python('enabled') -- the restart signal
-	// -----------------------------------------------------------------------
-
-	public function testMarkerAbsentSignalsRestartAndLogs(): void
-	{
-		// absent marker (fresh stage the running module never recorded) = drift.
-		$this->shipFiles();
-		$this->assertTrue(pfb_unbound_python('enabled'));
-		$log = (string) file_get_contents($GLOBALS['pfb']['log']);
-		$this->assertStringContainsString('DNSBL Unbound python module changed -- Resolver restart required', $log);
-	}
-
-	public function testMarkerMatchingFingerprintConvergesToFalse(): void
-	{
-		// call 1 writes the ini + whitelist (returns TRUE, before-state); with the
-		// marker already equal, call 2 has NOTHING left to signal -> FALSE.
-		$this->shipFiles();
-		file_put_contents($this->markerPath(), self::PARITY_FP . "\n");
-		$this->assertTrue(pfb_unbound_python('enabled'), 'first call must write ini + whitelist (before-state)');
-		$this->assertFalse(pfb_unbound_python('enabled'));
-	}
-
-	public function testMarkerHoldingDifferentFingerprintKeepsSignaling(): void
-	{
-		// a stale-but-wellformed marker (module changed since) = drift, again.
-		$this->shipFiles();
-		file_put_contents($this->markerPath(), str_repeat('f', 64) . "\n");
-		$this->assertTrue(pfb_unbound_python('enabled'));
-		$this->assertTrue(pfb_unbound_python('enabled'));
-	}
-
-	#[TestWith([TRUE])]
-	#[TestWith([FALSE])]
-	public function testProxyHostedModuleDriftIsTheDecidersRecordsToJudgeNotTheResolversRestartSignal(bool $dnsbl): void
-	{
-		// A fronted Resolver never hosts the DNSBL module, whether DNSBL is on or off.
-		$this->shipFiles();
-		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', 'on');
-		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns', 'on');
-		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', $dnsbl ? PfbToggle::On : PfbToggle::Off);
-		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
-		$GLOBALS['config']['unbound'] = ['enable' => 'on', 'port' => '53', 'active_interface' => 'lan'];
-		$keys = ['active_interface' => ['present' => TRUE, 'value' => 'lan'], 'enablessl' => ['present' => FALSE, 'value' => NULL], 'custom_options' => ['present' => FALSE, 'value' => NULL]];
-		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode($keys)));
-		$this->assertFileDoesNotExist($this->markerPath(), 'before: the module has no applied record');
-		$this->assertTrue(pfb_unbound_python('enabled', TRUE), 'before: the first call writes the ini and the observer settings');
-		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the proxy still owns the Resolver');
-		$this->assertSame($dnsbl, pfb_dns_proxy_hosts_module(), 'before: DNSBL decides whether the proxy hosts the module');
-		@unlink($GLOBALS['pfb']['log']);
-
-		// When the pass runs again with nothing else to apply
-		$signal = pfb_unbound_python('enabled', TRUE);
-
-		// Then the module's drift does not ask for a Resolver restart, which would also restart the proxy (the decider's own
-		// record decides that, per side)
-		$this->assertFalse($signal);
-		$this->assertStringNotContainsString('Resolver restart required', (string) @file_get_contents($GLOBALS['pfb']['log']));
-	}
-
-	public function testUnreadableShippedFileSuppressesSignal(): void
-	{
-		// fingerprint FALSE = nothing to compare -> NO signal (second call FALSE),
-		// even though the marker is absent. False alarm beats restart, never the reverse.
-		$this->shipFiles();
-		$GLOBALS['pfb']['unbound_py_module_src'][0] = "{$this->tmp}/absent.py";
-		$this->assertTrue(pfb_unbound_python('enabled'), 'first call still writes ini + whitelist (before-state)');
-		$this->assertFalse(pfb_unbound_python('enabled'));
-	}
-
-	public function testDisabledModeNeverSignals(): void
-	{
-		// the module compare lives ONLY in the enabled branch.
-		$this->shipFiles();
-		$this->assertFalse(pfb_unbound_python('disabled'));
-	}
-
-	public function testMarkerSurroundingWhitespaceStillMatches(): void
-	{
-		// the marker is read trim()'d -- the writer's trailing newline (plus any
-		// stray padding) must not fake a drift.
-		$this->shipFiles();
-		file_put_contents($this->markerPath(), '  ' . self::PARITY_FP . "  \n");
-		$this->assertTrue(pfb_unbound_python('enabled'), 'first call writes ini + whitelist (before-state)');
-		$this->assertFalse(pfb_unbound_python('enabled'));
-	}
-
-	public function testMarkerJunkIsDifferentNeverCrashes(): void
-	{
-		// Hostile: a junk marker -- 64 non-hex chars, or 10 MB of it --
-		// is just "different" (restart signal); never parsed as anything else.
-		$this->shipFiles();
-		file_put_contents($this->markerPath(), str_repeat('z', 64));
-		$this->assertTrue(pfb_unbound_python('enabled'));
-
-		file_put_contents($this->markerPath(), str_repeat('x', 10 * 1024 * 1024));
-		$this->assertTrue(pfb_unbound_python('enabled'));
 	}
 
 	public function testEmptiedShippedFilesStillFingerprintAsString(): void
@@ -257,6 +73,6 @@ final class PythonModuleFingerprintTest extends TestCase
 		// Hostile: emptied shipped files fingerprint to the md5-of-empty
 		// pair -- still a string, still compares normally, no special case.
 		$this->shipFiles('', '');
-		$this->assertSame(self::EMPTY_FP, pfb_unbound_py_module_fingerprint($GLOBALS['pfb']['unbound_py_module_src']));
+		$this->assertSame(self::EMPTY_FP, pfb_unbound_py_module_fingerprint($this->pair));
 	}
 }

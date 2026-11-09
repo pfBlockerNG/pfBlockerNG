@@ -172,8 +172,10 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			touch($GLOBALS['pfb']['dnsbl_cert']);
 		}
 
-		// The module is wired into the resolver; whether the resolver is up decides if a finished reload converged.
-		file_put_contents("{$dir}/unbound.conf", "python-script: pfb_unbound.py\n");
+		// Unbound never loads pfb_unbound.py (issue #3770), so the conf carries no python-script line for pfb_unbound_dnsbl() to
+		// strip on every pass; pfb_unbound_py_module_wired() still reads the module's name from this file until the host predicates
+		// follow the DNS proxy (the comment line is what it finds). Whether the resolver is up decides if a finished reload converged.
+		file_put_contents("{$dir}/unbound.conf", "# pfb_unbound.py\n");
 		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess($o['up']);
 	}
 
@@ -731,6 +733,11 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	{
 		// GIVEN the same serving web server, but a resolver that is not running after the reload (not converged)
 		$this->arrange(['served' => TRUE, 'demand' => FALSE, 'up' => FALSE]);
+		// AND an upgraded box: Unbound still loads the module an older version gave it, which the pass takes out and so reloads the resolver
+		config_set_path('unbound/python', '');
+		config_set_path('unbound/python_order', 'pre_validator');
+		config_set_path('unbound/python_script', 'pfb_unbound');
+		file_put_contents("{$this->dir}/unbound.conf", "server:\n\tmodule-config: \"python validator iterator\"\n\npython:\npython-script: pfb_unbound.py\n");
 		$this->assertServedStateIntact();
 
 		// WHEN the apply pass runs

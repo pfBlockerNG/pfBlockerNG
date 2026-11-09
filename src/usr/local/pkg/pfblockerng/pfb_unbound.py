@@ -651,8 +651,8 @@ def _reload_write_applied(gen: int) -> None:
             pass
 
 
-# issue #3125: the in-process code pair, in the order PHP's $pfb['unbound_py_module_src']
-# hashes it -- the marker below must digest the same files in the same order.
+# issue #3125: the in-process code pair, in the order PHP's pfb_unbound_py_module_fingerprint() hashes it
+# (the decider record's last two files) -- the marker below must digest the same files in the same order.
 PFB_MODULE_CODE_FILES = ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py")
 
 
