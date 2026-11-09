@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "feed /re/ lines the admission gate refuses never block, even though Python re would match them; admitted twins and a control block",
+  "description": "feed /re/ lines the admission gate refuses never block: one row per refusal reason, the name each would match resolves, and admitted twins at the depth, width and length boundaries block",
   "module": {
     "ini": {
       "MAIN": {
@@ -24,7 +24,41 @@
         "/^r16x\\x41\\.example$/",
         "/^r16q(a|b)+\\.example$/",
         "/r16c.*a.*b/",
-        "/^r16d.*a.*b/"
+        "/^r16d.*a.*b/",
+        "/^r-rr[z-a]\\.example$/",
+        "/^r-nc[[a]\\.example$/",
+        "/^r-so[+--]\\.example$/",
+        "/^r-sa[a&&b]\\.example$/",
+        "/^r-st[a~~b]\\.example$/",
+        "/^r-sp[a||b]\\.example$/",
+        "/^r-rb[0-9]{0,256}\\.example$/",
+        "/^((((((((a))))))))\\.r-d8\\.example$/",
+        "/^(((((((((a)))))))))\\.r-d9\\.example$/",
+        "/^r-w4[a-z][a-z][a-z][a-z]\\.example$/",
+        "/^r-w5[a-z][a-z][a-z][a-z][a-z]\\.example$/",
+        "/^*r-mq\\.example$/",
+        "/^r-pq[0-9]++\\.example$/",
+        "/^r-uo(a\\.example$/",
+        "/^r-uc)a\\.example$/",
+        "/^r-ue]x\\.example$/",
+        "/^r-uf}x\\.example$/",
+        "/^r-ec[]x]\\.example$/",
+        "/^r-cr[\\d-z]\\.example$/",
+        "/^r-tw\\.example$\\/",
+        "/^r-uk[abc\\.example$/",
+        "/^r-ir{x}\\.example$/",
+        "/^r-ic[0-9]{,2}\\.example$/",
+        "/^r-io[0-9]{2\\.example$/",
+        "/(?i)^r-gf\\.example$/",
+        "/^r-gn(?P<n>a)\\.example$/",
+        "/^r-ca[a-z]*[a-z]*[a-z]*\\.example$/",
+        "/^eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\.ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\.gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\\.hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh\\.exampl[e]$/",
+        "/^aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\.cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\.exampl[e]$/",
+        "/^r-ws x\\.example$/",
+        "/^r-wt\tx\\.example$/",
+        "/^r-wd\u007fx\\.example$/",
+        "/^r-we\u00e9\\.example$/",
+        "/^r-bc[\\b]\\.example$/"
       ]
     }
   },
@@ -34,7 +68,38 @@
     "r16lxy.example. A": ["r16lxy.example. 300 IN A 192.0.2.13"],
     "r16xa.example. A": ["r16xa.example. 300 IN A 192.0.2.14"],
     "r16qab.example. A": ["r16qab.example. 300 IN A 192.0.2.15"],
-    "r16cxaxb.example. A": ["r16cxaxb.example. 300 IN A 192.0.2.16"]
+    "r16cxaxb.example. A": ["r16cxaxb.example. 300 IN A 192.0.2.16"],
+    "r-rrm.example. A": ["r-rrm.example. 300 IN A 192.0.2.41"],
+    "r-nca.example. A": ["r-nca.example. 300 IN A 192.0.2.42"],
+    "r-so,.example. A": ["r-so,.example. 300 IN A 192.0.2.43"],
+    "r-saa.example. A": ["r-saa.example. 300 IN A 192.0.2.44"],
+    "r-sta.example. A": ["r-sta.example. 300 IN A 192.0.2.45"],
+    "r-spa.example. A": ["r-spa.example. 300 IN A 192.0.2.46"],
+    "r-rb5.example. A": ["r-rb5.example. 300 IN A 192.0.2.47"],
+    "a.r-d9.example. A": ["a.r-d9.example. 300 IN A 192.0.2.48"],
+    "r-w5abcde.example. A": ["r-w5abcde.example. 300 IN A 192.0.2.49"],
+    "r-mq.example. A": ["r-mq.example. 300 IN A 192.0.2.50"],
+    "r-pq55.example. A": ["r-pq55.example. 300 IN A 192.0.2.51"],
+    "r-uoa.example. A": ["r-uoa.example. 300 IN A 192.0.2.52"],
+    "r-uca.example. A": ["r-uca.example. 300 IN A 192.0.2.53"],
+    "r-ue]x.example. A": ["r-ue]x.example. 300 IN A 192.0.2.54"],
+    "r-uf}x.example. A": ["r-uf}x.example. 300 IN A 192.0.2.55"],
+    "r-ecx.example. A": ["r-ecx.example. 300 IN A 192.0.2.56"],
+    "r-cr5.example. A": ["r-cr5.example. 300 IN A 192.0.2.57"],
+    "r-tw.example. A": ["r-tw.example. 300 IN A 192.0.2.58"],
+    "r-ukb.example. A": ["r-ukb.example. 300 IN A 192.0.2.59"],
+    "r-ir{x}.example. A": ["r-ir{x}.example. 300 IN A 192.0.2.60"],
+    "r-ic.example. A": ["r-ic.example. 300 IN A 192.0.2.61"],
+    "r-io5{2.example. A": ["r-io5{2.example. 300 IN A 192.0.2.62"],
+    "r-gf.example. A": ["r-gf.example. 300 IN A 192.0.2.63"],
+    "r-gna.example. A": ["r-gna.example. 300 IN A 192.0.2.64"],
+    "r-cab.example. A": ["r-cab.example. 300 IN A 192.0.2.65"],
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.example. A": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.example. 300 IN A 192.0.2.66"],
+    "alias-r-ws.example. A": ["alias-r-ws.example. 300 IN CNAME r-ws\\032x.example.", "r-ws\\032x.example. 300 IN A 192.0.2.67"],
+    "alias-r-wt.example. A": ["alias-r-wt.example. 300 IN CNAME r-wt\\009x.example.", "r-wt\\009x.example. 300 IN A 192.0.2.68"],
+    "alias-r-wd.example. A": ["alias-r-wd.example. 300 IN CNAME r-wd\\127x.example.", "r-wd\\127x.example. 300 IN A 192.0.2.69"],
+    "alias-r-we.example. A": ["alias-r-we.example. 300 IN CNAME r-we\\233.example.", "r-we\\233.example. 300 IN A 192.0.2.70"],
+    "alias-r-bc.example. A": ["alias-r-bc.example. 300 IN CNAME r-bc\\008.example.", "r-bc\\008.example. 300 IN A 192.0.2.71"]
   },
   "cases": [
     {
@@ -138,6 +203,448 @@
         "forwards": [],
         "rcode": "NOERROR",
         "answer": ["r16dxaxb.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-reversed-range-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a reversed range ([z-a]), so the name resolves; re rejects this pattern too, so no name would match it",
+      "query": {"name": "r-rrm.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-rrm.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-rrm.example. 300 IN A 192.0.2.41"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-nested-class-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a class nested in a class ([[a]), so the name it would match resolves",
+      "query": {"name": "r-nca.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-nca.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-nca.example. 300 IN A 192.0.2.42"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-set-difference-in-class-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a set operation in a class (--: [+--]), so the name it would match resolves",
+      "query": {"name": "r-so,.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-so,.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-so,.example. 300 IN A 192.0.2.43"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-set-intersection-in-class-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a set operation in a class (&&: [a&&b]), so the name it would match resolves",
+      "query": {"name": "r-saa.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-saa.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-saa.example. 300 IN A 192.0.2.44"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-set-symmetric-difference-in-class-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a set operation in a class (~~: [a~~b]), so the name it would match resolves",
+      "query": {"name": "r-sta.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-sta.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-sta.example. 300 IN A 192.0.2.45"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-set-union-in-class-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a set operation in a class (||: [a||b]), so the name it would match resolves",
+      "query": {"name": "r-spa.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-spa.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-spa.example. 300 IN A 192.0.2.46"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-repeat-over-255-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a repeat bound over 255 ({0,256}), so the name it would match resolves",
+      "query": {"name": "r-rb5.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-rb5.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-rb5.example. 300 IN A 192.0.2.47"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-groups-nested-8-deep-blocks",
+      "family": "regex",
+      "description": "R16 boundary: groups nested 8 deep are admitted and block",
+      "query": {"name": "a.r-d8.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.r-d8.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-groups-nested-9-deep-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses groups nested over 8 (9 deep), so the name it would match resolves",
+      "query": {"name": "a.r-d9.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["a.r-d9.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["a.r-d9.example. 300 IN A 192.0.2.48"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-classes-width-208-blocks",
+      "family": "regex",
+      "description": "R16 boundary: four [a-z] classes (width 208) are admitted and block",
+      "query": {"name": "r-w4abcd.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r-w4abcd.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-classes-width-260-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses bracket classes listing over 256 characters in total (five [a-z], width 260), so the name it would match resolves",
+      "query": {"name": "r-w5abcde.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-w5abcde.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-w5abcde.example. 300 IN A 192.0.2.49"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-quantifier-after-caret-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a quantifier with nothing to repeat (^*), so the name resolves; re rejects this pattern too, so no name would match it",
+      "query": {"name": "r-mq.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-mq.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-mq.example. 300 IN A 192.0.2.50"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-possessive-quantifier-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a quantifier right after a quantifier (++), so the name it would match resolves",
+      "query": {"name": "r-pq55.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-pq55.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-pq55.example. 300 IN A 192.0.2.51"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-unbalanced-open-parenthesis-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses an unbalanced (, so the name resolves; re rejects this pattern too, so no name would match it",
+      "query": {"name": "r-uoa.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-uoa.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-uoa.example. 300 IN A 192.0.2.52"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-unbalanced-close-parenthesis-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses an unbalanced ), so the name resolves; re rejects this pattern too, so no name would match it",
+      "query": {"name": "r-uca.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-uca.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-uca.example. 300 IN A 192.0.2.53"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-unescaped-close-bracket-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses an unescaped ] outside a class, so the name it would match resolves",
+      "query": {"name": "r-ue]x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-ue]x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-ue]x.example. 300 IN A 192.0.2.54"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-unescaped-close-brace-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses an unescaped } outside a repeat, so the name it would match resolves",
+      "query": {"name": "r-uf}x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-uf}x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-uf}x.example. 300 IN A 192.0.2.55"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-empty-class-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses an empty class ([]x]), so the name it would match resolves",
+      "query": {"name": "r-ecx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-ecx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-ecx.example. 300 IN A 192.0.2.56"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-class-escape-in-range-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a class escape as the end of a range ([\\d-z]), so the name resolves; re rejects this pattern too, so no name would match it",
+      "query": {"name": "r-cr5.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-cr5.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-cr5.example. 300 IN A 192.0.2.57"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-trailing-backslash-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a trailing backslash, so the name resolves; re rejects this pattern too, so no name would match it",
+      "query": {"name": "r-tw.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-tw.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-tw.example. 300 IN A 192.0.2.58"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-unclosed-class-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses an unclosed class ([abc), so the name resolves; re rejects this pattern too, so no name would match it",
+      "query": {"name": "r-ukb.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-ukb.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-ukb.example. 300 IN A 192.0.2.59"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-invalid-repeat-not-a-number-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a { repeat that is not a number ({x}), so the name it would match resolves",
+      "query": {"name": "r-ir{x}.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-ir{x}.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-ir{x}.example. 300 IN A 192.0.2.60"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-invalid-repeat-without-a-minimum-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a { repeat without a minimum ({,2}), so the name it would match resolves",
+      "query": {"name": "r-ic.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-ic.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-ic.example. 300 IN A 192.0.2.61"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-invalid-repeat-unclosed-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a { repeat with no closing } ({2), so the name it would match resolves",
+      "query": {"name": "r-io5{2.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-io5{2.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-io5{2.example. 300 IN A 192.0.2.62"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-inline-flag-group-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses an unsupported group ((?i) inline flag), so the name it would match resolves",
+      "query": {"name": "r-gf.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-gf.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-gf.example. 300 IN A 192.0.2.63"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-named-group-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses an unsupported group ((?P<n>...) named group), so the name it would match resolves",
+      "query": {"name": "r-gna.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-gna.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-gna.example. 300 IN A 192.0.2.64"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-anchored-pattern-over-the-cost-bound-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a pattern whose bound on backtracking steps is over the limit even when anchored, so the name it would match resolves",
+      "query": {"name": "r-cab.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r-cab.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r-cab.example. 300 IN A 192.0.2.65"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-pattern-of-256-characters-blocks",
+      "family": "regex",
+      "description": "R16 boundary: a pattern of exactly 256 characters is admitted and blocks",
+      "query": {"name": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg.hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg.hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-pattern-of-257-characters-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a pattern over 256 characters (257), so the name it would match resolves",
+      "query": {"name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.example. 300 IN A 192.0.2.66"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-space-in-pattern-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a space in a pattern, so the CNAME target it would match (a space octet) resolves",
+      "query": {"name": "alias-r-ws.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-r-ws.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-r-ws.example. 300 IN CNAME r-ws\\032x.example.", "r-ws\\032x.example. 300 IN A 192.0.2.67"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-tab-in-pattern-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a control character (tab) in a pattern, so the CNAME target it would match resolves",
+      "query": {"name": "alias-r-wt.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-r-wt.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-r-wt.example. 300 IN CNAME r-wt\\009x.example.", "r-wt\\009x.example. 300 IN A 192.0.2.68"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-delete-in-pattern-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a control character (DEL, 0x7f) in a pattern, so the CNAME target it would match resolves",
+      "query": {"name": "alias-r-wd.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-r-wd.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-r-wd.example. 300 IN CNAME r-wd\\127x.example.", "r-wd\\127x.example. 300 IN A 192.0.2.69"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-non-ascii-in-pattern-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses a non-ASCII character in a pattern, so the CNAME target it would match (the Latin-1 octet 0xE9) resolves",
+      "query": {"name": "alias-r-we.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-r-we.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-r-we.example. 300 IN CNAME r-we\\233.example.", "r-we\\233.example. 300 IN A 192.0.2.70"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-backspace-escape-in-class-resolves",
+      "family": "regex",
+      "description": "R16: the gate refuses \\b inside a class ([\\b]), so the CNAME target it would match (a backspace octet) resolves",
+      "query": {"name": "alias-r-bc.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-r-bc.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-r-bc.example. 300 IN CNAME r-bc\\008.example.", "r-bc\\008.example. 300 IN A 192.0.2.71"],
         "authority": []
       }
     }

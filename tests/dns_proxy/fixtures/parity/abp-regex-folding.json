@@ -33,7 +33,8 @@
     "xfold-zone2.example. A": ["xfold-zone2.example. 300 IN A 192.0.2.13"],
     "xfold-zone3.example. A": ["xfold-zone3.example. 300 IN A 192.0.2.14"],
     "fold-wwx.example. A": ["fold-wwx.example. 300 IN A 192.0.2.15"],
-    "sub.fold-upper.example. A": ["sub.fold-upper.example. 300 IN A 192.0.2.16"]
+    "sub.fold-upper.example. A": ["sub.fold-upper.example. 300 IN A 192.0.2.16"],
+    "www.fold-www.example. A": ["www.fold-www.example. 300 IN A 192.0.2.17"]
   },
   "cases": [
     {
@@ -189,6 +190,19 @@
         "forwards": [],
         "rcode": "NOERROR",
         "answer": ["fold-www.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "optional-www-fold-does-not-block-the-www-form",
+      "family": "abp",
+      "description": "the optional-www fold is exact: ^(www\\.)?d$ becomes the bare domain d only, so www.d resolves although the regex itself would match it (ADR-07)",
+      "query": {"name": "www.fold-www.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["www.fold-www.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["www.fold-www.example. 300 IN A 192.0.2.17"],
         "authority": []
       }
     },

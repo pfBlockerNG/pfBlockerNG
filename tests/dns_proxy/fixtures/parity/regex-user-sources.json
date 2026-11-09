@@ -9,7 +9,7 @@
         "python_cname": "true",
         "dnsbl_ipv4": "10.10.10.1",
         "dnsbl_ipv6": "fd00::1",
-        "regex_list": "XnVzZXItbWFpblswLTldXC5leGFtcGxlJApedXNlci1kZXNjWzAtOV1cLmV4YW1wbGUkICMgYSByb3cgd2l0aCBhIGRlc2NyaXB0aW9uCl4oPz11KXVzZXItcmVmdXNlZFwuZXhhbXBsZSQ="
+        "regex_list": "XnVzZXItbWFpblswLTldXC5leGFtcGxlJApedXNlci1kZXNjWzAtOV1cLmV4YW1wbGUkICMgYSByb3cgd2l0aCBhIGRlc2NyaXB0aW9uCl4oPz11KXVzZXItcmVmdXNlZFwuZXhhbXBsZSQKXlVTRVItVVBQRVJbMC05XVwuRVhBTVBMRSQ="
       }
     },
     "manifest": {
@@ -32,7 +32,8 @@
   "upstream": {
     "user-main-x.example. A": ["user-main-x.example. 300 IN A 192.0.2.11"],
     "user-refused.example. A": ["user-refused.example. 300 IN A 192.0.2.12"],
-    "custom-rex.example. A": ["custom-rex.example. 300 IN A 192.0.2.13"]
+    "custom-rex.example. A": ["custom-rex.example. 300 IN A 192.0.2.13"],
+    "user-upper-x.example. A": ["user-upper-x.example. 300 IN A 192.0.2.14"]
   },
   "cases": [
     {
@@ -110,6 +111,32 @@
         "forwards": ["custom-rex.example. A"],
         "rcode": "NOERROR",
         "answer": ["custom-rex.example. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    },
+    {
+      "id": "blocked-user-upper-case-pattern",
+      "family": "regex",
+      "description": "a MAIN.regex_list row written in upper case blocks the lower-case name: user regex are case-insensitive",
+      "query": {"name": "user-upper4.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["user-upper4.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "resolves-user-upper-case-pattern-near-miss",
+      "family": "regex",
+      "description": "the upper-case MAIN.regex_list row still needs its digit: a hyphen where it wants one resolves",
+      "query": {"name": "user-upper-x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["user-upper-x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["user-upper-x.example. 300 IN A 192.0.2.14"],
         "authority": []
       }
     }
