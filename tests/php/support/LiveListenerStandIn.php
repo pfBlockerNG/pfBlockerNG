@@ -91,12 +91,6 @@ trait LiveListenerStandIn
 		return array_values(array_filter(self::frames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffc'));
 	}
 
-	/** @return list<array{head:string,body:string,fds:array}> listener-control changes, not independent address-table snapshots */
-	private static function listenerFrames(string $record): array
-	{
-		return array_values(array_filter(self::changeFrames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffb'));
-	}
-
 	/** @return list<array{head:string,body:string,fds:array}> frames with only the independent ownership rows projected out */
 	private static function nameDdrFrames(string $record): array
 	{

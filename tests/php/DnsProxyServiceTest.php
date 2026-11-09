@@ -76,17 +76,18 @@ final class DnsProxyServiceTest extends TestCase
 
 	public function testScriptLaunchesTheGatewayThroughTheWrapperOnTheSavedAddressesAndLoopbackAsUnbound(): void
 	{
-		// Given a Resolver that was saved listening on lan (IPv4 and IPv6), without DoT
+		// Given a Resolver that was saved listening on lan (IPv4 and IPv6, described "Office LAN" in pfSense), without DoT
 		$this->moveResolver(FALSE, 'lan', ['lan' => '192.0.2.1'], ['lan' => '2001:db8::1']);
+		$GLOBALS['pfb_test_interfaces']['lan'] = 'Office LAN';
 
 		// When the rc service is generated and started under dash
 		$this->generate();
 		$this->arrange();
 		[$status, $output] = $this->rc('start');
 
-		// Then the daemon is launched with these service arguments, independently of ownership metadata
+		// Then the daemon is launched with exactly this argument vector, Localhost's and lan's ownership pairs included
 		$this->assertSame(0, $status, "rc start failed: {$output}");
-		$this->assertGatewayArgv($this->gatewayArgv(PFB_DNS_PROXY_DIR, ['192.0.2.1', '2001:db8::1']), $this->daemonArgv());
+		$this->assertSame($this->gatewayArgv(PFB_DNS_PROXY_DIR, ['192.0.2.1', '2001:db8::1']), $this->daemonArgv());
 		$this->assertSame(['launch'], $this->events());
 	}
 
@@ -517,7 +518,7 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then the gateway has exactly that mode's flags, before `--`, and the Python decider's own argv is the one it always had
-		$this->assertGatewayArgv($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [], '53', $flags), $argv);
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [], '53', $flags), $argv);
 		$decider = array_slice($argv, (int) array_search('--', $argv, TRUE));
 		$this->assertSame(self::DECIDER, $decider, 'the decider is told nothing the gateway does not pass on itself');
 	}
@@ -1356,29 +1357,6 @@ final class DnsProxyServiceTest extends TestCase
 	}
 
 	/**
-	 * @param list<string> $expected
-	 * @param list<string> $actual
-	 */
-	private function assertGatewayArgv(array $expected, array $actual, string $message = ''): void
-	{
-		// Ownership metadata is covered by PfbDnsStatusTest; keep the decider and every service argument intact.
-		$service = [];
-		$gateway = TRUE;
-		for ($i = 0; $i < count($actual); $i++) {
-			if ($actual[$i] === '--') {
-				$gateway = FALSE;
-			}
-			if ($gateway && $actual[$i] === '--listener-interface') {
-				$this->assertArrayHasKey($i + 1, $actual, 'ownership metadata has a value before the decider');
-				$this->assertNotSame('--', $actual[++$i], 'ownership metadata must not consume the decider separator');
-				continue;
-			}
-			$service[] = $actual[$i];
-		}
-		$this->assertSame($expected, $service, $message);
-	}
-
-	/**
 	 * The daemon argv the gateway rc script must launch.
 	 *
 	 * @param list<string> $listen plain DNS addresses the Resolver's interfaces give; the loopback pair is appended
@@ -1395,6 +1373,18 @@ final class DnsProxyServiceTest extends TestCase
 			array_push($addresses, '--listen', $address);
 			if ($dot) {
 				array_push($dotFlags, '--dot-listen', $address);
+			}
+		}
+		// The ownership table the gateway is started with: Localhost's two addresses, then each configured interface's addresses
+		// in pfSense's order, each with its description as base64
+		foreach (['127.0.0.1', '::1'] as $address) {
+			array_push($addresses, '--listener-interface', $address . '=' . base64_encode('Localhost'));
+		}
+		foreach ($GLOBALS['pfb_test_interfaces'] as $interface => $description) {
+			foreach ([$GLOBALS['pfb_test_interface_ip'][$interface] ?? NULL, $GLOBALS['pfb_test_configured_ipv6'][$interface] ?? NULL] as $address) {
+				if ($address !== NULL) {
+					array_push($addresses, '--listener-interface', $address . '=' . base64_encode($description));
+				}
 			}
 		}
 		if ($dot) {
@@ -1472,7 +1462,7 @@ final class DnsProxyServiceTest extends TestCase
 
 		// Then the daemon runs the gateway with the plain addresses, Unbound's PROXY port, Unbound's config (where it
 		// reads the ACL) and the unprivileged user, and hands the Python decider's argv over after `--`
-		$this->assertGatewayArgv($this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1'], $dot), $argv);
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1'], $dot), $argv);
 		$this->assertSame(['launch'], $this->events());
 	}
 
@@ -1542,7 +1532,7 @@ final class DnsProxyServiceTest extends TestCase
 
 		// Then the DoH group sits between --tls-pem and --unbound-conf, loopback after its interfaces' addresses;
 		// the plain DNS addresses are untouched
-		$this->assertGatewayArgv(
+		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1', '198.51.100.1', '2001:db8:1::1'], FALSE, $expected),
 			$argv
 		);
@@ -1576,7 +1566,7 @@ final class DnsProxyServiceTest extends TestCase
 
 		$argv = $this->startAndReadArgv($gateway);
 
-		$this->assertGatewayArgv(
+		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1', '198.51.100.1', '2001:db8:1::1'], FALSE, $expected),
 			$argv,
 			'DoQ has no trusted front ends, and DoH (off) leaves nothing behind'
@@ -1590,7 +1580,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->setting('pfb_dns_doh', 'on');
 		$this->setting('pfb_dns_doq', 'on');
 
-		$this->assertGatewayArgv(
+		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
 				'--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443',
 				'--doq-listen', '192.0.2.1', ...self::loopbackListen('doq'), '--doq-port', '853',
@@ -1632,7 +1622,7 @@ final class DnsProxyServiceTest extends TestCase
 
 		// Then plain DNS is served on the interface address and on both loopback addresses at 5300, so the firewall's
 		// resolv.conf (127.0.0.1, ::1) reaches the gateway; DoH and DoQ keep their own ports and also listen on loopback
-		$this->assertGatewayArgv(
+		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
 				'--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443',
 				'--doq-listen', '192.0.2.1', ...self::loopbackListen('doq'), '--doq-port', '853',
@@ -1650,7 +1640,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->setting('pfb_dns_doh_trusted', '192.0.2.10');
 		$this->setting('pfb_dns_doq_port', '8853');
 
-		$this->assertGatewayArgv($this->gatewayArgv($gateway, ['192.0.2.1']), $this->startAndReadArgv($gateway));
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $this->startAndReadArgv($gateway));
 	}
 
 	public function testATlsListenerWhoseInterfacesHaveNoAddressStillListensOnLoopbackAlone(): void
@@ -1661,7 +1651,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->setting('pfb_dns_doh_interface', 'opt9');
 		$this->setting('pfb_dns_doh_trusted', '192.0.2.10');
 
-		$this->assertGatewayArgv(
+		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
 				...self::loopbackListen('doh'), '--doh-port', '4443', '--doh-trusted', '192.0.2.10/32',
 			]),
@@ -1734,7 +1724,7 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then the daemon runs the wrapper under /bin/sh, which alone decides whether this machine has a usable binary
-		$this->assertGatewayArgv($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
 		$this->assertStringNotContainsString('pfb_dns_proxy.py --listen', $this->rcText(), 'no standalone Python listener to fall back to when the wrapper refuses');
 	}
 
@@ -1974,7 +1964,7 @@ final class DnsProxyServiceTest extends TestCase
 
 		// Then the DoH group is left out whole, the DoQ group is intact, the bad value is nowhere in the script,
 		// and one warning says so
-		$this->assertGatewayArgv(
+		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
 				'--doq-listen', '192.0.2.1', ...self::loopbackListen('doq'), '--doq-port', '8853',
 			]),
@@ -1994,7 +1984,7 @@ final class DnsProxyServiceTest extends TestCase
 		$this->setting('pfb_dns_doq', 'on');
 		$this->setting('pfb_dns_doq_port', 'abc');
 
-		$this->assertGatewayArgv(
+		$this->assertSame(
 			$this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [
 				'--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443',
 			]),
@@ -2311,7 +2301,7 @@ final class DnsProxyServiceTest extends TestCase
 
 		// Then the daemon gets --ddr after the name and before its answers, all after the DoH group and before the mode flags, and nothing else changed
 		$doh = ['--doh-listen', '192.0.2.1', ...self::loopbackListen('doh'), '--doh-port', '4443'];
-		$this->assertGatewayArgv($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [...$doh, '--dns-name', 'fw.example.lan', '--ddr', ...self::ANSWER]), $argv);
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [...$doh, '--dns-name', 'fw.example.lan', '--ddr', ...self::ANSWER]), $argv);
 		$this->assertStringContainsString(" --doh-port '4443' --dns-name 'fw.example.lan' --ddr --dns-name-answer '192.0.2.1=192.0.2.1' --no-module", $this->rcText(), 'the name and the answer are one quoted word each');
 	}
 
@@ -2337,7 +2327,7 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then --ddr-doh-443 follows --ddr with the address of lan, as a flag with a value of its own
-		$this->assertGatewayArgv($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [...self::dohFlags(), '--dns-name', 'fw.example.lan', '--ddr', '--ddr-doh-443', '192.0.2.1', ...self::ANSWER]), $argv);
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [...self::dohFlags(), '--dns-name', 'fw.example.lan', '--ddr', '--ddr-doh-443', '192.0.2.1', ...self::ANSWER]), $argv);
 		$this->assertStringContainsString(" --dns-name 'fw.example.lan' --ddr --ddr-doh-443 '192.0.2.1' --dns-name-answer '192.0.2.1=192.0.2.1' --no-module", $this->rcText());
 	}
 
@@ -2402,7 +2392,7 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then the daemon serves plain DNS only: no encrypted listener, DDR or name interception remains.
-		$this->assertGatewayArgv($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
+		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1']), $argv);
 		$this->assertStringNotContainsString('--dns-name', $this->rcText());
 		$this->assertStringNotContainsString('--ddr', $this->rcText());
 	}

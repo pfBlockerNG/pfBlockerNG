@@ -24,17 +24,20 @@ use PHPUnit\Framework\TestCase;
  *   - the sync is given the gateway's answer to the list request (the update pass asks once and acts on that answer), then removes each
  *     served listener the command no longer names and adds each one it names that nothing serves; no answer (no socket, an error, a
  *     hang-up) changes nothing: no frame but the request, nothing logged, no restart, and the gateway's log is never read in its place;
- *   - an address the box cannot assign yet (in the words of Linux and of FreeBSD) is left for a later pass with nothing sent, logged or
- *     restarted; one that fails to bind otherwise is logged and skipped, a restart pending or not; a change the gateway does not take
- *     (an older gateway's error, a hang-up) restarts the pair once and sends no further frame;
+ *   - an address the box cannot assign yet (in the words of Linux and of FreeBSD) is left for a later pass with no listener frame sent,
+ *     nothing logged and no restart; one that fails to bind otherwise is logged and skipped, a restart pending or not; a change the
+ *     gateway does not take (an older gateway's error, a hang-up) restarts the pair once and sends no further frame;
  *   - the cron tick adds an address the start refused and the box binds now, and removes one the command no longer names, live;
  *     with a restart pending it changes nothing live and restarts once for a missing listener that binds (the update pass keeps the
  *     marker); under an update pass it does nothing. A package operation's rows are DnsProxyKeepRunningPkgTest's.
  *   - the sync takes no gap for a change: an rc script that names no plain listener (missing, empty, no command) changes nothing; a
  *     host the gateway prints differently (an IPv4-mapped one) is spelled as it prints it; one TLS kind's address changes live by itself.
+ *   - a sync that is not deferred by a pending restart, and whose changes the gateway took, ends on exactly one ownership-table frame
+ *     (name answers, Localhost, then the interface addresses); no list, a pending restart and a change the gateway refused send none.
  *
  * Every row that binds uses a port above 1024 picked free at runtime and configured as the rc script's port, so that it runs as a
- * user that is not root too. Every row starts from the quiet box (nothing differs: nothing is sent or restarted).
+ * user that is not root too. Every row starts from the quiet box (nothing differs: no listener changes, the pair is not restarted, and
+ * the ownership table is the one frame sent).
  */
 #[CoversFunction('pfb_dns_proxy_ensure_running')]
 #[CoversFunction('pfb_dns_proxy_listeners_sync')]
@@ -57,6 +60,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 	private const OLD_GATEWAY = 'error: a message of 4294967294 bytes is not between 1 and 65536';
 	/** What a gateway older than the list verb answers a list request with. */
 	private const NO_LIST = "error: a message of 4294967292 bytes is not between 1 and 65536\n";
+	/** An ownership-table row of the fixture's interface: lan has 192.0.2.1 and no description, so the description part is empty. */
+	private const LAN_ROW = 'listener-interface 192.0.2.1=';
 
 	private array $savedGlobals = [];
 	private int $port = 0;
@@ -166,7 +171,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		pfb_dns_proxy_service($this->krProxyDir);
 	}
 
-	/** @return list<string> listener-control requests in order, excluding independent address-table snapshots */
+	/** @return list<string> each frame the stand-in got, the list requests too, in order: "list", "add <kind> <host:port>", "remove <kind> <host:port>" or the address table as "fffffffb <body>" */
 	private static function requests(string $record): array
 	{
 		return array_map(
@@ -176,22 +181,66 @@ final class DnsProxyLiveListenersTest extends TestCase
 				'fffffffd' => "remove {$frame['body']}",
 				default => "{$frame['head']} {$frame['body']}",
 			},
-			array_values(array_filter(self::frames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffb'))
+			self::frames($record)
 		);
 	}
 
-	/** @return list<string> each listener change, as requests() writes it */
+	/** @return list<string> each frame that changes the gateway, as requests() writes it */
 	private static function verbs(string $record): array
 	{
 		return array_values(array_diff(self::requests($record), ['list']));
 	}
 
-	/** @return list<array{string,string,bool}> [type, host:port, listening] of each descriptor listener-change frame $index carried */
+	/**
+	 * The body of the ownership table a sync that is not deferred ends on: the name-answer rows of a DNS Name, if any, then Localhost's two
+	 * addresses (base64 of `Localhost`), then $rows.
+	 *
+	 * @param list<string> $rows `listener-interface <address>=<base64 of the interface description>`, in pfSense's interface order
+	 * @param list<string> $answers `dns-name-answer <local>=<address>` rows the rc script's command gives
+	 */
+	private static function tableBody(array $rows = [], array $answers = []): string
+	{
+		return implode("\n", [...$answers, 'listener-interface 127.0.0.1=TG9jYWxob3N0', 'listener-interface ::1=TG9jYWxob3N0', ...$rows]);
+	}
+
+	/**
+	 * The one frame such a table is, as changeFrames() holds it: the table head, exactly that body, no descriptor.
+	 *
+	 * @param list<string> $rows as tableBody()
+	 * @return array{head:string,body:string,fds:list<mixed>}
+	 */
+	private static function tableFrame(array $rows = []): array
+	{
+		return ['head' => 'fffffffb', 'body' => self::tableBody($rows), 'fds' => []];
+	}
+
+	/**
+	 * That frame as requests() writes it.
+	 *
+	 * @param list<string> $rows as tableBody()
+	 * @param list<string> $answers as tableBody()
+	 */
+	private static function tableRequest(array $rows = [], array $answers = []): string
+	{
+		return 'fffffffb ' . self::tableBody($rows, $answers);
+	}
+
+	/**
+	 * The table rows of lan when it has 192.0.2.1 and, with $lan6, that IPv6 address as well (the fixture gives neither a description).
+	 *
+	 * @return list<string>
+	 */
+	private static function lanRows(?string $lan6): array
+	{
+		return [self::LAN_ROW, ...($lan6 === NULL ? [] : ["listener-interface {$lan6}="])];
+	}
+
+	/** @return list<array{string,string,bool}> [type, host:port, listening] of each descriptor frame $index (of the frames that change the gateway) carried */
 	private static function fdsOf(string $record, int $index): array
 	{
 		return array_map(
 			static fn (array $fd): array => [$fd['type'], $fd['name'], $fd['listening']],
-			self::listenerFrames($record)[$index]['fds'] ?? []
+			self::changeFrames($record)[$index]['fds'] ?? []
 		);
 	}
 
@@ -248,10 +297,10 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
 
 		// Then it asked first, removed the listener the command no longer names, added the two it names that nothing served, in the
-		// command's order and with their sockets, and sent nothing else
+		// command's order and with their sockets, and ended on the ownership table, sending nothing else
 		$p = $this->port;
 		$this->assertNull($why);
-		$this->assertSame(['list', "remove udp+tcp 192.0.2.1:{$p}", "add udp+tcp 0.0.0.0:{$p}", "add udp+tcp [::1]:{$p}"], array_slice(self::requests($record), $asked));
+		$this->assertSame(['list', "remove udp+tcp 192.0.2.1:{$p}", "add udp+tcp 0.0.0.0:{$p}", "add udp+tcp [::1]:{$p}", self::tableRequest()], array_slice(self::requests($record), $asked));
 		$this->assertSame([['dgram', "0.0.0.0:{$p}", FALSE], ['stream', "0.0.0.0:{$p}", TRUE]], self::fdsOf($record, 1), 'the add of 0.0.0.0 carried the UDP socket, then the listening TCP socket');
 		// and the gateway now serves exactly the command's listeners, each change taking one line of the pfB log
 		$this->assertEqualsCanonicalizing($this->listed(['0.0.0.0', '127.0.0.1', '[::1]']), $this->served());
@@ -334,7 +383,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// Then the gone address was removed and the new one added, in that order, with the socket pair the gateway wants; nothing restarted
 		$this->assertTrue($ready);
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame(["remove udp+tcp 192.0.2.1:{$this->port}", "add udp+tcp 0.0.0.0:{$this->port}"], self::verbs($record));
+		$this->assertSame(["remove udp+tcp 192.0.2.1:{$this->port}", "add udp+tcp 0.0.0.0:{$this->port}", self::tableRequest()], self::verbs($record));
 		$this->assertSame([], self::fdsOf($record, 0), 'a remove carries no descriptor');
 		$this->assertSame([['dgram', "0.0.0.0:{$this->port}", FALSE], ['stream', "0.0.0.0:{$this->port}", TRUE]], self::fdsOf($record, 1), 'the UDP socket, then the listening TCP socket');
 		// and the rc script is the new one, each change is one line of the pfB log, and nothing is reported as unserved
@@ -372,7 +421,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then only that listener is added, as an IPv6 pair, and nothing restarted
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame(["add udp+tcp [::]:{$this->port}"], self::verbs($record));
+		$this->assertSame(["add udp+tcp [::]:{$this->port}", self::tableRequest([self::LAN_ROW])], self::verbs($record));
 		$this->assertSame([['dgram', "[::]:{$this->port}", FALSE], ['stream', "[::]:{$this->port}", TRUE]], self::fdsOf($record, 0));
 	}
 
@@ -389,6 +438,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame([], $this->krProxyCalls());
 		$this->assertSame([
 			"remove udp+tcp 192.0.2.1:{$this->port}", "add udp+tcp 0.0.0.0:{$this->port}", "add udp+tcp 127.0.0.1:{$this->port}",
+			self::tableRequest(),
 		], self::verbs($record));
 	}
 
@@ -422,15 +472,15 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// Then only that kind's address changed, live, with the kind's own socket; nothing restarted and plain DNS was left alone
 		$this->assertTrue($ready);
 		$this->assertSame([], $this->krProxyCalls());
-		$listener_changes = array_values(array_filter(self::verbs($record), static fn (string $verb): bool => !str_starts_with($verb, 'fffffffb ')));
 		$this->assertSame([
 			"remove {$kind} 198.51.100.1:{$port}", "add {$kind} 0.0.0.0:{$port}",
-		], $listener_changes);
+			self::tableRequest([self::LAN_ROW], ['dns-name-answer 192.0.2.1=192.0.2.1', 'dns-name-answer 0.0.0.0=0.0.0.0']),
+		], self::verbs($record));
 		$this->assertSame([[($kind === 'doq') ? 'dgram' : 'stream', "0.0.0.0:{$port}", $kind !== 'doq']], self::fdsOf($record, 1));
 		$this->assertSame([], $this->startupNotices());
 	}
 
-	public function testAQuietBoxSendsNothing(): void
+	public function testAQuietBoxSendsOnlyItsOwnershipTable(): void
 	{
 		// Given a ready proxy that serves every address of its command
 		$this->quiet();
@@ -439,13 +489,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the update pass runs
 		$this->assertTrue($this->krEnsure());
 
-		// Then nothing is sent and nothing restarts
-		$this->assertSame([], self::listenerFrames($record));
-		$tables = self::changeFrames($record);
-		$this->assertCount(1, $tables, 'a quiet box still sends its independent ownership snapshot');
-		$this->assertSame('fffffffb', $tables[0]['head']);
-		$this->assertContains('listener-interface 192.0.2.1=', explode("\n", $tables[0]['body']));
-		$this->assertSame([], $tables[0]['fds'], 'ownership metadata carries no listener descriptors');
+		// Then no listener is changed and nothing restarts: the one frame sent is the ownership table, Localhost then lan
+		$this->assertSame([self::tableFrame([self::LAN_ROW])], self::changeFrames($record));
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
@@ -579,9 +624,9 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the reconcile runs
 		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
 
-		// Then nothing is sent, logged or asked for: the next pass tries again
+		// Then no listener frame is sent, nothing is logged or asked for, and the sync ends on the ownership table: the next pass tries again
 		$this->assertNull($why);
-		$this->assertSame([], self::listenerFrames($record));
+		$this->assertSame([self::tableFrame(self::lanRows($lan6))], self::changeFrames($record));
 		$this->assertSame($logged, strlen($this->pfbLog()), 'nothing was logged about an address that is not there yet');
 		$this->assertSame([], $this->krProxyCalls());
 	}
@@ -603,9 +648,9 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the reconcile runs
 		$why = ($namespace . '\\pfb_dns_proxy_listeners_sync')(pfb_dns_proxy_listener_list());
 
-		// Then nothing is sent, logged or asked for: the next pass tries again
+		// Then no listener frame is sent, nothing is logged or asked for, and the sync ends on the ownership table: the next pass tries again
 		$this->assertNull($why);
-		$this->assertSame([], self::listenerFrames($record));
+		$this->assertSame([self::tableFrame([self::LAN_ROW])], self::changeFrames($record));
 		$this->assertSame($logged, strlen($this->pfbLog()), 'nothing was logged about an address that is not there yet');
 		$this->assertSame([], $this->krProxyCalls());
 	}
@@ -621,10 +666,10 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the update pass runs
 		$ready = $this->krEnsure();
 
-		// Then the proxy is left alone, and the startup check names the address as not served
+		// Then the proxy is left alone, no listener frame is sent beside the ownership table, and the startup check names the address as not served
 		$this->assertTrue($ready);
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame([], self::listenerFrames($record));
+		$this->assertSame([self::tableFrame(self::lanRows($lan6))], self::changeFrames($record));
 		$this->assertStringContainsString("Plain DNS is not served on {$host}:{$this->port}", implode(' ', $this->startupNotices()));
 	}
 
@@ -640,9 +685,9 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the reconcile runs
 		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
 
-		// Then the failure is one line of the pfB log naming the transport, the address and the reason; nothing is sent, nothing restarts
+		// Then the failure is one line of the pfB log naming the transport, the address and the reason; no listener frame is sent, only the ownership table; nothing restarts
 		$this->assertNull($why);
-		$this->assertSame([], self::listenerFrames($record));
+		$this->assertSame([self::tableFrame()], self::changeFrames($record));
 		$this->assertSame(1, $this->linesWith("0.0.0.0:{$this->port}"));
 		$this->assertMatchesRegularExpression('/Plain DNS[^\n]*0\.0\.0\.0:' . $this->port . '[^\n]*in use/i', $this->pfbLog());
 		$this->assertSame([], $this->krProxyCalls());
@@ -679,9 +724,9 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the update pass runs
 		$this->assertTrue($this->krEnsure());
 
-		// Then the proxy is left alone and no frame is sent
+		// Then the proxy is left alone and no listener frame is sent, only the ownership table
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame([], self::listenerFrames($record));
+		$this->assertSame([self::tableFrame()], self::changeFrames($record));
 	}
 
 	public function testAHostThatIsNoIpAddressIsNeverBound(): void
@@ -696,9 +741,9 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the reconcile runs
 		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
 
-		// Then nothing is sent and nothing is asked for: the host was never handed to a bind
+		// Then no listener is changed and nothing is asked for, only the ownership table is sent: the host was never handed to a bind
 		$this->assertNull($why);
-		$this->assertSame([], self::listenerFrames($record));
+		$this->assertSame([self::tableFrame([self::LAN_ROW])], self::changeFrames($record));
 	}
 
 	// -----------------------------------------------------------------------
@@ -753,8 +798,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the cron tick runs
 		$this->krTick();
 
-		// Then it is the same listener: nothing is removed or added, and nothing restarts
-		$this->assertSame([], self::listenerFrames($record));
+		// Then it is the same listener: nothing is removed or added (the ownership table is the one frame), and nothing restarts
+		$this->assertSame([self::tableFrame([self::LAN_ROW])], self::changeFrames($record));
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
@@ -826,9 +871,10 @@ final class DnsProxyLiveListenersTest extends TestCase
 			"remove dot 192.0.2.1:{$dot}", "add dot 127.0.0.1:{$dot}", "add dot [::1]:{$dot}",
 			"remove doh 192.0.2.1:{$doh}", "add doh 127.0.0.1:{$doh}", "add doh [::1]:{$doh}",
 			"remove doq 192.0.2.1:{$doq}", "add doq 127.0.0.1:{$doq}", "add doq [::1]:{$doq}",
+			self::tableRequest([self::LAN_ROW]),
 		], self::verbs($record));
 		$types = [];
-		foreach (self::listenerFrames($record) as $index => $frame) {
+		foreach (self::changeFrames($record) as $index => $frame) {
 			$types[$frame['body']] = implode(',', array_column(self::fdsOf($record, $index), 0));
 		}
 		$this->assertSame('dgram,stream', $types["udp+tcp [::1]:{$plain}"]);
@@ -866,7 +912,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then the address was added live, with its two sockets; the proxy was not restarted and the notice is closed
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame(["add udp+tcp {$host}:{$this->port}"], self::verbs($record));
+		$this->assertSame(["add udp+tcp {$host}:{$this->port}", self::tableRequest([self::LAN_ROW])], self::verbs($record));
 		$this->assertSame([['dgram', "{$host}:{$this->port}", FALSE], ['stream', "{$host}:{$this->port}", TRUE]], self::fdsOf($record, 0));
 		$this->assertSame([], $this->startupNotices());
 	}
@@ -883,7 +929,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then each is added with its own frame, in the command's order, and the pair is not restarted
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame(["add udp+tcp 127.0.0.1:{$this->port}", "add udp+tcp [::1]:{$this->port}"], self::verbs($record));
+		$this->assertSame(["add udp+tcp 127.0.0.1:{$this->port}", "add udp+tcp [::1]:{$this->port}", self::tableRequest([self::LAN_ROW])], self::verbs($record));
 		$this->assertSame([], $this->startupNotices());
 	}
 
@@ -938,7 +984,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 
 		// Then it is removed live, nothing is restarted, and the gateway no longer serves it
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame(["remove udp+tcp 0.0.0.0:{$this->port}"], self::verbs($record));
+		$this->assertSame(["remove udp+tcp 0.0.0.0:{$this->port}", self::tableRequest([self::LAN_ROW])], self::verbs($record));
 		$this->assertNotContains("udp+tcp 0.0.0.0:{$this->port}", $this->served());
 	}
 
@@ -953,9 +999,9 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the cron tick runs
 		$this->krTick();
 
-		// Then nothing is sent or restarted and the confirmation files the problem as it always did
+		// Then no listener frame is sent and nothing restarts (the ownership table is the one frame), and the confirmation files the problem as it always did
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame([], self::listenerFrames($record));
+		$this->assertSame([self::tableFrame([self::LAN_ROW])], self::changeFrames($record));
 		$this->assertStringContainsString("Plain DNS is not served on 192.0.2.1:{$this->port}: bind: can't assign requested address", substr($this->pfbLog(), $logged));
 	}
 
