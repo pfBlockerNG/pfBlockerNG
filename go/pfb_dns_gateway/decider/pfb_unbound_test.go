@@ -219,13 +219,20 @@ func TestInitStandardPslFeedPolicies(t *testing.T) {
 	check("dotted capital I is not an i", private, icann, "honor", "honor")
 }
 
+// loadIni is loadIniConfig for the ini at path, on a module that has no other state.
+func loadIni(path string) *configParser {
+	m := &pfbUnbound{}
+	m.pfb.pfbUnboundIni = path
+	return m.loadIniConfig()
+}
+
 func TestLoadIniConfig(t *testing.T) {
 	dir := t.TempDir()
 	logs := modCaptureLog(t)
-	if c := loadIniConfig(filepath.Join(dir, "absent.ini")); c != nil {
+	if c := loadIni(filepath.Join(dir, "absent.ini")); c != nil {
 		t.Errorf("loadIniConfig(absent file) = %v, want nil", c)
 	}
-	if c := loadIniConfig(dir); c != nil {
+	if c := loadIni(dir); c != nil {
 		t.Errorf("loadIniConfig(directory) = %v, want nil: os.path.isfile is false for a directory", c)
 	}
 	if logs.Len() != 0 {
@@ -236,7 +243,7 @@ func TestLoadIniConfig(t *testing.T) {
 	if err := os.WriteFile(good, []byte("[MAIN]\nk = v\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if c := loadIniConfig(good); c == nil || !c.hasOption("MAIN", "k") || logs.Len() != 0 {
+	if c := loadIni(good); c == nil || !c.hasOption("MAIN", "k") || logs.Len() != 0 {
 		t.Errorf("loadIniConfig(good) = (%v, log %q), want a config holding MAIN.k and no log", c, logs.String())
 	}
 
@@ -255,7 +262,7 @@ func TestLoadIniConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 		logs.Reset()
-		c := loadIniConfig(path)
+		c := loadIni(path)
 		if c == nil {
 			t.Errorf("%s: loadIniConfig = nil, want the partially read config", tc.name)
 			continue

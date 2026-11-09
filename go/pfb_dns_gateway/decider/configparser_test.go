@@ -435,3 +435,62 @@ func TestConfigParserInterpolationRecursionLimitIsTenSubstitutions(t *testing.T)
 	_, err := chain(12).get("M", "a1")   // 11
 	cfgErrContains(t, "11 nested substitutions", err, "Recursion limit exceeded in value substitution", "in 10 steps")
 }
+
+// ConfigParser.items(section[, raw]) as init_standard calls it for [noAAAA] and [GP_Bypass_List]: the DEFAULT options
+// first, then the section's own in file order, a section value overriding a default's value but not its position.
+// pfb_unbound.py:1438 builds ConfigParser() with strict=True, so a repeated option in one section is a read error
+// (TestConfigParserStrictDuplicatesKeepWhatWasRead); what the order decides is two options holding the same domain.
+func TestConfigParserItems(t *testing.T) {
+	c := cfgParse(t, "[DEFAULT]\nd1 = x%%y\nk2 = dflt\n[S]\nb = 1\na = %(d1)s!\nk2 = sec\nz = 3\n[T]\n")
+	for _, tc := range []struct {
+		section string
+		raw     bool
+		want    [][2]string
+	}{
+		{"S", false, [][2]string{{"d1", "x%y"}, {"k2", "sec"}, {"b", "1"}, {"a", "x%y!"}, {"z", "3"}}},
+		{"S", true, [][2]string{{"d1", "x%%y"}, {"k2", "sec"}, {"b", "1"}, {"a", "%(d1)s!"}, {"z", "3"}}},
+		{"T", false, [][2]string{{"d1", "x%y"}, {"k2", "dflt"}}},
+	} {
+		got, err := c.items(tc.section, tc.raw)
+		if err != nil || fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			t.Errorf("items(%q, raw=%v) = (%v, %v), want (%v, nil)", tc.section, tc.raw, got, err, tc.want)
+		}
+	}
+
+	_, err := c.items("nope", false)
+	cfgErrContains(t, "items of a missing section", err, "No section")
+
+	bad := cfgParse(t, "[S]\na = %(nope)s\nb = 1\n")
+	_, err = bad.items("S", false)
+	cfgErrContains(t, "items interpolates every value", err, "Bad value substitution", `option "a"`, "nope")
+	if got, err := bad.items("S", true); err != nil || fmt.Sprint(got) != "[[a %(nope)s] [b 1]]" {
+		t.Errorf("items(raw=true) = (%v, %v), want the uninterpolated pairs and no error", got, err)
+	}
+
+	zone := cfgParse(t, "[GP_Bypass_List]\n0 = fe80::1%em0\n1 = 10.0.0.0/24\n")
+	if got, err := zone.items("GP_Bypass_List", true); err != nil || fmt.Sprint(got) != "[[0 fe80::1%em0] [1 10.0.0.0/24]]" {
+		t.Errorf("zone-id row: items(raw=true) = (%v, %v), want the '%%em0' kept", got, err)
+	}
+}
+
+func TestConfigParserItemsKeepFileOrderPastTenOptions(t *testing.T) {
+	// A Go map would shuffle these; Python's dict keeps the insertion order.
+	var text strings.Builder
+	text.WriteString("[S]\n")
+	var want []string
+	for i := 20; i > 0; i-- {
+		fmt.Fprintf(&text, "k%d = v%d\n", i, i)
+		want = append(want, fmt.Sprintf("k%d", i))
+	}
+	got, err := cfgParse(t, text.String()).items("S", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, pair := range got {
+		names = append(names, pair[0])
+	}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Errorf("items names = %v, want the file order %v", names, want)
+	}
+}
