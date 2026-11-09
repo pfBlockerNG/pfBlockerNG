@@ -86,4 +86,38 @@ final class WizardEnablesPfbDnsWithDnsblTest extends TestCase
 		$this->assertSame('on', config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl'), 'the wizard writes DNSBL on');
 		$this->assertSame('on', config_get_path('installedpackages/pfblockerngdns/config/0/pfb_dns'), 'pfB-DNS is stored on with it');
 	}
+
+	/** The reset sweeps the migration's run-once marker with the other sections; it stores the marker again. */
+	public function testTheDefaultConfigurationRecordsThePfbDnsMigrationAsRun(): void
+	{
+		// When the wizard resets, up to the write of its default configuration
+		try {
+			step4_submitphpaction();
+			$this->fail('the reset must reach its configuration write');
+		} catch (\RuntimeException $stop) {
+			$this->assertSame(self::RESET_WRITE, $stop->getMessage());
+		}
+
+		// Then the run-once marker is stored on
+		$this->assertSame('on', config_get_path('installedpackages/pfblockerngdns/config/0/pfb_dns_dnsbl_migrated'), 'the wizard records the migration as run');
+	}
+
+	/** A pfB-DNS Off saved after the wizard is the administrator's choice: the next upgrade's migrations do not turn it back on. */
+	public function testAPfbDnsOffSavedAfterTheWizardSurvivesTheNextMigrationRun(): void
+	{
+		// Given the wizard's reset ran, and the administrator then saved pfB-DNS off beside DNSBL on
+		try {
+			step4_submitphpaction();
+			$this->fail('the reset must reach its configuration write');
+		} catch (\RuntimeException $stop) {
+			$this->assertSame(self::RESET_WRITE, $stop->getMessage());
+		}
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns', '');
+
+		// When the next upgrade's migrations run
+		pfb_run_migrations();
+
+		// Then pfB-DNS is still off
+		$this->assertNotSame('on', config_get_path('installedpackages/pfblockerngdns/config/0/pfb_dns'), 'the saved Off is the administrator\'s choice');
+	}
 }

@@ -335,7 +335,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	// A -- a proxy that never becomes ready is rolled back to the old integration
 	// -----------------------------------------------------------------------
 
-	public function testAProxyThatNeverServesTurnsPfbDnsOffAndRestoresTheResolverWithNoPythonScriptInUnbound(): void
+	public function testAProxyThatNeverServesKeepsPfbDnsOnAndRestoresTheResolverWithNoPythonScriptInUnbound(): void
 	{
 		// Given a first activation with DNSBL on: the Resolver is moved, and the proxy lives but never publishes its marker
 		$this->activate(TRUE);

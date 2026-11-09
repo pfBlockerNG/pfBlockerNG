@@ -2427,7 +2427,7 @@ function pfb_cfg_registry(): array
 		],
 
 		// issue #3770: the run-once record of that migration on this node. A later reinstall or upgrade then never turns back on a
-		// pfB-DNS the administrator saved off. Written only by the migration; '' = it has not run.
+		// pfB-DNS the administrator saved off. Written only by the migration and the setup wizard's reset; '' = it has not run.
 		'dns/pfb_dns_dnsbl_migrated' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
