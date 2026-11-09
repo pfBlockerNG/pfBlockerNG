@@ -26,6 +26,7 @@ WARNING_HINT = "<strong>DNSBL Virtual IP</strong>"  # the recovery step names th
 # drive those two through the Sync page's own save.
 GUARD_CONFIG = {
     "installedpackages/pfblockerng/config/0/enable_cb": "on",
+    helpers.dns_config_path("pfb_dns"): "on",
     "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl": "on",
     "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto": "",
     "installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface": "lo0",
@@ -86,3 +87,15 @@ def test_sync_page_warns_until_hasync_rule_sync_is_cleared(
     helpers.config_restore_state(smoke_vm, "hasync/synchronizerules", (False, ""))
     html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
     assert WARNING_MARKER not in html, f"after: expected no {WARNING_MARKER!r}, found the marker"
+
+
+def test_sync_page_does_not_warn_while_pfb_dns_is_off(
+    smoke_vm: SmokeVM, webui: WebUI, dnsblip_mismatch_config: None
+) -> None:
+    """Given every stored condition, pfB-DNS off stops DNSBL as the package off does: no DNSBL IP rules to skip."""
+    html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
+    assert WARNING_MARKER in html, f"before: expected {WARNING_MARKER!r}, found no marker"
+
+    helpers.config_set(smoke_vm, helpers.dns_config_path("pfb_dns"), "")
+    html = _render(smoke_vm, webui, SYNC_PAGE, "XMLRPC Sync Settings")
+    assert WARNING_MARKER not in html, f"after: expected no {WARNING_MARKER!r} with pfB-DNS off, found the marker"

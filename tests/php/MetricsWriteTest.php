@@ -46,8 +46,10 @@ final class MetricsWriteTest extends TestCase
 		$pfb['log']                = "{$this->root}/log/pfblockerng.log";
 		$pfb['errlog']             = "{$this->root}/log/error.log";
 		$pfb['pfctl']              = "{$this->root}/pfctl";
+		// DNSBL runs: package, pfB-DNS and DNSBL on
 		$pfb['dnsbl']              = PfbToggle::On;
-		$pfb['enable']             = PfbToggle::Off;
+		$pfb['pfb_dns']            = PfbToggle::On;
+		$pfb['enable']             = PfbToggle::On;
 		// /usr/local/etc stands in: it is outside the RAM-disked /var, which is why the state lives there.
 		$pfb['metrics_enabled']          = "{$this->root}/etc/pfb_metrics_enabled";
 		$pfb['metrics_lock']             = "{$this->root}/etc/pfb_metrics.lock";
@@ -983,9 +985,16 @@ final class MetricsWriteTest extends TestCase
 		$this->assertNull($s['ip_tables']);
 	}
 
-	public function testDnsblOffSkipsBothDatabasesAndReportsThemUpWithNoSeries(): void
+	/** @return array<string,array{string}> the switch that, turned off, stops DNSBL from running */
+	public static function dnsblParentSwitches(): array
 	{
-		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
+		return ['DNSBL off' => ['dnsbl'], 'pfB-DNS off' => ['pfb_dns'], 'package off' => ['enable']];
+	}
+
+	#[DataProvider('dnsblParentSwitches')]
+	public function testWithDnsblNotRunningBothDatabasesAreSkippedAndReportedUpWithNoSeries(string $switch): void
+	{
+		$GLOBALS['pfb'][$switch] = PfbToggle::Off;
 		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
 			'CREATE TABLE dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER );',
 			"INSERT INTO dnsbl VALUES ('DNSBL_Ads', '2026-10-18 10:00:00', 5000, 17);",

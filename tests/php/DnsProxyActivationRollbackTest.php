@@ -987,6 +987,29 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept for the next restore');
 	}
 
+	/** @return array<string,array{string,bool}> the pfB-DNS enable stored when the rollback runs, and whether DNSBL runs for it */
+	public static function enablesStoredAtRollback(): array
+	{
+		return ['pfB-DNS on' => ['on', TRUE], 'pfB-DNS turned off since the move' => ['', FALSE]];
+	}
+
+	#[DataProvider('enablesStoredAtRollback')]
+	public function testTheRollbackRestoresUnboundWithTheDnsblModuleInputsOnlyWhilePfbDnsIsOn(string $stored, bool $dnsblRuns): void
+	{
+		// Given a moved Resolver with DNSBL on, a proxy that never serves, and the module's inputs not written yet
+		$this->activate(TRUE);
+		$this->proxyLivesButNeverServes();
+		config_set_path(self::TOGGLE, $stored);
+		unlink_if_exists($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['unbound_py_conf'], 'before: no module inputs');
+
+		// When the rollback runs
+		$this->assertTrue(pfb_dns_proxy_roll_back(), 'the Resolver is restored');
+
+		// Then Unbound was restored in DNSBL's mode exactly while DNSBL runs: DNSBL stored On with pfB-DNS off is handled as the package off is
+		$this->assertSame($dnsblRuns, is_file($GLOBALS['pfb']['unbound_py_conf']), 'the module inputs were written');
+	}
+
 	// -----------------------------------------------------------------------
 	// E -- an unsafe Custom Options line added after the move rolls pfB-DNS back like a failed activation
 	// -----------------------------------------------------------------------

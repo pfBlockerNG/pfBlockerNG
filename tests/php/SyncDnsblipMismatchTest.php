@@ -18,7 +18,8 @@ final class SyncDnsblipMismatchTest extends TestCase
 		PfbToggle $enable,
 		PfbToggle $dnsbl,
 		mixed $dnsblIpAction,
-		mixed $hasyncRules
+		mixed $hasyncRules,
+		PfbToggle $pfbdns = PfbToggle::On
 	): void {
 		$this->assertSame(
 			$expected,
@@ -28,13 +29,14 @@ final class SyncDnsblipMismatchTest extends TestCase
 				$enable,
 				$dnsbl,
 				$dnsblIpAction,
-				$hasyncRules
+				$hasyncRules,
+				$pfbdns
 			),
 			"{$row}: mismatch result"
 		);
 	}
 
-	/** @return iterable<string, array{string, bool, string, mixed, PfbToggle, PfbToggle, mixed, mixed}> */
+	/** @return iterable<string, array{0:string, 1:bool, 2:string, 3:mixed, 4:PfbToggle, 5:PfbToggle, 6:mixed, 7:mixed, 8?:PfbToggle}> */
 	public static function mismatchCases(): iterable
 	{
 		yield 'R1 all active with automatic sync' => [
@@ -91,6 +93,9 @@ final class SyncDnsblipMismatchTest extends TestCase
 		];
 		yield 'R7 pfBlockerNG is disabled' => [
 			'R7 pfBlockerNG is disabled', FALSE, 'lists', 'auto', PfbToggle::Off, PfbToggle::On, 'Deny_Both', 'on',
+		];
+		yield 'R7a pfB-DNS is disabled, as the package is' => [
+			'R7a pfB-DNS is disabled, as the package is', FALSE, 'lists', 'auto', PfbToggle::On, PfbToggle::On, 'Deny_Both', 'on', PfbToggle::Off,
 		];
 		yield 'R8 DNSBL is disabled' => [
 			'R8 DNSBL is disabled', FALSE, 'lists', 'auto', PfbToggle::On, PfbToggle::Off, 'Deny_Both', 'on',

@@ -14,7 +14,8 @@ final class DnsOwnedCollectorTest extends TestCase
 		$this->prior = $GLOBALS['pfb'];
 		$this->root = sys_get_temp_dir() . '/pfb_owned_collect_' . bin2hex(random_bytes(8));
 		mkdir($this->root);
-		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'], ['dnsbl'=>PfbToggle::On,'dnsbl_info'=>"$this->root/info",'dnsbl_resolver'=>"$this->root/resolver",'dnsbldir'=>$this->root,'dbdir'=>$this->root,'schedule_state_dir'=>$this->root]);
+		// DNSBL runs only while the package, pfB-DNS and DNSBL are all on (issue #3770)
+		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'], ['enable'=>PfbToggle::On,'pfb_dns'=>PfbToggle::On,'dnsbl'=>PfbToggle::On,'dnsbl_info'=>"$this->root/info",'dnsbl_resolver'=>"$this->root/resolver",'dnsbldir'=>$this->root,'dbdir'=>$this->root,'schedule_state_dir'=>$this->root]);
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
 		$db->exec('CREATE TABLE dnsbl(groupname TEXT,entries INTEGER,counter INTEGER)');
 		$db->exec("INSERT INTO dnsbl VALUES ('DNSBL_Regex',2,15)");

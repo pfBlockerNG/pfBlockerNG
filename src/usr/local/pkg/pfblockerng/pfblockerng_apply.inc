@@ -3922,7 +3922,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			}
 
 			// Add DNSBLIP, if configured (IPv4 + IPv6)
-			if ($pfb['dnsbl'] === PfbToggle::On && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
+			if (pfb_dnsbl_active() && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
 			    && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
 
 				$list = array(	'aliasname'	=> 'DNSBLIP',
@@ -4647,7 +4647,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		$lists = config_get_path("installedpackages/{$ip_type}/config");
 
 		// Add DNSBLIP, if configured (IPv4 + IPv6)
-		if ($pfb['dnsbl'] === PfbToggle::On && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
+		if (pfb_dnsbl_active() && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4')
 		    && $pfb['dnsbl_ip'] != 'Disabled' && ($vtype == '_v4' || $vtype == '_v6')) {
 
 			$list = array(	'aliasname'	=> 'DNSBLIP',

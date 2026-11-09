@@ -7351,11 +7351,10 @@ function pfblockerng_tick(
 	$manifest_path = (string) ($pfb['unbound_py_sources'] ?? '');
 	// Only a pass that can publish a manifest may be dispatched for a missing one: DNSBL off
 	// takes the disable branch and publishes nothing, and an empty path is a broken setting,
-	// so either would retry every tick forever without repairing anything. The DNSBL state
-	// read here is the EFFECTIVE one -- a manual-mode VIP failure disables it at runtime
-	// (issue #331) while the stored setting still says enabled.
+	// so either would retry every tick forever without repairing anything. pfb_dns_proxy_hosts_module() reads the
+	// EFFECTIVE DNSBL state -- a manual-mode VIP failure disables it at runtime (issue #331) while the stored
+	// setting still says enabled -- so it needs no DNSBL check of its own.
 	$manifest_due = $runtime_ready && $runtime_model !== NULL && $runtime_model['scheduled']
-		&& ($pfb['dnsbl'] ?? PfbToggle::Off) === PfbToggle::On
 		&& pfb_dns_proxy_hosts_module()
 		&& $manifest_path !== '' && !file_exists($manifest_path);
 	$scheduled_due = $runtime_ready && $cache_ready && $runtime_model !== NULL

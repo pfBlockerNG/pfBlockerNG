@@ -11332,10 +11332,10 @@ function pfb_metrics_collect(): array {
 		return $packets;
 	});
 
-	// With DNSBL off the databases hold nothing to export (the widget shows none either): both sources are up with no series.
+	// With DNSBL not running (DNSBL, pfB-DNS or the package off) the databases hold nothing to export (the widget shows none either): both sources are up with no series.
 	$dnsbl_groups = $dnsbl_detail = $dnsbl_totals = NULL;
 	$resolver_queries = $resolver_detail = NULL;
-	if ($pfb['dnsbl'] === PfbToggle::On) {
+	if (pfb_dnsbl_active()) {
 		$dnsbl_snapshot = $guard('dnsbl_db', function () use (&$up, $pfb, $num, $counter, $details, $permission): ?array {
 			$snapshot = pfb_metrics_sqlite_snapshot($pfb['dnsbl_info'],
 				'SELECT groupname, entries, counter FROM dnsbl ORDER BY rowid',
@@ -16254,9 +16254,10 @@ function pfb_dns_wanted(): bool {
 }
 
 /**
- * Does the DNS Reply log get filled, as far as Reports' reply controls are concerned: DNSBL on (its module logs, as before),
- * or pfB-DNS on with the stored reply-logging preference on (the proxy's --reply-log). The preference alone is not enough:
- * it defaults to on, and without pfB-DNS nothing logs.
+ * Does the DNS Reply log get filled, as far as Reports' reply controls are concerned: DNSBL stored On (the DNS proxy hosts its
+ * module, which logs; with a parent switch off the controls still show, as they filter the log already written), or pfB-DNS on
+ * with the stored reply-logging preference on (the proxy's --reply-log). The preference alone is not enough: it defaults to on,
+ * and without pfB-DNS nothing logs.
  */
 function pfb_dns_reply_log_active(): bool {
 	global $pfb;
@@ -27968,12 +27969,14 @@ function pfb_sync_policy_merge(array $incoming, array $current, ?array &$ignored
 // issue #3441: TRUE when pfSense HA copies this node's pfB_DNSBLIP_* rules to a peer whose
 // DNSBL settings are excluded from pfBlockerNG sync, so the peer can serve an empty alias.
 // issue #3452: only the 'lists' scope excludes them; 'all' and 'policy' carry DNSBL policy.
+// issue #3770: no aliases exist while DNSBL does not run, and it needs pfB-DNS on as it needs the package on ($pfbdns: the stored enable).
 function pfblockerng_sync_dnsblip_mismatch(string $scope, mixed $synconchanges, PfbToggle $enable,
-	PfbToggle $dnsbl, mixed $dnsbl_ip_action, mixed $hasync_rules): bool {
+	PfbToggle $dnsbl, mixed $dnsbl_ip_action, mixed $hasync_rules, PfbToggle $pfbdns): bool {
 	$dnsbl_ip_action = pfb_dnsblip_action_value($dnsbl_ip_action);
 	return $scope === 'lists'
 	    && in_array($synconchanges, ['auto', 'manual'], TRUE)
 	    && $enable === PfbToggle::On
+	    && $pfbdns === PfbToggle::On
 	    && $dnsbl === PfbToggle::On
 	    && $hasync_rules === 'on'
 	    && $dnsbl_ip_action !== 'Disabled'

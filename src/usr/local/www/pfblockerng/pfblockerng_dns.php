@@ -202,7 +202,7 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('<p><strong>Experimental.</strong> <strong>pfB-DNS</strong> answers client DNS. '
 		. 'With DNSBL enabled, it answers blocked names locally and passes other queries to the DNS Resolver with the client address. '
-		. '<strong>DNSBL</strong> runs only through <strong>pfB-DNS</strong>: turning <strong>pfB-DNS</strong> off turns <strong>DNSBL</strong> off too.</p>'
+		. '<strong>DNSBL</strong> runs only through <strong>pfB-DNS</strong>: turning <strong>pfB-DNS</strong> off stops <strong>DNSBL</strong>; the <strong>DNSBL</strong> setting is kept.</p>'
 		. '<div class="infoblock">'
 		. '<p><strong>Resolver changes</strong></p>'
 		. '<ul>'

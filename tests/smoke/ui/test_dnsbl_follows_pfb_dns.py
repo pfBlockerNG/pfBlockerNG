@@ -148,12 +148,12 @@ def test_dnsbl_enable_help_says_dnsbl_runs_only_while_pfb_dns_is_on(webui: WebUI
     ) in text, "the DNSBL enable help must say DNSBL requires pfB-DNS and pfBlockerNG"
 
 
-def test_pfb_dns_help_says_dnsbl_goes_off_with_it_and_what_a_failed_activation_leaves(webui: WebUI) -> None:
+def test_pfb_dns_help_says_dnsbl_stops_with_it_and_what_a_failed_activation_leaves(webui: WebUI) -> None:
     """When the pfB-DNS page renders, Then its enable help states the parent switch and a failed activation."""
     text = _plain_text(webui.get(DNS_PAGE).text)
 
-    assert "DNSBL runs only through pfB-DNS: turning pfB-DNS off turns DNSBL off too." in text, (
-        "the pfB-DNS enable help must say that turning it off turns DNSBL off too"
+    assert "DNSBL runs only through pfB-DNS: turning pfB-DNS off stops DNSBL; the DNSBL setting is kept." in text, (
+        "the pfB-DNS enable help must say that turning it off stops DNSBL and keeps the DNSBL setting"
     )
     assert (
         "Adding such a conflict later restores the Resolver with the conflicting line kept; pfB-DNS stays on, "
@@ -168,6 +168,7 @@ def test_pfb_dns_help_says_dnsbl_goes_off_with_it_and_what_a_failed_activation_l
         "Adding such a conflict later turns pfB-DNS off",
         "Disabling the DNS Resolver stops pfB-DNS, restores the saved fields and turns this option off",
         "DNSBL requires pfB-DNS, so turn DNSBL off first",
+        "turning pfB-DNS off turns DNSBL off too",
     ):
         assert retired not in text, f"the help still carries the retired sentence: {retired}"
 

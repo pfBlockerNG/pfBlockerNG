@@ -524,9 +524,11 @@ nothing. Pinned by `DnsProxyConfigLockTest` and `DnsblSettingsSaveRaceTest`.
 
 pfB-DNS is a parent switch of DNSBL exactly as the pfBlockerNG enable is (issue #3770): `pfb_dnsbl_active()` is true only while the
 pfBlockerNG enable, the pfB-DNS enable and DNSBL are all on, and every site that gated on the enable together with DNSBL (the apply's
-`$mode` and its DNSBL passes, the install's web server start, the widget's DNSBL row and statistics, the proxy's `--no-module`) goes
-through it. DNSBL stored On with pfB-DNS Off is handled like DNSBL On with pfBlockerNG Off: neither save is refused, DNSBL does not
-run, and every status surface shows DNSBL off. Pinned by `DnsblActiveNeedsBothParentSwitchesTest` and `DnsblSaveWithPfbDnsOffTest`.
+`$mode` and its DNSBL passes and DNSBL IP aliases, the install's web server start, the metrics export, the widget's DNSBL statistics,
+the proxy's `--no-module`) goes through it; the widget's DNSBL row open-codes the same three conditions, because its oracle test
+extracts that expression with a `$pfb` of its own. DNSBL stored On with pfB-DNS Off is handled like DNSBL On with pfBlockerNG Off:
+neither save is refused, DNSBL does not run, and every status surface shows DNSBL off. Pinned by
+`DnsblActiveNeedsBothParentSwitchesTest`, `DnsblSaveWithPfbDnsOffTest` and, for the passes, `DnsblVipApplyLifecycleTest`.
 
 While the Resolver is moved and DNSBL is on (`pfb_dns_proxy_hosts_module()`: a snapshot and `pfb_dnsbl_active()`) the proxy is the only module host:
 Unbound never is (issue #3770). Every liveness decision (`pfb_unbound_py_host_running()`: `pfb_dns_proxy_hosts_module()` and the

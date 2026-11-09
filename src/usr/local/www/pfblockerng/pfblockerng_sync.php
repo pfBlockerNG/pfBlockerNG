@@ -196,7 +196,7 @@ pfb_print_pending_changes_box();
 
 // foreign key: hasync/synchronizerules is a pfSense core key, not in registry
 if (pfblockerng_sync_dnsblip_mismatch($pconfig['syncscope'], $pconfig['varsynconchanges'], PfbConfig::read('gen/enable_cb'),
-	PfbConfig::read('dnsbl/pfb_dnsbl'), PfbConfig::read('dnsbl/action'), config_get_path('hasync/synchronizerules'))) {
+	PfbConfig::read('dnsbl/pfb_dnsbl'), PfbConfig::read('dnsbl/action'), config_get_path('hasync/synchronizerules'), PfbConfig::read('dns/pfb_dns'))) {
 	print_info_box(gettext('<p><strong>DNSBL IP rules may be skipped on the High Availability peer.</strong></p>'
 		. '<p><strong>System &gt; High Availability Sync</strong> copies firewall rules, but <strong>Lists and global settings only (legacy)</strong> omits the DNSBL settings needed for the <code>pfB_DNSBLIP_v4</code> and <code>pfB_DNSBLIP_v6</code> aliases.</p>'
 		. '<ul>'

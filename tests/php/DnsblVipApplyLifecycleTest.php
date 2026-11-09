@@ -1036,6 +1036,125 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------------------------------
+	// pfB-DNS is a parent switch of DNSBL, as the pfBlockerNG enable is (issue #3770)
+	// ------------------------------------------------------------------------------------------
+
+	/** @return array<string,array{array<string,bool>,bool}> the state, and whether DNSBL runs in it */
+	public static function parentRows(): array
+	{
+		return [
+			'package, pfB-DNS and DNSBL on' => [[], TRUE],
+			'pfB-DNS off' => [['pfbdns' => FALSE], FALSE],
+			'package off' => [['enable' => FALSE], FALSE],
+			'DNSBL off' => [['dnsbl' => FALSE], FALSE],
+		];
+	}
+
+	/** @param array<string,bool> $state */
+	#[DataProvider('parentRows')]
+	public function testTheDnsblIpAliasesExistOnlyWhileDnsblRuns(array $state, bool $runs): void
+	{
+		// GIVEN a full update pass and a DNSBL IP action that builds the two DNSBL IP aliases
+		$this->arrange(['save' => FALSE, 'demand' => FALSE] + $state);
+		PfbConfig::write('dnsbl/action', 'Deny_Both');
+		$this->publishTo(TRUE);
+
+		// WHEN the pass runs
+		$this->runPass();
+
+		// THEN the aliases exist exactly while DNSBL runs: DNSBL stored On with pfB-DNS Off builds none, as with the package off
+		$aliases = array_values(array_filter(
+			array_column(config_get_path('aliases/alias', []), 'name'),
+			static fn (string $name): bool => str_starts_with($name, 'pfB_DNSBLIP_')
+		));
+		$this->assertSame($runs ? ['pfB_DNSBLIP_v4', 'pfB_DNSBLIP_v6'] : [], $aliases, 'the DNSBL IP aliases');
+	}
+
+	/** @param array<string,bool> $state */
+	#[DataProvider('parentRows')]
+	public function testTheIpPassLoadsTheDnsblIpListOnlyWhileDnsblRuns(array $state, bool $runs): void
+	{
+		// GIVEN a full update pass, a DNSBL IP action, and no IP list of its own
+		$this->arrange(['save' => FALSE, 'demand' => FALSE] + $state);
+		PfbConfig::write('dnsbl/action', 'Deny_Both');
+		$this->publishTo(TRUE);
+
+		// WHEN the pass runs
+		$this->runPass();
+
+		// THEN the IPv4 pass ran, for the DNSBL IP list alone, exactly while DNSBL runs
+		$this->assertSame($runs, str_contains($this->passLog(), 'IPv4 Process'), 'the IPv4 pass loaded the DNSBL IP list');
+	}
+
+	public function testTurningPfbDnsOffRemovesTheDnsblIpAliasesTheLastPassBuilt(): void
+	{
+		// GIVEN pass 1, everything on: the aliases and their member files exist
+		$this->arrange(['save' => FALSE, 'demand' => FALSE]);
+		PfbConfig::write('dnsbl/action', 'Deny_Both');
+		$this->publishTo(TRUE);
+		$this->runPass();
+		$aliases = static fn (): array => array_values(array_filter(
+			array_column(config_get_path('aliases/alias', []), 'name'),
+			static fn (string $name): bool => str_starts_with($name, 'pfB_DNSBLIP_')
+		));
+		$this->assertSame(['pfB_DNSBLIP_v4', 'pfB_DNSBLIP_v6'], $aliases(), 'before: pass 1 built the aliases');
+
+		// WHEN pfB-DNS is turned off and pass 2 runs
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		$this->runPass();
+
+		// THEN the aliases are gone with it, as with DNSBL not running from the start
+		$this->assertSame([], $aliases(), 'the DNSBL IP aliases after pass 2');
+	}
+
+	/** @param array<string,bool> $state */
+	#[DataProvider('parentRows')]
+	public function testAFullPassProcessesAndPublishesDnsblOnlyWhileDnsblRuns(array $state, bool $runs): void
+	{
+		// GIVEN a full update pass with web server ports and a manifest path in the temp tree
+		$this->arrange(['save' => FALSE, 'demand' => FALSE] + $state);
+		$this->publishTo(TRUE);
+
+		// WHEN the pass runs
+		$this->runPass();
+
+		// THEN the DNSBL feed processing ran and the manifest was published exactly while DNSBL runs
+		$this->assertSame($runs, str_contains($this->passLog(), self::DNSBL_PROCESSING), 'DNSBL feed processing ran');
+		$this->assertSame($runs, file_exists($GLOBALS['pfb']['unbound_py_sources']), 'the manifest is published');
+	}
+
+	/** @param array<string,bool> $state */
+	#[DataProvider('parentRows')]
+	public function testEmptyPortsAbortTheDnsblPassOnlyWhileDnsblRuns(array $state, bool $runs): void
+	{
+		// GIVEN a full update pass, a group answering with the VIP, and no web server ports
+		$this->arrange(['save' => FALSE, 'demand' => TRUE, 'ports' => FALSE] + $state);
+		$this->publishTo(TRUE);
+
+		// WHEN the pass runs
+		$this->runPass();
+
+		// THEN the pass aborts on the missing ports exactly while DNSBL runs: with DNSBL not running there is no VIP to serve
+		$this->assertSame($runs, str_contains($this->passLog(), self::PORTS_ABORT), 'the pass aborted on the missing ports');
+	}
+
+	/** @param array<string,bool> $state */
+	#[DataProvider('parentRows')]
+	public function testTheDnsblFloatingRulesExistOnlyWhileDnsblRuns(array $state, bool $runs): void
+	{
+		// GIVEN a group answering with the VIP, web server ports and an allowed interface
+		$this->arrange(['demand' => TRUE] + $state);
+
+		// WHEN the apply pass runs
+		$this->runPass();
+
+		// THEN the ping and permit floating rules exist exactly while DNSBL runs
+		$rules = array_column(config_get_path('filter/rule', []), 'descr');
+		$this->assertSame($runs, in_array('pfB_DNSBL_Ping auto rule', $rules, TRUE), 'ping rule: ' . json_encode($rules));
+		$this->assertSame($runs, in_array('pfB_DNSBL_Permit auto rule', $rules, TRUE), 'permit rule: ' . json_encode($rules));
+	}
+
+	// ------------------------------------------------------------------------------------------
 	// Boot / install resync
 	// ------------------------------------------------------------------------------------------
 
