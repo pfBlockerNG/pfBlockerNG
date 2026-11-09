@@ -245,9 +245,9 @@ UNSEEDED_LOCAL_KEYS = {
     f"{DNSBL}/dnsbl_interface": "must be the interface of the node's DNSBL VIP (lo0): pfb_validate_vips() disables DNSBL otherwise",
     f"{DNSBL}/pfb_dnsvip6": "names a VIP object the guests do not have: a dangling reference disables DNSBL",
     f"{GEN}/pfb_metrics_export": "'on' needs pfSense-pkg-node_exporter on the node (the save gate refuses it without), and no HA guest installs that package",
-    f"{DNS}/pfb_dns": "turns pfB-DNS on, which moves the node's Resolver off its port and ends the DNSBL probes the harness runs",
+    f"{DNS}/pfb_dns": "the harness turns it on with DNSBL on both nodes (DNSBL runs only through pfB-DNS, #3770): a node where it is off would not block",
     f"{DNS}/pfb_dns_saved": "the Resolver snapshot the apply writes itself when it moves the Resolver; a seeded value reads as a moved one",
-    f"{DNS}/pfb_dns_interface": "read once pfB-DNS is on, which this harness leaves off: a seeded value changes nothing",
+    f"{DNS}/pfb_dns_interface": "the apply seeds it from the node's own Resolver interfaces (pfb_dns_proxy_seed()): a seeded value would keep the proxy off the interfaces the Resolver serves",
     h.dns_config_path(
         "pfb_dns_dot"
     ): "turns the TLS listener on, which needs the Resolver's certificate the guests do not have",
@@ -256,7 +256,7 @@ UNSEEDED_LOCAL_KEYS = {
     ): "read only while DoT is on, which this harness leaves off: a seeded value changes nothing",
     f"{DNS}/pfb_dns_dot_interface": "read only while DoT is on, which this harness leaves off: a seeded value changes nothing",
     f"{DNS}/pfb_dns_sslcertref": "names the Resolver's certificate, which the guests do not have: a seeded value would dangle",
-    f"{DNS}/pfb_dns_name": "read only while pfB-DNS is on, which this harness leaves off: a seeded value changes nothing",
+    f"{DNS}/pfb_dns_name": "names the host the certificate covers, which the guests do not have: a seeded name adds --dns-name and the name answers to the gateway's command line",
     **{
         h.dns_config_path(
             f"pfb_dns_{kind}"
@@ -269,12 +269,12 @@ UNSEEDED_LOCAL_KEYS = {
         ): "read only while its DoH/DoQ toggle is on, which this harness leaves off: a seeded value changes nothing"
         for leaf in ("doh_port", "doh_interface", "doh_trusted", "doq_port", "doq_interface")
     },
-    **{
-        h.dns_config_path(
-            f"pfb_dns_{leaf}"
-        ): "read only while pfB-DNS is on, which this harness leaves off: a seeded value changes nothing"
-        for leaf in ("ddr", "ddr_doh_443_interfaces")
-    },
+    h.dns_config_path(
+        "pfb_dns_ddr"
+    ): "needs the DNS Name, which stays unseeded: the pfB-DNS page refuses DDR without a name and the gateway answers nothing for resolver.arpa. without one",
+    h.dns_config_path(
+        "pfb_dns_ddr_doh_443_interfaces"
+    ): "read only while DoH is on (pfb_dns_proxy_ddr_doh_443_addresses()), which this harness leaves off: a seeded value changes nothing",
     **{
         h.dns_config_path(
             f"pfb_dns_{leaf}"

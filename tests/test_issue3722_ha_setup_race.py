@@ -113,7 +113,13 @@ def seams(hp: ModuleType, ha: ModuleType, monkeypatch: pytest.MonkeyPatch) -> No
         "assert_dnsbl_vip",
     ):
         monkeypatch.setattr(hp, name, lambda *_a, **_k: None)
-    for name in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled", "wait_unbound_ready"):
+    for name in (
+        "inject_ip_lists",
+        "ensure_dnsbl_vip",
+        "set_dnsbl_enabled",
+        "wait_unbound_ready",
+        "_require_pfb_dns_serving",
+    ):
         monkeypatch.setattr(hp.h, name, lambda *_a, **_k: None)
     monkeypatch.setattr(hp, "gateway_name", lambda _vm: "WAN_DHCP")
     monkeypatch.setattr(hp, "php_json", _guest_json)

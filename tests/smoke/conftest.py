@@ -1953,7 +1953,9 @@ def _scheduled_ticks_stay_disabled(request: pytest.FixtureRequest) -> None:
 
 
 @pytest.fixture(autouse=True, scope="module")
-def _pfb_module_baseline(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+def _pfb_module_baseline(
+    request: pytest.FixtureRequest, _restore_dns_config_per_module: None
+) -> Generator[None, None, None]:
     """Wipe pfBlockerNG config to a clean baseline AFTER each smoke module (cross-module isolation).
 
     Each module's ``deployed_vm`` deploys on top of whatever the PREVIOUS module left behind,
@@ -1962,6 +1964,10 @@ def _pfb_module_baseline(request: pytest.FixtureRequest) -> Generator[None, None
     on flips the next module's intended non-floating rule to floating). This teardown calls
     :func:`helpers.reset_pfb_baseline` so the next module starts from an empty pfBlockerNG
     config; module 1 is already clean from the fresh boot.
+
+    It requests ``_restore_dns_config_per_module`` so that fixture tears down AFTER this one: ``release_pfb_dns``
+    (pfB-DNS off + the product's own apply) then runs while the module's DNS mutations are still in place, and
+    :func:`helpers.restore_dns_config` puts them back afterwards.
 
     Scoped to the SMOKE tier only — the UI tier (``tests/smoke/ui/``) shares a session-scoped
     login + box and is reset by its own per-test mechanism instead

@@ -1131,6 +1131,11 @@ def dns_config_path(key: str) -> str:
     return f"installedpackages/{section}/config/0/{key}"
 
 
+def _pfb_dns_on_php() -> str:
+    """PHP storing pfB-DNS 'on': DNSBL runs only through pfB-DNS (#3770), so a DNSBL-on writer turns it on too."""
+    return f"config_set_path({_php_str(dns_config_path('pfb_dns'))}, 'on');\n"
+
+
 def config_get(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> str:
     """Read a scalar config value back via the config API (for self-tests).
 
@@ -1802,12 +1807,16 @@ def set_dnsvip_auto(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
 
 def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Toggle the DNSBL component (``pfb_dnsbl``) so the next reload runs
-    pfb_create_dnsbl in 'enabled' / 'disabled' mode (mode keys on dnsbl=='on')."""
+    pfb_create_dnsbl in 'enabled' / 'disabled' mode (mode keys on dnsbl=='on').
+
+    Turning it on also turns pfB-DNS on in the same write (DNSBL runs only through pfB-DNS, #3770). Turning it off
+    leaves pfB-DNS alone: with DNSBL off it only forwards, and :func:`release_pfb_dns` gives the Resolver back."""
     val = "on" if on else ""
     snippet = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
         f"$d['pfb_dnsbl'] = {_php_str(val)};\n"
         f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        f"{_pfb_dns_on_php() if on else ''}"
         "write_config('pfBlockerNG smoke: toggle pfb_dnsbl');\n"
         "echo 'OK';"
     )
@@ -3226,7 +3235,10 @@ def _dnsbl_settings_replace_php(settings: dict[str, str]) -> str:
     set and REPLACES every behaviour toggle. A plain ``array_merge`` would let a prior case's
     ``pfb_idn`` / ``pfb_hsts`` / ``pfb_regex`` survive into this one — :func:`reset` never clears
     config, so within a module a case would inherit toggles it never declared. Shared by
-    :func:`_dnsbl_inject_snippet` and :func:`inject_dnsbl_lists`."""
+    :func:`_dnsbl_inject_snippet`, :func:`inject_dnsbl_lists` and the test-local writers.
+
+    A replace that turns DNSBL on (``pfb_dnsbl`` 'on') also turns pfB-DNS on in the same write: DNSBL runs only through
+    pfB-DNS (#3770). Without ``pfb_dnsbl`` 'on' the PHP never mentions pfB-DNS."""
     keep = ", ".join(_php_str(k) for k in _DNSBL_INFRA_KEYS)
     return (
         f"$prev = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
@@ -3236,6 +3248,7 @@ def _dnsbl_settings_replace_php(settings: dict[str, str]) -> str:
         "}\n"
         f"$s = array_merge($keep, {_php_kv_array(settings)});\n"
         f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $s);\n"
+        f"{_pfb_dns_on_php() if settings.get('pfb_dnsbl') == 'on' else ''}"
     )
 
 
@@ -3487,6 +3500,34 @@ _SCOPE_TO_PFBTRIGGER: dict[str, tuple[str, str, str]] = {
 RELOAD_RETRY_INTERVAL = 5.0
 
 
+def _require_pfb_dns_serving(vm: SmokeVM) -> None:
+    """Raise when DNSBL and pfB-DNS are both on (package enabled) but pfB-DNS is not serving: one read, no poll.
+
+    DNSBL runs only through pfB-DNS (#3770), so a DNSBL apply that leaves the proxy not serving turns every later
+    block probe into a timeout. The apply itself waits for the proxy (``pfb_dns_proxy_serving_ready()``), so one look
+    suffices.
+    """
+    import json
+
+    pre = (
+        f"$s = array('enable_cb' => config_get_path({_php_str(CFG_GLOBAL + '/enable_cb')}, ''),\n"
+        f"  'dnsbl' => config_get_path({_php_str(CFG_DNSBL_SETTINGS + '/pfb_dnsbl')}, ''),\n"
+        f"  'pfb_dns' => config_get_path({_php_str(dns_config_path('pfb_dns'))}, ''));\n"
+        "$on = $s['enable_cb'] === 'on' && $s['dnsbl'] === 'on' && $s['pfb_dns'] === 'on';\n"
+        "if ($on) { require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); }"
+    )
+    state = json.loads(
+        _php_read_scalar(vm, pre, "json_encode($s + array('serving' => $on ? pfb_dns_proxy_serving_ready() : NULL))")
+    )
+    if all(state[key] == "on" for key in ("enable_cb", "dnsbl", "pfb_dns")) and state["serving"] is not True:
+        tail = vm.ssh(f"tail -n 40 {PFB_DNS_PROXY_LOG} 2>&1").stdout
+        raise RuntimeError(
+            "reload: DNSBL and pfB-DNS are on, pfb_dns_proxy_serving_ready(): "
+            f"expected True, actual {state['serving']}\n"
+            f"last 40 lines of {PFB_DNS_PROXY_LOG}:\n{tail}"
+        )
+
+
 @timed_step(lambda vm, scope="update", **_k: f"reload:{scope}")
 def reload(
     vm: SmokeVM,
@@ -3533,6 +3574,10 @@ def reload(
     ruleset is authoritative on the next read. The ``data_path=True`` path ignores this flag:
     it must wait on the zero-downtime swap signal regardless.
 
+    Once the readiness wait returns, DNSBL and pfB-DNS both on (package enabled) must mean a serving proxy
+    (``pfb_dns_proxy_serving_ready()``, what the apply itself waits for): one check, no poll, ``RuntimeError`` with the
+    last lines of the proxy log otherwise. ``wait_unbound=False`` skips it.
+
     Feed-pass lock deferrals return 75 and fail immediately with the precise stderr
     reason, before either readiness wait. ``retry_deferred`` (seconds, default none) re-runs a
     deferred pass, and only a deferred one, until it is accepted or the budget is spent, then fails the same way
@@ -3577,6 +3622,9 @@ def reload(
         wait_zero_downtime_swap(vm, since=swap_before, timeout=max(1.0, deadline - time.monotonic()))
     elif wait_unbound:
         wait_unbound_ready(vm)
+    else:
+        return  # a pf-level caller never probes DNS
+    _require_pfb_dns_serving(vm)
 
 
 def reload_deprecated_verb(vm: SmokeVM, verb: str, *, timeout: float = 600.0) -> None:
@@ -3690,6 +3738,40 @@ _BASELINE_GLOBAL_KEYS = (
 )
 
 
+def release_pfb_dns(vm: SmokeVM) -> None:
+    """Give the Resolver back: pfB-DNS off, plus the product's own DNSBL apply when it had moved the Resolver.
+
+    ``dns/pfb_dns_saved`` is the Resolver snapshot the apply takes when it moves the Resolver off its port and clears
+    when it restores it (``pfb_dns_proxy_resolver_locked()``): set means moved. Only an apply that sees pfB-DNS off
+    restores a moved Resolver, so the toggle is stored off and ``updatednsbl`` (the Settings page's apply) runs; a
+    snapshot still set afterwards raises, because wiping or restoring config under a running proxy leaves Unbound
+    colliding with it on :53. pfB-DNS on with nothing moved needs only the store; off with nothing moved, nothing.
+    An uninstalled package is left alone: its uninstall gave the Resolver back itself.
+    """
+    if not pkg_installed(vm):
+        return
+    saved_path = dns_config_path("pfb_dns_saved")
+    moved = config_get(vm, saved_path) != ""
+    if not moved and config_get(vm, dns_config_path("pfb_dns")) != "on":
+        return
+    snippet = (
+        f"config_set_path({_php_str(dns_config_path('pfb_dns'))}, '');\n"
+        "write_config('pfBlockerNG smoke: release pfB-DNS');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"release_pfb_dns: storing pfB-DNS off failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+    if not moved:
+        return
+    reload(vm, "updatednsbl")
+    still = config_get(vm, saved_path)
+    if still:
+        raise RuntimeError(f"release_pfb_dns: {saved_path} expected '' after the apply, actual {still!r}")
+
+
 def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
     """Wipe pfBlockerNG config to a known-EMPTY baseline (cross-module isolation).
 
@@ -3699,6 +3781,8 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
     along collection order (the #532-style false-green this guards against). This is the
     missing clean slate: it
 
+      * gives the Resolver back first (:func:`release_pfb_dns`: pfB-DNS off, then the product's own apply), while the
+        module's config is still in place;
       * deletes every test-injected pfBlockerNG config section (:data:`_BASELINE_DEL_SECTIONS`
         + the update hooks + the SafeSearch toggle);
       * unsets the behaviour toggles a case writes into ``config/0``
@@ -3717,6 +3801,7 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
     autouse teardown in ``conftest.py``; safe to call
     directly. Raises on a non-zero ``pfSsh.php`` eval so a broken baseline surfaces loudly.
     """
+    release_pfb_dns(vm)
     del_sections = "".join(f"config_del_path({_php_str(s)});\n" for s in _BASELINE_DEL_SECTIONS)
     unset_keys = "".join(f"unset($g[{_php_str(k)}]);\n" for k in _BASELINE_GLOBAL_KEYS)
     snippet = (
@@ -3808,8 +3893,12 @@ def restore_pfb_config_baseline(vm: SmokeVM, *, snapshot_path: str, timeout: flo
     4. A blocking :func:`apply_filter_sync` so the pf ruleset matches the restored
        config.
 
+    :func:`release_pfb_dns` runs before step 1: restoring a pre-move ``config.xml`` under a running pfB-DNS proxy
+    would leave Unbound colliding with it on :53.
+
     Issue #810.
     """
+    release_pfb_dns(vm)
     # Single-string ssh convention (runs verbatim under the guest /bin/sh -- required for
     # the `&&`); shlex.quote hardens the caller-supplied path (PR #965 Copilot review).
     cp_result = vm.ssh(
@@ -4105,6 +4194,7 @@ def snapshot_unbound_conf(vm: SmokeVM, *, timeout: float = 30.0) -> None:
 
 
 PFB_LOGDIR = "/var/log/pfblockerng"
+PFB_DNS_PROXY_LOG = f"{PFB_LOGDIR}/dns_proxy.log"
 
 
 @timed_step(lambda vm, tag, **_k: f"snap_state:{tag}")

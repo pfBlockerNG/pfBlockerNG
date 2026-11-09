@@ -668,6 +668,8 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         assert trusted.returncode == 0, f"copying the certificate to the client failed: {trusted.stderr!r}"
         _configure_resolver(vm, refid)
         h.inject(vm, h.DnsblCase(aliasname=FEED_HEADER, feed_url=feed_url, header=FEED_HEADER, mode=h.DnsblMode.VIP))
+        # inject turns pfB-DNS on with DNSBL; this module starts from pfB-DNS off and toggles it itself
+        _set_proxy_toggle(vm, False)
         # A package delete drops the manifest, so the next apply reuses a cached `.orig` of the module that ran
         # before and ignores the feed offered now: start from this module's own cache, then force the re-read.
         _discard_own_feed_cache(vm)

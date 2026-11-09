@@ -208,6 +208,13 @@ def test_digest_happy_path_matches_independent_md5() -> None:
 _SNAPSHOT_PATH = "/root/pfb_ui_config_baseline.xml"
 
 
+@pytest.fixture(autouse=True)
+def _no_pfb_dns_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These pins cover the restore's own sequence; the Resolver release it starts with is pinned in
+    ``test_issue3774_smoke_pfb_dns.py``."""
+    monkeypatch.setattr(helpers, "release_pfb_dns", lambda _vm, **_kw: None)
+
+
 def test_restore_cp_failure_raises_before_php_eval(monkeypatch: pytest.MonkeyPatch) -> None:
     """(k) A failed guest-side ``cp`` (bad snapshot path, disk full, ...) raises RuntimeError
     BEFORE ``php_eval`` runs -- a broken restore must surface immediately, never limp forward

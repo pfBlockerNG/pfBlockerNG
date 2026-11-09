@@ -93,6 +93,8 @@ def _enable_dnsbl(vm: SmokeVM) -> None:
     ``h.inject`` writes the DNSBL LIST/settings config but not the two master switches;
     ``h.ensure_dnsbl_vip`` + a reload then make the block live. Mirrors the enable chain
     ``test_upgrade_config_stability._write_representative_config`` sets.
+
+    DNSBL runs only through pfB-DNS (#3770), so pfB-DNS goes on in the same write.
     """
     snippet = (
         f"$g = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());\n"
@@ -101,6 +103,7 @@ def _enable_dnsbl(vm: SmokeVM) -> None:
         f"$s = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
         "$s['pfb_dnsbl'] = 'on';\n"
         f"config_set_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, $s);\n"
+        f"{h._pfb_dns_on_php()}"
         "write_config('pfBlockerNG #697 pkg-op smoke: enable DNSBL');\n"
         "echo 'OK';"
     )

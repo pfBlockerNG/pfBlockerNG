@@ -834,6 +834,8 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
         _configure_resolver(vm, refid)
         _put_reply_logging(vm, "on")
         h.inject(vm, h.DnsblCase(aliasname=feed_header, feed_url=feed_url, header=feed_header, mode=h.DnsblMode.VIP))
+        # inject turns pfB-DNS on with DNSBL; this module starts from pfB-DNS off and toggles it itself
+        _set_proxy_toggle(vm, False)
         _set_listeners(vm)
         _upload(client_vm, probe_binary, PROBE_BIN, "root:root")  # the gateway itself is the package's, never uploaded
         _apply(vm)  # toggle off: pfBlockerNG's own wiring, the module inside Unbound
