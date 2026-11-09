@@ -19,7 +19,7 @@ URLs, and checksums. Client sources and untested behavior are identified in each
 ## Shared DNS settings and per-family ports
 
 The top-level **DNS** tab opens **General**. **DNS Reply Logging** and **Resolver addresses** live there, not on
-the **pfB-DNS** or **DNSBL** sub-tabs. Resolver addresses offers an optional existing VIP or **Create VIP automatically**
+the **DNSBL** sub-tab; the pfB-DNS settings are on the same page. Resolver addresses offers an optional existing VIP or **Create VIP automatically**
 for each family; **Automatic VIP interface** defaults to Localhost and applies only to automatic creation.
 On a selected VIP, port 443 may already be taken; an automatically created resolver VIP leaves 443 free.
 

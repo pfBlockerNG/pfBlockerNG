@@ -1,5 +1,5 @@
 // pfb_dns_gateway, the pfB-DNS network layer (issue #3513): serves plain DNS over UDP and TCP, and DoT, DoH and DoQ with the
-// certificate pfBlockerNG writes from the pfB-DNS page's selection; applies the Resolver ACL before anyone is asked, lets the
+// certificate pfBlockerNG writes from the pfB-DNS settings' selection; applies the Resolver ACL before anyone is asked, lets the
 // Python DNSBL decider (its child) decide every other query, and forwards to Unbound with a PROXYv2 header naming the client.
 //
 //	pfb_dns_gateway [flags] -- <decider command...>
@@ -48,7 +48,7 @@ const (
 	defaultRestartTimeout = 30 * time.Second           // a decider restarted on the control socket: pfBlockerNG waits 40 s for the reply
 	defaultKillAfter      = 3 * time.Second            // how long the decider gets to leave on EOF
 	defaultShutdownBudget = 4 * time.Second            // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
-	defaultTLSPEM         = "/var/etc/pfb_dns/tls.pem" // the certificate and key pfBlockerNG writes from the pfB-DNS page's selection: root only
+	defaultTLSPEM         = "/var/etc/pfb_dns/tls.pem" // the certificate and key pfBlockerNG writes from the pfB-DNS settings' selection: root only
 )
 
 type config struct {
