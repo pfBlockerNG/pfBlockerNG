@@ -4660,7 +4660,8 @@ function pfb_dns_proxy_listen(?array &$skipped = NULL): array {
  * them. An address two interfaces carry belongs to the first whose description is a safe label (pfb_dns_listener_label_valid()): an
  * interface or VIP with any other description owns nothing, so that the panel and the gateway own the same addresses. An address that
  * is none (an interface with nothing assigned, a non-address) is left out. IPv6 keys are spelled as the gateway prints them
- * (pfb_dns_proxy_host_port()), except the embedded-IPv4 forms (::a.b.c.d), so that a lookup by a logged address finds them.
+ * (pfb_dns_proxy_host_port()), except the embedded-IPv4 forms (::a.b.c.d, ::ffff:a.b.c.d), so that a lookup by a logged address finds
+ * them.
  *
  * @return array<string,string> address (no port, no brackets) => label
  */

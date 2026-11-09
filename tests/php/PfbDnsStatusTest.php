@@ -956,6 +956,13 @@ final class PfbDnsStatusTest extends TestCase
 		], pfb_dns_proxy_address_interfaces());
 	}
 
+	public function testAnAddressTwoInterfacesCarryBelongsToTheFirstWhoseDescriptionIsASafeLabel(): void
+	{
+		$this->interfaces(['lan' => "bad\u{200D}name", 'opt1' => 'GUEST'], ['lan' => '192.0.2.1', 'opt1' => '192.0.2.1']);
+
+		$this->assertSame(['127.0.0.1' => 'Localhost', '::1' => 'Localhost', '192.0.2.1' => 'GUEST'], pfb_dns_proxy_address_interfaces());
+	}
+
 	public function testWithNoAssignedInterfaceOnlyLoopbackIsLabelled(): void
 	{
 		$this->interfaces([]);
