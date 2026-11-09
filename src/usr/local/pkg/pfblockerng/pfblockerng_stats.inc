@@ -96,7 +96,8 @@ function pfb_log_window_offset(string $path, int $date_index, string $since): in
 
 /**
  * Copy the lines of a log whose first field is an ISO date at or after $since to a new private temp file and return
- * its path (the caller unlinks it); NULL if the log cannot be read or the copy fails. Lines are copied in 4 KiB pieces.
+ * its path (the caller unlinks it; a shutdown function does too if the request dies first); NULL if the log cannot be
+ * read or the copy fails. Lines are copied in 4 KiB pieces.
  */
 function pfb_stats_window_log(string $path, string $since): ?string {
 	$source = @fopen($path, 'rb');
@@ -105,6 +106,10 @@ function pfb_stats_window_log(string $path, string $since): ?string {
 	}
 	fseek($source, pfb_log_window_offset($path, 0, $since));
 	$target = tempnam(sys_get_temp_dir(), 'pfb-stats-');
+	if ($target !== FALSE) {
+		// Nothing after the copy loop runs if the request dies in it (fatal error, time limit, exit).
+		register_shutdown_function(static fn () => @unlink($target));
+	}
 	$copy = $target === FALSE ? FALSE : @fopen($target, 'wb');
 	if ($target === FALSE || $copy === FALSE) {
 		fclose($source);
@@ -130,6 +135,41 @@ function pfb_stats_window_log(string $path, string $since): ?string {
 		return NULL;
 	}
 	return $target;
+}
+
+/**
+ * The first complete ISO date ('Y-m-d H:i:s') in field $date_index of a log, read from the start of the file in 4 KiB
+ * pieces (a line that does not start with one is read past, never held); NULL if the log is unreadable or has none.
+ */
+function pfb_log_first_date(string $path, int $date_index): ?string {
+	$handle = @fopen($path, 'rb');
+	if ($handle === FALSE) {
+		return NULL;
+	}
+	$stat = fstat($handle);
+	$size = $stat === FALSE ? PHP_INT_MAX : $stat['size'];
+	$first = NULL;
+	while ($first === NULL && ($line = fgets($handle, 4096)) !== FALSE) {
+		$date = explode(',', $line, $date_index + 2)[$date_index] ?? '';
+		if (preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/', $date, $match) === 1) {
+			$first = $match[0];
+		} elseif (!str_ends_with($line, "\n")) {
+			pfb_log_skip_line($handle, $size);
+		}
+	}
+	fclose($handle);
+	return $first;
+}
+
+/**
+ * The window a Stats page shows, as local 'Y-m-d H:i:s' [from, to]: it ends at $now and starts $range hours earlier, or
+ * for 'max' (All time) at the first dated record of the log; NULL for 'max' on a log with none.
+ *
+ * @return array{string, string}|null
+ */
+function pfb_stats_window(string $range, int $now, string $log, int $date_index): ?array {
+	$from = pfb_stats_since($range, $now) ?? pfb_log_first_date($log, $date_index);
+	return $from === NULL ? NULL : [$from, date('Y-m-d H:i:s', $now)];
 }
 
 function pfb_stats_definitions(string $alert_view, string $range): array {

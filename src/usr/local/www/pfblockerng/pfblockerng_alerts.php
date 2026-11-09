@@ -168,7 +168,7 @@ if (isset($_GET) && isset($_GET['view']) || isset($_REQUEST) && isset($_REQUEST[
 		case 'dnsbl_reply_stat':
 			$alert_view	= 'dnsbl_reply_stat';
 			$alert_log	= $pfb['dnsreplylog'];
-			$alert_title	= 'DNS Reply Stats';
+			$alert_title	= 'DNS Reply';
 			$active		= array('dnsbl_reply_stat' => TRUE);
 			break;
 		case 'ip_block_stat':
@@ -1720,8 +1720,10 @@ foreach (config_get_path('interfaces', []) as $int) {
 $local_hosts = pfb_collect_localhosts();
 
 // #3773: one range for every Stats panel (and the JSON endpoint): ?range= if it is an option, else the saved default.
+// $stats_now is the one clock read the window start and the "Showing ... to ..." end are both taken from.
+$stats_now	= time();
 $stats_range	= pfb_stats_range(is_string($_GET['range'] ?? NULL) ? $_GET['range'] : NULL, (string) $pfbchartcnt, $options_pfbchartcnt);
-$stats_since	= pfb_stats_since($stats_range);
+$stats_since	= pfb_stats_since($stats_range, $stats_now);
 
 // Collect Alert Statistics
 $stats_timeline = [];
@@ -1837,10 +1839,6 @@ if ($alert_summary) {
 		$stats_log = $alert_log;
 		if ($stats_since !== NULL) {
 			$stats_log = pfb_stats_window_log($alert_log, $stats_since) ?? '';
-			if ($stats_log !== '') {
-				// Removed even if this request dies first (fatal error, time limit, exit).
-				register_shutdown_function(static fn () => @unlink($stats_log));
-			}
 		}
 		// Total entry count for this view is constant across every $stat_info
 		// iteration (the log doesn't change mid-loop), so compute it once here
@@ -1889,7 +1887,7 @@ if ($alert_summary) {
 						break;
 					case 'ipsrcipout':
 						exec("{$lc_bytes}{$cut_cmd},13,14 {$stats_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
-	 					break;
+						break;
 					case 'ipdstipin':
 						exec("{$lc_bytes}{$cut_cmd},13,14 {$stats_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
 						break;
@@ -4856,15 +4854,23 @@ foreach ($stats_payload['panels'] ?? [] as $index => $panel) {
 	<div class="panel-heading">
 		<h2 class="panel-title"><?=$alert_title;?> Statistics&emsp;<small>Total event(s):
 			&emsp;[ <span id="Alert_Stats_Total"><?=$stats_progressive ? '…' : ($stats_payload['total'] ?? '—')?></span> ]</small>
-			<span class="pull-right">
-				<label for="Alert_Stats_Range" style="font-weight: normal;"><?=gettext('Time range');?></label>
-				<select id="Alert_Stats_Range" name="range" class="form-control input-sm" style="display: inline-block; width: auto;" autocomplete="off">
-					<?php foreach ($options_pfbchartcnt as $range_value => $range_label): ?>
-					<option value="<?=pfb_hsc((string) $range_value);?>"<?=(string) $range_value === $stats_range ? ' selected' : '';?>><?=pfb_hsc($range_label);?></option>
-					<?php endforeach; ?>
-				</select>
-			</span>
 		</h2>
+	</div>
+	<?php $stats_window = pfb_stats_window($stats_range, $stats_now, $alert_log, $stats_progressive ? 1 : 0); ?>
+	<div class="panel-body">
+		<div class="form-inline">
+			<label for="Alert_Stats_Range" style="margin-right: 8px;"><?=gettext('Time range');?></label>
+			<select id="Alert_Stats_Range" name="range" class="form-control input-sm" autocomplete="off">
+				<?php foreach ($options_pfbchartcnt as $range_value => $range_label): ?>
+				<option value="<?=pfb_hsc((string) $range_value);?>"<?=(string) $range_value === $stats_range ? ' selected' : '';?>><?=pfb_hsc($range_label);?></option>
+				<?php endforeach; ?>
+			</select>
+		</div>
+		<?php if ($stats_window === NULL): ?>
+		<p id="Alert_Stats_Window" style="margin: 10px 0 0;"><?=gettext('No dated records');?></p>
+		<?php else: ?>
+		<p id="Alert_Stats_Window" style="margin: 10px 0 0;"><?=gettext('Showing');?> <time datetime="<?=pfb_hsc(str_replace(' ', 'T', $stats_window[0]));?>"><?=pfb_hsc(substr($stats_window[0], 0, 16));?></time> <?=gettext('to');?> <time datetime="<?=pfb_hsc(str_replace(' ', 'T', $stats_window[1]));?>"><?=pfb_hsc(substr($stats_window[1], 0, 16));?></time></p>
+		<?php endif; ?>
 	</div>
 </div>
 <?php if ($stats_progressive): ?>
