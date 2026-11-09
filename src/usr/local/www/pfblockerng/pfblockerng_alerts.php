@@ -4905,19 +4905,23 @@ foreach ($stats_payload['panels'] ?? [] as $index => $panel) {
 	</div>
 	<?php $stats_window = pfb_stats_window($stats_range, $stats_now, $alert_log, $stats_progressive ? 1 : 0); ?>
 	<div class="panel-body">
-		<div class="form-inline">
-			<label for="Alert_Stats_Range" style="margin-right: 8px;"><?=gettext('Time range');?></label>
-			<select id="Alert_Stats_Range" name="range" class="form-control input-sm" autocomplete="off">
-				<?php foreach ($options_pfbchartcnt as $range_value => $range_label): ?>
-				<option value="<?=pfb_hsc((string) $range_value);?>"<?=(string) $range_value === $stats_range ? ' selected' : '';?>><?=pfb_hsc($range_label);?></option>
-				<?php endforeach; ?>
-			</select>
-		</div>
-		<?php if ($stats_window === NULL): ?>
-		<p id="Alert_Stats_Window" style="margin: 10px 0 0;"><?=gettext('No dated records');?></p>
-		<?php else: ?>
-		<p id="Alert_Stats_Window" style="margin: 10px 0 0;"><?=gettext('Showing');?> <time datetime="<?=pfb_hsc(str_replace(' ', 'T', $stats_window[0]));?>"><?=pfb_hsc(substr($stats_window[0], 0, 16));?></time> <?=gettext('to');?> <time datetime="<?=pfb_hsc(str_replace(' ', 'T', $stats_window[1]));?>"><?=pfb_hsc(substr($stats_window[1], 0, 16));?></time></p>
-		<?php endif; ?>
+<?php
+$stats_range_group = new Form_Group('Time range');
+$stats_range_select = new Form_Select('range', NULL, $stats_range, $options_pfbchartcnt);
+$stats_range_select->setAttribute('id', 'Alert_Stats_Range')
+	->setAttribute('aria-label', gettext('Time range'))
+	->setAttribute('autocomplete', 'off')
+	->setWidth(4)
+	->setHelp(gettext('Applies to every panel on this page.'));
+$stats_range_group->add($stats_range_select);
+print($stats_range_group);
+$stats_window_text = $stats_window === NULL ? gettext('No dated records')
+	: '<time datetime="' . pfb_hsc(str_replace(' ', 'T', $stats_window[0])) . '">' . pfb_hsc(substr($stats_window[0], 0, 16)) . '</time> '
+	. gettext('to') . ' <time datetime="' . pfb_hsc(str_replace(' ', 'T', $stats_window[1])) . '">' . pfb_hsc(substr($stats_window[1], 0, 16)) . '</time>';
+$stats_window_group = new Form_Group('Showing');
+$stats_window_group->add(new Form_StaticText(NULL, '<span id="Alert_Stats_Window">' . $stats_window_text . '</span>'));
+print($stats_window_group);
+?>
 	</div>
 </div>
 <?php if ($stats_progressive): ?>

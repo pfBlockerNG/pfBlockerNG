@@ -27,7 +27,8 @@ pytestmark = pytest.mark.ui_render
 ALERT_REFRESH = "installedpackages/pfblockerngglobal/alertrefresh"
 VIEWS = ("dnsbl_stat", "dnsbl_reply_stat", "ip_block_stat", "ip_permit_stat", "ip_match_stat")
 META = re.compile(r'<meta id="AlertRefresh" http-equiv="refresh" content="60;url=([^"]+)"')
-PICKER = re.compile(r'<select id="Alert_Stats_Range".*?</select>', re.DOTALL)
+# pfSense's Form_Select orders the attributes itself, so match the select by its id wherever it sits.
+PICKER = re.compile(r'<select\b[^>]*\bid="Alert_Stats_Range"[^>]*>.*?</select>', re.DOTALL)
 SELECTED = re.compile(r'<option value="([^"]*)" selected')
 
 
