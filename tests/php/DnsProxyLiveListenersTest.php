@@ -612,7 +612,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 	}
 
 	#[DataProvider('addressesTheBoxDoesNotHave')]
-	public function testAnAddressTheBoxCannotAssignYetIsLeftForALaterPassWithNothingSentLoggedOrRestarted(string $host, ?string $lan6): void
+	public function testAnAddressTheBoxCannotAssignYetIsLeftForALaterPassWithNoListenerFrameLogOrRestart(string $host, ?string $lan6): void
 	{
 		// Given a ready proxy whose command names an address that this box cannot assign (before: its bind fails as EADDRNOTAVAIL)
 		$this->assertStringContainsString('assign requested address', self::bindError("{$host}:{$this->port}"), 'before: the bind fails for an address that is not there');
@@ -705,7 +705,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the reconcile runs
 		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
 
-		// Then, as with no restart pending, the failure is one line of the pfB log; nothing is sent, nothing restarts, the marker stays
+		// Then, as with no restart pending, the failure is one line of the pfB log; with a restart pending nothing at all is sent (not even
+		// the ownership table), nothing restarts, the marker stays
 		$this->assertNull($why);
 		$this->assertSame([], self::changeFrames($record));
 		$this->assertSame(1, $this->linesWith("0.0.0.0:{$this->port}"));
