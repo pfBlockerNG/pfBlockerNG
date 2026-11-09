@@ -1285,10 +1285,12 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
     helpers.ensure_dnsbl_vip(vm)
     orig_enable = helpers.config_get(vm, _CFG_PFB_ENABLE)
     orig_dnsbl = helpers.config_get(vm, CFG_PFB_DNSBL)
+    orig_pfb_dns = helpers.config_get(vm, helpers.dns_config_path("pfb_dns"))
     helpers.php_eval(
         vm,
         f"config_set_path('{_CFG_PFB_ENABLE}', 'on');\n"
         f"config_set_path('{CFG_PFB_DNSBL}', 'on');\n"
+        f"{helpers._pfb_dns_on_php()}"
         "write_config('pfBlockerNG smoke: enable DNSBL for a widget stat render check');\n"
         "echo 'OK';",
     )
@@ -1352,6 +1354,7 @@ def _seeded_dnsbl_stat_row(vm: SmokeVM, group: str, timestamp: str, counter: int
             vm,
             f"config_set_path('{_CFG_PFB_ENABLE}', '{orig_enable}');\n"
             f"config_set_path('{CFG_PFB_DNSBL}', '{orig_dnsbl}');\n"
+            f"config_set_path('{helpers.dns_config_path('pfb_dns')}', '{orig_pfb_dns}');\n"
             "write_config('pfBlockerNG smoke: restore enable_cb/pfb_dnsbl after a widget stat render check');\n"
             "echo 'OK';",
         )
@@ -1818,9 +1821,11 @@ def test_alerts_unified_log_colour_fields_render(
     """
     helpers.ensure_dnsbl_vip(smoke_vm)
     original = helpers.config_get(smoke_vm, CFG_PFB_DNSBL)
+    original_pfb_dns = helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns"))
     helpers.php_eval(
         smoke_vm,
         f"config_set_path('{CFG_PFB_DNSBL}', 'on');\n"
+        f"{helpers._pfb_dns_on_php()}"
         "write_config('pfBlockerNG smoke: enable DNSBL for the alerts unified-log render check');\n"
         "echo 'OK';",
     )
@@ -1841,6 +1846,7 @@ def test_alerts_unified_log_colour_fields_render(
         helpers.php_eval(
             smoke_vm,
             f"config_set_path('{CFG_PFB_DNSBL}', '{original}');\n"
+            f"config_set_path('{helpers.dns_config_path('pfb_dns')}', '{original_pfb_dns}');\n"
             "write_config('pfBlockerNG smoke: restore DNSBL toggle');\n"
             "echo 'OK';",
         )
