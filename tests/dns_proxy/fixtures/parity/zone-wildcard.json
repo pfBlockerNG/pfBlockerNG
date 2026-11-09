@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "description": "one ABP feed line ||ads.example^ becomes a wildcard zone entry, independent of Wildcard Blocking",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpGroup", "log_flag": "1"}]
+    },
+    "files": {"pfb_py_raw/abp.txt": ["||ads.example^"]}
+  },
+  "upstream": {
+    "xads.example. A": ["xads.example. 300 IN A 192.0.2.81"],
+    "other.example. A": ["other.example. 300 IN A 192.0.2.82"]
+  },
+  "cases": [
+    {
+      "id": "zone-apex-is-blocked",
+      "family": "zone_wildcard",
+      "description": "the anchor of a zone entry is blocked",
+      "query": {"name": "ads.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["ads.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "zone-covers-a-deep-subdomain",
+      "family": "zone_wildcard",
+      "description": "a zone entry blocks its subdomains at any depth",
+      "query": {"name": "a.b.c.ads.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.b.c.ads.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "zone-does-not-match-a-label-prefix-of-the-anchor",
+      "family": "zone_wildcard",
+      "description": "xads.example only ends in the letters of ads.example, not in its label, so it resolves",
+      "query": {"name": "xads.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["xads.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["xads.example. 300 IN A 192.0.2.81"],
+        "authority": []
+      }
+    },
+    {
+      "id": "zone-does-not-match-a-sibling",
+      "family": "zone_wildcard",
+      "description": "a sibling name under the same parent is not covered by the zone",
+      "query": {"name": "other.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["other.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["other.example. 300 IN A 192.0.2.82"],
+        "authority": []
+      }
+    }
+  ]
+}

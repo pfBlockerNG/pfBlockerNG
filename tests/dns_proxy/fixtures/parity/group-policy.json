@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "description": "[GP_Bypass_List] with an exact IPv4 address, an IPv4 CIDR and an IPv6 CIDR; one feed entry and one SafeSearch row",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      },
+      "GP_Bypass_List": {"row1": "192.0.2.50", "row2": "198.51.100.0/24", "row3": "2001:db8:100::/48"}
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/vip.txt": ["blocked.example"],
+      "pfb_py_ss.txt": ["ss-gp.example,192.0.2.210,2001:db8::210"]
+    }
+  },
+  "upstream": {"blocked.example. A": ["blocked.example. 300 IN A 192.0.2.99"]},
+  "cases": [
+    {
+      "id": "client-off-the-bypass-list-gets-the-block-answer",
+      "family": "group_policy",
+      "description": "the control: a client not on the list is blocked, so the bypassed rows below are a change",
+      "query": {"name": "blocked.example.", "type": "A", "client": "192.0.2.51"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exact-ipv4-bypass-is-relayed",
+      "family": "group_policy",
+      "description": "a client listed by its exact IPv4 address is never blocked",
+      "query": {"name": "blocked.example.", "type": "A", "client": "192.0.2.50"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["blocked.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 300 IN A 192.0.2.99"],
+        "authority": []
+      }
+    },
+    {
+      "id": "ipv4-cidr-bypass-is-relayed",
+      "family": "group_policy",
+      "description": "a client inside a listed IPv4 network is never blocked",
+      "query": {"name": "blocked.example.", "type": "A", "client": "198.51.100.77"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["blocked.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 300 IN A 192.0.2.99"],
+        "authority": []
+      }
+    },
+    {
+      "id": "ipv6-cidr-bypass-is-relayed",
+      "family": "group_policy",
+      "description": "a client inside a listed IPv6 network is never blocked",
+      "query": {"name": "blocked.example.", "type": "A", "client": "2001:db8:100::5"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["blocked.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 300 IN A 192.0.2.99"],
+        "authority": []
+      }
+    },
+    {
+      "id": "client-just-outside-the-listed-network-is-blocked",
+      "family": "group_policy",
+      "description": "198.51.101.1 is next to the listed 198.51.100.0/24, not in it: the block answer",
+      "query": {"name": "blocked.example.", "type": "A", "client": "198.51.101.1"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "bypassed-client-is-still-rewritten-by-safesearch",
+      "family": "group_policy",
+      "description": "the bypass skips the DNSBL only: a bypassed client still gets the SafeSearch rewrite",
+      "query": {"name": "ss-gp.example.", "type": "A", "client": "192.0.2.50"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["ss-gp.example. 300 IN A 192.0.2.210"],
+        "authority": []
+      }
+    }
+  ]
+}

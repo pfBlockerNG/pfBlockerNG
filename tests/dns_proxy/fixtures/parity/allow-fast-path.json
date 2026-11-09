@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "description": "user whitelist against plain feed blocks; no ABP @@, $important or regex line, so the fast path (important_rules off) decides",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"user_whitelist": [".wild-ok.example", "exact-ok.example"]},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/feed.txt": ["plain-blocked.example", "exact-ok.example", "sub.exact-ok.example", "sub.wild-ok.example"]
+    }
+  },
+  "upstream": {
+    "exact-ok.example. A": ["exact-ok.example. 300 IN A 192.0.2.91"],
+    "sub.wild-ok.example. A": ["sub.wild-ok.example. 300 IN A 192.0.2.92"]
+  },
+  "cases": [
+    {
+      "id": "listed-name-off-the-whitelist-is-blocked",
+      "family": "allow",
+      "description": "with a whitelist loaded, a listed name it does not name is still blocked (the control for the rows below)",
+      "query": {"name": "plain-blocked.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["plain-blocked.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exact-whitelist-entry-overrides-the-exact-block",
+      "family": "allow",
+      "description": "a whitelisted name that a feed lists is resolved, not blocked",
+      "query": {"name": "exact-ok.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["exact-ok.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["exact-ok.example. 300 IN A 192.0.2.91"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-whitelist-entry-overrides-a-subdomain-block",
+      "family": "allow",
+      "description": "a leading-dot whitelist entry (.wild-ok.example) allows a blocked subdomain of it",
+      "query": {"name": "sub.wild-ok.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["sub.wild-ok.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["sub.wild-ok.example. 300 IN A 192.0.2.92"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exact-whitelist-entry-does-not-cover-a-blocked-subdomain",
+      "family": "allow",
+      "description": "a whitelist entry without the leading dot allows only that name: the blocked subdomain stays blocked",
+      "query": {"name": "sub.exact-ok.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.exact-ok.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

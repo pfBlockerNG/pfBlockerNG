@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "description": "python_cname on: a CNAME chain's targets are checked against the feeds and the whitelist of the original name",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"user_whitelist": ["trusted.example"]},
+      "feeds": [
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"},
+        {"raw": "pfb_py_raw/nx3.txt", "feed": "Nx3Feed", "group": "Nx3Group", "log_flag": "3"}
+      ]
+    },
+    "files": {
+      "pfb_py_raw/vip.txt": ["blocked.example", "trusted-target.example"],
+      "pfb_py_raw/nx3.txt": ["nxshape.example"]
+    }
+  },
+  "upstream": {
+    "alias.example. A": ["alias.example. 300 IN CNAME blocked.example.", "blocked.example. 300 IN A 192.0.2.99"],
+    "bare.example. A": ["bare.example. 300 IN CNAME blocked.example."],
+    "nxalias.example. A": ["nxalias.example. 300 IN CNAME nxshape.example.", "nxshape.example. 300 IN A 192.0.2.98"],
+    "trusted.example. A": [
+      "trusted.example. 300 IN CNAME trusted-target.example.",
+      "trusted-target.example. 300 IN A 192.0.2.97"
+    ]
+  },
+  "cases": [
+    {
+      "id": "alias-of-a-blocked-target-gets-the-block-answer-owned-by-the-alias",
+      "family": "cname",
+      "description": "Unbound's CNAME + A answer ends at a blocked name: the client gets the block answer for the name it asked",
+      "query": {"name": "alias.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "lone-cname-answer-is-relayed-without-checking-its-target",
+      "family": "cname",
+      "description": "an answer that is one CNAME record and nothing else is not chain-validated, even to a blocked target",
+      "query": {"name": "bare.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["bare.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["bare.example. 300 IN CNAME blocked.example."],
+        "authority": []
+      }
+    },
+    {
+      "id": "alias-of-an-nxdomain-shaped-target-is-nxdomain-for-the-alias",
+      "family": "cname",
+      "description": "a target on a log_flag 3 feed turns the whole answer into a bare NXDOMAIN for the name asked",
+      "query": {"name": "nxalias.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["nxalias.example. A"],
+        "rcode": "NXDOMAIN",
+        "answer": [],
+        "authority": []
+      }
+    },
+    {
+      "id": "whitelisted-alias-of-a-blocked-target-is-relayed",
+      "family": "cname",
+      "description": "the original name is on the user whitelist, so its blocked CNAME target does not block it (issue #3222)",
+      "query": {"name": "trusted.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["trusted.example. A"],
+        "rcode": "NOERROR",
+        "answer": [
+          "trusted.example. 300 IN CNAME trusted-target.example.",
+          "trusted-target.example. 300 IN A 192.0.2.97"
+        ],
+        "authority": []
+      }
+    }
+  ]
+}

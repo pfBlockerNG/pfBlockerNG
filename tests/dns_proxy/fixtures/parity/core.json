@@ -1,0 +1,307 @@
+{
+  "schema": 1,
+  "description": "blocking on, Wildcard Blocking off: plain feed lines are exact entries, one feed row per log_flag",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"},
+        {"raw": "pfb_py_raw/null0.txt", "feed": "Null0Feed", "group": "Null0Group", "log_flag": "0"},
+        {"raw": "pfb_py_raw/null2.txt", "feed": "Null2Feed", "group": "Null2Group", "log_flag": "2"},
+        {"raw": "pfb_py_raw/nx3.txt", "feed": "Nx3Feed", "group": "Nx3Group", "log_flag": "3"},
+        {"raw": "pfb_py_raw/nx4.txt", "feed": "Nx4Feed", "group": "Nx4Group", "log_flag": "4"},
+        {"raw": "pfb_py_raw/nodata5.txt", "feed": "Nodata5Feed", "group": "Nodata5Group", "log_flag": "5"},
+        {"raw": "pfb_py_raw/nodata6.txt", "feed": "Nodata6Feed", "group": "Nodata6Group", "log_flag": "6"}
+      ]
+    },
+    "files": {
+      "pfb_py_raw/vip.txt": [
+        "blocked.example",
+        "vip.example",
+        "4.2.0.192.in-addr.arpa",
+        "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa"
+      ],
+      "pfb_py_raw/null0.txt": ["null0.example"],
+      "pfb_py_raw/null2.txt": ["null2.example"],
+      "pfb_py_raw/nx3.txt": ["nx3.example"],
+      "pfb_py_raw/nx4.txt": ["nx4.example"],
+      "pfb_py_raw/nodata5.txt": ["nodata5.example"],
+      "pfb_py_raw/nodata6.txt": ["nodata6.example"]
+    }
+  },
+  "upstream": {
+    "allowed.example. A": ["allowed.example. 300 IN A 192.0.2.77"],
+    "sub.blocked.example. A": ["sub.blocked.example. 300 IN A 192.0.2.78"],
+    "blocked.example. SOA": ["blocked.example. 300 IN SOA ns.example. hostmaster.example. 1 2 3 4 60"],
+    "blocked.example. TYPE35": []
+  },
+  "cases": [
+    {
+      "id": "unlisted-name-is-relayed-unchanged",
+      "family": "relay",
+      "description": "a name no feed lists is answered by Unbound and the client gets Unbound's bytes",
+      "query": {"name": "allowed.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["allowed.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["allowed.example. 300 IN A 192.0.2.77"],
+        "authority": []
+      }
+    },
+    {
+      "id": "unlisted-name-unbound-answers-nxdomain-is-relayed",
+      "family": "relay",
+      "description": "Unbound's NXDOMAIN for an unlisted name reaches the client as it is",
+      "query": {"name": "unknown.example.", "type": "A"},
+      "expect": {"decision": "relay", "forwards": ["unknown.example. A"], "rcode": "NXDOMAIN", "answer": [], "authority": []}
+    },
+    {
+      "id": "exact-entry-is-blocked",
+      "family": "zone_exact",
+      "description": "a name an exact feed entry lists is answered by the decider with the VIP, no query to Unbound",
+      "query": {"name": "blocked.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exact-entry-does-not-block-its-subdomain-without-wildcard-blocking",
+      "family": "zone_exact",
+      "description": "with Wildcard Blocking off a plain feed line is exact, so a subdomain of the listed name resolves",
+      "query": {"name": "sub.blocked.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["sub.blocked.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["sub.blocked.example. 300 IN A 192.0.2.78"],
+        "authority": []
+      }
+    },
+    {
+      "id": "mixed-case-query-is-blocked-and-the-answer-owner-is-the-name-as-asked",
+      "family": "zone_exact",
+      "description": "the block matches whatever the case; the answer owner is the question's name, since the wire compresses it into the question",
+      "query": {"name": "BlOcKeD.ExAmPlE.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["BlOcKeD.ExAmPlE. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "vip-log-flag-1-answers-the-vip-address-for-aaaa",
+      "family": "response",
+      "description": "log_flag 1 answers AAAA with the DNSBL VIP v6 address",
+      "query": {"name": "vip.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["vip.example. 3600 IN AAAA fd00::1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "vip-log-flag-1-answers-both-addresses-for-any",
+      "family": "response",
+      "description": "ANY on a VIP entry gets the A record and then the AAAA record",
+      "query": {"name": "vip.example.", "type": "ANY"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["vip.example. 3600 IN A 10.10.10.1", "vip.example. 3600 IN AAAA fd00::1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "null-log-flag-0-answers-the-null-ipv4-address",
+      "family": "response",
+      "description": "log_flag 0 is null blocking: A is answered 0.0.0.0",
+      "query": {"name": "null0.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["null0.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "null-log-flag-2-answers-the-null-ipv6-address",
+      "family": "response",
+      "description": "log_flag 2 is null blocking too: AAAA is answered ::",
+      "query": {"name": "null2.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["null2.example. 3600 IN AAAA ::"],
+        "authority": []
+      }
+    },
+    {
+      "id": "nxdomain-log-flag-3-answers-nxdomain-without-records",
+      "family": "response",
+      "description": "log_flag 3 answers NXDOMAIN with nothing in the answer or authority sections",
+      "query": {"name": "nx3.example.", "type": "A"},
+      "expect": {"decision": "answer", "forwards": [], "rcode": "NXDOMAIN", "answer": [], "authority": []}
+    },
+    {
+      "id": "nxdomain-log-flag-4-answers-nxdomain-without-records",
+      "family": "response",
+      "description": "log_flag 4 (the unlogged NXDOMAIN) answers the same bare NXDOMAIN",
+      "query": {"name": "nx4.example.", "type": "A"},
+      "expect": {"decision": "answer", "forwards": [], "rcode": "NXDOMAIN", "answer": [], "authority": []}
+    },
+    {
+      "id": "nodata-log-flag-5-answers-noerror-with-the-soa",
+      "family": "response",
+      "description": "log_flag 5 answers NOERROR with no records and the SOA in the authority section",
+      "query": {"name": "nodata5.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["nodata5.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "nodata-log-flag-6-answers-noerror-with-the-soa",
+      "family": "response",
+      "description": "log_flag 6 (the unlogged NODATA) answers the same NOERROR with the SOA",
+      "query": {"name": "nodata6.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["nodata6.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-mx-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for MX has no address to give: NOERROR, no answer, the SOA",
+      "query": {"name": "blocked.example.", "type": "MX"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-txt-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for TXT is answered NODATA with the SOA",
+      "query": {"name": "blocked.example.", "type": "TXT"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-cname-query-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for CNAME is answered NODATA with the SOA",
+      "query": {"name": "blocked.example.", "type": "CNAME"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-https-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for HTTPS is answered NODATA with the SOA",
+      "query": {"name": "blocked.example.", "type": "HTTPS"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-name-asked-for-a-type-the-dnsbl-ignores-is-relayed",
+      "family": "qtype",
+      "description": "SOA is outside the DNSBL's query types, so even a listed name is Unbound's to answer",
+      "query": {"name": "blocked.example.", "type": "SOA"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["blocked.example. SOA"],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 300 IN SOA ns.example. hostmaster.example. 1 2 3 4 60"],
+        "authority": []
+      }
+    },
+    {
+      "id": "blocked-name-asked-for-an-unnumbered-type-the-dnsbl-ignores-is-relayed",
+      "family": "qtype",
+      "description": "TYPE35 is outside the DNSBL's query types too, so it is relayed whatever Unbound says",
+      "query": {"name": "blocked.example.", "type": "TYPE35"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["blocked.example. TYPE35"],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": []
+      }
+    },
+    {
+      "id": "listed-in-addr-arpa-ptr-is-relayed",
+      "family": "in_addr_arpa",
+      "description": "an in-addr.arpa name is never DNSBL-checked, so a listed one still goes to Unbound (here NXDOMAIN)",
+      "query": {"name": "4.2.0.192.in-addr.arpa.", "type": "PTR"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["4.2.0.192.in-addr.arpa. PTR"],
+        "rcode": "NXDOMAIN",
+        "answer": [],
+        "authority": []
+      }
+    },
+    {
+      "id": "listed-ip6-arpa-ptr-is-still-blocked",
+      "family": "in_addr_arpa",
+      "description": "only in-addr.arpa is skipped: a listed ip6.arpa name is blocked and answered NODATA with the SOA",
+      "query": {"name": "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.", "type": "PTR"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": [
+          "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"
+        ]
+      }
+    }
+  ]
+}

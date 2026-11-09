@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "description": "5-column SafeSearch CNAME rows (domain,cname,target,baked_v4,baked_v6): the decider chases the target as Unbound's iterator would",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/vip.txt": ["blocked.example"],
+      "pfb_py_ss.txt": [
+        "duck.example,cname,safe.duck.example,198.51.100.7,2001:db8::7",
+        "nx.example,cname,nx-target.example,198.51.100.10,2001:db8::10",
+        "nodata.example,cname,nodata-target.example,198.51.100.8,2001:db8::8",
+        "nobaked.example,cname,nodata-target.example,,",
+        "trap.example,cname,blocked.example,198.51.100.9,2001:db8::9"
+      ]
+    }
+  },
+  "upstream": {
+    "duck.example. A": ["duck.example. 300 IN A 192.0.2.50"],
+    "duck.example. AAAA": ["duck.example. 300 IN AAAA 2001:db8::50"],
+    "duck.example. MX": [],
+    "safe.duck.example. A": ["safe.duck.example. 300 IN A 192.0.2.88"],
+    "safe.duck.example. AAAA": ["safe.duck.example. 300 IN AAAA 2001:db8::88"],
+    "nx.example. A": ["nx.example. 300 IN A 192.0.2.52"],
+    "nodata.example. AAAA": ["nodata.example. 300 IN AAAA 2001:db8::51"],
+    "nodata-target.example. A": [],
+    "nodata-target.example. AAAA": [],
+    "nobaked.example. A": ["nobaked.example. 300 IN A 192.0.2.55"],
+    "trap.example. A": ["trap.example. 300 IN A 192.0.2.56"],
+    "blocked.example. A": ["blocked.example. 300 IN A 192.0.2.99"]
+  },
+  "cases": [
+    {
+      "id": "chase-succeeds-and-the-client-gets-the-cname-plus-the-targets-a",
+      "family": "safesearch_cname",
+      "description": "Unbound is asked for the name, then for the target; the client gets the planted CNAME and the target's A",
+      "query": {"name": "duck.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["duck.example. A", "safe.duck.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["duck.example. 3600 IN CNAME safe.duck.example.", "safe.duck.example. 300 IN A 192.0.2.88"],
+        "authority": []
+      }
+    },
+    {
+      "id": "chase-succeeds-and-the-client-gets-the-cname-plus-the-targets-aaaa",
+      "family": "safesearch_cname",
+      "description": "the chase asks for the type the client asked: AAAA gets the target's AAAA",
+      "query": {"name": "duck.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["duck.example. AAAA", "safe.duck.example. AAAA"],
+        "rcode": "NOERROR",
+        "answer": ["duck.example. 3600 IN CNAME safe.duck.example.", "safe.duck.example. 300 IN AAAA 2001:db8::88"],
+        "authority": []
+      }
+    },
+    {
+      "id": "target-nxdomain-gets-the-baked-ipv4-address",
+      "family": "safesearch_cname",
+      "description": "the target does not exist, so the A answer is the row's baked IPv4 address, TTL 300",
+      "query": {"name": "nx.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["nx.example. A", "nx-target.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["nx.example. 300 IN A 198.51.100.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "target-without-an-address-gets-the-baked-ipv6-address",
+      "family": "safesearch_cname",
+      "description": "the target exists but has no AAAA, so the AAAA answer is the row's baked IPv6 address",
+      "query": {"name": "nodata.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["nodata.example. AAAA", "nodata-target.example. AAAA"],
+        "rcode": "NOERROR",
+        "answer": ["nodata.example. 300 IN AAAA 2001:db8::8"],
+        "authority": []
+      }
+    },
+    {
+      "id": "no-chased-and-no-baked-address-leaves-the-lone-cname",
+      "family": "safesearch_cname",
+      "description": "no address from the chase and none baked in the row: the client gets the CNAME alone",
+      "query": {"name": "nobaked.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["nobaked.example. A", "nodata-target.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["nobaked.example. 3600 IN CNAME nodata-target.example."],
+        "authority": []
+      }
+    },
+    {
+      "id": "chased-target-the-dnsbl-blocks-gets-the-block-answer",
+      "family": "safesearch_cname",
+      "description": "the SafeSearch target is on a feed: the client gets the block answer owned by the name it asked",
+      "query": {"name": "trap.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["trap.example. A", "blocked.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["trap.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "mx-query-on-a-cname-row-is-not-redirected",
+      "family": "safesearch_cname",
+      "description": "only A and AAAA are redirected: an MX query for a SafeSearch name is Unbound's to answer",
+      "query": {"name": "duck.example.", "type": "MX"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["duck.example. MX"],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": []
+      }
+    }
+  ]
+}

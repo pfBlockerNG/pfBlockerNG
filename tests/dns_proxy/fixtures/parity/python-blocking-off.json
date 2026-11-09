@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "description": "python_blocking off: the feed still loads, but the exact feed entry no longer blocks (compare core.json's exact-entry-is-blocked)",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "false",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}]
+    },
+    "files": {"pfb_py_raw/vip.txt": ["blocked.example"]}
+  },
+  "upstream": {"blocked.example. A": ["blocked.example. 300 IN A 192.0.2.99"]},
+  "cases": [
+    {
+      "id": "exact-entry-is-relayed-when-python-blocking-is-off",
+      "family": "zone_exact",
+      "description": "the same exact feed entry that core.json blocks is Unbound's to answer when python_blocking is off",
+      "query": {"name": "blocked.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["blocked.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 300 IN A 192.0.2.99"],
+        "authority": []
+      }
+    }
+  ]
+}

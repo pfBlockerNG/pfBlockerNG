@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "description": "legacy DNS-TXT control on (python_control and python_control_legacy); only a command that changes no state is used",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_control": "true",
+        "python_control_legacy": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {"version": 1, "config": {}, "feeds": []},
+    "files": {}
+  },
+  "upstream": {
+    "python_control.nosuchcommand. TXT": ["python_control.nosuchcommand. 300 IN TXT \"from-upstream\""]
+  },
+  "cases": [
+    {
+      "id": "loopback-client-unknown-command-is-refused-in-a-txt-answer",
+      "family": "control",
+      "description": "a TXT query python_control.<unknown command> from 127.0.0.1 is answered by the decider with python_control_fail",
+      "query": {"name": "python_control.nosuchcommand.", "type": "TXT", "client": "127.0.0.1"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [
+          "python_control_fail. 0 IN TXT \"Python_control: Command not authorized! [ python_control.nosuchcommand ]\""
+        ],
+        "authority": []
+      }
+    },
+    {
+      "id": "ipv6-loopback-client-is-obeyed-like-the-ipv4-one",
+      "family": "control",
+      "description": "::1 is a loopback client too: the same refusal",
+      "query": {"name": "python_control.nosuchcommand.", "type": "TXT", "client": "::1"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [
+          "python_control_fail. 0 IN TXT \"Python_control: Command not authorized! [ python_control.nosuchcommand ]\""
+        ],
+        "authority": []
+      }
+    },
+    {
+      "id": "non-loopback-client-is-relayed-not-obeyed",
+      "family": "control",
+      "description": "the same query from any other client is an ordinary TXT query for Unbound",
+      "query": {"name": "python_control.nosuchcommand.", "type": "TXT", "client": "192.0.2.10"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["python_control.nosuchcommand. TXT"],
+        "rcode": "NOERROR",
+        "answer": ["python_control.nosuchcommand. 300 IN TXT \"from-upstream\""],
+        "authority": []
+      }
+    }
+  ]
+}

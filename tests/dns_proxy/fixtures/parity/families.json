@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "families": {
+    "relay": "operate: MODULE_EVENT_NEW -> MODULE_WAIT_MODULE, then MODULE_EVENT_MODDONE finishes (nothing listed: Unbound's reply is the answer)",
+    "zone_exact": "evaluate_domain: dataDB exact lookup, fed by build/tld_wildcard_classify (plain feed lines are exact without Wildcard Blocking)",
+    "zone_wildcard": "evaluate_domain: find_zone_match suffix walk over zoneDB (ABP ||host^ lines)",
+    "tld_block": "build: tld_wildcard_blacklist roots become DNSBL_TLD zoneDB entries",
+    "tld_allow": "evaluate_domain: _tld_allow_blocks (names outside the allowed TLD roots are blocked)",
+    "psl": "tld_wildcard_classify: public-suffix-aware zone/exact classification of plain feed lines",
+    "idn": "evaluate_domain: idn_mode_decision and idn_confusable_action (All-IDN and Confusable modes)",
+    "regex": "evaluate_domain: _first_regex_match over userRegexDB and regexDB",
+    "abp": "parse_abp and reconcile: ABP rule lines folded into dataDB, zoneDB and whiteDB",
+    "allow": "evaluate_domain fast path: whitelist_check_domain over the user whitelist (important_rules False)",
+    "allow_band": "_resolve_numeric_allow: the six-band block/allow precedence (important_rules True)",
+    "hsts": "evaluate_domain: hsts_check_domain turns a VIP block into a null block",
+    "response": "evaluate_domain log_type shapes the operate block answer: VIP, null, NXDOMAIN, NODATA",
+    "qtype": "operate: the q_type in rr_types gate; a blocked non-address type answers NODATA",
+    "in_addr_arpa": "operate: names under in-addr.arpa are left out of the DNSBL validation list",
+    "group_policy": "_load_gp_bypass_list and _gp_bypassed: a bypassed client is never DNSBL-checked",
+    "cname": "operate: python_cname CNAME-chain validation in the MODDONE pass",
+    "noaaaa": "evaluate_noaaaa and find_noaaaa_wildcard_parent: AAAA answered NODATA for listed names",
+    "safesearch": "safesearch_entry and operate: A/AAAA rewrite, nxdomain row and www. fallback",
+    "safesearch_cname": "safesearch_cname_redirect and _safesearch_baked_fallback (Frontend._chase_cname plays the iterator)",
+    "control": "operate: the python_control TXT branch and pfb_apply_control_command",
+    "top1m": "build: the per-Group TOP1M filter (_top1m_listed)"
+  }
+}

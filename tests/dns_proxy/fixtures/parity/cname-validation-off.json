@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "description": "python_cname off: blocking still works, but a CNAME chain's targets are not checked",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "false",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}]
+    },
+    "files": {"pfb_py_raw/vip.txt": ["blocked.example"]}
+  },
+  "upstream": {
+    "alias.example. A": ["alias.example. 300 IN CNAME blocked.example.", "blocked.example. 300 IN A 192.0.2.99"]
+  },
+  "cases": [
+    {
+      "id": "listed-name-is-still-blocked-with-python-cname-off",
+      "family": "cname",
+      "description": "the control: python_cname off turns off chain validation only, a listed name asked directly is blocked",
+      "query": {"name": "blocked.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["blocked.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "alias-of-a-blocked-target-is-relayed-with-python-cname-off",
+      "family": "cname",
+      "description": "the same CNAME chain that cname-validation.json blocks reaches the client as Unbound answered it",
+      "query": {"name": "alias.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias.example. 300 IN CNAME blocked.example.", "blocked.example. 300 IN A 192.0.2.99"],
+        "authority": []
+      }
+    }
+  ]
+}

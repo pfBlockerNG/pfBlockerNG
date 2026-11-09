@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "description": "3-column SafeSearch rows (domain,A,AAAA): address rewrites, an nxdomain row and a www. row; no DNSBL feeds",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {"version": 1, "config": {}, "feeds": []},
+    "files": {
+      "pfb_py_ss.txt": [
+        "ss-both.example,192.0.2.201,2001:db8::201",
+        "ss-v4only.example,192.0.2.202,",
+        "ss-gone.example,nxdomain,",
+        "www.ss-www.example,192.0.2.203,2001:db8::203"
+      ]
+    }
+  },
+  "upstream": {
+    "ss-both.example. A": ["ss-both.example. 300 IN A 192.0.2.99"]
+  },
+  "cases": [
+    {
+      "id": "a-query-gets-the-rewrite-address-not-unbounds",
+      "family": "safesearch",
+      "description": "the decider answers A with the row's address, TTL 300, and never asks Unbound (which would say 192.0.2.99)",
+      "query": {"name": "ss-both.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["ss-both.example. 300 IN A 192.0.2.201"],
+        "authority": []
+      }
+    },
+    {
+      "id": "aaaa-query-gets-the-rewrite-aaaa",
+      "family": "safesearch",
+      "description": "a row with an AAAA column answers AAAA with it",
+      "query": {"name": "ss-both.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["ss-both.example. 300 IN AAAA 2001:db8::201"],
+        "authority": []
+      }
+    },
+    {
+      "id": "aaaa-query-on-a-row-without-aaaa-gets-the-a-record",
+      "family": "safesearch",
+      "description": "a row with an empty AAAA column answers an AAAA query with its A record",
+      "query": {"name": "ss-v4only.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["ss-v4only.example. 300 IN A 192.0.2.202"],
+        "authority": []
+      }
+    },
+    {
+      "id": "nxdomain-row-answers-nxdomain",
+      "family": "safesearch",
+      "description": "a row whose A column is nxdomain answers a bare NXDOMAIN",
+      "query": {"name": "ss-gone.example.", "type": "A"},
+      "expect": {"decision": "answer", "forwards": [], "rcode": "NXDOMAIN", "answer": [], "authority": []}
+    },
+    {
+      "id": "www-row-redirects-the-bare-name-too",
+      "family": "safesearch",
+      "description": "the row www.ss-www.example also rewrites ss-www.example, and the answer is owned by the name asked",
+      "query": {"name": "ss-www.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["ss-www.example. 300 IN A 192.0.2.203"],
+        "authority": []
+      }
+    }
+  ]
+}

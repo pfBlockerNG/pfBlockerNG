@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "description": "[noAAAA] rows: one exact (flag 0) and one wildcard (flag 1); no DNSBL feeds",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      },
+      "noAAAA": {"row1": "exact-noaaaa.example,0", "row2": "wild-noaaaa.example,1"}
+    },
+    "manifest": {"version": 1, "config": {}, "feeds": []},
+    "files": {}
+  },
+  "upstream": {
+    "exact-noaaaa.example. A": ["exact-noaaaa.example. 300 IN A 192.0.2.71"],
+    "sub.exact-noaaaa.example. AAAA": ["sub.exact-noaaaa.example. 300 IN AAAA 2001:db8::72"],
+    "unlisted.example. AAAA": ["unlisted.example. 300 IN AAAA 2001:db8::73"]
+  },
+  "cases": [
+    {
+      "id": "exact-row-aaaa-answers-nodata-with-the-soa",
+      "family": "noaaaa",
+      "description": "AAAA for a listed name is answered NOERROR, no records, the SOA, with no query to Unbound",
+      "query": {"name": "exact-noaaaa.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["exact-noaaaa.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "exact-row-a-query-is-relayed",
+      "family": "noaaaa",
+      "description": "only AAAA is suppressed: the A query for the same listed name is Unbound's to answer",
+      "query": {"name": "exact-noaaaa.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["exact-noaaaa.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["exact-noaaaa.example. 300 IN A 192.0.2.71"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exact-row-does-not-cover-a-subdomain",
+      "family": "noaaaa",
+      "description": "a row without the wildcard flag matches only that name, so AAAA for a subdomain is relayed",
+      "query": {"name": "sub.exact-noaaaa.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["sub.exact-noaaaa.example. AAAA"],
+        "rcode": "NOERROR",
+        "answer": ["sub.exact-noaaaa.example. 300 IN AAAA 2001:db8::72"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-row-aaaa-answers-nodata-for-its-own-name",
+      "family": "noaaaa",
+      "description": "a wildcard row suppresses AAAA for the listed name itself",
+      "query": {"name": "wild-noaaaa.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["wild-noaaaa.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "wildcard-row-covers-a-deep-subdomain",
+      "family": "noaaaa",
+      "description": "a wildcard row suppresses AAAA for its subdomains at any depth",
+      "query": {"name": "a.b.wild-noaaaa.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["a.b.wild-noaaaa.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "unlisted-name-aaaa-is-relayed",
+      "family": "noaaaa",
+      "description": "AAAA for a name no row lists is Unbound's to answer",
+      "query": {"name": "unlisted.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["unlisted.example. AAAA"],
+        "rcode": "NOERROR",
+        "answer": ["unlisted.example. 300 IN AAAA 2001:db8::73"],
+        "authority": []
+      }
+    }
+  ]
+}
