@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+
 /**
  * ADR-61 Phase 3 (+ #998 follow-up) — DNSBL-side sync-status writer/clearer pairs.
  *
@@ -31,6 +33,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_download_ledger_update')]
 final class PfbSyncStatusDnsblWritersTest extends TestCase
 {
+	use DnsProxyReadySeedTrait;
+
 	private string $dir;
 
 	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
@@ -64,10 +68,12 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$GLOBALS['pfb']['errlog']   = "{$this->dir}/error.log";
 		$GLOBALS['pfb']['php']      = PHP_BINARY;
 		$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];
+		$this->setUpUpstreamFixture();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
 		// dnsbldir may have been chmod'd read-only by testRestartFallback... --
 		// restore write permission BEFORE cleanup can unlink anything inside it.
 		@chmod($this->dir, 0777);
@@ -138,6 +144,22 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	private function proxyUp(bool|callable $up): void
 	{
 		$GLOBALS['pfb_test_valid_pids']['/var/run/pfb_dns_proxy.pid'] = $up;
+	}
+
+	/**
+	 * The resolver is up around a restart but down at every stop check. This keeps the fixture stable as the stop
+	 * implementation gains checks of its own.
+	 */
+	private static function unboundDownDuringStop(): callable
+	{
+		return static function (): bool {
+			foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+				if (($frame['function'] ?? '') === 'pfb_stop_start_unbound') {
+					return FALSE;
+				}
+			}
+			return TRUE;
+		};
 	}
 
 	// -----------------------------------------------------------------------
@@ -380,16 +402,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
 		$GLOBALS['g']['varrun_path']             = $this->dir;
 
-		// The resolver is up around this restart but down at every stop check.
-		// This keeps the fixture stable as the stop implementation gains checks of its own.
-		$GLOBALS['pfb_test_process_running']['unbound'] = static function (): bool {
-			foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
-				if (($frame['function'] ?? '') === 'pfb_stop_start_unbound') {
-					return FALSE;
-				}
-			}
-			return TRUE;
-		};
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::unboundDownDuringStop();
 
 		$ledger_calls = 0;
 		pfb_reload_unbound('enabled', FALSE, TRUE, static function () use (&$ledger_calls): bool {
@@ -685,6 +698,111 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->assertCount(1, $open,
 			'the unconfirmed swap must open the (dnsbl,dnsbl,apply) entry itself, not leave that to a restart tail that must not run');
 		$this->assertSame('apply', $open[0]['stage'] ?? '');
+	}
+
+	/**
+	 * issue #3200: the only genuinely broken swap state is a DEAD module host -- the reload watcher lives inside the DNS
+	 * proxy, so a dead proxy can never apply the generation. The liveness probe must break the wait on its first FALSE
+	 * answer (counted below: the budget is not burned by a wait nothing could ever satisfy), and the restart tail
+	 * recovers DNS.
+	 */
+	public function testZeroDowntimeSwapWatcherDeathRecoversViaRestart(): void
+	{
+		$GLOBALS['pfb_test_swap_wait_s'] = 3;
+
+		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
+		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
+		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::unboundDownDuringStop();
+
+		file_put_contents("{$this->dir}/pfb_py_reload.applied", "0\n");
+
+		// The restart tail finds the proxy serving again (its child pidfile and ready marker are seeded). The supervisor's
+		// pidfile, the one the host probe reads, answers alive at the fast-path eligibility check, then dead: the watcher
+		// died inside the swap, so nothing will ever apply the published generation. $waitProbes counts the answers the
+		// wait itself asked for.
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$probes = 0;
+		$waitProbes = 0;
+		$this->pfbDnsHostsTheModule(static function () use (&$probes, &$waitProbes): bool {
+			$probes++;
+			foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+				if (($frame['function'] ?? '') === 'pfb_unbound_py_wait_marker') {
+					$waitProbes++;
+					break;
+				}
+			}
+			return $probes === 1;
+		});
+
+		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
+
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertFalse($swapped, 'the restart fallback keeps the FALSE contract');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.sync",
+			'the restart fall-through must clear the daemon-suppression marker before the shared tail');
+		$this->assertStringContainsString('the module host exited during the swap; recovering via restart', $log,
+			'a dead module host during a swap must be named as the restart trigger');
+		$this->assertSame(1, $waitProbes,
+			'the liveness probe must break the wait on its first FALSE answer -- a dead watcher can never apply the generation');
+	}
+
+	/**
+	 * A sentinel flip that fails (dnsbldir read-only, so the staged generation cannot be renamed into place) must not leave a
+	 * flipped-but-no-op state: the swap falls back to the restart at once, no 30s poll, and clears the daemon-suppression
+	 * marker it touched. The proxy stays up, so the restart tail converges and leaves no apply entry open.
+	 */
+	public function testSentinelFlipFailureFallsBackToRestartAndClearsTheSyncMarker(): void
+	{
+		$writable = sys_get_temp_dir() . '/pfb_dnsbl_writable_' . getmypid() . '_' . uniqid();
+		mkdir($writable, 0777, TRUE);
+
+		// The proxy keeps serving, so the restart tail confirms it ready and nothing is rolled back
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$this->pfbDnsHostsTheModule(TRUE);
+		$GLOBALS['pfb']['dnsbl_file']            = "{$writable}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count']      = "{$writable}/unbound_py_count";
+		$GLOBALS['pfb']['log']                   = "{$writable}/pfblockerng.log";
+		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
+		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
+		$GLOBALS['g']['varrun_path']             = $writable;
+		$this->seedUnbound();
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::unboundDownDuringStop();
+
+		// dnsbldir read-only: reads still work, but pfb_unbound_py_atomic_write()'s rename() into it fails, so
+		// flip_sentinel() returns FALSE and the "sentinel flip failed" fallback fires.
+		chmod($this->dir, 0555);
+
+		try {
+			[$swapped, $ledger_calls] = pfb_test_as_unprivileged(function (): array {
+				$ledger_calls = 0;
+				$swapped = pfb_reload_unbound('enabled', FALSE, TRUE, static function () use (&$ledger_calls): bool {
+					$ledger_calls++;
+					return pfb_dnsbl_apply_ledger_update();
+				});
+				return [$swapped, $ledger_calls];
+			}, [$this->dir, $writable]);
+
+			$this->assertFalse($swapped, 'the restart fallback keeps the FALSE contract');
+			$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.sync",
+				'the flip-failure fallback must clear the daemon-suppression marker it touched');
+			$this->assertStringContainsString('sentinel flip failed', (string) @file_get_contents($GLOBALS['pfb']['log']),
+				'the fallback must name the failed flip as the restart trigger');
+			$this->assertSame(1, $ledger_calls, 'the restart fallback must reach the shared ledger tail exactly once');
+			$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
+				'a flip-failure restart that ends with the proxy up must not leave a dnsbl apply entry open');
+		} finally {
+			chmod($this->dir, 0777);
+			foreach (glob("{$writable}/*") ?: [] as $file) {
+				@unlink($file);
+			}
+			@rmdir($writable);
+		}
 	}
 
 	public function testGenericSwapReturnsAppliedAndLeavesFullFlushToCaller(): void
