@@ -521,10 +521,12 @@ func soaRdata(rest string) ([]byte, error) {
 		}
 		numbers[i] = number
 	}
+	counters := make([]uint32, 0, len(numbers))
 	for _, number := range numbers {
 		if number < 0 || number > 0xFFFFFFFF {
 			return nil, errors.New("SOA counter out of range")
 		}
+		counters = append(counters, uint32(number))
 	}
 	mname, err := EncodeName(fields[0])
 	if err != nil {
@@ -535,8 +537,8 @@ func soaRdata(rest string) ([]byte, error) {
 		return nil, err
 	}
 	out := append(mname, rname...)
-	for _, number := range numbers {
-		out = binary.BigEndian.AppendUint32(out, uint32(number))
+	for _, counter := range counters {
+		out = binary.BigEndian.AppendUint32(out, counter)
 	}
 	return out, nil
 }

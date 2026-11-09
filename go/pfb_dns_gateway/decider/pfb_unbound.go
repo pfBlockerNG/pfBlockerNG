@@ -57,8 +57,8 @@ type pfbSettings struct {
 	idnMode                     IdnMode
 	pythonIdnBlockMalicious     bool
 	pythonIdnEscalateSuspicious bool
-	pythonTldSeg                int
-	decisiondbMax               int
+	pythonTldSeg                int64
+	decisiondbMax               int64
 	tldAllow                    bool
 	tldAllowList                []string
 	pslIncludePrivate           bool
@@ -128,7 +128,7 @@ func isValueError(err error) bool {
 
 // parseIniInt reads an integer MAIN-ini option; ok is false for a malformed (non-integer) value, so the caller keeps
 // its current one. Only the ValueError is swallowed, any other error escapes as in Python.
-func parseIniInt(config *configParser, section, option string) (value int, ok bool, err error) {
+func parseIniInt(config *configParser, section, option string) (value int64, ok bool, err error) {
 	value, err = config.getint(section, option)
 	if isValueError(err) {
 		return 0, false, nil

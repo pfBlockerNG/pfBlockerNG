@@ -327,7 +327,7 @@ func (c *configParser) getboolean(section, option string) (bool, error) {
 	return state, nil
 }
 
-func (c *configParser) getint(section, option string) (int, error) {
+func (c *configParser) getint(section, option string) (int64, error) {
 	value, err := c.get(section, option)
 	if err != nil {
 		return 0, err
@@ -336,7 +336,7 @@ func (c *configParser) getint(section, option string) (int, error) {
 	if err != nil {
 		return 0, &valueError{err.Error()}
 	}
-	return int(v), nil
+	return v, nil
 }
 
 func (c *configParser) getfloat(section, option string) (float64, error) {

@@ -261,8 +261,8 @@ func TestConfigParserGetboolean(t *testing.T) {
 }
 
 func TestConfigParserGetint(t *testing.T) {
-	for value, want := range map[string]int{"12": 12, "-7": -7, "+3": 3, "1_000": 1000, "007": 7, "0": 0} {
-		if got, err := cfgParse(t, "[M]\nk = "+value+"\n").getint("M", "k"); err != nil || got != want {
+	for value, want := range map[string]int64{"12": 12, "-7": -7, "+3": 3, "1_000": 1000, "007": 7, "0": 0} {
+		if got, err := cfgParse(t, "[M]\nk = "+value+"\n").getint("M", "k"); err != nil || int64(got) != want {
 			t.Errorf("getint(%q) = (%d, %v), want (%d, nil)", value, got, err, want)
 		}
 	}
@@ -276,11 +276,18 @@ func TestConfigParserGetint(t *testing.T) {
 		cfgErrContains(t, "getint("+value+")", err, "invalid literal for int() with base 10")
 	}
 	// Python ints are unbounded; this port keeps an int that does not fit 64 bits at the nearest bound.
-	if got, err := cfgParse(t, "[M]\nbig = 99999999999999999999\nsmall = -99999999999999999999\n").getint("M", "big"); err != nil || got != math.MaxInt {
-		t.Errorf("getint(99999999999999999999) = (%d, %v), want (%d, nil)", got, err, math.MaxInt)
+	if got, err := cfgParse(t, "[M]\nbig = 99999999999999999999\nsmall = -99999999999999999999\n").getint("M", "big"); err != nil || int64(got) != math.MaxInt64 {
+		t.Errorf("getint(99999999999999999999) = (%d, %v), want (%d, nil)", got, err, int64(math.MaxInt64))
 	}
-	if got, err := cfgParse(t, "[M]\nsmall = -99999999999999999999\n").getint("M", "small"); err != nil || got != math.MinInt {
-		t.Errorf("getint(-99999999999999999999) = (%d, %v), want (%d, nil)", got, err, math.MinInt)
+	if got, err := cfgParse(t, "[M]\nsmall = -99999999999999999999\n").getint("M", "small"); err != nil || int64(got) != math.MinInt64 {
+		t.Errorf("getint(-99999999999999999999) = (%d, %v), want (%d, nil)", got, err, int64(math.MinInt64))
+	}
+}
+
+// Python's int is unbounded; on a 32-bit build a value past 32 bits must not wrap.
+func TestConfigParserGetintKeepsSixtyFourBitsOnEveryPlatform(t *testing.T) {
+	if got, err := cfgParse(t, "[M]\nk = 4294967296\n").getint("M", "k"); err != nil || int64(got) != 4294967296 {
+		t.Errorf("getint(4294967296) = (%d, %v), want (4294967296, nil)", got, err)
 	}
 }
 

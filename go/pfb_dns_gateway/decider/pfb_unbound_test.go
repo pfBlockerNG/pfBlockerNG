@@ -139,7 +139,7 @@ func TestParseIniInt(t *testing.T) {
 		{"pct", 0, false, true},    // an interpolation error is not a ValueError: it escapes, as in Python
 	} {
 		got, ok, err := parseIniInt(c, "MAIN", tc.option)
-		if ok != tc.wantOk || (err != nil) != tc.wantErr || (ok && got != tc.want) {
+		if ok != tc.wantOk || (err != nil) != tc.wantErr || (ok && int64(got) != int64(tc.want)) {
 			t.Errorf("parseIniInt(%s) = (%d, %v, %v), want (%d, %v, error=%v)", tc.option, got, ok, err, tc.want, tc.wantOk, tc.wantErr)
 		}
 	}
