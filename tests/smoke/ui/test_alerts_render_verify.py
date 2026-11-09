@@ -593,15 +593,17 @@ def _capture_stats(webui: WebUI, key: str, path: str) -> dict[str, Any] | None:
     return response.json()
 
 
+# The Stats views read "All time" (range=max): FIXED_TS is a legacy non-ISO stamp, and a time-windowed view (#3773) only
+# counts rows with an ISO date inside the window.
 GET_MATRIX: list[tuple[str, str]] = [
     ("alert", ALERTS_PAGE),
     ("unified", f"{ALERTS_PAGE}?view=unified"),
     ("reply", f"{ALERTS_PAGE}?view=reply"),
-    ("dnsbl_stat", f"{ALERTS_PAGE}?view=dnsbl_stat"),
-    ("dnsbl_reply_stat", f"{ALERTS_PAGE}?view=dnsbl_reply_stat"),
-    ("ip_block_stat", f"{ALERTS_PAGE}?view=ip_block_stat"),
-    ("ip_permit_stat", f"{ALERTS_PAGE}?view=ip_permit_stat"),
-    ("ip_match_stat", f"{ALERTS_PAGE}?view=ip_match_stat"),
+    ("dnsbl_stat", f"{ALERTS_PAGE}?view=dnsbl_stat&range=max"),
+    ("dnsbl_reply_stat", f"{ALERTS_PAGE}?view=dnsbl_reply_stat&range=max"),
+    ("ip_block_stat", f"{ALERTS_PAGE}?view=ip_block_stat&range=max"),
+    ("ip_permit_stat", f"{ALERTS_PAGE}?view=ip_permit_stat&range=max"),
+    ("ip_match_stat", f"{ALERTS_PAGE}?view=ip_match_stat&range=max"),
     ("alert_filterip", f"{ALERTS_PAGE}?filterip={quote(S1_ALIAS)}"),
     ("alert_filterdnsbl", f"{ALERTS_PAGE}?filterdnsbl={quote(D1_LOGGED_GROUP)}"),
     ("unified_filterip", f"{ALERTS_PAGE}?view=unified&filterip={quote(S1_ALIAS)}"),

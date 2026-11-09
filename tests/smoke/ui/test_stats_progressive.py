@@ -385,6 +385,9 @@ def test_stats_progressive_expired_session_never_injects_login_html(
     webui: WebUI,
 ) -> None:
     page = browser_page
+    # route.fetch() stores the anonymous reply's fresh session cookie in the shared browser context, which
+    # would log out every later browser test; keep the authenticated cookies and put them back afterwards.
+    cookies = page.context.cookies()
 
     def expired(route: Route) -> None:
         # Strip authentication only from the real data GET, not the shell.
@@ -402,3 +405,7 @@ def test_stats_progressive_expired_session_never_injects_login_html(
         assert page.locator("#iform_stats #usernamefld, #iform_stats .login").count() == 0
     finally:
         page.unroute(DATA_ROUTE, expired)
+        page.context.clear_cookies()
+        page.context.add_cookies(
+            [{"name": c["name"], "value": c["value"], "domain": c["domain"], "path": c["path"]} for c in cookies]
+        )

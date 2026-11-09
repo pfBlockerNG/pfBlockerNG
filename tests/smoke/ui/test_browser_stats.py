@@ -50,8 +50,9 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_browser
 
 # ── page paths ────────────────────────────────────────────────────────────────
-ALERTS_IP_STAT = "/pfblockerng/pfblockerng_alerts.php?view=ip_block_stat"
-ALERTS_DNSBL_STAT = "/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat"
+# range=max (All time): the seeds carry legacy non-ISO stamps, which a time-windowed view (#3773) never counts.
+ALERTS_IP_STAT = "/pfblockerng/pfblockerng_alerts.php?view=ip_block_stat&range=max"
+ALERTS_DNSBL_STAT = "/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat&range=max"
 
 # ── log paths (on the VM) ─────────────────────────────────────────────────────
 IP_BLOCK_LOG = "/var/log/pfblockerng/ip_block.log"

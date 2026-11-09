@@ -1837,6 +1837,10 @@ if ($alert_summary) {
 		$stats_log = $alert_log;
 		if ($stats_since !== NULL) {
 			$stats_log = pfb_stats_window_log($alert_log, $stats_since) ?? '';
+			if ($stats_log !== '') {
+				// Removed even if this request dies first (fatal error, time limit, exit).
+				register_shutdown_function(static fn () => @unlink($stats_log));
+			}
 		}
 		// Total entry count for this view is constant across every $stat_info
 		// iteration (the log doesn't change mid-loop), so compute it once here
@@ -1846,104 +1850,101 @@ if ($alert_summary) {
 		// as it does today.
 		// issue #1261: display-only total -- NULL (read failure) -> 0, same as the
 		// exec()-era `?: 0` fallback (a legitimately-empty file also yields 0).
-		try {
-			$alert_log_total_count = file_exists($stats_log) ? (pfb_count_lines($stats_log) ?? 0) : 0;
+		$alert_log_total_count = file_exists($stats_log) ? (pfb_count_lines($stats_log) ?? 0) : 0;
 
-			foreach ($stat_info as $stat_type => $column) {
-				if (isset($stat_hidden[$stat_type])) {
-					continue;
+		foreach ($stat_info as $stat_type => $column) {
+			if (isset($stat_hidden[$stat_type])) {
+				continue;
+			}
+
+			if (file_exists($stats_log)) {
+
+				$cut_cmd = "{$pfb['cut']} -d ',' -f{$column}";
+
+				$unknown_msg = 'Unknown';
+
+				$agent_cmd = '';
+
+				$stats = array();
+				switch ($stat_type) {
+					case 'ipdate':
+						// ISO date/time has 1 space token (not the old 3-token
+						// 'M j H:i:s'); the day bucket is the date field alone.
+						// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
+						exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
+						$stats = array_reverse($stats);
+						break;
+					case 'ipchart':
+						$chart_rows = [];
+						exec("{$lc_bytes}{$cut_cmd} {$stats_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1", $chart_rows);
+						foreach ($chart_rows as $chart_row) {
+							$split = strrpos($chart_row, ',');
+							if ($split !== FALSE) {
+								$stats_timeline[] = ['edate' => substr($chart_row, 0, $split), 'ecount' => (int) substr($chart_row, $split + 1)];
+							}
+						}
+						break;
+					case 'ipsrcipin':
+						exec("{$lc_bytes}{$cut_cmd},13,14,18 {$stats_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
+						break;
+					case 'ipsrcipout':
+						exec("{$lc_bytes}{$cut_cmd},13,14 {$stats_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
+	 					break;
+					case 'ipdstipin':
+						exec("{$lc_bytes}{$cut_cmd},13,14 {$stats_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
+						break;
+					case 'ipdstipout':
+						exec("{$lc_bytes}{$cut_cmd},13,14,18 {$stats_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
+						break;
+					case 'ipsrcport':
+						exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$su_cmd} | {$pfb['awk']} -F ' ' '\$2 <= 1024 || \$2 ~ /[a-zA-Z]/' | sort -nr 2>&1", $stats);
+						break;
+					case 'ipasn':
+						// issue #1369 (ADR-38 Amendment 3): no back-compat for log entries --
+						// only the new 23-field schema carries a plain ASN token at column 20
+						// (unchanged position: the 2 new columns were appended AFTER it). A
+						// pre-upgrade 21-field legacy row's column 20 is still the old
+						// pipe-blob text, and any other field count is malformed either way --
+						// gate on the exact new field count before extracting, so a legacy/
+						// malformed row is skipped silently instead of polluting the Top ASN
+						// count with blob noise.
+						exec("{$lc_bytes}{$pfb['awk']} -F',' 'NF == 23' {$stats_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+						break;
+					default:
+						exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+						break;
 				}
 
-				if (file_exists($stats_log)) {
+				if (!empty($stats)) {
+					foreach($stats as $key => $line) {
 
-					$cut_cmd = "{$pfb['cut']} -d ',' -f{$column}";
-
-					$unknown_msg = 'Unknown';
-
-					$agent_cmd = '';
-
-					$stats = array();
-					switch ($stat_type) {
-						case 'ipdate':
-							// ISO date/time has 1 space token (not the old 3-token
-							// 'M j H:i:s'); the day bucket is the date field alone.
-							// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
-							exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
-							$stats = array_reverse($stats);
-							break;
-						case 'ipchart':
-							$chart_rows = [];
-							exec("{$lc_bytes}{$cut_cmd} {$stats_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1", $chart_rows);
-							foreach ($chart_rows as $chart_row) {
-								$split = strrpos($chart_row, ',');
-								if ($split !== FALSE) {
-									$stats_timeline[] = ['edate' => substr($chart_row, 0, $split), 'ecount' => (int) substr($chart_row, $split + 1)];
-								}
-							}
-							break;
-						case 'ipsrcipin':
-							exec("{$lc_bytes}{$cut_cmd},13,14,18 {$stats_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
-							break;
-						case 'ipsrcipout':
-							exec("{$lc_bytes}{$cut_cmd},13,14 {$stats_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
-							break;
-						case 'ipdstipin':
-							exec("{$lc_bytes}{$cut_cmd},13,14 {$stats_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
-							break;
-						case 'ipdstipout':
-							exec("{$lc_bytes}{$cut_cmd},13,14,18 {$stats_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
-							break;
-						case 'ipsrcport':
-							exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$su_cmd} | {$pfb['awk']} -F ' ' '\$2 <= 1024 || \$2 ~ /[a-zA-Z]/' | sort -nr 2>&1", $stats);
-							break;
-						case 'ipasn':
-							// issue #1369 (ADR-38 Amendment 3): no back-compat for log entries --
-							// only the new 23-field schema carries a plain ASN token at column 20
-							// (unchanged position: the 2 new columns were appended AFTER it). A
-							// pre-upgrade 21-field legacy row's column 20 is still the old
-							// pipe-blob text, and any other field count is malformed either way --
-							// gate on the exact new field count before extracting, so a legacy/
-							// malformed row is skipped silently instead of polluting the Top ASN
-							// count with blob noise.
-							exec("{$lc_bytes}{$pfb['awk']} -F',' 'NF == 23' {$stats_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
-							break;
-						default:
-							exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
-							break;
-					}
-
-					if (!empty($stats)) {
-						foreach($stats as $key => $line) {
-
-							// Remove last column for '-' and '+' indicator
-							$eol = substr($line, -2);
-							if ($eol == ' -' || $eol == ' +') {
-								continue;
-							}
-
-							$data = array_map('trim', explode(' ', trim($line), 2));
-							// issue #1792: a stat label of literally '0' is a real
-							// label -- only a MISSING/empty field reads "Unknown".
-							$alert_stats[$alert_view][$stat_type][pfb_is_empty($data[1] ?? NULL) ? $unknown_msg : $data[1]] = (int) $data[0];
+						// Remove last column for '-' and '+' indicator
+						$eol = substr($line, -2);
+						if ($eol == ' -' || $eol == ' +') {
+							continue;
 						}
+
+						$data = array_map('trim', explode(' ', trim($line), 2));
+						// issue #1792: a stat label of literally '0' is a real
+						// label -- only a MISSING/empty field reads "Unknown".
+						$alert_stats[$alert_view][$stat_type][pfb_is_empty($data[1] ?? NULL) ? $unknown_msg : $data[1]] = (int) $data[0];
 					}
-					else {
-						$alert_stats[$alert_view][$stat_type] = array();
-					}
-					// The exec is hoisted above the loop (issue #809); this assignment
-					// stays here so an all-hidden $stat_info leaves $alert_stats['count']
-					// unset for this view, exactly as before.
-					$alert_stats['count'][$alert_view] = $alert_log_total_count;
 				}
 				else {
-					$alert_stats[$alert_view][$stat_type]	= array();
-					$alert_stats['count'][$alert_view]	= 0;
+					$alert_stats[$alert_view][$stat_type] = array();
 				}
+				// The exec is hoisted above the loop (issue #809); this assignment
+				// stays here so an all-hidden $stat_info leaves $alert_stats['count']
+				// unset for this view, exactly as before.
+				$alert_stats['count'][$alert_view] = $alert_log_total_count;
 			}
-		} finally {
-			if ($stats_since !== NULL && $stats_log !== '') {
-				unlink($stats_log);
+			else {
+				$alert_stats[$alert_view][$stat_type]	= array();
+				$alert_stats['count'][$alert_view]	= 0;
 			}
+		}
+		if ($stats_since !== NULL && $stats_log !== '') {
+			unlink($stats_log);
 		}
 	}
 

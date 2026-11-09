@@ -34,19 +34,37 @@ function pfb_stats_since(string $range, ?int $now = NULL): ?string {
 	return $range === 'max' ? NULL : date('Y-m-d H:i:s', ($now ?? time()) - (int) $range * 3600);
 }
 
+/** Read past the rest of the current log line in 4 KiB pieces, never holding it, and stop at byte $limit at the latest. */
+function pfb_log_skip_line($handle, int $limit): void {
+	do {
+		$rest = fgets($handle, 4096);
+	} while ($rest !== FALSE && !str_ends_with($rest, "\n") && ftell($handle) < $limit);
+}
+
+/** One log line as at most its first 4095 bytes (a date field sits at its start); the rest of a longer line is skipped. */
+function pfb_log_read_line($handle, int $limit): string|false {
+	$line = fgets($handle, 4096);
+	if ($line !== FALSE && !str_ends_with($line, "\n")) {
+		pfb_log_skip_line($handle, $limit);
+	}
+	return $line;
+}
+
 /**
  * Byte offset of the first line a window starting at $since can need: a line start with no line dated at or after
  * $since before it. Logs grow in time order with under an hour of skew, so this binary-searches for the first line dated
- * at or after $since - 1 h; lines without an ISO date in field $date_index never decide a probe. 0 if unreadable.
+ * at or after $since - 1 h (wall-clock arithmetic: a log's stamps are local time, so a DST fall-back repeats a wall-clock
+ * hour); lines without an ISO date in field $date_index never decide a probe. Reads are bounded: a line is never held
+ * beyond 4 KiB, so a newline-free run costs time, not memory. 0 if unreadable.
  */
 function pfb_log_window_offset(string $path, int $date_index, string $since): int {
-	$cutoff = strtotime($since);
+	$cutoff = strtotime("{$since} UTC");
 	$handle = $cutoff === FALSE ? FALSE : @fopen($path, 'rb');
 	$stat = $handle === FALSE ? FALSE : fstat($handle);
 	if ($handle === FALSE || $stat === FALSE) {
 		return 0;
 	}
-	$threshold = date('Y-m-d H:i:s', $cutoff - 3600);
+	$threshold = gmdate('Y-m-d H:i:s', $cutoff - 3600);
 	$lo = 0;
 	$hi = $best = $stat['size'];
 	// No line starting in [$hi, $best) has an ISO date; $best is the first known line at or after the threshold.
@@ -54,10 +72,10 @@ function pfb_log_window_offset(string $path, int $date_index, string $since): in
 		$mid = $lo + intdiv($hi - $lo, 2);
 		fseek($handle, max(0, $mid - 1));
 		if ($mid > 0) {
-			fgets($handle); // finish the line holding byte $mid - 1: the probe starts at a line start
+			pfb_log_skip_line($handle, $hi); // finish the line holding byte $mid - 1: the probe starts at a line start
 		}
 		$found = NULL;
-		while (($start = ftell($handle)) < $hi && ($line = fgets($handle)) !== FALSE) {
+		while (($start = ftell($handle)) < $hi && ($line = pfb_log_read_line($handle, $hi)) !== FALSE) {
 			$date = explode(',', $line, $date_index + 2)[$date_index] ?? '';
 			if (preg_match('/^[0-9]{4}-/', $date) === 1) {
 				$found = [$start, ftell($handle), $date >= $threshold];
@@ -78,25 +96,32 @@ function pfb_log_window_offset(string $path, int $date_index, string $since): in
 
 /**
  * Copy the lines of a log whose first field is an ISO date at or after $since to a new private temp file and return
- * its path (the caller unlinks it); NULL if the log cannot be read or the copy fails.
+ * its path (the caller unlinks it); NULL if the log cannot be read or the copy fails. Lines are copied in 4 KiB pieces.
  */
 function pfb_stats_window_log(string $path, string $since): ?string {
 	$source = @fopen($path, 'rb');
 	if ($source === FALSE) {
 		return NULL;
 	}
+	fseek($source, pfb_log_window_offset($path, 0, $since));
 	$target = tempnam(sys_get_temp_dir(), 'pfb-stats-');
 	$copy = $target === FALSE ? FALSE : @fopen($target, 'wb');
 	if ($target === FALSE || $copy === FALSE) {
 		fclose($source);
+		if ($target !== FALSE) {
+			unlink($target);
+		}
 		return NULL;
 	}
-	fseek($source, pfb_log_window_offset($path, 0, $since));
 	$complete = TRUE;
-	while ($complete && ($line = fgets($source)) !== FALSE) {
+	while ($complete && ($line = fgets($source, 4096)) !== FALSE) {
 		$date = explode(',', $line, 2)[0];
-		if (preg_match('/^[0-9]{4}-/', $date) === 1 && $date >= $since) {
-			$complete = fwrite($copy, $line) === strlen($line);
+		$keep = preg_match('/^[0-9]{4}-/', $date) === 1 && $date >= $since;
+		while ($complete) {
+			$complete = !$keep || fwrite($copy, $line) === strlen($line);
+			if (!$complete || str_ends_with($line, "\n") || ($line = fgets($source, 4096)) === FALSE) {
+				break;
+			}
 		}
 	}
 	fclose($source);

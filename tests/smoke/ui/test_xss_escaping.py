@@ -104,6 +104,18 @@ def _seeded_xss_dnsbl_log(smoke_vm: SmokeVM) -> Iterator[None]:
     )
 
 
+def _stats_panels(webui: WebUI) -> tuple[str, str]:
+    """``(decoded panel HTML, raw response text)`` of the DNSBL Stats data endpoint.
+
+    Since #3759 the DNSBL Stats page is only a shell; the table cells and the pie data arrive as JSON. The decoded
+    HTML is what the browser injects into the cells; the raw text is what carries the JS-string encoding.
+    """
+    response = webui.get(f"{ALERTS_DNSBL_STAT_PAGE}&stats_data=1")
+    assert response.status_code == 200, f"stats data returned HTTP {response.status_code}"
+    assert "application/json" in response.headers.get("content-type", ""), "stats data returned HTML"
+    return "".join(panel["html"] for panel in response.json()["panels"]), response.text
+
+
 def test_alerts_dnsbl_stat_escapes_hostile_domain(smoke_vm: SmokeVM, webui: WebUI, _seeded_xss_dnsbl_log: None) -> None:
     """A ``<script>``-carrying blocked domain renders HTML/JS-encoded, never verbatim.
 
@@ -128,29 +140,29 @@ def test_alerts_dnsbl_stat_escapes_hostile_domain(smoke_vm: SmokeVM, webui: WebU
     result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("DNSBL Block Stats",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
 
-    body = resp.text
+    # The page is a shell (#3759): the table cells and the pie JSON come from the data endpoint.
+    cells, data = _stats_panels(webui)
     # Non-vacuity: the unique marker proves THE SEEDED domain rendered (in both
-    # the HTML table and the inline-JS pie label, where ".evil.example" survives
-    # encoding verbatim). Without it, the encoded-form checks below could pass on
+    # the HTML table and the pie label, where ".evil.example" survives encoding
+    # verbatim). Without it, the encoded-form checks below could pass on
     # unrelated content.
-    assert XSS_DOMAIN_MARKER in body, (
+    assert XSS_DOMAIN_MARKER in cells and XSS_DOMAIN_MARKER in data, (
         f"the seeded hostile domain never rendered ({XSS_DOMAIN_MARKER!r} absent) -- "
         "the escaping assertions would be vacuous"
     )
-    assert "<script>alert(1)</script>" not in body, (
-        "the raw <script> payload rendered verbatim in the DNSBL stats page -- an XSS sink regressed"
-    )
+    for where, text in (("page", resp.text), ("table", cells), ("data", data)):
+        assert "<script>alert(1)</script>" not in text, (
+            f"the raw <script> payload rendered verbatim in the DNSBL stats {where} -- an XSS sink regressed"
+        )
     # HTML context (stats table <td>/button attrs): the full domain encodes to
     # &lt;script&gt;alert(1)&lt;/script&gt;&quot;&#039;.evil.example
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body, (
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in cells, (
         "the stats table <td>/button attrs did not HTML-encode the hostile domain's <script> markup"
     )
-    assert "&quot;" in body or "&#34;" in body, "the hostile domain's double-quote did not render encoded"
-    assert "&#039;" in body, "the hostile domain's single-quote did not render encoded"
-    # Inline-<script> JS context (pie chart label): JSON_HEX_* hex-escapes the tags.
-    assert "\\u003Cscript\\u003E" in body, (
-        "the pie chart's inline <script> JSON did not JS-string-encode the hostile domain"
-    )
+    assert "&quot;" in cells or "&#34;" in cells, "the hostile domain's double-quote did not render encoded"
+    assert "&#039;" in cells, "the hostile domain's single-quote did not render encoded"
+    # JS context (pie chart label in the JSON): JSON_HEX_* hex-escapes the tags in the raw response text.
+    assert "\\u003Cscript\\u003E" in data, "the pie chart's JSON did not JS-string-encode the hostile domain"
 
     guard.assert_no_growth()
 
@@ -256,13 +268,13 @@ def test_alerts_dnsbl_stat_substitutes_invalid_utf8_byte(
     result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("DNSBL Block Stats",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
 
-    body = resp.text
+    cells, _data = _stats_panels(webui)
     # Discriminating, cell-specific: this exact composed substitution appears ONLY
-    # in the fixed HTML <td> cell. The pie chart's inline <script> JSON
-    # (pfb_js_string(), a pre-existing/unrelated substitution) renders the same
-    # byte backslash-escaped, never as this literal string -- so this check is
-    # genuinely red pre-fix, not vacuously green off the unrelated JSON sink.
-    assert INVALID_UTF8_DOMAIN_SUBSTITUTED in body, (
+    # in the fixed HTML <td> cell. The pie chart's JSON label (pfb_js_string(), a
+    # pre-existing/unrelated substitution) renders the same byte backslash-escaped,
+    # never as this literal string -- so this check is genuinely red pre-fix, not
+    # vacuously green off the unrelated JSON sink.
+    assert INVALID_UTF8_DOMAIN_SUBSTITUTED in cells, (
         f"the stats table <td> cell did not render the invalid-UTF-8 domain substituted "
         f"({INVALID_UTF8_DOMAIN_SUBSTITUTED!r} absent) -- the cell was blanked instead of "
         "substituted (issue #1814)"
