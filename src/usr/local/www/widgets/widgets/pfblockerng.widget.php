@@ -289,7 +289,7 @@ function pfBlockerNG_update_table() {
 	}
 
 	// DNSBL collect statistics
-	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On) {
+	if (pfb_dnsbl_active()) {
 
 		$pfb['dnsbl_missing'] = TRUE;	// Flag to indicate error message to user in widget
 		$db_handle = pfb_open_sqlite(1, 'Widget stats');
@@ -557,7 +557,7 @@ function pfBlockerNG_get_header($mode='') {
 	$unbound_validate = pfb_unbound_py_host_running();
 
 	// Status indicator if DNSBL is actively running
-	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On && $unbound_validate) {
+	if ($pfb['enable'] === PfbToggle::On && $pfb['pfb_dns'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On && $unbound_validate) {
 
 		// ADR-61: yellow on ANY open facility='dnsbl' entry, merged PHP + Python ledgers.
 		$pfb_dnsbl_open = array_merge(pfb_sync_status_list_open($pfb['dbdir'], 'dnsbl'), pfb_py_sync_status_list_open($pfb['dnsbldir']));

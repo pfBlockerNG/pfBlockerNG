@@ -44,11 +44,11 @@ final class PfbDnsblConvergedTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_dnsbl_converged_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0777, TRUE);
 
-		foreach (['dnsbldir', 'enable', 'dnsbl'] as $k) {
+		foreach (['dnsbldir', 'enable', 'pfb_dns', 'dnsbl'] as $k) {
 			$this->savedPfb[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		$GLOBALS['pfb']['dnsbldir'] = $this->dir;
-		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 
 		// pfB-DNS owns the Resolver (a snapshot) and its proxy runs: the module host
 		$this->hadConfig = array_key_exists('config', $GLOBALS);

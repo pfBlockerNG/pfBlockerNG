@@ -560,7 +560,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$this->assertDirectoryExists($stage);
 
 		// The DNS proxy hosts the module (pfB-DNS owns the Resolver with DNSBL on) and runs: DNSBL converges (issue #3770)
-		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 		$GLOBALS['config'] ??= [];
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
 			'active_interface' => ['present' => TRUE, 'value' => 'lan'],

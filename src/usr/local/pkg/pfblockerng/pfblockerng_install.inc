@@ -237,7 +237,7 @@ update_status(" done.\n");
 // Create DNSBL Lighttpd config file and DNSBL Certificate and restart DNSBL Service
 // issue #3539: only while a block answers with the VIP; the conf is written because the rc script launches lighttpd only when it exists.
 pfb_global();
-if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On &&
+if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On &&
     !empty($pfb['dnsbl_vip_demand']) && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])) {
 
 	update_status("Creating DNSBL web server config ...");

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/PidShimHarnessTrait.php';
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class WidgetGetTableArgOrderTest extends TestCase
@@ -136,6 +137,52 @@ PHP;
 		$rows = substr($result['stdout'], (int) strpos($result['stdout'], '__ROWS__'));
 		$this->assertMatchesRegularExpression('/<tr data-pfb-group="ip">\s*<td><small>DNSBL_lookalike</', $rows);
 		$this->assertMatchesRegularExpression('/<tr data-pfb-group="dnsbl">\s*<td><small>pfB_lookalike</', $rows);
+	}
+
+	/**
+	 * Does the widget collect DNSBL statistics (pfBlockerNG_update_table() looks for the DNSBL database, and flags it missing when
+	 * it holds nothing) on a box with DNSBL stored On, an empty DNSBL database of its own and these two enables stored ('on' or '')?
+	 */
+	private function widgetCollectsDnsblStatistics(string $package, string $pfbDns): bool
+	{
+		$stored = ['installedpackages' => [
+			'pfblockerng' => ['config' => [['enable_cb' => $package]]],
+			'pfblockerngdns' => ['config' => [['pfb_dns' => $pfbDns]]],
+			'pfblockerngdnsblsettings' => ['config' => [['pfb_dnsbl' => 'on']]],
+		]];
+		$database = sys_get_temp_dir() . '/pfb_widget_dnsbl_' . getmypid() . '_' . bin2hex(random_bytes(4)) . '.sqlite';
+		try {
+			$result = $this->runWidget(
+				['getNewWidget' => '1'], [], FALSE,
+				"\$GLOBALS['config'] = " . var_export($stored, TRUE) . ";\$GLOBALS['pfb']['dnsbl_info'] = " . var_export($database, TRUE) . ';',
+				'echo "\n__DNSBL_MISSING__" . (isset($GLOBALS[\'pfb\'][\'dnsbl_missing\']) ? \'yes\' : \'no\');'
+			);
+		} finally {
+			@unlink($database);
+		}
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertMatchesRegularExpression('/\n__DNSBL_MISSING__(yes|no)/', $result['stdout']);
+		return str_contains($result['stdout'], "\n__DNSBL_MISSING__yes");
+	}
+
+	/** @return array<string,array{string,string}> the stored pfBlockerNG enable and pfB-DNS enable of a box with DNSBL stored On, one of them off */
+	public static function dnsblParentSwitchOffRows(): array
+	{
+		return ['pfBlockerNG off' => ['', 'on'], 'pfB-DNS off' => ['on', '']];
+	}
+
+	/**
+	 * Scenario: pfB-DNS is a parent switch of DNSBL, as the pfBlockerNG enable is (issue #3770).
+	 * Given a box with DNSBL stored On and no DNSBL database rows yet,
+	 * When the widget refreshes with both switches on, and again with one of them off,
+	 * Then it looks for DNSBL statistics (and flags the empty database) only while DNSBL runs: not with a parent switch off.
+	 */
+	#[DataProvider('dnsblParentSwitchOffRows')]
+	public function testTheWidgetCollectsDnsblStatisticsOnlyWhileBothParentSwitchesOfDnsblAreOn(string $package, string $pfbDns): void
+	{
+		$this->assertTrue($this->widgetCollectsDnsblStatistics('on', 'on'), 'before: DNSBL runs, so its statistics are collected');
+
+		$this->assertFalse($this->widgetCollectsDnsblStatistics($package, $pfbDns));
 	}
 
 	/**

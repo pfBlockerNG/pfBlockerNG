@@ -77,6 +77,7 @@ final class DnsblLoadedCountTest extends TestCase
 
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
+			'pfb_dns' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
 			// The install/uninstall resync pass: config-save only, no feed processing.
 			'save' => TRUE,

@@ -47,7 +47,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_sync_status_dnsbl_writers_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0777, TRUE);
 
-		foreach (['dnsbldir', 'dbdir', 'dnsbl_file', 'unbound_py_count', 'chroot_cmd', 'enable', 'dnsbl',
+		foreach (['dnsbldir', 'dbdir', 'dnsbl_file', 'unbound_py_count', 'chroot_cmd', 'enable', 'pfb_dns', 'dnsbl',
 			  'dnsbl_python_unmount', 'log', 'errlog', 'php'] as $k) {
 			$this->savedPfb[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
@@ -125,7 +125,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	 */
 	private function pfbDnsHostsTheModule(bool|callable $up): void
 	{
-		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 		$GLOBALS['config'] ??= [];
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
 			'active_interface' => ['present' => TRUE, 'value' => 'lan'],

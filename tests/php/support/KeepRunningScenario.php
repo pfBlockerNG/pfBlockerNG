@@ -40,7 +40,7 @@ trait KeepRunningScenario
 			'unbound_py_sources' => "{$dir}/pfb_py_sources.json", 'unbound_py_rawdir' => "{$dir}/pfb_py_raw",
 			'unbound_py_reject_stats' => "{$dir}/pfb_py_reject_stats.json", 'dnsbl_unlock' => "{$dir}/dnsbl_unlock",
 			'chroot_cmd' => '/bin/echo', 'dnsbl_python_unmount' => FALSE,
-			'dnsbl_cache_flush' => PfbToggle::Off, 'enable' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'save' => TRUE,
+			'dnsbl_cache_flush' => PfbToggle::Off, 'enable' => PfbToggle::On, 'pfb_dns' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'save' => TRUE,
 			'keep' => PfbToggle::On, 'install' => FALSE, 'errlog' => "{$dir}/error.log", 'log' => "{$dir}/pfblockerng.log",
 			'php' => PHP_BINARY, 'ps' => "{$dir}/ps",
 			'dns_proxy_restart_pending' => "{$dir}/restart.pending", 'dns_proxy_gateway_applied' => "{$dir}/gateway.sha256",

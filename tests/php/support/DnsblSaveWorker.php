@@ -10,14 +10,10 @@ declare(strict_types=1);
  *
  * Scenarios: `interleave` (a pfB-DNS save of Off and a Resolver move land on disk after this request started),
  * `lock_taken` (another process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (exception),
- * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1).
- * Issue #3770 (DNSBL runs only through pfB-DNS), the form posts DNSBL On while: `pfb_dns_off` (pfB-DNS is stored ''),
- * `pfb_dns_absent` (the key was never written), `pfb_dns_turned_off_meanwhile` (this request loaded pfB-DNS On, another
- * save turned it Off before the fresh read); `pfb_dns_off_dnsbl_off` posts DNSBL Off with pfB-DNS stored Off, and
- * `pfb_dns_on` posts DNSBL On with pfB-DNS On and nothing interleaved.
- * The result holds disk config and the config before the save, lock events, input errors, pending marker presence,
- * whether control returned to render instead of exiting through the redirect, and the submitted port rendered after a
- * failure.
+ * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1), `pfb_dns_off` (issue #3770: pfB-DNS is
+ * stored Off, which the save leaves as it is); any other name saves with nothing interleaved.
+ * The result holds disk config, the config before the save, lock events, input errors, pending marker presence, whether control
+ * returned to render instead of exiting through the redirect, and the submitted port rendered after a failure.
  */
 
 $workerArgv = $argv;
@@ -94,7 +90,6 @@ config_set_path("{$dnsbl}/dnsbl_webpage", 'dnsbl_default.php');
 config_set_path('unbound/active_interface', 'lan');
 config_set_path('unbound/custom_options', base64_encode('do-ip6: no'));
 config_set_path("{$dnsbl}/global_log_mode", 'default');	// a migrated policy: the upgrade facade writes nothing
-config_set_path("{$dns}/pfb_dns", 'on');	// DNSBL runs only through pfB-DNS: a node that saves DNSBL On has pfB-DNS On
 
 // What the other requests wrote after this one started: the pfB-DNS page's Off, and an apply's Resolver move.
 $other = $GLOBALS['config'];
@@ -147,15 +142,10 @@ $_POST['pfb_py_cache_max'] = '10000';
 $_POST['top1m_count'] = '1000';
 $pfb_posted_policy = pfb_dnsbl_policy_from_post($_POST, $local_tld, $default_tlds);	// the page's validation computes it once; the save reuses it
 
-if (in_array($scenario, ['pfb_dns_off', 'pfb_dns_off_dnsbl_off'], TRUE)) {
+if ($scenario === 'pfb_dns_off') {
 	config_set_path("{$dns}/pfb_dns", '');
-} elseif ($scenario === 'pfb_dns_absent') {
-	config_del_path("{$dns}/pfb_dns");
 }
-if ($scenario === 'pfb_dns_off_dnsbl_off') {
-	$_POST['pfb_dnsbl'] = '';
-}
-$disk = $GLOBALS['config'];
+$disk = $before = $GLOBALS['config'];
 if ($scenario === 'interleave') {
 	$disk = $other;
 	$GLOBALS['pfb_test_config_read_hook'] = static function () use ($other): void {
@@ -172,12 +162,6 @@ if ($scenario === 'interleave') {
 	$GLOBALS['pfb_test_write_config_result'] = FALSE;
 } elseif ($scenario === 'write_failed') {
 	$GLOBALS['pfb_test_write_config_result'] = -1;
-} elseif ($scenario === 'pfb_dns_turned_off_meanwhile') {
-	$other['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns'] = '';
-	$disk = $other;
-	$GLOBALS['pfb_test_config_read_hook'] = static function () use ($other): void {
-		$GLOBALS['config'] = $other;
-	};
 }
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, $scenario): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['write'];
@@ -189,7 +173,6 @@ $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) u
 	}
 };
 
-$before = $disk;
 $input_errors = [];
 ini_set('open_basedir', "{$tmp}:" . dirname($resultFile) . ":{$repo}:/usr/share/php:/dev/null:/dev/urandom");
 eval($block);

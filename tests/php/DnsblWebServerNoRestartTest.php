@@ -49,7 +49,7 @@ final class DnsblWebServerNoRestartTest extends TestCase
 			'unbound_py_sources' => "{$dir}/pfb_py_sources.json", 'unbound_py_rawdir' => "{$dir}/pfb_py_raw",
 			'unbound_py_reject_stats' => "{$dir}/pfb_py_reject_stats.json", 'chroot_cmd' => '/bin/echo',
 			'dnsbl_python_unmount' => FALSE, 'dnsbl_cache_flush' => PfbToggle::Off,
-			'enable' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'save' => TRUE, 'dnsbl_tld_wildcard' => FALSE,
+			'enable' => PfbToggle::On, 'pfb_dns' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'save' => TRUE, 'dnsbl_tld_wildcard' => FALSE,
 			'domain_update' => FALSE, 'reuse_dnsbl' => '', 'dnsbl_unlock' => "{$dir}/dnsbl_unlock", 'keep' => PfbToggle::On,
 			'install' => FALSE, 'errlog' => "{$dir}/error.log", 'log' => "{$dir}/pfblockerng.log", 'php' => PHP_BINARY,
 		]);

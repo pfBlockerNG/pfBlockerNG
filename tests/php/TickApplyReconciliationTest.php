@@ -47,7 +47,7 @@ final class TickApplyReconciliationTest extends TestCase
 		mkdir($this->dir, 0755, TRUE);
 
 		foreach (['dbdir', 'schedule_state_dir', 'aliasdir', 'dnsbldir', 'pfctl', 'php', 'log', 'errlog', 'runlog', 'extraslog',
-			  'dnsbl_file', 'dnsbl_python_unmount', 'pending_marker', 'enable', 'dnsbl', 'unbound_py_sources'] as $k) {
+			  'dnsbl_file', 'dnsbl_python_unmount', 'pending_marker', 'enable', 'pfb_dns', 'dnsbl', 'unbound_py_sources'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : FALSE;
 		}
 
@@ -243,12 +243,15 @@ final class TickApplyReconciliationTest extends TestCase
 	{
 		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', 'on');
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl', 'on');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns', 'on');
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
 			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
 			'enablessl' => ['present' => FALSE, 'value' => NULL],
 			'custom_options' => ['present' => FALSE, 'value' => NULL],
 		])));
-		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		// pfB-DNS is on and the Resolver it fronts is enabled: the tick has nothing to stand down
+		$GLOBALS['config']['unbound']['enable'] = '';
 		// The manifest exists, so the tick dispatches no feed pass to rebuild it: this suite stays isolated to apply reconciliation.
 		$GLOBALS['pfb']['unbound_py_sources'] = "{$this->dir}/pfb_py_sources.json";
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{}');

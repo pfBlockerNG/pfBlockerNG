@@ -18,7 +18,7 @@ final class PfbReloadCachePolicyTest extends TestCase
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_reload_cache_policy_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0777, TRUE);
-		foreach (['dnsbldir', 'dbdir', 'dnsbl_file', 'unbound_py_count', 'unbound_py_sources', 'enable', 'dnsbl',
+		foreach (['dnsbldir', 'dbdir', 'dnsbl_file', 'unbound_py_count', 'unbound_py_sources', 'enable', 'pfb_dns', 'dnsbl',
 			'unbound_py_rawdir', 'chroot_cmd', 'dnsbl_python_unmount', 'log', 'errlog'] as $key) {
 			$this->savedPfb[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$key] : FALSE;
 		}
@@ -38,7 +38,7 @@ final class PfbReloadCachePolicyTest extends TestCase
 		$GLOBALS['pfb']['log']                    = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog']                 = "{$this->dir}/error.log";
 		$GLOBALS['g']['varrun_path']              = $this->dir;
-		$GLOBALS['pfb']['enable']                 = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable']                 = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 		// pfB-DNS owns the Resolver and is up: the DNS proxy hosts the module, Unbound never does (issue #3770)
 		$GLOBALS['config'] ??= [];
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([

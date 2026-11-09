@@ -376,7 +376,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringContainsString('did not become ready', $notices[0]['notice']);
 		$this->assertStringContainsString('turned off', $notices[0]['notice']);
 		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
-		$this->assertStringContainsString('DNSBL', $notices[0]['notice'], 'DNSBL runs in the Resolver again');
+		$this->assertStringNotContainsString('DNSBL', $notices[0]['notice'], 'pfB-DNS was turned off, so DNSBL does not run: the notice says nothing about it');
 		$this->assertSame(2, $notices[0]['priority']);
 		$this->assertStringContainsString('did not become ready', $this->pfbLog());
 	}
@@ -1219,11 +1219,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
 		$this->assertStringNotContainsString('Custom Options', $notices[0]['notice']);
 		$this->assertStringNotContainsString('kept', $notices[0]['notice']);
-		if ($dnsbl) {
-			$this->assertStringContainsString('DNSBL runs in the DNS Resolver again', $notices[0]['notice']);
-		} else {
-			$this->assertStringNotContainsString('DNSBL', $notices[0]['notice']);
-		}
+		// pfB-DNS was turned off, so DNSBL does not run (it runs only through pfB-DNS): the notice says nothing about it, DNSBL on or off
+		$this->assertStringNotContainsString('DNSBL', $notices[0]['notice']);
 		$this->assertSame(2, $notices[0]['priority']);
 
 		// When the next apply runs again, and a readiness check of the proxy follows

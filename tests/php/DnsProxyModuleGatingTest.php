@@ -1291,6 +1291,34 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertFalse(config_path_enabled('unbound', 'python'));
 	}
 
+	/** @return array<string,array{PfbToggle,PfbToggle,string,bool}> the pfBlockerNG enable, the pfB-DNS enable, the apply's $mode, and whether it wants pfB-DNS */
+	public static function parentSwitchStates(): array
+	{
+		return [
+			'pfBlockerNG on, pfB-DNS on' => [PfbToggle::On, PfbToggle::On, 'enabled', TRUE],
+			'pfBlockerNG off, pfB-DNS on' => [PfbToggle::Off, PfbToggle::On, 'disabled', FALSE],
+			'pfBlockerNG on, pfB-DNS off' => [PfbToggle::On, PfbToggle::Off, 'disabled', FALSE],
+		];
+	}
+
+	/**
+	 * issue #3770: pfB-DNS is a parent switch of DNSBL, as the pfBlockerNG enable is: DNSBL stored On with either one off runs the
+	 * apply exactly as DNSBL off does, so the DNSBL pipeline is torn down (and pfB-DNS is wanted only while both are on).
+	 */
+	#[DataProvider('parentSwitchStates')]
+	public function testTheApplyRunsDisabledForDnsblStoredOnWheneverAParentSwitchOfItIsOff(PfbToggle $enable, PfbToggle $pfbDns, string $mode, bool $wanted): void
+	{
+		// Given DNSBL stored On, the Resolver enabled, and the parent switches as the row says
+		PfbConfig::writeSystem('gen/enable_cb', $enable);
+		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
+		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
+		$this->setProxy($pfbDns === PfbToggle::On);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+
+		// When the apply decides its mode, then it is DNSBL's pipeline that is on, or off, exactly as the switches say
+		$this->assertSame([$mode, $wanted], $this->applyDecisionsFor(FALSE));
+	}
+
 	/** @return array<string,array{string}> the DNSBL mode the apply runs with */
 	public static function dnsblModes(): array
 	{

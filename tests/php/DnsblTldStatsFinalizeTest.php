@@ -166,7 +166,7 @@ final class DnsblTldStatsFinalizeTest extends TestCase
 		$group = ['groupname'=>'DNSBL_A','timestamp'=>'old','entries'=>3,'counter'=>12];
 		$this->configure('', TRUE, $group);
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'], [
-			'enable'=>PfbToggle::On,'dnsbl'=>PfbToggle::On,'save'=>FALSE,'dnsbl_tld_wildcard'=>TRUE,
+			'enable'=>PfbToggle::On,'pfb_dns'=>PfbToggle::On,'dnsbl'=>PfbToggle::On,'save'=>FALSE,'dnsbl_tld_wildcard'=>TRUE,
 			'alias_dnsbl_configured'=>['DNSBL_A'],'dnsbl_file'=>"{$this->tmp}/dnsbl",'dnsbl_publish_failed'=>FALSE,
 			'dbdir' => $this->tmp, 'pending_marker' => "{$this->tmp}/pending",
 		]);

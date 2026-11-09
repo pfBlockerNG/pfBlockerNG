@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -136,6 +137,7 @@ final class PfbWidgetOracleTest extends TestCase
 	{
 		return [
 			'enable'         => PfbToggle::On,
+			'pfb_dns'        => PfbToggle::On,
 			'dnsbl'          => PfbToggle::On,
 			'unbound_state'  => PfbToggle::On,
 			'dbdir'          => $this->dir,	// PHP-owned ledger (pfb_sync_status.json)
@@ -255,10 +257,18 @@ final class PfbWidgetOracleTest extends TestCase
 		return $this->basePfb();
 	}
 
-	public function testDnsblEnableOffIsRed(): void
+	/** @return array<string,array{string}> the parent switch DNSBL needs, turned off: pfB-DNS is one like the pfBlockerNG enable (issue #3770) */
+	public static function dnsblParentSwitches(): array
+	{
+		return ['pfBlockerNG off' => ['enable'], 'pfB-DNS off' => ['pfb_dns']];
+	}
+
+	#[DataProvider('dnsblParentSwitches')]
+	public function testDnsblParentSwitchOffIsRed(string $parent): void
 	{
 		$pfb = $this->liveDnsblPfb();
-		$pfb['enable'] = PfbToggle::Off;
+		$this->assertSame(self::ICON_GREEN, pfb_widget_oracle_status($pfb)[2], 'before: both parents on, DNSBL is live');
+		$pfb[$parent] = PfbToggle::Off;
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
 
@@ -286,13 +296,14 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame(self::ICON_RED, $status);
 	}
 
-	public function testDnsblDisabledIsRedWithPlainWordingWhenNoOpenEntries(): void
+	#[DataProvider('dnsblParentSwitches')]
+	public function testDnsblDisabledIsRedWithPlainWordingWhenNoOpenEntries(string $parent): void
 	{
 		// Before-state for the pair below: disabled + a clean ledger keeps the
 		// plain "Disabled." wording (Semantics #1: never yellow, but wording still
 		// distinguishes "nothing open" from "something open" while disabled).
 		$pfb = $this->liveDnsblPfb();
-		$pfb['enable'] = PfbToggle::Off;
+		$pfb[$parent] = PfbToggle::Off;
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
 
@@ -300,7 +311,8 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame('DNSBL is Disabled.', $msg);
 	}
 
-	public function testDnsblDisabledStaysRedButShowsErrorsWordingWithAnOpenDnsblEntry(): void
+	#[DataProvider('dnsblParentSwitches')]
+	public function testDnsblDisabledStaysRedButShowsErrorsWordingWithAnOpenDnsblEntry(string $parent): void
 	{
 		// Semantics #1: an open entry must never leak a yellow read into a
 		// genuinely-disabled facility -- but the disabled message DOES still
@@ -308,7 +320,7 @@ final class PfbWidgetOracleTest extends TestCase
 		// merged ledger instead of py_error.log's filesize (which the widget no
 		// longer reads at all).
 		$pfb = $this->liveDnsblPfb();
-		$pfb['enable'] = PfbToggle::Off;
+		$pfb[$parent] = PfbToggle::Off;
 		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply', 'stale dnsbl entry', $this->dir);
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
@@ -390,8 +402,8 @@ final class PfbWidgetOracleTest extends TestCase
 			$keys[$key] = ['present' => $value !== null, 'value' => $value];
 		}
 		$GLOBALS['config'] = [];
-		// The proxy hosts the module only while DNSBL is on: the widget's own $pfb is the one the predicates read.
-		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		// The proxy hosts the module only while pfBlockerNG, pfB-DNS and DNSBL are on: the widget's own $pfb is the one the predicates read.
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 		config_set_path(
 			'installedpackages/pfblockerngdns/config/0/pfb_dns_saved',
 			base64_encode((string) json_encode($keys))

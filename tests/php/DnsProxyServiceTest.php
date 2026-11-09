@@ -434,8 +434,8 @@ final class DnsProxyServiceTest extends TestCase
 	#[DataProvider('moduleFlagRows')]
 	public function testTheProxyBootsTheModuleOnlyWithDnsblAndListensForTheObserverOnlyWhileForwarding(bool $dnsbl, bool $forwarding, string $flag): void
 	{
-		// Given pfBlockerNG enabled, DNSBL on or off, and the Resolver forwarding or not
-		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+		// Given pfBlockerNG and pfB-DNS enabled, DNSBL on or off, and the Resolver forwarding or not
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
 		$GLOBALS['pfb']['dnsbl'] = $dnsbl ? PfbToggle::On : PfbToggle::Off;
 		if ($forwarding) {
 			config_set_path('unbound/forwarding', '');
@@ -452,6 +452,38 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->daemonArgv();
 		$this->assertSame($flag === '--no-module', in_array('--no-module', $argv, TRUE), '--no-module iff DNSBL is off');
 		$this->assertSame($flag === '--observer', in_array('--observer', $argv, TRUE), '--observer iff DNSBL is on and the Resolver forwards');
+	}
+
+	/** @return array<string,array{?string,list<string>}> the parent switch of DNSBL turned off ($pfb key, NULL = none), the module flags expected in order */
+	public static function parentSwitchRows(): array
+	{
+		return [
+			'every switch on: the module is hosted, its own log is the one' => [NULL, []],
+			'pfBlockerNG off: DNSBL does not run, as with DNSBL off'        => ['enable', ['--no-module', '--reply-log']],
+			'pfB-DNS off: DNSBL does not run, as with DNSBL off'            => ['pfb_dns', ['--no-module', '--reply-log']],
+		];
+	}
+
+	/** @param list<string> $expected */
+	#[DataProvider('parentSwitchRows')]
+	public function testTheProxyHostsNoModuleWhileAParentSwitchOfDnsblIsOffAndLogsTheRepliesItForwards(?string $off, array $expected): void
+	{
+		// Given pfBlockerNG, pfB-DNS, DNSBL and DNS Reply Logging on, except the parent switch under test
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['pfb']['dnsbl_py_reply'] = PfbToggle::On;
+		if ($off !== NULL) {
+			$GLOBALS['pfb'][$off] = PfbToggle::Off;
+		}
+		$this->moveResolver();
+
+		// When the service is generated and started
+		$this->generate();
+		$this->arrange();
+		[$status, $output] = $this->rc('start');
+
+		// Then the daemon is launched with the module flags the mode needs: no module and reply logging once DNSBL does not run
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame($expected, array_values(array_intersect($this->daemonArgv(), ['--no-module', '--reply-log', '--observer'])));
 	}
 
 	/** @return array<string,array{bool,?PfbToggle,list<string>}> DNSBL on, the DNS Reply Logging preference ($pfb['dnsbl_py_reply'], NULL = unread), the module flags expected in order */
@@ -471,7 +503,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testTheProxyLogsRepliesOnlyWithoutTheModuleAndOnlyWhileTheSharedPreferenceIsOn(bool $dnsbl, ?PfbToggle $preference, array $expected): void
 	{
 		// Given pfBlockerNG enabled, DNSBL on or off, and the DNS Reply Logging preference (the DNSBL module's own switch) set or not
-		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
 		$GLOBALS['pfb']['dnsbl'] = $dnsbl ? PfbToggle::On : PfbToggle::Off;
 		if ($preference !== NULL) {
 			$GLOBALS['pfb']['dnsbl_py_reply'] = $preference;
@@ -505,7 +537,7 @@ final class DnsProxyServiceTest extends TestCase
 	public function testTheGatewayLineCarriesThePfbDnsModeFlagsAsItsOwnAndTheDeciderIsLeftAlone(bool $dnsbl, bool $forwarding, ?PfbToggle $preference, array $flags): void
 	{
 		// Given the gateway binary, a saved Resolver, and pfB-DNS in the mode DNSBL, forwarding and the logging preference make
-		$GLOBALS['pfb']['enable'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
 		$GLOBALS['pfb']['dnsbl'] = $dnsbl ? PfbToggle::On : PfbToggle::Off;
 		$GLOBALS['pfb']['dnsbl_py_reply'] = $preference;
 		if ($forwarding) {

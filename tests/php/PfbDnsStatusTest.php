@@ -263,14 +263,14 @@ final class PfbDnsStatusTest extends TestCase
 		return ['address' => $address, 'state' => $state, 'reason' => $reason];
 	}
 
-	public function testAnOffToggleWithNothingMovedIsNotInUse(): void
+	public function testAnOffToggleWithNothingMovedIsNotInUseAndDnsblDoesNotRunWithIt(): void
 	{
 		$this->assertSame([
 			'service'    => 'Not in use',
 			'mode'       => 'Off: the DNS Resolver serves clients itself',
 			'transports' => NULL,
 			'active'     => FALSE,
-			'dnsbl'      => TRUE,
+			'dnsbl'      => FALSE,
 			'name'       => '',
 		], pfb_dns_status());
 	}
@@ -300,6 +300,37 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame($mode, $status['mode']);
 		$this->assertArrayHasKey('transports', $status);
 		$this->assertNull($status['transports'], 'no transport is claimed while nothing is moved');
+	}
+
+	/** @return array<string,array{string,bool}> the parent switch of DNSBL turned off ($pfb key), and whether the Resolver is still moved (its restore pending) */
+	public static function parentSwitchOffRows(): array
+	{
+		$rows = [];
+		foreach (['pfBlockerNG' => 'enable', 'pfB-DNS' => 'pfb_dns'] as $name => $key) {
+			$rows["{$name} off, nothing moved"] = [$key, FALSE];
+			$rows["{$name} off, the Resolver still moved"] = [$key, TRUE];
+		}
+		return $rows;
+	}
+
+	#[DataProvider('parentSwitchOffRows')]
+	public function testTheDnsblTickIsOffWhileAParentSwitchOfDnsblIsOffWhichEveryOneOfThemShows(string $off, bool $moved): void
+	{
+		// Given DNSBL stored On with pfBlockerNG and pfB-DNS on: DNSBL runs, and the overview says so
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		if ($moved) {
+			$this->moved(FALSE);
+		}
+		$this->assertTrue(pfb_dns_status()['dnsbl'], 'before: the status says DNSBL runs');
+		$this->assertMatchesRegularExpression('~<tr id="pfb-dns-status-dnsbl"><th>DNSBL</th><td><i [^>]*title="On"~', pfb_dns_status_panel(pfb_dns_status()), 'before: the panel shows DNSBL On');
+
+		// When a parent switch DNSBL needs is turned off
+		$GLOBALS['pfb'][$off] = PfbToggle::Off;
+		$status = pfb_dns_status();
+
+		// Then DNSBL reads off in the status and in the panel: it does not run, whichever parent is off
+		$this->assertFalse($status['dnsbl']);
+		$this->assertMatchesRegularExpression('~<tr id="pfb-dns-status-dnsbl"><th>DNSBL</th><td><i [^>]*title="Off"~', pfb_dns_status_panel($status));
 	}
 
 	public function testAMovedBoxWithThePackageDisabledSaysTheRestoreIsPendingNotThatTheProxyIsOn(): void

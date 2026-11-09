@@ -6696,7 +6696,7 @@ function pfb_dns_proxy_roll_back(?string $what = NULL, ?string $next = NULL, ?st
 		}
 
 		pfb_global();
-		$mode = ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On) ? 'enabled' : 'disabled';
+		$mode = (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On) ? 'enabled' : 'disabled';
 		// The Unbound reload below reads state only an apply pass sets; a rollback from the installer or a Reports page has none
 		$pfb += ['reuse_dnsbl' => '', 'save' => FALSE, 'install' => FALSE];
 		pfb_unbound_python($mode, FALSE);
@@ -16220,13 +16220,13 @@ function pfb_dns_proxy_running(): bool {
 }
 
 /**
- * Is DNSBL on as far as the DNS proxy is concerned: pfBlockerNG enabled and DNSBL enabled (the runtime $pfb, so a VIP
+ * Is DNSBL on as far as the DNS proxy is concerned: pfBlockerNG and pfB-DNS enabled, and DNSBL enabled (the runtime $pfb, so a VIP
  * that forced DNSBL off counts as off)? Then the proxy hosts the DNSBL module; otherwise it only forwards.
  */
 function pfb_dnsbl_active(): bool {
 	global $pfb;
 
-	return ($pfb['enable'] ?? NULL) === PfbToggle::On && ($pfb['dnsbl'] ?? NULL) === PfbToggle::On;
+	return ($pfb['enable'] ?? NULL) === PfbToggle::On && ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On && ($pfb['dnsbl'] ?? NULL) === PfbToggle::On;
 }
 
 /** pfB-DNS is wanted: pfBlockerNG enabled, the pfB-DNS toggle on and the Resolver enabled, with DNSBL on or off. */
@@ -18618,7 +18618,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	}
 
 	// Finalize deferred TLD-mode statistics, if configured
-	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save']) {
+	if (pfb_dnsbl_active() && !$pfb['save']) {
 		if ($pfb['dnsbl_tld_wildcard']) {
 			if ($pfb['domain_update']) {
 				if (!pfb_dnsbl_tld_stats_finalize($dnsbl_tld_group_counts)) {
@@ -18669,7 +18669,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	}
 
 	// Disable DNSBL
-	if (($pfb['enable'] !== PfbToggle::On || $pfb['dnsbl'] !== PfbToggle::On) && !$pfb['install']) {
+	if (!pfb_dnsbl_active() && !$pfb['install']) {
 
 		pfb_reload_unbound('disabled', $pfbpython);
 		if (is_service_running('pfb_dnsbl')) {

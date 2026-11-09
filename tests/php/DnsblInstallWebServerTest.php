@@ -8,8 +8,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3539 — a package (re)install creates, writes and starts the DNSBL web server only for an
- * enabled package with DNSBL on, the resolver on, a block answering with the VIP and both ports set; and
+ * issue #3539, #3770 — a package (re)install creates, writes and starts the DNSBL web server only for an
+ * enabled package with pfB-DNS and DNSBL on, the resolver on, a block answering with the VIP and both ports set; and
  * what it starts is real: the conf it builds is written, because the rc script launches lighttpd only
  * when that conf exists.
  *
@@ -66,17 +66,18 @@ final class DnsblInstallWebServerTest extends TestCase
 	}
 
 	/**
-	 * @param array{enable?:bool,dnsbl?:bool,unbound?:bool,demand?:bool,http?:bool,https?:bool} $o
+	 * @param array{enable?:bool,pfbdns?:bool,dnsbl?:bool,unbound?:bool,demand?:bool,http?:bool,https?:bool} $o
 	 */
 	private function arrange(array $o): void
 	{
-		$o += ['enable' => TRUE, 'dnsbl' => TRUE, 'unbound' => TRUE, 'demand' => TRUE, 'http' => TRUE, 'https' => TRUE];
+		$o += ['enable' => TRUE, 'pfbdns' => TRUE, 'dnsbl' => TRUE, 'unbound' => TRUE, 'demand' => TRUE, 'http' => TRUE, 'https' => TRUE];
 		$this->seedDnsblNatWriter($this->dir, [], $o['demand']);
 		file_put_contents($GLOBALS['pfb']['dnsbl_cert'], 'STALE');
 		config_set_path(self::GENERAL . '/enable_cb', $o['enable'] ? 'on' : '');
 		config_set_path(self::DNSBL . '/pfb_dnsport', $o['http'] ? '8081' : '');
 		config_set_path(self::DNSBL . '/pfb_dnsport_ssl', $o['https'] ? '8443' : '');
 		PfbConfig::write('dnsbl/pfb_dnsbl', $o['dnsbl'] ? 'on' : '');
+		PfbConfig::write('dns/pfb_dns', $o['pfbdns'] ? 'on' : '');
 		if ($o['unbound']) {
 			$GLOBALS['config']['unbound'] = ['enable' => ''];
 		}
@@ -121,6 +122,7 @@ final class DnsblInstallWebServerTest extends TestCase
 	{
 		return [
 			'package off' => [['enable' => FALSE]],
+			'pfB-DNS off' => [['pfbdns' => FALSE]],
 			'DNSBL off' => [['dnsbl' => FALSE]],
 			'resolver off' => [['unbound' => FALSE]],
 			'no block answers with the VIP' => [['demand' => FALSE]],

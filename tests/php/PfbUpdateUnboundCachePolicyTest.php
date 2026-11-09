@@ -57,6 +57,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
+			'pfb_dns' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
 			'save' => TRUE,
 			'dnsbl_tld_wildcard' => FALSE,

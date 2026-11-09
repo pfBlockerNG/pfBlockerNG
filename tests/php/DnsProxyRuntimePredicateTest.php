@@ -58,6 +58,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
+			'pfb_dns' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
 			'save' => TRUE,
 			'dnsbl_tld_wildcard' => FALSE,
@@ -225,24 +226,32 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// P1 -- pfb_unbound_py_host_running(): with DNSBL off the proxy hosts nothing
+	// P1 -- pfb_unbound_py_host_running(): with DNSBL off, or a parent switch it needs off, the proxy hosts nothing
 	// -----------------------------------------------------------------------
 
-	/** @return array<string, array{bool}> proxy pid valid */
-	public static function proxyPidRows(): array
+	/** @return array<string, array{string, bool}> what is turned off ($pfb key: DNSBL, or a parent switch of it as the pfBlockerNG enable is), proxy pid valid */
+	public static function dnsblOffRows(): array
 	{
-		return ['proxy pid valid' => [TRUE], 'proxy pid invalid' => [FALSE]];
+		$rows = [];
+		foreach (['DNSBL' => 'dnsbl', 'pfBlockerNG' => 'enable', 'pfB-DNS' => 'pfb_dns'] as $name => $key) {
+			$rows["{$name} off, proxy pid valid"] = [$key, TRUE];
+			$rows["{$name} off, proxy pid invalid"] = [$key, FALSE];
+		}
+		return $rows;
 	}
 
-	#[DataProvider('proxyPidRows')]
-	public function testWithDnsblOffAMovedResolverHasNoModuleHostWhateverTheProxyAndUnboundDo(bool $proxyUp): void
+	#[DataProvider('dnsblOffRows')]
+	public function testWithDnsblOffAMovedResolverHasNoModuleHostWhateverTheProxyAndUnboundDo(string $off, bool $proxyUp): void
 	{
-		// Given pfB-DNS fronting Unbound (a snapshot) with DNSBL off: the proxy only forwards and hosts no module.
-		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
+		// Given pfB-DNS fronting Unbound (a snapshot) with everything on: a live proxy is the module host
 		$this->setProxyMode(TRUE);
 		$this->setPythonKeys(FALSE);
 		$this->setProxyUp($proxyUp);
 		$this->setUnboundUp(TRUE);
+		$this->assertSame($proxyUp, pfb_unbound_py_host_running(), 'before: the proxy hosts the module while it runs');
+
+		// When DNSBL, or a parent switch it needs, is turned off: the proxy only forwards and hosts no module.
+		$GLOBALS['pfb'][$off] = PfbToggle::Off;
 
 		// Then nothing hosts the module: neither the proxy's pid nor a live Unbound stands in for one.
 		$this->assertFalse(pfb_unbound_py_host_running());

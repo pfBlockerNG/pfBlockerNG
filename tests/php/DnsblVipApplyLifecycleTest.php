@@ -38,6 +38,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	private const CONF_WITH_OBSERVER = "server:\n\tinterface: 127.0.0.1\n\tmodule-config: \"python validator iterator\"\n\npython:\npython-script: pfb_upstream_observer.py\n";
 	private const PROXY_BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
 		. "proxy-protocol-port: 5353\nedns-buffer-size: 1432\n# end pfBlockerNG DNS proxy";
+	private const UNSAFE_OPTIONS = 'include: /var/unbound/admin.conf';	// a line pfB-DNS refuses to share the Resolver with
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	private const RELOAD_DONE = 'DNSBL update [ feed lines';
 	private const VIP_WRITE = 'pfBlockerNG: saving DNSBL auto-VIP changes';
@@ -119,16 +120,17 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	}
 
 	/**
-	 * @param array{save?:bool,demand?:bool,rowState?:string,ports?:bool,enable?:bool,dnsbl?:bool,unbound?:bool,install?:bool,served?:bool,up?:bool} $o
+	 * @param array{save?:bool,demand?:bool,rowState?:string,ports?:bool,enable?:bool,pfbdns?:bool,dnsbl?:bool,unbound?:bool,install?:bool,served?:bool,up?:bool} $o
 	 *   save    GUI/resync save pass (no feed processing) vs a full update pass
 	 *   demand  a group answers with the VIP (logging 'enabled'), else Null Blocking ('disabled_log')
 	 *   rowState state of the group's one feed row ('Disabled' = the group has no blocking row)
 	 *   served  the web server serves: marked VIP, DNSBL NAT, conf and certificate exist
 	 *   up      the resolver process is running (so a finished reload is converged)
+	 *   pfbdns  the pfB-DNS enable stored On (DNSBL runs only while it is); FALSE stores Off whatever the resolver state
 	 */
 	private function arrange(array $o = []): void
 	{
-		$o += ['save' => TRUE, 'demand' => FALSE, 'rowState' => 'Enabled', 'ports' => TRUE, 'enable' => TRUE, 'dnsbl' => TRUE,
+		$o += ['save' => TRUE, 'demand' => FALSE, 'rowState' => 'Enabled', 'ports' => TRUE, 'enable' => TRUE, 'pfbdns' => TRUE, 'dnsbl' => TRUE,
 			'unbound' => TRUE, 'install' => FALSE, 'served' => FALSE, 'up' => TRUE];
 		$dir = $this->dir;
 
@@ -199,17 +201,23 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		// is up decides if a stop/start of Unbound completes, and whether pfB-DNS hosts decides if a finished reload converged.
 		file_put_contents("{$dir}/unbound.conf", "server:\n");
 		$this->resolverUp($o['up'] && $o['unbound']);
+		if (!$o['pfbdns']) {
+			PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		}
 	}
 
-	/** The resolver process and, with it, pfB-DNS hosting the module: both up, or neither (a finished reload converges only if both are). */
+	/**
+	 * The resolver process and, with it, pfB-DNS hosting the module: both up, or neither (a finished reload converges only if both are).
+	 * Neither: pfB-DNS is on (DNSBL runs only while it is) but never took the Resolver -- an unsafe Custom Options line refuses the
+	 * move, as a failed activation does -- so nothing hosts the module.
+	 */
 	private function resolverUp(bool $up): void
 	{
 		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess($up);
 		if (!$up) {
-			// pfB-DNS never took the Resolver: nothing hosts the module
-			PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+			PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::On);
 			if (isset($GLOBALS['config']['unbound'])) {
-				$GLOBALS['config']['unbound'] = ['enable' => ''];
+				$GLOBALS['config']['unbound'] = ['enable' => '', 'custom_options' => base64_encode(self::UNSAFE_OPTIONS)];
 			}
 			config_set_path(self::SAVED, '');
 			file_put_contents("{$this->dir}/unbound.conf", "server:\n");
@@ -1034,8 +1042,9 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	public static function bootRows(): array
 	{
 		return [
-			'package on, DNSBL on, resolver on' => [[], TRUE],
+			'package on, pfB-DNS on, DNSBL on, resolver on' => [[], TRUE],
 			'package off' => [['enable' => FALSE], FALSE],
+			'pfB-DNS off' => [['pfbdns' => FALSE], FALSE],
 			'DNSBL off' => [['dnsbl' => FALSE], FALSE],
 			'resolver off' => [['unbound' => FALSE], FALSE],
 		];
@@ -1043,7 +1052,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 	/** @param array<string,bool> $state */
 	#[DataProvider('bootRows')]
-	public function testBootResyncServesOnlyForAnEnabledPackageWithDnsblAndTheResolverOnAndOtherwiseTearsDownALeftOverServedState(array $state, bool $serves): void
+	public function testBootResyncServesOnlyForAnEnabledPackageWithPfbDnsAndDnsblAndTheResolverOnAndOtherwiseTearsDownALeftOverServedState(array $state, bool $serves): void
 	{
 		// GIVEN the boot/install resync, a group answering with the VIP, and -- unless the web server may serve -- the
 		// served state an older version left behind (conf, certificate, NAT, marked auto-VIP)
@@ -1056,7 +1065,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 		// THEN the pass took the boot/install branch
 		$this->assertStringContainsString('Sync terminated during boot process.', $this->passLog());
-		// AND package, DNSBL and resolver all on serve (conf and NAT) -- anything else leaves no conf, certificate or NAT
+		// AND package, pfB-DNS, DNSBL and resolver all on serve (conf and NAT) -- anything else leaves no conf, certificate or NAT
 		$this->assertCount($serves ? 2 : 0, $this->dnsblNat(), 'DNSBL NAT');
 		$this->assertSame($serves, file_exists($GLOBALS['pfb']['dnsbl_conf']), 'web server conf');
 		$this->assertSame($serves, file_exists($GLOBALS['pfb']['dnsbl_cert']), 'web server certificate');

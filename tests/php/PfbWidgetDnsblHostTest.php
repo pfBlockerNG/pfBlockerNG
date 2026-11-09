@@ -48,7 +48,7 @@ final class PfbWidgetDnsblHostTest extends TestCase
 		$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];
 		file_put_contents("{$this->dir}/unbound.conf", "python:\n\tpython-script: pfb_unbound.py\n");
 		$GLOBALS['pfb']['dnsbldir'] = $this->dir;
-		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 	}
 
 	protected function tearDown(): void
@@ -67,7 +67,7 @@ final class PfbWidgetDnsblHostTest extends TestCase
 	/** @return array<string,mixed> */
 	private function pfb(): array
 	{
-		return ['enable' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'unbound_state' => PfbToggle::On, 'dbdir' => $this->dir, 'dnsbldir' => $this->dir,
+		return ['enable' => PfbToggle::On, 'pfb_dns' => PfbToggle::On, 'dnsbl' => PfbToggle::On, 'unbound_state' => PfbToggle::On, 'dbdir' => $this->dir, 'dnsbldir' => $this->dir,
 			'dnsbl_vip_demand' => FALSE, 'config' => []];
 	}
 

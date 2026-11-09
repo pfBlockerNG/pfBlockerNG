@@ -60,8 +60,9 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		$GLOBALS['config'] = [];
 
 		// pfB-DNS owns the Resolver with DNSBL on, so the proxy hosts the module (issue #3770): the manifest is its only blocklist
-		// source. The tick re-reads the toggles through pfb_global(), so pfBlockerNG is enabled in config.xml too.
+		// source. The tick re-reads the toggles through pfb_global(), so pfBlockerNG and pfB-DNS are enabled in config.xml too.
 		PfbConfig::writeSystem('gen/enable_cb', PfbToggle::On);
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::On);
 		$keys = [];
 		foreach (['active_interface' => 'lan', 'enablessl' => NULL, 'custom_options' => NULL] as $key => $value) {
 			$keys[$key] = ['present' => $value !== NULL, 'value' => $value];

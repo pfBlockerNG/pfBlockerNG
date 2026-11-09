@@ -57,7 +57,7 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 			'dnsbl_cache_flush' => PfbToggle::Off,
 			'enable' => PfbToggle::On,
 			'dnsbl' => PfbToggle::On,
-			'pfb_dns' => PfbToggle::Off,
+			'pfb_dns' => PfbToggle::On,	// requested: DNSBL runs only while pfB-DNS is on, so "not hosted" rows are about ownership, not the switch
 			'unbound_state' => PfbToggle::On,
 			'save' => TRUE,
 			'dnsbl_tld_wildcard' => FALSE,

@@ -1039,13 +1039,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	if (is_platform_booting() || $g['pfblockerng_install']) {
 		// Create DNSBL NAT, VIP, Lighttpd service and certs if required on reboot (pfb_create_dnsbl() applies the VIP demand rule).
 		// issue #3539: no demand but a conf on disk -> the on-disk generation may still answer with the VIP; the next publishing pass tears down.
-		if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On) {
+		if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On) {
 			if (!empty($pfb['dnsbl_vip_demand']) || !file_exists($pfb['dnsbl_conf'])) {
 				pfb_create_dnsbl('enabled');
 			}
 		}
 		else {
-			// Package, DNSBL or resolver off: nothing may serve, so strip what an older version left (conf, certificate, NAT, auto-VIP).
+			// Package, pfB-DNS, DNSBL or resolver off: nothing may serve, so strip what an older version left (conf, certificate, NAT, auto-VIP).
 			pfb_create_dnsbl('disabled');
 		}
 		if ($pfb_sync_absorb) {
@@ -1453,7 +1453,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			}
 
 			// ADD DNSBL IP
-			if (($ltype == 'pfblockernglistsv4' || $ltype == 'pfblockernglistsv6') && $pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On
+			if (($ltype == 'pfblockernglistsv4' || $ltype == 'pfblockernglistsv6') && pfb_dnsbl_active()
 			    && pfb_group_action_valid($pfb['dnsbl_ip'] ?? NULL, 'ipv4') && $pfb['dnsbl_ip'] != 'Disabled') {
 				$list = array();
 				$list['action'] = "{$pfb['dnsbl_ip']}";
@@ -1768,7 +1768,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb_fp_old			= null;		// Fingerprint of loaded input files BEFORE this pass (null => DNSBL not active this pass)
 
 	$dnsbl_error = FALSE;
-	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save']) {
+	if (pfb_dnsbl_active() && !$pfb['save']) {
 
 		// Terminate if DNSBL VIP is empty (issue #3539: the ports matter only while a block answers with the VIP)
 		if (!empty($pfb['dnsbl_vip_demand']) && (empty($pfb['dnsbl_port']) || empty($pfb['dnsbl_port_ssl']))) {
@@ -1778,7 +1778,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 	}
 
-	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && !$pfb['save'] && !$dnsbl_error) {
+	if (pfb_dnsbl_active() && !$pfb['save'] && !$dnsbl_error) {
 		$configured = array();
 		$config_complete = TRUE;
 		$source_groups = config_get_path('installedpackages/pfblockerngdnsbl/config', array());
@@ -3196,7 +3196,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		}
 	}
 	else {
-		if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On) {
+		if (pfb_dnsbl_active()) {
 
 			// When DNSBL is enabled and no Aliases are defined, or all Aliases are Disabled
 			if (empty($lists_dnsbl_all) && !$pfb['save']) {
@@ -3254,10 +3254,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// pfb_manage_dnsbl_vip(string $mode)); the if/elseif does not cover every state
 	// (e.g. DNSBL enabled while the DNS Resolver is disabled). '' is a no-op mode.
 	$mode = '';
-	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On) {
+	if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On) {
 		$mode = 'enabled';
 	}
-	elseif (($pfb['enable'] !== PfbToggle::On || $pfb['dnsbl'] !== PfbToggle::On) && !$pfb['install']) {
+	elseif (!pfb_dnsbl_active() && !$pfb['install']) {
 		$mode = 'disabled';
 	}
 
@@ -3297,7 +3297,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// Reads dnsbl_redir (toggle) via PfbConfig; manages nat/rule directly
 	// (pfSense-core foreign section — ADR-29 exclusion list).
 	// Coupled to DNSBL being enabled: rules are created only when $mode === 'enabled'
-	// (master enable + DNSBL toggle + resolver up); force-removed otherwise. Feeds/lists
+	// (master enable + pfB-DNS + DNSBL toggle + resolver up); force-removed otherwise. Feeds/lists
 	// are NOT required — only the DNSBL toggle + resolver state.
 	{
 		$redir_changed = FALSE;
@@ -3395,7 +3395,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// Reads dnsbl_dot_block (toggle) via PfbConfig; manages filter/rule directly
 	// (pfSense-core foreign section — ADR-29 exclusion list).
 	// Coupled to DNSBL being enabled: rules are created only when $mode === 'enabled'
-	// (master enable + DNSBL toggle + resolver up); force-removed otherwise. Feeds/lists
+	// (master enable + pfB-DNS + DNSBL toggle + resolver up); force-removed otherwise. Feeds/lists
 	// are NOT required — only the DNSBL toggle + resolver state.
 	{
 		$dot_changed = FALSE;
@@ -3588,7 +3588,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		// zero-downtime swap waited / Unbound restarted). On a RAM-disk /var, re-archive
 		// the generated DNSBL state so the boot 'dnsbl_cache restore' brings it back after
 		// the next reboot. Gated like the IP side (archive only inside the change branch):
-		// DNSBL active ($mode === 'enabled', i.e. enable + dnsbl + resolver on) +
+		// DNSBL active ($mode === 'enabled', i.e. enable + pfB-DNS + dnsbl + resolver on) +
 		// use_mfs_tmpvar. Read $pfb directly (not $mode) to keep the gate self-contained.
 		// #520 NOTE: an HSTS-only change now enters this branch too ($pfb_data_changed
 		// fingerprints the shipped pfb_py_hsts.txt), so the archive is re-saved even
@@ -3596,7 +3596,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		// identical generated content. Deliberately NOT separately gated: the shipped
 		// HSTS list ships per-release (changes ~never), so the rare extra save isn't
 		// worth a second generated-only fingerprint.
-		if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On &&
+		if (pfb_dnsbl_active() && $pfb['unbound_state'] === PfbToggle::On &&
 		    config_path_enabled('system', 'use_mfs_tmpvar')) {
 			pfb_dnsbl_cache('save');
 		}
@@ -4994,7 +4994,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			// Build the DNSBL floating pass rules (ping + permit pair) to pass into the helper.
 			$pfb_dnsbl_float = [];
-			if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['dnsbl_rule'] != 'Disabled'
+			if (pfb_dnsbl_active() && $pfb['dnsbl_rule'] != 'Disabled'
 			    && $pfb_dnsbl_vip_served
 			    && !empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl'])
 			    && !empty($pfb['dnsblconfig']['dnsbl_allow_int'])) {
