@@ -2675,6 +2675,29 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
         )
 
 
+def restart_dnsbl_decider(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
+    """Restart the pfB-DNS decider when it hosts the DNSBL module and return True; False when Unbound hosts it.
+
+    The decider's restart (``pfb_dns_proxy_decider_restart()``) is the product's own module reload: it re-runs the
+    module's ``init()`` as an Unbound restart does for the module in Unbound. On False the caller reloads Unbound.
+    """
+    # Fenced and compared as a whole token: a failure text may itself contain the word UNBOUND.
+    host = _php_read_scalar(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n"
+        "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; } else {\n"
+        "  $failed = pfb_dns_proxy_decider_restart();\n"
+        "  $host = $failed === NULL ? 'DECIDER-RESTARTED' : 'DECIDER-FAILED: ' . $failed;\n}",
+        "$host",
+        timeout=timeout,
+    )
+    if host == "DECIDER-RESTARTED":
+        return True
+    if host != "UNBOUND":
+        raise RuntimeError(f"restart_dnsbl_decider: decider restart failed: {host!r}")
+    return False
+
+
 def inject_safesearch_cname_entries(
     vm: SmokeVM,
     entries: Sequence[SafeSearchEntry],
@@ -2721,20 +2744,8 @@ def inject_safesearch_cname_entries(
             f"inject_safesearch_cname_entries: tee to {UNBOUND_PY_SS_FILE} failed: "
             f"rc={result.returncode} {result.stderr!r}"
         )
-    # Fenced and compared as a whole token: a failure text may itself contain the word UNBOUND.
-    host = _php_read_scalar(
-        vm,
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n"
-        "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; } else {\n"
-        "  $failed = pfb_dns_proxy_decider_restart();\n"
-        "  $host = $failed === NULL ? 'DECIDER-RESTARTED' : 'DECIDER-FAILED: ' . $failed;\n}",
-        "$host",
-        timeout=timeout,
-    )
-    if host == "DECIDER-RESTARTED":
+    if restart_dnsbl_decider(vm, timeout=timeout):
         return
-    if host != "UNBOUND":
-        raise RuntimeError(f"inject_safesearch_cname_entries: decider restart failed: {host!r}")
     # Raw Unbound bounce to reload safeSearchDB from the updated file.
     # Unlike pfb_stop_start_unbound() in pfblockerng.inc, this raw bounce has no
     # KILL escalation or mount handling: TERM, wait up to 30 s, then start.
