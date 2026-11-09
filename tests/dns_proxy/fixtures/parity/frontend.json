@@ -413,6 +413,40 @@
       }
     },
     {
+      "id": "silence-on-an-opcode-relay-is-servfail",
+      "family": "frontend",
+      "description": "Unbound's silence on a non-zero-opcode query it answers itself becomes a SERVFAIL the decider builds",
+      "query": {
+        "wire_hex": "1234110000010000000000000673696c656e74076578616d706c650000010001"
+      },
+      "expect": {
+        "decision": "rewrite",
+        "forwards": [
+          "silent.example. A"
+        ],
+        "rcode": "SERVFAIL",
+        "answer": [],
+        "authority": []
+      }
+    },
+    {
+      "id": "silence-on-a-class-ch-relay-is-servfail",
+      "family": "frontend",
+      "description": "Unbound's silence on a class CH query the module does not decide becomes a SERVFAIL the decider builds",
+      "query": {
+        "wire_hex": "1234010000010000000000000673696c656e74076578616d706c650000010003"
+      },
+      "expect": {
+        "decision": "rewrite",
+        "forwards": [
+          "silent.example. A"
+        ],
+        "rcode": "SERVFAIL",
+        "answer": [],
+        "authority": []
+      }
+    },
+    {
       "id": "silence-on-a-decided-query-is-servfail",
       "family": "frontend",
       "description": "Unbound's silence on a query the module deferred becomes a SERVFAIL the decider builds",

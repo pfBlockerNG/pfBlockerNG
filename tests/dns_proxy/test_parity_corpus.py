@@ -48,6 +48,9 @@ ttl, rdata) with the owner exactly as on the wire: the encoder compresses an own
 into the question, so a mixed-case query's answer carries the client's spelling. For every non-drop case the ANSWER's
 id (equal to the query's first two bytes), rcode and TC are compared too; its question section, other flags and
 additional section (EDNS included) are not. A drop has no ANSWER: only decision and forwards are compared.
+The frontend family's size rows sit on exact byte counts of the decider's encoding (dnswire.encode): every owner name
+compressed against the names written before it, rdata names (a CNAME's target) never compressed. A decider whose
+encoder differs builds answers of other sizes and fails those rows.
 """
 
 from __future__ import annotations
