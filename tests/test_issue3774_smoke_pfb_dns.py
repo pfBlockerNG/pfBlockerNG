@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -421,3 +422,87 @@ def test_reload_reads_the_three_switches_and_the_serving_predicate_in_one_php_ev
         "pfb_dns_proxy_serving_ready()",
     ]
     assert all(part in snippet for part in required), f"the readiness snippet lacks one of {required}:\n{snippet}"
+
+
+# --- the Resolver mutators edit the Resolver only while pfB-DNS does not hold it ---------------------------------
+
+RESOLVER_MUTATORS = [
+    pytest.param(lambda vm: helpers.use_system_dns_upstream(vm), id="use_system_dns_upstream"),
+    pytest.param(lambda vm: helpers.set_unbound_forwarding(vm, True), id="set_unbound_forwarding"),
+    pytest.param(lambda vm: helpers.use_stub_for_safesearch(vm, False), id="use_stub_for_safesearch-recursive"),
+    pytest.param(lambda vm: helpers.use_stub_for_safesearch(vm, True), id="use_stub_for_safesearch-forwarding"),
+]
+
+
+def _arrange_resolver_edit(monkeypatch: pytest.MonkeyPatch, *, pfb_dns: str) -> tuple[SimpleNamespace, list[str]]:
+    """Stub a Resolver mutator's collaborators; the returned list records them in call order.
+
+    The toggle is stateful (release clears it, the store-on sets it): a mutator reading it after the release sees off.
+    """
+    events: list[str] = []
+    state = {"pfb_dns": pfb_dns}
+
+    def config_get(_vm: object, path: str, **_kw: object) -> str:
+        assert path == PFB_DNS_PATH, f"unexpected config read: {path}"
+        return state["pfb_dns"]
+
+    def release_pfb_dns(_vm: object) -> None:
+        if state["pfb_dns"] == "on":  # the real release is a no-op when pfB-DNS is off and holds nothing
+            events.append("release")
+            state["pfb_dns"] = ""
+
+    def php_eval(_vm: object, snippet: str, **_kw: object) -> SimpleNamespace:
+        if "services_unbound_configure()" in snippet:
+            events.append("resolver write")
+        elif PFB_DNS_ON in snippet and "write_config(" in snippet:
+            events.append("store pfb_dns on")
+            state["pfb_dns"] = "on"
+        else:
+            raise AssertionError(f"unexpected PHP:\n{snippet}")
+        return SimpleNamespace(returncode=0, stdout="OK", stderr="")
+
+    def dns_probe(_vm: object, *_a: object, **_kw: object) -> object:
+        events.append("probe")
+        return object()
+
+    monkeypatch.setattr(helpers, "config_get", config_get)
+    monkeypatch.setattr(helpers, "release_pfb_dns", release_pfb_dns)
+    monkeypatch.setattr(helpers, "_remember_dns_baseline", lambda _vm, **_kw: events.append("baseline"))
+    monkeypatch.setattr(helpers, "php_eval", php_eval)
+    monkeypatch.setattr(helpers, "wait_unbound_ready", lambda _vm, **_kw: events.append("wait unbound"))
+    monkeypatch.setattr(helpers, "dns_probe", dns_probe)
+    monkeypatch.setattr(helpers, "resolves_to", lambda *_a, **_kw: True)
+    return SimpleNamespace(upstream_dns_port=None), events
+
+
+@pytest.mark.parametrize("mutate", RESOLVER_MUTATORS)
+def test_a_resolver_mutator_edits_the_resolver_only_while_pfb_dns_does_not_hold_it(
+    monkeypatch: pytest.MonkeyPatch, mutate: Callable[[SimpleNamespace], None]
+) -> None:
+    """Given pfB-DNS is on (DNSBL turned it on, so it holds the Resolver) When a test edits the Resolver
+    Then pfB-DNS is released before the baseline and the write, the edit is verified with pfB-DNS off, and pfB-DNS is
+    stored on again last, so the caller's next reload moves the edited Resolver and its marked clause survives."""
+    vm, events = _arrange_resolver_edit(monkeypatch, pfb_dns="on")
+
+    mutate(vm)
+
+    assert events.count("release") == 1, f"expected exactly one release: {events}"
+    assert events.count("store pfb_dns on") == 1, f"expected pfB-DNS stored on exactly once: {events}"
+    assert events.index("release") < events.index("baseline"), f"the baseline snapshot saw a moved Resolver: {events}"
+    assert events.index("release") < events.index("resolver write"), f"the Resolver was edited while moved: {events}"
+    assert events[-1] == "store pfb_dns on", f"pfB-DNS was not stored on again after the edit and its checks: {events}"
+
+
+@pytest.mark.parametrize("mutate", RESOLVER_MUTATORS)
+def test_a_resolver_mutator_never_turns_pfb_dns_on_when_it_was_off(
+    monkeypatch: pytest.MonkeyPatch, mutate: Callable[[SimpleNamespace], None]
+) -> None:
+    """Given pfB-DNS is off When a test edits the Resolver
+    Then the edit is written and pfB-DNS stays off: a mutator that turned it on would move the Resolver for tests
+    that never asked for it."""
+    vm, events = _arrange_resolver_edit(monkeypatch, pfb_dns="")
+
+    mutate(vm)
+
+    assert "resolver write" in events, f"the mutator never wrote the Resolver: {events}"
+    assert "store pfb_dns on" not in events, f"pfB-DNS was turned on although it was off: {events}"

@@ -1421,6 +1421,7 @@ def _pfb_dns_on_with_resolver_vip6(vm: SmokeVM, domain: str, lan6: str, *, lan_l
     """
     restored = (*_LISTEN_KEYS, *_PFB_DNS_LISTS)
     lists = "lo0,lan" if lan_listens else "lo0"
+    h.release_pfb_dns(vm)  # this drives pfB-DNS itself and asserts the Resolver it started from comes back
     prior = {path: h.config_get_state(vm, path) for path in (*restored, *_RESOLVER_KEYS)}
     try:
         _require_payload(vm)

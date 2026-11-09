@@ -39,6 +39,8 @@ ob_start();
         return SimpleNamespace(returncode=0, stdout="OK", stderr="")
 
     monkeypatch.setattr(h, "_remember_dns_baseline", lambda *_a, **_kw: None)
+    monkeypatch.setattr(h, "config_get", lambda *_a, **_kw: "")  # pfB-DNS is off, so the edit is the only guest write
+    monkeypatch.setattr(h, "release_pfb_dns", lambda *_a, **_kw: None)
     monkeypatch.setattr(h, "php_eval", php_eval)
     monkeypatch.setattr(h, "wait_unbound_ready", lambda *_a, **_kw: None)
     monkeypatch.setattr(h, "dns_probe", lambda *_a, **_kw: h.DnsAnswer(rcode="NOERROR", records=[STUB_DNS_A]))

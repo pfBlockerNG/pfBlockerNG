@@ -40,6 +40,7 @@ so importing this module does not require the smoke deps.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import ipaddress
 import math
@@ -57,7 +58,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Concatenate, NamedTuple, ParamSpec
 
 from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from .conftest import (
@@ -2433,7 +2434,42 @@ def restore_dns_config(*, timeout: float = 120.0) -> None:
     _DNS_BASELINE = None
 
 
+_P = ParamSpec("_P")
+
+
+def _edits_resolver_off_pfb_dns(
+    fn: Callable[Concatenate[SmokeVM, _P], None],
+) -> Callable[Concatenate[SmokeVM, _P], None]:
+    """Run a Resolver edit while pfB-DNS does not hold the Resolver, then hand it back to pfB-DNS.
+
+    A moved Resolver carries pfB-DNS's marked ``server:`` clause in ``unbound/custom_options``; an edit under it drops
+    the clause and Unbound collides with the proxy on :53. So pfB-DNS is released first (the baseline snapshot and the
+    edit see the real Resolver) and, when it was on, stored on again after the edit and its own checks: the caller's
+    next reload moves the Resolver again with the edited settings as its snapshot.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(vm: SmokeVM, *args: _P.args, **kwargs: _P.kwargs) -> None:
+        was_on = config_get(vm, dns_config_path("pfb_dns")) == "on"
+        release_pfb_dns(vm)
+        fn(vm, *args, **kwargs)
+        if not was_on:
+            return
+        snippet = (
+            f"{_pfb_dns_on_php()}write_config('pfBlockerNG smoke: pfB-DNS on again after a Resolver edit');\necho 'OK';"
+        )
+        result = php_eval(vm, snippet)
+        if result.returncode != 0 or "OK" not in result.stdout:
+            raise RuntimeError(
+                f"{fn.__name__}: storing pfB-DNS on again failed: rc={result.returncode} "
+                f"{result.stderr!r} {result.stdout!r}"
+            )
+
+    return wrapper
+
+
 @timed_step("use_system_dns_upstream")
+@_edits_resolver_off_pfb_dns
 def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone on :53).
 
@@ -2464,6 +2500,8 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         tier gets an ephemeral port) is the exception: the System DNS list cannot carry a port, so
         a catch-all ``forward-zone`` to ``192.168.89.2@<port>`` overrides pfSense's generated zone.
         Forwarding stays ON (the gateway runs the upstream observer only then).
+
+    Edits the Resolver only while pfB-DNS does not hold it: released first, stored on again after the self-check.
     """
     _remember_dns_baseline(vm)
     port = vm.upstream_dns_port or 53
@@ -2509,6 +2547,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         )
 
 
+@_edits_resolver_off_pfb_dns
 def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", timeout: float = 120.0) -> None:
     """Set Unbound to RECURSIVE (``on=False``) or FORWARDING (``on=True``) mode.
 
@@ -2529,6 +2568,8 @@ def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", 
     Idempotent; written + ``services_unbound_configure`` (restarts Unbound). NOTE: that
     regenerates the base unbound.conf WITHOUT pfBlockerNG's python module, so the caller
     MUST run a pfBlockerNG reload afterwards to re-add the module + reload safeSearchDB.
+
+    Edits the Resolver only while pfB-DNS does not hold it: released first, stored on again after the edit.
     """
     _remember_dns_baseline(vm)
     snippet = (
@@ -2554,6 +2595,7 @@ def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", 
     wait_unbound_ready(vm)
 
 
+@_edits_resolver_off_pfb_dns
 def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float = 120.0) -> None:
     """Wire Unbound to the stub DNS so SafeSearch CNAME redirects resolve hermetically.
 
@@ -2583,6 +2625,8 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
     pfBlockerNG's python module.  The caller MUST run a pfBlockerNG reload AFTER
     this call to re-add the module and reload ``safeSearchDB`` before any
     SafeSearch probe.
+
+    Edits the Resolver only while pfB-DNS does not hold it: released first, stored on again after the self-check.
     """
     if forwarding_on:
         # Forwarding mode: identical to use_system_dns_upstream — delegate so

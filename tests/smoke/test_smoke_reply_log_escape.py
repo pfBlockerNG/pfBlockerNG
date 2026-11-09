@@ -12,8 +12,8 @@ row is written. These cases prove, on a real Unbound + python module, that:
 * a queried name carrying angle brackets reaches the log as Unbound's own
   ``qname_str`` rendering (``dname_str()`` turns every byte outside
   ``[A-Za-z0-9-_*]`` into ``?``), so the name column never carries raw ``<>``;
-* an ordinary A answer is logged exactly as before (10 columns, plain name, IP);
-* a DNSBL block is logged exactly as before (11 columns, plain name).
+* an ordinary A answer is logged exactly as before apart from the endpoint pfB-DNS appends (13 columns, plain name, IP);
+* a DNSBL block is logged exactly as before apart from the same endpoint (14 columns, plain name).
 
 Guest Unbound forwards to the runner-side ``stub_dns`` over SLIRP
 (``use_system_dns_upstream``), so the TXT payload comes off the wire the way an
@@ -31,7 +31,7 @@ from collections.abc import Iterator
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM, _StubDnsServer
+from .conftest import PFSENSE_LAN_IP, SmokeVM, _StubDnsServer
 
 pytestmark = [pytest.mark.smoke]
 
@@ -43,6 +43,9 @@ PAYLOAD = b"\"><script src='//x.example/a.js'></script>&"
 PAYLOAD_ESCAPED = "\\034\\062\\060script src=\\039//x.example/a.js\\039\\062\\060/script\\062\\038"
 HOSTILE_TARGET = 'we\\"ird\\<x\\>.example.'  # presentation form of the label we"ird<x>
 HOSTILE_TARGET_ESCAPED = "we\\034ird\\060x\\062.example"
+# The endpoint pfB-DNS appends to every row: transport, the address the client asked (dns_probe_client asks the
+# firewall's LAN address over UDP) and the receiving interface (the guest's own listener table: 192.168.1.1 = "LAN").
+ENDPOINT = ["UDP", PFSENSE_LAN_IP, "LAN"]
 
 
 @pytest.fixture(scope="module")
@@ -119,7 +122,7 @@ class TestDnsReplyLogEscape:
         assert ans.records, f"TXT {name}: no TXT record delivered to the client: {ans}"
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 11 and row[10] == "Unknown", row
+            assert len(row) == 13 and row[10:13] == ENDPOINT, row
             assert row[8] == PAYLOAD_ESCAPED, row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if name in line]
         assert not any(c in line for line in raw for c in "<>\"'"), raw
@@ -136,7 +139,7 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR", f"CNAME {name}: {ans}"
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 11 and row[10] == "Unknown", row
+            assert len(row) == 13 and row[10:13] == ENDPOINT, row
             assert row[8] == HOSTILE_TARGET_ESCAPED, row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if name in line]
         assert not any(c in line for line in raw for c in "<>\"'"), raw
@@ -153,7 +156,7 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR" and ans.records == ["203.0.113.42"], ans
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", f".{suffix}", 6, suffix=True)
         for row in rows:
-            assert len(row) == 11 and row[10] == "Unknown", row
+            assert len(row) == 13 and row[10:13] == ENDPOINT, row
             # Unbound, not pfBlockerNG, rewrites the brackets (dname_str); the row sees "?".
             assert row[6] == f"a?b?.{suffix}", row
             assert row[8] == "203.0.113.42", row
@@ -170,7 +173,7 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR" and ans.records == ["203.0.113.41"], ans
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 11 and row[10] == "Unknown", row
+            assert len(row) == 13 and row[10:13] == ENDPOINT, row
             assert row[4] == "A", row
             assert row[8] == "203.0.113.41", row
 
@@ -184,6 +187,6 @@ class TestDnsReplyLogEscape:
         assert h.is_vip(ans), f"DNSBL seed {seed} expected VIP, got {ans}"
         rows = _wait_rows(vm, _DNSBL_LOG, "DNSBL-python,", seed, 2)
         for row in rows:
-            assert len(row) == 12 and row[11] == "Unknown", row
+            assert len(row) == 14 and row[11:14] == ENDPOINT, row
             assert row[2] == seed, row
             assert row[8] == "smokereplylog", row  # the header= of the fixture's feed
