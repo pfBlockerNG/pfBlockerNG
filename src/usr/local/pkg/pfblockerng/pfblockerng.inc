@@ -20787,10 +20787,11 @@ function pfb_registry_pass(array $sections, ?array $registry = NULL, ?array $mod
 		[$alias, $key] = explode('/', $path_key, 2);
 		$section = PFB_SECTIONS[$alias];
 		$blob    = $result[$section];
-		// Migrated/received values predate this section's captured NEWCFG mode (#3649).
-		// Unset DoT choices belong to the first Resolver seed, not the registry default.
-		if ($alias === 'dns_shared' && (array_key_exists($key, $blob) ||
-		    in_array($key, ['pfb_dns_dot', 'pfb_dns_dot_port'], TRUE))) {
+		// Migrated/received values predate this section's captured NEWCFG mode (#3649, #3770: the pfB-DNS enable
+		// the DNSBL migration turned on). Unset DoT choices belong to the first Resolver seed, not the registry default.
+		if (($alias === 'dns_shared' && (array_key_exists($key, $blob) ||
+		    in_array($key, ['pfb_dns_dot', 'pfb_dns_dot_port'], TRUE))) ||
+		    ($path_key === 'dns/pfb_dns' && array_key_exists($key, $blob))) {
 			continue;
 		}
 		$map     = $entry['grandfather'] ?? array();

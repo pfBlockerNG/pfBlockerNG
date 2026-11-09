@@ -3869,7 +3869,7 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: removed obsolete Resolver cache preference (issue #3701)',
 			'since'   => '4.0.0',
 		],
-		// issue #3770: DNSBL runs only through pfB-DNS. Last, so it sees the #3649 split's result.
+		// issue #3770: DNSBL runs only through pfB-DNS; this turns pfB-DNS on where DNSBL is on and rewrites no other key.
 		[
 			'id'       => 'issue3770-pfb-dns-for-dnsbl',
 			'sections' => [$dnsbl, PFB_SECTIONS['dns']],
