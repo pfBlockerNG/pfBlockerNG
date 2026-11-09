@@ -560,7 +560,7 @@ test_smoke_reply_log_escape.py 32.79
 test_smoke_reply_log_escape.py::TestDnsReplyLogEscape::test_a_reply_is_logged_unchanged 0.34
 test_smoke_reply_log_escape.py::TestDnsReplyLogEscape::test_cname_target_is_logged_escaped 0.43
 test_smoke_reply_log_escape.py::TestDnsReplyLogEscape::test_dnsbl_block_is_logged_unchanged 18.52
-test_smoke_reply_log_escape.py::TestDnsReplyLogEscape::test_hostile_query_name_is_sanitised_by_unbound 0.44
+test_smoke_reply_log_escape.py::TestDnsReplyLogEscape::test_hostile_query_name_is_logged_escaped 0.44
 test_smoke_reply_log_escape.py::TestDnsReplyLogEscape::test_txt_payload_is_delivered_and_logged_escaped 13.06
 test_smoke_resolver_off_sync.py 18.91
 test_smoke_resolver_off_sync.py::test_sync_with_resolver_disabled_completes_without_typeerror 18.91

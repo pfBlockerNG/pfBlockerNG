@@ -312,8 +312,9 @@ def test_ha_restore_node_releases_pfb_dns_before_it_copies_the_pre_pair_config(m
     monkeypatch.setattr(ha_pair, "clear_sshguard", lambda _vm: None)
     monkeypatch.setattr(ha_pair, "clear_pending_marker", lambda _vm: None)
     monkeypatch.setattr(ha_pair, "_verify_baseline", lambda _vm: None)
-    monkeypatch.setattr(helpers, "apply_filter_sync", lambda _vm, **_kw: None)
-    monkeypatch.setattr(helpers, "release_pfb_dns", lambda _vm, **_kw: events.append("release"))
+    # ha_pair's own reference: another test module may have re-imported tests.smoke.helpers under it.
+    monkeypatch.setattr(ha_pair.helpers, "apply_filter_sync", lambda _vm, **_kw: None)
+    monkeypatch.setattr(ha_pair.helpers, "release_pfb_dns", lambda _vm, **_kw: events.append("release"))
 
     ha_pair.restore_node(object(), "primary")  # type: ignore[arg-type]
 
