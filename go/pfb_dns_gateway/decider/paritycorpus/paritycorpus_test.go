@@ -90,7 +90,7 @@ var rawValue = regexp.MustCompile(`"@raw:([^"]*)"`)
 // good is the smallest valid scenario; each hostile row below breaks one thing in a fresh copy of it.
 func good() *object {
 	return obj(
-		"schema", 1,
+		"schema", 2,
 		"description", "one unlisted name",
 		"module", obj(
 			"ini", obj("MAIN", obj("python_enable", "true")),
@@ -173,12 +173,12 @@ func TestAMinimalValidScenarioLoadsWithTheDefaultsFilledIn(t *testing.T) {
 		t.Fatalf("scenario header: got %q %q with %d cases", s.Name, s.Description, len(s.Cases))
 	}
 	c := s.Cases[0]
-	wantQuery := Query{Name: "allowed.example.", Qtype: 1, Client: "192.0.2.10", Transport: "UDP"}
-	if c.ID != "good" || c.Family != "relay" || c.Query != wantQuery {
+	wantQuery := Query{Wire: query(t, "allowed.example.", dnswire.TYPE_A), Client: "192.0.2.10", Transport: "UDP"}
+	if c.ID != "good" || c.Family != "relay" || !reflect.DeepEqual(c.Query, wantQuery) {
 		t.Errorf("case: got %q %q %+v, want good relay %+v", c.ID, c.Family, c.Query, wantQuery)
 	}
 	rr := mustRR(t, "allowed.example. 300 IN A 192.0.2.77")
-	if c.Expect.Decision != "relay" || c.Expect.Rcode != "NOERROR" ||
+	if c.Expect.Decision != "relay" || c.Expect.Rcode != "NOERROR" || c.Expect.TC ||
 		!reflect.DeepEqual(c.Expect.Forwards, []string{"allowed.example. A"}) ||
 		!reflect.DeepEqual(c.Expect.Answer, []dnswire.RR{rr}) || len(c.Expect.Authority) != 0 {
 		t.Errorf("expect: got %+v", c.Expect)
@@ -197,6 +197,66 @@ func TestAMinimalValidScenarioLoadsWithTheDefaultsFilledIn(t *testing.T) {
 	wantUpstream := map[UpstreamKey][]string{{Name: "allowed.example.", Qtype: 1}: {"allowed.example. 300 IN A 192.0.2.77"}}
 	if !reflect.DeepEqual(s.Upstream, wantUpstream) {
 		t.Errorf("upstream: got %+v, want %+v", s.Upstream, wantUpstream)
+	}
+}
+
+func loadGood(t *testing.T, mutate func(d *object)) *Scenario {
+	t.Helper()
+	d := good()
+	mutate(d)
+	s, err := loadText(t, documentText(t, d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestAWireHexQueryLoadsAsExactlyThoseBytesWithTheDefaults(t *testing.T) {
+	q := loadGood(t, func(d *object) { caseZero(d).set("query", obj("wire_hex", "00ff10")) }).Cases[0].Query
+	if !bytes.Equal(q.Wire, []byte{0x00, 0xff, 0x10}) || q.Client != DEFAULT_CLIENT || q.Transport != "UDP" {
+		t.Errorf("got %x %q %q", q.Wire, q.Client, q.Transport)
+	}
+}
+
+func TestAWireHexQueryTakesAClientAndATransportToo(t *testing.T) {
+	q := loadGood(t, func(d *object) {
+		caseZero(d).set("query", obj("wire_hex", "", "client", "2001:db8::1", "transport", "DoT"))
+	}).Cases[0].Query
+	if len(q.Wire) != 0 || q.Client != "2001:db8::1" || q.Transport != "DoT" {
+		t.Errorf("got %x %q %q", q.Wire, q.Client, q.Transport)
+	}
+}
+
+func TestAWireHexQueryOfTheLargestDNSMessageLoads(t *testing.T) {
+	q := loadGood(t, func(d *object) { caseZero(d).set("query", obj("wire_hex", strings.Repeat("00", 0xFFFF))) }).Cases[0].Query
+	if len(q.Wire) != 0xFFFF {
+		t.Errorf("got %d bytes, want 65535", len(q.Wire))
+	}
+}
+
+func TestADropExpectationLoadsWithNothingElse(t *testing.T) {
+	e := loadGood(t, func(d *object) { caseZero(d).set("expect", obj("decision", "drop", "forwards", []any{})) }).Cases[0].Expect
+	if !reflect.DeepEqual(e, Expect{Decision: "drop"}) {
+		t.Errorf("got %+v", e)
+	}
+}
+
+func TestTCTrueLoads(t *testing.T) {
+	if e := loadGood(t, func(d *object) { caseZero(d).get("expect").set("tc", true) }).Cases[0].Expect; !e.TC {
+		t.Errorf("got %+v, want TC set", e)
+	}
+}
+
+func TestAnUpstreamNullLoadsAsNoReplyAndAnEmptyListAsNoRecords(t *testing.T) {
+	s := loadGood(t, func(d *object) {
+		d.get("upstream").set("silent.example. A", nil)
+		d.get("upstream").set("empty.example. A", []any{})
+	})
+	if got, ok := s.Upstream[UpstreamKey{Name: "silent.example.", Qtype: 1}]; !ok || got != nil {
+		t.Errorf("null: got %#v, present %v; want a nil list: Unbound gives no reply", got, ok)
+	}
+	if got, ok := s.Upstream[UpstreamKey{Name: "empty.example.", Qtype: 1}]; !ok || got == nil || len(got) != 0 {
+		t.Errorf("[]: got %#v, present %v; want an empty list that is not nil: NOERROR without records", got, ok)
 	}
 }
 
@@ -225,16 +285,18 @@ type hostileRow struct {
 }
 
 var hostile = []hostileRow{
-	{"schema 2", func(d *object) { d.set("schema", 2) }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 1, got 2", ""},
-	{"schema as a string", func(d *object) { d.set("schema", "1") }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 1, got '1'", ""},
+	{"schema 1, the old version", func(d *object) { d.set("schema", 1) }, []string{badFile, "schema"},
+		"bad.json: schema: must be the integer 2, got 1", ""},
+	{"schema 3", func(d *object) { d.set("schema", 3) }, []string{badFile, "schema"},
+		"bad.json: schema: must be the integer 2, got 3", ""},
+	{"schema as a string", func(d *object) { d.set("schema", "2") }, []string{badFile, "schema"},
+		"bad.json: schema: must be the integer 2, got '2'", ""},
 	{"schema missing", func(d *object) { d.del("schema") }, []string{badFile, "schema"},
 		"bad.json: schema: missing", ""},
 	{"schema true", func(d *object) { d.set("schema", true) }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 1, got True", ""},
-	{"schema 1.0", func(d *object) { d.set("schema", raw("1.0")) }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 1, got 1.0", ""},
+		"bad.json: schema: must be the integer 2, got True", ""},
+	{"schema 2.0", func(d *object) { d.set("schema", raw("2.0")) }, []string{badFile, "schema"},
+		"bad.json: schema: must be the integer 2, got 2.0", ""},
 	// Deviation: Python's json reads NaN and the loader refuses it by name; Go's decoder refuses it as a syntax error.
 	{"NaN, which only Python reads", func(d *object) { d.get("module", "manifest").set("x", raw("NaN")) },
 		[]string{badFile, "not a readable JSON document"}, "", "bad.json: not a readable JSON document: "},
@@ -246,6 +308,22 @@ var hostile = []hostileRow{
 		"bad.json: case 'good': description: must say what behaviour is pinned", ""},
 	{"client not an IP", func(d *object) { caseZero(d).get("query").set("client", "host.example") }, []string{"'good'", "query.client"},
 		"bad.json: case 'good': query.client: not an IP address: 'host.example'", ""},
+	{"client 0.0.0.0", func(d *object) { caseZero(d).get("query").set("client", "0.0.0.0") }, []string{"query.client"},
+		"bad.json: case 'good': query.client: '0.0.0.0' is not a canonical, specified address without a zone", ""},
+	{"client ::", func(d *object) { caseZero(d).get("query").set("client", "::") }, []string{"query.client"},
+		"bad.json: case 'good': query.client: '::' is not a canonical, specified address without a zone", ""},
+	{"client fe80::1%eth0", func(d *object) { caseZero(d).get("query").set("client", "fe80::1%eth0") }, []string{"query.client"},
+		"bad.json: case 'good': query.client: 'fe80::1%eth0' is not a canonical, specified address without a zone", ""},
+	{"client ::ffff:192.0.2.1", func(d *object) { caseZero(d).get("query").set("client", "::ffff:192.0.2.1") }, []string{"query.client"},
+		"bad.json: case 'good': query.client: '::ffff:192.0.2.1' is not a canonical, specified address without a zone", ""},
+	{"client 2001:DB8::1", func(d *object) { caseZero(d).get("query").set("client", "2001:DB8::1") }, []string{"query.client"},
+		"bad.json: case 'good': query.client: '2001:DB8::1' is not a canonical, specified address without a zone", ""},
+	{"client IPv6 not compressed", func(d *object) { caseZero(d).get("query").set("client", "2001:db8:0:0:0:0:0:1") }, []string{"query.client"},
+		"bad.json: case 'good': query.client: '2001:db8:0:0:0:0:0:1' is not a canonical, specified address without a zone", ""},
+	{"client IPv4-compatible IPv6", func(d *object) { caseZero(d).get("query").set("client", "::1.2.3.4") }, []string{"query.client"},
+		"bad.json: case 'good': query.client: '::1.2.3.4' is not a canonical, specified address without a zone", ""},
+	{"client a number", func(d *object) { caseZero(d).get("query").set("client", 5) }, []string{"query.client"},
+		"bad.json: case 'good': query.client: must be a string, got 5", ""},
 	// Python's ipaddress refuses a second '%' and any '/' in an IPv6 text; net/netip takes both.
 	{"client IPv6 with two zone separators", func(d *object) { caseZero(d).get("query").set("client", "fe80::1%a%b") }, []string{"'good'", "query.client"},
 		"bad.json: case 'good': query.client: not an IP address: 'fe80::1%a%b'", ""},
@@ -303,7 +381,7 @@ var hostile = []hostileRow{
 	{"missing expect.decision", func(d *object) { caseZero(d).get("expect").del("decision") }, []string{badFile, "'good'", "expect.decision"},
 		"bad.json: case 'good': expect.decision: missing", ""},
 	{"decision 'block'", func(d *object) { caseZero(d).get("expect").set("decision", "block") }, []string{badFile, "'good'", "expect.decision"},
-		"bad.json: case 'good': expect.decision: unknown value 'block', expected one of answer relay rewrite", ""},
+		"bad.json: case 'good': expect.decision: unknown value 'block', expected one of answer drop relay rewrite", ""},
 	{"query type BOGUS", func(d *object) { caseZero(d).get("query").set("type", "BOGUS") }, []string{badFile, "'good'", "query.type"},
 		"bad.json: case 'good': query.type: unknown query type 'BOGUS'", ""},
 	{"files path climbing out", func(d *object) { d.get("module", "files").set("../x", []any{"x"}) }, []string{badFile, "module.files", "../x"},
@@ -333,6 +411,79 @@ var hostile = []hostileRow{
 	{"forward that is not '<name> <TYPE>'", func(d *object) { caseZero(d).get("expect").set("forwards", []any{"allowed.example."}) },
 		[]string{badFile, "'good'", "expect.forwards[0]"},
 		"bad.json: case 'good': expect.forwards[0]: expected '<name> <TYPE>', got 'allowed.example.'", ""},
+	{"wire_hex with a name too", func(d *object) { caseZero(d).get("query").set("wire_hex", "00") }, []string{badFile, "'good'", "query.wire_hex"},
+		"bad.json: case 'good': query.wire_hex: excludes query.name and query.type", ""},
+	{"neither name nor wire_hex", func(d *object) { caseZero(d).set("query", obj()) }, []string{badFile, "'good'", "query", "wire_hex"},
+		"bad.json: case 'good': query.name: missing: a query is a name and a type, or wire_hex", ""},
+	{"name without type", func(d *object) { caseZero(d).get("query").del("type") }, []string{badFile, "'good'", "query.type"},
+		"bad.json: case 'good': query.type: missing: a query is a name and a type, or wire_hex", ""},
+	{"type without name", func(d *object) { caseZero(d).get("query").del("name") }, []string{badFile, "'good'", "query.name"},
+		"bad.json: case 'good': query.name: missing: a query is a name and a type, or wire_hex", ""},
+	{"wire_hex in upper case", func(d *object) { caseZero(d).set("query", obj("wire_hex", "AB")) }, []string{badFile, "'good'", "query.wire_hex"},
+		"bad.json: case 'good': query.wire_hex: 'AB' must be lower-case hex of whole bytes", ""},
+	{"wire_hex of odd length", func(d *object) { caseZero(d).set("query", obj("wire_hex", "abc")) }, []string{badFile, "'good'", "query.wire_hex"},
+		"bad.json: case 'good': query.wire_hex: 'abc' must be lower-case hex of whole bytes", ""},
+	{"wire_hex that is not hex", func(d *object) { caseZero(d).set("query", obj("wire_hex", "zz")) }, []string{badFile, "'good'", "query.wire_hex"},
+		"bad.json: case 'good': query.wire_hex: 'zz' must be lower-case hex of whole bytes", ""},
+	{"wire_hex with a space", func(d *object) { caseZero(d).set("query", obj("wire_hex", "ab cd")) }, []string{badFile, "'good'", "query.wire_hex"},
+		"bad.json: case 'good': query.wire_hex: 'ab cd' must be lower-case hex of whole bytes", ""},
+	{"wire_hex ending in a newline", func(d *object) { caseZero(d).set("query", obj("wire_hex", "ab\n")) }, []string{badFile, "'good'", "query.wire_hex"},
+		"bad.json: case 'good': query.wire_hex: " + `'ab\n'` + " must be lower-case hex of whole bytes", ""},
+	{"wire_hex as a number", func(d *object) { caseZero(d).set("query", obj("wire_hex", 12)) }, []string{badFile, "'good'", "query.wire_hex"},
+		"bad.json: case 'good': query.wire_hex: must be a string, got 12", ""},
+	{"wire_hex null", func(d *object) { caseZero(d).set("query", obj("wire_hex", nil)) }, []string{badFile, "'good'", "query.wire_hex"},
+		"bad.json: case 'good': query.wire_hex: must be a string, got None", ""},
+	{"wire_hex of 65536 bytes", func(d *object) { caseZero(d).set("query", obj("wire_hex", strings.Repeat("00", 65536))) },
+		[]string{badFile, "'good'", "query.wire_hex", "65536"},
+		"bad.json: case 'good': query.wire_hex: 65536 bytes: a DNS message has at most 65535", ""},
+	{"drop with an rcode", func(d *object) {
+		caseZero(d).set("expect", obj("decision", "drop", "forwards", []any{}, "rcode", "NOERROR"))
+	},
+		[]string{badFile, "'good'", "expect.rcode"},
+		"bad.json: case 'good': expect.rcode: unknown key: a drop has no ANSWER", ""},
+	{"drop with answer", func(d *object) {
+		caseZero(d).set("expect", obj("decision", "drop", "forwards", []any{}, "answer", []any{}))
+	},
+		[]string{badFile, "'good'", "expect.answer"},
+		"bad.json: case 'good': expect.answer: unknown key: a drop has no ANSWER", ""},
+	{"drop with authority", func(d *object) {
+		caseZero(d).set("expect", obj("decision", "drop", "forwards", []any{}, "authority", []any{}))
+	},
+		[]string{badFile, "'good'", "expect.authority"},
+		"bad.json: case 'good': expect.authority: unknown key: a drop has no ANSWER", ""},
+	{"drop with tc", func(d *object) { caseZero(d).set("expect", obj("decision", "drop", "forwards", []any{}, "tc", false)) },
+		[]string{badFile, "'good'", "expect.tc"},
+		"bad.json: case 'good': expect.tc: unknown key: a drop has no ANSWER", ""},
+	{"drop with a forward", func(d *object) {
+		caseZero(d).set("expect", obj("decision", "drop", "forwards", []any{"allowed.example. A"}))
+	},
+		[]string{badFile, "'good'", "expect.forwards"},
+		"bad.json: case 'good': expect.forwards: must be empty for a drop", ""},
+	{"drop with a malformed forward", func(d *object) {
+		caseZero(d).set("expect", obj("decision", "drop", "forwards", []any{"allowed.example."}))
+	},
+		[]string{badFile, "'good'", "expect.forwards[0]"},
+		"bad.json: case 'good': expect.forwards[0]: expected '<name> <TYPE>', got 'allowed.example.'", ""},
+	{"non-drop without an rcode", func(d *object) { caseZero(d).get("expect").del("rcode") }, []string{badFile, "'good'", "expect.rcode"},
+		"bad.json: case 'good': expect.rcode: missing", ""},
+	{"tc as a number", func(d *object) { caseZero(d).get("expect").set("tc", 1) }, []string{badFile, "'good'", "expect.tc"},
+		"bad.json: case 'good': expect.tc: must be true or false, got 1", ""},
+	{"tc as a string", func(d *object) { caseZero(d).get("expect").set("tc", "true") }, []string{badFile, "'good'", "expect.tc"},
+		"bad.json: case 'good': expect.tc: must be true or false, got 'true'", ""},
+	{"tc null", func(d *object) { caseZero(d).get("expect").set("tc", nil) }, []string{badFile, "'good'", "expect.tc"},
+		"bad.json: case 'good': expect.tc: must be true or false, got None", ""},
+	{"upstream value a string", func(d *object) { d.set("upstream", obj("allowed.example. A", "allowed.example. 300 IN A 192.0.2.77")) },
+		[]string{badFile, "upstream['allowed.example. A']"},
+		"bad.json: upstream['allowed.example. A']: must be a list, got 'allowed.example. 300 IN A 192.0.2.77'", ""},
+	{"upstream value an object", func(d *object) { d.set("upstream", obj("allowed.example. A", obj())) },
+		[]string{badFile, "upstream['allowed.example. A']"},
+		"bad.json: upstream['allowed.example. A']: must be a list, got {}", ""},
+	{"upstream value a number", func(d *object) { d.set("upstream", obj("allowed.example. A", 7)) },
+		[]string{badFile, "upstream['allowed.example. A']"},
+		"bad.json: upstream['allowed.example. A']: must be a list, got 7", ""},
+	{"upstream value a list of numbers", func(d *object) { d.set("upstream", obj("allowed.example. A", []any{7})) },
+		[]string{badFile, "upstream['allowed.example. A'][0]"},
+		"bad.json: upstream['allowed.example. A'][0]: must be a string, got 7", ""},
 }
 
 func TestTheLoaderRefusesABadScenarioNamingFileCaseAndField(t *testing.T) {
@@ -367,8 +518,8 @@ func TestTheLoaderAcceptsTheHighestNumberedQueryType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := s.Cases[0].Query.Qtype; got != 65535 {
-		t.Errorf("query.type TYPE65535: got %d, want 65535", got)
+	if got, want := s.Cases[0].Query.Wire, query(t, "allowed.example.", 65535); !bytes.Equal(got, want) {
+		t.Errorf("query.type TYPE65535: got wire %x, want %x", got, want)
 	}
 }
 
@@ -421,16 +572,16 @@ func TestTheLoaderRefusesADocumentNestedPastTheCapAndReadsOneAtTheCap(t *testing
 
 	_, err = loadText(t, nestedSchema(t, maxDepth))
 	got := refusalText(t, err)
-	if strings.Contains(got, "not a readable JSON document") || !strings.HasPrefix(got, "bad.json: schema: must be the integer 1, got [[") {
+	if strings.Contains(got, "not a readable JSON document") || !strings.HasPrefix(got, "bad.json: schema: must be the integer 2, got [[") {
 		t.Errorf("at the cap the JSON stage must pass and the schema field be what is refused: got %.120q", got)
 	}
 }
 
 func TestTheLoaderRefusesABadFamiliesIndex(t *testing.T) {
 	for _, row := range []struct{ name, document, want string }{
-		{"schema", `{"schema": 2, "families": {"relay": "x"}}`, "families.json: schema: must be the integer 1, got 2"},
-		{"source", `{"schema": 1, "families": {"relay": 7}}`, "families.json: families.relay: must be a string, got 7"},
-		{"no family", `{"schema": 1, "families": {}}`, "families.json: families: must be a non-empty JSON object of family -> source branch"},
+		{"schema", `{"schema": 1, "families": {"relay": "x"}}`, "families.json: schema: must be the integer 2, got 1"},
+		{"source", `{"schema": 2, "families": {"relay": 7}}`, "families.json: families.relay: must be a string, got 7"},
+		{"no family", `{"schema": 2, "families": {}}`, "families.json: families: must be a non-empty JSON object of family -> source branch"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "families.json")
@@ -447,7 +598,7 @@ func TestTheLoaderRefusesABadFamiliesIndex(t *testing.T) {
 
 func TestTheFamiliesComeBackInFileOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "families.json")
-	if err := os.WriteFile(path, []byte(`{"schema": 1, "families": {"zeta": "z branch", "alpha": "a branch"}}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema": 2, "families": {"zeta": "z branch", "alpha": "a branch"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	names, source, err := LoadFamilies(path)
@@ -542,6 +693,7 @@ func TestBuildQueryIsOneRecursiveQuestionWithoutEDNS(t *testing.T) {
 var zone = map[UpstreamKey][]string{
 	{Name: "allowed.example.", Qtype: dnswire.TYPE_A}: {"allowed.example. 300 IN A 192.0.2.77"},
 	{Name: "empty.example.", Qtype: dnswire.TYPE_A}:   {},
+	{Name: "silent.example.", Qtype: dnswire.TYPE_A}:  nil,
 }
 
 func query(t *testing.T, name string, qtype uint16) []byte {
@@ -628,13 +780,57 @@ func TestFakeUnboundRecordsEveryQueryAndItsOwnCopyOfEveryReply(t *testing.T) {
 	}
 }
 
-func TestFakeUnboundRecordsAQueryItCannotParseAndGivesNoReply(t *testing.T) {
-	u := NewFakeUnbound(zone)
-	if reply, err := u.Answer([]byte{1, 2, 3}); err == nil || reply != nil {
-		t.Errorf("got %x, %v; want an error and no reply", reply, err)
+func TestFakeUnboundRecordsNothingForAQueryItCannotParseOrThatAsksNothing(t *testing.T) {
+	noQuestion := make([]byte, 12) // a well-formed header: the zone is keyed on the first question, and there is none
+	for name, wire := range map[string][]byte{"not a message": {1, 2, 3}, "no question": noQuestion} {
+		u := NewFakeUnbound(zone)
+		if reply, err := u.Answer(wire); err == nil || reply != nil {
+			t.Errorf("%s: got %x, %v; want an error and no reply", name, reply, err)
+		}
+		if len(u.Queries) != 0 || len(u.Replies) != 0 {
+			t.Errorf("%s: recorded %d queries and %d replies, want none: the question is read before anything is kept", name, len(u.Queries), len(u.Replies))
+		}
 	}
-	if len(u.Queries) != 1 || len(u.Replies) != 0 {
-		t.Errorf("recorded %d queries and %d replies, want 1 and 0", len(u.Queries), len(u.Replies))
+}
+
+func TestFakeUnboundGivesNoReplyForAQuestionTheZoneListsAsNull(t *testing.T) {
+	u := NewFakeUnbound(zone)
+	wire := query(t, "SILENT.example.", dnswire.TYPE_A)
+	if reply, err := u.Answer(wire); err != nil || reply != nil {
+		t.Errorf("got %x, %v; want no reply and no error", reply, err)
+	}
+	if len(u.Queries) != 1 || !bytes.Equal(u.Queries[0], wire) {
+		t.Errorf("the query is on record: got %x", u.Queries)
+	}
+	if len(u.Replies) != 1 || len(u.Replies[0]) != 0 {
+		t.Errorf("the empty REPLY is on record, so no ANSWER can be taken for Unbound's: got %x", u.Replies)
+	}
+}
+
+func TestFakeUnboundKeysOnTheFirstQuestionIgnoresItsClassAndEchoesTheQuestionsAndTheID(t *testing.T) {
+	questions := []dnswire.Question{
+		{Name: "Allowed.example.", Qtype: dnswire.TYPE_A, Qclass: dnswire.CLASS_ANY},
+		{Name: "unknown.example.", Qtype: dnswire.TYPE_AAAA, Qclass: dnswire.CLASS_IN},
+	}
+	wire, err := dnswire.Encode(&dnswire.Message{ID: 0xBEEF, Flags: dnswire.RD, Questions: questions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, _ := answer(t, NewFakeUnbound(zone), wire)
+	if reply.ID != 0xBEEF || reply.Flags != dnswire.QR|dnswire.RA|dnswire.RD || len(reply.Answers) != 1 {
+		t.Errorf("first question listed, class ANY: got id %#x flags %#x with %d answers", reply.ID, reply.Flags, len(reply.Answers))
+	}
+	if !reflect.DeepEqual(reply.Questions, questions) {
+		t.Errorf("questions: got %+v, want %+v", reply.Questions, questions)
+	}
+
+	swapped, err := dnswire.Encode(&dnswire.Message{ID: 1, Flags: dnswire.RD, Questions: []dnswire.Question{questions[1], questions[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, _ = answer(t, NewFakeUnbound(zone), swapped)
+	if reply.Rcode() != 3 || len(reply.Answers) != 0 {
+		t.Errorf("first question unlisted, second listed: got rcode %d with %d answers, want NXDOMAIN", reply.Rcode(), len(reply.Answers))
 	}
 }
 
@@ -675,6 +871,36 @@ func TestDecisionTellsAnswerRelayRewriteAndUnclassifiedApart(t *testing.T) {
 	}
 	if got := Decision(second, u, other); got != unclassified {
 		t.Errorf("two FORWARDs, the second one's reply: got %q, want %q", got, unclassified)
+	}
+}
+
+func TestDecisionIsDropWhenThereIsNoAnswerWhateverWasForwarded(t *testing.T) {
+	wire := query(t, "allowed.example.", dnswire.TYPE_A)
+	if got := Decision(wire, NewFakeUnbound(zone), nil); got != "drop" {
+		t.Errorf("nothing forwarded: got %q, want drop", got)
+	}
+	u := NewFakeUnbound(zone)
+	answer(t, u, wire)
+	if got := Decision(wire, u, nil); got != "drop" {
+		t.Errorf("forwarded first: got %q, want drop", got)
+	}
+}
+
+func TestDecisionCountsTheServfailTheDeciderBuildsForUnboundsSilenceAsARewrite(t *testing.T) {
+	wire := query(t, "silent.example.", dnswire.TYPE_A)
+	u := NewFakeUnbound(zone)
+	if _, err := u.Answer(wire); err != nil {
+		t.Fatal(err)
+	}
+	servfail, err := dnswire.Encode(&dnswire.Message{
+		ID: 0x1234, Flags: dnswire.QR | dnswire.RA | dnswire.RD | 2,
+		Questions: []dnswire.Question{{Name: "silent.example.", Qtype: dnswire.TYPE_A, Qclass: dnswire.CLASS_IN}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Decision(wire, u, servfail); got != "rewrite" {
+		t.Errorf("got %q, want rewrite", got)
 	}
 }
 
@@ -724,10 +950,92 @@ func TestMismatchesIsEmptyForTheExpectedExchangeAndNamesTheFieldThatDiffers(t *t
 	}
 }
 
+func TestMismatchesComparesTheAnswersIDAndTC(t *testing.T) {
+	s := &Scenario{Name: "s.json"}
+	a := mustRR(t, "allowed.example. 300 IN A 192.0.2.77")
+	wire := query(t, "allowed.example.", dnswire.TYPE_A) // id 0x1234 = 4660
+	u := NewFakeUnbound(zone)
+	_, reply := answer(t, u, wire)
+	otherID := bytes.Clone(reply)
+	otherID[0] ^= 0xff // id 0xed34 = 60724
+	truncated := bytes.Clone(reply)
+	truncated[2] |= 0x02 // the TC bit
+	rewrite := Expect{Decision: "rewrite", Forwards: []string{"allowed.example. A"}, Rcode: "NOERROR", Answer: []dnswire.RR{a}}
+	relayTC := rewrite
+	relayTC.Decision, relayTC.TC = "relay", true
+	rewriteTC := rewrite
+	rewriteTC.TC = true
+
+	for _, row := range []struct {
+		name   string
+		expect Expect
+		answer []byte
+		want   []string
+	}{
+		{"the id differs", rewrite, otherID, []string{"s.json: case 'c': id: expected 4660, got 60724"}},
+		{"TC set, not expected", rewrite, truncated, []string{"s.json: case 'c': tc: expected False, got True"}},
+		{"TC expected, not set", relayTC, reply, []string{"s.json: case 'c': tc: expected True, got False"}},
+		{"TC expected and set", rewriteTC, truncated, nil},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			if got := Mismatches(s, &Case{ID: "c", Expect: row.expect}, wire, u, row.answer); !slices.Equal(got, row.want) {
+				t.Errorf("got %q\nwant %q", got, row.want)
+			}
+		})
+	}
+
+	answered := Case{ID: "c", Expect: Expect{Decision: "answer", Rcode: "NOERROR", Answer: []dnswire.RR{a}}}
+	for name, row := range map[string]struct {
+		wire []byte
+		want string
+	}{
+		"a query of one byte": {[]byte{0x12}, "s.json: case 'c': id: expected 18, got 4660"},
+		"a query of no bytes": {nil, "s.json: case 'c': id: expected 0, got 4660"},
+	} {
+		if got := Mismatches(s, &answered, row.wire, NewFakeUnbound(zone), reply); !slices.Equal(got, []string{row.want}) {
+			t.Errorf("%s: got %q, want %q", name, got, row.want)
+		}
+	}
+}
+
+func TestMismatchesForADropComparesOnlyTheDecisionAndTheForwards(t *testing.T) {
+	s := &Scenario{Name: "s.json"}
+	a := mustRR(t, "allowed.example. 300 IN A 192.0.2.77")
+	wire := query(t, "allowed.example.", dnswire.TYPE_A)
+	forwarded := NewFakeUnbound(zone)
+	_, reply := answer(t, forwarded, wire)
+	drop := Case{ID: "c", Expect: Expect{Decision: "drop"}}
+	relay := Case{ID: "c", Expect: Expect{Decision: "relay", Forwards: []string{"allowed.example. A"}, Rcode: "NOERROR", Answer: []dnswire.RR{a}}}
+
+	for _, row := range []struct {
+		name   string
+		c      Case
+		u      *FakeUnbound
+		answer []byte
+		want   []string
+	}{
+		{"a drop as expected", drop, NewFakeUnbound(zone), nil, nil},
+		{"a drop after a FORWARD", drop, forwarded, nil,
+			[]string{"s.json: case 'c': forwards: expected [], got ['allowed.example. A']"}},
+		{"an ANSWER where a drop is expected", drop, NewFakeUnbound(zone), reply,
+			[]string{"s.json: case 'c': decision: expected 'drop', got 'answer'"}},
+		{"an ANSWER that is no DNS message where a drop is expected", drop, NewFakeUnbound(zone), []byte{1, 2, 3},
+			[]string{"s.json: case 'c': decision: expected 'drop', got 'answer'"}},
+		{"a drop where an ANSWER is expected", relay, forwarded, nil,
+			[]string{"s.json: case 'c': decision: expected 'relay', got 'drop'"}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			if got := Mismatches(s, &row.c, wire, row.u, row.answer); !slices.Equal(got, row.want) {
+				t.Errorf("got %q\nwant %q", got, row.want)
+			}
+		})
+	}
+}
+
 func TestMismatchesReportsAnAnswerThatIsNotADNSMessageAsOneLine(t *testing.T) {
 	s := &Scenario{Name: "s.json"}
 	c := Case{ID: "c", Expect: Expect{Decision: "answer", Rcode: "NOERROR"}}
-	for name, answer := range map[string][]byte{"garbage": {1, 2, 3}, "no bytes": nil} {
+	for name, answer := range map[string][]byte{"garbage": {1, 2, 3}, "no bytes": {}} {
 		got := Mismatches(s, &c, query(t, "a.example.", dnswire.TYPE_A), NewFakeUnbound(zone), answer)
 		if len(got) != 1 || !strings.HasPrefix(got[0], "s.json: case 'c': answer: ") {
 			t.Errorf("%s: got %q, want one line starting %q", name, got, "s.json: case 'c': answer: ")

@@ -1,15 +1,17 @@
-// Package paritycorpus is the Go side of the schema-1 parity corpus contract, so the Go decider runs the JSON scenarios
+// Package paritycorpus is the Go side of the schema-2 parity corpus contract, so the Go decider runs the JSON scenarios
 // the Python one passes. It translates tests/dns_proxy/test_parity_corpus.py (the loader, write_module, RecordingUnbound,
 // _decision, _rr_text, _mismatches) and tests/dns_proxy/frontend_helpers.py (build_query, FakeUnbound without verdicts).
 package paritycorpus
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,7 +30,7 @@ const DEFAULT_CLIENT = "192.0.2.10"
 var (
 	RUNNER_WRITES = []string{"pfb_unbound.py", "pfb_dnsbl_regex_rules.py", "pfb_unbound.ini", "pfb_py_sources.json"}
 	TRANSPORTS    = []string{"TCP", "UDP", "DoT", "DoH", "DoQ"} // the QUERY frame's transport byte is this index
-	DECISIONS     = []string{"answer", "relay", "rewrite"}
+	DECISIONS     = []string{"answer", "relay", "rewrite", "drop"}
 	RCODES        = map[string]int{"NOERROR": 0, "FORMERR": 1, "SERVFAIL": 2, "NXDOMAIN": 3, "NOTIMP": 4, "REFUSED": 5}
 	QTYPES        = map[string]uint16{
 		"A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "PTR": 12, "MX": 15, "TXT": 16, "SIG": 24, "AAAA": 28, "SRV": 33,
@@ -41,8 +43,7 @@ type FixtureError string
 func (e FixtureError) Error() string { return string(e) }
 
 type Query struct {
-	Name      string
-	Qtype     uint16
+	Wire      []byte // the QUERY frame's DNS wire
 	Client    string
 	Transport string
 }
@@ -50,9 +51,10 @@ type Query struct {
 type Expect struct {
 	Decision  string
 	Forwards  []string
-	Rcode     string
+	Rcode     string // the rest only for a non-drop decision: a drop has no ANSWER
 	Answer    []dnswire.RR
 	Authority []dnswire.RR
+	TC        bool
 }
 
 type Case struct {
@@ -85,7 +87,7 @@ type UpstreamKey struct {
 type Scenario struct {
 	Name, Description string
 	Module            Module
-	Upstream          map[UpstreamKey][]string // FakeUnbound's zone: (lower-case name, qtype) -> RR texts
+	Upstream          map[UpstreamKey][]string // FakeUnbound's zone: (lower-case name, qtype) -> RR texts; nil: no reply
 	Cases             []Case
 }
 
@@ -283,8 +285,8 @@ func iniText(text, where, field, forbidden string) string {
 }
 
 func schema(doc *orderedObject, where string) {
-	if number, ok := doc.vals["schema"].(json.Number); !ok || number.String() != "1" { // a bool or 1.0 is not the integer 1
-		fail(where, "schema", "must be the integer 1, got "+pyRepr(doc.vals["schema"]))
+	if number, ok := doc.vals["schema"].(json.Number); !ok || number.String() != "2" { // a bool or 2.0 is not the integer 2
+		fail(where, "schema", "must be the integer 2, got "+pyRepr(doc.vals["schema"]))
 	}
 }
 
@@ -452,9 +454,12 @@ func upstream(value any, where string) map[UpstreamKey][]string {
 		if name != pysem.Lower(name) {
 			fail(where, field, "the name must be lower case")
 		}
-		texts := stringValues(listed.vals[key], where, field)
-		for index, text := range texts {
-			rrFromText(text, where, field, index) // rr_from_text must accept every record
+		var texts []string // nil for null: Unbound gives no reply
+		if listed.vals[key] != nil {
+			texts = stringValues(listed.vals[key], where, field)
+			for index, text := range texts {
+				rrFromText(text, where, field, index) // rr_from_text must accept every record
+			}
 		}
 		if _, ok := zone[UpstreamKey{name, kind}]; ok {
 			fail(where, field, "the same question is already listed under another spelling")
@@ -485,41 +490,121 @@ func parseCase(item any, index int, where string, families map[string]string, se
 	if description == "" {
 		fail(whereCase, "description", "must say what behaviour is pinned")
 	}
-
-	query := objectOf(object.vals["query"], whereCase, "query", []string{"name", "type"}, "client", "transport")
-	name := wireName(stringValue(query.vals["name"], whereCase, "query.name"), whereCase, "query.name")
-	kind := qtype(stringValue(query.vals["type"], whereCase, "query.type"), whereCase, "query.type")
-	var client any = DEFAULT_CLIENT
-	if given, ok := query.vals["client"]; ok {
-		client = given
-	}
-	address := stringValue(client, whereCase, "query.client")
-	if _, err := pysem.IPAddress(address); err != nil {
-		fail(whereCase, "query.client", "not an IP address: "+pyRepr(address))
-	}
-	var transport any = "UDP"
-	if given, ok := query.vals["transport"]; ok {
-		transport = given
-	}
-	transportName := choice(transport, whereCase, "query.transport", TRANSPORTS)
-
-	expect := objectOf(object.vals["expect"], whereCase, "expect", []string{"decision", "forwards", "rcode", "answer", "authority"})
-	forwards := stringValues(expect.vals["forwards"], whereCase, "expect.forwards")
-	for position, text := range forwards {
-		question(text, whereCase, fmt.Sprintf("expect.forwards[%d]", position))
-	}
 	return Case{
 		id,
 		family,
 		description,
-		Query{name, kind, address, transportName},
-		Expect{
-			choice(expect.vals["decision"], whereCase, "expect.decision", DECISIONS),
-			forwards,
-			choice(expect.vals["rcode"], whereCase, "expect.rcode", slices.Collect(maps.Keys(RCODES))),
-			rrs(expect.vals["answer"], whereCase, "expect.answer"),
-			rrs(expect.vals["authority"], whereCase, "expect.authority"),
-		},
+		parseQuery(object.vals["query"], whereCase),
+		parseExpect(object.vals["expect"], whereCase),
+	}
+}
+
+var wholeHexBytes = regexp.MustCompile(`\A(?:[0-9a-f]{2})*\z`)
+
+func wireHex(text, where, field string) []byte {
+	if !wholeHexBytes.MatchString(text) { // hex.DecodeString alone takes upper case
+		fail(where, field, pyRepr(text)+" must be lower-case hex of whole bytes")
+	}
+	if len(text) > 2*0xFFFF {
+		fail(where, field, fmt.Sprintf("%d bytes: a DNS message has at most 65535", len(text)/2))
+	}
+	wire, err := hex.DecodeString(text)
+	if err != nil {
+		panic(err) // unreachable: the pattern above is whole bytes of hex
+	}
+	return wire
+}
+
+// canonicalClient is a client address as the gateway writes it: no zone, not unspecified, not IPv4-mapped (the
+// gateway unmaps it) and spelled as Python's str(ip_address(text)).
+func canonicalClient(text string, packed []byte) bool {
+	unspecified := !slices.ContainsFunc(packed, func(octet byte) bool { return octet != 0 })
+	mapped := len(packed) == 16 && bytes.HasPrefix(packed, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff})
+	if strings.Contains(text, "%") || unspecified || mapped {
+		return false
+	}
+	address, _ := netip.AddrFromSlice(packed)
+	return address.String() == text // netip spells an IPv6 address as Python does, bar the mapped form refused above
+}
+
+func parseQuery(value any, where string) Query {
+	object := objectOf(value, where, "query", nil, "name", "type", "wire_hex", "client", "transport")
+	var wire []byte
+	if given, ok := object.vals["wire_hex"]; ok {
+		_, named := object.vals["name"]
+		_, typed := object.vals["type"]
+		if named || typed {
+			fail(where, "query.wire_hex", "excludes query.name and query.type")
+		}
+		wire = wireHex(stringValue(given, where, "query.wire_hex"), where, "query.wire_hex")
+	} else {
+		for _, key := range []string{"name", "type"} {
+			if _, ok := object.vals[key]; !ok {
+				fail(where, "query."+key, "missing: a query is a name and a type, or wire_hex")
+			}
+		}
+		name := wireName(stringValue(object.vals["name"], where, "query.name"), where, "query.name")
+		built, err := BuildQuery(name, qtype(stringValue(object.vals["type"], where, "query.type"), where, "query.type"))
+		if err != nil {
+			panic(err) // unreachable: wireName accepted the name
+		}
+		wire = built
+	}
+	var client any = DEFAULT_CLIENT
+	if given, ok := object.vals["client"]; ok {
+		client = given
+	}
+	address := stringValue(client, where, "query.client")
+	packed, err := pysem.IPAddress(address)
+	if err != nil {
+		fail(where, "query.client", "not an IP address: "+pyRepr(address))
+	}
+	if !canonicalClient(address, packed) {
+		fail(where, "query.client", pyRepr(address)+" is not a canonical, specified address without a zone")
+	}
+	var transport any = "UDP"
+	if given, ok := object.vals["transport"]; ok {
+		transport = given
+	}
+	return Query{wire, address, choice(transport, where, "query.transport", TRANSPORTS)}
+}
+
+func parseExpect(value any, where string) Expect {
+	object := objectOf(value, where, "expect", []string{"decision", "forwards"}, "rcode", "answer", "authority", "tc")
+	decision := choice(object.vals["decision"], where, "expect.decision", DECISIONS)
+	forwards := stringValues(object.vals["forwards"], where, "expect.forwards")
+	for position, text := range forwards {
+		question(text, where, fmt.Sprintf("expect.forwards[%d]", position))
+	}
+	if decision == "drop" {
+		for _, key := range []string{"rcode", "answer", "authority", "tc"} {
+			if _, ok := object.vals[key]; ok {
+				fail(where, "expect."+key, "unknown key: a drop has no ANSWER")
+			}
+		}
+		if len(forwards) > 0 {
+			fail(where, "expect.forwards", "must be empty for a drop")
+		}
+		return Expect{Decision: decision}
+	}
+	for _, key := range []string{"rcode", "answer", "authority"} {
+		if _, ok := object.vals[key]; !ok {
+			fail(where, "expect."+key, "missing")
+		}
+	}
+	tc := false
+	if given, ok := object.vals["tc"]; ok {
+		if tc, ok = given.(bool); !ok {
+			fail(where, "expect.tc", "must be true or false, got "+pyRepr(given))
+		}
+	}
+	return Expect{
+		decision,
+		forwards,
+		choice(object.vals["rcode"], where, "expect.rcode", slices.Collect(maps.Keys(RCODES))),
+		rrs(object.vals["answer"], where, "expect.answer"),
+		rrs(object.vals["authority"], where, "expect.authority"),
+		tc,
 	}
 }
 
@@ -589,7 +674,8 @@ func BuildQuery(name string, qtype uint16) ([]byte, error) {
 	})
 }
 
-// FakeUnbound keeps each reply it gave, so a relayed ANSWER can be told from a rewritten one by its bytes.
+// FakeUnbound keeps each reply it gave, so a relayed ANSWER can be told from a rewritten one by its bytes. A question
+// the zone lists as nil gets no reply: the empty one goes on record.
 type FakeUnbound struct {
 	zone    map[UpstreamKey][]string
 	Queries [][]byte
@@ -601,8 +687,6 @@ func NewFakeUnbound(zone map[UpstreamKey][]string) *FakeUnbound {
 }
 
 func (u *FakeUnbound) Answer(wire []byte) ([]byte, error) {
-	// Copies, because Python's bytes cannot change under the record: the decider may edit the slice it is handed.
-	u.Queries = append(u.Queries, bytes.Clone(wire))
 	query, err := dnswire.Parse(wire)
 	if err != nil {
 		return nil, err
@@ -610,8 +694,14 @@ func (u *FakeUnbound) Answer(wire []byte) ([]byte, error) {
 	if len(query.Questions) == 0 {
 		return nil, errors.New("the query has no question")
 	}
+	// Copies, because Python's bytes cannot change under the record: the decider may edit the slice it is handed.
+	u.Queries = append(u.Queries, bytes.Clone(wire))
 	question := query.Questions[0]
 	texts, listed := u.zone[UpstreamKey{pysem.Lower(question.Name), question.Qtype}]
+	if listed && texts == nil {
+		u.Replies = append(u.Replies, []byte{})
+		return nil, nil
+	}
 	flags := dnswire.QR | dnswire.RA | (query.Flags & dnswire.RD)
 	if !listed {
 		flags |= 3
@@ -633,6 +723,9 @@ func (u *FakeUnbound) Answer(wire []byte) ([]byte, error) {
 }
 
 func Decision(wire []byte, u *FakeUnbound, answer []byte) string {
+	if answer == nil {
+		return "drop"
+	}
 	if len(u.Queries) == 0 {
 		return "answer"
 	}
@@ -657,12 +750,10 @@ func rrTexts(rrs []dnswire.RR) []string {
 	return out
 }
 
+type comparison struct{ field, want, got string }
+
 func Mismatches(s *Scenario, c *Case, wire []byte, u *FakeUnbound, answer []byte) []string {
 	where := fmt.Sprintf("%s: case %s", s.Name, pyRepr(c.ID))
-	reply, err := dnswire.Parse(answer)
-	if err != nil {
-		return []string{fmt.Sprintf("%s: answer: not a DNS message: %v", where, err)}
-	}
 	expect := c.Expect
 	forwards := []string{}
 	for _, sent := range u.Queries {
@@ -674,20 +765,35 @@ func Mismatches(s *Scenario, c *Case, wire []byte, u *FakeUnbound, answer []byte
 			forwards = append(forwards, question.Name+" "+typeText(question.Qtype))
 		}
 	}
-	rcode := fmt.Sprintf("RCODE%d", reply.Rcode())
-	for name, number := range RCODES {
-		if number == reply.Rcode() {
-			rcode = name
-		}
-	}
-	var out []string
-	for _, row := range []struct{ field, want, got string }{
+	compared := []comparison{
 		{"decision", pyRepr(expect.Decision), pyRepr(Decision(wire, u, answer))},
 		{"forwards", pyRepr(expect.Forwards), pyRepr(forwards)},
-		{"rcode", pyRepr(expect.Rcode), pyRepr(rcode)},
-		{"answer", pyRepr(rrTexts(expect.Answer)), pyRepr(rrTexts(reply.Answers))},
-		{"authority", pyRepr(rrTexts(expect.Authority)), pyRepr(rrTexts(reply.Authority))},
-	} {
+	}
+	if answer != nil && expect.Decision != "drop" { // a drop/non-drop disagreement is the decision's line
+		reply, err := dnswire.Parse(answer)
+		if err != nil {
+			return []string{fmt.Sprintf("%s: answer: not a DNS message: %v", where, err)}
+		}
+		rcode := fmt.Sprintf("RCODE%d", reply.Rcode())
+		for name, number := range RCODES {
+			if number == reply.Rcode() {
+				rcode = name
+			}
+		}
+		queryID := 0 // int.from_bytes(wire[:2], "big"), whatever the length of wire
+		for _, octet := range wire[:min(len(wire), 2)] {
+			queryID = queryID<<8 | int(octet)
+		}
+		compared = append(compared,
+			comparison{"id", pyRepr(queryID), pyRepr(int(reply.ID))},
+			comparison{"rcode", pyRepr(expect.Rcode), pyRepr(rcode)},
+			comparison{"answer", pyRepr(rrTexts(expect.Answer)), pyRepr(rrTexts(reply.Answers))},
+			comparison{"authority", pyRepr(rrTexts(expect.Authority)), pyRepr(rrTexts(reply.Authority))},
+			comparison{"tc", pyRepr(expect.TC), pyRepr(reply.Flags&dnswire.TC != 0)},
+		)
+	}
+	var out []string
+	for _, row := range compared {
 		if row.want != row.got {
 			out = append(out, fmt.Sprintf("%s: %s: expected %s, got %s", where, row.field, row.want, row.got))
 		}

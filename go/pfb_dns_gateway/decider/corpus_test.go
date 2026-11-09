@@ -3,6 +3,7 @@
 package decider
 
 import (
+	"bytes"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -71,13 +72,10 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 		c := &s.Cases[i]
 		skipped := false
 		ok := t.Run(c.ID, func(t *testing.T) {
-			wire, err := paritycorpus.BuildQuery(c.Query.Name, c.Query.Qtype)
-			if err != nil {
-				t.Fatal(err)
-			}
 			u := paritycorpus.NewFakeUnbound(s.Upstream)
 			// Every case is resolved, translated or not: the decider's per-name memo carries across the cases in file order.
-			answer := f.resolve(wire, c.Query.Client, func(w []byte) []byte {
+			// The decider gets its own copy of the wire: Python's bytes cannot change under the comparison with the FORWARD.
+			answer := f.resolve(bytes.Clone(c.Query.Wire), c.Query.Client, func(w []byte) []byte {
 				reply, err := u.Answer(w)
 				if err != nil {
 					t.Errorf("FakeUnbound: %v", err)
@@ -88,10 +86,7 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 				skipped = true
 				t.Skipf("family %s: not implemented in Go yet", c.Family)
 			}
-			if answer == nil {
-				t.Fatal("the decider dropped the query: no ANSWER")
-			}
-			for _, line := range paritycorpus.Mismatches(s, c, wire, u, answer) {
+			for _, line := range paritycorpus.Mismatches(s, c, c.Query.Wire, u, answer) {
 				t.Error(line)
 			}
 		})
