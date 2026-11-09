@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "description": "Wildcard Blocking on with PRIVATE recognition off, psl_feed_icann_policy = ignore loading the public-suffix list and psl_feed_private_policy = honor: a plain feed line at a PRIVATE suffix stays the zone the ICANN-only classifier makes of it",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_tld_wildcard": "true",
+        "psl_include_private": "false",
+        "psl_feed_private_policy": "honor",
+        "psl_feed_icann_policy": "ignore",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": ["pages.com"]
+    }
+  },
+  "upstream": {
+    "other.com. A": ["other.com. 300 IN A 192.0.2.12"]
+  },
+  "cases": [
+    {
+      "id": "plain-line-at-a-private-suffix-blocks-the-suffix",
+      "family": "psl",
+      "description": "honor keeps the plain line pages.com, which the ICANN-only classifier makes a zone at the registrable pages.com",
+      "query": {"name": "pages.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["pages.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "plain-line-at-a-private-suffix-still-covers-its-tenants",
+      "family": "psl",
+      "description": "honor is neither apex nor ignore: the kept zone still blocks a tenant of the private suffix",
+      "query": {"name": "x.pages.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["x.pages.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "unlisted-sibling-under-the-icann-suffix-relays",
+      "family": "psl",
+      "description": "the zone is pages.com, not com: another registrable domain under com resolves",
+      "query": {"name": "other.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["other.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["other.com. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    }
+  ]
+}
