@@ -120,10 +120,14 @@ func (s *regexScan) report() {
 //
 // shortcut: Python buckets the rules by the first character of a literal that every match must contain (read from
 // CPython's private re._parser) and skips the rules whose literal the query lacks. That prefilter only drops rules
-// that cannot match, so every rule a candidate decides identically; Go would need its own walk of regexp/syntax for
-// the same skip. Upgrade when scanning a large list shows up in a profile. Candidates keep list order, where Python
-// iterates a set (hash order): that only reaches a decision on a band tie between two rules of one list, which
-// Python itself resolves differently per PYTHONHASHSEED. The returned slice is the list's own; never modify it.
+// that cannot match, so the blocked / allowed verdict and its band are the same with every rule a candidate. Two
+// observable differences remain. (1) Go times every rule of the list where Python times only the prefilter
+// candidates, so the per-list slow-scan line (the rule count and the slowest rule) can differ from Python's; it is
+// log text only, no decision reads it. (2) Candidates keep list order, where Python iterates a set (hash order, which
+// varies with PYTHONHASHSEED): when two rules of one list match at the SAME band, the one scanned first holds the
+// meta, so the feed, group, group_owner and group_origin the band re-scan re-attributes to can differ from Python's
+// pick; the band, and so the decision, cannot. Go needs its own walk of regexp/syntax for the same skip. Upgrade
+// when scanning a large list shows up in a profile. The returned slice is the list's own; never modify it.
 func regexCandidates(regexDB *regexDB, qName string) []string {
 	if regexDB == nil {
 		return nil
