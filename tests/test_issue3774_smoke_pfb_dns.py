@@ -120,15 +120,13 @@ def test_set_dnsbl_enabled_false_leaves_pfb_dns_untouched(monkeypatch: pytest.Mo
 
 
 def _arrange_release(
-    monkeypatch: pytest.MonkeyPatch, *, installed: bool = True, saved: tuple[str, ...] = ("",), pfb_dns: str = ""
+    monkeypatch: pytest.MonkeyPatch, *, installed: bool = True, moved: tuple[bool, ...] = (False,), pfb_dns: str = ""
 ) -> list[str]:
     """Stub release_pfb_dns's collaborators; the returned list holds only its writes and reloads, in order."""
     events: list[str] = []
-    saved_reads = iter(saved)
+    moved_reads = iter(moved)
 
     def config_get(_vm: object, path: str, **_kw: object) -> str:
-        if path == SAVED_PATH:
-            return next(saved_reads)
         if path == PFB_DNS_PATH:
             return pfb_dns
         raise AssertionError(f"unexpected config read: {path}")
@@ -143,6 +141,7 @@ def _arrange_release(
 
     monkeypatch.setattr(helpers, "pkg_installed", lambda _vm, **_kw: installed)
     monkeypatch.setattr(helpers, "config_get", config_get)
+    monkeypatch.setattr(helpers, "_pfb_dns_moved", lambda _vm: next(moved_reads), raising=False)
     monkeypatch.setattr(helpers, "php_eval", php_eval)
     monkeypatch.setattr(helpers, "reload", reload)
     return events
@@ -151,7 +150,7 @@ def _arrange_release(
 def test_release_pfb_dns_does_nothing_when_pfb_dns_is_off_and_the_resolver_is_not_moved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    events = _arrange_release(monkeypatch, saved=("",), pfb_dns="")
+    events = _arrange_release(monkeypatch, moved=(False,), pfb_dns="")
 
     helpers.release_pfb_dns(_Vm([]))  # type: ignore[arg-type]
 
@@ -161,7 +160,7 @@ def test_release_pfb_dns_does_nothing_when_pfb_dns_is_off_and_the_resolver_is_no
 def test_release_pfb_dns_only_stores_off_when_pfb_dns_is_on_but_the_resolver_was_never_moved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    events = _arrange_release(monkeypatch, saved=("",), pfb_dns="on")
+    events = _arrange_release(monkeypatch, moved=(False,), pfb_dns="on")
 
     helpers.release_pfb_dns(_Vm([]))  # type: ignore[arg-type]
 
@@ -169,9 +168,9 @@ def test_release_pfb_dns_only_stores_off_when_pfb_dns_is_on_but_the_resolver_was
 
 
 def test_release_pfb_dns_stores_off_and_applies_when_the_resolver_is_moved(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Given the Resolver is moved (pfb_dns_saved set) When it is released
-    Then pfB-DNS is stored off and the product's own DNSBL apply runs, and it returns once the snapshot is gone."""
-    events = _arrange_release(monkeypatch, saved=("snapshot", ""))
+    """Given pfB-DNS holds the Resolver (a running proxy, or a valid snapshot / our block) When it is released
+    Then pfB-DNS is stored off and the product's own DNSBL apply runs, and it returns once nothing holds it."""
+    events = _arrange_release(monkeypatch, moved=(True, False))
 
     helpers.release_pfb_dns(_Vm([]))  # type: ignore[arg-type]
 
@@ -179,11 +178,11 @@ def test_release_pfb_dns_stores_off_and_applies_when_the_resolver_is_moved(monke
 
 
 def test_release_pfb_dns_fails_loudly_when_the_apply_leaves_the_resolver_moved(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Given the apply does not clear pfb_dns_saved When the Resolver is released
+    """Given the apply leaves pfB-DNS holding the Resolver When it is released
     Then the harness raises with expected vs actual instead of wiping config under a running proxy."""
-    events = _arrange_release(monkeypatch, saved=("snapshot", "snapshot"))
+    events = _arrange_release(monkeypatch, moved=(True, True))
 
-    with pytest.raises(RuntimeError, match=r"expected ''.*snapshot"):
+    with pytest.raises(RuntimeError, match=r"expected.*released.*still"):
         helpers.release_pfb_dns(_Vm([]))  # type: ignore[arg-type]
 
     assert events == ["store pfb_dns ''", "reload:updatednsbl"], f"the failure came before the apply ran: {events}"
@@ -192,11 +191,33 @@ def test_release_pfb_dns_fails_loudly_when_the_apply_leaves_the_resolver_moved(m
 def test_release_pfb_dns_does_nothing_when_the_package_is_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Given the package was uninstalled When the Resolver is released
     Then nothing is read, written or applied: the uninstall gave the Resolver back itself."""
-    events = _arrange_release(monkeypatch, installed=False, saved=("snapshot",), pfb_dns="on")
+    events = _arrange_release(monkeypatch, installed=False, moved=(True,), pfb_dns="on")
 
     helpers.release_pfb_dns(_Vm([]))  # type: ignore[arg-type]
 
     assert events == [], f"the harness touched an uninstalled package: {events}"
+
+
+def test_a_resolver_counts_as_moved_only_by_a_running_proxy_or_the_products_own_ownership_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given a test that plants a pfb_dns_saved value that is no valid snapshot (the wizard's refused-Finish cases)
+    When the harness asks whether pfB-DNS holds the Resolver
+    Then it asks the product (a live proxy pid, or pfb_dns_proxy_owns_resolver(): a valid snapshot or our block),
+    never the raw marker: an apply cannot clear a planted invalid marker, so a raw-marker test would fail every later
+    restore."""
+    reads: list[str] = []
+
+    def read_scalar(_vm: object, pre: str, expr: str, **_kw: object) -> str:
+        reads.append(pre + "\n" + expr)
+        return "true"
+
+    monkeypatch.setattr(helpers, "_php_read_scalar", read_scalar)
+
+    assert helpers._pfb_dns_moved(_Vm([])) is True  # type: ignore[arg-type]
+    (php,) = reads
+    assert "pfb_dns_proxy_running()" in php and "pfb_dns_proxy_owns_resolver()" in php, php
+    assert "pfb_dns_saved" not in php, f"the raw marker decides a move: {php}"
 
 
 # --- R5 / R6: the wipe and the restore give the Resolver back first ----------------------------------------------

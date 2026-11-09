@@ -3739,20 +3739,28 @@ _BASELINE_GLOBAL_KEYS = (
 )
 
 
-def release_pfb_dns(vm: SmokeVM) -> None:
-    """Give the Resolver back: pfB-DNS off, plus the product's own DNSBL apply when it had moved the Resolver.
+def _pfb_dns_moved(vm: SmokeVM) -> bool:
+    """Does pfB-DNS hold the Resolver: a live proxy, or the product's ownership test (a valid snapshot or our block)?
 
-    ``dns/pfb_dns_saved`` is the Resolver snapshot the apply takes when it moves the Resolver off its port and clears
-    when it restores it (``pfb_dns_proxy_resolver_locked()``): set means moved. Only an apply that sees pfB-DNS off
-    restores a moved Resolver, so the toggle is stored off and ``updatednsbl`` (the Settings page's apply) runs; a
-    snapshot still set afterwards raises, because wiping or restoring config under a running proxy leaves Unbound
-    colliding with it on :53. pfB-DNS on with nothing moved needs only the store; off with nothing moved, nothing.
-    An uninstalled package is left alone: its uninstall gave the Resolver back itself.
+    Never the raw ``dns/pfb_dns_saved``: a test may plant a value that is no valid snapshot (the wizard's refused-Finish
+    cases), which no apply clears and no proxy serves."""
+    pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+    held = "json_encode(pfb_dns_proxy_running() || pfb_dns_proxy_owns_resolver())"
+    return _php_read_scalar(vm, pre, held) == "true"
+
+
+def release_pfb_dns(vm: SmokeVM) -> None:
+    """Give the Resolver back: pfB-DNS off, plus the product's own DNSBL apply when pfB-DNS holds the Resolver.
+
+    Only an apply that sees pfB-DNS off restores a moved Resolver and stops the proxy, so the toggle is stored off and
+    ``updatednsbl`` (the Settings page's apply) runs; pfB-DNS still holding it afterwards raises, because wiping or
+    restoring config under a running proxy leaves Unbound colliding with it on :53. pfB-DNS on with nothing held needs
+    only the store; off with nothing held, nothing. An uninstalled package is left alone: its uninstall gave the
+    Resolver back itself.
     """
     if not pkg_installed(vm):
         return
-    saved_path = dns_config_path("pfb_dns_saved")
-    moved = config_get(vm, saved_path) != ""
+    moved = _pfb_dns_moved(vm)
     if not moved and config_get(vm, dns_config_path("pfb_dns")) != "on":
         return
     snippet = (
@@ -3768,9 +3776,10 @@ def release_pfb_dns(vm: SmokeVM) -> None:
     if not moved:
         return
     reload(vm, "updatednsbl")
-    still = config_get(vm, saved_path)
-    if still:
-        raise RuntimeError(f"release_pfb_dns: {saved_path} expected '' after the apply, actual {still!r}")
+    if _pfb_dns_moved(vm):
+        raise RuntimeError(
+            "release_pfb_dns: expected the Resolver released after the apply, but pfB-DNS still holds it"
+        )
 
 
 def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
