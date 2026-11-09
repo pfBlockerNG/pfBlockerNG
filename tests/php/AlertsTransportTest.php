@@ -144,7 +144,7 @@ final class AlertsTransportTest extends TestCase
 				if (!$reply) {
 					$rows[] = array_slice($base, 0, 10);
 				}
-				foreach (['', '0.0.0.0', '::', '192.0.2.1/32', '[::1]', 'fe80::1%em0', '<script>', "192.0.2.1\0", []] as $bad) {
+				foreach (['', '0.0.0.0', '::', '::ffff:0.0.0.0', '192.0.2.1/32', '[::1]', 'fe80::1%em0', '<script>', "192.0.2.1\0", []] as $bad) {
 					$rows[] = [...$base, 'UDP', $bad, 'LAN'];
 				}
 				$rows[] = [...$base, 'UDP', '192.0.2.53', "bad\ninterface"];
@@ -157,6 +157,17 @@ final class AlertsTransportTest extends TestCase
 					$this->assertSame($mode === 'Unified' ? 12 : ($reply ? 13 : 9), substr_count($html, '<td'));
 					$this->assertStringNotContainsString('<script>', $html);
 				}
+			}
+		}
+	}
+
+	public function testAnIpv4MappedReceivingAddressRendersAsItsIpv4(): void
+	{
+		foreach ([FALSE, TRUE] as $reply) {
+			foreach (['Reports', 'Unified'] as $mode) {
+				$html = $this->render($reply, $mode, [...$this->row($reply), 'UDP', '::ffff:192.0.2.53', 'LAN']);
+				$this->assertStringContainsString('<td>192.0.2.53</td>', $html);
+				$this->assertStringNotContainsString('ffff', $html);
 			}
 		}
 	}

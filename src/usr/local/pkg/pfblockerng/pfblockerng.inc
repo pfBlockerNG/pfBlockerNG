@@ -4657,10 +4657,10 @@ function pfb_dns_proxy_listen(?array &$skipped = NULL): array {
  * The label of each address pfB-DNS can serve, for the status panel's Interface column: 127.0.0.1 and ::1 are `Localhost`; every other
  * address is the pfSense description of the interface that carries it (get_interface_ip(), get_interface_ipv6()) or of the interface a
  * VIP is on (pfb_vip_interface()). In display order: Localhost, then the interfaces as get_configured_interface_with_descr() lists
- * them. An address two interfaces carry belongs to the first; an address that is none (an interface with nothing assigned, a
- * non-address) is left out, as is one whose description is not a safe label (pfb_dns_listener_label_valid()), so that the panel and the
- * gateway own the same addresses. IPv6 keys are spelled as the gateway prints them (pfb_dns_proxy_host_port()), so that a lookup by a
- * logged address finds them.
+ * them. An address two interfaces carry belongs to the first whose description is a safe label (pfb_dns_listener_label_valid()): an
+ * interface or VIP with any other description owns nothing, so that the panel and the gateway own the same addresses. An address that
+ * is none (an interface with nothing assigned, a non-address) is left out. IPv6 keys are spelled as the gateway prints them
+ * (pfb_dns_proxy_host_port()), except the embedded-IPv4 forms (::a.b.c.d), so that a lookup by a logged address finds them.
  *
  * @return array<string,string> address (no port, no brackets) => label
  */
@@ -6399,7 +6399,7 @@ function pfb_dns_proxy_rc_command(): string {
  * The table the rc script's command asks for (issue #3694), as the lines of the gateway's address-table verb, in the command's order:
  * `dns-name-answer LOCAL=ADDR[,ADDR]` for each --dns-name-answer argument and `ddr-doh-443 ADDR` for each --ddr-doh-443 argument.
  *
- * @return list<string>|null NULL when the command names no DNS Name (--dns-name): a gateway started without one takes no table
+ * @return list<string>|null NULL when the command names no DNS Name (--dns-name): it has no name or DoH-443 rows to send
  */
 function pfb_dns_proxy_command_name_answers(): ?array {
 	$command = pfb_dns_proxy_rc_command();

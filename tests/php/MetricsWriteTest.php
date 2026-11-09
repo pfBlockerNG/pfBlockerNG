@@ -296,6 +296,7 @@ final class MetricsWriteTest extends TestCase
 			'line separator interface' => ['listener_interface', "LAN\u{2028}forged"],
 			'paragraph separator interface' => ['listener_interface', "LAN\u{2029}forged"],
 			'byte order mark interface' => ['listener_interface', "LAN\u{FEFF}forged"],
+			'interface without a listener' => ['listener_ip', ''],
 		];
 	}
 
