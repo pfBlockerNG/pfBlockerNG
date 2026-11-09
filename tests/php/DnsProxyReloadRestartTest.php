@@ -296,14 +296,15 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertStringNotContainsString('Unbound not fully live', $open[0]['message']);
 	}
 
-	public function testOutsideProxyModeTheNotConvergedMessageStillNamesUnbound(): void
+	public function testOutsideProxyModeTheNotConvergedMessageSaysPfbDnsIsNotActive(): void
 	{
-		// Given no snapshot and no Unbound start (the test double fails it): not converged, as today
+		// Given no snapshot, so nothing hosts the module: not converged
 		pfb_reload_unbound('enabled', TRUE);
 
 		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
 		$this->assertCount(1, $open, 'before: the apply did not converge');
-		$this->assertStringContainsString('Unbound not fully live with pfb_unbound.py', $open[0]['message']);
+		$this->assertStringContainsString('pfB-DNS is not active', $open[0]['message']);
 		$this->assertStringNotContainsString('DNS proxy', $open[0]['message']);
+		$this->assertStringNotContainsString('Unbound', $open[0]['message']);
 	}
 }

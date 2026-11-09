@@ -47,7 +47,7 @@ final class TickApplyReconciliationTest extends TestCase
 		mkdir($this->dir, 0755, TRUE);
 
 		foreach (['dbdir', 'schedule_state_dir', 'aliasdir', 'dnsbldir', 'pfctl', 'php', 'log', 'errlog', 'runlog', 'extraslog',
-			  'dnsbl_file', 'dnsbl_python_unmount', 'pending_marker'] as $k) {
+			  'dnsbl_file', 'dnsbl_python_unmount', 'pending_marker', 'enable', 'dnsbl', 'unbound_py_sources'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : FALSE;
 		}
 
@@ -88,7 +88,7 @@ final class TickApplyReconciliationTest extends TestCase
 			}
 		}
 		$this->saved = [];
-		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['config']['unbound']);
+		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_valid_pids'], $GLOBALS['config']['unbound']);
 
 		foreach ($this->tmpfiles as $f) {
 			if (is_file($f)) {
@@ -235,10 +235,24 @@ final class TickApplyReconciliationTest extends TestCase
 		file_put_contents("{$this->dir}/pfb_py_reload.applied", "{$gen}\n");
 	}
 
-	private function writeUnboundConf(bool $referencesPfbUnbound): void
+	/**
+	 * pfB-DNS owns the Resolver with DNSBL on (in config.xml, so a tick's pfb_global() reads it too), its proxy up or down:
+	 * the module host (issue #3770; Unbound never is).
+	 */
+	private function pfbDnsHostsTheModule(bool $up): void
 	{
-		$body = $referencesPfbUnbound ? "python-script: \"/var/unbound/pfb_unbound.py\"\n" : "no python here\n";
-		file_put_contents("{$this->dir}/unbound.conf", $body);
+		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', 'on');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl', 'on');
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl' => ['present' => FALSE, 'value' => NULL],
+			'custom_options' => ['present' => FALSE, 'value' => NULL],
+		])));
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		// The manifest exists, so the tick dispatches no feed pass to rebuild it: this suite stays isolated to apply reconciliation.
+		$GLOBALS['pfb']['unbound_py_sources'] = "{$this->dir}/pfb_py_sources.json";
+		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{}');
+		$GLOBALS['pfb_test_valid_pids']['/var/run/pfb_dns_proxy.pid'] = $up;
 	}
 
 	private function tick(): void
@@ -441,7 +455,7 @@ final class TickApplyReconciliationTest extends TestCase
 	/**
 	 * Scenario:
 	 *   Given an open (dnsbl,dnsbl,apply) entry (sentinel=5, applied=3 --
-	 *   genuinely not converged) with Unbound running and python mode wired.
+	 *   genuinely not converged) with the DNS proxy hosting the module and running.
 	 *   When  pfblockerng_tick() runs once.
 	 *   Then  the reload sentinel was bumped again (a real re-flip attempt --
 	 *         the spy, not just "no crash").
@@ -451,8 +465,7 @@ final class TickApplyReconciliationTest extends TestCase
 	 */
 	public function testTickRetriesOpenDnsblApplyEntryAndLeavesItOpenOnContinuedFailure(): void
 	{
-		$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];
-		$this->writeUnboundConf(TRUE);
+		$this->pfbDnsHostsTheModule(TRUE);
 		$this->writeSentinel(5);
 		$this->writeApplied(3);
 
@@ -485,8 +498,7 @@ final class TickApplyReconciliationTest extends TestCase
 	 */
 	public function testTickClearsDnsblApplyEntryOnceUnderlyingConditionIsFixed(): void
 	{
-		$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];
-		$this->writeUnboundConf(TRUE);
+		$this->pfbDnsHostsTheModule(TRUE);
 		$this->writeSentinel(5);
 		$this->writeApplied(3);
 
@@ -504,13 +516,12 @@ final class TickApplyReconciliationTest extends TestCase
 
 	// -----------------------------------------------------------------------
 	// KILL-GATE support -- pfb_dnsbl_apply_retry() never re-flips when nothing
-	// could consume it (Unbound down): stays cheap, never a false "attempt".
+	// could consume it (the module host down): stays cheap, never a false "attempt".
 	// -----------------------------------------------------------------------
 
-	public function testDnsblRetryDoesNotFlipSentinelWhenUnboundIsNotRunning(): void
+	public function testDnsblRetryDoesNotFlipSentinelWhenTheProxyIsNotRunning(): void
 	{
-		$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];
-		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		$this->pfbDnsHostsTheModule(FALSE);
 		$this->writeSentinel(5);
 		$this->writeApplied(3);
 
@@ -521,7 +532,7 @@ final class TickApplyReconciliationTest extends TestCase
 
 		$sentinelAfter = (int) trim((string) file_get_contents("{$this->dir}/pfb_py_reload"));
 		$this->assertSame(5, $sentinelAfter,
-			'Unbound is not running -- nothing can consume a re-flipped sentinel, so '
+			'The module host is not running -- nothing can consume a re-flipped sentinel, so '
 			. "pfb_dnsbl_apply_retry() must not bump it (got {$sentinelAfter}, expected unchanged 5)");
 	}
 

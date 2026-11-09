@@ -891,11 +891,11 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringNotContainsString('python-script', $patched);
 		$this->assertStringNotContainsString('module-config: "python', $patched);
 
-		// ... and the operator is told that pfB-DNS is not active and that DNSBL remains where it was
+		// ... and the operator is told that pfB-DNS is not active and that DNSBL does not block until it is
 		$notices = $this->notices();
 		$this->assertCount(1, $notices, 'one notice');
 		$this->assertStringContainsString('pfB-DNS is not active', $notices[0]);
-		$this->assertStringContainsString('DNSBL keeps running in the DNS Resolver as before', $notices[0]);
+		$this->assertStringContainsString('DNSBL does not block until pfB-DNS is active', $notices[0]);
 		$this->assertStringNotContainsString('DNSBL blocks nothing', $notices[0]);
 	}
 
@@ -948,7 +948,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$notices = $this->notices();
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('pfB-DNS is not active', $notices[0]);
-		$this->assertStringNotContainsString('DNSBL keeps running', $notices[0]);
+		$this->assertStringNotContainsString('DNSBL', $notices[0]);
 	}
 
 	#[DataProvider('takeoverFailures')]
@@ -992,7 +992,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$notices = $this->notices();
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('The DNS proxy keeps serving the DNS Resolver as it was moved', $notices[0]);
-		$this->assertStringNotContainsString('DNSBL keeps running in the DNS Resolver', $notices[0], 'the proxy hosts the module');
+		$this->assertStringNotContainsString('DNSBL does not block', $notices[0], 'the proxy hosts the module');
 	}
 
 	public function testAnAcceptedTakeoverStillGivesUnboundTheObserverNotTheModuleAndRaisesNoNotice(): void

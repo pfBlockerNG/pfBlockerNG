@@ -35,8 +35,8 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		}
 		$this->savedG['varrun_path'] = array_key_exists('varrun_path', $GLOBALS['g'] ?? [])
 			? $GLOBALS['g']['varrun_path'] : FALSE;
-		$this->hadConfig = array_key_exists('unbound', $GLOBALS['config'] ?? []);
-		$this->savedConfig = $GLOBALS['config']['unbound'] ?? [];
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->savedConfig = $GLOBALS['config'] ?? [];
 
 		$dnsdir = "{$this->dir}/dnsdir";
 		mkdir($dnsdir);
@@ -69,12 +69,18 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			'log' => "{$this->dir}/pfblockerng.log",
 		]);
 		$GLOBALS['g']['varrun_path'] = $this->dir;
-		$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];
+		// pfB-DNS owns the Resolver and is up: the DNS proxy hosts the module, Unbound never does (issue #3770)
+		$GLOBALS['config'] ??= [];
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl' => ['present' => FALSE, 'value' => NULL],
+			'custom_options' => ['present' => FALSE, 'value' => NULL],
+		])));
+		$GLOBALS['pfb_test_valid_pids'] = ['/var/run/pfb_dns_proxy.pid' => TRUE];
 		$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];
 		file_put_contents($GLOBALS['pfb']['unbound_py_count'], "1\n");
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"feeds":[]}');
 		file_put_contents($GLOBALS['pfb']['unbound_py_reject_stats'], '[]');
-		file_put_contents("{$this->dir}/unbound.conf", "python-script: pfb_unbound.py\n");
 		file_put_contents("{$this->dir}/pfb_py_reload.applied", "1\n");
 	}
 
@@ -95,12 +101,13 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 			}
 		}
 		if ($this->hadConfig) {
-			$GLOBALS['config']['unbound'] = $this->savedConfig;
+			$GLOBALS['config'] = $this->savedConfig;
 		} else {
-			unset($GLOBALS['config']['unbound']);
+			unset($GLOBALS['config']);
 		}
 		unset(
 			$GLOBALS['pfb_test_process_running'],
+			$GLOBALS['pfb_test_valid_pids'],
 			$GLOBALS['pfb_test_sysctl'],
 			$GLOBALS['pfb_test_unbound_py_sentinel_published']
 		);
@@ -163,7 +170,7 @@ final class PfbUpdateUnboundCachePolicyTest extends TestCase
 		$this->installRecorder($log);
 		$this->installAppliedMarkerWatcher();
 		$GLOBALS['pfb']['dnsbl_cache_flush'] = PfbToggle::On;
-		$this->assertTrue(pfb_unbound_py_mode_active(), 'test setup must enable live Python mode');
+		$this->assertTrue(pfb_unbound_py_host_running(), 'test setup must have the DNS proxy host the module');
 		$this->assertTrue(pfb_unbound_py_swap_fits_ram(), 'test setup must allow the data swap');
 		$this->assertTrue(is_process_running('unbound'), 'test setup must keep Unbound running');
 

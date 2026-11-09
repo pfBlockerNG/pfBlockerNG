@@ -779,12 +779,18 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$this->assertNotFalse(file_put_contents("{$this->dir}/pfb_py_count", "1\n"));
 		$this->assertNotFalse(file_put_contents("{$this->dir}/pfb_py_sources.json", '{"feeds":[]}'));
 		$this->assertNotFalse(file_put_contents("{$this->dir}/pfb_py_reject_stats.json", '[]'));
-		$this->assertNotFalse(file_put_contents("{$this->dir}/unbound.conf", "python-script: pfb_unbound.py\n"));
 		$this->assertNotFalse(file_put_contents($sentinel, "1\n"));
 		$this->assertNotFalse(file_put_contents($applied, "1\n"));
 
 		$run = $this->runIsolated(
-			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+			"// pfB-DNS owns the Resolver and its proxy runs: the DNS proxy hosts the module, Unbound never does (issue #3770)\n"
+			. "\$GLOBALS['config'] ??= [];\n"
+			. "config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode(json_encode([\n"
+			. "\t'active_interface' => ['present' => TRUE, 'value' => 'lan'],\n"
+			. "\t'enablessl' => ['present' => FALSE, 'value' => NULL],\n"
+			. "\t'custom_options' => ['present' => FALSE, 'value' => NULL],\n"
+			. "])));\n"
+			. "\$GLOBALS['pfb_test_valid_pids'] = ['/var/run/pfb_dns_proxy.pid' => TRUE];\n"
 			. "\$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];\n"
 			. "\$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string \$path, int \$generation): void {\n"
 			. "\tif (\$path === " . var_export($sentinel, TRUE) . ") {\n"

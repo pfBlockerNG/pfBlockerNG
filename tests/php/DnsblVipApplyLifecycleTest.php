@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -19,8 +21,9 @@ define('PFB_VIP_APPLY_PFB_BASELINE', $GLOBALS['pfb']);
  *   - the boot / install resync serves (or tears down) through pfb_create_dnsbl() only for an enabled
  *     package with DNSBL on and the resolver on.
  *
- * The pass runs for real on a temp tree. Doubles: pfSense services (recorded), the resolver process (a
- * flag), the resolver start (suppressed by the bootstrap). The pass log is the clock: the line
+ * The pass runs for real on a temp tree. Doubles: pfSense services (recorded; a DNS proxy asked to start serves), the resolver
+ * process (a flag; "up" also means pfB-DNS owns the Resolver, so the DNS proxy hosts the module and a finished reload converges:
+ * Unbound never hosts it, issue #3770), the resolver start (suppressed by the bootstrap). The pass log is the clock: the line
  * "DNSBL update [ feed lines" is written once the resolver reload has finished.
  */
 #[CoversFunction('sync_package_pfblockerng')]
@@ -29,6 +32,12 @@ define('PFB_VIP_APPLY_PFB_BASELINE', $GLOBALS['pfb']);
 #[CoversFunction('pfb_sync_receive_suppressed')]
 final class DnsblVipApplyLifecycleTest extends TestCase
 {
+	use DnsProxyReadySeedTrait;
+
+	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
+	private const CONF_WITH_OBSERVER = "server:\n\tinterface: 127.0.0.1\n\tmodule-config: \"python validator iterator\"\n\npython:\npython-script: pfb_upstream_observer.py\n";
+	private const PROXY_BLOCK = "server:\n# pfBlockerNG DNS proxy\nport: 5354\ninterface: 127.0.0.1@5353\ninterface: ::1@5353\n"
+		. "proxy-protocol-port: 5353\nedns-buffer-size: 1432\n# end pfBlockerNG DNS proxy";
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	private const RELOAD_DONE = 'DNSBL update [ feed lines';
 	private const VIP_WRITE = 'pfBlockerNG: saving DNSBL auto-VIP changes';
@@ -60,14 +69,28 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 		$GLOBALS['pfb_test_service_hook']       = function (string $function, string $service): void {
 			$this->serviceEvents[] = [$function, $service, $this->reloadFinished()];
+			// A proxy asked to (re)start serves at once, as the real one does once it is ready
+			if ($service === 'pfb_dns_proxy' && in_array($function, ['start_service', 'restart_service'], TRUE)) {
+				$this->proxyServes();
+				$this->seedRunningGateway();
+			}
 		};
 		$GLOBALS['pfb_test_write_config_hook']  = function (string $description): void {
 			$this->configWrites[] = [$description, $this->reloadFinished()];
 		};
+		// The Resolver pfB-DNS took over listened on lan: configured, up and addressed, so a healthy proxy start has no warning to report
+		$GLOBALS['pfb_test_valid_pids'] = [];
+		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1'];
+		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE]];
+		$GLOBALS['pfb_test_interfaces'] = ['lan' => ''];
+		$this->clearProxyFiles();
+		$this->setUpUpstreamFixture();
 	}
 
 	protected function tearDown(): void
 	{
+		$this->tearDownUpstreamFixture();
+		$this->clearProxyFiles();
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
 				$GLOBALS[$name] = $value;
@@ -172,11 +195,42 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			touch($GLOBALS['pfb']['dnsbl_cert']);
 		}
 
-		// Unbound never loads pfb_unbound.py (issue #3770), so the conf carries no python-script line for pfb_unbound_dnsbl() to
-		// strip on every pass; pfb_unbound_py_module_wired() still reads the module's name from this file until the host predicates
-		// follow the DNS proxy (the comment line is what it finds). Whether the resolver is up decides if a finished reload converged.
-		file_put_contents("{$dir}/unbound.conf", "# pfb_unbound.py\n");
-		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess($o['up']);
+		// Unbound never hosts the DNSBL module (issue #3770); the DNS proxy does while pfB-DNS owns the Resolver. Whether the resolver
+		// is up decides if a stop/start of Unbound completes, and whether pfB-DNS hosts decides if a finished reload converged.
+		file_put_contents("{$dir}/unbound.conf", "server:\n");
+		$this->resolverUp($o['up'] && $o['unbound']);
+	}
+
+	/** The resolver process and, with it, pfB-DNS hosting the module: both up, or neither (a finished reload converges only if both are). */
+	private function resolverUp(bool $up): void
+	{
+		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess($up);
+		if (!$up) {
+			// pfB-DNS never took the Resolver: nothing hosts the module
+			PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+			if (isset($GLOBALS['config']['unbound'])) {
+				$GLOBALS['config']['unbound'] = ['enable' => ''];
+			}
+			config_set_path(self::SAVED, '');
+			file_put_contents("{$this->dir}/unbound.conf", "server:\n");
+			$this->clearProxyFiles();
+			return;
+		}
+		// pfB-DNS took the Resolver (the snapshot, the moved Resolver with the observer) and its proxy serves
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::On);
+		$GLOBALS['config']['unbound'] = [
+			'enable' => '', 'active_interface' => 'lo0', 'custom_options' => base64_encode(self::PROXY_BLOCK),
+			'python' => '', 'python_order' => 'pre_validator', 'python_script' => 'pfb_upstream_observer',
+		];
+		config_set_path(self::SAVED, base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl' => ['present' => FALSE, 'value' => NULL],
+			'custom_options' => ['present' => FALSE, 'value' => NULL],
+		])));
+		file_put_contents("{$this->dir}/unbound.conf", self::CONF_WITH_OBSERVER);
+		$this->seedUnbound();
+		$this->proxyServes();
+		$this->seedRunningGateway();
 	}
 
 	/** The resolver process double: never running, or running except while pfb_stop_start_unbound() restarts it (so a finished reload is converged). */
@@ -308,6 +362,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		file_put_contents("{$this->dir}/pfb_py_reload", "7\n");
 		file_put_contents("{$this->dir}/pfb_py_reload.applied", "7\n");
 		file_put_contents($GLOBALS['pfb']['unbound_py_vip'], '1');
+		pfb_global();
 		$this->assertTrue(pfb_dnsbl_converged(), 'the prior live generation starts converged');
 		$this->assertTrue($db->exec("CREATE TRIGGER refuse BEFORE DELETE ON dnsbl_group_epochs BEGIN SELECT RAISE(ABORT,'real reconciliation refusal'); END"));
 		return $db;
@@ -434,7 +489,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$db = $this->arrangeAccountingFailure(TRUE);
 		$this->runPass();
 		$this->assertTrue($db->exec('DROP TRIGGER refuse'));
-		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(FALSE);
+		$this->resolverUp(FALSE);
 		file_put_contents($GLOBALS['pfb']['log'], '');
 
 		$ok = $this->runPass();
@@ -446,7 +501,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
 		$this->assertFalse($ok);
 
-		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(TRUE);
+		$this->resolverUp(TRUE);
 		file_put_contents($GLOBALS['pfb']['log'], '');
 		$this->assertTrue($this->runPass());
 		$this->assertTrue($this->reloadFinished());
@@ -538,7 +593,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	{
 		$db = $this->arrangeUnrecordedAccountingFailure();
 		$this->assertTrue(rmdir("{$GLOBALS['pfb']['dnsbl_file']}.reload"));
-		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(FALSE);
+		$this->resolverUp(FALSE);
 		file_put_contents($GLOBALS['pfb']['log'], '');
 
 		$this->assertFalse($this->runPass());
@@ -549,7 +604,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertTrue(pfb_pending_changes());
 		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
 
-		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(TRUE);
+		$this->resolverUp(TRUE);
 		file_put_contents($GLOBALS['pfb']['log'], '');
 		$this->assertTrue($this->runPass());
 		$this->assertTrue($this->reloadFinished());
@@ -833,7 +888,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 		// WHEN pass 2 publishes nothing (a save pass) and the resolver has converged on that generation
 		$GLOBALS['pfb']['save'] = TRUE;
-		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(TRUE);
+		$this->resolverUp(TRUE);
 		$this->runPass();
 
 		// THEN the live generation answers with no VIP, so the hold is released and the web server torn down
@@ -951,7 +1006,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 		// WHEN pass 2 finds the demand ended but the resolver is not converged: the old generation still answers with the VIP
 		config_set_path('installedpackages/pfblockerngdnsbl/config/0/logging', 'disabled_log');
-		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(FALSE);
+		$this->resolverUp(FALSE);
 		$this->runPass();
 
 		// THEN the web server is held and so are the alias and rules that let clients reach it
@@ -963,7 +1018,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
 		$GLOBALS['pfb']['save'] = FALSE;
 		$this->publishTo(TRUE);
-		$GLOBALS['pfb_test_process_running']['unbound'] = self::resolverProcess(TRUE);
+		$this->resolverUp(TRUE);
 		$this->runPass();
 
 		// THEN the hold is released: the web server is torn down and the alias and rules are gone with it

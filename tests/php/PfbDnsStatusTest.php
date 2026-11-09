@@ -283,7 +283,7 @@ final class PfbDnsStatusTest extends TestCase
 			'the Resolver disabled' => [PfbToggle::On, PfbToggle::Off, 'On, but not active: the DNS Resolver is disabled'],
 			'the Resolver not moved yet, or the move refused' => [PfbToggle::On, PfbToggle::On,
 				'On, not active: the DNS Resolver has not been moved to the proxy (run an Update; if this stays, see the notices). '
-				. 'It serves clients itself, with DNSBL if that is on'],
+				. 'It serves clients itself, and DNSBL does not block until pfB-DNS is active'],
 		];
 	}
 

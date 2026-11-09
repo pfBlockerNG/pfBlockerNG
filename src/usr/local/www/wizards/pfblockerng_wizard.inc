@@ -275,6 +275,8 @@ function step4_submitphpaction() {
 	foreach ($dnsbl_section as $pfb_dnsbl_key => $pfb_dnsbl_val) {
 		$new_config['pfblockerngdnsblsettings']['config'][0][$pfb_dnsbl_key] = $pfb_dnsbl_val;
 	}
+	// DNSBL runs only through pfB-DNS: DNSBL on needs it on (the Update that follows moves the Resolver)
+	$new_config['pfblockerngdns']['config'][0]['pfb_dns']				= 'on';
 
 	// Default DNSBL Whitelist
 	// foreign section: pfblockerng_wizard/step3/suppression is a wizard temp key, not in registry

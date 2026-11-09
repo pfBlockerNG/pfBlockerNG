@@ -554,7 +554,7 @@ function pfBlockerNG_get_header($mode='') {
 		$pfb_msg = 'pfBlockerNG is Disabled.';
 	}
 
-	$unbound_validate = pfb_unbound_py_module_wired();
+	$unbound_validate = pfb_unbound_py_host_running();
 
 	// Status indicator if DNSBL is actively running
 	if ($pfb['enable'] === PfbToggle::On && $pfb['dnsbl'] === PfbToggle::On && $pfb['unbound_state'] === PfbToggle::On && $unbound_validate) {

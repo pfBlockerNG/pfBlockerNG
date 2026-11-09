@@ -4225,7 +4225,7 @@ function pfb_global() {
 	$pfb['dnsbl_top1m']	= PfbConfig::read('dnsbl/top1m_enable');							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
-	$pfb['pfb_dns']	= PfbConfig::read('dns/pfb_dns');							// [ #3515 ] pfB-DNS: experimental DNS proxy front end, with or without DNSBL (default off)
+	$pfb['pfb_dns']	= PfbConfig::read('dns/pfb_dns');							// [ #3515 ] pfB-DNS: experimental DNS proxy front end, the only host of DNSBL (default off)
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
 	// (strict); existing installs are grandfathered to 'on' by the registry pass at
@@ -15273,7 +15273,7 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive
 // marker (/var/unbound/pfb_py_reload.applied) — restoring the "lists live on return" invariant
 // the restart had. Queries NEVER stop during the wait (zero-downtime/zero-dropped). Returns
 // TRUE once applied; FALSE on timeout (in flight, not an error) or liveness loss. Default
-// liveness is the module host (Unbound, or the DNS proxy in proxy mode): the reload watcher
+// liveness is the module host (the DNS proxy): the reload watcher
 // lives inside it, so a dead host can never apply the generation (issue #3200).
 // Poll cadence (~2s) + rebuild time bound the latency; the budget decides only how long
 // this caller waits before reporting the swap still in flight.
@@ -16199,7 +16199,7 @@ function pfb_dns_proxy_block_present(): bool {
 	return in_array(PFB_DNS_PROXY_MARKER, array_map('trim', explode("\n", $custom)), TRUE);
 }
 
-/** Does pfB-DNS still own the Resolver: a valid snapshot, or our block (the proxy keeps the DNSBL module out of Unbound). */
+/** Does pfB-DNS still own the Resolver: a valid snapshot, or our block (the proxy hosts the DNSBL module). */
 function pfb_dns_proxy_owns_resolver(): bool {
 	return pfb_dns_proxy_saved() !== NULL || pfb_dns_proxy_block_present();
 }
@@ -16208,7 +16208,7 @@ function pfb_dns_proxy_owns_resolver(): bool {
  * pfB-DNS cannot say what the Resolver was before: our block with no valid snapshot, or a stored marker that is no valid
  * snapshot at all. Nothing can put the Resolver back automatically and the proxy cannot start without a snapshot; the operator
  * repairs the Resolver by hand (recovery required). A marker that is merely corrupt is no evidence that the Resolver was moved,
- * so it is not ownership: pfb_dns_proxy_owns_resolver() decides where Unbound loads the DNSBL module and stays as it is.
+ * so it is not ownership: pfb_dns_proxy_owns_resolver() decides whether the proxy hosts the DNSBL module and stays as it is.
  */
 function pfb_dns_proxy_recovery_required(): bool {
 	return pfb_dns_proxy_saved() === NULL && (pfb_dns_proxy_block_present() || PfbConfig::read('dns/pfb_dns_saved') !== '');
@@ -16305,7 +16305,7 @@ function pfb_dns_status(): array {
 			$mode = 'On, but not active: the DNS Resolver is disabled';
 		} else {
 			$mode = 'On, not active: the DNS Resolver has not been moved to the proxy (run an Update; if this stays, see the notices). ' .
-			    'It serves clients itself, with DNSBL if that is on';
+			    'It serves clients itself' . ($dnsbl ? ', and DNSBL does not block until pfB-DNS is active' : '');
 		}
 		return [
 			'service'    => 'Not in use',
@@ -16962,8 +16962,8 @@ function pfb_dns_proxy_acl_networks(): array {
 
 /**
  * What a pfB-DNS takeover that did not happen means, for a notice. The proxy fronts the Resolver iff a moved-Resolver
- * snapshot exists (pfb_unbound_python() and pfb_unbound_dnsbl() decide the module by it): with one the proxy keeps serving
- * the Resolver it moved earlier; without one the Resolver is unchanged and, DNSBL being on, keeps the DNSBL module.
+ * snapshot exists (pfb_unbound_python() and pfb_unbound_dnsbl() decide the observer by it): with one the proxy keeps serving
+ * the Resolver it moved earlier; without one the Resolver is unchanged and, DNSBL being on, DNSBL does not block (only pfB-DNS hosts it).
  */
 function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
 	if ($fronted) {
@@ -16975,10 +16975,10 @@ function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
 		    : 'pfB-DNS is not active, and recovery is required: the saved copy of the DNS Resolver\'s previous settings is invalid, so what they were cannot be confirmed. ' .
 		      'The Resolver and the saved value were left as they are and nothing was put back; manual repair is required: check the Resolver in Services > DNS Resolver ' .
 		      '(restore a known-good configuration backup if needed), and empty pfb_dns_saved in the pfblockerngdns section of config.xml only after that check. To start pfB-DNS again, turn it on and apply to regenerate its service script.' .
-		      (pfb_dnsbl_active() ? ' DNSBL keeps running in the DNS Resolver as before.' : '');
+		      (pfb_dnsbl_active() ? ' DNSBL does not block until pfB-DNS is active.' : '');
 	}
 	return 'pfB-DNS is not active and the DNS Resolver is unchanged' .
-	    (pfb_dnsbl_active() ? ': DNSBL keeps running in the DNS Resolver as before.' : '.');
+	    (pfb_dnsbl_active() ? ': DNSBL does not block until pfB-DNS is active.' : '.');
 }
 
 /** The DNS proxy's loopback port (5353 or 5354) that the Resolver's Listen Port takes, or NULL when it takes neither. */
@@ -17131,7 +17131,7 @@ function pfb_dns_proxy_stand_down(): bool {
  * exactly one complete block (a partial or repeated pair is never cut); values that cannot be stored verbatim; our
  * block with no snapshot (never snapshot moved values as the "previous" ones); or a stored marker that is no valid snapshot
  * (kept as it is: only an empty marker means never moved, loopback or not). A refused move stores no snapshot, so
- * DNSBL keeps its module in Unbound (pfb_unbound_python(), pfb_unbound_dnsbl()).
+ * Unbound runs no pfBlockerNG python and DNSBL does not block until a move succeeds (pfb_unbound_python(), pfb_unbound_dnsbl()).
  *
  * OFF restores the Resolver. It takes the config lock below and reads config.xml afresh first, whatever this process's copy
  * says (that copy can predate a takeover another apply made, and a restore that trusted it would leave the Resolver moved), and only then stops the
@@ -18132,37 +18132,11 @@ function pfb_stop_start_unbound($type) {
 }
 
 
-// ADR-10: is the Python DNSBL runtime the LIVE resolver mode? The zero-downtime swap only applies when the
-// in-memory matcher (pfb_unbound.py) is the active blocklist source: Unbound's python keys in config.xml
-// (the source of truth, not a generated file) or, issue #3515, the DNS proxy hosting it (Resolver snapshot, DNSBL on).
-function pfb_unbound_py_mode_active() {
-	return (config_path_enabled('unbound', 'python') &&
-		config_get_path('unbound/python_script') == 'pfb_unbound') ||
-		pfb_dns_proxy_hosts_module();
-}
-
-// issue #3515: liveness of the process hosting the DNSBL module -- the DNS proxy in proxy mode, else Unbound.
+// issue #3770: liveness of the process hosting the DNSBL module. Only the DNS proxy hosts it, and only while it owns the
+// Resolver with DNSBL on; Unbound never does, whatever its process, its unbound.conf or its python keys say. The dashboard
+// widget shares it.
 function pfb_unbound_py_host_running(): bool {
-	return pfb_dns_proxy_hosts_module() ? pfb_dns_proxy_running() : is_process_running('unbound');
-}
-
-// Is the module wired into its host? Proxy mode: the proxy loads it itself, so wired == running.
-// Otherwise unbound.conf must reference pfb_unbound.py. Shared with the dashboard widget.
-function pfb_unbound_py_module_wired(): bool {
-	global $pfb;
-
-	if (pfb_dns_proxy_hosts_module()) {
-		return pfb_dns_proxy_running();
-	}
-
-	$unbound_conf = "{$pfb['dnsbldir']}/unbound.conf";
-	if (!file_exists($unbound_conf)) {
-		return FALSE;
-	}
-	// @-suppressed: a TOCTOU race (deleted/unreadable between the check above and here)
-	// returns FALSE, not a string -- strpos(FALSE, ...) is a PHP 8+ TypeError otherwise.
-	$conf_contents = @file_get_contents($unbound_conf);
-	return $conf_contents !== FALSE && strpos($conf_contents, 'pfb_unbound.py') !== FALSE;
+	return pfb_dns_proxy_hosts_module() && pfb_dns_proxy_running();
 }
 
 /*
@@ -18321,8 +18295,7 @@ function pfb_dnsbl_manifest_missing(array $pfb): bool {
 
 // ADR-61: is DNSBL's live matcher state actually caught up with what it was told to
 // become? TRUE iff the sentinel/applied generations agree (or neither has ever been
-// written), the module host is running, and the module is wired in
-// (pfb_unbound_py_host_running(), pfb_unbound_py_module_wired()). Pure
+// written) and the module host is running (pfb_unbound_py_host_running()). Pure
 // read -- no writes, no waiting/polling. Reused by pfb_reload_unbound()'s own
 // apply-stage writer/clearer and by the tick reconciliation step.
 function pfb_dnsbl_converged(): bool {
@@ -18334,7 +18307,7 @@ function pfb_dnsbl_converged(): bool {
 		return FALSE;
 	}
 
-	return pfb_unbound_py_host_running() && pfb_unbound_py_module_wired();
+	return pfb_unbound_py_host_running();
 }
 
 // ADR-61: the DNSBL apply-stage writer/clearer decision, shared by every point in
@@ -18348,10 +18321,11 @@ function pfb_dnsbl_apply_ledger_update(): bool {
 	if ($converged) {
 		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
 	} else {
-		// issue #3515: in proxy mode the module host is the DNS proxy, not Unbound
-		$host = pfb_dns_proxy_hosts_module() ? 'the DNS proxy is' : 'Unbound';
+		// issue #3770: DNSBL runs only through pfB-DNS, so while pfB-DNS is requested but not active nothing blocks
 		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply',
-			"DNSBL apply not converged -- {$host} not fully live with pfb_unbound.py; see error.log",
+			pfb_dns_proxy_hosts_module()
+			    ? 'DNSBL apply not converged -- the DNS proxy is not fully live with pfb_unbound.py; see error.log'
+			    : 'DNSBL is not blocking: pfB-DNS is not active yet (see the pfB-DNS status and the notices)',
 			$pfb['dbdir']);
 	}
 	return $converged;
@@ -18361,13 +18335,12 @@ function pfb_dnsbl_apply_ledger_update(): bool {
 // A full Unbound restart (pfb_stop_start_unbound(): a real ~30s stop-wait plus an
 // actual daemon restart) is deliberately out of scope for a per-tick retry -- only
 // re-publishes the reload sentinel (one atomic file write, no wait_applied poll,
-// no restart), and only when a live python-mode watcher could actually consume
+// no restart), and only when the DNS proxy hosting the module is live to consume
 // it; otherwise nothing safe/cheap is left to try, so the entry just stays open.
 function pfb_dnsbl_apply_retry(): void {
 	global $pfb;
 
 	if (!pfb_dnsbl_converged()
-	    && pfb_unbound_py_mode_active()
 	    && pfb_unbound_py_host_running()
 	    && empty($pfb['dnsbl_python_unmount'])
 	    && !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
@@ -18398,8 +18371,8 @@ function pfb_dnsbl_manifest_failure_notice(): bool {
 }
 
 // Reload Resolver. ADR-10: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
-// custom-list edit) already published atomically to the manifest. When python is live, its host
-// (Unbound, or the DNS proxy) is running, no config change is pending, and the RAM gate fits, this
+// custom-list edit) already published atomically to the manifest. When the DNS proxy hosts the module (pfB-DNS)
+// and runs, no config change is pending, and the RAM gate fits, this
 // takes the ZERO-DOWNTIME fast path (flip the reload sentinel, no restart). Any other case falls back to the restart
 // (fail-safe; PHP is the PRIMARY gate — never "flip and hope"). Returns TRUE only after the
 // applied-generation handshake; FALSE = restart fallback (resolver broken) OR unconfirmed-
@@ -18418,13 +18391,12 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 	}
 
 	// ZERO-DOWNTIME DATA FAST PATH (no restart). Eligible iff this is a data-only update
-	// in the live python mode, its host (Unbound or the DNS proxy) is up, NO config change is staged (a pending
+	// while the DNS proxy hosts the module and is up, NO config change is staged (a pending
 	// unbound.tmp or an unmount-in-progress means the resolver config changed -> restart),
 	// and the primary RAM gate says the ~2x transient build fits. Otherwise fall through
 	// to the restart path below (also the fallback when the swap is unavailable).
 	if ($datapath &&
 	    $mode == 'enabled' &&
-	    pfb_unbound_py_mode_active() &&
 	    pfb_unbound_py_host_running() &&
 	    empty($pfb['dnsbl_python_unmount']) &&
 	    !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
@@ -18579,7 +18551,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 	// issue #3515: the proxy hosts the module and re-reads lists and ini only when it boots, so it restarts with
 	// the Resolver (the zero-downtime swap returns above and never gets here). A disabled pass gives the Resolver back.
 	// restart_service() returns before the new proxy serves, which the ledger below depends on: wait for it to be READY,
-	// and a proxy that is not rolls the activation back (the Resolver, the module and Unbound as before), which the
+	// and a proxy that is not rolls the activation back (the Resolver and Unbound as before), which the
 	// reload that rollback runs does not repeat: the restore consumed the snapshot this condition reads.
 	// Under a package operation a running proxy keeps serving and the restart is deferred to the next update (issue #3566); a dead one is started.
 	if ($mode == 'enabled' && pfb_dns_proxy_saved() !== NULL) {
@@ -18764,7 +18736,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// ADR-65: the manifest is Python's sole DNSBL source now -- surface a fail-loud
 	// parse-stage ledger entry (absent/unparseable/build-failed manifest) here, the
 	// same per-update-pass cadence the MaxMind/VIP notices already use.
-	if (pfb_unbound_py_mode_active()) {
+	if (pfb_dns_proxy_hosts_module()) {
 		pfb_dnsbl_manifest_failure_notice();
 	}
 

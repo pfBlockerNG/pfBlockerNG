@@ -9,21 +9,17 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- in proxy mode (the Resolver is moved aside: pfb_dns_proxy_saved() !== NULL) the
- * DNSBL module lives in the DNS proxy process, not in Unbound. Every "is the Python DNSBL runtime
- * active / alive / wired" decision must follow the module host, so data swaps, ADR-61 retries and
- * the manifest notice take the zero-downtime path against the proxy; outside proxy mode the
- * Unbound-process answers are unchanged.
+ * issue #3515, #3770 -- the DNSBL module lives in the DNS proxy process while pfB-DNS owns the Resolver (the Resolver is moved
+ * aside: pfb_dns_proxy_saved() !== NULL) and DNSBL is on; Unbound never hosts it. Every "is the Python DNSBL runtime alive"
+ * decision must follow the module host, so data swaps, ADR-61 retries and the manifest notice take the zero-downtime path
+ * against the proxy and never against Unbound.
  *
- * Each row names its mode. A proxy-mode row keeps the Unbound process in the OPPOSITE state to the
- * proxy (and unbound.conf without pfb_unbound.py), so a verdict that still consults Unbound fails.
- * A non-proxy row leaves the proxy pidfile in the opposite state to Unbound, so a verdict that
- * consults the pidfile fails.
+ * Each row names its mode. A proxy-mode row keeps the Unbound process in the OPPOSITE state to the proxy (and unbound.conf
+ * without pfb_unbound.py), so a verdict that still consults Unbound fails. A non-proxy row leaves the proxy pidfile in the
+ * opposite state to Unbound, so a verdict that consults either one fails.
  */
 #[CoversFunction('pfb_dns_proxy_running')]
-#[CoversFunction('pfb_unbound_py_mode_active')]
 #[CoversFunction('pfb_unbound_py_host_running')]
-#[CoversFunction('pfb_unbound_py_module_wired')]
 #[CoversFunction('pfb_dnsbl_converged')]
 #[CoversFunction('pfb_dnsbl_apply_retry')]
 #[CoversFunction('pfb_unbound_py_wait_applied')]
@@ -229,32 +225,8 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// P1 -- pfb_unbound_py_mode_active()
+	// P1 -- pfb_unbound_py_host_running(): with DNSBL off the proxy hosts nothing
 	// -----------------------------------------------------------------------
-
-	/** @return array<string, array{bool, bool, bool}> Unbound python keys, proxy snapshot, expected */
-	public static function modeActiveRows(): array
-	{
-		return [
-			'python keys only (Unbound hosts the module)' => [TRUE, FALSE, TRUE],
-			'proxy snapshot only (the proxy hosts the module)' => [FALSE, TRUE, TRUE],
-			'keys and snapshot both present' => [TRUE, TRUE, TRUE],
-			'neither: the runtime is not active' => [FALSE, FALSE, FALSE],
-		];
-	}
-
-	#[DataProvider('modeActiveRows')]
-	public function testPythonRuntimeIsActiveWhenEitherUnboundKeysOrTheProxySnapshotHostTheModule(
-		bool $keys,
-		bool $proxy,
-		bool $expected
-	): void {
-		$this->setPythonKeys($keys);
-		$this->setProxyMode($proxy);
-
-		$this->assertSame($expected, pfb_unbound_py_mode_active(),
-			'keys=' . var_export($keys, TRUE) . ' snapshot=' . var_export($proxy, TRUE));
-	}
 
 	/** @return array<string, array{bool}> proxy pid valid */
 	public static function proxyPidRows(): array
@@ -263,7 +235,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	}
 
 	#[DataProvider('proxyPidRows')]
-	public function testWithDnsblOffAMovedResolverIsNotTheDnsblRuntimeAndUnboundIsTheHost(bool $proxyUp): void
+	public function testWithDnsblOffAMovedResolverHasNoModuleHostWhateverTheProxyAndUnboundDo(bool $proxyUp): void
 	{
 		// Given pfB-DNS fronting Unbound (a snapshot) with DNSBL off: the proxy only forwards and hosts no module.
 		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
@@ -272,23 +244,10 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->setProxyUp($proxyUp);
 		$this->setUnboundUp(TRUE);
 
-		// Then no DNSBL runtime is active, and the process to ask about is Unbound, whatever the proxy's pid says.
-		$this->assertFalse(pfb_unbound_py_mode_active());
-		$this->assertTrue(pfb_unbound_py_host_running());
+		// Then nothing hosts the module: neither the proxy's pid nor a live Unbound stands in for one.
+		$this->assertFalse(pfb_unbound_py_host_running());
 		$this->setUnboundUp(FALSE);
-		$this->assertFalse(pfb_unbound_py_host_running(), 'the proxy pid cannot stand in for Unbound');
-	}
-
-	public function testWithDnsblOffAMovedResolverIsNeverModuleWiredByTheProxyPid(): void
-	{
-		// Given pfB-DNS fronting Unbound with DNSBL off, the proxy up, and a conf without the module.
-		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
-		$this->setProxyMode(TRUE);
-		$this->setProxyUp(TRUE);
-		$this->writeUnboundConf(FALSE);
-
-		// Then the module is not wired: nothing hosts it, a live proxy does not mean it is.
-		$this->assertFalse(pfb_unbound_py_module_wired());
+		$this->assertFalse(pfb_unbound_py_host_running());
 	}
 
 	// -----------------------------------------------------------------------
@@ -312,7 +271,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	}
 
 	#[DataProvider('hostRunningRows')]
-	public function testModuleHostIsTheProxyInProxyModeAndUnboundOtherwise(
+	public function testModuleHostIsTheProxyWhenItOwnsTheResolverAndNeverUnbound(
 		bool $proxyMode,
 		bool $pidValid,
 		bool $unboundUp
@@ -321,12 +280,12 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->setProxyUp($pidValid);
 		$this->setUnboundUp($unboundUp);
 
-		$expected = $proxyMode ? $pidValid : $unboundUp;
+		$expected = $proxyMode && $pidValid;
 		$this->assertSame($expected, pfb_unbound_py_host_running());
 	}
 
 	// -----------------------------------------------------------------------
-	// P3 -- pfb_dnsbl_converged() and pfb_unbound_py_module_wired()
+	// P3 -- pfb_dnsbl_converged()
 	// -----------------------------------------------------------------------
 
 	public function testProxyModeConvergesOnTheProxyPidAloneNotOnUnboundNorItsConf(): void
@@ -367,50 +326,9 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->assertTrue(pfb_dnsbl_converged(), 'the same box converges once the generations agree');
 	}
 
-	public function testWithoutTheProxyConvergenceStillNeedsUnboundAndItsConfAndIgnoresTheProxyPid(): void
-	{
-		$this->setProxyMode(FALSE);
-		$this->setPythonKeys(TRUE);
-		$this->writeGenerations(3, 3);
-		$this->setProxyUp(TRUE);
-
-		$this->writeUnboundConf(TRUE);
-		$this->setUnboundUp(FALSE);
-		$this->assertFalse(pfb_dnsbl_converged(), 'a live proxy pid cannot stand in for a dead Unbound');
-
-		$this->setUnboundUp(TRUE);
-		$this->assertTrue(pfb_dnsbl_converged(), 'Unbound up and wired converges');
-
-		$this->writeUnboundConf(FALSE);
-		$this->assertFalse(pfb_dnsbl_converged(), 'a live proxy pid cannot stand in for the pfb_unbound.py wiring');
-	}
-
-	public function testWiringIsTheProxyPidInProxyModeAndTheConfOtherwise(): void
-	{
-		$this->setProxyMode(TRUE);
-		$this->writeUnboundConf(FALSE);
-		$this->setProxyUp(TRUE);
-		$this->assertTrue(pfb_unbound_py_module_wired(), 'proxy mode, proxy up, conf without pfb_unbound.py');
-		$this->writeUnboundConf(TRUE);
-		$this->setProxyUp(FALSE);
-		$this->assertFalse(pfb_unbound_py_module_wired(), 'proxy mode, proxy down, conf with pfb_unbound.py');
-	}
-
-	public function testWiringOutsideProxyModeReadsTheConfAndHandlesAMissingOne(): void
-	{
-		$this->setProxyMode(FALSE);
-		$this->setProxyUp(TRUE);
-
-		$this->assertFalse(pfb_unbound_py_module_wired(), 'no unbound.conf: not wired');
-		$this->writeUnboundConf(FALSE);
-		$this->assertFalse(pfb_unbound_py_module_wired(), 'conf without pfb_unbound.py: not wired');
-		$this->writeUnboundConf(TRUE);
-		$this->assertTrue(pfb_unbound_py_module_wired(), 'conf with pfb_unbound.py: wired');
-	}
-
 	// The observer (pfb_upstream_observer.py) is the python module Unbound runs in proxy mode while it forwards. It
 	// reports upstream answers to the proxy and never decides a block: its presence must not read as the DNSBL
-	// module being active or wired in Unbound.
+	// module being hosted by Unbound.
 
 	private function writeUnboundConfWithObserver(): void
 	{
@@ -420,37 +338,29 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		);
 	}
 
-	public function testTheObserversPythonKeysAloneDoNotMakeThePythonRuntimeActive(): void
+	public function testTheObserversPythonKeysAloneDoNotMakeUnboundTheModuleHost(): void
 	{
-		// Given Unbound's python keys naming the observer and no proxy snapshot (a stale state before the next apply)
+		// Given Unbound up and loading the observer (python keys and conf), no proxy snapshot (a stale state before the next apply)
 		$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => '', 'python_script' => 'pfb_upstream_observer', 'python_order' => 'pre_validator'];
 		$this->setProxyMode(FALSE);
-
-		// Then the DNSBL runtime is not active: the swap and the retries must not target a module nobody hosts
-		$this->assertFalse(pfb_unbound_py_mode_active());
-	}
-
-	public function testTheObserverInUnboundConfDoesNotMakeTheModuleWiredOutsideProxyMode(): void
-	{
-		$this->setProxyMode(FALSE);
 		$this->setProxyUp(TRUE);
+		$this->setUnboundUp(TRUE);
 		$this->writeUnboundConfWithObserver();
 
-		$this->assertFalse(pfb_unbound_py_module_wired(), 'unbound.conf names the observer, not pfb_unbound.py');
+		// Then nothing hosts the module: the swap and the retries must not target a module nobody hosts
+		$this->assertFalse(pfb_unbound_py_host_running());
 	}
 
-	public function testInProxyModeTheWiringFollowsTheProxyWhateverUnboundConfRunsAsItsPythonScript(): void
+	public function testInProxyModeTheHostFollowsTheProxyWhateverUnboundConfRunsAsItsPythonScript(): void
 	{
 		$this->setProxyMode(TRUE);
 		$this->writeUnboundConfWithObserver();
 		$GLOBALS['config']['unbound'] = ['enable' => '', 'python' => '', 'python_script' => 'pfb_upstream_observer', 'python_order' => 'pre_validator'];
 
 		$this->setProxyUp(FALSE);
-		$this->assertFalse(pfb_unbound_py_module_wired(), 'proxy down: not wired, though Unbound loads the observer');
-		$this->assertTrue(pfb_unbound_py_mode_active(), 'the proxy still hosts the module');
+		$this->assertFalse(pfb_unbound_py_host_running(), 'proxy down: no host, though Unbound loads the observer');
 		$this->setProxyUp(TRUE);
-		$this->assertTrue(pfb_unbound_py_module_wired(), 'proxy up: wired, though the conf has no pfb_unbound.py');
-		$this->assertSame(TRUE, pfb_unbound_py_host_running());
+		$this->assertTrue(pfb_unbound_py_host_running(), 'proxy up: the host, though the conf has no pfb_unbound.py');
 	}
 
 	// -----------------------------------------------------------------------
@@ -463,7 +373,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		return [
 			'proxy mode, proxy up, Unbound down: re-flips' => [TRUE, TRUE, FALSE, TRUE],
 			'proxy mode, proxy down, Unbound up: nothing could consume it' => [TRUE, FALSE, TRUE, FALSE],
-			'no proxy, Unbound up, proxy pid dead: re-flips' => [FALSE, FALSE, TRUE, TRUE],
+			'no proxy, Unbound up, proxy pid dead: Unbound is no module host' => [FALSE, FALSE, TRUE, FALSE],
 			'no proxy, Unbound down, proxy pid live: nothing could consume it' => [FALSE, TRUE, FALSE, FALSE],
 		];
 	}
@@ -542,7 +452,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		$this->assertFileDoesNotExist("{$this->dir}/pfb_py_reload",
-			'Unbound is the module host here: a live proxy pid must not open the zero-downtime path');
+			'pfB-DNS does not own the Resolver: a live proxy pid must not open the zero-downtime path');
 		$this->assertGreaterThan($starts, $this->startAttempts(), 'the restart path ran');
 	}
 
@@ -621,23 +531,28 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 		$this->assertSame(0, $unboundProbes, 'the Unbound process is not the consumer in proxy mode');
 	}
 
-	public function testWithoutTheProxyTheWaitFollowsUnboundAndNeverAsksTheProxyPid(): void
+	public function testWithoutTheProxyTheWaitGivesUpAtOnceAndAsksNeitherUnboundNorTheProxyPid(): void
 	{
 		$this->setProxyMode(FALSE);
 		$this->writeGenerations(1, 0);
-		$this->setUnboundUp(FALSE);
+		$unboundProbes = 0;
+		$this->setUnboundUp(static function () use (&$unboundProbes): bool {
+			$unboundProbes++;
+			return TRUE;
+		});
 		$proxyProbes = 0;
 		$this->setProxyUp(static function () use (&$proxyProbes): bool {
 			$proxyProbes++;
 			return TRUE;
 		});
 
-		$this->assertFalse(pfb_unbound_py_wait_applied(1, 1), 'a dead Unbound can never apply the generation');
-		$this->assertSame(0, $proxyProbes, 'the proxy pid is not the consumer outside proxy mode');
+		$this->assertFalse(pfb_unbound_py_wait_applied(1, 1), 'nothing hosts the module, so nothing can apply the generation');
+		$this->assertSame(0, $unboundProbes, 'the Unbound process is never the consumer');
+		$this->assertSame(0, $proxyProbes, 'the proxy pid is not the consumer when pfB-DNS does not own the Resolver');
 	}
 
 	// -----------------------------------------------------------------------
-	// P8 -- callers that gate on pfb_unbound_py_mode_active()
+	// P8 -- callers that gate on pfb_dns_proxy_hosts_module()
 	// -----------------------------------------------------------------------
 
 	/** @return array<string, array{bool, bool, int}> proxy mode, python keys, notices expected */
@@ -645,13 +560,13 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	{
 		return [
 			'proxy mode (keys absent)' => [TRUE, FALSE, 1],
-			'python keys (no proxy)' => [FALSE, TRUE, 1],
+			'python keys (no proxy): Unbound hosts no module' => [FALSE, TRUE, 0],
 			'neither: no manifest contract to report' => [FALSE, FALSE, 0],
 		];
 	}
 
 	#[DataProvider('manifestNoticeRows')]
-	public function testAnUpdatePassReportsAFailedManifestWheneverTheModuleIsHostedAnywhere(
+	public function testAnUpdatePassReportsAFailedManifestOnlyWhileTheProxyHostsTheModule(
 		bool $proxyMode,
 		bool $keys,
 		int $notices

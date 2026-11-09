@@ -107,3 +107,16 @@ def test_pfb_dns_page_refuses_pfb_dns_off_while_dnsbl_is_on(webui: WebUI, smoke_
             "a refused save must leave DNSBL and pfB-DNS On"
         )
         assert _write_state(vm) == before, "a refused save changed config.xml or a pending/apply marker"
+
+
+def test_dnsbl_page_note_says_dnsbl_runs_in_pfb_dns(webui: WebUI) -> None:
+    """When the DNSBL page renders, Then its note says DNSBL runs in pfB-DNS in front of the Resolver."""
+    body = webui.get(DNSBL_PAGE).text
+
+    assert (
+        "DNSBL runs in pfB-DNS, in front of the DNS Resolver (Unbound), so both must be used as the DNS service."
+        in body
+    ), "the DNSBL note must say DNSBL runs in pfB-DNS in front of the Resolver"
+    assert "DNSBL requires the DNS Resolver (Unbound) to be used as the DNS service." not in body, (
+        "the old note, which names the Resolver alone, is still rendered"
+    )

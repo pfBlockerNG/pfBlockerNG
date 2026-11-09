@@ -7355,7 +7355,7 @@ function pfblockerng_tick(
 	// (issue #331) while the stored setting still says enabled.
 	$manifest_due = $runtime_ready && $runtime_model !== NULL && $runtime_model['scheduled']
 		&& ($pfb['dnsbl'] ?? PfbToggle::Off) === PfbToggle::On
-		&& pfb_unbound_py_mode_active()
+		&& pfb_dns_proxy_hosts_module()
 		&& $manifest_path !== '' && !file_exists($manifest_path);
 	$scheduled_due = $runtime_ready && $cache_ready && $runtime_model !== NULL
 		&& $runtime_model['scheduled'] && $cron_due;

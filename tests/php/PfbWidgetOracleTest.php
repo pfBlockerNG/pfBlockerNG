@@ -55,13 +55,14 @@ final class PfbWidgetOracleTest extends TestCase
 			throw new RuntimeException('test bootstrap: failed to read pfblockerng.widget.php');
 		}
 
+		$start = strpos($src, "\tif (\$pfb['enable'] === PfbToggle::On) {");
+		$end = strpos($src, "\t\$stats = array();", $start === false ? 0 : $start);
+		if ($start === false || $end === false || $end <= $start) {
+			throw new RuntimeException('test bootstrap: icon-status block not found in widget source');
+		}
+		self::$iconRegion = substr($src, $start, $end - $start);
+		// PfbWidgetDnsblHostTest defines the same function from the same block: whichever class runs first does it
 		if (!function_exists('pfb_widget_oracle_status')) {
-			$start = strpos($src, "\tif (\$pfb['enable'] === PfbToggle::On) {");
-			$end = strpos($src, "\t\$stats = array();", $start === false ? 0 : $start);
-			if ($start === false || $end === false || $end <= $start) {
-				throw new RuntimeException('test bootstrap: icon-status block not found in widget source');
-			}
-			self::$iconRegion = substr($src, $start, $end - $start);
 			eval(
 				'function pfb_widget_oracle_status(array $pfb): array { ' . self::$iconRegion
 				. ' return [$pfb_status, $pfb_msg, $dnsbl_status, $dnsbl_msg]; }'
@@ -106,9 +107,8 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->savedPfb = $GLOBALS['pfb'] ?? null;
 		$this->hadConfig   = array_key_exists('config', $GLOBALS);
 		$this->savedConfig = $GLOBALS['config'] ?? null;
-		// The widget's wiring check (pfb_unbound_py_module_wired()) reads the GLOBAL $pfb, not the
-		// eval-extracted function's parameter, so point it at the same fixture directory.
-		$GLOBALS['pfb']['dnsbldir'] = $this->dir;
+		// The widget's host check (pfb_unbound_py_host_running()) reads the GLOBAL $pfb, not the eval-extracted function's
+		// parameter: enterProxyMode() sets that one.
 	}
 
 	protected function tearDown(): void
@@ -248,12 +248,11 @@ final class PfbWidgetOracleTest extends TestCase
 	// (b) DNSBL icon — each "is it live" gate, individually off -> red.
 	// -----------------------------------------------------------------------
 
-	/** A baseline $pfb that is fully "live" for the DNSBL check, no open entries. */
+	/** A baseline $pfb that is fully "live" for the DNSBL check, no open entries: the DNS proxy hosts the module and runs. */
 	private function liveDnsblPfb(): array
 	{
-		$pfb = $this->basePfb();
-		$this->writeUnboundConf(TRUE);
-		return $pfb;
+		$this->enterProxyMode(true);
+		return $this->basePfb();
 	}
 
 	public function testDnsblEnableOffIsRed(): void
@@ -281,26 +280,6 @@ final class PfbWidgetOracleTest extends TestCase
 	{
 		$pfb = $this->liveDnsblPfb();
 		$pfb['unbound_state'] = PfbToggle::Off;
-
-		[, , $status] = pfb_widget_oracle_status($pfb);
-
-		$this->assertSame(self::ICON_RED, $status);
-	}
-
-	public function testDnsblUnboundConfMissingPyReferenceIsRed(): void
-	{
-		$pfb = $this->liveDnsblPfb();
-		$this->writeUnboundConf(FALSE);	// present, but no pfb_unbound.py reference
-
-		[, , $status] = pfb_widget_oracle_status($pfb);
-
-		$this->assertSame(self::ICON_RED, $status);
-	}
-
-	public function testDnsblUnboundConfAbsentIsRed(): void
-	{
-		$pfb = $this->liveDnsblPfb();
-		unlink($this->dir . '/unbound.conf');
 
 		[, , $status] = pfb_widget_oracle_status($pfb);
 

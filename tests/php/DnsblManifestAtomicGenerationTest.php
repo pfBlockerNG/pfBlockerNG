@@ -15,11 +15,15 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 	private string $tmp;
 	private array $originalPfb = [];
 	private bool $hadPfb = FALSE;
+	private array $originalConfig = [];
+	private bool $hadConfig = FALSE;
 
 	protected function setUp(): void
 	{
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? [];
 		$this->tmp = sys_get_temp_dir() . '/pfb_generation_' . uniqid('', TRUE);
 		mkdir("{$this->tmp}/dnsbl", 0777, TRUE);
 		mkdir("{$this->tmp}/db", 0777, TRUE);
@@ -42,7 +46,12 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		unset($GLOBALS['pfb_test_process_running']);
+		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_valid_pids']);
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
@@ -550,8 +559,15 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 		$this->assertDirectoryExists(dirname($this->manifestRaw($first)));
 		$this->assertDirectoryExists($stage);
 
-		$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];
-		file_put_contents("{$this->tmp}/unbound.conf", "python-script: /var/unbound/pfb_unbound.py\n");
+		// The DNS proxy hosts the module (pfB-DNS owns the Resolver with DNSBL on) and runs: DNSBL converges (issue #3770)
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['config'] ??= [];
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl' => ['present' => FALSE, 'value' => NULL],
+			'custom_options' => ['present' => FALSE, 'value' => NULL],
+		])));
+		$GLOBALS['pfb_test_valid_pids'] = ['/var/run/pfb_dns_proxy.pid' => TRUE];
 		$this->assertTrue(pfb_dnsbl_converged());
 		$this->assertTrue(pfb_unbound_py_gc(TRUE));
 		$this->assertDirectoryDoesNotExist(dirname($this->manifestRaw($first)));

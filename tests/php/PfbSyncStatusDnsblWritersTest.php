@@ -47,14 +47,14 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_sync_status_dnsbl_writers_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0777, TRUE);
 
-		foreach (['dnsbldir', 'dbdir', 'dnsbl_file', 'unbound_py_count', 'chroot_cmd',
+		foreach (['dnsbldir', 'dbdir', 'dnsbl_file', 'unbound_py_count', 'chroot_cmd', 'enable', 'dnsbl',
 			  'dnsbl_python_unmount', 'log', 'errlog', 'php'] as $k) {
 			$this->savedPfb[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		foreach (['varrun_path'] as $k) {
 			$this->savedG[$k] = array_key_exists($k, $GLOBALS['g'] ?? []) ? $GLOBALS['g'][$k] : false;
 		}
-		foreach (['unbound'] as $k) {
+		foreach (['unbound', 'installedpackages'] as $k) {
 			$this->savedConfig[$k] = array_key_exists($k, $GLOBALS['config'] ?? []) ? $GLOBALS['config'][$k] : false;
 		}
 
@@ -119,10 +119,25 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		file_put_contents("{$this->dir}/pfb_py_reload.applied", "{$gen}\n");
 	}
 
-	private function writeUnboundConf(bool $referencesPfbUnbound): void
+	/**
+	 * pfB-DNS owns the Resolver (a snapshot) with DNSBL on, so the DNS proxy is the module host (issue #3770; Unbound never is).
+	 * Its pid file answers $up: TRUE or FALSE, or a callable that counts the probes.
+	 */
+	private function pfbDnsHostsTheModule(bool|callable $up): void
 	{
-		$body = $referencesPfbUnbound ? "python-script: \"/var/unbound/pfb_unbound.py\"\n" : "no python here\n";
-		file_put_contents("{$this->dir}/unbound.conf", $body);
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
+		$GLOBALS['config'] ??= [];
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl' => ['present' => FALSE, 'value' => NULL],
+			'custom_options' => ['present' => FALSE, 'value' => NULL],
+		])));
+		$this->proxyUp($up);
+	}
+
+	private function proxyUp(bool|callable $up): void
+	{
+		$GLOBALS['pfb_test_valid_pids']['/var/run/pfb_dns_proxy.pid'] = $up;
 	}
 
 	// -----------------------------------------------------------------------
@@ -131,8 +146,8 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 	public function testNotConvergedOpensEntry(): void
 	{
-		// No unbound.conf at all -> pfb_dnsbl_converged() is FALSE.
-		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		// The proxy hosts the module but is down -> pfb_dnsbl_converged() is FALSE.
+		$this->pfbDnsHostsTheModule(FALSE);
 
 		pfb_dnsbl_apply_ledger_update();
 
@@ -145,13 +160,12 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 	public function testConvergedClosesEntry(): void
 	{
-		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		$this->pfbDnsHostsTheModule(FALSE);
 		pfb_dnsbl_apply_ledger_update();
 		// Before-state: genuinely open first, so the close below is a real transition.
 		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
 
-		$this->writeUnboundConf(TRUE);
-		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$this->proxyUp(TRUE);
 		pfb_dnsbl_apply_ledger_update();
 
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
@@ -160,7 +174,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 	public function testNotConvergedTwiceRefreshesWithoutDuplicating(): void
 	{
-		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		$this->pfbDnsHostsTheModule(FALSE);
 		pfb_dnsbl_apply_ledger_update();
 		pfb_dnsbl_apply_ledger_update();
 
@@ -340,17 +354,15 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// pfb_reload_unbound() end-to-end -- restart-fallback reaches a converged tail
+	// pfb_reload_unbound() end-to-end -- the restart path reaches the ledger tail
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Drives the REAL swap-not-confirmed -> restart-fallback branch (dnsbldir
-	 * made read-only, so the sentinel flip itself fails) through to the
-	 * shared tail, exactly as a genuine stuck watcher would. Proves ONLY:
-	 * the shared ledger tail runs exactly once and records the REAL final
-	 * convergence outcome once Unbound is back up.
+	 * A data-only reload with nothing hosting the module (pfB-DNS does not own the Resolver) never tries the zero-downtime
+	 * swap -- Unbound is never the host (issue #3770) -- so it takes the restart path to the shared ledger tail. Proves ONLY:
+	 * the tail runs exactly once and records the REAL outcome, not converged even with Unbound back up.
 	 *
-	 * Does NOT prove the fallback branch itself never calls a ledger
+	 * Does NOT prove the restart path itself never calls a ledger
 	 * function: the tail's write is deterministic/idempotent-by-key (see
 	 * testConvergedClosesEntry / testNotConvergedTwiceRefreshesWithoutDuplicating),
 	 * so it unconditionally overwrites the (dnsbl,dnsbl,apply) key regardless
@@ -359,29 +371,16 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	 * testRestartFallbackBranchesNeverCallLedgerFunctionsDirectly for that
 	 * invariant, pinned by source inspection instead.
 	 */
-	public function testRestartFallbackPathReachesTailWithConvergedState(): void
+	public function testRestartPathReachesTailAndRecordsThatNothingHostsDnsbl(): void
 	{
-
-		$writable = sys_get_temp_dir() . '/pfb_dnsbl_writable_' . getmypid() . '_' . uniqid();
-		mkdir($writable, 0777, TRUE);
-
-		$this->writeUnboundConf(TRUE);
-		$GLOBALS['pfb']['dnsbl_file']           = "{$writable}/dnsbl_file";
-		$GLOBALS['pfb']['unbound_py_count']     = "{$writable}/unbound_py_count";
+		$GLOBALS['pfb']['dnsbl_file']           = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count']     = "{$this->dir}/unbound_py_count";
 		file_put_contents($GLOBALS['pfb']['unbound_py_count'], "10");
 		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
 		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
-		$GLOBALS['g']['varrun_path']             = $writable;
+		$GLOBALS['g']['varrun_path']             = $this->dir;
 
-		$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];
-
-		// dnsbldir read-only: reads (unbound.conf, sentinel/applied) still work, but
-		// pfb_unbound_py_atomic_write()'s rename() into it fails -> flip_sentinel()
-		// returns FALSE -> the "sentinel flip failed" fallback fires (near-instant,
-		// no 30s poll -- unlike the wait_applied-timeout sibling branch).
-		chmod($this->dir, 0555);
-
-		// The resolver is up around this restart fallback but down at every stop check.
+		// The resolver is up around this restart but down at every stop check.
 		// This keeps the fixture stable as the stop implementation gains checks of its own.
 		$GLOBALS['pfb_test_process_running']['unbound'] = static function (): bool {
 			foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
@@ -393,27 +392,19 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		};
 
 		$ledger_calls = 0;
-		try {
-			$ledger_calls = pfb_test_as_unprivileged(function (): int {
-				$ledger_calls = 0;
-				pfb_reload_unbound('enabled', FALSE, TRUE, static function () use (&$ledger_calls): bool {
-					$ledger_calls++;
-					return pfb_dnsbl_apply_ledger_update();
-				});
-				return $ledger_calls;
-			}, [$this->dir, $writable]);
-		} finally {
-			chmod($this->dir, 0777);
-			foreach (glob("{$writable}/*") ?: [] as $file) {
-				@unlink($file);
-			}
-			@rmdir($writable);
-		}
+		pfb_reload_unbound('enabled', FALSE, TRUE, static function () use (&$ledger_calls): bool {
+			$ledger_calls++;
+			return pfb_dnsbl_apply_ledger_update();
+		});
 
 		$this->assertSame(1, $ledger_calls,
-			'the restart fallback must reach the shared ledger tail exactly once');
-		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
-			'a swap-not-confirmed restart-fallback that ultimately converges must not leave a dnsbl apply entry open');
+			'the restart path must reach the shared ledger tail exactly once');
+		$this->assertFileDoesNotExist("{$this->dir}/pfb_py_reload",
+			'nothing hosts the module, so no generation was published');
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open,
+			'a running Unbound does not converge DNSBL: pfB-DNS does not host it');
+		$this->assertStringContainsString('pfB-DNS is not active', $open[0]['message']);
 	}
 
 	/**
@@ -602,43 +593,39 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	/**
 	 * Drives the REAL zero-downtime swap all the way to its own SUCCESS
 	 * early-return (pfb_dnsbl_apply_ledger_update(); return;) -- distinct from
-	 * testRestartFallbackPathReachesTailWithConvergedState, which only reaches
-	 * the SHARED tail via the restart fallback. is_process_running('unbound')
-	 * is called exactly twice on this path (the fast-path eligibility check,
+	 * testRestartPathReachesTailAndRecordsThatNothingHostsDnsbl, which only reaches
+	 * the SHARED tail via the restart path. The module host (the DNS proxy) is
+	 * probed exactly twice on this path (the fast-path eligibility check,
 	 * then pfb_dnsbl_converged() inside the ledger update this return makes) --
-	 * any other count means the restart path (>=5 calls, see the fallback
-	 * sibling above) ran instead.
+	 * any other count means the restart path ran instead.
 	 */
 	public function testZeroDowntimeSwapSuccessClosesLedgerViaEarlyReturn(): void
 	{
 		// Before-state: a stale dnsbl-apply entry genuinely open first (mirrors
 		// testConvergedClosesEntry), so the close asserted below is a real transition.
-		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		$this->pfbDnsHostsTheModule(FALSE);
 		pfb_dnsbl_apply_ledger_update();
 		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'),
 			'a stale dnsbl apply entry must exist before the zero-downtime swap under test');
 
-		$this->writeUnboundConf(TRUE);
 		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
 		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
 		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
 		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
 		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
-		$GLOBALS['config']['unbound']            = ['python' => 'on', 'python_script' => 'pfb_unbound'];
 
 		// No sentinel written yet -> flip_sentinel()'s cur=0 -> next=1; pre-write the
 		// applied marker to 1 so wait_applied(1) confirms on its FIRST read, never sleeping.
 		file_put_contents("{$this->dir}/pfb_py_reload.applied", "1\n");
 
-		// TRUE only for the two expected success-path calls -- if a regression falls
-		// through to the restart path instead, is_process_running() resolves FALSE
-		// immediately so pfb_stop_start_unbound()'s wait loop never real-sleeps; the
-		// call-count assertion below still catches the regression.
+		// TRUE only for the two expected success-path probes of the module host -- if a regression falls
+		// through to the restart path instead, the pid file reads dead immediately so the restart
+		// never real-sleeps; the call-count assertion below still catches the regression.
 		$calls = 0;
-		$GLOBALS['pfb_test_process_running']['unbound'] = function () use (&$calls) {
+		$this->proxyUp(function () use (&$calls) {
 			$calls++;
 			return $calls <= 2;
-		};
+		});
 
 		$ledger_calls = 0;
 		pfb_reload_unbound('enabled', FALSE, TRUE, static function () use (&$ledger_calls): bool {
@@ -647,7 +634,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		});
 
 		$this->assertSame(2, $calls,
-			"the success path must call is_process_running('unbound') exactly twice (eligibility check + pfb_dnsbl_converged()); any other count means the restart path ran instead");
+			"the success path must probe the module host exactly twice (eligibility check + pfb_dnsbl_converged()); any other count means the restart path ran instead");
 		$this->assertSame(1, $ledger_calls,
 			'the zero-downtime success must write apply status exactly once before returning');
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
@@ -670,21 +657,19 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	{
 		$GLOBALS['pfb_test_swap_wait_s'] = 1;
 
-		$this->writeUnboundConf(TRUE);
+		$this->pfbDnsHostsTheModule(TRUE);
 		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
 		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
 		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
 		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
 		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
 		$GLOBALS['g']['varrun_path']             = $this->dir;
-		$GLOBALS['config']['unbound']            = ['python' => 'on', 'python_script' => 'pfb_unbound'];
 
 		// Applied marker BEHIND the generation the flip publishes (1): the swap never
 		// confirms within the 1s test budget.
 		file_put_contents("{$this->dir}/pfb_py_reload.applied", "0\n");
 
-		// Unbound stays alive throughout: the watcher is merely slow, nothing is broken.
-		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		// The module host (the DNS proxy) stays alive throughout: the watcher is merely slow, nothing is broken.
 
 		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 
@@ -702,58 +687,13 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->assertSame('apply', $open[0]['stage'] ?? '');
 	}
 
-	/**
-	 * issue #3200: the only genuinely broken swap state is a DEAD resolver -- the
-	 * reload-watcher thread lives inside Unbound, so a dead Unbound can never apply
-	 * the generation. The liveness probe must break the wait on its first pass (the
-	 * elapsed bound below is that liveness property: the budget must not be burned
-	 * by a wait nothing could ever satisfy), and the restart tail recovers DNS.
-	 */
-	public function testZeroDowntimeSwapWatcherDeathRecoversViaRestart(): void
-	{
-		$GLOBALS['pfb_test_swap_wait_s'] = 3;
-
-		$this->writeUnboundConf(TRUE);
-		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
-		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
-		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
-		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
-		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
-		$GLOBALS['g']['varrun_path']             = $this->dir;
-		$GLOBALS['config']['unbound']            = ['python' => 'on', 'python_script' => 'pfb_unbound'];
-
-		file_put_contents("{$this->dir}/pfb_py_reload.applied", "0\n");
-
-		// Unbound is UP at the fast-path eligibility check, then GONE: the watcher
-		// died inside the swap, so nothing will ever apply the published generation.
-		$calls = 0;
-		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$calls): bool {
-			$calls++;
-			return $calls === 1;
-		};
-
-		$started = microtime(TRUE);
-		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
-		$elapsed = microtime(TRUE) - $started;
-
-		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
-		$this->assertFalse($swapped, 'the restart fallback keeps the FALSE contract');
-		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.sync",
-			'the restart fall-through must clear the daemon-suppression marker before the shared tail');
-		$this->assertStringContainsString('recovering via restart', $log,
-			'a dead resolver during a swap must be named as the restart trigger');
-		$this->assertLessThan(2.0, $elapsed,
-			'the liveness probe must break the wait on its first pass -- a dead watcher can never apply the generation');
-	}
-
 	public function testGenericSwapReturnsAppliedAndLeavesFullFlushToCaller(): void
 	{
-		$this->writeUnboundConf(TRUE);
+		$this->pfbDnsHostsTheModule(TRUE);
 		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
 		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
 		$GLOBALS['pfb']['chroot_cmd']            = "{$this->dir}/chroot-control-recorder";
 		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
-		$GLOBALS['config']['unbound']            = ['python' => 'on', 'python_script' => 'pfb_unbound'];
 		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
 		$this->writeApplied(1);
 
@@ -766,10 +706,10 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		chmod($GLOBALS['pfb']['chroot_cmd'], 0755);
 
 		$calls = 0;
-		$GLOBALS['pfb_test_process_running']['unbound'] = function () use (&$calls) {
+		$this->proxyUp(function () use (&$calls) {
 			$calls++;
 			return $calls <= 2;
-		};
+		});
 
 		$swapped = pfb_reload_unbound('enabled', FALSE, TRUE);
 

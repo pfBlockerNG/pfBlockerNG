@@ -9,12 +9,11 @@ use PHPUnit\Framework\TestCase;
  * ADR-61 Phase 3 — pfb_dnsbl_converged() truth table.
  *
  * TRUE iff (a) the sentinel/applied generation markers agree (or neither has
- * ever been written -- both default to 0), (b) is_process_running('unbound'),
- * AND (c) unbound.conf still references pfb_unbound.py. The function
- * short-circuits on the first failing condition, so a mismatch on (a) makes
- * (b)/(c) irrelevant to the result -- each collapsed case below is exercised
- * with the LATER conditions deliberately left passing, to prove the EARLIER
- * failing condition alone forces FALSE.
+ * ever been written -- both default to 0) AND (b) the DNS proxy hosts the module
+ * (pfB-DNS owns the Resolver with DNSBL on) and is running: Unbound never hosts it
+ * (issue #3770). The function short-circuits on the first failing condition, so a
+ * mismatch on (a) makes (b) irrelevant to the result -- that case is exercised
+ * with (b) deliberately left passing, to prove the mismatch alone forces FALSE.
  *
  * Also covers pfb_unbound_py_marker_generation()'s remaining return-0 shapes
  * DIRECTLY (issue #1024): the truth table above only reaches it through the
@@ -37,18 +36,30 @@ final class PfbDnsblConvergedTest extends TestCase
 
 	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
 	private array $savedPfb = [];
+	private bool $hadConfig = FALSE;
+	private array $savedConfig = [];
 
 	protected function setUp(): void
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_dnsbl_converged_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0777, TRUE);
 
-		foreach (['dnsbldir'] as $k) {
+		foreach (['dnsbldir', 'enable', 'dnsbl'] as $k) {
 			$this->savedPfb[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		$GLOBALS['pfb']['dnsbldir'] = $this->dir;
+		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
 
-		$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];
+		// pfB-DNS owns the Resolver (a snapshot) and its proxy runs: the module host
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->savedConfig = $GLOBALS['config'] ?? [];
+		$GLOBALS['config'] ??= [];
+		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_saved', base64_encode((string) json_encode([
+			'active_interface' => ['present' => TRUE, 'value' => 'lan'],
+			'enablessl' => ['present' => FALSE, 'value' => NULL],
+			'custom_options' => ['present' => FALSE, 'value' => NULL],
+		])));
+		$GLOBALS['pfb_test_valid_pids'] = ['/var/run/pfb_dns_proxy.pid' => TRUE];
 	}
 
 	protected function tearDown(): void
@@ -61,7 +72,12 @@ final class PfbDnsblConvergedTest extends TestCase
 			}
 		}
 		$this->savedPfb = [];
-		unset($GLOBALS['pfb_test_process_running']);
+		unset($GLOBALS['pfb_test_valid_pids']);
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->savedConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
 
 		foreach (glob($this->dir . '/*') ?: [] as $file) {
 			@unlink($file);
@@ -79,28 +95,18 @@ final class PfbDnsblConvergedTest extends TestCase
 		file_put_contents("{$this->dir}/pfb_py_reload.applied", "{$gen}\n");
 	}
 
-	private function writeUnboundConf(bool $referencesPfbUnbound): void
-	{
-		$body = $referencesPfbUnbound ? "module-config: \"python validator iterator\"\npython-script: \"/var/unbound/pfb_unbound.py\"\n"
-			: "module-config: \"validator iterator\"\n";
-		file_put_contents("{$this->dir}/unbound.conf", $body);
-	}
-
-	public function testSentinelEqualsAppliedRunningAndConfReferenced_returnsTrue(): void
+	public function testSentinelEqualsAppliedAndTheProxyRuns_returnsTrue(): void
 	{
 		$this->writeSentinel(3);
 		$this->writeApplied(3);
-		$this->writeUnboundConf(TRUE);
 
-		$this->assertTrue(pfb_dnsbl_converged(), 'matching non-zero generations + live + wired must converge');
+		$this->assertTrue(pfb_dnsbl_converged(), 'matching non-zero generations + a running module host must converge');
 	}
 
-	public function testNeitherMarkerFileExists_defaultsToZeroEqualsZero_convergedWhenRunningAndConfOk(): void
+	public function testNeitherMarkerFileExists_defaultsToZeroEqualsZero_convergedWhenTheProxyRuns(): void
 	{
 		// Neither pfb_py_reload nor .applied exists yet (DNSBL never flipped this boot) --
 		// the shared "0 == 0" baseline both markers' read helper defaults to.
-		$this->writeUnboundConf(TRUE);
-
 		$this->assertTrue(pfb_dnsbl_converged(), 'a never-flipped sentinel/applied pair (both absent) must read as converged');
 	}
 
@@ -108,57 +114,18 @@ final class PfbDnsblConvergedTest extends TestCase
 	{
 		$this->writeSentinel(5);
 		$this->writeApplied(3);
-		// Running + wired both deliberately TRUE -- proves the generation mismatch ALONE forces FALSE.
-		$this->writeUnboundConf(TRUE);
+		// The proxy runs -- proves the generation mismatch ALONE forces FALSE.
 
 		$this->assertFalse(pfb_dnsbl_converged(), 'a sentinel/applied generation mismatch must never converge');
 	}
 
-	public function testUnboundNotRunning_returnsFalseEvenWhenGenerationsMatch(): void
+	public function testTheProxyNotRunning_returnsFalseEvenWhenGenerationsMatch(): void
 	{
 		$this->writeSentinel(2);
 		$this->writeApplied(2);
-		$this->writeUnboundConf(TRUE);
-		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		$GLOBALS['pfb_test_valid_pids']['/var/run/pfb_dns_proxy.pid'] = FALSE;
 
-		$this->assertFalse(pfb_dnsbl_converged(), 'Unbound not running must never converge, even with matching generations');
-	}
-
-	public function testUnboundConfMissing_returnsFalse(): void
-	{
-		$this->writeSentinel(1);
-		$this->writeApplied(1);
-		// No unbound.conf written at all.
-
-		$this->assertFalse(pfb_dnsbl_converged(), 'an absent unbound.conf must never converge');
-	}
-
-	public function testUnboundConfDoesNotReferencePfbUnboundPy_returnsFalse(): void
-	{
-		$this->writeSentinel(1);
-		$this->writeApplied(1);
-		$this->writeUnboundConf(FALSE);
-
-		$this->assertFalse(pfb_dnsbl_converged(), 'an unbound.conf that no longer wires pfb_unbound.py must never converge');
-	}
-
-	public function testUnboundConfExistsButUnreadable_returnsFalseInsteadOfCrashing(): void
-	{
-
-		$this->writeSentinel(1);
-		$this->writeApplied(1);
-		$this->writeUnboundConf(TRUE);
-		chmod("{$this->dir}/unbound.conf", 0000);
-
-		try {
-			// file_exists() sees the file (TOCTOU-style: present but unreadable), so
-			// file_get_contents() returns FALSE -- a bare strpos(FALSE, ...) call would
-			// TypeError in PHP 8+. Must degrade to FALSE, not throw.
-			$this->assertFalse(pfb_test_as_unprivileged(fn () => pfb_dnsbl_converged(), [$this->dir]),
-				'an existing-but-unreadable unbound.conf must read as not converged, never crash');
-		} finally {
-			chmod("{$this->dir}/unbound.conf", 0644);
-		}
+		$this->assertFalse(pfb_dnsbl_converged(), 'a stopped module host must never converge, even with matching generations');
 	}
 
 	// -----------------------------------------------------------------------
