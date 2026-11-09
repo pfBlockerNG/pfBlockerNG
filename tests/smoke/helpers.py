@@ -2701,8 +2701,9 @@ def inject_safesearch_cname_entries(
     update (which would overwrite the file with package-generated content); the raw
     bounce re-runs the python module's ``init()`` which re-reads ``pfb_py_ss.txt`` as
     written.  For ``safeSearchDB`` to take effect the DNSBL python module must already
-    be loaded in ``unbound.conf`` — DNSBL must be enabled and a pfBlockerNG reload run
-    before this call.
+    be loaded — DNSBL must be enabled and a pfBlockerNG reload run before this call.
+    While the pfB-DNS proxy runs, its decider hosts that module instead: the decider alone is restarted
+    (``pfb_dns_proxy_decider_restart()``, the product's own module reload) and Unbound is left as it is.
     """
     csv_lines = "\n".join(f"{e.domain},cname,{e.target},{e.baked_v4},{e.baked_v6}" for e in entries)
     contents = csv_lines + "\n"
@@ -2719,6 +2720,20 @@ def inject_safesearch_cname_entries(
         raise RuntimeError(
             f"inject_safesearch_cname_entries: tee to {UNBOUND_PY_SS_FILE} failed: "
             f"rc={result.returncode} {result.stderr!r}"
+        )
+    reload = php_eval(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n"
+        "if (!pfb_dns_proxy_running()) { echo 'UNBOUND'; } else {\n"
+        "  $failed = pfb_dns_proxy_decider_restart();\n"
+        "  echo $failed === NULL ? 'DECIDER-RESTARTED' : 'DECIDER-FAILED: ' . $failed;\n}",
+        timeout=timeout,
+    )
+    if "DECIDER-RESTARTED" in reload.stdout:
+        return
+    if "UNBOUND" not in reload.stdout:
+        raise RuntimeError(
+            f"inject_safesearch_cname_entries: decider restart failed: {reload.stdout!r} {reload.stderr!r}"
         )
     # Raw Unbound bounce to reload safeSearchDB from the updated file.
     # Unlike pfb_stop_start_unbound() in pfblockerng.inc, this raw bounce has no

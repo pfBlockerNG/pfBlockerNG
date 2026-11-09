@@ -3,15 +3,14 @@
 NetSPI showed a TXT reply carrying ``"><script ...>`` reaching ``dns_reply.log``
 raw. v4 pages escape log fields on output; ``_log_text()`` in ``pfb_unbound.py``
 additionally rewrites ``< > " ' &`` and control characters to ``\\DDD`` before a
-row is written. These cases prove, on a real Unbound + python module, that:
+row is written. These cases prove, through pfB-DNS (its decider runs that module), that:
 
 * a TXT answer carrying the payload is still delivered to the client, and its
   ``dns_reply.log`` row holds the escaped payload in the reply column;
 * a CNAME answer whose target label carries quote and angle brackets is logged
   escaped the same way (every non-address type shares that reply column);
-* a queried name carrying angle brackets reaches the log as Unbound's own
-  ``qname_str`` rendering (``dname_str()`` turns every byte outside
-  ``[A-Za-z0-9-_*]`` into ``?``), so the name column never carries raw ``<>``;
+* a queried name carrying angle brackets reaches the log escaped by ``_log_text()``
+  (``<`` and ``>`` as ``\\060`` / ``\\062``), so the name column never carries raw ``<>``;
 * an ordinary A answer is logged exactly as before apart from the endpoint pfB-DNS appends (13 columns, plain name, IP);
 * a DNSBL block is logged exactly as before apart from the same endpoint (14 columns, plain name).
 
@@ -144,7 +143,7 @@ class TestDnsReplyLogEscape:
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if name in line]
         assert not any(c in line for line in raw for c in "<>\"'"), raw
 
-    def test_hostile_query_name_is_sanitised_by_unbound(
+    def test_hostile_query_name_is_logged_escaped(
         self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
     ) -> None:
         vm, cvm = deployed_vm
@@ -157,8 +156,8 @@ class TestDnsReplyLogEscape:
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", f".{suffix}", 6, suffix=True)
         for row in rows:
             assert len(row) == 13 and row[10:13] == ENDPOINT, row
-            # Unbound, not pfBlockerNG, rewrites the brackets (dname_str); the row sees "?".
-            assert row[6] == f"a?b?.{suffix}", row
+            # pfBlockerNG's write-side escape renders the brackets; the name column never carries them raw.
+            assert row[6] == f"a\\060b\\062.{suffix}", row
             assert row[8] == "203.0.113.42", row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if suffix in line]
         assert not any(c in line for line in raw for c in "<>"), raw

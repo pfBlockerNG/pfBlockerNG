@@ -506,3 +506,56 @@ def test_a_resolver_mutator_never_turns_pfb_dns_on_when_it_was_off(
 
     assert "resolver write" in events, f"the mutator never wrote the Resolver: {events}"
     assert "store pfb_dns on" not in events, f"pfB-DNS was turned on although it was off: {events}"
+
+
+# --- SafeSearch rows reload in whichever process hosts DNSBL ----------------------------------------------------------
+
+
+SS_ROWS = [helpers.SafeSearchEntry("a.example", "b.example", "", "")]
+
+
+def _arrange_safesearch(monkeypatch: pytest.MonkeyPatch, host: str) -> tuple[list[str], SimpleNamespace]:
+    """Stub the SafeSearch injection's guest calls; ``host`` is what the DNSBL-host reload answers."""
+    events: list[str] = []
+
+    def run(_argv: list[str], **kwargs: object) -> SimpleNamespace:
+        events.append("unbound bounce" if "unbound.pid" in str(kwargs.get("input", "")) else "append rows")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def php_eval(_vm: object, snippet: str, **_kw: object) -> SimpleNamespace:
+        events.append("host reload" if "pfb_dns_proxy_decider_restart()" in snippet else "php")
+        return SimpleNamespace(returncode=0, stdout=host, stderr="")
+
+    monkeypatch.setattr(helpers.subprocess, "run", run)
+    monkeypatch.setattr(helpers, "php_eval", php_eval)
+    monkeypatch.setattr(helpers, "wait_unbound_ready", lambda _vm, **_kw: events.append("unbound ready"))
+    return events, SimpleNamespace(ssh_argv=lambda *argv: list(argv))
+
+
+def test_safesearch_rows_reload_in_the_pfb_dns_decider_while_it_hosts_dnsbl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given pfB-DNS serves DNSBL When fabricated SafeSearch rows are appended
+    Then the decider restarts and re-reads pfb_py_ss.txt, and Unbound (which hosts no module) is not bounced."""
+    events, vm = _arrange_safesearch(monkeypatch, "DECIDER-RESTARTED")
+
+    helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
+
+    assert events == ["append rows", "host reload"], f"wrong reload sequence: {events}"
+
+
+def test_safesearch_rows_reload_in_unbound_while_unbound_hosts_dnsbl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given no pfB-DNS proxy runs When fabricated SafeSearch rows are appended
+    Then Unbound is bounced so its module re-reads pfb_py_ss.txt, as before."""
+    events, vm = _arrange_safesearch(monkeypatch, "UNBOUND")
+
+    helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
+
+    assert events == ["append rows", "host reload", "unbound bounce", "unbound ready"], f"wrong sequence: {events}"
+
+
+def test_safesearch_injection_fails_loudly_when_the_decider_does_not_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given pfB-DNS serves DNSBL When its decider cannot restart
+    Then the injection raises with the product's reason."""
+    _events, vm = _arrange_safesearch(monkeypatch, "DECIDER-FAILED: no READY")
+
+    with pytest.raises(RuntimeError, match="no READY"):
+        helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
