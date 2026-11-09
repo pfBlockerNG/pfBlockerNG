@@ -39,12 +39,12 @@ final class SyncPolicyProjectionTest extends TestCase
 	{
 		$fx = self::diskFixture();
 		$this->assertSame(
-			array_merge(pfblockerng_sync_sections(TRUE), ['pfblockerngsync', 'pfblockerngbogus']),
+			array_merge(pfb_sync_policy_sections(), ['pfblockerngsync', 'pfblockerngbogus']),
 			array_keys($fx['sections']),
-			'the fixture must hold all 19 synced sections, then pfblockerngsync and an unknown section'
+			'the fixture must hold all 19 synced sections and pfblockerngdns, then pfblockerngsync and an unknown section'
 		);
 
-		$order = array_flip(pfblockerng_sync_sections(TRUE));
+		$order = array_flip(pfb_sync_policy_sections());
 		$last  = -1;
 		foreach (array_keys($fx['policy']) as $path) {
 			$section = explode('/', $path)[1];
@@ -54,7 +54,7 @@ final class SyncPolicyProjectionTest extends TestCase
 		}
 
 		foreach (self::localRegistryKeys() as $key) {
-			if (str_starts_with($key, 'gen/') || str_starts_with($key, 'ip/') || str_starts_with($key, 'dnsbl/')) {
+			if (str_starts_with($key, 'gen/') || str_starts_with($key, 'ip/') || str_starts_with($key, 'dnsbl/') || str_starts_with($key, 'dns/')) {
 				[$alias, $bare] = explode('/', $key, 2);
 				$this->assertArrayHasKey(PFB_SECTIONS[$alias] . '/' . $bare, $fx['nonpolicy'],
 					"fixture must carry the local key {$key}");
@@ -401,19 +401,19 @@ final class SyncPolicyProjectionTest extends TestCase
 		$this->assertSame($text, serialize($fx['sections']));
 	}
 
-	// B11 -- every projected path is rooted at installedpackages/<one of the 19 synced sections>/.
+	// B11 -- every projected path is rooted at installedpackages/<one of the 19 synced sections or pfblockerngdns>/.
 	public function testEveryPathStartsWithInstalledPackagesAndASyncedSection(): void
 	{
 		$fx = self::diskFixture();
 		$projection = $this->project($fx['sections']);
 		$this->assertNotEmpty($projection, 'vacuity guard');
 
-		$sections = pfblockerng_sync_sections(TRUE);
-		$this->assertCount(19, $sections);
+		$sections = pfb_sync_policy_sections();
+		$this->assertCount(20, $sections);
 		foreach (array_keys($projection) as $path) {
 			$this->assertStringStartsWith(self::SECTIONS_ROOT, $path);
 			$segments = explode('/', $path);
-			$this->assertContains($segments[1], $sections, "{$path} must sit in one of the 19 synced sections");
+			$this->assertContains($segments[1], $sections, "{$path} must sit in one of the 19 synced sections or pfblockerngdns");
 			$this->assertGreaterThanOrEqual(3, count($segments), "{$path} must name a leaf below its section");
 		}
 	}

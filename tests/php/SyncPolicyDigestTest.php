@@ -99,7 +99,7 @@ final class SyncPolicyDigestTest extends TestCase
 			'installedpackages/pfblockerngsafesearch/safesearch_enable' => [],
 		];
 
-		$tree = array_fill_keys(pfblockerng_sync_sections(TRUE), []);
+		$tree = array_fill_keys(pfb_sync_policy_sections(), []);
 		// Map keys sorted; the row list keeps position order (config/1 was listed first), indices renumbered.
 		$tree['pfblockerng']            = ['config' => [0 => ['enable_cb' => 'on', 'skipfeed' => '3']]];
 		$tree['pfblockerngdnsbl']       = ['config' => [0 => ['aliasname' => 'B'], 1 => ['aliasname' => 'A']]];
@@ -231,7 +231,7 @@ final class SyncPolicyDigestTest extends TestCase
 	{
 		$empty = $this->digest([]);
 
-		$this->assertSame(hash('sha256', serialize(array_fill_keys(pfblockerng_sync_sections(TRUE), []))), $empty);
+		$this->assertSame(hash('sha256', serialize(array_fill_keys(pfb_sync_policy_sections(), []))), $empty);
 		$this->assertSame($empty, $this->digest($this->project([
 			'pfblockerng'           => [],
 			'pfblockerngipsettings' => ['config' => [0 => []]],

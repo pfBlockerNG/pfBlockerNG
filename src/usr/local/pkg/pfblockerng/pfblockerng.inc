@@ -27444,17 +27444,32 @@ function pfb_sync_legacy_sections(bool $all): array {
 }
 
 /**
+ * The sections scope 'policy' carries: the synced ones plus pfblockerngdns, of which only the pfB-DNS enable is policy
+ * (the registry's 'sync' class; the snapshot, listener lists and transports stay node-local). DNSBL runs only through
+ * pfB-DNS, so the enable travels with the DNSBL enable (#3770). The legacy scopes keep pfb_sync_legacy_sections().
+ * @return list<string>
+ */
+function pfb_sync_policy_sections(): array {
+	return [...pfblockerng_sync_sections(TRUE), 'pfblockerngdns'];
+}
+
+/**
  * Digest of the payload each legacy scope in $scopes would send from $sections (bare section name => subtree; NULL
  * reads this node's stored ones), taken in the persisted shape, so a received policy suppresses a legacy send only
- * while that payload is as accepted (#3674).
+ * while that payload is as accepted (#3674). Scope 'all' also carries the one pfblockerngdns leaf pfSense's HA sync sends
+ * for it, the pfB-DNS enable (#3770), so this node's own edit of it lifts the suppression.
  * @param list<'all'|'lists'> $scopes
  * @return array<string,string> scope => digest
  */
 function pfb_sync_legacy_digests(array $scopes, ?array $sections = NULL): array {
-	$sections ??= pfb_sync_stored_sections(pfb_sync_legacy_sections(in_array('all', $scopes, TRUE)));
+	$sections ??= pfb_sync_stored_sections([...pfb_sync_legacy_sections(TRUE), 'pfblockerngdns']);
 	$digests  = array();
 	foreach ($scopes as $scope) {
-		$payload         = array_intersect_key($sections, array_flip(pfb_sync_legacy_sections($scope === 'all')));
+		$payload = array_intersect_key($sections, array_flip(pfb_sync_legacy_sections($scope === 'all')));
+		$enable  = array_get_path($sections, 'pfblockerngdns/config/0/pfb_dns');
+		if ($scope === 'all' && $enable !== NULL) {
+			array_set_path($payload, 'pfblockerngdns/config/0/pfb_dns', $enable);
+		}
 		$digests[$scope] = hash('sha256', json_encode(pfb_sync_copied_sorted(array_map('pfb_sync_persisted_shape', $payload)), JSON_THROW_ON_ERROR));
 	}
 	return $digests;
@@ -27496,7 +27511,7 @@ function pfb_sync_path_is_local(array $local, string $section, array $rel): bool
 }
 
 /**
- * pfb_sync_settings_sections — the settings sections of the synced set (issue #3450/#3451): bare
+ * pfb_sync_settings_sections — the settings sections of the synced set (issue #3450/#3451, #3770): bare
  * section name => [registry alias, path segments of the settings map inside the section]. The
  * projection and the receive merge share it.
  *
@@ -27504,7 +27519,7 @@ function pfb_sync_path_is_local(array $local, string $section, array $rel): bool
  */
 function pfb_sync_settings_sections(): array {
 	$settings = array();
-	foreach (array('gen', 'ip', 'dnsbl') as $alias) {
+	foreach (array('gen', 'ip', 'dnsbl', 'dns') as $alias) {
 		[, $name, $prefix] = explode('/', PFB_SECTIONS[$alias], 3);
 		$settings[$name]   = array($alias, explode('/', $prefix));
 	}
@@ -27516,14 +27531,14 @@ function pfb_sync_settings_sections(): array {
  * (issue #3450; docs/specs/xmlrpc-per-field-sync.md, "Policy projection").
  *
  * Input: bare section name => stored subtree. Output: 'installedpackages/<section>/<key
- * path>' => leaf, in pfblockerng_sync_sections(TRUE) order and stored order within a
+ * path>' => leaf, in pfb_sync_policy_sections() order and stored order within a
  * section, row indices kept verbatim. A leaf is a non-array value or an empty array; NULL
  * counts as absent. Values are copied as stored: normalising them for the wire belongs to
  * the manual builder.
  *
  * Settings sections are an allowlist: only a key of config/0 whose registry entry says
  * 'policy' projects. Every other synced section is a deny list (pfb_sync_local_paths()).
- * Anything outside the 19 sections, pfblockerngsync included, contributes nothing.
+ * Anything outside pfb_sync_policy_sections(), pfblockerngsync included, contributes nothing.
  *
  * Pure: reads only pfb_cfg_registry(), PFB_SECTIONS and the two section/schema functions.
  *
@@ -27563,7 +27578,7 @@ function pfb_sync_policy_projection(array $sections): array {
 		}
 	};
 
-	foreach (pfblockerng_sync_sections(TRUE) as $section) {
+	foreach (pfb_sync_policy_sections() as $section) {
 		$blob = $sections[$section] ?? NULL;
 		if (!is_array($blob)) {
 			continue;
@@ -27596,7 +27611,7 @@ function pfb_sync_policy_projection(array $sections): array {
 /**
  * pfb_sync_policy_digest — a stable sha256 of a policy projection (issue #3450).
  *
- * The projection is rebuilt into a tree over the 19 synced sections (paths outside them are
+ * The projection is rebuilt into a tree over pfb_sync_policy_sections() (paths outside them are
  * ignored; an array leaf counts as the empty string) and canonicalised below the section
  * level: an array with only integer keys is a list kept in position order with its indices
  * renumbered, any other array is a map sorted by key. Two nodes with the same policy
@@ -27610,7 +27625,7 @@ function pfb_sync_policy_projection(array $sections): array {
  */
 function pfb_sync_policy_digest(array $projection): string {
 
-	$tree = array_fill_keys(pfblockerng_sync_sections(TRUE), array());
+	$tree = array_fill_keys(pfb_sync_policy_sections(), array());
 
 	foreach ($projection as $path => $value) {
 		$segments = explode('/', (string) $path);
@@ -27662,8 +27677,8 @@ function pfb_sync_policy_digest(array $projection): string {
  * (issue #3451; docs/specs/xmlrpc-per-field-sync.md, "Receive merge").
  *
  * Both arguments are bare section name => stored subtree. The result is the receiver's new
- * subtree for each of the 19 synced sections present on either side, in
- * pfblockerng_sync_sections(TRUE) order; keys outside those sections (pfblockerngsync
+ * subtree for each of pfb_sync_policy_sections() present on either side, in
+ * that order; keys outside those sections (pfblockerngsync
  * included) are ignored and never returned. A policy leaf takes the incoming string
  * verbatim ([] becomes ''); a receiver policy key the sender no longer has is deleted; a
  * receiver-local key (pfb_sync_path_is_local(), plus every non-policy key of a settings
@@ -27672,6 +27687,10 @@ function pfb_sync_policy_digest(array $projection): string {
  * receiver's local leaves, new rows get the editor's local defaults, absent rows drop with
  * their locals. When the receiver's policy already equals the incoming one the result is
  * identical (===) to $current, and merging twice equals merging once.
+ *
+ * A payload without any pfblockerngdns section (a sender older than #3770, which never sent the pfB-DNS enable) leaves
+ * the receiver's pfblockerngdns section as it is, the enable included; a section that is present applies as usual,
+ * so an explicit Off still turns the receiver off.
  *
  * Pure: reads no config and writes no log; it consults the registry, the section/schema functions
  * and pfb_normalize_row_header(), and never modifies the argument arrays. Closing the status ledger
@@ -27871,7 +27890,7 @@ function pfb_sync_policy_merge(array $incoming, array $current, ?array &$ignored
 		return $out === array() && $iv === NULL ? NULL : $out;
 	};
 
-	$sections = pfblockerng_sync_sections(TRUE);
+	$sections = pfb_sync_policy_sections();
 	foreach ($sections as $s) {
 		$inc = $incoming[$s] ?? NULL;
 		$cur = $current[$s] ?? NULL;
@@ -27896,7 +27915,8 @@ function pfb_sync_policy_merge(array $incoming, array $current, ?array &$ignored
 		$inc = $incoming[$s] ?? NULL;
 		$cur = $current[$s] ?? NULL;
 		if ($inc !== NULL || $cur !== NULL) {
-			$out[$s] = $node($s, array(), $inc, $cur) ?? ($cur === '' ? '' : array());
+			// #3770 version skew: an older sender sends no pfblockerngdns at all, which is no statement about the enable.
+			$out[$s] = $s === 'pfblockerngdns' && $inc === NULL ? $cur : ($node($s, array(), $inc, $cur) ?? ($cur === '' ? '' : array()));
 		}
 	}
 
@@ -27964,6 +27984,9 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 		$method = 'merge_installedpackages_section';
 
 		// 'lists' removes the General/IP/DNSBL tab sections from the sync (#2123).
+		// #3770: never pfblockerngdns here, not even its enable: this method replaces each sent section wholesale and calls no
+		// receive hook, so a one-leaf section would erase the receiver's Resolver snapshot and listener lists. The enable
+		// travels in scope 'policy' and, for 'all', through pfSense's HA sync (pfblockerng_plugin_xmlrpc_send()).
 		$sections = pfb_sync_legacy_sections($scope === 'all');
 
 		/* xml will hold the sections to sync */
@@ -28044,6 +28067,11 @@ function pfblockerng_plugin_xmlrpc_send() {
 	$sections = pfb_sync_legacy_sections($scope === 'all');
 	foreach ($sections as $section) {
 		$section_paths_temp[] = "installedpackages/{$section}";
+	}
+	// #3770: 'all' also hands over the pfB-DNS enable, the one leaf of pfblockerngdns that is not node-local (DNSBL runs only
+	// through pfB-DNS). Core's receive writes the paths the hook returns, so a leaf alone never touches the rest of the section.
+	if ($scope === 'all') {
+		$section_paths_temp[] = PFB_SECTIONS['dns'] . '/pfb_dns';
 	}
 
 	$section_paths = [];
@@ -28777,7 +28805,7 @@ function pfb_sync_stored_scope(): ?string {
 // This node's stored synced sections (or $names), bare section name => subtree; absent sections are omitted.
 function pfb_sync_stored_sections(?array $names = NULL): array {
 	$sections = array();
-	foreach ($names ?? pfblockerng_sync_sections(TRUE) as $section) {
+	foreach ($names ?? pfb_sync_policy_sections() as $section) {
 		$stored = config_get_path("installedpackages/{$section}");
 		if ($stored !== NULL) {
 			$sections[$section] = $stored;
@@ -28894,7 +28922,7 @@ function pfb_sync_receive_policy(array $new_sections, mixed $gate): array {
 			$flat[$path] = $value;
 		}
 	};
-	foreach (pfblockerng_sync_sections(TRUE) as $section) {
+	foreach (pfb_sync_policy_sections() as $section) {
 		if (isset($new_sections['installedpackages'][$section])) {
 			$walk("installedpackages/{$section}", pfb_sync_persisted_shape($new_sections['installedpackages'][$section]));
 		}
@@ -28991,6 +29019,17 @@ function pfblockerng_plugin_xmlrpc_recv($new_sections) {
 		}
 
 		$ret[$path] = array_merge($old_section, $new_section);
+		$ret['xmlrpc_recv_result'] = TRUE;
+	}
+
+	// #3770: scope 'all' carries the pfB-DNS enable as the one leaf of pfblockerngdns; set that key alone, as the rest of the
+	// section (Resolver snapshot, listener lists, transports) is node-local. Only this hook can: the XMLRPC replication
+	// targets of 'all' go through core's merge_installedpackages_section, which replaces a whole section and calls no hook.
+	$enable_path = PFB_SECTIONS['dns'] . '/pfb_dns';
+	$enable      = array_get_path($new_sections, $enable_path);
+	$enable      = $enable === array() ? '' : $enable;
+	if (is_string($enable) && $enable !== config_get_path($enable_path)) {
+		$ret[$enable_path]         = $enable;
 		$ret['xmlrpc_recv_result'] = TRUE;
 	}
 

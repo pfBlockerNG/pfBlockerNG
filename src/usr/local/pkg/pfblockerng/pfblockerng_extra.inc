@@ -872,7 +872,7 @@ const PFB_SECTIONS = [
 	'global' => 'installedpackages/pfblockerngglobal',
 	'sync'   => 'installedpackages/pfblockerngsync/config/0',
 	// issue #3515: pfB-DNS, the experimental DNS proxy tab. Its own section, so the DNSBL page's section save cannot touch
-	// the Resolver snapshot kept beside the toggle; never synced (not one of pfblockerng_sync_sections()).
+	// the Resolver snapshot kept beside the toggle; only the enable syncs (#3770, a settings section of pfb_sync_policy_sections()).
 	'dns'    => 'installedpackages/pfblockerngdns/config/0',
 	// issue #3649: shared transport settings, separate from the receiver's Resolver recovery state.
 	'dns_shared' => 'installedpackages/pfblockerngdnssettings/config/0',
@@ -2416,12 +2416,13 @@ function pfb_cfg_registry(): array
 		// pfB-DNS local state (dns, #3515) and legacy-shared transport settings (dns_shared, #3649).
 		// -------------------------------------------------------------------
 
-		// pfB-DNS front end of the Resolver; DNSBL runs only through it, so DNSBL on requires it. Default off.
+		// pfB-DNS front end of the Resolver; DNSBL runs only through it, so DNSBL on requires it. Default off. Syncs with the
+		// DNSBL enable (#3770); the rest of this section (snapshot, listener lists, transports) stays node-local.
 		'dns/pfb_dns' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'sync'          => 'local',
+			'sync'          => 'policy',
 			'no_grandfather' => '#3770 cross-section migration issue3770-pfb-dns-for-dnsbl turns it on where DNSBL is on, which a per-section grandfather map cannot see; absent with DNSBL off reads Off = no proxy',
 		],
 
@@ -2578,7 +2579,7 @@ function pfb_cfg_registry(): array
  * pfb_sync_local_paths — the deny-list schema for the synced sections that are NOT settings
  * sections (issue #3450; docs/specs/xmlrpc-per-field-sync.md, "Ownership classification").
  *
- * The settings sections (pfblockerng, pfblockerngipsettings, pfblockerngdnsblsettings) are not
+ * The settings sections (pfblockerng, pfblockerngipsettings, pfblockerngdnsblsettings, and pfblockerngdns for its enable, #3770) are not
  * in this schema: they are an allowlist, and a key syncs there if and only if its registry
  * entry says 'sync' => 'policy'. Every other synced section is policy except what is listed:
  *

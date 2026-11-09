@@ -861,13 +861,16 @@ salvage limit and can interrupt unfinished core work; it does not guarantee comp
   saved; from then on new connections get it with no restart. Root pushes it over the control socket; the key file remains
   root-only and cannot be read by Unbound or the Python decider.
 - High availability: pfSense's DNS Resolver XMLRPC sync copies the moved `unbound` section to the secondary, while the
-  toggle, the listener settings and the snapshot marker are per-node (`local`). With the sync on, two orders are unsafe:
-  - Enabling pfB-DNS on the primary before the secondary: the secondary receives the moved section with no snapshot, so
-    it refuses the move with a notice on every apply. pfB-DNS stays inactive there, and DNSBL, if on, keeps its module
-    in Unbound.
+  listener settings and the snapshot marker are per-node (`local`). The toggle syncs with the DNSBL enable (#3770: scope
+  Policy and lists, and All settings (legacy) over the pfSense HA sync only), so the primary's setting replaces the
+  secondary's at its next sync, but a received enable never moves the Resolver: the receiver's next Update does. With the
+  Resolver sync on, two orders are unsafe:
+  - Applying pfB-DNS on the primary before the secondary: the secondary receives the moved section with no snapshot, so
+    it refuses the move with a notice on every apply. pfB-DNS stays inactive there, and DNSBL, if on, does not block.
   - Turning pfB-DNS off on the primary while the secondary still has it on: the restored Resolver settings reach the
     secondary, whose Unbound collides with its running proxy on the client port.
-  Enable pfB-DNS on the secondary first, or turn the DNS Resolver sync off before changing either node.
+  Save the same setting on both nodes and apply it on the secondary first, or turn the DNS Resolver sync off before
+  changing either node.
 - Queries Unbound answers itself are forwarded unchanged, so the DNSBL does not decide them and the DNS Reply log does not
   record them: a truncated query, one with more than one additional record, a class other than IN or ANY, or an OPT
   other than EDNS version 0.

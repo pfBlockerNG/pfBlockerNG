@@ -2,6 +2,8 @@
 
 The DNSBL page refuses DNSBL On while pfB-DNS is Off, and the pfB-DNS page refuses pfB-DNS Off while DNSBL is On. Each
 refusal renders the form with an input error and writes nothing: config.xml and the pending/apply markers are untouched.
+The pfB-DNS enable also syncs with the DNSBL enable, so the pfB-DNS and Sync help text list it under Sync Scope, not as
+a node-local setting.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ pytestmark = pytest.mark.ui_e2e
 
 DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
+SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 DNSBL_ENABLE = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl"
 PFB_DNS_ENABLE = helpers.dns_config_path("pfb_dns")
 SAVE_TIMEOUT = 300.0
@@ -119,4 +122,33 @@ def test_dnsbl_page_note_says_dnsbl_runs_in_pfb_dns(webui: WebUI) -> None:
     ), "the DNSBL note must say DNSBL runs in pfB-DNS in front of the Resolver"
     assert "DNSBL requires the DNS Resolver (Unbound) to be used as the DNS service." not in body, (
         "the old note, which names the Resolver alone, is still rendered"
+    )
+
+
+def _list_items(body: str) -> list[str]:
+    """Every list item of the page as one line of plain text (tags stripped, entities decoded)."""
+    items = re.findall(r"<li>(.*?)</li>", body, re.S)
+    return [" ".join(html.unescape(re.sub(r"<[^>]+>", " ", item)).split()) for item in items]
+
+
+def test_help_lists_the_pfb_dns_enable_under_sync_scope_not_as_node_local(webui: WebUI) -> None:
+    """Given the pfB-DNS and Sync pages, When help renders, Then the enable follows Sync Scope, not the local list."""
+    dns_items = _list_items(webui.get(DNS_PAGE).text)
+    sync_items = _list_items(webui.get(SYNC_PAGE).text)
+
+    followers = [item for item in dns_items if "enable switch" in item]
+    assert followers and all("follow Sync Scope" in item for item in followers), (
+        f"the pfB-DNS page must list the enable switch among the settings that follow Sync Scope; items: {followers}"
+    )
+    local = [item for item in dns_items if item.startswith("Saved Resolver settings")]
+    assert local and all("enable switch" not in item for item in local), (
+        f"the pfB-DNS page's node-local list must not name the enable switch; items: {local}"
+    )
+
+    assert any(item.startswith("Policy and lists") and "pfB-DNS enable switch" in item for item in sync_items), (
+        "the Sync page must list the pfB-DNS enable switch under the Policy and lists scope"
+    )
+    always_local = [item for item in sync_items if item.startswith("Saved Resolver settings")]
+    assert always_local and all("enable switch" not in item for item in always_local), (
+        f"the Sync page's every-scope local list must not name the enable switch; items: {always_local}"
     )

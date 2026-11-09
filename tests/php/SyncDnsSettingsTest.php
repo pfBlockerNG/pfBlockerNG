@@ -72,7 +72,7 @@ final class SyncDnsSettingsTest extends TestCase
 	}
 
 	#[DataProvider('transports')]
-	public function testLegacyAllTransfersOnlySharedSettingsWithoutEnablingOrDisablingReceiver(string $transport, string $toggle): void
+	public function testLegacyAllTransfersSharedSettingsAndOnlyTheEnableOfTheLocalPfbDnsSection(string $transport, string $toggle): void
 	{
 		config_set_path(self::LOCAL, self::local($toggle === 'on' ? '' : 'on') + self::VALUES);
 		pfb_run_migrations();
@@ -90,7 +90,14 @@ final class SyncDnsSettingsTest extends TestCase
 			$payload = $payload['installedpackages'];
 		}
 		$this->assertSame(self::VALUES, $payload['pfblockerngdnssettings']['config'][0] ?? NULL);
-		$this->assertArrayNotHasKey('pfblockerngdns', $payload);
+		// A's enable: the opposite of B's. Core's array_get_path() answers its default for '', so Off travels as [].
+		$enable = $toggle === 'on' ? '' : 'on';
+		if ($transport === 'manual') {
+			// merge_installedpackages_section replaces a section wholesale and calls no hook: it can never carry one leaf (#3770).
+			$this->assertArrayNotHasKey('pfblockerngdns', $payload);
+		} else {
+			$this->assertSame(['config' => [0 => ['pfb_dns' => $enable === '' ? [] : $enable]]], $payload['pfblockerngdns'] ?? NULL);
+		}
 		if ($transport === 'manual') {
 			// Core receive is covered by the permanent self-XMLRPC smoke case, not a copied merge.
 			return;
@@ -105,28 +112,34 @@ final class SyncDnsSettingsTest extends TestCase
 				config_set_path($path, $value);
 			}
 		}
-		$this->assertSame(self::local($toggle), PfbConfig::readSection(self::LOCAL));
+		$this->assertSame(array_replace(self::local($toggle), ['pfb_dns' => $enable]), PfbConfig::readSection(self::LOCAL));
 		$this->assertSame($unbound, $GLOBALS['config']['unbound']);
 		$this->assertSame(self::VALUES, PfbConfig::readSection(self::SHARED));
 		$this->assertSame('443', PfbConfig::read('dns_shared/pfb_dns_doh_port'));
 	}
 
-	public function testPolicyAndListsLeavePfBDnsUntouched(): void
+	public function testPolicySendsOnlyTheEnableOfPfbDnsAndListsSendsNothingOfIt(): void
 	{
 		config_set_path(self::LOCAL, self::local('on') + self::VALUES);
 		pfb_run_migrations();
-		foreach (['policy', 'lists'] as $scope) {
+		foreach (['policy' => ['config' => [0 => ['pfb_dns' => 'on']]], 'lists' => NULL] as $scope => $dns) {
 			config_set_path(PFB_SECTIONS['sync'], ['syncscope' => $scope, 'varsynconchanges' => 'manual']);
 			$GLOBALS['pfb_test_xmlrpc_calls'] = [];
 			pfblockerng_do_xmlrpc_sync('192.0.2.2', '443', 'https', 'admin', 'password', 5);
 			$payload = $GLOBALS['pfb_test_xmlrpc_calls'][0][1];
 			$this->assertArrayNotHasKey('pfblockerngdnssettings', $payload['installedpackages'] ?? $payload);
+			$this->assertSame($dns, ($payload['installedpackages'] ?? $payload)['pfblockerngdns'] ?? NULL, "{$scope}: the only pfB-DNS leaf sent");
 			$this->assertStringNotContainsString('B-SNAPSHOT', serialize($payload));
 			config_set_path(PFB_SECTIONS['sync'] . '/varsynconchanges', 'auto');
+			$dnsPaths = [];
 			foreach (pfblockerng_plugin_xmlrpc_send() as $path) {
 				$this->assertStringNotContainsString('pfblockerngdnssettings', $path);
 				$this->assertNotSame('installedpackages/pfblockerngdns', $path);
+				if (str_starts_with($path, 'installedpackages/pfblockerngdns/')) {
+					$dnsPaths[] = $path;
+				}
 			}
+			$this->assertSame($dns === NULL ? [] : [self::LOCAL . '/pfb_dns'], $dnsPaths, "{$scope}: handed to pfSense HA sync");
 		}
 	}
 

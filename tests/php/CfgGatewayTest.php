@@ -572,10 +572,10 @@ final class CfgGatewayTest extends TestCase
 		foreach (['dnsbl/pfb_dns_proxy', 'dnsbl/pfb_dns_proxy_saved'] as $retired) {
 			$this->assertArrayNotHasKey($retired, $registry, "{$retired} left the registry");
 		}
-		foreach (['dns/pfb_dns', 'dns/pfb_dns_saved'] as $key) {
-			$this->assertArrayHasKey($key, $registry, "{$key} is registered");
-			$this->assertSame('local', $registry[$key]['sync'], "{$key} never leaves the node");
-		}
+		$this->assertArrayHasKey('dns/pfb_dns', $registry, 'dns/pfb_dns is registered');
+		$this->assertSame('policy', $registry['dns/pfb_dns']['sync'], 'dns/pfb_dns syncs with the DNSBL enable (#3770)');
+		$this->assertArrayHasKey('dns/pfb_dns_saved', $registry, 'dns/pfb_dns_saved is registered');
+		$this->assertSame('local', $registry['dns/pfb_dns_saved']['sync'], 'the Resolver snapshot never leaves the node');
 	}
 
 	/** issue #3513: the DoH/DoQ settings moved from the DNSBL section to the pfB-DNS one; the old keys are gone, not aliased. */

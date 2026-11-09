@@ -21,7 +21,7 @@ trait SyncPolicyFixtureTrait
 	private const EMBEDDED_KEY_PATH  = 'installedpackages/pfblockerngdnsbl/config/1/row/1/url';
 	private const EMBEDDED_KEY_VALUE = 'https://example.com/feed.txt?key=EMBEDDED-POLICY-KEY';
 
-	/** @return list<string> alias-qualified registry keys the spec classifies local (75) */
+	/** @return list<string> alias-qualified registry keys the spec classifies local (82) */
 	private static function localRegistryKeys(): array
 	{
 		$logs = [
@@ -66,7 +66,6 @@ trait SyncPolicyFixtureTrait
 			'dnsbl/pfb_dnsport',
 			'dnsbl/pfb_dnsport_ssl',
 			'dnsbl/pfb_cache_flush',
-			'dns/pfb_dns',
 			'dns/pfb_dns_saved',
 			'dns_shared/pfb_dns_doh',
 			'dns_shared/pfb_dns_doh_port',
@@ -174,12 +173,12 @@ trait SyncPolicyFixtureTrait
 			$fx[$policy ? 'policy' : 'nonpolicy'][$path] = $value;
 		};
 
-		// Sections are built in pfblockerng_sync_sections(TRUE) order so that 'policy' is
+		// Sections are built in pfb_sync_policy_sections() order so that 'policy' is
 		// already the expected projection order.
 		$registry = pfb_cfg_registry();
 		$local    = self::localRegistryKeys();
 		$cred     = self::credentialValues();
-		foreach (['gen', 'ip', 'dnsbl'] as $alias) {
+		$settings = static function (string $alias) use ($put, $registry, $local, $cred): void {
 			$base = PFB_SECTIONS[$alias];
 			foreach (array_keys($registry) as $key) {
 				if (str_starts_with($key, "{$alias}/") && !in_array($key, $local, TRUE)) {
@@ -201,6 +200,9 @@ trait SyncPolicyFixtureTrait
 				}
 				$put(FALSE, "{$base}/dnsbl_webpage", 'FOREIGN<dnsbl_webpage>');
 			}
+		};
+		foreach (['gen', 'ip', 'dnsbl'] as $alias) {
+			$settings($alias);
 		}
 
 		$groupRow = static function (string $section, int $n) use ($put): void {
@@ -266,6 +268,9 @@ trait SyncPolicyFixtureTrait
 		foreach (['safesearch_enable', 'safesearch_youtube', 'safesearch_doh', 'safesearch_doh_list'] as $leaf) {
 			$put(TRUE, "installedpackages/pfblockerngsafesearch/{$leaf}", "POLICY<ss.{$leaf}>");
 		}
+
+		// #3770: pfblockerngdns closes the policy sections; its enable is the one policy leaf, every other key is local.
+		$settings('dns');
 
 		$sy = 'installedpackages/pfblockerngsync/config/0';
 		$put(FALSE, "{$sy}/syncscope", 'SYNC<syncscope>');

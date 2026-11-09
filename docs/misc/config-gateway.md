@@ -218,7 +218,7 @@ Authorization = property of **write**, not call site (generalises
     runtime mirror and reload argument are removed. The migration deletes only the current
     DNSBL preference; saved settings-family snapshots, including 3.3, remain unchanged.
   - **`dns/pfb_dns` → `PfbToggle`** (issue #3515, pfB-DNS, mirror `$pfb['pfb_dns']`; section `dns` =
-    `installedpackages/pfblockerngdns/config/0`, the pfB-DNS tab's own): default Off, sync `local`; opt-in,
+    `installedpackages/pfblockerngdns/config/0`, the pfB-DNS tab's own): default Off, sync `policy` (the only `dns` key that syncs, #3770); opt-in,
     experimental pfBlockerNG DNS proxy in front of the DNS Resolver. DNSBL runs only through it, so DNSBL
     requires it (issue #3770). Migration `issue3770-pfb-dns-for-dnsbl` stores On where `dnsbl/pfb_dnsbl` is On
     and changes no other key; it runs at install/upgrade and is idempotent. There is no grandfather map,
@@ -238,8 +238,7 @@ Authorization = property of **write**, not call site (generalises
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`. It sits in the pfB-DNS section,
     not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only its own leaves
-    (the toggle, the twelve listener settings, the DDR settings and the DNS Reply Logging preference `dnsbl/pfb_py_reply`), never the section, under `pfb_dns_config_lock()`. The `dns` section is not one of the synced sections
-    (`pfblockerng_sync_sections()`), so neither key can leave the node. New key, no grandfather.
+    (the toggle, the twelve listener settings, the DDR settings and the DNS Reply Logging preference `dnsbl/pfb_py_reply`), never the section, under `pfb_dns_config_lock()`. Of the `dns` section only the toggle syncs (#3770: `pfblockerngdns` is a settings section of `pfb_sync_policy_sections()`, allowlisted by the registry `sync` class, and not one of `pfblockerng_sync_sections()`), so this snapshot cannot leave the node. New key, no grandfather.
     Manual repair means checking the Resolver (restoring a known-good configuration backup if necessary), then clearing
     the invalid marker only after that check. To start pfB-DNS again, turn it on and apply to regenerate its refusing
     service script. Package removal can instead be retried directly after the repair.
@@ -288,9 +287,9 @@ Authorization = property of **write**, not call site (generalises
     `installedpackages/pfblockerngdnssettings/config/0`. Its fields are the DoT/DoH/DoQ toggles
     and ports (IPv4 and IPv6), trusted DoH front ends and DDR (the two DoH-on-443 toggles it held are retired, issue #3694). Registry `sync: local` means
     excluded from **Policy and lists**; **All settings (legacy)** alone sends this whole section
-    on either transport. **Lists and global settings only (legacy)** excludes it. Node enable,
-    Resolver snapshot, all four interface/address lists (VIPs included), and certificate reference
-    stay in `dns` and are never transmitted. The legacy wire methods/receive merge are unchanged.
+    on either transport. **Lists and global settings only (legacy)** excludes it. Resolver snapshot,
+    all four interface/address lists (VIPs included), and certificate reference
+    stay in `dns` and are never transmitted. Since #3770 **All settings (legacy)** also carries the node enable, as the one `dns/pfb_dns` leaf, over the pfSense HA sync only: the XMLRPC replication targets use core's `merge_installedpackages_section`, which replaces a section wholesale and calls no hook, so they never send `pfblockerngdns`. The legacy receive sets only that key. The legacy wire methods/receive merge are otherwise unchanged.
     Migration `issue3649-dns-settings-split` moves raw values before registry writeback, retains
     all node-local fields, and removes only the nine retired locations. An exception preserves
     first-load inheritance: if old `pfb_dns_interface` is absent or empty, old DoT enable/port

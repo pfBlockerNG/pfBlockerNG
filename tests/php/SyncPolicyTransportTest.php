@@ -368,12 +368,17 @@ final class SyncPolicyTransportTest extends TestCase
 
 		$paths = $this->autoPaths();
 
+		// #3770: scope 'all' also hands pfSense the pfB-DNS enable, the one leaf of pfblockerngdns that is not node-local.
 		$expected = pfb_test_prechange_plugin_xmlrpc_send($scope === 'lists' ? PfbToggle::On : PfbToggle::Off);
+		if ($scope === 'all') {
+			$expected[] = 'installedpackages/pfblockerngdns/config/0/pfb_dns';
+		}
 		$this->assertSame($expected, $paths);
-		$this->assertCount($scope === 'lists' ? 17 : 20, $paths, 'varsynconchanges plus the 16 or 19 whole sections');
+		$this->assertCount($scope === 'lists' ? 17 : 21, $paths, 'varsynconchanges plus the 16 or 19 whole sections, plus the pfB-DNS enable for all');
 		$this->assertSame(self::SYNC_ROOT . '/varsynconchanges', $paths[0]);
 		$this->assertSame($scope === 'all', in_array('installedpackages/pfblockerng', $paths, TRUE), 'only all carries the General section');
 		$this->assertNotContains(self::GATE, $paths, 'legacy scopes never carry the gate leaf');
+		$this->assertNotContains('installedpackages/pfblockerngdns', $paths, 'the whole pfB-DNS section never travels');
 	}
 
 	#[DataProvider('nonSendingScopeProvider')]

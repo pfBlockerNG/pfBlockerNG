@@ -265,7 +265,7 @@ final class SyncPolicyReceiveTest extends TestCase
 	private function currentDigest(): string
 	{
 		$sections = [];
-		foreach (pfblockerng_sync_sections(TRUE) as $section) {
+		foreach (pfb_sync_policy_sections() as $section) {
 			$value = config_get_path("installedpackages/{$section}");
 			if ($value !== NULL) {
 				$sections[$section] = $value;

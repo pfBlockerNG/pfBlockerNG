@@ -113,8 +113,8 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 
 | Token | Meaning | Sent | Receive |
 | --- | --- | --- | --- |
-| `policy` | Policy and lists; this node's local settings stay local | the gate leaf plus the policy projection of the 19 sections of `pfblockerng_sync_sections(TRUE)` | per-field merge (below) |
-| `all` | All settings (legacy) | the same 19 sections, whole | legacy whole-section merge |
+| `policy` | Policy and lists; this node's local settings stay local | the gate leaf plus the policy projection of the 19 sections of `pfblockerng_sync_sections(TRUE)` and of `pfblockerngdns` (its enable only, #3770), together `pfb_sync_policy_sections()` | per-field merge (below) |
+| `all` | All settings (legacy) | the same 19 sections, whole; over the pfSense HA sync also the one leaf `pfblockerngdns/config/0/pfb_dns` (#3770) | legacy whole-section merge; that leaf is set alone |
 | `lists` | Lists and global settings only (legacy) | the 16 always-synced sections, whole | legacy whole-section merge |
 
 - `all` and `lists` reproduce today's unchecked and checked behaviour exactly: same sections, the
@@ -149,7 +149,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   **Policy** is what is blocked, permitted, logged, or transformed, and the shape of generated
   objects. Exception: the auto-created DNSBL VIP's address (`pfb_dnsvip_auto4/6`, #3540) is policy so
   both nodes sinkhole to one address; its VIP ids stay local.
-- Settings sections (`gen`, `ip`, `dnsbl`) use an allowlist: a key syncs if and only if its
+- Settings sections (`gen`, `ip`, `dnsbl`, and `dns` since #3770) use an allowlist: a key syncs if and only if its
   registry entry says `policy`. Unregistered keys there (`dnsbl_webpage`, the retired markers
   `dnsbl_mode`, `pfb_py_block`, `pfb_control_legacy_seeded`, and the `hooks` subtree) never sync.
 - All other synced sections use a deny list, `pfb_sync_local_paths()`, kept beside the registry:
@@ -182,7 +182,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 | `global` | every key except `feed_*`: `alertrefresh`, every `widget-*` |
 | `pfblockerngblacklist` | `item/*/username`, `item/*/password` (the `item` list is matched by its `xml` leaf) |
 | `sync` | `syncscope` (the section is never sent) |
-| `dns` | `pfb_dns`, `pfb_dns_saved`, `pfb_dns_interface`, `pfb_dns_dot`, `pfb_dns_dot_port`, `pfb_dns_dot_interface`, `pfb_dns_sslcertref`, `pfb_dns_doh`, `pfb_dns_doh_port`, `pfb_dns_doh_interface`, `pfb_dns_doh_trusted`, `pfb_dns_doq`, `pfb_dns_doq_port`, `pfb_dns_doq_interface`, `pfb_dns_ddr`, `pfb_dns_name`, `pfb_dns_ddr_doh_443_interfaces` (issues #3515, #3513, #3538, #3583 and #3694, pfB-DNS; the section is not one of the 19 and is never sent) |
+| `dns` | `pfb_dns_saved`, `pfb_dns_interface`, `pfb_dns_dot`, `pfb_dns_dot_port`, `pfb_dns_dot_interface`, `pfb_dns_sslcertref`, `pfb_dns_doh`, `pfb_dns_doh_port`, `pfb_dns_doh_interface`, `pfb_dns_doh_trusted`, `pfb_dns_doq`, `pfb_dns_doq_port`, `pfb_dns_doq_interface`, `pfb_dns_ddr`, `pfb_dns_name`, `pfb_dns_ddr_doh_443_interfaces` (issues #3515, #3513, #3538, #3583 and #3694, pfB-DNS; the section is not one of the 19 and is a settings section of `pfb_sync_policy_sections()`: only its enable `pfb_dns` is policy, #3770) |
 
 - Credentials are local. The MaxMind account and key (`maxmind_account`, `maxmind_key`), the IPinfo
   ASN token (`asn_token`), the Cloudflare TOP1M token (`top1m_token`), and the Blacklist provider
@@ -195,8 +195,8 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   `dnsbl_dot_block` sync, while their interface lists stay local. Their exception lists
   (`dnsbl_redir_exclude`, `dnsbl_dot_block_exclude`) and `killstates` are enforcement behaviour and
   therefore policy.
-- pfB-DNS is per node. `pfb_dns` (the toggle), `pfb_dns_saved` (the Resolver snapshot), the twelve listener settings and the two DDR settings are local and live in their own
-  `dns` section, which is none of the synced sections and is never sent. pfSense's own DNS Resolver sync does copy the
+- pfB-DNS is per node, except its enable (#3770). `pfb_dns_saved` (the Resolver snapshot), the twelve listener settings and the two DDR settings are local and live in their own
+  `dns` section, a settings section of `pfb_sync_policy_sections()` whose only policy key is `pfb_dns`: DNSBL runs only through pfB-DNS, so the enable travels with the DNSBL enable. pfSense's own DNS Resolver sync does copy the
   moved `unbound` section to a secondary, so a secondary needs pfB-DNS on before the primary syncs a moved Resolver
   (architecture-notes "pfB-DNS: the experimental DNS proxy", known limits).
 - Each node applies its own classification. The sender's classification never decides what the
@@ -215,7 +215,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 
 ### Policy projection
 
-A node's **policy projection** is the ordered list of its stored policy leaves in the 19 sections,
+A node's **policy projection** is the ordered list of its stored policy leaves in the 19 sections and `pfblockerngdns`,
 produced by its own classification before anything is transmitted. Local and unknown settings
 leaves, credentials, `pfblockerngsync` content, and `varsynconchanges` are not in it.
 
@@ -245,7 +245,7 @@ leaves, credentials, `pfblockerngsync` content, and `varsynconchanges` are not i
     `array_set_path($payload, $path, array_get_path($normalized, $path, []))`. It sends `$payload`
     itself as the `restore_config_section` argument and never wraps it in
     `['installedpackages' => …]` again. Both transports therefore put the same array on the wire.
-- The payload is a **complete snapshot**: all 19 sections are always in scope. A section with no
+- The payload is a **complete snapshot**: all 19 sections (and `pfblockerngdns`, #3770) are always in scope. A section with no
   policy leaf contributes no path, which means the sender has no policy content there. No
   per-leaf deletion record exists or is needed.
 
@@ -292,10 +292,10 @@ The receiver's own `syncscope` is not consulted.
    passes. A received header therefore cannot change under the apply after the accepted digest is
    taken. Each Blacklist `item` row is an array with a non-empty string `xml`, unique within `item`
    on both sides. Any failure returns `[]` and records the refusal locally. No pfBlockerNG path
-   changes. Sections outside the 19, and content of `pfblockerngsync` other than the gate leaf, are
+   changes. Sections outside the 19 and `pfblockerngdns`, and content of `pfblockerngsync` other than the gate leaf, are
    ignored.
-2. **Complete snapshot.** In `policy` scope all 19 sections are always in scope. A section missing
-   or empty in the payload means the sender has no policy content there. A listed leaf holding
+2. **Complete snapshot.** In `policy` scope all 19 sections and `pfblockerngdns` are always in scope. A section missing
+   or empty in the payload means the sender has no policy content there, except `pfblockerngdns`, whose absence leaves the receiver's own section as it is (#3770, version skew). A listed leaf holding
    `''` or `[]` is a present, empty value and never a deletion. The merge therefore does not depend
    on how XMLRPC or the config parser encodes an empty element.
 3. **Map sections** (each settings `config/0`, the continent, Top Spammers and Proxy/Satellite
@@ -420,7 +420,7 @@ digest is exchanged or compared across nodes. State lives in root-only files und
 name leaf paths, never values.
 
 A node's **policy digest** is SHA-256 over a canonical serialization of its policy projection: the
-19 sections in `pfblockerng_sync_sections(TRUE)` order, string-keyed maps sorted by key, and row
+19 sections in `pfblockerng_sync_sections(TRUE)` order followed by `pfblockerngdns` (`pfb_sync_policy_sections()`), string-keyed maps sorted by key, and row
 lists, Blacklist `item` included, kept in order and renumbered by position. It depends on that
 node's own classification.
 
@@ -734,3 +734,32 @@ win on upgrade; review and reapply intended transport choices in the upgraded UI
 Node-local activation and recovery state remain untouched. Whole-section sync also means an
 unseeded sender's absent DoT fields clear the receiver's explicit DoT choices; configure those
 choices on the sender first if needed. See `docs/misc/config-gateway.md` for downgrade semantics.
+
+## Amendment 2026-11-09 — the pfB-DNS enable syncs with the DNSBL enable (#3770)
+
+DNSBL runs only through pfB-DNS, so a receiver that got DNSBL On without pfB-DNS On would hold DNSBL that blocks
+nothing. `dns/pfb_dns` is therefore registry `sync: policy`, and the amendment of 2026-11-02 above no longer holds for
+the enable; everything else of the `pfblockerngdns` section stays local in every scope.
+
+- **Policy.** `pfb_sync_policy_sections()` is the 19 sections plus `pfblockerngdns`. It feeds the policy projection,
+  digest tree, receive merge, `pfb_sync_stored_sections()` default and the receive's incoming-digest walk, and nothing
+  else: `pfblockerng_sync_sections()` and `pfb_sync_legacy_sections()` are unchanged, so no legacy scope ships the
+  whole section. `pfblockerngdns` is a settings section (allowlist), so only `pfb_dns` projects and merges; the
+  snapshot, listener lists and transport settings are kept by the receiver. Adding the section changes every policy
+  digest once on upgrade, which reads as drift and lets a node that is also a sender echo once.
+- **Version skew.** A policy payload without any `pfblockerngdns` section (a sender older than this change) leaves the
+  receiver's own section as it is, the enable included. A payload that carries the section applies its policy keys as
+  usual, so an explicit Off from an upgraded sender still applies (it travels as `[]`, read as `''`).
+- **Legacy `all`.** Over the pfSense HA sync the sender adds the single leaf `pfblockerngdns/config/0/pfb_dns`
+  to the paths it hands to core, and the legacy receive sets only that key (it returns the leaf path, so the rest
+  of the section is untouched). The `all` legacy digest includes the leaf, so a node's own edit of it lifts the echo
+  suppression like any other `all` edit. The XMLRPC replication targets of `all` never send `pfblockerngdns`: they use
+  `merge_installedpackages_section`, which replaces each sent section wholesale and calls no hook (`xmlrpc.php:726-743`),
+  so even one leaf would erase the receiver's snapshot and listener lists. A receiver of that transport therefore keeps
+  its own enable and the existing "DNSBL is not blocking: pfB-DNS is off" notice covers it. `lists` carries nothing of
+  `pfblockerngdns`.
+- **Apply.** The receive never moves the Resolver. A policy receive marks the change pending and starts the tick as
+  for any received change; a legacy receive stores only, and the receiver's next Update applies it.
+- **HA ordering is unchanged.** pfSense's Resolver sync still copies the moved `unbound` section, so the secondary must
+  apply the change first. The primary's setting now replaces the secondary's at its next sync, so save the same setting on both
+  nodes before applying.

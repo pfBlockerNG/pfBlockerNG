@@ -23,7 +23,7 @@ final class SyncDnsMixedVersionTest extends TestCase
 	}
 
 	#[DataProvider('peers')]
-	public function testOlderPeerNeverReceivesAnotherNodesEnableStateOrSnapshot(string $transport, string $toggle): void
+	public function testOlderPeerNeverStoresAnotherNodesEnableStateOrReceivesItsSnapshot(string $transport, string $toggle): void
 	{
 		$localPath = 'installedpackages/pfblockerngdns/config/0';
 		$sharedPath = 'installedpackages/pfblockerngdnssettings/config/0';
@@ -46,7 +46,13 @@ final class SyncDnsMixedVersionTest extends TestCase
 			$payload = $payload['installedpackages'];
 		}
 		$this->assertArrayHasKey('pfblockerngdnssettings', $payload, 'vacuity guard: the new sender sent its new section');
-		$this->assertArrayNotHasKey('pfblockerngdns', $payload);
+		if ($transport === 'manual') {
+			// merge_installedpackages_section replaces a section wholesale and calls no hook, so it never carries pfblockerngdns (#3770).
+			$this->assertArrayNotHasKey('pfblockerngdns', $payload);
+		} else {
+			// Over pfSense HA sync the legacy scope carries the enable alone (Off travels as []); the released hook ignores it below.
+			$this->assertSame(['config' => [0 => ['pfb_dns' => $toggle === 'on' ? [] : 'on']]], $payload['pfblockerngdns'] ?? NULL);
+		}
 		if ($transport === 'manual') {
 			// The live XMLRPC smoke case covers core's receiver; this case proves the sender's safe payload.
 			return;

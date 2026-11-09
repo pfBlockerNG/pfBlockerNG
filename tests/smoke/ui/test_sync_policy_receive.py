@@ -173,7 +173,7 @@ def _changed_payload(box: _Box) -> dict[str, Any]:
         f"$rows[] = {helpers._ip_list_php(spec)};\n"
         f"array_set_path($normalized, {lists}, $rows);\n"
         "$sections = array();\n"
-        "foreach (pfblockerng_sync_sections(TRUE) as $s) {\n"
+        "foreach (pfb_sync_policy_sections() as $s) {\n"
         "    $sections[$s] = array_get_path($normalized, 'installedpackages/' . $s);\n"
         "}\n"
         f"$paths = array_merge(array({gate}), array_keys(pfb_sync_policy_projection($sections)));\n"

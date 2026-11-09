@@ -245,7 +245,6 @@ UNSEEDED_LOCAL_KEYS = {
     f"{DNSBL}/dnsbl_interface": "must be the interface of the node's DNSBL VIP (lo0): pfb_validate_vips() disables DNSBL otherwise",
     f"{DNSBL}/pfb_dnsvip6": "names a VIP object the guests do not have: a dangling reference disables DNSBL",
     f"{GEN}/pfb_metrics_export": "'on' needs pfSense-pkg-node_exporter on the node (the save gate refuses it without), and no HA guest installs that package",
-    f"{DNS}/pfb_dns": "the harness turns it on with DNSBL on both nodes (#3770 makes DNSBL run only through pfB-DNS): a node where it is off would not block",
     f"{DNS}/pfb_dns_saved": "the Resolver snapshot the apply writes itself when it moves the Resolver; a seeded value reads as a moved one",
     f"{DNS}/pfb_dns_interface": "the apply seeds it from the node's own Resolver interfaces (pfb_dns_proxy_seed()): a seeded value would keep the proxy off the interfaces the Resolver serves",
     h.dns_config_path(
@@ -634,7 +633,7 @@ _STATE_PHP = (
     "    if (strpos((string) $name, 'pfblockerng') === 0) { $names[$name] = pfb_sync_persisted_shape($tree); }\n"
     "}\n"
     "$synced = array();\n"
-    "foreach (pfblockerng_sync_sections(TRUE) as $s) { if (isset($names[$s])) { $synced[$s] = $names[$s]; } }\n"
+    "foreach (pfb_sync_policy_sections() as $s) { if (isset($names[$s])) { $synced[$s] = $names[$s]; } }\n"
     "$projection = pfb_sync_policy_projection($synced);\n"
     "$leaves = array();\n"
     "$walk = static function (string $path, mixed $value) use (&$walk, &$leaves): void {\n"
