@@ -110,9 +110,9 @@
 		timeline = {chart: chart, svg: svg, updateTicks: updateTicks};
 	}
 
-	function renderPie(data) {
-		const pie = new d3pie(data.id, {
-			size: {canvasHeight: 390, canvasWidth: 560, pieInnerRadius: 60, pieOuterRadius: '78%'},
+	function renderPie(data, target, size) {
+		const pie = new d3pie(target || data.id, {
+			size: Object.assign({canvasHeight: 390, canvasWidth: 560, pieInnerRadius: 60, pieOuterRadius: '78%'}, size || {}),
 			data: {sortOrder: 'value-asc', content: data.content},
 			labels: {
 				outer: {pieDistance: 25}, inner: {format: 'percentage', hideWhenLessThanPercentage: 3},
@@ -134,8 +134,37 @@
 			misc: {gradient: {enabled: true, percentage: 50}, pieCenterOffset: {x: 0, y: 0},
 				colors: {background: null, segmentStroke: '#ffffff'}}
 		});
-		fluidPie(data.id);
+		fluidPie(target || data.id);
 		return pie;
+	}
+
+	function zoomPie(data, button) {
+		const title = button.getAttribute('aria-label');
+		const modal = $('<div class="modal fade" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg pfb-pie-zoom-dialog" role="document"><div class="modal-content">'
+			+ '<div class="modal-header"><button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>'
+			+ '<h4 class="modal-title"></h4></div><div class="modal-body"><div class="pfb-pie-zoomed" id="' + data.id + '_zoom"></div></div></div></div></div>');
+		modal.find('.modal-title').text(title);
+		let zoomed = null;
+		modal.on('shown.bs.modal', function () { zoomed = renderPie(data, data.id + '_zoom', {canvasHeight: 600, canvasWidth: 860, pieInnerRadius: 90}); });
+		modal.on('hidden.bs.modal', function () { if (zoomed) { zoomed.destroy(); } modal.remove(); button.focus(); });
+		$('body').append(modal);
+		modal.modal('show');
+	}
+
+	function mountPie(panel) {
+		const holder = document.getElementById(panel.data.pie.id);
+		const column = holder.parentElement;
+		// The pie's height follows its own shape, capped like the table beside it.
+		holder.style.maxHeight = column.style.maxHeight;
+		panel.pie = renderPie(panel.data.pie);
+		const heading = panel.body.closest('.panel') && panel.body.closest('.panel').querySelector('.panel-title');
+		const button = document.createElement('button');
+		button.type = 'button';
+		button.className = 'btn btn-default btn-xs pfb-pie-zoom';
+		button.setAttribute('aria-label', 'Zoom ' + (heading ? heading.textContent.trim() : 'chart'));
+		button.innerHTML = '<i class="fa-solid fa-magnifying-glass-plus" aria-hidden="true"></i>';
+		button.addEventListener('click', function () { zoomPie(panel.data.pie, button); });
+		holder.appendChild(button);
 	}
 
 	function mount(panel) {
@@ -147,8 +176,13 @@
 			panel.body.innerHTML = panel.data.html;
 		}
 		panel.body.style.minHeight = '';
+		// Stats columns shrink to their content and only scroll past the configured height.
+		panel.body.querySelectorAll('.pfb-stats-col').forEach(function (column) {
+			if (column.style.height) { column.style.maxHeight = column.style.height; column.style.height = ''; }
+			if (column.style.overflowY === 'scroll') { column.style.overflowY = 'auto'; }
+		});
 		if (panel.body.querySelector('#chart')) { renderTimeline(); }
-		if (panel.data.pie) { panel.pie = renderPie(panel.data.pie); }
+		if (panel.data.pie) { mountPie(panel); }
 		if (window.Sortable) {
 			panel.body.querySelectorAll('table[data-sortable]').forEach(function (table) { Sortable.initTable(table); });
 		}

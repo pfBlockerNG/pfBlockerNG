@@ -3499,15 +3499,39 @@ $pfb_unified_tint = $pfb_webgui_dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05
 	display: flex;
 	flex-wrap: wrap;
 	gap: 10px;
+	align-items: flex-start;
 }
 .pfb-stats-col {
 	flex: 1 1 480px;
 	min-width: 0;
 }
-/* Let the d3pie SVG scale fluidly within its column */
-.pfb-stats-col svg {
-	max-width: 100%;
-	height: auto;
+/* Fit each d3pie SVG inside its fixed-height column (never scroll); zoom opens one pie larger */
+.pfb-stats-col > [id^="pieChart_"] {
+	position: relative;
+	aspect-ratio: 560 / 390;
+	margin: 0 auto;
+	overflow: hidden;
+}
+.pfb-stats-col > [id^="pieChart_"] > svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+.pfb-pie-zoom {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+}
+.pfb-pie-zoomed {
+	height: 70vh;
+}
+.pfb-pie-zoomed > svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+@media (max-width: 991px) {
+	.modal-dialog.modal-lg.pfb-pie-zoom-dialog { width: auto; margin: 10px; }
 }
 
 @media print {
@@ -3520,6 +3544,9 @@ $pfb_unified_tint = $pfb_webgui_dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05
 		page-break-inside: avoid;
 	}
 	.panel-body { overflow: visible !important; }
+	.pfb-stats-col > [id^="pieChart_"], .pfb-stats-col > [id^="pieChart_"] > svg { height: auto; }
+	.pfb-stats-col, .pfb-stats-col > [id^="pieChart_"] { max-height: none !important; }
+	.pfb-pie-zoom { display: none; }
 	* { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .pfb-unified tbody tr:nth-of-type(odd) {
