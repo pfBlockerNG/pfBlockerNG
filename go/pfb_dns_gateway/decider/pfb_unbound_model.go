@@ -84,11 +84,14 @@ type feedGroup struct{ feed, group string }
 // rejectTally is Python's RejectTally: (feed, group) -> bucket -> count.
 type rejectTally map[[2]string]map[string]int
 
-// regexEntry is a regexDB / allowRegexDB / userRegexDB / userAllowRegexDB payload.
+// regexEntry is a regexDB / allowRegexDB / userRegexDB / userAllowRegexDB payload. Every builder sets group_owner
+// and group_origin, so Python's .get(key, "") reads need no has* flag.
 type regexEntry struct {
-	re        *regexp.Regexp
-	important bool
-	band      int
+	re          *regexp.Regexp
+	important   bool
+	band        int
+	groupOwner  string
+	groupOrigin string
 }
 
 // regexDB is an insertion-ordered dict[str, regexEntry]; re-assigning a key keeps its position, as in Python.
