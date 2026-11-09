@@ -2416,13 +2416,13 @@ function pfb_cfg_registry(): array
 		// pfB-DNS local state (dns, #3515) and legacy-shared transport settings (dns_shared, #3649).
 		// -------------------------------------------------------------------
 
-		// EXPERIMENTAL DNS proxy on the Resolver's client-facing interfaces, with or without DNSBL. Default off.
+		// pfB-DNS front end of the Resolver; DNSBL runs only through it, so DNSBL on requires it. Default off.
 		'dns/pfb_dns' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'sync'          => 'local',
-			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads Off = pre-feature behaviour (no proxy, Resolver untouched)',
+			'no_grandfather' => '#3770 cross-section migration issue3770-pfb-dns-for-dnsbl turns it on where DNSBL is on, which a per-section grandfather map cannot see; absent with DNSBL off reads Off = no proxy',
 		],
 
 		// The Resolver's pre-move active_interface/enablessl/custom_options (base64 JSON, written by
@@ -3869,6 +3869,14 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: removed obsolete Resolver cache preference (issue #3701)',
 			'since'   => '4.0.0',
 		],
+		// issue #3770: DNSBL runs only through pfB-DNS. Last, so it sees the #3649 split's result.
+		[
+			'id'       => 'issue3770-pfb-dns-for-dnsbl',
+			'sections' => [$dnsbl, PFB_SECTIONS['dns']],
+			'apply'    => 'pfb_dns_dnsbl_migrate',
+			'message'  => 'pfBlockerNG: turned pfB-DNS on because DNSBL runs only through it (issue #3770)',
+			'since'    => '4.1.0',
+		],
 	];
 }
 
@@ -3898,6 +3906,27 @@ function pfb_dns_settings_migrate(array $sections): ?array
 		$changed = TRUE;
 	}
 	return $changed ? [$old_path => $old, $new_path => $new] : NULL;
+}
+
+/**
+ * Issue #3770: DNSBL runs only through pfB-DNS, so an install with DNSBL on gets pfB-DNS on.
+ * Every other pfB-DNS key stays as stored; NULL when there is nothing to change.
+ *
+ * @param array<string,mixed> $sections
+ * @return array<string,array<string,mixed>>|null
+ */
+function pfb_dns_dnsbl_migrate(array $sections): ?array
+{
+	$dnsbl_path = PFB_SECTIONS['dnsbl'];
+	$dns_path   = PFB_SECTIONS['dns'];
+	$dnsbl      = is_array($sections[$dnsbl_path] ?? NULL) ? $sections[$dnsbl_path] : [];
+	$dns        = is_array($sections[$dns_path] ?? NULL) ? $sections[$dns_path] : [];
+	if (pfb_cfg_toggle_read($dnsbl['pfb_dnsbl'] ?? NULL) !== PfbToggle::On
+		|| pfb_cfg_toggle_read($dns['pfb_dns'] ?? NULL) === PfbToggle::On) {
+		return NULL;
+	}
+	$dns['pfb_dns'] = pfb_cfg_toggle_write(PfbToggle::On);
+	return [$dns_path => $dns];
 }
 
 /**

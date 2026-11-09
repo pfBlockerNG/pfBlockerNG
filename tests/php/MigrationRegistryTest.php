@@ -510,6 +510,8 @@ final class MigrationRegistryTest extends TestCase
 			'pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7',
 			'pfb_schedule_hour' => '0', 'pfb_schedule_minute' => '0',
 		]);
+		// issue #3770: DNSBL on migrates to pfB-DNS on, so the migrated state carries it.
+		config_set_path('installedpackages/pfblockerngdns/config/0', ['pfb_dns' => 'on']);
 
 		// First run should be a no-op since all keys already carry migrated values.
 		pfb_run_migrations();

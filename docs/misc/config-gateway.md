@@ -219,9 +219,11 @@ Authorization = property of **write**, not call site (generalises
     DNSBL preference; saved settings-family snapshots, including 3.3, remain unchanged.
   - **`dns/pfb_dns` → `PfbToggle`** (issue #3515, pfB-DNS, mirror `$pfb['pfb_dns']`; section `dns` =
     `installedpackages/pfblockerngdns/config/0`, the pfB-DNS tab's own): default Off, sync `local`; opt-in,
-    experimental pfBlockerNG DNS proxy in front of the DNS Resolver, with or without DNSBL. The feature is
-    unreleased, so there is no grandfather and no migration from the DNSBL-section key it started as
-    (`dnsbl/pfb_dns_proxy`, retired without an alias): absent reads Off = pre-feature behaviour.
+    experimental pfBlockerNG DNS proxy in front of the DNS Resolver. DNSBL runs only through it, so DNSBL
+    requires it (issue #3770). Migration `issue3770-pfb-dns-for-dnsbl` stores On where `dnsbl/pfb_dnsbl` is On
+    and changes no other key; it runs at install/upgrade and is idempotent. There is no grandfather map,
+    because it cannot see the DNSBL section. No migration from the DNSBL-section key it started as
+    (`dnsbl/pfb_dns_proxy`, retired without an alias): absent with DNSBL off reads Off = no proxy.
   - **`gen/pfb_dns_listen_vip_only` → `PfbToggle`** (issue #3699): default Off, sync `policy`,
     beside the Resolver VIP policy fields. Explicit opt-in restricts pfB-DNS client-facing
     listeners to active selected Resolver VIPs and answers the DNS Name with their address
