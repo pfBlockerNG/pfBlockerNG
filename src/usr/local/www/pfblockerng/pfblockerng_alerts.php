@@ -4912,7 +4912,7 @@ $stats_range_select->setAttribute('id', 'Alert_Stats_Range')
 	->setAttribute('aria-label', gettext('Time range'))
 	->setAttribute('autocomplete', 'off')
 	->setWidth(4)
-	->setHelp(gettext('Applies to every panel on this page.'));
+	->setHelp('Applies to every panel on this page.');
 $stats_range_group->add($stats_range_select);
 print($stats_range_group);
 $stats_window_text = $stats_window === NULL ? gettext('No dated records')

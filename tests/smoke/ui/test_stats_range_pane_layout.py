@@ -129,6 +129,8 @@ def test_stats_range_pane_uses_pfsense_form_rows(
         assert rng["labelTag"] == "label", rng
         assert {"col-sm-2", "control-label"} <= set(rng["labelClasses"]), rng["labelClasses"]
         assert rng["labelText"] == "Time range"
+        # pfSense omits <label for> unless the left-column-hyperlink user setting is on: the name must not depend on it.
+        _expect()(page.locator("#Alert_Stats_Range")).to_have_attribute("aria-label", "Time range")
         assert rng["controlInColumn"], "the select is not in the column that follows the label"
         assert "col-sm-4" in rng["columnClasses"], rng["columnClasses"]
         assert "form-control" in rng["controlClasses"], rng["controlClasses"]
