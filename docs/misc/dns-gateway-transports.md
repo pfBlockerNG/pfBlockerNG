@@ -11,7 +11,7 @@ does not change the listener transport. Only UDP clients have the decider's UDP 
 
 ## Certificate
 
-DoT, DoH and DoQ serve the certificate selected on the pfB-DNS page (`dns/pfb_dns_sslcertref`): the certificate, the CAs after it nearest first, then its private key,
+DoT, DoH and DoQ serve the certificate selected on **DNS > General** (`dns/pfb_dns_sslcertref`): the certificate, the CAs after it nearest first, then its private key,
 as one PEM text. The gateway does not read `config.xml`. It has the certificate from two places, and nowhere else:
 
 1. **At start, from `--tls-pem`** (`/var/etc/pfb_dns/tls.pem` in pfBlockerNG's rc script). pfBlockerNG writes the file
@@ -424,7 +424,7 @@ transports do answer).
 
 ## DNS name
 
-The DNS name (issue #3694) is entered on the pfB-DNS page beside the certificate (`dns/pfb_dns_name`, per node like the certificate, which
+The DNS name (issue #3694) is entered on **DNS > General** beside the certificate (`dns/pfb_dns_name`, per node like the certificate, which
 must list it as a DNS SAN) and is both DDR's target name and the one name pfB-DNS answers `A` and `AAAA` for itself.
 An active pfB-DNS configuration requires this name for any of DoT, DoH, DoQ or DDR, even when DDR is off.
 Save validation rejects a missing name; runtime command generation also leaves unnamed/invalid-name encrypted groups out with
@@ -433,7 +433,7 @@ configuration policy, not a new restriction on the standalone gateway's generic 
 
 | Flag | Meaning |
 |---|---|
-| `--dns-name NAME` | The DNS name, with or without one trailing dot: labels of 1 to 63 characters, at most 253 in all. Empty or absent: no name, so no DDR and no name answers. The pfB-DNS page also refuses an IP literal, a wildcard, a single label and `resolver.arpa.` or a name under it. |
+| `--dns-name NAME` | The DNS name, with or without one trailing dot: labels of 1 to 63 characters, at most 253 in all. Empty or absent: no name, so no DDR and no name answers. The pfB-DNS settings save also refuses an IP literal, a wildcard, a single label and `resolver.arpa.` or a name under it. |
 | `--dns-name-answer LOCAL=ADDR[,ADDR]` | Repeatable. A query for the name that arrives on LOCAL is answered with the ADDR of the family it asked for, or local NOERROR/NODATA when that family is absent. `LOCAL=` owns the Name without any addresses. LOCAL and every ADDR are IP addresses without a zone (an IPv4-mapped one is read as its IPv4 address); at most one ADDR per family; a LOCAL named twice is an error, and so is any of these flags without `--dns-name` (`--dns-name-answer needs --dns-name`). LOCAL need not be one of its ADDRs. |
 
 After the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and after DDR, before the decider, the gateway

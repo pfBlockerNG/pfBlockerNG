@@ -449,7 +449,7 @@ instead of the VIP, which may avoid browser certificate errors.
 
 **CNAME Validation** also checks the names a domain points at.
 
-**DNS Reply Logging** (on the **pfB-DNS** tab, for DNSBL with or without
+**DNS Reply Logging** (on **DNS > General**, for DNSBL with or without
 pfB-DNS) records replies that were *not* blocked. Useful to prove a name was
 allowed; it can fill the log.
 

@@ -171,7 +171,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 | `pfblockerngblacklist` | flat settings keys plus an `item` list of per-provider rows, each identified by its `xml` leaf | Blacklist tab | deny list; `item` rows matched by `xml` |
 | `pfblockerngglobal` | flat map | Feeds page (`feed_*`), dashboard widget (`widget-*`), Alerts page (`alertrefresh`) | deny list |
 | `pfblockerngsafesearch` | flat map | SafeSearch tab | deny list |
-| `pfblockerngdns` | `config/0` map | pfB-DNS tab | allowlist (one `policy` key: `pfb_dns`) |
+| `pfblockerngdns` | `config/0` map | DNS > General (pfB-DNS settings) | allowlist (one `policy` key: `pfb_dns`) |
 
 - Local keys (every other key in these sections is policy):
 

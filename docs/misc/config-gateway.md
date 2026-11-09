@@ -208,8 +208,8 @@ Authorization = property of **write**, not call site (generalises
     `'dnsbl_python'` was inert (both consumers python-gated in 3.2) and is disabled
     before ADR-02 python force would otherwise activate it.
   - **`dnsbl/pfb_py_reply` is read in both DNS modes** (issue #3515): it stays the DNSBL-section key,
-    with the same default, grandfathering and `local` sync, but it is edited on the pfB-DNS tab
-    (the pfB-DNS save writes it through the gateway under the same config lock as `dns/pfb_dns`;
+    with the same default, grandfathering and `local` sync, but it is edited on **DNS > General**
+    (the DNS General save writes it through the gateway under the same config lock as `dns/pfb_dns`;
     the DNSBL save no longer assigns it). The DNSBL module's ini carries it as `python_reply`; with
     DNSBL off, `pfb_dns_proxy_service()` turns it into the proxy's `--reply-log`.
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables post-handshake full Unbound
@@ -218,7 +218,7 @@ Authorization = property of **write**, not call site (generalises
     runtime mirror and reload argument are removed. The migration deletes only the current
     DNSBL preference; saved settings-family snapshots, including 3.3, remain unchanged.
   - **`dns/pfb_dns` → `PfbToggle`** (issue #3515, pfB-DNS, mirror `$pfb['pfb_dns']`; section `dns` =
-    `installedpackages/pfblockerngdns/config/0`, the pfB-DNS tab's own): default Off, sync `policy` (the only `dns` key that syncs, #3770); opt-in,
+    `installedpackages/pfblockerngdns/config/0`, the pfB-DNS settings' own, on **DNS > General**): default Off, sync `policy` (the only `dns` key that syncs, #3770); opt-in,
     experimental pfBlockerNG DNS proxy in front of the DNS Resolver. DNSBL runs only through it, so DNSBL
     requires it (issue #3770). Migration `issue3770-pfb-dns-for-dnsbl` stores On where `dnsbl/pfb_dnsbl` is On
     and changes no other key; it runs once per install base (marker `dns/pfb_dns_dnsbl_migrated`, next bullet), so a
@@ -244,8 +244,8 @@ Authorization = property of **write**, not call site (generalises
     overwritten or cleared by the package (recovery required: the removal and the wizard's reset stop). Default `''`, sync
     `local`. Written only by `pfb_dns_proxy_resolver()` via `PfbConfig::writeSystem()` (cron/CLI/wizard
     callers hold no web session), read only by `pfb_dns_proxy_saved()`. It sits in the pfB-DNS section,
-    not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS page writes only its own leaves
-    (the toggle, the twelve listener settings, the DDR settings and the DNS Reply Logging preference `dnsbl/pfb_py_reply`), never the section, under `pfb_dns_config_lock()`. Of the `dns` section only the toggle syncs (#3770: `pfblockerngdns` is a settings section of `pfb_sync_policy_sections()`, allowlisted by the registry `sync` class, and not one of `pfblockerng_sync_sections()`), so this snapshot cannot leave the node. New key, no grandfather.
+    not the DNSBL one, so no DNSBL page save can replace it; the pfB-DNS settings save writes only its own leaves
+    (the toggle, the twelve listener settings and the DDR settings), never the section, under `pfb_dns_config_lock()`. Of the `dns` section only the toggle syncs (#3770: `pfblockerngdns` is a settings section of `pfb_sync_policy_sections()`, allowlisted by the registry `sync` class, and not one of `pfblockerng_sync_sections()`), so this snapshot cannot leave the node. New key, no grandfather.
     Manual repair means checking the Resolver (restoring a known-good configuration backup if necessary), then clearing
     the invalid marker only after that check. To start pfB-DNS again, turn it on and apply to regenerate its refusing
     service script. Package removal can instead be retried directly after the repair.
@@ -261,7 +261,7 @@ Authorization = property of **write**, not call site (generalises
     `pfb_dns_proxy_seed()`, sync `local`. New keys, no grandfather.
   - **`dns_shared/pfb_dns_doh_trusted`** (issue #3513, plain string): space-joined IPs/CIDRs of front ends trusted to
     send PROXY protocol v2 / X-Forwarded-For, default `''`, sync `local`. New key, no grandfather. These seven and the
-    five #3538 keys below are written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`, under
+    five #3538 keys below are written by the pfB-DNS settings save (`pfb_dns_proxy_listeners_stored()`, under
     `pfb_dns_config_lock()` beside the toggle), read through `PfbConfig::read()` by `pfb_dns_proxy_service()`.
   - **`dns/pfb_dns_interface` / `dns_shared/pfb_dns_dot` / `dns_shared/pfb_dns_dot_port` / `dns/pfb_dns_dot_interface` /
     `dns/pfb_dns_sslcertref`** (issue #3538, pfB-DNS's own listener settings): defaults `''` (interface, DoT
@@ -269,11 +269,11 @@ Authorization = property of **write**, not call site (generalises
     no grandfather. `pfb_dns_proxy_seed()` fills each one not seeded yet, from the DNS Resolver or, once pfB-DNS has
     moved it, from its snapshot, on every apply that turns the proxy on. The seed is keyed on
     `dns/pfb_dns_interface` being `''`. Shared DoT enable/port keys are left absent by the registry pass until this seed;
-    existing explicit values (including received Off/empty choices) are never replaced. The pfB-DNS page seeds on load and shows a
+    existing explicit values (including received Off/empty choices) are never replaced. **DNS > General** seeds on load and shows a
     setting through `pfb_dns_proxy_setting()`, so a seed the lock refused still shows; its save writes all twelve and the DDR keys below.
   - **`dns_shared/pfb_dns_ddr` → `PfbToggle`** (issue #3583, pfB-DNS's DDR answers, RFC 9462): default
     Off, sync `local`. New key, no grandfather: absent reads Off = pre-feature behaviour (the gateway does not touch
-    `resolver.arpa.`). Written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`) and read through `PfbConfig::read()` by
+    `resolver.arpa.`). Written by the pfB-DNS settings save (`pfb_dns_proxy_listeners_stored()`) and read through `PfbConfig::read()` by
     `pfb_dns_proxy_ddr_flags()` for the gateway's `--ddr`, which needs a DNS Name.
   - **`dns/pfb_dns_ddr_doh_443_interfaces`** (issue #3694, plain string): the interface tokens (and Resolver VIP ids the operator chose)
     DDR advertises DoH on port 443 for, comma-joined; default `''` = nothing advertised, sync `local` (per node, beside the DoH interface list
@@ -286,7 +286,7 @@ Authorization = property of **write**, not call site (generalises
   - **`dns/pfb_dns_name`** (issue #3694, plain string): the DNS Name, DDR's target name and the name pfB-DNS answers `A` and `AAAA` for;
     default `''` = no name, sync `local` (per node like the certificate, which must list it as a DNS SAN; not one of
     `PFB_DNS_SHARED_FIELDS`). New key, no grandfather, never seeded: a box that had DDR On before the key existed reads `''` and
-    stops answering DDR until a name is entered. Written by the pfB-DNS page's save (`pfb_dns_proxy_listeners_stored()`, trailing dot
+    stops answering DDR until a name is entered. Written by the pfB-DNS settings save (`pfb_dns_proxy_listeners_stored()`, trailing dot
     stripped, case kept; the save refuses DDR On with no name), read through `PfbConfig::read()` by `pfb_dns_proxy_ddr_flags()`
     for `--dns-name`, `--ddr` and one `--dns-name-answer` per listen address, and by `pfb_dns_proxy_ddr_warnings()`. A stored
     text that is no valid name (`pfb_dns_proxy_name_normalized()`) counts as `''` and is logged.

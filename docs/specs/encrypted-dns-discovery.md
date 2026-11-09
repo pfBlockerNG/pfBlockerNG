@@ -53,6 +53,8 @@ responsibility and do not block activation. Existing Resolver VIP advertisement 
 The basic pfB-DNS, Resolver-address and selected-VIP-family prerequisites still apply. No DHCP parser, migration or lease
 deletion is added. This supersedes the earlier same-day DHCP/RA guard requirement, not the Name-ownership correction.
 
+Amended 2026-11-09 (#3771): the pfB-DNS settings, DDR included, moved from DNS > pfB-DNS to DNS > General; "the pfB-DNS page" below means those settings on DNS > General.
+
 ## Fixed constraints
 
 - ISC dhcpd is out of scope; only the Kea DHCP backend is considered.

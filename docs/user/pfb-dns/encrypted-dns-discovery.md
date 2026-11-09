@@ -1,7 +1,7 @@
 # Encrypted DNS discovery with pfB-DNS
 
 Choose a mechanism your clients support, then enable the corresponding encrypted listener under
-**Firewall > pfBlockerNG > DNS > pfB-DNS**. Discovery is not a policy that forces every device or application to use
+**Firewall > pfBlockerNG > DNS > General**. Discovery is not a policy that forces every device or application to use
 pfB-DNS. DNR advertises configuration through DHCP; DDR discovers encrypted service from the DNS address the client
 already uses; Android can also try DoT without either mechanism. [RFC 9463 §3.3][dnr-validation],
 [RFC 9462 §4][ddr], and [Android's announcement][android-blog] describe these different paths.
@@ -55,7 +55,7 @@ New VIP ownership is saved with creation, so an advertisement-save failure does 
 Disabling the option removes only owned VIPs; uninstall also removes recorded advertisements and reapplies the
 affected DHCP and DNS Resolver settings.
 
-Transport controls, the certificate and DDR remain under **DNS > pfB-DNS**. Each transport has an **IPv4** port and
+Transport controls, the certificate and DDR remain under **DNS > General**. Each transport has an **IPv4** port and
 an **IPv6** port; an empty IPv6 port uses the IPv4 value. DDR has one **Advertise DoH on port 443** selection of interfaces
 (and Resolver VIPs you chose). It advertises 443 on the addresses of the selected entries; it does not change the listening ports.
 
@@ -98,7 +98,7 @@ current GA defaults.
    **Custom Configuration > JSON Configuration**, not the global **Settings** field or a pool/static mapping.
    The CE 2.8.1 pages `services_dhcp.php:1854-1859` and `services_dhcpv6.php:1414-1419` say this JSON merges into the
    generated subnet and must not include a wrapper key. [DHCPv4 documentation][dhcp4], [CE package][ce-package].
-2. Enable the transports and select **SSL/TLS Certificate** on the pfB-DNS page. Its default ports are DoT TCP 853,
+2. Enable the transports and select **SSL/TLS Certificate** on **DNS > General**. Its default ports are DoT TCP 853,
    DoQ UDP 853, and DoH TCP 4443 at `/dns-query`; select the appropriate **DoT Interface(s)**,
    **DoH Interface(s)**, and **DoQ Interface(s)**. Advertise only listeners you actually enabled. [Page source][ui],
    [listener defaults][defaults], [transport reference](../../misc/dns-gateway-transports.md#listeners).
@@ -225,7 +225,7 @@ DnsResolver commit `4d70e9efa5ae4b5eae682e5267fa09a2d694d23e`, not a tested devi
    opportunistic path uses those network-provided servers. [AOSP `DnsTlsServer.h`][android-server].
 2. Enable **DoT** and include that address's interface in **DoT Interface(s)**, with the family's **DoT Port** set to **853**.
    Permit LAN clients to reach TCP 853. Android's DoT default is 853; changing pfB-DNS to another port will not change
-   the client's opportunistic probe port. [AOSP `PrivateDnsCommon.h`][android-common], [pfB-DNS page][ui].
+   the client's opportunistic probe port. [AOSP `PrivateDnsCommon.h`][android-common], [pfB-DNS settings source][ui].
 3. Leave the device in **Private DNS: Automatic**, rather than **Off** or a provider-hostname mode. Android describes
    automatic upgrade as the default. With no hostname, the cited TLS code does **not** authenticate the certificate;
    a publicly trusted certificate or matching SAN is not required by this client mode. pfB-DNS still needs a selected,
@@ -261,7 +261,7 @@ See [Public resolver addresses](#public-resolver-addresses) for that separate ro
 
 ### The DNS Name
 
-**DNS Name** (`dns/pfb_dns_name`) is the text input right after **SSL/TLS Certificate** on the pfB-DNS page. It is the target
+**DNS Name** (`dns/pfb_dns_name`) is the text input right after **SSL/TLS Certificate** on **DNS > General**. It is the target
 name DDR gives clients and the one name pfB-DNS answers for itself. There is no predefined name and none is filled in for you.
 Like the certificate it is stored per node, never synced, and applied on the next **Update**.
 
@@ -286,7 +286,7 @@ Like the certificate it is stored per node, never synced, and applied on the nex
 
 ### DDR and DoH on port 443
 
-Under **Discovery of Designated Resolvers (DDR)** on the pfB-DNS page:
+Under **Discovery of Designated Resolvers (DDR)** on **DNS > General**:
 
 - **DDR — Enable** (`dns_shared/pfb_dns_ddr`): experimental, disabled by default, applied on the next **Update**. It lets
   pfB-DNS answer `resolver.arpa` discovery queries, naming the **DNS Name** as the target, so it needs one. A plain DNS query
@@ -370,7 +370,7 @@ putting a public address in a DDR answer while clients query a private address d
 | IPv6 | Use a global IPv6 address of the firewall's **LAN interface**, from the delegated prefix; listen for plain and encrypted DNS there. LAN clients reach it without NAT. | ISP prefix changes invalidate the address, DHCP/RDNSS advertisement and IP certificate. |
 | IPv4 | Use the firewall's own **public WAN IPv4 address**; listen there for plain and encrypted DNS. LAN traffic is addressed to the firewall itself, not sent through a port forward to another host. Permit it on LAN. | Dynamic WAN changes invalidate the advertisement/certificate. A CGNAT address (`100.64.0.0/10`) is not publicly certifiable; with double NAT the firewall's WAN address is not the upstream public address. |
 
-Select **DNS Interface(s)** and the desired **DoT/DoH/DoQ Interface(s)** on the pfB-DNS page to include those addresses
+Select **DNS Interface(s)** and the desired **DoT/DoH/DoQ Interface(s)** on **DNS > General** to include those addresses
 (LAN for the IPv6 design, WAN for the IPv4 design). Interface selection binds its addresses, not just one chosen IP.
 After an address or prefix change, use **Update** to rebind listeners as well as updating DHCP/RDNSS and the
 certificate; the old listener addresses were resolved at the preceding apply.
@@ -399,7 +399,7 @@ For double NAT, this guide supplies no forwarding workaround; use DNR or opportu
 4. Select the resulting Certificate Manager certificate in pfB-DNS's **SSL/TLS Certificate**, or install it on the
    client-facing reverse proxy if that is where TLS terminates. Ensure its SANs cover **every address** clients use for
    verified DDR, and that clients trust the chain. If also using DNR, include the ADN name in the certificate clients
-   reach. [RFC 9462 §4.2][ddr-verified], [RFC 9463 §3.3][dnr-validation], [pfB-DNS page][ui].
+   reach. [RFC 9462 §4.2][ddr-verified], [RFC 9463 §3.3][dnr-validation], [pfB-DNS settings source][ui].
 5. Automate and monitor renewal before relying on the six-day lifetime. ACME 1.3.2 runs its renewal cron daily at 03:16;
    the exact renewal day for a 160-hour certificate is **[UNVERIFIED]**. pfB-DNS can push a changed selected certificate
    on apply/its 15-minute cron tick without restarting listeners; verify the certificate actually served, including
