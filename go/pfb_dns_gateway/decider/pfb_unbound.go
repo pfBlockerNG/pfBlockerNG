@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
@@ -111,6 +112,10 @@ type pfbUnbound struct {
 	// regexRuntime is what the regex scans keep in module globals in Python (the slow-match warning set, the prefilter
 	// slots); evaluateConfig passes it through.
 	regexRuntime *regexRuntime
+
+	// statusMu is _pfb_py_status_lock; statusClock is pfb_py_status_open's clock_fn (nil: the real clock).
+	statusMu    sync.Mutex
+	statusClock func() int64
 }
 
 // parseTldAllow turns the MAIN-ini tld_allow_list value into a cleaned list: stripped, lower-cased, blank entries
