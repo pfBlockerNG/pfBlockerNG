@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters, so Python re's Unicode classes decide on them, and a leading .* crosses a newline octet (pins what a port to another regex engine must reproduce); case tags: R3 class escapes, R13 leading dot runs, R17 non-ASCII octets",
   "module": {
     "ini": {

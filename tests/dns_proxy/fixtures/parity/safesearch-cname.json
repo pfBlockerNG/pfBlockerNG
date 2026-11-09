@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "5-column SafeSearch CNAME rows (domain,cname,target,baked_v4,baked_v6): the decider chases the target as Unbound's iterator would",
   "module": {
     "ini": {

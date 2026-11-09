@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "Wildcard Blocking on with excluded.example on the Wildcard Blocking exclusion list: an excluded registrable domain stays an exact entry, any other one becomes a zone",
   "module": {
     "ini": {

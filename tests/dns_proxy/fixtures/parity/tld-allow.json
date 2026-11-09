@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "TLD Allow on with org and uk allowed: names outside them are blocked as a VIP answer (built-in log flag 1)",
   "module": {
     "ini": {

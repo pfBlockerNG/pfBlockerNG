@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "feed /re/ lines: literals, the any-character dot, punctuation escapes, word boundaries, ^ and $, IGNORECASE and the unanchored search; a hit answers Null Blocking (the global built-in flag), not the VIP feed row; case tags: R1 literals, R2 dot, R4 punctuation escapes, R5 word boundaries, R6 anchors, R14 case folding, R15 unanchored search",
   "module": {
     "ini": {

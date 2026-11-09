@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "python_tld_seg 3: a leading-dot whitelist entry counts only when it has at least three labels; no ABP @@, $important or regex line, so the fast path decides",
   "module": {
     "ini": {

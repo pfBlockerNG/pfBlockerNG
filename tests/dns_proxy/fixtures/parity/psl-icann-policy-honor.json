@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "both feed-at-suffix policies honor and Wildcard Blocking off: nothing enables the public-suffix list (the file is present but never read), so feed entries at a suffix are kept as listed; the control for psl-icann-policy-apex and psl-icann-policy-ignore",
   "module": {
     "ini": {

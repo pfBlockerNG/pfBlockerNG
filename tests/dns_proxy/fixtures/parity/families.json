@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "families": {
     "relay": "operate: MODULE_EVENT_NEW -> MODULE_WAIT_MODULE, then MODULE_EVENT_MODDONE finishes (nothing listed: Unbound's reply is the answer)",
     "zone_exact": "evaluate_domain: dataDB exact lookup, fed by build/tld_wildcard_classify (plain feed lines are exact without Wildcard Blocking)",
@@ -22,6 +22,7 @@
     "safesearch": "safesearch_entry and operate: A/AAAA rewrite, nxdomain row and www. fallback",
     "safesearch_cname": "safesearch_cname_redirect and _safesearch_baked_fallback (Frontend._chase_cname plays the iterator)",
     "control": "operate: the python_control TXT branch and pfb_apply_control_command",
-    "top1m": "build: the per-Group TOP1M filter (_top1m_listed)"
+    "top1m": "build: the per-Group TOP1M filter (_top1m_listed)",
+    "frontend": "Frontend.resolve in dns_proxy/pfb_dns_proxy.py, before pfb_unbound.py runs: the header guards, _module_decides, Unbound's silence, and _rendered's UDP and stream size limits"
   }
 }

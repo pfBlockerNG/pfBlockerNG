@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "python_hsts off although the preload file is present: the file is not loaded and no HSTS rule applies, not even the built-in TLD list",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "ABP rules on a feed row whose log_flag is empty answer Null Blocking, not the VIP address (issue #3539); a log_flag 1 row is the contrast",
   "module": {
     "ini": {

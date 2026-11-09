@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "[GP_Bypass_List] with an exact IPv4 address, an IPv4 CIDR and an IPv6 CIDR; one feed entry and one SafeSearch row",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "blocking on, Wildcard Blocking off: plain feed lines are exact entries, one feed row per log_flag",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "legacy DNS-TXT control on (python_control and python_control_legacy); only a command that changes no state is used",
   "module": {
     "ini": {

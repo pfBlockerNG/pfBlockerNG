@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "python_blocking off: the feed still loads, but the exact feed entry no longer blocks (compare core.json's exact-entry-is-blocked)",
   "module": {
     "ini": {

@@ -6,12 +6,13 @@ ordered query cases, each with the decision as it appears on the decision protoc
 The expectations in fixtures/parity/ are frozen literals derived from the source branch each family names in
 families.json, never captured from a run. A fixture the loader refuses is an error naming file, case and field.
 
-Schema 1, the contract a Go runner implements too (every key is required unless marked optional; any other key, a
+Schema 2, the contract a Go runner implements too (every key is required unless marked optional; any other key, a
 duplicate JSON key, NaN/Infinity, a wrong JSON type or an unknown value is a refusal, never a skip; every file in
 fixtures/parity/ is a .json document the runner loads):
 
-  families.json  {"schema": 1, "families": {"<family>": "<source branch>", ...}}: the closed family list.
-  <scenario>.json  {"schema": 1, "description", "module", "upstream", "cases"}
+  families.json  {"schema": 2, "families": {"<family>": "<source branch>", ...}}: the closed family list. Every family
+                 pins pfb_unbound.py except `frontend`, which pins Frontend.resolve in pfb_dns_proxy.py.
+  <scenario>.json  {"schema": 2, "description", "module", "upstream", "cases"}
     module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order; no line
                      break anywhere, no bracket in a section name, no "=" or ":" in a key.
     module.manifest  written verbatim as pfb_py_sources.json.
@@ -19,25 +20,30 @@ fixtures/parity/ is a .json document the runner loads):
                      path, no path listed twice ("./x" is "x"), no file that is also another one's directory, and
                      nothing at or under the names the runner writes (the shipped pfb_unbound.py and
                      pfb_dnsbl_regex_rules.py are linked in by the runner, never by a fixture).
-    upstream         {"<lower-case absolute name> <TYPE>": [RR texts]}, Unbound's stand-in (FakeUnbound): a listed
-                     question gets NOERROR with those records (an empty list: none at all), any other NXDOMAIN; one
-                     question is listed once, whichever spelling of its type.
+    upstream         {"<lower-case absolute name> <TYPE>": [RR texts] or null}, Unbound's stand-in (FakeUnbound): a
+                     listed question gets NOERROR with those records (an empty list: none at all; null: no reply, which
+                     the runner gives as an empty REPLY), any other NXDOMAIN; one question is listed once, whichever
+                     spelling of its type.
     cases            non-empty list, run IN FILE ORDER against one booted decider (its per-name memo carries over).
       id, description   non-empty strings; id unique within the file.
       family            a families.json key.
-      query             {"name": absolute name, "type": mnemonic or TYPE<n> (n <= 65535), "client": IP (optional,
-                        192.0.2.10), "transport": TCP|UDP|DoT|DoH|DoQ (optional, UDP)}; one question, class IN, RD
-                        set, no EDNS.
-      expect            {"decision": answer|relay|rewrite, "forwards": ["<name> <TYPE>", ...], "rcode": NOERROR|
-                        FORMERR|SERVFAIL|NXDOMAIN|NOTIMP|REFUSED, "answer": [RR texts], "authority": [RR texts]}.
+      query             {"name": absolute name, "type": mnemonic or TYPE<n> (n <= 65535)}: one question, class IN, RD
+                        set, no EDNS; or {"wire_hex": lower-case hex of at most 65535 bytes}: the QUERY frame's DNS wire
+                        verbatim; never both, never half of the first. Either has "client": IP (optional, 192.0.2.10)
+                        and "transport": TCP|UDP|DoT|DoH|DoQ (optional, UDP).
+      expect            {"decision": answer|relay|rewrite|drop, "forwards": ["<name> <TYPE>", ...], "rcode": NOERROR|
+                        FORMERR|SERVFAIL|NXDOMAIN|NOTIMP|REFUSED, "answer": [RR texts], "authority": [RR texts], "tc":
+                        true|false (optional, false)}. A drop is exactly {"decision": "drop", "forwards": []}.
   RR texts are "name ttl IN TYPE rdata" for A, AAAA, CNAME, TXT and SOA (dnswire.rr_from_text).
 
 Decisions: answer = no FORWARD, the decider built the ANSWER; relay = one FORWARD carrying the client's own wire and
-an ANSWER byte-identical to Unbound's reply; rewrite = FORWARDs, then an ANSWER that is none of Unbound's replies.
-forwards lists every FORWARD's question in order. answer/authority compare in order as (owner, type, class, ttl,
-rdata) with the owner exactly as on the wire: the encoder compresses an owner equal to the question, case-blind,
-into the question, so a mixed-case query's answer carries the client's spelling. Flags other than the rcode and the
-additional section are not compared.
+an ANSWER byte-identical to Unbound's reply; rewrite = FORWARDs, then an ANSWER that is none of Unbound's replies (the
+SERVFAIL the decider builds for Unbound's silence is one); drop = no FORWARD and a DROP in place of the ANSWER. forwards
+lists every FORWARD's question in order. answer/authority compare in order as (owner, type, class, ttl, rdata) with the
+owner exactly as on the wire: the encoder compresses an owner equal to the question, case-blind, into the question, so
+a mixed-case query's answer carries the client's spelling. Flags other than the rcode and TC, and the additional
+section, are not compared; TC (the ANSWER's) is compared for every non-drop case. A drop has no ANSWER: only decision
+and forwards are compared.
 """
 
 from __future__ import annotations
@@ -58,14 +64,25 @@ import dnswire
 import pfb_dns_proxy
 import pytest
 from frontend_constants import SHIPPED_DIR, Booted
-from frontend_helpers import READY, WATCHDOG, DecisionGateway, FakeUnbound, build_query, watchdog
+from frontend_helpers import (
+    ANSWER,
+    FORWARD,
+    QUERY,
+    READY,
+    REPLY,
+    WATCHDOG,
+    DecisionGateway,
+    FakeUnbound,
+    build_query,
+    watchdog,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "parity"
 DEFAULT_CLIENT = "192.0.2.10"
 SHIPPED_MODULES = ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py")  # linked into every scenario's module directory
 RUNNER_WRITES = (*SHIPPED_MODULES, "pfb_unbound.ini", "pfb_py_sources.json")
 TRANSPORTS = ("TCP", "UDP", "DoT", "DoH", "DoQ")  # the QUERY frame's transport byte is this index
-DECISIONS = ("answer", "relay", "rewrite")
+DECISIONS = ("answer", "relay", "rewrite", "drop")
 RCODES = {"NOERROR": 0, "FORMERR": 1, "SERVFAIL": 2, "NXDOMAIN": 3, "NOTIMP": 4, "REFUSED": 5}
 QTYPES = {
     "A": 1,
@@ -91,8 +108,7 @@ class FixtureError(ValueError):
 
 @dataclass(frozen=True)
 class Query:
-    name: str
-    qtype: int
+    wire: bytes  # the QUERY frame's DNS wire
     client: str
     transport: str
 
@@ -101,9 +117,10 @@ class Query:
 class Expect:
     decision: str
     forwards: tuple[str, ...]
-    rcode: str
-    answer: tuple[dnswire.RR, ...]
-    authority: tuple[dnswire.RR, ...]
+    rcode: str = ""  # the rest only for a non-drop decision: a drop has no ANSWER
+    answer: tuple[dnswire.RR, ...] = ()
+    authority: tuple[dnswire.RR, ...] = ()
+    tc: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,7 +144,7 @@ class Scenario:
     name: str
     description: str
     module: Module
-    upstream: dict[tuple[str, int], list[str]]  # FakeUnbound's zone: (lower-case name, qtype) -> RR texts
+    upstream: dict[tuple[str, int], list[str] | None]  # (lower-case name, qtype) -> RR texts; None: no reply
     cases: tuple[Case, ...]
 
 
@@ -201,8 +218,8 @@ def _ini_text(text: str, where: str, field: str, forbidden: str) -> str:
 
 
 def _schema(doc: dict[str, Any], where: str) -> None:
-    if type(doc["schema"]) is not int or doc["schema"] != 1:  # a bool or 1.0 is not the integer 1
-        _fail(where, "schema", f"must be the integer 1, got {doc['schema']!r}")
+    if type(doc["schema"]) is not int or doc["schema"] != 2:  # a bool or 2.0 is not the integer 2
+        _fail(where, "schema", f"must be the integer 2, got {doc['schema']!r}")
 
 
 def _qtype(text: str, where: str, field: str) -> int:
@@ -294,19 +311,77 @@ def _module(value: object, where: str) -> Module:
     return Module(ini, obj["manifest"], files)
 
 
-def _upstream(value: object, where: str) -> dict[tuple[str, int], list[str]]:
+def _upstream(value: object, where: str) -> dict[tuple[str, int], list[str] | None]:
     if not isinstance(value, dict):
         _fail(where, "upstream", "must be a JSON object of '<name> <TYPE>' -> RR texts")
-    zone: dict[tuple[str, int], list[str]] = {}
+    zone: dict[tuple[str, int], list[str] | None] = {}
     for key, texts in value.items():
         name, qtype = _question(key, where, f"upstream[{key!r}]")
         if name != name.lower():
             _fail(where, f"upstream[{key!r}]", "the name must be lower case")
-        _rrs(texts, where, f"upstream[{key!r}]")  # rr_from_text must accept every record
+        if texts is not None:  # null: Unbound gives no reply
+            _rrs(texts, where, f"upstream[{key!r}]")  # rr_from_text must accept every record
         if (name, qtype) in zone:
             _fail(where, f"upstream[{key!r}]", "the same question is already listed under another spelling")
-        zone[(name, qtype)] = list(texts)
+        zone[(name, qtype)] = None if texts is None else list(texts)
     return zone
+
+
+def _wire_hex(text: str, where: str, field: str) -> bytes:
+    if not re.fullmatch(r"(?:[0-9a-f]{2})*", text):  # bytes.fromhex alone takes spaces and upper case
+        _fail(where, field, f"{text!r} must be lower-case hex of whole bytes")
+    if len(text) > 2 * 0xFFFF:
+        _fail(where, field, f"{len(text) // 2} bytes: a DNS message has at most 65535")
+    return bytes.fromhex(text)
+
+
+def _query(value: object, where: str) -> Query:
+    obj = _object(value, where, "query", (), ("name", "type", "wire_hex", "client", "transport"))
+    if "wire_hex" in obj:
+        if "name" in obj or "type" in obj:
+            _fail(where, "query.wire_hex", "excludes query.name and query.type")
+        wire = _wire_hex(_string(obj["wire_hex"], where, "query.wire_hex"), where, "query.wire_hex")
+    else:
+        for key in ("name", "type"):
+            if key not in obj:
+                _fail(where, f"query.{key}", "missing: a query is a name and a type, or wire_hex")
+        name = _wire_name(_string(obj["name"], where, "query.name"), where, "query.name")
+        wire = build_query(name, _qtype(_string(obj["type"], where, "query.type"), where, "query.type"))
+    client = _string(obj.get("client", DEFAULT_CLIENT), where, "query.client")
+    try:
+        ipaddress.ip_address(client)
+    except ValueError:
+        _fail(where, "query.client", f"not an IP address: {client!r}")
+    return Query(wire, client, _choice(obj.get("transport", "UDP"), where, "query.transport", TRANSPORTS))
+
+
+def _expect(value: object, where: str) -> Expect:
+    obj = _object(value, where, "expect", ("decision", "forwards"), ("rcode", "answer", "authority", "tc"))
+    decision = _choice(obj["decision"], where, "expect.decision", DECISIONS)
+    forwards = _strings(obj["forwards"], where, "expect.forwards")
+    for position, text in enumerate(forwards):
+        _question(text, where, f"expect.forwards[{position}]")
+    if decision == "drop":
+        for key in ("rcode", "answer", "authority", "tc"):
+            if key in obj:
+                _fail(where, f"expect.{key}", "unknown key: a drop has no ANSWER")
+        if forwards:
+            _fail(where, "expect.forwards", "must be empty for a drop")
+        return Expect(decision, ())
+    for key in ("rcode", "answer", "authority"):
+        if key not in obj:
+            _fail(where, f"expect.{key}", "missing")
+    tc = obj.get("tc", False)
+    if not isinstance(tc, bool):
+        _fail(where, "expect.tc", f"must be true or false, got {tc!r}")
+    return Expect(
+        decision,
+        tuple(forwards),
+        _choice(obj["rcode"], where, "expect.rcode", RCODES),
+        _rrs(obj["answer"], where, "expect.answer"),
+        _rrs(obj["authority"], where, "expect.authority"),
+        tc,
+    )
 
 
 def _case(item: object, index: int, where: str, families: Collection[str], seen: set[str]) -> Case:
@@ -325,32 +400,12 @@ def _case(item: object, index: int, where: str, families: Collection[str], seen:
     if not description:
         _fail(where_case, "description", "must say what behaviour is pinned")
 
-    query = _object(obj["query"], where_case, "query", ("name", "type"), ("client", "transport"))
-    name = _wire_name(_string(query["name"], where_case, "query.name"), where_case, "query.name")
-    qtype = _qtype(_string(query["type"], where_case, "query.type"), where_case, "query.type")
-    client = _string(query.get("client", DEFAULT_CLIENT), where_case, "query.client")
-    try:
-        ipaddress.ip_address(client)
-    except ValueError:
-        _fail(where_case, "query.client", f"not an IP address: {client!r}")
-    transport = _choice(query.get("transport", "UDP"), where_case, "query.transport", TRANSPORTS)
-
-    expect = _object(obj["expect"], where_case, "expect", ("decision", "forwards", "rcode", "answer", "authority"))
-    forwards = _strings(expect["forwards"], where_case, "expect.forwards")
-    for position, text in enumerate(forwards):
-        _question(text, where_case, f"expect.forwards[{position}]")
     return Case(
         case_id,
         family,
         description,
-        Query(name, qtype, client, transport),
-        Expect(
-            _choice(expect["decision"], where_case, "expect.decision", DECISIONS),
-            tuple(forwards),
-            _choice(expect["rcode"], where_case, "expect.rcode", RCODES),
-            _rrs(expect["answer"], where_case, "expect.answer"),
-            _rrs(expect["authority"], where_case, "expect.authority"),
-        ),
+        _query(obj["query"], where_case),
+        _expect(obj["expect"], where_case),
     )
 
 
@@ -392,20 +447,29 @@ def write_module(root: Path, module: Module) -> None:
 
 
 class RecordingUnbound(FakeUnbound):
-    """FakeUnbound that keeps each reply it gave, so a relayed answer can be told from a rewritten one by its bytes."""
+    """FakeUnbound that keeps each reply it gave, so a relayed answer can be told from a rewritten one by its bytes.
+    A question the zone lists as None is silent: it is recorded and answered with b"", the empty REPLY."""
 
-    def __init__(self, zone: dict[tuple[str, int], list[str]]) -> None:
-        super().__init__(zone)
+    def __init__(self, zone: dict[tuple[str, int], list[str] | None]) -> None:
+        super().__init__({key: texts for key, texts in zone.items() if texts is not None})
+        self.silent = {key for key, texts in zone.items() if texts is None}
         self.replies: list[bytes] = []
 
     def answer(self, wire: bytes) -> bytes:
-        reply = super().answer(wire)
+        question = dnswire.parse(wire).questions[0]
+        if (question.name.lower(), question.qtype) in self.silent:
+            self.queries.append(wire)
+            reply = b""
+        else:
+            reply = super().answer(wire)
         self.replies.append(reply)
         return reply
 
 
-def _decision(wire: bytes, upstream: RecordingUnbound, answer: bytes) -> str:
-    """How the exchange went, by the contract's definitions of answer, relay and rewrite."""
+def _decision(wire: bytes, upstream: RecordingUnbound, answer: bytes | None) -> str:
+    """How the exchange went, by the contract's definitions of answer, relay, rewrite and drop."""
+    if answer is None:
+        return "drop"
     if not upstream.queries:
         return "answer"
     if upstream.queries == [wire] and answer == upstream.replies[0]:
@@ -419,28 +483,50 @@ def _rr_text(rr: dnswire.RR) -> str:
     return f"{rr.name} {rr.ttl} class{rr.rclass} {dnswire.type_str(rr.rtype)} {rr.rdata.hex()}"
 
 
-def _mismatches(scenario: Scenario, case: Case, wire: bytes, upstream: RecordingUnbound, answer: bytes) -> list[str]:
+def _mismatches(
+    scenario: Scenario, case: Case, wire: bytes, upstream: RecordingUnbound, answer: bytes | None
+) -> list[str]:
     """One line per way the exchange differs from what `case` expects; [] when it is the expected decision."""
-    reply = dnswire.parse(answer)
     expect = case.expect
     forwards = [
         f"{question.name} {_type_text(question.qtype)}"
         for query in upstream.queries
         for question in dnswire.parse(query).questions
     ]
-    rcode = next((name for name, number in RCODES.items() if number == reply.rcode), f"RCODE{reply.rcode}")
-    compared = [
+    compared: list[tuple[str, object, object]] = [
         ("decision", expect.decision, _decision(wire, upstream, answer)),
         ("forwards", list(expect.forwards), forwards),
-        ("rcode", expect.rcode, rcode),
-        ("answer", [_rr_text(rr) for rr in expect.answer], [_rr_text(rr) for rr in reply.answers]),
-        ("authority", [_rr_text(rr) for rr in expect.authority], [_rr_text(rr) for rr in reply.authority]),
     ]
+    if answer is not None and expect.decision != "drop":  # a drop/non-drop disagreement is the decision's line
+        reply = dnswire.parse(answer)
+        rcode = next((name for name, number in RCODES.items() if number == reply.rcode), f"RCODE{reply.rcode}")
+        compared += [
+            ("rcode", expect.rcode, rcode),
+            ("answer", [_rr_text(rr) for rr in expect.answer], [_rr_text(rr) for rr in reply.answers]),
+            ("authority", [_rr_text(rr) for rr in expect.authority], [_rr_text(rr) for rr in reply.authority]),
+            ("tc", expect.tc, bool(reply.flags & dnswire.TC)),
+        ]
     return [
         f"{scenario.name}: case {case.id!r}: {field}: expected {want!r}, got {got!r}"
         for field, want, got in compared
         if want != got
     ]
+
+
+async def _exchange(gateway: DecisionGateway, query: Query, upstream: RecordingUnbound, frame_id: int) -> bytes | None:
+    """One QUERY as the gateway sends it, each FORWARD answered from `upstream`: the ANSWER's wire, None for a DROP."""
+    client = query.client.encode("ascii")
+    transport = TRANSPORTS.index(query.transport)
+    await gateway.send(QUERY, frame_id, bytes([transport, len(client)]) + client + b"\x00\x00\x00" + query.wire)
+    while True:
+        ftype, got, payload = await gateway.recv()
+        assert got == frame_id
+        if ftype == ANSWER:
+            return payload
+        if ftype == decision_service.DROP:
+            return None
+        assert ftype == FORWARD, f"frame type {ftype}: want FORWARD, ANSWER or DROP"
+        await gateway.send(REPLY, frame_id, upstream.answer(payload))
 
 
 async def _drive(booted: Booted, scenario: Scenario) -> tuple[list[str], list[str]]:
@@ -457,10 +543,9 @@ async def _drive(booted: Booted, scenario: Scenario) -> tuple[list[str], list[st
         assert await gateway.recv() == (READY, 0, b"")
         for frame_id, case in enumerate(scenario.cases, start=1):
             upstream = RecordingUnbound(scenario.upstream)
-            wire = build_query(case.query.name, case.query.qtype)
             query = case.query
-            answer = await gateway.ask(wire, upstream, client=query.client, transport=query.transport, fid=frame_id)
-            mismatches += _mismatches(scenario, case, wire, upstream, answer)
+            answer = await _exchange(gateway, query, upstream, frame_id)
+            mismatches += _mismatches(scenario, case, query.wire, upstream, answer)
     finally:
         writer.close()
         await watchdog(service, "the decision service to end")
@@ -491,7 +576,7 @@ def test_the_decider_makes_every_decision_the_scenario_expects(scenario: Scenari
 def _good() -> dict[str, Any]:
     """The smallest valid scenario; each hostile row below breaks one thing in a copy of it."""
     return {
-        "schema": 1,
+        "schema": 2,
         "description": "one unlisted name",
         "module": {
             "ini": {"MAIN": {"python_enable": "true"}},
@@ -528,21 +613,61 @@ def _bad(tmp_path: Path, mutate: Callable[[dict[str, Any]], object]) -> str:
     return str(refusal.value)
 
 
-def test_a_minimal_valid_scenario_loads_with_the_defaults_filled_in(tmp_path: Path) -> None:
+def _load(tmp_path: Path, mutate: Callable[[dict[str, Any]], object]) -> Scenario:
+    """The loader's reading of `_good()` after `mutate`d."""
+    doc = _good()
+    mutate(doc)
     path = tmp_path / "good.json"
-    path.write_text(json.dumps(_good()), encoding="utf-8")
-    [case] = load_scenario(path, FAMILIES).cases
-    assert (case.id, case.family, case.query) == ("good", "relay", Query("allowed.example.", 1, DEFAULT_CLIENT, "UDP"))
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return load_scenario(path, FAMILIES)
+
+
+def test_a_minimal_valid_scenario_loads_with_the_defaults_filled_in(tmp_path: Path) -> None:
+    [case] = _load(tmp_path, lambda doc: None).cases
+    assert (case.id, case.family, case.query) == (
+        "good",
+        "relay",
+        Query(build_query("allowed.example.", 1), DEFAULT_CLIENT, "UDP"),
+    )
     assert case.expect.rcode == "NOERROR"
+    assert case.expect.tc is False
+
+
+def test_a_wire_hex_query_loads_as_exactly_those_bytes_with_the_defaults(tmp_path: Path) -> None:
+    [case] = _load(tmp_path, lambda doc: doc["cases"][0].update(query={"wire_hex": "00ff10"})).cases
+    assert case.query == Query(b"\x00\xff\x10", DEFAULT_CLIENT, "UDP")
+
+
+def test_a_wire_hex_query_takes_a_client_and_a_transport_too(tmp_path: Path) -> None:
+    query = {"wire_hex": "", "client": "2001:db8::1", "transport": "DoT"}
+    [case] = _load(tmp_path, lambda doc: doc["cases"][0].update(query=query)).cases
+    assert case.query == Query(b"", "2001:db8::1", "DoT")
+
+
+def test_a_wire_hex_query_of_the_largest_dns_message_loads(tmp_path: Path) -> None:
+    [case] = _load(tmp_path, lambda doc: doc["cases"][0].update(query={"wire_hex": "00" * 0xFFFF})).cases
+    assert len(case.query.wire) == 0xFFFF
+
+
+def test_a_drop_expectation_loads(tmp_path: Path) -> None:
+    expect = {"decision": "drop", "forwards": []}
+    [case] = _load(tmp_path, lambda doc: doc["cases"][0].update(expect=expect)).cases
+    assert case.expect == Expect("drop", ())
+
+
+def test_an_upstream_null_loads_as_unbound_giving_no_reply(tmp_path: Path) -> None:
+    scenario = _load(tmp_path, lambda doc: doc["upstream"].update({"silent.example. A": None}))
+    assert scenario.upstream[("silent.example.", 1)] is None
 
 
 # (what is wrong, how the valid scenario is broken, what the message must name)
 HOSTILE: list[tuple[str, Callable[[dict[str, Any]], object], tuple[str, ...]]] = [
-    ("schema 2", lambda d: d.update(schema=2), ("bad.json", "schema")),
-    ("schema as a string", lambda d: d.update(schema="1"), ("bad.json", "schema")),
+    ("schema 1, the old version", lambda d: d.update(schema=1), ("bad.json", "schema")),
+    ("schema 3", lambda d: d.update(schema=3), ("bad.json", "schema")),
+    ("schema as a string", lambda d: d.update(schema="2"), ("bad.json", "schema")),
     ("schema missing", lambda d: d.pop("schema"), ("bad.json", "schema")),
     ("schema true", lambda d: d.update(schema=True), ("bad.json", "schema")),
-    ("schema 1.0", lambda d: d.update(schema=1.0), ("bad.json", "schema")),
+    ("schema 2.0", lambda d: d.update(schema=2.0), ("bad.json", "schema")),
     ("NaN, which only Python reads", lambda d: d["module"]["manifest"].update(x=float("nan")), ("bad.json", "NaN")),
     ("no cases", lambda d: d.update(cases=[]), ("bad.json", "cases")),
     ("empty case id", lambda d: d["cases"][0].update(id=""), ("bad.json", "cases[0]", "id")),
@@ -657,6 +782,85 @@ HOSTILE: list[tuple[str, Callable[[dict[str, Any]], object], tuple[str, ...]]] =
         lambda d: d["cases"][0]["expect"].update(forwards=["allowed.example."]),
         ("bad.json", "'good'", "expect.forwards[0]"),
     ),
+    (
+        "wire_hex with a name too",
+        lambda d: d["cases"][0]["query"].update(wire_hex="00"),
+        ("bad.json", "'good'", "query.wire_hex"),
+    ),
+    (
+        "neither name nor wire_hex",
+        lambda d: d["cases"][0].update(query={}),
+        ("bad.json", "'good'", "query", "wire_hex"),
+    ),
+    ("name without type", lambda d: d["cases"][0]["query"].pop("type"), ("bad.json", "'good'", "query.type")),
+    ("type without name", lambda d: d["cases"][0]["query"].pop("name"), ("bad.json", "'good'", "query.name")),
+    (
+        "wire_hex in upper case",
+        lambda d: d["cases"][0].update(query={"wire_hex": "AB"}),
+        ("bad.json", "'good'", "query.wire_hex"),
+    ),
+    (
+        "wire_hex of odd length",
+        lambda d: d["cases"][0].update(query={"wire_hex": "abc"}),
+        ("bad.json", "'good'", "query.wire_hex"),
+    ),
+    (
+        "wire_hex that is not hex",
+        lambda d: d["cases"][0].update(query={"wire_hex": "zz"}),
+        ("bad.json", "'good'", "query.wire_hex"),
+    ),
+    (
+        "wire_hex with a space",
+        lambda d: d["cases"][0].update(query={"wire_hex": "ab cd"}),
+        ("bad.json", "'good'", "query.wire_hex"),
+    ),
+    (
+        "wire_hex as a number",
+        lambda d: d["cases"][0].update(query={"wire_hex": 12}),
+        ("bad.json", "'good'", "query.wire_hex"),
+    ),
+    (
+        "wire_hex of 65536 bytes",
+        lambda d: d["cases"][0].update(query={"wire_hex": "00" * 65536}),
+        ("bad.json", "'good'", "query.wire_hex", "65536"),
+    ),
+    (
+        "drop with an rcode",
+        lambda d: d["cases"][0].update(expect={"decision": "drop", "forwards": [], "rcode": "NOERROR"}),
+        ("bad.json", "'good'", "expect.rcode"),
+    ),
+    *[
+        (
+            f"drop with {key}",
+            lambda d, key=key, value=value: d["cases"][0].update(
+                expect={"decision": "drop", "forwards": [], key: value}
+            ),
+            ("bad.json", "'good'", f"expect.{key}"),
+        )
+        for key, value in (("answer", []), ("authority", []), ("tc", False))
+    ],
+    (
+        "drop with a forward",
+        lambda d: d["cases"][0].update(expect={"decision": "drop", "forwards": ["allowed.example. A"]}),
+        ("bad.json", "'good'", "expect.forwards"),
+    ),
+    (
+        "non-drop without an rcode",
+        lambda d: d["cases"][0]["expect"].pop("rcode"),
+        ("bad.json", "'good'", "expect.rcode"),
+    ),
+    ("tc as a number", lambda d: d["cases"][0]["expect"].update(tc=1), ("bad.json", "'good'", "expect.tc")),
+    ("tc as a string", lambda d: d["cases"][0]["expect"].update(tc="true"), ("bad.json", "'good'", "expect.tc")),
+    (
+        "upstream value a string",
+        lambda d: d.update(upstream={"allowed.example. A": "allowed.example. 300 IN A 192.0.2.77"}),
+        ("bad.json", "upstream['allowed.example. A']"),
+    ),
+    (
+        "upstream value an object",
+        lambda d: d.update(upstream={"allowed.example. A": {}}),
+        ("bad.json", "upstream['allowed.example. A']"),
+    ),
 ]
 
 
@@ -684,7 +888,7 @@ def test_the_loader_refuses_an_unreadable_document_as_a_fixture_error(
 
 @pytest.mark.parametrize(
     "document",
-    ['{"schema": 2, "families": {"relay": "x"}}', '{"schema": 1, "families": {"relay": 7}}'],
+    ['{"schema": 1, "families": {"relay": "x"}}', '{"schema": 2, "families": {"relay": 7}}'],
     ids=["schema", "source"],
 )
 def test_the_loader_refuses_a_bad_families_index(tmp_path: Path, document: str) -> None:

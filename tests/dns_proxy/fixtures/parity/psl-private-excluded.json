@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "Wildcard Blocking on and PRIVATE suffixes not recognised: only the ICANN suffix com counts, so pages.com is the registrable domain",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "feed entries at an ICANN public suffix under psl_feed_icann_policy = ignore (Wildcard Blocking off; the policy needs the PSL on its own)",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "TOP1M on, Wildcard Blocking on: an unmarked Group writes the zone key after a marked Group, so the key is no longer filtered and the unmarked entry blocks even a name TOP1M lists",
   "module": {
     "ini": {

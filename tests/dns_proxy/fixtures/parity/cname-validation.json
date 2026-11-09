@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "python_cname on: a CNAME chain's targets are checked against the feeds and the whitelist of the original name",
   "module": {
     "ini": {

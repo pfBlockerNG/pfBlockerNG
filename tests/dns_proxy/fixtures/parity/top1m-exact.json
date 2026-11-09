@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "description": "TOP1M on, Wildcard Blocking off: a TOP1M-marked Group drops its exact entries for names TOP1M lists (popular.example, big.example), an unmarked Group does not",
   "module": {
     "ini": {
