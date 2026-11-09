@@ -4847,13 +4847,112 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 	$total = 0;
 	$tld_levels = ['dnsbltld' => 1, 'replytld' => 1, 'replytld2' => 2, 'replytld3' => 3];
 	$tld_depths = array_intersect_key($stat_info, $tld_levels);
-	$tld_column = $tld_depths ? $stat_info[array_key_first($tld_depths)] - 1 : 0;
+	$tld_column = $tld_depths ? (int) ($stat_info[array_key_first($tld_depths)] - 1) : 0;
 	foreach ($tld_depths as $type => &$depth) {
 		$depth = $tld_levels[$type];
 	}
 	unset($depth);
 	arsort($tld_depths, SORT_NUMERIC);
 	$scan_info = array_diff_key($stat_info, $tld_depths);
+	$groups = [];
+	$composites = [];
+	$date_types = ['dnsbldate', 'replydate', 'dnsbldatehr', 'dnsbldatehrmin', 'dnsblchart', 'replychart'];
+	$date_selected = array_keys(array_intersect_key($scan_info, array_flip($date_types)));
+	foreach ($scan_info as $type => $column) {
+		if (in_array($type, $date_types, TRUE)) {
+			$groups[1] ??= [];
+		} elseif (in_array($type, ['dnsbldomain', 'dnsblevald', 'replysrcipd'], TRUE)) {
+			$composites[$type] = $column - 1;
+		} else {
+			$groups[$column - 1][] = $type;
+		}
+	}
+	if ($tld_depths) {
+		$groups[$tld_column] ??= [];
+	}
+	$columns = array_keys($groups);
+	$defaults = array_fill_keys($columns, '');
+	$max_column = $columns ? max($columns) : -1;
+	$negative_column = $columns && min($columns) < 0;
+	$batch = [];
+	$batch_bytes = 0;
+	$flush = static function () use (&$batch, &$batch_bytes, &$stats, &$chart, $groups, $composites, $tld_depths, $tld_column, $date_selected): void {
+		foreach ($groups as $column => $types) {
+			foreach (array_count_values(array_column($batch, $column)) as $raw => $frequency) {
+				$raw = (string) $raw;
+				if ($column === 1 && $date_selected && preg_match('/^[0-9]{4}-/', $raw) === 1) {
+					$date_parts = explode(':', $raw, 3);
+					$hour = $date_parts[0];
+					$date = explode(' ', $raw, 2)[0];
+					foreach ($date_selected as $type) {
+						if ($type === 'dnsblchart' || $type === 'replychart') {
+							$chart[$hour] = ($chart[$hour] ?? 0) + $frequency;
+							continue;
+						}
+						$value = $hour;
+						if ($type === 'dnsbldate' || $type === 'replydate') {
+							$value = $date;
+						} elseif ($type === 'dnsbldatehrmin' && isset($date_parts[1])) {
+							$value .= ':' . $date_parts[1];
+						}
+						$value = trim($value);
+						if ($value === '-' || $value === '+' || str_ends_with($value, ' -') || str_ends_with($value, ' +')) {
+							continue;
+						}
+						$stats[$type][$value] = ($stats[$type][$value] ?? 0) + $frequency;
+					}
+				}
+				foreach ($types as $type) {
+					$value = $raw;
+					if ($type === 'dnsblagent') {
+						$agent_parts = explode('|', $raw, 4);
+						$value = count($agent_parts) === 1 ? $raw : ($agent_parts[2] ?? '');
+					}
+					$value = trim($value);
+					if ($value === '-' || $value === '+' || str_ends_with($value, ' -') || str_ends_with($value, ' +')) {
+						continue;
+					}
+					$stats[$type][$value] = ($stats[$type][$value] ?? 0) + $frequency;
+				}
+				if ($tld_depths && $column === $tld_column) {
+					$domain_parts = explode('.', $raw);
+					$label_count = count($domain_parts);
+					if ($label_count >= 2) {
+						foreach ($tld_depths as $type => $depth) {
+							if ($label_count < $depth) {
+								continue;
+							}
+							$value = trim(implode('.', array_slice($domain_parts, -$depth)));
+							if ($value !== '-' && $value !== '+' && !str_ends_with($value, ' -') && !str_ends_with($value, ' +')) {
+								$stats[$type][$value] = ($stats[$type][$value] ?? 0) + $frequency;
+							}
+							break;
+						}
+					}
+				}
+			}
+		}
+		foreach ($composites as $type => $column) {
+			$values = [];
+			foreach ($batch as $fields) {
+				$value = $fields[$column] ?? '';
+				$values[] = $type === 'dnsblevald' ? ($fields[5] ?? '') . ',' . $value
+					: $value . ',' . ($fields[$type === 'replysrcipd' ? 7 : 5] ?? '');
+			}
+			foreach (array_count_values($values) as $value => $frequency) {
+				if ($type === 'dnsblevald' && !str_contains($value, 'TLD')) {
+					continue;
+				}
+				$value = trim($value);
+				if ($value === '-' || $value === '+' || str_ends_with($value, ' -') || str_ends_with($value, ' +')) {
+					continue;
+				}
+				$stats[$type][$value] = ($stats[$type][$value] ?? 0) + $frequency;
+			}
+		}
+		$batch = [];
+		$batch_bytes = 0;
+	};
 	$handle = $stat_info ? @fopen($path, 'r') : FALSE;
 	if ($handle !== FALSE) {
 		while (($line = fgets($handle)) !== FALSE) {
@@ -4878,75 +4977,18 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 				$fields = explode(',', rtrim($line, "\r\n"));
 				$total++;
 			}
-			$date = $fields[1] ?? '';
-			$is_iso = preg_match('/^[0-9]{4}-/', $date) === 1;
-			$date_parts = explode(':', $date, 3);
-			$hour = $date_parts[0];
-			foreach ($scan_info as $type => $column) {
-				$value = $fields[$column - 1] ?? '';
-				switch ($type) {
-					case 'dnsbldate':
-					case 'replydate':
-						if (!$is_iso) {
-							continue 2;
-						}
-						$value = explode(' ', $date, 2)[0];
-						break;
-					case 'dnsbldatehr':
-					case 'dnsbldatehrmin':
-						if (!$is_iso) {
-							continue 2;
-						}
-						$value = $hour;
-						if ($type === 'dnsbldatehrmin' && isset($date_parts[1])) {
-							$value .= ':' . $date_parts[1];
-						}
-						break;
-					case 'dnsblchart':
-					case 'replychart':
-						if ($is_iso) {
-							$chart[$hour] = ($chart[$hour] ?? 0) + 1;
-						}
-						continue 2;
-					case 'dnsblagent':
-						$agent_parts = explode('|', $value, 4);
-						$value = count($agent_parts) === 1 ? $value : ($agent_parts[2] ?? '');
-						break;
-					case 'dnsbldomain':
-						$value .= ',' . ($fields[5] ?? '');
-						break;
-					case 'dnsblevald':
-						$value = ($fields[5] ?? '') . ',' . $value;
-						if (!str_contains($value, 'TLD')) {
-							continue 2;
-						}
-						break;
-					case 'replysrcipd':
-						$value .= ',' . ($fields[7] ?? '');
-						break;
-				}
-				$value = trim($value);
-				if ($value === '-' || $value === '+' || str_ends_with($value, ' -') || str_ends_with($value, ' +')) {
-					continue;
-				}
-				$stats[$type][$value] = ($stats[$type][$value] ?? 0) + 1;
+			$record_bytes = str_contains($line, '"') ? $record_end - $next_line + strlen($line) : strlen($line);
+			if ($negative_column || count($fields) <= $max_column) {
+				$fields += $defaults;
 			}
-			if ($tld_depths) {
-				$domain_parts = explode('.', $fields[$tld_column] ?? '');
-				$label_count = count($domain_parts);
-				if ($label_count >= 2) {
-					foreach ($tld_depths as $type => $depth) {
-						if ($label_count < $depth) {
-							continue;
-						}
-						$value = trim(implode('.', array_slice($domain_parts, -$depth)));
-						if ($value !== '-' && $value !== '+' && !str_ends_with($value, ' -') && !str_ends_with($value, ' +')) {
-							$stats[$type][$value] = ($stats[$type][$value] ?? 0) + 1;
-						}
-						break;
-					}
-				}
+			$batch[] = $fields;
+			$batch_bytes += $record_bytes;
+			if (count($batch) >= 1024 || $batch_bytes >= 524288) {
+				$flush();
 			}
+		}
+		if ($batch) {
+			$flush();
 		}
 		fclose($handle);
 	}
