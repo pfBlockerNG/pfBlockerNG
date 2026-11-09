@@ -619,8 +619,8 @@ final class DnsProxyLifecycleTest extends TestCase
 		$this->assertNull(pfb_dns_proxy_saved(), 'before: the marker is no snapshot');
 		$this->assertFalse(pfb_dns_proxy_block_present(), 'before: no block of ours');
 
-		// Then recovery is required, but ownership is not claimed: it decides where Unbound loads the DNSBL module, and a
-		// corrupted value is no evidence that the Resolver was moved
+		// Then recovery is required, but ownership is not claimed: it decides whether the DNS proxy hosts the DNSBL module, and
+		// a corrupted value is no evidence that the Resolver was moved
 		$this->assertTrue(pfb_dns_proxy_recovery_required());
 		$this->assertFalse(pfb_dns_proxy_owns_resolver());
 		$this->assertFalse(pfb_dns_proxy_hosts_module());

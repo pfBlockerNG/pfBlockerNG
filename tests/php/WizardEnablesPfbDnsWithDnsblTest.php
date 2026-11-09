@@ -41,6 +41,7 @@ final class WizardEnablesPfbDnsWithDnsblTest extends TestCase
 			'log'    => "{$this->dir}/pfb.log",
 			'errlog' => "{$this->dir}/pfb.err",
 			'php'    => PHP_BINARY,
+			'dns_proxy_activation_failed' => "{$this->dir}/dns_proxy_activation_failed",
 		];
 		foreach (self::SWEPT as $key) {
 			$GLOBALS['pfb'][$key] = "{$this->dir}/{$key}";
