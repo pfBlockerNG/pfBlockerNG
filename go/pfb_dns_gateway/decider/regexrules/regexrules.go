@@ -6,7 +6,9 @@
 // The gate reads the pattern text once, left to right, with an explicit stack. It never compiles, matches or
 // otherwise executes pattern text (this package imports no regexp), so judging a pattern costs time linear in its
 // capped length however hostile it is. The compile text is Python re syntax; a Go caller hands it to regexp with the
-// (?i) flag, and the places where RE2 reads it differently are listed in the handoff of #3779 PR2.
+// (?i) flag. RE2 reads some admitted texts differently from Python's re (Unicode \w \s \b on Latin-1, `$` before a
+// trailing newline): re2_divergence_test.go pins those rows, and the three that flip parity-corpus cases are signed
+// off on https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6752661597.
 package regexrules
 
 import (
@@ -198,8 +200,8 @@ const (
 	_GROUP = 2
 )
 
-// _fold is members with the other case of every letter in it added.
-func _fold(members bitSet) bitSet {
+// fold is members with the other case of every letter in it added.
+func fold(members bitSet) bitSet {
 	return members.or(members.and(_UPPER).shl(32)).or(members.and(_LOWER).shr(32))
 }
 
@@ -326,7 +328,7 @@ func classEnd(pattern string, index int) (int, bitSet, int, error) {
 			if items == 0 {
 				return 0, bitSet{}, 0, refuse("empty class at %d", index)
 			}
-			members = _fold(members)
+			members = fold(members)
 			listed := members.and(_ASCII).bitCount()
 			if negated {
 				return index + 1, _ASCII.andNot(members).or(_NONASCII), listed, nil
@@ -610,7 +612,7 @@ func admit(pattern string) (counter, string, error) {
 				if kind == "class" {
 					members = _CLASS_ESCAPES[escaped]
 				} else {
-					members = _fold(bit(int(escaped)))
+					members = fold(bit(int(escaped)))
 				}
 				index = end
 			case char == ']' || char == '}':
@@ -619,7 +621,7 @@ func admit(pattern string) (counter, string, error) {
 				if char == '.' {
 					members = _DOT
 				} else {
-					members = _fold(bit(int(char)))
+					members = fold(bit(int(char)))
 				}
 				index++
 			}

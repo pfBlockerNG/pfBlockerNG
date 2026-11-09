@@ -69,8 +69,8 @@ func TestBitSetOperationsCrossWordBoundaries(t *testing.T) {
 	if _UPPER.bitCount() != 26 || _LOWER.bitCount() != 26 || _UPPER.and(_LOWER) != (bitSet{}) {
 		t.Errorf("_UPPER %v _LOWER %v", _UPPER, _LOWER)
 	}
-	if got, want := _fold(bit('k').or(bit('0'))), bit('k').or(bit('K')).or(bit('0')); got != want {
-		t.Errorf("_fold('k', '0') = %v, want %v", got, want)
+	if got, want := fold(bit('k').or(bit('0'))), bit('k').or(bit('K')).or(bit('0')); got != want {
+		t.Errorf("fold('k', '0') = %v, want %v", got, want)
 	}
 	// \w lists the 63 ASCII word characters, \s the 10 ASCII whitespace characters (\t-\r, 0x1C-0x1F, space).
 	if got := _CLASS_ESCAPES['w'].and(_ASCII).bitCount(); got != 63 {
