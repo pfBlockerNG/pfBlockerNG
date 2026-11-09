@@ -573,6 +573,16 @@ HOSTILE: list[tuple[str, Callable[[dict[str, Any]], object], tuple[str, ...]]] =
         ("bad.json", "module.ini.MAIN.python_enable"),
     ),
     (
+        "ini section name closing early",
+        lambda d: d["module"]["ini"].update({"A]\nB": {}}),
+        ("bad.json", "module.ini.A]"),
+    ),
+    (
+        "ini key carrying its own value",
+        lambda d: d["module"]["ini"]["MAIN"].update({"a=b": "c"}),
+        ("bad.json", "module.ini.MAIN.a=b"),
+    ),
+    (
         "files under the shipped decider's link",
         lambda d: d["module"]["files"].update({"pfb_unbound.py/x": ["x"]}),
         ("bad.json", "module.files", "runner"),
