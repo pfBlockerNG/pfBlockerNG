@@ -5,6 +5,7 @@ package decider
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -352,4 +353,61 @@ func TestConfigParserReadFromAFile(t *testing.T) {
 		t.Fatalf("read(utf8) = %v, want nil", err)
 	}
 	cfgGet(t, c, "M", "k", "caf\u00e9")
+}
+
+func TestConfigParserKeepsTheLinesOfAnEightyThousandLineValue(t *testing.T) {
+	const n = 80000
+	for _, c := range []struct {
+		name, text, want string
+	}{
+		{"blank lines then a continuation", "[M]\nk = 1\n" + strings.Repeat("\n", n) + "  2\n", "1" + strings.Repeat("\n", n+1) + "2"},
+		{"continuation lines", "[M]\nk = 1\n" + strings.Repeat("  x\n", n), "1" + strings.Repeat("\nx", n)},
+	} {
+		if got, err := cfgParse(t, c.text).get("M", "k"); err != nil || got != c.want {
+			t.Errorf("%s: got %d bytes, err %v; want %d bytes equal to the joined lines", c.name, len(got), err, len(c.want))
+		}
+	}
+}
+
+func TestConfigParserTreatsTheAsciiSeparators0x1cTo0x1fAsWhitespace(t *testing.T) {
+	// str.strip() and the regex \S count them as whitespace, so they are stripped, make a blank line and indent.
+	c := cfgParse(t, "[M]\nk = \x1cv\x1f\nj\x1c = 1\n")
+	cfgGet(t, c, "M", "k", "v")
+	cfgGet(t, c, "M", "j", "1")
+	cfgGet(t, cfgParse(t, "[M]\nk = 1\n\x1c\n  2\n"), "M", "k", "1\n\n2")
+	c = cfgParse(t, "[M]\nk = 1\n\x1c2\nj = 3\n")
+	cfgGet(t, c, "M", "k", "1\n2")
+	cfgGet(t, c, "M", "j", "3")
+	if !cfgParse(t, "\x1c[M]\x1d\nk = v\n").hasSection("M") {
+		t.Errorf("hasSection(M) = false, want true for a header wrapped in separators")
+	}
+}
+
+func TestConfigParserReadsAMultiLineValueOfACRLFFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "crlf.ini")
+	if err := os.WriteFile(path, []byte("[M]\r\nk = 1\r\n  2\r\nj = 3\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := newConfigParser()
+	if err := c.read(path); err != nil {
+		t.Fatalf("read(crlf) = %v, want nil", err)
+	}
+	cfgGet(t, c, "M", "k", "1\n2") // a CRLF is one line break, not a blank line after the value line
+	cfgGet(t, c, "M", "j", "3")
+}
+
+func TestConfigParserInterpolationRecursionLimitIsTenSubstitutions(t *testing.T) {
+	// a1 -> a2 -> ... -> an, each value holding a '%' so it is interpolated again: n-1 nested substitutions
+	chain := func(n int) *configParser {
+		var text strings.Builder
+		text.WriteString("[M]\n")
+		for i := 1; i < n; i++ {
+			fmt.Fprintf(&text, "a%d = %%(a%d)s\n", i, i+1)
+		}
+		fmt.Fprintf(&text, "a%d = x\n", n)
+		return cfgParse(t, text.String())
+	}
+	cfgGet(t, chain(11), "M", "a1", "x") // 10 substitutions
+	_, err := chain(12).get("M", "a1")   // 11
+	cfgErrContains(t, "11 nested substitutions", err, "Recursion limit exceeded in value substitution", "in 10 steps")
 }

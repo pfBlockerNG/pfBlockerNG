@@ -23,14 +23,10 @@ const (
 // nil if there is none.
 type forward func(wire []byte) []byte
 
-// --- module lifecycle ----------------------------------------------------------------------------
-
 // boot loads the module from moduleDir and runs its init_standard.
 func boot(moduleDir string) (*pfbUnbound, error) {
 	return initStandard(MODULE_ID, moduleDir)
 }
-
-// --- replies the proxy builds itself -------------------------------------------------------------
 
 func optOf(query *dnswire.Message) *dnswire.RR {
 	for i := range query.Additional {
@@ -119,9 +115,8 @@ func moduleDecides(query *dnswire.Message) bool {
 	return true
 }
 
-// --- the decider ---------------------------------------------------------------------------------
-
 // Frontend decides one client query at a time: the module answers it, or Unbound does through the gateway's forward.
+// A Frontend is not safe for concurrent use: Python ran it on one asyncio loop, so the wiring PR must serialize or lock.
 type Frontend struct {
 	module        *pfbUnbound
 	silenceLogged time.Duration // when "no reply from Unbound" was last logged, on the monotonic clock

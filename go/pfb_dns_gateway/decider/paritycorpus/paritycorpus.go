@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,10 +17,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/dnswire"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
 const DEFAULT_CLIENT = "192.0.2.10"
@@ -495,7 +494,7 @@ func parseCase(item any, index int, where string, families map[string]string, se
 		client = given
 	}
 	address := stringValue(client, whereCase, "query.client")
-	if _, err := netip.ParseAddr(address); err != nil {
+	if _, err := pysem.IPAddress(address); err != nil {
 		fail(whereCase, "query.client", "not an IP address: "+pyRepr(address))
 	}
 	var transport any = "UDP"
@@ -709,11 +708,11 @@ func pyRepr(value any) string {
 	case json.Number:
 		return v.String()
 	case string:
-		return reprString(v)
+		return pysem.Repr(v)
 	case []string:
 		items := make([]string, len(v))
 		for index, item := range v {
-			items[index] = reprString(item)
+			items[index] = pysem.Repr(item)
 		}
 		return "[" + strings.Join(items, ", ") + "]"
 	case []any:
@@ -725,43 +724,9 @@ func pyRepr(value any) string {
 	case *orderedObject:
 		items := make([]string, len(v.keys))
 		for index, key := range v.keys {
-			items[index] = reprString(key) + ": " + pyRepr(v.vals[key])
+			items[index] = pysem.Repr(key) + ": " + pyRepr(v.vals[key])
 		}
 		return "{" + strings.Join(items, ", ") + "}"
 	}
 	return fmt.Sprint(value)
-}
-
-func reprString(text string) string {
-	quote := '\''
-	if strings.ContainsRune(text, '\'') && !strings.ContainsRune(text, '"') {
-		quote = '"'
-	}
-	var out strings.Builder
-	out.WriteRune(quote)
-	for _, r := range text {
-		switch {
-		case r == quote || r == '\\':
-			out.WriteByte('\\')
-			out.WriteRune(r)
-		case r == '\n':
-			out.WriteString(`\n`)
-		case r == '\r':
-			out.WriteString(`\r`)
-		case r == '\t':
-			out.WriteString(`\t`)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&out, `\x%02x`, r)
-		case r < 0x7f || unicode.IsPrint(r):
-			out.WriteRune(r)
-		case r <= 0xff:
-			fmt.Fprintf(&out, `\x%02x`, r)
-		case r <= 0xffff:
-			fmt.Fprintf(&out, `\u%04x`, r)
-		default:
-			fmt.Fprintf(&out, `\U%08x`, r)
-		}
-	}
-	out.WriteRune(quote)
-	return out.String()
 }

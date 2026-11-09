@@ -91,8 +91,6 @@ func logWarn(msg string) { logLine("warning", msg) }
 
 func logErr(msg string) { logLine("error", msg) }
 
-// --- reply objects -------------------------------------------------------------------------------
-
 type rrSetKey struct{ typeStr string }
 
 type rrSetData struct {
@@ -277,8 +275,6 @@ func (m *DNSMessage) setReturnMsg(qstate *moduleQstate) bool {
 	qstate.returnMsg = newDnsMsg(queryInfo{m.rrName, m.rrType, m.rrClass}, flags, sections[0], sections[1], sections[2])
 	return true
 }
-
-// --- query state ---------------------------------------------------------------------------------
 
 // moduleQstate flattens mesh_info.reply_list.query_reply to clientIP and clientPort.
 type moduleQstate struct {

@@ -1,6 +1,7 @@
 // Port of tests/dns_proxy/test_dnswire.py: packets are hand-built so the codec is not graded against itself.
 // Tests after the "Python stdlib behaviour" banner cover what the Go port had to reimplement from the Python
-// standard library (shlex, ipaddress, int, repr, str.split); their expectations were produced by running Python 3.13.
+// standard library (shlex here; ipaddress, int, repr and str.split in package pysem); their expectations were produced
+// by running Python 3.13.
 
 package dnswire
 
@@ -493,6 +494,25 @@ func TestEncodeStopsRecordingNamesPastThe0x4000Offset(t *testing.T) {
 	}
 }
 
+func TestEncodeRecordsANameAtOffset0x3FFFButNotAt0x4000(t *testing.T) {
+	owner := []byte("\x01a\x07example\x00")
+	for _, c := range []struct {
+		firstAt int
+		second  []byte // how the second, identical owner is written
+	}{
+		{0x3FFF, []byte{0xFF, 0xFF}}, // recorded: a pointer to the first
+		{0x4000, owner},              // not recorded: written in full again
+	} {
+		// a root-owned filler record moves the first owner to the wanted offset: 12 header + 1 owner + 10 fixed + rdata
+		filler := RR{".", TYPE_A, CLASS_IN, 60, make([]byte, c.firstAt-12-1-10)}
+		record := RR{"a.example.", TYPE_A, CLASS_IN, 60, make([]byte, 4)}
+		wire := mustEncode(t, &Message{ID: 1, Flags: 0x8180, Answers: []RR{filler, record, record}})
+		wantBytes(t, wire[c.firstAt:c.firstAt+len(owner)], owner)
+		secondAt := c.firstAt + len(owner) + 10 + 4
+		wantBytes(t, wire[secondAt:secondAt+len(c.second)], c.second)
+	}
+}
+
 func TestEncodeRejectsWhatDoesNotFitTheWireFields(t *testing.T) {
 	_, err := Encode(&Message{Answers: []RR{{".", TYPE_A, CLASS_IN, 0, make([]byte, 65536)}}})
 	wantError(t, err, "'H' format requires 0 <= number <= 65535")
@@ -601,54 +621,9 @@ var shlexCases = []struct {
 	{"a\\\u000ab", []string{"a\u000ab"}, ""},
 }
 
-var reprCases = []struct{ in, want string }{
-	{"abc", "'abc'"},
-	{"", "''"},
-	{"a'b", "\"a'b\""},
-	{"a\"b", "'a\"b'"},
-	{"a'\"b", "'a\\'\"b'"},
-	{"a\\b", "'a\\\\b'"},
-	{"tab\u0009", "'tab\\t'"},
-	{"nl\u000a\u000d", "'nl\\n\\r'"},
-	{"\u0000\u0001", "'\\x00\\x01'"},
-	{"\u007f\u00ad\u0085\u00e9", "'\\x7f\\xad\\x85\u00e9'"},
-	{"\U0001f600", "'\U0001f600'"},
-	{"\ue000", "'\\ue000'"},
-	{"\U000e0001", "'\\U000e0001'"},
-	{"\u00a0", "'\\xa0'"},
-	{"\u2028", "'\\u2028'"},
-	{"\u0007\u000b\u000c\u001b", "'\\x07\\x0b\\x0c\\x1b'"},
-	{"\u00ff\u00ff\u0100", "'\u00ff\u00ff\u0100'"},
-}
-
 var rrFromTextErrCases = []struct{ line, want string }{
 	{"x.example. 60 IN A 999.1.1.1", "Octet 999 (> 255) not permitted in '999.1.1.1'"},
-	{"x.example. 60 IN A 1.2.3", "Expected 4 octets in '1.2.3'"},
-	{"x.example. 60 IN A 01.2.3.4", "Leading zeros are not permitted in '01' in '01.2.3.4'"},
-	{"x.example. 60 IN A 1.2.3.x", "Only decimal digits permitted in 'x' in '1.2.3.x'"},
-	{"x.example. 60 IN A 1..3.4", "Empty octet not permitted in '1..3.4'"},
-	{"x.example. 60 IN A 1.2.3.4/8", "Unexpected '/' in '1.2.3.4/8'"},
-	{"x.example. 60 IN A 1.2.3.1234", "At most 3 characters permitted in '1234' in '1.2.3.1234'"},
-	{"x.example. 60 IN A \u0661.2.3.4", "Only decimal digits permitted in '\u0661' in '\u0661.2.3.4'"},
-	{"x.example. 60 IN A 1.2.3.4.5", "Expected 4 octets in '1.2.3.4.5'"},
 	{"x.example. 60 IN AAAA 10.0.0.1", "At least 3 parts expected in '10.0.0.1'"},
-	{"x.example. 60 IN AAAA ::1::", "At most one '::' permitted in '::1::'"},
-	{"x.example. 60 IN AAAA 1:2:3:4:5:6:7:8:9", "Exactly 8 parts expected without '::' in '1:2:3:4:5:6:7:8:9'"},
-	{"x.example. 60 IN AAAA 12345::", "At most 4 characters permitted in '12345' in '12345::'"},
-	{"x.example. 60 IN AAAA fe80::1%", "Invalid IPv6 address: \"'fe80::1%'\""},
-	{"x.example. 60 IN AAAA fe80::1%a%b", "Invalid IPv6 address: \"'fe80::1%a%b'\""},
-	{"x.example. 60 IN AAAA ::1.2.3", "Expected 4 octets in '1.2.3' in '::1.2.3'"},
-	{"x.example. 60 IN AAAA :1:2:3:4:5:6:7", "Leading ':' only permitted as part of '::' in ':1:2:3:4:5:6:7'"},
-	{"x.example. 60 IN AAAA 1:2:3:4:5:6:7:", "Trailing ':' only permitted as part of '::' in '1:2:3:4:5:6:7:'"},
-	{"x.example. 60 IN AAAA 1:2:3:4:5:6:7", "Exactly 8 parts expected without '::' in '1:2:3:4:5:6:7'"},
-	{"x.example. 60 IN AAAA 1:2:3:4:5:6::7:8", "Expected at most 7 other parts with '::' in '1:2:3:4:5:6::7:8'"},
-	{"x.example. 60 IN AAAA 1:g::", "Only hex digits permitted in 'g' in '1:g::'"},
-	{"x.example. 60 IN AAAA 1::2::3", "At most one '::' permitted in '1::2::3'"},
-	{"x.example. 60 IN AAAA 1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1", "At most 45 characters expected in '1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1'"},
-	{"x.example. 60 IN AAAA 1:2:3:4:5:6:7:8/64", "Unexpected '/' in '1:2:3:4:5:6:7:8/64'"},
-	{"x.example. 60 IN AAAA 1:2", "At least 3 parts expected in '1:2'"},
-	{"x.example. 60 IN AAAA 1:2:3:4:5:6:7:8:9:1:2:3", "At most 8 colons permitted in '1:2:3:4:5:6:7:8:9:1:2:3'"},
-	{"x.example. 60 IN AAAA ::1:2:3:4:5:6:7:8", "At most 8 colons permitted in '::1:2:3:4:5:6:7:8'"},
 	{"x.example. 60 IN A", "expected 'name ttl IN type rdata': 'x.example. 60 IN A'"},
 	{"x.example. 60 CH A 10.0.0.1", "unsupported class 'CH'"},
 	{"x.example. sixty IN A 10.0.0.1", "bad ttl 'sixty'"},
@@ -657,6 +632,8 @@ var rrFromTextErrCases = []struct{ line, want string }{
 	{"x.example. 60 IN MX 10 mail.example.", "unsupported RR type 'MX'"},
 	{"x.example. 60 IN TXT \"unterminated", "No closing quotation"},
 	{"x.example. 60 IN SOA only.three. fields.here.", "SOA rdata is: mname rname serial refresh retry expire minimum"},
+	{"x.example. 60 IN SOA a. b. 1 2 3 4", "SOA rdata is: mname rname serial refresh retry expire minimum"},
+	{"x.example. 60 IN SOA a. b. 1 2 3 4 5 6", "SOA rdata is: mname rname serial refresh retry expire minimum"},
 	{"x.example. 60 IN SOA a. b. 1 2 3 4 x", "invalid literal for int() with base 10: 'x'"},
 	{"x.example. 60 IN SOA a. b. 1 2 3 4 -1", "SOA counter out of range"},
 	{"x.example. 60 IN SOA a. b. 1 2 3 4 4294967296", "SOA counter out of range"},
@@ -690,16 +667,6 @@ var rrFromTextOkCases = []struct {
 	{"x. 60 IN a 1.2.3.4  ", "x.", 1, 60, "01020304"},
 	{"x. 60 in A  \u00091.2.3.4", "x.", 1, 60, "01020304"},
 	{"x. 60 IN AAAA 2001:db8::1", "x.", 28, 60, "20010db8000000000000000000000001"},
-	{"x. 60 IN AAAA ::ffff:1.2.3.4", "x.", 28, 60, "00000000000000000000ffff01020304"},
-	{"x. 60 IN AAAA fe80::1%eth0", "x.", 28, 60, "fe800000000000000000000000000001"},
-	{"x. 60 IN AAAA 1:2:3:4:5:6:7:8", "x.", 28, 60, "00010002000300040005000600070008"},
-	{"x. 60 IN AAAA ::", "x.", 28, 60, "00000000000000000000000000000000"},
-	{"x. 60 IN AAAA 1::", "x.", 28, 60, "00010000000000000000000000000000"},
-	{"x. 60 IN AAAA 0001:0002:0003:0004:0005:0006:1.2.3.4", "x.", 28, 60, "00010002000300040005000601020304"},
-	{"x. 60 IN AAAA ABCD::EF", "x.", 28, 60, "abcd00000000000000000000000000ef"},
-	{"x. 60 IN AAAA 1:2:3:4:5:6:7::", "x.", 28, 60, "00010002000300040005000600070000"},
-	{"x. 60 IN AAAA ::2:3:4:5:6:7:8", "x.", 28, 60, "00000002000300040005000600070008"},
-	{"x. 60 IN AAAA 1:2:3:4:5:6:7:8%z", "x.", 28, 60, "00010002000300040005000600070008"},
 	{"x. 60 IN TXT a b", "x.", 16, 60, "01610162"},
 	{"x. 60 IN TXT 'a b' \"c d\" e\\ f", "x.", 16, 60, "036120620363206403652066"},
 	{"x. 60 IN TXT \"a\\\"b\" \"a\\\\b\" \"a\\xb\"", "x.", 16, 60, "0361226203615c6204615c7862"},
@@ -746,23 +713,6 @@ var nameToLabelsCases = []struct{ in, labels, err string }{
 	{"a b.", "612062", ""},
 }
 
-var splitCases = []struct {
-	in   string
-	want []string
-}{
-	{"a b c d e", []string{"a", "b", "c", "d", "e"}},
-	{"a b c d e  f  ", []string{"a", "b", "c", "d", "e  f  "}},
-	{"  a  b  ", []string{"a", "b"}},
-	{"a b c d   ", []string{"a", "b", "c", "d"}},
-	{"a b c d  e f g ", []string{"a", "b", "c", "d", "e f g "}},
-	{"a\u001cb c d e f", []string{"a", "b", "c", "d", "e f"}},
-	{"a\u00a0b c d e f", []string{"a", "b", "c", "d", "e f"}},
-	{"", []string{}},
-	{"   ", []string{}},
-	{"a", []string{"a"}},
-	{"a b c d e\u0009f\u000a", []string{"a", "b", "c", "d", "e\u0009f\u000a"}},
-}
-
 var typeNameCases = []struct {
 	rtype uint16
 	want  string
@@ -804,22 +754,6 @@ func TestShlexSplitMatchesPython(t *testing.T) {
 		}
 		if err != nil || !slices.Equal(got, c.want) {
 			t.Errorf("shlexSplit(%q) = %q, %v; want %q", c.in, got, err, c.want)
-		}
-	}
-}
-
-func TestPyReprMatchesPython(t *testing.T) {
-	for _, c := range reprCases {
-		if got := pyRepr(c.in); got != c.want {
-			t.Errorf("pyRepr(%q) = %s, want %s", c.in, got, c.want)
-		}
-	}
-}
-
-func TestSplitWhitespaceMatchesPython(t *testing.T) {
-	for _, c := range splitCases {
-		if got := splitWhitespace(c.in, 4); !slices.Equal(got, c.want) {
-			t.Errorf("splitWhitespace(%q, 4) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

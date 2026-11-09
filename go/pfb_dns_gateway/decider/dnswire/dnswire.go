@@ -5,8 +5,8 @@
 // label may carry. RR rdata is kept canonical: names inside RFC 1035 rdata types are expanded (never compressed),
 // which is also how Unbound stores them. Encode compresses owner names only.
 //
-// The Python module leans on shlex, ipaddress, int(), repr() and str.split(); the helpers below (shlexSplit,
-// ipv4Address, ipv6Address, pyInt, pyRepr, splitWhitespace) reproduce those behaviours, error text included.
+// The Python module leans on shlex, ipaddress, int(), repr() and str.split(); shlexSplit is the shlex part, the rest is
+// in package pysem.
 package dnswire
 
 import (
@@ -16,6 +16,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
 const (
@@ -180,7 +182,7 @@ func NameToLabels(name string) ([][]byte, error) {
 		if char == '\\' {
 			i++
 			if i >= len(chars) {
-				return nil, fmt.Errorf("dangling escape in %s", pyRepr(name))
+				return nil, fmt.Errorf("dangling escape in %s", pysem.Repr(name))
 			}
 			digits := chars[i:min(i+3, len(chars))]
 			// shortcut: ASCII-only digit escapes. Python's isdigit() also takes the Nd decimal digits (`\٠٠١`: Python
@@ -189,12 +191,12 @@ func NameToLabels(name string) ([][]byte, error) {
 			// decider renders, because LabelsToText escapes every non-ASCII octet as \DDD; upgrade when a hand-written
 			// non-ASCII escape has to match Python.
 			if unicode.IsDigit(chars[i]) {
-				if len(digits) != 3 || !isASCIIDigits(string(digits)) {
-					return nil, fmt.Errorf("bad \\DDD escape in %s", pyRepr(name))
+				if len(digits) != 3 || !pysem.IsASCIIDigits(string(digits)) {
+					return nil, fmt.Errorf("bad \\DDD escape in %s", pysem.Repr(name))
 				}
 				value := int(digits[0]-'0')*100 + int(digits[1]-'0')*10 + int(digits[2]-'0')
 				if value > 255 {
-					return nil, fmt.Errorf("bad \\DDD escape in %s", pyRepr(name))
+					return nil, fmt.Errorf("bad \\DDD escape in %s", pysem.Repr(name))
 				}
 				current = append(current, byte(value))
 				i += 3
@@ -206,7 +208,7 @@ func NameToLabels(name string) ([][]byte, error) {
 		}
 		if char == '.' {
 			if len(current) == 0 {
-				return nil, fmt.Errorf("empty label in %s", pyRepr(name))
+				return nil, fmt.Errorf("empty label in %s", pysem.Repr(name))
 			}
 			labels = append(labels, current)
 			current = nil
@@ -220,7 +222,7 @@ func NameToLabels(name string) ([][]byte, error) {
 	}
 	for _, label := range labels {
 		if len(label) > _MAX_LABEL {
-			return nil, fmt.Errorf("label longer than %d octets in %s", _MAX_LABEL, pyRepr(name))
+			return nil, fmt.Errorf("label longer than %d octets in %s", _MAX_LABEL, pysem.Repr(name))
 		}
 	}
 	wireLen := 1
@@ -507,13 +509,13 @@ func txtRdata(rest string) ([]byte, error) {
 }
 
 func soaRdata(rest string) ([]byte, error) {
-	fields := strings.FieldsFunc(rest, isSpace)
+	fields := strings.FieldsFunc(rest, pysem.IsSpace)
 	if len(fields) != 7 {
 		return nil, errors.New("SOA rdata is: mname rname serial refresh retry expire minimum")
 	}
 	numbers := make([]int64, 5)
 	for i, value := range fields[2:] {
-		number, err := pyInt(value)
+		number, err := pysem.Int(value)
 		if err != nil {
 			return nil, err
 		}
@@ -540,7 +542,7 @@ func soaRdata(rest string) ([]byte, error) {
 }
 
 func cnameRdata(rest string) ([]byte, error) {
-	fields := strings.FieldsFunc(rest, isSpace)
+	fields := strings.FieldsFunc(rest, pysem.IsSpace)
 	if len(fields) != 1 {
 		return nil, errors.New("CNAME rdata is one target name")
 	}
@@ -552,31 +554,31 @@ var _TEXT_RDATA = map[string]struct {
 	build func(rest string) ([]byte, error)
 }{
 	"A": {TYPE_A, func(rest string) ([]byte, error) {
-		ip, err := ipv4Address(strings.TrimFunc(rest, isSpace))
+		ip, err := pysem.IPv4Address(strings.TrimFunc(rest, pysem.IsSpace))
 		return binary.BigEndian.AppendUint32(nil, ip), err
 	}},
-	"AAAA":  {TYPE_AAAA, func(rest string) ([]byte, error) { return ipv6Address(strings.TrimFunc(rest, isSpace)) }},
+	"AAAA":  {TYPE_AAAA, func(rest string) ([]byte, error) { return pysem.IPv6Address(strings.TrimFunc(rest, pysem.IsSpace)) }},
 	"CNAME": {TYPE_CNAME, cnameRdata},
 	"TXT":   {TYPE_TXT, txtRdata},
 	"SOA":   {TYPE_SOA, soaRdata},
 }
 
 func RRFromText(line string) (RR, error) {
-	parts := splitWhitespace(line, 4)
+	parts := pysem.SplitWhitespace(line, 4)
 	if len(parts) < 5 {
-		return RR{}, fmt.Errorf("expected 'name ttl IN type rdata': %s", pyRepr(line))
+		return RR{}, fmt.Errorf("expected 'name ttl IN type rdata': %s", pysem.Repr(line))
 	}
 	name, ttl, rclass, rtype, rest := parts[0], parts[1], parts[2], parts[3], parts[4]
-	ttlValue, _ := pyInt(ttl) // digits only when the isASCIIDigits test passes, so no error to report
-	if !isASCIIDigits(ttl) || ttlValue > 0xFFFFFFFF {
-		return RR{}, fmt.Errorf("bad ttl %s", pyRepr(ttl))
+	ttlValue, _ := pysem.Int(ttl) // digits only when the IsASCIIDigits test passes, so no error to report
+	if !pysem.IsASCIIDigits(ttl) || ttlValue > 0xFFFFFFFF {
+		return RR{}, fmt.Errorf("bad ttl %s", pysem.Repr(ttl))
 	}
 	if strings.ToUpper(rclass) != "IN" {
-		return RR{}, fmt.Errorf("unsupported class %s", pyRepr(rclass))
+		return RR{}, fmt.Errorf("unsupported class %s", pysem.Repr(rclass))
 	}
 	entry, ok := _TEXT_RDATA[strings.ToUpper(rtype)]
 	if !ok {
-		return RR{}, fmt.Errorf("unsupported RR type %s", pyRepr(rtype))
+		return RR{}, fmt.Errorf("unsupported RR type %s", pysem.Repr(rtype))
 	}
 	if _, err := NameToLabels(name); err != nil { // reject a name that cannot be encoded now, not when the reply is serialised
 		return RR{}, err
@@ -586,130 +588,6 @@ func RRFromText(line string) (RR, error) {
 		return RR{}, err
 	}
 	return RR{name, entry.code, CLASS_IN, uint32(ttlValue), rdata}, nil
-}
-
-// isSpace is str.isspace() for one character: Unicode White_Space plus the ASCII separators 0x1C-0x1F.
-func isSpace(r rune) bool { return unicode.IsSpace(r) || 0x1C <= r && r <= 0x1F }
-
-// isASCIIDigits is str.isdigit() restricted to ASCII.
-// shortcut: for a ttl or SOA counter Python's int() converts Nd decimal digits ("٦٠" is 60; Go rejects it) and rejects
-// No digits such as "²" or "①" (Go rejects them too, with its own message). Unreachable from the module's text RRs,
-// whose ttls are literals; upgrade when text RRs can come from outside the module.
-func isASCIIDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := range len(s) {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// splitWhitespace is s.split(None, maxsplit): the remainder after the last split keeps its trailing whitespace.
-func splitWhitespace(s string, maxsplit int) []string {
-	var parts []string
-	i := 0
-	skipSpace := func() {
-		for i < len(s) {
-			r, width := utf8.DecodeRuneInString(s[i:])
-			if !isSpace(r) {
-				return
-			}
-			i += width
-		}
-	}
-	for ; maxsplit > 0; maxsplit-- {
-		skipSpace()
-		if i == len(s) {
-			return parts
-		}
-		start := i
-		for i < len(s) {
-			r, width := utf8.DecodeRuneInString(s[i:])
-			if isSpace(r) {
-				break
-			}
-			i += width
-		}
-		parts = append(parts, s[start:i])
-	}
-	skipSpace()
-	if i < len(s) {
-		parts = append(parts, s[i:])
-	}
-	return parts
-}
-
-// pyInt is int(s) for base 10: an optional sign, then digits with single underscores between them. A value too big
-// for 40 bits saturates, which is enough for the 32-bit range checks of its callers.
-// shortcut: no 4300-digit limit (Python 3.11+ raises beyond it); irrelevant to a 32-bit field.
-func pyInt(s string) (int64, error) {
-	digits := s
-	negative := false
-	if digits != "" && (digits[0] == '+' || digits[0] == '-') {
-		negative = digits[0] == '-'
-		digits = digits[1:]
-	}
-	var value int64
-	afterDigit := false
-	for i := range len(digits) {
-		c := digits[i]
-		switch {
-		case '0' <= c && c <= '9':
-			if value < 1<<40 {
-				value = value*10 + int64(c-'0')
-			}
-			afterDigit = true
-		case c == '_' && afterDigit && i+1 < len(digits) && '0' <= digits[i+1] && digits[i+1] <= '9':
-			afterDigit = false
-		default:
-			return 0, fmt.Errorf("invalid literal for int() with base 10: %s", pyRepr(s))
-		}
-	}
-	if !afterDigit {
-		return 0, fmt.Errorf("invalid literal for int() with base 10: %s", pyRepr(s))
-	}
-	if negative {
-		value = -value
-	}
-	return value, nil
-}
-
-// pyRepr is repr(s) of a str.
-func pyRepr(s string) string {
-	quote := '\''
-	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
-		quote = '"'
-	}
-	var out strings.Builder
-	out.WriteRune(quote)
-	for _, r := range s {
-		switch {
-		case r == quote || r == '\\':
-			out.WriteByte('\\')
-			out.WriteRune(r)
-		case r == '\t':
-			out.WriteString(`\t`)
-		case r == '\n':
-			out.WriteString(`\n`)
-		case r == '\r':
-			out.WriteString(`\r`)
-		case r < ' ' || r == 0x7F:
-			fmt.Fprintf(&out, `\x%02x`, r)
-		case r < 0x7F || unicode.IsPrint(r):
-			out.WriteRune(r)
-		case r < 0x100:
-			fmt.Fprintf(&out, `\x%02x`, r)
-		case r < 0x10000:
-			fmt.Fprintf(&out, `\u%04x`, r)
-		default:
-			fmt.Fprintf(&out, `\U%08x`, r)
-		}
-	}
-	out.WriteRune(quote)
-	return out.String()
 }
 
 // shlexSplit is shlex.split(s): POSIX mode, whitespace_split, no comments.
@@ -820,191 +698,3 @@ loop:
 }
 
 func isShlexSpace(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }
-
-// ipv4Address is the value of ipaddress.IPv4Address(address).
-func ipv4Address(address string) (uint32, error) {
-	if strings.Contains(address, "/") {
-		return 0, fmt.Errorf("Unexpected '/' in %s", pyRepr(address))
-	}
-	if address == "" {
-		return 0, errors.New("Address cannot be empty")
-	}
-	octets := strings.Split(address, ".")
-	if len(octets) != 4 {
-		return 0, fmt.Errorf("Expected 4 octets in %s", pyRepr(address))
-	}
-	var value uint32
-	for _, octet := range octets {
-		number, err := parseOctet(octet)
-		if err != nil {
-			return 0, fmt.Errorf("%s in %s", err, pyRepr(address))
-		}
-		value = value<<8 | uint32(number)
-	}
-	return value, nil
-}
-
-func parseOctet(octet string) (int, error) {
-	if octet == "" {
-		return 0, errors.New("Empty octet not permitted")
-	}
-	if !isASCIIDigits(octet) {
-		return 0, fmt.Errorf("Only decimal digits permitted in %s", pyRepr(octet))
-	}
-	if len(octet) > 3 {
-		return 0, fmt.Errorf("At most 3 characters permitted in %s", pyRepr(octet))
-	}
-	if octet != "0" && octet[0] == '0' {
-		return 0, fmt.Errorf("Leading zeros are not permitted in %s", pyRepr(octet))
-	}
-	number := 0
-	for i := range len(octet) {
-		number = number*10 + int(octet[i]-'0')
-	}
-	if number > 255 {
-		return 0, fmt.Errorf("Octet %d (> 255) not permitted", number)
-	}
-	return number, nil
-}
-
-const _HEXTET_COUNT = 8
-
-// ipv6Address is the packed form of ipaddress.IPv6Address(address); a %scope id is validated and dropped.
-func ipv6Address(address string) ([]byte, error) {
-	if strings.Contains(address, "/") {
-		return nil, fmt.Errorf("Unexpected '/' in %s", pyRepr(address))
-	}
-	ipStr, scopeID, hasScope := strings.Cut(address, "%")
-	if hasScope && (scopeID == "" || strings.Contains(scopeID, "%")) {
-		return nil, fmt.Errorf("Invalid IPv6 address: \"%s\"", pyRepr(address))
-	}
-
-	if ipStr == "" {
-		return nil, errors.New("Address cannot be empty")
-	}
-	if chars := []rune(ipStr); len(chars) > 45 {
-		shorten := ipStr
-		if len(chars) > 100 {
-			shorten = fmt.Sprintf("%s(%d chars elided)%s", string(chars[:45]), len(chars)-90, string(chars[len(chars)-45:]))
-		}
-		return nil, fmt.Errorf("At most 45 characters expected in %s", pyRepr(shorten))
-	}
-
-	// more parts than the max are split off to keep the right error message for too many parts combined with '::'
-	maxParts := _HEXTET_COUNT + 1
-	parts := strings.SplitN(ipStr, ":", maxParts+1)
-
-	// An IPv6 address needs at least 2 colons (3 parts).
-	const minParts = 3
-	if len(parts) < minParts {
-		return nil, fmt.Errorf("At least %d parts expected in %s", minParts, pyRepr(ipStr))
-	}
-
-	// If the address has an IPv4-style suffix, convert it to hexadecimal.
-	if strings.Contains(parts[len(parts)-1], ".") {
-		ipv4Int, err := ipv4Address(parts[len(parts)-1])
-		if err != nil {
-			return nil, fmt.Errorf("%s in %s", err, pyRepr(ipStr))
-		}
-		parts = append(parts[:len(parts)-1], fmt.Sprintf("%x", (ipv4Int>>16)&0xFFFF), fmt.Sprintf("%x", ipv4Int&0xFFFF))
-	}
-
-	// An IPv6 address can't have more than 8 colons (9 parts). The extra colon comes from using the "::" notation
-	// for a single leading or trailing zero part.
-	if len(parts) > maxParts {
-		return nil, fmt.Errorf("At most %d colons permitted in %s", maxParts-1, pyRepr(ipStr))
-	}
-
-	// Disregarding the endpoints, find '::' with nothing in between: a run of zeroes has been skipped.
-	skipIndex := -1
-	for i := 1; i < len(parts)-1; i++ {
-		if parts[i] == "" {
-			if skipIndex != -1 {
-				return nil, fmt.Errorf("At most one '::' permitted in %s", pyRepr(ipStr))
-			}
-			skipIndex = i
-		}
-	}
-
-	// partsHi parts are copied from before the '::', partsLo from after it.
-	var partsHi, partsLo, partsSkipped int
-	if skipIndex != -1 {
-		partsHi = skipIndex
-		partsLo = len(parts) - skipIndex - 1
-		if parts[0] == "" {
-			partsHi--
-			if partsHi != 0 {
-				return nil, fmt.Errorf("Leading ':' only permitted as part of '::' in %s", pyRepr(ipStr))
-			}
-		}
-		if parts[len(parts)-1] == "" {
-			partsLo--
-			if partsLo != 0 {
-				return nil, fmt.Errorf("Trailing ':' only permitted as part of '::' in %s", pyRepr(ipStr))
-			}
-		}
-		partsSkipped = _HEXTET_COUNT - (partsHi + partsLo)
-		if partsSkipped < 1 {
-			return nil, fmt.Errorf("Expected at most %d other parts with '::' in %s", _HEXTET_COUNT-1, pyRepr(ipStr))
-		}
-	} else {
-		// The endpoints could still be empty, but parseHextet will check for that.
-		if len(parts) != _HEXTET_COUNT {
-			return nil, fmt.Errorf("Exactly %d parts expected without '::' in %s", _HEXTET_COUNT, pyRepr(ipStr))
-		}
-		if parts[0] == "" {
-			return nil, fmt.Errorf("Leading ':' only permitted as part of '::' in %s", pyRepr(ipStr))
-		}
-		if parts[len(parts)-1] == "" {
-			return nil, fmt.Errorf("Trailing ':' only permitted as part of '::' in %s", pyRepr(ipStr))
-		}
-		partsHi = len(parts)
-	}
-
-	packed := make([]byte, 0, 16)
-	for _, part := range parts[:partsHi] {
-		hextet, err := parseHextet(part)
-		if err != nil {
-			return nil, fmt.Errorf("%s in %s", err, pyRepr(ipStr))
-		}
-		packed = binary.BigEndian.AppendUint16(packed, hextet)
-	}
-	packed = append(packed, make([]byte, 2*partsSkipped)...)
-	for _, part := range parts[len(parts)-partsLo:] {
-		hextet, err := parseHextet(part)
-		if err != nil {
-			return nil, fmt.Errorf("%s in %s", err, pyRepr(ipStr))
-		}
-		packed = binary.BigEndian.AppendUint16(packed, hextet)
-	}
-	return packed, nil
-}
-
-func parseHextet(hextet string) (uint16, error) {
-	var value uint16
-	for i := range len(hextet) {
-		c := hextet[i]
-		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
-			return 0, fmt.Errorf("Only hex digits permitted in %s", pyRepr(hextet))
-		}
-	}
-	if len(hextet) > 4 {
-		return 0, fmt.Errorf("At most 4 characters permitted in %s", pyRepr(hextet))
-	}
-	if hextet == "" {
-		return 0, errors.New("invalid literal for int() with base 16: ''")
-	}
-	for i := range len(hextet) {
-		c := hextet[i]
-		switch {
-		case c <= '9':
-			c -= '0'
-		case c <= 'F':
-			c = c - 'A' + 10
-		default:
-			c = c - 'a' + 10
-		}
-		value = value<<4 | uint16(c)
-	}
-	return value, nil
-}

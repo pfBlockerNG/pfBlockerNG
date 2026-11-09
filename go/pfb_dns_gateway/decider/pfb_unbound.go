@@ -113,6 +113,8 @@ func parseTldAllow(raw string) []string {
 	var tlds []string
 	for _, part := range strings.Split(raw, ",") {
 		if tld := pyStrip(part); tld != "" {
+			// shortcut: strings.ToLower is not str.lower() for U+0130 or a final sigma, and Python 3.11's Unicode 14 case tables
+			// differ from Go's Unicode 17; PHP writes this value ASCII, so upgrade only if it can carry non-ASCII.
 			tlds = append(tlds, strings.ToLower(tld))
 		}
 	}
@@ -168,7 +170,7 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	m := &pfbUnbound{}
 	pfb := &m.pfb
 
-	// Initialize default settings; a key not set here has its Python default False / "" / 0 / empty list.
+	// A key not set here keeps Go's zero value, which is its Python default (False / "" / 0 / empty list).
 	pfb.idnMode = IdnModeOff
 	pfb.pythonIdnBlockMalicious = true
 	pfb.pslIncludePrivate = true
@@ -177,7 +179,6 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	pfb.regexWarnMs = REGEX_WARN_MS_DEFAULT
 	pfb.decisiondbMax = 10000
 
-	// DNSBL Python files
 	in := func(name string) string { return filepath.Join(moduleDir, name) }
 	pfb.pfbUnboundIni = in("pfb_unbound.ini")
 	pfb.pfbPyWhitelist = in("pfb_py_whitelist.txt")
@@ -201,7 +202,6 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	pfb.pfbPyDnsbl = in("pfb_py_dnsbl.sqlite")
 	pfb.pfbPyResolver = in("pfb_py_resolver.sqlite")
 
-	// DNSBL validation on these RR_TYPES only
 	pfb.rrTypes = []uint16{
 		RR_TYPE_A,
 		RR_TYPE_AAAA,
@@ -218,7 +218,6 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 		65,
 	}
 
-	// List of HSTS preload TLDs
 	pfb.hstsTlds = []string{
 		"android",
 		"app",
@@ -239,7 +238,6 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 		"youtube",
 	}
 
-	// Read pfb_unbound.ini settings
 	config := loadIniConfig(pfb.pfbUnboundIni)
 	if config != nil {
 		if config.hasSection("MAIN") {
@@ -275,6 +273,8 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 					return mainOptionError(option, err)
 				}
 				*dst = "honor"
+				// shortcut: strings.ToLower is not str.lower() for U+0130 or a final sigma, and Python 3.11's Unicode 14 case tables
+				// differ from Go's Unicode 17; PHP writes both psl_feed_*_policy values ASCII, so upgrade only if they can carry non-ASCII.
 				if policy := strings.ToLower(pyStrip(raw)); policy == "ignore" || policy == "apex" || policy == "honor" {
 					*dst = policy
 				}
@@ -309,6 +309,8 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 				if err != nil {
 					return nil, mainOptionError("idn_mode", err)
 				}
+				// shortcut: strings.ToLower is not str.lower() for U+0130 or a final sigma, and Python 3.11's Unicode 14 case tables
+				// differ from Go's Unicode 17; PHP writes idn_mode ASCII, so upgrade only if it can carry non-ASCII.
 				switch rawIdn := strings.ToLower(pyStrip(raw)); rawIdn {
 				case "":
 					pfb.idnMode = IdnModeOff
@@ -409,7 +411,6 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 				pfb.dnsblIpv6 = "::"
 			}
 
-			// List of DNS R_CODES
 			m.rcodeDB = map[int]string{
 				0:  "NoError",
 				1:  "FormErr",

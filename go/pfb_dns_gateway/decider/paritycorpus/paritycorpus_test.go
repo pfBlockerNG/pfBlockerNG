@@ -173,7 +173,7 @@ func TestAMinimalValidScenarioLoadsWithTheDefaultsFilledIn(t *testing.T) {
 		t.Fatalf("scenario header: got %q %q with %d cases", s.Name, s.Description, len(s.Cases))
 	}
 	c := s.Cases[0]
-	wantQuery := Query{Name: "allowed.example.", Qtype: 1, Client: DEFAULT_CLIENT, Transport: "UDP"}
+	wantQuery := Query{Name: "allowed.example.", Qtype: 1, Client: "192.0.2.10", Transport: "UDP"}
 	if c.ID != "good" || c.Family != "relay" || c.Query != wantQuery {
 		t.Errorf("case: got %q %q %+v, want good relay %+v", c.ID, c.Family, c.Query, wantQuery)
 	}
@@ -246,6 +246,13 @@ var hostile = []hostileRow{
 		"bad.json: case 'good': description: must say what behaviour is pinned", ""},
 	{"client not an IP", func(d *object) { caseZero(d).get("query").set("client", "host.example") }, []string{"'good'", "query.client"},
 		"bad.json: case 'good': query.client: not an IP address: 'host.example'", ""},
+	// Python's ipaddress refuses a second '%' and any '/' in an IPv6 text; net/netip takes both.
+	{"client IPv6 with two zone separators", func(d *object) { caseZero(d).get("query").set("client", "fe80::1%a%b") }, []string{"'good'", "query.client"},
+		"bad.json: case 'good': query.client: not an IP address: 'fe80::1%a%b'", ""},
+	{"client IPv6 with a prefix length after an empty zone", func(d *object) { caseZero(d).get("query").set("client", "::%/64") }, []string{"'good'", "query.client"},
+		"bad.json: case 'good': query.client: not an IP address: '::%/64'", ""},
+	{"manifest that is not an object", func(d *object) { d.get("module").set("manifest", []any{}) }, []string{badFile, "module.manifest"},
+		"bad.json: module.manifest: must be a JSON object", ""},
 	{"unknown transport", func(d *object) { caseZero(d).get("query").set("transport", "QUIC") }, []string{"'good'", "query.transport"},
 		"bad.json: case 'good': query.transport: unknown value 'QUIC', expected one of DoH DoQ DoT TCP UDP", ""},
 	{"TYPE65536", func(d *object) { caseZero(d).get("query").set("type", "TYPE65536") }, []string{"'good'", "query.type"},
@@ -283,6 +290,10 @@ var hostile = []hostileRow{
 		"bad.json: module.files: 'pfb_py_raw/feed.txt' is both a file and the directory of another listed file", ""},
 	{"files path with a NUL", func(d *object) { d.get("module", "files").set("a\x00b", []any{"x"}) }, []string{badFile, "module.files"},
 		`bad.json: module.files: unsafe path 'a\x00b': must be relative and stay inside the module directory`, ""},
+	{"files path '.'", func(d *object) { d.get("module", "files").set(".", []any{"x"}) }, []string{badFile, "module.files"},
+		"bad.json: module.files: unsafe path '.': must be relative and stay inside the module directory", ""},
+	{"files path ''", func(d *object) { d.get("module", "files").set("", []any{"x"}) }, []string{badFile, "module.files"},
+		"bad.json: module.files: unsafe path '': must be relative and stay inside the module directory", ""},
 	{"unknown family", func(d *object) { caseZero(d).set("family", "nonesuch") }, []string{badFile, "'good'", "family"},
 		"", "bad.json: case 'good': family: unknown value 'nonesuch', expected one of abp allow "},
 	{"unknown top-level key", func(d *object) { d.set("extra", 1) }, []string{badFile, "extra"},
@@ -346,6 +357,18 @@ func TestTheLoaderRefusesABadScenarioNamingFileCaseAndField(t *testing.T) {
 				t.Errorf("message:\n got %q\nwant it to start with %q", message, row.prefix)
 			}
 		})
+	}
+}
+
+func TestTheLoaderAcceptsTheHighestNumberedQueryType(t *testing.T) {
+	d := good()
+	caseZero(d).get("query").set("type", "TYPE65535")
+	s, err := loadText(t, documentText(t, d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Cases[0].Query.Qtype; got != 65535 {
+		t.Errorf("query.type TYPE65535: got %d, want 65535", got)
 	}
 }
 

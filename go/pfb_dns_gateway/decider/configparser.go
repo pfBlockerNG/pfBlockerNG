@@ -10,8 +10,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
 const (
@@ -43,13 +44,11 @@ func newConfigParser() *configParser {
 	return &configParser{defaults: map[string]string{}, sections: map[string]map[string]string{}}
 }
 
-// pyIsSpace is str.isspace(): unicode.IsSpace plus the four ASCII separators U+001C-U+001F.
-func pyIsSpace(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) }
+func pyStrip(s string) string { return strings.TrimFunc(s, pysem.IsSpace) }
 
-func pyStrip(s string) string { return strings.TrimFunc(s, pyIsSpace) }
-
-// optionxform is str.lower; shortcut: strings.ToLower differs from it only for non-ASCII special casing, and the
-// option names PHP writes are ASCII.
+// optionxform is str.lower.
+// shortcut: strings.ToLower is not str.lower() for U+0130 or a final sigma, and Python 3.11's Unicode 14 case tables
+// differ from Go's Unicode 17; PHP writes the option names ASCII, so upgrade only if they can carry non-ASCII.
 func optionxform(option string) string { return strings.ToLower(option) }
 
 // read is ConfigParser.read([path], encoding="utf-8"): a file that cannot be opened is skipped without an error, a
@@ -92,7 +91,7 @@ func sectionHeader(value string) (string, bool) {
 func indentLevelOf(line string) int {
 	n := 0
 	for _, r := range line {
-		if !pyIsSpace(r) {
+		if !pysem.IsSpace(r) {
 			break
 		}
 		n++
@@ -103,7 +102,9 @@ func indentLevelOf(line string) int {
 // readString is read_string, i.e. the body of RawConfigParser._read. Like Python it keeps whatever it parsed
 // when it fails: a parsing error is only reported after the whole text was read, the other errors stop the read.
 func (c *configParser) readString(text, source string) error {
-	defer c.joinMultilineValues()
+	var values []*multilineValue
+	var current *multilineValue
+	defer func() { joinMultilineValues(values) }()
 	elementsAdded := map[string]bool{}
 	var cursect map[string]string
 	sectname, optname := "", ""
@@ -128,13 +129,13 @@ func (c *configParser) readString(text, source string) error {
 		if value == "" {
 			// a blank line (not a comment) is part of a multi-line value; the trailing ones are dropped at the join
 			if !fullLineComment && cursect != nil && optname != "" {
-				cursect[optname] += "\n"
+				current.lines = append(current.lines, "")
 			}
 			continue
 		}
 		curIndentLevel := indentLevelOf(line)
 		if cursect != nil && optname != "" && curIndentLevel > indentLevel {
-			cursect[optname] += "\n" + value
+			current.lines = append(current.lines, value)
 			continue
 		}
 		indentLevel = curIndentLevel
@@ -167,12 +168,13 @@ func (c *configParser) readString(text, source string) error {
 		if delimiter == 0 {
 			handleError(lineno, line)
 		}
-		optname = optionxform(strings.TrimRightFunc(value[:delimiter], pyIsSpace))
+		optname = optionxform(strings.TrimRightFunc(value[:delimiter], pysem.IsSpace))
 		if elementsAdded["o\x00"+sectname+"\x00"+optname] {
 			return &configError{fmt.Sprintf("While reading from %q [line %2d]: option %q in section %q already exists", source, lineno, optname, sectname)}
 		}
 		elementsAdded["o\x00"+sectname+"\x00"+optname] = true
-		cursect[optname] = pyStrip(value[delimiter+1:])
+		current = &multilineValue{cursect, optname, []string{pyStrip(value[delimiter+1:])}}
+		values = append(values, current)
 	}
 	if parsingErrors != nil {
 		return parsingErrors
@@ -180,17 +182,17 @@ func (c *configParser) readString(text, source string) error {
 	return nil
 }
 
-// joinMultilineValues drops the trailing blank lines of every value (Python joins the lines of a value with "\n" and
-// rstrips the result; readString already joined them as it went).
-func (c *configParser) joinMultilineValues() {
-	rstrip := func(options map[string]string) {
-		for name, val := range options {
-			options[name] = strings.TrimRightFunc(val, pyIsSpace)
-		}
-	}
-	rstrip(c.defaults)
-	for _, options := range c.sections {
-		rstrip(options)
+// multilineValue is the lines of one option's value; Python keeps them in a list and joins them once at the end.
+type multilineValue struct {
+	options map[string]string // the DEFAULT or section options the value belongs to
+	name    string
+	lines   []string
+}
+
+// joinMultilineValues is _join_multiline_values: a value is its lines joined with "\n", minus the trailing blank ones.
+func joinMultilineValues(values []*multilineValue) {
+	for _, value := range values {
+		value.options[value.name] = strings.TrimRightFunc(strings.Join(value.lines, "\n"), pysem.IsSpace)
 	}
 }
 
@@ -330,11 +332,11 @@ func (c *configParser) getint(section, option string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	v, ok := pyInt(value)
-	if !ok {
-		return 0, &valueError{"invalid literal for int() with base 10: '" + value + "'"}
+	v, err := pysem.Int(value)
+	if err != nil {
+		return 0, &valueError{err.Error()}
 	}
-	return v, nil
+	return int(v), nil
 }
 
 func (c *configParser) getfloat(section, option string) (float64, error) {
@@ -347,35 +349,6 @@ func (c *configParser) getfloat(section, option string) (float64, error) {
 		return 0, &valueError{"could not convert string to float: '" + value + "'"}
 	}
 	return v, nil
-}
-
-// pyInt is int(s) for a base-10 string. shortcut: ASCII digits only (Python also takes other Unicode decimal
-// digits), and an int beyond 64 bits stays at the nearest bound where Python's is unbounded; neither can come from
-// a PHP-written ini.
-func pyInt(s string) (int, bool) {
-	s = pyStrip(s)
-	negative := false
-	if s != "" && (s[0] == '+' || s[0] == '-') {
-		negative = s[0] == '-'
-		s = s[1:]
-	}
-	if s == "" || s[0] == '_' || s[len(s)-1] == '_' || strings.Contains(s, "__") {
-		return 0, false
-	}
-	digits := strings.ReplaceAll(s, "_", "")
-	for _, r := range digits {
-		if r < '0' || r > '9' {
-			return 0, false
-		}
-	}
-	if negative {
-		digits = "-" + digits
-	}
-	v, err := strconv.ParseInt(digits, 10, 0)
-	if err != nil && !errors.Is(err, strconv.ErrRange) {
-		return 0, false
-	}
-	return int(v), true
 }
 
 // pyFloat is float(s). Go's ParseFloat also reads hex floats, which float() rejects, and wants no underscores;
