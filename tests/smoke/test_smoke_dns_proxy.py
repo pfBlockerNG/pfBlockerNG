@@ -136,7 +136,7 @@ SNAPSHOT_FILE = "/var/tmp/pfb3515_cfg_snapshot.json"
 CERT_GUEST = "/tmp/pfb3515_cert.pem"
 CERT_CLIENT = "/tmp/pfb3515_ca.pem"
 
-CFG_PFB_DNS = "installedpackages/pfblockerngdns/config/0"  # the pfB-DNS section: local, not synced
+CFG_PFB_DNS = "installedpackages/pfblockerngdns/config/0"  # pfB-DNS section: node-local, but its enable syncs
 CFG_PROXY = f"{CFG_PFB_DNS}/pfb_dns"
 CFG_MARKER = f"{CFG_PFB_DNS}/pfb_dns_saved"
 # pfB-DNS's own listener settings: the interface lists, whose emptiness (pfb_dns_interface first) marks them unseeded,

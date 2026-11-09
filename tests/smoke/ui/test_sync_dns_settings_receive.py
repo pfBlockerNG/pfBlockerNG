@@ -1,8 +1,11 @@
-"""Real XMLRPC legacy-all receive keeps pfB-DNS activation/recovery per node (#3649).
+"""Real XMLRPC legacy-all receive keeps pfB-DNS recovery/listener state per node (#3649, #3770).
 
 The real manual sender calls the disposable VM's own XMLRPC endpoint. The automatic
 case builds its payload from the real send hook and calls core's restore endpoint,
 which invokes the real receive hook. No receiver merge is copied or mocked.
+
+The pfB-DNS enable (`pfb_dns`) syncs with the DNSBL enable: the automatic payload carries it and the receiver follows
+the sender, the manual sender never sends the pfB-DNS section. Every other pfB-DNS key stays the receiver's own.
 """
 
 from __future__ import annotations
@@ -53,7 +56,7 @@ def _php_value(value: object) -> str:
 
 @pytest.mark.parametrize("transport", ["manual", "auto"])
 @pytest.mark.parametrize("toggle", ["", "on"], ids=["disabled", "enabled"])
-def test_real_legacy_receive_transfers_eight_shared_fields_and_keeps_seven_local_fields(
+def test_real_legacy_receive_transfers_eight_shared_fields_and_the_enable_on_auto_only_and_keeps_six_local_fields(
     deployed_vm: SmokeVM,
     admin_credentials: tuple[str, str],
     webgui_protocol: str,
@@ -86,7 +89,7 @@ def test_real_legacy_receive_transfers_eight_shared_fields_and_keeps_seven_local
         assert restored == original, "pfB-DNS receive fixture restoration changed original values"
 
     request.addfinalizer(restore)  # Registered before the first mutation, including failed setup.
-    local = {
+    local = {  # the receiver's seven pfB-DNS values: six node-local, plus the enable that auto receive hands over
         "pfb_dns": toggle,
         "pfb_dns_saved": SAVED_SNAPSHOT,
         "pfb_dns_interface": "lan",
@@ -151,5 +154,10 @@ def test_real_legacy_receive_transfers_eight_shared_fields_and_keeps_seven_local
         ),
     )
     assert after["shared"] == SHARED, f"real {transport} receive: expected {SHARED!r}, got {after['shared']!r}"
-    assert after["local"] == before["local"], f"real {transport} receive changed node-local activation/recovery fields"
+    # Manual never sends pfB-DNS; auto carries the enable alone, so the receiver ends with the sender's (the opposite).
+    expected_local = before["local"] | ({"pfb_dns": "" if toggle else "on"} if transport == "auto" else {})
+    assert after["local"] == expected_local, (
+        f"real {transport} receive: expected node-local fields kept and pfb_dns "
+        f"{'following the sender' if transport == 'auto' else 'kept'}, got {after['local']!r}"
+    )
     assert after["unbound"] == before["unbound"], f"real {transport} receive changed the receiver's Resolver"
