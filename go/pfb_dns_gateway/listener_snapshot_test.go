@@ -137,7 +137,7 @@ func requireSkipped(t *testing.T, log string, values ...string) {
 		t.Fatalf("%d `listener-interface` lines in the log, want %d; log:\n%s", n, len(values), log)
 	}
 	for _, v := range values {
-		if want := fmt.Sprintf("listener-interface %.64q skipped: ", v); !strings.Contains(log, want) {
+		if want := fmt.Sprintf("listener-interface %.64q skipped: ", v); !strings.Contains("\n"+log, "\n"+want) {
 			t.Fatalf("the log has no line starting %q; log:\n%s", want, log)
 		}
 	}
@@ -155,6 +155,25 @@ func TestABadListenerInterfaceRowIsSkippedAndTheGoodRowsAreApplied(t *testing.T)
 			requireSkipped(t, k.r.logs.joined(), value)
 		})
 	}
+}
+
+// A push refused whole applies nothing, so it logs no skipped listener-interface entry either.
+func TestARefusedPushLogsNoSkippedListenerInterface(t *testing.T) {
+	bad := "\nlistener-interface 0.0.0.0=YmFk"
+	t.Run("started without --ddr", func(t *testing.T) {
+		k := newTableRig(t, false)
+		if got := k.send(t, addressTableFrame(doh443Line(tblB)+bad)); got != "error: started without --ddr" {
+			t.Fatalf("reply %q, want `error: started without --ddr`", got)
+		}
+		requireSkipped(t, k.r.logs.joined())
+	})
+	t.Run("started without --dns-name", func(t *testing.T) {
+		k := newCtlRig(t)
+		if got := k.send(t, addressTableFrame(tableLine(tblB+"="+tblB)+bad)); got != "error: started without --dns-name" {
+			t.Fatalf("reply %q, want `error: started without --dns-name`", got)
+		}
+		requireSkipped(t, k.r.logs.joined())
+	})
 }
 
 // Bad rows are skipped wherever they stand among the good ones, and the log counts what was applied.

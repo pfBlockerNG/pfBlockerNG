@@ -221,7 +221,9 @@ func (c *ctlServer) addressTable(in io.Reader) string {
 	if c.names == nil && c.interfaces == nil {
 		return "error: started without --dns-name"
 	}
-	table, err := parseAddressTable(body, c.logf)
+	// A skip is logged only for a push that is applied.
+	var skipped []string
+	table, err := parseAddressTable(body, func(format string, args ...any) { skipped = append(skipped, fmt.Sprintf(format, args...)) })
 	if err != nil {
 		return "error: " + err.Error()
 	}
@@ -230,6 +232,9 @@ func (c *ctlServer) addressTable(in io.Reader) string {
 	}
 	if len(table.doh443) > 0 && c.ddr == nil {
 		return "error: started without --ddr"
+	}
+	for _, line := range skipped {
+		c.logf("%s", line)
 	}
 	changed := false
 	if c.names != nil {
