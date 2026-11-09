@@ -9,7 +9,7 @@ require_once __DIR__ . '/SyncPolicyFixtureTrait.php';
 
 /**
  * Issue #3450 — pfb_sync_policy_projection(): the ordered `installedpackages/<section>/...`
- * => leaf map of a node's policy content across the 19 synced sections
+ * => leaf map of a node's policy content across the policy sections (the 19 synced ones and pfblockerngdns)
  * (docs/specs/xmlrpc-per-field-sync.md, "Policy projection").
  *
  * Settings sections (pfblockerng, pfblockerngipsettings, pfblockerngdnsblsettings) are an

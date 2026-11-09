@@ -157,7 +157,8 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   in `pfblockerngblacklist` the provider credentials `item/*/username` and `item/*/password`; in
   `pfblockerngglobal` every key except `feed_*` (which includes `feed_alt_*`). Everything else is
   policy.
-- The 19 synced sections, with the classification mode that applies to each:
+- The 19 synced sections, with the classification mode that applies to each, and `pfblockerngdns`, the one more section
+  of `pfb_sync_policy_sections()` (#3770):
 
 | Section | Shape | Written by | Mode |
 | --- | --- | --- | --- |
@@ -170,6 +171,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 | `pfblockerngblacklist` | flat settings keys plus an `item` list of per-provider rows, each identified by its `xml` leaf | Blacklist tab | deny list; `item` rows matched by `xml` |
 | `pfblockerngglobal` | flat map | Feeds page (`feed_*`), dashboard widget (`widget-*`), Alerts page (`alertrefresh`) | deny list |
 | `pfblockerngsafesearch` | flat map | SafeSearch tab | deny list |
+| `pfblockerngdns` | `config/0` map | pfB-DNS tab | allowlist (one `policy` key: `pfb_dns`) |
 
 - Local keys (every other key in these sections is policy):
 
@@ -427,8 +429,8 @@ node's own classification.
 **Receiver** (Sync page panel and a pfSense notice per state change):
 
 1. **Last receive.** Time and receive outcome (accepted with changes, accepted unchanged, or
-   refused with its reason), the **incoming digest** over every leaf the payload carried in the 19
-   sections, counting an empty array as `''`, and the **accepted digest** over this node's policy
+   refused with its reason), the **incoming digest** over every leaf the payload carried in the policy sections (the 19
+   and `pfblockerngdns`), counting an empty array as `''`, and the **accepted digest** over this node's policy
    projection immediately after the merge. The outcome says only that the configuration was stored
    or refused; it makes no claim about runtime.
 2. **Incoming versus accepted.** When the two digests differ after an accepted receive, the payload
@@ -745,8 +747,11 @@ the enable; everything else of the `pfblockerngdns` section stays local in every
   digest tree, receive merge, `pfb_sync_stored_sections()` default and the receive's incoming-digest walk, and nothing
   else: `pfblockerng_sync_sections()` and `pfb_sync_legacy_sections()` are unchanged, so no legacy scope ships the
   whole section. `pfblockerngdns` is a settings section (allowlist), so only `pfb_dns` projects and merges; the
-  snapshot, listener lists and transport settings are kept by the receiver. Adding the section changes every policy
-  digest once on upgrade, which reads as drift and lets a node that is also a sender echo once.
+  snapshot, listener lists and transport settings are kept by the receiver. Adding the section changes every node's
+  current policy digest on upgrade, while the accepted and legacy digests stored before it keep describing the old
+  payload and persist until the node's next accepted receive. Until then the Sync page shows policy drift, and a node
+  that is also a sender is not suppressed: it re-sends payloads identical to the ones it received (not one echo), which
+  a peer treats as a no-op.
 - **Version skew.** A policy payload without any `pfblockerngdns` section (a sender older than this change) leaves the
   receiver's own section as it is, the enable included. A payload that carries the section applies its policy keys as
   usual, so an explicit Off from an upgraded sender still applies (it travels as `[]`, read as `''`).

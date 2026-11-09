@@ -29057,8 +29057,8 @@ function pfblockerng_plugin_xmlrpc_recv($new_sections) {
 	}
 
 	// #3770: scope 'all' carries the pfB-DNS enable as the one leaf of pfblockerngdns; set that key alone, as the rest of the
-	// section (Resolver snapshot, listener lists, transports) is node-local. Only this hook can: the XMLRPC replication
-	// targets of 'all' go through core's merge_installedpackages_section, which replaces a whole section and calls no hook.
+	// section (Resolver snapshot, listener lists, transports) is node-local. The XMLRPC replication targets never carry it
+	// (see pfblockerng_do_xmlrpc_sync()).
 	$enable_path = PFB_SECTIONS['dns'] . '/pfb_dns';
 	$enable      = array_get_path($new_sections, $enable_path);
 	$enable      = $enable === array() ? '' : $enable;

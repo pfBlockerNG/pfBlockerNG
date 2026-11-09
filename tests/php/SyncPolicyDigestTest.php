@@ -12,8 +12,8 @@ require_once __DIR__ . '/SyncPolicyFixtureTrait.php';
  * nodes holding the same policy compare equal and any policy change moves the digest
  * (docs/specs/xmlrpc-per-field-sync.md, "Policy projection").
  *
- * The digest rebuilds the projection into a tree over the 19 synced sections, canonicalises
- * it (map keys sorted, lists by position, '' for every empty leaf) and hashes serialize().
+ * The digest rebuilds the projection into a tree over the policy sections (the 19 synced ones and pfblockerngdns),
+ * canonicalises it (map keys sorted, lists by position, '' for every empty leaf) and hashes serialize().
  * It is order-insensitive for map keys and order-sensitive for row and feed lists, which is
  * exactly the difference between "same settings" and "same rule order". Local content never
  * reaches it because it is not in the projection in the first place (E7 proves the chain).
@@ -241,7 +241,7 @@ final class SyncPolicyDigestTest extends TestCase
 		$this->assertNotSame($empty, $this->digest([self::SKIPFEED => '3']), 'control: one leaf must move it');
 	}
 
-	// E9 -- paths outside the 19 sections, without the installedpackages root, or without a leaf do not count.
+	// E9 -- paths outside the policy sections, without the installedpackages root, or without a leaf do not count.
 	public function testPathsOutsideTheSyncedSectionsDoNotMoveTheDigest(): void
 	{
 		$base = [self::SKIPFEED => '3'];
