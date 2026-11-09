@@ -5,6 +5,35 @@ ordered query cases, each with the decision as it appears on the decision protoc
 
 The expectations in fixtures/parity/ are frozen literals derived from the source branch each family names in
 families.json, never captured from a run. A fixture the loader refuses is an error naming file, case and field.
+
+Schema 1, the contract a Go runner implements too (every key is required unless marked optional; any other key, a
+duplicate JSON key, a wrong JSON type or an unknown value is a refusal, never a skip):
+
+  families.json  {"schema": 1, "families": {"<family>": "<source branch>", ...}}: the closed family list.
+  <scenario>.json  {"schema": 1, "description", "module", "upstream", "cases"}
+    module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order.
+    module.manifest  written verbatim as pfb_py_sources.json.
+    module.files     {relative path: [lines]}, written joined by newlines plus a trailing one; no "..", no absolute
+                     path, and none of the names the runner writes (the shipped pfb_unbound.py and
+                     pfb_dnsbl_regex_rules.py are linked in by the runner, never by a fixture).
+    upstream         {"<lower-case absolute name> <TYPE>": [RR texts]}, Unbound's stand-in (FakeUnbound): a listed
+                     question gets NOERROR with those records (an empty list: none at all), any other NXDOMAIN.
+    cases            non-empty list, run IN FILE ORDER against one booted decider (its per-name memo carries over).
+      id, description   non-empty strings; id unique within the file.
+      family            a families.json key.
+      query             {"name": absolute name, "type": mnemonic or TYPE<n> (n <= 65535), "client": IP (optional,
+                        192.0.2.10), "transport": TCP|UDP|DoT|DoH|DoQ (optional, UDP)}; one question, class IN, RD
+                        set, no EDNS.
+      expect            {"decision": answer|relay|rewrite, "forwards": ["<name> <TYPE>", ...], "rcode": NOERROR|
+                        FORMERR|SERVFAIL|NXDOMAIN|NOTIMP|REFUSED, "answer": [RR texts], "authority": [RR texts]}.
+  RR texts are "name ttl IN TYPE rdata" for A, AAAA, CNAME, TXT and SOA (dnswire.rr_from_text).
+
+Decisions: answer = no FORWARD, the decider built the ANSWER; relay = one FORWARD carrying the client's own wire and
+an ANSWER byte-identical to Unbound's reply; rewrite = FORWARDs, then an ANSWER that is none of Unbound's replies.
+forwards lists every FORWARD's question in order. answer/authority compare in order as (owner, type, class, ttl,
+rdata) with the owner exactly as on the wire: the encoder compresses an owner equal to the question, case-blind,
+into the question, so a mixed-case query's answer carries the client's spelling. Flags other than the rcode and the
+additional section are not compared.
 """
 
 from __future__ import annotations
@@ -29,6 +58,8 @@ from frontend_helpers import READY, WATCHDOG, DecisionGateway, FakeUnbound, buil
 
 FIXTURES = Path(__file__).parent / "fixtures" / "parity"
 DEFAULT_CLIENT = "192.0.2.10"
+SHIPPED_MODULES = ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py")  # linked into every scenario's module directory
+RUNNER_WRITES = (*SHIPPED_MODULES, "pfb_unbound.ini", "pfb_py_sources.json")
 TRANSPORTS = ("TCP", "UDP", "DoT", "DoH", "DoQ")  # the QUERY frame's transport byte is this index
 DECISIONS = ("answer", "relay", "rewrite")
 RCODES = {"NOERROR": 0, "FORMERR": 1, "SERVFAIL": 2, "NXDOMAIN": 3, "NOTIMP": 4, "REFUSED": 5}
@@ -224,9 +255,11 @@ def _module(value: object, where: str) -> Module:
         _fail(where, "module.files", "must be a JSON object of path -> lines")
     files: dict[str, list[str]] = {}
     for rel, lines in obj["files"].items():
-        parts = PurePosixPath(rel).parts
-        if not parts or PurePosixPath(rel).is_absolute() or ".." in parts:
+        path = PurePosixPath(rel)
+        if not path.parts or path.is_absolute() or ".." in path.parts:
             _fail(where, "module.files", f"unsafe path {rel!r}: must be relative and stay inside the module directory")
+        if path.as_posix() in RUNNER_WRITES:  # a write would follow the shipped-code link into src/
+            _fail(where, "module.files", f"{rel!r} is written by the runner, never by a fixture")
         files[rel] = _strings(lines, where, f"module.files[{rel!r}]")
     return Module(ini, obj["manifest"], files)
 
@@ -312,7 +345,7 @@ SCENARIO_FILES = sorted(path for path in FIXTURES.glob("*.json") if path.name !=
 
 def write_module(root: Path, module: Module) -> None:
     """The scenario's module directory: the shipped decider code linked in, then what PHP would write."""
-    for name in ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py"):
+    for name in SHIPPED_MODULES:
         (root / name).symlink_to(SHIPPED_DIR / name)
     ini = "".join(
         f"[{section}]\n" + "".join(f"{key} = {text}\n" for key, text in rows.items()) + "\n"
@@ -499,6 +532,16 @@ HOSTILE: list[tuple[str, Callable[[dict[str, Any]], object], tuple[str, ...]]] =
         "files absolute path",
         lambda d: d["module"]["files"].update({"/etc/x": ["x"]}),
         ("bad.json", "module.files", "/etc/x"),
+    ),
+    (
+        "files overwriting the shipped decider",
+        lambda d: d["module"]["files"].update({"pfb_unbound.py": ["x"]}),
+        ("bad.json", "module.files", "pfb_unbound.py", "runner"),
+    ),
+    (
+        "files overwriting the manifest through a dot path",
+        lambda d: d["module"]["files"].update({"./pfb_py_sources.json": ["x"]}),
+        ("bad.json", "module.files", "pfb_py_sources.json", "runner"),
     ),
     (
         "ini value that is not a string",
