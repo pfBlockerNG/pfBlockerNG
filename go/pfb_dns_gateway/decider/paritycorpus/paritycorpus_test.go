@@ -413,6 +413,9 @@ var hostile = []hostileRow{
 		"bad.json: case 'good': expect.forwards[0]: expected '<name> <TYPE>', got 'allowed.example.'", ""},
 	{"wire_hex with a name too", func(d *object) { caseZero(d).get("query").set("wire_hex", "00") }, []string{badFile, "'good'", "query.wire_hex"},
 		"bad.json: case 'good': query.wire_hex: excludes query.name and query.type", ""},
+	{"wire_hex with a type and no name", func(d *object) { caseZero(d).set("query", obj("wire_hex", "00", "type", "A")) },
+		[]string{badFile, "'good'", "query"},
+		"bad.json: case 'good': query.wire_hex: excludes query.name and query.type", ""},
 	{"neither name nor wire_hex", func(d *object) { caseZero(d).set("query", obj()) }, []string{badFile, "'good'", "query", "wire_hex"},
 		"bad.json: case 'good': query.name: missing: a query is a name and a type, or wire_hex", ""},
 	{"name without type", func(d *object) { caseZero(d).get("query").del("type") }, []string{badFile, "'good'", "query.type"},
@@ -554,7 +557,12 @@ func TestTheLoaderRefusesAnUnreadableDocumentAsAFixtureError(t *testing.T) {
 	}
 }
 
-var depthReason = fmt.Sprintf("nesting deeper than %d levels", maxDepth)
+// The cap is Python's floor through the loader: it reads 990 levels and refuses 1000 (the real limit is the recursion
+// limit less the caller's stack). The numbers are written out here so a change of the constant turns these tests red.
+const (
+	depthCap    = 990
+	depthReason = "nesting deeper than 990 levels"
+)
 
 // nestedSchema is a valid scenario whose "schema" holds arrays, so that the whole document nests `levels` deep (its own
 // object is the first level) and the first thing refused, past the JSON stage, is the schema field.
@@ -565,15 +573,96 @@ func nestedSchema(t *testing.T, levels int) string {
 }
 
 func TestTheLoaderRefusesADocumentNestedPastTheCapAndReadsOneAtTheCap(t *testing.T) {
-	_, err := loadText(t, nestedSchema(t, maxDepth+1))
+	_, err := loadText(t, nestedSchema(t, depthCap+1))
 	if got, want := refusalText(t, err), "bad.json: not a readable JSON document: "+depthReason; got != want {
 		t.Errorf("one level past the cap:\n got %q\nwant %q", got, want)
 	}
 
-	_, err = loadText(t, nestedSchema(t, maxDepth))
+	_, err = loadText(t, nestedSchema(t, depthCap))
 	got := refusalText(t, err)
 	if strings.Contains(got, "not a readable JSON document") || !strings.HasPrefix(got, "bad.json: schema: must be the integer 2, got [[") {
 		t.Errorf("at the cap the JSON stage must pass and the schema field be what is refused: got %.120q", got)
+	}
+}
+
+// withEscape is the document with every "@@" replaced by the escape's text, which json.Marshal cannot write.
+func withEscape(t *testing.T, d *object, escape string) string {
+	t.Helper()
+	return strings.ReplaceAll(documentText(t, d), "@@", escape)
+}
+
+func TestTheLoaderRefusesALoneSurrogateEscapeWhereverItStands(t *testing.T) {
+	const escape = `\ud800`
+	for _, position := range []struct {
+		name   string
+		mutate func(d *object)
+	}{
+		{"query.name", func(d *object) { caseZero(d).get("query").set("name", "@@.example.") }},
+		{"an upstream key", func(d *object) { d.set("upstream", obj("@@.example. A", []any{})) }},
+		{"a description", func(d *object) { d.set("description", "x@@y") }},
+		{"an ini value", func(d *object) { d.get("module", "ini", "MAIN").set("python_enable", "@@") }},
+		{"a files path", func(d *object) { d.get("module", "files").set("@@.txt", []any{"x"}) }},
+		{"a files line", func(d *object) { d.get("module", "files").set("pfb_py_raw/feed.txt", []any{"@@"}) }},
+		{"a manifest value", func(d *object) { d.get("module", "manifest").set("x", "@@") }},
+	} {
+		t.Run(position.name, func(t *testing.T) {
+			d := good()
+			position.mutate(d)
+			text := withEscape(t, d, escape)
+			_, err := loadText(t, text)
+			want := fmt.Sprintf("bad.json: not a readable JSON document: lone surrogate %s at byte %d", escape, strings.Index(text, escape))
+			if got := refusalText(t, err); got != want {
+				t.Errorf("message:\n got %q\nwant %q", got, want)
+			}
+		})
+	}
+}
+
+func TestTheLoaderRefusesEveryEscapeThatIsHalfOfNoSurrogatePairAndOnlyThose(t *testing.T) {
+	// shortcut: Python takes a lone surrogate into a str and refuses it only where it must be encoded (a name, a file
+	// the runner writes); the loader refuses it in every field, which is stricter on the ones Python never encodes.
+	for name, escape := range map[string]string{
+		"a high half":                           `\ud800`,
+		"a high half in upper case":             `\uD800`,
+		"the last high half":                    `\udbff`,
+		"a low half":                            `\udc00`,
+		"the last low half":                     `\udfff`,
+		"a high half then another escape":       `\ud800\u0041`,
+		"a high half then a plain character":    `\ud800x`,
+		"a low half then a high half":           `\udc00\ud800`,
+		"two high halves":                       `\ud800\ud800`,
+		"a high half then an escaped backslash": `\ud800\\udc00`,
+	} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			d := good()
+			d.set("description", "x@@y")
+			text := withEscape(t, d, escape)
+			_, err := loadText(t, text)
+			want := fmt.Sprintf("bad.json: not a readable JSON document: lone surrogate %s at byte %d", escape[:6], strings.Index(text, escape))
+			if got := refusalText(t, err); got != want {
+				t.Errorf("message:\n got %q\nwant %q", got, want)
+			}
+		})
+	}
+	for _, row := range []struct{ name, escape, want string }{
+		{"a valid pair", `\ud83d\ude00`, "x\U0001F600y"},
+		{"a valid pair in upper case", `\uD83D\uDE00`, "x\U0001F600y"},
+		{"an escaped backslash then text that spells a surrogate", `\\ud800`, `x\ud800y`},
+		{"the code point below the range", `\ud7ff`, "x\ud7ffy"},
+		{"the code point above the range", `\ue000`, "x\ue000y"},
+		{"the replacement character", `\ufffd`, "x\ufffdy"},
+	} {
+		t.Run("reads "+row.name, func(t *testing.T) {
+			d := good()
+			d.set("description", "x@@y")
+			s, err := loadText(t, withEscape(t, d, row.escape))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Description != row.want {
+				t.Errorf("description: got %q, want %q", s.Description, row.want)
+			}
+		})
 	}
 }
 

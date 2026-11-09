@@ -1,6 +1,7 @@
 // Package paritycorpus is the Go side of the schema-2 parity corpus contract, so the Go decider runs the JSON scenarios
 // the Python one passes. It translates tests/dns_proxy/test_parity_corpus.py (the loader, write_module, RecordingUnbound,
-// _decision, _rr_text, _mismatches) and tests/dns_proxy/frontend_helpers.py (build_query, FakeUnbound without verdicts).
+// _decision, _rr_text, _mismatches) and tests/dns_proxy/frontend_helpers.py (build_query, and the FakeUnbound that
+// RecordingUnbound wraps, without verdicts; like RecordingUnbound it parses a FORWARD before it records it).
 package paritycorpus
 
 import (
@@ -124,8 +125,11 @@ type orderedObject struct {
 	raw  map[string][]byte
 }
 
-// maxDepth: Python's json gives up on absurd nesting with a RecursionError; so does the loader.
-const maxDepth = 512
+// maxDepth: Python's json gives up on absurd nesting with a RecursionError; so does the loader. It reads 990 levels
+// through the loader and refuses 1000.
+// shortcut: Python's real limit is its recursion limit less the caller's stack, so it moves with the caller; 990 is the
+// floor measured through the loader.
+const maxDepth = 990
 
 func parseDocument(data []byte) (any, error) {
 	if !utf8.Valid(data) {
@@ -143,7 +147,52 @@ func parseDocument(data []byte) (any, error) {
 		}
 		return nil, err
 	}
+	if offset := loneSurrogate(data); offset >= 0 {
+		return nil, fmt.Errorf("lone surrogate %s at byte %d", data[offset:offset+6], offset)
+	}
 	return value, nil
+}
+
+// loneSurrogate is the offset of the first \uD800-\uDFFF escape in a valid JSON document that is not half of a high then
+// low pair, or -1. Go's decoder would turn it into U+FFFD, where Python keeps the surrogate in its str.
+// shortcut: Python refuses a lone surrogate only where it must be encoded (a name, a file the runner writes); refusing it
+// in every field is stricter on the ones Python never encodes.
+func loneSurrogate(data []byte) int {
+	inString := false
+	for i := 0; i < len(data); i++ {
+		switch {
+		case !inString:
+			inString = data[i] == '"'
+		case data[i] == '"':
+			inString = false
+		case data[i] == '\\':
+			if data[i+1] != 'u' {
+				i++ // the escaped character: a quote or a backslash here ends no string and starts no escape
+				continue
+			}
+			unit := utf16Unit(data[i+2 : i+6])
+			switch {
+			case unit >= 0xD800 && unit <= 0xDBFF:
+				if i+12 > len(data) || data[i+6] != '\\' || data[i+7] != 'u' {
+					return i
+				}
+				if low := utf16Unit(data[i+8 : i+12]); low < 0xDC00 || low > 0xDFFF {
+					return i
+				}
+				i += 11 // the whole pair
+			case unit >= 0xDC00 && unit <= 0xDFFF:
+				return i
+			default:
+				i += 5 // the whole escape
+			}
+		}
+	}
+	return -1
+}
+
+func utf16Unit(hex4 []byte) int {
+	unit, _ := strconv.ParseUint(string(hex4), 16, 16) // the document is valid JSON: four hex digits
+	return int(unit)
 }
 
 func readValue(dec *json.Decoder, data []byte, depth int) (any, error) {
@@ -515,12 +564,12 @@ func wireHex(text, where, field string) []byte {
 	return wire
 }
 
-// canonicalClient is a client address as the gateway writes it: no zone, not unspecified, not IPv4-mapped (the
-// gateway unmaps it) and spelled as Python's str(ip_address(text)).
+// canonicalClient is a client address as the gateway writes it: not unspecified, not IPv4-mapped (the gateway unmaps
+// it) and spelled as Python's str(ip_address(text)); a zone never matches that spelling, because packed has none.
 func canonicalClient(text string, packed []byte) bool {
 	unspecified := !slices.ContainsFunc(packed, func(octet byte) bool { return octet != 0 })
 	mapped := len(packed) == 16 && bytes.HasPrefix(packed, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff})
-	if strings.Contains(text, "%") || unspecified || mapped {
+	if unspecified || mapped {
 		return false
 	}
 	address, _ := netip.AddrFromSlice(packed)
