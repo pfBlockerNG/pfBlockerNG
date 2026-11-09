@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "description": "python_tld_seg 3: a leading-dot whitelist entry counts only when it has at least three labels; no ABP @@, $important or regex line, so the fast path decides",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_seg": "3",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"user_whitelist": [".wild-ok.example", ".deep.seg-ok.example"]},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/feed.txt": ["sub.wild-ok.example", "x.deep.seg-ok.example"]
+    }
+  },
+  "upstream": {
+    "x.deep.seg-ok.example. A": ["x.deep.seg-ok.example. 300 IN A 192.0.2.94"]
+  },
+  "cases": [
+    {
+      "id": "wildcard-whitelist-entry-of-fewer-labels-than-tld-seg-does-not-apply",
+      "family": "allow",
+      "description": "a two-label wildcard whitelist entry (.wild-ok.example) is too short for python_tld_seg 3, so the subdomain it would allow stays blocked",
+      "query": {"name": "sub.wild-ok.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.wild-ok.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-whitelist-entry-of-tld-seg-labels-applies",
+      "family": "allow",
+      "description": "the control: a three-label wildcard whitelist entry (.deep.seg-ok.example) meets python_tld_seg 3 and allows its blocked subdomain",
+      "query": {"name": "x.deep.seg-ok.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["x.deep.seg-ok.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["x.deep.seg-ok.example. 300 IN A 192.0.2.94"],
+        "authority": []
+      }
+    }
+  ]
+}

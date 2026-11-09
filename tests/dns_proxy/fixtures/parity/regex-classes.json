@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "feed /re/ lines: the class escapes \\d \\D \\w \\W \\S and bracket classes (items, range, negation, escapes inside, trailing hyphen, case folding)",
+  "description": "feed /re/ lines: the class escapes \\d \\D \\w \\W \\S and bracket classes (items, range, negation, escapes inside, leading and trailing hyphen, case folding); case tags: R3 class escapes, R7 bracket classes",
   "module": {
     "ini": {
       "MAIN": {
@@ -30,6 +30,7 @@
         "/^r7e[\\-x]end\\.example$/",
         "/^r7g[\\.]h\\.example$/",
         "/^r7t[a-]x\\.example$/",
+        "/^r7l[-a]x\\.example$/",
         "/^r7f[A-C]\\.example$/"
       ]
     }
@@ -49,6 +50,7 @@
     "r7e_end.example. A": ["r7e_end.example. 300 IN A 192.0.2.22"],
     "r7gxh.example. A": ["r7gxh.example. 300 IN A 192.0.2.23"],
     "r7tbx.example. A": ["r7tbx.example. 300 IN A 192.0.2.24"],
+    "r7lbx.example. A": ["r7lbx.example. 300 IN A 192.0.2.26"],
     "r7fd.example. A": ["r7fd.example. 300 IN A 192.0.2.25"]
   },
   "cases": [
@@ -439,6 +441,45 @@
         "forwards": ["r7tbx.example. A"],
         "rcode": "NOERROR",
         "answer": ["r7tbx.example. 300 IN A 192.0.2.24"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7l-x",
+      "family": "regex",
+      "description": "R7: a hyphen that opens a class is a literal member",
+      "query": {"name": "r7l-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7l-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7lax",
+      "family": "regex",
+      "description": "R7: the item after a hyphen that opens a class is still a member",
+      "query": {"name": "r7lax.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7lax.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7lbx",
+      "family": "regex",
+      "description": "R7: a hyphen that opens a class does not make a range from the hyphen to the next item",
+      "query": {"name": "r7lbx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7lbx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7lbx.example. 300 IN A 192.0.2.26"],
         "authority": []
       }
     },

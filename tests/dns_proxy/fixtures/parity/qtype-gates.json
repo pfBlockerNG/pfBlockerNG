@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "description": "every other query type the DNSBL validates (NS, SRV, DNAME, SIG, SVCB, PTR; core.json pins MX, TXT, CNAME, HTTPS): a blocked name answers NODATA with the SOA instead of being relayed",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/vip.txt": ["blocked.example"]
+    }
+  },
+  "upstream": {},
+  "cases": [
+    {
+      "id": "blocked-ns-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for NS has no address to give: NOERROR, no answer, the SOA",
+      "query": {"name": "blocked.example.", "type": "NS"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-srv-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for SRV has no address to give: NOERROR, no answer, the SOA",
+      "query": {"name": "blocked.example.", "type": "SRV"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-dname-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for DNAME has no address to give: NOERROR, no answer, the SOA",
+      "query": {"name": "blocked.example.", "type": "DNAME"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-sig-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for SIG has no address to give: NOERROR, no answer, the SOA",
+      "query": {"name": "blocked.example.", "type": "SIG"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-svcb-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for SVCB has no address to give: NOERROR, no answer, the SOA",
+      "query": {"name": "blocked.example.", "type": "SVCB"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    },
+    {
+      "id": "blocked-ptr-answers-nodata-with-the-soa",
+      "family": "qtype",
+      "description": "a blocked name asked for PTR has no address to give: NOERROR, no answer, the SOA",
+      "query": {"name": "blocked.example.", "type": "PTR"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["blocked.example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "description": "a feed @@ exception is loaded (important_rules on, so the numeric band resolution decides): a CNAME target's allow honours the original name's user whitelist entry, a non-whitelisted alias of the same target stays blocked",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"user_whitelist": ["trusted.example"]},
+      "feeds": [
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"},
+        {"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"}
+      ]
+    },
+    "files": {
+      "pfb_py_raw/vip.txt": ["trusted-target.example"],
+      "pfb_py_raw/abp.txt": ["@@||y.example^"]
+    }
+  },
+  "upstream": {
+    "other.example. A": ["other.example. 300 IN CNAME trusted-target.example.", "trusted-target.example. 300 IN A 192.0.2.97"],
+    "trusted.example. A": ["trusted.example. 300 IN CNAME trusted-target.example.", "trusted-target.example. 300 IN A 192.0.2.97"]
+  },
+  "cases": [
+    {
+      "id": "non-whitelisted-alias-of-a-blocked-target-is-blocked",
+      "family": "cname",
+      "description": "the control: with the numeric band resolution active, an alias that is not whitelisted still gets the block answer for its blocked target, owned by the alias",
+      "query": {"name": "other.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["other.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["other.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "whitelisted-alias-of-a-blocked-target-is-relayed",
+      "family": "cname",
+      "description": "the original name is on the user whitelist, so the numeric band resolution lets its blocked CNAME target through (the allow is looked up under the original name too)",
+      "query": {"name": "trusted.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["trusted.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["trusted.example. 300 IN CNAME trusted-target.example.", "trusted-target.example. 300 IN A 192.0.2.97"],
+        "authority": []
+      }
+    }
+  ]
+}

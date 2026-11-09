@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "description": "[noAAAA] wildcard row on a single label (example,1): it answers its own name but covers no name below it, since the wildcard walk never reaches the TLD label; no DNSBL feeds",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      },
+      "noAAAA": {"row1": "example,1"}
+    },
+    "manifest": {"version": 1, "config": {}, "feeds": []},
+    "files": {}
+  },
+  "upstream": {
+    "a.example. AAAA": ["a.example. 300 IN AAAA 2001:db8::74"]
+  },
+  "cases": [
+    {
+      "id": "single-label-wildcard-row-covers-no-subdomain",
+      "family": "noaaaa",
+      "description": "AAAA for a name below a single-label wildcard row is an ordinary query for Unbound",
+      "query": {"name": "a.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["a.example. AAAA"],
+        "rcode": "NOERROR",
+        "answer": ["a.example. 300 IN AAAA 2001:db8::74"],
+        "authority": []
+      }
+    },
+    {
+      "id": "single-label-wildcard-row-answers-its-own-name-nodata",
+      "family": "noaaaa",
+      "description": "the control: AAAA for the single-label row's own name is NOERROR, no records, the SOA, with no query to Unbound",
+      "query": {"name": "example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [],
+        "authority": ["example. 3600 IN SOA pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"]
+      }
+    }
+  ]
+}

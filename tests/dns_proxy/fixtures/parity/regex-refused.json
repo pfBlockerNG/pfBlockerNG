@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "feed /re/ lines the admission gate refuses never block: one row per refusal reason, the name each would match resolves, and admitted twins at the depth, width and length boundaries block",
+  "description": "feed /re/ lines the admission gate refuses never block: one row per refusal reason, the name each would match resolves, and admitted twins at the repeat, depth, width and length boundaries block; case tag: R16 refusals",
   "module": {
     "ini": {
       "MAIN": {
@@ -31,11 +31,13 @@
         "/^r-sa[a&&b]\\.example$/",
         "/^r-st[a~~b]\\.example$/",
         "/^r-sp[a||b]\\.example$/",
+        "/^r-ra[0-9]{0,255}\\.example$/",
         "/^r-rb[0-9]{0,256}\\.example$/",
         "/^((((((((a))))))))\\.r-d8\\.example$/",
         "/^(((((((((a)))))))))\\.r-d9\\.example$/",
         "/^r-w4[a-z][a-z][a-z][a-z]\\.example$/",
         "/^r-w5[a-z][a-z][a-z][a-z][a-z]\\.example$/",
+        "/^r-w6[a-z][a-z][a-z][a-z][!-@][a-h]\\.example$/",
         "/^*r-mq\\.example$/",
         "/^r-pq[0-9]++\\.example$/",
         "/^r-uo(a\\.example$/",
@@ -285,6 +287,19 @@
       }
     },
     {
+      "id": "r16-repeat-of-255-blocks",
+      "family": "regex",
+      "description": "R16 boundary: a repeat bound of exactly 255 ({0,255}) is admitted and blocks",
+      "query": {"name": "r-ra5.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r-ra5.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
       "id": "r16-repeat-over-255-resolves",
       "family": "regex",
       "description": "R16: the gate refuses a repeat bound over 255 ({0,256}), so the name it would match resolves",
@@ -333,6 +348,19 @@
         "forwards": [],
         "rcode": "NOERROR",
         "answer": ["r-w4abcd.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-classes-width-256-blocks",
+      "family": "regex",
+      "description": "R16 boundary: bracket classes listing exactly 256 characters in total (four [a-z] at 52 each, [!-@] at 32, [a-h] at 16) are admitted and block",
+      "query": {"name": "r-w6abcd1a.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r-w6abcd1a.example. 3600 IN A 0.0.0.0"],
         "authority": []
       }
     },

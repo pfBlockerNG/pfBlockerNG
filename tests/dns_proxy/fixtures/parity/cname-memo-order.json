@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "description": "a whitelisted alias of a blocked target, queried after the target itself was: the target's memoized block is re-evaluated in the alias's CNAME context, so the alias is relayed (issue #3222); the reverse order, alias first, is deliberately not pinned (open bug #3775)",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"user_whitelist": ["trusted.example"]},
+      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/vip.txt": ["trusted-target.example"]
+    }
+  },
+  "upstream": {
+    "trusted.example. A": ["trusted.example. 300 IN CNAME trusted-target.example.", "trusted-target.example. 300 IN A 192.0.2.97"]
+  },
+  "cases": [
+    {
+      "id": "target-queried-directly-is-blocked",
+      "family": "cname",
+      "description": "a listed name queried on its own is answered with the VIP address, which memoizes its block verdict for the case below",
+      "query": {"name": "trusted-target.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["trusted-target.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "whitelisted-alias-of-a-memoized-blocked-target-is-relayed",
+      "family": "cname",
+      "description": "the alias is on the user whitelist, so the target's memoized block is re-evaluated in the alias's context and does not block it (issue #3222)",
+      "query": {"name": "trusted.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["trusted.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["trusted.example. 300 IN CNAME trusted-target.example.", "trusted-target.example. 300 IN A 192.0.2.97"],
+        "authority": []
+      }
+    }
+  ]
+}

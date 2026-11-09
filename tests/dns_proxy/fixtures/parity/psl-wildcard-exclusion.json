@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "description": "Wildcard Blocking on with excluded.example on the Wildcard Blocking exclusion list: an excluded registrable domain stays an exact entry, any other one becomes a zone",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"tld_wildcard_exclusion": ["excluded.example"]},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": ["excluded.example", "zoned.example"]
+    }
+  },
+  "upstream": {
+    "sub.excluded.example. A": ["sub.excluded.example. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "excluded-registrable-domain-blocks-itself",
+      "family": "psl",
+      "description": "a feed line on the exclusion list is still blocked as the exact name it names",
+      "query": {"name": "excluded.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["excluded.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "excluded-registrable-domain-does-not-cover-its-subdomains",
+      "family": "psl",
+      "description": "an excluded registrable domain is not widened to a zone, so its subdomain resolves",
+      "query": {"name": "sub.excluded.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["sub.excluded.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["sub.excluded.example. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "registrable-domain-off-the-exclusion-list-blocks-its-subdomains",
+      "family": "psl",
+      "description": "the control: a registrable domain not on the exclusion list is widened to a zone and blocks its subdomain",
+      "query": {"name": "sub.zoned.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.zoned.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "description": "python_control on but python_control_legacy not set (off by default): the legacy DNS-TXT control branch is inert, nothing is obeyed",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_control": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {"version": 1, "config": {}, "feeds": []},
+    "files": {}
+  },
+  "upstream": {
+    "python_control.nosuchcommand. TXT": ["python_control.nosuchcommand. 300 IN TXT \"from-upstream\""]
+  },
+  "cases": [
+    {
+      "id": "loopback-client-is-relayed-when-the-legacy-transport-is-off",
+      "family": "control",
+      "description": "with the legacy DNS-TXT transport off, a loopback client's python_control TXT query is an ordinary query for Unbound, not a command",
+      "query": {"name": "python_control.nosuchcommand.", "type": "TXT", "client": "127.0.0.1"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["python_control.nosuchcommand. TXT"],
+        "rcode": "NOERROR",
+        "answer": ["python_control.nosuchcommand. 300 IN TXT \"from-upstream\""],
+        "authority": []
+      }
+    }
+  ]
+}

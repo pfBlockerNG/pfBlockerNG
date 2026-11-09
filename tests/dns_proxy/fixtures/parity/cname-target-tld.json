@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "description": "python_hsts on: the TLD that decides HSTS for a CNAME target is the target's own, not the queried alias's",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_hsts": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_hsts.txt": ["# preloaded parents", "bank.example"],
+      "pfb_py_raw/vip.txt": ["blocked.app", "blocked.example"]
+    }
+  },
+  "upstream": {
+    "alias.example. A": ["alias.example. 300 IN CNAME blocked.app.", "blocked.app. 300 IN A 192.0.2.98"],
+    "alias-plain.example. A": ["alias-plain.example. 300 IN CNAME blocked.example.", "blocked.example. 300 IN A 192.0.2.99"]
+  },
+  "cases": [
+    {
+      "id": "alias-of-a-target-under-a-built-in-hsts-tld-is-null-blocked",
+      "family": "cname",
+      "description": "the target's TLD (app) is a built-in HSTS TLD although the alias's (example) is not, so the VIP block becomes a null block owned by the alias",
+      "query": {"name": "alias.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "alias-of-a-target-outside-the-hsts-tlds-gets-the-vip-block",
+      "family": "cname",
+      "description": "the control: a target outside every HSTS TLD and parent keeps the VIP block, owned by the alias",
+      "query": {"name": "alias-plain.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-plain.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-plain.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

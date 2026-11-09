@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters, so Python re's Unicode classes decide on them (pins what a port to another regex engine must reproduce)",
+  "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters, so Python re's Unicode classes decide on them, and a leading .* crosses a newline octet (pins what a port to another regex engine must reproduce); case tags: R3 class escapes, R13 leading dot runs, R17 non-ASCII octets",
   "module": {
     "ini": {
       "MAIN": {
@@ -26,7 +26,8 @@
         "/^cak\\s\\.example$/",
         "/^cai\\W\\.example$/",
         "/^cam\\d\\.example$/",
-        "/^can[a-z]\\.example$/"
+        "/^can[a-z]\\.example$/",
+        "/.*bad\\.example$/"
       ]
     }
   },
@@ -40,7 +41,9 @@
     "alias-cak.example. A": ["alias-cak.example. 300 IN CNAME cak\\160.example.", "cak\\160.example. 300 IN A 192.0.2.17"],
     "alias-cai.example. A": ["alias-cai.example. 300 IN CNAME cai\\233.example.", "cai\\233.example. 300 IN A 192.0.2.18"],
     "alias-cam.example. A": ["alias-cam.example. 300 IN CNAME cam\\233.example.", "cam\\233.example. 300 IN A 192.0.2.19"],
-    "alias-can.example. A": ["alias-can.example. 300 IN CNAME can\\233.example.", "can\\233.example. 300 IN A 192.0.2.20"]
+    "alias-can.example. A": ["alias-can.example. 300 IN CNAME can\\233.example.", "can\\233.example. 300 IN A 192.0.2.20"],
+    "alias-nl.example. A": ["alias-nl.example. 300 IN CNAME nl\\010bad.example.", "nl\\010bad.example. 300 IN A 192.0.2.21"],
+    "alias-nlx.example. A": ["alias-nlx.example. 300 IN CNAME nl\\010ok.example.", "nl\\010ok.example. 300 IN A 192.0.2.22"]
   },
   "cases": [
     {
@@ -170,6 +173,32 @@
         "forwards": ["alias-can.example. A"],
         "rcode": "NOERROR",
         "answer": ["alias-can.example. 300 IN CNAME can\\233.example.", "can\\233.example. 300 IN A 192.0.2.20"],
+        "authority": []
+      }
+    },
+    {
+      "id": "leading-dot-star-crosses-a-newline-octet",
+      "family": "regex",
+      "description": "R13: a leading .* matches across a newline octet in a CNAME target (the compiled text spells the run (?s:.*)), so /.*bad\\.example$/ blocks a target that holds one",
+      "query": {"name": "alias-nl.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-nl.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-nl.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "leading-dot-star-needs-its-literal-after-a-newline-octet",
+      "family": "regex",
+      "description": "R13: the control: a CNAME target with the same newline octet but without the rule's literal bad.example resolves",
+      "query": {"name": "alias-nlx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-nlx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-nlx.example. 300 IN CNAME nl\\010ok.example.", "nl\\010ok.example. 300 IN A 192.0.2.22"],
         "authority": []
       }
     }

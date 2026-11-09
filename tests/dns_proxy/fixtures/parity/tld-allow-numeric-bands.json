@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "description": "TLD Allow on with org and uk allowed and a feed @@ exception loaded (important_rules on, so the numeric band resolution decides): the TLD-Allow block carries the feed block band, so a disallowed TLD is still blocked",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "tld_allow": "true",
+        "tld_allow_list": "org,uk",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"builtin_log_flag": "1"},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": ["||x.example^", "@@||y.example^"]
+    }
+  },
+  "upstream": {
+    "site.org. A": ["site.org. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "name-outside-the-allowed-tlds-is-still-blocked",
+      "family": "tld_allow",
+      "description": "with the numeric band resolution active, a name outside the allowed TLDs is blocked as a VIP answer (the TLD-Allow block is not overridden by an allow band of 0)",
+      "query": {"name": "site.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["site.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "name-in-an-allowed-tld-relays",
+      "family": "tld_allow",
+      "description": "the control: a name in an allowed TLD still resolves with the numeric band resolution active",
+      "query": {"name": "site.org.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["site.org. A"],
+        "rcode": "NOERROR",
+        "answer": ["site.org. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    }
+  ]
+}

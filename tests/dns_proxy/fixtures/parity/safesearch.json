@@ -22,7 +22,9 @@
     }
   },
   "upstream": {
-    "ss-both.example. A": ["ss-both.example. 300 IN A 192.0.2.99"]
+    "ss-both.example. A": ["ss-both.example. 300 IN A 192.0.2.99"],
+    "ss-gone.example. AAAA": ["ss-gone.example. 300 IN AAAA 2001:db8::99"],
+    "ss-gone.example. TXT": ["ss-gone.example. 300 IN TXT \"from-upstream\""]
   },
   "cases": [
     {
@@ -69,6 +71,20 @@
       "family": "safesearch",
       "description": "a row whose A column is nxdomain answers a bare NXDOMAIN",
       "query": {"name": "ss-gone.example.", "type": "A"},
+      "expect": {"decision": "answer", "forwards": [], "rcode": "NXDOMAIN", "answer": [], "authority": []}
+    },
+    {
+      "id": "nxdomain-row-answers-nxdomain-for-aaaa",
+      "family": "safesearch",
+      "description": "the nxdomain row is not tied to A: an AAAA query for it is a bare NXDOMAIN too, and Unbound is never asked (it would answer an address)",
+      "query": {"name": "ss-gone.example.", "type": "AAAA"},
+      "expect": {"decision": "answer", "forwards": [], "rcode": "NXDOMAIN", "answer": [], "authority": []}
+    },
+    {
+      "id": "nxdomain-row-answers-nxdomain-for-txt",
+      "family": "safesearch",
+      "description": "the nxdomain row covers every query type: a TXT query for it is a bare NXDOMAIN, and Unbound is never asked (it would answer a TXT record)",
+      "query": {"name": "ss-gone.example.", "type": "TXT"},
       "expect": {"decision": "answer", "forwards": [], "rcode": "NXDOMAIN", "answer": [], "authority": []}
     },
     {

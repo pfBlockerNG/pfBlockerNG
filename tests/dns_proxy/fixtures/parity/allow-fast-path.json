@@ -17,12 +17,19 @@
       "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
     },
     "files": {
-      "pfb_py_raw/feed.txt": ["plain-blocked.example", "exact-ok.example", "sub.exact-ok.example", "sub.wild-ok.example"]
+      "pfb_py_raw/feed.txt": [
+        "plain-blocked.example",
+        "exact-ok.example",
+        "sub.exact-ok.example",
+        "sub.wild-ok.example",
+        "www.exact-ok.example"
+      ]
     }
   },
   "upstream": {
     "exact-ok.example. A": ["exact-ok.example. 300 IN A 192.0.2.91"],
-    "sub.wild-ok.example. A": ["sub.wild-ok.example. 300 IN A 192.0.2.92"]
+    "sub.wild-ok.example. A": ["sub.wild-ok.example. 300 IN A 192.0.2.92"],
+    "www.exact-ok.example. A": ["www.exact-ok.example. 300 IN A 192.0.2.93"]
   },
   "cases": [
     {
@@ -74,6 +81,19 @@
         "forwards": [],
         "rcode": "NOERROR",
         "answer": ["sub.exact-ok.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exact-whitelist-entry-also-covers-its-www-form",
+      "family": "allow",
+      "description": "a whitelist entry for exact-ok.example also allows the www. form of that name when a feed lists it",
+      "query": {"name": "www.exact-ok.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["www.exact-ok.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["www.exact-ok.example. 300 IN A 192.0.2.93"],
         "authority": []
       }
     }
