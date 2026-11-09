@@ -296,6 +296,32 @@ def test_the_decider_listing_matches_the_gateways_child_and_never_its_own_comman
     (command,) = vm.sent[0]
     assert "/var/run/pfb_dns_proxy.pid" in command and "$2 == gw" in command, command
     assert "pfb_dns_proxy[.]py" in command and "pfb_dns_proxy.py" not in command, command
+    # A failing ps must fail the command (rc 1), never read as "no decider"; -ww keeps long argv whole.
+    assert "/bin/ps -axww -o pid= -o ppid= -o args=) || exit 1;" in command, command
+
+
+def test_pfb_dns_state_returns_the_stored_toggle_then_whether_pfb_dns_holds_the_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given one PHP read answers the toggle and the hold together When release_pfb_dns asks for both
+    Then the read names exactly the pfb_dns key and the product's hold test, in that order, and the pair comes back in
+    that order: a swapped pair would skip the apply while the proxy still holds the Resolver."""
+    reads: list[str] = []
+    answers = iter(['["on",false]', '["",true]'])
+
+    def read_scalar(_vm: object, _pre: str, expr: str, **_kw: object) -> str:
+        reads.append(expr)
+        return next(answers)
+
+    monkeypatch.setattr(helpers, "_php_read_scalar", read_scalar)
+
+    assert helpers._pfb_dns_state(_Vm([])) == ("on", False)  # type: ignore[arg-type]
+    assert helpers._pfb_dns_state(_Vm([])) == ("", True)  # type: ignore[arg-type]
+    expected = (
+        f"json_encode(array((string) config_get_path('{PFB_DNS_PATH}', ''), "
+        "pfb_dns_proxy_running() || pfb_dns_proxy_owns_resolver()))"
+    )
+    assert reads[0] == expected, f"the state read is not exactly {expected!r}: {reads[0]!r}"
 
 
 def test_a_resolver_counts_as_moved_only_by_a_running_proxy_or_the_products_own_ownership_test(
@@ -539,7 +565,8 @@ def test_reload_requires_the_serving_proxy_exactly_when_enable_dnsbl_and_pfb_dns
 
     on = "$on = $s['enable_cb'] === 'on' && $s['dnsbl'] === 'on' && $s['pfb_dns'] === 'on';"
     assert on in snippets[0], f"the all-three-on conjunction is not exactly {on!r}:\n{snippets[0]}"
-    assert "$on ? pfb_dns_proxy_serving_ready() : NULL" in snippets[0], snippets[0]
+    serving = "array('serving' => $on ? pfb_dns_proxy_serving_ready() : NULL)"
+    assert serving in snippets[0], f"the serving predicate is not asked exactly under $on {serving!r}:\n{snippets[0]}"
 
 
 # --- the Resolver mutators edit the Resolver only while pfB-DNS does not hold it ---------------------------------
@@ -683,6 +710,15 @@ def test_safesearch_injection_fails_loudly_when_the_decider_does_not_restart(mon
         helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
 
 
+def test_safesearch_injection_accepts_only_the_exact_restarted_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given the reload answers a near miss of the success token When the rows are appended
+    Then it raises: only the exact DECIDER-RESTARTED means the decider re-read the rows."""
+    _events, vm = _arrange_safesearch(monkeypatch, "NOT-DECIDER-RESTARTED")
+
+    with pytest.raises(RuntimeError, match="NOT-DECIDER-RESTARTED"):
+        helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
+
+
 def test_safesearch_injection_does_not_mistake_a_failure_text_naming_unbound_for_the_unbound_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -697,14 +733,15 @@ def test_safesearch_injection_does_not_mistake_a_failure_text_naming_unbound_for
     assert events == ["append rows", "host reload"], f"Unbound was bounced for a failed decider restart: {events}"
 
 
-def test_safesearch_injection_picks_the_unbound_host_exactly_when_no_proxy_runs(
+def test_safesearch_injection_picks_the_unbound_host_exactly_when_pfb_dns_does_not_host_the_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Given the stubbed answer cannot tell a right selector from an inverted one
-    When the host reload is built Then Unbound is the host exactly when pfB-DNS's proxy is NOT running."""
+    When the host reload is built Then Unbound is the host exactly when the product says pfB-DNS does not host the
+    DNSBL module (pfb_dns_proxy_hosts_module(): it owns the Resolver and DNSBL is active), not by proxy liveness."""
     _events, vm = _arrange_safesearch(monkeypatch, "DECIDER-RESTARTED")
 
     helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
 
-    selector = "if (!pfb_dns_proxy_running()) { $host = 'UNBOUND'; }"
+    selector = "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; }"
     assert selector in vm.snippets[0], f"the host selector is not exactly {selector!r}:\n{vm.snippets[0]}"

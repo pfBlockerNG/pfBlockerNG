@@ -2702,7 +2702,7 @@ def inject_safesearch_cname_entries(
     bounce re-runs the python module's ``init()`` which re-reads ``pfb_py_ss.txt`` as
     written.  For ``safeSearchDB`` to take effect the DNSBL python module must already
     be loaded — DNSBL must be enabled and a pfBlockerNG reload run before this call.
-    While the pfB-DNS proxy runs, its decider hosts that module instead: the decider alone is restarted
+    While pfB-DNS hosts that module (``pfb_dns_proxy_hosts_module()``), its decider alone is restarted
     (``pfb_dns_proxy_decider_restart()``, the product's own module reload) and Unbound is left as it is.
     """
     csv_lines = "\n".join(f"{e.domain},cname,{e.target},{e.baked_v4},{e.baked_v6}" for e in entries)
@@ -2725,7 +2725,7 @@ def inject_safesearch_cname_entries(
     host = _php_read_scalar(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n"
-        "if (!pfb_dns_proxy_running()) { $host = 'UNBOUND'; } else {\n"
+        "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; } else {\n"
         "  $failed = pfb_dns_proxy_decider_restart();\n"
         "  $host = $failed === NULL ? 'DECIDER-RESTARTED' : 'DECIDER-FAILED: ' . $failed;\n}",
         "$host",
