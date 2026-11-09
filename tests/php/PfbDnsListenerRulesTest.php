@@ -28,6 +28,8 @@ final class PfbDnsListenerRulesTest extends TestCase
 			'unspecified IPv4' => ['0.0.0.0', NULL],
 			'unspecified IPv6' => ['::', NULL],
 			'unspecified IPv6 in full form' => ['0:0:0:0:0:0:0:0', NULL],
+			'IPv4-mapped unspecified' => ['::ffff:0.0.0.0', NULL],
+			'IPv4-mapped unspecified in hex' => ['0:0:0:0:0:ffff:0:0', NULL],
 			'host and port' => ['127.0.0.1:53', NULL],
 			'bracketed IPv6' => ['[::1]', NULL],
 			'zone' => ['fe80::1%lo0', NULL],

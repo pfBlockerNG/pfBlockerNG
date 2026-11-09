@@ -4681,13 +4681,13 @@ function pfb_dns_transport(mixed $value): string
 }
 
 /**
- * The inet_ntop() text of a valid, specific IP address; NULL for anything else. A NUL byte is refused first: inet_pton() throws on it,
- * and `@` does not stop that.
+ * The inet_ntop() text of a valid, specific IP address; NULL for anything else, the IPv4-mapped unspecified ::ffff:0.0.0.0 included
+ * (Reports and the gateway unmap it to 0.0.0.0). A NUL byte is refused first: inet_pton() throws on it, and `@` does not stop that.
  */
 function pfb_dns_canonical_ip(mixed $ip): ?string
 {
 	$packed = is_string($ip) && !str_contains($ip, "\0") ? @inet_pton($ip) : FALSE;
-	return $packed === FALSE || trim($packed, "\0") === '' ? NULL : (string) inet_ntop($packed);
+	return $packed === FALSE || trim($packed, "\0") === '' || $packed === str_repeat("\0", 10) . "\xff\xff\0\0\0\0" ? NULL : (string) inet_ntop($packed);
 }
 
 /**
