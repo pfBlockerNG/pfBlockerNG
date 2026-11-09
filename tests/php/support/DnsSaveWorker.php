@@ -12,10 +12,14 @@ declare(strict_types=1);
  * process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (config.xml cannot be written),
  * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1), `advert_write_fails` (DNS General selects a
  * listener VIP whose advertisement write_config answers FALSE while every other write succeeds).
+ * Issue #3770 (DNSBL runs only through pfB-DNS), the pfB-DNS page's form posts pfB-DNS Off while: `dnsbl_on` (DNSBL is
+ * stored On), `dnsbl_turned_on_meanwhile` (this request loaded DNSBL Off, another save turned it On before the fresh
+ * read); `dnsbl_off` stores DNSBL Off, and `dnsbl_on_pfb_dns_on` stores DNSBL On and posts pfB-DNS On.
  * The result file holds what config.xml would contain afterwards ("disk"), the lock/read/write order, the page's input
  * errors, whether the config lock is still held, the reply-logging preference the form would show ("reply"), the write_config()
  * descriptions ("writes"), how often Unbound was regenerated ("unboundCalls") and whether
- * the save marked pending changes ("pendingMarked") or returned to render instead of exiting via redirect ("returned").
+ * the save marked pending changes ("pendingMarked") or returned to render instead of exiting via redirect ("returned"),
+ * the config before the save ("before") and the pfB-DNS checkbox the form would show ("pfbDnsShown").
  */
 
 $workerArgv = $argv;
@@ -25,13 +29,15 @@ $repo = dirname(__DIR__, 3);
 $general = ($workerArgv[3] ?? '') === 'general';
 $page = $repo . '/src/usr/local/www/pfblockerng/' . ($general ? 'pfblockerng_dns_general.php' : 'pfblockerng_dns.php');
 $disk = NULL;
+$before = NULL;
 $input_errors = [];
 $pconfig = [];
 $returned = FALSE;
 
-register_shutdown_function(static function () use ($resultFile, &$disk, &$input_errors, &$pconfig, &$returned): void {
+register_shutdown_function(static function () use ($resultFile, &$disk, &$before, &$input_errors, &$pconfig, &$returned): void {
 	file_put_contents($resultFile, json_encode([
 		'disk'          => $disk,
+		'before'        => $before,
 		'events'        => $GLOBALS['pfb_test_lock_events'] ?? [],
 		'lockHeld'      => !empty($GLOBALS['pfb_test_lock_held']),
 		'inputErrors'   => $input_errors,
@@ -40,6 +46,7 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$input_
 		'returned'      => $returned,
 		'writes'        => $GLOBALS['pfb_test_write_config_calls'] ?? [],
 		'unboundCalls'  => count($GLOBALS['pfb_test_unbound_configure_calls'] ?? []),
+		'pfbDnsShown'   => $pconfig['pfb_dns'] ?? NULL,
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -119,6 +126,14 @@ preg_match_all("~\\\$_POST\\['([a-z0-9_]+)'\\]~", $block, $posted);
 foreach (array_unique($posted[1]) as $key) {
 	$_POST[$key] = $_POST[$key] ?? '';
 }
+if (in_array($scenario, ['dnsbl_on', 'dnsbl_on_pfb_dns_on'], TRUE)) {
+	config_set_path("{$dnsbl}/pfb_dnsbl", 'on');
+} elseif ($scenario === 'dnsbl_off') {
+	config_set_path("{$dnsbl}/pfb_dnsbl", '');
+}
+if ($scenario === 'dnsbl_on_pfb_dns_on') {
+	$pfb_dns = $_POST['pfb_dns'] = 'on';
+}
 $disk = $GLOBALS['config'];
 if ($scenario === 'interleave') {
 	$disk = $other;
@@ -143,6 +158,12 @@ if ($scenario === 'interleave') {
 	config_set_path("{$dns}/pfb_dns", '');	// the Resolver's own interfaces are what the listener advertisement edits
 	config_set_path('virtualip/vip', [['mode' => 'ipalias', 'interface' => 'lan', 'type' => 'single', 'subnet' => 'fd12::53', 'subnet_bits' => '128', 'descr' => 'operator', 'uniqid' => 'x']]);
 	$disk = $GLOBALS['config'];
+} elseif ($scenario === 'dnsbl_turned_on_meanwhile') {
+	$other['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_dnsbl'] = 'on';
+	$disk = $other;
+	$GLOBALS['pfb_test_config_read_hook'] = static function () use ($other): void {
+		$GLOBALS['config'] = $other;
+	};
 }
 $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, $scenario): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['write'];
@@ -160,6 +181,7 @@ $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) u
 		$disk = $GLOBALS['config'];
 	}
 };
+$before = $disk;
 $input_errors = [];
 ini_set('open_basedir', "{$tmp}:" . dirname($resultFile) . ":{$repo}:/usr/share/php:/dev/null:/dev/urandom");
 eval($block);

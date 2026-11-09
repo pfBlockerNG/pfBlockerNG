@@ -837,12 +837,17 @@ if ($_POST) {
 		);
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
+		$pfb_dnsbl_posted = pfb_filter($_POST['pfb_dnsbl'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 		if (!$input_errors) {
 			// issue #3515: the pfB-DNS page and the Resolver move write config.xml under this lock; this whole-section save, and
 			// write_config() with it (it writes the whole copy this request read), must not put back what they wrote since.
 			$pfb_config_lock = pfb_dns_config_lock();
 			if ($pfb_config_lock === NULL) {
 				$input_errors[] = 'DNSBL: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+			} elseif ($pfb_dnsbl_posted === 'on' && PfbConfig::read('dns/pfb_dns') !== PfbToggle::On) {
+				// issue #3770: DNSBL runs only through pfB-DNS; decided on the fresh read this lock gave, so a concurrent pfB-DNS save is seen
+				$input_errors[] = 'DNSBL requires pfB-DNS: turn it on in DNS > pfB-DNS, then enable DNSBL.';
+				unlock($pfb_config_lock);
 			}
 		}
 
@@ -866,7 +871,7 @@ if ($_POST) {
 				'provider' => PfbConfig::read('dnsbl/top1m_source')->toStored(),
 			);
 
-			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['pfb_dnsbl']		= $pfb_dnsbl_posted;
 			$pfb['dconfig'] = array_replace($pfb['dconfig'], $pfb_posted_policy);
 			$psl_include_private = pfb_filter($_POST['pfb_psl_include_private'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$psl_allow_private = pfb_filter($_POST['pfb_psl_allow_private'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
@@ -2681,7 +2686,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable DNSBL',
 	pfb_cfg_toggle_read($pconfig['pfb_dnsbl']) === PfbToggle::On,
 	'on'
-))->setHelp('Block the domains in your DNSBL groups. Needs the DNS Resolver, and pfBlockerNG enabled on the <strong>General</strong> tab.'
+))->setHelp('Block the domains in your DNSBL groups. Requires <strong>pfB-DNS</strong> (turned on in <strong>DNS &gt; pfB-DNS</strong>) and pfBlockerNG enabled on the <strong>General</strong> tab.'
 		. "{$dnsbl_text}"
 );
 

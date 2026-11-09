@@ -118,6 +118,10 @@ if ($_POST) {
 			$pfb_config_lock = pfb_dns_config_lock();
 			if ($pfb_config_lock === NULL) {
 				$input_errors[] = 'pfB-DNS: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+			} elseif ($pfb_dns !== 'on' && PfbConfig::read('dnsbl/pfb_dnsbl') === PfbToggle::On) {
+				// issue #3770: DNSBL runs only through pfB-DNS; decided on the fresh read this lock gave, so a concurrent DNSBL save is seen
+				$input_errors[] = 'pfB-DNS cannot be turned off while DNSBL is on, because DNSBL runs only through pfB-DNS: turn DNSBL off in DNS > DNSBL first.';
+				unlock($pfb_config_lock);
 			}
 		}
 
@@ -201,7 +205,8 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns']) === PfbToggle::On,
 	'on'
 ))->setHelp('<p><strong>Experimental.</strong> <strong>pfB-DNS</strong> answers client DNS. '
-		. 'With DNSBL enabled, it answers blocked names locally and passes other queries to the DNS Resolver with the client address.</p>'
+		. 'With DNSBL enabled, it answers blocked names locally and passes other queries to the DNS Resolver with the client address. '
+		. '<strong>DNSBL</strong> requires <strong>pfB-DNS</strong>, so turn <strong>DNSBL</strong> off first to turn <strong>pfB-DNS</strong> off.</p>'
 		. '<div class="infoblock">'
 		. '<p><strong>Resolver changes</strong></p>'
 		. '<ul>'
@@ -211,7 +216,7 @@ $section->addInput(new Form_Checkbox(
 		. '</ul>'
 		. '<p>A <strong>Custom options</strong> line containing <code>interface:</code>, <code>port:</code> or <code>include:</code>, or an unmatched proxy marker, prevents activation. '
 		. 'A notice identifies the conflict. Adding such a conflict later turns <strong>pfB-DNS</strong> off and restores the Resolver, retaining the conflicting line. '
-		. 'Turning the option off is never refused.</p>'
+		. 'A conflict never refuses turning the option off.</p>'
 		. '<p>Turning <strong>pfB-DNS</strong> off, disabling pfBlockerNG or removing the package restores the saved Resolver settings. '
 		. 'Later edits to the saved <strong>Network Interfaces</strong>, <strong>SSL/TLS Service</strong> and <strong>Custom options</strong> fields are replaced.</p>'
 		. '<p>Disabling the DNS Resolver stops <strong>pfB-DNS</strong>, restores the saved fields and turns this option off; the Resolver remains disabled. '

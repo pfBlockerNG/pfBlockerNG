@@ -517,7 +517,10 @@ is FALSE for "nothing to restore" too). A check that could not run is reported a
 its request read, so it takes the same lock before reading its section, applies the posted fields to the section read under
 it and holds the lock through `write_config()`: a DNS Reply Logging Off saved on the pfB-DNS page, or a Resolver move, that
 landed while the DNSBL form was open is kept, and a lock that stays taken or a failed read is an input error that saves
-nothing. Pinned by `DnsProxyConfigLockTest` and `DnsblSettingsSaveRaceTest`.
+nothing. Both enable saves also decide on that fresh read (issue #3770: DNSBL runs only through pfB-DNS): the DNSBL page refuses
+DNSBL On while `dns/pfb_dns` is not On, and the pfB-DNS page refuses the toggle Off while `dnsbl/pfb_dnsbl` is On, each as an
+input error that writes nothing and releases the lock. Pinned by `DnsProxyConfigLockTest`, `DnsblSettingsSaveRaceTest` and
+`DnsblRequiresPfbDnsSaveTest`.
 
 While the Resolver is moved and DNSBL is on (`pfb_dns_proxy_hosts_module()`: a snapshot and `pfb_dnsbl_active()`) the proxy, not Unbound, is the module host:
 `pfb_unbound_py_mode_active()` is TRUE, and every liveness decision (`pfb_unbound_py_host_running()`: the

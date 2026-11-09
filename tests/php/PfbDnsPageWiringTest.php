@@ -71,9 +71,11 @@ final class PfbDnsPageWiringTest extends TestCase
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');
 
-		foreach (['pfb_dns_proxy', "'pfb_dns'", "dns/pfb_dns", 'DNS Proxy', 'pfBlockerNG DNS proxy'] as $needle) {
-			$this->assertStringNotContainsString($needle, $page, "the DNSBL page has no trace of the toggle: {$needle}");
+		foreach (['pfb_dns_proxy', "'pfb_dns'", "PfbConfig::write('dns/pfb_dns'", 'DNS Proxy', 'pfBlockerNG DNS proxy'] as $needle) {
+			$this->assertStringNotContainsString($needle, $page, "the DNSBL page has no control, save or help for the toggle: {$needle}");
 		}
+		// issue #3770: it reads the toggle only to refuse DNSBL On while pfB-DNS is not On
+		$this->assertSame(1, substr_count($page, "PfbConfig::read('dns/pfb_dns')"), 'the one read is the DNSBL-needs-pfB-DNS refusal');
 	}
 
 	public function testTheDnsblPageSavesUnderTheSameConfigLockAsThePfbDnsPage(): void
@@ -81,7 +83,7 @@ final class PfbDnsPageWiringTest extends TestCase
 		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');
 
 		$this->assertSame(1, substr_count($page, '$pfb_config_lock = pfb_dns_config_lock();'), 'its whole-section save runs under the lock the pfB-DNS page and the Resolver move take');
-		$this->assertSame(1, substr_count($page, 'unlock($pfb_config_lock);'), 'released after write_config()');
+		$this->assertSame(2, substr_count($page, 'unlock($pfb_config_lock);'), 'released after write_config(), and when the save is refused under the lock');
 	}
 
 	public function testThePageCarriesTheTwelveListenerSettingsBelowTheEnableToggleReadAndSavedThroughTheDnsSection(): void
