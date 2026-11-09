@@ -409,7 +409,9 @@ def test_the_geoip_column_is_unk_without_the_database(replylog: Logged) -> None:
 def _serve_and_ask(argv: list[str], qname: str = ALLOWED) -> bytes:
     async def scenario() -> bytes:
         async with serving_decisions(argv) as gateway:  # a client that is not the firewall itself (127.0.0.1)
-            return await gateway.ask(build_query(qname), FakeUnbound(ZONE), client=CLIENT_ON_LOOPBACK)
+            reply = await gateway.ask(build_query(qname), FakeUnbound(ZONE), client=CLIENT_ON_LOOPBACK)
+            assert reply is not None, "the decider dropped the query"
+            return reply
 
     return asyncio.run(scenario())
 

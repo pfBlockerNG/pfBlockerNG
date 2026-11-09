@@ -20,17 +20,20 @@ fixtures/parity/ is a .json document the runner loads):
                      path, no path listed twice ("./x" is "x"), no file that is also another one's directory, and
                      nothing at or under the names the runner writes (the shipped pfb_unbound.py and
                      pfb_dnsbl_regex_rules.py are linked in by the runner, never by a fixture).
-    upstream         {"<lower-case absolute name> <TYPE>": [RR texts] or null}, Unbound's stand-in (FakeUnbound): a
-                     listed question gets NOERROR with those records (an empty list: none at all; null: no reply, which
-                     the runner gives as an empty REPLY), any other NXDOMAIN; one question is listed once, whichever
-                     spelling of its type.
+    upstream         {"<lower-case absolute name> <TYPE>": [RR texts] or null}, Unbound's stand-in (FakeUnbound),
+                     keyed on the FORWARD's first question, its name lower-cased; its class is ignored and the reply
+                     carries the FORWARD's questions and id, RD copied, RA set. A listed question gets NOERROR with
+                     those records (an empty list: none at all; null: no reply, which the runner gives as an empty
+                     REPLY), any other NXDOMAIN; one question is listed once, whichever spelling of its type. So a
+                     FORWARD must parse with at least one question: a relay of a wire that does not is not expressible.
     cases            non-empty list, run IN FILE ORDER against one booted decider (its per-name memo carries over).
       id, description   non-empty strings; id unique within the file.
       family            a families.json key.
       query             {"name": absolute name, "type": mnemonic or TYPE<n> (n <= 65535)}: one question, class IN, RD
                         set, no EDNS; or {"wire_hex": lower-case hex of at most 65535 bytes}: the QUERY frame's DNS wire
-                        verbatim; never both, never half of the first. Either has "client": IP (optional, 192.0.2.10)
-                        and "transport": TCP|UDP|DoT|DoH|DoQ (optional, UDP).
+                        verbatim; never both, never half of the first. Either has "client": IP (optional, 192.0.2.10;
+                        canonical as the gateway sends it: no zone, not unspecified, IPv4-mapped IPv6 refused) and
+                        "transport": TCP|UDP|DoT|DoH|DoQ (optional, UDP).
       expect            {"decision": answer|relay|rewrite|drop, "forwards": ["<name> <TYPE>", ...], "rcode": NOERROR|
                         FORMERR|SERVFAIL|NXDOMAIN|NOTIMP|REFUSED, "answer": [RR texts], "authority": [RR texts], "tc":
                         true|false (optional, false)}. A drop is exactly {"decision": "drop", "forwards": []}.
@@ -38,12 +41,13 @@ fixtures/parity/ is a .json document the runner loads):
 
 Decisions: answer = no FORWARD, the decider built the ANSWER; relay = one FORWARD carrying the client's own wire and
 an ANSWER byte-identical to Unbound's reply; rewrite = FORWARDs, then an ANSWER that is none of Unbound's replies (the
-SERVFAIL the decider builds for Unbound's silence is one); drop = no FORWARD and a DROP in place of the ANSWER. forwards
-lists every FORWARD's question in order. answer/authority compare in order as (owner, type, class, ttl, rdata) with the
-owner exactly as on the wire: the encoder compresses an owner equal to the question, case-blind, into the question, so
-a mixed-case query's answer carries the client's spelling. Flags other than the rcode and TC, and the additional
-section, are not compared; TC (the ANSWER's) is compared for every non-drop case. A drop has no ANSWER: only decision
-and forwards are compared.
+SERVFAIL the decider builds for Unbound's silence is one); drop = the decider's final frame is DROP, whatever it
+forwarded first. Any other outcome (an ANSWER equal to an Unbound reply other than a relay's) is always a mismatch.
+forwards lists every question of every FORWARD, in order. answer/authority compare in order as (owner, type, class,
+ttl, rdata) with the owner exactly as on the wire: the encoder compresses an owner equal to the question, case-blind,
+into the question, so a mixed-case query's answer carries the client's spelling. For every non-drop case the ANSWER's
+id (equal to the query's first two bytes), rcode and TC are compared too; its question section, other flags and
+additional section (EDNS included) are not. A drop has no ANSWER: only decision and forwards are compared.
 """
 
 from __future__ import annotations
@@ -65,11 +69,7 @@ import pfb_dns_proxy
 import pytest
 from frontend_constants import SHIPPED_DIR, Booted
 from frontend_helpers import (
-    ANSWER,
-    FORWARD,
-    QUERY,
     READY,
-    REPLY,
     WATCHDOG,
     DecisionGateway,
     FakeUnbound,
@@ -349,9 +349,12 @@ def _query(value: object, where: str) -> Query:
         wire = build_query(name, _qtype(_string(obj["type"], where, "query.type"), where, "query.type"))
     client = _string(obj.get("client", DEFAULT_CLIENT), where, "query.client")
     try:
-        ipaddress.ip_address(client)
+        address = ipaddress.ip_address(client)
     except ValueError:
         _fail(where, "query.client", f"not an IP address: {client!r}")
+    mapped = isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None  # the gateway unmaps it
+    if "%" in client or address.is_unspecified or mapped or str(address) != client:
+        _fail(where, "query.client", f"{client!r} is not a canonical, specified address without a zone")
     return Query(wire, client, _choice(obj.get("transport", "UDP"), where, "query.transport", TRANSPORTS))
 
 
@@ -501,6 +504,7 @@ def _mismatches(
         reply = dnswire.parse(answer)
         rcode = next((name for name, number in RCODES.items() if number == reply.rcode), f"RCODE{reply.rcode}")
         compared += [
+            ("id", int.from_bytes(wire[:2], "big"), reply.id),
             ("rcode", expect.rcode, rcode),
             ("answer", [_rr_text(rr) for rr in expect.answer], [_rr_text(rr) for rr in reply.answers]),
             ("authority", [_rr_text(rr) for rr in expect.authority], [_rr_text(rr) for rr in reply.authority]),
@@ -511,22 +515,6 @@ def _mismatches(
         for field, want, got in compared
         if want != got
     ]
-
-
-async def _exchange(gateway: DecisionGateway, query: Query, upstream: RecordingUnbound, frame_id: int) -> bytes | None:
-    """One QUERY as the gateway sends it, each FORWARD answered from `upstream`: the ANSWER's wire, None for a DROP."""
-    client = query.client.encode("ascii")
-    transport = TRANSPORTS.index(query.transport)
-    await gateway.send(QUERY, frame_id, bytes([transport, len(client)]) + client + b"\x00\x00\x00" + query.wire)
-    while True:
-        ftype, got, payload = await gateway.recv()
-        assert got == frame_id
-        if ftype == ANSWER:
-            return payload
-        if ftype == decision_service.DROP:
-            return None
-        assert ftype == FORWARD, f"frame type {ftype}: want FORWARD, ANSWER or DROP"
-        await gateway.send(REPLY, frame_id, upstream.answer(payload))
 
 
 async def _drive(booted: Booted, scenario: Scenario) -> tuple[list[str], list[str]]:
@@ -544,7 +532,9 @@ async def _drive(booted: Booted, scenario: Scenario) -> tuple[list[str], list[st
         for frame_id, case in enumerate(scenario.cases, start=1):
             upstream = RecordingUnbound(scenario.upstream)
             query = case.query
-            answer = await _exchange(gateway, query, upstream, frame_id)
+            answer = await gateway.ask(
+                query.wire, upstream, client=query.client, transport=query.transport, fid=frame_id
+            )
             mismatches += _mismatches(scenario, case, query.wire, upstream, answer)
     finally:
         writer.close()
@@ -673,6 +663,10 @@ HOSTILE: list[tuple[str, Callable[[dict[str, Any]], object], tuple[str, ...]]] =
     ("empty case id", lambda d: d["cases"][0].update(id=""), ("bad.json", "cases[0]", "id")),
     ("empty case description", lambda d: d["cases"][0].update(description=""), ("bad.json", "'good'", "description")),
     ("client not an IP", lambda d: d["cases"][0]["query"].update(client="host.example"), ("'good'", "query.client")),
+    *[
+        (f"client {client}", lambda d, client=client: d["cases"][0]["query"].update(client=client), ("query.client",))
+        for client in ("0.0.0.0", "::", "fe80::1%eth0", "::ffff:192.0.2.1", "2001:DB8::1")
+    ],
     ("unknown transport", lambda d: d["cases"][0]["query"].update(transport="QUIC"), ("'good'", "query.transport")),
     ("TYPE65536", lambda d: d["cases"][0]["query"].update(type="TYPE65536"), ("'good'", "query.type")),
     ("TYPE with 5000 digits", lambda d: d["cases"][0]["query"].update(type="TYPE" + "9" * 5000), ("query.type",)),

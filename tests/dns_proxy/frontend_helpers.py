@@ -268,7 +268,7 @@ async def tcp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes
 
 # --- the gateway end of the decision socket, for tests that run the decider in this process ---------------------
 
-QUERY, FORWARD, REPLY, ANSWER, READY = 1, 2, 3, 4, 6  # the frame types of docs/misc/dns-gateway-protocol.md
+QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6  # the frame types of docs/misc/dns-gateway-protocol.md
 
 
 class DecisionGateway:
@@ -289,8 +289,9 @@ class DecisionGateway:
 
     async def ask(
         self, wire: bytes, unbound: FakeUnbound, *, client: str = "127.0.0.2", transport: str = "UDP", fid: int = 1
-    ) -> bytes:
-        """QUERY `wire` as `client`, answer every FORWARD from `unbound`, and return the final ANSWER's wire."""
+    ) -> bytes | None:
+        """QUERY `wire` as `client`, answer every FORWARD from `unbound`, and return the final ANSWER's wire; None
+        for a DROP."""
         text = client.encode("ascii")
         byte = ("TCP", "UDP", "DoT", "DoH", "DoQ").index(transport)
         await self.send(QUERY, fid, bytes([byte, len(text)]) + text + b"\x00\x00\x00" + wire)
@@ -299,7 +300,9 @@ class DecisionGateway:
             assert got == fid
             if ftype == ANSWER:
                 return payload
-            assert ftype == FORWARD, f"frame type {ftype}: want FORWARD or ANSWER"
+            if ftype == DROP:
+                return None
+            assert ftype == FORWARD, f"frame type {ftype}: want FORWARD, ANSWER or DROP"
             await self.send(REPLY, fid, unbound.answer(payload))
 
 
