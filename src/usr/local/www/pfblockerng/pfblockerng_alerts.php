@@ -3505,14 +3505,14 @@ $pfb_unified_tint = $pfb_webgui_dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05
 	flex: 1 1 480px;
 	min-width: 0;
 }
-/* Fit each d3pie SVG inside its fixed-height column (never scroll); zoom opens one pie larger */
-.pfb-stats-col > [id^="pieChart_"] {
+/* Fit each mounted d3pie SVG inside its column (never scroll); an empty panel mounts none, so its box stays 0 high */
+.pfb-stats-col > .pfb-pie-box {
 	position: relative;
 	aspect-ratio: 560 / 390;
 	margin: 0 auto;
 	overflow: hidden;
 }
-.pfb-stats-col > [id^="pieChart_"] > svg {
+.pfb-pie-box > svg, .pfb-pie-zoomed > svg {
 	display: block;
 	width: 100%;
 	height: 100%;
@@ -3524,11 +3524,6 @@ $pfb_unified_tint = $pfb_webgui_dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05
 }
 .pfb-pie-zoomed {
 	height: 70vh;
-}
-.pfb-pie-zoomed > svg {
-	display: block;
-	width: 100%;
-	height: 100%;
 }
 @media (max-width: 991px) {
 	.modal-dialog.modal-lg.pfb-pie-zoom-dialog { width: auto; margin: 10px; }
@@ -3544,8 +3539,8 @@ $pfb_unified_tint = $pfb_webgui_dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05
 		page-break-inside: avoid;
 	}
 	.panel-body { overflow: visible !important; }
-	.pfb-stats-col > [id^="pieChart_"], .pfb-stats-col > [id^="pieChart_"] > svg { height: auto; }
-	.pfb-stats-col, .pfb-stats-col > [id^="pieChart_"] { max-height: none !important; }
+	.pfb-pie-box, .pfb-pie-box > svg { height: auto; }
+	.pfb-stats-col, .pfb-pie-box { max-height: none !important; }
 	.pfb-pie-zoom { display: none; }
 	* { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }

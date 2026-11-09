@@ -139,15 +139,31 @@
 	}
 
 	function zoomPie(data, button) {
+		if (document.querySelector('.pfb-pie-zoom-dialog')) { return; }
 		const title = button.getAttribute('aria-label');
 		const modal = $('<div class="modal fade" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg pfb-pie-zoom-dialog" role="document"><div class="modal-content">'
 			+ '<div class="modal-header"><button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>'
 			+ '<h4 class="modal-title"></h4></div><div class="modal-body"><div class="pfb-pie-zoomed"></div></div></div></div></div>');
-		modal.find('.modal-title').text(title);
+		modal.attr('aria-labelledby', data.id + '_zoom_title');
+		modal.find('.modal-title').attr('id', data.id + '_zoom_title').text(title);
 		modal.find('.pfb-pie-zoomed').attr('id', data.id + '_zoom');
+		// A scheduled meta refresh outlives its meta; only window.stop() cancels it (as PauseRefresh does).
+		// Re-attaching the meta restarts the refresh, and a meta the user paused stays paused.
+		const refresh = document.getElementById('AlertRefresh');
+		const refreshParent = refresh && refresh.parentNode;
+		if (refresh) { refresh.remove(); window.stop(); }
 		let zoomed = null;
-		modal.on('shown.bs.modal', function () { zoomed = renderPie(data, data.id + '_zoom', {canvasHeight: 600, canvasWidth: 860, pieInnerRadius: 90}); });
-		modal.on('hidden.bs.modal', function () { if (zoomed) { zoomed.destroy(); } modal.remove(); button.focus(); });
+		// The canvas is the dialog's own size: labels keep their size, the pie fills the dialog, its hole keeps the inline ratio.
+		modal.on('shown.bs.modal', function () {
+			const target = document.getElementById(data.id + '_zoom');
+			zoomed = renderPie(data, data.id + '_zoom', {canvasHeight: target.clientHeight, canvasWidth: target.clientWidth, pieInnerRadius: '39%'});
+		});
+		modal.on('hidden.bs.modal', function () {
+			if (zoomed) { zoomed.destroy(); }
+			if (refresh) { refreshParent.appendChild(refresh); }
+			modal.remove();
+			button.focus();
+		});
 		$('body').append(modal);
 		modal.modal('show');
 	}
@@ -155,6 +171,7 @@
 	function mountPie(panel) {
 		const holder = document.getElementById(panel.data.pie.id);
 		const column = holder.parentElement;
+		holder.classList.add('pfb-pie-box');
 		// The pie's height follows its own shape, capped like the table beside it.
 		holder.style.maxHeight = column.style.maxHeight;
 		panel.pie = renderPie(panel.data.pie);
@@ -165,6 +182,7 @@
 		button.setAttribute('aria-label', 'Zoom ' + (heading ? heading.textContent.trim() : 'chart'));
 		button.innerHTML = '<i class="fa-solid fa-magnifying-glass-plus" aria-hidden="true"></i>';
 		button.addEventListener('click', function () { zoomPie(panel.data.pie, button); });
+		panel.zoom = button;
 		holder.appendChild(button);
 	}
 
@@ -271,7 +289,12 @@
 		const panel = panels.get(event.target.id);
 		if (!panel) { return; }
 		mount(panel);
-		if (panel.pie) { panel.pie.redraw(); fluidPie(panel.data.pie.id); }
+		if (panel.pie) {
+			panel.pie.redraw();
+			fluidPie(panel.data.pie.id);
+			// redraw empties the pie's element, taking the zoom button with it
+			document.getElementById(panel.data.pie.id).appendChild(panel.zoom);
+		}
 		if (panel.body.querySelector('#chart') && timeline) { timeline.updateTicks(); timeline.chart.update(); }
 	}
 
