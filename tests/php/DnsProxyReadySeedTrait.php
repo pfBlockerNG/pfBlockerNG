@@ -37,10 +37,13 @@ trait DnsProxyReadySeedTrait
 			$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] ?? NULL,
 		];
 		$this->seedUnbound();
+		// No earlier test's failed activation is on record when this one starts, and none is left behind
+		@unlink((string) ($GLOBALS['pfb']['dns_proxy_activation_failed'] ?? ''));
 	}
 
 	private function tearDownUpstreamFixture(): void
 	{
+		@unlink((string) ($GLOBALS['pfb']['dns_proxy_activation_failed'] ?? ''));
 		foreach ($this->upstreamFiles as $file => $contents) {
 			if ($contents === FALSE) {
 				@unlink($file);

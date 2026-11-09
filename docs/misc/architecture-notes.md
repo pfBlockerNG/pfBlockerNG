@@ -459,8 +459,8 @@ the Network Interfaces field, which pfSense writes outside the custom text (the 
 An `interface`, `port` or `include` line the admin adds after the move is not refused (a refusal keeps serving, one Resolver
 restart away from an address-in-use failure): `pfb_dns_proxy_resolver()` reports it through its `$unsafe_line` argument, writes
 the admin's text as it stands (our block cut out) into the snapshot's `custom_options`, and `pfb_unbound_python()` takes the
-failed-activation rollback (`pfb_dns_proxy_roll_back()`, see "Readiness and rollback"): pfB-DNS off, the proxy stopped, the
-Resolver restored with the admin's line kept in Custom Options, one notice naming the line. A Listen Port of 5353 or 5354 that the
+failed-activation rollback (`pfb_dns_proxy_roll_back()`, see "Readiness and rollback"): pfB-DNS stays on, the proxy stopped, the
+Resolver restored with the admin's line kept in Custom Options, one notice naming the line (the next Update retries the move, and is refused while the line stands). A Listen Port of 5353 or 5354 that the
 admin sets after the move takes the same rollback, but the move itself raises no notice and changes nothing: the saved keys come
 back, the Listen Port stays as the admin set it, and the one notice names that port. While such a rollback cannot run (config.xml
 locked, or the proxy outlives its stop) the gateway keeps the rc script it serves with, so the proxy is not restarted onto that port.
@@ -471,11 +471,14 @@ snapshot, `unbound/enable` absent) leaves the proxy on its listen addresses answ
 on CE 2.8.1: Unbound gone, the stale `unbound.pid` left, the proxy serving LAN:53), because pfSense runs no package hook when a
 Resolver is disabled and its disabled branch only kills Unbound. `pfb_dns_proxy_stand_down()` runs at the start of every apply
 (`pfb_unbound_python()`) and every tick (`pfblockerng_tick()`, unless an update pass is running: that pass runs it itself): it
-turns the pfB-DNS toggle Off under the config lock, stops the proxy and restores the saved settings through
-`pfb_dns_proxy_resolver(FALSE)` (the Resolver stays disabled), and raises one notice. A restore that does not finish (the proxy
-outlived its stop, or config.xml did not take the write) is retried by the next apply's ordinary restore, because the toggle is already Off; a lock that stays taken
-or a toggle write that config.xml does not take changes nothing (pfB-DNS stays on, no notice says it was turned off) and is retried by the next apply or tick. With pfBlockerNG itself disabled the ordinary restore runs and the
-toggle stays as the admin set it. Pinned by `DnsProxyActivationRollbackTest` (sections E, F and G) and `TickEntrypointTest`; live
+claims the failed activation under the config lock (`pfb_dns_proxy_claim_failure()`: the pfB-DNS enable is not written and stays On, so
+nothing propagates by sync, and the failure is put on record for the status), stops the proxy and restores the saved settings through
+`pfb_dns_proxy_resolver(FALSE)` (the Resolver stays disabled), and raises one notice that says pfB-DNS stays on and the next Update retries.
+Once the Resolver is restored there is no snapshot, so the entry check returns at once on every later tick and nothing repeats; a restore
+that does not finish (the proxy outlived its stop, or config.xml did not take the write) keeps the snapshot, so the next apply or tick stands
+down again and retries it, and a lock that stays taken changes nothing and is retried the same way. The next Update retries the takeover once
+the Resolver is enabled again (`pfb_dns_wanted()` needs it). With pfBlockerNG itself disabled the ordinary restore runs and the
+toggle stays as the admin set it. Pinned by `DnsProxyActivationRollbackTest` (sections E, F, G and H) and `TickEntrypointTest`; live
 in `tests/smoke/test_smoke_pfb_dns_resolver_state.py`. The pass that follows a stand-down (the apply itself, or a pass the tick
 dispatches) still has python integration to remove and mounts to unmount, which pfBlockerNG does with an Unbound restart, and
 `pfb_stop_start_unbound()` used to start Unbound whatever `unbound/enable` said (live: the start log count rose by one after
@@ -703,15 +706,22 @@ unchanged script, so a crash-looping listener is noticed). The boot check (`dns_
 stored snapshot's start through the same `pfb_dns_proxy_confirm_ready()`, and so does the cron tick, but only while a gateway pidfile
 is live: with none live the tick waits for nothing and rolls nothing back. It may first change the proxy's listeners live, and restart the
 pair once only for a change the gateway does not take (issues #3598 and #3599, below). A proxy that is not ready within the budget has FAILED its
-activation, and `pfb_dns_proxy_roll_back()` runs: under the config lock the requested toggle goes Off (so the next apply
-cannot enable it again, and there is no retry or suppression state of its own), then `pfb_unbound_python($mode, FALSE)` stops
-the proxy and gives the Resolver exactly its saved settings back and, iff DNSBL is on, puts the DNSBL module back into
-Unbound, and `pfb_unbound_dnsbl()` with `pfb_update_unbound()` regenerate `unbound.conf` and restart Unbound as an apply does.
-The restore consumes the snapshot, so that reload does not restart the proxy (no recursion), and the restore's own restart of a
-proxy that outlived its stop is deliberately not confirmed. The operator gets a notice: pfB-DNS was turned off, the Resolver
-was restored, DNSBL runs in Unbound again. A rollback that cannot finish (the config lock stays taken, config.xml does not take the write that turns the toggle off, the proxy outlives its
+activation, and `pfb_dns_proxy_roll_back()` runs: it claims the failure under the config lock (`pfb_dns_proxy_claim_failure()`). The pfB-DNS
+enable is not written and stays On, so nothing propagates by sync; a one-line record of why (`$pfb['dns_proxy_activation_failed']`, in
+`/var/run`) is what the pfB-DNS status reads ("Activation failed: ... The next Update retries"). Then `pfb_unbound_python($mode, FALSE)`
+stops the proxy and gives the Resolver exactly its saved settings back (the `FALSE` says pfB-DNS is not wanted for that call, so the restore
+does not move the Resolver again), and `pfb_unbound_dnsbl()` with `pfb_update_unbound()` regenerate `unbound.conf` and restart Unbound as an
+apply does. The restore consumes the snapshot, so that reload does not restart the proxy (no recursion), and the restore's own restart of a
+proxy that outlived its stop is deliberately not confirmed. The operator gets a notice: the activation failed, the Resolver was restored,
+pfB-DNS stays on and the next Update retries (with DNSBL on, DNSBL does not block until the activation succeeds: Unbound never hosts the
+module). The record ends when a takeover goes ahead (the Resolver is snapshotted again), when the proxy is confirmed ready, and when a
+restore runs with pfB-DNS off. The retry is the next apply's: `pfb_dns_wanted()` stays TRUE, so its Resolver step moves the Resolver again;
+a cause that stands (an unsafe Custom Options line, a Listen Port on a proxy port) has the move refused with a notice of its own until the
+admin corrects it. A rollback that cannot finish (the config lock stays taken, config.xml does not take the restore's write, the proxy outlives its
 stop) keeps the snapshot and the moved Resolver, runs nothing destructive after the failure, and says that recovery is needed
-(for a failed activation: nothing answers DNS on the Resolver's port until the restore succeeds): it never claims success. The restore's stop is
+(for a failed activation: nothing answers DNS on the Resolver's port until the restore succeeds): it never claims success. With the snapshot
+kept and pfB-DNS still On, the next apply re-applies the move on that snapshot (`pfb_dns_proxy_resolver_locked()` takes no second one), and
+the proxy check or the next tick rolls it back again while the proxy is not ready. The restore's stop is
 the rc script's own, so it also ends a supervisor that keeps respawning a decider that never becomes ready while pfSense has no
 service entry for the package (an install runs this before pfSense registers it, and the Resolver's start hook starts the proxy without one).
 The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
@@ -721,7 +731,7 @@ every client port held, and a decider that exits at every start, with the packag
 and `tests/smoke/test_smoke_pfb_dns_resolver_state.py` (TCP and UDP 127.0.0.1:5353 held before enabling:
 the real Unbound bind fails, activation rolls back with a notice, and native Resolver DNS works while the holders remain).
 
-**Single-flight recovery and stale ownership (issue #3572).** A rollback of one box never overlaps another: `pfb_dns_proxy_roll_back()` runs entirely under the operation lock `pfb_dns_proxy_rollback` (a close-on-exec file, `pfb_flock_bounded()`, `PFB_DNS_PROXY_START_WAIT`, 30 s), taken before the DNS config lock, so the order is operation lock, then config lock, and no config lock is held across a full Unbound restart or readiness wait. A rollback that cannot take it changes nothing and files one notice that the operation lock could not be acquired; a recovery may still be running. A recovery never acts on a copy of the stored marker that predates another write: the caller passes the raw marker it saw (`pfb_dns_proxy_confirm_ready()` reads it before its readiness wait; `pfb_dns_proxy_roll_back()` reads it before its operation-lock wait; a NULL argument reads it at entry and is never a bypass). Under the config lock, `pfb_dns_proxy_turn_off()` compares the fresh marker with that value and writes the Off only while they match and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs recovery. A different or consumed marker, or an unowned box, makes it return NULL: nothing is written, stopped, restarted or announced, because another save or recovery already resolved the state. The failed start is diagnosed (`pfb_dns_proxy_startup_check()`) only after that guard has won and before the restore consumes the snapshot. `pfb_dns_proxy_stand_down()` uses the same tri-state: NULL is a quiet FALSE, FALSE the existing error, TRUE the existing restore. A recovery that fails part way keeps the snapshot and the moved Resolver, and the next apply's ordinary restore retries from the stored marker. Pinned by `DnsProxyActivationRollbackTest` (the stale-ownership, operation-lock and race rows) and `DnsProxyStartupCheckTest`; the owner and the contender race as two real processes (`tests/php/support/DnsProxyRecoveryWorker.php`) over real `flock()` locks.
+**Single-flight recovery and stale ownership (issue #3572).** A rollback of one box never overlaps another: `pfb_dns_proxy_roll_back()` runs entirely under the operation lock `pfb_dns_proxy_rollback` (a close-on-exec file, `pfb_flock_bounded()`, `PFB_DNS_PROXY_START_WAIT`, 30 s), taken before the DNS config lock, so the order is operation lock, then config lock, and no config lock is held across a full Unbound restart or readiness wait. A rollback that cannot take it changes nothing and files one notice that the operation lock could not be acquired; a recovery may still be running. A recovery never acts on a copy of the stored marker that predates another write: the caller passes the raw marker it saw (`pfb_dns_proxy_confirm_ready()` reads it before its readiness wait; `pfb_dns_proxy_roll_back()` reads it before its operation-lock wait; a NULL argument reads it at entry and is never a bypass). Under the config lock, `pfb_dns_proxy_claim_failure()` compares the fresh marker with that value and records the failure (the pfB-DNS enable is not written) only while they match and this box is still owned by pfB-DNS (a snapshot, or our block) or still needs recovery. A different or consumed marker, or an unowned box, makes it return NULL: nothing is recorded, stopped, restarted or announced, because another save or recovery already resolved the state. The failed start is diagnosed (`pfb_dns_proxy_startup_check()`) only after that guard has won and before the restore consumes the snapshot. `pfb_dns_proxy_stand_down()` uses the same tri-state: NULL is a quiet FALSE, FALSE the existing error, TRUE the existing restore. A recovery that fails part way keeps the snapshot and the moved Resolver, and the next apply or tick retries from the stored marker. Pinned by `DnsProxyActivationRollbackTest` (the stale-ownership, operation-lock and race rows) and `DnsProxyStartupCheckTest`; the owner and the contender race as two real processes (`tests/php/support/DnsProxyRecoveryWorker.php`) over real `flock()` locks.
 The operation lock serializes calls to `pfb_dns_proxy_roll_back()`, including failed starts and unsafe-setting recovery. It does not serialize or coalesce other DNS proxy starts, restarts or GUI service calls.
 
 **Startup check (issues #3538, #3625).** "Ready" requires the gateway and its Unbound upstream; it does not say every client address the rc script names is served (an

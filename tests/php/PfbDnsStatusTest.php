@@ -347,6 +347,114 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame('Off: pfBlockerNG is disabled, and the DNS Resolver restore is pending: see the notices', $mode);
 	}
 
+	/** The one line a failed pfB-DNS activation leaves (pfb_dns_proxy_claim_failure()), which the status reads. */
+	private function activationFailed(string $why): void
+	{
+		file_put_contents($GLOBALS['pfb']['dns_proxy_activation_failed'], "{$why}\n");
+	}
+
+	/** @return array<string,array{bool,string}> DNSBL on and off, and the status of an on toggle with nothing moved after a failed activation */
+	public static function failedActivationModes(): array
+	{
+		return [
+			'with DNSBL on' => [TRUE, 'Activation failed: the proxy did not become ready. pfB-DNS stays on and the DNS Resolver is back as it was, '
+				. 'so DNSBL does not block until pfB-DNS is active. The next Update retries'],
+			'with DNSBL off' => [FALSE, 'Activation failed: the proxy did not become ready. pfB-DNS stays on and the DNS Resolver is back as it was. '
+				. 'The next Update retries'],
+		];
+	}
+
+	#[DataProvider('failedActivationModes')]
+	public function testAnOnToggleWithNothingMovedAfterAFailedActivationSaysItFailedAndThatTheNextUpdateRetries(bool $dnsbl, string $mode): void
+	{
+		// Given pfB-DNS on, the Resolver unmoved, and a failed activation on record
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$GLOBALS['pfb']['dnsbl'] = $dnsbl ? PfbToggle::On : PfbToggle::Off;
+		$GLOBALS['pfb']['unbound_state'] = PfbToggle::On;
+		$this->activationFailed('the proxy did not become ready');
+
+		// When the status is read
+		$status = pfb_dns_status();
+
+		// Then it says the activation failed, and nothing is active
+		$this->assertSame('Not in use', $status['service']);
+		$this->assertSame($mode, $status['mode']);
+		$this->assertNull($status['transports'], 'no transport is claimed while nothing is moved');
+		$this->assertFalse($status['active']);
+	}
+
+	public function testAFailedActivationIsNamedEvenWhileTheResolverIsDisabled(): void
+	{
+		// Given pfB-DNS on and stood down because the Resolver was disabled, which is on record
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$GLOBALS['pfb']['unbound_state'] = PfbToggle::Off;
+		$this->activationFailed('the DNS Resolver is disabled, so the DNS proxy has nothing to front');
+
+		// When the status is read
+		$mode = pfb_dns_status()['mode'];
+
+		// Then the failure is what it says, not only that the Resolver is disabled
+		$this->assertStringStartsWith('Activation failed: the DNS Resolver is disabled, so the DNS proxy has nothing to front. ', $mode);
+		$this->assertStringEndsWith('The next Update retries', $mode);
+	}
+
+	/** @return array<string,array{PfbToggle,PfbToggle,string}> pfB-DNS, pfBlockerNG and the status that outranks a failure on record */
+	public static function failureOnRecordOutranked(): array
+	{
+		return [
+			'pfB-DNS off: the record is not about the current setting' => [PfbToggle::Off, PfbToggle::On, 'Off: the DNS Resolver serves clients itself'],
+			'pfBlockerNG disabled' => [PfbToggle::On, PfbToggle::Off, 'On, but not active: pfBlockerNG is disabled'],
+		];
+	}
+
+	#[DataProvider('failureOnRecordOutranked')]
+	public function testAFailureOnRecordDoesNotOutrankPfbDnsOffOrPfBlockerNgDisabled(PfbToggle $toggle, PfbToggle $enable, string $mode): void
+	{
+		// Given a failed activation on record, with nothing moved
+		$GLOBALS['pfb']['pfb_dns'] = $toggle;
+		$GLOBALS['pfb']['enable'] = $enable;
+		$this->activationFailed('the proxy did not become ready');
+
+		// When the status is read, Then it says what it says without the record
+		$this->assertSame($mode, pfb_dns_status()['mode']);
+	}
+
+	public function testAMovedBoxWithAFailedActivationOnRecordSaysTheRestoreIsPending(): void
+	{
+		// Given a moved Resolver whose restore did not finish after a failed activation, with pfB-DNS still on
+		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
+		$this->moved(FALSE);
+		$this->activationFailed('the proxy did not become ready');
+
+		// When the status is read
+		$mode = pfb_dns_status()['mode'];
+
+		// Then it names the failure and the pending restore, never a working proxy
+		$this->assertSame('Activation failed: the proxy did not become ready. The DNS Resolver restore is pending: see the notices. The next Update retries', $mode);
+	}
+
+	/** @return array<string,array{PfbToggle,PfbToggle,string}> pfB-DNS, pfBlockerNG and the pending-restore status that outranks a failure on record */
+	public static function pendingRestoreOutranksFailure(): array
+	{
+		return [
+			'pfB-DNS off' => [PfbToggle::Off, PfbToggle::On, 'Turning off: pfB-DNS is off, and the DNS Resolver restore is pending: see the notices'],
+			'pfBlockerNG disabled' => [PfbToggle::On, PfbToggle::Off, 'Off: pfBlockerNG is disabled, and the DNS Resolver restore is pending: see the notices'],
+		];
+	}
+
+	#[DataProvider('pendingRestoreOutranksFailure')]
+	public function testAMovedBoxSaysTurningOffOrPackageDisabledWhateverFailureIsOnRecord(PfbToggle $toggle, PfbToggle $enable, string $mode): void
+	{
+		// Given a moved Resolver, a failure on record, and pfB-DNS off or pfBlockerNG disabled
+		$GLOBALS['pfb']['pfb_dns'] = $toggle;
+		$GLOBALS['pfb']['enable'] = $enable;
+		$this->moved(FALSE);
+		$this->activationFailed('the proxy did not become ready');
+
+		// When the status is read, Then the restore is pending for the reason the admin set
+		$this->assertSame($mode, pfb_dns_status()['mode']);
+	}
+
 	public function testARunningProxyListsForEachTransportTheAddressesTheGatewayServes(): void
 	{
 		// Given a running proxy with DoT, DoH and DoQ on, and a gateway that lists every listener

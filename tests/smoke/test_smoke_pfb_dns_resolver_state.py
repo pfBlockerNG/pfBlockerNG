@@ -11,10 +11,11 @@ handler (services_unbound.php over HTTP). Nothing is faked on the box.
   the wire at the stub upstream (the OPT UDP size of the query Unbound sends), and carries none when the Advanced page
   sets a size or the admin's Custom Options do.
 * An ``interface:``, ``port:`` or ``include:`` line the admin adds to Custom Options after the move takes the pfB-DNS
-  activation back like a failed one: pfB-DNS off, the Resolver restored, the admin's line kept, one notice naming it.
+  activation back like a failed one: pfB-DNS stays on, the Resolver restored, the admin's line kept, one notice
+  naming it.
 * A Resolver disabled in Services > DNS Resolver while pfB-DNS fronts it: the proxy kept LAN:53 and answered SERVFAIL
   for every allowed name. The next apply, or the next tick, stops pfB-DNS, restores the saved Resolver settings (the
-  Resolver stays disabled), turns pfB-DNS off and raises one notice.
+  Resolver stays disabled) and raises one notice that says pfB-DNS stays on and the next Update retries.
 * The Resolver page's own save keeps pfBlockerNG's marked block (the textarea is filled from the stored Custom Options
   and posted back), so an admin who saves the page without touching Custom Options does not unmove the Resolver.
 
@@ -370,7 +371,7 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
                 )
 
             after = _capture(vm)
-            assert not _toggle_on_in_config(vm), f"failed upstream activation must turn pfB-DNS off: {after}"
+            assert _toggle_on_in_config(vm), f"failed upstream activation must keep pfB-DNS on: {after}"
             assert not _snapshot_present(vm), f"rollback must consume the Resolver snapshot: {after.marker!r}"
             assert after.service == "stopped" and not after.ps, (
                 f"rollback must stop the proxy: {after.service} {after.ps}"
@@ -382,7 +383,7 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
                 f"rollback must restore all original Resolver keys:\nafter={after.resolver}\nbefore={before.resolver}"
             )
             new = _notices(vm)[prior_notices:]
-            assert len(new) == 1 and "was turned off" in new[0] and "restored to its previous settings" in new[0], (
+            assert len(new) == 1 and "pfB-DNS stays on" in new[0] and "restored to its previous settings" in new[0], (
                 f"one failure notice must report the rollback: {new}"
             )
             sockets = [s for s in _listeners(vm, connected=True) if s.port == 5353]
@@ -409,7 +410,7 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
 
 def test_an_unsafe_line_added_after_the_move_rolls_pfb_dns_back_and_keeps_the_line(rig: Rig, proxy_on: State) -> None:
     """Given a moved Resolver, When the admin adds `interface: 0.0.0.0@53` to Custom Options and the next apply runs,
-    Then pfB-DNS is off, the proxy is stopped, the Resolver has its saved settings, the line is still in Custom
+    Then pfB-DNS stays on, the proxy is stopped, the Resolver has its saved settings, the line is still in Custom
     Options, one notice names it, and Unbound (with the DNSBL module, as before) answers a listed name on 53.
     """
     vm = rig.vm
@@ -422,7 +423,7 @@ def test_an_unsafe_line_added_after_the_move_rolls_pfb_dns_back_and_keeps_the_li
         _apply(vm)
 
         after = _capture(vm)
-        assert not _toggle_on_in_config(vm), "pfB-DNS is turned off"
+        assert _toggle_on_in_config(vm), "pfB-DNS stays on"
         assert after.service == "stopped", f"the proxy is stopped: {after.service}"
         assert not _snapshot_present(vm), "the snapshot is consumed"
         for key in RESTORED_KEYS:
@@ -480,7 +481,7 @@ def _unbound_state(vm: SmokeVM, label: str) -> _UnboundState:
 
 def _assert_stood_down(rig: Rig, prior_notices: int, how: str, unbound: _UnboundState) -> None:
     vm = rig.vm
-    assert not _toggle_on_in_config(vm), f"{how}: pfB-DNS is turned off"
+    assert _toggle_on_in_config(vm), f"{how}: pfB-DNS stays on"
     assert _service_status(vm) == "stopped", f"{how}: the proxy is stopped"
     assert not _snapshot_present(vm), f"{how}: the snapshot is consumed"
     for key in RESTORED_KEYS:

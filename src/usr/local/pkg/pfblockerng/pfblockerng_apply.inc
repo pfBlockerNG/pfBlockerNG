@@ -3619,8 +3619,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	// issue #3515: pfB-DNS serves with DNSBL on or off ($mode only says whether DNSBL is): bring up a proxy that died since
 	// the last pass, and restart one whose rc script changed. A reload above has already restarted a proxy that hosts the module.
-	// A proxy that does not become ready has failed its activation: it is rolled back (pfB-DNS turned off, the Resolver and the
-	// DNSBL module as before, with a notice), and the pass goes on with the Resolver as that left it; nothing here enables it again.
+	// A proxy that does not become ready has failed its activation: it is rolled back (the Resolver restored, with a notice; pfB-DNS
+	// stays on, so the next pass's Resolver step retries the takeover), and the pass goes on with the Resolver as that left it.
 	if (!pfb_dns_proxy_ensure_running()) {
 		pfb_logger("\npfB-DNS: the DNS proxy did not become ready; see the notices", 2);
 	}

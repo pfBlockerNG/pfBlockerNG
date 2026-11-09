@@ -58,7 +58,7 @@ What it proves, in file order:
 * pfB-DNS off + apply: the proxy and its pidfiles are gone, every Resolver key is back to its pre-toggle value (absent
   stays absent), the marker is cleared, the module is back in ``unbound.conf``, Unbound is on 53 and 853 again;
 * a failed activation: pfB-DNS requested, the Resolver already moved, every address the proxy would serve held by nc(1)
-  on the guest, then the real apply: the proxy cannot bind and never becomes ready, pfB-DNS is turned off, the Resolver
+  on the guest, then the real apply: the proxy cannot bind and never becomes ready, pfB-DNS stays on, the Resolver
   and Unbound are back exactly as before the toggle, and the client's listed name still gets the VIP from Unbound.
 * a decision service that exits before READY at every start (issue #3561): the supervisor waiting out its restart
   delay still names pfb_dns_proxy and the rc stop ends it; started by the Resolver's start hook, with the package's
@@ -2281,7 +2281,7 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
       (the move's Unbound restart had started it), and every address the proxy would serve held by another process on
       port 53,
     When the real apply runs (pfb_trigger scope=dnsbl) and the proxy, which cannot bind, never becomes ready,
-    Then pfB-DNS is turned off in config.xml, the proxy and its supervisor are gone with their pidfiles, every Resolver
+    Then pfB-DNS stays on in config.xml, the proxy and its supervisor are gone with their pidfiles, every Resolver
       key equals its pre-toggle value, the marker is cleared, unbound.conf loads the python module again and Unbound
       listens on 53 and 853 as before; the proxy's own log says no address could be bound and the package log says it
       did not become ready;
@@ -2314,7 +2314,7 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         diagnostics = _diagnostics(vm)
         root = _config_xml(vm)
         toggle = _xml_text(root, "installedpackages/pfblockerngdns/config/pfb_dns") or ""
-        assert toggle == "", f"pfB-DNS was not turned off: {toggle!r}\n{diagnostics}"
+        assert toggle == "on", f"pfB-DNS was turned off: {toggle!r}\n{diagnostics}"
         assert after.service == "stopped" and after.ps == [], f"proxy left running: {after.service} {after.ps}"
         assert after.proxy_pid is None and after.daemon_pid is None, (after.proxy_pid, after.daemon_pid)
         assert after.resolver == before.resolver, (
@@ -2403,7 +2403,7 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
         assert state.service == "stopped" and state.ps == [], f"rc stop left a proxy: {state.service} {state.ps}"
 
         def rolled_back() -> bool:
-            return h.config_get(vm, CFG_PROXY) == "" and _capture(vm).marker == ""
+            return h.config_get(vm, CFG_PROXY) == "on" and _capture(vm).marker == ""
 
         with _decider_exits_at_every_start(vm):
             _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the boot start hook)")
@@ -2426,7 +2426,7 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
             toggle = h.config_get(vm, CFG_PROXY)
             diagnostics = _diagnostics(vm)
 
-        assert toggle == "", f"pfB-DNS did not stay off:\n{diagnostics}"
+        assert toggle == "on", f"pfB-DNS did not stay on:\n{diagnostics}"
         assert after.resolver == before.resolver, (
             f"Resolver after boot-check rollback:\n{after.resolver}\nbefore:\n{before.resolver}"
         )
@@ -2687,7 +2687,7 @@ def test_a_decider_that_exits_at_every_start_is_rolled_back_with_no_supervisor_l
       registered or taken out (an install's window: pfSense's stop_service() then does nothing), and the proxy started
       by the Resolver's start hook (services_unbound_configure(), as the install's resync restarts Unbound),
     When the real apply runs (pfb_trigger scope=dnsbl) and the proxy never becomes ready,
-    Then pfB-DNS is turned off, no supervisor or gateway runs and no pidfile is left (nothing keeps respawning), every
+    Then pfB-DNS stays on, no supervisor or gateway runs and no pidfile is left (nothing keeps respawning), every
       Resolver key equals its pre-toggle value and the snapshot marker is empty.
     """
     vm, before = rig.vm, rig.before
@@ -2703,7 +2703,7 @@ def test_a_decider_that_exits_at_every_start_is_rolled_back_with_no_supervisor_l
             after = _capture(vm)
             diagnostics = _diagnostics(vm)
             toggle = _xml_text(_config_xml(vm), "installedpackages/pfblockerngdns/config/pfb_dns") or ""
-            assert toggle == "", f"pfB-DNS was not turned off: {toggle!r}\n{diagnostics}"
+            assert toggle == "on", f"pfB-DNS was turned off: {toggle!r}\n{diagnostics}"
             assert not _alive(vm, supervisor), (
                 f"the hook's supervisor {supervisor} survived the rollback:\n{diagnostics}"
             )

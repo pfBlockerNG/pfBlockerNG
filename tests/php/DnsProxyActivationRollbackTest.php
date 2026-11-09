@@ -15,38 +15,39 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- a pfB-DNS activation whose proxy never becomes ready is rolled back, and the DNSBL that ran in Unbound
- * before keeps running there.
+ * issue #3515 -- a pfB-DNS activation whose proxy never becomes ready is rolled back and the Resolver is given back as it was;
+ * issue #3770 -- the pfB-DNS enable stays On after any failed activation, so nothing propagates by sync and the next Update retries.
  *
- * The owner's choice: a failed activation must leave the Resolver as it was, with the DNSBL module still loaded by Unbound
- * when DNSBL is on, and must say so; it must not claim success, leave filtering silently off, or retry in a loop. "Failed"
- * means the proxy did not publish its ready marker within the startup budget (a bind or initialisation failure after the
- * Resolver was already moved), whichever call started it: the reload's restart, the apply's start of a proxy that died, or
- * a restart from the installer.
+ * The owner's choice: a failed activation must leave the Resolver as it was and must say so; it must not claim success, and it
+ * must not turn pfB-DNS off (the setting is the admin's, not the rollback's: the status and the notices say the activation
+ * failed, and the next Update retries the takeover). "Failed" means the proxy did not publish its ready marker within the
+ * startup budget (a bind or initialisation failure after the Resolver was already moved), whichever call started it: the
+ * reload's restart, the apply's start of a proxy that died, or a restart from the installer.
  *
  * Contract pinned here, each as its own scenario:
- *   - the requested pfB-DNS toggle is turned Off (so the next apply does not enable it again), the proxy is stopped, the
- *     Resolver gets exactly its saved settings back, the DNSBL module goes back into Unbound iff DNSBL is on, unbound.conf
- *     is regenerated and Unbound restarted, the call reports failure and the operator is told;
- *   - nothing is waited on under the config lock, and the proxy is neither restarted again nor started again in the same
- *     apply (the toggle is Off, so the apply's own start finds nothing moved);
- *   - when the proxy cannot be stopped, or the config lock stays taken, the snapshot and the moved Resolver are kept as
- *     they are, nothing destructive runs, and the notice says recovery is needed: the rollback never claims success;
- *   - a proxy that does become ready is left alone: no toggle write, no stop, no notice;
+ *   - the stored pfB-DNS enable stays On (nothing writes it), the proxy is stopped, the Resolver gets exactly its saved settings
+ *     back, unbound.conf is regenerated and Unbound restarted, the call reports failure, the failure is recorded for the status
+ *     and the operator is told;
+ *   - nothing is waited on under the config lock, and the proxy is neither restarted again nor started again in the same apply
+ *     (the snapshot is consumed, so the apply's own start finds nothing moved);
+ *   - when the proxy cannot be stopped, or the config lock stays taken, the snapshot and the moved Resolver are kept as they
+ *     are, nothing destructive runs, and the notice says recovery is needed: the rollback never claims success;
+ *   - a proxy that does become ready is left alone: no stop, no notice, no failure record;
  *   - a restore that config.xml refuses, or that finds the proxy alive after its stop, leaves the moved Resolver served: the proxy
  *     is started again through its rc script, whether or not pfSense has a service entry for it (issue #3561).
  *
  * The same rollback, and the same restore, serve two later failures (owner, 2026-10): an unsafe Custom Options line
  * (`interface:`, `port:` or `include:`) the admin adds after the move rolls pfB-DNS back like a failed activation, the line
  * kept in the restored Custom Options and named in the one notice; and a DNS Resolver disabled while pfB-DNS fronts it makes
- * the next apply or tick stop pfB-DNS, restore the saved settings (the Resolver stays disabled), turn pfB-DNS off and say so
- * once, instead of leaving the proxy answering SERVFAIL for every allowed name.
+ * the next apply or tick stop pfB-DNS, restore the saved settings (the Resolver stays disabled) and say so once, instead of
+ * leaving the proxy answering SERVFAIL for every allowed name. pfB-DNS stays on in both.
  *
- * pfB-DNS is turned off only if config.xml takes the write that says so (pfSense's write_config() answers FALSE when it
- * refuses one and -1 when it did not write): a refused write is reported as a failure, this process holds the stored toggle
- * again, and nothing that follows the toggle (the proxy's stop, the restore, a notice that says "turned off") runs.
+ * The only config.xml write a failed activation makes is the restore's: one that config.xml refuses is a restore that did not
+ * happen, this process holds the stored settings again, and nothing says the Resolver was restored.
  */
 #[CoversFunction('pfb_dns_proxy_roll_back')]
+#[CoversFunction('pfb_dns_proxy_claim_failure')]
+#[CoversFunction('pfb_dns_proxy_stand_down')]
 #[CoversFunction('pfb_dns_proxy_confirm_ready')]
 #[CoversFunction('pfb_dns_proxy_ensure_running')]
 #[CoversFunction('pfb_dns_proxy_restart')]
@@ -347,8 +348,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Then the call reports failure ...
 		$this->assertFalse($ok, 'the activation failed');
 
-		// ... the requested toggle is Off, so the next apply does not enable it again ...
-		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		// ... pfB-DNS stays on (nothing wrote Off), so the next Update retries the takeover ...
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
 
 		// ... the Resolver has exactly its saved settings back ...
 		$this->assertResolverIsTheOriginal('rolled back');
@@ -374,9 +375,11 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$notices = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('did not become ready', $notices[0]['notice']);
-		$this->assertStringContainsString('turned off', $notices[0]['notice']);
+		$this->assertStringContainsString('pfB-DNS stays on', $notices[0]['notice']);
+		$this->assertStringContainsString('the next Update retries', $notices[0]['notice']);
+		$this->assertStringNotContainsString('turned off', $notices[0]['notice']);
 		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
-		$this->assertStringNotContainsString('DNSBL', $notices[0]['notice'], 'pfB-DNS was turned off, so DNSBL does not run: the notice says nothing about it');
+		$this->assertStringContainsString('DNSBL does not block until the activation succeeds', $notices[0]['notice']);
 		$this->assertSame(2, $notices[0]['priority']);
 		$this->assertStringContainsString('did not become ready', $this->pfbLog());
 	}
@@ -401,9 +404,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame(['start_service (no entry)', 'rc stop'], $this->proxyCalls);
 		$this->assertFalse(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'no supervisor is left to respawn the decider');
 
-		// ... and the Resolver is the original, pfB-DNS is off, and the operator is told it was restored
+		// ... and the Resolver is the original, pfB-DNS stays on, and the operator is told it was restored
 		$this->assertResolverIsTheOriginal('rolled back');
-		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
 		$notices = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
@@ -431,7 +434,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$ok = pfb_dns_proxy_ensure_running();
 
 		$this->assertFalse($ok, 'a gateway that published its marker cannot activate over a failed Unbound start');
-		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
 		$this->assertResolverIsTheOriginal('failed upstream activation rolled back');
 		$this->assertFalse(pfb_dns_proxy_running(), 'the failed activation leaves no live gateway child');
 		$this->assertFalse(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'the failed activation leaves no live supervisor');
@@ -453,7 +456,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		// Then the Resolver is the saved one, plain: neither the module nor the observer is left in it
 		$this->assertFalse($ok);
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertResolverIsTheOriginal('rolled back');
 		$this->assertFalse(config_path_enabled('unbound', 'python'), 'no python integration at all');
 		$this->assertNotContains(config_get_path('unbound/python_script'), ['pfb_unbound', 'pfb_upstream_observer']);
@@ -480,7 +483,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		pfb_reload_unbound('enabled', TRUE);
 
 		// Then the activation is rolled back, as above ...
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertResolverIsTheOriginal('rolled back');
 		$this->assertSame('', (string) config_get_path('unbound/python_script', ''));
 
@@ -506,7 +509,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		// Then the restart reports failure and the rollback ran
 		$this->assertFalse($ok);
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertResolverIsTheOriginal('rolled back');
 		$this->assertSame(['restart_service', 'rc stop'], $this->proxyCalls);
 	}
@@ -578,7 +581,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Then the restart reaches the service and the rollback, which reads config.xml afresh, stops the proxy through its rc
 		// script: the proxy is stopped and the Resolver has its saved settings back
 		$this->assertSame(['restart_service', 'rc stop'], $this->proxyCalls, 'the restart reached the service and the rollback\'s rc stop ran');
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertResolverIsTheOriginal('rolled back');
 	}
 
@@ -641,10 +644,10 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the apply goes on to its own start check once more, and the Resolver step asks for the move again
 		$again = pfb_dns_proxy_ensure_running();
 
-		// Then nothing starts the proxy: the toggle is Off and nothing is moved
+		// Then nothing starts the proxy: pfB-DNS stays on, but nothing is moved, and only the Resolver step takes the Resolver
 		$this->assertTrue($again, 'nothing is moved, so there is nothing to be ready');
 		$this->assertSame($calls, $this->proxyCalls, 'no start or restart after the rollback');
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertNull(pfb_dns_proxy_saved());
 	}
 
@@ -677,9 +680,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame('pfb_upstream_observer', config_get_path('unbound/python_script'), 'the module is not put into Unbound while the proxy still hosts it');
 		$this->assertSame($before, $this->startAttempts(), 'Unbound is not restarted over a proxy that still holds the Resolver\'s port');
 
-		// ... the requested toggle is Off, so the next apply retries the restore instead of enabling it again ...
-		$this->assertSame('', $this->toggleStored());
-		$this->assertContains('', $committed, 'Off was written to config.xml, not only held in memory');
+		// ... pfB-DNS stays on, and nothing wrote Off to config.xml, so the next Update retries the takeover ...
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertNotContains('', $committed, 'no write put Off in config.xml');
 
 		// ... and the operator is told that recovery is needed, not that the old integration is back
 		$joined = implode("\n", array_column($this->notices(), 'notice'));
@@ -851,7 +854,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Then the last notice names the state: the Resolver is moved aside for a proxy that is not ready
 		$texts = array_column($this->notices(), 'notice');
 		$this->assertStringContainsString('nothing answers DNS', (string) end($texts));
-		$this->assertStringContainsString('turned off', (string) end($texts));
+		$this->assertStringContainsString('pfB-DNS stays on', (string) end($texts));
 	}
 
 	public function testAConfigLockThatStaysTakenAbortsEverythingDestructive(): void
@@ -959,7 +962,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		// Then it is not ready after the budget, and the activation is rolled back: a crash-looping listener is no proxy
 		$this->assertFalse($ok);
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertResolverIsTheOriginal('rolled back');
 	}
 
@@ -1017,7 +1020,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	#[DataProvider('unsafeLines')]
-	public function testAnUnsafeLineAddedAfterTheMoveTurnsPfbDnsOffRestoresTheResolverAndKeepsTheLine(string $line): void
+	public function testAnUnsafeLineAddedAfterTheMoveRestoresTheResolverKeepsTheLineAndKeepsPfbDnsOn(string $line): void
 	{
 		// Given a moved Resolver with DNSBL on, and an admin who then adds an unsafe line to its Custom Options
 		$this->activate(TRUE);
@@ -1030,8 +1033,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the next apply runs
 		$changed = pfb_unbound_python('enabled', TRUE);
 
-		// Then pfB-DNS is off and the Resolver is back to its saved settings: the admin's line is kept, our block is gone
-		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		// Then the Resolver is back to its saved settings and pfB-DNS stays on: the admin's line is kept, our block is gone
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
 		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
 		$unbound = config_get_path('unbound');
 		unset($unbound['python'], $unbound['python_order'], $unbound['python_script']);
@@ -1056,31 +1059,37 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringContainsString($line, $notices[0]['notice']);
 		$this->assertStringContainsString('Custom Options', $notices[0]['notice']);
 		$this->assertStringContainsString('kept', $notices[0]['notice']);
-		$this->assertStringContainsString('turned off', $notices[0]['notice']);
+		$this->assertStringContainsString('pfB-DNS stays on', $notices[0]['notice']);
+		$this->assertStringContainsString('the next Update retries', $notices[0]['notice']);
+		$this->assertStringNotContainsString('turned off', $notices[0]['notice']);
 		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
 		$this->assertSame(2, $notices[0]['priority']);
 	}
 
-	public function testTheApplyAfterAnUnsafeLineRollbackRaisesNothingAndLeavesTheLine(): void
+	public function testTheApplyAfterAnUnsafeLineRollbackRefusesTheMoveAgainAndLeavesTheLine(): void
 	{
-		// Given an unsafe line that was rolled back
+		// Given an unsafe line that was rolled back, with pfB-DNS still on
 		$this->activate(TRUE);
 		$this->proxyServes();
 		$this->adminAppends('interface: 0.0.0.0@53');
 		pfb_unbound_python('enabled', TRUE);
-		$this->assertSame('', $this->toggleStored(), 'before: rolled back');
+		$this->assertSame('on', $this->toggleStored(), 'before: rolled back, and pfB-DNS stays on');
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: the Resolver is restored');
 		$calls = $this->proxyCalls;
 		$notices = count($this->notices());
 		$text = $this->customText();
 
-		// When the next apply runs
+		// When the next apply runs, which retries the takeover
 		pfb_unbound_python('enabled');
 
-		// Then nothing happens again: no second notice, no proxy call, the admin's text byte for byte
-		$this->assertCount($notices, $this->notices());
+		// Then the line still refuses the move, announced once in a notice that names it: nothing is moved or started, the admin's text byte for byte
+		$this->assertNull(pfb_dns_proxy_saved(), 'the Resolver stays unmoved while the line stands');
+		$all = $this->notices();
+		$this->assertCount($notices + 1, $all, 'the refusal is announced');
+		$this->assertStringContainsString('interface:', $all[array_key_last($all)]['notice']);
 		$this->assertSame($calls, $this->proxyCalls);
 		$this->assertSame($text, $this->customText());
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 	}
 
 	public function testALineThatIsNotUnsafeAddedAfterTheMoveLeavesPfbDnsRunning(): void
@@ -1113,7 +1122,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		pfb_unbound_python('disabled', TRUE);
 
 		// Then the Resolver is back with the line, plain: no python module or observer, and the notice does not mention DNSBL
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertNull(pfb_dns_proxy_saved());
 		$this->assertFalse(config_path_enabled('unbound', 'python'));
 		$this->assertSame(['do-ip6: no', 'prefetch: yes', 'server:', 'port: 5300'], $this->customLines());
@@ -1134,9 +1143,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the next apply runs
 		pfb_unbound_python('enabled', TRUE);
 
-		// Then pfB-DNS is off (the next apply retries the restore), the moved Resolver and its snapshot are kept, and the snapshot
+		// Then pfB-DNS stays on (the next apply retries, and finds the line again), the moved Resolver and its snapshot are kept, and the snapshot
 		// holds the admin's line so the retry keeps it too
-		$this->assertSame('', $this->toggleStored());
+		$this->assertSame('on', $this->toggleStored());
 		$saved = pfb_dns_proxy_saved();
 		$this->assertNotNull($saved, 'the snapshot is kept');
 		$this->assertStringContainsString('include: /tmp/extra.conf', (string) base64_decode($saved['custom_options']['value'], TRUE));
@@ -1148,7 +1157,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringNotContainsString('did not become ready', $joined, 'an unsafe line is no readiness failure');
 		$this->assertStringNotContainsString('nothing answers DNS', $joined, 'the proxy served until its stop');
 
-		// And once the proxy can be stopped, the next apply's ordinary restore puts the Resolver back with the line
+		// And once the proxy can be stopped, the next apply finds the line again, rolls back again and puts the Resolver back with the line
 		$this->survivesStop = FALSE;
 		pfb_unbound_python('enabled');
 		$this->assertNull(pfb_dns_proxy_saved());
@@ -1171,7 +1180,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	#[DataProvider('reservedListenPorts')]
-	public function testAListenPortSetOnTheMovedResolverRollsPfbDnsBackAndKeepsThatPort(string $port, bool $dnsbl): void
+	public function testAListenPortSetOnTheMovedResolverRestoresTheResolverKeepsThatPortAndKeepsPfbDnsOn(string $port, bool $dnsbl): void
 	{
 		// Given a moved Resolver with DNSBL on or off, a proxy that serves, and an admin who then sets its Listen Port to the proxy's own port
 		$this->activate($dnsbl);
@@ -1188,8 +1197,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the next apply runs
 		$changed = pfb_unbound_python($dnsbl ? 'enabled' : 'disabled', TRUE);
 
-		// Then pfB-DNS is off and the proxy is stopped once: every saved key is back, and the Listen Port is the admin's
-		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		// Then the proxy is stopped once and pfB-DNS stays on: every saved key is back, and the Listen Port is the admin's
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
 		$this->assertSame(['rc stop'], $this->proxyCalls);
 		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
 		$expected = self::originalResolver();
@@ -1215,23 +1224,31 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('Listen Port', $notices[0]['notice']);
 		$this->assertStringContainsString($port, $notices[0]['notice']);
-		$this->assertStringContainsString('turned off', $notices[0]['notice']);
+		$this->assertStringContainsString('pfB-DNS stays on', $notices[0]['notice']);
+		$this->assertStringContainsString('the next Update retries', $notices[0]['notice']);
+		$this->assertStringNotContainsString('turned off', $notices[0]['notice']);
 		$this->assertStringContainsString('DNS Resolver was restored', $notices[0]['notice']);
 		$this->assertStringNotContainsString('Custom Options', $notices[0]['notice']);
 		$this->assertStringNotContainsString('kept', $notices[0]['notice']);
-		// pfB-DNS was turned off, so DNSBL does not run (it runs only through pfB-DNS): the notice says nothing about it, DNSBL on or off
-		$this->assertStringNotContainsString('DNSBL', $notices[0]['notice']);
+		if ($dnsbl) {
+			$this->assertStringContainsString('DNSBL does not block until the activation succeeds', $notices[0]['notice']);
+		} else {
+			$this->assertStringNotContainsString('DNSBL', $notices[0]['notice']);
+		}
 		$this->assertSame(2, $notices[0]['priority']);
 
-		// When the next apply runs again, and a readiness check of the proxy follows
+		// When the next apply runs again (the takeover is retried), and a readiness check of the proxy follows
 		$calls = $this->proxyCalls;
 		$this->assertTrue(pfb_dns_proxy_ensure_running(), 'nothing is moved, so there is nothing to wait for');
 		pfb_unbound_python($dnsbl ? 'enabled' : 'disabled');
 
-		// Then nothing starts or restarts the proxy again, pfB-DNS stays off, and the operator is not told a second time
+		// Then the Listen Port still refuses the move, in a second notice that names it: nothing starts the proxy and pfB-DNS stays on
 		$this->assertSame($calls, $this->proxyCalls, 'no resurrection of the proxy');
-		$this->assertSame('', $this->toggleStored());
-		$this->assertCount(1, $this->notices());
+		$this->assertSame('on', $this->toggleStored());
+		$all = $this->notices();
+		$this->assertCount(2, $all, 'the retry is refused and announced once');
+		$this->assertStringContainsString("Listen Port is {$port}", $all[1]['notice']);
+		$this->assertNull(pfb_dns_proxy_saved(), 'the Resolver stays unmoved');
 		$this->assertSame($port, config_get_path('unbound/port'));
 	}
 
@@ -1247,18 +1264,18 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the next apply runs
 		pfb_unbound_python('enabled', TRUE);
 
-		// Then pfB-DNS is off, the moved Resolver and its snapshot are kept as they were, and the operator is told recovery is needed
-		$this->assertSame('', $this->toggleStored());
+		// Then pfB-DNS stays on, the moved Resolver and its snapshot are kept as they were, and the operator is told recovery is needed
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
 		$this->assertSame($moved, self::sorted(config_get_path('unbound')), 'the moved Resolver is untouched');
 		$joined = implode("\n", array_column($this->notices(), 'notice'));
 		$this->assertStringContainsString('could not be restored', $joined);
 		$this->assertStringNotContainsString('DNS Resolver was restored', $joined, 'no claim that the rollback worked');
 
-		// And once the proxy can be stopped, the next apply restores the saved keys and keeps the Listen Port
+		// And once the proxy can be stopped, the next apply finds the Listen Port again, rolls back again, restores the saved keys and keeps the Listen Port
 		$this->survivesStop = FALSE;
 		pfb_unbound_python('enabled');
-		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed by the ordinary restore');
+		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed by the retried rollback');
 		$this->assertSame('lan,opt1', config_get_path('unbound/active_interface'));
 		$this->assertSame('5353', config_get_path('unbound/port'));
 	}
@@ -1386,9 +1403,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the next apply runs
 		$changed = pfb_unbound_python('');
 
-		// Then pfB-DNS is stopped and off, the Resolver has its saved settings and stays disabled, once and announced once
+		// Then the proxy is stopped and pfB-DNS stays on, the Resolver has its saved settings and stays disabled, once and announced once
 		$this->assertTrue($changed);
-		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
 		$this->assertSame(['rc stop'], $this->proxyCalls, 'the proxy is stopped');
 		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
 		$this->assertFalse(config_path_enabled('unbound'), 'the Resolver stays disabled');
@@ -1401,7 +1418,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$notices = $this->notices();
 		$this->assertCount(1, $notices);
 		$this->assertStringContainsString('DNS Resolver is disabled', $notices[0]['notice']);
-		$this->assertStringContainsString('turned off', $notices[0]['notice']);
+		$this->assertStringContainsString('pfB-DNS stays on', $notices[0]['notice']);
+		$this->assertStringContainsString('the next Update retries', $notices[0]['notice']);
+		$this->assertStringNotContainsString('turned off', $notices[0]['notice']);
 		$this->assertStringContainsString('restored', $notices[0]['notice']);
 		$this->assertSame(2, $notices[0]['priority']);
 	}
@@ -1413,7 +1432,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->proxyServes();
 		$this->disableTheResolver();
 		pfb_unbound_python('');
-		$this->assertSame('', $this->toggleStored(), 'before: stood down');
+		$this->assertSame('on', $this->toggleStored(), 'before: stood down, and pfB-DNS stays on');
 		$calls = $this->proxyCalls;
 
 		// When the next apply runs
@@ -1470,19 +1489,21 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the next apply runs
 		pfb_unbound_python('');
 
-		// Then pfB-DNS is off and the snapshot is kept, and the notices say the restore is pending
-		$this->assertSame('', $this->toggleStored());
+		// Then pfB-DNS stays on and the snapshot is kept, and the notices say the restore is pending
+		$this->assertSame('on', $this->toggleStored());
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
 		$joined = implode("\n", array_column($this->notices(), 'notice'));
-		$this->assertStringContainsString('turned off', $joined);
+		$this->assertStringContainsString('pfB-DNS stays on', $joined);
 		$this->assertStringNotContainsString('DNS Resolver was restored', $joined, 'no claim that the restore worked');
 
-		// And once the proxy can be stopped, the next apply restores without a second stand-down notice
+		// And once the proxy can be stopped, the next apply stands down again and restores, announcing the restore once more
 		$notices = count($this->notices());
 		$this->survivesStop = FALSE;
 		pfb_unbound_python('');
 		$this->assertNull(pfb_dns_proxy_saved());
-		$this->assertCount($notices, $this->notices());
+		$all = $this->notices();
+		$this->assertCount($notices + 1, $all, 'the finished restore is announced');
+		$this->assertStringContainsString('restored to its previous settings', $all[array_key_last($all)]['notice']);
 	}
 
 	public function testAStandDownWhileConfigXmlIsLockedChangesNothing(): void
@@ -1619,7 +1640,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 		// Then the rollback retried the lock once, after the save released it, and put the Resolver back
 		$this->assertFalse($ok, 'the activation failed');
-		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
 		$this->assertResolverIsTheOriginal('rolled back');
 	}
 
@@ -1666,35 +1687,16 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// G -- config.xml does not take the write that turns pfB-DNS off or that keeps the admin's line
+	// G -- config.xml does not take the restore's write or the write that keeps the admin's line
 	// -----------------------------------------------------------------------
 
 	#[DataProvider('refusedWrites')]
-	public function testATurnOffWhoseWriteIsRefusedIsNotReportedAndLeavesTheToggleAsStored(mixed $answer): void
+	public function testARollbackWhoseRestoreWriteIsRefusedKeepsTheMovedResolverAndPfbDnsOnAndNeverClaimsARestore(mixed $answer): void
 	{
-		// Given pfB-DNS on with the Resolver moved, and a config.xml that does not take the write
-		$this->activate(TRUE);
-		$this->configXmlOnDisk($answer);
-		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
-
-		// When pfB-DNS is turned off
-		$turnedOff = pfb_dns_proxy_turn_off('the proxy did not become ready');
-
-		// Then it is not reported as turned off: the toggle is On in config.xml, and this process holds that stored toggle
-		$this->assertFalse($turnedOff);
-		$this->assertSame('on', $this->onDisk(self::TOGGLE), 'config.xml still requests pfB-DNS');
-		$this->assertSame('on', $this->toggleStored(), 'and the copy held here is the stored one: nothing written next puts Off in config.xml half way');
-		$this->assertFalse(!empty($GLOBALS['pfb_test_lock_held']), 'the config lock is released');
-	}
-
-	#[DataProvider('refusedWrites')]
-	public function testARollbackWhoseTurnOffWriteIsRefusedChangesNothingAndNeverSaysPfbDnsWasTurnedOff(mixed $answer): void
-	{
-		// Given a moved Resolver and a proxy that never serves, and a config.xml that refuses the write that turns pfB-DNS off
-		// (and takes every other: a rollback that went on would write the restored Resolver with pfB-DNS still On)
+		// Given a moved Resolver and a proxy that never serves, and a config.xml that refuses the restore's write (and takes every other)
 		$this->activate(TRUE);
 		$this->proxyLivesButNeverServes();
-		$this->configXmlOnDisk($answer, 'pfB-DNS turned off');
+		$this->configXmlOnDisk($answer, 'Restored the DNS Resolver');
 		$snapshot = (string) config_get_path(self::SAVED, '');
 		$moved = config_get_path('unbound');
 		$this->assertSame($moved, $this->onDisk('unbound'), 'before: config.xml holds the moved Resolver');
@@ -1702,26 +1704,24 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the activation is rolled back
 		$ok = pfb_dns_proxy_roll_back();
 
-		// Then the rollback says it did not work, and nothing was stopped, restored or written behind that refusal
+		// Then the rollback says it did not work: config.xml keeps pfB-DNS On, the snapshot and the moved Resolver, and this process holds the stored copy
 		$this->assertFalse($ok);
-		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls'], 'the refused write is the only write: no restore persists pfB-DNS On beside the old Resolver');
 		$this->assertSame('on', $this->onDisk(self::TOGGLE), 'config.xml still requests pfB-DNS');
 		$this->assertSame($snapshot, $this->onDisk(self::SAVED), 'and keeps the snapshot');
 		$this->assertSame($moved, $this->onDisk('unbound'), 'and the moved Resolver');
 		$this->assertSame($snapshot, (string) config_get_path(self::SAVED, ''), 'the copy held here is the stored one');
-		$this->assertNotContains('rc stop', $this->proxyCalls, 'the proxy that serves the moved Resolver is not stopped');
-		$this->assertNotContains('stop_service', $this->proxyCalls, 'nor through pfSense\'s stop_service()');
+		$this->assertContains('rc start', $this->proxyCalls, 'the proxy that serves the moved Resolver is brought back');
 
-		// And the operator is told pfB-DNS could not be turned off, never that it was
+		// And the operator is told the Resolver could not be restored and that pfB-DNS stays on, never that it was turned off or restored
 		$joined = implode("\n", array_column($this->notices(), 'notice'));
-		$this->assertStringContainsString('could not be turned off', $joined);
-		$this->assertStringContainsString('could not be written', $joined);
-		$this->assertStringNotContainsString('was turned off', $joined);
+		$this->assertStringContainsString('could not be restored', $joined);
+		$this->assertStringContainsString('pfB-DNS stays on', $joined);
+		$this->assertStringNotContainsString('turned off', $joined);
 		$this->assertStringNotContainsString('DNS Resolver was restored', $joined);
 	}
 
 	#[DataProvider('refusedWrites')]
-	public function testAStandDownWhoseWritesAreRefusedClaimsNothingAndConfigXmlStillHoldsTheMovedResolver(mixed $answer): void
+	public function testAStandDownWhoseWritesAreRefusedKeepsPfbDnsOnAndTheMovedResolverAndSaysTheRestoreCouldNotBeDone(mixed $answer): void
 	{
 		// Given pfB-DNS on with the Resolver moved, then disabled by the admin, and a config.xml that refuses every write
 		$this->activate(TRUE);
@@ -1733,23 +1733,24 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the next apply runs
 		pfb_unbound_python('');
 
-		// Then config.xml is as the admin left it: pfB-DNS On and the snapshot kept, and no notice says otherwise
+		// Then config.xml is as the admin left it: pfB-DNS On and the snapshot kept, and the notice says the restore could not be done
 		$this->assertSame('on', $this->onDisk(self::TOGGLE));
 		$this->assertSame($snapshot, $this->onDisk(self::SAVED));
 		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'the Resolver is still moved');
 		$this->assertSame('on', $this->toggleStored(), 'and this process holds the stored toggle');
 		$joined = implode("\n", array_column($this->notices(), 'notice'));
-		$this->assertStringNotContainsString('was turned off', $joined, 'nothing says pfB-DNS was turned off');
+		$this->assertStringContainsString('could not be restored yet', $joined);
+		$this->assertStringContainsString('pfB-DNS stays on', $joined);
+		$this->assertStringNotContainsString('turned off', $joined, 'nothing says pfB-DNS was turned off');
 		$this->assertStringNotContainsString('DNS Resolver was restored', $joined, 'nothing says the Resolver was restored');
 		$this->assertStringNotContainsString('restored to its previous settings', $joined);
-		$this->assertStringContainsString('could not be turned off', $this->pfbLog(), 'the log says pfB-DNS could not be turned off, so the retry is understood');
 	}
 
 	#[DataProvider('refusedWrites')]
 	public function testAnUnsafeLineWhoseKeepWriteIsRefusedIsNotRolledBackSoTheAdminsLineSurvives(mixed $answer): void
 	{
 		// Given a moved Resolver, an admin who then added an unsafe line, and a config.xml that refuses the write that keeps
-		// that line in the saved settings (it takes every other: the rollback would turn pfB-DNS off and restore the old text)
+		// that line in the saved settings (it takes every other: the rollback would restore the old text and drop the line)
 		$this->activate(TRUE);
 		$this->proxyServes();
 		$this->adminAppends('port: 5300');
@@ -1761,7 +1762,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the next apply runs
 		pfb_unbound_python('enabled', TRUE);
 
-		// Then the admin's line was not dropped by a restore from a snapshot that does not hold it, and pfB-DNS was not turned off
+		// Then the admin's line was not dropped by a restore from a snapshot that does not hold it, and nothing was rolled back
 		$this->assertSame('on', $this->onDisk(self::TOGGLE), 'pfB-DNS is still requested');
 		$this->assertSame($snapshot, $this->onDisk(self::SAVED), 'the snapshot is kept');
 		$this->assertSame($text, $this->customText(), 'the Resolver\'s Custom Options are as the admin saved them');
@@ -1769,6 +1770,259 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$joined = implode("\n", array_column($this->notices(), 'notice'));
 		$this->assertStringContainsString('could not be written', $joined, 'the operator is told why nothing was changed');
 		$this->assertStringNotContainsString('was turned off', $joined);
+	}
+
+	// -----------------------------------------------------------------------
+	// H -- a failed activation keeps pfB-DNS on, says so, and the next Update retries it (issue #3770, owner decision of 2026-11-09)
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{string}> the ways an activation fails: the Resolver is restored and pfB-DNS stays On in each */
+	public static function failedActivations(): array
+	{
+		return [
+			'the proxy does not become ready' => ['not_ready'],
+			'an unsafe Custom Options line' => ['unsafe_line'],
+			'a Listen Port on a proxy port' => ['listen_port'],
+			'the Resolver is disabled' => ['stand_down'],
+		];
+	}
+
+	/** The failure the status and the notices speak of: one line, why the last activation failed; NULL when none is on record. */
+	private function failureRecord(): ?string
+	{
+		$text = @file_get_contents($GLOBALS['pfb']['dns_proxy_activation_failed']);
+		return $text === FALSE ? NULL : rtrim($text, "\n");
+	}
+
+	/**
+	 * What the next sync carries of the pfB-DNS enable, and the digest of this node's whole policy.
+	 *
+	 * @return array{0:string,1:string}
+	 */
+	private function syncCarries(): array
+	{
+		$projection = pfb_sync_policy_projection(array_map('pfb_sync_persisted_shape', pfb_sync_stored_sections()));
+		return [(string) ($projection[self::TOGGLE] ?? 'absent'), pfb_sync_policy_current_digest()];
+	}
+
+	/** Fails the activation of a moved Resolver the way $trigger says: a proxy that never serves, or what the admin did to the Resolver after the move. */
+	private function failTheActivation(string $trigger): void
+	{
+		if ($trigger !== 'not_ready') {
+			$this->proxyServes();
+		}
+		match ($trigger) {
+			'unsafe_line' => $this->adminAppends('interface: 0.0.0.0@53'),
+			'listen_port' => config_set_path('unbound/port', '5353'),
+			'stand_down' => $this->disableTheResolver(),
+			default => NULL,
+		};
+		// What the admin saved is what config.xml holds: a recovery reads it afresh under its lock
+		$this->configXmlOnDisk();
+		match ($trigger) {
+			'not_ready' => $this->assertFalse(pfb_dns_proxy_ensure_running(), 'the proxy never serves'),
+			'stand_down' => pfb_unbound_python(''),
+			default => pfb_unbound_python('enabled', TRUE),
+		};
+	}
+
+	/** The admin corrects what made the activation fail, where there is something of theirs to correct, and saves it. */
+	private function correctTheCause(string $trigger): void
+	{
+		match ($trigger) {
+			'unsafe_line' => config_set_path('unbound/custom_options', base64_encode("do-ip6: no\nprefetch: yes")),
+			'listen_port' => config_set_path('unbound/port', '53'),
+			'stand_down' => config_set_path('unbound/enable', ''),
+			default => NULL,
+		};
+		$this->configXmlOnDisk();
+	}
+
+	#[DataProvider('failedActivations')]
+	public function testAFailedActivationRestoresTheResolverButKeepsPfbDnsOnAndNothingChangesForTheNextSync(string $trigger): void
+	{
+		// Given pfB-DNS on with DNSBL on and the Resolver moved, config.xml as a file, and what the next sync carries
+		$this->activate(TRUE);
+		$this->configXmlOnDisk();
+		$carried = $this->syncCarries();
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is on');
+		$this->assertSame('on', $carried[0], 'before: the next sync carries pfB-DNS On');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the Resolver is moved');
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+
+		// When the activation fails
+		$this->failTheActivation($trigger);
+
+		// Then the Resolver is restored: the snapshot is consumed, our block is gone and it listens on its own interfaces again ...
+		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
+		$this->assertFalse(pfb_dns_proxy_block_present(), 'our block is gone');
+		$this->assertSame('lan,opt1', config_get_path('unbound/active_interface'), 'the Resolver is back on its own interfaces');
+
+		// ... pfB-DNS is still On, in memory and in config.xml, and no write turned it off ...
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns'));
+		$this->assertSame('on', $this->onDisk(self::TOGGLE), 'config.xml still requests pfB-DNS');
+		$turnedOff = array_filter($GLOBALS['pfb_test_write_config_calls'], static fn (string $description): bool => str_contains($description, 'pfB-DNS turned off'));
+		$this->assertSame([], array_values($turnedOff), 'no write turned pfB-DNS off');
+
+		// ... so what the next sync carries is what it carried before: the enable's leaf and the digest of the whole policy
+		$this->assertSame($carried, $this->syncCarries(), 'the rollback changed nothing a sync carries');
+	}
+
+	#[DataProvider('failedActivations')]
+	public function testAFailedActivationIsRecordedAndSaidToHaveFailedByTheStatusAndTheNotice(string $trigger): void
+	{
+		// Given a moved Resolver with DNSBL on, and no failure on record
+		$this->activate(TRUE);
+		$this->assertNull($this->failureRecord(), 'before: no activation has failed');
+
+		// When the activation fails
+		$this->failTheActivation($trigger);
+
+		// Then the reason is on record, and the status names it, says that pfB-DNS stays on and that the next Update retries
+		$reason = $this->failureRecord();
+		$this->assertNotNull($reason, 'the failure is on record');
+		$this->assertNotSame('', $reason);
+		pfb_global();
+		$status = pfb_dns_status();
+		$this->assertStringStartsWith("Activation failed: {$reason}", $status['mode']);
+		$this->assertStringContainsString('pfB-DNS stays on', $status['mode']);
+		$this->assertStringContainsString('DNSBL does not block until pfB-DNS is active', $status['mode']);
+		$this->assertStringEndsWith('The next Update retries', $status['mode']);
+		$this->assertFalse($status['active'], 'nothing is moved, so pfB-DNS is not active');
+
+		// ... and the notice says the same: the activation failed, pfB-DNS stays on, the next Update retries, DNSBL waits for it
+		$rollback = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
+		$this->assertNotEmpty($rollback, 'the operator is told');
+		$text = $rollback[array_key_last($rollback)]['notice'];
+		$this->assertStringContainsString('activation failed', $text);
+		$this->assertStringContainsString($reason, $text);
+		$this->assertStringContainsString('pfB-DNS stays on and the next Update retries', $text);
+		$this->assertStringContainsString('DNSBL does not block until the activation succeeds', $text);
+		$this->assertStringNotContainsString('turned off', $text);
+		$this->assertStringNotContainsString('turn pfB-DNS on again', $text);
+	}
+
+	#[DataProvider('failedActivations')]
+	public function testTheNextUpdateRetriesTheTakeoverAndMovesTheResolverOnceTheCauseIsGone(string $trigger): void
+	{
+		// Given a failed activation: the Resolver is restored, pfB-DNS stays on, and the failure is on record
+		$this->activate(TRUE);
+		$this->failTheActivation($trigger);
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: the Resolver is restored');
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS stays on');
+		$this->assertNotNull($this->failureRecord(), 'before: the failure is on record');
+
+		// When the next Update applies with the cause as it was
+		pfb_unbound_python('enabled');
+
+		// Then the takeover is tried again: a proxy that merely was not ready moves the Resolver again; a cause that stands
+		// (the line, the port, the disabled Resolver) keeps it unmoved and the failure on record
+		$standing = $trigger !== 'not_ready';
+		$this->assertSame(!$standing, pfb_dns_proxy_saved() !== NULL, $standing ? 'the cause still keeps the Resolver unmoved' : 'the Resolver is moved again');
+		if ($standing) {
+			$this->assertNotNull($this->failureRecord(), 'the failure stays on record while its cause stands');
+
+			// When the admin corrects the cause and the next Update applies
+			$this->correctTheCause($trigger);
+			pfb_unbound_python('enabled');
+		}
+
+		// Then the Resolver is moved again, with our block, and the failure on record is ended by the takeover that goes ahead
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the takeover moved the Resolver again');
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
+		$this->assertTrue(pfb_dns_proxy_block_present(), 'with our block');
+		$this->assertNull($this->failureRecord(), 'a takeover that goes ahead ends the failure on record');
+		$this->assertSame('on', $this->toggleStored());
+	}
+
+	#[DataProvider('failedActivations')]
+	public function testTurningPfbDnsOffAfterAFailedActivationEndsTheFailureOnRecord(string $trigger): void
+	{
+		// Given a failed activation with the failure on record
+		$this->activate(TRUE);
+		$this->failTheActivation($trigger);
+		$this->assertNotNull($this->failureRecord(), 'before: the failure is on record');
+
+		// When the admin turns pfB-DNS off and the next apply runs
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		$this->configXmlOnDisk();
+		pfb_unbound_python('enabled');
+
+		// Then no failure is on record and the status says pfB-DNS is off
+		$this->assertNull($this->failureRecord(), 'turning pfB-DNS off ends the failed activation');
+		pfb_global();
+		$this->assertSame('Off: the DNS Resolver serves clients itself', pfb_dns_status()['mode']);
+	}
+
+	public function testASuccessfulActivationLeavesNoFailureOnRecordAndTheStatusSaysSo(): void
+	{
+		// Given a first activation whose proxy serves once started
+		$this->activate(TRUE);
+		$this->behaviour = 'serves';
+
+		// When the apply starts it and waits for it
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+
+		// Then no failure is on record and the status shows a working proxy
+		$this->assertNull($this->failureRecord());
+		pfb_global();
+		$this->assertSame('On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else', pfb_dns_status()['mode']);
+		$this->assertSame('on', $this->toggleStored());
+	}
+
+	public function testTurningPfbDnsOffRestoresTheResolverAndLeavesNoFailureOnRecord(): void
+	{
+		// Given a moved Resolver whose proxy serves
+		$this->activate(TRUE);
+		$this->proxyServes();
+
+		// When the admin turns pfB-DNS off and the next apply runs
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		pfb_unbound_python('enabled');
+
+		// Then the Resolver is back as it was, no failure is on record, and the status says pfB-DNS is off
+		$this->assertResolverIsTheOriginal('turned off by the admin');
+		$this->assertNull($this->failureRecord());
+		pfb_global();
+		$this->assertSame('Off: the DNS Resolver serves clients itself', pfb_dns_status()['mode']);
+	}
+
+	public function testARestoreThatCouldNotFinishKeepsPfbDnsOnAndTheStatusNamesTheFailureAndThePendingRestore(): void
+	{
+		// Given a proxy that never serves and survives its stop: the restore cannot finish, so the Resolver stays moved
+		$this->activate(TRUE);
+		$this->survivesStop = TRUE;
+		$this->assertFalse(pfb_dns_proxy_ensure_running(), 'the activation failed');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the Resolver is still moved');
+
+		// Then pfB-DNS stays on, the failure is on record, and the status names it with the pending restore
+		$this->assertSame('on', $this->toggleStored());
+		$reason = $this->failureRecord();
+		$this->assertNotNull($reason, 'the failure is on record');
+		pfb_global();
+		$this->assertSame(
+			"Activation failed: {$reason}. The DNS Resolver restore is pending: see the notices. The next Update retries",
+			pfb_dns_status()['mode']
+		);
+	}
+
+	public function testAProxyThatServesAfterAFailedRestoreEndsTheFailureOnRecord(): void
+	{
+		// Given the failed restore above: the failure is on record and the Resolver is still moved
+		$this->activate(TRUE);
+		$this->survivesStop = TRUE;
+		$this->assertFalse(pfb_dns_proxy_ensure_running(), 'the activation failed');
+		$this->assertNotNull($this->failureRecord(), 'before: the failure is on record');
+
+		// When the proxy serves and the next confirmation finds it ready
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$this->assertTrue(pfb_dns_proxy_confirm_ready());
+
+		// Then the failure is no longer on record, and the status shows a working proxy
+		$this->assertNull($this->failureRecord());
+		pfb_global();
+		$this->assertSame('On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else', pfb_dns_status()['mode']);
 	}
 
 	// -----------------------------------------------------------------------
@@ -1800,10 +2054,10 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		})(['pfblockerng.inc', 'dns_check', $size]);
 	}
 
-	/** What a rollback leaves: pfB-DNS off, the saved Resolver back, the startup notice then the rollback notice, the proxy stopped and never started. */
+	/** What a rollback leaves: pfB-DNS still on, the saved Resolver back, the startup notice then the rollback notice, the proxy stopped and never started. */
 	private function assertRolledBackWithNotices(string $why): void
 	{
-		$this->assertSame('', $this->toggleStored(), "{$why}: pfB-DNS is turned off");
+		$this->assertSame('on', $this->toggleStored(), "{$why}: pfB-DNS stays on");
 		$this->assertResolverIsTheOriginal($why);
 		$this->assertSame(['pfBlockerNG DNS Proxy startup', 'pfBlockerNG DNS Proxy'], array_column($this->notices(), 'id'), "{$why}: the startup notice, then the rollback notice");
 		$rollback = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
@@ -2092,21 +2346,43 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	public function testAFailedRollbackThatCannotStopTheProxyIsRetriedByAFreshRecoveryWhichRestoresTheResolver(): void
 	{
-		// Given a rollback whose proxy survives its stop: the snapshot is kept and Off is stored
+		// Given a rollback whose proxy survives its stop: the snapshot is kept and pfB-DNS stays on
 		$this->activate(TRUE);
 		$this->survivesStop = TRUE;
 		$this->proxyLivesButNeverServes();
 		$this->configXmlOnDisk();
 		$this->assertFalse(pfb_dns_proxy_roll_back(), 'before: the first attempt cannot finish');
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is kept');
-		$this->assertSame('', $this->toggleStored(), 'before: Off is stored');
+		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS stays on');
 
-		// When the proxy stops on the next, fresh attempt
+		// When the proxy stops on the next, fresh attempt, and the one the rc script brought back for the moved Resolver still never serves
 		$this->survivesStop = FALSE;
+		$this->proxyLivesButNeverServes();
 		$this->assertTrue(pfb_dns_proxy_roll_back(), 'the fresh attempt restores the Resolver');
 
 		// Then the Resolver is restored and the snapshot consumed
 		$this->assertResolverIsTheOriginal('retried');
+	}
+
+	public function testAFailedRollbackWhoseProxyThenServesIsLeftAloneByAFreshRecovery(): void
+	{
+		// Given a rollback whose proxy survived its stop: the snapshot is kept and pfB-DNS stays on
+		$this->activate(TRUE);
+		$this->survivesStop = TRUE;
+		$this->proxyLivesButNeverServes();
+		$this->assertFalse(pfb_dns_proxy_roll_back(), 'before: the first attempt cannot finish');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is kept');
+
+		// When the proxy serves by the time a fresh recovery wins the guard
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$ok = pfb_dns_proxy_roll_back();
+
+		// Then the activation stands: nothing is restored, pfB-DNS stays on, and the Resolver stays moved for the proxy that serves it
+		$this->assertFalse($ok);
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the proxy still serves');
 	}
 
 	public function testAnOperationLockHeldElsewhereStopsTheRecoveryBeforeAnyWriteStopOrRestore(): void
@@ -2203,7 +2479,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'on'));
 	}
 
-	public function testATurnOffAskedToRetireASnapshotAnotherProcessReplacedWritesNothingAndSaysSo(): void
+	public function testAClaimAskedToRetireASnapshotAnotherProcessReplacedIsNullAndRecordsNothing(): void
 	{
 		// Given the snapshot A this process holds, and config.xml on which another process has stored B
 		$this->activate(TRUE);
@@ -2213,17 +2489,18 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->diskWrites(self::SAVED, $b);
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 
-		// When the turn-off asked to retire A runs
-		$turned = pfb_dns_proxy_turn_off('the test', $a);
+		// When the claim asked to retire A runs
+		$claimed = pfb_dns_proxy_claim_failure('the test', $a);
 
-		// Then nothing is written: B is not this recovery's to retire
-		$this->assertNull($turned);
+		// Then nothing is written or recorded: B is not this recovery's to retire
+		$this->assertNull($claimed);
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertNull($this->failureRecord());
 		$this->assertSame($b, (string) $this->onDisk(self::SAVED, ''));
 		$this->assertSame('on', (string) $this->onDisk(self::TOGGLE, ''));
 	}
 
-	public function testATurnOffWithNoOwnershipAndNoRecoveryToDoIsNullAndWritesNothing(): void
+	public function testAClaimWithNoOwnershipAndNoRecoveryToDoIsNullAndRecordsNothing(): void
 	{
 		// Given config.xml and this process agree that the Resolver is restored: no snapshot and no block of ours
 		$this->activate(TRUE);
@@ -2232,43 +2509,48 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$GLOBALS['config'] = $this->disk;
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 
-		// When a turn-off runs
-		$turned = pfb_dns_proxy_turn_off('the test');
+		// When a claim runs
+		$claimed = pfb_dns_proxy_claim_failure('the test');
 
-		// Then there is nothing to turn off: NULL, and nothing is written
-		$this->assertNull($turned);
+		// Then there is nothing to recover: NULL, nothing is written and no failure is recorded
+		$this->assertNull($claimed);
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertNull($this->failureRecord());
 		$this->assertSame('', $this->onDisk(self::TOGGLE, 'missing'));
 	}
 
-	public function testATurnOffThatIsPersistedIsTrueAndTheToggleIsOffOnDisk(): void
+	public function testAClaimOnABoxStillOwnedByPfbDnsIsTrueRecordsWhyAndWritesNothing(): void
 	{
 		// Given a box still owned by pfB-DNS: the snapshot is stored and the Resolver moved
 		$this->activate(TRUE);
 		$this->configXmlOnDisk();
+		$GLOBALS['pfb_test_write_config_calls'] = [];
 
-		// When the turn-off writes config.xml
-		$this->assertTrue(pfb_dns_proxy_turn_off('the test'));
+		// When the failure is claimed
+		$this->assertTrue(pfb_dns_proxy_claim_failure('the test'));
 
-		// Then the toggle is Off on disk, and the snapshot is still there for the restore
-		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'on'));
+		// Then the failure is recorded with its reason, pfB-DNS is still On on disk, the snapshot is still there for the restore, and nothing was written
+		$this->assertSame('the test', $this->failureRecord());
+		$this->assertSame('on', (string) $this->onDisk(self::TOGGLE, 'missing'));
 		$this->assertNotNull(pfb_dns_proxy_saved());
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'the claim writes nothing to config.xml');
+		$this->assertFalse(!empty($GLOBALS['pfb_test_lock_held']), 'the config lock is released');
 	}
 
-	#[DataProvider('refusedWrites')]
-	public function testATurnOffWhoseWriteIsRefusedIsFalseAndTheStoredSnapshotAndToggleAreKept(mixed $answer): void
+	public function testAClaimWhoseConfigLockStaysTakenIsFalseAndRecordsNothing(): void
 	{
-		// Given a box still owned by pfB-DNS, and config.xml that refuses the write that turns it off
+		// Given a box still owned by pfB-DNS, and another process saving config.xml for as long as the claim tries
 		$this->activate(TRUE);
-		$this->configXmlOnDisk($answer);
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 
-		// When the turn-off runs
-		$this->assertFalse(pfb_dns_proxy_turn_off('the test'));
+		// When the failure is claimed
+		$claimed = pfb_dns_proxy_claim_failure('the test');
 
-		// Then the snapshot and the stored toggle are as they were
+		// Then it is not claimed, nothing is recorded, and the snapshot and the stored toggle are as they were
+		$this->assertFalse($claimed);
+		$this->assertNull($this->failureRecord());
 		$this->assertNotNull(pfb_dns_proxy_saved());
 		$this->assertSame('on', $this->toggleStored());
-		$this->assertSame('on', (string) $this->onDisk(self::TOGGLE, 'on'));
 	}
 
 	/** @return array<string,array{string,string,int,string}> the gateway lines an older start logged, the lines this start logged after the size was taken, the quote its notice carries */
@@ -2392,11 +2674,11 @@ final class DnsProxyActivationRollbackTest extends TestCase
 
 	public function testOnlyTheOwnerRestoresAndTheContenderWaitsForItsCompletion(): void
 	{
-		// Given two recoveries of this box that run concurrently, with the owner held after its Off write
+		// Given two recoveries of this box that run concurrently, with the owner held after it claimed the failure
 		$this->activate(TRUE);
 		$snapshot = (string) config_get_path(self::SAVED, '');
 		$race = $this->raceTheRecovery(1);
-		$this->assertOwnerHeld($race, '', $snapshot, 'after its Off write and config unlock');
+		$this->assertOwnerHeld($race, 'on', $snapshot, 'after its claim and config unlock');
 		$this->assertContenderWaitedAndDidNothing($race);
 	}
 
@@ -2405,7 +2687,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Given two recoveries of this box, with the owner held after the snapshot is consumed, before its Unbound restart
 		$this->activate(TRUE);
 		$race = $this->raceTheRecovery(2);
-		$this->assertOwnerHeld($race, '', '', 'after the snapshot is consumed and config unlocked, before its Unbound restart');
+		$this->assertOwnerHeld($race, 'on', '', 'after the snapshot is consumed and config unlocked, before its Unbound restart');
 		$this->assertContenderWaitedAndDidNothing($race);
 	}
 
@@ -2490,9 +2772,9 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// When the confirmation's readiness wait times out and its rollback runs
 		$ready = pfb_dns_proxy_confirm_ready();
 
-		// Then the activation is rolled back: pfB-DNS is off and the Resolver is the original
+		// Then the activation is rolled back: pfB-DNS stays on and the Resolver is the original
 		$this->assertFalse($ready);
-		$this->assertSame('', $this->toggleStored(), 'pfB-DNS is turned off');
+		$this->assertSame('on', $this->toggleStored(), 'pfB-DNS stays on');
 		$this->assertResolverIsTheOriginal('rolled back by the stale confirmation');
 	}
 
@@ -2525,7 +2807,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			$ownerBuffer = '';
 			$paused = $this->readLine($owner, $ownerBuffer, ['PAUSED ', 'DONE '], 20.0);
 			$this->assertTrue(str_starts_with((string) $paused, 'PAUSED '), 'the owner never reached the notice that reports its rollback finished: ' . var_export($paused, TRUE) . ' ' . (string) stream_get_contents($owner[1][2]));
-			$this->assertOwnerHeld(['paused' => $paused, 'stderr' => (string) stream_get_contents($owner[1][2])], '', '', 'at the notice that reports its rollback finished');
+			$this->assertOwnerHeld(['paused' => $paused, 'stderr' => (string) stream_get_contents($owner[1][2])], 'on', '', 'at the notice that reports its rollback finished');
 			$starts = array_values(array_filter(explode("\n", (string) file_get_contents("{$dir}/events.log")), static fn (string $event): bool => str_ends_with($event, ' unbound_start')));
 			$this->assertSame(['fd unbound_start'], $starts, 'before: the rollback restarted Unbound through the production launcher');
 			$ownerPid = (int) proc_get_status($owner[0])['pid'];
@@ -2776,10 +3058,10 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertGreaterThan($ownerRestart, $contenderDone, 'the contender finished only after the owner restarted Unbound');
 		$this->assertSame(['confirmed' => FALSE], json_decode(substr((string) $race['contenderDone'], strlen('DONE ')), TRUE), 'the contender quietly said not ready');
 
-		// And config.xml holds the admin's Resolver: the snapshot consumed, pfB-DNS off
+		// And config.xml holds the admin's Resolver: the snapshot consumed, pfB-DNS still on
 		$this->disk = $race['disk'];
 		$this->assertSame('', (string) $this->onDisk(self::SAVED, 'stored'), 'the snapshot is consumed on config.xml');
-		$this->assertSame('', (string) $this->onDisk(self::TOGGLE, 'stored'), 'pfB-DNS is off on config.xml');
+		$this->assertSame('on', (string) $this->onDisk(self::TOGGLE, 'stored'), 'pfB-DNS stays on on config.xml');
 		$this->assertSame('lan,opt1', (string) $this->onDisk('unbound/active_interface'), 'the Resolver is the admin\'s again');
 	}
 

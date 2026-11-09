@@ -1128,7 +1128,7 @@ final class TickEntrypointTest extends TestCase
 	 * Scenario:
 	 *   Given pfB-DNS on with the Resolver moved (a snapshot), then the Resolver disabled; nothing else is due.
 	 *   When  pfblockerng_tick() is called twice.
-	 *   Then  the first stands pfB-DNS down (toggle off, Resolver restored and still disabled, one notice); the second does nothing.
+	 *   Then  the first stands pfB-DNS down (the Resolver restored and still disabled, pfB-DNS still on, one notice); the second does nothing.
 	 */
 	public function testAnIdleTickStandsPfbDnsDownWhenTheResolverWasDisabled(): void
 	{
@@ -1158,14 +1158,15 @@ final class TickEntrypointTest extends TestCase
 		// Act.
 		pfblockerng_tick([]);
 
-		// Assert: stood down once, the Resolver is back as saved and still disabled.
-		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns/pfb_dns'), 'pfB-DNS is turned off');
+		// Assert: stood down once, the Resolver is back as saved and still disabled, and pfB-DNS stays on (nothing writes the enable).
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns'), 'pfB-DNS stays on');
 		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
 		$this->assertFalse(config_path_enabled('unbound'), 'the Resolver stays disabled');
 		$this->assertSame('lan,opt1', config_get_path('unbound/active_interface'));
 		$this->assertSame($original['custom_options'], config_get_path('unbound/custom_options'));
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
 		$this->assertStringContainsString('DNS Resolver is disabled', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertStringContainsString('pfB-DNS stays on', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 
 		// And the next tick finds nothing to do.
 		pfblockerng_tick([]);
