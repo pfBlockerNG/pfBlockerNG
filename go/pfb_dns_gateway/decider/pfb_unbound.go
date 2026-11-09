@@ -107,6 +107,10 @@ type pfbSettings struct {
 type pfbUnbound struct {
 	pfb     pfbSettings
 	rcodeDB map[int]string
+
+	// regexRuntime is what the regex scans keep in module globals in Python (the slow-match warning set, the prefilter
+	// slots); evaluateConfig passes it through.
+	regexRuntime *regexRuntime
 }
 
 // parseTldAllow turns the MAIN-ini tld_allow_list value into a cleaned list: stripped, lower-cased, blank entries
@@ -167,7 +171,7 @@ func mainOptionError(option string, err error) error {
 // initStandard builds the module from the ini and the files in moduleDir. An error is what makes init_standard
 // raise in Python: a MAIN value that is no boolean, or an interpolation error in a value that is read.
 func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
-	m := &pfbUnbound{}
+	m := &pfbUnbound{regexRuntime: newRegexRuntime()}
 	pfb := &m.pfb
 
 	// A key not set here keeps Go's zero value, which is its Python default (False / "" / 0 / empty list).
