@@ -329,7 +329,6 @@ display_top_tabs($tab_array, TRUE);
 
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
-$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,		'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('DNSBL'),	FALSE,		'/pfblockerng/pfblockerng_dnsbl.php');
 $tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
 $tab_array[]	= array(gettext('DNSBL Category'),	TRUE,	'/pfblockerng/pfblockerng_blacklist.php');

@@ -4098,7 +4098,7 @@ $pfb['dns_proxy_restart_pending'] = '/var/run/pfb_dns_proxy_restart_pending';
 $pfb['dns_proxy_activation_failed'] = '/var/run/pfb_dns_proxy_activation_failed';
 // The gateway's log (daemon(8) -o): read only for the last `pfb_dns_gateway:` error of a start that never became ready.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
-// The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
+// The certificate selected on the DNS General page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
 // It is root's alone, in a directory root alone can enter and outside the Unbound chroot: the gateway reads it once, at start, while it is
 // still root, and a renewal reaches the running gateway as a push on its control socket (pfb_dns_proxy_certificate_push()), because the
 // gateway is no longer root by then. The socket is the gateway's --ctl-socket; the third path is the copy an earlier build left in the
@@ -5277,7 +5277,7 @@ function pfb_dns_proxy_certificate_sans(array $entry): array {
 }
 
 /**
- * The pfB-DNS page's DNS Name and DDR certificate warnings (issues #3583, #3694), from the stored settings. Never blocks a save.
+ * The DNS General page's DNS Name and DDR certificate warnings (issues #3583, #3694), from the stored settings. Never blocks a save.
  *   - a DNS Name, DoT, DoH or DoQ on and a certificate selected: one text when no dNSName SAN of it covers the name, which is the name
  *     itself or `*.<parent>` for a name of exactly one label under <parent>, ASCII case-insensitive; an iPAddress SAN never does.
  *   - DDR on and a DNS Name, with a certificate selected: one text per public IPv4 address that DoT, DoH or DoQ listens on and that is
@@ -5390,7 +5390,7 @@ function pfb_dns_proxy_pem_field(array $entry, string $kind, string $field): str
 }
 
 /**
- * Write the certificate chain and private key of the certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref) to one PEM file the
+ * Write the certificate chain and private key of the certificate selected on the DNS General page (dns/pfb_dns_sslcertref) to one PEM file the
  * gateway serves DoT, DoH and DoQ from: the certificate, the CAs its caref leads to nearest first (a missing CA or a loop ends the chain), then
  * the key. The file is mode 0600 in a directory of mode 0700 (made, or closed again, here), outside the Unbound chroot, and belongs
  * to the user that writes it, root on a box: the gateway reads it once, at start, while it is still root (pfSense writes the Resolver's
@@ -5757,7 +5757,7 @@ function pfb_dns_proxy_listener_list(?string $socket = NULL, float $timeout = PF
 }
 
 /**
- * Keep the gateway's certificate as the one selected on the pfB-DNS page (dns/pfb_dns_sslcertref): the root-only file written (pfb_dns_proxy_certificate_export())
+ * Keep the gateway's certificate as the one selected on the DNS General page (dns/pfb_dns_sslcertref): the root-only file written (pfb_dns_proxy_certificate_export())
  * while an encrypted transport is wanted, and a renewal pushed to the running gateway (pfb_dns_proxy_certificate_push()) once it is
  * READY and has not been given this content yet; the file, the record of the push and any copy an earlier build left in the Unbound
  * chroot are removed otherwise, so that no key stays on disk for a service that does not use it. A certificate that cannot be
@@ -5791,12 +5791,12 @@ function pfb_dns_proxy_certificate_refresh(bool $wanted): bool {
 	}
 	if ($why !== NULL) {
 		pfb_dns_proxy_notify('pfBlockerNG DNS Proxy certificate', "pfB-DNS: DoT, DoH and DoQ got no new certificate: {$why}. The one already in place, if any, keeps being served.",
-		    '/pfblockerng/pfblockerng_dns.php');
+		    '/pfblockerng/pfblockerng_dns_general.php');
 	}
 	return $why === NULL;
 }
 
-/** The cron tick's share of the certificate: the file follows the certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref) between applies and a renewal is pushed to the running gateway, so it reaches it without an apply or a restart. */
+/** The cron tick's share of the certificate: the file follows the certificate selected on the DNS General page (dns/pfb_dns_sslcertref) between applies and a renewal is pushed to the running gateway, so it reaches it without an apply or a restart. */
 function pfb_dns_proxy_certificate_sync(): void {
 	pfb_dns_proxy_certificate_refresh(pfb_dns_proxy_saved() !== NULL && pfb_dns_proxy_tls_wanted());
 }
@@ -5837,7 +5837,7 @@ function pfb_dns_proxy_certificate_sync(): void {
  * ancestor, a delete or an unreadable process table stop it. The script's own stops (start, restart) pass an argument and always
  * stop. Known limit: the first upgrade to a version with this probe still runs the old script, so it takes effect from the next.
  *
- * Encrypted transports: while DoT, DoH or DoQ is wanted (pfb_dns_proxy_tls_wanted()) the certificate and key selected on the pfB-DNS page
+ * Encrypted transports: while DoT, DoH or DoQ is wanted (pfb_dns_proxy_tls_wanted()) the certificate and key selected on the DNS General page
  * are written to $pfb['dns_proxy_cert'] on every call (pfb_dns_proxy_certificate_export(), the root-only file the gateway's --tls-pem
  * names, which it reads once, at start, while it is still root) and a renewal is pushed to the running gateway on its --ctl-socket
  * ($pfb['dns_proxy_ctl'], pfb_dns_proxy_certificate_push()): a renewal never restarts the proxy. Both are removed when no encrypted
@@ -6581,7 +6581,7 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 	if ($problems !== []) {
 		pfb_dns_proxy_notify($id, 'pfB-DNS started with problems: ' .
 		    implode(' ', array_map(static fn (string $problem): string => rtrim($problem, '.') . '.', $problems)) .
-		    ' Correct the settings on "DNS" > "pfB-DNS" or the cause named, then use "Run Now" on "Update".', '/pfblockerng/pfblockerng_dns.php');
+		    ' Correct the settings on "DNS" > "General" or the cause named, then use "Run Now" on "Update".', '/pfblockerng/pfblockerng_dns_general.php');
 	} elseif ($judged) {
 		foreach (get_notices() ?: [] as $key => $row) {
 			if (($row['id'] ?? NULL) === htmlentities($id)) {
@@ -6593,7 +6593,7 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 
 /** A rollback outcome: in the log and as a notice, so the operator is told in the GUI. */
 function pfb_dns_proxy_rollback_notice(string $text): void {
-	pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/pfblockerng/pfblockerng_dns.php');
+	pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/pfblockerng/pfblockerng_dns_general.php');
 }
 
 /**
@@ -7229,7 +7229,7 @@ if (isset($argv[1])) {
 			exit;
 	}
 
-	// The certificate selected on the pfB-DNS page (dns/pfb_dns_sslcertref) for the gateway's DoT, DoH and DoQ, written where the rc script's start finds it missing
+	// The certificate selected on the DNS General page (dns/pfb_dns_sslcertref) for the gateway's DoT, DoH and DoQ, written where the rc script's start finds it missing
 	elseif ($argv[1] == 'dns_cert') {
 			exit(pfb_dns_proxy_certificate_refresh(TRUE) ? 0 : 1);
 	}
@@ -16281,7 +16281,7 @@ function pfb_dns_proxy_port(): string {
 }
 
 /**
- * What the pfB-DNS tab's status panel (pfb_dns_status_panel()) shows: the service, the mode as text, and for each transport (plain DNS,
+ * What the DNS General page's status panel (pfb_dns_status_panel()) shows: the service, the mode as text, and for each transport (plain DNS,
  * DoT, DoH, DoQ) its state. The box is moved or it is not (a valid snapshot, or our block with none: recovery required); a toggle that
  * is on while nothing is moved is never running: it is said not to be active, with the reason (pfBlockerNG or the Resolver disabled, the last
  * activation failed, or the Resolver not moved yet or refused), and claims no transport (`transports` is NULL).
@@ -16822,7 +16822,7 @@ function pfb_dns_ddr_status_panel(array $status): string {
 }
 
 /**
- * The pfB-DNS tab's status panel for a pfb_dns_status() result: a section for the service and the mode, then a section per transport
+ * The DNS General page's status panel for a pfb_dns_status() result: a section for the service and the mode, then a section per transport
  * holding a table of Interface | Address | State rows (header only when the transport is off) or, when it is on with no listener, the
  * notice; no transport section when the status claims no transport. Each section is the markup of an open COLLAPSIBLE Form_Section,
  * and a transport's table sits in a table-responsive container, so on a phone it scrolls inside its section instead of widening the
@@ -16910,7 +16910,7 @@ function pfb_dns_widget_status(array $status): array {
 			$faulty = count(array_filter($rows, static fn (array $row): bool => $row['state'] !== 'listening'));
 			[$icon, $title] = $faulty === 0
 			    ? [$green, "{$label} is listening on " . implode(', ', array_unique(array_column($rows, 'interface')))]
-			    : [$yellow, "{$label}: {$faulty} of " . count($rows) . ' listener rows are not confirmed listening; see the pfB-DNS tab'];
+			    : [$yellow, "{$label}: {$faulty} of " . count($rows) . ' listener rows are not confirmed listening; see the DNS General tab'];
 		}
 		// pfBlockerNG disabled is off whatever a proxy still listening for the pending Resolver restore says; the title says why first
 		if (!$enabled) {
@@ -16923,7 +16923,7 @@ function pfb_dns_widget_status(array $status): array {
 
 /**
  * The widget header's pfB-DNS row for pfb_dns_widget_status() cells: one `<tr>` of the five status cells (each icon carries its anchor
- * class, the service label in <strong>, the rest in <small>, like the IP and DNSBL rows) and a link to the pfB-DNS tab. Titles escaped here, once.
+ * class, the service label in <strong>, the rest in <small>, like the IP and DNSBL rows) and a link to the DNS General tab. Titles escaped here, once.
  *
  * @param list<array{anchor:string,label:string,icon:string,title:string}> $cells
  */
@@ -16933,7 +16933,7 @@ function pfb_dns_widget_row(array $cells): string {
 		$label = $i === 0 ? "<strong>{$cell['label']}</strong>" : "<small>{$cell['label']}</small>";
 		$html .= '<td style="text-align: left;" title="' . htmlspecialchars($cell['title']) . "\"><i class=\"{$cell['anchor']} {$cell['icon']}\"></i>&nbsp;&nbsp;{$label}</td>\n";
 	}
-	return $html . "<td><a target='_blank' rel='noopener noreferrer' href='pfblockerng/pfblockerng_dns.php' title='Click to open the pfB-DNS tab'>"
+	return $html . "<td><a target='_blank' rel='noopener noreferrer' href='pfblockerng/pfblockerng_dns_general.php' title='Click to open the DNS General tab'>"
 	    . "<i class='fa-regular fa-rectangle-list'></i></a></td>\n</tr>\n";
 }
 
@@ -17020,7 +17020,7 @@ function pfb_dns_proxy_listen_port_conflict(): ?string {
 /** The toggle-on refusal: the operator gets a notice, not only a log line, saying what stays as it was and what to correct. */
 function pfb_dns_proxy_refuse(string $why): bool {
 	$text = "DNS proxy: {$why}. " . pfb_dns_proxy_unmoved_effect(pfb_dns_proxy_saved() !== NULL) .
-	    ' Correct the Resolver in "Services" > "DNS Resolver", or turn "pfB-DNS" off on "DNS" > "pfB-DNS".';
+	    ' Correct the Resolver in "Services" > "DNS Resolver", or turn "pfB-DNS" off on "DNS" > "General".';
 	pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', $text, '/services_unbound.php');
 	return FALSE;
 }

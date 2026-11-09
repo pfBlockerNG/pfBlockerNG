@@ -891,7 +891,7 @@ const PFB_DNS_POLICY_FIELDS = [
 	'pfb_dns_listen_auto4', 'pfb_dns_listen_auto6',
 ];
 
-/** The registered home of a pfB-DNS page field (issue #3649). */
+/** The registered home of a pfB-DNS field on the DNS General page (issue #3649). */
 function pfb_dns_config_key(string $key): string
 {
 	if (in_array($key, PFB_DNS_POLICY_FIELDS, TRUE)) {
@@ -2543,7 +2543,7 @@ function pfb_cfg_registry(): array
 			'sync'          => 'local',
 			'no_grandfather' => 'new key; absent reads \'\' = no certificate, and pfb_dns_proxy_seed() fills it once from the Resolver\'s certificate',
 		],
-		// issue #3694: DDR's target name and the name pfB-DNS answers A and AAAA for, entered on the pfB-DNS page beside the certificate
+		// issue #3694: DDR's target name and the name pfB-DNS answers A and AAAA for, entered on the DNS General page beside the certificate
 		'dns/pfb_dns_name' => [
 			'default'       => '',
 			'read_adapter'  => NULL,

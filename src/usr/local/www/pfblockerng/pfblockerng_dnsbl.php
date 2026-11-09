@@ -838,7 +838,7 @@ if ($_POST) {
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
-			// issue #3515: the pfB-DNS page and the Resolver move write config.xml under this lock; this whole-section save, and
+			// issue #3515: the DNS General page's pfB-DNS save and the Resolver move write config.xml under this lock; this whole-section save, and
 			// write_config() with it (it writes the whole copy this request read), must not put back what they wrote since.
 			$pfb_config_lock = pfb_dns_config_lock();
 			if ($pfb_config_lock === NULL) {
@@ -2617,7 +2617,6 @@ display_top_tabs($tab_array, TRUE);
 
 $tab_array	= array();
 $tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
-$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,		'/pfblockerng/pfblockerng_dns.php');
 $tab_array[]	= array(gettext('DNSBL'),	TRUE,		'/pfblockerng/pfblockerng_dnsbl.php');
 $tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,		'/pfblockerng/pfblockerng_category.php?type=dnsbl');
 $tab_array[]	= array(gettext('DNSBL Category'),	FALSE,		'/pfblockerng/pfblockerng_blacklist.php');
@@ -2681,7 +2680,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable DNSBL',
 	pfb_cfg_toggle_read($pconfig['pfb_dnsbl']) === PfbToggle::On,
 	'on'
-))->setHelp('Block the domains in your DNSBL groups. Requires <strong>pfB-DNS</strong> (turned on in <strong>DNS &gt; pfB-DNS</strong>) and pfBlockerNG enabled on the <strong>General</strong> tab.'
+))->setHelp('Block the domains in your DNSBL groups. Requires <strong>pfB-DNS</strong> (turned on in <strong>DNS &gt; General</strong>) and pfBlockerNG enabled on the <strong>General</strong> tab.'
 		. "{$dnsbl_text}"
 );
 

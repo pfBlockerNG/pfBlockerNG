@@ -371,7 +371,6 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6' || $gtype == 'geoip') {
 }
 else {
 	$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_dns_general.php');
-	$tab_array[]	= array(gettext('pfB-DNS'),	FALSE,	'/pfblockerng/pfblockerng_dns.php');
 	$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
 	$tab_array[]	= array(gettext('DNSBL Groups'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_category.php?type=dnsbl');
 	$tab_array[]	= array(gettext('DNSBL Category'),	FALSE,			'/pfblockerng/pfblockerng_blacklist.php');
