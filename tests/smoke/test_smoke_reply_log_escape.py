@@ -42,9 +42,6 @@ PAYLOAD = b"\"><script src='//x.example/a.js'></script>&"
 PAYLOAD_ESCAPED = "\\034\\062\\060script src=\\039//x.example/a.js\\039\\062\\060/script\\062\\038"
 HOSTILE_TARGET = 'we\\"ird\\<x\\>.example.'  # presentation form of the label we"ird<x>
 HOSTILE_TARGET_ESCAPED = "we\\034ird\\060x\\062.example"
-# The endpoint pfB-DNS appends to every row: transport, the address the client asked (dns_probe_client asks the
-# firewall's LAN address over UDP) and the receiving interface (the guest's own listener table: 192.168.1.1 = "LAN").
-ENDPOINT = ["UDP", PFSENSE_LAN_IP, "LAN"]
 
 
 @pytest.fixture(scope="module")
@@ -80,6 +77,13 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
         h.collect_host_diagnostics(smoke_vm)
 
 
+@pytest.fixture(scope="module")
+def endpoint(deployed_vm: tuple[SmokeVM, SmokeVM]) -> list[str]:
+    """The endpoint pfB-DNS appends to every row: transport, the address the client asked (``dns_probe_client`` asks
+    the firewall's LAN address over UDP) and the receiving interface, which is the LAN's description as stored."""
+    return ["UDP", PFSENSE_LAN_IP, h.config_get(deployed_vm[0], "interfaces/lan/descr")]
+
+
 def _rows(vm: SmokeVM, log: str, prefix: str, name: str, name_col: int, *, suffix: bool = False) -> list[list[str]]:
     raw = [line for line in h.read_log_file(vm, log).splitlines() if line.startswith(prefix)]
     return [
@@ -106,7 +110,7 @@ def _wait_rows(
 
 class TestDnsReplyLogEscape:
     def test_txt_payload_is_delivered_and_logged_escaped(
-        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer, endpoint: list[str]
     ) -> None:
         # Given: the upstream answers TXT for a fresh name with the NetSPI-style payload
         vm, cvm = deployed_vm
@@ -121,13 +125,13 @@ class TestDnsReplyLogEscape:
         assert ans.records, f"TXT {name}: no TXT record delivered to the client: {ans}"
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 13 and row[10:13] == ENDPOINT, row
+            assert len(row) == 13 and row[10:13] == endpoint, row
             assert row[8] == PAYLOAD_ESCAPED, row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if name in line]
         assert not any(c in line for line in raw for c in "<>\"'"), raw
 
     def test_cname_target_is_logged_escaped(
-        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer, endpoint: list[str]
     ) -> None:
         vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-replylog-cname")
@@ -138,13 +142,13 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR", f"CNAME {name}: {ans}"
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 13 and row[10:13] == ENDPOINT, row
+            assert len(row) == 13 and row[10:13] == endpoint, row
             assert row[8] == HOSTILE_TARGET_ESCAPED, row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if name in line]
         assert not any(c in line for line in raw for c in "<>\"'"), raw
 
     def test_hostile_query_name_is_logged_escaped(
-        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer, endpoint: list[str]
     ) -> None:
         vm, cvm = deployed_vm
         suffix = h.unique_domain("pfbsmoke-replylog-qname")
@@ -155,14 +159,16 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR" and ans.records == ["203.0.113.42"], ans
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", f".{suffix}", 6, suffix=True)
         for row in rows:
-            assert len(row) == 13 and row[10:13] == ENDPOINT, row
+            assert len(row) == 13 and row[10:13] == endpoint, row
             # pfBlockerNG's write-side escape renders the brackets; the name column never carries them raw.
             assert row[6] == f"a\\060b\\062.{suffix}", row
             assert row[8] == "203.0.113.42", row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if suffix in line]
         assert not any(c in line for line in raw for c in "<>"), raw
 
-    def test_a_reply_is_logged_unchanged(self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer) -> None:
+    def test_a_reply_is_logged_unchanged(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer, endpoint: list[str]
+    ) -> None:
         vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-replylog-a")
         stub_dns.register_a(name, "203.0.113.41")
@@ -172,11 +178,11 @@ class TestDnsReplyLogEscape:
         assert ans.rcode == "NOERROR" and ans.records == ["203.0.113.41"], ans
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", name, 6)
         for row in rows:
-            assert len(row) == 13 and row[10:13] == ENDPOINT, row
+            assert len(row) == 13 and row[10:13] == endpoint, row
             assert row[4] == "A", row
             assert row[8] == "203.0.113.41", row
 
-    def test_dnsbl_block_is_logged_unchanged(self, deployed_vm: tuple[SmokeVM, SmokeVM]) -> None:
+    def test_dnsbl_block_is_logged_unchanged(self, deployed_vm: tuple[SmokeVM, SmokeVM], endpoint: list[str]) -> None:
         vm, cvm = deployed_vm
         seed: str = vm._pfb_replylog_seed  # type: ignore[attr-defined]
         h.flush_unbound_name(vm, seed)
@@ -186,6 +192,6 @@ class TestDnsReplyLogEscape:
         assert h.is_vip(ans), f"DNSBL seed {seed} expected VIP, got {ans}"
         rows = _wait_rows(vm, _DNSBL_LOG, "DNSBL-python,", seed, 2)
         for row in rows:
-            assert len(row) == 14 and row[11:14] == ENDPOINT, row
+            assert len(row) == 14 and row[11:14] == endpoint, row
             assert row[2] == seed, row
             assert row[8] == "smokereplylog", row  # the header= of the fixture's feed

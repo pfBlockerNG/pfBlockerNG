@@ -976,9 +976,9 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} still resolving after block: {blocked}"
 
-        # NO-RESTART invariant: capture Unbound's pid before the #51 Unlock/Lock flips.
-        # Each flip takes the ADR-10 zero-downtime fast path, so the pid must NOT change.
-        pid_before = h.unbound_pid(deployed_vm)
+        # NO-RESTART invariant: capture the DNSBL hosts' pids (Unbound's, the pfB-DNS decider's) before the #51 flips.
+        # Each flip takes the ADR-10 zero-downtime fast path, so neither pid may change.
+        pids_before = h.dns_host_pids(deployed_vm)
 
         # (c) Temporary Unlock -> resolves again (forwarded to the stub sentinel).
         #     A VIP here would be the #51 no-op (unlock never reaching the build).
@@ -996,11 +996,11 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         relocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(relocked), f"re-locked {domain} still resolving: {relocked}"
 
-        # The whole Unlock/Lock sequence applied with NO restart: pid unchanged.
-        pid_after = h.unbound_pid(deployed_vm)
-        assert pid_after == pid_before, (
-            f"#51 Unlock/Lock must apply via the no-restart zero-downtime swap, but Unbound "
-            f"restarted: pid {pid_before} -> {pid_after}"
+        # The whole Unlock/Lock sequence applied with NO restart: pids unchanged.
+        pids_after = h.dns_host_pids(deployed_vm)
+        assert pids_after == pids_before, (
+            f"#51 Unlock/Lock must apply via the no-restart zero-downtime swap, but a DNSBL host "
+            f"restarted: (Unbound, decider) pids {pids_before} -> {pids_after}"
         )
 
 
@@ -1065,7 +1065,7 @@ def test_dnsbl_sentinel_flip_failure_clears_sync_marker(deployed_vm: SmokeVM, mo
             f"{domain} expected VIP block before the sentinel corruption, got {blocked_before}"
         )
 
-        pid_before = h.unbound_pid(deployed_vm)
+        pids_before = h.dns_host_pids(deployed_vm)
         fail_log_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "ADR-10: sentinel flip failed")
         # Pre-condition, not the regression under test: a marker already present here
         # would mean an EARLIER case/module leaked it, not this one.
@@ -1130,12 +1130,12 @@ def test_dnsbl_sentinel_flip_failure_clears_sync_marker(deployed_vm: SmokeVM, mo
                 f"did not drive pfb_reload_unbound() into the branch under test"
             )
 
-            # Then: it genuinely fell back to a RESTART (pid changed) -- the fallback this
+            # Then: it genuinely fell back to a RESTART (a host's pid changed) -- the fallback this
             # fix's comment describes, not some other no-op path.
-            pid_after = h.unbound_pid(deployed_vm)
-            assert pid_after != pid_before, (
-                f"expected the sentinel-flip-failure fallback to RESTART Unbound, but pid was "
-                f"unchanged ({pid_before}) -- the restart fallback did not run"
+            pids_after = h.dns_host_pids(deployed_vm)
+            assert pids_after != pids_before, (
+                f"expected the sentinel-flip-failure fallback to RESTART a DNSBL host, but the pids "
+                f"(Unbound, decider) were unchanged ({pids_before}) -- the restart fallback did not run"
             )
 
             # Then: the '.sync' daemon-suppression marker touched at the top of the fast
@@ -1210,8 +1210,8 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block, got {blocked}"
 
-        # NO-RESTART invariant: capture pid before the Unlock + Force-update re-lock.
-        pid_before = h.unbound_pid(deployed_vm)
+        # NO-RESTART invariant: capture the DNSBL hosts' pids before the Unlock + Force-update re-lock.
+        pids_before = h.dns_host_pids(deployed_vm)
 
         # Unlock -> resolves again through the stub sentinel. The helper waits for the
         # applied-generation handshake but flushes the native cache only for Lock.
@@ -1228,11 +1228,11 @@ def test_dnsbl_temp_unlock_cleared_by_force_update(
         relocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(relocked), f"re-locked {domain} still resolving: {relocked}"
 
-        # Both the Unlock and the Force-update re-lock applied with NO restart: pid unchanged.
-        pid_after = h.unbound_pid(deployed_vm)
-        assert pid_after == pid_before, (
-            f"#51 Unlock + Cron/Force re-lock must apply via the no-restart swap, but Unbound "
-            f"restarted: pid {pid_before} -> {pid_after}"
+        # Both the Unlock and the Force-update re-lock applied with NO restart: pids unchanged.
+        pids_after = h.dns_host_pids(deployed_vm)
+        assert pids_after == pids_before, (
+            f"#51 Unlock + Cron/Force re-lock must apply via the no-restart swap, but a DNSBL host "
+            f"restarted: (Unbound, decider) pids {pids_before} -> {pids_after}"
         )
 
 
@@ -1285,8 +1285,8 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         assert h.resolves_to(before, STUB_DNS_A), f"{domain} should resolve via stub BEFORE the feed edit, got {before}"
         assert not h.is_vip(before), f"{domain} unexpectedly VIP-blocked before being listed: {before}"
 
-        # NO-RESTART invariant + fast-path-log proof: capture pid and the swap-log baseline.
-        pid_before = h.unbound_pid(deployed_vm)
+        # NO-RESTART invariant + fast-path-log proof: capture the hosts' pids and the swap-log baseline.
+        pids_before = h.dns_host_pids(deployed_vm)
         swap_before = h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER)
 
         # APPLY: add the target to the feed and force a full update (re-fetches the edited
@@ -1346,11 +1346,11 @@ def test_dnsbl_feed_update_no_restart(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         assert generation["missing"] == [], f"published manifest has missing raw refs: {generation!r}"
         assert generation["staged"] == [], f"published manifest references staging: {generation!r}"
 
-        # AFTER: pid unchanged (no restart) AND a fresh fast-path swap line was logged.
-        pid_after = h.unbound_pid(deployed_vm)
-        assert pid_after == pid_before, (
-            f"a feed DNSBL update must take the no-restart zero-downtime swap, but Unbound "
-            f"restarted: pid {pid_before} -> {pid_after}"
+        # AFTER: pids unchanged (no restart) AND a fresh fast-path swap line was logged.
+        pids_after = h.dns_host_pids(deployed_vm)
+        assert pids_after == pids_before, (
+            f"a feed DNSBL update must take the no-restart zero-downtime swap, but a DNSBL host "
+            f"restarted: (Unbound, decider) pids {pids_before} -> {pids_after}"
         )
         swap_after = h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER)
         assert swap_after > swap_before, (
@@ -1390,25 +1390,26 @@ def test_dnsbl_config_change_restarts(deployed_vm: SmokeVM, client_vm: SmokeVM, 
         # BEFORE: the name is blocked (VIP) and DNSBL is live. Capture the running pid.
         blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block before the config change, got {blocked}"
-        pid_before = h.unbound_pid(deployed_vm)
+        pids_before = h.dns_host_pids(deployed_vm)
 
         # CONFIG CHANGE: disable DNSBL -> regenerates unbound.conf (drops the python
         # module) -> restart. These reloads are NOT data_path: a config change keeps the
         # restart, so wait on restart readiness (the default reload() path).
         h.set_dnsbl_enabled(deployed_vm, False)
         h.reload(deployed_vm, "updatednsbl")
-        pid_mid = h.unbound_pid(deployed_vm)
-        assert pid_mid != pid_before, (
-            f"disabling DNSBL is a config change and MUST restart Unbound, but pid was "
-            f"unchanged ({pid_before}) — the config fork wrongly took the no-restart path"
+        pids_mid = h.dns_host_pids(deployed_vm)
+        assert pids_mid != pids_before, (
+            f"disabling DNSBL is a config change and MUST restart a DNSBL host, but the pids "
+            f"(Unbound, decider) were unchanged ({pids_before}) — the config fork wrongly took the no-restart path"
         )
 
         # Re-enable DNSBL -> regenerates unbound.conf WITH the python module -> restart.
         h.set_dnsbl_enabled(deployed_vm, True)
         h.reload(deployed_vm, "updatednsbl")
-        pid_after = h.unbound_pid(deployed_vm)
-        assert pid_after != pid_mid, (
-            f"re-enabling DNSBL is a config change and MUST restart Unbound, but pid was unchanged ({pid_mid})"
+        pids_after = h.dns_host_pids(deployed_vm)
+        assert pids_after != pids_mid, (
+            f"re-enabling DNSBL is a config change and MUST restart a DNSBL host, but the pids "
+            f"(Unbound, decider) were unchanged ({pids_mid})"
         )
         # The list is restored: the name blocks again after the config round-trip.
         reblocked = h.dns_probe_client(client_vm, domain, "A")
@@ -1447,7 +1448,7 @@ def test_dnsbl_fail_closed_broken_manifest(
         # BEFORE: the name is blocked (VIP) by the last-good snapshot.
         blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block before corrupting the manifest, got {blocked}"
-        pid_before = h.unbound_pid(deployed_vm)
+        pids_before = h.dns_host_pids(deployed_vm)
         pyerr_before = h.count_log_marker(deployed_vm, h.PY_ERROR_LOG, "Failed to load DNSBL manifest")
 
         # CORRUPT the manifest + bump the sentinel via PHP (pfSsh.php) — NOT a raw SSH shell
@@ -1489,10 +1490,10 @@ def test_dnsbl_fail_closed_broken_manifest(
 
         # Unbound is still UP and was NOT restarted by the failed build.
         h.wait_unbound_ready(deployed_vm)
-        pid_after = h.unbound_pid(deployed_vm)
-        assert pid_after == pid_before, (
-            f"a failed (fail-closed) build must keep the running resolver: Unbound pid changed "
-            f"{pid_before} -> {pid_after}"
+        pids_after = h.dns_host_pids(deployed_vm)
+        assert pids_after == pids_before, (
+            f"a failed (fail-closed) build must keep the running resolver: a DNSBL host restarted, "
+            f"(Unbound, decider) pids {pids_before} -> {pids_after}"
         )
         pyerr_after = h.count_log_marker(deployed_vm, h.PY_ERROR_LOG, "Failed to load DNSBL manifest")
         assert pyerr_after > pyerr_before, (
@@ -1569,7 +1570,7 @@ def test_datapath_swap_budget_expiry_keeps_resolver_serving(
         # BEFORE: the name is blocked (VIP) by the live snapshot; capture every baseline.
         blocked = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_vip(blocked), f"{domain} expected VIP block before the forced expiry, got {blocked}"
-        pid_before = h.unbound_pid(deployed_vm)
+        pids_before = h.dns_host_pids(deployed_vm)
         swap_before = h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER)
         inflight_before = h.count_log_marker(deployed_vm, h.PFB_LOG, _INFLIGHT_LINE)
         stop_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Stopping Unbound Resolver")
@@ -1620,9 +1621,10 @@ def test_datapath_swap_budget_expiry_keeps_resolver_serving(
         assert h.is_vip(still), f"the previous snapshot must keep serving during the in-flight swap, got {still}"
 
         # THE #3200 INVARIANT: no restart, no fallback, exactly one fresh swap line.
-        pid_after = h.unbound_pid(deployed_vm)
-        assert pid_after == pid_before, (
-            f"a budget-expired datapath swap must NEVER restart Unbound: pid {pid_before} -> {pid_after}"
+        pids_after = h.dns_host_pids(deployed_vm)
+        assert pids_after == pids_before, (
+            f"a budget-expired datapath swap must NEVER restart a DNSBL host: "
+            f"(Unbound, decider) pids {pids_before} -> {pids_after}"
         )
         assert h.count_log_marker(deployed_vm, h.PFB_LOG, "Stopping Unbound Resolver") == stop_before, (
             "'Stopping Unbound Resolver' logged for a datapath reload -- the #3200 regression"

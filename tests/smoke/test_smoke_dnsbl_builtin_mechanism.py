@@ -366,13 +366,13 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
 
         # ---- Phase 2: disabled_log (flag '0') -> NULL. Swap-freshness observation ----
         # (not asserted either way — the answer change below is the load-bearing proof).
-        pid_before = h.unbound_pid(deployed_vm)
+        pids_before = h.dns_host_pids(deployed_vm)
         _set_global_mechanism(deployed_vm, mode="default", mechanism="disabled_log")
         h.reload(deployed_vm, "updatednsbl")
-        pid_after = h.unbound_pid(deployed_vm)
+        pids_after = h.dns_host_pids(deployed_vm)
         print(
-            f"[issue-3291 swap freshness] Unbound pid before={pid_before} after={pid_after} "
-            f"(restarted={pid_before != pid_after}) across a mechanism-only reload"
+            f"[issue-3291 swap freshness] (Unbound, decider) pids before={pids_before} after={pids_after} "
+            f"(restarted={pids_before != pids_after}) across a mechanism-only reload"
         )
         with _hermetic_probe():
             _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 2, "null")

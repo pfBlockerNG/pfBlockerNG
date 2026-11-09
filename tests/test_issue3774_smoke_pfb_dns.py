@@ -19,7 +19,6 @@ import pytest
 from tests.smoke import helpers
 
 PFB_DNS_PATH = "installedpackages/pfblockerngdns/config/0/pfb_dns"
-SAVED_PATH = "installedpackages/pfblockerngdns/config/0/pfb_dns_saved"
 PFB_DNS_ON = f"config_set_path('{PFB_DNS_PATH}', 'on');"
 PFB_DNS_OFF = f"config_set_path('{PFB_DNS_PATH}', '');"
 LOG_TAIL = "dns_proxy.log tail marker line"
@@ -121,28 +120,30 @@ def test_set_dnsbl_enabled_false_leaves_pfb_dns_untouched(monkeypatch: pytest.Mo
 
 
 def _arrange_release(
-    monkeypatch: pytest.MonkeyPatch, *, installed: bool = True, moved: tuple[bool, ...] = (False,), pfb_dns: str = ""
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    installed: bool = True,
+    moved: tuple[bool, ...] = (False,),
+    pfb_dns: str = "",
+    reload_kwargs: list[dict[str, object]] | None = None,
 ) -> list[str]:
     """Stub release_pfb_dns's collaborators; the returned list holds only its writes and reloads, in order."""
     events: list[str] = []
     moved_reads = iter(moved)
-
-    def config_get(_vm: object, path: str, **_kw: object) -> str:
-        if path == PFB_DNS_PATH:
-            return pfb_dns
-        raise AssertionError(f"unexpected config read: {path}")
 
     def php_eval(_vm: object, snippet: str, **_kw: object) -> SimpleNamespace:
         assert PFB_DNS_OFF in snippet and "write_config(" in snippet, f"unexpected write:\n{snippet}"
         events.append("store pfb_dns ''")
         return SimpleNamespace(returncode=0, stdout="OK", stderr="")
 
-    def reload(_vm: object, scope: str = "update", **_kw: object) -> None:
+    def reload(_vm: object, scope: str = "update", **kw: object) -> None:
         events.append(f"reload:{scope}")
+        if reload_kwargs is not None:
+            reload_kwargs.append(kw)
 
     monkeypatch.setattr(helpers, "pkg_installed", lambda _vm, **_kw: installed)
-    monkeypatch.setattr(helpers, "config_get", config_get)
-    monkeypatch.setattr(helpers, "_pfb_dns_moved", lambda _vm: next(moved_reads), raising=False)
+    monkeypatch.setattr(helpers, "_pfb_dns_state", lambda _vm: (pfb_dns, next(moved_reads)))
+    monkeypatch.setattr(helpers, "_pfb_dns_moved", lambda _vm: next(moved_reads))
     monkeypatch.setattr(helpers, "php_eval", php_eval)
     monkeypatch.setattr(helpers, "reload", reload)
     return events
@@ -178,6 +179,20 @@ def test_release_pfb_dns_stores_off_and_applies_when_the_resolver_is_moved(monke
     assert events == ["store pfb_dns ''", "reload:updatednsbl"], f"wrong release sequence: {events}"
 
 
+def test_release_pfb_dns_retries_an_apply_deferred_by_core_s_package_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given the release's apply can land inside core's own package restart (rc=75, the lock is held)
+    When pfB-DNS is released Then the apply is re-run for a budget, not failed on the first deferral, so the config
+    copy that follows never runs under a proxy that still holds the Resolver."""
+    kwargs: list[dict[str, object]] = []
+    _arrange_release(monkeypatch, moved=(True, False), reload_kwargs=kwargs)
+
+    helpers.release_pfb_dns(_Vm([]))  # type: ignore[arg-type]
+
+    assert len(kwargs) == 1, f"the apply ran {len(kwargs)} times: {kwargs}"
+    budget = kwargs[0].get("retry_deferred", 0.0)
+    assert isinstance(budget, float) and budget > 0, f"the release's apply does not retry a deferral: {kwargs}"
+
+
 def test_release_pfb_dns_fails_loudly_when_the_apply_leaves_the_resolver_moved(monkeypatch: pytest.MonkeyPatch) -> None:
     """Given the apply leaves pfB-DNS holding the Resolver When it is released
     Then the harness raises with expected vs actual instead of wiping config under a running proxy."""
@@ -199,6 +214,90 @@ def test_release_pfb_dns_does_nothing_when_the_package_is_not_installed(monkeypa
     assert events == [], f"the harness touched an uninstalled package: {events}"
 
 
+def test_a_release_with_nothing_to_do_costs_one_php_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given pfB-DNS is off and holds nothing When it is released
+    Then the toggle and the ownership come from ONE PHP read: every guest round trip costs seconds, and a release
+    runs before every config wipe and restore."""
+    reads: list[str] = []
+
+    def php_eval(_vm: object, snippet: str, **_kw: object) -> SimpleNamespace:
+        reads.append(snippet)
+        fenced = f'{helpers._CFG_VAL_OPEN}["",false]{helpers._CFG_VAL_CLOSE}'
+        return SimpleNamespace(returncode=0, stdout=fenced, stderr="")
+
+    def reload(*_a: object, **_kw: object) -> None:
+        raise AssertionError("a release with nothing held applied DNSBL")
+
+    monkeypatch.setattr(helpers, "pkg_installed", lambda _vm, **_kw: True)
+    monkeypatch.setattr(helpers, "php_eval", php_eval)
+    monkeypatch.setattr(helpers, "reload", reload)
+
+    helpers.release_pfb_dns(_Vm([]))  # type: ignore[arg-type]
+
+    assert len(reads) == 1, f"expected one PHP read for a no-op release, got {len(reads)}: {reads}"
+    assert PFB_DNS_PATH in reads[0], f"the one read does not carry the pfB-DNS toggle:\n{reads[0]}"
+
+
+# --- the no-restart pins watch both processes that can host DNSBL ------------------------------------------------
+
+
+class _PidVm:
+    """A guest that answers the decider listing with ``decider`` (exit status ``rc``); keeps the commands it is sent."""
+
+    def __init__(self, decider: str, rc: int = 0) -> None:
+        self.decider, self.rc = decider, rc
+        self.sent: list[tuple[str, ...]] = []
+
+    def ssh(self, *argv: str, **_kw: object) -> SimpleNamespace:
+        self.sent.append(argv)
+        return SimpleNamespace(returncode=self.rc, stdout=self.decider, stderr="ps: broken")
+
+
+@pytest.mark.parametrize(("listing", "decider"), [("4242\n", 4242), ("", 0)], ids=["decider", "no-proxy"])
+def test_dns_host_pids_pairs_unbounds_pid_with_the_deciders_or_zero(
+    monkeypatch: pytest.MonkeyPatch, listing: str, decider: int
+) -> None:
+    """Given the gateway has one decider child, or no proxy runs When the DNSBL hosts' pids are read
+    Then they are (Unbound's pid, the decider's pid or 0), so a restart of either host moves the tuple."""
+    monkeypatch.setattr(helpers, "unbound_pid", lambda _vm, **_kw: 77)
+
+    assert helpers.dns_host_pids(_PidVm(listing)) == (77, decider)  # type: ignore[arg-type]
+
+
+def test_dns_host_pids_refuses_to_guess_between_two_deciders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given two processes under the gateway name the decider When the pids are read Then it raises: a tuple built
+    from either would pin the wrong process."""
+    monkeypatch.setattr(helpers, "unbound_pid", lambda _vm, **_kw: 77)
+
+    with pytest.raises(RuntimeError, match=r"at most one decider.*4242.*4343"):
+        helpers.dns_host_pids(_PidVm("4242\n4343\n"))  # type: ignore[arg-type]
+
+
+def test_dns_host_pids_fails_loudly_when_the_process_listing_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given ps fails When the pids are read Then it raises: a broken listing must not read as "no decider" both
+    before and after, which would pass every no-restart pin."""
+    monkeypatch.setattr(helpers, "unbound_pid", lambda _vm, **_kw: 77)
+
+    with pytest.raises(RuntimeError, match="ps: broken"):
+        helpers.dns_host_pids(_PidVm("", rc=1))  # type: ignore[arg-type]
+
+
+def test_the_decider_listing_matches_the_gateways_child_and_never_its_own_command_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given the listing runs on the guest as one /bin/sh command When its text is built
+    Then it keys on the gateway pidfile's pid as the parent and the bracketed ``pfb_dns_proxy[.]py``: the bare name
+    would also match this very command's argv."""
+    monkeypatch.setattr(helpers, "unbound_pid", lambda _vm, **_kw: 77)
+    vm = _PidVm("")
+
+    helpers.dns_host_pids(vm)  # type: ignore[arg-type]
+
+    (command,) = vm.sent[0]
+    assert "/var/run/pfb_dns_proxy.pid" in command and "$2 == gw" in command, command
+    assert "pfb_dns_proxy[.]py" in command and "pfb_dns_proxy.py" not in command, command
+
+
 def test_a_resolver_counts_as_moved_only_by_a_running_proxy_or_the_products_own_ownership_test(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -206,18 +305,21 @@ def test_a_resolver_counts_as_moved_only_by_a_running_proxy_or_the_products_own_
     When the harness asks whether pfB-DNS holds the Resolver
     Then it asks the product (a live proxy pid, or pfb_dns_proxy_owns_resolver(): a valid snapshot or our block),
     never the raw marker: an apply cannot clear a planted invalid marker, so a raw-marker test would fail every later
-    restore."""
+    restore. Held is exactly the string "true"; "false" (and nothing else) means not held."""
     reads: list[str] = []
+    answer = {"value": "true"}
 
     def read_scalar(_vm: object, pre: str, expr: str, **_kw: object) -> str:
         reads.append(pre + "\n" + expr)
-        return "true"
+        return answer["value"]
 
     monkeypatch.setattr(helpers, "_php_read_scalar", read_scalar)
 
     assert helpers._pfb_dns_moved(_Vm([])) is True  # type: ignore[arg-type]
-    (php,) = reads
-    assert "pfb_dns_proxy_running()" in php and "pfb_dns_proxy_owns_resolver()" in php, php
+    answer["value"] = "false"
+    assert helpers._pfb_dns_moved(_Vm([])) is False  # type: ignore[arg-type]
+    php = reads[0]
+    assert "pfb_dns_proxy_running() || pfb_dns_proxy_owns_resolver()" in php, php
     assert "pfb_dns_saved" not in php, f"the raw marker decides a move: {php}"
 
 
@@ -425,6 +527,21 @@ def test_reload_reads_the_three_switches_and_the_serving_predicate_in_one_php_ev
     assert all(part in snippet for part in required), f"the readiness snippet lacks one of {required}:\n{snippet}"
 
 
+def test_reload_requires_the_serving_proxy_exactly_when_enable_dnsbl_and_pfb_dns_are_all_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given the stubbed reads cannot tell a right PHP expression from a wrong one
+    When the readiness read is built Then its conjunction is exactly enable_cb, pfb_dnsbl and pfb_dns all 'on', and
+    the serving predicate is asked only under it: an inverted term or an OR would only fail on a live box."""
+    events, snippets = _arrange_reload(monkeypatch, serving=True)
+
+    helpers.reload(_Vm(events), "update")  # type: ignore[arg-type]
+
+    on = "$on = $s['enable_cb'] === 'on' && $s['dnsbl'] === 'on' && $s['pfb_dns'] === 'on';"
+    assert on in snippets[0], f"the all-three-on conjunction is not exactly {on!r}:\n{snippets[0]}"
+    assert "$on ? pfb_dns_proxy_serving_ready() : NULL" in snippets[0], snippets[0]
+
+
 # --- the Resolver mutators edit the Resolver only while pfB-DNS does not hold it ---------------------------------
 
 RESOLVER_MUTATORS = [
@@ -516,21 +633,25 @@ SS_ROWS = [helpers.SafeSearchEntry("a.example", "b.example", "", "")]
 
 
 def _arrange_safesearch(monkeypatch: pytest.MonkeyPatch, host: str) -> tuple[list[str], SimpleNamespace]:
-    """Stub the SafeSearch injection's guest calls; ``host`` is what the DNSBL-host reload answers."""
+    """Stub the SafeSearch injection's guest calls; ``host`` is what the DNSBL-host reload answers (fenced, as the
+    harness reads it). ``vm.snippets`` holds every PHP snippet the injection ran."""
     events: list[str] = []
+    vm = SimpleNamespace(ssh_argv=lambda *argv: list(argv), snippets=[])
 
     def run(_argv: list[str], **kwargs: object) -> SimpleNamespace:
         events.append("unbound bounce" if "unbound.pid" in str(kwargs.get("input", "")) else "append rows")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def php_eval(_vm: object, snippet: str, **_kw: object) -> SimpleNamespace:
+        vm.snippets.append(snippet)
         events.append("host reload" if "pfb_dns_proxy_decider_restart()" in snippet else "php")
-        return SimpleNamespace(returncode=0, stdout=host, stderr="")
+        fenced = f"banner{helpers._CFG_VAL_OPEN}{host}{helpers._CFG_VAL_CLOSE}"
+        return SimpleNamespace(returncode=0, stdout=fenced, stderr="")
 
     monkeypatch.setattr(helpers.subprocess, "run", run)
     monkeypatch.setattr(helpers, "php_eval", php_eval)
     monkeypatch.setattr(helpers, "wait_unbound_ready", lambda _vm, **_kw: events.append("unbound ready"))
-    return events, SimpleNamespace(ssh_argv=lambda *argv: list(argv))
+    return events, vm
 
 
 def test_safesearch_rows_reload_in_the_pfb_dns_decider_while_it_hosts_dnsbl(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -560,3 +681,30 @@ def test_safesearch_injection_fails_loudly_when_the_decider_does_not_restart(mon
 
     with pytest.raises(RuntimeError, match="no READY"):
         helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
+
+
+def test_safesearch_injection_does_not_mistake_a_failure_text_naming_unbound_for_the_unbound_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given the decider restart fails with a reason that contains the word UNBOUND
+    When fabricated SafeSearch rows are appended Then it raises with that reason and never bounces Unbound: only the
+    exact token UNBOUND means Unbound hosts DNSBL."""
+    events, vm = _arrange_safesearch(monkeypatch, "DECIDER-FAILED: UNBOUND backend gone")
+
+    with pytest.raises(RuntimeError, match="UNBOUND backend gone"):
+        helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
+
+    assert events == ["append rows", "host reload"], f"Unbound was bounced for a failed decider restart: {events}"
+
+
+def test_safesearch_injection_picks_the_unbound_host_exactly_when_no_proxy_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given the stubbed answer cannot tell a right selector from an inverted one
+    When the host reload is built Then Unbound is the host exactly when pfB-DNS's proxy is NOT running."""
+    _events, vm = _arrange_safesearch(monkeypatch, "DECIDER-RESTARTED")
+
+    helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
+
+    selector = "if (!pfb_dns_proxy_running()) { $host = 'UNBOUND'; }"
+    assert selector in vm.snippets[0], f"the host selector is not exactly {selector!r}:\n{vm.snippets[0]}"

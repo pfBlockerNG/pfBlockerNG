@@ -2721,20 +2721,20 @@ def inject_safesearch_cname_entries(
             f"inject_safesearch_cname_entries: tee to {UNBOUND_PY_SS_FILE} failed: "
             f"rc={result.returncode} {result.stderr!r}"
         )
-    reload = php_eval(
+    # Fenced and compared as a whole token: a failure text may itself contain the word UNBOUND.
+    host = _php_read_scalar(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n"
-        "if (!pfb_dns_proxy_running()) { echo 'UNBOUND'; } else {\n"
+        "if (!pfb_dns_proxy_running()) { $host = 'UNBOUND'; } else {\n"
         "  $failed = pfb_dns_proxy_decider_restart();\n"
-        "  echo $failed === NULL ? 'DECIDER-RESTARTED' : 'DECIDER-FAILED: ' . $failed;\n}",
+        "  $host = $failed === NULL ? 'DECIDER-RESTARTED' : 'DECIDER-FAILED: ' . $failed;\n}",
+        "$host",
         timeout=timeout,
     )
-    if "DECIDER-RESTARTED" in reload.stdout:
+    if host == "DECIDER-RESTARTED":
         return
-    if "UNBOUND" not in reload.stdout:
-        raise RuntimeError(
-            f"inject_safesearch_cname_entries: decider restart failed: {reload.stdout!r} {reload.stderr!r}"
-        )
+    if host != "UNBOUND":
+        raise RuntimeError(f"inject_safesearch_cname_entries: decider restart failed: {host!r}")
     # Raw Unbound bounce to reload safeSearchDB from the updated file.
     # Unlike pfb_stop_start_unbound() in pfblockerng.inc, this raw bounce has no
     # KILL escalation or mount handling: TERM, wait up to 30 s, then start.
@@ -3798,13 +3798,27 @@ _BASELINE_GLOBAL_KEYS = (
 )
 
 
+# Does pfB-DNS hold the Resolver: a live proxy, or the product's own ownership test (a valid snapshot or our block).
+_PFB_DNS_HELD = "pfb_dns_proxy_running() || pfb_dns_proxy_owns_resolver()"
+
+
+def _pfb_dns_state(vm: SmokeVM) -> tuple[str, bool]:
+    """The pfB-DNS toggle as stored and whether pfB-DNS holds the Resolver (:func:`_pfb_dns_moved`), in ONE PHP read."""
+    import json
+
+    pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+    stored = f"(string) config_get_path({_php_str(dns_config_path('pfb_dns'))}, '')"
+    toggle, held = json.loads(_php_read_scalar(vm, pre, f"json_encode(array({stored}, {_PFB_DNS_HELD}))"))
+    return toggle, held
+
+
 def _pfb_dns_moved(vm: SmokeVM) -> bool:
     """Does pfB-DNS hold the Resolver: a live proxy, or the product's ownership test (a valid snapshot or our block)?
 
     Never the raw ``dns/pfb_dns_saved``: a test may plant a value that is no valid snapshot (the wizard's refused-Finish
     cases), which no apply clears and no proxy serves."""
     pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
-    held = "json_encode(pfb_dns_proxy_running() || pfb_dns_proxy_owns_resolver())"
+    held = f"json_encode({_PFB_DNS_HELD})"
     return _php_read_scalar(vm, pre, held) == "true"
 
 
@@ -3819,8 +3833,8 @@ def release_pfb_dns(vm: SmokeVM) -> None:
     """
     if not pkg_installed(vm):
         return
-    moved = _pfb_dns_moved(vm)
-    if not moved and config_get(vm, dns_config_path("pfb_dns")) != "on":
+    stored, moved = _pfb_dns_state(vm)
+    if not moved and stored != "on":
         return
     snippet = (
         f"config_set_path({_php_str(dns_config_path('pfb_dns'))}, '');\n"
@@ -3834,7 +3848,8 @@ def release_pfb_dns(vm: SmokeVM) -> None:
         )
     if not moved:
         return
-    reload(vm, "updatednsbl")
+    # rc=75 while core's own package restart holds the lock: ha_policy's CORE_RESTART_TIMEOUT for the same deferral.
+    reload(vm, "updatednsbl", retry_deferred=300.0)
     if _pfb_dns_moved(vm):
         raise RuntimeError(
             "release_pfb_dns: expected the Resolver released after the apply, but pfB-DNS still holds it"
@@ -4640,6 +4655,8 @@ def wait_no_active_pfb_task(vm: SmokeVM, *, timeout: float = 90.0, delay: float 
 # hard no-restart proof: UNCHANGED across a data update, CHANGED across a config one.
 
 UNBOUND_PID_FILE = "/var/run/unbound.pid"
+# The pfB-DNS gateway's pidfile (PFB_DNS_PROXY_PIDFILE): its pid is the parent of the Python decider.
+PFB_DNS_PROXY_PIDFILE = "/var/run/pfb_dns_proxy.pid"
 # The pfBlockerNG main log; PHP's pfb_reload_unbound writes the fast-path markers here
 # (inc:3956 "[ zero-downtime swap ]" then inc:3962 " completed [ NOW ]"). Their
 # appearance proves the no-restart data path was TAKEN (vs the restart fallback).
@@ -4687,6 +4704,34 @@ def unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> int:
         return int(text)
     except ValueError as exc:
         raise RuntimeError(f"unbound_pid: {UNBOUND_PID_FILE} not an integer: {text!r}") from exc
+
+
+# The decider as the product finds it (pfb_dns_proxy_decider_restart_fits_ram): the gateway's child whose args name
+# pfb_dns_proxy.py. The bracketed dot keeps this command's own argv from matching itself; ps's exit status is kept, or a
+# broken ps would read as "no decider" both before and after.
+_DECIDER_PID_CMD = (
+    f"gw=$(cat {PFB_DNS_PROXY_PIDFILE} 2>/dev/null); "
+    "rows=$(/bin/ps -axww -o pid= -o ppid= -o args=) || exit 1; "
+    "printf '%s\\n' \"$rows\" | /usr/bin/awk -v gw=\"$gw\" '$2 == gw && /pfb_dns_proxy[.]py/ { print $1 }'"
+)
+
+
+def dns_host_pids(vm: SmokeVM, *, timeout: float = 30.0) -> tuple[int, int]:
+    """Pids of the two processes that can host DNSBL: ``(Unbound's, the pfB-DNS decider's, or 0 with no decider)``.
+
+    Since #3770 DNSBL runs in the pfB-DNS decider, and restarting a host moves only its own pid: a before/after pin
+    on :func:`unbound_pid` alone cannot see a decider restart. Pin this tuple instead; unchanged means no host
+    restarted, changed means one did.
+    """
+    result = vm.ssh(_DECIDER_PID_CMD, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"dns_host_pids: cannot list the gateway's children: rc={result.returncode} {result.stderr!r}"
+        )
+    deciders = result.stdout.split()
+    if len(deciders) > 1:
+        raise RuntimeError(f"dns_host_pids: expected at most one decider under the gateway, got pids {deciders}")
+    return unbound_pid(vm, timeout=timeout), (int(deciders[0]) if deciders else 0)
 
 
 def detector_status_marker(header: str, status: str) -> str:

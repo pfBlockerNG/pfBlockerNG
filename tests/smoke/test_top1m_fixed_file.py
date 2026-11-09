@@ -496,7 +496,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
 
     # A TOP1M-only source transition must replace fixed bytes and advance the
     # data reload while leaving the unrelated content-addressed feed generation intact.
-    pid_before = h.unbound_pid(vm)
+    pids_before = h.dns_host_pids(vm)
     _stage_top1m_source(vm, f"1,{replacement}\n2,{sibling}\n")
     _require_ok(vm.ssh("/usr/bin/touch", TOP1M_UPDATE), "mark TOP1M source changed")
     h.reload(vm, "update", data_path=True)
@@ -513,7 +513,11 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     assert second["raw_rel"] == first["raw_rel"]
     assert second["raw_identity"] == first["raw_identity"], "TOP1M-only update regenerated unrelated feed raw"
     assert second["raw_dir_identity"] == first["raw_dir_identity"], "TOP1M-only update replaced unrelated generation"
-    assert h.unbound_pid(vm) == pid_before, "TOP1M-only data change restarted Unbound instead of swapping"
+    pids_after = h.dns_host_pids(vm)
+    assert pids_after == pids_before, (
+        f"TOP1M-only data change restarted a DNSBL host instead of swapping: (Unbound, decider) pids "
+        f"{pids_before} -> {pids_after}"
+    )
 
     assert second["fixed_bytes"] == f"{replacement}\n", f"replacement TOP1M bytes not canonical: {second!r}"
     reader_second_generation = second["reload_generation"]
