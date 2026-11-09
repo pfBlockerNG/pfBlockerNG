@@ -94,7 +94,7 @@ def _enable_dnsbl(vm: SmokeVM) -> None:
     ``h.ensure_dnsbl_vip`` + a reload then make the block live. Mirrors the enable chain
     ``test_upgrade_config_stability._write_representative_config`` sets.
 
-    DNSBL runs only through pfB-DNS (#3770), so pfB-DNS goes on in the same write.
+    #3770 makes DNSBL run only through pfB-DNS, so pfB-DNS goes on in the same write.
     """
     snippet = (
         f"$g = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());\n"

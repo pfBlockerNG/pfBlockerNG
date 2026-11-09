@@ -362,6 +362,7 @@ def seams(ha: ModuleType, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     reloaded: list[str] = []
     monkeypatch.setattr(ha.helpers, "php_eval", lambda vm, snippet, **kw: vm.php(snippet))
     monkeypatch.setattr(ha.helpers, "apply_filter_sync", lambda vm, **kw: reloaded.append(vm.name))
+    monkeypatch.setattr(ha.helpers, "release_pfb_dns", lambda vm: None)
     return reloaded
 
 

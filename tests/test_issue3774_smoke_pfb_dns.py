@@ -269,6 +269,36 @@ def test_pfb_module_baseline_requests_the_dns_config_restore_so_it_tears_down_fi
     )
 
 
+# --- the HA pair restore gives the Resolver back before it copies the pre-pair config.xml ---------------------------
+
+
+def test_ha_restore_node_releases_pfb_dns_before_it_copies_the_pre_pair_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given an HA node whose DNSBL turned pfB-DNS on When the pair is restored
+    Then pfB-DNS is released before the pre-pair config.xml is copied back: that config predates the move, and
+    restoring it under a running proxy leaves the next module's Unbound behind a proxy with no upstream (SERVFAIL)."""
+    from tests.smoke import ha_pair
+
+    events: list[str] = []
+
+    def ssh_ok(_vm: object, command: str, **_kw: object) -> str:
+        events.append("config-restore" if "/conf/config.xml" in command else "ssh")
+        return ""
+
+    monkeypatch.setattr(ha_pair, "_baseline_exists", lambda _vm, _node: True)
+    monkeypatch.setattr(ha_pair, "_php_ok", lambda *_a, **_kw: events.append("runtime-teardown"))
+    monkeypatch.setattr(ha_pair, "_ssh_ok", ssh_ok)
+    monkeypatch.setattr(ha_pair, "clear_sshguard", lambda _vm: None)
+    monkeypatch.setattr(ha_pair, "clear_pending_marker", lambda _vm: None)
+    monkeypatch.setattr(ha_pair, "_verify_baseline", lambda _vm: None)
+    monkeypatch.setattr(helpers, "apply_filter_sync", lambda _vm, **_kw: None)
+    monkeypatch.setattr(helpers, "release_pfb_dns", lambda _vm, **_kw: events.append("release"))
+
+    ha_pair.restore_node(object(), "primary")  # type: ignore[arg-type]
+
+    assert "release" in events, f"restore_node never released pfB-DNS: {events}"
+    assert events.index("release") < events.index("config-restore"), f"config.xml was restored first: {events}"
+
+
 # --- R8: a DNSBL apply that leaves pfB-DNS on but not serving fails loudly -------------------------------------------
 
 

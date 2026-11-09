@@ -1132,7 +1132,7 @@ def dns_config_path(key: str) -> str:
 
 
 def _pfb_dns_on_php() -> str:
-    """PHP storing pfB-DNS 'on': DNSBL runs only through pfB-DNS (#3770), so a DNSBL-on writer turns it on too."""
+    """PHP storing pfB-DNS 'on': #3770 makes DNSBL run only through pfB-DNS, so a DNSBL-on writer turns it on too."""
     return f"config_set_path({_php_str(dns_config_path('pfb_dns'))}, 'on');\n"
 
 
@@ -1809,7 +1809,7 @@ def set_dnsbl_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     """Toggle the DNSBL component (``pfb_dnsbl``) so the next reload runs
     pfb_create_dnsbl in 'enabled' / 'disabled' mode (mode keys on dnsbl=='on').
 
-    Turning it on also turns pfB-DNS on in the same write (DNSBL runs only through pfB-DNS, #3770). Turning it off
+    Turning it on also turns pfB-DNS on in the same write (#3770 makes DNSBL run only through pfB-DNS). Turning it off
     leaves pfB-DNS alone: with DNSBL off it only forwards, and :func:`release_pfb_dns` gives the Resolver back."""
     val = "on" if on else ""
     snippet = (
@@ -3503,7 +3503,7 @@ RELOAD_RETRY_INTERVAL = 5.0
 def _require_pfb_dns_serving(vm: SmokeVM) -> None:
     """Raise when DNSBL and pfB-DNS are both on (package enabled) but pfB-DNS is not serving: one read, no poll.
 
-    DNSBL runs only through pfB-DNS (#3770), so a DNSBL apply that leaves the proxy not serving turns every later
+    #3770 makes DNSBL run only through pfB-DNS, so a DNSBL apply that leaves the proxy not serving turns every later
     block probe into a timeout. The apply itself waits for the proxy (``pfb_dns_proxy_serving_ready()``), so one look
     suffices.
     """
@@ -3576,7 +3576,8 @@ def reload(
 
     Once the readiness wait returns, DNSBL and pfB-DNS both on (package enabled) must mean a serving proxy
     (``pfb_dns_proxy_serving_ready()``, what the apply itself waits for): one check, no poll, ``RuntimeError`` with the
-    last lines of the proxy log otherwise. ``wait_unbound=False`` skips it.
+    last lines of the proxy log otherwise. ``wait_unbound=False`` on the default path skips it; ``data_path=True``
+    always checks, as it always waits for the swap.
 
     Feed-pass lock deferrals return 75 and fail immediately with the precise stderr
     reason, before either readiness wait. ``retry_deferred`` (seconds, default none) re-runs a

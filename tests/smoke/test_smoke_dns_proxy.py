@@ -125,7 +125,7 @@ PROXY_PID_FILE = "/var/run/pfb_dns_proxy.pid"  # the gateway, pfb-dns exec'd by 
 DAEMON_PID_FILE = "/var/run/pfb_dns_proxy_daemon.pid"  # its supervisor (daemon -P)
 # the package's pfb-dns binaries, one directory per architecture
 PAYLOAD_DIR = "/usr/local/pkg/pfblockerng/dns_proxy/bin"
-PROXY_LOG = f"{h.PFB_LOGDIR}/dns_proxy.log"
+PROXY_LOG = h.PFB_DNS_PROXY_LOG
 PROXY_RC = "/usr/local/etc/rc.d/pfb_dns_proxy.sh"
 SERVICE = "pfb_dns_proxy"
 CONFIG_XML = "/cf/conf/config.xml"

@@ -231,6 +231,8 @@ def restore_node(vm: SmokeVM, node: str) -> None:
     if not _baseline_exists(vm, node):
         return
     steps: tuple[tuple[str, Callable[[], object]], ...] = (
+        # The pre-pair config.xml predates any pfB-DNS move: give the Resolver back before it is copied over.
+        ("pfb-dns-release", lambda: helpers.release_pfb_dns(vm)),
         ("runtime-teardown", lambda: _php_ok(vm, _TEARDOWN_PHP, ())),
         (
             "config-restore",

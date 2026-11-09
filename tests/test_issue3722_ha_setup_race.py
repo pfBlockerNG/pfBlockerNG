@@ -119,6 +119,7 @@ def seams(hp: ModuleType, ha: ModuleType, monkeypatch: pytest.MonkeyPatch) -> No
         "set_dnsbl_enabled",
         "wait_unbound_ready",
         "_require_pfb_dns_serving",
+        "release_pfb_dns",
     ):
         monkeypatch.setattr(hp.h, name, lambda *_a, **_k: None)
     monkeypatch.setattr(hp, "gateway_name", lambda _vm: "WAN_DHCP")
