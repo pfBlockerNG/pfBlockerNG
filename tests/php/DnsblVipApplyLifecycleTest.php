@@ -141,6 +141,9 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			'install' => FALSE, 'domain_clear' => FALSE, 'save' => $o['save'], 'unbound_py_vip' => "{$dir}/pfb_py_vip",
 			'dnsbl_info' => "{$dir}/info.sqlite", 'dnsbl_resolver' => "{$dir}/resolver.sqlite",
 			'dnsbl_file' => "{$dir}/pfb_dnsbl", 'pending_marker' => "{$dir}/pending",
+			// The pass reloads the resolver when the module ini or whitelist it writes changed: a file shared with other tests (or
+			// another run) under /var/unbound would decide that, and hand a test the state its own last run left
+			'unbound_py_wh' => "{$dir}/whitelist.txt", 'unbound_py_conf' => "{$dir}/module.ini",
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['g']['varrun_path']          = $dir;
@@ -329,8 +332,6 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 	private function modelMountedModule(): void
 	{
-		$GLOBALS['pfb']['unbound_py_wh'] = "{$this->dir}/whitelist.txt";
-		$GLOBALS['pfb']['unbound_py_conf'] = "{$this->dir}/module.ini";
 		$grep = "{$this->dir}/mounted-grep";
 		$real_grep = escapeshellarg($GLOBALS['pfb']['grep']);
 		$mounts = escapeshellarg("{$this->dir}/usr/local/bin") . '|' . escapeshellarg("{$this->dir}/usr/local/lib");
