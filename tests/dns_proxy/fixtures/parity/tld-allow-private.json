@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "description": "TLD Allow on with org and uk allowed and psl_allow_private on: a PRIVATE suffix is allowed whatever its root",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "tld_allow": "true",
+        "tld_allow_list": "org,uk",
+        "psl_allow_private": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"builtin_log_flag": "1"},
+      "feeds": []
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ]
+    }
+  },
+  "upstream": {
+    "evil.pages.com. A": ["evil.pages.com. 300 IN A 192.0.2.10"],
+    "site.org. A": ["site.org. 300 IN A 192.0.2.11"]
+  },
+  "cases": [
+    {
+      "id": "private-suffix-name-relays",
+      "family": "tld_allow",
+      "description": "a name under the PRIVATE suffix pages.com resolves although com is not allowed",
+      "query": {"name": "evil.pages.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["evil.pages.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["evil.pages.com. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "plain-disallowed-name-is-still-blocked",
+      "family": "tld_allow",
+      "description": "a name under com with no PRIVATE suffix is still blocked",
+      "query": {"name": "site.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["site.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "name-in-an-allowed-tld-relays",
+      "family": "tld_allow",
+      "description": "a name in an allowed TLD resolves",
+      "query": {"name": "site.org.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["site.org. A"],
+        "rcode": "NOERROR",
+        "answer": ["site.org. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    }
+  ]
+}

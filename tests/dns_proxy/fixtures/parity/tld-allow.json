@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "description": "TLD Allow on with org and uk allowed: names outside them are blocked as a VIP answer (built-in log flag 1)",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "tld_allow": "true",
+        "tld_allow_list": "org,uk",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"builtin_log_flag": "1"},
+      "feeds": []
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ]
+    }
+  },
+  "upstream": {
+    "site.org. A": ["site.org. 300 IN A 192.0.2.10"],
+    "shop.co.uk. A": ["shop.co.uk. 300 IN A 192.0.2.11"]
+  },
+  "cases": [
+    {
+      "id": "name-in-an-allowed-tld-relays",
+      "family": "tld_allow",
+      "description": "a name in an allowed TLD resolves",
+      "query": {"name": "site.org.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["site.org. A"],
+        "rcode": "NOERROR",
+        "answer": ["site.org. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "name-outside-the-allowed-tlds-is-blocked",
+      "family": "tld_allow",
+      "description": "a name in any other TLD is blocked",
+      "query": {"name": "site.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["site.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "multi-label-suffix-under-an-allowed-root-relays",
+      "family": "tld_allow",
+      "description": "a name under the multi-label public suffix co.uk resolves because its root uk is allowed",
+      "query": {"name": "shop.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["shop.co.uk. A"],
+        "rcode": "NOERROR",
+        "answer": ["shop.co.uk. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "private-suffix-under-a-disallowed-root-is-blocked",
+      "family": "tld_allow",
+      "description": "a PRIVATE suffix (pages.com) does not rescue a disallowed root while psl_allow_private is off",
+      "query": {"name": "evil.pages.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["evil.pages.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

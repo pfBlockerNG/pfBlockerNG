@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "description": "TLD Allow on with org and uk allowed: names outside them are blocked as a null answer (built-in log flag 0)",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "tld_allow": "true",
+        "tld_allow_list": "org,uk",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"builtin_log_flag": "0"},
+      "feeds": []
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ]
+    }
+  },
+  "upstream": {
+    "site.org. A": ["site.org. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "name-in-an-allowed-tld-relays",
+      "family": "tld_allow",
+      "description": "a name in an allowed TLD resolves",
+      "query": {"name": "site.org.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["site.org. A"],
+        "rcode": "NOERROR",
+        "answer": ["site.org. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "name-outside-the-allowed-tlds-is-a-null-block",
+      "family": "tld_allow",
+      "description": "a name in any other TLD gets the null answer",
+      "query": {"name": "site.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["site.com. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    }
+  ]
+}

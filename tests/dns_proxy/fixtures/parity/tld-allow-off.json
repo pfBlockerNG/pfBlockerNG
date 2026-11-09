@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "description": "TLD Allow off although a list is configured: no name is blocked for its TLD",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "tld_allow": "false",
+        "tld_allow_list": "org,uk",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"builtin_log_flag": "1"},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {"pfb_py_raw/feed.txt": ["listed.example"]}
+  },
+  "upstream": {
+    "site.com. A": ["site.com. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "listed-name-is-still-blocked",
+      "family": "tld_allow",
+      "description": "the DNSBL is running: a listed name is blocked",
+      "query": {"name": "listed.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["listed.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "name-outside-the-list-relays-when-tld-allow-is-off",
+      "family": "tld_allow",
+      "description": "a name outside org and uk resolves (the same name is blocked when TLD Allow is on)",
+      "query": {"name": "site.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["site.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["site.com. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "description": "IDN mode Confusable with python_idn_escalate_suspicious on: the suspicious name is blocked too",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "idn_mode": "confusable",
+        "python_idn_escalate_suspicious": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"builtin_log_flag": "1"},
+      "feeds": []
+    },
+    "files": {
+
+    }
+  },
+  "upstream": {
+    "xn--mnchen-3ya.com. A": ["xn--mnchen-3ya.com. 300 IN A 192.0.2.10"],
+    "example.xn--p1ai. A": ["example.xn--p1ai. 300 IN A 192.0.2.11"],
+    "plain.example. A": ["plain.example. 300 IN A 192.0.2.12"]
+  },
+  "cases": [
+    {
+      "id": "malicious-homoglyph-name",
+      "family": "idn",
+      "description": "a single label mixing Latin and Cyrillic (the apple look-alike)",
+      "query": {"name": "xn--pple-43d.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["xn--pple-43d.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "suspicious-mixed-script-name",
+      "family": "idn",
+      "description": "a label mixing Latin and Armenian is suspicious",
+      "query": {"name": "xn--bnk-1ce.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["xn--bnk-1ce.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "legitimate-single-script-idn-relays",
+      "family": "idn",
+      "description": "a single-script IDN label (munchen with an umlaut) resolves",
+      "query": {"name": "xn--mnchen-3ya.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["xn--mnchen-3ya.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["xn--mnchen-3ya.com. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "scripts-are-judged-per-label",
+      "family": "idn",
+      "description": "a Latin label under a Cyrillic ccTLD resolves: scripts do not union across the dot",
+      "query": {"name": "example.xn--p1ai.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["example.xn--p1ai. A"],
+        "rcode": "NOERROR",
+        "answer": ["example.xn--p1ai. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "plain-name-relays",
+      "family": "idn",
+      "description": "a name with no xn-- label resolves",
+      "query": {"name": "plain.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["plain.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["plain.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "description": "both feed-at-suffix policies = ignore: a downloaded feed's entries at a suffix are dropped, a user Custom_List's are kept",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "false",
+        "psl_feed_icann_policy": "ignore",
+        "psl_feed_private_policy": "ignore",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"},
+        {"raw": "pfb_py_raw/custom.txt", "feed": "Custom", "group": "CustomGroup", "log_flag": "1", "provenance": "user"}
+      ]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": ["org.uk", "||gov.uk^"],
+      "pfb_py_raw/custom.txt": ["ac.uk", "||co.uk^", "pages.com"]
+    }
+  },
+  "upstream": {
+    "org.uk. A": ["org.uk. 300 IN A 192.0.2.10"],
+    "gov.uk. A": ["gov.uk. 300 IN A 192.0.2.11"],
+    "www.gov.uk. A": ["www.gov.uk. 300 IN A 192.0.2.12"]
+  },
+  "cases": [
+    {
+      "id": "feed-line-at-a-suffix-is-dropped",
+      "family": "psl",
+      "description": "a downloaded feed's plain line at org.uk is dropped",
+      "query": {"name": "org.uk.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["org.uk. A"],
+        "rcode": "NOERROR",
+        "answer": ["org.uk. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "feed-abp-zone-at-a-suffix-is-dropped",
+      "family": "psl",
+      "description": "a downloaded feed's ||gov.uk^ is dropped: the suffix resolves",
+      "query": {"name": "gov.uk.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["gov.uk. A"],
+        "rcode": "NOERROR",
+        "answer": ["gov.uk. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "feed-abp-zone-drop-leaves-its-children-open",
+      "family": "psl",
+      "description": "and its children",
+      "query": {"name": "www.gov.uk.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["www.gov.uk. A"],
+        "rcode": "NOERROR",
+        "answer": ["www.gov.uk. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "user-line-at-a-suffix-is-kept",
+      "family": "psl",
+      "description": "a user list's plain line at ac.uk is exempt and blocks",
+      "query": {"name": "ac.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["ac.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "user-abp-zone-at-a-suffix-stays-a-zone",
+      "family": "psl",
+      "description": "a user list's ||co.uk^ stays a zone: a child of co.uk is blocked",
+      "query": {"name": "www.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["www.co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "user-line-at-a-private-suffix-is-kept",
+      "family": "psl",
+      "description": "a user list's line at the PRIVATE suffix pages.com is exempt from the private policy too",
+      "query": {"name": "pages.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["pages.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

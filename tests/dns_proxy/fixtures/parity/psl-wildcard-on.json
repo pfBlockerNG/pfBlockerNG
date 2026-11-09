@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "description": "Wildcard Blocking on with a small public-suffix list: a plain feed registrable domain becomes a zone, boundaries follow the PSL",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": [
+        "tracker.com",
+        "host.metrics.com",
+        "shop.co.uk",
+        "co.uk",
+        "ads.shop.ck",
+        "www.ck",
+        "other.ck"
+      ]
+    }
+  },
+  "upstream": {
+    "other.com. A": ["other.com. 300 IN A 192.0.2.10"],
+    "deep.host.metrics.com. A": ["deep.host.metrics.com. 300 IN A 192.0.2.11"],
+    "other.co.uk. A": ["other.co.uk. 300 IN A 192.0.2.12"],
+    "shop.ck. A": ["shop.ck. 300 IN A 192.0.2.13"],
+    "a.other.ck. A": ["a.other.ck. 300 IN A 192.0.2.14"]
+  },
+  "cases": [
+    {
+      "id": "registrable-feed-line-blocks-its-subdomains",
+      "family": "psl",
+      "description": "a plain feed line that is a registrable domain blocks its subdomains at any depth",
+      "query": {"name": "a.b.tracker.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.b.tracker.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "unlisted-sibling-registrable-domain-relays",
+      "family": "psl",
+      "description": "a sibling registrable domain under the same public suffix is not covered",
+      "query": {"name": "other.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["other.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["other.com. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "feed-line-below-its-registrable-domain-stays-exact",
+      "family": "psl",
+      "description": "a feed line that is a subdomain of its registrable domain blocks only itself",
+      "query": {"name": "host.metrics.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["host.metrics.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "name-below-an-exact-feed-line-relays",
+      "family": "psl",
+      "description": "a name under such an exact entry is not blocked",
+      "query": {"name": "deep.host.metrics.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["deep.host.metrics.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["deep.host.metrics.com. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "multi-label-suffix-registrable-is-the-zone-anchor",
+      "family": "psl",
+      "description": "under the public suffix co.uk the registrable domain shop.co.uk is the zone: its subdomain is blocked",
+      "query": {"name": "www.shop.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["www.shop.co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "multi-label-suffix-sibling-registrable-relays",
+      "family": "psl",
+      "description": "another registrable domain under co.uk is not covered",
+      "query": {"name": "other.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["other.co.uk. A"],
+        "rcode": "NOERROR",
+        "answer": ["other.co.uk. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "feed-line-at-a-public-suffix-blocks-only-the-suffix",
+      "family": "psl",
+      "description": "a feed line that is itself a public suffix is an exact entry, not a blanket over everything under it",
+      "query": {"name": "co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "psl-wildcard-rule-moves-the-registrable-boundary",
+      "family": "psl",
+      "description": "with the rule *.ck, shop.ck is a public suffix so ads.shop.ck is the registrable domain and a zone",
+      "query": {"name": "x.ads.shop.ck.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["x.ads.shop.ck. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "psl-wildcard-rule-suffix-itself-is-not-blocked",
+      "family": "psl",
+      "description": "the suffix shop.ck made by the wildcard rule is not listed and resolves",
+      "query": {"name": "shop.ck.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["shop.ck. A"],
+        "rcode": "NOERROR",
+        "answer": ["shop.ck. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    },
+    {
+      "id": "psl-exception-rule-makes-the-name-registrable",
+      "family": "psl",
+      "description": "the exception !www.ck makes www.ck registrable, so its feed line is a zone and blocks a subdomain",
+      "query": {"name": "a.www.ck.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.www.ck. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "psl-wildcard-suffix-feed-line-blocks-only-the-apex",
+      "family": "psl",
+      "description": "a feed line at a suffix made by *.ck blocks that name",
+      "query": {"name": "other.ck.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["other.ck. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "psl-wildcard-suffix-feed-line-does-not-cover-subdomains",
+      "family": "psl",
+      "description": "and nothing under that suffix",
+      "query": {"name": "a.other.ck.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["a.other.ck. A"],
+        "rcode": "NOERROR",
+        "answer": ["a.other.ck. 300 IN A 192.0.2.14"],
+        "authority": []
+      }
+    }
+  ]
+}

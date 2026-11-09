@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "description": "feed entries at an ICANN public suffix under psl_feed_icann_policy = honor (Wildcard Blocking off; the policy needs the PSL on its own)",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "false",
+        "psl_feed_icann_policy": "honor",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": ["org.uk", "||co.uk^", "shop.co.uk"]
+    }
+  },
+  "upstream": {},
+  "cases": [
+    {
+      "id": "abp-zone-at-a-suffix-blocks-the-suffix",
+      "family": "psl",
+      "description": "||co.uk^ is kept as a zone: co.uk is blocked",
+      "query": {"name": "co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "abp-zone-at-a-suffix-blocks-its-children",
+      "family": "psl",
+      "description": "and everything under it",
+      "query": {"name": "www.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["www.co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "plain-line-at-a-suffix-is-an-exact-entry",
+      "family": "psl",
+      "description": "a plain feed line at org.uk blocks org.uk",
+      "query": {"name": "org.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["org.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "registrable-line-is-never-touched-by-the-policy",
+      "family": "psl",
+      "description": "a line that is a registrable domain, not a suffix, blocks as listed",
+      "query": {"name": "shop.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["shop.co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

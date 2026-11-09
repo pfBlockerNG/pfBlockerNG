@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "description": "python_hsts off although the preload file is present: the file is not loaded and no HSTS rule applies, not even the built-in TLD list",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_hsts": "false",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"},
+        {"raw": "pfb_py_raw/nx.txt", "feed": "NxFeed", "group": "NxGroup", "log_flag": "3"}
+      ]
+    },
+    "files": {
+      "pfb_py_hsts.txt": ["# preloaded parents", "bank.example"],
+      "pfb_py_raw/vip.txt": ["sub.bank.example", "a.b.c.bank.example", "plain-vip.example", "blocked.app"],
+      "pfb_py_raw/nx.txt": ["nx.bank.example"]
+    }
+  },
+  "upstream": {},
+  "cases": [
+    {
+      "id": "vip-block-under-a-listed-parent-keeps-the-vip",
+      "family": "hsts",
+      "description": "the preloaded parent is ignored: the block answers the VIP address",
+      "query": {"name": "sub.bank.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.bank.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "vip-block-under-a-built-in-hsts-tld-keeps-the-vip",
+      "family": "hsts",
+      "description": "the built-in HSTS TLD list is gated by the same switch: a name under app keeps the VIP address",
+      "query": {"name": "blocked.app.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["blocked.app. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

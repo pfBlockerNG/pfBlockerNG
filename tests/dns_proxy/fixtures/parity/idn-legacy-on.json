@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "description": "legacy python_idn = true without idn_mode behaves as IDN mode All",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_idn": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"builtin_log_flag": "1"},
+      "feeds": []
+    },
+    "files": {
+
+    }
+  },
+  "upstream": {
+    "plain.example. A": ["plain.example. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "idn-name-is-blocked",
+      "family": "idn",
+      "description": "an xn-- name is blocked",
+      "query": {"name": "xn--mnchen-3ya.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["xn--mnchen-3ya.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "plain-name-relays",
+      "family": "idn",
+      "description": "a plain name resolves",
+      "query": {"name": "plain.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["plain.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["plain.example. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    }
+  ]
+}

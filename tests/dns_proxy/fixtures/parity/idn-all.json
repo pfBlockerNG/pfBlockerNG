@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "description": "IDN mode All (idn_mode = on): every xn-- name is blocked, a plain name resolves",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "idn_mode": "on",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"builtin_log_flag": "1"},
+      "feeds": []
+    },
+    "files": {
+
+    }
+  },
+  "upstream": {
+    "plain.example. A": ["plain.example. 300 IN A 192.0.2.10"],
+    "not-xn--label.example. A": ["not-xn--label.example. 300 IN A 192.0.2.11"]
+  },
+  "cases": [
+    {
+      "id": "idn-name-is-blocked",
+      "family": "idn",
+      "description": "a name with an xn-- label is blocked",
+      "query": {"name": "xn--mnchen-3ya.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["xn--mnchen-3ya.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "subdomain-of-an-idn-name-is-blocked",
+      "family": "idn",
+      "description": "also when the xn-- label is not the first",
+      "query": {"name": "www.xn--mnchen-3ya.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["www.xn--mnchen-3ya.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "homoglyph-name-is-blocked-too",
+      "family": "idn",
+      "description": "the mode does not tell a homoglyph from a legitimate name",
+      "query": {"name": "xn--pple-43d.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["xn--pple-43d.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "plain-name-relays",
+      "family": "idn",
+      "description": "a name with no xn-- label resolves",
+      "query": {"name": "plain.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["plain.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["plain.example. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "xn-inside-a-label-is-not-an-idn-name",
+      "family": "idn",
+      "description": "xn-- in the middle of a label does not make an IDN name",
+      "query": {"name": "not-xn--label.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["not-xn--label.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["not-xn--label.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    }
+  ]
+}

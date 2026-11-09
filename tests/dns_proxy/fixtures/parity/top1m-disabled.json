@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "description": "TOP1M off although the sidecar and the marked Group are present: the marked Group drops nothing",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "false",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"top1m_enabled": false},
+      "feeds": [
+        {"raw": "pfb_py_raw/marked.txt", "feed": "MarkedFeed", "group": "MarkedGroup", "log_flag": "1", "top1m": true},
+        {"raw": "pfb_py_raw/plain.txt", "feed": "PlainFeed", "group": "PlainGroup", "log_flag": "1"}
+      ]
+    },
+    "files": {
+      "pfb_py_top1m.txt": ["popular.example", "big.example"],
+      "pfb_py_raw/marked.txt": ["popular.example", "www.big.example", "deep.popular.example", "tracker.example"],
+      "pfb_py_raw/plain.txt": ["big.example"]
+    }
+  },
+  "upstream": {},
+  "cases": [
+    {
+      "id": "marked-group-entry-for-a-listed-name-blocks",
+      "family": "top1m",
+      "description": "with TOP1M off the marked Group's entry for popular.example blocks (it resolves when TOP1M is on)",
+      "query": {"name": "popular.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["popular.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "marked-group-entry-for-the-www-form-blocks",
+      "family": "top1m",
+      "description": "and so does its entry for www.big.example",
+      "query": {"name": "www.big.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["www.big.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

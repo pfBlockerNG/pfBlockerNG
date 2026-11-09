@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "description": "Wildcard Blocking on and PRIVATE suffixes recognised: pages.com is a public suffix, so evil.pages.com is the registrable domain",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "true",
+        "psl_include_private": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": ["evil.pages.com"]
+    }
+  },
+  "upstream": {
+    "other.pages.com. A": ["other.pages.com. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "private-suffix-registrable-blocks-its-subdomains",
+      "family": "psl",
+      "description": "evil.pages.com is a zone: its subdomain is blocked",
+      "query": {"name": "x.evil.pages.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["x.evil.pages.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "private-suffix-registrable-blocks-itself",
+      "family": "psl",
+      "description": "the zone covers its own apex",
+      "query": {"name": "evil.pages.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["evil.pages.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "private-suffix-sibling-relays",
+      "family": "psl",
+      "description": "another tenant of the private suffix is not covered",
+      "query": {"name": "other.pages.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["other.pages.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["other.pages.com. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    }
+  ]
+}

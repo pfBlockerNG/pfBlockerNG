@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "description": "a blacklisted TLD (xyz) blocks every name under it; the built-in log flag 0 sets the answer shape",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"tld_wildcard_blacklist": [".xyz"], "builtin_log_flag": "0"},
+      "feeds": []
+    },
+    "files": {
+
+    }
+  },
+  "upstream": {
+    "site.net. A": ["site.net. 300 IN A 192.0.2.10"],
+    "site.axyz. A": ["site.axyz. 300 IN A 192.0.2.11"]
+  },
+  "cases": [
+    {
+      "id": "name-under-the-tld-is-blocked",
+      "family": "tld_block",
+      "description": "a name under the blacklisted TLD is blocked",
+      "query": {"name": "site.xyz.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["site.xyz. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "deep-name-under-the-tld-is-blocked",
+      "family": "tld_block",
+      "description": "at any depth",
+      "query": {"name": "a.b.site.xyz.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.b.site.xyz. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "the-tld-itself-is-blocked",
+      "family": "tld_block",
+      "description": "and the TLD name itself",
+      "query": {"name": "xyz.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["xyz. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "name-in-another-tld-relays",
+      "family": "tld_block",
+      "description": "a name in another TLD resolves",
+      "query": {"name": "site.net.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["site.net. A"],
+        "rcode": "NOERROR",
+        "answer": ["site.net. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "tld-match-is-on-a-label-boundary",
+      "family": "tld_block",
+      "description": "a TLD that merely ends in the same letters resolves",
+      "query": {"name": "site.axyz.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["site.axyz. A"],
+        "rcode": "NOERROR",
+        "answer": ["site.axyz. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    }
+  ]
+}

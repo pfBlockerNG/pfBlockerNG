@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "description": "Wildcard Blocking off: the same plain feed lines are exact entries whatever the public suffix list says",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "false",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {"pfb_py_raw/feed.txt": ["tracker.com", "shop.co.uk"]}
+  },
+  "upstream": {
+    "a.b.tracker.com. A": ["a.b.tracker.com. 300 IN A 192.0.2.10"],
+    "www.shop.co.uk. A": ["www.shop.co.uk. 300 IN A 192.0.2.11"]
+  },
+  "cases": [
+    {
+      "id": "registrable-feed-line-blocks-itself",
+      "family": "psl",
+      "description": "the listed registrable domain is blocked",
+      "query": {"name": "tracker.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["tracker.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "subdomain-of-a-feed-line-relays",
+      "family": "psl",
+      "description": "without Wildcard Blocking its subdomain resolves (the control for psl-wildcard-on)",
+      "query": {"name": "a.b.tracker.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["a.b.tracker.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["a.b.tracker.com. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "multi-label-suffix-registrable-blocks-itself",
+      "family": "psl",
+      "description": "shop.co.uk is blocked as listed",
+      "query": {"name": "shop.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["shop.co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "multi-label-suffix-subdomain-relays",
+      "family": "psl",
+      "description": "and its subdomain resolves",
+      "query": {"name": "www.shop.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["www.shop.co.uk. A"],
+        "rcode": "NOERROR",
+        "answer": ["www.shop.co.uk. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    }
+  ]
+}

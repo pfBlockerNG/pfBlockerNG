@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "description": "python_hsts on with bank.example preloaded: a VIP block of an HSTS name is a null block, an NXDOMAIN block stays NXDOMAIN",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_hsts": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"},
+        {"raw": "pfb_py_raw/nx.txt", "feed": "NxFeed", "group": "NxGroup", "log_flag": "3"}
+      ]
+    },
+    "files": {
+      "pfb_py_hsts.txt": ["# preloaded parents", "bank.example"],
+      "pfb_py_raw/vip.txt": ["sub.bank.example", "a.b.c.bank.example", "plain-vip.example", "blocked.app"],
+      "pfb_py_raw/nx.txt": ["nx.bank.example"]
+    }
+  },
+  "upstream": {},
+  "cases": [
+    {
+      "id": "vip-block-under-an-hsts-parent-is-null",
+      "family": "hsts",
+      "description": "a name whose parent is preloaded gets the null address, not the VIP",
+      "query": {"name": "sub.bank.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.bank.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "vip-block-under-an-hsts-parent-is-null-for-aaaa",
+      "family": "hsts",
+      "description": "and the null IPv6 address for AAAA",
+      "query": {"name": "sub.bank.example.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.bank.example. 3600 IN AAAA ::"],
+        "authority": []
+      }
+    },
+    {
+      "id": "hsts-parent-several-labels-up-is-found",
+      "family": "hsts",
+      "description": "every parent suffix is checked: bank.example three labels up still makes the block null",
+      "query": {"name": "a.b.c.bank.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.b.c.bank.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "vip-block-without-an-hsts-parent-is-vip",
+      "family": "hsts",
+      "description": "a blocked name with no preloaded parent keeps the VIP answer",
+      "query": {"name": "plain-vip.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["plain-vip.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "vip-block-under-a-built-in-hsts-tld-is-null",
+      "family": "hsts",
+      "description": "a name under the built-in HSTS TLD app gets the null address",
+      "query": {"name": "blocked.app.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["blocked.app. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "nxdomain-block-of-an-hsts-name-stays-nxdomain",
+      "family": "hsts",
+      "description": "an NXDOMAIN-shaped block is not turned into a null address",
+      "query": {"name": "nx.bank.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NXDOMAIN",
+        "answer": [],
+        "authority": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "description": "TOP1M on, Wildcard Blocking on: plain feed registrable domains become zones; a marked Group's zone yields for names TOP1M lists, to the last unmarked writer of the same key",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"top1m_enabled": true},
+      "feeds": [
+        {"raw": "pfb_py_raw/plain.txt", "feed": "PlainFeed", "group": "PlainGroup", "log_flag": "0"},
+        {"raw": "pfb_py_raw/marked.txt", "feed": "MarkedFeed", "group": "MarkedGroup", "log_flag": "1", "top1m": true}
+      ]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "example",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_top1m.txt": ["zone1.example", "zone2.example"],
+      "pfb_py_raw/plain.txt": ["zone2.example"],
+      "pfb_py_raw/marked.txt": ["zone1.example", "zone2.example"]
+    }
+  },
+  "upstream": {
+    "zone1.example. A": ["zone1.example. 300 IN A 192.0.2.10"],
+    "www.zone1.example. A": ["www.zone1.example. 300 IN A 192.0.2.11"]
+  },
+  "cases": [
+    {
+      "id": "marked-zone-yields-for-the-listed-name",
+      "family": "top1m",
+      "description": "zone1.example (marked Group only) is listed by TOP1M: its zone does not block it",
+      "query": {"name": "zone1.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["zone1.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["zone1.example. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "marked-zone-still-blocks-an-unlisted-subdomain",
+      "family": "top1m",
+      "description": "the same zone still blocks a name TOP1M does not list",
+      "query": {"name": "sub.zone1.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.zone1.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "marked-zone-yields-for-the-www-form-of-the-listed-name",
+      "family": "top1m",
+      "description": "and yields for www. plus the listed name",
+      "query": {"name": "www.zone1.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["www.zone1.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["www.zone1.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "marked-zone-yields-to-the-unmarked-writer-of-the-same-key",
+      "family": "top1m",
+      "description": "zone2.example was written by an unmarked Group first, then by the marked one: for the listed name the unmarked entry (null answer) blocks",
+      "query": {"name": "zone2.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["zone2.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "marked-zone-last-writer-blocks-an-unlisted-subdomain",
+      "family": "top1m",
+      "description": "for an unlisted name under it the last writer, the marked Group (VIP answer), blocks",
+      "query": {"name": "sub.zone2.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.zone2.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

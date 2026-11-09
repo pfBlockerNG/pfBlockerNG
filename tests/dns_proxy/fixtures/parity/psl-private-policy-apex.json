@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "description": "a feed line at the PRIVATE suffix pages.com under psl_feed_private_policy = apex (Wildcard Blocking on, PRIVATE suffixes not recognised); the ICANN policy stays honor",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "true",
+        "psl_include_private": "false",
+        "psl_feed_private_policy": "apex",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": ["pages.com", "org.uk"]
+    }
+  },
+  "upstream": {
+    "x.pages.com. A": ["x.pages.com. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "private-suffix-line-is-demoted-to-the-apex",
+      "family": "psl",
+      "description": "the zone is demoted to an exact entry: pages.com is blocked",
+      "query": {"name": "pages.com.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["pages.com. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "private-suffix-line-no-longer-covers-its-tenants",
+      "family": "psl",
+      "description": "but a name under it resolves",
+      "query": {"name": "x.pages.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["x.pages.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["x.pages.com. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "icann-policy-is-independent-of-the-private-one",
+      "family": "psl",
+      "description": "the plain line at the ICANN suffix org.uk is an exact entry",
+      "query": {"name": "org.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["org.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}
