@@ -1819,12 +1819,25 @@ if ($alert_summary) {
 		$stat_hidden = array_flip($stat_hidden);
 	}
 
+	$window_groups = FALSE;
 	if ($alert_view == 'dnsbl_stat' || $alert_view == 'dnsbl_reply_stat') {
 		if ($stats_data) {
 			$visible_stats = array_diff_key($stat_info, $stat_hidden);
 			$unknown_msg = $alert_view == 'dnsbl_stat' ? pfb_dnsbl_mechanism_labels()['enabled'] : 'Unknown';
-			$dns_stats = $visible_stats ? pfb_dns_stats($alert_log, $visible_stats, $unknown_msg, $stats_since) : ['stats' => [], 'chart' => []];
+			// #3773: "Top Blocked Group" is a SQLite counter (cumulative, see the widget statistics below). In a bounded
+			// window it counts the window's own events instead: the group is column 7 of dnsbl.log. A hidden panel
+			// is not scanned for, and does not make the total computed.
+			$scan_stats = $visible_stats;
+			$window_groups = $alert_view == 'dnsbl_stat' && $stats_since !== NULL && !isset($stat_hidden['dnsblgpblock']);
+			if ($window_groups) {
+				$scan_stats['dnsblgpblock'] = 7;
+			}
+			$dns_stats = $scan_stats ? pfb_dns_stats($alert_log, $scan_stats, $unknown_msg, $stats_since) : ['stats' => [], 'chart' => []];
 			$alert_stats[$alert_view] = $dns_stats['stats'];
+			if ($window_groups) {
+				// Rows without a group were counted under the unknown label: they are not a group.
+				unset($alert_stats[$alert_view]['dnsblgpblock'][$unknown_msg]);
+			}
 			if ($visible_stats) {
 				$alert_stats['count'][$alert_view] = $dns_stats['count'];
 			}
@@ -1949,7 +1962,10 @@ if ($alert_summary) {
 	// Collect DNSBL widget statistics
 	if ($stats_data && $alert_view == 'dnsbl_stat') {
 		$alert_stats[$alert_view]['dnsblgptotal'] = array();
-		$alert_stats[$alert_view]['dnsblgpblock'] = array();
+		if (!$window_groups) {
+			$alert_stats[$alert_view]['dnsblgpblock'] = array();
+		}
+		$disabled_groups = array();
 
 		if (file_exists($pfb['dnsbl_info'])) {
 			$db_handle = pfb_open_sqlite(1, 'Report Stats');
@@ -1962,20 +1978,42 @@ if ($alert_summary) {
 						if (!empty($res['groupname'])) {
 							if ($res['entries'] == 'disabled') {
 								$res['entries']		= 0;
+								$disabled_groups[$res['groupname']] = TRUE;
 								$res['groupname']	= "{$res['groupname']}&emsp;(Disabled)";
 							}
 
 							$alert_stats[$alert_view]['dnsblgptotal'][$res['groupname']] = pfb_filter($res['entries'], PFB_FILTER_NUM, 'alerts widget stat', '0');
-							$alert_stats[$alert_view]['dnsblgpblock'][$res['groupname']] = pfb_filter($res['counter'], PFB_FILTER_NUM, 'alerts widget stat', '0');
+							if (!$window_groups) {
+								$alert_stats[$alert_view]['dnsblgpblock'][$res['groupname']] = pfb_filter($res['counter'], PFB_FILTER_NUM, 'alerts widget stat', '0');
+							}
 						}
 					}
 
 					array_multisort($alert_stats[$alert_view]['dnsblgptotal'], SORT_DESC, 1);
-					array_multisort($alert_stats[$alert_view]['dnsblgpblock'], SORT_DESC, 1);
+					if (!$window_groups) {
+						array_multisort($alert_stats[$alert_view]['dnsblgpblock'], SORT_DESC, 1);
+					}
 				}
 			}
 			$db_handle->close();
 			unset($db_handle);
+		}
+
+		// #3773: a bounded window counted the groups from dnsbl.log (above); label them like the SQLite list does.
+		if ($window_groups) {
+			$group_blocks = array();
+			foreach ($alert_stats[$alert_view]['dnsblgpblock'] as $group => $count) {
+				$group = pfb_filter((string) $group, PFB_FILTER_HTML, 'alerts widget stat');
+				if (empty($group)) {
+					continue;
+				}
+				if (isset($disabled_groups[$group])) {
+					$group = "{$group}&emsp;(Disabled)";
+				}
+				$group_blocks[$group] = ($group_blocks[$group] ?? 0) + $count;
+			}
+			arsort($group_blocks, SORT_NUMERIC);
+			$alert_stats[$alert_view]['dnsblgpblock'] = $group_blocks;
 		}
 	}
 }
