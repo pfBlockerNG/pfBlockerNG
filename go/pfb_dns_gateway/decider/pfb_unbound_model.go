@@ -1,7 +1,8 @@
 // Go translation of src/usr/local/pkg/pfblockerng/pfb_unbound.py, the matcher's data model and lookups:
-// _top1m_listed (5571-5574); iter_domain_suffixes .. hsts_check_domain with the whiteDB entry helpers
-// (6829-6970); DnsblDecision, UNSET, Decision, _decision_for, _LruCache, the PRIO_* bands and _block_entry_band
-// (6971-7127); whitelist_lookup_band (7264-7289); evaluate_noaaaa (7778-7781).
+// BuildResult, _snapshot_gen, Snapshot and containers (4525-4677); _top1m_listed (5571-5574);
+// iter_domain_suffixes .. hsts_check_domain with the whiteDB entry helpers (6829-6970); DnsblDecision, UNSET,
+// Decision, _decision_for, _LruCache, the PRIO_* bands and _block_entry_band (6971-7127); whitelist_lookup_band
+// (7264-7289); evaluate_noaaaa (7778-7781).
 //
 // Python dict payloads become the structs below; a key Python reads with .get(key, default) keeps a has* flag so
 // "absent" stays distinct from the zero value. A Python dict whose iteration order reaches a decision (the regex
@@ -11,10 +12,12 @@ package decider
 import (
 	"container/list"
 	"iter"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // ADR-07: the 6-band precedence scale. Highest wins; a block wins iff block_prio > allow_prio (no ties: block in
@@ -136,6 +139,157 @@ func (d *regexDB) items() iter.Seq2[string, *regexEntry] {
 				return
 			}
 		}
+	}
+}
+
+// safeSearchEntry is a safeSearchDB value: {"A", "AAAA"} plus, for a 5-column CNAME row, the baked "v4"/"v6".
+type safeSearchEntry struct{ a, aaaa, v4, v6 string }
+
+// buildResult is the structure-set build() returns. Every dict is fresh (no global is mutated), so the result is
+// safe to swap in later.
+type buildResult struct {
+	dataDB           map[string]*blockEntry
+	zoneDB           map[string]*blockEntry
+	feedGroupIndexDB map[int]feedGroup
+	whiteDB          map[string]whiteEntry
+	counts           int
+	userRegexDB      *regexDB
+	userAllowRegexDB *regexDB
+	regexDB          *regexDB
+	allowRegexDB     *regexDB
+	importantRules   bool
+	regexCount       int
+	rejects          rejectTally
+	pslRules         pslRules
+	// issue #3291: the effective global DNSBL mechanism's logging flag for built-in blocks; issue #3539: "0"
+	// (Null Blocking, logged) is the fail-safe.
+	builtinLogFlag string
+}
+
+func newBuildResult() *buildResult {
+	return &buildResult{
+		dataDB:           map[string]*blockEntry{},
+		zoneDB:           map[string]*blockEntry{},
+		feedGroupIndexDB: map[int]feedGroup{},
+		whiteDB:          map[string]whiteEntry{},
+		userRegexDB:      &regexDB{},
+		userAllowRegexDB: &regexDB{},
+		regexDB:          &regexDB{},
+		allowRegexDB:     &regexDB{},
+		rejects:          rejectTally{},
+		builtinLogFlag:   "0",
+	}
+}
+
+// issue #1074: every built snapshot gets a unique, monotonically advancing generation (Python
+// itertools.count(1)), so a decisionDB memo can be tied to the snapshot that produced it.
+var snapshotGen atomic.Int64
+
+// snapshot is ADR-10's immutable bundle of every matcher stratum a DNS query reads. It is published once through an
+// atomic.Pointer[snapshot] and a query Loads it once; nothing in it is written after the Store, so a swap can never
+// show a query a torn mix of two generations.
+//
+// noAAAADB, safeSearchDB, gpListDB, gpNetDB and settings are the owner's 2026-11-09 snapshot rule: Python keeps
+// them as module globals, here they swap with the snapshot. settings is an immutable copy of the config a decision
+// reads.
+type snapshot struct {
+	dataDB           map[string]*blockEntry
+	zoneDB           map[string]*blockEntry
+	whiteDB          map[string]whiteEntry
+	regexDB          *regexDB
+	allowRegexDB     *regexDB
+	userRegexDB      *regexDB
+	userAllowRegexDB *regexDB
+	feedGroupIndexDB map[int]feedGroup
+	hstsDB           map[string]struct{} // Python values are 0; only membership is read
+	importantRules   bool
+	counts           int
+	regexCount       int
+	rejects          rejectTally
+	groupEpochs      map[[2]string]string
+	pslRules         pslRules
+	// Python None marks hand-built legacy fixtures; runtime swaps always capture a tuple (empty included).
+	tldAllowRoots     []string
+	hasTldAllowRoots  bool
+	pslIncludePrivate bool
+	pslAllowPrivate   bool
+	// issue #2371: feed-at-suffix PSL policy per PSL section; "honor" keeps hand-built legacy fixtures
+	// decision-identical.
+	pslFeedPrivatePolicy string
+	pslFeedIcannPolicy   string
+	builtinLogFlag       string
+	// gen identifies this snapshot for decisionDB memo stamping; newSnapshot assigns it.
+	gen int64
+
+	noAAAADB     map[string]bool // Python values are the wildcard flag
+	safeSearchDB map[string]safeSearchEntry
+	gpListDB     map[string]int
+	gpNetDB      []netip.Prefix
+	settings     *pfbSettings
+}
+
+// newSnapshot returns a snapshot with Python's dataclass defaults and fresh writable dicts; the builder fills it in
+// before publishing it.
+func newSnapshot() *snapshot {
+	return &snapshot{
+		dataDB:               map[string]*blockEntry{},
+		zoneDB:               map[string]*blockEntry{},
+		whiteDB:              map[string]whiteEntry{},
+		regexDB:              &regexDB{},
+		allowRegexDB:         &regexDB{},
+		userRegexDB:          &regexDB{},
+		userAllowRegexDB:     &regexDB{},
+		feedGroupIndexDB:     map[int]feedGroup{},
+		hstsDB:               map[string]struct{}{},
+		rejects:              rejectTally{},
+		groupEpochs:          map[[2]string]string{},
+		pslIncludePrivate:    true,
+		pslFeedPrivatePolicy: "honor",
+		pslFeedIcannPolicy:   "honor",
+		builtinLogFlag:       "0",
+		gen:                  snapshotGen.Add(1),
+		noAAAADB:             map[string]bool{},
+		safeSearchDB:         map[string]safeSearchEntry{},
+		gpListDB:             map[string]int{},
+	}
+}
+
+// matcherContainers is the per-query "containers" dict evaluate_domain reads, with Python's legacy keys as fields.
+type matcherContainers struct {
+	dataDB               map[string]*blockEntry
+	zoneDB               map[string]*blockEntry
+	whiteDB              map[string]whiteEntry
+	regexDB              *regexDB
+	allowRegexDB         *regexDB
+	userRegexDB          *regexDB
+	userAllowRegexDB     *regexDB
+	feedGroupIndexDB     map[int]feedGroup
+	hstsDB               map[string]struct{}
+	pslRules             pslRules
+	tldAllowRoots        []string
+	pslIncludePrivate    bool
+	pslAllowPrivate      bool
+	pslFeedPrivatePolicy string
+	pslFeedIcannPolicy   string
+}
+
+func (s *snapshot) containers() matcherContainers {
+	return matcherContainers{
+		dataDB:               s.dataDB,
+		zoneDB:               s.zoneDB,
+		whiteDB:              s.whiteDB,
+		regexDB:              s.regexDB,
+		allowRegexDB:         s.allowRegexDB,
+		userRegexDB:          s.userRegexDB,
+		userAllowRegexDB:     s.userAllowRegexDB,
+		feedGroupIndexDB:     s.feedGroupIndexDB,
+		hstsDB:               s.hstsDB,
+		pslRules:             s.pslRules,
+		tldAllowRoots:        s.tldAllowRoots,
+		pslIncludePrivate:    s.pslIncludePrivate,
+		pslAllowPrivate:      s.pslAllowPrivate,
+		pslFeedPrivatePolicy: s.pslFeedPrivatePolicy,
+		pslFeedIcannPolicy:   s.pslFeedIcannPolicy,
 	}
 }
 
