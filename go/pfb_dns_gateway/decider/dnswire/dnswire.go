@@ -96,7 +96,6 @@ const (
 	_HEADER_SIZE = 12  // struct.Struct("!HHHHHH").size
 )
 
-// WireError: the packet is not a well-formed DNS message.
 type WireError struct{ msg string }
 
 func (e *WireError) Error() string { return e.msg }
@@ -130,8 +129,6 @@ func (m *Message) Rcode() int { return int(m.Flags & 0xF) }
 
 const EDNS_UDP_SIZE uint16 = 1232 // the UDP size the proxy advertises: Unbound's edns-buffer-size default
 
-// MakeOpt builds an EDNS OPT pseudo-RR: the class field carries the UDP size, the TTL field the DO bit, the rdata
-// `options` (already encoded).
 func MakeOpt(udpSize uint16, do bool, options []byte) RR {
 	var ttl uint32
 	if do {
@@ -139,8 +136,6 @@ func MakeOpt(udpSize uint16, do bool, options []byte) RR {
 	}
 	return RR{".", TYPE_OPT, udpSize, ttl, options}
 }
-
-// --- names ---------------------------------------------------------------------------------------
 
 func labelText(label []byte) string {
 	var out strings.Builder
@@ -168,8 +163,6 @@ func LabelsToText(labels [][]byte) string {
 	return out.String()
 }
 
-// NameToLabels turns a presentation name into labels (no root label). The error is Python's ValueError: what
-// cannot go on the wire.
 func NameToLabels(name string) ([][]byte, error) {
 	if name == "." {
 		return [][]byte{}, nil
@@ -190,8 +183,11 @@ func NameToLabels(name string) ([][]byte, error) {
 				return nil, fmt.Errorf("dangling escape in %s", pyRepr(name))
 			}
 			digits := chars[i:min(i+3, len(chars))]
-			// shortcut: Python's isdigit()/int() also take non-ASCII decimal digits (\٠٠١), here such an escape is
-			// "bad \DDD"; upgrade when a non-ASCII digit escape has to round-trip.
+			// shortcut: ASCII-only digit escapes. Python's isdigit() also takes the Nd decimal digits (`\٠٠١`: Python
+			// converts it to octet 1, Go answers "bad \DDD escape") and the No digits such as superscripts and circled
+			// digits (`\²`, `\①`: Python raises ValueError, Go takes the character literally). Unreachable from names the
+			// decider renders, because LabelsToText escapes every non-ASCII octet as \DDD; upgrade when a hand-written
+			// non-ASCII escape has to match Python.
 			if unicode.IsDigit(chars[i]) {
 				if len(digits) != 3 || !isASCIIDigits(string(digits)) {
 					return nil, fmt.Errorf("bad \\DDD escape in %s", pyRepr(name))
@@ -250,7 +246,6 @@ func EncodeName(name string) ([]byte, error) {
 	return append(out, 0), nil
 }
 
-// NameFromRdata is the name an uncompressed domain-name rdata (CNAME, NS, PTR) holds, in presentation form.
 func NameFromRdata(rdata []byte) (string, error) {
 	labels, _, err := readLabels(rdata, 0)
 	if err != nil {
@@ -259,11 +254,6 @@ func NameFromRdata(rdata []byte) (string, error) {
 	return LabelsToText(labels), nil
 }
 
-// readLabels returns the labels of the name at `pos` (following compression pointers) and the offset just past it
-// in the stream.
-//
-// A pointer must point strictly backwards, so a loop is impossible by construction; at most _MAX_HOPS pointers are
-// followed, because a chain of pointers aimed at the previous pointer costs a hop per link on every read.
 func readLabels(data []byte, pos int) ([][]byte, int, error) {
 	var labels [][]byte
 	wireLen := 1 // root octet
@@ -314,8 +304,6 @@ func readLabels(data []byte, pos int) ([][]byte, int, error) {
 	}
 }
 
-// --- parse ---------------------------------------------------------------------------------------
-
 func expandRdata(data []byte, rtype uint16, start, end int) ([]byte, error) {
 	layout, ok := _NAME_LAYOUTS[rtype]
 	if !ok {
@@ -353,7 +341,6 @@ func expandRdata(data []byte, rtype uint16, start, end int) ([]byte, error) {
 	return out, nil
 }
 
-// Parse a DNS message. Bytes after the last declared record are ignored.
 func Parse(data []byte) (*Message, error) {
 	if len(data) < _HEADER_SIZE {
 		return nil, &WireError{"short header"}
@@ -416,13 +403,9 @@ func Parse(data []byte) (*Message, error) {
 	return message, nil
 }
 
-// --- encode --------------------------------------------------------------------------------------
-
 // errStructH is the struct.error Python raises when a count or length does not fit a 16-bit wire field.
 var errStructH = errors.New("'H' format requires 0 <= number <= 65535")
 
-// Encode serialises a message, compressing owner names against everything already written. The error is Python's
-// ValueError (or struct.error for a count or rdata length beyond 16 bits).
 func Encode(m *Message) ([]byte, error) {
 	for _, count := range []int{len(m.Questions), len(m.Answers), len(m.Authority), len(m.Additional)} {
 		if count > 0xFFFF {
@@ -504,8 +487,6 @@ func asciiLower(label []byte) []byte {
 	return out
 }
 
-// --- text RRs (what pfb_unbound.py hands DNSMessage.answer/authority) ----------------------------
-
 func txtRdata(rest string) ([]byte, error) {
 	tokens, err := shlexSplit(rest)
 	if err != nil {
@@ -580,8 +561,6 @@ var _TEXT_RDATA = map[string]struct {
 	"SOA":   {TYPE_SOA, soaRdata},
 }
 
-// RRFromText builds an RR from `name ttl IN type rdata` (A, AAAA, CNAME, TXT, SOA); an error (Python's ValueError)
-// for anything else.
 func RRFromText(line string) (RR, error) {
 	parts := splitWhitespace(line, 4)
 	if len(parts) < 5 {
@@ -609,14 +588,13 @@ func RRFromText(line string) (RR, error) {
 	return RR{name, entry.code, CLASS_IN, uint32(ttlValue), rdata}, nil
 }
 
-// --- Python standard library, as dnswire.py uses it ----------------------------------------------
-
 // isSpace is str.isspace() for one character: Unicode White_Space plus the ASCII separators 0x1C-0x1F.
 func isSpace(r rune) bool { return unicode.IsSpace(r) || 0x1C <= r && r <= 0x1F }
 
 // isASCIIDigits is str.isdigit() restricted to ASCII.
-// shortcut: Python's isdigit()/int() also accept non-ASCII decimal digits (a ttl or SOA counter in Arabic-Indic
-// digits); those are rejected here. Upgrade when text RRs can come from outside the module.
+// shortcut: for a ttl or SOA counter Python's int() converts Nd decimal digits ("٦٠" is 60; Go rejects it) and rejects
+// No digits such as "²" or "①" (Go rejects them too, with its own message). Unreachable from the module's text RRs,
+// whose ttls are literals; upgrade when text RRs can come from outside the module.
 func isASCIIDigits(s string) bool {
 	if s == "" {
 		return false

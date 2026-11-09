@@ -880,3 +880,14 @@ func TestNameToLabelsLabelLengthMessage(t *testing.T) {
 		t.Fatalf("63-octet label: %q, %v", labels, err)
 	}
 }
+
+func TestEncodeNameAcceptsAName255OctetsLongOnTheWire(t *testing.T) {
+	got, err := EncodeName(strings.Repeat("a.", 127))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBytes(t, got, append(bytes.Repeat([]byte("\x01a"), 127), 0))
+	if len(got) != 255 {
+		t.Fatalf("wire length = %d, want 255", len(got))
+	}
+}
