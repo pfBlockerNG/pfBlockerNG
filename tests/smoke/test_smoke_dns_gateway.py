@@ -1273,7 +1273,7 @@ def _publish_listener_owner_table(vm: SmokeVM, overrides: dict[str, str] | None)
         "pfb_global();"
         "$table = pfb_dns_proxy_command_name_answers() ?? [];"
         "$owners = pfb_dns_proxy_address_interfaces();" + override + "foreach ($owners as $ip => $descr) {"
-        "if (mb_check_encoding($descr, 'UTF-8') && !preg_match('/\\p{Cc}/u', $descr)) {"
+        "if (pfb_dns_listener_label_valid($descr)) {"
         "$table[] = 'listener-interface ' . $ip . '=' . base64_encode($descr); }}"
         "$error = pfb_dns_proxy_address_table($table);"
         "if ($error !== NULL) { throw new RuntimeException($error); }",

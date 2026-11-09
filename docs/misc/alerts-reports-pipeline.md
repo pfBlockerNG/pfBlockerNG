@@ -44,8 +44,9 @@ interface columns; regex filter keys are DNSBL **22/23** and reply **91/92**. Mi
 **—**, including historical rows and native/observer events without a supported endpoint API; `^—$` selects it.
 
 The gateway snapshots the actual receiving socket address and its pfSense address-owner description at query time.
-This is not the client-subnet-derived Interface column or packet ingress. A loopback-owned VIP is `Localhost`,
-and later VIP moves/renames do not reinterpret stored rows. DNSBL's existing syslog path accepts the new 14-field
+This is not the client-subnet-derived Interface column or packet ingress. A loopback-owned VIP is `Localhost`, an IP alias on a
+CARP VIP is owned by the CARP VIP's interface, a description with a control, format, line or paragraph separator character
+(or invalid UTF-8) is no owner, and later VIP moves/renames do not reinterpret stored rows. DNSBL's existing syslog path accepts the new 14-field
 rows alongside older 11/12-field rows and adds known `listener_ip`/`listener_interface` tokens.
 `listener_interface` is a JSON-quoted, ASCII-escaped string; JSON-decode it to recover the exact Unicode,
 quote and backslash value. This avoids FreeBSD syslogd's byte-oriented C1 transformation. CSV, Reports

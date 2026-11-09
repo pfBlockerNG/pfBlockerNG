@@ -4641,12 +4641,11 @@ function pfb_syslog_format_dnsbl(array $fields): string
 	if (array_key_exists('transport', $fields)) {
 		$parts[] = 'transport=' . pfb_dns_transport($fields['transport']);
 	}
-	$listener = $fields['listener_ip'] ?? '';
-	$packed = is_string($listener) ? @inet_pton($listener) : FALSE;
-	if ($packed !== FALSE && trim($packed, "\0") !== '') {
-		$parts[] = 'listener_ip=' . pfb_syslog_escape((string) inet_ntop($packed));
+	$listener = pfb_dns_canonical_ip($fields['listener_ip'] ?? '');
+	if ($listener !== NULL) {
+		$parts[] = 'listener_ip=' . pfb_syslog_escape($listener);
 		$interface = $fields['listener_interface'] ?? '';
-		if (is_string($interface) && $interface !== '' && mb_check_encoding($interface, 'UTF-8') && !preg_match('/\p{Cc}/u', $interface)) {
+		if ($interface !== '' && pfb_dns_listener_label_valid($interface)) {
 			// ASCII JSON preserves UTF-8 through FreeBSD syslogd's byte-oriented C1 escaping.
 			$parts[] = 'listener_interface=' . json_encode($interface, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 		}
@@ -4679,6 +4678,27 @@ function pfb_unified_format_ip(array $fields): string
 function pfb_dns_transport(mixed $value): string
 {
 	return is_string($value) && in_array($value, ['TCP', 'UDP', 'DoT', 'DoH', 'DoQ'], TRUE) ? $value : 'Unknown';
+}
+
+/**
+ * The inet_ntop() text of a valid, specific IP address; NULL for anything else. A NUL byte is refused first: inet_pton() throws on it,
+ * and `@` does not stop that.
+ */
+function pfb_dns_canonical_ip(mixed $ip): ?string
+{
+	$packed = is_string($ip) && !str_contains($ip, "\0") ? @inet_pton($ip) : FALSE;
+	return $packed === FALSE || trim($packed, "\0") === '' ? NULL : (string) inet_ntop($packed);
+}
+
+/**
+ * TRUE for a listener description safe to log, store and send: valid UTF-8 (preg_match() is FALSE on invalid UTF-8) with no control,
+ * format, line- or paragraph-separator character.
+ *
+ * @phpstan-assert-if-true string $label
+ */
+function pfb_dns_listener_label_valid(mixed $label): bool
+{
+	return is_string($label) && preg_match('/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u', $label) === 0;
 }
 
 /**

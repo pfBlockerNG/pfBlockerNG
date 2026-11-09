@@ -47,14 +47,14 @@ final class DnsTransportSyslogTest extends TestCase
 			$this->assertJson($token, 'Interface must be a quoted JSON token');
 			$this->assertSame($interface, json_decode($token, TRUE, 512, JSON_THROW_ON_ERROR));
 		}
-		foreach (['bad', '0.0.0.0', '::', '[::1]', 'fe80::1%lo0', '192.0.2.1/24'] as $invalid) {
+		foreach (['bad', '0.0.0.0', '::', '[::1]', 'fe80::1%lo0', '192.0.2.1/24', "192.0.2.1\0"] as $invalid) {
 			$this->assertSame($old, pfb_syslog_format_dnsbl($base + ['listener_ip' => $invalid, 'listener_interface' => 'LAN']));
 		}
 	}
 	public function testSyslogOmitsInvalidInterfaceButKeepsKnownEndpoint(): void
 	{
 		$base = ['listener_ip' => '192.0.2.1'];
-		foreach (["LAN\u{0085}forged", "LAN\nforged", "LAN\0forged", "LAN\xff", [], FALSE, 42, null] as $interface) {
+		foreach (["LAN\u{0085}forged", "LAN\nforged", "LAN\0forged", "LAN\xff", "LAN\u{200D}forged", "LAN\u{200E}forged", "LAN\u{2028}forged", "LAN\u{2029}forged", "LAN\u{FEFF}forged", [], FALSE, 42, null] as $interface) {
 			$body = pfb_syslog_format_dnsbl($base + ['listener_interface' => $interface]);
 			$this->assertMatchesRegularExpression('/(?:^| )listener_ip=192\.0\.2\.1(?: |$)/', $body);
 			$this->assertStringNotContainsString('listener_interface=', $body);

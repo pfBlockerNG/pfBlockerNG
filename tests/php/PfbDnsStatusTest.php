@@ -963,6 +963,84 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame(['127.0.0.1' => 'Localhost', '::1' => 'Localhost'], pfb_dns_proxy_address_interfaces());
 	}
 
+	/** @return array<string,array{string}> */
+	public static function unsafeLabels(): array
+	{
+		return [
+			'zero width joiner' => ["bad\u{200D}name"],
+			'left-to-right mark' => ["bad\u{200E}name"],
+			'line separator' => ["bad\u{2028}name"],
+			'paragraph separator' => ["bad\u{2029}name"],
+			'newline' => ["bad\nname"],
+			'invalid UTF-8' => ["\xff"],
+		];
+	}
+
+	#[DataProvider('unsafeLabels')]
+	public function testAnInterfaceOrVipWhoseDescriptionIsNotASafeLabelOwnsNoAddressForThePanelOrTheGateway(string $description): void
+	{
+		// Given lan, with an address of each family and a VIP, described by unsafe text, and another interface with a valid description
+		$this->interfaces(['lan' => $description, 'opt1' => '日本'], ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'], ['lan' => '2001:db8::1']);
+		config_set_path('virtualip/vip', [['interface' => 'lan', 'subnet' => '192.0.2.9']]);
+
+		// Then the owner map the panel reads and the entries the gateway is sent agree: none of lan's addresses has an owner
+		$this->assertSame(['127.0.0.1' => 'Localhost', '::1' => 'Localhost', '198.51.100.1' => '日本'], pfb_dns_proxy_address_interfaces());
+		$this->assertSame([
+			'127.0.0.1=' . base64_encode('Localhost'),
+			'::1=' . base64_encode('Localhost'),
+			'198.51.100.1=' . base64_encode('日本'),
+		], pfb_dns_proxy_listener_interface_entries());
+	}
+
+	public function testValidNonAsciiDescriptionsReachTheGatewayBase64Encoded(): void
+	{
+		$this->interfaces(['lan' => 'Län,"\\', 'opt1' => '日本'], ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1']);
+
+		$this->assertSame([
+			'127.0.0.1=' . base64_encode('Localhost'),
+			'::1=' . base64_encode('Localhost'),
+			'192.0.2.1=' . base64_encode('Län,"\\'),
+			'198.51.100.1=' . base64_encode('日本'),
+		], pfb_dns_proxy_listener_interface_entries());
+	}
+
+	public function testAnAddressTheGatewaySpellsDifferentlyFromInetNtopGetsNoEntry(): void
+	{
+		// Given the embedded-IPv4 spellings PHP prints for ::ffff:192.0.2.9 and ::1.2.3.4 (Go prints the second as ::102:304 and rejects the first)
+		$this->interfaces(
+			['lan' => 'LAN', 'opt1' => 'GUEST', 'opt2' => 'DMZ'],
+			['lan' => '192.0.2.1'],
+			['lan' => '2001:db8::1', 'opt1' => '::ffff:192.0.2.9', 'opt2' => '::1.2.3.4']
+		);
+
+		// Then only the addresses both spell alike are sent
+		$this->assertSame([
+			'127.0.0.1=' . base64_encode('Localhost'),
+			'::1=' . base64_encode('Localhost'),
+			'192.0.2.1=' . base64_encode('LAN'),
+			'2001:db8::1=' . base64_encode('LAN'),
+		], pfb_dns_proxy_listener_interface_entries());
+	}
+
+	public function testAnIpAliasOnACarpVipIsLabelledWithTheInterfaceOfTheCarpVip(): void
+	{
+		// Given a CARP VIP on lan, an IP alias on that CARP VIP (pfSense names it `_vip<uniqid>`), and one on a CARP VIP that is gone
+		$this->interfaces(['lan' => 'LAN']);
+		config_set_path('virtualip/vip', [
+			['mode' => 'carp', 'interface' => 'lan', 'uniqid' => 'carp1', 'subnet' => '192.0.2.50'],
+			['mode' => 'ipalias', 'interface' => '_vipcarp1', 'uniqid' => 'alias1', 'subnet' => '192.0.2.60'],
+			['mode' => 'ipalias', 'interface' => '_vip_gone_1', 'uniqid' => 'alias2', 'subnet' => '192.0.2.61'],
+		]);
+
+		// Then both live ones belong to lan, and the alias whose parent is gone to nothing
+		$this->assertSame([
+			'127.0.0.1' => 'Localhost',
+			'::1' => 'Localhost',
+			'192.0.2.50' => 'LAN',
+			'192.0.2.60' => 'LAN',
+		], pfb_dns_proxy_address_interfaces());
+	}
+
 	public function testRowsAreOrderedLocalhostThenTheInterfacesInPfSensesOrderThenAddressesOfNoInterface(): void
 	{
 		// Given the interfaces wan (no address), lan and a guest one, and two addresses on none of them

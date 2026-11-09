@@ -291,6 +291,11 @@ final class MetricsWriteTest extends TestCase
 			'control interface' => ['listener_interface', "LAN\nforged"],
 			'C1 interface' => ['listener_interface', "LAN\u{0085}forged"],
 			'invalid UTF8 interface' => ['listener_interface', "LAN\xff"],
+			'zero width joiner interface' => ['listener_interface', "LAN\u{200D}forged"],
+			'bidi mark interface' => ['listener_interface', "LAN\u{200E}forged"],
+			'line separator interface' => ['listener_interface', "LAN\u{2028}forged"],
+			'paragraph separator interface' => ['listener_interface', "LAN\u{2029}forged"],
+			'byte order mark interface' => ['listener_interface', "LAN\u{FEFF}forged"],
 		];
 	}
 

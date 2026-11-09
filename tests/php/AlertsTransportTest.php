@@ -144,7 +144,7 @@ final class AlertsTransportTest extends TestCase
 				if (!$reply) {
 					$rows[] = array_slice($base, 0, 10);
 				}
-				foreach (['', '0.0.0.0', '::', '192.0.2.1/32', '[::1]', 'fe80::1%em0', '<script>', []] as $bad) {
+				foreach (['', '0.0.0.0', '::', '192.0.2.1/32', '[::1]', 'fe80::1%em0', '<script>', "192.0.2.1\0", []] as $bad) {
 					$rows[] = [...$base, 'UDP', $bad, 'LAN'];
 				}
 				$rows[] = [...$base, 'UDP', '192.0.2.53', "bad\ninterface"];
@@ -161,11 +161,11 @@ final class AlertsTransportTest extends TestCase
 		}
 	}
 
-	public function testControlReceivingInterfaceIsUnavailableWithoutLosingListenerIp(): void
+	public function testUnsafeReceivingInterfaceIsUnavailableWithoutLosingListenerIp(): void
 	{
 		foreach ([FALSE, TRUE] as $reply) {
 			foreach (['Reports', 'Unified'] as $mode) {
-				foreach (["\u{0080}", "\u{0085}", "\u{009f}"] as $control) {
+				foreach (["\u{0080}", "\u{0085}", "\u{009f}", "\u{200D}", "\u{200E}", "\u{2028}", "\u{2029}", "\u{FEFF}"] as $control) {
 					$row = [...$this->row($reply), 'UDP', '192.0.2.53', 'bad' . $control . 'interface'];
 					$GLOBALS['pfb']['filterlogentries'] = TRUE;
 					$GLOBALS['filterfieldsarray'][$reply ? 2 : 1] = [$reply ? 92 : 23 => '^—$'];

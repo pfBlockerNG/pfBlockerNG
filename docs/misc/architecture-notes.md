@@ -746,7 +746,7 @@ container, so on a phone a wide table scrolls inside its section instead of wide
 into rows, one per interface and outcome (state and reason), ordered Localhost, then the interfaces in pfSense's order, then each
 address that maps to no interface on a row of its own, labelled with the address. The label of an address comes from
 `pfb_dns_proxy_address_interfaces()`, which `pfb_dns_status()` asks once per page and hands to the grouping: loopback is `Localhost`, else the description of the interface that `get_interface_ip()` or
-`get_interface_ipv6()` ties it to (the first interface in pfSense's order when two carry it). A state is an icon (`fa-check-circle`,
+`get_interface_ipv6()` ties it to (the first interface in pfSense's order when two carry it), or of the interface a VIP is on (`pfb_vip_interface()`: an IP alias on a CARP VIP takes the CARP VIP's interface). A description with a control, format, line- or paragraph-separator character or invalid UTF-8 (`pfb_dns_listener_label_valid()`) is no label, so its addresses are in neither the panel's map nor the gateway's `listener-interface` entries; an address `inet_ntop()` spells with both `:` and `.` (`::ffff:a.b.c.d`) gets no entry either, since the gateway spells it differently. A state is an icon (`fa-check-circle`,
 `fa-times-circle`, `fa-exclamation-circle`) with its meaning as hover title and as `sr-only` text, so no colour or shape stands
 alone; a refusal also shows its reason. An off transport is its header alone, with no `<tbody>` (pfSense's `pfSenseHelpers.js` fills every empty one with a blank row); the recovery-required and not-in-use states show no
 transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the `ui_render` test of the pfB-DNS page,

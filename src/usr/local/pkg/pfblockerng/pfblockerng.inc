@@ -2401,6 +2401,16 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 	return $result === FALSE ? $default : $result;
 }
 
+/**
+ * The interface a stored VIP is on. An IP alias on a CARP VIP names it as `_vip<uniqid>`, which pfSense resolves to the CARP VIP's
+ * interface (get_configured_vip_interface()); '' when that VIP is gone.
+ * @param array<string,mixed> $vip
+ */
+function pfb_vip_interface(array $vip): string {
+	$interface = (string) ($vip['interface'] ?? '');
+	return str_starts_with($interface, '_vip') ? (string) get_configured_vip_interface($interface) : $interface;
+}
+
 function pfb_get_vips(): array {
 	$vips = get_specialnet('', [SPECIALNET_VIPS]);
 	$vips4 = [];
@@ -4645,10 +4655,12 @@ function pfb_dns_proxy_listen(?array &$skipped = NULL): array {
 
 /**
  * The label of each address pfB-DNS can serve, for the status panel's Interface column: 127.0.0.1 and ::1 are `Localhost`; every other
- * address is the pfSense description of the interface that carries it (get_interface_ip(), get_interface_ipv6()). In display order:
- * Localhost, then the interfaces as get_configured_interface_with_descr() lists them. An address two interfaces carry belongs to the
- * first; an address that is none (an interface with nothing assigned, a non-address) is left out. IPv6 keys are spelled as the gateway
- * prints them (pfb_dns_proxy_host_port()), so that a lookup by a logged address finds them.
+ * address is the pfSense description of the interface that carries it (get_interface_ip(), get_interface_ipv6()) or of the interface a
+ * VIP is on (pfb_vip_interface()). In display order: Localhost, then the interfaces as get_configured_interface_with_descr() lists
+ * them. An address two interfaces carry belongs to the first; an address that is none (an interface with nothing assigned, a
+ * non-address) is left out, as is one whose description is not a safe label (pfb_dns_listener_label_valid()), so that the panel and the
+ * gateway own the same addresses. IPv6 keys are spelled as the gateway prints them (pfb_dns_proxy_host_port()), so that a lookup by a
+ * logged address finds them.
  *
  * @return array<string,string> address (no port, no brackets) => label
  */
@@ -4659,32 +4671,34 @@ function pfb_dns_proxy_address_interfaces(): array {
 	}
 	$interfaces = (array) get_configured_interface_with_descr();
 	foreach ($interfaces as $interface => $description) {
+		if (!pfb_dns_listener_label_valid($description)) {
+			continue;
+		}
 		foreach ([get_interface_ip($interface), get_interface_ipv6($interface)] as $address) {
-			$packed = is_string($address) ? @inet_pton($address) : FALSE;
-			if ($packed !== FALSE && trim($packed, "\0") !== '') {
-				$labels[(string) inet_ntop($packed)] ??= (string) $description;
+			if (($canonical = pfb_dns_canonical_ip($address)) !== NULL) {
+				$labels[$canonical] ??= $description;
 			}
 		}
 	}
 	foreach (config_get_path('virtualip/vip', []) as $vip) {
-		$interface = $vip['interface'] ?? '';
+		$interface = pfb_vip_interface($vip);
 		$description = $interface === 'lo0' ? 'Localhost' : ($interfaces[$interface] ?? NULL);
-		$packed = @inet_pton((string) ($vip['subnet'] ?? ''));
-		if ($description !== NULL && $packed !== FALSE && trim($packed, "\0") !== '') {
-			$labels[(string) inet_ntop($packed)] ??= (string) $description;
+		if (pfb_dns_listener_label_valid($description) && ($canonical = pfb_dns_canonical_ip($vip['subnet'] ?? '')) !== NULL) {
+			$labels[$canonical] ??= $description;
 		}
 	}
 	return $labels;
 }
 
 /**
- * The address=base64(description) entries shared by the startup flags and live ownership table.
+ * The address=base64(description) entries shared by the startup flags and live ownership table. An address that holds both ':' and '.'
+ * is an embedded-IPv4 spelling (::a.b.c.d, ::ffff:a.b.c.d) that the gateway prints or accepts differently, so it gets no entry.
  * @return list<string>
  */
 function pfb_dns_proxy_listener_interface_entries(): array {
 	$entries = [];
 	foreach (pfb_dns_proxy_address_interfaces() as $address => $description) {
-		if (mb_check_encoding($description, 'UTF-8') && !preg_match('/\p{Cc}/u', $description)) {
+		if (!(str_contains($address, ':') && str_contains($address, '.'))) {
 			$entries[] = $address . '=' . base64_encode($description);
 		}
 	}
@@ -5664,11 +5678,14 @@ function pfb_dns_proxy_listener_remove(string $kind, string $at, ?string $socket
 }
 
 /**
- * Replace the running gateway's name-answer table on its control socket (FF FF FF FB, issue #3694): after the four head bytes, the length
- * of the body as 4 bytes big-endian and then $lines joined by "\n", each `dns-name-answer LOCAL=ADDR[,ADDR]` (the value of a
- * --dns-name-answer flag); no line is an empty table. The gateway checks the whole body first and answers one line: `ok` once the table is
- * replaced, or `error: <reason>` with the table unchanged (an older gateway answers the head as a bad message length, one started without
- * --dns-name `error: started without --dns-name`).
+ * Replace the running gateway's address tables on its control socket (FF FF FF FB, issues #3694, #3757): after the four head bytes, the
+ * length of the body as 4 bytes big-endian and then $lines joined by "\n"; no line is an empty table. A line is `dns-name-answer
+ * LOCAL=ADDR[,ADDR]` (the value of a --dns-name-answer flag), `ddr-doh-443 ADDR` (a --ddr-doh-443 flag) or `listener-interface
+ * IP=BASE64UTF8` (a --listener-interface flag). Name rows need a gateway started with --dns-name and DoH-443 rows one started with
+ * --ddr; an ownership-only or empty table needs neither. A listener-interface row the gateway cannot take is logged and skipped
+ * (docs/misc/dns-gateway-transports.md). The gateway answers one line: `ok` once the tables are replaced, or `error: <reason>` with them
+ * unchanged (an older gateway answers the head as a bad message length, one started without --dns-name or --ddr `error: started without
+ * --dns-name` or `error: started without --ddr` for the rows that need it).
  *
  * @param list<string> $lines
  * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
@@ -6429,8 +6446,9 @@ function pfb_dns_proxy_command_listeners(): array {
  * with nothing logged, any other failed bind is logged and skipped, a restart pending or not. While a restart is pending the rc script
  * may differ from the running gateway in more than addresses: nothing is removed or added, and a missing listener that binds now is the
  * reason to restart (issue #3598).
- * Last, for a command that names a DNS Name (--dns-name) and with no restart pending, the whole name-answer table the command's
- * --dns-name-answer arguments give is sent as one frame (pfb_dns_proxy_address_table(), issue #3694), so that a changed answer is never a restart.
+ * Last, with no restart pending, the whole table is sent as one frame (pfb_dns_proxy_address_table(), issues #3694, #3757): the name
+ * answers when the command names a DNS Name (--dns-name), its DDR DoH-443 rows and the listener-interface ownership rows, on every
+ * sync, so that a changed answer or owner is never a restart.
  *
  * @param array{listening: array<string,array<string,true>>, refused: array<string,array<string,string>>}|null $served the gateway's list,
  *        NULL = unknown (nothing to compare with: nothing is done)
@@ -11227,20 +11245,12 @@ function pfb_metrics_collect(): array {
 			}
 			foreach (array('listener_ip', 'client_ip') as $label) {
 				$row[$label] ??= '';
-				if (!is_string($row[$label])) {
-					throw new UnexpectedValueException('Invalid DNS metric address');
-				}
 				if ($row[$label] !== '') {
-					$packed = @inet_pton($row[$label]);
-					if ($packed === FALSE || trim($packed, "\0") === '') {
-						throw new UnexpectedValueException('Invalid DNS metric address');
-					}
-					$row[$label] = (string) inet_ntop($packed);
+					$row[$label] = pfb_dns_canonical_ip($row[$label]) ?? throw new UnexpectedValueException('Invalid DNS metric address');
 				}
 			}
 			$row['listener_interface'] ??= '';
-			if (!is_string($row['listener_interface']) || !mb_check_encoding($row['listener_interface'], 'UTF-8')
-			    || preg_match('/\p{Cc}/u', $row['listener_interface']) || ($row['listener_ip'] === '' && $row['listener_interface'] !== '')) {
+			if (!pfb_dns_listener_label_valid($row['listener_interface']) || ($row['listener_ip'] === '' && $row['listener_interface'] !== '')) {
 				throw new UnexpectedValueException('Invalid DNS metric interface');
 			}
 			$key = serialize(array($group, $row['qtype'], $row['transport'], $row['listener_ip'], $row['listener_interface'], $row['client_ip']));
@@ -16643,8 +16653,9 @@ function pfb_dns_ddr_status(?string $only = NULL): array {
 			continue;
 		}
 		$managed = pfb_managed_obj_match($vip, 'pfB_DNS_LISTEN_VIP_v4') || pfb_managed_obj_match($vip, 'pfB_DNS_LISTEN_VIP_v6');
+		$interface = pfb_vip_interface($vip);
 		$vips[(string) inet_ntop($packed)] = [
-			'interface' => (string) ($interfaces[$vip['interface'] ?? ''] ?? $vip['interface'] ?? ''),
+			'interface' => (string) ($interfaces[$interface] ?? $interface),
 			'identity' => $managed ? 'Managed Resolver VIP' : 'Manual VIP: ' . (string) ($vip['descr'] ?? $vip['uniqid'] ?? ''),
 		];
 	}

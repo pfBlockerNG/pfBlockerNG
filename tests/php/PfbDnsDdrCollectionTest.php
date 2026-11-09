@@ -90,6 +90,23 @@ final class PfbDnsDdrCollectionTest extends TestCase
 		}
 	}
 
+	public function testAnIpAliasOnACarpVipShowsTheInterfaceOfTheCarpVipNotItsInternalId(): void
+	{
+		// Given a CARP VIP on lan, and an IP alias on it that pfSense stores as `_vip<uniqid>`, which the gateway serves
+		$this->ready();
+		config_set_path('virtualip/vip', [
+			['mode' => 'carp', 'interface' => 'lan', 'uniqid' => 'carp1', 'subnet' => '192.0.2.50', 'descr' => 'Carp'],
+			['mode' => 'ipalias', 'interface' => '_vipcarp1', 'uniqid' => 'alias1', 'subnet' => '192.0.2.60', 'descr' => 'Alias'],
+		]);
+		$this->gatewayServes(['udp+tcp 192.0.2.60:53'], []);
+
+		// Then its row names lan's description
+		$this->assertSame(
+			[['LAN <guest>', 'Manual VIP: Alias', '192.0.2.60:53']],
+			array_map(static fn (array $row): array => [$row['interface'], $row['identity'], $row['address']], pfb_dns_ddr_status()['rows'])
+		);
+	}
+
 	public function testStoppedServiceDoesNotTurnIntoAnEmptySuccessfulQuery(): void
 	{
 		$status = pfb_dns_ddr_status();

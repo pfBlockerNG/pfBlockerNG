@@ -2358,19 +2358,15 @@ function pfb_alerts_unlocked_entry_actions(string $kind, string $entry, string $
 
 // Metadata is an event snapshot, never reconstructed from today's interface map.
 function pfb_report_listener($ip, $interface): array {
-	$packed = is_string($ip) ? @inet_pton($ip) : FALSE;
-	if ($packed === FALSE || trim($packed, "\0") === '') {
+	$canonical = pfb_dns_canonical_ip($ip);
+	if ($canonical === NULL) {
 		return array('—', '—');
 	}
-	$ip = inet_ntop($packed);
-	if (strlen($packed) === 16 && substr($packed, 0, 12) === str_repeat("\0", 10) . "\xff\xff") {
-		$ip = inet_ntop(substr($packed, 12));
-	}
+	$ip = pfb_ipv4_from_mapped($canonical) ?? $canonical;
 	if ($ip === '0.0.0.0') {
 		return array('—', '—');
 	}
-	$interface = is_string($interface) && $interface !== '' &&
-		preg_match('//u', $interface) === 1 && !preg_match('/\p{Cc}/u', $interface) ? $interface : '—';
+	$interface = $interface !== '' && pfb_dns_listener_label_valid($interface) ? $interface : '—';
 	return array($ip, $interface);
 }
 
