@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "description": "user regex: MAIN.regex_list rows (base64 in the ini) and a Custom_List /re/ line block like feed regex; a refused user pattern never blocks",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1",
+        "regex_list": "XnVzZXItbWFpblswLTldXC5leGFtcGxlJApedXNlci1kZXNjWzAtOV1cLmV4YW1wbGUkICMgYSByb3cgd2l0aCBhIGRlc2NyaXB0aW9uCl4oPz11KXVzZXItcmVmdXNlZFwuZXhhbXBsZSQ="
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {
+          "raw": "pfb_py_raw/custom.txt",
+          "feed": "CustomList",
+          "group": "CustomListGroup",
+          "log_flag": "1",
+          "provenance": "user"
+        }
+      ]
+    },
+    "files": {
+      "pfb_py_raw/custom.txt": ["/^custom-re[0-9]\\.example$/"]
+    }
+  },
+  "upstream": {
+    "user-main-x.example. A": ["user-main-x.example. 300 IN A 192.0.2.11"],
+    "user-refused.example. A": ["user-refused.example. 300 IN A 192.0.2.12"],
+    "custom-rex.example. A": ["custom-rex.example. 300 IN A 192.0.2.13"]
+  },
+  "cases": [
+    {
+      "id": "blocked-user-main3",
+      "family": "regex",
+      "description": "a MAIN.regex_list row blocks the names it matches",
+      "query": {"name": "user-main3.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["user-main3.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "resolves-user-main-x",
+      "family": "regex",
+      "description": "a MAIN.regex_list row does not block a name it does not match",
+      "query": {"name": "user-main-x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["user-main-x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["user-main-x.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "blocked-user-desc7",
+      "family": "regex",
+      "description": "a MAIN.regex_list row with a trailing # description is the pattern before the description",
+      "query": {"name": "user-desc7.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["user-desc7.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "resolves-user-refused",
+      "family": "regex",
+      "description": "a MAIN.regex_list row the admission gate refuses (lookahead) never blocks",
+      "query": {"name": "user-refused.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["user-refused.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["user-refused.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "blocked-custom-re5",
+      "family": "regex",
+      "description": "a Custom_List /re/ line is a user regex block",
+      "query": {"name": "custom-re5.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["custom-re5.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "resolves-custom-rex",
+      "family": "regex",
+      "description": "a Custom_List /re/ line does not block a name it does not match",
+      "query": {"name": "custom-rex.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["custom-rex.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["custom-rex.example. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    }
+  ]
+}

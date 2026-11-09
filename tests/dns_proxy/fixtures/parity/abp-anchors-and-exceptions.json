@@ -1,0 +1,120 @@
+{
+  "schema": 1,
+  "description": "ABP ||d^ block lines and an @@||d^ exception under a ||parent^ block; the exception makes the feed @@ engage the six-band resolution",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/abp.txt": ["||block-d.example^", "||parent.example^", "@@||allowed.parent.example^"]
+    }
+  },
+  "upstream": {
+    "allowed.parent.example. A": ["allowed.parent.example. 300 IN A 192.0.2.11"],
+    "x.allowed.parent.example. A": ["x.allowed.parent.example. 300 IN A 192.0.2.12"]
+  },
+  "cases": [
+    {
+      "id": "anchor-rule-blocks-the-apex",
+      "family": "abp",
+      "description": "||d^ blocks the domain itself",
+      "query": {"name": "block-d.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["block-d.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "anchor-rule-blocks-a-subdomain",
+      "family": "abp",
+      "description": "||d^ blocks a subdomain of d",
+      "query": {"name": "www.block-d.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["www.block-d.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "anchor-rule-blocks-a-deep-subdomain",
+      "family": "abp",
+      "description": "||d^ blocks subdomains at any depth",
+      "query": {"name": "a.b.block-d.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.b.block-d.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exception-relays-its-own-name-under-a-blocked-parent",
+      "family": "abp",
+      "description": "@@||d^ on a name under a ||parent^ block resolves d (feed allow band 2 beats feed block band 1)",
+      "query": {"name": "allowed.parent.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["allowed.parent.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["allowed.parent.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exception-relays-its-subdomains-too",
+      "family": "abp",
+      "description": "@@||d^ covers the subdomains of d like ||d^ does",
+      "query": {"name": "x.allowed.parent.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["x.allowed.parent.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["x.allowed.parent.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exception-leaves-a-sibling-blocked",
+      "family": "abp",
+      "description": "a sibling of d under the same blocked parent stays blocked",
+      "query": {"name": "other.parent.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["other.parent.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exception-leaves-the-parent-itself-blocked",
+      "family": "abp",
+      "description": "the ||parent^ apex is not covered by the exception for a child",
+      "query": {"name": "parent.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["parent.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

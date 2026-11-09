@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "description": "feed /re/ lines the admission gate refuses never block, even though Python re would match them; admitted twins and a control block",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/regex.txt", "feed": "RegexFeed", "group": "RegexFeedGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/regex.txt": [
+        "/^r16ok[0-9]\\.example$/",
+        "/^r16b-(a)\\1\\.example$/",
+        "/^r16l(?=x)xy\\.example$/",
+        "/^r16x\\x41\\.example$/",
+        "/^r16q(a|b)+\\.example$/",
+        "/r16c.*a.*b/",
+        "/^r16d.*a.*b/"
+      ]
+    }
+  },
+  "upstream": {
+    "r16ok-x.example. A": ["r16ok-x.example. 300 IN A 192.0.2.11"],
+    "r16b-aa.example. A": ["r16b-aa.example. 300 IN A 192.0.2.12"],
+    "r16lxy.example. A": ["r16lxy.example. 300 IN A 192.0.2.13"],
+    "r16xa.example. A": ["r16xa.example. 300 IN A 192.0.2.14"],
+    "r16qab.example. A": ["r16qab.example. 300 IN A 192.0.2.15"],
+    "r16cxaxb.example. A": ["r16cxaxb.example. 300 IN A 192.0.2.16"]
+  },
+  "cases": [
+    {
+      "id": "blocked-r16ok1",
+      "family": "regex",
+      "description": "the control: an admitted pattern in the same list loads and blocks",
+      "query": {"name": "r16ok1.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r16ok1.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "resolves-r16ok-x",
+      "family": "regex",
+      "description": "the control's near miss: a hyphen is not a digit",
+      "query": {"name": "r16ok-x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r16ok-x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r16ok-x.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-resolves-r16b-aa",
+      "family": "regex",
+      "description": "R16: a backreference is refused, so aa (which \\1 would match) resolves",
+      "query": {"name": "r16b-aa.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r16b-aa.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r16b-aa.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-resolves-r16lxy",
+      "family": "regex",
+      "description": "R16: a lookahead group is refused, so the name it would match resolves",
+      "query": {"name": "r16lxy.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r16lxy.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r16lxy.example. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-resolves-r16xa",
+      "family": "regex",
+      "description": "R16: a letter escape (\\x41) is refused, so the name it would match resolves",
+      "query": {"name": "r16xa.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r16xa.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r16xa.example. 300 IN A 192.0.2.14"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-resolves-r16qab",
+      "family": "regex",
+      "description": "R16: a quantified group with an alternation is refused, so the name it would match resolves",
+      "query": {"name": "r16qab.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r16qab.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r16qab.example. 300 IN A 192.0.2.15"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-resolves-r16cxaxb",
+      "family": "regex",
+      "description": "R16: an unanchored pattern over the cost bound is refused (not loaded as a slow rule), so it resolves",
+      "query": {"name": "r16cxaxb.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r16cxaxb.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r16cxaxb.example. 300 IN A 192.0.2.16"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r16-blocked-r16dxaxb",
+      "family": "regex",
+      "description": "R16: the same pattern anchored with ^ is under the bound, is admitted and blocks",
+      "query": {"name": "r16dxaxb.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r16dxaxb.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    }
+  ]
+}

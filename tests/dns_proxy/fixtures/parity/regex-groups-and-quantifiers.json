@@ -1,0 +1,1003 @@
+{
+  "schema": 1,
+  "description": "feed /re/ lines: groups, alternation, every quantifier greedy and lazy, optional groups, repeated plain-run groups and leading dot runs",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/regex.txt", "feed": "RegexFeed", "group": "RegexFeedGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/regex.txt": [
+        "/^r8c(ab)c\\.example$/",
+        "/^r8n(?:ab)c\\.example$/",
+        "/^r9t1\\.example$|^r9t2\\.example$/",
+        "/^r9g(x|y)z\\.example$/",
+        "/^r10q-?x\\.example$/",
+        "/^r10s-*x\\.example$/",
+        "/^r10p-+x\\.example$/",
+        "/^r10m[0-9]{3}\\.example$/",
+        "/^r10n[0-9]{2,}\\.example$/",
+        "/^r10r[0-9]{2,3}\\.example$/",
+        "/^r11a-??x\\.example$/",
+        "/^r11b-*?x\\.example$/",
+        "/^r11c-+?x\\.example$/",
+        "/^r11d[0-9]{2,3}?\\.example$/",
+        "/^r12o(?:a[0-9]|b)?x\\.example$/",
+        "/^r12p(?:ab)+x\\.example$/",
+        "/^r12r(ab){2}x\\.example$/",
+        "/.*r13a\\.example$/",
+        "/.+r13b\\.example$/",
+        "/.*?r13c\\.example$/",
+        "/.+?r13d\\.example$/",
+        "/^r13e\\.example$|.*r13f\\.example$/"
+      ]
+    }
+  },
+  "upstream": {
+    "r8cac.example. A": ["r8cac.example. 300 IN A 192.0.2.11"],
+    "r8cabbc.example. A": ["r8cabbc.example. 300 IN A 192.0.2.12"],
+    "r8nac.example. A": ["r8nac.example. 300 IN A 192.0.2.13"],
+    "r9t3.example. A": ["r9t3.example. 300 IN A 192.0.2.14"],
+    "r9gwz.example. A": ["r9gwz.example. 300 IN A 192.0.2.15"],
+    "r9gz.example. A": ["r9gz.example. 300 IN A 192.0.2.16"],
+    "r10q--x.example. A": ["r10q--x.example. 300 IN A 192.0.2.17"],
+    "r10s-y.example. A": ["r10s-y.example. 300 IN A 192.0.2.18"],
+    "r10px.example. A": ["r10px.example. 300 IN A 192.0.2.19"],
+    "r10m12.example. A": ["r10m12.example. 300 IN A 192.0.2.20"],
+    "r10m1234.example. A": ["r10m1234.example. 300 IN A 192.0.2.21"],
+    "r10n1.example. A": ["r10n1.example. 300 IN A 192.0.2.22"],
+    "r10r1.example. A": ["r10r1.example. 300 IN A 192.0.2.23"],
+    "r10r1234.example. A": ["r10r1234.example. 300 IN A 192.0.2.24"],
+    "r11a--x.example. A": ["r11a--x.example. 300 IN A 192.0.2.25"],
+    "r11b-y.example. A": ["r11b-y.example. 300 IN A 192.0.2.26"],
+    "r11cx.example. A": ["r11cx.example. 300 IN A 192.0.2.27"],
+    "r11d1.example. A": ["r11d1.example. 300 IN A 192.0.2.28"],
+    "r12oa5bx.example. A": ["r12oa5bx.example. 300 IN A 192.0.2.29"],
+    "r12oax.example. A": ["r12oax.example. 300 IN A 192.0.2.30"],
+    "r12px.example. A": ["r12px.example. 300 IN A 192.0.2.31"],
+    "r12paabx.example. A": ["r12paabx.example. 300 IN A 192.0.2.32"],
+    "r12rabx.example. A": ["r12rabx.example. 300 IN A 192.0.2.33"],
+    "r12rabababx.example. A": ["r12rabababx.example. 300 IN A 192.0.2.34"],
+    "r13a.example.net. A": ["r13a.example.net. 300 IN A 192.0.2.35"],
+    "r13b.example. A": ["r13b.example. 300 IN A 192.0.2.36"],
+    "r13c.example.net. A": ["r13c.example.net. 300 IN A 192.0.2.37"],
+    "r13d.example. A": ["r13d.example. 300 IN A 192.0.2.38"],
+    "x.r13e.example. A": ["x.r13e.example. 300 IN A 192.0.2.39"],
+    "r13f.example.net. A": ["r13f.example.net. 300 IN A 192.0.2.40"]
+  },
+  "cases": [
+    {
+      "id": "r8-blocked-r8cabc",
+      "family": "regex",
+      "description": "R8: a capturing group matches its body",
+      "query": {"name": "r8cabc.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r8cabc.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r8-resolves-r8cac",
+      "family": "regex",
+      "description": "R8: a capturing group needs its whole body, once",
+      "query": {"name": "r8cac.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r8cac.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r8cac.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r8-resolves-r8cabbc",
+      "family": "regex",
+      "description": "R8: a capturing group needs its whole body, once",
+      "query": {"name": "r8cabbc.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r8cabbc.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r8cabbc.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r8-blocked-r8nabc",
+      "family": "regex",
+      "description": "R8: a non-capturing group matches its body",
+      "query": {"name": "r8nabc.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r8nabc.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r8-resolves-r8nac",
+      "family": "regex",
+      "description": "R8: a non-capturing group needs its whole body",
+      "query": {"name": "r8nac.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r8nac.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r8nac.example. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r9-blocked-r9t1",
+      "family": "regex",
+      "description": "R9: a top-level | matches either whole branch",
+      "query": {"name": "r9t1.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r9t1.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r9-blocked-r9t2",
+      "family": "regex",
+      "description": "R9: a top-level | matches either whole branch",
+      "query": {"name": "r9t2.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r9t2.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r9-resolves-r9t3",
+      "family": "regex",
+      "description": "R9: a top-level | matches neither a third name",
+      "query": {"name": "r9t3.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r9t3.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r9t3.example. 300 IN A 192.0.2.14"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r9-blocked-r9gxz",
+      "family": "regex",
+      "description": "R9: | inside a group matches either alternative",
+      "query": {"name": "r9gxz.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r9gxz.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r9-blocked-r9gyz",
+      "family": "regex",
+      "description": "R9: | inside a group matches either alternative",
+      "query": {"name": "r9gyz.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r9gyz.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r9-resolves-r9gwz",
+      "family": "regex",
+      "description": "R9: | inside a group needs one of its alternatives",
+      "query": {"name": "r9gwz.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r9gwz.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r9gwz.example. 300 IN A 192.0.2.15"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r9-resolves-r9gz",
+      "family": "regex",
+      "description": "R9: | inside a group needs one of its alternatives",
+      "query": {"name": "r9gz.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r9gz.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r9gz.example. 300 IN A 192.0.2.16"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10qx",
+      "family": "regex",
+      "description": "R10: ? matches zero or one",
+      "query": {"name": "r10qx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10qx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10q-x",
+      "family": "regex",
+      "description": "R10: ? matches zero or one",
+      "query": {"name": "r10q-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10q-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-resolves-r10q--x",
+      "family": "regex",
+      "description": "R10: ? does not match two",
+      "query": {"name": "r10q--x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r10q--x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r10q--x.example. 300 IN A 192.0.2.17"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10sx",
+      "family": "regex",
+      "description": "R10: * matches zero or many",
+      "query": {"name": "r10sx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10sx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10s---x",
+      "family": "regex",
+      "description": "R10: * matches zero or many",
+      "query": {"name": "r10s---x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10s---x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-resolves-r10s-y",
+      "family": "regex",
+      "description": "R10: * still needs the rest of the pattern",
+      "query": {"name": "r10s-y.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r10s-y.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r10s-y.example. 300 IN A 192.0.2.18"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10p-x",
+      "family": "regex",
+      "description": "R10: + matches one or many",
+      "query": {"name": "r10p-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10p-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10p---x",
+      "family": "regex",
+      "description": "R10: + matches one or many",
+      "query": {"name": "r10p---x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10p---x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-resolves-r10px",
+      "family": "regex",
+      "description": "R10: + does not match zero",
+      "query": {"name": "r10px.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r10px.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r10px.example. 300 IN A 192.0.2.19"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10m123",
+      "family": "regex",
+      "description": "R10: {m} matches exactly m",
+      "query": {"name": "r10m123.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10m123.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-resolves-r10m12",
+      "family": "regex",
+      "description": "R10: {m} does not match fewer or more",
+      "query": {"name": "r10m12.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r10m12.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r10m12.example. 300 IN A 192.0.2.20"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-resolves-r10m1234",
+      "family": "regex",
+      "description": "R10: {m} does not match fewer or more",
+      "query": {"name": "r10m1234.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r10m1234.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r10m1234.example. 300 IN A 192.0.2.21"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10n12",
+      "family": "regex",
+      "description": "R10: {m,} matches m or more",
+      "query": {"name": "r10n12.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10n12.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10n12345",
+      "family": "regex",
+      "description": "R10: {m,} matches m or more",
+      "query": {"name": "r10n12345.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10n12345.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-resolves-r10n1",
+      "family": "regex",
+      "description": "R10: {m,} does not match fewer than m",
+      "query": {"name": "r10n1.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r10n1.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r10n1.example. 300 IN A 192.0.2.22"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10r12",
+      "family": "regex",
+      "description": "R10: {m,n} matches m to n",
+      "query": {"name": "r10r12.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10r12.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-blocked-r10r123",
+      "family": "regex",
+      "description": "R10: {m,n} matches m to n",
+      "query": {"name": "r10r123.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r10r123.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-resolves-r10r1",
+      "family": "regex",
+      "description": "R10: {m,n} does not match fewer than m or more than n",
+      "query": {"name": "r10r1.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r10r1.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r10r1.example. 300 IN A 192.0.2.23"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r10-resolves-r10r1234",
+      "family": "regex",
+      "description": "R10: {m,n} does not match fewer than m or more than n",
+      "query": {"name": "r10r1234.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r10r1234.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r10r1234.example. 300 IN A 192.0.2.24"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-blocked-r11ax",
+      "family": "regex",
+      "description": "R11: lazy ?? matches zero or one",
+      "query": {"name": "r11ax.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r11ax.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-blocked-r11a-x",
+      "family": "regex",
+      "description": "R11: lazy ?? matches zero or one",
+      "query": {"name": "r11a-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r11a-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-resolves-r11a--x",
+      "family": "regex",
+      "description": "R11: lazy ?? does not match two",
+      "query": {"name": "r11a--x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r11a--x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r11a--x.example. 300 IN A 192.0.2.25"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-blocked-r11bx",
+      "family": "regex",
+      "description": "R11: lazy *? matches zero or many",
+      "query": {"name": "r11bx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r11bx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-blocked-r11b--x",
+      "family": "regex",
+      "description": "R11: lazy *? matches zero or many",
+      "query": {"name": "r11b--x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r11b--x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-resolves-r11b-y",
+      "family": "regex",
+      "description": "R11: lazy *? still needs the rest of the pattern",
+      "query": {"name": "r11b-y.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r11b-y.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r11b-y.example. 300 IN A 192.0.2.26"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-blocked-r11c-x",
+      "family": "regex",
+      "description": "R11: lazy +? matches one",
+      "query": {"name": "r11c-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r11c-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-resolves-r11cx",
+      "family": "regex",
+      "description": "R11: lazy +? does not match zero",
+      "query": {"name": "r11cx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r11cx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r11cx.example. 300 IN A 192.0.2.27"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-blocked-r11d12",
+      "family": "regex",
+      "description": "R11: lazy {m,n}? matches m to n",
+      "query": {"name": "r11d12.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r11d12.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-blocked-r11d123",
+      "family": "regex",
+      "description": "R11: lazy {m,n}? matches m to n",
+      "query": {"name": "r11d123.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r11d123.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r11-resolves-r11d1",
+      "family": "regex",
+      "description": "R11: lazy {m,n}? does not match fewer than m",
+      "query": {"name": "r11d1.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r11d1.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r11d1.example. 300 IN A 192.0.2.28"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-blocked-r12ox",
+      "family": "regex",
+      "description": "R12: an optional group with a class and an alternation matches with either body or none",
+      "query": {"name": "r12ox.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r12ox.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-blocked-r12oa5x",
+      "family": "regex",
+      "description": "R12: an optional group with a class and an alternation matches with either body or none",
+      "query": {"name": "r12oa5x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r12oa5x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-blocked-r12obx",
+      "family": "regex",
+      "description": "R12: an optional group with a class and an alternation matches with either body or none",
+      "query": {"name": "r12obx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r12obx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-resolves-r12oa5bx",
+      "family": "regex",
+      "description": "R12: an optional group is one body at most and a body is whole",
+      "query": {"name": "r12oa5bx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r12oa5bx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r12oa5bx.example. 300 IN A 192.0.2.29"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-resolves-r12oax",
+      "family": "regex",
+      "description": "R12: an optional group is one body at most and a body is whole",
+      "query": {"name": "r12oax.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r12oax.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r12oax.example. 300 IN A 192.0.2.30"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-blocked-r12pabx",
+      "family": "regex",
+      "description": "R12: a repeated plain run (?:ab)+ matches one run or more",
+      "query": {"name": "r12pabx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r12pabx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-blocked-r12pababx",
+      "family": "regex",
+      "description": "R12: a repeated plain run (?:ab)+ matches one run or more",
+      "query": {"name": "r12pababx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r12pababx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-resolves-r12px",
+      "family": "regex",
+      "description": "R12: a repeated plain run needs at least one whole run",
+      "query": {"name": "r12px.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r12px.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r12px.example. 300 IN A 192.0.2.31"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-resolves-r12paabx",
+      "family": "regex",
+      "description": "R12: a repeated plain run needs at least one whole run",
+      "query": {"name": "r12paabx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r12paabx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r12paabx.example. 300 IN A 192.0.2.32"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-blocked-r12rababx",
+      "family": "regex",
+      "description": "R12: a counted plain-run group (ab){2} matches exactly two runs",
+      "query": {"name": "r12rababx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r12rababx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-resolves-r12rabx",
+      "family": "regex",
+      "description": "R12: a counted plain-run group does not match one or three runs",
+      "query": {"name": "r12rabx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r12rabx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r12rabx.example. 300 IN A 192.0.2.33"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r12-resolves-r12rabababx",
+      "family": "regex",
+      "description": "R12: a counted plain-run group does not match one or three runs",
+      "query": {"name": "r12rabababx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r12rabababx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r12rabababx.example. 300 IN A 192.0.2.34"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-r13a",
+      "family": "regex",
+      "description": "R13: a leading greedy .* matches any front, empty included",
+      "query": {"name": "r13a.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r13a.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-x.y.r13a",
+      "family": "regex",
+      "description": "R13: a leading greedy .* matches any front, empty included",
+      "query": {"name": "x.y.r13a.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["x.y.r13a.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-zzr13a",
+      "family": "regex",
+      "description": "R13: a leading greedy .* matches any front, empty included",
+      "query": {"name": "zzr13a.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["zzr13a.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-resolves-r13a.net",
+      "family": "regex",
+      "description": "R13: the end anchor after a leading .* still has to match",
+      "query": {"name": "r13a.example.net.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r13a.example.net. A"],
+        "rcode": "NOERROR",
+        "answer": ["r13a.example.net. 300 IN A 192.0.2.35"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-x.r13b",
+      "family": "regex",
+      "description": "R13: a leading greedy .+ matches a non-empty front",
+      "query": {"name": "x.r13b.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["x.r13b.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-zr13b",
+      "family": "regex",
+      "description": "R13: a leading greedy .+ matches a non-empty front",
+      "query": {"name": "zr13b.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["zr13b.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-resolves-r13b",
+      "family": "regex",
+      "description": "R13: a leading .+ needs at least one character in front",
+      "query": {"name": "r13b.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r13b.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r13b.example. 300 IN A 192.0.2.36"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-r13c",
+      "family": "regex",
+      "description": "R13: a leading lazy .*? matches any front, empty included",
+      "query": {"name": "r13c.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r13c.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-a.r13c",
+      "family": "regex",
+      "description": "R13: a leading lazy .*? matches any front, empty included",
+      "query": {"name": "a.r13c.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.r13c.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-resolves-r13c.net",
+      "family": "regex",
+      "description": "R13: the end anchor after a leading .*? still has to match",
+      "query": {"name": "r13c.example.net.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r13c.example.net. A"],
+        "rcode": "NOERROR",
+        "answer": ["r13c.example.net. 300 IN A 192.0.2.37"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-a.r13d",
+      "family": "regex",
+      "description": "R13: a leading lazy .+? matches a non-empty front",
+      "query": {"name": "a.r13d.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["a.r13d.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-resolves-r13d",
+      "family": "regex",
+      "description": "R13: a leading .+? needs at least one character in front",
+      "query": {"name": "r13d.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r13d.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r13d.example. 300 IN A 192.0.2.38"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-r13e",
+      "family": "regex",
+      "description": "R13: in an alternation of a ^ branch and a leading-.* branch each branch keeps its own anchor",
+      "query": {"name": "r13e.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r13e.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-x.r13f",
+      "family": "regex",
+      "description": "R13: in an alternation of a ^ branch and a leading-.* branch each branch keeps its own anchor",
+      "query": {"name": "x.r13f.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["x.r13f.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-blocked-r13f",
+      "family": "regex",
+      "description": "R13: in an alternation of a ^ branch and a leading-.* branch each branch keeps its own anchor",
+      "query": {"name": "r13f.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r13f.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-resolves-x.r13e",
+      "family": "regex",
+      "description": "R13: the ^ branch of that alternation is not unanchored by the dot-run rewrite of the other",
+      "query": {"name": "x.r13e.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["x.r13e.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["x.r13e.example. 300 IN A 192.0.2.39"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r13-resolves-r13f.net",
+      "family": "regex",
+      "description": "R13: the ^ branch of that alternation is not unanchored by the dot-run rewrite of the other",
+      "query": {"name": "r13f.example.net.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r13f.example.net. A"],
+        "rcode": "NOERROR",
+        "answer": ["r13f.example.net. 300 IN A 192.0.2.40"],
+        "authority": []
+      }
+    }
+  ]
+}

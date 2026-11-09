@@ -1,0 +1,235 @@
+{
+  "schema": 1,
+  "description": "feed /re/ lines that fold to a domain rule at build time (zero per-query regex cost): exact data, wildcard zone, optional www, upper case",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/abp.txt": [
+        "/^fold-exact\\.example$/",
+        "/^(.+\\.)?fold-zone\\.example$/",
+        "/(^|\\.)fold-zone2\\.example$/",
+        "/^(?:.+\\.)?fold-zone3\\.example$/",
+        "/^(www\\.)?fold-www\\.example$/",
+        "/^FOLD-UPPER\\.EXAMPLE$/"
+      ]
+    }
+  },
+  "upstream": {
+    "sub.fold-exact.example. A": ["sub.fold-exact.example. 300 IN A 192.0.2.11"],
+    "xfold-zone.example. A": ["xfold-zone.example. 300 IN A 192.0.2.12"],
+    "xfold-zone2.example. A": ["xfold-zone2.example. 300 IN A 192.0.2.13"],
+    "xfold-zone3.example. A": ["xfold-zone3.example. 300 IN A 192.0.2.14"],
+    "fold-wwx.example. A": ["fold-wwx.example. 300 IN A 192.0.2.15"],
+    "sub.fold-upper.example. A": ["sub.fold-upper.example. 300 IN A 192.0.2.16"]
+  },
+  "cases": [
+    {
+      "id": "exact-fold-blocks-the-domain",
+      "family": "abp",
+      "description": "/^d$/ folds to an exact entry: the domain is blocked",
+      "query": {"name": "fold-exact.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["fold-exact.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "exact-fold-does-not-block-a-subdomain",
+      "family": "abp",
+      "description": "an exact fold is data, not a zone: a subdomain resolves",
+      "query": {"name": "sub.fold-exact.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["sub.fold-exact.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["sub.fold-exact.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-blocks-the-apex",
+      "family": "abp",
+      "description": "a ^(.+\\.)?d$ regex folds to a zone: its apex is blocked",
+      "query": {"name": "fold-zone.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["fold-zone.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-blocks-a-deep-subdomain",
+      "family": "abp",
+      "description": "a ^(.+\\.)?d$ regex folds to a zone: subdomains are blocked",
+      "query": {"name": "deep.sub.fold-zone.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["deep.sub.fold-zone.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-does-not-block-a-lookalike",
+      "family": "abp",
+      "description": "xfold-zone.example only ends in the letters of the zone, not its label",
+      "query": {"name": "xfold-zone.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["xfold-zone.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["xfold-zone.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-2-blocks-the-apex",
+      "family": "abp",
+      "description": "a (^|\\.)d$ regex folds to a zone: its apex is blocked",
+      "query": {"name": "fold-zone2.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["fold-zone2.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-2-blocks-a-deep-subdomain",
+      "family": "abp",
+      "description": "a (^|\\.)d$ regex folds to a zone: subdomains are blocked",
+      "query": {"name": "deep.sub.fold-zone2.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["deep.sub.fold-zone2.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-2-does-not-block-a-lookalike",
+      "family": "abp",
+      "description": "xfold-zone2.example only ends in the letters of the zone, not its label",
+      "query": {"name": "xfold-zone2.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["xfold-zone2.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["xfold-zone2.example. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-3-blocks-the-apex",
+      "family": "abp",
+      "description": "a ^(?:.+\\.)?d$ regex folds to a zone: its apex is blocked",
+      "query": {"name": "fold-zone3.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["fold-zone3.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-3-blocks-a-deep-subdomain",
+      "family": "abp",
+      "description": "a ^(?:.+\\.)?d$ regex folds to a zone: subdomains are blocked",
+      "query": {"name": "deep.sub.fold-zone3.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["deep.sub.fold-zone3.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "wildcard-fold-3-does-not-block-a-lookalike",
+      "family": "abp",
+      "description": "xfold-zone3.example only ends in the letters of the zone, not its label",
+      "query": {"name": "xfold-zone3.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["xfold-zone3.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["xfold-zone3.example. 300 IN A 192.0.2.14"],
+        "authority": []
+      }
+    },
+    {
+      "id": "optional-www-fold-blocks-the-bare-domain",
+      "family": "abp",
+      "description": "^(www\\.)?d$ folds to the exact bare domain",
+      "query": {"name": "fold-www.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["fold-www.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "optional-www-fold-does-not-block-another-name",
+      "family": "abp",
+      "description": "the optional-www fold names one domain only",
+      "query": {"name": "fold-wwx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["fold-wwx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["fold-wwx.example. 300 IN A 192.0.2.15"],
+        "authority": []
+      }
+    },
+    {
+      "id": "upper-case-fold-blocks-the-lower-case-name",
+      "family": "abp",
+      "description": "a mixed-case literal folds to its lower-case twin (#2099)",
+      "query": {"name": "fold-upper.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["fold-upper.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "upper-case-fold-does-not-block-a-subdomain",
+      "family": "abp",
+      "description": "the upper-case exact fold is data too: a subdomain resolves",
+      "query": {"name": "sub.fold-upper.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["sub.fold-upper.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["sub.fold-upper.example. 300 IN A 192.0.2.16"],
+        "authority": []
+      }
+    }
+  ]
+}

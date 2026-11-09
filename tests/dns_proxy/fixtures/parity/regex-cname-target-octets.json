@@ -1,0 +1,177 @@
+{
+  "schema": 1,
+  "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters, so Python re's Unicode classes decide on them (pins what a port to another regex engine must reproduce)",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/regex.txt", "feed": "RegexFeed", "group": "RegexFeedGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/regex.txt": [
+        "/^r3s\\s\\.example$/",
+        "/^caf\\w\\.example$/",
+        "/^cag.\\.example$/",
+        "/^cah[^a-z]\\.example$/",
+        "/^caj\\D\\.example$/",
+        "/^cak\\s\\.example$/",
+        "/^cai\\W\\.example$/",
+        "/^cam\\d\\.example$/",
+        "/^can[a-z]\\.example$/"
+      ]
+    }
+  },
+  "upstream": {
+    "alias-r3s.example. A": ["alias-r3s.example. 300 IN CNAME r3s\\032.example.", "r3s\\032.example. 300 IN A 192.0.2.11"],
+    "alias-r3sx.example. A": ["alias-r3sx.example. 300 IN CNAME r3sx.example.", "r3sx.example. 300 IN A 192.0.2.12"],
+    "alias-caf.example. A": ["alias-caf.example. 300 IN CNAME caf\\233.example.", "caf\\233.example. 300 IN A 192.0.2.13"],
+    "alias-cag.example. A": ["alias-cag.example. 300 IN CNAME cag\\233.example.", "cag\\233.example. 300 IN A 192.0.2.14"],
+    "alias-cah.example. A": ["alias-cah.example. 300 IN CNAME cah\\233.example.", "cah\\233.example. 300 IN A 192.0.2.15"],
+    "alias-caj.example. A": ["alias-caj.example. 300 IN CNAME caj\\233.example.", "caj\\233.example. 300 IN A 192.0.2.16"],
+    "alias-cak.example. A": ["alias-cak.example. 300 IN CNAME cak\\160.example.", "cak\\160.example. 300 IN A 192.0.2.17"],
+    "alias-cai.example. A": ["alias-cai.example. 300 IN CNAME cai\\233.example.", "cai\\233.example. 300 IN A 192.0.2.18"],
+    "alias-cam.example. A": ["alias-cam.example. 300 IN CNAME cam\\233.example.", "cam\\233.example. 300 IN A 192.0.2.19"],
+    "alias-can.example. A": ["alias-can.example. 300 IN CNAME can\\233.example.", "can\\233.example. 300 IN A 192.0.2.20"]
+  },
+  "cases": [
+    {
+      "id": "space-octet-matches-backslash-s",
+      "family": "regex",
+      "description": "R3: \\s matches a space octet in a CNAME target",
+      "query": {"name": "alias-r3s.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-r3s.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-r3s.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "letter-does-not-match-backslash-s",
+      "family": "regex",
+      "description": "R3: \\s does not match a letter in a CNAME target",
+      "query": {"name": "alias-r3sx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-r3sx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-r3sx.example. 300 IN CNAME r3sx.example.", "r3sx.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "latin1-letter-matches-backslash-w",
+      "family": "regex",
+      "description": "R17: \\w matches the Latin-1 letter 0xE9",
+      "query": {"name": "alias-caf.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-caf.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-caf.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "latin1-letter-matches-the-dot",
+      "family": "regex",
+      "description": "R17: . matches the Latin-1 letter 0xE9",
+      "query": {"name": "alias-cag.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-cag.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-cag.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "latin1-letter-matches-a-negated-class",
+      "family": "regex",
+      "description": "R17: [^a-z] matches the Latin-1 letter 0xE9",
+      "query": {"name": "alias-cah.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-cah.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-cah.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "latin1-letter-matches-backslash-capital-d",
+      "family": "regex",
+      "description": "R17: \\D matches the Latin-1 letter 0xE9",
+      "query": {"name": "alias-caj.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-caj.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-caj.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "latin1-no-break-space-matches-backslash-s",
+      "family": "regex",
+      "description": "R17: \\s matches the Latin-1 no-break space 0xA0",
+      "query": {"name": "alias-cak.example.", "type": "A"},
+      "expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-cak.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-cak.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "latin1-letter-does-not-match-backslash-capital-w",
+      "family": "regex",
+      "description": "R17: \\W does not match the Latin-1 letter 0xE9, a word character to Python",
+      "query": {"name": "alias-cai.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-cai.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-cai.example. 300 IN CNAME cai\\233.example.", "cai\\233.example. 300 IN A 192.0.2.18"],
+        "authority": []
+      }
+    },
+    {
+      "id": "latin1-letter-does-not-match-backslash-d",
+      "family": "regex",
+      "description": "R17: \\d does not match the Latin-1 letter 0xE9",
+      "query": {"name": "alias-cam.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-cam.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-cam.example. 300 IN CNAME cam\\233.example.", "cam\\233.example. 300 IN A 192.0.2.19"],
+        "authority": []
+      }
+    },
+    {
+      "id": "latin1-letter-does-not-match-an-ascii-range",
+      "family": "regex",
+      "description": "R17: [a-z] does not match the Latin-1 letter 0xE9 even case folded",
+      "query": {"name": "alias-can.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["alias-can.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-can.example. 300 IN CNAME can\\233.example.", "can\\233.example. 300 IN A 192.0.2.20"],
+        "authority": []
+      }
+    }
+  ]
+}

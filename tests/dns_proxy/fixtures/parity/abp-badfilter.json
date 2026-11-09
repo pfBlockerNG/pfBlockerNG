@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "description": "$badfilter in a feed prunes the feed twin of the same signature only: not a user Custom_List twin, not a rule with another option set",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"},
+        {
+          "raw": "pfb_py_raw/custom.txt",
+          "feed": "CustomList",
+          "group": "CustomListGroup",
+          "log_flag": "1",
+          "provenance": "user"
+        }
+      ]
+    },
+    "files": {
+      "pfb_py_raw/abp.txt": [
+        "||control.example^",
+        "||pruned.example^",
+        "||pruned.example^$badfilter",
+        "||different-options.example^$important",
+        "||different-options.example^$badfilter",
+        "||user-twin.example^",
+        "||user-twin.example^$badfilter"
+      ],
+      "pfb_py_raw/custom.txt": ["||user-twin.example^"]
+    }
+  },
+  "upstream": {"pruned.example. A": ["pruned.example. 300 IN A 192.0.2.11"]},
+  "cases": [
+    {
+      "id": "rule-without-a-badfilter-is-blocked",
+      "family": "abp",
+      "description": "the control: a plain ||d^ line is blocked, so the pruned row below is a change",
+      "query": {"name": "control.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["control.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "feed-badfilter-prunes-its-feed-twin",
+      "family": "abp",
+      "description": "||d^ and ||d^$badfilter in feeds cancel: d resolves",
+      "query": {"name": "pruned.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["pruned.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["pruned.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "badfilter-with-another-option-set-prunes-nothing",
+      "family": "abp",
+      "description": "||d^$important has a different signature from ||d^$badfilter, so it is not pruned",
+      "query": {"name": "different-options.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["different-options.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "feed-badfilter-never-prunes-a-user-custom-list-twin",
+      "family": "abp",
+      "description": "a Custom_List (user) ||d^ is sovereign: the feed ||d^$badfilter prunes only the feed ||d^",
+      "query": {"name": "user-twin.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["user-twin.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

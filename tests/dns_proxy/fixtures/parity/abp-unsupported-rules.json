@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "description": "ABP lines outside DNS scope are skipped, so the name they mention resolves; one plain ||d^ line proves the feed loaded",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/abp.txt", "feed": "AbpFeed", "group": "AbpFeedGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/abp.txt": [
+        "||control.example^",
+        "||rewrite.example^$dnsrewrite=NOERROR;A;192.0.2.1",
+        "||third.example^$third-party",
+        "||unknown-option.example^$bogus-option",
+        "elemhide.example##.ad",
+        "||path.example/ads^"
+      ]
+    }
+  },
+  "upstream": {
+    "rewrite.example. A": ["rewrite.example. 300 IN A 192.0.2.11"],
+    "third.example. A": ["third.example. 300 IN A 192.0.2.12"],
+    "unknown-option.example. A": ["unknown-option.example. 300 IN A 192.0.2.13"],
+    "elemhide.example. A": ["elemhide.example. 300 IN A 192.0.2.14"],
+    "path.example. A": ["path.example. 300 IN A 192.0.2.15"]
+  },
+  "cases": [
+    {
+      "id": "plain-anchor-rule-is-blocked",
+      "family": "abp",
+      "description": "the control: a ||d^ line without options is blocked",
+      "query": {"name": "control.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["control.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "dnsrewrite-rule-is-skipped",
+      "family": "abp",
+      "description": "a $dnsrewrite rule rewrites and never blocks: it is skipped",
+      "query": {"name": "rewrite.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["rewrite.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["rewrite.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "page-context-option-skips-the-rule",
+      "family": "abp",
+      "description": "$third-party is a page-context option: the rule is skipped",
+      "query": {"name": "third.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["third.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["third.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "unknown-option-skips-the-rule",
+      "family": "abp",
+      "description": "an option the decider does not model skips the whole rule",
+      "query": {"name": "unknown-option.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["unknown-option.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["unknown-option.example. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    },
+    {
+      "id": "element-hiding-rule-does-not-block-its-domain",
+      "family": "abp",
+      "description": "d##.ad hides an element and never blocks d",
+      "query": {"name": "elemhide.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["elemhide.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["elemhide.example. 300 IN A 192.0.2.14"],
+        "authority": []
+      }
+    },
+    {
+      "id": "path-rule-is-skipped",
+      "family": "abp",
+      "description": "||d/ads^ names a path, not a domain: it is skipped",
+      "query": {"name": "path.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["path.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["path.example. 300 IN A 192.0.2.15"],
+        "authority": []
+      }
+    }
+  ]
+}

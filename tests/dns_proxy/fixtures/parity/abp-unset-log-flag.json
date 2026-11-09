@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "description": "ABP rules on a feed row whose log_flag is empty answer Null Blocking, not the VIP address (issue #3539); a log_flag 1 row is the contrast",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {"raw": "pfb_py_raw/unset.txt", "feed": "UnsetFeed", "group": "UnsetFeedGroup", "log_flag": ""},
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipFeedGroup", "log_flag": "1"}
+      ]
+    },
+    "files": {
+      "pfb_py_raw/unset.txt": ["||unset-flag.example^"],
+      "pfb_py_raw/vip.txt": ["||vip-flag.example^"]
+    }
+  },
+  "upstream": {},
+  "cases": [
+    {
+      "id": "abp-rule-on-a-row-without-a-log-flag-answers-null",
+      "family": "abp",
+      "description": "an empty log_flag on an ABP row is Null Blocking (0.0.0.0), never VIP (issue #3539)",
+      "query": {"name": "unset-flag.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["unset-flag.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "abp-rule-on-a-vip-row-answers-vip",
+      "family": "abp",
+      "description": "the contrast: the same rule shape on a log_flag 1 row answers the VIP address",
+      "query": {"name": "vip-flag.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["vip-flag.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

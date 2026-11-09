@@ -1,0 +1,472 @@
+{
+  "schema": 1,
+  "description": "feed /re/ lines: the class escapes \\d \\D \\w \\W \\S and bracket classes (items, range, negation, escapes inside, trailing hyphen, case folding)",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/regex.txt", "feed": "RegexFeed", "group": "RegexFeedGroup", "log_flag": "1"}]
+    },
+    "files": {
+      "pfb_py_raw/regex.txt": [
+        "/^r3d\\d\\.example$/",
+        "/^r3e\\D\\.example$/",
+        "/^r3w\\w-x\\.example$/",
+        "/^r3x\\Wx\\.example$/",
+        "/^r3y\\S\\.example$/",
+        "/^r7a[xyz]\\.example$/",
+        "/^r7b[a-f]\\.example$/",
+        "/^r7c[^0-9]\\.example$/",
+        "/^r7d[\\d]\\.example$/",
+        "/^r7e[\\-x]end\\.example$/",
+        "/^r7g[\\.]h\\.example$/",
+        "/^r7t[a-]x\\.example$/",
+        "/^r7f[A-C]\\.example$/"
+      ]
+    }
+  },
+  "upstream": {
+    "r3dx.example. A": ["r3dx.example. 300 IN A 192.0.2.11"],
+    "r3e5.example. A": ["r3e5.example. 300 IN A 192.0.2.12"],
+    "r3w--x.example. A": ["r3w--x.example. 300 IN A 192.0.2.13"],
+    "r3x_x.example. A": ["r3x_x.example. 300 IN A 192.0.2.14"],
+    "r3xax.example. A": ["r3xax.example. 300 IN A 192.0.2.15"],
+    "r3yxy.example. A": ["r3yxy.example. 300 IN A 192.0.2.16"],
+    "r7aw.example. A": ["r7aw.example. 300 IN A 192.0.2.17"],
+    "r7bg.example. A": ["r7bg.example. 300 IN A 192.0.2.18"],
+    "r7b5.example. A": ["r7b5.example. 300 IN A 192.0.2.19"],
+    "r7c5.example. A": ["r7c5.example. 300 IN A 192.0.2.20"],
+    "r7dx.example. A": ["r7dx.example. 300 IN A 192.0.2.21"],
+    "r7e_end.example. A": ["r7e_end.example. 300 IN A 192.0.2.22"],
+    "r7gxh.example. A": ["r7gxh.example. 300 IN A 192.0.2.23"],
+    "r7tbx.example. A": ["r7tbx.example. 300 IN A 192.0.2.24"],
+    "r7fd.example. A": ["r7fd.example. 300 IN A 192.0.2.25"]
+  },
+  "cases": [
+    {
+      "id": "r3-blocked-r3d5",
+      "family": "regex",
+      "description": "R3: \\d matches a digit",
+      "query": {"name": "r3d5.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r3d5.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-resolves-r3dx",
+      "family": "regex",
+      "description": "R3: \\d does not match a letter",
+      "query": {"name": "r3dx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r3dx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r3dx.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-blocked-r3ex",
+      "family": "regex",
+      "description": "R3: \\D matches a non-digit",
+      "query": {"name": "r3ex.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r3ex.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-resolves-r3e5",
+      "family": "regex",
+      "description": "R3: \\D does not match a digit",
+      "query": {"name": "r3e5.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r3e5.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r3e5.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-blocked-r3wa-x",
+      "family": "regex",
+      "description": "R3: \\w matches a letter, a digit or an underscore",
+      "query": {"name": "r3wa-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r3wa-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-blocked-r3w_-x",
+      "family": "regex",
+      "description": "R3: \\w matches a letter, a digit or an underscore",
+      "query": {"name": "r3w_-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r3w_-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-resolves-r3w--x",
+      "family": "regex",
+      "description": "R3: \\w does not match a hyphen",
+      "query": {"name": "r3w--x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r3w--x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r3w--x.example. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-blocked-r3x-x",
+      "family": "regex",
+      "description": "R3: \\W matches a hyphen",
+      "query": {"name": "r3x-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r3x-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-resolves-r3x_x",
+      "family": "regex",
+      "description": "R3: \\W does not match an underscore or a letter",
+      "query": {"name": "r3x_x.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r3x_x.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r3x_x.example. 300 IN A 192.0.2.14"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-resolves-r3xax",
+      "family": "regex",
+      "description": "R3: \\W does not match an underscore or a letter",
+      "query": {"name": "r3xax.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r3xax.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r3xax.example. 300 IN A 192.0.2.15"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-blocked-r3yx",
+      "family": "regex",
+      "description": "R3: \\S matches one non-space character",
+      "query": {"name": "r3yx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r3yx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r3-resolves-r3yxy",
+      "family": "regex",
+      "description": "R3: \\S is exactly one character",
+      "query": {"name": "r3yxy.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r3yxy.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r3yxy.example. 300 IN A 192.0.2.16"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7ax",
+      "family": "regex",
+      "description": "R7: a bracket class of literal items matches each of them",
+      "query": {"name": "r7ax.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7ax.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7az",
+      "family": "regex",
+      "description": "R7: a bracket class of literal items matches each of them",
+      "query": {"name": "r7az.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7az.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7aw",
+      "family": "regex",
+      "description": "R7: a bracket class of literal items does not match another letter",
+      "query": {"name": "r7aw.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7aw.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7aw.example. 300 IN A 192.0.2.17"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7bc",
+      "family": "regex",
+      "description": "R7: a range matches inside it",
+      "query": {"name": "r7bc.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7bc.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7bg",
+      "family": "regex",
+      "description": "R7: a range does not match past its end or a digit",
+      "query": {"name": "r7bg.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7bg.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7bg.example. 300 IN A 192.0.2.18"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7b5",
+      "family": "regex",
+      "description": "R7: a range does not match past its end or a digit",
+      "query": {"name": "r7b5.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7b5.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7b5.example. 300 IN A 192.0.2.19"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7cx",
+      "family": "regex",
+      "description": "R7: a negated class matches what it does not list",
+      "query": {"name": "r7cx.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7cx.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7c5",
+      "family": "regex",
+      "description": "R7: a negated class does not match what it lists",
+      "query": {"name": "r7c5.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7c5.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7c5.example. 300 IN A 192.0.2.20"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7d5",
+      "family": "regex",
+      "description": "R7: a class escape works inside a class",
+      "query": {"name": "r7d5.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7d5.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7dx",
+      "family": "regex",
+      "description": "R7: a class escape inside a class matches only its own set",
+      "query": {"name": "r7dx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7dx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7dx.example. 300 IN A 192.0.2.21"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7e-end",
+      "family": "regex",
+      "description": "R7: an escaped hyphen inside a class is a literal hyphen next to a letter item",
+      "query": {"name": "r7e-end.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7e-end.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7exend",
+      "family": "regex",
+      "description": "R7: an escaped hyphen inside a class is a literal hyphen next to a letter item",
+      "query": {"name": "r7exend.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7exend.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7e_end",
+      "family": "regex",
+      "description": "R7: an escaped hyphen inside a class is not a range",
+      "query": {"name": "r7e_end.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7e_end.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7e_end.example. 300 IN A 192.0.2.22"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7g.h",
+      "family": "regex",
+      "description": "R7: an escaped dot inside a class is a literal dot",
+      "query": {"name": "r7g.h.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7g.h.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7gxh",
+      "family": "regex",
+      "description": "R7: an escaped dot inside a class is not any character",
+      "query": {"name": "r7gxh.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7gxh.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7gxh.example. 300 IN A 192.0.2.23"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7tax",
+      "family": "regex",
+      "description": "R7: a hyphen that ends a class is a literal member",
+      "query": {"name": "r7tax.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7tax.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7t-x",
+      "family": "regex",
+      "description": "R7: a hyphen that ends a class is a literal member",
+      "query": {"name": "r7t-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7t-x.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7tbx",
+      "family": "regex",
+      "description": "R7: a hyphen that ends a class does not make a range up to the bracket",
+      "query": {"name": "r7tbx.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7tbx.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7tbx.example. 300 IN A 192.0.2.24"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-blocked-r7fb",
+      "family": "regex",
+      "description": "R7: a class is case folded (IGNORECASE), so [A-C] matches a lower-case b",
+      "query": {"name": "r7fb.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["r7fb.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "r7-resolves-r7fd",
+      "family": "regex",
+      "description": "R7: case folding does not widen the class past its range",
+      "query": {"name": "r7fd.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["r7fd.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["r7fd.example. 300 IN A 192.0.2.25"],
+        "authority": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,242 @@
+{
+  "schema": 1,
+  "description": "the six-band precedence: feed block 1 < feed allow 2 < $important block 3 < $important allow 4 < Custom_List block 5 < user whitelist/unlock 6, plus permit feeds, allow regex and re-attribution",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"user_whitelist": ["custom-block-vs-whitelist.example"], "user_unlock": ["custom-block-vs-unlock.example"]},
+      "feeds": [
+        {"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "FeedGroup", "log_flag": "1"},
+        {
+          "raw": "pfb_py_raw/custom.txt",
+          "feed": "CustomList",
+          "group": "CustomListGroup",
+          "log_flag": "1",
+          "provenance": "user"
+        },
+        {
+          "raw": "pfb_py_raw/custom-nx.txt",
+          "feed": "CustomNx",
+          "group": "CustomNxGroup",
+          "log_flag": "3",
+          "provenance": "user"
+        },
+        {"raw": "pfb_py_raw/permit.txt", "feed": "Permit", "group": "PermitGroup", "log_flag": "0", "mode": "permit"}
+      ]
+    },
+    "files": {
+      "pfb_py_raw/feed.txt": [
+        "||feed-block-alone.example^",
+        "||feed-block-vs-allow.example^",
+        "@@||feed-block-vs-allow.example^",
+        "||important-block-vs-allow.example^$important",
+        "@@||important-block-vs-allow.example^",
+        "||important-block-vs-important-allow.example^$important",
+        "@@||important-block-vs-important-allow.example^$important",
+        "@@||custom-block-vs-important-allow.example^$important",
+        "||permit-vs-feed-block.example^",
+        "||permit-vs-important-block.example^$important",
+        "||allow-regex-vs-block-1.example^",
+        "||allow-regex-vs-block-x.example^",
+        "@@/^allow-regex-vs-block-[0-9]\\.example$/",
+        "sub.reattribution.example"
+      ],
+      "pfb_py_raw/custom.txt": [
+        "||custom-block-vs-important-allow.example^",
+        "||custom-block-vs-whitelist.example^",
+        "||custom-block-vs-unlock.example^",
+        "||custom-block-alone.example^"
+      ],
+      "pfb_py_raw/custom-nx.txt": ["||reattribution.example^"],
+      "pfb_py_raw/permit.txt": ["permit-vs-feed-block.example", "permit-vs-important-block.example"]
+    }
+  },
+  "upstream": {
+    "feed-block-vs-allow.example. A": ["feed-block-vs-allow.example. 300 IN A 192.0.2.11"],
+    "important-block-vs-important-allow.example. A": ["important-block-vs-important-allow.example. 300 IN A 192.0.2.12"],
+    "custom-block-vs-whitelist.example. A": ["custom-block-vs-whitelist.example. 300 IN A 192.0.2.13"],
+    "custom-block-vs-unlock.example. A": ["custom-block-vs-unlock.example. 300 IN A 192.0.2.14"],
+    "permit-vs-feed-block.example. A": ["permit-vs-feed-block.example. 300 IN A 192.0.2.15"],
+    "allow-regex-vs-block-1.example. A": ["allow-regex-vs-block-1.example. 300 IN A 192.0.2.16"]
+  },
+  "cases": [
+    {
+      "id": "feed-block-alone-is-blocked",
+      "family": "allow_band",
+      "description": "the before-state: a band 1 feed block with no allow answers the block",
+      "query": {"name": "feed-block-alone.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["feed-block-alone.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "feed-allow-beats-feed-block",
+      "family": "allow_band",
+      "description": "feed @@ (band 2) beats a feed block (band 1): the name resolves",
+      "query": {"name": "feed-block-vs-allow.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["feed-block-vs-allow.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["feed-block-vs-allow.example. 300 IN A 192.0.2.11"],
+        "authority": []
+      }
+    },
+    {
+      "id": "important-block-beats-feed-allow",
+      "family": "allow_band",
+      "description": "a $important feed block (band 3) beats a plain feed @@ (band 2)",
+      "query": {"name": "important-block-vs-allow.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["important-block-vs-allow.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "important-allow-beats-important-block",
+      "family": "allow_band",
+      "description": "@@...$important (band 4) beats a $important block (band 3)",
+      "query": {"name": "important-block-vs-important-allow.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["important-block-vs-important-allow.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["important-block-vs-important-allow.example. 300 IN A 192.0.2.12"],
+        "authority": []
+      }
+    },
+    {
+      "id": "custom-list-block-beats-important-allow",
+      "family": "allow_band",
+      "description": "a Custom_List user block (band 5) beats a feed @@$important (band 4)",
+      "query": {"name": "custom-block-vs-important-allow.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["custom-block-vs-important-allow.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "custom-list-block-alone-is-blocked",
+      "family": "allow_band",
+      "description": "the before-state of the rows below: a Custom_List block with no allow answers the block",
+      "query": {"name": "custom-block-alone.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["custom-block-alone.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "user-whitelist-beats-custom-list-block",
+      "family": "allow_band",
+      "description": "config.user_whitelist (band 6) beats a Custom_List block (band 5)",
+      "query": {"name": "custom-block-vs-whitelist.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["custom-block-vs-whitelist.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["custom-block-vs-whitelist.example. 300 IN A 192.0.2.13"],
+        "authority": []
+      }
+    },
+    {
+      "id": "user-unlock-beats-custom-list-block",
+      "family": "allow_band",
+      "description": "config.user_unlock (band 6) beats a Custom_List block (band 5)",
+      "query": {"name": "custom-block-vs-unlock.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["custom-block-vs-unlock.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["custom-block-vs-unlock.example. 300 IN A 192.0.2.14"],
+        "authority": []
+      }
+    },
+    {
+      "id": "permit-feed-beats-feed-block",
+      "family": "allow_band",
+      "description": "a permit-mode feed entry (allow band 2) beats a feed block (band 1)",
+      "query": {"name": "permit-vs-feed-block.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["permit-vs-feed-block.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["permit-vs-feed-block.example. 300 IN A 192.0.2.15"],
+        "authority": []
+      }
+    },
+    {
+      "id": "important-block-beats-permit-feed",
+      "family": "allow_band",
+      "description": "a $important feed block (band 3) beats a permit-mode feed entry (band 2)",
+      "query": {"name": "permit-vs-important-block.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["permit-vs-important-block.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "allow-regex-beats-feed-block",
+      "family": "allow_band",
+      "description": "a feed @@/re/ (band 2) that matches beats a feed block (band 1)",
+      "query": {"name": "allow-regex-vs-block-1.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["allow-regex-vs-block-1.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["allow-regex-vs-block-1.example. 300 IN A 192.0.2.16"],
+        "authority": []
+      }
+    },
+    {
+      "id": "allow-regex-that-does-not-match-leaves-the-block",
+      "family": "allow_band",
+      "description": "the near miss: the same @@/re/ does not match a letter where it needs a digit",
+      "query": {"name": "allow-regex-vs-block-x.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["allow-regex-vs-block-x.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "higher-band-block-sets-the-answer-shape",
+      "family": "allow_band",
+      "description": "sub.reattribution.example is a band 1 VIP entry and also under a band 5 log_flag 3 zone: the winner's NXDOMAIN shape is answered (issue #47)",
+      "query": {"name": "sub.reattribution.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NXDOMAIN",
+        "answer": [],
+        "authority": []
+      }
+    }
+  ]
+}
