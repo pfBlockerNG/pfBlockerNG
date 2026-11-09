@@ -449,7 +449,7 @@ func upstream(value any, where string) map[UpstreamKey][]string {
 	for _, key := range listed.keys {
 		field := "upstream[" + pyRepr(key) + "]"
 		name, kind := question(key, where, field)
-		if name != strings.ToLower(name) {
+		if name != pysem.Lower(name) {
 			fail(where, field, "the name must be lower case")
 		}
 		texts := stringValues(listed.vals[key], where, field)
@@ -611,7 +611,7 @@ func (u *FakeUnbound) Answer(wire []byte) ([]byte, error) {
 		return nil, errors.New("the query has no question")
 	}
 	question := query.Questions[0]
-	texts, listed := u.zone[UpstreamKey{strings.ToLower(question.Name), question.Qtype}]
+	texts, listed := u.zone[UpstreamKey{pysem.Lower(question.Name), question.Qtype}]
 	flags := dnswire.QR | dnswire.RA | (query.Flags & dnswire.RD)
 	if !listed {
 		flags |= 3

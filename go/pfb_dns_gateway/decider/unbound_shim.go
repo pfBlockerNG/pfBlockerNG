@@ -10,10 +10,10 @@ import (
 	"io"
 	"os"
 	"slices"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/dnswire"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
 const MODULE_ID = 0
@@ -171,7 +171,7 @@ func buildRrsets(sections [3][]dnswire.RR) ([]*rrSet, [3]int, uint32) {
 				continue
 			}
 			ttls = append(ttls, rr.TTL)
-			owner := strings.ToLower(rr.Name)
+			owner := pysem.Lower(rr.Name)
 			if rr.Rtype == dnswire.TYPE_RRSIG && len(rr.Rdata) >= 2 {
 				covered := byKey[rrsetIndex{owner, binary.BigEndian.Uint16(rr.Rdata[:2]), rr.Rclass}]
 				if covered != nil {

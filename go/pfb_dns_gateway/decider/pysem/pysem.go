@@ -12,6 +12,12 @@ import (
 	"unicode/utf8"
 )
 
+// Lower is str.lower(): Go's simple case mapping plus str.lower()'s one multi-character mapping, U+0130 to "i" and
+// U+0307.
+// shortcut: no Final_Sigma (a word-final capital sigma lowers to σ, not ς) and Go's Unicode 17 case tables where
+// Python 3.11 has Unicode 14; neither changes an ASCII result, and every value the decider lowers today is ASCII.
+func Lower(s string) string { return strings.ToLower(strings.ReplaceAll(s, "\u0130", "i\u0307")) }
+
 // IsSpace is str.isspace() for one character: Unicode White_Space plus the ASCII separators 0x1C-0x1F.
 func IsSpace(r rune) bool { return unicode.IsSpace(r) || 0x1C <= r && r <= 0x1F }
 
@@ -67,7 +73,7 @@ func SplitWhitespace(s string, maxsplit int) []string {
 }
 
 // Int is int(s) for base 10: surrounding whitespace, an optional sign, then digits with single underscores between
-// them. int() strips unicode.IsSpace only: 0x1C-0x1F, which str.strip() takes, are not whitespace to it (CPython 3.13).
+// them. int() strips unicode.IsSpace only: 0x1C-0x1F, which str.strip() takes, are not whitespace to it (CPython 3.11).
 // shortcut: ASCII digits only (Python also takes other Unicode decimal digits), an int beyond 64 bits stays at the
 // nearest bound where Python's is unbounded, and there is no 4300-digit limit (Python 3.11+ raises beyond it); none
 // of them can come from a PHP-written ini or a 32-bit wire field.
@@ -100,6 +106,8 @@ func invalidInt(s string) error {
 }
 
 // Repr is repr(s) of a str.
+// shortcut: printability follows Go's Unicode 17 tables where Python 3.11 has Unicode 14, so a code point unassigned
+// in 14 prints raw here and as an escape in Python; it only shapes error and diagnostic text.
 func Repr(s string) string {
 	quote := '\''
 	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {

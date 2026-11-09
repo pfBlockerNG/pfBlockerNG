@@ -521,12 +521,12 @@ func soaRdata(rest string) ([]byte, error) {
 		}
 		numbers[i] = number
 	}
-	counters := make([]uint32, 0, len(numbers))
-	for _, number := range numbers {
+	var counters [5]uint32
+	for i, number := range numbers {
 		if number < 0 || number > 0xFFFFFFFF {
 			return nil, errors.New("SOA counter out of range")
 		}
-		counters = append(counters, uint32(number))
+		counters[i] = uint32(number)
 	}
 	mname, err := EncodeName(fields[0])
 	if err != nil {

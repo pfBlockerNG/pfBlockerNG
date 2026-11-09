@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -285,7 +286,7 @@ func TestConfigParserGetint(t *testing.T) {
 }
 
 // Python's int is unbounded; on a 32-bit build a value past 32 bits must not wrap.
-func TestConfigParserGetintKeepsSixtyFourBitsOnEveryPlatform(t *testing.T) {
+func TestConfigParserGetintDoesNotWrapOnA32BitBuild(t *testing.T) {
 	if got, err := cfgParse(t, "[M]\nk = 4294967296\n").getint("M", "k"); err != nil || int64(got) != 4294967296 {
 		t.Errorf("getint(4294967296) = (%d, %v), want (4294967296, nil)", got, err)
 	}
@@ -370,10 +371,25 @@ func TestConfigParserKeepsTheLinesOfAnEightyThousandLineValue(t *testing.T) {
 		{"blank lines then a continuation", "[M]\nk = 1\n" + strings.Repeat("\n", n) + "  2\n", "1" + strings.Repeat("\n", n+1) + "2"},
 		{"continuation lines", "[M]\nk = 1\n" + strings.Repeat("  x\n", n), "1" + strings.Repeat("\nx", n)},
 	} {
-		if got, err := cfgParse(t, c.text).get("M", "k"); err != nil || got != c.want {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		got, err := cfgParse(t, c.text).get("M", "k")
+		runtime.ReadMemStats(&after)
+		if err != nil || got != c.want {
 			t.Errorf("%s: got %d bytes, err %v; want %d bytes equal to the joined lines", c.name, len(got), err, len(c.want))
 		}
+		// Appending each line to the value so far allocates gigabytes here; joining once allocates a few megabytes.
+		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<20 {
+			t.Errorf("%s: parsing allocated %d MiB, want under 64: the lines are not joined once", c.name, allocated>>20)
+		}
 	}
+}
+
+func TestConfigParserTellsADottedCapitalIFromAnI(t *testing.T) {
+	// optionxform is str.lower(): "S\u0130" becomes "si\u0307", a different option from "si", not a duplicate.
+	c := cfgParse(t, "[A]\nS\u0130 = x\nsi = 1\n")
+	cfgGet(t, c, "A", "si", "1")
+	cfgGet(t, c, "A", "si\u0307", "x")
 }
 
 func TestConfigParserTreatsTheAsciiSeparators0x1cTo0x1fAsWhitespace(t *testing.T) {

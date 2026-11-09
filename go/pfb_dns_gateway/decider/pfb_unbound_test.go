@@ -214,6 +214,9 @@ func TestInitStandardPslFeedPolicies(t *testing.T) {
 	check("garbage value", private, icann, "honor", "honor")
 	private, icann = read("psl_feed_private_policy = APEX", "psl_feed_icann_policy = IGNORE")
 	check("upper-case canonical value is case-folded", private, icann, "apex", "ignore")
+	// str.lower() maps U+0130 to "i" plus U+0307, so "İgnore" is no policy word in Python and falls back to honor.
+	private, icann = read("psl_feed_private_policy = \u0130gnore", "psl_feed_icann_policy = \u0130GNORE")
+	check("dotted capital I is not an i", private, icann, "honor", "honor")
 }
 
 func TestLoadIniConfig(t *testing.T) {

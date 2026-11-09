@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
 const REGEX_WARN_MS_DEFAULT = 10.0
@@ -113,9 +115,7 @@ func parseTldAllow(raw string) []string {
 	var tlds []string
 	for _, part := range strings.Split(raw, ",") {
 		if tld := pyStrip(part); tld != "" {
-			// shortcut: strings.ToLower is not str.lower() for U+0130 or a final sigma, and Python 3.11's Unicode 14 case tables
-			// differ from Go's Unicode 17; PHP writes this value ASCII, so upgrade only if it can carry non-ASCII.
-			tlds = append(tlds, strings.ToLower(tld))
+			tlds = append(tlds, pysem.Lower(tld))
 		}
 	}
 	return tlds
@@ -273,9 +273,7 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 					return mainOptionError(option, err)
 				}
 				*dst = "honor"
-				// shortcut: strings.ToLower is not str.lower() for U+0130 or a final sigma, and Python 3.11's Unicode 14 case tables
-				// differ from Go's Unicode 17; PHP writes both psl_feed_*_policy values ASCII, so upgrade only if they can carry non-ASCII.
-				if policy := strings.ToLower(pyStrip(raw)); policy == "ignore" || policy == "apex" || policy == "honor" {
+				if policy := pysem.Lower(pyStrip(raw)); policy == "ignore" || policy == "apex" || policy == "honor" {
 					*dst = policy
 				}
 				return nil
@@ -309,9 +307,7 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 				if err != nil {
 					return nil, mainOptionError("idn_mode", err)
 				}
-				// shortcut: strings.ToLower is not str.lower() for U+0130 or a final sigma, and Python 3.11's Unicode 14 case tables
-				// differ from Go's Unicode 17; PHP writes idn_mode ASCII, so upgrade only if it can carry non-ASCII.
-				switch rawIdn := strings.ToLower(pyStrip(raw)); rawIdn {
+				switch rawIdn := pysem.Lower(pyStrip(raw)); rawIdn {
 				case "":
 					pfb.idnMode = IdnModeOff
 				case IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE:
@@ -491,7 +487,7 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 	if qstate != nil {
 		qstateValid = true
 		qType = qstate.qinfo.qtype
-		qNameOriginal = strings.ToLower(getQNameQstate(qstate))
+		qNameOriginal = pysem.Lower(getQNameQstate(qstate))
 		qIP = getQIp(qstate)
 	} else {
 		logErr("[pfBlockerNG] qstate is not None and qstate.qinfo.qtype is not None")

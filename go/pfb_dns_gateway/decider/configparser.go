@@ -47,9 +47,7 @@ func newConfigParser() *configParser {
 func pyStrip(s string) string { return strings.TrimFunc(s, pysem.IsSpace) }
 
 // optionxform is str.lower.
-// shortcut: strings.ToLower is not str.lower() for U+0130 or a final sigma, and Python 3.11's Unicode 14 case tables
-// differ from Go's Unicode 17; PHP writes the option names ASCII, so upgrade only if they can carry non-ASCII.
-func optionxform(option string) string { return strings.ToLower(option) }
+func optionxform(option string) string { return pysem.Lower(option) }
 
 // read is ConfigParser.read([path], encoding="utf-8"): a file that cannot be opened is skipped without an error, a
 // file that is not UTF-8 is a read error, and the text gets universal newlines.
@@ -320,7 +318,7 @@ func (c *configParser) getboolean(section, option string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	state, ok := booleanStates[strings.ToLower(value)]
+	state, ok := booleanStates[pysem.Lower(value)]
 	if !ok {
 		return false, &valueError{"Not a boolean: " + value}
 	}
