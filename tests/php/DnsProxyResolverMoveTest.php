@@ -389,6 +389,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertStringContainsString('DNS proxy', $notice['notice']);
 		$this->assertStringContainsString('pfB-DNS is not active', $notice['notice'], 'it says the takeover did not happen');
 		$this->assertStringNotContainsString('DNSBL', $notice['notice'], 'DNSBL is off here: no claim about it');
+		$this->assertStringEndsWith('or turn "pfB-DNS" off on "DNS" > "General".', $notice['notice'], 'its advice names the page that holds the pfB-DNS enable now');
 		$this->assertSame('/services_unbound.php', $notice['url'], 'it points at the Resolver page');
 		$this->assertSame(2, $notice['priority']);
 	}

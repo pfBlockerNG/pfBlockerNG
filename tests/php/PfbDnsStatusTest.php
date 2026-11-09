@@ -11,7 +11,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issues #3515, #3548, #3555, #3625 -- the pfB-DNS tab's status data: whether the proxy is running, starting or stopped, which mode the box is
+ * issues #3515, #3548, #3555, #3625 -- the pfB-DNS status data (shown on DNS > General): whether the proxy is running, starting or stopped, which mode the box is
  * in, and for each transport (plain DNS, DoT, DoH, DoQ) either a whole-transport state (`off`, or `no_listener`) or the rows of its
  * table: one per interface and outcome, with the addresses it covers. Service and mode derive from the Resolver snapshot (the box is
  * moved or it is not), the toggle (what the admin asked for) and DNSBL (whether the proxy makes DNSBL decisions); a toggle that is on

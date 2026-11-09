@@ -43,7 +43,7 @@ final class ToggleEmptyPreservationTest extends TestCase
 	}
 
 	/**
-	 * issue #3515: DNS Reply Logging (dnsbl/pfb_py_reply, still the DNSBL-section key) is saved by the pfB-DNS page, as a
+	 * issue #3515: DNS Reply Logging (dnsbl/pfb_py_reply, still the DNSBL-section key) is saved by the DNS General page, as a
 	 * leaf through the gateway. Same polarity as the DNSBL page's toggles: an absent checkbox persists the empty Off token
 	 * even though the registry default is On, a checked one persists On, and the render reads them back.
 	 */

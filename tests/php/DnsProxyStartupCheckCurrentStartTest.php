@@ -32,7 +32,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	use LiveListenerStandIn;
 
 	private const ID = 'pfBlockerNG DNS Proxy startup';
-	private const URL = '/pfblockerng/pfblockerng_dns.php';
+	private const URL = '/pfblockerng/pfblockerng_dns_general.php';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 
@@ -183,7 +183,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	private function problemText(string ...$sentences): string
 	{
 		return 'pfB-DNS started with problems: ' . implode(' ', $sentences) .
-			' Correct the settings on "DNS" > "pfB-DNS" or the cause named, then use "Run Now" on "Update".';
+			' Correct the settings on "DNS" > "General" or the cause named, then use "Run Now" on "Update".';
 	}
 
 	private function fileStandingNotice(): void

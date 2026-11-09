@@ -8,7 +8,7 @@ require_once __DIR__ . '/support/ProcessRunner.php';
 
 /**
  * issue #3515 -- the DNSBL page saves its whole section, and write_config() writes the whole copy of config.xml the request
- * read when it started. A pfB-DNS page save (DNS Reply Logging Off) or an apply's Resolver move (snapshot, moved
+ * read when it started. A DNS General save (DNS Reply Logging Off) or an apply's Resolver move (snapshot, moved
  * interface) that landed in between would therefore be overwritten with the values this request loaded.
  *
  * The DNSBL save takes the same config lock as those writers (pfb_dns_config_lock()), reads config.xml afresh under it,
@@ -93,7 +93,7 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 
 		$this->assertSame(['try_lock', 'read', 'write', 'unlock'], array_map(static fn (array $event): string => $event[0], $result['events']),
 			'lock, fresh read under it, one write, then release');
-		$this->assertSame('pfb_dns_config', $result['events'][0][1], 'the lock the pfB-DNS page and the Resolver move take');
+		$this->assertSame('pfb_dns_config', $result['events'][0][1], 'the lock the DNS General saves and the Resolver move take');
 		$this->assertFalse($result['lockHeld'], 'released');
 	}
 

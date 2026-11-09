@@ -178,7 +178,7 @@ final class DnsblHostIsPfbDnsOnlyTest extends TestCase
 		$this->assertStringContainsString('DNSBL is not blocking', $open[0]['message']);
 		$this->assertStringContainsString('pfB-DNS is not active yet', $open[0]['message']);
 		$this->assertStringContainsString('pfB-DNS status', $open[0]['message']);
-		$this->assertStringNotContainsString('DNS > pfB-DNS', $open[0]['message'], 'pfB-DNS is already requested: no instruction to turn it on');
+		$this->assertStringNotContainsString('DNS > General', $open[0]['message'], 'pfB-DNS is already requested: no instruction to turn it on');
 		$this->assertStringNotContainsString('pfb_unbound.py', $open[0]['message'], 'no word of an Unbound-hosted module');
 	}
 

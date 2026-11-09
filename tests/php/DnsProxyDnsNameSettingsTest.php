@@ -7,7 +7,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #3694 -- the DNS Name setting of the pfB-DNS page (`dns/pfb_dns_name`, next to the certificate): DDR's target name and the
+ * Issue #3694 -- the DNS Name setting of pfB-DNS on DNS > General (`dns/pfb_dns_name`, next to the certificate): DDR's target name and the
  * name pfB-DNS answers A and AAAA for. Active encrypted transports and DDR need a name, accepted only in the
  * shape the gateway takes (a hand-typed name must never be the reason it refuses to start).
  *

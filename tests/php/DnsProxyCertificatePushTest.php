@@ -201,6 +201,8 @@ final class DnsProxyCertificatePushTest extends TestCase
 		// Then the standing condition is one notice that says what it is, and nothing is on record
 		$this->assertCount(1, $this->notices());
 		$this->assertStringContainsString('cannot connect to ' . $this->socket, $this->notices()[0]);
+		$this->assertSame('pfBlockerNG DNS Proxy certificate', $GLOBALS['pfb_test_file_notices'][0]['id']);
+		$this->assertSame('/pfblockerng/pfblockerng_dns_general.php', $GLOBALS['pfb_test_file_notices'][0]['url'], 'the notice opens the page that holds the certificate selector');
 		$this->assertFileDoesNotExist(pfb_dns_proxy_certificate_pushed_path());
 	}
 

@@ -7,7 +7,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issues #3513 and #3538 -- pfB-DNS's listener settings on its own page: the plain DNS, DoT, DoH and DoQ interface
+ * issues #3513 and #3538 -- pfB-DNS's listener settings, on DNS > General (issue #3771): the plain DNS, DoT, DoH and DoQ interface
  * lists, the three transports' ports and toggles, the DoH trusted front ends and the SSL/TLS Certificate they share.
  *
  * Functions under test:
@@ -26,7 +26,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_tokens')]
 final class DnsProxyListenerSettingsTest extends TestCase
 {
-	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_dns.php';
+	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
 	private const IFACES = ['all', 'lo0', 'lan', 'opt1'];
 	private const CERTS = ['cert5f3a'];
 	private const PORT_FIELDS = [

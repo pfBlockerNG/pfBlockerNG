@@ -305,6 +305,7 @@ def test_absent_syncscope_renders_the_registered_default_policy(
 
 _DNSBL_SETTINGS_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 _GENERAL_SETTINGS_PAGE = "/pfblockerng/pfblockerng_general.php"
+_PFB_DNS_SETTINGS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # holds the pfB-DNS settings since issue #3771
 
 _SWEPT_DNSBL_TOGGLES = {
     "pfb_dnsbl": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl",
@@ -359,11 +360,11 @@ def test_swept_pfb_dns_toggle_renders_on_when_stored_and_off_when_absent(
     """issue #3515, #3513: the pfB-DNS checkboxes (the pfblockerngdns section) render checked only for stored ``on``."""
     path = _SWEPT_DNS_TOGGLES[name]
     node_state(path, "on")
-    html = _render(smoke_vm, webui, "/pfblockerng/pfblockerng_dns.php", "pfB-DNS Settings")
+    html = _render(smoke_vm, webui, _PFB_DNS_SETTINGS_PAGE, "pfB-DNS Settings")
     assert _checkbox_is_checked(html, name), f"control: a stored 'on' {name} must render checked"
 
     node_state(path, None)
-    html = _render(smoke_vm, webui, "/pfblockerng/pfblockerng_dns.php", "pfB-DNS Settings")
+    html = _render(smoke_vm, webui, _PFB_DNS_SETTINGS_PAGE, "pfB-DNS Settings")
     assert not _checkbox_is_checked(html, name), f"an absent {name} must render UNCHECKED (registry default Off)"
 
 

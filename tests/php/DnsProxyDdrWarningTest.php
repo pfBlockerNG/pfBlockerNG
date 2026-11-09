@@ -9,7 +9,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3583 -- the pfB-DNS page warns, without blocking the save, about each address an encrypted listener serves that is
+ * issue #3583 -- DNS > General warns, without blocking the pfB-DNS save, about each address an encrypted listener serves that is
  * public and is not an `iPAddress` SAN of the selected certificate: a client verifying DDR (RFC 9462 section 4.2) checks the
  * address it queried against that SAN, so there it will not use DoT, DoH or DoQ. Spec: docs/specs/encrypted-dns-discovery.md,
  * "Certificate warning", acceptance criterion 8.

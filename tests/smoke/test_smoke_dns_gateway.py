@@ -24,7 +24,7 @@ What it proves, in file order:
   ``pfb_dns_proxy.py --decision-fd 3``, both as ``unbound``; ``dns_proxy.log`` has the ``listening`` lines and
   ``ready upstream 127.0.0.1:5353 pid N``, N the gateway's; the gateway owns every client-facing socket (DoH and DoQ on
   loopback too, for a local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
-* the pfB-DNS tab's status panel is one table per transport with a Localhost row (loopbacks plus the served lo0 VIP
+* DNS General's status panel is one table per transport with a Localhost row (loopbacks plus the served lo0 VIP
   for plain DNS and DoT) and a LAN row (the LAN address), each reading ``Listening`` for a screen reader (issue #3555);
 * when Unbound stops under the live gateway (issue #3560), the status panel reads ``Starting`` and every table keeps its
   ``Listening`` rows; the Resolver is restored afterwards and an allowed name resolves again;
@@ -579,7 +579,7 @@ def _restore(vm: SmokeVM) -> None:
 
 
 def _set_listeners(vm: SmokeVM) -> None:
-    """DoH and DoQ on, on the LAN, as the pfB-DNS tab's seven settings store them."""
+    """DoH and DoQ on, on the LAN, as the pfB-DNS form's seven settings store them."""
     assignments = "".join(
         f"config_set_path({h._php_str(h.dns_config_path(k))}, {h._php_str(v)});\n" for k, v in LISTENER_SETTINGS.items()
     )
@@ -1021,7 +1021,7 @@ def test_the_gateway_owns_the_client_facing_sockets_and_unbound_only_loopback(gw
     assert not stray, f"Unbound listens beyond loopback 5353 and 5354: {sorted(stray)}"
 
 
-STATUS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+STATUS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # the pfB-DNS settings and status page since issue #3771
 
 
 @pytest.fixture
@@ -1044,7 +1044,7 @@ def gui(gw: Gateway) -> WebUI:
 
 
 def _status_rows(page: str, transport: str) -> list[tuple[str, list[str], str]]:
-    """The rows of one transport's table in the pfB-DNS tab's status panel, as (interface, one address per line, what a
+    """The rows of one transport's table in DNS General's status panel, as (interface, one address per line, what a
     screen reader says for the state)."""
     # the table inside this section, never one of the next section (a transport on with no listener has none)
     table = re.search(rf'id="pfb-dns-status-{transport}">(?:(?!class="panel ).)*?(<table .*?</table>)', page, re.DOTALL)
@@ -1839,7 +1839,7 @@ def _ddr_doh_port_shown(client: SmokeVM, server: str = PFSENSE_LAN_IP) -> bool |
 
 
 def _set_ddr(vm: SmokeVM, on: bool, doh_443: bool) -> None:
-    """The pfB-DNS tab's DDR settings as its Save stores them: the toggle ('on' or the empty Off token) and the
+    """The pfB-DNS form's DDR settings as its Save stores them: the toggle ('on' or the empty Off token) and the
     interface list of "Advertise DoH on port 443".
 
     DDR on is saved with the DNS name, its target (issue #3694); DDR off leaves the stored name as it is.
@@ -2756,7 +2756,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
                 answer, raw = _ask(client, transport, gw.names.ready, server=vips[0], port=port)
                 _say(f"VIP-only managed {transport} at {vips[0]}:{port}\n{raw}")
                 assert h.is_vip(answer), f"VIP-only {transport} failed: {answer}\n{raw}"
-        status = gui.get("/pfblockerng/pfblockerng_dns.php")
+        status = gui.get(STATUS_PAGE)
         assert status.status_code == 200, status.text
         from .ui.test_sync_status_panels import panel
 
@@ -2772,7 +2772,7 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
             assert status_row is not None, f"DDR status omitted {endpoint}: {observations}"
             _say(f"VIP-only DDR status {endpoint}: {ET.tostring(status_row, encoding='unicode')}")
             assert status_row.attrib["data-state"] == "pending", ET.tostring(status_row, encoding="unicode")
-            checked = gui.get("/pfblockerng/pfblockerng_dns.php?ajax=ddr", params={"listener": endpoint})
+            checked = gui.get(f"{STATUS_PAGE}?ajax=ddr", params={"listener": endpoint})
             assert checked.status_code == 200, checked.text
             checked_section = panel(checked.json()["html"], "pfb-dns-status-ddr")
             assert checked_section is not None, checked.text

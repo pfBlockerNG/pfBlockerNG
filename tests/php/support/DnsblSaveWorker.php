@@ -91,7 +91,7 @@ config_set_path('unbound/active_interface', 'lan');
 config_set_path('unbound/custom_options', base64_encode('do-ip6: no'));
 config_set_path("{$dnsbl}/global_log_mode", 'default');	// a migrated policy: the upgrade facade writes nothing
 
-// What the other requests wrote after this one started: the pfB-DNS page's Off, and an apply's Resolver move.
+// What the other requests wrote after this one started: the pfB-DNS form's Off (DNS > General), and an apply's Resolver move.
 $other = $GLOBALS['config'];
 $other['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_py_reply'] = '';
 $other['unbound']['active_interface'] = 'lo0';

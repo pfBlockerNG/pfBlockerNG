@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     from .webui import WebUI
 
-DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+DNS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # holds the pfB-DNS settings since issue #3771
 LISTS = ("pfb_dns_interface", "pfb_dns_dot_interface", "pfb_dns_doh_interface", "pfb_dns_doq_interface")
 SERVICES = ("dot", "doh", "doq", "ddr")
 SAVED_KEYS = (
@@ -106,7 +106,7 @@ def test_dns_name_rejection_then_disable_and_plain_only_save(
     browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM, settings_policy_box: None
 ) -> None:
     """Missing Name rejects each active service without writes; disable and plain-only really save."""
-    from .test_browser_dns import _save
+    from .test_browser_dns import _save_pfb_dns
     from .test_browser_feeds import _open
 
     page = browser_page
@@ -134,7 +134,7 @@ def test_dns_name_rejection_then_disable_and_plain_only_save(
     before = _write_state(smoke_vm)
     for service in SERVICES:
         page.locator(f'input[name="pfb_dns_{service}"]').check()
-        _save(page)
+        _save_pfb_dns(page)
         errors = page.locator(".input-errors")
         assert errors.count() == 1 and "DNS Name" in errors.inner_text(), f"{service}: missing Name not rejected"
         assert _write_state(smoke_vm) == before, f"{service}: rejected POST changed configuration/markers"
@@ -143,7 +143,7 @@ def test_dns_name_rejection_then_disable_and_plain_only_save(
     for service in SERVICES:
         page.locator(f'input[name="pfb_dns_{service}"]').check()
     page.locator('input[name="pfb_dns"]').uncheck()
-    _save(page)
+    _save_pfb_dns(page)
     assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").all_inner_texts()
     assert helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns")) == ""
     assert helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns_name")) == ""
@@ -151,7 +151,7 @@ def test_dns_name_rejection_then_disable_and_plain_only_save(
         assert helpers.config_get(smoke_vm, helpers.dns_config_path(f"pfb_dns_{service}")) == "on", service
         page.locator(f'input[name="pfb_dns_{service}"]').uncheck()
     page.locator('input[name="pfb_dns"]').check()
-    _save(page)
+    _save_pfb_dns(page)
     assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").all_inner_texts()
     assert helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns")) == "on"
     assert helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns_name")) == ""

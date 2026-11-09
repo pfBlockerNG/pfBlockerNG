@@ -7,7 +7,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3555 -- the pfB-DNS tab's status panel renders what pfb_dns_status() returns: the service and the mode, then one section per
+ * issue #3555 -- the pfB-DNS status panel (shown on DNS > General) renders what pfb_dns_status() returns: the service and the mode, then one section per
  * transport (Plain DNS, DNS over TLS, DNS over HTTPS, DNS over QUIC listeners) with a table of Interface | Address | State rows, an empty
  * table when the transport is off, or one line of notice when it is on and has no listener. The state is an icon that says what it means
  * to a screen reader and in its hover title, so colour or shape never carries it alone; a refusal also shows its reason. Every dynamic

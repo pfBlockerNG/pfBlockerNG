@@ -1,6 +1,6 @@
 """Issue #3515: pfB-DNS, the experimental DNS proxy, driven the way an operator drives it, proven live.
 
-pfB-DNS (``dns/pfb_dns``, the pfB-DNS tab) moves the DNS Resolver onto loopback (its port stays 53, so the firewall
+pfB-DNS (``dns/pfb_dns``, on DNS > General) moves the DNS Resolver onto loopback (its port stays 53, so the firewall
 keeps resolving through it) and runs the Go gateway ``pfb-dns`` on the Resolver's client-facing addresses; its child,
 the Python decider, answers the DNSBL decisions. It is independent of DNSBL: with DNSBL on the decider answers DNSBL
 decisions itself (the SHIPPED ``pfb_unbound.py`` through its Unbound API shim) and the gateway forwards every other
@@ -39,7 +39,7 @@ What it proves, in file order:
 * pfB-DNS on, DNSBL off: the proxy runs with ``--no-module``, Unbound has no ``pfb_unbound.py`` (only the inert
   observer), a listed name is NOT blocked (UDP, TCP, DoT), Unbound's log names the real client, the firewall's own
   lookup goes through the proxy (Unbound has no socket on 53), and no DNSBL decision is logged;
-* pfB-DNS on, DNSBL off, DNS Reply Logging on (the pfB-DNS tab's preference, ``dnsbl/pfb_py_reply``): the proxy
+* pfB-DNS on, DNSBL off, DNS Reply Logging on (the DNS General preference, ``dnsbl/pfb_py_reply``): the proxy
   runs with ``--no-module --reply-log``, a LAN client's query is answered and dns_reply.log and unified.log (the
   Reports and Stats pipeline) each gain one row naming the client, the name, the type and the upstream's answer, and
   dnsbl.log none; with the preference off the proxy runs without ``--reply-log``, answers the same and no row is
@@ -72,7 +72,7 @@ What it proves, in file order:
   gateway, its supervisor nor its decider and no query for a listed name goes unanswered; a changed decider module
   restarts the decider alone; a changed gateway binary restarts the pair once.
 
-The pfB-DNS tab (enable checkbox, help that says it is experimental, status panel) is covered by the Tier A render
+pfB-DNS on DNS General (enable, experimental help, status panel) is covered by the Tier A render
 test ``test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status``
 (tests/smoke/ui/test_render_smoke.py) and the toggle flow ``pfb_dns``
 (tests/smoke/ui/test_functional.py).
@@ -382,7 +382,7 @@ def _configure_group_policy(vm: SmokeVM) -> None:
 
 
 def _set_proxy_toggle(vm: SmokeVM, on: bool) -> None:
-    """The pfB-DNS tab's save, minus the page: the registered toggle token, 'on' or the empty Off token."""
+    """The pfB-DNS form's save, minus the page: the registered toggle token, 'on' or the empty Off token."""
     _php_ok(
         vm,
         f"config_set_path({h._php_str(CFG_PROXY)}, {h._php_str('on' if on else '')});\n"
@@ -1093,7 +1093,7 @@ def test_pfb_dns_without_dnsbl_forwards_everything_and_blocks_nothing(rig: Rig, 
 # --------------------------------------------------------------------------- #
 
 CFG_REPLY_LOG = (
-    f"{h.CFG_DNSBL_SETTINGS}/pfb_py_reply"  # the pfB-DNS tab's DNS Reply Logging: 'on', or the empty Off token
+    f"{h.CFG_DNSBL_SETTINGS}/pfb_py_reply"  # the DNS General DNS Reply Logging: 'on', or the empty Off token
 )
 REPLY_LOG = f"{h.PFB_LOGDIR}/dns_reply.log"
 UNIFIED_LOG = (
@@ -1102,7 +1102,7 @@ UNIFIED_LOG = (
 
 
 def _put_reply_logging(vm: SmokeVM, value: str | None) -> None:
-    """The pfB-DNS tab's save of DNS Reply Logging, minus the page: 'on' or the empty Off token; None puts back an
+    """The DNS General save of DNS Reply Logging, minus the page: 'on' or the empty Off token; None puts back an
     absent key."""
     path = h._php_str(CFG_REPLY_LOG)
     op = f"config_del_path({path});" if value is None else f"config_set_path({path}, {h._php_str(value)});"

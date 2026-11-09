@@ -585,6 +585,13 @@ def test_pfb_dns_row_shows_only_while_pfb_dns_is_on(
         row = body[body.rindex("<tr", 0, first) : body.index("</tr>", first)]
         assert [anchor for anchor in _DNS_ANCHORS if anchor in row] == _DNS_ANCHORS, "the five icons are not in one row"
         assert row.count("<td") == 6, f"the pfB-DNS row has {row.count('<td')} cells, expected 5 icons and a link"
+        link = re.search(r"<a\b[^>]*>", row)
+        assert link, f"the pfB-DNS row has no link: {row}"
+        attrs = dict(re.findall(r"""(\w+)=['"]([^'"]*)['"]""", link.group()))
+        assert (attrs.get("href"), attrs.get("title")) == (
+            "pfblockerng/pfblockerng_dns_general.php",
+            "Click to open the DNS General tab",
+        ), f"the pfB-DNS row links {attrs}, expected DNS General (issue #3771)"
         assert first < body.index("PFBSTATUS"), "the pfB-DNS row is not above the IP row"
 
         expected = [ICON_YELLOW, ICON_YELLOW, ICON_RED, ICON_RED, ICON_RED]

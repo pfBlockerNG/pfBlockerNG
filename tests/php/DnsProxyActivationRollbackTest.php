@@ -374,6 +374,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame(['pfBlockerNG DNS Proxy startup', 'pfBlockerNG DNS Proxy'], array_column($this->notices(), 'id'), 'the startup check names the failure, then the rollback notice says what was done');
 		$notices = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
 		$this->assertCount(1, $notices);
+		$this->assertSame('/pfblockerng/pfblockerng_dns_general.php', $notices[0]['url'], 'the rollback notice opens the page that holds the pfB-DNS settings');
 		$this->assertStringContainsString('did not become ready', $notices[0]['notice']);
 		$this->assertStringContainsString('pfB-DNS stays on', $notices[0]['notice']);
 		$this->assertStringContainsString('the next Update retries', $notices[0]['notice']);

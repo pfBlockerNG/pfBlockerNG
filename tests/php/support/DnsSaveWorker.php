@@ -3,10 +3,15 @@
 declare(strict_types=1);
 
 /**
- * Child process for DnsSettingsSaveRaceTest: executes the pfB-DNS page's real POST save (the code from its config lock to
- * the end of `if (isset($_POST['save']))`, extracted from the shipped pfblockerng_dns.php by its tokens) over the PHPUnit
- * doubles, with another request's writes interleaved at the instant the save re-reads config.xml. The page cannot be
- * included whole: its validation reads files under /usr/local/www on the appliance. argv: scenario name, result file.
+ * Child process for DnsSettingsSaveRaceTest, DnsblSaveWithPfbDnsOffTest and DnsGeneralPfbDnsFoldTest: executes the real POST save of
+ * DNS > General (issue #3771: the pfB-DNS form and the DNS General form share that one page) over the PHPUnit doubles, with another
+ * request's writes interleaved at the instant the save re-reads config.xml. The page cannot be included whole (it renders and exits),
+ * so its save code is extracted from the shipped pfblockerng_dns_general.php. argv: scenario name, result file, mode, button.
+ *
+ * Modes (argv[3]): `dns` (default) runs the pfB-DNS handler, from its config lock to the end of `if (isset($_POST['save_pfb_dns']))`,
+ * extracted by its tokens; `general` runs the DNS General handler `if ($_POST && isset($_POST['save']))` alone; `region` runs the page's
+ * whole POST region (from `$input_errors = array();` to `$pgtitle =`: both handlers and their gates, validation included) with ONLY the
+ * submit button of argv[4] (`save_pfb_dns` or `save`) and that form's own valid fields posted, as a browser sends them.
  *
  * Scenarios: `interleave` (an apply's Resolver move lands on disk after this request started), `lock_taken` (another
  * process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (config.xml cannot be written),
@@ -23,14 +28,21 @@ $workerArgv = $argv;
 $scenario = (string) $workerArgv[1];
 $resultFile = (string) $workerArgv[2];
 $repo = dirname(__DIR__, 3);
-$general = ($workerArgv[3] ?? '') === 'general';
-$page = $repo . '/src/usr/local/www/pfblockerng/' . ($general ? 'pfblockerng_dns_general.php' : 'pfblockerng_dns.php');
+$mode = (string) ($workerArgv[3] ?? 'dns');
+$region = $mode === 'region';
+// The submit button the browser posts: the DNS General form's own, or the pfB-DNS form's.
+$submit = $mode === 'general' ? 'save' : ($region ? (string) ($workerArgv[4] ?? '') : 'save_pfb_dns');
+if (!in_array($submit, ['save', 'save_pfb_dns'], TRUE)) {
+	throw new RuntimeException("worker: unknown submit button '{$submit}'");
+}
+$page = $repo . '/src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
 $disk = $before = NULL;
 $input_errors = [];
 $pconfig = [];
 $returned = FALSE;
+$handedPost = [];
 
-register_shutdown_function(static function () use ($resultFile, &$disk, &$before, &$input_errors, &$pconfig, &$returned): void {
+register_shutdown_function(static function () use ($resultFile, &$disk, &$before, &$input_errors, &$pconfig, &$returned, &$handedPost): void {
 	file_put_contents($resultFile, json_encode([
 		'disk'          => $disk,
 		'before'        => $before,
@@ -42,6 +54,7 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$before
 		'returned'      => $returned,
 		'writes'        => $GLOBALS['pfb_test_write_config_calls'] ?? [],
 		'unboundCalls'  => count($GLOBALS['pfb_test_unbound_configure_calls'] ?? []),
+		'posted'        => $handedPost,
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -58,13 +71,13 @@ final class DnsSaveWorkerSeeder
 	}
 }
 
-/** The page's POST save: from the config lock's first statement to the end of `if (isset($_POST['save']))`. */
+/** The pfB-DNS save handler: from the config lock's first statement to the end of `if (isset($_POST['save_pfb_dns']))`. */
 function dns_save_worker_block(string $source): string
 {
 	$anchor = '$pfb_config_lock = NULL;';
 	$from = strpos($source, $anchor);
 	if ($from === FALSE) {
-		throw new RuntimeException('worker: the pfB-DNS page no longer has its config lock anchor');
+		throw new RuntimeException('worker: DNS General has no pfB-DNS save handler (no config lock anchor)');
 	}
 	$tokens = token_get_all('<?php ' . substr($source, $from));
 	$code = '';
@@ -80,13 +93,26 @@ function dns_save_worker_block(string $source): string
 		}
 		$code .= $text;
 	}
-	throw new RuntimeException('worker: the pfB-DNS page save block has no end');
+	throw new RuntimeException('worker: the pfB-DNS save handler has no end');
+}
+
+/** The source between two markers (start inclusive, end exclusive), or a worker error naming the one that is missing. */
+function dns_save_worker_region(string $source, string $start, string $end): string
+{
+	$from = strpos($source, $start);
+	$to = strpos($source, $end);
+	if ($from === FALSE || $to === FALSE || $to < $from) {
+		throw new RuntimeException("worker: DNS General has no region {$start} .. {$end}");
+	}
+	return substr($source, $from, $to - $from);
 }
 
 $source = (string) file_get_contents($page);
-$block = $general
-	? substr($source, strpos($source, 'if ($_POST &&'), strpos($source, '$pgtitle =') - strpos($source, 'if ($_POST &&'))
-	: dns_save_worker_block($source);
+$block = match ($mode) {
+	'general' => dns_save_worker_region($source, 'if ($_POST &&', '$pgtitle ='),
+	'region' => dns_save_worker_region($source, '$input_errors = array();', '$pgtitle ='),
+	default => dns_save_worker_block($source),
+};
 $dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
 $dns = 'installedpackages/pfblockerngdns/config/0';
 $GLOBALS['config'] = [];
@@ -109,20 +135,38 @@ $tmp = $GLOBALS['pfb_test_tmp'];
 $pfb['pending_marker'] = "{$tmp}/pending";
 // The page renders the stored preference before the save: a failed save re-displays what the form posted, not this.
 $pconfig['pfb_py_reply'] = PfbConfig::read('dnsbl/pfb_py_reply');
-// Both pages submit their own checkbox Off; the other page's preference must survive.
-$_POST = ['save' => 'Save'];
+// The posted form: the clicked form's button, and for DNS General its own fields (each form posts only its own).
+$_POST = [$submit => 'Save'];
 $pfb_dns = '';
-if ($general) {
+if ($submit === 'save') {
 	$_POST += ['pfb_dns_listen_vip4' => 'none', 'pfb_dns_listen_vip6' => 'none', 'pfb_dns_listen_interface' => 'lo0'];
 	$options_dns_listen_vip4 = $options_dns_listen_vip6 = ['none' => '', 'auto' => 'Create VIP automatically'];
 	$options_dns_listen_interface = ['lo0' => 'Localhost'];
 }
-preg_match_all("~\\\$_POST\\['([a-z0-9_]+)'\\]~", $block, $posted);
-foreach (array_unique($posted[1]) as $key) {
-	$_POST[$key] = $_POST[$key] ?? '';
+if ($region && $submit === 'save_pfb_dns') {
+	// A complete valid pfB-DNS form with pfB-DNS turned On, DoT, DoH and DDR on and DoQ off; its option lists are the page's, as the page loads them.
+	$options_dns_interface = ['lo0' => 'Localhost'];
+	$options_dns_cert = ['cert1' => 'Certificate'];
+	$_POST += [
+		'pfb_dns' => 'on', 'pfb_dns_interface' => ['lo0'], 'pfb_dns_sslcertref' => 'cert1', 'pfb_dns_name' => 'fw.example.lan',
+		'pfb_dns_dot' => 'on', 'pfb_dns_dot_port' => '853', 'pfb_dns_dot_port6' => '', 'pfb_dns_dot_interface' => ['lo0'],
+		'pfb_dns_doh' => 'on', 'pfb_dns_doh_port' => '4443', 'pfb_dns_doh_port6' => '', 'pfb_dns_doh_interface' => ['lo0'], 'pfb_dns_doh_trusted' => '',
+		'pfb_dns_doq_port' => '8853', 'pfb_dns_doq_port6' => '', 'pfb_dns_doq_interface' => ['lo0'],
+		'pfb_dns_ddr' => 'on',
+	];
+}
+if (!$region) {
+	// The cut-out handler reads these fields of its form: each is posted empty, as a browser posts an unticked box
+	preg_match_all("~\\\$_POST\\['([a-z0-9_]+)'\\]~", $block, $posted);
+	foreach (array_unique($posted[1]) as $key) {
+		$_POST[$key] = $_POST[$key] ?? '';
+	}
 }
 if ($scenario === 'dnsbl_on') {
 	config_set_path("{$dnsbl}/pfb_dnsbl", 'on');
+}
+if ($region && $submit === 'save_pfb_dns') {
+	config_set_path("{$dns}/pfb_dns", '');	// pfB-DNS is Off in config.xml: the form turns it On
 }
 $disk = $before = $GLOBALS['config'];
 if ($scenario === 'interleave') {
@@ -166,6 +210,7 @@ $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) u
 	}
 };
 $input_errors = [];
+$handedPost = $_POST;
 ini_set('open_basedir', "{$tmp}:" . dirname($resultFile) . ":{$repo}:/usr/share/php:/dev/null:/dev/urandom");
 eval($block);
 $returned = TRUE;

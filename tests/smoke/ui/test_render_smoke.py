@@ -36,6 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -149,10 +150,27 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Block the suffix apex only",
         ),
     ),
-    # issue #3515: the pfB-DNS tab (experimental DNS proxy). The section titles are the page's own: the tab label alone
-    # is on every page's tab bar and proves nothing.
-    Page("dns", "/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings", "pfB-DNS Status")),
-    Page("dns-general", "/pfblockerng/pfblockerng_dns_general.php", ("DNS Reply Logging", "Resolver addresses")),
+    # issue #3771: pfblockerng_dns.php is a redirect stub to DNS General, so this entry renders DNS General through the
+    # redirect and its markers are ones only DNS General has; test_retired_pfb_dns_address_redirects_once_to_dns_general
+    # pins the redirect itself.
+    Page("dns", "/pfblockerng/pfblockerng_dns.php", ("DNS Reply Logging", "pfB-DNS Settings")),
+    # issues #3515, #3771: DNS General carries the pfB-DNS settings (experimental DNS proxy) and status beside its own
+    # settings. The section titles are the page's own: the tab label alone is on every page's tab bar and proves
+    # nothing. The oracle matches markers with any(), so test_dns_settings_order pins every section and both forms.
+    Page(
+        "dns-general",
+        "/pfblockerng/pfblockerng_dns_general.php",
+        (
+            "DNS Reply Logging",
+            "Resolver addresses",
+            "pfB-DNS Settings",
+            "DNS over TLS (DoT)",
+            "DNS over HTTPS (DoH)",
+            "DNS over QUIC (DoQ)",
+            "Discovery of Designated Resolvers (DDR)",
+            "pfB-DNS Status",
+        ),
+    ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
     # is probed; the type-specific marker is the active type's "Feed Settings" alias-name
     # StaticText label ("IPv4 alias name(s):" etc.), which renders ONLY for the active
@@ -2111,9 +2129,10 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
 def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """issue #3515: the pfB-DNS tab carries the enable checkbox in its order, and a status panel names the service and
-    the mode and, once the Resolver is moved, a table per transport (issue #3555)."""
-    path = "/pfblockerng/pfblockerng_dns.php"
+    """issues #3515, #3771: DNS General carries the pfB-DNS enable checkbox in its order, then its own settings, and the
+    pfB-DNS status panel names the service and the mode and, once the Resolver is moved, a table per transport (#3555).
+    """
+    path = "/pfblockerng/pfblockerng_dns_general.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
     assert result.ok, f"pfB-DNS render oracle failed: {result.detail}"
@@ -2129,9 +2148,12 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
         "pfb_dns_doh",
         "pfb_dns_doq",
         "pfb_dns_ddr",
+        "pfb_py_reply",
+        "pfb_dns_listen_vip",
+        "pfb_dns_listen_vip_only",
     ]
     assert checkboxes == expected, (
-        f"the page has the enable checkbox, DoT, DoH, DoQ, and the three DDR checkboxes; got {checkboxes}"
+        f"expected the pfB-DNS checkboxes then DNS General's three, in order; got {checkboxes}"
     )
     status_html = html[html.index('id="pfb-dns-status"') :]
     service = re.search(r'<tr id="pfb-dns-status-service"><th>Service</th><td>([^<]+)</td></tr>', status_html)
@@ -2151,6 +2173,26 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
     assert status_html.split("</table>", 1)[1].startswith("</div></div></div>"), (
         "a box with nothing moved claims no transport: nothing may follow the overview rows"
     )
+
+
+def test_retired_pfb_dns_address_redirects_once_to_dns_general_which_renders(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3771: GET pfblockerng_dns.php answers one redirect to DNS General, which renders in full.
+
+    The redirect is read from the response history (the session follows it), so a page that still renders pfB-DNS
+    itself, or one that redirects elsewhere or more than once, fails here.
+    """
+    old, new = "/pfblockerng/pfblockerng_dns.php", "/pfblockerng/pfblockerng_dns_general.php"
+    resp = webui.get(old)
+    hops = [(hop.status_code, hop.headers.get("Location")) for hop in resp.history]
+    assert len(hops) == 1, f"expected one redirect from {old} to {new}, got {hops}"
+    location = urlsplit(hops[0][1] or "")
+    assert (location.path, location.query) == (new, ""), f"expected the redirect to {new}, got {hops[0]}"
+    assert urlsplit(resp.url).path == new, f"expected the final URL path {new}, got {urlsplit(resp.url).path}"
+    result = evaluate_render(new, resp.status_code, resp.text, ("DNS Reply Logging",))
+    assert result.ok, f"DNS General render oracle failed after the redirect: {result.detail}"
+    assert "pfB-DNS Settings" in resp.text, f"the page {new} was redirected to lacks the pfB-DNS settings"
 
 
 # Dual-marked ui_e2e (issue #810): this test MUTATES config.xml (DNSBL off, pfB-DNS and reply logging per row) as
@@ -2374,14 +2416,16 @@ _DNS_LISTENER_NAMES = tuple(f'name="{field}' for field in (*_DNS_LISTENER_FIELDS
 
 
 def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """issue #3515: the toggle left the DNSBL page for the pfB-DNS tab, which the DNSBL page's own tab bar links to."""
+    """issue #3515: the toggle left the DNSBL page for pfB-DNS, which issue #3771 moved onto DNS General: the DNSBL
+    page's tab bar links DNS General and no longer links the retired pfB-DNS page."""
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', "Experimental", 'name="pfb_py_reply"', *_DNS_LISTENER_NAMES):
         assert gone not in resp.text, f"the DNSBL page still carries {gone!r}"
-    assert "/pfblockerng/pfblockerng_dns.php" in resp.text, "the DNSBL page's tab bar links to pfB-DNS"
+    assert "/pfblockerng/pfblockerng_dns_general.php" in resp.text, "the DNSBL page's tab bar links to DNS General"
+    assert "/pfblockerng/pfblockerng_dns.php" not in resp.text, "the DNSBL page still links the retired pfB-DNS page"
 
 
 def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings_after_the_enable_toggle(
@@ -2389,7 +2433,7 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
 ) -> None:
     """issues #3513, #3538, #3688: the listener settings follow the pfB-DNS enable checkbox, in order, before DDR.
 
-    Given the pfB-DNS page renders, Then the DNS interfaces, the SSL/TLS Certificate (or the Resolver's no-certificate
+    Given DNS General renders, Then the DNS interfaces, the SSL/TLS Certificate (or the Resolver's no-certificate
     text), the DNS Name (a text input, issue #3694), DoT (enable, port, interfaces), DoH (enable, port, interfaces,
     trusted front ends) and DoQ (enable, port, interfaces) appear in that order between the enable checkbox and DDR,
     as the right input kinds. Every
@@ -2397,7 +2441,7 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     operator to the certificate selector, says DoQ is UDP, names the HAProxy options and the binary the package ships
     (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
     """
-    path = "/pfblockerng/pfblockerng_dns.php"
+    path = "/pfblockerng/pfblockerng_dns_general.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
     assert result.ok, f"pfB-DNS listener render oracle failed: {result.detail}"
@@ -2454,7 +2498,7 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     assert "pfb_dns_gateway" not in html, "the page still names the retired binary pfb_dns_gateway"
 
 
-_PFB_DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+_PFB_DNS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # holds the pfB-DNS settings since issue #3771
 # Empty local interfaces and absent shared DoT values mark the first Resolver seed.
 _DNS_UNSEEDED = {
     "pfb_dns_interface": "",
@@ -2511,7 +2555,7 @@ def _write_config_paths(vm: SmokeVM, values: Mapping[str, str | None]) -> None:
 def test_pfb_dns_page_load_seeds_its_settings_from_the_resolver_once(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """issue #3538: loading the pfB-DNS page seeds its interface, DoT and certificate settings once.
+    """issue #3538: loading DNS General seeds the pfB-DNS interface, DoT and certificate settings once.
 
     Given pfB-DNS is off, local settings are empty, shared DoT settings absent, and the Resolver has an interface,
     SSL/TLS, a TLS port and a certificate, When the page loads, Then config.xml holds those values under pfB-DNS's own
@@ -2636,7 +2680,7 @@ def test_pfb_dns_page_renders_the_ddr_section_with_its_toggle_and_the_doh_443_se
 ) -> None:
     """issues #3583, #3694: the DDR section follows DoQ and ends the settings, before the status panel.
 
-    Given the pfB-DNS page renders, Then the DDR section title is there; `pfb_dns_ddr` is a checkbox of value `on`;
+    Given DNS General renders, Then the DDR section title is there; `pfb_dns_ddr` is a checkbox of value `on`;
     `pfb_dns_ddr_doh_443_interfaces[]` is a multiple select labelled `Advertise DoH on port 443`; the DoQ interface
     list, the DDR section title, the checkbox, the select and the status panel follow one another in the markup; and
     the two per-family checkboxes the select replaced are gone.
@@ -2816,7 +2860,7 @@ def _warned_address(text: str) -> str:
 
 
 def _assert_ddr_warnings(webui: WebUI, when: str, *, naming_the_vip: int) -> set[str]:
-    """Load the pfB-DNS page and expect `naming_the_vip` alert-warnings starting `DDR: ` that name the public VIP.
+    """Load DNS General and expect `naming_the_vip` alert-warnings starting `DDR: ` that name the public VIP.
 
     Only the VIP's warnings are counted, so another public address on the box (a pool VM's WAN, LAN or SLIRP address)
     cannot fail the count. The addresses the other `DDR: ` warnings are about are returned: a text names the
@@ -4498,7 +4542,8 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
         "/pfblockerng/pfblockerng_general.php",
         "/pfblockerng/pfblockerng_ip.php",
         "/pfblockerng/pfblockerng_dnsbl.php",
-        "/pfblockerng/pfblockerng_dns.php",
+        "/pfblockerng/pfblockerng_dns.php",  # the retired pfB-DNS page: a redirect stub since issue #3771
+        "/pfblockerng/pfblockerng_dns_general.php",  # carries the pfB-DNS settings since issue #3771
         "/pfblockerng/pfblockerng_feeds.php",
         "/pfblockerng/pfblockerng_alerts.php",
         "/pfblockerng/pfblockerng_log.php",

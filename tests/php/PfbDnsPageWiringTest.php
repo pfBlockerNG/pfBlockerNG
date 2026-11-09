@@ -5,11 +5,14 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * The pfB-DNS page is reachable through the package privilege, owns its listener settings,
- * and keeps its enable toggle out of the DNSBL settings page.
+ * The pfB-DNS settings live on DNS > General (issue #3771): that page is reachable through the package privilege, owns the listener settings,
+ * and keeps its enable toggle out of the DNSBL settings page. The old pfB-DNS URL still authenticates (it is a redirect stub).
  */
 final class PfbDnsPageWiringTest extends TestCase
 {
+	/** The one page that holds the pfB-DNS settings since issue #3771. */
+	private const PAGE = 'www/pfblockerng/pfblockerng_dns_general.php';
+
 	/** The listener settings in the order the page shows them (issues #3513, #3538). */
 	private const LISTENER_FIELDS = [
 		'pfb_dns_interface', 'pfb_dns_sslcertref', 'pfb_dns_name',
@@ -44,7 +47,7 @@ final class PfbDnsPageWiringTest extends TestCase
 		$this->assertContains(
 			'pfblockerng/pfblockerng_dns.php*',
 			$GLOBALS['priv_list']['page-firewall-pfblockerng']['match'] ?? [],
-			'the package privilege matches the pfB-DNS page, or no scoped operator reaches it'
+			'the package privilege still matches the old pfB-DNS URL, so its redirect stub authenticates and no scoped operator is refused'
 		);
 		$this->assertContains('pfblockerng/pfblockerng_dns_general.php*',
 			$GLOBALS['priv_list']['page-firewall-pfblockerng']['match'] ?? []);
@@ -53,7 +56,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testThePageCarriesTheEnableToggleAndAnExperimentalWarning(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		$this->assertStringContainsString("'pfb_dns',", $page, 'the enable checkbox');
 		$this->assertStringContainsString("PfbConfig::read('dns/pfb_dns')", $page, 'read through the gateway');
@@ -62,7 +65,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testTheHelpNamesTheCustomOptionsLinesThatStopTheMove(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		$this->assertStringContainsString('<code>include:</code>', $page, 'an include is named: the move refuses it');
 	}
@@ -80,14 +83,14 @@ final class PfbDnsPageWiringTest extends TestCase
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');
 
-		$this->assertSame(1, substr_count($page, '$pfb_config_lock = pfb_dns_config_lock();'), 'its whole-section save runs under the lock the pfB-DNS page and the Resolver move take');
+		$this->assertSame(1, substr_count($page, '$pfb_config_lock = pfb_dns_config_lock();'), 'its whole-section save runs under the lock the pfB-DNS save and the Resolver move take');
 		$this->assertSame(1, substr_count($page, 'unlock($pfb_config_lock);'), 'released after write_config()');
 	}
 
 	public function testThePageCarriesTheTwelveListenerSettingsBelowTheEnableToggleReadAndSavedThroughTheDnsSection(): void
 	{
-		// Given the pfB-DNS page
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		// Given the DNS General page
+		$page = self::src(self::PAGE);
 
 		// Then its enable toggle comes first and the twelve settings follow it in order, each read from its registered home
 		$after = (int) strpos($page, "'pfb_dns',");
@@ -116,7 +119,7 @@ final class PfbDnsPageWiringTest extends TestCase
 	public function testTheDnsNameInputFollowsTheCertificateSelectorDirectly(): void
 	{
 		// Given the page, in which the DNS Name is DDR's target and the name the certificate must cover (issue #3694)
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 		$this->assertSame(1, preg_match('/new Form_Select\(\s*\'pfb_dns_sslcertref\',/', $page, $selector, PREG_OFFSET_CAPTURE), 'the certificate selector');
 		$cert = $selector[0][1];
 		$name = (int) strpos($page, "'pfb_dns_name',", $cert);
@@ -130,7 +133,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testThePageSanitizesTheDnsNameAtIngestionOnlyWhenItIsText(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		// An array post stays as posted for the validator to refuse: casting it would raise a PHP warning
 		$found = preg_match('/if \(is_string\(\$_POST\[\'pfb_dns_name\'\] \?\? \'\'\)\) \{\s*\$_POST\[\'pfb_dns_name\'\] = pfb_sanitize_text\(\(string\) \(\$_POST\[\'pfb_dns_name\'\] \?\? \'\'\)\);\s*\}/', $page, $guard, PREG_OFFSET_CAPTURE);
@@ -140,7 +143,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testAFailedSaveBringsBackTheSubmittedDdrFields(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		// The page restores each scalar field the form posted from $_POST when the save fails
 		$found = preg_match('/foreach \(array\(([^)]*)\) as \$pfb_dns_field\) \{\s*\$pconfig\[\$pfb_dns_field\] = \$_POST\[\$pfb_dns_field\] \?\? \'\';/', $page, $restore);
@@ -174,7 +177,7 @@ final class PfbDnsPageWiringTest extends TestCase
 	public function testThePagePrintsTheDdrCertificateWarningsRightAfterThePendingChangesBox(): void
 	{
 		$this->assertTrue(
-			self::warningsFollowThePendingChangesBox(self::src('www/pfblockerng/pfblockerng_dns.php')),
+			self::warningsFollowThePendingChangesBox(self::src(self::PAGE)),
 			'pfb_print_pending_changes_box() is followed by foreach (pfb_dns_proxy_ddr_warnings() as $w) { print_info_box($w, \'warning\', FALSE); }'
 		);
 	}
@@ -198,14 +201,14 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testTheDdrCheckboxHasAnAccessibleNameBecauseItsGroupLabelHasNoFor(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		$this->assertTrue(self::checkboxNamedBy($page, 'pfb_dns_ddr', 'DDR'), "the pfb_dns_ddr checkbox has aria-label gettext('DDR')");
 	}
 
 	public function testTheDohOn443SelectIsAMultipleSelectOfTheOptionsFunctionNamedForAssistiveTechnologyAndFollowsTheDdrCheckbox(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		// Given the select that replaced the two per-family checkboxes (issue #3694): its options are the options function's, on the DoH list of the form
 		$this->assertSame(1, preg_match('/\$options_ddr_doh_443 = pfb_dns_proxy_ddr_doh_443_options\(\$pconfig\[\'pfb_dns_doh_interface\'\] \?\? array\(\)\);/', $page), 'the options come from the options function, on the DoH list as posted');
@@ -222,7 +225,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testAFailedSaveBringsBackTheSubmittedDohOn443SelectionLikeTheInterfaceLists(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		$found = preg_match('/foreach \(array\(([^)]*)\) as \$pfb_dns_field\) \{\s*\$pconfig\[\$pfb_dns_field\] = array_filter\(\(array\) \(\$_POST\[\$pfb_dns_field\] \?\? array\(\)\), \'is_string\'\);/', $page, $restore);
 
@@ -316,7 +319,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testEachDdrCheckboxIsCheckedFromItsOwnFieldAndCarriesTheValueOn(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		foreach (self::DDR_FIELDS as $field) {
 			$this->assertSame([], self::checkboxProblems($page, $field), $field);
@@ -325,7 +328,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testThePageSeedsItsListenerSettingsUnderTheLockOnLoadBeforeItReadsAny(): void
 	{
-		$page = self::src('www/pfblockerng/pfblockerng_dns.php');
+		$page = self::src(self::PAGE);
 
 		$from = 0;
 		foreach ([
@@ -364,7 +367,7 @@ final class PfbDnsPageWiringTest extends TestCase
 
 	public function testEveryDnsSubtabRowStartsWithGeneralAndKeepsAllExistingTabs(): void
 	{
-		foreach (['dns_general' => 'General', 'dns' => 'pfB-DNS', 'dnsbl' => 'DNSBL',
+		foreach (['dns_general' => 'General', 'dnsbl' => 'DNSBL',
 			'category' => 'DNSBL Groups', 'category_edit' => 'DNSBL Groups',
 			'blacklist' => 'DNSBL Category', 'safesearch' => 'DNSBL SafeSearch'] as $suffix => $selected) {
 			$path = dirname(__DIR__, 2) . "/src/usr/local/www/pfblockerng/pfblockerng_{$suffix}.php";
@@ -372,8 +375,8 @@ final class PfbDnsPageWiringTest extends TestCase
 			$page = (string) file_get_contents($path);
 			$this->assertSame(1, preg_match('/(\$tab_array\[\][^\n]*gettext\(\'General\'\)[^\n]*dns_general\.php[^\n]*\n)(.*?display_top_tabs)/s', $page, $row), $suffix);
 			preg_match_all('/array\(gettext\(\'([^\']+)\'\),\s*([^,]+),\s*\'([^\']+)\'\)/', $row[0], $tabs, PREG_SET_ORDER);
-			$this->assertSame(['General', 'pfB-DNS', 'DNSBL', 'DNSBL Groups', 'DNSBL Category', 'DNSBL SafeSearch'],
-				array_column($tabs, 1), $suffix);
+			$this->assertSame(['General', 'DNSBL', 'DNSBL Groups', 'DNSBL Category', 'DNSBL SafeSearch'],
+				array_column($tabs, 1), "{$suffix}: the row has no pfB-DNS entry");
 			foreach ($tabs as $tab) {
 				$this->assertSame($tab[1] === $selected, $tab[2] !== 'FALSE', "{$suffix}: {$tab[1]} selected");
 			}

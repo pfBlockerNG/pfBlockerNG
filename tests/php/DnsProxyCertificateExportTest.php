@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #3515 -- a renewed certificate reaches the running pfB-DNS gateway with no restart: PHP writes the certificate
- * chain and key that the pfB-DNS page selected (issue #3538: dns/pfb_dns_sslcertref, not the Resolver's unbound/sslcertref) to one PEM file that only root can read (the gateway reads it once, at
+ * chain and key that the pfB-DNS settings on DNS > General selected (issue #3538: dns/pfb_dns_sslcertref, not the Resolver's unbound/sslcertref) to one PEM file that only root can read (the gateway reads it once, at
  * start, while it is still root) and pushes a renewal to the running gateway on its control socket
  * (DnsProxyCertificatePushTest). Intent pinned here:
  *   - the file holds the certificate, the CAs its caref leads to nearest first (a missing CA or a loop ends the chain), then the

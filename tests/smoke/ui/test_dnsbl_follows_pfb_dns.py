@@ -26,7 +26,8 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.ui_e2e
 
-DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+DNS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # holds the pfB-DNS settings since issue #3771
+SAVE_PFB_DNS = ("save_pfb_dns", "Save pfB-DNS settings")
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 PACKAGE_ENABLE = "installedpackages/pfblockerng/config/0/enable_cb"
@@ -100,7 +101,7 @@ def test_pfb_dns_page_saves_pfb_dns_off_while_dnsbl_is_on(webui: WebUI, smoke_vm
     vm = smoke_vm
     siblings = {helpers.dns_config_path(key): value for key, value in PFB_DNS_SIBLINGS.items()}
     with _seeded(vm, {DNSBL_ENABLE: "on", PFB_DNS_ENABLE: "on"} | siblings):
-        saved = webui.post(DNS_PAGE, {"pfb_dns": ""}, timeout=SAVE_TIMEOUT)
+        saved = webui.post(DNS_PAGE, {"pfb_dns": ""}, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT)
 
         assert _errors_text(saved.text) == NO_INPUT_ERRORS, (
             f"pfB-DNS Off with DNSBL On must save; input errors: {_errors_text(saved.text)}"
@@ -111,7 +112,7 @@ def test_pfb_dns_page_saves_pfb_dns_off_while_dnsbl_is_on(webui: WebUI, smoke_vm
 
 
 def test_dnsbl_shows_disabled_while_pfb_dns_is_off(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """Given the package and DNSBL On and pfB-DNS Off, When the pfB-DNS tab and widget render, Then DNSBL reads off."""
+    """Given the package and DNSBL On and pfB-DNS Off, When DNS General and the widget render, Then DNSBL reads off."""
     vm = smoke_vm
     with _seeded(vm, {PACKAGE_ENABLE: "on", DNSBL_ENABLE: "on", PFB_DNS_ENABLE: ""}):
         panel = webui.get(DNS_PAGE).text
@@ -143,13 +144,13 @@ def test_dnsbl_enable_help_says_dnsbl_runs_only_while_pfb_dns_is_on(webui: WebUI
     text = _plain_text(webui.get(DNSBL_PAGE).text)
 
     assert (
-        "Block the domains in your DNSBL groups. Requires pfB-DNS (turned on in DNS > pfB-DNS) "
+        "Block the domains in your DNSBL groups. Requires pfB-DNS (turned on in DNS > General) "
         "and pfBlockerNG enabled on the General tab."
     ) in text, "the DNSBL enable help must say DNSBL requires pfB-DNS and pfBlockerNG"
 
 
 def test_pfb_dns_help_says_dnsbl_stops_with_it_and_what_a_failed_activation_leaves(webui: WebUI) -> None:
-    """When the pfB-DNS page renders, Then its enable help states the parent switch and a failed activation."""
+    """When DNS General renders, Then its pfB-DNS enable help states the parent switch and a failed activation."""
     text = _plain_text(webui.get(DNS_PAGE).text)
 
     assert "DNSBL runs only through pfB-DNS: turning pfB-DNS off stops DNSBL; the DNSBL setting is kept." in text, (
@@ -180,17 +181,17 @@ def _list_items(body: str) -> list[str]:
 
 
 def test_help_lists_the_pfb_dns_enable_under_sync_scope_not_as_node_local(webui: WebUI) -> None:
-    """Given the pfB-DNS and Sync pages, When help renders, Then the enable follows Sync Scope, not the local list."""
+    """Given DNS General and Sync pages, When help renders, Then the enable follows Sync Scope, not the local list."""
     dns_items = _list_items(webui.get(DNS_PAGE).text)
     sync_items = _list_items(webui.get(SYNC_PAGE).text)
 
     followers = [item for item in dns_items if "enable switch" in item]
     assert followers and all("follow Sync Scope" in item for item in followers), (
-        f"the pfB-DNS page must list the enable switch among the settings that follow Sync Scope; items: {followers}"
+        f"DNS General must list the pfB-DNS enable switch among the settings that follow Sync Scope; items: {followers}"
     )
     local = [item for item in dns_items if item.startswith("Saved Resolver settings")]
     assert local and all("enable switch" not in item for item in local), (
-        f"the pfB-DNS page's node-local list must not name the enable switch; items: {local}"
+        f"DNS General's node-local list must not name the pfB-DNS enable switch; items: {local}"
     )
 
     assert any(item.startswith("Policy and lists") and "pfB-DNS enable switch" in item for item in sync_items), (

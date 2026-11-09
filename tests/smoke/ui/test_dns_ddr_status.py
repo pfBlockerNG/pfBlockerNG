@@ -1,4 +1,4 @@
-"""Live DDR page checks: automatic semantic results, read-only polling and preserved form state."""
+"""Live DDR checks on DNS General: automatic semantic results, read-only polling and preserved form state."""
 
 from __future__ import annotations
 
@@ -50,7 +50,8 @@ if TYPE_CHECKING:
     from ..test_smoke_dns_proxy import State
     from .webui import WebUI
 
-DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+# The DDR status panel and its ``?ajax=ddr`` endpoint are on DNS General since issue #3771.
+DNS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"
 PANEL_ID = "pfb-dns-status-ddr"
 
 LISTENER_QUERY = "ajax=ddr&listener="
@@ -141,7 +142,7 @@ def test_dns_ddr_initial_checks_are_async_and_keep_rows_on_failure(
         else:
             route.continue_()
 
-    page.route("**/pfblockerng_dns.php?ajax=ddr&listener=*", selected_listener)
+    page.route("**/pfblockerng_dns_general.php?ajax=ddr&listener=*", selected_listener)
     with page.expect_request(lambda request: "ajax=ddr&listener=" in request.url):
         page.goto(webui.url(DNS_PAGE), wait_until="domcontentloaded", timeout=JS_TIMEOUT_MS * 3)
     assert page.locator("#usernamefld").count() == 0
@@ -157,7 +158,7 @@ def test_dns_ddr_initial_checks_are_async_and_keep_rows_on_failure(
         }"""
     )
     page.locator("#pfb_dns_name").fill("unsaved-ddr-name.com")
-    assert page.locator('button[type="submit"][name="save"]').is_enabled()
+    assert page.locator('button[type="submit"][name="save_pfb_dns"]').is_enabled()
     phase = "pass"
     held[0].abort()
     page.wait_for_function(
@@ -207,7 +208,7 @@ def test_dns_ddr_failed_refresh_keeps_rows_and_last_results_then_recovers(
     assert "matched" in states.values(), states
     successes = section.locator(".text-success").count()
     _remember_rows(page)
-    endpoint = "**/pfblockerng_dns.php?ajax=ddr&listener=*"
+    endpoint = "**/pfblockerng_dns_general.php?ajax=ddr&listener=*"
     panel_html = f'<div id="{PANEL_ID}"><div id="{PANEL_ID}_panel-body"></div></div>'
     replies = {
         "http": (503, "text/plain", "Service unavailable"),
@@ -540,7 +541,7 @@ def test_dns_ddr_checks_automatically_after_saving(
     _wait_settled(page)
     assert any(state == "matched" for state in _states(page).values()), _states(page)
     with page.expect_navigation(wait_until="domcontentloaded"):
-        page.locator('button[type="submit"][name="save"]').click()
+        page.locator('button[type="submit"][name="save_pfb_dns"]').click()
     assert page.locator(".input-errors").count() == 0, page.locator("body").inner_text()
     _wait_settled(page)
     assert any(state == "matched" for state in _states(page).values()), _states(page)
@@ -604,3 +605,21 @@ def test_dns_ddr_timer_preserves_unsaved_form_and_collapse(
     assert dimensions["tables"] and all(value in ("auto", "scroll") for value in dimensions["tables"]), dimensions
     assert _config_digest(gw.vm) == before, "browser refresh changed config.xml"
     section.screenshot(path=str(screenshot_dir / f"pfb-dns-ddr-{width}.png"))
+
+
+@pytest.mark.ui_browser
+def test_dns_ddr_refresh_requests_go_to_dns_general_and_settle_the_rows(
+    gw: Gateway, gateway_on: State, browser_page: Page, webui: WebUI
+) -> None:
+    """issue #3771: DNS General's DDR panel refreshes each row through its own ``?ajax=ddr&listener=`` endpoint, and
+    the rows settle with a matched result as they did on the retired pfB-DNS page."""
+    _ensure_ddr(gw, on=True)
+    page = browser_page
+    requests = _track_listener_requests(page)
+    _open(page, webui, DNS_PAGE)
+    assert page.locator(f"#{PANEL_ID}").count() == 1, f"{DNS_PAGE} renders no DDR status panel"
+    _wait_settled(page)
+    paths = {urlsplit(url).path for url in requests}
+    assert requests, f"the DDR panel on {DNS_PAGE} made no refresh request"
+    assert paths == {DNS_PAGE}, f"expected every DDR refresh request on {DNS_PAGE}, got {sorted(paths)}"
+    assert "matched" in _states(page).values(), f"expected a matched DDR row, got {_states(page)}"

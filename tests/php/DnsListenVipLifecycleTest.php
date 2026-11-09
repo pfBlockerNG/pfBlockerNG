@@ -781,7 +781,7 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$GLOBALS['pfb_test_interface_ip']['opt1'] = '172.21.0.1';
 		pfb_dns_listen_vips_apply();
 		$this->assertSame(2, substr_count((string) @file_get_contents($GLOBALS['pfb']['log']), 'the Resolver VIP is not added'), 'one log line per scope left alone');
-		pfb_test_page_eval(pfb_test_page_region($page, 'foreach (pfb_dns_listen_foreign_warnings()', '$form = new Form('), []);
+		pfb_test_page_eval(pfb_test_page_region($page, 'foreach (pfb_dns_listen_foreign_warnings()', '$btn = new Form_Button('), []);
 		$boxes = $GLOBALS['pfb_test_info_boxes'];
 		unset($GLOBALS['pfb_test_info_boxes']);
 		$this->assertCount(2, $boxes, 'one box per scope left alone');

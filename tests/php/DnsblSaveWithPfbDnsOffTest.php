@@ -11,7 +11,7 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  * issue #3770 -- pfB-DNS is the parent switch of DNSBL, as the pfBlockerNG enable is of everything: DNSBL stored On with
  * pfB-DNS Off is a state like DNSBL On with pfBlockerNG Off (DNSBL does not run), never a refused save.
  *   - the DNSBL page stores DNSBL On while config.xml holds pfB-DNS Off or nothing, and leaves the pfB-DNS enable as it found it;
- *   - the pfB-DNS page stores pfB-DNS Off while config.xml holds DNSBL On, and leaves the DNSBL enable as it found it.
+ *   - the pfB-DNS form (on DNS > General) stores pfB-DNS Off while config.xml holds DNSBL On, and leaves the DNSBL enable as it found it.
  * Either save is as posted, marks the change pending for the next Update and ends through its redirect.
  *
  * Each save runs in a child process (support/DnsblSaveWorker.php and support/DnsSaveWorker.php: the page's real save code over
@@ -31,6 +31,7 @@ final class DnsblSaveWithPfbDnsOffTest extends TestCase
 		try {
 			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . "/support/{$worker}.php", $scenario, $result], 60.0);
 			$this->assertFileExists($result, "the worker reported nothing (exit {$process['exit']}): {$process['stderr']}");
+			$this->assertStringNotContainsString('worker:', $process['stdout'] . $process['stderr'], 'the worker found the save code it runs');
 			return json_decode((string) file_get_contents($result), TRUE, 512, JSON_THROW_ON_ERROR);
 		} finally {
 			@unlink($result);

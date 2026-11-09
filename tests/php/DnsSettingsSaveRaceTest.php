@@ -8,13 +8,13 @@ use PHPUnit\Framework\Attributes\DataProvider;
 require_once __DIR__ . '/support/ProcessRunner.php';
 
 /**
- * issue #3515 -- pfB-DNS saves its toggle and DNS General saves DNS Reply Logging, while write_config() writes the
+ * issue #3515 -- the pfB-DNS form and the DNS General form (both on DNS > General since issue #3771) save the pfB-DNS toggle and DNS Reply Logging, while write_config() writes the
  * whole copy of config.xml the request read when it started. An apply's Resolver move (snapshot, moved interface) that
  * landed in between would be overwritten with the values this request loaded.
  *
  * The page takes the config lock the apply's Resolver move takes, reads config.xml afresh under it, writes its own leaves
  * and holds the lock through write_config():
- *   - the move the apply made survives either page's save, and that page's posted toggle or preference is saved;
+ *   - the move the apply made survives either form's save, and that form's posted toggle or preference is saved;
  *   - a lock that stays taken, or a failed fresh read, is an input error: nothing is written;
  *   - a config.xml write that throws still releases the lock.
  *   - a failed save re-displays the reply-logging preference the form submitted, not the stored one;
@@ -37,6 +37,7 @@ final class DnsSettingsSaveRaceTest extends TestCase
 		try {
 			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . '/support/DnsSaveWorker.php', $scenario, $result, $general ? 'general' : 'dns'], 60.0);
 			$this->assertFileExists($result, "the worker reported nothing (exit {$process['exit']}): {$process['stderr']}");
+			$this->assertStringNotContainsString('worker:', $process['stdout'] . $process['stderr'], 'the worker found the save code it runs on DNS General');
 			return json_decode((string) file_get_contents($result), TRUE, 512, JSON_THROW_ON_ERROR);
 		} finally {
 			@unlink($result);

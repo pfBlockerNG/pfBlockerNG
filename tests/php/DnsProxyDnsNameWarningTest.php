@@ -9,7 +9,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #3694 -- what the pfB-DNS page says about the DNS Name, without blocking the save:
+ * Issue #3694 -- what DNS > General says about the DNS Name, without blocking the save:
  *   (a) DDR is On and no DNS Name is set: nothing is said, and DDR answers nothing until a name is entered;
  *   (b) a name is set, DoT, DoH or DoQ is on, the selected certificate resolves, and none of its dNSName SANs covers the name: a
  *       client that connects by that name will not accept it. Covering is the name itself, ASCII case-insensitive, or a wildcard

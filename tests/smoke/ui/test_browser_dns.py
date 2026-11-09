@@ -1,7 +1,7 @@
-"""Tier-B browser regression (#3517, #3538, #3555, #3557, #3583): the pfB-DNS page's names, saves and status tables.
+"""Tier-B browser regression (#3517, #3538, #3555, #3557, #3583, #3771): the pfB-DNS settings on DNS General.
 
-Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
-(``pfblockerng_dns.php``) and measures the live DOM, not the markup:
+Drives a headless Chromium on the live ADR-04 smoke VM against DNS General (``pfblockerng_dns_general.php``), which
+holds the pfB-DNS settings since issue #3771, and measures the live DOM, not the markup:
 
 * the DNS, DoT, DoH and DoQ interface multi-selects resolve by role ``listbox`` under their visible
   "... Interface(s)" label, and stay operable through that name;
@@ -10,7 +10,8 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
 * saving with a DNS interface list empty shows the input error and leaves config.xml alone, saving
   Localhost with DoT on and a certificate persists them, and stored virtual IP and gone-interface
   tokens render selected and survive a save that leaves the lists alone;
-* DNS Reply Logging is on DNS General, separate from pfB-DNS transports;
+* the pfB-DNS form and DNS General's own form save independently: a browser posts only the clicked form;
+* the retired ``pfblockerng_dns.php`` address ends on DNS General with the pfB-DNS enable visible;
 * DNS General's Resolver addresses save off with no listener VIP;
 * DDR's checkbox resolves by ``DDR`` and its interfaces multi-select by ``Advertise DoH on port 443``;
   the select offers the configured DoH interfaces without Localhost;
@@ -18,9 +19,8 @@ Drives a headless Chromium on the live ADR-04 smoke VM against the pfB-DNS page
   state an icon with a hover title and a screen-reader text, and an off transport's table is empty; on a phone the
   tables scroll inside their sections.
 * the DNS top tab opens DNS General from the package General page and from the keyboard;
-  each of the six second-row tabs (General, pfB-DNS, DNSBL, DNSBL Groups, DNSBL Category,
-  DNSBL SafeSearch) opens its page with
-  DNS selected, its own tab selected and the DNS breadcrumb, and the DNSBL group editor stays under DNSBL Groups.
+  each of the five second-row tabs (General, DNSBL, DNSBL Groups, DNSBL Category, DNSBL SafeSearch) opens its page
+  with DNS selected, its own tab selected and the DNS breadcrumb, and the DNSBL group editor stays under DNSBL Groups.
 
 Scope is the controls and disclosures on this page only: no whole-page axe claim, since the
 header breadcrumb and other shared framework markup are outside it. Measured in the box's
@@ -40,6 +40,8 @@ import pytest
 
 from .. import helpers
 from .test_browser_feeds import JS_TIMEOUT_MS, _contrast_ratio, _open, _shot
+from .test_dns_general_forms import PFB_DNS_DOT_PORT, REPLY_LOGGING, _both_forms_seeded, _stored
+from .test_dns_settings_order import PFB_DNS_SECTIONS
 
 pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 
@@ -52,10 +54,11 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.ui_browser
 
-DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
+# The retired pfB-DNS page: it redirects to DNS General (issue #3771).
+RETIRED_PFB_DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
 DNS_GENERAL_PAGE = "/pfblockerng/pfblockerng_dns_general.php"
 DNS_CFG = "installedpackages/pfblockerngdns/config/0/"
-# Everything the pfB-DNS page's Save writes.
+# Everything the pfB-DNS form's Save writes.
 DNS_SAVED_KEYS = (
     "pfb_dns",
     "pfb_dns_interface",
@@ -101,19 +104,19 @@ _SELECTED_VALUES_JS = "el => [...el.selectedOptions].map(option => option.value)
 def test_interface_listbox_resolves_by_its_visible_label(browser_page: Page, webui: WebUI, label: str) -> None:
     """The interface multi-select's accessible name is its visible label."""
     page = browser_page
-    _open(page, webui, DNS_PAGE)
+    _open(page, webui, DNS_GENERAL_PAGE)
     found = page.get_by_role("listbox", name=label, exact=True).count()
-    assert found == 1, f"expected exactly one listbox named {label!r} on {DNS_PAGE}, got {found}"
+    assert found == 1, f"expected exactly one listbox named {label!r} on {DNS_GENERAL_PAGE}, got {found}"
 
 
 @pytest.mark.parametrize("label", INTERFACE_LABELS, ids=["dns", "dot", "doh", "doq"])
 def test_interface_listbox_selection_works_through_its_name(browser_page: Page, webui: WebUI, label: str) -> None:
     """Selecting an interface through the named listbox selects exactly that interface."""
     page = browser_page
-    _open(page, webui, DNS_PAGE)
+    _open(page, webui, DNS_GENERAL_PAGE)
     listbox = page.get_by_role("listbox", name=label, exact=True)
     found = listbox.count()
-    assert found == 1, f"expected exactly one listbox named {label!r} on {DNS_PAGE}, got {found}"
+    assert found == 1, f"expected exactly one listbox named {label!r} on {DNS_GENERAL_PAGE}, got {found}"
     values = listbox.locator("option").evaluate_all("options => options.map(option => option.value)")
     assert values, f"{label!r} lists no interfaces to select"
     before = listbox.evaluate(_SELECTED_VALUES_JS)
@@ -127,11 +130,11 @@ def test_interface_listbox_selection_works_through_its_name(browser_page: Page, 
 def test_experimental_disclosures_keep_text_contrast(browser_page: Page, webui: WebUI, screenshot_dir: Path) -> None:
     """Each "Experimental." disclosure meets 4.5:1 against the backdrop it actually paints on."""
     page = browser_page
-    _open(page, webui, DNS_PAGE)
+    _open(page, webui, DNS_GENERAL_PAGE)
     disclosures = page.locator("strong", has_text="Experimental.")
     found = disclosures.count()
     assert found == EXPERIMENTAL_DISCLOSURES, (
-        f"expected {EXPERIMENTAL_DISCLOSURES} 'Experimental.' disclosures on {DNS_PAGE}, got {found}"
+        f"expected {EXPERIMENTAL_DISCLOSURES} 'Experimental.' disclosures on {DNS_GENERAL_PAGE}, got {found}"
     )
     measured = []
     for index in range(found):
@@ -151,9 +154,15 @@ def test_experimental_disclosures_keep_text_contrast(browser_page: Page, webui: 
 
 
 def _save(page: Page) -> None:
-    """Click Save and wait for the page the POST answers with."""
+    """Click DNS General's own Save (button ``save``) and wait for the page the POST answers with."""
     with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
         page.locator('button[type="submit"][name="save"]').click()
+
+
+def _save_pfb_dns(page: Page) -> None:
+    """Click Save pfB-DNS settings (button ``save_pfb_dns``) and wait for the page the POST answers with."""
+    with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
+        page.locator('button[type="submit"][name="save_pfb_dns"]').click()
 
 
 def test_saving_with_no_dns_interface_selected_shows_the_input_error_and_leaves_config_unchanged(
@@ -162,14 +171,14 @@ def test_saving_with_no_dns_interface_selected_shows_the_input_error_and_leaves_
     """issue #3538: every interface list needs an entry. Deselecting each DNS Interface(s) option and saving shows the
     input error, keeps the empty selection in the form and leaves the stored list as it was."""
     page = browser_page
-    _open(page, webui, DNS_PAGE)  # the first load seeds the list
+    _open(page, webui, DNS_GENERAL_PAGE)  # the first load seeds the list
     stored = helpers.config_get(smoke_vm, f"{DNS_CFG}pfb_dns_interface")
     assert stored, "the first page load must have seeded the DNS interface list"
     listbox = page.get_by_role("listbox", name="DNS Interface(s)", exact=True)
     listbox.evaluate("el => { for (const option of el.options) option.selected = false; }")
     assert listbox.evaluate(_SELECTED_VALUES_JS) == [], "the test could not deselect every option"
 
-    _save(page)
+    _save_pfb_dns(page)
 
     errors = page.locator(".input-errors")
     assert errors.count() == 1, "the empty list must show the input errors box"
@@ -190,7 +199,7 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
     paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     try:
-        _open(page, webui, DNS_PAGE)
+        _open(page, webui, DNS_GENERAL_PAGE)
         cert = page.locator('select[name="pfb_dns_sslcertref"]')
         assert cert.count() == 1, "the box offers no certificate with a private key: nothing to select"
         cert_ref = cert.locator("option").first.get_attribute("value")
@@ -200,7 +209,7 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
         page.get_by_role("listbox", name="DoT Interface(s)", exact=True).select_option("lo0")
         page.locator('input[name="pfb_dns_dot"]').check()
 
-        _save(page)
+        _save_pfb_dns(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         assert helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns_dot")) == "on"
@@ -221,15 +230,16 @@ DOH_443_CFG = helpers.dns_config_path("pfb_dns_ddr_doh_443_interfaces")
 DOH_INTERFACE_CFG = helpers.dns_config_path("pfb_dns_doh_interface")
 
 
-def test_dns_reply_logging_lives_on_general_not_proxy_settings(
+def test_dns_general_holds_the_pfb_dns_enable_and_reply_logging_each_in_its_own_form(
     browser_page: Page, webui: WebUI, screenshot_dir: Path
 ) -> None:
-    """The shared logging control is operable on General, not on the transport page."""
+    """DNS General shows the pfB-DNS enable and the shared reply logging, each operable in the form of its own Save."""
     page = browser_page
     _open(page, webui, DNS_GENERAL_PAGE)
     _assert_dns_navigation(page, "General")
     titles = [title.strip() for title in page.locator(".panel-title").all_inner_texts()]
-    assert titles[:2] == ["DNS Reply Logging", "Resolver addresses"], titles
+    expected = [*PFB_DNS_SECTIONS, "DNS Reply Logging", "Resolver addresses"]
+    assert titles[: len(expected)] == expected, f"expected the first panels {expected}, got {titles}"
     reply = page.locator('input[name="pfb_py_reply"]')
     assert reply.is_visible() and reply.is_enabled()
     before = reply.is_checked()
@@ -237,10 +247,14 @@ def test_dns_reply_logging_lives_on_general_not_proxy_settings(
     assert reply.is_checked() is not before
     reply.set_checked(before)
     _shot(page, screenshot_dir, "dns_general_reply_logging")
-    assert page.locator('input[name="pfb_dns"]').count() == 0
-    _open(page, webui, DNS_PAGE)
-    assert page.locator('input[name="pfb_py_reply"]').count() == 0
-    assert page.locator('input[name="pfb_dns"]').is_visible()
+    enable = page.locator('input[name="pfb_dns"]')
+    assert enable.is_visible() and enable.is_enabled(), "the pfB-DNS enable is not operable on DNS General"
+    pfb_dns_form = page.locator('form:has(button[name="save_pfb_dns"])')
+    general_form = page.locator('form:has(button[name="save"])')
+    assert pfb_dns_form.locator('input[name="pfb_dns"]').count() == 1, "the pfB-DNS enable is not in the pfB-DNS form"
+    assert pfb_dns_form.locator('input[name="pfb_py_reply"]').count() == 0, "reply logging is in the pfB-DNS form"
+    assert general_form.locator('input[name="pfb_py_reply"]').count() == 1, "reply logging is not in the General form"
+    assert general_form.locator('input[name="pfb_dns"]').count() == 0, "the pfB-DNS enable is in the General form"
 
 
 # The Resolver addresses controls on DNS General, as stored after a save with the option off and both VIPs at none.
@@ -300,9 +314,9 @@ def test_resolver_addresses_off_saves_with_no_listener_vip(
 def test_ddr_controls_resolve_by_their_visible_labels_inside_the_ddr_section(browser_page: Page, webui: WebUI) -> None:
     """The DDR checkbox and the DoH-on-443 select have distinct accessible names within the DDR panel."""
     page = browser_page
-    _open(page, webui, DNS_PAGE)
+    _open(page, webui, DNS_GENERAL_PAGE)
     section = page.locator(".panel").filter(has=page.locator(".panel-title", has_text=DDR_SECTION)).last
-    assert section.count() == 1, f"no panel on {DNS_PAGE} has the title {DDR_SECTION!r}"
+    assert section.count() == 1, f"no panel on {DNS_GENERAL_PAGE} has the title {DDR_SECTION!r}"
     for label, name in DDR_TOGGLES:
         control = section.get_by_label(label, exact=True)
         found = control.count()
@@ -331,7 +345,7 @@ def test_doh_on_port_443_select_offers_the_doh_interfaces_without_localhost_and_
     try:
         helpers.config_set(smoke_vm, DOH_INTERFACE_CFG, "lo0,lan")
         helpers.config_set(smoke_vm, DOH_443_CFG, "lan")
-        _open(page, webui, DNS_PAGE)
+        _open(page, webui, DNS_GENERAL_PAGE)
         select = page.get_by_role("listbox", name=DOH_443_LABEL, exact=True)
         _shot(page, screenshot_dir, "pfb_dns_ddr_doh_443_interfaces")
         offered = select.locator("option").evaluate_all("options => options.map(option => option.value)")
@@ -363,7 +377,7 @@ def test_saving_ddr_and_a_doh_on_port_443_choice_persists_both(
         helpers.config_set(smoke_vm, DOH_INTERFACE_CFG, "lan")
         before = (helpers.config_get(smoke_vm, ddr_path), helpers.config_get(smoke_vm, DOH_443_CFG))
         assert before == ("", ""), f"seed did not take: DDR and the choice must start empty, got {before}"
-        _open(page, webui, DNS_PAGE)
+        _open(page, webui, DNS_GENERAL_PAGE)
         dns_name = page.locator('input[name="pfb_dns_name"]')
         named = page.get_by_label("DNS Name", exact=True)
         if named.count() != 1:
@@ -375,13 +389,13 @@ def test_saving_ddr_and_a_doh_on_port_443_choice_persists_both(
             pytest.fail(
                 f"DNS Name label resolves {named.count()} inputs; input count={dns_name.count()}; "
                 f"DOM={dom}; "
-                f"accessible snapshot={page.locator('form').aria_snapshot()}"
+                f"accessible snapshot={page.locator('form', has=dns_name).aria_snapshot()}"
             )
         page.get_by_label("DNS Name", exact=True).fill("fw.example.lan")
         page.locator('input[name="pfb_dns_ddr"]').check()
         page.get_by_role("listbox", name=DOH_443_LABEL, exact=True).select_option("lan")
 
-        _save(page)
+        _save_pfb_dns(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         stored = (helpers.config_get(smoke_vm, ddr_path), helpers.config_get(smoke_vm, DOH_443_CFG))
@@ -427,7 +441,7 @@ def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save
     try:
         result = helpers.php_eval(smoke_vm, setup)
         assert result.returncode == 0 and "OK" in result.stdout, f"setup failed: {result.stdout!r} {result.stderr!r}"
-        _open(page, webui, DNS_PAGE)
+        _open(page, webui, DNS_GENERAL_PAGE)
         for label in INTERFACE_LABELS:
             listbox = page.get_by_role("listbox", name=label, exact=True)
             selected = listbox.evaluate(_SELECTED_VALUES_JS)
@@ -439,7 +453,7 @@ def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save
             gone_text = listbox.locator(f'option[value="{_GONE}"]').inner_text()
             assert gone_text == f"{_GONE} (not currently available)", f"{label!r}: the gone option reads {gone_text!r}"
 
-        _save(page)
+        _save_pfb_dns(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         for path in lists:
@@ -522,7 +536,7 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
     originals = {key: helpers.config_get_state(smoke_vm, helpers.dns_config_path(key)) for key in settings}
     try:
         _write_rc_script(smoke_vm, settings)
-        _open(page, webui, DNS_PAGE)
+        _open(page, webui, DNS_GENERAL_PAGE)
 
         panel = page.locator("#pfb-dns-status")
         assert panel.count() == 1, "the page has no pfB-DNS status panel"
@@ -595,7 +609,7 @@ def test_status_panel_is_a_section_per_transport_with_a_titled_icon_for_each_sta
         _write_rc_script(smoke_vm)
 
 
-# DNS General is the DNS landing page; transports and all existing DNSBL pages remain sub-tabs.
+# DNS General is the DNS landing page and holds the pfB-DNS settings; the DNSBL pages are its sub-tabs.
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
@@ -605,7 +619,6 @@ SAFESEARCH_PAGE = "/pfblockerng/pfblockerng_safesearch.php"
 GROUP_EDITOR = "/pfblockerng/pfblockerng_category_edit.php"
 DNS_SUBTABS = (
     ("General", DNS_GENERAL_PAGE),
-    ("pfB-DNS", DNS_PAGE),
     ("DNSBL", DNSBL_PAGE),
     ("DNSBL Groups", GROUPS_PAGE),
     ("DNSBL Category", BLACKLIST_PAGE),
@@ -708,21 +721,22 @@ def test_dns_navigation_top_tab_opens_from_the_keyboard(browser_page: Page, webu
     ("label", "target", "shot"),
     [
         ("General", DNS_GENERAL_PAGE, "dns_navigation_dns_general"),
-        ("pfB-DNS", DNS_PAGE, "dns_navigation_pfb_dns"),
         ("DNSBL", DNSBL_PAGE, "dns_navigation_dnsbl"),
         ("DNSBL Groups", GROUPS_PAGE, "dns_navigation_dnsbl_groups"),
         ("DNSBL Category", BLACKLIST_PAGE, "dns_navigation_dnsbl_category"),
         ("DNSBL SafeSearch", SAFESEARCH_PAGE, "dns_navigation_dnsbl_safesearch"),
     ],
-    ids=["general", "pfb-dns", "dnsbl", "dnsbl-groups", "dnsbl-category", "dnsbl-safesearch"],
+    ids=["general", "dnsbl", "dnsbl-groups", "dnsbl-category", "dnsbl-safesearch"],
 )
 def test_dns_navigation_subtab_opens_its_page_under_dns(
     browser_page: Page, webui: WebUI, screenshot_dir: Path, label: str, target: str, shot: str
 ) -> None:
     """Each second-row tab under DNS opens its own page, which keeps DNS selected and selects that tab."""
     page = browser_page
-    _open(page, webui, DNS_PAGE)
-    _assert_dns_navigation(page, "pfB-DNS")
+    # General is reached from a sibling page, so the click moves the browser; every other tab from General.
+    start, selected = (DNSBL_PAGE, "DNSBL") if target == DNS_GENERAL_PAGE else (DNS_GENERAL_PAGE, "General")
+    _open(page, webui, start)
+    _assert_dns_navigation(page, selected)
     _follow(page, _nav_row(page, SAFESEARCH_PAGE, GROUPS_PAGE).get_by_role("link", name=label, exact=True))
     assert _target(page.url) == target, f"{label!r} opened {_target(page.url)}, expected {target}"
     _assert_dns_navigation(page, label)
@@ -748,3 +762,67 @@ def test_dns_navigation_group_editor_stays_under_dnsbl_groups(
     crumb = page.locator("ol.breadcrumb").get_by_role("link", name="DNSBL Groups", exact=True)
     assert crumb.count() == 1, "the editor's breadcrumb does not contain DNSBL Groups"
     _shot(page, screenshot_dir, "dns_navigation_dnsbl_group_editor")
+
+
+def test_the_retired_pfb_dns_address_ends_on_dns_general_with_the_pfb_dns_enable_visible(
+    browser_page: Page, webui: WebUI, screenshot_dir: Path
+) -> None:
+    """issue #3771: opening pfblockerng_dns.php in the browser ends on DNS General, which shows the pfB-DNS enable."""
+    page = browser_page
+    _open(page, webui, RETIRED_PFB_DNS_PAGE)
+    ended = _target(page.url)
+    assert ended == DNS_GENERAL_PAGE, f"{RETIRED_PFB_DNS_PAGE} ended on {ended}, expected {DNS_GENERAL_PAGE}"
+    enable = page.locator('input[name="pfb_dns"]')
+    assert enable.count() == 1 and enable.is_visible(), "the pfB-DNS enable is not visible after the redirect"
+    _assert_dns_navigation(page, "General")
+    _shot(page, screenshot_dir, "dns_retired_pfb_dns_address")
+
+
+def test_clicking_save_pfb_dns_stores_the_changed_pfb_dns_field_and_not_the_changed_dns_general_field(
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
+) -> None:
+    """Given both forms stored, When the DoT port and the reply logging are changed and Save pfB-DNS settings is
+    clicked, Then the DoT port is stored and the reply logging keeps its stored value: only the clicked form posted.
+    """
+    page = browser_page
+    with _both_forms_seeded(smoke_vm):
+        before = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
+        assert before == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: "on"}, f"before-state: got {before}"
+        _open(page, webui, DNS_GENERAL_PAGE)
+        page.locator('input[name="pfb_dns_dot_port"]').fill("8853")
+        page.locator('input[name="pfb_py_reply"]').set_checked(False)
+        label = page.locator('button[type="submit"][name="save_pfb_dns"]').inner_text().strip()
+        assert label == "Save pfB-DNS settings", f"the pfB-DNS save button reads {label!r}"
+
+        _save_pfb_dns(page)
+
+        assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
+        after = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
+        assert after == {PFB_DNS_DOT_PORT: "8853", REPLY_LOGGING: "on"}, (
+            f"expected the DoT port stored as 8853 and the reply logging still on, got {after}"
+        )
+
+
+def test_clicking_save_dns_general_stores_the_changed_dns_general_field_and_not_the_changed_pfb_dns_field(
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
+) -> None:
+    """Given both forms stored, When the DoT port and the reply logging are changed and Save DNS General settings is
+    clicked, Then the reply logging is stored and the DoT port keeps its stored value: only the clicked form posted.
+    """
+    page = browser_page
+    with _both_forms_seeded(smoke_vm):
+        before = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
+        assert before == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: "on"}, f"before-state: got {before}"
+        _open(page, webui, DNS_GENERAL_PAGE)
+        page.locator('input[name="pfb_dns_dot_port"]').fill("8853")
+        page.locator('input[name="pfb_py_reply"]').set_checked(False)
+        label = page.locator('button[type="submit"][name="save"]').inner_text().strip()
+        assert label == "Save DNS General settings", f"the DNS General save button reads {label!r}"
+
+        _save(page)
+
+        assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
+        after = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
+        assert after == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: ""}, (
+            f"expected the reply logging stored off and the DoT port still 853, got {after}"
+        )

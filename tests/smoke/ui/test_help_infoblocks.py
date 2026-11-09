@@ -21,13 +21,11 @@ if TYPE_CHECKING:
 
     from .webui import WebUI
 
-DNS = "/pfblockerng/pfblockerng_dns.php"
 GENERAL = "/pfblockerng/pfblockerng_dns_general.php"
 IP = "/pfblockerng/pfblockerng_ip.php"
 SYNC = "/pfblockerng/pfblockerng_sync.php"
 PAGE_MARKERS = {
-    DNS: ("pfB-DNS Settings",),
-    GENERAL: ("DNS Reply Logging",),
+    GENERAL: ("DNS Reply Logging", "pfB-DNS Settings"),
     IP: ("IP Configuration",),
     SYNC: ("XMLRPC Sync Settings",),
 }
@@ -38,12 +36,20 @@ pytestmark = pytest.mark.usefixtures("php_error_log_guard")
 LIST_HELP = (
     (GENERAL, "pfb_dns_listen_vip", (("DNS Resolver",), ("DHCPv4",), ("DHCPv6",), ("Router Advertisements",))),
     (GENERAL, "pfb_dns_listen_vip_only", (("pfB-DNS", "Resolver addresses"), ("DNS Name",))),
-    (DNS, "pfb_dns_dot", (("pfB-DNS",), ("DNS Name", "SSL/TLS Certificate"), ("DNSBL",))),
-    (DNS, "pfb_dns_doh", (("pfB-DNS",), ("DNS Name", "SSL/TLS Certificate"), ("DNSBL",), ("DoH Trusted Front Ends",))),
-    (DNS, "pfb_dns_doq", (("pfB-DNS",), ("DNS Name", "SSL/TLS Certificate"), ("DNSBL",))),
-    (DNS, "pfb_dns_ddr", (("pfB-DNS", "DNS Name"), ("DoT", "DoH", "DoQ"), ("DDR",))),
-    (DNS, "pfb_dns_ddr_doh_443_interfaces", (("DDR", "DoH"), ("IPv4 DoH Port", "IPv6 DoH Port"), ("Resolver VIPs",))),
-    (DNS, "pfb_dns", (("Resolver addresses", "VIP-only mode", "Sync Scope"), ("DNS Name", "SSL/TLS Certificate"))),
+    (GENERAL, "pfb_dns_dot", (("pfB-DNS",), ("DNS Name", "SSL/TLS Certificate"), ("DNSBL",))),
+    (
+        GENERAL,
+        "pfb_dns_doh",
+        (("pfB-DNS",), ("DNS Name", "SSL/TLS Certificate"), ("DNSBL",), ("DoH Trusted Front Ends",)),
+    ),
+    (GENERAL, "pfb_dns_doq", (("pfB-DNS",), ("DNS Name", "SSL/TLS Certificate"), ("DNSBL",))),
+    (GENERAL, "pfb_dns_ddr", (("pfB-DNS", "DNS Name"), ("DoT", "DoH", "DoQ"), ("DDR",))),
+    (
+        GENERAL,
+        "pfb_dns_ddr_doh_443_interfaces",
+        (("DDR", "DoH"), ("IPv4 DoH Port", "IPv6 DoH Port"), ("Resolver VIPs",)),
+    ),
+    (GENERAL, "pfb_dns", (("Resolver addresses", "VIP-only mode", "Sync Scope"), ("DNS Name", "SSL/TLS Certificate"))),
     (IP, "pfb_agg_types", (("List Action",), ("Deny Inbound", "Deny Outbound", "Deny Both", "Alias Deny"))),
     (IP, "pfb_alias_delta_mode", (("Auto (recommended)", "5%"), ("Always incremental",), ("Always full replace",))),
     (SYNC, "syncscope", (("VIP-only mode",), ("DNS Name", "SSL/TLS Certificate"), ("Automatic VIP interface",))),

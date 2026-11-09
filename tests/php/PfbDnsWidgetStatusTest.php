@@ -181,10 +181,10 @@ final class PfbDnsWidgetStatusTest extends TestCase
 			'off' => [['state' => 'off'], self::RED, 'DoT is off'],
 			'no listener' => [['state' => 'no_listener', 'notice' => self::NOTICE], self::YELLOW, 'DoT: ' . self::NOTICE],
 			'every row listening' => [self::rows('listening', 'listening'), self::GREEN, 'DoT is listening on LAN'],
-			'one row not listening' => [self::rows('listening', 'not_listening'), self::YELLOW, 'DoT: 1 of 2 listener rows are not confirmed listening; see the pfB-DNS tab'],
-			'every row not listening' => [self::rows('not_listening'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the pfB-DNS tab'],
-			'configured but not confirmed' => [self::rows('configured_unconfirmed'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the pfB-DNS tab'],
-			'configured but not bound' => [self::rows('configured_not_bound'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the pfB-DNS tab'],
+			'one row not listening' => [self::rows('listening', 'not_listening'), self::YELLOW, 'DoT: 1 of 2 listener rows are not confirmed listening; see the DNS General tab'],
+			'every row not listening' => [self::rows('not_listening'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the DNS General tab'],
+			'configured but not confirmed' => [self::rows('configured_unconfirmed'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the DNS General tab'],
+			'configured but not bound' => [self::rows('configured_not_bound'), self::YELLOW, 'DoT: 1 of 1 listener rows are not confirmed listening; see the DNS General tab'],
 		];
 	}
 
@@ -255,10 +255,10 @@ final class PfbDnsWidgetStatusTest extends TestCase
 		foreach ([2 => 'DNS', 3 => 'DoT', 4 => 'DoH', 5 => 'DoQ'] as $position => $label) {
 			$this->assertSame($label, $row->evaluate("string(//tr/td[{$position}]/small)"), "cell {$position}");
 		}
-		$this->assertSame('pfblockerng/pfblockerng_dns.php', $row->evaluate('string(//tr/td[6]/a/@href)'));
+		$this->assertSame('pfblockerng/pfblockerng_dns_general.php', $row->evaluate('string(//tr/td[6]/a/@href)'));
 		$this->assertSame('_blank', $row->evaluate('string(//tr/td[6]/a/@target)'));
 		$this->assertSame('noopener noreferrer', $row->evaluate('string(//tr/td[6]/a/@rel)'));
-		$this->assertSame('Click to open the pfB-DNS tab', $row->evaluate('string(//tr/td[6]/a/@title)'));
+		$this->assertSame('Click to open the DNS General tab', $row->evaluate('string(//tr/td[6]/a/@title)'));
 		$this->assertSame(1, $row->query('//tr/td[6]/a/i[@class="fa-regular fa-rectangle-list"]')->length);
 	}
 

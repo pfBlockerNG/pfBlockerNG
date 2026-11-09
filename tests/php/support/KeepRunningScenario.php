@@ -214,7 +214,7 @@ trait KeepRunningScenario
 		$this->krDecider($s['decider']);
 	}
 
-	/** A DoT listener on lan (192.0.2.1:853), configured as the pfB-DNS page configures it: the gateway's log decides whether it is reported. */
+	/** A DoT listener on lan (192.0.2.1:853), configured as pfB-DNS on DNS > General configures it: the gateway's log decides whether it is reported. */
 	private function krEnableDot(): void
 	{
 		// A stored plain interface list: without one, the one-time seed (pfb_dns_proxy_seed_values()) turns DoT off

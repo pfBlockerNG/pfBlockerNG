@@ -7,11 +7,11 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3557 -- the pfB-DNS page offers and accepts the interface tokens the DNS Resolver's Network Interfaces do
+ * issue #3557 -- the pfB-DNS settings on DNS > General offer and accept the interface tokens the DNS Resolver's Network Interfaces do
  * (configured interfaces and unmanaged virtual IPs, `_vip<uniqid>`), and keeps unavailable stored tokens selectable.
  * Package-owned service VIPs are excluded; manual VIPs survive an unchanged save.
  *
- * Page-level round trip: the page's own load statements (from `$pconfig = array();` to the option lists) run against a
+ * Page-level round trip: the page's own pfB-DNS load statements (from `$pconfig = array();` to the certificate option list) run against a
  * seeded config, a browser POST is derived from what they render (a multi-select submits each selected value that is an
  * option, in option order), and that POST goes through listener validation and canonical storage with the keys of the
  * rendered option list. The live browser test also exercises the actual form submission and saved configuration.
@@ -21,7 +21,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dns_proxy_listeners_stored')]
 final class DnsProxyInterfaceOptionsTest extends TestCase
 {
-	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_dns.php';
+	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
 	private const LISTS = ['pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface'];
 	private const VIP = '_vip5f3a1b2c3d4e5';
 	private const GLOBALS = ['pfb', 'config', 'pfb_test_interfaces', 'pfb_test_vip_list'];
@@ -77,11 +77,12 @@ final class DnsProxyInterfaceOptionsTest extends TestCase
 	{
 		$page = (string) file_get_contents(self::PAGE);
 		$from = strpos($page, '$pconfig = array();');
-		$to = strpos($page, '$input_errors = array();');
+		$certs = strpos($page, '$options_dns_cert = ');
+		$to = $certs === FALSE ? FALSE : strpos($page, ";\n", $certs);
 		self::assertNotFalse($from, 'the page builds $pconfig');
-		self::assertNotFalse($to, 'the page starts its input errors after the option lists');
+		self::assertNotFalse($to, 'the page builds $options_dns_cert, the last of the pfB-DNS option lists');
 		$pconfig = $options_dns_interface = $options_dns_cert = NULL;
-		eval(substr($page, $from, $to - $from));
+		eval(substr($page, $from, $to + 1 - $from));
 		self::assertIsArray($options_dns_interface, 'the page builds $options_dns_interface');
 		self::assertIsArray($options_dns_cert, 'the page builds $options_dns_cert');
 		return [$pconfig, $options_dns_interface, $options_dns_cert];

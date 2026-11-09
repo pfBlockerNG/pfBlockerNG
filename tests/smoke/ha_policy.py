@@ -271,7 +271,7 @@ UNSEEDED_LOCAL_KEYS = {
     },
     h.dns_config_path(
         "pfb_dns_ddr"
-    ): "needs the DNS Name, which stays unseeded: the pfB-DNS page refuses DDR without a name and the gateway answers nothing for resolver.arpa. without one",
+    ): "needs the DNS Name, which stays unseeded: the pfB-DNS save on DNS > General refuses DDR without a name and the gateway answers nothing for resolver.arpa. without one",
     h.dns_config_path(
         "pfb_dns_ddr_doh_443_interfaces"
     ): "read only while DoH is on (pfb_dns_proxy_ddr_doh_443_addresses()), which this harness leaves off: a seeded value changes nothing",

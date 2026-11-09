@@ -1,4 +1,4 @@
-"""Tier B: real pfSense read-only users cannot save DNS General, transports or DNSBL.
+"""Tier B: real pfSense read-only users cannot save DNS General, its pfB-DNS settings or DNSBL.
 
 Reuse the scoped-operator account lifecycle: real auth.inc password/OS provisioning,
 real CSRF login, and user-config-readonly enforced by config.lib.inc::write_config().
@@ -127,36 +127,41 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
         scoped.login()
         guard = PhpErrorLogGuard(vm)
         guard.snapshot()
-        for page, markers, field, original, submitted in (
-            ("/pfblockerng/pfblockerng_dns_general.php", ("DNS Reply Logging",), "pfb_py_reply", "on", ""),
-            ("/pfblockerng/pfblockerng_dns.php", ("pfB-DNS Settings",), "pfb_dns", "on", ""),
+        general = "/pfblockerng/pfblockerng_dns_general.php"
+        for page, markers, field, original, submitted, submit in (
+            (general, ("DNS Reply Logging",), "pfb_py_reply", "on", "", ("save", "save")),
+            (general, ("pfB-DNS Settings",), "pfb_dns", "on", "", ("save_pfb_dns", "Save pfB-DNS settings")),
             (
                 "/pfblockerng/pfblockerng_dnsbl.php",
                 ("DNSBL Webserver Configuration",),
                 "pfb_py_cache_max",
                 "10000",
                 "777",
+                ("save", "save"),
             ),
         ):
+            where = f"{page} [{submit[0]}]"
             before_page = scoped.get(page)
             rendered = evaluate_render(page, before_page.status_code, before_page.text, markers)
-            assert rendered.ok, f"read-only GET {page}: {rendered.detail}"
+            assert rendered.ok, f"read-only GET {where}: {rendered.detail}"
             assert scrape_form_fields(before_page.text).get(field, "") == original, (
-                f"before {page}: {field} must render stored {original!r}"
+                f"before {where}: {field} must render stored {original!r}"
             )
             before = _write_state(vm)
-            response = scoped.post(page, {field: submitted}, allow_redirects=False, timeout=300.0)
-            assert response.status_code == 200, f"{page} refused POST must render, not redirect: {response.status_code}"
-            assert not looks_like_login_page(response.text), f"{page}: operator session lost"
+            response = scoped.post(page, {field: submitted}, submit=submit, allow_redirects=False, timeout=300.0)
+            assert response.status_code == 200, (
+                f"{where} refused POST must render, not redirect: {response.status_code}"
+            )
+            assert not looks_like_login_page(response.text), f"{where}: operator session lost"
             errors = input_errors_block(response.text)
             assert errors and "the configuration could not be written" in errors, (
-                f"{page}: POST must reach the real write_config refusal, not an unrelated validation error: "
+                f"{where}: POST must reach the real write_config refusal, not an unrelated validation error: "
                 f"{response.text[-8000:]}"
             )
             assert scrape_form_fields(response.text).get(field, "") == submitted, (
-                f"{page}: form must re-display submitted {field}={submitted!r}, not stored {original!r}"
+                f"{where}: form must re-display submitted {field}={submitted!r}, not stored {original!r}"
             )
-            assert _write_state(vm) == before, f"{page}: refused save changed config.xml or a pending/apply marker"
+            assert _write_state(vm) == before, f"{where}: refused save changed config.xml or a pending/apply marker"
         guard.assert_no_growth()
     finally:
         for path, state in originals.items():
