@@ -697,26 +697,28 @@ def test_the_loader_refuses_a_bad_families_index(tmp_path: Path, document: str) 
 # --- the corpus covers every family -------------------------------------------------------------------------------
 
 
-def _family_counts() -> dict[str, int]:
-    """Cases per family over every scenario the loader accepts (a refused one fails its own scenario test)."""
+def _family_counts() -> tuple[dict[str, int], list[str]]:
+    """Cases per family over every scenario the loader accepts, and the refused ones (each fails its own test too)."""
     counts = dict.fromkeys(FAMILIES, 0)
+    refused = []
     for path in SCENARIO_FILES:
         try:
             cases = load_scenario(path, FAMILIES).cases
-        except FixtureError:
+        except FixtureError as refusal:
+            refused.append(str(refusal))
             continue
         for case in cases:
             counts[case.family] += 1
-    return counts
+    return counts, refused
 
 
-FAMILY_COUNTS = _family_counts()
+FAMILY_COUNTS, REFUSED_SCENARIOS = _family_counts()
 
 
 # The count is in the test id, so the default verbose run lists the cases per family.
 @pytest.mark.parametrize("family", list(FAMILY_COUNTS), ids=[f"{name}={n}" for name, n in FAMILY_COUNTS.items()])
 def test_every_family_has_cases(family: str) -> None:
-    assert FAMILY_COUNTS[family], f"family {family} has no case"
+    assert FAMILY_COUNTS[family], f"family {family} has no case; refused scenarios not counted: {REFUSED_SCENARIOS}"
 
 
 def test_every_file_in_the_corpus_is_a_json_document_the_runner_loads() -> None:

@@ -36,7 +36,7 @@
         "pages.com",
         "// ===END PRIVATE DOMAINS==="
       ],
-      "pfb_py_raw/feed.txt": ["pages.com", "org.uk"]
+      "pfb_py_raw/feed.txt": ["pages.com", "||org.uk^"]
     }
   },
   "upstream": {
@@ -72,13 +72,13 @@
     {
       "id": "icann-policy-is-independent-of-the-private-one",
       "family": "psl",
-      "description": "the plain line at the ICANN suffix org.uk is an exact entry",
-      "query": {"name": "org.uk.", "type": "A"},
+      "description": "the ICANN policy stays honor: the zone ||org.uk^ at an ICANN suffix is not demoted, so a child of org.uk is blocked",
+      "query": {"name": "x.org.uk.", "type": "A"},
       "expect": {
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
-        "answer": ["org.uk. 3600 IN A 10.10.10.1"],
+        "answer": ["x.org.uk. 3600 IN A 10.10.10.1"],
         "authority": []
       }
     }
