@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlsplit
 
@@ -109,12 +110,36 @@ def _pick(page: Page, *, value: str | None = None, label: str | None = None) -> 
     return parse_qs(urlsplit(page.url).query)
 
 
+def _shown_window(page: Page) -> tuple[datetime, datetime]:
+    """The from/to the page says it is showing: two ``<time>`` elements in ``#Alert_Stats_Window``."""
+    times = page.locator("#Alert_Stats_Window time")
+    _expect()(times).to_have_count(2)
+    start, end = (datetime.fromisoformat(stamp) for stamp in times.evaluate_all("t => t.map(e => e.dateTime)"))
+    text = page.locator("#Alert_Stats_Window").inner_text()
+    for stamp in (start, end):
+        assert stamp.strftime("%Y-%m-%d %H:%M") in text, f"{stamp} not visible in {text!r}"
+    return start, end
+
+
 def _assert_window(
-    page: Page, table: str, chart: str, *, value: str, total: int, top: dict[str, int], title: str
+    page: Page,
+    table: str,
+    chart: str,
+    *,
+    value: str,
+    total: int,
+    top: dict[str, int],
+    title: str,
+    now: datetime,
+    first: datetime,
 ) -> None:
     expect = _expect()
     expect(page.locator("#Alert_Stats_Range")).to_have_value(value)
     expect(page.locator("#Alert_Stats_Total")).to_have_text(str(total))
+    # The shown window ends at the request time; it starts N hours earlier, or at the first dated record for All time.
+    start, end = _shown_window(page)
+    assert now <= end <= now + timedelta(minutes=15), (end, now)
+    assert start == (first if value == "max" else end - timedelta(hours=int(value))), (start, end)
     assert _top(page, table) == top
     _reveal(page, chart)
     expect(page.locator("#chart")).to_be_attached()
@@ -141,28 +166,39 @@ def test_stats_time_range_is_one_shared_window_for_every_panel(
         _row(view, LEGACY_STAMP, legacy) + 3 * _row(view, older_stamp, older) + 2 * _row(view, recent_stamp, recent)
     )
     leftovers = _stats_tempfiles(smoke_vm)
+    # Lower bound for the request time, and the first dated record "All time" starts at.
+    shown = {
+        "now": datetime.fromisoformat(recent_stamp) + timedelta(hours=2),
+        "first": datetime.fromisoformat(older_stamp),
+    }
     with _stats_log(smoke_vm, log, preference, contents), _saved_default(smoke_vm, "24"):
         _open(page, webui, view)
 
-        # One labelled native control in the top heading, outside any nested form, never a POST.
+        # One labelled native control in its own pane of the page-level Statistics panel (owner, 2026-11-09),
+        # outside any nested form, never a POST.
         select = page.locator("#Alert_Stats_Range")
         _expect()(page.get_by_label("Time range", exact=True)).to_have_attribute("id", "Alert_Stats_Range")
         assert select.get_attribute("name") == "range"
         assert select.evaluate("el => el.closest('form').id") == "iform_stats"
         assert page.locator("#iform_stats form").count() == 0
-        in_heading = page.locator("#iform_stats .panel-heading:has(#Alert_Stats_Total) #Alert_Stats_Range")
-        _expect()(in_heading).to_have_count(1)
+        top = page.locator("#iform_stats > .panel:has(#Alert_Stats_Total)").first
+        _expect()(top.locator(".panel-body #Alert_Stats_Range")).to_have_count(1)
+        _expect()(top.locator(".panel-heading #Alert_Stats_Range")).to_have_count(0)
+        title = {"dnsbl_reply_stat": "DNS Reply Statistics", "ip_block_stat": "IP Block Statistics"}[view]
+        assert top.locator(".panel-title").inner_text().split("Total event", 1)[0].strip() == title
         assert {"24", "48", "168", "max"} <= set(select.locator("option").evaluate_all("o => o.map(e => e.value)"))
         _expect()(select.locator('option[value="max"]')).to_have_text("All time")
 
         # Saved default 24: only the 2 h rows; the legacy row and the 30 h rows are outside the window.
-        _assert_window(page, table, chart, value="24", total=2, top={recent: 2}, title="(Last 24 hours)")
+        _assert_window(page, table, chart, value="24", total=2, top={recent: 2}, title="(Last 24 hours)", **shown)
 
         query = _pick(page, value="48")
         assert query["range"] == ["48"]
         assert query["view"] == [view]
         _settle(page, view)
-        _assert_window(page, table, chart, value="48", total=5, top={recent: 2, older: 3}, title="(Last 48 hours)")
+        _assert_window(
+            page, table, chart, value="48", total=5, top={recent: 2, older: 3}, title="(Last 48 hours)", **shown
+        )
 
         query = _pick(page, label="All time")
         assert query["range"] == ["max"]
@@ -176,11 +212,12 @@ def test_stats_time_range_is_one_shared_window_for_every_panel(
             total=6,
             top={recent: 2, older: 3, legacy: 1},
             title="(All time)",
+            **shown,
         )
 
         # An unknown range is not an error and not an injection path: it falls back to the saved default.
         _open(page, webui, view, "&range=evil")
-        _assert_window(page, table, chart, value="24", total=2, top={recent: 2}, title="(Last 24 hours)")
+        _assert_window(page, table, chart, value="24", total=2, top={recent: 2}, title="(Last 24 hours)", **shown)
 
         # Picking a range never rewrites the saved default.
         assert helpers.config_get_state(smoke_vm, SAVED_RANGE) == (True, "24")
