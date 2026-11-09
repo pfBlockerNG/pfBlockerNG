@@ -2423,7 +2423,17 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'sync'          => 'policy',
-			'no_grandfather' => '#3770 cross-section migration issue3770-pfb-dns-for-dnsbl turns it on where DNSBL is on, which a per-section grandfather map cannot see; absent with DNSBL off reads Off = no proxy',
+			'no_grandfather' => '#3770 cross-section migration issue3770-pfb-dns-for-dnsbl turns it on once, on its first run where DNSBL is on, which a per-section grandfather map cannot see; absent with DNSBL off reads Off = no proxy',
+		],
+
+		// issue #3770: the run-once record of that migration on this node. A later reinstall or upgrade then never turns back on a
+		// pfB-DNS the administrator saved off. Written only by the migration; '' = it has not run.
+		'dns/pfb_dns_dnsbl_migrated' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'sync'          => 'local',
+			'no_grandfather' => '#3770 run-once record of migration issue3770-pfb-dns-for-dnsbl; absent reads Off = not run yet; a per-node marker, never synced',
 		],
 
 		// The Resolver's pre-move active_interface/enablessl/custom_options (base64 JSON, written by
@@ -3870,12 +3880,12 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: removed obsolete Resolver cache preference (issue #3701)',
 			'since'   => '4.0.0',
 		],
-		// issue #3770: DNSBL runs only through pfB-DNS; this turns pfB-DNS on where DNSBL is on and rewrites no other key.
+		// issue #3770: DNSBL runs only through pfB-DNS; the first run turns pfB-DNS on where DNSBL is on and records its marker, and rewrites no other key.
 		[
 			'id'       => 'issue3770-pfb-dns-for-dnsbl',
 			'sections' => [$dnsbl, PFB_SECTIONS['dns']],
 			'apply'    => 'pfb_dns_dnsbl_migrate',
-			'message'  => 'pfBlockerNG: turned pfB-DNS on because DNSBL runs only through it (issue #3770)',
+			'message'  => 'pfBlockerNG: migrated the pfB-DNS enable, because DNSBL runs only through pfB-DNS (issue #3770)',
 			'since'    => '4.1.0',
 		],
 	];
@@ -3910,8 +3920,11 @@ function pfb_dns_settings_migrate(array $sections): ?array
 }
 
 /**
- * Issue #3770: DNSBL runs only through pfB-DNS, so an install with DNSBL on gets pfB-DNS on.
- * Every other pfB-DNS key stays as stored; NULL when there is nothing to change.
+ * Issue #3770: DNSBL runs only through pfB-DNS, so the FIRST run on an install base (the upgrade out of the Unbound-hosted DNSBL
+ * world) turns pfB-DNS on where DNSBL is on, over any stored pfB-DNS value, and records the node-local marker
+ * 'pfb_dns_dnsbl_migrated'. Every later run returns NULL: a pfB-DNS Off saved afterwards is the administrator's choice. The
+ * marker, not section emptiness, is the run-once record (config-gateway.md), so a fresh install is marked too.
+ * Every other pfB-DNS key stays as stored.
  *
  * @param array<string,mixed> $sections
  * @return array<string,array<string,mixed>>|null
@@ -3922,11 +3935,14 @@ function pfb_dns_dnsbl_migrate(array $sections): ?array
 	$dns_path   = PFB_SECTIONS['dns'];
 	$dnsbl      = is_array($sections[$dnsbl_path] ?? NULL) ? $sections[$dnsbl_path] : [];
 	$dns        = is_array($sections[$dns_path] ?? NULL) ? $sections[$dns_path] : [];
-	if (pfb_cfg_toggle_read($dnsbl['pfb_dnsbl'] ?? NULL) !== PfbToggle::On
-		|| pfb_cfg_toggle_read($dns['pfb_dns'] ?? NULL) === PfbToggle::On) {
+	if (pfb_cfg_toggle_read($dns['pfb_dns_dnsbl_migrated'] ?? NULL) === PfbToggle::On) {
 		return NULL;
 	}
-	$dns['pfb_dns'] = pfb_cfg_toggle_write(PfbToggle::On);
+	if (pfb_cfg_toggle_read($dnsbl['pfb_dnsbl'] ?? NULL) === PfbToggle::On
+		&& pfb_cfg_toggle_read($dns['pfb_dns'] ?? NULL) !== PfbToggle::On) {
+		$dns['pfb_dns'] = pfb_cfg_toggle_write(PfbToggle::On);
+	}
+	$dns['pfb_dns_dnsbl_migrated'] = pfb_cfg_toggle_write(PfbToggle::On);
 	return [$dns_path => $dns];
 }
 

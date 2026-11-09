@@ -19,6 +19,7 @@ final class PfbDnsForDnsblInstallerSequenceTest extends TestCase
 {
 	private const DNSBL_SECTION = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	private const DNS_SECTION   = 'installedpackages/pfblockerngdns/config/0';
+	private const MARKER        = 'pfb_dns_dnsbl_migrated';
 
 	protected function setUp(): void
 	{
@@ -68,6 +69,7 @@ final class PfbDnsForDnsblInstallerSequenceTest extends TestCase
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns'), 'pfB-DNS reads On after the installer order');
 		$this->assertSame('on', config_get_path(self::DNS_SECTION)['pfb_dns'] ?? NULL, 'and is stored On');
 		$this->assertArrayHasKey('pfb_dns_saved', config_get_path(self::DNS_SECTION), 'the registry pass still seeds the other pfB-DNS keys');
+		$this->assertSame('on', config_get_path(self::DNS_SECTION)[self::MARKER] ?? NULL, 'and the run-once marker survives the NEWCFG seeding');
 	}
 
 	public function testDnsblOffWithNoPfbDnsSectionSeedsTheDefaultOff(): void
@@ -79,6 +81,7 @@ final class PfbDnsForDnsblInstallerSequenceTest extends TestCase
 		$this->assertSame('NEWCFG', $modes[PFB_SECTIONS['dns']]);
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns/pfb_dns'));
 		$this->assertArrayHasKey('pfb_dns', config_get_path(self::DNS_SECTION), 'the registered default is seeded');
+		$this->assertSame('on', config_get_path(self::DNS_SECTION)[self::MARKER] ?? NULL, 'the run is recorded even with DNSBL off');
 	}
 
 	public function testFreshInstallLeavesPfbDnsOff(): void
@@ -89,6 +92,7 @@ final class PfbDnsForDnsblInstallerSequenceTest extends TestCase
 		$this->assertSame('NEWCFG', $modes[PFB_SECTIONS['dnsbl']]);
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns/pfb_dns'));
 		$this->assertArrayHasKey('pfb_dns', config_get_path(self::DNS_SECTION), 'the registered default is seeded');
+		$this->assertSame('on', config_get_path(self::DNS_SECTION)[self::MARKER] ?? NULL, 'a fresh install is marked: it never lived in the Unbound-hosted DNSBL world');
 	}
 
 	/** Coverage, not the reproduction: pins the case-insensitive DNSBL read in the migration (an `=== 'on'` test fails it). */
@@ -99,5 +103,20 @@ final class PfbDnsForDnsblInstallerSequenceTest extends TestCase
 		pfb_run_migrations();
 
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns'));
+	}
+
+	/** The Codex P2 on PR #3792: the second install runs the same sequence over the section the first one wrote. */
+	public function testAReinstallAfterTheAdministratorSavedPfbDnsOffKeepsItOff(): void
+	{
+		config_set_path(self::DNSBL_SECTION, ['pfb_dnsbl' => 'on']);
+		self::installerOrder();
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns'), 'before: the first upgrade turned pfB-DNS on');
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns/pfb_dns'), 'before: the administrator saved pfB-DNS off');
+
+		self::installerOrder();
+
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dns/pfb_dns'), 'the reinstall leaves pfB-DNS off');
+		$this->assertSame('on', config_get_path(self::DNS_SECTION)[self::MARKER] ?? NULL, 'and keeps the marker');
 	}
 }

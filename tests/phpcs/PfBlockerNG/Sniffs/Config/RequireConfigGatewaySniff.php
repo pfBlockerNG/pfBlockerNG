@@ -280,6 +280,8 @@ class RequireConfigGatewaySniff implements Sniff
 		// issue #3515: installedpackages/pfblockerngdns/config/0 (pfB-DNS): the enable toggle and the Resolver snapshot it keeps
 		'installedpackages/pfblockerngdns/config/0/pfb_dns',
 		'installedpackages/pfblockerngdns/config/0/pfb_dns_saved',
+		// issue #3770: the run-once marker of the pfB-DNS enable migration (node-local)
+		'installedpackages/pfblockerngdns/config/0/pfb_dns_dnsbl_migrated',
 		// issue #3513: the DoH/DoQ listener settings of pfB-DNS
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh',
 		'installedpackages/pfblockerngdnssettings/config/0/pfb_dns_doh_port',

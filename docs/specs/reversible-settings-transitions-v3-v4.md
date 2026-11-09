@@ -332,7 +332,8 @@ None.
 
 ### 2026-11-09: issue #3770, pfB-DNS on for DNSBL
 
-- Migration `issue3770-pfb-dns-for-dnsbl` (since 4.1.0) changes stored `dns/pfb_dns` to On where
-  `dnsbl/pfb_dnsbl` is On, because DNSBL runs only through pfB-DNS.
-- A v4 → v3.2 transition restores the v3.2 head, which has no pfB-DNS key. A later re-upgrade runs the
-  migration again, idempotently, so the transition stays reversible.
+- Migration `issue3770-pfb-dns-for-dnsbl` (since 4.1.0) runs once per install base (node-local marker
+  `dns/pfb_dns_dnsbl_migrated`): its first run changes stored `dns/pfb_dns` to On where `dnsbl/pfb_dnsbl` is On, because
+  DNSBL runs only through pfB-DNS. A pfB-DNS Off the administrator saves afterwards survives every reinstall and upgrade.
+- A v4 → v3.2 transition restores the v3.2 head, which has no pfB-DNS key and no marker. A later re-upgrade runs the
+  migration again as a first run, so the transition stays reversible.

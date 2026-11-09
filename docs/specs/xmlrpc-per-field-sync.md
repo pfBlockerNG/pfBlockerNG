@@ -184,7 +184,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 | `global` | every key except `feed_*`: `alertrefresh`, every `widget-*` |
 | `pfblockerngblacklist` | `item/*/username`, `item/*/password` (the `item` list is matched by its `xml` leaf) |
 | `sync` | `syncscope` (the section is never sent) |
-| `dns` | `pfb_dns_saved`, `pfb_dns_interface`, `pfb_dns_dot`, `pfb_dns_dot_port`, `pfb_dns_dot_interface`, `pfb_dns_sslcertref`, `pfb_dns_doh`, `pfb_dns_doh_port`, `pfb_dns_doh_interface`, `pfb_dns_doh_trusted`, `pfb_dns_doq`, `pfb_dns_doq_port`, `pfb_dns_doq_interface`, `pfb_dns_ddr`, `pfb_dns_name`, `pfb_dns_ddr_doh_443_interfaces` (issues #3515, #3513, #3538, #3583 and #3694, pfB-DNS; the section is not one of the 19 and is a settings section of `pfb_sync_policy_sections()`: only its enable `pfb_dns` is policy, #3770) |
+| `dns` | `pfb_dns_saved`, `pfb_dns_dnsbl_migrated`, `pfb_dns_interface`, `pfb_dns_dot`, `pfb_dns_dot_port`, `pfb_dns_dot_interface`, `pfb_dns_sslcertref`, `pfb_dns_doh`, `pfb_dns_doh_port`, `pfb_dns_doh_interface`, `pfb_dns_doh_trusted`, `pfb_dns_doq`, `pfb_dns_doq_port`, `pfb_dns_doq_interface`, `pfb_dns_ddr`, `pfb_dns_name`, `pfb_dns_ddr_doh_443_interfaces` (issues #3515, #3513, #3538, #3583, #3694 and #3770, pfB-DNS; the section is not one of the 19 and is a settings section of `pfb_sync_policy_sections()`: only its enable `pfb_dns` is policy, #3770) |
 
 - Credentials are local. The MaxMind account and key (`maxmind_account`, `maxmind_key`), the IPinfo
   ASN token (`asn_token`), the Cloudflare TOP1M token (`top1m_token`), and the Blacklist provider
@@ -197,7 +197,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
   `dnsbl_dot_block` sync, while their interface lists stay local. Their exception lists
   (`dnsbl_redir_exclude`, `dnsbl_dot_block_exclude`) and `killstates` are enforcement behaviour and
   therefore policy.
-- pfB-DNS is per node, except its enable (#3770). `pfb_dns_saved` (the Resolver snapshot), the twelve listener settings and the two DDR settings are local and live in their own
+- pfB-DNS is per node, except its enable (#3770). `pfb_dns_saved` (the Resolver snapshot), `pfb_dns_dnsbl_migrated` (the run-once marker of the #3770 enable migration), the twelve listener settings and the two DDR settings are local and live in their own
   `dns` section, a settings section of `pfb_sync_policy_sections()` whose only policy key is `pfb_dns`: DNSBL runs only through pfB-DNS, so the enable travels with the DNSBL enable. pfSense's own DNS Resolver sync does copy the
   moved `unbound` section to a secondary, so a secondary needs pfB-DNS on before the primary syncs a moved Resolver
   (architecture-notes "pfB-DNS: the experimental DNS proxy", known limits).

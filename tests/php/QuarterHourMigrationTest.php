@@ -201,7 +201,8 @@ PHP;
 		$this->assertLessThanOrEqual(6, (int) $hour);
 		$this->assertSame('3', config_get_path(self::GEN . '/skipfeed'));
 		$writes = $GLOBALS['pfb_test_write_config_calls'];
-		$this->assertCount(1, $writes);
+		// The schedule's own write, plus issue #3770's: a first run records its run-once marker, fresh install included.
+		$this->assertCount(2, $writes);
 		pfb_run_migrations();
 		$this->assertSame($writes, $GLOBALS['pfb_test_write_config_calls']);
 	}
@@ -484,6 +485,8 @@ PHP;
 			'global_log_mode'           => 'default',
 			'global_log'                => 'enabled',
 		]);
+		// issue #3770: the pfB-DNS enable migration's run-once marker, for the same reason.
+		config_set_path('installedpackages/pfblockerngdns/config/0', ['pfb_dns_dnsbl_migrated' => 'on']);
 		foreach ([self::V4, self::V6, self::DNS] as $section) {
 			config_set_path($section, [['action' => 'Deny_Inbound', 'cron' => 'Weekly', 'row' => $GLOBALS['pfb_test_rows'] ?? [['url' => 'https://example.test', 'state' => 'Enabled']], 'schedule_override' => 'on', 'schedule_weekday' => '3', 'schedule_hour' => '2', 'schedule_minute' => '30', 'logging' => 'default']]);
 		}
@@ -504,7 +507,8 @@ PHP;
 		foreach (['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart'] as $key) {
 			$this->assertNull(config_get_path(self::GEN . "/{$key}"), "retired General key remains: {$key}");
 		}
-		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
+		// The schedule's own write, plus issue #3770's run-once marker write (the DNSBL settings are absent: a first run on a fresh install).
+		$this->assertCount(2, $GLOBALS['pfb_test_write_config_calls']);
 		$first = config_get_path(self::GEN);
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 		pfb_run_migrations();

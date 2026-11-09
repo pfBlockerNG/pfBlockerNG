@@ -21,6 +21,9 @@ final class SyncDnsSettingsTest extends TestCase
 		'pfb_dns_doh_trusted' => '192.0.2.20/32', 'pfb_dns_ddr' => 'on',
 	];
 
+	/** issue #3770: the run-once marker the migration run adds to the node-local section. */
+	private const MARKED = ['pfb_dns_dnsbl_migrated' => 'on'];
+
 	protected function setUp(): void
 	{
 		$GLOBALS['config'] = [];
@@ -43,7 +46,7 @@ final class SyncDnsSettingsTest extends TestCase
 		config_set_path(self::LOCAL, self::local('on') + $values);
 		pfb_run_migrations();
 		$this->assertSame($values, PfbConfig::readSection(self::SHARED));
-		$this->assertSame(self::local('on'), PfbConfig::readSection(self::LOCAL));
+		$this->assertSame(self::local('on') + self::MARKED, PfbConfig::readSection(self::LOCAL));
 		$before = $GLOBALS['config'];
 		$writes = $GLOBALS['pfb_test_write_config_calls'];
 		pfb_run_migrations();
@@ -58,7 +61,7 @@ final class SyncDnsSettingsTest extends TestCase
 		config_set_path(self::SHARED, $received);
 		pfb_run_migrations();
 		$this->assertSame($received + self::VALUES, PfbConfig::readSection(self::SHARED));
-		$this->assertSame(self::local(''), PfbConfig::readSection(self::LOCAL));
+		$this->assertSame(self::local('') + self::MARKED, PfbConfig::readSection(self::LOCAL));
 	}
 
 	/** @return iterable<string,array{string,string}> */

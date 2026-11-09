@@ -315,7 +315,8 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertSame('on', config_get_path(self::GEN_SECTION . '/pfb_scheduled_feed_updates'));
 		$this->assertSame('7', config_get_path(self::GEN_SECTION . '/pfb_schedule_weekday'));
 		$this->assertSame('3', config_get_path(self::GEN_SECTION . '/skipfeed'));
-		$this->assertCount(1, $this->writeConfigCalls());
+		// The schedule's own write, plus issue #3770's: a first run records its run-once marker, fresh install included.
+		$this->assertCount(2, $this->writeConfigCalls());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'fresh schedule seeding is not malformed legacy state');
 	}
 
@@ -510,8 +511,8 @@ final class MigrationRegistryTest extends TestCase
 			'pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7',
 			'pfb_schedule_hour' => '0', 'pfb_schedule_minute' => '0',
 		]);
-		// issue #3770: DNSBL on migrates to pfB-DNS on, so the migrated state carries it.
-		config_set_path('installedpackages/pfblockerngdns/config/0', ['pfb_dns' => 'on']);
+		// issue #3770: DNSBL on migrates to pfB-DNS on and records the run-once marker, so the migrated state carries both.
+		config_set_path('installedpackages/pfblockerngdns/config/0', ['pfb_dns' => 'on', 'pfb_dns_dnsbl_migrated' => 'on']);
 
 		// First run should be a no-op since all keys already carry migrated values.
 		pfb_run_migrations();

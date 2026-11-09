@@ -221,9 +221,16 @@ Authorization = property of **write**, not call site (generalises
     `installedpackages/pfblockerngdns/config/0`, the pfB-DNS tab's own): default Off, sync `policy` (the only `dns` key that syncs, #3770); opt-in,
     experimental pfBlockerNG DNS proxy in front of the DNS Resolver. DNSBL runs only through it, so DNSBL
     requires it (issue #3770). Migration `issue3770-pfb-dns-for-dnsbl` stores On where `dnsbl/pfb_dnsbl` is On
-    and changes no other key; it runs at install/upgrade and is idempotent. There is no grandfather map,
+    and changes no other key; it runs once per install base (marker `dns/pfb_dns_dnsbl_migrated`, next bullet), so a
+    pfB-DNS Off the administrator saves afterwards survives every reinstall and upgrade. There is no grandfather map,
     because it cannot see the DNSBL section. No migration from the DNSBL-section key it started as
     (`dnsbl/pfb_dns_proxy`, retired without an alias): absent with DNSBL off reads Off = no proxy.
+  - **`dns/pfb_dns_dnsbl_migrated` → `PfbToggle`** (issue #3770, the run-once marker of `issue3770-pfb-dns-for-dnsbl`, same
+    section): default Off (absent = not run yet), sync `local`, so it never projects in any sync scope. Only the migration
+    writes it, raw, on its first run on a node: also when DNSBL is off or the install is fresh, because the marker, not
+    section emptiness, is the run-once record. That run turns pfB-DNS on over any stored value where DNSBL is on; every
+    later run returns without a write. `pfb_registry_pass()` keeps a stored marker as it keeps a stored `dns/pfb_dns`.
+    New key, no grandfather.
   - **`gen/pfb_dns_listen_vip_only` → `PfbToggle`** (issue #3699): default Off, sync `policy`,
     beside the Resolver VIP policy fields. Explicit opt-in restricts pfB-DNS client-facing
     listeners to active selected Resolver VIPs and answers the DNS Name with their address
