@@ -714,7 +714,7 @@ does not move the Resolver again), and `pfb_unbound_dnsbl()` with `pfb_update_un
 apply does. The restore consumes the snapshot, so that reload does not restart the proxy (no recursion), and the restore's own restart of a
 proxy that outlived its stop is deliberately not confirmed. The operator gets a notice: the activation failed, the Resolver was restored,
 pfB-DNS stays on and the next Update retries (with DNSBL on, DNSBL does not block until the activation succeeds: Unbound never hosts the
-module). The record ends when a takeover goes ahead (the Resolver is snapshotted again), when the proxy is confirmed ready, and when a
+module). The record ends when a takeover goes ahead (the Resolver is snapshotted again and config.xml takes the write; a refused write keeps it), when the proxy is confirmed ready, and when a
 restore runs with pfB-DNS off. The retry is the next apply's: `pfb_dns_wanted()` stays TRUE, so its Resolver step moves the Resolver again;
 a cause that stands (an unsafe Custom Options line, a Listen Port on a proxy port) has the move refused with a notice of its own until the
 admin corrects it. A rollback that cannot finish (the config lock stays taken, config.xml does not take the restore's write, the proxy outlives its

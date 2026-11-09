@@ -16302,8 +16302,9 @@ function pfb_dns_status(): array {
 	$service = pfb_dns_proxy_serving_ready() ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
 	// The overview's pfB-DNS and DNSBL ticks are independent; the DNS Name is the one the running command applies.
 	$dnsbl = pfb_dnsbl_active();
-	// Why the last activation failed, while pfB-DNS is on (issue #3770): a record of an earlier setting says nothing about this one
-	$failure = (($pfb['pfb_dns'] ?? NULL) === PfbToggle::On) ? trim((string) @file_get_contents($pfb['dns_proxy_activation_failed'])) : '';
+	// Why the last activation failed (issue #3770): the branches below that report it run only while pfB-DNS is on, so the record of
+	// an earlier setting never reaches the status
+	$failure = trim((string) @file_get_contents($pfb['dns_proxy_activation_failed']));
 	$off = ['active' => FALSE, 'dnsbl' => $dnsbl, 'name' => ''];
 	if ($saved === NULL && pfb_dns_proxy_recovery_required()) {
 		return [
@@ -17470,6 +17471,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 	}
 
 	$changed = FALSE;
+	$took_snapshot = FALSE;
 	if ($saved === NULL) {
 		$current = [];
 		foreach (PFB_DNS_PROXY_RESOLVER_KEYS as $key) {
@@ -17495,10 +17497,9 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 			    'DNS Resolver was already moved aside for the DNS proxy; refusing to snapshot it as it stands');
 		}
 		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode($json));
-		// A takeover that goes ahead ends the record of the failed one it retries
-		unlink_if_exists($pfb['dns_proxy_activation_failed']);
 		$saved = $current;
 		$changed = TRUE;
+		$took_snapshot = TRUE;
 	}
 
 	// After the refusals and the snapshot (which hold the live values), before enablessl is deleted.
@@ -17548,6 +17549,10 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 		if (pfb_dns_config_write_failed(write_config("pfBlockerNG: {$log}"))) {
 			pfb_dns_proxy_resolver_unchanged(TRUE, 'config.xml could not be written');
 			return FALSE;
+		}
+		// A takeover that goes ahead ends the record of the failed one it retries: a write config.xml refused did not go ahead
+		if ($took_snapshot) {
+			unlink_if_exists($pfb['dns_proxy_activation_failed']);
 		}
 		pfb_logger("\n{$log}", 1);
 	}

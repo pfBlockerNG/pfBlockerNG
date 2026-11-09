@@ -1935,6 +1935,26 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertSame('on', $this->toggleStored());
 	}
 
+	#[DataProvider('refusedWrites')]
+	public function testARetryWhoseTakeoverWriteConfigXmlRefusesKeepsTheFailureOnRecord(mixed $answer): void
+	{
+		// Given a failed activation (the Resolver is restored, pfB-DNS stays on, the failure is on record) and a config.xml that
+		// refuses the write of the takeover the next Update retries
+		$this->activate(TRUE);
+		$this->failTheActivation('not_ready');
+		$reason = $this->failureRecord();
+		$this->assertNotNull($reason, 'before: the failure is on record');
+		$this->assertSame('', $this->onDisk(self::SAVED), 'before: config.xml holds no snapshot, the Resolver is not moved');
+		$this->configXmlOnDisk($answer, 'Moved the DNS Resolver onto loopback');
+
+		// When the next Update retries the takeover
+		pfb_unbound_python('enabled');
+
+		// Then the takeover did not go ahead: config.xml still holds no snapshot, and the failure it retries stays on record
+		$this->assertSame('', $this->onDisk(self::SAVED), 'config.xml refused the move');
+		$this->assertSame($reason, $this->failureRecord(), 'a takeover that config.xml refused does not end the failure on record');
+	}
+
 	#[DataProvider('failedActivations')]
 	public function testTurningPfbDnsOffAfterAFailedActivationEndsTheFailureOnRecord(string $trigger): void
 	{
