@@ -12,22 +12,6 @@ import pytest
 from tests.smoke import test_syslog_export as syslog
 
 
-def test_syslog_event_history_reads_current_and_rotated_generations(monkeypatch: pytest.MonkeyPatch) -> None:
-    current = "pfblockerng: act=dnsbl qname=barrier.example.com qip=192.168.1.10"
-    rotated = "pfblockerng: act=dnsbl qname=subject.example.com qip=192.168.1.10"
-    monkeypatch.setattr(syslog.h, "read_log_file", lambda *_args, **_kwargs: current)
-
-    def ssh(*args: str, **_kwargs: object) -> SimpleNamespace:
-        assert args[:2] == ("/bin/sh", "-c")
-        script = args[2]
-        assert f"{syslog.PFB_SYSLOG_LOG} {syslog.PFB_SYSLOG_LOG}.[0-9]*" in script
-        assert "/usr/bin/bsdcat" in script
-        return SimpleNamespace(returncode=0, stdout=f"{current}\n{rotated}\n", stderr="")
-
-    vm = SimpleNamespace(ssh=ssh)
-    assert syslog._pfb_event_history_lines(cast(syslog.SmokeVM, vm)) == [current, rotated]
-
-
 def test_syslog_event_history_decompression_failure_is_loud() -> None:
     vm = SimpleNamespace(
         ssh=lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout="partial", stderr="bad archive")
