@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "description": "psl_feed_private_policy = ignore loads the public-suffix list and psl_feed_icann_policy stays honor: an ICANN suffix entry is kept as listed while a PRIVATE suffix entry is dropped (Wildcard Blocking off)",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "false",
+        "psl_feed_private_policy": "ignore",
+        "psl_feed_icann_policy": "honor",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [{"raw": "pfb_py_raw/feed.txt", "feed": "Feed", "group": "Group", "log_flag": "1"}]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "com",
+        "example",
+        "uk",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "*.ck",
+        "!www.ck",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "pages.com",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": ["||co.uk^", "org.uk", "pages.com"]
+    }
+  },
+  "upstream": {
+    "pages.com. A": ["pages.com. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "private-suffix-line-is-dropped",
+      "family": "psl",
+      "description": "the private policy is active: a plain line at the PRIVATE suffix pages.com is dropped and the name resolves",
+      "query": {"name": "pages.com.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["pages.com. A"],
+        "rcode": "NOERROR",
+        "answer": ["pages.com. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    },
+    {
+      "id": "icann-abp-zone-at-a-suffix-is-kept",
+      "family": "psl",
+      "description": "the ICANN policy is honor while another policy is active: ||co.uk^ stays a zone and blocks co.uk",
+      "query": {"name": "co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "icann-abp-zone-at-a-suffix-still-covers-its-children",
+      "family": "psl",
+      "description": "and the kept zone still blocks a child of co.uk",
+      "query": {"name": "x.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["x.co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "icann-plain-line-at-a-suffix-is-kept",
+      "family": "psl",
+      "description": "a plain feed line at the ICANN suffix org.uk is kept as an exact entry",
+      "query": {"name": "org.uk.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["org.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

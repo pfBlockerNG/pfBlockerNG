@@ -39,7 +39,8 @@
     }
   },
   "upstream": {
-    "www.co.uk. A": ["www.co.uk. 300 IN A 192.0.2.10"]
+    "www.co.uk. A": ["www.co.uk. 300 IN A 192.0.2.10"],
+    "www.shop.co.uk. A": ["www.shop.co.uk. 300 IN A 192.0.2.11"]
   },
   "cases": [
     {
@@ -91,6 +92,19 @@
         "forwards": [],
         "rcode": "NOERROR",
         "answer": ["shop.co.uk. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    },
+    {
+      "id": "plain-registrable-line-does-not-cover-its-subdomain",
+      "family": "psl",
+      "description": "with the public-suffix list loaded but Wildcard Blocking off, a plain registrable feed line is an exact entry: its subdomain resolves",
+      "query": {"name": "www.shop.co.uk.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["www.shop.co.uk. A"],
+        "rcode": "NOERROR",
+        "answer": ["www.shop.co.uk. 300 IN A 192.0.2.11"],
         "authority": []
       }
     }

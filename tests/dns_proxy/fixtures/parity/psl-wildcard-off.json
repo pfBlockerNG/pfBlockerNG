@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "Wildcard Blocking off: the same plain feed lines are exact entries whatever the public suffix list says",
+  "description": "Wildcard Blocking off, no feed-at-suffix policy: plain feed lines are exact entries, a listed name is blocked and its subdomain resolves (the control for psl-wildcard-on)",
   "module": {
     "ini": {
       "MAIN": {
@@ -51,7 +51,7 @@
       }
     },
     {
-      "id": "multi-label-suffix-registrable-blocks-itself",
+      "id": "three-label-feed-line-blocks-itself",
       "family": "psl",
       "description": "shop.co.uk is blocked as listed",
       "query": {"name": "shop.co.uk.", "type": "A"},
@@ -64,7 +64,7 @@
       }
     },
     {
-      "id": "multi-label-suffix-subdomain-relays",
+      "id": "three-label-feed-line-subdomain-relays",
       "family": "psl",
       "description": "and its subdomain resolves",
       "query": {"name": "www.shop.co.uk.", "type": "A"},

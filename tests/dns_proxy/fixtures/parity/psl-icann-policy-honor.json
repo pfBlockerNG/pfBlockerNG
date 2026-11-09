@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "feed entries at an ICANN public suffix under psl_feed_icann_policy = honor (Wildcard Blocking off; the policy needs the PSL on its own)",
+  "description": "both feed-at-suffix policies honor and Wildcard Blocking off: nothing enables the public-suffix list (the file is present but never read), so feed entries at a suffix are kept as listed; the control for psl-icann-policy-apex and psl-icann-policy-ignore",
   "module": {
     "ini": {
       "MAIN": {

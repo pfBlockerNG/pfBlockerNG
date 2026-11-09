@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "description": "TOP1M on, Wildcard Blocking on: an unmarked Group writes the zone key after a marked Group, so the key is no longer filtered and the unmarked entry blocks even a name TOP1M lists",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {"top1m_enabled": true},
+      "feeds": [
+        {"raw": "pfb_py_raw/marked.txt", "feed": "MarkedFeed", "group": "MarkedGroup", "log_flag": "1", "top1m": true},
+        {"raw": "pfb_py_raw/unmarked.txt", "feed": "UnmarkedFeed", "group": "UnmarkedGroup", "log_flag": "0"}
+      ]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "example",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_top1m.txt": ["later.example", "solo.example"],
+      "pfb_py_raw/marked.txt": ["later.example", "solo.example"],
+      "pfb_py_raw/unmarked.txt": ["later.example"]
+    }
+  },
+  "upstream": {
+    "solo.example. A": ["solo.example. 300 IN A 192.0.2.10"]
+  },
+  "cases": [
+    {
+      "id": "unmarked-writer-after-a-marked-one-blocks-the-listed-name",
+      "family": "top1m",
+      "description": "later.example is listed by TOP1M, written by the marked Group and then by the unmarked one: the unmarked entry (null answer) blocks it",
+      "query": {"name": "later.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["later.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "unmarked-writer-after-a-marked-one-blocks-the-www-form",
+      "family": "top1m",
+      "description": "the www. form of the listed name is blocked by the same unmarked entry",
+      "query": {"name": "www.later.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["www.later.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "unmarked-writer-after-a-marked-one-owns-the-whole-zone",
+      "family": "top1m",
+      "description": "an unlisted subdomain is answered by the unmarked entry (null), not the marked one (VIP): the unmarked Group wrote the key last",
+      "query": {"name": "sub.later.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["sub.later.example. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "marked-only-zone-still-yields-for-the-listed-name",
+      "family": "top1m",
+      "description": "the control: solo.example is written by the marked Group alone, so its zone yields for the listed name",
+      "query": {"name": "solo.example.", "type": "A"},
+      "expect": {
+        "decision": "relay",
+        "forwards": ["solo.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["solo.example. 300 IN A 192.0.2.10"],
+        "authority": []
+      }
+    }
+  ]
+}
