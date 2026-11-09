@@ -107,8 +107,14 @@ function pfb_stats_window_log(string $path, string $since): ?string {
 	fseek($source, pfb_log_window_offset($path, 0, $since));
 	$target = tempnam(sys_get_temp_dir(), 'pfb-stats-');
 	if ($target !== FALSE) {
-		// Nothing after the copy loop runs if the request dies in it (fatal error, time limit, exit).
-		register_shutdown_function(static fn () => @unlink($target));
+		// Nothing after the copy loop runs if the request dies in it (fatal error, time limit, exit). A forked child
+		// inherits this function: only the process that made the file may remove it, and only if it is still there.
+		$owner = getmypid();
+		register_shutdown_function(static function () use ($target, $owner): void {
+			if (getmypid() === $owner && is_file($target)) {
+				unlink($target);
+			}
+		});
 	}
 	$copy = $target === FALSE ? FALSE : @fopen($target, 'wb');
 	if ($target === FALSE || $copy === FALSE) {

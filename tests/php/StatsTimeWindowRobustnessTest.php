@@ -252,6 +252,45 @@ PHP
 		$this->assertDirectoryDoesNotExist($dir);
 	}
 
+	/**
+	 * pcntl_fork() copies the shutdown functions: a forked worker (the Tick tests fork) that exits runs the cleanup the
+	 * parent registered for its window log. The child must neither delete the parent's file nor fail when the parent
+	 * already removed it (a warning raised there reaches PHPUnit's handler outside any test and kills the child).
+	 */
+	public function testAForkedChildNeverTouchesTheParentsWindowLog(): void
+	{
+		if (!function_exists('pcntl_fork') || !function_exists('pcntl_waitpid')) {
+			$this->markTestSkipped('pcntl is unavailable');
+		}
+		foreach ([TRUE, FALSE] as $parentStillHasIt) {
+			$this->withFile("2030-01-15 13:00:00,row\n", function (string $path) use ($parentStillHasIt): void {
+				$out = pfb_stats_window_log($path, self::SINCE);
+				$this->assertIsString($out);
+				try {
+					if (!$parentStillHasIt) {
+						unlink($out); // what the page does once the panels are built
+						$this->assertFileDoesNotExist($out);
+					}
+					$pid = pcntl_fork();
+					$this->assertNotSame(-1, $pid, 'fork failed');
+					if ($pid === 0) {
+						exit(0); // a worker's normal end: the inherited shutdown functions run here
+					}
+					pcntl_waitpid($pid, $status);
+					$this->assertTrue(pcntl_wifexited($status), 'the child did not exit normally');
+					$this->assertSame(0, pcntl_wexitstatus($status), 'the child failed in its shutdown functions');
+					if ($parentStillHasIt) {
+						$this->assertFileExists($out, "a forked child removed the parent's window log");
+					}
+				} finally {
+					if (is_file($out)) {
+						unlink($out);
+					}
+				}
+			});
+		}
+	}
+
 	/** @return array<string, array{string, string}> */
 	public static function dstFallbacks(): array
 	{
