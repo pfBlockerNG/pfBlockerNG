@@ -202,7 +202,7 @@ func TestConfigParserLineWithoutDelimiterIsAParsingErrorAfterTheFullRead(t *test
 
 func TestConfigParserBasicInterpolation(t *testing.T) {
 	c := cfgParse(t, "[DEFAULT]\ndflt = from-default\n[M]\nesc = 100%%\nref = %(esc)s!\nviaDefault = %(dflt)s\nnested = a%%b %(esc)s\n"+
-		"missing = %(zz)s\nbare = 5%\nother = %x\nunterminated = %(esc\nbadconv = %(esc)x\nself = %(self)s\nping = %(pong)s\npong = %(ping)s\n")
+		"missing = %(zz)s\nbare = 5%\nother = %x\nunterminated = %(esc\nbadconv = %(esc)x\nempty = %()s\nself = %(self)s\nping = %(pong)s\npong = %(ping)s\n")
 	cfgGet(t, c, "M", "esc", "100%")
 	cfgGet(t, c, "M", "ref", "100%!") // %(name)s whose value itself holds %% is interpolated again
 	cfgGet(t, c, "M", "viaDefault", "from-default")
@@ -216,6 +216,7 @@ func TestConfigParserBasicInterpolation(t *testing.T) {
 		{"other", "'%' must be followed by '%' or '('"},
 		{"unterminated", "bad interpolation variable reference"},
 		{"badconv", "bad interpolation variable reference"}, // %(name) needs the trailing 's'
+		{"empty", "bad interpolation variable reference"},   // _KEYCRE %\(([^)]+)\)s needs a non-empty name
 		{"self", "Recursion limit exceeded"},
 		{"ping", "Recursion limit exceeded"},
 	} {
