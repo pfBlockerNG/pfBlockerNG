@@ -19,9 +19,98 @@
  * limitations under the License.
  */
 
-function pfb_stats_definitions(string $alert_view, $pfbchartcnt): array {
+/** #3773: the shared Stats range: a requested key of $options, else the saved default, else 24 hours. */
+function pfb_stats_range(?string $requested, string $saved, array $options): string {
+	foreach ([$requested, $saved] as $range) {
+		if ($range !== NULL && array_key_exists($range, $options)) {
+			return $range;
+		}
+	}
+	return '24';
+}
+
+/** Local-time lower bound of a range in the log timestamp format; NULL ('max') means no bound. */
+function pfb_stats_since(string $range, ?int $now = NULL): ?string {
+	return $range === 'max' ? NULL : date('Y-m-d H:i:s', ($now ?? time()) - (int) $range * 3600);
+}
+
+/**
+ * Byte offset of the first line a window starting at $since can need: a line start with no line dated at or after
+ * $since before it. Logs grow in time order with under an hour of skew, so this binary-searches for the first line dated
+ * at or after $since - 1 h; lines without an ISO date in field $date_index never decide a probe. 0 if unreadable.
+ */
+function pfb_log_window_offset(string $path, int $date_index, string $since): int {
+	$cutoff = strtotime($since);
+	$handle = $cutoff === FALSE ? FALSE : @fopen($path, 'rb');
+	$stat = $handle === FALSE ? FALSE : fstat($handle);
+	if ($handle === FALSE || $stat === FALSE) {
+		return 0;
+	}
+	$threshold = date('Y-m-d H:i:s', $cutoff - 3600);
+	$lo = 0;
+	$hi = $best = $stat['size'];
+	// No line starting in [$hi, $best) has an ISO date; $best is the first known line at or after the threshold.
+	while ($lo < $hi) {
+		$mid = $lo + intdiv($hi - $lo, 2);
+		fseek($handle, max(0, $mid - 1));
+		if ($mid > 0) {
+			fgets($handle); // finish the line holding byte $mid - 1: the probe starts at a line start
+		}
+		$found = NULL;
+		while (($start = ftell($handle)) < $hi && ($line = fgets($handle)) !== FALSE) {
+			$date = explode(',', $line, $date_index + 2)[$date_index] ?? '';
+			if (preg_match('/^[0-9]{4}-/', $date) === 1) {
+				$found = [$start, ftell($handle), $date >= $threshold];
+				break;
+			}
+		}
+		if ($found === NULL) {
+			$hi = $mid;
+		} elseif ($found[2]) {
+			$best = $hi = $found[0];
+		} else {
+			$lo = $found[1];
+		}
+	}
+	fclose($handle);
+	return $best;
+}
+
+/**
+ * Copy the lines of a log whose first field is an ISO date at or after $since to a new private temp file and return
+ * its path (the caller unlinks it); NULL if the log cannot be read or the copy fails.
+ */
+function pfb_stats_window_log(string $path, string $since): ?string {
+	$source = @fopen($path, 'rb');
+	if ($source === FALSE) {
+		return NULL;
+	}
+	$target = tempnam(sys_get_temp_dir(), 'pfb-stats-');
+	$copy = $target === FALSE ? FALSE : @fopen($target, 'wb');
+	if ($target === FALSE || $copy === FALSE) {
+		fclose($source);
+		return NULL;
+	}
+	fseek($source, pfb_log_window_offset($path, 0, $since));
+	$complete = TRUE;
+	while ($complete && ($line = fgets($source)) !== FALSE) {
+		$date = explode(',', $line, 2)[0];
+		if (preg_match('/^[0-9]{4}-/', $date) === 1 && $date >= $since) {
+			$complete = fwrite($copy, $line) === strlen($line);
+		}
+	}
+	fclose($source);
+	if (!fclose($copy) || !$complete) {
+		unlink($target);
+		return NULL;
+	}
+	return $target;
+}
+
+function pfb_stats_definitions(string $alert_view, string $range): array {
+$window = $range === 'max' ? 'All time' : "Last {$range} hours";
 if ($alert_view == 'dnsbl_stat') {
-$stats = array( 'dnsblchart'	=> array("DNSBL Event Timeline&emsp;<small>(Last <span id=\"range\">{$pfbchartcnt}</span> hours)</small>",'','', FALSE, ''),
+$stats = array( 'dnsblchart'	=> array("DNSBL Event Timeline&emsp;<small>({$window})</small>",'','', FALSE, ''),
 		'dnsbldomain'	=> array('Top Blocked Domain',			'Found', 'Blocked Domain(s)',	TRUE, 'domain'),
 		'dnsblevald'	=> array('Top Blocked Evaluated Domain (TLD)',	'Found', 'Blocked Domain(s)',	TRUE, 'domain'),
 		'dnsblgptotal'	=> array('Top Group Count',			'Found', 'DNSBL Group(s)',	FALSE, ''),
@@ -38,7 +127,7 @@ $stats = array( 'dnsblchart'	=> array("DNSBL Event Timeline&emsp;<small>(Last <s
 		'dnsbldate'	=> array('Top Date',				'Found', 'day(s) of logs',		FALSE, '') );
 }
 elseif ($alert_view == 'dnsbl_reply_stat') {
-$stats = array( 'replychart'	=> array("Reply Event Timeline&emsp;<small>(Last <span id=\"range\">{$pfbchartcnt}</span> hours)</small>",'','', FALSE, ''),
+$stats = array( 'replychart'	=> array("Reply Event Timeline&emsp;<small>({$window})</small>",'','', FALSE, ''),
 			'replydomain'	=> array('Top Reply Domain',			'Found', 'Reply Domain(s)',	FALSE, 'domain'),
 			'replytld'	=> array('Top Reply TLD',			'Found', 'Reply TLD(s)',	FALSE, ''),
 			'replytld2'	=> array('Top Reply TLD 2nd level',		'Found', 'Reply TLD(s)',	FALSE, ''),
@@ -54,7 +143,7 @@ $stats = array( 'replychart'	=> array("Reply Event Timeline&emsp;<small>(Last <s
 			'replydate'	=> array('Top Date',				'Found', 'day(s) of logs',	FALSE, ''));
 }
 else {
-	$stats = array(	'ipchart'	=> array("IP Event Timeline&emsp;<small>(Last <span id=\"range\">{$pfbchartcnt}</span> hours)</small>",'','', FALSE, ''),
+	$stats = array(	'ipchart'	=> array("IP Event Timeline&emsp;<small>({$window})</small>",'','', FALSE, ''),
 			'ipsrcipin'	=> array("Top SRC IP Inbound (by GeoIP)",	'Found', 'SRC IP(s)',		TRUE, 'host'),
 			'ipsrcipout'	=> array("Top SRC IP Outbound (by GeoIP)",	'Found', 'SRC IP(s)',		TRUE, 'host'),
 			'ipdstipin'	=> array("Top DST IP Inbound (by GeoIP)",	'Found', 'DST IP(s)',		TRUE, 'host'),
@@ -315,7 +404,7 @@ function pfb_stats_panel(string $stat_type, array $stype, array $summary, $pfbma
 	return ['id' => $stat_type, 'html' => (string) ob_get_clean(), 'pie' => $pie];
 }
 
-function pfb_stats_panels(array $definitions, array $summaries, array $hidden, $pfbmaxtable, array $local_hosts, array $ranges): array {
+function pfb_stats_panels(array $definitions, array $summaries, array $hidden, $pfbmaxtable, array $local_hosts): array {
 	global $pfb;
 	$panels = [];
 	foreach ($definitions as $id => $definition) {
@@ -323,11 +412,7 @@ function pfb_stats_panels(array $definitions, array $summaries, array $hidden, $
 			continue;
 		}
 		if (in_array($id, ['dnsblchart', 'replychart', 'ipchart'], TRUE)) {
-			$html = '<div id="chart" class="d3-chart" style="overflow: hidden;"><div class="btn-group navbar-right" style="margin-right: 10px;"><ul class="navbar-nav"><a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-expanded="false">Date Range <span class="caret"></span></a><ul class="dropdown-menu" role="menu" style="padding: 1px; font-size: smaller;">';
-			foreach ($ranges as $range => $label) {
-				$html .= '<li id="chartEvent" value="' . pfb_hsc((string) $range) . '"><a href="#" class="navlnk">' . pfb_hsc($label) . '</a></li>';
-			}
-			$panels[] = ['id' => $id, 'html' => $html . '</ul></ul></div></div>', 'pie' => NULL];
+			$panels[] = ['id' => $id, 'html' => '<div id="chart" class="d3-chart" style="overflow: hidden;"></div>', 'pie' => NULL];
 		} else {
 			$panels[] = pfb_stats_panel($id, $definition, $summaries[$id] ?? [], $pfbmaxtable, $local_hosts);
 		}

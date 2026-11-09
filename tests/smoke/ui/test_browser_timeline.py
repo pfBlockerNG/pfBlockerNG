@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -11,6 +10,7 @@ import pytest
 from .. import helpers
 from .test_alerts_render_verify import _backup_seeded_files, _restore_seeded_files
 from .test_browser_stats import _open, _shot
+from .test_stats_progressive import _vm_hours
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -70,12 +70,9 @@ def _put(vm: helpers.SmokeVM, path: str, content: str) -> None:
     assert result.returncode == 0, f"write {path}: {result.stderr}"
 
 
-def _rows(view: str, count: int) -> str:
-    start = datetime(2025, 1, 1)
+def _rows(view: str, stamps: list[str]) -> str:
     rows = []
-    for i in range(count):
-        date = start + timedelta(hours=i)
-        stamp = date.strftime("%Y-%m-%d %H:00:00")
+    for stamp in stamps:
         if view == "dnsbl_stat":
             rows.append(f"DNSBL-python,{stamp},timeline.com,192.0.2.1,Python,DNSBL,Timeline,Match,Timeline,+,A\n")
         elif view == "dnsbl_reply_stat":
@@ -91,6 +88,16 @@ def _show_timeline(page: Page, view: str) -> None:
     kind = {"dnsbl_stat": "dnsblchart", "dnsbl_reply_stat": "replychart"}.get(view, "ipchart")
     page.locator(f"#Alert_Stats_{kind}").scroll_into_view_if_needed()
     pytest.importorskip("playwright.sync_api").expect(page.locator("#chart")).to_be_attached()
+
+
+def _pick_range(page: Page, view: str, hours: int) -> None:
+    """Choose the shared Time range: the page reloads with it, and the timeline is redrawn for that window."""
+    expect = pytest.importorskip("playwright.sync_api").expect
+    with page.expect_navigation(wait_until="domcontentloaded"):
+        page.locator("#Alert_Stats_Range").select_option(str(hours))
+    page.wait_for_load_state("networkidle")
+    expect(page.locator("#Alert_Stats_Range")).to_have_value(str(hours))
+    _show_timeline(page, view)
 
 
 @pytest.mark.parametrize(
@@ -120,14 +127,13 @@ def test_timeline_labels_fit_on_range_redraw_and_resize(
     try:
         for key, value in keys.items():
             helpers.config_set(vm, key, value)
-        _put(vm, path, _rows(view, 8064))
+        stamps = _vm_hours(vm, 8064)
+        _put(vm, path, _rows(view, stamps))
         page.set_viewport_size({"width": 1440, "height": 1000})
         _open(page, webui, f"/pfblockerng/pfblockerng_alerts.php?view={view}")
         _show_timeline(page, view)
         for count in (24, 168, 8064):
-            page.locator("#chart .dropdown-toggle").click()
-            page.locator(f'#chartEvent[value="{count}"] a').click()
-            page.wait_for_function("n => document.querySelector('#range').textContent == n", arg=str(count))
+            _pick_range(page, view, count)
             for width in (1440, 320, 768, 1024, 1440):
                 page.set_viewport_size({"width": width, "height": 1000})
                 assert_timeline_geometry(page, count)
@@ -137,10 +143,10 @@ def test_timeline_labels_fit_on_range_redraw_and_resize(
         tooltip = page.locator(".nvtooltip").last
         expect = pytest.importorskip("playwright.sync_api").expect
         expect(tooltip).to_be_visible()
-        expected_date = (datetime(2025, 1, 1) + timedelta(hours=8063)).strftime("%Y-%m-%d (%H)")
+        expected_date = f"{stamps[-1][:10]} ({stamps[-1][11:13]})"
         assert expected_date in tooltip.inner_text(), tooltip.inner_text()
         for count in (1, 0):
-            _put(vm, path, _rows(view, count))
+            _put(vm, path, _rows(view, _vm_hours(vm, count)))
             _open(page, webui, f"/pfblockerng/pfblockerng_alerts.php?view={view}")
             _show_timeline(page, view)
             assert_timeline_geometry(page, count)

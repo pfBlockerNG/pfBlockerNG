@@ -31,11 +31,25 @@ VIEWS = (
 )
 
 
-def _rows(prefix: str, domain: str, hours: int = 3) -> str:
+def _vm_hours(vm: helpers.SmokeVM, count: int) -> list[str]:
+    """``count`` hourly stamps from the appliance clock, oldest first: ``now - 30 min - i h``.
+
+    A ``count``-hour window then holds exactly these rows, with 30 min of slack at both edges.
+    """
+    if not count:
+        return []
+    stamp = "date('Y-m-d H:i:s', time() - 1800 - $i * 3600)"
+    expr = f"implode('|', array_map(fn (int $i): string => {stamp}, range(0, {count - 1})))"
+    return helpers._php_read_scalar(vm, "", expr).split("|")[::-1]
+
+
+def _rows(prefix: str, domain: str, stamps: list[str] | None = None) -> str:
     stream = io.StringIO()
     writer = csv.writer(stream, lineterminator="\n")
-    for index in range(hours):
-        stamp = (datetime(2031, 2, 15, 9) + timedelta(hours=index)).strftime("%Y-%m-%d %H:%M:%S")
+    # Future-dated by default: inside every range, whatever the appliance clock says.
+    for stamp in stamps or [
+        (datetime(2031, 2, 15, 9) + timedelta(hours=index)).strftime("%Y-%m-%d %H:%M:%S") for index in range(3)
+    ]:
         if prefix == "dnsbl":
             writer.writerow(["DNSBL", stamp, domain, "192.0.2.1", "Python", "TLD", "Group", domain, "Feed", "+", "A"])
         else:
@@ -87,7 +101,7 @@ def test_stats_progressive_shell_real_payload_and_lazy_panels(
     with _stats_log(smoke_vm, log, preference, _rows(prefix, domain)):
         page.set_viewport_size({"width": 1024, "height": 320})
         try:
-            page.goto(webui.url(f"{ALERTS}?view={view}"), wait_until="domcontentloaded", timeout=90_000)
+            page.goto(webui.url(f"{ALERTS}?view={view}&range=24"), wait_until="domcontentloaded", timeout=90_000)
             # Baseline RED must be this missing loading contract, not a route timeout.
             _expect()(page.locator("#Alert_Stats_Loading")).to_have_attribute("aria-busy", "true")
             _expect()(page.locator("#Alert_Stats_Status")).to_have_attribute("role", "status")
@@ -133,10 +147,15 @@ def test_stats_progressive_shell_real_payload_and_lazy_panels(
             page.locator(f"#Alert_Stats_A_{prefix}domain").click()
             page.locator(f"#Alert_Stats_A_{prefix}domain").click()
             _reveal(page, f"{prefix}chart")
-            page.locator("#chart .dropdown-toggle").click()
-            page.locator('[id="chartEvent"][value="168"] a').click()
-            _expect()(page.locator("#range")).to_have_text("168")
-            assert len(requests) == 1, "Expand/range fetched the log again"
+            assert len(requests) == 1, "Expanding panels fetched the log again"
+            # The shared range reloads every panel: exactly one more data request, carrying the new range.
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                page.locator("#Alert_Stats_Range").select_option("168")
+            _expect()(page.locator("html")).to_have_attribute("data-stats-request-held", "true")
+            assert len(held) == 1 and len(requests) == 2, "A range change must fetch the log exactly once"
+            assert parse_qs(requests[1].split("?", 1)[1])["range"] == ["168"]
+            held.pop().continue_()
+            _ready(page)
             assert page.locator("#iform_stats form").count() == 0
             # Lazy action buttons must submit through the native outer CSRF form.
             if prefix == "reply":
@@ -211,7 +230,7 @@ def test_stats_progressive_transport_error_retry_is_real(
 @pytest.mark.ui_browser
 @pytest.mark.parametrize(("view", "log", "preference", "prefix"), VIEWS)
 @pytest.mark.parametrize("width", [320, 768, 1024, 1440])
-def test_stats_progressive_timeline_geometry_and_retained_ranges(
+def test_stats_progressive_timeline_geometry_and_shared_ranges(
     browser_page: Page,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
@@ -224,15 +243,18 @@ def test_stats_progressive_timeline_geometry_and_retained_ranges(
     page = browser_page
     requests: list[str] = []
     page.on("request", lambda request: requests.append(request.url) if "stats_data=1" in request.url else None)
-    with _stats_log(smoke_vm, log, preference, _rows(prefix, helpers.unique_domain(), 30)):
+    stamps = _vm_hours(smoke_vm, 30)
+    with _stats_log(smoke_vm, log, preference, _rows(prefix, helpers.unique_domain(), stamps)):
         page.set_viewport_size({"width": width, "height": 768})
-        page.goto(webui.url(f"{ALERTS}?view={view}"), wait_until="domcontentloaded", timeout=90_000)
+        # Start on a range the loop changes, so every pick is a real change and reloads the page.
+        page.goto(webui.url(f"{ALERTS}?view={view}&range=8064"), wait_until="domcontentloaded", timeout=90_000)
         _ready(page)
-        _reveal(page, prefix + "chart")
         for count, bars in ((24, 24), (168, 30), (8064, 30), (24, 24)):
-            page.locator("#chart .dropdown-toggle").click()
-            page.locator(f'[id="chartEvent"][value="{count}"] a').click()
-            _expect()(page.locator("#range")).to_have_text(str(count))
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                page.locator("#Alert_Stats_Range").select_option(str(count))
+            _ready(page)
+            _reveal(page, prefix + "chart")
+            _expect()(page.locator("#Alert_Stats_Range")).to_have_value(str(count))
             _expect()(page.locator("#chart .nv-bar")).to_have_count(bars)
             geometry = page.locator("#chart svg").evaluate("""svg => ({
                 width: svg.getBoundingClientRect().width,
@@ -240,9 +262,12 @@ def test_stats_progressive_timeline_geometry_and_retained_ranges(
                     !Number.isFinite(Number(r.getAttribute('width'))) || Number(r.getAttribute('width')) < 0)
             })""")
             assert geometry["width"] > 0 and not geometry["bad"], geometry
+            oldest = stamps[-bars]
             page.locator("#chart .nv-bar").first.hover(force=True)
-            _expect()(page.locator(".nvtooltip").filter(has_text="2031-02-").last).to_be_visible()
-        assert len(requests) == 1
+            _expect()(
+                page.locator(".nvtooltip").filter(has_text=f"{oldest[:10]} ({oldest[11:13]})").last
+            ).to_be_visible()
+        assert len(requests) == 5, "Each load must fetch the log exactly once"
 
 
 @pytest.mark.ui_render

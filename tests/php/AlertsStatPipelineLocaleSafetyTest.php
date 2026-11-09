@@ -40,7 +40,7 @@ final class AlertsStatPipelineLocaleSafetyTest extends TestCase
 		}
 
 		eval(
-			'function pfb_alerts_oracle_default_stat_pipeline(string $cut_cmd, string $alert_log, string $agent_cmd, string $su_cmd, string $lc_bytes = \'\'): array {'
+			'function pfb_alerts_oracle_default_stat_pipeline(string $cut_cmd, string $stats_log, string $agent_cmd, string $su_cmd, string $lc_bytes = \'\'): array {'
 			. ' $stats = [];'
 			. $execLine
 			. ' return $stats; }'

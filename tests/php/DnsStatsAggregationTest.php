@@ -20,6 +20,7 @@ final class DnsStatsAggregationTest extends TestCase
 		$code = substr($source, $start, $end - $start) . "\n}";
 		$stats_data = TRUE;
 		$alert_summary = TRUE;
+		$stats_since = NULL; // the collector's new range window (#3773): NULL = every record, as before
 		$alert_view = $view;
 		$pfbdnsblstat = $pfbdnsblreplystat = $pfbblockstat = $pfbpermitstat = $pfbmatchstat = $hidden;
 		$pfb = ['cut' => 'cut', 'grep' => 'grep', 'sed' => 'sed', 'awk' => 'awk'];

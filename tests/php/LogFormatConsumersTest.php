@@ -577,7 +577,7 @@ EOT;
 	public function testTopAsnStatPipelineSourceHasSchemaGate(): void
 	{
 		$source = $this->codeSource(self::ALERTS_PHP);
-		$needle = "{\$pfb['awk']} -F',' 'NF == 23' {\$alert_log} | {\$cut_cmd} | {\$agent_cmd} {\$su_cmd} | sort -nr 2>&1";
+		$needle = "{\$pfb['awk']} -F',' 'NF == 23' {\$stats_log} | {\$cut_cmd} | {\$agent_cmd} {\$su_cmd} | sort -nr 2>&1";
 		$this->assertStringContainsString($needle, $source, "pfblockerng_alerts.php's Top ASN ('ipasn') pipeline changed -- update this oracle");
 		$this->assertSame(
 			1,

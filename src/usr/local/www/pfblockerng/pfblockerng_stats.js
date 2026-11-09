@@ -22,7 +22,8 @@
 	const configElement = document.getElementById('Alert_Stats_Config');
 	if (!configElement) { return; }
 	const config = JSON.parse(configElement.textContent);
-	const form = document.getElementById('iform_stats');
+	const picker = document.getElementById('Alert_Stats_Range');
+	const shown = picker.value;
 	const loading = document.getElementById('Alert_Stats_Loading');
 	const status = document.getElementById('Alert_Stats_Status');
 	const retry = document.getElementById('Alert_Stats_Retry');
@@ -31,7 +32,6 @@
 	let request = null;
 	let generation = 0;
 	let timeline = null;
-	let range = config.range;
 	let observer = null;
 
 	function fluidPie(id) {
@@ -60,8 +60,7 @@
 		const container = document.getElementById('chart');
 		if (!container || !payload) { return; }
 		destroyTimeline();
-		document.getElementById('range').textContent = range;
-		const data = payload.timeline.slice(-range);
+		const data = payload.timeline.slice();
 		const count = data.length;
 		if (count && count < 24) {
 			for (let i = 24 - count; i > 0; i--) {
@@ -223,16 +222,15 @@
 		}
 	}
 
-	function rangeClick(event) {
-		const choice = event.target.closest('[id="chartEvent"]');
-		if (!choice || !form.contains(choice)) { return; }
-		event.preventDefault();
-		const selected = Number(choice.getAttribute('value'));
-		if (Number.isInteger(selected) && selected > 0 && selected <= 8064) {
-			range = selected;
-			renderTimeline();
-		}
+	// One range for every panel (fetched or server-rendered): reload this URL with it, keeping view and other parameters.
+	function rangeChange() {
+		const url = new URL(location.href);
+		url.searchParams.set('range', picker.value);
+		location.assign(url);
 	}
+
+	// A page restored from the back/forward cache keeps its old data: show the range that data belongs to.
+	function restored() { picker.value = shown; }
 
 	function expanded(event) {
 		const panel = panels.get(event.target.id);
@@ -253,14 +251,16 @@
 		generation++;
 		if (request) { request.abort(); request = null; }
 		disposePanels();
-		form.removeEventListener('click', rangeClick);
+		picker.removeEventListener('change', rangeChange);
+		window.removeEventListener('pageshow', restored);
 		window.removeEventListener('resize', resize);
 		window.removeEventListener('pagehide', dispose);
 		$(document).off('shown.bs.collapse.pfbStats', expanded);
 		if (retry) { retry.removeEventListener('click', load); }
 	}
 
-	form.addEventListener('click', rangeClick);
+	picker.addEventListener('change', rangeChange);
+	window.addEventListener('pageshow', restored);
 	$(document).on('shown.bs.collapse.pfbStats', '.panel-body', expanded);
 	window.addEventListener('resize', resize);
 	window.addEventListener('pagehide', dispose);

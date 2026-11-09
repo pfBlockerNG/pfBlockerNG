@@ -4839,8 +4839,12 @@ function pfb_csv_field(string $value): string
 	return '"' . str_replace('"', '""', $value) . '"';
 }
 
-/** Aggregate enabled DNS statistics in one CSV scan; count is physical log lines. */
-function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
+/**
+ * Aggregate enabled DNS statistics in one CSV scan; count is physical log lines.
+ * With $since ('Y-m-d H:i:s', #3773) reading starts at pfb_log_window_offset() and only records with an ISO date field
+ * at or after $since are aggregated or counted; NULL reads every record.
+ */
+function pfb_dns_stats(string $path, array $stat_info, string $unknown, ?string $since = NULL): array
 {
 	$stats = array_fill_keys(array_keys($stat_info), []);
 	$chart = [];
@@ -4955,6 +4959,9 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 	};
 	$handle = $stat_info ? @fopen($path, 'r') : FALSE;
 	if ($handle !== FALSE) {
+		if ($since !== NULL) {
+			fseek($handle, pfb_log_window_offset($path, 1, $since));
+		}
 		while (($line = fgets($handle)) !== FALSE) {
 			// Quoted records may span physical lines; let the native CSV reader frame them.
 			if (str_contains($line, '"')) {
@@ -4964,19 +4971,26 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown): array
 				if ($fields === FALSE) {
 					break;
 				}
-				$total++;
+				$lines = 1;
 				// Count raw line boundaries even when EOF leaves a quoted field open.
 				$record_end = ftell($handle);
 				if ($next_line < $record_end) {
 					fseek($handle, $next_line);
 					while (ftell($handle) < $record_end && fgets($handle) !== FALSE) {
-						$total++;
+						$lines++;
 					}
 				}
 			} else {
 				$fields = explode(',', rtrim($line, "\r\n"));
-				$total++;
+				$lines = 1;
 			}
+			if ($since !== NULL) {
+				$date = $fields[1] ?? '';
+				if (preg_match('/^[0-9]{4}-/', $date) !== 1 || $date < $since) {
+					continue;
+				}
+			}
+			$total += $lines;
 			$record_bytes = str_contains($line, '"') ? $record_end - $next_line + strlen($line) : strlen($line);
 			if ($negative_column || count($fields) <= $max_column) {
 				$fields += $defaults;

@@ -480,7 +480,7 @@ $options_pfbchartcnt	= [	'24'	=> '24 Hrs (~1 Day)',
 				'2688'	=> '2688 Hrs (~4 Months)',
 				'4032'	=> '4032 Hrs (~6 Months)',
 				'8064'	=> '8064 Hrs (~1 Year)',
-				'max'	=> 'Unlimited'
+				'max'	=> 'All time'
 				];
 
 $options_pfbchartstyle	= [	'twotone'	=> 'Two-Tone',
@@ -1719,6 +1719,10 @@ foreach (config_get_path('interfaces', []) as $int) {
 // Collect DHCP hostnames/IPs
 $local_hosts = pfb_collect_localhosts();
 
+// #3773: one range for every Stats panel (and the JSON endpoint): ?range= if it is an option, else the saved default.
+$stats_range	= pfb_stats_range(is_string($_GET['range'] ?? NULL) ? $_GET['range'] : NULL, (string) $pfbchartcnt, $options_pfbchartcnt);
+$stats_since	= pfb_stats_since($stats_range);
+
 // Collect Alert Statistics
 $stats_timeline = [];
 $stat_hidden = array();
@@ -1817,7 +1821,7 @@ if ($alert_summary) {
 		if ($stats_data) {
 			$visible_stats = array_diff_key($stat_info, $stat_hidden);
 			$unknown_msg = $alert_view == 'dnsbl_stat' ? pfb_dnsbl_mechanism_labels()['enabled'] : 'Unknown';
-			$dns_stats = $visible_stats ? pfb_dns_stats($alert_log, $visible_stats, $unknown_msg) : ['stats' => [], 'chart' => []];
+			$dns_stats = $visible_stats ? pfb_dns_stats($alert_log, $visible_stats, $unknown_msg, $stats_since) : ['stats' => [], 'chart' => []];
 			$alert_stats[$alert_view] = $dns_stats['stats'];
 			if ($visible_stats) {
 				$alert_stats['count'][$alert_view] = $dns_stats['count'];
@@ -1828,6 +1832,12 @@ if ($alert_summary) {
 			}
 		}
 	} else {
+		// #3773: a range window is copied once to a private temp file that every pipeline below reads;
+		// 'max' reads the log itself. An unreadable log reads as an absent one.
+		$stats_log = $alert_log;
+		if ($stats_since !== NULL) {
+			$stats_log = pfb_stats_window_log($alert_log, $stats_since) ?? '';
+		}
 		// Total entry count for this view is constant across every $stat_info
 		// iteration (the log doesn't change mid-loop), so compute it once here
 		// instead of once per iteration (issue #809). The per-iteration assignment
@@ -1836,97 +1846,103 @@ if ($alert_summary) {
 		// as it does today.
 		// issue #1261: display-only total -- NULL (read failure) -> 0, same as the
 		// exec()-era `?: 0` fallback (a legitimately-empty file also yields 0).
-		$alert_log_total_count = file_exists($alert_log) ? (pfb_count_lines($alert_log) ?? 0) : 0;
+		try {
+			$alert_log_total_count = file_exists($stats_log) ? (pfb_count_lines($stats_log) ?? 0) : 0;
 
-		foreach ($stat_info as $stat_type => $column) {
-			if (isset($stat_hidden[$stat_type])) {
-				continue;
-			}
-
-			if (file_exists($alert_log)) {
-
-				$cut_cmd = "{$pfb['cut']} -d ',' -f{$column}";
-
-				$unknown_msg = 'Unknown';
-
-				$agent_cmd = '';
-
-				$stats = array();
-				switch ($stat_type) {
-					case 'ipdate':
-						// ISO date/time has 1 space token (not the old 3-token
-						// 'M j H:i:s'); the day bucket is the date field alone.
-						// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
-						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
-						$stats = array_reverse($stats);
-						break;
-					case 'ipchart':
-						$chart_rows = [];
-						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1", $chart_rows);
-						foreach ($chart_rows as $chart_row) {
-							$split = strrpos($chart_row, ',');
-							if ($split !== FALSE) {
-								$stats_timeline[] = ['edate' => substr($chart_row, 0, $split), 'ecount' => (int) substr($chart_row, $split + 1)];
-							}
-						}
-						break;
-					case 'ipsrcipin':
-						exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
-						break;
-					case 'ipsrcipout':
-						exec("{$lc_bytes}{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
-	 					break;
-					case 'ipdstipin':
-						exec("{$lc_bytes}{$cut_cmd},13,14 {$alert_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
-						break;
-					case 'ipdstipout':
-						exec("{$lc_bytes}{$cut_cmd},13,14,18 {$alert_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
-						break;
-					case 'ipsrcport':
-						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$su_cmd} | {$pfb['awk']} -F ' ' '\$2 <= 1024 || \$2 ~ /[a-zA-Z]/' | sort -nr 2>&1", $stats);
-						break;
-					case 'ipasn':
-						// issue #1369 (ADR-38 Amendment 3): no back-compat for log entries --
-						// only the new 23-field schema carries a plain ASN token at column 20
-						// (unchanged position: the 2 new columns were appended AFTER it). A
-						// pre-upgrade 21-field legacy row's column 20 is still the old
-						// pipe-blob text, and any other field count is malformed either way --
-						// gate on the exact new field count before extracting, so a legacy/
-						// malformed row is skipped silently instead of polluting the Top ASN
-						// count with blob noise.
-						exec("{$lc_bytes}{$pfb['awk']} -F',' 'NF == 23' {$alert_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
-						break;
-					default:
-						exec("{$lc_bytes}{$cut_cmd} {$alert_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
-						break;
+			foreach ($stat_info as $stat_type => $column) {
+				if (isset($stat_hidden[$stat_type])) {
+					continue;
 				}
 
-				if (!empty($stats)) {
-					foreach($stats as $key => $line) {
+				if (file_exists($stats_log)) {
 
-						// Remove last column for '-' and '+' indicator
-						$eol = substr($line, -2);
-						if ($eol == ' -' || $eol == ' +') {
-							continue;
-						}
+					$cut_cmd = "{$pfb['cut']} -d ',' -f{$column}";
 
-						$data = array_map('trim', explode(' ', trim($line), 2));
-						// issue #1792: a stat label of literally '0' is a real
-						// label -- only a MISSING/empty field reads "Unknown".
-						$alert_stats[$alert_view][$stat_type][pfb_is_empty($data[1] ?? NULL) ? $unknown_msg : $data[1]] = (int) $data[0];
+					$unknown_msg = 'Unknown';
+
+					$agent_cmd = '';
+
+					$stats = array();
+					switch ($stat_type) {
+						case 'ipdate':
+							// ISO date/time has 1 space token (not the old 3-token
+							// 'M j H:i:s'); the day bucket is the date field alone.
+							// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
+							exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
+							$stats = array_reverse($stats);
+							break;
+						case 'ipchart':
+							$chart_rows = [];
+							exec("{$lc_bytes}{$cut_cmd} {$stats_log} | cut -d ':' -f1 | uniq -c | {$chart_cmd} 2>&1", $chart_rows);
+							foreach ($chart_rows as $chart_row) {
+								$split = strrpos($chart_row, ',');
+								if ($split !== FALSE) {
+									$stats_timeline[] = ['edate' => substr($chart_row, 0, $split), 'ecount' => (int) substr($chart_row, $split + 1)];
+								}
+							}
+							break;
+						case 'ipsrcipin':
+							exec("{$lc_bytes}{$cut_cmd},13,14,18 {$stats_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
+							break;
+						case 'ipsrcipout':
+							exec("{$lc_bytes}{$cut_cmd},13,14 {$stats_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
+							break;
+						case 'ipdstipin':
+							exec("{$lc_bytes}{$cut_cmd},13,14 {$stats_log} | {$grep_cmd} ',out,' | {$sss_cmd} | {$pfb['sed']} 's/,in,/,/' 2>&1", $stats);
+							break;
+						case 'ipdstipout':
+							exec("{$lc_bytes}{$cut_cmd},13,14,18 {$stats_log} | {$grep_cmd} ',in,' | {$sss_cmd} | {$pfb['sed']} 's/,out,/,/' 2>&1", $stats);
+							break;
+						case 'ipsrcport':
+							exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$su_cmd} | {$pfb['awk']} -F ' ' '\$2 <= 1024 || \$2 ~ /[a-zA-Z]/' | sort -nr 2>&1", $stats);
+							break;
+						case 'ipasn':
+							// issue #1369 (ADR-38 Amendment 3): no back-compat for log entries --
+							// only the new 23-field schema carries a plain ASN token at column 20
+							// (unchanged position: the 2 new columns were appended AFTER it). A
+							// pre-upgrade 21-field legacy row's column 20 is still the old
+							// pipe-blob text, and any other field count is malformed either way --
+							// gate on the exact new field count before extracting, so a legacy/
+							// malformed row is skipped silently instead of polluting the Top ASN
+							// count with blob noise.
+							exec("{$lc_bytes}{$pfb['awk']} -F',' 'NF == 23' {$stats_log} | {$cut_cmd} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+							break;
+						default:
+							exec("{$lc_bytes}{$cut_cmd} {$stats_log} | {$agent_cmd} {$su_cmd} | sort -nr 2>&1", $stats);
+							break;
 					}
+
+					if (!empty($stats)) {
+						foreach($stats as $key => $line) {
+
+							// Remove last column for '-' and '+' indicator
+							$eol = substr($line, -2);
+							if ($eol == ' -' || $eol == ' +') {
+								continue;
+							}
+
+							$data = array_map('trim', explode(' ', trim($line), 2));
+							// issue #1792: a stat label of literally '0' is a real
+							// label -- only a MISSING/empty field reads "Unknown".
+							$alert_stats[$alert_view][$stat_type][pfb_is_empty($data[1] ?? NULL) ? $unknown_msg : $data[1]] = (int) $data[0];
+						}
+					}
+					else {
+						$alert_stats[$alert_view][$stat_type] = array();
+					}
+					// The exec is hoisted above the loop (issue #809); this assignment
+					// stays here so an all-hidden $stat_info leaves $alert_stats['count']
+					// unset for this view, exactly as before.
+					$alert_stats['count'][$alert_view] = $alert_log_total_count;
 				}
 				else {
-					$alert_stats[$alert_view][$stat_type] = array();
+					$alert_stats[$alert_view][$stat_type]	= array();
+					$alert_stats['count'][$alert_view]	= 0;
 				}
-				// The exec is hoisted above the loop (issue #809); this assignment
-				// stays here so an all-hidden $stat_info leaves $alert_stats['count']
-				// unset for this view, exactly as before.
-				$alert_stats['count'][$alert_view] = $alert_log_total_count;
 			}
-			else {
-				$alert_stats[$alert_view][$stat_type]	= array();
-				$alert_stats['count'][$alert_view]	= 0;
+		} finally {
+			if ($stats_since !== NULL && $stats_log !== '') {
+				unlink($stats_log);
 			}
 		}
 	}
@@ -1969,8 +1985,8 @@ if ($stats_data) {
 	$stats_payload = [
 		'total' => $alert_stats['count'][$alert_view] ?? NULL,
 		'timeline' => $stats_timeline,
-		'panels' => pfb_stats_panels(pfb_stats_definitions($alert_view, $pfbchartcnt), $alert_stats[$alert_view],
-			$stat_hidden, $pfbmaxtable, $local_hosts, $options_pfbchartcnt),
+		'panels' => pfb_stats_panels(pfb_stats_definitions($alert_view, $stats_range), $alert_stats[$alert_view],
+			$stat_hidden, $pfbmaxtable, $local_hosts),
 	];
 	echo json_encode($stats_payload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE);
 	exit;
@@ -3729,9 +3745,9 @@ $group->add(new Form_Select(
 	'',
 	$pfbchartcnt,
 	$options_pfbchartcnt
-))->setHelp('Chart Statistics - Number of logged hours to chart')
+))->setHelp('Statistics - Default Time range (logged hours) for every Statistics panel and Event Timeline; each Statistics page can change it with <strong>Time range</strong>')
   ->setWidth(4)
-  ->setAttribute('title', 'Select the Number of logged hours to chart')
+  ->setAttribute('title', 'Select the default Time range (logged hours) for Statistics')
   ->setAttribute('size', 15);
 
 $group->add(new Form_Select(
@@ -4813,16 +4829,16 @@ if (!$pfb['filterlogentries']):?>
 
 <?php
 $stats_progressive = in_array($alert_view, ['dnsbl_stat', 'dnsbl_reply_stat'], TRUE);
-$stats = pfb_stats_definitions($alert_view, $pfbchartcnt);
+$stats = pfb_stats_definitions($alert_view, $stats_range);
 $stats_payload = $stats_progressive ? NULL : [
 	'total' => $alert_stats['count'][$alert_view] ?? NULL,
 	'timeline' => $stats_timeline,
-	'panels' => pfb_stats_panels($stats, $alert_stats[$alert_view], $stat_hidden, $pfbmaxtable, $local_hosts, $options_pfbchartcnt),
+	'panels' => pfb_stats_panels($stats, $alert_stats[$alert_view], $stat_hidden, $pfbmaxtable, $local_hosts),
 ];
 $stats_config = [
-	'url' => $stats_progressive ? '/pfblockerng/pfblockerng_alerts.php?view=' . $alert_view . '&stats_data=1' : NULL,
+	'url' => $stats_progressive ? '/pfblockerng/pfblockerng_alerts.php?view=' . $alert_view . '&stats_data=1&range=' . $stats_range : NULL,
 	'payload' => $stats_payload,
-	'range' => (int) $pfbchartcnt, 'style' => $pfbchartstyle, 'color1' => $pfbchart1, 'color2' => $pfbchart2,
+	'style' => $pfbchartstyle, 'color1' => $pfbchart1, 'color2' => $pfbchart2,
 ];
 $stats_initial = [];
 foreach ($stats_payload['panels'] ?? [] as $index => $panel) {
@@ -4839,6 +4855,14 @@ foreach ($stats_payload['panels'] ?? [] as $index => $panel) {
 	<div class="panel-heading">
 		<h2 class="panel-title"><?=$alert_title;?> Statistics&emsp;<small>Total event(s):
 			&emsp;[ <span id="Alert_Stats_Total"><?=$stats_progressive ? '…' : ($stats_payload['total'] ?? '—')?></span> ]</small>
+			<span class="pull-right">
+				<label for="Alert_Stats_Range" style="font-weight: normal;"><?=gettext('Time range');?></label>
+				<select id="Alert_Stats_Range" name="range" class="form-control input-sm" style="display: inline-block; width: auto;" autocomplete="off">
+					<?php foreach ($options_pfbchartcnt as $range_value => $range_label): ?>
+					<option value="<?=pfb_hsc((string) $range_value);?>"<?=(string) $range_value === $stats_range ? ' selected' : '';?>><?=pfb_hsc($range_label);?></option>
+					<?php endforeach; ?>
+				</select>
+			</span>
 		</h2>
 	</div>
 </div>
@@ -4890,6 +4914,9 @@ if ($alertrefresh === PfbToggle::On) {
 
 	if (!empty($alert_view) && $alert_view != 'alert') {
 		$pageview .= "view={$alert_view}";
+		if ($alert_summary) {
+			$pageview .= "&range={$stats_range}";	// the validated option key: digits or 'max'
+		}
 	} else {
 		$pageview = '';
 	}
