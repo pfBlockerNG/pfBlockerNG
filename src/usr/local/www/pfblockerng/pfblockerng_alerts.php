@@ -1825,8 +1825,9 @@ if ($alert_summary) {
 			$visible_stats = array_diff_key($stat_info, $stat_hidden);
 			$unknown_msg = $alert_view == 'dnsbl_stat' ? pfb_dnsbl_mechanism_labels()['enabled'] : 'Unknown';
 			// #3773: "Top Blocked Group" is a SQLite counter (cumulative, see the widget statistics below). In a bounded
-			// window it counts the window's own events instead: the group is column 7 of dnsbl.log. A hidden panel
-			// is not scanned for, and does not make the total computed.
+			// window it counts the window's own events instead: the group is column 7 of dnsbl.log (keyed with the
+			// b_type, column 6, so the widget statistics can leave IDN alerts out). A hidden panel is not scanned for,
+			// and does not make the total computed.
 			$scan_stats = $visible_stats;
 			$window_groups = $alert_view == 'dnsbl_stat' && $stats_since !== NULL && !isset($stat_hidden['dnsblgpblock']);
 			if ($window_groups) {
@@ -1834,10 +1835,6 @@ if ($alert_summary) {
 			}
 			$dns_stats = $scan_stats ? pfb_dns_stats($alert_log, $scan_stats, $unknown_msg, $stats_since) : ['stats' => [], 'chart' => []];
 			$alert_stats[$alert_view] = $dns_stats['stats'];
-			if ($window_groups) {
-				// Rows without a group were counted under the unknown label: they are not a group.
-				unset($alert_stats[$alert_view]['dnsblgpblock'][$unknown_msg]);
-			}
 			if ($visible_stats) {
 				$alert_stats['count'][$alert_view] = $dns_stats['count'];
 			}
@@ -1848,10 +1845,15 @@ if ($alert_summary) {
 		}
 	} else {
 		// #3773: a range window is copied once to a private temp file that every pipeline below reads;
-		// 'max' reads the log itself. An unreadable log reads as an absent one.
+		// 'max' reads the log itself. A copy that fails for a log that exists (full /tmp, unreadable log) is logged,
+		// then reads as an absent log; a valid empty window is not a failure.
 		$stats_log = $alert_log;
 		if ($stats_since !== NULL) {
-			$stats_log = pfb_stats_window_log($alert_log, $stats_since) ?? '';
+			$window_log = pfb_stats_window_log($alert_log, $stats_since);
+			if ($window_log === NULL && file_exists($alert_log)) {
+				pfb_logger("\npfblockerng_alerts: Stats time-window copy of [ {$alert_log} ] FAILED; this view shows no events\n", 2);
+			}
+			$stats_log = $window_log ?? '';
 		}
 		// Total entry count for this view is constant across every $stat_info
 		// iteration (the log doesn't change mid-loop), so compute it once here
@@ -1999,11 +2001,18 @@ if ($alert_summary) {
 			unset($db_handle);
 		}
 
-		// #3773: a bounded window counted the groups from dnsbl.log (above); label them like the SQLite list does.
+		// #3773: a bounded window counted the groups from dnsbl.log keyed "group,b_type" (above). IDN homoglyph alerts
+		// are not blocks (and never reach the SQLite counter), so they do not count here; rows without a group are no
+		// group. Label the rest like the SQLite list does.
 		if ($window_groups) {
 			$group_blocks = array();
-			foreach ($alert_stats[$alert_view]['dnsblgpblock'] as $group => $count) {
-				$group = pfb_filter((string) $group, PFB_FILTER_HTML, 'alerts widget stat');
+			foreach ($alert_stats[$alert_view]['dnsblgpblock'] as $key => $count) {
+				$key = (string) $key;
+				$split = strrpos($key, ',');
+				if ($split === FALSE || substr($key, $split + 1) === 'Homoglyph_Alert') {
+					continue;
+				}
+				$group = pfb_filter(substr($key, 0, $split), PFB_FILTER_HTML, 'alerts widget stat');
 				if (empty($group)) {
 					continue;
 				}

@@ -76,16 +76,21 @@ final class DnsblGroupBlockedWindowTest extends TestCase
 	{
 		$stats = $this->collect(self::SINCE, []);
 		$this->assertSame(
-			['GroupOff&emsp;(Disabled)' => 5, 'GroupNew' => 2, 'GroupDeleted' => 1],
+			['GroupOff&emsp;(Disabled)' => 5, 'GroupTld' => 4, 'Comma,Group' => 3, 'GroupNew' => 2, 'GroupDeleted' => 1],
 			$stats['dnsbl_stat']['dnsblgpblock'],
-			'GroupOld (old blocks only) must be absent; a group with no entry in SQLite still counts; rows without a group do not'
+			'GroupOld (old blocks only) and GroupAlertOnly (alerts only) must be absent; the 3 alerts of GroupNew are not blocks; a group with no entry in SQLite still counts; rows without a group do not'
 		);
 		$this->assertSame(
 			['GroupNew' => 20, 'GroupOld' => 10, 'GroupOff&emsp;(Disabled)' => 0],
 			$stats['dnsbl_stat']['dnsblgptotal'],
 			'list sizes are not time based'
 		);
-		$this->assertSame(9, $stats['count']['dnsbl_stat'], 'the total counts the window\'s rows, whether or not the group panel is on');
+		$this->assertSame(24, $stats['count']['dnsbl_stat'], 'the total counts every in-window row, the 8 alerts included, whether or not the group panel is on');
+		$this->assertSame(
+			['DNSBL' => 12, 'Homoglyph_Alert' => 8, 'TLD' => 4],
+			$stats['dnsbl_stat']['dnsblmode'],
+			'the alerts stay in every other table'
+		);
 	}
 
 	public function testAllTimeKeepsTheCumulativeSqliteCounters(): void
@@ -112,7 +117,7 @@ final class DnsblGroupBlockedWindowTest extends TestCase
 	{
 		$stats = $this->collect(self::SINCE, self::LOG_STATS);
 		$this->assertSame(
-			['GroupOff&emsp;(Disabled)' => 5, 'GroupNew' => 2, 'GroupDeleted' => 1],
+			['GroupOff&emsp;(Disabled)' => 5, 'GroupTld' => 4, 'Comma,Group' => 3, 'GroupNew' => 2, 'GroupDeleted' => 1],
 			$stats['dnsbl_stat']['dnsblgpblock']
 		);
 		$this->assertArrayNotHasKey('count', $stats, 'every log category is hidden: the total stays uncomputed (null), as before');
@@ -126,13 +131,20 @@ final class DnsblGroupBlockedWindowTest extends TestCase
 	 */
 	private function collect(?string $since, array $hidden): array
 	{
-		$line = static fn (string $date, string $group): string => "DNSBL-python,{$date},blocked.example,192.0.2.1,Python,DNSBL,{$group},blocked.example,Feed,+,A\n";
+		$line = static fn (string $date, string $group, string $mode = 'DNSBL'): string => "DNSBL-python,{$date},blocked.example,192.0.2.1,Python,{$mode}," . pfb_csv_field($group) . ",blocked.example,Feed,+,A\n";
 		$log = $this->tempFile('pfb_gp_dnsbl_');
 		file_put_contents(
 			$log,
 			str_repeat($line('2030-01-10 08:00:00', 'GroupOld'), 3) . $line('2030-01-10 09:00:00', 'GroupNew') // before the window
 			. str_repeat($line('2030-01-16 08:00:00', 'GroupOff'), 5) . str_repeat($line('2030-01-16 09:00:00', 'GroupNew'), 2)
 			. $line('2030-01-16 10:00:00', 'GroupDeleted') . $line('2030-01-16 11:00:00', '')
+			// IDN homoglyph alerts (pfb_unbound.py::_log_idn_alert): real group, b_type "Homoglyph_Alert", never a block
+			. str_repeat($line('2030-01-16 12:00:00', 'GroupNew', 'Homoglyph_Alert'), 3)
+			. str_repeat($line('2030-01-16 13:00:00', 'GroupAlertOnly', 'Homoglyph_Alert'), 4)
+			// a group name with a comma (quoted in the CSV): the b_type is split off at the LAST comma
+			. str_repeat($line('2030-01-16 14:00:00', 'Comma,Group'), 3) . $line('2030-01-16 14:30:00', 'Comma,Group', 'Homoglyph_Alert')
+			// every b_type but "Homoglyph_Alert" is a block (TLD blocks, for one)
+			. str_repeat($line('2030-01-16 15:00:00', 'GroupTld', 'TLD'), 4)
 		);
 		$code = pfb_test_page_region(self::PAGE, '// Collect Alert Statistics', "if (\$stats_data) {\n\t\$stats_payload = [");
 		$scope = pfb_test_page_eval($code, [

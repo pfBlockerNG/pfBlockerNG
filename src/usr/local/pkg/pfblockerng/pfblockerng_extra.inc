@@ -4842,7 +4842,8 @@ function pfb_csv_field(string $value): string
 /**
  * Aggregate enabled DNS statistics in one CSV scan; count is physical log lines.
  * With $since ('Y-m-d H:i:s', #3773) reading starts at pfb_log_window_offset() and only records with an ISO date field
- * at or after $since are aggregated or counted; NULL reads every record.
+ * at or after $since are aggregated or counted; NULL reads every record. The 'dnsblgpblock' category is keyed
+ * "group,b_type" like 'dnsbldomain' is "domain,b_type", so its caller can tell blocks from IDN alerts.
  */
 function pfb_dns_stats(string $path, array $stat_info, string $unknown, ?string $since = NULL): array
 {
@@ -4865,7 +4866,7 @@ function pfb_dns_stats(string $path, array $stat_info, string $unknown, ?string 
 	foreach ($scan_info as $type => $column) {
 		if (in_array($type, $date_types, TRUE)) {
 			$groups[1] ??= [];
-		} elseif (in_array($type, ['dnsbldomain', 'dnsblevald', 'replysrcipd'], TRUE)) {
+		} elseif (in_array($type, ['dnsbldomain', 'dnsblevald', 'replysrcipd', 'dnsblgpblock'], TRUE)) {
 			$composites[$type] = $column - 1;
 		} else {
 			$groups[$column - 1][] = $type;
