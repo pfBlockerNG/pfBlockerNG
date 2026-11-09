@@ -37,8 +37,6 @@ var (
 	}
 )
 
-// FixtureError is a parity fixture the loader refuses; the message names the file, the case (when there is one) and
-// the field.
 type FixtureError string
 
 func (e FixtureError) Error() string { return string(e) }
@@ -92,13 +90,11 @@ type Scenario struct {
 	Cases             []Case
 }
 
-// Fixtures is the absolute path of tests/dns_proxy/fixtures/parity, found from this file so any package's test can use it.
+// Fixtures is derived from this source file's location, so it does not work under -trimpath.
 func Fixtures() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "tests", "dns_proxy", "fixtures", "parity")
 }
-
-// --- the loader: every defect is one FixtureError ---------------------------------------------------------------
 
 // fail panics with the FixtureError; the exported loaders turn it back into their error return.
 func fail(where, field, why string) {
@@ -119,7 +115,8 @@ func catch(run func()) (err error) {
 	return nil
 }
 
-// orderedObject is a JSON object with its keys in file order and each member's value as written.
+// orderedObject keeps the file order a Go map loses, and each member's raw bytes: the manifest is written back as the
+// fixture has it.
 type orderedObject struct {
 	keys []string
 	vals map[string]any
@@ -225,7 +222,6 @@ func readJSON(where string, data []byte) any {
 	return value
 }
 
-// objectOf is value as a JSON object with exactly the required keys plus any of the optional ones.
 func objectOf(value any, where, field string, required []string, optional ...string) *orderedObject {
 	object, ok := value.(*orderedObject)
 	if !ok {
@@ -327,7 +323,6 @@ func wireName(name, where, field string) string {
 	return name
 }
 
-// question is "<name> <TYPE>" as the name and the numeric type.
 func question(text, where, field string) (string, uint16) {
 	name, kind, found := strings.Cut(text, " ")
 	if !found {
@@ -352,7 +347,6 @@ func rrs(value any, where, field string) []dnswire.RR {
 	return out
 }
 
-// LoadFamilies reads families.json: the family names in file order and the source branch of each.
 func LoadFamilies(path string) (names []string, source map[string]string, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -471,7 +465,7 @@ func upstream(value any, where string) map[UpstreamKey][]string {
 	return zone
 }
 
-func caseOf(item any, index int, where string, families map[string]string, seen map[string]bool) Case {
+func parseCase(item any, index int, where string, families map[string]string, seen map[string]bool) Case {
 	whereCase := fmt.Sprintf("%s: cases[%d]", where, index)
 	if listed, ok := item.(*orderedObject); ok {
 		if id, ok := listed.vals["id"].(string); ok && id != "" {
@@ -530,7 +524,6 @@ func caseOf(item any, index int, where string, families map[string]string, seen 
 	}
 }
 
-// LoadScenario reads one scenario file; families is the families.json index (name -> source branch).
 func LoadScenario(path string, families map[string]string) (*Scenario, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -556,14 +549,12 @@ func scenarioFrom(where string, data []byte, families map[string]string) *Scenar
 	seen := map[string]bool{}
 	cases := make([]Case, len(items))
 	for index, item := range items {
-		cases[index] = caseOf(item, index, where, families, seen)
+		cases[index] = parseCase(item, index, where, families, seen)
 	}
 	return &Scenario{where, description, mod, zone, cases}
 }
 
-// --- the runner: the scenario's module directory, the queries and the verdict on each exchange ---------------------
-
-// WriteModule writes the files PHP would write for the decider. It links no shipped code: the Go decider reads no Python.
+// WriteModule links no shipped Python: the Go decider reads none.
 func WriteModule(root string, m Module) error {
 	var ini strings.Builder
 	for _, section := range m.Ini {
@@ -591,7 +582,6 @@ func WriteModule(root string, m Module) error {
 	return nil
 }
 
-// BuildQuery is a one-question query: id 0x1234, RD set, no EDNS.
 func BuildQuery(name string, qtype uint16) ([]byte, error) {
 	return dnswire.Encode(&dnswire.Message{
 		ID:        0x1234,
@@ -600,8 +590,7 @@ func BuildQuery(name string, qtype uint16) ([]byte, error) {
 	})
 }
 
-// FakeUnbound stands in for Unbound behind the decider: it answers from a table and keeps every query it is sent and
-// every reply it gave, so a relayed answer can be told from a rewritten one by its bytes.
+// FakeUnbound keeps each reply it gave, so a relayed ANSWER can be told from a rewritten one by its bytes.
 type FakeUnbound struct {
 	zone    map[UpstreamKey][]string
 	Queries [][]byte
@@ -644,7 +633,6 @@ func (u *FakeUnbound) Answer(wire []byte) ([]byte, error) {
 	return encoded, nil
 }
 
-// Decision is how the exchange went, by the contract's definitions of answer, relay and rewrite.
 func Decision(wire []byte, u *FakeUnbound, answer []byte) string {
 	if len(u.Queries) == 0 {
 		return "answer"
@@ -670,7 +658,6 @@ func rrTexts(rrs []dnswire.RR) []string {
 	return out
 }
 
-// Mismatches is one line per way the exchange differs from what the case expects; empty when it is the expected decision.
 func Mismatches(s *Scenario, c *Case, wire []byte, u *FakeUnbound, answer []byte) []string {
 	where := fmt.Sprintf("%s: case %s", s.Name, pyRepr(c.ID))
 	reply, err := dnswire.Parse(answer)
@@ -709,8 +696,7 @@ func Mismatches(s *Scenario, c *Case, wire []byte, u *FakeUnbound, answer []byte
 	return out
 }
 
-// --- Python's repr, so a refusal reads as the Python loader's --------------------------------------------------------
-
+// pyRepr formats a value as Python's repr, so a refusal reads as the Python loader's.
 func pyRepr(value any) string {
 	switch v := value.(type) {
 	case nil:

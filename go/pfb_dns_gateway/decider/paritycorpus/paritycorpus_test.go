@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -362,7 +363,7 @@ func TestTheUnknownFamilyMessageListsEveryFamilyInOrder(t *testing.T) {
 func TestTheLoaderRefusesAnUnreadableDocumentAsAFixtureError(t *testing.T) {
 	for name, row := range map[string]struct{ document, reason string }{
 		"key written twice":                 {`{"schema": 1, "schema": 2}`, `duplicate JSON key 'schema'`},
-		"nesting too deep to read":          {strings.Repeat("[", 100_000), ""},
+		"nesting too deep to read":          {strings.Repeat("[", 100_000), depthReason},
 		"empty file":                        {"", ""},
 		"cut off":                           {`{"schema": `, ""},
 		"text after the document":           {`{"schema": 1} {}`, ""},
@@ -376,6 +377,29 @@ func TestTheLoaderRefusesAnUnreadableDocumentAsAFixtureError(t *testing.T) {
 				t.Errorf("message %q must be %q then a reason containing %q", message, "bad.json: not a readable JSON document: ", row.reason)
 			}
 		})
+	}
+}
+
+var depthReason = fmt.Sprintf("nesting deeper than %d levels", maxDepth)
+
+// nestedSchema is a valid scenario whose "schema" holds arrays, so that the whole document nests `levels` deep (its own
+// object is the first level) and the first thing refused, past the JSON stage, is the schema field.
+func nestedSchema(t *testing.T, levels int) string {
+	d := good()
+	d.set("schema", raw(strings.Repeat("[", levels-1)+strings.Repeat("]", levels-1)))
+	return documentText(t, d)
+}
+
+func TestTheLoaderRefusesADocumentNestedPastTheCapAndReadsOneAtTheCap(t *testing.T) {
+	_, err := loadText(t, nestedSchema(t, maxDepth+1))
+	if got, want := refusalText(t, err), "bad.json: not a readable JSON document: "+depthReason; got != want {
+		t.Errorf("one level past the cap:\n got %q\nwant %q", got, want)
+	}
+
+	_, err = loadText(t, nestedSchema(t, maxDepth))
+	got := refusalText(t, err)
+	if strings.Contains(got, "not a readable JSON document") || !strings.HasPrefix(got, "bad.json: schema: must be the integer 1, got [[") {
+		t.Errorf("at the cap the JSON stage must pass and the schema field be what is refused: got %.120q", got)
 	}
 }
 
