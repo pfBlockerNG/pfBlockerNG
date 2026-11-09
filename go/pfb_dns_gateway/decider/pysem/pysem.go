@@ -15,7 +15,8 @@ import (
 // Lower is str.lower(): Go's simple case mapping plus str.lower()'s one multi-character mapping, U+0130 to "i" and
 // U+0307.
 // shortcut: no Final_Sigma (a word-final capital sigma lowers to σ, not ς) and Go's Unicode 17 case tables where
-// Python 3.11 has Unicode 14; neither changes an ASCII result, and every value the decider lowers today is ASCII.
+// Python 3.11 has Unicode 14; neither changes an ASCII result. tld_allow_list is free text PHP writes from the form,
+// so it can carry them: port Final_Sigma when its TLD Allow matcher is translated.
 func Lower(s string) string { return strings.ToLower(strings.ReplaceAll(s, "\u0130", "i\u0307")) }
 
 // IsSpace is str.isspace() for one character: Unicode White_Space plus the ASCII separators 0x1C-0x1F.

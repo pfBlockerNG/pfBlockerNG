@@ -379,6 +379,7 @@ func TestConfigParserKeepsTheLinesOfAnEightyThousandLineValue(t *testing.T) {
 			t.Errorf("%s: got %d bytes, err %v; want %d bytes equal to the joined lines", c.name, len(got), err, len(c.want))
 		}
 		// Appending each line to the value so far allocates gigabytes here; joining once allocates a few megabytes.
+		// TotalAlloc is process-wide: this holds only while no test in the package calls t.Parallel.
 		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<20 {
 			t.Errorf("%s: parsing allocated %d MiB, want under 64: the lines are not joined once", c.name, allocated>>20)
 		}
