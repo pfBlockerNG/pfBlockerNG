@@ -2695,8 +2695,14 @@ def restart_pfb_dns_if_hosting_dnsbl(vm: SmokeVM, *, timeout: float = 60.0) -> b
     )
     if host == "PFB-DNS-RESTARTED":
         return True
+    if host == "PFB-DNS-NOT-READY":
+        tail = vm.ssh(f"tail -n 40 {PFB_DNS_PROXY_LOG} 2>&1").stdout
+        raise RuntimeError(
+            f"restart_pfb_dns_if_hosting_dnsbl: pfB-DNS did not serve again after its restart; "
+            f"last 40 lines of {PFB_DNS_PROXY_LOG}:\n{tail}"
+        )
     if host != "UNBOUND":
-        raise RuntimeError(f"restart_pfb_dns_if_hosting_dnsbl: pfB-DNS did not serve again after its restart: {host!r}")
+        raise RuntimeError(f"restart_pfb_dns_if_hosting_dnsbl: unexpected host answer: {host!r}")
     return False
 
 

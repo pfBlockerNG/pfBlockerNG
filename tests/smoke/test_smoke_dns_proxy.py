@@ -53,7 +53,7 @@ What it proves, in file order:
 * readiness: a serving proxy has published its ready marker (``/var/unbound/pfb_dns_ready``: its own child pid, mode
   600, owned by unbound) and a healthy second ``start`` changes neither pids nor marker; ``lockf`` hands the start
   lock to the one run of the rc script and not to the daemon it launches (the lock is free while the proxy runs); two
-  ``start`` verbs racing leave exactly one supervisor and one child, and the same race without the lock is printed as
+  ``start`` verbs racing leave exactly one supervisor and one gateway, and the same race without the lock is printed as
   evidence;
 * pfB-DNS off + apply: the proxy and its pidfiles are gone, every Resolver key is back to its pre-toggle value (absent
   stays absent), the marker is cleared, ``unbound.conf`` has no python module again, Unbound is on 53 and 853 again
@@ -1964,6 +1964,7 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
     """
     vm = rig.vm
     before = _settled_pids(vm)
+    assert before.complete(), f"before: expected a gateway and a supervisor: {before}\n{_diagnostics(vm)}"
     command = vm.ssh(f"ps -o args= -p {before.gateway}").stdout.split()
     binary = command[0] if command else ""
     assert binary.startswith(f"{PAYLOAD_DIR}/") and binary.endswith("/pfb-dns"), (
@@ -2011,12 +2012,12 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
 def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
     """RACE_ROUNDS times: stop the proxy, run two `start`s at once, count what is left running.
 
-    Returns (supervisors, children, the two exit statuses) per round. The unlocked variant sets the rc script's own
+    Returns (supervisors, gateways, the two exit statuses) per round. The unlocked variant sets the rc script's own
     inner-run variable, which makes it skip lockf: the same script, with only the serialization taken away.
     A start returns once it has launched the proxy, not once the proxy serves. The locked race, which is asserted,
     is therefore counted when a proxy has published its ready marker naming a live process; a round whose proxy never
     does is stuck, not a count. The unlocked race is evidence only and promises no settled state (two supervisors
-    whose children cannot bind keep restarting them, and a start's removal of the marker can follow a proxy's
+    whose gateways cannot bind keep restarting them, and a start's removal of the marker can follow a proxy's
     write of it), so it is counted when both starts have returned and awaits nothing.
     """
     env = "" if locked else "PFB_DNS_PROXY_START_LOCKED=1 "
@@ -2040,8 +2041,8 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
         "  wait\n"
         f"{wait_for_proxy if locked else ''}"
         "  sup=$(ps -axww -o args= | grep -c 'daemon: pfb_dns_prox[y]')\n"
-        "  kids=$(ps -axww -o args= | awk '$1 ~ /\\/bin\\/freebsd-[a-z0-9]+\\/pfb-dns$/' | wc -l | tr -d ' ')\n"
-        '  echo "round=$i supervisors=$sup children=$kids rc=$(cat $s1)/$(cat $s2)"\n'
+        "  gateways=$(ps -axww -o args= | awk '$1 ~ /\\/bin\\/freebsd-[a-z0-9]+\\/pfb-dns$/' | wc -l | tr -d ' ')\n"
+        '  echo "round=$i supervisors=$sup gateways=$gateways rc=$(cat $s1)/$(cat $s2)"\n'
         "  rm -f $s1 $s2\n"
         "  i=$((i + 1))\n"
         "done\n"
@@ -2053,7 +2054,7 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
     stuck = [line for line in out.splitlines() if " stuck: " in line]
     if stuck:
         raise RuntimeError(f"STUCK/ENVIRONMENT: {stuck[0]}\nrace probe output:\n{out}")
-    rounds = [re.fullmatch(r"round=\d+ supervisors=(\d+) children=(\d+) rc=(\S+)", line) for line in out.splitlines()]
+    rounds = [re.fullmatch(r"round=\d+ supervisors=(\d+) gateways=(\d+) rc=(\S+)", line) for line in out.splitlines()]
     parsed = [(int(m.group(1)), int(m.group(2)), m.group(3)) for m in rounds if m]
     assert len(parsed) == RACE_ROUNDS, f"race probe output:\n{out}"
     return parsed
@@ -2065,7 +2066,7 @@ def test_starts_that_race_each_other_leave_exactly_one_proxy(rig: Rig, proxy_on:
 
     Given the proxy stopped before each of RACE_ROUNDS rounds,
     When two `start`s run at once,
-    Then both exit 0 and exactly one supervisor and one child are left, in every round;
+    Then both exit 0 and exactly one supervisor and one gateway are left, in every round;
       the same starts with the serialization taken away are printed too, as a snapshot taken when both starts had
       returned (not a race finding and not asserted: the proxies they launched may not have settled, and a race may
       or may not fire in a given run).
@@ -2074,12 +2075,12 @@ def test_starts_that_race_each_other_leave_exactly_one_proxy(rig: Rig, proxy_on:
     try:
         unlocked = _race(vm, locked=False)
         _say(
-            "unlocked starts, snapshot taken when both had returned (not a race finding; supervisors, children, "
+            "unlocked starts, snapshot taken when both had returned (not a race finding; supervisors, gateways, "
             f"exit statuses), per round: {unlocked}"
         )
         _force_stop_proxy(vm)
         locked = _race(vm, locked=True)
-        _say(f"locked start race (supervisors, children, exit statuses), per round: {locked}")
+        _say(f"locked start race (supervisors, gateways, exit statuses), per round: {locked}")
         assert all(round_ == (1, 1, "0/0") for round_ in locked), (
             f"two racing starts did not leave exactly one proxy: {locked}\n{_diagnostics(vm)}"
         )
@@ -2510,9 +2511,12 @@ def _gateway_exits_at_every_start(vm: SmokeVM) -> Iterator[None]:
         assert made.returncode == 0, f"making {GATEWAY_BINARIES} not executable failed: {made.stderr!r}"
         yield
     finally:
-        _force_stop_proxy(vm)
-        back = _sh(vm, f"chmod 0555 {GATEWAY_BINARIES}")
-        assert back.returncode == 0, f"putting the mode of {GATEWAY_BINARIES} back failed: {back.stderr!r}"
+        # The mode first: a failing stop must never leave the binaries 0444
+        try:
+            back = _sh(vm, f"chmod 0555 {GATEWAY_BINARIES}")
+            assert back.returncode == 0, f"putting the mode of {GATEWAY_BINARIES} back failed: {back.stderr!r}"
+        finally:
+            _force_stop_proxy(vm)
 
 
 @contextlib.contextmanager

@@ -242,7 +242,8 @@ def test_a_release_with_nothing_to_do_costs_one_php_read(monkeypatch: pytest.Mon
 
 
 class _PidVm:
-    """A guest that answers the gateway pidfile read with ``pidfile`` (exit status ``rc``); keeps what it is sent."""
+    """A guest that answers the gateway pidfile read with ``pidfile`` (exit status ``rc``); keeps what it is sent and
+    refuses any command that does not read the gateway's own pidfile (never the supervisor's)."""
 
     def __init__(self, pidfile: str, rc: int = 0) -> None:
         self.pidfile, self.rc = pidfile, rc
@@ -250,6 +251,8 @@ class _PidVm:
 
     def ssh(self, *argv: str, **_kw: object) -> SimpleNamespace:
         self.sent.append(argv)
+        (command,) = argv
+        assert "/var/run/pfb_dns_proxy.pid" in command and "pfb_dns_proxy_daemon" not in command, command
         return SimpleNamespace(returncode=self.rc, stdout=self.pidfile, stderr="cat: broken")
 
 
@@ -643,15 +646,21 @@ SS_ROWS = [helpers.SafeSearchEntry("a.example", "b.example", "", "")]
 
 def _arrange_safesearch(monkeypatch: pytest.MonkeyPatch, host: str) -> tuple[list[str], SimpleNamespace]:
     """Stub the SafeSearch injection's guest calls; ``host`` is what the DNSBL-host reload answers (fenced, as the
-    harness reads it)."""
+    harness reads it). ``vm.snippets`` holds every PHP snippet the injection ran; ``vm.ssh`` answers the gateway log
+    tail."""
     events: list[str] = []
-    vm = SimpleNamespace(ssh_argv=lambda *argv: list(argv))
+    vm = SimpleNamespace(
+        ssh_argv=lambda *argv: list(argv),
+        snippets=[],
+        ssh=lambda *_argv, **_kw: SimpleNamespace(returncode=0, stdout="LOG-TAIL: gateway exited", stderr=""),
+    )
 
     def run(_argv: list[str], **kwargs: object) -> SimpleNamespace:
         events.append("unbound bounce" if "unbound.pid" in str(kwargs.get("input", "")) else "append rows")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def php_eval(_vm: object, snippet: str, **_kw: object) -> SimpleNamespace:
+        vm.snippets.append(snippet)
         events.append("host reload")
         fenced = f"banner{helpers._CFG_VAL_OPEN}{host}{helpers._CFG_VAL_CLOSE}"
         return SimpleNamespace(returncode=0, stdout=fenced, stderr="")
@@ -684,10 +693,10 @@ def test_safesearch_rows_reload_in_unbound_while_unbound_hosts_dnsbl(monkeypatch
 
 def test_safesearch_injection_fails_loudly_when_pfb_dns_does_not_serve_again(monkeypatch: pytest.MonkeyPatch) -> None:
     """Given pfB-DNS serves DNSBL When it does not serve again after its restart
-    Then the injection raises with the product's reason."""
+    Then the injection raises with the tail of the gateway's log."""
     _events, vm = _arrange_safesearch(monkeypatch, "PFB-DNS-NOT-READY")
 
-    with pytest.raises(RuntimeError, match="PFB-DNS-NOT-READY"):
+    with pytest.raises(RuntimeError, match="LOG-TAIL: gateway exited"):
         helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
 
 
@@ -712,3 +721,17 @@ def test_safesearch_injection_does_not_mistake_a_failure_text_naming_unbound_for
         helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
 
     assert events == ["append rows", "host reload"], f"Unbound was bounced for a failed pfB-DNS restart: {events}"
+
+
+def test_safesearch_injection_picks_the_unbound_host_exactly_when_pfb_dns_does_not_host_the_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given the stubbed answer cannot tell a right selector from an inverted one
+    When the host reload is built Then Unbound is the host exactly when the product says pfB-DNS does not host the
+    DNSBL module (pfb_dns_proxy_hosts_module(): it owns the Resolver and DNSBL is active), not by proxy liveness."""
+    _events, vm = _arrange_safesearch(monkeypatch, "PFB-DNS-RESTARTED")
+
+    helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
+
+    selector = "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; }"
+    assert selector in vm.snippets[0], f"the host selector is not exactly {selector!r}:\n{vm.snippets[0]}"
