@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/netip"
@@ -9,10 +10,10 @@ import (
 	"testing"
 )
 
-// A panic inside the decider is a DROP, as an exception of the Python decider was (decision_service.serve answers it with
-// a DROP and logs one line per 30 seconds): it must not take the process down, and the next query is answered as usual.
-// The two panics here come inside one window, so one line is logged, with the panic value.
-func TestADeciderPanicIsADropLoggedOncePerWindowAndTheGatewayKeepsServing(t *testing.T) {
+// A panic inside the decider is a SERVFAIL, as an exception of the Python decider was (its resolve wrapper turned it into
+// MODULE_ERROR, a SERVFAIL, and logged one line per 30 seconds): it must not take the process down, and the next query is
+// answered as usual. The two panics here come inside one window, so one line is logged, with the panic value.
+func TestADeciderPanicIsAServfailLoggedOncePerWindowAndTheGatewayKeepsServing(t *testing.T) {
 	client, wire := netip.MustParseAddr(clientAllowed), buildQuery(t, 0x0042, "boom.example.", true)
 	var mu sync.Mutex
 	var lines []string
@@ -40,8 +41,8 @@ func TestADeciderPanicIsADropLoggedOncePerWindowAndTheGatewayKeepsServing(t *tes
 		return g.resolve(context.Background(), client, netip.Addr{}, clientUDP, wire, noForward(t))
 	}
 	for i := 1; i <= 2; i++ {
-		if got := ask(fmt.Sprintf("panicking query %d", i)); got != nil {
-			t.Fatalf("panicking query %d: reply %x, want none (a DROP)", i, got)
+		if got, want := ask(fmt.Sprintf("panicking query %d", i)), buildServfail(wire); !bytes.Equal(got, want) {
+			t.Fatalf("panicking query %d: reply %x, want SERVFAIL %x", i, got, want)
 		}
 	}
 	mu.Lock()

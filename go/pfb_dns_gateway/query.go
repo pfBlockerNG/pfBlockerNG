@@ -285,11 +285,11 @@ func (g *gateway) resolve(ctx context.Context, client, listener netip.Addr, tran
 const deciderFailureLogInterval = 30 * time.Second
 
 // decideSafely is g.decide that a panic of the decider cannot take the process down through: as an exception of the
-// Python decider was, the query is a DROP (nil) and the panic value is logged, at most once per deciderFailureLogInterval.
+// Python decider was, the query is answered SERVFAIL and the panic value is logged, at most once per deciderFailureLogInterval.
 func (g *gateway) decideSafely(wire []byte, clientIP string, fwd func([]byte) []byte, transport, listenerIP, listenerInterface string) (answer []byte) {
 	defer func() {
 		if r := recover(); r != nil {
-			answer = nil
+			answer = buildServfail(wire)
 			g.deciderFailure.Lock()
 			log := g.deciderFailure.logged.IsZero() || time.Since(g.deciderFailure.logged) >= deciderFailureLogInterval
 			if log {
@@ -297,7 +297,7 @@ func (g *gateway) decideSafely(wire []byte, clientIP string, fwd func([]byte) []
 			}
 			g.deciderFailure.Unlock()
 			if log {
-				g.logf("decider failed on a query, dropping it: %v", r)
+				g.logf("decider failed on a query, answering SERVFAIL: %v", r)
 			}
 		}
 	}()
