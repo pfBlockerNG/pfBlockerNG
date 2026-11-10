@@ -6785,12 +6785,14 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		$rc_changed = $before !== $after;
 		$mask = "/ --(?:(?:dot|doh|doq)-)?listen(?:-(?:53|443|853))? '[^']*'| --(?:dns-name-answer|ddr-doh-443|listener-interface) '[^']*'/";
 		$addresses_only = $rc_changed && preg_replace($mask, '', (string) $before) === preg_replace($mask, '', (string) $after);
+		// An rc script of the package before the one-binary gateway: its launch line had the Python decider after `--`
+		$old_decider = $rc_changed && preg_match('/ -- .*pfb_dns_proxy\.py/', (string) $before) === 1;
 		if ($deferred) {
 			if ($rc_changed) {
-				pfb_dns_proxy_defer_restart('its listen addresses or DoH/DoQ/DDR settings changed');
+				pfb_dns_proxy_defer_restart($old_decider ? 'its launch line changed to the one-binary gateway' : 'its listen addresses or DoH/DoQ/DDR settings changed');
 			}
 		} elseif ($rc_changed && !$addresses_only) {
-			$why = 'its ports or DoT/DoH/DoQ/DDR settings changed';
+			$why = $old_decider ? 'its launch line changed to the one-binary gateway' : 'its ports or DoT/DoH/DoQ/DDR settings changed';
 		} elseif (file_exists($pfb['dns_proxy_restart_pending'])) {
 			$why = 'a restart was deferred to this update';
 		} elseif (pfb_dns_proxy_ready()) {
