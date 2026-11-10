@@ -869,7 +869,7 @@ if (isset($_POST) && !empty($_POST)) {
 		// the whitelist so the block takes effect. (The dead file_put_contents into
 		// pfb_py_data/pfb_py_zone was removed: under ADR-06 the resolver builds the
 		// DNSBL structures from the manifest raws, never those legacy CSVs -- see
-		// pfb_unbound.py's 'if not dnsbl_built' guard.)
+		// the gateway's 'if not dnsbl_built' guard.)
 		$wl_base = $domain;
 		if (str_starts_with($wl_base, 'www.')) {
 			$wl_base = substr($wl_base, 4);
@@ -1507,10 +1507,10 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		// ADR-06 (#51): DNSBL is built by Unbound's python plugin from the per-feed
+		// ADR-06 (#51): DNSBL is built by the gateway from the per-feed
 		// manifest; the legacy pfb_py_whitelist.txt/pfb_py_data/pfb_py_zone files this
-		// handler once wrote are not read on the manifest path (only pfb_unbound.py's
-		// legacy CSV fallback still loads them), so writing them was a no-op. Lock/Unlock
+		// handler once wrote are read by nothing on the manifest path, so
+		// writing them was a no-op. Lock/Unlock
 		// now only toggles $pfb['dnsbl_unlock']; the resolver effect comes from
 		// regenerating the manifest's config.user_unlock from that store and reloading
 		// Unbound. Dispatch: pfb_dnsbl_unlock_action() (unit-tested); unknown action = no-op.
@@ -2154,7 +2154,7 @@ function pfb_match_filter_field($flent, $fields) {
 
 /* Render-time attribution model (docs/misc/alerts-reports-pipeline.md; perf: issue #809)
 
-   The logs already carry full event-time attribution: pfb_unbound.py writes the DNSBL/
+   The logs already carry full event-time attribution: the pfB-DNS gateway writes the DNSBL/
    DNS-reply verdicts, and the filterlog daemon (pfb_daemon_filterlog) resolves the bare
    pf event into rule/feed/GeoIP/rDNS/ASN once, at event time, caching in its ipcache.
    DNSBL rows therefore render their logged fields directly — no render-time lookup.

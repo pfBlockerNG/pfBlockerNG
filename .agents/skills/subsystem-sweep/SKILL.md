@@ -19,7 +19,7 @@ issues, process improvements become a PR against this skill.
 | # | Scope | Roots (source of truth) | Read first |
 |---|-------|--------------------------|------------|
 | 0 | release/publish plane | source `.github/workflows/{release,release-published,nightly,pkg-republish,pkg-tagged-ingest}.yml`, `scripts/{dispatch-pkg-publication.sh,build-*-portable.py,build-leg.sh}`, plus live `pfBlockerNG/pkg` `.github/workflows/{ingest,render-site}.yml`, `scripts/{publish_*.py,publish-pkg-repo.sh,render-pkg-site.sh,gen_landing.py,catalogue_assembly.py}`, `pkg-site/`, `docs/`, and Pages | `.agents/context/release.md`, `docs/misc/architecture-notes.md` (pkg repository) |
-| 1 | DNSBL/ABP pipeline | `src/usr/local/pkg/pfblockerng/pfb_unbound.py`, `list_scripts/`, manifest/swap/watcher paths in `pfblockerng.inc` | architecture-notes "DNSBL/ABP pipeline", `docs/misc/public-suffix-list.md` |
+| 1 | DNSBL/ABP pipeline | `go/pfb_dns_gateway/decider/`, `list_scripts/`, manifest/swap/watcher paths in `pfblockerng.inc` | architecture-notes "DNSBL/ABP pipeline", `docs/misc/public-suffix-list.md` |
 | 2 | IP alias tables + reload + scheduling | `pfblockerng.inc` alias/reload/cron code, `pfblockerng.sh` | architecture-notes ADR-40/43/11 |
 | 3 | Web UI + Alerts/Reports | `src/usr/local/www/**` | architecture-notes "Web UI test tiers", `docs/misc/alerts-reports-pipeline.md`, `.agents/context/lang-php.md` |
 | 4 | Agent ops + policy checkers + hooks | `scripts/agent/`, `scripts/check_*.py`, `.githooks/`, `.claude/hooks/`, `.agents/policy/` | `.agents/policy/delegation.md`, `testing.md` |

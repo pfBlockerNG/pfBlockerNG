@@ -395,7 +395,7 @@ Authorization = property of **write**, not call site (generalises
     explicit per-list IPv4 value. The synthesized DNSBLIP list has no row of its own, so it takes the
     global limits. The shared parser applies them only while IP-tab Suppression is on, and a changed
     limit takes effect on the next IP reparse (Run Now with Force: Parse, scope IP or Both).
-- **Python** (`pfb_unbound.py`): **`IdnMode` enum** keeps internal cases
+- **Gateway decider** (Go, `decider/pfb_unbound_idn.go`): **`IdnMode` enum** keeps internal cases
   `All = 'on'`, `Confusable = 'confusable'`, `Off = 'off'`. Present empty or legacy
   `'off'` ini value reads Off; absent `idn_mode` and unrecognised junk retain legacy
   `python_idn` fallback. Toggle enum has

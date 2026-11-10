@@ -154,7 +154,7 @@ enum PfbIdnMode: string implements PfbStoredEnum
 // pre-#2371 behaviour). Absent, present '', and any unknown/junk stored token all
 // read as Honor -- fail-safe, same "never silently drop or demote" principle as
 // PfbToggle's Off/PfbIdnMode's Off fallback. Step 1 of #2371 registers and plumbs
-// this enum only; pfb_unbound.py build() enforces the stored policy.
+// this enum only; the gateway's build enforces the stored policy.
 enum PfbFeedSuffixPolicy: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -1609,7 +1609,7 @@ function pfb_cfg_registry(): array
 		// never via this registry default; a fresh install is instead seeded 'apex' by
 		// pfb_psl_feed_policy_is_fresh_install() + pfblockerng_install.inc's post-registry-
 		// pass write (owner decision 2026-08-14: apex/apex for new installs, honor/honor
-		// grandfathered for existing ones). pfb_unbound.py build() enforces the policy.
+		// grandfathered for existing ones). The gateway's build enforces the policy.
 		'dnsbl/pfb_psl_feed_private_policy' => [
 			'default'        => '',
 			'read_adapter'   => 'pfb_cfg_feed_suffix_policy_read',
@@ -4297,7 +4297,7 @@ function pfb_dnsbl_regex_description_warnings(string $contents): array
  * pfb_dnsbl_regex_validation_errors — validate the DNSBL regex form in one
  * bounded Python pass, preserving source line numbers and resolver semantics.
  * Runs pfb_dnsbl_regex_rules.py (issue #1765) as the save-time probe -- the
- * SAME module pfb_unbound.py imports, not a duplicated nowdoc.
+ * reference the gateway's regexrules package mirrors, not a duplicated nowdoc.
  *
  * @param bool $regex_cap Mirrors the "Limit regex length to 200 characters" toggle: gates the
  *     save-time length-cap diagnostic so it agrees with the resolver's load-time drop.
@@ -8136,7 +8136,7 @@ function pfb_sync_status_close_removed_alias(string $gtype, string $aliasname, s
 
 /**
  * pfb_py_sync_status_list_open — read-only reader for Python's OWN status ledger
- * (pfb_py_status.json, written EXCLUSIVELY by pfb_unbound.py -- this function never
+ * (pfb_py_status.json, written EXCLUSIVELY by the gateway -- this function never
  * writes it), returning entries in the SAME shape as pfb_sync_status_list_open() so
  * the widget can merge both sources. Every degenerate input (absent/unreadable file,
  * non-array JSON, a malformed entry) reads as "no open Python-side entries" -- never

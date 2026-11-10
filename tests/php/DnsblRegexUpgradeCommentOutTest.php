@@ -22,7 +22,7 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 	private const INSTALL = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_install.inc';
 	private const EXTRA   = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
 	private const PAGE    = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php';
-	private const UNBOUND = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfb_unbound.py';
+	private const DECIDER = __DIR__ . '/../../go/pfb_dns_gateway/decider/pfb_unbound_build.go';
 	private const SRC     = __DIR__ . '/../../src';
 
 	private const WHY = '# blocked at package upgrade: ';
@@ -450,17 +450,17 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 
 	public function testFeedRegexStaysLogOnlyAndIsNeverRewritten(): void
 	{
-		$src = self::source(self::UNBOUND);
+		$src = self::source(self::DECIDER);
 		$this->assertStringContainsString(
-			'[pfBlockerNG]: dropping user regex [ {} ] pattern [ {} ]',
+			'[pfBlockerNG]: dropping user regex [ %s ] pattern [ %s ]',
 			$src,
 			'positive control: the user-regex drop path still logs'
 		);
 		$this->assertStringContainsString(
-			'[pfBlockerNG]: dropping {} regex feed [ {} ] pattern [ {} ] ({})',
+			'[pfBlockerNG]: dropping %s regex feed [ %s ] pattern [ %s ] (%s)',
 			$src
 		);
-		$feed_at = strpos($src, '[pfBlockerNG]: dropping {} regex feed [ {} ] pattern [ {} ] ({})');
+		$feed_at = strpos($src, '[pfBlockerNG]: dropping %s regex feed [ %s ] pattern [ %s ] (%s)');
 		$this->assertNotFalse($feed_at);
 		$region = substr($src, $feed_at, 400);
 		$this->assertStringNotContainsString('file_notice', $region);

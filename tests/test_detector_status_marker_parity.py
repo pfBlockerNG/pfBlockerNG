@@ -5,8 +5,8 @@ field in Python because ``count_log_marker`` matches the Update log with ``grep 
 has to carry the producer's exact padding. Two copies of one formula drift, and the drift is not
 obvious at the call site — the smoke assertions would just stop seeing their verdict.
 
-So this compares the two implementations by executing the shipped PHP, the same way
-``test_dnsbl_log_csv_quoting`` round-trips its rows through the real ``fgetcsv``.
+So this compares the two implementations by executing the shipped PHP, the way
+the PHP-side tests execute the shipped functions rather than reimplementing them.
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 preload list.
 
 src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt is the flat, one-name-per-line HSTS
-exclusion oracle _load_hsts_db() (pfb_unbound.py) keys resolved domains against: a
+exclusion oracle the gateway's HSTS loader keys resolved domains against: a
 blocked domain on this list resolves real (HSTS bypass) instead of being
 null-blocked. This script refreshes it from Chromium's own preload source.
 
@@ -46,7 +46,7 @@ Output format
 -------------
 A '#'-prefixed header (source + license URLs, a SYNCED date, a regenerated-by
 note) followed by one name per line, sorted (LC-C) and deduplicated. Both
-loader sites in pfb_unbound.py already skip '' and '#'-prefixed lines, so the
+loader sites in the gateway already skip '' and '#'-prefixed lines, so the
 header rides through harmlessly.
 
 Churn guard: upstream carries no retrievable revision marker for this file, so

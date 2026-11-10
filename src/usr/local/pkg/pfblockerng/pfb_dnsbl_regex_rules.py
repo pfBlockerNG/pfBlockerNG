@@ -4,13 +4,9 @@ Single source of the pure static predicates that decide whether a DNSBL regex
 pattern is admitted: the bounded-grammar admission gate (an allowlist of
 constructs plus a static cost bound), the text a pattern is compiled from, the
 log excerpt, the opt-in length cap, and the pattern/description line-splitter.
-Two consumers share this ONE module instead of duplicating the literals:
-
-  - pfb_unbound.py imports it at load (Unbound's pythonmod loader `chdir()`s
-    into the script directory and appends '.' to sys.path before running
-    pfb_unbound.py, so a plain module-scope import resolves).
-  - pfblockerng_extra.inc's pfb_dnsbl_regex_validation_errors() runs it
-    standalone as the save-time probe (this file's ``main()``).
+pfblockerng_extra.inc's pfb_dnsbl_regex_validation_errors() runs this file standalone as the
+save-time probe (this file's ``main()``). The gateway's Go package regexrules mirrors the
+predicates; its tests pin the rows this module admits and refuses.
 
 The admission gate reads the pattern text once, left to right, with an explicit
 stack. It never compiles, matches or otherwise executes pattern text, so judging

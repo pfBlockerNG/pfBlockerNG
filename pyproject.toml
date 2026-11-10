@@ -129,23 +129,6 @@ markers = [
     "timeout: per-test budget override (pytest-timeout); the plugin is installed in the smoke env only, so register the mark here to keep off-appliance imports of smoke modules (unit pins, the shard union oracle) warning-free",
 ]
 
-# coverage.py (issue #38). BRANCH coverage is the point of the sweep -- line
-# coverage hides one-sided decision branches (a feature's ON path tested, its OFF
-# path not). The canonical invocation is
-#   python -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
-# (pytest-cov drives coverage.py); these knobs make a bare `coverage run` branchy
-# too and keep the TYPE_CHECKING-only import block out of the denominator. The
-# report is INFORMATIONAL in CI -- no enforced floor yet (mirrors the shell kcov /
-# PHP pcov informational coverage; #38 decides later whether to gate on a floor).
-[tool.coverage.run]
-branch = true
-
-[tool.coverage.report]
-show_missing = true
-exclude_also = [
-    "if TYPE_CHECKING:",
-]
-
 [tool.ruff]
 # Minimum Python supported: pfSense CE 2.8 ships Python 3.11 (FreeBSD 15).
 target-version = "py311"
@@ -156,12 +139,8 @@ extend-exclude = ["legacy"]
 [tool.ruff.lint]
 # E/W = pycodestyle  F = pyflakes  I = isort
 select = ["E", "F", "W", "I"]
-# pfb_unbound.py places a few imports inside try/except optional-dependency
-# guards (not at the top of the file); suppress only that. F401 (unused import)
-# IS enforced -- the TYPE_CHECKING / runtime-stub imports ruff already counts as
-# used, so nothing legitimate trips it.
 ignore = [
-    "E402",  # module-level import not at top of file (intentional try/except guards)
+    "E402",  # module-level import not at top of file (tests put a sys.path insert before the import they need)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -190,19 +169,18 @@ ignore = [
 "tests/smoke/test_smoke_pfb_dns_resolver_state.py" = ["F811"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["pfb_unbound", "pfb_dnsbl_regex_rules"]
+known-first-party = ["pfb_dnsbl_regex_rules"]
 
 [tool.mypy]
 python_version       = "3.11"
 warn_unused_configs  = true
 ignore_missing_imports = true
 # Resolve `unboundmodule` (Unbound's runtime-injected API) to the dev/test stub
-# in stubs/python/ so the TYPE_CHECKING import in pfb_unbound.py type-checks.
+# in stubs/python/ so the TYPE_CHECKING import in pfb_upstream_observer.py type-checks.
 mypy_path            = "stubs/python"
-# pfb_unbound.py predates type annotations; add hints incrementally rather
-# than requiring full coverage up-front. follow_imports = silent so that running
+# follow_imports = silent so that running
 # `mypy tests/` (the gate below) loads production modules the tests import (e.g.
-# pfb_unbound.py) for their types but does NOT fail on their own incremental-typing
+# pfb_upstream_observer.py) for their types but does NOT fail on their own incremental-typing
 # errors -- the gate judges the test suite, not production.
 follow_imports       = "silent"
 # tests/smoke is the dispatch-only live-VM suite (ADR-04), but its annotations

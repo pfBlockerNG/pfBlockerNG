@@ -19,7 +19,7 @@ set -eu
 
 # Package names map 1:1 to the port RUN_DEPENDS origins:
 #   libmaxminddb             net/libmaxminddb              (mmdblookup — GeoIP)
-#   py311-maxminddb          net/py-maxminddb              (GeoIP reader in pfb_unbound.py)
+#   py311-maxminddb          net/py-maxminddb              (port RUN_DEPENDS; no shipped script uses it since #3791)
 #   py311-sqlite3            databases/py-sqlite3          (DNSBL / reports DB)
 #   py311-charset-normalizer textproc/py-charset-normalizer (feed encoding detection, issue #1797)
 #   lighttpd                 www/lighttpd                  (DNSBL sinkhole webserver)

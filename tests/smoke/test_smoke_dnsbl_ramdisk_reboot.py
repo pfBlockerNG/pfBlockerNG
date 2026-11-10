@@ -9,7 +9,7 @@ restore``) untars it then re-stages the shipped files — pure file ops, no relo
 Unbound's normal start then loads the restored files.
 
 REPRODUCE-FIRST: assert the domain sinkholes BEFORE the reboot, then require it to
-still sinkhole AFTER a RAM-disk reboot (pfb_unbound.py re-staged + matcher rebuilt
+still sinkhole AFTER a RAM-disk reboot (the shipped module files re-staged + matcher rebuilt
 from the restored manifest), with NO manual update. Verified RED on pre-fix code.
 
 Issue #1255 rides the SAME reboot cycle: the shipped TLD-Wildcard public-suffix
@@ -47,7 +47,7 @@ from .conftest import SmokeVM, _StubDnsServer
 pytestmark = pytest.mark.reboot
 
 VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_468_WIPE"
-PFB_UNBOUND = "/var/unbound/pfb_unbound.py"
+PFB_UNBOUND = "/var/unbound/pfb_dnsbl_regex_rules.py"
 PFB_DNSBL_PSL = "/var/unbound/dnsbl_psl"  # issue #1255: PSL authority, archive-EXCLUDED, re-staged
 RECOVERY_DEADLINE = 240  # seconds to wait for DNSBL to self-heal post-reboot
 
@@ -120,7 +120,7 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
       2-label domain wildcard-blocks a never-listed sub-domain too) with RAM-disk
       /var enabled, and both sinkhole (DNSBL works before the reboot),
     When the guest is rebooted (MFS wipes /var/unbound; the boot re-stage runs),
-    Then capture: /var really wiped (MFS), pfb_unbound.py re-staged, the TLD-Wildcard
+    Then capture: /var really wiped (MFS), the shipped module files re-staged, the TLD-Wildcard
       oracle re-staged, and whether the domain AND the wildcard sub-domain self-recover
       to the sinkhole within RECOVERY_DEADLINE (no manual update).
     """
@@ -175,7 +175,7 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
     manifest_state = json.loads(manifest_probe.stdout.split("<<PFB1357>>", 1)[1].split("<<END1357>>", 1)[0])
     print(f"[smoke] #1357 post-MFS manifest refs: {manifest_state}")
 
-    # Poll for self-recovery (pfb_unbound.py staged AND both sinkholes) with NO manual update.
+    # Poll for self-recovery (the shipped module files staged AND both sinkholes) with NO manual update.
     recovered = False
     wild_recovered = False
     staged_now = False
@@ -226,7 +226,7 @@ def test_dnsbl_survives_ramdisk_var_reboot(reboot_observation: DnsblRebootObserv
     assert obs.var_wiped, (
         f"{VAR_WIPE_SENTINEL} survived the reboot — use_mfs_tmpvar did not engage; not a RAM-disk /var"
     )
-    # #468 core: pfb_unbound.py re-staged into the chroot after the wipe.
+    # #468 core: the shipped module files re-staged into the chroot after the wipe.
     assert obs.staged_after, (
         f"#468: {PFB_UNBOUND} missing after RAM-disk reboot (not re-staged).\n/var/unbound:\n{obs.var_unbound_ls}"
     )

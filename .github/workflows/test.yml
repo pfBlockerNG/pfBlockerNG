@@ -177,20 +177,6 @@ jobs:
           python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt /tmp/pytest-junit.xml
 
-      - name: Branch coverage (informational)
-        # Issue #38: measure BRANCH coverage of pfb_unbound.py (line coverage hides
-        # one-sided decision branches). Informational only -- no enforced floor yet
-        # (mirrors the shell kcov / PHP pcov steps). continue-on-error so a coverage
-        # hiccup never blocks the gate; the canonical `uv run pytest` above is the
-        # authority. coverage knobs (branch=true, TYPE_CHECKING exclude) live in
-        # pyproject.toml [tool.coverage.*].
-        continue-on-error: true
-        # Swallow a non-zero exit (e.g. a timing-sensitive test that flakes only under
-        # the slower coverage instrumentation): this run is informational and the
-        # canonical `uv run pytest` step above is the authority + gate. Keeping the
-        # step at exit 0 avoids a spurious error annotation on a green job.
-        run: uv run pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing || echo "branch-coverage run is informational; non-zero exit ignored (canonical 'Run tests' step gates)"
-
       - name: Root-only integration (control-socket pushes need uid 0)
         # The gateway takes a push or a listener frame only from uid 0 (ctl.go ctlUID), so the runner's account skips these tests.
         # This step runs them as root; the euid guard runs in the same process before pytest is imported and fails, never skips, when not root.

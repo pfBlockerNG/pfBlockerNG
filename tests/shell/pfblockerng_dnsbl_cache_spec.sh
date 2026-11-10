@@ -43,7 +43,6 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     pathtar="/usr/bin/tar"
     mkdir -p "${pfbpkgdir}" "${pfbdb}"
     # The shipped files (current code in /usr/local).
-    echo 'PY-CODE-v1' > "${pfbpkgdir}/pfb_unbound.py"
     echo 'RULES-CODE-v1' > "${pfbpkgdir}/pfb_dnsbl_regex_rules.py"
     echo 'INC-CODE-v1' > "${pfbpkgdir}/pfb_unbound_include.inc"
     echo 'HSTS-v1' > "${pfbpkgdir}/pfb_py_hsts.txt"
@@ -91,7 +90,6 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # Before: the chroot does not exist at all (fresh MFS).
     When call dc stage
     # The shipped files landed in the chroot.
-    The path "${pfbchroot}/pfb_unbound.py" should be exist
     The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
     The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
     The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
@@ -102,6 +100,38 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The path "${pfbchroot}/dev" should be directory
     The path "${pfbchroot}/var/log/pfblockerng" should be directory
     The path "${pfbchroot}/usr/local/share/GeoIP" should be directory
+    cleanup_sandbox
+  End
+
+  It 'stage removes the pfb_unbound.py an older package left in the chroot (#3791)'
+    setup_sandbox
+    mkdir -p "${pfbchroot}"
+    echo 'PY-CODE-OLD' > "${pfbchroot}/pfb_unbound.py"
+    When call dc stage
+    The path "${pfbchroot}/pfb_unbound.py" should not be exist
+    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
+    cleanup_sandbox
+  End
+
+  It 'restore does not bring back a pfb_unbound.py that an older package had archived (#3791)'
+    setup_sandbox
+    dc stage
+    echo 'PY-CODE-OLD' > "${pfbchroot}/pfb_unbound.py"
+    echo 'ini-v1' > "${pfbchroot}/pfb_unbound.ini"
+    dc save
+    rm -rf "${pfbchroot}"
+    When call dc restore
+    The path "${pfbchroot}/pfb_unbound.py" should not be exist
+    The contents of file "${pfbchroot}/pfb_unbound.ini" should equal 'ini-v1'
+    cleanup_sandbox
+  End
+
+  It 'teardown removes the pfb_unbound.py an older package left in the chroot (#3791)'
+    setup_sandbox
+    dc stage
+    echo 'PY-CODE-OLD' > "${pfbchroot}/pfb_unbound.py"
+    When call dc teardown
+    The path "${pfbchroot}/pfb_unbound.py" should not be exist
     cleanup_sandbox
   End
 
@@ -342,7 +372,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # Simulate a RAM-disk reboot: wipe the whole chroot.
     rm -rf "${pfbchroot}"
     # Bump the shipped code in /usr/local to prove restore re-stages CURRENT code.
-    echo 'PY-CODE-v2' > "${pfbpkgdir}/pfb_unbound.py"
+    echo 'RULES-CODE-v2' > "${pfbpkgdir}/pfb_dnsbl_regex_rules.py"
     When call restore_and_report
     # Before: the chroot was wiped; After: restore ran.
     The output should include 'PRE:wiped'
@@ -351,7 +381,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The contents of file "${pfbchroot}/pfb_py_sources.json" should equal 'MANIFEST-v1'
     The contents of file "${pfbchroot}/pfb_unbound.ini" should equal 'ini-v1'
     # The shipped code is the CURRENT /usr/local copy (v2), not a stale archived v1.
-    The contents of file "${pfbchroot}/pfb_unbound.py" should equal 'PY-CODE-v2'
+    The contents of file "${pfbchroot}/pfb_dnsbl_regex_rules.py" should equal 'RULES-CODE-v2'
     # Mount-point dirs are present again after restore.
     The path "${pfbchroot}/lib" should be directory
     cleanup_sandbox
@@ -378,7 +408,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dc stage
     dc save
     rm -rf "${pfbchroot}"
-    # Bump the shipped oracle to prove restore re-stages CURRENT code, like pfb_unbound.py.
+    # Bump the shipped oracle to prove restore re-stages CURRENT code, like pfb_dnsbl_regex_rules.py.
     echo 'PSL-AUTHORITY-v2' > "${pfbpkgdir}/dnsbl_psl"
     When call dc restore
     The contents of file "${pfbchroot}/dnsbl_psl" should equal 'PSL-AUTHORITY-v2'
@@ -391,7 +421,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     When call dc restore
     arc="$(pfb_spec_archive_path "${dnsblarchive}")"
     The value "$arc" should equal ''
-    The path "${pfbchroot}/pfb_unbound.py" should be exist
+    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
     The path "${pfbchroot}/lib" should be directory
     cleanup_sandbox
   End

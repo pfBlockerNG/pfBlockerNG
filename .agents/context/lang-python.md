@@ -4,7 +4,7 @@ Scope: writing or changing Python. Load when: any touched `*.py` file.
 
 - Indent **4 spaces**; target Python 3.11+; `from __future__ import annotations`. Type-hint
   new functions; no bare `except:` (`except Exception` minimum).
-- `pfb_unbound.py` runs in Unbound's Python loader — **stdlib only, no external deps**.
+- `dns_proxy/pfb_upstream_observer.py` runs in Unbound's Python loader — **stdlib only, no external deps**.
 - **No direct Python interpreter invocation ON the appliance.** No `python`/`python3` symlink
   exist. Appliance consumers call `/usr/local/pkg/pfblockerng/pfb_python.sh` — only resolver
   allowed to build the exact versioned path from the package's direct Python dependency.
@@ -22,6 +22,6 @@ Scope: writing or changing Python. Load when: any touched `*.py` file.
   deadlock guard only, must **raise loudly**, never return silently (exemplar
   `_Harness.wait_builds`, `tests/test_adr10_watcher.py`). Poll = last resort against
   unsignalable production code.
-- Unbound inject API symbols (`log_info`, `RR_TYPE_*`, …) as runtime globals; declared once
-  in `stubs/python/unboundmodule.py` (suite copy them onto `builtins`,
-  `tests/conftest.py`). Add new injected symbol there.
+- Unbound inject API symbols (`log_warn`, `MODULE_*`, …) are runtime globals; the ones the
+  upstream observer uses are declared once in `stubs/python/unboundmodule.py`, a type-checking
+  stand-in only (nothing copies it onto `builtins`). Add a new injected symbol there.

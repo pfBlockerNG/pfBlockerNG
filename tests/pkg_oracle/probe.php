@@ -103,10 +103,9 @@ switch ($cmd) {
 			exit(3);
 		}
 		// The module the proxy hosts: shipped code, the ini the production generator writes, a manifest and one raw feed
-		foreach (['pfb_unbound.py', 'pfb_dnsbl_regex_rules.py'] as $shipped) {
-			@unlink(ORACLE_MODULE_DIR . "/{$shipped}");
-			symlink("/usr/local/pkg/pfblockerng/{$shipped}", ORACLE_MODULE_DIR . "/{$shipped}");
-		}
+		$shipped = 'pfb_dnsbl_regex_rules.py';
+		@unlink(ORACLE_MODULE_DIR . "/{$shipped}");
+		symlink("/usr/local/pkg/pfblockerng/{$shipped}", ORACLE_MODULE_DIR . "/{$shipped}");
 		@mkdir(ORACLE_MODULE_DIR . '/pfb_py_raw', 0755, TRUE);
 		file_put_contents(ORACLE_MODULE_DIR . '/pfb_py_raw/feed.txt', "blocked.example\n");
 		file_put_contents(ORACLE_MODULE_DIR . '/pfb_py_sources.json', json_encode([

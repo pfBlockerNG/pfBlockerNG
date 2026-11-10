@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "pytest: pfb_unbound",
+      "name": "pytest",
       "type": "debugpy",
       "request": "launch",
       "module": "pytest",

@@ -365,7 +365,7 @@ function pfBlockerNG_update_table() {
 
 // Close every open PHP-owned sync-status ledger entry (both facilities) -- the
 // "Clear Failed Downloads" icon's manual dismiss. issue #999: never touches the
-// python-owned ledger (pfb_unbound.py's exclusive writer).
+// python-owned ledger (the gateway's exclusive writer).
 function pfBlockerNG_clearfailed($ledger_dir) {
 	foreach (pfb_sync_status_list_open($ledger_dir) as $entry) {
 		pfb_sync_status_close($entry['facility'], $entry['item'], $entry['stage'], $ledger_dir);

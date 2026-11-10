@@ -89,7 +89,7 @@ def test_shell_teardown_derives_shipped_files_including_psl_authority() -> None:
     body = _shell_teardown_body(source)
     shipped = _shipped_files(source)
 
-    assert body.count("for _f in ${PFB_PY_SHIPPED}; do") == 1
+    assert body.count("for _f in ${PFB_PY_SHIPPED} ${PFB_PY_RETIRED}; do") == 1
     assert body.count('rm -f "${pfbchroot}/${_f}"') == 1
     assert "dnsbl_psl" in shipped
     assert 'rm -f "${pfbchroot}/pfb_py_tld.txt"' not in body

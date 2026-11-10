@@ -6,7 +6,7 @@ refresh or audit `dnsbl_psl` against publicsuffix.org.
 `src/usr/local/pkg/pfblockerng/dnsbl_psl` = the SOLE shipped PSL artifact (issue #1541):
 a self-describing authority carrying both ICANN and PRIVATE sections, exact/wildcard
 (`*.`)/exception (`!`) rule syntax preserved. Consumed by the pure PSL resolver
-(`pfb_unbound.py`'s `parse_psl_rules`) to derive each domain's registrable parent for
+(`parsePslRules` in the gateway's `decider/pfb_unbound_psl.go`) to derive each domain's registrable parent for
 DNSBL Wildcard Blocking. This note record how to keep current. Sibling of
 [`tld-lists.md`](tld-lists.md) (issue #1272; single-authority retirement issue #1541).
 

@@ -731,7 +731,7 @@ if ($_POST) {
 		}
 		// A usable validator always runs, so an entry the resolver would drop is reported
 		// whether or not the feature is on yet. Only the fail-closed branch is gated: with
-		// no usable interpreter, pfb_unbound.py loads Regex List patterns solely when this
+		// no usable interpreter, the gateway loads Regex List patterns solely when this
 		// toggle is on, so an unloaded list must not make the whole page unsavable.
 		$pfb_regex_python = pfb_python_interpreter();
 		$pfb_regex_ready = $pfb_regex_python !== '';

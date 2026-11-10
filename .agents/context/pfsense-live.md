@@ -11,7 +11,7 @@ Each cost real misdiagnosis:
   in `/var/unbound/unbound.conf` but in included `/var/unbound/access_lists.conf` (with
   `host_entries.conf`, `domainoverrides.conf`, `remotecontrol.conf`).
 - **Some pfSense services run CHROOTED** — chrooted process resolves absolute paths against
-  its chroot root. **Unbound** → `/var/unbound` (`pfb_unbound.py` runs there: host-absolute
+  its chroot root. **Unbound** → `/var/unbound` (the module directory: the manifest's `raw` paths are read relative to it, so host-absolute
   `/var/unbound/pfb_py_raw/x` becomes `/var/unbound/var/unbound/pfb_py_raw/x` inside and 404s —
   use in-chroot paths; files like `/usr/local/pkg/...` unreachable). **HAProxy** →
   `/tmp/haproxy`. Host file can be unreadable purely from chroot — caused real DNSBL

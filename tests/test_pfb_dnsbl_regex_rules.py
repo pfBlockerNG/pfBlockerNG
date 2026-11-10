@@ -1,5 +1,5 @@
 """pfb_dnsbl_regex_rules.py (issue #1765): single-source DNSBL regex admission
-rules, shared by pfb_unbound.py and the save-time probe.
+rules, run as the save-time probe and mirrored by the gateway's Go regexrules package.
 
 Covers what the PHP suite (tests/php/DnsblRegexEntryErrorTest.php, which drives
 the probe through pfb_dnsbl_regex_validation_errors()) cannot reach directly:
@@ -185,7 +185,7 @@ def test_probe_and_resolver_both_reject_an_adjacent_quantifier_run() -> None:
 
     The rule lives in the one shared module, so this drives both surfaces the way they are
     really used: ``main()`` through a subprocess (what pfb_dnsbl_regex_validation_errors()
-    runs) and the gate (what pfb_unbound.py imports).
+    runs) and the gate (what the module's importers call).
     """
     from pfb_dnsbl_regex_rules import pfb_regex_admission
 

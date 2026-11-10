@@ -12,8 +12,8 @@ unprivileged split. Only `src/` ships. Everything else (`tests/`, `scripts/`, `s
 
 Ranked by exposure:
 
-1. **DNS queries from LAN clients.** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` runs
-   inside Unbound as a Python module and sees every query name, type and client address.
+1. **DNS queries from LAN clients.** The pfB-DNS gateway (`go/pfb_dns_gateway/`) decides
+   every query and sees each query name, type and client address.
    Any client that can reach the resolver is untrusted.
 2. **The DNSBL block page.** `src/usr/local/www/pfblockerng/www/index.php` and
    `dnsbl_default.php` are served without authentication by a dedicated lighttpd instance on
@@ -49,7 +49,7 @@ Ranked by exposure:
 
 ## How to exercise it
 
-- `pytest` runs the Python suite, including `pfb_unbound.py` with a stubbed `unboundmodule`.
+- `pytest` runs the Python suite, including the upstream observer with its stubbed `unboundmodule`.
 - `vendor/bin/phpunit` loads the real `pfblockerng.inc` with pfSense doubles from
   `tests/php/bootstrap.php`.
 - `shellspec --shell /usr/bin/dash` runs the POSIX shell specs under `tests/shell/`.
@@ -61,7 +61,7 @@ Ranked by exposure:
   query, block-page request, or feed entry that reaches a shell, `eval`, or a file write
   in an executable location.
 - **High:** unauthenticated persistent denial of service of DNS resolution or the
-  firewall (crash or hang of Unbound through `pfb_unbound.py`, or a feed that wedges the
+  firewall (crash or hang of the gateway's decider, or a feed that wedges the
   update cron); arbitrary file write or read as root from feed data; stored XSS that
   reaches an administrator from LAN or feed input; silently disabling enforcement (a
   crafted feed or query that bypasses blocking for entries that should match).

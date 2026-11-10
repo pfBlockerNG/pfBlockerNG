@@ -138,7 +138,6 @@ final class DnsblServiceRestartTest extends TestCase
 			$this->assertTrue(symlink($double, "{$this->dir}/bin/{$name}"), "double link failed: {$name}");
 		}
 		touch("{$this->dir}/var/pfb_dnsbl_lighty.conf");
-		touch("{$this->dir}/var/pfb_unbound.py");
 		$dash = trim((string) shell_exec('command -v dash 2>/dev/null'));
 		$this->shell = $dash !== '' ? $dash : '/bin/sh';
 	}
@@ -280,6 +279,19 @@ final class DnsblServiceRestartTest extends TestCase
 		$this->assertSame(0, $status, "rc {$verb} failed: {$output}");
 		$this->assertSame($expected, $this->events(), "rc {$verb} command events");
 		$this->assertSame($verb === 'start' ? ['lighttpd_pfb'] : [], $this->liveProcesses());
+	}
+
+	public function testStartNeverLooksForTheRetiredModuleScript(): void
+	{
+		// Given the generated rc script of a box whose package no longer ships pfb_unbound.py (#3791)
+		$this->arrange([]);
+
+		// When its start body is read
+		$script = (string) file_get_contents("{$this->dir}/pfb_dnsbl.sh");
+
+		// Then it neither tests for that file nor logs a missing script
+		$this->assertStringNotContainsString('pfb_unbound.py', $script);
+		$this->assertStringNotContainsString('missing python script', $script);
 	}
 
 	public function testStopWaitsForProcessToExitAfterTerm(): void

@@ -15,11 +15,11 @@ describes.
 ### ADR-06 — DNSBL list preprocessing moved to Python
 
 DNSBL list preprocessing (parse → normalise → classify data/zone → build dicts + feed/group
-index + `whiteDB`, then emit `pfb_py_count`) lives in `pfb_unbound.py`'s pure
-`dnsbl_build_from_manifest()` / `build()`, fed by the PHP/shell-written manifest
+index + `whiteDB`, then emit `pfb_py_count`) lives in the Go decider's pure
+`dnsblBuildFromManifest()` / `build()` (`go/pfb_dns_gateway/decider/`, translated from the removed `pfb_unbound.py`), fed by the PHP/shell-written manifest
 (`/var/unbound/pfb_py_sources.json` + per-feed raw). PHP/shell only download + tag + run the
-DNSBL-IP firewall pass. Decision-equivalence is pinned by `tests/test_adr06_*` (golden oracle,
-build module, init-from-raw, PHP boundary); the init/peak-RAM kill-gate is
+DNSBL-IP firewall pass. Decision-equivalence is pinned by the Go decider's tests (`TestDnsblBuildFromManifestMatchesPython`,
+`TestBuild*`, the parity corpus, over the `tests/fixtures/adr06_golden/` and `tests/fixtures/dnsbl_corpus/` fixtures); the init/peak-RAM kill-gate is
 `legacy/benchmarks/spike_adr06_build.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0).
 Its synthetic `build()` on a generic runner is NOT the production number, so the CI
 `benchmarks` job is **manual-only** (dispatch Tests with `run_benchmarks`, default off); the
@@ -70,7 +70,7 @@ Domain names are case-insensitive, so **everything that evaluates a domain-match
 must be too** — by lowercasing for plain comparison, by `re.IGNORECASE` for a compiled
 pattern, never by folding a pattern's own text. Every regex that matches a query name carries
 `IGNORECASE` (feed/user regex load and the save-time validator; the admission gate never
-compiles or matches pattern text); the domain-literal reduction grammar (prod `pfb_unbound.py`, the
+compiles or matches pattern text); the domain-literal reduction grammar (prod the Go decider, the
 reference oracle `tests/test_adr07_decision_spec.py`, and the benchmark spike
 `legacy/benchmarks/spike_adr07_regex.py` — kept in lockstep) admits either case and lowercases the
 folded key at fold time, so a mixed-case literal reduces identically to its lowercase twin.
@@ -113,7 +113,7 @@ collects to the DNSBL-IP firewall pass (never treated as an ABP `[section]` comm
 non-IPv6 `[…]` is dropped as a control line.
 
 The manifest build is the sole DNSBL classifier in every TLD mode. PHP publishes each feed's
-raw rows and metadata, then `pfb_unbound.py` routes plain and ABP rows through the production
+raw rows and metadata, then the gateway's decider routes plain and ABP rows through the production
 matcher build. PHP does not re-read an aggregate feed or rebuild per-group plaintext summaries;
 it finalizes widget statistics from counts already computed during feed ingest.
 
@@ -261,7 +261,8 @@ queries simply stop matching) until every feed redownloads and reparses through 
 own dialect again. There is no supported downgrade path; the fix is to stay on, or return to, a
 build from #1083 or later.
 
-**Benchmark evidence** (issue #1083, `scripts/bench_dnsbl_line_parsing.py`, 1,000,000 lines,
+**Benchmark evidence** (issue #1083, `scripts/bench_dnsbl_line_parsing.py`, removed in #3791 with the Python build it timed and kept
+in git history; 1,000,000 lines,
 5 iterations × 2 trials, base = the pre-#1083 merge-base `e9dda731`):
 
 | Surface | base wall | branch wall | Δ wall | base peak RSS | branch peak RSS | Δ RSS |
@@ -305,7 +306,7 @@ a **FEED**-provenance rule does when its normalized name resolves EXACTLY to its
 winning public suffix. **USER**-provenance rows (Custom_List, sovereign ABP) are exempt
 in every state.
 
-**Enforcement points** (`pfb_unbound.py`): both the plain `tld_wildcard_classify()`
+**Enforcement points** (the Go decider): both the plain `tld_wildcard_classify()`
 loop and the ABP reconcile-fold loop run every suffix-apex FEED row through
 `_dnsbl_suffix_feed_policy()` — `ignore` drops the entry (tallied `suffix_drop`); `apex`
 demotes a would-be wildcard ZONE anchor to an exact-apex DATA block (tallied
@@ -393,7 +394,7 @@ default). It is the only DNS front end: there is no Python listener and no fallb
 enabled, the toggle on, the Resolver enabled) alone decides the Resolver move, its restore and the service, and the apply
 reconciles it whatever the DNSBL `$mode` is.
 
-| pfB-DNS | DNSBL | `pfb_unbound.py` runs in | Unbound runs | The gateway's mode flags |
+| pfB-DNS | DNSBL | The DNSBL decider runs in | Unbound runs | The gateway's mode flags |
 |---|---|---|---|---|
 | off | on | nowhere: DNSBL is off while pfB-DNS is off (no decisions, no DNSBL runtime) | no pfBlockerNG python | not running |
 | on | on | the gateway's in-process decider (`go/pfb_dns_gateway/decider`) | the inert observer (it reports upstream blocks while the Resolver forwards) | `--observer` iff the Resolver forwards |
@@ -1037,11 +1038,11 @@ ones:
   ccTLD (`example.рф`, `site.中国`) resolves. Decode runs only on `xn--` queries; malformed
   labels are flagged, never crash the resolver.
 
-The analyzer (inlined in `pfb_unbound.py`) resolves each code point's script from the stdlib
-`unicodedata.name()` leading token — no shipped Unicode table, no runtime dependency; the script
+The analyzer (`go/pfb_dns_gateway/decider/pfb_unbound_idn.go`) resolves each code point's script from the leading
+word of its Unicode name (`golang.org/x/text/unicode/runenames`) — no shipped Unicode table, no runtime dependency; the script
 names are stable across UCD versions for the in-scope scripts, so the FP/TP result holds across
-Python 3.11–3.14. Measured on `tests/fixtures/adr08_corpus/`: 0 false positives on the
-legitimate set, 6/6 homographs caught. Guards: the `tests/test_adr08_*` suite. See
+Go toolchains. Measured on `tests/fixtures/adr08_corpus/`: 0 false positives on the
+legitimate set, 6/6 homographs caught. Guards: the Go `TestAnalyzer*` tests and `tests/test_adr08_decision_spec.py`. See
 [`legacy/ADRs/ADR_08_Homoglyph_Protection/`](../../legacy/ADRs/ADR_08_Homoglyph_Protection/).
 
 ### ADR-12 — update hooks (PHP/shell, dependency-derived Python)
@@ -1174,10 +1175,9 @@ maintainer manual-smoke checklist (ADR-40 §7) — the `enable_dup`/`enable_drep
 additional harness helpers not yet in the fixture set, and real lock-hold measurement requires
 live traffic on production hardware.
 
-Issue #3125 adds a package-upgrade restart signal alongside the feed passes: at init the
-python module fingerprints the staged shipped files (`pfb_unbound.py` + `pfb_dnsbl_regex_rules.py`,
-md5 concat (ADR-42)) into the `pfb_py_module.applied` marker, and `pfb_unbound_python('enabled')`
-restarts the Resolver iff that marker drifts from the shipped files' fingerprint.
+Issue #3125 added a package-upgrade restart signal alongside the feed passes: the python module fingerprinted
+its staged shipped files into the `pfb_py_module.applied` marker. #3791 retired that fingerprint with
+`pfb_unbound.py`; the gateway's own executable SHA-256 record replaces it.
 
 ---
 
@@ -1566,7 +1566,7 @@ reorder on the GeoIP tab — `category.php` drops the row `class="sortable"` mar
 
 ## Alerts/Reports render pipeline — `pfblockerng_alerts.php`
 
-DNSBL rows are attributed **once**, at event time, by the log writer (`pfb_unbound.py` for
+DNSBL rows are attributed **once**, at event time, by the log writer (the pfB-DNS gateway for
 `dnsbl.log`; the webserver-hit path via the ADR-65 query channel, `pfb_dnsbl_query()`) — the
 page renders exactly what was logged, with no render-time re-check. IP rows keep the older
 two-phase model: attributed once at event time by the filterlog daemon (feed match, GeoIP,
@@ -2192,7 +2192,7 @@ digests; **no cross-language digest is ever produced or compared**:
 | --- | --- | --- |
 | PHP (detector + download) | `xxh128` | `hash('xxh128', …)` / `hash_file('xxh128', …)` |
 | POSIX shell | `xxh128` | `xxh128sum` (writes the `.xxhash128` extension) |
-| Python (`pfb_unbound.py`) | `md5` | `hashlib.md5` — **policy only here; no Python code lands in ADR-42** (it ships with its first consumer, the deferred DNSBL structure-reuse ADR). `pfb_unbound.py` is stdlib-only + chrooted, and `hashlib` has no xxhash; `xxh128sum` would have to be copied into the jail. md5 is used only for Python's own self-comparisons. |
+| Python (`pfb_unbound.py`, removed in #3791) | `md5` | `hashlib.md5` — **policy only here; no Python code lands in ADR-42** (it ships with its first consumer, the deferred DNSBL structure-reuse ADR). `pfb_unbound.py` is stdlib-only + chrooted, and `hashlib` has no xxhash; `xxh128sum` would have to be copied into the jail. md5 is used only for Python's own self-comparisons. |
 
 PHP `hash('xxh128', X)` is byte-identical to the base-CLI `xxh128sum` (XXH128 frozen since
 xxHash 0.8.0). Pinned known-answer vector: `"pfBlockerNG"` → `4a2690170244f2e853151c59fbcb2105`
@@ -2493,7 +2493,7 @@ list-open helpers live in `pfblockerng_extra.inc` (`pfb_sync_status_*`), mirrori
 `pfb_due_ledger_*`'s exact persistence idiom (ADR-43) — same sidecar-file convention, same
 fail-safe-on-corrupt/absent-file contract, same "no config.xml involvement" shape.
 
-`pfb_unbound.py` runs chrooted inside Unbound's Python loader, a separate process from PHP —
+The gateway's decider runs as a separate process from PHP —
 it cannot safely co-write the PHP file (write contention, and PHP is not chrooted so the paths
 don't resolve the same way). It instead owns a **second**, structurally-identical file,
 chroot-relative `pfb_py_status.json` (mirroring the existing `pfb_py_reload`/`.applied` marker
@@ -2520,7 +2520,7 @@ next success. Open is idempotent-by-key: opening an already-open key refreshes
 | `dnsbl` | `download` | `pfb_dnsbl_download_ledger_update()` (`pfblockerng_extra.inc`) | alias-pass-managed; paired with the whole-alias download success path |
 | `dnsbl` | `script` | `pfb_list_script_failure_record()` / `pfb_list_script_failure_close()` (`pfblockerng_apply.inc`) | alias-pass-managed; same alias key shape as download |
 | `dnsbl` | `apply` | `pfb_dnsbl_apply_ledger_update()` and `pfb_reload_unbound()` (`pfblockerng.inc`) | convergence paths update the key; disabled-mode teardown clears it |
-| `dnsbl` | `parse` | Python-owned `pfb_py_status_open()` / `pfb_py_status_close()` sites in `pfb_unbound.py` | loader/build failures with stable item identities use the Python ledger; capability and background-thread errors remain free text |
+| `dnsbl` | `parse` | gateway-owned `pfb_py_status_open()` / `pfb_py_status_close()` sites (`decider/pfb_unbound_status.go`) | loader/build failures with stable item identities use the gateway ledger; capability and background-thread errors remain free text |
 
 ### Tick-driven reconciliation — apply stage only
 
