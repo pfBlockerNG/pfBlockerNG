@@ -1563,6 +1563,42 @@ func TestOperateKeepsOneSnapshotForAllEventsOfAQuery(t *testing.T) {
 	}
 }
 
+// A query that loaded generation A at NEW reads A's noAAAA, SafeSearch and Group Policy data at its later events, though
+// a swap installed B in between: each would decide differently on B.
+func TestOperateReadsNoaaaaFromTheQuerysOwnSnapshot(t *testing.T) {
+	m := modMust(t, t.TempDir())
+	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.noAAAADB = true }, nil)
+	q := opQstate("n.example.", RR_TYPE_AAAA, "192.0.2.1")
+	opWantState(t, "NEW on A", opOperate(m, MODULE_EVENT_NEW, q), MODULE_WAIT_MODULE)
+	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.noAAAADB = true }, func(s *snapshot) { s.noAAAADB["n.example"] = false })
+	opWantState(t, "PASS after the swap to B, which lists the name", opOperate(m, MODULE_EVENT_PASS, q), MODULE_WAIT_MODULE)
+}
+
+func TestOperateReadsSafeSearchFromTheQuerysOwnSnapshot(t *testing.T) {
+	m := modMust(t, t.TempDir())
+	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.safeSearchDB = true }, nil)
+	q := opQstate("ss.example.", RR_TYPE_A, "192.0.2.1")
+	opWantState(t, "NEW on A", opOperate(m, MODULE_EVENT_NEW, q), MODULE_WAIT_MODULE)
+	opInstall(t, m, func(s *pfbSettings) { opEnable(s); s.safeSearchDB = true }, func(s *snapshot) {
+		s.safeSearchDB["ss.example"] = safeSearchEntry{a: "1.2.3.4"}
+	})
+	opWantState(t, "PASS after the swap to B, which rewrites the name", opOperate(m, MODULE_EVENT_PASS, q), MODULE_WAIT_MODULE)
+}
+
+func TestOperateReadsGroupPolicyFromTheQuerysOwnSnapshot(t *testing.T) {
+	m := modMust(t, t.TempDir())
+	settings := func(s *pfbSettings) { opEnable(s); s.gpListDB = true; s.rrTypes = []uint16{RR_TYPE_A} }
+	opInstall(t, m, settings, func(s *snapshot) { opBlockData(s, "b.example", "1", 0); opFeed(s, 0, "F", "G") })
+	q := opQstate("b.example.", RR_TYPE_A, "192.0.2.77")
+	opWantState(t, "NEW on A, client not bypassed: blocked", opOperate(m, MODULE_EVENT_NEW, q), MODULE_FINISHED)
+	opInstall(t, m, settings, func(s *snapshot) {
+		opBlockData(s, "b.example", "1", 0)
+		opFeed(s, 0, "F", "G")
+		s.gpListDB["192.0.2.77"] = 0
+	})
+	opWantState(t, "PASS after the swap to B, which bypasses the client: still blocked", opOperate(m, MODULE_EVENT_PASS, q), MODULE_FINISHED)
+}
+
 // --- the swap race ---
 
 type raceSide struct {
