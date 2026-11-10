@@ -162,15 +162,17 @@ func pyNumber(v any) (*big.Int, *float64) {
 
 // queryWriteReply is _pfb_write_query_reply: reply is published as the channel's reply (temp file, fsync, chmod 0o640, rename:
 // Go owns this file, unlike the request, which is the writer's to create and permit). A write failure is logged and the
-// watcher stays alive.
+// watcher stays alive. Nothing is written once deinit has begun.
 func (m *pfbUnbound) queryWriteReply(reply []queryField) {
 	path := m.pfb.pfbPyQueryReply
 	if path == "" {
 		return
 	}
-	if failure := writeMarker(path, pyJSONDumps(reply), 0o640); failure != "" {
-		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write query reply [ %s ]: %s\n", path, failure)
-	}
+	m.whileNotRetired(func() {
+		if failure := writeMarker(path, pyJSONDumps(reply), 0o640); failure != "" {
+			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write query reply [ %s ]: %s\n", path, failure)
+		}
+	})
 }
 
 // queryMiss is the miss-shaped answer: blocked false and every attribution field empty.
@@ -248,7 +250,7 @@ func (w *queryWatcher) answer(record *jsonObject) {
 func (w *queryWatcher) drainAndAnswer(stop <-chan struct{}) {
 	for !stopped(stop) {
 		record := channelReadRecord(w.channel, parsePyJSONSurrogates)
-		if record == nil || w.last != nil && pyEqual(record, w.last) {
+		if record == nil || w.m.retired.Load() || w.last != nil && pyEqual(record, w.last) { // a record read after Close is not answered
 			return
 		}
 		w.last = record
