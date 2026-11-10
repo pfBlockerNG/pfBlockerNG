@@ -373,7 +373,7 @@ func writeMarker(path, text string) string {
 	if err == nil {
 		return ""
 	}
-	os.Remove(tmp)
+	syscall.Unlink(tmp) // not os.Remove, which also removes an empty directory: Python's os.unlink refuses one
 	var pathErr *os.PathError
 	var linkErr *os.LinkError
 	switch {

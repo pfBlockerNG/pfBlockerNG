@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -185,14 +186,16 @@ func rlWantDomains(t *testing.T, what string, m *pfbUnbound, want ...string) {
 // its previous drain is over, so the second send of a pair is the barrier that the first tick's drain finished.
 //
 // A drain takes at most one advance, so one that asks the RAM gate twice has retried a generation it had already acted on:
-// the second ask ends the loop and fails the test, which a loop that retries would otherwise spin in forever.
+// the second ask ends the loop and fails the test, which a loop that retries would otherwise spin in forever. The bound
+// assumes that no publish lands during a build: a test that publishes mid-build must bound its drain another way (the
+// coalescing test counts builds).
 type rlLoop struct {
 	t     *testing.T
 	stop  chan struct{}
 	tick  chan time.Time
 	done  chan struct{}
 	once  sync.Once
-	asked int // the RAM gate's asks in this poll; the loop goroutine writes it and poll resets it between drains
+	asked int // the RAM gate's asks in this drain; only the loop goroutine touches it
 }
 
 func startRlLoop(t *testing.T, w *reloadWatcher) *rlLoop {
@@ -566,8 +569,19 @@ func TestReloadWatcherCoalescesAdvancesThatLandDuringABuild(t *testing.T) {
 	m := rlModule(t)
 	b := newRlBuilds(m)
 	b.gate, b.entered = make(chan struct{}), make(chan struct{}, 8)
-	w := m.newReloadWatcher()
 	stop, done := make(chan struct{}), make(chan struct{})
+	// Two builds are the most this test's one advance and one coalesced advance can need: a third is a generation built
+	// twice. It fails the test at once and ends the drain, instead of blocking on the gate until the wait gives up.
+	builds := 0 // only the drain goroutine builds
+	m.reloadBuilder = func() (*snapshot, error) {
+		if builds++; builds == 3 {
+			t.Errorf("a third build started: the watcher rebuilt a generation it had already built")
+			close(stop)
+			return nil, errors.New("a third build")
+		}
+		return b.build()
+	}
+	w := m.newReloadWatcher()
 
 	rlPublish(t, m, 2)
 	go func() {
@@ -929,6 +943,29 @@ func TestReloadWriteAppliedFailureLogsPythonsOSErrorText(t *testing.T) {
 		want := "[pfBlockerNG]: failed to write applied-generation marker [ " + tc.path + " ]: " + detail + "\n"
 		if got := log.String(); got != want {
 			t.Errorf("%s: log = %q, want %q", tc.name, got, want)
+		}
+	}
+}
+
+// Python's cleanup is os.unlink(tmp), which refuses a directory: a directory at <marker>.tmp survives a failed write
+// (the open of it fails with EISDIR), for the reload marker and the control marker alike.
+func TestMarkerFailureLeavesADirectoryAtTheTempPathAlone(t *testing.T) {
+	m := rlModule(t)
+	for name, write := range map[string]func(path string){
+		"reload":  func(path string) { m.pfb.pfbPyReloadApplied = path; m.reloadWriteApplied(7) },
+		"control": func(path string) { m.pfb.pfbPyControlApplied = path; m.controlWriteApplied(big.NewInt(7)) },
+	} {
+		path := filepath.Join(t.TempDir(), "marker")
+		if err := os.Mkdir(path+".tmp", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		modCaptureLog(t)
+		write(path)
+		if info, err := os.Lstat(path + ".tmp"); err != nil || !info.IsDir() {
+			t.Errorf("%s: after the failed write the temp path = (%v, %v), want the directory left alone", name, info, err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s: a marker exists after a failed write (stat error %v)", name, err)
 		}
 	}
 }
