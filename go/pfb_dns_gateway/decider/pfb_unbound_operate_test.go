@@ -968,13 +968,16 @@ func TestRebuildAndSwapEmitCountsToggle(t *testing.T) {
 	}
 }
 
-// pfb_unbound.py's TestSingleRebindPoint: rebuildAndSwap is the one place the live snapshot is bound.
-func TestRebuildAndSwapIsTheOnlyPlaceTheSnapshotIsStored(t *testing.T) {
+// pfb_unbound.py's TestSingleRebindPoint: the live snapshot is bound in exactly two places, each under publishMu:
+// rebuildAndSwap, which installs a rebuilt snapshot, and publishControl, which publishes the copy a control command
+// edited. Python's control commands write the module globals in place; the snapshot rule (a published snapshot is never
+// written) makes them a second publisher here.
+func TestSnapshotIsStoredOnlyByRebuildAndSwapAndThePublishControlStep(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stores := 0
+	stores := map[string]int{}
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
@@ -983,10 +986,13 @@ func TestRebuildAndSwapIsTheOnlyPlaceTheSnapshotIsStored(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stores += strings.Count(string(data), ".snapshot.Store(") + strings.Count(string(data), ".snapshot.Swap(") + strings.Count(string(data), ".snapshot.CompareAndSwap(")
+		if n := strings.Count(string(data), ".snapshot.Store(") + strings.Count(string(data), ".snapshot.Swap(") + strings.Count(string(data), ".snapshot.CompareAndSwap("); n > 0 {
+			stores[file] = n
+		}
 	}
-	if stores != 1 {
-		t.Errorf("production code binds the snapshot at %d places, want exactly one (inside rebuildAndSwap)", stores)
+	want := map[string]int{"pfb_unbound.go": 1, "pfb_unbound_control.go": 1}
+	if !reflect.DeepEqual(stores, want) {
+		t.Errorf("production code binds the snapshot at %v, want %v (rebuildAndSwap and publishControl)", stores, want)
 	}
 }
 
