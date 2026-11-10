@@ -1,9 +1,12 @@
 package main
 
 import (
+	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,5 +54,102 @@ func TestShutdownEndsInsideItsBudgetWhenTheDeciderCannotBeClosed(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg.readyFile); err == nil {
 		t.Fatal("the ready file is still there after the shutdown")
+	}
+}
+
+// heldFrontend is a decider that ignores the cancelling of a query: Resolve says it has the query, then holds it until
+// release. Close, when closeGate is set, does not return until the gate is closed; closed says it was called.
+type heldFrontend struct {
+	entered   chan struct{}
+	release   chan struct{}
+	closeGate chan struct{}
+	closed    atomic.Bool
+}
+
+func (f *heldFrontend) Resolve([]byte, string, func([]byte) []byte, string, string, string) []byte {
+	select {
+	case f.entered <- struct{}{}:
+	default:
+	}
+	<-f.release
+	return nil
+}
+
+func (f *heldFrontend) Close() {
+	f.closed.Store(true)
+	if f.closeGate != nil {
+		<-f.closeGate
+	}
+}
+
+// startHeldQuery starts a server whose decider is fe, sends it a TCP query and returns once the decider holds it.
+func startHeldQuery(t *testing.T, fe *heldFrontend, stopBound, budget time.Duration) (*server, net.Conn, *capture) {
+	t.Helper()
+	cfg, logs := lifecycleConfig(t)
+	useDecider(t, func(decider.Options) (frontend, error) { return fe, nil })
+	cfg.shutdownBudget = budget
+	srv, err := start(cfg, logs.logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.g.stopBound = stopBound
+	var addr netip.AddrPort
+	for _, l := range strings.Split(logs.text(), "\n") {
+		if strings.HasPrefix(l, "listening udp+tcp ") {
+			addr = listenAddr(t, l)
+		}
+	}
+	c, err := net.Dial("tcp", addr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	tcpSend(t, c, buildQuery(t, 1, "held.example.", true))
+	waitClosed(t, fe.entered, "the decider to hold the query")
+	return srv, c, logs
+}
+
+// A decider that is still inside a query when the transports stop is not closed: Close does not wait for a query, so closing
+// it would pull the module out from under the query still running in it. The process exits right after, which takes both.
+func TestShutdownDoesNotCloseTheDeciderWhileAQueryIsStillInIt(t *testing.T) {
+	fe := &heldFrontend{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	t.Cleanup(sync.OnceFunc(func() { close(fe.release) }))
+	srv, _, logs := startHeldQuery(t, fe, 20*time.Millisecond, 10*time.Second)
+	done := make(chan struct{})
+	go func() { srv.shutdown(); close(done) }()
+	waitClosed(t, done, "shutdown to end")
+	if fe.closed.Load() {
+		t.Fatal("the decider was closed while a query was still running in it")
+	}
+	if text := logs.text(); !strings.Contains(text, "not closing the decider") {
+		t.Fatalf("the log must say that the decider was left:\n%s", text)
+	}
+}
+
+// The stop of the transports and the close of the decider share one budget: a stop that takes stopBound to drain leaves
+// the decider only what is left of it, so a Close that never returns ends the shutdown at the budget, not stopBound later.
+func TestShutdownEndsInsideItsBudgetWhenTheStopIsSlowAndTheDeciderCannotBeClosed(t *testing.T) {
+	const stopBound, budget, slack = 200 * time.Millisecond, 800 * time.Millisecond, 100 * time.Millisecond
+	fe := &heldFrontend{entered: make(chan struct{}, 1), release: make(chan struct{}), closeGate: make(chan struct{})}
+	letGo := sync.OnceFunc(func() { close(fe.release) })
+	t.Cleanup(letGo)
+	t.Cleanup(sync.OnceFunc(func() { close(fe.closeGate) }))
+	srv, c, logs := startHeldQuery(t, fe, stopBound, budget)
+	go func() { // the query is let go when stop() closes its client, in its second stage: stop drains after ~stopBound
+		_, _ = c.Read(make([]byte, 1))
+		letGo()
+	}()
+	start := time.Now()
+	done := make(chan struct{})
+	go func() { srv.shutdown(); close(done) }()
+	waitClosed(t, done, "shutdown to end")
+	if took := time.Since(start); took > budget+slack {
+		t.Fatalf("shutdown took %v, want at most the budget %v (+%v)", took, budget, slack)
+	}
+	if !fe.closed.Load() {
+		t.Fatal("the decider was not closed although the stop drained")
+	}
+	if text := logs.text(); !strings.Contains(text, "the decider did not close within") {
+		t.Fatalf("the log must say that the decider was left:\n%s", text)
 	}
 }
