@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -761,16 +763,16 @@ func TestAPanickingCallbackIsSwallowedAndPrintedLikePythons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.log.Reset()
+	drainPyError()
 	if !r.m.inplaceCbQueryResponse(qstate, response) {
 		t.Error("the callback returned False: Python's always returns True")
 	}
-	if got, want := r.log.String(), "[pfBlockerNG] inplace_cb_query_response: boom\n"; got != want {
+	if got, want := drainPyError(), "[pfBlockerNG] inplace_cb_query_response: boom\n"; got != want {
 		t.Errorf("printed %q, want %q", got, want)
 	}
 	r.log.Reset()
 	r.relay(t, observerReport(t, nil)) // through the Frontend: it must return
-	if got, want := r.log.String(), "[pfBlockerNG] inplace_cb_query_response: boom\n"; got != want {
+	if got, want := drainPyError(), "[pfBlockerNG] inplace_cb_query_response: boom\n"; got != want {
 		t.Errorf("through the Frontend printed %q, want %q", got, want)
 	}
 	if events := drain(); len(events) != 0 {
@@ -796,10 +798,21 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 // fireQueryResponse is the shim's last line: whatever the callback's own handler lets out is logged as an error and
 // swallowed, as Python's fire_query_response does. The line's reason is the panic value as %v says it, where Python's is
 // the exception's repr (Exception('writer boom')): the module's callback catches every Exception itself, so no report
-// reaches this line, and the test pins the Go text only to show that the swallow works.
+// reaches this line, and the test pins the Go text only to show that the swallow works. What the handler lets out here is
+// a failing write of its own line: py_error.log cannot be written, so the line falls back to the process stderr, whose
+// writer panics.
 func TestFireQueryResponseSwallowsWhatTheCallbackLetsOut(t *testing.T) {
 	r := newObserverRig(t, "forwarding = true\n")
 	r.m.logSink = func(string, string) { panic("boom") }
+	drainPyError()
+	path := filepath.Join(testLogDir, pyErrorLogName)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil { // a directory where the file was: no append to it
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
 	w := &failingWriter{trigger: "inplace_cb_query_response"}
 	previous := logOutput
 	logOutput = w
@@ -809,8 +822,8 @@ func TestFireQueryResponseSwallowsWhatTheCallbackLetsOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.m.fireQueryResponse(qstate, response)
-	if got, want := w.out.String(), "pfb_dns_proxy error: inplace callback query_response failed: writer boom\n"; got != want {
-		t.Errorf("logged %q, want %q", got, want)
+	if got, want := w.out.String(), "pfb_dns_proxy error: inplace callback query_response failed: writer boom\n"; !strings.HasSuffix(got, want) {
+		t.Errorf("logged %q, want it to end with %q", got, want)
 	}
 }
 

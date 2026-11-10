@@ -22,6 +22,7 @@ func modCaptureLog(t *testing.T) *bytes.Buffer {
 	previous := logOutput
 	logOutput = &out
 	t.Cleanup(func() { logOutput = previous })
+	drainPyError() // what the modules of the test write to sys.stderr is in py_error.log
 	return &out
 }
 
@@ -481,16 +482,17 @@ func TestInitStandardGoesOnWithAPartiallyReadIni(t *testing.T) {
 	if !m.pfb.pythonEnable || !m.pfb.forwarding {
 		t.Errorf("(pythonEnable, forwarding) = (%v, %v), want (true, true): the keys around a bad line are read", m.pfb.pythonEnable, m.pfb.forwarding)
 	}
-	if got := logs.String(); !strings.Contains(got, "Failed to load ini configuration: ") || !strings.Contains(got, "parsing errors") {
+	if got := drainPyError(); !strings.Contains(got, "Failed to load ini configuration: ") || !strings.Contains(got, "parsing errors") {
 		t.Errorf("log = %q, want the parse failure logged", got)
 	}
 
 	logs.Reset()
+	drainPyError()
 	dir := modIniDir(t, "k = v\n[MAIN]\npython_enable = true\n")
 	m = modMust(t, dir)
 	want := modDefaults(dir) // the read stopped at the first line: an empty config, no [MAIN]
 	modDiff(t, "ini without a first section header", m.pfb, want)
-	if got := logs.String(); !strings.Contains(got, "no section headers") || strings.Contains(got, "Ini file missing") {
+	if got := drainPyError() + logs.String(); !strings.Contains(got, "no section headers") || strings.Contains(got, "Ini file missing") {
 		t.Errorf("log = %q, want the missing-header failure and not 'Ini file missing'", got)
 	}
 }

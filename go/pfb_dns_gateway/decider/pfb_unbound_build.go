@@ -302,7 +302,7 @@ func loadUserRegexEntries(config *configParser) []userRegexEntry {
 		return raw, nil
 	}()
 	if err != nil {
-		logErr("[pfBlockerNG]: Failed to decode MAIN.regex_list: " + err.Error())
+		pyStderr("[pfBlockerNG]: Failed to decode MAIN.regex_list: " + err.Error())
 		return nil
 	}
 	text = string(decoded)
@@ -354,7 +354,7 @@ type refusalLog struct{ logged, suppressed int }
 func (l *refusalLog) write(line string) {
 	if l.logged < REGEX_REFUSAL_LOG_MAX {
 		l.logged++
-		logErr(line)
+		pyStderr(line + "\n")
 	} else {
 		l.suppressed++
 	}
@@ -362,7 +362,7 @@ func (l *refusalLog) write(line string) {
 
 func (l *refusalLog) summarize(kind string) {
 	if l.suppressed > 0 {
-		logErr(fmt.Sprintf("[pfBlockerNG]: %d more refused %s regex rules not logged", l.suppressed, kind))
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: %d more refused %s regex rules not logged\n", l.suppressed, kind))
 	}
 }
 
@@ -1033,7 +1033,7 @@ func dnsblFileLineReader(baseDir string, failClosed bool) lineReader {
 	return func(raw string) iter.Seq2[string, error] {
 		return func(yield func(string, error) bool) {
 			fail := func(message string) {
-				logErr("[pfBlockerNG]: " + message)
+				pyStderr("[pfBlockerNG]: " + message)
 				if failClosed {
 					yield("", &dnsblGenerationError{message})
 				}
@@ -1318,14 +1318,14 @@ func (m *pfbUnbound) dnsblBuildFromManifest(manifestPath string) *buildResult {
 		if errors.As(err, &pathErr) {
 			message = pyOSError(pathErr.Err, manifestPath)
 		}
-		logErr(fmt.Sprintf("[pfBlockerNG]: Failed to load DNSBL manifest '%s': %s", manifestPath, message))
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to load DNSBL manifest '%s': %s", manifestPath, message))
 		m.pfbPyStatusOpen("dnsbl", manifestPath, "parse", fmt.Sprintf("Failed to load DNSBL manifest '%s': %s", manifestPath, message))
 		return nil
 	}
 
 	result, err := m.buildFromManifestDocument(manifestPath, document)
 	if err != nil {
-		logErr("[pfBlockerNG]: Failed to build DNSBL structures from raw: " + err.Error())
+		pyStderr("[pfBlockerNG]: Failed to build DNSBL structures from raw: " + err.Error())
 		m.pfbPyStatusOpen("dnsbl", manifestPath, "parse", "Failed to build DNSBL structures from raw: "+err.Error())
 		return nil
 	}
@@ -1363,7 +1363,7 @@ func (m *pfbUnbound) buildFromManifestDocument(manifestPath string, document any
 		if top1mEnabled {
 			action = "reading TOP1M from it"
 		}
-		logErr(fmt.Sprintf("[pfBlockerNG]: DNSBL manifest '%s' still carries the retired config.top1m_list -- %s until the next full update rewrites the manifest",
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: DNSBL manifest '%s' still carries the retired config.top1m_list -- %s until the next full update rewrites the manifest",
 			manifestPath, action))
 	}
 	var top1mLines iter.Seq2[string, error]
@@ -1390,7 +1390,7 @@ func dnsblEmitCount(countPath string, count int) bool {
 		if errors.As(err, &pathErr) {
 			err = pathErr.Err
 		}
-		logErr(fmt.Sprintf("[pfBlockerNG]: Failed to write DNSBL count '%s': %s", countPath, pyOSError(err, countPath)))
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to write DNSBL count '%s': %s", countPath, pyOSError(err, countPath)))
 		return false
 	}
 	return true
@@ -1463,7 +1463,7 @@ func dnsblEmitRejectStats(statsPath string, rejects rejectTally) bool {
 		case errors.As(err, &linkErr):
 			err = linkErr.Err
 		}
-		logErr(fmt.Sprintf("[pfBlockerNG]: Failed to write DNSBL reject stats '%s': %s", statsPath, pyOSError(err, statsPath)))
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to write DNSBL reject stats '%s': %s", statsPath, pyOSError(err, statsPath)))
 		os.Remove(tmp)
 		return false
 	}

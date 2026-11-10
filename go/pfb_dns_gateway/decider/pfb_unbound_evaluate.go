@@ -71,7 +71,7 @@ func (r *regexRuntime) warnSlow(name string, elapsedMs, warnMs float64, label st
 	if elapsedMs <= warnMs || !r.firstWarning(label+":"+name) {
 		return
 	}
-	logErr(fmt.Sprintf("[pfBlockerNG]: slow %s regex [ %s ] took %.1f ms (warn ceiling %.1f ms)", label, name, elapsedMs, warnMs))
+	pyStderr(fmt.Sprintf("[pfBlockerNG]: slow %s regex [ %s ] took %.1f ms (warn ceiling %.1f ms)\n", label, name, elapsedMs, warnMs))
 }
 
 // regexScan is one pass over one regex list: it times every match, warns per slow rule, and report writes the ONE
@@ -112,7 +112,7 @@ func (s *regexScan) report() {
 	if s.totalMs <= s.warnMs || !s.rt.firstWarning("list:"+s.label) {
 		return
 	}
-	logErr(fmt.Sprintf("[pfBlockerNG]: slow %s regex list scan took %.1f ms over %d rules (warn ceiling %.1f ms); slowest [ %s ] %.1f ms",
+	pyStderr(fmt.Sprintf("[pfBlockerNG]: slow %s regex list scan took %.1f ms over %d rules (warn ceiling %.1f ms); slowest [ %s ] %.1f ms\n",
 		s.label, s.totalMs, s.rules, s.warnMs, s.slowest, s.slowestMs))
 }
 
@@ -639,7 +639,7 @@ func getTld(qstate *moduleQstate) string {
 		if err != nil {
 			// A qname carrying invalid UTF-8 makes Unbound's qname_list raise while decoding the labels; fall back to an
 			// empty TLD rather than crashing the module on that query (mirrors get_q_name_qstate).
-			logErr("[pfBlockerNG]: Failed get_tld: " + err.Error())
+			pyStderr("[pfBlockerNG]: Failed get_tld: " + err.Error() + "\n")
 		} else if len(labels) > 1 {
 			tld = pysem.Lower(labels[len(labels)-2])
 		}

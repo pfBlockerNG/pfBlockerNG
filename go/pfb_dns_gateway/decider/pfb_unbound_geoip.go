@@ -24,7 +24,7 @@ func (m *pfbUnbound) openMaxmind() {
 	}
 	reader, err := maxminddb.Open(maxmindDBPath)
 	if err != nil {
-		logErr("[pfBlockerNG]: Failed to open MaxMind DB: " + err.Error())
+		pyStderr("[pfBlockerNG]: Failed to open MaxMind DB: " + err.Error())
 		return
 	}
 	m.maxmind = reader
@@ -65,14 +65,14 @@ func (m *pfbUnbound) geoIPCode(settings *pfbSettings, rAddr string) string {
 	// (what an interface name is), as a ValueError: unk. pysem drops the scope from the packed address.
 	if _, scope, scoped := strings.Cut(rAddr, "%"); scoped {
 		if _, err := strconv.ParseUint(scope, 10, 32); err != nil {
-			logErr(fmt.Sprintf("[pfBlockerNG]: MaxMind Reader failed: %s does not appear to be an IPv4 or IPv6 address.: IP: %s", pysem.Repr(rAddr), rAddr))
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: MaxMind Reader failed: %s does not appear to be an IPv4 or IPv6 address.: IP: %s", pysem.Repr(rAddr), rAddr))
 			return unknown
 		}
 	}
 	addr, _ := netip.AddrFromSlice(packed)
 	var record geoRecord
 	if err := m.maxmind.Lookup(addr).Decode(&record); err != nil {
-		logErr(fmt.Sprintf("[pfBlockerNG]: MaxMind Reader failed: %v: IP: %s", err, rAddr))
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: MaxMind Reader failed: %v: IP: %s", err, rAddr))
 		return unknown
 	}
 	return record.code()

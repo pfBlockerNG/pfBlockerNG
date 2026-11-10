@@ -77,7 +77,7 @@ func parseEdeOptions(opts []ednsOpt) []edeEntry {
 func (m *pfbUnbound) inplaceCbQueryResponse(qstate *moduleQstate, response *dnsMsg) (observed bool) {
 	defer func() {
 		if err := recover(); err != nil {
-			fmt.Fprintf(logOutput, "[pfBlockerNG] inplace_cb_query_response: %v\n", err)
+			pyStderr(fmt.Sprintf("[pfBlockerNG] inplace_cb_query_response: %v\n", err))
 		}
 		observed = true
 	}()

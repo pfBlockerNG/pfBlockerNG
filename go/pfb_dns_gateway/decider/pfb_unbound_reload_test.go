@@ -902,11 +902,11 @@ func TestReloadWriteAppliedFailureIsLoggedAndLeavesNoTempFile(t *testing.T) {
 	} {
 		m := rlModule(t)
 		m.pfb.pfbPyReloadApplied = path
-		log := modCaptureLog(t)
+		_ = modCaptureLog(t)
 		m.reloadWriteApplied(7)
 		want := "[pfBlockerNG]: failed to write applied-generation marker [ " + path + " ]: "
-		if !strings.Contains(log.String(), want) {
-			t.Errorf("%s: log = %q, want it to hold %q", name, log.String(), want)
+		if got := drainPyError(); !strings.Contains(got, want) {
+			t.Errorf("%s: py_error.log = %q, want it to hold %q", name, got, want)
 		}
 		if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 			t.Errorf("%s: a temp file is left (stat error %v)", name, err)
@@ -937,12 +937,12 @@ func TestReloadWriteAppliedFailureLogsPythonsOSErrorText(t *testing.T) {
 		tc.setup(tc.path)
 		m := rlModule(t)
 		m.pfb.pfbPyReloadApplied = tc.path
-		log := modCaptureLog(t)
+		_ = modCaptureLog(t)
 		m.reloadWriteApplied(7)
 		detail := strings.Replace(tc.want, "%s", tc.path, strings.Count(tc.want, "%s"))
 		want := "[pfBlockerNG]: failed to write applied-generation marker [ " + tc.path + " ]: " + detail + "\n"
-		if got := log.String(); got != want {
-			t.Errorf("%s: log = %q, want %q", tc.name, got, want)
+		if got := drainPyError(); got != want {
+			t.Errorf("%s: py_error.log = %q, want %q", tc.name, got, want)
 		}
 	}
 }
@@ -1014,14 +1014,14 @@ func TestReloadWatcherKeepsTheSwapWhenTheMarkerWriteFailsAndGoesOn(t *testing.T)
 	m := rlModule(t)
 	b := newRlBuilds(m)
 	m.pfb.pfbPyReloadApplied = filepath.Join(t.TempDir(), "missing", "pfb_py_reload.applied")
-	log := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	w := m.newReloadWatcher()
 
 	rlPublish(t, m, 1)
 	rlDrainOnce(t, m, w)
 	rlWantDomains(t, "after the failed marker write", m, "gen1.example")
-	if !strings.Contains(log.String(), "failed to write applied-generation marker") {
-		t.Errorf("log = %q, want the marker failure", log.String())
+	if got := drainPyError(); !strings.Contains(got, "failed to write applied-generation marker") {
+		t.Errorf("py_error.log = %q, want the marker failure", got)
 	}
 	rlPublish(t, m, 2)
 	rlDrainOnce(t, m, w)
@@ -1225,7 +1225,7 @@ func TestReloadBuildSnapshotLogsAnUnreadableHstsFileAndStillBuilds(t *testing.T)
 		t.Fatal(err)
 	}
 	m.readFile = func(name string) ([]byte, error) { return nil, errors.New("read failed") }
-	log := modCaptureLog(t)
+	_ = modCaptureLog(t)
 
 	next, err := m.reloadBuildSnapshot()
 	if err != nil || next == nil {
@@ -1234,8 +1234,8 @@ func TestReloadBuildSnapshotLogsAnUnreadableHstsFileAndStillBuilds(t *testing.T)
 	if len(next.hstsDB) != 0 || len(next.dataDB) != 1 {
 		t.Errorf("(hstsDB, dataDB) = (%d, %d), want (0, 1)", len(next.hstsDB), len(next.dataDB))
 	}
-	if want := "reload: failed to load " + hsts + ": read failed"; !strings.Contains(log.String(), want) {
-		t.Errorf("log = %q, want it to hold %q", log.String(), want)
+	if got, want := drainPyError(), "reload: failed to load "+hsts+": read failed"; !strings.Contains(got, want) {
+		t.Errorf("py_error.log = %q, want it to hold %q", got, want)
 	}
 }
 

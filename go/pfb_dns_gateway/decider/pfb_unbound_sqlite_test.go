@@ -320,8 +320,9 @@ func TestSqliteDetailFailureRollsBackTheAggregateBeforeRetrying(t *testing.T) {
 				if got := r.sleeps.Load(); got != wantSleeps {
 					t.Errorf("pauses between attempts = %d, want %d", got, wantSleeps)
 				}
-				if failed := strings.Contains(r.log.String(), "sqlite write failed"); failed == retry {
-					t.Errorf("the final failure is logged = %v, want %v:\n%s", failed, !retry, r.log)
+				logged := drainPyError()
+				if failed := strings.Contains(logged, "sqlite write failed"); failed == retry {
+					t.Errorf("the final failure is logged = %v, want %v:\n%s", failed, !retry, logged)
 				}
 			})
 		}
@@ -406,14 +407,15 @@ func TestSqliteConnectLogsPragmaFailureAndStillInitialises(t *testing.T) {
 	r := newSqlRig(t, "", nil)
 	r.m.dbClose(dbResolver)
 	r.log.Reset()
+	drainPyError()
 	previous := dbPragmas
 	dbPragmas = []string{previous[0], "PRAGMA busy_timeout=NOT A NUMBER ;; bad", previous[2]}
 	t.Cleanup(func() { dbPragmas = previous })
 	if !r.m.dbValidate(dbResolver) {
 		t.Fatal("a PRAGMA failure stopped the connect: the connection still works on SQLite defaults")
 	}
-	if !strings.Contains(r.log.String(), "PRAGMA setup failed") {
-		t.Errorf("the PRAGMA failure was not logged:\n%s", r.log)
+	if got := drainPyError(); !strings.Contains(got, "PRAGMA setup failed") {
+		t.Errorf("the PRAGMA failure was not logged:\n%s", got)
 	}
 	if got := sqlValue(t, r.path(dbResolver), "SELECT totalqueries FROM resolver WHERE row = 0"); got != int64(0) {
 		t.Errorf("the seed row after a failed PRAGMA = %v, want 0: the tables must still be created", got)
@@ -561,8 +563,8 @@ func TestSqliteRecoveryNeverRemovesADirectory(t *testing.T) {
 	if info, err := os.Stat(path); err != nil || !info.IsDir() {
 		t.Errorf("the directory at the database path was removed: %v", err)
 	}
-	if !strings.Contains(r.log.String(), "sqlite write failed") {
-		t.Errorf("the failure was not reported:\n%s", r.log)
+	if got := drainPyError(); !strings.Contains(got, "sqlite write failed") {
+		t.Errorf("the failure was not reported:\n%s", got)
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
@@ -753,8 +755,8 @@ func TestSqliteOpenDnsblIfWantedIsIdempotentAndRetriesAfterAFailure(t *testing.T
 	if r.m.sqlite3DnsblCon.Load() {
 		t.Fatal("a database that cannot open set sqlite3_dnsbl_con")
 	}
-	if !strings.Contains(r.log.String(), "Failed to open pfb_py_dnsbl.sqlite database after recovery attempt") {
-		t.Errorf("the failure was not reported:\n%s", r.log)
+	if got := drainPyError(); !strings.Contains(got, "Failed to open pfb_py_dnsbl.sqlite database after recovery attempt") {
+		t.Errorf("the failure was not reported:\n%s", got)
 	}
 	if err := os.RemoveAll(blocked); err != nil {
 		t.Fatal(err)
@@ -891,14 +893,15 @@ func statsOutageModule(t *testing.T) *pfbUnbound {
 }
 
 func TestSqliteDnsKeepsAnsweringWhenTheStatsDatabasesCannotOpen(t *testing.T) {
-	log := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	m := statsOutageModule(t)
 	if m.sqlite3ResolverCon.Load() || m.sqlite3DnsblCon.Load() {
 		t.Error("a database that cannot open set its availability flag")
 	}
+	stderr := drainPyError()
 	for _, want := range []string{"Failed to open pfb_py_resolver.sqlite database", "Failed to open pfb_py_dnsbl.sqlite database"} {
-		if !strings.Contains(log.String(), want) {
-			t.Errorf("log lacks %q:\n%s", want, log)
+		if !strings.Contains(stderr, want) {
+			t.Errorf("py_error.log lacks %q:\n%s", want, stderr)
 		}
 	}
 	if len(m.metricsPrivacyEpochs) != 0 {
@@ -937,8 +940,8 @@ func TestSqliteGroupEpochReadFailureKeepsDnsAvailableWithoutAccounting(t *testin
 	if r.m.sqlite3DnsblCon.Load() {
 		t.Error("sqlite3_dnsbl_con stayed on after the epoch read failed")
 	}
-	if !strings.Contains(r.log.String(), "DNSBL accounting unavailable: ") {
-		t.Errorf("the failure was not reported:\n%s", r.log)
+	if got := drainPyError(); !strings.Contains(got, "DNSBL accounting unavailable: ") {
+		t.Errorf("the failure was not reported:\n%s", got)
 	}
 	r.m.dbEnqueue(blockEvent("First", "x")) // accounting is off: no write, no panic
 }
@@ -952,14 +955,14 @@ func TestSqliteMissingOwnerEpochsAreReported(t *testing.T) {
 	snap.feedGroupIndexDB[2] = feedGroup{feed: "F2", group: "FallbackLost"}
 	snap.zoneDB["b.example"] = &blockEntry{groupOwner: "DNSBL_Missing", groupOrigin: "builtin", hasGroupOwner: true, hasGroupOrigin: true, top1mFallback: &blockEntry{index: 2}}
 	snap.regexDB.set("r", &regexEntry{groupOwner: "Rx", groupOrigin: "custom"})
-	r.log.Reset()
+	drainPyError()
 	epochs := r.m.dbGroupEpochs(true, snap)
 	if _, ok := epochs[[2]string{"Upstream", "builtin"}]; !ok {
 		t.Errorf("epochs = %v, want the builtin owners", epochs)
 	}
 	want := "DNSBL accounting unavailable for owners: [('DNSBL_Missing', 'builtin'), ('FallbackLost', 'custom'), ('Lost', 'custom'), ('Rx', 'custom')]"
-	if !strings.Contains(r.log.String(), want) {
-		t.Errorf("log = %q, want it to name every owner without an epoch:\n%s", r.log, want)
+	if got := drainPyError(); !strings.Contains(got, want) {
+		t.Errorf("py_error.log = %q, want it to name every owner without an epoch:\n%s", got, want)
 	}
 }
 
@@ -983,8 +986,8 @@ func TestSqlitePrivacyAuthorityFailureNeverBreaksDns(t *testing.T) {
 	if len(r.m.metricsPrivacyEpochs) != 0 {
 		t.Errorf("epochs = %v from databases that cannot be read", r.m.metricsPrivacyEpochs)
 	}
-	if !strings.Contains(r.log.String(), "Client metric authority unavailable") {
-		t.Errorf("the failure was not reported:\n%s", r.log)
+	if got := drainPyError(); !strings.Contains(got, "Client metric authority unavailable") {
+		t.Errorf("the failure was not reported:\n%s", got)
 	}
 	if client, epoch := r.m.metricClient(dbResolver, "192.0.2.10"); client != "" || epoch != "" {
 		t.Errorf("metricClient = %q, %q without authority, want blanks", client, epoch)

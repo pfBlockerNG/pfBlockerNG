@@ -55,8 +55,8 @@ func TestReloadWatcherSurvivesABuilderPanicAndTakesTheNextGeneration(t *testing.
 
 	rlPublish(t, m, 1)
 	poll("after the generation whose build panicked")
-	if want := "[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: builder blew up\n"; !strings.Contains(log.String(), want) {
-		t.Errorf("log = %q, want it to hold %q", log.String(), want)
+	if got, want := drainPyError(), "[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: builder blew up\n"; !strings.Contains(got, want) {
+		t.Errorf("py_error.log = %q, want it to hold %q", got, want)
 	}
 	rlWantDomains(t, "after the panicked generation", m, "old.example")
 	rlWantApplied(t, "after the panicked generation", m, "")

@@ -147,7 +147,7 @@ func TestControlWriteAppliedWritesTheSeqAsOneLine(t *testing.T) {
 // is logged and the temp file is not left behind.
 func TestControlWriteAppliedRenameFailureIsLoggedAndLeavesNoTempFile(t *testing.T) {
 	m := chModule(t)
-	logs := captureLog(t)
+	_ = captureLog(t)
 	marker := filepath.Join(t.TempDir(), "pfb_py_control.applied")
 	if err := os.MkdirAll(filepath.Join(marker, "occupied"), 0o700); err != nil {
 		t.Fatal(err)
@@ -155,8 +155,8 @@ func TestControlWriteAppliedRenameFailureIsLoggedAndLeavesNoTempFile(t *testing.
 	m.pfb.pfbPyControlApplied = marker
 	m.controlWriteApplied(big.NewInt(3))
 	want := "[pfBlockerNG]: failed to write control applied marker [ " + marker + " ]: "
-	if !strings.HasPrefix(logs.String(), want) {
-		t.Errorf("logged %q, want it to start with %q", logs.String(), want)
+	if got := drainPyError(); !strings.HasPrefix(got, want) {
+		t.Errorf("py_error.log has %q, want it to start with %q", got, want)
 	}
 	if _, err := os.Stat(marker + ".tmp"); !os.IsNotExist(err) {
 		t.Errorf("the temp file is left behind (stat error %v), want it removed after the failed rename", err)
@@ -169,12 +169,12 @@ func TestControlWriteAppliedRenameFailureIsLoggedAndLeavesNoTempFile(t *testing.
 // The temp file cannot be created at all: logged, nothing to clean.
 func TestControlWriteAppliedFailureToCreateIsLogged(t *testing.T) {
 	m := chModule(t)
-	logs := captureLog(t)
+	_ = captureLog(t)
 	m.pfb.pfbPyControlApplied = filepath.Join(t.TempDir(), "gone", "pfb_py_control.applied")
 	m.controlWriteApplied(big.NewInt(3))
 	want := "[pfBlockerNG]: failed to write control applied marker [ " + m.pfb.pfbPyControlApplied + " ]: "
-	if !strings.HasPrefix(logs.String(), want) {
-		t.Errorf("logged %q, want it to start with %q", logs.String(), want)
+	if got := drainPyError(); !strings.HasPrefix(got, want) {
+		t.Errorf("py_error.log has %q, want it to start with %q", got, want)
 	}
 }
 
@@ -192,12 +192,12 @@ func TestControlWriteAppliedFailureLogsPythonsOSErrorText(t *testing.T) {
 		asDir:   "[Errno 21] Is a directory: '" + asDir + ".tmp' -> '" + asDir + "'",
 	} {
 		m := chModule(t)
-		logs := captureLog(t)
+		_ = captureLog(t)
 		m.pfb.pfbPyControlApplied = path
 		m.controlWriteApplied(big.NewInt(3))
 		want := "[pfBlockerNG]: failed to write control applied marker [ " + path + " ]: " + detail + "\n"
-		if got := logs.String(); got != want {
-			t.Errorf("logged %q, want %q", got, want)
+		if got := drainPyError(); got != want {
+			t.Errorf("py_error.log has %q, want %q", got, want)
 		}
 	}
 }
@@ -467,15 +467,15 @@ func TestWatcherPassesAnAddbypassDurationAndDropsARemovebypassOne(t *testing.T) 
 func TestWatcherWriteFailureIsLoggedAndTheCommandStillStands(t *testing.T) {
 	m := chModule(t)
 	w := m.newControlWatcher()
-	logs := captureLog(t)
+	_ = captureLog(t)
 	m.pfb.pfbPyControlApplied = filepath.Join(t.TempDir(), "gone", "pfb_py_control.applied")
 	chPublish(t, m, `{"seq": 1, "cmd": "disable"}`)
 	w.drainAndApply(make(chan struct{}))
 	if ctlBlacklist(m) {
 		t.Errorf("python_blacklist = true: the failed marker write undid the command")
 	}
-	if !strings.Contains(logs.String(), "failed to write control applied marker") {
-		t.Errorf("logged %q, want the marker failure", logs.String())
+	if got := drainPyError(); !strings.Contains(got, "failed to write control applied marker") {
+		t.Errorf("py_error.log has %q, want the marker failure", got)
 	}
 	// the seq was consumed all the same: the next drain does not apply it again
 	ctlApply(m, "python_control", "enable")

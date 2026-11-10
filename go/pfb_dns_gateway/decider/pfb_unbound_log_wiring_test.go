@@ -25,7 +25,7 @@ func geoModule(t *testing.T, reply string, database string) (*pfbUnbound, string
 		t.Fatal(err)
 	}
 	stopModule(t, m)
-	return m, logs.String()
+	return m, logs.String() + drainPyError() // what the module wrote to sys.stderr is py_error.log
 }
 
 func TestInitOpensTheGeoIPReaderWhenRepliesAreLoggedAndTheDatabaseIsInstalled(t *testing.T) {

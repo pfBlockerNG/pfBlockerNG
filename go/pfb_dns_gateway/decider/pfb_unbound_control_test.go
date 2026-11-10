@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -127,7 +128,8 @@ func TestControlDurationFollowsPythonsUnicodeNumerics(t *testing.T) {
 		if got := controlDuration(text); got != 0 {
 			t.Errorf("controlDuration(%q) = %d, want 0: isnumeric() but not an int()", text, got)
 		}
-		if want := "[pfBlockerNG] python_control_duration: invalid literal for int() with base 10: '" + text + "'"; logs.String() != want {
+		// no module is booted, so sys.stderr is the process's: the line is logErr's
+		if want := "pfb_dns_proxy error: [pfBlockerNG] python_control_duration: invalid literal for int() with base 10: '" + text + "'\n"; logs.String() != want {
 			t.Errorf("controlDuration(%q) logged %q, want %q", text, logs.String(), want)
 		}
 	}
@@ -195,8 +197,13 @@ func TestControlDurationMatchesPythonOnTheOracleRows(t *testing.T) {
 		if got := controlDuration(row.Text); got != want {
 			t.Errorf("controlDuration(%q) = %d, want %d", row.Text, got, want)
 		}
-		if logs.String() != row.Stderr {
-			t.Errorf("controlDuration(%q) logged %q, want Python's %q", row.Text, logs.String(), row.Stderr)
+		// no module is booted, so sys.stderr is the process's: Python's text, as a line of logErr's
+		wantLog := ""
+		if row.Stderr != "" {
+			wantLog = "pfb_dns_proxy error: " + strings.TrimRight(row.Stderr, "\n") + "\n"
+		}
+		if logs.String() != wantLog {
+			t.Errorf("controlDuration(%q) logged %q, want Python's %q as a line (%q)", row.Text, logs.String(), row.Stderr, wantLog)
 		}
 	}
 }

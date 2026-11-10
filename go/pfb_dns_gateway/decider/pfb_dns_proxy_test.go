@@ -49,6 +49,7 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	previous := logOutput
 	logOutput = &out
 	t.Cleanup(func() { logOutput = previous })
+	drainPyError()
 	return &out
 }
 

@@ -524,7 +524,7 @@ func replyAddress(rep *replyInfo) (string, error) {
 				}
 				rAddr = address
 				if packed, err := pysem.IPAddress(address); err != nil {
-					logErr(fmt.Sprintf("[pfBlockerNG]: Failed to compress IPv6: %s, %s", address, err))
+					pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to compress IPv6: %s, %s", address, err))
 				} else {
 					rAddr = pysem.Compressed(packed)
 				}
