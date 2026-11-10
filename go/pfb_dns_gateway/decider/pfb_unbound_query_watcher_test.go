@@ -50,14 +50,24 @@ func queryWaitReply(t *testing.T, dir string, limit time.Duration) string {
 
 // PHP's pfb_dnsbl_query() waits at most 5 s for a reply and shares that budget with its lock wait, so a watcher that
 // polls every RELOAD_POLL_INTERVAL (2 s) times concurrent hits out. The query watcher takes a tick of its own, a fraction
-// of that. The request is written after the watcher's first drain, so only a later tick can pick it up.
+// of that. A probe request, answered and removed, shows the watcher is running its loop; the timed request is written
+// after that, so only a later tick can pick it up.
 func TestQueryWatcherAnswersWellInsideThePollInterval(t *testing.T) {
 	oracle := loadQueryOracle(t)
 	dir := t.TempDir()
 	m := modMust(t, dir)
 	m.snapshot.Store(oracle.Fixtures["plain"].snapshot(t))
-	time.Sleep(200 * time.Millisecond)
-	if err := os.WriteFile(filepath.Join(dir, "pfb_py_query"), []byte(`{"id": "fast", "domain": "listed.example.com"}`), 0o660); err != nil {
+	channel, reply := filepath.Join(dir, "pfb_py_query"), filepath.Join(dir, "pfb_py_query.reply")
+	if err := os.WriteFile(channel, []byte(`{"id": "probe", "domain": "clean.example.com"}`), 0o660); err != nil {
+		t.Fatal(err)
+	}
+	queryWaitReply(t, dir, 30*time.Second) // the loop runs; its next look is a tick away
+	for _, path := range []string{channel, reply} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(channel, []byte(`{"id": "fast", "domain": "listed.example.com"}`), 0o660); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
@@ -76,6 +86,10 @@ func TestQueryWatcherAnswersARequestAlreadyOnDisk(t *testing.T) {
 	}
 	m := modMust(t, dir)
 	m.stopQueryWatcher()
+	// The watcher init started may have answered the request before it stopped: only the one driven here may satisfy it.
+	if err := os.Remove(filepath.Join(dir, "pfb_py_query.reply")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	w := m.newQueryWatcher()
 	queryDrain(t, w)
 	got, err := os.ReadFile(filepath.Join(dir, "pfb_py_query.reply"))
