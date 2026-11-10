@@ -27,11 +27,13 @@ import (
 const RELOAD_POLL_INTERVAL = 2 * time.Second
 
 // controlEdit is the copy-on-write view of the live snapshot that one control command writes: nothing is copied until it
-// is written.
+// is written. openStats marks a command that newly wants the DNSBL statistics database: it opens once the edit is
+// published, outside publishMu, so that a database that is slow to open holds no publisher.
 type controlEdit struct {
-	live     *snapshot
-	settings *pfbSettings
-	gpListDB map[string]int
+	live      *snapshot
+	settings  *pfbSettings
+	gpListDB  map[string]int
+	openStats bool
 }
 
 func newControlEdit(m *pfbUnbound) *controlEdit { return &controlEdit{live: m.snapshot.Load()} }
@@ -180,14 +182,15 @@ func (m *pfbUnbound) controlStartThread(tname string, delay time.Duration, body 
 	})
 }
 
-// controlSleep is python_control_sleep's body once the sleep is over: blocking is back on.
-// Not translated: _open_dnsbl_stats_db_if_wanted (the sqlite stats DB).
+// controlSleep is python_control_sleep's body once the sleep is over: blocking is back on, and the DNSBL statistics
+// database init skipped opens (issue #870).
 func (m *pfbUnbound) controlSleep() {
 	m.publishMu.Lock()
-	defer m.publishMu.Unlock()
 	edit := newControlEdit(m)
 	edit.writeSettings().pythonBlacklist = true
 	m.publishControl(edit)
+	m.publishMu.Unlock()
+	m.openDnsblStatsDbIfWanted(edit.readSettings())
 }
 
 // controlAddbypass is python_control_addbypass's body once the sleep is over: the IP leaves the Group Policy bypass list.
@@ -205,14 +208,17 @@ func (m *pfbUnbound) controlAddbypass(bIP string) bool {
 
 // pfbApplyControlCommand is pfb_apply_control_command: the single DNSBL-control handler. controlCommand is the
 // dot-split token list both transports build; the IP and the duration are validated here, never trusted from the
-// transport. It returns (applied, message). It holds publishMu throughout, so the check for a running timer and the
-// start of one are one step, as the Python callers' GIL-held sequence is not.
+// transport. It returns (applied, message). It holds publishMu while it edits and publishes, so the check for a running
+// timer and the start of one are one step, as the Python callers' GIL-held sequence is not.
 func (m *pfbUnbound) pfbApplyControlCommand(controlCommand []string) (bool, string) {
 	m.publishMu.Lock()
-	defer m.publishMu.Unlock()
 	edit := newControlEdit(m)
 	controlRcd, controlMsg := m.applyControlCommand(edit, controlCommand)
 	m.publishControl(edit)
+	m.publishMu.Unlock()
+	if edit.openStats {
+		m.openDnsblStatsDbIfWanted(edit.readSettings())
+	}
 	return controlRcd, controlMsg
 }
 
@@ -249,7 +255,9 @@ func (m *pfbUnbound) applyControlCommand(edit *controlEdit, controlCommand []str
 			controlRcd = true
 			controlMsg = "Python_control: DNSBL enabled"
 			edit.writeSettings().pythonBlacklist = true
-			// Not translated: _open_dnsbl_stats_db_if_wanted (the sqlite stats DB).
+			// Enabling newly satisfies _dnsbl_stats_wanted: the statistics database init skipped at boot opens once this is
+			// published (issue #870).
+			edit.openStats = true
 
 		case "addbypass", "removebypass":
 			// PFBL-03: reject a malformed bypass command instead of raising

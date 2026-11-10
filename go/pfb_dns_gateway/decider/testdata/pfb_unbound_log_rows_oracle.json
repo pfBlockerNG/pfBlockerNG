@@ -7638,6 +7638,66 @@
        [
         "TXT",
         [
+         "00100f323030313a3231383a3a3125307831"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%0x1,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "00100f323030313a3231383a3a3125315f30"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%1_0,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
          "0019183a3a666666663a322e3132352e3136302e32313625656d30"
         ]
        ]

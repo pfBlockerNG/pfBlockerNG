@@ -1123,6 +1123,13 @@ _DO_BUILD_LINE = re.compile(
 _VENDOR_PREFIX = "../go/pfb_dns_gateway/vendor/"
 # Go's three pseudo-version forms: vX.0.0-<ts>-<rev>, vX.Y.Z-0.<ts>-<rev>, vX.Y.Z-pre.0.<ts>-<rev> (any rev).
 _PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]+(?:\+.*)?$")
+# Owner decision (#3511/#3779): the only modules GL_TUPLE may supply (their `go-import` is gitlab.com/cznic/<project>)
+# and the only module whose untagged pseudo-version a GH_TUPLE may name (by revision). Widening either is an owner call.
+_GITLAB_MODULE_HOSTS = frozenset({"modernc.org"})  # first path element of a module GL_TUPLE may fetch
+_PSEUDO_VERSION_MODULES = frozenset({"github.com/remyoudompheng/bigfft"})
+_GITLAB_SITE = "https://gitlab.com:"
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+_REVISION = re.compile(r"[0-9a-f]{12}")
 
 
 def _parse_do_build(mk: Makefile) -> tuple[Path, Path | None]:
@@ -1152,34 +1159,62 @@ def _read_modules_txt(path: Path | None) -> str:
 
 
 def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
-    """GH_TUPLE (what the port unpacks into vendor/) must name exactly the modules, at the versions, of modules.txt."""
-    unpacked: set[tuple[str, str]] = set()
-    try:
-        entries = shlex.split(mk.get("GH_TUPLE"))
-    except ValueError as exc:
-        raise BuildError(f"GH_TUPLE is not a list of words ({exc})") from None
-    for entry in entries:
-        parts = entry.split(":", 3)
-        if len(parts) != 4:
-            raise BuildError(f"GH_TUPLE entry {entry!r} is not account:project:tag:group/subdir")
-        _group, _, subdir = parts[3].partition("/")
-        if not subdir.startswith(_VENDOR_PREFIX):
-            raise BuildError(f"GH_TUPLE entry {entry!r} does not unpack under {_VENDOR_PREFIX} (the gateway's vendor/)")
-        unpacked.add((subdir[len(_VENDOR_PREFIX) :], parts[2]))
-    listed: set[tuple[str, str]] = set()
+    """GH_TUPLE and GL_TUPLE (what the port unpacks into vendor/) must name exactly the modules of modules.txt.
+
+    GH_TUPLE names a tag, so the versions agree; a GL_TUPLE commit cannot be checked against a tag offline, so only its
+    shape is and the module counts at the version modules.txt lists. An allowlisted pseudo-version module is named by
+    the revision its version ends in.
+    """
+    listed: dict[str, str] = {}
     for line in _read_modules_txt(modules_txt).splitlines():
         if not line.startswith("# "):
             continue
         fields = line[2:].split()
-        if len(fields) != 2:  # also every `# path version => replacement` line: no GH_TUPLE entry can supply it
+        if len(fields) != 2:  # also every `# path version => replacement` line: no tuple entry can supply it
             raise BuildError(f"{modules_txt}: unsupported module line {line!r}")
-        if _PSEUDO_VERSION.search(fields[1]):
+        if _PSEUDO_VERSION.search(fields[1]) and fields[0] not in _PSEUDO_VERSION_MODULES:
             raise BuildError(f"{modules_txt}: {fields[1]} is a pseudo-version, which no GH_TUPLE tag can name")
-        listed.add((fields[0], fields[1]))
-    if unpacked != listed:
-        differences = [f"GH_TUPLE only: {path} {version}" for path, version in sorted(unpacked - listed)]
-        differences += [f"modules.txt only: {path} {version}" for path, version in sorted(listed - unpacked)]
-        raise BuildError("GH_TUPLE and the recipe's modules.txt disagree:\n  " + "\n  ".join(differences))
+        if fields[0] in listed:
+            raise BuildError(f"{modules_txt}: {fields[0]} is listed twice ({listed[fields[0]]} and {fields[1]})")
+        listed[fields[0]] = fields[1]
+    unpacked: dict[tuple[str, str], str] = {}  # (path, version) -> the variable that unpacks it
+    for variable in ("GH_TUPLE", "GL_TUPLE"):
+        try:
+            entries = shlex.split(mk.get(variable))
+        except ValueError as exc:
+            raise BuildError(f"{variable} is not a list of words ({exc})") from None
+        for entry in entries:
+            parts = entry.removeprefix(_GITLAB_SITE if variable == "GL_TUPLE" else "").split(":", 3)
+            if len(parts) != 4:
+                raise BuildError(f"{variable} entry {entry!r} is not account:project:tag:group/subdir")
+            _group, _, subdir = parts[3].partition("/")
+            if not subdir.startswith(_VENDOR_PREFIX):
+                raise BuildError(
+                    f"{variable} entry {entry!r} does not unpack under {_VENDOR_PREFIX} (the gateway's vendor/)"
+                )
+            path, tag = subdir[len(_VENDOR_PREFIX) :], parts[2]
+            if variable == "GL_TUPLE":
+                if not _COMMIT.fullmatch(tag):
+                    raise BuildError(f"GL_TUPLE entry {entry!r} does not name a 40-hex lowercase commit")
+                host, _, rest = path.partition("/")
+                if host not in _GITLAB_MODULE_HOSTS or not rest:
+                    hosts = " or ".join(sorted(_GITLAB_MODULE_HOSTS))
+                    raise BuildError(f"GL_TUPLE entry {entry!r} is not a {hosts} module")
+                if path not in listed:
+                    raise BuildError(f"GL_TUPLE entry {entry!r} names {path}, which modules.txt does not list")
+                tag = listed[path]
+            elif path in _PSEUDO_VERSION_MODULES and _PSEUDO_VERSION.search(listed.get(path, "")):
+                revision = listed[path].partition("+")[0].rsplit("-", 1)[1]
+                accepted = tag == revision or (_COMMIT.fullmatch(tag) and tag.startswith(revision))
+                if not _REVISION.fullmatch(revision) or not accepted:
+                    raise BuildError(f"GH_TUPLE entry {entry!r} is not the revision of {path} {listed[path]}")
+                tag = listed[path]
+            unpacked[path, tag] = variable
+    modules = set(listed.items())
+    if unpacked.keys() != modules:
+        differences = [f"{unpacked[key]} only: {key[0]} {key[1]}" for key in sorted(unpacked.keys() - modules)]
+        differences += [f"modules.txt only: {path} {version}" for path, version in sorted(modules - unpacked.keys())]
+        raise BuildError("GH_TUPLE/GL_TUPLE and the recipe's modules.txt disagree:\n  " + "\n  ".join(differences))
 
 
 def _refuse_committed_binaries(wrksrc: Path) -> None:

@@ -385,24 +385,34 @@ The builder follows that recipe instead of re-deriving it. It accepts only that 
 line, flag for flag and in that order (any other shape, flag or value is an error that says to
 teach the builder), refuses a source tree that already carries `dns_proxy/bin`, and builds the
 attested source with its own copy of `build-pfb-dns.py` (never the source's), with the same
-`--modules-txt` and the leg's FreeBSD major. Before any Go runs it checks that `GH_TUPLE` and
-`files/modules.txt` name the same modules at the same versions: every entry unpacks under
-`../go/pfb_dns_gateway/vendor/`, `=>` replace lines and pseudo-versions (which no tag can
-name) are refused, and so are a tuple without a `modules.txt` line and the reverse. A
-`do-build` without `--modules-txt` is refused when the source vendors modules, because a real
+`--modules-txt` and the leg's FreeBSD major. Before any Go runs it checks that `GH_TUPLE`,
+`GL_TUPLE` and `files/modules.txt` name the same modules at the same versions: every entry
+unpacks under `../go/pfb_dns_gateway/vendor/`, `=>` replace lines and pseudo-versions (which no
+tag can name) are refused, and so are a tuple without a `modules.txt` line and the reverse. Two
+narrow exceptions, both allowlists in the builder (`_GITLAB_MODULE_HOSTS`,
+`_PSEUDO_VERSION_MODULES`; changing either is an owner decision):
+
+- `GL_TUPLE` (`[https://gitlab.com:]account:project:<40 lower-case hex commit>:group/subdir`) may supply
+  modules under `modernc.org/` only (the first path element, never the bare host). A module listed twice in `modules.txt` is refused. A commit cannot be compared with a tag offline, so only its
+  shape is checked, and the module counts at the version `modules.txt` lists.
+- `github.com/remyoudompheng/bigfft` has no tags: its `GH_TUPLE` entry names the 12-hex
+  revision its pseudo-version ends in (or the full commit that starts with it).
+
+A `do-build` without `--modules-txt` is refused when the source vendors modules, because a real
 `make` would have no vendor tree to build from.
 
-The check compares each module's path and tag, not the repository a tuple fetches: whoever
-reviews the ports PR confirms that every `GH_TUPLE` account and project is the module's own.
+The check compares each module's path and tag (for `GL_TUPLE`, the commit's shape), not the
+repository a tuple fetches: whoever reviews the ports PR confirms that every `GH_TUPLE` and
+`GL_TUPLE` account and project is the module's own.
 
-### Regenerating GH_TUPLE and modules.txt
+### Regenerating GH_TUPLE, GL_TUPLE and modules.txt
 
 Do this whenever `go/pfb_dns_gateway/go.mod` or `go.sum` changes:
 
 1. `cd go/pfb_dns_gateway`
 2. `go mod vendor -o "$VENDOR"` (any empty directory)
-3. `modules2tuple "$VENDOR/modules.txt"` prints the `GH_TUPLE` lines; prefix each
-   subdirectory with `../go/pfb_dns_gateway/` (`vendor/<path>` becomes
+3. `modules2tuple "$VENDOR/modules.txt"` prints the `GH_TUPLE` and `GL_TUPLE` lines; prefix
+   each subdirectory with `../go/pfb_dns_gateway/` (`vendor/<path>` becomes
    `../go/pfb_dns_gateway/vendor/<path>`).
 4. `cp "$VENDOR/modules.txt" <port>/files/modules.txt`
 

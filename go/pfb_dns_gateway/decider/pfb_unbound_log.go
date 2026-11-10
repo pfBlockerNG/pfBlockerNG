@@ -1,7 +1,7 @@
 // Go translation of the log-row half of pfb_unbound.py: get_details_dnsbl, _log_idn_alert and get_details_reply with the
 // helpers their rows are built from (_log_text, _csv_row, make_timestamp, get_q_*, convert_ipv4/ipv6) and the reply
-// callbacks. The rows go out through pfbLog (pfb_unbound_logfile.go). Not translated: the SQLite counters the same
-// functions enqueue (PR5b) and _log_upstream_block (the upstream observer).
+// callbacks. The rows go out through pfbLog (pfb_unbound_logfile.go), and the counters the same functions enqueue go to
+// the stats databases (pfb_unbound_sqlite.go). Not translated: _log_upstream_block (the upstream observer).
 package decider
 
 import (
@@ -289,7 +289,8 @@ func (m *pfbUnbound) seen(event dnsblEvent) bool {
 }
 
 // getDetailsDnsbl logs the block `dnsbl` that operate() served for the query, unless the block is silent (python_nolog
-// for a VIP block, log type 2, 4 or 6). A nil dnsbl is UNSET, a defensive no-op. groupEpoch only feeds the counter.
+// for a VIP block, log type 2, 4 or 6). A nil dnsbl is UNSET, a defensive no-op. groupEpoch is the group's counter
+// authority from the query's snapshot: the group counter is enqueued, silent or not, only under it.
 func (m *pfbUnbound) getDetailsDnsbl(mType string, qinfo *queryInfo, qstate *moduleQstate, kwargs *logKwargs, dnsbl *dnsblDecision, groupEpoch string) bool {
 	var qName string
 	switch {
@@ -306,7 +307,14 @@ func (m *pfbUnbound) getDetailsDnsbl(mType string, qinfo *queryInfo, qstate *mod
 	listenerIP, listenerInterface := getQListener(qstate, kwargs)
 	qIP := getQIpComm(kwargs)
 
-	// Not translated: the resolver counter enqueue (PR5b).
+	// Increment the totalqueries counter.
+	if m.sqlite3ResolverCon.Load() {
+		client, clientEpoch := m.metricClient(dbResolver, qIP)
+		m.dbEnqueue(dbEvent{
+			qtype: metricQtype(qstate, qinfo, qType), transport: metricTransport(transport), listenerIP: listenerIP, listenerInterface: listenerInterface,
+			client: client, clientEpoch: clientEpoch,
+		})
+	}
 
 	// The served verdict rides in by value from operate(): never re-read the shared decisionDB memo (issue #1094).
 	if dnsbl == nil || !dnsbl.isFound || dnsbl.inWhitelist {
@@ -317,7 +325,15 @@ func (m *pfbUnbound) getDetailsDnsbl(mType string, qinfo *queryInfo, qstate *mod
 		return true
 	}
 
-	// Not translated: the dnsbl group counter enqueue (PR5b).
+	// Increment the dnsblgroup counter.
+	if m.sqlite3DnsblCon.Load() && dnsbl.group != "" && groupEpoch != "" {
+		client, clientEpoch := m.metricClient(dbDnsbl, qIP)
+		m.dbEnqueue(dbEvent{
+			dnsbl: true, group: dnsbl.group, owner: dnsbl.groupOwner, origin: dnsbl.groupOrigin, epoch: groupEpoch,
+			qtype: metricQtype(qstate, qinfo, qType), transport: metricTransport(transport), listenerIP: listenerIP, listenerInterface: listenerInterface,
+			client: client, clientEpoch: clientEpoch,
+		})
+	}
 
 	// The decision is name- and qtype-independent for some block kinds, so the name and q_type are part of the event.
 	event := dnsblEvent{
@@ -400,7 +416,14 @@ func (m *pfbUnbound) getDetailsReply(mType string, qinfo *queryInfo, qstate *mod
 		mType = "reply"
 	}
 
-	// Not translated: the resolver counter enqueue, which leaves the Resolver's own requests out (PR5b).
+	// Increment the totalqueries counter (the Resolver's own DNS requests are not included).
+	if m.sqlite3ResolverCon.Load() && qIP != "127.0.0.1" {
+		client, clientEpoch := m.metricClient(dbResolver, qIP)
+		m.dbEnqueue(dbEvent{
+			qtype: metricQtype(qstate, qinfo, oType), transport: metricTransport(transport), listenerIP: listenerIP, listenerInterface: listenerInterface,
+			client: client, clientEpoch: clientEpoch,
+		})
+	}
 
 	// Do not log Replies, if disabled.
 	if !snap.settings.pythonReply {
