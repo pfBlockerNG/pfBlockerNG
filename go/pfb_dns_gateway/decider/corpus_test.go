@@ -28,7 +28,7 @@ func TestParityCorpus(t *testing.T) {
 			continue
 		}
 		t.Run(strings.TrimSuffix(filepath.Base(file), ".json"), func(t *testing.T) {
-			runScenario(t, file, source)
+			runScenario(t, file, source, func(t *testing.T, line string) { t.Error(line) })
 		})
 	}
 	if statsCounted == 0 {
@@ -36,7 +36,9 @@ func TestParityCorpus(t *testing.T) {
 	}
 }
 
-func runScenario(t *testing.T, file string, families map[string]string) {
+// runScenario runs the scenario file's cases in file order, each as a subtest of t, and hands every mismatch to report
+// with that subtest.
+func runScenario(t *testing.T, file string, families map[string]string, report func(t *testing.T, line string)) {
 	s, err := paritycorpus.LoadScenario(file, families)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +48,7 @@ func runScenario(t *testing.T, file string, families map[string]string) {
 		c := &s.Cases[i]
 		t.Run(c.ID, func(t *testing.T) {
 			for _, line := range resolveCase(f, s, c) {
-				t.Error(line)
+				report(t, line)
 			}
 		})
 	}
@@ -87,13 +89,13 @@ func resolveCase(f *Frontend, s *paritycorpus.Scenario, c *paritycorpus.Case) []
 	return append(lines, paritycorpus.Mismatches(s, c, c.Query.Wire, u, answer)...)
 }
 
-// scratchScenario loads a one-case scenario whose case, in a family no runner list names, relays an unlisted name; expect
-// is the case's expect object as JSON.
-func scratchScenario(t *testing.T, expect string) *paritycorpus.Scenario {
+// scratchFile writes a one-case scenario whose case, in a family no list names, relays a name nothing blocks; expect is
+// the case's expect object as JSON. It returns the file and the families index that knows the family.
+func scratchFile(t *testing.T, expect string) (string, map[string]string) {
 	t.Helper()
 	doc := `{"schema": 4, "description": "scratch",
 	"module": {"ini": {"MAIN": {"python_enable": "true"}}, "manifest": {"version": 1, "config": {}, "feeds": []},
-		"files": {"pfb_py_raw/feed.txt": ["listed.example"]}},
+		"files": {}},
 	"upstream": {"allowed.example. A": ["allowed.example. 300 IN A 192.0.2.77"]},
 	"cases": [{"id": "scratch", "family": "never_heard_of", "description": "a relay",
 		"query": {"name": "allowed.example.", "type": "A"}, "expect": ` + expect + `}]}`
@@ -101,13 +103,11 @@ func scratchScenario(t *testing.T, expect string) *paritycorpus.Scenario {
 	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := paritycorpus.LoadScenario(path, map[string]string{"never_heard_of": "no branch"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
+	return path, map[string]string{"never_heard_of": "no branch"}
 }
 
+// TestACaseIsComparedWhateverItsFamily drives runScenario itself: a case that is skipped, or whose mismatch is not
+// reported, makes the wrong-expect row fail.
 func TestACaseIsComparedWhateverItsFamily(t *testing.T) {
 	const relay = `{"decision": "relay", "forwards": ["allowed.example. A"], "rcode": "NOERROR",
 		"answer": ["allowed.example. 300 IN A 192.0.2.77"], "authority": []}`
@@ -117,9 +117,9 @@ func TestACaseIsComparedWhateverItsFamily(t *testing.T) {
 		mismatch     bool
 	}{{"a right expect passes", relay, false}, {"a wrong expect fails", wrong, true}} {
 		t.Run(row.name, func(t *testing.T) {
-			s := scratchScenario(t, row.expect)
-			_, f := bootScenario(t, s)
-			lines := resolveCase(f, s, &s.Cases[0])
+			file, families := scratchFile(t, row.expect)
+			var lines []string
+			runScenario(t, file, families, func(_ *testing.T, line string) { lines = append(lines, line) })
 			if got := len(lines) > 0; got != row.mismatch {
 				t.Errorf("mismatch lines %q: reported %v, want %v", lines, got, row.mismatch)
 			}

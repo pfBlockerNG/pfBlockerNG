@@ -10,18 +10,20 @@
 //
 // The schema (every key is required unless marked optional; any other key, a duplicate JSON key, NaN/Infinity, a wrong
 // JSON type or an unknown value is a refusal, never a skip; every file in fixtures/parity is a .json document the runner
-// loads; "schema" is the integer 4 in every file, 3, 2 and 1 are refused):
+// loads; "schema" is the integer 4 in every file, 3, 2 and 1 are refused). A document that cannot be read is refused too:
+// bad UTF-8, a lone surrogate escape, nesting deeper than 990 levels, data after the document.
 //
 //	families.json  {"schema": 4, "families": {"<family>": "<source branch>", ...}}: the closed family list. Every
 //	               family pins pfb_unbound.py except `frontend`, which pins Frontend.resolve in pfb_dns_proxy.py.
 //	<scenario>.json  {"schema": 4, "description", "module", "upstream", "cases"}
 //	  module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order; no line
 //	                   break anywhere, no bracket in a section name, no "=" or ":" in a key.
-//	  module.manifest  written verbatim as pfb_py_sources.json.
+//	  module.manifest  a JSON object, written verbatim as pfb_py_sources.json.
 //	  module.files     {relative path: [lines]}, written joined by newlines plus a trailing one; no "..", NUL or
 //	                   absolute path, no path listed twice ("./x" is "x"), no file that is also another one's directory,
-//	                   and nothing at or under the names the runner writes (the shipped pfb_unbound.py and
-//	                   pfb_dnsbl_regex_rules.py are linked in by the runner, never by a fixture).
+//	                   and nothing at or under the names the runner writes (pfb_unbound.ini and pfb_py_sources.json)
+//	                   or reserves (pfb_unbound.py and pfb_dnsbl_regex_rules.py, which the Go decider does not read:
+//	                   the runner writes no Python).
 //	  upstream         {"<lower-case absolute name> <TYPE>": [RR texts] or null}, Unbound's stand-in (FakeUnbound),
 //	                   keyed on the FORWARD's first question, its name lower-cased; its class is ignored and the reply
 //	                   carries the FORWARD's questions and id, RD copied, RA set. A listed question gets NOERROR with
@@ -521,7 +523,7 @@ func module(value any, where string) Module {
 		if len(parts) == 0 || absolute || slices.Contains(parts, "..") || strings.Contains(rel, "\x00") {
 			fail(where, "module.files", fmt.Sprintf("unsafe path %s: must be relative and stay inside the module directory", pyRepr(rel)))
 		}
-		if slices.Contains(RUNNER_WRITES, parts[0]) { // a write would follow the shipped-code link into src/
+		if slices.Contains(RUNNER_WRITES, parts[0]) { // the runner writes the ini and the manifest; the two .py names stay reserved
 			fail(where, "module.files", pyRepr(rel)+" is written by the runner, never by a fixture")
 		}
 		path := strings.Join(parts, "/")
