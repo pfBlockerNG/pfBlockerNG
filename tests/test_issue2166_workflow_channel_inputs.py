@@ -205,3 +205,16 @@ def test_smoke_fan_out_ports_checkout_is_overridable_by_dispatch_and_call() -> N
     build_with = workflow["jobs"]["build-pkg"]["with"]
     assert build_with["ports_repo"] == "${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}"
     assert build_with["ports_ref"] == "${{ inputs.ports_ref || 'pfblockerng/use-github' }}"
+
+
+def test_version_above_outranks_the_installed_version_on_every_channel() -> None:
+    """A seeded "latest" must sit above what is installed, whatever the channel (issue #3791).
+
+    A nightly package version is ``YYYYMMDDHHMMSS.<7-sha>``, which outranks a fixed ``99.0.0``,
+    so a fixture seeding that constant offers no update on a nightly build.
+    """
+    version_above = _pkg_identity().version_above
+    assert version_above("20261110120000.abcdef0") == "20261110120001.abcdef0"
+    assert version_above("20261110120000") == "20261110120001"
+    assert version_above("4.0.0.b1") == "99.0.0"
+    assert version_above("") == "99.0.0"

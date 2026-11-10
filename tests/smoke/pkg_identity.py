@@ -55,3 +55,20 @@ def branch_pkg_name(pkg_path: str | None) -> str:
     if not match:
         raise ValueError(f"not a pfBlockerNG package filename: {pkg_path!r}")
     return match.group("name")
+
+
+# A nightly version: `YYYYMMDDHHMMSS` plus an optional `.<7-sha>`.
+_NIGHTLY_VERSION = re.compile(r"^(?P<stamp>\d{14})(?P<rest>\..+)?$")
+
+
+def version_above(installed: str) -> str:
+    """Return a package version that outranks ``installed``, whatever channel built it.
+
+    A fixture that seeds the software-update cache with a "newer" ``latest`` needs one that really
+    is newer. A nightly version is a 14-digit timestamp, so it outranks any semantic constant such
+    as ``99.0.0``; its own timestamp plus one second does not depend on the channel.
+    """
+    match = _NIGHTLY_VERSION.match(installed)
+    if match is None:
+        return "99.0.0"
+    return f"{int(match.group('stamp')) + 1}{match.group('rest') or ''}"

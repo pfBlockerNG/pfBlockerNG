@@ -4177,7 +4177,7 @@ def test_software_actions_link_to_package_manager(
             seed = json.dumps(
                 {
                     "pkgname": pkgname,
-                    "latest": "99.0.0",
+                    "latest": _latest_above_installed(smoke_vm, pkgname),
                     "last_checked": 1,
                 }
             )
@@ -4243,7 +4243,7 @@ def test_software_page_shows_a_failed_catalogue_check(
                 {
                     "pkgname": pkgname,
                     "repo": installed_repo,
-                    "latest": "99.0.0",
+                    "latest": _latest_above_installed(smoke_vm, pkgname),
                     "last_checked": checked_at,
                     **extra,
                 }
@@ -4725,6 +4725,20 @@ def test_reputation_page_help_text_names_relocated_matchgen_paths(
 
 _PFB_LOG = "/var/log/pfblockerng/pfblockerng.log"
 _PFB_RUNLOG = "/var/log/pfblockerng/pfblockerng_run.log"
+
+
+def _latest_above_installed(vm: SmokeVM, pkgname: str) -> str:
+    """A ``latest`` the product must see as newer than the INSTALLED package, on any channel.
+
+    A fixed ``99.0.0`` is below a nightly version (``YYYYMMDDHHMMSS.<sha>``), so it offers no
+    update on a nightly build (issue #3791). Verified with pkg's own comparison, so a wrong
+    derivation fails here instead of as a disabled control.
+    """
+    installed = vm.ssh("/usr/local/sbin/pkg", "query", "%v", pkgname).stdout.strip()
+    latest = pkg_identity.version_above(installed)
+    order = vm.ssh("/usr/local/sbin/pkg", "version", "-t", installed, latest).stdout.strip()
+    assert order == "<", f"derived latest {latest!r} does not outrank installed {installed!r} (pkg says {order!r})"
+    return latest
 
 
 def _seed_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float = 30.0) -> None:
