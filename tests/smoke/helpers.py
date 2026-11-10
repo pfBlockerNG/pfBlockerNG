@@ -2680,16 +2680,15 @@ def restart_pfb_dns_if_hosting_dnsbl(vm: SmokeVM, *, timeout: float = 60.0) -> b
 
     pfB-DNS is one process (the ``pfb-dns`` gateway decides in-process), so its restart is the product's own module
     reload: the new process re-reads the lists and the ini as an Unbound restart does for the module in Unbound. The
-    restart is ``restart_service('pfb_dns_proxy')``, then the product's own wait for the gateway to serve again. On
-    False the caller reloads Unbound.
+    restart is the product's own ``pfb_dns_proxy_restart()`` (rc script, restart, wait for the gateway to serve again).
+    On False the caller reloads Unbound.
     """
     # Fenced and compared as a whole token: a failure text may itself contain the word UNBOUND.
     host = _php_read_scalar(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n"
         "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; } else {\n"
-        "  restart_service('pfb_dns_proxy');\n"
-        "  $host = pfb_dns_proxy_await_ready() ? 'PFB-DNS-RESTARTED' : 'PFB-DNS-NOT-READY';\n}",
+        "  $host = pfb_dns_proxy_restart() ? 'PFB-DNS-RESTARTED' : 'PFB-DNS-NOT-READY';\n}",
         "$host",
         timeout=timeout,
     )

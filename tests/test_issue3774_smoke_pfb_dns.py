@@ -735,3 +735,17 @@ def test_safesearch_injection_picks_the_unbound_host_exactly_when_pfb_dns_does_n
 
     selector = "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; }"
     assert selector in vm.snippets[0], f"the host selector is not exactly {selector!r}:\n{vm.snippets[0]}"
+
+
+def test_safesearch_injection_restarts_pfb_dns_through_the_products_own_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given pfB-DNS hosts DNSBL When the host reload is built
+    Then the restart and the wait for readiness are the product's pfb_dns_proxy_restart(), not a copy of its steps."""
+    _events, vm = _arrange_safesearch(monkeypatch, "PFB-DNS-RESTARTED")
+
+    helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
+
+    snippet = vm.snippets[0]
+    assert "pfb_dns_proxy_restart()" in snippet, f"the reload does not call the product's restart:\n{snippet}"
+    assert "restart_service" not in snippet, f"the reload re-implements the restart:\n{snippet}"
