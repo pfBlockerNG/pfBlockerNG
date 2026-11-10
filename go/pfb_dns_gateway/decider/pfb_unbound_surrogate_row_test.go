@@ -86,7 +86,7 @@ func TestPipelineLosesARowWithASurrogateAndKeepsTheRowsAroundIt(t *testing.T) {
 }
 
 func TestDirectAppendLosesARowWithASurrogateAfterFourAttempts(t *testing.T) {
-	logs := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	dir := t.TempDir()
 	m, f, moduleDir := forwardingModuleWithLogs(t, dir)
 	m.stopLogging()
@@ -103,9 +103,9 @@ func TestDirectAppendLosesARowWithASurrogateAfterFourAttempts(t *testing.T) {
 	if slept != 4 {
 		t.Errorf("slept %d times, want 4: the encoding error is retried like any other", slept)
 	}
-	want := "pfb_dns_proxy error: [pfBlockerNG]: log_entry: 4: 'utf-8' codec can't encode character '\\ud800' in position 34: surrogates not allowed\n"
-	if logs.String() != want {
-		t.Errorf("log = %q, want %q", logs.String(), want)
+	want := "[pfBlockerNG]: log_entry: 4: 'utf-8' codec can't encode character '\\ud800' in position 34: surrogates not allowed\n"
+	if got := drainPyError(); got != want {
+		t.Errorf("py_error.log = %q, want %q", got, want)
 	}
 	if got := upstreamCounter(t, m, moduleDir); got != int64(2) {
 		t.Errorf("Upstream counter = %v, want 2", got)

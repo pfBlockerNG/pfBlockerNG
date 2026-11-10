@@ -170,7 +170,7 @@ func (m *pfbUnbound) queryWriteReply(reply []queryField) {
 	}
 	m.whileNotRetired(func() {
 		if failure := writeMarker(path, pyJSONDumps(reply), 0o640); failure != "" {
-			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write query reply [ %s ]: %s\n", path, failure)
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: failed to write query reply [ %s ]: %s\n", path, failure))
 		}
 	})
 }
@@ -238,7 +238,7 @@ func (m *pfbUnbound) newQueryWatcher() *queryWatcher {
 func (w *queryWatcher) answer(record *jsonObject) {
 	defer func() {
 		if err := recover(); err != nil {
-			fmt.Fprintf(logOutput, "[pfBlockerNG]: query watcher failed to answer a request: %v\n", err)
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: query watcher failed to answer a request: %v\n", err))
 		}
 	}()
 	w.m.answerQueryRequest(record)

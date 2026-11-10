@@ -25,7 +25,7 @@ func geoModule(t *testing.T, reply string, database string) (*pfbUnbound, string
 		t.Fatal(err)
 	}
 	stopModule(t, m)
-	return m, logs.String()
+	return m, logs.String() + drainPyError() // what the module wrote to sys.stderr is py_error.log
 }
 
 func TestInitOpensTheGeoIPReaderWhenRepliesAreLoggedAndTheDatabaseIsInstalled(t *testing.T) {
@@ -86,4 +86,33 @@ func TestEveryBootStartsALogWriterThatStopLoggingEnds(t *testing.T) {
 		t.Error("the log writer is still set after stopLogging: deinit sets pfb[\"log_listener\"] False")
 	}
 	m.stopLogging() // a second stop is not an error
+}
+
+// A scoped address that the reader refuses (libmaxminddb takes a numeric scope id up to 2**32-1, not an interface name) is
+// unk and one py_error.log row, the text of maxminddb 3.2.0's extension on CPython 3.11.15 (Reader.get raises ValueError,
+// pfb_unbound.py writes "MaxMind Reader failed: <error>: IP: <address>" to sys.stderr):
+//
+//	'2001:4860:4860::8888%12abc' does not appear to be an IPv4 or IPv6 address.: IP: 2001:4860:4860::8888%12abc
+//
+// A numeric scope id is no failure: no row.
+func TestAScopedAddressTheReaderRefusesIsUnkAndOnePyErrorRow(t *testing.T) {
+	m, _ := geoModule(t, "true", filepath.Join("testdata", "GeoLite2-Country-Test.mmdb"))
+	settings := m.snapshot.Load().settings
+	drainPyError()
+
+	const refused = "2001:4860:4860::8888%12abc"
+	if got := m.geoIPCode(settings, refused); got != "unk" {
+		t.Errorf("geoIPCode(%q) = %q, want unk", refused, got)
+	}
+	want := "[pfBlockerNG]: MaxMind Reader failed: '2001:4860:4860::8888%12abc' does not appear to be an IPv4 or IPv6 address.: IP: 2001:4860:4860::8888%12abc\n"
+	if got := drainPyError(); got != want {
+		t.Errorf("py_error.log rows = %q, want %q", got, want)
+	}
+
+	if got := m.geoIPCode(settings, "2001:4860:4860::8888%7"); got != "unk" {
+		t.Errorf("geoIPCode with a numeric scope id = %q, want unk (not in the test database)", got)
+	}
+	if got := drainPyError(); got != "" {
+		t.Errorf("py_error.log rows = %q for a numeric scope id, want none: the reader takes it", got)
+	}
 }

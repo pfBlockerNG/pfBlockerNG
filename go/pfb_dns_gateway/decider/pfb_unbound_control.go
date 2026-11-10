@@ -117,7 +117,7 @@ func controlDuration(duration string) int {
 		digit, ok := decimalDigit(r)
 		if !ok {
 			// int() takes decimal digits only: "²" is numeric but not an int
-			fmt.Fprint(logOutput, "[pfBlockerNG] python_control_duration: invalid literal for int() with base 10: "+pyErrRepr(duration))
+			pyStderr("[pfBlockerNG] python_control_duration: invalid literal for int() with base 10: " + pyErrRepr(duration))
 			return 0
 		}
 		digits++
@@ -126,8 +126,8 @@ func controlDuration(duration string) int {
 		}
 	}
 	if digits > pyIntMaxStrDigits {
-		fmt.Fprintf(logOutput, "[pfBlockerNG] python_control_duration: Exceeds the limit (%d digits) for integer string conversion: "+
-			"value has %d digits; use sys.set_int_max_str_digits() to increase the limit", pyIntMaxStrDigits, digits)
+		pyStderr(fmt.Sprintf("[pfBlockerNG] python_control_duration: Exceeds the limit (%d digits) for integer string conversion: "+
+			"value has %d digits; use sys.set_int_max_str_digits() to increase the limit", pyIntMaxStrDigits, digits))
 		return 0
 	}
 	if 0 < value && value <= 3600 {
@@ -423,7 +423,7 @@ func (m *pfbUnbound) controlWriteApplied(seq *big.Int) {
 	}
 	m.whileNotRetired(func() {
 		if failure := writeMarker(path, seq.String()+"\n", 0); failure != "" {
-			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure)
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure))
 		}
 	})
 }

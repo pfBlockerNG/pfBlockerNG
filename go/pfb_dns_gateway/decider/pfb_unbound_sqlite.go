@@ -112,11 +112,11 @@ func (m *pfbUnbound) dbConnect(db int) (*dbConn, error) {
 			}
 		}
 		if strings.ToLower(mode) != "wal" {
-			logErr(fmt.Sprintf("[pfBlockerNG]: sqlite journal_mode is '%s' (wanted 'wal') db %s: concurrent readers may hit 'database is locked'", strings.ToLower(mode), path))
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: sqlite journal_mode is '%s' (wanted 'wal') db %s: concurrent readers may hit 'database is locked'\n", strings.ToLower(mode), path))
 		}
 		return nil
 	}(); err != nil {
-		logErr(fmt.Sprintf("[pfBlockerNG]: sqlite PRAGMA setup failed db %s: %v", path, err))
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: sqlite PRAGMA setup failed db %s: %v\n", path, err))
 	}
 	if err := m.dbCreate(ctx, con, db); err != nil {
 		c.close()
@@ -315,7 +315,7 @@ func (m *pfbUnbound) dbRun(db int, work func(ctx context.Context, c *sql.Conn) e
 		}
 		m.dbCloseLocked(db)
 		if attempt == 3 {
-			logErr(fmt.Sprintf("[pfBlockerNG]: sqlite write failed db %s: %v", m.dbFile(db), err))
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: sqlite write failed db %s: %v\n", m.dbFile(db), err))
 			return false
 		}
 		dbRetrySleep(250 * time.Millisecond)
@@ -384,7 +384,7 @@ func (m *pfbUnbound) openDnsblStatsDb(wanted bool) {
 		if m.validateDbWithRecovery(dbDnsbl) {
 			m.sqlite3DnsblCon.Store(true)
 		} else {
-			logErr("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database after recovery attempt")
+			pyStderr("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database after recovery attempt\n")
 		}
 	}
 }
@@ -425,7 +425,7 @@ func (m *pfbUnbound) dbGroupEpochs(wanted bool, s *snapshot) map[[2]string]strin
 		m.dbCloseLocked(dbDnsbl)
 		m.sqlite3DnsblCon.Store(false)
 		m.dbMu.Unlock()
-		logErr(fmt.Sprintf("[pfBlockerNG]: DNSBL accounting unavailable: %v", err))
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: DNSBL accounting unavailable: %v\n", err))
 		return map[[2]string]string{}
 	}
 	m.dbMu.Unlock()
@@ -434,7 +434,7 @@ func (m *pfbUnbound) dbGroupEpochs(wanted bool, s *snapshot) map[[2]string]strin
 		for i, owner := range missing {
 			parts[i] = fmt.Sprintf("(%s, %s)", pysem.Repr(owner[0]), pysem.Repr(owner[1]))
 		}
-		logErr(fmt.Sprintf("[pfBlockerNG]: DNSBL accounting unavailable for owners: [%s]", strings.Join(parts, ", ")))
+		pyStderr(fmt.Sprintf("[pfBlockerNG]: DNSBL accounting unavailable for owners: [%s]\n", strings.Join(parts, ", ")))
 	}
 	return epochs
 }
@@ -514,7 +514,7 @@ func (m *pfbUnbound) dbCapturePrivacyEpochs() {
 				return nil
 			}()
 			if err != nil {
-				logErr(fmt.Sprintf("[pfBlockerNG]: Client metric authority unavailable: %v", err))
+				pyStderr(fmt.Sprintf("[pfBlockerNG]: Client metric authority unavailable: %v\n", err))
 			}
 		}
 		m.dbMu.Unlock()

@@ -1,0 +1,14 @@
+{
+ "writes": [
+  "[pfBlockerNG]: Failed to load ini configuration: boom",
+  "[pfBlockerNG]: Failed to load ini configuration: boom",
+  "[pfBlockerNG]: Failed to load ini configuration: boom\n",
+  "[pfBlockerNG]: Failed to load ini configuration: boom\n",
+  "[pfBlockerNG]: sqlite write failed db a.sqlite: x\n",
+  "[pfBlockerNG]: Failed to load ini configuration: boom",
+  "[pfBlockerNG]: trailing \t \n\n",
+  "[pfBlockerNG]: first line\nsecond line\n",
+  "\n"
+ ],
+ "file": "<ASCTIME>|ERROR| [pfBlockerNG]: Failed to load ini configuration: boom\n<ASCTIME>|ERROR| [pfBlockerNG]: Failed to load ini configuration: boom\n<ASCTIME>|ERROR| [pfBlockerNG]: sqlite write failed db a.sqlite: x\n<ASCTIME>|ERROR| [pfBlockerNG]: Failed to load ini configuration: boom\n<ASCTIME>|ERROR| [pfBlockerNG]: trailing\n<ASCTIME>|ERROR| [pfBlockerNG]: first line\nsecond line\n<ASCTIME>|ERROR| \n"
+}

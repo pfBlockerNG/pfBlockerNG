@@ -36,6 +36,7 @@ func TestQueryChannelMatchesPythonOracle(t *testing.T) {
 				label := fmt.Sprintf("step %d %s %.60q", i, step.Op, step.Text+step.B64)
 				queryApply(t, channel, step)
 				logs.Reset()
+				takePyError()
 				queryDrain(t, w)
 
 				var got *string
@@ -56,8 +57,12 @@ func TestQueryChannelMatchesPythonOracle(t *testing.T) {
 				case step.Mode != nil && mode != *step.Mode:
 					t.Errorf("%s: reply mode = %s, want %s", label, mode, *step.Mode)
 				}
-				if want := strings.ReplaceAll(step.Stderr, "<dir>", dir); logs.String() != want {
-					t.Errorf("%s: stderr = %q, want %q", label, logs.String(), want)
+				// Python's sys.stderr is the py_error.log logger, which does not log a message equal to the one before it, so the
+				// oracle recorded the rows that file got, and the suppression state runs on from step to step. The process
+				// stderr stays empty.
+				want := strings.ReplaceAll(step.PyError, "<dir>", dir)
+				if got := takePyError(); got != want || logs.Len() != 0 {
+					t.Errorf("%s: py_error.log rows = %q, want %q; process stderr = %q", label, got, want, logs.String())
 				}
 				for _, leftover := range []string{reply + ".tmp", m.pfb.pfbPyQueryReply + ".tmp"} {
 					if _, err := os.Lstat(leftover); err == nil {
@@ -125,8 +130,8 @@ func TestQueryWatcherSurvivesARequestThatPanics(t *testing.T) {
 
 	queryApply(t, channel, queryStep{Op: "text", Text: `{"id": "boom", "domain": "listed.example.com"}`})
 	queryDrain(t, w)
-	if want := "[pfBlockerNG]: query watcher failed to answer a request: "; !strings.HasPrefix(logs.String(), want) {
-		t.Errorf("stderr = %q, want it to start with %q", logs.String(), want)
+	if want := "[pfBlockerNG]: query watcher failed to answer a request: "; !strings.HasPrefix(drainPyError(), want) || logs.Len() != 0 {
+		t.Errorf("want py_error.log to start with %q and the process stderr empty, got stderr %q", want, logs.String())
 	}
 	if _, err := os.Stat(reply); err == nil {
 		t.Errorf("a reply was written for the request that panicked")

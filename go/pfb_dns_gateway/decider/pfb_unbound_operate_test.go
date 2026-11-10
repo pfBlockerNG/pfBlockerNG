@@ -280,16 +280,16 @@ func TestLoadHstsDbNeverOpensAnEntryWhenDisabled(t *testing.T) {
 func TestLoadHstsDbFailureOpensAnEntryAndSuccessClearsIt(t *testing.T) {
 	content := "bad.example\n"
 	m, ledger := opHstsModule(t, true, &content)
-	logs := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	real := m.readFile
 	m.readFile = func(name string) ([]byte, error) { return nil, errors.New("simulated read failure") }
 	db := map[string]struct{}{}
 
 	m.loadHstsDb(db)
 
-	want := "pfb_dns_proxy error: [pfBlockerNG]: Failed to load: " + m.pfb.pfbPyHsts + ": simulated read failure\n"
-	if logs.String() != want {
-		t.Errorf("log = %q, want %q", logs.String(), want)
+	want := "[pfBlockerNG]: Failed to load: " + m.pfb.pfbPyHsts + ": simulated read failure\n"
+	if got := drainPyError(); got != want {
+		t.Errorf("py_error.log = %q, want %q", got, want)
 	}
 	if items := opLedgerItems(t, ledger); !slices.Equal(items, []string{m.pfb.pfbPyHsts}) {
 		t.Errorf("ledger after a failed load = %v, want one entry for %s", items, m.pfb.pfbPyHsts)
@@ -346,18 +346,19 @@ func TestLoadSafeSearchDbParsesThreeAndFiveColumnRows(t *testing.T) {
 func TestLoadSafeSearchDbReportsOtherRowShapesAndKeepsGoing(t *testing.T) {
 	content := "a.com,1.2.3.4\nb.com,1.2.3.4,::1,x\nok.com,5.6.7.8,\nc.com,1,2,3,4,5\n"
 	m, _ := opSafeSearchModule(t, &content)
-	logs := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	db := map[string]safeSearchEntry{}
 
 	m.loadSafesearchDb(db)
+	logged := drainPyError()
 
 	if !reflect.DeepEqual(db, map[string]safeSearchEntry{"ok.com": {a: "5.6.7.8"}}) {
 		t.Errorf("safeSearchDB = %v, want only the 3-column row", db)
 	}
 	for _, row := range []string{"['a.com', '1.2.3.4']", "['b.com', '1.2.3.4', '::1', 'x']", "['c.com', '1', '2', '3', '4', '5']"} {
-		want := "pfb_dns_proxy error: [pfBlockerNG]: Failed to parse: " + m.pfb.pfbPySs + ": " + row + "\n"
-		if !strings.Contains(logs.String(), want) {
-			t.Errorf("log = %q, want it to contain %q", logs.String(), want)
+		want := "[pfBlockerNG]: Failed to parse: " + m.pfb.pfbPySs + ": " + row + "\n"
+		if !strings.Contains(logged, want) {
+			t.Errorf("py_error.log = %q, want it to contain %q", logged, want)
 		}
 	}
 }
@@ -365,7 +366,7 @@ func TestLoadSafeSearchDbReportsOtherRowShapesAndKeepsGoing(t *testing.T) {
 func TestLoadSafeSearchDbFailureNamesTheSafeSearchFileAndLedgers(t *testing.T) {
 	content := "forcesafe.com,1.2.3.4,::1\n"
 	m, ledger := opSafeSearchModule(t, &content)
-	logs := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	m.pfb.pfbPyZone = filepath.Join(t.TempDir(), "pfb_py_zone.txt") // the wrong-file trap of #714 FIX #6
 	real := m.readFile
 	m.readFile = func(string) ([]byte, error) { return nil, errors.New("simulated read failure") }
@@ -373,8 +374,8 @@ func TestLoadSafeSearchDbFailureNamesTheSafeSearchFileAndLedgers(t *testing.T) {
 
 	m.loadSafesearchDb(db)
 
-	if !strings.Contains(logs.String(), m.pfb.pfbPySs) || strings.Contains(logs.String(), m.pfb.pfbPyZone) {
-		t.Errorf("log = %q, want it to name %s and not %s", logs.String(), m.pfb.pfbPySs, m.pfb.pfbPyZone)
+	if got := drainPyError(); !strings.Contains(got, m.pfb.pfbPySs) || strings.Contains(got, m.pfb.pfbPyZone) {
+		t.Errorf("py_error.log = %q, want it to name %s and not %s", got, m.pfb.pfbPySs, m.pfb.pfbPyZone)
 	}
 	if items := opLedgerItems(t, ledger); !slices.Equal(items, []string{m.pfb.pfbPySs}) {
 		t.Errorf("ledger after a failed load = %v, want one entry for %s", items, m.pfb.pfbPySs)
@@ -494,9 +495,9 @@ func TestGroupPolicyRowsMatchPython(t *testing.T) {
 	if err := json.Unmarshal(data, &oracle); err != nil {
 		t.Fatal(err)
 	}
-	logs := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	for _, row := range oracle.Rows {
-		logs.Reset()
+		drainPyError()
 		m, snap := opGpLoad(t, row.Value)
 		if m.pfb.gpListDB != row.Gate {
 			t.Errorf("row %q: gate = %v, want %v", row.Value, m.pfb.gpListDB, row.Gate)
@@ -528,19 +529,20 @@ func TestGroupPolicyRowsMatchPython(t *testing.T) {
 		if !slices.Equal(bypassed, row.Bypassed) {
 			t.Errorf("row %q: bypassed clients = %q, want %q", row.Value, bypassed, row.Bypassed)
 		}
-		failed := strings.Contains(logs.String(), "Failed to parse: GP_Bypass_List: row:0 line:"+row.Value)
+		logged := drainPyError()
+		failed := strings.Contains(logged, "Failed to parse: GP_Bypass_List: row:0 line:"+row.Value)
 		if failed != (!row.Gate) {
-			t.Errorf("row %q: parse failure logged = %v (log %q), want %v", row.Value, failed, logs.String(), !row.Gate)
+			t.Errorf("row %q: parse failure logged = %v (py_error.log %q), want %v", row.Value, failed, logged, !row.Gate)
 		}
 	}
 }
 
 func TestGroupPolicyUnparseableRowIsSkippedReportedAndNeverAbortsTheLoad(t *testing.T) {
 	for _, bad := range []string{"example.com", "10.0.0.0/33", "2001:db8:9::/129", "xn--abc", "10.0.0.0/", "/24", "10.0.0.0/-1", "10.0.0.0/24 extra", "# comment", ""} {
-		logs := modCaptureLog(t)
+		_ = modCaptureLog(t)
 		m, snap := opGpLoad(t, "192.0.2.0/24", bad, "2001:db8:5::/48")
-		if !strings.Contains(logs.String(), "[pfBlockerNG]: Failed to parse: GP_Bypass_List: row:1 line:"+bad+"\n") {
-			t.Errorf("row %q: log = %q, want the row-1 parse failure", bad, logs.String())
+		if got := drainPyError(); !strings.Contains(got, "[pfBlockerNG]: Failed to parse: GP_Bypass_List: row:1 line:"+bad+"\n") {
+			t.Errorf("row %q: py_error.log = %q, want the row-1 parse failure", bad, got)
 		}
 		for ip, want := range map[string]bool{"192.0.2.9": true, "2001:db8:5::1": true, "203.0.113.50": false, "10.0.0.5": false} {
 			if got := opGpBypassed(m, snap, ip); got != want {
@@ -551,13 +553,13 @@ func TestGroupPolicyUnparseableRowIsSkippedReportedAndNeverAbortsTheLoad(t *test
 }
 
 func TestGroupPolicyGateStaysOffWhenNoRowParses(t *testing.T) {
-	logs := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	m, snap := opGpLoad(t, "example.com")
 	if m.pfb.gpListDB || len(snap.gpListDB) != 0 || len(snap.gpNetDB) != 0 {
 		t.Errorf("gate, exact, networks = (%v, %v, %v), want an off gate and nothing loaded", m.pfb.gpListDB, snap.gpListDB, snap.gpNetDB)
 	}
-	if logs.Len() == 0 {
-		t.Errorf("log is empty, want the parse failure")
+	if got := drainPyError(); !strings.Contains(got, "Failed to parse: GP_Bypass_List") {
+		t.Errorf("py_error.log = %q, want the parse failure", got)
 	}
 	m = modMust(t, t.TempDir())
 	snap = newSnapshot()
@@ -635,11 +637,12 @@ func TestOperateGroupPolicyBypass(t *testing.T) {
 // --- init_standard: the noAAAA, Group Policy, SafeSearch and HSTS sections ---
 
 func TestInitStandardLoadsNoAAAARows(t *testing.T) {
-	logs := modCaptureLog(t)
+	_ = modCaptureLog(t)
 	// Rows follow the file order; a later row for the same domain wins, whatever its option name.
 	ini := "[MAIN]\npython_enable = true\n[noAAAA]\n1 = noaaaa.com,0\n2 = noaaawild.net,1\n3 = bad row\n4 = a,b,c\n5 = dup.com,0\n6 = dup.com,1\n7 = x.com,2\n"
 	m := modMust(t, modIniDir(t, ini))
 	snap := m.snapshot.Load()
+	logged := drainPyError()
 
 	want := map[string]bool{"noaaaa.com": false, "noaaawild.net": true, "dup.com": true, "x.com": false}
 	if !reflect.DeepEqual(snap.noAAAADB, want) {
@@ -649,8 +652,8 @@ func TestInitStandardLoadsNoAAAARows(t *testing.T) {
 		t.Errorf("noAAAADB flag = (snapshot %v, pfb %v), want true", snap.settings.noAAAADB, m.pfb.noAAAADB)
 	}
 	for _, row := range []string{"row:3 line:bad row", "row:4 line:a,b,c"} {
-		if !strings.Contains(logs.String(), "[pfBlockerNG]: Failed to parse: noAAAA: "+row+"\n") {
-			t.Errorf("log = %q, want the parse failure %q", logs.String(), row)
+		if !strings.Contains(logged, "[pfBlockerNG]: Failed to parse: noAAAA: "+row+"\n") {
+			t.Errorf("py_error.log = %q, want the parse failure %q", logged, row)
 		}
 	}
 	for domain, wantBlock := range map[string]bool{"noaaaa.com": true, "sub.noaaaa.com": false, "host.noaaawild.net": true, "noaaawild.net": true, "unrelated.com": false} {
@@ -904,16 +907,16 @@ func TestRebuildAndSwapFailClosed(t *testing.T) {
 	}{
 		{"the builder returns nothing", func() (*snapshot, error) { return nil, nil }, ""},
 		{"the builder fails", func() (*snapshot, error) { return nil, errors.New("build blew up") },
-			"pfb_dns_proxy error: [pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up\n"},
+			"[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up\n"},
 		// Python's `except Exception` around build_snapshot() reads the same for a raise as for a returned failure
 		{"the builder panics", func() (*snapshot, error) { panic("build blew up") },
-			"pfb_dns_proxy error: [pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up\n"},
+			"[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up\n"},
 	} {
-		logs := modCaptureLog(t)
+		_ = modCaptureLog(t)
 		m := modMust(t, t.TempDir())
 		old := m.snapshot.Load()
 		opSeed(m, "stale.example.com", opBlockVerdict(nil))
-		logs.Reset()
+		drainPyError()
 
 		for _, emit := range []bool{true, false} {
 			if m.rebuildAndSwap(tc.builder, emit) {
@@ -929,8 +932,9 @@ func TestRebuildAndSwapFailClosed(t *testing.T) {
 				t.Errorf("%s (emit %v): pfb_py_count was written, want no recount on failure", tc.name, emit)
 			}
 		}
-		if want := strings.Repeat(tc.wantLog, 2); logs.String() != want {
-			t.Errorf("%s: log = %q, want %q (the failure is logged once per call)", tc.name, logs.String(), want)
+		// the second call fails with the very message of the first: sys.stderr does not log it again
+		if got := drainPyError(); got != tc.wantLog {
+			t.Errorf("%s: py_error.log = %q, want %q (an equal message is logged once)", tc.name, got, tc.wantLog)
 		}
 	}
 }

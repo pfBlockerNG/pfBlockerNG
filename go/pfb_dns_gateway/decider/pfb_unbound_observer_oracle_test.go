@@ -165,10 +165,11 @@ func TestObserverReportsMatchPython(t *testing.T) {
 				before := probe()
 				mark := len(rows)
 				stderr.Reset()
+				drainPyError()
 				act()
 				got := append([][2]string(nil), rows[mark:]...)
 				rows = rows[:mark]
-				printed := linesOf(stderr.String())
+				printed := linesOf(stderr.String() + drainPyError()) // the proxy's warning, and the module's sys.stderr line
 				after := probe()
 				rowsSeen += len(got)
 				want := step.Rows

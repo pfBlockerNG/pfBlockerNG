@@ -9,9 +9,9 @@
 //
 // Not translated, because the decider does not need them: the module fingerprint (the code record it feeds is replaced by
 // the gateway's executable SHA-256 record, #3791) and the retired-cache sweep (pfb_py_cache.sqlite*: nothing reads or
-// writes it any more). The stderr redirect is a documented difference: Python sends its stderr to py_error.log through
-// pfb_async_io, the decider writes those lines to its own stderr (logOutput). The live update (the reload watcher, its RAM
-// gate, its applied marker and the reload builder) is in pfb_unbound_reload.go, the DNSBL control surface
+// writes it any more). The stderr redirect is translated (pfb_unbound_stderr.go: what the module writes to sys.stderr is
+// py_error.log rows). The live update (the reload watcher, its RAM gate, its applied marker and the reload builder) is in
+// pfb_unbound_reload.go, the DNSBL control surface
 // (pfb_apply_control_command, its timers and the control watcher) in pfb_unbound_control.go, the ADR-65 query channel
 // (pfb_query_watcher and its verdict) in pfb_unbound_query.go, and the log rows, their files and the GeoIP reader in
 // pfb_unbound_log.go, pfb_unbound_logfile.go and pfb_unbound_geoip.go. deinit (pfbUnbound.deinit) stops what init
@@ -156,10 +156,12 @@ type pfbUnbound struct {
 	// publishMu serializes the publishers of snapshot: rebuildAndSwap, a control command and a control timer's expiry.
 	// Each loads the live snapshot, derives the next from it and stores it, so two of them at once would lose a write.
 	publishMu sync.Mutex
-	// retired is set by deinit under publishMu: from then on nothing is published (a snapshot, an applied marker, the
-	// counts, the status ledger) and the stats database is not opened, so that a reload or a control record that outlives
-	// the bounded stop of its watcher cannot act on a closed module when it ends. The snapshot publishers read it under
-	// publishMu, so that a swap is either stored before deinit or refused; the file writers read it without a lock.
+	// retired is set by deinit under publishMu, and by the module-less reply log's close, which has no publishers and sets it
+	// without the lock: from then on nothing is published (a snapshot, an applied marker, the counts, the status ledger), no
+	// log row is written and the stats database is not opened, so that a reload or a control record that outlives the
+	// bounded stop of its watcher cannot act on a closed module when it ends. The snapshot publishers read it under
+	// publishMu, so that a swap is either stored before deinit or refused; the file writers read it without a lock. The
+	// module's error lines (pyStderr) are not retired: they still reach py_error.log until deinit restores sys.stderr.
 	retired atomic.Bool
 	// afterFunc starts a control timer (time.AfterFunc's shape; nil is the real one). A test replaces it to fire the
 	// expiry by hand; it must not run f before it returns, as the caller holds publishMu.
@@ -195,12 +197,14 @@ type pfbUnbound struct {
 	// logs is the log writer (pfb["log_listener"]), nil when none runs: rows are then appended directly. logDir is the
 	// directory it writes. logSink, when set, takes every row instead (Python's tests replace pfb_log).
 	logs    *logPipeline
+	logsMu  sync.RWMutex // guards logs: a query that outlives Close reads it while deinit stops the writer
 	logDir  string
 	logSink func(name, line string)
 	// clock is the time source of the rows' timestamp and the cache TTL; nil is the local time.
 	clock func() time.Time
 	// maxmind is maxmindReader, nil when python_maxmind is off.
-	maxmind *maxminddb.Reader
+	maxmind   *maxminddb.Reader
+	maxmindMu sync.RWMutex // guards maxmind: a lookup holds it for reading, closing the reader takes it for writing
 	// dnsblLast is _dnsbl_last_event, the previous block, which a repeat of marks its row a duplicate.
 	dnsblLastMu sync.Mutex
 	dnsblLast   *dnsblEvent
@@ -271,7 +275,7 @@ func (m *pfbUnbound) loadIniConfig() *configParser {
 	config := newConfigParser()
 	if err := config.read(path); err != nil {
 		failure := "Failed to load ini configuration: " + err.Error()
-		logErr("[pfBlockerNG]: " + failure)
+		pyStderr("[pfBlockerNG]: " + failure)
 		m.pfbPyStatusOpen("dnsbl", path, "parse", failure)
 	} else {
 		m.pfbPyStatusClose("dnsbl", path, "parse")
@@ -285,8 +289,14 @@ func mainOptionError(option string, err error) error {
 
 // initStandard builds the module from the ini and the files in moduleDir. An error is what makes init_standard
 // raise in Python: a MAIN value that is no boolean, or an interpolation error in a value that is read.
-func initStandard(id int, moduleDir, logDir string) (*pfbUnbound, error) {
+func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err error) {
 	m := &pfbUnbound{regexRuntime: newRegexRuntime(), readFile: os.ReadFile, logDir: logDir}
+	m.redirectStderr() // sys.stderr is py_error.log from here on, as in init_standard
+	defer func() {
+		if err != nil {
+			m.restoreStderr()
+		}
+	}()
 	// scratch collects the strata the loaders below fill; it becomes the module's first snapshot at the end.
 	scratch := newSnapshot()
 	pfb := &m.pfb
@@ -563,7 +573,7 @@ func initStandard(id int, moduleDir, logDir string) (*pfbUnbound, error) {
 						if len(data) == 2 {
 							scratch.noAAAADB[data[0]] = data[1] == "1"
 						} else {
-							logErr(fmt.Sprintf("[pfBlockerNG]: Failed to parse: noAAAA: row:%s line:%s", key, line))
+							pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to parse: noAAAA: row:%s line:%s", key, line))
 						}
 					}
 					pfb.noAAAADB = true
@@ -624,14 +634,14 @@ func initStandard(id int, moduleDir, logDir string) (*pfbUnbound, error) {
 			if m.validateDbWithRecovery(dbResolver) {
 				m.sqlite3ResolverCon.Store(true)
 			} else {
-				logErr("[pfBlockerNG]: Failed to open pfb_py_resolver.sqlite database")
+				pyStderr("[pfBlockerNG]: Failed to open pfb_py_resolver.sqlite database\n")
 			}
 			// Enable DNSBL statistics: forwarding-gated too, not just blacklist-gated (issue #860).
 			if m.dnsblStatsWanted(pfb) {
 				if m.validateDbWithRecovery(dbDnsbl) {
 					m.sqlite3DnsblCon.Store(true)
 				} else {
-					logErr("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database")
+					pyStderr("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database\n")
 				}
 			}
 
@@ -716,11 +726,12 @@ func (m *pfbUnbound) whileNotRetired(f func()) {
 // deinit is deinit(): the reload, control and query watchers stop (each waited for at most watcherStopWait: Python's
 // join(timeout=5)), the database worker drains and the connections close, the log writer writes what is queued and the
 // GeoIP reader closes. The watchers come first, ahead of Python's close of the reader: a watcher mid-build must not meet a
-// closed database. The module has no query in flight by then. A watcher that does not stop within its bound is left
-// running, and retirement (above all, the closed database) is what keeps it from publishing or opening anything.
+// closed database. A query may still be inside Resolve (Frontend.Close runs after the gateway's drain bound): retired
+// comes first, so that it publishes nothing, opens nothing and writes no log row from here on. A watcher that does not stop within its bound is
+// left running, and retirement (above all, the closed database) is what keeps it from publishing or opening anything.
 func (m *pfbUnbound) deinit() {
 	m.publishMu.Lock()
-	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing from here on
+	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing, and writes no log row, from here on
 	m.publishMu.Unlock()
 	m.stopReloadWatcher()
 	m.stopControlWatcher()
@@ -728,6 +739,7 @@ func (m *pfbUnbound) deinit() {
 	m.closeDb()
 	m.stopLogging()
 	m.closeMaxmind()
+	m.restoreStderr()
 	logInfo("[pfBlockerNG]: pfb_unbound.py script exiting")
 }
 
@@ -810,7 +822,7 @@ func (m *pfbUnbound) loadHstsDb(hstsDB map[string]struct{}) {
 	data, err := m.readFile(pfb.pfbPyHsts)
 	if err != nil {
 		failure := fmt.Sprintf("Failed to load: %s: %v", pfb.pfbPyHsts, err)
-		logErr("[pfBlockerNG]: " + failure)
+		pyStderr("[pfBlockerNG]: " + failure)
 		m.pfbPyStatusOpen("dnsbl", pfb.pfbPyHsts, "parse", failure)
 		return
 	}
@@ -868,7 +880,7 @@ func (m *pfbUnbound) loadSafesearchDb(safeSearchDB map[string]safeSearchEntry) {
 			case 5:
 				safeSearchDB[row[0]] = safeSearchEntry{a: row[1], aaaa: row[2], v4: row[3], v6: row[4]}
 			default:
-				logErr(fmt.Sprintf("[pfBlockerNG]: Failed to parse: %s: %s", pfb.pfbPySs, pyListRepr(row)))
+				pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to parse: %s: %s", pfb.pfbPySs, pyListRepr(row)))
 			}
 		}
 		if err == io.EOF {
@@ -878,7 +890,7 @@ func (m *pfbUnbound) loadSafesearchDb(safeSearchDB map[string]safeSearchEntry) {
 	if err != nil {
 		// #714 FIX #6: name the SafeSearch source, not the zone list.
 		failure := fmt.Sprintf("Failed to load: %s: %v", pfb.pfbPySs, err)
-		logErr("[pfBlockerNG]: " + failure)
+		pyStderr("[pfBlockerNG]: " + failure)
 		m.pfbPyStatusOpen("dnsbl", pfb.pfbPySs, "parse", failure)
 		return
 	}
@@ -1005,14 +1017,14 @@ func (m *pfbUnbound) loadGpBypassList(config *configParser, snap *snapshot) {
 	// raw: a link-local zone id ('fe80::1%em0') is not a '%' interpolation, so items cannot fail here.
 	rows, err := config.items("GP_Bypass_List", true)
 	if err != nil {
-		logErr("[pfBlockerNG]: Failed to read: GP_Bypass_List: " + err.Error())
+		pyStderr("[pfBlockerNG]: Failed to read: GP_Bypass_List: " + err.Error())
 		return
 	}
 	for _, row := range rows {
 		key, line := row[0], row[1]
 		network, ok := ipNetwork(line)
 		if !ok {
-			logErr(fmt.Sprintf("[pfBlockerNG]: Failed to parse: GP_Bypass_List: row:%s line:%s", key, line))
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to parse: GP_Bypass_List: row:%s line:%s", key, line))
 			continue
 		}
 		if network.host {
@@ -1136,7 +1148,7 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 		return buildSnapshot()
 	}()
 	if err != nil {
-		logErr("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: " + err.Error())
+		pyStderr("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: " + err.Error())
 		return false
 	}
 	if next == nil {
@@ -1348,7 +1360,7 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 		snap = qstate.snap
 		settings = snap.settings
 	} else {
-		logErr("[pfBlockerNG] qstate is not None and qstate.qinfo.qtype is not None")
+		pyStderr("[pfBlockerNG] qstate is not None and qstate.qinfo.qtype is not None")
 	}
 
 	if event == MODULE_EVENT_NEW || event == MODULE_EVENT_PASS {

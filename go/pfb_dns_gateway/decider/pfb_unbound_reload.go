@@ -150,7 +150,7 @@ func (m *pfbUnbound) reloadWriteApplied(gen int64) {
 	}
 	m.whileNotRetired(func() {
 		if failure := writeMarker(path, strconv.FormatInt(gen, 10)+"\n", 0); failure != "" {
-			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write applied-generation marker [ %s ]: %s\n", path, failure)
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: failed to write applied-generation marker [ %s ]: %s\n", path, failure))
 		}
 	})
 }
@@ -186,7 +186,7 @@ func (m *pfbUnbound) reloadBuildSnapshot() (*snapshot, error) {
 	// hstsDB is no part of the manifest: omitting it would ship an empty one and flip HSTS NULL-vs-VIP behaviour.
 	if settings.pythonHsts && isFile(settings.pfbPyHsts) {
 		if data, err := m.readFile(settings.pfbPyHsts); err != nil {
-			logErr(fmt.Sprintf("[pfBlockerNG]: reload: failed to load %s: %v", settings.pfbPyHsts, err))
+			pyStderr(fmt.Sprintf("[pfBlockerNG]: reload: failed to load %s: %v", settings.pfbPyHsts, err))
 		} else {
 			addHstsLines(next.hstsDB, data)
 		}
@@ -207,7 +207,7 @@ func (m *pfbUnbound) reloadUserRegex(settings *pfbSettings) *regexDB {
 	}
 	config := newConfigParser()
 	if err := config.read(settings.pfbUnboundIni); err != nil {
-		logErr("[pfBlockerNG]: reload: failed to load user REGEX ini: " + err.Error())
+		pyStderr("[pfBlockerNG]: reload: failed to load user REGEX ini: " + err.Error())
 		return nil
 	}
 	return dnsblCompileUserRegex(loadUserRegexEntries(config), settings.regexCap)
