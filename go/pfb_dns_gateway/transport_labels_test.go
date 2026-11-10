@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// R8: what the decider is told of a query: the transport label the module logs and counts it under, the client, and the
+// What the decider is told of a query: the transport label the module logs and counts it under, the client, and the
 // listener and its interface description (both empty when the query did not reach an address of the gateway).
 func TestTheDeciderIsToldTheTransportLabelAndTheListener(t *testing.T) {
 	client, wire := netip.MustParseAddr("::ffff:192.0.2.1"), buildQuery(t, 0x8008, "label.example.", true)

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// F1: a decider DROP is no reply, however late it comes. A query whose whole-query limit has run out by the time the
+// A decider DROP is no reply, however late it comes. A query whose whole-query limit has run out by the time the
 // decider returns gets SERVFAIL only when the decider answered: a drop after the limit stays a drop, as it was before the
 // decider moved into the process. The limit is zero here, so it is over before the decider is called.
 func TestADeciderDropAfterTheQueryLimitIsStillNoReply(t *testing.T) {

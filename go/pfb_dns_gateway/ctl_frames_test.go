@@ -21,7 +21,7 @@ func (k *ctlRig) send(t *testing.T, frame []byte) string {
 	return ctlReply(t, c)
 }
 
-// R7: the retired restart frame is refused as a length over the limit, like any other, and the control socket goes on taking
+// The retired restart frame is refused as a length over the limit, like any other, and the control socket goes on taking
 // pushes.
 func TestTheRetiredRestartFrameIsRefusedAsALengthAndThePushesGoOn(t *testing.T) {
 	k := newCtlRig(t)

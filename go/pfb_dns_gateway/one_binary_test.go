@@ -88,7 +88,7 @@ func children(pid int) (pids []string, ok bool) {
 	return pids, true
 }
 
-// R1: the module decides in the gateway's own process: a listed name gets the block answer over UDP and TCP and is never
+// The module decides in the gateway's own process: a listed name gets the block answer over UDP and TCP and is never
 // asked of Unbound; an unlisted one is relayed from Unbound; and the gateway has started no process.
 func TestOneBinaryBlocksAListedNameAndRelaysTheRest(t *testing.T) {
 	dir := shortTempDir(t)
@@ -129,7 +129,7 @@ func TestOneBinaryBlocksAListedNameAndRelaysTheRest(t *testing.T) {
 	}
 }
 
-// R2: with --no-module no module boots: every query is relayed from Unbound, a listed name included.
+// With --no-module no module boots: every query is relayed from Unbound, a listed name included.
 func TestOneBinaryWithNoModuleRelaysEveryQuery(t *testing.T) {
 	up := newFakeUpstream(t)
 	gw := startGatewayProcessWith(t, oneBinaryFlags(up.addr, "--no-module"))
@@ -141,7 +141,7 @@ func TestOneBinaryWithNoModuleRelaysEveryQuery(t *testing.T) {
 	}
 }
 
-// R3: the decider command of the old command line is not an argument any more.
+// The decider command of the old command line is not an argument any more.
 func TestOneBinaryRefusesADeciderCommandAfterTheDoubleDash(t *testing.T) {
 	gw := startGatewayProcessWith(t, []string{"--listen", "127.0.0.1", "--port", "0", "--", "/bin/true"})
 	if code := gw.exit(); code != 2 {
@@ -152,7 +152,7 @@ func TestOneBinaryRefusesADeciderCommandAfterTheDoubleDash(t *testing.T) {
 	}
 }
 
-// R4: a module that cannot boot is exit 1 with the reason, nothing stays bound, no ready file. (A directory with no ini at all
+// A module that cannot boot is exit 1 with the reason, nothing stays bound, no ready file. (A directory with no ini at all
 // is not such a module: the decider logs "Ini file missing" and serves without DNSBL, as the Python decider did.)
 func TestOneBinaryExitsOneWhenTheModuleCannotBoot(t *testing.T) {
 	dir, ready := t.TempDir(), filepath.Join(t.TempDir(), "ready")
@@ -178,7 +178,7 @@ func TestOneBinaryExitsOneWhenTheModuleCannotBoot(t *testing.T) {
 	}
 }
 
-// R5: SIGTERM while the decider is still booting stops the gateway at once: exit 0, the stopped-by-signal line, no ready file.
+// SIGTERM while the decider is still booting stops the gateway at once: exit 0, the stopped-by-signal line, no ready file.
 func TestOneBinaryStoppedBySignalWhileTheDeciderBootsExitsZero(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
 	gw := startGatewayProcessWith(t, oneBinaryFlags("127.0.0.1:5353", "--ready-file", ready), "PFB_FAKE_FRONTEND=block-open")
@@ -198,7 +198,7 @@ func TestOneBinaryStoppedBySignalWhileTheDeciderBootsExitsZero(t *testing.T) {
 	}
 }
 
-// R6: shutdown closes the decider: its observer socket is gone after the exit, and so is the ready file.
+// Shutdown closes the decider: its observer socket is gone after the exit, and so is the ready file.
 func TestOneBinaryShutdownClosesTheDecider(t *testing.T) {
 	dir := shortTempDir(t)
 	writeModuleDir(t, dir)
@@ -218,7 +218,7 @@ func TestOneBinaryShutdownClosesTheDecider(t *testing.T) {
 	}
 }
 
-// R7: the decider is booted after the drop, so that what it creates is the unprivileged user's: its observer socket is owned
+// The decider is booted after the drop, so that what it creates is the unprivileged user's: its observer socket is owned
 // by that user, mode 0600, which is what lets only the user Unbound runs as report to it. Root only: it needs a user to
 // drop to, and a directory that user can write to.
 func TestOneBinaryObserverSocketIsOwnedByTheUserTheGatewayDroppedTo(t *testing.T) {
