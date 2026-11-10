@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -231,6 +232,16 @@ func TestReloadReadGenerationFollowsPythonsIntParse(t *testing.T) {
 		{"no trailing newline", "11", 11, true},
 		{"only the first line", "7\nignored second line\n", 7, true},
 		{"a carriage return ends the first line", "7\r8\n", 7, true},
+		// int() takes every Unicode decimal digit (category Nd), mixed with ASCII ones, and refuses past 4300 digits.
+		{"an Arabic-Indic digit", "\u0663", 3, true},
+		{"two Arabic-Indic digits", "\u0663\u0664", 34, true},
+		{"Arabic-Indic digits and a newline", "\u0661\u0662\u0663\n", 123, true},
+		{"an ASCII and an Arabic-Indic digit", "5\u0663", 53, true},
+		{"Arabic-Indic digits around an underscore", "\u0663_\u0664", 34, true},
+		{"a sign before Arabic-Indic digits", "-\u0663", -3, true},
+		{"4300 digits (past int64: saturates)", strings.Repeat("1", 4300), math.MaxInt64, true},
+		{"4301 digits (Python's int() limit)", strings.Repeat("1", 4301), 0, false},
+		{"a superscript is a digit but no decimal", "\u00b2", 0, false},
 		{"empty", "", 0, false},
 		{"a blank first line", "\n8\n", 0, false},
 		{"not a number", "not-a-number\n", 0, false},
@@ -322,6 +333,23 @@ func TestReloadDeclineLogLineIsPythonsByteForByte(t *testing.T) {
 	}
 }
 
+// rlStopAfterDeclines is a log that closes stop at its limit-th decline line: a loop that retries a declined generation
+// is then ended by the log, so that it is the count that fails and the test does not hang.
+type rlStopAfterDeclines struct {
+	declines, limit int
+	stop            chan struct{}
+}
+
+func (l *rlStopAfterDeclines) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "DNSBL reload DECLINED") {
+		l.declines++
+		if l.declines == l.limit {
+			close(l.stop)
+		}
+	}
+	return len(p), nil
+}
+
 // Python advances its last generation before the gate, so a declined generation is not retried and logs once; the next
 // generation logs its own line.
 func TestReloadDeclineIsLoggedOncePerDeclinedGeneration(t *testing.T) {
@@ -330,20 +358,22 @@ func TestReloadDeclineIsLoggedOncePerDeclinedGeneration(t *testing.T) {
 	opInstall(t, m, nil, func(s *snapshot) { s.counts = 1_000_000 })
 	m.totalRAM = ramOf(1 << 20)
 	w := m.newReloadWatcher()
-	log := modCaptureLog(t)
 	stop := make(chan struct{})
-	declines := func() int { return strings.Count(log.String(), "DNSBL reload DECLINED") }
+	log := &rlStopAfterDeclines{limit: 3, stop: stop}
+	previous := logOutput
+	logOutput = log
+	t.Cleanup(func() { logOutput = previous })
 
 	rlPublish(t, m, 1)
 	w.drainAndSwap(stop)
 	w.drainAndSwap(stop)
-	if got := declines(); got != 1 {
-		t.Errorf("declines logged for generation 1 after two polls = %d, want 1", got)
+	if log.declines != 1 {
+		t.Errorf("declines logged for generation 1 after two polls = %d, want 1", log.declines)
 	}
 	rlPublish(t, m, 2)
 	w.drainAndSwap(stop)
-	if got := declines(); got != 2 {
-		t.Errorf("declines logged after generation 2 = %d, want 2", got)
+	if log.declines != 2 {
+		t.Errorf("declines logged after generation 2 = %d, want 2", log.declines)
 	}
 	rlWantBuilds(t, "declined generations", b)
 }
@@ -598,6 +628,39 @@ func TestReloadWatcherDoesNotSwapOnceStopped(t *testing.T) {
 	}()
 	chWait(t, "the loop to end at once", done)
 	rlWantBuilds(t, "a loop already stopped", b)
+}
+
+// Python's uncaught exception in the watcher ends only the watcher thread (pfb_unbound.py:966-972): it writes
+// "[pfBlockerNG]: reload watcher error: ..." and the thread is gone while pfb["reload_watcher"] stays True. A panic in the
+// loop body ends only the watcher goroutine the same way; the module goes on answering.
+func TestAPanicInTheReloadLoopEndsOnlyTheWatcherAndIsLogged(t *testing.T) {
+	m := rlModule(t)
+	opInstall(t, m, nil, func(s *snapshot) { opBlockData(s, "old.example", "1", 0); opFeed(s, 0, "F", "G") })
+	m.totalRAM = func() (uint64, bool) { panic("ram probe blew up") }
+	log := modCaptureLog(t)
+	tick, ended := make(chan time.Time), make(chan struct{})
+	m.reloadTick = func() (<-chan time.Time, func()) { return tick, func() { close(ended) } }
+	m.startReloadWatcher()
+
+	// The loop's startup drain may already see the generation, and then it panics before it takes a tick.
+	rlPublish(t, m, 1)
+	select {
+	case tick <- time.Time{}:
+	case <-ended:
+	}
+	chWait(t, "the watcher goroutine to end after the panic", ended)
+
+	if want := "[pfBlockerNG]: reload watcher error: ram probe blew up\n"; !strings.Contains(log.String(), want) {
+		t.Errorf("log = %q, want it to hold %q", log.String(), want)
+	}
+	if m.reloadStop == nil {
+		t.Errorf("the watcher is marked stopped after a panic; Python leaves reload_watcher True")
+	}
+	rlWantDomains(t, "after the watcher died", m, "old.example")
+	m.stopReloadWatcher() // a stop of a watcher that has already ended returns
+	if m.reloadStop != nil {
+		t.Errorf("stopReloadWatcher left the watcher marked running")
+	}
 }
 
 // rlTicks is the module's poll tick under the test's hand: it counts the watchers started (each takes one tick source)
@@ -1089,21 +1152,47 @@ func TestAReloadSwapCarriesTheRuntimeBypassNetworkNoAAAAAndSafeSearchTables(t *t
 }
 
 // A control write that lands while the reload builds is carried: the tables are taken from the live snapshot when the swap
-// stores, not when the build began.
+// stores, not when the build began or ended. The three writes land before the build starts, after it returns and before
+// the swap stores, so that a carry taken at any earlier moment loses the last one.
 func TestAControlWriteDuringAReloadBuildIsCarriedByTheSwap(t *testing.T) {
 	m, _ := rlManifestModule(t, []string{"python_blocking = true"}, map[string][]string{"feed.txt": {"evil.example"}})
 	build := func() (*snapshot, error) {
 		ctlApply(m, "python_control", "addbypass", "10-0-0-6")
-		return m.reloadBuildSnapshot()
+		next, err := m.reloadBuildSnapshot()
+		ctlApply(m, "python_control", "addbypass", "10-0-0-7") // after the build returned, before rebuildAndSwap stores
+		return next, err
 	}
 	if !m.reloadRunSwap(build) {
 		t.Fatalf("reloadRunSwap = false, want a swap")
 	}
 	live := m.snapshot.Load()
-	if _, ok := live.gpListDB["10.0.0.6"]; !ok || !live.settings.gpListDB {
-		t.Errorf("(gpListDB entry, gate) = (%v, %v), want both carried: %v", ok, live.settings.gpListDB, live.gpListDB)
+	for _, ip := range []string{"10.0.0.6", "10.0.0.7"} {
+		if _, ok := live.gpListDB[ip]; !ok {
+			t.Errorf("gpListDB lost the addbypass of %s: %v", ip, live.gpListDB)
+		}
+	}
+	if !live.settings.gpListDB {
+		t.Errorf("the Group Policy gate a control write turned on is off after the swap")
 	}
 	rlWantDomains(t, "after the reload", m, "evil.example")
+}
+
+// A control command copies the live snapshot to publish it; the copy is a control edit, not a reload's build, so it does
+// not ask the next swap to carry from itself.
+func TestAControlEditAfterAReloadSwapIsNotMarkedForCarry(t *testing.T) {
+	m, _ := rlManifestModule(t, []string{"python_blocking = true"}, map[string][]string{"feed.txt": {"evil.example"}})
+	if !m.reloadRunSwap(m.reloadBuildSnapshot) {
+		t.Fatalf("reloadRunSwap = false, want a swap")
+	}
+	before := m.snapshot.Load()
+	ctlApply(m, "python_control", "addbypass", "10-0-0-8")
+	live := m.snapshot.Load()
+	if live == before {
+		t.Fatalf("the control command published nothing")
+	}
+	if live.carryRuntime {
+		t.Errorf("a snapshot a control command published is still marked carryRuntime")
+	}
 }
 
 // Python's swap sets python_blacklist when the new snapshot has any list, which re-enables a runtime disable (map section

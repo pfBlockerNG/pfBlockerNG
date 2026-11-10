@@ -79,6 +79,7 @@ func (m *pfbUnbound) publishControl(e *controlEdit) {
 		return
 	}
 	next := *e.live
+	next.carryRuntime = false // a control edit is no reload build
 	if e.settings != nil {
 		next.settings = e.settings
 	}
