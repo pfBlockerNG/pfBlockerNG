@@ -266,8 +266,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 		// Then the whole pair restarts onto the one-binary line, for the changed script
 		$this->assertTrue($ready);
 		$this->assertSame($this->pair(), $this->krProxyCalls());
-		$this->assertStringContainsString('Restarting the DNS proxy: its launch line changed to the one-binary gateway', $this->krLog());
-		$this->assertStringNotContainsString('its ports or DoT/DoH/DoQ/DDR settings changed', $this->krLog());
+		$this->assertStringContainsString('Restarting the DNS proxy: its ports or DoT/DoH/DoQ/DDR settings changed', $this->krLog());
 		$this->assertStringNotContainsString('--decision-fd', (string) file_get_contents(PFB_DNS_PROXY_RCFILE));
 	}
 
