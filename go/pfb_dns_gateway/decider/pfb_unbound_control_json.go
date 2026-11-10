@@ -122,7 +122,7 @@ func (p *jsonParser) hex4() (rune, bool) {
 	if p.pos+4 > len(p.text) {
 		return 0, false
 	}
-	number, err := strconv.ParseUint(p.text[p.pos:p.pos+4], 16, 32)
+	number, err := strconv.ParseUint(p.text[p.pos:p.pos+4], 16, 16) // four hex digits never exceed 0xFFFF
 	if err != nil {
 		return 0, false
 	}

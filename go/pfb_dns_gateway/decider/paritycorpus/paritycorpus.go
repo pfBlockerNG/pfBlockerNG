@@ -351,7 +351,7 @@ func qtype(text, where, field string) uint16 {
 		return number
 	}
 	if numbered := typeNumber.FindStringSubmatch(text); numbered != nil {
-		if number, _ := strconv.Atoi(numbered[1]); number <= 0xFFFF {
+		if number, err := strconv.ParseUint(numbered[1], 10, 16); err == nil { // TYPE65536 and above is a range error
 			return uint16(number)
 		}
 	}
