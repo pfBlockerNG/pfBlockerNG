@@ -2,7 +2,7 @@
 
 pfBlockerNG stays ONE architecture-independent (NO_ARCH) package. build-pkg-portable.py
 cross-compiles the gateway from the attested source for FreeBSD amd64 and arm64 and stages both
-ELFs, executable, beside the Python proxy; the runtime picks the one that matches the machine.
+ELFs, executable, beside the observer script; the runtime picks the one that matches the machine.
 
 Every case drives the real builder with a synthetic port and a throwaway git source repo, the real
 Go toolchain, and reads the produced `.pkg` back. Nothing stands in for the compiler or the
@@ -134,7 +134,7 @@ def make_fixture(
     source = root / "source"
     proxy = source / "src" / DNS_PROXY
     proxy.mkdir(parents=True)
-    (proxy / "pfb_dns_proxy.py").write_text("print('python proxy')\n")
+    (proxy / "pfb_upstream_observer.py").write_text("print('observer')\n")
     for name, text in (go_files or {}).items():
         path = source / "go" / "pfb_dns_gateway" / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,9 +250,9 @@ def test_package_ships_both_architectures_and_keeps_its_existing_metadata(
     assert full_after["flatsize"] == sum(tf.getmember(path).size for path in full_after["files"])
     assert set(full_after["files"]) - set(full_before["files"]) == {f"{BIN}/{t}/pfb-dns" for t in TARGETS}
     assert set(full_before["files"]) <= set(full_after["files"])
-    proxy = f"/{DNS_PROXY}/pfb_dns_proxy.py"
-    assert full_after["files"][proxy]["perm"] == "0644"
-    assert member(tf, proxy) == b"print('python proxy')\n"
+    script = f"/{DNS_PROXY}/pfb_upstream_observer.py"
+    assert full_after["files"][script]["perm"] == "0644"
+    assert member(tf, script) == b"print('observer')\n"
     assert not [p for p in full_after["files"] if "/go/" in p or p.endswith(("go.mod", "main.go"))], (
         "the Go source tree leaked into the package"
     )

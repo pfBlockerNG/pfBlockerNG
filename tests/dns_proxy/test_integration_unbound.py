@@ -17,7 +17,6 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TypeVar
 
-import pfb_dns_proxy
 import pytest
 from dot_helpers import retry_on_taken_port
 from frontend_constants import ALLOWED, BLOCKED, DNSBL_IPV4, PROTO_DIR
@@ -34,6 +33,7 @@ DOCKERFILE = (
     " && rm -rf /var/lib/apt/lists/*\n"
 )
 BUILD_TIMEOUT = 900
+OBSERVER_SOCKET = "pfb_upstream.sock"  # the gateway's observer socket, relative to the module dir (Unbound's cwd)
 ALLOWED_CLIENT = "127.0.0.5"
 ALLOWED_CLIENT_TCP = "127.0.0.6"
 REFUSED_CLIENT = "127.0.0.9"
@@ -208,8 +208,8 @@ class RunningUnbound:
 
     @property
     def socket_path(self) -> Path:
-        """Where the proxy listens for the observer: beside the script, the working directory Unbound runs in."""
-        return self.conf_dir / pfb_dns_proxy.OBSERVER_SOCKET
+        """Where the gateway listens for the observer: beside the script, the working directory Unbound runs in."""
+        return self.conf_dir / OBSERVER_SOCKET
 
 
 def _run_unbound(tmp_path_factory: pytest.TempPathFactory, *, observer: bool) -> Iterator[RunningUnbound]:

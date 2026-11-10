@@ -16,7 +16,7 @@ One JSON datagram per upstream response, at most MAX_REPORT_BYTES, sent to the U
      "opts": [[EDNS option code, data as hex], ...]}
 
 Installed as /var/unbound/pfb_upstream_observer.py and named by `python-script:`. SOCKET is relative to Unbound's
-working directory (its chroot, /var/unbound), where the proxy creates it (pfb_dns_proxy.py OBSERVER_SOCKET) when it is
+working directory (its chroot, /var/unbound), where the gateway (pfb-dns) creates it when it is
 started with --observer. Without that file the script does nothing, so it may stay loaded whenever the proxy is not
 listening for reports. An answer is never delayed or changed: the send does not block, and a proxy that stops
 listening just loses the report.
@@ -42,8 +42,9 @@ if TYPE_CHECKING:
     )
 
 SOCKET = "pfb_upstream.sock"
-# Mirror of the decider's limits (pfb_dns_proxy.py); test_upstream_observer checks the copies agree. One report is one
-# datagram; 2 KiB is a conservative per-report bound, not the AF_UNIX datagram limit (net.local.dgram.maxdgram).
+# Mirror of the decider's limits (go/pfb_dns_gateway/decider/pfb_dns_proxy_observer.go); test_upstream_observer checks
+# the copies agree. One report is one datagram; 2 KiB is a conservative per-report bound, not the AF_UNIX datagram limit
+# (net.local.dgram.maxdgram).
 MAX_REPORT_BYTES = 2048
 MAX_REPORT_OPTIONS = 8
 MAX_REPORT_OPTION_HEX = 1024

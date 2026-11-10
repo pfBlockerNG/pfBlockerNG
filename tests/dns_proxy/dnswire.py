@@ -1,4 +1,4 @@
-"""Standard-library DNS wire codec (RFC 1035 with the RFC 6891 OPT record) for the pfBlockerNG DNS proxy.
+"""Standard-library DNS wire codec (RFC 1035 with the RFC 6891 OPT record) for the DNS gateway tests.
 
 Names are absolute presentation strings ("example.com.", root "."); `\\.`, `\\\\` and `\\DDD` escape the bytes a
 label may carry. RR rdata is kept canonical: names inside RFC 1035 rdata types are expanded (never compressed),
