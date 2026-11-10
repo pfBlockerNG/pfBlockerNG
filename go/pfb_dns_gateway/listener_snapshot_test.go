@@ -35,7 +35,7 @@ func TestListenerInterfaceSnapshotOnOpenConnection(t *testing.T) {
 	}
 	answer := func(q transportQuery) {
 		t.Helper()
-		k.r.p.send(tAnswer, q.id, echoAnswer(decidedQuery{wire: q.wire}))
+		k.r.p.answer(q.id, echoAnswer(decidedQuery{wire: q.wire}))
 		if got := tcpReply(t, c); len(got) == 0 {
 			t.Fatal("empty socket answer")
 		}

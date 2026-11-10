@@ -145,7 +145,7 @@ func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 			if q.transport != c.want || q.ip != clientAllowed {
 				t.Fatalf("QUERY: transport=%q client=%q, want transport=%q client=%q", q.transport, q.ip, c.want, clientAllowed)
 			}
-			r.p.send(tAnswer, q.id, echoAnswer(decidedQuery{wire: q.wire}))
+			r.p.answer(q.id, echoAnswer(decidedQuery{wire: q.wire}))
 			if got := reply(); len(got) == 0 {
 				t.Fatal("the client got no reply to the decider's answer")
 			}
@@ -168,17 +168,17 @@ func TestPlainUDPFirstForwardIsRelayedAsIsAndTheChaseIsRetriedOverTCPWhenTruncat
 		t.Fatalf("QUERY transport %q, want datagram", q.transport)
 	}
 
-	r.p.send(tForward, q.id, q.wire)
+	r.p.forward(q.id, q.wire)
 	first := r.up.next()
 	truncated := echoWithQR(first)[0]
 	truncated[2] |= 0x02
-	r.p.expect(tReply, q.id, truncated[:12])
+	r.p.expectForwarded(q.id, truncated[:12])
 	r.requireNoUpstreamQuery("the first FORWARD is UDP only: its truncated reply goes to the decider as it is")
 	if first.tcp {
 		t.Fatal("the first FORWARD went to Unbound over TCP")
 	}
 
-	r.p.send(tForward, q.id, chase)
+	r.p.forward(q.id, chase)
 	viaUDP, viaTCP := r.up.next(), r.up.next()
 	if viaUDP.tcp || !viaTCP.tcp || !bytes.Equal(viaUDP.wire, chase) || !bytes.Equal(viaTCP.wire, chase) {
 		t.Fatalf("Unbound saw tcp=%v wire=%x then tcp=%v wire=%x, want the chase over UDP, then the same chase over TCP", viaUDP.tcp, viaUDP.wire, viaTCP.tcp, viaTCP.wire)
@@ -190,8 +190,8 @@ func TestPlainUDPFirstForwardIsRelayedAsIsAndTheChaseIsRetriedOverTCPWhenTruncat
 		t.Fatalf("TCP retry header:\n got  %x\n want %x (a stream header naming the same client)", viaTCP.header, want)
 	}
 	full := append(echoWithQR(viaTCP)[0], "full-answer"...)
-	r.p.expect(tReply, q.id, full)
-	r.p.send(tAnswer, q.id, []byte("cname+target"))
+	r.p.expectForwarded(q.id, full)
+	r.p.answer(q.id, []byte("cname+target"))
 	if got := udpReply(t, c); string(got) != "cname+target" {
 		t.Fatalf("client reply: got %q", got)
 	}
@@ -205,17 +205,17 @@ func TestPlainUDPChaseIsNotRetriedWhenUnboundDidNotTruncateIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := r.recvTransportQuery()
-	r.p.send(tForward, q.id, q.wire)
-	r.p.expect(tReply, q.id, echoWithQR(r.up.next())[0])
+	r.p.forward(q.id, q.wire)
+	r.p.expectForwarded(q.id, echoWithQR(r.up.next())[0])
 	chase := buildQuery(t, 0x4444, "safe.duck.example.", true)
-	r.p.send(tForward, q.id, chase)
+	r.p.forward(q.id, chase)
 	seen := r.up.next()
-	r.p.expect(tReply, q.id, echoWithQR(seen)[0])
+	r.p.expectForwarded(q.id, echoWithQR(seen)[0])
 	r.requireNoUpstreamQuery("the chase was answered whole over UDP")
 	if seen.tcp {
 		t.Fatal("the chase went to Unbound over TCP although UDP was not truncated")
 	}
-	r.p.send(tAnswer, q.id, []byte("done"))
+	r.p.answer(q.id, []byte("done"))
 	if got := udpReply(t, c); string(got) != "done" {
 		t.Fatalf("client reply: got %q", got)
 	}
@@ -233,18 +233,18 @@ func TestStreamClientForwardsGoOverUDPAndTruncatedOnesRetryOnItsOneUpstreamTCPCo
 	}
 	for _, name := range []string{"duck.example.", "safe.duck.example."} {
 		wire := buildQuery(t, 0x5555, name, true)
-		r.p.send(tForward, q.id, wire)
+		r.p.forward(q.id, wire)
 		viaUDP, viaTCP := r.up.next(), r.up.next()
 		if viaUDP.tcp || !viaTCP.tcp || !bytes.Equal(viaUDP.wire, wire) || !bytes.Equal(viaTCP.wire, wire) {
 			t.Fatalf("Unbound saw tcp=%v wire=%x then tcp=%v wire=%x for %s, want the FORWARD's wire over UDP, then over TCP", viaUDP.tcp, viaUDP.wire, viaTCP.tcp, viaTCP.wire, name)
 		}
-		r.p.expect(tReply, q.id, append(echoWithQR(viaTCP)[0], "full-answer"...))
+		r.p.expectForwarded(q.id, append(echoWithQR(viaTCP)[0], "full-answer"...))
 	}
 	r.requireNoUpstreamQuery("each FORWARD was asked once over UDP and once over TCP")
 	if conns, headers := r.up.counts(); conns != 1 || headers != 1 {
 		t.Fatalf("Unbound accepted %d TCP connections with %d headers, want the client's one connection and one header", conns, headers)
 	}
-	r.p.send(tAnswer, q.id, []byte("done"))
+	r.p.answer(q.id, []byte("done"))
 	if got := tcpReply(t, c); string(got) != "done" {
 		t.Fatalf("client reply: got %q", got)
 	}

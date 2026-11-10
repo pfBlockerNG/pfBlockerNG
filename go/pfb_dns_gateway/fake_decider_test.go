@@ -10,32 +10,25 @@ import (
 
 const watchdog = 10 * time.Second // stuck-run guard for waits; never asserted on
 
-// The frame names of the script a test plays as the decider: the gateway's QUERY and REPLY come out of peer.recv, the test's
-// FORWARD, ANSWER and DROP go in through peer.send. They are the vocabulary of the old decision protocol, kept because a
-// test reads best as that conversation; nothing is framed, the gateway calls peer.decide in its own process.
-const (
-	tQuery, tForward, tReply, tAnswer, tDrop byte = 1, 2, 3, 4, 5
-)
-
-// peerFrame is one step of the script from the gateway's side: a QUERY (query) or a REPLY (payload).
-type peerFrame struct {
-	typ     byte
-	id      uint32
-	payload []byte
-	query   transportQuery
+// peerEvent is one step of the script from the gateway's side: a query the gateway asks of the decider (query), or the reply
+// to a forward the decider asked for (reply).
+type peerEvent struct {
+	id    uint32
+	query *transportQuery
+	reply []byte
 }
 
 type peerCall struct {
-	forward chan []byte // the test's FORWARD wires
-	final   chan []byte // the test's ANSWER; a nil send is DROP
+	forwards chan []byte // the wires the test has the decider forward
+	final    chan []byte // the answer the test gives; nil is a drop
 }
 
-// peer is the decider of a test: the gateway's decide seam, driven by the test one frame at a time (send, recv, expect), or
-// by a function that answers every query (auto).
+// peer is the decider of a test: the gateway's decide seam, driven by the test one call at a time (forward, answer, drop,
+// recvQuery, expectForwarded), or by a function that answers every query (auto).
 type peer struct {
-	t    *testing.T
-	out  chan peerFrame // the gateway's QUERYs and REPLYs, in order
-	done chan struct{}  // closed by release: queries still held return as dropped
+	t      *testing.T
+	events chan peerEvent // what the gateway did, in order
+	done   chan struct{}  // closed by release: queries still held return as dropped
 
 	mu    sync.Mutex
 	next  uint32
@@ -45,7 +38,7 @@ type peer struct {
 
 func newPeer(t *testing.T) *peer {
 	t.Helper()
-	p := &peer{t: t, out: make(chan peerFrame, 4096), done: make(chan struct{}), calls: map[uint32]*peerCall{}}
+	p := &peer{t: t, events: make(chan peerEvent, 4096), done: make(chan struct{}), calls: map[uint32]*peerCall{}}
 	t.Cleanup(p.release)
 	return p
 }
@@ -67,7 +60,7 @@ func (p *peer) decide(wire []byte, clientIP string, fwd func([]byte) []byte, tra
 	p.next++
 	id := p.next
 	auto := p.auto
-	c := &peerCall{forward: make(chan []byte, 1), final: make(chan []byte, 1)}
+	c := &peerCall{forwards: make(chan []byte, 1), final: make(chan []byte, 1)}
 	p.calls[id] = c
 	p.mu.Unlock()
 	defer func() { p.mu.Lock(); delete(p.calls, id); p.mu.Unlock() }()
@@ -78,11 +71,11 @@ func (p *peer) decide(wire []byte, clientIP string, fwd func([]byte) []byte, tra
 	if auto != nil {
 		return auto(q, fwd)
 	}
-	p.out <- peerFrame{typ: tQuery, id: id, query: q}
+	p.events <- peerEvent{id: id, query: &q}
 	for {
 		select {
-		case w := <-c.forward:
-			p.out <- peerFrame{typ: tReply, id: id, payload: fwd(w)}
+		case w := <-c.forwards:
+			p.events <- peerEvent{id: id, reply: fwd(w)}
 		case answer := <-c.final:
 			return answer
 		case <-p.done:
@@ -91,54 +84,61 @@ func (p *peer) decide(wire []byte, clientIP string, fwd func([]byte) []byte, tra
 	}
 }
 
-// send plays a frame of the decider: FORWARD, ANSWER or DROP for the query id. Frames for a query that is over are ignored.
-func (p *peer) send(typ byte, id uint32, payload []byte) {
-	p.t.Helper()
+// call is the held query id, nil when it is over: what the test says about a query that is over is ignored.
+func (p *peer) call(id uint32) *peerCall {
 	p.mu.Lock()
-	c := p.calls[id]
-	p.mu.Unlock()
-	if c == nil {
-		return
-	}
-	switch typ {
-	case tForward:
-		c.forward <- bytes.Clone(payload)
-	case tAnswer:
-		c.final <- append([]byte{}, payload...)
-	case tDrop:
-		c.final <- nil
-	default:
-		p.t.Fatalf("peer.send: frame type %d is not the decider's", typ)
+	defer p.mu.Unlock()
+	return p.calls[id]
+}
+
+// forward has the decider forward wire to Unbound for the query id.
+func (p *peer) forward(id uint32, wire []byte) {
+	if c := p.call(id); c != nil {
+		c.forwards <- bytes.Clone(wire)
 	}
 }
 
-func (p *peer) recvFrame() peerFrame {
+// answer has the decider answer the query id with wire.
+func (p *peer) answer(id uint32, wire []byte) {
+	if c := p.call(id); c != nil {
+		c.final <- append([]byte{}, wire...)
+	}
+}
+
+// drop has the decider give the query id no answer.
+func (p *peer) drop(id uint32) {
+	if c := p.call(id); c != nil {
+		c.final <- nil
+	}
+}
+
+func (p *peer) recvEvent() peerEvent {
 	p.t.Helper()
 	select {
-	case f := <-p.out:
-		return f
+	case e := <-p.events:
+		return e
 	case <-time.After(watchdog):
-		p.t.Fatal("STUCK/ENVIRONMENT: the gateway sent the decider nothing")
-		return peerFrame{}
+		p.t.Fatal("STUCK/ENVIRONMENT: the gateway did nothing the decider could see")
+		return peerEvent{}
 	}
 }
 
-// recvQuery is the next frame, which must be a QUERY.
+// recvQuery is the next thing the gateway does, which must be asking the decider a query.
 func (p *peer) recvQuery() transportQuery {
 	p.t.Helper()
-	f := p.recvFrame()
-	if f.typ != tQuery {
-		p.t.Fatalf("frame from the gateway: type %d, want QUERY", f.typ)
+	e := p.recvEvent()
+	if e.query == nil {
+		p.t.Fatalf("the gateway returned %x to a forward, want a query", e.reply)
 	}
-	return f.query
+	return *e.query
 }
 
-// expect reads one frame and fails unless it is the REPLY to id with exactly payload.
-func (p *peer) expect(typ byte, id uint32, payload []byte) {
+// expectForwarded reads the next thing the gateway does and fails unless it is returning exactly reply to the forward of query id.
+func (p *peer) expectForwarded(id uint32, reply []byte) {
 	p.t.Helper()
-	f := p.recvFrame()
-	if f.typ != typ || f.id != id || !bytes.Equal(f.payload, payload) {
-		p.t.Fatalf("frame from the gateway: got type=%d id=%d payload=%x, want type=%d id=%d payload=%x", f.typ, f.id, f.payload, typ, id, payload)
+	e := p.recvEvent()
+	if e.query != nil || e.id != id || !bytes.Equal(e.reply, reply) {
+		p.t.Fatalf("the gateway did: query=%v id=%d reply=%x, want reply %x to the forward of query %d", e.query != nil, e.id, e.reply, reply, id)
 	}
 }
 

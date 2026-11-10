@@ -70,10 +70,10 @@ func TestChaseOfTwoSilentForwardsStillGetsItsAnswer(t *testing.T) {
 			go func() { done <- c.ask(r.g, wire, fwd) }()
 			q := r.recvQuery()
 			for range 2 {
-				r.p.send(tForward, q.id, q.wire)
-				r.p.expect(tReply, q.id, nil)
+				r.p.forward(q.id, q.wire)
+				r.p.expectForwarded(q.id, nil)
 			}
-			r.p.send(tAnswer, q.id, []byte("chased answer"))
+			r.p.answer(q.id, []byte("chased answer"))
 			if got := awaitBytes(t, done); string(got) != "chased answer" {
 				t.Fatalf("client reply %x, want the decider's answer: the query was cut off before the chase finished", got)
 			}
@@ -117,15 +117,15 @@ func TestTheUDPAndTCPHandlersDoNotShortenTheWholeQueryLimit(t *testing.T) {
 				reply = func() []byte { return udpReply(t, c) }
 			}
 			q := r.recvQuery()
-			r.p.send(tForward, q.id, q.wire)
+			r.p.forward(q.id, q.wire)
 			var seen seenQuery
 			select {
 			case seen = <-r.up.queries:
 			case <-time.After(watchdog):
 				t.Fatal("STUCK/ENVIRONMENT: the decider's FORWARD never reached Unbound: the query's context was over before it ran, so the handler shortened the whole-query limit")
 			}
-			r.p.expect(tReply, q.id, echoWithQR(seen)[0])
-			r.p.send(tAnswer, q.id, []byte("answered"))
+			r.p.expectForwarded(q.id, echoWithQR(seen)[0])
+			r.p.answer(q.id, []byte("answered"))
 			if got := reply(); string(got) != "answered" {
 				t.Fatalf("client reply %x, want the decider's answer", got)
 			}

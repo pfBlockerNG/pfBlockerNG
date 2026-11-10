@@ -146,7 +146,7 @@ func testListenerEndpoints(t *testing.T, wildcard bool) {
 				if q.listenerIP != host || q.listenerInterface != "" {
 					t.Fatalf("QUERY listener=%q interface=%q, want queried destination %q and empty interface without snapshot", q.listenerIP, q.listenerInterface, host)
 				}
-				r.p.send(tForward, q.id, q.wire)
+				r.p.forward(q.id, q.wire)
 				seen := r.up.next()
 				if seen.tcp {
 					t.Fatal("first forward used TCP, want UDP")
@@ -163,12 +163,12 @@ func testListenerEndpoints(t *testing.T, wildcard bool) {
 					}
 					want = append(echoWithQR(seen)[0], "full-answer"...)
 				}
-				r.p.expect(tReply, q.id, want)
+				r.p.expectForwarded(q.id, want)
 				answer := echoAnswer(decidedQuery{wire: q.wire})
 				if tc.transport != transportUDP {
 					answer = append(answer, make([]byte, 2048)...)
 				}
-				r.p.send(tAnswer, q.id, answer)
+				r.p.answer(q.id, answer)
 				if tc.transport == transportDoQ {
 					answer[0], answer[1] = 0, 0
 				}
@@ -231,7 +231,7 @@ func TestDoHAttributionKeepsListenerTransport(t *testing.T) {
 			if q.listenerIP != addr.Addr().String() || q.listenerInterface != "" {
 				t.Fatalf("QUERY listener=%q interface=%q, want kernel listener %q and empty interface without snapshot", q.listenerIP, q.listenerInterface, addr.Addr())
 			}
-			r.p.send(tAnswer, q.id, echoAnswer(decidedQuery{wire: q.wire}))
+			r.p.answer(q.id, echoAnswer(decidedQuery{wire: q.wire}))
 			if len(awaitClient(t, done)) == 0 {
 				t.Fatal("empty answer")
 			}

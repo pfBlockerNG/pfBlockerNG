@@ -92,7 +92,7 @@ func newRig(t *testing.T, cfg rigConfig) *rig {
 	return &rig{t: t, g: g, p: p, up: up, addr: l.addr(), aclPath: aclPath, logs: logs, queries: make(chan decidedQuery, 1024)}
 }
 
-// recvQuery reads the next frame and requires it to be a QUERY.
+// recvQuery reads the next thing the gateway does and requires it to be a query asked of the decider.
 func (r *rig) recvQuery() decidedQuery {
 	r.t.Helper()
 	q := r.p.recvQuery()
@@ -399,7 +399,7 @@ func TestForwardReachesUnboundAsTheClientAndTheReplyComesBack(t *testing.T) {
 				go func() { done <- udpReply(t, c) }()
 			}
 			q := r.recvQuery()
-			r.p.send(tForward, q.id, q.wire)
+			r.p.forward(q.id, q.wire)
 			seen := r.up.next()
 			if !bytes.Equal(seen.wire, query) || seen.tcp {
 				t.Fatalf("Unbound saw wire=%x tcp=%v, want wire=%x over UDP", seen.wire, seen.tcp, query)
@@ -408,8 +408,8 @@ func TestForwardReachesUnboundAsTheClientAndTheReplyComesBack(t *testing.T) {
 				t.Fatalf("PROXYv2 header:\n got  %x\n want %x", seen.header, want)
 			}
 			unboundReply := echoWithQR(seen)[0]
-			r.p.expect(tReply, q.id, unboundReply)
-			r.p.send(tAnswer, q.id, unboundReply)
+			r.p.expectForwarded(q.id, unboundReply)
+			r.p.answer(q.id, unboundReply)
 			if got := awaitBytes(t, done); !bytes.Equal(got, unboundReply) {
 				t.Fatalf("client reply: got %x, want %x", got, unboundReply)
 			}
@@ -426,16 +426,16 @@ func TestChaseQueryIsExchangedAfterTheFirstReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := r.recvQuery()
-	r.p.send(tForward, q.id, q.wire)
+	r.p.forward(q.id, q.wire)
 	first := r.up.next()
-	r.p.expect(tReply, q.id, echoWithQR(first)[0])
-	r.p.send(tForward, q.id, chase)
+	r.p.expectForwarded(q.id, echoWithQR(first)[0])
+	r.p.forward(q.id, chase)
 	second := r.up.next()
 	if !bytes.Equal(first.wire, query) || !bytes.Equal(second.wire, chase) {
 		t.Fatalf("Unbound saw %x then %x, want the query then the chase", first.wire, second.wire)
 	}
-	r.p.expect(tReply, q.id, echoWithQR(second)[0])
-	r.p.send(tAnswer, q.id, []byte("cname+target"))
+	r.p.expectForwarded(q.id, echoWithQR(second)[0])
+	r.p.answer(q.id, []byte("cname+target"))
 	if got := udpReply(t, c); string(got) != "cname+target" {
 		t.Fatalf("client reply: got %q", got)
 	}
@@ -450,7 +450,7 @@ func TestDeciderDropSendsNothingAndKeepsTheTCPConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 		q := r.recvQuery()
-		r.p.send(tDrop, q.id, nil)
+		r.p.drop(q.id)
 		r.g.queries.Wait() // the handler of the dropped query has finished: a stray reply would be queued by now
 		requireNoUDPReply(t, c)
 
@@ -458,7 +458,7 @@ func TestDeciderDropSendsNothingAndKeepsTheTCPConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 		q = r.recvQuery()
-		r.p.send(tAnswer, q.id, []byte("next answer"))
+		r.p.answer(q.id, []byte("next answer"))
 		if got := udpReply(t, c); string(got) != "next answer" {
 			t.Fatalf("a later query on the same socket: got %q", got)
 		}
@@ -468,10 +468,10 @@ func TestDeciderDropSendsNothingAndKeepsTheTCPConnection(t *testing.T) {
 		c := r.tcpClient("")
 		tcpSend(t, c, buildQuery(t, 1, "dropped.example.", true))
 		q := r.recvQuery()
-		r.p.send(tDrop, q.id, nil)
+		r.p.drop(q.id)
 		tcpSend(t, c, buildQuery(t, 2, "next.example.", true)) // TCP is ordered: a reply to the first would come first
 		q = r.recvQuery()
-		r.p.send(tAnswer, q.id, []byte("next answer"))
+		r.p.answer(q.id, []byte("next answer"))
 		if got := tcpReply(t, c); string(got) != "next answer" {
 			t.Fatalf("the connection after a DROP: got %q", got)
 		}
