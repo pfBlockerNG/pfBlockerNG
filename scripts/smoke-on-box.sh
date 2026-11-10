@@ -6,15 +6,19 @@
 #
 # USAGE (always via select-box.sh -- "... sh /root/pfBlockerNG/scripts/smoke-on-box.sh <flags>"):
 #   smoke-on-box.sh [--ref REF] [--abi ABI] [--channel C] [--marker M] [--filter EXPR]
-#                   [--no-two-vm]
+#                   [--ports-repo R] [--ports-ref REF] [--no-two-vm]
 #                   [--shard I] [--shard-total N]
 #
 # FLAGS:
 #   --ref REF        git ref to check out (default: current HEAD)
 #   --abi ABI        build ABI string (default: FreeBSD:15:amd64)
-#   --channel C      pkg channel to build: stable|testing|edge|nightly (default: edge).
+#   --channel C      pkg channel to build: stable|testing|edge|nightly (default: nightly,
+#                    the port the devel branch pairs with).
 #                    The channel selects the port, and the port names the package, so this
 #                    decides WHICH artifact the suite installs (issue #2206).
+#   --ports-repo R   FreeBSD-ports repo, OWNER/NAME or URL (default: pfBlockerNG/FreeBSD-ports).
+#   --ports-ref REF  FreeBSD-ports branch or commit SHA (default: pfblockerng/use-github). Lets
+#                    a run build against a ports commit that is not on the default branch yet.
 #   --pkgversion V   nightly identity YYYYMMDDHHMMSS.<7-sha>. When omitted on
 #                    --channel nightly, derived from scripts/nightly-pkgversion.sh
 #                    using the just-checked-out HEAD (the commit this script
@@ -60,7 +64,7 @@
 #   1a. When the source carries go/pfb_dns_gateway, install the pinned Go (scripts/go_toolchain.py)
 #      into a private directory and put it on PATH for everything below; removed after the run
 #      (issue #3513). A legacy source gets no toolchain and no download.
-#   2. Ensure /root/FreeBSD-ports is current on pfblockerng/use-github.
+#   2. Ensure /root/FreeBSD-ports is current on the ports ref (default pfblockerng/use-github).
 #   3. Pull /root/images/{pfsense,civm} directly via oras into this workload's filesystem.
 #   4. Host prep: ip_unprivileged_port_start sysctl + pkill stale qemu.
 #   5. Build .pkg via build-leg.sh → SMOKE_PKG.
@@ -82,7 +86,9 @@ set -eu
 # ── Defaults ──────────────────────────────────────────────────────────────── #
 _REF=""        # resolved below (HEAD) if not given
 _ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
-_CHANNEL="edge"          # the devel branch's release line; overridden by --channel
+_CHANNEL="nightly"       # the port the devel branch pairs with; overridden by --channel
+_PORTS_REPO="pfBlockerNG/FreeBSD-ports"  # OWNER/NAME or URL; overridden by --ports-repo
+_PORTS_REF="pfblockerng/use-github"      # branch or commit SHA; overridden by --ports-ref
 _PKGVERSION="${PFB_NIGHTLY_PKGVERSION:-}"
 _MARKER="smoke"
 _FILTER=""
@@ -136,6 +142,8 @@ while [ "$#" -gt 0 ]; do
         --ref)      shift; _REF="$1";    shift ;;
         --abi)      shift; _ABI="$1";    shift ;;
         --channel)  shift; _CHANNEL="$1"; shift ;;
+        --ports-repo) shift; _PORTS_REPO="$1"; shift ;;
+        --ports-ref)  shift; _PORTS_REF="$1";  shift ;;
         --pkgversion) shift; _PKGVERSION="$1"; shift ;;
         --marker)   shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
@@ -257,12 +265,16 @@ if [ -f "${REPO_ROOT}/go/pfb_dns_gateway/go.mod" ]; then
     trap 'exit 143' TERM
 fi
 
-# ── Step 2: ports tree — bring to pfblockerng/use-github ───────────────────── #
+# ── Step 2: ports tree — bring to the ports ref ────────────────────────────── #
 printf 'smoke-on-box: updating FreeBSD-ports at %s (php=%s %s)\n' \
     "$PORTS_DIR" "$_php_ver" "$_py_flavor" >&2
+case "$_PORTS_REPO" in
+    file://*|https://*|http://*) _ports_url="$_PORTS_REPO" ;;
+    *) _ports_url="https://github.com/${_PORTS_REPO}" ;;
+esac
 sh scripts/sparse-clone-ports.sh \
-    "https://github.com/pfBlockerNG/FreeBSD-ports" \
-    "pfblockerng/use-github" \
+    "$_ports_url" \
+    "$_PORTS_REF" \
     "$PORTS_DIR" \
     "$_CHANNEL" "$_php_ver" "$_py_flavor" >&2
 
@@ -374,6 +386,8 @@ pkill -9 -f qemu-system-x86_64 2>/dev/null || true
 # is the operator override and is not re-derived.
 printf 'smoke-on-box: building .pkg (abi=%s channel=%s)...\n' "$_ABI" "$_CHANNEL" >&2
 set -- \
+    --ports-repo "$_PORTS_REPO" \
+    --ports-ref  "$_PORTS_REF" \
     --ports-dir  "$PORTS_DIR" \
     --channel    "$_CHANNEL" \
     --abi        "$_ABI" \

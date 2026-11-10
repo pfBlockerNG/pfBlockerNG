@@ -21,7 +21,7 @@ from pathlib import Path
 # The channel build-pkg-linux.yml builds, for the case where no artifact is in hand (a dev
 # box collecting without SMOKE_PKG). test_issue2166_workflow_channel_inputs.py pins this to
 # the workflow's own default, so the two can never drift apart unnoticed.
-DEFAULT_CHANNEL = "edge"
+DEFAULT_CHANNEL = "nightly"
 
 # `<name>-<version>.pkg`: a FreeBSD pkg version never contains '-' and always starts with a
 # digit, so the last '-' before a digit run ends the name.

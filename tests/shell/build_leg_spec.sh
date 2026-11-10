@@ -64,6 +64,7 @@ SHEOF
     ln -s "${SCRIPT}" "${FAKE_SCRIPTS}/build-leg.sh"
     ln -s "${PFB_ROOT}/scripts/lib/run-id.sh" "${FAKE_LIB}/run-id.sh"
     ln -s "${PFB_ROOT}/scripts/lib/git-env-scrub.sh" "${FAKE_LIB}/git-env-scrub.sh"
+    ln -s "${PFB_ROOT}/scripts/nightly-pkgversion.sh" "${FAKE_SCRIPTS}/nightly-pkgversion.sh"
 
     # Export paths/vars consumed by the fake stubs and by build-leg.sh.
     export BUILDER_ARGV_FILE="${BUILDER_ARGV}"
@@ -297,6 +298,34 @@ SHEOF
       The output should include 'channel=nightly'
       The output should include 'pkgversion=20260606153045.aaaaaaa'
       The output should include 'annotate_commit=present'
+    End
+  End
+
+  # ── nightly without --pkgversion: stamped from the source being built ────
+  # issue #3791: devel builds the nightly port by default, and the builder refuses a
+  # nightly build with no version, so the identity has to come from here.
+  Describe 'nightly identity'
+    run_nightly() {
+      src="${WORK}/src"
+      mkdir -p "$src"
+      git_fixture -C "$src" init --quiet . >/dev/null 2>&1
+      git_fixture -C "$src" -c user.name=t -c user.email=t@example.com \
+        commit --quiet --allow-empty -m seed >/dev/null 2>&1
+      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel nightly --local-src "$src" "$@" >/dev/null 2>&1
+      version="$(arg_after '--pkgversion' "$BUILDER_ARGV_FILE")"
+      printf 'pkgversion=%s\n' "$version"
+      case "$version" in *."$(git_fixture -C "$src" rev-parse HEAD | cut -c1-7)") echo 'sha=head' ;; *) echo 'sha=other' ;; esac
+    }
+
+    It 'derives YYYYMMDDHHMMSS.<7-sha> from the --local-src HEAD'
+      When call run_nightly
+      The line 1 of output should match pattern 'pkgversion=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].???????'
+      The line 2 of output should equal 'sha=head'
+    End
+
+    It 'keeps an explicit --pkgversion verbatim'
+      When call run_nightly --pkgversion 20260101120000.abcdef0
+      The line 1 of output should equal 'pkgversion=20260101120000.abcdef0'
     End
   End
 

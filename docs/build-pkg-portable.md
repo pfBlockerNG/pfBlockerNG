@@ -572,11 +572,14 @@ python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports --local-src . \
 
 The ADR-04 smoke gate builds the branch `.pkg` with this tool on a plain Linux
 runner — `.github/workflows/build-pkg-linux.yml` clones the FreeBSD-ports tree and
-runs:
+runs the **nightly** recipe by default (`devel` pairs with `net/pfSense-pkg-pfBlockerNG-nightly`;
+`edge` pairs with `release/X.Y`). `scripts/build-leg.sh` stamps the Nightly version from
+the checkout:
 
 ```sh
 python3 scripts/build-pkg-portable.py \
-  --ports "$PORTS" --channel testing --local-src . \
+  --ports "$PORTS" --channel nightly --local-src . \
+  --pkgversion "$(sh scripts/nightly-pkgversion.sh "$(git rev-parse HEAD)")" \
   --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out out
 ```
 

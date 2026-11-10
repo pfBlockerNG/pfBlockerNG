@@ -31,6 +31,7 @@ Describe 'smoke-on-box.sh --pkgversion (issue #2754)'
 
     cat > "${FAKE_ROOT}/scripts/sparse-clone-ports.sh" <<'STUBEOF'
 #!/bin/sh
+printf '%s\n' "$*" > "${SPARSE_CLONE_ARGV}"
 exit 0
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/sparse-clone-ports.sh"
@@ -42,6 +43,7 @@ STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/read-version-matrix.sh"
 
     BUILD_LEG_ARGV="${WORK}/build-leg-argv"
+    SPARSE_CLONE_ARGV="${WORK}/sparse-clone-argv"
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<STUBEOF
 #!/bin/sh
 printf '%s\n' "\$*" > "${BUILD_LEG_ARGV}"
@@ -101,7 +103,7 @@ STUBEOF
     PFB_ONBOX_REPO_ROOT="$FAKE_ROOT"
     PFB_ONBOX_PORTS_DIR="${WORK}/ports"
     PFB_ONBOX_IMAGES_DIR="${WORK}/images"
-    export WORK FAKE_ROOT BUILD_LEG_ARGV HEAD_SHA HEAD_SHORT \
+    export WORK FAKE_ROOT BUILD_LEG_ARGV SPARSE_CLONE_ARGV HEAD_SHA HEAD_SHORT \
         PFB_ONBOX_REPO_ROOT PFB_ONBOX_PORTS_DIR PFB_ONBOX_IMAGES_DIR \
         PFB_ONBOX_PORT_FLOOR_FILE
   }
@@ -116,6 +118,33 @@ STUBEOF
     [ -f "$BUILD_LEG_ARGV" ] || { printf 'no-argv\n'; return 0; }
     cat "$BUILD_LEG_ARGV"
   }
+
+  # The ports checkout the launcher prepares before building, as `url ref dir ...`.
+  run_to_build_and_clone() {
+    run_to_build "$@"
+    printf 'clone: %s\n' "$(tr '\n' ' ' < "$SPARSE_CLONE_ARGV")"
+  }
+
+  # issue #3791: devel builds the -nightly port, so an unflagged run must stamp one itself.
+  It 'builds nightly with a derived --pkgversion when no --channel is given'
+    When call run_to_build
+    The output should include "--channel nightly"
+    The output should include "--pkgversion "
+    The output should include ".${HEAD_SHORT}"
+  End
+
+  # issue #3791: a pre-landing run builds against a ports commit that is not on the default branch.
+  It 'puts --ports-ref and --ports-repo on build-leg and on the ports checkout'
+    When call run_to_build_and_clone --ports-repo someone/FreeBSD-ports --ports-ref 0123abcd
+    The output should include "--ports-repo someone/FreeBSD-ports"
+    The output should include "--ports-ref 0123abcd"
+    The output should include "clone: https://github.com/someone/FreeBSD-ports 0123abcd "
+  End
+
+  It 'checks out the default ports ref when none is given'
+    When call run_to_build_and_clone
+    The output should include "clone: https://github.com/pfBlockerNG/FreeBSD-ports pfblockerng/use-github "
+  End
 
   It 'puts a helper-derived --pkgversion on build-leg for --channel nightly'
     When call run_to_build --channel nightly

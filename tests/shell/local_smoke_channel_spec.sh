@@ -67,11 +67,25 @@ FAKEEOF
     The output should include "--channel 'testing'"
   End
 
-  It 'falls back to the devel branch release line when no --channel is given'
+  It 'defaults to nightly, the channel the devel branch builds, when no --channel is given'
     When call run_and_diag --ref dummy
     The line 1 of output should equal 'exit=0'
     The line 2 of output should equal 'calls=1'
-    The output should include "--channel 'edge'"
+    The output should include "--channel 'nightly'"
+  End
+
+  # issue #3791: a pre-landing run builds against a ports commit that is not on the default branch.
+  It 'forwards --ports-ref and --ports-repo to smoke-on-box.sh'
+    When call run_and_diag --ref dummy --ports-repo someone/FreeBSD-ports --ports-ref 0123abcd
+    The line 1 of output should equal 'exit=0'
+    The line 2 of output should equal 'calls=1'
+    The output should include "--ports-repo 'someone/FreeBSD-ports'"
+    The output should include "--ports-ref '0123abcd'"
+  End
+
+  It 'sends no ports flag when none is given, leaving the on-box default in force'
+    When call run_and_diag --ref dummy
+    The output should not include '--ports-'
   End
 
   It 'rejects a channel the portable builder would reject, before leasing a box'

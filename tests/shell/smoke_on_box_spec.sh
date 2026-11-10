@@ -26,6 +26,8 @@ Describe 'smoke-on-box.sh (issue #2223)'
     cp "${PFB_ROOT}/scripts/lib/git-env-scrub.sh" "${FAKE_ROOT}/scripts/lib/"
     cp "${PFB_ROOT}/scripts/lib/smoke-tier.sh"    "${FAKE_ROOT}/scripts/lib/"
     cp "${PFB_ROOT}/scripts/lib/lan-registry.sh"  "${FAKE_ROOT}/scripts/lib/"
+    # The default channel is nightly (issue #3791), whose identity the script derives with this helper.
+    cp "${PFB_ROOT}/scripts/nightly-pkgversion.sh" "${FAKE_ROOT}/scripts/"
 
     # Stubs for the steps between arg-parsing and the port-floor gate: the ports update
     # and image pulls both shell out, and neither is what this setup covers.

@@ -123,8 +123,12 @@ scripts/local-smoke.sh --no-two-vm
 # The ADR-14 Web-UI tiers (ui_render / ui_e2e / ui_browser):
 scripts/local-smoke.sh --marker ui_render
 
-# A different pkg channel (stable|testing|edge|nightly; default edge):
-scripts/local-smoke.sh --channel testing
+# A different pkg channel (stable|testing|edge|nightly; default nightly):
+scripts/local-smoke.sh --channel edge
+
+# Build against a FreeBSD-ports branch or commit that is not on the default branch yet
+# (default pfblockerng/use-github; --ports-repo takes OWNER/NAME or a URL):
+scripts/local-smoke.sh --ports-ref 0123abcd0123abcd0123abcd0123abcd0123abcd
 
 # Fetch the ref (and ci-metadata) from a different git source — a local mirror, a
 # fork, or an air-gapped copy (issue #2497). Per-run; never repoint a box's origin:
@@ -133,11 +137,13 @@ scripts/local-smoke.sh --git-remote git://mirror.lan/pfBlockerNG.git --ref mybra
 
 `--channel` decides which port `.pkg` built from, and port NAMES package
 (`pfSense-pkg-pfBlockerNG-<channel>`), so it decides which artifact suite installs. Default
-is channel `devel` branch's `4.0.0.a*` line belongs to — one
-`build-pkg-linux.yml` builds (issue #2166) — because run on any other channel
+is `nightly`, the port `devel` pairs with and the channel `build-pkg-linux.yml` builds
+(issue #2166); `release/X.Y` lines pair with `edge`. Run on any other channel
 verifies differently-named package than CI ships (issue #2206). Two defaults kept
-in step by hand: `tests/test_issue2166_workflow_channel_inputs.py` pins workflows and
-`tests/smoke`, never this script's own default. Pass `--channel` explicit if verifying
+in step: `tests/test_issue2166_workflow_channel_inputs.py` pins workflows and
+`tests/smoke`, `tests/shell/local_smoke_channel_spec.sh` pins this script's own default.
+Nightly's `YYYYMMDDHHMMSS.<7-sha>` version is stamped by `build-leg.sh` from box's
+checked-out HEAD; `--pkgversion` overrides it. Pass `--channel` explicit if verifying
 specific artifact. Unknown channel refused before box leased,
 because `build-pkg-portable.py` would otherwise reject it on box after
 lease and ports clone.
@@ -279,7 +285,7 @@ without `SMOKE_LEGACY_PKG`, and only this module fails. Fixture `legacy_pkg` fai
 `SMOKE_PKG` but no `SMOKE_LEGACY_PKG`.
 
 Published channel builds all carry the canonical package name, so a real 4.x -> 3.3.13 move is a same-name
-`pkg install -f` (`scripts/install.sh` step 9c). The smoke build is named for its channel (`-edge`), so `pkg add -f` of
+`pkg install -f` (`scripts/install.sh` step 9c). The smoke build is named for its channel (`-nightly`), so `pkg add -f` of
 the shipped file does not replace it: pkg ignores the file conflict "by forced mode" and registers both packages. The
 module therefore goes back with `pkg delete` of the branch build and then `pkg add` of the shipped file, the closest
 shape the harness can reach. It stages Netgate 3.2's unmarked settings after `pkg delete`, and puts the branch build,
@@ -293,11 +299,12 @@ nightly go recipe, whose `do-build` compiles only pfb-dns). For CE 2.8
 
 ```sh
 python3 scripts/build-pkg-portable.py \
-  --ports /path/to/FreeBSD-ports --channel edge --local-src . \
+  --ports /path/to/FreeBSD-ports --channel nightly --local-src . \
+  --pkgversion "$(sh scripts/nightly-pkgversion.sh "$(git rev-parse HEAD)")" \
   --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out out/
 ```
 
-`--ports` is FreeBSD-ports checkout containing `net/pfSense-pkg-pfBlockerNG-edge`
+`--ports` is FreeBSD-ports checkout containing `net/pfSense-pkg-pfBlockerNG-nightly`
 (channel devel branch builds; `--channel` accepts stable, testing, edge, nightly).
 `pkg add` checks dep is PRESENT, not its version, so this `.pkg` installs on
 baked-deps image.
