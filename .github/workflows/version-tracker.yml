@@ -179,9 +179,9 @@ jobs:
             # regardless of what's given, so every arch of this FreeBSD major
             # is served by the one build this triggers.
             ABI="FreeBSD:${MAJOR}:amd64"
-            # Channel maps to pkg channel: devel builds the -nightly port, main -> stable.
-            # For standalone tracker runs we use 'nightly' by default.
-            # A real release tag push always uses release.yml; this is a build smoke-check.
+            # Not derived from the matrix row: every tracker build smoke-checks the port the
+            # devel branch pairs with (-nightly; -edge follows release/X.Y). A real release
+            # tag push always uses release.yml.
             PKG_CHANNEL="nightly"
 
             if [ "$DRY_RUN" = "true" ]; then

@@ -20,9 +20,9 @@
 #   --ports-ref REF  FreeBSD-ports branch or commit SHA (default: pfblockerng/use-github). Lets
 #                    a run build against a ports commit that is not on the default branch yet.
 #   --pkgversion V   nightly identity YYYYMMDDHHMMSS.<7-sha>. When omitted on
-#                    --channel nightly, derived from scripts/nightly-pkgversion.sh
-#                    using the just-checked-out HEAD (the commit this script
-#                    builds, issue #2754). An explicit flag or
+#                    --channel nightly, build-leg.sh derives it with
+#                    scripts/nightly-pkgversion.sh from the just-checked-out HEAD (the
+#                    commit this script builds, issue #2754). An explicit flag or
 #                    PFB_NIGHTLY_PKGVERSION is the documented exception: the
 #                    operator may stamp any identity. Ignored on other channels.
 #   --marker M       pytest -m marker (default: smoke)
@@ -153,6 +153,14 @@ while [ "$#" -gt 0 ]; do
         *) printf 'smoke-on-box: unknown argument: %s\n' "$1" >&2; exit 1 ;;
     esac
 done
+
+# These reach git as arguments (sparse-clone-ports.sh): refuse an option-shaped value up front.
+case "$_PORTS_REF" in
+    -*) printf 'smoke-on-box: --ports-ref must not start with "-": %s\n' "$_PORTS_REF" >&2; exit 1 ;;
+esac
+case "$_PORTS_REPO" in
+    -*) printf 'smoke-on-box: --ports-repo must not start with "-": %s\n' "$_PORTS_REPO" >&2; exit 1 ;;
+esac
 
 # ── Step 1: the ref is already resolved ────────────────────────────────────── #
 # The caller (local-smoke.sh's bootstrap, via select-box.sh) fetches the requested ref and
@@ -380,10 +388,9 @@ export SMOKE_STUB_DNS_PORT="${SMOKE_STUB_DNS_PORT:-53}"
 pkill -9 -f qemu-system-x86_64 2>/dev/null || true
 
 # ── Step 5: build .pkg ─────────────────────────────────────────────────────── #
-# Nightly builds require explicit --pkgversion (YYYYMMDDHHMMSS.<7-sha>).
-# Derive from the just-checked-out HEAD so the identity matches what this
-# run builds (issue #2754). An explicit --pkgversion / PFB_NIGHTLY_PKGVERSION
-# is the operator override and is not re-derived.
+# Nightly needs a YYYYMMDDHHMMSS.<7-sha> identity. build-leg.sh derives it from --local-src
+# (the just-checked-out HEAD, the commit this run builds, issue #2754), so only an explicit
+# --pkgversion / PFB_NIGHTLY_PKGVERSION (the operator override) is forwarded.
 printf 'smoke-on-box: building .pkg (abi=%s channel=%s)...\n' "$_ABI" "$_CHANNEL" >&2
 set -- \
     --ports-repo "$_PORTS_REPO" \
@@ -394,12 +401,9 @@ set -- \
     --php        "$_php_ver" \
     --py-flavor  "$_py_flavor" \
     --local-src  "$REPO_ROOT"
-if [ "$_CHANNEL" = nightly ]; then
-    if [ -z "$_PKGVERSION" ]; then
-        _PKGVERSION="$(sh scripts/nightly-pkgversion.sh "$(git -C "$REPO_ROOT" rev-parse HEAD)")"
-    fi
+if [ "$_CHANNEL" = nightly ] && [ -n "$_PKGVERSION" ]; then
     set -- "$@" --pkgversion "$_PKGVERSION"
-    printf 'smoke-on-box: nightly pkgversion %s\n' "$_PKGVERSION" >&2
+    printf 'smoke-on-box: nightly pkgversion override %s\n' "$_PKGVERSION" >&2
 fi
 SMOKE_PKG="$(sh scripts/build-leg.sh "$@")"
 export SMOKE_PKG

@@ -2,7 +2,7 @@
 
 Dev-only reference (not shipped — release archives hold only `src/`). Per-version facts about pfSense CE/Plus affecting pfBlockerNG packaging, deps, ADR-04 smoke-test base image.
 
-How obtained (re-verify — see `.agents/context/pfsense-live.md`): on live box, `pkg info` (installed set), `pkg info -d <pkg>` (declared deps), `php -v` / `python --version`. Authoritative dep list = port Makefile `RUN_DEPENDS` (`net/pfSense-pkg-pfBlockerNG-edge`, channel devel branch builds — `-devel` recipe retired from ports tree, issue #2166); tables below hand-maintained mirror — confirm against port (or built `.pkg`) when baking image.
+How obtained (re-verify — see `.agents/context/pfsense-live.md`): on live box, `pkg info` (installed set), `pkg info -d <pkg>` (declared deps), `php -v` / `python --version`. Authoritative dep list = port Makefile `RUN_DEPENDS` (`net/pfSense-pkg-pfBlockerNG-nightly`, channel devel branch builds — `-devel` recipe retired from ports tree, issue #2166); tables below hand-maintained mirror — confirm against port (or built `.pkg`) when baking image.
 
 ## 2.8.x (CE)
 
@@ -61,7 +61,7 @@ Observed on CE **2.8.1** box; 2.8.0 shares same base toolchain.
 
 Must be present for pfBlockerNG to work. By convention ADR-04 smoke image **bakes** them so harness `pkg add` of branch `.pkg` resolves them from local pkg db **offline** (see `legacy/ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md` §3). Missing dep = `pkg add` "Missing dependency" = bad image, re-bake.
 
-These = port's explicit `RUN_DEPENDS` (10 packages, issue #1806 — fixes pre-existing drift against port Makefile: table had stopped at 9), verified against `net/pfSense-pkg-pfBlockerNG-edge/Makefile`. To bake onto image, run [`scripts/misc/install_deps_CE_2.8.sh`](../../scripts/misc/install_deps_CE_2.8.sh) on box (as root):
+These = port's explicit `RUN_DEPENDS` (10 packages, issue #1806 — fixes pre-existing drift against port Makefile: table had stopped at 9), verified against `net/pfSense-pkg-pfBlockerNG-nightly/Makefile`. To bake onto image, run [`scripts/misc/install_deps_CE_2.8.sh`](../../scripts/misc/install_deps_CE_2.8.sh) on box (as root):
 
 > **Built `.pkg` records 13 dependencies, not 10.** Besides these 10,
 > `make package` records the three that `USES=php` (`USE_PHP=intl`) and

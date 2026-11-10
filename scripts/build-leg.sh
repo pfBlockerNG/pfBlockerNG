@@ -19,7 +19,9 @@
 #   --ports-repo  pfBlockerNG/FreeBSD-ports   → https://github.com/<repo>
 #                 (file:// and https:// URLs pass through unchanged)
 #   --ports-ref   pfblockerng/use-github
-#   --channel     testing        (→ sparse-clone arg4 AND builder --channel)
+#   --channel     testing        (→ sparse-clone arg4 AND builder --channel). This is the
+#                                  script's own default; the devel build/smoke callers pass
+#                                  nightly explicitly (issue #3791).
 #   --variant     CE             (→ builder --variant; native builds ignore it)
 #   --build-record (empty)       → --build-record JSON|PATH when supplied
 #   --abi         FreeBSD:15:amd64
@@ -27,8 +29,8 @@
 #   --php         8.3
 #   --local-src   .              (→ builder --local-src)
 #   --pkgversion  (empty)        → flag omitted; builder derives from ports Makefile.
-#                                  Nightly has no recipe version: it is stamped
-#                                  YYYYMMDDHHMMSS.<7-sha> from --local-src's HEAD
+#                                  Exception: --channel nightly has no recipe version, so it
+#                                  is stamped YYYYMMDDHHMMSS.<7-sha> from --local-src's HEAD
 #                                  (scripts/nightly-pkgversion.sh, as nightly.yml does).
 #   --annotate    (none)         repeatable; each → --annotate K=V to builder
 #   --ports-dir   (run-keyed)    ${PFB_PORTS_DIR:-$PFB_RUN_DIR/ports}
@@ -111,6 +113,14 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# These reach git as arguments (sparse-clone-ports.sh): refuse an option-shaped value up front.
+case "$PORTS_REF" in
+    -*) printf '%s: --ports-ref must not start with "-": %s\n' "$0" "$PORTS_REF" >&2; exit 2 ;;
+esac
+case "$PORTS_REPO" in
+    -*) printf '%s: --ports-repo must not start with "-": %s\n' "$0" "$PORTS_REPO" >&2; exit 2 ;;
+esac
 
 # ── Derive ports URL ─────────────────────────────────────────────────────────
 # file:// and https:// (and http://) pass through unchanged for testing; OWNER/NAME

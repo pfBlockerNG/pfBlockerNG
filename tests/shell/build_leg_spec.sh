@@ -158,8 +158,10 @@ SHEOF
     End
   End
 
-  # ── build-pkg-linux leg: NO --pkgversion, NO --annotate ──────────────────
-  Describe 'build-pkg-linux leg'
+  # ── non-nightly build-pkg-linux leg: NO --pkgversion, NO --annotate ──────
+  # (a nightly leg, build-pkg-linux's default since issue #3791, derives its version: see
+  # 'nightly identity' below)
+  Describe 'non-nightly build-pkg-linux leg'
     check_linux_leg() {
       sh "${FAKE_SCRIPTS}/build-leg.sh" \
         --ports-repo 'pfBlockerNG/FreeBSD-ports' \
@@ -169,7 +171,7 @@ SHEOF
         --py-flavor 'py311' \
         --php '8.3' \
         2>/dev/null
-      # Assert ABSENCE of --pkgversion (the ADR "neither" — build-pkg-linux omits it).
+      # Assert ABSENCE of --pkgversion (the ADR "neither" — a non-nightly build-pkg-linux leg omits it).
       if grep -qF -- '--pkgversion' "$BUILDER_ARGV_FILE" 2>/dev/null; then
         echo "pkgversion=present"
       else
@@ -186,8 +188,8 @@ SHEOF
       echo "php=$(arg_after '--php' "$BUILDER_ARGV_FILE")"
     }
 
-    It 'records no --pkgversion and no --annotate in builder argv (the linux-leg neither case)'
-      # Scenario: build-pkg-linux leg passes no version override and no annotations.
+    It 'records no --pkgversion and no --annotate in builder argv (the non-nightly linux-leg neither case)'
+      # Scenario: a testing/edge build-pkg-linux leg passes no version override and no annotations.
       # Given: build-leg.sh called without --pkgversion or --annotate.
       # When: builder argv is recorded by the fake.
       # Then: --pkgversion is absent, --annotate is absent, --channel/--php are present.
@@ -326,6 +328,29 @@ SHEOF
     It 'keeps an explicit --pkgversion verbatim'
       When call run_nightly --pkgversion 20260101120000.abcdef0
       The line 1 of output should equal 'pkgversion=20260101120000.abcdef0'
+    End
+  End
+
+  # ── Option-shaped ports values ───────────────────────────────────────────
+  # issue #3791: --ports-ref / --ports-repo are free-form operator input that reaches git, so a
+  # value starting with `-` is refused before the ports step runs.
+  Describe 'option-shaped ports values'
+    run_refused() {
+      sh "${FAKE_SCRIPTS}/build-leg.sh" "$@" 2>&1
+      printf 'status=%s\n' "$?"
+      [ -f "$CLONE_ARGV" ] && echo 'clone=ran' || echo 'clone=not-run'
+    }
+    It 'refuses a --ports-ref starting with a dash'
+      When call run_refused --ports-ref '--upload-pack=touch x'
+      The output should include 'ports-ref'
+      The output should include 'status=2'
+      The output should include 'clone=not-run'
+    End
+    It 'refuses a --ports-repo starting with a dash'
+      When call run_refused --ports-repo '--upload-pack=touch x'
+      The output should include 'ports-repo'
+      The output should include 'status=2'
+      The output should include 'clone=not-run'
     End
   End
 

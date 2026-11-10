@@ -48,6 +48,17 @@ CHANNEL="$4"
 PHP="$5"
 PYFLAVOR="$6"
 
+# URL and REF are operator input (local-smoke.sh --ports-repo/--ports-ref). Reaching git as an
+# argument, a value starting with `-` is an OPTION (`--upload-pack=<cmd>` runs <cmd>), and an
+# empty REF names nothing, so refuse both before any git runs. The `--` before each value below
+# is the second line of defence.
+case "$URL" in
+	-*) printf '%s: refusing URL %s: must not start with "-"\n' "$0" "$URL" >&2; exit 2 ;;
+esac
+case "$REF" in
+	''|-*) printf '%s: refusing REF %s: must be non-empty and not start with "-"\n' "$0" "$REF" >&2; exit 2 ;;
+esac
+
 # Resolve the repo root relative to this script so the builder can always be found
 # regardless of where the caller's CWD is.
 SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
@@ -77,7 +88,7 @@ if [ -e "${DEST}/.git" ]; then
 	# sparse checkout below lazy-fetches only the needed blobs — exactly like the fresh clone.
 	# Checking out REF corrects a tree left on the wrong branch instead of building from it.
 	git -C "$DEST" remote set-url origin "$URL" 2>/dev/null || git -C "$DEST" remote add origin "$URL"
-	git -C "$DEST" fetch --depth 1 --filter=blob:none origin "$REF"
+	git -C "$DEST" fetch --depth 1 --filter=blob:none origin -- "$REF"
 	co_target=FETCH_HEAD
 elif [ -e "$DEST" ] && { [ ! -d "$DEST" ] || [ -n "$(ls -A "$DEST")" ]; }; then
 	# Refuse only when there is something to protect. An EMPTY directory (issue #2490:

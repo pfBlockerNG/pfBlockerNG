@@ -145,6 +145,14 @@ while [ "$#" -gt 0 ]; do
         *)  break ;;
     esac
 done
+# These end up as git arguments on the box (sparse-clone-ports.sh): an option-shaped value is refused
+# here, before a box is leased.
+case "$_PORTS_REF" in
+    -*) printf 'local-smoke: --ports-ref must not start with "-": %s\n' "$_PORTS_REF" >&2; exit 2 ;;
+esac
+case "$_PORTS_REPO" in
+    -*) printf 'local-smoke: --ports-repo must not start with "-": %s\n' "$_PORTS_REPO" >&2; exit 2 ;;
+esac
 if [ "$#" -gt 0 ]; then
     printf 'local-smoke: unexpected positional args (use --marker/--filter): %s\n' "$*" >&2
     exit 2

@@ -169,6 +169,87 @@ PYEOF
     The output should equal "head=${USE_GITHUB_SHA}"
   End
 
+  # A REF is operator input (local-smoke.sh --ports-ref). A value that starts with `-` would be a
+  # git OPTION (`--upload-pack=<cmd>` runs <cmd> during the fetch), so it is refused outright (exit
+  # 2) before any git runs; every other odd shape must at worst fail inert. The marker file proves
+  # nothing was executed. Each row runs against a fresh clone (DEST absent) and a reused work-tree.
+  hostile_ref_result() {
+    _mode="$1"
+    # @WORK@ in a row is this example's own temp dir, which Parameters cannot know yet.
+    _ref="$(printf '%s' "$2" | sed "s|@WORK@|${WORK}|g")"
+    if [ "$_mode" = reuse ]; then
+      git_fixture clone -q "$URL" "$DEST" >/dev/null 2>&1
+    fi
+    _out="$(sh "$SCRIPT" "$URL" "$_ref" "$DEST" testing 8.3 py311 2>&1)"
+    _rc=$?
+    printf 'status=%s\n' "$_rc"
+    if [ -e "${WORK}/pwned" ]; then echo 'pwned=yes'; else echo 'pwned=no'; fi
+    printf '%s\n' "$_out" | grep -c 'refusing' | sed 's/^/refused-lines=/'
+  }
+
+  Describe 'an option-shaped REF is refused before git runs'
+    Parameters
+      reuse "--upload-pack=touch @WORK@/pwned; git-upload-pack"
+      fresh "--upload-pack=touch @WORK@/pwned; git-upload-pack"
+      reuse '-h'
+      fresh '-h'
+      reuse '--help'
+      fresh '-b'
+    End
+    It "refuses $1 REF '$2' (exit 2, nothing executed)"
+      When call hostile_ref_result "$1" "$2"
+      The line 1 of output should equal 'status=2'
+      The line 2 of output should equal 'pwned=no'
+      The line 3 of output should equal 'refused-lines=1'
+    End
+  End
+
+  # The URL is the other free-form value (--ports-repo reaches it through build-leg.sh).
+  url_result() {
+    _url="$(printf '%s' "$1" | sed "s|@WORK@|${WORK}|g")"
+    _out="$(sh "$SCRIPT" "$_url" pfblockerng/use-github "$DEST" testing 8.3 py311 2>&1)"
+    _rc=$?
+    printf 'status=%s\n' "$_rc"
+    if [ -e "${WORK}/pwned" ]; then echo 'pwned=yes'; else echo 'pwned=no'; fi
+    printf '%s\n' "$_out" | grep -c 'refusing' | sed 's/^/refused-lines=/'
+  }
+  It 'refuses an option-shaped URL (exit 2, nothing executed)'
+    When call url_result '--upload-pack=touch @WORK@/pwned; git-upload-pack'
+    The line 1 of output should equal 'status=2'
+    The line 2 of output should equal 'pwned=no'
+    The line 3 of output should equal 'refused-lines=1'
+  End
+
+  Describe 'an empty or shell-shaped REF is refused or inert'
+    Parameters
+      reuse ''
+      fresh ''
+    End
+    It "refuses an empty REF ($1)"
+      When call hostile_ref_result "$1" "$2"
+      The line 1 of output should equal 'status=2'
+      The line 2 of output should equal 'pwned=no'
+    End
+  End
+
+  Describe 'quote, space, substitution and backtick REFs are inert'
+    Parameters
+      reuse 'a b'
+      fresh 'a b'
+      reuse "q'q"
+      fresh 'q"q'
+      reuse '$(touch @WORK@/pwned)'
+      fresh '$(touch @WORK@/pwned)'
+      reuse '`touch @WORK@/pwned`'
+      fresh '`touch @WORK@/pwned`'
+    End
+    It "never executes REF '$2' ($1)"
+      When call hostile_ref_result "$1" "$2"
+      The line 1 of output should not equal 'status=0'
+      The line 2 of output should equal 'pwned=no'
+    End
+  End
+
   refuse_result() {
     mkdir -p "$DEST" && true > "${DEST}/not-a-clone"
     run_clone 2>&1  # merge the refusal (stderr) into output for a single clean assertion
@@ -202,10 +283,10 @@ PYEOF
   # different message) — asserting that phrase proves the REF was NOT treated as a SHA.
   run_clone_hostile() { sh "$SCRIPT" "$URL" "$1" "$DEST" testing 8.3 py311 2>&1; }
 
-  It 'empty REF is not a SHA -> branch path (not fetch-by-oid)'
+  It 'empty REF is refused before any git runs (it names nothing, so it is no branch either)'
     When call run_clone_hostile ''
-    The status should be failure
-    The output should include 'Remote branch'
+    The status should equal 2
+    The output should include 'refusing REF'
   End
 
   It '39-hex (one short) REF is not a SHA -> branch path'
@@ -246,12 +327,12 @@ PYEOF
     The output should include 'Remote branch'
   End
 
-  It 'REF with a leading dash is never taken as a git option -> branch path, treated as literal data'
+  It 'REF with a leading dash is refused before git runs, so it is never taken as a git option'
     # Absolute payload path on purpose: a bare 'touch INJECTED' would land in the
     # shellspec CWD, so asserting on ${WORK} would pass even if the option were honoured.
     When call run_clone_hostile "--upload-pack=touch ${WORK}/INJECTED"
-    The status should be failure
-    The output should include 'Remote branch'
+    The status should equal 2
+    The output should include 'refusing REF'
     The path "${WORK}/INJECTED" should not be exist
   End
 
