@@ -9,8 +9,9 @@
 # Usage:
 #   sparse-clone-ports.sh URL REF DEST CHANNEL PHP PYFLAVOR
 #
-#   URL        FreeBSD-ports HTTPS clone URL
-#   REF        branch, tag, or full 40-hex commit SHA to fetch (e.g. pfblockerng/use-github)
+#   URL        FreeBSD-ports HTTPS clone URL; refused (exit 2) when it starts with "-"
+#   REF        branch, tag, or full 40-hex commit SHA to fetch (e.g. pfblockerng/use-github);
+#              refused (exit 2) when empty, starting with "-" or "+", or containing ":"
 #   DEST       destination directory — created (fresh clone) if absent or an empty
 #              directory; an EXISTING git work-tree is fetched + checked out at REF
 #              (idempotent reuse); any other existing DEST (non-empty directory,
@@ -36,6 +37,7 @@ set -eu
 
 usage() {
 	printf 'Usage: %s URL REF DEST CHANNEL PHP PYFLAVOR\n' "$0" >&2
+	printf '  URL must not start with "-"; REF must be non-empty, not start with "-" or "+", and not contain ":".\n' >&2
 	exit 1
 }
 
@@ -49,14 +51,20 @@ PHP="$5"
 PYFLAVOR="$6"
 
 # URL and REF are operator input (local-smoke.sh --ports-repo/--ports-ref). Reaching git as an
-# argument, a value starting with `-` is an OPTION (`--upload-pack=<cmd>` runs <cmd>), and an
-# empty REF names nothing, so refuse both before any git runs. The `--` before each value below
-# is the second line of defence.
+# argument, a value starting with `-` is an OPTION (`--upload-pack=<cmd>` runs <cmd>); in a
+# refspec a leading `+` forces the update and `:` names a destination. An empty REF names nothing.
+# Refuse all of these before any git runs. The `--` before REF in the fetches below is the second
+# line of defence (the URL is never passed after `--`, so the `-` refusal is its only guard).
+# The echoed value is made printable first: a newline in it would start a log line of its own.
+_pfb_printable() { printf '%s' "$1" | tr -c '[:print:]' '?'; }
 case "$URL" in
-	-*) printf '%s: refusing URL %s: must not start with "-"\n' "$0" "$URL" >&2; exit 2 ;;
+	-*) printf '%s: refusing URL %s: must not start with "-"\n' "$0" "$(_pfb_printable "$URL")" >&2; exit 2 ;;
 esac
 case "$REF" in
-	''|-*) printf '%s: refusing REF %s: must be non-empty and not start with "-"\n' "$0" "$REF" >&2; exit 2 ;;
+	''|-*|+*|*:*)
+		printf '%s: refusing REF %s: must be non-empty, not start with "-" or "+", and not contain ":"\n' \
+			"$0" "$(_pfb_printable "$REF")" >&2
+		exit 2 ;;
 esac
 
 # Resolve the repo root relative to this script so the builder can always be found

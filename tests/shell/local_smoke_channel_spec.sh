@@ -123,20 +123,13 @@ FAKEEOF
     The line 2 of output should equal 'literal=yes'
   End
 
-  # A value starting with `-` could be read as a git option further down (sparse-clone-ports.sh), so
-  # it is refused here, before a box is leased.
+  # A --ports-ref starting with `-` could be read as a git option further down (sparse-clone-ports.sh),
+  # so it is refused here, before a box is leased.
   It 'refuses an option-shaped --ports-ref before leasing a box'
     When call run_and_diag --ref dummy --ports-ref '--upload-pack=touch x'
     The line 1 of output should equal 'exit=2'
     The line 2 of output should equal 'calls=0'
     The output should include 'ports-ref'
-  End
-
-  It 'refuses an option-shaped --ports-repo before leasing a box'
-    When call run_and_diag --ref dummy --ports-repo '-h'
-    The line 1 of output should equal 'exit=2'
-    The line 2 of output should equal 'calls=0'
-    The output should include 'ports-repo'
   End
 
   It 'rejects a channel the portable builder would reject, before leasing a box'

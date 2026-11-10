@@ -70,6 +70,16 @@ done
 exit 0
 PYEOF
     chmod +x "${BIN}/python3"
+    # Records every git argv the script under test runs, then runs the real git.
+    GIT_ARGV_LOG="${WORK}/git-argv"
+    REAL_GIT="$(command -v git)"
+    cat > "${BIN}/git" <<'GITEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_ARGV_LOG"
+exec "$REAL_GIT" "$@"
+GITEOF
+    chmod +x "${BIN}/git"
+    export GIT_ARGV_LOG REAL_GIT
     PATH="${BIN}:${PATH}"
   }
   cleanup() { rm -rf "$WORK"; }
@@ -218,6 +228,61 @@ PYEOF
     The line 1 of output should equal 'status=2'
     The line 2 of output should equal 'pwned=no'
     The line 3 of output should equal 'refused-lines=1'
+  End
+
+  # A refspec is `[+]<src>[:<dst>]`: a leading `+` forces an update and `:` names a destination
+  # ref, so neither belongs in a plain branch/tag/SHA REF.
+  Describe 'a refspec-shaped REF is refused'
+    Parameters
+      reuse 'refs/heads/x:refs/heads/y'
+      fresh 'a:b'
+      reuse '+refs/heads/x'
+      fresh '+pfblockerng/use-github'
+    End
+    It "refuses REF '$2' ($1)"
+      When call hostile_ref_result "$1" "$2"
+      The line 1 of output should equal 'status=2'
+      The line 2 of output should equal 'pwned=no'
+      The line 3 of output should equal 'refused-lines=1'
+    End
+  End
+
+  # The refusal message echoes the value; a newline in it must not start a line of its own, or
+  # a workflow log would parse `::error::...` as a runner command.
+  injected_line_result() {
+    _bad="$(printf -- '-x\n::error::injected')"
+    _out="$(sh "$SCRIPT" "$URL" "$_bad" "$DEST" testing 8.3 py311 2>&1)"
+    printf 'status=%s\n' "$?"
+    printf '%s\n' "$_out" | grep -c '^::error::' | sed 's/^/injected-lines=/'
+    printf '%s\n' "$_out" | grep -c 'refusing' | sed 's/^/refused-lines=/'
+  }
+  It 'does not echo a newline from a refused REF'
+    When call injected_line_result
+    The line 1 of output should equal 'status=2'
+    The line 2 of output should equal 'injected-lines=0'
+    The line 3 of output should equal 'refused-lines=1'
+  End
+
+  # `--` before the REF is what keeps a branch named like an option from being parsed as one. The
+  # refusal above makes that input unreachable, so pin the argv git actually receives instead.
+  Describe 'git receives the REF after --'
+    fetch_argv() {
+      : > "$GIT_ARGV_LOG"
+      if [ "$1" = reuse ]; then
+        git_fixture clone -q "$URL" "$DEST" >/dev/null 2>&1
+        : > "$GIT_ARGV_LOG"
+      fi
+      sh "$SCRIPT" "$URL" "$2" "$DEST" testing 8.3 py311 >/dev/null 2>&1
+      grep '^-C .* fetch ' "$GIT_ARGV_LOG" | sed 's|^-C [^ ]* ||'
+    }
+    It 'on the reuse path (branch REF)'
+      When call fetch_argv reuse pfblockerng/use-github
+      The output should equal 'fetch --depth 1 --filter=blob:none origin -- pfblockerng/use-github'
+    End
+    It 'on the fresh-by-SHA path'
+      When call fetch_argv fresh "$USE_GITHUB_SHA"
+      The output should equal "fetch --depth 1 --filter=blob:none origin -- ${USE_GITHUB_SHA}"
+    End
   End
 
   Describe 'an empty or shell-shaped REF is refused or inert'

@@ -67,7 +67,7 @@ pytestmark = pytest.mark.repo
 
 NIGHTLY_NAME = "pfSense-pkg-pfBlockerNG-nightly"
 # The DEVEL_* names below are historical: they mean "the branch package, whichever channel it
-# was built on" (the ports tree retired the -devel channel; the devel branch now builds edge).
+# was built on" (the ports tree retired the -devel channel; the devel branch now builds nightly).
 # Nightly is the one package with a fixed name of its own, so it stays a literal.
 DEVEL_NAME = branch_pkg_name(os.environ.get("SMOKE_PKG"))
 NIGHTLY_REPO = "pfblockerng-nightly"  # the %R origin a nightly install reports

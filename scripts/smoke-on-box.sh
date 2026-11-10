@@ -154,14 +154,6 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-# These reach git as arguments (sparse-clone-ports.sh): refuse an option-shaped value up front.
-case "$_PORTS_REF" in
-    -*) printf 'smoke-on-box: --ports-ref must not start with "-": %s\n' "$_PORTS_REF" >&2; exit 1 ;;
-esac
-case "$_PORTS_REPO" in
-    -*) printf 'smoke-on-box: --ports-repo must not start with "-": %s\n' "$_PORTS_REPO" >&2; exit 1 ;;
-esac
-
 # ── Step 1: the ref is already resolved ────────────────────────────────────── #
 # The caller (local-smoke.sh's bootstrap, via select-box.sh) fetches the requested ref and
 # checks out its FETCHED TIP before invoking this script, so there is nothing to resolve

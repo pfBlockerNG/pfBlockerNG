@@ -114,14 +114,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# These reach git as arguments (sparse-clone-ports.sh): refuse an option-shaped value up front.
-case "$PORTS_REF" in
-    -*) printf '%s: --ports-ref must not start with "-": %s\n' "$0" "$PORTS_REF" >&2; exit 2 ;;
-esac
-case "$PORTS_REPO" in
-    -*) printf '%s: --ports-repo must not start with "-": %s\n' "$0" "$PORTS_REPO" >&2; exit 2 ;;
-esac
-
 # ── Derive ports URL ─────────────────────────────────────────────────────────
 # file:// and https:// (and http://) pass through unchanged for testing; OWNER/NAME
 # style → prepend the GitHub HTTPS prefix.

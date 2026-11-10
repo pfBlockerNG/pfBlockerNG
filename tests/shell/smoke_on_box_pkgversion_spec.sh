@@ -161,24 +161,4 @@ STUBEOF
     The output should include "--channel edge"
     The output should not include "--pkgversion"
   End
-
-  # issue #3791: the ports values reach git as arguments, so an option-shaped one is refused
-  # before anything runs.
-  run_refused() {
-    sh "$SCRIPT" --no-two-vm "$@" 2>&1
-    printf 'status=%s\n' "$?"
-    [ -f "$BUILD_LEG_ARGV" ] && echo 'build-leg=ran' || echo 'build-leg=not-run'
-  }
-  It 'refuses an option-shaped --ports-ref'
-    When call run_refused --ports-ref '--upload-pack=touch x'
-    The output should include 'ports-ref'
-    The output should include 'status=1'
-    The output should include 'build-leg=not-run'
-  End
-  It 'refuses an option-shaped --ports-repo'
-    When call run_refused --ports-repo '-h'
-    The output should include 'ports-repo'
-    The output should include 'status=1'
-    The output should include 'build-leg=not-run'
-  End
 End

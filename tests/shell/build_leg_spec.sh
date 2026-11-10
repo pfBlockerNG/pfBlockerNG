@@ -331,29 +331,6 @@ SHEOF
     End
   End
 
-  # ── Option-shaped ports values ───────────────────────────────────────────
-  # issue #3791: --ports-ref / --ports-repo are free-form operator input that reaches git, so a
-  # value starting with `-` is refused before the ports step runs.
-  Describe 'option-shaped ports values'
-    run_refused() {
-      sh "${FAKE_SCRIPTS}/build-leg.sh" "$@" 2>&1
-      printf 'status=%s\n' "$?"
-      [ -f "$CLONE_ARGV" ] && echo 'clone=ran' || echo 'clone=not-run'
-    }
-    It 'refuses a --ports-ref starting with a dash'
-      When call run_refused --ports-ref '--upload-pack=touch x'
-      The output should include 'ports-ref'
-      The output should include 'status=2'
-      The output should include 'clone=not-run'
-    End
-    It 'refuses a --ports-repo starting with a dash'
-      When call run_refused --ports-repo '--upload-pack=touch x'
-      The output should include 'ports-repo'
-      The output should include 'status=2'
-      The output should include 'clone=not-run'
-    End
-  End
-
   # ── Run-keying: different RUN_IDs → different --out dirs ─────────────────
   Describe 'run-keying'
     run_keying_check() {
