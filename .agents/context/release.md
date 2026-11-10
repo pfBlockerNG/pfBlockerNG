@@ -39,6 +39,18 @@ Stable, Testing, Edge can coexist on every maintained `release/X.Y`; tagged patc
 
 Self-hosted catalog keep exact package identity, record channel metadata outside package name. EOL route-only behavior and unsupported downgrade policy unchanged; retained artifacts give availability and provenance, not general downgrade guarantee.
 
+### Cutting a new `release/X.Y` from `devel`
+
+Each line's CI builds with the ports recipe that tracks it, set by defaults in the branch's own files (#3825): `devel` says `nightly`, a release line says `edge`. A branch cut from `devel` inherits `nightly`, so its first commit switches every default to `edge`:
+
+- `.github/workflows/build-pkg-linux.yml`: both `channel` input defaults.
+- `channel:` passed by `smoke.yml`, `smoke-single.yml`, `ui-tests.yml`, `build-image.yml`.
+- `PKG_CHANNEL` in `version-tracker.yml`.
+- `_CHANNEL` default in `scripts/local-smoke.sh`; the `--channel` default in `scripts/smoke-on-box.sh`.
+- `DEFAULT_CHANNEL` in `tests/smoke/pkg_identity.py`.
+
+Enumerate with `git grep -n nightly -- .github/workflows scripts/local-smoke.sh scripts/smoke-on-box.sh tests/smoke/pkg_identity.py`; do not trust this list alone. The `-edge` port's `files/modules.txt` and tuples in `pfBlockerNG/FreeBSD-ports` must match the new line's `go/pfb_dns_gateway/go.mod` before its first build.
+
 ## Scope
 
 This context document authoring and publication contracts only. Not select branches, not mutate catalogs, not alter on-box update client, not add release workflow mechanisms. Builder, publisher, catalog, client migration work stay with issue owners named by #2140.
