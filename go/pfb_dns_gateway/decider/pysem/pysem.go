@@ -48,11 +48,26 @@ func WriteRune(b *strings.Builder, r rune) {
 }
 
 // Lower is str.lower(): Go's simple case mapping plus str.lower()'s one multi-character mapping, U+0130 to "i" and
-// U+0307.
+// U+0307. A lone surrogate is kept as it is (strings.ToLower would turn its three bytes into three U+FFFD).
 // shortcut: no Final_Sigma (a word-final capital sigma lowers to σ, not ς) and Go's Unicode 17 case tables where
 // Python 3.11 has Unicode 14; neither changes an ASCII result. tld_allow_list is free text PHP writes from the form,
 // so it can carry them: port Final_Sigma when its TLD Allow matcher is translated.
-func Lower(s string) string { return strings.ToLower(strings.ReplaceAll(s, "\u0130", "i\u0307")) }
+func Lower(s string) string {
+	if !strings.Contains(s, "\xed") {
+		return strings.ToLower(strings.ReplaceAll(s, "\u0130", "i\u0307"))
+	}
+	var out strings.Builder
+	for len(s) > 0 {
+		r, size := DecodeRune(s)
+		if 0xD800 <= r && r <= 0xDFFF {
+			out.WriteString(s[:size])
+		} else {
+			out.WriteString(strings.ToLower(strings.ReplaceAll(s[:size], "\u0130", "i\u0307")))
+		}
+		s = s[size:]
+	}
+	return out.String()
+}
 
 // IsSpace is str.isspace() for one character: Unicode White_Space plus the ASCII separators 0x1C-0x1F.
 func IsSpace(r rune) bool { return unicode.IsSpace(r) || 0x1C <= r && r <= 0x1F }

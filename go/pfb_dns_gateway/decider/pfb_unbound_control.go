@@ -358,6 +358,9 @@ func controlSeq(record *jsonObject) (*big.Int, bool) {
 	return nil, false
 }
 
+// markerChmod is os.Chmod; a test replaces it to reach the chmod failure, which a process that owns the file cannot cause.
+var markerChmod = os.Chmod
+
 // writeMarker publishes text at path the way Python's marker writers do: a temp file next to it, written, fsynced and
 // renamed over it, so a reader sees the old marker or the new one. A mode that is not 0 is chmod'ed onto the temp file
 // before the rename, as the query reply's 0o640 is. A failure leaves no temp file and is returned as the text Python's
@@ -381,7 +384,7 @@ func writeMarker(path, text string, mode os.FileMode) string {
 			return &os.PathError{Op: "write", Path: tmp, Err: errors.Unwrap(err)}
 		}
 		if mode != 0 {
-			if err := os.Chmod(tmp, mode); err != nil {
+			if err := markerChmod(tmp, mode); err != nil {
 				return err
 			}
 		}

@@ -258,17 +258,30 @@ func (w *queryWatcher) drainAndAnswer(stop <-chan struct{}) {
 
 // run is the daemon body: drain, then wait for the next tick, until stop is closed.
 // shortcut: Python waits on a kqueue (EVFILT_VNODE on the channel's directory) on FreeBSD and polls elsewhere; Go polls
-// on every tick, which only adds up to RELOAD_POLL_INTERVAL of latency to a reply. Upgrade if that latency matters.
+// on every queryPollInterval tick, which only adds up to that much latency to a reply. Upgrade if that latency matters.
 func (w *queryWatcher) run(stop <-chan struct{}, tick <-chan time.Time) {
 	pollLoop(stop, tick, w.drainAndAnswer)
 }
+
+// queryPollInterval is how often the query watcher looks at the channel. Python wakes on the directory's kqueue event, so
+// a reply follows its request within milliseconds; PHP's pfb_dnsbl_query() waits 5 s for it and shares that budget with
+// its lock wait, so two parsers polled at RELOAD_POLL_INTERVAL (2 s) would time each other out. A look at an absent or
+// unchanged channel is one open and one read.
+const queryPollInterval = 50 * time.Millisecond
 
 // startQueryWatcher starts the watcher (pfb["query_watcher"] True: queryStop is set) unless it already runs.
 func (m *pfbUnbound) startQueryWatcher() {
 	if m.queryStop != nil {
 		return
 	}
-	m.queryStop = startPoller("query", m.queryTick, m.newQueryWatcher().run)
+	tickFor := m.queryTick
+	if tickFor == nil {
+		tickFor = func() (<-chan time.Time, func()) {
+			ticker := time.NewTicker(queryPollInterval)
+			return ticker.C, ticker.Stop
+		}
+	}
+	m.queryStop = startPoller("query", tickFor, m.newQueryWatcher().run)
 }
 
 // stopQueryWatcher is deinit's stop of the watcher: it returns once the watcher has ended, or after watcherStopWait.

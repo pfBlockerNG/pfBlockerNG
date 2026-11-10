@@ -7,12 +7,15 @@
 // here is joined onto moduleDir. The decision data (the DBs, the settings a decision reads) lives in the one
 // snapshot the module publishes, not in module fields: see pfbUnbound.snapshot.
 //
-// Not translated: the module fingerprint (the code record it feeds is replaced by the gateway's executable SHA-256 record,
-// #3791). Not translated yet, each arriving with the family that needs it: the stderr redirect and the retired-cache
-// sweep. The live update (the reload watcher, its RAM gate, its applied marker and the reload builder) is in
-// pfb_unbound_reload.go, the DNSBL control surface (pfb_apply_control_command, its timers and the control watcher) in
-// pfb_unbound_control.go, the ADR-65 query channel (pfb_query_watcher and its verdict) in pfb_unbound_query.go, and the
-// log rows, their files and the GeoIP reader in pfb_unbound_log.go, pfb_unbound_logfile.go and pfb_unbound_geoip.go. deinit (pfbUnbound.deinit) stops what init started, bounded as Python's joins are.
+// Not translated, because the decider does not need them: the module fingerprint (the code record it feeds is replaced by
+// the gateway's executable SHA-256 record, #3791) and the retired-cache sweep (pfb_py_cache.sqlite*: nothing reads or
+// writes it any more). The stderr redirect is a documented difference: Python sends its stderr to py_error.log through
+// pfb_async_io, the decider writes those lines to its own stderr (logOutput). The live update (the reload watcher, its RAM
+// gate, its applied marker and the reload builder) is in pfb_unbound_reload.go, the DNSBL control surface
+// (pfb_apply_control_command, its timers and the control watcher) in pfb_unbound_control.go, the ADR-65 query channel
+// (pfb_query_watcher and its verdict) in pfb_unbound_query.go, and the log rows, their files and the GeoIP reader in
+// pfb_unbound_log.go, pfb_unbound_logfile.go and pfb_unbound_geoip.go. deinit (pfbUnbound.deinit) stops what init
+// started, bounded as Python's joins are.
 package decider
 
 import (

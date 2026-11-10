@@ -76,7 +76,8 @@ func TestIsSpaceMatchesPython(t *testing.T) {
 }
 
 func TestLowerMatchesPythonStrLower(t *testing.T) {
-	for in, want := range map[string]string{"ABC": "abc", "\u0130": "i\u0307", "S\u0130": "si\u0307", "\u00c9T\u00c9": "\u00e9t\u00e9", "": ""} {
+	for in, want := range map[string]string{"ABC": "abc", "\u0130": "i\u0307", "S\u0130": "si\u0307", "\u00c9T\u00c9": "\u00e9t\u00e9", "": "",
+		"XN--\xed\xa0\x80.COM": "xn--\xed\xa0\x80.com", "\xed\xb3\xbfA\u0130": "\xed\xb3\xbfai\u0307", "\u00ed\u00c9": "\u00ed\u00e9"} {
 		if got := Lower(in); got != want {
 			t.Errorf("Lower(%q) = %q, want %q", in, got, want)
 		}

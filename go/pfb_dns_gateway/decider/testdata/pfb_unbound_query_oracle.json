@@ -195,6 +195,38 @@
    "user_allow_regex": [],
    "hsts": [],
    "group_epochs": []
+  },
+  "idn_confusable": {
+   "settings": {
+    "python_blocking": true,
+    "tld_allow": false,
+    "tld_allow_list": [],
+    "dnsbl_ipv4": "10.10.10.1",
+    "dnsbl_ipv6": "::1",
+    "python_idn": false,
+    "idn_mode": "confusable",
+    "python_idn_block_malicious": true,
+    "python_idn_escalate_suspicious": false,
+    "regex_warn_ms": 10.0,
+    "python_tld_seg": 2,
+    "hsts_tlds": []
+   },
+   "important_rules": false,
+   "feed_group_index": {
+    "0": [
+     "TestFeed",
+     "TestGroup"
+    ]
+   },
+   "data": {},
+   "zone": {},
+   "white": {},
+   "regex": [],
+   "allow_regex": [],
+   "user_regex": [],
+   "user_allow_regex": [],
+   "hsts": [],
+   "group_epochs": []
   }
  },
  "scenarios": [
@@ -319,6 +351,20 @@
      "op": "text",
      "text": "{\"id\": \"v17\", \"domain\": \"UPPER.CASE.Example.Com...\", \"qtype\": \"A\"}",
      "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"v17\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"v23\", \"domain\": \"listed.example.com...\", \"qtype\": \"A\"}",
+     "reply": "{\"blocked\": true, \"b_type\": \"DNSBL\", \"group\": \"TestGroup\", \"group_owner\": \"TestGroup\", \"group_origin\": \"custom\", \"group_epoch\": \"0123456789abcdef0123456789abcdef\", \"b_eval\": \"listed.example.com\", \"feed\": \"TestFeed\", \"p_type\": \"Python\", \"id\": \"v23\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"v24\", \"domain\": \"LISTED.Example.COM....\", \"qtype\": \"A\"}",
+     "reply": "{\"blocked\": true, \"b_type\": \"DNSBL\", \"group\": \"TestGroup\", \"group_owner\": \"TestGroup\", \"group_origin\": \"custom\", \"group_epoch\": \"0123456789abcdef0123456789abcdef\", \"b_eval\": \"listed.example.com\", \"feed\": \"TestFeed\", \"p_type\": \"Python\", \"id\": \"v24\"}",
      "mode": "0o640",
      "stderr": ""
     },
@@ -570,6 +616,174 @@
    ]
   },
   {
+   "name": "surrogate_plain",
+   "fixture": "plain",
+   "reply_mode": "ok",
+   "steps": [
+    {
+     "op": "text",
+     "text": "{\"id\": \"g1\", \"domain\": \"xn--\\ud800.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g1\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g2\", \"domain\": \"XN--\\ud800.COM.\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g2\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g3\", \"domain\": \"a\\ud800B.example.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g3\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g4\", \"domain\": \"\\udfff.\\ud83d\\ude00.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g4\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g5\", \"domain\": \"\\u0130\\ud800.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g5\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g6\", \"domain\": \"XN--PPLE-43D.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g6\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g7\", \"domain\": \"\\ud800.XN--PPLE-43D.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g7\"}",
+     "mode": "0o640",
+     "stderr": ""
+    }
+   ]
+  },
+  {
+   "name": "surrogate_idn_all",
+   "fixture": "tld_idn",
+   "reply_mode": "ok",
+   "steps": [
+    {
+     "op": "text",
+     "text": "{\"id\": \"g1\", \"domain\": \"xn--\\ud800.com\"}",
+     "reply": "{\"blocked\": true, \"b_type\": \"Python\", \"group\": \"DNSBL_IDN\", \"group_owner\": \"DNSBL_IDN\", \"group_origin\": \"builtin\", \"group_epoch\": \"\", \"b_eval\": \"xn--\\ud800.com\", \"feed\": \"IDN\", \"p_type\": \"Python\", \"id\": \"g1\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g2\", \"domain\": \"XN--\\ud800.COM.\"}",
+     "reply": "{\"blocked\": true, \"b_type\": \"Python\", \"group\": \"DNSBL_IDN\", \"group_owner\": \"DNSBL_IDN\", \"group_origin\": \"builtin\", \"group_epoch\": \"\", \"b_eval\": \"xn--\\ud800.com\", \"feed\": \"IDN\", \"p_type\": \"Python\", \"id\": \"g2\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g3\", \"domain\": \"a\\ud800B.example.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g3\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g4\", \"domain\": \"\\udfff.\\ud83d\\ude00.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g4\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g5\", \"domain\": \"\\u0130\\ud800.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g5\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g6\", \"domain\": \"XN--PPLE-43D.com\"}",
+     "reply": "{\"blocked\": true, \"b_type\": \"Python\", \"group\": \"DNSBL_IDN\", \"group_owner\": \"DNSBL_IDN\", \"group_origin\": \"builtin\", \"group_epoch\": \"\", \"b_eval\": \"xn--pple-43d.com\", \"feed\": \"IDN\", \"p_type\": \"Python\", \"id\": \"g6\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g7\", \"domain\": \"\\ud800.XN--PPLE-43D.com\"}",
+     "reply": "{\"blocked\": true, \"b_type\": \"Python\", \"group\": \"DNSBL_IDN\", \"group_owner\": \"DNSBL_IDN\", \"group_origin\": \"builtin\", \"group_epoch\": \"\", \"b_eval\": \"\\ud800.xn--pple-43d.com\", \"feed\": \"IDN\", \"p_type\": \"Python\", \"id\": \"g7\"}",
+     "mode": "0o640",
+     "stderr": ""
+    }
+   ]
+  },
+  {
+   "name": "surrogate_idn_confusable",
+   "fixture": "idn_confusable",
+   "reply_mode": "ok",
+   "steps": [
+    {
+     "op": "text",
+     "text": "{\"id\": \"g1\", \"domain\": \"xn--\\ud800.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g1\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g2\", \"domain\": \"XN--\\ud800.COM.\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g2\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g3\", \"domain\": \"a\\ud800B.example.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g3\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g4\", \"domain\": \"\\udfff.\\ud83d\\ude00.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g4\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g5\", \"domain\": \"\\u0130\\ud800.com\"}",
+     "reply": "{\"blocked\": false, \"b_type\": \"\", \"group\": \"\", \"b_eval\": \"\", \"feed\": \"\", \"p_type\": \"\", \"group_owner\": \"\", \"group_origin\": \"\", \"group_epoch\": \"\", \"id\": \"g5\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g6\", \"domain\": \"XN--PPLE-43D.com\"}",
+     "reply": "{\"blocked\": true, \"b_type\": \"Python\", \"group\": \"DNSBL_Homoglyph\", \"group_owner\": \"DNSBL_Homoglyph\", \"group_origin\": \"builtin\", \"group_epoch\": \"\", \"b_eval\": \"xn--pple-43d [\\u0430pple] Cyrillic Latin\", \"feed\": \"Homoglyph\", \"p_type\": \"Python\", \"id\": \"g6\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"g7\", \"domain\": \"\\ud800.XN--PPLE-43D.com\"}",
+     "reply": "{\"blocked\": true, \"b_type\": \"Python\", \"group\": \"DNSBL_Homoglyph\", \"group_owner\": \"DNSBL_Homoglyph\", \"group_origin\": \"builtin\", \"group_epoch\": \"\", \"b_eval\": \"xn--pple-43d [\\u0430pple] Cyrillic Latin\", \"feed\": \"Homoglyph\", \"p_type\": \"Python\", \"id\": \"g7\"}",
+     "mode": "0o640",
+     "stderr": ""
+    }
+   ]
+  },
+  {
    "name": "unreadable_channel",
    "fixture": "plain",
    "reply_mode": "ok",
@@ -722,6 +936,13 @@
     {
      "op": "text",
      "text": "{\"id\": \"d1\", \"domain\": \"listed.example.com\", \"qtype\": \"A\", \"x\": 2}",
+     "reply": "{\"blocked\": true, \"b_type\": \"DNSBL\", \"group\": \"TestGroup\", \"group_owner\": \"TestGroup\", \"group_origin\": \"custom\", \"group_epoch\": \"0123456789abcdef0123456789abcdef\", \"b_eval\": \"listed.example.com\", \"feed\": \"TestFeed\", \"p_type\": \"Python\", \"id\": \"d1\"}",
+     "mode": "0o640",
+     "stderr": ""
+    },
+    {
+     "op": "text",
+     "text": "{\"id\": \"d1\", \"domain\": \"listed.example.com\", \"qtype\": \"A\"}",
      "reply": "{\"blocked\": true, \"b_type\": \"DNSBL\", \"group\": \"TestGroup\", \"group_owner\": \"TestGroup\", \"group_origin\": \"custom\", \"group_epoch\": \"0123456789abcdef0123456789abcdef\", \"b_eval\": \"listed.example.com\", \"feed\": \"TestFeed\", \"p_type\": \"Python\", \"id\": \"d1\"}",
      "mode": "0o640",
      "stderr": ""

@@ -111,6 +111,20 @@ FIXTURES = {
         "hsts": [],
         "group_epochs": [],
     },
+    "idn_confusable": {
+        "settings": dict(SETTINGS, idn_mode=P.IDN_MODE_CONFUSABLE),
+        "important_rules": False,
+        "feed_group_index": {"0": ["TestFeed", "TestGroup"]},
+        "data": {},
+        "zone": {},
+        "white": {},
+        "regex": [],
+        "allow_regex": [],
+        "user_regex": [],
+        "user_allow_regex": [],
+        "hsts": [],
+        "group_epochs": [],
+    },
 }
 
 
@@ -190,6 +204,8 @@ scenario(
         answer("v15", ("a" * 63 + ".") * 4 + "com"),  # 4 maximal labels
         answer("v16", "evil\ndomain,foo;bar"),
         answer("v17", "UPPER.CASE.Example.Com..."),  # several root dots
+        answer("v23", "listed.example.com..."),  # every trailing root dot is stripped, not one
+        answer("v24", "LISTED.Example.COM...."),
         text(req("v18", "listed.example.com", qtype=None)),
         text(req("v19", "listed.example.com", qtype=42)),
         text(req("v20", "listed.example.com", qtype="FOO", extra=[1, {"a": None}])),
@@ -247,6 +263,27 @@ scenario(
     ],
 )
 
+# a lone surrogate in the domain reaches evaluate_domain and, as b_eval, the reply: it must survive lower() and the
+# escape
+for _name, _fixture in (
+    ("surrogate_plain", "plain"),
+    ("surrogate_idn_all", "tld_idn"),
+    ("surrogate_idn_confusable", "idn_confusable"),
+):
+    scenario(
+        _name,
+        _fixture,
+        [
+            text('{"id": "g1", "domain": "xn--\\ud800.com"}'),
+            text('{"id": "g2", "domain": "XN--\\ud800.COM."}'),
+            text('{"id": "g3", "domain": "a\\ud800B.example.com"}'),
+            text('{"id": "g4", "domain": "\\udfff.\\ud83d\\ude00.com"}'),  # a lone low surrogate, then a pair
+            text('{"id": "g5", "domain": "\\u0130\\ud800.com"}'),  # the dotted capital I lower()s to two characters
+            text('{"id": "g6", "domain": "XN--PPLE-43D.com"}'),  # a Latin+Cyrillic label, blocked by Confusable mode
+            text('{"id": "g7", "domain": "\\ud800.XN--PPLE-43D.com"}'),  # the same with a lone surrogate label
+        ],
+    )
+
 # the reader: no record is no answer, whatever the file holds
 scenario(
     "unreadable_channel",
@@ -281,6 +318,7 @@ scenario(
         text('{"id": "d1", "domain": "listed.example.com", "qtype": "A", "x": 1.0}'),  # 1 == 1.0: no reply
         text('{"id": "d1", "domain": "listed.example.com", "qtype": "A", "x": true}'),  # 1.0 == True: no reply
         text('{"id": "d1", "domain": "listed.example.com", "qtype": "A", "x": 2}'),  # changed: answered
+        text('{"id": "d1", "domain": "listed.example.com", "qtype": "A"}'),  # a key removed: answered
         text('{"id": "d1", "domain": "clean.example.com", "qtype": "A", "x": 2}'),  # same id, new domain: answered
         text('{"id": "d2", "domain": "clean.example.com", "qtype": "A", "x": 2}'),  # new id: answered
         text('{"id": "d2", "domain": "clean.example.com", "qtype": "A", "x": NaN}'),  # answered

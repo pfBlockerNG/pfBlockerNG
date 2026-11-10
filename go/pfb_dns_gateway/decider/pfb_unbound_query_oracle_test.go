@@ -31,12 +31,12 @@ func TestQueryChannelMatchesPythonOracle(t *testing.T) {
 				}
 			}
 			logs := modCaptureLog(t)
-			w, stop := m.newQueryWatcher(), make(chan struct{})
+			w := m.newQueryWatcher()
 			for i, step := range sc.Steps {
 				label := fmt.Sprintf("step %d %s %.60q", i, step.Op, step.Text+step.B64)
 				queryApply(t, channel, step)
 				logs.Reset()
-				w.drainAndAnswer(stop)
+				queryDrain(t, w)
 
 				var got *string
 				var mode string
@@ -120,11 +120,11 @@ func TestQueryWatcherSurvivesARequestThatPanics(t *testing.T) {
 	broken.settings = nil
 	m.snapshot.Store(broken)
 	logs := modCaptureLog(t)
-	w, stop := m.newQueryWatcher(), make(chan struct{})
+	w := m.newQueryWatcher()
 	channel, reply := filepath.Join(dir, "pfb_py_query"), filepath.Join(dir, "pfb_py_query.reply")
 
 	queryApply(t, channel, queryStep{Op: "text", Text: `{"id": "boom", "domain": "listed.example.com"}`})
-	w.drainAndAnswer(stop)
+	queryDrain(t, w)
 	if want := "[pfBlockerNG]: query watcher failed to answer a request: "; !strings.HasPrefix(logs.String(), want) {
 		t.Errorf("stderr = %q, want it to start with %q", logs.String(), want)
 	}
@@ -134,7 +134,7 @@ func TestQueryWatcherSurvivesARequestThatPanics(t *testing.T) {
 
 	m.snapshot.Store(oracle.Fixtures["plain"].snapshot(t))
 	queryApply(t, channel, queryStep{Op: "text", Text: `{"id": "next", "domain": "clean.example.com"}`})
-	w.drainAndAnswer(stop)
+	queryDrain(t, w)
 	got, err := os.ReadFile(reply)
 	if err != nil || !strings.Contains(string(got), `"id": "next"`) {
 		t.Errorf("reply after the panic = %q, %v; want the answer to the next request", got, err)
