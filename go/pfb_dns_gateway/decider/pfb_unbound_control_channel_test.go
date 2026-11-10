@@ -10,7 +10,9 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -141,10 +143,33 @@ func TestControlWriteAppliedWritesTheSeqAsOneLine(t *testing.T) {
 	}
 }
 
-func TestControlWriteAppliedFailureIsLoggedAndLeavesNoTempFile(t *testing.T) {
+// The temp file is created and written, then the rename fails (the marker's path is a non-empty directory): the failure
+// is logged and the temp file is not left behind.
+func TestControlWriteAppliedRenameFailureIsLoggedAndLeavesNoTempFile(t *testing.T) {
 	m := chModule(t)
 	logs := captureLog(t)
-	// the directory of the marker is missing, so the temp file cannot be created
+	marker := filepath.Join(t.TempDir(), "pfb_py_control.applied")
+	if err := os.MkdirAll(filepath.Join(marker, "occupied"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m.pfb.pfbPyControlApplied = marker
+	m.controlWriteApplied(big.NewInt(3))
+	want := "[pfBlockerNG]: failed to write control applied marker [ " + marker + " ]: "
+	if !strings.HasPrefix(logs.String(), want) {
+		t.Errorf("logged %q, want it to start with %q", logs.String(), want)
+	}
+	if _, err := os.Stat(marker + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("the temp file is left behind (stat error %v), want it removed after the failed rename", err)
+	}
+	if info, err := os.Stat(marker); err != nil || !info.IsDir() {
+		t.Errorf("the marker path = (%v, %v), want the directory untouched", info, err)
+	}
+}
+
+// The temp file cannot be created at all: logged, nothing to clean.
+func TestControlWriteAppliedFailureToCreateIsLogged(t *testing.T) {
+	m := chModule(t)
+	logs := captureLog(t)
 	m.pfb.pfbPyControlApplied = filepath.Join(t.TempDir(), "gone", "pfb_py_control.applied")
 	m.controlWriteApplied(big.NewInt(3))
 	want := "[pfBlockerNG]: failed to write control applied marker [ " + m.pfb.pfbPyControlApplied + " ]: "
@@ -564,6 +589,104 @@ func TestStopControlWatcherEndsItAndAllowsARestart(t *testing.T) {
 	if m.controlStop == nil {
 		t.Errorf("the watcher did not start again")
 	}
-	m.startControlWatcher() // already running: no second watcher
 	m.stopControlWatcher()
+}
+
+// chTicks is the module's poll tick under the test's hand: it counts the watchers started (each takes one tick source)
+// and holds the release of the tick source's cleanup, which runs when a watcher's goroutine ends.
+type chTicks struct {
+	mu       sync.Mutex
+	started  int
+	entered  chan struct{} // closed when a watcher's goroutine begins its cleanup
+	release  chan struct{} // the cleanup returns once this is closed
+	released bool
+}
+
+func chInjectTicks(m *pfbUnbound, blockCleanup bool) *chTicks {
+	c := &chTicks{entered: make(chan struct{}), release: make(chan struct{})}
+	m.controlTick = func() (<-chan time.Time, func()) {
+		c.mu.Lock()
+		c.started++
+		c.mu.Unlock()
+		return make(chan time.Time), func() {
+			if blockCleanup {
+				close(c.entered)
+				<-c.release
+			}
+		}
+	}
+	return c
+}
+
+func (c *chTicks) watchers() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.started
+}
+
+// A watcher that is already running is not started a second time: two would each apply every record.
+func TestStartControlWatcherDoesNotStartASecondWatcherWhileOneRuns(t *testing.T) {
+	m := chModule(t)
+	ticks := chInjectTicks(m, false)
+	t.Cleanup(m.stopControlWatcher)
+	m.startControlWatcher()
+	m.startControlWatcher()
+	if got := ticks.watchers(); got != 1 {
+		t.Errorf("watchers started = %d after two starts, want 1", got)
+	}
+	m.stopControlWatcher()
+	m.startControlWatcher()
+	if got := ticks.watchers(); got != 2 {
+		t.Errorf("watchers started = %d after a stop and a start, want 2", got)
+	}
+}
+
+// stopControlWatcher returns only once the watcher's goroutine has ended: its cleanup, which runs last, is still blocked
+// here, so a stop that has returned did not wait.
+func TestStopControlWatcherWaitsForTheWatcherToEnd(t *testing.T) {
+	m := chModule(t)
+	ticks := chInjectTicks(m, true)
+	m.startControlWatcher()
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		m.stopControlWatcher()
+	}()
+	chWait(t, "the watcher to reach its cleanup after stop", ticks.entered)
+	// Every yield lets a stop that does not wait run to its return; one that waits cannot, the cleanup being blocked.
+	for range 10000 {
+		select {
+		case <-returned:
+			t.Fatalf("stopControlWatcher returned while the watcher's goroutine had not ended")
+		default:
+			runtime.Gosched()
+		}
+	}
+	close(ticks.release)
+	chWait(t, "stopControlWatcher to return once the watcher ended", returned)
+	if m.controlStop != nil {
+		t.Errorf("the watcher is still marked running after stopControlWatcher")
+	}
+}
+
+// Python applies the command, then publishes its seq as the applied marker, so a writer that sees the marker knows the
+// command ran. The marker still holds the previous seq while the handler runs.
+func TestWatcherPublishesTheAppliedMarkerOnlyAfterApplyingTheCommand(t *testing.T) {
+	m := chModule(t)
+	w := m.newControlWatcher()
+	timers := &ctlTimers{}
+	var duringApply string
+	timers.onSchedule = func() { duringApply = chApplied(t, m) } // runs inside the handler
+	m.afterFunc = timers.afterFunc
+	chPublish(t, m, `{"seq": 1, "cmd": "disable", "duration": 30}`)
+	w.drainAndApply(make(chan struct{}))
+	if len(timers.all()) != 1 {
+		t.Fatalf("timers = %d, want the command to have run", len(timers.all()))
+	}
+	if duringApply != "0\n" {
+		t.Errorf("applied marker = %q while the command ran, want the previous %q", duringApply, "0\n")
+	}
+	if got := chApplied(t, m); got != "1\n" {
+		t.Errorf("applied marker = %q after the command, want %q", got, "1\n")
+	}
 }

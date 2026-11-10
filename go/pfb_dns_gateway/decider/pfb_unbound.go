@@ -153,7 +153,10 @@ type pfbUnbound struct {
 	// controlMu guards controlActive, the names of the running control timers (Python: threading.enumerate()).
 	controlMu     sync.Mutex
 	controlActive map[string]struct{}
-	// controlStop stops the control watcher; nil is pfb["control_watcher"] False.
+	// controlTick is the control watcher's poll tick and its release (nil: a RELOAD_POLL_INTERVAL ticker). A test
+	// replaces it to drive the watcher without a clock.
+	controlTick func() (tick <-chan time.Time, stop func())
+	// controlStop stops the control watcher and waits for it to end; nil is pfb["control_watcher"] False.
 	controlStop func()
 }
 

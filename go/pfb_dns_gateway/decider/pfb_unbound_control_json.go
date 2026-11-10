@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
@@ -28,10 +27,6 @@ func (o *jsonObject) set(key string, value any) {
 	}
 	o.vals[key] = value
 }
-
-// pyIntMaxStrDigits is sys.get_int_max_str_digits(): CPython 3.11 refuses to parse a longer integer, so json.loads
-// raises a ValueError for it.
-const pyIntMaxStrDigits = 4300
 
 // jsonMaxDepth bounds the recursion.
 // shortcut: Python raises an uncaught RecursionError near 1000 levels, which ends the watcher thread; Go reads anything
@@ -230,11 +225,6 @@ func (p *jsonParser) object(depth int) (any, bool) {
 			return nil, false
 		}
 	}
-}
-
-// readPyText is open(path, encoding="utf-8").read(): ok is false for text that is not valid UTF-8.
-func readPyText(data []byte) (string, bool) {
-	return string(data), utf8.Valid(data)
 }
 
 // pyStr is str(value) of a parsed JSON value.

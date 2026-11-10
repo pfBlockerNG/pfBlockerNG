@@ -122,6 +122,16 @@ DURATIONS = [
     "00060",
     "\u2155",
     "99999999999999999999999999",
+    # CPython 3.11's int() refuses a string of more than 4300 digits (leading zeros count), so a long zero-padded
+    # duration is not the number it spells
+    "0" * 4299 + "3",
+    "0" * 4300 + "3",
+    "0" * 5000 + "3",
+    "1" * 4300,
+    "1" * 4301,
+    "0" * 4299 + "\u0663",
+    "0" * 4300 + "\u0663",
+    "\u00b2" + "0" * 4300,
 ]
 
 # raw channel file texts (UTF-8 str; the invalid-UTF-8 and lone-surrogate rows are Go-side hostile rows)

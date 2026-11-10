@@ -86,30 +86,56 @@ func (m *pfbUnbound) publishControl(e *controlEdit) {
 	m.snapshot.Store(&next)
 }
 
-// controlDuration is python_control_duration: the seconds of a valid duration (1-3600), else 0 (Python's False).
+// pyIntMaxStrDigits is sys.get_int_max_str_digits(): CPython 3.11's int() raises a ValueError for a string of more
+// digits than this, leading zeros included.
+const pyIntMaxStrDigits = 4300
+
+// pyErrReprLimit is the precision of the "%.200R" CPython's int() error text formats the offending string with.
+const pyErrReprLimit = 200
+
+// controlDuration is python_control_duration: the seconds of a valid duration (1-3600), else 0 (Python's False). The
+// ValueError arms of int() write Python's stderr line.
 // shortcut: str.isnumeric() is Unicode's Numeric_Type != None; unicode.IsNumber is Nd, Nl and No, so a CJK numeral
 // such as "一" (isnumeric, but int() raises) is "not numeric" here. The result is the same, 0; only Python's stderr
 // line for it is not written.
+// shortcut: Go's unicode tables are Unicode 17 where Python 3.11's are Unicode 14, so a digit or numeral added since is
+// numeric here and not there. The owner signed the Unicode-version difference off in
+// https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482; it changes only such a character.
 func controlDuration(duration string) int {
 	if duration == "" || strings.ContainsFunc(duration, func(r rune) bool { return !unicode.IsNumber(r) }) {
 		return 0
 	}
-	value := 0
+	value, digits := 0, 0
 	for _, r := range duration {
 		digit, ok := decimalDigit(r)
 		if !ok {
 			// int() takes decimal digits only: "²" is numeric but not an int
-			fmt.Fprint(logOutput, "[pfBlockerNG] python_control_duration: invalid literal for int() with base 10: "+pysem.Repr(duration))
+			fmt.Fprint(logOutput, "[pfBlockerNG] python_control_duration: invalid literal for int() with base 10: "+pyErrRepr(duration))
 			return 0
 		}
+		digits++
 		if value <= 3600 { // past the range the value only has to stay out of it
 			value = value*10 + digit
 		}
+	}
+	if digits > pyIntMaxStrDigits {
+		fmt.Fprintf(logOutput, "[pfBlockerNG] python_control_duration: Exceeds the limit (%d digits) for integer string conversion: "+
+			"value has %d digits; use sys.set_int_max_str_digits() to increase the limit", pyIntMaxStrDigits, digits)
+		return 0
 	}
 	if 0 < value && value <= 3600 {
 		return value
 	}
 	return 0
+}
+
+// pyErrRepr is repr(text) cut to the first pyErrReprLimit characters, as "%.200R" formats it.
+func pyErrRepr(text string) string {
+	repr := []rune(pysem.Repr(text))
+	if len(repr) > pyErrReprLimit {
+		repr = repr[:pyErrReprLimit]
+	}
+	return string(repr)
 }
 
 // decimalDigit is the value of a Unicode decimal digit (category Nd): the Nd characters come in contiguous runs of ten
@@ -452,11 +478,18 @@ func (m *pfbUnbound) startControlWatcher() {
 	}
 	w := m.newControlWatcher()
 	stop, done := make(chan struct{}), make(chan struct{})
-	ticker := time.NewTicker(RELOAD_POLL_INTERVAL)
+	tickFor := m.controlTick
+	if tickFor == nil {
+		tickFor = func() (<-chan time.Time, func()) {
+			ticker := time.NewTicker(RELOAD_POLL_INTERVAL)
+			return ticker.C, ticker.Stop
+		}
+	}
+	tick, release := tickFor()
 	go func() {
 		defer close(done)
-		defer ticker.Stop()
-		w.run(stop, ticker.C)
+		defer release()
+		w.run(stop, tick)
 	}()
 	m.controlStop = func() {
 		close(stop)

@@ -727,3 +727,54 @@ func TestTxtControlCommandNotAuthorizedNamesTheWholeQuery(t *testing.T) {
 	q := ctlTxt(t, m, MODULE_EVENT_NEW, "python_control.a.b.c.", RR_TYPE_TXT, "::1")
 	opSections(t, "unknown command", q, []string{`python_control_fail. 0 IN TXT "Python_control: Command not authorized! [ python_control.a.b.c ]"`}, nil)
 }
+
+// RELOAD_POLL_INTERVAL = 2.0 (pfb_unbound.py:553).
+func TestReloadPollIntervalIsTwoSeconds(t *testing.T) {
+	if RELOAD_POLL_INTERVAL != 2*time.Second {
+		t.Errorf("RELOAD_POLL_INTERVAL = %v, want 2s", RELOAD_POLL_INTERVAL)
+	}
+}
+
+// The timers' expiry bodies publish under publishMu like the commands do: expiries and commands racing lose no write.
+func TestControlExpiriesRacingCommandsLoseNoWrite(t *testing.T) {
+	const workers, perWorker = 4, 50
+	for _, tc := range []struct {
+		name   string
+		expire func(m *pfbUnbound, i int)
+	}{
+		{"sleep", func(m *pfbUnbound, i int) { m.controlSleep() }},
+		{"addbypass", func(m *pfbUnbound, i int) { m.controlAddbypass(fmt.Sprintf("10.9.0.%d", i)) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := ctlModule(t)
+			// the IPs the addbypass expiries remove are listed before the race
+			for i := range workers * perWorker {
+				ctlApply(m, "python_control", "addbypass", fmt.Sprintf("10-9-0-%d", i))
+			}
+			var wg sync.WaitGroup
+			for w := range workers {
+				wg.Add(2)
+				go func() {
+					defer wg.Done()
+					for i := range perWorker {
+						ctlApply(m, "python_control", "addbypass", fmt.Sprintf("10-8-%d-%d", w, i))
+					}
+				}()
+				go func() {
+					defer wg.Done()
+					for i := range perWorker {
+						tc.expire(m, w*perWorker+i)
+					}
+				}()
+			}
+			wg.Wait()
+			want := workers * perWorker // the commands' IPs; the expired ones are gone for "addbypass", kept for "sleep"
+			if tc.name == "sleep" {
+				want *= 2
+			}
+			if got := len(ctlEntries(m)); got != want {
+				t.Errorf("gpListDB has %d entries, want %d: an expiry and a command lost a write", got, want)
+			}
+		})
+	}
+}
