@@ -411,7 +411,7 @@ Do this whenever `go/pfb_dns_gateway/go.mod` or `go.sum` changes:
 A change to `go.mod` or `go.sum` needs a paired FreeBSD-ports PR that updates `GH_TUPLE` and
 `files/modules.txt` of every recipe that tracks that source: nightly for `devel`, edge for its
 release line. Until both repositories agree the builder fails closed, nightly included.
-`release-published.yml` bumps only `PORTVERSION` and `PORTREVISION`, so a release whose
+`release-published.yml` bumps only `PORTVERSION`, so a release whose
 `go.mod` differs from the edge recipe fails at build time, before anything is published.
 Check the pair before either lands by dispatching the build with `ports_ref=<the ports PR branch>`.
 
@@ -493,10 +493,9 @@ The output filename is `<PORTNAME>-<PKGVERSION>.pkg`, where `PKGVERSION` is
 `PORTVERSION[_PORTREVISION][,PORTEPOCH]`.
 
 `PORTREVISION` is read directly from the port's Makefile and appended as `_N` when
-non-zero (e.g. `4.0.0_2`). The release automation (`release.yml` `sync-ports-fork`
-job) keeps this in sync: when a release tag carries the **same PORTVERSION** already
-committed on the ports fork, it auto-increments `PORTREVISION` (rebuild bump); when
-the PORTVERSION changes, `PORTREVISION` is removed (reset to 0, no `_N` suffix).
+non-zero (e.g. `4.0.0_2`). A recipe change committed on the ports fork bumps it; the
+release automation (`release-published.yml` `sync-ports-fork` job) only drops it when
+it moves `PORTVERSION` to a new version, and leaves a rerun of the same version untouched.
 
 ## Exit status and output streams
 

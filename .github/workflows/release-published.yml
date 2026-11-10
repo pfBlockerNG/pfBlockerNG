@@ -207,7 +207,9 @@ jobs:
   # Bump the matching port's PORTVERSION directly on our own fork's build-input branch
   # (pfblockerng/use-github) — the SAME branch every build reads — so the fork changes
   # only after the Release is actually published. Direct push: it is our branch, no PR.
-  # Re-publishing the same PORTVERSION is a rebuild and increments PORTREVISION.
+  # Only PORTVERSION moves here: a new version drops PORTREVISION, and republishing the
+  # version already on the fork (a rerun) changes nothing. PORTREVISION marks a recipe
+  # change on the fork itself and is bumped by that fork commit, never by a release.
   sync-ports-fork:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
@@ -255,7 +257,7 @@ jobs:
       - name: Checkout pfBlockerNG (the release helper — TRUSTED ref, sparse)
         uses: actions/checkout@v7
         with:
-          # SECURITY: portrevision-rebuild.sh below is EXECUTED AS SHELL in a job that
+          # SECURITY: setup-hooks.sh below is EXECUTED AS SHELL in a job that
           # holds an App token able to push to pfblockerng/use-github. It must therefore
           # come from the revision this workflow itself came from — never from the
           # published tag's tree. github.workflow_sha is that trusted handle. Do not
@@ -327,34 +329,19 @@ jobs:
           PORTS_LABEL="$PORT_PATH"
           MAKEFILE="${PORT_PATH}/Makefile"
 
-            # Read the current PORTVERSION and PORTREVISION from the Makefile before
-            # editing, so the compare-and-bump helper can decide whether to increment
-            # or reset.  Absent PORTREVISION is treated as 0 by the helper.
-            OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')"
-            if [ -z "${OLD_PORTVERSION}" ]; then
-              echo "::error::PORTVERSION not found in ${MAKEFILE}"
-              exit 1
-            fi
-            OLD_PORTREVISION="$(grep -m1 '^PORTREVISION=' "$MAKEFILE" | sed 's/^PORTREVISION=[[:space:]]*//')" || true
-
-            # Auto-detect rebuild: same PORTVERSION → bump PORTREVISION; different → 0.
-            # Logic is extracted into scripts/portrevision-rebuild.sh for testability.
-            NEW_PORTREVISION="$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/portrevision-rebuild.sh" \
-              "${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}")"
-
-            # Update PORTVERSION only. GH_TAGNAME is `v${PORTVERSION}` in the Makefile,
-            # so it self-resolves to the matching tag — the workflow never sets it.
+          # Update PORTVERSION only. GH_TAGNAME is `v${PORTVERSION}` in the Makefile,
+          # so it self-resolves to the matching tag — the workflow never sets it.
+          OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')" || true
+          if [ -z "${OLD_PORTVERSION}" ]; then
+            echo "::error::PORTVERSION not found in ${MAKEFILE}"
+            exit 1
+          fi
+          if [ "${OLD_PORTVERSION}" != "${PORTVERSION}" ]; then
             sed -i \
               -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
+              -e "/^PORTREVISION=/d" \
               "$MAKEFILE"
-
-            # Apply PORTREVISION per ports convention: remove when 0; set/insert after
-            # PORTVERSION when > 0.  The sed removes any existing line first, then the
-            # PORTVERSION line is used as an anchor to insert the new one.
-            sed -i -e "/^PORTREVISION=/d" "$MAKEFILE"
-            if [ "${NEW_PORTREVISION}" -gt 0 ]; then
-              sed -i -e "s/^PORTVERSION=.*/&\nPORTREVISION=\t${NEW_PORTREVISION}/" "$MAKEFILE"
-            fi
+          fi
 
           git add "$MAKEFILE"
 

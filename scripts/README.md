@@ -179,12 +179,10 @@ Release** as `pfSense-pkg-pfBlockerNG-<version>-<Variant>-<pfsense_version>.pkg`
 bytes and native manifest stay unchanged. A build failure blocks the tag, Release, and
 `sync-ports-fork` gates.
 
-The `sync-ports-fork` job in `release.yml` also updates `PORTREVISION` on the ports fork using
-`scripts/portrevision-rebuild.sh`: when the release tag carries the same PORTVERSION already
-committed on the fork (a repackage/rebuild), it auto-increments `PORTREVISION` (`_1`, `_2`, …);
-when the PORTVERSION changes, `PORTREVISION` is removed (pkg orders `4.0.0 < 4.0.0_1 < 4.0.1`).
-The builder (`build-pkg-portable.py`) already reads and emits `_N` from the Makefile — no
-builder change is needed for rebuild bumps.
+The `sync-ports-fork` job in `release-published.yml` moves only `PORTVERSION` on the ports fork:
+a new version drops `PORTREVISION`, and republishing the version already on the fork (a rerun)
+changes nothing. `PORTREVISION` marks a recipe change committed on the fork itself, which bumps
+it in that commit (pkg orders `4.0.0 < 4.0.0_1 < 4.0.1`).
 
 The daily **version-tracker** (`version-tracker.yml`, `0 6 * * *`) also triggers
 `build-pkg-linux.yml` for every BUILD matrix entry to validate each entry's build pair

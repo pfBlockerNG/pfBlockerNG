@@ -692,13 +692,49 @@ def test_sync_ports_rejects_long_prerelease_versions(stage: str) -> None:
     assert result.returncode != 0, result.stdout + result.stderr
 
 
-def test_sync_ports_preserves_rebuild_and_push_retry_contract() -> None:
-    script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["sync-ports-fork"], "Bump PORTVERSION and push"))
-    assert 'OLD_PORTVERSION="$(grep -m1 \'^PORTVERSION=\' "$MAKEFILE"' in script
-    assert 'OLD_PORTREVISION="$(grep -m1 \'^PORTREVISION=\' "$MAKEFILE"' in script
+_EDGE_MAKEFILE = "net/pfSense-pkg-pfBlockerNG-edge/Makefile"
 
-    assert '"${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}"' in script
-    assert 'if [ "${NEW_PORTREVISION}" -gt 0 ]; then' in script
+
+def _run_port_sync_edit(tmp_path: Path, makefile: str, portversion: str) -> str:
+    """Run the REAL Makefile-edit part of the port sync on a fixture fork; return the Makefile."""
+    script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["sync-ports-fork"], "Bump PORTVERSION and push"))
+    edit = 'case "$CHANNEL" in' + script.split('case "$CHANNEL" in', 1)[1].split('git add "$MAKEFILE"', 1)[0]
+    fork = tmp_path / "fork"
+    (fork / _EDGE_MAKEFILE).parent.mkdir(parents=True)
+    (fork / _EDGE_MAKEFILE).write_text(makefile)
+    (fork / "pfblockerng-src").symlink_to(ROOT)
+    result = subprocess.run(  # noqa: S603
+        ["sh", "-c", "set -eu\n" + edit],
+        cwd=fork,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "GITHUB_WORKSPACE": str(fork),
+            "CHANNEL": "edge",
+            "TAG": f"v{portversion}",
+            "PORTVERSION": portversion,
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return (fork / _EDGE_MAKEFILE).read_text()
+
+
+def test_sync_ports_rerun_of_the_published_version_leaves_the_port_untouched(tmp_path: Path) -> None:
+    """A rerun publishes nothing new, so it is no packaging change (#3808)."""
+    makefile = "PORTNAME=\tpfSense-pkg-pfBlockerNG-edge\nPORTVERSION=\t4.0.0.b2\nPORTREVISION=\t1\nCATEGORIES=\tnet\n"
+    assert _run_port_sync_edit(tmp_path, makefile, "4.0.0.b2") == makefile
+
+
+def test_sync_ports_new_version_drops_the_packaging_revision(tmp_path: Path) -> None:
+    makefile = "PORTNAME=\tpfSense-pkg-pfBlockerNG-edge\nPORTVERSION=\t4.0.0.b2\nPORTREVISION=\t2\nCATEGORIES=\tnet\n"
+    assert _run_port_sync_edit(tmp_path, makefile, "4.0.0.b3") == (
+        "PORTNAME=\tpfSense-pkg-pfBlockerNG-edge\nPORTVERSION=\t4.0.0.b3\nCATEGORIES=\tnet\n"
+    )
+
+
+def test_sync_ports_preserves_push_retry_contract() -> None:
+    script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["sync-ports-fork"], "Bump PORTVERSION and push"))
     assert "n=0" in script
     assert "n=$((n + 1))" in script
     assert "until git push origin HEAD:pfblockerng/use-github; do" in script
