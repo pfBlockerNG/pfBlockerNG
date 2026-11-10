@@ -57,6 +57,10 @@ NXDOMAIN_AUTHORITATIVE_RA = 0x8583
 NOERROR = 0x8180
 
 
+def is_surrogate(char):
+    return "\ud800" <= char <= "\udfff"
+
+
 def hx(data):
     return None if data is None else data.hex()
 
@@ -297,8 +301,21 @@ class Runner:
         del self.rows[mark:]
         after = self.probe()
         assert before == after, step["note"]
+        wtf8 = {}
+        if any(is_surrogate(c) for _, line in rows for c in line):
+            # A row holding a lone surrogate has no JSON spelling a Go reader keeps: its bytes, as surrogatepass writes
+            # them, stand in for it.
+            wtf8 = {"rows_wtf8": [[name, line.encode("utf-8", "surrogatepass").hex()] for name, line in rows]}
+            rows = []
         self.record(
-            {**step, "rows": rows, "stderr": printed.getvalue().splitlines(), "before": hx(before), "after": hx(after)}
+            {
+                **step,
+                **wtf8,
+                "rows": rows,
+                "stderr": printed.getvalue().splitlines(),
+                "before": hx(before),
+                "after": hx(after),
+            }
         )
 
     def datagram(self, data, note, new_frontend=True):
@@ -819,6 +836,127 @@ def _(r):
     r.dump()
 
 
+RAW_SURROGATE_REPORT = b'{"client":"","qname":"\xed\xa0\x80.example.","qtype":1,"flags":33027,"opts":[]}'
+
+
+def utf16_lone_surrogate(big_endian=False, name="\ud800"):
+    text = '{"client":"","qname":"' + name + 'x.example.","qtype":1,"flags":33027,"opts":[]}'
+    if big_endian:
+        return b"\xfe\xff" + text.encode("utf-16-be", "surrogatepass")
+    return b"\xff\xfe" + text.encode("utf-16-le", "surrogatepass")
+
+
+def utf32_lone_surrogate(name="\ud800"):
+    text = '{"client":"","qname":"' + name + 'x.example.","qtype":1,"flags":33027,"opts":[]}'
+    return b"\xff\xfe\x00\x00" + text.encode("utf-32-le", "surrogatepass")
+
+
+@scenario("surrogates", module_files())
+def _(r):
+    d = r.datagram
+    esc = "\\ud800"  # the JSON escape of a lone high surrogate, as the text of a hand-written report
+    lo = "\\udc00"
+    d(report(qname="a\ud800b.example."), "a lone high surrogate in the name, as json.dumps writes it")
+    d(raw_report(qname=f'"{esc}.example."', flags="33027"), "a lone high surrogate, first")
+    d(raw_report(qname=f'"{lo}.example."', flags="33027"), "a lone low surrogate")
+    d(raw_report(qname=f'"{esc}\\u0041.example."', flags="33027"), "a high surrogate then a plain escape")
+    d(raw_report(qname=f'"{lo}{esc}.example."', flags="33027"), "a low surrogate then a high one: two lone ones")
+    d(raw_report(qname=f'"{esc}{lo}.example."', flags="33027"), "a high then a low one: one character above the BMP")
+    d(raw_report(qname=f'"{esc}x{lo}.example."', flags="33027"), "a high and a low one apart: two lone ones")
+    d(raw_report(qname=f'"x{esc}"', flags="33027"), "a lone surrogate last in the name")
+    d(raw_report(qname=f'"{esc}"', flags="33027"), "a name that is one lone surrogate")
+    d(raw_report(qname='"' + esc * 1024 + '"', flags="33027"), "1024 lone surrogates fill a datagram: refused for size")
+    d(raw_report(qname='"' + esc * 300 + '"', flags="33027"), "300 lone surrogates: accepted, 300 code points")
+    d(raw_report(qname='"' + "a" * 1023 + esc + '"', flags="33027"), "1024 code points with a lone surrogate: accepted")
+    d(raw_report(qname='"' + "a" * 1024 + esc + '"', flags="33027"), "1025 code points with a lone surrogate: refused")
+    d(raw_report(qname=f'"{esc}.{esc}"', flags="33027", client='""'), "a name with two lone surrogates and a dot")
+    d(
+        raw_report(qname=f'"{esc}"', flags="33027", client='"2001:db8::53"'),
+        "an IPv6 client behind a name it cannot encode",
+    )
+    d(raw_report(client=f'"{esc}"'), "a lone surrogate as the client: refused, named by its repr")
+    d(raw_report(client=f'"192.0.2.1{esc}"'), "a lone surrogate after an address: refused")
+    d(raw_report(opts=f'[["{esc}","00"]]'), "a lone surrogate as an option code: not a pair")
+    d(raw_report(opts=f'[[15,"{esc}"]]'), "a lone surrogate as option data: not hex")
+    d(raw_report(opts=f'[[15,"00{esc}"]]'), "a lone surrogate after hex digits: not hex, at its position")
+    d(raw_report(opts='[[15,"' + esc * 250 + '"]]'), "250 lone surrogates as option data: not hex")
+    d(raw_report(opts='[[15,"00' + esc * 250 + '"]]'), "250 surrogates after hex digits: not hex at their position")
+    d(report(opts=[ede(15, b"\xed\xa0\x80")]), "an encoded surrogate in the provider is three replacement characters")
+    d(
+        raw_report(qname='"a."', flags="33027").replace(b"}", b',"x":"' + esc.encode() + b'"}'),
+        "a lone surrogate under an ignored key",
+    )
+    d(
+        raw_report(qname='"a."', flags="33027").replace(b'"client"', b'"' + esc.encode() + b'":1,"client"'),
+        "a lone surrogate in a key",
+    )
+    d(RAW_SURROGATE_REPORT, "a surrogate as raw UTF-8: Python decodes it")
+    d(utf16_lone_surrogate(), "an unpaired UTF-16 unit: Python decodes it")
+    d(utf16_lone_surrogate(True), "a high UTF-16 unit then a plain one, big endian")
+    d(utf16_lone_surrogate(False, "\udc00"), "a lone low UTF-16 unit")
+    d(utf16_lone_surrogate(False, "\ud800\udc00"), "a UTF-16 pair is one character")
+    d(utf16_lone_surrogate(False, "\udc00\ud800"), "a low then a high UTF-16 unit: two lone ones")
+    d(utf32_lone_surrogate(), "a UTF-32 surrogate: Python decodes it")
+    d(utf32_lone_surrogate("\ud800\udc00"), "a UTF-32 surrogate pair is two lone ones, not one character")
+    d(b"\xef\xbb\xbf" + RAW_SURROGATE_REPORT, "a BOM and a raw UTF-8 surrogate")
+    pair = b"\xed\xa0\xbd\xed\xb8\x80"
+    d(RAW_SURROGATE_REPORT.replace(b"\xed\xa0\x80", pair), "a surrogate pair as two raw UTF-8 surrogates: not combined")
+    d(RAW_SURROGATE_REPORT.replace(b"\xed\xa0\x80", b"\xed\xa0"), "a raw UTF-8 surrogate cut short: not text")
+    d(
+        RAW_SURROGATE_REPORT.replace(b"\xed\xa0\x80", b"\xed\x80\x80"),
+        "U+D000, the last character before the surrogates",
+    )
+    d(
+        RAW_SURROGATE_REPORT.replace(b"\xed\xa0\x80", b"\xed\xc0\x80"),
+        "ED followed by a non-continuation byte: not text",
+    )
+    d(
+        RAW_SURROGATE_REPORT.replace(b"\xed\xa0\x80", b"\xee\x80\x80"),
+        "U+E000, the first character after the surrogates",
+    )
+    d(RAW_SURROGATE_REPORT.replace(b"\xed\xa0\x80", b"\xf0\x9f\x98\x80"), "a character above the BMP as raw UTF-8")
+    d(RAW_SURROGATE_REPORT.replace(b"\xed\xa0\x80", b"\xf4\x90\x80\x80"), "above U+10FFFF: not text")
+    d(RAW_SURROGATE_REPORT.replace(b"\xed\xa0\x80", b"\xc0\x80"), "an overlong NUL: not text")
+    d(raw_report(client='"fe80::1%' + esc + '"'), "a lone surrogate as a zone id: a client Python accepts")
+    r.dump()
+
+
+@scenario("answers-unblocked", module_files())
+def _(r):
+    d = r.datagram
+    d(report(qname=PROBE_NAME, flags=NXRA, opts=[]), "an NXRA report for the very name the fixed query asks")
+    d(report(qname=PROBE_NAME), "an EDE15 report for it")
+    d(report(qname=PROBE_NAME.upper()), "the same name in capitals")
+    d(report(qname=PROBE_NAME[:-1], opts=[ede(17, b"x")], flags=NOERROR), "the same name with no trailing dot, EDE17")
+    d(report(qname=PROBE_NAME, client=""), "no client")
+    d(report(qname=PROBE_NAME, qtype=28), "type AAAA")
+    d(report(qname=PROBE_NAME, flags=NXDOMAIN_RECURSIVE, opts=[]), "a natural NXDOMAIN: no block")
+    d(b"not json", "a malformed report")
+    d(report(qname=PROBE_NAME, client="bad"), "a malformed report that names the probe")
+    d(oversize_report(), "an oversize report")
+    r.fire("a shim call for it", NXRA, [], qname=PROBE_NAME, transport="UDP", lip="192.0.2.53", lif="LAN")
+    r.log_raises()
+    d(report(qname=PROBE_NAME), "a report whose row cannot be written")
+    r.log_works()
+    r.dump()
+
+
+@scenario("answers-blocked", module_files(feeds=[("F1", "G1", "1", ["probe.example", "other.example"])]))
+def _(r):
+    d = r.datagram
+    d(report(qname=PROBE_NAME, flags=NXRA, opts=[]), "an NXRA report for the very name the list blocks")
+    d(report(qname=PROBE_NAME), "an EDE15 report for it")
+    d(report(qname="other.example."), "an EDE15 report for another listed name")
+    d(report(qname="unlisted.example."), "an EDE15 report for an unlisted name")
+    d(b"not json", "a malformed report")
+    d(report(qname=PROBE_NAME, client="bad"), "a malformed report that names the probe")
+    d(oversize_report(), "an oversize report")
+    r.fire("a shim call for the blocked name", NXRA, [], qname=PROBE_NAME)
+    d(report(qname=PROBE_NAME), "a second EDE15 report for it")
+    r.dump()
+    assert r.steps[0]["before"] != hx(PROBE_REPLY), "the listed name must be answered by the module, not by Unbound"
+
+
 @scenario("callback-panics", module_files())
 def _(r):
     r.log_raises()
@@ -850,10 +988,11 @@ def main():
     }
     OUT.write_text(json.dumps(out, indent=1, ensure_ascii=True) + "\n", encoding="utf-8")
     steps = [step for sc in SCENARIOS for step in sc["steps"]]
-    datagrams = [step for step in steps if step["op"] == "datagram"]
+    observed = [step for step in steps if step["op"] in ("datagram", "fire")]
+    rows = sum(len(s["rows"]) + len(s.get("rows_wtf8", [])) for s in observed)
     print(
-        f"{OUT.name}: {len(SCENARIOS)} scenarios, {len(datagrams)} datagrams, "
-        f"{sum(len(s['rows']) for s in datagrams)} rows, {sum(s['op'] == 'dump' for s in steps)} dumps"
+        f"{OUT.name}: {len(SCENARIOS)} scenarios, {len(observed)} datagrams and shim calls, "
+        f"{rows} rows, {sum(s['op'] == 'dump' for s in steps)} dumps"
     )
 
 

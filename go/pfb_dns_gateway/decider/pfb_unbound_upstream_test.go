@@ -791,7 +791,9 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 }
 
 // fireQueryResponse is the shim's last line: whatever the callback's own handler lets out is logged as an error and
-// swallowed, as Python's fire_query_response does.
+// swallowed, as Python's fire_query_response does. The line's reason is the panic value as %v says it, where Python's is
+// the exception's repr (Exception('writer boom')): the module's callback catches every Exception itself, so no report
+// reaches this line, and the test pins the Go text only to show that the swallow works.
 func TestFireQueryResponseSwallowsWhatTheCallbackLetsOut(t *testing.T) {
 	r := newObserverRig(t, "forwarding = true\n")
 	r.m.logSink = func(string, string) { panic("boom") }

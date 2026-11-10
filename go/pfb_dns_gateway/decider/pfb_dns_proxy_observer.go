@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"unicode/utf16"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
@@ -35,9 +35,9 @@ func jsonU16(value any) (uint16, bool) {
 
 // reportText is json.loads(bytes)'s decoding of a datagram: UTF-8 with or without a BOM, UTF-16 or UTF-32 with a BOM, or
 // without one when the first bytes' NUL pattern says so (json.detect_encoding), the BOM a codec of that name takes off.
-// shortcut: Python decodes with surrogatepass, so an encoded lone surrogate (UTF-8 ED A0..BF xx, an unpaired UTF-16 unit, a
-// UTF-32 surrogate) is a str there; Go has no such string, so UTF-8 holding one is not text here and the others read as
-// U+FFFD. The sender writes ASCII json.dumps; upgrade if a report can carry one.
+// Python decodes with "surrogatepass", so a lone surrogate (an encoded one in UTF-8, an unpaired UTF-16 unit, a UTF-32
+// unit in the surrogate range) is a character of the str, not an error: here it is pysem's three-byte encoding of it, which
+// the name, the row and the counter then carry as Python does. Anything else invalid is not text.
 func reportText(b []byte) (string, bool) {
 	switch {
 	case bytes.HasPrefix(b, []byte{0xff, 0xfe, 0, 0}):
@@ -63,33 +63,52 @@ func reportText(b []byte) (string, bool) {
 	case len(b) == 2 && b[1] == 0:
 		return utf16Text(b, binary.LittleEndian)
 	}
-	return string(b), utf8.Valid(b)
+	text := string(b)
+	for rest := text; len(rest) > 0; {
+		r, size := pysem.DecodeRune(rest)
+		if r == utf8.RuneError && size == 1 {
+			return "", false
+		}
+		rest = rest[size:]
+	}
+	return text, true
 }
 
+// utf16Text decodes UTF-16 as the codec does: a high unit followed by a low one is one character, any other surrogate unit
+// stands alone.
 func utf16Text(b []byte, order binary.ByteOrder) (string, bool) {
 	if len(b)%2 != 0 {
 		return "", false
 	}
-	units := make([]uint16, len(b)/2)
-	for i := range units {
-		units[i] = order.Uint16(b[2*i:])
+	var out strings.Builder
+	for i := 0; i < len(b); i += 2 {
+		unit := rune(order.Uint16(b[i:]))
+		if 0xD800 <= unit && unit < 0xDC00 && i+3 < len(b) {
+			if low := rune(order.Uint16(b[i+2:])); 0xDC00 <= low && low < 0xE000 {
+				out.WriteRune(0x10000 + (unit-0xD800)<<10 + (low - 0xDC00))
+				i += 2
+				continue
+			}
+		}
+		pysem.WriteRune(&out, unit)
 	}
-	return string(utf16.Decode(units)), true
+	return out.String(), true
 }
 
+// utf32Text decodes UTF-32 as the codec does: a surrogate unit is a lone surrogate, a unit above U+10FFFF is an error.
 func utf32Text(b []byte, order binary.ByteOrder) (string, bool) {
 	if len(b)%4 != 0 {
 		return "", false
 	}
-	runes := make([]rune, len(b)/4)
-	for i := range runes {
-		unit := order.Uint32(b[4*i:])
+	var out strings.Builder
+	for i := 0; i < len(b); i += 4 {
+		unit := order.Uint32(b[i:])
 		if unit > utf8.MaxRune {
 			return "", false
 		}
-		runes[i] = rune(unit)
+		pysem.WriteRune(&out, rune(unit))
 	}
-	return string(runes), true
+	return out.String(), true
 }
 
 // notSubscriptable is the TypeError Python's report[key] raises on a parsed JSON value that is not an object.
@@ -125,7 +144,7 @@ func hexDigit(r rune) (byte, bool) {
 // pyFromHex is bytes.fromhex: byte pairs of hex digits, with ASCII whitespace allowed between pairs. The error names the
 // position, in characters, of the first digit that is missing or is not one.
 func pyFromHex(text string) ([]byte, error) {
-	chars := []rune(text)
+	chars := pysem.Runes(text)
 	out := make([]byte, 0, len(chars)/2)
 	for i := 0; i < len(chars); {
 		switch chars[i] {
@@ -163,7 +182,7 @@ func upstreamReport(data []byte) (*moduleQstate, *dnsMsg, error) {
 	if !ok {
 		return nil, nil, errors.New("not a report: not text in UTF-8, UTF-16 or UTF-32")
 	}
-	parsed, ok := parsePyJSON(text)
+	parsed, ok := parsePyJSONSurrogates(text)
 	if !ok {
 		return nil, nil, errors.New("not a report: invalid JSON")
 	}
@@ -179,7 +198,7 @@ func upstreamReport(data []byte) (*moduleQstate, *dnsMsg, error) {
 	qname, qnameOK := report.vals["qname"].(string)
 	qtype, qtypeOK := jsonU16(report.vals["qtype"])
 	flags, flagsOK := jsonU16(report.vals["flags"])
-	if length := utf8.RuneCountInString(qname); !(qnameOK && 0 < length && length <= maxReportQname && qtypeOK && flagsOK) {
+	if length := pysem.Len(qname); !(qnameOK && 0 < length && length <= maxReportQname && qtypeOK && flagsOK) {
 		return nil, nil, errors.New("qname, qtype or flags is not valid")
 	}
 	client, clientOK := report.vals["client"].(string)
@@ -203,7 +222,7 @@ func upstreamReport(data []byte) (*moduleQstate, *dnsMsg, error) {
 			return nil, nil, errors.New("option is not [code, hex data]")
 		}
 		digits, ok := pair[1].(string)
-		if !ok || utf8.RuneCountInString(digits) > maxReportOptionHex {
+		if !ok || pysem.Len(digits) > maxReportOptionHex {
 			return nil, nil, errors.New("option data is not hex of a sane size")
 		}
 		optionData, err := pyFromHex(digits)

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
 // logQueueMaxsize is PFB_LOG_QUEUE_MAXSIZE.
@@ -153,7 +155,42 @@ func (p *logPipeline) write(path, line string) {
 	}
 }
 
+// rowEncodeError is the UnicodeEncodeError Python's UTF-8 codec raises on a row holding a lone surrogate, which only an
+// observer report's name can put there; nil for a row it encodes. The first run of surrogates is the one named, by its
+// position in characters.
+func rowEncodeError(line string) error {
+	start := -1
+	var first rune
+	pos := 0
+	for rest := line; len(rest) > 0; pos++ {
+		r, size := pysem.DecodeRune(rest)
+		rest = rest[size:]
+		surrogate := 0xD800 <= r && r <= 0xDFFF
+		switch {
+		case surrogate && start < 0:
+			start, first = pos, r
+		case surrogate:
+		case start >= 0:
+			return surrogateEncodeError(start, pos-1, first)
+		}
+	}
+	if start >= 0 {
+		return surrogateEncodeError(start, pos-1, first)
+	}
+	return nil
+}
+
+func surrogateEncodeError(start, end int, first rune) error {
+	if start == end {
+		return fmt.Errorf("'utf-8' codec can't encode character '\\u%04x' in position %d: surrogates not allowed", first, start)
+	}
+	return fmt.Errorf("'utf-8' codec can't encode characters in position %d-%d: surrogates not allowed", start, end)
+}
+
 func (p *logPipeline) append(path, line string) error {
+	if err := rowEncodeError(line); err != nil {
+		return err
+	}
 	if wf := p.files[path]; wf != nil {
 		if current, err := os.Stat(path); err != nil || !os.SameFile(wf.info, current) {
 			wf.file.Close()
@@ -188,7 +225,9 @@ func logEntryDirect(line, log string) {
 	for attempt := 1; attempt <= 4; attempt++ {
 		file, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 		if err == nil {
-			_, err = file.WriteString(line + "\n")
+			if err = rowEncodeError(line); err == nil {
+				_, err = file.WriteString(line + "\n")
+			}
 			if closeErr := file.Close(); err == nil {
 				err = closeErr
 			}

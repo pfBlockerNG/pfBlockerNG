@@ -12,6 +12,52 @@ import (
 	"unicode/utf8"
 )
 
+// A Python str can hold a lone surrogate (U+D800 to U+DFFF), which Go's strings cannot: here it is its three-byte
+// encoding, as the "surrogatepass" codec writes it (ED A0..BF 80..BF), and these helpers read such a string by
+// character. Valid UTF-8 never contains the encoding, so a string without a lone surrogate is an ordinary Go string.
+
+// DecodeRune is the first character of s and its size in bytes: an encoded lone surrogate is one character of 3 bytes.
+// Any other invalid byte is utf8.RuneError of size 1, as utf8.DecodeRuneInString reports it.
+func DecodeRune(s string) (rune, int) {
+	if len(s) >= 3 && s[0] == 0xED && 0xA0 <= s[1] && s[1] <= 0xBF && s[2]&0xC0 == 0x80 {
+		return 0xD000 | rune(s[1]&0x3F)<<6 | rune(s[2]&0x3F), 3
+	}
+	return utf8.DecodeRuneInString(s)
+}
+
+// Runes is list(s) by code point, a lone surrogate being one.
+func Runes(s string) []rune {
+	out := make([]rune, 0, len(s))
+	for len(s) > 0 {
+		r, size := DecodeRune(s)
+		out = append(out, r)
+		s = s[size:]
+	}
+	return out
+}
+
+// Len is len(s) of a str: its code points, a lone surrogate being one.
+func Len(s string) int {
+	n := 0
+	for len(s) > 0 {
+		_, size := DecodeRune(s)
+		s = s[size:]
+		n++
+	}
+	return n
+}
+
+// WriteRune writes r to b: a surrogate as its three-byte encoding, which strings.Builder.WriteRune would turn into U+FFFD.
+func WriteRune(b *strings.Builder, r rune) {
+	if 0xD800 <= r && r <= 0xDFFF {
+		b.WriteByte(0xE0 | byte(r>>12))
+		b.WriteByte(0x80 | byte(r>>6)&0x3F)
+		b.WriteByte(0x80 | byte(r)&0x3F)
+		return
+	}
+	b.WriteRune(r)
+}
+
 // Lower is str.lower(): Go's simple case mapping plus str.lower()'s one multi-character mapping, U+0130 to "i" and
 // U+0307.
 // shortcut: no Final_Sigma (a word-final capital sigma lowers to σ, not ς) and Go's Unicode 17 case tables where
@@ -116,7 +162,9 @@ func Repr(s string) string {
 	}
 	var out strings.Builder
 	out.WriteRune(quote)
-	for _, r := range s {
+	for len(s) > 0 {
+		r, size := DecodeRune(s)
+		s = s[size:]
 		switch {
 		case r == quote || r == '\\':
 			out.WriteByte('\\')

@@ -1,6 +1,8 @@
 // Go translation of src/usr/local/pkg/pfblockerng/dns_proxy/unbound_shim.py: the constants, reply objects and query
-// state of the Unbound API that pythonmod gives pfb_unbound.py, with the upstream's EDNS options. The install/uninstall of
-// callbacks comes with the rows that need it.
+// state of the Unbound API that pythonmod gives pfb_unbound.py, with the upstream's EDNS options. There is no callback
+// registry: the one callback the module registers for query_response is called directly (fireQueryResponse in
+// pfb_unbound_upstream.go), and the reply callbacks by fireReplyCallback (pfb_unbound_log.go). Install and uninstall
+// come with the rows that need them.
 package decider
 
 import (

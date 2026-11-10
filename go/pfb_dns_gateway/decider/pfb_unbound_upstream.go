@@ -103,6 +103,9 @@ func (m *pfbUnbound) inplaceCbQueryResponse(qstate *moduleQstate, response *dnsM
 // fireQueryResponse is the shim's fire_query_response: it calls the module's query_response callback with the qstate and the
 // raw upstream response and no keyword arguments, so the row's transport and listener are the qstate's. A callback that fails
 // is logged and swallowed, as pythonmod does.
+// shortcut: the reason is the panic value as %v writes it, where Python's is the exception's repr (Exception('boom')). The
+// module's callback catches every Exception itself, so no report reaches this line; only a callback that is not the module's
+// would. Upgrade if one is ever registered.
 func (m *pfbUnbound) fireQueryResponse(qstate *moduleQstate, response *dnsMsg) {
 	defer func() {
 		if err := recover(); err != nil {

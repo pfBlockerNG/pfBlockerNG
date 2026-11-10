@@ -40,6 +40,9 @@ var jsonEscapes = map[byte]byte{'"': '"', '\\': '\\', '/': '/', 'b': '\b', 'f': 
 type jsonParser struct {
 	text string
 	pos  int
+	// surrogates keeps a lone surrogate escape as the str it is in Python (pysem's three-byte encoding of it), where
+	// otherwise it reads as U+FFFD.
+	surrogates bool
 }
 
 // parsePyJSON is json.loads(text): ok is false where Python raises a ValueError.
@@ -47,6 +50,17 @@ type jsonParser struct {
 // text of a str()-ed value.
 func parsePyJSON(text string) (value any, ok bool) {
 	p := &jsonParser{text: text}
+	value, ok = p.value(0)
+	if !ok {
+		return nil, false
+	}
+	p.space()
+	return value, p.pos == len(p.text)
+}
+
+// parsePyJSONSurrogates is parsePyJSON with a lone surrogate escape kept as Python keeps it, for text that reaches a row.
+func parsePyJSONSurrogates(text string) (value any, ok bool) {
+	p := &jsonParser{text: text, surrogates: true}
 	value, ok = p.value(0)
 	if !ok {
 		return nil, false
@@ -164,7 +178,11 @@ func (p *jsonParser) str() (any, bool) {
 				p.pos = save
 			}
 		}
-		out.WriteRune(r) // a lone surrogate is written as U+FFFD
+		if p.surrogates {
+			pysem.WriteRune(&out, r)
+		} else {
+			out.WriteRune(r) // a lone surrogate is written as U+FFFD
+		}
 	}
 	return nil, false
 }

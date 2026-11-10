@@ -23,12 +23,15 @@ type observerStep struct {
 	Hex         string
 	NewFrontend bool `json:"new_frontend"`
 	Rows        [][2]string
-	Stderr      []string
-	Before      *string
-	After       *string
-	DB          string
-	Statements  []string
-	Dump        sqlDump
+	// RowsWtf8 stands for Rows when a row holds a lone surrogate, which JSON cannot hand a Go reader: the row's bytes as
+	// Python's surrogatepass codec writes them, in hex.
+	RowsWtf8   [][2]string `json:"rows_wtf8"`
+	Stderr     []string
+	Before     *string
+	After      *string
+	DB         string
+	Statements []string
+	Dump       sqlDump
 
 	// the fire step: the shim's fire_query_response with a qstate of the test's own making
 	Qname     string
@@ -164,8 +167,15 @@ func TestObserverReportsMatchPython(t *testing.T) {
 				printed := linesOf(stderr.String())
 				after := probe()
 				rowsSeen += len(got)
-				if len(got) != len(step.Rows) || (len(got) > 0 && !reflect.DeepEqual(got, step.Rows)) {
-					t.Errorf("step %d (%s): rows\n  go:     %q\n  python: %q", i, step.Note, got, step.Rows)
+				want := step.Rows
+				if step.RowsWtf8 != nil {
+					want = nil
+					for _, row := range step.RowsWtf8 {
+						want = append(want, [2]string{row[0], string(mustHex(t, row[1]))})
+					}
+				}
+				if len(got) != len(want) || (len(got) > 0 && !reflect.DeepEqual(got, want)) {
+					t.Errorf("step %d (%s): rows\n  go:     %q\n  python: %q", i, step.Note, got, want)
 				}
 				if len(printed) != len(step.Stderr) {
 					t.Errorf("step %d (%s): stderr\n  go:     %q\n  python: %q", i, step.Note, printed, step.Stderr)
@@ -223,8 +233,8 @@ func TestObserverReportsMatchPython(t *testing.T) {
 			}
 		})
 	}
-	if datagrams < 295 || dumps < 20 || rowsSeen < 166 || malformedFixtures < 27 {
-		t.Errorf("the oracle compared %d datagrams and fires, %d dumps, %d rows, %d malformed fixtures: want the full set (295, 20, 166, 27 or more)",
+	if datagrams < 359 || dumps < 23 || rowsSeen < 209 || malformedFixtures < 27 {
+		t.Errorf("the oracle compared %d datagrams and fires, %d dumps, %d rows, %d malformed fixtures: want the full set (359, 23, 209, 27 or more)",
 			datagrams, dumps, rowsSeen, malformedFixtures)
 	}
 }
