@@ -156,10 +156,12 @@ type pfbUnbound struct {
 	// publishMu serializes the publishers of snapshot: rebuildAndSwap, a control command and a control timer's expiry.
 	// Each loads the live snapshot, derives the next from it and stores it, so two of them at once would lose a write.
 	publishMu sync.Mutex
-	// retired is set by deinit under publishMu: from then on nothing is published (a snapshot, an applied marker, the
-	// counts, the status ledger) and the stats database is not opened, so that a reload or a control record that outlives
-	// the bounded stop of its watcher cannot act on a closed module when it ends. The snapshot publishers read it under
-	// publishMu, so that a swap is either stored before deinit or refused; the file writers read it without a lock.
+	// retired is set by deinit under publishMu, and by the module-less reply log's close, which has no publishers and sets it
+	// without the lock: from then on nothing is published (a snapshot, an applied marker, the counts, the status ledger), no
+	// log row is written and the stats database is not opened, so that a reload or a control record that outlives the
+	// bounded stop of its watcher cannot act on a closed module when it ends. The snapshot publishers read it under
+	// publishMu, so that a swap is either stored before deinit or refused; the file writers read it without a lock. The
+	// module's error lines (pyStderr) are not retired: they still reach py_error.log until deinit restores sys.stderr.
 	retired atomic.Bool
 	// afterFunc starts a control timer (time.AfterFunc's shape; nil is the real one). A test replaces it to fire the
 	// expiry by hand; it must not run f before it returns, as the caller holds publishMu.
@@ -725,11 +727,11 @@ func (m *pfbUnbound) whileNotRetired(f func()) {
 // join(timeout=5)), the database worker drains and the connections close, the log writer writes what is queued and the
 // GeoIP reader closes. The watchers come first, ahead of Python's close of the reader: a watcher mid-build must not meet a
 // closed database. A query may still be inside Resolve (Frontend.Close runs after the gateway's drain bound): retired
-// comes first, so that it publishes, opens and writes nothing from here on. A watcher that does not stop within its bound is
+// comes first, so that it publishes nothing, opens nothing and writes no log row from here on. A watcher that does not stop within its bound is
 // left running, and retirement (above all, the closed database) is what keeps it from publishing or opening anything.
 func (m *pfbUnbound) deinit() {
 	m.publishMu.Lock()
-	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing from here on
+	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing, and writes no log row, from here on
 	m.publishMu.Unlock()
 	m.stopReloadWatcher()
 	m.stopControlWatcher()

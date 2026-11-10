@@ -358,6 +358,30 @@ func TestReplyLogWritesDnsReplyLogAndCloseFlushesIt(t *testing.T) {
 	}
 }
 
+// A reply that is answered after Close writes no row: the reply log is retired before its writer stops, so the row is
+// dropped, neither queued to the writer that has stopped nor appended to the file directly.
+func TestAReplyResolvedAfterCloseWritesNoRow(t *testing.T) {
+	dir := t.TempDir()
+	withLogDir(t, dir)
+	f, err := Open(Options{LogDir: testLogDir, NoModule: true, ReplyLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.replyLog.clock = fixedClock
+	f.Resolve(qtypeWire(t, allowed, 1), testClient, fakeUnbound(t), "Unknown", "", "")
+	f.Close()
+	path := filepath.Join(dir, "dns_reply.log")
+	before, err := os.ReadFile(path)
+	if err != nil || len(before) == 0 {
+		t.Fatalf("dns_reply.log = (%q, %v), want the row of the reply answered before Close", before, err)
+	}
+	f.Resolve(qtypeWire(t, allowed, 1), testClient, fakeUnbound(t), "Unknown", "", "")
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("row written after Close: dns_reply.log = (%q, %v), want it unchanged: %q", after, err, before)
+	}
+}
+
 // DNS must not go down with its log: with an unwritable log directory the writer reports the failure once and every
 // query is still answered.
 func TestReplyLogWithAnUnwritableLogDirectoryServesAndReportsOnce(t *testing.T) {

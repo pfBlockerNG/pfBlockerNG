@@ -32,17 +32,20 @@ var stderrRedirect struct {
 // stderrNow is the clock of a row's asctime; a test sets it.
 var stderrNow = time.Now
 
+// stderrTouch creates py_error.log for redirectStderr; a test fails it, as no file mode can for a test that runs as root.
+var stderrTouch = touch
+
 // redirectStderr is the redirect of init_standard: it creates py_error.log (logging.basicConfig opens it at once) and
 // resets pfb["p_err"]. A file it cannot open is removed once and opened again, as Python does for one that unbound does not
 // own; one that still cannot be opened is said once on the process stderr, and the module's errors stay there.
 func (m *pfbUnbound) redirectStderr() {
 	path := m.logPath(pyErrorLogName)
-	err := touch(path)
+	err := stderrTouch(path)
 	if err != nil {
 		if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
 			_ = os.Remove(path)
 		}
-		err = touch(path)
+		err = stderrTouch(path)
 	}
 	stderrRedirect.mu.Lock()
 	defer stderrRedirect.mu.Unlock()
@@ -90,8 +93,7 @@ func pyStderr(msg string) {
 	}
 	stderrRedirect.last = msg
 	now := stderrNow()
-	row := fmt.Sprintf("%s,%03d|ERROR| %s\n", now.Format("2006-01-02 15:04:05"), now.Nanosecond()/int(time.Millisecond),
-		strings.TrimRightFunc(msg, pysem.IsSpace))
+	row := now.Format("2006-01-02 15:04:05,000") + "|ERROR| " + strings.TrimRightFunc(msg, pysem.IsSpace) + "\n"
 	file, err := os.OpenFile(stderrRedirect.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 	if err == nil {
 		_, err = file.WriteString(row)

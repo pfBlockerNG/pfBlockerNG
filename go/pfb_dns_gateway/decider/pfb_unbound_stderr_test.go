@@ -3,6 +3,7 @@ package decider
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -155,6 +156,154 @@ func TestAnUnwritablePyErrorLogFallsBackToTheProcessStderrWithOneLine(t *testing
 		if !strings.Contains(text, "pfb_dns_proxy error: "+msg+"\n") {
 			t.Fatalf("the process stderr lacks %q:\n%s", msg, text)
 		}
+	}
+}
+
+// replaceWithDir puts a directory where py_error.log was: appending to it fails (EISDIR) for every user, root included.
+func replaceWithDir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A py_error.log that cannot be opened when the module boots is removed once (unbound did not create it, so it may not own
+// it) and created again, and the module's errors go to the new file.
+func TestARegularPyErrorLogThatCannotBeOpenedIsRemovedAndCreatedAgain(t *testing.T) {
+	_ = captureLog(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, pyErrorLogName)
+	if err := os.WriteFile(path, []byte("a row of the previous owner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opens := 0
+	previous := stderrTouch
+	stderrTouch = func(p string) error {
+		if opens++; opens == 1 {
+			return errors.New("permission denied")
+		}
+		return touch(p)
+	}
+	t.Cleanup(func() { stderrTouch = previous })
+	m := &pfbUnbound{logDir: dir}
+	m.redirectStderr()
+	t.Cleanup(m.restoreStderr)
+
+	if opens != 2 {
+		t.Fatalf("py_error.log was opened %d times, want 2: the failed open, then the open of the file created again", opens)
+	}
+	if got := readPyError(t, dir); got != "" {
+		t.Fatalf("py_error.log holds %q, want the previous owner's file gone and an empty one", got)
+	}
+	pyStderr("[pfBlockerNG]: after")
+	if got := readPyError(t, dir); !strings.HasSuffix(got, "|ERROR| [pfBlockerNG]: after\n") {
+		t.Fatalf("py_error.log holds %q, want the module's error in the new file", got)
+	}
+}
+
+// What is not a regular file is not removed: a py_error.log that stays unopenable is said once on the process stderr and
+// the module's errors stay there.
+func TestAPyErrorLogThatCannotBeOpenedStaysAndErrorsStayOnTheProcessStderr(t *testing.T) {
+	out := captureLog(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, pyErrorLogName)
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := &pfbUnbound{logDir: dir}
+	m.redirectStderr()
+	t.Cleanup(m.restoreStderr)
+
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		t.Fatalf("%s = (%v, %v), want the directory left where it is", path, info, err)
+	}
+	if n := strings.Count(out.String(), "cannot open"); n != 1 {
+		t.Fatalf("the failed open was said %d times, want once:\n%s", n, out)
+	}
+	pyStderr("[pfBlockerNG]: one")
+	if !strings.Contains(out.String(), "pfb_dns_proxy error: [pfBlockerNG]: one\n") {
+		t.Fatalf("the process stderr lacks the module's error:\n%s", out)
+	}
+}
+
+// A module boots with the message before forgotten: the same message is a row of its file.
+func TestRedirectForgetsTheMessageBefore(t *testing.T) {
+	_ = captureLog(t)
+	_ = redirected(t)
+	pyStderr("[pfBlockerNG]: same")
+
+	second := redirected(t)
+	pyStderr("[pfBlockerNG]: same")
+	if got := readPyError(t, second); !strings.HasSuffix(got, "|ERROR| [pfBlockerNG]: same\n") {
+		t.Fatalf("the second module's py_error.log holds %q, want the message the first module wrote last, again", got)
+	}
+}
+
+// A module boots with the "cannot write" state forgotten: a file it cannot write is said again, once.
+func TestRedirectForgetsTheFailureAlreadySaid(t *testing.T) {
+	out := captureLog(t)
+	first := redirected(t)
+	replaceWithDir(t, filepath.Join(first, pyErrorLogName))
+	pyStderr("[pfBlockerNG]: first") // says "cannot write" for the first module
+
+	second := redirected(t)
+	replaceWithDir(t, filepath.Join(second, pyErrorLogName))
+	pyStderr("[pfBlockerNG]: second")
+	if n := strings.Count(out.String(), "cannot write"); n != 2 {
+		t.Fatalf("the unwritable file was said %d times across two modules, want once each:\n%s", n, out)
+	}
+}
+
+// Only the module that redirected sys.stderr gives it back: a module that was replaced does not undo its successor's.
+func TestARetiredModuleDoesNotRestoreTheStderrOfItsSuccessor(t *testing.T) {
+	_ = captureLog(t)
+	firstDir, secondDir := t.TempDir(), t.TempDir()
+	first, second := &pfbUnbound{logDir: firstDir}, &pfbUnbound{logDir: secondDir}
+	first.redirectStderr()
+	second.redirectStderr()
+	t.Cleanup(second.restoreStderr)
+	first.restoreStderr()
+	pyStderr("[pfBlockerNG]: to the second")
+	if got := readPyError(t, secondDir); !strings.HasSuffix(got, "|ERROR| [pfBlockerNG]: to the second\n") {
+		t.Fatalf("the second module's py_error.log holds %q, want its error: the first module restored it", got)
+	}
+}
+
+// deinit gives sys.stderr back to the process: what the module writes afterwards is not a py_error.log row.
+func TestDeinitGivesStderrBackToTheProcess(t *testing.T) {
+	out := captureLog(t)
+	logDir := t.TempDir()
+	m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n"), logDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.deinit()
+	pyStderr("[pfBlockerNG]: after deinit")
+	if got := readPyError(t, logDir); got != "" {
+		t.Fatalf("py_error.log holds %q after deinit, want nothing", got)
+	}
+	if !strings.Contains(out.String(), "pfb_dns_proxy error: [pfBlockerNG]: after deinit\n") {
+		t.Fatalf("the process stderr lacks the error written after deinit:\n%s", out)
+	}
+}
+
+// An init_standard that raises gives sys.stderr back: the module never existed, so nothing of it stays redirected.
+func TestAnInitThatFailsGivesStderrBack(t *testing.T) {
+	out := captureLog(t)
+	logDir := t.TempDir()
+	if m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = maybe\n"), logDir); err == nil {
+		stopModule(t, m)
+		t.Fatal("initStandard accepted a MAIN value that is no boolean")
+	}
+	pyStderr("[pfBlockerNG]: after the failed init")
+	if got := readPyError(t, logDir); got != "" {
+		t.Fatalf("py_error.log holds %q, want nothing: the failed module's redirect was left in place", got)
+	}
+	if !strings.Contains(out.String(), "pfb_dns_proxy error: [pfBlockerNG]: after the failed init\n") {
+		t.Fatalf("the process stderr lacks the error:\n%s", out)
 	}
 }
 
