@@ -195,8 +195,11 @@ func TestShutdownGivesTheDeciderOnlyWhatTheStopLeftOfTheBudget(t *testing.T) {
 	t.Cleanup(letGo)
 	t.Cleanup(sync.OnceFunc(func() { close(fe.closeGate) }))
 	srv, c, logs := startHeldQuery(t, fe, 20*time.Millisecond, budget, clock.config)
+	// The fake time moves while stop() is still waiting: it closes the client only after its first wait, and returns only
+	// when the held query is let go, which comes after the advance. So the advance happens before shutdown reads the clock
+	// for the decider's share, whatever the real 20 ms stopBound does; no real duration decides the 650 ms below.
 	go func() {
-		_, _ = c.Read(make([]byte, 1)) // stop() closed the client: the stop is nearly over
+		_, _ = c.Read(make([]byte, 1)) // stop() closed the client
 		clock.advance(stopTook)
 		letGo()
 	}()
