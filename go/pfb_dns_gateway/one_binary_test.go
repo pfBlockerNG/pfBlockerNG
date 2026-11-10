@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -213,5 +214,39 @@ func TestOneBinaryShutdownClosesTheDecider(t *testing.T) {
 	}
 	if _, err := os.Stat(ready); err == nil {
 		t.Fatal("the ready file is still there after shutdown")
+	}
+}
+
+// R7: the decider is booted after the drop, so that what it creates is the unprivileged user's: its observer socket is owned
+// by that user, mode 0600, which is what lets only the user Unbound runs as report to it. Root only: it needs a user to
+// drop to, and a directory that user can write to.
+func TestOneBinaryObserverSocketIsOwnedByTheUserTheGatewayDroppedTo(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("a real drop to another user: needs root")
+	}
+	nobody, err := user.Lookup("nobody")
+	if err != nil {
+		t.Skip("no user `nobody` to drop to")
+	}
+	uid, err := strconv.Atoi(nobody.Uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := shortTempDir(t)
+	writeModuleDir(t, dir)
+	if err := os.Chmod(dir, 0o777); err != nil { // the user creates the socket in it
+		t.Fatal(err)
+	}
+	gw := startGatewayProcessWith(t, oneBinaryFlags("127.0.0.1:5353", "--user", "nobody", "--module-dir", dir, "--observer"))
+	gw.waitLine("ready upstream ")
+	info, err := os.Lstat(filepath.Join(dir, "pfb_upstream.sock"))
+	if err != nil {
+		t.Fatalf("no observer socket while serving: %v\n%s", err, gw.logText())
+	}
+	if got := info.Sys().(*syscall.Stat_t).Uid; int(got) != uid {
+		t.Fatalf("the observer socket is owned by uid %d, want %d (nobody): the decider was booted before the drop", got, uid)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("the observer socket is mode %o, want 0600", perm)
 	}
 }
