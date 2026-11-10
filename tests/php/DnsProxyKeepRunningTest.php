@@ -214,15 +214,12 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
-	public function testALeftoverDeciderRecordThatDiffersFromTheInstalledCodeRestartsNothingAndSendsNoDeciderRestartFrame(): void
+	public function testACurrentGatewayIsNeitherRestartedNorSentTheRetiredDeciderRestartFrame(): void
 	{
-		// Given a gateway that is current and lists exactly what the rc script serves on its control socket, and the code record the
-		// Python decider left beside it, which differs from the decider files still on disk (what a decider-only restart once acted on)
+		// Given a gateway that is current and lists exactly what the rc script serves on its control socket
 		$socket = "{$this->krDir}/ctl.sock";
 		$record = $this->standIn($socket, [], ['listening' => ['udp+tcp 192.0.2.1:53', 'udp+tcp 127.0.0.1:53', 'udp+tcp [::1]:53']]);
 		$this->krApply(['ctl' => $socket]);
-		file_put_contents("{$this->krDir}/pfb_dns_proxy.py", 'the decider as the package installed it');
-		file_put_contents("{$this->krDir}/decider.applied", str_repeat('0', 32));
 		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway is ready');
 
 		// When the pass runs
