@@ -905,6 +905,9 @@ func TestRebuildAndSwapFailClosed(t *testing.T) {
 		{"the builder returns nothing", func() (*snapshot, error) { return nil, nil }, ""},
 		{"the builder fails", func() (*snapshot, error) { return nil, errors.New("build blew up") },
 			"pfb_dns_proxy error: [pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up\n"},
+		// Python's `except Exception` around build_snapshot() reads the same for a raise as for a returned failure
+		{"the builder panics", func() (*snapshot, error) { panic("build blew up") },
+			"pfb_dns_proxy error: [pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up\n"},
 	} {
 		logs := modCaptureLog(t)
 		m := modMust(t, t.TempDir())

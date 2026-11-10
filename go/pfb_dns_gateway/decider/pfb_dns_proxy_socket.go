@@ -21,8 +21,9 @@ const (
 	observerReadBuffer = 64 * 1024
 )
 
-// observerRename puts the bound socket onto its path; a variable so that a test can look at what the rename moves.
-var observerRename = os.Rename
+// observerPublish gives the bound socket its final name: a hard link, which fails with EEXIST rather than replace what is
+// there. A variable so that a test can look at what it publishes, or act between the lstat and the publish.
+var observerPublish = os.Link
 
 // observerSocket is the listening socket and the goroutine reading it.
 type observerSocket struct {
@@ -36,8 +37,10 @@ type observerSocket struct {
 // error and is left alone.
 //
 // The socket is never reachable with a wider mode: it is bound in a fresh 0700 directory inside dir, restricted there, and
-// renamed onto its path (#3511). A bind followed by a chmod would leave it open for the time between; a process-wide umask
-// would change the mode of what every other goroutine creates.
+// published onto its path by a hard link (#3511). A bind followed by a chmod would leave it open for the time between; a
+// process-wide umask would change the mode of what every other goroutine creates. The link, unlike a rename, never
+// replaces: whatever appears at the path after the lstat (EEXIST) is an error naming the path, and is left alone. The
+// temporary name is then removed with its directory; the socket stays reachable through the final name, the same inode.
 func (f *Frontend) listenObserver(dir string) (*observerSocket, error) {
 	path := filepath.Join(dir, observerSocketName)
 	switch info, err := os.Lstat(path); {
@@ -56,7 +59,7 @@ func (f *Frontend) listenObserver(dir string) (*observerSocket, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(private) // empty once the socket is renamed out of it; the socket too, if anything failed
+	defer os.RemoveAll(private) // the temporary name goes, and with it the directory; the final name is the same inode
 	bound := filepath.Join(private, "s")
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: bound, Net: "unixgram"})
 	if err != nil {
@@ -65,7 +68,7 @@ func (f *Frontend) listenObserver(dir string) (*observerSocket, error) {
 	for _, step := range []func() error{
 		func() error { return os.Chmod(bound, 0o600) }, // still private: nobody else can reach the directory
 		func() error { return conn.SetReadBuffer(observerRcvbuf) },
-		func() error { return observerRename(bound, path) },
+		func() error { return observerPublish(bound, path) },
 	} {
 		if err := step(); err != nil {
 			conn.Close()

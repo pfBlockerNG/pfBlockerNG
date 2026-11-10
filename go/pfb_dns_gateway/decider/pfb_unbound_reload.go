@@ -117,8 +117,8 @@ func reloadProjectedBytes(entryCount int) uint64 {
 // reloadRunSwap is _reload_run_swap: one RAM-gated rebuildAndSwap. The gate projects the LIVE snapshot's counts +
 // regex_count and is asked first: a box that cannot fit the transient declines, the old snapshot stays live and the
 // builder is not called. It reports whether a snapshot was swapped in, so that only then the caller advances the applied
-// marker: a decline, a failed build or a builder that panics leaves PHP's wait to time out. A builder's panic is logged
-// and fails that swap only, as Python's rebuild_and_swap catches the builder's exception: the watcher goes on.
+// marker: a decline, a failed build or a builder that panics leaves PHP's wait to time out. A builder's panic is logged by
+// rebuildAndSwap and fails that swap only, as Python's rebuild_and_swap catches the builder's exception: the watcher goes on.
 func (m *pfbUnbound) reloadRunSwap(build func() (*snapshot, error)) bool {
 	entryCount := 0
 	if snap := m.snapshot.Load(); snap != nil {
@@ -133,25 +133,11 @@ func (m *pfbUnbound) reloadRunSwap(build func() (*snapshot, error)) bool {
 			"total RAM); keeping current lists, the update needs the restart fallback", reloadProjectedBytes(entryCount)>>20, entryCount))
 		return false
 	}
-	if m.rebuildAndSwap(recovering(build), true) {
+	if m.rebuildAndSwap(build, true) {
 		logInfo("[pfBlockerNG]: DNSBL lists reloaded with no restart (zero-downtime swap)")
 		return true
 	}
 	return false
-}
-
-// recovering is build with its panic logged and turned into no snapshot (Python's None), which rebuildAndSwap fails
-// closed on without a second line.
-func recovering(build func() (*snapshot, error)) func() (*snapshot, error) {
-	return func() (next *snapshot, err error) {
-		defer func() {
-			if v := recover(); v != nil {
-				fmt.Fprintf(logOutput, "[pfBlockerNG]: reload watcher error: %v\n", v)
-				next, err = nil, nil
-			}
-		}()
-		return build()
-	}
 }
 
 // reloadWriteApplied is _reload_write_applied: gen is published as the applied-generation marker (temp file, fsync,
@@ -227,10 +213,11 @@ func (m *pfbUnbound) reloadUserRegex(settings *pfbSettings) *regexDB {
 
 // reloadWatcher is the state of pfb_reload_watcher: the sentinel, the builder, and the last generation it acted on.
 //
-// A panic in the builder is a failed swap (reloadRunSwap), not the end of the watcher. A panic anywhere else in the loop
-// body ends only the watcher, as Python's uncaught exception ends only the watcher thread: run recovers it and logs it,
-// and the module goes on without a reload watcher (reloadStop stays set, as Python leaves pfb["reload_watcher"] True, so
-// nothing restarts it). A builder's error is not that either: it is what rebuildAndSwap catches, and the watcher lives.
+// A panic in the builder is a failed swap (rebuildAndSwap recovers it), not the end of the watcher. A panic anywhere
+// else in the loop body ends only the watcher, as Python's uncaught exception ends only the watcher thread: run recovers
+// it and logs it, and the module goes on without a reload watcher (reloadStop stays set, as Python leaves
+// pfb["reload_watcher"] True, so nothing restarts it). A builder's error is not that either: it is what rebuildAndSwap
+// catches, and the watcher lives.
 type reloadWatcher struct {
 	m        *pfbUnbound
 	sentinel string

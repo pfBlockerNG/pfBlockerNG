@@ -293,11 +293,21 @@ func TestReplyLogSetsUpOnlyTheRowWriter(t *testing.T) {
 	}
 }
 
+// The table is a literal copy of RCODES in src/usr/local/pkg/pfblockerng/dns_proxy/dns_reply_log.py, so that a name edited
+// on one side only fails here; comparing the table with itself would not.
 func TestReplyLogRcodeNamesAreTheModulesOwnTable(t *testing.T) {
+	want := map[int]string{
+		0: "NoError", 1: "FormErr", 2: "ServFail", 3: "NXDOMAIN", 4: "NotImp", 5: "Refused", 6: "YXDomain", 7: "YXRRSet",
+		8: "NXRRSet", 9: "NotAuth", 10: "NotZone", 11: "DSOTYPENI", 16: "BADVERS", 17: "BADKEY", 18: "BADTIME",
+		19: "BADMODE", 20: "BADNAME", 21: "BADALG", 22: "BADTRUNC", 23: "BADCOOKIE",
+	}
+	if got := rcodeNames(); !reflect.DeepEqual(got, want) {
+		t.Errorf("rcodeNames() = %v, want dns_reply_log.py's RCODES %v", got, want)
+	}
 	f := openOK(t, Options{NoModule: true, ReplyLog: true})
 	module := modMust(t, moduleDir(t))
-	if !reflect.DeepEqual(f.replyLog.rcodeDB, module.rcodeDB) {
-		t.Errorf("rcode names = %v, want the module's %v", f.replyLog.rcodeDB, module.rcodeDB)
+	if !reflect.DeepEqual(f.replyLog.rcodeDB, want) || !reflect.DeepEqual(module.rcodeDB, want) {
+		t.Errorf("rcode names = %v (reply log), %v (module), want both %v", f.replyLog.rcodeDB, module.rcodeDB, want)
 	}
 }
 

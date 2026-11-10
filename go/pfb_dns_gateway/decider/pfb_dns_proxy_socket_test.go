@@ -178,18 +178,21 @@ func TestObserverSocketLeavesAnythingThatIsNotASocketAloneAndServesWithoutIt(t *
 }
 
 // #3511: the socket is created restricted, not chmod-ed after the bind. It is bound inside a fresh 0700 directory in the
-// module directory, restricted there, and renamed onto its path: at no moment is the final path a socket of a wider mode. The
-// worst umask (none) is the one that would make the bind alone create it 0777.
-func TestObserverSocketOnlyAppearsAtItsPathThroughARenameOfARestrictedSocket(t *testing.T) {
+// module directory, restricted there, and only then published at its path (an atomic link or rename of that restricted
+// socket): at no moment is the final path a socket of a wider mode. The worst umask (none) is the one that would make the
+// bind alone create it 0777. The published socket is the one that listens.
+func TestObserverSocketOnlyAppearsAtItsPathAsARestrictedSocket(t *testing.T) {
 	dir := shortDir(t)
-	var renames int
+	logDir := t.TempDir()
+	withLogDir(t, logDir)
+	var publishes int
 	var from, to string
 	var privateMode, socketMode fs.FileMode
 	var finalAbsent bool
-	previous := observerRename
-	t.Cleanup(func() { observerRename = previous })
-	observerRename = func(oldpath, newpath string) error {
-		renames++
+	previous := observerPublish
+	t.Cleanup(func() { observerPublish = previous })
+	observerPublish = func(oldpath, newpath string) error {
+		publishes++
 		from, to = oldpath, newpath
 		if info, err := os.Stat(filepath.Dir(oldpath)); err == nil {
 			privateMode = info.Mode()
@@ -209,8 +212,8 @@ func TestObserverSocketOnlyAppearsAtItsPathThroughARenameOfARestrictedSocket(t *
 	}
 	t.Cleanup(f.Close)
 
-	if renames != 1 || to != observerPath(dir) {
-		t.Fatalf("renames = %d, last onto %q, want one onto %q", renames, to, observerPath(dir))
+	if publishes != 1 || to != observerPath(dir) {
+		t.Fatalf("publishes = %d, last onto %q, want one onto %q", publishes, to, observerPath(dir))
 	}
 	if filepath.Dir(filepath.Dir(from)) != dir || !strings.HasPrefix(filepath.Base(filepath.Dir(from)), ".pfb_upstream") {
 		t.Errorf("the socket was bound at %q, want a fresh directory directly inside the module directory", from)
@@ -219,16 +222,49 @@ func TestObserverSocketOnlyAppearsAtItsPathThroughARenameOfARestrictedSocket(t *
 		t.Errorf("the directory it was bound in is %v, want a directory of mode 0700", privateMode)
 	}
 	if socketMode.Type() != fs.ModeSocket || socketMode.Perm() != 0o600 {
-		t.Errorf("at the rename the socket is %v, want a socket of mode 0600", socketMode)
+		t.Errorf("at the publish the socket is %v, want a socket of mode 0600", socketMode)
 	}
 	if !finalAbsent {
-		t.Errorf("the final path existed before the rename put the socket there")
+		t.Errorf("the final path existed before the publish put the socket there")
 	}
 	if _, err := os.Lstat(filepath.Dir(from)); !os.IsNotExist(err) {
-		t.Errorf("the private directory is left after the rename (lstat: %v)", err)
+		t.Errorf("the private directory is left after the publish (lstat: %v)", err)
 	}
 	if info, err := os.Lstat(observerPath(dir)); err != nil || info.Mode().Perm() != 0o600 || info.Mode().Type() != fs.ModeSocket {
 		t.Errorf("final path = (%v, %v), want a socket of mode 0600", info, err)
+	}
+	mustSend(t, dir, observerReport(t, nil)) // reachable through its final name once the temporary name is gone
+	eventually(t, "the report sent to the final path to be heard", func() bool { return len(blockRows(logDir)) > 0 })
+}
+
+// The final path is published without replacing: whatever appears there after the lstat (a file another process created in
+// that moment) is not this decider's to overwrite. The publish refuses, the file is left byte for byte, and DNS is served
+// without the observer.
+func TestObserverSocketPublishNeverReplacesWhatAppearsAtItsPathAfterTheLstat(t *testing.T) {
+	dir := shortDir(t)
+	path := observerPath(dir)
+	previous := observerPublish
+	t.Cleanup(func() { observerPublish = previous })
+	observerPublish = func(oldpath, newpath string) error {
+		if err := os.WriteFile(newpath, []byte("not mine"), 0o644); err != nil {
+			t.Error(err)
+		}
+		return previous(oldpath, newpath)
+	}
+	log := captureLockedLog(t)
+	f := openOK(t, Options{ModuleDir: dir, Observer: true})
+
+	if got, err := os.ReadFile(path); err != nil || string(got) != "not mine" {
+		t.Errorf("the file that appeared at %s = (%q, %v), want it left byte for byte", path, got, err)
+	}
+	if f.observer != nil {
+		t.Errorf("an observer is listening after the publish was refused")
+	}
+	if got := strings.Count(log.String(), observerOffLine); got != 1 || !strings.Contains(log.String(), path) {
+		t.Errorf("the off line (naming %s) was logged %d times, want once; log = %q", path, got, log.String())
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".pfb_upstream-*")); len(left) != 0 {
+		t.Errorf("the private directory is left after a refused publish: %v", left)
 	}
 }
 
@@ -358,5 +394,107 @@ func TestObserverSocketIsUnlinkedByCloseAndASecondCloseDoesNothing(t *testing.T)
 	f.Close()
 	if _, err := os.Lstat(observerPath(dir)); err != nil {
 		t.Errorf("a second Close removed a socket that is not this decider's: %v", err)
+	}
+}
+
+// --- a reader that panics or sticks, and the order of Close ---------------------------------------------
+
+// gatedLog is a log whose first write of a line holding match panics (panics) or blocks until release is closed.
+type gatedLog struct {
+	*lockedLog
+	match            string
+	panics           bool
+	once             sync.Once
+	entered, release chan struct{}
+}
+
+func (g *gatedLog) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), g.match) {
+		g.once.Do(func() {
+			if g.panics {
+				panic("log writer blew up")
+			}
+			close(g.entered)
+			<-g.release
+		})
+	}
+	return g.lockedLog.Write(p)
+}
+
+// A panic in the report handler (here: the log write of the first malformed report) is logged and the reader goes on:
+// the next valid report is still a row. Python's asyncio logs an exception of datagram_received and reads on.
+func TestObserverSocketRecoversAPanicOfTheReportHandlerAndProcessesTheNextReport(t *testing.T) {
+	dir := shortDir(t)
+	logDir := t.TempDir()
+	withLogDir(t, logDir)
+	log := captureLockedLog(t)
+	logOutput = &gatedLog{lockedLog: log, match: "malformed upstream report", panics: true}
+	f := openOK(t, Options{ModuleDir: dir, Observer: true})
+	if f.observer == nil {
+		t.Fatalf("no observer socket; log = %q", log.String())
+	}
+
+	mustSend(t, dir, []byte("not json"))
+	eventually(t, "the failure of the handler to be logged", func() bool {
+		return strings.Contains(log.String(), "upstream report handler failed: log writer blew up")
+	})
+	mustSend(t, dir, observerReport(t, nil))
+	eventually(t, "the next valid report's row", func() bool { return len(blockRows(logDir)) > 0 })
+}
+
+// A reader that does not end (here: stuck in the log write of a report) holds Close for watcherStopWait and no longer: one
+// line says so, and the socket is unlinked all the same.
+func TestObserverSocketCloseGivesUpOnAStuckReaderAfterTheBound(t *testing.T) {
+	shortStopWait(t)
+	dir := shortDir(t)
+	withLogDir(t, t.TempDir())
+	log := captureLockedLog(t)
+	gate := &gatedLog{lockedLog: log, match: "malformed upstream report", entered: make(chan struct{}), release: make(chan struct{})}
+	logOutput = gate
+	f := openOK(t, Options{ModuleDir: dir, Observer: true})
+	t.Cleanup(func() { close(gate.release) }) // runs before Close's own cleanup: the stuck reader ends first
+
+	mustSend(t, dir, []byte("not json"))
+	chWait(t, "the reader to stick in its log write", gate.entered)
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		f.Close()
+	}()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Close is still waiting for a stuck reader: the wait is not bounded")
+	}
+	if got := strings.Count(log.String(), "observer socket reader did not stop"); got != 1 {
+		t.Errorf("Close logged %d lines about the stuck reader, want 1; log = %q", got, log.String())
+	}
+	if _, err := os.Lstat(observerPath(dir)); !os.IsNotExist(err) {
+		t.Errorf("the socket is still there after Close gave up on the reader (lstat: %v)", err)
+	}
+}
+
+// Close stops the observer before the module deinits, so that no report meets a closing module: when deinit starts (its
+// first step is the reload watcher's stop, hooked here) the socket is gone and refuses a datagram.
+func TestCloseStopsTheObserverBeforeTheModuleDeinits(t *testing.T) {
+	dir := shortDir(t)
+	f, _, _ := socketFrontend(t, dir)
+	var called bool
+	var lstatErr, sendErr error
+	stopWatcher := f.module.reloadStop
+	f.module.reloadStop = func() {
+		called = true
+		_, lstatErr = os.Lstat(observerPath(dir))
+		sendErr = send(observerPath(dir), []byte("x"))
+		if stopWatcher != nil {
+			stopWatcher()
+		}
+	}
+	f.Close()
+	if !called {
+		t.Fatal("deinit did not stop the reload watcher: the hook never ran")
+	}
+	if !os.IsNotExist(lstatErr) || sendErr == nil {
+		t.Errorf("when deinit started the socket was still there (lstat: %v, send: %v), want it closed and unlinked", lstatErr, sendErr)
 	}
 }

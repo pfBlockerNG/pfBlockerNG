@@ -1072,7 +1072,8 @@ func intOf(value int64) int {
 
 // rebuildAndSwap is ADR-10's single fail-closed step: build a brand-new snapshot, publish it atomically, reset the
 // query memo. buildSnapshot returns a snapshot built off to the side (it must write nothing live) or an error for a
-// failed build; a nil snapshot is a failed build too. On success the new snapshot is stored, decisionDB is cleared
+// failed build; a nil snapshot is a failed build too, and so is a panic of the builder, which is logged like an error
+// (Python's `except Exception`). On success the new snapshot is stored, decisionDB is cleared
 // (the clear alone is no guard, since a query that captured the OLD snapshot can memoize after it, issue #1074:
 // every memo is also stamped with its snapshot's generation, and a reader rejects a foreign one), the regex runtime is
 // reset, and with emitCounts the UI counts and the reject-stats artifact are rewritten from the new snapshot. On
@@ -1091,7 +1092,14 @@ func intOf(value int64) int {
 // survives it and one that lands while the reload builds is carried. A published table is never written (a control
 // command clones before it writes), so the new snapshot shares the live one's maps.
 func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emitCounts bool) bool {
-	next, err := buildSnapshot()
+	next, err := func() (next *snapshot, err error) {
+		defer func() { // Python's `except Exception` around build_snapshot(): a raise reads as a returned failure
+			if v := recover(); v != nil {
+				err = fmt.Errorf("%v", v)
+			}
+		}()
+		return buildSnapshot()
+	}()
 	if err != nil {
 		logErr("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: " + err.Error())
 		return false
