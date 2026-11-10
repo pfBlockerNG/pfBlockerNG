@@ -36,6 +36,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_software_write_cache')]
 #[CoversFunction('pfb_pkg_latest')]
 #[CoversFunction('pfb_software_check_enabled')]
+#[CoversFunction('pfb_software_notice_text')]
 final class SoftwareUpdateCheckTest extends TestCase
 {
 	private string $dbdir = '';
@@ -802,5 +803,74 @@ final class SoftwareUpdateCheckTest extends TestCase
 
 		$this->assertSame('pfblockerng-edge', $cache['repo'], 'the cache is rescoped to the new catalogue');
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the new catalogue gets its own first notice');
+	}
+
+	/** A notes.json for $version as the publisher writes it: release link on v<version>. */
+	private function notesFor(string $version): string
+	{
+		return json_encode([
+			'schema'  => 1,
+			'version' => $version,
+			'items'   => ['Fixed DNSBL reload'],
+			'total'   => 1,
+			'link'    => ['kind' => 'release', 'tag' => 'v' . $version],
+		], JSON_THROW_ON_ERROR);
+	}
+
+	/**
+	 * Given a page-displayable build with an update available and a notes.json for that exact version,
+	 * When the check runs,
+	 * Then the one filed notice carries the enriched text and the de-dupe state is still recorded.
+	 */
+	public function testNoticeCarriesNotesForTheAnnouncedVersion(): void
+	{
+		$this->setCheck('on');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		$cache = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9') + ['notes' => $this->notesFor('3.2.0_9')]);
+
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice');
+		$this->assertSame(implode("\n", [
+			'pfBlockerNG 3.2.0_9 available (devel)',
+			"What's new:",
+			'- Fixed DNSBL reload',
+			'Full notes: https://github.com/pfBlockerNG/pfBlockerNG/releases/tag/v3.2.0_9',
+		]), $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertSame('3.2.0_9', $cache['last_notified'], 'after: de-dupe state still recorded');
+	}
+
+	public function testNoticeKeepsBaseLineWhenNotesAreForAnotherVersion(): void
+	{
+		$this->setCheck('on');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9') + ['notes' => $this->notesFor('3.2.0_8')]);
+
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice');
+		$this->assertSame('pfBlockerNG 3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	public function testInjectedIoWithoutNotesKeyKeepsBaseLine(): void
+	{
+		$this->setCheck('on');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice');
+		$this->assertSame('pfBlockerNG 3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	public function testNotesDoNotRenotifyTheSameVersionAcrossTicks(): void
+	{
+		$this->setCheck('on');
+		$io = $this->ourBuildIo('3.2.0_1', '3.2.0_9') + ['notes' => $this->notesFor('3.2.0_9')];
+
+		pfb_software_update_check(false, $io);
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 1: exactly one notice');
+		$this->assertSame('3.2.0_9', $this->readCache()['last_notified'], 'before tick 2: 3.2.0_9 recorded');
+
+		pfb_software_update_check(false, $io);
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 2: still one notice (de-duped)');
 	}
 }
