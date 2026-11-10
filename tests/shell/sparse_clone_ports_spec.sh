@@ -267,10 +267,10 @@ GITEOF
   # refusal above makes that input unreachable, so pin the argv git actually receives instead.
   Describe 'git receives the REF after --'
     fetch_argv() {
-      : > "$GIT_ARGV_LOG"
+      true > "$GIT_ARGV_LOG"
       if [ "$1" = reuse ]; then
         git_fixture clone -q "$URL" "$DEST" >/dev/null 2>&1
-        : > "$GIT_ARGV_LOG"
+        true > "$GIT_ARGV_LOG"
       fi
       sh "$SCRIPT" "$URL" "$2" "$DEST" testing 8.3 py311 >/dev/null 2>&1
       grep '^-C .* fetch ' "$GIT_ARGV_LOG" | sed 's|^-C [^ ]* ||'
