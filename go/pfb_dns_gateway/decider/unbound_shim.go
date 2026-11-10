@@ -1,6 +1,8 @@
 // Go translation of src/usr/local/pkg/pfblockerng/dns_proxy/unbound_shim.py: the constants, reply objects and query
-// state of the Unbound API that pythonmod gives pfb_unbound.py. The callback registry, install/uninstall and the
-// observer's EDNS options come with the rows that need them.
+// state of the Unbound API that pythonmod gives pfb_unbound.py, with the upstream's EDNS options. There is no callback
+// registry: the one callback the module registers for query_response is called directly (fireQueryResponse in
+// pfb_unbound_upstream.go), and the reply callbacks by fireReplyCallback (pfb_unbound_log.go). Install and uninstall
+// come with the rows that need them.
 package decider
 
 import (
@@ -296,6 +298,8 @@ type moduleQstate struct {
 	noCacheStore         int
 	clientIP             string
 	clientPort           int
+	// ednsOptsBackInIter is the upstream's EDNS options (qstate.edns_opts_back_in_iter), which only an observer report has.
+	ednsOptsBackInIter []ednsOpt
 	// snap is the matcher snapshot this query decides on: operate() Loads it on the query's first event and every
 	// later event reuses it, so a swap between two events never tears one query across two generations.
 	snap *snapshot

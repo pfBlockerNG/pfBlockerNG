@@ -1,6 +1,7 @@
 // Go translation of src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py: the Frontend that decides one client
-// query, and the replies it builds itself. The observer, CLI, privilege-drop and code-record code, and the module-less
-// path (a Go boot always yields a module or an error), are not part of it.
+// query, and the replies it builds itself. The observer's reports come in through relayUpstreamResponse
+// (pfb_dns_proxy_observer.go); its socket, the CLI, privilege-drop and code-record code, and the module-less path (a Go
+// boot always yields a module or an error), are not part of it.
 package decider
 
 import (
@@ -126,6 +127,8 @@ type Frontend struct {
 	oversizedChaseLogged time.Duration
 	oversizedChaseSeen   bool
 	monotonic            func() time.Duration
+	// malformedReported is the latch of the first malformed observer report: warned about once, never reset.
+	malformedReported bool
 }
 
 func newFrontend(module *pfbUnbound) *Frontend {

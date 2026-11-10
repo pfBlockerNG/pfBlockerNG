@@ -31,6 +31,8 @@ func (o *jsonObject) set(key string, value any) {
 // jsonMaxDepth bounds the recursion.
 // shortcut: Python raises an uncaught RecursionError near 1000 levels, which ends the watcher thread; Go reads anything
 // deeper as no record and the watcher goes on. A hand-written channel file never nests; upgrade if one does.
+// On the observer path Python's limit is its stack depth at the call, not a constant: a report that nests an ignored key
+// between about 990 and 1000 levels fits a datagram, and is read here where Python may refuse it as a RecursionError.
 const jsonMaxDepth = 1000
 
 var jsonNumber = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?`)
@@ -40,13 +42,23 @@ var jsonEscapes = map[byte]byte{'"': '"', '\\': '\\', '/': '/', 'b': '\b', 'f': 
 type jsonParser struct {
 	text string
 	pos  int
+	// surrogates keeps a lone surrogate escape as the str it is in Python (pysem's three-byte encoding of it), where
+	// otherwise it reads as U+FFFD.
+	surrogates bool
 }
 
 // parsePyJSON is json.loads(text): ok is false where Python raises a ValueError.
-// shortcut: a lone surrogate escape ("\ud800") becomes U+FFFD, where Python keeps the surrogate; it only shapes the
-// text of a str()-ed value.
-func parsePyJSON(text string) (value any, ok bool) {
-	p := &jsonParser{text: text}
+// shortcut: a lone surrogate escape ("\ud800") becomes U+FFFD, where Python keeps the surrogate. It reaches only the IP
+// and duration of a control record, which PHP never writes with one: the command rejects them (an IP is not an address, a
+// duration is out of range) in both, and the rejection's message and the log_info line that carries it hold U+FFFD here
+// and the surrogate in Python, which the shim's print to stderr writes as \ud800. No row or log file takes it, so no
+// UnicodeEncodeError is lost. parsePyJSONSurrogates keeps it for the observer's reports, whose rows do; both are pinned
+// by pfb_unbound_control_surrogate_test.go. Upgrade if the control channel's messages must match byte for byte.
+func parsePyJSON(text string) (value any, ok bool) { return parsePyJSONText(text, false) }
+
+// parsePyJSONText parses text; surrogates is jsonParser.surrogates.
+func parsePyJSONText(text string, surrogates bool) (value any, ok bool) {
+	p := &jsonParser{text: text, surrogates: surrogates}
 	value, ok = p.value(0)
 	if !ok {
 		return nil, false
@@ -54,6 +66,9 @@ func parsePyJSON(text string) (value any, ok bool) {
 	p.space()
 	return value, p.pos == len(p.text)
 }
+
+// parsePyJSONSurrogates is parsePyJSON with a lone surrogate escape kept as Python keeps it, for text that reaches a row.
+func parsePyJSONSurrogates(text string) (value any, ok bool) { return parsePyJSONText(text, true) }
 
 func (p *jsonParser) space() {
 	for p.pos < len(p.text) && strings.IndexByte(" \t\n\r", p.text[p.pos]) >= 0 {
@@ -164,7 +179,11 @@ func (p *jsonParser) str() (any, bool) {
 				p.pos = save
 			}
 		}
-		out.WriteRune(r) // a lone surrogate is written as U+FFFD
+		if p.surrogates {
+			pysem.WriteRune(&out, r)
+		} else {
+			out.WriteRune(r) // a lone surrogate is written as U+FFFD
+		}
 	}
 	return nil, false
 }

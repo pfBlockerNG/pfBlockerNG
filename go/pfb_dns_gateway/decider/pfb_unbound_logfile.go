@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
 
 // logQueueMaxsize is PFB_LOG_QUEUE_MAXSIZE.
@@ -141,6 +143,9 @@ func (p *logPipeline) run() {
 
 // write appends one row, reopening the file first if its path no longer names the file that was opened (WatchedFileHandler:
 // the line-cap trim and the viewer clear rotate it). A failure is logged once, until a row is written again.
+// shortcut: Python's logging handler reports every failed record (logging.handleError prints a "--- Logging error ---"
+// traceback to stderr, the reason the same as here), so a run of failing rows is one line here and one traceback per row
+// there. Only the stderr volume differs; the rows that fail and the rows written are the same.
 func (p *logPipeline) write(path, line string) {
 	err := p.append(path, line)
 	if err == nil {
@@ -153,7 +158,42 @@ func (p *logPipeline) write(path, line string) {
 	}
 }
 
+// rowEncodeError is the UnicodeEncodeError Python's UTF-8 codec raises on a row holding a lone surrogate, which only an
+// observer report's name can put there; nil for a row it encodes. The first run of surrogates is the one named, by its
+// position in characters.
+func rowEncodeError(line string) error {
+	start := -1
+	var first rune
+	pos := 0
+	for rest := line; len(rest) > 0; pos++ {
+		r, size := pysem.DecodeRune(rest)
+		rest = rest[size:]
+		surrogate := 0xD800 <= r && r <= 0xDFFF
+		switch {
+		case surrogate && start < 0:
+			start, first = pos, r
+		case surrogate:
+		case start >= 0:
+			return surrogateEncodeError(start, pos-1, first)
+		}
+	}
+	if start >= 0 {
+		return surrogateEncodeError(start, pos-1, first)
+	}
+	return nil
+}
+
+func surrogateEncodeError(start, end int, first rune) error {
+	if start == end {
+		return fmt.Errorf("'utf-8' codec can't encode character '\\u%04x' in position %d: surrogates not allowed", first, start)
+	}
+	return fmt.Errorf("'utf-8' codec can't encode characters in position %d-%d: surrogates not allowed", start, end)
+}
+
 func (p *logPipeline) append(path, line string) error {
+	if err := rowEncodeError(line); err != nil {
+		return err
+	}
 	if wf := p.files[path]; wf != nil {
 		if current, err := os.Stat(path); err != nil || !os.SameFile(wf.info, current) {
 			wf.file.Close()
@@ -184,11 +224,19 @@ func (p *logPipeline) append(path, line string) error {
 
 // logEntryDirect is _log_entry_direct: the synchronous append of a module with no writer, four attempts a quarter of a
 // second apart; the last failure is reported.
+// shortcut: Python writes the attempt-4 line to sys.stderr, which init_standard() points at a logger: it reaches
+// py_error.log as "<asctime>|ERROR| [pfBlockerNG]: log_entry: 4: <reason>", the message stripped, and a message equal to
+// the one before it is not logged again (three rows failing alike leave one line). Go writes "pfb_dns_proxy error:
+// [pfBlockerNG]: log_entry: 4: <reason>" and a newline to the process stderr for every row that fails. The reason is
+// Python's for a row that cannot be encoded; for an OS failure it is Go's text ("open …: no such file or directory"), where
+// Python's is "[Errno 2] No such file or directory: '…'". Upgrade when the module's stderr is translated to py_error.log.
 func logEntryDirect(line, log string) {
 	for attempt := 1; attempt <= 4; attempt++ {
 		file, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
 		if err == nil {
-			_, err = file.WriteString(line + "\n")
+			if err = rowEncodeError(line); err == nil {
+				_, err = file.WriteString(line + "\n")
+			}
 			if closeErr := file.Close(); err == nil {
 				err = closeErr
 			}
