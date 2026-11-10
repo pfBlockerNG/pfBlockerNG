@@ -35,12 +35,13 @@ type watchedFile struct {
 }
 
 type logPipeline struct {
-	queue    chan logRecord
-	paths    map[string]struct{}
-	done     chan struct{}
-	stopOnce sync.Once
-	stopped  atomic.Bool
-	drops    atomic.Int64
+	queue      chan logRecord
+	paths      map[string]struct{}
+	done       chan struct{}
+	stopMu     sync.Mutex // serializes stop; stopQueued is guarded by it
+	stopQueued bool
+	stopped    atomic.Bool
+	drops      atomic.Int64
 	// beforeWrite runs in the writer before each row is written; a test holds the writer there to fill the queue.
 	beforeWrite func()
 
@@ -99,13 +100,23 @@ func (p *logPipeline) flush() {
 	}
 }
 
-// stop writes what is queued, closes the files and ends the writer (QueueListener.stop()); a second stop does nothing.
+// stop asks the writer to write what is queued and end (QueueListener.stop()), and waits for it. The request is queued
+// without waiting, as Python does (put_nowait): on a full queue it is not queued, stop returns at once, and the writer
+// keeps running and writing what is queued, as Python's listener thread does when deinit catches the queue.Full. A stop
+// that did not queue can be tried again; once queued, a further stop only waits for the writer to end.
 func (p *logPipeline) stop() {
-	p.stopOnce.Do(func() {
-		p.stopped.Store(true)
-		p.queue <- logRecord{stop: true}
-		<-p.done
-	})
+	p.stopMu.Lock()
+	defer p.stopMu.Unlock()
+	if !p.stopQueued {
+		select {
+		case p.queue <- logRecord{stop: true}:
+			p.stopQueued = true
+			p.stopped.Store(true)
+		default:
+			return
+		}
+	}
+	<-p.done
 }
 
 func (p *logPipeline) run() {

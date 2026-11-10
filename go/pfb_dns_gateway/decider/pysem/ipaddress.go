@@ -224,7 +224,6 @@ var (
 	ipv4PrivateExceptions = prefixes("192.0.0.9/32", "192.0.0.10/32")
 	ipv6Private           = prefixes("::1/128", "::/128", "::ffff:0.0.0.0/96", "64:ff9b:1::/48", "100::/64", "2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20", "fc00::/7", "fe80::/10")
 	ipv6PrivateExceptions = prefixes("2001:1::1/128", "2001:1::2/128", "2001:3::/32", "2001:4:112::/48", "2001:20::/28", "2001:30::/28")
-	ipv4Loopback          = netip.MustParsePrefix("127.0.0.0/8")
 )
 
 func inAny(networks []netip.Prefix, addr netip.Addr) bool {
@@ -238,28 +237,18 @@ func inAny(networks []netip.Prefix, addr netip.Addr) bool {
 
 // IPv4Mapped is the IPv4 address (4 bytes) inside an IPv4-mapped IPv6 address (::ffff:0:0/96), else nil.
 func IPv4Mapped(packed []byte) []byte {
-	if len(packed) != 16 {
-		return nil
+	if addr, _ := netip.AddrFromSlice(packed); addr.Is4In6() {
+		mapped := addr.Unmap().As4()
+		return mapped[:]
 	}
-	for _, b := range packed[:10] {
-		if b != 0 {
-			return nil
-		}
-	}
-	if packed[10] != 0xff || packed[11] != 0xff {
-		return nil
-	}
-	return packed[12:]
+	return nil
 }
 
 // IsPrivate is .is_private: the address is not globally reachable by the IANA special-purpose registries (but
 // 100.64.0.0/10 is not private), and an IPv4-mapped address is as private as its IPv4 address.
 func IsPrivate(packed []byte) bool {
-	if mapped := IPv4Mapped(packed); mapped != nil {
-		return IsPrivate(mapped)
-	}
 	addr, _ := netip.AddrFromSlice(packed)
-	if addr.Is4() {
+	if addr = addr.Unmap(); addr.Is4() {
 		return inAny(ipv4Private, addr) && !inAny(ipv4PrivateExceptions, addr)
 	}
 	return inAny(ipv6Private, addr) && !inAny(ipv6PrivateExceptions, addr)
@@ -267,26 +256,14 @@ func IsPrivate(packed []byte) bool {
 
 // IsLoopback is .is_loopback: 127.0.0.0/8, ::1, and an IPv4-mapped address whose IPv4 address is loopback.
 func IsLoopback(packed []byte) bool {
-	if mapped := IPv4Mapped(packed); mapped != nil {
-		return IsLoopback(mapped)
-	}
-	if len(packed) == 4 {
-		return ipv4Loopback.Contains(netip.AddrFrom4([4]byte(packed)))
-	}
-	return netip.AddrFrom16([16]byte(packed)) == netip.IPv6Loopback()
+	addr, _ := netip.AddrFromSlice(packed)
+	return addr.Unmap().IsLoopback()
 }
 
 // IsUnspecified is .is_unspecified: 0.0.0.0 or ::, and an IPv4-mapped address whose IPv4 address is 0.0.0.0.
 func IsUnspecified(packed []byte) bool {
-	if mapped := IPv4Mapped(packed); mapped != nil {
-		return IsUnspecified(mapped)
-	}
-	for _, b := range packed {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
+	addr, _ := netip.AddrFromSlice(packed)
+	return addr.Unmap().IsUnspecified()
 }
 
 // Compressed is .compressed (and str()): dotted decimal, or the shortest IPv6 text, an IPv4-mapped one ending in

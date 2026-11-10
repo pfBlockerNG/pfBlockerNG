@@ -5,6 +5,8 @@ package decider
 import (
 	"fmt"
 	"net/netip"
+	"strconv"
+	"strings"
 
 	"github.com/oschwald/maxminddb-golang/v2"
 
@@ -38,7 +40,8 @@ func (m *pfbUnbound) closeMaxmind() {
 }
 
 // geoIPCode is the country (else the continent) of the address in the reply column: prv for a private one, l.b. for a
-// loopback one, unk for anything that is not an address, is not in the database or fails to look up.
+// loopback one, unk for anything that is not an address, is not in the database or fails to look up (a scope id the
+// reader refuses is such a failure).
 func (m *pfbUnbound) geoIPCode(settings *pfbSettings, rAddr string) string {
 	const unknown = "unk"
 	if !settings.pythonMaxmind || m.maxmind == nil {
@@ -57,6 +60,14 @@ func (m *pfbUnbound) geoIPCode(settings *pfbSettings, rAddr string) string {
 		return "prv"
 	case pysem.IsLoopback(packed):
 		return "l.b."
+	}
+	// maxminddb's get() takes the text, and libmaxminddb refuses a scope id that is not a decimal number up to 2**32-1
+	// (what an interface name is), as a ValueError: unk. pysem drops the scope from the packed address.
+	if _, scope, scoped := strings.Cut(rAddr, "%"); scoped {
+		if _, err := strconv.ParseUint(scope, 10, 32); err != nil {
+			logErr(fmt.Sprintf("[pfBlockerNG]: MaxMind Reader failed: %s does not appear to be an IPv4 or IPv6 address.: IP: %s", pysem.Repr(rAddr), rAddr))
+			return unknown
+		}
 	}
 	addr, _ := netip.AddrFromSlice(packed)
 	var record geoRecord

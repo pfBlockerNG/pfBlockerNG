@@ -9,6 +9,14 @@ import (
 	"testing"
 )
 
+// stopModule ends what init_standard started for a module booted by a test (deinit's stop of the log writer and close of the
+// GeoIP reader) when the test ends, so no test leaks a writer goroutine.
+func stopModule(t *testing.T, m *pfbUnbound) {
+	t.Helper()
+	t.Cleanup(m.closeMaxmind)
+	t.Cleanup(m.stopLogging)
+}
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "pfblogs")
 	if err != nil {

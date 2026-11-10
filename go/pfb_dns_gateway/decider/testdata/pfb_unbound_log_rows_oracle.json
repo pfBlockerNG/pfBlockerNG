@@ -7308,6 +7308,396 @@
        [
         "TXT",
         [
+         "001110666431323a333435363a3a3125656d30"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,fd12:3456::1%em0,prv,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "0015143a3a666666663a3132372e302e302e3125656d30"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,::ffff:127.0.0.1%em0,prv,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "0014133a3a666666663a31302e302e302e3125656d30"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,::ffff:10.0.0.1%em0,prv,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "00100f323030313a3231383a3a3125656d30"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%em0,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "000e0d323030313a3231383a3a312531"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%1,JP,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "000e0d323030313a3231383a3a312530"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%0,JP,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "00201f3a3a666666663a322e3132352e3136302e3231362534323934393637323935"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,::ffff:2.125.160.216%4294967295,GB,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "001716323030313a3231383a3a312534323934393637323936"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%4294967296,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "000f0e323030313a3231383a3a31253161"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%1a,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "000f0e323030313a3231383a3a31252b31"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%+1,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "00100f323030313a3231383a3a3125efbc91"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2001:218::1%\u00ef\u00bc\\145,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "0019183a3a666666663a322e3132352e3136302e32313625656d30"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,::ffff:2.125.160.216%em0,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
+         "001110326130323a643530303a3a3125656d30"
+        ]
+       ]
+      ]
+     },
+     "kwargs": {
+      "pfb_addr": "192.0.2.7"
+     },
+     "raises": false,
+     "rows": [
+      [
+       "dns_reply.log",
+       "DNS-reply,2026-10-18 12:00:00,reply,TXT,TXT,300,geo.example,192.0.2.7,2a02:d500::1%em0,unk,Unknown,,"
+      ]
+     ]
+    },
+    {
+     "op": "details_reply",
+     "m_type": "reply",
+     "qstate": {
+      "qname": "geo.example.",
+      "qtype": 16
+     },
+     "qinfo": null,
+     "rep": {
+      "ttl": 300,
+      "rrsets": [
+       [
+        "TXT",
+        [
          "000605312e322e33"
         ]
        ]

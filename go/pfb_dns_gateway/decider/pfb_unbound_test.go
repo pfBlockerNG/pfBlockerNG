@@ -41,6 +41,7 @@ func modMust(t *testing.T, dir string) *pfbUnbound {
 	if err != nil || m == nil {
 		t.Fatalf("initStandard(%q) = (%v, %v), want a module and nil", dir, m, err)
 	}
+	stopModule(t, m)
 	return m
 }
 

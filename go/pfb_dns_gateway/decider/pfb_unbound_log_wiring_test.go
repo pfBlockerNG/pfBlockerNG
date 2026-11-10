@@ -24,7 +24,7 @@ func geoModule(t *testing.T, reply string, database string) (*pfbUnbound, string
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(m.stopLogging)
+	stopModule(t, m)
 	return m, logs.String()
 }
 

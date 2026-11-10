@@ -318,7 +318,7 @@ func TestLogRowsMatchPython(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(m.stopLogging)
+			stopModule(t, m)
 			m.clock = func() time.Time { return time.Unix(o.Now, 0).UTC() }
 			var rows [][2]string
 			m.logSink = func(name, line string) { rows = append(rows, [2]string{name, line}) }

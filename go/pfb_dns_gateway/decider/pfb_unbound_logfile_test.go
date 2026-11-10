@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,19 +74,53 @@ func TestPipelineOpensAFileOnItsFirstRowNotAtStart(t *testing.T) {
 	}
 }
 
+// stuckWatchdog bounds a wait that only a stuck run exceeds: it is how a blocking emit or stop is reported, as an
+// assertion, instead of a hung test. It is never part of an expected outcome.
+const stuckWatchdog = 5 * time.Second
+
+// within runs f and reports whether it returned before the watchdog; a run that did not is left to finish when the test's
+// cleanups release what holds it.
+func within(f func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(stuckWatchdog):
+		return false
+	}
+}
+
+// stuckWriter holds the pipeline's writer in its first write until the test ends (or release is called), and returns
+// once the writer is inside it.
+func stuckWriter(t *testing.T, p *logPipeline, path string) (release func()) {
+	t.Helper()
+	entered, gate := make(chan struct{}, 1), make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release) // runs before the pipeline's stop, which was registered first
+	p.beforeWrite = func() {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-gate
+	}
+	p.emit(path, "first")
+	<-entered
+	return release
+}
+
 func TestPipelineDropsWhenFullAndNeverBlocksTheQuery(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.log")
 	const size = 8
 	p := newLogPipeline([]string{a}, size)
 	t.Cleanup(p.stop)
-	entered, release := make(chan struct{}, 1), make(chan struct{})
-	p.beforeWrite = func() {
-		entered <- struct{}{}
-		<-release
-	}
-	p.emit(a, "first")
-	<-entered // the writer holds "first" and is stuck: the queue itself is empty
+	release := stuckWriter(t, p, a) // the writer holds "first": the queue itself is empty
 	for i := range size {
 		p.emit(a, fmt.Sprintf("queued %d", i))
 	}
@@ -93,14 +128,17 @@ func TestPipelineDropsWhenFullAndNeverBlocksTheQuery(t *testing.T) {
 		t.Fatalf("dropped = %d after filling the queue exactly, want 0", p.dropped())
 	}
 	const extra = 5
-	for i := range extra {
-		p.emit(a, fmt.Sprintf("dropped %d", i)) // each returns at once with the writer stuck
+	if !within(func() {
+		for i := range extra {
+			p.emit(a, fmt.Sprintf("dropped %d", i))
+		}
+	}) {
+		t.Fatalf("emit blocked on a full queue with the writer stuck: the DNS path would wait on the disk")
 	}
 	if p.dropped() != extra {
 		t.Errorf("dropped = %d, want %d: pfb[\"log_dropped\"] counts every row the full queue refused", p.dropped(), extra)
 	}
-	p.beforeWrite = nil
-	close(release)
+	release()
 	p.flush()
 	want := "first\n"
 	for i := range size {
@@ -108,6 +146,46 @@ func TestPipelineDropsWhenFullAndNeverBlocksTheQuery(t *testing.T) {
 	}
 	if got := readLog(t, a); got != want {
 		t.Errorf("a.log = %q, want %q: the dropped rows never reach the file", got, want)
+	}
+}
+
+// Python's QueueListener.stop() queues its sentinel with put_nowait; deinit catches the queue.Full it raises (and never
+// reaches the join), so the listener thread lives on and writes what is queued. stop() here returns at once, leaves the
+// writer running to drain the queue, and can be tried again.
+func TestPipelineStopOnAFullQueueWithAStuckWriterReturnsAndLeavesTheWriterDraining(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.log")
+	const size = 4
+	p := newLogPipeline([]string{a}, size)
+	t.Cleanup(p.stop)
+	release := stuckWriter(t, p, a)
+	for i := range size {
+		p.emit(a, fmt.Sprintf("queued %d", i))
+	}
+	if !within(p.stop) {
+		t.Fatal("stop blocked on a full queue with the writer stuck: deinit would hang the module's shutdown")
+	}
+	select {
+	case <-p.done:
+		t.Fatal("the writer ended with its queue not drained: Python's listener thread keeps running when the sentinel does not fit")
+	default:
+	}
+	release()
+	p.flush() // the writer is still serving the queue
+	want := "first\n"
+	for i := range size {
+		want += fmt.Sprintf("queued %d\n", i)
+	}
+	if got := readLog(t, a); got != want {
+		t.Errorf("a.log = %q, want %q: every queued row is still written", got, want)
+	}
+	if !within(p.stop) {
+		t.Fatal("a second stop, with room in the queue, did not return")
+	}
+	select {
+	case <-p.done:
+	default:
+		t.Error("the writer is still running after a stop that was queued: it ends once it reads the stop")
 	}
 }
 
@@ -295,7 +373,7 @@ func moduleWithLogs(t *testing.T, dir string) (*pfbUnbound, *Frontend) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(m.stopLogging)
+	stopModule(t, m)
 	return m, newFrontend(m)
 }
 
