@@ -17,7 +17,7 @@ var translated = map[string]bool{
 	"relay": true, "zone_exact": true, "zone_wildcard": true, "tld_block": true, "tld_allow": true, "psl": true,
 	"idn": true, "regex": true, "abp": true, "allow": true, "allow_band": true, "hsts": true, "response": true,
 	"qtype": true, "in_addr_arpa": true, "group_policy": true, "cname": true, "noaaaa": true, "safesearch": true,
-	"top1m": true,
+	"top1m": true, "safesearch_cname": true, "frontend": true,
 }
 
 // divergent lists the cases of translated families where the Go decider differs from the Python oracle and the owner

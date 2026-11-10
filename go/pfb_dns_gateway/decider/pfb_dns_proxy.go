@@ -4,6 +4,7 @@
 package decider
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"slices"
@@ -121,7 +122,10 @@ type Frontend struct {
 	module        *pfbUnbound
 	silenceLogged time.Duration // when "no reply from Unbound" was last logged, on the monotonic clock
 	silenceSeen   bool          // Python starts silenceLogged at -inf; a Duration has no such value
-	monotonic     func() time.Duration
+	// when an oversized SafeSearch chase was last logged, likewise
+	oversizedChaseLogged time.Duration
+	oversizedChaseSeen   bool
+	monotonic            func() time.Duration
 }
 
 func newFrontend(module *pfbUnbound) *Frontend {
@@ -166,7 +170,8 @@ func (f *Frontend) unchanged(wire []byte, query *dnswire.Message, fwd forward) [
 // nil means the packet is dropped. The header is checked before anything is parsed, so a hostile packet costs a
 // constant, and every FORMERR is header-only. Only `transport == "UDP"` holds a built reply to the client's advertised
 // size (a relayed reply already is: Unbound saw that size). A query Unbound answers itself (see moduleDecides) is
-// forwarded unchanged: its reply is the client's answer.
+// forwarded unchanged: its reply is the client's answer. The gateway asks Unbound again over TCP for a truncated reply
+// to a SafeSearch chase.
 func (f *Frontend) resolve(wire []byte, clientIP string, fwd forward, transport, listenerIP, listenerInterface string) []byte {
 	if len(wire) < 12 || wire[2]&0x80 != 0 { // no header, or a response: never answered (no reflection loops)
 		return nil
@@ -231,8 +236,9 @@ func (f *Frontend) resolve(wire []byte, clientIP string, fwd forward, transport,
 			}
 		}
 	}
-	// MODULE_RESTART_NEXT (Python's _chase_cname) comes with the safesearch_cname family: until then it is "not
-	// FINISHED", a SERVFAIL, like every other state but the one below.
+	if state == MODULE_RESTART_NEXT {
+		state = f.chaseCname(query, qstate, fwd)
+	}
 	if state != MODULE_FINISHED {
 		qstate.returnMsg, qstate.returnRcode, relay = nil, RCODE_SERVFAIL, nil
 	}
@@ -246,6 +252,71 @@ func (f *Frontend) resolve(wire []byte, clientIP string, fwd forward, transport,
 		return nil
 	}
 	return reply
+}
+
+// chaseId is secrets.randbits(16): the 16 bits of a chase's id come from crypto/rand, not math/rand/v2. The id is all an
+// off-path sender of a forged answer to the chase has to guess, and Python's `secrets` is the CSPRNG for that; one
+// two-byte read per chase costs nothing next to the round trip it starts, and since Go 1.24 Read never fails.
+func chaseId() uint16 {
+	var id [2]byte
+	_, _ = rand.Read(id[:])
+	return binary.BigEndian.Uint16(id[:])
+}
+
+// chaseCname emulates MODULE_RESTART_NEXT as the SafeSearch CNAME redirect uses it (safesearchCnameRedirect).
+//
+// The module planted orig -> CNAME -> target and expects Unbound's iterator to chase the target, then runs its
+// post-resolution pass on the combined answer. Unbound will not chase a CNAME a module hands it, so this plays the
+// iterator: ask Unbound for the target as the same client, give the module the planted CNAME plus the target's answer
+// records, and run that pass once. A chase that finds nothing leaves the CNAME alone in the message, which is what makes
+// the module answer with its baked address. The chase carries the client's CD bit and EDNS options. A chase over
+// MAX_DNS_MESSAGE bytes is never forwarded: the state is MODULE_ERROR, a SERVFAIL. Returns the module's state.
+//
+// A failure Python raises through resolve's `except Exception` (an unreadable target, a chase that cannot be encoded,
+// a reply that is not a DNS message) is logged here and is MODULE_ERROR, as there.
+func (f *Frontend) chaseCname(query *dnswire.Message, qstate *moduleQstate, fwd forward) int {
+	planted := qstate.returnMsg
+	if planted == nil || len(planted.answer) != 1 || planted.answer[0].Rtype != dnswire.TYPE_CNAME {
+		logErr("MODULE_RESTART_NEXT without a planted CNAME referral")
+		return MODULE_ERROR
+	}
+	cname := planted.answer[0]
+	name, err := dnswire.NameFromRdata(cname.Rdata)
+	if err != nil {
+		logErr(err.Error())
+		return MODULE_ERROR
+	}
+	target := dnswire.Question{Name: name, Qtype: planted.qinfo.qtype, Qclass: planted.qinfo.qclass}
+	chase := &dnswire.Message{
+		ID:         chaseId(),
+		Flags:      dnswire.RD | (query.Flags & dnswire.CD),
+		Questions:  []dnswire.Question{target},
+		Additional: ednsFor(query, true),
+	}
+	wire, err := dnswire.Encode(chase)
+	if err != nil {
+		logErr(err.Error())
+		return MODULE_ERROR
+	}
+	if len(wire) > MAX_DNS_MESSAGE {
+		if now := f.monotonic(); !f.oversizedChaseSeen || now-f.oversizedChaseLogged >= SILENCE_LOG_INTERVAL { // a client can repeat it
+			f.oversizedChaseLogged, f.oversizedChaseSeen = now, true
+			logErr(fmt.Sprintf("SafeSearch chase for %s is %d bytes, over one DNS message; SERVFAIL", target.Name, len(wire)))
+		}
+		return MODULE_ERROR
+	}
+	var answers []dnswire.RR
+	if reply := fwd(wire); reply != nil {
+		message, err := dnswire.Parse(reply) // an unparseable reply is a SERVFAIL, as above
+		if err != nil {
+			logErr(err.Error())
+			return MODULE_ERROR
+		}
+		answers = message.Answers
+	}
+	qstate.returnMsg = newDnsMsg(planted.qinfo, planted.rep.flags, slices.Concat([]dnswire.RR{cname}, answers), nil, nil)
+	// A module that asks for yet another restart is not obeyed: the chased answer is final, so that is a SERVFAIL.
+	return f.operate(qstate, MODULE_EVENT_MODDONE)
 }
 
 // send replies to the client the way mesh_send_reply does: rcode != 0 is a bare error, no message is SERVFAIL. A

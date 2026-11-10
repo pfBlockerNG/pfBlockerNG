@@ -4,6 +4,7 @@ package decider
 
 import (
 	"bytes"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -356,6 +357,21 @@ func TestLogFunctionsWriteTheLevelAndTheMessage(t *testing.T) {
 	want := "pfb_dns_proxy info: alpha\npfb_dns_proxy warning: beta\npfb_dns_proxy error: gamma\n"
 	if out.String() != want {
 		t.Errorf("log output = %q, want %q", out.String(), want)
+	}
+}
+
+// The SafeSearch pass calls both for every query and the proxy runs for weeks: neither keeps anything or touches the query.
+func TestTheCacheCallsAreNoOpsThatRememberNothing(t *testing.T) {
+	qstate := newModuleQstate(queryInfo{qnameStr: "duck.example.", qtype: dnswire.TYPE_A, qclass: dnswire.CLASS_IN}, "192.0.2.10", 0, 0, "UDP", "", "")
+	before := *qstate
+	for range 1000 {
+		if !storeQueryInCache(qstate, qstate.qinfo, nil, 1) {
+			t.Fatal("storeQueryInCache = false, want true: the shim's store always succeeds")
+		}
+		invalidateQueryInCache(qstate, qstate.qinfo)
+	}
+	if !reflect.DeepEqual(*qstate, before) {
+		t.Errorf("the cache calls changed the query state to %+v, was %+v", *qstate, before)
 	}
 }
 
