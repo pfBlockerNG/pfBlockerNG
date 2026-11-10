@@ -62,7 +62,7 @@ func newSqlRig(t *testing.T, main string, presql map[string][]string) *sqlRig {
 	previous := dbRetrySleep
 	dbRetrySleep = func(time.Duration) { r.sleeps.Add(1) }
 	t.Cleanup(func() { dbRetrySleep = previous })
-	m, err := boot(r.dir)
+	m, err := boot(r.dir, testLogDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +71,16 @@ func newSqlRig(t *testing.T, main string, presql map[string][]string) *sqlRig {
 	m.stopDbWorker()
 	t.Cleanup(func() { m.closeDb(); m.stopLogging() })
 	return r
+}
+
+// dropDbConnections closes every connection of the module and leaves the module open: the next use opens the database
+// again, as after a fault. (closeDb is deinit's, after which nothing opens again.)
+func dropDbConnections(m *pfbUnbound) {
+	m.dbMu.Lock()
+	defer m.dbMu.Unlock()
+	for db := range m.dbConns {
+		m.dbCloseLocked(db)
+	}
 }
 
 func resolverEvent(qtype, transport string) dbEvent {
@@ -324,7 +334,7 @@ func TestSqliteFailedBatchCannotResurrectClients(t *testing.T) {
 	for _, db := range []int{dbResolver, dbDnsbl} {
 		sqlExec(t, r.path(db), "UPDATE dns_metric_settings SET client_ip=1, epoch='"+old+"' WHERE row=0")
 	}
-	r.m.closeDb()
+	dropDbConnections(r.m)
 	r.m.dbCapturePrivacyEpochs()
 	for _, db := range []int{dbResolver, dbDnsbl} {
 		if got := r.m.metricsPrivacyEpochs[db]; got != old {
@@ -465,7 +475,7 @@ func TestSqliteUnsupportedSchemaIsRefusedAndRolledBack(t *testing.T) {
 
 func TestSqliteRecoversACorruptDatabase(t *testing.T) {
 	r := newSqlRig(t, "", nil)
-	r.m.closeDb()
+	dropDbConnections(r.m)
 	path := r.path(dbResolver)
 	for _, file := range []string{path, path + "-wal", path + "-shm"} {
 		if err := os.WriteFile(file, []byte("this is not a database, nor its journal"), 0o644); err != nil {
@@ -489,7 +499,7 @@ func TestSqliteRecoversACorruptDatabase(t *testing.T) {
 // that sits next to a zero-length database file, so a recovery that left it behind would pass too.)
 func TestSqliteRecoveryRemovesTheStaleSidecars(t *testing.T) {
 	r := newSqlRig(t, "", nil)
-	r.m.closeDb()
+	dropDbConnections(r.m)
 	path := r.path(dbResolver)
 	other := filepath.Join(t.TempDir(), "other.sqlite")
 	pool, err := sql.Open("sqlite", other)
@@ -537,7 +547,7 @@ func TestSqliteRecoveryRemovesTheStaleSidecars(t *testing.T) {
 // validate reports false.
 func TestSqliteRecoveryNeverRemovesADirectory(t *testing.T) {
 	r := newSqlRig(t, "", nil)
-	r.m.closeDb()
+	dropDbConnections(r.m)
 	path := r.path(dbResolver)
 	for _, file := range []string{path, path + "-wal", path + "-shm"} {
 		os.Remove(file)
@@ -577,7 +587,7 @@ func TestSqliteRecoveryNeverRemovesADirectory(t *testing.T) {
 // lock would let another in.
 func TestSqliteConcurrentRecoveryKeepsTheWinnersDatabase(t *testing.T) {
 	r := newSqlRig(t, "", nil)
-	r.m.closeDb()
+	dropDbConnections(r.m)
 	path := r.path(dbResolver)
 	if err := os.WriteFile(path, []byte("garbage, not a database"), 0o644); err != nil {
 		t.Fatal(err)
@@ -871,7 +881,7 @@ func statsOutageModule(t *testing.T) *pfbUnbound {
 	previous := dbRetrySleep
 	dbRetrySleep = func(time.Duration) {}
 	t.Cleanup(func() { dbRetrySleep = previous })
-	m, err := boot(dir)
+	m, err := boot(dir, testLogDir)
 	if err != nil {
 		t.Fatalf("a stats database that cannot open failed the boot: %v", err)
 	}
@@ -896,7 +906,7 @@ func TestSqliteDnsKeepsAnsweringWhenTheStatsDatabasesCannotOpen(t *testing.T) {
 	}
 	f := newFrontend(m)
 	wire := qtypeWire(t, "lf1.example.", 1)
-	answer := f.resolve(wire, "192.0.2.10", func([]byte) []byte {
+	answer := f.Resolve(wire, "192.0.2.10", func([]byte) []byte {
 		t.Error("a blocked name was forwarded")
 		return nil
 	}, "UDP", "", "")
@@ -958,7 +968,7 @@ func TestSqlitePrivacyAuthorityFailureNeverBreaksDns(t *testing.T) {
 	for _, db := range []int{dbResolver, dbDnsbl} {
 		sqlExec(t, r.path(db), "UPDATE dns_metric_settings SET client_ip=1 WHERE row=0")
 	}
-	r.m.closeDb()
+	dropDbConnections(r.m)
 	for _, db := range []int{dbResolver, dbDnsbl} {
 		if err := os.Remove(r.path(db)); err != nil {
 			t.Fatal(err)

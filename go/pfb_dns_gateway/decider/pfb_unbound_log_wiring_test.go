@@ -20,7 +20,7 @@ func geoModule(t *testing.T, reply string, database string) (*pfbUnbound, string
 	if err := os.WriteFile(filepath.Join(dir, "pfb_py_sources.json"), []byte(`{"version":1,"config":{},"feeds":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m, err := boot(dir)
+	m, err := boot(dir, testLogDir)
 	if err != nil {
 		t.Fatal(err)
 	}

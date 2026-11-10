@@ -50,7 +50,7 @@ func forwardingModuleWithLogs(t *testing.T, dir string) (*pfbUnbound, *Frontend,
 	if err := os.WriteFile(filepath.Join(moduleDir, "pfb_unbound.ini"), []byte("[MAIN]\npython_enable = true\nforwarding = true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m, err := boot(moduleDir)
+	m, err := boot(moduleDir, testLogDir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -135,7 +135,7 @@ func TestObserverReportsMatchPython(t *testing.T) {
 			var frontend *Frontend
 			start := func() {
 				var err error
-				if m, err = boot(dir); err != nil {
+				if m, err = boot(dir, testLogDir); err != nil {
 					t.Fatal(err)
 				}
 				m.clock = func() time.Time { return time.Unix(o.Now, 0).UTC() }
@@ -148,7 +148,7 @@ func TestObserverReportsMatchPython(t *testing.T) {
 			// probe is Frontend.resolve's answer to the fixed query; the rows the query itself writes are not the scenario's.
 			probe := func() *string {
 				mark := len(rows)
-				answer := newFrontend(m).resolve(mustHex(t, o.Probe.Wire), o.Probe.Client, func([]byte) []byte {
+				answer := newFrontend(m).Resolve(mustHex(t, o.Probe.Wire), o.Probe.Client, func([]byte) []byte {
 					return mustHex(t, o.Probe.Reply)
 				}, o.Probe.Transport, "", "")
 				rows = rows[:mark]
@@ -192,7 +192,7 @@ func TestObserverReportsMatchPython(t *testing.T) {
 				}
 				for _, probe := range step.Fresh {
 					mark := len(rows)
-					answer := newFrontend(m).resolve(mustHex(t, probe[1]), o.Probe.Client, func([]byte) []byte {
+					answer := newFrontend(m).Resolve(mustHex(t, probe[1]), o.Probe.Client, func([]byte) []byte {
 						return mustHex(t, probe[2])
 					}, o.Probe.Transport, "", "")
 					rows = rows[:mark]

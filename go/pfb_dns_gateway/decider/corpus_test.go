@@ -65,7 +65,7 @@ func bootScenario(t *testing.T, s *paritycorpus.Scenario) (*pfbUnbound, *Fronten
 	if err := paritycorpus.WriteModule(dir, s.Module); err != nil {
 		t.Fatal(err)
 	}
-	module, err := boot(dir)
+	module, err := boot(dir, testLogDir)
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -79,7 +79,7 @@ func resolveCase(f *Frontend, s *paritycorpus.Scenario, c *paritycorpus.Case) []
 	u := paritycorpus.NewFakeUnbound(s.Upstream)
 	var lines []string
 	// The decider gets its own copy of the wire: it cannot change under the comparison with the FORWARD.
-	answer := f.resolve(bytes.Clone(c.Query.Wire), c.Query.Client, func(w []byte) []byte {
+	answer := f.Resolve(bytes.Clone(c.Query.Wire), c.Query.Client, func(w []byte) []byte {
 		reply, err := u.Answer(w)
 		if err != nil {
 			lines = append(lines, "FakeUnbound: "+err.Error())

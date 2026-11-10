@@ -7,11 +7,12 @@
 // here is joined onto moduleDir. The decision data (the DBs, the settings a decision reads) lives in the one
 // snapshot the module publishes, not in module fields: see pfbUnbound.snapshot.
 //
-// Not translated yet, each arriving with the family that needs it: the query watcher, the stderr redirect, the module
-// fingerprint, and the retired-cache sweep. The live update (the reload watcher, its RAM gate, its applied marker and
-// the reload builder) is in pfb_unbound_reload.go, the DNSBL control surface (pfb_apply_control_command, its timers and
-// the control watcher) in pfb_unbound_control.go, and the log rows, their files and the GeoIP reader in pfb_unbound_log.go,
-// pfb_unbound_logfile.go and pfb_unbound_geoip.go.
+// Not translated: the module fingerprint (the code record it feeds is replaced by the gateway's executable SHA-256 record,
+// #3791). Not translated yet, each arriving with the family that needs it: the query watcher, the stderr redirect and the
+// retired-cache sweep. The live update (the reload watcher, its RAM gate, its applied marker and the reload builder) is in
+// pfb_unbound_reload.go, the DNSBL control surface (pfb_apply_control_command, its timers and the control watcher) in
+// pfb_unbound_control.go, and the log rows, their files and the GeoIP reader in pfb_unbound_log.go, pfb_unbound_logfile.go
+// and pfb_unbound_geoip.go. deinit (pfbUnbound.deinit) stops what init started, bounded as Python's joins are.
 package decider
 
 import (
@@ -152,6 +153,11 @@ type pfbUnbound struct {
 	// publishMu serializes the publishers of snapshot: rebuildAndSwap, a control command and a control timer's expiry.
 	// Each loads the live snapshot, derives the next from it and stores it, so two of them at once would lose a write.
 	publishMu sync.Mutex
+	// retired is set by deinit under publishMu: from then on nothing is published (a snapshot, an applied marker, the
+	// counts, the status ledger) and the stats database is not opened, so that a reload or a control record that outlives
+	// the bounded stop of its watcher cannot act on a closed module when it ends. The snapshot publishers read it under
+	// publishMu, so that a swap is either stored before deinit or refused; the file writers read it without a lock.
+	retired atomic.Bool
 	// afterFunc starts a control timer (time.AfterFunc's shape; nil is the real one). A test replaces it to fire the
 	// expiry by hand; it must not run f before it returns, as the caller holds publishMu.
 	afterFunc func(delay time.Duration, f func())
@@ -193,6 +199,7 @@ type pfbUnbound struct {
 	// query. dbWorker is the DB I/O worker, nil when none runs (pfb["db_worker"] False), and dbDropped counts the events
 	// its full queue refused (pfb["db_dropped"]).
 	dbMu, dbRecoveryMu   sync.Mutex
+	dbClosed             bool // set by closeDb under dbMu: no connection is opened again
 	dbConns              map[int]*dbConn
 	sqlite3ResolverCon   atomic.Bool
 	sqlite3DnsblCon      atomic.Bool
@@ -265,8 +272,8 @@ func mainOptionError(option string, err error) error {
 
 // initStandard builds the module from the ini and the files in moduleDir. An error is what makes init_standard
 // raise in Python: a MAIN value that is no boolean, or an interpolation error in a value that is read.
-func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
-	m := &pfbUnbound{regexRuntime: newRegexRuntime(), readFile: os.ReadFile}
+func initStandard(id int, moduleDir, logDir string) (*pfbUnbound, error) {
+	m := &pfbUnbound{regexRuntime: newRegexRuntime(), readFile: os.ReadFile, logDir: logDir}
 	// scratch collects the strata the loaders below fill; it becomes the module's first snapshot at the end.
 	scratch := newSnapshot()
 	pfb := &m.pfb
@@ -508,28 +515,7 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 				pfb.dnsblIpv6 = "::"
 			}
 
-			m.rcodeDB = map[int]string{
-				0:  "NoError",
-				1:  "FormErr",
-				2:  "ServFail",
-				3:  "NXDOMAIN",
-				4:  "NotImp",
-				5:  "Refused",
-				6:  "YXDomain",
-				7:  "YXRRSet",
-				8:  "NXRRSet",
-				9:  "NotAuth",
-				10: "NotZone",
-				11: "DSOTYPENI",
-				16: "BADVERS",
-				17: "BADKEY",
-				18: "BADTIME",
-				19: "BADMODE",
-				20: "BADNAME",
-				21: "BADALG",
-				22: "BADTRUNC",
-				23: "BADCOOKIE",
-			}
+			m.rcodeDB = rcodeNames()
 		}
 
 		if pfb.pythonEnable {
@@ -674,6 +660,58 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	}
 	m.pfbSetupLogging()
 	return m, nil
+}
+
+// rcodeNames is the RCODE table init_standard builds rcodeDB from (a table of its own per module): the name a reply row
+// shows for a non-NOERROR return code. dns_reply_log.py's RCODES is the same table, held equal by a test.
+func rcodeNames() map[int]string {
+	return map[int]string{
+		0:  "NoError",
+		1:  "FormErr",
+		2:  "ServFail",
+		3:  "NXDOMAIN",
+		4:  "NotImp",
+		5:  "Refused",
+		6:  "YXDomain",
+		7:  "YXRRSet",
+		8:  "NXRRSet",
+		9:  "NotAuth",
+		10: "NotZone",
+		11: "DSOTYPENI",
+		16: "BADVERS",
+		17: "BADKEY",
+		18: "BADTIME",
+		19: "BADMODE",
+		20: "BADNAME",
+		21: "BADALG",
+		22: "BADTRUNC",
+		23: "BADCOOKIE",
+	}
+}
+
+// whileNotRetired runs f unless deinit has begun, so that nothing is written once the module is closing. It holds no lock:
+// f writes a file that may block (a FIFO nobody reads), and deinit must not wait behind it.
+func (m *pfbUnbound) whileNotRetired(f func()) {
+	if !m.retired.Load() {
+		f()
+	}
+}
+
+// deinit is deinit(): the reload and control watchers stop (each waited for at most watcherStopWait: Python's
+// join(timeout=5)), the database worker drains and the connections close, the log writer writes what is queued and the
+// GeoIP reader closes. The watchers come first, ahead of Python's close of the reader: a watcher mid-build must not meet a
+// closed database. The module has no query in flight by then. A watcher that does not stop within its bound is left
+// running, and retirement (above all, the closed database) is what keeps it from publishing or opening anything.
+func (m *pfbUnbound) deinit() {
+	m.publishMu.Lock()
+	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing from here on
+	m.publishMu.Unlock()
+	m.stopReloadWatcher()
+	m.stopControlWatcher()
+	m.closeDb()
+	m.stopLogging()
+	m.closeMaxmind()
+	logInfo("[pfBlockerNG]: pfb_unbound.py script exiting")
 }
 
 // finishSnapshot fills the fields init and a reload derive the same way once the strata are loaded into s: the group
@@ -1052,7 +1090,8 @@ func intOf(value int64) int {
 
 // rebuildAndSwap is ADR-10's single fail-closed step: build a brand-new snapshot, publish it atomically, reset the
 // query memo. buildSnapshot returns a snapshot built off to the side (it must write nothing live) or an error for a
-// failed build; a nil snapshot is a failed build too. On success the new snapshot is stored, decisionDB is cleared
+// failed build; a nil snapshot is a failed build too, and so is a panic of the builder, which is logged like an error
+// (Python's `except Exception`). On success the new snapshot is stored, decisionDB is cleared
 // (the clear alone is no guard, since a query that captured the OLD snapshot can memoize after it, issue #1074:
 // every memo is also stamped with its snapshot's generation, and a reader rejects a foreign one), the regex runtime is
 // reset, and with emitCounts the UI counts and the reject-stats artifact are rewritten from the new snapshot. On
@@ -1071,7 +1110,14 @@ func intOf(value int64) int {
 // survives it and one that lands while the reload builds is carried. A published table is never written (a control
 // command clones before it writes), so the new snapshot shares the live one's maps.
 func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emitCounts bool) bool {
-	next, err := buildSnapshot()
+	next, err := func() (next *snapshot, err error) {
+		defer func() { // Python's `except Exception` around build_snapshot(): a raise reads as a returned failure
+			if v := recover(); v != nil {
+				err = fmt.Errorf("%v", v)
+			}
+		}()
+		return buildSnapshot()
+	}()
 	if err != nil {
 		logErr("[pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: " + err.Error())
 		return false
@@ -1081,6 +1127,10 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	}
 
 	m.publishMu.Lock()
+	if m.retired.Load() {
+		m.publishMu.Unlock()
+		return false
+	}
 	base := next.settings
 	if base == nil {
 		base = &m.pfb
@@ -1107,12 +1157,14 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	m.regexRuntime.reset()
 	m.openDnsblStatsDbIfWanted(&settings)
 	if emitCounts {
-		dnsblEmitCount(settings.pfbPyCount, next.counts)
-		dnsblEmitCount(settings.pfbPyRegexCount, next.regexCount)
-		// ADR-48 (issue #789): the reject-stats artifact too; a module built without the path emits none.
-		if settings.pfbPyRejectStats != "" {
-			dnsblEmitRejectStats(settings.pfbPyRejectStats, next.rejects)
-		}
+		m.whileNotRetired(func() {
+			dnsblEmitCount(settings.pfbPyCount, next.counts)
+			dnsblEmitCount(settings.pfbPyRegexCount, next.regexCount)
+			// ADR-48 (issue #789): the reject-stats artifact too; a module built without the path emits none.
+			if settings.pfbPyRejectStats != "" {
+				dnsblEmitRejectStats(settings.pfbPyRejectStats, next.rejects)
+			}
+		})
 	}
 	return true
 }

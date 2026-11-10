@@ -86,6 +86,9 @@ func (m *pfbUnbound) pfbPyStatusOpen(facility, item, stage, message string) {
 	}
 	m.statusMu.Lock()
 	defer m.statusMu.Unlock()
+	if m.retired.Load() {
+		return
+	}
 	entries := m.pfbPyStatusReadAll()
 	for _, entry := range entries {
 		if entry["facility"] == facility && entry["item"] == item && entry["stage"] == stage {
@@ -104,6 +107,9 @@ func (m *pfbUnbound) pfbPyStatusOpen(facility, item, stage, message string) {
 func (m *pfbUnbound) pfbPyStatusClose(facility, item, stage string) {
 	m.statusMu.Lock()
 	defer m.statusMu.Unlock()
+	if m.retired.Load() {
+		return
+	}
 	entries := m.pfbPyStatusReadAll()
 	filtered := slices.DeleteFunc(slices.Clone(entries), func(entry map[string]any) bool {
 		return entry["facility"] == facility && entry["item"] == item && entry["stage"] == stage

@@ -1,7 +1,7 @@
 // Go translation of the observer's receiving half of dns_proxy/pfb_dns_proxy.py: _upstream_report, which validates one
 // datagram from pfb_upstream_observer.py, and Frontend.relay_upstream_response, which fires the module's query_response
-// callback on it. The socket the datagrams arrive on (serve_observer: its 0600 mode, the stale-socket unlink, the receive
-// buffer) is not part of it: a datagram's bytes come in through relayUpstreamResponse.
+// callback on it. The socket the datagrams arrive on (serve_observer) is pfb_dns_proxy_socket.go's: a datagram's bytes
+// come in through relayUpstreamResponse.
 package decider
 
 import (
@@ -255,8 +255,11 @@ func upstreamReport(data []byte) (*moduleQstate, *dnsMsg, error) {
 func (f *Frontend) relayUpstreamResponse(data []byte) {
 	qstate, response, err := upstreamReport(data)
 	if err != nil {
-		if !f.malformedReported {
-			f.malformedReported = true
+		f.mu.Lock()
+		first := !f.malformedReported
+		f.malformedReported = true
+		f.mu.Unlock()
+		if first {
 			logWarn("malformed upstream report from the observer, ignored (further ones silently): " + err.Error())
 		}
 		return

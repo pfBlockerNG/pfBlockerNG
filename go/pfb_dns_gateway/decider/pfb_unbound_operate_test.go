@@ -683,12 +683,12 @@ func TestInitStandardNoAAAAFlagFollowsTheSectionAndPythonEnable(t *testing.T) {
 
 func TestInitStandardRaisesWhereNoAAAAItemsRaisesInPython(t *testing.T) {
 	// config.items("noAAAA") interpolates every value outside the try block, so a bad '%' escapes init_standard.
-	m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[noAAAA]\n1 = a.com%(nope)s,1\n"))
+	m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[noAAAA]\n1 = a.com%(nope)s,1\n"), testLogDir)
 	if m != nil || err == nil || !strings.Contains(err.Error(), "noAAAA") || !strings.Contains(err.Error(), "Bad value substitution") {
 		t.Errorf("initStandard = (%v, %v), want (nil, an error naming noAAAA and the bad substitution)", m, err)
 	}
 	// [GP_Bypass_List] is read raw, so the same text is no error there.
-	zoned, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[GP_Bypass_List]\n1 = fe80::1%em0\n"))
+	zoned, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[GP_Bypass_List]\n1 = fe80::1%em0\n"), testLogDir)
 	if err != nil {
 		t.Fatalf("initStandard with a zone-id Group Policy row: %v, want nil", err)
 	}
@@ -904,6 +904,9 @@ func TestRebuildAndSwapFailClosed(t *testing.T) {
 	}{
 		{"the builder returns nothing", func() (*snapshot, error) { return nil, nil }, ""},
 		{"the builder fails", func() (*snapshot, error) { return nil, errors.New("build blew up") },
+			"pfb_dns_proxy error: [pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up\n"},
+		// Python's `except Exception` around build_snapshot() reads the same for a raise as for a returned failure
+		{"the builder panics", func() (*snapshot, error) { panic("build blew up") },
 			"pfb_dns_proxy error: [pfBlockerNG]: DNSBL rebuild failed, keeping current snapshot: build blew up\n"},
 	} {
 		logs := modCaptureLog(t)
@@ -1695,7 +1698,7 @@ func raceAddresses(t *testing.T, reply []byte) string {
 	return strings.Join(out, ",")
 }
 
-// Queries run through Frontend.resolve in several goroutines (one Frontend each, one module between them) while
+// Queries run through Frontend.Resolve in several goroutines (one Frontend each, one module between them) while
 // another goroutine swaps between two snapshots that block different names. Each answer must be exactly one
 // generation's verdict for that name. Run it with -race: the memo, the snapshot pointer and the settings are shared.
 func TestSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
@@ -1720,7 +1723,7 @@ func TestSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
 		swap(side)
 		f := newFrontend(m)
 		for i, name := range names {
-			got := raceAddresses(t, f.resolve(raceQuery(t, uint16(i+1), name), "192.0.2.10", upstream, "UDP", "", ""))
+			got := raceAddresses(t, f.Resolve(raceQuery(t, uint16(i+1), name), "192.0.2.10", upstream, "UDP", "", ""))
 			if got != want[name][side.name] {
 				t.Errorf("settled generation %s: %s answered %q, want %q", side.name, name, got, want[name][side.name])
 			}
@@ -1749,7 +1752,7 @@ func TestSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
 			f := newFrontend(m)
 			for i := range rounds {
 				name := names[(g+i)%len(names)]
-				got := raceAddresses(t, f.resolve(raceQuery(t, uint16(g*rounds+i), name), "192.0.2.10", upstream, "UDP", "", ""))
+				got := raceAddresses(t, f.Resolve(raceQuery(t, uint16(g*rounds+i), name), "192.0.2.10", upstream, "UDP", "", ""))
 				if got != want[name]["A"] && got != want[name]["B"] {
 					t.Errorf("%s answered %q, want one generation's verdict: %q (A) or %q (B)", name, got, want[name]["A"], want[name]["B"])
 					return

@@ -248,10 +248,16 @@ func dbMetricTable(ctx context.Context, c *sql.Conn, table string, labels []stri
 	return nil
 }
 
+// errDbClosed is what a use of a database after closeDb gets: the connections are gone for good.
+var errDbClosed = errors.New("the module is closed")
+
 // dbConnLocked is the cached connection of a database, opened on first use; the caller holds dbMu.
 func (m *pfbUnbound) dbConnLocked(db int) (*dbConn, error) {
 	if c := m.dbConns[db]; c != nil {
 		return c, nil
+	}
+	if m.dbClosed {
+		return nil, errDbClosed
 	}
 	c, err := m.dbConnect(db)
 	if err != nil {
@@ -278,11 +284,13 @@ func (m *pfbUnbound) dbClose(db int) {
 	m.dbCloseLocked(db)
 }
 
-// closeDb is the end of deinit's database half: the worker drains and stops, then every connection closes.
+// closeDb is the end of deinit's database half: the worker drains and stops, then every connection closes and none opens
+// again, so that a reload that outlived its watcher's bounded stop finds the databases closed.
 func (m *pfbUnbound) closeDb() {
 	m.stopDbWorker()
 	m.dbMu.Lock()
 	defer m.dbMu.Unlock()
+	m.dbClosed = true
 	for db := range m.dbConns {
 		m.dbCloseLocked(db)
 	}
@@ -294,6 +302,9 @@ func (m *pfbUnbound) closeDb() {
 func (m *pfbUnbound) dbRun(db int, work func(ctx context.Context, c *sql.Conn) error) bool {
 	m.dbMu.Lock()
 	defer m.dbMu.Unlock()
+	if m.dbClosed {
+		return false
+	}
 	for attempt := range 4 {
 		c, err := m.dbConnLocked(db)
 		if err == nil {
@@ -317,6 +328,9 @@ func (m *pfbUnbound) dbValidate(db int) bool {
 	return m.dbRun(db, func(context.Context, *sql.Conn) error { return nil })
 }
 
+// removeStale removes a corrupt database or one of its sidecars; a variable so that a test can see what lock is held.
+var removeStale = os.Remove
+
 // validateDbWithRecovery is _validate_db_with_recovery. dbRun swallows every connect or PRAGMA fault and returns false, so
 // a false validate is the broken-database case (usually corruption): the file and its WAL and SHM sidecars are removed
 // (each remove may fail, a read-only directory for one) and the database validated once more. The whole sequence is one
@@ -333,12 +347,20 @@ func (m *pfbUnbound) validateDbWithRecovery(db int) bool {
 	if base == "" {
 		return false
 	}
+	// The closed check and the removal are one step under dbMu: a close that lands between them would otherwise take a
+	// closed module's database for a corrupt one and remove it.
+	m.dbMu.Lock()
+	if m.dbClosed {
+		m.dbMu.Unlock()
+		return false // a closed module is not a corrupt database: nothing is removed
+	}
 	for _, stale := range []string{base, base + "-wal", base + "-shm"} {
 		// os.remove refuses a directory, os.Remove would take an empty one: a directory is not the corrupt file.
 		if info, err := os.Lstat(stale); err == nil && !info.IsDir() {
-			os.Remove(stale)
+			removeStale(stale)
 		}
 	}
+	m.dbMu.Unlock()
 	return m.dbValidate(db)
 }
 
@@ -358,7 +380,7 @@ func (m *pfbUnbound) openDnsblStatsDbIfWanted(settings *pfbSettings) {
 // openDnsblStatsDb opens the dnsbl database, with recovery, when it is wanted and not yet open; a failure is logged and
 // leaves the flag off.
 func (m *pfbUnbound) openDnsblStatsDb(wanted bool) {
-	if wanted && !m.sqlite3DnsblCon.Load() {
+	if wanted && !m.sqlite3DnsblCon.Load() && !m.retired.Load() {
 		if m.validateDbWithRecovery(dbDnsbl) {
 			m.sqlite3DnsblCon.Store(true)
 		} else {
@@ -371,6 +393,9 @@ func (m *pfbUnbound) openDnsblStatsDb(wanted bool) {
 // dnsbl database opens first when statistics are wanted; it is optional, so DNS never depends on it: a database that cannot
 // be read turns the accounting off and gives no epochs.
 func (m *pfbUnbound) dbGroupEpochs(wanted bool, s *snapshot) map[[2]string]string {
+	if m.retired.Load() {
+		return map[[2]string]string{}
+	}
 	m.openDnsblStatsDb(wanted)
 	epochs := map[[2]string]string{}
 	if !m.sqlite3DnsblCon.Load() {

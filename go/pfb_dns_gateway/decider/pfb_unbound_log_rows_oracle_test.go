@@ -313,7 +313,7 @@ func TestLogRowsMatchPython(t *testing.T) {
 			if sc.Mmdb != "" {
 				maxmindDBPath = filepath.Join("testdata", sc.Mmdb)
 			}
-			m, err := boot(dir)
+			m, err := boot(dir, testLogDir)
 			maxmindDBPath = previous
 			if err != nil {
 				t.Fatal(err)
@@ -329,7 +329,7 @@ func TestLogRowsMatchPython(t *testing.T) {
 				switch step.Op {
 				case "resolve":
 					next := 0
-					f.resolve(mustHex(t, step.Wire), step.Client, func([]byte) []byte {
+					f.Resolve(mustHex(t, step.Wire), step.Client, func([]byte) []byte {
 						if next >= len(step.Forwards) {
 							t.Errorf("step %d: the decider asked Unbound %d times, Python %d", i, next+1, len(step.Forwards))
 							return nil

@@ -1,7 +1,10 @@
 // Go translation of src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py: the Frontend that decides one client
-// query, and the replies it builds itself. The observer's reports come in through relayUpstreamResponse
-// (pfb_dns_proxy_observer.go); its socket, the CLI, privilege-drop and code-record code, and the module-less path (a Go
-// boot always yields a module or an error), are not part of it.
+// query, and the replies it builds itself, and what serve_decisions set up around it: Open boots the module (or none, with
+// the module-less reply log of dns_reply_log.py, pfb_dns_proxy_replylog.go) and the observer's socket
+// (pfb_dns_proxy_socket.go), and Close shuts them down in serve_decisions's order (pfb_dns_proxy_serve.go). The observer's
+// reports come in through relayUpstreamResponse (pfb_dns_proxy_observer.go). The decision protocol, the CLI, the privilege
+// drop and the code record are not part of it: the gateway is the one process, and its executable's SHA-256 record
+// replaces the code record.
 package decider
 
 import (
@@ -9,6 +12,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/dnswire"
@@ -23,11 +27,11 @@ const (
 
 // forward has the gateway send the client's own bytes to Unbound as that client and returns Unbound's reply bytes,
 // nil if there is none.
-type forward func(wire []byte) []byte
+type forward = func(wire []byte) []byte
 
-// boot loads the module from moduleDir and runs its init_standard.
-func boot(moduleDir string) (*pfbUnbound, error) {
-	return initStandard(MODULE_ID, moduleDir)
+// boot loads the module from moduleDir and runs its init_standard; the module writes its logs under logDir.
+func boot(moduleDir, logDir string) (*pfbUnbound, error) {
+	return initStandard(MODULE_ID, moduleDir, logDir)
 }
 
 func optOf(query *dnswire.Message) *dnswire.RR {
@@ -118,17 +122,41 @@ func moduleDecides(query *dnswire.Message) bool {
 }
 
 // Frontend decides one client query at a time: the module answers it, or Unbound does through the gateway's forward.
-// A Frontend is not safe for concurrent use: Python ran it on one asyncio loop, so the wiring PR must serialize or lock.
+// Resolve is safe for concurrent use by any number of goroutines: the module takes its decisions from one immutable
+// snapshot and guards its memo, and what a Frontend keeps of its own (the rate limits of three log lines) is under mu.
 type Frontend struct {
-	module        *pfbUnbound
-	silenceLogged time.Duration // when "no reply from Unbound" was last logged, on the monotonic clock
-	silenceSeen   bool          // Python starts silenceLogged at -inf; a Duration has no such value
-	// when an oversized SafeSearch chase was last logged, likewise
-	oversizedChaseLogged time.Duration
-	oversizedChaseSeen   bool
-	monotonic            func() time.Duration
+	module *pfbUnbound // nil: no module, every query is forwarded (Python --no-module)
+	// replyLog is the row writer of a module-less decider that logs each relayed reply (--reply-log), nil without one.
+	replyLog       *pfbUnbound
+	replyLogFailed sync.Once // ReplyLog._failed: a row that cannot be written is reported once
+	// observer is the socket the upstream observer reports on, nil when there is none.
+	observer  *observerSocket
+	closeOnce sync.Once
+	monotonic func() time.Duration
+
+	mu sync.Mutex
+	// when "no reply from Unbound" and an oversized SafeSearch chase were last logged
+	silence, oversizedChase logLatch
 	// malformedReported is the latch of the first malformed observer report: warned about once, never reset.
 	malformedReported bool
+}
+
+// logLatch limits one log line to one per SILENCE_LOG_INTERVAL. Python starts at -inf; a Duration has no such value.
+type logLatch struct {
+	last time.Duration // on the monotonic clock
+	seen bool
+}
+
+// due is whether the line that l guards may be logged now; it is then taken.
+func (f *Frontend) due(l *logLatch) bool {
+	now := f.monotonic()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if l.seen && now-l.last < SILENCE_LOG_INTERVAL {
+		return false
+	}
+	l.last, l.seen = now, true
+	return true
 }
 
 func newFrontend(module *pfbUnbound) *Frontend {
@@ -149,11 +177,8 @@ func (f *Frontend) ask(fwd forward, wire []byte, question dnswire.Question) []by
 	if len(reply) < 12 {
 		reply = nil
 	}
-	if reply == nil {
-		if now := f.monotonic(); !f.silenceSeen || now-f.silenceLogged >= SILENCE_LOG_INTERVAL {
-			f.silenceLogged, f.silenceSeen = now, true
-			logWarn(fmt.Sprintf("no reply from Unbound for %s %s", question.Name, dnswire.TypeStr(question.Qtype)))
-		}
+	if reply == nil && f.due(&f.silence) {
+		logWarn(fmt.Sprintf("no reply from Unbound for %s %s", question.Name, dnswire.TypeStr(question.Qtype)))
 	}
 	return reply
 }
@@ -168,14 +193,17 @@ func (f *Frontend) unchanged(wire []byte, query *dnswire.Message, fwd forward) [
 	return reply
 }
 
-// resolve answers one client query: parse it, let the module decide, forward to Unbound when it defers.
+// Resolve answers one client query: parse it, let the module decide, forward to Unbound when it defers. fwd sends the
+// client's wire to Unbound as that client and returns its reply, nil for none; transport is one of "TCP", "UDP", "DoT",
+// "DoH", "DoQ" (decision_service.py TRANSPORTS), which the module logs and counts. Safe for concurrent use.
 //
 // nil means the packet is dropped. The header is checked before anything is parsed, so a hostile packet costs a
 // constant, and every FORMERR is header-only. Only `transport == "UDP"` holds a built reply to the client's advertised
 // size (a relayed reply already is: Unbound saw that size). A query Unbound answers itself (see moduleDecides) is
 // forwarded unchanged: its reply is the client's answer. The gateway asks Unbound again over TCP for a truncated reply
-// to a SafeSearch chase.
-func (f *Frontend) resolve(wire []byte, clientIP string, fwd forward, transport, listenerIP, listenerInterface string) []byte {
+// to a SafeSearch chase. Without a module every query that gets this far is forwarded, and Unbound's reply relayed as it
+// is (SERVFAIL when there is none), logged as a reply row when the decider has a reply log.
+func (f *Frontend) Resolve(wire []byte, clientIP string, fwd forward, transport, listenerIP, listenerInterface string) []byte {
 	if len(wire) < 12 || wire[2]&0x80 != 0 { // no header, or a response: never answered (no reflection loops)
 		return nil
 	}
@@ -199,6 +227,16 @@ func (f *Frontend) resolve(wire []byte, clientIP string, fwd forward, transport,
 	}
 
 	question := query.Questions[0]
+	if f.module == nil {
+		reply := f.ask(fwd, wire, question)
+		if f.replyLog != nil {
+			f.logReply(query, clientIP, reply, transport, listenerIP, listenerInterface)
+		}
+		if reply == nil {
+			return errorReply(query, RCODE_SERVFAIL)
+		}
+		return reply
+	}
 	qstate := newModuleQstate(
 		queryInfo{question.Name, question.Qtype, question.Qclass},
 		clientIP,
@@ -302,8 +340,7 @@ func (f *Frontend) chaseCname(query *dnswire.Message, qstate *moduleQstate, fwd 
 		return MODULE_ERROR
 	}
 	if len(wire) > MAX_DNS_MESSAGE {
-		if now := f.monotonic(); !f.oversizedChaseSeen || now-f.oversizedChaseLogged >= SILENCE_LOG_INTERVAL { // a client can repeat it
-			f.oversizedChaseLogged, f.oversizedChaseSeen = now, true
+		if f.due(&f.oversizedChase) { // a client can repeat it
 			logErr(fmt.Sprintf("SafeSearch chase for %s is %d bytes, over one DNS message; SERVFAIL", target.Name, len(wire)))
 		}
 		return MODULE_ERROR

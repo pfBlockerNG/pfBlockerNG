@@ -37,7 +37,7 @@ func modIniDir(t *testing.T, ini string) string {
 
 func modMust(t *testing.T, dir string) *pfbUnbound {
 	t.Helper()
-	m, err := initStandard(MODULE_ID, dir)
+	m, err := initStandard(MODULE_ID, dir, testLogDir)
 	if err != nil || m == nil {
 		t.Fatalf("initStandard(%q) = (%v, %v), want a module and nil", dir, m, err)
 	}
@@ -468,7 +468,7 @@ func TestInitStandardFailsWhereTheIniReadRaisesInPython(t *testing.T) {
 		{"psl_feed_private_policy = %z", "psl_feed_private_policy", "'%' must be followed by '%' or '('"},
 		{"psl_feed_icann_policy = %z", "psl_feed_icann_policy", "'%' must be followed by '%' or '('"},
 	} {
-		m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\n"+tc.line+"\n"))
+		m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\n"+tc.line+"\n"), testLogDir)
 		if m != nil || err == nil || !strings.Contains(err.Error(), tc.key) || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q: initStandard = (%v, %v), want (nil, an error naming %q and containing %q)", tc.line, m, err, tc.key, tc.want)
 		}

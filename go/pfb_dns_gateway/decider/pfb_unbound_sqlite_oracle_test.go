@@ -362,7 +362,7 @@ func TestSqliteStatsMatchPython(t *testing.T) {
 			var m *pfbUnbound
 			start := func() {
 				var err error
-				if m, err = boot(dir); err != nil {
+				if m, err = boot(dir, testLogDir); err != nil {
 					t.Fatal(err)
 				}
 				m.clock = func() time.Time { return time.Unix(o.Now, 0).UTC() }
@@ -457,7 +457,7 @@ func TestSqliteStatsMatchPython(t *testing.T) {
 					}, false)
 				case "resolve":
 					next := 0
-					newFrontend(m).resolve(mustHex(t, step.Wire), step.Client, func([]byte) []byte {
+					newFrontend(m).Resolve(mustHex(t, step.Wire), step.Client, func([]byte) []byte {
 						if next >= len(step.Forwards) {
 							t.Errorf("step %d: the decider asked Unbound %d times, Python %d", i, next+1, len(step.Forwards))
 							return nil

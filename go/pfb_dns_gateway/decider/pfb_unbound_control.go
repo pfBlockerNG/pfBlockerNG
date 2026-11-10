@@ -80,6 +80,9 @@ func (m *pfbUnbound) publishControl(e *controlEdit) {
 	if e.settings == nil && e.gpListDB == nil {
 		return
 	}
+	if m.retired.Load() {
+		return
+	}
 	next := *e.live
 	next.carryRuntime = false // a control edit is no reload build
 	if e.settings != nil {
@@ -215,6 +218,10 @@ func (m *pfbUnbound) controlAddbypass(bIP string) bool {
 // timer and the start of one are one step, as the Python callers' GIL-held sequence is not.
 func (m *pfbUnbound) pfbApplyControlCommand(controlCommand []string) (bool, string) {
 	m.publishMu.Lock()
+	if m.retired.Load() {
+		m.publishMu.Unlock()
+		return false, ""
+	}
 	edit := newControlEdit(m)
 	controlRcd, controlMsg := m.applyControlCommand(edit, controlCommand)
 	m.publishControl(edit)
@@ -394,15 +401,18 @@ func writeMarker(path, text string) string {
 }
 
 // controlWriteApplied is _control_write_applied: seq is published as the applied-sequence marker (temp file, fsync,
-// rename). A write failure is logged and the command still stands.
+// rename). A write failure is logged and the command still stands. A module that is closing writes none, whether its
+// command was refused or ran just before deinit began: the check is made at the write.
 func (m *pfbUnbound) controlWriteApplied(seq *big.Int) {
 	path := m.pfb.pfbPyControlApplied
 	if path == "" {
 		return
 	}
-	if failure := writeMarker(path, seq.String()+"\n"); failure != "" {
-		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure)
-	}
+	m.whileNotRetired(func() {
+		if failure := writeMarker(path, seq.String()+"\n"); failure != "" {
+			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure)
+		}
+	})
 }
 
 // controlRecordToCommand is _control_record_to_command: the dot-split token list the shared handler consumes, or nil when
@@ -477,7 +487,7 @@ func stopped(stop <-chan struct{}) bool {
 func (w *controlWatcher) drainAndApply(stop <-chan struct{}) {
 	for !stopped(stop) {
 		record := controlReadRecord(w.channel)
-		if record == nil {
+		if record == nil || w.m.retired.Load() { // a record read after Close (the read was blocked) is not applied
 			return
 		}
 		seq, ok := controlSeq(record)
@@ -485,14 +495,20 @@ func (w *controlWatcher) drainAndApply(stop <-chan struct{}) {
 			return
 		}
 		w.lastSeq = seq
+		controlHook("apply")
 		if command := controlRecordToCommand(record); command != nil {
 			if _, msg := w.m.pfbApplyControlCommand(command); msg != "" {
 				logInfo("[pfBlockerNG]: " + msg)
 			}
 		}
+		controlHook("marker")
 		w.m.controlWriteApplied(seq)
 	}
 }
+
+// controlHook is called by drainAndApply before it applies a record ("apply") and before it publishes the applied marker
+// ("marker"); a variable so that a test can retire the module at exactly that point.
+var controlHook = func(stage string) {}
 
 // run is the daemon body: drain, then wait for the next tick, until stop is closed.
 // shortcut: Python waits on a kqueue (EVFILT_VNODE on the channel's directory) on FreeBSD and polls elsewhere; Go polls
@@ -513,10 +529,15 @@ func pollLoop(stop <-chan struct{}, tick <-chan time.Time, drain func(stop <-cha
 	}
 }
 
-// startPoller runs a watcher's loop on its own goroutine, fed by the tick source tickFor makes (nil: a
+// watcherStopWait is how long a stop waits for a watcher's goroutine: deinit's join(timeout=5). A variable so that a test
+// can shorten it.
+var watcherStopWait = 5 * time.Second
+
+// startPoller runs the watcher `name`'s loop on its own goroutine, fed by the tick source tickFor makes (nil: a
 // RELOAD_POLL_INTERVAL ticker), and returns what stops it and waits for its goroutine, the release of the tick source
-// included, to end.
-func startPoller(tickFor func() (<-chan time.Time, func()), run func(stop <-chan struct{}, tick <-chan time.Time)) func() {
+// included, to end. The wait is bounded by watcherStopWait: a goroutine stuck in a drain is left to finish by itself, one
+// line says so, and the stop returns. Call the stop once.
+func startPoller(name string, tickFor func() (<-chan time.Time, func()), run func(stop <-chan struct{}, tick <-chan time.Time)) func() {
 	stop, done := make(chan struct{}), make(chan struct{})
 	if tickFor == nil {
 		tickFor = func() (<-chan time.Time, func()) {
@@ -532,7 +553,13 @@ func startPoller(tickFor func() (<-chan time.Time, func()), run func(stop <-chan
 	}()
 	return func() {
 		close(stop)
-		<-done
+		timer := time.NewTimer(watcherStopWait)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			logWarn(fmt.Sprintf("[pfBlockerNG]: %s watcher did not stop within %s, going on", name, watcherStopWait))
+		}
 	}
 }
 
@@ -541,10 +568,10 @@ func (m *pfbUnbound) startControlWatcher() {
 	if m.controlStop != nil {
 		return
 	}
-	m.controlStop = startPoller(m.controlTick, m.newControlWatcher().run)
+	m.controlStop = startPoller("control", m.controlTick, m.newControlWatcher().run)
 }
 
-// stopControlWatcher is deinit's stop of the watcher: it returns once the watcher has ended.
+// stopControlWatcher is deinit's stop of the watcher: it returns once the watcher has ended, or after watcherStopWait.
 func (m *pfbUnbound) stopControlWatcher() {
 	if m.controlStop != nil {
 		m.controlStop()
