@@ -9657,9 +9657,9 @@ function pfb_software_repo_url(string $repo, string $dir = '/usr/local/etc/pkg/r
 }
 
 /*
- * The notes.json beside a catalogue, derived from its repo URL. Only the published shape
- * https://pkg.pfblockerng.com/<channel>/<varver> maps to a URL: a staging prefix, a file://
- * catalogue or another host publishes no notes we trust, and '.'/'..' are not a varver.
+ * The https notes.json beside a catalogue, from its http(s) repo URL. Only the published
+ * pkg.pfblockerng.com/<channel>/<varver> shape maps: staging prefixes, file:// and other hosts
+ * publish no notes we trust, and '.'/'..' are not a varver.
  */
 function pfb_software_notes_url(string $repo_url): string {
 	if (preg_match('#^https?://pkg\.pfblockerng\.com/((?:stable|testing|edge|nightly)/([A-Za-z0-9._-]+))/?$#D', $repo_url, $m) !== 1 || in_array($m[2], ['.', '..'], TRUE)) {
@@ -9669,8 +9669,8 @@ function pfb_software_notes_url(string $repo_url): string {
 }
 
 /*
- * Fetch a notes.json, bounded in time and size. Only an HTTP 200 within the size cap yields a
- * body; every other outcome is NULL so the notice keeps its one-line form. Never logs the body.
+ * Fetch a notes.json within 15 s. Only an HTTP 200 of at most 64 KiB yields a body (an
+ * announced larger size aborts early); anything else is NULL. Never logs the body.
  */
 function pfb_software_fetch_notes(string $url): ?string {
 	if ($url === '') {
@@ -9702,10 +9702,9 @@ function pfb_software_fetch_notes(string $url): ?string {
 }
 
 /*
- * The "update available" notice body. The one-line base is returned alone unless the notes
- * satisfy every rule of the notes.json contract. Notes are untrusted: items become single
- * printable-ASCII lines (the GUI shows anything else as an entity) and the link is rebuilt
- * from its validated parts, never copied from the document.
+ * The "update available" notice: the one-line base, plus notes only when they meet the whole
+ * notes.json contract. Items become printable-ASCII lines (the GUI renders anything else as
+ * an entity); the link is rebuilt from validated parts, never copied.
  */
 function pfb_software_notice_text(string $latest, ?string $channel, ?string $notes_json): string {
 	$base = "pfBlockerNG {$latest} available ({$channel})";
@@ -9782,7 +9781,7 @@ function pfb_software_notice_text(string $latest, ?string $channel, ?string $not
  *
  * Order is deliberate:
  *   1. Resolve installed name + version. These can be injected for unit tests via
- *      $io ['installed_name','installed','installed_repo','latest']; absent keys fall
+ *      $io ['installed_name','installed','installed_repo','latest','notes']; absent keys fall
  *      through to the live pfb_pkg_*() shellout.
  *   2. PROVENANCE GATE FIRST: gate on pfb_software_provenance_ok() — the SAME predicate
  *      that decides whether the Software PAGE is displayable (our-repo install, honouring

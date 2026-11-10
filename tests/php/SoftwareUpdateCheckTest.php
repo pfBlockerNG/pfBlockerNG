@@ -850,15 +850,17 @@ final class SoftwareUpdateCheckTest extends TestCase
 		$this->assertSame('pfBlockerNG 3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
-	public function testInjectedIoWithoutNotesKeyKeepsBaseLine(): void
+	public function testInjectedIoWithoutUsableNotesKeepsBaseLine(): void
 	{
 		$this->setCheck('on');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
 
 		pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+		pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_10') + ['notes' => 5]);
 
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice');
-		$this->assertSame('pfBlockerNG 3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertCount(2, $GLOBALS['pfb_test_file_notices'], 'after: one notice per new version');
+		$this->assertSame('pfBlockerNG 3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice'], 'no notes key');
+		$this->assertSame('pfBlockerNG 3.2.0_10 available (devel)', $GLOBALS['pfb_test_file_notices'][1]['notice'], 'non-string notes');
 	}
 
 	public function testNotesDoNotRenotifyTheSameVersionAcrossTicks(): void

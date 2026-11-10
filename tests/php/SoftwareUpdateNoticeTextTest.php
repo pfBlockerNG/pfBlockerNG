@@ -284,6 +284,7 @@ final class SoftwareUpdateNoticeTextTest extends TestCase
 		return [
 			'suffixed latest' => [self::json(self::releaseDoc(['version' => '3.3.14'])), '3.3.14_1', 'pfBlockerNG 3.3.14_1 available (stable)'],
 			'version missing' => [self::json(self::releaseDoc(['version' => null])), '3.3.14', self::BASE],
+			'numerically equal, textually not' => [self::json(self::releaseDoc(['version' => '1.0'])), '1.00', 'pfBlockerNG 1.00 available (stable)'],
 		];
 	}
 
