@@ -18,9 +18,9 @@ var RE2_DIVERGENCES = []struct {
 	why           string
 }{
 	// corpus cases (a CNAME target is decoded from Latin-1 octets, so a name can carry 0x80-0xFF)
-	{`^caf\w\.example$`, "caf\u00e9.example", true, false, `corpus latin1-letter-matches-backslash-w: Python \w is Unicode, RE2 \w is [0-9A-Za-z_]`},
-	{`^cak\s\.example$`, "cak\u00a0.example", true, false, `corpus latin1-no-break-space-matches-backslash-s: Python \s takes U+00A0, RE2 \s is [\t\n\f\r ]`},
-	{`^cai\W\.example$`, "cai\u00e9.example", false, true, `corpus latin1-letter-does-not-match-backslash-capital-w: é is a word character to Python, not to RE2`},
+	{`^caf\w\.example$`, "caf\u00e9.example", true, false, `corpus latin1-letter-does-not-match-backslash-w: Python \w is Unicode, RE2 \w is [0-9A-Za-z_]`},
+	{`^cak\s\.example$`, "cak\u00a0.example", true, false, `corpus latin1-no-break-space-does-not-match-backslash-s: Python \s takes U+00A0, RE2 \s is [\t\n\f\r ]`},
+	{`^cai\W\.example$`, "cai\u00e9.example", false, true, `corpus latin1-letter-matches-backslash-capital-w: é is a word character to Python, not to RE2`},
 	// controls: the same patterns, ASCII names
 	{`^caf\w\.example$`, "cafe.example", true, true, "control"},
 	{`^cak\s\.example$`, "cak .example", true, true, "control"},
