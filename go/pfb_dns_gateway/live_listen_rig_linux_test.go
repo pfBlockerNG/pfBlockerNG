@@ -215,9 +215,9 @@ func liveClose(fds ...int) {
 	}
 }
 
-// liveHeld is the set of sockets and pipes the process holds, each named as /proc/self/fd names it (`socket:[N]`, `pipe:[N]`):
-// the kernel never gives one inode to two of them at once, so a descriptor of a test can be told from any other. A
-// descriptor on a plain file or /dev/null has no inode of its own to name and is not in the set.
+// liveHeld is the set of descriptors the process holds, each named as /proc/self/fd names it. A socket or a pipe is named by
+// its inode (`socket:[N]`, `pipe:[N]`), which the kernel never gives to two of them at once; one that has no inode of its own
+// (/dev/null, a file) is named `fd<N>:<target>`, so it counts as new only at a descriptor number the baseline did not hold.
 func liveHeld(t *testing.T) map[string]bool {
 	t.Helper()
 	entries, err := os.ReadDir("/proc/self/fd")
@@ -233,14 +233,15 @@ func liveHeld(t *testing.T) map[string]bool {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.HasPrefix(link, "socket:[") || strings.HasPrefix(link, "pipe:[") {
-			held[link] = true
+		if !strings.HasPrefix(link, "socket:[") && !strings.HasPrefix(link, "pipe:[") {
+			link = "fd" + e.Name() + ":" + link
 		}
+		held[link] = true
 	}
 	return held
 }
 
-// liveRequireNew waits for the sockets and pipes that are not in base to be exactly want of them: the gateway closes what it
+// liveRequireNew waits for the descriptors that are not in base to be exactly want of them: the gateway closes what it
 // was sent, and its end of the connection, as the handler ends. base is what the process held at the test's start, so a
 // stopped gateway of an earlier test that closes what it served as its goroutines end, some after stop() has returned, cannot
 // offset a descriptor of this test that is never closed: that one stays in the set, named in the failure.
@@ -259,7 +260,7 @@ func liveRequireNew(t *testing.T, base map[string]bool, want int, when string) {
 		}
 		if time.Now().After(deadline) {
 			slices.Sort(fresh)
-			t.Fatalf("%s: %d sockets and pipes are held that the test did not start with, want %d: %v (one that came over the control socket was not closed)", when, len(fresh), want, fresh)
+			t.Fatalf("%s: %d descriptors are held that the test did not start with, want %d: %v (one that came over the control socket was not closed)", when, len(fresh), want, fresh)
 		}
 		time.Sleep(time.Millisecond)
 	}
