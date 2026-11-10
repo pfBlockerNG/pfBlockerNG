@@ -109,19 +109,35 @@ func startHeldQuery(t *testing.T, fe *heldFrontend, stopBound, budget time.Durat
 	return srv, c, logs
 }
 
-// A decider that is still inside a query when the transports stop is not closed: Close does not wait for a query, so closing
-// it would pull the module out from under the query still running in it. The process exits right after, which takes both.
-func TestShutdownDoesNotCloseTheDeciderWhileAQueryIsStillInIt(t *testing.T) {
+// A query that never finishes does not keep the decider open: once the transports have stopped and the drain bound has
+// passed, the decider is closed all the same, so its watchers stop and its observer socket goes. Close is safe for the query
+// still inside it (decider.Frontend.Close).
+func TestShutdownClosesTheDeciderWhileAQueryIsStillInIt(t *testing.T) {
 	fe := &heldFrontend{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	t.Cleanup(sync.OnceFunc(func() { close(fe.release) }))
 	srv, _, logs := startHeldQuery(t, fe, 20*time.Millisecond, 10*time.Second)
 	done := make(chan struct{})
 	go func() { srv.shutdown(); close(done) }()
 	waitClosed(t, done, "shutdown to end")
-	if fe.closed.Load() {
-		t.Fatal("the decider was closed while a query was still running in it")
+	if !fe.closed.Load() {
+		t.Fatal("the decider was not closed while a query was still running in it")
 	}
-	if text := logs.text(); !strings.Contains(text, "not closing the decider") {
+	if text := logs.text(); !strings.Contains(text, "queries are still running in the decider: closing it anyway") {
+		t.Fatalf("the log must say that the decider is closed with a query in it:\n%s", text)
+	}
+}
+
+// The close on that path shares the shutdown budget like the normal one: a Close that never returns ends the shutdown at
+// the budget, with the query still held.
+func TestShutdownEndsWhenTheDeciderCannotBeClosedWhileAQueryIsStillInIt(t *testing.T) {
+	fe := &heldFrontend{entered: make(chan struct{}, 1), release: make(chan struct{}), closeGate: make(chan struct{})}
+	t.Cleanup(sync.OnceFunc(func() { close(fe.release) }))
+	t.Cleanup(sync.OnceFunc(func() { close(fe.closeGate) }))
+	srv, _, logs := startHeldQuery(t, fe, 20*time.Millisecond, 100*time.Millisecond)
+	done := make(chan struct{})
+	go func() { srv.shutdown(); close(done) }()
+	waitClosed(t, done, "shutdown to end although the decider cannot be closed")
+	if text := logs.text(); !strings.Contains(text, "the decider did not close within") {
 		t.Fatalf("the log must say that the decider was left:\n%s", text)
 	}
 }

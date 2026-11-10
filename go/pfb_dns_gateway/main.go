@@ -478,9 +478,10 @@ func bootDecider(cfg config) (frontend, error) {
 	return nil, err
 }
 
-// shutdown stops accepting and drains the queries in flight, then closes the decider: Close does not wait for a query
-// and stops what a query writes to, so a decider with a query still running in it is not closed, and the exit of the
-// process takes it. Everything in it fits in shutdownBudget; a decider that is not closed by then is left to the exit.
+// shutdown stops accepting and drains the queries in flight, then closes the decider, also when a query is still running
+// in it past the drain bound: Close stops the decider's watchers and removes its observer socket, and is safe for that
+// query (decider.Frontend.Close). Everything in it fits in shutdownBudget; a decider that is not closed by then is left to
+// the exit of the process.
 func (s *server) shutdown() {
 	s.once.Do(func() {
 		deadline := time.Now().Add(s.cfg.shutdownBudget)
@@ -488,8 +489,7 @@ func (s *server) shutdown() {
 			s.logf("cannot remove the ready file: %v", err)
 		}
 		if !s.g.stop() {
-			s.logf("queries are still running in the decider: not closing the decider, leaving it to the exit")
-			return
+			s.logf("queries are still running in the decider: closing it anyway")
 		}
 		closed := make(chan struct{})
 		go func() { s.frontend.Close(); close(closed) }()
