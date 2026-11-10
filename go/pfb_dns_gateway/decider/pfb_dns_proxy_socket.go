@@ -104,6 +104,8 @@ func (f *Frontend) relaySafely(data []byte) {
 
 // close stops listening: the socket closes, its reader is waited for (at most watcherStopWait, as a watcher is), and its
 // path is unlinked.
+// shortcut: a reader still running past the bound may relay one more report while the module deinits (relaySafely
+// contains a panic from that), wait for it without a bound if a report ever has to be kept out of a closing module.
 func (o *observerSocket) close() {
 	o.conn.Close()
 	timer := time.NewTimer(watcherStopWait)

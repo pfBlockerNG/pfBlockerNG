@@ -341,7 +341,6 @@ func TestLogRowsMatchPython(t *testing.T) {
 						}
 						return mustHex(t, *reply)
 					}, step.Transport, step.Lip, step.Lif)
-
 					if next != len(step.Forwards) {
 						t.Errorf("step %d: the decider asked Unbound %d times, Python %d", i, next, len(step.Forwards))
 					}

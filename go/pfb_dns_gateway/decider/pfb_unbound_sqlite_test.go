@@ -900,7 +900,6 @@ func TestSqliteDnsKeepsAnsweringWhenTheStatsDatabasesCannotOpen(t *testing.T) {
 		t.Error("a blocked name was forwarded")
 		return nil
 	}, "UDP", "", "")
-
 	reply, err := dnswire.Parse(answer)
 	if err != nil {
 		t.Fatalf("the answer does not parse: %v", err)

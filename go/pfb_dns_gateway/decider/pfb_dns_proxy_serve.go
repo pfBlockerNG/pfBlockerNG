@@ -50,8 +50,9 @@ func Open(opts Options) (*Frontend, error) {
 }
 
 // Close shuts down what Open started, in serve_decisions's `finally` order: the observer stops (its socket closed and
-// unlinked, its reader ended, so that no report meets a closed module), the module deinits, the reply log closes. Every wait
-// is bounded (watcherStopWait): a watcher that does not stop is logged and left. Close is idempotent. The caller stops
+// unlinked, its reader ended, so that no report meets a closed module), the module deinits, the reply log closes. Each of
+// the three waits (observer reader, reload and control watchers) is bounded by watcherStopWait, so Close takes at most
+// three times it: what does not stop in time is logged and left. Close is idempotent. The caller stops
 // calling Resolve before it: a query in flight meets a module whose log writer and databases are closing.
 func (f *Frontend) Close() {
 	f.closeOnce.Do(func() {

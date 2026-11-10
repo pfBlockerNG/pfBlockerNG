@@ -151,7 +151,6 @@ func TestObserverReportsMatchPython(t *testing.T) {
 				answer := newFrontend(m).Resolve(mustHex(t, o.Probe.Wire), o.Probe.Client, func([]byte) []byte {
 					return mustHex(t, o.Probe.Reply)
 				}, o.Probe.Transport, "", "")
-
 				rows = rows[:mark]
 				if answer == nil {
 					return nil
@@ -196,7 +195,6 @@ func TestObserverReportsMatchPython(t *testing.T) {
 					answer := newFrontend(m).Resolve(mustHex(t, probe[1]), o.Probe.Client, func([]byte) []byte {
 						return mustHex(t, probe[2])
 					}, o.Probe.Transport, "", "")
-
 					rows = rows[:mark]
 					if got := fmt.Sprintf("%x", answer); got != probe[3] {
 						t.Errorf("step %d (%s): the answer to %s, never asked before, differs from Python's\n  go:     %s\n  python: %s",

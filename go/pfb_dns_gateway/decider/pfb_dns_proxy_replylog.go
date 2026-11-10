@@ -17,10 +17,9 @@ import (
 )
 
 // openReplyLog is ReplyLog.__init__: the module state of the row writer, and its log pipeline.
-// shortcut: Python's ReplyLog can fail to start (the module import, the log listener) and the proxy then serves without
-// it, with "DNS Reply logging is off, serving without it: ..."; here nothing in the setup can fail: the log files open at
-// their first row, so an unwritable log directory is the pipeline's one "Failed to write" line, and the answers go on.
-// Upgrade if the setup gains a step that can.
+// shortcut: Go has no "DNS Reply logging is off, serving without it" path, because nothing in this setup can fail (the
+// log files open at their first row; an unwritable directory is the pipeline's one "Failed to write" line), add that path
+// when the setup gains a step that can fail.
 func openReplyLog() *pfbUnbound {
 	m := &pfbUnbound{rcodeDB: rcodeNames(), regexRuntime: newRegexRuntime(), decisionDB: newLruCache[*decision](1)}
 	m.pfb.pythonReply = true
@@ -58,7 +57,7 @@ func (f *Frontend) replyRow(query *dnswire.Message, clientIP string, reply []byt
 		m.fireReplyCallback("reply_servfail", qstate, nil)
 		return nil
 	}
-	parsed, err := dnswire.Parse(reply) // a reply that does not parse is relayed as it is and logs nothing
+	parsed, err := dnswire.Parse(reply) // a reply that does not parse is still relayed; logReply reports this error once
 	if err != nil {
 		return err
 	}
