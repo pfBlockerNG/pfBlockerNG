@@ -403,7 +403,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		// Then the activation failed, and the rollback stopped the supervisor itself: pfSense did nothing for either call
 		$this->assertFalse($ok, 'the activation failed');
 		$this->assertSame(['start_service (no entry)', 'rc stop'], $this->proxyCalls);
-		$this->assertFalse(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'no supervisor is left to respawn the decider');
+		$this->assertFalse(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'no supervisor is left to respawn the gateway');
 
 		// ... and the Resolver is the original, pfB-DNS stays on, and the operator is told it was restored
 		$this->assertResolverIsTheOriginal('rolled back');

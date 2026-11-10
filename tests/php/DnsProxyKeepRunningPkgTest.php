@@ -22,8 +22,7 @@ use PHPUnit\Framework\TestCase;
  *   - the Resolver reload's proxy restart, an rc script that changed and a proxy that must reload its lists are deferred, never
  *     performed, and each records its reason in the marker;
  *   - a proxy that is down is still started (and nothing stays pending);
- *   - a pending restart, a gateway or a decider that differs are left for the next pass: no restart, no decider restart on the control
- *     socket (the gateway is only asked what it serves), the marker kept;
+ *   - a pending restart and a gateway that differs are left for the next pass: no restart, the marker kept;
  *   - an address-only change of the rc script (issue #3599) and a start that could not assign an address the box can bind now (issue
  *     #3598) are neither made live nor restarted by the update pass or the cron tick under one: no add or remove is sent on the control
  *     socket (the gateway is only asked what it serves), the first is recorded as a pending restart (DnsProxyLiveListenersTest has the live changes outside one);
@@ -39,8 +38,6 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 	use LiveListenerStandIn;
 
 	private string $dir = '';
-	/** @var list<array{resource,array<int,resource>}> */
-	private array $servers = [];
 
 	protected function setUp(): void
 	{
@@ -50,21 +47,8 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		$this->finish();
 		$this->standInsStop();
 		rmdir_recursive($this->dir);
-	}
-
-	/** Let the stand-in gateways go (their stdin closes) so that what they recorded is complete. */
-	private function finish(): void
-	{
-		foreach ($this->servers as [$proc, $pipes]) {
-			@fclose($pipes[0]);
-			@fclose($pipes[1]);
-			@fclose($pipes[2]);
-			proc_close($proc);
-		}
-		$this->servers = [];
 	}
 
 	/** @return array<string,mixed> what the worker saw and did, run as a descendant of `pkg upgrade` */
@@ -80,25 +64,6 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$result = json_decode((string) file_get_contents($resultFile), TRUE, 8, JSON_THROW_ON_ERROR);
 		$this->assertSame('upgrade', $result['operation'], 'before: the worker runs under a package upgrade');
 		return $result;
-	}
-
-	/** A gateway that listens on the control socket and records what it is sent but for the list request, which it answers as an older gateway does; returns the socket and the record's paths. */
-	private function listen(): array
-	{
-		$socket = "{$this->dir}/ctl.sock";
-		$record = "{$this->dir}/ctl.request";
-		$proc = proc_open(
-			[PHP_BINARY, __DIR__ . '/support/DeciderControlServer.php', $socket, $record, bin2hex("ok\n")],
-			[0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-			$pipes
-		);
-		$this->assertIsResource($proc);
-		$read = [$pipes[1]];
-		$write = $except = NULL;
-		$this->assertSame(1, stream_select($read, $write, $except, 15), 'the stand-in gateway did not start listening');
-		$this->assertSame("ready\n", fgets($pipes[1]));
-		$this->servers[] = [$proc, $pipes];
-		return [$socket, $record];
 	}
 
 	public function testTheReloadsProxyRestartIsDeferredAndRecordsItsReason(): void
@@ -181,20 +146,27 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$this->assertStringContainsString('DoT is not served on 192.0.2.1:853', $result['log']);
 	}
 
-	public function testAPendingRestartAndADifferingGatewayAndDeciderAreLeftForTheNextPass(): void
+	public function testAPendingRestartAndADifferingGatewayAreLeftForTheNextPass(): void
 	{
-		// Given a pending restart, a gateway binary and a decider that both differ, and a gateway that would take a decider restart
-		[$socket, $record] = $this->listen();
-		$result = $this->runUnderPkg([
-			'op' => 'ensure', 'marker' => 'the package changed its rc script', 'gateway' => 'different', 'decider' => 'different', 'ctl' => $socket,
-		]);
-		$this->finish();
+		// Given a pending restart and a gateway binary that differs
+		$result = $this->runUnderPkg(['op' => 'ensure', 'marker' => 'the package changed its rc script', 'gateway' => 'different']);
 
-		// Then nothing restarted, no decider restart was sent on the control socket, and the pending restart is still there
+		// Then nothing restarted, and the pending restart is still there
 		$this->assertTrue($result['returned']);
 		$this->assertSame([], $result['calls']);
-		$this->assertFileDoesNotExist($record, 'no decider restart was sent');
 		$this->assertSame('the package changed its rc script', $result['marker']);
+	}
+
+	public function testAGatewayStartedByTheOldPythonDeciderLineKeepsRunningAndItsRestartIsDeferred(): void
+	{
+		// Given a running gateway whose rc script still has the Python decider after `--`, and the package's one-binary line to write
+		$result = $this->runUnderPkg(['op' => 'ensure', 'rc' => 'python_decider']);
+
+		// Then it is not restarted under the package operation, and a pending restart records it for the next pass
+		$this->assertTrue($result['returned']);
+		$this->assertSame([], $result['calls']);
+		$this->assertIsString($result['marker']);
+		$this->assertStringContainsString('deferred', $result['log']);
 	}
 
 	/**

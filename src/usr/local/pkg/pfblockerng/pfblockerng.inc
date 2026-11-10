@@ -4056,8 +4056,6 @@ const PFB_DNS_PROXY_LOG = '/var/log/pfblockerng/dns_proxy.log';
 // The lock file that serializes the rc script's starts (lockf(1), kept between starts): the boot hook's background start and an
 // apply's start_service() both run `rc start`, and both could pass its "already serving?" check before the first daemon wrote a pidfile.
 const PFB_DNS_PROXY_LOCKFILE = '/var/run/pfb_dns_proxy.lock';
-// pfb_dns_proxy_decider_restart_fits_ram()'s headroom beside two deciders: the 64 MiB pfb_unbound_py_swap_fits_ram() leaves.
-const PFB_DNS_PROXY_DECIDER_RESTART_HEADROOM = 64 * 1024 * 1024;
 // issue #3515: the DNSBL page's section save and pfb_dns_proxy_resolver() both read-modify-write config.xml; the one
 // lock (pfSense try_lock(), seconds to give up after) they hold from a fresh read through write_config(). A restore
 // stops the proxy (up to 7 s) under it, so the wait must stay above that plus the restore's own read and write.
@@ -4079,10 +4077,6 @@ if (!defined('PFB_DNS_PROXY_START_WAIT')) {
 // connection on its control socket, above what a gateway that is serving needs.
 if (!defined('PFB_DNS_PROXY_CTL_TIMEOUT')) {
 	define('PFB_DNS_PROXY_CTL_TIMEOUT', 3.0);
-}
-// Seconds pfb_dns_proxy_decider_restart() waits for the reply: the gateway waits up to 30 s for the new decider's READY, then kills.
-if (!defined('PFB_DNS_PROXY_DECIDER_RESTART_WAIT')) {
-	define('PFB_DNS_PROXY_DECIDER_RESTART_WAIT', 40.0);
 }
 // Readiness is read from the daemon's child pidfile and from the marker the proxy publishes with --ready-file (its own PID,
 // written once it serves). Kept in $pfb like the other runtime paths, so a unit test reads its own files; the marker lives
@@ -4111,19 +4105,13 @@ $pfb['dns_proxy_cert_legacy'] = '/var/unbound/pfb_dns_cert.pem';
 if (!defined('PFB_PACKAGE_XML')) {
 	define('PFB_PACKAGE_XML', '/usr/local/pkg/pfblockerng.xml');
 }
-// issue #3513: the package ships pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and runs the Python decider as its
-// decision service, once per FreeBSD architecture (bin/<target>/pfb-dns). pfb_dns.sh picks this machine's and execs it, so the
+// issue #3513: the package ships pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and decides in-process (issue #3791),
+// once per FreeBSD architecture (bin/<target>/pfb-dns). pfb_dns.sh picks this machine's and execs it, so the
 // daemon(8) child's pid is the gateway's own. pfB-DNS has no other front end: a package with no pfb-dns this machine can run
 // cannot start it (see pfb_dns_proxy_service()).
 const PFB_DNS_PROXY_DIR = '/usr/local/pkg/pfblockerng/dns_proxy';
-// The sha256 the gateway records of its own binary when it publishes the ready marker, and the decider's record of its code (the md5
-// digests of its files, $pfb['dns_proxy_decider_src'], concatenated): the next update compares them with what the package installed.
+// The sha256 the gateway records of its own binary when it publishes the ready marker: the next update compares it with what the package installed.
 $pfb['dns_proxy_gateway_applied'] = $pfb['dns_proxy_ready'] . '.sha256';
-$pfb['dns_proxy_decider_applied'] = '/var/unbound/pfb_dns_decider.applied';
-$pfb['dns_proxy_decider_src'] = [
-	PFB_DNS_PROXY_DIR . '/pfb_dns_proxy.py', PFB_DNS_PROXY_DIR . '/decision_service.py', PFB_DNS_PROXY_DIR . '/dns_reply_log.py',
-	PFB_DNS_PROXY_DIR . '/dnswire.py', PFB_DNS_PROXY_DIR . '/unbound_shim.py', '/var/unbound/pfb_unbound.py', '/var/unbound/pfb_dnsbl_regex_rules.py',
-];
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -5580,25 +5568,6 @@ function pfb_dns_proxy_certificate_push(string $pem, ?string $socket = NULL, flo
 }
 
 /**
- * Have the running gateway start a new decider and switch to it, with no restart of the gateway (ctl.go): the request is four 0xFF
- * bytes, a length no certificate has, and the reply one line, `ok` once the new decider is READY and active, else `error: <reason>`
- * with the old decider still serving. An older gateway answers it as a bad certificate length, which is an error here too.
- *
- * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
- * @param float $timeout seconds each step may take: the reply waits for the new decider's READY
- * @return string|null NULL once the gateway runs the new decider; else why not
- */
-function pfb_dns_proxy_decider_restart(?string $socket = NULL, float $timeout = PFB_DNS_PROXY_DECIDER_RESTART_WAIT): ?string {
-	global $pfb;
-
-	[$reply, $why] = pfb_dns_proxy_ctl_exchange("\xFF\xFF\xFF\xFF", $socket ?? $pfb['dns_proxy_ctl'], $timeout, 'the decider restart');
-	if ($why !== NULL) {
-		return $why;
-	}
-	return ($reply === 'ok') ? NULL : "the gateway did not restart the decider: {$reply}";
-}
-
-/**
  * Bind, as root and in this process, the sockets the gateway takes for one listener of $kind (the gateway can no longer bind: it is not
  * root after its start). Only a host inet_pton() accepts is bound: a name would be resolved. TCP is bound first, then UDP; whatever was
  * bound before a failure is closed again.
@@ -5809,8 +5778,8 @@ function pfb_dns_proxy_certificate_sync(): void {
  * Written on each call unless a moved Resolver's Listen Port conflicts with a backend port; then the current script is kept.
  * Warnings are logged only when the content changed.
  *
- * DNSBL on: the proxy boots pfb_unbound.py, and while the Resolver forwards it also listens for the upstream observer
- * Unbound runs (--observer). DNSBL off: --no-module, the proxy only forwards every query, and with the DNS Reply
+ * DNSBL on: the gateway builds the DNSBL module from the files under --module-dir, and while the Resolver forwards it also listens
+ * for the upstream observer Unbound runs (--observer). DNSBL off: --no-module, the proxy only forwards every query, and with the DNS Reply
  * Logging preference on (dnsbl/pfb_py_reply, the one the DNSBL module's own log reads) it also logs each reply it
  * forwards to dns_reply.log (--reply-log); with it off nothing is logged. A running proxy reads its flags only at start,
  * so a changed preference changes this script, which restarts the proxy (pfb_dns_proxy_ensure_running()).
@@ -5822,10 +5791,10 @@ function pfb_dns_proxy_certificate_sync(): void {
  * that could not bind, and logs one error when the stored marker is no snapshot or our block stands with none (a manual repair);
  * never over a survivor; every address shell-quoted. Loopback is always among
  * the addresses, so an interface list on Localhost only, or on an interface with no address, still gets a proxy. It
- * runs pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and runs the Python decider as its decision service,
- * through pfb_dns.sh (which execs this machine's binary), with --ready-file $pfb['dns_proxy_ready'] ahead of the
- * decider's `--` (the gateway, not the decider, publishes its pid there once it serves, so the marker names the
- * daemon(8) child). There is no other front end: the script has this one launch line whatever the package ships. A
+ * runs pfb-dns, the Go gateway that serves DNS, DoT, DoH and DoQ and decides in-process, through pfb_dns.sh (which execs this
+ * machine's binary), with --module-dir /var/unbound and --ready-file $pfb['dns_proxy_ready'] (the gateway publishes its pid there
+ * once it serves, so the marker names the daemon(8) child); no `--` and no command follow its flags. There is no other front end:
+ * the script has this one launch line whatever the package ships. A
  * package with no pfb-dns this machine can run (no payload, another architecture's only, no execute bit) makes the
  * wrapper exit with its reason on stderr, which daemon(8) writes to the proxy log, and the supervisor start it again
  * every 5 s: no ready marker is ever published, so the activation's readiness wait fails and rolls pfB-DNS back
@@ -5897,15 +5866,13 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 
 	$port = pfb_dns_proxy_port();
 
-	$python = '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py';
 	$wrapper = escapeshellarg("{$proxyDir}/pfb_dns.sh");
 	$command = "/bin/sh {$wrapper}{$addresses} --port {$port} --upstream {$upstream}" .
 	    " --tls-pem {$cert} --ctl-socket {$ctl}{$tlsFlags}{$ddrFlags}" . $module .
-	    ' --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready .
-	    " -- {$python} --decision-fd 3 --module-dir /var/unbound --user unbound";
-	// The command lines of the processes this script keeps and signals: the supervisor and the decider behind the gateway
-	// name pfb_dns_proxy; pfb-dns itself, as the wrapper execs it, is known by its installed path.
-	$proxyArgs = '*pfb_dns_proxy*|' . PFB_DNS_PROXY_DIR . '/bin/freebsd-*/pfb-dns*';
+	    ' --module-dir /var/unbound --unbound-conf /var/unbound/unbound.conf --user unbound --ready-file ' . $ready;
+	// The command lines of the processes this script keeps and signals: the supervisor (its daemon -t title is pfb_dns_proxy), the
+	// wrapper before it execs (a space in a case pattern is escaped), and pfb-dns itself, as the wrapper execs it, by its installed path.
+	$proxyArgs = '*pfb_dns_proxy*|/bin/sh\ ' . PFB_DNS_PROXY_DIR . '/pfb_dns.sh\ *|' . PFB_DNS_PROXY_DIR . '/bin/freebsd-*/pfb-dns*';
 
 	// A /var that came up empty (RAM disks) has no certificate file when the boot starts the proxy: PHP writes it first. Bounded
 	// (timeout(1)) because a start runs under the start lock; a failure costs only the encrypted transports, which the gateway reports.
@@ -6766,54 +6733,6 @@ function pfb_dns_proxy_gateway_changed(string $proxyDir): bool {
 }
 
 /**
- * Did the package install other decider code than the running decider records (it writes the md5 digests of its files beside the
- * module's, before READY)? No record or another one is a change; files that cannot be read are no signal.
- */
-function pfb_dns_proxy_decider_changed(): bool {
-	global $pfb;
-
-	$installed = pfb_unbound_py_module_fingerprint($pfb['dns_proxy_decider_src']);
-	return $installed !== FALSE && trim((string) @file_get_contents($pfb['dns_proxy_decider_applied'])) !== $installed;
-}
-
-/**
- * Does a second decider fit beside the running one while the gateway restarts it alone (issue #3580)? The new one loads the whole
- * DNSBL database before the old one leaves, so hw.usermem must hold twice the running decider's RSS plus
- * PFB_DNS_PROXY_DECIDER_RESTART_HEADROOM, on pfb_unbound_py_swap_fits_ram()'s total-RAM basis. The decider is the gateway's one
- * child whose command line names pfb_dns_proxy.py (the gateway's own names it too); none, two (a drain), or an RSS or hw.usermem
- * that cannot be read is no fit. $pfb['ps'] is the off-appliance injection point.
- *
- * @return array{0: bool, 1: string} whether it fits; then the decider's pid and RSS and hw.usermem as read, or what could not be read
- */
-function pfb_dns_proxy_decider_restart_fits_ram(): array {
-	global $pfb;
-
-	$usermem = (string) get_single_sysctl('hw.usermem');
-	if (!ctype_digit($usermem) || (int) $usermem === 0) {
-		return [FALSE, 'hw.usermem could not be read'];
-	}
-	$gateway = trim((string) @file_get_contents($pfb['dns_proxy_pidfile']));
-	$out = [];
-	$rc = 1;
-	exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -axww -o pid= -o ppid= -o rss= -o args= 2>/dev/null', $out, $rc);
-	$deciders = [];
-	foreach (($rc === 0) ? $out : [] as $line) {
-		$fields = preg_split('/\s+/', trim($line), 4);
-		if (count($fields) === 4 && $fields[1] === $gateway && str_contains($fields[3], 'pfb_dns_proxy.py')) {
-			$deciders[] = $fields;
-		}
-	}
-	if (count($deciders) !== 1) {
-		return [FALSE, 'no single decider runs under the gateway'];
-	}
-	[$pid, , $rss] = $deciders[0];
-	if (!ctype_digit($rss) || (int) $rss === 0) {
-		return [FALSE, "the RSS of decider pid {$pid} could not be read"];
-	}
-	return [(int) $usermem >= 2 * (int) $rss * 1024 + PFB_DNS_PROXY_DECIDER_RESTART_HEADROOM, "decider pid {$pid} uses {$rss} KiB, hw.usermem is {$usermem} bytes"];
-}
-
-/**
  * The apply's branch with nothing to reload restarts nothing unless something changed: bring up a proxy that died since the last
  * reload, and restart a live one whose rc script changed in more than its listen addresses. The script bakes in the ports and the
  * DoT/DoH/DoQ/DDR settings, so a changed one is not served until the proxy restarts. A script that differs only in its listen addresses
@@ -6827,10 +6746,10 @@ function pfb_dns_proxy_decider_restart_fits_ram(): array {
  *
  * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
  * pending restart (pfb_dns_proxy_defer_restart()), and nothing else is looked at. The next pass outside one restarts the whole pair
- * once for a pending restart or a changed gateway binary (pfb_dns_proxy_gateway_changed()), and only the decider, on the gateway's
- * control socket, for changed decider code (pfb_dns_proxy_decider_changed()) when a second decider fits in memory beside it
- * (pfb_dns_proxy_decider_restart_fits_ram()); one that may not fit, or that the gateway does not take, is logged and becomes the
- * whole-pair restart. Neither change is looked for while the proxy is not READY: it has no running gateway to judge. The same reconcile
+ * once for a pending restart or a changed gateway binary (pfb_dns_proxy_gateway_changed(): the one binary decides in-process, so
+ * there is no other code to change). A running gateway the previous package launched with a separate decider (`--` and a command
+ * after its flags) has an rc script that differs in more than listen addresses: it is restarted here, or deferred and then restarted by
+ * the next pass. A changed binary is not looked for while the proxy is not READY: it has no running gateway to judge. The same reconcile
  * adds, live, an address the gateway could not assign when it started and the box can bind now (issue #3598), and restarts the pair only when
  * the gateway does not take a change: looked for only while READY, and never under a package operation.
  *
@@ -6855,7 +6774,6 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	pfb_dns_proxy_service($proxyDir);
 	$deferred = pfb_dns_proxy_restart_deferred();
 	$why = NULL;		// why the running proxy restarts as a whole pair
-	$decider = FALSE;	// only its decider has to
 	if (!pfb_dns_proxy_running()) {
 		pfb_logger("\nStarting the DNS proxy", 1);
 		$since = pfb_dns_proxy_log_size();
@@ -6880,31 +6798,16 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 				$why = 'the package installed another gateway';
 			} elseif (($served = pfb_dns_proxy_listener_list()) === NULL && $rc_changed) {
 				$why = 'its listen addresses changed';
-			} elseif (($why = pfb_dns_proxy_listeners_sync($served)) === NULL) {
-				$decider = pfb_dns_proxy_decider_changed();
+			} else {
+				$why = pfb_dns_proxy_listeners_sync($served);
 			}
 		} elseif ($rc_changed) {
 			$why = 'its listen addresses changed';
 		}
 		$since = NULL;
-		$acted = ($why !== NULL || $decider);
-		if ($decider) {
-			[$fits, $measured] = pfb_dns_proxy_decider_restart_fits_ram();
-			if (!$fits) {
-				$why = "a second decider is not known to fit in memory ({$measured})";
-				pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
-			} else {
-				pfb_logger("\nRestarting the DNS proxy's decider: the package installed other decider code ({$measured})", 1);
-				$failed = pfb_dns_proxy_decider_restart();
-				if ($failed !== NULL) {
-					pfb_logger("\nNot completed: the DNS proxy's decider did not restart: {$failed}", 2);
-					$why = 'its decider could not be restarted alone';
-				}
-			}
-		} elseif ($why !== NULL) {
-			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
-		}
+		$acted = ($why !== NULL);
 		if ($why !== NULL) {
+			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
 			$since = pfb_dns_proxy_log_size();
 			restart_service('pfb_dns_proxy');
 			unlink_if_exists($pfb['dns_proxy_restart_pending']);
@@ -16289,22 +16192,6 @@ function pfb_dnsbl_unlock_action($action) {
 }
 
 
-// issue #3125: mirror of python's _module_fingerprint() -- md5 concat, pfb_unbound.py
-// first, no separator. md5: ADR-42's Python-side algorithm, hashlib has no xxh128.
-// FALSE when any member is unreadable: nothing to compare, so no restart signal.
-function pfb_unbound_py_module_fingerprint(array $paths): string|false {
-	$fp = '';
-	foreach ($paths as $path) {
-		$digest = @md5_file($path);
-		if ($digest === FALSE) {
-			return FALSE;
-		}
-		$fp .= $digest;
-	}
-	return $fp;
-}
-
-
 /**
  * The Resolver snapshot pfb_dns_proxy_resolver() keeps in the registered marker dns/pfb_dns_saved:
  * base64 JSON with exactly the PFB_DNS_PROXY_RESOLVER_KEYS, each {"present": bool, "value": string|null}
@@ -17790,7 +17677,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	}
 
 	if ($mode == 'enabled') {
-		// DNSBL on: the inputs the DNS proxy's decider loads the module from
+		// DNSBL on: the inputs the DNS proxy's DNSBL module is built from
 
 		// Create DNSBL Whitelist
 		$dnsbl_whitelist = pfb_unbound_python_whitelist();
