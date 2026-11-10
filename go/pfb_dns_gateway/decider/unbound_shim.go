@@ -91,6 +91,13 @@ func logWarn(msg string) { logLine("warning", msg) }
 
 func logErr(msg string) { logLine("error", msg) }
 
+// storeQueryInCache and invalidateQueryInCache are pythonmod's message-cache calls, which the shim does not model
+// (unbound_shim.py 108-113): a store always succeeds and keeps nothing. Variables so that a test can record a call or
+// fail a store, as the Python tests swap the builtins.
+var storeQueryInCache = func(qstate *moduleQstate, qinfo queryInfo, msgrep *replyInfo, isReferral int) bool { return true }
+
+var invalidateQueryInCache = func(qstate *moduleQstate, qinfo queryInfo) {}
+
 type rrSetKey struct{ typeStr string }
 
 type rrSetData struct {

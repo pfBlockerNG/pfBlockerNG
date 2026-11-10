@@ -999,14 +999,153 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	return true
 }
 
+// ssAnswerHasCnameTo is whether the resolved answer carries a CNAME pointing at target. It identifies the post-restart
+// pass of the SafeSearch CNAME redirect: the iterator has chased the orig -> CNAME -> target referral we planted, so
+// the answer now contains that CNAME. A genuine answer for the original name would not CNAME to our SafeSearch target.
+func ssAnswerHasCnameTo(qstate *moduleQstate, target string) bool {
+	rm := qstate.returnMsg
+	if rm == nil || rm.rep == nil {
+		return false
+	}
+	rep := rm.rep
+	target = pysem.Lower(strings.TrimRight(target, "."))
+	for i := range rep.anNumrrsets {
+		rr := rep.rrsets[i]
+		if rr.rk.typeStr != "CNAME" {
+			continue
+		}
+		for j := range rr.entry.data.count {
+			if pysem.Lower(strings.TrimRight(convertOther(rr.entry.data.rrData[j]), ".")) == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ssAnswerHasAddress is whether the resolved answer carries at least one A/AAAA RRset. On the post-restart pass this
+// means the iterator successfully chased the CNAME to the target's address (the #1 live path); its absence means the
+// chase produced only a bare CNAME and the #2 baked fallback must answer.
+func ssAnswerHasAddress(qstate *moduleQstate) bool {
+	rm := qstate.returnMsg
+	if rm == nil || rm.rep == nil {
+		return false
+	}
+	rep := rm.rep
+	for i := range rep.anNumrrsets {
+		if typeStr := rep.rrsets[i].rk.typeStr; typeStr == "A" || typeStr == "AAAA" {
+			return true
+		}
+	}
+	return false
+}
+
+// safesearchBakedFallback is the #2 fallback: answer a SafeSearch CNAME name with the baked target IP. Used when the #1
+// live chase yields no address (this Unbound refuses to chase a module-planted CNAME, or the target failed to resolve).
+// The baked v4/v6 are resolved by PHP at list-build and kept ~15-min-fresh by the freshness cron. Returns true if it
+// answered (the caller must return true), false to fall through (no baked IP available for this qtype).
+func safesearchBakedFallback(id int, qstate *moduleQstate, qType uint16, isSafeSearch safeSearchEntry) bool {
+	ip, rrtype := isSafeSearch.v6, "AAAA"
+	if qType == RR_TYPE_A {
+		ip, rrtype = isSafeSearch.v4, "A"
+	}
+	if ip == "" {
+		return false
+	}
+	qname := qstate.qinfo.qnameStr
+	msg := newDNSMessage(qname, qType, RR_CLASS_IN, PKT_QR|PKT_RA)
+	msg.answer = append(msg.answer, fmt.Sprintf("%s 300 IN %s %s", qname, rrtype, ip))
+	if !msg.setReturnMsg(qstate) {
+		qstate.extState[id] = MODULE_ERROR
+		return true
+	}
+	qstate.returnRcode = RCODE_NOERROR
+	// Synthesized, deliberately unsigned -> stop the validator marking it bogus.
+	qstate.returnMsg.rep.security = secStatusInsecure
+	qstate.extState[id] = MODULE_FINISHED
+	return true
+}
+
+// safesearchCnameRedirect is the SafeSearch CNAME redirect (e.g. duckduckgo.com -> safe.duckduckgo.com). Unbound will
+// not chase a CNAME a module hands it (NLnetLabs/unbound #976), so this uses the field-proven nxforward technique
+// post-resolution (MODDONE):
+//
+//  1. First pass: plant the synthetic orig -> CNAME -> target into Unbound's message cache as a REFERRAL and restart
+//     the iterator (MODULE_RESTART_NEXT) so the ITERATOR chases the target's A/AAAA itself. If the plant fails to
+//     store (real Unbound's silent falsy failure -- issue #749), restarting would chase a referral that was never
+//     actually cached, so this falls back to the baked target IP (#2) instead -- never MODULE_RESTART_NEXT on a
+//     failed store.
+//  2. Post-restart pass (the answer now carries our CNAME): if the chase produced an address, force rep.security so
+//     the unsigned synthesized hop is not marked bogus (the historical DNSSEC blocker, issue #149), re-cache as a
+//     final answer and finish -- a failure to re-cache here (issue #749) only means the chased answer isn't cached,
+//     not that the already-built, already-validated reply is invalid, so it still finishes; if the chase produced no
+//     address, fall back to the baked target IP (#2).
+//
+// Runs only for A/AAAA queries. Returns true if it took over the query (the caller must return true), false to let
+// normal processing continue. snap is the query's own snapshot, which Group Policy is read from.
+func safesearchCnameRedirect(snap *snapshot, id int, qstate *moduleQstate, qType uint16, isSafeSearch safeSearchEntry) bool {
+	target := isSafeSearch.aaaa
+	if target == "" || (qType != RR_TYPE_A && qType != RR_TYPE_AAAA) {
+		return false
+	}
+
+	// Post-restart pass: the iterator has chased our planted CNAME.
+	if ssAnswerHasCnameTo(qstate, target) {
+		if ssAnswerHasAddress(qstate) {
+			qstate.returnRcode = RCODE_NOERROR
+			// The orig->target hop is synthesized (unsigned); without this the validator marks a signed original zone
+			// bogus -> SERVFAIL (issue #149).
+			qstate.returnMsg.rep.security = secStatusInsecure
+			invalidateQueryInCache(qstate, qstate.qinfo)
+			// A bypassed client's answer stays out of the shared cache (issue #3508).
+			if gpBypassed(snap, qstate) {
+				qstate.extState[id] = MODULE_FINISHED
+				return true
+			}
+			qstate.noCacheStore = 0
+			if !storeQueryInCache(qstate, qstate.qinfo, qstate.returnMsg.rep, 0) {
+				// A cache-store failure must not SERVFAIL an already-built, already-validated answer -- log it and
+				// finish anyway (issue #749).
+				logInfo(fmt.Sprintf("[pfBlockerNG]: SafeSearch: failed to re-cache chased answer for %s", qstate.qinfo.qnameStr))
+			}
+			qstate.extState[id] = MODULE_FINISHED
+			return true
+		}
+		// #1 chase yielded only a bare CNAME -> #2 baked fallback.
+		return safesearchBakedFallback(id, qstate, qType, isSafeSearch)
+	}
+
+	// First pass: plant the synthetic CNAME referral and restart the iterator.
+	qname := qstate.qinfo.qnameStr
+	cnameMsg := newDNSMessage(qname, qType, RR_CLASS_IN, PKT_QR|PKT_RD|PKT_RA)
+	cnameMsg.answer = append(cnameMsg.answer, fmt.Sprintf("%s 3600 IN CNAME %s", qname, target))
+	if !cnameMsg.setReturnMsg(qstate) {
+		qstate.extState[id] = MODULE_ERROR
+		return true
+	}
+	invalidateQueryInCache(qstate, qstate.returnMsg.qinfo)
+	if !storeQueryInCache(qstate, qstate.returnMsg.qinfo, qstate.returnMsg.rep, 1) {
+		// The planted referral isn't actually in cache -- restarting the iterator would chase nothing and fruitlessly
+		// loop back into this first pass (issue #749). Fall back to the baked target IP instead of restarting.
+		logInfo(fmt.Sprintf("[pfBlockerNG]: SafeSearch: failed to store planted CNAME referral for %s", qname))
+		if safesearchBakedFallback(id, qstate, qType, isSafeSearch) {
+			return true
+		}
+		qstate.extState[id] = MODULE_ERROR
+		return true
+	}
+	qstate.noCacheStore = 1
+	qstate.extState[id] = MODULE_RESTART_NEXT
+	return true
+}
+
 // operate is the module's query callback. A query's matcher snapshot is Loaded once, on its first event, into
 // qstate.snap and every later event (MODDONE, the CNAME pass) reuses it; Python re-reads the module's _snapshot per
 // event, the owner's 2026-11-09 rule makes one query one generation. Every reader below (noAAAA, SafeSearch, Group
 // Policy, evaluate_domain, the settings) reads that snapshot, never a field of m a swap could change.
 //
-// Not translated yet: the python_control TXT branch (family control), the log calls get_details_dnsbl,
-// get_details_reply and _log_idn_alert (the DNSBL and DNS Reply log acceptance rows of #3779), and
-// safesearch_cname_redirect (family safesearch_cname).
+// Not translated yet: the python_control TXT branch (family control), and the log calls get_details_dnsbl,
+// get_details_reply and _log_idn_alert (the DNSBL and DNS Reply log acceptance rows of #3779).
 func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any) bool {
 	qstateValid := false
 	var qType uint16
@@ -1258,12 +1397,17 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 	}
 
 	if event == MODULE_EVENT_MODDONE {
-		// SafeSearch CNAME redirect (duckduckgo.com / pixabay.com), post-resolution because Unbound will not chase a CNAME
-		// the module hands it (issue #149 / unbound #976): safesearch_cname_redirect(id, qstate, q_type, isSafeSearch)
-		// takes over an entry whose A is "cname" here. It waits for the safesearch_cname family, so until then MODDONE
-		// finishes with Unbound's reply; the lookup stays for the memo it leaves on the name's Decision.
+		// SafeSearch CNAME redirect (duckduckgo.com / pixabay.com). Handled here, post-resolution, because Unbound will
+		// not chase a CNAME the module hands it (issue #149 / unbound #976): we plant the synthetic CNAME in the cache
+		// and restart the iterator so it chases the target itself. The first pass (plant + restart) and the second
+		// pass (fix DNSSEC + finish, or the baked fallback) are distinguished inside safesearchCnameRedirect by the
+		// resolved answer.
 		if qstateValid && settings.safeSearchDB {
-			m.safesearchEntry(snap, qNameOriginal)
+			if isSafeSearch, found := m.safesearchEntry(snap, qNameOriginal); found && isSafeSearch.a == "cname" {
+				if safesearchCnameRedirect(snap, id, qstate, qType, isSafeSearch) {
+					return true
+				}
+			}
 		}
 
 		// Log entry: get_details_reply waits for the DNS Reply log acceptance row of #3779.

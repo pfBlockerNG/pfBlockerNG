@@ -1127,7 +1127,7 @@ func TestOperateSafeSearchRewrites(t *testing.T) {
 	}
 }
 
-func TestOperateSafeSearchCnameEntryWaitsForTheChase(t *testing.T) {
+func TestOperateSafeSearchCnameEntryIsRedirectedAfterResolution(t *testing.T) {
 	m := opSafeSearchOperate(t, map[string]safeSearchEntry{"cname.com": {a: "cname", aaaa: "target.com", v4: "5.6.7.8", v6: "::2"}})
 	q := opQstate("cname.com.", RR_TYPE_A, "192.0.2.1")
 	// The pre-resolution pass leaves a CNAME entry to the post-resolution one (issue #149 / unbound #976).
@@ -1135,11 +1135,10 @@ func TestOperateSafeSearchCnameEntryWaitsForTheChase(t *testing.T) {
 	if q.returnMsg != nil || q.returnRcode != RCODE_NOERROR {
 		t.Errorf("NEW: (returnMsg, rcode) = (%v, %d), want the query untouched", q.returnMsg, q.returnRcode)
 	}
-	// safesearch_cname_redirect is not translated yet (family safesearch_cname): MODDONE finishes with Unbound's reply.
-	opWantState(t, "MODDONE", opOperate(m, MODULE_EVENT_MODDONE, q), MODULE_FINISHED)
-	if q.returnMsg != nil {
-		t.Errorf("MODDONE: returnMsg = %v, want it left alone until the chase is translated", q.returnMsg)
-	}
+	// The post-resolution pass plants the CNAME referral and asks for the restart that has the iterator chase it
+	// (safesearch_cname_redirect, tested in pfb_unbound_safesearch_cname_test.go).
+	opWantState(t, "MODDONE", opOperate(m, MODULE_EVENT_MODDONE, q), MODULE_RESTART_NEXT)
+	opSections(t, "MODDONE", q, []string{"cname.com. 3600 IN CNAME target.com"}, nil)
 }
 
 func TestOperateSafeSearchMemoIsReusedAndGenerationGated(t *testing.T) {
