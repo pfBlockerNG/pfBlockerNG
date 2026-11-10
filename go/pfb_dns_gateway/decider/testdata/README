@@ -1,0 +1,5 @@
+Log-rows oracle fixtures
+
+pfb_unbound_log_rows_oracle.json is written by gen_pfb_unbound_log_rows_oracle.py from the shipped pfb_unbound.py (CPython 3.11.15, maxminddb 3.2.0); run it as its header says.
+
+GeoLite2-Country-Test.mmdb and GeoIP2-Country-Test.mmdb are MaxMind's own test databases, test-data/ of https://github.com/maxmind/MaxMind-DB at commit 1b0113ab55f0428c00fe30b9709742ac52f4e9cc. That repository is dual-licensed Apache-2.0 / MIT (LICENSE-APACHE, LICENSE-MIT there), which this repository's Apache-2.0 licence accepts; they are used unmodified as test data only and are not shipped.
