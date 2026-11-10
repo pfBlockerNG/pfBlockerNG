@@ -65,7 +65,8 @@ func reloadParseInt(text string) (int64, bool) {
 	if text == "" || text[0] == '_' || text[len(text)-1] == '_' || strings.Contains(text, "__") {
 		return 0, false
 	}
-	var value uint64
+	var value int64
+	saturated := false
 	digits := 0
 	for _, r := range text {
 		if r == '_' {
@@ -76,22 +77,26 @@ func reloadParseInt(text string) (int64, bool) {
 			return 0, false
 		}
 		digits++
-		if value <= math.MaxInt64 { // past the range the value only has to stay out of it
-			value = value*10 + uint64(digit)
+		switch {
+		case saturated:
+		case value > (math.MaxInt64-int64(digit))/10: // the next step would pass int64: stop at the bound
+			saturated = true
+		default:
+			value = value*10 + int64(digit)
 		}
 	}
 	if digits > pyIntMaxStrDigits {
 		return 0, false
 	}
 	switch {
-	case negative && value > math.MaxInt64:
+	case saturated && negative:
 		return math.MinInt64, true
-	case negative:
-		return -int64(value), true
-	case value > math.MaxInt64:
+	case saturated:
 		return math.MaxInt64, true
+	case negative:
+		return -value, true
 	}
-	return int64(value), true
+	return value, true
 }
 
 // reloadRAMGateOK is _reload_ram_gate_ok: whether the both-resident transient of a rebuild for entryCount entries (2 x

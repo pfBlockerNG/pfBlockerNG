@@ -240,6 +240,12 @@ func TestReloadReadGenerationFollowsPythonsIntParse(t *testing.T) {
 		{"Arabic-Indic digits around an underscore", "\u0663_\u0664", 34, true},
 		{"a sign before Arabic-Indic digits", "-\u0663", -3, true},
 		{"4300 digits (past int64: saturates)", strings.Repeat("1", 4300), math.MaxInt64, true},
+		{"2e19 (past int64, below 2^65)", "20000000000000000000", math.MaxInt64, true},
+		{"-2e19", "-20000000000000000000", math.MinInt64, true},
+		{"99999999999999999999999 (23 digits)", "99999999999999999999999", math.MaxInt64, true},
+		{"the largest int64", "9223372036854775807", math.MaxInt64, true},
+		{"the smallest int64", "-9223372036854775808", math.MinInt64, true},
+		{"one past the largest int64", "9223372036854775808", math.MaxInt64, true},
 		{"4301 digits (Python's int() limit)", strings.Repeat("1", 4301), 0, false},
 		{"a superscript is a digit but no decimal", "\u00b2", 0, false},
 		{"empty", "", 0, false},
@@ -333,6 +339,28 @@ func TestReloadDeclineLogLineIsPythonsByteForByte(t *testing.T) {
 	}
 }
 
+// rlDrainOnce is one drain of a watcher that is to take exactly one advance: it asks the RAM gate once per generation it
+// builds or declines, so a drain that asks twice has retried a generation it had already seen. The second ask closes the
+// drain's stop, which ends the retrying loop and fails the test by assertion rather than leaving it spinning.
+func rlDrainOnce(t *testing.T, m *pfbUnbound, w *reloadWatcher) {
+	t.Helper()
+	stop := make(chan struct{})
+	inner := m.totalRAM
+	asked := 0
+	m.totalRAM = func() (uint64, bool) {
+		asked++
+		if asked == 2 {
+			close(stop)
+		}
+		return inner()
+	}
+	w.drainAndSwap(stop)
+	m.totalRAM = inner
+	if asked > 1 {
+		t.Errorf("one drain asked the RAM gate %d times: it retried a generation it had already acted on", asked)
+	}
+}
+
 // rlStopAfterDeclines is a log that closes stop at its limit-th decline line: a loop that retries a declined generation
 // is then ended by the log, so that it is the count that fails and the test does not hang.
 type rlStopAfterDeclines struct {
@@ -389,7 +417,7 @@ func TestReloadDeclineKeepsTheOldSnapshotServingSkipsTheBuilderAndLeavesTheMarke
 	rlWantApplied(t, "before the advance", m, "5\n")
 
 	rlPublish(t, m, 6)
-	w.drainAndSwap(make(chan struct{}))
+	rlDrainOnce(t, m, w)
 
 	if m.snapshot.Load() != old {
 		t.Errorf("a declined reload replaced the live snapshot")
@@ -450,13 +478,13 @@ func TestReloadWatcherAdoptsTheBaselineWithoutABuildAndPublishesIt(t *testing.T)
 	rlWantApplied(t, "before the watcher", m, "")
 
 	w := m.newReloadWatcher()
-	w.drainAndSwap(make(chan struct{}))
+	rlDrainOnce(t, m, w)
 
 	rlWantApplied(t, "after the baseline", m, "5\n")
 	rlWantBuilds(t, "the baseline generation", b)
 
 	rlPublish(t, m, 6)
-	w.drainAndSwap(make(chan struct{}))
+	rlDrainOnce(t, m, w)
 	rlWantBuilds(t, "a genuine advance past the baseline", b, 6)
 }
 
@@ -464,13 +492,12 @@ func TestReloadWatcherWithoutASentinelPublishesNoBaselineAndBuildsForTheFirstGen
 	m := rlModule(t)
 	b := newRlBuilds(m)
 	w := m.newReloadWatcher()
-	stop := make(chan struct{})
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
 	rlWantApplied(t, "no sentinel", m, "")
 	rlWantBuilds(t, "no sentinel", b)
 
 	rlPublish(t, m, 1) // None -> 1 is an advance
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
 	rlWantBuilds(t, "the first generation", b, 1)
 }
 
@@ -479,12 +506,11 @@ func TestReloadWatcherAdvanceTriggersExactlyOneSwap(t *testing.T) {
 	b := newRlBuilds(m)
 	opInstall(t, m, nil, func(s *snapshot) { opBlockData(s, "old.example", "1", 0) })
 	w := m.newReloadWatcher()
-	stop := make(chan struct{})
 	rlWantDomains(t, "before the advance", m, "old.example")
 
 	rlPublish(t, m, 1)
-	w.drainAndSwap(stop)
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
+	rlDrainOnce(t, m, w)
 
 	rlWantBuilds(t, "one advance, two polls", b, 1)
 	rlWantDomains(t, "after the advance", m, "gen1.example")
@@ -494,15 +520,14 @@ func TestReloadWatcherDoesNotSwapWithoutAnAdvance(t *testing.T) {
 	m := rlModule(t)
 	b := newRlBuilds(m)
 	w := m.newReloadWatcher()
-	stop := make(chan struct{})
 	rlPublish(t, m, 5)
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
 	rlWantBuilds(t, "the first advance", b, 5)
 
 	rlPublish(t, m, 5) // the same generation again: a duplicate event
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
 	rlPublish(t, m, 3) // a generation that went backwards is no advance either
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
 	rlWantBuilds(t, "the same and a lower generation", b, 5)
 }
 
@@ -547,9 +572,8 @@ func TestReloadWatcherKeepsTheOldSnapshotAndTheMarkerWhenABuildFailsAndDoesNotRe
 	rlWantApplied(t, "before", m, "8\n")
 
 	rlPublish(t, m, 9)
-	stop := make(chan struct{})
-	w.drainAndSwap(stop)
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
+	rlDrainOnce(t, m, w)
 
 	if m.snapshot.Load() != old {
 		t.Errorf("a failed build replaced the live snapshot")
@@ -840,7 +864,7 @@ func TestReloadMarkerAdvancesOnlyOnASuccessfulSwap(t *testing.T) {
 	rlWantApplied(t, "before: the baseline", m, "5\n")
 
 	rlPublish(t, m, 6)
-	w.drainAndSwap(make(chan struct{}))
+	rlDrainOnce(t, m, w)
 	rlWantApplied(t, "after the swap", m, "6\n")
 }
 
@@ -854,7 +878,7 @@ func TestReloadMarkerIsNotAdvancedOnARAMDecline(t *testing.T) {
 	rlWantApplied(t, "before: the baseline", m, "5\n")
 
 	rlPublish(t, m, 7)
-	w.drainAndSwap(make(chan struct{}))
+	rlDrainOnce(t, m, w)
 	rlWantApplied(t, "after the decline", m, "5\n")
 }
 
@@ -867,7 +891,7 @@ func TestReloadMarkerIsNotAdvancedOnAFailedBuild(t *testing.T) {
 	rlWantApplied(t, "before: the baseline", m, "2\n")
 
 	rlPublish(t, m, 3)
-	w.drainAndSwap(make(chan struct{}))
+	rlDrainOnce(t, m, w)
 	rlWantApplied(t, "after the failed build", m, "2\n")
 }
 
@@ -878,16 +902,15 @@ func TestReloadWatcherKeepsTheSwapWhenTheMarkerWriteFailsAndGoesOn(t *testing.T)
 	m.pfb.pfbPyReloadApplied = filepath.Join(t.TempDir(), "missing", "pfb_py_reload.applied")
 	log := modCaptureLog(t)
 	w := m.newReloadWatcher()
-	stop := make(chan struct{})
 
 	rlPublish(t, m, 1)
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
 	rlWantDomains(t, "after the failed marker write", m, "gen1.example")
 	if !strings.Contains(log.String(), "failed to write applied-generation marker") {
 		t.Errorf("log = %q, want the marker failure", log.String())
 	}
 	rlPublish(t, m, 2)
-	w.drainAndSwap(stop)
+	rlDrainOnce(t, m, w)
 	rlWantBuilds(t, "the generation after a marker failure", b, 1, 2)
 }
 
