@@ -1174,6 +1174,8 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
             raise BuildError(f"{modules_txt}: unsupported module line {line!r}")
         if _PSEUDO_VERSION.search(fields[1]) and fields[0] not in _PSEUDO_VERSION_MODULES:
             raise BuildError(f"{modules_txt}: {fields[1]} is a pseudo-version, which no GH_TUPLE tag can name")
+        if fields[0] in listed:
+            raise BuildError(f"{modules_txt}: {fields[0]} is listed twice ({listed[fields[0]]} and {fields[1]})")
         listed[fields[0]] = fields[1]
     unpacked: dict[tuple[str, str], str] = {}  # (path, version) -> the variable that unpacks it
     for variable in ("GH_TUPLE", "GL_TUPLE"):
@@ -1194,7 +1196,8 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
             if variable == "GL_TUPLE":
                 if not _COMMIT.fullmatch(tag):
                     raise BuildError(f"GL_TUPLE entry {entry!r} does not name a 40-hex lowercase commit")
-                if path.split("/", 1)[0] not in _GITLAB_MODULE_HOSTS:
+                host, _, rest = path.partition("/")
+                if host not in _GITLAB_MODULE_HOSTS or not rest:
                     hosts = " or ".join(sorted(_GITLAB_MODULE_HOSTS))
                     raise BuildError(f"GL_TUPLE entry {entry!r} is not a {hosts} module")
                 if path not in listed:

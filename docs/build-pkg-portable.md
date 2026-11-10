@@ -392,8 +392,8 @@ tag can name) are refused, and so are a tuple without a `modules.txt` line and t
 narrow exceptions, both allowlists in the builder (`_GITLAB_MODULE_HOSTS`,
 `_PSEUDO_VERSION_MODULES`; changing either is an owner decision):
 
-- `GL_TUPLE` (`[https://gitlab.com:]account:project:<40-hex commit>:group/subdir`) may supply
-  modules whose first path element is `modernc.org` only. A commit cannot be compared with a tag offline, so only its
+- `GL_TUPLE` (`[https://gitlab.com:]account:project:<40 lower-case hex commit>:group/subdir`) may supply
+  modules under `modernc.org/` only (the first path element, never the bare host). A module listed twice in `modules.txt` is refused. A commit cannot be compared with a tag offline, so only its
   shape is checked, and the module counts at the version `modules.txt` lists.
 - `github.com/remyoudompheng/bigfft` has no tags: its `GH_TUPLE` entry names the 12-hex
   revision its pseudo-version ends in (or the full commit that starts with it).

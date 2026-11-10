@@ -641,6 +641,36 @@ PARITY_FAILURES = [
     ("gitlab-commit-that-is-not-hex", gl_tuples_for(MODERNC[0], commit="z" * 40), modules_txt_for(MODERNC), "commit"),
     ("gitlab-commit-that-is-short", gl_tuples_for(MODERNC[0], commit=COMMIT[:12]), modules_txt_for(MODERNC), "commit"),
     (
+        "gitlab-commit-in-upper-case",
+        gl_tuples_for(MODERNC[0], commit=COMMIT.upper()),
+        modules_txt_for(MODERNC),
+        "commit",
+    ),
+    (
+        "gitlab-bare-host-is-no-module",
+        gl_tuples_for("modernc.org"),
+        modules_txt_for(("modernc.org", "v1.0.0")),
+        "modernc.org",
+    ),
+    (
+        "module-listed-twice-at-two-versions",
+        gh_tuples_for(QUIC),
+        modules_txt_for(OLDER_QUIC, QUIC),
+        "quic-go",
+    ),
+    (
+        "allowlisted-pseudo-version-with-an-upper-case-revision",
+        gh_tuples_for((BIGFFT[0], BIGFFT_REVISION.upper())),
+        modules_txt_for(BIGFFT),
+        "revision",
+    ),
+    (
+        "allowlisted-pseudo-version-with-an-upper-case-commit",
+        gh_tuples_for((BIGFFT[0], BIGFFT_COMMIT.upper())),
+        modules_txt_for(BIGFFT),
+        "revision",
+    ),
+    (
         "gitlab-tag-instead-of-a-commit",
         gl_tuples_for(MODERNC[0], commit=MODERNC[1]),
         modules_txt_for(MODERNC),
