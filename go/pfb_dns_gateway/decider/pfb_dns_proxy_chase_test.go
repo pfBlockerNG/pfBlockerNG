@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"net/netip"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -71,6 +72,9 @@ func ssBoot(t *testing.T) *pfbUnbound {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// dnsbl_save_stats() has written the feed's group before Unbound starts: without its epoch row the boot logs that the group
+	// cannot be counted.
+	sqlExec(t, filepath.Join(dir, "pfb_py_dnsbl.sqlite"), sqlCustomGroups(0, "TestGroup")...)
 	module, err := boot(dir)
 	if err != nil {
 		t.Fatalf("boot: %v", err)

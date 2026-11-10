@@ -67,6 +67,9 @@ func TestParityCorpus(t *testing.T) {
 	for _, file := range files {
 		stems[strings.TrimSuffix(filepath.Base(file), ".json")] = true
 	}
+	if statsCounted == 0 {
+		t.Error("no corpus query was counted in a resolver database: the corpus must run with the statistics on")
+	}
 	for key := range divergent {
 		if !stems[strings.SplitN(key, "/", 2)[0]] {
 			t.Errorf("divergent case %q names no scenario file", key)
@@ -137,4 +140,23 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 			counts[c.Family].failed++
 		}
 	}
+	module.stopDbWorker() // the stop flushes what the worker holds
+	if module.sqlite3ResolverCon.Load() {
+		checkResolverStats(t, module)
+	}
+}
+
+// statsCounted is the queries the corpus's resolver databases counted: the corpus runs with the statistics on.
+var statsCounted int64
+
+// checkResolverStats holds the invariant of a database born under the module: the total and the detail rows count the
+// same queries.
+func checkResolverStats(t *testing.T, m *pfbUnbound) {
+	t.Helper()
+	total := sqlValue(t, m.pfb.pfbPyResolver, "SELECT totalqueries FROM resolver WHERE row = 0")
+	detail := sqlValue(t, m.pfb.pfbPyResolver, "SELECT COALESCE(SUM(count), 0) FROM dns_metric_queries")
+	if total != detail {
+		t.Errorf("resolver stats: totalqueries = %v, dns_metric_queries sums to %v", total, detail)
+	}
+	statsCounted += total.(int64)
 }

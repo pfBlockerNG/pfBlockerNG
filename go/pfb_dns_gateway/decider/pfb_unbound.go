@@ -7,8 +7,8 @@
 // here is joined onto moduleDir. The decision data (the DBs, the settings a decision reads) lives in the one
 // snapshot the module publishes, not in module fields: see pfbUnbound.snapshot.
 //
-// Not translated yet, each arriving with the family that needs it: the sqlite setup, the reload and query watchers, the
-// stderr redirect, the module fingerprint, and the retired-cache sweep. The DNSBL control surface
+// Not translated yet, each arriving with the family that needs it: the reload and query watchers, the stderr redirect,
+// the module fingerprint, and the retired-cache sweep. The DNSBL control surface
 // (pfb_apply_control_command, its timers and the control watcher) is in pfb_unbound_control.go, and the log rows, their
 // files and the GeoIP reader in pfb_unbound_log.go, pfb_unbound_logfile.go and pfb_unbound_geoip.go.
 package decider
@@ -62,8 +62,8 @@ func idnModeFromLegacy(pythonIdn bool) IdnMode {
 }
 
 // pfbSettings is the pfb dict init_standard fills: the settings a decision reads, the DNSBL files, the ini toggles.
-// important_rules is the snapshot's own importantRules, and group_policy and the sqlite/thread flags are set only by code
-// that is not translated yet, so they are not here.
+// important_rules is the snapshot's own importantRules, and group_policy and the thread flags are set only by code that
+// is not translated yet, so they are not here. The sqlite flags are pfbUnbound's own (pfb_unbound_sqlite.go).
 type pfbSettings struct {
 	metricsClientIp             bool
 	pythonEnable                bool
@@ -175,6 +175,20 @@ type pfbUnbound struct {
 	// dnsblLast is _dnsbl_last_event, the previous block, which a repeat of marks its row a duplicate.
 	dnsblLastMu sync.Mutex
 	dnsblLast   *dnsblEvent
+
+	// The stats databases (pfb_unbound_sqlite.go). dbMu is _db_lock, held for every use of a connection, the retries of a
+	// failed write included; dbRecoveryMu is _db_recovery_lock, taken before dbMu and never inside it. sqlite3ResolverCon and
+	// sqlite3DnsblCon are pfb["sqlite3_resolver_con"] and pfb["sqlite3_dnsbl_con"]: the counters are enqueued only while
+	// their database is open. metricsPrivacyEpochs is pfb["metrics_privacy_epochs"], written by init before the first
+	// query. dbWorker is the DB I/O worker, nil when none runs (pfb["db_worker"] False), and dbDropped counts the events
+	// its full queue refused (pfb["db_dropped"]).
+	dbMu, dbRecoveryMu   sync.Mutex
+	dbConns              map[int]*dbConn
+	sqlite3ResolverCon   atomic.Bool
+	sqlite3DnsblCon      atomic.Bool
+	metricsPrivacyEpochs map[int]string
+	dbWorker             atomic.Pointer[dbWorker]
+	dbDropped            atomic.Int64
 }
 
 // parseTldAllow turns the MAIN-ini tld_allow_list value into a cleaned list: stripped, lower-cased, blank entries
@@ -595,7 +609,22 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 			// feed regex is enabled.
 			dnsblEmitCount(pfb.pfbPyRegexCount, scratch.regexDB.len()+scratch.allowRegexDB.len()+scratch.userRegexDB.len()+scratch.userAllowRegexDB.len())
 
-			// Not translated: the SQLite statistics databases (PR5b).
+			// Validate the SQLite3 database connections. A false validate (issue #900) is the corrupt or broken database:
+			// validateDbWithRecovery deletes the file and retries once, and one that still fails leaves its flag off, no
+			// crash and no endless retry, but logged.
+			if m.validateDbWithRecovery(dbResolver) {
+				m.sqlite3ResolverCon.Store(true)
+			} else {
+				logErr("[pfBlockerNG]: Failed to open pfb_py_resolver.sqlite database")
+			}
+			// Enable DNSBL statistics: forwarding-gated too, not just blacklist-gated (issue #860).
+			if m.dnsblStatsWanted(pfb) {
+				if m.validateDbWithRecovery(dbDnsbl) {
+					m.sqlite3DnsblCon.Store(true)
+				} else {
+					logErr("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database")
+				}
+			}
 
 			// Open MaxMind db reader for DNS Reply GeoIP logging.
 			m.openMaxmind()
@@ -612,10 +641,12 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 
 	// ADR-10: bundle the loaded strata into ONE immutable snapshot and install it through rebuildAndSwap, on every
 	// path (python_enable or not, ini or not), so a snapshot is always present for operate(). counts and the others
-	// are the swap's own, and emit_counts is off: init keeps its path-specific inline emits above. The group epochs
-	// (_db_group_epochs) feed only the counters, so the snapshot's groupEpochs stays empty until those land (PR5b).
+	// are the swap's own, and emit_counts is off: init keeps its path-specific inline emits above. The group epochs are
+	// read from the DNSBL database when the snapshot is built (_db_group_epochs): the counter authority a query takes
+	// from its snapshot.
 	m.decisionDB = newLruCache[*decision](intOf(pfb.decisiondbMax))
 	m.rebuildAndSwap(func() (*snapshot, error) {
+		scratch.groupEpochs = m.dbGroupEpochs(m.dnsblStatsWanted(pfb), scratch)
 		scratch.counts = len(scratch.dataDB) + len(scratch.zoneDB)
 		scratch.regexCount = scratch.regexDB.len() + scratch.allowRegexDB.len() + scratch.userRegexDB.len() + scratch.userAllowRegexDB.len()
 		scratch.tldAllowRoots = selectedTldRoots(pfb.tldAllowList)
@@ -626,6 +657,10 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 		scratch.pslFeedIcannPolicy = pfb.pslFeedIcannPolicy
 		return scratch, nil
 	}, false)
+	m.dbCapturePrivacyEpochs()
+
+	// Start the background DB-write worker (persistent sqlite connection, batched).
+	m.startDbWorker()
 
 	// PFBL-03: start the DNSBL-control command-channel reader when the feature is enabled.
 	if pfb.pythonControl {
@@ -1002,8 +1037,8 @@ func intOf(value int64) int {
 // made on a copy of the settings before the snapshot is published, because a published snapshot is never written.
 // The base is the builder's own settings, else the live snapshot's (the module's at init). The base is read and the
 // next snapshot stored under publishMu, so a control command that lands meanwhile is carried, not overwritten.
-//
-// Not translated: _open_dnsbl_stats_db_if_wanted (the sqlite stats DB).
+// A swap that newly satisfies _dnsbl_stats_wanted (python_blacklist just flipped on) opens the DNSBL database init left
+// closed (issues #862, #870).
 func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emitCounts bool) bool {
 	next, err := buildSnapshot()
 	if err != nil {
@@ -1034,6 +1069,7 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	m.decisionDB.clear()
 	// #714 FIX #2: a swap installs brand-new regex DBs, so the warn suppression keyed on a rule name must not outlive it.
 	m.regexRuntime.reset()
+	m.openDnsblStatsDbIfWanted(&settings)
 	if emitCounts {
 		dnsblEmitCount(settings.pfbPyCount, next.counts)
 		dnsblEmitCount(settings.pfbPyRegexCount, next.regexCount)
