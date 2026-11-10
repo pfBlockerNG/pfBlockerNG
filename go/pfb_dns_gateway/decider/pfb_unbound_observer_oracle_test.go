@@ -33,6 +33,10 @@ type observerStep struct {
 	Statements []string
 	Dump       sqlDump
 
+	// Fresh is, for a scenario that probes them, the queries made after the step for names never asked before: each is
+	// [name, the query, the reply Unbound gives, the answer], in hex.
+	Fresh [][4]string
+
 	// the fire step: the shim's fire_query_response with a qstate of the test's own making
 	Qname     string
 	Qtype     uint16
@@ -111,7 +115,7 @@ func linesOf(s string) []string {
 
 func TestObserverReportsMatchPython(t *testing.T) {
 	o := loadObserverOracle(t)
-	datagrams, dumps, rowsSeen, malformedFixtures := 0, 0, 0, 0
+	datagrams, dumps, rowsSeen, malformedFixtures, freshProbes := 0, 0, 0, 0, 0
 	for _, sc := range o.Scenarios {
 		t.Run(sc.Name, func(t *testing.T) {
 			stderr := modCaptureLog(t)
@@ -186,6 +190,18 @@ func TestObserverReportsMatchPython(t *testing.T) {
 						}
 					}
 				}
+				for _, probe := range step.Fresh {
+					mark := len(rows)
+					answer := newFrontend(m).resolve(mustHex(t, probe[1]), o.Probe.Client, func([]byte) []byte {
+						return mustHex(t, probe[2])
+					}, o.Probe.Transport, "", "")
+					rows = rows[:mark]
+					if got := fmt.Sprintf("%x", answer); got != probe[3] {
+						t.Errorf("step %d (%s): the answer to %s, never asked before, differs from Python's\n  go:     %s\n  python: %s",
+							i, step.Note, probe[0], got, probe[3])
+					}
+					freshProbes++
+				}
 				if !same(before, step.Before) || !same(after, step.After) || !same(before, after) {
 					t.Errorf("step %d (%s): the answer to the fixed query changed or differs from Python's: before %v after %v, python %v / %v",
 						i, step.Note, deref(before), deref(after), deref(step.Before), deref(step.After))
@@ -233,9 +249,9 @@ func TestObserverReportsMatchPython(t *testing.T) {
 			}
 		})
 	}
-	if datagrams < 359 || dumps < 23 || rowsSeen < 209 || malformedFixtures < 27 {
-		t.Errorf("the oracle compared %d datagrams and fires, %d dumps, %d rows, %d malformed fixtures: want the full set (359, 23, 209, 27 or more)",
-			datagrams, dumps, rowsSeen, malformedFixtures)
+	if datagrams < 416 || dumps < 24 || rowsSeen < 239 || malformedFixtures < 54 || freshProbes < 190 {
+		t.Errorf("the oracle compared %d datagrams and fires, %d dumps, %d rows, %d malformed fixtures, %d fresh names: want the full set (416, 24, 239, 54, 190 or more)",
+			datagrams, dumps, rowsSeen, malformedFixtures, freshProbes)
 	}
 }
 

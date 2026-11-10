@@ -46,8 +46,12 @@ type jsonParser struct {
 }
 
 // parsePyJSON is json.loads(text): ok is false where Python raises a ValueError.
-// shortcut: a lone surrogate escape ("\ud800") becomes U+FFFD, where Python keeps the surrogate; it only shapes the
-// text of a str()-ed value.
+// shortcut: a lone surrogate escape ("\ud800") becomes U+FFFD, where Python keeps the surrogate. It reaches only the IP
+// and duration of a control record, which PHP never writes with one: the command rejects them (an IP is not an address, a
+// duration is out of range) in both, and the rejection's message and the log_info line that carries it hold U+FFFD here
+// and the surrogate in Python, which the shim's print to stderr writes as \ud800. No row or log file takes it, so no
+// UnicodeEncodeError is lost. parsePyJSONSurrogates keeps it for the observer's reports, whose rows do; both are pinned
+// by pfb_unbound_control_surrogate_test.go. Upgrade if the control channel's messages must match byte for byte.
 func parsePyJSON(text string) (value any, ok bool) {
 	p := &jsonParser{text: text}
 	value, ok = p.value(0)

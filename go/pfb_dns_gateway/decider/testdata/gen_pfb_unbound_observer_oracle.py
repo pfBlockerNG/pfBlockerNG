@@ -46,6 +46,8 @@ STAMPED = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
 
 MAIN = {"python_enable": "true", "python_blocking": "true", "dnsbl_ipv4": "10.10.10.1", "forwarding": "true"}
 PROBE_NAME = "probe.example."
+LISTED_ZONE = "fresh.example."  # blocked with every name under it by the lists of the scenarios that probe fresh names
+OPEN_ZONE = "open.example."
 PROBE_ZONE = {(PROBE_NAME, 1): [f"{PROBE_NAME} 300 IN A 192.0.2.99"]}
 PROBE_WIRE = build_query(PROBE_NAME, 1)
 PROBE_REPLY = FakeUnbound(PROBE_ZONE).answer(PROBE_WIRE)
@@ -233,8 +235,11 @@ class Clock:
 
 
 class Runner:
-    def __init__(self, name, files):
+    def __init__(self, name, files, fresh=False):
         self.name, self.files = name, files
+        self.fresh = fresh  # query names never queried before after every step, see fresh_probe
+        self.seen = {PROBE_NAME}
+        self.fresh_count = 0
         self.dir = Path(tempfile.mkdtemp(prefix="pfbobserver"))
         for rel, text in files.items():
             target = self.dir / rel
@@ -286,6 +291,33 @@ class Runner:
         del self.rows[mark:]
         return answer
 
+    def fresh_probe(self, reported=None):
+        """Frontend.resolve's answers, after a step, to names the module has never been asked: one the lists block, one
+        they do not, and the name the step reported. The module memoizes an answer per name and snapshot generation, so
+        a change a step makes in place only shows on a name asked for the first time. Each entry is [name, query, the
+        reply Unbound would give, the answer], in hex."""
+        self.fresh_count += 1
+        names = [f"f{self.fresh_count}.{LISTED_ZONE}", f"f{self.fresh_count}.{OPEN_ZONE}"]
+        if isinstance(reported, str) and reported.lower() not in self.seen:
+            names.append(reported)
+        out = []
+        for name in names:
+            self.seen.add(name.lower())
+            try:
+                wire = build_query(name, 1)
+            except Exception:  # a name no query can carry: the module is never asked it
+                continue
+            reply = FakeUnbound({}).answer(wire)
+            mark = len(self.rows)
+
+            async def forward(data, reply=reply):
+                return reply
+
+            answer = asyncio.run(pfb_dns_proxy.Frontend(self.module).resolve(wire, CLIENT, forward, transport="UDP"))
+            del self.rows[mark:]
+            out.append([name, wire.hex(), reply.hex(), hx(answer)])
+        return out
+
     def observe(self, act, step):
         """Run `act` between two probes, recording the rows and the stderr lines it produced and both answers."""
         before = self.probe()
@@ -307,9 +339,11 @@ class Runner:
             # them, stand in for it.
             wtf8 = {"rows_wtf8": [[name, line.encode("utf-8", "surrogatepass").hex()] for name, line in rows]}
             rows = []
+        fresh = {"fresh": self.fresh_probe(step.get("reported"))} if self.fresh else {}
         self.record(
             {
                 **step,
+                **fresh,
                 **wtf8,
                 "rows": rows,
                 "stderr": printed.getvalue().splitlines(),
@@ -322,6 +356,10 @@ class Runner:
         if new_frontend:
             self.frontend = pfb_dns_proxy.Frontend(self.module)
         step = {"op": "datagram", "note": note, "hex": data.hex(), "new_frontend": new_frontend}
+        try:
+            step["reported"] = json.loads(data)["qname"]
+        except Exception:  # a datagram that is no report names no query
+            pass
         self.observe(lambda: self.frontend.relay_upstream_response(data), step)
 
     def fire(
@@ -353,6 +391,7 @@ class Runner:
             "lif": lif,
             "flags": flags,
             "opts": opts,
+            "reported": qname,
         }
         self.observe(lambda: shim.fire_query_response(qstate, shim.DnsMsg(qinfo, flags, [], [], [])), step)
 
@@ -396,9 +435,9 @@ class Runner:
 SCENARIOS = []
 
 
-def scenario(name, files):
+def scenario(name, files, fresh=False):
     def decorate(build):
-        runner = Runner(name, files)
+        runner = Runner(name, files, fresh)
         try:
             build(runner)
             SCENARIOS.append({"name": name, "files": files, "steps": runner.steps})
@@ -921,7 +960,19 @@ def _(r):
     r.dump()
 
 
-@scenario("answers-unblocked", module_files())
+def assert_fresh_answers(r, listed):
+    """The lists block what is under fresh.example and two names: the module answers those, Unbound the rest."""
+    probed = [step["fresh"] for step in r.steps if "fresh" in step]
+    assert probed, "no step probed a fresh name"
+    for entries in probed:
+        for name, _wire, reply, answer in entries:
+            blocked = listed and (
+                name.lower().endswith(LISTED_ZONE) or name.lower() in ("probe.example.", "other.example.")
+            )
+            assert (answer != reply) == blocked, (name, answer, reply)
+
+
+@scenario("answers-unblocked", module_files(), fresh=True)
 def _(r):
     d = r.datagram
     d(report(qname=PROBE_NAME, flags=NXRA, opts=[]), "an NXRA report for the very name the fixed query asks")
@@ -939,9 +990,13 @@ def _(r):
     d(report(qname=PROBE_NAME), "a report whose row cannot be written")
     r.log_works()
     r.dump()
+    assert_fresh_answers(r, listed=False)
 
 
-@scenario("answers-blocked", module_files(feeds=[("F1", "G1", "1", ["probe.example", "other.example"])]))
+ANSWER_FEEDS = [("F1", "G1", "1", ["probe.example", "other.example", "||fresh.example^"])]
+
+
+@scenario("answers-blocked", module_files(feeds=ANSWER_FEEDS), fresh=True)
 def _(r):
     d = r.datagram
     d(report(qname=PROBE_NAME, flags=NXRA, opts=[]), "an NXRA report for the very name the list blocks")
@@ -955,6 +1010,37 @@ def _(r):
     d(report(qname=PROBE_NAME), "a second EDE15 report for it")
     r.dump()
     assert r.steps[0]["before"] != hx(PROBE_REPLY), "the listed name must be answered by the module, not by Unbound"
+    assert_fresh_answers(r, listed=True)
+
+
+@scenario("answers-after-everything", module_files(feeds=ANSWER_FEEDS), fresh=True)
+def _(r):
+    """Every kind of datagram, each followed by queries for names never asked, the lists blocking some of them."""
+    d = r.datagram
+    for name, data in MALFORMED.items():
+        d(data, f"malformed: {name}")
+    for i in range(12):
+        d(report(qname=f"n{i}.fresh.example."), f"a report for a listed name never asked before ({i})")
+        d(
+            report(qname=f"n{i}.open.example.", flags=NXRA, opts=[]),
+            f"an NXRA report for an unlisted name never asked ({i})",
+        )
+    d(report(qname="a\ud800b.fresh.example."), "a lone surrogate in a listed name")
+    d(report(qname="x" * 70 + ".fresh.example."), "a label no query can carry")
+    d(b"\xef\xbb\xbf" + report(qname="bom.fresh.example."), "a BOM")
+    d(utf16_lone_surrogate(False, "a"), "UTF-16")
+    r.fire(
+        "a shim call for a listed name never asked",
+        NXRA,
+        [],
+        qname="shim.fresh.example.",
+        transport="DoT",
+        lip="192.0.2.53",
+        lif="LAN",
+    )
+    r.fire("a shim call for an unlisted name", NXRA, [], qname="shim.open.example.")
+    r.dump()
+    assert_fresh_answers(r, listed=True)
 
 
 @scenario("callback-panics", module_files())
