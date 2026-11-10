@@ -8,11 +8,11 @@
 // snapshot the module publishes, not in module fields: see pfbUnbound.snapshot.
 //
 // Not translated: the module fingerprint (the code record it feeds is replaced by the gateway's executable SHA-256 record,
-// #3791). Not translated yet, each arriving with the family that needs it: the query watcher, the stderr redirect and the
-// retired-cache sweep. The live update (the reload watcher, its RAM gate, its applied marker and the reload builder) is in
+// #3791). Not translated yet, each arriving with the family that needs it: the stderr redirect and the retired-cache
+// sweep. The live update (the reload watcher, its RAM gate, its applied marker and the reload builder) is in
 // pfb_unbound_reload.go, the DNSBL control surface (pfb_apply_control_command, its timers and the control watcher) in
-// pfb_unbound_control.go, and the log rows, their files and the GeoIP reader in pfb_unbound_log.go, pfb_unbound_logfile.go
-// and pfb_unbound_geoip.go. deinit (pfbUnbound.deinit) stops what init started, bounded as Python's joins are.
+// pfb_unbound_control.go, the ADR-65 query channel (pfb_query_watcher and its verdict) in pfb_unbound_query.go, and the
+// log rows, their files and the GeoIP reader in pfb_unbound_log.go, pfb_unbound_logfile.go and pfb_unbound_geoip.go. deinit (pfbUnbound.deinit) stops what init started, bounded as Python's joins are.
 package decider
 
 import (
@@ -169,6 +169,10 @@ type pfbUnbound struct {
 	controlTick func() (tick <-chan time.Time, stop func())
 	// controlStop stops the control watcher and waits for it to end; nil is pfb["control_watcher"] False.
 	controlStop func()
+	// queryTick and queryStop are the query channel's (pfb_unbound_query.go), as controlTick and controlStop are the control
+	// watcher's; queryStop is nil when pfb["query_watcher"] is False.
+	queryTick func() (tick <-chan time.Time, stop func())
+	queryStop func()
 
 	// The live update (pfb_unbound_reload.go). reloadStop stops the reload watcher and waits for it to end; nil is
 	// pfb["reload_watcher"] False. reloadTick is its poll tick and the tick's release (nil: a RELOAD_POLL_INTERVAL ticker),
@@ -658,6 +662,9 @@ func initStandard(id int, moduleDir, logDir string) (*pfbUnbound, error) {
 	if pfb.pythonControl {
 		m.startControlWatcher()
 	}
+
+	// ADR-65: start the read-only DNSBL decision query channel's reader, always on (Python gates it on threading alone).
+	m.startQueryWatcher()
 	m.pfbSetupLogging()
 	return m, nil
 }
@@ -697,7 +704,7 @@ func (m *pfbUnbound) whileNotRetired(f func()) {
 	}
 }
 
-// deinit is deinit(): the reload and control watchers stop (each waited for at most watcherStopWait: Python's
+// deinit is deinit(): the reload, control and query watchers stop (each waited for at most watcherStopWait: Python's
 // join(timeout=5)), the database worker drains and the connections close, the log writer writes what is queued and the
 // GeoIP reader closes. The watchers come first, ahead of Python's close of the reader: a watcher mid-build must not meet a
 // closed database. The module has no query in flight by then. A watcher that does not stop within its bound is left
@@ -708,6 +715,7 @@ func (m *pfbUnbound) deinit() {
 	m.publishMu.Unlock()
 	m.stopReloadWatcher()
 	m.stopControlWatcher()
+	m.stopQueryWatcher()
 	m.closeDb()
 	m.stopLogging()
 	m.closeMaxmind()

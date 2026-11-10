@@ -326,12 +326,16 @@ func (m *pfbUnbound) applyControlCommand(edit *controlEdit, controlCommand []str
 
 // controlReadRecord is _control_read_record: the channel's JSON record, or nil if the file is absent, unreadable, not
 // UTF-8 text, empty, malformed or not an object. Any read or parse error is "no command".
-func controlReadRecord(path string) *jsonObject {
+func controlReadRecord(path string) *jsonObject { return channelReadRecord(path, parsePyJSON) }
+
+// channelReadRecord is _control_read_record with the JSON parser the caller's record needs: the query channel's reaches
+// a reply, so it keeps a lone surrogate (parsePyJSONSurrogates).
+func channelReadRecord(path string, parse func(string) (any, bool)) *jsonObject {
 	data, err := os.ReadFile(path)
 	if err != nil || !utf8.Valid(data) {
 		return nil
 	}
-	value, ok := parsePyJSON(string(data))
+	value, ok := parse(string(data))
 	if !ok {
 		return nil
 	}
@@ -355,10 +359,11 @@ func controlSeq(record *jsonObject) (*big.Int, bool) {
 }
 
 // writeMarker publishes text at path the way Python's marker writers do: a temp file next to it, written, fsynced and
-// renamed over it, so a reader sees the old marker or the new one. A failure leaves no temp file and is returned as the
-// text Python's OSError prints (str(e)): an open error names the temp file, a rename error both files, and an error of the
+// renamed over it, so a reader sees the old marker or the new one. A mode that is not 0 is chmod'ed onto the temp file
+// before the rename, as the query reply's 0o640 is. A failure leaves no temp file and is returned as the text Python's
+// OSError prints (str(e)): an open or a chmod error names the temp file, a rename error both files, and an error of the
 // write, the fsync or the close names none. "" is success.
-func writeMarker(path, text string) string {
+func writeMarker(path, text string, mode os.FileMode) string {
 	tmp := path + ".tmp"
 	err := func() error {
 		fh, err := os.Create(tmp)
@@ -374,6 +379,11 @@ func writeMarker(path, text string) string {
 		}
 		if err != nil {
 			return &os.PathError{Op: "write", Path: tmp, Err: errors.Unwrap(err)}
+		}
+		if mode != 0 {
+			if err := os.Chmod(tmp, mode); err != nil {
+				return err
+			}
 		}
 		return os.Rename(tmp, path)
 	}()
@@ -392,7 +402,7 @@ func writeMarker(path, text string) string {
 			reason = syscall.EISDIR
 		}
 		return pyOSError(reason, "") + ": " + pysem.Repr(linkErr.Old) + " -> " + pysem.Repr(linkErr.New)
-	case errors.As(err, &pathErr) && pathErr.Op == "open":
+	case errors.As(err, &pathErr) && (pathErr.Op == "open" || pathErr.Op == "chmod"):
 		return pyOSError(pathErr.Err, pathErr.Path)
 	case errors.As(err, &pathErr):
 		return pyOSError(pathErr.Err, "")
@@ -409,7 +419,7 @@ func (m *pfbUnbound) controlWriteApplied(seq *big.Int) {
 		return
 	}
 	m.whileNotRetired(func() {
-		if failure := writeMarker(path, seq.String()+"\n"); failure != "" {
+		if failure := writeMarker(path, seq.String()+"\n", 0); failure != "" {
 			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure)
 		}
 	})
