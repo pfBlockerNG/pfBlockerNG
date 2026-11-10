@@ -218,6 +218,10 @@ func (m *pfbUnbound) controlAddbypass(bIP string) bool {
 // timer and the start of one are one step, as the Python callers' GIL-held sequence is not.
 func (m *pfbUnbound) pfbApplyControlCommand(controlCommand []string) (bool, string) {
 	m.publishMu.Lock()
+	if m.retired.Load() {
+		m.publishMu.Unlock()
+		return false, ""
+	}
 	edit := newControlEdit(m)
 	controlRcd, controlMsg := m.applyControlCommand(edit, controlCommand)
 	m.publishControl(edit)
@@ -480,7 +484,7 @@ func stopped(stop <-chan struct{}) bool {
 func (w *controlWatcher) drainAndApply(stop <-chan struct{}) {
 	for !stopped(stop) {
 		record := controlReadRecord(w.channel)
-		if record == nil {
+		if record == nil || w.m.retired.Load() { // a record read after Close (the read was blocked) is not applied
 			return
 		}
 		seq, ok := controlSeq(record)

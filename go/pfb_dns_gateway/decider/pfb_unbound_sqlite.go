@@ -284,18 +284,13 @@ func (m *pfbUnbound) dbClose(db int) {
 	m.dbCloseLocked(db)
 }
 
-// closeDb is the end of deinit's database half: the worker drains and stops, then every connection closes.
-func (m *pfbUnbound) closeDb() { m.closeDbConns(false) }
-
-// closeDbForGood is closeDb for a module that is going away: no connection opens again, so that a reload that outlived
-// its watcher's bounded stop finds the databases closed.
-func (m *pfbUnbound) closeDbForGood() { m.closeDbConns(true) }
-
-func (m *pfbUnbound) closeDbConns(forGood bool) {
+// closeDb is the end of deinit's database half: the worker drains and stops, then every connection closes and none opens
+// again, so that a reload that outlived its watcher's bounded stop finds the databases closed.
+func (m *pfbUnbound) closeDb() {
 	m.stopDbWorker()
 	m.dbMu.Lock()
 	defer m.dbMu.Unlock()
-	m.dbClosed = m.dbClosed || forGood
+	m.dbClosed = true
 	for db := range m.dbConns {
 		m.dbCloseLocked(db)
 	}
@@ -333,6 +328,9 @@ func (m *pfbUnbound) dbValidate(db int) bool {
 	return m.dbRun(db, func(context.Context, *sql.Conn) error { return nil })
 }
 
+// removeStale removes a corrupt database or one of its sidecars; a variable so that a test can see what lock is held.
+var removeStale = os.Remove
+
 // validateDbWithRecovery is _validate_db_with_recovery. dbRun swallows every connect or PRAGMA fault and returns false, so
 // a false validate is the broken-database case (usually corruption): the file and its WAL and SHM sidecars are removed
 // (each remove may fail, a read-only directory for one) and the database validated once more. The whole sequence is one
@@ -345,22 +343,24 @@ func (m *pfbUnbound) validateDbWithRecovery(db int) bool {
 	if m.dbValidate(db) {
 		return true
 	}
-	m.dbMu.Lock()
-	closed := m.dbClosed
-	m.dbMu.Unlock()
-	if closed {
-		return false // a closed module is not a corrupt database: nothing is removed
-	}
 	base := m.dbFile(db)
 	if base == "" {
 		return false
 	}
+	// The closed check and the removal are one step under dbMu: a close that lands between them would otherwise take a
+	// closed module's database for a corrupt one and remove it.
+	m.dbMu.Lock()
+	if m.dbClosed {
+		m.dbMu.Unlock()
+		return false // a closed module is not a corrupt database: nothing is removed
+	}
 	for _, stale := range []string{base, base + "-wal", base + "-shm"} {
 		// os.remove refuses a directory, os.Remove would take an empty one: a directory is not the corrupt file.
 		if info, err := os.Lstat(stale); err == nil && !info.IsDir() {
-			os.Remove(stale)
+			removeStale(stale)
 		}
 	}
+	m.dbMu.Unlock()
 	return m.dbValidate(db)
 }
 

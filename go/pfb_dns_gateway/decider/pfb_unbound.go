@@ -154,8 +154,9 @@ type pfbUnbound struct {
 	// Each loads the live snapshot, derives the next from it and stores it, so two of them at once would lose a write.
 	publishMu sync.Mutex
 	// retired is set by deinit under publishMu: from then on nothing is published (a snapshot, an applied marker, the
-	// counts) and the stats database is not opened, so that a reload that outlives the bounded stop of its watcher cannot
-	// act on a closed module when it ends. Written under publishMu, read by whoever publishes or opens.
+	// counts, the status ledger) and the stats database is not opened, so that a reload or a control record that outlives
+	// the bounded stop of its watcher cannot act on a closed module when it ends. The snapshot publishers read it under
+	// publishMu, so that a swap is either stored before deinit or refused; the file writers read it without a lock.
 	retired atomic.Bool
 	// afterFunc starts a control timer (time.AfterFunc's shape; nil is the real one). A test replaces it to fire the
 	// expiry by hand; it must not run f before it returns, as the caller holds publishMu.
@@ -198,7 +199,7 @@ type pfbUnbound struct {
 	// query. dbWorker is the DB I/O worker, nil when none runs (pfb["db_worker"] False), and dbDropped counts the events
 	// its full queue refused (pfb["db_dropped"]).
 	dbMu, dbRecoveryMu   sync.Mutex
-	dbClosed             bool // set by closeDbForGood under dbMu: no connection is opened again
+	dbClosed             bool // set by closeDb under dbMu: no connection is opened again
 	dbConns              map[int]*dbConn
 	sqlite3ResolverCon   atomic.Bool
 	sqlite3DnsblCon      atomic.Bool
@@ -688,10 +689,9 @@ func rcodeNames() map[int]string {
 	}
 }
 
-// whileNotRetired runs f under publishMu unless deinit has begun, so that nothing is written once the module is closing.
+// whileNotRetired runs f unless deinit has begun, so that nothing is written once the module is closing. It holds no lock:
+// f writes a file that may block (a FIFO nobody reads), and deinit must not wait behind it.
 func (m *pfbUnbound) whileNotRetired(f func()) {
-	m.publishMu.Lock()
-	defer m.publishMu.Unlock()
 	if !m.retired.Load() {
 		f()
 	}
@@ -708,7 +708,7 @@ func (m *pfbUnbound) deinit() {
 	m.publishMu.Unlock()
 	m.stopReloadWatcher()
 	m.stopControlWatcher()
-	m.closeDbForGood()
+	m.closeDb()
 	m.stopLogging()
 	m.closeMaxmind()
 	logInfo("[pfBlockerNG]: pfb_unbound.py script exiting")
