@@ -247,15 +247,6 @@ func TestTCTrueLoads(t *testing.T) {
 	}
 }
 
-func TestAnExpectIsTheOnlyExpectationACaseHas(t *testing.T) {
-	c := loadGood(t, func(d *object) {}).Cases[0]
-	want := Expect{"relay", []string{"allowed.example. A"}, "NOERROR",
-		[]dnswire.RR{mustRR(t, "allowed.example. 300 IN A 192.0.2.77")}, nil, false}
-	if !reflect.DeepEqual(c.Expect, want) {
-		t.Errorf("expect: got %+v, want %+v", c.Expect, want)
-	}
-}
-
 func TestAnUpstreamNullLoadsAsNoReplyAndAnEmptyListAsNoRecords(t *testing.T) {
 	s := loadGood(t, func(d *object) {
 		d.get("upstream").set("silent.example. A", nil)

@@ -1,7 +1,61 @@
-// Package paritycorpus loads the schema-4 parity corpus (tests/dns_proxy/fixtures/parity): language-neutral JSON
-// scenarios of a module directory plus ordered query cases and the decision each must reach. The Go decider is the only
-// runner. The package also holds the runner's harness: WriteModule, a recording FakeUnbound (it parses a FORWARD before
-// it records it), the decision classifier, RR texts, Mismatches and the query builder.
+// Package paritycorpus loads the decision parity corpus (issue #3772), schema 4: language-neutral JSON scenarios that the
+// Go decider passes; it is the only runner (decider/corpus_test.go). A scenario is one module directory (the files PHP
+// writes for the decider) plus ordered query cases, each with the decision as it appears on the decision protocol
+// (docs/misc/dns-gateway-protocol.md, "One query"): which FORWARDs the decider sent, and the final ANSWER.
+//
+// The expectations in tests/dns_proxy/fixtures/parity are frozen literals derived from the source branch each family
+// names in families.json, never captured from a run. Where the owner signed off a Go result that differs from the
+// source's, expect holds the Go result and the case's description names the sign-off. A fixture the loader refuses is an
+// error naming file, case and field.
+//
+// The schema (every key is required unless marked optional; any other key, a duplicate JSON key, NaN/Infinity, a wrong
+// JSON type or an unknown value is a refusal, never a skip; every file in fixtures/parity is a .json document the runner
+// loads; "schema" is the integer 4 in every file, 3, 2 and 1 are refused):
+//
+//	families.json  {"schema": 4, "families": {"<family>": "<source branch>", ...}}: the closed family list. Every
+//	               family pins pfb_unbound.py except `frontend`, which pins Frontend.resolve in pfb_dns_proxy.py.
+//	<scenario>.json  {"schema": 4, "description", "module", "upstream", "cases"}
+//	  module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order; no line
+//	                   break anywhere, no bracket in a section name, no "=" or ":" in a key.
+//	  module.manifest  written verbatim as pfb_py_sources.json.
+//	  module.files     {relative path: [lines]}, written joined by newlines plus a trailing one; no "..", NUL or
+//	                   absolute path, no path listed twice ("./x" is "x"), no file that is also another one's directory,
+//	                   and nothing at or under the names the runner writes (the shipped pfb_unbound.py and
+//	                   pfb_dnsbl_regex_rules.py are linked in by the runner, never by a fixture).
+//	  upstream         {"<lower-case absolute name> <TYPE>": [RR texts] or null}, Unbound's stand-in (FakeUnbound),
+//	                   keyed on the FORWARD's first question, its name lower-cased; its class is ignored and the reply
+//	                   carries the FORWARD's questions and id, RD copied, RA set. A listed question gets NOERROR with
+//	                   those records (an empty list: none at all; null: no reply, which the runner gives as an empty
+//	                   REPLY), any other NXDOMAIN; one question is listed once, whichever spelling of its type. So a
+//	                   FORWARD must parse with at least one question: a relay of a wire that does not is not
+//	                   expressible.
+//	  cases            non-empty list, run IN FILE ORDER against one booted decider (its per-name memo carries over).
+//	    id, description   non-empty strings; id unique within the file.
+//	    family            a families.json key; every family's cases run, none is skipped.
+//	    query             {"name": absolute name, "type": mnemonic or TYPE<n> (n <= 65535)}: one question, class IN,
+//	                      RD set, no EDNS; or {"wire_hex": lower-case hex of at most 65535 bytes}: the QUERY frame's DNS
+//	                      wire verbatim; never both, never half of the first. Either has "client": IP (optional,
+//	                      192.0.2.10; canonical as the gateway sends it: no zone, not unspecified, IPv4-mapped IPv6
+//	                      refused) and "transport": TCP|UDP|DoT|DoH|DoQ (optional, UDP).
+//	    expect            {"decision": answer|relay|rewrite|drop, "forwards": ["<name> <TYPE>", ...], "rcode":
+//	                      NOERROR|FORMERR|SERVFAIL|NXDOMAIN|NOTIMP|REFUSED, "answer": [RR texts], "authority": [RR
+//	                      texts], "tc": true|false (optional, false)}. A drop is exactly {"decision": "drop",
+//	                      "forwards": []}.
+//
+// RR texts are "name ttl IN TYPE rdata" for A, AAAA, CNAME, TXT and SOA (dnswire.RRFromText).
+//
+// Decisions: answer = no FORWARD, the decider built the ANSWER; relay = one FORWARD carrying the client's own wire and
+// an ANSWER byte-identical to Unbound's reply; rewrite = FORWARDs, then an ANSWER that is none of Unbound's replies (the
+// SERVFAIL the decider builds for Unbound's silence is one); drop = the decider's final frame is DROP, whatever it
+// forwarded first. Any other outcome (an ANSWER equal to an Unbound reply other than a relay's) is always a mismatch.
+// forwards lists every question of every FORWARD, in order. answer/authority compare in order as (owner, type, class,
+// ttl, rdata) with the owner exactly as on the wire: the encoder compresses an owner equal to the question, case-blind,
+// into the question, so a mixed-case query's answer carries the client's spelling. For every non-drop case the ANSWER's
+// id (equal to the query's first two bytes), rcode and TC are compared too; its question section, other flags and
+// additional section (EDNS included) are not. A drop has no ANSWER: only decision and forwards are compared.
+// The frontend family's size rows sit on exact byte counts of the decider's encoding (dnswire.Encode): every owner name
+// compressed against the names written before it, rdata names (a CNAME's target) never compressed. A decider whose
+// encoder differs builds answers of other sizes and fails those rows.
 package paritycorpus
 
 import (

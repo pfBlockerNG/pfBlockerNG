@@ -1,6 +1,6 @@
 {
   "schema": 4,
-  "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters, so Python re's Unicode classes decide on them, and a leading .* crosses a newline octet (pins what a port to another regex engine must reproduce); case tags: R3 class escapes, R13 leading dot runs, R17 non-ASCII octets",
+  "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters and Go's RE2 decides on them, so \\w and \\s match ASCII only and \\W matches the rest (the three rows that differ from Python re's Unicode classes pin the Go result the owner signed off), and a leading .* crosses a newline octet (pins what a port to another regex engine must reproduce); case tags: R3 class escapes, R13 leading dot runs, R17 non-ASCII octets",
   "module": {
     "ini": {
       "MAIN": {

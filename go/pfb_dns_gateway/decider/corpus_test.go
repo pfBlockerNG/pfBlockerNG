@@ -3,6 +3,7 @@ package decider
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,61 +12,53 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/paritycorpus"
 )
 
-// translated lists the families whose decisions the Go decider makes; the others are reported, never passed.
-var translated = map[string]bool{
-	"relay": true, "zone_exact": true, "zone_wildcard": true, "tld_block": true, "tld_allow": true, "psl": true,
-	"idn": true, "regex": true, "abp": true, "allow": true, "allow_band": true, "hsts": true, "response": true,
-	"qtype": true, "in_addr_arpa": true, "group_policy": true, "cname": true, "noaaaa": true, "safesearch": true,
-	"top1m": true, "safesearch_cname": true, "frontend": true, "control": true,
-}
-
-type tally struct{ passed, failed, notImplemented int }
-
 func TestParityCorpus(t *testing.T) {
 	fixtures := paritycorpus.Fixtures()
-	names, source, err := paritycorpus.LoadFamilies(filepath.Join(fixtures, "families.json"))
+	_, source, err := paritycorpus.LoadFamilies(filepath.Join(fixtures, "families.json"))
 	if err != nil {
 		t.Fatal(err)
-	}
-	for name := range translated {
-		if _, ok := source[name]; !ok {
-			t.Fatalf("translated family %q is not in families.json", name)
-		}
 	}
 	files, err := filepath.Glob(filepath.Join(fixtures, "*.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	slices.Sort(files)
-	counts := map[string]*tally{}
-	for _, name := range names {
-		counts[name] = &tally{}
-	}
 	for _, file := range files {
 		if filepath.Base(file) == "families.json" {
 			continue
 		}
 		t.Run(strings.TrimSuffix(filepath.Base(file), ".json"), func(t *testing.T) {
-			runScenario(t, file, source, counts)
+			runScenario(t, file, source)
 		})
-	}
-	for _, name := range names {
-		if translated[name] {
-			t.Logf("%s: %d passed, %d failed", name, counts[name].passed, counts[name].failed)
-		} else {
-			t.Logf("%s: %d not implemented", name, counts[name].notImplemented)
-		}
 	}
 	if statsCounted == 0 {
 		t.Error("no corpus query was counted in a resolver database: the corpus must run with the statistics on")
 	}
 }
 
-func runScenario(t *testing.T, file string, families map[string]string, counts map[string]*tally) {
+func runScenario(t *testing.T, file string, families map[string]string) {
 	s, err := paritycorpus.LoadScenario(file, families)
 	if err != nil {
 		t.Fatal(err)
 	}
+	module, f := bootScenario(t, s)
+	for i := range s.Cases {
+		c := &s.Cases[i]
+		t.Run(c.ID, func(t *testing.T) {
+			for _, line := range resolveCase(f, s, c) {
+				t.Error(line)
+			}
+		})
+	}
+	module.stopDbWorker() // the stop flushes what the worker holds
+	if module.sqlite3ResolverCon.Load() {
+		checkResolverStats(t, module)
+	}
+}
+
+// bootScenario boots the decider on the scenario's module directory.
+func bootScenario(t *testing.T, s *paritycorpus.Scenario) (*pfbUnbound, *Frontend) {
+	t.Helper()
 	dir := t.TempDir()
 	if err := paritycorpus.WriteModule(dir, s.Module); err != nil {
 		t.Fatal(err)
@@ -75,41 +68,62 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 		t.Fatalf("boot: %v", err)
 	}
 	stopModule(t, module)
-	f := newFrontend(module)
-	for i := range s.Cases {
-		c := s.Cases[i]
-		skipped := false
-		ok := t.Run(c.ID, func(t *testing.T) {
-			u := paritycorpus.NewFakeUnbound(s.Upstream)
-			// Every case is resolved, translated or not: the decider's per-name memo carries across the cases in file order.
-			// The decider gets its own copy of the wire: Python's bytes cannot change under the comparison with the FORWARD.
-			answer := f.resolve(bytes.Clone(c.Query.Wire), c.Query.Client, func(w []byte) []byte {
-				reply, err := u.Answer(w)
-				if err != nil {
-					t.Errorf("FakeUnbound: %v", err)
-				}
-				return reply
-			}, c.Query.Transport, "", "")
-			if !translated[c.Family] {
-				skipped = true
-				t.Skipf("family %s: not implemented in Go yet", c.Family)
-			}
-			for _, line := range paritycorpus.Mismatches(s, &c, c.Query.Wire, u, answer) {
-				t.Error(line)
+	return module, newFrontend(module)
+}
+
+// resolveCase resolves the case's query and returns what differs from its expect, one line each. Cases run in file
+// order: the decider's per-name memo carries across them.
+func resolveCase(f *Frontend, s *paritycorpus.Scenario, c *paritycorpus.Case) []string {
+	u := paritycorpus.NewFakeUnbound(s.Upstream)
+	var lines []string
+	// The decider gets its own copy of the wire: it cannot change under the comparison with the FORWARD.
+	answer := f.resolve(bytes.Clone(c.Query.Wire), c.Query.Client, func(w []byte) []byte {
+		reply, err := u.Answer(w)
+		if err != nil {
+			lines = append(lines, "FakeUnbound: "+err.Error())
+		}
+		return reply
+	}, c.Query.Transport, "", "")
+	return append(lines, paritycorpus.Mismatches(s, c, c.Query.Wire, u, answer)...)
+}
+
+// scratchScenario loads a one-case scenario whose case, in a family no runner list names, relays an unlisted name; expect
+// is the case's expect object as JSON.
+func scratchScenario(t *testing.T, expect string) *paritycorpus.Scenario {
+	t.Helper()
+	doc := `{"schema": 4, "description": "scratch",
+	"module": {"ini": {"MAIN": {"python_enable": "true"}}, "manifest": {"version": 1, "config": {}, "feeds": []},
+		"files": {"pfb_py_raw/feed.txt": ["listed.example"]}},
+	"upstream": {"allowed.example. A": ["allowed.example. 300 IN A 192.0.2.77"]},
+	"cases": [{"id": "scratch", "family": "never_heard_of", "description": "a relay",
+		"query": {"name": "allowed.example.", "type": "A"}, "expect": ` + expect + `}]}`
+	path := filepath.Join(t.TempDir(), "scratch.json")
+	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := paritycorpus.LoadScenario(path, map[string]string{"never_heard_of": "no branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestACaseIsComparedWhateverItsFamily(t *testing.T) {
+	const relay = `{"decision": "relay", "forwards": ["allowed.example. A"], "rcode": "NOERROR",
+		"answer": ["allowed.example. 300 IN A 192.0.2.77"], "authority": []}`
+	const wrong = `{"decision": "drop", "forwards": []}`
+	for _, row := range []struct {
+		name, expect string
+		mismatch     bool
+	}{{"a right expect passes", relay, false}, {"a wrong expect fails", wrong, true}} {
+		t.Run(row.name, func(t *testing.T) {
+			s := scratchScenario(t, row.expect)
+			_, f := bootScenario(t, s)
+			lines := resolveCase(f, s, &s.Cases[0])
+			if got := len(lines) > 0; got != row.mismatch {
+				t.Errorf("mismatch lines %q: reported %v, want %v", lines, got, row.mismatch)
 			}
 		})
-		switch {
-		case skipped:
-			counts[c.Family].notImplemented++
-		case ok:
-			counts[c.Family].passed++
-		default:
-			counts[c.Family].failed++
-		}
-	}
-	module.stopDbWorker() // the stop flushes what the worker holds
-	if module.sqlite3ResolverCon.Load() {
-		checkResolverStats(t, module)
 	}
 }
 
