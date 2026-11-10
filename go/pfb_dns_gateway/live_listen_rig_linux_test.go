@@ -215,29 +215,51 @@ func liveClose(fds ...int) {
 	}
 }
 
-func liveOpenFDs(t *testing.T) int {
+// liveHeld is the set of sockets and pipes the process holds, each named as /proc/self/fd names it (`socket:[N]`, `pipe:[N]`):
+// the kernel never gives one inode to two of them at once, so a descriptor of a test can be told from any other. A
+// descriptor on a plain file or /dev/null has no inode of its own to name and is not in the set.
+func liveHeld(t *testing.T) map[string]bool {
 	t.Helper()
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return len(entries)
+	held := map[string]bool{}
+	for _, e := range entries {
+		link, err := os.Readlink("/proc/self/fd/" + e.Name())
+		if errors.Is(err, os.ErrNotExist) { // closed since the listing, or the listing's own descriptor
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(link, "socket:[") || strings.HasPrefix(link, "pipe:[") {
+			held[link] = true
+		}
+	}
+	return held
 }
 
-// liveRequireFDs waits for the process's descriptor count to be want: the gateway closes what it was sent, and its end of
-// the connection, as the handler ends. Fewer is as good: a stopped gateway of an earlier test closes the sockets it served and
-// accepted as its goroutines end, some after stop() has returned, so the count a test takes at its start may still hold one that
-// goes while it runs. A descriptor that is never closed is the count staying above want.
-func liveRequireFDs(t *testing.T, want int, when string) {
+// liveRequireNew waits for the sockets and pipes that are not in base to be exactly want of them: the gateway closes what it
+// was sent, and its end of the connection, as the handler ends. base is what the process held at the test's start, so a
+// stopped gateway of an earlier test that closes what it served as its goroutines end, some after stop() has returned, cannot
+// offset a descriptor of this test that is never closed: that one stays in the set, named in the failure.
+func liveRequireNew(t *testing.T, base map[string]bool, want int, when string) {
 	t.Helper()
 	deadline := time.Now().Add(watchdog)
 	for {
-		got := liveOpenFDs(t)
-		if got <= want {
+		var fresh []string
+		for link := range liveHeld(t) {
+			if !base[link] {
+				fresh = append(fresh, link)
+			}
+		}
+		if len(fresh) == want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%s: the process holds %d descriptors, want %d: one that came over the control socket was not closed", when, got, want)
+			slices.Sort(fresh)
+			t.Fatalf("%s: %d sockets and pipes are held that the test did not start with, want %d: %v (one that came over the control socket was not closed)", when, len(fresh), want, fresh)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -442,10 +464,10 @@ func (r *liveRig) remove(kind string, ap netip.AddrPort) {
 func (r *liveRig) refuse(row string, eof bool, build func() []livePart) string {
 	t := r.t
 	t.Helper()
-	base, listening := liveOpenFDs(t), r.countLines("listening ")
+	base, listening := liveHeld(t), r.countLines("listening ")
 	reply := r.exchange(eof, build()...)
 	liveRefused(t, reply, row)
-	liveRequireFDs(t, base, row)
+	liveRequireNew(t, base, 0, row)
 	if n := r.countLines("listening "); n != listening {
 		t.Fatalf("%s: %d `listening` lines before, %d after; log:\n%s", row, listening, n, r.logs.text())
 	}

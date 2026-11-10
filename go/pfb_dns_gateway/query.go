@@ -266,6 +266,9 @@ func (g *gateway) resolve(ctx context.Context, client, listener netip.Addr, tran
 		}
 	}
 	answer := g.decide(wire, addrKey(client).String(), func(w []byte) []byte { return fwd(ctx, w) }, transportNames[transport], local, label)
+	if answer == nil { // a DROP stays no reply, however late
+		return nil
+	}
 	if ctx.Err() != nil {
 		return buildServfail(wire)
 	}

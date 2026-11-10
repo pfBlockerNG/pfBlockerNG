@@ -31,8 +31,9 @@ func TestGatewaySIGHUPStopsLikeSIGTERMAndRemovesTheReadyFile(t *testing.T) {
 	}
 }
 
-// Stopping cancels, it does not drain: a query in flight is answered with the SERVFAIL the gateway builds, and the
-// reply Unbound sends afterwards, which the decider never approved, reaches nobody.
+// Stopping cancels, it does not drain: a query in flight is answered with a SERVFAIL, and the
+// reply Unbound sends afterwards, which the decider never approved, reaches nobody. The decider here answers a forward that
+// stopping cancelled with SERVFAIL, as the real one does (decider.Frontend.unchanged): a decider that drops gets no reply.
 func TestStopAnswersWhatIsInFlightWithServfailNeverWithUnboundsReply(t *testing.T) {
 	for _, k := range streamKinds {
 		t.Run(k.name, func(t *testing.T) {
@@ -43,7 +44,15 @@ func TestStopAnswersWhatIsInFlightWithServfailNeverWithUnboundsReply(t *testing.
 				<-held
 				return echoWithQR(q)
 			})}})
-			r.autoForward()
+			r.p.mu.Lock()
+			r.p.auto = func(tq transportQuery, fwd func([]byte) []byte) []byte {
+				r.queries <- decidedQuery{id: tq.id, ip: tq.ip, wire: tq.wire}
+				if reply := fwd(tq.wire); reply != nil {
+					return reply
+				}
+				return buildServfail(tq.wire)
+			}
+			r.p.mu.Unlock()
 			c := k.dial(t, r)
 			query := buildQuery(t, 7, "inflight.example.", true)
 			tcpSend(t, c, query)

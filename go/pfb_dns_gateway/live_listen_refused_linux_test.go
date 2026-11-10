@@ -269,13 +269,13 @@ func TestDescriptorsSentWithAnyOtherFrameAreClosedAndTheFrameIsHandledAsWithoutT
 // A descriptor on a byte after the frame is never read by the gateway: the kernel disposes of it when the connection ends.
 func TestADescriptorOnAByteAfterTheFrameIsNotLeftInTheGateway(t *testing.T) {
 	r := newLiveRig(t)
-	base := liveOpenFDs(t)
+	base := liveHeld(t)
 	kept, sent := livePair(t)
 	frame := r.removeFrame("dot", r.at("dot", "127.0.0.2"))
 	got := r.exchange(false, livePart{data: frame}, livePart{data: []byte{0}, fds: []int{sent}})
 	liveRefused(t, got, "a remove with a byte and a descriptor after it")
 	liveRequireEOF(t, kept, "a descriptor after the frame")
-	liveRequireFDs(t, base+1, "after the exchange") // the kept end
+	liveRequireNew(t, base, 1, "after the exchange") // the kept end
 }
 
 // An add that comes once the gateway has begun to stop is refused: stop() has taken its list of what to close.
@@ -293,13 +293,13 @@ func TestAPeerThatIsNotRootGetsNoDescriptorIntoTheGateway(t *testing.T) {
 	r := newLiveRig(t, liveStranger())
 	for _, kind := range liveKinds {
 		ap := r.at(kind, "127.0.0.2")
-		base := liveOpenFDs(t)
+		base := liveHeld(t)
 		kept, sent := livePair(t)
 		if got := r.send(r.addFrame(kind, ap), append(liveSockets(t, kind, ap), sent)...); got != "" {
 			t.Fatalf("%s add from a peer that is not root: reply %q, want none", kind, got)
 		}
 		liveRequireEOF(t, kept, kind+" add from a peer that is not root")
-		liveRequireFDs(t, base+1, kind+" add from a peer that is not root") // the kept end
+		liveRequireNew(t, base, 1, kind+" add from a peer that is not root") // the kept end
 		r.requireGone(kind, ap)
 		if r.hasLine("listening " + kind + " " + ap.String()) {
 			t.Fatalf("%s add from a peer that is not root was served:\n%s", kind, r.logs.text())

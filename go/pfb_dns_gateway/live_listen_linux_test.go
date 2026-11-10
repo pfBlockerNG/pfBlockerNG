@@ -100,16 +100,16 @@ func TestARemovedListenerStopsAndTheOthersKeepServing(t *testing.T) {
 // G3: a removed listener gives its descriptors back, and add and remove cycles leave nothing registered for the stop.
 func TestRemovingAnAddedListenerReleasesItsDescriptorsAndLeavesNoCloserBehind(t *testing.T) {
 	r := newLiveRig(t)
-	base, closers := liveOpenFDs(t), r.closers()
+	base, closers := liveHeld(t), r.closers()
 	held := map[string]int{"udp+tcp": 2, "dot": 1, "doh": 1, "doq": 1}
 	for _, kind := range liveKinds {
 		ap := r.at(kind, "127.0.0.2")
 		for round := range 3 {
 			when := kind + " round " + strconv.Itoa(round)
 			r.add(kind, ap)
-			liveRequireFDs(t, base+held[kind], when+" added")
+			liveRequireNew(t, base, held[kind], when+" added")
 			r.remove(kind, ap)
-			liveRequireFDs(t, base, when+" removed")
+			liveRequireNew(t, base, 0, when+" removed")
 		}
 	}
 	if got := r.closers(); got != closers {
