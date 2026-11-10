@@ -7,10 +7,11 @@
 // here is joined onto moduleDir. The decision data (the DBs, the settings a decision reads) lives in the one
 // snapshot the module publishes, not in module fields: see pfbUnbound.snapshot.
 //
-// Not translated yet, each arriving with the family that needs it: the reload and query watchers, the stderr redirect,
-// the module fingerprint, and the retired-cache sweep. The DNSBL control surface
-// (pfb_apply_control_command, its timers and the control watcher) is in pfb_unbound_control.go, and the log rows, their
-// files and the GeoIP reader in pfb_unbound_log.go, pfb_unbound_logfile.go and pfb_unbound_geoip.go.
+// Not translated yet, each arriving with the family that needs it: the query watcher, the stderr redirect, the module
+// fingerprint, and the retired-cache sweep. The live update (the reload watcher, its RAM gate, its applied marker and
+// the reload builder) is in pfb_unbound_reload.go, the DNSBL control surface (pfb_apply_control_command, its timers and
+// the control watcher) in pfb_unbound_control.go, and the log rows, their files and the GeoIP reader in pfb_unbound_log.go,
+// pfb_unbound_logfile.go and pfb_unbound_geoip.go.
 package decider
 
 import (
@@ -162,6 +163,15 @@ type pfbUnbound struct {
 	controlTick func() (tick <-chan time.Time, stop func())
 	// controlStop stops the control watcher and waits for it to end; nil is pfb["control_watcher"] False.
 	controlStop func()
+
+	// The live update (pfb_unbound_reload.go). reloadStop stops the reload watcher and waits for it to end; nil is
+	// pfb["reload_watcher"] False. reloadTick is its poll tick and the tick's release (nil: a RELOAD_POLL_INTERVAL ticker),
+	// reloadBuilder its builder (nil: reloadBuildSnapshot) and totalRAM the RAM gate's probe of total physical memory (nil:
+	// totalPhysicalRAM); a test replaces them to drive a reload without a clock, a manifest or a particular host.
+	reloadStop    func()
+	reloadTick    func() (tick <-chan time.Time, stop func())
+	reloadBuilder func() (*snapshot, error)
+	totalRAM      func() (uint64, bool)
 
 	// logs is the log writer (pfb["log_listener"]), nil when none runs: rows are then appended directly. logDir is the
 	// directory it writes. logSink, when set, takes every row instead (Python's tests replace pfb_log).
@@ -646,15 +656,7 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	// from its snapshot.
 	m.decisionDB = newLruCache[*decision](intOf(pfb.decisiondbMax))
 	m.rebuildAndSwap(func() (*snapshot, error) {
-		scratch.groupEpochs = m.dbGroupEpochs(m.dnsblStatsWanted(pfb), scratch)
-		scratch.counts = len(scratch.dataDB) + len(scratch.zoneDB)
-		scratch.regexCount = scratch.regexDB.len() + scratch.allowRegexDB.len() + scratch.userRegexDB.len() + scratch.userAllowRegexDB.len()
-		scratch.tldAllowRoots = selectedTldRoots(pfb.tldAllowList)
-		scratch.hasTldAllowRoots = true
-		scratch.pslIncludePrivate = pfb.pslIncludePrivate
-		scratch.pslAllowPrivate = pfb.pslAllowPrivate
-		scratch.pslFeedPrivatePolicy = pfb.pslFeedPrivatePolicy
-		scratch.pslFeedIcannPolicy = pfb.pslFeedIcannPolicy
+		m.finishSnapshot(scratch, pfb, m.dnsblStatsWanted(pfb))
 		return scratch, nil
 	}, false)
 	m.dbCapturePrivacyEpochs()
@@ -662,12 +664,31 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	// Start the background DB-write worker (persistent sqlite connection, batched).
 	m.startDbWorker()
 
+	// ADR-10: start the zero-downtime reload watcher, after the init swap, whatever python_enable says (Python gates it on
+	// threading alone).
+	m.startReloadWatcher()
+
 	// PFBL-03: start the DNSBL-control command-channel reader when the feature is enabled.
 	if pfb.pythonControl {
 		m.startControlWatcher()
 	}
 	m.pfbSetupLogging()
 	return m, nil
+}
+
+// finishSnapshot fills the fields init and a reload derive the same way once the strata are loaded into s: the group
+// epochs (statsWanted opens the DNSBL database that holds them), the counts, and the TLD Allow roots and PSL policies of
+// the settings. A snapshot's own settings are never written here.
+func (m *pfbUnbound) finishSnapshot(s *snapshot, set *pfbSettings, statsWanted bool) {
+	s.groupEpochs = m.dbGroupEpochs(statsWanted, s)
+	s.counts = len(s.dataDB) + len(s.zoneDB)
+	s.regexCount = s.regexDB.len() + s.allowRegexDB.len() + s.userRegexDB.len() + s.userAllowRegexDB.len()
+	s.tldAllowRoots = selectedTldRoots(set.tldAllowList)
+	s.hasTldAllowRoots = true
+	s.pslIncludePrivate = set.pslIncludePrivate
+	s.pslAllowPrivate = set.pslAllowPrivate
+	s.pslFeedPrivatePolicy = set.pslFeedPrivatePolicy
+	s.pslFeedIcannPolicy = set.pslFeedIcannPolicy
 }
 
 func isUnknown(x string) string {
@@ -738,6 +759,12 @@ func (m *pfbUnbound) loadHstsDb(hstsDB map[string]struct{}) {
 		m.pfbPyStatusOpen("dnsbl", pfb.pfbPyHsts, "parse", failure)
 		return
 	}
+	addHstsLines(hstsDB, data)
+	m.pfbPyStatusClose("dnsbl", pfb.pfbPyHsts, "parse")
+}
+
+// addHstsLines adds the HSTS preload file's keys to hstsDB; init and a reload parse the file the same way.
+func addHstsLines(hstsDB map[string]struct{}, data []byte) {
 	for _, line := range pyTextLines(data) {
 		// The PSL parser skips comment and whitespace-only lines; '0' stays valid.
 		key := pyStrip(line)
@@ -746,7 +773,6 @@ func (m *pfbUnbound) loadHstsDb(hstsDB map[string]struct{}) {
 		}
 		hstsDB[key] = struct{}{}
 	}
-	m.pfbPyStatusClose("dnsbl", pfb.pfbPyHsts, "parse")
 }
 
 // pyListRepr is repr() of a list of str.
@@ -1039,6 +1065,11 @@ func intOf(value int64) int {
 // next snapshot stored under publishMu, so a control command that lands meanwhile is carried, not overwritten.
 // A swap that newly satisfies _dnsbl_stats_wanted (python_blacklist just flipped on) opens the DNSBL database init left
 // closed (issues #862, #870).
+//
+// A snapshot built with carryRuntime (a reload) takes noAAAADB, safeSearchDB, gpListDB and gpNetDB from the live snapshot
+// at the same moment, under publishMu: Python keeps them as module globals a swap never touches, so a runtime addbypass
+// survives it and one that lands while the reload builds is carried. A published table is never written (a control
+// command clones before it writes), so the new snapshot shares the live one's maps.
 func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emitCounts bool) bool {
 	next, err := buildSnapshot()
 	if err != nil {
@@ -1063,6 +1094,11 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 		settings.pythonBlacklist = true
 	}
 	next.settings = &settings
+	if next.carryRuntime {
+		if live := m.snapshot.Load(); live != nil {
+			next.noAAAADB, next.safeSearchDB, next.gpListDB, next.gpNetDB = live.noAAAADB, live.safeSearchDB, live.gpListDB, live.gpNetDB
+		}
+	}
 
 	m.snapshot.Store(next)
 	m.publishMu.Unlock()

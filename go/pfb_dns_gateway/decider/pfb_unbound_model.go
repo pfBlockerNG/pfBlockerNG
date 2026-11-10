@@ -226,6 +226,11 @@ type snapshot struct {
 	gpListDB     map[string]int
 	gpNetDB      []netip.Prefix
 	settings     *pfbSettings
+
+	// carryRuntime marks a snapshot a reload built from the files: noAAAADB, safeSearchDB, gpListDB and gpNetDB are runtime
+	// state in Python (module globals a swap never touches), so rebuildAndSwap gives it the live snapshot's tables when it
+	// stores it. A builder that fills them itself (init, a test) leaves it false.
+	carryRuntime bool
 }
 
 // newSnapshot returns a snapshot with Python's dataclass defaults and fresh writable dicts; the builder fills it in

@@ -11,11 +11,13 @@
 package decider
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"math/big"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -79,6 +81,7 @@ func (m *pfbUnbound) publishControl(e *controlEdit) {
 		return
 	}
 	next := *e.live
+	next.carryRuntime = false // a control edit is no reload build
 	if e.settings != nil {
 		next.settings = e.settings
 	}
@@ -344,20 +347,18 @@ func controlSeq(record *jsonObject) (*big.Int, bool) {
 	return nil, false
 }
 
-// controlWriteApplied is _control_write_applied: seq is published as the applied-sequence marker (temp file, fsync,
-// rename). A write failure is logged and the command still stands.
-func (m *pfbUnbound) controlWriteApplied(seq *big.Int) {
-	path := m.pfb.pfbPyControlApplied
-	if path == "" {
-		return
-	}
+// writeMarker publishes text at path the way Python's marker writers do: a temp file next to it, written, fsynced and
+// renamed over it, so a reader sees the old marker or the new one. A failure leaves no temp file and is returned as the
+// text Python's OSError prints (str(e)): an open error names the temp file, a rename error both files, and an error of the
+// write, the fsync or the close names none. "" is success.
+func writeMarker(path, text string) string {
 	tmp := path + ".tmp"
 	err := func() error {
 		fh, err := os.Create(tmp)
 		if err != nil {
 			return err
 		}
-		_, err = fh.WriteString(seq.String() + "\n")
+		_, err = fh.WriteString(text)
 		if err == nil {
 			err = fh.Sync()
 		}
@@ -365,13 +366,42 @@ func (m *pfbUnbound) controlWriteApplied(seq *big.Int) {
 			err = closeErr
 		}
 		if err != nil {
-			return err
+			return &os.PathError{Op: "write", Path: tmp, Err: errors.Unwrap(err)}
 		}
 		return os.Rename(tmp, path)
 	}()
-	if err != nil {
-		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %v\n", path, err)
-		os.Remove(tmp)
+	if err == nil {
+		return ""
+	}
+	syscall.Unlink(tmp) // not os.Remove, which also removes an empty directory: Python's os.unlink refuses one
+	var pathErr *os.PathError
+	var linkErr *os.LinkError
+	switch {
+	case errors.As(err, &linkErr):
+		// os.Rename refuses a directory in the way with EEXIST before it asks the kernel; rename(2), which Python calls, says
+		// EISDIR for a file renamed over a directory.
+		reason := linkErr.Err
+		if info, statErr := os.Lstat(linkErr.New); reason == syscall.EEXIST && statErr == nil && info.IsDir() {
+			reason = syscall.EISDIR
+		}
+		return pyOSError(reason, "") + ": " + pysem.Repr(linkErr.Old) + " -> " + pysem.Repr(linkErr.New)
+	case errors.As(err, &pathErr) && pathErr.Op == "open":
+		return pyOSError(pathErr.Err, pathErr.Path)
+	case errors.As(err, &pathErr):
+		return pyOSError(pathErr.Err, "")
+	}
+	return err.Error()
+}
+
+// controlWriteApplied is _control_write_applied: seq is published as the applied-sequence marker (temp file, fsync,
+// rename). A write failure is logged and the command still stands.
+func (m *pfbUnbound) controlWriteApplied(seq *big.Int) {
+	path := m.pfb.pfbPyControlApplied
+	if path == "" {
+		return
+	}
+	if failure := writeMarker(path, seq.String()+"\n"); failure != "" {
+		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure)
 	}
 }
 
@@ -468,8 +498,13 @@ func (w *controlWatcher) drainAndApply(stop <-chan struct{}) {
 // shortcut: Python waits on a kqueue (EVFILT_VNODE on the channel's directory) on FreeBSD and polls elsewhere; Go polls
 // on every tick, which only adds up to RELOAD_POLL_INTERVAL of latency to a command. Upgrade if that latency matters.
 func (w *controlWatcher) run(stop <-chan struct{}, tick <-chan time.Time) {
+	pollLoop(stop, tick, w.drainAndApply)
+}
+
+// pollLoop is a watcher's body: drain, then wait for the next tick, until stop is closed.
+func pollLoop(stop <-chan struct{}, tick <-chan time.Time, drain func(stop <-chan struct{})) {
 	for !stopped(stop) {
-		w.drainAndApply(stop)
+		drain(stop)
 		select {
 		case <-stop:
 			return
@@ -478,14 +513,11 @@ func (w *controlWatcher) run(stop <-chan struct{}, tick <-chan time.Time) {
 	}
 }
 
-// startControlWatcher starts the watcher (pfb["control_watcher"] True: controlStop is set) unless it already runs.
-func (m *pfbUnbound) startControlWatcher() {
-	if m.controlStop != nil {
-		return
-	}
-	w := m.newControlWatcher()
+// startPoller runs a watcher's loop on its own goroutine, fed by the tick source tickFor makes (nil: a
+// RELOAD_POLL_INTERVAL ticker), and returns what stops it and waits for its goroutine, the release of the tick source
+// included, to end.
+func startPoller(tickFor func() (<-chan time.Time, func()), run func(stop <-chan struct{}, tick <-chan time.Time)) func() {
 	stop, done := make(chan struct{}), make(chan struct{})
-	tickFor := m.controlTick
 	if tickFor == nil {
 		tickFor = func() (<-chan time.Time, func()) {
 			ticker := time.NewTicker(RELOAD_POLL_INTERVAL)
@@ -496,12 +528,20 @@ func (m *pfbUnbound) startControlWatcher() {
 	go func() {
 		defer close(done)
 		defer release()
-		w.run(stop, tick)
+		run(stop, tick)
 	}()
-	m.controlStop = func() {
+	return func() {
 		close(stop)
 		<-done
 	}
+}
+
+// startControlWatcher starts the watcher (pfb["control_watcher"] True: controlStop is set) unless it already runs.
+func (m *pfbUnbound) startControlWatcher() {
+	if m.controlStop != nil {
+		return
+	}
+	m.controlStop = startPoller(m.controlTick, m.newControlWatcher().run)
 }
 
 // stopControlWatcher is deinit's stop of the watcher: it returns once the watcher has ended.

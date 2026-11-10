@@ -178,6 +178,30 @@ func TestControlWriteAppliedFailureToCreateIsLogged(t *testing.T) {
 	}
 }
 
+// The control line is Python's own (_control_write_applied) with the same OSError text, run on CPython 3.11.15
+// (pr6-fix/py/gen.py): the open error names the temp file, the rename error both files.
+func TestControlWriteAppliedFailureLogsPythonsOSErrorText(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing", "c.applied")
+	asDir := filepath.Join(dir, "asdir")
+	if err := os.MkdirAll(filepath.Join(asDir, "occupied"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, detail := range map[string]string{
+		missing: "[Errno 2] No such file or directory: '" + missing + ".tmp'",
+		asDir:   "[Errno 21] Is a directory: '" + asDir + ".tmp' -> '" + asDir + "'",
+	} {
+		m := chModule(t)
+		logs := captureLog(t)
+		m.pfb.pfbPyControlApplied = path
+		m.controlWriteApplied(big.NewInt(3))
+		want := "[pfBlockerNG]: failed to write control applied marker [ " + path + " ]: " + detail + "\n"
+		if got := logs.String(); got != want {
+			t.Errorf("logged %q, want %q", got, want)
+		}
+	}
+}
+
 func TestControlWriteAppliedWithoutAPathWritesNothing(t *testing.T) {
 	m := chModule(t)
 	logs := captureLog(t)
