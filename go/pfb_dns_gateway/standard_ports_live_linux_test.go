@@ -221,7 +221,7 @@ func TestStandardPortCliFlagsBindOnlyTheirNamedTransport(t *testing.T) {
 		for kind, flag := range map[string]string{"udp+tcp": "listen-53", "dot": "dot-listen-853", "doh": "doh-listen-443", "doq": "doq-listen-853"} {
 			t.Run(host+"/"+flag, func(t *testing.T) {
 				liveNeedAddr(t, host)
-				parsed, err := parseConfig([]string{"--listen", "127.0.0.1", "--" + flag, host, "--", "decider"}, io.Discard)
+				parsed, err := parseConfig([]string{"--listen", "127.0.0.1", "--" + flag, host}, io.Discard)
 				if err != nil {
 					t.Fatal(err)
 				}

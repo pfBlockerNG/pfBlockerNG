@@ -2,13 +2,36 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// forwarder sends one wire to Unbound as the client and returns Unbound's reply; nil means none.
+type forwarder func(ctx context.Context, wire []byte) []byte
+
+// decideFunc is (*decider.Frontend).Resolve: the decision for one query, nil for a dropped packet. fwd asks Unbound as
+// the client; transport is one of transportNames, listenerIP and listenerInterface are "" when the query did not
+// reach an address of the gateway.
+type decideFunc func(wire []byte, clientIP string, fwd func([]byte) []byte, transport, listenerIP, listenerInterface string) []byte
+
+// clientTransport names the accepted listener, not the upstream exchange.
+type clientTransport byte
+
+const (
+	clientTCP clientTransport = iota
+	clientUDP
+	clientDoT
+	clientDoH
+	clientDoQ
+)
+
+// transportNames are the labels the decider logs and counts a query under.
+var transportNames = [...]string{clientTCP: "TCP", clientUDP: "UDP", clientDoT: "DoT", clientDoH: "DoH", clientDoQ: "DoQ"}
+
+const maxWire = 65535 // the largest DNS message
 
 const (
 	maxUDPInflight   = 512                    // concurrent UDP queries, each holding an upstream socket; more are dropped
@@ -21,7 +44,7 @@ const (
 	defaultGrace     = time.Second            // added to 2 x timeout for the whole query
 	defaultHandshake = 10 * time.Second       // TLS handshake, PROXY header and request headers of a new connection
 	defaultCloseWait = 250 * time.Millisecond // a DoT peer gets this long to take close_notify before the TCP connection is cut
-	defaultStopWait  = 500 * time.Millisecond // each of stop()'s two waits; with the decider's 3 s, under the rc stop loop's 5 s KILL
+	defaultStopWait  = 500 * time.Millisecond // each of stop()'s two waits; under the rc stop loop's 5 s KILL
 	// What one client address may hold of each shared budget, keyed by the full address (a pfSense LAN is one /64: keying by
 	// prefix would make every IPv6 host there share one budget). Half of each budget, so no address takes a whole one.
 	maxUDPPerAddr = maxUDPInflight / 2
@@ -107,7 +130,7 @@ func (l *addrLimit) release(a netip.Addr) {
 // gateway is the serving state shared by every listener: who may ask, who decides, where Unbound is.
 type gateway struct {
 	acl                                                        *ACL
-	dec                                                        atomic.Pointer[Decider] // the active decider; a query keeps the one it started on
+	decide                                                     decideFunc // the in-process decider's Resolve
 	up                                                         *upstream
 	timeout                                                    time.Duration // wait for Unbound per exchange
 	grace                                                      time.Duration
@@ -120,7 +143,6 @@ type gateway struct {
 	udpPerAddr, muxPerAddr, tcpPerAddr, dohPerAddr, doqPerAddr int    // per-address shares of the budgets below; a test lifts one to look at the global cap alone
 	doqAccepted                                                func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
 	doqListenerClosed                                          func() // test seam: DoQ's closer calls it once ln.Close() has returned, before it waits for the accept loop
-	deciderRead                                                func() // test seam: resolve calls it between reading the active decider and asking it
 
 	ddr                *ddr         // issue #3583: answers resolver.arpa. itself, after the ACL and before the decider; nil = off
 	names              *nameAnswers // issue #3694: answers A and AAAA for the DNS name, after the ACL and DDR; nil = no DNS name
@@ -176,7 +198,7 @@ func (q *idleGroup) Wait() {
 	<-idle
 }
 
-func newGateway(acl *ACL, dec *Decider, up *upstream, timeout time.Duration, logf func(format string, args ...any)) *gateway {
+func newGateway(acl *ACL, decide decideFunc, up *upstream, timeout time.Duration, logf func(format string, args ...any)) *gateway {
 	g := &gateway{
 		acl: acl, up: up, timeout: timeout, grace: defaultGrace, tcpIdle: defaultTCPIdle, handshake: defaultHandshake, doqHandshakeIdle: defaultDoQHandshakeIdle, logf: logf,
 		closeBound: defaultCloseWait, stopBound: defaultStopWait,
@@ -185,7 +207,7 @@ func newGateway(acl *ACL, dec *Decider, up *upstream, timeout time.Duration, log
 		dohConns: newConnLimit("DoH", maxDoHConns), doqConns: newConnLimit("DoQ", maxDoQConns),
 	}
 	g.ctx, g.cancel = context.WithCancel(context.Background())
-	g.dec.Store(dec)
+	g.decide = decide
 	return g
 }
 
@@ -230,36 +252,24 @@ func (g *gateway) screen(client, local netip.Addr, plain, udp bool, wire []byte)
 	return toDecider, nil
 }
 
-// resolve asks the decider and serves its FORWARDs through fwd. nil
-// means the decider dropped the query; a decider that fails or does not decide within 2 x timeout + grace gets
-// SERVFAIL built here.
+// resolve asks the decider and serves its FORWARDs through fwd. nil means the decider dropped the query; a query whose
+// 2 x timeout + grace has run out by the time the decider returns gets SERVFAIL built here.
 func (g *gateway) resolve(ctx context.Context, client, listener netip.Addr, transport clientTransport, wire []byte, fwd forwarder) []byte {
 	ctx, cancel := context.WithTimeout(ctx, 2*g.timeout+g.grace)
 	defer cancel()
 	listener = listener.Unmap().WithZone("")
-	label := ""
-	if table := g.listenerInterfaces.Load(); table != nil && listener.IsValid() && !listener.IsUnspecified() {
-		label = (*table)[listener]
+	local, label := "", ""
+	if listener.IsValid() && !listener.IsUnspecified() {
+		local = listener.String()
+		if table := g.listenerInterfaces.Load(); table != nil {
+			label = (*table)[listener]
+		}
 	}
-	dec := g.dec.Load()
-	if g.deciderRead != nil {
-		g.deciderRead()
-	}
-	answer, err := g.decide(ctx, dec, client, listener, label, transport, wire, fwd)
-	if err != nil {
+	answer := g.decide(wire, addrKey(client).String(), func(w []byte) []byte { return fwd(ctx, w) }, transportNames[transport], local, label)
+	if ctx.Err() != nil {
 		return buildServfail(wire)
 	}
 	return answer
-}
-
-// decide asks dec. A query that dec refused because a restart retired it before the query registered (nothing was sent
-// to it) is asked of the active decider, once; every other failure is the query's.
-func (g *gateway) decide(ctx context.Context, dec *Decider, client, listener netip.Addr, label string, transport clientTransport, wire []byte, fwd forwarder) ([]byte, error) {
-	answer, err := dec.Decide(ctx, client, listener, label, transport, wire, fwd)
-	if errors.Is(err, errDeciderRetired) {
-		return g.dec.Load().Decide(ctx, client, listener, label, transport, wire, fwd)
-	}
-	return answer, err
 }
 
 // resolveShared is resolve under the cap DoH and DoQ share: they carry many queries on one connection, so their

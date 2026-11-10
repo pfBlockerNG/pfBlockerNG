@@ -1,14 +1,14 @@
 // pfb_dns_gateway, the pfB-DNS network layer (issue #3513): serves plain DNS over UDP and TCP, and DoT, DoH and DoQ with the
-// certificate pfBlockerNG writes from the pfB-DNS settings' selection; applies the Resolver ACL before anyone is asked, lets the
-// Python DNSBL decider (its child) decide every other query, and forwards to Unbound with a PROXYv2 header naming the client.
+// certificate pfBlockerNG writes from the pfB-DNS settings' selection; applies the Resolver ACL before anyone is asked, lets
+// the DNSBL decider it boots in its own process (package decider) decide every other query, and forwards to Unbound with a
+// PROXYv2 header naming the client. It is one binary: there is no separate decider process.
 //
-//	pfb_dns_gateway [flags] -- <decider command...>
+//	pfb_dns_gateway [flags]
 //
-// The decider command is started with the decision socket as fd 3; docs/misc/dns-gateway-protocol.md is the
-// protocol, docs/misc/dns-gateway-transports.md the encrypted transports. Log lines on stderr:
+// docs/misc/dns-gateway-transports.md is the encrypted transports. Log lines on stderr:
 //
-//	starting pid <pid>                  the first line of every start, before the decider is READY
-//	listening udp+tcp <host>:<port>     one per bound --listen address, once the decider has sent READY
+//	starting pid <pid>                  the first line of every start, before the decider boots
+//	listening udp+tcp <host>:<port>     one per bound --listen address, once the decider has booted
 //	listening dot|doh|doq <host>:<port> one per bound TLS listener
 //	ready upstream <host>:<port> pid <pid>
 //
@@ -32,7 +32,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -41,14 +40,16 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider"
 )
 
 const (
-	defaultReadyTimeout   = 300 * time.Second          // the decider boots the whole DNSBL database before it says READY
-	defaultRestartTimeout = 30 * time.Second           // a decider restarted on the control socket: pfBlockerNG waits 40 s for the reply
-	defaultKillAfter      = 3 * time.Second            // how long the decider gets to leave on EOF
+	defaultReadyTimeout   = 300 * time.Second          // the decider boots the whole DNSBL database before the gateway serves
 	defaultShutdownBudget = 4 * time.Second            // all of shutdown: the rc stop sends KILL 5 s after TERM, which would leave a stale ready file
 	defaultTLSPEM         = "/var/etc/pfb_dns/tls.pem" // the certificate and key pfBlockerNG writes from the pfB-DNS settings' selection: root only
+	defaultModuleDir      = "/var/unbound"             // where the DNSBL module's ini, manifest and feed files are
+	defaultLogDir         = "/var/log/pfblockerng"     // where the decider writes dnsbl.log and dns_reply.log
 )
 
 type config struct {
@@ -73,7 +74,9 @@ type config struct {
 	dotPort6           int // zero inherits the IPv4 port
 	dohPort6           int
 	doqPort6           int
-	noModule           bool // pfB-DNS modes: the decider's own flags of the same names, handed on to it
+	moduleDir          string // --module-dir: the DNSBL module's directory (and the observer socket's)
+	logDir             string // --log-dir: where the decider writes dnsbl.log and dns_reply.log
+	noModule           bool   // pfB-DNS modes: decider.Options' fields of the same names
 	observer           bool
 	replyLog           bool
 	readyFile          string   // --ready-file: the gateway's pid is published here once it serves; "" = none
@@ -83,14 +86,11 @@ type config struct {
 	ddrDoH443          []string // --ddr-doh-443: addresses DDR advertises DoH on without a port, each parsed by doh443Set; need ddr
 	dohListen443       []string // --doh-listen-443: addresses DoH is bound on port 443
 	listenerInterfaces []string
-	decider            []string
 
 	// Test seams; the zero value is production.
 	drop           func() error      // replaces the privilege drop to --user
-	trace          func(step string) // called after bind, decider start and READY (the drop hook records itself)
+	trace          func(step string) // called after bind and the privilege drop, and when the decider has booted (the drop hook records itself)
 	readyTimeout   time.Duration
-	restartTimeout time.Duration
-	killAfter      time.Duration
 	shutdownBudget time.Duration
 	interrupt      <-chan struct{} // closed on SIGINT/SIGTERM: start stops waiting for the decider
 	doh443Port     int             // the port --doh-listen-443 binds, and DDR advertises as 443; zero is 443. A test cannot bind 443
@@ -103,19 +103,12 @@ type listFlag []string
 func (l *listFlag) String() string     { return strings.Join(*l, ",") }
 func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 
-// parseConfig reads the command line: flags, then `--`, then the decider command, which is never parsed. -h
-// writes the flag defaults to usage and returns flag.ErrHelp.
+// parseConfig reads the command line. -h writes the flag defaults to usage and returns flag.ErrHelp.
 func parseConfig(args []string, usage io.Writer) (config, error) {
 	cfg := config{
 		port: 53, upstream: "127.0.0.1:5353", timeout: 5 * time.Second, unboundConf: "/var/unbound/unbound.conf",
 		tlsPEM: defaultTLSPEM, ctlSocket: defaultCtlSocket, dotPort: defaultDoTPort, dohPort: 4443, doqPort: 853,
 	}
-	split := slices.Index(args, "--")
-	if split < 0 {
-		return config{}, errors.New("missing `--` and the decider command after it")
-	}
-	cfg.decider = args[split+1:]
-
 	fs := flag.NewFlagSet("pfb_dns_gateway", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
@@ -126,7 +119,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.StringVar(&cfg.upstream, "upstream", cfg.upstream, "Unbound's proxy-protocol HOST:PORT")
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "wait for Unbound per exchange")
 	fs.StringVar(&cfg.unboundConf, "unbound-conf", cfg.unboundConf, "Unbound's config: the access-control rows of it and of every file it includes are the ACL")
-	fs.StringVar(&cfg.user, "user", "", "give up root for this user once the sockets are bound and the decider runs")
+	fs.StringVar(&cfg.user, "user", "", "give up root for this user once the sockets are bound")
 	fs.IntVar(&cfg.dotPort, "dot-port", cfg.dotPort, "DoT port; 0 picks one per address")
 	fs.StringVar(&cfg.tlsPEM, "tls-pem", cfg.tlsPEM, "certificate chain and private key of DoT, DoH and DoQ, one PEM file, read once at start while still root")
 	fs.StringVar(&cfg.ctlSocket, "ctl-socket", cfg.ctlSocket, "Unix socket on which root pushes a renewed certificate; made in a root-only directory before the privilege drop")
@@ -142,9 +135,11 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.IntVar(&cfg.dotPort6, "dot-port6", 0, "IPv6 DoT port; 0 inherits --dot-port")
 	fs.IntVar(&cfg.dohPort6, "doh-port6", 0, "IPv6 DoH port; 0 inherits --doh-port")
 	fs.IntVar(&cfg.doqPort6, "doq-port6", 0, "IPv6 DoQ port; 0 inherits --doq-port")
-	fs.BoolVar(&cfg.noModule, "no-module", false, "pfB-DNS without DNSBL: the decider boots no module and forwards every query")
-	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: the decider listens for the upstream observer's reports")
-	fs.BoolVar(&cfg.replyLog, "reply-log", false, "the decider logs each relayed reply to dns_reply.log (needs --no-module)")
+	fs.StringVar(&cfg.moduleDir, "module-dir", defaultModuleDir, "the DNSBL module's directory: its ini, manifest and feed files; the observer's socket is made here")
+	fs.StringVar(&cfg.logDir, "log-dir", defaultLogDir, "where the decider writes dnsbl.log and dns_reply.log")
+	fs.BoolVar(&cfg.noModule, "no-module", false, "pfB-DNS without DNSBL: boot no module and forward every query")
+	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: listen for the upstream observer's reports")
+	fs.BoolVar(&cfg.replyLog, "reply-log", false, "log each relayed reply to dns_reply.log (needs --no-module)")
 	fs.StringVar(&cfg.readyFile, "ready-file", "", "write the gateway's pid here, mode 0600, once it serves; removed at stop while it still names the gateway")
 	fs.StringVar(&cfg.dnsName, "dns-name", "", "the firewall's DNS name: DDR's target, and the one name answered (A and AAAA) from the address the query reached; empty = none")
 	fs.BoolVar(&cfg.ddr, "ddr", false, "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462), naming --dns-name; needs --dns-name")
@@ -155,7 +150,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.Var(&dohListen443, "doh-listen-443", "DoH address on port 443, repeatable")
 	var interfaces listFlag
 	fs.Var(&interfaces, "listener-interface", "IP=BASE64UTF8 interface description for a listener address, repeatable")
-	if err := fs.Parse(args[:split]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fs.SetOutput(usage)
 			fs.PrintDefaults()
@@ -163,7 +158,7 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 		return config{}, err
 	}
 	if fs.NArg() > 0 {
-		return config{}, fmt.Errorf("unexpected argument %q before `--`", fs.Arg(0))
+		return config{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
 	cfg.listen, cfg.dotListen, cfg.dohListen, cfg.dohTrusted, cfg.doqListen = listen, dotListen, dohListen, dohTrusted, doqListen
 	cfg.nameAnswers, cfg.ddrDoH443, cfg.dohListen443 = answers, ddrDoH443, dohListen443
@@ -172,24 +167,10 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	if err := cfg.validate(); err != nil {
 		return config{}, err
 	}
-	for _, mode := range []struct {
-		on   bool
-		flag string
-	}{{cfg.noModule, "--no-module"}, {cfg.replyLog, "--reply-log"}, {cfg.observer, "--observer"}} {
-		if mode.on {
-			cfg.decider = append(cfg.decider, mode.flag)
-		}
-	}
 	return cfg, nil
 }
 
 func (c config) validate() error {
-	if len(c.decider) == 0 {
-		return errors.New("no decider command after `--`")
-	}
-	if c.decider[0] == "" {
-		return errors.New("empty decider command after `--`")
-	}
 	if c.observer && c.noModule {
 		return errors.New("--observer cannot be used with --no-module")
 	}
@@ -280,71 +261,32 @@ func (c config) validate() error {
 	return nil
 }
 
-// child is the decider process.
-type child struct {
-	cmd         *exec.Cmd
-	killProcess func() error          // cmd.Process.Kill; a test makes it refuse
-	waiting     func(d time.Duration) // test seam: called with the bound of every wait for the decider to leave
-	exited      chan struct{}
-	err         error // how it ended; valid once exited is closed
+// frontend is the decider the gateway asks: (*decider.Frontend) in production.
+type frontend interface {
+	Resolve(wire []byte, clientIP string, fwd func([]byte) []byte, transport, listenerIP, listenerInterface string) []byte
+	Close()
 }
 
-// startDecider runs argv with fd as its fd 3 and our stdout and stderr, and closes fd here.
-func startDecider(argv []string, fd *os.File) (*child, error) {
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	cmd.ExtraFiles = []*os.File{fd}
-	err := cmd.Start()
-	_ = fd.Close()
+// openFrontend boots the decider. A test replaces it with a fake.
+var openFrontend = func(opts decider.Options) (frontend, error) {
+	f, err := decider.Open(opts)
 	if err != nil {
-		return nil, fmt.Errorf("cannot start the decider: %w", err)
+		return nil, err
 	}
-	c := &child{cmd: cmd, killProcess: cmd.Process.Kill, exited: make(chan struct{})}
-	go func() { c.err = cmd.Wait(); close(c.exited) }()
-	return c, nil
+	return f, nil
 }
 
-// kill stops the decider and waits at most bound for it to be gone. After the privilege drop the gateway cannot
-// signal a decider that is still root (EPERM), and must not wait for that decider's boot to finish.
-func (c *child) kill(logf func(format string, args ...any), bound time.Duration) {
-	if err := c.killProcess(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		logf("cannot kill the decider: %v", err)
-	}
-	if !c.waitExit(bound) {
-		logf("the decider is still running %s after the kill", bound.Round(time.Millisecond))
-	}
-}
-
-func (c *child) waitExit(d time.Duration) bool {
-	if c.waiting != nil {
-		c.waiting(d)
-	}
-	select {
-	case <-c.exited:
-		return true
-	case <-time.After(d):
-		return false
-	}
-}
-
-// server is a started gateway: listeners bound, decider ready, serving.
+// server is a started gateway: listeners bound, decider booted, serving.
 type server struct {
-	cfg     config
-	logf    func(format string, args ...any)
-	g       *gateway
-	failed  chan error
-	stopped chan struct{}
-	once    sync.Once
-
-	mu       sync.Mutex // guards the fields below: a restart replaces the active decider, the shutdown takes them all
-	dec      *Decider   // the active decider, the one g asks: only its end is fatal
-	child    *child
-	swapped  chan struct{}       // closed, and replaced, when a restart makes another decider the active one
-	retiring map[*child]*Decider // deciders a restart replaced that are not gone yet
+	cfg      config
+	logf     func(format string, args ...any)
+	g        *gateway
+	frontend frontend
+	once     sync.Once
 }
 
-// start logs `starting pid`, binds every --listen address (one that fails is logged and skipped), starts the decider,
-// gives up root, waits for READY, reports readiness and begins serving. On any error nothing is left running or bound.
+// start logs `starting pid`, binds every --listen address (one that fails is logged and skipped), gives up root, boots the
+// decider in this process, reports readiness and begins serving. On any error nothing is left running or bound.
 func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	logf("starting pid %d", os.Getpid()) // first, so that a reader of the log finds where this start begins
 	trace := cfg.trace
@@ -361,12 +303,6 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	if cfg.readyTimeout == 0 {
 		cfg.readyTimeout = defaultReadyTimeout
-	}
-	if cfg.restartTimeout == 0 {
-		cfg.restartTimeout = defaultRestartTimeout
-	}
-	if cfg.killAfter == 0 {
-		cfg.killAfter = defaultKillAfter
 	}
 	if cfg.shutdownBudget == 0 {
 		cfg.shutdownBudget = defaultShutdownBudget
@@ -413,14 +349,14 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		return nil, errors.New("no address could be bound")
 	}
 	secure = bindTLS(cfg, logf, refused) // the certificate file is read, and the sockets are bound, before the privilege drop
-	if cfg.ctlSocket != "" {             // in every mode: a decider restart needs it as much as a certificate renewal does
+	if cfg.ctlSocket != "" {             // in every mode
 		var err error
 		var certs *certStore
 		if secure != nil {
 			certs = secure.certs
 		}
 		if ctl, err = bindCtl(cfg.ctlSocket, certs, logf); err != nil {
-			logf("control socket: %v; the certificate cannot be renewed without a restart, nor the decider restarted alone", err)
+			logf("control socket: %v; the certificate cannot be renewed without a restart", err)
 		}
 	}
 	var names *nameAnswers
@@ -441,44 +377,25 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	trace("bind")
 
-	conn, deciderEnd, err := newSocketpair()
-	if err != nil {
-		closeListeners()
-		return nil, err
-	}
-	ch, err := startDecider(cfg.decider, deciderEnd)
-	if err != nil {
-		_ = conn.Close()
-		closeListeners()
-		return nil, err
-	}
-	trace("decider")
-	dec := NewDecider(conn, logf)
-	abort := func(err error) (*server, error) {
-		dec.Close()
-		ch.kill(logf, cfg.killAfter)
-		closeListeners()
-		return nil, err
-	}
-
+	// The drop comes before the boot, as the Python decider's did: the module opens its files as the unprivileged user.
 	if drop != nil {
 		if err := drop(); err != nil {
-			return abort(err)
+			closeListeners()
+			return nil, err
 		}
 	}
-	if err := awaitReady(dec, ch, cfg.interrupt, cfg.readyTimeout); errors.Is(err, errGivenUp) {
-		return abort(errInterrupted)
-	} else if err != nil {
-		return abort(fmt.Errorf("decider %w", err))
+	fe, err := bootDecider(cfg)
+	if err != nil {
+		closeListeners()
+		return nil, err
 	}
 	trace("ready")
 
-	g := newGateway(acl, dec, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
+	g := newGateway(acl, fe.Resolve, newUpstream(cfg.upstream, cfg.timeout), cfg.timeout, logf)
 	g.ddr, g.names = ddrAnswers, names
 	interfaces := listenerInterfaceTable(cfg.listenerInterfaces, logf)
 	g.listenerInterfaces.Store(&interfaces)
-	s := &server{cfg: cfg, logf: logf, g: g, dec: dec, child: ch, failed: make(chan error, 1), stopped: make(chan struct{}),
-		swapped: make(chan struct{}), retiring: map[*child]*Decider{}}
+	s := &server{cfg: cfg, logf: logf, g: g, frontend: fe}
 	set := newListenerSet(g, cfg, secure)
 	set.refused = refused // the binds above record into it before the set exists
 	for _, l := range listeners {
@@ -486,7 +403,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	secure.serve(set)
 	if ctl != nil {
-		ctl.restart, ctl.listeners, ctl.names, ctl.ddr = s.restartDecider, set, names, ddrAnswers
+		ctl.listeners, ctl.names, ctl.ddr = set, names, ddrAnswers
 		ctl.serve(g)
 	}
 	g.wg.Add(1)
@@ -524,167 +441,61 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		logf("control socket %s", ctl.path)
 	}
 	logf("ready upstream %s pid %d", cfg.upstream, os.Getpid())
-	go s.watch()
 	return s, nil
 }
 
-var errGivenUp = errors.New("was given up: the gateway is stopping")
-
-// awaitReady waits at most bound for the decider's READY; its session ending, its exit and stop end the wait first.
-func awaitReady(dec *Decider, ch *child, stop <-chan struct{}, bound time.Duration) error {
-	t := time.NewTimer(bound)
-	defer t.Stop()
+// bootDecider boots the decider, giving up after readyTimeout or when cfg.interrupt closes (errInterrupted). Open runs on
+// its own goroutine so that neither waits for it; a result that arrives after the wait ended is Closed.
+func bootDecider(cfg config) (frontend, error) {
+	type booted struct {
+		f   frontend
+		err error
+	}
+	done := make(chan booted, 1)
+	go func() {
+		f, err := openFrontend(decider.Options{ModuleDir: cfg.moduleDir, LogDir: cfg.logDir, NoModule: cfg.noModule, ReplyLog: cfg.replyLog, Observer: cfg.observer})
+		done <- booted{f, err}
+	}()
+	bound := time.NewTimer(cfg.readyTimeout)
+	defer bound.Stop()
+	var err error
 	select {
-	case <-dec.Ready():
-		return nil
-	case <-dec.Done():
-		return fmt.Errorf("failed before READY: %w", dec.Err())
-	case <-ch.exited:
-		return fmt.Errorf("exited before READY: %v", ch.err)
-	case <-stop:
-		return errGivenUp
-	case <-t.C:
-		return fmt.Errorf("sent no READY within %s", bound)
-	}
-}
-
-// restartDecider starts a new decider with the first one's argv and, once it is READY, makes it the active one and
-// retires the old one. A new decider that does not get READY is closed and killed; the old one stays active.
-func (s *server) restartDecider() error {
-	conn, end, err := newSocketpair()
-	if err != nil {
-		return err
-	}
-	ch, err := startDecider(s.cfg.decider, end)
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
-	dec := NewDecider(conn, s.logf)
-	pid := ch.cmd.Process.Pid
-	giveUp := func(err error) error {
-		dec.Close()
-		ch.kill(s.logf, s.cfg.killAfter)
-		return fmt.Errorf("the new decider (pid %d) %w", pid, err)
-	}
-	if err := awaitReady(dec, ch, s.stopped, s.cfg.restartTimeout); err != nil {
-		return giveUp(err)
-	}
-	s.mu.Lock()
-	select {
-	case <-s.stopped: // the shutdown has taken the deciders it reaps: this one is not among them
-		s.mu.Unlock()
-		return giveUp(errGivenUp)
-	default:
-	}
-	oldDec, oldChild := s.dec, s.child
-	s.dec, s.child = dec, ch
-	s.g.dec.Store(dec)
-	oldDec.markRetired() // after the store: a query that still read the old one is handed to this one
-	s.retiring[oldChild] = oldDec
-	close(s.swapped)
-	s.swapped = make(chan struct{})
-	s.mu.Unlock()
-	s.logf("decider restarted: pid %d took over from pid %d", pid, oldChild.cmd.Process.Pid)
-	go s.retire(oldDec, oldChild)
-	return nil
-}
-
-// retire lets a replaced decider finish what it holds (as long as a query may take), then closes and reaps it.
-func (s *server) retire(dec *Decider, ch *child) {
-	drain := time.NewTimer(2*s.cfg.timeout + s.g.grace)
-	defer drain.Stop()
-	select {
-	case <-dec.drained():
-	case <-dec.Done():
-	case <-drain.C:
-		s.logf("the replaced decider (pid %d) still holds queries after %s: closing it", ch.cmd.Process.Pid, 2*s.cfg.timeout+s.g.grace)
-	case <-s.stopped:
-		return
-	}
-	dec.Close()
-	leave := time.NewTimer(s.cfg.killAfter)
-	defer leave.Stop()
-	select {
-	case <-ch.exited:
-	case <-leave.C:
-		s.logf("the replaced decider (pid %d) did not exit within %s of EOF: killing it", ch.cmd.Process.Pid, s.cfg.killAfter)
-		ch.kill(s.logf, s.cfg.killAfter)
-	case <-s.stopped:
-		return
-	}
-	s.mu.Lock()
-	delete(s.retiring, ch)
-	s.mu.Unlock()
-}
-
-// watch turns the end of the active decider's session, or of its process, into a fatal error. A decider a restart
-// replaced may end as it likes.
-func (s *server) watch() {
-	for {
-		s.mu.Lock()
-		dec, ch, swapped := s.dec, s.child, s.swapped
-		s.mu.Unlock()
-		var err error
-		select {
-		case <-s.stopped:
-			return
-		case <-swapped:
-			continue
-		case <-dec.Done():
-			err = fmt.Errorf("decider session ended: %w", dec.Err())
-		case <-ch.exited:
-			err = fmt.Errorf("decider exited: %v", ch.err)
+	case b := <-done:
+		if b.err != nil {
+			return nil, fmt.Errorf("decider: %w", b.err)
 		}
-		if cur, _ := s.active(); cur != dec { // replaced while this waited: its end is the retirement's
-			continue
-		}
-		select {
-		case <-s.stopped: // our own shutdown made the decider leave
-		default:
-			s.failed <- err
-		}
-		return
+		return b.f, nil
+	case <-cfg.interrupt:
+		err = errInterrupted
+	case <-bound.C:
+		err = fmt.Errorf("decider did not boot within %s", cfg.readyTimeout)
 	}
+	go func() {
+		if b := <-done; b.f != nil {
+			b.f.Close()
+		}
+	}()
+	return nil, err
 }
 
-// fatal delivers the reason the gateway can no longer serve; a requested shutdown delivers nothing.
-func (s *server) fatal() <-chan error { return s.failed }
-
-func (s *server) active() (*Decider, *child) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.dec, s.child
-}
-
-// shutdown stops accepting, closes the decision sockets of the active decider and of any being retired (each reads EOF
-// and exits), and waits for them, killing those that do not leave in time. Everything in it, the transports' stop
-// included, fits in shutdownBudget: the deciders' patience for EOF is whatever the transports left, less an eighth of
-// the budget that the kills and their reaps keep.
+// shutdown stops accepting and drains the queries in flight, then closes the decider: Close does not wait for a query
+// and stops what a query writes to. Everything in it fits in shutdownBudget; a decider that is not closed by then is
+// left to the exit of the process.
 func (s *server) shutdown() {
 	s.once.Do(func() {
 		deadline := time.Now().Add(s.cfg.shutdownBudget)
-		s.mu.Lock()
-		close(s.stopped) // under mu: a restart has either made its decider active, or sees this and gives it up
-		decs, children := []*Decider{s.dec}, []*child{s.child}
-		for ch, dec := range s.retiring {
-			decs, children = append(decs, dec), append(children, ch)
-		}
-		s.mu.Unlock()
 		if err := removeReady(s.cfg.readyFile); err != nil {
 			s.logf("cannot remove the ready file: %v", err)
 		}
-		for _, dec := range decs {
-			dec.Close() // first: queries blocked writing to a decider that reads nothing would hold g.stop() up to the write deadline
-		}
 		s.g.stop()
-		patience := max(min(s.cfg.killAfter, time.Until(deadline)-s.cfg.shutdownBudget/8), 0)
-		eof := time.Now().Add(patience)
-		for _, ch := range children {
-			if !ch.waitExit(max(time.Until(eof), 0)) {
-				s.logf("the decider did not exit within %s of EOF: killing it", patience.Round(time.Millisecond))
-				ch.kill(s.logf, time.Until(deadline))
-			}
+		closed := make(chan struct{})
+		go func() { s.frontend.Close(); close(closed) }()
+		left := time.NewTimer(max(time.Until(deadline), 0))
+		defer left.Stop()
+		select {
+		case <-closed:
+		case <-left.C:
+			s.logf("the decider did not close within %s: leaving it to the exit", s.cfg.shutdownBudget)
 		}
 	})
 }
@@ -769,7 +580,7 @@ func removeReady(path string) error {
 	return os.Remove(path)
 }
 
-var errInterrupted = errors.New("interrupted while waiting for the decider")
+var errInterrupted = errors.New("interrupted while the decider booted")
 
 func realMain(args []string, stderr io.Writer) int {
 	logger := log.New(stderr, "", 0)
@@ -778,7 +589,7 @@ func realMain(args []string, stderr io.Writer) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		logger.Printf("pfb_dns_gateway: %v\nusage: pfb_dns_gateway [flags] -- <decider command...>   (-h lists the flags)", err)
+		logger.Printf("pfb_dns_gateway: %v\nusage: pfb_dns_gateway [flags]   (-h lists the flags)", err)
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP) // SIGHUP's default action would leave a stale ready file
@@ -793,15 +604,9 @@ func realMain(args []string, stderr io.Writer) int {
 		logger.Printf("pfb_dns_gateway: %v", err)
 		return 1
 	}
-	select {
-	case <-ctx.Done():
-		srv.shutdown()
-		return 0
-	case err := <-srv.fatal():
-		logger.Printf("pfb_dns_gateway: %v", err)
-		srv.shutdown()
-		return 1
-	}
+	<-ctx.Done()
+	srv.shutdown()
+	return 0
 }
 
 func main() { os.Exit(realMain(os.Args[1:], os.Stderr)) }

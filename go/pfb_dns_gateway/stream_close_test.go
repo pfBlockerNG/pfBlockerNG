@@ -71,11 +71,8 @@ func TestAClientThatHangsUpInsideAFrameAbandonsWhatItAsked(t *testing.T) {
 			{"inside the query", []byte{0, 40, 0xab}},
 		} {
 			t.Run(k.name+"/"+cut.name, func(t *testing.T) {
-				r := newRig(t, rigConfig{acl: aclMixed})
-				held := make(chan struct{})
-				release := sync.OnceFunc(func() { close(held) })
-				t.Cleanup(release)
-				r.autoAnswer(func(q decidedQuery) []byte { <-held; return echoAnswer(q) })
+				r := newRig(t, rigConfig{acl: aclMixed, upstream: []upstreamOption{silent()}})
+				r.autoForward() // the decider waits for an Unbound that says nothing, until the gateway gives the query up
 				c := k.dial(t, r)
 				tcpSend(t, c, buildQuery(t, 1, "held.example.", true))
 				r.nextQuery()

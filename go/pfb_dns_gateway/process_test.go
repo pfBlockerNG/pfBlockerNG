@@ -3,10 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -17,21 +15,23 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider"
 )
 
-// The test binary doubles as the gateway, the decider and the privilege-drop probe: the process-level tests
-// start it with a role as its first argument instead of building anything.
+// The test binary doubles as the gateway and the privilege-drop probe: the process-level tests start it with a role as its
+// first argument instead of building anything.
 func TestMain(m *testing.M) {
 	ctlUID = uint32(os.Getuid()) // the control socket takes pushes from the user running the tests, root or not
 	if len(os.Args) > 2 {
 		switch os.Args[1] {
 		case "--as-gateway":
+			installFakeFrontend()
 			os.Exit(realMain(os.Args[2:], os.Stderr))
-		case "--as-decider":
-			os.Exit(fakeDecider(os.Args[2]))
 		case "--as-dropper":
 			os.Exit(dropAndReport(os.Args[2]))
 		case "--as-ctl-client":
@@ -41,128 +41,36 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// fakeDecider is the Python side of the socketpair (fd 3). Modes:
+// echoFrontend is the decider of a test that is not about decisions: every query is answered with itself, QR set.
+type echoFrontend struct{}
+
+func (echoFrontend) Resolve(wire []byte, _ string, _ func([]byte) []byte, _, _, _ string) []byte {
+	return echoWithQR(seenQuery{wire: wire})[0]
+}
+
+func (echoFrontend) Close() {}
+
+// installFakeFrontend replaces the decider of the gateway role by what PFB_FAKE_FRONTEND names; unset, the gateway boots the
+// real one.
 //
-//	serve           READY, then answer every QUERY with the query echoed and QR set; exit 0 at EOF
-//	forward-tagged  serve, but each QUERY is FORWARDed first and its ANSWER, once the REPLY is in, ends in "pid=<its pid>"
-//	from-file       the mode the file PFB_FAKE_MODEFILE holds when the process starts
-//	no-ready-exit   exit 3 at once, never READY
-//	no-ready-hang   never READY; wait for EOF
-//	bad-frame-before-ready a frame whose length is below the minimum, never READY; wait for EOF
-//	boot-ignores-eof never READY; ignore everything, EOF included
-//	ready-then-exit READY, then exit 0
-//	bad-frame       READY, then a frame whose length is below the minimum
-//	ignore-eof      READY, then ignore everything, EOF included
-//
-// PFB_FAKE_PIDFILE gets its pid and PFB_FAKE_ARGVFILE its arguments before anything else. PFB_FAKE_EVENTS names an append-only
-// file the decider writes what it saw to, in order, so a test reads the order of events from the processes themselves rather
-// than from when the test happened to look: "before-ready ready-file=absent|present" is the state of the file PFB_FAKE_WATCH
-// names, taken just before READY is sent; "exit parent=PID" is the decider's parent at its last moment. PFB_FAKE_EXIT_DELAY (a
-// duration) holds the exit after EOF: it only gives a gateway that exits before its child the time to do so, and the verdict is
-// the recorded parent, not how long anything took.
-func fakeDecider(mode string) int {
-	if mode == "from-file" { // every decider of a gateway has the same argv: the file is how a test makes the next one differ
-		b, err := os.ReadFile(os.Getenv("PFB_FAKE_MODEFILE"))
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "fake decider: mode file:", err)
-			return 4
-		}
-		mode = strings.TrimSpace(string(b))
-	}
-	conn, err := net.FileConn(os.NewFile(3, "decision"))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "fake decider: no fd 3:", err)
-		return 4
-	}
-	if path := os.Getenv("PFB_FAKE_PIDFILE"); path != "" {
-		_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
-	}
-	if path := os.Getenv("PFB_FAKE_ARGVFILE"); path != "" { // what the gateway handed this process after its own role words
-		_ = os.WriteFile(path, []byte(strings.Join(os.Args[3:], " ")), 0o644)
-	}
-	switch mode {
-	case "no-ready-exit":
-		return 3
-	case "no-ready-hang":
-		_, _ = io.Copy(io.Discard, conn)
-		return 0
-	case "boot-ignores-eof": // a module that is still booting reads no socket, so EOF goes unnoticed
-		time.Sleep(time.Hour)
-		return 0
-	case "bad-frame-before-ready":
-		_, _ = conn.Write([]byte{0, 0, 0, 3})
-		_, _ = io.Copy(io.Discard, conn)
-		return 0
-	}
-	if watch := os.Getenv("PFB_FAKE_WATCH"); watch != "" {
-		state := "absent"
-		if _, err := os.Lstat(watch); err == nil {
-			state = "present"
-		}
-		fakeEvent("before-ready ready-file=%s", state)
-	}
-	_, _ = conn.Write(pack(tReady, 0, nil))
-	switch mode {
-	case "ready-then-exit":
-		return 0
-	case "bad-frame":
-		_, _ = conn.Write([]byte{0, 0, 0, 3})
-		_, _ = io.Copy(io.Discard, conn)
-		return 0
-	case "ignore-eof":
-		time.Sleep(time.Hour)
-		return 0
-	}
-	r := bufio.NewReader(conn)
-	for {
-		typ, id, payload, err := fakeFrame(r)
-		if err != nil {
-			break
-		}
-		if typ == tQuery {
-			wire := queryDNSWire(payload)
-			answer := bytes.Clone(wire)
-			answer[2] |= 0x80
-			if mode == "forward-tagged" {
-				_, _ = conn.Write(pack(tForward, id, wire))
-				if !fakeAwaitReply(r, id) {
-					break
+//	echo        echoFrontend. PFB_FAKE_EVENTS names an append-only file the boot writes what it saw to, in order: "before-ready
+//	            ready-file=absent|present" is the state of the file PFB_FAKE_WATCH names, taken as the decider boots
+//	block-open  the boot never ends
+func installFakeFrontend() {
+	switch os.Getenv("PFB_FAKE_FRONTEND") {
+	case "echo":
+		openFrontend = func(decider.Options) (frontend, error) {
+			if watch := os.Getenv("PFB_FAKE_WATCH"); watch != "" {
+				state := "absent"
+				if _, err := os.Lstat(watch); err == nil {
+					state = "present"
 				}
-				answer = append(answer, "pid="+strconv.Itoa(os.Getpid())...)
+				fakeEvent("before-ready ready-file=%s", state)
 			}
-			_, _ = conn.Write(pack(tAnswer, id, answer))
+			return echoFrontend{}, nil
 		}
-	}
-	if delay, err := time.ParseDuration(os.Getenv("PFB_FAKE_EXIT_DELAY")); err == nil {
-		time.Sleep(delay)
-	}
-	fakeEvent("exit parent=%d", os.Getppid())
-	return 0
-}
-
-// fakeFrame reads one frame of the decision protocol.
-func fakeFrame(r io.Reader) (typ byte, id uint32, payload []byte, err error) {
-	var head [9]byte
-	if _, err = io.ReadFull(r, head[:]); err != nil {
-		return 0, 0, nil, err
-	}
-	payload = make([]byte, int(binary.BigEndian.Uint32(head[:4]))-5)
-	if _, err = io.ReadFull(r, payload); err != nil {
-		return 0, 0, nil, err
-	}
-	return head[4], binary.BigEndian.Uint32(head[5:]), payload, nil
-}
-
-// fakeAwaitReply reads frames until the REPLY to id; false when the session ends first.
-func fakeAwaitReply(r io.Reader, id uint32) bool {
-	for {
-		typ, got, _, err := fakeFrame(r)
-		if err != nil {
-			return false
-		}
-		if typ == tReply && got == id {
-			return true
-		}
+	case "block-open":
+		openFrontend = func(decider.Options) (frontend, error) { select {} }
 	}
 }
 
@@ -174,7 +82,7 @@ func fakeEvent(format string, args ...any) {
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fake decider: events:", err)
+		fmt.Fprintln(os.Stderr, "fake frontend: events:", err)
 		return
 	}
 	defer f.Close()
@@ -211,8 +119,6 @@ func dropAndReport(name string) int {
 	return 0
 }
 
-func decider(mode string) []string { return []string{os.Args[0], "--as-decider", mode} }
-
 // gatewayProcess is the gateway as its own process with its stderr read line by line.
 type gatewayProcess struct {
 	t      *testing.T
@@ -225,15 +131,22 @@ type gatewayProcess struct {
 	log []string
 }
 
-// startGatewayProcess runs the gateway with flags; its control socket is a private one unless flags name it, so a test never
-// touches the system's.
-func startGatewayProcess(t *testing.T, flags []string, deciderArgv []string) *gatewayProcess {
+// startGatewayProcess runs the gateway with echoFrontend as its decider; its control socket is a private one unless flags
+// name it, so a test never touches the system's.
+func startGatewayProcess(t *testing.T, flags []string) *gatewayProcess {
+	t.Helper()
+	return startGatewayProcessWith(t, flags, "PFB_FAKE_FRONTEND=echo")
+}
+
+// startGatewayProcessWith is startGatewayProcess with the environment given: without PFB_FAKE_FRONTEND the gateway boots the
+// real decider.
+func startGatewayProcessWith(t *testing.T, flags []string, env ...string) *gatewayProcess {
 	t.Helper()
 	if !slices.Contains(flags, "--ctl-socket") {
 		flags = append(slices.Clone(flags), "--ctl-socket", filepath.Join(shortTempDir(t), "run", "ctl.sock"))
 	}
-	args := append(append([]string{"--as-gateway"}, flags...), "--")
-	cmd := exec.Command(os.Args[0], append(args, deciderArgv...)...)
+	cmd := exec.Command(os.Args[0], append([]string{"--as-gateway"}, flags...)...)
+	cmd.Env = append(os.Environ(), env...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -316,36 +229,6 @@ func (p *gatewayProcess) exit() int {
 	}
 }
 
-func requireGone(t *testing.T, pid int) {
-	t.Helper()
-	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("process %d must be gone, kill(pid, 0) = %v", pid, err)
-	}
-}
-
-// waitForPid blocks until the fake decider has written its pid: a drop hook calling it makes the decider exist
-// (and be known) before the code under test can kill it.
-func waitForPid(t *testing.T, path string) {
-	t.Helper()
-	eventually(t, "the decider to write its pid", func() bool {
-		b, err := os.ReadFile(path)
-		return err == nil && len(b) > 0
-	})
-}
-
-func readPid(t *testing.T, path string) int {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, err := strconv.Atoi(string(b))
-	if err != nil {
-		t.Fatalf("pid file %q: %v", b, err)
-	}
-	return pid
-}
-
 func freePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -380,7 +263,7 @@ func udpQuery(t *testing.T, to netip.AddrPort, wire []byte) []byte {
 
 // G18: one unbindable --listen address is skipped and named; the good one serves.
 func TestGatewaySkipsAnUnbindableListenAddressAndServesTheOthers(t *testing.T) {
-	gw := startGatewayProcess(t, []string{"--listen", "192.0.2.1", "--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf"}, decider("serve"))
+	gw := startGatewayProcess(t, []string{"--listen", "192.0.2.1", "--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf"})
 	skipped := gw.waitLine("cannot listen on 192.0.2.1:0:")
 	serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("ready upstream 127.0.0.1:5353")
@@ -396,26 +279,25 @@ func TestGatewaySkipsAnUnbindableListenAddressAndServesTheOthers(t *testing.T) {
 	}
 }
 
-// issue #3513: the process the gateway starts is handed the pfB-DNS mode flags it was given, once, after its own argv.
-func TestGatewayStartsTheDeciderWithTheModeFlagsItWasGiven(t *testing.T) {
-	argvFile := filepath.Join(t.TempDir(), "argv")
-	t.Setenv("PFB_FAKE_ARGVFILE", argvFile)
-	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0", "--no-module", "--reply-log", "--unbound-conf", "/nonexistent/unbound.conf"}, decider("serve"))
-	gw.waitLine("ready upstream ")
-	got, err := os.ReadFile(argvFile)
+// issue #3513: the pfB-DNS mode flags the gateway was given are what the decider boots with.
+func TestStartBootsTheDeciderWithTheModeFlagsItWasGiven(t *testing.T) {
+	cfg, logs := lifecycleConfig(t)
+	var got decider.Options
+	useDecider(t, func(opts decider.Options) (frontend, error) { got = opts; return echoFrontend{}, nil })
+	cfg.moduleDir, cfg.logDir, cfg.noModule, cfg.replyLog = "/some/module/dir", "/some/log/dir", true, true
+	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "--no-module --reply-log"; string(got) != want {
-		t.Fatalf("the decider's arguments: got %q, want %q", got, want)
+	defer srv.shutdown()
+	if want := (decider.Options{ModuleDir: "/some/module/dir", LogDir: "/some/log/dir", NoModule: true, ReplyLog: true}); got != want {
+		t.Fatalf("the decider was booted with %+v, want %+v", got, want)
 	}
 }
 
-// G18: no address binds -> exit 1, and the decider is never started.
+// G18: no address binds -> exit 1, and the decider is never booted.
 func TestGatewayExitsWhenNoListenAddressBinds(t *testing.T) {
-	pidfile := filepath.Join(t.TempDir(), "decider.pid")
-	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
-	gw := startGatewayProcess(t, []string{"--listen", "192.0.2.1", "--listen", "192.0.2.2", "--port", "0"}, decider("serve"))
+	gw := startGatewayProcess(t, []string{"--listen", "192.0.2.1", "--listen", "192.0.2.2", "--port", "0"})
 	if code := gw.exit(); code != 1 {
 		t.Fatalf("exit code %d, want 1; log:\n%s", code, gw.logText())
 	}
@@ -424,63 +306,30 @@ func TestGatewayExitsWhenNoListenAddressBinds(t *testing.T) {
 			t.Fatalf("log lacks %q:\n%s", want, gw.logText())
 		}
 	}
-	if _, err := os.Stat(pidfile); err == nil {
-		t.Fatal("the decider was started although nothing could be bound")
+	cfg, logs := lifecycleConfig(t)
+	var booted int
+	useDecider(t, func(decider.Options) (frontend, error) { booted++; return echoFrontend{}, nil })
+	cfg.listen = []string{"192.0.2.1"}
+	if srv, err := start(cfg, logs.logf); err == nil {
+		srv.shutdown()
+		t.Fatal("start served although nothing could be bound")
+	}
+	if booted != 0 {
+		t.Fatalf("the decider was booted %d times although nothing could be bound", booted)
 	}
 }
 
-// G8 (process level): a malformed frame from the decider ends the gateway with a non-zero status and a clear line.
-func TestGatewayExitsNonZeroOnAProtocolErrorFromTheDecider(t *testing.T) {
-	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0"}, decider("bad-frame"))
-	if code := gw.exit(); code != 1 {
-		t.Fatalf("exit code %d, want 1; log:\n%s", code, gw.logText())
-	}
-	if !strings.Contains(gw.logText(), "decision protocol error:") {
-		t.Fatalf("log lacks the protocol error line:\n%s", gw.logText())
-	}
-}
-
-// G22: a decider that exits without ever sending READY means the gateway never serves.
-func TestGatewayExitsWithoutServingWhenTheDeciderNeverBecomesReady(t *testing.T) {
-	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0"}, decider("no-ready-exit"))
-	if code := gw.exit(); code != 1 {
-		t.Fatalf("exit code %d, want 1; log:\n%s", code, gw.logText())
-	}
-	if text := gw.logText(); strings.Contains(text, "listening") || strings.Contains(text, "ready upstream") {
-		t.Fatalf("the gateway reported readiness without a READY:\n%s", text)
-	}
-}
-
-// G20: SIGTERM stops accepting, ends the decider and exits 0; the child is gone before the gateway is.
-func TestGatewaySIGTERMExitsZeroAfterTheDeciderIsGone(t *testing.T) {
-	dir := t.TempDir()
-	pidfile, events := filepath.Join(dir, "decider.pid"), filepath.Join(dir, "events")
-	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
-	t.Setenv("PFB_FAKE_EVENTS", events)
-	t.Setenv("PFB_FAKE_EXIT_DELAY", "300ms") // gives a gateway that does not wait for its child the time to leave first
-	// The race runtime keeps an exiting process alive for atexit_sleep_ms (1000 by default) to report late races: a gateway
-	// built with -race that did not wait for its child would still be the child's parent 300 ms later, and the recorded
-	// parent below would not show it. The gateway and its decider inherit this; options already set stay.
-	t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
-	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0"}, decider("serve"))
+// G20: SIGTERM stops accepting and exits 0.
+func TestGatewaySIGTERMExitsZeroAndStopsServing(t *testing.T) {
+	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0"})
 	serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("ready upstream")
-	pid := readPid(t, pidfile)
-	if err := syscall.Kill(pid, 0); err != nil {
-		t.Fatalf("the decider (pid %d) should be running while the gateway serves: %v", pid, err)
-	}
 	if err := gw.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
 	if code := gw.exit(); code != 0 {
 		t.Fatalf("exit code %d after SIGTERM, want 0; log:\n%s", code, gw.logText())
 	}
-	// Recorded by the decider at its last moment, so it does not depend on when this test looks: the gateway was still its
-	// parent, i.e. had not exited, and so waited for it.
-	if got, want := readEvents(t, events), []string{"exit parent=" + strconv.Itoa(gw.cmd.Process.Pid)}; !slices.Equal(got, want) {
-		t.Fatalf("decider events %q, want %q: the gateway exited before its child did", got, want)
-	}
-	requireGone(t, pid)
 	if c, err := net.DialTimeout("tcp", serving.String(), watchdog); err == nil {
 		_ = c.Close()
 		t.Fatalf("%s still accepts connections after the gateway exited", serving)
@@ -507,7 +356,7 @@ func TestPrivilegeDropBecomesTheUserAndCannotComeBack(t *testing.T) {
 }
 
 func TestUnknownUserExitsOneBeforeAnythingIsServed(t *testing.T) {
-	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0", "--user", "pfb-no-such-user-3513"}, decider("serve"))
+	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0", "--user", "pfb-no-such-user-3513"})
 	if code := gw.exit(); code != 1 {
 		t.Fatalf("exit code %d, want 1; log:\n%s", code, gw.logText())
 	}
@@ -517,29 +366,9 @@ func TestUnknownUserExitsOneBeforeAnythingIsServed(t *testing.T) {
 }
 
 func TestUsageErrorExitsTwo(t *testing.T) {
-	gw := startGatewayProcess(t, []string{"--port", "53"}, nil) // no decider argv after `--`
+	gw := startGatewayProcess(t, []string{"--port", "53"}) // no --listen
 	if code := gw.exit(); code != 2 {
 		t.Fatalf("exit code %d, want 2; log:\n%s", code, gw.logText())
-	}
-}
-
-// SIGTERM while the decider is still booting abandons the wait for READY instead of sitting out its cap; the
-// decider leaves with the socket and nothing was ever reported as ready.
-func TestSIGTERMWhileTheDeciderIsStillBootingExitsZero(t *testing.T) {
-	pidfile := filepath.Join(t.TempDir(), "decider.pid")
-	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
-	gw := startGatewayProcess(t, []string{"--listen", "127.0.0.1", "--port", "0"}, decider("no-ready-hang"))
-	waitForPid(t, pidfile) // the decider exists, so the gateway is waiting for its READY
-	pid := readPid(t, pidfile)
-	if err := gw.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	if code := gw.exit(); code != 0 {
-		t.Fatalf("exit code %d after SIGTERM during startup, want 0; log:\n%s", code, gw.logText())
-	}
-	requireGone(t, pid)
-	if text := gw.logText(); strings.Contains(text, "listening") || strings.Contains(text, "ready upstream") {
-		t.Fatalf("readiness reported without a READY:\n%s", text)
 	}
 }
 
@@ -562,22 +391,40 @@ func (c *capture) text() string {
 	return strings.Join(c.lines, "\n")
 }
 
-func lifecycleConfig(t *testing.T, mode string) (config, *capture) {
+// useDecider replaces the decider boot of start for the test.
+func useDecider(t *testing.T, open func(decider.Options) (frontend, error)) {
 	t.Helper()
+	old := openFrontend
+	openFrontend = open
+	t.Cleanup(func() { openFrontend = old })
+}
+
+// closingFrontend is a decider that says when it is Closed.
+type closingFrontend struct {
+	echoFrontend
+	closed chan struct{}
+}
+
+func (c closingFrontend) Close() { close(c.closed) }
+
+func lifecycleConfig(t *testing.T) (config, *capture) {
+	t.Helper()
+	useDecider(t, func(decider.Options) (frontend, error) { return echoFrontend{}, nil })
 	return config{
 		listen: []string{"127.0.0.1"}, port: 0, upstream: "127.0.0.1:5353", timeout: watchdog,
-		unboundConf: filepath.Join(t.TempDir(), "absent"), decider: decider(mode),
+		unboundConf: filepath.Join(t.TempDir(), "absent"),
 	}, &capture{}
 }
 
-// G19 (ordering): bind, then start the decider, then drop privileges, then wait for READY.
-func TestStartupOrderIsBindThenDeciderThenDropThenReady(t *testing.T) {
-	cfg, logs := lifecycleConfig(t, "serve")
+// G19 (ordering): bind, then drop privileges, then boot the decider in this process.
+func TestStartupOrderIsBindThenDropThenReady(t *testing.T) {
+	cfg, logs := lifecycleConfig(t)
 	var steps []string
 	var mu sync.Mutex
 	record := func(s string) { mu.Lock(); steps = append(steps, s); mu.Unlock() }
 	cfg.trace = record
 	cfg.drop = func() error { record("drop"); return nil }
+	useDecider(t, func(decider.Options) (frontend, error) { record("open"); return echoFrontend{}, nil })
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)
@@ -585,13 +432,13 @@ func TestStartupOrderIsBindThenDeciderThenDropThenReady(t *testing.T) {
 	defer srv.shutdown()
 	mu.Lock()
 	defer mu.Unlock()
-	if got := strings.Join(steps, ","); got != "bind,decider,drop,ready" {
-		t.Fatalf("startup order: got %s, want bind,decider,drop,ready", got)
+	if got := strings.Join(steps, ","); got != "bind,drop,open,ready" {
+		t.Fatalf("startup order: got %s, want bind,drop,open,ready", got)
 	}
 }
 
 func TestStartupReportsEachListenerThenTheUpstreamOnlyAfterReady(t *testing.T) {
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	cfg.upstream = "127.0.0.1:5454"
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
@@ -612,16 +459,18 @@ func TestStartupReportsEachListenerThenTheUpstreamOnlyAfterReady(t *testing.T) {
 }
 
 func TestFailedDropStopsEverythingAndFreesThePort(t *testing.T) {
-	pidfile := filepath.Join(t.TempDir(), "decider.pid")
-	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
+	var booted int
+	useDecider(t, func(decider.Options) (frontend, error) { booted++; return echoFrontend{}, nil })
 	cfg.port = freePort(t)
-	cfg.drop = func() error { waitForPid(t, pidfile); return errors.New("setuid refused") }
+	cfg.drop = func() error { return errors.New("setuid refused") }
 	srv, err := start(cfg, logs.logf)
 	if err == nil || !strings.Contains(err.Error(), "setuid refused") {
 		t.Fatalf("start: got srv=%v err=%v, want the drop error", srv, err)
 	}
-	requireGone(t, readPid(t, pidfile))
+	if booted != 0 {
+		t.Fatalf("the decider was booted %d times after the privilege drop failed, want never", booted)
+	}
 	l, err := bindPlain("127.0.0.1", cfg.port)
 	if err != nil {
 		t.Fatalf("the port is still held after a failed start: %v", err)
@@ -629,67 +478,118 @@ func TestFailedDropStopsEverythingAndFreesThePort(t *testing.T) {
 	l.close()
 }
 
-func TestStartupGivesUpWhenTheDeciderSendsNoReadyInTime(t *testing.T) {
-	pidfile := filepath.Join(t.TempDir(), "decider.pid")
-	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
-	cfg, logs := lifecycleConfig(t, "no-ready-hang")
-	cfg.drop = func() error { waitForPid(t, pidfile); return nil }
+// A decider that cannot boot is the start's error, and nothing stays bound.
+func TestADeciderThatCannotBootFailsTheStartAndFreesThePort(t *testing.T) {
+	cfg, logs := lifecycleConfig(t)
+	useDecider(t, func(decider.Options) (frontend, error) { return nil, errors.New("no pfb_unbound.ini") })
+	cfg.port = freePort(t)
+	srv, err := start(cfg, logs.logf)
+	if err == nil || err.Error() != "decider: no pfb_unbound.ini" {
+		t.Fatalf("start: got srv=%v err=%v, want the boot error", srv, err)
+	}
+	l, err := bindPlain("127.0.0.1", cfg.port)
+	if err != nil {
+		t.Fatalf("the port is still held after a failed start: %v", err)
+	}
+	l.close()
+	if strings.Contains(logs.text(), "listening") {
+		t.Fatalf("no readiness line without a decider:\n%s", logs.text())
+	}
+}
+
+// A decider that boots too slowly is given up on; the one that finishes afterwards is Closed.
+func TestStartupGivesUpWhenTheDeciderDoesNotBootInTime(t *testing.T) {
+	cfg, logs := lifecycleConfig(t)
+	release, late := make(chan struct{}), closingFrontend{closed: make(chan struct{})}
+	useDecider(t, func(decider.Options) (frontend, error) { <-release; return late, nil })
 	cfg.readyTimeout = 100 * time.Millisecond
 	srv, err := start(cfg, logs.logf)
-	if err == nil || !strings.Contains(err.Error(), "READY") {
-		t.Fatalf("start: got srv=%v err=%v, want a no-READY error", srv, err)
+	if err == nil || !strings.Contains(err.Error(), "did not boot") {
+		t.Fatalf("start: got srv=%v err=%v, want a did-not-boot error", srv, err)
 	}
-	requireGone(t, readPid(t, pidfile))
 	if strings.Contains(logs.text(), "listening") {
-		t.Fatalf("no readiness line without READY:\n%s", logs.text())
+		t.Fatalf("no readiness line without a decider:\n%s", logs.text())
 	}
+	close(release)
+	waitClosed(t, late.closed, "the late decider to be closed")
 }
 
-// G21: the decider dying while the gateway serves is fatal for the gateway.
-func TestDeciderKilledWhileServingIsFatal(t *testing.T) {
-	pidfile := filepath.Join(t.TempDir(), "decider.pid")
-	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
-	cfg, logs := lifecycleConfig(t, "serve")
+// A signal during the boot ends the wait (errInterrupted); the decider that finishes afterwards is Closed.
+func TestAnInterruptWhileTheDeciderBootsEndsTheStart(t *testing.T) {
+	cfg, logs := lifecycleConfig(t)
+	release, late := make(chan struct{}), closingFrontend{closed: make(chan struct{})}
+	useDecider(t, func(decider.Options) (frontend, error) { <-release; return late, nil })
+	interrupt := make(chan struct{})
+	close(interrupt)
+	cfg.interrupt = interrupt
+	srv, err := start(cfg, logs.logf)
+	if !errors.Is(err, errInterrupted) {
+		t.Fatalf("start: got srv=%v err=%v, want errInterrupted", srv, err)
+	}
+	close(release)
+	waitClosed(t, late.closed, "the late decider to be closed")
+}
+
+// Shutdown closes the decider after the queries in flight are done with it: Close stops what a query writes to.
+func TestShutdownClosesTheDeciderOnlyAfterTheQueriesInFlightAreDrained(t *testing.T) {
+	cfg, logs := lifecycleConfig(t)
+	silent, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}) // an Unbound that never answers holds the query's forward
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	cfg.upstream = silent.LocalAddr().String()
+	fe := &drainFrontend{inflight: make(chan struct{}), closedWithQuery: make(chan bool, 1)}
+	useDecider(t, func(decider.Options) (frontend, error) { return fe, nil })
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer srv.shutdown()
-	select {
-	case err := <-srv.fatal():
-		t.Fatalf("fatal before anything went wrong: %v", err)
-	default:
-	}
-	if err := syscall.Kill(readPid(t, pidfile), syscall.SIGKILL); err != nil {
+	port := int(listenAddr(t, firstLine(logs.text(), "listening udp+tcp ")).Port())
+	c, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.Close()
+	if _, err := c.Write(buildQuery(t, 1, "held.example.", true)); err != nil {
+		t.Fatal(err)
+	}
+	waitClosed(t, fe.inflight, "the query to reach the decider")
+	srv.shutdown()
 	select {
-	case err := <-srv.fatal():
-		if err == nil || !strings.Contains(err.Error(), "decider") {
-			t.Fatalf("fatal error: got %v, want one naming the decider", err)
+	case withQuery := <-fe.closedWithQuery:
+		if withQuery {
+			t.Fatal("the decider was closed while a query still ran in it")
 		}
 	case <-time.After(watchdog):
-		t.Fatal("STUCK/ENVIRONMENT: no fatal error after the decider was killed")
+		t.Fatal("STUCK/ENVIRONMENT: the decider was never closed")
 	}
 }
 
-func TestShutdownKillsADeciderThatIgnoresEOF(t *testing.T) {
-	pidfile := filepath.Join(t.TempDir(), "decider.pid")
-	t.Setenv("PFB_FAKE_PIDFILE", pidfile)
-	cfg, logs := lifecycleConfig(t, "ignore-eof")
-	cfg.killAfter = 100 * time.Millisecond
-	srv, err := start(cfg, logs.logf)
-	if err != nil {
-		t.Fatal(err)
+func firstLine(text, prefix string) string {
+	for _, l := range strings.Split(text, "\n") {
+		if strings.HasPrefix(l, prefix) {
+			return l
+		}
 	}
-	srv.shutdown()
-	requireGone(t, readPid(t, pidfile))
-	if !strings.Contains(logs.text(), "killing") {
-		t.Fatalf("the kill must be logged:\n%s", logs.text())
-	}
-	select {
-	case err := <-srv.fatal():
-		t.Fatalf("a requested shutdown is not fatal, got %v", err)
-	default:
-	}
+	return ""
 }
+
+// drainFrontend holds a query until the gateway cancels it (its forward gives up), and records whether one was still running
+// when it was closed.
+type drainFrontend struct {
+	inflight        chan struct{}
+	running         atomic.Int32
+	once            sync.Once
+	closedWithQuery chan bool
+}
+
+func (f *drainFrontend) Resolve(wire []byte, _ string, fwd func([]byte) []byte, _, _, _ string) []byte {
+	f.running.Add(1)
+	defer f.running.Add(-1)
+	f.once.Do(func() { close(f.inflight) })
+	fwd(wire) // returns once the stopping gateway cancels the query
+	return nil
+}
+
+func (f *drainFrontend) Close() { f.closedWithQuery <- f.running.Load() != 0 }

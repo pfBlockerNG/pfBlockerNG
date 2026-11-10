@@ -26,28 +26,15 @@ const (
 )
 
 // autoForward plays a decider that forwards every query to Unbound unchanged and answers the client with Unbound's
-// reply (the path of an allowed name). Queries are recorded like autoAnswer's. Use it instead of recv()/send().
+// reply (the path of an allowed name), a drop when there is none. Queries are recorded like autoAnswer's. Use it
+// instead of recvQuery()/send().
 func (r *rig) autoForward() {
-	go func() {
-		for {
-			typ, id, payload, err := readFrame(r.p.conn)
-			if err != nil {
-				return
-			}
-			switch typ {
-			case tQuery:
-				q := r.recvQueryPayload(id, payload)
-				r.queries <- q
-				_ = writeFrame(r.p.conn, tForward, id, q.wire)
-			case tReply:
-				if len(payload) == 0 {
-					_ = writeFrame(r.p.conn, tDrop, id, nil)
-				} else {
-					_ = writeFrame(r.p.conn, tAnswer, id, payload)
-				}
-			}
-		}
-	}()
+	r.p.mu.Lock()
+	defer r.p.mu.Unlock()
+	r.p.auto = func(tq transportQuery, fwd func([]byte) []byte) []byte {
+		r.queries <- decidedQuery{id: tq.id, ip: tq.ip, wire: tq.wire}
+		return fwd(tq.wire)
+	}
 }
 
 func (r *rig) serveDoT(m tlsMaterial) netip.AddrPort {

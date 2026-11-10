@@ -41,7 +41,7 @@ type rigConfig struct {
 // noAddrCap leaves a test of a global cap to the global cap: no single address reaches its own share first.
 const noAddrCap = 1 << 20
 
-// rig is a gateway on a loopback port with a fake Unbound and the test playing the decider on the socketpair.
+// rig is a gateway on a loopback port with a fake Unbound and the test playing the decider.
 type rig struct {
 	t       *testing.T
 	g       *gateway
@@ -63,26 +63,14 @@ func newRig(t *testing.T, cfg rigConfig) *rig {
 	t.Helper()
 	logs := &capturedLog{}
 	aclPath := writeACLFile(t, cfg.acl)
-	parent, child, err := newSocketpair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, err := net.FileConn(child)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = child.Close()
-	dec := NewDecider(parent, logs.logf)
-	p := &peer{t: t, conn: other}
-	p.send(tReady, 0, nil)
-	waitClosed(t, dec.Ready(), "READY")
+	p := newPeer(t)
 
 	up := newFakeUpstream(t, cfg.upstream...)
 	timeout := cfg.timeout
 	if timeout == 0 {
 		timeout = watchdog
 	}
-	g := newGateway(NewACL(aclPath, logs.logf), dec, newUpstream(up.addr, timeout), timeout, logs.logf)
+	g := newGateway(NewACL(aclPath, logs.logf), p.decide, newUpstream(up.addr, timeout), timeout, logs.logf)
 	if cfg.grace != 0 {
 		g.grace = cfg.grace
 	}
@@ -100,49 +88,27 @@ func newRig(t *testing.T, cfg rigConfig) *rig {
 		cfg.beforeServe(g)
 	}
 	g.serve(l)
-	t.Cleanup(func() { g.stop(); dec.Close(); _ = other.Close() })
+	t.Cleanup(func() { p.release(); g.stop() })
 	return &rig{t: t, g: g, p: p, up: up, addr: l.addr(), aclPath: aclPath, logs: logs, queries: make(chan decidedQuery, 1024)}
 }
 
 // recvQuery reads the next frame and requires it to be a QUERY.
 func (r *rig) recvQuery() decidedQuery {
 	r.t.Helper()
-	typ, id, payload := r.p.recv()
-	if typ != tQuery {
-		r.t.Fatalf("frame from the gateway: type %d, want QUERY", typ)
-	}
-	q := r.recvQueryPayload(id, payload)
-	return q
+	q := r.p.recvQuery()
+	return decidedQuery{id: q.id, ip: q.ip, wire: q.wire}
 }
 
-func (r *rig) recvQueryPayload(id uint32, payload []byte) decidedQuery {
-	n := int(payload[1])
-	return decidedQuery{id: id, ip: string(payload[2 : 2+n]), wire: queryDNSWire(payload)}
-}
-
-// autoAnswer plays a decider that answers every QUERY with fn's bytes (DROP for nil); QUERYs are recorded.
-// Use it instead of recv()/send(), never with them.
+// autoAnswer plays a decider that answers every query with fn's bytes (a drop for nil); queries are recorded.
+// Use it instead of recvQuery()/send(), never with them.
 func (r *rig) autoAnswer(fn func(q decidedQuery) []byte) {
-	go func() {
-		for {
-			typ, id, payload, err := readFrame(r.p.conn)
-			if err != nil {
-				return
-			}
-			if typ != tQuery {
-				continue
-			}
-			q := r.recvQueryPayload(id, payload)
-			r.queries <- q
-			go func() { // a held query must not stop the next one from being read
-				if answer := fn(q); answer == nil {
-					_ = writeFrame(r.p.conn, tDrop, id, nil)
-				} else {
-					_ = writeFrame(r.p.conn, tAnswer, id, answer)
-				}
-			}()
-		}
-	}()
+	r.p.mu.Lock()
+	defer r.p.mu.Unlock()
+	r.p.auto = func(tq transportQuery, _ func([]byte) []byte) []byte {
+		q := decidedQuery{id: tq.id, ip: tq.ip, wire: tq.wire}
+		r.queries <- q
+		return fn(q)
+	}
 }
 
 func echoAnswer(q decidedQuery) []byte { return echoWithQR(seenQuery{wire: q.wire})[0] }
@@ -520,24 +486,29 @@ func servfailFor(t *testing.T, wire []byte) {
 	}
 }
 
-// G6 + G6b: a decider that never decides gets SERVFAIL built by the gateway; its late FORWARD is answered
-// empty without bothering Unbound.
-func TestSilentDeciderGetsServfailAndItsLateForwardIsNotExchanged(t *testing.T) {
+// G6 + G6b: a query whose whole-query limit (2 x timeout + grace) is over when the decider returns gets the SERVFAIL the
+// gateway builds, whatever the decider answered; the decider's late forward is not exchanged with Unbound.
+func TestAnAnswerAfterTheQueryLimitIsServfailAndTheLateForwardIsNotExchanged(t *testing.T) {
 	for _, tr := range transports {
 		t.Run(tr.name, func(t *testing.T) {
-			r := newRig(t, rigConfig{acl: aclMixed, timeout: time.Millisecond, grace: time.Millisecond})
+			// grace of minus two timeouts makes the limit zero: the query is over before the decider runs, however slow it is.
+			r := newRig(t, rigConfig{acl: aclMixed, timeout: time.Hour, grace: -2 * time.Hour})
+			forwarded := make(chan []byte, 1)
+			r.p.mu.Lock()
+			r.p.auto = func(q transportQuery, fwd func([]byte) []byte) []byte {
+				forwarded <- fwd(q.wire) // the decider wakes up late
+				return []byte("a late answer")
+			}
+			r.p.mu.Unlock()
 			query := buildQuery(t, 0x5555, "slow.example.", true)
-			done := make(chan []byte, 1)
-			go func() { done <- r.roundTrip(tr, "", query) }()
-			q := r.recvQuery() // read, never answered
-			reply := awaitBytes(t, done)
+			reply := r.roundTrip(tr, "", query)
 			servfailFor(t, reply)
 			if id := binary.BigEndian.Uint16(reply); id != 0x5555 {
 				t.Fatalf("SERVFAIL id: got %#x, want 0x5555", id)
 			}
-
-			r.p.send(tForward, q.id, q.wire) // the decider wakes up late
-			r.p.expect(tReply, q.id, nil)
+			if got := <-forwarded; got != nil {
+				t.Fatalf("a forward after the query limit returned %x, want none", got)
+			}
 			select {
 			case seen := <-r.up.queries:
 				t.Fatalf("Unbound was asked for an abandoned query: %x", seen.wire)

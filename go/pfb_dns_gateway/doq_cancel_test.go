@@ -12,8 +12,9 @@ import (
 
 // After the query is read, the shared in-flight slot used to stay until 2*timeout+grace unless the gateway or
 // the connection ended. STOP_SENDING, and a stream reset that also stops the server sending, end the stream
-// while the connection stays up. The decider never answers the cancelled query, so only that can free the slot.
-// A later query on the same connection still gets its answer. timeout is an hour: waiting it out is the bug.
+// while the connection stays up. The decider waits for an Unbound that never answers the cancelled query, so only that
+// can free the slot. A later query on the same connection still gets its answer. timeout is an hour: waiting it out is
+// the bug.
 func TestDoQCancelledStreamReleasesTheSharedInFlightSlot(t *testing.T) {
 	cases := []struct {
 		name string
@@ -27,11 +28,17 @@ func TestDoQCancelledStreamReleasesTheSharedInFlightSlot(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r, m, addr := newDoQRig(t, rigConfig{timeout: time.Hour})
+			r, m, addr := newDoQRig(t, rigConfig{timeout: time.Hour, upstream: []upstreamOption{answering(func(q seenQuery) [][]byte {
+				if bytes.Contains(q.wire, []byte("held")) {
+					return nil
+				}
+				return echoWithQR(q)
+			})}})
+			r.autoForward()
 			c := dialDoQ(t, addr, m, clientAllowed)
 			s := c.stream()
 			sendDoQ(t, s, doqQuery(t, "held.example."))
-			if q := r.recvQuery(); q.ip != clientAllowed {
+			if q := r.nextQuery(); q.ip != clientAllowed {
 				t.Fatalf("the decider saw the query from %s, want %s", q.ip, clientAllowed)
 			}
 			if n := r.g.muxInflight.Load(); n != 1 {
@@ -53,11 +60,10 @@ func TestDoQCancelledStreamReleasesTheSharedInFlightSlot(t *testing.T) {
 			done := doqQuery(t, "done.example.")
 			s2 := c.stream()
 			sendDoQ(t, s2, done)
-			q2 := r.recvQuery()
+			q2 := r.nextQuery()
 			if q2.ip != clientAllowed || !bytes.Equal(q2.wire[2:], done[2:]) {
 				t.Fatalf("the decider saw client=%s wire=%x; want %s and %x", q2.ip, q2.wire, clientAllowed, done)
 			}
-			r.p.send(tAnswer, q2.id, echoAnswer(q2))
 			data, err := readDoQ(t, s2)
 			if !errors.Is(err, io.EOF) {
 				t.Fatalf("completed query ended with %v, want a FIN after the answer", err)

@@ -26,7 +26,7 @@ func TestDoTListenFlagsBindTheirAddressesInOrder(t *testing.T) {
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
 		"--dot-listen", "127.0.0.1", "--dot-listen", "::1", "--dot-port", "0", "--tls-pem", path,
-	}, decider("serve"))
+	})
 	gw.waitLine("ready upstream ") // the listening lines come before it: all of them are logged by now
 	var got []netip.AddrPort
 	for _, line := range strings.Split(gw.logText(), "\n") {
@@ -46,7 +46,7 @@ func TestDoTBindsOnlyTheDoTListenAddresses(t *testing.T) {
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
 		"--dot-listen", "::1", "--dot-port", "0", "--tls-pem", path,
-	}, decider("serve"))
+	})
 	gw.waitLine("listening udp+tcp ")
 	dot := listeningAddr(t, gw.waitLine("listening dot "), "dot")
 	gw.waitLine("ready upstream ")
@@ -69,7 +69,7 @@ func TestDoTListenThatIsNotAnAddressIsSkipped(t *testing.T) {
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
 		"--dot-listen", "nonsense", "--dot-port", "0", "--tls-pem", path,
-	}, decider("serve"))
+	})
 	gw.waitLine("ready upstream ")
 	if !strings.Contains(gw.logText(), "cannot listen on nonsense:0") {
 		t.Fatalf("the bad --dot-listen value is not logged:\n%s", gw.logText())
@@ -81,7 +81,7 @@ func TestDoTListenThatIsNotAnAddressIsSkipped(t *testing.T) {
 
 // An empty --dot-listen is a usage error, as an empty --doh-listen is.
 func TestDoTListenEmptyIsAUsageError(t *testing.T) {
-	_, err := parse(t, "--dot-listen", "", "--", "decider")
+	_, err := parse(t, "--dot-listen", "")
 	if err == nil || !strings.Contains(err.Error(), "--dot-listen must not be empty") {
 		t.Fatalf("got err=%v, want a usage error saying --dot-listen must not be empty", err)
 	}
@@ -90,7 +90,7 @@ func TestDoTListenEmptyIsAUsageError(t *testing.T) {
 // An empty --dot-listen exits 2 with the reason on stderr, before anything is bound.
 func TestRealMainExitsTwoOnEmptyDoTListen(t *testing.T) {
 	var stderr bytes.Buffer
-	code := realMain([]string{"--listen", "127.0.0.1", "--dot-listen", "", "--", "decider"}, &stderr)
+	code := realMain([]string{"--listen", "127.0.0.1", "--dot-listen", ""}, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "pfb_dns_gateway: --dot-listen must not be empty") {
 		t.Fatalf("exit %d, stderr %q; want exit 2 and `pfb_dns_gateway: --dot-listen must not be empty`", code, stderr.String())
 	}
@@ -100,7 +100,7 @@ func TestRealMainExitsTwoOnEmptyDoTListen(t *testing.T) {
 // check before it binds anything.
 func TestDotBoolFlagIsUnknown(t *testing.T) {
 	var stderr bytes.Buffer
-	code := realMain([]string{"--dot", "--", "decider"}, &stderr)
+	code := realMain([]string{"--dot"}, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "not defined: -dot") {
 		t.Fatalf("exit %d, stderr %q; want exit 2 and `flag provided but not defined: -dot`", code, stderr.String())
 	}

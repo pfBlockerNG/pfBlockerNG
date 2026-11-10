@@ -23,8 +23,8 @@ func testListenerEndpoints(t *testing.T, wildcard bool) {
 	for _, host := range []string{"127.0.0.1", "127.0.0.2", "::1"} {
 		for _, tc := range []struct {
 			name      string
-			transport byte
-		}{{"tcp", 0}, {"udp", 1}, {"dot", 2}, {"doh", 3}, {"doq", 4}} {
+			transport string
+		}{{"tcp", transportTCP}, {"udp", transportUDP}, {"dot", transportDoT}, {"doh", transportDoH}, {"doq", transportDoQ}} {
 			t.Run(host+"/"+tc.name, func(t *testing.T) {
 				bindHost, source := host, clientAllowed
 				if netip.MustParseAddr(host).Is6() {
@@ -141,7 +141,7 @@ func testListenerEndpoints(t *testing.T, wildcard bool) {
 				}
 				q := r.recvTransportQuery()
 				if q.transport != tc.transport || q.ip != source {
-					t.Fatalf("QUERY transport=%d client=%s, want %d socket client %s", q.transport, q.ip, tc.transport, source)
+					t.Fatalf("QUERY transport=%q client=%s, want %q socket client %s", q.transport, q.ip, tc.transport, source)
 				}
 				if q.listenerIP != host || q.listenerInterface != "" {
 					t.Fatalf("QUERY listener=%q interface=%q, want queried destination %q and empty interface without snapshot", q.listenerIP, q.listenerInterface, host)
@@ -152,7 +152,7 @@ func testListenerEndpoints(t *testing.T, wildcard bool) {
 					t.Fatal("first forward used TCP, want UDP")
 				}
 				want := echoWithQR(seen)[0]
-				if tc.transport == 1 {
+				if tc.transport == transportUDP {
 					want[2] |= 0x02
 					want = want[:12]
 				} else {
@@ -165,11 +165,11 @@ func testListenerEndpoints(t *testing.T, wildcard bool) {
 				}
 				r.p.expect(tReply, q.id, want)
 				answer := echoAnswer(decidedQuery{wire: q.wire})
-				if tc.transport != 1 {
+				if tc.transport != transportUDP {
 					answer = append(answer, make([]byte, 2048)...)
 				}
 				r.p.send(tAnswer, q.id, answer)
-				if tc.transport == 4 {
+				if tc.transport == transportDoQ {
 					answer[0], answer[1] = 0, 0
 				}
 				if got := ask(); !bytes.Equal(got, answer) {
@@ -225,8 +225,8 @@ func TestDoHAttributionKeepsListenerTransport(t *testing.T) {
 				done <- clientResult{body: body, err: err}
 			}()
 			q := r.recvTransportQuery()
-			if q.transport != 3 || q.ip != tc.want {
-				t.Fatalf("QUERY transport=%d client=%s, want 3 %s", q.transport, q.ip, tc.want)
+			if q.transport != transportDoH || q.ip != tc.want {
+				t.Fatalf("QUERY transport=%q client=%s, want %q %s", q.transport, q.ip, transportDoH, tc.want)
 			}
 			if q.listenerIP != addr.Addr().String() || q.listenerInterface != "" {
 				t.Fatalf("QUERY listener=%q interface=%q, want kernel listener %q and empty interface without snapshot", q.listenerIP, q.listenerInterface, addr.Addr())
@@ -242,28 +242,18 @@ func TestDoHAttributionKeepsListenerTransport(t *testing.T) {
 // resolve looks the interface label up by the plain address: a 4-in-6 listener must find its IPv4 entry, and the
 // sockets already unmap, so only a direct call reaches the lookup.
 func TestResolveFindsTheInterfaceOfAMappedListener(t *testing.T) {
-	d, p, logs := readyPeer(t)
-	g := newGateway(nil, d, nil, time.Second, logs.logf)
+	p := newPeer(t)
+	g := newGateway(nil, p.decide, nil, time.Second, nil)
 	table := map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "LAN"}
 	g.listenerInterfaces.Store(&table)
-	asked := answerOne(p)
 	wire := buildQuery(t, 0x3767, "mapped.example.", true)
+	done := make(chan transportQuery, 1)
+	p.auto = func(q transportQuery, _ func([]byte) []byte) []byte { done <- q; return nil }
 	ctx, cancel := context.WithTimeout(context.Background(), watchdog)
 	defer cancel()
 	g.resolve(ctx, netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("::ffff:127.0.0.1"), clientTCP, wire, noForward(t))
-	select {
-	case payload := <-asked:
-		ip := "192.0.2.1"
-		want := append([]byte{byte(clientTCP), byte(len(ip))}, ip...)
-		want = append(want, byte(len("127.0.0.1")))
-		want = append(want, "127.0.0.1"...)
-		want = append(want, 0, byte(len("LAN")))
-		want = append(want, "LAN"...)
-		want = append(want, wire...)
-		if !bytes.Equal(payload, want) {
-			t.Fatalf("QUERY=%x, want listener 127.0.0.1 with interface LAN %x", payload, want)
-		}
-	case <-time.After(watchdog):
-		t.Fatal("STUCK/ENVIRONMENT: decider did not receive the query")
+	q := <-done
+	if q.listenerIP != "127.0.0.1" || q.listenerInterface != "LAN" || q.ip != "192.0.2.1" || q.transport != transportTCP || !bytes.Equal(q.wire, wire) {
+		t.Fatalf("the decider was asked %+v, want client 192.0.2.1 over %s on listener 127.0.0.1 with interface LAN", q, transportTCP)
 	}
 }

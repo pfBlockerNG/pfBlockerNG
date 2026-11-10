@@ -93,10 +93,8 @@ func TestPoolKeepsAConnectionThatAnsweredAndNeverOneThatFailed(t *testing.T) {
 // and the connection frees its slot. The handlers also reach the write path together, which -race may flag if its
 // failure flag is unguarded; race detection is intermittent, so the assertion here is the freed slot.
 func TestAClientThatResetsWithQueriesInFlightFreesItsSlot(t *testing.T) {
-	r := newRig(t, rigConfig{acl: aclMixed})
-	held := make(chan struct{})
-	t.Cleanup(sync.OnceFunc(func() { close(held) }))
-	r.autoAnswer(func(q decidedQuery) []byte { <-held; return echoAnswer(q) })
+	r := newRig(t, rigConfig{acl: aclMixed, upstream: []upstreamOption{silent()}})
+	r.autoForward() // the decider waits for an Unbound that says nothing, until the gateway gives the queries up
 	c := r.tcpClient("").(*net.TCPConn)
 	for id := uint16(1); id < pipelineDepth; id++ {
 		tcpSend(t, c, buildQuery(t, id, "held.example.", true))
@@ -137,22 +135,17 @@ func TestCloseTLSGivesUpOnAPeerThatDoesNotRead(t *testing.T) {
 	waitClosed(t, done, "closeTLS to give up on a peer that does not read the alert")
 }
 
-// stop() does not wait for ever: a handler held in a write nothing can interrupt is given stopBound, then its client is
-// closed, then stopBound again, and the gateway says what it left behind.
+// stop() does not wait for ever: a handler held in the decider, which nothing can interrupt, is given stopBound, then its
+// client is closed, then stopBound again, and the gateway says what it left behind.
 func TestStopGivesUpOnAHandlerNothingCanInterrupt(t *testing.T) {
 	r := newRig(t, rigConfig{acl: aclMixed})
-	r.autoAnswer(echoAnswer)
+	held := make(chan struct{})
+	r.autoAnswer(func(q decidedQuery) []byte { <-held; return echoAnswer(q) })
+	t.Cleanup(sync.OnceFunc(func() { close(held) }))
 	r.g.stopBound = 50 * time.Millisecond
-	d := r.g.dec.Load()
-	d.wmu.Lock() // the handler's QUERY can never be written
-	t.Cleanup(sync.OnceFunc(d.wmu.Unlock))
 	c := r.tcpClient("")
 	tcpSend(t, c, buildQuery(t, 1, "held.example.", true))
-	eventually(t, "the query to be held in its write", func() bool {
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return len(d.calls) == 1
-	})
+	r.nextQuery() // the query is held in the decider
 	stopped := make(chan struct{})
 	go func() { r.g.stop(); close(stopped) }()
 	waitClosed(t, stopped, "stop() to give up on the handler")

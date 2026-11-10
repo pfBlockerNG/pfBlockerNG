@@ -225,13 +225,15 @@ func liveOpenFDs(t *testing.T) int {
 }
 
 // liveRequireFDs waits for the process's descriptor count to be want: the gateway closes what it was sent, and its end of
-// the connection, as the handler ends.
+// the connection, as the handler ends. Fewer is as good: a stopped gateway of an earlier test closes the sockets it served and
+// accepted as its goroutines end, some after stop() has returned, so the count a test takes at its start may still hold one that
+// goes while it runs. A descriptor that is never closed is the count staying above want.
 func liveRequireFDs(t *testing.T, want int, when string) {
 	t.Helper()
 	deadline := time.Now().Add(watchdog)
 	for {
 		got := liveOpenFDs(t)
-		if got == want {
+		if got <= want {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -308,7 +310,7 @@ func newLiveRig(t *testing.T, opts ...liveOpt) *liveRig {
 	t.Helper()
 	ports := liveFreePorts(t, 5)
 	pem, m := goodPEM(t)
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	conf := filepath.Join(t.TempDir(), "unbound.conf")
 	if err := os.WriteFile(conf, []byte("access-control: 127.0.0.0/8 allow\naccess-control: ::1 allow\n"), 0o600); err != nil {
 		t.Fatal(err)

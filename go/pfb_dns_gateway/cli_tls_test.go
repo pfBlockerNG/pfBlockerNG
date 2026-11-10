@@ -8,7 +8,7 @@ import (
 )
 
 func TestConfigTLSDefaults(t *testing.T) {
-	cfg, err := parse(t, "--", "decider")
+	cfg, err := parse(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,8 +24,7 @@ func TestConfigTLSEveryFlag(t *testing.T) {
 		"--dot-listen", "192.0.2.1", "--dot-listen", "::1", "--dot-port", "8530", "--tls-pem", "/tmp/cert.pem", "--ctl-socket", "/tmp/ctl.sock",
 		"--doh-listen", "192.0.2.1", "--doh-listen", "::1", "--doh-port", "8443",
 		"--doh-trusted", "192.0.2.0/24", "--doh-trusted", "2001:db8::1",
-		"--doq-listen", "192.0.2.2", "--doq-port", "8853",
-		"--", "decider")
+		"--doq-listen", "192.0.2.2", "--doq-port", "8853")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +37,7 @@ func TestConfigTLSEveryFlag(t *testing.T) {
 }
 
 func TestConfigTLSPortZeroPicksOne(t *testing.T) {
-	cfg, err := parse(t, "--dot-port", "0", "--doh-port", "0", "--doq-port", "0", "--", "decider")
+	cfg, err := parse(t, "--dot-port", "0", "--doh-port", "0", "--doq-port", "0")
 	if err != nil || cfg.dotPort != 0 || cfg.dohPort != 0 || cfg.doqPort != 0 {
 		t.Fatalf("got dot-port=%d doh-port=%d doq-port=%d err=%v, want 0, 0 and 0 (a port picked per address)", cfg.dotPort, cfg.dohPort, cfg.doqPort, err)
 	}
@@ -62,7 +61,7 @@ func TestConfigRejectsBadTLSUsage(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := parse(t, append(c.args, "--", "decider")...)
+			_, err := parse(t, c.args...)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got err=%v, want a usage error naming %s", err, c.want)
 			}

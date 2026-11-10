@@ -30,7 +30,7 @@ func TestConfigDoH443FlagsAreParsedAsLists(t *testing.T) {
 	}
 	for label, c := range cases {
 		t.Run(label, func(t *testing.T) {
-			cfg, err := parse(t, append(slices.Clone(c.flags), "--", "decider")...)
+			cfg, err := parse(t, slices.Clone(c.flags)...)
 			if err != nil {
 				t.Fatal(err)
 			}

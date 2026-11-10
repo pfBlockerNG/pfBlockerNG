@@ -36,7 +36,7 @@ func requireRecord(t *testing.T, path, when string) {
 }
 
 func TestTheReadyFileHasTheSHA256OfTheGatewayBinaryBesideIt(t *testing.T) {
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	cfg.readyFile = filepath.Join(t.TempDir(), "ready")
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
@@ -52,7 +52,7 @@ func TestTheReadyFileHasTheSHA256OfTheGatewayBinaryBesideIt(t *testing.T) {
 
 // The record comes first: when the ready file cannot be published (a directory is in its place), the record is there.
 func TestTheBinaryRecordIsWrittenBeforeTheReadyFile(t *testing.T) {
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	cfg.readyFile = filepath.Join(t.TempDir(), "ready")
 	if err := os.MkdirAll(filepath.Join(cfg.readyFile, "occupied"), 0o755); err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestTheBinaryRecordIsWrittenBeforeTheReadyFile(t *testing.T) {
 func TestNoBinaryRecordIsWrittenWithoutAReadyFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir) // where a record named after an empty path would land
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)

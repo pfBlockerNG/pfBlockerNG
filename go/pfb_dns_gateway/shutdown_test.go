@@ -15,7 +15,7 @@ import (
 // 0, ready file removed), not by the default action that kills the process and leaves a stale ready file.
 func TestGatewaySIGHUPStopsLikeSIGTERMAndRemovesTheReadyFile(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
-	gw := startGatewayProcess(t, readyFileFlags(ready), decider("serve"))
+	gw := startGatewayProcess(t, readyFileFlags(ready))
 	gw.waitLine("ready upstream ")
 	if _, err := os.Stat(ready); err != nil {
 		t.Fatalf("no ready file while the gateway serves: %v", err)
@@ -48,7 +48,6 @@ func TestStopAnswersWhatIsInFlightWithServfailNeverWithUnboundsReply(t *testing.
 			query := buildQuery(t, 7, "inflight.example.", true)
 			tcpSend(t, c, query)
 			r.up.next() // Unbound has the query and holds its answer
-			r.g.dec.Load().Close()
 			r.g.stop()
 			release() // too late: nobody is waiting for it
 
@@ -66,18 +65,17 @@ func TestStopAnswersWhatIsInFlightWithServfailNeverWithUnboundsReply(t *testing.
 }
 
 // stop() waits for the DoH requests still being served, not only for the listener's goroutine: an http.Server does not
-// wait for its handlers when it is closed. The handler here is held in its QUERY write by a wedged decision socket,
-// so it can only finish when the test lets it.
+// wait for its handlers when it is closed. The handler here is held in the decider, which nothing can interrupt, so it
+// can only finish when the test lets it.
 func TestStopWaitsForADoHHandlerThatIsStillRunning(t *testing.T) {
 	m := newTLSMaterial(t)
 	r := newRig(t, rigConfig{acl: aclMixed})
-	r.autoAnswer(echoAnswer)
+	held := make(chan struct{})
+	r.autoAnswer(func(q decidedQuery) []byte { <-held; return echoAnswer(q) })
 	r.g.stopBound = time.Hour // this test lets the handler go itself
 	addr := r.serveDoH(m)
 	c := newDoHClient(t, addr, m, dohOptions{})
-	d := r.g.dec.Load()
-	d.wmu.Lock()
-	var unlock = sync.OnceFunc(d.wmu.Unlock)
+	var unlock = sync.OnceFunc(func() { close(held) })
 	t.Cleanup(unlock) // before the rig's own cleanup: its stop() must not wait for this handler forever
 
 	req := c.post(dohPath, dohMediaType, buildQuery(t, 1, "held.example.", true))

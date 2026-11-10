@@ -230,7 +230,7 @@ func TestAnAddForATLSKindThatTheStartDidNotServeIsRefused(t *testing.T) {
 	}
 }
 
-// G9: descriptors that come with a restart, a certificate or a remove are closed and the frame does what it does without
+// G9: descriptors that come with the retired restart frame, a certificate or a remove are closed and the frame does what it does without
 // them. The test keeps the other end of each socket it sends: it reads EOF once the gateway has closed its copy.
 func TestDescriptorsSentWithAnyOtherFrameAreClosedAndTheFrameIsHandledAsWithoutThem(t *testing.T) {
 	r := newLiveRig(t)
@@ -253,7 +253,7 @@ func TestDescriptorsSentWithAnyOtherFrameAreClosedAndTheFrameIsHandledAsWithoutT
 		{"a remove of one that is not served", r.removeFrame("dot", ap), func(s string) bool {
 			return s == "error: dot "+ap.String()+" is not served"
 		}},
-		{"a restart", ctlRestartFrame, func(s string) bool { return s == "ok" }},
+		{"the retired restart frame", ctlRestartFrame, func(s string) bool { return s == "error: a message of 4294967295 bytes is not between 1 and 65536" }},
 	}
 	for _, row := range rows {
 		kept, sent := livePair(t)
@@ -263,7 +263,7 @@ func TestDescriptorsSentWithAnyOtherFrameAreClosedAndTheFrameIsHandledAsWithoutT
 		liveRequireEOF(t, kept, row.name)
 	}
 	r.requireGone("dot", ap)
-	r.ask("udp+tcp", r.at("udp+tcp", "127.0.0.1")) // the restarted decider answers
+	r.ask("udp+tcp", r.at("udp+tcp", "127.0.0.1")) // the gateway still answers
 }
 
 // A descriptor on a byte after the frame is never read by the gateway: the kernel disposes of it when the connection ends.

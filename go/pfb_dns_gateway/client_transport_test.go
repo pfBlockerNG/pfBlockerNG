@@ -3,67 +3,35 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"io"
 	"testing"
 	"time"
 )
 
 // issue #3517: the decider learns which kind of client asked (a datagram client has a UDP size limit, a stream
-// client has none), and a plain-UDP client's chase is asked again over TCP when Unbound truncated it. The QUERY
-// payload layout is transport, length-prefixed client and listener IP text, a u16be-length-prefixed
-// listener interface description, then the DNS wire.
+// client has none), and a plain-UDP client's chase is asked again over TCP when Unbound truncated it.
 
 const (
-	transportTCP byte = 0
-	transportUDP byte = 1
-	transportDoT byte = 2
-	transportDoH byte = 3
-	transportDoQ byte = 4
+	transportTCP = "TCP"
+	transportUDP = "UDP"
+	transportDoT = "DoT"
+	transportDoH = "DoH"
+	transportDoQ = "DoQ"
 )
 
 type transportQuery struct {
 	id                uint32
-	transport         byte
+	transport         string
 	ip                string
 	listenerIP        string
 	listenerInterface string
 	wire              []byte
 }
 
-// recvTransportQuery reads the next frame, which must be a QUERY, and splits its payload by the documented layout.
+// recvTransportQuery reads the next query the gateway asked of the decider.
 func (r *rig) recvTransportQuery() transportQuery {
 	r.t.Helper()
-	typ, id, payload := r.p.recv()
-	if typ != tQuery {
-		r.t.Fatalf("frame from the gateway: type %d, want QUERY", typ)
-	}
-	if len(payload) < 2 || payload[0] > transportDoQ || len(payload) < 2+int(payload[1]) {
-		r.t.Fatalf("QUERY payload %x does not start with a valid transport byte, the IP text length and the IP text", payload)
-	}
-	n := int(payload[1])
-	pos := 2 + n
-	if len(payload) < pos+1 {
-		r.t.Fatalf("QUERY listener metadata missing: no listener IP length after client")
-	}
-	listenerLen := int(payload[pos])
-	pos++
-	if len(payload) < pos+listenerLen+2 {
-		r.t.Fatalf("QUERY listener metadata truncated: listener IP length=%d, remaining=%d", listenerLen, len(payload)-pos)
-	}
-	listenerIP := string(payload[pos : pos+listenerLen])
-	pos += listenerLen
-	interfaceLen := int(binary.BigEndian.Uint16(payload[pos : pos+2]))
-	pos += 2
-	if len(payload) < pos+interfaceLen+12 {
-		r.t.Fatalf("QUERY listener metadata truncated: interface length=%d, remaining=%d (need interface and DNS header)", interfaceLen, len(payload)-pos)
-	}
-	listenerInterface := string(payload[pos : pos+interfaceLen])
-	pos += interfaceLen
-	return transportQuery{
-		id: id, transport: payload[0], ip: string(payload[2 : 2+n]),
-		listenerIP: listenerIP, listenerInterface: listenerInterface, wire: payload[pos:],
-	}
+	return r.p.recvQuery()
 }
 
 func (r *rig) requireNoUpstreamQuery(what string) {
@@ -101,7 +69,7 @@ func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 	query := buildQuery(t, 0x0000, "allowed.example.", true)
 	cases := []struct {
 		name string
-		want byte
+		want string
 		ask  func(t *testing.T) (r *rig, reply func() []byte)
 	}{
 		{"udp", transportUDP, func(t *testing.T) (*rig, func() []byte) {
@@ -175,7 +143,7 @@ func TestQueryFrameNamesTheTransportOfTheClient(t *testing.T) {
 			r, reply := c.ask(t)
 			q := r.recvTransportQuery()
 			if q.transport != c.want || q.ip != clientAllowed {
-				t.Fatalf("QUERY: transport=%d client=%q, want transport=%d client=%q", q.transport, q.ip, c.want, clientAllowed)
+				t.Fatalf("QUERY: transport=%q client=%q, want transport=%q client=%q", q.transport, q.ip, c.want, clientAllowed)
 			}
 			r.p.send(tAnswer, q.id, echoAnswer(decidedQuery{wire: q.wire}))
 			if got := reply(); len(got) == 0 {
@@ -197,7 +165,7 @@ func TestPlainUDPFirstForwardIsRelayedAsIsAndTheChaseIsRetriedOverTCPWhenTruncat
 	}
 	q := r.recvTransportQuery()
 	if q.transport != transportUDP {
-		t.Fatalf("QUERY transport %d, want datagram", q.transport)
+		t.Fatalf("QUERY transport %q, want datagram", q.transport)
 	}
 
 	r.p.send(tForward, q.id, q.wire)
@@ -261,7 +229,7 @@ func TestStreamClientForwardsGoOverUDPAndTruncatedOnesRetryOnItsOneUpstreamTCPCo
 	tcpSend(t, c, buildQuery(t, 0x3333, "duck.example.", true))
 	q := r.recvTransportQuery()
 	if q.transport != transportTCP {
-		t.Fatalf("QUERY transport %d, want stream", q.transport)
+		t.Fatalf("QUERY transport %q, want stream", q.transport)
 	}
 	for _, name := range []string{"duck.example.", "safe.duck.example."} {
 		wire := buildQuery(t, 0x5555, name, true)

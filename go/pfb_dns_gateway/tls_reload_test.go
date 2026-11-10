@@ -67,7 +67,7 @@ func startReloadRig(t *testing.T, file string, root *pki) *reloadRig {
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
 		"--dot-listen", "127.0.0.1", "--dot-port", "0", "--tls-pem", file, "--ctl-socket", ctl,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doq-listen", "127.0.0.1", "--doq-port", "0",
-	}, decider("serve"))
+	})
 	plain := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	r := &reloadRig{t: t, file: file, ctl: ctl, plain: plain, root: root, m: tlsMaterial{pool: root.pool()}, gw: gw}
 	r.dot = listeningAddr(t, gw.waitLine("listening dot "), "dot")

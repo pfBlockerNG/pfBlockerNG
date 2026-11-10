@@ -34,7 +34,7 @@ func startDoH443Gateway(t *testing.T, extra ...string) *doh443Gateway {
 		"--doh-listen", "127.0.0.1", "--doh-port", fmt.Sprint(ports[2]),
 		"--tls-pem", path, "--ctl-socket", ctl, "--dns-name", ddrTarget,
 	}
-	gw := startGatewayProcess(t, append(flags, extra...), decider("serve"))
+	gw := startGatewayProcess(t, append(flags, extra...))
 	g := &doh443Gateway{gw: gw, ctl: ctl, dot: uint16(ports[1]), doh: uint16(ports[2])}
 	g.plain = listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("listening dot ")

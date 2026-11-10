@@ -129,7 +129,7 @@ func TestNameOwnershipScreenKeepsQuestionHeadersEDNSAndACL(t *testing.T) {
 
 func TestNameOwnershipEmptyCLIAndAtomicControlTransitions(t *testing.T) {
 	for _, value := range []string{"127.0.0.1=", "::1=", "::ffff:127.0.0.1="} {
-		if _, err := parse(t, "--dns-name", "fw.example.lan", "--dns-name-answer", value, "--", "decider"); err != nil {
+		if _, err := parse(t, "--dns-name", "fw.example.lan", "--dns-name-answer", value); err != nil {
 			t.Errorf("owned-empty CLI %q: %v", value, err)
 		}
 	}
