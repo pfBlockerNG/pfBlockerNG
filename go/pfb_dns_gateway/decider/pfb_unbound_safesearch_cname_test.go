@@ -7,6 +7,7 @@ package decider
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/dnswire"
@@ -245,6 +246,41 @@ func TestSafesearchCnameRedirectAnswersFromTheBakedAddressWhenTheReferralCannotB
 		ssWantCalls(t, row.name, calls, ssInvalidate(), ssStore(1, rep))
 		if lines := logLines(out); len(lines) != 1 || lines[0] != failed {
 			t.Errorf("%s: log = %q, want the one line %q", row.name, lines, failed)
+		}
+	}
+}
+
+// A SafeSearch row is loaded as PHP wrote it, so a target or a baked address that is no record's text reaches the
+// module; set_return_msg then fails and the query ends in MODULE_ERROR, a SERVFAIL, as in Python.
+func TestSafesearchCnameRedirectIsAnErrorWhenItsRecordCannotBeBuilt(t *testing.T) {
+	const failed = "pfb_dns_proxy info: [pfBlockerNG]: SafeSearch: failed to store planted CNAME referral for duckduckgo.com."
+	for _, row := range []struct {
+		name       string
+		entry      safeSearchEntry
+		chased     []string // the answer the chase brought back: nil is the first pass
+		storeFails bool
+		wantCalls  int    // cache calls made before the failure
+		wantLog    string // "" = nothing logged
+	}{
+		{"a target with a space", safeSearchEntry{a: "cname", aaaa: "safe duck.example", v4: "203.0.113.7"}, nil, false, 0, ""},
+		{"a target with a label over 63 octets", safeSearchEntry{a: "cname", aaaa: strings.Repeat("a", 64) + ".example", v4: "203.0.113.7"}, nil, false, 0, ""},
+		{"a baked v4 that is no address, after a failed store", ssEntry("not-an-address", ""), nil, true, 2, failed},
+		// The fallback's own MODULE_ERROR: a false return here would let operate go on with the bare chased CNAME.
+		{"a baked v4 that is no address, after a chase without one", ssEntry("not-an-address", ""), []string{ssChasedCN}, false, 0, ""},
+	} {
+		calls := recordCache(t, row.storeFails)
+		m := ssModule(t, row.entry)
+		out := captureLog(t) // after the boot, which logs its missing ini
+		q := ssQstate(t, RR_TYPE_A, "192.0.2.1", row.chased...)
+		opWantState(t, row.name, opOperate(m, MODULE_EVENT_MODDONE, q), MODULE_ERROR)
+		if len(*calls) != row.wantCalls || q.noCacheStore != 0 {
+			t.Errorf("%s: (cache calls, noCacheStore) = (%+v, %d), want %d calls and 0", row.name, *calls, q.noCacheStore, row.wantCalls)
+		}
+		if row.chased == nil && row.wantCalls == 0 && q.returnMsg != nil {
+			t.Errorf("%s: returnMsg = %v, want none: no record was built", row.name, q.returnMsg)
+		}
+		if lines := logLines(out); (row.wantLog == "" && len(lines) != 0) || (row.wantLog != "" && (len(lines) != 1 || lines[0] != row.wantLog)) {
+			t.Errorf("%s: log = %q, want %q", row.name, lines, row.wantLog)
 		}
 	}
 }
