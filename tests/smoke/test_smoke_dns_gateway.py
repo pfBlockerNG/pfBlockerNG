@@ -102,13 +102,13 @@ from .test_smoke_dns_proxy import (
     PROXY_PID_FILE,
     PROXY_RC,
     RESOLVER_LOG,
-    SCRIPT_LINE,
     SNAPSHOT_PATHS,
     UNIFIED_LOG,
     UPSTREAM_PORT,
     Listener,
     State,
     _apply,
+    _assert_no_python_module,
     _capture,
     _client_alias,
     _configure_resolver,
@@ -356,7 +356,7 @@ class Gateway:
     vm: SmokeVM
     client: SmokeVM
     names: Names
-    before: State  # the Resolver as pfBlockerNG leaves it with DNSBL on and the toggle off
+    before: State  # the Resolver with the toggle off (DNSBL is off with it): Unbound plain on 53 and 853
 
 
 # --------------------------------------------------------------------------- #
@@ -838,7 +838,7 @@ def gw(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer, probe_bi
         _set_proxy_toggle(vm, False)
         _set_listeners(vm)
         _upload(client_vm, probe_binary, PROBE_BIN, "root:root")  # the gateway itself is the package's, never uploaded
-        _apply(vm)  # toggle off: pfBlockerNG's own wiring, the module inside Unbound
+        _apply(vm)  # toggle off: DNSBL is off with it (#3770), Unbound runs plain
         yield Gateway(vm, client_vm, names, _capture(vm))
     finally:
         try:
@@ -2528,8 +2528,9 @@ def test_toggle_off_gives_the_resolver_back_and_leaves_no_gateway(gw: Gateway, g
     Given the toggle on (the Resolver moved, the gateway serving),
     When the toggle is turned off and applied,
     Then no gateway, decider or supervisor runs and no pidfile is left; every Resolver key equals its pre-toggle value;
-      the marker is cleared; unbound.conf has the python module again; Unbound listens where it did before the toggle;
-      And the client's blocked, allowed and DoT queries work against Unbound again.
+      the marker is cleared; unbound.conf has no python module (pfB-DNS off is DNSBL off, #3770); Unbound listens
+      where it did before the toggle; And the client's blocked, allowed and DoT queries are answered by the upstream:
+      Unbound blocks nothing again.
     """
     vm, before = gw.vm, gw.before
     assert _is_on(gateway_on) and gateway_on.marker, f"the toggle is not on before the test turns it off: {gateway_on}"
@@ -2543,16 +2544,16 @@ def test_toggle_off_gives_the_resolver_back_and_leaves_no_gateway(gw: Gateway, g
         f"Resolver keys after the toggle off:\n{state.resolver}\nbefore:\n{before.resolver}"
     )
     assert state.marker == "", f"pfb_dns_proxy_saved is not cleared: {state.marker!r}"
-    assert MODULE_LINE.search(state.conf) and SCRIPT_LINE.search(state.conf), f"module not back:\n{state.conf}"
+    _assert_no_python_module(state.conf, "toggle off")
     assert state.unbound_dns() == before.unbound_dns(), (
         f"Unbound sockets {sorted(state.unbound_dns())}, before the toggle {sorted(before.unbound_dns())}"
     )
     blocked, raw = _ask(gw.client, "udp", gw.names.ready)
-    assert h.is_vip(blocked), f"blocked name through Unbound again: {blocked}\n{raw}"
+    assert h.resolves_to(blocked, STUB_DNS_A), f"listed name through Unbound after the toggle off: {blocked}\n{raw}"
     allowed, raw = _ask(gw.client, "udp", h.unique_domain("restored"))
     assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name through Unbound again: {allowed}\n{raw}"
     dot, raw = _ask(gw.client, "dot", gw.names.ready)
-    assert h.is_vip(dot), f"blocked name over Unbound's own DoT again: {dot}\n{raw}"
+    assert h.resolves_to(dot, STUB_DNS_A), f"listed name over Unbound's own DoT after the toggle off: {dot}\n{raw}"
 
 
 def test_a_listener_on_a_wildcard_socket_has_no_port() -> None:

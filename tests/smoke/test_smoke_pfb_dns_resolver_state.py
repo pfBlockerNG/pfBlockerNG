@@ -52,6 +52,7 @@ from .test_smoke_dns_proxy import (
     Rig,
     State,
     _apply,
+    _apply_of_an_activation_that_cannot_serve,
     _capture,
     _diagnostics,
     _listeners,
@@ -333,7 +334,8 @@ def test_an_explicit_size_and_an_admin_directive_keep_winning_while_moved(rig: R
 
 @pytest.mark.usefixtures("_clear_dns_proxy_notices")
 def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
-    """Given working native Resolver DNS and both upstream transports held before enabling pfB-DNS,
+    """Given working native Resolver DNS (pfB-DNS off, so no DNSBL: a listed name is answered by the upstream) and both
+    upstream transports held before enabling pfB-DNS,
     When the real toggle and apply cannot start Unbound, Then activation rolls back and native DNS still works
     while the holders remain on 5353.
     """
@@ -352,7 +354,10 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
         assert before.unbound_dns(), f"before: native Unbound has no DNS listeners: {before.listeners}"
         for tcp in (False, True):
             blocked, raw = _query(rig.client, rig.names.blocked, tcp=tcp)
-            assert h.is_vip(blocked), f"before: native Resolver must block the listed name (tcp={tcp}): {raw}"
+            assert h.resolves_to(blocked, STUB_DNS_A), (
+                f"before: pfB-DNS off, the native Resolver must answer the listed name from the upstream (tcp={tcp}): "
+                f"{raw}"
+            )
             allowed, raw = _query(rig.client, h.unique_domain("upstream-before"), tcp=tcp)
             assert h.resolves_to(allowed, STUB_DNS_A), f"before: native Resolver must resolve (tcp={tcp}): {raw}"
         prior_notices = len(_notices(vm))
@@ -394,7 +399,10 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
             )
             for tcp in (False, True):
                 blocked, raw = _query(rig.client, rig.names.blocked, tcp=tcp)
-                assert h.is_vip(blocked), f"rollback must restore native DNSBL with 5353 held (tcp={tcp}): {raw}"
+                assert h.resolves_to(blocked, STUB_DNS_A), (
+                    f"rollback must restore the native Resolver, answering the listed name from the upstream with 5353 "
+                    f"held (tcp={tcp}): {raw}"
+                )
                 allowed, raw = _query(rig.client, h.unique_domain("upstream-restored"), tcp=tcp)
                 assert h.resolves_to(allowed, STUB_DNS_A), (
                     f"rollback must restore allowed DNS with 5353 held (tcp={tcp}): {raw}"
@@ -411,7 +419,7 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
 def test_an_unsafe_line_added_after_the_move_rolls_pfb_dns_back_and_keeps_the_line(rig: Rig, proxy_on: State) -> None:
     """Given a moved Resolver, When the admin adds `interface: 0.0.0.0@53` to Custom Options and the next apply runs,
     Then pfB-DNS stays on, the proxy is stopped, the Resolver has its saved settings, the line is still in Custom
-    Options, one notice names it, and Unbound (with the DNSBL module, as before) answers a listed name on 53.
+    Options, one notice names it, and Unbound (no DNSBL module: pfB-DNS did not serve) answers a listed name on 53.
     """
     vm = rig.vm
     line = "interface: 0.0.0.0@53"
@@ -420,7 +428,7 @@ def test_an_unsafe_line_added_after_the_move_rolls_pfb_dns_back_and_keeps_the_li
         assert _snapshot_present(vm) and _toggle_on_in_config(vm), "before: pfB-DNS is on and the Resolver is moved"
         _put_custom_options(vm, f"{_custom_options(vm)}\nserver:\n{line}\n")
 
-        _apply(vm)
+        _apply_of_an_activation_that_cannot_serve(vm)
 
         after = _capture(vm)
         assert _toggle_on_in_config(vm), "pfB-DNS stays on"
@@ -436,7 +444,9 @@ def test_an_unsafe_line_added_after_the_move_rolls_pfb_dns_back_and_keeps_the_li
         new = _notices(vm)[prior_notices:]
         assert len(new) == 1 and line in new[0] and "kept" in new[0], f"one notice naming the line: {new}"
         answer, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(answer), f"Unbound answers the listed name with the VIP on 53 again: {raw}"
+        assert h.resolves_to(answer, STUB_DNS_A), (
+            f"Unbound answers the listed name from the upstream on 53 again: {raw}"
+        )
 
 
 # --------------------------------------------------------------------------- #
