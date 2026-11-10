@@ -45,7 +45,7 @@ STUBEOF
     SPARSE_CLONE_ARGV="${WORK}/sparse-clone-argv"
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<STUBEOF
 #!/bin/sh
-printf '%s\n' "\$*" > "${BUILD_LEG_ARGV}"
+printf '%s\n' "\$*" >> "${BUILD_LEG_ARGV}"
 printf '%s\n' "${WORK}/fake.pkg"
 exit 0
 STUBEOF
@@ -160,5 +160,21 @@ STUBEOF
     When call run_to_build --channel edge --pkgversion 20260101120000.abcdef0
     The output should include "--channel edge"
     The output should not include "--pkgversion"
+  End
+
+  # The repo marker's nightly cases need a builder-produced nightly .pkg carrying the commit
+  # (SMOKE_NIGHTLY_PKG); every other marker builds the branch package only.
+  It 'builds the annotated nightly package for --marker repo, apart from the branch package'
+    When call run_to_build --marker repo --channel edge
+    The output should include "--channel edge"
+    The output should include "--channel nightly"
+    The output should include "--annotate commit=${HEAD_SHA}"
+    The output should include "--out-dir ${WORK}/nightly"
+  End
+
+  It 'builds no nightly package for the default marker'
+    When call run_to_build
+    The output should not include "--annotate"
+    The output should not include "--out-dir"
   End
 End

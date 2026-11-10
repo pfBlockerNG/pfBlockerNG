@@ -67,7 +67,8 @@
 #   2. Ensure /root/FreeBSD-ports is current on the ports ref (default pfblockerng/use-github).
 #   3. Pull /root/images/{pfsense,civm} directly via oras into this workload's filesystem.
 #   4. Host prep: ip_unprivileged_port_start sysctl + pkill stale qemu.
-#   5. Build .pkg via build-leg.sh → SMOKE_PKG.
+#   5. Build .pkg via build-leg.sh → SMOKE_PKG. For --marker repo also the annotated nightly
+#      .pkg → SMOKE_NIGHTLY_PKG (what smoke-single.yml builds for CI).
 #   5a. Build the previous-devel .pkg via build-prev-pkg.sh → SMOKE_PREV_PKG (issue
 #      #3455); a failed build stops the run here.
 #   5a2. Fetch the shipped v3.3.13 .pkg via fetch-legacy-pkg.sh → SMOKE_LEGACY_PKG (issue
@@ -400,6 +401,29 @@ fi
 SMOKE_PKG="$(sh scripts/build-leg.sh "$@")"
 export SMOKE_PKG
 printf 'smoke-on-box: pkg built: %s\n' "$SMOKE_PKG" >&2
+
+# ── Step 5-nightly: the repo flow's builder-produced nightly .pkg ───────────── #
+# The `repo` marker's nightly cases (test_nightly_install.py) install a nightly package that
+# carries the source commit as an annotation, and skip without SMOKE_NIGHTLY_PKG. smoke-single.yml
+# builds the same package for CI; it goes to its own directory so it never overwrites SMOKE_PKG.
+if [ "$_MARKER" = repo ]; then
+    printf 'smoke-on-box: building the nightly .pkg for the repo flow...\n' >&2
+    set -- \
+        --ports-repo "$_PORTS_REPO" \
+        --ports-ref  "$_PORTS_REF" \
+        --ports-dir  "$PORTS_DIR" \
+        --channel    nightly \
+        --abi        "$_ABI" \
+        --php        "$_php_ver" \
+        --py-flavor  "$_py_flavor" \
+        --local-src  "$REPO_ROOT" \
+        --out-dir    "$(dirname "$SMOKE_PKG")/nightly" \
+        --annotate   "commit=$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    [ -z "$_PKGVERSION" ] || set -- "$@" --pkgversion "$_PKGVERSION"
+    SMOKE_NIGHTLY_PKG="$(sh scripts/build-leg.sh "$@")"
+    export SMOKE_NIGHTLY_PKG
+    printf 'smoke-on-box: nightly pkg built: %s\n' "$SMOKE_NIGHTLY_PKG" >&2
+fi
 
 # ── Step 5a: the previous-devel .pkg (issue #3455) ─────────────────────────── #
 # The HA mixed-version rows install it on node B (SMOKE_PREV_PKG). It is built for every
