@@ -1,0 +1,31 @@
+// Every module this package boots starts the log writer and opens the GeoIP reader named by its settings, so the run
+// points both at places of its own: no test writes under /var/log/pfblockerng or reads the host's GeoIP database.
+package decider
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// stopModule ends what init_standard started for a module booted by a test (deinit's stop of the log writer and close of the
+// GeoIP reader) when the test ends, so no test leaks a writer goroutine.
+func stopModule(t *testing.T, m *pfbUnbound) {
+	t.Helper()
+	t.Cleanup(m.closeMaxmind)
+	t.Cleanup(m.stopLogging)
+}
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "pfblogs")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	pfbLogDir = dir
+	maxmindDBPath = filepath.Join(dir, "no-GeoLite2-Country.mmdb")
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}

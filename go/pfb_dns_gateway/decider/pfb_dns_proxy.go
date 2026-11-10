@@ -334,9 +334,19 @@ func (f *Frontend) send(query *dnswire.Message, qstate *moduleQstate, relay []by
 			return nil, err
 		}
 		if replaced {
-			rcode = RCODE_SERVFAIL // fire_reply_callback picks reply_servfail by it; that call comes with the DNS Reply rows
+			rcode = RCODE_SERVFAIL
 		}
 	}
+	// fire_reply_callback: reply_servfail for a SERVFAIL, else reply; the module logs the row there.
+	kind := "reply"
+	if rcode == RCODE_SERVFAIL {
+		kind = "reply_servfail"
+	}
+	var rep *replyInfo
+	if msg != nil {
+		rep = msg.rep
+	}
+	f.module.fireReplyCallback(kind, qstate, rep)
 	if relay != nil {
 		return relay, nil
 	}

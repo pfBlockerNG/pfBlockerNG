@@ -87,6 +87,7 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
+	stopModule(t, module)
 	f := newFrontend(module)
 	stem := strings.TrimSuffix(filepath.Base(file), ".json")
 	for i := range s.Cases {

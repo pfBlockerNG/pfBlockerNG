@@ -7,9 +7,10 @@
 // here is joined onto moduleDir. The decision data (the DBs, the settings a decision reads) lives in the one
 // snapshot the module publishes, not in module fields: see pfbUnbound.snapshot.
 //
-// Not translated yet, each arriving with the family that needs it: the sqlite and MaxMind setup, the reload and query
-// watchers, the log files and stderr redirect, the module fingerprint, and the retired-cache sweep. The DNSBL control
-// surface (pfb_apply_control_command, its timers and the control watcher) is in pfb_unbound_control.go.
+// Not translated yet, each arriving with the family that needs it: the sqlite setup, the reload and query watchers, the
+// stderr redirect, the module fingerprint, and the retired-cache sweep. The DNSBL control surface
+// (pfb_apply_control_command, its timers and the control watcher) is in pfb_unbound_control.go, and the log rows, their
+// files and the GeoIP reader in pfb_unbound_log.go, pfb_unbound_logfile.go and pfb_unbound_geoip.go.
 package decider
 
 import (
@@ -28,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/oschwald/maxminddb-golang/v2"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
@@ -59,8 +62,8 @@ func idnModeFromLegacy(pythonIdn bool) IdnMode {
 }
 
 // pfbSettings is the pfb dict init_standard fills: the settings a decision reads, the DNSBL files, the ini toggles.
-// important_rules is the snapshot's own importantRules, and group_policy and the sqlite/maxmind/thread flags are set
-// only by code that is not translated yet, so they are not here.
+// important_rules is the snapshot's own importantRules, and group_policy and the sqlite/thread flags are set only by code
+// that is not translated yet, so they are not here.
 type pfbSettings struct {
 	metricsClientIp             bool
 	pythonEnable                bool
@@ -83,6 +86,7 @@ type pfbSettings struct {
 	dnsblIpv4                   string
 	dnsblIpv6                   string
 	pythonNolog                 bool
+	pythonMaxmind               bool
 	pythonCname                 bool
 	pythonControl               bool
 	pythonControlLegacy         bool
@@ -158,6 +162,19 @@ type pfbUnbound struct {
 	controlTick func() (tick <-chan time.Time, stop func())
 	// controlStop stops the control watcher and waits for it to end; nil is pfb["control_watcher"] False.
 	controlStop func()
+
+	// logs is the log writer (pfb["log_listener"]), nil when none runs: rows are then appended directly. logDir is the
+	// directory it writes. logSink, when set, takes every row instead (Python's tests replace pfb_log).
+	logs    *logPipeline
+	logDir  string
+	logSink func(name, line string)
+	// clock is the time source of the rows' timestamp and the cache TTL; nil is the local time.
+	clock func() time.Time
+	// maxmind is maxmindReader, nil when python_maxmind is off.
+	maxmind *maxminddb.Reader
+	// dnsblLast is _dnsbl_last_event, the previous block, which a repeat of marks its row a duplicate.
+	dnsblLastMu sync.Mutex
+	dnsblLast   *dnsblEvent
 }
 
 // parseTldAllow turns the MAIN-ini tld_allow_list value into a cleaned list: stripped, lower-cased, blank entries
@@ -578,7 +595,10 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 			// feed regex is enabled.
 			dnsblEmitCount(pfb.pfbPyRegexCount, scratch.regexDB.len()+scratch.allowRegexDB.len()+scratch.userRegexDB.len()+scratch.userAllowRegexDB.len())
 
-			// Not translated: the SQLite statistics databases and the MaxMind reader.
+			// Not translated: the SQLite statistics databases (PR5b).
+
+			// Open MaxMind db reader for DNS Reply GeoIP logging.
+			m.openMaxmind()
 		} else {
 			// issue #1049: python_enable OFF skips every DNSBL loader above: close their parse-stage entries instead of
 			// stranding them open.
@@ -593,7 +613,7 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	// ADR-10: bundle the loaded strata into ONE immutable snapshot and install it through rebuildAndSwap, on every
 	// path (python_enable or not, ini or not), so a snapshot is always present for operate(). counts and the others
 	// are the swap's own, and emit_counts is off: init keeps its path-specific inline emits above. The group epochs
-	// (_db_group_epochs) feed only the log rows, so the snapshot's groupEpochs stays empty until those rows land.
+	// (_db_group_epochs) feed only the counters, so the snapshot's groupEpochs stays empty until those land (PR5b).
 	m.decisionDB = newLruCache[*decision](intOf(pfb.decisiondbMax))
 	m.rebuildAndSwap(func() (*snapshot, error) {
 		scratch.counts = len(scratch.dataDB) + len(scratch.zoneDB)
@@ -611,6 +631,7 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	if pfb.pythonControl {
 		m.startControlWatcher()
 	}
+	m.pfbSetupLogging()
 	return m, nil
 }
 
@@ -1168,9 +1189,6 @@ func safesearchCnameRedirect(snap *snapshot, id int, qstate *moduleQstate, qType
 // qstate.snap and every later event (MODDONE, the CNAME pass) reuses it; Python re-reads the module's _snapshot per
 // event, the owner's 2026-11-09 rule makes one query one generation. Every reader below (noAAAA, SafeSearch, Group
 // Policy, evaluate_domain, the settings) reads that snapshot, never a field of m a swap could change.
-//
-// Not translated yet: the log calls get_details_dnsbl, get_details_reply and _log_idn_alert (the DNSBL and DNS Reply
-// log acceptance rows of #3779).
 func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any) bool {
 	qstateValid := false
 	var qType uint16
@@ -1376,8 +1394,13 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 					decisionFor(m.decisionDB, qName, snap.gen).setDnsbl(dnsbl)
 				}
 
-				// ADR-08: a Confusable-mode ALERT does not block but is surfaced once, here, on the fresh evaluation:
-				// _log_idn_alert waits for the DNSBL log acceptance row of #3779.
+				// ADR-08: a Confusable-mode ALERT (suspicious/flagged, or malicious with block disabled) does NOT block but is
+				// surfaced once, here, on the fresh evaluation, in the same dnsbl.log shape as a block; a repeat query reuses the
+				// cached decision and is not re-logged (issue #1349: block and alert stay exclusive after cache retirement).
+				if dnsbl.idnAlert != nil && !(dnsbl.isFound && !dnsbl.inWhitelist) {
+					listenerIP, listenerInterface := getQListener(qstate, nil)
+					m.logIdnAlert(qName, qIP, *dnsbl.idnAlert, getQType(qstate, nil), getQTransport(qstate, nil), listenerIP, listenerInterface)
+				}
 			} else {
 				dnsbl = memo.(*dnsblDecision)
 				if isCNAME && dnsbl.isFound && !dnsbl.inWhitelist {
@@ -1395,9 +1418,10 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 			// Block iff found and not whitelisted; an allow decision falls through to the resolver (the WAIT_MODULE below).
 			if dnsbl.isFound && !dnsbl.inWhitelist {
 				// issue #31: NXDOMAIN block shape ("3" logged / "4" silent): a bare NXDOMAIN rcode with NO answer records,
-				// uncached for the same #43 reasons as the VIP/null path below. get_details_dnsbl waits for the DNSBL log
-				// acceptance row of #3779.
+				// uncached for the same #43 reasons as the VIP/null path below; still attributed and logged (get_details_dnsbl
+				// drops the row for log type 4).
 				if dnsbl.nxdomain {
+					m.getDetailsDnsbl("dnsbl", nil, qstate, &logKwargs{pfbAddr: &qIP}, dnsbl, snap.groupEpochs[[2]string{dnsbl.groupOwner, dnsbl.groupOrigin}])
 					qstate.returnRcode = RCODE_NXDOMAIN
 					qstate.noCacheStore = 1
 					qstate.extState[id] = MODULE_FINISHED
@@ -1433,7 +1457,8 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 					return true
 				}
 
-				// Log entry: get_details_dnsbl waits for the DNSBL log acceptance row of #3779.
+				// Log entry.
+				m.getDetailsDnsbl("dnsbl", nil, qstate, &logKwargs{pfbAddr: &qIP}, dnsbl, snap.groupEpochs[[2]string{dnsbl.groupOwner, dnsbl.groupOrigin}])
 
 				qstate.returnRcode = RCODE_NOERROR
 				qstate.returnMsg.rep.security = secStatusIndeterminate
@@ -1466,7 +1491,18 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 			}
 		}
 
-		// Log entry: get_details_reply waits for the DNS Reply log acceptance row of #3779.
+		// Log entry. A record too short for its type is the IndexError Python lets out of operate(): a module error.
+		var replyErr error
+		if qstateValid && qstate.returnMsg != nil {
+			replyErr = m.getDetailsReply("reply", nil, qstate, qstate.returnMsg.rep, &logKwargs{pfbAddr: &qIP})
+		} else {
+			replyErr = m.getDetailsReply("reply", nil, qstate, nil, nil)
+		}
+		if replyErr != nil {
+			logErr("[pfBlockerNG]: get_details_reply: " + replyErr.Error())
+			qstate.extState[id] = MODULE_ERROR
+			return true
+		}
 
 		qstate.extState[id] = MODULE_FINISHED
 		return true

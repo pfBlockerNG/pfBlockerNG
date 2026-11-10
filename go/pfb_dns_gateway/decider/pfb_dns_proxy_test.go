@@ -37,6 +37,7 @@ func bootModule(t *testing.T) *pfbUnbound {
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
+	stopModule(t, module)
 	return module
 }
 

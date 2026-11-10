@@ -688,9 +688,11 @@ func TestInitStandardRaisesWhereNoAAAAItemsRaisesInPython(t *testing.T) {
 		t.Errorf("initStandard = (%v, %v), want (nil, an error naming noAAAA and the bad substitution)", m, err)
 	}
 	// [GP_Bypass_List] is read raw, so the same text is no error there.
-	if _, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[GP_Bypass_List]\n1 = fe80::1%em0\n")); err != nil {
-		t.Errorf("initStandard with a zone-id Group Policy row: %v, want nil", err)
+	zoned, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[GP_Bypass_List]\n1 = fe80::1%em0\n"))
+	if err != nil {
+		t.Fatalf("initStandard with a zone-id Group Policy row: %v, want nil", err)
 	}
+	stopModule(t, zoned)
 }
 
 func TestInitStandardLoadsGroupPolicyAndSafeSearchAndHsts(t *testing.T) {

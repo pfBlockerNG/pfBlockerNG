@@ -1,10 +1,12 @@
-// The ipaddress module's parsing of an address text (Python 3.11 Lib/ipaddress.py), error text included.
+// The ipaddress module's parsing of an address text (Python 3.11 Lib/ipaddress.py), error text included, and the
+// classification and text of a parsed address (is_private, is_loopback, is_unspecified, ipv4_mapped, compressed).
 package pysem
 
 import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 )
 
@@ -205,4 +207,70 @@ func parseHextet(hextet string) (uint16, error) {
 		value = value<<4 | uint16(c)
 	}
 	return value, nil
+}
+
+func prefixes(texts ...string) []netip.Prefix {
+	out := make([]netip.Prefix, len(texts))
+	for i, text := range texts {
+		out[i] = netip.MustParsePrefix(text)
+	}
+	return out
+}
+
+// Python 3.11.15's _IPv4Constants and _IPv6Constants: the networks is_private holds, and the ones inside them it does
+// not.
+var (
+	ipv4Private           = prefixes("0.0.0.0/8", "10.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.0.170/31", "192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "255.255.255.255/32")
+	ipv4PrivateExceptions = prefixes("192.0.0.9/32", "192.0.0.10/32")
+	ipv6Private           = prefixes("::1/128", "::/128", "::ffff:0.0.0.0/96", "64:ff9b:1::/48", "100::/64", "2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20", "fc00::/7", "fe80::/10")
+	ipv6PrivateExceptions = prefixes("2001:1::1/128", "2001:1::2/128", "2001:3::/32", "2001:4:112::/48", "2001:20::/28", "2001:30::/28")
+)
+
+func inAny(networks []netip.Prefix, addr netip.Addr) bool {
+	for _, network := range networks {
+		if network.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// IPv4Mapped is the IPv4 address (4 bytes) inside an IPv4-mapped IPv6 address (::ffff:0:0/96), else nil.
+func IPv4Mapped(packed []byte) []byte {
+	if addr, _ := netip.AddrFromSlice(packed); addr.Is4In6() {
+		mapped := addr.Unmap().As4()
+		return mapped[:]
+	}
+	return nil
+}
+
+// IsPrivate is .is_private: the address is not globally reachable by the IANA special-purpose registries (but
+// 100.64.0.0/10 is not private), and an IPv4-mapped address is as private as its IPv4 address.
+func IsPrivate(packed []byte) bool {
+	addr, _ := netip.AddrFromSlice(packed)
+	if addr = addr.Unmap(); addr.Is4() {
+		return inAny(ipv4Private, addr) && !inAny(ipv4PrivateExceptions, addr)
+	}
+	return inAny(ipv6Private, addr) && !inAny(ipv6PrivateExceptions, addr)
+}
+
+// IsLoopback is .is_loopback: 127.0.0.0/8, ::1, and an IPv4-mapped address whose IPv4 address is loopback.
+func IsLoopback(packed []byte) bool {
+	addr, _ := netip.AddrFromSlice(packed)
+	return addr.Unmap().IsLoopback()
+}
+
+// IsUnspecified is .is_unspecified: 0.0.0.0 or ::, and an IPv4-mapped address whose IPv4 address is 0.0.0.0.
+func IsUnspecified(packed []byte) bool {
+	addr, _ := netip.AddrFromSlice(packed)
+	return addr.Unmap().IsUnspecified()
+}
+
+// Compressed is .compressed (and str()): dotted decimal, or the shortest IPv6 text, an IPv4-mapped one ending in
+// dotted decimal.
+func Compressed(packed []byte) string {
+	if len(packed) == 4 {
+		return netip.AddrFrom4([4]byte(packed)).String()
+	}
+	return netip.AddrFrom16([16]byte(packed)).String()
 }
