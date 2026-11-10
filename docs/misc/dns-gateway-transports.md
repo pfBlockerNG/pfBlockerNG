@@ -3,9 +3,8 @@
 Scope: DoT, DoH and DoQ of the Go connectivity layer (`go/pfb_dns_gateway`, issue #3513), the certificate they serve,
 how a client address is decided on each, and what a front end such as HAProxy can and cannot do for them. Load when:
 changing `tlsconfig.go`, `dot.go`, `doh.go`, `doq.go`, `pfb_doq_probe`, or putting a front end in front of the gateway.
-The decision protocol with the Python decider is in [dns-gateway-protocol.md](dns-gateway-protocol.md).
 
-Every QUERY identifies the accepted listener as TCP, UDP, DoT, DoH or DoQ, independently of the upstream
+Every query is attributed to the accepted listener as TCP, UDP, DoT, DoH or DoQ, independently of the upstream
 UDP exchange or TCP fallback. DoH client attribution still follows the trusted-proxy rules below; a proxy header
 does not change the listener transport. Only UDP clients have the decider's UDP answer-size limit.
 
@@ -35,11 +34,11 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
 
 ### The control socket
 
-- **Made** before the privilege drop in every mode, TLS transport or not (the decider restart below needs it as much as a
-  renewal does), and reported as `control socket <path>` before `ready upstream`. Its directory is created mode 0700 (or
+- **Made** before the privilege drop in every mode, TLS transport or not, and reported as `control socket <path>` before
+  `ready upstream`. Its directory is created mode 0700 (or
   must already be a real directory, not a symlink, owned by the user running the gateway, and is chmod'ed 0700 if it was left
   open); the socket is mode 0600; a stale file at the path is replaced. A socket that cannot be made is logged once
-  (`control socket: <reason>; the certificate cannot be renewed without a restart, nor the decider restarted alone`) and the
+  (`control socket: <reason>; the certificate cannot be renewed without a restart`) and the
   gateway serves the certificate it read at start: a renewal then needs a restart, which pfBlockerNG reports as a notice.
 - **Who may push.** One credential, read from the kernel for every connection: the peer's uid must be 0. Linux:
   `getsockopt(SO_PEERCRED)` (`unix.GetsockoptUcred`, the `uid` field). FreeBSD (pfSense): `getsockopt(SOL_LOCAL, LOCAL_PEERCRED)`
@@ -47,8 +46,8 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   refused. A connection from another user, or whose credential cannot be read, is closed without being read and logged once per
   burst (`control socket: refused a connection from uid N: only uid 0 may push`; the next accepted root connection re-arms the
   line). The mode 0600 on the socket is a second wall, not the one relied on.
-- **Frame.** One message per connection, starting with 4 bytes. `FF FF FF FF`, with nothing after it, is the decider restart
-  below; `FF FF FF FE` and `FF FF FF FD` add and remove a listener, and `FF FF FF FB` replaces the address tables (below).
+- **Frame.** One message per connection, starting with 4 bytes. `FF FF FF FE` and `FF FF FF FD` add and remove a listener,
+  and `FF FF FF FB` replaces the address tables (below).
   `FF FF FF FC`, with nothing after it, lists the
   listeners: `listening <kind> <host:port>` for each one served, then `refused <kind> <host:port> <reason>` for each start-time
   bind not served since (keyed by kind, then address, so DoT and DoQ on :853 are two lines), then `ok`; a live add clears the
@@ -101,14 +100,6 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   address-table push after listener synchronization to refresh ownership as well as name/DDR rows; in-flight queries
   retain their captured description. A gateway older than the verb answers
   `error: a message of 4294967291 bytes is not between 1 and 65536`.
-- **Decider restart.** The gateway starts a new decider with the first one's command on a new decision socket and waits up to
-  30 s for its READY. READY: the new decider takes every query from then on, the reply is `ok` and
-  `decider restarted: pid N took over from pid M` is logged; the old one answers the queries it holds (for as long as a query
-  may take, 2 x `--timeout` + 1 s), then gets EOF and is killed when it does not leave within 3 s. No READY (the bound, an exit,
-  a protocol error, or the gateway stopping): the new decider is closed and killed, the old one stays, and the reply is
-  `error: the new decider (pid N) <what happened>`. Only the active decider's end is fatal to the gateway; a shutdown closes
-  and reaps a decider still being retired within the same 4 s budget. A gateway older than the restart answers the frame with
-  `error: a message of 4294967295 bytes is not between 1 and 65536` and restarts nothing.
 
 A renewal needs no restart. Every TLS config of the three transports takes its certificate from `GetCertificate`, an atomic
 pointer the push replaces: no handshake fails and no connection is touched: an open DoT, DoH or DoQ connection keeps the
@@ -219,10 +210,10 @@ wire before the UDP socket goes: an accepted one with a CONNECTION_CLOSE and `DO
 `CONNECTION_REFUSED` (quic-go's `Transport.Close` and `Listener.Close` send neither for an accepted connection, which
 would stay open at the client until its 30 s idle timeout); that wait is bounded by 500 ms. The gateway waits for its
 goroutines, DoH requests being served included, for 500 ms; the client connections still open then are closed, and
-after another 500 ms the gateway stops waiting. The decider gets EOF with the transports' stop, and then the time
-left of the shutdown's 4 s budget, less an eighth of it, to exit; after that it is killed (a kill that is refused is
-logged) and the gateway exits at the end of the budget whatever the decider does, inside the 5 s the rc stop allows
-before its KILL.
+after another 500 ms the gateway stops waiting. The decider is then closed, in the time left of the shutdown's 4 s budget:
+a decider with a query still running in it is not closed (the process exit takes it), and one that does not close in time is
+left to the exit (each is logged), so the gateway exits at the end of the budget whatever the decider does, inside the 5 s the
+rc stop allows before its KILL.
 
 Every transport goes through the same path as plain DNS: the Resolver ACL, then the decider, then PROXYv2 to Unbound
 with the client in the header. The ACL is Unbound's own, read from `--unbound-conf` (`/var/unbound/unbound.conf`) and
@@ -276,10 +267,10 @@ gateway judges only a runt (under 12 bytes) and a message that is already a resp
 Unbound (DoH: 400; DoQ: the stream is reset with `DOQ_PROTOCOL_ERROR`). Everything else, malformed or not (another opcode,
 QDCOUNT 0 or 2, oversized counts, TC set, a bad OPT), goes through the decider to Unbound as the client sent it, and Unbound
 owns the answer; the client gets it back unchanged. A DoQ message differs only in the Message ID the gateway picks (RFC 9250
-4.2.1). The parsers of what comes from outside have fuzz targets with a committed seed corpus (`testdata/fuzz/`): the
-decider's frames (`FuzzReadFrame`), Unbound config rows (`FuzzACLRow`) and the DoH GET parameter and POST body
+4.2.1). The parsers of what comes from outside have fuzz targets with a committed seed corpus (`testdata/fuzz/`): Unbound
+config rows (`FuzzACLRow`) and the DoH GET parameter and POST body
 (`FuzzDoHGet`, `FuzzDoHPost`). `go test` runs the corpus as ordinary tests, as the Go step of `scripts/agent/run-gates.sh`
-does; `go test -fuzz=FuzzReadFrame -fuzztime=30s` (and the others) explores from it, and what it finds is minimised into the
+does; `go test -fuzz=FuzzACLRow -fuzztime=30s` (and the others) explores from it, and what it finds is minimised into the
 same directory.
 
 ## DoQ details (RFC 9250)
