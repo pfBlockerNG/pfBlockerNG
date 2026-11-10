@@ -89,6 +89,7 @@ def make_fixture(
     php_version: str = "8.3",
     recipe: str = "legacy",
     gh_tuple: tuple[str, ...] = (),
+    gl_tuple: tuple[str, ...] = (),
     modules_txt: str | bytes | None = None,
     do_build: str | None = None,
 ) -> Fixture:
@@ -100,7 +101,7 @@ def make_fixture(
     ``php_version`` is the PHP the target's dependency ports are for (a matrix row's).
     ``recipe`` "legacy" installs no binaries (the builder stages them itself); "go" is the recipe that
     builds them in `do-build` (``do_build`` replaces its body) and installs them with INSTALL_PROGRAM, with
-    the vendored modules named by ``gh_tuple`` and the port's ``modules_txt`` file.
+    the vendored modules named by ``gh_tuple``/``gl_tuple`` and the port's ``modules_txt`` file.
     """
     ports, portdir, ports_sha, _ = _make_channel_port(root, "stable", github=True, php_version=php_version)
     if ships_dns_proxy:
@@ -111,7 +112,11 @@ def make_fixture(
         install = "do-install:\n\t(cd ${WRKSRC}/usr/local/pkg && ${COPYTREE_SHARE} . ${STAGEDIR}${PREFIX}/pkg)\n"
         if recipe == "go":
             bindir = "${STAGEDIR}${PREFIX}/pkg/pfblockerng/dns_proxy/bin"
-            tuples = "GH_TUPLE=\t" + " \\\n\t\t".join(gh_tuple) + "\n" if gh_tuple else ""
+            tuples = "".join(
+                f"{name}=\t" + " \\\n\t\t".join(entries) + "\n"
+                for name, entries in (("GH_TUPLE", gh_tuple), ("GL_TUPLE", gl_tuple))
+                if entries
+            )
             body = do_build if do_build is not None else go_do_build(modules_txt=modules_txt is not None)
             text = text.replace(
                 "do-install:\n", f"NO_ARCH_IGNORE=\tpfb-dns\nSTRIP=\n{tuples}do-build:\n{body}\ndo-install:\n"
@@ -572,10 +577,31 @@ def gh_tuples_for(*modules: tuple[str, str]) -> tuple[str, ...]:
     )
 
 
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+GITLAB_SITE = "https://gitlab.com:"
+
+
+def gl_tuples_for(*paths: str, commit: str = COMMIT) -> tuple[str, ...]:
+    """GL_TUPLE entries (a 40-hex commit, as modules2tuple emits) that unpack the given module paths."""
+    return tuple(f"cznic:project{index}:{commit}:cznic{index}/{GO_VENDOR}/{path}" for index, path in enumerate(paths))
+
+
+def fixture_with_tuples(root: Path, entries: tuple[str, ...], modules_txt: str | bytes | None) -> Fixture:
+    """The go recipe over a mixed list of entries: GitLab ones are its ``GL_TUPLE``, the others its ``GH_TUPLE``."""
+    is_gl = [entry.startswith(("cznic:", GITLAB_SITE)) for entry in entries]
+    gh = tuple(e for e, gl in zip(entries, is_gl, strict=True) if not gl)
+    gl = tuple(e for e, gl in zip(entries, is_gl, strict=True) if gl)
+    return make_fixture(root, recipe="go", gh_tuple=gh, gl_tuple=gl, modules_txt=modules_txt)
+
+
 QUIC = ("github.com/quic-go/quic-go", "v0.64.0")
 OLDER_QUIC = ("github.com/quic-go/quic-go", "v0.63.0")
 NET = ("golang.org/x/net", "v0.56.0")
 PSEUDO = ("example.test/dep", "v0.0.0-20260101000000-0123456789ab")
+MODERNC = ("modernc.org/x", "v1.2.3")
+BIGFFT = ("github.com/remyoudompheng/bigfft", "v0.0.0-20230129092748-24d4a6f8daec")
+BIGFFT_REVISION = "24d4a6f8daec"
+BIGFFT_COMMIT = BIGFFT_REVISION + "0123456789abcdef0123456789ab"
 PSEUDO_AFTER_A_TAG = ("example.test/dep", "v1.2.4-0.20260101000000-0123456789ab")
 PSEUDO_AFTER_A_PRERELEASE = ("example.test/dep", "v1.2.3-pre.0.20260101000000-0123456789ab")
 PSEUDO_LONG_REVISION = ("example.test/dep", "v0.0.0-20260101000000-0123456789abcdef")
@@ -612,23 +638,76 @@ PARITY_FAILURES = [
     ("tuple-with-an-unbalanced-quote", (UNBALANCED_QUOTE,), modules_txt_for(QUIC), "GH_TUPLE"),
     ("tuple-at-the-bare-vendor-dir", (BARE_VENDOR_DIR, *gh_tuples_for(QUIC)), modules_txt_for(QUIC), "GH_TUPLE only"),
     ("modules-txt-that-is-not-utf-8", gh_tuples_for(QUIC), b"# \xff\xfe v1\n", "modules.txt"),
+    ("gitlab-commit-that-is-not-hex", gl_tuples_for(MODERNC[0], commit="z" * 40), modules_txt_for(MODERNC), "commit"),
+    ("gitlab-commit-that-is-short", gl_tuples_for(MODERNC[0], commit=COMMIT[:12]), modules_txt_for(MODERNC), "commit"),
+    (
+        "gitlab-tag-instead-of-a-commit",
+        gl_tuples_for(MODERNC[0], commit=MODERNC[1]),
+        modules_txt_for(MODERNC),
+        "commit",
+    ),
+    (
+        "gitlab-module-not-under-modernc",
+        gl_tuples_for("example.test/dep"),
+        modules_txt_for(("example.test/dep", "v1.0.0")),
+        "modernc.org/",
+    ),
+    (
+        "gitlab-tuple-outside-the-vendor-tree",
+        (f"cznic:p:{COMMIT}:g/vendor/{MODERNC[0]}",),
+        modules_txt_for(MODERNC),
+        "vendor",
+    ),
+    ("gitlab-module-missing-from-modules-txt", gl_tuples_for(MODERNC[0]), modules_txt_for(QUIC), "modernc.org/x"),
+    (
+        "allowlisted-pseudo-version-with-another-revision",
+        gh_tuples_for((BIGFFT[0], "ffffffffffff")),
+        modules_txt_for(BIGFFT),
+        "revision",
+    ),
+    (
+        "allowlisted-pseudo-version-with-another-commit",
+        gh_tuples_for((BIGFFT[0], "f" * 40)),
+        modules_txt_for(BIGFFT),
+        "revision",
+    ),
+    (
+        "github-pseudo-version-off-the-allowlist-by-revision",
+        gh_tuples_for((PSEUDO[0], "0123456789ab")),
+        modules_txt_for(PSEUDO),
+        "pseudo-version",
+    ),
+]
+
+
+# (id, the port's GH_TUPLE and GL_TUPLE entries, the port's modules.txt) the builder accepts
+PARITY_ACCEPTED = [
+    ("tags", gh_tuples_for(QUIC, NET), modules_txt_for(QUIC, NET)),
+    ("gitlab-commit", gl_tuples_for(MODERNC[0]), modules_txt_for(MODERNC)),
+    (
+        "gitlab-commit-with-site",
+        tuple(GITLAB_SITE + entry for entry in gl_tuples_for(MODERNC[0])),
+        modules_txt_for(MODERNC),
+    ),
+    ("allowlisted-pseudo-version-by-revision", gh_tuples_for((BIGFFT[0], BIGFFT_REVISION)), modules_txt_for(BIGFFT)),
+    ("allowlisted-pseudo-version-by-commit", gh_tuples_for((BIGFFT[0], BIGFFT_COMMIT)), modules_txt_for(BIGFFT)),
 ]
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
 @pytest.mark.parametrize(
-    ("gh_tuple", "modules_txt", "says"), [row[1:] for row in PARITY_FAILURES], ids=[row[0] for row in PARITY_FAILURES]
+    ("tuples", "modules_txt", "says"), [row[1:] for row in PARITY_FAILURES], ids=[row[0] for row in PARITY_FAILURES]
 )
 def test_gh_tuple_that_disagrees_with_modules_txt_fails_before_go_runs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capfd: pytest.CaptureFixture[str],
     mode: str,
-    gh_tuple: tuple[str, ...],
+    tuples: tuple[str, ...],
     modules_txt: str | bytes | None,
     says: str,
 ) -> None:
-    fx = make_fixture(tmp_path, recipe="go", gh_tuple=gh_tuple, modules_txt=modules_txt)
+    fx = fixture_with_tuples(tmp_path, tuples, modules_txt)
     without_go_on_path(tmp_path, monkeypatch)
 
     assert build(fx, mode, tmp_path / "out") == 1
@@ -640,10 +719,18 @@ def test_gh_tuple_that_disagrees_with_modules_txt_fails_before_go_runs(
 
 
 @pytest.mark.parametrize("mode", ["native", "project"])
-def test_a_gh_tuple_that_matches_modules_txt_goes_on_to_the_go_build(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], mode: str
+@pytest.mark.parametrize(
+    ("tuples", "modules_txt"), [row[1:] for row in PARITY_ACCEPTED], ids=[r[0] for r in PARITY_ACCEPTED]
+)
+def test_tuples_that_match_modules_txt_go_on_to_the_go_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    mode: str,
+    tuples: tuple[str, ...],
+    modules_txt: str,
 ) -> None:
-    fx = make_fixture(tmp_path, recipe="go", gh_tuple=gh_tuples_for(QUIC, NET), modules_txt=modules_txt_for(QUIC, NET))
+    fx = fixture_with_tuples(tmp_path, tuples, modules_txt)
     without_go_on_path(tmp_path, monkeypatch)
 
     assert build(fx, mode, tmp_path / "out") == 1
@@ -712,10 +799,18 @@ def with_the_real_gateway(fx: Fixture) -> Fixture:
 
 
 def real_gateway_fixture(root: Path, modules_txt: str) -> Fixture:
-    """The go recipe over the real gateway, its GH_TUPLE naming the modules ``modules_txt`` lists."""
+    """The go recipe over the real gateway, its tuples naming ``modules_txt``'s modules as modules2tuple does."""
     modules = [tuple(line[2:].split()) for line in modules_txt.splitlines() if line.startswith("# ")]
-    pairs = [(path, version) for path, version in modules]
-    fx = make_fixture(root, go_files=None, recipe="go", gh_tuple=gh_tuples_for(*pairs), modules_txt=modules_txt)
+    gl = gl_tuples_for(*(path for path, _version in modules if path.startswith("modernc.org/")))
+    # the untagged bigfft is named by the revision its pseudo-version ends in
+    gh = gh_tuples_for(
+        *(
+            (path, version.rsplit("-", 1)[1] if path == BIGFFT[0] else version)
+            for path, version in modules
+            if not path.startswith("modernc.org/")
+        )
+    )
+    fx = make_fixture(root, go_files=None, recipe="go", gh_tuple=gh, gl_tuple=gl, modules_txt=modules_txt)
     return with_the_real_gateway(fx)
 
 
