@@ -673,8 +673,8 @@ selected port, or correct the Listen Port and apply. Retry removal after DNS is 
 
 **Readiness and rollback.** A proxy is READY, not merely alive. `pfb_dns_proxy_ready()` (issue #3560) holds only when the gateway's
 child pidfile and its ready marker name the same live PID: the rc script passes `--ready-file /var/unbound/pfb_dns_ready`
-(`$pfb['dns_proxy_ready']`), and the gateway writes its own PID there atomically after binding its sockets, dropping privileges
-and receiving its decider's READY. The marker is PID-only; the complete startup log ends in `ready upstream <host>:<port> pid <pid>`.
+(`$pfb['dns_proxy_ready']`), and the gateway writes its own PID there atomically once its in-process decider has booted (after it
+bound its sockets and dropped privileges) and its listeners serve. The marker is PID-only; the complete startup log ends in `ready upstream <host>:<port> pid <pid>`.
 `pfb_dns_proxy_upstream_ready()` additionally requires a live Unbound pidfile and native `sockstat -46lw` TCP and UDP
 listeners owned by that Unbound PID on the `--upstream` endpoint of the **running** gateway. That endpoint comes from the gateway's
 command line, read with a bounded `ps -ww -o args=` for the marker's PID, which must be the installed
@@ -723,7 +723,7 @@ stop) keeps the snapshot and the moved Resolver, runs nothing destructive after 
 (for a failed activation: nothing answers DNS on the Resolver's port until the restore succeeds): it never claims success. With the snapshot
 kept and pfB-DNS still On, the next apply re-applies the move on that snapshot (`pfb_dns_proxy_resolver_locked()` takes no second one), and
 the proxy check or the next tick rolls it back again while the proxy is not ready. The restore's stop is
-the rc script's own, so it also ends a supervisor that keeps respawning a decider that never becomes ready while pfSense has no
+the rc script's own, so it also ends a supervisor that keeps respawning a gateway that never becomes ready while pfSense has no
 service entry for the package (an install runs this before pfSense registers it, and the Resolver's start hook starts the proxy without one).
 The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
 `DnsProxyActivationRollbackTest`, the marker and lock rows of `DnsProxyServiceTest` and `go/pfb_dns_gateway/readyfile_test.go`
@@ -899,9 +899,8 @@ stays `NO_ARCH`), next to `dns_proxy/pfb_dns.sh`. The wrapper (installed 0644, r
 `uname -p` and `exec`s it, so the `daemon -p` child's pid is the gateway's own; no payload at all fails with status 3, and a
 machine it ships no binary for, or whose binary is missing or not executable, with status 1, each with its reason on stderr. The
 launch line is the one "Service" above describes, whatever the package ships. The plain `--listen` set and `--port` are the derived addresses, then loopback so the
-firewall's own lookups are filtered, at the Resolver's Listen Port. `--ready-file` is optional for the binary and always passed here, ahead of the
-decider's `--` and never handed on: the gateway writes its own pid there (mode 0600) once its listeners serve and the
-decider has sent READY, and removes the file at stop while it still names it. The activation wait (`pfb_dns_proxy_await_ready()`,
+firewall's own lookups are filtered, at the Resolver's Listen Port. `--ready-file` is optional for the binary and always passed here, as the last flag of the launch line:
+the gateway writes its own pid there (mode 0600) once its in-process decider has booted and its listeners serve, and removes the file at stop while it still names it. The activation wait (`pfb_dns_proxy_await_ready()`,
 see "Readiness and rollback" above) reads that marker, which names the `daemon -p` child because the wrapper `exec`s the binary. The gateway's ACL is Unbound's own: the `access-control` rows of
 `--unbound-conf` and of every file it includes (globs too: `access_lists.conf`, pfBlockerNG's marked clause, an admin's
 Custom Options), the last row of identical prefixes winning and the most specific prefix matching, as Unbound does; a

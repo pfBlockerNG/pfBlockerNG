@@ -4,7 +4,7 @@
 
 The running pfB-DNS gateway (`go/pfb_dns_gateway`) gains and loses listen addresses without a restart
 ([#3599](https://github.com/pfBlockerNG/pfBlockerNG/issues/3599)). When an address on one interface and IP version
-appears or disappears, only that address's listeners change; the gateway, its decider and every other listener keep
+appears or disappears, only that address's listeners change; the gateway (its in-process decider included) and every other listener keep
 serving. This replaces the whole-pair restart that [#3598](https://github.com/pfBlockerNG/pfBlockerNG/issues/3598)
 makes once an address the gateway's start could not bind becomes bindable.
 
