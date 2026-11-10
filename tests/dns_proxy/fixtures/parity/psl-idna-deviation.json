@@ -76,7 +76,7 @@
     {
       "id": "eszett-subdomain-under-wildcard",
       "family": "psl",
-      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--strae-oqa.de (straße: ß (U+00DF)): Python's IDNA2003 nameprep maps or deletes the deviation character, refuses the label as non-canonical and never makes it a zone, so the subdomain relays; Go (UTS #46 non-transitional) keeps the character, makes the line a zone and blocks the subdomain, as the owner decided (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592)",
+      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--strae-oqa.de (straße: ß (U+00DF)) is blocked: Go (UTS #46 non-transitional) keeps the deviation character, so the line is a zone; Python's IDNA2003 nameprep maps or deletes it, refuses the label as non-canonical and relays the subdomain (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592)",
       "query": {
         "name": "sub.xn--strae-oqa.de.",
         "type": "A"
@@ -112,7 +112,7 @@
     {
       "id": "final-sigma-subdomain-under-wildcard",
       "family": "psl",
-      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--mxa8ae.de (τας: final sigma ς (U+03C2)): Python's IDNA2003 nameprep maps or deletes the deviation character, refuses the label as non-canonical and never makes it a zone, so the subdomain relays; Go (UTS #46 non-transitional) keeps the character, makes the line a zone and blocks the subdomain, as the owner decided (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592)",
+      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--mxa8ae.de (τας: final sigma ς (U+03C2)) is blocked: Go (UTS #46 non-transitional) keeps the deviation character, so the line is a zone; Python's IDNA2003 nameprep maps or deletes it, refuses the label as non-canonical and relays the subdomain (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592)",
       "query": {
         "name": "sub.xn--mxa8ae.de.",
         "type": "A"
