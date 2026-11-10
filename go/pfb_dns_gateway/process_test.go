@@ -30,8 +30,7 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 2 {
 		switch os.Args[1] {
 		case "--as-gateway":
-			installFakeFrontend()
-			os.Exit(realMain(os.Args[2:], os.Stderr))
+			os.Exit(run(os.Args[2:], os.Stderr, fakeDecider()))
 		case "--as-dropper":
 			os.Exit(dropAndReport(os.Args[2]))
 		case "--as-ctl-client":
@@ -50,16 +49,16 @@ func (echoFrontend) Resolve(wire []byte, _ string, _ func([]byte) []byte, _, _, 
 
 func (echoFrontend) Close() {}
 
-// installFakeFrontend replaces the decider of the gateway role by what PFB_FAKE_FRONTEND names; unset, the gateway boots the
-// real one.
+// fakeDecider is the decider boot of the gateway role, by what PFB_FAKE_FRONTEND names; unset, it is nil and the gateway
+// boots the real one.
 //
 //	echo        echoFrontend. PFB_FAKE_EVENTS names an append-only file the boot writes what it saw to, in order: "before-ready
 //	            ready-file=absent|present" is the state of the file PFB_FAKE_WATCH names, taken as the decider boots
 //	block-open  the boot never ends
-func installFakeFrontend() {
+func fakeDecider() func(decider.Options) (frontend, error) {
 	switch os.Getenv("PFB_FAKE_FRONTEND") {
 	case "echo":
-		openFrontend = func(decider.Options) (frontend, error) {
+		return func(decider.Options) (frontend, error) {
 			if watch := os.Getenv("PFB_FAKE_WATCH"); watch != "" {
 				state := "absent"
 				if _, err := os.Lstat(watch); err == nil {
@@ -70,8 +69,9 @@ func installFakeFrontend() {
 			return echoFrontend{}, nil
 		}
 	case "block-open":
-		openFrontend = func(decider.Options) (frontend, error) { select {} }
+		return func(decider.Options) (frontend, error) { select {} }
 	}
+	return nil
 }
 
 // fakeEvent appends one line to the file PFB_FAKE_EVENTS names (nothing when it is unset).
@@ -283,7 +283,7 @@ func TestGatewaySkipsAnUnbindableListenAddressAndServesTheOthers(t *testing.T) {
 func TestStartBootsTheDeciderWithTheModeFlagsItWasGiven(t *testing.T) {
 	cfg, logs := lifecycleConfig(t)
 	var got decider.Options
-	useDecider(t, func(opts decider.Options) (frontend, error) { got = opts; return echoFrontend{}, nil })
+	cfg.open = func(opts decider.Options) (frontend, error) { got = opts; return echoFrontend{}, nil }
 	cfg.moduleDir, cfg.logDir, cfg.noModule, cfg.replyLog = "/some/module/dir", "/some/log/dir", true, true
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
@@ -308,7 +308,7 @@ func TestGatewayExitsWhenNoListenAddressBinds(t *testing.T) {
 	}
 	cfg, logs := lifecycleConfig(t)
 	var booted int
-	useDecider(t, func(decider.Options) (frontend, error) { booted++; return echoFrontend{}, nil })
+	cfg.open = func(decider.Options) (frontend, error) { booted++; return echoFrontend{}, nil }
 	cfg.listen = []string{"192.0.2.1"}
 	if srv, err := start(cfg, logs.logf); err == nil {
 		srv.shutdown()
@@ -391,14 +391,6 @@ func (c *capture) text() string {
 	return strings.Join(c.lines, "\n")
 }
 
-// useDecider replaces the decider boot of start for the test.
-func useDecider(t *testing.T, open func(decider.Options) (frontend, error)) {
-	t.Helper()
-	old := openFrontend
-	openFrontend = open
-	t.Cleanup(func() { openFrontend = old })
-}
-
 // closingFrontend is a decider that says when it is Closed.
 type closingFrontend struct {
 	echoFrontend
@@ -409,10 +401,10 @@ func (c closingFrontend) Close() { close(c.closed) }
 
 func lifecycleConfig(t *testing.T) (config, *capture) {
 	t.Helper()
-	useDecider(t, func(decider.Options) (frontend, error) { return echoFrontend{}, nil })
 	return config{
 		listen: []string{"127.0.0.1"}, port: 0, upstream: "127.0.0.1:5353", timeout: watchdog,
 		unboundConf: filepath.Join(t.TempDir(), "absent"),
+		open:        func(decider.Options) (frontend, error) { return echoFrontend{}, nil },
 	}, &capture{}
 }
 
@@ -424,7 +416,7 @@ func TestStartupOrderIsBindThenDropThenReady(t *testing.T) {
 	record := func(s string) { mu.Lock(); steps = append(steps, s); mu.Unlock() }
 	cfg.trace = record
 	cfg.drop = func() error { record("drop"); return nil }
-	useDecider(t, func(decider.Options) (frontend, error) { record("open"); return echoFrontend{}, nil })
+	cfg.open = func(decider.Options) (frontend, error) { record("open"); return echoFrontend{}, nil }
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)
@@ -461,7 +453,7 @@ func TestStartupReportsEachListenerThenTheUpstreamOnlyAfterReady(t *testing.T) {
 func TestFailedDropStopsEverythingAndFreesThePort(t *testing.T) {
 	cfg, logs := lifecycleConfig(t)
 	var booted int
-	useDecider(t, func(decider.Options) (frontend, error) { booted++; return echoFrontend{}, nil })
+	cfg.open = func(decider.Options) (frontend, error) { booted++; return echoFrontend{}, nil }
 	cfg.port = freePort(t)
 	cfg.drop = func() error { return errors.New("setuid refused") }
 	srv, err := start(cfg, logs.logf)
@@ -481,7 +473,7 @@ func TestFailedDropStopsEverythingAndFreesThePort(t *testing.T) {
 // A decider that cannot boot is the start's error, and nothing stays bound.
 func TestADeciderThatCannotBootFailsTheStartAndFreesThePort(t *testing.T) {
 	cfg, logs := lifecycleConfig(t)
-	useDecider(t, func(decider.Options) (frontend, error) { return nil, errors.New("no pfb_unbound.ini") })
+	cfg.open = func(decider.Options) (frontend, error) { return nil, errors.New("no pfb_unbound.ini") }
 	cfg.port = freePort(t)
 	srv, err := start(cfg, logs.logf)
 	if err == nil || err.Error() != "decider: no pfb_unbound.ini" {
@@ -501,7 +493,7 @@ func TestADeciderThatCannotBootFailsTheStartAndFreesThePort(t *testing.T) {
 func TestStartupGivesUpWhenTheDeciderDoesNotBootInTime(t *testing.T) {
 	cfg, logs := lifecycleConfig(t)
 	release, late := make(chan struct{}), closingFrontend{closed: make(chan struct{})}
-	useDecider(t, func(decider.Options) (frontend, error) { <-release; return late, nil })
+	cfg.open = func(decider.Options) (frontend, error) { <-release; return late, nil }
 	cfg.readyTimeout = 100 * time.Millisecond
 	srv, err := start(cfg, logs.logf)
 	if err == nil || !strings.Contains(err.Error(), "did not boot") {
@@ -518,7 +510,7 @@ func TestStartupGivesUpWhenTheDeciderDoesNotBootInTime(t *testing.T) {
 func TestAnInterruptWhileTheDeciderBootsEndsTheStart(t *testing.T) {
 	cfg, logs := lifecycleConfig(t)
 	release, late := make(chan struct{}), closingFrontend{closed: make(chan struct{})}
-	useDecider(t, func(decider.Options) (frontend, error) { <-release; return late, nil })
+	cfg.open = func(decider.Options) (frontend, error) { <-release; return late, nil }
 	interrupt := make(chan struct{})
 	close(interrupt)
 	cfg.interrupt = interrupt
@@ -540,7 +532,7 @@ func TestShutdownClosesTheDeciderOnlyAfterTheQueriesInFlightAreDrained(t *testin
 	defer silent.Close()
 	cfg.upstream = silent.LocalAddr().String()
 	fe := &drainFrontend{inflight: make(chan struct{}), closedWithQuery: make(chan bool, 1)}
-	useDecider(t, func(decider.Options) (frontend, error) { return fe, nil })
+	cfg.open = func(decider.Options) (frontend, error) { return fe, nil }
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)

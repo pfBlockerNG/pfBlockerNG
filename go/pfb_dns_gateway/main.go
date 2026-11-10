@@ -88,8 +88,9 @@ type config struct {
 	listenerInterfaces []string
 
 	// Test seams; the zero value is production.
-	drop           func() error      // replaces the privilege drop to --user
-	trace          func(step string) // called after bind and the privilege drop, and when the decider has booted (the drop hook records itself)
+	drop           func() error                            // replaces the privilege drop to --user
+	trace          func(step string)                       // called after bind and the privilege drop, and when the decider has booted (the drop hook records itself)
+	open           func(decider.Options) (frontend, error) // boots the decider; nil is the real one (openDecider)
 	readyTimeout   time.Duration
 	shutdownBudget time.Duration
 	clock          budgetClock     // what shutdown measures its budget by; the zero value is the wall clock
@@ -275,8 +276,8 @@ type frontend interface {
 	Close()
 }
 
-// openFrontend boots the decider. A test replaces it with a fake.
-var openFrontend = func(opts decider.Options) (frontend, error) {
+// openDecider boots the real decider.
+func openDecider(opts decider.Options) (frontend, error) {
 	f, err := decider.Open(opts)
 	if err != nil {
 		return nil, err
@@ -461,7 +462,11 @@ func bootDecider(cfg config) (frontend, error) {
 	}
 	done := make(chan booted, 1)
 	go func() {
-		f, err := openFrontend(decider.Options{ModuleDir: cfg.moduleDir, LogDir: cfg.logDir, NoModule: cfg.noModule, ReplyLog: cfg.replyLog, Observer: cfg.observer})
+		open := cfg.open
+		if open == nil {
+			open = openDecider
+		}
+		f, err := open(decider.Options{ModuleDir: cfg.moduleDir, LogDir: cfg.logDir, NoModule: cfg.noModule, ReplyLog: cfg.replyLog, Observer: cfg.observer})
 		done <- booted{f, err}
 	}()
 	bound := time.NewTimer(cfg.readyTimeout)
@@ -603,9 +608,13 @@ func removeReady(path string) error {
 
 var errInterrupted = errors.New("interrupted while the decider booted")
 
-func realMain(args []string, stderr io.Writer) int {
+func realMain(args []string, stderr io.Writer) int { return run(args, stderr, nil) }
+
+// run is realMain with the decider's boot given: nil is the real decider.
+func run(args []string, stderr io.Writer, open func(decider.Options) (frontend, error)) int {
 	logger := log.New(stderr, "", 0)
 	cfg, err := parseConfig(args, stderr)
+	cfg.open = open
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0

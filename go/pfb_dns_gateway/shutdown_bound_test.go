@@ -39,7 +39,7 @@ func TestShutdownEndsInsideItsBudgetWhenTheDeciderCannotBeClosed(t *testing.T) {
 	cfg, logs := lifecycleConfig(t)
 	stuck := stuckFrontend{release: make(chan struct{})}
 	t.Cleanup(sync.OnceFunc(func() { close(stuck.release) }))
-	useDecider(t, func(decider.Options) (frontend, error) { return stuck, nil })
+	cfg.open = func(decider.Options) (frontend, error) { return stuck, nil }
 	cfg.shutdownBudget = 50 * time.Millisecond
 	cfg.readyFile = t.TempDir() + "/ready"
 	srv, err := start(cfg, logs.logf)
@@ -93,7 +93,7 @@ func (f *heldFrontend) Close() {
 func startHeldQuery(t *testing.T, fe *heldFrontend, stopBound, budget time.Duration, tweaks ...func(*config)) (*server, net.Conn, *capture) {
 	t.Helper()
 	cfg, logs := lifecycleConfig(t)
-	useDecider(t, func(decider.Options) (frontend, error) { return fe, nil })
+	cfg.open = func(decider.Options) (frontend, error) { return fe, nil }
 	cfg.shutdownBudget = budget
 	for _, tweak := range tweaks {
 		tweak(&cfg)
