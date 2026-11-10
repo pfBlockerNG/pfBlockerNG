@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "TOP1M off although the sidecar and the marked Group are present: the marked Group drops nothing",
   "module": {
     "ini": {

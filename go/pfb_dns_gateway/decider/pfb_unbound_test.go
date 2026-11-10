@@ -7,6 +7,7 @@ package decider
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -145,6 +146,19 @@ func TestParseIniInt(t *testing.T) {
 	}
 }
 
+// decisiondb_max is a Python int; past the build's int range the LRU cap saturates instead of wrapping.
+func TestIntOfKeepsTheValueOrSaturates(t *testing.T) {
+	for _, c := range []struct{ in, want int64 }{
+		{5, 5}, {-5, -5}, {0, 0},
+		{4294967296, min(4294967296, math.MaxInt)},
+		{math.MaxInt64, math.MaxInt}, {math.MinInt64, math.MinInt},
+	} {
+		if got := intOf(c.in); int64(got) != c.want {
+			t.Errorf("intOf(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
 func TestIdnModeFromLegacy(t *testing.T) {
 	if got := idnModeFromLegacy(true); got != IdnModeAll {
 		t.Errorf("idnModeFromLegacy(true) = %q, want %q", got, IdnModeAll)
@@ -219,13 +233,20 @@ func TestInitStandardPslFeedPolicies(t *testing.T) {
 	check("dotted capital I is not an i", private, icann, "honor", "honor")
 }
 
+// loadIni is loadIniConfig for the ini at path, on a module that has no other state.
+func loadIni(path string) *configParser {
+	m := &pfbUnbound{}
+	m.pfb.pfbUnboundIni = path
+	return m.loadIniConfig()
+}
+
 func TestLoadIniConfig(t *testing.T) {
 	dir := t.TempDir()
 	logs := modCaptureLog(t)
-	if c := loadIniConfig(filepath.Join(dir, "absent.ini")); c != nil {
+	if c := loadIni(filepath.Join(dir, "absent.ini")); c != nil {
 		t.Errorf("loadIniConfig(absent file) = %v, want nil", c)
 	}
-	if c := loadIniConfig(dir); c != nil {
+	if c := loadIni(dir); c != nil {
 		t.Errorf("loadIniConfig(directory) = %v, want nil: os.path.isfile is false for a directory", c)
 	}
 	if logs.Len() != 0 {
@@ -236,7 +257,7 @@ func TestLoadIniConfig(t *testing.T) {
 	if err := os.WriteFile(good, []byte("[MAIN]\nk = v\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if c := loadIniConfig(good); c == nil || !c.hasOption("MAIN", "k") || logs.Len() != 0 {
+	if c := loadIni(good); c == nil || !c.hasOption("MAIN", "k") || logs.Len() != 0 {
 		t.Errorf("loadIniConfig(good) = (%v, log %q), want a config holding MAIN.k and no log", c, logs.String())
 	}
 
@@ -255,7 +276,7 @@ func TestLoadIniConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 		logs.Reset()
-		c := loadIniConfig(path)
+		c := loadIni(path)
 		if c == nil {
 			t.Errorf("%s: loadIniConfig = nil, want the partially read config", tc.name)
 			continue

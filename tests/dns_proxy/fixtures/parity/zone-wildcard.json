@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "one ABP feed line ||ads.example^ becomes a wildcard zone entry, independent of Wildcard Blocking",
   "module": {
     "ini": {

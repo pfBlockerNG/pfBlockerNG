@@ -289,6 +289,9 @@ type moduleQstate struct {
 	noCacheStore         int
 	clientIP             string
 	clientPort           int
+	// snap is the matcher snapshot this query decides on: operate() Loads it on the query's first event and every
+	// later event reuses it, so a swap between two events never tears one query across two generations.
+	snap *snapshot
 }
 
 func newModuleQstate(qinfo queryInfo, clientIP string, clientPort int, queryFlags uint16, transport, listenerIP, listenerInterface string) *moduleQstate {

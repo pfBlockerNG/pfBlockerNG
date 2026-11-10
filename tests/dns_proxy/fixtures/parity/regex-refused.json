@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "feed /re/ lines the admission gate refuses never block: one row per refusal reason whose pattern Python's re would still compile (a pattern re rejects too cannot show the gate, so none is listed), the name each would match resolves, and admitted twins at the repeat, depth, width and length boundaries block; case tag: R16 refusals",
   "module": {
     "ini": {

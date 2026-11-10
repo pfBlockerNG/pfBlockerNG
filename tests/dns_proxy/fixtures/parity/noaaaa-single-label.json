@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "[noAAAA] wildcard row on a single label (example,1): it answers its own name but covers no name below it, since the wildcard walk never reaches the TLD label; no DNSBL feeds",
   "module": {
     "ini": {

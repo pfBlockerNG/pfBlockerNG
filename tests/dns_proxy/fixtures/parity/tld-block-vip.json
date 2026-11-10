@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "a blacklisted TLD (xyz) blocks every name under it; the built-in log flag 1 sets the answer shape",
   "module": {
     "ini": {

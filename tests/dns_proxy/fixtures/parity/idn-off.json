@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "IDN mode off with the DNSBL otherwise running: xn-- names resolve",
   "module": {
     "ini": {

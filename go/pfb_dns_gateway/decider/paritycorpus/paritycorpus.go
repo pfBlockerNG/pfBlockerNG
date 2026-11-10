@@ -1,4 +1,4 @@
-// Package paritycorpus is the Go side of the schema-2 parity corpus contract, so the Go decider runs the JSON scenarios
+// Package paritycorpus is the Go side of the schema-3 parity corpus contract, so the Go decider runs the JSON scenarios
 // the Python one passes. It translates tests/dns_proxy/test_parity_corpus.py (the loader, write_module, RecordingUnbound,
 // _decision, _rr_text, _mismatches) and tests/dns_proxy/frontend_helpers.py (build_query, and the FakeUnbound that
 // RecordingUnbound wraps, without verdicts; like RecordingUnbound it parses a FORWARD before it records it).
@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
@@ -27,6 +28,8 @@ import (
 )
 
 const DEFAULT_CLIENT = "192.0.2.10"
+
+const SIGNOFF_URL_PREFIX = "https://github.com/pfBlockerNG/pfBlockerNG/issues/" // where a go_expect's sign-off must point
 
 var (
 	RUNNER_WRITES = []string{"pfb_unbound.py", "pfb_dnsbl_regex_rules.py", "pfb_unbound.ini", "pfb_py_sources.json"}
@@ -62,6 +65,8 @@ type Case struct {
 	ID, Family, Description string
 	Query                   Query
 	Expect                  Expect
+	GoExpect                *Expect // the Go decider's owner-signed expectation; the Python runner never compares it
+	Signoff                 string  // the owner's sign-off URL for GoExpect
 }
 
 type IniSection struct {
@@ -334,8 +339,8 @@ func iniText(text, where, field, forbidden string) string {
 }
 
 func schema(doc *orderedObject, where string) {
-	if number, ok := doc.vals["schema"].(json.Number); !ok || number.String() != "2" { // a bool or 2.0 is not the integer 2
-		fail(where, "schema", "must be the integer 2, got "+pyRepr(doc.vals["schema"]))
+	if number, ok := doc.vals["schema"].(json.Number); !ok || number.String() != "3" { // a bool or 3.0 is not the integer 3
+		fail(where, "schema", "must be the integer 3, got "+pyRepr(doc.vals["schema"]))
 	}
 }
 
@@ -525,7 +530,7 @@ func parseCase(item any, index int, where string, families map[string]string, se
 			whereCase = where + ": case " + pyRepr(id) // every later error names the case
 		}
 	}
-	object := objectOf(item, whereCase, "", []string{"id", "family", "description", "query", "expect"})
+	object := objectOf(item, whereCase, "", []string{"id", "family", "description", "query", "expect"}, "go_expect")
 	id := stringValue(object.vals["id"], whereCase, "id")
 	if id == "" {
 		fail(whereCase, "id", "must not be empty")
@@ -539,13 +544,17 @@ func parseCase(item any, index int, where string, families map[string]string, se
 	if description == "" {
 		fail(whereCase, "description", "must say what behaviour is pinned")
 	}
-	return Case{
-		id,
-		family,
-		description,
-		parseQuery(object.vals["query"], whereCase),
-		parseExpect(object.vals["expect"], whereCase),
+	c := Case{
+		ID:          id,
+		Family:      family,
+		Description: description,
+		Query:       parseQuery(object.vals["query"], whereCase),
+		Expect:      parseExpect(object.vals["expect"], whereCase, "expect"),
 	}
+	if given, ok := object.vals["go_expect"]; ok {
+		c.GoExpect, c.Signoff = parseGoExpect(given, whereCase, c.Expect)
+	}
+	return c
 }
 
 var wholeHexBytes = regexp.MustCompile(`\A(?:[0-9a-f]{2})*\z`)
@@ -618,43 +627,63 @@ func parseQuery(value any, where string) Query {
 	return Query{wire, address, choice(transport, where, "query.transport", TRANSPORTS)}
 }
 
-func parseExpect(value any, where string) Expect {
-	object := objectOf(value, where, "expect", []string{"decision", "forwards"}, "rcode", "answer", "authority", "tc")
-	decision := choice(object.vals["decision"], where, "expect.decision", DECISIONS)
-	forwards := stringValues(object.vals["forwards"], where, "expect.forwards")
+func parseExpect(value any, where, field string) Expect {
+	object := objectOf(value, where, field, []string{"decision", "forwards"}, "rcode", "answer", "authority", "tc")
+	decision := choice(object.vals["decision"], where, field+".decision", DECISIONS)
+	forwards := stringValues(object.vals["forwards"], where, field+".forwards")
 	for position, text := range forwards {
-		question(text, where, fmt.Sprintf("expect.forwards[%d]", position))
+		question(text, where, fmt.Sprintf("%s.forwards[%d]", field, position))
 	}
 	if decision == "drop" {
 		for _, key := range []string{"rcode", "answer", "authority", "tc"} {
 			if _, ok := object.vals[key]; ok {
-				fail(where, "expect."+key, "unknown key: a drop has no ANSWER")
+				fail(where, field+"."+key, "unknown key: a drop has no ANSWER")
 			}
 		}
 		if len(forwards) > 0 {
-			fail(where, "expect.forwards", "must be empty for a drop")
+			fail(where, field+".forwards", "must be empty for a drop")
 		}
 		return Expect{Decision: decision}
 	}
 	for _, key := range []string{"rcode", "answer", "authority"} {
 		if _, ok := object.vals[key]; !ok {
-			fail(where, "expect."+key, "missing")
+			fail(where, field+"."+key, "missing")
 		}
 	}
 	tc := false
 	if given, ok := object.vals["tc"]; ok {
 		if tc, ok = given.(bool); !ok {
-			fail(where, "expect.tc", "must be true or false, got "+pyRepr(given))
+			fail(where, field+".tc", "must be true or false, got "+pyRepr(given))
 		}
 	}
 	return Expect{
 		decision,
 		forwards,
-		choice(object.vals["rcode"], where, "expect.rcode", slices.Collect(maps.Keys(RCODES))),
-		rrs(object.vals["answer"], where, "expect.answer"),
-		rrs(object.vals["authority"], where, "expect.authority"),
+		choice(object.vals["rcode"], where, field+".rcode", slices.Collect(maps.Keys(RCODES))),
+		rrs(object.vals["answer"], where, field+".answer"),
+		rrs(object.vals["authority"], where, field+".authority"),
 		tc,
 	}
+}
+
+// parseGoExpect is the Go decider's own expectation and the owner's sign-off for it: expect's keys and rules plus
+// signoff, refused when it equals expect once parsed, since it would then pin nothing.
+func parseGoExpect(value any, where string, expect Expect) (*Expect, string) {
+	object := objectOf(value, where, "go_expect", []string{"signoff"}, "decision", "forwards", "rcode", "answer", "authority", "tc")
+	signoff := stringValue(object.vals["signoff"], where, "go_expect.signoff")
+	if signoff == "" {
+		fail(where, "go_expect.signoff", "must not be empty")
+	}
+	if !strings.HasPrefix(signoff, SIGNOFF_URL_PREFIX) {
+		fail(where, "go_expect.signoff", "must start with "+pyRepr(SIGNOFF_URL_PREFIX)+", got "+pyRepr(signoff))
+	}
+	rest := &orderedObject{keys: slices.DeleteFunc(slices.Clone(object.keys), func(key string) bool { return key == "signoff" }),
+		vals: object.vals, raw: object.raw}
+	goExpect := parseExpect(rest, where, "go_expect")
+	if reflect.DeepEqual(goExpect, expect) {
+		fail(where, "go_expect", "equals expect, so it pins no Go-specific decision: remove it")
+	}
+	return &goExpect, signoff
 }
 
 func LoadScenario(path string, families map[string]string) (*Scenario, error) {

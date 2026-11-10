@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -38,10 +39,11 @@ var booleanStates = map[string]bool{
 type configParser struct {
 	defaults map[string]string
 	sections map[string]map[string]string
+	order    map[string][]string // the option names of the DEFAULT section and of each section, in file order
 }
 
 func newConfigParser() *configParser {
-	return &configParser{defaults: map[string]string{}, sections: map[string]map[string]string{}}
+	return &configParser{defaults: map[string]string{}, sections: map[string]map[string]string{}, order: map[string][]string{}}
 }
 
 func pyStrip(s string) string { return strings.TrimFunc(s, pysem.IsSpace) }
@@ -171,6 +173,7 @@ func (c *configParser) readString(text, source string) error {
 			return &configError{fmt.Sprintf("While reading from %q [line %2d]: option %q in section %q already exists", source, lineno, optname, sectname)}
 		}
 		elementsAdded["o\x00"+sectname+"\x00"+optname] = true
+		c.order[sectname] = append(c.order[sectname], optname)
 		current = &multilineValue{cursect, optname, []string{pyStrip(value[delimiter+1:])}}
 		values = append(values, current)
 	}
@@ -247,6 +250,35 @@ func (c *configParser) find(section, option string) (func(string) (string, bool)
 func (c *configParser) getRaw(section, option string) (string, error) {
 	_, rawval, err := c.find(section, optionxform(option))
 	return rawval, err
+}
+
+// items is ConfigParser.items(section, raw=raw): the DEFAULT options first, then the section's own that DEFAULT lacks,
+// each in file order, a section value overriding a default's value but not its position. Without raw every value is
+// interpolated, so a bad '%' in any value of the section is an error here, as it is in Python.
+func (c *configParser) items(section string, raw bool) ([][2]string, error) {
+	lookup, err := c.lookup(section)
+	if err != nil {
+		return nil, err
+	}
+	names := slices.Clone(c.order[defaultSection])
+	for _, name := range c.order[section] {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	pairs := make([][2]string, 0, len(names))
+	for _, name := range names {
+		value, _ := lookup(name)
+		if !raw {
+			var accum strings.Builder
+			if err := interpolateSome(name, section, &accum, value, value, lookup, 1); err != nil {
+				return nil, err
+			}
+			value = accum.String()
+		}
+		pairs = append(pairs, [2]string{name, value})
+	}
+	return pairs, nil
 }
 
 // get is ConfigParser.get with BasicInterpolation (before_get).

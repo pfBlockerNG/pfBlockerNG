@@ -1,0 +1,748 @@
+{
+ "probes": [
+  "1.2.3.4",
+  "1.2.3.5",
+  "10.0.0.0",
+  "10.0.0.77",
+  "10.0.0.255",
+  "10.0.1.0",
+  "10.1.9.9",
+  "10.3.2.1",
+  "9.255.255.255",
+  "203.0.113.9",
+  "0.0.0.0",
+  "255.255.255.255",
+  "::",
+  "::1",
+  "::2",
+  "2001:db8::1",
+  "2001:db8::2",
+  "2001:db8:1::abcd",
+  "2001:db8:1:1::1",
+  "2001:db8:9::1",
+  "2001:db9:1::1",
+  "fe80::1",
+  "fe80::1%em0",
+  "fe80::2%em0",
+  "fec0::1%em0",
+  "::ffff:1.2.3.4",
+  "::ffff:102:304",
+  "::ffff:1.2.3.5",
+  "::ffff:0:1",
+  "::1.2.3.4",
+  "not-an-address",
+  "",
+  "Unknown",
+  "1.2.3",
+  "1.2.3.4%em0",
+  "FE80::1%em0",
+  "2001:DB8::1",
+  "2001:0db8:0:0:0:0:0:1"
+ ],
+ "rows": [
+  {
+   "value": "10.0.0.0/24",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "10.0.0.0/24"
+   ],
+   "bypassed": [
+    "10.0.0.0",
+    "10.0.0.77",
+    "10.0.0.255"
+   ]
+  },
+  {
+   "value": "10.0.0.1/24",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "10.0.0.0/24"
+   ],
+   "bypassed": [
+    "10.0.0.0",
+    "10.0.0.77",
+    "10.0.0.255"
+   ]
+  },
+  {
+   "value": "10.0.0.0/255.255.255.0",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "10.0.0.0/24"
+   ],
+   "bypassed": [
+    "10.0.0.0",
+    "10.0.0.77",
+    "10.0.0.255"
+   ]
+  },
+  {
+   "value": "10.0.0.0/0.0.0.255",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "10.0.0.0/24"
+   ],
+   "bypassed": [
+    "10.0.0.0",
+    "10.0.0.77",
+    "10.0.0.255"
+   ]
+  },
+  {
+   "value": "10.1.2.3/255.255.0.0",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "10.1.0.0/16"
+   ],
+   "bypassed": [
+    "10.1.9.9"
+   ]
+  },
+  {
+   "value": "10.0.0.0/255.0.255.0",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "10.0.0.0/0.255.0.0",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4/0.0.0.0",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "0.0.0.0/0"
+   ],
+   "bypassed": [
+    "1.2.3.4",
+    "1.2.3.5",
+    "10.0.0.0",
+    "10.0.0.77",
+    "10.0.0.255",
+    "10.0.1.0",
+    "10.1.9.9",
+    "10.3.2.1",
+    "9.255.255.255",
+    "203.0.113.9",
+    "0.0.0.0",
+    "255.255.255.255"
+   ]
+  },
+  {
+   "value": "1.2.3.4/255.255.255.255",
+   "gate": true,
+   "exact": [
+    "1.2.3.4"
+   ],
+   "nets": [],
+   "bypassed": [
+    "1.2.3.4"
+   ]
+  },
+  {
+   "value": "1.2.3.4/0.0.0.1",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "1.2.3.4/31"
+   ],
+   "bypassed": [
+    "1.2.3.4",
+    "1.2.3.5"
+   ]
+  },
+  {
+   "value": "1.2.3.4",
+   "gate": true,
+   "exact": [
+    "1.2.3.4"
+   ],
+   "nets": [],
+   "bypassed": [
+    "1.2.3.4"
+   ]
+  },
+  {
+   "value": "1.2.3.4/32",
+   "gate": true,
+   "exact": [
+    "1.2.3.4"
+   ],
+   "nets": [],
+   "bypassed": [
+    "1.2.3.4"
+   ]
+  },
+  {
+   "value": "1.2.3.4/0",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "0.0.0.0/0"
+   ],
+   "bypassed": [
+    "1.2.3.4",
+    "1.2.3.5",
+    "10.0.0.0",
+    "10.0.0.77",
+    "10.0.0.255",
+    "10.0.1.0",
+    "10.1.9.9",
+    "10.3.2.1",
+    "9.255.255.255",
+    "203.0.113.9",
+    "0.0.0.0",
+    "255.255.255.255"
+   ]
+  },
+  {
+   "value": "1.2.3.4/08",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "1.0.0.0/8"
+   ],
+   "bypassed": [
+    "1.2.3.4",
+    "1.2.3.5"
+   ]
+  },
+  {
+   "value": "1.2.3.4/033",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4/33",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4/-1",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4/+8",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4/ 8",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4/8",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "1.0.0.0/8"
+   ],
+   "bypassed": [
+    "1.2.3.4",
+    "1.2.3.5"
+   ]
+  },
+  {
+   "value": "1.2.3.4/",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "/8",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4.5",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "01.2.3.4",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.256",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4/8/8",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "0.0.0.0/0",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "0.0.0.0/0"
+   ],
+   "bypassed": [
+    "1.2.3.4",
+    "1.2.3.5",
+    "10.0.0.0",
+    "10.0.0.77",
+    "10.0.0.255",
+    "10.0.1.0",
+    "10.1.9.9",
+    "10.3.2.1",
+    "9.255.255.255",
+    "203.0.113.9",
+    "0.0.0.0",
+    "255.255.255.255"
+   ]
+  },
+  {
+   "value": "::/0",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "::/0"
+   ],
+   "bypassed": [
+    "::",
+    "::1",
+    "::2",
+    "2001:db8::1",
+    "2001:db8::2",
+    "2001:db8:1::abcd",
+    "2001:db8:1:1::1",
+    "2001:db8:9::1",
+    "2001:db9:1::1",
+    "fe80::1",
+    "fe80::1%em0",
+    "fe80::2%em0",
+    "fec0::1%em0",
+    "::ffff:1.2.3.4",
+    "::ffff:102:304",
+    "::ffff:1.2.3.5",
+    "::ffff:0:1",
+    "::1.2.3.4",
+    "FE80::1%em0",
+    "2001:DB8::1",
+    "2001:0db8:0:0:0:0:0:1"
+   ]
+  },
+  {
+   "value": "::1",
+   "gate": true,
+   "exact": [
+    "::1"
+   ],
+   "nets": [],
+   "bypassed": [
+    "::1"
+   ]
+  },
+  {
+   "value": "::1/128",
+   "gate": true,
+   "exact": [
+    "::1"
+   ],
+   "nets": [],
+   "bypassed": [
+    "::1"
+   ]
+  },
+  {
+   "value": "::1/129",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "::1/ffff::",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "2001:db8:1::/64",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "2001:db8:1::/64"
+   ],
+   "bypassed": [
+    "2001:db8:1::abcd"
+   ]
+  },
+  {
+   "value": "2001:db8::1/128",
+   "gate": true,
+   "exact": [
+    "2001:db8::1"
+   ],
+   "nets": [],
+   "bypassed": [
+    "2001:db8::1"
+   ]
+  },
+  {
+   "value": "2001:0db8:0:0:0:0:0:1",
+   "gate": true,
+   "exact": [
+    "2001:db8::1"
+   ],
+   "nets": [],
+   "bypassed": [
+    "2001:db8::1"
+   ]
+  },
+  {
+   "value": "2001:DB8::1",
+   "gate": true,
+   "exact": [
+    "2001:db8::1"
+   ],
+   "nets": [],
+   "bypassed": [
+    "2001:db8::1"
+   ]
+  },
+  {
+   "value": "2001:db8:9::/129",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "2001:db8::/32",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "2001:db8::/32"
+   ],
+   "bypassed": [
+    "2001:db8::1",
+    "2001:db8::2",
+    "2001:db8:1::abcd",
+    "2001:db8:1:1::1",
+    "2001:db8:9::1",
+    "2001:DB8::1",
+    "2001:0db8:0:0:0:0:0:1"
+   ]
+  },
+  {
+   "value": "2001:db8::1/32",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "2001:db8::/32"
+   ],
+   "bypassed": [
+    "2001:db8::1",
+    "2001:db8::2",
+    "2001:db8:1::abcd",
+    "2001:db8:1:1::1",
+    "2001:db8:9::1",
+    "2001:DB8::1",
+    "2001:0db8:0:0:0:0:0:1"
+   ]
+  },
+  {
+   "value": "fe80::1%em0",
+   "gate": true,
+   "exact": [
+    "fe80::1%em0"
+   ],
+   "nets": [],
+   "bypassed": [
+    "fe80::1%em0"
+   ]
+  },
+  {
+   "value": "fe80::/10",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "fe80::/10"
+   ],
+   "bypassed": [
+    "fe80::1",
+    "fe80::1%em0",
+    "fe80::2%em0",
+    "FE80::1%em0"
+   ]
+  },
+  {
+   "value": "fe80::%em0/10",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "fe80::%em0/10"
+   ],
+   "bypassed": [
+    "fe80::1",
+    "fe80::1%em0",
+    "fe80::2%em0",
+    "FE80::1%em0"
+   ]
+  },
+  {
+   "value": "fe80::1%em0/64",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "fe80::/64"
+   ],
+   "bypassed": [
+    "fe80::1",
+    "fe80::1%em0",
+    "fe80::2%em0",
+    "FE80::1%em0"
+   ]
+  },
+  {
+   "value": "fe80::1%em0/128",
+   "gate": true,
+   "exact": [
+    "fe80::1%em0"
+   ],
+   "nets": [],
+   "bypassed": [
+    "fe80::1%em0"
+   ]
+  },
+  {
+   "value": "fe80::1%",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "fe80::1%em0%x",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4%em0",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "::ffff:1.2.3.4",
+   "gate": true,
+   "exact": [
+    "::ffff:1.2.3.4"
+   ],
+   "nets": [],
+   "bypassed": [
+    "::ffff:1.2.3.4"
+   ]
+  },
+  {
+   "value": "::ffff:1.2.3.4/128",
+   "gate": true,
+   "exact": [
+    "::ffff:1.2.3.4"
+   ],
+   "nets": [],
+   "bypassed": [
+    "::ffff:1.2.3.4"
+   ]
+  },
+  {
+   "value": "::ffff:1.2.3.0/120",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "::ffff:1.2.3.0/120"
+   ],
+   "bypassed": [
+    "::ffff:1.2.3.4",
+    "::ffff:102:304",
+    "::ffff:1.2.3.5"
+   ]
+  },
+  {
+   "value": "::ffff:0:0/96",
+   "gate": true,
+   "exact": [],
+   "nets": [
+    "::ffff:0.0.0.0/96"
+   ],
+   "bypassed": [
+    "::ffff:1.2.3.4",
+    "::ffff:102:304",
+    "::ffff:1.2.3.5",
+    "::ffff:0:1"
+   ]
+  },
+  {
+   "value": "::1.2.3.4",
+   "gate": true,
+   "exact": [
+    "::102:304"
+   ],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1::",
+   "gate": true,
+   "exact": [
+    "1::"
+   ],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": ":::",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1:2:3:4:5:6:7:8",
+   "gate": true,
+   "exact": [
+    "1:2:3:4:5:6:7:8"
+   ],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1:2:3:4:5:6:7:8:9",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "12345::1",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "g::1",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "::ffff:1.2.3.04",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "# comment",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "example.com",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "xn--abc",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "10.0.0.0/24 extra",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "\u0663.2.3.4",
+   "gate": false,
+   "exact": [],
+   "nets": [],
+   "bypassed": []
+  },
+  {
+   "value": "1.2.3.4",
+   "gate": true,
+   "exact": [
+    "1.2.3.4"
+   ],
+   "nets": [],
+   "bypassed": [
+    "1.2.3.4"
+   ]
+  }
+ ]
+}

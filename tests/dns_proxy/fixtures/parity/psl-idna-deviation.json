@@ -1,0 +1,231 @@
+{
+  "schema": 3,
+  "description": "Wildcard Blocking on, plain feed lines that are xn-- labels decoding to an IDNA deviation character (ß, ς, ZWNJ, ZWJ): IDNA2003 (Python) and UTS #46 non-transitional (Go) disagree on whether the line is a registrable domain",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_tld_wildcard": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {
+          "raw": "pfb_py_raw/feed.txt",
+          "feed": "Feed",
+          "group": "Group",
+          "log_flag": "1"
+        }
+      ]
+    },
+    "files": {
+      "dnsbl_psl": [
+        "// ===BEGIN ICANN DOMAINS===",
+        "de",
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "// ===END PRIVATE DOMAINS==="
+      ],
+      "pfb_py_raw/feed.txt": [
+        "xn--strae-oqa.de",
+        "xn--mxa8ae.de",
+        "xn--ab-j1t.de",
+        "xn--ab-m1t.de"
+      ]
+    }
+  },
+  "upstream": {
+    "sub.xn--strae-oqa.de. A": [
+      "sub.xn--strae-oqa.de. 300 IN A 192.0.2.5"
+    ],
+    "sub.xn--mxa8ae.de. A": [
+      "sub.xn--mxa8ae.de. 300 IN A 192.0.2.5"
+    ],
+    "sub.xn--ab-j1t.de. A": [
+      "sub.xn--ab-j1t.de. 300 IN A 192.0.2.5"
+    ],
+    "sub.xn--ab-m1t.de. A": [
+      "sub.xn--ab-m1t.de. 300 IN A 192.0.2.5"
+    ]
+  },
+  "cases": [
+    {
+      "id": "eszett-feed-line-is-blocked",
+      "family": "psl",
+      "description": "the feed line xn--strae-oqa.de (straße: ß (U+00DF)) blocks the listed name itself: Python keeps it as exact data although its IDNA2003 round trip refuses the label",
+      "query": {
+        "name": "xn--strae-oqa.de.",
+        "type": "A"
+      },
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [
+          "xn--strae-oqa.de. 3600 IN A 10.10.10.1"
+        ],
+        "authority": []
+      }
+    },
+    {
+      "id": "eszett-subdomain-under-wildcard",
+      "family": "psl",
+      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--strae-oqa.de (straße: ß (U+00DF)): Python's IDNA2003 nameprep maps or deletes the deviation character, refuses the label as non-canonical and never makes it a zone, so the subdomain relays; Go (UTS #46 non-transitional) keeps the character, makes the line a zone and blocks the subdomain, as the owner decided",
+      "query": {
+        "name": "sub.xn--strae-oqa.de.",
+        "type": "A"
+      },
+      "expect": {
+        "decision": "relay",
+        "forwards": [
+          "sub.xn--strae-oqa.de. A"
+        ],
+        "rcode": "NOERROR",
+        "answer": [
+          "sub.xn--strae-oqa.de. 300 IN A 192.0.2.5"
+        ],
+        "authority": []
+      },
+      "go_expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [
+          "sub.xn--strae-oqa.de. 3600 IN A 10.10.10.1"
+        ],
+        "authority": [],
+        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592"
+      }
+    },
+    {
+      "id": "final-sigma-feed-line-is-blocked",
+      "family": "psl",
+      "description": "the feed line xn--mxa8ae.de (τας: final sigma ς (U+03C2)) blocks the listed name itself: Python keeps it as exact data although its IDNA2003 round trip refuses the label",
+      "query": {
+        "name": "xn--mxa8ae.de.",
+        "type": "A"
+      },
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [
+          "xn--mxa8ae.de. 3600 IN A 10.10.10.1"
+        ],
+        "authority": []
+      }
+    },
+    {
+      "id": "final-sigma-subdomain-under-wildcard",
+      "family": "psl",
+      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--mxa8ae.de (τας: final sigma ς (U+03C2)): Python's IDNA2003 nameprep maps or deletes the deviation character, refuses the label as non-canonical and never makes it a zone, so the subdomain relays; Go (UTS #46 non-transitional) keeps the character, makes the line a zone and blocks the subdomain, as the owner decided",
+      "query": {
+        "name": "sub.xn--mxa8ae.de.",
+        "type": "A"
+      },
+      "expect": {
+        "decision": "relay",
+        "forwards": [
+          "sub.xn--mxa8ae.de. A"
+        ],
+        "rcode": "NOERROR",
+        "answer": [
+          "sub.xn--mxa8ae.de. 300 IN A 192.0.2.5"
+        ],
+        "authority": []
+      },
+      "go_expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [
+          "sub.xn--mxa8ae.de. 3600 IN A 10.10.10.1"
+        ],
+        "authority": [],
+        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592"
+      }
+    },
+    {
+      "id": "zwnj-feed-line-is-blocked",
+      "family": "psl",
+      "description": "the feed line xn--ab-j1t.de (a, ZWNJ (U+200C), b) blocks the listed name itself: Python keeps it as exact data although its IDNA2003 round trip refuses the label",
+      "query": {
+        "name": "xn--ab-j1t.de.",
+        "type": "A"
+      },
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [
+          "xn--ab-j1t.de. 3600 IN A 10.10.10.1"
+        ],
+        "authority": []
+      }
+    },
+    {
+      "id": "zwnj-subdomain-under-wildcard",
+      "family": "psl",
+      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--ab-j1t.de (a, ZWNJ (U+200C), b): Python's IDNA2003 nameprep maps or deletes the deviation character, refuses the label as non-canonical and never makes it a zone, so the subdomain relays; Go refuses the joiner label too, so both relay",
+      "query": {
+        "name": "sub.xn--ab-j1t.de.",
+        "type": "A"
+      },
+      "expect": {
+        "decision": "relay",
+        "forwards": [
+          "sub.xn--ab-j1t.de. A"
+        ],
+        "rcode": "NOERROR",
+        "answer": [
+          "sub.xn--ab-j1t.de. 300 IN A 192.0.2.5"
+        ],
+        "authority": []
+      }
+    },
+    {
+      "id": "zwj-feed-line-is-blocked",
+      "family": "psl",
+      "description": "the feed line xn--ab-m1t.de (a, ZWJ (U+200D), b) blocks the listed name itself: Python keeps it as exact data although its IDNA2003 round trip refuses the label",
+      "query": {
+        "name": "xn--ab-m1t.de.",
+        "type": "A"
+      },
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": [
+          "xn--ab-m1t.de. 3600 IN A 10.10.10.1"
+        ],
+        "authority": []
+      }
+    },
+    {
+      "id": "zwj-subdomain-under-wildcard",
+      "family": "psl",
+      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--ab-m1t.de (a, ZWJ (U+200D), b): Python's IDNA2003 nameprep maps or deletes the deviation character, refuses the label as non-canonical and never makes it a zone, so the subdomain relays; Go refuses the joiner label too, so both relay",
+      "query": {
+        "name": "sub.xn--ab-m1t.de.",
+        "type": "A"
+      },
+      "expect": {
+        "decision": "relay",
+        "forwards": [
+          "sub.xn--ab-m1t.de. A"
+        ],
+        "rcode": "NOERROR",
+        "answer": [
+          "sub.xn--ab-m1t.de. 300 IN A 192.0.2.5"
+        ],
+        "authority": []
+      }
+    }
+  ]
+}

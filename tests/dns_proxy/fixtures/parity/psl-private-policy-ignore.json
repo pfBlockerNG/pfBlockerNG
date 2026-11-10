@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "a feed line at the PRIVATE suffix pages.com under psl_feed_private_policy = ignore (Wildcard Blocking on, PRIVATE suffixes not recognised); the ICANN policy stays honor",
   "module": {
     "ini": {

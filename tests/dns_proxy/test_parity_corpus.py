@@ -6,13 +6,13 @@ ordered query cases, each with the decision as it appears on the decision protoc
 The expectations in fixtures/parity/ are frozen literals derived from the source branch each family names in
 families.json, never captured from a run. A fixture the loader refuses is an error naming file, case and field.
 
-Schema 2, the contract a Go runner implements too (every key is required unless marked optional; any other key, a
+Schema 3, the contract a Go runner implements too (every key is required unless marked optional; any other key, a
 duplicate JSON key, NaN/Infinity, a wrong JSON type or an unknown value is a refusal, never a skip; every file in
-fixtures/parity/ is a .json document the runner loads):
+fixtures/parity/ is a .json document the runner loads; "schema" is the integer 3 in every file, 2 and 1 are refused):
 
-  families.json  {"schema": 2, "families": {"<family>": "<source branch>", ...}}: the closed family list. Every family
+  families.json  {"schema": 3, "families": {"<family>": "<source branch>", ...}}: the closed family list. Every family
                  pins pfb_unbound.py except `frontend`, which pins Frontend.resolve in pfb_dns_proxy.py.
-  <scenario>.json  {"schema": 2, "description", "module", "upstream", "cases"}
+  <scenario>.json  {"schema": 3, "description", "module", "upstream", "cases"}
     module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order; no line
                      break anywhere, no bracket in a section name, no "=" or ":" in a key.
     module.manifest  written verbatim as pfb_py_sources.json.
@@ -37,6 +37,13 @@ fixtures/parity/ is a .json document the runner loads):
       expect            {"decision": answer|relay|rewrite|drop, "forwards": ["<name> <TYPE>", ...], "rcode": NOERROR|
                         FORMERR|SERVFAIL|NXDOMAIN|NOTIMP|REFUSED, "answer": [RR texts], "authority": [RR texts], "tc":
                         true|false (optional, false)}. A drop is exactly {"decision": "drop", "forwards": []}.
+      go_expect         (optional) the Go decider's own expectation where it differs from expect by an owner decision:
+                        an object with exactly expect's keys and rules (the same decision-dependent shape) plus a
+                        required "signoff", a non-empty URL starting https://github.com/pfBlockerNG/pfBlockerNG/issues/
+                        that points at the owner's sign-off of the difference. A go_expect that equals expect once
+                        parsed (signoff aside) is refused: it would pin nothing. The Python runner compares `expect`
+                        only (a go_expect is validated, never compared); a Go runner compares go_expect when the case
+                        has one, else expect.
   RR texts are "name ttl IN TYPE rdata" for A, AAAA, CNAME, TXT and SOA (dnswire.rr_from_text).
 
 Decisions: answer = no FORWARD, the decider built the ANSWER; relay = one FORWARD carrying the client's own wire and
@@ -86,6 +93,7 @@ SHIPPED_MODULES = ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py")  # linked into 
 RUNNER_WRITES = (*SHIPPED_MODULES, "pfb_unbound.ini", "pfb_py_sources.json")
 TRANSPORTS = ("TCP", "UDP", "DoT", "DoH", "DoQ")  # the QUERY frame's transport byte is this index
 DECISIONS = ("answer", "relay", "rewrite", "drop")
+SIGNOFF_URL_PREFIX = "https://github.com/pfBlockerNG/pfBlockerNG/issues/"  # where a go_expect's sign-off must point
 RCODES = {"NOERROR": 0, "FORMERR": 1, "SERVFAIL": 2, "NXDOMAIN": 3, "NOTIMP": 4, "REFUSED": 5}
 QTYPES = {
     "A": 1,
@@ -133,6 +141,8 @@ class Case:
     description: str
     query: Query
     expect: Expect
+    go_expect: Expect | None = None  # the Go decider's owner-signed expectation; the Python runner never compares it
+    signoff: str = ""  # the owner's sign-off URL for go_expect
 
 
 @dataclass(frozen=True)
@@ -221,8 +231,8 @@ def _ini_text(text: str, where: str, field: str, forbidden: str) -> str:
 
 
 def _schema(doc: dict[str, Any], where: str) -> None:
-    if type(doc["schema"]) is not int or doc["schema"] != 2:  # a bool or 2.0 is not the integer 2
-        _fail(where, "schema", f"must be the integer 2, got {doc['schema']!r}")
+    if type(doc["schema"]) is not int or doc["schema"] != 3:  # a bool or 3.0 is not the integer 3
+        _fail(where, "schema", f"must be the integer 3, got {doc['schema']!r}")
 
 
 def _qtype(text: str, where: str, field: str) -> int:
@@ -361,40 +371,56 @@ def _query(value: object, where: str) -> Query:
     return Query(wire, client, _choice(obj.get("transport", "UDP"), where, "query.transport", TRANSPORTS))
 
 
-def _expect(value: object, where: str) -> Expect:
-    obj = _object(value, where, "expect", ("decision", "forwards"), ("rcode", "answer", "authority", "tc"))
-    decision = _choice(obj["decision"], where, "expect.decision", DECISIONS)
-    forwards = _strings(obj["forwards"], where, "expect.forwards")
+def _expect(value: object, where: str, field: str = "expect") -> Expect:
+    obj = _object(value, where, field, ("decision", "forwards"), ("rcode", "answer", "authority", "tc"))
+    decision = _choice(obj["decision"], where, f"{field}.decision", DECISIONS)
+    forwards = _strings(obj["forwards"], where, f"{field}.forwards")
     for position, text in enumerate(forwards):
-        _question(text, where, f"expect.forwards[{position}]")
+        _question(text, where, f"{field}.forwards[{position}]")
     if decision == "drop":
         for key in ("rcode", "answer", "authority", "tc"):
             if key in obj:
-                _fail(where, f"expect.{key}", "unknown key: a drop has no ANSWER")
+                _fail(where, f"{field}.{key}", "unknown key: a drop has no ANSWER")
         if forwards:
-            _fail(where, "expect.forwards", "must be empty for a drop")
+            _fail(where, f"{field}.forwards", "must be empty for a drop")
         return Expect(decision, ())
     for key in ("rcode", "answer", "authority"):
         if key not in obj:
-            _fail(where, f"expect.{key}", "missing")
+            _fail(where, f"{field}.{key}", "missing")
     tc = obj.get("tc", False)
     if not isinstance(tc, bool):
-        _fail(where, "expect.tc", f"must be true or false, got {tc!r}")
+        _fail(where, f"{field}.tc", f"must be true or false, got {tc!r}")
     return Expect(
         decision,
         tuple(forwards),
-        _choice(obj["rcode"], where, "expect.rcode", RCODES),
-        _rrs(obj["answer"], where, "expect.answer"),
-        _rrs(obj["authority"], where, "expect.authority"),
+        _choice(obj["rcode"], where, f"{field}.rcode", RCODES),
+        _rrs(obj["answer"], where, f"{field}.answer"),
+        _rrs(obj["authority"], where, f"{field}.authority"),
         tc,
     )
+
+
+def _go_expect(value: object, where: str, expect: Expect) -> tuple[Expect, str]:
+    """The Go decider's own expectation and the owner's sign-off for it: `expect`'s keys and rules plus `signoff`."""
+    obj = _object(
+        value, where, "go_expect", ("signoff",), ("decision", "forwards", "rcode", "answer", "authority", "tc")
+    )
+    signoff = _string(obj["signoff"], where, "go_expect.signoff")
+    if not signoff:
+        _fail(where, "go_expect.signoff", "must not be empty")
+    if not signoff.startswith(SIGNOFF_URL_PREFIX):
+        _fail(where, "go_expect.signoff", f"must start with {SIGNOFF_URL_PREFIX!r}, got {signoff!r}")
+    go_expect = _expect({key: item for key, item in obj.items() if key != "signoff"}, where, "go_expect")
+    if go_expect == expect:
+        _fail(where, "go_expect", "equals expect, so it pins no Go-specific decision: remove it")
+    return go_expect, signoff
 
 
 def _case(item: object, index: int, where: str, families: Collection[str], seen: set[str]) -> Case:
     where_case = f"{where}: cases[{index}]"
     if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
         where_case = f"{where}: case {item['id']!r}"  # every later error names the case
-    obj = _object(item, where_case, "", ("id", "family", "description", "query", "expect"))
+    obj = _object(item, where_case, "", ("id", "family", "description", "query", "expect"), ("go_expect",))
     case_id = _string(obj["id"], where_case, "id")
     if not case_id:
         _fail(where_case, "id", "must not be empty")
@@ -405,14 +431,10 @@ def _case(item: object, index: int, where: str, families: Collection[str], seen:
     description = _string(obj["description"], where_case, "description")
     if not description:
         _fail(where_case, "description", "must say what behaviour is pinned")
-
-    return Case(
-        case_id,
-        family,
-        description,
-        _query(obj["query"], where_case),
-        _expect(obj["expect"], where_case),
-    )
+    query = _query(obj["query"], where_case)
+    expect = _expect(obj["expect"], where_case)
+    go_expect, signoff = _go_expect(obj["go_expect"], where_case, expect) if "go_expect" in obj else (None, "")
+    return Case(case_id, family, description, query, expect, go_expect, signoff)
 
 
 def load_scenario(path: Path, families: Collection[str]) -> Scenario:
@@ -569,7 +591,7 @@ def test_the_decider_makes_every_decision_the_scenario_expects(scenario: Scenari
 def _good() -> dict[str, Any]:
     """The smallest valid scenario; each hostile row below breaks one thing in a copy of it."""
     return {
-        "schema": 2,
+        "schema": 3,
         "description": "one unlisted name",
         "module": {
             "ini": {"MAIN": {"python_enable": "true"}},
@@ -615,6 +637,24 @@ def _load(tmp_path: Path, mutate: Callable[[dict[str, Any]], object]) -> Scenari
     return load_scenario(path, FAMILIES)
 
 
+SIGNOFF = "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482"
+SIGNOFF_PREFIX = "https://github.com/pfBlockerNG/pfBlockerNG/issues/"
+GO_EXPECT = {  # a rewrite where `_good()`'s expect is a relay
+    "decision": "rewrite",
+    "forwards": ["allowed.example. A"],
+    "rcode": "NOERROR",
+    "answer": ["allowed.example. 3600 IN A 0.0.0.0"],
+    "authority": [],
+    "signoff": SIGNOFF,
+}
+
+
+def _go(*drop: str, **changes: Any) -> Callable[[dict[str, Any]], object]:
+    """Mutation giving `_good()`'s case the go_expect GO_EXPECT, without the keys `drop`, with `changes` applied."""
+    go_expect = {key: value for key, value in {**GO_EXPECT, **changes}.items() if key not in drop}
+    return lambda doc: doc["cases"][0].update(go_expect=go_expect)
+
+
 def test_a_minimal_valid_scenario_loads_with_the_defaults_filled_in(tmp_path: Path) -> None:
     [case] = _load(tmp_path, lambda doc: None).cases
     assert (case.id, case.family, case.query) == (
@@ -653,14 +693,49 @@ def test_an_upstream_null_loads_as_unbound_giving_no_reply(tmp_path: Path) -> No
     assert scenario.upstream[("silent.example.", 1)] is None
 
 
+def test_a_case_without_a_go_expect_has_none(tmp_path: Path) -> None:
+    [case] = _load(tmp_path, lambda doc: None).cases
+    assert (case.go_expect, case.signoff) == (None, "")
+
+
+def test_a_signed_go_expect_loads_next_to_an_untouched_expect(tmp_path: Path) -> None:
+    [case] = _load(tmp_path, _go()).cases
+    assert case.go_expect == Expect(
+        "rewrite", ("allowed.example. A",), "NOERROR", (dnswire.rr_from_text("allowed.example. 3600 IN A 0.0.0.0"),)
+    )
+    assert case.signoff == SIGNOFF
+    assert case.expect.decision == "relay"
+
+
+def test_the_python_runner_compares_expect_and_never_go_expect(tmp_path: Path) -> None:
+    scenario = _load(tmp_path, _go())
+    [case] = scenario.cases
+    wire = case.query.wire
+    upstream = RecordingUnbound(scenario.upstream)
+    relayed = upstream.answer(wire)  # the exchange expect describes: one FORWARD, Unbound's reply relayed as it is
+    assert _mismatches(scenario, case, wire, upstream, relayed) == []
+    reply = dnswire.parse(relayed)
+    rewritten = dnswire.encode(
+        dnswire.Message(
+            reply.id,
+            dnswire.QR | dnswire.RA | dnswire.RD,
+            reply.questions,
+            [dnswire.rr_from_text("allowed.example. 3600 IN A 0.0.0.0")],
+        )
+    )  # the exchange go_expect describes
+    lines = _mismatches(scenario, case, wire, upstream, rewritten)
+    assert "decision: expected 'relay', got 'rewrite'" in "\n".join(lines)
+
+
 # (what is wrong, how the valid scenario is broken, what the message must name)
 HOSTILE: list[tuple[str, Callable[[dict[str, Any]], object], tuple[str, ...]]] = [
     ("schema 1, the old version", lambda d: d.update(schema=1), ("bad.json", "schema")),
-    ("schema 3", lambda d: d.update(schema=3), ("bad.json", "schema")),
-    ("schema as a string", lambda d: d.update(schema="2"), ("bad.json", "schema")),
+    ("schema 2, the version before go_expect", lambda d: d.update(schema=2), ("bad.json", "schema")),
+    ("schema 4", lambda d: d.update(schema=4), ("bad.json", "schema")),
+    ("schema as a string", lambda d: d.update(schema="3"), ("bad.json", "schema")),
     ("schema missing", lambda d: d.pop("schema"), ("bad.json", "schema")),
     ("schema true", lambda d: d.update(schema=True), ("bad.json", "schema")),
-    ("schema 2.0", lambda d: d.update(schema=2.0), ("bad.json", "schema")),
+    ("schema 3.0", lambda d: d.update(schema=3.0), ("bad.json", "schema")),
     ("NaN, which only Python reads", lambda d: d["module"]["manifest"].update(x=float("nan")), ("bad.json", "NaN")),
     ("no cases", lambda d: d.update(cases=[]), ("bad.json", "cases")),
     ("empty case id", lambda d: d["cases"][0].update(id=""), ("bad.json", "cases[0]", "id")),
@@ -858,6 +933,49 @@ HOSTILE: list[tuple[str, Callable[[dict[str, Any]], object], tuple[str, ...]]] =
         lambda d: d.update(upstream={"allowed.example. A": {}}),
         ("bad.json", "upstream['allowed.example. A']"),
     ),
+    (
+        "go_expect not an object",
+        lambda d: d["cases"][0].update(go_expect="rewrite"),
+        ("bad.json", "'good'", "go_expect", "must be a JSON object"),
+    ),
+    (
+        "go_expect an empty object",
+        lambda d: d["cases"][0].update(go_expect={}),
+        ("bad.json", "'good'", "go_expect.signoff", "missing"),
+    ),
+    ("go_expect with an unknown key", _go(note="x"), ("bad.json", "'good'", "go_expect.note", "unknown key")),
+    ("go_expect without a signoff", _go("signoff"), ("bad.json", "'good'", "go_expect.signoff", "missing")),
+    ("signoff a number", _go(signoff=7), ("bad.json", "'good'", "go_expect.signoff", "must be a string")),
+    ("signoff empty", _go(signoff=""), ("bad.json", "'good'", "go_expect.signoff", "must not be empty")),
+    *[
+        (f"signoff {text}", _go(signoff=text), ("bad.json", "'good'", "go_expect.signoff", SIGNOFF_PREFIX, repr(text)))
+        for text in (
+            "https://example.com/x",
+            "http://github.com/pfBlockerNG/pfBlockerNG/issues/1",
+            "https://github.com/other/repo/issues/1",
+            "issues/3511",
+        )
+    ],
+    (
+        "go_expect equal to expect",
+        lambda d: d["cases"][0].update(go_expect={**d["cases"][0]["expect"], "signoff": SIGNOFF}),
+        ("bad.json", "'good'", "go_expect:", "equals expect"),
+    ),
+    (
+        "go_expect equal to expect once parsed (tc spelled out)",
+        lambda d: d["cases"][0].update(go_expect={**d["cases"][0]["expect"], "tc": False, "signoff": SIGNOFF}),
+        ("bad.json", "'good'", "go_expect:", "equals expect"),
+    ),
+    ("go_expect without a decision", _go("decision"), ("bad.json", "'good'", "go_expect.decision", "missing")),
+    ("go_expect with decision 'block'", _go(decision="block"), ("bad.json", "'good'", "go_expect.decision")),
+    (
+        "go_expect drop with an rcode",
+        _go(decision="drop", forwards=[]),
+        ("bad.json", "'good'", "go_expect.rcode", "a drop has no ANSWER"),
+    ),
+    ("go_expect non-drop without an rcode", _go("rcode"), ("bad.json", "'good'", "go_expect.rcode", "missing")),
+    ("go_expect tc as a string", _go(tc="true"), ("bad.json", "'good'", "go_expect.tc")),
+    ("go_expect answer not a record", _go(answer=["x"]), ("bad.json", "'good'", "go_expect.answer[0]")),
 ]
 
 
@@ -884,14 +1002,18 @@ def test_the_loader_refuses_an_unreadable_document_as_a_fixture_error(
 
 
 @pytest.mark.parametrize(
-    "document",
-    ['{"schema": 1, "families": {"relay": "x"}}', '{"schema": 2, "families": {"relay": 7}}'],
-    ids=["schema", "source"],
+    ("document", "field"),
+    [
+        ('{"schema": 1, "families": {"relay": "x"}}', "schema"),
+        ('{"schema": 2, "families": {"relay": "x"}}', "schema"),
+        ('{"schema": 3, "families": {"relay": 7}}', "families.relay"),
+    ],
+    ids=["schema 1", "schema 2", "source"],
 )
-def test_the_loader_refuses_a_bad_families_index(tmp_path: Path, document: str) -> None:
+def test_the_loader_refuses_a_bad_families_index(tmp_path: Path, document: str, field: str) -> None:
     path = tmp_path / "families.json"
     path.write_text(document, encoding="utf-8")
-    with pytest.raises(FixtureError, match=r"families\.json"):
+    with pytest.raises(FixtureError, match=rf"families\.json: {re.escape(field)}:"):
         load_families(path)
 
 

@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters, so Python re's Unicode classes decide on them, and a leading .* crosses a newline octet (pins what a port to another regex engine must reproduce); case tags: R3 class escapes, R13 leading dot runs, R17 non-ASCII octets",
   "module": {
     "ini": {
@@ -83,6 +83,14 @@
         "rcode": "NOERROR",
         "answer": ["alias-caf.example. 3600 IN A 0.0.0.0"],
         "authority": []
+      },
+      "go_expect": {
+        "decision": "relay",
+        "forwards": ["alias-caf.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-caf.example. 300 IN CNAME caf\\233.example.", "caf\\233.example. 300 IN A 192.0.2.13"],
+        "authority": [],
+        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482"
       }
     },
     {
@@ -135,6 +143,14 @@
         "rcode": "NOERROR",
         "answer": ["alias-cak.example. 3600 IN A 0.0.0.0"],
         "authority": []
+      },
+      "go_expect": {
+        "decision": "relay",
+        "forwards": ["alias-cak.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-cak.example. 300 IN CNAME cak\\160.example.", "cak\\160.example. 300 IN A 192.0.2.17"],
+        "authority": [],
+        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482"
       }
     },
     {
@@ -148,6 +164,14 @@
         "rcode": "NOERROR",
         "answer": ["alias-cai.example. 300 IN CNAME cai\\233.example.", "cai\\233.example. 300 IN A 192.0.2.18"],
         "authority": []
+      },
+      "go_expect": {
+        "decision": "rewrite",
+        "forwards": ["alias-cai.example. A"],
+        "rcode": "NOERROR",
+        "answer": ["alias-cai.example. 3600 IN A 0.0.0.0"],
+        "authority": [],
+        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482"
       }
     },
     {

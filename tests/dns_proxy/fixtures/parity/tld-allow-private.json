@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "TLD Allow on with org and uk allowed and psl_allow_private on: a PRIVATE suffix is allowed whatever its root",
   "module": {
     "ini": {

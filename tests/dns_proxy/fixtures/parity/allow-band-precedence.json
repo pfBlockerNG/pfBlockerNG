@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "the six-band precedence: feed block 1 < feed allow 2 < $important block 3 < $important allow 4 < Custom_List block 5 < user whitelist/unlock 6, plus permit feeds, allow regex and re-attribution",
   "module": {
     "ini": {

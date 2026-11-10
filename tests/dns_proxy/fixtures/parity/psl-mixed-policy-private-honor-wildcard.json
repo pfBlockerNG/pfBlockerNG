@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "Wildcard Blocking on with PRIVATE recognition off, psl_feed_icann_policy = ignore loading the public-suffix list and psl_feed_private_policy = honor: a plain feed line at a PRIVATE suffix stays the zone the ICANN-only classifier makes of it",
   "module": {
     "ini": {

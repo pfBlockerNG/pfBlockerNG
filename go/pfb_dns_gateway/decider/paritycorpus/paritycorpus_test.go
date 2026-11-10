@@ -90,7 +90,7 @@ var rawValue = regexp.MustCompile(`"@raw:([^"]*)"`)
 // good is the smallest valid scenario; each hostile row below breaks one thing in a fresh copy of it.
 func good() *object {
 	return obj(
-		"schema", 2,
+		"schema", 3,
 		"description", "one unlisted name",
 		"module", obj(
 			"ini", obj("MAIN", obj("python_enable", "true")),
@@ -247,6 +247,48 @@ func TestTCTrueLoads(t *testing.T) {
 	}
 }
 
+const signoff = "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482"
+
+// withGoExpect gives good()'s case a go_expect that rewrites where its expect relays, without the keys drop, then
+// applies change to it.
+func withGoExpect(change func(g *object), drop ...string) func(d *object) {
+	return func(d *object) {
+		g := obj(
+			"decision", "rewrite",
+			"forwards", []any{"allowed.example. A"},
+			"rcode", "NOERROR",
+			"answer", []any{"allowed.example. 3600 IN A 0.0.0.0"},
+			"authority", []any{},
+			"signoff", signoff,
+		)
+		for _, key := range drop {
+			g.del(key)
+		}
+		if change != nil {
+			change(g)
+		}
+		caseZero(d).set("go_expect", g)
+	}
+}
+
+func TestACaseWithoutAGoExpectHasNone(t *testing.T) {
+	if c := loadGood(t, func(d *object) {}).Cases[0]; c.GoExpect != nil || c.Signoff != "" {
+		t.Errorf("got go_expect %+v, signoff %q; want none", c.GoExpect, c.Signoff)
+	}
+}
+
+func TestASignedGoExpectLoadsNextToAnUntouchedExpect(t *testing.T) {
+	c := loadGood(t, withGoExpect(nil)).Cases[0]
+	want := Expect{"rewrite", []string{"allowed.example. A"}, "NOERROR",
+		[]dnswire.RR{mustRR(t, "allowed.example. 3600 IN A 0.0.0.0")}, nil, false}
+	if c.GoExpect == nil || !reflect.DeepEqual(*c.GoExpect, want) {
+		t.Errorf("go_expect: got %+v, want %+v", c.GoExpect, want)
+	}
+	if c.Signoff != signoff || c.Expect.Decision != "relay" {
+		t.Errorf("got signoff %q and expect decision %q, want %q and relay", c.Signoff, c.Expect.Decision, signoff)
+	}
+}
+
 func TestAnUpstreamNullLoadsAsNoReplyAndAnEmptyListAsNoRecords(t *testing.T) {
 	s := loadGood(t, func(d *object) {
 		d.get("upstream").set("silent.example. A", nil)
@@ -286,17 +328,19 @@ type hostileRow struct {
 
 var hostile = []hostileRow{
 	{"schema 1, the old version", func(d *object) { d.set("schema", 1) }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 2, got 1", ""},
-	{"schema 3", func(d *object) { d.set("schema", 3) }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 2, got 3", ""},
-	{"schema as a string", func(d *object) { d.set("schema", "2") }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 2, got '2'", ""},
+		"bad.json: schema: must be the integer 3, got 1", ""},
+	{"schema 2, the version before go_expect", func(d *object) { d.set("schema", 2) }, []string{badFile, "schema"},
+		"bad.json: schema: must be the integer 3, got 2", ""},
+	{"schema 4", func(d *object) { d.set("schema", 4) }, []string{badFile, "schema"},
+		"bad.json: schema: must be the integer 3, got 4", ""},
+	{"schema as a string", func(d *object) { d.set("schema", "3") }, []string{badFile, "schema"},
+		"bad.json: schema: must be the integer 3, got '3'", ""},
 	{"schema missing", func(d *object) { d.del("schema") }, []string{badFile, "schema"},
 		"bad.json: schema: missing", ""},
 	{"schema true", func(d *object) { d.set("schema", true) }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 2, got True", ""},
-	{"schema 2.0", func(d *object) { d.set("schema", raw("2.0")) }, []string{badFile, "schema"},
-		"bad.json: schema: must be the integer 2, got 2.0", ""},
+		"bad.json: schema: must be the integer 3, got True", ""},
+	{"schema 3.0", func(d *object) { d.set("schema", raw("3.0")) }, []string{badFile, "schema"},
+		"bad.json: schema: must be the integer 3, got 3.0", ""},
 	// Deviation: Python's json reads NaN and the loader refuses it by name; Go's decoder refuses it as a syntax error.
 	{"NaN, which only Python reads", func(d *object) { d.get("module", "manifest").set("x", raw("NaN")) },
 		[]string{badFile, "not a readable JSON document"}, "", "bad.json: not a readable JSON document: "},
@@ -487,6 +531,64 @@ var hostile = []hostileRow{
 	{"upstream value a list of numbers", func(d *object) { d.set("upstream", obj("allowed.example. A", []any{7})) },
 		[]string{badFile, "upstream['allowed.example. A'][0]"},
 		"bad.json: upstream['allowed.example. A'][0]: must be a string, got 7", ""},
+	{"go_expect not an object", func(d *object) { caseZero(d).set("go_expect", "rewrite") },
+		[]string{badFile, "'good'", "go_expect", "must be a JSON object"},
+		"bad.json: case 'good': go_expect: must be a JSON object", ""},
+	{"go_expect an empty object", func(d *object) { caseZero(d).set("go_expect", obj()) },
+		[]string{badFile, "'good'", "go_expect.signoff", "missing"},
+		"bad.json: case 'good': go_expect.signoff: missing", ""},
+	{"go_expect with an unknown key", withGoExpect(func(g *object) { g.set("note", "x") }),
+		[]string{badFile, "'good'", "go_expect.note", "unknown key"},
+		"bad.json: case 'good': go_expect.note: unknown key", ""},
+	{"go_expect without a signoff", withGoExpect(nil, "signoff"),
+		[]string{badFile, "'good'", "go_expect.signoff", "missing"},
+		"bad.json: case 'good': go_expect.signoff: missing", ""},
+	{"signoff a number", withGoExpect(func(g *object) { g.set("signoff", 7) }),
+		[]string{badFile, "'good'", "go_expect.signoff", "must be a string"},
+		"bad.json: case 'good': go_expect.signoff: must be a string, got 7", ""},
+	{"signoff empty", withGoExpect(func(g *object) { g.set("signoff", "") }),
+		[]string{badFile, "'good'", "go_expect.signoff", "must not be empty"},
+		"bad.json: case 'good': go_expect.signoff: must not be empty", ""},
+	{"signoff on another site", withGoExpect(func(g *object) { g.set("signoff", "https://example.com/x") }),
+		[]string{badFile, "'good'", "go_expect.signoff"},
+		"bad.json: case 'good': go_expect.signoff: must start with 'https://github.com/pfBlockerNG/pfBlockerNG/issues/', got 'https://example.com/x'", ""},
+	{"signoff over http", withGoExpect(func(g *object) { g.set("signoff", "http://github.com/pfBlockerNG/pfBlockerNG/issues/1") }),
+		[]string{badFile, "'good'", "go_expect.signoff"},
+		"bad.json: case 'good': go_expect.signoff: must start with 'https://github.com/pfBlockerNG/pfBlockerNG/issues/', got 'http://github.com/pfBlockerNG/pfBlockerNG/issues/1'", ""},
+	{"signoff in another repository", withGoExpect(func(g *object) { g.set("signoff", "https://github.com/other/repo/issues/1") }),
+		[]string{badFile, "'good'", "go_expect.signoff"},
+		"bad.json: case 'good': go_expect.signoff: must start with 'https://github.com/pfBlockerNG/pfBlockerNG/issues/', got 'https://github.com/other/repo/issues/1'", ""},
+	{"signoff a relative path", withGoExpect(func(g *object) { g.set("signoff", "issues/3511") }),
+		[]string{badFile, "'good'", "go_expect.signoff"},
+		"bad.json: case 'good': go_expect.signoff: must start with 'https://github.com/pfBlockerNG/pfBlockerNG/issues/', got 'issues/3511'", ""},
+	{"go_expect equal to expect", func(d *object) {
+		g := append(slices.Clone(*caseZero(d).get("expect")), member{"signoff", signoff})
+		caseZero(d).set("go_expect", &g)
+	}, []string{badFile, "'good'", "go_expect:", "equals expect"},
+		"bad.json: case 'good': go_expect: equals expect, so it pins no Go-specific decision: remove it", ""},
+	{"go_expect equal to expect once parsed (tc spelled out)", func(d *object) {
+		g := append(slices.Clone(*caseZero(d).get("expect")), member{"tc", false}, member{"signoff", signoff})
+		caseZero(d).set("go_expect", &g)
+	}, []string{badFile, "'good'", "go_expect:", "equals expect"},
+		"bad.json: case 'good': go_expect: equals expect, so it pins no Go-specific decision: remove it", ""},
+	{"go_expect without a decision", withGoExpect(nil, "decision"),
+		[]string{badFile, "'good'", "go_expect.decision", "missing"},
+		"bad.json: case 'good': go_expect.decision: missing", ""},
+	{"go_expect with decision 'block'", withGoExpect(func(g *object) { g.set("decision", "block") }),
+		[]string{badFile, "'good'", "go_expect.decision"},
+		"bad.json: case 'good': go_expect.decision: unknown value 'block', expected one of answer drop relay rewrite", ""},
+	{"go_expect drop with an rcode", withGoExpect(func(g *object) { g.set("decision", "drop"); g.set("forwards", []any{}) }),
+		[]string{badFile, "'good'", "go_expect.rcode", "a drop has no ANSWER"},
+		"bad.json: case 'good': go_expect.rcode: unknown key: a drop has no ANSWER", ""},
+	{"go_expect non-drop without an rcode", withGoExpect(nil, "rcode"),
+		[]string{badFile, "'good'", "go_expect.rcode", "missing"},
+		"bad.json: case 'good': go_expect.rcode: missing", ""},
+	{"go_expect tc as a string", withGoExpect(func(g *object) { g.set("tc", "true") }),
+		[]string{badFile, "'good'", "go_expect.tc"},
+		"bad.json: case 'good': go_expect.tc: must be true or false, got 'true'", ""},
+	{"go_expect answer not a record", withGoExpect(func(g *object) { g.set("answer", []any{"x"}) }),
+		[]string{badFile, "'good'", "go_expect.answer[0]"},
+		"", "bad.json: case 'good': go_expect.answer[0]: rr_from_text rejects 'x': "},
 }
 
 func TestTheLoaderRefusesABadScenarioNamingFileCaseAndField(t *testing.T) {
@@ -580,7 +682,7 @@ func TestTheLoaderRefusesADocumentNestedPastTheCapAndReadsOneAtTheCap(t *testing
 
 	_, err = loadText(t, nestedSchema(t, depthCap))
 	got := refusalText(t, err)
-	if strings.Contains(got, "not a readable JSON document") || !strings.HasPrefix(got, "bad.json: schema: must be the integer 2, got [[") {
+	if strings.Contains(got, "not a readable JSON document") || !strings.HasPrefix(got, "bad.json: schema: must be the integer 3, got [[") {
 		t.Errorf("at the cap the JSON stage must pass and the schema field be what is refused: got %.120q", got)
 	}
 }
@@ -668,9 +770,10 @@ func TestTheLoaderRefusesEveryEscapeThatIsHalfOfNoSurrogatePairAndOnlyThose(t *t
 
 func TestTheLoaderRefusesABadFamiliesIndex(t *testing.T) {
 	for _, row := range []struct{ name, document, want string }{
-		{"schema", `{"schema": 1, "families": {"relay": "x"}}`, "families.json: schema: must be the integer 2, got 1"},
-		{"source", `{"schema": 2, "families": {"relay": 7}}`, "families.json: families.relay: must be a string, got 7"},
-		{"no family", `{"schema": 2, "families": {}}`, "families.json: families: must be a non-empty JSON object of family -> source branch"},
+		{"schema 1", `{"schema": 1, "families": {"relay": "x"}}`, "families.json: schema: must be the integer 3, got 1"},
+		{"schema 2", `{"schema": 2, "families": {"relay": "x"}}`, "families.json: schema: must be the integer 3, got 2"},
+		{"source", `{"schema": 3, "families": {"relay": 7}}`, "families.json: families.relay: must be a string, got 7"},
+		{"no family", `{"schema": 3, "families": {}}`, "families.json: families: must be a non-empty JSON object of family -> source branch"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "families.json")
@@ -687,7 +790,7 @@ func TestTheLoaderRefusesABadFamiliesIndex(t *testing.T) {
 
 func TestTheFamiliesComeBackInFileOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "families.json")
-	if err := os.WriteFile(path, []byte(`{"schema": 2, "families": {"zeta": "z branch", "alpha": "a branch"}}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema": 3, "families": {"zeta": "z branch", "alpha": "a branch"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	names, source, err := LoadFamilies(path)

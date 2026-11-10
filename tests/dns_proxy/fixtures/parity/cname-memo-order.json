@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "a whitelisted alias of a blocked target, queried after the target itself was: the target's memoized block is re-evaluated in the alias's CNAME context, so the alias is relayed (issue #3222); the reverse order, alias first, is deliberately not pinned (open bug #3775)",
   "module": {
     "ini": {

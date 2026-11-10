@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "python_cname off: blocking still works, but a CNAME chain's targets are not checked",
   "module": {
     "ini": {
