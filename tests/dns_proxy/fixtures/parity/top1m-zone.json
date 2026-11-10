@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "TOP1M on, Wildcard Blocking on: plain feed registrable domains become zones; a marked Group's zone yields for names TOP1M lists, to the last unmarked writer of the same key",
   "module": {
     "ini": {

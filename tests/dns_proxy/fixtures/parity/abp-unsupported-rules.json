@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "ABP lines outside DNS scope are skipped, so the name they mention resolves; one plain ||d^ line proves the feed loaded",
   "module": {
     "ini": {

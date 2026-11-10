@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "python_control_legacy on but python_control not set (off by default): the legacy branch is entered but obeys no command",
   "module": {
     "ini": {

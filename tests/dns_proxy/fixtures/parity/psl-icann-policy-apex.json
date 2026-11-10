@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "feed entries at an ICANN public suffix under psl_feed_icann_policy = apex (Wildcard Blocking off; the policy needs the PSL on its own)",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "Wildcard Blocking on and PRIVATE suffixes recognised: pages.com is a public suffix, so evil.pages.com is the registrable domain",
   "module": {
     "ini": {

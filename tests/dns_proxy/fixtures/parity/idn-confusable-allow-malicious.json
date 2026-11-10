@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "IDN mode Confusable with python_idn_block_malicious off: the malicious homoglyph only alerts and resolves",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "python_hsts on with bank.example preloaded: a VIP block of an HSTS name is a null block, an NXDOMAIN block stays NXDOMAIN",
   "module": {
     "ini": {

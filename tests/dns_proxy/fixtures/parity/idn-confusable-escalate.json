@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "IDN mode Confusable with python_idn_escalate_suspicious on: the suspicious name is blocked too",
   "module": {
     "ini": {

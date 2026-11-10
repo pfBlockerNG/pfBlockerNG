@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "user whitelist against plain feed blocks; no ABP @@, $important or regex line, so the fast path (important_rules off) decides",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "psl_feed_private_policy = ignore loads the public-suffix list and psl_feed_icann_policy stays honor: an ICANN suffix entry is kept as listed while a PRIVATE suffix entry is dropped (Wildcard Blocking off)",
   "module": {
     "ini": {

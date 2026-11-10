@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "Frontend.resolve's decisions before the module runs: the header guards, the module's gate, Unbound's silence, and the UDP and stream size limits",
   "module": {
     "ini": {

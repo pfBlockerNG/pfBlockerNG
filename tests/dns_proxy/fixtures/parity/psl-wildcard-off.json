@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "Wildcard Blocking off, no feed-at-suffix policy: plain feed lines are exact entries, a listed name is blocked and its subdomain resolves (the control for psl-wildcard-on)",
   "module": {
     "ini": {

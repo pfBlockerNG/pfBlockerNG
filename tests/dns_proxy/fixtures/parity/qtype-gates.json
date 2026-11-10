@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "every other query type the DNSBL validates (NS, SRV, DNAME, SIG, SVCB, PTR; core.json pins MX, TXT, CNAME, HTTPS): a blocked name answers NODATA with the SOA instead of being relayed",
   "module": {
     "ini": {

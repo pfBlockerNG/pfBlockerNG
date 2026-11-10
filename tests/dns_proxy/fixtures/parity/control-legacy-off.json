@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "python_control on but python_control_legacy not set (off by default): the legacy DNS-TXT control branch is inert, nothing is obeyed",
   "module": {
     "ini": {
