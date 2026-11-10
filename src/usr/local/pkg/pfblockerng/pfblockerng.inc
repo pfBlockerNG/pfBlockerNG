@@ -9763,7 +9763,7 @@ function pfb_software_notice_text(string $latest, ?string $channel, ?string $not
 	if ($shown === []) {
 		return $base;
 	}
-	$more = max(0, $total - count($shown));
+	$more = $total - count($shown);
 
 	$lines = [$base, $header];
 	foreach ($shown as $entry) {
@@ -9781,8 +9781,8 @@ function pfb_software_notice_text(string $latest, ?string $channel, ?string $not
  *
  * Order is deliberate:
  *   1. Resolve installed name + version. These can be injected for unit tests via
- *      $io ['installed_name','installed','installed_repo','latest','notes']; absent keys fall
- *      through to the live pfb_pkg_*() shellout.
+ *      $io ['installed_name','installed','installed_repo','latest','notes','fetch_notes'];
+ *      absent keys fall through to the live pfb_pkg_*() shellout.
  *   2. PROVENANCE GATE FIRST: gate on pfb_software_provenance_ok() — the SAME predicate
  *      that decides whether the Software PAGE is displayable (our-repo install, honouring
  *      the hidden CI/support override) — so a build that cannot show the page never runs
@@ -9940,8 +9940,10 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null, ?bool
 	if (pfb_should_notify($installed, $latest, $last_notified, $enabled)) {
 		if (array_key_exists('notes', $io)) {
 			$notes = is_string($io['notes']) ? $io['notes'] : null;
-		} elseif ($io === array()) {
-			$notes = pfb_software_fetch_notes(pfb_software_notes_url(pfb_software_repo_url($repo)));
+		} elseif ($io === array() || isset($io['fetch_notes'])) {
+			$fetch = $io['fetch_notes'] ?? 'pfb_software_fetch_notes';
+			$fetched = $fetch(pfb_software_notes_url(pfb_software_repo_url($repo)));
+			$notes = is_string($fetched) ? $fetched : null;
 		} else {
 			$notes = null;
 		}

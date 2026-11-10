@@ -334,6 +334,7 @@ final class SoftwareUpdateNoticeTextTest extends TestCase
 			'empty tag'            => [self::json(self::releaseDoc(['link' => ['kind' => 'release', 'tag' => '']]))],
 			'tag of 65 characters' => [self::json(self::releaseDoc(['link' => ['kind' => 'release', 'tag' => '1' . str_repeat('a', 64)]]))],
 			'link missing'         => [self::json(self::releaseDoc(['link' => null]))],
+			'tag trailing newline' => [self::json(self::releaseDoc(['link' => ['kind' => 'release', 'tag' => "v3.3.14\n"]]))],
 		];
 	}
 
@@ -351,6 +352,10 @@ final class SoftwareUpdateNoticeTextTest extends TestCase
 			'6-hex from'      => [self::json(self::releaseDoc(['link' => ['kind' => 'compare', 'from' => 'abcdef', 'to' => 'fedcba9']]))],
 			'41-hex from'     => [self::json(self::releaseDoc(['link' => ['kind' => 'compare', 'from' => str_repeat('a', 41), 'to' => 'fedcba9']]))],
 			'to missing'      => [self::json(self::releaseDoc(['link' => ['kind' => 'compare', 'from' => $hex40, 'to' => null]]))],
+			'to not hex'      => [self::json(self::releaseDoc(['link' => ['kind' => 'compare', 'from' => 'abcdef1', 'to' => 'ZZZ']]))],
+			'to upper-case'   => [self::json(self::releaseDoc(['link' => ['kind' => 'compare', 'from' => 'abcdef1', 'to' => 'FEDCBA9']]))],
+			'to newline'      => [self::json(self::releaseDoc(['link' => ['kind' => 'compare', 'from' => 'abcdef1', 'to' => "fedcba9\n"]]))],
+			'from newline'    => [self::json(self::releaseDoc(['link' => ['kind' => 'compare', 'from' => "abcdef1\n", 'to' => 'fedcba9']]))],
 		];
 	}
 

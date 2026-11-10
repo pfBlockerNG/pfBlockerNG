@@ -875,4 +875,80 @@ final class SoftwareUpdateCheckTest extends TestCase
 		pfb_software_update_check(false, $io);
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 2: still one notice (de-duped)');
 	}
+
+	/**
+	 * Given a page-displayable build with an update available and an injected notes fetcher,
+	 * When two ticks run at the same latest,
+	 * Then the fetcher runs once, on the tick that raises the notice, and the notice carries the notes.
+	 */
+	public function testFetcherRunsOnlyOnTheTickThatNotifies(): void
+	{
+		$this->setCheck('on');
+		$calls = 0;
+		$io = $this->ourBuildIo('3.2.0_1', '3.2.0_9') + [
+			'fetch_notes' => function (string $url) use (&$calls): ?string {
+				$calls++;
+				return $this->notesFor('3.2.0_9');
+			},
+		];
+		$this->assertSame(0, $calls, 'before: the fetcher has not run');
+
+		pfb_software_update_check(false, $io);
+
+		$this->assertSame(1, $calls, 'tick 1: the fetcher runs once for the newly notified version');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 1: exactly one notice');
+		$this->assertStringContainsString("What's new:", $GLOBALS['pfb_test_file_notices'][0]['notice'], 'tick 1: the notice carries the notes');
+
+		pfb_software_update_check(false, $io);
+
+		$this->assertSame(1, $calls, 'tick 2: de-duped, so no second fetch');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 2: still one notice');
+	}
+
+	/**
+	 * Given the installed build already runs the latest version,
+	 * When the check runs with an injected notes fetcher,
+	 * Then the fetcher never runs, because there is no notice to enrich.
+	 */
+	public function testFetcherNotCalledWhenNoUpdateIsAvailable(): void
+	{
+		$this->setCheck('on');
+		$calls = 0;
+		$io = $this->ourBuildIo('3.2.0_9', '3.2.0_9') + [
+			'fetch_notes' => function (string $url) use (&$calls): ?string {
+				$calls++;
+				return $this->notesFor('3.2.0_9');
+			},
+		];
+		$this->assertSame(0, $calls, 'before: the fetcher has not run');
+
+		pfb_software_update_check(false, $io);
+
+		$this->assertSame(0, $calls, 'after: no update available, so no fetch');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice');
+	}
+
+	/**
+	 * Given a fetcher that returns something other than a string,
+	 * When the update notice is raised,
+	 * Then the fetcher is consulted and the notice keeps its one-line form.
+	 */
+	public function testNonStringFetchResultKeepsBaseLine(): void
+	{
+		$this->setCheck('on');
+		$calls = 0;
+		$io = $this->ourBuildIo('3.2.0_1', '3.2.0_9') + [
+			'fetch_notes' => function (string $url) use (&$calls) {
+				$calls++;
+				return ['schema' => 1];
+			},
+		];
+		$this->assertSame(0, $calls, 'before: the fetcher has not run');
+
+		pfb_software_update_check(false, $io);
+
+		$this->assertSame(1, $calls, 'the injected fetcher is consulted for the newly notified version');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'exactly one notice');
+		$this->assertSame('pfBlockerNG 3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice'], 'a non-string fetch result keeps the base line');
+	}
 }
