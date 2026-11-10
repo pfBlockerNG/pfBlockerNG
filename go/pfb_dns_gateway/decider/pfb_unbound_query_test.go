@@ -51,12 +51,12 @@ type queryFixture struct {
 }
 
 type queryStep struct {
-	Op     string  `json:"op"`
-	Text   string  `json:"text"`
-	B64    string  `json:"b64"`
-	Reply  *string `json:"reply"`
-	Mode   *string `json:"mode"`
-	Stderr string  `json:"stderr"`
+	Op      string  `json:"op"`
+	Text    string  `json:"text"`
+	B64     string  `json:"b64"`
+	Reply   *string `json:"reply"`
+	Mode    *string `json:"mode"`
+	PyError string  `json:"py_error"`
 }
 
 type queryScenario struct {

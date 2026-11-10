@@ -36,7 +36,7 @@ func TestQueryChannelMatchesPythonOracle(t *testing.T) {
 				label := fmt.Sprintf("step %d %s %.60q", i, step.Op, step.Text+step.B64)
 				queryApply(t, channel, step)
 				logs.Reset()
-				drainPyError()
+				takePyError()
 				queryDrain(t, w)
 
 				var got *string
@@ -57,10 +57,12 @@ func TestQueryChannelMatchesPythonOracle(t *testing.T) {
 				case step.Mode != nil && mode != *step.Mode:
 					t.Errorf("%s: reply mode = %s, want %s", label, mode, *step.Mode)
 				}
-				// Python's sys.stderr is py_error.log, so what the oracle captured on it is that file's rows, and the process
+				// Python's sys.stderr is the py_error.log logger, which does not log a message equal to the one before it, so the
+				// oracle recorded the rows that file got, and the suppression state runs on from step to step. The process
 				// stderr stays empty.
-				if want := strings.ReplaceAll(step.Stderr, "<dir>", dir); drainPyError() != want || logs.Len() != 0 {
-					t.Errorf("%s: py_error.log lacks %q or the process stderr holds %q", label, want, logs.String())
+				want := strings.ReplaceAll(step.PyError, "<dir>", dir)
+				if got := takePyError(); got != want || logs.Len() != 0 {
+					t.Errorf("%s: py_error.log rows = %q, want %q; process stderr = %q", label, got, want, logs.String())
 				}
 				for _, leftover := range []string{reply + ".tmp", m.pfb.pfbPyQueryReply + ".tmp"} {
 					if _, err := os.Lstat(leftover); err == nil {

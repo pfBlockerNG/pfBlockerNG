@@ -75,6 +75,9 @@ func touch(path string) error {
 // pyStderr is sys.stderr.write(msg): msg is exactly what Python writes, with its trailing newline where it has one (it
 // takes part in the comparison with the message before). Without a redirect it is a line of the process stderr, as
 // logErr writes it: the standalone reply log, which Python never redirects, and a module that is not booted yet.
+// The mutex is held across the file write on purpose: the comparison with the message before, the update of it and the append
+// are one step, so concurrent writers cannot reorder rows against it or log a repeat (Python's logging handler lock covers the
+// same write). A repeat returns before any I/O, and the callers are the module's error paths.
 func pyStderr(msg string) {
 	stderrRedirect.mu.Lock()
 	defer stderrRedirect.mu.Unlock()

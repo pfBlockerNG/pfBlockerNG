@@ -1,19 +1,21 @@
 # Records what pfb_unbound.py (CPython 3.11) answers on the ADR-65 query channel for the scenarios
 # pfb_unbound_query_test.go describes: the SHIPPED pfb_query_watcher runs on its own thread over a temp channel, each
 # step rewrites the channel (or breaks it), waits until the watcher has finished with it and freezes the bytes of the
-# reply file it left (null: none), its mode and what it wrote to stderr.
+# reply file it left (null: none), its mode and the rows it left in py_error.log: the module's sys.stderr is the logger
+# init_standard installs, so its lines are run as shipped (see shipped_stderr_logger) and a message equal to the one
+# before it is not logged again.
 # Run from the repo root: uv run python go/pfb_dns_gateway/decider/testdata/gen_pfb_unbound_query_oracle.py
 # It rewrites testdata/pfb_unbound_query_oracle.json.
 import base64
 import builtins
-import contextlib
-import io
 import json
+import logging
 import os
 import re
 import shutil
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -407,6 +409,25 @@ class Harness:
         os.replace(tmp, self.channel)
 
 
+SHIPPED = Path(P.__file__)
+STDERR_START = "    # Store previous error message to avoid repeating\n"
+STDERR_END = '    sys.stderr = log_stderr(logging.getLogger("pfb_stderr"))\n'
+ROW = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\|ERROR\| ", re.M)
+
+
+def shipped_stderr_logger(logfile):
+    """Points sys.stderr at init_standard's own logger lines, cut out of the shipped source, over logfile."""
+    lines = SHIPPED.read_text().splitlines(keepends=True)
+    body = textwrap.dedent("".join(lines[lines.index(STDERR_START) : lines.index(STDERR_END) + 1]))
+    body = body.replace('"/var/log/pfblockerng/py_error.log"', repr(logfile))
+    assert logfile in body, "the log file name is no longer where the generator looks for it"
+    for handler in logging.root.handlers[:]:  # basicConfig is a no-op once the root logger has a handler
+        logging.root.removeHandler(handler)
+        handler.close()
+    scope = {"pfb": {}, "pfb_async": lambda func, *args: func(*args), "logging": logging, "os": os, "sys": sys}
+    exec(body, scope)  # noqa: S102 - the shipped init_standard lines, nothing else
+
+
 def run_scenario(name, fixture_name, reply_mode, steps):
     install(FIXTURES[fixture_name])
     with tempfile.TemporaryDirectory(prefix="pfbquery") as tmp:
@@ -423,20 +444,25 @@ def run_scenario(name, fixture_name, reply_mode, steps):
         thread = threading.Thread(name="pfb_query_watcher_oracle", target=P.pfb_query_watcher, daemon=True)
         thread.start()
         out = []
+        logfile = os.path.join(tmp, "py_error.log")
+        saved = sys.stderr
         try:
+            shipped_stderr_logger(logfile)
             for step in steps:
-                err = io.StringIO()
-                with contextlib.redirect_stderr(err):
-                    if step["op"] == "text":
-                        h.put(step["text"].encode("utf-8"))
-                    elif step["op"] == "bytes":
-                        h.put(base64.b64decode(step["b64"]))
-                    elif step["op"] == "dir":
-                        h.clear_channel()
-                        os.mkdir(h.channel)
-                    else:
-                        h.clear_channel()
-                    h.settle()
+                with open(logfile, "rb") as fh:
+                    before = len(fh.read())
+                if step["op"] == "text":
+                    h.put(step["text"].encode("utf-8"))
+                elif step["op"] == "bytes":
+                    h.put(base64.b64decode(step["b64"]))
+                elif step["op"] == "dir":
+                    h.clear_channel()
+                    os.mkdir(h.channel)
+                else:
+                    h.clear_channel()
+                h.settle()
+                with open(logfile, "rb") as fh:
+                    rows = fh.read()[before:].decode("utf-8")
                 row = dict(step)
                 row["reply"] = row["mode"] = None
                 if reply_mode == "ok" and os.path.exists(h.reply):
@@ -446,9 +472,10 @@ def run_scenario(name, fixture_name, reply_mode, steps):
                     os.unlink(h.reply)
                 for leftover in (h.reply + ".tmp", reply_path + ".tmp"):
                     assert not os.path.exists(leftover), leftover
-                row["stderr"] = err.getvalue().replace(tmp, "<dir>")
+                row["py_error"] = ROW.sub("", rows).replace(tmp, "<dir>")
                 out.append(row)
         finally:
+            sys.stderr = saved
             P.pfb_query_stop.set()
             thread.join(10)
             assert not thread.is_alive()

@@ -142,7 +142,7 @@ func TestAnUnwritablePyErrorLogFallsBackToTheProcessStderrWithOneLine(t *testing
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(path, 0o700); err != nil { // a directory where the file was: no user can append to it
+	if err := os.Mkdir(path, 0o700); err != nil { // a directory where the file was: opening it for append fails (EISDIR) for every user, root included
 		t.Fatal(err)
 	}
 	pyStderr("[pfBlockerNG]: one")
@@ -158,15 +158,22 @@ func TestAnUnwritablePyErrorLogFallsBackToTheProcessStderrWithOneLine(t *testing
 	}
 }
 
-// drainPyError is what the modules of these tests (they all log to testLogDir) wrote to py_error.log since the last drain,
-// each row without its asctime and level. It empties the file and forgets the message before, as a freshly booted module
-// has it, so that the same message written again is written again.
-func drainPyError() string {
+// takePyError is what the modules of these tests (they all log to testLogDir) wrote to py_error.log since the last take,
+// each row without its asctime and level. It empties the file and leaves the message before as it is: a module that
+// writes the same message again writes no second row, as in Python.
+func takePyError() string {
 	path := filepath.Join(testLogDir, pyErrorLogName)
 	raw, _ := os.ReadFile(path)
 	_ = os.Truncate(path, 0)
+	return regexp.MustCompile(`(?m)^`+rowTime+`\|ERROR\| `).ReplaceAllString(string(raw), "")
+}
+
+// drainPyError is takePyError, and forgets the message before as a freshly booted module has it, so that the same message
+// written again is written again.
+func drainPyError() string {
+	rows := takePyError()
 	stderrRedirect.mu.Lock()
 	stderrRedirect.last = ""
 	stderrRedirect.mu.Unlock()
-	return regexp.MustCompile(`(?m)^`+rowTime+`\|ERROR\| `).ReplaceAllString(string(raw), "")
+	return rows
 }
