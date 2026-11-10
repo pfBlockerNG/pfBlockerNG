@@ -20,8 +20,8 @@ import (
 // shortcut: Go has no "DNS Reply logging is off, serving without it" path, because nothing in this setup can fail (the
 // log files open at their first row; an unwritable directory is the pipeline's one "Failed to write" line), add that path
 // when the setup gains a step that can fail.
-func openReplyLog() *pfbUnbound {
-	m := &pfbUnbound{rcodeDB: rcodeNames(), regexRuntime: newRegexRuntime(), decisionDB: newLruCache[*decision](1)}
+func openReplyLog(logDir string) *pfbUnbound {
+	m := &pfbUnbound{rcodeDB: rcodeNames(), regexRuntime: newRegexRuntime(), decisionDB: newLruCache[*decision](1), logDir: logDir}
 	m.pfb.pythonReply = true
 	m.openMaxmind() // python_maxmind: on when the database is installed and opens
 	// no noAAAA, no lists: the row writer reads the switch and the GeoIP flag of the one snapshot

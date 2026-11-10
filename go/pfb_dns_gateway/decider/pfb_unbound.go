@@ -266,8 +266,8 @@ func mainOptionError(option string, err error) error {
 
 // initStandard builds the module from the ini and the files in moduleDir. An error is what makes init_standard
 // raise in Python: a MAIN value that is no boolean, or an interpolation error in a value that is read.
-func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
-	m := &pfbUnbound{regexRuntime: newRegexRuntime(), readFile: os.ReadFile}
+func initStandard(id int, moduleDir, logDir string) (*pfbUnbound, error) {
+	m := &pfbUnbound{regexRuntime: newRegexRuntime(), readFile: os.ReadFile, logDir: logDir}
 	// scratch collects the strata the loaders below fill; it becomes the module's first snapshot at the end.
 	scratch := newSnapshot()
 	pfb := &m.pfb

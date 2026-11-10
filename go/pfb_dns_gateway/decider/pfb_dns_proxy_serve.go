@@ -14,6 +14,7 @@ type Options struct {
 	NoModule  bool   // boot no module: every query is forwarded (Python --no-module)
 	ReplyLog  bool   // with NoModule: log each relayed reply to dns_reply.log (Python --reply-log)
 	Observer  bool   // listen for pfb_upstream_observer.py's reports on <ModuleDir>/pfb_upstream.sock
+	LogDir    string // where the module and the reply log write dnsbl.log and dns_reply.log; empty is /var/log/pfblockerng
 }
 
 // Open boots the decider: the module (unless NoModule), then the reply log (ReplyLog), then the observer socket
@@ -30,13 +31,13 @@ func Open(opts Options) (*Frontend, error) {
 	var module *pfbUnbound
 	if !opts.NoModule {
 		var err error
-		if module, err = boot(opts.ModuleDir); err != nil {
+		if module, err = boot(opts.ModuleDir, opts.LogDir); err != nil {
 			return nil, err
 		}
 	}
 	f := newFrontend(module)
 	if opts.ReplyLog {
-		f.replyLog = openReplyLog()
+		f.replyLog = openReplyLog(opts.LogDir)
 	}
 	if opts.Observer {
 		// before the gateway serves: it serves only once the module can hear Unbound

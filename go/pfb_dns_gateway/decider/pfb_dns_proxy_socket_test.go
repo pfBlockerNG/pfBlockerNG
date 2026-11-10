@@ -80,7 +80,7 @@ func socketFrontend(t *testing.T, dir string) (*Frontend, string, *lockedLog) {
 	logDir := t.TempDir()
 	withLogDir(t, logDir)
 	log := captureLockedLog(t)
-	f := openOK(t, Options{ModuleDir: dir, Observer: true})
+	f := openOK(t, Options{LogDir: testLogDir, ModuleDir: dir, Observer: true})
 	if f.observer == nil {
 		t.Fatalf("no observer socket; log = %q", log.String())
 	}
@@ -118,7 +118,7 @@ func TestObserverSocketReplacesAStaleOne(t *testing.T) {
 		t.Fatalf("stale socket not set up: %v, %v", before, err)
 	}
 	log := captureLockedLog(t)
-	f := openOK(t, Options{ModuleDir: dir, Observer: true})
+	f := openOK(t, Options{LogDir: testLogDir, ModuleDir: dir, Observer: true})
 	after, err := os.Lstat(observerPath(dir))
 	if err != nil || f.observer == nil {
 		t.Fatalf("lstat = (%v, %v), observer = %v; log = %q", after, err, f.observer, log.String())
@@ -155,7 +155,7 @@ func TestObserverSocketLeavesAnythingThatIsNotASocketAloneAndServesWithoutIt(t *
 			t.Fatal(err)
 		}
 		log := captureLockedLog(t)
-		f := openOK(t, Options{ModuleDir: dir, Observer: true})
+		f := openOK(t, Options{LogDir: testLogDir, ModuleDir: dir, Observer: true})
 		after, err := os.Lstat(path)
 		if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
 			t.Errorf("%s: left alone? lstat = (%v, %v), was %v", name, after, err, before)
@@ -205,7 +205,7 @@ func TestObserverSocketOnlyAppearsAtItsPathAsARestrictedSocket(t *testing.T) {
 		return previous(oldpath, newpath)
 	}
 	umask := syscall.Umask(0)
-	f, err := Open(Options{ModuleDir: dir, Observer: true})
+	f, err := Open(Options{LogDir: testLogDir, ModuleDir: dir, Observer: true})
 	syscall.Umask(umask)
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestObserverSocketPublishNeverReplacesWhatAppearsAtItsPathAfterTheLstat(t *
 		return previous(oldpath, newpath)
 	}
 	log := captureLockedLog(t)
-	f := openOK(t, Options{ModuleDir: dir, Observer: true})
+	f := openOK(t, Options{ModuleDir: dir, LogDir: testLogDir, Observer: true})
 
 	if got, err := os.ReadFile(path); err != nil || string(got) != "not mine" {
 		t.Errorf("the file that appeared at %s = (%q, %v), want it left byte for byte", path, got, err)
@@ -429,7 +429,7 @@ func TestObserverSocketRecoversAPanicOfTheReportHandlerAndProcessesTheNextReport
 	withLogDir(t, logDir)
 	log := captureLockedLog(t)
 	logOutput = &gatedLog{lockedLog: log, match: "malformed upstream report", panics: true}
-	f := openOK(t, Options{ModuleDir: dir, Observer: true})
+	f := openOK(t, Options{ModuleDir: dir, LogDir: testLogDir, Observer: true})
 	if f.observer == nil {
 		t.Fatalf("no observer socket; log = %q", log.String())
 	}
@@ -451,7 +451,7 @@ func TestObserverSocketCloseGivesUpOnAStuckReaderAfterTheBound(t *testing.T) {
 	log := captureLockedLog(t)
 	gate := &gatedLog{lockedLog: log, match: "malformed upstream report", entered: make(chan struct{}), release: make(chan struct{})}
 	logOutput = gate
-	f := openOK(t, Options{ModuleDir: dir, Observer: true})
+	f := openOK(t, Options{ModuleDir: dir, LogDir: testLogDir, Observer: true})
 	t.Cleanup(func() { close(gate.release) }) // runs before Close's own cleanup: the stuck reader ends first
 
 	mustSend(t, dir, []byte("not json"))

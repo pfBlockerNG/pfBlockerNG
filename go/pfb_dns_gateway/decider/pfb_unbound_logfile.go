@@ -17,8 +17,8 @@ import (
 // logQueueMaxsize is PFB_LOG_QUEUE_MAXSIZE.
 const logQueueMaxsize = 5000
 
-// pfbLogDir is where the module's logs live (PFB_LOG_FILES); a variable so that tests never write the real ones.
-var pfbLogDir = "/var/log/pfblockerng"
+// defaultLogDir is where the module's logs live (PFB_LOG_FILES) unless Options.LogDir says otherwise.
+const defaultLogDir = "/var/log/pfblockerng"
 
 // logRetrySleep is _log_entry_direct's pause between attempts.
 var logRetrySleep = time.Sleep
@@ -254,7 +254,7 @@ func logEntryDirect(line, log string) {
 func (m *pfbUnbound) logPath(name string) string {
 	dir := m.logDir
 	if dir == "" {
-		dir = pfbLogDir
+		dir = defaultLogDir
 	}
 	return filepath.Join(dir, name)
 }
@@ -277,7 +277,6 @@ func (m *pfbUnbound) pfbSetupLogging() {
 	if m.logs != nil {
 		return
 	}
-	m.logDir = pfbLogDir
 	m.logs = newLogPipeline([]string{m.logPath(dnsblLogName), m.logPath(dnsReplyLogName)}, logQueueMaxsize)
 }
 

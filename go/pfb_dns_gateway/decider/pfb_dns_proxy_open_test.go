@@ -62,7 +62,7 @@ func openOK(t *testing.T, opts Options) *Frontend {
 
 func TestOpenBootsTheModuleAndResolveAsksIt(t *testing.T) {
 	rlQuietLog(t)
-	f := openOK(t, Options{ModuleDir: moduleDir(t)})
+	f := openOK(t, Options{LogDir: testLogDir, ModuleDir: moduleDir(t)})
 	if f.module == nil {
 		t.Fatal("Open booted no module")
 	}
@@ -74,7 +74,7 @@ func TestOpenBootsTheModuleAndResolveAsksIt(t *testing.T) {
 
 func TestOpenReturnsTheBootErrorAndLeavesNothingRunning(t *testing.T) {
 	dir := modIniDir(t, "[MAIN]\npython_enable = banana\n")
-	f, err := Open(Options{ModuleDir: dir, Observer: true})
+	f, err := Open(Options{LogDir: testLogDir, ModuleDir: dir, Observer: true})
 	if err == nil || f != nil || !strings.Contains(err.Error(), "python_enable") {
 		t.Fatalf("Open with a module that cannot initialise = (%v, %v), want (nil, an error naming python_enable)", f, err)
 	}
@@ -84,7 +84,7 @@ func TestOpenReturnsTheBootErrorAndLeavesNothingRunning(t *testing.T) {
 }
 
 func TestOpenWithNoModuleBootsNoModuleAndNeedsNoModuleDir(t *testing.T) {
-	f := openOK(t, Options{NoModule: true})
+	f := openOK(t, Options{LogDir: testLogDir, NoModule: true})
 	if f.module != nil || f.replyLog != nil || f.observer != nil {
 		t.Errorf("Open(NoModule) = module %v, reply log %v, observer %v, want none of them", f.module, f.replyLog, f.observer)
 	}
@@ -96,8 +96,8 @@ func TestOpenRejectsTheFlagCombinationsTheCLIRejects(t *testing.T) {
 		opts Options
 		want string
 	}{
-		"the reply log without NoModule": {Options{ModuleDir: "unused", ReplyLog: true}, "--reply-log needs --no-module"},
-		"the observer with NoModule":     {Options{NoModule: true, Observer: true}, "--observer cannot be used with --no-module"},
+		"the reply log without NoModule": {Options{LogDir: testLogDir, ModuleDir: "unused", ReplyLog: true}, "--reply-log needs --no-module"},
+		"the observer with NoModule":     {Options{LogDir: testLogDir, NoModule: true, Observer: true}, "--observer cannot be used with --no-module"},
 	} {
 		f, err := Open(tc.opts)
 		if err == nil || f != nil || !strings.Contains(err.Error(), tc.want) {
@@ -112,8 +112,8 @@ func TestOpenRejectsTheFlagCombinationsTheCLIRejects(t *testing.T) {
 // is the proxy's SERVFAIL. Everything before that is the module path's, so each case is asked of both and must agree.
 func TestNoModuleAnswersWhatTheModulePathAnswersWhereNoModuleDecides(t *testing.T) {
 	rlQuietLog(t)
-	bare := openOK(t, Options{NoModule: true})
-	withModule := openOK(t, Options{ModuleDir: moduleDir(t)})
+	bare := openOK(t, Options{LogDir: testLogDir, NoModule: true})
+	withModule := openOK(t, Options{LogDir: testLogDir, ModuleDir: moduleDir(t)})
 	twoQuestions := encode(t, &dnswire.Message{ID: 7, Flags: dnswire.RD, Questions: append(question(allowed, dnswire.CLASS_IN), question("other.example.", dnswire.CLASS_IN)...)})
 	chaos := encode(t, &dnswire.Message{ID: 8, Flags: dnswire.RD, Questions: question(allowed, 3)})
 	good := queryWire(t, allowed, dnswire.RD)
@@ -160,7 +160,7 @@ func TestNoModuleAnswersWhatTheModulePathAnswersWhereNoModuleDecides(t *testing.
 }
 
 func TestNoModuleRelaysUnboundsReplyAsItIs(t *testing.T) {
-	f := openOK(t, Options{NoModule: true})
+	f := openOK(t, Options{LogDir: testLogDir, NoModule: true})
 	wire := queryWire(t, allowed, dnswire.RD)
 	reply := replyTo(t, wire, 0, aRecord(allowed, 300, 77))
 	if got := f.Resolve(wire, testClient, answering(reply).forward, "UDP", "", ""); !bytes.Equal(got, reply) {
@@ -170,7 +170,7 @@ func TestNoModuleRelaysUnboundsReplyAsItIs(t *testing.T) {
 
 func TestNoModuleAnswersServfailWhenUnboundIsSilentAndSaysSoOnce(t *testing.T) {
 	log := captureLog(t)
-	f := openOK(t, Options{NoModule: true})
+	f := openOK(t, Options{LogDir: testLogDir, NoModule: true})
 	wire := queryWire(t, allowed, dnswire.RD)
 	for range 3 {
 		reply := f.Resolve(wire, testClient, (&recorder{}).forward, "UDP", "", "")
@@ -188,7 +188,7 @@ func TestNoModuleAnswersServfailWhenUnboundIsSilentAndSaysSoOnce(t *testing.T) {
 func TestResolveIsSafeForConcurrentUseWithAndWithoutTheModule(t *testing.T) {
 	rlQuietLog(t)
 	for name, opts := range map[string]Options{
-		"with the module": {ModuleDir: moduleDir(t)},
+		"with the module": {ModuleDir: moduleDir(t), LogDir: testLogDir},
 		"no module":       {NoModule: true},
 	} {
 		f := openOK(t, opts)
@@ -256,7 +256,7 @@ func TestTheFrontendsOtherLatchesAreSafeForConcurrentUseAndLetOneLineThrough(t *
 
 func TestCloseDeinitsTheModuleOnceAndASecondCloseDoesNothing(t *testing.T) {
 	log := captureLockedLog(t)
-	f, err := Open(Options{ModuleDir: moduleDir(t)})
+	f, err := Open(Options{LogDir: testLogDir, ModuleDir: moduleDir(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestCloseDeinitsTheModuleOnceAndASecondCloseDoesNothing(t *testing.T) {
 }
 
 func TestCloseOfADeciderWithNoModuleIsANoOp(t *testing.T) {
-	f, err := Open(Options{NoModule: true})
+	f, err := Open(Options{LogDir: testLogDir, NoModule: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -65,7 +65,7 @@ func bootScenario(t *testing.T, s *paritycorpus.Scenario) (*pfbUnbound, *Fronten
 	if err := paritycorpus.WriteModule(dir, s.Module); err != nil {
 		t.Fatal(err)
 	}
-	module, err := boot(dir)
+	module, err := boot(dir, testLogDir)
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}

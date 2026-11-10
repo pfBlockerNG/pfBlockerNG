@@ -29,9 +29,9 @@ const (
 // nil if there is none.
 type forward = func(wire []byte) []byte
 
-// boot loads the module from moduleDir and runs its init_standard.
-func boot(moduleDir string) (*pfbUnbound, error) {
-	return initStandard(MODULE_ID, moduleDir)
+// boot loads the module from moduleDir and runs its init_standard; the module writes its logs under logDir.
+func boot(moduleDir, logDir string) (*pfbUnbound, error) {
+	return initStandard(MODULE_ID, moduleDir, logDir)
 }
 
 func optOf(query *dnswire.Message) *dnswire.RR {

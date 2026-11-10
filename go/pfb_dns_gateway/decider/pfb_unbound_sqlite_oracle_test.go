@@ -362,7 +362,7 @@ func TestSqliteStatsMatchPython(t *testing.T) {
 			var m *pfbUnbound
 			start := func() {
 				var err error
-				if m, err = boot(dir); err != nil {
+				if m, err = boot(dir, testLogDir); err != nil {
 					t.Fatal(err)
 				}
 				m.clock = func() time.Time { return time.Unix(o.Now, 0).UTC() }

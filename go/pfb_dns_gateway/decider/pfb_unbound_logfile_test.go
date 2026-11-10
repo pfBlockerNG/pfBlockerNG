@@ -30,9 +30,42 @@ func readLog(t *testing.T, path string) string {
 // withLogDir points every module booted by the test at dir for its logs.
 func withLogDir(t *testing.T, dir string) {
 	t.Helper()
-	previous := pfbLogDir
-	pfbLogDir = dir
-	t.Cleanup(func() { pfbLogDir = previous })
+	previous := testLogDir
+	testLogDir = dir
+	t.Cleanup(func() { testLogDir = previous })
+}
+
+// The directory is the module's own: dnsbl.log and dns_reply.log go where Options.LogDir says, for the module of a boot and for
+// the module-less reply log.
+func TestAModuleAndTheReplyLogWriteUnderTheLogDirTheyWereGiven(t *testing.T) {
+	moduleLogs, replyLogs := t.TempDir(), t.TempDir()
+	m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n"), moduleLogs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopModule(t, m)
+	m.pfbLog(dnsblLogName, "a dnsbl row")
+	m.logs.flush()
+	if got := readLog(t, filepath.Join(moduleLogs, dnsblLogName)); got != "a dnsbl row\n" {
+		t.Errorf("the module's dnsbl.log under its log dir = %q, want its row", got)
+	}
+	r := openReplyLog(replyLogs)
+	t.Cleanup(r.closeReplyLog)
+	r.pfbLog(dnsReplyLogName, "a reply row")
+	r.logs.flush()
+	if got := readLog(t, filepath.Join(replyLogs, dnsReplyLogName)); got != "a reply row\n" {
+		t.Errorf("the reply log's dns_reply.log under its log dir = %q, want its row", got)
+	}
+}
+
+// Without a log dir the logs are where the PHP readers look for them.
+func TestTheDefaultLogDirIsWherePfBlockerNGReadsTheLogs(t *testing.T) {
+	if got := (&pfbUnbound{}).logPath(dnsblLogName); got != "/var/log/pfblockerng/dnsbl.log" {
+		t.Errorf("a module with no log dir logs to %q, want /var/log/pfblockerng/dnsbl.log", got)
+	}
+	if got := (&pfbUnbound{}).logPath(dnsReplyLogName); got != "/var/log/pfblockerng/dns_reply.log" {
+		t.Errorf("a module with no log dir logs replies to %q, want /var/log/pfblockerng/dns_reply.log", got)
+	}
 }
 
 func TestPipelineWritesEachFilesRowsInOrder(t *testing.T) {
@@ -369,7 +402,7 @@ func moduleWithLogs(t *testing.T, dir string) (*pfbUnbound, *Frontend) {
 			t.Fatal(err)
 		}
 	}
-	m, err := boot(moduleDir)
+	m, err := boot(moduleDir, testLogDir)
 	if err != nil {
 		t.Fatal(err)
 	}

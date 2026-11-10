@@ -33,7 +33,7 @@ func bootModule(t *testing.T) *pfbUnbound {
 	if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte("[MAIN]\npython_enable = true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	module, err := boot(dir)
+	module, err := boot(dir, testLogDir)
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestBootReportsAModuleThatCannotInitialise(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte("[MAIN]\npython_enable = banana\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	module, err := boot(dir)
+	module, err := boot(dir, testLogDir)
 	if err == nil || module != nil || !strings.Contains(err.Error(), "python_enable") {
 		t.Errorf("boot of a non-boolean python_enable = (%v, %v), want (nil, an error naming python_enable)", module, err)
 	}

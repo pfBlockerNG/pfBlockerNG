@@ -313,7 +313,7 @@ func TestLogRowsMatchPython(t *testing.T) {
 			if sc.Mmdb != "" {
 				maxmindDBPath = filepath.Join("testdata", sc.Mmdb)
 			}
-			m, err := boot(dir)
+			m, err := boot(dir, testLogDir)
 			maxmindDBPath = previous
 			if err != nil {
 				t.Fatal(err)

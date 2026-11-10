@@ -683,12 +683,12 @@ func TestInitStandardNoAAAAFlagFollowsTheSectionAndPythonEnable(t *testing.T) {
 
 func TestInitStandardRaisesWhereNoAAAAItemsRaisesInPython(t *testing.T) {
 	// config.items("noAAAA") interpolates every value outside the try block, so a bad '%' escapes init_standard.
-	m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[noAAAA]\n1 = a.com%(nope)s,1\n"))
+	m, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[noAAAA]\n1 = a.com%(nope)s,1\n"), testLogDir)
 	if m != nil || err == nil || !strings.Contains(err.Error(), "noAAAA") || !strings.Contains(err.Error(), "Bad value substitution") {
 		t.Errorf("initStandard = (%v, %v), want (nil, an error naming noAAAA and the bad substitution)", m, err)
 	}
 	// [GP_Bypass_List] is read raw, so the same text is no error there.
-	zoned, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[GP_Bypass_List]\n1 = fe80::1%em0\n"))
+	zoned, err := initStandard(MODULE_ID, modIniDir(t, "[MAIN]\npython_enable = true\n[GP_Bypass_List]\n1 = fe80::1%em0\n"), testLogDir)
 	if err != nil {
 		t.Fatalf("initStandard with a zone-id Group Policy row: %v, want nil", err)
 	}

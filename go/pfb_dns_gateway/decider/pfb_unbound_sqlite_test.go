@@ -62,7 +62,7 @@ func newSqlRig(t *testing.T, main string, presql map[string][]string) *sqlRig {
 	previous := dbRetrySleep
 	dbRetrySleep = func(time.Duration) { r.sleeps.Add(1) }
 	t.Cleanup(func() { dbRetrySleep = previous })
-	m, err := boot(r.dir)
+	m, err := boot(r.dir, testLogDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +871,7 @@ func statsOutageModule(t *testing.T) *pfbUnbound {
 	previous := dbRetrySleep
 	dbRetrySleep = func(time.Duration) {}
 	t.Cleanup(func() { dbRetrySleep = previous })
-	m, err := boot(dir)
+	m, err := boot(dir, testLogDir)
 	if err != nil {
 		t.Fatalf("a stats database that cannot open failed the boot: %v", err)
 	}

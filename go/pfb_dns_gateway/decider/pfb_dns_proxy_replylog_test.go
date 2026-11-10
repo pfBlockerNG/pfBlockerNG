@@ -53,7 +53,7 @@ func withGeoIP(t *testing.T, path string) {
 // replyLogRows is a module-less decider whose reply log hands its rows to the test, in the oracle's time.
 func replyLogRows(t *testing.T) (*Frontend, *[]string) {
 	t.Helper()
-	f := openOK(t, Options{NoModule: true, ReplyLog: true})
+	f := openOK(t, Options{LogDir: testLogDir, NoModule: true, ReplyLog: true})
 	rows := &[]string{}
 	f.replyLog.clock = fixedClock
 	f.replyLog.logSink = func(name, line string) {
@@ -185,7 +185,7 @@ func TestReplyLogWritesTheOraclesRows(t *testing.T) {
 func TestReplyLogNeverChangesWhatTheClientGets(t *testing.T) {
 	oracle := loadStandaloneRows(t)
 	logged, _ := replyLogRows(t)
-	plain := openOK(t, Options{NoModule: true})
+	plain := openOK(t, Options{LogDir: testLogDir, NoModule: true})
 	for id, c := range oracleCases {
 		got := logged.Resolve(c.wire(t), oracle.Client, c.upstream(t), "Unknown", "", "")
 		if want := plain.Resolve(c.wire(t), oracle.Client, c.upstream(t), "Unknown", "", ""); got == nil || !bytes.Equal(got, want) {
@@ -268,7 +268,7 @@ func TestReplyLogFailureStillAnswersAndIsReportedOnce(t *testing.T) {
 
 func TestOpeningTheReplyLogSaysWhatItIsOnce(t *testing.T) {
 	log := captureLockedLog(t)
-	openOK(t, Options{NoModule: true, ReplyLog: true})
+	openOK(t, Options{LogDir: testLogDir, NoModule: true, ReplyLog: true})
 	const want = "pfb_dns_proxy info: DNS Reply logging is on: pfb_unbound.py is loaded for its row writer only, no DNSBL runs\n"
 	if got := strings.Count(log.String(), want); got != 1 {
 		t.Errorf("the startup line was logged %d times, want once; log = %q", got, log.String())
@@ -278,7 +278,7 @@ func TestOpeningTheReplyLogSaysWhatItIsOnce(t *testing.T) {
 // Only what init_standard would have set up for the one function: the DNS Reply Logging switch, the RCODE names and no
 // noAAAA table; nothing of the DNSBL lifecycle.
 func TestReplyLogSetsUpOnlyTheRowWriter(t *testing.T) {
-	f := openOK(t, Options{NoModule: true, ReplyLog: true})
+	f := openOK(t, Options{LogDir: testLogDir, NoModule: true, ReplyLog: true})
 	m := f.replyLog
 	snap := m.snapshot.Load()
 	if snap == nil || !snap.settings.pythonReply || snap.settings.pythonBlacklist || len(snap.noAAAADB) != 0 {
@@ -304,7 +304,7 @@ func TestReplyLogRcodeNamesAreTheModulesOwnTable(t *testing.T) {
 	if got := rcodeNames(); !reflect.DeepEqual(got, want) {
 		t.Errorf("rcodeNames() = %v, want dns_reply_log.py's RCODES %v", got, want)
 	}
-	f := openOK(t, Options{NoModule: true, ReplyLog: true})
+	f := openOK(t, Options{LogDir: testLogDir, NoModule: true, ReplyLog: true})
 	module := modMust(t, moduleDir(t))
 	if !reflect.DeepEqual(f.replyLog.rcodeDB, want) || !reflect.DeepEqual(module.rcodeDB, want) {
 		t.Errorf("rcode names = %v (reply log), %v (module), want both %v", f.replyLog.rcodeDB, module.rcodeDB, want)
@@ -340,7 +340,7 @@ func TestReplyLogFillsTheGeoIPColumnWhenTheDatabaseIsThere(t *testing.T) {
 func TestReplyLogWritesDnsReplyLogAndCloseFlushesIt(t *testing.T) {
 	dir := t.TempDir()
 	withLogDir(t, dir)
-	f, err := Open(Options{NoModule: true, ReplyLog: true})
+	f, err := Open(Options{LogDir: testLogDir, NoModule: true, ReplyLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestReplyLogWithAnUnwritableLogDirectoryServesAndReportsOnce(t *testing.T) 
 	}
 	withLogDir(t, filepath.Join(file, "no-such-dir")) // a path under a regular file cannot be created
 	log := captureLockedLog(t)
-	f, err := Open(Options{NoModule: true, ReplyLog: true})
+	f, err := Open(Options{LogDir: testLogDir, NoModule: true, ReplyLog: true})
 	if err != nil {
 		t.Fatalf("Open = %v, want the decider to serve without its log", err)
 	}
