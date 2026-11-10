@@ -242,62 +242,44 @@ def test_a_release_with_nothing_to_do_costs_one_php_read(monkeypatch: pytest.Mon
 
 
 class _PidVm:
-    """A guest that answers the decider listing with ``decider`` (exit status ``rc``); keeps the commands it is sent."""
+    """A guest that answers the gateway pidfile read with ``pidfile`` (exit status ``rc``); keeps what it is sent."""
 
-    def __init__(self, decider: str, rc: int = 0) -> None:
-        self.decider, self.rc = decider, rc
+    def __init__(self, pidfile: str, rc: int = 0) -> None:
+        self.pidfile, self.rc = pidfile, rc
         self.sent: list[tuple[str, ...]] = []
 
     def ssh(self, *argv: str, **_kw: object) -> SimpleNamespace:
         self.sent.append(argv)
-        return SimpleNamespace(returncode=self.rc, stdout=self.decider, stderr="ps: broken")
+        return SimpleNamespace(returncode=self.rc, stdout=self.pidfile, stderr="cat: broken")
 
 
-@pytest.mark.parametrize(("listing", "decider"), [("4242\n", 4242), ("", 0)], ids=["decider", "no-proxy"])
-def test_dns_host_pids_pairs_unbounds_pid_with_the_deciders_or_zero(
-    monkeypatch: pytest.MonkeyPatch, listing: str, decider: int
+@pytest.mark.parametrize(("pidfile", "gateway"), [("4242\n", 4242), ("", 0)], ids=["gateway", "no-proxy"])
+def test_dns_host_pids_pairs_unbounds_pid_with_the_gateways_or_zero(
+    monkeypatch: pytest.MonkeyPatch, pidfile: str, gateway: int
 ) -> None:
-    """Given the gateway has one decider child, or no proxy runs When the DNSBL hosts' pids are read
-    Then they are (Unbound's pid, the decider's pid or 0), so a restart of either host moves the tuple."""
+    """Given the gateway's pidfile names its pid, or no proxy runs When the DNSBL hosts' pids are read
+    Then they are (Unbound's pid, the gateway's pid or 0), so a restart of either host moves the tuple."""
     monkeypatch.setattr(helpers, "unbound_pid", lambda _vm, **_kw: 77)
 
-    assert helpers.dns_host_pids(_PidVm(listing)) == (77, decider)  # type: ignore[arg-type]
+    assert helpers.dns_host_pids(_PidVm(pidfile)) == (77, gateway)  # type: ignore[arg-type]
 
 
-def test_dns_host_pids_refuses_to_guess_between_two_deciders(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Given two processes under the gateway name the decider When the pids are read Then it raises: a tuple built
-    from either would pin the wrong process."""
+def test_dns_host_pids_refuses_a_pidfile_that_is_no_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given the gateway's pidfile holds something else When the pids are read Then it raises: a tuple built from it
+    would pin nothing."""
     monkeypatch.setattr(helpers, "unbound_pid", lambda _vm, **_kw: 77)
 
-    with pytest.raises(RuntimeError, match=r"at most one decider.*4242.*4343"):
+    with pytest.raises(RuntimeError, match=r"not an integer.*4242.*4343"):
         helpers.dns_host_pids(_PidVm("4242\n4343\n"))  # type: ignore[arg-type]
 
 
-def test_dns_host_pids_fails_loudly_when_the_process_listing_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Given ps fails When the pids are read Then it raises: a broken listing must not read as "no decider" both
-    before and after, which would pass every no-restart pin."""
+def test_dns_host_pids_fails_loudly_when_the_pidfile_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given the pidfile exists but cannot be read When the pids are read Then it raises: a broken read must not read as
+    "no gateway" both before and after, which would pass every no-restart pin."""
     monkeypatch.setattr(helpers, "unbound_pid", lambda _vm, **_kw: 77)
 
-    with pytest.raises(RuntimeError, match="ps: broken"):
+    with pytest.raises(RuntimeError, match="cat: broken"):
         helpers.dns_host_pids(_PidVm("", rc=1))  # type: ignore[arg-type]
-
-
-def test_the_decider_listing_matches_the_gateways_child_and_never_its_own_command_line(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Given the listing runs on the guest as one /bin/sh command When its text is built
-    Then it keys on the gateway pidfile's pid as the parent and the bracketed ``pfb_dns_proxy[.]py``: the bare name
-    would also match this very command's argv."""
-    monkeypatch.setattr(helpers, "unbound_pid", lambda _vm, **_kw: 77)
-    vm = _PidVm("")
-
-    helpers.dns_host_pids(vm)  # type: ignore[arg-type]
-
-    (command,) = vm.sent[0]
-    assert "/var/run/pfb_dns_proxy.pid" in command and "$2 == gw" in command, command
-    assert "pfb_dns_proxy[.]py" in command and "pfb_dns_proxy.py" not in command, command
-    # A failing ps must fail the command (rc 1), never read as "no decider"; -ww keeps long argv whole.
-    assert "/bin/ps -axww -o pid= -o ppid= -o args=) || exit 1;" in command, command
 
 
 def test_pfb_dns_state_returns_the_stored_toggle_then_whether_pfb_dns_holds_the_resolver(
@@ -661,17 +643,16 @@ SS_ROWS = [helpers.SafeSearchEntry("a.example", "b.example", "", "")]
 
 def _arrange_safesearch(monkeypatch: pytest.MonkeyPatch, host: str) -> tuple[list[str], SimpleNamespace]:
     """Stub the SafeSearch injection's guest calls; ``host`` is what the DNSBL-host reload answers (fenced, as the
-    harness reads it). ``vm.snippets`` holds every PHP snippet the injection ran."""
+    harness reads it)."""
     events: list[str] = []
-    vm = SimpleNamespace(ssh_argv=lambda *argv: list(argv), snippets=[])
+    vm = SimpleNamespace(ssh_argv=lambda *argv: list(argv))
 
     def run(_argv: list[str], **kwargs: object) -> SimpleNamespace:
         events.append("unbound bounce" if "unbound.pid" in str(kwargs.get("input", "")) else "append rows")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def php_eval(_vm: object, snippet: str, **_kw: object) -> SimpleNamespace:
-        vm.snippets.append(snippet)
-        events.append("host reload" if "pfb_dns_proxy_decider_restart()" in snippet else "php")
+        events.append("host reload")
         fenced = f"banner{helpers._CFG_VAL_OPEN}{host}{helpers._CFG_VAL_CLOSE}"
         return SimpleNamespace(returncode=0, stdout=fenced, stderr="")
 
@@ -681,10 +662,10 @@ def _arrange_safesearch(monkeypatch: pytest.MonkeyPatch, host: str) -> tuple[lis
     return events, vm
 
 
-def test_safesearch_rows_reload_in_the_pfb_dns_decider_while_it_hosts_dnsbl(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_safesearch_rows_reload_in_pfb_dns_while_it_hosts_dnsbl(monkeypatch: pytest.MonkeyPatch) -> None:
     """Given pfB-DNS serves DNSBL When fabricated SafeSearch rows are appended
-    Then the decider restarts and re-reads pfb_py_ss.txt, and Unbound (which hosts no module) is not bounced."""
-    events, vm = _arrange_safesearch(monkeypatch, "DECIDER-RESTARTED")
+    Then pfB-DNS restarts and re-reads pfb_py_ss.txt, and Unbound (which hosts no module) is not bounced."""
+    events, vm = _arrange_safesearch(monkeypatch, "PFB-DNS-RESTARTED")
 
     helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
 
@@ -701,47 +682,33 @@ def test_safesearch_rows_reload_in_unbound_while_unbound_hosts_dnsbl(monkeypatch
     assert events == ["append rows", "host reload", "unbound bounce", "unbound ready"], f"wrong sequence: {events}"
 
 
-def test_safesearch_injection_fails_loudly_when_the_decider_does_not_restart(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Given pfB-DNS serves DNSBL When its decider cannot restart
+def test_safesearch_injection_fails_loudly_when_pfb_dns_does_not_serve_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given pfB-DNS serves DNSBL When it does not serve again after its restart
     Then the injection raises with the product's reason."""
-    _events, vm = _arrange_safesearch(monkeypatch, "DECIDER-FAILED: no READY")
+    _events, vm = _arrange_safesearch(monkeypatch, "PFB-DNS-NOT-READY")
 
-    with pytest.raises(RuntimeError, match="no READY"):
+    with pytest.raises(RuntimeError, match="PFB-DNS-NOT-READY"):
         helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
 
 
 def test_safesearch_injection_accepts_only_the_exact_restarted_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """Given the reload answers a near miss of the success token When the rows are appended
-    Then it raises: only the exact DECIDER-RESTARTED means the decider re-read the rows."""
-    _events, vm = _arrange_safesearch(monkeypatch, "NOT-DECIDER-RESTARTED")
+    Then it raises: only the exact PFB-DNS-RESTARTED means pfB-DNS re-read the rows."""
+    _events, vm = _arrange_safesearch(monkeypatch, "NOT-PFB-DNS-RESTARTED")
 
-    with pytest.raises(RuntimeError, match="NOT-DECIDER-RESTARTED"):
+    with pytest.raises(RuntimeError, match="NOT-PFB-DNS-RESTARTED"):
         helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
 
 
 def test_safesearch_injection_does_not_mistake_a_failure_text_naming_unbound_for_the_unbound_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Given the decider restart fails with a reason that contains the word UNBOUND
+    """Given the pfB-DNS restart fails with a reason that contains the word UNBOUND
     When fabricated SafeSearch rows are appended Then it raises with that reason and never bounces Unbound: only the
     exact token UNBOUND means Unbound hosts DNSBL."""
-    events, vm = _arrange_safesearch(monkeypatch, "DECIDER-FAILED: UNBOUND backend gone")
+    events, vm = _arrange_safesearch(monkeypatch, "PFB-DNS-NOT-READY: UNBOUND backend gone")
 
     with pytest.raises(RuntimeError, match="UNBOUND backend gone"):
         helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
 
-    assert events == ["append rows", "host reload"], f"Unbound was bounced for a failed decider restart: {events}"
-
-
-def test_safesearch_injection_picks_the_unbound_host_exactly_when_pfb_dns_does_not_host_the_module(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Given the stubbed answer cannot tell a right selector from an inverted one
-    When the host reload is built Then Unbound is the host exactly when the product says pfB-DNS does not host the
-    DNSBL module (pfb_dns_proxy_hosts_module(): it owns the Resolver and DNSBL is active), not by proxy liveness."""
-    _events, vm = _arrange_safesearch(monkeypatch, "DECIDER-RESTARTED")
-
-    helpers.inject_safesearch_cname_entries(vm, SS_ROWS)  # type: ignore[arg-type]
-
-    selector = "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; }"
-    assert selector in vm.snippets[0], f"the host selector is not exactly {selector!r}:\n{vm.snippets[0]}"
+    assert events == ["append rows", "host reload"], f"Unbound was bounced for a failed pfB-DNS restart: {events}"

@@ -3,7 +3,7 @@
 NetSPI showed a TXT reply carrying ``"><script ...>`` reaching ``dns_reply.log``
 raw. v4 pages escape log fields on output; ``_log_text()`` in ``pfb_unbound.py``
 additionally rewrites ``< > " ' &`` and control characters to ``\\DDD`` before a
-row is written. These cases prove, through pfB-DNS (its decider runs that module), that:
+row is written. These cases prove, through pfB-DNS (the gateway runs that module), that:
 
 * a TXT answer carrying the payload is still delivered to the client, and its
   ``dns_reply.log`` row holds the escaped payload in the reply column;

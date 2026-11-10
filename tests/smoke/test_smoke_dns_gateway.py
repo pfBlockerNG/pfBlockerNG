@@ -3,9 +3,9 @@ transport.
 
 The package ships the gateway as ``pfb-dns``, one raw FreeBSD binary per architecture under ``dns_proxy/bin/``, and
 ``pfb_dns.sh``, which runs the one for the machine; with the DNS Proxy toggle on, pfBlockerNG's rc script runs that
-wrapper under daemon(8) with the Python decider as the gateway's child. This module installs nothing of its own for the
-gateway, so a broken package cannot hide behind an uploaded binary: it asserts the INSTALLED package's payload, turns
-DoH and DoQ on next to the toggle, and watches the box and the LAN client VM. Only the client's DoQ probe,
+wrapper under daemon(8). The gateway decides in-process and has no child. This module installs nothing of its own for
+the gateway, so a broken package cannot hide behind an uploaded binary: it asserts the INSTALLED package's payload,
+turns DoH and DoQ on next to the toggle, and watches the box and the LAN client VM. Only the client's DoQ probe,
 ``pfb_doq_probe``, is built here, from ``go/``, with the Go that built the package (smoke-on-box.sh's, CI's, or, when
 there is none, the pinned one scripts/go_toolchain.py installs in this module's scratch directory and deletes).
 
@@ -20,8 +20,9 @@ What it proves, in file order:
 * package: both ``pfb-dns`` binaries are 0555 and byte-equal to the built ``.pkg``'s members, ``pfb_dns.sh`` is 0644
   (run as ``/bin/sh``), and the installed package's ABI is a wildcard (``NO_ARCH``);
 * service: the daemon supervises ``pfb-dns``, the binary ``pfb_dns.sh`` chose for ``uname -p`` (the wrapper exec'd, so
-  the pidfile's pid is the gateway's), which published that pid in ``/var/unbound/pfb_dns_ready``; its child is
-  ``pfb_dns_proxy.py --decision-fd 3``, both as ``unbound``; ``dns_proxy.log`` has the ``listening`` lines and
+  the pidfile's pid is the gateway's), which published that pid in ``/var/unbound/pfb_dns_ready``; it runs as
+  ``unbound`` with ``--module-dir /var/unbound`` and no `` -- `` decider command, has no child, and no process runs
+  ``pfb_dns_proxy.py``; ``dns_proxy.log`` has the ``listening`` lines and
   ``ready upstream 127.0.0.1:5353 pid N``, N the gateway's; the gateway owns every client-facing socket (DoH and DoQ on
   loopback too, for a local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
 * DNS General's status panel is one table per transport with a Localhost row (loopbacks plus the served lo0 VIP
@@ -45,7 +46,7 @@ What it proves, in file order:
   over UDP and TCP gets the DoH, DoT and DoQ records for the LAN address (alpn, ``port`` only off its default,
   ``dohpath``, ``ipv4hint``, the DNS name as TargetName, its A record in Additional); another type or name under
   ``resolver.arpa.`` and the SVCB query over DoT and DoH get NODATA with the 300-second SOA, apex SOA and NS are
-  answered, and Unbound's query log never names ``resolver.arpa``, so the decider saw none of it; a client the Resolver
+  answered, and Unbound's query log never names ``resolver.arpa``, so Unbound saw none of them; a client the Resolver
   ACL refuses gets REFUSED; with the toggle off the client gets what Unbound itself answers, asked on the box at
   port 5354; with the LAN in ``dns/pfb_dns_ddr_doh_443_interfaces`` (issue #3694) the DoH record at its address has no
   ``port`` and keeps its hint and path;
@@ -53,7 +54,7 @@ What it proves, in file order:
   the LAN address and A at an automatic Resolver VIP is the VIP, in any letter case; a subdomain of it is Unbound's;
 * automatic Resolver VIPs use only standard transport ports, and DDR advertises those actual bound ports while ordinary
   interfaces retain their configured ports;
-* ``rc stop`` ends the gateway, its decider and the supervisor; toggle off gives the Resolver back, no gateway left.
+* ``rc stop`` ends the gateway and the supervisor; toggle off gives the Resolver back, no gateway left.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
 
@@ -210,7 +211,7 @@ LOG_TRANSPORT = {"udp": "UDP", "tcp": "TCP", "dot": "DoT", "doh-post": "DoH", "d
 
 
 def _drain_logs(gw: Gateway, *, port: int = 53) -> None:
-    """A fresh completed reply drains the decider's earlier log writes."""
+    """A fresh completed reply drains the gateway's earlier log writes."""
     name = h.unique_domain("transport-log-barrier")
     answer, raw = _ask(gw.client, "udp", name, port=port)
     assert h.resolves_to(answer, STUB_DNS_A), f"log barrier {name}: {answer}\n{raw}"
@@ -910,16 +911,16 @@ def test_the_installed_package_ships_both_pfb_dns_binaries_and_the_dispatcher(gw
     assert re.fullmatch(r"FreeBSD:\d+:\*", abi), f"the installed {name} has ABI {abi!r}, not a NO_ARCH wildcard"
 
 
-def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decider(
+def test_the_daemon_supervises_the_gateway_and_the_gateway_is_the_one_process_that_decides(
     gw: Gateway, gateway_on: State
 ) -> None:
-    """The service is the Go gateway, not the Python listener: supervisor, gateway and decider, all as they should be.
+    """The service is the one Go gateway: a supervisor and a gateway with no child, and no Python decider anywhere.
 
     Then Status > Services says `pfb_dns_proxy` runs; the supervisor's ps title is `daemon: pfb_dns_proxy[<child pid>]`;
-      the child (the pidfile's pid) is the pfb-dns `pfb_dns.sh` chose for this machine, as `unbound`; its only child is
-      the decider
-      `pfb_dns_proxy.py --decision-fd 3`, also `unbound`; no process runs the Python listener; dns_proxy.log has a
-      `listening` line per transport and `ready upstream 127.0.0.1:5353 pid <gateway>` after them.
+      the child (the pidfile's pid) is the pfb-dns `pfb_dns.sh` chose for this machine, as `unbound`, started with
+      `--module-dir /var/unbound` and no ` -- ` decider command; it has no child process; no process runs
+      `pfb_dns_proxy.py`; dns_proxy.log has a `listening` line per transport and
+      `ready upstream 127.0.0.1:5353 pid <gateway>` after them.
     """
     state = gateway_on
     assert state.service == "running", f"service pfb_dns_proxy: {state.service}"
@@ -934,14 +935,14 @@ def test_the_daemon_supervises_the_gateway_and_the_gateway_runs_the_python_decid
         f"the pidfile's process is not this machine's pfb-dns ({_selected_binary(gw.vm)}): {gateway}"
     )
     assert gateway.user == "unbound", f"the gateway should have dropped root to unbound: {gateway}"
-    deciders = [p for p in procs if p.ppid == state.proxy_pid]
-    assert len(deciders) == 1, f"the gateway's children: {deciders}"
-    assert "pfb_dns_proxy.py" in deciders[0].args and "--decision-fd 3" in deciders[0].args, deciders[0]
-    assert deciders[0].user == "unbound", f"the decider should have dropped root to unbound: {deciders[0]}"
-    listeners = [
-        p for p in procs if "pfb_dns_proxy.py" in p.args and "--decision-fd" not in p.args and "daemon:" not in p.args
-    ]
-    assert not listeners, f"a Python listener runs next to the gateway: {listeners}"
+    assert "--module-dir /var/unbound" in gateway.args and " -- " not in gateway.args, (
+        f"the gateway's command line names no module dir, or still carries a decider command: {gateway.args}"
+    )
+    children = [p for p in procs if p.ppid == state.proxy_pid]
+    assert not children, f"the gateway has children: {children}"
+    # The cutover's live proof: no Python decider (or listener) runs, whoever started it
+    deciders = [p for p in procs if "pfb_dns_proxy.py" in p.args]
+    assert not deciders, f"a Python decider runs next to the gateway: {deciders}"
 
     log = _proxy_log(gw.vm, 400).splitlines()
     ready_line = f"ready upstream 127.0.0.1:{UPSTREAM_PORT} pid {state.proxy_pid}"
@@ -1419,7 +1420,7 @@ def test_receiving_interface_is_the_event_snapshot_after_interface_rename(
 def test_a_listed_name_gets_the_vip_and_a_log_row_naming_the_client(
     gw: Gateway, gateway_on: State, transport: str, gui: WebUI
 ) -> None:
-    """A listed name is answered by the gateway's decider: the VIP and a dnsbl.log row for the LAN client.
+    """A listed name is answered by the gateway itself: the VIP and a dnsbl.log row for the LAN client.
 
     When the LAN client asks over UDP, TCP, DoT, DoH (POST and GET) or DoQ,
     Then it gets the DNSBL VIP and dnsbl.log has a row for the name that names 192.168.1.10.
@@ -2000,7 +2001,7 @@ def _resolver_arpa_log_lines(vm: SmokeVM) -> list[str]:
 def test_ddr_answers_are_never_forwarded_so_unbounds_query_log_names_none_of_them(
     gw: Gateway, gateway_on: State
 ) -> None:
-    """Criterion 2, "the decider saw none": Unbound's query log gains no line for any DDR-answered query.
+    """Criterion 2, "Unbound saw none": Unbound's query log gains no line for any DDR-answered query.
 
     Given the gateway runs with `--ddr` and every query below is answered NOERROR by the gateway itself,
     When the client asks them all and then an allowed name that the upstream answers (so that the log has drained
@@ -2501,17 +2502,17 @@ def test_an_automatic_resolver_vip_serves_doh_on_443_and_ddr_advertises_it_there
 # --------------------------------------------------------------------------- #
 
 
-def test_rc_stop_ends_the_gateway_the_decider_and_the_supervisor(gw: Gateway, gateway_on: State) -> None:
+def test_rc_stop_ends_the_gateway_and_the_supervisor(gw: Gateway, gateway_on: State) -> None:
     """`pfb_dns_proxy.sh stop` waits for the whole tree to go: no process, no pidfile, service stopped.
 
-    Given the gateway, its decider and the supervisor running,
+    Given the gateway and the supervisor running,
     When the rc script stops them,
-    Then it exits 0 (its own wait ended with all of them gone), none of the three pids is alive, both pidfiles are
-      gone and Status > Services says stopped.
+    Then it exits 0 (its own wait ended with both gone), neither pid is alive, both pidfiles are gone and Status >
+      Services says stopped.
     """
     state, vm = gateway_on, gw.vm
-    tree = {state.daemon_pid, state.proxy_pid} | {p.pid for p in _processes(vm) if p.ppid == state.proxy_pid}
-    assert None not in tree and len(tree) == 3, f"supervisor, gateway and decider pids: {tree}"
+    tree = {state.daemon_pid, state.proxy_pid}
+    assert None not in tree and len(tree) == 2, f"supervisor and gateway pids: {tree}"
     stop = vm.ssh(PROXY_RC, "stop")
     assert stop.returncode == 0, f"{PROXY_RC} stop: rc={stop.returncode} {stop.stdout!r} {stop.stderr!r}"
     survivors = [p for p in _processes(vm) if p.pid in tree]
@@ -2527,7 +2528,7 @@ def test_toggle_off_gives_the_resolver_back_and_leaves_no_gateway(gw: Gateway, g
 
     Given the toggle on (the Resolver moved, the gateway serving),
     When the toggle is turned off and applied,
-    Then no gateway, decider or supervisor runs and no pidfile is left; every Resolver key equals its pre-toggle value;
+    Then no gateway or supervisor runs and no pidfile is left; every Resolver key equals its pre-toggle value;
       the marker is cleared; unbound.conf has no python module (pfB-DNS off is DNSBL off, #3770); Unbound listens
       where it did before the toggle; And the client's blocked, allowed and DoT queries are answered by the upstream:
       Unbound blocks nothing again.
