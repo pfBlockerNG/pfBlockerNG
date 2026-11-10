@@ -401,15 +401,18 @@ func writeMarker(path, text string) string {
 }
 
 // controlWriteApplied is _control_write_applied: seq is published as the applied-sequence marker (temp file, fsync,
-// rename). A write failure is logged and the command still stands.
+// rename). A write failure is logged and the command still stands. A module that is closing writes none, whether its
+// command was refused or ran just before deinit began: the check is made at the write.
 func (m *pfbUnbound) controlWriteApplied(seq *big.Int) {
 	path := m.pfb.pfbPyControlApplied
 	if path == "" {
 		return
 	}
-	if failure := writeMarker(path, seq.String()+"\n"); failure != "" {
-		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure)
-	}
+	m.whileNotRetired(func() {
+		if failure := writeMarker(path, seq.String()+"\n"); failure != "" {
+			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure)
+		}
+	})
 }
 
 // controlRecordToCommand is _control_record_to_command: the dot-split token list the shared handler consumes, or nil when
@@ -492,14 +495,20 @@ func (w *controlWatcher) drainAndApply(stop <-chan struct{}) {
 			return
 		}
 		w.lastSeq = seq
+		controlHook("apply")
 		if command := controlRecordToCommand(record); command != nil {
 			if _, msg := w.m.pfbApplyControlCommand(command); msg != "" {
 				logInfo("[pfBlockerNG]: " + msg)
 			}
 		}
+		controlHook("marker")
 		w.m.controlWriteApplied(seq)
 	}
 }
+
+// controlHook is called by drainAndApply before it applies a record ("apply") and before it publishes the applied marker
+// ("marker"); a variable so that a test can retire the module at exactly that point.
+var controlHook = func(stage string) {}
 
 // run is the daemon body: drain, then wait for the next tick, until stop is closed.
 // shortcut: Python waits on a kqueue (EVFILT_VNODE on the channel's directory) on FreeBSD and polls elsewhere; Go polls

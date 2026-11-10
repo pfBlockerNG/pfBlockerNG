@@ -37,8 +37,8 @@ func TestACloseDoesNotWaitBehindAReloadBlockedWritingItsCountFile(t *testing.T) 
 	m.reloadTick = func() (<-chan time.Time, func()) { return ticks, func() { close(ended) } }
 	rlPublish(t, m, 1)
 	m.startReloadWatcher()
+	before := m.snapshot.Load() // taken ahead of the publish: the watcher's first drain may already take generation 2
 	rlPublish(t, m, 2)
-	before := m.snapshot.Load()
 	for deadline := time.Now().Add(10 * time.Second); m.snapshot.Load() == before; time.Sleep(5 * time.Millisecond) {
 		select {
 		case ticks <- time.Time{}:
@@ -336,5 +336,46 @@ func TestASwapThatLandsBeforeCloseWritesNoCountsAfterIt(t *testing.T) {
 	}
 	if _, err := os.Stat(m.pfb.pfbPyCount); err == nil {
 		t.Errorf("%s was written after Close began", m.pfb.pfbPyCount)
+	}
+}
+
+// controlWatcherRetiredAt drains one control record (seq 5, disable) with the module retired by controlHook at stage,
+// as a deinit that lands at that point would.
+func controlWatcherRetiredAt(t *testing.T, stage string) (m *pfbUnbound, before *snapshot) {
+	t.Helper()
+	m = chModule(t)
+	chPublish(t, m, `{"seq":1,"cmd":"enable"}`)
+	w := m.newControlWatcher() // the baseline marker is 1
+	chPublish(t, m, `{"seq":5,"cmd":"disable"}`)
+	previous := controlHook
+	t.Cleanup(func() { controlHook = previous })
+	controlHook = func(at string) {
+		if at == stage {
+			m.retired.Store(true)
+		}
+	}
+	before = m.snapshot.Load()
+	w.drainAndApply(make(chan struct{}))
+	return m, before
+}
+
+// A deinit that lands after the watcher read a record but before it applies it: the command is refused, so the applied
+// marker must not announce it, and nothing is published.
+func TestADeinitBetweenReadingAControlRecordAndApplyingItLeavesTheMarkerAlone(t *testing.T) {
+	m, before := controlWatcherRetiredAt(t, "apply")
+	if got := chApplied(t, m); got != "1\n" {
+		t.Errorf("applied marker = %q for a command that was refused, want the baseline 1", got)
+	}
+	if m.snapshot.Load() != before {
+		t.Errorf("a snapshot was published after deinit began")
+	}
+}
+
+// A deinit that lands after the command ran but before the marker is written: the marker is a publication, and is not
+// written.
+func TestADeinitBetweenApplyingAControlRecordAndItsMarkerLeavesTheMarkerAlone(t *testing.T) {
+	m, _ := controlWatcherRetiredAt(t, "marker")
+	if got := chApplied(t, m); got != "1\n" {
+		t.Errorf("applied marker = %q after deinit began, want the baseline 1", got)
 	}
 }
