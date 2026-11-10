@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -248,5 +249,33 @@ func TestOneBinaryObserverSocketIsOwnedByTheUserTheGatewayDroppedTo(t *testing.T
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("the observer socket is mode %o, want 0600", perm)
+	}
+}
+
+// A module error of the one-binary gateway is a py_error.log row in --log-dir, the file the Log Browser reads, and is not on
+// the gateway's own log: the module's sys.stderr was py_error.log in the Python decider.
+func TestOneBinaryModuleErrorsGoToPyErrorLogInTheLogDir(t *testing.T) {
+	dir, logDir := shortTempDir(t), shortTempDir(t)
+	writeModuleDir(t, dir)
+	ini := filepath.Join(dir, "pfb_unbound.ini")
+	text, err := os.ReadFile(ini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ini, append(text, "[GP_Bypass_List]\nrow1 = not-an-ip\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gw := startGatewayProcessWith(t, oneBinaryFlags("127.0.0.1:5353", "--module-dir", dir, "--log-dir", logDir))
+	gw.waitLine("ready upstream ")
+	rows, err := os.ReadFile(filepath.Join(logDir, "py_error.log"))
+	if err != nil {
+		t.Fatalf("no py_error.log in the log dir: %v\n%s", err, gw.logText())
+	}
+	want := regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\|ERROR\| \[pfBlockerNG\]: Failed to parse: GP_Bypass_List: row:row1 line:not-an-ip\n`)
+	if !want.Match(rows) {
+		t.Fatalf("py_error.log is %q, want a Python-format row for the bad row", rows)
+	}
+	if strings.Contains(gw.logText(), "GP_Bypass_List") {
+		t.Fatalf("the module error is also on the gateway's log:\n%s", gw.logText())
 	}
 }
