@@ -565,7 +565,7 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
     Given two configured groups and five original client transports,
     When A is disabled, re-enabled, deleted and recreated,
     Then only deletion changes its incarnation and resets its counts, never B's.
-    With pfB-DNS off, DNSBL is off with it (#3770): native Unbound traffic is neither blocked nor counted.
+    With pfB-DNS off, DNSBL is off with it (#3770): a listed name asked of Unbound reaches the upstream.
     """
     vm = gw.vm
     token = secrets.token_hex(4)
@@ -765,25 +765,35 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         )
         assert _epochs(vm) == new_epochs, "explicit clear replaced group incarnations"
 
+        # The proxy counts a private-use type under its own receiving-socket labels.
+        numeric_key = {
+            "qtype": "TYPE65280",
+            "transport": "UDP",
+            "listener_ip": PFSENSE_LAN_IP,
+            "listener_interface": LAN_DESCRIPTION,
+        }
+        before_value = sum(value for labels, value in _samples(_export(vm), _RESOLVER) if labels == numeric_key)
+        numeric = h.unique_domain("metric-numeric")
+        reply = _dig(gw.client, "udp", "TYPE65280", numeric)
+        assert reply.rcode == "NOERROR", f"TYPE65280 query through the proxy: {reply.raw}"
+        assert stub_dns.received(numeric), f"unlisted numeric query did not reach upstream: {reply.raw}"
+
+        def numeric_committed() -> bool:
+            return (
+                sum(value for labels, value in _samples(_export(vm), _RESOLVER) if labels == numeric_key)
+                == before_value + 1
+            )
+
+        assert h.wait_until(numeric_committed, timeout=60.0, interval=0.5), (
+            before_value,
+            _samples(_export(vm), _RESOLVER),
+        )
+
         _set_proxy_toggle(vm, False)
         _apply(vm)
-        before_native = _export(vm)
         reply = _dig(gw.client, "udp", "TXT", native)
         assert reply.rcode == "NOERROR", f"native TXT query: {reply.raw}"
         assert stub_dns.received(native), f"pfB-DNS off: the listed {native} must reach the upstream: {reply.raw}"
-        _wait_blocks(vm, {group: {} for group in groups})
-        native_key = {"qtype": "TYPE65280"}
-        before_value = sum(value for labels, value in _samples(before_native, _RESOLVER) if labels == native_key)
-        numeric = h.unique_domain("metric-numeric")
-        reply = _dig(gw.client, "udp", "TYPE65280", numeric)
-        assert reply.rcode == "NOERROR", f"native TYPE65280 query: {reply.raw}"
-        assert stub_dns.received(numeric), f"unlisted numeric query did not reach upstream: {reply.raw}"
-        final = _export(vm)
-        assert sum(value for labels, value in _samples(final, _RESOLVER) if labels == native_key) == before_value, (
-            "pfB-DNS off: Unbound has no module, so a native query is counted nowhere",
-            before_value,
-            _samples(final, _RESOLVER),
-        )
 
         # One collision phase: feed regex and global regex share the display group, never ownership.
         collision_alias = f"smmetric{token}regex"

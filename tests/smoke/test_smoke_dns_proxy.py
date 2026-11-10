@@ -175,10 +175,13 @@ DONE = "PFB3515-DONE"
 # in the pfB-DNS decider: with pfB-DNS off, or after a rolled-back activation, unbound.conf has neither.
 MODULE_LINE = re.compile(r'^\s*module-config:\s*"\s*python\b', re.MULTILINE)
 SCRIPT_LINE = re.compile(r"^\s*python-script\s*:", re.MULTILINE)
+# python anywhere on the module-config line, wherever it stands in the chain, with or without a script line
+PYTHON_IN_CHAIN = re.compile(r"^\s*module-config:.*\bpython\b", re.MULTILINE)
+LAN_INTERFACE_DESCRIPTION = "LAN"  # the smoke box's LAN description, as the reply log's listener_interface names it
 
 
 def _assert_no_python_module(conf: str, when: str) -> None:
-    assert not MODULE_LINE.search(conf) and not SCRIPT_LINE.search(conf), (
+    assert not PYTHON_IN_CHAIN.search(conf) and not SCRIPT_LINE.search(conf), (
         f"{when}: unbound.conf loads a python module:\n{conf}"
     )
 
@@ -1156,8 +1159,8 @@ def _reply_logging(rig: Rig, on: bool) -> Iterator[str]:
 
 
 def _reply_rows(vm: SmokeVM, name: str, path: str = REPLY_LOG) -> list[list[str]]:
-    """The DNS-reply rows of `name` in dns_reply.log (or unified.log, same thirteen columns):
-    DNS-reply,timestamp,type,orig_type,final_type,ttl,name,client,answer,geoip,transport,listener_ip,listener_interface."""
+    """The DNS-reply rows of `name` in dns_reply.log (or unified.log, same thirteen columns): DNS-reply, timestamp,
+    type, orig_type, final_type, ttl, name, client, answer, geoip, transport, listener_ip, listener_interface."""
     rows = csv.reader(io.StringIO(h.read_log_file(vm, path)))
     return [row for row in rows if row[:1] == ["DNS-reply"] and row[6:7] == [name]]
 
@@ -1189,6 +1192,7 @@ def test_pfb_dns_without_dnsbl_logs_replies_for_the_client_only_while_dns_reply_
                 raise RuntimeError(f"{exc}\ndns_reply.log gained no row for {logged}:\n{_proxy_log(vm)}") from exc
             [row] = _reply_rows(vm, logged)
             assert len(row) == 13 and row[10] == "UDP", row
+            assert row[11:13] == [PFSENSE_LAN_IP, LAN_INTERFACE_DESCRIPTION], row
             assert row[2:5] == ["reply", "A", "A"] and row[5].isdigit(), f"row: {row}"
             assert row[6:9] == [logged, CLIENT_LAN_IP, STUB_DNS_A], f"row: {row}"
             try:
