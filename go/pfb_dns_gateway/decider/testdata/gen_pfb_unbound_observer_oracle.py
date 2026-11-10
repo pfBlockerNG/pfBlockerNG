@@ -960,6 +960,83 @@ def _(r):
     r.dump()
 
 
+@scenario("decoder-bounds", module_files())
+def _(r):
+    """The edges of the text decoders and of the checks each report goes through, one datagram per edge."""
+    d = r.datagram
+    # bytes.fromhex names the first non-ASCII character when there is one, ahead of any earlier ASCII error
+    for text in (
+        "zz\u00e9",
+        "0 \u00e9",
+        "0z\u00e9",
+        "\u00e9",
+        "z\u00e9",
+        "00 z\u00e9",
+        "0\u00e9",
+        "zzzz\u00e9\u00e9",
+        "0g\u00e9z",
+    ):
+        d(raw_report(opts=f'[[15,"{text}"]]'), f"option data {text!r}: the first non-ASCII character is the position")
+    d(raw_report(opts='[[15,"zz"]]'), "option data with ASCII errors only: the first bad digit")
+    d(raw_report(opts='[[15,"00 0"]]'), "option data with a digit left over")
+    # UTF-16 units: a pair is a high unit D800-DBFF and a low one DC00-DFFF; every other surrogate stands alone
+    for name, why in (
+        ("\udc00\udc00", "a low unit before a low unit: two lone ones"),
+        ("\ud800\ue000", "a high unit before U+E000: a lone one, then the character"),
+        ("\ud800\udbff", "a high unit before a high unit: two lone ones"),
+        ("\ud7ff\udc00", "U+D7FF before a low unit: the character, then a lone one"),
+        ("\udbff\udfff", "the last pair: U+10FFFF"),
+        ("\ud800\udc00", "the first pair: U+10000"),
+        ("\udbff\udc00", "a pair ending at its low bound: U+10FC00"),
+        ("\ud800\udfff", "a pair ending at its high bound: U+103FF"),
+    ):
+        d(utf16_lone_surrogate(False, name), f"UTF-16: {why}")
+        d(utf16_lone_surrogate(True, name), f"UTF-16 big endian: {why}")
+    # UTF-32 units: anything up to U+10FFFF, surrogates included
+    d(utf32_lone_surrogate("\U0010ffff"), "UTF-32: U+10FFFF is accepted")
+    d(utf32_lone_surrogate("\U0010fffe"), "UTF-32: U+10FFFE is accepted")
+    d(utf32_lone_surrogate("A").replace(b"A\x00\x00\x00", b"\x00\x00\x11\x00", 1), "UTF-32: U+110000 is not text")
+    d(
+        utf32_lone_surrogate("A").replace(b"A\x00\x00\x00", b"\xff\xff\xff\xff", 1),
+        "UTF-32: a unit of all ones is not text",
+    )
+    # json.detect_encoding on the first four bytes
+    d(b"{\x00\x00x\x00\x00\x00\x00", "four bytes {, NUL, NUL, x: UTF-16 little endian, so not JSON")
+    d(b"{\x00\x00\x00}\x00\x00\x00", "{ then three NULs: UTF-32 little endian, not a report")
+    d(b"\x00{\x00}", "NUL, {, NUL, }: UTF-16 big endian, not a report")
+    d(b"\x00\x00\x00{", "three NULs then {: UTF-32 big endian, cut short")
+    d(b"\x00\x00", "two NULs: UTF-16 big endian, empty")
+    d(b"{\x00", "{ and a NUL: UTF-16 little endian, cut short")
+    d(b"\x00\x00\x00\x00", "four NULs: UTF-32 big endian")
+    # a literal U+FFFD is text, not a decoding error
+    d(utf8_report(qname="a\ufffdb.example."), "a literal U+FFFD in the name is accepted")
+    d(utf8_report(qname="\ufffd"), "a name of one U+FFFD")
+    d(
+        utf8_report(qname="a.example.", client="").replace(b"a.example.", b"\xef\xbf\xbd\xef\xbf\xbe"),
+        "U+FFFD then U+FFFE",
+    )
+    # a report cut inside an encoded surrogate, at the end of the text
+    d(report() + b"\xed\xa0", "a report followed by the first two bytes of an encoded surrogate: not text")
+    d(report() + b"\xed", "a report followed by one byte ED: not text")
+    d(report() + b"\xed\xa0\x80", "a report followed by a whole encoded surrogate: text, but not JSON")
+    # the classifier on the wire flags
+    d(report(flags=0x810B, opts=[]), "rcode 11 with RA clear: not NXDOMAIN, no block")
+    d(report(flags=0x8103, opts=[]), "rcode 3 with RA clear: NXRA")
+    d(report(flags=0x810A, opts=[]), "rcode 10 with RA clear: no block")
+    d(report(flags=0x8107, opts=[]), "rcode 7 with RA clear: no block")
+    d(report(flags=0x810F, opts=[]), "rcode 15 with RA clear: no block")
+    d(report(flags=0x8113, opts=[]), "rcode 3 and a reserved header bit above it: NXRA")
+    d(report(flags=0xFFFF, opts=[]), "every header bit set: rcode 15, RA and AA: no block")
+    d(report(flags=0x8103 | 0x7000, opts=[]), "rcode 3 with the opcode bits set: NXRA")
+    d(report(opts=[ede(17, b"  Filtered by Quad9 \t")], flags=NOERROR), "an EDE17 provider with whitespace around it")
+    d(
+        report(opts=[ede(17, "\u00a0\u3000Quad9\u2003".encode())], flags=NOERROR),
+        "an EDE17 provider with Unicode whitespace around it",
+    )
+    d(report(opts=[ede(17, b" \t ")], flags=NOERROR), "an EDE17 provider of only whitespace: External")
+    r.dump()
+
+
 def assert_fresh_answers(r, listed):
     """The lists block what is under fresh.example and two names: the module answers those, Unbound the rest."""
     probed = [step["fresh"] for step in r.steps if "fresh" in step]

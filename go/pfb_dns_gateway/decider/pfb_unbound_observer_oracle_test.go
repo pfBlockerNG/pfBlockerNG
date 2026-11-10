@@ -249,8 +249,8 @@ func TestObserverReportsMatchPython(t *testing.T) {
 			}
 		})
 	}
-	if datagrams < 416 || dumps < 24 || rowsSeen < 239 || malformedFixtures < 54 || freshProbes < 190 {
-		t.Errorf("the oracle compared %d datagrams and fires, %d dumps, %d rows, %d malformed fixtures, %d fresh names: want the full set (416, 24, 239, 54, 190 or more)",
+	if datagrams < 471 || dumps < 25 || rowsSeen < 266 || malformedFixtures < 54 || freshProbes < 190 {
+		t.Errorf("the oracle compared %d datagrams and fires, %d dumps, %d rows, %d malformed fixtures, %d fresh names: want the full set (471, 25, 266, 54, 190 or more)",
 			datagrams, dumps, rowsSeen, malformedFixtures, freshProbes)
 	}
 }

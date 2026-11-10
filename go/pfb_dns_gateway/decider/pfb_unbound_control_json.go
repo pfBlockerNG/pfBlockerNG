@@ -31,6 +31,8 @@ func (o *jsonObject) set(key string, value any) {
 // jsonMaxDepth bounds the recursion.
 // shortcut: Python raises an uncaught RecursionError near 1000 levels, which ends the watcher thread; Go reads anything
 // deeper as no record and the watcher goes on. A hand-written channel file never nests; upgrade if one does.
+// On the observer path Python's limit is its stack depth at the call, not a constant: a report that nests an ignored key
+// between about 990 and 1000 levels fits a datagram, and is read here where Python may refuse it as a RecursionError.
 const jsonMaxDepth = 1000
 
 var jsonNumber = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?`)
@@ -52,8 +54,11 @@ type jsonParser struct {
 // and the surrogate in Python, which the shim's print to stderr writes as \ud800. No row or log file takes it, so no
 // UnicodeEncodeError is lost. parsePyJSONSurrogates keeps it for the observer's reports, whose rows do; both are pinned
 // by pfb_unbound_control_surrogate_test.go. Upgrade if the control channel's messages must match byte for byte.
-func parsePyJSON(text string) (value any, ok bool) {
-	p := &jsonParser{text: text}
+func parsePyJSON(text string) (value any, ok bool) { return parsePyJSONText(text, false) }
+
+// parsePyJSONText parses text; surrogates is jsonParser.surrogates.
+func parsePyJSONText(text string, surrogates bool) (value any, ok bool) {
+	p := &jsonParser{text: text, surrogates: surrogates}
 	value, ok = p.value(0)
 	if !ok {
 		return nil, false
@@ -63,15 +68,7 @@ func parsePyJSON(text string) (value any, ok bool) {
 }
 
 // parsePyJSONSurrogates is parsePyJSON with a lone surrogate escape kept as Python keeps it, for text that reaches a row.
-func parsePyJSONSurrogates(text string) (value any, ok bool) {
-	p := &jsonParser{text: text, surrogates: true}
-	value, ok = p.value(0)
-	if !ok {
-		return nil, false
-	}
-	p.space()
-	return value, p.pos == len(p.text)
-}
+func parsePyJSONSurrogates(text string) (value any, ok bool) { return parsePyJSONText(text, true) }
 
 func (p *jsonParser) space() {
 	for p.pos < len(p.text) && strings.IndexByte(" \t\n\r", p.text[p.pos]) >= 0 {

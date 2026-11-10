@@ -25,17 +25,6 @@ func DecodeRune(s string) (rune, int) {
 	return utf8.DecodeRuneInString(s)
 }
 
-// Runes is list(s) by code point, a lone surrogate being one.
-func Runes(s string) []rune {
-	out := make([]rune, 0, len(s))
-	for len(s) > 0 {
-		r, size := DecodeRune(s)
-		out = append(out, r)
-		s = s[size:]
-	}
-	return out
-}
-
 // Len is len(s) of a str: its code points, a lone surrogate being one.
 func Len(s string) int {
 	n := 0

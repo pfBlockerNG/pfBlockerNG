@@ -142,9 +142,20 @@ func hexDigit(r rune) (byte, bool) {
 }
 
 // pyFromHex is bytes.fromhex: byte pairs of hex digits, with ASCII whitespace allowed between pairs. The error names the
-// position, in characters, of the first digit that is missing or is not one.
+// position, in characters, of the first digit that is missing or is not one; of the first non-ASCII character, when the
+// text has one, ahead of any earlier error.
 func pyFromHex(text string) ([]byte, error) {
-	chars := pysem.Runes(text)
+	chars := make([]rune, 0, len(text))
+	for rest := text; len(rest) > 0; {
+		r, size := pysem.DecodeRune(rest)
+		chars = append(chars, r)
+		rest = rest[size:]
+	}
+	for i, c := range chars {
+		if c >= 128 {
+			return nil, fmt.Errorf("non-hexadecimal number found in fromhex() arg at position %d", i)
+		}
+	}
 	out := make([]byte, 0, len(chars)/2)
 	for i := 0; i < len(chars); {
 		switch chars[i] {
