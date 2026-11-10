@@ -286,8 +286,12 @@ func (m *pfbUnbound) startQueryWatcher() {
 	}
 	tickFor := m.queryTick
 	if tickFor == nil {
+		newTicker := m.queryNewTicker
+		if newTicker == nil {
+			newTicker = time.NewTicker
+		}
 		tickFor = func() (<-chan time.Time, func()) {
-			ticker := time.NewTicker(queryPollInterval)
+			ticker := newTicker(queryPollInterval)
 			return ticker.C, ticker.Stop
 		}
 	}

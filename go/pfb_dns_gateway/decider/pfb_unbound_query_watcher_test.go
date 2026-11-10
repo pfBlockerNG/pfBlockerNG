@@ -61,19 +61,22 @@ func queryWaitPass(t *testing.T, passes <-chan struct{}, what string) {
 
 // PHP's pfb_dnsbl_query() waits at most 5 s for a reply and shares that budget with its lock wait, so a watcher that
 // polls every RELOAD_POLL_INTERVAL (2 s) times concurrent hits out: the query watcher takes a tick of its own, a small
-// fraction of that. No duration is asserted. The tick is checked as a constant; the loop is checked by passes, which the
-// watcher reports through queryDrained. A probe is answered, and the pass that answered it reads the channel once more
-// before it returns, so the timed request is put in place only once that pass has ended. The reply to it then exists by
-// the end of a later pass: two passes after it is in place, since the one that ends first may have begun before it.
+// fraction of that. No duration is asserted. The interval its ticker is made with is checked through queryNewTicker; the
+// loop is checked by passes, which the watcher reports through queryDrained. A probe is answered, and the pass that
+// answered it reads the channel once more before it returns, so the timed request is put in place only once that pass
+// has ended. The reply to it then exists by the end of a later pass: two passes after it is in place, since the one that
+// ends first may have begun before it.
 func TestQueryWatcherAnswersWellInsideThePollInterval(t *testing.T) {
-	if interval := queryPollInterval; interval >= RELOAD_POLL_INTERVAL/2 {
-		t.Fatalf("queryPollInterval = %v, want well under RELOAD_POLL_INTERVAL (%v)", interval, RELOAD_POLL_INTERVAL)
-	}
 	oracle := loadQueryOracle(t)
 	dir := t.TempDir()
 	m := modMust(t, dir)
 	m.snapshot.Store(oracle.Fixtures["plain"].snapshot(t))
 	m.stopQueryWatcher()
+	var tickEvery time.Duration // what the watcher's own ticker is made with, as the default tick makes it
+	m.queryNewTicker = func(d time.Duration) *time.Ticker {
+		tickEvery = d
+		return time.NewTicker(d)
+	}
 	passes := make(chan struct{}, 1000)
 	m.queryDrained = func() {
 		select {
@@ -82,6 +85,9 @@ func TestQueryWatcherAnswersWellInsideThePollInterval(t *testing.T) {
 		}
 	}
 	m.startQueryWatcher()
+	if tickEvery <= 0 || tickEvery >= RELOAD_POLL_INTERVAL/2 {
+		t.Fatalf("the watcher's ticker is made with %v, want a small fraction of RELOAD_POLL_INTERVAL (%v)", tickEvery, RELOAD_POLL_INTERVAL)
+	}
 	channel, reply := filepath.Join(dir, "pfb_py_query"), filepath.Join(dir, "pfb_py_query.reply")
 	if err := os.WriteFile(channel, []byte(`{"id": "probe", "domain": "clean.example.com"}`), 0o660); err != nil {
 		t.Fatal(err)
@@ -103,6 +109,8 @@ func TestQueryWatcherAnswersWellInsideThePollInterval(t *testing.T) {
 	if err := os.Rename(next, channel); err != nil {
 		t.Fatal(err)
 	}
+	// A pause of more than one tick between the signal above and the rename lets a pass begin before the rename, so the
+	// first pass signalled below may have read the probe again; the second one began after the rename.
 	queryWaitPass(t, passes, "after the timed request was put in place")
 	queryWaitPass(t, passes, "after a pass that began with the timed request in place")
 	if !queryReplyExists(dir) {

@@ -179,6 +179,9 @@ type pfbUnbound struct {
 	// queryDrained, when set before the watcher starts, is called each time one of its drain passes returns, so that a
 	// test knows a pass is over without waiting for a time to go by.
 	queryDrained func()
+	// queryNewTicker makes the default tick of the query watcher (nil: time.NewTicker); a test wraps it to see the
+	// interval the watcher's ticker is made with.
+	queryNewTicker func(d time.Duration) *time.Ticker
 
 	// The live update (pfb_unbound_reload.go). reloadStop stops the reload watcher and waits for it to end; nil is
 	// pfb["reload_watcher"] False. reloadTick is its poll tick and the tick's release (nil: a RELOAD_POLL_INTERVAL ticker),
