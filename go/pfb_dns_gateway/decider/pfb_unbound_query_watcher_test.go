@@ -48,32 +48,65 @@ func queryWaitReply(t *testing.T, dir string, limit time.Duration) string {
 	}
 }
 
+// queryWaitPass waits for one drain pass of the watcher to end, or fails after a bound that only a watcher that no longer
+// looks at its channel reaches.
+func queryWaitPass(t *testing.T, passes <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-passes:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("STUCK: no drain pass ended %s: the watcher looks at its channel no more", what)
+	}
+}
+
 // PHP's pfb_dnsbl_query() waits at most 5 s for a reply and shares that budget with its lock wait, so a watcher that
-// polls every RELOAD_POLL_INTERVAL (2 s) times concurrent hits out. The query watcher takes a tick of its own, a fraction
-// of that. A probe request, answered and removed, shows the watcher is running its loop; the timed request is written
-// after that, so only a later tick can pick it up.
+// polls every RELOAD_POLL_INTERVAL (2 s) times concurrent hits out: the query watcher takes a tick of its own, a small
+// fraction of that. No duration is asserted. The tick is checked as a constant; the loop is checked by passes, which the
+// watcher reports through queryDrained. A probe is answered, and the pass that answered it reads the channel once more
+// before it returns, so the timed request is put in place only once that pass has ended. The reply to it then exists by
+// the end of a later pass: two passes after it is in place, since the one that ends first may have begun before it.
 func TestQueryWatcherAnswersWellInsideThePollInterval(t *testing.T) {
+	if interval := queryPollInterval; interval >= RELOAD_POLL_INTERVAL/2 {
+		t.Fatalf("queryPollInterval = %v, want well under RELOAD_POLL_INTERVAL (%v)", interval, RELOAD_POLL_INTERVAL)
+	}
 	oracle := loadQueryOracle(t)
 	dir := t.TempDir()
 	m := modMust(t, dir)
 	m.snapshot.Store(oracle.Fixtures["plain"].snapshot(t))
+	m.stopQueryWatcher()
+	passes := make(chan struct{}, 1000)
+	m.queryDrained = func() {
+		select {
+		case passes <- struct{}{}:
+		default:
+		}
+	}
+	m.startQueryWatcher()
 	channel, reply := filepath.Join(dir, "pfb_py_query"), filepath.Join(dir, "pfb_py_query.reply")
 	if err := os.WriteFile(channel, []byte(`{"id": "probe", "domain": "clean.example.com"}`), 0o660); err != nil {
 		t.Fatal(err)
 	}
-	queryWaitReply(t, dir, 30*time.Second) // the loop runs; its next look is a tick away
-	for _, path := range []string{channel, reply} {
-		if err := os.Remove(path); err != nil {
-			t.Fatal(err)
-		}
+	queryWaitReply(t, dir, 10*time.Second)
+	// Every signal in the channel now was sent before the probe was answered or by the pass that answered it; the first
+	// one after the flush is from that pass or a later one. Passes run one at a time, so the answering pass has ended.
+	for len(passes) > 0 {
+		<-passes
 	}
-	if err := os.WriteFile(channel, []byte(`{"id": "fast", "domain": "listed.example.com"}`), 0o660); err != nil {
+	queryWaitPass(t, passes, "after the probe was answered")
+	if err := os.Remove(reply); err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
-	queryWaitReply(t, dir, RELOAD_POLL_INTERVAL/2)
-	if took := time.Since(start); took >= RELOAD_POLL_INTERVAL/2 {
-		t.Errorf("the reply took %v, want well under RELOAD_POLL_INTERVAL (%v)", took, RELOAD_POLL_INTERVAL)
+	next := channel + ".new" // renamed over the channel, so that no pass reads it half written or absent
+	if err := os.WriteFile(next, []byte(`{"id": "fast", "domain": "listed.example.com"}`), 0o660); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, channel); err != nil {
+		t.Fatal(err)
+	}
+	queryWaitPass(t, passes, "after the timed request was put in place")
+	queryWaitPass(t, passes, "after a pass that began with the timed request in place")
+	if !queryReplyExists(dir) {
+		t.Errorf("no reply to the timed request after two later drain passes")
 	}
 }
 

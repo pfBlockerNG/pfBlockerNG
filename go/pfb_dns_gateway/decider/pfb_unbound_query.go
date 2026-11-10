@@ -250,7 +250,8 @@ func (w *queryWatcher) answer(record *jsonObject) {
 func (w *queryWatcher) drainAndAnswer(stop <-chan struct{}) {
 	for !stopped(stop) {
 		record := channelReadRecord(w.channel, parsePyJSONSurrogates)
-		if record == nil || w.m.retired.Load() || w.last != nil && pyEqual(record, w.last) { // a record read after Close is not answered
+		// a record read after Close is not answered
+		if record == nil || w.m.retired.Load() || w.last != nil && pyEqual(record, w.last) {
 			return
 		}
 		w.last = record
@@ -262,7 +263,14 @@ func (w *queryWatcher) drainAndAnswer(stop <-chan struct{}) {
 // shortcut: Python waits on a kqueue (EVFILT_VNODE on the channel's directory) on FreeBSD and polls elsewhere; Go polls
 // on every queryPollInterval tick, which only adds up to that much latency to a reply. Upgrade if that latency matters.
 func (w *queryWatcher) run(stop <-chan struct{}, tick <-chan time.Time) {
-	pollLoop(stop, tick, w.drainAndAnswer)
+	drain := w.drainAndAnswer
+	if done := w.m.queryDrained; done != nil { // a test's hook: production pays one nil check when the watcher starts
+		drain = func(stop <-chan struct{}) {
+			w.drainAndAnswer(stop)
+			done()
+		}
+	}
+	pollLoop(stop, tick, drain)
 }
 
 // queryPollInterval is how often the query watcher looks at the channel. Python wakes on the directory's kqueue event, so
@@ -271,7 +279,7 @@ func (w *queryWatcher) run(stop <-chan struct{}, tick <-chan time.Time) {
 // unchanged channel is one open and one read.
 const queryPollInterval = 50 * time.Millisecond
 
-// startQueryWatcher starts the watcher (pfb["query_watcher"] True: queryStop is set) unless it already runs.
+// startQueryWatcher starts the watcher (queryStop is set, and nil again once it stops) unless it already runs.
 func (m *pfbUnbound) startQueryWatcher() {
 	if m.queryStop != nil {
 		return

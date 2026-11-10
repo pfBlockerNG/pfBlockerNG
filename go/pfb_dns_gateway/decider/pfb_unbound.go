@@ -173,9 +173,12 @@ type pfbUnbound struct {
 	// controlStop stops the control watcher and waits for it to end; nil is pfb["control_watcher"] False.
 	controlStop func()
 	// queryTick and queryStop are the query channel's (pfb_unbound_query.go), as controlTick and controlStop are the control
-	// watcher's; queryStop is nil when pfb["query_watcher"] is False.
+	// watcher's; queryStop is nil before the watcher starts and after it stops.
 	queryTick func() (tick <-chan time.Time, stop func())
 	queryStop func()
+	// queryDrained, when set before the watcher starts, is called each time one of its drain passes returns, so that a
+	// test knows a pass is over without waiting for a time to go by.
+	queryDrained func()
 
 	// The live update (pfb_unbound_reload.go). reloadStop stops the reload watcher and waits for it to end; nil is
 	// pfb["reload_watcher"] False. reloadTick is its poll tick and the tick's release (nil: a RELOAD_POLL_INTERVAL ticker),
