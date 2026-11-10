@@ -92,10 +92,18 @@ type config struct {
 	trace          func(step string) // called after bind and the privilege drop, and when the decider has booted (the drop hook records itself)
 	readyTimeout   time.Duration
 	shutdownBudget time.Duration
+	clock          budgetClock     // what shutdown measures its budget by; the zero value is the wall clock
 	interrupt      <-chan struct{} // closed on SIGINT/SIGTERM: start stops waiting for the decider
 	doh443Port     int             // the port --doh-listen-443 binds, and DDR advertises as 443; zero is 443. A test cannot bind 443
 	plain53Port    int             // zero is 53; tests bind a free port instead
 	tls853Port     int             // zero is 853; tests bind a free port instead
+}
+
+// budgetClock is the time shutdown measures its budget by: now, and a timer of a duration that reports when it ran out. A
+// test replaces them, so that a budget is never a wall-clock assertion. A nil field is the wall clock.
+type budgetClock struct {
+	now   func() time.Time
+	timer func(d time.Duration) (expired <-chan time.Time, stop func() bool)
 }
 
 type listFlag []string
@@ -484,7 +492,17 @@ func bootDecider(cfg config) (frontend, error) {
 // the exit of the process.
 func (s *server) shutdown() {
 	s.once.Do(func() {
-		deadline := time.Now().Add(s.cfg.shutdownBudget)
+		now, timer := s.cfg.clock.now, s.cfg.clock.timer
+		if now == nil {
+			now = time.Now
+		}
+		if timer == nil {
+			timer = func(d time.Duration) (<-chan time.Time, func() bool) {
+				t := time.NewTimer(d)
+				return t.C, t.Stop
+			}
+		}
+		deadline := now().Add(s.cfg.shutdownBudget)
 		if err := removeReady(s.cfg.readyFile); err != nil {
 			s.logf("cannot remove the ready file: %v", err)
 		}
@@ -493,11 +511,11 @@ func (s *server) shutdown() {
 		}
 		closed := make(chan struct{})
 		go func() { s.frontend.Close(); close(closed) }()
-		left := time.NewTimer(max(time.Until(deadline), 0))
-		defer left.Stop()
+		expired, stopTimer := timer(max(deadline.Sub(now()), 0))
+		defer stopTimer()
 		select {
 		case <-closed:
-		case <-left.C:
+		case <-expired:
 			s.logf("the decider did not close within %s: leaving it to the exit", s.cfg.shutdownBudget)
 		}
 	})

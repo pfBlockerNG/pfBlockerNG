@@ -63,6 +63,7 @@ type heldFrontend struct {
 	entered   chan struct{}
 	release   chan struct{}
 	closeGate chan struct{}
+	closing   chan struct{} // receives once when Close has begun, when set
 	closed    atomic.Bool
 }
 
@@ -77,17 +78,26 @@ func (f *heldFrontend) Resolve([]byte, string, func([]byte) []byte, string, stri
 
 func (f *heldFrontend) Close() {
 	f.closed.Store(true)
+	if f.closing != nil {
+		select {
+		case f.closing <- struct{}{}:
+		default:
+		}
+	}
 	if f.closeGate != nil {
 		<-f.closeGate
 	}
 }
 
 // startHeldQuery starts a server whose decider is fe, sends it a TCP query and returns once the decider holds it.
-func startHeldQuery(t *testing.T, fe *heldFrontend, stopBound, budget time.Duration) (*server, net.Conn, *capture) {
+func startHeldQuery(t *testing.T, fe *heldFrontend, stopBound, budget time.Duration, tweaks ...func(*config)) (*server, net.Conn, *capture) {
 	t.Helper()
 	cfg, logs := lifecycleConfig(t)
 	useDecider(t, func(decider.Options) (frontend, error) { return fe, nil })
 	cfg.shutdownBudget = budget
+	for _, tweak := range tweaks {
+		tweak(&cfg)
+	}
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
 		t.Fatal(err)
@@ -142,26 +152,73 @@ func TestShutdownEndsWhenTheDeciderCannotBeClosedWhileAQueryIsStillInIt(t *testi
 	}
 }
 
-// The stop of the transports and the close of the decider share one budget: a stop that takes stopBound to drain leaves
-// the decider only what is left of it, so a Close that never returns ends the shutdown at the budget, not stopBound later.
-func TestShutdownEndsInsideItsBudgetWhenTheStopIsSlowAndTheDeciderCannotBeClosed(t *testing.T) {
-	const stopBound, budget, slack = 200 * time.Millisecond, 800 * time.Millisecond, 100 * time.Millisecond
-	fe := &heldFrontend{entered: make(chan struct{}, 1), release: make(chan struct{}), closeGate: make(chan struct{})}
+// fakeBudgetClock is the time of a shutdown under test: now is moved by the test, and a timer is asked for once and fires
+// when the test says. No duration is waited for.
+type fakeBudgetClock struct {
+	mu      sync.Mutex
+	t       time.Time
+	asked   chan time.Duration // what each timer was asked for
+	expired chan time.Time     // a timer fires when the test sends on it
+}
+
+func newFakeBudgetClock() *fakeBudgetClock {
+	return &fakeBudgetClock{t: time.Unix(1_000_000, 0), asked: make(chan time.Duration, 4), expired: make(chan time.Time, 1)}
+}
+
+func (f *fakeBudgetClock) now() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.t
+}
+
+func (f *fakeBudgetClock) advance(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.t = f.t.Add(d)
+}
+
+func (f *fakeBudgetClock) timer(d time.Duration) (<-chan time.Time, func() bool) {
+	f.asked <- d
+	return f.expired, func() bool { return true }
+}
+
+func (f *fakeBudgetClock) config(cfg *config) { cfg.clock = budgetClock{now: f.now, timer: f.timer} }
+
+// The stop of the transports and the close of the decider share one budget: a stop that took some of it leaves the decider
+// only what is left, and a Close that never returns ends the shutdown when that runs out. The stop here takes 150 ms of the
+// fake time (the query is let go when it closes its client), so the decider is given the budget less that.
+func TestShutdownGivesTheDeciderOnlyWhatTheStopLeftOfTheBudget(t *testing.T) {
+	const budget, stopTook = 800 * time.Millisecond, 150 * time.Millisecond
+	clock := newFakeBudgetClock()
+	fe := &heldFrontend{entered: make(chan struct{}, 1), release: make(chan struct{}), closeGate: make(chan struct{}), closing: make(chan struct{}, 1)}
 	letGo := sync.OnceFunc(func() { close(fe.release) })
 	t.Cleanup(letGo)
 	t.Cleanup(sync.OnceFunc(func() { close(fe.closeGate) }))
-	srv, c, logs := startHeldQuery(t, fe, stopBound, budget)
-	go func() { // the query is let go when stop() closes its client, in its second stage: stop drains after ~stopBound
-		_, _ = c.Read(make([]byte, 1))
+	srv, c, logs := startHeldQuery(t, fe, 20*time.Millisecond, budget, clock.config)
+	go func() {
+		_, _ = c.Read(make([]byte, 1)) // stop() closed the client: the stop is nearly over
+		clock.advance(stopTook)
 		letGo()
 	}()
-	start := time.Now()
 	done := make(chan struct{})
 	go func() { srv.shutdown(); close(done) }()
-	waitClosed(t, done, "shutdown to end")
-	if took := time.Since(start); took > budget+slack {
-		t.Fatalf("shutdown took %v, want at most the budget %v (+%v)", took, budget, slack)
+
+	select {
+	case asked := <-clock.asked:
+		if want := budget - stopTook; asked != want {
+			t.Fatalf("the decider was given %v to close in, want what the stop left of the budget: %v", asked, want)
+		}
+	case <-time.After(watchdog):
+		t.Fatal("STUCK/ENVIRONMENT: shutdown never started its timer for the decider's close")
 	}
+	waitClosed(t, fe.closing, "the decider's Close to begin")
+	select {
+	case <-done:
+		t.Fatal("shutdown ended before the budget ran out, with the decider's Close still running")
+	default:
+	}
+	clock.expired <- time.Time{}
+	waitClosed(t, done, "shutdown to end once the budget ran out")
 	if !fe.closed.Load() {
 		t.Fatal("the decider was not closed although the stop drained")
 	}
