@@ -1125,7 +1125,7 @@ _VENDOR_PREFIX = "../go/pfb_dns_gateway/vendor/"
 _PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]+(?:\+.*)?$")
 # Owner decision (#3511/#3779): the only modules GL_TUPLE may supply (their `go-import` is gitlab.com/cznic/<project>)
 # and the only module whose untagged pseudo-version a GH_TUPLE may name (by revision). Widening either is an owner call.
-_GITLAB_MODULE_PREFIXES = ("modernc.org/",)
+_GITLAB_MODULE_HOSTS = frozenset({"modernc.org"})  # first path element of a module GL_TUPLE may fetch
 _PSEUDO_VERSION_MODULES = frozenset({"github.com/remyoudompheng/bigfft"})
 _GITLAB_SITE = "https://gitlab.com:"
 _COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -1194,8 +1194,9 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
             if variable == "GL_TUPLE":
                 if not _COMMIT.fullmatch(tag):
                     raise BuildError(f"GL_TUPLE entry {entry!r} does not name a 40-hex lowercase commit")
-                if not path.startswith(_GITLAB_MODULE_PREFIXES):
-                    raise BuildError(f"GL_TUPLE entry {entry!r} is not a {' or '.join(_GITLAB_MODULE_PREFIXES)} module")
+                if path.split("/", 1)[0] not in _GITLAB_MODULE_HOSTS:
+                    hosts = " or ".join(sorted(_GITLAB_MODULE_HOSTS))
+                    raise BuildError(f"GL_TUPLE entry {entry!r} is not a {hosts} module")
                 if path not in listed:
                     raise BuildError(f"GL_TUPLE entry {entry!r} names {path}, which modules.txt does not list")
                 tag = listed[path]

@@ -650,7 +650,19 @@ PARITY_FAILURES = [
         "gitlab-module-not-under-modernc",
         gl_tuples_for("example.test/dep"),
         modules_txt_for(("example.test/dep", "v1.0.0")),
-        "modernc.org/",
+        "is not a modernc.org module",
+    ),
+    (
+        "gitlab-module-whose-host-only-contains-modernc",
+        gl_tuples_for("evil.example/modernc.org/x"),
+        modules_txt_for(("evil.example/modernc.org/x", "v1.0.0")),
+        "is not a modernc.org module",
+    ),
+    (
+        "gitlab-module-whose-host-only-starts-with-modernc",
+        gl_tuples_for("modernc.org.evil.example/x"),
+        modules_txt_for(("modernc.org.evil.example/x", "v1.0.0")),
+        "is not a modernc.org module",
     ),
     (
         "gitlab-tuple-outside-the-vendor-tree",
@@ -798,16 +810,21 @@ def with_the_real_gateway(fx: Fixture) -> Fixture:
     return fx._replace(source_sha=sha)
 
 
+def _gitlab_hosted(module_path: str) -> bool:
+    """Whether a module path's first element is the modernc.org vanity host, whose repositories live on GitLab."""
+    return module_path.split("/", 1)[0] == "modernc.org"
+
+
 def real_gateway_fixture(root: Path, modules_txt: str) -> Fixture:
     """The go recipe over the real gateway, its tuples naming ``modules_txt``'s modules as modules2tuple does."""
     modules = [tuple(line[2:].split()) for line in modules_txt.splitlines() if line.startswith("# ")]
-    gl = gl_tuples_for(*(path for path, _version in modules if path.startswith("modernc.org/")))
+    gl = gl_tuples_for(*(path for path, _version in modules if _gitlab_hosted(path)))
     # the untagged bigfft is named by the revision its pseudo-version ends in
     gh = gh_tuples_for(
         *(
             (path, version.rsplit("-", 1)[1] if path == BIGFFT[0] else version)
             for path, version in modules
-            if not path.startswith("modernc.org/")
+            if not _gitlab_hosted(path)
         )
     )
     fx = make_fixture(root, go_files=None, recipe="go", gh_tuple=gh, gl_tuple=gl, modules_txt=modules_txt)
