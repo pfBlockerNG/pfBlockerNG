@@ -936,7 +936,15 @@ func regexDBUpdate(dst, src *regexDB) {
 }
 
 // intOf is an int64 ini value as an int; a value past int's range saturates (32-bit), where Python's int does not.
-func intOf(value int64) int { return int(max(min(value, math.MaxInt), math.MinInt)) }
+func intOf(value int64) int {
+	if value > math.MaxInt {
+		return math.MaxInt
+	}
+	if value < math.MinInt {
+		return math.MinInt
+	}
+	return int(value)
+}
 
 // rebuildAndSwap is ADR-10's single fail-closed step: build a brand-new snapshot, publish it atomically, reset the
 // query memo. buildSnapshot returns a snapshot built off to the side (it must write nothing live) or an error for a

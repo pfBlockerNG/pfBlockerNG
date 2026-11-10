@@ -7,6 +7,7 @@ package decider
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -141,6 +142,19 @@ func TestParseIniInt(t *testing.T) {
 		got, ok, err := parseIniInt(c, "MAIN", tc.option)
 		if ok != tc.wantOk || (err != nil) != tc.wantErr || (ok && int64(got) != int64(tc.want)) {
 			t.Errorf("parseIniInt(%s) = (%d, %v, %v), want (%d, %v, error=%v)", tc.option, got, ok, err, tc.want, tc.wantOk, tc.wantErr)
+		}
+	}
+}
+
+// decisiondb_max is a Python int; past the build's int range the LRU cap saturates instead of wrapping.
+func TestIntOfKeepsTheValueOrSaturates(t *testing.T) {
+	for _, c := range []struct{ in, want int64 }{
+		{5, 5}, {-5, -5}, {0, 0},
+		{4294967296, min(4294967296, math.MaxInt)},
+		{math.MaxInt64, math.MaxInt}, {math.MinInt64, math.MinInt},
+	} {
+		if got := intOf(c.in); int64(got) != c.want {
+			t.Errorf("intOf(%d) = %d, want %d", c.in, got, c.want)
 		}
 	}
 }
