@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     )
 
 SOCKET = "pfb_upstream.sock"
-# Mirror of the decider's limits (go/pfb_dns_gateway/decider/pfb_dns_proxy_observer.go); test_upstream_observer checks
+# Mirror of the Go decider's report limits (decider/pfb_dns_proxy_observer.go); test_upstream_observer checks
 # the copies agree. One report is one datagram; 2 KiB is a conservative per-report bound, not the AF_UNIX datagram limit
 # (net.local.dgram.maxdgram).
 MAX_REPORT_BYTES = 2048
