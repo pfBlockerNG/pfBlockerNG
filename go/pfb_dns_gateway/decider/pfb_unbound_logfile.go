@@ -260,11 +260,19 @@ func (m *pfbUnbound) logPath(name string) string {
 // pfbLog is pfb_log: a row to an app log through the writer, else appended directly; a test's logSink takes it instead.
 func (m *pfbUnbound) pfbLog(name, line string) {
 	path := m.logPath(name)
-	switch {
-	case m.logSink != nil:
+	if m.logSink != nil {
 		m.logSink(name, line)
-	case m.logs != nil && m.logs.handles(path):
-		m.logs.emit(path, line)
+		return
+	}
+	// Read the writer and the retirement under one lock, as stopLogging swaps the writer under it: a row of a query that
+	// outlives Close is dropped, neither queued to a writer that has stopped nor appended directly.
+	m.logsMu.RLock()
+	logs, retired := m.logs, m.retired.Load()
+	m.logsMu.RUnlock()
+	switch {
+	case retired:
+	case logs != nil && logs.handles(path):
+		logs.emit(path, line)
 	default:
 		logEntryDirect(line, path)
 	}
@@ -272,16 +280,22 @@ func (m *pfbUnbound) pfbLog(name, line string) {
 
 // pfbSetupLogging starts the writer for the two logs unless one runs (end of init_standard).
 func (m *pfbUnbound) pfbSetupLogging() {
+	m.logsMu.Lock()
+	defer m.logsMu.Unlock()
 	if m.logs != nil {
 		return
 	}
 	m.logs = newLogPipeline([]string{m.logPath(dnsblLogName), m.logPath(dnsReplyLogName)}, logQueueMaxsize)
 }
 
-// stopLogging is deinit's stop of the writer, which writes what is queued; the module has no query in flight by then.
+// stopLogging is deinit's stop of the writer, which writes what is queued. A query that outlives Close may still hold the
+// writer it read: its row is queued behind the stop and never written.
 func (m *pfbUnbound) stopLogging() {
-	if m.logs != nil {
-		m.logs.stop()
-		m.logs = nil
+	m.logsMu.Lock()
+	logs := m.logs
+	m.logs = nil
+	m.logsMu.Unlock()
+	if logs != nil {
+		logs.stop()
 	}
 }

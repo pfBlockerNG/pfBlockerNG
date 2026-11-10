@@ -53,8 +53,9 @@ func Open(opts Options) (*Frontend, error) {
 // Close shuts down what Open started, in serve_decisions's `finally` order: the observer stops (its socket closed and
 // unlinked, its reader ended, so that no report meets a closed module), the module deinits, the reply log closes. Each of
 // the four waits (observer reader, reload, control and query watchers) is bounded by watcherStopWait, so Close takes at
-// most four times it: what does not stop in time is logged and left. Close is idempotent. The caller stops calling
-// Resolve before it: a query in flight meets a module whose log writer and databases are closing.
+// most four times it: what does not stop in time is logged and left. Close is idempotent. A query still inside Resolve when
+// Close runs (the gateway closes the decider after its drain bound, whatever a query is doing) is safe: it writes no row, its
+// counter write finds the database closed, and a GeoIP lookup of it finishes before the reader closes.
 func (f *Frontend) Close() {
 	f.closeOnce.Do(func() {
 		if f.observer != nil {

@@ -31,8 +31,10 @@ func openReplyLog(logDir string) *pfbUnbound {
 	return m
 }
 
-// closeReplyLog is ReplyLog.close: the writer writes what is still queued, then the GeoIP reader closes.
+// closeReplyLog is ReplyLog.close: the writer writes what is still queued, then the GeoIP reader closes. The module is
+// retired first, so that a reply that outlives the close writes no row.
 func (m *pfbUnbound) closeReplyLog() {
+	m.retired.Store(true)
 	m.stopLogging()
 	m.closeMaxmind()
 }

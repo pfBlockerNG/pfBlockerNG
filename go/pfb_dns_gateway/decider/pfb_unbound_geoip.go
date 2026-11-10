@@ -27,12 +27,17 @@ func (m *pfbUnbound) openMaxmind() {
 		pyStderr("[pfBlockerNG]: Failed to open MaxMind DB: " + err.Error())
 		return
 	}
+	m.maxmindMu.Lock()
 	m.maxmind = reader
+	m.maxmindMu.Unlock()
 	m.pfb.pythonMaxmind = true
 }
 
-// closeMaxmind is deinit's close of the reader.
+// closeMaxmind is deinit's close of the reader. It waits for the lookups in flight, which are short, and a lookup that
+// starts after it finds no reader.
 func (m *pfbUnbound) closeMaxmind() {
+	m.maxmindMu.Lock()
+	defer m.maxmindMu.Unlock()
 	if m.maxmind != nil {
 		m.maxmind.Close()
 		m.maxmind = nil
@@ -44,6 +49,8 @@ func (m *pfbUnbound) closeMaxmind() {
 // reader refuses is such a failure).
 func (m *pfbUnbound) geoIPCode(settings *pfbSettings, rAddr string) string {
 	const unknown = "unk"
+	m.maxmindMu.RLock() // a lookup that is running holds Close off; one that starts after Close finds no reader
+	defer m.maxmindMu.RUnlock()
 	if !settings.pythonMaxmind || m.maxmind == nil {
 		return unknown
 	}

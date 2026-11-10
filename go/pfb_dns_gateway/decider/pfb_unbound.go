@@ -195,12 +195,14 @@ type pfbUnbound struct {
 	// logs is the log writer (pfb["log_listener"]), nil when none runs: rows are then appended directly. logDir is the
 	// directory it writes. logSink, when set, takes every row instead (Python's tests replace pfb_log).
 	logs    *logPipeline
+	logsMu  sync.RWMutex // guards logs: a query that outlives Close reads it while deinit stops the writer
 	logDir  string
 	logSink func(name, line string)
 	// clock is the time source of the rows' timestamp and the cache TTL; nil is the local time.
 	clock func() time.Time
 	// maxmind is maxmindReader, nil when python_maxmind is off.
-	maxmind *maxminddb.Reader
+	maxmind   *maxminddb.Reader
+	maxmindMu sync.RWMutex // guards maxmind: a lookup holds it for reading, closing the reader takes it for writing
 	// dnsblLast is _dnsbl_last_event, the previous block, which a repeat of marks its row a duplicate.
 	dnsblLastMu sync.Mutex
 	dnsblLast   *dnsblEvent
@@ -722,8 +724,9 @@ func (m *pfbUnbound) whileNotRetired(f func()) {
 // deinit is deinit(): the reload, control and query watchers stop (each waited for at most watcherStopWait: Python's
 // join(timeout=5)), the database worker drains and the connections close, the log writer writes what is queued and the
 // GeoIP reader closes. The watchers come first, ahead of Python's close of the reader: a watcher mid-build must not meet a
-// closed database. The module has no query in flight by then. A watcher that does not stop within its bound is left
-// running, and retirement (above all, the closed database) is what keeps it from publishing or opening anything.
+// closed database. A query may still be inside Resolve (Frontend.Close runs after the gateway's drain bound): retired
+// comes first, so that it publishes, opens and writes nothing from here on. A watcher that does not stop within its bound is
+// left running, and retirement (above all, the closed database) is what keeps it from publishing or opening anything.
 func (m *pfbUnbound) deinit() {
 	m.publishMu.Lock()
 	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing from here on
