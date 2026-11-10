@@ -1,7 +1,7 @@
 // Go translation of the log-row half of pfb_unbound.py: get_details_dnsbl, _log_idn_alert and get_details_reply with the
 // helpers their rows are built from (_log_text, _csv_row, make_timestamp, get_q_*, convert_ipv4/ipv6) and the reply
 // callbacks. The rows go out through pfbLog (pfb_unbound_logfile.go), and the counters the same functions enqueue go to
-// the stats databases (pfb_unbound_sqlite.go). Not translated: _log_upstream_block (the upstream observer).
+// the stats databases (pfb_unbound_sqlite.go). _log_upstream_block is in pfb_unbound_upstream.go.
 package decider
 
 import (
