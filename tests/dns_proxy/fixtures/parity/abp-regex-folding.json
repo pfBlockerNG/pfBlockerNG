@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "feed /re/ lines that fold to a domain rule at build time (zero per-query regex cost): exact data, wildcard zone, optional www, upper case",
   "module": {
     "ini": {

@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "Wildcard Blocking on with a small public-suffix list: a plain feed registrable domain becomes a zone, boundaries follow the PSL",
   "module": {
     "ini": {

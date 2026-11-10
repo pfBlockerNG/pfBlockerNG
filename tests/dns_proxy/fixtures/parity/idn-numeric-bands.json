@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "IDN mode All with a feed @@ exception loaded (important_rules on, so the numeric band resolution decides): the IDN block carries the feed block band, so an xn-- name is still blocked",
   "module": {
     "ini": {

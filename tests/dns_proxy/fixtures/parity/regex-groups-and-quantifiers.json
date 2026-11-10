@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "feed /re/ lines: groups, alternation, every quantifier greedy and lazy, optional groups, repeated plain-run groups and leading dot runs; case tags: R8 groups, R9 alternation, R10 quantifiers, R11 lazy quantifiers, R12 quantified groups, R13 leading dot runs",
   "module": {
     "ini": {

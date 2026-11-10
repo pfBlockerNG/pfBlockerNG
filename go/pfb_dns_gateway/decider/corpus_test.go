@@ -20,18 +20,11 @@ var translated = map[string]bool{
 	"top1m": true,
 }
 
-// divergent lists the cases of translated families where the Go decider differs from the Python oracle by an owner
-// decision (IDNA2003 vs UTS46, Python's Unicode tables vs Go's), as "<scenario file stem>/<case id>" -> the #3511
-// comment that tables the row for the owner's sign-off. Such a case is reported as divergent, never as a pass and
-// never skipped, and it must still differ: one that starts to match fails until it is taken off this list.
-var divergent = map[string]string{
-	"regex-cname-target-octets/latin1-letter-matches-backslash-w":                re2LatinClasses,
-	"regex-cname-target-octets/latin1-no-break-space-matches-backslash-s":        re2LatinClasses,
-	"regex-cname-target-octets/latin1-letter-does-not-match-backslash-capital-w": re2LatinClasses,
-}
-
-// re2LatinClasses: RE2 reads \w \s \W as ASCII classes, Python re as Unicode ones, on a Latin-1 CNAME target.
-const re2LatinClasses = "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6752661597"
+// divergent lists the cases of translated families where the Go decider differs from the Python oracle and the owner
+// has not yet signed off a go_expect for them, as "<scenario file stem>/<case id>" -> the #3511 comment that tables the
+// row. Such a case is reported as divergent, never as a pass and never skipped, and it must still differ: one that
+// starts to match fails until it is taken off this list. A signed-off case carries a go_expect and is never listed.
+var divergent = map[string]string{}
 
 type tally struct{ passed, failed, divergent, notImplemented int }
 
@@ -97,7 +90,10 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 	f := newFrontend(module)
 	stem := strings.TrimSuffix(filepath.Base(file), ".json")
 	for i := range s.Cases {
-		c := &s.Cases[i]
+		c := s.Cases[i]
+		if c.GoExpect != nil { // the owner signed off a Go-specific decision for this case: compare that one
+			c.Expect = *c.GoExpect
+		}
 		skipped := false
 		reason, isDivergent := divergent[stem+"/"+c.ID]
 		ok := t.Run(c.ID, func(t *testing.T) {
@@ -115,7 +111,7 @@ func runScenario(t *testing.T, file string, families map[string]string, counts m
 				skipped = true
 				t.Skipf("family %s: not implemented in Go yet", c.Family)
 			}
-			lines := paritycorpus.Mismatches(s, c, c.Query.Wire, u, answer)
+			lines := paritycorpus.Mismatches(s, &c, c.Query.Wire, u, answer)
 			if isDivergent {
 				if len(lines) == 0 {
 					t.Errorf("listed as divergent (%s) but the Go decider now matches the oracle: take it off the list", reason)

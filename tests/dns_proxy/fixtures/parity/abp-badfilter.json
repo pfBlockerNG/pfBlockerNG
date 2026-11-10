@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "description": "$badfilter in a feed prunes the feed twin of the same signature only: not a user Custom_List twin, not a rule with another option set",
   "module": {
     "ini": {

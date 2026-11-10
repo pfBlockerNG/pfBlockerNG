@@ -7,8 +7,8 @@
 // otherwise executes pattern text (this package imports no regexp), so judging a pattern costs time linear in its
 // capped length however hostile it is. The compile text is Python re syntax; a Go caller hands it to regexp with the
 // (?i) flag. RE2 reads some admitted texts differently from Python's re (Unicode \w \s \b on Latin-1, `$` before a
-// trailing newline): re2_divergence_test.go pins those rows, and the three that flip parity-corpus cases are signed
-// off on https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6752661597.
+// trailing newline): re2_divergence_test.go pins those rows, and the three that flip parity-corpus cases carry a
+// go_expect signed off on https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482.
 package regexrules
 
 import (

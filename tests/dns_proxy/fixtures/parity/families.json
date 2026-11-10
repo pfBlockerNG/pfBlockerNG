@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "families": {
     "relay": "operate: MODULE_EVENT_NEW -> MODULE_WAIT_MODULE, then MODULE_EVENT_MODDONE finishes (nothing listed: Unbound's reply is the answer)",
     "zone_exact": "evaluate_domain: dataDB exact lookup, fed by build/tld_wildcard_classify (plain feed lines are exact without Wildcard Blocking)",
