@@ -768,7 +768,7 @@ To update the ports tree manually instead:
 # net/pfSense-pkg-pfBlockerNG-edge/Makefile     (edge)
 # net/pfSense-pkg-pfBlockerNG-nightly/Makefile  (nightly)
 
-# Update GH_TAGNAME to the new tag, then bump PORTREVISION if the
-# PORTVERSION is unchanged, or update PORTVERSION to match the new tag.
+# Update GH_TAGNAME and PORTVERSION to match the new tag and drop PORTREVISION.
+# Bump PORTREVISION only for a recipe change that keeps the same PORTVERSION.
 # Push to pfblockerng/use-github (the build-input branch) — no upstream PR.
 ```
