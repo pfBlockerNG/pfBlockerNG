@@ -26,6 +26,7 @@ from .test_blacklist import (
 from .test_category import DNSBL_GROUPS, _page_url, _restore_node, _seed_three_rows, _snapshot_node
 from .test_category_edit import CFG_DNSBL, _del_rowid, _dnsbl_payload, _free_rowid, _post_form
 from .test_category_edit_new_group_logging_default import _legacy_no_override_system, _seed_raw_legacy_dnsbl_group
+from .test_dns_stats_review import _stats_data
 from .webui import looks_like_login_page
 
 if TYPE_CHECKING:
@@ -532,7 +533,9 @@ def test_alerts_dnsbl_stat_unknown_blocking_type_rows_use_the_deprecated_label(
     resp = webui.get(ALERTS_DNSBL_STAT_PAGE)
     result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("Alert Settings",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
-    labels = re.findall(r"DNSBL Web ?Server/VIP[^<\"']*", resp.text, re.IGNORECASE)
+    # Since #2cdd83fe10 the stats panels arrive progressively as JSON, not in the plain page.
+    body = "".join(panel["html"] for panel in _stats_data(webui, "dnsbl_stat")["panels"])
+    labels = re.findall(r"DNSBL Web ?Server/VIP[^<\"']*", body, re.IGNORECASE)
     # Fixture sanity: both seeded rows must surface the label, or the assertion below is vacuous.
     assert len(labels) >= 2, f"the two seeded unknown-agent rows did not both render the VIP label: {labels!r}"
     stale = [label for label in labels if "deprecated" not in label.lower()]

@@ -22,8 +22,8 @@ Module setup, put back in ``finally``::
 
 What it proves, in file order:
 
-* pfB-DNS off, DNSBL on (devel's behaviour): Unbound hosts the python module and listens on 53 and 853 (the baseline
-  every "not any more" below is measured against);
+* pfB-DNS off (DNSBL is off with it, #3770): Unbound runs no python module, listens on 53 and 853 and answers a listed
+  name from the upstream (the baseline every "not any more" below is measured against);
 * pfB-DNS on, DNSBL on + apply: config.xml shows the Resolver moved (interfaces, DoT, Custom Options; NOT the port) and
   the snapshot, ``unbound.conf`` never loads ``pfb_unbound.py``, Unbound listens on loopback 5353 and 5354 only (our
   clause's ``port: 5354``); the service, its processes and sockets, the observer, the firewall's own lookups and the
@@ -56,10 +56,12 @@ What it proves, in file order:
   ``start`` verbs racing leave exactly one supervisor and one child, and the same race without the lock is printed as
   evidence;
 * pfB-DNS off + apply: the proxy and its pidfiles are gone, every Resolver key is back to its pre-toggle value (absent
-  stays absent), the marker is cleared, the module is back in ``unbound.conf``, Unbound is on 53 and 853 again;
+  stays absent), the marker is cleared, ``unbound.conf`` has no python module again, Unbound is on 53 and 853 again
+  and no longer blocks (pfB-DNS is off, so is DNSBL);
 * a failed activation: pfB-DNS requested, the Resolver already moved, every address the proxy would serve held by nc(1)
   on the guest, then the real apply: the proxy cannot bind and never becomes ready, pfB-DNS stays on, the Resolver
-  and Unbound are back exactly as before the toggle, and the client's listed name still gets the VIP from Unbound.
+  and Unbound are back exactly as before the toggle, and the client's listed name gets the upstream's answer from that
+  Unbound: DNSBL does not block until an activation serves.
 * a decision service that exits before READY at every start (issue #3561): the supervisor waiting out its restart
   delay still names pfb_dns_proxy and the rc stop ends it; started by the Resolver's start hook, with the package's
   service entry registered or absent (an install's window, where pfSense's stop_service() does nothing), the real
@@ -169,9 +171,17 @@ FEED_HEADER = "smoke3515"
 BYPASSED_ALIAS_IP = "192.168.1.12"  # a second LAN address on the client; on the Group Policy bypass list
 DONE = "PFB3515-DONE"
 
-# What pfSense and pfBlockerNG write: the python module in unbound.conf (module-config + the python clause).
+# What a python-module Unbound carries in unbound.conf (module-config + the python clause). Since #3770 DNSBL runs only
+# in the pfB-DNS decider: with pfB-DNS off, or after a rolled-back activation, unbound.conf has neither.
 MODULE_LINE = re.compile(r'^\s*module-config:\s*"\s*python\b', re.MULTILINE)
 SCRIPT_LINE = re.compile(r"^\s*python-script\s*:", re.MULTILINE)
+
+
+def _assert_no_python_module(conf: str, when: str) -> None:
+    assert not MODULE_LINE.search(conf) and not SCRIPT_LINE.search(conf), (
+        f"{when}: unbound.conf loads a python module:\n{conf}"
+    )
+
 
 # Everything the module touches outside pfBlockerNG's own reset, snapshotted whole and put back verbatim.
 SNAPSHOT_PATHS = (
@@ -252,7 +262,7 @@ class Rig:
     vm: SmokeVM
     client: SmokeVM
     names: Names
-    before: State  # the Resolver as pfBlockerNG leaves it with DNSBL on and the toggle off
+    before: State  # the Resolver with the toggle off (DNSBL is off with it): Unbound plain on 53 and 853
     baseline: dict[str, h.DnsAnswer]  # what the client got from that Resolver
 
 
@@ -588,6 +598,13 @@ def _apply(vm: SmokeVM) -> None:
     h.reload(vm, "updatednsbl")
 
 
+def _apply_of_an_activation_that_cannot_serve(vm: SmokeVM) -> None:
+    """The same apply for a test whose proxy never becomes ready: `h.reload` raises for DNSBL and pfB-DNS both on but
+    not serving, the very state this apply must end in (rolled back, pfB-DNS still on). Waits for Unbound itself."""
+    h.reload(vm, "updatednsbl", wait_unbound=False)
+    h.wait_unbound_ready(vm)
+
+
 def _unbound_conf_report(vm: SmokeVM) -> str:
     """Why Unbound would not start: its own config check, and the lines around the error."""
     check = vm.ssh(f"/usr/local/sbin/unbound-checkconf {h.UNBOUND_CONF} 2>&1").stdout
@@ -676,7 +693,7 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
         h.force_dnsbl_refetch(vm, FEED_HEADER)
         h.reload(vm, "update")
         _configure_group_policy(vm)
-        _apply(vm)  # toggle off: pfBlockerNG's own wiring, the module inside Unbound
+        _apply(vm)  # toggle off: DNSBL is off with it (#3770), Unbound runs plain
         before = _capture(vm)
         baseline = {
             "blocked": _query(client_vm, names.blocked)[0],
@@ -684,7 +701,9 @@ def rig(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iter
             "blocked_dot": _query(client_vm, names.blocked, dot=True)[0],
         }
         # An invalid setup fails here at once, not as a 240 s `_wait_proxy_serves` timeout in every toggle test.
-        assert h.is_vip(baseline["blocked"]), f"baseline: {names.blocked} should answer the VIP: {baseline['blocked']}"
+        assert h.resolves_to(baseline["blocked"], STUB_DNS_A), (
+            f"baseline: {names.blocked} should get the upstream's {STUB_DNS_A} with pfB-DNS off: {baseline['blocked']}"
+        )
         yield Rig(vm, client_vm, names, before, baseline)
     finally:
         try:
@@ -720,24 +739,27 @@ def proxy_on(rig: Rig) -> State:
 # --------------------------------------------------------------------------- #
 
 
-def test_before_the_toggle_unbound_hosts_the_module_and_serves_53_and_853(rig: Rig) -> None:
-    """With DNSBL on and the toggle off, the Resolver is untouched and Unbound runs the python module itself.
+def test_before_the_toggle_unbound_runs_plain_on_53_and_853_and_blocks_nothing(rig: Rig) -> None:
+    """With the toggle off, DNSBL is off too (#3770): the Resolver is untouched and Unbound runs no python module.
 
-    Given the Resolver at its defaults with DoT on, DNSBL active, and the toggle off,
-    Then unbound.conf has the python module, Unbound listens on 53 and 853 (not 5353), the Resolver keys are
-      unmoved, no snapshot exists, and no proxy runs; the client's blocked / allowed / DoT queries all work.
+    Given the Resolver at its defaults with DoT on, DNSBL configured on, and the toggle off,
+    Then unbound.conf has no python module, Unbound listens on 53 and 853 (not 5353), the Resolver keys are
+      unmoved, no snapshot exists, and no proxy runs; the client's blocked / allowed / DoT queries all get the
+      upstream's answer: a listed name is not blocked.
     """
     before = rig.before
-    assert MODULE_LINE.search(before.conf) and SCRIPT_LINE.search(before.conf), before.conf
+    _assert_no_python_module(before.conf, "toggle off")
     _say(f"Unbound DNS sockets, toggle off: {sorted(before.unbound_dns())}")
     ports = {int(local.rsplit(":", 1)[1]) for _, local in before.unbound_dns()}
     assert {53, 853} <= ports and 5353 not in ports, f"Unbound DNS sockets: {sorted(before.unbound_dns())}"
     assert before.resolver["port"] is None and before.resolver["active_interface"] is None, before.resolver
     assert before.resolver["enablessl"] == "yes" and before.resolver["sslcertref"], before.resolver
     assert before.marker == "" and before.ps == [] and before.proxy_pid is None and before.service == "stopped", before
-    assert h.is_vip(rig.baseline["blocked"]), f"baseline blocked name: {rig.baseline['blocked']}"
+    assert h.resolves_to(rig.baseline["blocked"], STUB_DNS_A), f"baseline blocked name: {rig.baseline['blocked']}"
     assert h.resolves_to(rig.baseline["allowed"], STUB_DNS_A), f"baseline allowed name: {rig.baseline['allowed']}"
-    assert h.is_vip(rig.baseline["blocked_dot"]), f"baseline blocked name over DoT: {rig.baseline['blocked_dot']}"
+    assert h.resolves_to(rig.baseline["blocked_dot"], STUB_DNS_A), (
+        f"baseline blocked name over DoT: {rig.baseline['blocked_dot']}"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1134,8 +1156,8 @@ def _reply_logging(rig: Rig, on: bool) -> Iterator[str]:
 
 
 def _reply_rows(vm: SmokeVM, name: str, path: str = REPLY_LOG) -> list[list[str]]:
-    """The DNS-reply rows of `name` in dns_reply.log (or unified.log, same eleven columns):
-    DNS-reply,timestamp,type,orig_type,final_type,ttl,name,client,answer,geoip,transport."""
+    """The DNS-reply rows of `name` in dns_reply.log (or unified.log, same thirteen columns):
+    DNS-reply,timestamp,type,orig_type,final_type,ttl,name,client,answer,geoip,transport,listener_ip,listener_interface."""
     rows = csv.reader(io.StringIO(h.read_log_file(vm, path)))
     return [row for row in rows if row[:1] == ["DNS-reply"] and row[6:7] == [name]]
 
@@ -1166,7 +1188,7 @@ def test_pfb_dns_without_dnsbl_logs_replies_for_the_client_only_while_dns_reply_
             except RuntimeError as exc:
                 raise RuntimeError(f"{exc}\ndns_reply.log gained no row for {logged}:\n{_proxy_log(vm)}") from exc
             [row] = _reply_rows(vm, logged)
-            assert len(row) == 11 and row[10] == "UDP", row
+            assert len(row) == 13 and row[10] == "UDP", row
             assert row[2:5] == ["reply", "A", "A"] and row[5].isdigit(), f"row: {row}"
             assert row[6:9] == [logged, CLIENT_LAN_IP, STUB_DNS_A], f"row: {row}"
             try:
@@ -2168,9 +2190,9 @@ def test_toggle_off_stops_the_proxy_and_puts_the_resolver_back_exactly(rig: Rig,
     When the toggle is turned off and applied,
     Then the proxy and the supervisor are gone with both pidfiles and the service reads stopped;
       every Resolver key equals its pre-toggle value (absent keys absent again, Custom Options byte for byte);
-      the marker is cleared; unbound.conf has the python module again; Unbound listens where it did before
-      the toggle (53 and 853, not 5353);
-      And the client's blocked / allowed / DoT queries work against Unbound again.
+      the marker is cleared; unbound.conf has no python module (pfB-DNS off is DNSBL off, #3770); Unbound listens
+      where it did before the toggle (53 and 853, not 5353);
+      And the client's blocked / allowed / DoT queries are answered by the upstream: Unbound blocks nothing again.
     """
     vm, before = rig.vm, rig.before
     assert _is_on(proxy_on) and proxy_on.marker, f"the toggle is not on before the test turns it off: {proxy_on}"
@@ -2183,16 +2205,16 @@ def test_toggle_off_stops_the_proxy_and_puts_the_resolver_back_exactly(rig: Rig,
         f"Resolver keys after the toggle off:\n{state.resolver}\nbefore:\n{before.resolver}"
     )
     assert state.marker == "", f"pfb_dns_proxy_saved is not cleared: {state.marker!r}"
-    assert MODULE_LINE.search(state.conf) and SCRIPT_LINE.search(state.conf), f"module not back:\n{state.conf}"
+    _assert_no_python_module(state.conf, "toggle off")
     assert state.unbound_dns() == before.unbound_dns(), (
         f"Unbound sockets {sorted(state.unbound_dns())}, before the toggle {sorted(before.unbound_dns())}"
     )
     blocked, raw = _query(rig.client, rig.names.blocked)
-    assert h.is_vip(blocked), f"blocked name through Unbound again: {blocked}\n{raw}"
+    assert h.resolves_to(blocked, STUB_DNS_A), f"listed name through Unbound after the toggle off: {blocked}\n{raw}"
     allowed, raw = _query(rig.client, h.unique_domain("restored"))
     assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name through Unbound again: {allowed}\n{raw}"
     dot, raw = _query(rig.client, rig.names.blocked, dot=True)
-    assert h.is_vip(dot), f"blocked name over Unbound's own DoT again: {dot}\n{raw}"
+    assert h.resolves_to(dot, STUB_DNS_A), f"listed name over Unbound's own DoT after the toggle off: {dot}\n{raw}"
 
 
 # --------------------------------------------------------------------------- #
@@ -2274,19 +2296,20 @@ def _stop_the_proxy_the_move_started(vm: SmokeVM) -> None:
 
 
 @pytest.mark.timeout(1500)
-def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_blocking_in_unbound(rig: Rig) -> None:
-    """A proxy that never serves leaves the Resolver, and the DNSBL in Unbound, exactly as they were.
+def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_unbound_answers_without_dnsbl(rig: Rig) -> None:
+    """A proxy that never serves leaves the Resolver exactly as it was, and DNSBL does not block until one serves.
 
     Given pfB-DNS requested and the Resolver already moved (the first half of an activation), the proxy stopped again
       (the move's Unbound restart had started it), and every address the proxy would serve held by another process on
       port 53,
     When the real apply runs (pfb_trigger scope=dnsbl) and the proxy, which cannot bind, never becomes ready,
     Then pfB-DNS stays on in config.xml, the proxy and its supervisor are gone with their pidfiles, every Resolver
-      key equals its pre-toggle value, the marker is cleared, unbound.conf loads the python module again and Unbound
+      key equals its pre-toggle value, the marker is cleared, unbound.conf loads no python module and Unbound
       listens on 53 and 853 as before; the proxy's own log says no address could be bound and the package log says it
       did not become ready;
-      And the LAN client's listed name still gets the DNSBL VIP from that Unbound, an allowed name resolves, and DoT
-      works: the original mode answers, not merely a config file that says so.
+      And the LAN client's listed name gets the upstream's answer from that Unbound (the activation did not serve, so
+      DNSBL blocks nothing, #3770), an allowed name resolves, and DoT works: the original Resolver answers, not merely a
+      config file that says so.
     """
     vm, before = rig.vm, rig.before
     if _is_on(_capture(vm)):  # an earlier test left pfB-DNS on: start from the baseline the rig recorded
@@ -2308,7 +2331,7 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         assert state.ps == [], f"a proxy is already running: {state.ps}"
         _occupy(vm, addresses, port)
 
-        _apply(vm)
+        _apply_of_an_activation_that_cannot_serve(vm)
 
         after = _capture(vm)
         diagnostics = _diagnostics(vm)
@@ -2321,7 +2344,7 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
             f"Resolver keys after the rollback:\n{after.resolver}\nbefore the toggle:\n{before.resolver}"
         )
         assert after.marker == "", f"pfb_dns_proxy_saved is not cleared: {after.marker!r}"
-        assert MODULE_LINE.search(after.conf) and SCRIPT_LINE.search(after.conf), f"module not back:\n{after.conf}"
+        _assert_no_python_module(after.conf, "after the rollback")
         assert after.unbound_dns() == before.unbound_dns(), (
             f"Unbound sockets {sorted(after.unbound_dns())}, before the toggle {sorted(before.unbound_dns())}"
         )
@@ -2336,11 +2359,11 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_dnsbl_keeps_
         _release(vm)
 
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"blocked name through Unbound again: {blocked}\n{raw}"
+        assert h.resolves_to(blocked, STUB_DNS_A), f"listed name through Unbound after the rollback: {blocked}\n{raw}"
         allowed, raw = _query(rig.client, h.unique_domain("rolledback"))
         assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name through Unbound again: {allowed}\n{raw}"
         dot, raw = _query(rig.client, rig.names.blocked, dot=True)
-        assert h.is_vip(dot), f"blocked name over Unbound's own DoT again: {dot}\n{raw}"
+        assert h.resolves_to(dot, STUB_DNS_A), f"listed name over Unbound's own DoT after the rollback: {dot}\n{raw}"
     finally:
         _release(vm)
         _force_stop_proxy(vm)
@@ -2433,7 +2456,7 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
         assert after.marker == "", f"boot check did not consume the saved Resolver: {after.marker!r}"
         assert after.proxy_pid is None and after.daemon_pid is None, (after.proxy_pid, after.daemon_pid)
         assert after.service == "stopped" and after.ps == [], f"proxy left running: {after.service} {after.ps}"
-        assert MODULE_LINE.search(after.conf) and SCRIPT_LINE.search(after.conf), f"module not back:\n{after.conf}"
+        _assert_no_python_module(after.conf, "after the boot-check rollback")
         assert after.unbound_dns() == before.unbound_dns(), (
             f"Unbound sockets {sorted(after.unbound_dns())}, before the toggle {sorted(before.unbound_dns())}"
         )
@@ -2446,7 +2469,7 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
                 f"missing {notice_id!r} notice containing {phrase!r}: {rows}"
             )
         blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"first blocked query after boot-check rollback: {blocked}\n{raw}"
+        assert h.resolves_to(blocked, STUB_DNS_A), f"first listed query after boot-check rollback: {blocked}\n{raw}"
         allowed, raw = _query(rig.client, h.unique_domain("bootcheck-restored"))
         assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name after boot-check rollback: {allowed}\n{raw}"
     finally:
@@ -2698,7 +2721,7 @@ def test_a_decider_that_exits_at_every_start_is_rolled_back_with_no_supervisor_l
             h.wait_unbound_ready(vm)
             supervisor, _ = _between_starts(vm)
 
-            _apply(vm)
+            _apply_of_an_activation_that_cannot_serve(vm)
 
             after = _capture(vm)
             diagnostics = _diagnostics(vm)

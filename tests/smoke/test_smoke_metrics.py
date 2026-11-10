@@ -565,7 +565,7 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
     Given two configured groups and five original client transports,
     When A is disabled, re-enabled, deleted and recreated,
     Then only deletion changes its incarnation and resets its counts, never B's.
-    Native Unbound traffic has no invented original-client transport label.
+    With pfB-DNS off, DNSBL is off with it (#3770): native Unbound traffic is neither blocked nor counted.
     """
     vm = gw.vm
     token = secrets.token_hex(4)
@@ -770,28 +770,20 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         before_native = _export(vm)
         reply = _dig(gw.client, "udp", "TXT", native)
         assert reply.rcode == "NOERROR", f"native TXT query: {reply.raw}"
-        assert not stub_dns.received(native), f"native query was not blocked: {stub_dns.received(native)}"
-        final = _wait_blocks(vm, {groups[0]: {("TXT", ""): 1}, groups[1]: {}})
-        assert all(
-            "listener_ip" not in labels and "listener_interface" not in labels
-            for labels, value in _samples(final, _BLOCKED)
-            if labels.get("group") == groups[0] and labels.get("qtype") == "TXT" and value
-        ), _samples(final, _BLOCKED)
+        assert stub_dns.received(native), f"pfB-DNS off: the listed {native} must reach the upstream: {reply.raw}"
+        _wait_blocks(vm, {group: {} for group in groups})
         native_key = {"qtype": "TYPE65280"}
         before_value = sum(value for labels, value in _samples(before_native, _RESOLVER) if labels == native_key)
         numeric = h.unique_domain("metric-numeric")
         reply = _dig(gw.client, "udp", "TYPE65280", numeric)
         assert reply.rcode == "NOERROR", f"native TYPE65280 query: {reply.raw}"
         assert stub_dns.received(numeric), f"unlisted numeric query did not reach upstream: {reply.raw}"
-
-        def numeric_committed() -> bool:
-            nonlocal final
-            final = _export(vm)
-            return (
-                sum(value for labels, value in _samples(final, _RESOLVER) if labels == native_key) == before_value + 1
-            )
-
-        assert h.wait_until(numeric_committed, timeout=60.0, interval=0.5), (before_value, _samples(final, _RESOLVER))
+        final = _export(vm)
+        assert sum(value for labels, value in _samples(final, _RESOLVER) if labels == native_key) == before_value, (
+            "pfB-DNS off: Unbound has no module, so a native query is counted nowhere",
+            before_value,
+            _samples(final, _RESOLVER),
+        )
 
         # One collision phase: feed regex and global regex share the display group, never ownership.
         collision_alias = f"smmetric{token}regex"
