@@ -21,7 +21,7 @@ from pathlib import Path
 # The channel build-pkg-linux.yml builds, for the case where no artifact is in hand (a dev
 # box collecting without SMOKE_PKG). test_issue2166_workflow_channel_inputs.py pins this to
 # the workflow's own default, so the two can never drift apart unnoticed.
-DEFAULT_CHANNEL = "edge"
+DEFAULT_CHANNEL = "nightly"
 
 # `<name>-<version>.pkg`: a FreeBSD pkg version never contains '-' and always starts with a
 # digit, so the last '-' before a digit run ends the name.
@@ -55,3 +55,35 @@ def branch_pkg_name(pkg_path: str | None) -> str:
     if not match:
         raise ValueError(f"not a pfBlockerNG package filename: {pkg_path!r}")
     return match.group("name")
+
+
+# A nightly version: `YYYYMMDDHHMMSS` plus an optional `.<7-sha>`.
+_NIGHTLY_VERSION = re.compile(r"^(?P<stamp>\d{14})(?P<rest>\..+)?$")
+
+
+def version_above(installed: str) -> str:
+    """Return a package version that outranks ``installed``, whatever channel built it.
+
+    A fixture that seeds the software-update cache with a "newer" ``latest`` needs one that really
+    is newer. A nightly version is a 14-digit timestamp, so it outranks any semantic constant such
+    as ``99.0.0``; its own timestamp plus one second does not depend on the channel.
+    """
+    match = _NIGHTLY_VERSION.match(installed)
+    if match is None:
+        return "99.0.0"
+    return f"{int(match.group('stamp')) + 1}{match.group('rest') or ''}"
+
+
+NIGHTLY_NAME = "pfSense-pkg-pfBlockerNG-nightly"
+EDGE_NAME = "pfSense-pkg-pfBlockerNG-edge"
+
+
+def counterpart_name(branch_name: str) -> str:
+    """The name of a package from a DIFFERENT channel than ``branch_name``, for conflict cases.
+
+    The nightly conflict cases need a second package that is not the nightly one. Devel builds the
+    nightly port (issue #3791), so the branch package can no longer play that part, and devel's
+    source cannot build the edge port; its identity is the edge one instead (``rename_pkg``).
+    Every other branch channel already differs from nightly and is its own counterpart.
+    """
+    return EDGE_NAME if branch_name == NIGHTLY_NAME else branch_name

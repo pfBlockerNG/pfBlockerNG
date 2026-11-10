@@ -14,7 +14,7 @@
 # Usage:
 #   scripts/local-smoke.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR]
 #                          [--no-two-vm] [--shards N] [--git-remote URL|NAME]
-#                          [--pkgversion V]
+#                          [--pkgversion V] [--ports-repo R] [--ports-ref REF]
 #
 # Required (env):
 #   PFB_BOXES   space-separated ssh targets, e.g. "root@10.0.0.23 root@10.0.0.24"
@@ -23,11 +23,16 @@
 #   PFB_REF     git ref (commit/branch) to test (default: current HEAD)
 #   --ref REF   same; flag takes precedence over PFB_REF
 #   --abi ABI   build ABI (default: FreeBSD:15:amd64)
-#   --channel C pkg channel to BUILD: stable|testing|edge|nightly (default: edge, the
-#               channel the devel branch's 4.0.0.a* line belongs to, and the one
-#               build-pkg-linux.yml builds, issue #2166). The channel picks the port,
-#               and the port names the package, so a run on the wrong channel verifies a
-#               differently-named artifact than CI ships (issue #2206).
+#   --channel C pkg channel to BUILD: stable|testing|edge|nightly (default: nightly, the
+#               port the devel branch pairs with; release/X.Y lines pair with edge). It is
+#               also the channel build-pkg-linux.yml builds (issue #2166). The channel picks
+#               the port, and the port names the package, so a run on the wrong channel
+#               verifies a differently-named artifact than CI ships (issue #2206).
+#   --ports-repo R  FreeBSD-ports repo the box builds against, OWNER/NAME or URL (default:
+#               pfBlockerNG/FreeBSD-ports). Forwarded to smoke-on-box.sh.
+#   --ports-ref REF  FreeBSD-ports branch or commit SHA (default: pfblockerng/use-github).
+#               Lets a pre-landing run build against a ports commit that is not on the
+#               default branch yet. Forwarded to smoke-on-box.sh.
 #   --pkgversion V  nightly identity YYYYMMDDHHMMSS.<7-sha>, forwarded to
 #               smoke-on-box.sh. Omit to let smoke-on-box.sh derive it from the
 #               box's just-checked-out HEAD (the commit it actually builds).
@@ -106,11 +111,12 @@ export PFB_BOXES
 _REF="${PFB_REF:-}"
 _ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
 # A local run must build the same-named package CI does, or a green local smoke proves
-# nothing about CI's artifact. NOT mechanically pinned to build-pkg-linux.yml: the guard test
-# (tests/test_issue2166_workflow_channel_inputs.py) scans the workflows and tests/smoke, never
-# this default, so the two are kept in step by hand. Both build the channel the devel branch's
-# 4.0.0.a* line belongs to. Revisit if the branch changes release line.
-_CHANNEL="edge"
+# nothing about CI's artifact. Pinned to build-pkg-linux.yml's default by
+# tests/test_issue2166_workflow_channel_inputs.py (workflows) and local_smoke_channel_spec.sh
+# (this default). Devel builds the nightly port; a release/X.Y line builds edge.
+_CHANNEL="nightly"
+_PORTS_REPO=""
+_PORTS_REF=""
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
@@ -126,6 +132,8 @@ while [ "$#" -gt 0 ]; do
         --ref)      shift; _REF="$1";    shift ;;
         --abi)      shift; _ABI="$1";    shift ;;
         --channel)  shift; _CHANNEL="$1"; shift ;;
+        --ports-repo) shift; _PORTS_REPO="$1"; shift ;;
+        --ports-ref)  shift; _PORTS_REF="$1";  shift ;;
         --marker|-m) shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;        shift ;;
@@ -137,6 +145,11 @@ while [ "$#" -gt 0 ]; do
         *)  break ;;
     esac
 done
+# An option-shaped --ports-ref would end up as a git argument on the box (sparse-clone-ports.sh
+# refuses it there too): refuse it here, before a box is leased.
+case "$_PORTS_REF" in
+    -*) printf 'local-smoke: --ports-ref must not start with "-": %s\n' "$_PORTS_REF" >&2; exit 2 ;;
+esac
 if [ "$#" -gt 0 ]; then
     printf 'local-smoke: unexpected positional args (use --marker/--filter): %s\n' "$*" >&2
     exit 2
@@ -281,6 +294,12 @@ _ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --channel '$_CHANNEL' --marker '$_MAR
 # (issue #2754 M1). Other channels never forward the flag.
 if [ "$_CHANNEL" = nightly ] && [ -n "$_PKGVERSION" ]; then
     _ob_flags="$_ob_flags --pkgversion '$(_sq "$_PKGVERSION")'"
+fi
+if [ -n "$_PORTS_REPO" ]; then
+    _ob_flags="$_ob_flags --ports-repo '$(_sq "$_PORTS_REPO")'"
+fi
+if [ -n "$_PORTS_REF" ]; then
+    _ob_flags="$_ob_flags --ports-ref '$(_sq "$_PORTS_REF")'"
 fi
 if [ -n "$_FILTER" ]; then
     _ob_flags="$_ob_flags --filter '$(_sq "$_FILTER")'"

@@ -110,6 +110,14 @@ on:
         required: false
         default: false
         type: boolean
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = pfBlockerNG/FreeBSD-ports). Point a pre-landing run at a ports branch or fork."
+        required: false
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch or commit SHA (blank = pfblockerng/use-github)."
+        required: false
+        default: ""
   # Called by other workflows. A callee sees the CALLER's event_name, so scope
   # never auto-resolves to full here (issue #906): blank = impacted; a caller
   # that wants the full suite passes scope=full explicitly.
@@ -155,6 +163,16 @@ on:
         required: false
         type: boolean
         default: false
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = pfBlockerNG/FreeBSD-ports). Point a pre-landing run at a ports branch or fork."
+        required: false
+        type: string
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch or commit SHA (blank = pfblockerng/use-github)."
+        required: false
+        type: string
+        default: ""
   # Daily nightly run — scope=full: the whole marker on every ci:true leg (CE + Plus).
   schedule:
     - cron: "0 7 * * *"
@@ -280,7 +298,7 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.leg_matrix) }}
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
-      channel: edge
+      channel: nightly
       # ABI/dep target matching this leg's image (CE=FreeBSD:15, Plus=FreeBSD:16
       # in the current matrix) — pkg add refuses a cross-major-ABI .pkg.
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
@@ -289,8 +307,8 @@ jobs:
       # Variant/version row identity keeps same-major sibling legs distinct;
       # every shard of this leg downloads this one build.
       artifact_name: pfBlockerNG-pkg-${{ matrix.variant }}-${{ matrix.pfsense_version }}
-      ports_repo: pfBlockerNG/FreeBSD-ports
-      ports_ref: pfblockerng/use-github
+      ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
+      ports_ref: ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
       # issue #1806 D1: this leg's dep .pkgs (e.g. textproc/py-charset-normalizer
       # for CE), uploaded separately when non-empty — smoke-single.yml downloads
       # + installs them (D2/D3).

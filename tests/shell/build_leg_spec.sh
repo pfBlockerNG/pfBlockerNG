@@ -64,6 +64,7 @@ SHEOF
     ln -s "${SCRIPT}" "${FAKE_SCRIPTS}/build-leg.sh"
     ln -s "${PFB_ROOT}/scripts/lib/run-id.sh" "${FAKE_LIB}/run-id.sh"
     ln -s "${PFB_ROOT}/scripts/lib/git-env-scrub.sh" "${FAKE_LIB}/git-env-scrub.sh"
+    ln -s "${PFB_ROOT}/scripts/nightly-pkgversion.sh" "${FAKE_SCRIPTS}/nightly-pkgversion.sh"
 
     # Export paths/vars consumed by the fake stubs and by build-leg.sh.
     export BUILDER_ARGV_FILE="${BUILDER_ARGV}"
@@ -157,8 +158,10 @@ SHEOF
     End
   End
 
-  # ── build-pkg-linux leg: NO --pkgversion, NO --annotate ──────────────────
-  Describe 'build-pkg-linux leg'
+  # ── non-nightly build-pkg-linux leg: NO --pkgversion, NO --annotate ──────
+  # (a nightly leg, build-pkg-linux's default since issue #3791, derives its version: see
+  # 'nightly identity' below)
+  Describe 'non-nightly build-pkg-linux leg'
     check_linux_leg() {
       sh "${FAKE_SCRIPTS}/build-leg.sh" \
         --ports-repo 'pfBlockerNG/FreeBSD-ports' \
@@ -168,7 +171,7 @@ SHEOF
         --py-flavor 'py311' \
         --php '8.3' \
         2>/dev/null
-      # Assert ABSENCE of --pkgversion (the ADR "neither" — build-pkg-linux omits it).
+      # Assert ABSENCE of --pkgversion (the ADR "neither" — a non-nightly build-pkg-linux leg omits it).
       if grep -qF -- '--pkgversion' "$BUILDER_ARGV_FILE" 2>/dev/null; then
         echo "pkgversion=present"
       else
@@ -185,8 +188,8 @@ SHEOF
       echo "php=$(arg_after '--php' "$BUILDER_ARGV_FILE")"
     }
 
-    It 'records no --pkgversion and no --annotate in builder argv (the linux-leg neither case)'
-      # Scenario: build-pkg-linux leg passes no version override and no annotations.
+    It 'records no --pkgversion and no --annotate in builder argv (the non-nightly linux-leg neither case)'
+      # Scenario: a testing/edge build-pkg-linux leg passes no version override and no annotations.
       # Given: build-leg.sh called without --pkgversion or --annotate.
       # When: builder argv is recorded by the fake.
       # Then: --pkgversion is absent, --annotate is absent, --channel/--php are present.
@@ -297,6 +300,34 @@ SHEOF
       The output should include 'channel=nightly'
       The output should include 'pkgversion=20260606153045.aaaaaaa'
       The output should include 'annotate_commit=present'
+    End
+  End
+
+  # ── nightly without --pkgversion: stamped from the source being built ────
+  # issue #3791: devel builds the nightly port by default, and the builder refuses a
+  # nightly build with no version, so the identity has to come from here.
+  Describe 'nightly identity'
+    run_nightly() {
+      src="${WORK}/src"
+      mkdir -p "$src"
+      git_fixture -C "$src" init --quiet . >/dev/null 2>&1
+      git_fixture -C "$src" -c user.name=t -c user.email=t@example.com \
+        commit --quiet --allow-empty -m seed >/dev/null 2>&1
+      sh "${FAKE_SCRIPTS}/build-leg.sh" --channel nightly --local-src "$src" "$@" >/dev/null 2>&1
+      version="$(arg_after '--pkgversion' "$BUILDER_ARGV_FILE")"
+      printf 'pkgversion=%s\n' "$version"
+      case "$version" in *."$(git_fixture -C "$src" rev-parse HEAD | cut -c1-7)") echo 'sha=head' ;; *) echo 'sha=other' ;; esac
+    }
+
+    It 'derives YYYYMMDDHHMMSS.<7-sha> from the --local-src HEAD'
+      When call run_nightly
+      The line 1 of output should match pattern 'pkgversion=[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].???????'
+      The line 2 of output should equal 'sha=head'
+    End
+
+    It 'keeps an explicit --pkgversion verbatim'
+      When call run_nightly --pkgversion 20260101120000.abcdef0
+      The line 1 of output should equal 'pkgversion=20260101120000.abcdef0'
     End
   End
 

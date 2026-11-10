@@ -67,11 +67,69 @@ FAKEEOF
     The output should include "--channel 'testing'"
   End
 
-  It 'falls back to the devel branch release line when no --channel is given'
+  It 'defaults to nightly, the channel the devel branch builds, when no --channel is given'
     When call run_and_diag --ref dummy
     The line 1 of output should equal 'exit=0'
     The line 2 of output should equal 'calls=1'
-    The output should include "--channel 'edge'"
+    The output should include "--channel 'nightly'"
+  End
+
+  # issue #3791: a pre-landing run builds against a ports commit that is not on the default branch.
+  It 'forwards --ports-ref and --ports-repo to smoke-on-box.sh'
+    When call run_and_diag --ref dummy --ports-repo someone/FreeBSD-ports --ports-ref 0123abcd
+    The line 1 of output should equal 'exit=0'
+    The line 2 of output should equal 'calls=1'
+    The output should include "--ports-repo 'someone/FreeBSD-ports'"
+    The output should include "--ports-ref '0123abcd'"
+  End
+
+  It 'sends no ports flag when none is given, leaving the on-box default in force'
+    When call run_and_diag --ref dummy
+    The output should not include '--ports-'
+  End
+
+  # The ports flags are free-form operator input that ends up inside the remote bootstrap string,
+  # so unlike --channel there is no whitelist: the quoting (`_sq`) is the only defence. Evaluate
+  # the recorded smoke-on-box.sh argument fragment the way the box's shell would, and require that
+  # it yields the hostile value as ONE literal argument and runs nothing.
+  # `eval` runs in WORK, so a quote break-out shows up as a file there.
+  run_hostile() {
+    _flag="$1"; _value="$2"
+    sh "$SCRIPT" --ref dummy "$_flag" "$_value" >/dev/null 2>&1
+    _fragment="$(sed -n 's/.*sh scripts\/smoke-on-box\.sh //p' "$CALLS_DIR"/*)"
+    _literal=no
+    cd "$WORK" || return 1
+    eval "set -- $_fragment" 2>/dev/null
+    for _a in "$@"; do [ "$_a" = "$_value" ] && _literal=yes; done
+    if [ -e "${WORK}/pwned" ]; then echo 'pwned=yes'; else echo 'pwned=no'; fi
+    echo "literal=${_literal}"
+  }
+
+  It 'keeps a hostile --ports-ref one literal argument on the box'
+    When call run_hostile --ports-ref "x'; touch pwned; '"
+    The line 1 of output should equal 'pwned=no'
+    The line 2 of output should equal 'literal=yes'
+  End
+
+  It 'keeps a hostile --ports-ref with command substitution one literal argument on the box'
+    When call run_hostile --ports-ref '$(touch pwned)'
+    The line 1 of output should equal 'pwned=no'
+    The line 2 of output should equal 'literal=yes'
+  End
+
+  It 'keeps a hostile --ports-repo one literal argument on the box'
+    When call run_hostile --ports-repo "x'; touch pwned; '"
+    The line 1 of output should equal 'pwned=no'
+    The line 2 of output should equal 'literal=yes'
+  End
+
+  # A --ports-ref starting with `-` could be read as a git option further down (sparse-clone-ports.sh),
+  # so it is refused here, before a box is leased.
+  It 'refuses an option-shaped --ports-ref before leasing a box'
+    When call run_and_diag --ref dummy --ports-ref '--upload-pack=touch x'
+    The line 1 of output should equal 'exit=2'
+    The line 2 of output should equal 'calls=0'
+    The output should include 'ports-ref'
   End
 
   It 'rejects a channel the portable builder would reject, before leasing a box'

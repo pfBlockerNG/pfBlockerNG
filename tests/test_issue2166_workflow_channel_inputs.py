@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
 
@@ -172,3 +174,65 @@ def test_every_workflow_channel_literal_is_a_builder_channel() -> None:
         "workflows pass a channel build-pkg-portable.py rejects "
         f"(valid: {sorted(VALID_CHANNELS)}):\n  " + "\n  ".join(stale)
     )
+
+
+# Devel pairs with the -nightly port (issue #3791); release lines keep their own channel through
+# release*.yml and the prebuilt-artifact path, so none of these entry points may default to edge.
+_DEVEL_BUILD_WORKFLOWS = (
+    "build-pkg-linux.yml",
+    "build-image.yml",
+    "smoke.yml",
+    "smoke-single.yml",
+    "ui-tests.yml",
+    "version-tracker.yml",
+)
+
+
+def test_devel_build_and_smoke_workflows_default_to_nightly() -> None:
+    channels: dict[str, set[str]] = {name: set() for name in _DEVEL_BUILD_WORKFLOWS}
+    for name, _, value in _channel_literals():
+        if name in channels:
+            channels[name].add(value)
+    assert channels == {name: {"nightly"} for name in _DEVEL_BUILD_WORKFLOWS}
+
+
+def test_smoke_fan_out_ports_checkout_is_overridable_by_dispatch_and_call() -> None:
+    """A pre-landing run builds against an unmerged ports commit, as ui-tests.yml already allows."""
+    workflow = yaml.safe_load((WORKFLOWS / "smoke.yml").read_text(encoding="utf-8"))
+    triggers = workflow[True]  # PyYAML reads the bare `on:` key as the boolean True
+    for trigger in ("workflow_dispatch", "workflow_call"):
+        assert {"ports_repo", "ports_ref"} <= set(triggers[trigger]["inputs"]), trigger
+    build_with = workflow["jobs"]["build-pkg"]["with"]
+    assert build_with["ports_repo"] == "${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}"
+    assert build_with["ports_ref"] == "${{ inputs.ports_ref || 'pfblockerng/use-github' }}"
+
+
+def test_version_above_outranks_the_installed_version_on_every_channel() -> None:
+    """A seeded "latest" must sit above what is installed, whatever the channel (issue #3791).
+
+    A nightly package version is ``YYYYMMDDHHMMSS.<7-sha>``, which outranks a fixed ``99.0.0``,
+    so a fixture seeding that constant offers no update on a nightly build.
+    """
+    version_above = _pkg_identity().version_above
+    assert version_above("20261110120000.abcdef0") == "20261110120001.abcdef0"
+    assert version_above("20261110120000") == "20261110120001"
+    assert version_above("4.0.0.b1") == "99.0.0"
+    assert version_above("") == "99.0.0"
+
+
+def test_conflict_counterpart_is_never_the_nightly_package() -> None:
+    """The nightly conflict cases need a package of ANOTHER channel (issue #3791).
+
+    The branch package is the nightly one now, so installing it "over" the nightly package is
+    a no-op and the case can never meet its precondition.
+    """
+    identity = _pkg_identity()
+    for branch in (
+        "pfSense-pkg-pfBlockerNG-nightly",
+        "pfSense-pkg-pfBlockerNG-edge",
+        "pfSense-pkg-pfBlockerNG-testing",
+        "pfSense-pkg-pfBlockerNG",
+    ):
+        assert identity.counterpart_name(branch) != identity.NIGHTLY_NAME, branch
+    assert identity.counterpart_name("pfSense-pkg-pfBlockerNG-nightly") == "pfSense-pkg-pfBlockerNG-edge"
+    assert identity.counterpart_name("pfSense-pkg-pfBlockerNG-testing") == "pfSense-pkg-pfBlockerNG-testing"

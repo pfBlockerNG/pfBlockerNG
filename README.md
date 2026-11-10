@@ -240,7 +240,7 @@ is a channel-style downgrade; see the caution under
 
 On a FreeBSD machine with the ports tree available, the package can be built
 directly — `make package` in `net/pfSense-pkg-pfBlockerNG` (stable) or the
-channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-edge` (the line the
+channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-nightly` (the line the
 `devel` branch builds); the resulting `.pkg` lands in `work/pkg/`.
 
 ## Documentation

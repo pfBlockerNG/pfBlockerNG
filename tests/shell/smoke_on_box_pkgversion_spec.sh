@@ -1,18 +1,17 @@
 #shellcheck shell=sh
 # smoke_on_box_pkgversion_spec.sh — issue #2754: nightly --pkgversion on build-leg argv.
 #
-# WHY THIS EXISTS: after issue #2754 M1, nightly identity is derived HERE from
-# the just-checked-out HEAD, not in local-smoke.sh. local_smoke_pkgversion_spec.sh
-# pins that the orchestrator does not stamp a SHA from its own clone. This spec
-# drives smoke-on-box.sh so the derivation-and-override branch (the nightly block
-# before build-leg.sh) cannot be deleted while the suite stays green. Same
-# PFB_ONBOX_* seams as smoke_on_box_spec.sh; build-leg.sh is stubbed to record
-# argv and print a fake .pkg. The run then dies on the missing guest SSH key —
-# after the argv is written.
+# WHY THIS EXISTS: after issue #2754 M1, nightly identity is derived from the
+# just-checked-out HEAD, not in local-smoke.sh (local_smoke_pkgversion_spec.sh pins that
+# the orchestrator does not stamp a SHA from its own clone). The derivation itself lives in
+# build-leg.sh (build_leg_spec.sh, from --local-src, which smoke-on-box.sh points at its own
+# checkout); this spec pins that smoke-on-box.sh leaves it there and forwards only an explicit
+# override, and only on nightly. Same PFB_ONBOX_* seams as smoke_on_box_spec.sh; build-leg.sh
+# is stubbed to record argv and print a fake .pkg. The run then dies on the missing guest SSH
+# key — after the argv is written.
 #
-# RED→GREEN: deleting the nightly block from smoke-on-box.sh leaves --channel
-# nightly with no --pkgversion on the recorded build-leg argv. The helper-derived
-# example is the pin that the identity matches FAKE_ROOT's HEAD (the built commit).
+# RED→GREEN: forwarding a second, script-local derivation (or dropping the override) flips the
+# examples below.
 
 Describe 'smoke-on-box.sh --pkgversion (issue #2754)'
   SCRIPT="${PFB_ROOT}/scripts/smoke-on-box.sh"
@@ -31,6 +30,7 @@ Describe 'smoke-on-box.sh --pkgversion (issue #2754)'
 
     cat > "${FAKE_ROOT}/scripts/sparse-clone-ports.sh" <<'STUBEOF'
 #!/bin/sh
+printf '%s\n' "$*" > "${SPARSE_CLONE_ARGV}"
 exit 0
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/sparse-clone-ports.sh"
@@ -42,9 +42,10 @@ STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/read-version-matrix.sh"
 
     BUILD_LEG_ARGV="${WORK}/build-leg-argv"
+    SPARSE_CLONE_ARGV="${WORK}/sparse-clone-argv"
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<STUBEOF
 #!/bin/sh
-printf '%s\n' "\$*" > "${BUILD_LEG_ARGV}"
+printf '%s\n' "\$*" >> "${BUILD_LEG_ARGV}"
 printf '%s\n' "${WORK}/fake.pkg"
 exit 0
 STUBEOF
@@ -101,7 +102,7 @@ STUBEOF
     PFB_ONBOX_REPO_ROOT="$FAKE_ROOT"
     PFB_ONBOX_PORTS_DIR="${WORK}/ports"
     PFB_ONBOX_IMAGES_DIR="${WORK}/images"
-    export WORK FAKE_ROOT BUILD_LEG_ARGV HEAD_SHA HEAD_SHORT \
+    export WORK FAKE_ROOT BUILD_LEG_ARGV SPARSE_CLONE_ARGV HEAD_SHA HEAD_SHORT \
         PFB_ONBOX_REPO_ROOT PFB_ONBOX_PORTS_DIR PFB_ONBOX_IMAGES_DIR \
         PFB_ONBOX_PORT_FLOOR_FILE
   }
@@ -117,11 +118,36 @@ STUBEOF
     cat "$BUILD_LEG_ARGV"
   }
 
-  It 'puts a helper-derived --pkgversion on build-leg for --channel nightly'
+  # The ports checkout the launcher prepares before building, as `url ref dir ...`.
+  run_to_build_and_clone() {
+    run_to_build "$@"
+    printf 'clone: %s\n' "$(tr '\n' ' ' < "$SPARSE_CLONE_ARGV")"
+  }
+
+  # issue #3791: devel builds the -nightly port; build-leg.sh stamps its identity.
+  It 'builds nightly by default and leaves the identity to build-leg.sh'
+    When call run_to_build
+    The output should include "--channel nightly"
+    The output should not include "--pkgversion"
+  End
+
+  # issue #3791: a pre-landing run builds against a ports commit that is not on the default branch.
+  It 'puts --ports-ref and --ports-repo on build-leg and on the ports checkout'
+    When call run_to_build_and_clone --ports-repo someone/FreeBSD-ports --ports-ref 0123abcd
+    The output should include "--ports-repo someone/FreeBSD-ports"
+    The output should include "--ports-ref 0123abcd"
+    The output should include "clone: https://github.com/someone/FreeBSD-ports 0123abcd "
+  End
+
+  It 'checks out the default ports ref when none is given'
+    When call run_to_build_and_clone
+    The output should include "clone: https://github.com/pfBlockerNG/FreeBSD-ports pfblockerng/use-github "
+  End
+
+  It 'leaves the identity to build-leg.sh for an explicit --channel nightly'
     When call run_to_build --channel nightly
     The output should include "--channel nightly"
-    The output should include "--pkgversion "
-    The output should include ".${HEAD_SHORT}"
+    The output should not include "--pkgversion"
   End
 
   It 'forwards an explicit --pkgversion verbatim to build-leg on nightly'
@@ -134,5 +160,21 @@ STUBEOF
     When call run_to_build --channel edge --pkgversion 20260101120000.abcdef0
     The output should include "--channel edge"
     The output should not include "--pkgversion"
+  End
+
+  # The repo marker's nightly cases need a builder-produced nightly .pkg carrying the commit
+  # (SMOKE_NIGHTLY_PKG); every other marker builds the branch package only.
+  It 'builds the annotated nightly package for --marker repo, apart from the branch package'
+    When call run_to_build --marker repo --channel edge
+    The output should include "--channel edge"
+    The output should include "--channel nightly"
+    The output should include "--annotate commit=${HEAD_SHA}"
+    The output should include "--out-dir ${WORK}/nightly"
+  End
+
+  It 'builds no nightly package for the default marker'
+    When call run_to_build
+    The output should not include "--annotate"
+    The output should not include "--out-dir"
   End
 End

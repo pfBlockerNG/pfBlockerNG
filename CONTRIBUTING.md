@@ -391,9 +391,9 @@ On a FreeBSD machine with the ports tree available:
 cd /usr/ports/net/pfSense-pkg-pfBlockerNG
 make package
 
-# Pre-release channel (edge is the line the devel branch builds;
-# testing and nightly have their own recipes)
-cd /usr/ports/net/pfSense-pkg-pfBlockerNG-edge
+# Pre-release channel (nightly is the line the devel branch builds; edge follows
+# release/X.Y, testing has its own recipe)
+cd /usr/ports/net/pfSense-pkg-pfBlockerNG-nightly
 make package
 ```
 

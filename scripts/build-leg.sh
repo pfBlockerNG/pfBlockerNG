@@ -19,14 +19,19 @@
 #   --ports-repo  pfBlockerNG/FreeBSD-ports   → https://github.com/<repo>
 #                 (file:// and https:// URLs pass through unchanged)
 #   --ports-ref   pfblockerng/use-github
-#   --channel     testing        (→ sparse-clone arg4 AND builder --channel)
+#   --channel     testing        (→ sparse-clone arg4 AND builder --channel). This is the
+#                                  script's own default; the devel build/smoke callers pass
+#                                  nightly explicitly (issue #3791).
 #   --variant     CE             (→ builder --variant; native builds ignore it)
 #   --build-record (empty)       → --build-record JSON|PATH when supplied
 #   --abi         FreeBSD:15:amd64
 #   --py-flavor   py311
 #   --php         8.3
 #   --local-src   .              (→ builder --local-src)
-#   --pkgversion  (empty)        → flag omitted; builder derives from ports Makefile
+#   --pkgversion  (empty)        → flag omitted; builder derives from ports Makefile.
+#                                  Exception: --channel nightly has no recipe version, so it
+#                                  is stamped YYYYMMDDHHMMSS.<7-sha> from --local-src's HEAD
+#                                  (scripts/nightly-pkgversion.sh, as nightly.yml does).
 #   --annotate    (none)         repeatable; each → --annotate K=V to builder
 #   --ports-dir   (run-keyed)    ${PFB_PORTS_DIR:-$PFB_RUN_DIR/ports}
 #   --out-dir     (run-keyed)    ${PFB_OUT_DIR:-$PFB_RUN_DIR/out}
@@ -144,6 +149,11 @@ DEST="${PORTS_DIR:-${PFB_PORTS_DIR:-${PFB_RUN_DIR}/ports}}"
 OUT="${OUT_DIR:-${PFB_OUT_DIR:-${PFB_RUN_DIR}/out}}"
 
 mkdir -p "$OUT"
+
+# The nightly port carries no version of its own and the builder refuses a nightly build without one.
+if [ "$CHANNEL" = nightly ] && [ -z "$PKGVERSION" ]; then
+    PKGVERSION="$(sh "${SCRIPT_DIR}/nightly-pkgversion.sh" "$(git -C "$LOCAL_SRC" rev-parse HEAD)")"
+fi
 
 # ── Step 1: prepare the ports tree ──────────────────────────────────────────
 # AMENDMENT 1: redirect sparse-clone stdout to stderr.
