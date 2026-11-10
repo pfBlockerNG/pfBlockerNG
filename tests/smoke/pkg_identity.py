@@ -72,3 +72,18 @@ def version_above(installed: str) -> str:
     if match is None:
         return "99.0.0"
     return f"{int(match.group('stamp')) + 1}{match.group('rest') or ''}"
+
+
+NIGHTLY_NAME = "pfSense-pkg-pfBlockerNG-nightly"
+EDGE_NAME = "pfSense-pkg-pfBlockerNG-edge"
+
+
+def counterpart_name(branch_name: str) -> str:
+    """The name of a package from a DIFFERENT channel than ``branch_name``, for conflict cases.
+
+    The nightly conflict cases need a second package that is not the nightly one. Devel builds the
+    nightly port (issue #3791), so the branch package can no longer play that part, and devel's
+    source cannot build the edge port; its identity is the edge one instead (``rename_pkg``).
+    Every other branch channel already differs from nightly and is its own counterpart.
+    """
+    return EDGE_NAME if branch_name == NIGHTLY_NAME else branch_name

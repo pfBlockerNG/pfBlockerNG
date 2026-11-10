@@ -218,3 +218,21 @@ def test_version_above_outranks_the_installed_version_on_every_channel() -> None
     assert version_above("20261110120000") == "20261110120001"
     assert version_above("4.0.0.b1") == "99.0.0"
     assert version_above("") == "99.0.0"
+
+
+def test_conflict_counterpart_is_never_the_nightly_package() -> None:
+    """The nightly conflict cases need a package of ANOTHER channel (issue #3791).
+
+    The branch package is the nightly one now, so installing it "over" the nightly package is
+    a no-op and the case can never meet its precondition.
+    """
+    identity = _pkg_identity()
+    for branch in (
+        "pfSense-pkg-pfBlockerNG-nightly",
+        "pfSense-pkg-pfBlockerNG-edge",
+        "pfSense-pkg-pfBlockerNG-testing",
+        "pfSense-pkg-pfBlockerNG",
+    ):
+        assert identity.counterpart_name(branch) != identity.NIGHTLY_NAME, branch
+    assert identity.counterpart_name("pfSense-pkg-pfBlockerNG-nightly") == "pfSense-pkg-pfBlockerNG-edge"
+    assert identity.counterpart_name("pfSense-pkg-pfBlockerNG-testing") == "pfSense-pkg-pfBlockerNG-testing"

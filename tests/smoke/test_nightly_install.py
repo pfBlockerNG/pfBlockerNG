@@ -43,7 +43,7 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM
-from .pkg_identity import branch_pkg_name
+from .pkg_identity import NIGHTLY_NAME, branch_pkg_name, counterpart_name
 from .test_repo_install import (
     CANONICAL_PKG_NAME,
     NIGHTLY_EXPECTED_SOURCE_SHA_ENV,
@@ -57,6 +57,7 @@ from .test_repo_install import (
     pkg_annotation,
     poll_catalog_served,
     read_compact_version,
+    rename_pkg,
     repo_priority,
     restore_pages_hosts,
     reversion_pkg,
@@ -65,11 +66,12 @@ from .test_repo_install import (
 
 pytestmark = pytest.mark.repo
 
-NIGHTLY_NAME = "pfSense-pkg-pfBlockerNG-nightly"
-# The DEVEL_* names below are historical: they mean "the branch package, whichever channel it
-# was built on" (the ports tree retired the -devel channel; the devel branch now builds nightly).
-# Nightly is the one package with a fixed name of its own, so it stays a literal.
-DEVEL_NAME = branch_pkg_name(os.environ.get("SMOKE_PKG"))
+# The DEVEL_* names below mean "the package of the OTHER channel the nightly conflict cases
+# install over and under the nightly one". The branch package is that package on a release line;
+# devel builds the nightly port itself (issue #3791), so there it is the same build under the
+# edge identity (see counterpart_name and rename_pkg). Nightly is the one package with a fixed
+# name of its own, so it stays a literal.
+DEVEL_NAME = counterpart_name(branch_pkg_name(os.environ.get("SMOKE_PKG")))
 NIGHTLY_REPO = "pfblockerng-nightly"  # the %R origin a nightly install reports
 DEVEL_REPO = "pfblockerng"  # %R origin of the controlled branch-package install (the shared release repo)
 
@@ -172,7 +174,7 @@ def assert_hook_succeeded(install_out: str, *, name: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def nightly_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
+def nightly_vm(smoke_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory) -> Iterator[SmokeVM]:
     """The booted VM with a hermetic ``file://`` nightly catalog (+ a controlled -devel one).
 
     Builds two NONE-signed ``file://`` catalogs from the handed-in ``.pkg`` files
@@ -192,7 +194,12 @@ def nightly_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     _ensure_egress_open()
     prio = repo_priority(smoke_vm, "pfSense") + 100
     build_guest_repo(smoke_vm, NIGHTLY_DIR, [Path(nightly)])
-    build_guest_repo(smoke_vm, DEVEL_DIR, [Path(devel)])
+    counterpart = Path(devel)
+    if branch_pkg_name(devel) != DEVEL_NAME:
+        # The branch package IS the nightly one: serve the same build under the other identity,
+        # so the conflict cases still pit two different packages against each other.
+        counterpart = rename_pkg(counterpart, DEVEL_NAME, tmp_path_factory.mktemp("counterpart"))
+    build_guest_repo(smoke_vm, DEVEL_DIR, [counterpart])
     write_conf(smoke_vm, [(NIGHTLY_REPO, NIGHTLY_DIR, prio), (DEVEL_REPO, DEVEL_DIR, prio)])
     pkg_update(smoke_vm)
     try:
