@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -23,8 +24,9 @@ const (
 	dbResolver = 1 // DB_RESOLVER
 	dbDnsbl    = 2 // DB_DNSBL
 
-	dbQueueMaxsize  = 5000        // PFB_DB_QUEUE_MAXSIZE
-	dbFlushInterval = time.Second // PFB_DB_FLUSH_INTERVAL
+	dbQueueMaxsize  = 5000            // PFB_DB_QUEUE_MAXSIZE
+	dbFlushInterval = time.Second     // PFB_DB_FLUSH_INTERVAL
+	dbStopWait      = 5 * time.Second // deinit's wait for the worker: join(timeout=5)
 )
 
 var (
@@ -32,13 +34,11 @@ var (
 	dbMaxBatch = 2000
 	// dbRetrySleep is _db_run's pause between attempts.
 	dbRetrySleep = time.Sleep
-	// dbStopWait bounds deinit's wait for the worker (join(timeout=5)).
-	dbStopWait = 5 * time.Second
 	// dbPragmas are the connection settings: WAL (read back, and warned about when it did not hold), a 100 s busy timeout
 	// and NORMAL synchronous.
 	dbPragmas = []string{"PRAGMA journal_mode=WAL", "PRAGMA busy_timeout=100000", "PRAGMA synchronous=NORMAL"}
 	// dbBuiltinOwners is _DNSBL_BUILTIN_OWNERS: the synthetic groups every dnsbl database owns an epoch for.
-	dbBuiltinOwners = []string{"Upstream", "DNSBL_IDN", "DNSBL_Homoglyph", "DNSBL_Homoglyph_Suspect", "DNSBL_TLD_Allow", "DNSBL_Regex", "DNSBL_TLD"}
+	dbBuiltinOwners = []any{"Upstream", "DNSBL_IDN", "DNSBL_Homoglyph", "DNSBL_Homoglyph_Suspect", "DNSBL_TLD_Allow", "DNSBL_Regex", "DNSBL_TLD"}
 )
 
 // dbEvent is one counter increment, the tuple pfb_db_enqueue takes: a resolver event leaves the group fields empty. client
@@ -86,7 +86,8 @@ func (m *pfbUnbound) dbConnect(db int) (*dbConn, error) {
 	}
 	// sqlite3.connect(timeout=100000): the busy timeout, in seconds there and milliseconds here, holds from the connect on,
 	// before and whatever the PRAGMAs below do.
-	pool, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(100000000)")
+	// The path is escaped into a file: URI, so a ?, # or % in a directory name stays part of it.
+	pool, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?_pragma=busy_timeout(100000000)")
 	if err != nil {
 		return nil, err
 	}
@@ -191,12 +192,8 @@ func (m *pfbUnbound) dbCreateTables(ctx context.Context, c *sql.Conn, db int) er
 			}
 		}
 		// Legacy display names prove custom ownership only outside the synthetic namespace.
-		args := make([]any, len(dbBuiltinOwners))
-		for i, owner := range dbBuiltinOwners {
-			args[i] = owner
-		}
 		return exec("INSERT OR IGNORE INTO dnsbl_group_epochs SELECT DISTINCT groupname, 'custom', lower(hex(randomblob(16))) FROM dnsbl "+
-			"WHERE substr(groupname, 1, 6) = 'DNSBL_' AND groupname NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+")", args...)
+			"WHERE substr(groupname, 1, 6) = 'DNSBL_' AND groupname NOT IN ("+strings.TrimSuffix(strings.Repeat("?,", len(dbBuiltinOwners)), ",")+")", dbBuiltinOwners...)
 	}
 	return nil
 }
@@ -337,7 +334,10 @@ func (m *pfbUnbound) validateDbWithRecovery(db int) bool {
 		return false
 	}
 	for _, stale := range []string{base, base + "-wal", base + "-shm"} {
-		os.Remove(stale)
+		// os.remove refuses a directory, os.Remove would take an empty one: a directory is not the corrupt file.
+		if info, err := os.Lstat(stale); err == nil && !info.IsDir() {
+			os.Remove(stale)
+		}
 	}
 	return m.dbValidate(db)
 }
@@ -352,7 +352,13 @@ func (m *pfbUnbound) dnsblStatsWanted(settings *pfbSettings) bool {
 // but init left it closed (issues #862, #870), from the swap, the control enable and the control timer's expiry. A no-op
 // once open. `settings` are the ones the caller has just made the module's.
 func (m *pfbUnbound) openDnsblStatsDbIfWanted(settings *pfbSettings) {
-	if !m.sqlite3DnsblCon.Load() && m.dnsblStatsWanted(settings) {
+	m.openDnsblStatsDb(m.dnsblStatsWanted(settings))
+}
+
+// openDnsblStatsDb opens the dnsbl database, with recovery, when it is wanted and not yet open; a failure is logged and
+// leaves the flag off.
+func (m *pfbUnbound) openDnsblStatsDb(wanted bool) {
+	if wanted && !m.sqlite3DnsblCon.Load() {
 		if m.validateDbWithRecovery(dbDnsbl) {
 			m.sqlite3DnsblCon.Store(true)
 		} else {
@@ -365,13 +371,7 @@ func (m *pfbUnbound) openDnsblStatsDbIfWanted(settings *pfbSettings) {
 // dnsbl database opens first when statistics are wanted; it is optional, so DNS never depends on it: a database that cannot
 // be read turns the accounting off and gives no epochs.
 func (m *pfbUnbound) dbGroupEpochs(wanted bool, s *snapshot) map[[2]string]string {
-	if !m.sqlite3DnsblCon.Load() && wanted {
-		if m.validateDbWithRecovery(dbDnsbl) {
-			m.sqlite3DnsblCon.Store(true)
-		} else {
-			logErr("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database after recovery attempt")
-		}
-	}
+	m.openDnsblStatsDb(wanted)
 	epochs := map[[2]string]string{}
 	if !m.sqlite3DnsblCon.Load() {
 		return epochs
@@ -679,17 +679,18 @@ type dbTask struct {
 // dbWorker is pfb_db_worker: it batches the counter writes off the DNS path. Increments accumulate as per-key deltas (they
 // commute) and flush on the interval, on a full batch, when the queue runs idle and on the stop.
 type dbWorker struct {
-	m        *pfbUnbound
-	queue    chan dbTask
-	done     chan struct{}
-	maxBatch int
+	m     *pfbUnbound
+	queue chan dbTask
+	done  chan struct{}
 	// get returns the next task, or false when the flush interval ran out with none; a test replaces it to place an
 	// idle interval where it needs one.
 	get func() (dbTask, bool)
+	// now is the clock of the flush interval; a test sets it.
+	now func() time.Time
 }
 
 func newDbWorker(m *pfbUnbound, queue chan dbTask) *dbWorker {
-	w := &dbWorker{m: m, queue: queue, done: make(chan struct{}), maxBatch: dbMaxBatch}
+	w := &dbWorker{m: m, queue: queue, done: make(chan struct{}), now: time.Now}
 	w.get = w.next
 	return w
 }
@@ -715,7 +716,7 @@ func (w *dbWorker) run() {
 	var resolverDelta int64
 	deltas := map[groupKey]int64{}
 	resolverDetails, dnsblDetails := map[dbEvent]int64{}, map[dbEvent]int64{}
-	lastFlush := time.Now()
+	lastFlush := w.now()
 	accumulate := func(task dbTask) {
 		if task.event.dnsbl {
 			deltas[task.event.groupKey()]++
@@ -733,7 +734,7 @@ func (w *dbWorker) run() {
 		if len(deltas) > 0 && w.m.dbFlushDnsbl(deltas, dnsblDetails) {
 			deltas, dnsblDetails = map[groupKey]int64{}, map[dbEvent]int64{}
 		}
-		lastFlush = time.Now()
+		lastFlush = w.now()
 	}
 	for {
 		task, ok := w.get()
@@ -752,7 +753,7 @@ func (w *dbWorker) run() {
 		} else if ok {
 			accumulate(task)
 		}
-		if stop || !ok || int(resolverDelta)+len(deltas) >= w.maxBatch || time.Since(lastFlush) >= dbFlushInterval {
+		if stop || !ok || int(resolverDelta)+len(deltas) >= dbMaxBatch || w.now().Sub(lastFlush) >= dbFlushInterval {
 			flush()
 		}
 		if stop {

@@ -7,6 +7,7 @@ package decider
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -483,38 +484,109 @@ func TestSqliteRecoversACorruptDatabase(t *testing.T) {
 	}
 }
 
-// A sidecar the recovery leaves behind keeps the recreated database out of WAL mode: here two that SQLite cannot use.
+// A database whose pages are still in its write-ahead log and whose schema the module refuses is recovered: the file and its
+// sidecars go and a fresh database is read. (The removal of the -wal itself is not observable here: SQLite deletes a log
+// that sits next to a zero-length database file, so a recovery that left it behind would pass too.)
 func TestSqliteRecoveryRemovesTheStaleSidecars(t *testing.T) {
 	r := newSqlRig(t, "", nil)
 	r.m.closeDb()
 	path := r.path(dbResolver)
-	if err := os.WriteFile(path, []byte("this is not a database"), 0o644); err != nil {
+	other := filepath.Join(t.TempDir(), "other.sqlite")
+	pool, err := sql.Open("sqlite", other)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
-		if err := os.Mkdir(sidecar, 0o755); err != nil {
+	pool.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"PRAGMA journal_mode=WAL", "PRAGMA wal_autocheckpoint=0",
+		"CREATE TABLE dns_metric_queries (qtype TEXT, other TEXT, count INTEGER)", "INSERT INTO dns_metric_queries VALUES ('A', 'x', 3)",
+	} {
+		if _, err := pool.Exec(statement); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// The log is complete while the connection is open.
+	for _, suffix := range []string{"", "-wal"} {
+		data, err := os.ReadFile(other + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path+suffix, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pool.Close()
+	if info, err := os.Stat(path + "-wal"); err != nil || info.Size() == 0 {
+		t.Fatalf("no write-ahead log to leave behind: %v", err)
 	}
 	if !r.m.validateDbWithRecovery(dbResolver) {
 		t.Fatalf("the database was not recovered:\n%s", r.log)
 	}
-	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
-		if info, err := os.Stat(sidecar); err == nil && info.IsDir() {
-			t.Errorf("%s was not removed", sidecar)
-		}
+	if got := sqlStrings(t, openSqlFile(t, path), "SELECT name FROM pragma_table_info('dns_metric_queries') WHERE name='other'"); len(got) != 0 {
+		t.Error("the recreated database holds the old schema")
+	}
+	if got := sqlValue(t, path, "SELECT totalqueries FROM resolver WHERE row = 0"); got != int64(0) {
+		t.Errorf("totalqueries = %v in the recreated database, want its fresh seed 0", got)
 	}
 	if got := sqlValue(t, path, "PRAGMA journal_mode"); got != "wal" {
 		t.Errorf("journal_mode = %v after the recovery, want wal", got)
 	}
 }
 
+// Python's os.remove refuses a directory, so a directory at the database path (or at a sidecar's) is left alone and the
+// validate reports false.
+func TestSqliteRecoveryNeverRemovesADirectory(t *testing.T) {
+	r := newSqlRig(t, "", nil)
+	r.m.closeDb()
+	path := r.path(dbResolver)
+	for _, file := range []string{path, path + "-wal", path + "-shm"} {
+		os.Remove(file)
+	}
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r.m.validateDbWithRecovery(dbResolver) {
+		t.Error("a directory at the database path validated")
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		t.Errorf("the directory at the database path was removed: %v", err)
+	}
+	if !strings.Contains(r.log.String(), "sqlite write failed") {
+		t.Errorf("the failure was not reported:\n%s", r.log)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("this is not a database"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		os.Remove(sidecar)
+	}
+	if err := os.Mkdir(path+"-wal", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.m.validateDbWithRecovery(dbResolver)
+	if info, err := os.Stat(path + "-wal"); err != nil || !info.IsDir() {
+		t.Errorf("the directory at the -wal path was removed: %v", err)
+	}
+}
+
+// Only one recoverer deletes: it holds dbRecoveryMu across its validate, remove and revalidate, so a loser's validate finds the
+// winner's database. The pause between attempts runs inside the first validate, which is where a recoverer without the
+// lock would let another in.
 func TestSqliteConcurrentRecoveryKeepsTheWinnersDatabase(t *testing.T) {
 	r := newSqlRig(t, "", nil)
 	r.m.closeDb()
 	path := r.path(dbResolver)
 	if err := os.WriteFile(path, []byte("garbage, not a database"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	dbRetrySleep = func(time.Duration) {
+		if r.m.dbRecoveryMu.TryLock() {
+			r.m.dbRecoveryMu.Unlock()
+			t.Error("a validate ran without dbRecoveryMu held: a second recoverer could delete the winner's database")
+		}
 	}
 	var wg sync.WaitGroup
 	results := make([]bool, 8)
@@ -535,6 +607,111 @@ func TestSqliteConcurrentRecoveryKeepsTheWinnersDatabase(t *testing.T) {
 	// The cached connection must write the file on disk: a loser's remove would leave it on an unlinked inode.
 	if got := sqlValue(t, path, "SELECT totalqueries FROM resolver"); got != int64(1) {
 		t.Errorf("the counter on disk = %v, want 1: the recovery deleted the winner's live file", got)
+	}
+}
+
+// The ini's opt-in alone grants no authority: only a database that is itself opted in (client_ip = 1) yields its epoch.
+func TestSqliteIniOptInNeedsTheDatabasesOwnOptIn(t *testing.T) {
+	r := newSqlRig(t, "metrics_client_ip = true\nforwarding = true\n", nil)
+	if len(r.m.metricsPrivacyEpochs) != 0 {
+		t.Fatalf("epochs = %v from databases with client_ip = 0", r.m.metricsPrivacyEpochs)
+	}
+	for _, db := range []int{dbResolver, dbDnsbl} {
+		sqlExec(t, r.path(db), "UPDATE dns_metric_settings SET client_ip=1 WHERE row=0")
+	}
+	r.m.dbCapturePrivacyEpochs()
+	for _, db := range []int{dbResolver, dbDnsbl} {
+		want := sqlValue(t, r.path(db), "SELECT epoch FROM dns_metric_settings WHERE row=0")
+		if got := r.m.metricsPrivacyEpochs[db]; got != want {
+			t.Errorf("db %d: epoch %q after the opt-in, want %q", db, got, want)
+		}
+	}
+}
+
+// The path of a database is a path, not a URI: a ?, #, % or space in a directory name must not move the files.
+func TestSqliteDatabasePathIsNotReadAsAURI(t *testing.T) {
+	for _, name := range []string{"q?mark", "hash#tag", "pct%41", "sp ace", "all ?#% x"} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			dir := filepath.Join(parent, name)
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte("[MAIN]\npython_enable = true\nforwarding = true\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			m := modMust(t, dir)
+			if !m.sqlite3ResolverCon.Load() || !m.sqlite3DnsblCon.Load() {
+				t.Fatalf("a database did not open:\n%s", modCaptureLog(t))
+			}
+			for _, file := range sqlFileNames {
+				if info, err := os.Stat(filepath.Join(dir, file)); err != nil || info.Size() == 0 {
+					t.Errorf("%s is not in %s: %v", file, name, err)
+				}
+			}
+			entries, err := os.ReadDir(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != name {
+				t.Errorf("the directory %q holds %d entries, want only %q: a file went elsewhere", parent, len(entries), name)
+			}
+		})
+	}
+}
+
+// The worker flushes once the flush interval has run, though events keep arriving (so the queue is never idle) and the batch is
+// small: the clock is the test's, so no wait is involved.
+func TestSqliteWorkerFlushesWhenTheIntervalHasRun(t *testing.T) {
+	r := newSqlRig(t, "", nil)
+	queue := make(chan dbTask, 8)
+	w := newDbWorker(r.m, queue)
+	clock := time.Unix(1000, 0)
+	w.now = func() time.Time { return clock }
+	counted := func() any { return sqlValue(t, r.path(dbResolver), "SELECT totalqueries FROM resolver") }
+	event := dbTask{event: resolverEvent("A", "UDP")}
+	call := 0
+	w.get = func() (dbTask, bool) {
+		call++
+		switch call {
+		case 1:
+			return event, true
+		case 2:
+			clock = clock.Add(dbFlushInterval - time.Millisecond)
+			return event, true
+		case 3:
+			if got := counted(); got != int64(0) {
+				t.Errorf("totalqueries = %v just short of the interval, want nothing flushed", got)
+			}
+			clock = clock.Add(time.Millisecond)
+			return event, true
+		case 4:
+			if got := counted(); got != int64(3) {
+				t.Errorf("totalqueries = %v once the interval had run, want the 3 events flushed", got)
+			}
+		}
+		return dbTask{stop: true}, true
+	}
+	w.run()
+}
+
+// A detail row is written only under a live incarnation of its group and an origin that is custom or builtin, whatever the
+// aggregate did.
+func TestSqliteDetailRowsNeedTheGroupsLiveEpochAndAKnownOrigin(t *testing.T) {
+	r := newSqlRig(t, "forwarding = true\n", map[string][]string{"dnsbl": sqlCustomGroups(0, "First")})
+	live := r.groupEpoch(t, "First")
+	sqlExec(t, r.path(dbDnsbl), "INSERT INTO dnsbl_group_epochs VALUES ('First', 'weird', 'x')")
+	odd := dbEvent{dnsbl: true, group: "First", owner: "First", origin: "weird", epoch: "x", qtype: "A", transport: "UDP"}
+	deltas := map[groupKey]int64{{"First", "First", "custom", live}: 1}
+	details := map[dbEvent]int64{blockEvent("First", live): 1, blockEvent("First", "stale"): 5, odd: 7}
+	if !r.m.dbFlushDnsbl(deltas, details) {
+		t.Fatalf("the flush failed:\n%s", r.log)
+	}
+	if got := sqlRows(t, r.path(dbDnsbl), "dns_metric_blocks", "groupname, origin, qtype, transport, count"); got != "First custom A UDP 1" {
+		t.Errorf("dns_metric_blocks = %q, want only the live incarnation's row", got)
+	}
+	if got := sqlRows(t, r.path(dbDnsbl), "dns_metric_totals", "groupname, origin, count"); got != "First custom 1" {
+		t.Errorf("dns_metric_totals = %q, want the live group's 1", got)
 	}
 }
 
@@ -590,9 +767,10 @@ func TestSqliteOpenDnsblIfWantedIsIdempotentAndRetriesAfterAFailure(t *testing.T
 	}
 }
 
-// A database that is slow to open must not hold the publishers: the enable is published first (Python's flag flips at
+// A database that is slow to open must not hold the publishers: the change is published first (Python's flag flips at
 // once), and the open runs outside publishMu.
-func TestSqliteControlEnableOpensTheDatabaseOutsidePublishMu(t *testing.T) {
+func assertOpensOutsidePublishMu(t *testing.T, fire func(m *pfbUnbound)) {
+	t.Helper()
 	r := newSqlRig(t, "", nil)
 	blocked := r.path(dbDnsbl)
 	if err := os.MkdirAll(filepath.Join(blocked, "keep"), 0o755); err != nil { // neither openable nor removable
@@ -609,15 +787,15 @@ func TestSqliteControlEnableOpensTheDatabaseOutsidePublishMu(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		r.m.pfbApplyControlCommand([]string{"python_control", "enable"})
+		fire(r.m)
 	}()
 	select {
 	case <-entered:
 	case <-time.After(10 * time.Second):
-		t.Fatal("the enable never reached the database open")
+		t.Fatal("the change never reached the database open")
 	}
 	if !r.m.snapshot.Load().settings.pythonBlacklist {
-		t.Error("the enable was not published before the database open began")
+		t.Error("the change was not published before the database open began")
 	}
 	locked := make(chan struct{})
 	go func() {
@@ -632,6 +810,36 @@ func TestSqliteControlEnableOpensTheDatabaseOutsidePublishMu(t *testing.T) {
 	}
 	close(release)
 	<-done
+}
+
+func TestSqliteControlEnableOpensTheDatabaseOutsidePublishMu(t *testing.T) {
+	assertOpensOutsidePublishMu(t, func(m *pfbUnbound) { m.pfbApplyControlCommand([]string{"python_control", "enable"}) })
+}
+
+func TestSqliteControlTimerExpiryOpensTheDatabaseOutsidePublishMu(t *testing.T) {
+	assertOpensOutsidePublishMu(t, func(m *pfbUnbound) { m.controlSleep() })
+}
+
+// A swap whose settings turn forwarding on, with no list, wants the Upstream counter (issue #860): the gate is
+// _dnsbl_stats_wanted, not python_blacklist alone.
+func TestSqliteSwapForForwardingAloneOpensTheDnsblDatabase(t *testing.T) {
+	r := newSqlRig(t, "", nil)
+	if r.m.sqlite3DnsblCon.Load() {
+		t.Fatal("the DNSBL database opened with nothing wanting it")
+	}
+	r.m.rebuildAndSwap(func() (*snapshot, error) {
+		next := newSnapshot()
+		settings := *r.m.snapshot.Load().settings
+		settings.forwarding = true
+		next.settings = &settings
+		return next, nil
+	}, false)
+	if !r.m.sqlite3DnsblCon.Load() {
+		t.Errorf("a swap with forwarding on did not open the DNSBL database:\n%s", r.log)
+	}
+	if _, err := os.Stat(r.path(dbDnsbl)); err != nil {
+		t.Errorf("no DNSBL database file: %v", err)
+	}
 }
 
 // statsOutageModule is a module with one blocked name whose two stats databases cannot be opened or recovered.
@@ -730,14 +938,16 @@ func TestSqliteMissingOwnerEpochsAreReported(t *testing.T) {
 	snap := newSnapshot()
 	snap.dataDB["a.example"] = &blockEntry{index: 1}
 	snap.feedGroupIndexDB[1] = feedGroup{feed: "F", group: "Lost"}
-	snap.zoneDB["b.example"] = &blockEntry{groupOwner: "DNSBL_Missing", groupOrigin: "builtin", hasGroupOwner: true, hasGroupOrigin: true, top1mFallback: &blockEntry{index: 1}}
+	// The TOP1M fallback is another rule of its own Group: its owner counts although the zone's own owner is named.
+	snap.feedGroupIndexDB[2] = feedGroup{feed: "F2", group: "FallbackLost"}
+	snap.zoneDB["b.example"] = &blockEntry{groupOwner: "DNSBL_Missing", groupOrigin: "builtin", hasGroupOwner: true, hasGroupOrigin: true, top1mFallback: &blockEntry{index: 2}}
 	snap.regexDB.set("r", &regexEntry{groupOwner: "Rx", groupOrigin: "custom"})
 	r.log.Reset()
 	epochs := r.m.dbGroupEpochs(true, snap)
 	if _, ok := epochs[[2]string{"Upstream", "builtin"}]; !ok {
 		t.Errorf("epochs = %v, want the builtin owners", epochs)
 	}
-	want := "DNSBL accounting unavailable for owners: [('DNSBL_Missing', 'builtin'), ('Lost', 'custom'), ('Rx', 'custom')]"
+	want := "DNSBL accounting unavailable for owners: [('DNSBL_Missing', 'builtin'), ('FallbackLost', 'custom'), ('Lost', 'custom'), ('Rx', 'custom')]"
 	if !strings.Contains(r.log.String(), want) {
 		t.Errorf("log = %q, want it to name every owner without an epoch:\n%s", r.log, want)
 	}

@@ -540,7 +540,11 @@ func TestSqliteConstantsMatchPython(t *testing.T) {
 	if dbMaxBatch != c.MaxBatch {
 		t.Errorf("PFB_DB_MAX_BATCH = %d in Python, %d here", c.MaxBatch, dbMaxBatch)
 	}
-	if !reflect.DeepEqual(dbBuiltinOwners, c.BuiltinOwners) {
-		t.Errorf("_DNSBL_BUILTIN_OWNERS = %q in Python, %q here", c.BuiltinOwners, dbBuiltinOwners)
+	owners := make([]string, len(dbBuiltinOwners))
+	for i, owner := range dbBuiltinOwners {
+		owners[i] = owner.(string)
+	}
+	if !reflect.DeepEqual(owners, c.BuiltinOwners) {
+		t.Errorf("_DNSBL_BUILTIN_OWNERS = %q in Python, %q here", c.BuiltinOwners, owners)
 	}
 }
