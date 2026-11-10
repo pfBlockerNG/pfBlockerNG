@@ -149,7 +149,7 @@ func (m *pfbUnbound) reloadWriteApplied(gen int64) {
 		return
 	}
 	m.whileNotRetired(func() {
-		if failure := writeMarker(path, strconv.FormatInt(gen, 10)+"\n"); failure != "" {
+		if failure := writeMarker(path, strconv.FormatInt(gen, 10)+"\n", 0); failure != "" {
 			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write applied-generation marker [ %s ]: %s\n", path, failure)
 		}
 	})
