@@ -387,7 +387,7 @@ decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. Se
 ### pfB-DNS: the experimental DNS gateway (issues #3515, #3517)
 
 pfB-DNS (its settings are on **DNS > General**; registered toggle `dns/pfb_dns`, runtime mirror `$pfb['pfb_dns']`, `sync` policy: only the enable syncs, like the DNSBL enable; its saved Resolver snapshot, listener lists and transports stay node-local) runs
-the Go gateway `pfb-dns` (UDP, TCP, DoT, DoH, DoQ), with pfBlockerNG's Python decider as its child, on the addresses of
+the Go gateway `pfb-dns` (UDP, TCP, DoT, DoH, DoQ), which decides DNSBL in its own process (`go/pfb_dns_gateway/decider`; there is no child), on the addresses of
 pfB-DNS's own plain DNS interface list (`dns/pfb_dns_interface`, seeded once from the Resolver's) and on loopback (`127.0.0.1`, `::1`) at the Resolver's Listen Port (`unbound/port`, 53 by
 default). It is the only DNS front end: there is no Python listener and no fallback to one. DNSBL runs only through it (issue #3770: the proxy is the only DNSBL host, and with pfB-DNS off DNSBL is off); it does not need DNSBL: `pfb_dns_wanted()` (pfBlockerNG
 enabled, the toggle on, the Resolver enabled) alone decides the Resolver move, its restore and the service, and the apply
@@ -873,7 +873,7 @@ salvage limit and can interrupt unfinished core work; it does not guarantee comp
   addresses that are only link-local IPv6 are not served by the proxy; pfSense lists neither.
 - A renewed Resolver certificate reaches the gateway at the next apply or cron tick (at most 15 minutes), not the moment it is
   saved; from then on new connections get it with no restart. Root pushes it over the control socket; the key file remains
-  root-only and cannot be read by Unbound or the Python decider.
+  root-only and cannot be read by Unbound.
 - High availability: pfSense's DNS Resolver XMLRPC sync copies the moved `unbound` section to the secondary, while the
   listener settings and the snapshot marker are per-node (`local`). The toggle syncs with the DNSBL enable (#3770: scope
   Policy and lists, and All settings (legacy) over the pfSense HA sync only), so the primary's setting replaces the

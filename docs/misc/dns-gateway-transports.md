@@ -210,8 +210,9 @@ wire before the UDP socket goes: an accepted one with a CONNECTION_CLOSE and `DO
 `CONNECTION_REFUSED` (quic-go's `Transport.Close` and `Listener.Close` send neither for an accepted connection, which
 would stay open at the client until its 30 s idle timeout); that wait is bounded by 500 ms. The gateway waits for its
 goroutines, DoH requests being served included, for 500 ms; the client connections still open then are closed, and
-after another 500 ms the gateway stops waiting. The decider is then closed, in the time left of the shutdown's 4 s budget:
-a decider with a query still running in it is not closed (the process exit takes it), and one that does not close in time is
+after another 500 ms the gateway stops waiting. The decider is then closed, in the time left of the shutdown's 4 s budget, also
+when a query is still running in it (Close stops its watchers and removes its observer socket, and that query writes no row
+after it; this is logged), and one that does not close in time is
 left to the exit (each is logged), so the gateway exits at the end of the budget whatever the decider does, inside the 5 s the
 rc stop allows before its KILL.
 
