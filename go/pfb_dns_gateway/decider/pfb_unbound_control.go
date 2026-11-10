@@ -99,8 +99,7 @@ const pyErrReprLimit = 200
 // such as "一" (isnumeric, but int() raises) is "not numeric" here. The result is the same, 0; only Python's stderr
 // line for it is not written.
 // shortcut: Go's unicode tables are Unicode 17 where Python 3.11's are Unicode 14, so a digit or numeral added since is
-// numeric here and not there. The owner signed the Unicode-version difference off in
-// https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482; it changes only such a character.
+// numeric here and not there; only a duration made of such characters, which no writer of the channel emits, differs.
 func controlDuration(duration string) int {
 	if duration == "" || strings.ContainsFunc(duration, func(r rune) bool { return !unicode.IsNumber(r) }) {
 		return 0
