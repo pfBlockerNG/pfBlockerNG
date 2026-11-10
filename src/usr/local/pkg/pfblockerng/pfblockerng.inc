@@ -9627,12 +9627,148 @@ function pfb_software_write_cache(array $cache): void {
 }
 
 /*
+ * The catalogue URL a box's repo conf points at, read from <dir>/<repo>.conf (the file
+ * pfblockerng_repo_generate.sh writes). '' unless $repo is one of our four channel repos AND
+ * the conf carries a url line. $dir is injectable so tests can point it at a temp directory.
+ */
+function pfb_software_repo_url(string $repo, string $dir = '/usr/local/etc/pkg/repos'): string {
+	if (preg_match('/^pfblockerng-(?:stable|testing|edge|nightly)$/D', $repo) !== 1) {
+		return '';
+	}
+	$body = @file_get_contents("{$dir}/{$repo}.conf");
+	if (!is_string($body) || preg_match('/^\s*url:\s*"([^"]*)"/m', $body, $m) !== 1) {
+		return '';
+	}
+	return $m[1];
+}
+
+/*
+ * The https notes.json beside a catalogue, from its http(s) repo URL. Only the published
+ * pkg.pfblockerng.com/<channel>/<varver> shape maps: staging prefixes, file:// and other hosts
+ * publish no notes we trust, and '.'/'..' are not a varver.
+ */
+function pfb_software_notes_url(string $repo_url): string {
+	if (preg_match('#^https?://pkg\.pfblockerng\.com/((?:stable|testing|edge|nightly)/([A-Za-z0-9._-]+))/?$#D', $repo_url, $m) !== 1 || in_array($m[2], ['.', '..'], TRUE)) {
+		return '';
+	}
+	return "https://pkg.pfblockerng.com/{$m[1]}/notes.json";
+}
+
+/*
+ * Fetch a notes.json within 15 s. Only an HTTP 200 of at most 64 KiB yields a body (an
+ * announced larger size aborts early); anything else is NULL. Never logs the body.
+ */
+function pfb_software_fetch_notes(string $url): ?string {
+	if ($url === '') {
+		return null;
+	}
+	$ch = curl_init($url);
+	if ($ch === FALSE) {
+		return null;
+	}
+	curl_setopt_array($ch, [
+		CURLOPT_RETURNTRANSFER  => TRUE,
+		CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
+		CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+		CURLOPT_FOLLOWLOCATION  => TRUE,
+		CURLOPT_MAXREDIRS       => 3,
+		CURLOPT_SSL_VERIFYPEER  => TRUE,
+		CURLOPT_SSL_VERIFYHOST  => 2,
+		CURLOPT_CAPATH          => '/etc/ssl/certs/',
+		CURLOPT_CONNECTTIMEOUT  => 5,
+		CURLOPT_TIMEOUT         => 15,
+		CURLOPT_MAXFILESIZE     => 65536,
+	]);
+	$body = curl_exec($ch);
+	$status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+	if (!is_string($body) || $status !== 200 || strlen($body) > 65536) {
+		return null;
+	}
+	return $body;
+}
+
+/*
+ * The "update available" notice: the one-line base, plus notes only when they meet the whole
+ * notes.json contract. Items become printable-ASCII lines (the GUI renders anything else as
+ * an entity); the link is rebuilt from validated parts, never copied.
+ */
+function pfb_software_notice_text(string $latest, ?string $channel, ?string $notes_json): string {
+	$base = "pfBlockerNG {$latest} available ({$channel})";
+	if ($notes_json === null || strlen($notes_json) > 65536) {
+		return $base;
+	}
+	$notes = json_decode($notes_json, TRUE);
+	if (!is_array($notes) || ($notes['schema'] ?? null) !== 1 || ($notes['version'] ?? null) !== $latest) {
+		return $base;
+	}
+	$items = $notes['items'] ?? null;
+	$total = $notes['total'] ?? null;
+	$link = $notes['link'] ?? null;
+	if (!is_array($items) || !array_is_list($items) || !is_int($total) || !is_array($link)) {
+		return $base;
+	}
+	foreach ($items as $item) {
+		if (!is_string($item)) {
+			return $base;
+		}
+	}
+	if ($total < count($items)) {
+		return $base;
+	}
+
+	$kind = $link['kind'] ?? null;
+	$tag = $link['tag'] ?? null;
+	$from = $link['from'] ?? null;
+	$to = $link['to'] ?? null;
+	$hex = '/^[0-9a-f]{7,40}$/D';
+	if ($kind === 'release' && is_string($tag) && preg_match('/^v?[0-9][0-9A-Za-z._-]{0,63}$/D', $tag) === 1) {
+		$url = "https://github.com/pfBlockerNG/pfBlockerNG/releases/tag/{$tag}";
+		$header = "What's new:";
+		$footer = "Full notes: {$url}";
+	} elseif ($kind === 'compare' && is_string($from) && is_string($to) && preg_match($hex, $from) === 1 && preg_match($hex, $to) === 1) {
+		$url = "https://github.com/pfBlockerNG/pfBlockerNG/compare/{$from}...{$to}";
+		$commits = $total === 1 ? 'commit' : 'commits';
+		$header = "What's new ({$total} {$commits} since " . substr($from, 0, 7) . '):';
+		$footer = "Full changes: {$url}";
+	} else {
+		return $base;
+	}
+
+	$shown = [];
+	foreach ($items as $item) {
+		// One pass: any run of bytes outside the printable, non-space range becomes one space.
+		$line = trim(preg_replace('/[^\x21-\x7E]+/', ' ', $item));
+		if ($line === '') {
+			continue;
+		}
+		$shown[] = strlen($line) > 100 ? substr($line, 0, 97) . '...' : $line;
+		if (count($shown) === 5) {
+			break;
+		}
+	}
+	if ($shown === []) {
+		return $base;
+	}
+	$more = $total - count($shown);
+
+	$lines = [$base, $header];
+	foreach ($shown as $entry) {
+		$lines[] = "- {$entry}";
+	}
+	if ($more > 0) {
+		$lines[] = "- ...and {$more} more";
+	}
+	$lines[] = $footer;
+	return implode("\n", $lines);
+}
+
+/*
  * The cron-driven software-update check (ADR-19 §2 "Background check").
  *
  * Order is deliberate:
  *   1. Resolve installed name + version. These can be injected for unit tests via
- *      $io ['installed_name','installed','installed_repo','latest']; absent keys fall
- *      through to the live pfb_pkg_*() shellout.
+ *      $io ['installed_name','installed','installed_repo','latest','notes','fetch_notes'];
+ *      absent keys fall through to the live pfb_pkg_*() shellout.
  *   2. PROVENANCE GATE FIRST: gate on pfb_software_provenance_ok() — the SAME predicate
  *      that decides whether the Software PAGE is displayable (our-repo install, honouring
  *      the hidden CI/support override) — so a build that cannot show the page never runs
@@ -9648,8 +9784,8 @@ function pfb_software_write_cache(array $cache): void {
  *      announce an update nothing verified (issue #2674).
  *   4. Refresh the cache (pkgname/repo/channel/installed/latest; last_checked only on a
  *      successful live read, last_failed only while the last attempt failed) and, when
- *      pfb_should_notify() says so, raise a DE-DUPED file_notice and persist
- *      last_notified = latest (so repeated ticks at the same latest do not renotify).
+ *      pfb_should_notify() says so, raise a DE-DUPED file_notice (notes.json-enriched when valid)
+ *      and persist last_notified = latest (so repeated ticks at the same latest do not renotify).
  *
  * $read_ok reports THIS call's read outcome to the caller, with pfb_pkg_latest()'s meanings:
  * TRUE succeeded, FALSE attempted and failed, NULL not attempted (a gate above returned
@@ -9788,7 +9924,16 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null, ?bool
 	}
 
 	if (pfb_should_notify($installed, $latest, $last_notified, $enabled)) {
-		file_notice('pfBlockerNG', "pfBlockerNG {$latest} available ({$channel})", 'pfBlockerNG', '/pfblockerng/pfblockerng_software.php', 1);
+		if (array_key_exists('notes', $io)) {
+			$notes = is_string($io['notes']) ? $io['notes'] : null;
+		} elseif ($io === array() || isset($io['fetch_notes'])) {
+			$fetch = $io['fetch_notes'] ?? 'pfb_software_fetch_notes';
+			$fetched = $fetch(pfb_software_notes_url(pfb_software_repo_url($repo)));
+			$notes = is_string($fetched) ? $fetched : null;
+		} else {
+			$notes = null;
+		}
+		file_notice('pfBlockerNG', pfb_software_notice_text($latest, $channel, $notes), 'pfBlockerNG', '/pfblockerng/pfblockerng_software.php', 1);
 		$cache['last_notified'] = $latest;
 	}
 
