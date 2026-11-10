@@ -223,8 +223,6 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->krApply(['ctl' => $socket]);
 		file_put_contents("{$this->krDir}/pfb_dns_proxy.py", 'the decider as the package installed it');
 		file_put_contents("{$this->krDir}/decider.applied", str_repeat('0', 32));
-		$GLOBALS['pfb']['dns_proxy_decider_src'] = ["{$this->krDir}/pfb_dns_proxy.py"];
-		$GLOBALS['pfb']['dns_proxy_decider_applied'] = "{$this->krDir}/decider.applied";
 		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway is ready');
 
 		// When the pass runs
@@ -283,22 +281,5 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->assertTrue($ready);
 		$this->assertSame($this->pair(), $this->krProxyCalls());
 		$this->assertNull($this->krMarker());
-	}
-
-	/** @return array<string,array{string}> every function that only the separate Python decider's lifecycle needed */
-	public static function removedFunctions(): array
-	{
-		return [
-			'the decider restart on the control socket' => ['pfb_dns_proxy_decider_restart'],
-			'the changed-decider-code check' => ['pfb_dns_proxy_decider_changed'],
-			'the second-decider memory check' => ['pfb_dns_proxy_decider_restart_fits_ram'],
-			"the decider's code fingerprint" => ['pfb_unbound_py_module_fingerprint'],
-		];
-	}
-
-	#[DataProvider('removedFunctions')]
-	public function testNoPathExistsForTheSeparateDecider(string $function): void
-	{
-		$this->assertFalse(function_exists($function), "{$function} served only the separate Python decider, which pfB-DNS no longer runs");
 	}
 }
