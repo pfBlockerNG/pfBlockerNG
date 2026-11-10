@@ -1,0 +1,2624 @@
+{
+ "handler": [
+  {
+   "id": "disable-without-duration",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-with-empty-duration-token",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     ""
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-with-valid-duration",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "30"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled for 30 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": [
+     [
+      "sleep",
+      30,
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "disable-duration-lower-bound",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "1"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled for 1 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": [
+     [
+      "sleep",
+      1,
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "disable-duration-upper-bound",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "3600"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled for 3600 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": [
+     [
+      "sleep",
+      3600,
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "disable-duration-zero",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "0"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: DNSBL disabled: duration [ 0 ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-duration-over-range",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "3601"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: DNSBL disabled: duration [ 3601 ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-duration-text",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "abc"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: DNSBL disabled: duration [ abc ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-duration-negative",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "-5"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: DNSBL disabled: duration [ -5 ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-duration-superscript-two",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "\u00b2"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: DNSBL disabled: duration [ \u00b2 ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-duration-arabic-indic-three",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "\u0663"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled for 3 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": [
+     [
+      "sleep",
+      3,
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "disable-duration-arabic-indic-thirty-three",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "\u0663\u0663"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled for 33 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": [
+     [
+      "sleep",
+      33,
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "disable-duration-fullwidth-digits",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "\uff11\uff10"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled for 10 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": [
+     [
+      "sleep",
+      10,
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "disable-extra-token-ignores-duration",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "30",
+     "x"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-twice-with-duration",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "30"
+    ],
+    [
+     "python_control",
+     "disable",
+     "40"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled for 30 second(s)"
+    ],
+    [
+     false,
+     "Python_control: DNSBL disabled: Previous call still in progress"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": [
+     [
+      "sleep",
+      30,
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "disable-while-timer-runs",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": [
+     "sleep"
+    ]
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable",
+     "30"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: DNSBL disabled: Previous call still in progress"
+    ]
+   ],
+   "post": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "disable-then-enable",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "disable"
+    ],
+    [
+     "python_control",
+     "enable"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL disabled"
+    ],
+    [
+     true,
+     "Python_control: DNSBL enabled"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "enable-sets-blacklist",
+   "pre": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "enable"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL enabled"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "enable-with-extra-token",
+   "pre": {
+    "python_blacklist": false,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "enable",
+     "x"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: DNSBL enabled"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "unknown-command",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "nosuchcommand"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     ""
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "single-token",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     ""
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "empty-command",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    []
+   ],
+   "results": [
+    [
+     false,
+     ""
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-missing-ip",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Missing bypass IP"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-empty-ip",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     ""
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Missing bypass IP"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "removebypass-missing-ip",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "removebypass"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Missing bypass IP"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-invalid-ip",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "not-an-ip"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Invalid IP: [ not.an.ip ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-invalid-ip-after-dash-mapping",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "1-2-3"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Invalid IP: [ 1.2.3 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-leading-zero-octet",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "01.2.3.4"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Invalid IP: [ 01.2.3.4 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-ipv4-dotted",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10.0.0.5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-ipv4-dashed",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-ipv6",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "2001:db8::5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 2001:db8::5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "2001:db8::5"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-ipv6-scoped",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "fe80::1%em0"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ fe80::1%em0 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "fe80::1%em0"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-ipv6-uppercase-is-kept-verbatim",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "2001:DB8::5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 2001:DB8::5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "2001:DB8::5"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-keeps-gate-already-on",
+   "pre": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.9"
+    ],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10.0.0.5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5",
+     "10.0.0.9"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-with-valid-duration",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "60"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ] for 60 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5"
+    ],
+    "timers": [
+     [
+      "addbypass10.0.0.5",
+      60,
+      "10.0.0.5"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "addbypass-with-empty-duration-token",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     ""
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-duration-zero",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "0"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]: duration [ 0 ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-duration-over-range",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "3601"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]: duration [ 3601 ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-duration-text",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "abc"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]: duration [ abc ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-duration-superscript-two",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "\u00b2"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]: duration [ \u00b2 ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-duration-arabic-indic-three",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "\u0663"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ] for 3 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5"
+    ],
+    "timers": [
+     [
+      "addbypass10.0.0.5",
+      3,
+      "10.0.0.5"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "addbypass-extra-token-ignores-duration",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "60",
+     "x"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-duplicate-timer",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "60"
+    ],
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "90"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ] for 60 second(s)"
+    ],
+    [
+     false,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]: Previous call still in progress"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5"
+    ],
+    "timers": [
+     [
+      "addbypass10.0.0.5",
+      60,
+      "10.0.0.5"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "addbypass-timer-for-another-ip-is-independent",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "60"
+    ],
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-6",
+     "90"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ] for 60 second(s)"
+    ],
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.6 ] for 90 second(s)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5",
+     "10.0.0.6"
+    ],
+    "timers": [
+     [
+      "addbypass10.0.0.5",
+      60,
+      "10.0.0.5"
+     ],
+     [
+      "addbypass10.0.0.6",
+      90,
+      "10.0.0.6"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "addbypass-invalid-duration-keeps-gate-on-adds-nothing",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5",
+     "0"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]: duration [ 0 ] out of range (1-3600sec)"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "removebypass-present",
+   "pre": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5",
+     "10.0.0.6"
+    ],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "removebypass",
+     "10-0-0-5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Remove bypass for IP: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.6"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "removebypass-absent",
+   "pre": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.6"
+    ],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "removebypass",
+     "10-0-0-5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: IP not in Group Policy: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.6"
+    ],
+    "timers": []
+   }
+  },
+  {
+   "id": "removebypass-absent-turns-the-gate-on",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "removebypass",
+     "10-0-0-5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: IP not in Group Policy: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "removebypass-invalid-ip",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "removebypass",
+     "nope"
+    ]
+   ],
+   "results": [
+    [
+     false,
+     "Python_control: Invalid IP: [ nope ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "removebypass-ignores-duration",
+   "pre": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [
+     "10.0.0.5"
+    ],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "removebypass",
+     "10-0-0-5",
+     "60"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Remove bypass for IP: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [],
+    "timers": []
+   }
+  },
+  {
+   "id": "addbypass-then-removebypass",
+   "pre": {
+    "python_blacklist": true,
+    "gate": false,
+    "entries": [],
+    "timers": []
+   },
+   "commands": [
+    [
+     "python_control",
+     "addbypass",
+     "10-0-0-5"
+    ],
+    [
+     "python_control",
+     "removebypass",
+     "10-0-0-5"
+    ]
+   ],
+   "results": [
+    [
+     true,
+     "Python_control: Add bypass for IP: [ 10.0.0.5 ]"
+    ],
+    [
+     true,
+     "Python_control: Remove bypass for IP: [ 10.0.0.5 ]"
+    ]
+   ],
+   "post": {
+    "python_blacklist": true,
+    "gate": true,
+    "entries": [],
+    "timers": []
+   }
+  }
+ ],
+ "sleep_expiry": {
+  "python_blacklist": true
+ },
+ "addbypass_expiry": {
+  "first": true,
+  "second": false,
+  "entries": [
+   "10.0.0.6"
+  ]
+ },
+ "durations": [
+  {
+   "text": "60",
+   "value": 60,
+   "stderr": ""
+  },
+  {
+   "text": "1",
+   "value": 1,
+   "stderr": ""
+  },
+  {
+   "text": "3600",
+   "value": 3600,
+   "stderr": ""
+  },
+  {
+   "text": "0",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "3601",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "abc",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "-1",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "\u00b2",
+   "value": false,
+   "stderr": "[pfBlockerNG] python_control_duration: invalid literal for int() with base 10: '\u00b2'"
+  },
+  {
+   "text": "\u0663",
+   "value": 3,
+   "stderr": ""
+  },
+  {
+   "text": "\u0663\u0663",
+   "value": 33,
+   "stderr": ""
+  },
+  {
+   "text": "\uff11",
+   "value": 1,
+   "stderr": ""
+  },
+  {
+   "text": "12 ",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "+1",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "1_0",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "\ud835\udfd1",
+   "value": 3,
+   "stderr": ""
+  },
+  {
+   "text": "00060",
+   "value": 60,
+   "stderr": ""
+  },
+  {
+   "text": "\u2155",
+   "value": false,
+   "stderr": "[pfBlockerNG] python_control_duration: invalid literal for int() with base 10: '\u2155'"
+  },
+  {
+   "text": "99999999999999999999999999",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
+   "value": 3,
+   "stderr": ""
+  },
+  {
+   "text": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
+   "value": false,
+   "stderr": "[pfBlockerNG] python_control_duration: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+  },
+  {
+   "text": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
+   "value": false,
+   "stderr": "[pfBlockerNG] python_control_duration: Exceeds the limit (4300 digits) for integer string conversion: value has 5001 digits; use sys.set_int_max_str_digits() to increase the limit"
+  },
+  {
+   "text": "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+   "value": false,
+   "stderr": ""
+  },
+  {
+   "text": "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+   "value": false,
+   "stderr": "[pfBlockerNG] python_control_duration: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+  },
+  {
+   "text": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\u0663",
+   "value": 3,
+   "stderr": ""
+  },
+  {
+   "text": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\u0663",
+   "value": false,
+   "stderr": "[pfBlockerNG] python_control_duration: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+  },
+  {
+   "text": "\u00b20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "value": false,
+   "stderr": "[pfBlockerNG] python_control_duration: invalid literal for int() with base 10: '\u00b2000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ],
+ "records": [
+  {
+   "text": "",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": " \n\t ",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "\u00a0",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "[]",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "[{\"seq\": 1, \"cmd\": \"enable\"}]",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "\"seq\"",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "null",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "3",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{}",
+   "record": true,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"cmd\": \"enable\"}",
+   "record": true,
+   "seq": null,
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\"} trailing",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\",}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 01, \"cmd\": \"enable\"}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": \"1\", \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": null,
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 2.0, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": null,
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1e2, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": null,
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": true, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": false, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": "0",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": null, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": null,
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": -0, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": "0",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": -7, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": "-7",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 123456789012345678901234567890, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": "123456789012345678901234567890",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": NaN, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": null,
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 5, \"cmd\": \"enable\", \"extra\": NaN}",
+   "record": true,
+   "seq": "5",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 5, \"cmd\": \"enable\", \"extra\": Infinity, \"more\": -Infinity}",
+   "record": true,
+   "seq": "5",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"seq\": 2, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": "2",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"cmd\": \"disable\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 30}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "30"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": \"30\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "30"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 1.5}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "1.5"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 30.0}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "30.0"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 1e2}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "100.0"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 1e16}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "1e+16"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 1e22}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "1e+22"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 1E-5}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "1e-05"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 0.0001}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "0.0001"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": -0.0}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "-0.0"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 123456789012345678.0}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "1.2345678901234568e+17"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 5e-324}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "5e-324"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 1e999}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "inf"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": -1e999}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "-inf"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": true}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "True"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": false}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "False"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": null}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "None"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": -5}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "-5"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": -0}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "0"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 123456789012345678901234567890}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "123456789012345678901234567890"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": \"\\u00b2\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "\u00b2"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": \"\\u0663\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "\u0663"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": \"\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    ""
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": []}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "[]"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": {}}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "{}"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": [1, \"a\", true, null, 2.0, [3], {\"k\": \"v\"}]}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "[1, 'a', True, None, 2.0, [3], {'k': 'v'}]"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": {\"b\": 1, \"a\": [true, null], \"b\": 2}}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "{'b': 2, 'a': [True, None]}"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": [\"it's\", \"say \\\"hi\\\"\", \"both ' and \\\"\", \"tab\\there\", \"nl\\n\", \"bs\\\\\", \"\\u00e9\", \"\\u2028\", \"\\u0007\", \"\\ud83d\\ude00\"]}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "[\"it's\", 'say \"hi\"', 'both \\' and \"', 'tab\\there', 'nl\\n', 'bs\\\\', '\u00e9', '\\u2028', '\\x07', '\ud83d\ude00']"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": \"plain\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "plain"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"disable\", \"duration\": 30, \"ip\": \"ignored\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "disable",
+    "30"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"duration\": 30}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": \"10.0.0.5\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "addbypass",
+    "10.0.0.5"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": \"10.0.0.5\", \"duration\": 60}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "addbypass",
+    "10.0.0.5",
+    "60"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": \"10.0.0.5\", \"duration\": \"60\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "addbypass",
+    "10.0.0.5",
+    "60"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": \"10.0.0.5\", \"duration\": null}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "addbypass",
+    "10.0.0.5",
+    "None"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": \"10-0-0-5\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "addbypass",
+    "10-0-0-5"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": \"\"}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\"}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": 5}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": null}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"addbypass\", \"ip\": [\"10.0.0.5\"]}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"removebypass\", \"ip\": \"10.0.0.5\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "removebypass",
+    "10.0.0.5"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"removebypass\", \"ip\": \"10.0.0.5\", \"duration\": 60}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "removebypass",
+    "10.0.0.5"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"removebypass\", \"ip\": \"\"}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"removebypass\"}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"removebypass\", \"ip\": false}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"wipe-everything\"}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"ENABLE\"}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \" enable\"}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": 5}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": null}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": [\"enable\"]}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": {\"enable\": 1}}",
+   "record": true,
+   "seq": "1",
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"en\\u0061ble\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\"}\n",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "\n\t {\"seq\": 1, \"cmd\": \"enable\"}\r\n",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\" : 1 ,\n \"cmd\" : \"enable\" }",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{'seq': 1, 'cmd': 'enable'}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\"}\u0000",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\"}\u00a0",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "\u00a0{\"seq\": 1, \"cmd\": \"enable\"}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"k\": \"\\ud800\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"bad\": tru}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"bad\": \"a\nb\"}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"bad\": \"\\x41\"}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"ok\": \"\\/\\b\\f\"}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"bad\": .5}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"bad\": 1.}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"bad\": +1}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"bad\": 1e}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"bad\": \"unterminated}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", 5: 1}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1 \"cmd\": \"enable\"}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\"",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "\ufeff{\"seq\": 1, \"cmd\": \"enable\"}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111, \"cmd\": \"enable\"}",
+   "record": true,
+   "seq": "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  },
+  {
+   "text": "{\"seq\": 11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111, \"cmd\": \"enable\"}",
+   "record": false,
+   "seq": null,
+   "command": null
+  },
+  {
+   "text": "{\"seq\": 1, \"cmd\": \"enable\", \"deep\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+   "record": true,
+   "seq": "1",
+   "command": [
+    "python_control",
+    "enable"
+   ]
+  }
+ ]
+}

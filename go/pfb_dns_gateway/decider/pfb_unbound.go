@@ -7,8 +7,9 @@
 // here is joined onto moduleDir. The decision data (the DBs, the settings a decision reads) lives in the one
 // snapshot the module publishes, not in module fields: see pfbUnbound.snapshot.
 //
-// Not translated yet, each arriving with the family that needs it: the sqlite, MaxMind and thread setup, the log
-// files and stderr redirect, the module fingerprint, the retired-cache sweep, and the control branch of operate().
+// Not translated yet, each arriving with the family that needs it: the sqlite and MaxMind setup, the reload and query
+// watchers, the log files and stderr redirect, the module fingerprint, and the retired-cache sweep. The DNSBL control
+// surface (pfb_apply_control_command, its timers and the control watcher) is in pfb_unbound_control.go.
 package decider
 
 import (
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_dns_gateway/decider/pysem"
 )
@@ -141,6 +143,21 @@ type pfbUnbound struct {
 	// statusMu is _pfb_py_status_lock; statusClock is pfb_py_status_open's clock_fn (nil: the real clock).
 	statusMu    sync.Mutex
 	statusClock func() int64
+
+	// publishMu serializes the publishers of snapshot: rebuildAndSwap, a control command and a control timer's expiry.
+	// Each loads the live snapshot, derives the next from it and stores it, so two of them at once would lose a write.
+	publishMu sync.Mutex
+	// afterFunc starts a control timer (time.AfterFunc's shape; nil is the real one). A test replaces it to fire the
+	// expiry by hand; it must not run f before it returns, as the caller holds publishMu.
+	afterFunc func(delay time.Duration, f func())
+	// controlMu guards controlActive, the names of the running control timers (Python: threading.enumerate()).
+	controlMu     sync.Mutex
+	controlActive map[string]struct{}
+	// controlTick is the control watcher's poll tick and its release (nil: a RELOAD_POLL_INTERVAL ticker). A test
+	// replaces it to drive the watcher without a clock.
+	controlTick func() (tick <-chan time.Time, stop func())
+	// controlStop stops the control watcher and waits for it to end; nil is pfb["control_watcher"] False.
+	controlStop func()
 }
 
 // parseTldAllow turns the MAIN-ini tld_allow_list value into a cleaned list: stripped, lower-cased, blank entries
@@ -589,6 +606,11 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 		scratch.pslFeedIcannPolicy = pfb.pslFeedIcannPolicy
 		return scratch, nil
 	}, false)
+
+	// PFBL-03: start the DNSBL-control command-channel reader when the feature is enabled.
+	if pfb.pythonControl {
+		m.startControlWatcher()
+	}
 	return m, nil
 }
 
@@ -957,7 +979,8 @@ func intOf(value int64) int {
 // The snapshot carries its settings. Python flips pfb["python_blacklist"] after the swap when the new lists have any
 // block or allow stratum (a regex-only reload into a module that had no lists must start blocking); here the flip is
 // made on a copy of the settings before the snapshot is published, because a published snapshot is never written.
-// The base is the builder's own settings, else the live snapshot's (the module's at init).
+// The base is the builder's own settings, else the live snapshot's (the module's at init). The base is read and the
+// next snapshot stored under publishMu, so a control command that lands meanwhile is carried, not overwritten.
 //
 // Not translated: _open_dnsbl_stats_db_if_wanted (the sqlite stats DB).
 func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emitCounts bool) bool {
@@ -970,6 +993,7 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 		return false
 	}
 
+	m.publishMu.Lock()
 	base := next.settings
 	if base == nil {
 		base = &m.pfb
@@ -985,6 +1009,7 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	next.settings = &settings
 
 	m.snapshot.Store(next)
+	m.publishMu.Unlock()
 	m.decisionDB.clear()
 	// #714 FIX #2: a swap installs brand-new regex DBs, so the warn suppression keyed on a rule name must not outlive it.
 	m.regexRuntime.reset()
@@ -1144,8 +1169,8 @@ func safesearchCnameRedirect(snap *snapshot, id int, qstate *moduleQstate, qType
 // event, the owner's 2026-11-09 rule makes one query one generation. Every reader below (noAAAA, SafeSearch, Group
 // Policy, evaluate_domain, the settings) reads that snapshot, never a field of m a swap could change.
 //
-// Not translated yet: the python_control TXT branch (family control), and the log calls get_details_dnsbl,
-// get_details_reply and _log_idn_alert (the DNSBL and DNS Reply log acceptance rows of #3779).
+// Not translated yet: the log calls get_details_dnsbl, get_details_reply and _log_idn_alert (the DNSBL and DNS Reply
+// log acceptance rows of #3779).
 func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any) bool {
 	qstateValid := false
 	var qType uint16
@@ -1166,8 +1191,6 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 	} else {
 		logErr("[pfBlockerNG] qstate is not None and qstate.qinfo.qtype is not None")
 	}
-	// qIP feeds the control branch and the log calls above, none translated yet.
-	_ = qIP
 
 	if event == MODULE_EVENT_NEW || event == MODULE_EVENT_PASS {
 		// no AAAA validation. The verdict is memoized on the name's Decision (noaaaa axis): UNSET = not yet evaluated,
@@ -1236,7 +1259,40 @@ func (m *pfbUnbound) operate(id int, event int, qstate *moduleQstate, qdata any)
 			}
 		}
 
-		// The python_control TXT branch (PFBL-03) waits for the control family.
+		// Python_control - Receive TXT commands from pfSense local IP
+		// PFBL-03: DEPRECATED legacy DNS-TXT control transport. Inert unless the operator explicitly opts back in via
+		// python_control_legacy; DNSBL control is CLI-driven over the local privileged command file. This whole branch is
+		// deprecated and will be removed in a future release.
+		if settings.pythonControlLegacy && qstateValid && qType == RR_TYPE_TXT && strings.HasPrefix(qNameOriginal, "python_control.") {
+			// PFBL-03: accept the loopback address over either family (the old check was IPv4-only).
+			if settings.pythonControl && (qIP == "127.0.0.1" || qIP == "::1" || qIP == "::ffff:127.0.0.1") {
+				controlCommand := strings.Split(qNameOriginal, ".")
+				// PFBL-03: route to the SINGLE shared handler (also used by the local privileged command channel) -- one
+				// implementation of the grammar.
+				controlRcd, controlMsg := m.pfbApplyControlCommand(controlCommand)
+
+				qReply := "python_control"
+				if !controlRcd {
+					if controlMsg == "" {
+						controlMsg = fmt.Sprintf("Python_control: Command not authorized! [ %s ]", qNameOriginal)
+					}
+					qReply = "python_control_fail"
+				}
+
+				txtMsg := newDNSMessage(qstate.qinfo.qnameStr, RR_TYPE_TXT, RR_CLASS_IN, PKT_QR|PKT_RA)
+				txtMsg.answer = append(txtMsg.answer, fmt.Sprintf("%s. 0 IN TXT \"%s\"", qReply, controlMsg))
+
+				if !txtMsg.setReturnMsg(qstate) {
+					qstate.extState[id] = MODULE_ERROR
+					return true
+				}
+
+				qstate.returnRcode = RCODE_NOERROR
+				qstate.returnMsg.rep.security = secStatusIndeterminate
+				qstate.extState[id] = MODULE_FINISHED
+				return true
+			}
+		}
 	}
 
 	// DNSBL Validation for specific RR_TYPES only
