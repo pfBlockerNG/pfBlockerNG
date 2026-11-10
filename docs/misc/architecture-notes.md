@@ -1932,6 +1932,12 @@ Full design: ADR-39.
   `pfb_channel_from_repo_name()` maps `pfblockerng-<ch>` → channel and
   `pfb_software_is_our_build()` accepts all five project repos, so a stable/testing/edge
   subscriber keeps the Software tab, the priv `match[]` line, and the update notice.
+  The update notice adds a short "What's new" list (issue #3816): when it fires for a new
+  version, the box fetches `https://pkg.pfblockerng.com/<channel>/<varver>/notes.json`
+  (published beside the catalogue by pfBlockerNG/pkg) over verified HTTPS, once per version.
+  It uses the file only when its `version` equals the announced one, keeps the text
+  printable ASCII (the GUI, e-mail and Telegram show notices as plain text) and rebuilds the
+  release or compare link itself. Anything else falls back to the one-line notice.
 - **Repo smoke flow:** `tests/smoke/test_repo_install.py` carries its **own marker `repo`** (a
   distribution flow, **deselected from `-m smoke`**) — install-from-our-repo (no `-f`), cross-repo
   precedence (both directions vs a `netgate-decoy`), `pkg upgrade` `_1`→`_9`, and the catalog
