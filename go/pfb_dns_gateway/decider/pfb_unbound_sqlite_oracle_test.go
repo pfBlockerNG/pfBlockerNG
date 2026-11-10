@@ -457,7 +457,7 @@ func TestSqliteStatsMatchPython(t *testing.T) {
 					}, false)
 				case "resolve":
 					next := 0
-					newFrontend(m).resolve(mustHex(t, step.Wire), step.Client, func([]byte) []byte {
+					newFrontend(m).Resolve(mustHex(t, step.Wire), step.Client, func([]byte) []byte {
 						if next >= len(step.Forwards) {
 							t.Errorf("step %d: the decider asked Unbound %d times, Python %d", i, next+1, len(step.Forwards))
 							return nil
@@ -466,6 +466,7 @@ func TestSqliteStatsMatchPython(t *testing.T) {
 						next++
 						return mustHex(t, reply)
 					}, step.Transport, step.Lip, step.Lif)
+
 					if next != len(step.Forwards) {
 						t.Errorf("step %d: the decider asked Unbound %d times, Python %d", i, next, len(step.Forwards))
 					}

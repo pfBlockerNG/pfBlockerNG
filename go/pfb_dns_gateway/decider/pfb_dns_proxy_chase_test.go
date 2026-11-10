@@ -180,7 +180,7 @@ func ssQuery(t *testing.T, name string, qtype uint16, o ssQ) []byte {
 // ssResolveWire is what the client is sent; a fresh Frontend decides, as each Python test makes one.
 func ssResolveWire(t *testing.T, module *pfbUnbound, wire []byte, fwd forward, transport string) []byte {
 	t.Helper()
-	return newFrontend(module).resolve(wire, ssClient, fwd, transport, "", "")
+	return newFrontend(module).Resolve(wire, ssClient, fwd, transport, "", "")
 }
 
 func ssResolve(t *testing.T, module *pfbUnbound, wire []byte, fwd forward, transport string) *dnswire.Message {
@@ -714,7 +714,7 @@ func TestAnOversizedChaseIsAServfailAndOneLogLineHoweverOftenItIsAsked(t *testin
 	f.monotonic = func() time.Duration { return now }
 	u := paritycorpus.NewFakeUnbound(ssZone())
 	ask := func() *dnswire.Message {
-		reply := f.resolve(query, ssClient, ssForward(t, u, nil), "Unknown", "", "")
+		reply := f.Resolve(query, ssClient, ssForward(t, u, nil), "Unknown", "", "")
 		wantBare(t, "oversized", reply, 0x1234, dnswire.QR|dnswire.RA|dnswire.RD|RCODE_SERVFAIL, RCODE_SERVFAIL, question(ssDuck, dnswire.CLASS_IN))
 		return parse(t, reply)
 	}

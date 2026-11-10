@@ -18,7 +18,7 @@ func TestARunningWriterTakesTheRowOffTheQueryPath(t *testing.T) {
 	release := stuckWriter(t, m.logs, m.logPath(dnsblLogName))
 	var answer []byte
 	if !within(func() {
-		answer = f.resolve(qtypeWire(t, "lf1.example.", 1), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
+		answer = f.Resolve(qtypeWire(t, "lf1.example.", 1), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
 	}) {
 		t.Fatal("a query blocked on its log row while the writer was stuck")
 	}

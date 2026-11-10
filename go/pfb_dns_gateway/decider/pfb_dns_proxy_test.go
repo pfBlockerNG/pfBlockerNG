@@ -494,7 +494,7 @@ func TestResolveNeverAnswersWhatIsNotAQuery(t *testing.T) {
 		"a response claiming two questions":  append(header(7, dnswire.QR|dnswire.RD, 2, 0, 0, 0), bytes.Repeat([]byte{0xC0, 0x0C}, 50)...),
 	} {
 		r := answering([]byte(unboundSaid))
-		if reply := f.resolve(wire, testClient, r.forward, "UDP", "", ""); reply != nil || len(r.wires) != 0 {
+		if reply := f.Resolve(wire, testClient, r.forward, "UDP", "", ""); reply != nil || len(r.wires) != 0 {
 			t.Errorf("%s: reply %q, forwarded %d wires, want a drop and nothing forwarded", name, reply, len(r.wires))
 		}
 	}
@@ -515,7 +515,7 @@ func TestResolveAnswersAQueryWithoutExactlyOneQuestionWithAHeaderOnlyFormerr(t *
 		{"RD that is not set is not made up", 0, header(0xABCD, 0, 3, 0, 0, 0)},
 	} {
 		r := answering([]byte(unboundSaid))
-		reply := f.resolve(row.wire, testClient, r.forward, "UDP", "", "")
+		reply := f.Resolve(row.wire, testClient, r.forward, "UDP", "", "")
 		if len(reply) != 12 {
 			t.Errorf("%s: reply is %d bytes, want the 12 of the header alone: no question echoed, nothing to amplify", row.name, len(reply))
 		}
@@ -530,7 +530,7 @@ func TestResolveAnswersAnUnparseableBodyWithAHeaderOnlyFormerr(t *testing.T) {
 	f := newTestFrontend(t)
 	r := answering([]byte(unboundSaid))
 	wire := append(header(0xABCD, dnswire.RD, 1, 0, 0, 0), 5, 'a', 'b') // a 5-octet label with 2 octets present
-	reply := f.resolve(wire, testClient, r.forward, "UDP", "", "")
+	reply := f.Resolve(wire, testClient, r.forward, "UDP", "", "")
 	if len(reply) != 12 {
 		t.Errorf("reply is %d bytes, want the 12 of a header-only FORMERR", len(reply))
 	}
@@ -582,7 +582,7 @@ func TestResolveForwardsWhatUnboundAnswersItselfUnchanged(t *testing.T) {
 	for _, c := range forwardedCases(t) {
 		for _, transport := range []string{"UDP", "TCP"} {
 			r := answering([]byte(unboundSaid))
-			reply := f.resolve(c.wire, testClient, r.forward, transport, "", "")
+			reply := f.Resolve(c.wire, testClient, r.forward, transport, "", "")
 			if string(reply) != unboundSaid || len(r.wires) != 1 || !bytes.Equal(r.wires[0], c.wire) {
 				t.Errorf("%s over %s: reply %q, forwarded %x, want Unbound's reply and the client's own bytes %x", c.name, transport, reply, r.wires, c.wire)
 			}
@@ -599,7 +599,7 @@ func TestResolveServfailsAForwardedQueryUnboundDoesNotAnswerWithoutLoggingIt(t *
 			questions = parse(t, c.wire).Questions
 		}
 		flags := binary.BigEndian.Uint16(c.wire[2:])
-		reply := f.resolve(c.wire, testClient, (&recorder{}).forward, "UDP", "", "")
+		reply := f.Resolve(c.wire, testClient, (&recorder{}).forward, "UDP", "", "")
 		// As the SERVFAIL of a module-decided query: id, RD, CD and the opcode kept.
 		want := dnswire.QR | dnswire.RA | (flags & (dnswire.RD | dnswire.CD | dnswire.OPCODE_MASK)) | RCODE_SERVFAIL
 		wantBare(t, c.name, reply, 0x4242, want, RCODE_SERVFAIL, questions)
@@ -619,7 +619,7 @@ func TestResolveRelaysUnboundsReplyByteForByte(t *testing.T) {
 		// Trailing bytes after the last record: the parser ignores them, a re-encoding would lose them.
 		upstream := append(replyTo(t, wire, 0, aRecord(allowed, 300, 1)), 0xDE, 0xAD)
 		r := answering(upstream)
-		reply := f.resolve(wire, testClient, r.forward, transport, "", "")
+		reply := f.Resolve(wire, testClient, r.forward, transport, "", "")
 		if !bytes.Equal(reply, upstream) || len(r.wires) != 1 || !bytes.Equal(r.wires[0], wire) {
 			t.Errorf("transport %q: reply %x, forwarded %x, want Unbound's exact bytes %x for the client's exact query %x", transport, reply, r.wires, upstream, wire)
 		}
@@ -635,7 +635,7 @@ func TestResolveRelaysUnboundErrorRepliesUnchanged(t *testing.T) {
 	for name, rcode := range map[string]uint16{"SERVFAIL": 2, "NXDOMAIN": 3, "REFUSED": 5} {
 		wire := queryWire(t, allowed, dnswire.RD)
 		upstream := replyTo(t, wire, rcode)
-		reply := f.resolve(wire, testClient, answering(upstream).forward, "UDP", "", "")
+		reply := f.Resolve(wire, testClient, answering(upstream).forward, "UDP", "", "")
 		if !bytes.Equal(reply, upstream) {
 			t.Errorf("%s: reply %x, want Unbound's reply %x untouched (the module left it alone)", name, reply, upstream)
 		}
@@ -649,7 +649,7 @@ func TestResolveRelaysAReplyThatCarriesNoQuestion(t *testing.T) {
 	f := newTestFrontend(t)
 	// Unbound's access-control REFUSED has no question section at all.
 	refused := header(0x1234, dnswire.QR|dnswire.RD|dnswire.RA|5, 0, 0, 0, 0)
-	reply := f.resolve(queryWire(t, allowed, dnswire.RD), testClient, answering(refused).forward, "UDP", "", "")
+	reply := f.Resolve(queryWire(t, allowed, dnswire.RD), testClient, answering(refused).forward, "UDP", "", "")
 	if !bytes.Equal(reply, refused) {
 		t.Errorf("reply %x, want the 12-byte REFUSED %x relayed as it is", reply, refused)
 	}
@@ -661,7 +661,7 @@ func TestResolveServfailsWhenUnboundGivesNoReply(t *testing.T) {
 		out := captureLog(t)
 		wire := encode(t, &dnswire.Message{ID: 0x0B0B, Flags: dnswire.RD, Questions: question(allowed, dnswire.CLASS_IN), Additional: []dnswire.RR{dnswire.MakeOpt(4096, do, nil)}})
 		r := &recorder{}
-		reply := f.resolve(wire, testClient, r.forward, "UDP", "", "")
+		reply := f.Resolve(wire, testClient, r.forward, "UDP", "", "")
 		wantBare(t, "silent", reply, 0x0B0B, dnswire.QR|dnswire.RA|dnswire.RD|RCODE_SERVFAIL, RCODE_SERVFAIL, question(allowed, dnswire.CLASS_IN))
 		wantOnlyOpt(t, "silent", parse(t, reply).Additional, do)
 		if len(r.wires) != 1 || !bytes.Equal(r.wires[0], wire) {
@@ -678,7 +678,7 @@ func TestResolveTakesAReplyTooShortForAHeaderForNoReply(t *testing.T) {
 		f := newTestFrontend(t)
 		out := captureLog(t)
 		wire := queryWire(t, allowed, dnswire.RD)
-		reply := f.resolve(wire, testClient, answering(short).forward, "UDP", "", "")
+		reply := f.Resolve(wire, testClient, answering(short).forward, "UDP", "", "")
 		wantBare(t, name, reply, 0x4242, dnswire.QR|dnswire.RA|dnswire.RD|RCODE_SERVFAIL, RCODE_SERVFAIL, question(allowed, dnswire.CLASS_IN))
 		if lines := logLines(out); len(lines) != 1 || !strings.HasPrefix(lines[0], "pfb_dns_proxy warning: no reply from Unbound for ") {
 			t.Errorf("%s: log = %q, want one silence warning", name, lines)
@@ -690,7 +690,7 @@ func TestResolveServfailsAMalformedReplyAndLogsItOnce(t *testing.T) {
 	f := newTestFrontend(t)
 	out := captureLog(t)
 	garbage := append(header(0x4242, dnswire.QR|dnswire.RD|dnswire.RA, 1, 0, 0, 0), 5, 'a', 'b') // a 5-octet label, 2 present
-	reply := f.resolve(queryWire(t, allowed, dnswire.RD), testClient, answering(garbage).forward, "UDP", "", "")
+	reply := f.Resolve(queryWire(t, allowed, dnswire.RD), testClient, answering(garbage).forward, "UDP", "", "")
 	wantBare(t, "malformed", reply, 0x4242, dnswire.QR|dnswire.RA|dnswire.RD|RCODE_SERVFAIL, RCODE_SERVFAIL, question(allowed, dnswire.CLASS_IN))
 	if lines := logLines(out); len(lines) != 1 || !strings.HasPrefix(lines[0], "pfb_dns_proxy error: ") {
 		t.Errorf("log = %q, want exactly one error line (Unbound did answer, so no silence warning)", lines)
@@ -721,7 +721,7 @@ func silenceLog(t *testing.T, f *Frontend, steps []silenceStep) []string {
 			}
 			return replyTo(t, wire, 0)
 		}}
-		f.resolve(wire, testClient, r.forward, "UDP", "", "")
+		f.Resolve(wire, testClient, r.forward, "UDP", "", "")
 	}
 	var warnings []string
 	for _, line := range logLines(out) {

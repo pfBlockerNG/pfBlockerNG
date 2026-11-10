@@ -513,10 +513,15 @@ func pollLoop(stop <-chan struct{}, tick <-chan time.Time, drain func(stop <-cha
 	}
 }
 
-// startPoller runs a watcher's loop on its own goroutine, fed by the tick source tickFor makes (nil: a
+// watcherStopWait is how long a stop waits for a watcher's goroutine: deinit's join(timeout=5). A variable so that a test
+// can shorten it.
+var watcherStopWait = 5 * time.Second
+
+// startPoller runs the watcher `name`'s loop on its own goroutine, fed by the tick source tickFor makes (nil: a
 // RELOAD_POLL_INTERVAL ticker), and returns what stops it and waits for its goroutine, the release of the tick source
-// included, to end.
-func startPoller(tickFor func() (<-chan time.Time, func()), run func(stop <-chan struct{}, tick <-chan time.Time)) func() {
+// included, to end. The wait is bounded by watcherStopWait: a goroutine stuck in a drain is left to finish by itself, one
+// line says so, and the stop returns. Call the stop once.
+func startPoller(name string, tickFor func() (<-chan time.Time, func()), run func(stop <-chan struct{}, tick <-chan time.Time)) func() {
 	stop, done := make(chan struct{}), make(chan struct{})
 	if tickFor == nil {
 		tickFor = func() (<-chan time.Time, func()) {
@@ -532,7 +537,13 @@ func startPoller(tickFor func() (<-chan time.Time, func()), run func(stop <-chan
 	}()
 	return func() {
 		close(stop)
-		<-done
+		timer := time.NewTimer(watcherStopWait)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			logWarn(fmt.Sprintf("[pfBlockerNG]: %s watcher did not stop within %s, going on", name, watcherStopWait))
+		}
 	}
 }
 
@@ -541,10 +552,10 @@ func (m *pfbUnbound) startControlWatcher() {
 	if m.controlStop != nil {
 		return
 	}
-	m.controlStop = startPoller(m.controlTick, m.newControlWatcher().run)
+	m.controlStop = startPoller("control", m.controlTick, m.newControlWatcher().run)
 }
 
-// stopControlWatcher is deinit's stop of the watcher: it returns once the watcher has ended.
+// stopControlWatcher is deinit's stop of the watcher: it returns once the watcher has ended, or after watcherStopWait.
 func (m *pfbUnbound) stopControlWatcher() {
 	if m.controlStop != nil {
 		m.controlStop()

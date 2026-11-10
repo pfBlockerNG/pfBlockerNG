@@ -1426,7 +1426,7 @@ func TestControlAddbypassRacingAReloadSwapLosesNeither(t *testing.T) {
 	}
 }
 
-// Queries run through Frontend.resolve in several goroutines while the watcher drains one generation after another and
+// Queries run through Frontend.Resolve in several goroutines while the watcher drains one generation after another and
 // control commands run alongside. The odd generations block n.example and t.example, the even ones m.example, with
 // different sinkholes, so each answer must be exactly one generation's verdict (a torn mix matches neither). The applied
 // marker must end at the last generation. Run it with -race.
@@ -1463,7 +1463,7 @@ func TestReloadSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
 		reload()
 		f := newFrontend(m)
 		for i, name := range names {
-			got := raceAddresses(t, f.resolve(raceQuery(t, uint16(i+1), name), "192.0.2.10", upstream, "UDP", "", ""))
+			got := raceAddresses(t, f.Resolve(raceQuery(t, uint16(i+1), name), "192.0.2.10", upstream, "UDP", "", ""))
 			if got != want[name][side] {
 				t.Errorf("settled generation %s: %s answered %q, want %q", side, name, got, want[name][side])
 			}
@@ -1504,7 +1504,7 @@ func TestReloadSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
 			f := newFrontend(m)
 			for i := range rounds {
 				name := names[(g+i)%len(names)]
-				got := raceAddresses(t, f.resolve(raceQuery(t, uint16(g*rounds+i), name), "192.0.2.10", upstream, "UDP", "", ""))
+				got := raceAddresses(t, f.Resolve(raceQuery(t, uint16(g*rounds+i), name), "192.0.2.10", upstream, "UDP", "", ""))
 				if got != want[name]["A"] && got != want[name]["B"] {
 					t.Errorf("%s answered %q, want one generation's verdict: %q (A) or %q (B)", name, got, want[name]["A"], want[name]["B"])
 					return

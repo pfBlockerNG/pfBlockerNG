@@ -7,11 +7,12 @@
 // here is joined onto moduleDir. The decision data (the DBs, the settings a decision reads) lives in the one
 // snapshot the module publishes, not in module fields: see pfbUnbound.snapshot.
 //
-// Not translated yet, each arriving with the family that needs it: the query watcher, the stderr redirect, the module
-// fingerprint, and the retired-cache sweep. The live update (the reload watcher, its RAM gate, its applied marker and
-// the reload builder) is in pfb_unbound_reload.go, the DNSBL control surface (pfb_apply_control_command, its timers and
-// the control watcher) in pfb_unbound_control.go, and the log rows, their files and the GeoIP reader in pfb_unbound_log.go,
-// pfb_unbound_logfile.go and pfb_unbound_geoip.go.
+// Not translated: the module fingerprint (the code record it feeds is replaced by the gateway's executable SHA-256 record,
+// #3791). Not translated yet, each arriving with the family that needs it: the query watcher, the stderr redirect and the
+// retired-cache sweep. The live update (the reload watcher, its RAM gate, its applied marker and the reload builder) is in
+// pfb_unbound_reload.go, the DNSBL control surface (pfb_apply_control_command, its timers and the control watcher) in
+// pfb_unbound_control.go, and the log rows, their files and the GeoIP reader in pfb_unbound_log.go, pfb_unbound_logfile.go
+// and pfb_unbound_geoip.go. deinit (pfbUnbound.deinit) stops what init started, bounded as Python's joins are.
 package decider
 
 import (
@@ -508,28 +509,7 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 				pfb.dnsblIpv6 = "::"
 			}
 
-			m.rcodeDB = map[int]string{
-				0:  "NoError",
-				1:  "FormErr",
-				2:  "ServFail",
-				3:  "NXDOMAIN",
-				4:  "NotImp",
-				5:  "Refused",
-				6:  "YXDomain",
-				7:  "YXRRSet",
-				8:  "NXRRSet",
-				9:  "NotAuth",
-				10: "NotZone",
-				11: "DSOTYPENI",
-				16: "BADVERS",
-				17: "BADKEY",
-				18: "BADTIME",
-				19: "BADMODE",
-				20: "BADNAME",
-				21: "BADALG",
-				22: "BADTRUNC",
-				23: "BADCOOKIE",
-			}
+			m.rcodeDB = rcodeNames()
 		}
 
 		if pfb.pythonEnable {
@@ -674,6 +654,46 @@ func initStandard(id int, moduleDir string) (*pfbUnbound, error) {
 	}
 	m.pfbSetupLogging()
 	return m, nil
+}
+
+// rcodeNames is the RCODE table init_standard builds rcodeDB from (a table of its own per module): the name a reply row
+// shows for a non-NOERROR return code. dns_reply_log.py's RCODES is the same table, held equal by a test.
+func rcodeNames() map[int]string {
+	return map[int]string{
+		0:  "NoError",
+		1:  "FormErr",
+		2:  "ServFail",
+		3:  "NXDOMAIN",
+		4:  "NotImp",
+		5:  "Refused",
+		6:  "YXDomain",
+		7:  "YXRRSet",
+		8:  "NXRRSet",
+		9:  "NotAuth",
+		10: "NotZone",
+		11: "DSOTYPENI",
+		16: "BADVERS",
+		17: "BADKEY",
+		18: "BADTIME",
+		19: "BADMODE",
+		20: "BADNAME",
+		21: "BADALG",
+		22: "BADTRUNC",
+		23: "BADCOOKIE",
+	}
+}
+
+// deinit is deinit(): the reload and control watchers stop (each waited for at most watcherStopWait: Python's
+// join(timeout=5)), the database worker drains and the connections close, the log writer writes what is queued and the
+// GeoIP reader closes. The watchers come first, ahead of Python's close of the reader: a watcher mid-build must not meet a
+// closed database. The module has no query in flight by then.
+func (m *pfbUnbound) deinit() {
+	m.stopReloadWatcher()
+	m.stopControlWatcher()
+	m.closeDb()
+	m.stopLogging()
+	m.closeMaxmind()
+	logInfo("[pfBlockerNG]: pfb_unbound.py script exiting")
 }
 
 // finishSnapshot fills the fields init and a reload derive the same way once the strata are loaded into s: the group

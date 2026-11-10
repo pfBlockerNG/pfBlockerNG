@@ -329,7 +329,7 @@ func TestLogRowsMatchPython(t *testing.T) {
 				switch step.Op {
 				case "resolve":
 					next := 0
-					f.resolve(mustHex(t, step.Wire), step.Client, func([]byte) []byte {
+					f.Resolve(mustHex(t, step.Wire), step.Client, func([]byte) []byte {
 						if next >= len(step.Forwards) {
 							t.Errorf("step %d: the decider asked Unbound %d times, Python %d", i, next+1, len(step.Forwards))
 							return nil
@@ -341,6 +341,7 @@ func TestLogRowsMatchPython(t *testing.T) {
 						}
 						return mustHex(t, *reply)
 					}, step.Transport, step.Lip, step.Lif)
+
 					if next != len(step.Forwards) {
 						t.Errorf("step %d: the decider asked Unbound %d times, Python %d", i, next, len(step.Forwards))
 					}

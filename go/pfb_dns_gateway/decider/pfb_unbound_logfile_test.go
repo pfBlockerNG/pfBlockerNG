@@ -402,8 +402,8 @@ func unboundAnswering192_0_2_77(t *testing.T) forward {
 func TestModuleWritesItsRowsThroughItsPipelineToTheLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	m, f := moduleWithLogs(t, dir)
-	f.resolve(qtypeWire(t, "lf1.example.", 1), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
-	f.resolve(qtypeWire(t, "allowed.example.", 1), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
+	f.Resolve(qtypeWire(t, "lf1.example.", 1), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
+	f.Resolve(qtypeWire(t, "allowed.example.", 1), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
 	m.stopLogging() // flushes
 	stamp := `\d{4}-\d\d-\d\d \d\d:\d\d:\d\d`
 	if got, want := readLog(t, filepath.Join(dir, "dnsbl.log")), regexp.MustCompile(`^DNSBL-python,`+stamp+`,lf1\.example,192\.0\.2\.10,Python,DNSBL,G1,lf1\.example,F1,\+,A,UDP,,\n$`); !want.MatchString(got) {
@@ -418,7 +418,7 @@ func TestModuleWithoutAWriterAppendsDirectly(t *testing.T) {
 	dir := t.TempDir()
 	m, f := moduleWithLogs(t, dir)
 	m.stopLogging()
-	f.resolve(qtypeWire(t, "lf1.example.", 1), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
+	f.Resolve(qtypeWire(t, "lf1.example.", 1), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
 	if got := readLog(t, filepath.Join(dir, "dnsbl.log")); !strings.HasPrefix(got, "DNSBL-python,") || strings.Count(got, "\n") != 1 {
 		t.Errorf("dnsbl.log = %q, want the block row appended by the direct fallback", got)
 	}
@@ -434,11 +434,11 @@ func TestLoggingNeverChangesTheAnswer(t *testing.T) {
 		name  string
 		qtype uint16
 	}{{"lf1.example.", 1}, {"lf1.example.", 28}, {"allowed.example.", 1}, {"allowed.example.", 28}, {"LF1.example.", 255}, {"a,b.example.", 1}} {
-		want := working.resolve(qtypeWire(t, c.name, c.qtype), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
-		if got := broken.resolve(qtypeWire(t, c.name, c.qtype), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", ""); !bytes.Equal(got, want) {
+		want := working.Resolve(qtypeWire(t, c.name, c.qtype), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", "")
+		if got := broken.Resolve(qtypeWire(t, c.name, c.qtype), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", ""); !bytes.Equal(got, want) {
 			t.Errorf("%s type %d: the answer with unwritable logs differs from the one with working logs", c.name, c.qtype)
 		}
-		if got := silent.resolve(qtypeWire(t, c.name, c.qtype), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", ""); !bytes.Equal(got, want) {
+		if got := silent.Resolve(qtypeWire(t, c.name, c.qtype), "192.0.2.10", unboundAnswering192_0_2_77(t), "UDP", "", ""); !bytes.Equal(got, want) {
 			t.Errorf("%s type %d: the answer with the rows swallowed differs from the one with working logs", c.name, c.qtype)
 		}
 	}
