@@ -165,8 +165,8 @@ today.
 1. The answer depends on the address the client queried: RFC 9462 §4.2 checks the certificate against that address and
    §4.3 allows opportunistic use only when the designated address equals it. The gateway binds one socket per listen
    address and knows the local address of every plain query: UDP at `go/pfb_dns_gateway/plain.go:181`, TCP at
-   `plain.go:365`. Behind the gateway that address is gone: the decider receives only the client's transport and IP
-   (`src/usr/local/pkg/pfblockerng/dns_proxy/decision_service.py:60-70`), and Unbound listens only on loopback for the
+   `plain.go:365`. Behind the gateway that address is gone: Unbound sees only the gateway's connection, and it
+   listens only on loopback for the
    gateway (`pfblockerng.inc:14869-14871`). Unbound's per-interface answers (`interface-view`, `interface-tag-data`)
    key on the interface Unbound itself received the query on, which there is always loopback
    ([unbound.conf.rst at release-1.26.1](https://github.com/NLnetLabs/unbound/blob/release-1.26.1/doc/unbound.conf.rst),
