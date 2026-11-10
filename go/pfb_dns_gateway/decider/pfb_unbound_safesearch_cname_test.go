@@ -127,6 +127,9 @@ func TestSsAnswerHasCnameTo(t *testing.T) {
 	cnameTo := func(owner, target string) string { return owner + " 3600 IN CNAME " + target }
 	withAuthority := newDnsMsg(queryInfo{qnameStr: ssQname, qtype: RR_TYPE_A, qclass: RR_CLASS_IN}, dnswire.QR,
 		[]dnswire.RR{opRR(t, ssChasedA)}, []dnswire.RR{opRR(t, ssChasedCN)}, nil)
+	ns := opRR(t, ssChasedCN) // an NS record's rdata is a name too: the same bytes, typed NS
+	ns.Rtype = dnswire.TYPE_NS
+	nsToTarget := newDnsMsg(queryInfo{qnameStr: ssQname, qtype: RR_TYPE_A, qclass: RR_CLASS_IN}, dnswire.QR, []dnswire.RR{ns}, nil, nil)
 	for _, row := range []struct {
 		name   string
 		msg    *dnsMsg
@@ -135,7 +138,8 @@ func TestSsAnswerHasCnameTo(t *testing.T) {
 	}{
 		{"the planted CNAME", ssMsg(t, RR_TYPE_A, []string{ssChasedCN, ssChasedA}, nil), ssTargetText, true},
 		{"the CNAME alone", ssMsg(t, RR_TYPE_A, []string{ssChasedCN}, nil), ssTargetText, true},
-		{"case and trailing dots on either side do not matter", ssMsg(t, RR_TYPE_A, []string{cnameTo("duckduckgo.com.", "SAFE.DuckDuckGo.com.")}, nil), "safe.duckduckgo.com..", true},
+		{"case and trailing dots on either side do not matter", ssMsg(t, RR_TYPE_A, []string{cnameTo("duckduckgo.com.", "SAFE.DuckDuckGo.com.")}, nil), "Safe.duckDUCKgo.com..", true},
+		{"an NS record pointing at the target is no CNAME", nsToTarget, ssTargetText, false},
 		{"a genuine CNAME to another name is not ours", ssMsg(t, RR_TYPE_A, []string{cnameTo("duckduckgo.com.", "cdn.example.net."), "cdn.example.net. 60 IN A 192.0.2.9"}, nil), ssTargetText, false},
 		{"our target as the second CNAME of a chain", ssMsg(t, RR_TYPE_A, []string{cnameTo("duckduckgo.com.", "mid.example."), cnameTo("mid.example.", "safe.duckduckgo.com."), ssChasedA}, nil), ssTargetText, true},
 		{"our target as the second CNAME of one owner", ssMsg(t, RR_TYPE_A, []string{cnameTo("duckduckgo.com.", "mid.example."), cnameTo("duckduckgo.com.", "safe.duckduckgo.com.")}, nil), ssTargetText, true},

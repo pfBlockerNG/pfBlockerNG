@@ -8,6 +8,7 @@ package decider
 import (
 	"encoding/binary"
 	"fmt"
+	"maps"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -345,6 +346,10 @@ func TestTheChaseIdIsRandom(t *testing.T) {
 	if len(ids) < 2 { // 64 draws of 16 bits all equal is a 2^-1008 chance
 		t.Errorf("64 chases carried %d distinct ids, want a random one each", len(ids))
 	}
+	// The id is all an off-path forger has to guess: all 16 bits are drawn, so 64 draws all below 256 is a 2^-512 chance.
+	if !slices.ContainsFunc(slices.Collect(maps.Keys(ids)), func(id uint16) bool { return id > 0xFF }) {
+		t.Errorf("64 chase ids %v all fit in 8 bits, want 16 random bits", slices.Collect(maps.Keys(ids)))
+	}
 }
 
 func TestTheChaseHasNoEdnsWhenTheClientHasNone(t *testing.T) {
@@ -543,6 +548,16 @@ func TestTheChaseHasNoCdBitWhenTheClientSentNone(t *testing.T) {
 	}
 }
 
+// The chased answer is the module's message, rendered with its own flags: a client's AA bit is never echoed into it.
+func TestTheChasedAnswerIsNotAuthoritativeWhenTheClientSetAA(t *testing.T) {
+	query := ssQuery(t, ssDuck, dnswire.TYPE_A, ssQ{})
+	query[2] |= 0x04 // AA
+	reply := ssResolve(t, ssBoot(t), query, ssForward(t, paritycorpus.NewFakeUnbound(ssZone()), nil), "Unknown")
+	if reply.Flags&dnswire.AA != 0 || len(reply.Answers) == 0 {
+		t.Errorf("reply flags %#x with %d answers, want the chased answer without AA", reply.Flags, len(reply.Answers))
+	}
+}
+
 func TestTheReplyAdvertises1232AndEchoesNoneOfTheClientsEdnsOptions(t *testing.T) {
 	reply := ssResolve(t, ssBoot(t), ssQuery(t, ssDuck, dnswire.TYPE_A, ssQ{do: true, udpSize: 4096, options: ssECS}), ssForward(t, paritycorpus.NewFakeUnbound(ssZone()), nil), "Unknown")
 	wantOnlyOpt(t, "reply", reply.Additional, true)
@@ -710,7 +725,14 @@ func TestAnOversizedChaseIsAServfailAndOneLogLineHoweverOftenItIsAsked(t *testin
 	if lines := logLines(out); !slices.Equal(lines, []string{logged, logged}) {
 		t.Errorf("log after the interval = %q, want the line twice", lines)
 	}
-	want := slices.Repeat([]string{ssDuck + " A"}, 4) // the client's own queries; no chase
+	// The interval restarts at the second line: two intervals later one ask logs, and an ask at that same instant does not.
+	now = 3 * SILENCE_LOG_INTERVAL
+	ask()
+	ask()
+	if lines := logLines(out); !slices.Equal(lines, []string{logged, logged, logged}) {
+		t.Errorf("log after a later interval = %q, want the line three times", lines)
+	}
+	want := slices.Repeat([]string{ssDuck + " A"}, 6) // the client's own queries; no chase
 	if got := ssAsked(t, u); !slices.Equal(got, want) {
 		t.Errorf("Unbound was asked %q, want %q", got, want)
 	}
