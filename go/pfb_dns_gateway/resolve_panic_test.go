@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A panic inside the decider is a SERVFAIL, as an exception of the Python decider was (its resolve wrapper turned it into
@@ -53,5 +54,39 @@ func TestADeciderPanicIsAServfailLoggedOncePerWindowAndTheGatewayKeepsServing(t 
 	}
 	if got := ask("the next query"); string(got) != "fine" {
 		t.Fatalf("the query after the panics got %q, want the decider's answer", got)
+	}
+}
+
+// The log of a decider that keeps failing is rearmed once the window has passed: a panic just inside the window is not
+// logged, one at the window's end is, and the window then starts again from that line. The gateway's clock is the test's.
+func TestADeciderPanicIsLoggedAgainOnceTheWindowHasPassed(t *testing.T) {
+	client, wire := netip.MustParseAddr(clientAllowed), buildQuery(t, 0x0042, "boom.example.", true)
+	var lines []string
+	logf := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+	calls := 0
+	decide := func([]byte, string, func([]byte) []byte, string, string, string) []byte {
+		calls++
+		panic(fmt.Sprintf("decider broke on call %d", calls))
+	}
+	g := newGateway(nil, decide, nil, 3600e9, logf)
+	now := time.Unix(1_000_000, 0)
+	g.now = func() time.Time { return now }
+	ask := func() { g.resolve(context.Background(), client, netip.Addr{}, clientUDP, wire, noForward(t)) }
+
+	ask() // call 1: the first failure is logged
+	now = now.Add(deciderFailureLogInterval - time.Nanosecond)
+	ask() // call 2: just inside the window
+	if len(lines) != 1 {
+		t.Fatalf("a failure just inside the window logged %q, want only the first line", lines)
+	}
+	now = now.Add(time.Nanosecond)
+	ask() // call 3: the window's end
+	if len(lines) != 2 || !strings.Contains(lines[1], "decider broke on call 3") {
+		t.Fatalf("a failure at the window's end logged %q, want a second line, with call 3's value", lines)
+	}
+	now = now.Add(deciderFailureLogInterval - time.Nanosecond)
+	ask() // call 4: inside the window that line started
+	if len(lines) != 2 {
+		t.Fatalf("a failure inside the second window logged %q, want no third line", lines)
 	}
 }

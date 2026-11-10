@@ -164,7 +164,8 @@ type gateway struct {
 	closers []*closer // what stop() closes besides client connections: listeners, servers
 	clients map[net.Conn]struct{}
 
-	deciderFailure struct { // when decideSafely last logged a panic of the decider
+	now            func() time.Time // the clock of the decider-failure log window; a test sets it
+	deciderFailure struct {         // when decideSafely last logged a panic of the decider
 		sync.Mutex
 		logged time.Time
 	}
@@ -211,6 +212,7 @@ func newGateway(acl *ACL, decide decideFunc, up *upstream, timeout time.Duration
 		clients:  map[net.Conn]struct{}{},
 		dohConns: newConnLimit("DoH", maxDoHConns), doqConns: newConnLimit("DoQ", maxDoQConns),
 	}
+	g.now = time.Now
 	g.ctx, g.cancel = context.WithCancel(context.Background())
 	g.decide = decide
 	return g
@@ -291,9 +293,10 @@ func (g *gateway) decideSafely(wire []byte, clientIP string, fwd func([]byte) []
 		if r := recover(); r != nil {
 			answer = buildServfail(wire)
 			g.deciderFailure.Lock()
-			log := g.deciderFailure.logged.IsZero() || time.Since(g.deciderFailure.logged) >= deciderFailureLogInterval
+			now := g.now()
+			log := g.deciderFailure.logged.IsZero() || now.Sub(g.deciderFailure.logged) >= deciderFailureLogInterval
 			if log {
-				g.deciderFailure.logged = time.Now()
+				g.deciderFailure.logged = now
 			}
 			g.deciderFailure.Unlock()
 			if log {
