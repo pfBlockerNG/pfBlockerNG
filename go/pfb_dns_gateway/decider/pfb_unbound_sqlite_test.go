@@ -884,3 +884,38 @@ func TestSqliteMetricQtypeFallsBackToTheNumber(t *testing.T) {
 		}
 	}
 }
+
+// sqlite3.connect(timeout=100000) gives the connection a busy timeout of 100000 s before any PRAGMA runs, and PRAGMA
+// busy_timeout=100000 then sets 100 s: a connection whose PRAGMA setup fails keeps the connect's timeout, never none.
+func TestSqliteConnectHasPythonsBusyTimeoutWhetherOrNotThePragmasRun(t *testing.T) {
+	busyTimeout := func(c *dbConn) int64 {
+		t.Helper()
+		var ms int64
+		if err := c.con.QueryRowContext(context.Background(), "PRAGMA busy_timeout").Scan(&ms); err != nil {
+			t.Fatal(err)
+		}
+		return ms
+	}
+	r := newSqlRig(t, "", nil)
+	r.m.dbClose(dbResolver)
+	c, err := r.m.dbConnect(dbResolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := busyTimeout(c); got != 100_000 {
+		t.Errorf("busy_timeout after the PRAGMAs = %d ms, want 100000 (PRAGMA busy_timeout=100000)", got)
+	}
+	c.close()
+
+	previous := dbPragmas
+	dbPragmas = []string{"PRAGMA journal_mode=NOT A MODE ;; bad", previous[1], previous[2]}
+	t.Cleanup(func() { dbPragmas = previous })
+	c, err = r.m.dbConnect(dbResolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	if got := busyTimeout(c); got != 100_000_000 {
+		t.Errorf("busy_timeout when the PRAGMA setup fails first = %d ms, want 100000000 (sqlite3.connect timeout=100000 s)", got)
+	}
+}

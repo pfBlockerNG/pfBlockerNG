@@ -84,7 +84,9 @@ func (m *pfbUnbound) dbConnect(db int) (*dbConn, error) {
 	if path == "" {
 		return nil, errors.New("no database path")
 	}
-	pool, err := sql.Open("sqlite", path)
+	// sqlite3.connect(timeout=100000): the busy timeout, in seconds there and milliseconds here, holds from the connect on,
+	// before and whatever the PRAGMAs below do.
+	pool, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(100000000)")
 	if err != nil {
 		return nil, err
 	}

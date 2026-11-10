@@ -5,7 +5,8 @@
 # The tables hold the pure helpers the rows are built from (_log_text, _csv_row, get_q_transport, _metric_ip,
 # get_q_listener, convert_*, ipaddress).
 # Run from the repo root:
-#   uv run --with maxminddb==3.2.0 python go/pfb_dns_gateway/decider/testdata/gen_pfb_unbound_log_rows_oracle.py
+#   uv run --python 3.11.15 --with maxminddb==3.2.0 python \
+#     go/pfb_dns_gateway/decider/testdata/gen_pfb_unbound_log_rows_oracle.py
 # It rewrites testdata/pfb_unbound_log_rows_oracle.json. The GeoIP fixtures are MaxMind's own test databases (README).
 import asyncio
 import calendar

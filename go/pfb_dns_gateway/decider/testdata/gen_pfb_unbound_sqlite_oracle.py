@@ -6,7 +6,8 @@
 # replaced by one token per distinct value and the init-time stamp of the Upstream seed row by "<now>". The .sqlite
 # bytes are never compared.
 # Run from the repo root:
-#   TMPDIR=<scratch dir> uv run python go/pfb_dns_gateway/decider/testdata/gen_pfb_unbound_sqlite_oracle.py
+#   TMPDIR=<scratch dir> uv run --python 3.11.15 python \
+#     go/pfb_dns_gateway/decider/testdata/gen_pfb_unbound_sqlite_oracle.py
 # It rewrites testdata/pfb_unbound_sqlite_oracle.json.
 import asyncio
 import calendar
