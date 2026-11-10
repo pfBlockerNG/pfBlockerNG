@@ -163,6 +163,11 @@ type gateway struct {
 	mu      sync.Mutex
 	closers []*closer // what stop() closes besides client connections: listeners, servers
 	clients map[net.Conn]struct{}
+
+	deciderFailure struct { // when decideSafely last logged a panic of the decider
+		sync.Mutex
+		logged time.Time
+	}
 }
 
 // idleGroup is a WaitGroup whose Add may race with Wait: a test waits for the queries sent so far, then sends
@@ -265,7 +270,7 @@ func (g *gateway) resolve(ctx context.Context, client, listener netip.Addr, tran
 			label = (*table)[listener]
 		}
 	}
-	answer := g.decide(wire, addrKey(client).String(), func(w []byte) []byte { return fwd(ctx, w) }, transportNames[transport], local, label)
+	answer := g.decideSafely(wire, addrKey(client).String(), func(w []byte) []byte { return fwd(ctx, w) }, transportNames[transport], local, label)
 	if answer == nil { // a DROP stays no reply, however late
 		return nil
 	}
@@ -273,6 +278,30 @@ func (g *gateway) resolve(ctx context.Context, client, listener netip.Addr, tran
 		return buildServfail(wire)
 	}
 	return answer
+}
+
+// deciderFailureLogInterval is the least time between two lines about a failed decider call: the Python decider's
+// FAILURE_LOG_INTERVAL, so a decider that fails on every query does not fill the log.
+const deciderFailureLogInterval = 30 * time.Second
+
+// decideSafely is g.decide that a panic of the decider cannot take the process down through: as an exception of the
+// Python decider was, the query is a DROP (nil) and the panic value is logged, at most once per deciderFailureLogInterval.
+func (g *gateway) decideSafely(wire []byte, clientIP string, fwd func([]byte) []byte, transport, listenerIP, listenerInterface string) (answer []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			answer = nil
+			g.deciderFailure.Lock()
+			log := g.deciderFailure.logged.IsZero() || time.Since(g.deciderFailure.logged) >= deciderFailureLogInterval
+			if log {
+				g.deciderFailure.logged = time.Now()
+			}
+			g.deciderFailure.Unlock()
+			if log {
+				g.logf("decider failed on a query, dropping it: %v", r)
+			}
+		}
+	}()
+	return g.decide(wire, clientIP, fwd, transport, listenerIP, listenerInterface)
 }
 
 // resolveShared is resolve under the cap DoH and DoQ share: they carry many queries on one connection, so their
