@@ -31,8 +31,9 @@ const reloadGenerationReadLimit = 8192
 // reloadReadGeneration is _reload_read_generation: the generation on the first line of the sentinel, int() of the stripped
 // line (a sign is accepted, as in Python), or none when the file is absent, unreadable, empty on that line or not an
 // integer. A directory is unreadable.
-// shortcut: Python raises on an undecodable byte anywhere in the first chunk and Go only on one in the first line, which
-// then is no integer either way; the sentinel is a PHP-written decimal.
+// shortcut: Python decodes the first 8192-byte chunk as UTF-8 and Go reads the bytes. An invalid byte after line 1 in that
+// chunk makes Python return none and Go read the generation; a line 1 padded past 8192 bytes makes Python read the value
+// (it reads on to the line's end) and Go return none. Neither is reachable with a PHP-written decimal.
 func reloadReadGeneration(path string) (int64, bool) {
 	fh, err := os.Open(path)
 	if err != nil {
@@ -146,8 +147,8 @@ func (m *pfbUnbound) reloadWriteApplied(gen int64) {
 	if path == "" {
 		return
 	}
-	if err := writeMarker(path, strconv.FormatInt(gen, 10)+"\n"); err != nil {
-		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write applied-generation marker [ %s ]: %v\n", path, err)
+	if failure := writeMarker(path, strconv.FormatInt(gen, 10)+"\n"); failure != "" {
+		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write applied-generation marker [ %s ]: %s\n", path, failure)
 	}
 }
 

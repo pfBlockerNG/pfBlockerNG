@@ -11,11 +11,13 @@
 package decider
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"math/big"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -346,8 +348,10 @@ func controlSeq(record *jsonObject) (*big.Int, bool) {
 }
 
 // writeMarker publishes text at path the way Python's marker writers do: a temp file next to it, written, fsynced and
-// renamed over it, so a reader sees the old marker or the new one. A failure leaves no temp file.
-func writeMarker(path, text string) error {
+// renamed over it, so a reader sees the old marker or the new one. A failure leaves no temp file and is returned as the
+// text Python's OSError prints (str(e)): an open error names the temp file, a rename error both files, and an error of the
+// write, the fsync or the close names none. "" is success.
+func writeMarker(path, text string) string {
 	tmp := path + ".tmp"
 	err := func() error {
 		fh, err := os.Create(tmp)
@@ -362,14 +366,31 @@ func writeMarker(path, text string) error {
 			err = closeErr
 		}
 		if err != nil {
-			return err
+			return &os.PathError{Op: "write", Path: tmp, Err: errors.Unwrap(err)}
 		}
 		return os.Rename(tmp, path)
 	}()
-	if err != nil {
-		os.Remove(tmp)
+	if err == nil {
+		return ""
 	}
-	return err
+	os.Remove(tmp)
+	var pathErr *os.PathError
+	var linkErr *os.LinkError
+	switch {
+	case errors.As(err, &linkErr):
+		// os.Rename refuses a directory in the way with EEXIST before it asks the kernel; rename(2), which Python calls, says
+		// EISDIR for a file renamed over a directory.
+		reason := linkErr.Err
+		if info, statErr := os.Lstat(linkErr.New); reason == syscall.EEXIST && statErr == nil && info.IsDir() {
+			reason = syscall.EISDIR
+		}
+		return pyOSError(reason, "") + ": " + pysem.Repr(linkErr.Old) + " -> " + pysem.Repr(linkErr.New)
+	case errors.As(err, &pathErr) && pathErr.Op == "open":
+		return pyOSError(pathErr.Err, pathErr.Path)
+	case errors.As(err, &pathErr):
+		return pyOSError(pathErr.Err, "")
+	}
+	return err.Error()
 }
 
 // controlWriteApplied is _control_write_applied: seq is published as the applied-sequence marker (temp file, fsync,
@@ -379,8 +400,8 @@ func (m *pfbUnbound) controlWriteApplied(seq *big.Int) {
 	if path == "" {
 		return
 	}
-	if err := writeMarker(path, seq.String()+"\n"); err != nil {
-		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %v\n", path, err)
+	if failure := writeMarker(path, seq.String()+"\n"); failure != "" {
+		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write control applied marker [ %s ]: %s\n", path, failure)
 	}
 }
 

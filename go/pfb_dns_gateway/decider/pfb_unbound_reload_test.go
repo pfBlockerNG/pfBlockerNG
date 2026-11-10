@@ -183,30 +183,54 @@ func rlWantDomains(t *testing.T, what string, m *pfbUnbound, want ...string) {
 
 // rlLoop runs the watcher's loop on a goroutine fed by a tick channel the test sends on. The loop takes a tick only when
 // its previous drain is over, so the second send of a pair is the barrier that the first tick's drain finished.
+//
+// A drain takes at most one advance, so one that asks the RAM gate twice has retried a generation it had already acted on:
+// the second ask ends the loop and fails the test, which a loop that retries would otherwise spin in forever.
 type rlLoop struct {
-	stop chan struct{}
-	tick chan time.Time
-	done chan struct{}
+	t     *testing.T
+	stop  chan struct{}
+	tick  chan time.Time
+	done  chan struct{}
+	once  sync.Once
+	asked int // the RAM gate's asks in this poll; the loop goroutine writes it and poll resets it between drains
 }
 
-func startRlLoop(w *reloadWatcher) *rlLoop {
-	l := &rlLoop{stop: make(chan struct{}), tick: make(chan time.Time), done: make(chan struct{})}
+func startRlLoop(t *testing.T, w *reloadWatcher) *rlLoop {
+	l := &rlLoop{t: t, stop: make(chan struct{}), tick: make(chan time.Time), done: make(chan struct{})}
+	inner := w.m.totalRAM
+	w.m.totalRAM = func() (uint64, bool) {
+		if l.asked++; l.asked == 2 {
+			t.Errorf("one drain asked the RAM gate twice: the watcher retried a generation it had already acted on")
+			l.shutdown()
+		}
+		return inner()
+	}
 	go func() {
 		defer close(l.done)
-		w.run(l.stop, l.tick)
+		pollLoop(l.stop, l.tick, func(stop <-chan struct{}) {
+			l.asked = 0
+			w.drainAndSwap(stop)
+		})
 	}()
 	return l
 }
 
-// poll is two ticks: the first drains, the second returns once that drain is over.
+func (l *rlLoop) shutdown() { l.once.Do(func() { close(l.stop) }) }
+
+// poll is two ticks: the first drains, the second returns once that drain is over (or the loop ended).
 func (l *rlLoop) poll() {
-	l.tick <- time.Time{}
-	l.tick <- time.Time{}
+	for range 2 {
+		select {
+		case l.tick <- time.Time{}:
+		case <-l.done:
+			return
+		}
+	}
 }
 
 func (l *rlLoop) end(t *testing.T) {
 	t.Helper()
-	close(l.stop)
+	l.shutdown()
 	chWait(t, "the loop to end after stop", l.done)
 }
 
@@ -246,6 +270,11 @@ func TestReloadReadGenerationFollowsPythonsIntParse(t *testing.T) {
 		{"the largest int64", "9223372036854775807", math.MaxInt64, true},
 		{"the smallest int64", "-9223372036854775808", math.MinInt64, true},
 		{"one past the largest int64", "9223372036854775808", math.MaxInt64, true},
+		{"a double underscore", "1__0", 0, false},
+		{"a leading underscore", "_1", 0, false},
+		{"a trailing underscore", "1_", 0, false},
+		{"an underscore after the sign", "-_1", 0, false},
+		{"a sign and a trailing underscore", "+1_", 0, false},
 		{"4301 digits (Python's int() limit)", strings.Repeat("1", 4301), 0, false},
 		{"a superscript is a digit but no decimal", "\u00b2", 0, false},
 		{"empty", "", 0, false},
@@ -596,7 +625,7 @@ func TestReloadWatcherLivesAfterABuilderFailureForTheNextGeneration(t *testing.T
 				logOutput = rlHostileLog{}
 				defer func() { logOutput = previous }()
 			}
-			loop := startRlLoop(m.newReloadWatcher())
+			loop := startRlLoop(t, m.newReloadWatcher())
 			loop.poll() // the startup drain is over
 
 			rlPublish(t, m, 1)
@@ -622,7 +651,7 @@ func TestReloadWatcherLivesAfterABuilderFailureForTheNextGeneration(t *testing.T
 func TestReloadWatcherLoopPollsOnEveryTickUntilStopped(t *testing.T) {
 	m := rlModule(t)
 	b := newRlBuilds(m)
-	loop := startRlLoop(m.newReloadWatcher())
+	loop := startRlLoop(t, m.newReloadWatcher())
 	loop.poll()
 	rlWantBuilds(t, "the startup drain with no sentinel", b)
 
@@ -796,6 +825,21 @@ func TestInitStandardStartsTheReloadWatcherAndPublishesTheBaseline(t *testing.T)
 	}
 }
 
+// Python's last_gen is None until a generation is seen, so a first generation of 0 (or below) is an advance: it is told
+// from "nothing seen yet", not from a number.
+func TestReloadWatcherBuildsForAFirstGenerationOfZeroWhenNoSentinelWasSeen(t *testing.T) {
+	m := rlModule(t)
+	b := newRlBuilds(m)
+	w := m.newReloadWatcher() // no sentinel: nothing seen yet
+	rlWantBuilds(t, "before the sentinel", b)
+
+	rlPublish(t, m, 0)
+	rlDrainOnce(t, m, w)
+	rlWantBuilds(t, "the first generation, 0", b, 0)
+	rlDrainOnce(t, m, w)
+	rlWantBuilds(t, "the same generation again", b, 0)
+}
+
 // --- e. the applied marker ---
 
 func TestReloadWriteAppliedRoundTripsAndOverwrites(t *testing.T) {
@@ -852,6 +896,39 @@ func TestReloadWriteAppliedFailureIsLoggedAndLeavesNoTempFile(t *testing.T) {
 		}
 		if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 			t.Errorf("%s: a temp file is left (stat error %v)", name, err)
+		}
+	}
+}
+
+// The failure line carries Python's OSError text, run on CPython 3.11.15 (pr6-fix/py/gen.py): an open error names the temp
+// file, a rename error names both files, and the lines end in a newline. A directory in the way of the marker is an
+// EISDIR of the rename; a directory in the way of the temp file is an EISDIR of the open.
+func TestReloadWriteAppliedFailureLogsPythonsOSErrorText(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name  string
+		path  string
+		setup func(path string)
+		want  string
+	}{
+		{"the directory is missing", filepath.Join(dir, "missing", "m.applied"), func(string) {},
+			"[Errno 2] No such file or directory: '%s.tmp'"},
+		{"a non-empty directory is the marker", filepath.Join(dir, "asdir"), func(p string) { os.MkdirAll(filepath.Join(p, "occupied"), 0o700) },
+			"[Errno 21] Is a directory: '%s.tmp' -> '%s'"},
+		{"an empty directory is the marker", filepath.Join(dir, "emptydir"), func(p string) { os.MkdirAll(p, 0o700) },
+			"[Errno 21] Is a directory: '%s.tmp' -> '%s'"},
+		{"a directory is the temp file", filepath.Join(dir, "tmpisdir"), func(p string) { os.MkdirAll(p+".tmp", 0o700) },
+			"[Errno 21] Is a directory: '%s.tmp'"},
+	} {
+		tc.setup(tc.path)
+		m := rlModule(t)
+		m.pfb.pfbPyReloadApplied = tc.path
+		log := modCaptureLog(t)
+		m.reloadWriteApplied(7)
+		detail := strings.Replace(tc.want, "%s", tc.path, strings.Count(tc.want, "%s"))
+		want := "[pfBlockerNG]: failed to write applied-generation marker [ " + tc.path + " ]: " + detail + "\n"
+		if got := log.String(); got != want {
+			t.Errorf("%s: log = %q, want %q", tc.name, got, want)
 		}
 	}
 }
@@ -1024,6 +1101,50 @@ func TestReloadBuildSnapshotTakesTldAllowRootsAndPslPoliciesFromTheLiveSettings(
 	if next.pslIncludePrivate || !next.pslAllowPrivate || next.pslFeedPrivatePolicy != "apex" || next.pslFeedIcannPolicy != "ignore" {
 		t.Errorf("PSL (includePrivate, allowPrivate, private, icann) = (%v, %v, %q, %q), want (false, true, apex, ignore)",
 			next.pslIncludePrivate, next.pslAllowPrivate, next.pslFeedPrivatePolicy, next.pslFeedIcannPolicy)
+	}
+}
+
+// The user regex of the ini come first and the Custom_List rows of the manifest follow them: the dict's order is the
+// order the scans try them in. (A name cannot collide: the ini's are [a-z0-9_] words and the manifest's are "Group#n".)
+func TestReloadBuildSnapshotPutsTheIniRegexAheadOfTheManifestCustomListRegex(t *testing.T) {
+	m, dir := rlManifestModule(t, []string{opRegexList(`^ini[0-9]+\.example$`)}, map[string][]string{})
+	if err := os.WriteFile(filepath.Join(dir, "custom.txt"), []byte("/^mine[0-9]+\\.example$/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version": 1, "config": {}, "feeds": [{"raw": "custom.txt", "feed": "Custom", "group": "Custom", "log_flag": "1", "provenance": "user"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "pfb_py_sources.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	next, err := m.reloadBuildSnapshot()
+	if err != nil || next == nil {
+		t.Fatalf("reloadBuildSnapshot = (%v, %v), want a snapshot", next, err)
+	}
+	if want := []string{"regex_1", "Custom#0"}; !slices.Equal(next.userRegexDB.names, want) {
+		t.Errorf("userRegexDB names = %v, want %v: the ini's first, the manifest's after", next.userRegexDB.names, want)
+	}
+}
+
+// A reload that loads lists asks for the group epochs even when python_blacklist is off and no statistics were wanted at
+// init: the DNSBL database opens for them (Python's `_dnsbl_stats_wanted() or bool(data_db or ...)`).
+func TestReloadBuildSnapshotOpensTheDatabaseForTheEpochsWhenListsLoadAndBlockingIsOff(t *testing.T) {
+	r := newSqlRig(t, "", map[string][]string{"dnsbl": sqlCustomGroups(0, "First")})
+	r.m.stopReloadWatcher()
+	rlWriteFeeds(t, r.dir, map[string][]string{"feed.txt": {"a.example"}})
+	if r.m.snapshot.Load().settings.pythonBlacklist || r.m.sqlite3DnsblCon.Load() {
+		t.Fatalf("init wanted the statistics (python_blacklist %v, database open %v), want neither",
+			r.m.snapshot.Load().settings.pythonBlacklist, r.m.sqlite3DnsblCon.Load())
+	}
+
+	next, err := r.m.reloadBuildSnapshot()
+	if err != nil || next == nil {
+		t.Fatalf("reloadBuildSnapshot = (%v, %v), want a snapshot", next, err)
+	}
+	if next.groupEpochs[[2]string{"First", "custom"}] == "" {
+		t.Errorf("built groupEpochs = %v, want the database's epochs: a build that loaded lists reads them", next.groupEpochs)
+	}
+	if !r.m.sqlite3DnsblCon.Load() {
+		t.Errorf("the DNSBL database is still closed after a build that loaded lists")
 	}
 }
 
@@ -1285,12 +1406,11 @@ func TestReloadSwapRaceEveryAnswerIsOneGenerationsVerdict(t *testing.T) {
 		return raceSnapshot(t, side)()
 	}
 	w := m.newReloadWatcher()
-	stopDrain := make(chan struct{})
 	published := 0
 	reload := func() {
 		published++
 		rlPublish(t, m, published)
-		w.drainAndSwap(stopDrain)
+		rlDrainOnce(t, m, w)
 	}
 	want := map[string]map[string]string{
 		"n.example.": {"A": "192.0.2.1", "B": "192.0.2.99"},
