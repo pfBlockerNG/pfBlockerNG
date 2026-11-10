@@ -248,10 +248,16 @@ func dbMetricTable(ctx context.Context, c *sql.Conn, table string, labels []stri
 	return nil
 }
 
+// errDbClosed is what a use of a database after closeDb gets: the connections are gone for good.
+var errDbClosed = errors.New("the module is closed")
+
 // dbConnLocked is the cached connection of a database, opened on first use; the caller holds dbMu.
 func (m *pfbUnbound) dbConnLocked(db int) (*dbConn, error) {
 	if c := m.dbConns[db]; c != nil {
 		return c, nil
+	}
+	if m.dbClosed {
+		return nil, errDbClosed
 	}
 	c, err := m.dbConnect(db)
 	if err != nil {
@@ -279,10 +285,17 @@ func (m *pfbUnbound) dbClose(db int) {
 }
 
 // closeDb is the end of deinit's database half: the worker drains and stops, then every connection closes.
-func (m *pfbUnbound) closeDb() {
+func (m *pfbUnbound) closeDb() { m.closeDbConns(false) }
+
+// closeDbForGood is closeDb for a module that is going away: no connection opens again, so that a reload that outlived
+// its watcher's bounded stop finds the databases closed.
+func (m *pfbUnbound) closeDbForGood() { m.closeDbConns(true) }
+
+func (m *pfbUnbound) closeDbConns(forGood bool) {
 	m.stopDbWorker()
 	m.dbMu.Lock()
 	defer m.dbMu.Unlock()
+	m.dbClosed = m.dbClosed || forGood
 	for db := range m.dbConns {
 		m.dbCloseLocked(db)
 	}
@@ -294,6 +307,9 @@ func (m *pfbUnbound) closeDb() {
 func (m *pfbUnbound) dbRun(db int, work func(ctx context.Context, c *sql.Conn) error) bool {
 	m.dbMu.Lock()
 	defer m.dbMu.Unlock()
+	if m.dbClosed {
+		return false
+	}
 	for attempt := range 4 {
 		c, err := m.dbConnLocked(db)
 		if err == nil {
@@ -329,6 +345,12 @@ func (m *pfbUnbound) validateDbWithRecovery(db int) bool {
 	if m.dbValidate(db) {
 		return true
 	}
+	m.dbMu.Lock()
+	closed := m.dbClosed
+	m.dbMu.Unlock()
+	if closed {
+		return false // a closed module is not a corrupt database: nothing is removed
+	}
 	base := m.dbFile(db)
 	if base == "" {
 		return false
@@ -358,7 +380,7 @@ func (m *pfbUnbound) openDnsblStatsDbIfWanted(settings *pfbSettings) {
 // openDnsblStatsDb opens the dnsbl database, with recovery, when it is wanted and not yet open; a failure is logged and
 // leaves the flag off.
 func (m *pfbUnbound) openDnsblStatsDb(wanted bool) {
-	if wanted && !m.sqlite3DnsblCon.Load() {
+	if wanted && !m.sqlite3DnsblCon.Load() && !m.retired.Load() {
 		if m.validateDbWithRecovery(dbDnsbl) {
 			m.sqlite3DnsblCon.Store(true)
 		} else {
@@ -371,6 +393,9 @@ func (m *pfbUnbound) openDnsblStatsDb(wanted bool) {
 // dnsbl database opens first when statistics are wanted; it is optional, so DNS never depends on it: a database that cannot
 // be read turns the accounting off and gives no epochs.
 func (m *pfbUnbound) dbGroupEpochs(wanted bool, s *snapshot) map[[2]string]string {
+	if m.retired.Load() {
+		return map[[2]string]string{}
+	}
 	m.openDnsblStatsDb(wanted)
 	epochs := map[[2]string]string{}
 	if !m.sqlite3DnsblCon.Load() {

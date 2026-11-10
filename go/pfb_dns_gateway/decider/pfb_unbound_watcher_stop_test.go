@@ -5,6 +5,7 @@ package decider
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -131,4 +132,68 @@ func TestStopControlWatcherGivesUpOnAStuckWatcherAfterTheBound(t *testing.T) {
 	if got := strings.Count(log.String(), "control watcher did not stop"); got != 1 {
 		t.Errorf("stop logged %d lines about the stuck watcher, want 1; log = %q", got, log.String())
 	}
+}
+
+// A reload still building when Close runs outlives the bounded stop (the watcher's goroutine is abandoned after
+// watcherStopWait). It must not act on a closed module when it finishes: no snapshot is published, no stats database is
+// opened again (its connections stay released), and the applied marker is not advanced for a generation that was never
+// served. Nothing is left open once the late build has ended.
+func TestAReloadThatOutlivesCloseNeitherPublishesNorReopensAnything(t *testing.T) {
+	m, _ := rlManifestModule(t, []string{"python_hsts = true"}, map[string][]string{"feed.txt": {"late.example"}})
+	shortStopWait(t)
+	entered, release, ended := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	ticks := make(chan time.Time)
+	if err := os.WriteFile(m.pfb.pfbPyHsts, []byte("example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalRead := m.readFile
+	m.readFile = func(path string) ([]byte, error) {
+		if path == m.pfb.pfbPyHsts {
+			close(entered)
+			<-release
+		}
+		return originalRead(path)
+	}
+	m.reloadTick = func() (<-chan time.Time, func()) { return ticks, func() { close(ended) } }
+	rlPublish(t, m, 1)
+	m.startReloadWatcher()
+	rlPublish(t, m, 2)
+	select { // the loop's own drain may already have seen the generation, and then it never takes a tick
+	case ticks <- time.Time{}:
+	case <-entered:
+	}
+	chWait(t, "the build to start", entered)
+	appliedAtClose := rlApplied(t, m)
+
+	newFrontend(m).Close()
+	connections := func() int {
+		m.dbMu.Lock()
+		defer m.dbMu.Unlock()
+		return len(m.dbConns)
+	}
+	if got := connections(); got != 0 {
+		t.Fatalf("Close left %d database connections open", got)
+	}
+	snapshotAtClose := m.snapshot.Load()
+
+	close(release)
+	chWait(t, "the late build to end", ended)
+	if got := connections(); got != 0 {
+		t.Errorf("the late reload reopened the stats database: %d connections after Close returned", got)
+	}
+	if m.snapshot.Load() != snapshotAtClose {
+		t.Errorf("the late reload published a snapshot after Close returned")
+	}
+	rlWantApplied(t, "after the late reload ended", m, appliedAtClose)
+}
+
+// The applied marker is a publication too: a swap that landed just before Close must not have its generation announced
+// to PHP's wait once the module is closing.
+func TestTheAppliedMarkerIsNotWrittenOnceTheModuleIsClosing(t *testing.T) {
+	m := rlModule(t)
+	m.reloadWriteApplied(1)
+	rlWantApplied(t, "before deinit", m, "1\n")
+	m.deinit()
+	m.reloadWriteApplied(2)
+	rlWantApplied(t, "after deinit", m, "1\n")
 }

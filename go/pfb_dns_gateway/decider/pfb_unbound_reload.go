@@ -148,9 +148,11 @@ func (m *pfbUnbound) reloadWriteApplied(gen int64) {
 	if path == "" {
 		return
 	}
-	if failure := writeMarker(path, strconv.FormatInt(gen, 10)+"\n"); failure != "" {
-		fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write applied-generation marker [ %s ]: %s\n", path, failure)
-	}
+	m.whileNotRetired(func() {
+		if failure := writeMarker(path, strconv.FormatInt(gen, 10)+"\n"); failure != "" {
+			fmt.Fprintf(logOutput, "[pfBlockerNG]: failed to write applied-generation marker [ %s ]: %s\n", path, failure)
+		}
+	})
 }
 
 // reloadBuildSnapshot is _build_swap_snapshot: every stratum rebuilt into FRESH values from the files, nothing live

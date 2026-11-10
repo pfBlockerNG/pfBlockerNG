@@ -153,6 +153,10 @@ type pfbUnbound struct {
 	// publishMu serializes the publishers of snapshot: rebuildAndSwap, a control command and a control timer's expiry.
 	// Each loads the live snapshot, derives the next from it and stores it, so two of them at once would lose a write.
 	publishMu sync.Mutex
+	// retired is set by deinit under publishMu: from then on nothing is published (a snapshot, an applied marker, the
+	// counts) and the stats database is not opened, so that a reload that outlives the bounded stop of its watcher cannot
+	// act on a closed module when it ends. Written under publishMu, read by whoever publishes or opens.
+	retired atomic.Bool
 	// afterFunc starts a control timer (time.AfterFunc's shape; nil is the real one). A test replaces it to fire the
 	// expiry by hand; it must not run f before it returns, as the caller holds publishMu.
 	afterFunc func(delay time.Duration, f func())
@@ -194,6 +198,7 @@ type pfbUnbound struct {
 	// query. dbWorker is the DB I/O worker, nil when none runs (pfb["db_worker"] False), and dbDropped counts the events
 	// its full queue refused (pfb["db_dropped"]).
 	dbMu, dbRecoveryMu   sync.Mutex
+	dbClosed             bool // set by closeDbForGood under dbMu: no connection is opened again
 	dbConns              map[int]*dbConn
 	sqlite3ResolverCon   atomic.Bool
 	sqlite3DnsblCon      atomic.Bool
@@ -683,14 +688,27 @@ func rcodeNames() map[int]string {
 	}
 }
 
+// whileNotRetired runs f under publishMu unless deinit has begun, so that nothing is written once the module is closing.
+func (m *pfbUnbound) whileNotRetired(f func()) {
+	m.publishMu.Lock()
+	defer m.publishMu.Unlock()
+	if !m.retired.Load() {
+		f()
+	}
+}
+
 // deinit is deinit(): the reload and control watchers stop (each waited for at most watcherStopWait: Python's
 // join(timeout=5)), the database worker drains and the connections close, the log writer writes what is queued and the
 // GeoIP reader closes. The watchers come first, ahead of Python's close of the reader: a watcher mid-build must not meet a
-// closed database. The module has no query in flight by then.
+// closed database. The module has no query in flight by then. A watcher that does not stop within its bound is left
+// running, and retirement (above all, the closed database) is what keeps it from publishing or opening anything.
 func (m *pfbUnbound) deinit() {
+	m.publishMu.Lock()
+	m.retired.Store(true) // before the stops: a watcher that outlives its bound publishes and opens nothing from here on
+	m.publishMu.Unlock()
 	m.stopReloadWatcher()
 	m.stopControlWatcher()
-	m.closeDb()
+	m.closeDbForGood()
 	m.stopLogging()
 	m.closeMaxmind()
 	logInfo("[pfBlockerNG]: pfb_unbound.py script exiting")
@@ -1109,6 +1127,10 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	}
 
 	m.publishMu.Lock()
+	if m.retired.Load() {
+		m.publishMu.Unlock()
+		return false
+	}
 	base := next.settings
 	if base == nil {
 		base = &m.pfb
@@ -1135,12 +1157,14 @@ func (m *pfbUnbound) rebuildAndSwap(buildSnapshot func() (*snapshot, error), emi
 	m.regexRuntime.reset()
 	m.openDnsblStatsDbIfWanted(&settings)
 	if emitCounts {
-		dnsblEmitCount(settings.pfbPyCount, next.counts)
-		dnsblEmitCount(settings.pfbPyRegexCount, next.regexCount)
-		// ADR-48 (issue #789): the reject-stats artifact too; a module built without the path emits none.
-		if settings.pfbPyRejectStats != "" {
-			dnsblEmitRejectStats(settings.pfbPyRejectStats, next.rejects)
-		}
+		m.whileNotRetired(func() {
+			dnsblEmitCount(settings.pfbPyCount, next.counts)
+			dnsblEmitCount(settings.pfbPyRegexCount, next.regexCount)
+			// ADR-48 (issue #789): the reject-stats artifact too; a module built without the path emits none.
+			if settings.pfbPyRejectStats != "" {
+				dnsblEmitRejectStats(settings.pfbPyRejectStats, next.rejects)
+			}
+		})
 	}
 	return true
 }

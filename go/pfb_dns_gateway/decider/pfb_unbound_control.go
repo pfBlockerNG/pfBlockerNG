@@ -80,6 +80,9 @@ func (m *pfbUnbound) publishControl(e *controlEdit) {
 	if e.settings == nil && e.gpListDB == nil {
 		return
 	}
+	if m.retired.Load() {
+		return
+	}
 	next := *e.live
 	next.carryRuntime = false // a control edit is no reload build
 	if e.settings != nil {
