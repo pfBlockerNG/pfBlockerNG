@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "Wildcard Blocking on, plain feed lines that are xn-- labels decoding to an IDNA deviation character (ß, ς, ZWNJ, ZWJ): IDNA2003 (Python) and UTS #46 non-transitional (Go) disagree on whether the line is a registrable domain",
   "module": {
     "ini": {
@@ -76,31 +76,19 @@
     {
       "id": "eszett-subdomain-under-wildcard",
       "family": "psl",
-      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--strae-oqa.de (straße: ß (U+00DF)): Python's IDNA2003 nameprep maps or deletes the deviation character, refuses the label as non-canonical and never makes it a zone, so the subdomain relays; Go (UTS #46 non-transitional) keeps the character, makes the line a zone and blocks the subdomain, as the owner decided",
+      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--strae-oqa.de (straße: ß (U+00DF)) is blocked: Go (UTS #46 non-transitional) keeps the deviation character, so the line is a zone; Python's IDNA2003 nameprep maps or deletes it, refuses the label as non-canonical and relays the subdomain (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592)",
       "query": {
         "name": "sub.xn--strae-oqa.de.",
         "type": "A"
       },
       "expect": {
-        "decision": "relay",
-        "forwards": [
-          "sub.xn--strae-oqa.de. A"
-        ],
-        "rcode": "NOERROR",
-        "answer": [
-          "sub.xn--strae-oqa.de. 300 IN A 192.0.2.5"
-        ],
-        "authority": []
-      },
-      "go_expect": {
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
         "answer": [
           "sub.xn--strae-oqa.de. 3600 IN A 10.10.10.1"
         ],
-        "authority": [],
-        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592"
+        "authority": []
       }
     },
     {
@@ -124,31 +112,19 @@
     {
       "id": "final-sigma-subdomain-under-wildcard",
       "family": "psl",
-      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--mxa8ae.de (τας: final sigma ς (U+03C2)): Python's IDNA2003 nameprep maps or deletes the deviation character, refuses the label as non-canonical and never makes it a zone, so the subdomain relays; Go (UTS #46 non-transitional) keeps the character, makes the line a zone and blocks the subdomain, as the owner decided",
+      "description": "with Wildcard Blocking on, a subdomain of the feed line xn--mxa8ae.de (τας: final sigma ς (U+03C2)) is blocked: Go (UTS #46 non-transitional) keeps the deviation character, so the line is a zone; Python's IDNA2003 nameprep maps or deletes it, refuses the label as non-canonical and relays the subdomain (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592)",
       "query": {
         "name": "sub.xn--mxa8ae.de.",
         "type": "A"
       },
       "expect": {
-        "decision": "relay",
-        "forwards": [
-          "sub.xn--mxa8ae.de. A"
-        ],
-        "rcode": "NOERROR",
-        "answer": [
-          "sub.xn--mxa8ae.de. 300 IN A 192.0.2.5"
-        ],
-        "authority": []
-      },
-      "go_expect": {
         "decision": "answer",
         "forwards": [],
         "rcode": "NOERROR",
         "answer": [
           "sub.xn--mxa8ae.de. 3600 IN A 10.10.10.1"
         ],
-        "authority": [],
-        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6758313592"
+        "authority": []
       }
     },
     {

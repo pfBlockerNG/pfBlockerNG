@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "[noAAAA] rows: one exact (flag 0) and one wildcard (flag 1); no DNSBL feeds",
   "module": {
     "ini": {

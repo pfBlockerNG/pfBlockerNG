@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "user regex: MAIN.regex_list rows (base64 in the ini) and a Custom_List /re/ line block like feed regex; a refused user pattern never blocks",
   "module": {
     "ini": {

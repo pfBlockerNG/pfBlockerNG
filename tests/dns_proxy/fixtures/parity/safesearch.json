@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "3-column SafeSearch rows (domain,A,AAAA): address rewrites, an nxdomain row and a www. row; no DNSBL feeds",
   "module": {
     "ini": {

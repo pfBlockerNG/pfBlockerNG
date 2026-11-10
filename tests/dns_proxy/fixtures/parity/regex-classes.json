@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "feed /re/ lines: the class escapes \\d \\D \\w \\W \\S and bracket classes (items, range, negation, escapes inside, leading and trailing hyphen, case folding); case tags: R3 class escapes, R7 bracket classes",
   "module": {
     "ini": {

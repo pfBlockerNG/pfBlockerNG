@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "python_hsts on: the TLD that decides HSTS for a CNAME target is the target's own, not the queried alias's",
   "module": {
     "ini": {

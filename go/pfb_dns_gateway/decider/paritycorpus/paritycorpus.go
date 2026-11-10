@@ -1,7 +1,63 @@
-// Package paritycorpus is the Go side of the schema-3 parity corpus contract, so the Go decider runs the JSON scenarios
-// the Python one passes. It translates tests/dns_proxy/test_parity_corpus.py (the loader, write_module, RecordingUnbound,
-// _decision, _rr_text, _mismatches) and tests/dns_proxy/frontend_helpers.py (build_query, and the FakeUnbound that
-// RecordingUnbound wraps, without verdicts; like RecordingUnbound it parses a FORWARD before it records it).
+// Package paritycorpus loads the decision parity corpus (issue #3772), schema 4: language-neutral JSON scenarios that the
+// Go decider passes; it is the only runner (decider/corpus_test.go). A scenario is one module directory (the files PHP
+// writes for the decider) plus ordered query cases, each with the decision as it appears on the decision protocol
+// (docs/misc/dns-gateway-protocol.md, "One query"): which FORWARDs the decider sent, and the final ANSWER.
+//
+// The expectations in tests/dns_proxy/fixtures/parity are frozen literals derived from the source branch each family
+// names in families.json, never captured from a run. Where the owner signed off a Go result that differs from the
+// source's, expect holds the Go result and the case's description names the sign-off. A fixture the loader refuses is an
+// error naming file, case and field.
+//
+// The schema (every key is required unless marked optional; any other key, a duplicate JSON key, NaN/Infinity, a wrong
+// JSON type or an unknown value is a refusal, never a skip; every file in fixtures/parity is a .json document the runner
+// loads; "schema" is the integer 4 in every file, 3, 2 and 1 are refused). A document that cannot be read is refused too:
+// bad UTF-8, a lone surrogate escape, nesting deeper than 990 levels, data after the document.
+//
+//	families.json  {"schema": 4, "families": {"<family>": "<source branch>", ...}}: the closed family list. Every
+//	               family pins pfb_unbound.py except `frontend`, which pins Frontend.resolve in pfb_dns_proxy.py.
+//	<scenario>.json  {"schema": 4, "description", "module", "upstream", "cases"}
+//	  module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order; no line
+//	                   break anywhere, no bracket in a section name, no "=" or ":" in a key.
+//	  module.manifest  a JSON object, written verbatim as pfb_py_sources.json.
+//	  module.files     {relative path: [lines]}, written joined by newlines plus a trailing one; no "..", NUL or
+//	                   absolute path, no path listed twice ("./x" is "x"), no file that is also another one's directory,
+//	                   and nothing at or under the names the runner writes (pfb_unbound.ini and pfb_py_sources.json)
+//	                   or reserves (pfb_unbound.py and pfb_dnsbl_regex_rules.py, which the Go decider does not read:
+//	                   the runner writes no Python).
+//	  upstream         {"<lower-case absolute name> <TYPE>": [RR texts] or null}, Unbound's stand-in (FakeUnbound),
+//	                   keyed on the FORWARD's first question, its name lower-cased; its class is ignored and the reply
+//	                   carries the FORWARD's questions and id, RD copied, RA set. A listed question gets NOERROR with
+//	                   those records (an empty list: none at all; null: no reply, which the runner gives as an empty
+//	                   REPLY), any other NXDOMAIN; one question is listed once, whichever spelling of its type. So a
+//	                   FORWARD must parse with at least one question: a relay of a wire that does not is not
+//	                   expressible.
+//	  cases            non-empty list, run IN FILE ORDER against one booted decider (its per-name memo carries over).
+//	    id, description   non-empty strings; id unique within the file.
+//	    family            a families.json key; every family's cases run, none is skipped.
+//	    query             {"name": absolute name, "type": mnemonic or TYPE<n> (n <= 65535)}: one question, class IN,
+//	                      RD set, no EDNS; or {"wire_hex": lower-case hex of at most 65535 bytes}: the QUERY frame's DNS
+//	                      wire verbatim; never both, never half of the first. Either has "client": IP (optional,
+//	                      192.0.2.10; canonical as the gateway sends it: no zone, not unspecified, IPv4-mapped IPv6
+//	                      refused) and "transport": TCP|UDP|DoT|DoH|DoQ (optional, UDP).
+//	    expect            {"decision": answer|relay|rewrite|drop, "forwards": ["<name> <TYPE>", ...], "rcode":
+//	                      NOERROR|FORMERR|SERVFAIL|NXDOMAIN|NOTIMP|REFUSED, "answer": [RR texts], "authority": [RR
+//	                      texts], "tc": true|false (optional, false)}. A drop is exactly {"decision": "drop",
+//	                      "forwards": []}.
+//
+// RR texts are "name ttl IN TYPE rdata" for A, AAAA, CNAME, TXT and SOA (dnswire.RRFromText).
+//
+// Decisions: answer = no FORWARD, the decider built the ANSWER; relay = one FORWARD carrying the client's own wire and
+// an ANSWER byte-identical to Unbound's reply; rewrite = FORWARDs, then an ANSWER that is none of Unbound's replies (the
+// SERVFAIL the decider builds for Unbound's silence is one); drop = the decider's final frame is DROP, whatever it
+// forwarded first. Any other outcome (an ANSWER equal to an Unbound reply other than a relay's) is always a mismatch.
+// forwards lists every question of every FORWARD, in order. answer/authority compare in order as (owner, type, class,
+// ttl, rdata) with the owner exactly as on the wire: the encoder compresses an owner equal to the question, case-blind,
+// into the question, so a mixed-case query's answer carries the client's spelling. For every non-drop case the ANSWER's
+// id (equal to the query's first two bytes), rcode and TC are compared too; its question section, other flags and
+// additional section (EDNS included) are not. A drop has no ANSWER: only decision and forwards are compared.
+// The frontend family's size rows sit on exact byte counts of the decider's encoding (dnswire.Encode): every owner name
+// compressed against the names written before it, rdata names (a CNAME's target) never compressed. A decider whose
+// encoder differs builds answers of other sizes and fails those rows.
 package paritycorpus
 
 import (
@@ -15,7 +71,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
@@ -28,8 +83,6 @@ import (
 )
 
 const DEFAULT_CLIENT = "192.0.2.10"
-
-const SIGNOFF_URL_PREFIX = "https://github.com/pfBlockerNG/pfBlockerNG/issues/" // where a go_expect's sign-off must point
 
 var (
 	RUNNER_WRITES = []string{"pfb_unbound.py", "pfb_dnsbl_regex_rules.py", "pfb_unbound.ini", "pfb_py_sources.json"}
@@ -65,8 +118,6 @@ type Case struct {
 	ID, Family, Description string
 	Query                   Query
 	Expect                  Expect
-	GoExpect                *Expect // the Go decider's owner-signed expectation; the Python runner never compares it
-	Signoff                 string  // the owner's sign-off URL for GoExpect
 }
 
 type IniSection struct {
@@ -339,8 +390,8 @@ func iniText(text, where, field, forbidden string) string {
 }
 
 func schema(doc *orderedObject, where string) {
-	if number, ok := doc.vals["schema"].(json.Number); !ok || number.String() != "3" { // a bool or 3.0 is not the integer 3
-		fail(where, "schema", "must be the integer 3, got "+pyRepr(doc.vals["schema"]))
+	if number, ok := doc.vals["schema"].(json.Number); !ok || number.String() != "4" { // a bool or 4.0 is not the integer 4
+		fail(where, "schema", "must be the integer 4, got "+pyRepr(doc.vals["schema"]))
 	}
 }
 
@@ -472,7 +523,7 @@ func module(value any, where string) Module {
 		if len(parts) == 0 || absolute || slices.Contains(parts, "..") || strings.Contains(rel, "\x00") {
 			fail(where, "module.files", fmt.Sprintf("unsafe path %s: must be relative and stay inside the module directory", pyRepr(rel)))
 		}
-		if slices.Contains(RUNNER_WRITES, parts[0]) { // a write would follow the shipped-code link into src/
+		if slices.Contains(RUNNER_WRITES, parts[0]) { // the runner writes the ini and the manifest; the two .py names stay reserved
 			fail(where, "module.files", pyRepr(rel)+" is written by the runner, never by a fixture")
 		}
 		path := strings.Join(parts, "/")
@@ -530,7 +581,7 @@ func parseCase(item any, index int, where string, families map[string]string, se
 			whereCase = where + ": case " + pyRepr(id) // every later error names the case
 		}
 	}
-	object := objectOf(item, whereCase, "", []string{"id", "family", "description", "query", "expect"}, "go_expect")
+	object := objectOf(item, whereCase, "", []string{"id", "family", "description", "query", "expect"})
 	id := stringValue(object.vals["id"], whereCase, "id")
 	if id == "" {
 		fail(whereCase, "id", "must not be empty")
@@ -544,17 +595,13 @@ func parseCase(item any, index int, where string, families map[string]string, se
 	if description == "" {
 		fail(whereCase, "description", "must say what behaviour is pinned")
 	}
-	c := Case{
+	return Case{
 		ID:          id,
 		Family:      family,
 		Description: description,
 		Query:       parseQuery(object.vals["query"], whereCase),
 		Expect:      parseExpect(object.vals["expect"], whereCase, "expect"),
 	}
-	if given, ok := object.vals["go_expect"]; ok {
-		c.GoExpect, c.Signoff = parseGoExpect(given, whereCase, c.Expect)
-	}
-	return c
 }
 
 var wholeHexBytes = regexp.MustCompile(`\A(?:[0-9a-f]{2})*\z`)
@@ -664,26 +711,6 @@ func parseExpect(value any, where, field string) Expect {
 		rrs(object.vals["authority"], where, field+".authority"),
 		tc,
 	}
-}
-
-// parseGoExpect is the Go decider's own expectation and the owner's sign-off for it: expect's keys and rules plus
-// signoff, refused when it equals expect once parsed, since it would then pin nothing.
-func parseGoExpect(value any, where string, expect Expect) (*Expect, string) {
-	object := objectOf(value, where, "go_expect", []string{"signoff"}, "decision", "forwards", "rcode", "answer", "authority", "tc")
-	signoff := stringValue(object.vals["signoff"], where, "go_expect.signoff")
-	if signoff == "" {
-		fail(where, "go_expect.signoff", "must not be empty")
-	}
-	if !strings.HasPrefix(signoff, SIGNOFF_URL_PREFIX) {
-		fail(where, "go_expect.signoff", "must start with "+pyRepr(SIGNOFF_URL_PREFIX)+", got "+pyRepr(signoff))
-	}
-	rest := &orderedObject{keys: slices.DeleteFunc(slices.Clone(object.keys), func(key string) bool { return key == "signoff" }),
-		vals: object.vals, raw: object.raw}
-	goExpect := parseExpect(rest, where, "go_expect")
-	if reflect.DeepEqual(goExpect, expect) {
-		fail(where, "go_expect", "equals expect, so it pins no Go-specific decision: remove it")
-	}
-	return &goExpect, signoff
 }
 
 func LoadScenario(path string, families map[string]string) (*Scenario, error) {

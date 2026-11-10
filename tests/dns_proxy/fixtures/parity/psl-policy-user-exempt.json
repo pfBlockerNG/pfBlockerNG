@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "both feed-at-suffix policies = ignore: a downloaded feed's entries at a suffix are dropped, a user Custom_List's are kept",
   "module": {
     "ini": {

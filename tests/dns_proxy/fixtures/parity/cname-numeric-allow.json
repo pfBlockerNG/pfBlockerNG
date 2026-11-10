@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "description": "a feed @@ exception is loaded (important_rules on, so the numeric band resolution decides): a CNAME target's allow honours the original name's user whitelist entry, a non-whitelisted alias of the same target stays blocked",
   "module": {
     "ini": {

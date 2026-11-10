@@ -1,6 +1,6 @@
 {
-  "schema": 3,
-  "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters, so Python re's Unicode classes decide on them, and a leading .* crosses a newline octet (pins what a port to another regex engine must reproduce); case tags: R3 class escapes, R13 leading dot runs, R17 non-ASCII octets",
+  "schema": 4,
+  "description": "feed /re/ lines matched against CNAME targets whose octets are not ASCII: the decider decodes them as Latin-1 characters and Go's RE2 decides on them, so \\w and \\s match ASCII only and \\W matches the rest (the three rows that differ from Python re's Unicode classes pin the Go result the owner signed off), and a leading .* crosses a newline octet (pins what a port to another regex engine must reproduce); case tags: R3 class escapes, R13 leading dot runs, R17 non-ASCII octets",
   "module": {
     "ini": {
       "MAIN": {
@@ -73,24 +73,16 @@
       }
     },
     {
-      "id": "latin1-letter-matches-backslash-w",
+      "id": "latin1-letter-does-not-match-backslash-w",
       "family": "regex",
-      "description": "R17: \\w matches the Latin-1 letter 0xE9",
+      "description": "R17: \\w does not match the Latin-1 letter 0xE9 under RE2 (ASCII word characters only), so the CNAME target is not blocked and the query relays; Python re matched it and rewrote (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482)",
       "query": {"name": "alias-caf.example.", "type": "A"},
       "expect": {
-        "decision": "rewrite",
-        "forwards": ["alias-caf.example. A"],
-        "rcode": "NOERROR",
-        "answer": ["alias-caf.example. 3600 IN A 0.0.0.0"],
-        "authority": []
-      },
-      "go_expect": {
         "decision": "relay",
         "forwards": ["alias-caf.example. A"],
         "rcode": "NOERROR",
         "answer": ["alias-caf.example. 300 IN CNAME caf\\233.example.", "caf\\233.example. 300 IN A 192.0.2.13"],
-        "authority": [],
-        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482"
+        "authority": []
       }
     },
     {
@@ -133,45 +125,29 @@
       }
     },
     {
-      "id": "latin1-no-break-space-matches-backslash-s",
+      "id": "latin1-no-break-space-does-not-match-backslash-s",
       "family": "regex",
-      "description": "R17: \\s matches the Latin-1 no-break space 0xA0",
+      "description": "R17: \\s does not match the Latin-1 no-break space 0xA0 under RE2 (ASCII whitespace only), so the CNAME target is not blocked and the query relays; Python re matched it and rewrote (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482)",
       "query": {"name": "alias-cak.example.", "type": "A"},
       "expect": {
-        "decision": "rewrite",
-        "forwards": ["alias-cak.example. A"],
-        "rcode": "NOERROR",
-        "answer": ["alias-cak.example. 3600 IN A 0.0.0.0"],
-        "authority": []
-      },
-      "go_expect": {
         "decision": "relay",
         "forwards": ["alias-cak.example. A"],
         "rcode": "NOERROR",
         "answer": ["alias-cak.example. 300 IN CNAME cak\\160.example.", "cak\\160.example. 300 IN A 192.0.2.17"],
-        "authority": [],
-        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482"
+        "authority": []
       }
     },
     {
-      "id": "latin1-letter-does-not-match-backslash-capital-w",
+      "id": "latin1-letter-matches-backslash-capital-w",
       "family": "regex",
-      "description": "R17: \\W does not match the Latin-1 letter 0xE9, a word character to Python",
+      "description": "R17: \\W matches the Latin-1 letter 0xE9 under RE2 (not an ASCII word character), so the CNAME target is blocked and the query rewrites; Python re did not match it, a word character to Python (Go result signed off: https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482)",
       "query": {"name": "alias-cai.example.", "type": "A"},
       "expect": {
-        "decision": "relay",
-        "forwards": ["alias-cai.example. A"],
-        "rcode": "NOERROR",
-        "answer": ["alias-cai.example. 300 IN CNAME cai\\233.example.", "cai\\233.example. 300 IN A 192.0.2.18"],
-        "authority": []
-      },
-      "go_expect": {
         "decision": "rewrite",
         "forwards": ["alias-cai.example. A"],
         "rcode": "NOERROR",
         "answer": ["alias-cai.example. 3600 IN A 0.0.0.0"],
-        "authority": [],
-        "signoff": "https://github.com/pfBlockerNG/pfBlockerNG/issues/3511#issuecomment-6757232482"
+        "authority": []
       }
     },
     {
