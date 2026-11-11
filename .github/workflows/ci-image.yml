@@ -1,0 +1,80 @@
+name: CI image
+
+# Builds the `ci` and `ci-vm` images that every installing job runs inside (#3852). The tag
+# is a hash of the build context, so an unchanged .github/docker/ reuses the published
+# image and a changed one is built once, here, before any job needs it.
+
+on:
+  workflow_call:
+    outputs:
+      ci:
+        description: Full ref of the ci image for this commit's .github/docker/
+        value: ${{ jobs.build.outputs.ci }}
+      ci_vm:
+        description: Full ref of the ci-vm image for this commit's .github/docker/
+        value: ${{ jobs.build.outputs.ci_vm }}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# One group per caller run, queued never cancelled: a fan-out's legs each call this workflow,
+# so the first call builds and every later one finds the tags and skips.
+concurrency:
+  group: ci-image-${{ github.run_id }}-${{ github.run_attempt }}
+  queue: max
+  cancel-in-progress: false
+
+env:
+  # Hashed for the tag AND passed to buildx as the build context: one path, so a file the
+  # Dockerfile can COPY can never be missing from the hash.
+  CONTEXT_DIR: .github/docker
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      ci: ${{ steps.hash.outputs.ci }}
+      ci_vm: ${{ steps.hash.outputs.ci_vm }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Hash the build context
+        id: hash
+        run: |
+          set -euo pipefail
+          # sha256 of the sorted per-file sha256 lines: the name AND content of every tracked file.
+          hash=$(git ls-files -z "$CONTEXT_DIR" | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          echo "ci=ghcr.io/pfblockerng/pfblockerng-ci:$hash" >> "$GITHUB_OUTPUT"
+          echo "ci_vm=ghcr.io/pfblockerng/pfblockerng-ci-vm:$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Build and push the images when missing
+        env:
+          CI_REF: ${{ steps.hash.outputs.ci }}
+          CI_VM_REF: ${{ steps.hash.outputs.ci_vm }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if docker manifest inspect "$CI_REF" >/dev/null 2>&1 && docker manifest inspect "$CI_VM_REF" >/dev/null 2>&1; then
+            echo "::notice::both tags exist; skipping the build"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" = pull_request ] && [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::error::fork PRs cannot publish images: this PR changes .github/docker/, so the CI images for it do not exist yet. A maintainer must run ci-image.yml from a branch of this repository first."
+            exit 1
+          fi
+          docker buildx build --target ci -t "$CI_REF" --push "$CONTEXT_DIR"
+          docker buildx build --target ci-vm -t "$CI_VM_REF" --push "$CONTEXT_DIR"

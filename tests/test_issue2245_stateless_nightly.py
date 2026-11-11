@@ -47,6 +47,7 @@ def test_actionlint_exceptions_are_narrowly_scoped_to_exact_workflows() -> None:
             ".github/workflows/release.yml": {"ignore": [queue_error]},
             ".github/workflows/image-refresh.yml": {"ignore": [queue_error]},
             ".github/workflows/nightly-failure-alert.yml": {"ignore": [queue_error]},
+            ".github/workflows/ci-image.yml": {"ignore": [queue_error]},
             ".github/workflows/smoke.yml": {"ignore": [queue_error]},
             ".github/workflows/ui-tests.yml": {"ignore": [queue_error]},
         }

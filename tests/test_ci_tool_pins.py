@@ -11,11 +11,15 @@ GO_PIN = "1.27.0"  # the compiler that cross-builds the pfB-DNS payload (issue #
 
 
 _WORKFLOWS = ROOT / ".github/workflows"
+_DOCKERFILE = ROOT / ".github/docker/Dockerfile"
 
-# A pinned tool version, upstream commit or release-asset checksum, as the workflows
-# spell it: an env key whose value is a literal. `${{ ... }}` values are expressions
-# resolved per run (a matrix leg, an input), not pins, so they are skipped.
-_PIN_ENTRY = re.compile(r"^\s*([A-Z][A-Z0-9_]*(?:_VERSION|_COMMIT|_SHA256)):\s*(\S+)\s*$")
+# A pinned tool version, upstream commit or release-asset checksum: an env key in a workflow
+# whose value is a literal, or an `ARG` in the CI image's Dockerfile (the single home of the
+# tool pins). `${{ ... }}` values are expressions resolved per run (a matrix leg, an input),
+# not pins, so they are skipped.
+_PIN_NAME = r"[A-Z][A-Z0-9_]*(?:_VERSION|_COMMIT|_SHA256)"
+_PIN_ENTRY = re.compile(rf"^\s*({_PIN_NAME}):\s*(\S+)\s*$")
+_DOCKERFILE_ARG = re.compile(rf"^ARG\s+({_PIN_NAME})=(\S+)\s*$")
 
 
 def _pin_index(sources: Iterable[tuple[str, str]]) -> dict[str, dict[str, list[str]]]:
@@ -23,7 +27,7 @@ def _pin_index(sources: Iterable[tuple[str, str]]) -> dict[str, dict[str, list[s
     found: dict[str, dict[str, list[str]]] = {}
     for where, text in sources:
         for line_no, line in enumerate(text.splitlines(), 1):
-            match = _PIN_ENTRY.match(line)
+            match = _PIN_ENTRY.match(line) or _DOCKERFILE_ARG.match(line)
             if not match:
                 continue
             name, value = match.group(1), match.group(2).strip("\"'")
@@ -34,7 +38,7 @@ def _pin_index(sources: Iterable[tuple[str, str]]) -> dict[str, dict[str, list[s
 
 
 def _pins() -> dict[str, dict[str, list[str]]]:
-    paths = sorted([*_WORKFLOWS.glob("*.yml"), *_WORKFLOWS.glob("*.yaml")])
+    paths = sorted([*_WORKFLOWS.glob("*.yml"), *_WORKFLOWS.glob("*.yaml"), _DOCKERFILE])
     return _pin_index((path.name, path.read_text(encoding="utf-8")) for path in paths)
 
 
@@ -55,24 +59,26 @@ def _docs_under(root: Path) -> list[Path]:
 
 
 def test_gate_deciding_pins_agree_wherever_they_appear() -> None:
-    """A tool version decides gate verdicts, so every job that installs it must install
-    the SAME build. The installs are per job again, and the same pin is spelled out in
-    more than one job (ShellCheck twice in test.yml, shellspec in test.yml and
+    """A tool version decides gate verdicts, so every place that installs it must install
+    the SAME build. The pins live as ARGs in the CI image's Dockerfile, and some workflows
+    still spell them out too (ShellCheck twice in test.yml, shellspec in test.yml and
     build-pkg-linux.yml) — two spellings of one pin drift, and the jobs then grade
     against different binaries while both read as green (#2185)."""
     pins = _pins()
 
-    # Floor: the pins whose drift changes a verdict or a shipped binary must actually be found. A
-    # workflow that renames or restructures them would otherwise pass vacuously.
+    # Floor: the pins whose drift changes a verdict or a shipped binary must actually be found,
+    # in the Dockerfile and nowhere with another value. A restructured install would otherwise
+    # pass vacuously.
     for name, expected in (
         ("SHELLCHECK_VERSION", SHELLCHECK_PIN),
         ("SHELLSPEC_VERSION", SHELLSPEC_PIN),
         ("KCOV_COMMIT", KCOV_PIN),
         ("GO_VERSION", GO_PIN),
     ):
-        assert name in pins, f"no workflow pins {name} any more — the install moved; retarget this gate"
-        assert set(pins[name]) == {expected}, (
-            f"workflows pin {name} to {sorted(pins[name])}, this gate records {expected}"
+        assert name in pins, f"nothing pins {name} any more — the install moved; retarget this gate"
+        assert set(pins[name]) == {expected}, f"{name} is pinned to {pins[name]}, this gate records {expected}"
+        assert any(site.startswith("Dockerfile:") for site in pins[name][expected]), (
+            f"the CI image's Dockerfile does not pin {name}: {pins[name]}"
         )
 
     split = {
