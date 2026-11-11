@@ -9,7 +9,7 @@ import (
 )
 
 // The classification and the text of an address, against what ipaddress (Python 3.11.15) says for every address in the
-// log-rows oracle (decider/testdata, gen_pfb_unbound_log_rows_oracle.py).
+// log-rows oracle (decider/testdata/pfb_unbound_log_rows_oracle.json, frozen: see testdata/README).
 func TestAddressClassificationMatchesPython(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "testdata", "pfb_unbound_log_rows_oracle.json"))
 	if err != nil {

@@ -158,7 +158,7 @@ func (q *upstreamQuestion) read(wire []byte) bool {
 				return false
 			}
 			target := (n&0x3f)<<8 | int(wire[pos+1])
-			// RFC 1035 pointers refer to prior name data, never the header. Bound pointer-only chains as dnswire.py does.
+			// RFC 1035 pointers refer to prior name data, never the header. Bound pointer-only chains as decider/dnswire does.
 			hops++
 			if target < dnsHeaderLen || target >= pos || hops > 127 {
 				return false

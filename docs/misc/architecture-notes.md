@@ -396,12 +396,12 @@ reconciles it whatever the DNSBL `$mode` is.
 | pfB-DNS | DNSBL | `pfb_unbound.py` runs in | Unbound runs | The gateway's mode flags |
 |---|---|---|---|---|
 | off | on | nowhere: DNSBL is off while pfB-DNS is off (no decisions, no DNSBL runtime) | no pfBlockerNG python | not running |
-| on | on | the decider, through the Unbound API shim | the inert observer (it reports upstream blocks while the Resolver forwards) | `--observer` iff the Resolver forwards |
+| on | on | the gateway's in-process decider (`go/pfb_dns_gateway/decider`) | the inert observer (it reports upstream blocks while the Resolver forwards) | `--observer` iff the Resolver forwards |
 | on | off | nowhere (`--reply-log`: only its row writer, see below) | the inert observer | `--no-module`: every query is forwarded over PROXYv2; `--no-module --reply-log` also writes the DNS Reply log |
 
 Unbound never loads `pfb_unbound.py` (issue #3770): neither the `unbound/python*` config.xml keys
-(`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it, and both strip a stored one; while pfB-DNS owns the Resolver they carry the observer. With DNSBL on the decider imports
-the shipped module and still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
+(`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it, and both strip a stored one; while pfB-DNS owns the Resolver they carry the observer. With DNSBL on the gateway's in-process decider
+still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
 moves the Resolver through config.xml (never `unbound.conf` directly): `active_interface` `lo0`, `enablessl`
 removed (DoT then comes from pfB-DNS's own `dns_shared/pfb_dns_dot`, seeded once from it unless an explicit shared choice exists), and a marked `server:` clause appended to `custom_options` (pfSense writes custom options after its
 Forwarding `forward-zone:` block, so a bare line there is a syntax error), then `services_unbound_configure(FALSE)`
@@ -728,7 +728,7 @@ service entry for the package (an install runs this before pfSense registers it,
 The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
 `DnsProxyActivationRollbackTest`, the marker and lock rows of `DnsProxyServiceTest` and `go/pfb_dns_gateway/readyfile_test.go`
 (the marker itself); live by `tests/smoke/test_smoke_dns_proxy.py` (the marker, the lock, racing starts, a rollback with
-every client port held, and a decider that exits at every start, with the package's service entry registered or absent)
+every client port held, and a gateway that exits at every start, with the package's service entry registered or absent)
 and `tests/smoke/test_smoke_pfb_dns_resolver_state.py` (TCP and UDP 127.0.0.1:5353 held before enabling:
 the real Unbound bind fails, activation rolls back with a notice, and native Resolver DNS works while the holders remain).
 
@@ -805,19 +805,18 @@ separate form above it on the same page. DNSBL on (module hosted by Unbound or b
 it as before and the module writes `dns_reply.log`; `--reply-log` is never passed, and the proxy refuses it without
 `--no-module`, so a reply is never logged twice. DNSBL off: `pfb_dns_proxy_service()` adds `--reply-log` to `--no-module` iff
 the preference is On, and the rc script (hence the proxy, which reads its flags only at start) changes with the preference, so
-the apply's `pfb_dns_proxy_ensure_running()` restarts a live proxy on a change. With the flag the proxy
-(`dns_proxy/dns_reply_log.py`) imports the shipped `pfb_unbound.py` from its own source directory (`--module-dir` stays
-unread, so no module runtime dir, feed or ini is needed), sets only what that file's `init_standard()` would have set for one
-function (the switch, the RCODE table, an empty noAAAA table, the GeoIP reader when the database is installed, the log
-pipeline) and logs each relayed reply with the module's own `get_details_reply()`, the same call sequence as the module mode
-(the MODDONE row, and the servfail callback for a SERVFAIL, which makes a SERVFAIL Unbound sent two rows in both modes). The
-log file, columns, escaping, retention and the Reports/Stats readers are the module mode's. Nothing of DNSBL runs: no feed
-is read, no query decided, no watcher or database started. Logging cannot change an answer, and a reply log that cannot
-start is one error line and the proxy forwards without it. `dns_reply_log.RCODES` and `GEOIP_DB` restate two constants
-that live inside `init_standard()`; `tests/dns_proxy/test_reply_log.py` holds them equal to the module's, and pins the rows in
-both modes against `tests/fixtures/dns_reply_standalone_rows.json`, which `DnsReplyStandaloneRowsTest` reads through the
-Reports and unified.log converters. The page contract is `DnsReplyLoggingPreferencePageTest`, the flag `DnsProxyServiceTest`
-and `DnsProxyApplyStartTest`.
+the apply's `pfb_dns_proxy_ensure_running()` restarts a live proxy on a change. With the flag the gateway's decider
+(`go/pfb_dns_gateway/decider/pfb_dns_proxy_replylog.go`) leaves `--module-dir` unread (so no module runtime dir, feed or ini is
+needed), sets up only what the module's `init_standard()` sets for its row writer (the switch, the RCODE table, an empty noAAAA
+table, the GeoIP reader when the database is installed, the log pipeline) and logs each relayed reply through the module's
+row writer, the same call sequence as the module mode (the MODDONE row, and the servfail callback for a SERVFAIL, which makes
+a SERVFAIL Unbound sent two rows in both modes). The log file, columns, escaping, retention and the Reports/Stats readers are
+the module mode's. Nothing of DNSBL runs: no feed is read, no query decided, no watcher or database started. Logging cannot
+change an answer: a log directory that cannot be written costs one "Failed to write" line and the gateway keeps forwarding.
+The rows are pinned against `tests/fixtures/dns_reply_standalone_rows.json` by `pfb_dns_proxy_replylog_test.go` (which also
+holds the RCODE names equal to the module's) and `tests/dns_proxy/test_gateway_modes.py` (the real gateway and Unbound);
+`DnsReplyStandaloneRowsTest` reads the same rows through the Reports and unified.log converters. The page contract is
+`DnsReplyLoggingPreferencePageTest`, the flag `DnsProxyServiceTest` and `DnsProxyApplyStartTest`.
 
 **Upstream-block observer and the boot hook.** Unbound rewrites RA/AA and drops the upstream's EDE on every client
 reply, so a block the upstream signals cannot be classified from what the proxy gets back. While pfB-DNS fronts the

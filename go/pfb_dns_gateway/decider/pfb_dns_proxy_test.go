@@ -1,5 +1,5 @@
 // Tests of pfb_dns_proxy.go: the Frontend that decides one client query, and the replies it builds itself, as
-// tests/dns_proxy/test_hostile.py, test_frontend_e2e.py and test_no_module.py check them for the Python Frontend.
+// tests/dns_proxy/test_hostile.py, test_frontend_e2e.py and test_no_module.py (removed in #3791) checked them for the Python Frontend.
 package decider
 
 import (

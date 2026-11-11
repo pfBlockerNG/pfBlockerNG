@@ -1,13 +1,9 @@
-"""Names and fixture text shared by the DNS proxy tests (imports nothing from the proxy itself)."""
+"""Names and fixture text shared by the DNS gateway tests."""
 
 from __future__ import annotations
 
 import json
-import threading
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_DIR = REPO_ROOT / "src" / "usr" / "local" / "pkg" / "pfblockerng"
@@ -54,34 +50,6 @@ GP_BYPASS_INI = f"""
 [GP_Bypass_List]
 row1 = {BYPASSED_CLIENT}
 """
-
-
-class LogFeed(list[tuple[str, str]]):
-    """The (log file, line) pairs the module tried to write, in order; a test waits on them instead of sleeping."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._cond = threading.Condition()
-
-    def append(self, item: tuple[str, str]) -> None:
-        with self._cond:
-            super().append(item)
-            self._cond.notify_all()
-
-    def wait_for(self, done: Callable[[list[tuple[str, str]]], bool], timeout: float = 10.0) -> list[tuple[str, str]]:
-        """The log once `done(log)` holds; raises with what was seen when it does not within `timeout` (a stuck run)."""
-        with self._cond:
-            if not self._cond.wait_for(lambda: done(self), timeout):
-                raise AssertionError(
-                    f"STUCK/ENVIRONMENT: no expected log line within {timeout:g} s; saw {list(self)!r}"
-                )
-            return list(self)
-
-
-@dataclass
-class Booted:
-    module: ModuleType
-    log: LogFeed
 
 
 def write_module_dir(root: Path, *, forwarding: bool = False) -> None:

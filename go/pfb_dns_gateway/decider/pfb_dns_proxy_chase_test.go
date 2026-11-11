@@ -1,5 +1,5 @@
 // Tests of pfb_dns_proxy.go's SafeSearch chase (Frontend._chase_cname and the MODULE_RESTART_NEXT dispatch in resolve),
-// as tests/dns_proxy/test_safesearch.py checks them for the Python Frontend with the real module. The rows that need a
+// as tests/dns_proxy/test_safesearch.py (removed in #3791) checked them for the Python Frontend with the real module. The rows that need a
 // real Unbound (test_gateway_e2e.py, test_gateway_safesearch.py, test_gateway_chase.py, test_integration_unbound.py)
 // run in-process here: the gateway's TCP retry of a truncated chase is the gateway's, so the decider sees the target's
 // whole answer, which is what the UDP-size and stream rows feed it.
@@ -87,7 +87,7 @@ func ssKey(name string, qtype uint16) paritycorpus.UpstreamKey {
 	return paritycorpus.UpstreamKey{Name: name, Qtype: qtype}
 }
 
-// ssZone is what Unbound's upstream serves: tests/dns_proxy/test_safesearch.py ZONE. An empty list is a NOERROR answer
+// ssZone is what Unbound's upstream serves: the ZONE of tests/dns_proxy/test_safesearch.py (removed in #3791). An empty list is a NOERROR answer
 // without records; nil, no reply at all.
 func ssZone() map[paritycorpus.UpstreamKey][]string {
 	const a, aaaa, txt = dnswire.TYPE_A, dnswire.TYPE_AAAA, dnswire.TYPE_TXT

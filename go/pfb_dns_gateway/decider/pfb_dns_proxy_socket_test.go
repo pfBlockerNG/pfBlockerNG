@@ -1,4 +1,4 @@
-// Tests of the observer's socket (#3791 step A): Frontend.serve_observer and _serve_observer of pfb_dns_proxy.py in Go. What
+// Tests of the observer's socket (#3791 step A): Frontend.serve_observer and _serve_observer of pfb_dns_proxy.py (removed in #3791), in Go. What
 // a datagram's bytes mean is pfb_unbound_upstream_test.go's and the oracle test's; these tests are about the socket: where
 // it is, who can reach it, what happens to a datagram on it and what Close leaves.
 package decider

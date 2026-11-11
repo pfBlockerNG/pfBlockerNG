@@ -689,7 +689,7 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 }
 
 // rcodeNames is the RCODE table init_standard builds rcodeDB from (a table of its own per module): the name a reply row
-// shows for a non-NOERROR return code. dns_reply_log.py's RCODES is the same table, held equal by a test.
+// shows for a non-NOERROR return code. The reply log of the Go decider uses this same table; TestReplyLogRcodeNamesAreTheModulesOwnTable compares it with a literal copy.
 func rcodeNames() map[int]string {
 	return map[int]string{
 		0:  "NoError",

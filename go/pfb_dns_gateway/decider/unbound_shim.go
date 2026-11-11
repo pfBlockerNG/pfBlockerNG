@@ -1,4 +1,4 @@
-// Go translation of src/usr/local/pkg/pfblockerng/dns_proxy/unbound_shim.py: the constants, reply objects and query
+// Ported from src/usr/local/pkg/pfblockerng/dns_proxy/unbound_shim.py (removed in #3791): the constants, reply objects and query
 // state of the Unbound API that pythonmod gives pfb_unbound.py, with the upstream's EDNS options. There is no callback
 // registry: the one callback the module registers for query_response is called directly (fireQueryResponse in
 // pfb_unbound_upstream.go), and the reply callbacks by fireReplyCallback (pfb_unbound_log.go). Install and uninstall
@@ -94,7 +94,7 @@ func logWarn(msg string) { logLine("warning", msg) }
 func logErr(msg string) { logLine("error", msg) }
 
 // storeQueryInCache and invalidateQueryInCache are pythonmod's message-cache calls, which the shim does not model
-// (unbound_shim.py 108-113): a store always succeeds and keeps nothing. Variables so that a test can record a call or
+// (unbound_shim.py 108-113, removed in #3791): a store always succeeds and keeps nothing. Variables so that a test can record a call or
 // fail a store, as the Python tests swap the builtins.
 var storeQueryInCache = func(qstate *moduleQstate, qinfo queryInfo, msgrep *replyInfo, isReferral int) bool { return true }
 

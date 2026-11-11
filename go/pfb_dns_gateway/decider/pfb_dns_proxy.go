@@ -1,6 +1,6 @@
-// Go translation of src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py: the Frontend that decides one client
+// Ported from src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py (removed in #3791): the Frontend that decides one client
 // query, and the replies it builds itself, and what serve_decisions set up around it: Open boots the module (or none, with
-// the module-less reply log of dns_reply_log.py, pfb_dns_proxy_replylog.go) and the observer's socket
+// the module-less reply log ported from dns_reply_log.py (removed in #3791), pfb_dns_proxy_replylog.go) and the observer's socket
 // (pfb_dns_proxy_socket.go), and Close shuts them down in serve_decisions's order (pfb_dns_proxy_serve.go). The observer's
 // reports come in through relayUpstreamResponse (pfb_dns_proxy_observer.go). The decision protocol, the CLI, the privilege
 // drop and the code record are not part of it: the gateway is the one process, and its executable's SHA-256 record
@@ -195,7 +195,7 @@ func (f *Frontend) unchanged(wire []byte, query *dnswire.Message, fwd forward) [
 
 // Resolve answers one client query: parse it, let the module decide, forward to Unbound when it defers. fwd sends the
 // client's wire to Unbound as that client and returns its reply, nil for none; transport is one of "TCP", "UDP", "DoT",
-// "DoH", "DoQ" (decision_service.py TRANSPORTS), which the module logs and counts. Safe for concurrent use.
+// "DoH", "DoQ" (the names decision_service.py, removed in #3791, sent), which the module logs and counts. Safe for concurrent use.
 //
 // nil means the packet is dropped. The header is checked before anything is parsed, so a hostile packet costs a
 // constant, and every FORMERR is header-only. Only `transport == "UDP"` holds a built reply to the client's advertised

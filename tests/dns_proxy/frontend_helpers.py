@@ -1,4 +1,4 @@
-"""Wire builders, a fake Unbound, client exchanges and the decision socket's gateway end, shared by the DNS tests."""
+"""Wire builders, a fake Unbound, and client exchanges, shared by the DNS gateway tests."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import socket
 import struct
 import subprocess
 import threading
-from collections.abc import AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import Awaitable, Iterator
 from dataclasses import dataclass
 from functools import partial
 from typing import TypeVar
@@ -39,21 +39,6 @@ async def watchdog(awaitable: Awaitable[T], what: str) -> T:
         return await asyncio.wait_for(awaitable, WATCHDOG)
 
 
-class ManualClock:
-    """Stands in for pfb_dns_proxy.monotonic: it reads the same every time until a test moves it. The decider's log
-    window runs on that clock, so a test ages a silence by `advance`, never by waiting. The tests use steps that are
-    exact in binary (0.5, 1, 2...), so a boundary is hit exactly."""
-
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
 def build_query(
     name: str,
     qtype: int = dnswire.TYPE_A,
@@ -77,7 +62,6 @@ def build_query(
 
 
 EDNS_OPTION_EDE = 15  # RFC 8914 Extended DNS Error
-AD = 0x0020  # DNSSEC authenticated data: dnswire does not name it, and the proxy never sets it on its own answers
 UPSTREAM_SOA = "example. 60 IN SOA ns.example. hostmaster.example. 1 2 3 4 60"
 
 
@@ -264,63 +248,3 @@ async def tcp_concurrent(server: tuple[str, int], queries: list[tuple[str, bytes
     finally:
         for _, writer in connections:
             writer.close()
-
-
-# --- the gateway end of the decision socket, for tests that run the decider in this process ---------------------
-
-QUERY, FORWARD, REPLY, ANSWER, DROP, READY = 1, 2, 3, 4, 5, 6  # the frame types of docs/misc/dns-gateway-protocol.md
-
-
-class DecisionGateway:
-    """The Go gateway's end of the decision socket, played in the test's event loop; frames are packed here."""
-
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        self.reader, self.writer = reader, writer
-
-    async def send(self, ftype: int, fid: int, payload: bytes = b"") -> None:
-        self.writer.write(struct.pack("!IBI", 5 + len(payload), ftype, fid) + payload)
-        await self.writer.drain()
-
-    async def recv(self) -> tuple[int, int, bytes]:
-        (size,) = struct.unpack("!I", await watchdog(self.reader.readexactly(4), "the decider's frame header"))
-        body = await watchdog(self.reader.readexactly(size), "the decider's frame body")
-        ftype, fid = struct.unpack_from("!BI", body)
-        return ftype, fid, body[5:]
-
-    async def ask(
-        self, wire: bytes, unbound: FakeUnbound, *, client: str = "127.0.0.2", transport: str = "UDP", fid: int = 1
-    ) -> bytes | None:
-        """QUERY `wire` as `client`, answer every FORWARD from `unbound`, and return the final ANSWER's wire; None
-        for a DROP."""
-        text = client.encode("ascii")
-        byte = ("TCP", "UDP", "DoT", "DoH", "DoQ").index(transport)
-        await self.send(QUERY, fid, bytes([byte, len(text)]) + text + b"\x00\x00\x00" + wire)
-        while True:
-            ftype, got, payload = await self.recv()
-            assert got == fid
-            if ftype == ANSWER:
-                return payload
-            if ftype == DROP:
-                return None
-            assert ftype == FORWARD, f"frame type {ftype}: want FORWARD, ANSWER or DROP"
-            await self.send(REPLY, fid, unbound.answer(payload))
-
-
-@contextlib.asynccontextmanager
-async def serving_decisions(argv: Sequence[str]) -> AsyncIterator[DecisionGateway]:
-    """pfb_dns_proxy.serve_decisions() as a task of this process on one end of a socketpair, with `argv` after
-    `--decision-fd`: yields the gateway end once READY has been read. Leaving ends the session by EOF, and a decider
-    that failed raises here."""
-    import pfb_dns_proxy  # the shipped decider: the tests' conftest puts its directory on sys.path
-
-    gateway_end, decider_end = socket.socketpair()
-    args = pfb_dns_proxy.parse_args(["--decision-fd", str(decider_end.detach()), *argv])
-    task = asyncio.ensure_future(pfb_dns_proxy.serve_decisions(args))
-    reader, writer = await asyncio.open_connection(sock=gateway_end)
-    gateway = DecisionGateway(reader, writer)
-    try:
-        assert await gateway.recv() == (READY, 0, b"")
-        yield gateway
-    finally:
-        writer.close()
-        await watchdog(task, "the decider's session to end")

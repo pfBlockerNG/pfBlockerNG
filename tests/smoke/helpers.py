@@ -22,7 +22,7 @@ Everything here drives the REAL production paths:
   included), and they survive the pfBlockerNG reload — which manages its OWN
   ``unbound.conf`` via ``pfb_stop_start_unbound`` and never calls
   ``services_unbound_configure``, so set_control_records() runs that itself to
-  regenerate ``host_entries.conf`` before the reload re-adds the DNSBL python.
+  regenerate ``host_entries.conf`` before the reload.
   (Custom Options were tried first; a pfBlockerNG reload never re-applies them.)
 * reload() runs the PHP CLI cron verbs (``update`` / ``updateip`` /
   ``updatednsbl``) — the exact cron entry point, no wrapper. reset() runs
@@ -142,8 +142,9 @@ def unique_domain(label: str = "pfbsmoke") -> str:
 
     Test domains MUST avoid the RFC 6761 special-use TLDs (``.test``, ``.example``,
     ``.invalid``, ``.localhost``, ``.onion``) and ``home.arpa``: Unbound serves
-    those as built-in ``local-zone``s and answers them (NXDOMAIN/NODATA) BEFORE the
-    pfBlockerNG python module runs — shadowing the DNSBL block entirely. A random
+    those as built-in ``local-zone``s and answers them (NXDOMAIN/NODATA) itself, so a
+    probe of such a name would show Unbound's own answer, not the DNSBL block or the
+    upstream answer under test. A random
     UUIDv4 under ``.com`` can't collide with a real domain and isn't on the HSTS
     preload list (which would flip the block shape to NULL when HSTS is on). The
     ``<label>-`` prefix keeps the first label from starting with a digit.
@@ -1588,8 +1589,8 @@ def set_control_records(
     ``pfb_stop_start_unbound``) and never calls ``services_unbound_configure``.
     So we add the rows to CONFIG (idempotent on host+domain) and run
     ``services_unbound_configure()`` ourselves to regenerate
-    ``host_entries.conf``; the later pfBlockerNG ``update`` re-adds the DNSBL
-    python on top (inject() does control records first, reload second).
+    ``host_entries.conf``; the later pfBlockerNG ``update`` reloads the DNSBL lists
+    in the gateway's decider (inject() does control records first, reload second).
 
     ``local_zone`` is unsupported here — a host override can't express a
     local-zone, and no matrix case needs one (DNSBL builds its own blocking
@@ -2565,9 +2566,10 @@ def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", 
     previous test in this module left in place — keeps the comparison varying exactly one
     thing, independent of test order within the module.
 
-    Idempotent; written + ``services_unbound_configure`` (restarts Unbound). NOTE: that
-    regenerates the base unbound.conf WITHOUT pfBlockerNG's python module, so the caller
-    MUST run a pfBlockerNG reload afterwards to re-add the module + reload safeSearchDB.
+    Idempotent; written + ``services_unbound_configure`` (restarts Unbound). NOTE: Unbound
+    never loads ``pfb_unbound.py`` (the gateway's in-process decider hosts it), so this does not
+    touch the DNSBL module; the caller MUST still run a pfBlockerNG reload afterwards so the
+    decider reloads ``safeSearchDB``.
 
     Edits the Resolver only while pfB-DNS does not hold it: released first, stored on again after the edit.
     """
@@ -2621,9 +2623,9 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
     then probes a throwaway name to confirm the stub relay is live before returning.
     A failed self-check raises immediately with the mode and the answer received.
 
-    NOTE: ``services_unbound_configure`` regenerates ``unbound.conf`` WITHOUT
-    pfBlockerNG's python module.  The caller MUST run a pfBlockerNG reload AFTER
-    this call to re-add the module and reload ``safeSearchDB`` before any
+    NOTE: Unbound never loads ``pfb_unbound.py`` (the gateway's in-process decider hosts it), so
+    ``services_unbound_configure`` does not touch the DNSBL module.  The caller MUST still run a
+    pfBlockerNG reload AFTER this call so the decider reloads ``safeSearchDB`` before any
     SafeSearch probe.
 
     Edits the Resolver only while pfB-DNS does not hold it: released first, stored on again after the self-check.
@@ -3914,7 +3916,7 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
         f"{unset_keys}"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
         # Drop the smoke control Host Overrides (descr-tagged) so a stale local-data row
-        # cannot answer a later module's probe before the DNSBL python module runs.
+        # cannot answer a later test module's probe for that name.
         f"$hosts = config_get_path({_php_str(CFG_UNBOUND_HOSTS)}, array());\n"
         "$hosts = array_values(array_filter($hosts, function($r) {\n"
         f"  return ($r['descr'] ?? '') !== {_php_str(CONTROL_DESCR)};\n"
@@ -4684,9 +4686,9 @@ PFB_LOG = f"{PFB_LOGDIR}/pfblockerng.log"
 # (pfb_run_log_target() routes hook/exec output here while a run is active). This is the file
 # the #671 AJAX live tail reads, so anything that must appear in the live view lands here.
 PFB_RUNLOG = f"{PFB_LOGDIR}/pfblockerng_run.log"
-# The Python module's stderr is redirected here (pfb_unbound.py:590); a FAILED build
-# (bad/partial manifest) writes "Failed to load DNSBL manifest" / "DNSBL rebuild
-# failed, keeping current snapshot" here — the fail-closed signal.
+# The DNSBL module's stderr is appended here by the gateway's decider (pfb_unbound_stderr.go, as
+# pfb_unbound.py's log_stderr did); a FAILED build (bad/partial manifest) writes "Failed to load DNSBL
+# manifest" / "DNSBL rebuild failed, keeping current snapshot" here — the fail-closed signal.
 PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
 # The fast-path swap marker PHP logs when the no-restart path is TAKEN: inc:3956 writes
 # "Reloading Unbound Resolver (DNSBL python) [ zero-downtime swap ]". Match the BRACKETED
@@ -4763,10 +4765,9 @@ def count_log_marker(vm: SmokeVM, path: str, marker: str, *, timeout: float = 30
     not left over from an earlier reload. Matching is fixed-string (non-regex); a missing
     file / no match yields 0 (grep exits non-zero) — never raises.
     """
-    # Count OCCURRENCES, not matching lines: the Python module writes its failure strings
-    # to py_error.log via sys.stderr.write WITHOUT a trailing newline (pfb_unbound.py:3679),
-    # so two failures can share a physical line — `grep -c` (line count) would under-count
-    # them. `grep -Fo` prints one line per match; `wc -l` counts those. Run as ONE shell
+    # Count OCCURRENCES, not matching lines: a log line that carries two failure strings would
+    # make `grep -c` (line count) under-count them. `grep -Fo` prints one line per match;
+    # `wc -l` counts those. Run as ONE shell
     # string (the guest login shell handles the pipe); a missing file / no match -> 0.
     quoted_marker = shlex.quote(marker)
     quoted_path = shlex.quote(path)

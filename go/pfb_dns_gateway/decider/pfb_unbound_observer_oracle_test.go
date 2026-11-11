@@ -1,5 +1,5 @@
 // The upstream observer's reports against what the shipped pfb_unbound.py does with the same datagrams: every scenario in
-// testdata/pfb_unbound_observer_oracle.json (gen_pfb_unbound_observer_oracle.py) boots a forwarding module and feeds each
+// testdata/pfb_unbound_observer_oracle.json (frozen: its generator was removed in #3791, see testdata/README) boots a forwarding module and feeds each
 // datagram through the Frontend. For each one the dnsbl.log rows, the lines printed to stderr and the answer to one fixed
 // query before and after it must be Python's, and after each dump step both stats databases must hold Python's tables.
 // The first malformed report's warning is compared whole where Python's text is the proxy's own; where it is a Python
@@ -145,7 +145,7 @@ func TestObserverReportsMatchPython(t *testing.T) {
 			}
 			start()
 			t.Cleanup(func() { m.closeDb(); m.stopLogging() })
-			// probe is Frontend.resolve's answer to the fixed query; the rows the query itself writes are not the scenario's.
+			// probe is Frontend.Resolve's answer to the fixed query; the rows the query itself writes are not the scenario's.
 			probe := func() *string {
 				mark := len(rows)
 				answer := newFrontend(m).Resolve(mustHex(t, o.Probe.Wire), o.Probe.Client, func([]byte) []byte {

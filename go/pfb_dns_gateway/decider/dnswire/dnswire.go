@@ -1,4 +1,4 @@
-// Package dnswire is the Go translation of src/usr/local/pkg/pfblockerng/dns_proxy/dnswire.py: a standard-library
+// Package dnswire is the Go translation of dnswire.py (now the test helper tests/dns_proxy/dnswire.py; moved out of src/ in #3791): a standard-library
 // DNS wire codec (RFC 1035 with the RFC 6891 OPT record).
 //
 // Names are absolute presentation strings ("example.com.", root "."); `\.`, `\\` and `\DDD` escape the bytes a

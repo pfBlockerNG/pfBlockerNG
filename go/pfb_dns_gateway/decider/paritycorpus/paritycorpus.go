@@ -1,7 +1,7 @@
 // Package paritycorpus loads the decision parity corpus (issue #3772), schema 4: language-neutral JSON scenarios that the
 // Go decider passes; it is the only runner (decider/corpus_test.go). A scenario is one module directory (the files PHP
-// writes for the decider) plus ordered query cases, each with the decision as it appears on the decision protocol
-// (docs/misc/dns-gateway-protocol.md, "One query"): which FORWARDs the decider sent, and the final ANSWER.
+// writes for the decider) plus ordered query cases, each with the decision as the retired decision protocol showed
+// it (docs/misc/dns-gateway-protocol.md, removed in #3791): which FORWARDs the decider sent, and the final ANSWER.
 //
 // The expectations in tests/dns_proxy/fixtures/parity are frozen literals derived from the source branch each family
 // names in families.json, never captured from a run. Where the owner signed off a Go result that differs from the
@@ -14,7 +14,7 @@
 // bad UTF-8, a lone surrogate escape, nesting deeper than 990 levels, data after the document.
 //
 //	families.json  {"schema": 4, "families": {"<family>": "<source branch>", ...}}: the closed family list. Every
-//	               family pins pfb_unbound.py except `frontend`, which pins Frontend.resolve in pfb_dns_proxy.py.
+//	               family pins pfb_unbound.py except `frontend`, which pins Frontend.resolve of pfb_dns_proxy.py (removed in #3791; now Frontend.Resolve in pfb_dns_proxy.go).
 //	<scenario>.json  {"schema": 4, "description", "module", "upstream", "cases"}
 //	  module.ini       {section: {key: value}}, every value a string, written as pfb_unbound.ini in file order; no line
 //	                   break anywhere, no bracket in a section name, no "=" or ":" in a key.

@@ -94,15 +94,15 @@ def doh_block_vm(
 
     1. Block egress (hermeticity gate).
     2. Wire Unbound to the stub in RECURSIVE mode (:func:`~helpers.use_stub_for_safesearch`)
-       — this strips the pfb python module from ``unbound.conf``.
-    3. Enable DNSBL with a dummy local feed so the pfb python module is reloaded into
-       ``unbound.conf``. The DoH block is NOT enabled yet.
+       — Unbound's own config only; the DNSBL module lives in the gateway's decider.
+    3. Enable DNSBL with a dummy local feed so the gateway's decider builds its lists.
+       The DoH block is NOT enabled yet.
     4. Capture the BEFORE answers for both probe hosts — unregistered names at the stub,
        so both resolve to the sentinel (STUB_DNS_A), proving the block is not yet active.
     5. Enable the DoH block for the ``dns.yandex`` key and reload — the production path
        (`$safesearch_update` -> restart) reloads `safeSearchDB` with the new NXDOMAIN rows.
     6. Flush the Unbound cache (the BEFORE probes cached the sentinel; clear it so the
-       AFTER probes are evaluated fresh through the pfb python module).
+       AFTER probes are evaluated fresh through the gateway's decider).
     7. Yield the :class:`_DohFixture`.
     8. Teardown: disable the DoH block + reload (drops the CSV rows), restore egress,
        collect diagnostics.
@@ -117,11 +117,11 @@ def doh_block_vm(
     control_name = h.unique_domain("dohctrl")
 
     try:
-        # Step 2: wire Unbound to the stub (strips pfb python module from unbound.conf).
+        # Step 2: wire Unbound to the stub (Unbound's own config; the DNSBL module is the gateway's decider).
         h.use_stub_for_safesearch(vm, False)
 
-        # Step 3: enable DNSBL with a dummy local feed — reloads pfb python module into
-        # unbound.conf so safeSearchDB and the DoH-block NXDOMAIN logic are active.
+        # Step 3: enable DNSBL with a dummy local feed — the gateway's decider loads its lists, so
+        # safeSearchDB and the DoH-block NXDOMAIN logic are active.
         feed = h.write_local_feed(vm, "smoke_doh_dummy.txt", f"{h.unique_domain('dohdummy')}\n")
         spec = h.DnsblCase(aliasname="smokedoh", feed_url=feed, header="smokedoh")
         h.inject(vm, spec)
@@ -139,7 +139,7 @@ def doh_block_vm(
         h.reload(vm, "update")
 
         # Step 6: flush the cache — the BEFORE probes cached the sentinel; clearing it
-        # ensures the AFTER probes are evaluated fresh through the pfb python module.
+        # ensures the AFTER probes are evaluated fresh through the gateway's decider.
         h.flush_unbound_cache(vm)
 
         yield _DohFixture(

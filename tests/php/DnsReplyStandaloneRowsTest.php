@@ -7,10 +7,11 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- pfB-DNS with DNSBL off writes dns_reply.log itself (pfb_dns_proxy.py --no-module --reply-log), through the
- * shipped pfb_unbound.py's own row writer. Reports and Stats must read those rows like the module's: the rows are the
- * ones tests/dns_proxy/test_reply_log.py pins in both modes (tests/fixtures/dns_reply_standalone_rows.json), so a row the
- * proxy writes and the viewers fail to read would fail here, and a writer that drifts from the fixture would fail there.
+ * issue #3515 -- pfB-DNS with DNSBL off writes dns_reply.log itself (pfb-dns --no-module --reply-log), in the row shape
+ * of the module's own row writer. Reports and Stats must read those rows like the module's: the rows are the ones
+ * go/pfb_dns_gateway/decider/pfb_dns_proxy_replylog_test.go pins (tests/fixtures/dns_reply_standalone_rows.json), so a
+ * row the gateway writes and the viewers fail to read would fail here, and a writer that drifts from the fixture would
+ * fail there.
  *
  * The Reports converter reads these historical rows with the same CSV arguments as the log reader.
  */

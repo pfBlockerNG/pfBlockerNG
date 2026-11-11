@@ -1,4 +1,4 @@
-// Go translation of src/usr/local/pkg/pfblockerng/dns_proxy/dns_reply_log.py: the DNS Reply log of a decider with no module
+// Ported from src/usr/local/pkg/pfblockerng/dns_proxy/dns_reply_log.py (removed in #3791): the DNS Reply log of a decider with no module
 // (--no-module --reply-log, issue #3515). Each reply the decider relays fills the row the module fills in module mode (the
 // same getDetailsReply, so the same columns, escaping and r_addr values) and goes through the same log pipeline to the same
 // file. The rows are the module mode's, call for call: the pass after Unbound's reply (MODDONE) logs a "reply" row, and a

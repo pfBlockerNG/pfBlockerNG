@@ -1,5 +1,5 @@
 // The DNSBL and DNS Reply log rows against what the shipped pfb_unbound.py writes for the same steps: every scenario in
-// testdata/pfb_unbound_log_rows_oracle.json (gen_pfb_unbound_log_rows_oracle.py) boots a module from the staged files and
+// testdata/pfb_unbound_log_rows_oracle.json (frozen: its generator was removed in #3791, see testdata/README) boots a module from the staged files and
 // replays its queries, reply callbacks and direct row-writer calls with the clock fixed; the rows must be the same bytes.
 // The tables hold the pure helpers the rows are built from.
 package decider
