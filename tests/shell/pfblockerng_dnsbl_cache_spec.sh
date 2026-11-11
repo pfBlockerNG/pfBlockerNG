@@ -85,16 +85,17 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dc restore
   }
 
-  It 'stage copies all shipped files and the PSL authority, then creates mount-point dirs'
+  It 'stage copies the shipped files and the PSL authority, then creates mount-point dirs'
     setup_sandbox
     # Before: the chroot does not exist at all (fresh MFS).
     When call dc stage
     # The shipped files landed in the chroot.
-    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
     The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
     The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
-    The path "${pfbchroot}/pfb_python.sh" should be executable
     The path "${pfbchroot}/dnsbl_psl" should be exist
+    # The retired files are not staged even though the package still ships two of them under /usr/local (#3791).
+    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should not be exist
+    The path "${pfbchroot}/pfb_python.sh" should not be exist
     # The mount-point dirs exist (the fresh-MFS fix).
     The path "${pfbchroot}/lib" should be directory
     The path "${pfbchroot}/dev" should be directory
@@ -103,35 +104,85 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
-  It 'stage removes the pfb_unbound.py an older package left in the chroot (#3791)'
+  # Every file an older package staged into the chroot that nothing reads any more (#3791).
+  plant_retired() {
+    mkdir -p "${pfbchroot}/__pycache__"
+    echo 'PY-CODE-OLD' > "${pfbchroot}/pfb_unbound.py"
+    echo 'FP-OLD' > "${pfbchroot}/pfb_py_module.applied"
+    echo 'RULES-OLD' > "${pfbchroot}/pfb_dnsbl_regex_rules.py"
+    echo 'WRAPPER-OLD' > "${pfbchroot}/pfb_python.sh"
+    echo 'PYC-OLD' > "${pfbchroot}/__pycache__/pfb_unbound.cpython-311.pyc"
+  }
+
+  It 'stage removes what an older package left in the chroot: the module, its fingerprint, the regex rules, the wrapper and __pycache__ (#3791)'
     setup_sandbox
     mkdir -p "${pfbchroot}"
-    echo 'PY-CODE-OLD' > "${pfbchroot}/pfb_unbound.py"
+    plant_retired
     When call dc stage
     The path "${pfbchroot}/pfb_unbound.py" should not be exist
-    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
+    The path "${pfbchroot}/pfb_py_module.applied" should not be exist
+    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should not be exist
+    The path "${pfbchroot}/pfb_python.sh" should not be exist
+    The path "${pfbchroot}/__pycache__" should not be exist
+    The path "${pfbchroot}/dnsbl_psl" should be exist
     cleanup_sandbox
   End
 
-  It 'restore does not bring back a pfb_unbound.py that an older package had archived (#3791)'
+  It 'save leaves the retired files out of the archive (#3791)'
     setup_sandbox
     dc stage
-    echo 'PY-CODE-OLD' > "${pfbchroot}/pfb_unbound.py"
+    plant_retired
     echo 'ini-v1' > "${pfbchroot}/pfb_unbound.ini"
     dc save
+    # Before: the chroot really holds the retired files, so their absence below is the skip's doing.
+    When call tar_list
+    The path "${pfbchroot}/pfb_unbound.py" should be exist
+    The path "${pfbchroot}/pfb_py_module.applied" should be exist
+    The output should include 'pfb_unbound.ini'
+    The output should not include 'pfb_unbound.py'
+    The output should not include 'pfb_py_module.applied'
+    cleanup_sandbox
+  End
+
+  # An archive written by an older package really holds the retired files (the save skip never ran for it).
+  craft_old_archive() {
+    mkdir -p "${pfbchroot}"
+    plant_retired
+    echo 'ini-v1' > "${pfbchroot}/pfb_unbound.ini"
+    /usr/bin/tar -Pjcf "${dnsblarchive}.bz2" "${pfbchroot}/pfb_unbound.py" "${pfbchroot}/pfb_py_module.applied" "${pfbchroot}/pfb_unbound.ini"
     rm -rf "${pfbchroot}"
-    When call dc restore
+  }
+  # Report the before-state, then restore: the archive holds both retired files and the chroot is gone,
+  # so their absence afterwards is restore's doing.
+  restore_old_archive_and_report() {
+    tar_list | grep -qx 'pfb_unbound.py' && echo 'PRE:archive-has-pfb_unbound.py'
+    tar_list | grep -qx 'pfb_py_module.applied' && echo 'PRE:archive-has-pfb_py_module.applied'
+    if [ -e "${pfbchroot}" ]; then echo 'PRE:chroot-present'; else echo 'PRE:chroot-wiped'; fi
+    dc restore
+  }
+
+  It 'restore does not bring back the module or its fingerprint from an archive an older package wrote (#3791)'
+    setup_sandbox
+    craft_old_archive
+    When call restore_old_archive_and_report
+    The output should include 'PRE:archive-has-pfb_unbound.py'
+    The output should include 'PRE:archive-has-pfb_py_module.applied'
+    The output should include 'PRE:chroot-wiped'
     The path "${pfbchroot}/pfb_unbound.py" should not be exist
+    The path "${pfbchroot}/pfb_py_module.applied" should not be exist
     The contents of file "${pfbchroot}/pfb_unbound.ini" should equal 'ini-v1'
     cleanup_sandbox
   End
 
-  It 'teardown removes the pfb_unbound.py an older package left in the chroot (#3791)'
+  It 'teardown removes what an older package left in the chroot (#3791)'
     setup_sandbox
     dc stage
-    echo 'PY-CODE-OLD' > "${pfbchroot}/pfb_unbound.py"
+    plant_retired
     When call dc teardown
     The path "${pfbchroot}/pfb_unbound.py" should not be exist
+    The path "${pfbchroot}/pfb_py_module.applied" should not be exist
+    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should not be exist
+    The path "${pfbchroot}/pfb_python.sh" should not be exist
     cleanup_sandbox
   End
 
@@ -372,7 +423,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # Simulate a RAM-disk reboot: wipe the whole chroot.
     rm -rf "${pfbchroot}"
     # Bump the shipped code in /usr/local to prove restore re-stages CURRENT code.
-    echo 'RULES-CODE-v2' > "${pfbpkgdir}/pfb_dnsbl_regex_rules.py"
+    echo 'HSTS-v2' > "${pfbpkgdir}/pfb_py_hsts.txt"
     When call restore_and_report
     # Before: the chroot was wiped; After: restore ran.
     The output should include 'PRE:wiped'
@@ -381,7 +432,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The contents of file "${pfbchroot}/pfb_py_sources.json" should equal 'MANIFEST-v1'
     The contents of file "${pfbchroot}/pfb_unbound.ini" should equal 'ini-v1'
     # The shipped code is the CURRENT /usr/local copy (v2), not a stale archived v1.
-    The contents of file "${pfbchroot}/pfb_dnsbl_regex_rules.py" should equal 'RULES-CODE-v2'
+    The contents of file "${pfbchroot}/pfb_py_hsts.txt" should equal 'HSTS-v2'
     # Mount-point dirs are present again after restore.
     The path "${pfbchroot}/lib" should be directory
     cleanup_sandbox
@@ -408,7 +459,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dc stage
     dc save
     rm -rf "${pfbchroot}"
-    # Bump the shipped oracle to prove restore re-stages CURRENT code, like pfb_dnsbl_regex_rules.py.
+    # Bump the shipped oracle to prove restore re-stages CURRENT code, like pfb_py_hsts.txt.
     echo 'PSL-AUTHORITY-v2' > "${pfbpkgdir}/dnsbl_psl"
     When call dc restore
     The contents of file "${pfbchroot}/dnsbl_psl" should equal 'PSL-AUTHORITY-v2'
@@ -421,7 +472,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     When call dc restore
     arc="$(pfb_spec_archive_path "${dnsblarchive}")"
     The value "$arc" should equal ''
-    The path "${pfbchroot}/pfb_dnsbl_regex_rules.py" should be exist
+    The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
     The path "${pfbchroot}/lib" should be directory
     cleanup_sandbox
   End

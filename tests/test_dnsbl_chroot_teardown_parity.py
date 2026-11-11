@@ -44,14 +44,26 @@ def test_teardown_derivation_includes_the_psl_authority() -> None:
     assert '"${pfbchroot}/pfb_py_tld.txt"' not in source
 
 
-def test_the_retired_module_is_cleaned_from_the_chroot_and_no_longer_shipped() -> None:
-    """#3791: `pfb_unbound.py` left the package, so it is not staged; an upgraded box still has the old
-    copy in /var/unbound, which `dnsbl_cache stage` and `teardown` remove through `PFB_PY_RETIRED`."""
+RETIRED_CHROOT_FILES = [
+    "pfb_unbound.py",
+    "pfb_py_module.applied",
+    "pfb_dnsbl_regex_rules.py",
+    "pfb_python.sh",
+]
+
+
+def test_the_retired_chroot_files_are_cleaned_and_no_longer_staged() -> None:
+    """#3791: `pfb_unbound.py` left the package and took with it its only chroot consumers' reasons to exist:
+    its code fingerprint (`pfb_py_module.applied`), the regex rules it imported and the wrapper that launched it.
+    The save-time probe and every other consumer run the host copies from `/usr/local`. An upgraded box still has
+    the old chroot copies (and the fingerprint matches the `pfb_py_*` archive glob), which `dnsbl_cache stage` and
+    `teardown` remove through `PFB_PY_RETIRED`."""
     source = SHELL.read_text()
     match = re.search(r"^\s*PFB_PY_RETIRED='([^']*)'", source, re.MULTILINE)
     assert match is not None, "PFB_PY_RETIRED assignment not found in pfblockerng.sh"
-    assert match.group(1).split() == ["pfb_unbound.py"]
-    assert "pfb_unbound.py" not in _shipped_files()
+    assert match.group(1).split() == RETIRED_CHROOT_FILES
+    shipped = _shipped_files()
+    assert not set(RETIRED_CHROOT_FILES) & set(shipped), shipped
 
 
 def test_the_shipped_set_actually_reaches_the_parity_check() -> None:
