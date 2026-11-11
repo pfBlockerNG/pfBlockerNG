@@ -36,3 +36,5 @@ def test_a_sync_wait_that_expires_is_stuck_for_a_child_process(monkeypatch: pyte
 def test_a_wait_that_finishes_in_time_returns_its_value() -> None:
     async def finished() -> str:
         return "answer"
+
+    assert asyncio.run(frontend_helpers.watchdog(finished(), "the probe wait")) == "answer"
