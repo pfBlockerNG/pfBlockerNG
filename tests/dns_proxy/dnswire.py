@@ -18,10 +18,8 @@ TC = 0x0200
 RD = 0x0100
 RA = 0x0080
 CD = 0x0010
-OPCODE_MASK = 0x7800  # header bits 11-14: the opcode
 
 CLASS_IN = 1
-CLASS_ANY = 255
 TYPE_A = 1
 TYPE_NS = 2
 TYPE_CNAME = 5
@@ -31,7 +29,6 @@ TYPE_MX = 15
 TYPE_TXT = 16
 TYPE_AAAA = 28
 TYPE_OPT = 41
-TYPE_RRSIG = 46
 
 _TYPE_NAMES = {
     1: "A",
@@ -189,11 +186,6 @@ def name_to_labels(name: str) -> list[bytes]:
 
 def encode_name(name: str) -> bytes:
     return b"".join(bytes([len(label)]) + label for label in name_to_labels(name)) + b"\x00"
-
-
-def name_from_rdata(rdata: bytes) -> str:
-    """The name an uncompressed domain-name rdata (CNAME, NS, PTR) holds, in presentation form."""
-    return labels_to_text(_read_labels(rdata, 0)[0])
 
 
 def _read_labels(data: bytes, pos: int) -> tuple[list[bytes], int]:
