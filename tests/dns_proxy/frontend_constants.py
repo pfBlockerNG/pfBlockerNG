@@ -43,7 +43,7 @@ trap.example,cname,blocked.example,198.51.100.9,2001:db8::9
 big.example,cname,big-target.example,198.51.100.13,2001:db8::13
 """
 
-# Group Policy bypass: a client on [GP_Bypass_List] is never DNSBL-blocked (pfb_unbound.py _load_gp_bypass_list).
+# Group Policy bypass: a client on [GP_Bypass_List] is never DNSBL-blocked.
 BYPASSED_CLIENT = "127.0.0.5"
 FILTERED_CLIENT = "127.0.0.6"
 GP_BYPASS_INI = f"""
@@ -53,10 +53,9 @@ row1 = {BYPASSED_CLIENT}
 
 
 def write_module_dir(root: Path, *, forwarding: bool = False) -> None:
-    """Shape `root` like /var/unbound: the shipped modules (symlinked, byte-identical), ini, manifest and raw feed. With
+    """Shape `root` like /var/unbound: the shipped module (symlinked, byte-identical), ini, manifest and raw feed. With
     `forwarding` the ini says the Resolver forwards, the only mode in which upstream blocks are detected."""
-    for name in ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py"):
-        (root / name).symlink_to(SHIPPED_DIR / name)
+    (root / "pfb_dnsbl_regex_rules.py").symlink_to(SHIPPED_DIR / "pfb_dnsbl_regex_rules.py")
     (root / "pfb_py_raw").mkdir()
     (root / "pfb_py_raw" / "feed.txt").write_text("blocked.example\n", encoding="utf-8")
     feed = {"raw": "pfb_py_raw/feed.txt", "feed": "TestFeed", "group": "TestGroup", "log_flag": "1"}

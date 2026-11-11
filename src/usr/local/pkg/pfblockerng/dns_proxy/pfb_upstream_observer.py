@@ -1,15 +1,15 @@
 # pfb_upstream_observer.py
-# pfBlockerNG - Unbound python script for upstream-block detection while the DNS proxy hosts pfb_unbound.py
+# pfBlockerNG - Unbound python script for upstream-block detection while pfB-DNS hosts DNSBL
 #
 # part of pfSense (https://www.pfsense.org)
-# Licensed under the Apache License, Version 2.0, as pfb_unbound.py.
+# Licensed under the Apache License, Version 2.0, as the rest of the package.
 
 """Reports each RAW upstream response to the DNS proxy (issue #267); runs inside Unbound, changes nothing.
 
-In proxy mode pfb_unbound.py runs in the proxy, and Unbound rewrites every reply it sends: RA set, AA clear, the
+In proxy mode the gateway (pfb-dns) decides, and Unbound rewrites every reply it sends: RA set, AA clear, the
 upstream's EDNS options (Extended DNS Errors) dropped. Only a callback on the raw upstream response can tell an upstream
 block (NXRA, EDE 15/17) from an ordinary answer, so while the Resolver forwards Unbound runs this script as its python
-module. It relays the facts and nothing else; the proxy classifies and logs them with the module's own code.
+module. It relays the facts and nothing else; the proxy classifies and logs them with its own code.
 
 One JSON datagram per upstream response, at most MAX_REPORT_BYTES, sent to the Unix socket SOCKET:
     {"client": address, "qname": text, "qtype": number, "flags": wire header flags (RCODE in the low 4 bits),

@@ -530,7 +530,7 @@ $section->addInput(new Form_Checkbox(
 ))->setHelp('Log each DNS reply to the DNS Reply log (the client, the name asked, the reply type, TTL and answer, and the answer\'s country), '
 		. 'which fills <strong>Reports</strong> &gt; <strong>DNS Reply</strong>.'
 		. '<div class="infoblock">'
-		. 'This one setting applies to both DNS modes. With DNSBL enabled, the DNSBL Python module logs the replies that were not blocked. '
+		. 'This one setting applies to both DNS modes. With DNSBL enabled, the pfB-DNS gateway logs the replies that were not blocked. '
 		. 'With pfB-DNS enabled and DNSBL disabled, the pfB-DNS proxy logs every reply it forwards from the DNS Resolver, '
 		. 'without loading any DNSBL feed or module. '
 		. 'When <strong>DNS Reply Logging</strong> is disabled, no replies are logged.<br />'

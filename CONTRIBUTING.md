@@ -16,7 +16,7 @@ repo. This guide is the *how-to* (setup, subsystems, build, test, release); `AGE
   upstream source rather than guessing a workaround; confirm a genuinely ambiguous or
   architecturally significant choice before building.
 - **Code standards.** Naming follows the surrounding pattern; per-language rules (PHP tabs /
-  8.3; Python 4-space / 3.11+ / stdlib-only in `pfb_unbound.py`; POSIX `sh` with inline
+  8.3; Python 4-space / 3.11+ / stdlib-only in the shipped scripts; POSIX `sh` with inline
   `LC_ALL=C` on collation sinks).
 - **Test coverage (mandatory).** Cover every branch, assert before-and-after, no coverage
   theater — the suites and how to run them are below.
@@ -181,16 +181,6 @@ uv run pytest
 ```
 
 Test paths and options are configured in `pyproject.toml`; no `cd` is required.
-
-Optional **branch**-coverage report for the Unbound matcher (issue #38 — line
-coverage hides one-sided decision branches; this surfaces them):
-
-```sh
-uv run pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
-```
-
-`pytest-cov` is already in the `dev` group. The report is informational only — CI runs
-the same one (non-blocking), with no enforced floor.
 
 Type checking for the test suite (the `tests.*` mypy override requires full
 annotations):
@@ -447,7 +437,7 @@ for the package identity, signing, channel, and live-gate contracts.
 
 The smoke suite (ADR-04, `tests/smoke/`) boots a **real pfSense CE VM** under
 QEMU/KVM, installs the branch's freshly-built `.pkg`, and asserts pfBlockerNG's
-real behaviour end-to-end — the DNS path (Unbound + `pfb_unbound.py`, probed
+real behaviour end-to-end — the DNS path (Unbound + the pfB-DNS gateway, probed
 with `dig`/`dnspython`) and the IP path (`pfctl` alias tables + rules, over
 SSH). It is **dev-only**, marked `@pytest.mark.smoke`, and **deselected from the
 default `uv run pytest`** (`pyproject.toml` `addopts: --ignore=tests/smoke`),

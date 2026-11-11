@@ -1192,18 +1192,20 @@ def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
 
 
 def test_unbound_runs_the_upstream_observer_never_the_module_in_gateway_mode(gw: Gateway, gateway_on: State) -> None:
-    """The gateway does not change what Unbound loads: the observer while forwarding, never pfb_unbound.py.
+    """The gateway does not change what Unbound loads: the observer while forwarding, never the retired pfb_unbound.py.
 
     Given the Resolver forwards to the System DNS server and the gateway serves,
     Then unbound.conf's only `python-script` is `pfb_upstream_observer.py` (the module is in the chain) and
-      `pfb_unbound.py` is not named; the observer is staged in the chroot beside the shipped module.
+      `pfb_unbound.py` is not named and is not staged (#3791); the observer is staged in the chroot.
     """
     scripts = re.findall(r"^\s*python-script\s*:\s*(\S+)", gateway_on.conf, re.MULTILINE)
     assert scripts == [OBSERVER_SCRIPT], f"python-script lines: {scripts}\n{gateway_on.conf}"
     assert MODULE_LINE.search(gateway_on.conf), f"the python module is not in the module chain:\n{gateway_on.conf}"
     assert "pfb_unbound.py" not in gateway_on.conf, gateway_on.conf
-    staged = gw.vm.ssh(f"ls -l /var/unbound/{OBSERVER_SCRIPT} /var/unbound/pfb_unbound.py 2>&1").stdout
+    staged = gw.vm.ssh(f"ls -l /var/unbound/{OBSERVER_SCRIPT} 2>&1").stdout
     assert OBSERVER_SCRIPT in staged and "No such file" not in staged, f"staged files: {staged}"
+    retired = gw.vm.ssh("ls /var/unbound/pfb_unbound.py 2>&1").stdout
+    assert "No such file" in retired, f"the retired module is still staged: {retired}"
 
 
 def test_an_upstream_ede_block_is_logged_with_the_real_client_in_gateway_mode(

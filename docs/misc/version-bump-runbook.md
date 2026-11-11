@@ -19,7 +19,7 @@ Also regenerate (or hand-edit) when pfBlockerNG calls new un-stubbed pfSense fun
 
 ## ADR-08 IDN homoglyph analyzer — no UCD table to regenerate
 
-ADR-08 IDN homoglyph analyzer (inlined in `src/usr/local/pkg/pfblockerng/pfb_unbound.py`, backing **IDN Blocking → Confusable**) ships **no** Unicode data table: resolves each code point's script from **stdlib `unicodedata.name()`** leading token (`LATIN…`→Latin, `CJK…`→Han, …), so nothing regenerates on UCD bump. Reads runtime stdlib UCD (Python 3.11 ships 14.0.0, 3.12/3.13 15.1.0, 3.14 16.0.0); name tokens stable across those for scripts in scope. Corpus/oracle GOLDEN (`tests/fixtures/adr08_*`) pinned to UCD 15.1.0 and `tests/test_adr08_*` proves analyzer agrees with it across versions. Lives **in `pfb_unbound.py`** (not sibling module) so it rides existing chroot copy + `pkg-plist` entry — no new shipped file, no extra deploy wiring.
+ADR-08 IDN homoglyph analyzer (in `go/pfb_dns_gateway/decider/pfb_unbound_idn.go`, backing **IDN Blocking → Confusable**) ships **no** Unicode data table: reads each code point's category from Go's `unicode` tables and its script from the leading word of its `golang.org/x/text/unicode/runenames` name (`LATIN…`→Latin, `CJK…`→Han, …), so nothing regenerates on UCD bump; the Unicode version moves with the Go toolchain. Corpus/oracle GOLDEN (`tests/fixtures/adr08_*`) pinned to UCD 15.1.0 and `pfb_unbound_idn_test.go` (`TestAnalyzerMatchesCorpus`, `TestAnalyzerMatchesGoldenSingleLabel`) proves analyzer agrees with it and pins the rows where Go's tables differ from the Python reference. A Go toolchain bump: re-run `go test ./decider/`.
 
 ## When the minimum pfSense version changes
 

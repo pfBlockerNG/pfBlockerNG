@@ -554,8 +554,8 @@ final class LogTimestampBaselineTest extends TestCase
 		});
 		$this->assertSame([], $unexpected, 'expected no unrelated PHP warning from pfb_log_event(); got: ' . var_export($unexpected, true));
 
-		// Synthetic python-mode line mirrors tests/test_pfb_unbound_log_timestamp_baseline.py;
-		// Python's writer is exercised by that suite, while this test checks the shared log shape.
+		// Synthetic python-mode line; the Go writer's timestamp format is pinned by
+		// `TestTimestampIsLocalTimeInTheLogFormat` (go/pfb_dns_gateway/decider), while this test checks the shared log shape.
 		$pyLine = 'DNSBL-python,' . date('Y-m-d H:i:s', time())
 			. ',uuid-pyrow.example.com,203.0.113.79,Python,VIP,TestGroup,uuid-pyrow.example.com,TestFeed,+,A';
 		file_put_contents($dnslog, "{$pyLine}\n", FILE_APPEND | LOCK_EX);

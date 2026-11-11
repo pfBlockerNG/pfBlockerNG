@@ -21,8 +21,8 @@ IP logs self-sufficient for rendering complete table; render-time pass is freshn
 
 | Log | Writer | Attribution filled at event time |
 | --- | ------ | -------------------------------- |
-| `dnsbl.log` | `pfb_unbound.py` (`_log_dnsbl` path) | full verdict: block type, group, evaluated domain/zone, feed, query type, client transport, receiving IP and address-owner interface |
-| `dns_reply.log` | `pfb_unbound.py` | reply type/record, TTL, resolved address, GeoIP iso code, client transport, receiving IP and address-owner interface |
+| `dnsbl.log` | pfB-DNS gateway (decider) | full verdict: block type, group, evaluated domain/zone, feed, query type, client transport, receiving IP and address-owner interface |
+| `dns_reply.log` | pfB-DNS gateway (decider) | reply type/record, TTL, resolved address, GeoIP iso code, client transport, receiving IP and address-owner interface |
 | `ip_block/permit/match.log` | filterlog daemon (`pfb_daemon_filterlog`, `pfblockerng.inc`) | pf tracker → pfB rule/alias, matching feed + IP/CIDR entry (`find_reported_header()`), GeoIP (`mmdblookup`), rDNS, ASN (3 CSV columns, issue #1369 — see below) |
 | `unified.log` | filterlog daemon (sole writer, ADR-38 Amendments 1/4) | reformatted IP rows; byte-identical RFC4180 DNSBL and DNS-reply rows |
 

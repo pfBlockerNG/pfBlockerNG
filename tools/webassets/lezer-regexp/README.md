@@ -4,8 +4,9 @@ A [Lezer](https://lezer.codemirror.net/) grammar for Python 3.11 `re` regular ex
 
 ## What this is
 
-pfBlockerNG's DNSBL rule editor highlights Python-`re` patterns (the appliance's DNSBL
-engine, `pfb_unbound.py`, compiles rules with Python's `re` module). This package is the
+pfBlockerNG's DNSBL rule editor highlights Python-`re` patterns (the save-time validator
+`pfb_dnsbl_regex_rules.py` still speaks that dialect; the gateway's DNSBL engine compiles the same
+rules with Go's RE2). This package is the
 first step of replacing the Prism-based syntax overlay with CodeMirror 6 (issue #1669): a
 Lezer grammar that produces a highlightable parse tree for that dialect.
 

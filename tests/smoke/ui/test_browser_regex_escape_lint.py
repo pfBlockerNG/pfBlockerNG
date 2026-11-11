@@ -1,8 +1,8 @@
 """Tier-B browser tests (issues #1866, #1867, #1868): the regex editor's own view of them.
 
 The escape rule and the description-length rule are proven hermetically at the
-layers that implement them (``tests/test_issue1867_regex_hash_escape.py`` on the
-resolver's load path, ``DnsblRegexHashEscapeTest`` /
+layers that implement them (the ``escaped-hash`` row of ``TestLoadUserRegexEntriesMatchesPython``
+in go/pfb_dns_gateway/decider on the resolver's load path, ``DnsblRegexHashEscapeTest`` /
 ``DnsblRegexDescriptionLintTest`` on the validator and the lint endpoint). What
 those cannot show is that the admin actually SEES the result: the lint endpoint
 is reached over a real POST from a real editor, and its diagnostics land in the

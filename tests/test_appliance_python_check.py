@@ -177,9 +177,9 @@ def test_wrapper_invocation_is_not_flagged(tmp_path: Path) -> None:
 
 
 def test_unbound_embedded_loader_not_flagged(tmp_path: Path) -> None:
-    # pfb_unbound.py runs in Unbound's embedded loader (python-script:), not spawned via
+    # pfb_upstream_observer.py runs in Unbound's embedded loader (python-script:), not spawned via
     # the appliance python path — so referencing the module file is fine.
-    loader = '    conf = "python-script: /usr/local/pkg/pfblockerng/pfb_unbound.py"\n'
+    loader = '    conf = "python-script: /usr/local/pkg/pfblockerng/pfb_upstream_observer.py"\n'
     assert _find(tmp_path, loader) == [], "the embedded-loader module path must not be flagged"
 
 

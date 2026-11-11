@@ -65,7 +65,7 @@ rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" "${INFO_XML_TMP}
 
 echo "==> Files synced. Restarting services..."
 
-# Restart Unbound to reload pfb_unbound.py and the DNS blocklists
+# Restart Unbound to reload the DNS blocklists
 ssh "$SSH_TARGET" "pfSsh.php playback svc restart unbound"
 
 # Reload the pfSense package subsystem so PHP changes take effect

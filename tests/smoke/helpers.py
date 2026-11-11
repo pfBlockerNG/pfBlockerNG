@@ -214,7 +214,7 @@ class DnsblMode(str, Enum):
       ``RCODE_NXDOMAIN`` with no DNSMessage. (The ``nxdomain`` / no-logging
       variant '4' yields the IDENTICAL shape — only the dnsbl.log line differs,
       which this on-box DNS-shape probe cannot observe, so it is unit-pinned in
-      ``tests/test_pfb_unbound.py`` rather than duplicated here.)
+      ``TestEvaluateDomainOracleRows`` (go/pfb_dns_gateway/decider) rather than duplicated here.)
 
     Before issue #31, NXDOMAIN was only reachable via SafeSearch; it is now a
     selectable per-list DNSBL block response.
@@ -269,8 +269,8 @@ class DnsblCase:
                        len > REGEX_STATIC_LEN_CAP check), so it never enters a regex container
                        or the admitted count. A pattern outside the bounded admission
                        grammar or over its cost bound is dropped always-on via
-                       pfb_dnsbl_regex_rules.py:pfb_regex_admission (which
-                       pfb_unbound.py imports), independent of this flag.
+                       pfb_dnsbl_regex_rules.py:pfb_regex_admission (whose
+                       rules the gateway's regexrules package mirrors), independent of this flag.
       custom_domains -> the DNSBL Group "Custom_List" (the list's base64 'custom'
                        field). pfBlockerNG auto-generates a synthetic
                        '{aliasname}_custom' row from it (inc:7752) which the manifest
@@ -3443,8 +3443,8 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     if spec.regex_cap:
         # Opt-in length cap (inc:2685 -> ini regex_cap=on). Drops over-LENGTH feed AND
         # user regex at load. The admission gate is separate and ALWAYS on
-        # (pfb_dnsbl_regex_rules.py:pfb_regex_admission, imported by
-        # pfb_unbound.py), independent of this flag.
+        # (pfb_dnsbl_regex_rules.py:pfb_regex_admission, mirrored by
+        # the gateway's regexrules package), independent of this flag.
         settings["pfb_regex_cap"] = "on"
     if spec.cname_validation:
         # "CNAME Validation" (inc:852 -> ini python_cname). Walk a resolved answer's

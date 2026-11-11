@@ -1,5 +1,5 @@
 """pfb_dnsbl_regex_rules.py (issue #1765): single-source DNSBL regex admission
-rules, shared by pfb_unbound.py and the save-time probe.
+rules, run as the save-time probe and mirrored by the gateway's Go regexrules package.
 
 Covers what the PHP suite (tests/php/DnsblRegexEntryErrorTest.php, which drives
 the probe through pfb_dnsbl_regex_validation_errors()) cannot reach directly:
@@ -123,9 +123,9 @@ def test_main_ignores_a_warning_raised_while_compiling_an_admitted_pattern(
 
 
 def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
-    """The save-time probe and the resolver's load-time gate give one verdict per pattern.
+    """The save-time probe and a direct call of the admission gate give one verdict per pattern.
     ``main()`` is a separate caller of ``pfb_regex_admission`` (it adds the control-character
-    and opt-in length checks and the compile) while the resolver calls the gate directly.
+    and opt-in length checks and the compile) while the gate is also called directly.
 
     This pin is the admission axis only. Compile, length-cap and control-character rejects
     are covered by DnsblRegexEntryErrorTest (PHP probe) and are skipped here.
@@ -181,11 +181,11 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
 
 def test_probe_and_resolver_both_reject_an_adjacent_quantifier_run() -> None:
     """issue #2035: a run of ungrouped adjacent quantified atoms must be refused by BOTH
-    consumers -- the save-time probe and the resolver's load-time gate.
+    callers -- the save-time probe's ``main()`` and the admission gate called directly.
 
     The rule lives in the one shared module, so this drives both surfaces the way they are
     really used: ``main()`` through a subprocess (what pfb_dnsbl_regex_validation_errors()
-    runs) and the gate (what pfb_unbound.py imports).
+    runs) and the gate (what the module's importers call).
     """
     from pfb_dnsbl_regex_rules import pfb_regex_admission
 

@@ -387,18 +387,22 @@ aliastables() {
 # DNSBL python-integration cache (#468). On a RAM-disk /var (use_mfs_tmpvar) the chroot is
 # wiped on reboot, so DNSBL comes up dead; this keeps it alive across reboot with PURE FILE
 # OPS (no reload/restart), kept SEPARATE from the IP aliastables flow above (different
-# lifecycles). stage = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot
-# (during the DNSBL pass and restore, never during save); teardown = remove the SHIPPED set;
-# save = archive the GENERATED set plus exact TOP1M detector sidecars, with the caller holding
-# the publication lock; restore = boot earlyshellcmd, untar
-# the cached files THEN stage. Naming contract: a new generated file MUST keep the
-# pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED (the port's plist
-# is GENERATED from the stagedir, so packaging needs nothing) -- dnsbl_psl rides
-# PFB_PY_SHIPPED with the same source/chroot basename like every other entry; no
-# NAME-MAPPED shipped file (source basename != chroot basename) remains (issue #1541
-# retired the last one, dnsbl_tld). Order matters: a module goes
-# BEFORE the file that imports it, so a
-# load racing the staging loop never sees the importer without its dependency.
+# lifecycles).
+#   stage    = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot and drop the
+#              RETIRED set (PFB_PY_RETIRED: files an older package staged that nothing reads any more)
+#              and __pycache__, keeping the module while unbound.conf still names it (dnsbl_cache_keeps);
+#              runs during the DNSBL pass and on restore, never during save
+#   teardown = remove both sets, keeping the module the same way
+#   save     = archive the GENERATED set plus exact TOP1M detector sidecars, with the caller holding
+#              the publication lock; the shipped and retired sets stay out
+#   restore  = boot earlyshellcmd: untar the cached files THEN stage
+# Naming contract: a new generated file MUST keep the pfb_unbound*/pfb_py_* prefix; a new shipped
+# file goes in PFB_PY_SHIPPED (the port's plist is GENERATED from the stagedir, so packaging needs
+# nothing) -- dnsbl_psl rides PFB_PY_SHIPPED with the same source/chroot basename like every other
+# entry; no NAME-MAPPED shipped file (source basename != chroot basename) remains (issue #1541
+# retired the last one, dnsbl_tld). A file that stops being read from the chroot moves to
+# PFB_PY_RETIRED, so the next stage clears the copy an upgraded box still holds (the module only
+# once unbound.conf stops naming it).
 dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
@@ -407,8 +411,27 @@ dnsbl_cache() {
 	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar}"
 	pathtar="${pathtar:-/usr/bin/tar}"
 
-	# The shipped (static) DNSBL Python files + their launcher -- the ONE definition of the set.
-	PFB_PY_SHIPPED='dnsbl_psl pfb_dnsbl_regex_rules.py pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt pfb_python.sh pfb_upstream_observer.py pfb_upstream_observer_include.inc'
+	# The shipped (static) files the chroot reads: the PSL authority, the HSTS list, the observer and the mount hook.
+	PFB_PY_SHIPPED='dnsbl_psl pfb_unbound_include.inc pfb_py_hsts.txt pfb_upstream_observer.py pfb_upstream_observer_include.inc'
+	# Files an older package staged into the chroot that nothing reads any more (#3791): the module and its code
+	# fingerprint (pfb_py_module.applied, which the pfb_py_* archive glob would restore on every RAM-disk reboot), and
+	# the regex rules and launcher that only the module used from there (the save-time probe and every other consumer
+	# run the /usr/local copies).
+	PFB_PY_RETIRED='pfb_unbound.py pfb_py_module.applied pfb_dnsbl_regex_rules.py pfb_python.sh'
+
+	# Whether a retired file stays: the module and the rules it imports, while the chroot's unbound.conf still names
+	# pfb_unbound.py (an upgrade whose removal of Unbound's python settings config.xml refused). pfBlockerNG restarts
+	# Unbound from that conf, and a python-script that is missing fails the start, so DNS is down (#3838). Asked for
+	# each file at the point of deletion.
+	dnsbl_cache_keeps() {
+		case "${1}" in
+			pfb_unbound.py|pfb_dnsbl_regex_rules.py) ;;
+			*) return 1 ;;
+		esac
+		grep -qs 'python-script:[[:space:]]*pfb_unbound\.py' "${pfbchroot}/unbound.conf" || return 1
+		echo "dnsbl_cache: keeping ${1}: Unbound loads pfb_unbound.py and unbound.conf still names it" >&2
+		return 0 # kept whether or not the reason could be written
+	}
 
 	dnsbl_cache_stage() {
 		mkdir -p "${pfbchroot}"
@@ -417,6 +440,12 @@ dnsbl_cache() {
 		for _d in lib dev var/log/pfblockerng usr/local/share/GeoIP; do
 			mkdir -p "${pfbchroot}/${_d}"
 		done
+		for _f in ${PFB_PY_RETIRED}; do
+			dnsbl_cache_keeps "${_f}" && continue
+			rm -f "${pfbchroot}/${_f}"
+		done
+		# Python's bytecode cache of the retired modules; nothing in the chroot imports any more.
+		rm -rf "${pfbchroot}/__pycache__"
 		# Copy the shipped files from /usr/local into the chroot (current code). A file that is not in the package
 		# directory itself is the DNS proxy's (dns_proxy/, e.g. pfb_upstream_observer.py): it lands flat in the chroot.
 		for _f in ${PFB_PY_SHIPPED}; do
@@ -429,7 +458,8 @@ dnsbl_cache() {
 		done
 	}
 	dnsbl_cache_teardown() {
-		for _f in ${PFB_PY_SHIPPED}; do
+		for _f in ${PFB_PY_SHIPPED} ${PFB_PY_RETIRED}; do
+			dnsbl_cache_keeps "${_f}" && continue
 			rm -f "${pfbchroot}/${_f}"
 		done
 	}
@@ -443,7 +473,7 @@ dnsbl_cache() {
 			;;
 		save)
 			# Archive the generated chroot set plus exact TOP1M detector sidecars,
-			# EXCLUDING shipped files (PFB_PY_SHIPPED) -- those are re-staged from
+			# EXCLUDING shipped and retired files (PFB_PY_SHIPPED, PFB_PY_RETIRED) -- those are re-staged from
 			# /usr/local on restore, so archiving them would reinstate stale code (e.g.
 			# pfb_py_hsts.txt matches the pfb_py_* glob but is shipped, not generated).
 			set --
@@ -453,7 +483,7 @@ dnsbl_cache() {
 				case "${_g}" in
 					"${pfbchroot}"/pfb_py_raw.stage.*|"${pfbchroot}"/pfb_py_sources.lock) _skip=1 ;;
 				esac
-				for _s in ${PFB_PY_SHIPPED}; do
+				for _s in ${PFB_PY_SHIPPED} ${PFB_PY_RETIRED}; do
 					[ "${_g}" = "${pfbchroot}/${_s}" ] && _skip=1 && break
 				done
 				[ -z "${_skip}" ] && set -- "$@" "${_g}"
@@ -1690,10 +1720,10 @@ pfb_count_table() {
 # ADR-06: dnsbl_scrub (build-time within/cross-feed De-Duplication + user-
 # whitelist removal + TOP1M removal) and domaintldpy (sort -u dedup + subdomain
 # COLLAPSE via ggrep -vF dnsbl_tld_remove + pfb_py_count write) have been REMOVED.
-# They were build-time list optimisations the Python plugin no longer needs: the
+# They were build-time list optimisations the gateway's decider no longer needs: the
 # dict load dedups keys for free, a redundant sub-domain is matched by its parent
 # zone, and the user whitelist + TOP1M are applied at QUERY TIME via the whiteDB.
-# The Python build (pfb_unbound.py) owns this and emits pfb_py_count itself; PHP
+# The pfB-DNS gateway's DNSBL build owns this and emits pfb_py_count itself; PHP
 # hands it the per-feed raw via pfblockerng.inc pfb_unbound_python_sources().
 
 
@@ -2641,7 +2671,7 @@ case "${1}" in
 	dnsbl-control)
 		# PFBL-03: root-only DNSBL-control CLI. Forwards the operator's command to the
 		# PHP writer, which validates it and writes it to the local privileged command
-		# channel consumed by pfb_unbound.py. The arguments ride as their own positional
+		# channel consumed by the pfB-DNS gateway. The arguments ride as their own positional
 		# parameters (no URL/shell interpolation); the writer re-validates each.
 		# Usage: pfblockerng dnsbl-control disable [sec] | enable |
 		#        addbypass <ip> [sec] | removebypass <ip>

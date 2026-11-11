@@ -2,7 +2,7 @@
 
 Scope: maintain vendored `pfb_py_hsts.txt` HSTS exclusion list. Load when: refreshing or auditing HSTS preload snapshot.
 
-`src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt` = flat one-name-per-line HSTS exclusion oracle. `_load_hsts_db()` (pfb_unbound.py) keys resolved domains against it: blocked domain on list resolves real (HSTS bypass) instead of null-blocked. Parent-suffix walk over loaded set means listing domain also covers subdomains, so `include_subdomains` moot for this consumer. This note = how to keep current. Sibling of [`public-suffix-list.md`](public-suffix-list.md) (issue #1303).
+`src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt` = flat one-name-per-line HSTS exclusion oracle. The gateway's HSTS loader (`decider/pfb_unbound_operate.go`) keys resolved domains against it: blocked domain on list resolves real (HSTS bypass) instead of null-blocked. Parent-suffix walk over loaded set means listing domain also covers subdomains, so `include_subdomains` moot for this consumer. This note = how to keep current. Sibling of [`public-suffix-list.md`](public-suffix-list.md) (issue #1303).
 
 ## Sources
 

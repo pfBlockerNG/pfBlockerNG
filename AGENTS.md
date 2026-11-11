@@ -98,7 +98,7 @@ Graphify routing; per-worktree `.codegraph/` invariants).
 | legacy ADR corpus (acceptance, amendments) | `.agents/policy/legacy-adr-flow.md` |
 | config fields / `PfbConfig` | `docs/misc/config-gateway.md` |
 | process spawn / `timeout(1)` / daemon waits | `docs/misc/external-process-waits.md` |
-| `pfb_unbound.py`, manifest, swap/watcher | `docs/misc/architecture-notes.md` "DNSBL/ABP pipeline" |
+| Go decider (`go/pfb_dns_gateway/decider/`), manifest, swap/watcher | `docs/misc/architecture-notes.md` "DNSBL/ABP pipeline" |
 | `pfb_update_check` / `pfb_download` | architecture-notes "Change detection / content hashing" (ADR-42) |
 | IP alias tables / reload path | architecture-notes ADR-40; scheduling/cron → ADR-43; Uber aliases → ADR-11 |
 | `www/` UI | architecture-notes "Web UI test tiers" + `lang-php.md`; Alerts/Reports pages → `docs/misc/alerts-reports-pipeline.md` |
@@ -120,7 +120,7 @@ front-end tests · tests document intent.
 pfBlockerNG/
 ├── src/                   # Production code — mirrors the pfSense filesystem; releases ship ONLY src/
 │   └── usr/local/
-│       ├── pkg/pfblockerng/   # pfblockerng.inc/.sh, pfb_unbound.py, list_scripts/, installers
+│       ├── pkg/pfblockerng/   # pfblockerng.inc/.sh, list_scripts/, installers
 │       ├── share/             # info.xml
 │       └── www/               # Web UI (PHP pages, JS, widgets, wizards)
 ├── tests/                 # pytest; php/ (PHPUnit); smoke/ (+ui/); phpcs/; shell/; js/

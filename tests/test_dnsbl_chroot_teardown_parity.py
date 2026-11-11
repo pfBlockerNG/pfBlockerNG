@@ -44,18 +44,31 @@ def test_teardown_derivation_includes_the_psl_authority() -> None:
     assert '"${pfbchroot}/pfb_py_tld.txt"' not in source
 
 
-def test_an_imported_module_is_staged_before_the_file_that_imports_it() -> None:
-    """`pfb_unbound.py` imports `pfb_dnsbl_regex_rules` at module scope and
-    `dnsbl_cache_stage()` copies `PFB_PY_SHIPPED` in list order, so the dependency has
-    to be staged first: a resolver load landing between the two copies would otherwise
-    find the importer without its module and die with `ModuleNotFoundError`."""
+RETIRED_CHROOT_FILES = [
+    "pfb_unbound.py",
+    "pfb_py_module.applied",
+    "pfb_dnsbl_regex_rules.py",
+    "pfb_python.sh",
+]
+
+
+def test_the_retired_chroot_files_are_cleaned_and_no_longer_staged() -> None:
+    """#3791: `pfb_unbound.py` left the package and took with it its only chroot consumers' reasons to exist:
+    its code fingerprint (`pfb_py_module.applied`), the regex rules it imported and the wrapper that launched it.
+    The save-time probe and every other consumer run the host copies from `/usr/local`. An upgraded box still has
+    the old chroot copies (and the fingerprint matches the `pfb_py_*` archive glob), which `dnsbl_cache stage` and
+    `teardown` remove through `PFB_PY_RETIRED`."""
+    source = SHELL.read_text()
+    match = re.search(r"^\s*PFB_PY_RETIRED='([^']*)'", source, re.MULTILINE)
+    assert match is not None, "PFB_PY_RETIRED assignment not found in pfblockerng.sh"
+    assert match.group(1).split() == RETIRED_CHROOT_FILES
     shipped = _shipped_files()
-    assert shipped.index("pfb_dnsbl_regex_rules.py") < shipped.index("pfb_unbound.py"), shipped
+    assert not set(RETIRED_CHROOT_FILES) & set(shipped), shipped
 
 
 def test_the_shipped_set_actually_reaches_the_parity_check() -> None:
     """Guard against the check above passing vacuously: the shipped set must be
-    non-trivial and must really contain the resolver's own entry point."""
+    non-trivial and must really contain the upstream observer, the one script Unbound still loads."""
     shipped = _shipped_files()
-    assert "pfb_unbound.py" in shipped
+    assert "pfb_upstream_observer.py" in shipped
     assert len(shipped) >= 3, shipped

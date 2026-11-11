@@ -30,19 +30,13 @@
   // Pylance: standard mode surfaces common type errors; flip to "basic" if noisy.
   "python.analysis.typeCheckingMode": "standard",
   // Resolve imports that are not installed as packages:
-  //  - stubs/python      holds unboundmodule.py, the dev/test stand-in for the
-  //    symbols Unbound injects into pfb_unbound.py at runtime.
-  //  - the pfblockerng pkg dir lets the tests' `import pfb_unbound` resolve.
+  //  - stubs/python      holds unboundmodule.py, the type-checking stand-in for the
+  //    symbols Unbound injects into pfb_upstream_observer.py at runtime.
+  //  - the pfblockerng pkg dir lets the tests' `import pfb_dnsbl_regex_rules` resolve.
   "python.analysis.extraPaths": [
     "stubs/python",
     "src/usr/local/pkg/pfblockerng"
   ],
-  // maxminddb is resolved via stubs/python/maxminddb.pyi; the actual module is
-  // provided by pfSense's py-maxminddb at runtime and is not installed in the
-  // dev environment, so suppress the (expected) "missing source" notice.
-  "python.analysis.diagnosticSeverityOverrides": {
-    "reportMissingModuleSource": "none"
-  },
 
   // ── Shell ─────────────────────────────────────────────────────────────────
   // ShellCheck auto-detects the shell dialect from each file's shebang line

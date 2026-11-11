@@ -2,7 +2,7 @@ name: Smoke (single leg, live pfSense VM)
 
 # End-to-end smoke harness (ADR-04): boot a real pfSense CE VM under KVM,
 # install the branch-under-test .pkg, and run the `pytest -m smoke` matrix
-# (tests/smoke/) against the live box — the real Unbound + pfb_unbound.py DNS
+# (tests/smoke/) against the live box — the real Unbound + pfB-DNS gateway DNS
 # path and the real pfctl IP path, asserted over SSH/dig, hermetic (egress
 # blocked). This REPLACES the Phase-1 shell round-trip spike (smoke-spike.yml,
 # retired): same scaffolding (build-pkg job, GHCR image pull+cache, KVM-perms

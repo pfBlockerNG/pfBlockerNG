@@ -4,7 +4,7 @@
 src/usr/local/pkg/pfblockerng/dnsbl_psl is the SOLE shipped PSL artifact (issue
 #1541): a self-describing authority carrying both the ICANN and PRIVATE
 sections, with exact, wildcard ('*.') and exception ('!') rule syntax intact.
-It is consumed by the pure PSL resolver (pfb_unbound.py's parse_psl_rules) to
+It is consumed by the pure PSL resolver (parsePslRules in the gateway's decider) to
 derive each domain's registrable parent for DNSBL Wildcard Blocking. This
 script refreshes it from the authoritative upstream source.
 

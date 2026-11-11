@@ -52,8 +52,8 @@ from .test_smoke_matrix import _header_counts, _raw_dig, _raw_drill
 from .test_smoke_matrix import deployed_vm as deployed_vm
 
 # xn--pple-43d = "аpple" (Latin+Cyrillic homograph) — the SAME fixed fixture
-# domain test_pfb_unbound.py's TestBuiltinLogFlagCoverageMatrix::test_confusable_idn_block
-# and test_adr08_confusable_matcher.py's MALICIOUS_NAME use. Not unique-able like
+# domain the Go decider's TestEvaluateDomainIdnArms (go/pfb_dns_gateway/decider)
+# and TestConfusableActionMatchesOracle use. Not unique-able like
 # unique_domain(): the Confusable analyzer needs this specific mixed-script shape
 # to classify as malicious, a random uuid label would not. Safe under the two
 # smoke.md domain rules regardless: '.com' is not an RFC 6761 reserved TLD, and

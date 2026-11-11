@@ -1430,6 +1430,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 		// Given Unbound loading a script and the Resolver back on its own interfaces; the removal pass runs with no DNSBL mode
 		$this->seedStoredPython($script);
 		$this->writeUnboundConf($conf);
+		touch("{$this->tmp}/{$script}.py"); // the script is in the chroot, as staged
 
 		// Before: when config.xml took the removal of the python settings, the pass takes the script out of unbound.conf
 		$GLOBALS['pfb']['python_removal_failed'] = FALSE;
@@ -1445,6 +1446,25 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertFalse($changed, 'unbound.conf is left as it is');
 		$this->assertSame('', $this->patchedConf(), 'no patched copy is written');
 		$this->assertStringContainsString($line, (string) file_get_contents("{$this->tmp}/unbound.conf"), 'it still loads the script');
+	}
+
+	public function testARefusedRemovalDoesNotKeepInUnboundConfAScriptThatIsGoneFromTheChroot(): void
+	{
+		// Given config.xml still naming the DNSBL module after a refused removal and unbound.conf loading it, with the script gone from
+		// the chroot (a RAM-disk reboot: no package stages pfb_unbound.py any more)
+		$this->seedStoredPython('pfb_unbound');
+		$this->writeUnboundConf(self::CONF_WITH_MODULE);
+		$GLOBALS['pfb']['python_removal_failed'] = TRUE;
+		$this->assertFileDoesNotExist("{$this->tmp}/pfb_unbound.py", 'before: the script is not in the chroot');
+
+		// When the pass patches unbound.conf
+		$changed = pfb_unbound_dnsbl('');
+
+		// Then the script is patched out: Unbound does not start from a conf whose python-script is missing, and DNS would be down
+		$this->assertTrue($changed, 'unbound.conf is patched');
+		$this->assertStringNotContainsString('python-script', $this->patchedConf());
+		$this->assertStringNotContainsString('module-config: "python', $this->patchedConf());
+		$this->assertStringContainsString('module-config: "validator iterator"', $this->patchedConf(), 'the rest of the conf stays');
 	}
 
 	public function testAFailedRemovalDoesNotKeepAScriptThatIsNotOurs(): void

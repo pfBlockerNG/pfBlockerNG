@@ -129,7 +129,7 @@ if (isset($argv[1])) {
 		exit;
 	}
 	// PFBL-03: root-only DNSBL-control entrypoint. Writes a validated command to the
-	// local privileged command channel consumed by pfb_unbound.py.
+	// local privileged command channel consumed by the pfB-DNS gateway.
 	// Usage: pfblockerng.php dnsbl-control <disable [sec] | enable |
 	//        addbypass <ip> [sec] | removebypass <ip>>
 	// The writer (pfb_unbound_py_write_control) re-validates the command + argument and

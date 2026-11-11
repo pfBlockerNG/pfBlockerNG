@@ -34,13 +34,13 @@ files named by the manifest's `feeds[].raw` rows from
 
 - **Not a loop-level oracle.** The DNSBL download loop
   (`sync_package_pfblockerng()`) has no off-appliance driver; this corpus pins the
-  **manifest-writer** (`pfb_unbound_python_sources()`) and **Python build** (`build()`/
-  `parse()`/`parse_abp()`) surfaces downstream of it, plus the **TLD-Wildcard
-  classification** pass (fixtures under `tld/`, consumed Python-side -- ADR-65 moved
-  classification out of PHP's `tld_analysis()` entirely). The loop's own raw-feed ->
-  `.txt` transform is verified live (deferred smoke rows, listed in the Phase-1 handoff).
+  **manifest-writer** (`pfb_unbound_python_sources()`) and **Go build** (`dnsblBuildFromManifest`
+  with `parseEntry`/`parseAbp` in `go/pfb_dns_gateway/decider`) surfaces downstream of
+  it, plus the **TLD-Wildcard classification** pass (`tld/tld_master.txt`, read by the Go
+  oracle generator -- ADR-65 moved classification out of PHP's `tld_analysis()` entirely). The
+  loop's own raw-feed -> `.txt` transform is verified live (deferred smoke rows, listed in the
+  Phase-1 handoff).
 - **Not shipped.** `tests/` is dev-only; release archives contain `src/` only.
 
-Consumed by `tests/php/Adr62DnsblCorpusManifestTest.php`,
-`tests/test_issue1083_dnsbl_interchange_semantic_oracle.py`, and
-`tests/test_adr62_byte_identity_corpus.py`.
+Consumed by `tests/php/Adr62DnsblCorpusManifestTest.php` and by the Go build tests in
+`go/pfb_dns_gateway/decider` (`bldStageCorpus`, `TestFixtureManifestV1BuildsAndConfigAffectsResult`).

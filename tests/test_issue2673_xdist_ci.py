@@ -68,10 +68,8 @@ def test_slow_tests_jobs_pin_timeout_minutes() -> None:
         assert int(hit.group(1)) == minutes, f"{name}: {hit.group(1)} != {minutes}"
 
 
-def test_informational_cov_is_still_a_second_pytest_run() -> None:
+def test_pytest_junit_run_is_the_only_pytest_run_and_no_coverage_run_targets_a_removed_module() -> None:
     text = TEST_YML.read_text(encoding="utf-8")
     junit = "uv run pytest --junitxml=/tmp/pytest-junit.xml"
-    cov = "uv run pytest --cov=pfb_unbound --cov-branch"
     assert text.count(junit) == 1
-    assert text.count(cov) == 1
-    assert text.index(junit) < text.index(cov)
+    assert "--cov=pfb_unbound" not in text

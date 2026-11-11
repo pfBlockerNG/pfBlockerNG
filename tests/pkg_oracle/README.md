@@ -11,7 +11,7 @@ DEINSTALL step and the shipped hook is real:
 | package manager | FreeBSD `pkg` 2.1.0 built from source (`PINS`), `pkg delete`, real `+DEINSTALL` / `+POST-DEINSTALL` scripts |
 | pfSense core | `delete_package_xml()`, `start_service()`, `stop_service()`, `write_rcfile()`, `isvalidpid()`, `parse_xml_config_pkg()` extracted **by name from the real files** at the pinned commits (`core.php`) |
 | package | the repo's `pfblockerng.inc` and the shipped `pfblockerng.xml` hook text, evaluated by core's `eval_once()` |
-| DNS | real Unbound, the real DNS proxy hosting the real `pfb_unbound.py` (module mode: a listed name is answered with the DNSBL VIP) |
+| DNS | real Unbound, the real pfB-DNS gateway (module mode: a listed name is answered with the DNSBL VIP) |
 | locks / config | real `flock`-based `try_lock()`; a file-backed config.xml written whole by `write_config()` |
 
 Stand-ins (listed in `core.php`): `update_status`, `logger`, `gettext`, `init_config_arr` and `platform_booting` (RELENG_2_7_2

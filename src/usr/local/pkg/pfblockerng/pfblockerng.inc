@@ -316,11 +316,11 @@ $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
 $pfb['unbound_py_psl']	= '/var/unbound/dnsbl_psl';	// SHIPPED PSL authority, staged/fingerprinted exactly like unbound_py_hsts above
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
-$pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted admitted feed+user regex total for the DNSBL_Regex alias
-$pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
-$pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
+$pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: gateway-emitted admitted feed+user regex total for the DNSBL_Regex alias
+$pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: gateway-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
+$pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by the pfB-DNS gateway's DNSBL build
 $pfb['unbound_py_vip']	= '/var/unbound/pfb_py_vip';		// issue #3539: '1' or '0' -- whether the published manifest's generation answers with the VIP
-$pfb['unbound_py_top1m']= '/var/unbound/pfb_py_top1m.txt';	// issue #1542: fixed TOP1M sidecar consumed by pfb_unbound.py
+$pfb['unbound_py_top1m']= '/var/unbound/pfb_py_top1m.txt';	// issue #1542: fixed TOP1M sidecar consumed by the pfB-DNS gateway
 $pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// #1357: basename for immutable per-feed raw generations
 
 $pfb['dnsbl_safesearch']		= '/usr/local/pkg/pfblockerng/pfb_dnsbl.safesearch.conf';
@@ -4479,11 +4479,6 @@ function pfb_dnsbl_service() {
 		# package install/upgrade) and hold it open, freezing the upgrade page's live log.
 		# Redirect so the daemon never holds an inherited descriptor.
 		/usr/local/sbin/lighttpd_pfb -f /var/unbound/pfb_dnsbl_lighty.conf >/dev/null 2>&1 </dev/null
-	fi
-
-	# Warn if the DNSBL python script is missing
-	if [ ! -e '/var/unbound/pfb_unbound.py' ]; then
-		/usr/bin/logger -p daemon.err -t php_pfb "ERROR [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL missing python script - forced reload required"
 	fi
 
 EOF;
@@ -13675,7 +13670,7 @@ function pfb_create_dnsbl($mode) {
 
 // Resolve a SafeSearch CNAME target (e.g. safe.duckduckgo.com) to its current A/AAAA via the
 // configured external DNS server — the baked-fallback IPs in the SafeSearch CSV (issue #149);
-// pfb_unbound.py uses them only when the live CNAME chase fails. Returns array($v4, $v6), each
+// the pfB-DNS gateway uses them only when the live CNAME chase fails. Returns array($v4, $v6), each
 // '' when unresolved. PFBL-01: $target is built into an exec() command line (escapeshellarg()
 // handles quoting) and must ALSO validate as a domain via pfb_filter(PFB_FILTER_DOMAIN) first —
 // semantic validation and shell quoting are distinct layers. A rejected value returns array('',
@@ -13819,7 +13814,7 @@ function pfb_ss_doh_list_yandex_migrate($stored) {
 
 // SafeSearch CNAME fallback freshness (issue #149). Light cron task: re-resolve each
 // CNAME target in the SafeSearch CSV and refresh its baked #2-fallback IPs in place.
-// On change, rewrite the CSV and touch the reload sentinel so pfb_unbound.py picks up
+// On change, rewrite the CSV and touch the reload sentinel so the pfB-DNS gateway picks up
 // the new IPs without a full DNSBL rebuild. No-op when the CSV or its CNAME rows are
 // absent (or nothing changed). Pure row transform lives in pfb_ss_refresh_lines().
 function pfblockerng_ss_refresh() {
@@ -13862,9 +13857,12 @@ function pfb_unbound_dnsbl($mode) {
 	// nothing. pfb_unbound_python() decides the same way.
 	$owned = pfb_dns_proxy_owns_resolver();
 	$script = $owned ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL;
-	// config.xml still names our script when its removal was refused (pfb_unbound_python()): unbound.conf and the staged files keep it
+	// config.xml still names our script when its removal was refused (pfb_unbound_python()): unbound.conf and the staged files keep it,
+	// while the script is in the chroot. Unbound does not start from a conf whose python-script is missing (a RAM-disk reboot loses
+	// pfb_unbound.py, which no package stages any more), and pfSense leaves such a script out of the conf it generates too.
 	$stored = config_get_path('unbound/python_script', '');
-	if ($script === NULL && !empty($pfb['python_removal_failed']) && in_array($stored, ['pfb_unbound', PFB_DNS_PROXY_OBSERVER], TRUE)) {
+	if ($script === NULL && !empty($pfb['python_removal_failed']) && in_array($stored, ['pfb_unbound', PFB_DNS_PROXY_OBSERVER], TRUE) &&
+	    file_exists("{$pfb['dnsbldir']}/{$stored}.py")) {
 		$script = "{$stored}.py";
 	}
 
@@ -13932,7 +13930,7 @@ function pfb_unbound_dnsbl($mode) {
 
 			elseif (strpos($line, 'pfb_dnsbl.*conf') !== FALSE) {
 				// Orphaned native SafeSearch CNAME include (issue #149) -- always drop;
-				// the CNAME redirect is now done by pfb_unbound.py.
+				// the CNAME redirect is now done by the pfB-DNS gateway.
 				$u_update = TRUE;
 				$u_msg .= "  Removed orphaned DNSBL SafeSearch CNAME include\n";
 				unset($conf[$key]);
@@ -13940,7 +13938,7 @@ function pfb_unbound_dnsbl($mode) {
 
 			elseif (strpos($line, 'module-config:') !== FALSE) {
 				if ($script !== NULL) {
-					// Ensure the python module is loaded. The pfb_unbound.py script
+					// Ensure the python module is loaded. The python-script
 					// block is tracked separately ($unbound_py_script) and ensured
 					// after the loop, so do NOT infer its presence from this line.
 					if (strpos($line, 'module-config: "python') === FALSE) {
@@ -14050,7 +14048,7 @@ function pfb_unbound_python_whitelist($mode='') {
 }
 
 
-// ADR-06: Collect the user DNSBL whitelist as normalised source lines for the Python build
+// ADR-06: Collect the user DNSBL whitelist as normalised source lines for the gateway's build
 // manifest (config.user_whitelist); pfb_text_area_decode() below already lower-cases, strips
 // '#' comments and punycodes IDN. Python does the www-strip/leading-dot->wildcard
 // normalisation, trailing-dot handling and the domain-shape gate, and re-normalises as a
@@ -14081,7 +14079,7 @@ function pfb_dnsbl_whitelist_lines() {
 }
 
 // ADR-06 (#51): collect the TEMPORARY per-alert DNSBL unlock store ($pfb['dnsbl_unlock'], CSV
-// "domain,type" rows toggled by the alerts Lock/Unlock icon) as domains for the Python build
+// "domain,type" rows toggled by the alerts Lock/Unlock icon) as domains for the gateway's build
 // manifest (config.user_unlock), merged into whiteDB as band-6 user allows. Deliberately
 // temporary: lives in /tmp, deleted by a full update/Force/Cron, so a FULL build emits an EMPTY
 // user_unlock and re-locks every unlock (documented in the alerts icon tooltip); only the
@@ -14441,7 +14439,7 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 // actually dials. Returns NULL when $host is not numeric-shaped (last label neither all digits nor
 // 0x-hex, or any ':' -- IPv6 is not an IPv4 spelling), array('ip' => 'a.b.c.d') when valid, and
 // array('ip' => NULL) when numeric-shaped but invalid (bad digit, overflow, over four parts, '5.8.67.' prefix).
-// Canonical dotted quads return themselves. Twin: pfb_unbound.py _dnsbl_is_numeric_host();
+// Canonical dotted quads return themselves. Twin: the gateway's dnsblIsNumericHost();
 // shared table tests/fixtures/ipv4_numeric_host.json.
 function pfb_ipv4_numeric_host(string $host): ?array {
 	if (str_contains($host, ':')) {
@@ -15426,7 +15424,7 @@ function pfb_unbound_py_atomic_write_root($path, $content) {
 // PFBL-03: root-only DNSBL-control writer. Validates command + argument (bypass IP via
 // PFB_FILTER_IP, duration via PFB_FILTER_NUM clamped 1-3600), assembles a JSON record with a
 // monotonically-advancing SEQUENCE, and atomically publishes to the privileged command channel
-// (root:unbound 0640, pfb_unbound_py_atomic_write_root). pfb_unbound.py's control-watcher
+// (root:unbound 0640, pfb_unbound_py_atomic_write_root). The gateway's control watcher
 // consumes a record only when its seq advances and re-validates every argument itself — writer
 // + reader form a dual-validation boundary. $cmd: disable|enable|addbypass|removebypass; $ip
 // required for add/removebypass; $duration optional 1-3600s. Returns the published sequence
@@ -15539,12 +15537,12 @@ function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '', $wait_time
 function pfb_unbound_py_swap_fits_ram() {
 	global $pfb;
 
-	// Bytes-per-entry + headroom mirror pfb_unbound.py RELOAD_BYTES_PER_ENTRY (276) and
+	// Bytes-per-entry + headroom mirror the gateway's RELOAD_BYTES_PER_ENTRY (276) and
 	// RELOAD_RAM_HEADROOM_BYTES (64 MiB). Keep the two ends of this contract in step.
 	$bytes_per_entry = 276;
 	$headroom	 = 64 * 1024 * 1024;
 
-	// Loaded entry count = the live snapshot size the Python build emits (data+zone).
+	// Loaded entry count = the live snapshot size the gateway's build emits (data+zone).
 	$loaded = @file_get_contents($pfb['unbound_py_count']);
 	if ($loaded === FALSE) {
 		return FALSE;
@@ -15589,10 +15587,10 @@ function pfb_sanitise_feed_header(string $header, string $reference = 'pfb_sanit
 
 // ADR-31: Build a single per-feed manifest row for $pfb_py_feeds[], parameterised by $mode so
 // DNSWL feeds can reuse the same structure as DNSBL. $mode = 'deny' omits the 'mode' key
-// (byte-identical with pre-ADR-31 entries; Python treats absent as deny); $mode = 'permit' adds
+// (byte-identical with pre-ADR-31 entries; the gateway treats absent as deny); $mode = 'permit' adds
 // 'mode' => 'permit'. $filter_top1m is the Group's stored 'filter_top1m' ("TOP1M Whitelist")
-// value: ticked adds 'top1m' => TRUE, so pfb_unbound.py lets TOP1M filter this feed (issue
-// #3648); anything else omits the key (byte-identical with pre-#3648 entries; Python treats
+// value: ticked adds 'top1m' => TRUE, so the gateway lets TOP1M filter this feed (issue
+// #3648); anything else omits the key (byte-identical with pre-#3648 entries; the gateway treats
 // absent as cleared). No file I/O, no exec, no validation side-effects — pure array
 // construction; callers have already validated $header and resolved $provenance.
 function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
@@ -15616,7 +15614,7 @@ function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 
 
 // ADR-06: Build the shell->Python contract: the per-feed manifest ($pfb['unbound_py_sources'])
-// plus a per-feed IP-stripped raw domain file that pfb_unbound.py's dnsbl_build_from_manifest
+// plus a per-feed IP-stripped raw domain file that the gateway's DNSBL build
 // consumes. raw is the bare-domain extraction of the parsed '.txt' NDJSON (IPs already routed
 // elsewhere; #1083), with 'abp'-kind NDJSON rows' raw payload passed through verbatim so
 // Python's per-line capture guard routes them to parse_abp() intact. $feeds rows:
@@ -15766,13 +15764,13 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 		}
 		$raw_metadata[$header] = array('bytes' => $raw_bytes, 'hash' => hash_final($raw_hash));
 
-		// Store the raw path RELATIVE to the manifest's directory. pfb_unbound.py
-		// runs inside Unbound's chroot (/var/unbound), so an absolute HOST path
+		// Store the raw path RELATIVE to the manifest's directory. The gateway
+		// joins a raw path onto the module directory (/var/unbound), so an absolute HOST path
 		// like /var/unbound/pfb_py_raw/<f>.raw resolves to
-		// /var/unbound/var/unbound/pfb_py_raw/<f>.raw inside the chroot and is not
-		// found (feeds silently fail to load -> nothing blocked). The Python build
-		// joins a relative path against the manifest's dir (the chroot root), which
-		// resolves correctly both chrooted and not.
+		// /var/unbound/var/unbound/pfb_py_raw/<f>.raw and is not
+		// found (feeds silently fail to load -> nothing blocked). The build
+		// joins a relative path against the manifest's dir (the module directory), which
+		// resolves correctly.
 		$manifest_feeds[] = array(
 			'raw'		=> "{$header}.raw",
 			'feed'		=> $header,
@@ -15834,7 +15832,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	}
 	unset($manifest_feed);
 
-	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the Python build emits these
+	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the gateway's build emits these
 	// as whole-TLD ZONE entries from config.tld_wildcard_blacklist, so no raw file is needed.
 
 	// TOP1M (Tranco/Cisco) popularity whitelist is a fixed sidecar. Publish it
@@ -15891,8 +15889,8 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	// emptied when off, even if configured. The public-suffix oracle itself (tld_master) no
 	// longer rides the manifest at all: it is a SHIPPED file (unbound_py_psl) gated by the same
 	// toggle's ini flag (python_tld_wildcard), mirroring HSTS (unbound_py_hsts /
-	// python_hsts) -- see pfb_unbound_python()'s ini emit and pfb_unbound.py's
-	// _dnsbl_config_from_manifest().
+	// python_hsts) -- see pfb_unbound_python()'s ini emit and the gateway's
+	// dnsblConfigFromManifest().
 	$tld_wildcard_blacklist = array();
 	$tld_wildcard_exclusion = array();
 	if (!empty($pfb['dnsbl_tld_wildcard'])) {
@@ -18396,7 +18394,7 @@ function pfb_dnsbl_apply_ledger_update(): bool {
 		// issue #3770: DNSBL runs only through pfB-DNS, so while pfB-DNS is requested but not active nothing blocks
 		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply',
 			pfb_dns_proxy_hosts_module()
-			    ? 'DNSBL apply not converged -- the DNS proxy is not fully live with pfb_unbound.py; see error.log'
+			    ? 'DNSBL apply not converged -- the DNS proxy is not fully live; see error.log'
 			    : 'DNSBL is not blocking: pfB-DNS is not active yet (see the pfB-DNS status and the notices)',
 			$pfb['dbdir']);
 	}
@@ -18789,8 +18787,8 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// records into one and undercounted); the sum is the correct total.
 	$dnsbl_cnt = pfb_update_unbound_feed_count($pfb['dnsdir']);
 
-	// ADR-06: pfb_py_count is now Python-emitted and means the LOADED entry total
-	// (len(dataDB)+len(zoneDB)), written by pfb_unbound.py dnsbl_emit_count(). The
+	// ADR-06: pfb_py_count is now gateway-emitted and means the LOADED entry total
+	// (len(dataDB)+len(zoneDB)), written by the gateway's DNSBL build. The
 	// lists are no longer dedup/collapse/whitelist/TOP1M-pruned at build time, so
 	// this value legitimately differs from (and is typically >=) the raw '*.txt'
 	// feed line count. The old subtract-and-compare sync-check (which assumed the
@@ -25916,7 +25914,7 @@ function pfb_open_sqlite($table, $message) {
 
 	if ($db_handle) {
 
-		// ADR-03: use WAL so the persistent pfb_unbound.py connection and the PHP
+		// ADR-03: use WAL so the persistent gateway connection and the PHP
 		// readers/writers (widget, alerts, pfBlockerNG_clearsqlite counter resets)
 		// coexist without 'database is locked'. WAL is a sticky property of the
 		// database file and must be set outside of a transaction.

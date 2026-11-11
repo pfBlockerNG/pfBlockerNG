@@ -74,7 +74,7 @@ These = port's explicit `RUN_DEPENDS` (10 packages, issue #1806 — fixes pre-ex
 | Package (origin) | Binary probed | Purpose |
 | --- | --- | --- |
 | `net/libmaxminddb` | `bin/mmdblookup` | GeoIP C library — GeoIP feeds / reports |
-| `net/py-maxminddb` (`py311-maxminddb`) | — | Python MaxMind reader — GeoIP in `pfb_unbound.py` |
+| `net/py-maxminddb` (`py311-maxminddb`) | — | Python MaxMind reader — no shipped script uses it since #3791 (the gateway reads GeoIP itself); still a port `RUN_DEPENDS` until the port drops it |
 | `databases/py-sqlite3` (`py311-sqlite3`) | — | Python sqlite3 — DNSBL / reports database |
 | `www/lighttpd` | `sbin/lighttpd` | DNSBL sinkhole webserver (block page on VIP) |
 | `textproc/jq` | `bin/jq` | JSON processing (feeds, AWS IP-prefix pre-scripts) |
