@@ -110,7 +110,7 @@ func TestDDRDoHRecordFollowsTheSetAndTheLive443Listeners(t *testing.T) {
 func TestDDROnListenersTakesThe443AddressesOfTheFlags(t *testing.T) {
 	m := newTLSMaterial(t)
 	cfg, err := parseConfig([]string{"--listen", "127.0.0.1", "--dns-name", "fw.example.lan", "--ddr",
-		"--ddr-doh-443", "127.0.0.1", "--ddr-doh-443", "::ffff:127.0.0.2", "--", "decider"}, io.Discard)
+		"--ddr-doh-443", "127.0.0.1", "--ddr-doh-443", "::ffff:127.0.0.2"}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

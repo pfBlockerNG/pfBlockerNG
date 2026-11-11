@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"net"
 	"net/netip"
+	"os"
 	"syscall"
 	"testing"
 )
@@ -16,12 +17,7 @@ func TestATakenAddLeavesNoDescriptorWithTheInputForTheHandlerToClose(t *testing.
 	ap := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.2"), uint16(liveFreePorts(t, 1)[0]))
 	s := newListenerSet(r.g, config{port: int(ap.Port())}, nil)
 
-	parent, child, err := newSocketpair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer parent.Close()
-	defer child.Close()
+	parent, child := unixPair(t)
 	body := "udp+tcp " + ap.String()
 	if _, err := child.Write(append(binary.BigEndian.AppendUint32(nil, uint32(len(body))), body...)); err != nil {
 		t.Fatal(err)
@@ -34,4 +30,23 @@ func TestATakenAddLeavesNoDescriptorWithTheInputForTheHandlerToClose(t *testing.
 	if len(in.fds) != 0 {
 		t.Fatalf("after a taken add in.fds is %v, want none: the handler would close descriptors the listeners own", in.fds)
 	}
+}
+
+// unixPair is an AF_UNIX stream pair as two connections.
+func unixPair(t *testing.T) (parent, child net.Conn) {
+	t.Helper()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ends := make([]net.Conn, 2)
+	for i, fd := range fds {
+		f := os.NewFile(uintptr(fd), "unixpair")
+		if ends[i], err = net.FileConn(f); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+		t.Cleanup(func() { _ = ends[i].Close() })
+	}
+	return ends[0], ends[1]
 }

@@ -89,13 +89,14 @@ func TestDoQQueryContextEndsWhenTheConnectionDoes(t *testing.T) {
 	}
 }
 
-// A dropped DoQ connection releases the shared in-flight slot while the gateway is still serving. The decider
-// never answers, so only the connection ending can free the slot before gateway shutdown.
+// A dropped DoQ connection releases the shared in-flight slot while the gateway is still serving. The decider waits for an
+// Unbound that never answers, so only the connection ending can free the slot before gateway shutdown.
 func TestDroppedDoQConnectionReleasesTheSharedInFlightSlot(t *testing.T) {
-	r, m, addr := newDoQRig(t, rigConfig{timeout: time.Hour})
+	r, m, addr := newDoQRig(t, rigConfig{timeout: time.Hour, upstream: []upstreamOption{silent()}})
+	r.autoForward()
 	c := dialDoQ(t, addr, m, clientAllowed)
 	sendDoQ(t, c.stream(), doqQuery(t, "held.example."))
-	if q := r.recvQuery(); q.ip != clientAllowed {
+	if q := r.nextQuery(); q.ip != clientAllowed {
 		t.Fatalf("the decider saw the query from %s, want %s", q.ip, clientAllowed)
 	}
 	if n := r.g.muxInflight.Load(); n != 1 {

@@ -371,7 +371,7 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
         h.reload(deployed_vm, "updatednsbl")
         pids_after = h.dns_host_pids(deployed_vm)
         print(
-            f"[issue-3291 swap freshness] (Unbound, decider) pids before={pids_before} after={pids_after} "
+            f"[issue-3291 swap freshness] (Unbound, pfB-DNS gateway) pids before={pids_before} after={pids_after} "
             f"(restarted={pids_before != pids_after}) across a mechanism-only reload"
         )
         with _hermetic_probe():

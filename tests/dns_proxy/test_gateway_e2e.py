@@ -1,10 +1,10 @@
 """End-to-end (issue #3513): the Go gateway, built here with `go build`, in front of a REAL Unbound (Docker, host
-network, PROXYv2 port) with the REAL Python decider (`pfb_dns_proxy.py --decision-fd 3`) as its child, Unbound's
+network, PROXYv2 port) with the REAL Go decider booted inside the gateway's own process (issue #3791), Unbound's
 config laid out as pfSense lays it out (`unbound.conf` includes `access_lists.conf` and has rows of its own).
 
 No Go toolchain and no Docker are FAILURES, never skips: these tests are the evidence that the three pieces
 agree. The module writes its logs under /var/log/pfblockerng, which a developer machine does not have (and a test
-must not create), so the decider runs with a sitecustomize.py that redirects those paths into the test's tmp dir.
+must not create), so the gateway is given `--log-dir` with a directory of the test's tmp dir.
 """
 
 from __future__ import annotations
@@ -48,7 +48,6 @@ from frontend_constants import (
     BYPASSED_CLIENT,
     DNSBL_IPV4,
     FILTERED_CLIENT,
-    PROTO_DIR,
     REPO_ROOT,
 )
 from frontend_helpers import WATCHDOG, build_query, tcp_concurrent, tcp_exchange, udp_concurrent, udp_exchange, watched
@@ -86,25 +85,6 @@ ACL_FILE = "\n".join([
 # Rows in unbound.conf itself, outside access_lists.conf: an admin's custom option, here one client denied.
 CLAUSE_ROWS = f"access-control: {DENIED_CLIENT}/32 deny\n"
 
-# Redirects what the module opens under /var/log/pfblockerng into PFB_TEST_LOG_DIR; imported first by every
-# interpreter that has this directory on PYTHONPATH.
-SITECUSTOMIZE = """
-import builtins
-import os
-
-_open = builtins.open
-_prefix = "/var/log/pfblockerng/"
-_target = os.environ["PFB_TEST_LOG_DIR"] + "/"
-
-
-def _redirected(file, *args, **kwargs):
-    if isinstance(file, str) and file.startswith(_prefix):
-        file = _target + file[len(_prefix):]
-    return _open(file, *args, **kwargs)
-
-
-builtins.open = _redirected
-"""
 MODULE_EXIT_LINE = "[pfBlockerNG]: pfb_unbound.py script exiting"
 
 
@@ -138,7 +118,7 @@ def doq_probe_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 class GatewayProcess:
-    """The gateway as a child process; its stderr (and the decider's, which shares it) is read line by line."""
+    """The gateway as a child process (the decider is part of it); its stderr is read line by line."""
 
     def __init__(self, argv: list[str], env: dict[str, str]) -> None:
         self.proc = subprocess.Popen(
@@ -246,7 +226,8 @@ def _gateway_process(
     flags: list[str],
     clause_rows: str = CLAUSE_ROWS,
 ) -> Iterator[tuple[GatewayProcess, Path]]:
-    """The gateway with `flags` added: the REAL decider on the module dir, Unbound's PROXYv2 port upstream.
+    """The gateway with `flags` added: the REAL Go decider, booted in the gateway's own process on the module dir, and
+    Unbound's PROXYv2 port upstream.
 
     The gateway is given an unbound.conf that includes access_lists.conf (`acl_text`) and carries `clause_rows`, and a
     control socket of its own unless `flags` name one: it is bound in every mode, and as root the default path would
@@ -258,18 +239,14 @@ def _gateway_process(
     conf.write_text(f'server:\n    include: "{acl}"\n{clause_rows}', encoding="utf-8")
     log_dir = tmp_path / "pfb-logs"
     log_dir.mkdir()
-    site = tmp_path / "site"
-    site.mkdir()
-    (site / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
-    env = {**os.environ, "PYTHONPATH": str(site), "PFB_TEST_LOG_DIR": str(log_dir)}
+    env = {**os.environ}
     with contextlib.ExitStack() as stack:
         if "--ctl-socket" not in flags:
             flags = [*flags, "--ctl-socket", str(stack.enter_context(control_socket()))]
         argv = [
             str(gateway_binary), "--listen", "127.0.0.1", "--port", "0",
             "--upstream", f"127.0.0.1:{unbound.port}", "--unbound-conf", str(conf), *flags,
-            "--",
-            sys.executable, str(PROTO_DIR / "pfb_dns_proxy.py"), "--decision-fd", "3", "--module-dir", str(module_dir),
+            "--module-dir", str(module_dir), "--log-dir", str(log_dir),
         ]  # fmt: skip
         process = GatewayProcess(argv, env)
         try:
@@ -614,11 +591,9 @@ def test_an_opcode_unbound_does_not_implement_gets_unbounds_notimp_for_a_blocked
 
 # E8
 def test_sigterm_ends_the_gateway_and_the_decider_and_the_module_shuts_down(gateway: Running) -> None:
-    [decider_pid] = gateway.process.children()
+    assert gateway.process.children() == [], "the decider is part of the gateway: no child process"
     gateway.process.proc.send_signal(signal.SIGTERM)
     assert gateway.process.finish() == 0
-    with pytest.raises(ProcessLookupError):
-        os.kill(decider_pid, 0)  # gone, and reaped by the gateway
     assert any(line.endswith(MODULE_EXIT_LINE) for line in gateway.process.lines), gateway.process.lines
 
 
@@ -1001,12 +976,10 @@ def test_denied_client_gets_a_closed_connection_before_any_tls_handshake(tls_gat
             pass  # the gateway shut the connection before reading anything
 
 
-def test_sigterm_with_tls_listeners_ends_the_gateway_and_the_decider(tls_gateway: TlsRunning) -> None:
-    [decider_pid] = tls_gateway.process.children()
+def test_sigterm_with_tls_listeners_ends_the_gateway_and_its_decider(tls_gateway: TlsRunning) -> None:
+    assert tls_gateway.process.children() == [], "the decider is part of the gateway: no child process"
     tls_gateway.process.proc.send_signal(signal.SIGTERM)
     assert tls_gateway.process.finish() == 0
-    with pytest.raises(ProcessLookupError):
-        os.kill(decider_pid, 0)
 
 
 def test_dnsbl_rows_that_never_arrive_are_stuck_not_a_short_list(

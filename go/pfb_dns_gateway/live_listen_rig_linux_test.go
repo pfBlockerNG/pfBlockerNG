@@ -215,27 +215,52 @@ func liveClose(fds ...int) {
 	}
 }
 
-func liveOpenFDs(t *testing.T) int {
+// liveHeld is the set of descriptors the process holds, each named as /proc/self/fd names it. A socket or a pipe is named by
+// its inode (`socket:[N]`, `pipe:[N]`), which the kernel never gives to two of them at once; one that has no inode of its own
+// (/dev/null, a file) is named `fd<N>:<target>`, so it counts as new only at a descriptor number the baseline did not hold.
+func liveHeld(t *testing.T) map[string]bool {
 	t.Helper()
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return len(entries)
+	held := map[string]bool{}
+	for _, e := range entries {
+		link, err := os.Readlink("/proc/self/fd/" + e.Name())
+		if errors.Is(err, os.ErrNotExist) { // closed since the listing, or the listing's own descriptor
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(link, "socket:[") && !strings.HasPrefix(link, "pipe:[") {
+			link = "fd" + e.Name() + ":" + link
+		}
+		held[link] = true
+	}
+	return held
 }
 
-// liveRequireFDs waits for the process's descriptor count to be want: the gateway closes what it was sent, and its end of
-// the connection, as the handler ends.
-func liveRequireFDs(t *testing.T, want int, when string) {
+// liveRequireNew waits for the descriptors that are not in base to be exactly want of them: the gateway closes what it
+// was sent, and its end of the connection, as the handler ends. base is what the process held at the test's start, so a
+// stopped gateway of an earlier test that closes what it served as its goroutines end, some after stop() has returned, cannot
+// offset a descriptor of this test that is never closed: that one stays in the set, named in the failure.
+func liveRequireNew(t *testing.T, base map[string]bool, want int, when string) {
 	t.Helper()
 	deadline := time.Now().Add(watchdog)
 	for {
-		got := liveOpenFDs(t)
-		if got == want {
+		var fresh []string
+		for link := range liveHeld(t) {
+			if !base[link] {
+				fresh = append(fresh, link)
+			}
+		}
+		if len(fresh) == want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%s: the process holds %d descriptors, want %d: one that came over the control socket was not closed", when, got, want)
+			slices.Sort(fresh)
+			t.Fatalf("%s: %d descriptors are held that the test did not start with, want %d: %v (one that came over the control socket was not closed)", when, len(fresh), want, fresh)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -308,7 +333,7 @@ func newLiveRig(t *testing.T, opts ...liveOpt) *liveRig {
 	t.Helper()
 	ports := liveFreePorts(t, 5)
 	pem, m := goodPEM(t)
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	conf := filepath.Join(t.TempDir(), "unbound.conf")
 	if err := os.WriteFile(conf, []byte("access-control: 127.0.0.0/8 allow\naccess-control: ::1 allow\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -440,10 +465,10 @@ func (r *liveRig) remove(kind string, ap netip.AddrPort) {
 func (r *liveRig) refuse(row string, eof bool, build func() []livePart) string {
 	t := r.t
 	t.Helper()
-	base, listening := liveOpenFDs(t), r.countLines("listening ")
+	base, listening := liveHeld(t), r.countLines("listening ")
 	reply := r.exchange(eof, build()...)
 	liveRefused(t, reply, row)
-	liveRequireFDs(t, base, row)
+	liveRequireNew(t, base, 0, row)
 	if n := r.countLines("listening "); n != listening {
 		t.Fatalf("%s: %d `listening` lines before, %d after; log:\n%s", row, listening, n, r.logs.text())
 	}

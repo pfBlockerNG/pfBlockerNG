@@ -21,7 +21,7 @@ func TestDNSNameGatewayProcessAnswersTheNameDesignatesItAndTakesANewTableLive(t 
 		"--listen", "127.0.0.1", "--port", fmt.Sprint(ports[1]), "--unbound-conf", filepath.Join(t.TempDir(), "absent"),
 		"--dot-listen", "127.0.0.1", "--dot-port", fmt.Sprint(ports[0]), "--tls-pem", path, "--ctl-socket", ctl,
 		"--dns-name", name, "--ddr", "--dns-name-answer", "127.0.0.1=" + nameV4 + "," + nameV6,
-	}, decider("serve"))
+	})
 	plain := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	dot := listeningAddr(t, gw.waitLine("listening dot "), "dot")
 	gw.waitLine("ready upstream ")

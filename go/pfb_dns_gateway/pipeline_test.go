@@ -158,7 +158,8 @@ func gatewayIsDraining() bool {
 
 // A client that closes its connection looks like one that half-closed (both are a FIN), so its queries are decided
 // first: until the decider answers, its slot is held and its query is still being waited for; the answer is taken as
-// the decision, never as the answer to an abandoned query; only then is the connection closed and the slot freed.
+// the decision, never as the answer to an abandoned query (its forward to Unbound still works); only then is the
+// connection closed and the slot freed.
 func TestAClosedClientFreesItsSlotOnceItsQueriesAreDecided(t *testing.T) {
 	for _, k := range streamKinds {
 		t.Run(k.name, func(t *testing.T) {
@@ -166,28 +167,32 @@ func TestAClosedClientFreesItsSlotOnceItsQueriesAreDecided(t *testing.T) {
 			held := make(chan struct{})
 			release := sync.OnceFunc(func() { close(held) })
 			t.Cleanup(release)
-			var answered atomic.Bool // the decider has sent its answer
-			r.autoAnswer(func(q decidedQuery) []byte {
+			var answered atomic.Bool  // the decider has sent its answer
+			var abandoned atomic.Bool // the query's forward found the query given up
+			asked := make(chan struct{})
+			markAsked := sync.OnceFunc(func() { close(asked) })
+			r.p.mu.Lock()
+			r.p.auto = func(q transportQuery, fwd func([]byte) []byte) []byte {
+				markAsked()
 				<-held
+				if fwd(q.wire) == nil {
+					abandoned.Store(true)
+				}
 				answered.Store(true)
-				return echoAnswer(q)
-			})
+				return echoAnswer(decidedQuery{wire: q.wire})
+			}
+			r.p.mu.Unlock()
 			c := k.dial(t, r)
 			tcpSend(t, c, buildQuery(t, 1, "held.example.", true))
-			inFlight := r.g.dec.Load().lookup(r.nextQuery().id)
+			waitClosed(t, asked, "the query to reach the decider")
 			if n := r.g.tcpConns.Load(); n != 1 {
 				t.Fatalf("one client is connected but %d slots are held", n)
 			}
 			_ = c.Close()
 			eventually(t, "the gateway to read the client's close and wait for the query it holds", gatewayIsDraining)
 
-			abandoned := func() bool {
-				inFlight.mu.Lock()
-				defer inFlight.mu.Unlock()
-				return inFlight.abandoned
-			}
-			if answered.Load() || abandoned() {
-				t.Fatalf("the client has closed and nothing is decided, yet its query is no longer waited for (answered=%v abandoned=%v)", answered.Load(), abandoned())
+			if answered.Load() {
+				t.Fatalf("the client has closed and nothing is decided, yet its query is no longer waited for")
 			}
 			if n := r.g.tcpConns.Load(); n != 1 {
 				t.Fatalf("the closed client's slot is released (%d held) while its query is undecided", n)
@@ -195,8 +200,8 @@ func TestAClosedClientFreesItsSlotOnceItsQueriesAreDecided(t *testing.T) {
 
 			release()
 			eventually(t, "the closed client's slot to be freed after its query was decided", func() bool { return r.g.tcpConns.Load() == 0 })
-			if !answered.Load() || abandoned() {
-				t.Fatalf("the slot was freed without the decider's answer being taken as the decision (answered=%v abandoned=%v)", answered.Load(), abandoned())
+			if !answered.Load() || abandoned.Load() {
+				t.Fatalf("the slot was freed without the decider's answer being taken as the decision (answered=%v abandoned=%v)", answered.Load(), abandoned.Load())
 			}
 		})
 	}

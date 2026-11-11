@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/binary"
-	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -15,43 +13,10 @@ import (
 	"testing"
 )
 
-// Fuzz targets for what the gateway parses from outside: the decider's frames, Unbound's config rows and the DoH
-// request. `go test` runs each over the corpus committed in testdata/fuzz/<target>/ (the run-gates Go step does that,
-// at no cost to speak of); `go test -fuzz=<target> -fuzztime=30s` explores from it. A crasher the fuzzer finds is
-// minimised into the same directory and stays a regression test.
-
-// A frame the decoder accepts is one the encoder writes back byte for byte, whatever bytes came in; one it refuses is
-// refused with the error kind its callers act on (a clean end, a torn frame, a protocol violation), never a panic.
-func FuzzReadFrame(f *testing.F) {
-	f.Fuzz(func(t *testing.T, data []byte) {
-		typ, id, payload, err := readFrame(bytes.NewReader(data))
-		if len(data) >= 4 { // a length outside 5..maxFrameLen is refused before any payload is read
-			if n := binary.BigEndian.Uint32(data); n < 5 || n > maxFrameLen {
-				var pe protocolError
-				if !errors.As(err, &pe) {
-					t.Fatalf("readFrame(%x…) with the length %d returned err %v, want a protocolError", data[:4], n, err)
-				}
-			}
-		}
-		if err != nil {
-			var pe protocolError
-			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.As(err, &pe) {
-				t.Fatalf("readFrame(%x) failed with %T %v, want EOF, an unexpected EOF or a protocolError", data, err, err)
-			}
-			return
-		}
-		if typ < frameQuery || typ > frameReady || len(payload) > maxFrameLen-5 {
-			t.Fatalf("readFrame(%x) returned type %d with %d payload bytes, outside the protocol", data, typ, len(payload))
-		}
-		var back bytes.Buffer
-		if err := writeFrame(&back, typ, id, payload); err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.HasPrefix(data, back.Bytes()) {
-			t.Fatalf("the frame read from %x writes back as %x, not the bytes it came from", data, back.Bytes())
-		}
-	})
-}
+// Fuzz targets for what the gateway parses from outside: Unbound's config rows and the DoH request. `go test` runs each
+// over the corpus committed in testdata/fuzz/<target>/ (the run-gates Go step does that, at no cost to speak of); `go test
+// -fuzz=<target> -fuzztime=30s` explores from it. A crasher the fuzzer finds is minimised into the same directory and stays
+// a regression test.
 
 // An access-control or implicit-allow row either parses to a netblock with no host bits and no zone, and to an action
 // the matcher knows, or it is ignored; and a matcher built from what parsed answers every address with a known action.

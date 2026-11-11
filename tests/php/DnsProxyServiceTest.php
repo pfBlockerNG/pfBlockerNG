@@ -14,8 +14,8 @@ use PHPUnit\Framework\TestCase;
  * Function under test: pfb_dns_proxy_service() -- writes /usr/local/etc/rc.d/pfb_dns_proxy.sh from pfB-DNS's own settings
  * (issue #3538: dns/pfb_dns_interface, pfb_dns_dot*, pfb_dns_doh*, pfb_dns_doq*; the SAVED Resolver only seeds them once, before
  * they are stored, and is otherwise the restore source). Intent pinned here:
- *   - the rc script launches pfb-dns, the Go gateway, only through pfb_dns.sh (the shipped Python proxy is its decider, run
- *     through pfb_python.sh), on exactly pfB-DNS's addresses, as the unprivileged `unbound` user, with every value
+ *   - the rc script launches pfb-dns, the Go gateway, only through pfb_dns.sh (it decides in-process: no command follows its
+ *     flags), on exactly pfB-DNS's addresses, as the unprivileged `unbound` user, with every value
  *     shell-quoted and stdio detached (DnsProxyGatewayOnlyTest: whatever the package ships);
  *   - it starts while the moved-Resolver snapshot is set, whatever the proxy toggle and DNSBL say (a restore that
  *     was abandoned leaves the Resolver moved, and the proxy must keep serving it until a retry succeeds), and never
@@ -527,14 +527,14 @@ final class DnsProxyServiceTest extends TestCase
 			'DNSBL off, preference on: no module, the replies are logged' => [FALSE, FALSE, PfbToggle::On, ['--no-module', '--reply-log']],
 			'DNSBL off, preference off: no module, nothing is logged'     => [FALSE, FALSE, PfbToggle::Off, ['--no-module']],
 			'DNSBL off, Resolver forwarding: still no observer'           => [FALSE, TRUE, PfbToggle::Off, ['--no-module']],
-			'DNSBL on, Resolver recursing: the decider hosts the module'  => [TRUE, FALSE, PfbToggle::On, []],
+			'DNSBL on, Resolver recursing: the gateway hosts the module'  => [TRUE, FALSE, PfbToggle::On, []],
 			'DNSBL on, Resolver forwarding: upstream blocks are reported' => [TRUE, TRUE, PfbToggle::On, ['--observer']],
 		];
 	}
 
 	/** @param list<string> $flags */
 	#[DataProvider('gatewayModeRows')]
-	public function testTheGatewayLineCarriesThePfbDnsModeFlagsAsItsOwnAndTheDeciderIsLeftAlone(bool $dnsbl, bool $forwarding, ?PfbToggle $preference, array $flags): void
+	public function testTheGatewayLineCarriesThePfbDnsModeFlagsAsItsOwn(bool $dnsbl, bool $forwarding, ?PfbToggle $preference, array $flags): void
 	{
 		// Given the gateway binary, a saved Resolver, and pfB-DNS in the mode DNSBL, forwarding and the logging preference make
 		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
@@ -549,10 +549,10 @@ final class DnsProxyServiceTest extends TestCase
 		// When the rc service is generated and started
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then the gateway has exactly that mode's flags, before `--`, and the Python decider's own argv is the one it always had
+		// Then the gateway has exactly that mode's flags, with the module directory, and no decider command after them
 		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1'], FALSE, [], '53', $flags), $argv);
-		$decider = array_slice($argv, (int) array_search('--', $argv, TRUE));
-		$this->assertSame(self::DECIDER, $decider, 'the decider is told nothing the gateway does not pass on itself');
+		$this->assertNotContains('--', $argv);
+		$this->assertStringNotContainsString('pfb_dns_proxy.py', $this->rcText());
 	}
 
 	public function testDohAndDoqAreServedByTheGatewayWithDnsblOffToo(): void
@@ -1342,13 +1342,8 @@ final class DnsProxyServiceTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// issues #3513, #3517 -- pfb-dns, the Go gateway, is the only front end: the Python proxy is its decider
+	// issues #3513, #3517 -- pfb-dns, the Go gateway, is the only front end and decides in-process: no decider command follows it
 	// -----------------------------------------------------------------------
-
-	private const DECIDER = [
-		'--', '/usr/local/pkg/pfblockerng/pfb_python.sh', '-u', '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py',
-		'--decision-fd', '3', '--module-dir', '/var/unbound', '--user', 'unbound',
-	];
 
 	/**
 	 * The dns_proxy directory of a package that ships pfb-dns: one stand-in per target the generator only has to find,
@@ -1441,12 +1436,12 @@ final class DnsProxyServiceTest extends TestCase
 			'-o', "{$this->dir}/log/dns_proxy.log",
 			'/bin/sh', "{$gateway}/pfb_dns.sh", ...$addresses,
 			'--port', $port, '--upstream', '127.0.0.1:5353',
-			'--tls-pem', $this->certFile(), '--ctl-socket', $this->ctlSocket(), ...$dotFlags, ...$tls, ...$module,
-			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', '--ready-file', $this->readyFile(), ...self::DECIDER,
+			'--tls-pem', $this->certFile(), '--ctl-socket', $this->ctlSocket(), ...$dotFlags, ...$tls, ...$module, '--module-dir', '/var/unbound',
+			'--unbound-conf', '/var/unbound/unbound.conf', '--user', 'unbound', '--ready-file', $this->readyFile(),
 		];
 	}
 
-	public function testTheGatewayIsAskedToPublishItsPidBeforeTheDeciderSeparatorAndNothingElseIs(): void
+	public function testTheGatewayIsAskedToPublishItsPidAndNothingFollowsItsFlags(): void
 	{
 		// Given a package that ships pfb-dns
 		$this->moveResolver(TRUE, 'lan', ['lan' => '192.0.2.1']);
@@ -1455,13 +1450,12 @@ final class DnsProxyServiceTest extends TestCase
 		// When the rc service is generated and started
 		$argv = $this->startAndReadArgv($gateway);
 
-		// Then the gateway gets exactly one --ready-file, ahead of `--`, and the decider is handed none
-		$separator = (int) array_search('--', $argv, TRUE);
+		// Then the gateway gets exactly one --ready-file, last of its flags, and no `--` command follows
 		$this->assertSame(1, count(array_keys($argv, '--ready-file', TRUE)), 'exactly one --ready-file');
 		$flag = (int) array_search('--ready-file', $argv, TRUE);
-		$this->assertLessThan($separator, $flag, '--ready-file belongs to the gateway, so it comes before the separator');
 		$this->assertSame($this->readyFile(), $argv[$flag + 1]);
-		$this->assertNotContains('--ready-file', array_slice($argv, $separator), 'the decider never publishes the pid: it is not the gateway');
+		$this->assertCount($flag + 2, $argv, 'nothing follows the ready file: the gateway decides in-process');
+		$this->assertNotContains('--', $argv);
 	}
 
 	/** @return list<string> the daemon argv after the rc script started under dash */
@@ -1483,7 +1477,7 @@ final class DnsProxyServiceTest extends TestCase
 	}
 
 	#[DataProvider('gatewayDotRows')]
-	public function testWithTheGatewayInstalledTheScriptRunsItWithTheDeciderAfterTheSeparatorAndDotOnlyWhenSaved(bool $dot): void
+	public function testWithTheGatewayInstalledTheScriptRunsItWithNoDeciderCommandAndDotOnlyWhenSaved(bool $dot): void
 	{
 		// Given the gateway binary and a saved Resolver that listened on lan (both families), DoH/DoQ off
 		$gateway = $this->gateway();
@@ -1493,7 +1487,7 @@ final class DnsProxyServiceTest extends TestCase
 		$argv = $this->startAndReadArgv($gateway);
 
 		// Then the daemon runs the gateway with the plain addresses, Unbound's PROXY port, Unbound's config (where it
-		// reads the ACL) and the unprivileged user, and hands the Python decider's argv over after `--`
+		// reads the ACL), the module directory and the unprivileged user, and no command after the gateway's own flags
 		$this->assertSame($this->gatewayArgv($gateway, ['192.0.2.1', '2001:db8::1'], $dot), $argv);
 		$this->assertSame(['launch'], $this->events());
 	}
@@ -1787,16 +1781,17 @@ final class DnsProxyServiceTest extends TestCase
 	{
 		$dir = '/usr/local/pkg/pfblockerng/dns_proxy';
 		return [
-			'the binary the wrapper exec`d, with the decider argv after the separator' => [
+			'the binary an earlier package exec`d, with the decider argv after the separator (still running across the upgrade)' => [
 				"{$dir}/bin/freebsd-amd64/pfb-dns --listen 192.0.2.1 --port 53 -- "
 				. '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py --decision-fd 3',
 			],
 			'the amd64 binary by its own name alone' => ["{$dir}/bin/freebsd-amd64/pfb-dns --listen 192.0.2.1"],
 			'the arm64 binary by its own name alone' => ["{$dir}/bin/freebsd-arm64/pfb-dns --listen 192.0.2.1"],
-			'the wrapper before it execs' => [
+			'the wrapper before it execs, with the decider argv after the separator (an earlier package)' => [
 				"/bin/sh {$dir}/pfb_dns.sh --listen 192.0.2.1 --port 53 -- "
 				. '/usr/local/pkg/pfblockerng/pfb_python.sh -u /usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py --decision-fd 3',
 			],
+			'the wrapper before it execs, one-binary line' => ["/bin/sh {$dir}/pfb_dns.sh --listen 192.0.2.1 --port 53 --module-dir /var/unbound"],
 		];
 	}
 

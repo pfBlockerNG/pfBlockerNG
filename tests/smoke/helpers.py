@@ -2675,26 +2675,33 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
         )
 
 
-def restart_dnsbl_decider(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
-    """Restart the pfB-DNS decider when it hosts the DNSBL module and return True; False when Unbound hosts it.
+def restart_pfb_dns_if_hosting_dnsbl(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
+    """Restart the pfB-DNS service when it hosts the DNSBL module and return True; False when Unbound hosts it.
 
-    The decider's restart (``pfb_dns_proxy_decider_restart()``) is the product's own module reload: it re-runs the
-    module's ``init()`` as an Unbound restart does for the module in Unbound. On False the caller reloads Unbound.
+    pfB-DNS is one process (the ``pfb-dns`` gateway decides in-process), so its restart is the product's own module
+    reload: the new process re-reads the lists and the ini as an Unbound restart does for the module in Unbound. The
+    restart is the product's own ``pfb_dns_proxy_restart()`` (rc script, restart, wait for the gateway to serve again).
+    On False the caller reloads Unbound.
     """
     # Fenced and compared as a whole token: a failure text may itself contain the word UNBOUND.
     host = _php_read_scalar(
         vm,
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n"
         "if (!pfb_dns_proxy_hosts_module()) { $host = 'UNBOUND'; } else {\n"
-        "  $failed = pfb_dns_proxy_decider_restart();\n"
-        "  $host = $failed === NULL ? 'DECIDER-RESTARTED' : 'DECIDER-FAILED: ' . $failed;\n}",
+        "  $host = pfb_dns_proxy_restart() ? 'PFB-DNS-RESTARTED' : 'PFB-DNS-NOT-READY';\n}",
         "$host",
         timeout=timeout,
     )
-    if host == "DECIDER-RESTARTED":
+    if host == "PFB-DNS-RESTARTED":
         return True
+    if host == "PFB-DNS-NOT-READY":
+        tail = vm.ssh(f"tail -n 40 {PFB_DNS_PROXY_LOG} 2>&1").stdout
+        raise RuntimeError(
+            f"restart_pfb_dns_if_hosting_dnsbl: pfB-DNS did not serve again after its restart; "
+            f"last 40 lines of {PFB_DNS_PROXY_LOG}:\n{tail}"
+        )
     if host != "UNBOUND":
-        raise RuntimeError(f"restart_dnsbl_decider: decider restart failed: {host!r}")
+        raise RuntimeError(f"restart_pfb_dns_if_hosting_dnsbl: unexpected host answer: {host!r}")
     return False
 
 
@@ -2725,8 +2732,8 @@ def inject_safesearch_cname_entries(
     bounce re-runs the python module's ``init()`` which re-reads ``pfb_py_ss.txt`` as
     written.  For ``safeSearchDB`` to take effect the DNSBL python module must already
     be loaded — DNSBL must be enabled and a pfBlockerNG reload run before this call.
-    While pfB-DNS hosts that module (``pfb_dns_proxy_hosts_module()``), its decider alone is restarted
-    (``pfb_dns_proxy_decider_restart()``, the product's own module reload) and Unbound is left as it is.
+    While pfB-DNS hosts that module (``pfb_dns_proxy_hosts_module()``), the pfB-DNS service is restarted instead
+    (:func:`restart_pfb_dns_if_hosting_dnsbl`, the product's own module reload) and Unbound is left as it is.
     """
     csv_lines = "\n".join(f"{e.domain},cname,{e.target},{e.baked_v4},{e.baked_v6}" for e in entries)
     contents = csv_lines + "\n"
@@ -2744,7 +2751,7 @@ def inject_safesearch_cname_entries(
             f"inject_safesearch_cname_entries: tee to {UNBOUND_PY_SS_FILE} failed: "
             f"rc={result.returncode} {result.stderr!r}"
         )
-    if restart_dnsbl_decider(vm, timeout=timeout):
+    if restart_pfb_dns_if_hosting_dnsbl(vm, timeout=timeout):
         return
     # Raw Unbound bounce to reload safeSearchDB from the updated file.
     # Unlike pfb_stop_start_unbound() in pfblockerng.inc, this raw bounce has no
@@ -4666,7 +4673,7 @@ def wait_no_active_pfb_task(vm: SmokeVM, *, timeout: float = 90.0, delay: float 
 # hard no-restart proof: UNCHANGED across a data update, CHANGED across a config one.
 
 UNBOUND_PID_FILE = "/var/run/unbound.pid"
-# The pfB-DNS gateway's pidfile (PFB_DNS_PROXY_PIDFILE): its pid is the parent of the Python decider.
+# The pfB-DNS gateway's pidfile (PFB_DNS_PROXY_PIDFILE): the pid of the one process that decides.
 PFB_DNS_PROXY_PIDFILE = "/var/run/pfb_dns_proxy.pid"
 # The pfBlockerNG main log; PHP's pfb_reload_unbound writes the fast-path markers here
 # (inc:3956 "[ zero-downtime swap ]" then inc:3962 " completed [ NOW ]"). Their
@@ -4717,32 +4724,24 @@ def unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> int:
         raise RuntimeError(f"unbound_pid: {UNBOUND_PID_FILE} not an integer: {text!r}") from exc
 
 
-# The decider as the product finds it (pfb_dns_proxy_decider_restart_fits_ram): the gateway's child whose args name
-# pfb_dns_proxy.py. The bracketed dot keeps this command's own argv from matching itself; ps's exit status is kept, or a
-# broken ps would read as "no decider" both before and after.
-_DECIDER_PID_CMD = (
-    f"gw=$(cat {PFB_DNS_PROXY_PIDFILE} 2>/dev/null); "
-    "rows=$(/bin/ps -axww -o pid= -o ppid= -o args=) || exit 1; "
-    "printf '%s\\n' \"$rows\" | /usr/bin/awk -v gw=\"$gw\" '$2 == gw && /pfb_dns_proxy[.]py/ { print $1 }'"
-)
-
-
 def dns_host_pids(vm: SmokeVM, *, timeout: float = 30.0) -> tuple[int, int]:
-    """Pids of the two processes that can host DNSBL: ``(Unbound's, the pfB-DNS decider's, or 0 with no decider)``.
+    """Pids of the two processes that can host DNSBL: ``(Unbound's, the pfB-DNS gateway's, or 0 with no gateway)``.
 
-    Since #3770 DNSBL runs in the pfB-DNS decider, and restarting a host moves only its own pid: a before/after pin
-    on :func:`unbound_pid` alone cannot see a decider restart. Pin this tuple instead; unchanged means no host
-    restarted, changed means one did.
+    DNSBL runs in the pfB-DNS gateway (one process: it decides in-process, it has no child), and restarting a host moves
+    only its own pid: a before/after pin on :func:`unbound_pid` alone cannot see a pfB-DNS restart. Pin this tuple
+    instead; unchanged means no host restarted, changed means one did. Restarting pfB-DNS gives the gateway a new pid;
+    reloading Unbound gives Unbound one.
     """
-    result = vm.ssh(_DECIDER_PID_CMD, timeout=timeout)
+    # The pidfile daemon(8) -p keeps for the gateway: absent with pfB-DNS off (0), unreadable is an error.
+    result = vm.ssh(f"[ ! -e {PFB_DNS_PROXY_PIDFILE} ] || cat {PFB_DNS_PROXY_PIDFILE}", timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
-            f"dns_host_pids: cannot list the gateway's children: rc={result.returncode} {result.stderr!r}"
+            f"dns_host_pids: cannot read {PFB_DNS_PROXY_PIDFILE}: rc={result.returncode} {result.stderr!r}"
         )
-    deciders = result.stdout.split()
-    if len(deciders) > 1:
-        raise RuntimeError(f"dns_host_pids: expected at most one decider under the gateway, got pids {deciders}")
-    return unbound_pid(vm, timeout=timeout), (int(deciders[0]) if deciders else 0)
+    text = result.stdout.strip()
+    if text and not text.isdigit():
+        raise RuntimeError(f"dns_host_pids: {PFB_DNS_PROXY_PIDFILE} not an integer: {text!r}")
+    return unbound_pid(vm, timeout=timeout), int(text) if text else 0
 
 
 def detector_status_marker(header: str, status: str) -> str:

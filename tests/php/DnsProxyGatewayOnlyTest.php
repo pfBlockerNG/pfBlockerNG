@@ -13,13 +13,13 @@ use PHPUnit\Framework\TestCase;
  *
  * Function under test: pfb_dns_proxy_service() -- writes /usr/local/etc/rc.d/pfb_dns_proxy.sh. Intent pinned here:
  *   - the script has one launch line, through pfb_dns.sh, whatever the package ships: there is no Python listener to
- *     fall back to, and the Python proxy is only the gateway's decider (`--decision-fd 3`);
+ *     fall back to, and the gateway decides in-process: no `--` and no command after its flags, only `--module-dir`;
  *   - a package with no pfb-dns this machine can run (no payload at all, the other architecture's only, a binary that
  *     is not executable, a machine the package has no binary for) is not started by anything else: the launch line
  *     the daemon is given exits nonzero with the wrapper's reason on its stderr, which daemon(8) writes to the proxy
  *     log, and runs no binary. The supervisor starts it again, no ready marker is ever published, and the activation's
  *     readiness wait rolls back (DnsProxyActivationRollbackTest);
- *   - a package with a binary for this machine launches it through the wrapper, with the decider after `--`.
+ *   - a package with a binary for this machine launches it through the wrapper, with no decider command.
  *
  * The real script runs under dash in the sandbox of DnsProxyRcSandboxTrait, with the SHIPPED pfb_dns.sh beside the
  * pfb-dns stand-ins and a `uname` double that says which machine it is. The launch line the daemon double recorded is
@@ -107,10 +107,10 @@ final class DnsProxyGatewayOnlyTest extends TestCase
 		// When the rc service starts
 		$launch = $this->startAndReadLaunch($proxyDir, $machine);
 
-		// Then the daemon is given the wrapper, never the Python proxy as a listener
+		// Then the daemon is given the wrapper, never a Python listener
 		$this->assertContains('/bin/sh', $launch);
 		$this->assertContains("{$proxyDir}/pfb_dns.sh", $launch, 'the daemon runs the wrapper');
-		$this->assertNotContains('--decision-fd', array_slice($launch, 0, (int) array_search('--', $launch, TRUE)), 'the Python proxy is only ever the decider after `--`');
+		$this->assertNotContains('--decision-fd', $launch, 'no Python decider is launched');
 
 		// And what it launched fails with the wrapper's status and reason, and ran no binary
 		[$exit, $output] = $this->runWhatDaemonLaunched($launch);
@@ -126,7 +126,7 @@ final class DnsProxyGatewayOnlyTest extends TestCase
 	}
 
 	#[DataProvider('machines')]
-	public function testAPackageWithABinaryForThisMachineLaunchesItThroughTheWrapperWithTheDeciderAfterTheSeparator(string $machine, string $target): void
+	public function testAPackageWithABinaryForThisMachineLaunchesItThroughTheWrapperWithNoDeciderCommand(string $machine, string $target): void
 	{
 		// Given a package that ships a pfb-dns for this machine
 		$proxyDir = $this->package(['freebsd-amd64', 'freebsd-arm64']);
@@ -134,16 +134,15 @@ final class DnsProxyGatewayOnlyTest extends TestCase
 		// When the rc service starts
 		$launch = $this->startAndReadLaunch($proxyDir, $machine);
 
-		// Then the daemon runs the wrapper, with the Python proxy as the decider after `--`
+		// Then the daemon runs the wrapper with the module directory and nothing after the gateway's own flags
 		$wrapper = (int) array_search("{$proxyDir}/pfb_dns.sh", $launch, TRUE);
 		$this->assertGreaterThan(0, $wrapper, 'the daemon runs the wrapper');
 		$this->assertSame('/bin/sh', $launch[$wrapper - 1]);
-		$separator = (int) array_search('--', $launch, TRUE);
-		$this->assertSame(
-			['/usr/local/pkg/pfblockerng/pfb_python.sh', '-u', '/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py', '--decision-fd', '3'],
-			array_slice($launch, $separator + 1, 5),
-			'the decider follows the separator'
-		);
+		$this->assertNotContains('--', $launch, 'no decider command follows the gateway');
+		$this->assertNotContains('--decision-fd', $launch);
+		$module = (int) array_search('--module-dir', $launch, TRUE);
+		$this->assertGreaterThan($wrapper, $module, 'the gateway is told where the module lives');
+		$this->assertSame('/var/unbound', $launch[$module + 1]);
 
 		// And the wrapper runs this machine's binary
 		[$exit, $output] = $this->runWhatDaemonLaunched($launch);
@@ -159,11 +158,12 @@ final class DnsProxyGatewayOnlyTest extends TestCase
 		pfb_dns_proxy_service($proxyDir);
 		$withoutPayload = $this->rcText();
 
-		// Then its one launch line is the wrapper's, with the Python proxy as the decider, and no Python listener
+		// Then its one launch line is the wrapper's, the gateway decides in-process (no command after it), and no Python listener
 		$this->assertStringContainsString("/bin/sh '{$proxyDir}/pfb_dns.sh' ", $withoutPayload);
-		$this->assertStringContainsString('--decision-fd 3', $withoutPayload);
+		$this->assertStringContainsString(' --module-dir /var/unbound ', $withoutPayload);
+		$this->assertStringNotContainsString('--decision-fd', $withoutPayload);
+		$this->assertStringNotContainsString('pfb_dns_proxy.py', $withoutPayload, 'no Python decider is launched');
 		$this->assertSame(1, substr_count($withoutPayload, '/usr/sbin/daemon '), 'one launch line');
-		$this->assertStringNotContainsString('pfb_dns_proxy.py --listen', $withoutPayload, 'there is no standalone Python listener');
 
 		// When the package ships a payload and the script is generated again
 		$this->package(['freebsd-amd64', 'freebsd-arm64']);

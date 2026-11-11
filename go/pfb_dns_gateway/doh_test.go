@@ -904,7 +904,7 @@ func TestDoHTrustedIPv4ClientKeepsIPv6ListenerEndpoint(t *testing.T) {
 	if q.ip != "192.0.2.7" || q.listenerIP != "::1" || q.listenerInterface != "" {
 		t.Fatalf("QUERY client=%q listener=%q interface=%q, want independently normalized 192.0.2.7 ::1 and empty interface", q.ip, q.listenerIP, q.listenerInterface)
 	}
-	r.p.send(tAnswer, q.id, echoAnswer(decidedQuery{wire: q.wire}))
+	r.p.answer(q.id, echoAnswer(decidedQuery{wire: q.wire}))
 	if len(awaitClient(t, done)) == 0 {
 		t.Fatal("empty IPv6 socket answer")
 	}

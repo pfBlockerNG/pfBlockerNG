@@ -1,10 +1,10 @@
 """Issue #3515: pfB-DNS, the experimental DNS proxy, driven the way an operator drives it, proven live.
 
 pfB-DNS (``dns/pfb_dns``, on DNS > General) moves the DNS Resolver onto loopback (its port stays 53, so the firewall
-keeps resolving through it) and runs the Go gateway ``pfb-dns`` on the Resolver's client-facing addresses; its child,
-the Python decider, answers the DNSBL decisions. It is independent of DNSBL: with DNSBL on the decider answers DNSBL
-decisions itself (the SHIPPED ``pfb_unbound.py`` through its Unbound API shim) and the gateway forwards every other
-query to Unbound on loopback 5353 with a PROXYv2 header; with DNSBL off the decider boots no module and every query is
+keeps resolving through it) and runs the Go gateway ``pfb-dns`` on the Resolver's client-facing addresses. pfB-DNS is
+one process: the gateway makes the DNSBL decisions in-process and has no child. It is independent of DNSBL: with DNSBL
+on the gateway answers DNSBL decisions itself (from the module's lists and ini in ``/var/unbound``) and forwards every
+other query to Unbound on loopback 5353 with a PROXYv2 header; with DNSBL off it boots no module and every query is
 forwarded. Unbound runs the inert ``pfb_upstream_observer.py`` in every pfB-DNS mode, because pfSense runs the start
 hook ``<python_script>_include.inc`` only for a python script, and that hook starts the gateway in boot. This module
 sets the real config keys, runs the real apply (``pfb_trigger scope=dnsbl``) and watches the box and a LAN client VM,
@@ -18,7 +18,7 @@ Module setup, put back in ``finally``::
               subnet to Unbound clients
     DNSBL:    one feed listing the test names, Group Policy on with 192.168.1.12 on the bypass list
     Package:  the installed ``dns_proxy/bin`` (the pfb-dns payload) is asserted present: pfB-DNS runs only through
-              the Go gateway, whose decider is the Python process, and a package without it cannot start it
+              the Go gateway, the one process that decides, and a package without it cannot start it
 
 What it proves, in file order:
 
@@ -53,7 +53,7 @@ What it proves, in file order:
 * readiness: a serving proxy has published its ready marker (``/var/unbound/pfb_dns_ready``: its own child pid, mode
   600, owned by unbound) and a healthy second ``start`` changes neither pids nor marker; ``lockf`` hands the start
   lock to the one run of the rc script and not to the daemon it launches (the lock is free while the proxy runs); two
-  ``start`` verbs racing leave exactly one supervisor and one child, and the same race without the lock is printed as
+  ``start`` verbs racing leave exactly one supervisor and one gateway, and the same race without the lock is printed as
   evidence;
 * pfB-DNS off + apply: the proxy and its pidfiles are gone, every Resolver key is back to its pre-toggle value (absent
   stays absent), the marker is cleared, ``unbound.conf`` has no python module again, Unbound is on 53 and 853 again
@@ -62,17 +62,18 @@ What it proves, in file order:
   on the guest, then the real apply: the proxy cannot bind and never becomes ready, pfB-DNS stays on, the Resolver
   and Unbound are back exactly as before the toggle, and the client's listed name gets the upstream's answer from that
   Unbound: DNSBL does not block until an activation serves.
-* a decision service that exits before READY at every start (issue #3561): the supervisor waiting out its restart
-  delay still names pfb_dns_proxy and the rc stop ends it; started by the Resolver's start hook, with the package's
-  service entry registered or absent (an install's window, where pfSense's stop_service() does nothing), the real
-  apply's rollback leaves no supervisor, the Resolver as before the toggle and the snapshot marker empty.
+* a gateway that exits before READY at every start (issue #3561: the installed binary is not executable, so
+  pfb_dns.sh exits with its reason): the supervisor waiting out its restart delay still names pfb_dns_proxy and the rc
+  stop ends it; started by the Resolver's start hook, with the package's service entry registered or absent (an
+  install's window, where pfSense's stop_service() does nothing), the real apply's rollback leaves no supervisor, the
+  Resolver as before the toggle and the snapshot marker empty.
 * a restore that config.xml refuses (issue #3561's recovery): with the package's service entry absent and a process
   whose write_config() answers -1, pfb_dns_proxy_resolver(FALSE) stops the proxy, abandons the restore (the snapshot and
   the moved Resolver stay in config.xml) and starts the proxy again through its rc script: a new child publishes the
   ready marker, pfb-dns alone holds port 53 on the LAN address and the client's listed name gets the VIP.
 * issue #3566, staying up across updates: a package upgrade and the update pass after it restart neither the
-  gateway, its supervisor nor its decider and no query for a listed name goes unanswered; a changed decider module
-  restarts the decider alone; a changed gateway binary restarts the pair once.
+  gateway nor its supervisor and no query for a listed name goes unanswered; a changed gateway binary restarts the
+  pair once.
 
 pfB-DNS on DNS General (enable, experimental help, status panel) is covered by the Tier A render
 test ``test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status``
@@ -232,7 +233,9 @@ class State:
     resolver: dict[str, str | None]  # config.xml unbound/<key>: the element's text, None when the element is absent
     marker: str  # config.xml pfb_dns_proxy_saved ('' when empty or absent)
     listeners: list[Listener]
-    ps: list[str]  # "pid user args" of every process whose command line names pfb_dns_proxy
+    ps: list[
+        str
+    ]  # "pid user args" of the supervisor (its title names pfb_dns_proxy) and the gateway (the pfb-dns binary)
     proxy_pid: int | None
     daemon_pid: int | None
     unbound_pid: int
@@ -471,8 +474,9 @@ def _service_status(vm: SmokeVM) -> str:
 
 def _capture(vm: SmokeVM) -> State:
     root = _config_xml(vm)
-    # The bracket keeps grep from matching its own command line.
-    ps = vm.ssh("ps -axww -o pid,user,args | grep -E 'pfb_dns_prox[y]'").stdout.splitlines()
+    # The supervisor's title names pfb_dns_proxy; the gateway's command line is its installed binary. The brackets keep
+    # grep from matching its own command line.
+    ps = vm.ssh("ps -axww -o pid,user,args | grep -E 'pfb_dns_prox[y]|/pfb-dn[s]'").stdout.splitlines()
     return State(
         conf=vm.ssh("cat", h.UNBOUND_CONF).stdout,
         access_lists=vm.ssh("cat", ACCESS_LISTS).stdout,
@@ -1621,7 +1625,7 @@ def test_after_a_reboot_the_proxy_answers_before_the_packages_start_and_the_pack
       not count;
       And from the first answers to the end of the probe (the package stage over: rc.start_packages has returned, the
       proxy's own rc start, which it launches in the background, has exited and the boot is complete) the proxy keeps
-      its child and supervisor pids, stays on 127.0.0.1:53, and no probe query fails;
+      its gateway and supervisor pids, stays on 127.0.0.1:53, and no probe query fails;
       And the launch, the listening socket, the first answers and Unbound's sync are reported as separate times;
       And the Resolver is still moved and the proxy runs, and a lookup from the firewall after the boot succeeds
       through the proxy (the upstream's answer with DNSBL off, the DNSBL VIP for a listed name with it on), and so
@@ -1742,11 +1746,8 @@ def test_the_start_lock_is_free_while_the_proxy_runs(rig: Rig, proxy_on: State) 
     )
 
 
-DECIDER_DIR = "/usr/local/pkg/pfblockerng/dns_proxy"
-DECIDER_APPLIED = "/var/unbound/pfb_dns_decider.applied"  # the decider's code record
 GATEWAY_APPLIED = f"{READY_FILE}.sha256"  # the gateway's binary record
 RESTART_PENDING = "/var/run/pfb_dns_proxy_restart_pending"
-DECIDER_RESTART_LOGGED = "Restarting the DNS proxy's decider: the package installed other decider code"
 SAVE_DIR = "/var/tmp/pfb3566_saved"  # the installed file a test edits, as it was
 UPGRADE_PROBE_DIR = "/var/tmp/pfb3566_probe"
 UPGRADE_PROBE_LOG = f"{UPGRADE_PROBE_DIR}/log"
@@ -1772,32 +1773,22 @@ done
 
 @dataclass(frozen=True)
 class Pids:
-    """The three processes of a serving pfB-DNS: the supervisor, the gateway it keeps up, the gateway's decider."""
+    """The two processes of a serving pfB-DNS: the supervisor and the gateway it keeps up (the gateway has no child)."""
 
     gateway: int | None
     supervisor: int | None
-    decider: int | None
 
     def complete(self) -> bool:
-        return None not in (self.gateway, self.supervisor, self.decider)
+        return None not in (self.gateway, self.supervisor)
 
 
 def _pids(vm: SmokeVM) -> Pids:
-    """The pidfiles name the gateway and its supervisor; the decider is its one child running pfb_dns_proxy.py.
-
-    A replaced decider drains for a while beside the new one: two children are no decider yet, never a guess.
-    """
-    gateway = _pid_file(vm, PROXY_PID_FILE)
-    children: list[int] = []
-    for line in vm.ssh("ps -axww -o pid,ppid,args").stdout.splitlines()[1:]:
-        fields = line.split(None, 2)
-        if len(fields) == 3 and gateway is not None and fields[1] == str(gateway) and "pfb_dns_proxy.py" in fields[2]:
-            children.append(int(fields[0]))
-    return Pids(gateway, _pid_file(vm, DAEMON_PID_FILE), children[0] if len(children) == 1 else None)
+    """The pidfiles name the gateway and its supervisor."""
+    return Pids(_pid_file(vm, PROXY_PID_FILE), _pid_file(vm, DAEMON_PID_FILE))
 
 
 def _settled_pids(vm: SmokeVM) -> Pids:
-    """The pids once a gateway, a supervisor and exactly one decider are there (a drained decider has left)."""
+    """The pids once a gateway and a supervisor are both there."""
     seen: list[Pids] = []
 
     def settled() -> bool:
@@ -1808,8 +1799,7 @@ def _settled_pids(vm: SmokeVM) -> Pids:
         h.wait_until(settled, timeout=60.0, interval=2.0)
     except RuntimeError as exc:
         raise RuntimeError(
-            f"{exc}\nexpected a gateway, a supervisor and exactly one decider within 60 s, last read: {seen[-1]}\n"
-            f"{_diagnostics(vm)}"
+            f"{exc}\nexpected a gateway and a supervisor within 60 s, last read: {seen[-1]}\n{_diagnostics(vm)}"
         ) from exc
     return seen[-1]
 
@@ -1892,21 +1882,21 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
     pfB-DNS is rolled back off. Only a real version move runs pfSense's removal step: `pkg add -f` of the installed
     version is an in-place overwrite that skips it.
 
-    Given the toggle on and the proxy serving, its gateway, supervisor and decider pids, and an on-box probe asking for
+    Given the toggle on and the proxy serving, its gateway and supervisor pids, and an on-box probe asking for
       a listed name every 0.2 s,
     When the branch package, re-versioned higher, comes in by `pkg upgrade` from a file:// repo,
     Then the toggle is still on, the Resolver still moved, the proxy running, a listed name still gets the VIP, the
-      three pids are the ones from before, and every probe got the VIP (the upgrade restarted nothing, dropped nothing);
+      two pids are the ones from before, and every probe got the VIP (the upgrade restarted nothing, dropped nothing);
     When the next update pass runs,
-    Then the three pids are still the same (the re-versioned package changed neither the binary nor the decider's code,
-      and nothing was deferred) and no restart is pending.
+    Then the two pids are still the same (the re-versioned package did not change the binary, and nothing was
+      deferred) and no restart is pending.
     """
     vm = rig.vm
     pkg = Path(os.environ["SMOKE_PKG"])
     higher = reversion_pkg(pkg, f"{read_compact_version(pkg)}_9", tmp_path)
     h._write_cron_disable_flag(vm)
     before = _settled_pids(vm)
-    assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
+    assert before.complete(), f"before: expected a gateway and a supervisor: {before}\n{_diagnostics(vm)}"
     probe = _Probe(vm, rig.names.blocked)
     try:
         probe.start()
@@ -1937,13 +1927,13 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
         assert h.is_vip(blocked), f"after the upgrade the listed name is not blocked: {blocked}\n{raw}\n{diagnostics}"
         during = _settled_pids(vm)
         assert during == before, (
-            f"the upgrade restarted pfB-DNS: (gateway, supervisor, decider) {before} -> {during}\n{diagnostics}"
+            f"the upgrade restarted pfB-DNS: (gateway, supervisor) {before} -> {during}\n{diagnostics}"
         )
         _assert_probe_answered(probe.stop(), "the package upgrade")
         h.reload(vm, "update")  # the next update
         later = _settled_pids(vm)
         assert later == before, (
-            f"the update after the upgrade restarted pfB-DNS: (gateway, supervisor, decider) {before} -> {later}\n"
+            f"the update after the upgrade restarted pfB-DNS: (gateway, supervisor) {before} -> {later}\n"
             f"{_diagnostics(vm)}"
         )
         assert not _restart_pending(vm), f"{RESTART_PENDING} exists after the next update: nothing was to be deferred"
@@ -1961,89 +1951,11 @@ def _restart_pending(vm: SmokeVM) -> bool:
     return result.returncode == 0
 
 
-@pytest.mark.timeout(900)  # an update pass to restart the decider, and another to put it back
-def test_a_decider_code_change_restarts_only_the_decider(rig: Rig, proxy_on: State) -> None:
-    """A changed decider module restarts the decider and nothing else, with no query lost (issue #3566).
-
-    Given pfB-DNS on and serving, its three pids and the decider's code record,
-    When a comment is appended to the installed dnswire.py and an update pass runs, an on-box probe asking for a listed
-      name every 0.2 s the whole time,
-    Then the gateway and its supervisor keep their pids, the decider has a new one, every probe got the VIP, the
-      listed name is still blocked, the decider's code record changed, and the update's log names the running decider's
-      pid and RSS and hw.usermem, the memory check it passed (issue #3580).
-    """
-    vm = rig.vm
-    target = f"{DECIDER_DIR}/dnswire.py"
-    before = _settled_pids(vm)
-    assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
-    record_before = _cat(vm, DECIDER_APPLIED)
-    assert record_before is not None, f"{DECIDER_APPLIED} is absent before the change: the decider wrote no record"
-    saved = _sh(vm, f"mkdir -p {SAVE_DIR} && cp -p {target} {SAVE_DIR}/dnswire.py")
-    assert saved.returncode == 0, f"saving {target}: rc={saved.returncode} {saved.stdout}{saved.stderr}"
-    probe = _Probe(vm, rig.names.blocked)
-    try:
-        edited = _sh(vm, f"printf '\\n# pfb3566 smoke: a decider code change\\n' >> {target}")
-        assert edited.returncode == 0, f"editing {target}: rc={edited.returncode} {edited.stdout}{edited.stderr}"
-        logged = _sh(vm, f"wc -c < {h.PFB_LOG}")
-        assert logged.returncode == 0 and logged.stdout.strip().isdigit(), (
-            f"reading the size of {h.PFB_LOG}: rc={logged.returncode} {logged.stdout!r}{logged.stderr!r}"
-        )
-        size = int(logged.stdout)
-        probe.start()
-        h.reload(vm, "update")
-        rows = probe.stop()
-        after = _settled_pids(vm)
-        diagnostics = _diagnostics(vm)
-        assert (after.gateway, after.supervisor) == (before.gateway, before.supervisor), (
-            f"a decider code change restarted the gateway or its supervisor: (gateway, supervisor) "
-            f"{(before.gateway, before.supervisor)} -> {(after.gateway, after.supervisor)}\n{diagnostics}"
-        )
-        assert after.decider is not None and after.decider != before.decider, (
-            f"a decider code change left the decider running: pid {before.decider} -> {after.decider}\n{diagnostics}"
-        )
-        _assert_probe_answered(rows, "the decider's restart")
-        blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.is_vip(blocked), f"after the decider restart {rig.names.blocked} is not blocked: {blocked}\n{raw}"
-        record_after = _cat(vm, DECIDER_APPLIED)
-        assert record_after is not None and record_after != record_before, (
-            f"{DECIDER_APPLIED} did not change: before {record_before!r}, after {record_after!r}"
-        )
-        added = _sh(vm, f"tail -c +{size + 1} {h.PFB_LOG} | grep -F {shlex.quote(DECIDER_RESTART_LOGGED)}")
-        lines = added.stdout.splitlines()
-        assert added.returncode == 0 and len(lines) == 1, (
-            f"expected one {DECIDER_RESTART_LOGGED!r} line added to {h.PFB_LOG} by the update, got {len(lines)} "
-            f"(grep rc={added.returncode}): {lines}\n{diagnostics}"
-        )
-        checked = re.search(r"\(decider pid (\d+) uses (\d+) KiB, hw\.usermem is (\d+) bytes\)", lines[0])
-        assert checked is not None, (
-            f"the decider restart's log line names no pid, RSS and hw.usermem: expected '(decider pid N uses R KiB, "
-            f"hw.usermem is U bytes)', got {lines[0]!r}\n{diagnostics}"
-        )
-        pid, rss, usermem = (int(group) for group in checked.groups())
-        assert pid == before.decider, (
-            f"the memory check measured another process than the running decider: expected pid {before.decider}, "
-            f"got {pid}: {lines[0]!r}\n{diagnostics}"
-        )
-        assert rss > 0 and usermem > 0, (
-            f"the memory check read no RSS or hw.usermem: expected both > 0, got RSS {rss} KiB and hw.usermem "
-            f"{usermem} bytes: {lines[0]!r}\n{diagnostics}"
-        )
-        _say(f"the decider restart's memory check read: {lines[0]}")
-    finally:
-        try:
-            probe.abort()
-        finally:
-            restored = _sh(vm, f"cp -p {SAVE_DIR}/dnswire.py {target} && cmp {SAVE_DIR}/dnswire.py {target}")
-            assert restored.returncode == 0, f"restoring {target}: rc={restored.returncode} {restored.stdout}"
-            _sh(vm, f"rm -rf {SAVE_DIR}")
-            h.reload(vm, "update")  # the decider on the restored code again
-
-
 @pytest.mark.timeout(1200)  # three update passes: the change, the check that it was once, the put-back
 def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: State) -> None:
-    """A changed gateway binary restarts the gateway and its decider once, and the next pass leaves them (issue #3566).
+    """A changed gateway binary restarts the gateway and its supervisor once; the next pass leaves them (issue #3566).
 
-    Given pfB-DNS on and serving, its three pids,
+    Given pfB-DNS on and serving, its two pids,
     When trailing bytes are appended to the installed pfb-dns (a file the kernel still runs) and an update pass runs,
     Then the gateway has a new pid, its binary record holds the installed binary's sha256, the proxy serves and the
       listed name is blocked;
@@ -2052,7 +1964,7 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
     """
     vm = rig.vm
     before = _settled_pids(vm)
-    assert before.complete(), f"before: expected a gateway, a supervisor and a decider: {before}\n{_diagnostics(vm)}"
+    assert before.complete(), f"before: expected a gateway and a supervisor: {before}\n{_diagnostics(vm)}"
     command = vm.ssh(f"ps -o args= -p {before.gateway}").stdout.split()
     binary = command[0] if command else ""
     assert binary.startswith(f"{PAYLOAD_DIR}/") and binary.endswith("/pfb-dns"), (
@@ -2067,15 +1979,12 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
         h.reload(vm, "update")
         after = _settled_pids(vm)
         diagnostics = _diagnostics(vm)
-        assert after.complete(), (
-            f"after the update pass: expected a gateway, a supervisor and a decider: {after}\n{diagnostics}"
-        )
+        assert after.complete(), f"after the update pass: expected a gateway and a supervisor: {after}\n{diagnostics}"
         assert after.gateway != before.gateway, (
             f"a gateway binary change left the gateway running: pid {before.gateway} -> {after.gateway}\n{diagnostics}"
         )
-        assert after.supervisor != before.supervisor and after.decider != before.decider, (
-            f"the pair was not restarted: (supervisor, decider) {(before.supervisor, before.decider)} -> "
-            f"{(after.supervisor, after.decider)}\n{diagnostics}"
+        assert after.supervisor != before.supervisor, (
+            f"the pair was not restarted: supervisor pid {before.supervisor} -> {after.supervisor}\n{diagnostics}"
         )
         installed = _sh(vm, f"sha256 -q {binary}").stdout.strip()
         assert re.fullmatch(r"[0-9a-f]{64}", installed), (
@@ -2103,12 +2012,12 @@ def test_a_gateway_binary_change_restarts_the_pair_once(rig: Rig, proxy_on: Stat
 def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
     """RACE_ROUNDS times: stop the proxy, run two `start`s at once, count what is left running.
 
-    Returns (supervisors, children, the two exit statuses) per round. The unlocked variant sets the rc script's own
+    Returns (supervisors, gateways, the two exit statuses) per round. The unlocked variant sets the rc script's own
     inner-run variable, which makes it skip lockf: the same script, with only the serialization taken away.
     A start returns once it has launched the proxy, not once the proxy serves. The locked race, which is asserted,
     is therefore counted when a proxy has published its ready marker naming a live process; a round whose proxy never
     does is stuck, not a count. The unlocked race is evidence only and promises no settled state (two supervisors
-    whose children cannot bind keep restarting them, and a start's removal of the marker can follow a proxy's
+    whose gateways cannot bind keep restarting them, and a start's removal of the marker can follow a proxy's
     write of it), so it is counted when both starts have returned and awaits nothing.
     """
     env = "" if locked else "PFB_DNS_PROXY_START_LOCKED=1 "
@@ -2132,8 +2041,8 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
         "  wait\n"
         f"{wait_for_proxy if locked else ''}"
         "  sup=$(ps -axww -o args= | grep -c 'daemon: pfb_dns_prox[y]')\n"
-        "  kids=$(ps -axww -o args= | awk '$1 ~ /python/ && /pfb_dns_prox[y][.]py/' | wc -l | tr -d ' ')\n"
-        '  echo "round=$i supervisors=$sup children=$kids rc=$(cat $s1)/$(cat $s2)"\n'
+        "  gateways=$(ps -axww -o args= | awk '$1 ~ /\\/bin\\/freebsd-[a-z0-9]+\\/pfb-dns$/' | wc -l | tr -d ' ')\n"
+        '  echo "round=$i supervisors=$sup gateways=$gateways rc=$(cat $s1)/$(cat $s2)"\n'
         "  rm -f $s1 $s2\n"
         "  i=$((i + 1))\n"
         "done\n"
@@ -2145,7 +2054,7 @@ def _race(vm: SmokeVM, *, locked: bool) -> list[tuple[int, int, str]]:
     stuck = [line for line in out.splitlines() if " stuck: " in line]
     if stuck:
         raise RuntimeError(f"STUCK/ENVIRONMENT: {stuck[0]}\nrace probe output:\n{out}")
-    rounds = [re.fullmatch(r"round=\d+ supervisors=(\d+) children=(\d+) rc=(\S+)", line) for line in out.splitlines()]
+    rounds = [re.fullmatch(r"round=\d+ supervisors=(\d+) gateways=(\d+) rc=(\S+)", line) for line in out.splitlines()]
     parsed = [(int(m.group(1)), int(m.group(2)), m.group(3)) for m in rounds if m]
     assert len(parsed) == RACE_ROUNDS, f"race probe output:\n{out}"
     return parsed
@@ -2157,7 +2066,7 @@ def test_starts_that_race_each_other_leave_exactly_one_proxy(rig: Rig, proxy_on:
 
     Given the proxy stopped before each of RACE_ROUNDS rounds,
     When two `start`s run at once,
-    Then both exit 0 and exactly one supervisor and one child are left, in every round;
+    Then both exit 0 and exactly one supervisor and one gateway are left, in every round;
       the same starts with the serialization taken away are printed too, as a snapshot taken when both starts had
       returned (not a race finding and not asserted: the proxies they launched may not have settled, and a race may
       or may not fire in a given run).
@@ -2166,12 +2075,12 @@ def test_starts_that_race_each_other_leave_exactly_one_proxy(rig: Rig, proxy_on:
     try:
         unlocked = _race(vm, locked=False)
         _say(
-            "unlocked starts, snapshot taken when both had returned (not a race finding; supervisors, children, "
+            "unlocked starts, snapshot taken when both had returned (not a race finding; supervisors, gateways, "
             f"exit statuses), per round: {unlocked}"
         )
         _force_stop_proxy(vm)
         locked = _race(vm, locked=True)
-        _say(f"locked start race (supervisors, children, exit statuses), per round: {locked}")
+        _say(f"locked start race (supervisors, gateways, exit statuses), per round: {locked}")
         assert all(round_ == (1, 1, "0/0") for round_ in locked), (
             f"two racing starts did not leave exactly one proxy: {locked}\n{_diagnostics(vm)}"
         )
@@ -2432,7 +2341,7 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
         def rolled_back() -> bool:
             return h.config_get(vm, CFG_PROXY) == "on" and _capture(vm).marker == ""
 
-        with _decider_exits_at_every_start(vm):
+        with _gateway_exits_at_every_start(vm):
             _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the boot start hook)")
             try:
                 h.wait_until(rolled_back, timeout=420.0, interval=5.0)
@@ -2448,7 +2357,7 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
                 interval=5.0,
             )
             h.wait_unbound_ready(vm)
-            # Read before the decider is put back: putting it back force-stops any proxy a failed rollback left
+            # Read before the binaries' mode is put back: putting it back force-stops any proxy a failed rollback left
             after = _capture(vm)
             toggle = h.config_get(vm, CFG_PROXY)
             diagnostics = _diagnostics(vm)
@@ -2583,34 +2492,31 @@ def test_restored_valid_marker_starts_the_existing_rc_script_and_serves_dns(rig:
 
 
 # --------------------------------------------------------------------------- #
-# A decision service that exits before READY at every start (issue #3561)
+# A gateway that exits before READY at every start (issue #3561)
 # --------------------------------------------------------------------------- #
 
-DECIDER = "/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py"  # the gateway's decider, run by pfb_python.sh
-DECIDER_ASIDE = "/var/tmp/pfb3561_decider.py"  # the shipped decider while the failing one stands in for it
 SERVICES_ASIDE = "/var/tmp/pfb3561_services.json"  # installedpackages/service while the proxy's entry is taken out
-FAILING_DECIDER = 'raise SystemExit("pfBlockerNG smoke #3561: the decision service exits before READY")\n'
+GATEWAY_BINARIES = f"{PAYLOAD_DIR}/*/pfb-dns"
 BETWEEN_STARTS_CAP = 60  # s: a supervisor restarting every 5 s waits between two starts well within this
 
 
 @contextlib.contextmanager
-def _decider_exits_at_every_start(vm: SmokeVM) -> Iterator[None]:
-    """The shipped decider replaced by one that exits at once, so every start of the gateway fails before READY (the
-    issue's `decider failed before READY: EOF`); the shipped file is put back, mode and owner kept, however the test
+def _gateway_exits_at_every_start(vm: SmokeVM) -> Iterator[None]:
+    """The installed pfb-dns binaries not executable (mode 0444), so pfb_dns.sh exits 1 with "missing or not executable"
+    at every start and the gateway never gets ready: the package's own no-usable-binary path, which its supervisor
+    retries every 5 s. The shipped mode, 0555 (test_smoke_dns_gateway.py asserts it), is put back however the test
     ends."""
     try:
-        # An aside an interrupted case left holds the shipped decider: keep it, never copy the failing one over it
-        swapped = _sh(
-            vm,
-            f"[ -e {DECIDER_ASIDE} ] || cp -p {DECIDER} {DECIDER_ASIDE}; "
-            f"[ -e {DECIDER_ASIDE} ] && printf '%s' {shlex.quote(FAILING_DECIDER)} > {DECIDER}",
-        )
-        assert swapped.returncode == 0, f"replacing {DECIDER} failed: {swapped.stderr!r}"
+        made = _sh(vm, f"chmod 0444 {GATEWAY_BINARIES}")
+        assert made.returncode == 0, f"making {GATEWAY_BINARIES} not executable failed: {made.stderr!r}"
         yield
     finally:
-        _force_stop_proxy(vm)
-        back = _sh(vm, f"[ ! -e {DECIDER_ASIDE} ] || {{ cp -p {DECIDER_ASIDE} {DECIDER} && rm -f {DECIDER_ASIDE}; }}")
-        assert back.returncode == 0, f"putting the shipped {DECIDER} back failed: {back.stderr!r}"
+        # The mode first: a failing stop must never leave the binaries 0444
+        try:
+            back = _sh(vm, f"chmod 0555 {GATEWAY_BINARIES}")
+            assert back.returncode == 0, f"putting the mode of {GATEWAY_BINARIES} back failed: {back.stderr!r}"
+        finally:
+            _force_stop_proxy(vm)
 
 
 @contextlib.contextmanager
@@ -2680,14 +2586,14 @@ def test_a_supervisor_waiting_between_failed_starts_still_names_the_proxy_and_th
 ) -> None:
     """daemon(8) -r keeps the title it set at its last start through the restart delay; the rc stop must match it.
 
-    Given pfB-DNS on and a decision service that exits before READY at every start,
+    Given pfB-DNS on and a gateway that exits before READY at every start,
     When the rc script starts the proxy and its supervisor waits out the restart delay (no child running),
     Then the supervisor's command line still names pfb_dns_proxy, the pattern the rc stop signals by,
       And `pfb_dns_proxy.sh stop` exits 0 with the supervisor gone and both pidfiles removed.
     """
     vm = rig.vm
     _force_stop_proxy(vm)
-    with _decider_exits_at_every_start(vm):
+    with _gateway_exits_at_every_start(vm):
         start = vm.ssh(PROXY_RC, "start")
         assert start.returncode == 0, f"{PROXY_RC} start: rc={start.returncode} {start.stdout!r} {start.stderr!r}"
         supervisor, seen = _between_starts(vm)
@@ -2705,12 +2611,12 @@ def test_a_supervisor_waiting_between_failed_starts_still_names_the_proxy_and_th
 
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize("registered", [True, False], ids=["service-registered", "service-entry-absent"])
-def test_a_decider_that_exits_at_every_start_is_rolled_back_with_no_supervisor_left(
+def test_a_gateway_that_exits_at_every_start_is_rolled_back_with_no_supervisor_left(
     rig: Rig, proxy_on: State, registered: bool
 ) -> None:
     """A failed activation ends with the supervisor gone and the Resolver restored, registered service entry or not.
 
-    Given pfB-DNS on, a decision service that exits before READY at every start, the package's service entry
+    Given pfB-DNS on, a gateway that exits before READY at every start, the package's service entry
       registered or taken out (an install's window: pfSense's stop_service() then does nothing), and the proxy started
       by the Resolver's start hook (services_unbound_configure(), as the install's resync restarts Unbound),
     When the real apply runs (pfb_trigger scope=dnsbl) and the proxy never becomes ready,
@@ -2720,7 +2626,7 @@ def test_a_decider_that_exits_at_every_start_is_rolled_back_with_no_supervisor_l
     vm, before = rig.vm, rig.before
     _force_stop_proxy(vm)
     try:
-        with _decider_exits_at_every_start(vm), _proxy_service_entry(vm, registered=registered):
+        with _gateway_exits_at_every_start(vm), _proxy_service_entry(vm, registered=registered):
             _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the start hook)")
             h.wait_unbound_ready(vm)
             supervisor, _ = _between_starts(vm)
@@ -2762,7 +2668,7 @@ REFUSED_RESTORE_PHP = (
 )
 # pfb_dns_proxy_resolver_unchanged()'s line for a restore that config.xml did not take
 NOT_PUT_BACK = "the DNS Resolver was not put back because config.xml could not be written"
-RECOVERY_CAP = 90.0  # s: the restore's start returns at once, the ready marker follows the decider's boot
+RECOVERY_CAP = 90.0  # s: the restore's start returns at once, the ready marker follows the gateway's boot
 
 
 def _logged(vm: SmokeVM, text: str) -> int:

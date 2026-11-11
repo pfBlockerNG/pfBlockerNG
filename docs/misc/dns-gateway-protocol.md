@@ -1,5 +1,7 @@
 # DNS gateway decision protocol
 
+> **Not spoken any more (issue #3791).** The gateway decides in its own process and starts no decider, so it no longer speaks this protocol. This file is removed together with the Python decider.
+
 Scope: the wire protocol between the Go connectivity layer (`pfb-dns`, the *gateway*) and the Python DNSBL
 decider (`dns_proxy/pfb_dns_proxy.py --decision-fd N`, the *decider*): the only process besides the gateway that
 pfB-DNS runs. Load when: changing either side or the frame format. Normative: where code and this page disagree, one

@@ -230,7 +230,7 @@ func TestAnAddForATLSKindThatTheStartDidNotServeIsRefused(t *testing.T) {
 	}
 }
 
-// G9: descriptors that come with a restart, a certificate or a remove are closed and the frame does what it does without
+// G9: descriptors that come with the retired restart frame, a certificate or a remove are closed and the frame does what it does without
 // them. The test keeps the other end of each socket it sends: it reads EOF once the gateway has closed its copy.
 func TestDescriptorsSentWithAnyOtherFrameAreClosedAndTheFrameIsHandledAsWithoutThem(t *testing.T) {
 	r := newLiveRig(t)
@@ -253,7 +253,7 @@ func TestDescriptorsSentWithAnyOtherFrameAreClosedAndTheFrameIsHandledAsWithoutT
 		{"a remove of one that is not served", r.removeFrame("dot", ap), func(s string) bool {
 			return s == "error: dot "+ap.String()+" is not served"
 		}},
-		{"a restart", ctlRestartFrame, func(s string) bool { return s == "ok" }},
+		{"the retired restart frame", ctlRestartFrame, func(s string) bool { return s == "error: a message of 4294967295 bytes is not between 1 and 65536" }},
 	}
 	for _, row := range rows {
 		kept, sent := livePair(t)
@@ -263,19 +263,19 @@ func TestDescriptorsSentWithAnyOtherFrameAreClosedAndTheFrameIsHandledAsWithoutT
 		liveRequireEOF(t, kept, row.name)
 	}
 	r.requireGone("dot", ap)
-	r.ask("udp+tcp", r.at("udp+tcp", "127.0.0.1")) // the restarted decider answers
+	r.ask("udp+tcp", r.at("udp+tcp", "127.0.0.1")) // the gateway still answers
 }
 
 // A descriptor on a byte after the frame is never read by the gateway: the kernel disposes of it when the connection ends.
 func TestADescriptorOnAByteAfterTheFrameIsNotLeftInTheGateway(t *testing.T) {
 	r := newLiveRig(t)
-	base := liveOpenFDs(t)
+	base := liveHeld(t)
 	kept, sent := livePair(t)
 	frame := r.removeFrame("dot", r.at("dot", "127.0.0.2"))
 	got := r.exchange(false, livePart{data: frame}, livePart{data: []byte{0}, fds: []int{sent}})
 	liveRefused(t, got, "a remove with a byte and a descriptor after it")
 	liveRequireEOF(t, kept, "a descriptor after the frame")
-	liveRequireFDs(t, base+1, "after the exchange") // the kept end
+	liveRequireNew(t, base, 1, "after the exchange") // the kept end
 }
 
 // An add that comes once the gateway has begun to stop is refused: stop() has taken its list of what to close.
@@ -293,13 +293,13 @@ func TestAPeerThatIsNotRootGetsNoDescriptorIntoTheGateway(t *testing.T) {
 	r := newLiveRig(t, liveStranger())
 	for _, kind := range liveKinds {
 		ap := r.at(kind, "127.0.0.2")
-		base := liveOpenFDs(t)
+		base := liveHeld(t)
 		kept, sent := livePair(t)
 		if got := r.send(r.addFrame(kind, ap), append(liveSockets(t, kind, ap), sent)...); got != "" {
 			t.Fatalf("%s add from a peer that is not root: reply %q, want none", kind, got)
 		}
 		liveRequireEOF(t, kept, kind+" add from a peer that is not root")
-		liveRequireFDs(t, base+1, kind+" add from a peer that is not root") // the kept end
+		liveRequireNew(t, base, 1, kind+" add from a peer that is not root") // the kept end
 		r.requireGone(kind, ap)
 		if r.hasLine("listening " + kind + " " + ap.String()) {
 			t.Fatalf("%s add from a peer that is not root was served:\n%s", kind, r.logs.text())

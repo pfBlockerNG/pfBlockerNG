@@ -17,7 +17,7 @@ func TestReadinessLinesBracketIPv6Addresses(t *testing.T) {
 	_ = held.Close()
 	ports := distinctPorts(t, 2)
 	path, _ := goodPEM(t)
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	cfg.port, cfg.dotPort = ports[1], ports[0]
 	cfg.listen, cfg.dotListen, cfg.tlsPEM = []string{"::1"}, []string{"::1"}, path
 	cfg.dohListen, cfg.doqListen = []string{"::1"}, []string{"::1"}

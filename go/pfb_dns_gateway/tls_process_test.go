@@ -33,7 +33,7 @@ func TestGatewayServesEveryTLSTransportAndReportsEachListener(t *testing.T) {
 		"--dot-listen", "127.0.0.1", "--dot-port", strconv.Itoa(tlsport), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
 		"--doq-listen", "127.0.0.1", "--doq-port", "0",
-	}, decider("serve"))
+	})
 	gw.waitLine("listening udp+tcp ")
 	dot := listeningAddr(t, gw.waitLine("listening dot "), "dot")
 	doh := listeningAddr(t, gw.waitLine("listening doh "), "doh")
@@ -133,7 +133,7 @@ func TestCertificateFileIsNotReadWhenNoTLSTransportIsRequested(t *testing.T) {
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf",
 		"--tls-pem", "/nonexistent/pfb_dns_cert.pem",
-	}, decider("serve"))
+	})
 	gw.waitLine("ready upstream ")
 	if log := gw.logText(); strings.Contains(log, "pfb_dns_cert") || strings.Contains(log, "TLS") {
 		t.Fatalf("nothing about TLS or the certificate file may be logged when no TLS transport is requested:\n%s", log)
@@ -145,7 +145,7 @@ func TestCertificateFileIsNotReadWhenNoTLSTransportIsRequested(t *testing.T) {
 func TestCertificateIsReadBeforeThePrivilegeDrop(t *testing.T) {
 	ports := distinctPorts(t, 2)
 	path, _ := goodPEM(t)
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	cfg.port, cfg.dotListen, cfg.dotPort, cfg.tlsPEM = ports[1], cfg.listen, ports[0], path
 	cfg.drop = func() error { return os.Remove(path) } // once the drop has happened the file is out of reach
 	srv, err := start(cfg, logs.logf)
@@ -164,7 +164,7 @@ func TestUnparseableTrustedPrefixIsLoggedAndTheGatewayStillServesDoH(t *testing.
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0", "--doh-trusted", "junk", "--doh-trusted", "192.0.2.0/24",
-	}, decider("serve"))
+	})
 	doh := listeningAddr(t, gw.waitLine("listening doh "), "doh")
 	gw.waitLine("ready upstream ")
 	if strings.Contains(gw.logText(), "listening dot") {
@@ -191,7 +191,7 @@ func TestTLSAddressThatCannotBeBoundIsSkipped(t *testing.T) {
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--dot-listen", "127.0.0.1", "--dot-port", strconv.Itoa(tlsport), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
-	}, decider("serve"))
+	})
 	skipped := gw.waitLine("cannot listen on 127.0.0.1:" + strconv.Itoa(tlsport))
 	doh := listeningAddr(t, gw.waitLine("listening doh "), "doh")
 	gw.waitLine("ready upstream ")

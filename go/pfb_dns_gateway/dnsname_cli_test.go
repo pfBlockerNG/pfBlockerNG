@@ -65,7 +65,7 @@ func TestConfigRejectsBadDNSNameUsage(t *testing.T) {
 	}
 	for label, c := range cases {
 		t.Run(label, func(t *testing.T) {
-			if cfg, err := parse(t, append(slices.Clone(c.flags), "--", "decider")...); err == nil || !strings.Contains(err.Error(), c.want) {
+			if cfg, err := parse(t, slices.Clone(c.flags)...); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got cfg=%+v err=%v, want an error mentioning %q", cfg, err, c.want)
 			}
 		})

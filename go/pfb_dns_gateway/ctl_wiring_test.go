@@ -13,7 +13,7 @@ import (
 
 func ctlConfig(t *testing.T) (config, *capture, string) {
 	t.Helper()
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	path, _ := goodPEM(t)
 	sock := filepath.Join(shortTempDir(t), "run", "ctl.sock")
 	cfg.dotListen, cfg.dotPort, cfg.tlsPEM, cfg.ctlSocket = cfg.listen, freePort(t), path, sock
@@ -94,7 +94,7 @@ func TestTheControlSocketTakesPushesAfterTheRealPrivilegeDrop(t *testing.T) {
 	gw := startGatewayProcess(t, []string{
 		"--listen", "127.0.0.1", "--port", "0", "--unbound-conf", "/nonexistent/unbound.conf", "--user", "nobody",
 		"--dot-listen", "127.0.0.1", "--dot-port", "0", "--tls-pem", file, "--ctl-socket", ctl,
-	}, decider("serve"))
+	})
 	dot := listeningAddr(t, gw.waitLine("listening dot "), "dot")
 	gw.waitLine("ready upstream ")
 	if uid := realUID(t, gw.cmd.Process.Pid); uid != nobody.Uid {

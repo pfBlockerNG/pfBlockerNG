@@ -1063,8 +1063,8 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
         output = _php_ok(
             vm,
             f"require_once('{_PKG}'); pfb_global();"
-            "$files = array_merge(pfb_dnsbl_loaded_input_paths($pfb), $pfb['dns_proxy_decider_src'],"
-            "array($pfb['unbound_py_conf'], $pfb['dns_proxy_decider_applied'],"
+            "$files = array_merge(pfb_dnsbl_loaded_input_paths($pfb),"
+            "array($pfb['unbound_py_conf'],"
             "$pfb['dns_proxy_gateway_applied'], $pfb['dnsbldir'].'/pfb_py_reload',"
             "$pfb['dnsbldir'].'/pfb_py_reload.applied'));"
             "$fence = function() use ($files) { $out = array(); foreach ($files as $file) {"
@@ -1080,8 +1080,6 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
             "'applied'=>@file_get_contents($pfb['dnsbldir'].'/pfb_py_reload.applied'),"
             "'generation'=>pfb_unbound_py_marker_generation($pfb['dnsbldir'].'/pfb_py_reload'),"
             "'applied_generation'=>pfb_unbound_py_marker_generation($pfb['dnsbldir'].'/pfb_py_reload.applied'),"
-            "'code'=>pfb_unbound_py_module_fingerprint($pfb['dns_proxy_decider_src']),"
-            "'code_applied'=>trim((string)@file_get_contents($pfb['dns_proxy_decider_applied'])),"
             "'gateway_applied'=>trim((string)@file_get_contents($pfb['dns_proxy_gateway_applied'])),"
             "'source_fingerprint'=>pfb_dnsbl_reload_fingerprint($pfb), 'db'=>array());"
             "foreach (array('resolver'=>array($pfb['dnsbl_resolver'],'dns_metric_queries'),"
@@ -1107,7 +1105,6 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
         print(f"PRIVACY_STATE {stage}={json.dumps(state, sort_keys=True)}", flush=True)
         assert state["stable"], state
         assert state["ready"] and state["gateway_pid"].isdigit(), state
-        assert state["code"] and state["code"] == state["code_applied"], state
         assert state["gateway_applied"], state
         # These are observed file generations, not the in-process Snapshot.gen.
         for raw_key, parsed_key in (("reload", "generation"), ("applied", "applied_generation")):
@@ -1238,14 +1235,13 @@ def test_dns_client_privacy_save_purges_labels_and_fences_old_worker_retry(
             assert _capture(vm).service == "running", activated
             assert activated["gateway_pid"] != before_on["gateway_pid"], (before_on, activated)
             assert activated["ini"]["metrics_client_ip"] == "on", activated
-            assert activated["code"] == before_on["code"], (before_on, activated)
             assert activated["gateway_applied"] == before_on["gateway_applied"], (before_on, activated)
             assert activated["source_fingerprint"] == before_on["source_fingerprint"], (before_on, activated)
             raw_clients(activated, True, 6, {})
             for kind, database in activated["db"].items():
                 assert database["policy"]["epoch"] != before_on["db"][kind]["policy"]["epoch"], activated
                 assert database["policy"]["epoch"] != off_saved["db"][kind]["policy"]["epoch"], activated
-            # Gateway PID is not Python PID; fresh decider init/capture follows the source boot path [INFERENCE].
+            # The gateway is the one process that decides: its new pid above is the fresh module init.
             ask(6)
             counted(7, {CLIENT_LAN_IP: 1})
             after_seven = privacy_state("on-seven")

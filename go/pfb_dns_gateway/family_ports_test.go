@@ -12,7 +12,7 @@ func TestIPv6TransportPortsBindIndependently(t *testing.T) {
 	for _, kind := range []string{"dot", "doh", "doq"} {
 		t.Run(kind, func(t *testing.T) {
 			v4, v6 := freePort(t), freePort(t)
-			args := []string{"--listen", "127.0.0.1", "--" + kind + "-listen", "127.0.0.1", "--" + kind + "-listen", "::1", "--" + kind + "-port", fmt.Sprint(v4), "--" + kind + "-port6", fmt.Sprint(v6), "--", "decider"}
+			args := []string{"--listen", "127.0.0.1", "--" + kind + "-listen", "127.0.0.1", "--" + kind + "-listen", "::1", "--" + kind + "-port", fmt.Sprint(v4), "--" + kind + "-port6", fmt.Sprint(v6)}
 			cfg, err := parseConfig(args, io.Discard)
 			if err != nil {
 				t.Fatal(err)

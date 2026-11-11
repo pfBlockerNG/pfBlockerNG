@@ -19,7 +19,7 @@ import (
 
 // The control socket is how root reaches the gateway once the gateway no longer is root: a Unix stream socket in a
 // directory only root can enter, bound before the privilege drop and kept after it, in every mode. One message per
-// connection, starting with 4 bytes: FF FF FF FF (nothing after it) restarts the decider; FF FF FF FE adds and FF FF FF FD
+// connection, starting with 4 bytes: FF FF FF FE adds and FF FF FF FD
 // removes a listener, each followed by a 4-byte big-endian length (1 to 256) and `<kind> <host:port>`, an add carrying
 // its sockets as SCM_RIGHTS (see listeners.go); FF FF FF FC (nothing after it) lists the listeners, lines then `ok`;
 // FF FF FF FB replaces the address table (dnsname.go): a 4-byte big-endian length (0 to 64 KiB) and that many bytes of
@@ -32,9 +32,8 @@ import (
 
 const (
 	defaultCtlSocket   = "/var/run/pfb_dns/ctl.sock"
-	ctlMaxPEM          = 64 << 10 // a chain of a few certificates and a key are a few KiB
-	ctlMaxListener     = 256      // `<kind> <host:port>`: the longest is 7 + 1 + 47 bytes
-	ctlRestart         = 0xffffffff
+	ctlMaxPEM          = 64 << 10   // a chain of a few certificates and a key are a few KiB
+	ctlMaxListener     = 256        // `<kind> <host:port>`: the longest is 7 + 1 + 47 bytes
 	ctlAdd             = 0xfffffffe // above ctlMaxPEM, so that no certificate's length is one
 	ctlRemove          = 0xfffffffd
 	ctlList            = 0xfffffffc
@@ -55,7 +54,6 @@ type ctlServer struct {
 	peerUID    func(*net.UnixConn) (uint32, error) // the kernel's credential of the peer; a test replaces it
 	deadline   time.Duration                       // for reading the message, and again for writing the reply
 	refusing   atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
-	restart    func() error                        // the decider restart; start() sets it
 	listeners  *listenerSet                        // what an add or remove changes; start() sets it. nil in a test of the PEM alone: no add or remove may be sent to it (a nil set would panic)
 	names      *nameAnswers                        // what the address table verb replaces; start() sets it. nil: the gateway started without --dns-name
 	ddr        *ddr                                // whose 443 set the verb replaces; start() sets it. nil: the gateway started without --ddr
@@ -163,13 +161,6 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 	}
 	n := binary.BigEndian.Uint32(head[:])
 	switch n {
-	case ctlRestart:
-		if err := c.restart(); err != nil {
-			reply("error: " + err.Error())
-			return
-		}
-		reply("ok")
-		return
 	case ctlAdd, ctlRemove:
 		reply(c.listeners.change(n == ctlAdd, in))
 		return

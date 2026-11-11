@@ -4,13 +4,13 @@
 
 The running pfB-DNS gateway (`go/pfb_dns_gateway`) gains and loses listen addresses without a restart
 ([#3599](https://github.com/pfBlockerNG/pfBlockerNG/issues/3599)). When an address on one interface and IP version
-appears or disappears, only that address's listeners change; the gateway, its decider and every other listener keep
+appears or disappears, only that address's listeners change; the gateway (its in-process decider included) and every other listener keep
 serving. This replaces the whole-pair restart that [#3598](https://github.com/pfBlockerNG/pfBlockerNG/issues/3598)
 makes once an address the gateway's start could not bind becomes bindable.
 
 ## Fixed constraints
 
-- One gateway process, as today. The decider stays the gateway's child on fd 3.
+- One gateway process, as today. The decider runs inside it (`go/pfb_dns_gateway/decider`); there is no child.
 - The gateway binds only before it drops root (`start()` in `go/pfb_dns_gateway/main.go`). A listener added later is
   bound by root PHP and handed over on the control socket (`/var/run/pfb_dns/ctl.sock`, `ctl.go`) with `SCM_RIGHTS`.
   The control socket stays uid-0-only, judged by the kernel's peer credential before a byte is read.
@@ -109,7 +109,7 @@ A remove names one served listener (bound at start or added): it is closed (both
 served`. Plain TCP and DoT connections a removed listener already accepted run to their own end; DoH and DoQ
 connections end with their listener (the HTTP server and the QUIC transport own them).
 
-Descriptors that arrive with any other frame (decider restart, certificate push, remove) are closed, and the frame is
+Descriptors that arrive with any other frame (certificate push, remove) are closed, and the frame is
 handled as without them. A peer that is not uid 0 is closed on unread, as today: the kernel disposes of descriptors
 still queued. The gateway's shutdown closes every listener it serves, added ones included; a removed listener is not
 closed twice.

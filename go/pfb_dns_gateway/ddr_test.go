@@ -998,7 +998,7 @@ func ddrLogLine(t *testing.T, text, prefix string) string {
 }
 
 func TestDDRStartAnswersFromTheBoundListenersIncludingPortsPickedByTheKernel(t *testing.T) {
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	path, _ := goodPEM(t)
 	cfg.tlsPEM = path
 	cfg.dotListen, cfg.dotPort = cfg.listen, freePort(t)
@@ -1045,7 +1045,7 @@ func TestDDRPlainWildcardSocketDesignatesOnlyOverTCPAndOnlyAnExplicitListener(t 
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cfg, logs := lifecycleConfig(t, "serve")
+			cfg, logs := lifecycleConfig(t)
 			path, _ := goodPEM(t)
 			cfg.listen, cfg.tlsPEM, cfg.dnsName, cfg.ddr = []string{"0.0.0.0"}, path, ddrTarget, true
 			cfg.dotListen, cfg.dotPort = []string{c.tlsListen}, freePort(t)
@@ -1079,7 +1079,7 @@ func TestDDRPlainWildcardSocketDesignatesOnlyOverTCPAndOnlyAnExplicitListener(t 
 }
 
 func TestDDRStartWithoutTLSListenersAnswersNODATA(t *testing.T) {
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	cfg.dnsName, cfg.ddr = ddrTarget, true
 	srv, err := start(cfg, logs.logf)
 	if err != nil {
@@ -1092,7 +1092,7 @@ func TestDDRStartWithoutTLSListenersAnswersNODATA(t *testing.T) {
 }
 
 func TestDDRStartWithAnUnusableNameFailsAndLeavesNothingBound(t *testing.T) {
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	cfg.port = freePort(t)
 	cfg.dnsName, cfg.ddr = "a..b", true
 	srv, err := start(cfg, logs.logf)
@@ -1119,7 +1119,7 @@ func TestDDRGatewayProcessTakesTheFlagsAndAnswersFromTheBoundListeners(t *testin
 		"--dot-listen", "127.0.0.1", "--dot-port", fmt.Sprint(ports[0]), "--tls-pem", path,
 		"--doh-listen", "127.0.0.1", "--doh-port", "0",
 		"--dns-name", ddrTarget, "--ddr", "--ddr-doh-443", "127.0.0.1",
-	}, decider("serve"))
+	})
 	plain := listenAddr(t, gw.waitLine("listening udp+tcp "))
 	gw.waitLine("listening dot ")
 	gw.waitLine("listening doh ")

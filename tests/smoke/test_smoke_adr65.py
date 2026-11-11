@@ -561,11 +561,11 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             assert h.is_vip(answer), f"expected VIP block for {domain!r} before breaking the manifest, got {answer!r}"
 
             # BREAK: delete the manifest, then restart the DNSBL host so init() re-runs
-            # dnsbl_build_from_manifest against the now-absent file: the pfB-DNS decider while it
+            # dnsbl_build_from_manifest against the now-absent file: pfB-DNS while it
             # hosts the module (#3770), else Unbound.
             rm = adr65_vm.ssh(f"rm -f {_MANIFEST_PATH}")
             assert rm.returncode == 0, f"failed to remove {_MANIFEST_PATH}: rc={rm.returncode} stderr={rm.stderr!r}"
-            if not h.restart_dnsbl_decider(adr65_vm):
+            if not h.restart_pfb_dns_if_hosting_dnsbl(adr65_vm):
                 _restart_unbound(adr65_vm)
 
             # NO STALE BLOCK: with the manifest absent, DNSBL is empty, so the domain

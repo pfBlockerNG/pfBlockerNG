@@ -35,7 +35,7 @@ func TestListenerInterfaceSnapshotOnOpenConnection(t *testing.T) {
 	}
 	answer := func(q transportQuery) {
 		t.Helper()
-		k.r.p.send(tAnswer, q.id, echoAnswer(decidedQuery{wire: q.wire}))
+		k.r.p.answer(q.id, echoAnswer(decidedQuery{wire: q.wire}))
 		if got := tcpReply(t, c); len(got) == 0 {
 			t.Fatal("empty socket answer")
 		}
@@ -267,7 +267,7 @@ func TestBadListenerInterfaceFlagsAreNotRefusedByParse(t *testing.T) {
 	values["a good entry"] = listenerValue("127.0.0.1", "LAN")
 	for name, value := range values {
 		t.Run(name, func(t *testing.T) {
-			cfg, err := parse(t, "--listener-interface", value, "--", "decider")
+			cfg, err := parse(t, "--listener-interface", value)
 			if err != nil || !slices.Equal(cfg.listenerInterfaces, []string{value}) {
 				t.Fatalf("flag %q: listenerInterfaces %q, error %v, want the flag kept and no error", value, cfg.listenerInterfaces, err)
 			}
@@ -277,7 +277,7 @@ func TestBadListenerInterfaceFlagsAreNotRefusedByParse(t *testing.T) {
 
 // At start the good flags are applied, the first flag for an address wins, and each skipped flag is logged.
 func TestStartSkipsBadListenerInterfaceFlagsAndAppliesTheGoodOnes(t *testing.T) {
-	cfg, logs := lifecycleConfig(t, "serve")
+	cfg, logs := lifecycleConfig(t)
 	oversized := listenerValue("127.0.0.9", strings.Repeat("a", 65536))
 	second := listenerValue("127.0.0.1", "second")
 	cfg.listenerInterfaces = []string{listenerValue("127.0.0.1", "kept"), listenerValue("127.0.0.2", "Län"), listenerValue("127.0.0.3", "日本"), oversized}

@@ -515,7 +515,7 @@ def test_top1m_fixed_file_publish_reload_cache_and_teardown(top1m_fixed_file_vm:
     assert second["raw_dir_identity"] == first["raw_dir_identity"], "TOP1M-only update replaced unrelated generation"
     pids_after = h.dns_host_pids(vm)
     assert pids_after == pids_before, (
-        f"TOP1M-only data change restarted a DNSBL host instead of swapping: (Unbound, decider) pids "
+        f"TOP1M-only data change restarted a DNSBL host instead of swapping: (Unbound, pfB-DNS gateway) pids "
         f"{pids_before} -> {pids_after}"
     )
 
