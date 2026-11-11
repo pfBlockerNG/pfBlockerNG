@@ -44,9 +44,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses the
+  # published one); `refresh` runs inside it instead of installing uv (#3852).
+  ci-image:
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   refresh:
     name: Rebuild + commit module-durations.txt
+    needs: ci-image
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     # workflow_run: only the nightly (schedule) full run, and only if it passed.
     # workflow_dispatch: the operator vouches the given run was a full fan-out.
     if: >-
@@ -60,9 +72,6 @@ jobs:
           persist-credentials: true   # need to push the refreshed table to devel via git push
           ref: devel
           fetch-depth: 0   # full history so the pre-push rebase can replay cleanly
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.2.0
 
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .

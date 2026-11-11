@@ -313,6 +313,10 @@ jobs:
   build-pkg:
     if: ${{ inputs.pkg_artifact == '' }}
     uses: ./.github/workflows/build-pkg-linux.yml
+    # build-pkg-linux.yml builds the ci image itself; its ci-image job needs packages: write, which only this caller can grant it.
+    permissions:
+      contents: read
+      packages: write
     with:
       channel: nightly
       # Build a .pkg whose ABI + dep names match THIS leg's image. A bare dispatch

@@ -306,6 +306,10 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.leg_matrix) }}
     uses: ./.github/workflows/build-pkg-linux.yml
+    # build-pkg-linux.yml builds the ci image itself; its ci-image job needs packages: write, which only this caller can grant it.
+    permissions:
+      contents: read
+      packages: write
     with:
       channel: nightly
       # ABI/dep target matching this leg's image (CE=FreeBSD:15, Plus=FreeBSD:16

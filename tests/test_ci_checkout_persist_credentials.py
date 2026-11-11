@@ -35,7 +35,7 @@ _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 _STEP_ITEM_RE = re.compile(r"^(?P<indent>[ ]*)-\s")
 _STEP_MARKER_RE = re.compile(r"^[ ]*-[ ]+")  # the sequence marker only, never the key that follows
 _CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
-_EXPECTED_ACTION_VERSIONS = {"actions/checkout": "v7", "astral-sh/setup-uv": "v10.2.0"}
+_EXPECTED_ACTION_VERSIONS = {"actions/checkout": "v7"}
 _PERSIST_RE = re.compile(r"^[ ]*persist-credentials:\s*(?P<value>true|false)\b(?P<comment>.*)$")
 _JOB_KEY_RE = re.compile(r"^ {2}[A-Za-z0-9_.-]+:\s*(#.*)?$")
 _WITH_KEY_RE = re.compile(r"^(?P<indent>[ ]*)with:\s*(#.*)?$")
@@ -228,7 +228,7 @@ def _action_version_offenders(files: list[Path]) -> tuple[set[str], list[str]]:
     return seen, offenders
 
 
-def test_checkout_and_setup_uv_versions_are_current() -> None:
+def test_checkout_version_is_current() -> None:
     seen, offenders = _action_version_offenders(_workflow_files())
     assert seen == _EXPECTED_ACTION_VERSIONS.keys(), (
         f"expected action pins not found: {sorted(_EXPECTED_ACTION_VERSIONS.keys() - seen)}"

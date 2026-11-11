@@ -325,14 +325,14 @@ def test_dependency_builder_toolchain_epoch_and_handoff_are_structurally_locked(
     build_steps = workflow["jobs"]["build"]["steps"]
     handoff_steps = workflow["jobs"]["handoff"]["steps"]
 
-    setup = next(step for step in build_steps if step.get("name") == "Set up the pinned dependency-package toolchain")
     sync = next(step for step in build_steps if step.get("name") == "Sync the locked dependency-package toolchain")
     prepare = next(
         step for step in prepare_steps if step.get("name") == "Resolve pinned source, Ports, and live matrices"
     )
     handoff = next(step for step in handoff_steps if step.get("name") == "Create verified publisher handoff")
 
-    assert setup["with"]["version"] == "0.12.6"
+    # uv is baked into the ci image (its UV_VERSION ARG is pinned by test_ci_tool_pins.py), not set up per run.
+    assert workflow["jobs"]["build"].get("container", {}).get("image") == "${{ needs.ci-image.outputs.ci }}"
     assert sync["run"] == "uv sync --project trusted --locked --only-group dep-pkg-build"
     assert "> plan/dependency-builder.json" in prepare["run"]
     assert "> plan/source-date-epoch" in prepare["run"]

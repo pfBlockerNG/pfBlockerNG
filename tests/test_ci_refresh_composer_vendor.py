@@ -47,10 +47,10 @@ _GIT_COMMIT_RE = re.compile(r"\bgit commit\b")
 # The one way a job ends up with a vendor tree: Composer resolving it in that job.
 _VENDOR_TREE_RE = re.compile(r"\bcomposer install\b")
 
-# The hook's php -l / PHPStan / PHPCS gates must run on a supported PHP, which
-# means setup-php fed from read-version-matrix rather than the runner default.
-_SETUP_PHP_RE = re.compile(r"uses:\s*shivammathur/setup-php@")
-_PHP_VERSION_RE = re.compile(r"php-version:\s*(?P<value>\S.*?)\s*$")
+# The hook's php -l / PHPStan / PHPCS gates must run on a supported PHP. The ci image bakes every
+# supported PHP side by side, so the job selects its version from read-version-matrix rather than
+# keeping the image's default.
+_SELECT_PHP_RE = re.compile(r"update-alternatives\s+--set\s+php\s+(?P<target>.+?)\s*$")
 _MATRIX_OUTPUT_RE = re.compile(r"outputs\.php_versions")
 
 # A job key: exactly two spaces of indent under the top-level `jobs:` mapping.
@@ -197,38 +197,66 @@ def test_php_staging_jobs_install_composer_before_committing() -> None:
     )
 
 
+def _php_selection_offenders(name: str, text: str) -> list[str]:
+    """Every hook-running, PHP-staging job in this workflow that does not pick its PHP from the matrix."""
+    offenders: list[str] = []
+    for job, _, job_lines in _hook_php_jobs(text):
+        selected = [match.group("target") for line in job_lines if (match := _SELECT_PHP_RE.search(line))]
+        if not selected:
+            offenders.append(f"{name}: job `{job}` runs the hook PHP gates on the image's default PHP")
+        offenders.extend(
+            f"{name}: job `{job}` selects PHP {target} instead of a read-version-matrix output"
+            for target in selected
+            if not _MATRIX_OUTPUT_RE.search(target)
+        )
+    return offenders
+
+
 def test_php_staging_jobs_pin_php_from_the_version_matrix() -> None:
-    """The hook's PHP gates run on a supported PHP, not on whatever the runner ships.
+    """The hook's PHP gates run on a supported PHP, not on whatever the image defaults to.
 
     Scenario: .githooks/pre-commit runs php -l and PHPCS.
     Given a job that puts those gates in front of its own commit,
-    when the runner image changes its default PHP,
+    when the image's default PHP changes,
     then the gates must still run on a version supported-versions.json ships --
-    so the PHP version comes from read-version-matrix, never from the ambient
-    runner default and never from a literal restating the matrix.
+    so the job selects its PHP from read-version-matrix with `update-alternatives`,
+    never keeps the image default and never selects a literal restating the matrix.
     """
     offenders: list[str] = []
     for path in _workflow_files():
-        text = path.read_text(encoding="utf-8")
-        for job, _, job_lines in _hook_php_jobs(text):
-            if _first_line_matching(job_lines, _SETUP_PHP_RE) is None:
-                offenders.append(f"{path.name}: job `{job}` runs the hook PHP gates on the runner's ambient PHP")
-                continue
-            pinned = [
-                match.group("value")
-                for line in job_lines
-                if (match := _PHP_VERSION_RE.search(line))
-                if not _MATRIX_OUTPUT_RE.search(match.group("value"))
-            ]
-            if pinned:
-                offenders.append(
-                    f"{path.name}: job `{job}` pins php-version to {', '.join(pinned)} "
-                    "instead of a read-version-matrix output"
-                )
+        offenders.extend(_php_selection_offenders(path.name, path.read_text(encoding="utf-8")))
 
     assert not offenders, "expected every PHP-staging job to take its PHP version from the matrix; got:\n" + "\n".join(
         offenders
     )
+
+
+_PHP_STAGING_JOB = (
+    "jobs:\n"
+    "  refresh:\n"
+    "    steps:\n"
+    "      - run: sh scripts/setup-hooks.sh\n"
+    "{select}"
+    "      - run: composer install\n"
+    "      - run: |\n"
+    "          git add src/foo.php\n"
+    "          git commit -m 'x'\n"
+)
+
+
+def test_guard_flags_a_php_staging_job_whose_php_does_not_come_from_the_matrix() -> None:
+    """The PHP-selection check's own red paths, and the compliant shape that passes."""
+    select = "      - run: update-alternatives --set php "
+    matrix = select + '"/usr/bin/php${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}"\n'
+    literal = select + '"/usr/bin/php8.3"\n'
+
+    assert _php_selection_offenders("synthetic.yml", _PHP_STAGING_JOB.format(select=matrix)) == []
+    assert _php_selection_offenders("synthetic.yml", _PHP_STAGING_JOB.format(select="")) == [
+        "synthetic.yml: job `refresh` runs the hook PHP gates on the image's default PHP"
+    ]
+    assert _php_selection_offenders("synthetic.yml", _PHP_STAGING_JOB.format(select=literal)) == [
+        'synthetic.yml: job `refresh` selects PHP "/usr/bin/php8.3" instead of a read-version-matrix output'
+    ]
 
 
 def test_guard_flags_a_job_that_stages_php_without_installing_composer() -> None:

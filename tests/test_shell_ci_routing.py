@@ -40,13 +40,17 @@ def test_ports_parity_examples_are_isolated_and_explicitly_routed() -> None:
 def test_linux_dependency_builder_uses_structured_locked_reproducibility_contract() -> None:
     workflow = yaml.safe_load(_read(".github/workflows/build-pkg-linux.yml"))
     steps = workflow["jobs"]["build"]["steps"]
-    setup = next(step for step in steps if step.get("name") == "Set up uv and the pinned Python")
     sync = next(step for step in steps if step.get("name") == "Sync the locked dependency-package toolchain")
     build = next(step for step in steps if step.get("name") == "Build .pkg via build-leg.sh")
 
-    assert setup["with"]["version"] == "0.12.6"
-    assert setup["with"]["activate-environment"] is True
-    assert sync["run"] == "uv sync --locked --only-group dep-pkg-build"
+    # uv and the pinned Python are baked into the ci image (UV_VERSION is pinned by test_ci_tool_pins.py), so
+    # only the sync remains, and the synced venv goes on PATH where the activated environment used to put it.
+    assert workflow["jobs"]["build"].get("container", {}).get("image") == "${{ needs.ci-image.outputs.ci }}"
+    assert sync["run"].splitlines() == [
+        "set -eu",
+        "uv sync --locked --only-group dep-pkg-build",
+        'echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"',
+    ]
     assert '--ports-sha "$PORTS_SHA"' in build["run"]
     assert '--source-date-epoch "$SOURCE_DATE_EPOCH"' in build["run"]
 

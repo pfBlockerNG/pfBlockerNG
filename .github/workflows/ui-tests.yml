@@ -218,6 +218,10 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
     uses: ./.github/workflows/build-pkg-linux.yml
+    # build-pkg-linux.yml builds the ci image itself; its ci-image job needs packages: write, which only this caller can grant it.
+    permissions:
+      contents: read
+      packages: write
     with:
       channel: nightly
       # Build the leg's .pkg for its own pfSense base, with the ABI/php/python

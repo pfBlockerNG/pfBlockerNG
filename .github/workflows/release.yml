@@ -104,6 +104,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses the
+  # published one); the jobs that install tools run inside it instead (#3852).
+  ci-image:
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   # ── 0. Prepare release (real publish only) ───────────────────────────────
   # PINS the release SHA and mints the annotated tag LOCALLY — it commits nothing,
   # pushes nothing (issue #1855: the tag reaches GitHub in `tag-release`, after
@@ -883,8 +891,12 @@ jobs:
     # softprops/action-gh-release CREATES a missing tag itself, which is exactly how a
     # failed run used to strand one, so a skipped tag-release must never reach it.
     # Real publish only: a dry run stops after the verification suites (steps 1-4).
-    needs: [prepare-release, read-matrix, build-pkgs-portable, tag-release]
-    if: ${{ !cancelled() && github.event.inputs.dry_run == 'false' && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.tag-release.result == 'success' }}
+    needs: [ci-image, prepare-release, read-matrix, build-pkgs-portable, tag-release]
+    if: ${{ !cancelled() && needs.ci-image.result == 'success' && github.event.inputs.dry_run == 'false' && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.tag-release.result == 'success' }}
+    # The ci image bakes the pinned Python (.python-version) that builds the source archive.
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     permissions:
       packages: read
       contents: write
@@ -1151,11 +1163,6 @@ jobs:
             echo "__RELEASE_BODY__"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Pin source archive Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.11.15"
-
       - name: Build source archive
         run: |
           set -eu
@@ -1245,12 +1252,16 @@ jobs:
   build-pkgs-portable:
     name: "build .pkg — ${{ matrix.variant }} ${{ matrix.pfsense_version }}"
     runs-on: ubuntu-latest
-    needs: [prepare-release, read-matrix, resolve-stamp]
+    needs: [ci-image, prepare-release, read-matrix, resolve-stamp]
     # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
-    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.resolve-stamp.result == 'success' }}
+    if: ${{ always() && needs.ci-image.result == 'success' && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.resolve-stamp.result == 'success' }}
     timeout-minutes: 30
-    env:
-      GO_VERSION: "1.27.0"
+    # The ci image bakes uv + the pinned Python and Go (build-pkg-portable.py cross-compiles the
+    # release source's pfB-DNS gateway with it, GOTOOLCHAIN=local; a release line without the Go
+    # module, release/3.3, builds nothing with it).
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     strategy:
       fail-fast: false
       matrix:
@@ -1282,25 +1293,13 @@ jobs:
           EXTRA_PKGS="$(printf '%s' "$EXTRA_PKGS" | jq -c .)"
           printf 'extra_pkgs=%s\n' "$EXTRA_PKGS" >> "$GITHUB_OUTPUT"
 
-      - name: Set up the pinned dependency-package toolchain
-        if: steps.extras.outputs.extra_pkgs != '[]'
-        uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: "0.12.6"
-          activate-environment: true
-
       - name: Sync the locked dependency-package toolchain
         if: steps.extras.outputs.extra_pkgs != '[]'
-        run: uv sync --locked --only-group dep-pkg-build
-
-      - name: Set up the pinned Go toolchain
-        # The release source's pfB-DNS gateway is cross-compiled by build-pkg-portable.py
-        # (scripts/build-pfb-dns.py, GOTOOLCHAIN=local): this is the compiler it runs. A
-        # release line without the Go module (release/3.3) builds nothing with it.
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
+        # The synced venv goes on PATH, where the activated environment used to put it.
+        run: |
+          set -eu
+          uv sync --locked --only-group dep-pkg-build
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Compute this leg's LEG/ABI
         id: leg

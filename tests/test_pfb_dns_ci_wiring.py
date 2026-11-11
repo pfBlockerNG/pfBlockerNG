@@ -1,10 +1,9 @@
 """CI provides the Go compiler wherever the pfB-DNS payload is built (issue #3513, dual-arch package).
 
 build-pkg-portable.py cross-compiles the gateway, so every job that runs it needs the pinned Go
-toolchain on PATH BEFORE the build step. The jobs that run inside the ci / ci-vm image (this
-repository's own test suite, the smoke job) get it from there, whose GO_VERSION ARG
-test_ci_tool_pins.py keeps equal to GO_PIN; the other jobs pin one literal per job, kept equal
-everywhere by the same file and at least the module's own `go` directive.
+toolchain on PATH BEFORE the build step. Every such job, and the job that runs this repository's
+own test suite, runs inside the ci / ci-vm image and gets Go from there, whose GO_VERSION ARG
+test_ci_tool_pins.py keeps equal to GO_PIN and at least the module's own `go` directive.
 """
 
 from __future__ import annotations
@@ -21,15 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
 SETUP_GO = "actions/setup-go@v7"
 TEST_JOB = ("test.yml", "test")
-# The build sites known today; the discovery below must still find every one of them.
+# The build sites known today; the discovery below must still find every one of them. Each runs
+# in a ci / ci-vm job container, whose Go comes from the image instead of a setup-go step.
 KNOWN_BUILD_SITES = {
     ("build-pkg-linux.yml", "build"),
     ("nightly.yml", "build"),
     ("release.yml", "build-pkgs-portable"),
-    ("smoke-single.yml", "smoke"),
-}
-# Build sites whose Go comes from the ci-vm image instead of a setup-go step.
-IMAGE_BUILD_SITES = {
     ("smoke-single.yml", "smoke"),
 }
 
@@ -50,28 +46,6 @@ def _first_step_running(job: dict[str, Any], needle: str) -> int | None:
     return None
 
 
-def go_wiring_problems(job: dict[str, Any], consumer: str) -> list[str]:
-    """Everything wrong with how ``job`` provides Go before its first step that runs ``consumer``."""
-    steps = job.get("steps") or []
-    consumer_at = _first_step_running(job, consumer)
-    if consumer_at is None:
-        return [f"no step runs {consumer!r}"]
-    setups = [i for i, step in enumerate(steps) if str(step.get("uses", "")) == SETUP_GO]
-    if not setups:
-        return [f"no {SETUP_GO} step"]
-    problems = []
-    if setups[0] > consumer_at:
-        problems.append(f"{SETUP_GO} comes after the step that runs {consumer!r}")
-    inputs = steps[setups[0]].get("with") or {}
-    if inputs.get("go-version") != "${{ env.GO_VERSION }}":
-        problems.append(f"go-version is {inputs.get('go-version')!r}, not the job's GO_VERSION pin")
-    if inputs.get("cache") is not False:
-        problems.append(f"cache is {inputs.get('cache')!r}; a package build must not restore a module cache")
-    if str((job.get("env") or {}).get("GO_VERSION")) != GO_PIN:
-        problems.append(f"job env GO_VERSION is {(job.get('env') or {}).get('GO_VERSION')!r}, expected {GO_PIN!r}")
-    return problems
-
-
 def image_go_problems(job: dict[str, Any]) -> list[str]:
     """Everything wrong with how ``job`` gets the Go baked into the ci / ci-vm image."""
     problems = []
@@ -83,13 +57,10 @@ def image_go_problems(job: dict[str, Any]) -> list[str]:
     return problems
 
 
-def test_every_job_that_runs_the_package_builder_pins_go_before_building() -> None:
+def test_every_job_that_runs_the_package_builder_runs_in_the_image_that_bakes_the_pinned_go() -> None:
     sites = {key: job for key, job in _jobs().items() if _first_step_running(job, "build-leg.sh") is not None}
     assert KNOWN_BUILD_SITES <= set(sites), f"build sites vanished or moved: {sorted(KNOWN_BUILD_SITES - set(sites))}"
-    problems = {
-        key: image_go_problems(job) if key in IMAGE_BUILD_SITES else go_wiring_problems(job, "build-leg.sh")
-        for key, job in sites.items()
-    }
+    problems = {key: image_go_problems(job) for key, job in sites.items()}
     assert {key: p for key, p in problems.items() if p} == {}
 
 
@@ -104,42 +75,8 @@ def test_the_test_job_runs_pytest_in_the_ci_image_that_bakes_the_pinned_go() -> 
         assert "$CI_RUN" in code, f"pytest runs outside the ci image (no Go baked there): {step['run']!r}"
 
 
-def test_go_wiring_check_rejects_each_planted_defect() -> None:
+def test_image_go_check_rejects_each_planted_defect() -> None:
     """Vacuity guard: the checker above reports every way the wiring can be wrong."""
-    good: dict[str, Any] = {
-        "env": {"GO_VERSION": GO_PIN},
-        "steps": [
-            {"uses": SETUP_GO, "with": {"go-version": "${{ env.GO_VERSION }}", "cache": False}},
-            {"run": "sh scripts/build-leg.sh"},
-        ],
-    }
-    assert go_wiring_problems(good, "build-leg.sh") == []
-
-    def mutated(**patch: Any) -> dict[str, Any]:
-        job: dict[str, Any] = {"env": dict(good["env"]), "steps": [dict(s) for s in good["steps"]]}
-        job["steps"][0]["with"] = dict(good["steps"][0]["with"])
-        for key, value in patch.items():
-            if key == "env":
-                job["env"] = value
-            elif key == "uses":
-                job["steps"][0]["uses"] = value
-            elif key == "order":
-                job["steps"].reverse()
-            else:
-                job["steps"][0]["with"][key] = value
-        return job
-
-    for label, job, fragment in (
-        ("missing setup-go", mutated(uses="actions/setup-node@v7"), "no actions/setup-go"),
-        ("setup after build", mutated(order=True), "comes after"),
-        ("literal version", mutated(**{"go-version": "1.27.0"}), "go-version"),
-        ("module cache restored", mutated(cache=True), "cache"),
-        ("pin missing", mutated(env={}), "GO_VERSION"),
-        ("pin drifted", mutated(env={"GO_VERSION": "1.1.0"}), "GO_VERSION"),
-    ):
-        problems = go_wiring_problems(job, "build-leg.sh")
-        assert any(fragment in p for p in problems), f"{label}: not reported, got {problems}"
-
     assert image_go_problems({"container": {"image": "${{ needs.ci-image.outputs.ci_vm }}"}, "steps": []}) == []
     assert image_go_problems({"container": {"image": "${{ needs.ci-image.outputs.ci }}"}, "steps": []}) == []
     for label, job, fragment in (

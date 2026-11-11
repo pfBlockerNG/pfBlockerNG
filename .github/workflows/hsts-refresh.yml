@@ -48,9 +48,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses the
+  # published one); `refresh` runs inside it instead of installing uv (#3852).
+  ci-image:
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   refresh:
     name: Refresh pfb_py_hsts.txt and open PR on change
+    needs: ci-image
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     timeout-minutes: 10
     permissions:
       packages: read
@@ -66,9 +78,6 @@ jobs:
         with:
           persist-credentials: true   # need to push the automation branch via git push --force
           ref: devel
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.2.0
 
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .

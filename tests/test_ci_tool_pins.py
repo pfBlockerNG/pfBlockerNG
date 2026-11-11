@@ -9,6 +9,7 @@ SHELLCHECK_PIN = "v0.11.0"
 SHELLSPEC_PIN = "0.28.1"
 KCOV_PIN = "a39874f938ce13f7a65f253120d1ec946b349ffe"  # the commit tag v43 pointed at
 GO_PIN = "1.27.0"  # the compiler that cross-builds the pfB-DNS payload (issue #3513)
+UV_PIN = "0.12.6"  # the uv that syncs the locked dependency-package toolchain
 
 
 _WORKFLOWS = ROOT / ".github/workflows"
@@ -60,11 +61,10 @@ def _docs_under(root: Path) -> list[Path]:
 
 
 def test_gate_deciding_pins_agree_wherever_they_appear() -> None:
-    """A tool version decides gate verdicts, so every place that installs it must install
-    the SAME build. The pins live as ARGs in the CI image's Dockerfile, and some workflows
-    still spell them out too (ShellCheck twice in test.yml, shellspec in test.yml and
-    build-pkg-linux.yml) — two spellings of one pin drift, and the jobs then grade
-    against different binaries while both read as green (#2185)."""
+    """A tool version decides gate verdicts, so every place that declares it must declare
+    the SAME build. The pins live as ARGs in the CI image's Dockerfile; two spellings of one
+    pin drift, and the jobs then grade against different binaries while both read as green
+    (#2185)."""
     pins = _pins()
 
     # Floor: the pins whose drift changes a verdict or a shipped binary must actually be found,
@@ -75,6 +75,7 @@ def test_gate_deciding_pins_agree_wherever_they_appear() -> None:
         ("SHELLSPEC_VERSION", SHELLSPEC_PIN),
         ("KCOV_COMMIT", KCOV_PIN),
         ("GO_VERSION", GO_PIN),
+        ("UV_VERSION", UV_PIN),
     ):
         assert name in pins, f"nothing pins {name} any more — the install moved; retarget this gate"
         assert set(pins[name]) == {expected}, f"{name} is pinned to {pins[name]}, this gate records {expected}"
@@ -106,6 +107,41 @@ def test_pin_scanner_reports_a_planted_disagreement() -> None:
     )
     assert index["TOOL_VERSION"] == {"1.0.0": ["a.yml:2"], "2.0.0": ["b.yml:2"]}
     assert index["KEPT_VERSION"] == {"9": ["a.yml:3", "b.yml:3"]}
+
+
+def _declared_outside_the_dockerfile(index: dict[str, dict[str, list[str]]]) -> dict[str, list[str]]:
+    """{PIN: [site, ...]}: every site beyond the Dockerfile that declares a pin the Dockerfile owns."""
+    stray: dict[str, list[str]] = {}
+    for name, values in index.items():
+        sites = [site for where in values.values() for site in where]
+        if any(site.startswith("Dockerfile:") for site in sites):
+            others = [site for site in sites if not site.startswith("Dockerfile:")]
+            if others:
+                stray[name] = others
+    return stray
+
+
+def test_a_tool_pin_the_image_owns_is_declared_only_in_the_dockerfile() -> None:
+    """The jobs run inside the image, so its Dockerfile ARG is the one version they use. A
+    workflow that spells the same name again states a version nothing installs any more, and
+    the two drift apart while both read as current."""
+    pins = _pins()
+    owned = {
+        name for name, values in pins.items() if any(s.startswith("Dockerfile:") for v in values.values() for s in v)
+    }
+    # Floor: a scan that stopped reading the Dockerfile's ARGs would find nothing to compare.
+    assert {"GO_VERSION", "NODE_VERSION", "ORAS_VERSION", "SHELLSPEC_VERSION", "KCOV_COMMIT"} <= owned
+    assert _declared_outside_the_dockerfile(pins) == {}
+
+
+def test_image_pin_scanner_reports_a_workflow_that_redeclares_a_dockerfile_pin() -> None:
+    """Vacuity guard: a workflow env key named like a Dockerfile ARG is reported with its site; a pin
+    only a workflow declares, and a Dockerfile-only pin, are not."""
+    dockerfile = ("Dockerfile", "ARG TOOL_VERSION=1.0.0\nARG DEBIAN_FRONTEND=noninteractive\n")
+    workflow = ("w.yml", '    env:\n      TOOL_VERSION: "1.0.0"\n      OTHER_VERSION: 2\n')
+    assert _declared_outside_the_dockerfile(_pin_index([dockerfile, workflow])) == {"TOOL_VERSION": ["w.yml:2"]}
+    assert _declared_outside_the_dockerfile(_pin_index([dockerfile])) == {}
+    assert _declared_outside_the_dockerfile(_pin_index([workflow])) == {}
 
 
 def _contributing() -> str:

@@ -36,6 +36,14 @@ env:
   PORTS_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ports_ref || vars.NIGHTLY_PORTS_REF || 'pfblockerng/use-github' }}
 
 jobs:
+  # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses the
+  # published one); the jobs that install tools run inside it instead (#3852).
+  ci-image:
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   prepare:
     name: Pin inputs and identify snapshot
     runs-on: ubuntu-latest
@@ -204,10 +212,13 @@ jobs:
 
   build:
     name: Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }} php${{ matrix.php_version }} ${{ matrix.py_flavor }})
-    needs: prepare
+    needs: [ci-image, prepare]
     runs-on: ubuntu-latest
-    env:
-      GO_VERSION: "1.27.0"
+    # The ci image bakes uv + the pinned Python and Go (the trusted builder cross-compiles the
+    # pinned source's pfB-DNS gateway with it, GOTOOLCHAIN=local).
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     strategy:
       fail-fast: false
       matrix:
@@ -229,21 +240,8 @@ jobs:
           persist-credentials: false
           path: source
 
-      - name: Set up the pinned dependency-package toolchain
-        uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: "0.12.6"
-
       - name: Sync the locked dependency-package toolchain
         run: uv sync --project trusted --locked --only-group dep-pkg-build
-
-      - name: Set up the pinned Go toolchain
-        # The pinned source's pfB-DNS gateway is cross-compiled by the trusted builder
-        # (scripts/build-pfb-dns.py, GOTOOLCHAIN=local): this is the compiler it runs.
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
 
       - name: Build and verify package
         env:
@@ -440,9 +438,13 @@ jobs:
 
   publish-nightly-oci:
     name: Publish verified Nightly handoff to OCI
-    needs: [prepare, handoff]
+    needs: [ci-image, prepare, handoff]
     if: vars.PKG_PUBLICATION_ENABLED == 'true'
     runs-on: ubuntu-latest
+    # oras is baked into the ci image; the login and push below use the same token env as before.
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     permissions:
       packages: write
       contents: read
@@ -459,8 +461,6 @@ jobs:
           pattern: nightly-result-*
           path: oci/results
           merge-multiple: false
-
-      - uses: oras-project/setup-oras@v2
 
       - name: Push exact Nightly OCI manifest
         id: push
@@ -527,8 +527,11 @@ jobs:
 
   resolve-live-stable-identity:
     name: Pin deployed Stable identity
-    needs: [prepare, ingest-pkg]
+    needs: [ci-image, prepare, ingest-pkg]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     outputs:
       source_sha: ${{ steps.identity.outputs.source_sha }}
       version: ${{ steps.identity.outputs.version }}
@@ -540,13 +543,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: "0.12.6"
-          activate-environment: true
-
       - name: Install the pinned catalogue decoder
-        run: uv sync --locked --only-group dep-pkg-build
+        # The synced venv goes on PATH so the `python3` below has the decoder.
+        run: |
+          set -eu
+          uv sync --locked --only-group dep-pkg-build
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Resolve exact published Stable identity
         id: identity

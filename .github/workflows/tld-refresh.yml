@@ -48,9 +48,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses the
+  # published one); `refresh` runs inside it instead of installing uv, PHP and Composer (#3852).
+  ci-image:
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   refresh:
     name: Refresh TLD lists and open PR on change
+    needs: ci-image
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     permissions:
       packages: read
       contents: write        # push the automation branch (NOT devel)
@@ -65,9 +77,6 @@ jobs:
         with:
           persist-credentials: true   # need to push the automation branch via git push --force
           ref: devel
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.2.0
 
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .
@@ -86,12 +95,13 @@ jobs:
 
       # The refresh stages a .php file, so pre-commit enters its PHP block: php -l,
       # PHPStan and PHPCS out of vendor/bin (issue #1793). They run on the OLDEST
-      # supported PHP — the floor a diagnostic has to clear — never the runner default.
-      - name: Set up PHP ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
-        uses: shivammathur/setup-php@v2 # v2.37.2
-        with:
-          php-version: ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
-          tools: composer:2.10.2
+      # supported PHP — the floor a diagnostic has to clear — never the image default.
+      - name: Select PHP ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
+        # The image bakes every supported PHP side by side, and Composer; an unbaked version
+        # fails here, loudly.
+        run: |
+          update-alternatives --set php "/usr/bin/php${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}"
+          php -v
 
       - name: Resolve the Composer cache directory
         # Composer's cache lives wherever COMPOSER_HOME/XDG put it, not at a fixed
