@@ -143,6 +143,9 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$GLOBALS['pfb_test_interfaces'] = array_fill_keys($names, '');
 		pfb_dns_proxy_service();
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE, 'the generator wrote the rc script the check reads');
+		// A started proxy is ready (child pidfile and marker agree); what the gateway reports is then judged on its control socket
+		$this->proxyServes();
+		$this->seedRunningGateway();
 	}
 
 	/**
@@ -641,6 +644,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	{
 		// Given no warning, a startup notice from an earlier start, and a gateway that gives no list
 		$this->box(self::DOT_ON);
+		$this->standInsStop();
 		$this->fileOther(self::ID, 'pfB-DNS started with problems: DoT is not served on 192.0.2.1:853: old.');
 		$before = $this->standing();
 		if ($gateway) {
@@ -658,6 +662,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	public function testAListThatIsNotKnownStillReportsAWarning(bool $gateway, ?string $reply): void
 	{
 		$this->box(['pfb_dns_interface' => 'lan,opt1'], ['lan' => '192.0.2.1', 'opt1' => NULL]);
+		$this->standInsStop();
 		if ($gateway) {
 			$this->gatewayAnswers($reply);
 		}
@@ -817,7 +822,6 @@ final class DnsProxyStartupCheckTest extends TestCase
 	public function testAReadyStartIsJudgedOnTheGatewaysListWithoutAnyTick(): void
 	{
 		$this->box(self::DOT_ON);
-		$this->proxyServes();
 		$this->gatewayLacksDotOnLan();
 		[$clock, $check] = $this->clockedCheck();
 
@@ -868,6 +872,8 @@ final class DnsProxyStartupCheckTest extends TestCase
 		// Given a moved box whose proxy never becomes ready, and a rollback that cannot turn pfB-DNS off (the config lock stays
 		// taken): ownership is not validated, so nothing about this start is diagnosed from this process's copy
 		$this->box();
+		// Lives and never publishes its marker: not ready, whatever applied identity the box seeded
+		$this->proxyLivesButNeverServes();
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 		$this->log('pfb_dns_gateway: cannot start: boom');
 		[$clock, $confirm] = $this->clockedConfirm();

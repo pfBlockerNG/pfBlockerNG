@@ -284,6 +284,22 @@ Like the certificate it is stored per node, never synced, and applied on the nex
   (`dNSName` SANs); `*.example.lan` covers `fw.example.lan` but not `example.lan` or `a.fw.example.lan`. The page warns when
   it does not (below).
 
+### Read the applied status
+
+**DNS > General > pfB-DNS Status** shows the running gateway's **DNS Name**, not an unapplied form value.
+**DDR Advertisements** shows its current per-address advertisements and local DNS Name answers.
+The page refresh reads one snapshot from pfB-DNS's existing private control socket, without querying every listener.
+
+- **None** means pfB-DNS is off/not active, or the running gateway deliberately has no DNS Name.
+- **Unavailable** means pfB-DNS is in use or expected to run but its applied status could not be obtained or validated.
+  Saved settings are not shown as applied. A still-running gateway keeps its applied name while a saved disable is pending.
+- Advertisements describe what pfB-DNS would answer locally. They do **not** verify client reachability,
+  reverse-proxy routing, certificate trust or encrypted endpoint connectivity.
+
+Rare IPv4-compatible (`::/96`) and mapped address spellings retain the existing acceptance behavior and may show
+unavailable or refused status. Their normalization is tracked separately in
+[#3849](https://github.com/pfBlockerNG/pfBlockerNG/issues/3849).
+
 ### DDR and DoH on port 443
 
 Under **Discovery of Designated Resolvers (DDR)** on **DNS > General**:

@@ -157,8 +157,8 @@ if (!defined('PFB_DNS_PROXY_SOCKSTAT')) {
 }
 unset($pfb_test_sockstat);
 
-// ps(1) reads the running gateway's command line from a fake process table, injected as $pfb['ps']: each row is `PID command line`, and a PID
-// with no row exits 1, as ps does for an absent process. A test writes the rows of the gateway it stands for; nothing else is listed.
+// Keep the fake process table for the long-argv consumer regression on pre-fix code; applied status never reads it.
+// Injected as $pfb['ps']: each row is `PID command line`, and an absent PID exits 1.
 $GLOBALS['pfb_test_ps_output'] = "{$pfb_test_tmp}/ps.out";
 file_put_contents($GLOBALS['pfb_test_ps_output'], '');
 $pfb_test_ps = "{$pfb_test_tmp}/ps";

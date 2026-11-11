@@ -82,6 +82,8 @@ final class DnsProxyKeepRunningTest extends TestCase
 	{
 		// Given a ready gateway whose Unbound backend is dead, with nothing changed and no package operation
 		$this->krApply(['serving' => FALSE]);
+		// The gateway answers for its applied identity, so the backend's state is known, not unknown: only its Unbound backend is dead
+		$this->seedRunningGateway();
 		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway is ready');
 		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'before: the backend is dead');
 
@@ -226,12 +228,12 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$ready = $this->krEnsure();
 		$this->standInsStop();
 
-		// Then nothing restarts: the pass asked the gateway what it serves (the list request, four bytes 0xFF 0xFF 0xFF 0xFC),
+		// Then nothing restarts: the pass asked the gateway for applied status (four bytes 0xFF 0xFF 0xFF 0xFA),
 		// found it as the rc script says, and sent no frame of the four 0xFF bytes that once asked the gateway to restart its decider
 		$this->assertTrue($ready);
 		$this->assertSame([], $this->krProxyCalls());
 		$heads = array_column(self::frames($record), 'head');
-		$this->assertContains('fffffffc', $heads, 'the pass asked the gateway for its listener list');
+		$this->assertContains('fffffffa', $heads, 'the pass asked the gateway for its applied status');
 		$this->assertNotContains('ffffffff', $heads);
 		$this->assertNull($this->krMarker());
 	}

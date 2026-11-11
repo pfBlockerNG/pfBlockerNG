@@ -56,6 +56,22 @@ define('PFB_UNBOUND_START_CMD', escapeshellarg($race['dir'] . '/unbound-start') 
 
 require_once $repo . '/tests/php/bootstrap.php';
 require_once $repo . '/tests/php/support/PfbFlockClockFixture.php';
+require_once $repo . '/tests/php/DnsProxyReadySeedTrait.php';
+
+$GLOBALS['race_gateway'] = new class {
+	use DnsProxyReadySeedTrait;
+
+	public function serve(): void
+	{
+		$this->seedRunningGateway();
+	}
+
+	public function stop(): void
+	{
+		$this->standInsStop();
+	}
+};
+register_shutdown_function(static fn () => $GLOBALS['race_gateway']->stop());
 
 function race_event(string $detail): void
 {
@@ -107,8 +123,7 @@ function race_backend_serves(): void
 	$GLOBALS['pfb_test_valid_pids'][$pidfile] = TRUE;
 	file_put_contents($GLOBALS['pfb_test_sockstat_output'],
 		"unbound unbound 5151 3 tcp4 127.0.0.1:5353 *:*\nunbound unbound 5151 4 udp4 127.0.0.1:5353 *:*\n");
-	file_put_contents($GLOBALS['pfb_test_ps_output'], '4242 ' . PFB_DNS_PROXY_DIR
-		. "/bin/freebsd-amd64/pfb-dns --listen 127.0.0.1 --port 53 --upstream 127.0.0.1:5353\n");
+	$GLOBALS['race_gateway']->serve();
 }
 
 /** The proxy comes up alive and never publishes its marker: the state the activation leaves a proxy that never serves in. */

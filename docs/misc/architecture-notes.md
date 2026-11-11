@@ -677,18 +677,23 @@ child pidfile and its ready marker name the same live PID: the rc script passes 
 (`$pfb['dns_proxy_ready']`), and the gateway writes its own PID there atomically once its in-process decider has booted (after it
 bound its sockets and dropped privileges) and its listeners serve. The marker is PID-only; the complete startup log ends in `ready upstream <host>:<port> pid <pid>`.
 `pfb_dns_proxy_upstream_ready()` additionally requires a live Unbound pidfile and native `sockstat -46lw` TCP and UDP
-listeners owned by that Unbound PID on the `--upstream` endpoint of the **running** gateway. That endpoint comes from the gateway's
-command line, read with a bounded `ps -ww -o args=` for the marker's PID, which must be the installed
-`dns_proxy/bin/freebsd-(amd64|arm64)/pfb-dns` with exactly one `--upstream`. The rc script is not the source: it is the desired
-state, and after a deferred restart it can name an endpoint the running gateway does not forward to. Any other command line (none,
-a foreign binary, two upstreams) fails closed. A foreign port holder, or Unbound running elsewhere, cannot satisfy it. Only the
-selected endpoint is required: dual-stack and `do-ip6: no` hosts using IPv4 need no IPv6 upstream, and a host without `127.0.0.1`
-uses IPv6. Port 5354 is not the gateway's upstream.
+listeners owned by that Unbound PID on the applied upstream endpoint of the **running** gateway. That endpoint comes from
+the versioned applied-status response on its existing root-only control socket (`FF FF FF FA`, issue #3845).
+PHP validates the response's PID against the live child's ready marker and requires the installed
+`dns_proxy/bin/freebsd-(amd64|arm64)/pfb-dns` executable. Missing, malformed or foreign runtime identity fails closed.
+The rc script and saved settings are desired state, not evidence of what the process forwards to.
+A foreign port holder, or Unbound running elsewhere, cannot satisfy readiness. Only the selected endpoint is required:
+dual-stack and `do-ip6: no` hosts using IPv4 need no IPv6 upstream, and a host without `127.0.0.1` uses IPv6.
+Port 5354 is not the gateway's upstream.
 `pfb_dns_proxy_serving_ready()` is `pfb_dns_proxy_ready()` and `pfb_dns_proxy_upstream_ready()`: what an activation waits for and what
 the status panel's Service reads as Running. The frontend listeners, the unlogged check, the active-transport gate, the installer's
 keep, the certificate push and the apply's change gate use the gateway-level READY alone.
 
-A deferred package-operation pass (`pfb_dns_proxy_ensure_running()` under a package upgrade or reload) that acted on nothing and finds the gateway READY skips the upstream confirmation: it files the startup problems its log shows, such as a configured listener the gateway did not report, and returns ready (issue #3560, D-a). The tick and the boot check confirm the upstream and roll back a failed one. Every other pass gets the full confirmation.
+A deferred package-operation pass that acted on nothing and finds the gateway READY retains its existing upstream-confirmation
+exception: startup diagnostics run without an activation wait. An unchanged-rc no-op pass also leaves the gateway alone when
+control status is unknown (issue #3845): unknown is not evidence that DNS is unhealthy. It adds no fallback, restart or retry;
+the page still reports unavailable. A real start/restart and the serving-ready wait remain fail-closed and retain devel's
+existing rollback behavior. Whether failed activation should later return port 53 to the Resolver is a separate owner decision.
 
 The socket inventory uses the bounded control-command seam with a one-second budget plus its kill grace; the outer wait
 keeps its startup deadline, with at most that final probe's bound beyond it. `pfb_dns_proxy_running()` remains pidfile-only
@@ -738,7 +743,10 @@ The operation lock serializes calls to `pfb_dns_proxy_roll_back()`, including fa
 
 **Startup check (issues #3538, #3625).** "Ready" requires the gateway and its Unbound upstream; it does not say every client address the rc script names is served (an
 address that cannot be bound is logged and skipped, plain.go and tlsbind.go). After every start, `pfb_dns_proxy_confirm_ready()` runs
-`pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool`. Ready, it asks the gateway what it serves: `pfb_dns_proxy_listener_list()`, one control-socket exchange (`FF FF FF FC`), is its only wait, bounded by `PFB_DNS_PROXY_CTL_TIMEOUT`, and it polls nothing. Not ready, it reads the log (below). The rollback diagnoses a start that is not ready once its guard has won and before the restore consumes the snapshot. The cron tick confirms the start the same way while a snapshot is
+`pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool`. Ready, it asks the gateway what it serves through
+the applied-status inventory on the control socket (`FF FF FF FA`), bounded by `PFB_DNS_PROXY_CTL_TIMEOUT`, with no polling.
+Not ready, it reads the log (below). The rollback diagnoses a start that is not ready once its guard has won and before the
+restore consumes the snapshot. The cron tick confirms the start the same way while a snapshot is
 stored, no update pass runs and a gateway pidfile is live (with none live it waits for nothing). The boot hook backgrounds
 `php -f pfblockerng.inc dns_check` under `timeout(1)` (certificate sync, then, while a snapshot is stored, the same confirmation),
 because boot has no apply to confirm the start. One notice, id
@@ -749,12 +757,14 @@ the service uses). Addresses are compared as the gateway prints them (IPv6 compr
 Every caller that makes a start reads the log's size BEFORE it (`pfb_dns_proxy_log_size()`; the boot hook, with core functions only, `filesize()`) and passes it on as `$since`: `pfb_dns_proxy_restart()` and `pfb_dns_proxy_ensure_running()` (when it started or restarted the proxy) through `pfb_dns_proxy_confirm_ready()`, the boot hook to the `dns_check` arm as `argv[2]` (digits only; anything else, or none, and the arm takes the size now). `$since` bounds only the not-ready error lookup: with a `$since` only the bytes after it are searched (a log now shorter than it was rotated is searched from its start), so an error of an older start is never quoted for this one (none is quoted when this start logged none); with no `$since` (the tick; an apply that restarted nothing) the lookup searches the log's last 64 KiB. A ready start never reads the log for what it serves: the list answers for the gateway running now, so the ready marker, which the gateway publishes before its log lines are relayed, cannot make it judge a previous start. Pinned by `DnsProxyStartupCheckTest`, `DnsProxyStartupCheckCurrentStartTest`, `DnsProxyBootTest` and `DnsProxyActivationRollbackTest`.
 
 **Status panel transports (issues #3548, #3555, #3625).** The pfB-DNS status panel on **DNS > General** (`pfb_dns_status()`) has an entry per transport: plain DNS,
-DoT, DoH and DoQ. It reads the same two sources as the startup check: `pfb_dns_proxy_listener_list()` (what the gateway lists as served and refused, asked on the control socket) and `pfb_dns_proxy_command_listeners()` (the rc script's addresses).
-A transport is `off` when its toggle is off and the gateway has no listeners for it, `no_listener` when it is on and the command gives it none, or a list of rows.
-Once the gateway itself is ready, rows name what the list gives as `listening`, then each command address it does not list (`not_listening`, with the `refused` reason, or `the gateway did not report it` when there is none).
-These front-end rows remain visible when an unavailable upstream leaves the service Starting. A saved toggle, interface or port change cannot replace that evidence before
-an Update applies it. Without a ready gateway (`configured_not_bound`), the rows are the command's addresses. So are they when the list is unknown (NULL: no socket, no reply
-within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB): `configured_unconfirmed`, labelled `Configured, not confirmed by the gateway`.
+DoT, DoH and DoQ. One applied-status response supplies bound/refused inventory, the DNS Name, DDR advertisements and
+upstream endpoint; no process argument scraping or automatic DNS queries are needed for those fields.
+The existing configured-versus-applied projection is preserved: `pfb_dns_proxy_command_listeners()` supplies desired rc-script
+addresses, the snapshot supplies actual bindings/refusals, and a configured address absent from both retains its
+`not_listening` row and existing reason. Startup diagnostics and live add/remove checks keep the same comparison.
+These front-end rows remain visible when an unavailable upstream leaves the service Starting. An unavailable snapshot uses
+explicitly configured placeholders: `configured_not_bound` without a ready gateway, otherwise `configured_unconfirmed`.
+Neither placeholder is a bound-listener claim, and an unavailable applied DNS Name never falls back to saved intent.
 
 **Status panel tables (issues #3555, #3586).** `pfb_dns_status_panel()` renders that status under the form as sections like the
 page's own (the markup of an open `COLLAPSIBLE` `Form_Section`, toggled from its title): `pfB-DNS Status` with the service and the
@@ -775,17 +785,18 @@ transport. Pinned by `PfbDnsStatusTest` and `PfbDnsStatusPanelTest`; live by the
 `test_smoke_dns_gateway.py` (native all-transport tables, also with Unbound stopped while gateway bindings remain) and the
 `ui_browser` test in `test_browser_dns.py`.
 
-**DDR advertisement checks (#3702).** The page-only section loads every bound plain DNS listener as pending; the applied DNS Name is shown once in the **pfB-DNS Status** overview, beside the **pfB-DNS** and **DNSBL** on/off icons. Each listener is then checked by its own authenticated, read-only AJAX request, one after another, and the sweep repeats 30 seconds after it finishes. A refresh changes only the State cells: the form, the collapse state, the row elements and the last results stay, even when a refresh fails.
-The table has Interface | Address | State columns and uses the listener tables' accessible check/cross icons, never raw
-command output. Green requires matching SVCB targets, transport priorities, ALPNs, ports, address hints, DoH paths and the complete
-Additional address set. Where the gateway owns the DNS Name, directed A/AAAA queries must also match its per-address answer map,
-including an absent family's NOERROR/NODATA response. Unmapped loopback checks only SVCB and states that limitation in its hover
-and screen-reader text; other unmapped addresses remain unverified. Disabled DDR, missing encrypted listeners and query failures
-never turn green. A failed or interrupted refresh keeps every row, its element and its last results, and shows a small status note until a complete sweep succeeds.
-Installed `drill` runs under bounded probe/request deadlines because PHP's standard DNS API cannot select a nameserver.
-IPv4 uses a loopback source; IPv6 uses `::1` only for addresses assigned to `lo0`, otherwise the kernel selects the source.
-These local checks do not prove client ACL access, certificate acceptance or encrypted endpoint reachability. The widget does
-not run them. Coverage includes PHP semantic/collection tests, live render/browser checks and the managed-VIP wire scenario.
+**Applied DDR advertisements (issue #3845).** The DNS General page reads a single versioned applied-state response from
+the existing control socket for its initial status and each authenticated, read-only refresh. The applied DNS Name appears
+in **pfB-DNS Status**, independently of pending form edits. In-use/expected-running status failure is unavailable, not no name
+or the saved setting. Off/not-in-use/on-but-not-active returns retain the original empty name; a still-running turning-off
+gateway shows its actual name. Each plain listener's DDR records and local A/AAAA answers come from the same snapshot.
+The gateway builds advertisements with `ddr.designate()`, the actual DNS reply builder, so loaded certificates, live listener
+changes and DoH-443 advertisement overrides have the same effect in the panel and in query replies.
+The control goroutine is already the sole writer of those tables and listeners; status runs there between mutations, not
+on the DNS query path. The complete wire response is bounded to 64 KiB and uses the existing peer-UID authorization.
+The panel reports **advertised** state, not a successful external DNS/TLS verification or a match against saved intent.
+Explicit directed DNS diagnostics remain available in the test/probe helpers. Client ACL access, certificate trust and
+encrypted endpoint reachability require independent checks; a status response does not establish them.
 
 **Dashboard widget row (issue #3588).** While pfB-DNS is on, the widget's status header gains a row above the IP and DNSBL rows: the
 service, then DNS, DoT, DoH and DoQ, each an icon (green on and working, yellow on with a fault, red off) whose hover title says why.

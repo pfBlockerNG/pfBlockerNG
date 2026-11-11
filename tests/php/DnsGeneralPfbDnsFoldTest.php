@@ -333,13 +333,19 @@ final class DnsGeneralPfbDnsFoldTest extends TestCase
 			"\$_SERVER['REQUEST_METHOD'] !== 'GET'",
 			"header('Allow: GET');",
 			'http_response_code(405);',
+			"array_key_exists('listener', \$_GET)",
 			'http_response_code(400);',
 			"header('Content-Type: application/json');",
-			"echo json_encode(['html' => pfb_dns_ddr_status_panel(pfb_dns_ddr_status(\$listener))]);",
+			"echo json_encode(['html' => pfb_dns_status_panel(pfb_dns_status())]);",
 		] as $needle) {
 			$this->assertHas($needle, $endpoint, 'the endpoint is GET-only JSON');
 		}
-		$this->assertHas("fetch('pfblockerng_dns_general.php?ajax=ddr&listener=' + encodeURIComponent(address)", $page, 'the refresh script asks this page');
+		$this->assertLacks('write_config', $endpoint, 'the endpoint writes nothing');
+		$this->assertLacks('PfbConfig::write', $endpoint, 'the endpoint writes nothing');
+		$this->assertLessThan($from, strpos($page, "require_once('guiconfig.inc');"), 'the endpoint answers only after authentication');
+		$this->assertSame(1, substr_count($page, "fetch('pfblockerng_dns_general.php?ajax=ddr'"), 'the refresh script fetches the whole status once');
+		$this->assertLacks('ajax=ddr&listener', $page, 'and not one request per address');
+		$this->assertLacks('encodeURIComponent(address)', $page, 'and not one request per address');
 		$this->assertLacks('pfblockerng_dns.php?ajax', $page, 'and not the redirect stub, which would answer with a page, not JSON');
 	}
 }

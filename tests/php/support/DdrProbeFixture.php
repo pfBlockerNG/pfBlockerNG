@@ -2,15 +2,13 @@
 
 declare(strict_types=1);
 
-/** Reflects unchanged production functions, replacing only subprocess, interface and clock boundaries. */
+/** Reflects unchanged production functions, replacing only the subprocess and interface boundaries. */
 final class DdrProbeFixture
 {
 	public array $calls = [];
 	public array $interfaces = [];
 	public array $responses = [];
 	public int $exit = 0;
-	public int $now = 0;
-	public int $elapsedPerQuery = 0;
 	private static array $instances = [];
 	public string $namespace;
 
@@ -34,12 +32,9 @@ final class DdrProbeFixture
 			}
 			function proc_close(\$process) {
 				fclose(\$process);
-				\$fixture = \\DdrProbeFixture::instance({$slot});
-				\$fixture->now += \$fixture->elapsedPerQuery;
-				return \$fixture->exit;
+				return \\DdrProbeFixture::instance({$slot})->exit;
 			}
 			function net_get_interfaces() { return \\DdrProbeFixture::instance({$slot})->interfaces; }
-			function hrtime(\$number) { return \\DdrProbeFixture::instance({$slot})->now; }
 			{$source}
 			PHP);
 	}
@@ -59,13 +54,15 @@ final class DdrProbeFixture
 		return tmpfile();
 	}
 
-	public function status(?string $only = NULL): array
+	/** The page's automatic check: one applied-state read through the control socket, and no DNS process. */
+	public function status(): array
 	{
-		return ($this->namespace . '\\pfb_dns_ddr_status')($only);
+		return ($this->namespace . '\\pfb_dns_ddr_status')();
 	}
 
-	public function probe(string $at, float $budget): array
+	/** One explicit diagnostic query: the question and type it asks, at the bound address it names. */
+	public function probe(string $at, float $budget, string $name = '_dns.resolver.arpa.', string $type = 'SVCB'): array
 	{
-		return ($this->namespace . '\\pfb_dns_ddr_probe')($at, $budget);
+		return ($this->namespace . '\\pfb_dns_ddr_probe')($at, $budget, $name, $type);
 	}
 }

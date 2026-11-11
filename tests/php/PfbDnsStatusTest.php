@@ -463,8 +463,11 @@ final class PfbDnsStatusTest extends TestCase
 
 		// When the status is read
 		$status = pfb_dns_status();
+		$queried = $status['ddr']['queried'];
 
-		// Then each of the four tables lists what the gateway serves, loopback first
+		// Then each of the four tables lists what the gateway serves, loopback first, and the applied DDR table lists the three plain
+		// listeners as off (DDR is disabled), dated when it was applied
+		$this->assertMatchesRegularExpression('/\A\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\z/', (string) $queried, 'the DDR table is dated');
 		$this->assertSame([
 			'service'    => 'Running',
 			'mode'       => 'On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else',
@@ -477,6 +480,15 @@ final class PfbDnsStatusTest extends TestCase
 			'active'     => TRUE,
 			'dnsbl'      => TRUE,
 			'name'       => '',
+			'ddr'        => [
+				'notice'  => '',
+				'queried' => $queried,
+				'rows'    => [
+					['interface' => 'Localhost', 'identity' => 'Interface', 'address' => '127.0.0.1:53', 'state' => 'off', 'reason' => 'DDR is disabled; DNS Name queries are forwarded'],
+					['interface' => 'LAN', 'identity' => 'Interface', 'address' => '192.0.2.1:53', 'state' => 'off', 'reason' => 'DDR is disabled; DNS Name queries are forwarded'],
+					['interface' => 'Localhost', 'identity' => 'Interface', 'address' => '[::1]:53', 'state' => 'off', 'reason' => 'DDR is disabled; DNS Name queries are forwarded'],
+				],
+			],
 		], $status);
 	}
 
@@ -603,6 +615,7 @@ final class PfbDnsStatusTest extends TestCase
 	{
 		// Given every transport on, a live gateway with its ready marker that gives no list, and Unbound dead
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$this->standInsStop();
 		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
 
 		// When the status is read
@@ -764,6 +777,7 @@ final class PfbDnsStatusTest extends TestCase
 	{
 		// Given a running proxy whose gateway gives no list
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
+		$this->standInsStop();
 		if ($gateway) {
 			$this->gatewayAnswers($reply);
 		}
@@ -875,7 +889,8 @@ final class PfbDnsStatusTest extends TestCase
 			],
 			'active'     => TRUE,
 			'dnsbl'      => FALSE,
-			'name'       => '',
+			'name'       => NULL,
+			'ddr'        => ['notice' => 'Applied pfB-DNS status unavailable.', 'queried' => NULL, 'rows' => []],
 		], pfb_dns_status());
 	}
 
@@ -933,7 +948,7 @@ final class PfbDnsStatusTest extends TestCase
 		foreach (['pfb_dns_status', 'pfb_dns_proxy_startup_check'] as $function) {
 			$reflection = new ReflectionFunction($function);
 			$body = implode('', array_slice((array) file(self::INC), $reflection->getStartLine() - 1, $reflection->getEndLine() - $reflection->getStartLine() + 1));
-			$this->assertStringContainsString('pfb_dns_proxy_listener_list(', $body, "{$function}() asks the gateway which listeners it serves");
+			$this->assertStringContainsString('pfb_dns_proxy_applied_status(', $body, "{$function}() reads the gateway's applied status");
 			$this->assertStringContainsString('pfb_dns_proxy_command_listeners(', $body, "{$function}() reads the command's listeners");
 			if ($function === 'pfb_dns_status') {
 				$this->assertStringNotContainsString('pfb_dns_proxy_log_lines(', $body, 'the status never reads the gateway log');
@@ -1329,7 +1344,7 @@ final class PfbDnsStatusTest extends TestCase
 		// Given a moved box running with DNSBL on and the name in its command
 		$this->box(self::DOT_ON);
 		$this->gatewayServes([...self::PLAIN, ...self::DOT]);
-		file_put_contents($GLOBALS['pfb_test_ps_output'], rtrim((string) file_get_contents($GLOBALS['pfb_test_ps_output'])) . " --dns-name fw.example.lan\n");
+		$this->gatewayStatus(['dns_name' => 'fw.example.lan']);
 		$this->assertStringContainsString(" --dns-name 'fw.example.lan'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'premise');
 		$status = pfb_dns_status();
 		$this->assertSame([TRUE, TRUE, 'fw.example.lan'], [$status['active'], $status['dnsbl'], $status['name']]);
@@ -1342,16 +1357,16 @@ final class PfbDnsStatusTest extends TestCase
 		// Then each is independent and the name is the applied one
 		$this->assertSame([TRUE, FALSE, 'fw.example.lan'], [$status['active'], $status['dnsbl'], $status['name']]);
 
-		// And with pfBlockerNG disabled while the Resolver is still moved, pfB-DNS is not applied
+		// And with pfBlockerNG disabled while the Resolver is still moved, pfB-DNS is off but the gateway still serves its applied name
 		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
 		$status = pfb_dns_status();
-		$this->assertSame([FALSE, ''], [$status['active'], $status['name']]);
+		$this->assertSame([FALSE, 'fw.example.lan'], [$status['active'], $status['name']]);
 		$GLOBALS['pfb']['enable'] = PfbToggle::On;
 
-		// And with pfB-DNS off nothing is applied
+		// And with pfB-DNS off the toggles are off, while the still-running gateway keeps its applied name
 		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::Off;
 		$status = pfb_dns_status();
-		$this->assertSame([FALSE, FALSE, ''], [$status['active'], $status['dnsbl'], $status['name']]);
+		$this->assertSame([FALSE, FALSE, 'fw.example.lan'], [$status['active'], $status['dnsbl'], $status['name']]);
 	}
 
 	public function testTheDnsNameIsTheRunningGatewaysNotAPendingScripts(): void
@@ -1359,8 +1374,7 @@ final class PfbDnsStatusTest extends TestCase
 		// Given a running gateway started with one name, and a regenerated script awaiting a restart with another
 		$this->box(self::DOT_ON);
 		$this->gatewayServes([...self::PLAIN, ...self::DOT]);
-		$ps = $GLOBALS['pfb_test_ps_output'];
-		file_put_contents($ps, rtrim((string) file_get_contents($ps)) . " --dns-name fw.example.lan\n");
+		$this->gatewayStatus(['dns_name' => 'fw.example.lan']);
 		PfbConfig::write('dns/pfb_dns_name', 'pending.example.lan');
 		pfb_dns_proxy_service();
 		$this->assertStringContainsString(" --dns-name 'pending.example.lan'", pfb_dns_proxy_rc_command(), 'premise: the script awaits a restart');

@@ -9,10 +9,13 @@ declare(strict_types=1);
  */
 trait LiveListenerStandIn
 {
-	/** @var list<array{resource,array<int,resource>}> */
+	/** @var list<array{resource,array<int,resource>,string}> */
 	private array $standIns = [];
 	/** @var list<resource|Socket> sockets a test holds so that a bind of their address fails */
 	private array $held = [];
+	/** @var string|null the control socket pfb read before controlSocket() pointed it at the sandbox, and that sandbox socket */
+	private ?string $shippedControl = NULL;
+	private ?string $switchedControl = NULL;
 
 	/**
 	 * A gateway that takes frames on $socket until $this->standInsStop(), and replies per $replies and $served (see ListenerControlServer.php).
@@ -25,29 +28,43 @@ trait LiveListenerStandIn
 	private function standIn(string $socket, array $replies = [], array $served = []): string
 	{
 		@unlink($socket);
+		$served += ['status' => self::appliedStatusFixture()];
+		if (array_key_exists('list', $served)) {
+			$served += ['status_wire' => $served['list']];
+		}
 		$record = $socket . '.frames.' . count($this->standIns);
 		$proc = proc_open(
 			[PHP_BINARY, __DIR__ . '/ListenerControlServer.php', $socket, $record, json_encode($replies, JSON_THROW_ON_ERROR), json_encode($served, JSON_THROW_ON_ERROR)],
 			[0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
 			$pipes
 		);
-		$this->assertIsResource($proc);
+		if (!is_resource($proc)) {
+			throw new RuntimeException('the stand-in gateway process could not start');
+		}
 		$read = [$pipes[1]];
 		$write = $except = NULL;
-		$this->assertSame(1, stream_select($read, $write, $except, 15), 'the stand-in gateway did not start listening');
-		$this->assertSame("ready\n", fgets($pipes[1]));
-		$this->standIns[] = [$proc, $pipes];
+		if (stream_select($read, $write, $except, 15) !== 1 || fgets($pipes[1]) !== "ready\n") {
+			fclose($pipes[0]);
+			proc_terminate($proc);
+			foreach (array_slice($pipes, 1) as $pipe) {
+				fclose($pipe);
+			}
+			proc_close($proc);
+			throw new RuntimeException('the stand-in gateway did not start listening');
+		}
+		$this->standIns[] = [$proc, $pipes, $socket];
 		return $record;
 	}
 
 	/** Let every stand-in gateway go (its stdin closes), and free what the test held. */
 	private function standInsStop(): void
 	{
-		foreach ($this->standIns as [$proc, $pipes]) {
+		foreach ($this->standIns as [$proc, $pipes, $socket]) {
 			@fclose($pipes[0]);
 			@fclose($pipes[1]);
 			@fclose($pipes[2]);
 			proc_close($proc);
+			@unlink($socket);
 		}
 		$this->standIns = [];
 		foreach ($this->held as $socket) {
@@ -56,6 +73,70 @@ trait LiveListenerStandIn
 			}
 		}
 		$this->held = [];
+		if ($this->switchedControl !== NULL && ($GLOBALS['pfb']['dns_proxy_ctl'] ?? NULL) === $this->switchedControl) {
+			$GLOBALS['pfb']['dns_proxy_ctl'] = $this->shippedControl;
+		}
+		$this->switchedControl = $this->shippedControl = NULL;
+	}
+
+	/** The applied control schema; tests override fields, never infer them from saved settings. */
+	private static function appliedStatusFixture(array $overrides = []): array
+	{
+		return array_replace([
+			'version' => 1, 'pid' => 4242,
+			'executable' => PFB_DNS_PROXY_DIR . '/bin/freebsd-amd64/pfb-dns',
+			'ready' => TRUE, 'upstream' => '127.0.0.1:5353', 'dns_name' => '',
+			'listeners' => [], 'name_answers' => (object) [], 'ddr' => FALSE,
+			'advertisements' => (object) [],
+		], $overrides);
+	}
+
+	/** Replace the running gateway's applied response without replacing its live listener state. */
+	private function gatewayStatus(array $overrides): void
+	{
+		file_put_contents($this->controlSocket() . '.status',
+			json_encode(self::appliedStatusFixture($overrides), JSON_THROW_ON_ERROR));
+	}
+
+	/** A single applied advertisement, independently of config.xml and of diagnostic DNS replies. */
+	private function gatewayAdvertisement(string $host, string $alpn = 'dot', int $port = 853, ?array $answers = NULL): void
+	{
+		$this->gatewayStatus([
+			'dns_name' => 'dns.example.com', 'ddr' => TRUE,
+			'name_answers' => (object) ($answers === NULL ? [] : [$host => $answers]),
+			'advertisements' => (object) [$host => ['records' => [[
+				'priority' => 1, 'target' => 'dns.example.com', 'alpn' => $alpn,
+				'port' => $port, 'hint' => $host, 'path' => $alpn === 'h2' ? '/dns-query{?dns}' : '',
+			]], 'additional' => [$host]]],
+		]);
+	}
+
+	/**
+	 * The control socket a seeded gateway listens on, which pfb reads: a sandbox path, never the appliance's /var/run one. The first
+	 * seeding of a test points pfb there; standInsStop() gives back what pfb read before.
+	 */
+	private function controlSocket(): string
+	{
+		if (!$this->sandboxed()) {
+			$this->shippedControl = (string) $GLOBALS['pfb']['dns_proxy_ctl'];
+			$this->switchedControl = dirname((string) $GLOBALS['pfb']['dns_proxy_ready']) . '/pfb_dns_ctl.sock';
+			$GLOBALS['pfb']['dns_proxy_ctl'] = $this->switchedControl;
+		}
+		return (string) $GLOBALS['pfb']['dns_proxy_ctl'];
+	}
+
+	/** Whether pfb's control socket is a sandbox path: the sandbox sits under the system temp directory. */
+	private function sandboxed(): bool
+	{
+		return str_starts_with((string) $GLOBALS['pfb']['dns_proxy_ctl'], sys_get_temp_dir() . '/');
+	}
+
+	/** Remove the status file of pfb's sandbox control socket, if it has one: never the appliance's. */
+	private function unlinkSandboxStatus(): void
+	{
+		if ($this->sandboxed()) {
+			@unlink($GLOBALS['pfb']['dns_proxy_ctl'] . '.status');
+		}
 	}
 
 	/**
@@ -68,14 +149,14 @@ trait LiveListenerStandIn
 	private function gatewayServes(array $listening, array $refused = []): void
 	{
 		$this->standInsStop();
-		$this->standIn($GLOBALS['pfb']['dns_proxy_ctl'], [], ['listening' => $listening, 'refused' => $refused]);
+		$this->standIn($this->controlSocket(), [], ['listening' => $listening, 'refused' => $refused]);
 	}
 
 	/** A gateway that answers a list request with exactly $reply (NULL: it hangs up), as gatewayServes() starts it. */
 	private function gatewayAnswers(?string $reply): void
 	{
 		$this->standInsStop();
-		$this->standIn($GLOBALS['pfb']['dns_proxy_ctl'], [], ['list' => $reply]);
+		$this->standIn($this->controlSocket(), [], ['list' => $reply]);
 	}
 
 	/** @return list<array{head:string,body:string,fds:list<array{type:string,name:string,listening:bool}>}> the frames the stand-in got, in order */
@@ -88,7 +169,7 @@ trait LiveListenerStandIn
 	/** @return list<array{head:string,body:string,fds:list<array{type:string,name:string,listening:bool}>}> the frames that change the gateway: its list requests (issue #3625) are not one */
 	private static function changeFrames(string $record): array
 	{
-		return array_values(array_filter(self::frames($record), static fn (array $frame): bool => $frame['head'] !== 'fffffffc'));
+		return array_values(array_filter(self::frames($record), static fn (array $frame): bool => !in_array($frame['head'], ['fffffffc', 'fffffffa'], TRUE)));
 	}
 
 	/** @return list<array{head:string,body:string,fds:array}> frames with only the independent ownership rows projected out */

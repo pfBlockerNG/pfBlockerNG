@@ -35,14 +35,12 @@ if (($_GET['ajax'] ?? '') === 'ddr') {
 		exit;
 	}
 	session_write_close();
-	// No listener is the metadata panel. A non-string (an array) is refused before any probe.
-	$listener = $_GET['listener'] ?? NULL;
-	if ($listener !== NULL && !is_string($listener)) {
+	if (array_key_exists('listener', $_GET)) {
 		http_response_code(400);
 		exit;
 	}
 	header('Content-Type: application/json');
-	echo json_encode(['html' => pfb_dns_ddr_status_panel(pfb_dns_ddr_status($listener))]);
+	echo json_encode(['html' => pfb_dns_status_panel(pfb_dns_status())]);
 	exit;
 }
 
@@ -596,106 +594,99 @@ $section->addInput(new Form_Checkbox(
 $form->add($section);
 print ($form);
 $status = pfb_dns_status();
-if ($status['transports'] !== NULL) {
-	$status['ddr'] = pfb_dns_ddr_status();
-}
 print pfb_dns_status_panel($status);
 
 include('foot.inc');
 ?>
 <script>
 events.push(function() {
-	const panelBody = document.getElementById('pfb-dns-status-ddr_panel-body');
-	if (!panelBody) {
+	const root = document.getElementById('pfb-dns-status');
+	if (!root) {
 		return;
 	}
-	const note = document.getElementById('pfb-dns-ddr-refresh-status');
-	const rows = Array.from(panelBody.querySelectorAll('tr[data-address]'));
 	let session = 0;
 	let timer = null;
 	let controller = null;
 
 	function setNote(visible) {
+		const note = root.querySelector('#pfb-dns-ddr-refresh-status');
 		if (note) {
-			note.textContent = 'Some checks could not be refreshed. Previous results are retained.';
+			note.textContent = 'Status could not be refreshed. Previous results are retained.';
 			note.hidden = !visible;
 		}
 	}
 
-	// One selected listener per request. Only its State cell and data-state change, and only for a response that proves it.
-	async function check(row, current) {
-		const address = row.getAttribute('data-address');
+	async function refresh(current) {
 		const own = new AbortController();
 		const timeout = setTimeout(function() { own.abort(); }, 15000);
 		controller = own;
+		root.setAttribute('aria-busy', 'true');
 		try {
-			const response = await fetch('pfblockerng_dns_general.php?ajax=ddr&listener=' + encodeURIComponent(address), {
-				cache: 'no-store',
-				credentials: 'same-origin',
-				signal: own.signal
+			const response = await fetch('pfblockerng_dns_general.php?ajax=ddr', {
+				cache: 'no-store', credentials: 'same-origin', signal: own.signal
 			});
 			if (!response.ok || response.redirected ||
 			    !(response.headers.get('Content-Type') || '').includes('application/json')) {
-				throw new Error('Invalid DDR response');
+				throw new Error('Invalid status response');
 			}
 			const result = await response.json();
 			if (!result || typeof result.html !== 'string') {
-				throw new Error('Invalid DDR panel');
+				throw new Error('Invalid status panel');
 			}
 			const parsed = new DOMParser().parseFromString(result.html, 'text/html');
-			const panels = parsed.querySelectorAll('#pfb-dns-status-ddr > #pfb-dns-status-ddr_panel-body');
-			if (panels.length !== 1) {
-				throw new Error('Missing DDR panel');
-			}
-			const returned = panels[0].querySelectorAll('tr[data-address]');
-			const matches = Array.from(returned).filter(function(candidate) {
-				return candidate.getAttribute('data-address') === address && candidate.cells.length === 3;
-			});
-			const state = returned.length === 1 && matches.length === 1 ? matches[0].getAttribute('data-state') : null;
-			if (!state) {
-				throw new Error('Missing DDR row');
+			const panels = parsed.querySelectorAll('#pfb-dns-status');
+			if (panels.length !== 1 || panels[0].querySelectorAll('#pfb-dns-status-overview').length !== 1 ||
+			    panels[0].querySelectorAll('#pfb-dns-status-service').length !== 1 ||
+			    panels[0].querySelectorAll('#pfb-dns-status-name').length !== 1) {
+				throw new Error('Missing status overview');
 			}
 			if (current === session) {
-				row.setAttribute('data-state', state);
-				row.cells[2].replaceChildren(...matches[0].cells[2].childNodes);
+				const collapsed = new Map(Array.from(root.querySelectorAll('.panel-body.collapse')).map(function(body) {
+					return [body.id, !body.classList.contains('in')];
+				}));
+				const focused = root.contains(document.activeElement) ? document.activeElement.getAttribute('href') : null;
+				root.replaceChildren(...panels[0].childNodes);
+				root.querySelectorAll('.panel-body.collapse').forEach(function(body) {
+					if (collapsed.has(body.id)) {
+						body.classList.toggle('in', !collapsed.get(body.id));
+						const link = root.querySelector('a[href="#' + body.id + '"]');
+						if (link) {
+							link.classList.toggle('collapsed', collapsed.get(body.id));
+							link.setAttribute('aria-expanded', String(!collapsed.get(body.id)));
+						}
+					}
+				});
+				if (focused) {
+					const link = Array.from(root.querySelectorAll('a[href]')).find(function(item) { return item.getAttribute('href') === focused; });
+					if (link) {
+						link.focus();
+					}
+				}
+				setNote(false);
+			}
+		} catch (error) {
+			if (current === session) {
+				setNote(true);
 			}
 		} finally {
 			clearTimeout(timeout);
 			if (controller === own) {
 				controller = null;
 			}
-		}
-	}
-
-	async function sweep(current) {
-		panelBody.setAttribute('aria-busy', 'true');
-		let complete = true;
-		for (const row of rows) {
-			try {
-				await check(row, current);
-			} catch (error) {
-				if (current === session) {
-					complete = false;
-					setNote(true);
-				}
-			}
-			if (current !== session) {
-				return;
-			}
-		}
-		panelBody.removeAttribute('aria-busy');
-		if (complete) {
-			setNote(false);
-		}
-	}
-
-	// The next sweep starts 30 seconds after this one finishes, so sweeps never overlap.
-	function cycle(current) {
-		sweep(current).then(function() {
 			if (current === session) {
-				timer = setTimeout(function() { cycle(current); }, 30000);
+				root.removeAttribute('aria-busy');
 			}
-		});
+		}
+	}
+
+	function cycle(current) {
+		timer = setTimeout(function() {
+			refresh(current).then(function() {
+				if (current === session) {
+					cycle(current);
+				}
+			});
+		}, 30000);
 	}
 
 	function start() {
@@ -711,7 +702,7 @@ events.push(function() {
 		if (controller) {
 			controller.abort();
 		}
-		panelBody.removeAttribute('aria-busy');
+		root.removeAttribute('aria-busy');
 	});
 	window.addEventListener('pageshow', function(event) {
 		if (event.persisted) {

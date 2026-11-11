@@ -442,6 +442,9 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		s.shutdown()
 		return nil, err
 	}
+	if ctl != nil {
+		ctl.ready.Store(true)
+	}
 	for _, l := range listeners {
 		logf("listening udp+tcp %s", l.addr())
 	}

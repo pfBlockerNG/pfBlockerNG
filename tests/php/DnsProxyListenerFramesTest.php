@@ -58,6 +58,40 @@ final class DnsProxyListenerFramesTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
+	public function testStatusStandInTracksRefusalsLiveListenersAndAddressTablesWithoutReplacingListDiagnostics(): void
+	{
+		$at = "127.0.0.1:{$this->port}";
+		$record = $this->standIn($this->socket, [], ['refused' => ["udp+tcp {$at}" => 'bind refused']]);
+		$read = function (): array {
+			[$wire, $why] = pfb_dns_proxy_ctl_exchange("\xff\xff\xff\xfa", $this->socket, 2.0, 'applied status', [], TRUE);
+			$this->assertNull($why);
+			$this->assertStringEndsWith("\nok", $wire);
+			return json_decode(explode("\n", $wire)[0], TRUE, 32, JSON_THROW_ON_ERROR);
+		};
+		$before = $read();
+		$this->assertSame(1, $before['version']);
+		$this->assertSame([['kind' => 'udp+tcp', 'address' => $at, 'state' => 'refused', 'reason' => 'bind refused']], $before['listeners']);
+		$this->assertSame([], $before['advertisements']);
+		$sockets = pfb_dns_proxy_listener_bind('udp+tcp', $at);
+		$this->assertIsArray($sockets);
+		$this->assertNull(pfb_dns_proxy_listener_add('udp+tcp', $at, $sockets));
+		$added = $read();
+		$this->assertSame([['kind' => 'udp+tcp', 'address' => $at, 'state' => 'listening', 'reason' => '']], $added['listeners']);
+		$this->assertSame(['records' => [], 'additional' => []], $added['advertisements']['127.0.0.1']);
+		$this->assertNull(pfb_dns_proxy_address_table(['dns-name-answer 127.0.0.1=127.0.0.1,::1']));
+		$this->assertSame(['127.0.0.1' => ['a' => ['127.0.0.1'], 'aaaa' => ['::1']]], $read()['name_answers']);
+		$list = pfb_dns_proxy_listener_list();
+		$this->assertSame([$at => TRUE], $list['listening']['udp+tcp']);
+		$this->assertNull(pfb_dns_proxy_listener_remove('udp+tcp', $at));
+		$this->assertSame([], $read()['listeners']);
+		$this->assertNull(pfb_dns_proxy_address_table([]));
+		$empty = $read();
+		$this->assertSame([], $empty['name_answers']);
+		$this->assertSame([], $empty['advertisements']);
+		$this->assertContains('fffffffc', array_column(self::frames($record), 'head'), 'explicit list diagnostics retain FC');
+		$this->assertContains('fffffffa', array_column(self::frames($record), 'head'), 'routine status uses FA');
+	}
+
 	/** @return array<string,array{string,string,list<array{string,bool}>}> kind, host, and each descriptor's [type, listening] in the order the gateway wants them */
 	public static function kindsAndFamilies(): array
 	{

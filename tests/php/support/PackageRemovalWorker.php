@@ -92,11 +92,10 @@ function worker_rc_present(array $service): bool
 	return !empty($service['rcfile']) && file_exists(RCFILEPREFIX . $service['rcfile']);
 }
 
-/** The running gateway's command line in the process table: the installed wrapper's child, serving the upstream its rc names. */
-function worker_seed_gateway_argv(): void
+/** The running gateway's applied upstream, served through the shared Unix control stand-in. */
+function worker_seed_gateway_status(): void
 {
-	file_put_contents($GLOBALS['pfb_test_ps_output'], WORKER_PROXY_PID . ' ' . PFB_DNS_PROXY_DIR
-		. "/bin/freebsd-amd64/pfb-dns --listen 127.0.0.1 --port 53 --upstream 127.0.0.1:5353\n");
+	$GLOBALS['worker_gateway']->gateway();
 }
 
 /**
@@ -108,7 +107,7 @@ function worker_service_up(string $name): void
 	if ($name === 'pfb_dns_proxy' && !file_exists(WORKER_STATE . '/running.pfb_dns_proxy')) {
 		file_put_contents($GLOBALS['pfb']['dns_proxy_pidfile'], WORKER_PROXY_PID . "\n");
 		file_put_contents($GLOBALS['pfb']['dns_proxy_ready'], WORKER_PROXY_PID . "\n");
-		worker_seed_gateway_argv();
+		worker_seed_gateway_status();
 	}
 	touch(WORKER_STATE . "/running.{$name}");
 }
@@ -120,7 +119,8 @@ function worker_service_down(string $name): void
 	if ($name === 'pfb_dns_proxy') {
 		@unlink($GLOBALS['pfb']['dns_proxy_pidfile']);
 		@unlink($GLOBALS['pfb']['dns_proxy_ready']);
-		file_put_contents($GLOBALS['pfb_test_ps_output'], '');
+		$GLOBALS['worker_gateway']->stop();
+		@unlink($GLOBALS['pfb']['dns_proxy_ctl'] . '.status');
 	}
 }
 
@@ -305,16 +305,31 @@ register_shutdown_function(static function () use ($resultFile, &$paths, &$retur
 
 require_once $repo . '/tests/php/bootstrap.php';
 require_once $repo . '/tests/php/SyncPrereqSeedTrait.php';
+require_once $repo . '/tests/php/DnsProxyReadySeedTrait.php';
 
 final class PackageRemovalWorkerSeeder
 {
 	use SyncPrereqSeedTrait;
+	use DnsProxyReadySeedTrait;
+
+	public function gateway(): void
+	{
+		$this->seedRunningGateway((string) WORKER_PROXY_PID);
+	}
+
+	public function stop(): void
+	{
+		$this->standInsStop();
+	}
 
 	public function seed(): void
 	{
 		$this->seedSyncPrereqs();
 	}
 }
+
+$GLOBALS['worker_gateway'] = new PackageRemovalWorkerSeeder();
+register_shutdown_function(static fn () => $GLOBALS['worker_gateway']->stop());
 
 global $pfb, $g;
 $tmp = $GLOBALS['pfb_test_tmp'];
@@ -351,7 +366,7 @@ $pfb['dns_proxy_cert_legacy'] = "{$state}/chroot/pfb_dns_cert.pem";
 $pfb['dns_proxy_ctl'] = "{$state}/ctl.sock";
 $alive = static fn (): bool => file_exists(WORKER_STATE . '/running.pfb_dns_proxy');
 if ($alive()) {
-	worker_seed_gateway_argv();
+	worker_seed_gateway_status();
 }
 $GLOBALS['pfb_test_valid_pids'] = [
 	PFB_DNS_PROXY_PIDFILE        => $alive,

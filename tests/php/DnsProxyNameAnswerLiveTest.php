@@ -167,7 +167,7 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		$this->assertSame([], self::sent($record), 'before: the gateway has been sent nothing');
 
 		// When the sync runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then the table is the one frame sent
 		$this->assertNull($why);
@@ -181,7 +181,7 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		$this->ready();
 		$record = $this->gateway([], ['192.0.2.1', '[2001:db8::1]', '127.0.0.1', '[::1]']);
 
-		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
+		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status())));
 
 		$this->assertSame([self::TABLE . ' dns-name-answer 192.0.2.1=192.0.2.1,2001:db8::1' . "\n" . 'dns-name-answer 2001:db8::1=192.0.2.1,2001:db8::1'], self::sent($record));
 	}
@@ -193,7 +193,7 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		$record = $this->gateway([self::OLD_GATEWAY]);
 
 		// When the sync runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then the answer is the sync's reason to restart
 		$this->assertIsString($why);
@@ -206,12 +206,12 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		// Given a ready proxy with a table to send: it is sent
 		$this->ready();
 		$record = $this->gateway();
-		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
+		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status())));
 		$this->assertCount(1, self::sent($record), 'before: the table goes');
 
 		// When a restart is pending (the script may differ in more than the table)
 		file_put_contents($GLOBALS['pfb']['dns_proxy_restart_pending'], "a package upgrade\n");
-		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
+		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status())));
 
 		// Then nothing more is sent
 		$this->assertCount(1, self::sent($record));
@@ -222,7 +222,7 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		// Given a ready proxy whose command names the DNS Name: the table is sent
 		$this->ready();
 		$record = $this->gateway();
-		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
+		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status())));
 		$this->assertCount(1, self::sent($record), 'before: the table goes');
 
 		// When the name is gone, with DDR stored On (it means nothing without a name), and the script is written again
@@ -230,7 +230,7 @@ final class DnsProxyNameAnswerLiveTest extends TestCase
 		config_set_path(self::SETTINGS . 'pfb_dns_name', '');
 		pfb_dns_proxy_service($this->krProxyDir);
 		$this->assertStringNotContainsString('--dns-name', (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'the command names no DNS Name');
-		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
+		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status())));
 
 		// Then name/DDR rows are absent, but the independent ownership snapshot still goes.
 		$this->assertSame([self::TABLE . ' dns-name-answer 192.0.2.1=192.0.2.1', self::TABLE . ' '], self::sent($record));

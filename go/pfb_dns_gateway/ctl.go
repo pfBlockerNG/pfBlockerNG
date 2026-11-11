@@ -24,9 +24,9 @@ import (
 // its sockets as SCM_RIGHTS (see listeners.go); FF FF FF FC (nothing after it) lists the listeners, lines then `ok`;
 // FF FF FF FB replaces the address table (dnsname.go): a 4-byte big-endian length (0 to 64 KiB) and that many bytes of
 // `\n`-separated lines, each `dns-name-answer LOCAL=ADDR[,ADDR]` or `ddr-doh-443 ADDR`, the whole body validated before any
-// of it is taken;
+// of it is taken; FF FF FF FA returns applied-state versioned JSON, then `ok`, and takes no body;
 // anything else is the big-endian length of the PEM that follows (the certificate, the CAs after it, the key), which
-// replaces the TLS certificate. One reply line, `ok` or `error: <reason>`, except the list's (listeners.go).
+// replaces the TLS certificate. One reply line, `ok` or `error: <reason>`, except list and status.
 // Whoever is not root, by the kernel's credential of the peer, is closed on without a byte read from it. Descriptors that
 // come with anything but an add that is taken are closed.
 
@@ -38,8 +38,9 @@ const (
 	ctlRemove          = 0xfffffffd
 	ctlList            = 0xfffffffc
 	ctlAddrTable       = 0xfffffffb // above ctlMaxPEM too
-	ctlMaxTable        = 64 << 10   // the address table: one line of `dns-name-answer LOCAL=ADDR[,ADDR]` is about 100 bytes
-	ctlRightsRoom      = 8          // descriptors one read takes: an add carries 2
+	ctlStatus          = 0xfffffffa
+	ctlMaxTable        = 64 << 10 // the address table: one line of `dns-name-answer LOCAL=ADDR[,ADDR]` is about 100 bytes
+	ctlRightsRoom      = 8        // descriptors one read takes: an add carries 2
 	defaultCtlDeadline = 5 * time.Second
 )
 
@@ -58,6 +59,8 @@ type ctlServer struct {
 	names      *nameAnswers                        // what the address table verb replaces; start() sets it. nil: the gateway started without --dns-name
 	ddr        *ddr                                // whose 443 set the verb replaces; start() sets it. nil: the gateway started without --ddr
 	interfaces *atomic.Pointer[map[netip.Addr]string]
+	g          *gateway
+	ready      atomic.Bool
 }
 
 // bindCtl makes path's directory private to the user running the gateway (root), replaces what an earlier gateway left at
@@ -114,6 +117,7 @@ func privateDir(dir string) error {
 // serve takes pushes until stop(). One connection at a time: each is bounded by the deadline, and only root is let in.
 func (c *ctlServer) serve(g *gateway) {
 	c.interfaces = &g.listenerInterfaces
+	c.g = g
 	g.closeOnStop(func() { _ = c.ln.Close() })
 	g.wg.Add(1)
 	go func() {
@@ -170,6 +174,19 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 		return
 	case ctlAddrTable:
 		reply(c.addressTable(in))
+		return
+	case ctlStatus:
+		if !in.emptyStatusRequest() {
+			reply("error: status takes no body or descriptors")
+			return
+		}
+		wire, err := c.status()
+		if err != nil {
+			reply("error: " + err.Error())
+			return
+		}
+		_ = conn.SetWriteDeadline(time.Now().Add(c.deadline))
+		_, _ = conn.Write(wire)
 		return
 	}
 	if n == 0 || n > ctlMaxPEM {

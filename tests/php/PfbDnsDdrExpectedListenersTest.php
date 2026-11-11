@@ -71,8 +71,9 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 		return $cases;
 	}
 
+	/** Saved ports and VIP pairs shape only what the gateway applies: the row shows that applied advertisement, and an unapplied base port changes nothing. */
 	#[DataProvider('listeners')]
-	public function testSavedPerFamilyPortsAndVipNamePairsMatchOnlyTheirBoundAdvertisement(string $kind, int $port, int $family, string $addressKind, bool $override): void
+	public function testSavedPerFamilyPortsAndVipNamePairsShowOnlyTheirAppliedAdvertisement(string $kind, int $port, int $family, string $addressKind, bool $override): void
 	{
 		$isVip = $addressKind !== 'interface';
 		$isAuto = $addressKind === 'auto';
@@ -108,22 +109,19 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 		$standard = $kind === 'doh' ? 443 : 853;
 		$boundPort = $isAuto ? $standard : ($family === 6 ? $port6 : $port);
 		$advertisedPort = $override ? 443 : $boundPort;
+		$alpn = ['dot' => 'dot', 'doh' => 'h2', 'doq' => 'doq'][$kind];
+		$answers = $addressKind === 'loopback' ? NULL : ($family === 4 ? ['a' => [$host], 'aaaa' => []] : ['a' => [], 'aaaa' => [$host]]);
 		$this->gatewayServes(['udp+tcp ' . pfb_dns_proxy_host_port($host, '5353'), "{$kind} " . pfb_dns_proxy_host_port($host, (string) $boundPort)]);
+		$this->gatewayAdvertisement($host, $alpn, $advertisedPort, $answers);
 		$fixture = new DdrProbeFixture();
-		$fixture->responses = [
-			'_dns.resolver.arpa. SVCB' => PfbDnsDdrStatusTest::response(
-				[PfbDnsDdrStatusTest::record($host, ['dot' => 'dot', 'doh' => 'h2', 'doq' => 'doq'][$kind], $advertisedPort)],
-				additional: ['dns.example.com. 300 IN ' . ($family === 4 ? 'A' : 'AAAA') . " {$host}"]),
-			'dns.example.com A' => PfbDnsDdrStatusTest::response(["dns.example.com. 300 IN A {$v4}"], 'dns.example.com.', 'A'),
-			'dns.example.com AAAA' => PfbDnsDdrStatusTest::response(["dns.example.com. 300 IN AAAA {$v6}"], 'dns.example.com.', 'AAAA'),
-		];
-		$result = $fixture->status(pfb_dns_proxy_host_port($host, '5353'));
-		$this->assertSame('matched', $result['rows'][0]['state'], json_encode($result));
-		$this->assertCount(3, $fixture->calls);
+		$row = $fixture->status()['rows'][0];
+		$this->assertSame('matched', $row['state'], json_encode($row));
+		$this->assertStringContainsString("{$alpn} dns.example.com:{$advertisedPort} ({$host})", $row['reason']);
+		$this->assertStringContainsString($answers === NULL ? 'DNS Name queries are forwarded' : "DNS Name: {$host}", $row['reason']);
+		$this->assertSame([], $fixture->calls, 'Page status launches no DNS subprocess');
 		PfbConfig::write("dns_shared/pfb_dns_{$kind}_port", 'invalid');
-		$invalid = $fixture->status(pfb_dns_proxy_host_port($host, '5353'));
-		$this->assertSame('no_transport', $invalid['rows'][0]['state'], 'An invalid base port disables the group even for IPv6 and managed VIP overrides: ' . json_encode($invalid));
-		$this->assertCount(3, $fixture->calls, 'Invalid settings must not launch more queries');
+		$this->assertSame($row, $fixture->status()['rows'][0], 'An invalid unapplied base port does not change the applied row');
+		$this->assertSame([], $fixture->calls, 'Invalid settings must not launch queries');
 	}
 
 	public static function ipv6Fallbacks(): array
@@ -132,23 +130,19 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 	}
 
 	#[DataProvider('ipv6Fallbacks')]
-	public function testInvalidIpv6OverrideKeepsTheBasePort(string $kind, string $alpn, int $port): void
+	public function testInvalidIpv6OverrideKeepsTheAppliedBasePort(string $kind, string $alpn, int $port): void
 	{
 		PfbConfig::write("dns_shared/pfb_dns_{$kind}", 'on');
 		PfbConfig::write("dns/pfb_dns_{$kind}_interface", 'lan');
 		PfbConfig::write("dns_shared/pfb_dns_{$kind}_port", (string) $port);
 		PfbConfig::write("dns_shared/pfb_dns_{$kind}_port6", 'invalid');
 		$this->gatewayServes(['udp+tcp [2001:db8::1]:5353', "{$kind} [2001:db8::1]:{$port}"]);
+		$this->gatewayAdvertisement('2001:db8::1', $alpn, $port, ['a' => [], 'aaaa' => ['2001:db8::1']]);
 		$fixture = new DdrProbeFixture();
-		$fixture->responses = [
-			'_dns.resolver.arpa. SVCB' => PfbDnsDdrStatusTest::response(
-				[PfbDnsDdrStatusTest::record('2001:db8::1', $alpn, $port)],
-				additional: ['dns.example.com. 300 IN AAAA 2001:db8::1']),
-			'dns.example.com A' => PfbDnsDdrStatusTest::response(['dns.example.com. 300 IN A 192.0.2.1'], 'dns.example.com.', 'A'),
-			'dns.example.com AAAA' => PfbDnsDdrStatusTest::response(['dns.example.com. 300 IN AAAA 2001:db8::1'], 'dns.example.com.', 'AAAA'),
-		];
-		$status = $fixture->status('[2001:db8::1]:5353');
+		$status = $fixture->status();
 		$this->assertSame('matched', $status['rows'][0]['state'], json_encode($status));
+		$this->assertStringContainsString("{$alpn} dns.example.com:{$port} (2001:db8::1)", $status['rows'][0]['reason']);
+		$this->assertSame([], $fixture->calls);
 	}
 
 	public static function nonCanonicalVips(): array
@@ -190,21 +184,19 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 			PfbConfig::write('dns/pfb_dns_ddr_doh_443_interfaces', '_vipv6');
 		}
 		$bound = $auto ? ($kind === 'doh' ? 443 : 853) : $port;
+		$advertised = $override ? 443 : $bound;
 		$this->gatewayServes(["udp+tcp [{$host}]:5353", "{$kind} [{$host}]:{$bound}"]);
+		$this->gatewayAdvertisement($host, $alpn, $advertised, ['a' => [], 'aaaa' => [$host]]);
 		$fixture = new DdrProbeFixture();
-		$fixture->responses = [
-			'_dns.resolver.arpa. SVCB' => PfbDnsDdrStatusTest::response(
-				[PfbDnsDdrStatusTest::record($host, $alpn, $override ? 443 : $bound)],
-				additional: ["dns.example.com. 300 IN AAAA {$host}"]),
-			'dns.example.com A' => PfbDnsDdrStatusTest::response(['dns.example.com. 300 IN A 192.0.2.53'], 'dns.example.com.', 'A'),
-			'dns.example.com AAAA' => PfbDnsDdrStatusTest::response(["dns.example.com. 300 IN AAAA {$host}"], 'dns.example.com.', 'AAAA'),
-		];
-		$status = $fixture->status("[{$host}]:5353");
+		$status = $fixture->status();
 		$this->assertSame('matched', $status['rows'][0]['state'], json_encode($status));
+		$this->assertSame("[{$host}]:5353", $status['rows'][0]['address']);
+		$this->assertStringContainsString("{$alpn} dns.example.com:{$advertised} ({$host})", $status['rows'][0]['reason']);
+		$this->assertSame([], $fixture->calls);
 	}
 
-	/** A manual VIP no client can be handed (loopback here) still has its bound listener checked, not reported as absent. */
-	public function testUnusableManualVipStillComparesItsBoundListener(): void
+	/** A manual VIP no client can be handed (loopback here) still shows its applied advertisement; its name is forwarded, never claimed as owned. */
+	public function testUnusableManualVipStillShowsItsAppliedAdvertisement(): void
 	{
 		$host = '127.0.0.2';
 		config_set_path('virtualip/vip', [['mode' => 'ipalias', 'interface' => 'lo0', 'type' => 'single', 'subnet' => $host,
@@ -216,14 +208,15 @@ final class PfbDnsDdrExpectedListenersTest extends TestCase
 		PfbConfig::write('dns/pfb_dns_dot_interface', 'lan');
 		PfbConfig::write('dns_shared/pfb_dns_dot_port', '8853');
 		$this->gatewayServes(["udp+tcp {$host}:5353", "dot {$host}:8853"]);
+		$this->gatewayAdvertisement($host, 'dot', 8853);
 		$fixture = new DdrProbeFixture();
-		$fixture->responses = [
-			'_dns.resolver.arpa. SVCB' => PfbDnsDdrStatusTest::response([PfbDnsDdrStatusTest::record($host, 'dot', 8853)],
-				additional: ["dns.example.com. 300 IN A {$host}"]),
-		];
-		$status = $fixture->status("{$host}:5353");
-		// No DNS Name answer is owned for an address clients cannot be given, so a matching SVCB stays unverified.
-		$this->assertSame('unverified', $status['rows'][0]['state'], json_encode($status));
-		$this->assertCount(1, $fixture->calls);
+		$status = $fixture->status();
+		$this->assertSame('matched', $status['rows'][0]['state'], json_encode($status));
+		$this->assertStringContainsString('DNS Name queries are forwarded', $status['rows'][0]['reason']);
+		$this->assertSame([], $fixture->calls);
+		$fixture->responses = ['_dns.resolver.arpa. SVCB' => PfbDnsDdrStatusTest::response([PfbDnsDdrStatusTest::record($host, 'dot', 8853)],
+			additional: ["dns.example.com. 300 IN A {$host}"])];
+		$this->assertSame('ok', $fixture->probe("{$host}:5353", 2.0)['state']);
+		$this->assertCount(1, $fixture->calls, 'The explicit diagnostic still asks one SVCB question');
 	}
 }

@@ -1,0 +1,2 @@
+{"version":1,"pid":972522,"executable":"/var/tmp/agents/3845-gate/upstream-canon/pfb_dns_gateway","ready":true,"dns_name":"","listeners":[{"kind":"udp+tcp","address":"127.0.0.1:41775","state":"listening","reason":""}],"name_answers":{},"ddr":false,"advertisements":{"127.0.0.1":{"records":[],"additional":[]}}}
+ok

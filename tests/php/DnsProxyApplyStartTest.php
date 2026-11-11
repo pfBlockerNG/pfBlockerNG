@@ -51,6 +51,8 @@ final class DnsProxyApplyStartTest extends TestCase
 			'logdir' => $this->dir,
 			'log'    => "{$this->dir}/pfb.log",
 			'errlog' => "{$this->dir}/pfb.err",
+			// The rc script names the control socket it is given: sandboxed from the start, so no later seeding changes it
+			'dns_proxy_ctl' => "{$this->dir}/ctl.sock",
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_service_calls'] = [];
@@ -173,6 +175,8 @@ final class DnsProxyApplyStartTest extends TestCase
 		};
 
 		// When the LAN gets a new address and the apply runs
+		// The running gateway has no control answer before the restart: the change is then a restart, and the restarted gateway serves
+		$this->standInsStop();
 		$this->setProxyMode('192.0.2.77');
 		pfb_dns_proxy_ensure_running();
 
@@ -244,6 +248,8 @@ final class DnsProxyApplyStartTest extends TestCase
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls'], 'before: unchanged settings leave the running proxy alone');
 
 		// When one setting changes and the next apply runs
+		// The running gateway has no control answer before the restart: the change is then a restart, and the restarted gateway serves
+		$this->standInsStop();
 		$this->configure($change);
 		$seen = [];
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use (&$seen): void {

@@ -8,10 +8,8 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3560 -- the upstream a serving proxy relies on is the one its running gateway was started with, read from the process table
- * (`$pfb['ps']`), not from the rc script on disk. The rc script is the desired state an apply writes: an update that was not
- * applied, a package upgrade that unlinked it, and an orphaned Resolver whose rc refuses to start all leave it out of step with the
- * process that runs. Readiness asks the process what it forwards to, and that Unbound owns that endpoint over TCP and UDP.
+ * issue #3560 -- readiness uses the applied upstream, never the desired rc script on disk. An unapplied update, a missing script
+ * or an orphaned Resolver must not override the running gateway. Unbound must own that applied endpoint over both TCP and UDP.
  */
 #[CoversFunction('pfb_dns_proxy_upstream_ready')]
 #[CoversFunction('pfb_dns_proxy_serving_ready')]
@@ -58,7 +56,7 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 			. "/pfb_dns.sh --listen 127.0.0.1 --port 53 --upstream {$upstream}\n");
 	}
 
-	/** A live gateway (child pid 4242, marker published) whose process table row is `$commandLine` (NULL: no row at all). */
+	/** A live gateway (child pid 4242, marker published) with the applied upstream (NULL: malformed missing endpoint). */
 	private function runningGateway(?string $upstream = '127.0.0.1:5353'): void
 	{
 		$this->proxyServes();
@@ -76,10 +74,11 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 		$GLOBALS['pfb']['pfb_dns'] = PfbToggle::On;
 	}
 
-	/** The process table's row for the child: an arbitrary command line, written as ps would print it. */
-	private function processTableRow(string $commandLine): void
+	/** Applied identity supplied independently of the desired rc script. */
+	private function appliedIdentity(array $fields): void
 	{
-		file_put_contents($GLOBALS['pfb_test_ps_output'], "4242 {$commandLine}\n");
+		$this->gatewayStatus($fields);
+		$this->standIn($GLOBALS['pfb']['dns_proxy_ctl']);
 	}
 
 	public function testTheRunningGatewayServesFromTheUpstreamItWasStartedWithNotTheDesiredRc(): void
@@ -139,29 +138,29 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 		$this->assertSame('Starting', pfb_dns_status()['service']);
 	}
 
-	public function testAGatewayCommandWithNoUpstreamFailsClosedEvenWhenTheRcNamesAHealthyOne(): void
+	public function testAGatewayStatusWithNoUpstreamFailsClosedEvenWhenTheRcNamesAHealthyOne(): void
 	{
 		$this->runningGateway(NULL);
 		$this->desiredRc('127.0.0.1:5353');
 		$this->seedUnbound('127.0.0.1:5353');
 
-		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the running command names no upstream, so there is no endpoint to confirm');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'applied status names no upstream, so there is no endpoint to confirm');
 	}
 
-	public function testAGatewayCommandWithTwoUpstreamsFailsClosed(): void
+	public function testAGatewayStatusWithTwoUpstreamsFailsClosed(): void
 	{
 		$this->proxyServes();
-		$this->processTableRow(PFB_DNS_PROXY_DIR . '/bin/freebsd-amd64/pfb-dns --upstream 127.0.0.1:5353 --upstream 127.0.0.1:5353');
+		$this->appliedIdentity(['upstream' => ['127.0.0.1:5353', '127.0.0.1:5353']]);
 		$this->desiredRc('127.0.0.1:5353');
 		$this->seedUnbound('127.0.0.1:5353');
 
-		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'an ambiguous command line names no single endpoint');
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'an ambiguous applied endpoint is not a single upstream');
 	}
 
 	public function testAnUnparsableRunningUpstreamFailsClosed(): void
 	{
 		$this->proxyServes();
-		$this->processTableRow(PFB_DNS_PROXY_DIR . '/bin/freebsd-amd64/pfb-dns --upstream not-an-endpoint');
+		$this->appliedIdentity(['upstream' => 'not-an-endpoint']);
 		$this->desiredRc('127.0.0.1:5353');
 		$this->seedUnbound('127.0.0.1:5353');
 
@@ -171,7 +170,7 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 	public function testAProcessThatIsNotTheInstalledGatewayFailsClosed(): void
 	{
 		$this->proxyServes();
-		$this->processTableRow('/usr/bin/someone-else --upstream 127.0.0.1:5353');
+		$this->appliedIdentity(['executable' => '/usr/bin/someone-else']);
 		$this->desiredRc('127.0.0.1:5353');
 		$this->seedUnbound('127.0.0.1:5353');
 
@@ -181,7 +180,7 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 	public function testAnotherBinaryUnderTheSameDirectoryFailsClosed(): void
 	{
 		$this->proxyServes();
-		$this->processTableRow(PFB_DNS_PROXY_DIR . '/bin/freebsd-amd64/pfb-dns-debug --upstream 127.0.0.1:5353');
+		$this->appliedIdentity(['executable' => PFB_DNS_PROXY_DIR . '/bin/freebsd-amd64/pfb-dns-debug']);
 		$this->desiredRc('127.0.0.1:5353');
 		$this->seedUnbound('127.0.0.1:5353');
 
@@ -197,10 +196,20 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'no running command for the child pid: nothing to confirm the upstream against');
 	}
 
+	public function testAGatewayStatusForAnotherPidFailsClosed(): void
+	{
+		$this->proxyServes();
+		$this->appliedIdentity(['pid' => 4243]);
+		$this->desiredRc('127.0.0.1:5353');
+		$this->seedUnbound('127.0.0.1:5353');
+
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'status names another PID, not the child in the pidfile');
+	}
+
 	public function testTheBinaryOfTheOtherArchitectureTheWrapperExecsIsTheSameGateway(): void
 	{
 		$this->proxyServes();
-		$this->processTableRow(PFB_DNS_PROXY_DIR . '/bin/freebsd-arm64/pfb-dns --listen 127.0.0.1 --port 53 --upstream 127.0.0.1:5353');
+		$this->appliedIdentity(['executable' => PFB_DNS_PROXY_DIR . '/bin/freebsd-arm64/pfb-dns']);
 		$this->seedUnbound('127.0.0.1:5353');
 
 		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'pfb_dns.sh execs bin/<target>/pfb-dns for the machine it runs on');
@@ -208,10 +217,9 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 
 	public function testALiteralQuotedUpstreamFailsClosed(): void
 	{
-		// Given a gateway whose command line carries literal quotes around its upstream: the shell strips those quotes from the rc
-		// text before any gateway starts, so a process never has them in its argv
+		// Literal quotes are not part of a canonical applied endpoint.
 		$this->proxyServes();
-		$this->processTableRow(PFB_DNS_PROXY_DIR . "/bin/freebsd-amd64/pfb-dns --upstream '127.0.0.1:5353'");
+		$this->appliedIdentity(['upstream' => "'127.0.0.1:5353'"]);
 		$this->seedUnbound('127.0.0.1:5353');
 
 		// Then nothing is confirmed: a quoted argv is not a command line the gateway was started with
@@ -220,12 +228,13 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 
 	public function testABracketedIPv4UpstreamIsJudgedByTheEndpointItNames(): void
 	{
-		// Given a gateway forwarding to a bracketed IPv4 endpoint, and Unbound owning that endpoint
+		// Given a gateway whose applied upstream is what the Go emitter writes for the config input [127.0.0.1]:5353 (canonical 127.0.0.1:5353),
+		// and Unbound owning that endpoint. A noncanonical status wire is rejected elsewhere; this row pins the canonical endpoint's owner check.
 		$this->proxyServes();
-		$this->processTableRow(PFB_DNS_PROXY_DIR . '/bin/freebsd-amd64/pfb-dns --upstream [127.0.0.1]:5353');
+		$this->appliedIdentity(['upstream' => '127.0.0.1:5353']);
 		$this->seedUnbound('127.0.0.1:5353');
 
-		// Then the proxy serves: the owner check compares the address the endpoint names, whatever brackets it was written with
-		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the bracketed endpoint names 127.0.0.1:5353, which Unbound owns');
+		// Then the proxy serves: the applied endpoint is the one Unbound owns over TCP and UDP
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the applied endpoint 127.0.0.1:5353 is owned by Unbound');
 	}
 }

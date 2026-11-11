@@ -269,7 +269,7 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		$this->assertStringContainsString(" --dns-name-answer '192.0.2.1=192.0.2.1'", $this->rc(), 'before: the command carries the name answer');
 
 		// When the sync runs
-		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
+		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status())));
 
 		// Then one frame carries both kinds of line, the command's order, joined by newlines
 		$this->assertSame([self::TABLE . " ddr-doh-443 192.0.2.1\ndns-name-answer 192.0.2.1=192.0.2.1"], self::sent($record));
@@ -298,7 +298,7 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		// Given DDR on and nothing selected: the table is the name answers alone
 		$this->ready(self::ddrOn());
 		$record = $this->gateway($this->served());
-		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
+		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status())));
 		$this->assertSame([self::TABLE . ' dns-name-answer 192.0.2.1=192.0.2.1'], self::sent($record), 'before: no 443 line');
 
 		// When lan is selected but DDR is turned off, the script has no --ddr and so no 443 argument
@@ -306,7 +306,7 @@ final class DnsProxyDoh443LiveTest extends TestCase
 		config_set_path(self::SHARED . 'pfb_dns_ddr', '');
 		pfb_dns_proxy_service($this->krProxyDir);
 		$this->assertStringNotContainsString('--ddr-doh-443', $this->rc());
-		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list()));
+		$this->assertNull(pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status())));
 
 		// Then the second table is still the name answers alone
 		$this->assertSame(

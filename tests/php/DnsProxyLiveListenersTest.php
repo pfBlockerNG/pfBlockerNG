@@ -146,8 +146,9 @@ final class DnsProxyLiveListenersTest extends TestCase
 	}
 
 	/**
-	 * From now on a restart of the proxy is a NEW gateway process: the stand-in is stopped and, with $listening, one that serves it
-	 * starts; NULL = none answers yet.
+	 * From now on a restart of the proxy is a NEW gateway process: the stand-in is stopped and a new one starts. With $listening it
+	 * serves those; NULL = ready but its inventory not answered yet: its first status answer serves the readiness check, and every
+	 * status answer after that is unavailable.
 	 *
 	 * @param list<string>|null $listening `<kind> <host:port>`
 	 */
@@ -158,9 +159,9 @@ final class DnsProxyLiveListenersTest extends TestCase
 			$serviceHook($fn, $service);
 			if ($fn === 'restart_service') {
 				$this->standInsStop();
-				if ($listening !== NULL) {
-					$this->standIn($this->socket, [], ['listening' => $listening]);
-				}
+				$this->standIn($this->socket, [], $listening === NULL
+					? ['listening' => [], 'status_later' => "error: the applied status is not yet available\n"]
+					: ['listening' => $listening]);
 			}
 		};
 	}
@@ -177,6 +178,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		return array_map(
 			static fn (array $frame): string => match ($frame['head']) {
 				'fffffffc' => 'list',
+				'fffffffa' => 'status',
 				'fffffffe' => "add {$frame['body']}",
 				'fffffffd' => "remove {$frame['body']}",
 				default => "{$frame['head']} {$frame['body']}",
@@ -188,7 +190,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 	/** @return list<string> each frame that changes the gateway, as requests() writes it */
 	private static function verbs(string $record): array
 	{
-		return array_values(array_diff(self::requests($record), ['list']));
+		return array_values(array_diff(self::requests($record), ['list', 'status']));
 	}
 
 	/**
@@ -294,13 +296,13 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$asked = count(self::requests($record));
 
 		// When the sync runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then it asked first, removed the listener the command no longer names, added the two it names that nothing served, in the
 		// command's order and with their sockets, and ended on the ownership table, sending nothing else
 		$p = $this->port;
 		$this->assertNull($why);
-		$this->assertSame(['list', "remove udp+tcp 192.0.2.1:{$p}", "add udp+tcp 0.0.0.0:{$p}", "add udp+tcp [::1]:{$p}", self::tableRequest()], array_slice(self::requests($record), $asked));
+		$this->assertSame(['status', "remove udp+tcp 192.0.2.1:{$p}", "add udp+tcp 0.0.0.0:{$p}", "add udp+tcp [::1]:{$p}", self::tableRequest()], array_slice(self::requests($record), $asked));
 		$this->assertSame([['dgram', "0.0.0.0:{$p}", FALSE], ['stream', "0.0.0.0:{$p}", TRUE]], self::fdsOf($record, 1), 'the add of 0.0.0.0 carried the UDP socket, then the listening TCP socket');
 		// and the gateway now serves exactly the command's listeners, each change taking one line of the pfB log
 		$this->assertEqualsCanonicalizing($this->listed(['0.0.0.0', '127.0.0.1', '[::1]']), $this->served());
@@ -326,6 +328,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// Given a command that names 0.0.0.0, a gateway that gives no list, and a log that says only 192.0.2.1 and loopback are served
 		// (which, taken for the truth, would be a remove and two adds)
 		$this->quiet(['lan' => '0.0.0.0']);
+		$this->standInsStop();
 		$this->logSaysServed(['192.0.2.1', '127.0.0.1']);
 		$record = ($answer === FALSE) ? NULL : $this->standIn($this->socket, [], ['list' => $answer]);
 		$this->rewriteRc();
@@ -335,12 +338,12 @@ final class DnsProxyLiveListenersTest extends TestCase
 		}
 
 		// When the sync runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then nothing is to be done: no frame but the list request, nothing logged, no restart asked for
 		$this->assertNull($why);
 		if ($record !== NULL) {
-			$this->assertSame(['list'], self::requests($record));
+			$this->assertSame(['status'], self::requests($record));
 		}
 		$this->assertSame($logged, strlen($this->pfbLog()), 'nothing was logged');
 		$this->assertSame([], $this->krProxyCalls());
@@ -351,6 +354,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 	{
 		// Given a ready proxy whose rc script did not change, a gateway that gives no list, and a log that says a listener is missing
 		$this->quiet();
+		$this->standInsStop();
 		$this->logSaysServed(['127.0.0.1']);
 		$record = ($answer === FALSE) ? NULL : $this->standIn($this->socket, [], ['list' => $answer]);
 
@@ -406,7 +410,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->krEnsure();
 
 		// Then the first three requests are one list, the remove and the add: the gateway was asked once, and the changes are made from that answer
-		$this->assertSame(['list', "remove udp+tcp 192.0.2.1:{$this->port}", "add udp+tcp 0.0.0.0:{$this->port}"], array_slice(self::requests($record), 0, 3));
+		$this->assertSame(['status', "remove udp+tcp 192.0.2.1:{$this->port}", "add udp+tcp 0.0.0.0:{$this->port}"], array_slice(self::requests($record), 0, 3));
 	}
 
 	public function testAnIPv6AddressThatAppearsIsAddedLive(): void
@@ -541,24 +545,36 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertStringContainsString('Restarting the DNS proxy: its ports or DoT/DoH/DoQ/DDR settings changed', $this->krLog());
 	}
 
-	/** @return array<string,array{string,string|bool|null}> how the gateway cannot take a live change: the proxy's state, and its answer to a list request (TRUE = the list; FALSE = no control socket; NULL = it hangs up) */
+	/**
+	 * How the gateway cannot take a live change: the proxy's state, and its answer to a list request (TRUE = the list; FALSE = no control
+	 * socket; NULL = it hangs up; an error = an older gateway). The last column: whether the restart replaces that gateway with one that
+	 * answers its applied status. An older gateway cannot answer it, so only its replacement lets the activation the restart starts complete.
+	 *
+	 * @return array<string,array{string,string|bool|null,bool}>
+	 */
 	public static function boxesThatCannotBeReconciledLive(): array
 	{
 		return [
-			'a proxy that is alive and not ready' => ['lives', TRUE],
-			'a gateway with no control socket' => ['serves', FALSE],
-			'an older gateway that answers the list request as an error' => ['serves', self::NO_LIST],
+			'a proxy that is alive and not ready' => ['lives', TRUE, FALSE],
+			'a gateway with no control socket' => ['serves', FALSE, FALSE],
+			'an older gateway that answers the list request as an error' => ['serves', self::NO_LIST, TRUE],
 		];
 	}
 
 	#[DataProvider('boxesThatCannotBeReconciledLive')]
-	public function testAnAddressOnlyChangeThatCannotBeMadeLiveRestartsTheWholePair(string $proxy, string|bool|null $answer): void
+	public function testAnAddressOnlyChangeThatCannotBeMadeLiveRestartsTheWholePair(string $proxy, string|bool|null $answer, bool $restartReplacesGateway): void
 	{
 		// Given an interface that has 0.0.0.0 now, a gateway log that says everything is served (which, taken for the truth, would be
 		// reconciled live: before, a known list does that, above), and a proxy that cannot be reconciled live
 		$this->quiet(['proxy' => $proxy, 'lan' => '0.0.0.0']);
+		$this->standInsStop();
 		$this->logSaysServed(self::ADDRESSES);
 		$record = ($answer === FALSE) ? NULL : (($answer === TRUE) ? $this->gateway() : $this->standIn($this->socket, [], ['list' => $answer]));
+		if ($restartReplacesGateway) {
+			// The old gateway answers the list request as an error, so it gives no applied status: the restart starts the gateway that replaces it,
+			// serving what the rc script's command names once the interface has 0.0.0.0 (no change frame: the replacement starts with the restart)
+			$this->restartStartsAGateway($this->listed(['0.0.0.0', '127.0.0.1', '[::1]']));
+		}
 
 		// When the update pass runs
 		$this->krEnsure();
@@ -569,6 +585,11 @@ final class DnsProxyLiveListenersTest extends TestCase
 			$this->assertSame([], self::changeFrames($record));
 		}
 		$this->assertStringContainsString('Restarting the DNS proxy: its listen addresses changed', $this->krLog());
+		if ($restartReplacesGateway) {
+			// The activation the restart started completes on the gateway that replaced the old one: a rollback would still pass the assertions above
+			$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the restarted gateway serves its applied status and its upstream');
+			$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_activation_failed'], 'the activation the restart started was not rolled back');
+		}
 	}
 
 	/** @return array<string,array{array<string,mixed>,string}> another reason the pass restarts the pair, and what it says */
@@ -622,7 +643,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$logged = strlen($this->pfbLog());
 
 		// When the reconcile runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then no listener frame is sent, nothing is logged or asked for, and the sync ends on the ownership table: the next pass tries again
 		$this->assertNull($why);
@@ -646,7 +667,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$logged = strlen($this->pfbLog());
 
 		// When the reconcile runs
-		$why = ($namespace . '\\pfb_dns_proxy_listeners_sync')(pfb_dns_proxy_listener_list());
+		$why = ($namespace . '\\pfb_dns_proxy_listeners_sync')(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then no listener frame is sent, nothing is logged or asked for, and the sync ends on the ownership table: the next pass tries again
 		$this->assertNull($why);
@@ -683,7 +704,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->rewriteRc();
 
 		// When the reconcile runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then the failure is one line of the pfB log naming the transport, the address and the reason; no listener frame is sent, only the ownership table; nothing restarts
 		$this->assertNull($why);
@@ -703,7 +724,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->rewriteRc();
 
 		// When the reconcile runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then, as with no restart pending, the failure is one line of the pfB log; with a restart pending nothing at all is sent (not even
 		// the ownership table), nothing restarts, the marker stays
@@ -740,7 +761,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$record = $this->gateway([], $this->listed(['127.0.0.1', '[::1]']));
 
 		// When the reconcile runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then no listener is changed and nothing is asked for, only the ownership table is sent: the host was never handed to a bind
 		$this->assertNull($why);
@@ -863,7 +884,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 		]);
 
 		// When the reconcile runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then each kind loses its stale address before it gains its two, in the command's order, with that kind's sockets
 		$this->assertNull($why);
@@ -1049,11 +1070,11 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$record = $this->gateway([], $this->listed(['192.0.2.1', '[::1]']), array_fill_keys($this->listed(['127.0.0.1']), self::CANT));
 
 		// When the reconcile runs
-		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_listener_list());
+		$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()));
 
 		// Then the address is the reason to restart the pair, and the gateway was only asked what it serves: no add, no remove
 		$this->assertSame("the gateway could not bind 127.0.0.1:{$this->port} when it started, and that address can be bound now", $why);
-		$this->assertSame(['list'], self::requests($record));
+		$this->assertSame(['status'], self::requests($record));
 	}
 
 	public function testATickRestartLeavesAPendingRestartToTheUpdatePassAndSendsNoFrame(): void

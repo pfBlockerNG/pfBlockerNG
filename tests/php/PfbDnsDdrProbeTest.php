@@ -65,14 +65,15 @@ final class PfbDnsDdrProbeTest extends TestCase
 		}
 	}
 
-	public function testMetadataKeepsAllBoundRowsPendingWithoutDnsProcesses(): void
+	public function testMetadataShowsTheAppliedRowsAndTimestampWithoutDnsProcesses(): void
 	{
 		$this->gatewayServes(['udp+tcp 192.0.2.1:5353', 'dot 192.0.2.1:853', 'udp+tcp [2001:db8::1]:5354', 'dot [2001:db8::1]:853']);
+		$this->gatewayAdvertisement('192.0.2.1');
 		$status = $this->fixture->status();
 		$this->assertSame([], $this->fixture->calls, 'Page metadata must not launch DNS subprocesses');
-		$this->assertNull($status['queried']);
+		$this->assertMatchesRegularExpression('/\A\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\z/', (string) $status['queried']);
 		$this->assertSame(['192.0.2.1:5353', '[2001:db8::1]:5354'], array_column($status['rows'], 'address'));
-		$this->assertSame(['pending', 'pending'], array_column($status['rows'], 'state'));
+		$this->assertSame(['matched', 'no_transport'], array_column($status['rows'], 'state'));
 		foreach ($status['rows'] as $row) {
 			$this->assertArrayNotHasKey('name', $row);
 		}
@@ -83,16 +84,15 @@ final class PfbDnsDdrProbeTest extends TestCase
 		return [['192.0.2.1:5353', '192.0.2.1'], ['[2001:db8::1]:5354', '2001:db8::1']];
 	}
 
+	/** The selector API is gone: each directed question is an explicit diagnostic at the exact address it names, on its own port. */
 	#[DataProvider('selectedListeners')]
-	public function testSelectedListenerQueriesOnlyItsExactCurrentBoundAddress(string $listener, string $host): void
+	public function testExplicitDiagnosticAsksEachDirectedQuestionAtExactlyItsBoundAddress(string $listener, string $host): void
 	{
-		$this->gatewayServes(['udp+tcp 192.0.2.1:5353', 'dot 192.0.2.1:853', 'udp+tcp [2001:db8::1]:5354', 'dot [2001:db8::1]:853']);
 		$this->fixture->responses['_dns.resolver.arpa. SVCB'] = PfbDnsDdrStatusTest::response(
 			[PfbDnsDdrStatusTest::record($host)], additional: ['dns.example.com. 300 IN ' . (str_contains($host, ':') ? 'AAAA' : 'A') . " {$host}"]);
-		$status = $this->fixture->status($listener);
-		$this->assertSame([$listener], array_column($status['rows'], 'address'));
-		$this->assertSame(['matched'], array_column($status['rows'], 'state'), json_encode($status));
-		$this->assertNotNull($status['queried']);
+		foreach ([['_dns.resolver.arpa.', 'SVCB'], ['dns.example.com', 'A'], ['dns.example.com', 'AAAA']] as [$question, $type]) {
+			$this->assertSame('ok', $this->fixture->probe($listener, 2.0, $question, $type)['state'], "{$question} {$type}");
+		}
 		$this->assertCount(3, $this->fixture->calls);
 		foreach ($this->fixture->calls as $call) {
 			$this->assertContains("@{$host}", $call);
@@ -100,45 +100,67 @@ final class PfbDnsDdrProbeTest extends TestCase
 		}
 	}
 
-	public static function rejectedSelectors(): array
+	public static function hostileTargets(): array
 	{
-		return array_merge(PfbDnsDdrStatusTest::hostileListeners(), [
-			['192.0.2.99:53'], ['192.0.2.50:53'], ['192.0.2.1:853'], ['192.0.2.1:53'],
-		]);
+		return PfbDnsDdrStatusTest::hostileListeners();
 	}
 
-	#[DataProvider('rejectedSelectors')]
-	public function testRejectedSelectorNeverQueriesAnotherBoundListener(string $listener): void
+	/** Hostile input is refused at the explicit boundary; the HTTP boundary refuses every listener parameter (smoke-owned). */
+	#[DataProvider('hostileTargets')]
+	public function testHostileDiagnosticTargetIsRefusedWithoutAQuery(string $listener): void
 	{
-		$this->gatewayServes(['udp+tcp 192.0.2.1:5353', 'dot 192.0.2.1:853'], ['udp+tcp 192.0.2.50:53' => 'refused']);
-		$status = $this->fixture->status($listener);
-		$this->assertSame([], $this->fixture->calls, "Rejected selector {$listener} must not launch DNS subprocesses");
-		$this->assertSame([], $status['rows']);
-		$this->assertNull($status['queried']);
+		$this->assertSame('error', $this->fixture->probe($listener, 2.0)['state']);
+		$this->assertSame([], $this->fixture->calls, "Rejected target {$listener} must not launch DNS subprocesses");
 	}
 
-	public function testSlowSelectedRequestCannotStarveTheNextSelectedRequest(): void
+	public static function canonicalUnboundTargets(): array
 	{
-		$this->gatewayServes(['udp+tcp 192.0.2.1:53', 'dot 192.0.2.1:853', 'udp+tcp 127.0.0.1:53', 'dot 127.0.0.1:853']);
-		$this->fixture->elapsedPerQuery = 5000000000;
-		$first = $this->fixture->status('192.0.2.1:53');
-		$this->assertSame(['budget'], array_column($first['rows'], 'state'));
-		$this->assertCount(2, $this->fixture->calls);
-		$this->fixture->elapsedPerQuery = 0;
+		return [['192.0.2.99:53'], ['192.0.2.50:53'], ['192.0.2.1:853'], ['192.0.2.1:53']];
+	}
+
+	/** A canonical numeric target is a valid diagnostic target bound or not: the explicit probe does not check the bound list. */
+	#[DataProvider('canonicalUnboundTargets')]
+	public function testCanonicalNumericDiagnosticTargetIsQueriedOnceWithoutABoundListCheck(string $listener): void
+	{
+		$colon = strrpos($listener, ':');
+		$this->assertSame('ok', $this->fixture->probe($listener, 2.0)['state']);
+		$this->assertCount(1, $this->fixture->calls);
+		$this->assertContains('@' . substr($listener, 0, $colon), $this->fixture->calls[0]);
+		$this->assertSame(substr($listener, $colon + 1), $this->fixture->calls[0][array_search('-p', $this->fixture->calls[0], TRUE) + 1]);
+	}
+
+	/** The multi-query budget is gone from automatic status: a slow DNS server cannot starve a request that launches nothing. */
+	public function testAutomaticStatusCannotBeStarvedBySlowDnsBecauseItLaunchesNoQuery(): void
+	{
+		$this->gatewayServes(['udp+tcp 192.0.2.1:53', 'udp+tcp 127.0.0.1:53']);
+		$this->gatewayAdvertisement('192.0.2.1');
+		$this->fixture->exit = 124;
+		$status = $this->fixture->status();
+		$this->assertSame([], $this->fixture->calls);
+		$states = array_column($status['rows'], 'state', 'address');
+		ksort($states);
+		$this->assertSame(['127.0.0.1:53' => 'no_transport', '192.0.2.1:53' => 'matched'], $states);
+	}
+
+	/** The explicit timeout reports timeout, and the next explicit request still gets its own deadline and query. */
+	public function testATimedOutDiagnosticQueryDoesNotStarveTheNextDiagnosticQuery(): void
+	{
+		$this->fixture->exit = 124;
+		$this->assertSame('timeout', $this->fixture->probe('192.0.2.1:53', 2.0)['state']);
+		$this->fixture->exit = 0;
 		$this->fixture->responses['_dns.resolver.arpa. SVCB'] = PfbDnsDdrStatusTest::response([PfbDnsDdrStatusTest::record('127.0.0.1')],
 			additional: ['dns.example.com. 300 IN A 127.0.0.1']);
-		$second = $this->fixture->status('127.0.0.1:53');
-		$this->assertSame(['127.0.0.1:53'], array_column($second['rows'], 'address'));
-		$this->assertSame(['matched'], array_column($second['rows'], 'state'), json_encode($second));
-		$this->assertCount(3, $this->fixture->calls, 'The next request must receive a fresh deadline');
+		$this->assertSame('ok', $this->fixture->probe('127.0.0.1:53', 2.0)['state']);
+		$this->assertCount(2, $this->fixture->calls, 'The next explicit request launches its own query');
 	}
 
-	public function testAutomaticQueriesUseActualPlainPortAndBothOwnedNameFamilies(): void
+	public function testExplicitQueriesUseTheActualPlainPortAndBothOwnedNameFamilies(): void
 	{
-		$this->gatewayServes(['udp+tcp 192.0.2.1:5353', 'dot 192.0.2.1:853', 'doh 192.0.2.99:443'], ['udp+tcp 192.0.2.50:53' => 'refused']);
-		$result = $this->fixture->status('192.0.2.1:5353');
-		$this->assertSame(['matched'], array_column($result['rows'], 'state'));
-		$this->assertCount(3, $this->fixture->calls);
+		foreach ([['_dns.resolver.arpa.', 'SVCB'], ['dns.example.com', 'A'], ['dns.example.com', 'AAAA']] as [$question, $type]) {
+			$this->assertSame('ok', $this->fixture->probe('192.0.2.1:5353', 2.0, $question, $type)['state'], "{$question} {$type}");
+		}
+		$this->assertSame([['_dns.resolver.arpa.', 'SVCB'], ['dns.example.com', 'A'], ['dns.example.com', 'AAAA']],
+			array_map(static fn (array $call): array => [$call[count($call) - 3], $call[count($call) - 1]], $this->fixture->calls));
 		foreach ($this->fixture->calls as $call) {
 			$this->assertSame(['-p', '5353'], array_slice($call, array_search('-p', $call, TRUE), 2));
 			$this->assertContains('@192.0.2.1', $call);
@@ -164,33 +186,52 @@ final class PfbDnsDdrProbeTest extends TestCase
 		}
 	}
 
-	public function testDisabledInvalidNameAndRefusedTransportCannotTurnGreenOrLaunchQueries(): void
+	/** Applied state governs the row: a saved name, DDR or transport change made after the snapshot does not alter it. */
+	public function testAppliedStateGovernsTheRowAndSavedChangesCannotOverrideIt(): void
 	{
 		$this->gatewayServes(['udp+tcp 192.0.2.1:53'], ['dot 192.0.2.1:853' => 'refused']);
-		$this->assertSame('no_transport', $this->fixture->status('192.0.2.1:53')['rows'][0]['state']);
+		$this->gatewayStatus(['dns_name' => 'dns.example.com', 'ddr' => TRUE,
+			'advertisements' => (object) ['192.0.2.1' => ['records' => [], 'additional' => []]]]);
+		$this->assertSame('no_transport', $this->fixture->status()['rows'][0]['state']);
 		PfbConfig::write('dns/pfb_dns_name', '');
-		$this->assertSame('unverified', $this->fixture->status('192.0.2.1:53')['rows'][0]['state']);
 		PfbConfig::write('dns_shared/pfb_dns_ddr', '');
-		$this->assertSame('off', $this->fixture->status('192.0.2.1:53')['rows'][0]['state']);
+		$this->assertSame('no_transport', $this->fixture->status()['rows'][0]['state'], 'Saved name and DDR changes do not override the applied row');
+		$this->gatewayStatus(['ddr' => FALSE, 'dns_name' => 'dns.example.com']);
+		PfbConfig::write('dns_shared/pfb_dns_ddr', 'on');
+		$this->assertSame('off', $this->fixture->status()['rows'][0]['state'], 'Applied DDR off wins over saved DDR on');
 		$this->assertSame([], $this->fixture->calls);
 	}
 
-	public function testStaleBoundPortsDoNotBlessTheStaleAdvertisement(): void
+	/** The actual bound nonstandard port stays advertised until it is applied; the unapplied saved port (853, set in setUp) does not override it. */
+	public function testAppliedBoundPortWinsOverAnUnappliedSavedPort(): void
 	{
 		$this->gatewayServes(['udp+tcp 192.0.2.1:53', 'dot 192.0.2.1:8853']);
-		$this->assertSame('no_transport', $this->fixture->status('192.0.2.1:53')['rows'][0]['state']);
+		$this->gatewayAdvertisement('192.0.2.1', 'dot', 8853);
+		$row = $this->fixture->status()['rows'][0];
+		$this->assertSame('matched', $row['state']);
+		$this->assertStringContainsString('dot dns.example.com:8853 (192.0.2.1)', $row['reason']);
 		$this->assertSame([], $this->fixture->calls);
 	}
 
-	public function testLoopbackWithoutOwnedNameMappingChecksOnlySvcb(): void
+	/** An address with no owned DNS Name mapping shows its applied advertisement as forwarded, never as a verified name. */
+	public function testLoopbackWithoutOwnedNameIsAdvertisedAsForwardedNotChecked(): void
 	{
 		$this->gatewayServes(['udp+tcp 127.0.0.1:53', 'dot 127.0.0.1:853']);
+		$this->gatewayAdvertisement('127.0.0.1');
+		$row = $this->fixture->status()['rows'][0];
+		$this->assertSame('matched', $row['state']);
+		$this->assertStringContainsString('DNS Name queries are forwarded', $row['reason']);
+		$this->assertSame([], $this->fixture->calls);
+	}
+
+	public function testExplicitLoopbackDiagnosticAsksOnlySvcb(): void
+	{
 		$this->fixture->responses['_dns.resolver.arpa. SVCB'] = PfbDnsDdrStatusTest::response([PfbDnsDdrStatusTest::record('127.0.0.1')],
 			additional: ['dns.example.com. 300 IN A 127.0.0.1']);
-		$result = $this->fixture->status('127.0.0.1:53')['rows'][0];
-		$this->assertSame('matched', $result['state']);
-		$this->assertStringContainsString('name resolution not checked', $result['reason']);
+		$this->assertSame('ok', $this->fixture->probe('127.0.0.1:53', 2.0)['state']);
 		$this->assertCount(1, $this->fixture->calls);
+		$this->assertContains('_dns.resolver.arpa.', $this->fixture->calls[0]);
+		$this->assertContains('SVCB', $this->fixture->calls[0]);
 	}
 
 	public function testInvalidRepeatedRootLabelsCannotBeNormalizedIntoTheQuestionOwner(): void

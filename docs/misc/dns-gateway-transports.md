@@ -47,16 +47,15 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   burst (`control socket: refused a connection from uid N: only uid 0 may push`; the next accepted root connection re-arms the
   line). The mode 0600 on the socket is a second wall, not the one relied on.
 - **Frame.** One message per connection, starting with 4 bytes. `FF FF FF FE` and `FF FF FF FD` add and remove a listener,
-  and `FF FF FF FB` replaces the address tables (below).
-  `FF FF FF FC`, with nothing after it, lists the
-  listeners: `listening <kind> <host:port>` for each one served, then `refused <kind> <host:port> <reason>` for each start-time
-  bind not served since (keyed by kind, then address, so DoT and DoQ on :853 are two lines), then `ok`; a live add clears the
-  refusal of the same kind and address. Anything else is the length of the PEM,
-  big-endian (1 to 65536; judged before the body is read), then the PEM (the chain, then the key). Reads have a 5 s
-  deadline. The one reply line is `ok` or `error: <reason>`, except the list's lines above. A push that does
-  not parse, or whose key is not the certificate's, changes nothing and logs
-  `TLS certificate not replaced: <reason>; keeping the previous one`; one that does logs `TLS certificate replaced by a push` and
-  is served from the next handshake on. A push to a gateway that serves no TLS transport is answered
+  `FF FF FF FB` replaces the address tables, and `FF FF FF FA` reads applied status (below).
+  `FF FF FF FC`, with nothing after it, remains the explicit listener-list diagnostic: `listening <kind> <host:port>`
+  for each served listener, then `refused <kind> <host:port> <reason>` for each outstanding start-time bind refusal,
+  then `ok`. A live add clears the refusal of the same kind and address.
+  Anything else is the length of the PEM, big-endian (1 to 65536; judged before the body is read), then the PEM
+  (the chain, then the key). Reads and writes have separate 5 s deadlines. Replies end with `ok` or `error: <reason>`.
+  A certificate push that does not parse, or whose key is not the certificate's, changes nothing and logs
+  `TLS certificate not replaced: <reason>; keeping the previous one`; one that does logs `TLS certificate replaced by a push`
+  and is served from the next handshake on. A push without TLS listeners answers
   `error: no TLS transport is served, so there is no certificate to replace`.
 - **Add and remove a listener** (issue #3599). The gateway binds only before it drops root; root PHP binds the socket and hands
   it over here with `SCM_RIGHTS`, in the same `sendmsg()` as the frame. `FF FF FF FE` (add) or `FF FF FF FD` (remove), a 4-byte
@@ -100,6 +99,33 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   address-table push after listener synchronization to refresh ownership as well as name/DDR rows; in-flight queries
   retain their captured description. A gateway older than the verb answers
   `error: a message of 4294967291 bytes is not between 1 and 65536`.
+- **Applied status** (issue #3845). `FF FF FF FA`, with no body, returns one compact JSON line, then `ok`, then EOF.
+  The complete response is at most 65536 bytes; an oversized snapshot returns an error, never partial status.
+  Version 1 includes:
+  - `version`, `pid`, `executable` and `ready`: runtime identity and frontend readiness.
+  - Optional `upstream`: the canonical numeric applied endpoint. Supported forms are package-generated loopback endpoints
+    and the prior readiness check's unscoped numeric IP forms (including bracketed IPv4), with a raw port of one to five
+    ASCII digits in the range 1–65535. Leading zeros normalize. Hostnames, scoped IPv6 and unsupported port spellings omit
+    this field without invalidating the rest of the snapshot. PHP upstream readiness is then false; no name resolution,
+    text passthrough or configuration fallback is attempted.
+  - `dns_name` and `name_answers`: the applied name and each local address's `a`/`aaaa` arrays. An owned empty pair means
+    NODATA; an address missing from the map is forwarded.
+  - `listeners`: each `kind`, `address`, `state` (`listening` or `refused`) and `reason`.
+  - `ddr` and `advertisements`: applied DDR enablement and each local address's `records` and `additional` addresses.
+    Records carry `priority`, `target`, `alpn`, `port`, `hint` and `path`, converted from the same designation builder
+    that answers DNS queries, including its certificate and actual-listener checks.
+
+  The existing serial control handler builds the snapshot between mutations, off the DNS query path. No certificate,
+  private key or configuration blob is returned. The same root peer credential and filesystem permissions apply.
+  PHP validates the version, complete response and runtime identity against the live gateway's ready marker.
+  Unknown, malformed, oversized or unavailable status is unavailable, never a saved-setting fallback.
+  One response supplies the page or widget refresh; readiness still independently requires the live Unbound PID to
+  own TCP and UDP sockets on the reported upstream. Advertised state does not prove client reachability or TLS trust.
+  An unchanged-rc no-op update does not roll DNS back merely because this control read is unavailable; it does not
+  infer health, add a fallback, restart or retry. Actual starts/restarts retain their existing fail-closed confirmation.
+  Rare IPv4-compatible (`::/96`), mapped and equivalent-spelling normalization is deferred to
+  [#3849](https://github.com/pfBlockerNG/pfBlockerNG/issues/3849). Existing exact-spelling acceptance/refusal is retained;
+  this status change does not introduce a new address codec.
 
 A renewal needs no restart. Every TLS config of the three transports takes its certificate from `GetCertificate`, an atomic
 pointer the push replaces: no handshake fails and no connection is touched: an open DoT, DoH or DoQ connection keeps the
@@ -139,7 +165,7 @@ A listener that cannot be bound is logged and skipped. Every start logs `startin
 that a reader of the log finds where a start begins; then, before `ready upstream`, the readiness lines in the order udp+tcp,
 dot, doh, doq: `listening dot|doh|doq <host>:<port>`; an IPv6 address is bracketed (`[::1]:853`). A listener added or removed
 while the gateway serves logs `listening <kind> <host>:<port>` or `stopped listening <kind> <host>:<port>` after `ready upstream`.
-These lines are for people reading the log: nothing parses them for listener state, which the list (`FF FF FF FC`, above) answers.
+These lines are for people reading the log: nothing parses them for listener state, which applied status answers.
 
 The repeatable fixed-port flags `--listen-53 ADDR`, `--dot-listen-853 ADDR`, `--doh-listen-443 ADDR` and
 `--doq-listen-853 ADDR` bind only their named kind on the named standard port (#3699). ADDR is an IP address without a zone;

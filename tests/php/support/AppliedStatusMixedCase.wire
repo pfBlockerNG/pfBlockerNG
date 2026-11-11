@@ -1,0 +1,2 @@
+{"version":1,"pid":4242,"executable":"\/usr\/local\/pkg\/pfblockerng\/dns_proxy\/bin\/freebsd-amd64\/pfb-dns","ready":true,"upstream":"127.0.0.1:5353","dns_name":"dns.example","listeners":[{"kind":"dot","address":"127.0.0.1:43405","state":"listening","reason":""},{"kind":"udp+tcp","address":"127.0.0.1:41351","state":"listening","reason":""}],"name_answers":{},"ddr":true,"advertisements":{"127.0.0.1":{"records":[{"priority":2,"target":"DNS.example","alpn":"dot","port":43405,"hint":"127.0.0.1","path":""}],"additional":["127.0.0.1"]}}}
+ok

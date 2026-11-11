@@ -6154,27 +6154,144 @@ function pfb_dns_proxy_upstream_address(): string {
 	return get_interface_ip('lo0') === '127.0.0.1' ? '127.0.0.1' : '::1';
 }
 
-/** The running gateway's command line, read from the process table ($pfb['ps'], default /bin/ps) for the PID the ready marker names; '' when unknown. */
-function pfb_dns_proxy_running_command(): string {
+/** One bounded applied-state snapshot, authenticated by the live ready-marker identity; NULL is unavailable, never saved intent. */
+function pfb_dns_proxy_applied_status(?string $socket = NULL, float $timeout = PFB_DNS_PROXY_CTL_TIMEOUT): ?array {
 	global $pfb;
 
-	$gateway = rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n");
-	$lines = [];
-	if ($gateway === '' || pfb_unbound_control_exec(escapeshellarg($pfb['ps'] ?? '/bin/ps') . ' -ww -o args= -p ' . escapeshellarg($gateway) . ' 2>/dev/null',
-	    'DNS proxy command line', $lines, FALSE, 1) !== 0) {
-		return '';
+	if (!pfb_dns_proxy_ready()) {
+		return NULL;
 	}
-	return trim(implode("\n", $lines));
+	[$reply] = pfb_dns_proxy_ctl_exchange("\xFF\xFF\xFF\xFA", $socket ?? $pfb['dns_proxy_ctl'], $timeout, 'the applied status', [], TRUE);
+	if ($reply === NULL || preg_match('/\A([^\r\n]+)\nok\z/', $reply, $line) !== 1) {
+		return NULL;
+	}
+	$data = json_decode($line[1]);
+	if (!$data instanceof stdClass) {
+		return NULL;
+	}
+	foreach (['version', 'pid', 'executable', 'ready', 'dns_name', 'listeners', 'name_answers', 'ddr', 'advertisements'] as $field) {
+		if (!property_exists($data, $field)) {
+			return NULL;
+		}
+	}
+	if ($data->version !== 1 || !is_int($data->pid) || $data->pid < 1 || $data->ready !== TRUE ||
+	    !is_string($data->executable) || !in_array($data->executable, [
+	        PFB_DNS_PROXY_DIR . '/bin/freebsd-amd64/pfb-dns', PFB_DNS_PROXY_DIR . '/bin/freebsd-arm64/pfb-dns',
+	    ], TRUE) || !pfb_dns_proxy_ready() || (string) $data->pid !== rtrim((string) @file_get_contents($pfb['dns_proxy_ready']), "\n") ||
+	    !is_string($data->dns_name) || pfb_dns_proxy_name_normalized($data->dns_name) !== $data->dns_name ||
+	    !is_bool($data->ddr) || !is_array($data->listeners) || !array_is_list($data->listeners) ||
+	    !$data->name_answers instanceof stdClass || !$data->advertisements instanceof stdClass) {
+		return NULL;
+	}
+	$ip = static function (mixed $value): bool {
+		if (!is_string($value) || pfb_ipv4_from_mapped($value) !== NULL) {
+			return FALSE;
+		}
+		$packed = @inet_pton($value);
+		return $packed !== FALSE && inet_ntop($packed) === $value;
+	};
+	$endpoint = static function (mixed $value) use ($ip): bool {
+		if (!is_string($value) || ($colon = strrpos($value, ':')) === FALSE) {
+			return FALSE;
+		}
+		$host = trim(substr($value, 0, $colon), '[]');
+		$port = substr($value, $colon + 1);
+		return $ip($host) && ctype_digit($port) && (string) (int) $port === $port && (int) $port >= 1 &&
+		    (int) $port <= 65535 && pfb_dns_proxy_host_port($host, $port) === $value;
+	};
+	// The gateway omits an upstream it does not canonicalise (hostname, scoped IPv6, odd port); a present one must be a canonical endpoint.
+	if (property_exists($data, 'upstream') && !$endpoint($data->upstream)) {
+		return NULL;
+	}
+	$seen = $locals = [];
+	foreach ($data->listeners as $index => $row) {
+		if (!$row instanceof stdClass || !isset($row->kind, $row->address, $row->state, $row->reason) ||
+		    !in_array($row->kind, ['udp+tcp', 'dot', 'doh', 'doq'], TRUE) || !$endpoint($row->address) ||
+		    !in_array($row->state, ['listening', 'refused'], TRUE) || !is_string($row->reason) ||
+		    preg_match('/\p{C}/u', $row->reason) !== 0 || ($row->state === 'listening' && $row->reason !== '')) {
+			return NULL;
+		}
+		$key = "{$row->kind} {$row->address}";
+		if (isset($seen[$key])) {
+			return NULL;
+		}
+		$seen[$key] = TRUE;
+		if ($row->state === 'listening') {
+			$locals[trim(substr($row->address, 0, (int) strrpos($row->address, ':')), '[]')] = TRUE;
+		}
+		$data->listeners[$index] = get_object_vars($row);
+	}
+	foreach ($data->name_answers as $local => $answers) {
+		if (!$ip($local) || !$answers instanceof stdClass || !isset($answers->a, $answers->aaaa)) {
+			return NULL;
+		}
+		foreach (['a' => 4, 'aaaa' => 16] as $family => $length) {
+			$values = $answers->$family;
+			if (!is_array($values) || !array_is_list($values) || count($values) > 1 ||
+			    ($values !== [] && (!$ip($values[0]) || strlen((string) inet_pton($values[0])) !== $length))) {
+				return NULL;
+			}
+		}
+		$locals[$local] = TRUE;
+		$data->name_answers->$local = get_object_vars($answers);
+	}
+	$advertisements = get_object_vars($data->advertisements);
+	if (array_diff_key($locals, $advertisements) !== [] || array_diff_key($advertisements, $locals) !== []) {
+		return NULL;
+	}
+	foreach ($advertisements as $local => $advertisement) {
+		if (!$ip($local) || !$advertisement instanceof stdClass || !isset($advertisement->records, $advertisement->additional) ||
+		    !is_array($advertisement->records) || !array_is_list($advertisement->records) ||
+		    !is_array($advertisement->additional) || !array_is_list($advertisement->additional) ||
+		    (!$data->ddr && ($advertisement->records !== [] || $advertisement->additional !== [])) ||
+		    ($advertisement->records === [] && $advertisement->additional !== [])) {
+			return NULL;
+		}
+		$records = [];
+		foreach ($advertisement->records as $index => $record) {
+			if (!$record instanceof stdClass || !isset($record->priority, $record->target, $record->alpn, $record->port, $record->hint, $record->path) ||
+			    !is_int($record->priority) || $record->priority < 1 || $record->priority > 65535 ||
+			    !is_string($record->target) || $record->target === '' || pfb_dns_proxy_name_normalized($record->target) !== $record->target ||
+			    !in_array($record->alpn, ['h2', 'dot', 'doq'], TRUE) ||
+			    !is_int($record->port) || $record->port < 1 || $record->port > 65535 || !$ip($record->hint) || $record->hint !== $local ||
+			    !is_string($record->path) || $record->path !== ($record->alpn === 'h2' ? '/dns-query{?dns}' : '')) {
+				return NULL;
+			}
+			$key = json_encode($record);
+			if (isset($records[$key])) {
+				return NULL;
+			}
+			$records[$key] = TRUE;
+			$advertisement->records[$index] = get_object_vars($record);
+		}
+		$additional = [];
+		foreach ($advertisement->additional as $address) {
+			if (!$ip($address) || isset($additional[$address])) {
+				return NULL;
+			}
+			$additional[$address] = TRUE;
+		}
+		$advertisements[$local] = get_object_vars($advertisement);
+	}
+	$data->name_answers = get_object_vars($data->name_answers);
+	$data->advertisements = $advertisements;
+	return get_object_vars($data);
 }
 
-/**
- * The upstream the RUNNING gateway forwards to must have both transports owned by the live Unbound pidfile's process. The endpoint
- * is the one in the command line the gateway was started with, read from the process table ($pfb['ps'], default /bin/ps) for the PID the ready
- * marker names; the rc script is not consulted, because an unapplied update, a package upgrade or an orphaned Resolver leaves it out of
- * step with the process. Anything that cannot be established (no such process, another binary, no single --upstream, an unusable
- * endpoint) fails closed.
- */
-function pfb_dns_proxy_upstream_ready(): bool {
+/** Project validated applied inventory into the listener-sync/list diagnostic shape; NULL stays unknown. */
+function pfb_dns_proxy_applied_listeners(?array $status): ?array {
+	if ($status === NULL) {
+		return NULL;
+	}
+	$list = ['listening' => [], 'refused' => []];
+	foreach ($status['listeners'] as $row) {
+		$list[$row['state']][$row['kind']][$row['address']] = $row['state'] === 'listening' ? TRUE : $row['reason'];
+	}
+	return $list;
+}
+
+/** The applied upstream must have TCP and UDP sockets owned by the live Unbound pidfile's process. */
+function pfb_dns_proxy_upstream_ready(?array $status = NULL): bool {
 	global $g, $pfb;
 
 	$pidfile = "{$g['varrun_path']}/unbound.pid";
@@ -6182,13 +6299,15 @@ function pfb_dns_proxy_upstream_ready(): bool {
 		return FALSE;
 	}
 	$pid = rtrim((string) @file_get_contents($pidfile), "\n");
-	$command = pfb_dns_proxy_running_command();
-	if (preg_match('~\A' . preg_quote(PFB_DNS_PROXY_DIR, '~') . '/bin/freebsd-(?:amd64|arm64)/pfb-dns(?=[ \t]|\z)~', $command) !== 1 ||
-	    substr_count($command, '--upstream') !== 1 ||
-	    preg_match('~[ \t]--upstream[ \t]+([^ \t]+)(?=[ \t]|\z)~', $command, $upstream) !== 1) {
+	$status ??= pfb_dns_proxy_applied_status();
+	if ($status === NULL) {
 		return FALSE;
 	}
-	$argument = $upstream[1];
+	// Absent when the gateway spells the upstream as a hostname or scoped address: no endpoint is proven, so readiness fails closed.
+	if (!array_key_exists('upstream', $status)) {
+		return FALSE;
+	}
+	$argument = $status['upstream'];
 	if (preg_match('/\A(\[[0-9A-Fa-f:.]+\]|[0-9.]+):([0-9]+)\z/', $argument, $endpoint) !== 1) {
 		return FALSE;
 	}
@@ -6407,7 +6526,7 @@ function pfb_dns_proxy_command_listeners(): array {
 
 /**
  * Make what the gateway serves what the rc script's command asks for, live (issue #3599): what it serves is what it lists on its control
- * socket, as the caller's one pfb_dns_proxy_listener_list() answered (this never asks again); per kind, each served listener the command
+ * socket, projected from the caller's one pfb_dns_proxy_applied_status() (this never asks again); per kind, each served listener the command
  * does not name is removed and then each one it names that nothing serves is added, one frame each (pfb_dns_proxy_listener_remove(),
  * pfb_dns_proxy_listener_add()), each change taken
  * one line of the pfB log. An add binds first, as root, here; an address that is not there yet (EADDRNOTAVAIL) is left for a later pass
@@ -6481,7 +6600,7 @@ function pfb_dns_proxy_listeners_sync(?array $served): ?string {
  * replaced here. The problems, in this order, each one sentence that says what is not served and why:
  *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one (this start's own, with a $since);
  *   2. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the running
- *      gateway does not serve, as it lists them on its control socket (pfb_dns_proxy_listener_list(), issue #3625), with the reason it
+ *      gateway does not serve, as its validated applied inventory reports (pfb_dns_proxy_applied_status()), with the reason it
  *      refused that address when it did, else that it did not report it. A gateway that gives no list (no socket, no answer in time, an
  *      older gateway, a reply that is not the list) cannot be judged: it gives no problem and closes nothing, and the log is never read for it;
  *   3. each warning that building the command line gives now (a stored setting skipped, an interface that adds no listener), asked of
@@ -6516,7 +6635,7 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 		$problems[] = 'pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s' .
 		    (($error === '') ? '' : " (last gateway error: {$error})");
 	} else {
-		$listeners = pfb_dns_proxy_listener_list();
+		$listeners = pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status());
 		$judged = ($listeners !== NULL);
 		if ($listeners !== NULL) {
 			$labels = ['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'];
@@ -6734,7 +6853,7 @@ function pfb_dns_proxy_gateway_changed(string $proxyDir): bool {
  * (every ordinary or fixed-port `--listen`/`--dot-listen`/`--doh-listen`/`--doq-listen` argument masked out of both texts) and its name
  * answers (every `--dns-name-answer` and `--ddr-doh-443`) is reconciled
  * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket: the pass
- * asks once (pfb_dns_proxy_listener_list()) and the sync acts on that answer; with the proxy not READY, or with a gateway that gives
+ * asks once (pfb_dns_proxy_applied_status()) and the sync acts on that inventory; with the proxy not READY, or with a gateway that gives
  * no list (nothing to compare with), it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()):
  * one that is alive but never published its marker (restarted every few seconds) fails the activation and is rolled back, which a
  * pidfile alone would never notice.
@@ -6769,6 +6888,7 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	pfb_dns_proxy_service($proxyDir);
 	$deferred = pfb_dns_proxy_restart_deferred();
 	$why = NULL;		// why the running proxy restarts as a whole pair
+	$unanswered = FALSE;
 	if (!pfb_dns_proxy_running()) {
 		pfb_logger("\nStarting the DNS proxy", 1);
 		$since = pfb_dns_proxy_log_size();
@@ -6789,9 +6909,11 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 		} elseif (file_exists($pfb['dns_proxy_restart_pending'])) {
 			$why = 'a restart was deferred to this update';
 		} elseif (pfb_dns_proxy_ready()) {
+			$applied = pfb_dns_proxy_applied_status();
+			$unanswered = $applied === NULL;
 			if (pfb_dns_proxy_gateway_changed($proxyDir)) {
 				$why = 'the package installed another gateway';
-			} elseif (($served = pfb_dns_proxy_listener_list()) === NULL && $rc_changed) {
+			} elseif (($served = pfb_dns_proxy_applied_listeners($applied)) === NULL && $rc_changed) {
 				$why = 'its listen addresses changed';
 			} else {
 				$why = pfb_dns_proxy_listeners_sync($served);
@@ -6812,6 +6934,11 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	// upstream; the tick and the boot check do, with their rollback (issue #3560 D-a).
 	if ($deferred && !$acted && pfb_dns_proxy_ready()) {
 		pfb_dns_proxy_startup_check(TRUE);
+		return TRUE;
+	}
+	// An unanswered applied status is unknown, not unhealthy: with nothing started or restarted, the ready gateway is kept as it is.
+	// Only an activation waits for an answered status (confirm_ready()).
+	if (!$acted && $unanswered) {
 		return TRUE;
 	}
 	$ready = pfb_dns_proxy_confirm_ready($since);
@@ -16315,23 +16442,18 @@ function pfb_dns_proxy_port(): string {
  * DoT, DoH, DoQ) its state. The box is moved or it is not (a valid snapshot, or our block with none: recovery required); a toggle that
  * is on while nothing is moved is never running: it is said not to be active, with the reason (pfBlockerNG or the Resolver disabled, the last
  * activation failed, or the Resolver not moved yet or refused), and claims no transport (`transports` is NULL).
- * A transport is `off` (its toggle is off and it has no active listener), `no_listener` (on, but the rc script's command gives it none)
- * or `rows` (pfb_dns_status_rows()). A ready gateway lists what it serves, asked of its control socket (pfb_dns_proxy_listener_list()), as
- * `listening`, then each address the rc script's command names (pfb_dns_proxy_command_listeners()) that it does not serve as `not_listening`
- * with the reason it refused it when it gave one. A saved toggle change or unavailable upstream cannot hide those front-end listeners.
- * A gateway that is not ready lists the command's addresses as `configured_not_bound`; a ready gateway that gives no list, as
- * `configured_unconfirmed`.
+ * Applied listeners, the DNS Name and DDR rows share one validated control snapshot. An unavailable snapshot never supplies an applied
+ * value; command addresses may still be labelled configured/not confirmed. Backend readiness is independently proved by sockstat.
  *
- * @return array{service:string,mode:string,transports:?array<string,array{state:string,notice?:string,rows?:list<array{interface:string,addresses:list<string>,state:string,reason:string}>}>,active:bool,dnsbl:bool,name:string}
+ * @return array{service:string,mode:string,transports:?array<string,array<string,mixed>>,active:bool,dnsbl:bool,name:?string,ddr?:array}
  */
 function pfb_dns_status(): array {
 	global $pfb;
 
 	$saved = pfb_dns_proxy_saved();
+	$applied = pfb_dns_proxy_applied_status();
 	$ready = pfb_dns_proxy_ready();
-	// Running requires the gateway and its Unbound upstream; the front-end evidence below depends only on the gateway's own readiness.
-	$service = pfb_dns_proxy_serving_ready() ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
-	// The overview's pfB-DNS and DNSBL ticks are independent; the DNS Name is the one the running command applies.
+	$service = $applied !== NULL && pfb_dns_proxy_upstream_ready($applied) ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
 	$dnsbl = pfb_dnsbl_active();
 	// Why the last activation failed (issue #3770): the branches below that report it run only while pfB-DNS is on, so the record of
 	// an earlier setting never reaches the status
@@ -16379,8 +16501,9 @@ function pfb_dns_status(): array {
 		$mode = 'On, without DNSBL: the proxy forwards every query';
 	}
 
+	$listeners = pfb_dns_proxy_applied_listeners($applied);
+	// The rc script's listeners stay configured when the gateway does not report them: not_listening, with the reason it gave.
 	$configured = pfb_dns_proxy_command_listeners();
-	$listeners = $ready ? pfb_dns_proxy_listener_list() : NULL;
 	$unconfirmed = $ready ? 'configured_unconfirmed' : 'configured_not_bound';
 	$labels = pfb_dns_proxy_address_interfaces();
 	$entry = static fn (string $at, string $state, string $reason = ''): array => ['address' => $at, 'state' => $state, 'reason' => $reason];
@@ -16407,8 +16530,9 @@ function pfb_dns_status(): array {
 		}
 	}
 	$on = ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On && ($pfb['enable'] ?? NULL) === PfbToggle::On;
-	$name = ($on && $ready && preg_match('~[ \t]--dns-name[ \t]+([^ \t]+)~', pfb_dns_proxy_running_command(), $applied) === 1) ? $applied[1] : '';
-	return ['service' => $service, 'mode' => $mode, 'transports' => $transports, 'active' => $on, 'dnsbl' => $dnsbl, 'name' => $name];
+	// A valid applied snapshot names the gateway. Without one: NULL (Unavailable) where it is expected to run (on) or its child is alive, else ''.
+	return ['service' => $service, 'mode' => $mode, 'transports' => $transports, 'active' => $on, 'dnsbl' => $dnsbl,
+	    'name' => $applied['dns_name'] ?? (($on || pfb_dns_proxy_running()) ? NULL : ''), 'ddr' => pfb_dns_ddr_status($applied)];
 }
 
 /**
@@ -16677,25 +16801,20 @@ function pfb_dns_ddr_probe(string $listener, float $budget, string $name = '_dns
 }
 
 /**
- * Automatic DDR verification at the actual bound plain listeners against saved intent and bound encrypted listeners.
- * NULL is the page's cheap metadata: every bound plain listener, pending, with no DNS process. A listener address checks only
- * that exact current bound listener, within its own 10-second deadline; any other value is refused without a query.
+ * Applied DDR advertisements and name-answer ownership at each bound plain listener; no DNS query or saved-setting reconstruction.
  *
  * @return array{notice:string,queried:?string,rows:list<array<string,string>>}
  */
-function pfb_dns_ddr_status(?string $only = NULL): array {
-	$deadline = hrtime(TRUE) + 10000000000;
-	$name = pfb_dns_proxy_name_normalized(PfbConfig::read('dns/pfb_dns_name')) ?? '';
+function pfb_dns_ddr_status(?array $applied = NULL): array {
+	if (func_num_args() === 0) {
+		$applied = pfb_dns_proxy_applied_status();
+	}
 	$status = ['notice' => '', 'queried' => NULL, 'rows' => []];
-	if (!pfb_dns_proxy_ready()) {
-		$status['notice'] = 'pfB-DNS service is not running; no addresses queried.';
+	if ($applied === NULL) {
+		$status['notice'] = 'Applied pfB-DNS status unavailable.';
 		return $status;
 	}
-	$listeners = pfb_dns_proxy_listener_list(NULL, min(PFB_DNS_PROXY_CTL_TIMEOUT, 3.0));
-	if ($listeners === NULL) {
-		$status['notice'] = 'Bound listener list unavailable; no addresses queried.';
-		return $status;
-	}
+	$status['queried'] = gmdate('Y-m-d H:i:s') . ' UTC';
 	$labels = pfb_dns_proxy_address_interfaces();
 	$interfaces = (array) get_configured_interface_with_descr();
 	$vips = [];
@@ -16711,127 +16830,63 @@ function pfb_dns_ddr_status(?string $only = NULL): array {
 			'identity' => $managed ? 'Managed Resolver VIP' : 'Manual VIP: ' . (string) ($vip['descr'] ?? $vip['uniqid'] ?? ''),
 		];
 	}
-	// config.xml keeps addresses as typed; listener keys use the gateway's canonical spelling.
-	$canon = static fn (array $list): array => array_map(static fn (string $a): string => pfb_dns_proxy_answer_address($a) ?? $a, $list);
-	// Name answers and DoH-443 addresses take about a second to derive; only a checked row needs them.
-	$answers = [];
-	$advertised = $managed = [];
-	if ($only !== NULL) {
-		foreach (pfb_dns_proxy_name_answers() as $local => $pair) {
-			$answers[pfb_dns_proxy_answer_address((string) $local) ?? (string) $local] ??= $pair;
-		}
-		$advertised = $canon(pfb_dns_proxy_ddr_doh_443_addresses());
-		$managed = $canon(pfb_dns_listen_auto_vips());
-	}
-	foreach (array_keys($listeners['listening']['udp+tcp'] ?? []) as $listener) {
-		if ($only !== NULL && $listener !== $only) {
+	foreach ($applied['listeners'] as $listener) {
+		if ($listener['kind'] !== 'udp+tcp' || $listener['state'] !== 'listening') {
 			continue;
 		}
-		$host = trim(substr($listener, 0, (int) strrpos($listener, ':')), '[]');
+		$address = $listener['address'];
+		$host = trim(substr($address, 0, (int) strrpos($address, ':')), '[]');
 		$row = $vips[$host] ?? ['interface' => $labels[$host] ?? $host, 'identity' => 'Interface'];
-		$row['address'] = $listener;
-		if ($only === NULL) {
-			$status['rows'][] = $row + ['state' => 'pending', 'reason' => ''];
-			continue;
-		}
-		$status['queried'] = gmdate('Y-m-d H:i:s') . ' UTC';
-		$expected = [];
-		foreach (['doh' => [1, 'h2', 443], 'dot' => [2, 'dot', 853], 'doq' => [3, 'doq', 853]] as $kind => [$priority, $alpn, $standard]) {
-			if (pfb_dns_proxy_setting("pfb_dns_{$kind}") !== PfbToggle::On) {
-				continue;
-			}
-			$tokens = pfb_dns_proxy_tokens((string) pfb_dns_proxy_setting("pfb_dns_{$kind}_interface"));
-			$addresses = [...$canon(pfb_dns_proxy_interface_addresses($tokens, pfb_dns_proxy_vip_only_families($kind))), ...PFB_DNS_PROXY_LOOPBACK];
-			if ($tokens === [] || !in_array($host, $addresses, TRUE)) {
-				continue;
-			}
-			$port = pfb_dns_proxy_listener_port(pfb_dns_proxy_setting("pfb_dns_{$kind}_port"));
-			if ($port === NULL) {
-				continue;
-			}
-			$port6 = PfbConfig::read("dns_shared/pfb_dns_{$kind}_port6");
-			if (str_contains($host, ':') && $port6 !== '') {
-				$port = pfb_dns_proxy_listener_port($port6) ?? $port;
-			}
-			if (in_array($host, $managed, TRUE)) {
-				$port = (string) $standard;
-			}
-			if ($port === NULL || !isset($listeners['listening'][$kind][pfb_dns_proxy_host_port($host, $port)])) {
-				continue;
-			}
-			if ($kind === 'doh' && in_array($host, $advertised, TRUE)) {
-				$port = '443';
-			}
-			$expected[] = ['priority' => $priority, 'target' => strtolower($name), 'alpn' => $alpn, 'port' => (int) $port,
-			    'hint' => $host, 'path' => $kind === 'doh' ? '/dns-query{?dns}' : ''];
-		}
-		$result = ['state' => 'off', 'reason' => 'DDR is disabled'];
-		if (PfbConfig::read('dns_shared/pfb_dns_ddr') === PfbToggle::On) {
-			if ($name === '') {
-				$result = ['state' => 'unverified', 'reason' => 'No valid configured DNS Name'];
-			} elseif ($expected === []) {
-				$result = ['state' => 'no_transport', 'reason' => 'No expected encrypted listener is bound on this address'];
-			} else {
-				// Reserve timeout's one-second KILL grace inside the whole-request deadline.
-				$probe = static fn (string $qname, string $type): array => pfb_dns_ddr_probe($listener,
-				    ($deadline - hrtime(TRUE)) / 1000000000 - 1.0, $qname, $type);
-				$svcb = $probe('_dns.resolver.arpa.', 'SVCB');
-				$names = [];
-				$owned = $answers[$host] ?? NULL;
-				if ($svcb['state'] === 'ok' && $owned !== NULL) {
-					foreach (['A', 'AAAA'] as $type) {
-						$names[$type] = $probe($name, $type);
-					}
-				}
-				$result = pfb_dns_ddr_compare($expected, $svcb, $owned, $names);
-				if ($owned === NULL && !in_array($host, PFB_DNS_PROXY_LOOPBACK, TRUE) && $result['state'] === 'matched') {
-					$result['state'] = 'unverified';
-				}
-			}
+		$row['address'] = $address;
+		$owned = $applied['name_answers'][$host] ?? NULL;
+		$name = $owned === NULL ? 'DNS Name queries are forwarded'
+		    : ($owned['a'] === [] && $owned['aaaa'] === [] ? 'DNS Name: owned NODATA'
+		        : 'DNS Name: ' . implode(', ', [...$owned['a'], ...$owned['aaaa']]));
+		$records = $applied['advertisements'][$host]['records'];
+		if (!$applied['ddr']) {
+			$result = ['state' => 'off', 'reason' => "DDR is disabled; {$name}"];
+		} elseif ($records === []) {
+			$result = ['state' => 'no_transport', 'reason' => "No applied advertisement (no eligible encrypted listener or certificate); {$name}"];
+		} else {
+			$description = array_map(static fn (array $record): string => $record['alpn'] . ' ' . $record['target'] . ':' . $record['port']
+			    . ' (' . $record['hint'] . ')' . ($record['path'] === '' ? '' : ' ' . $record['path']), $records);
+			$result = ['state' => 'matched', 'reason' => implode('; ', $description) . "; {$name}"];
 		}
 		$status['rows'][] = array_merge($row, $result);
 	}
 	if ($status['rows'] === []) {
-		$status['notice'] = $only === NULL ? 'pfB-DNS reports no bound plain DNS listeners; no addresses queried.'
-		    : 'Address is not a bound plain DNS listener; no address queried.';
+		$status['notice'] = 'pfB-DNS reports no bound plain DNS listeners.';
 	}
 	return $status;
 }
 
 /**
- * The page-only DDR check table; endpoint health and certificate acceptance are not checked. Rows are Interface, Address and
- * State; a pending row shows a neutral spinner until the browser checks it.
+ * The page-only applied DDR table; endpoint health and certificate acceptance are not checked.
  *
  * @param array{notice:string,queried:?string,rows:list<array<string,string>>} $status
  */
 function pfb_dns_ddr_status_panel(array $status): string {
-	$body = '<p>DDR and DNS Name answers are checked automatically against current settings. '
+	$body = '<p>DDR advertisements and DNS Name answers applied by pfB-DNS. '
 	    . 'This does not check certificates or encrypted endpoint connectivity.</p>';
 	if ($status['queried'] !== NULL) {
-		$body .= '<p>Checked: ' . htmlspecialchars($status['queried']) . '</p>';
+		$body .= '<p>Snapshot: ' . htmlspecialchars($status['queried']) . '</p>';
 	}
 	if ($status['notice'] !== '') {
 		$body .= '<p>' . htmlspecialchars($status['notice']) . '</p>';
 	}
-	$body .= '<p id="pfb-dns-ddr-refresh-status" role="status" hidden="hidden"></p>';
 	$rows = '';
 	foreach ($status['rows'] as $row) {
 		$address = htmlspecialchars($row['address']);
 		$cells = '<td>' . htmlspecialchars($row['interface']) . '</td><td>' . $address . '</td>';
-		if ($row['state'] === 'pending') {
-			$rows .= '<tr data-address="' . $address . '" data-state="pending">' . $cells
-			    . '<td><i class="fa-solid fa-spinner fa-spin text-muted" aria-hidden="true"></i><span class="sr-only">Checking</span></td></tr>';
-			continue;
-		}
 		$matched = $row['state'] === 'matched';
 		$meaning = match ($row['state']) {
-			'matched' => 'Matched',
+			'matched' => 'Advertised',
 			'mismatch' => 'Mismatch',
 			'error' => 'Query error',
 			'timeout' => 'Query timed out',
 			'budget' => 'Request deadline reached',
 			'off' => 'DDR disabled',
-			'no_transport' => 'No encrypted listener',
+			'no_transport' => 'No advertisement',
 			default => 'Not verified',
 		};
 		$icon = $matched ? 'fa-check-circle text-success' : 'fa-times-circle text-danger';
@@ -16870,7 +16925,7 @@ function pfb_dns_status_panel(array $status): string {
 	        : '<i class="fa-solid fa-times-circle text-danger" title="Off" aria-hidden="true"></i><span class="sr-only">Off</span>') . '</td></tr>';
 	$html = $section('pfb-dns-status-overview', 'pfB-DNS Status', '<table class="table table-condensed"><tr id="pfb-dns-status-service"><th>Service</th><td>'
 	    . htmlspecialchars($status['service']) . '</td></tr>' . $toggle('pfbdns', 'pfB-DNS', $status['active']) . $toggle('dnsbl', 'DNSBL', $status['dnsbl'])
-	    . '<tr id="pfb-dns-status-name"><th>DNS Name</th><td>' . htmlspecialchars($status['name'] === '' ? 'None' : $status['name']) . '</td></tr></table>');
+	    . '<tr id="pfb-dns-status-name"><th>DNS Name</th><td>' . htmlspecialchars($status['name'] === NULL ? 'Unavailable' : ($status['name'] === '' ? 'None' : $status['name'])) . '</td></tr></table>');
 	foreach (['plain' => 'Plain DNS', 'dot' => 'DNS over TLS', 'doh' => 'DNS over HTTPS', 'doq' => 'DNS over QUIC'] as $key => $title) {
 		$transport = $status['transports'][$key] ?? NULL;
 		if ($transport === NULL) {
@@ -16899,7 +16954,7 @@ function pfb_dns_status_panel(array $status): string {
 	if (isset($status['ddr'])) {
 		$html .= pfb_dns_ddr_status_panel($status['ddr']);
 	}
-	return "<div id=\"pfb-dns-status\">{$html}</div>";
+	return "<div id=\"pfb-dns-status\">{$html}<p id=\"pfb-dns-ddr-refresh-status\" role=\"status\" hidden=\"hidden\"></p></div>";
 }
 
 /**

@@ -123,6 +123,9 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => ''];
 		pfb_dns_proxy_service();
 		$this->assertFileExists(PFB_DNS_PROXY_RCFILE, 'the generator wrote the rc script the check reads');
+		// A started proxy is ready (child pidfile and marker agree); what the gateway reports is then judged on its control socket
+		$this->proxyServes();
+		$this->seedRunningGateway();
 	}
 
 	/** The gateway lists every listener of the box: plain DNS and DoT, on lan and loopback. */
@@ -270,6 +273,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	{
 		// Given a standing notice and no gateway to ask
 		$this->box();
+		$this->standInsStop();
 		$this->fileStandingNotice();
 		$before = $this->standing();
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_startup_check']);
@@ -384,6 +388,9 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 			$this->proxyServes();
 			$this->seedRunningGateway();
 			file_put_contents(PFB_DNS_PROXY_RCFILE, "#!/bin/sh\n# stale\n");
+		} else {
+			// box() proxies a live child; a proxy that is not running has no supervisor, child, marker or status
+			$this->clearProxyFiles();
 		}
 		$this->gatewayLacksDotOnLan();
 		[$clock, $namespace] = $this->onVirtualClock(['pfb_dns_proxy_ensure_running']);

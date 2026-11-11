@@ -3,15 +3,17 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/support/PfbFlockClockFixture.php';
+require_once __DIR__ . '/support/LiveListenerStandIn.php';
 
 /**
- * issue #3515 -- seeds the two files the DNS proxy's readiness is read from, as real files, and answers liveness through the
- * isvalidpid() double (a test never starts a process): the daemon's child pidfile ($pfb['dns_proxy_pidfile'], what
- * `daemon -p` writes) and the listener-ready marker ($pfb['dns_proxy_ready'], what the proxy's --ready-file writes).
- * The bootstrap points both at its own sandbox, so a test never reads or writes the appliance's /var/run or /var/unbound.
+ * Seeds the child pidfile and listener-ready marker as real sandbox files; isvalidpid() supplies liveness. seedRunningGateway()
+ * adds the applied status on the shared Unix control stand-in, without starting a DNS gateway or consulting desired settings.
+ * No fixture reads or writes the appliance's /var/run or /var/unbound.
  */
 trait DnsProxyReadySeedTrait
 {
+	use LiveListenerStandIn;
+
 	/** @var array<string,string|false> */
 	private array $upstreamFiles = [];
 	private array $upstreamPidState = [];
@@ -44,6 +46,8 @@ trait DnsProxyReadySeedTrait
 	private function tearDownUpstreamFixture(): void
 	{
 		@unlink((string) ($GLOBALS['pfb']['dns_proxy_activation_failed'] ?? ''));
+		$this->unlinkSandboxStatus();
+		$this->standInsStop();
 		foreach ($this->upstreamFiles as $file => $contents) {
 			if ($contents === FALSE) {
 				@unlink($file);
@@ -92,8 +96,7 @@ trait DnsProxyReadySeedTrait
 	/** A proxy whose child is $child: its pidfile names it and the double says it lives; the marker is $marker ('' = absent). */
 	private function seedProxy(string $child, ?string $marker, bool $alive = TRUE): void
 	{
-		// The process table lists no gateway until a test seeds its command line (seedRunningGateway())
-		file_put_contents($GLOBALS['pfb_test_ps_output'], '');
+		// Identity is not seeded here: a caller's or stand-in's applied response is never written over (seedRunningGateway() supplies identity).
 		file_put_contents($this->proxyPidfile(), "{$child}\n");
 		if ($marker === NULL) {
 			@unlink($this->proxyMarker());
@@ -117,18 +120,33 @@ trait DnsProxyReadySeedTrait
 	}
 
 	/**
-	 * The running gateway's command line in the process table, for child $child: the installed binary the wrapper execs, with its
-	 * --upstream ($upstream = NULL: none). The running argv names the endpoint the gateway forwards to, not the rc script.
+	 * Applied identity and upstream of the running gateway. A gateway started here serves the listeners the rc script's command names,
+	 * as a healthy start does; one already on the control socket keeps the listeners its test gave it.
 	 */
 	private function seedRunningGateway(string $child = '4242', ?string $upstream = '127.0.0.1:5353'): void
 	{
-		$flag = $upstream === NULL ? '' : " --upstream {$upstream}";
-		file_put_contents($GLOBALS['pfb_test_ps_output'], "{$child} " . PFB_DNS_PROXY_DIR
-			. "/bin/freebsd-amd64/pfb-dns --listen 127.0.0.1 --port 53 --ready-file /var/unbound/pfb_dns_ready{$flag}\n");
+		$this->gatewayStatus(['pid' => (int) $child, 'upstream' => $upstream]);
+		if (!file_exists($this->controlSocket())) {
+			$this->standIn($this->controlSocket(), [], ['listening' => $this->commandListeners()]);
+		}
+	}
+
+	/** @return list<string> `<kind> <host:port>` of every listener the rc script's command names */
+	private function commandListeners(): array
+	{
+		$listening = [];
+		foreach (pfb_dns_proxy_command_listeners() as $kind => $addresses) {
+			foreach ($addresses as $at) {
+				$listening[] = "{$kind} {$at}";
+			}
+		}
+		return $listening;
 	}
 
 	private function clearProxyFiles(): void
 	{
+		$this->unlinkSandboxStatus();
+		$this->standInsStop();
 		@unlink($this->proxyPidfile());
 		@unlink($this->proxyMarker());
 		unset($GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()], $GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_PIDFILE]);

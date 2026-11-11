@@ -56,24 +56,32 @@ final class PfbDnsDdrCollectionTest extends TestCase
 		$GLOBALS['pfb_test_valid_pids'][$GLOBALS['pfb']['dns_proxy_pidfile']] = TRUE;
 	}
 
-	public function testOnlyBoundPlainAddressesArePendingWithTheirRealAddressIdentity(): void
+	/** The applied snapshot the projection reads: the fields pfb_dns_proxy_applied_status() returns, as the arrays it returns them. */
+	private static function applied(array $listeners, array $advertisements): array
 	{
-		$this->ready();
+		return ['ddr' => TRUE, 'listeners' => $listeners, 'name_answers' => [], 'advertisements' => $advertisements];
+	}
+
+	public function testOnlyBoundPlainAddressesAreAppliedWithTheirRealAddressIdentity(): void
+	{
 		config_set_path('virtualip/vip', [
 			['subnet' => '192.0.2.53', 'interface' => 'lo0', 'descr' => 'pfB_DNS_LISTEN_VIP_v4'],
 			['subnet' => '2001:db8::53', 'interface' => 'lo0', 'descr' => 'pfB_DNS_LISTEN_VIP_v6'],
 			['subnet' => '192.0.2.54', 'interface' => 'lan', 'descr' => 'Admin <VIP>'],
 		]);
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'wan');
-		$this->gatewayServes([
-			'udp+tcp 192.0.2.1:5353', 'udp+tcp [2001:db8::1]:5354',
-			'udp+tcp 192.0.2.53:53', 'udp+tcp [2001:db8::53]:53', 'udp+tcp 192.0.2.54:1053',
-			'doh 192.0.2.55:443',
-		], ['udp+tcp 192.0.2.56:53' => 'bind refused']);
+		$status = pfb_dns_ddr_status(self::applied([
+			['kind' => 'udp+tcp', 'address' => '192.0.2.1:5353', 'state' => 'listening', 'reason' => ''],
+			['kind' => 'udp+tcp', 'address' => '[2001:db8::1]:5354', 'state' => 'listening', 'reason' => ''],
+			['kind' => 'udp+tcp', 'address' => '192.0.2.53:53', 'state' => 'listening', 'reason' => ''],
+			['kind' => 'udp+tcp', 'address' => '[2001:db8::53]:53', 'state' => 'listening', 'reason' => ''],
+			['kind' => 'udp+tcp', 'address' => '192.0.2.54:1053', 'state' => 'listening', 'reason' => ''],
+			['kind' => 'udp+tcp', 'address' => '192.0.2.56:53', 'state' => 'refused', 'reason' => 'bind refused'],
+			['kind' => 'doh', 'address' => '192.0.2.55:443', 'state' => 'listening', 'reason' => ''],
+		], array_fill_keys(['192.0.2.1', '2001:db8::1', '192.0.2.53', '2001:db8::53', '192.0.2.54'], ['records' => [], 'additional' => []])));
 
-		$status = pfb_dns_ddr_status();
 		$this->assertSame('', $status['notice']);
-		$this->assertNull($status['queried']);
+		$this->assertMatchesRegularExpression('/\A\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\z/', (string) $status['queried']);
 		$this->assertSame([
 			['LAN <guest>', 'Interface', '192.0.2.1:5353'],
 			['LAN <guest>', 'Interface', '[2001:db8::1]:5354'],
@@ -82,7 +90,7 @@ final class PfbDnsDdrCollectionTest extends TestCase
 			['LAN <guest>', 'Manual VIP: Admin <VIP>', '192.0.2.54:1053'],
 		], array_map(static fn (array $row): array => [$row['interface'], $row['identity'], $row['address']], $status['rows']));
 		foreach ($status['rows'] as $row) {
-			$this->assertSame('pending', $row['state']);
+			$this->assertSame('no_transport', $row['state']);
 			$this->assertArrayNotHasKey('stdout', $row);
 			$this->assertArrayNotHasKey('stderr', $row);
 			$this->assertArrayNotHasKey('name', $row);
@@ -110,7 +118,7 @@ final class PfbDnsDdrCollectionTest extends TestCase
 	public function testStoppedServiceDoesNotTurnIntoAnEmptySuccessfulQuery(): void
 	{
 		$status = pfb_dns_ddr_status();
-		$this->assertStringContainsString('service is not running', $status['notice']);
+		$this->assertStringContainsString('Applied pfB-DNS status unavailable', $status['notice']);
 		$this->assertSame([], $status['rows']);
 		$this->assertNull($status['queried']);
 	}
@@ -120,7 +128,7 @@ final class PfbDnsDdrCollectionTest extends TestCase
 		$this->ready();
 		config_set_path('installedpackages/pfblockerngdns/config/0/pfb_dns_interface', 'lan');
 		$status = pfb_dns_ddr_status();
-		$this->assertStringContainsString('listener list unavailable', $status['notice']);
+		$this->assertStringContainsString('Applied pfB-DNS status unavailable', $status['notice']);
 		$this->assertSame([], $status['rows']);
 		$this->assertNull($status['queried']);
 	}
@@ -131,6 +139,7 @@ final class PfbDnsDdrCollectionTest extends TestCase
 		$this->gatewayServes([]);
 		$status = pfb_dns_ddr_status();
 		$this->assertStringContainsString('no bound plain DNS listeners', $status['notice']);
+		$this->assertStringNotContainsString('unavailable', $status['notice']);
 		$this->assertSame([], $status['rows']);
 	}
 

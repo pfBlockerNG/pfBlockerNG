@@ -41,6 +41,7 @@ final class KeepRunningWorker
 			'marker' => $this->krMarker(),
 			'log' => $this->krLog(),
 		], JSON_THROW_ON_ERROR));
+		$this->standInsStop();
 		rmdir_recursive($this->krDir);
 	}
 }

@@ -938,7 +938,8 @@ final class DnsProxyActivationRollbackTest extends TestCase
 				$served[] = "{$kind} {$at}";
 			}
 		}
-		$record = $this->standIn($GLOBALS['pfb']['dns_proxy_ctl'], [], ['listening' => $served]);
+		$this->standInsStop();
+		$record = $this->standIn($this->controlSocket(), [], ['listening' => $served]);
 		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'before: gateway serves without changing its sockets');
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => 'Renamed,"\\', 'opt1' => 'OPT'];
 		$this->assertTrue(pfb_dns_proxy_ensure_running());

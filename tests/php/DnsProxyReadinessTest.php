@@ -293,10 +293,17 @@ final class DnsProxyReadinessTest extends TestCase
 	public function testAMissingOrForeignRunningCommandFailsClosed(): void
 	{
 		$this->servingGateway();
-		foreach (['', "4242 /usr/bin/someone-else --upstream 127.0.0.1:5353"] as $row) {
-			file_put_contents($GLOBALS['pfb_test_ps_output'], $row === '' ? '' : "{$row}\n");
-			$this->assertFalse(pfb_dns_proxy_serving_ready(), 'no running gateway command: ' . var_export($row, TRUE));
-		}
+		$this->gatewayStatus(['executable' => '/usr/bin/someone-else']);
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'a status from a foreign executable: not the gateway the wrapper execs');
+		$this->standInsStop();
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'no running gateway status: unavailable');
+	}
+
+	public function testAGatewayStatusForAnotherPidFailsClosed(): void
+	{
+		$this->servingGateway();
+		$this->gatewayStatus(['pid' => 4243]);
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'status names another PID, not the child in the pidfile');
 	}
 
 	public function testSockstatFailureFailsClosedEvenIfItsStdoutNamesHealthySockets(): void
@@ -357,24 +364,23 @@ final class DnsProxyReadinessTest extends TestCase
 
 	public function testTheAwaitReturnsAsSoonAsTheMarkerAppears(): void
 	{
-		// Given a proxy whose marker appears on the third probe of its liveness
-		$probes = 0;
-		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = function () use (&$probes): bool {
-			if (++$probes === 3) {
-				file_put_contents($this->proxyMarker(), "4242\n");
-			}
-			return TRUE;
-		};
+		// Given a proxy whose marker appears during the second tick of the wait, so the third poll finds it
+		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = TRUE;
 		file_put_contents($this->proxyPidfile(), "4242\n");
 		$this->runningUpstream();
 		[$clock, $await] = $this->clockedAwait();
+		$clock->setOnSleep(function () use ($clock): void {
+			if (count($clock->sleeps) === 2) {
+				file_put_contents($this->proxyMarker(), "4242\n");
+			}
+		});
 
 		// When the activation waits for it
 		$ready = $await();
 
-		// Then it returns ready on the probe that found the marker, two 100 ms ticks in, not after the whole budget
+		// Then it returns ready on the third poll, two 100 ms ticks in, not after the whole budget
 		$this->assertSame(TRUE, $ready, 'the wait ends ready once the marker is there');
-		$this->assertSame(3, $probes, 'one probe per tick, stopping at the probe that found the marker');
+		$this->assertSame(3, count($clock->sleeps) + 1, 'one poll per tick, stopping at the poll that found the marker');
 		$this->assertSame([100000, 100000], $clock->sleeps, 'the wait slept two ticks of 100 ms, then returned');
 	}
 
@@ -410,25 +416,22 @@ final class DnsProxyReadinessTest extends TestCase
 	public function testTheAwaitFollowsTheProcessTheSupervisorRestartedAsNewChild(): void
 	{
 		// Given child 4241 with the marker of an earlier incarnation (4242), a supervisor that replaces the child by 4243
-		// while PHP waits, and the new child's marker landing two probes later
+		// after the first poll, and the new child's marker landing after the third
 		$this->seedProxy('4241', "4242\n");
 		$this->seedRunningGateway('4243');
-		$probes = 0;
-		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = function () use (&$probes): bool {
-			$probes++;
-			if ($probes === 2) {
+		[$clock, $await] = $this->clockedAwait();
+		$clock->setOnSleep(function () use ($clock): void {
+			if (count($clock->sleeps) === 1) {
 				file_put_contents($this->proxyPidfile(), "4243\n");
 			}
-			if ($probes === 4) {
+			if (count($clock->sleeps) === 3) {
 				file_put_contents($this->proxyMarker(), "4243\n");
 			}
-			return TRUE;
-		};
-		[$clock, $await] = $this->clockedAwait();
+		});
 
-		// Then the wait ends only once the marker names the child the pidfile names at that moment
+		// Then the wait ends only once the marker names the child the pidfile names at that moment, on the fourth poll
 		$this->assertSame(TRUE, $await(), 'the marker of the new child ends the wait');
-		$this->assertSame(4, $probes, 'the marker of the earlier incarnation did not end the wait');
+		$this->assertSame(4, count($clock->sleeps) + 1, 'the marker of the earlier incarnation did not end the wait');
 		$this->assertSame([100000, 100000, 100000], $clock->sleeps, 'three ticks of 100 ms, then ready');
 	}
 
