@@ -1087,6 +1087,10 @@ func dnsblFileLineReader(baseDir string, failClosed bool) lineReader {
 	}
 }
 
+// sidecarBeforeOpen is a test seam in the window between the path inspection and the open of the TOP1M sidecar; nil
+// in production.
+var sidecarBeforeOpen func()
+
 // dnsblFixedTop1mLines streams the fixed TOP1M sidecar; any source failure aborts the build.
 func dnsblFixedTop1mLines(baseDir string) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
@@ -1104,6 +1108,9 @@ func dnsblFixedTop1mLines(baseDir string) iter.Seq2[string, error] {
 		if !pathStat.Mode().IsRegular() {
 			fail("TOP1M sidecar is not a regular file: '%s'", path)
 			return
+		}
+		if sidecarBeforeOpen != nil {
+			sidecarBeforeOpen()
 		}
 		handle, err := os.OpenFile(path, os.O_RDONLY|sidecarOpenFlags, 0)
 		if err != nil {
