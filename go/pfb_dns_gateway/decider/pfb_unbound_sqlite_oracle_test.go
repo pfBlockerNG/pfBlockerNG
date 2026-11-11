@@ -1,5 +1,5 @@
 // The stats databases against what the shipped pfb_unbound.py leaves in them for the same steps: every scenario in
-// testdata/pfb_unbound_sqlite_oracle.json (gen_pfb_unbound_sqlite_oracle.py) stages a module directory, boots a module,
+// testdata/pfb_unbound_sqlite_oracle.json (frozen: its generator was removed in #3791, see testdata/README) stages a module directory, boots a module,
 // replays its queries, direct counter writes, SQL and lifecycle steps with the clock fixed, and after each dump step both
 // databases must hold the same tables, columns and rows. A randomblob epoch is compared as one token per distinct value
 // and the init-time stamp of the Upstream seed row as "<now>"; the .sqlite bytes are not compared.

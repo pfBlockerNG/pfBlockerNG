@@ -1,6 +1,17 @@
 Log-rows oracle fixtures
 
-pfb_unbound_log_rows_oracle.json is written by gen_pfb_unbound_log_rows_oracle.py from the shipped pfb_unbound.py (CPython 3.11.15, maxminddb 3.2.0); run it as its header says.
+Frozen oracles: pfb_unbound_log_rows_oracle.json, pfb_unbound_observer_oracle.json and pfb_unbound_sqlite_oracle.json
+
+These three files hold what the shipped pfb_unbound.py (CPython 3.11.15, maxminddb 3.2.0) did for each scenario, recorded
+through the Python decider (dns_proxy/pfb_dns_proxy.py and dns_proxy/unbound_shim.py). Issue #3791 removed that decider, so
+the generators that booted the module through it (gen_pfb_unbound_log_rows_oracle.py, gen_pfb_unbound_observer_oracle.py,
+gen_pfb_unbound_sqlite_oracle.py) can no longer run and were deleted. The JSON files are frozen records: the Go tests in
+this directory (pfb_unbound_log_rows_oracle_test.go, pfb_unbound_observer_oracle_test.go, pfb_unbound_sqlite_oracle_test.go)
+still compare against them, and nothing regenerates them. To change a scenario, edit the JSON by hand, or check out the
+commit the file was last generated at (b74ea41efd for the log-rows and sqlite oracles, 9883faf3af for the observer oracle),
+run its generator there as its header says, and copy the JSON back.
+
+The other gen_*.py files (abp, build, control, gp, query, stderr) record pfb_unbound.py directly and are not changed here.
 
 GeoLite2-Country-Test.mmdb and GeoIP2-Country-Test.mmdb are MaxMind's own test databases, test-data/ of https://github.com/maxmind/MaxMind-DB at commit 1b0113ab55f0428c00fe30b9709742ac52f4e9cc. That repository is dual-licensed Apache-2.0 / MIT (LICENSE-APACHE, LICENSE-MIT there), which this repository's Apache-2.0 licence accepts; they are used unmodified as test data only and are not shipped.
 
