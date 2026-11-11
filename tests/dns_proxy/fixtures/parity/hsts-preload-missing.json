@@ -1,0 +1,68 @@
+{
+  "schema": 4,
+  "description": "python_hsts on with no pfb_py_hsts.txt: the built-in HSTS TLD list still turns a VIP block into a null block",
+  "module": {
+    "ini": {
+      "MAIN": {
+        "python_enable": "true",
+        "python_blocking": "true",
+        "python_cname": "true",
+        "python_hsts": "true",
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "fd00::1"
+      }
+    },
+    "manifest": {
+      "version": 1,
+      "config": {},
+      "feeds": [
+        {"raw": "pfb_py_raw/vip.txt", "feed": "VipFeed", "group": "VipGroup", "log_flag": "1"}
+      ]
+    },
+    "files": {
+      "pfb_py_raw/vip.txt": ["blocked.dev", "plain-vip.example"]
+    }
+  },
+  "upstream": {},
+  "cases": [
+    {
+      "id": "vip-block-under-a-built-in-hsts-tld-is-null",
+      "family": "hsts",
+      "description": "a name under the built-in HSTS TLD dev gets the null address. owner decision 2026-11-11: fix in Go (#3805); pfb_unbound.py answered the VIP 10.10.10.1 here",
+      "query": {"name": "blocked.dev.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["blocked.dev. 3600 IN A 0.0.0.0"],
+        "authority": []
+      }
+    },
+    {
+      "id": "vip-block-under-a-built-in-hsts-tld-is-null-for-aaaa",
+      "family": "hsts",
+      "description": "and the null IPv6 address for AAAA. owner decision 2026-11-11: fix in Go (#3805); pfb_unbound.py answered the VIP fd00::1 here",
+      "query": {"name": "blocked.dev.", "type": "AAAA"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["blocked.dev. 3600 IN AAAA ::"],
+        "authority": []
+      }
+    },
+    {
+      "id": "vip-block-outside-the-hsts-tlds-is-vip",
+      "family": "hsts",
+      "description": "the control: a blocked name outside every HSTS TLD and preloaded parent keeps the VIP answer",
+      "query": {"name": "plain-vip.example.", "type": "A"},
+      "expect": {
+        "decision": "answer",
+        "forwards": [],
+        "rcode": "NOERROR",
+        "answer": ["plain-vip.example. 3600 IN A 10.10.10.1"],
+        "authority": []
+      }
+    }
+  ]
+}

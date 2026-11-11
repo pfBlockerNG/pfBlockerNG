@@ -18,7 +18,7 @@ func TestNumericReattributionToHigherBandRegexTakesTheBuiltinLogFlag(t *testing.
 			t.Run(name, func(t *testing.T) {
 				cfg := evCfg()
 				cfg.dataDB, cfg.regexDB, cfg.importantRules = true, true, true
-				cfg.builtinLogFlag, cfg.hstsDB, cfg.hstsTlds = flag, hsts, nil
+				cfg.builtinLogFlag, cfg.pythonHsts, cfg.hstsTlds = flag, hsts, nil
 				containers := matcherContainers{
 					// the data hit is found first with a sentinel log flag that the re-attribution must replace
 					dataDB:           map[string]*blockEntry{q: evBlk("9", 0, PRIO_FEED_BLOCK)},

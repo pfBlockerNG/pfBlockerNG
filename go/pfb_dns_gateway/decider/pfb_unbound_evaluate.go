@@ -324,7 +324,7 @@ func tldAllowBlocks(qName, tld string, cfg evaluateConfig, containers matcherCon
 }
 
 // evaluateConfig is the per-query cfg dict evaluate_domain reads, built by evaluateCfg from one snapshot. The
-// presence gates (dataDB .. hstsDB) say whether that list is non-empty. cfg's psl_rules / psl_include_private /
+// presence gates (the <x>DB fields) say whether that list is non-empty. cfg's psl_rules / psl_include_private /
 // psl_allow_private are not here: evaluate_domain only reads them as a fallback for a containers dict without them.
 type evaluateConfig struct {
 	pythonBlocking              bool
@@ -346,7 +346,7 @@ type evaluateConfig struct {
 	importantRules              bool
 	regexWarnMs                 float64
 	pythonTldSeg                int64
-	hstsDB                      bool
+	pythonHsts                  bool
 	hstsTlds                    []string
 	builtinLogFlag              string
 	regex                       *regexRuntime
@@ -548,7 +548,8 @@ func evaluateDomain(qName, qNameOriginal, tld string, isCname bool, cfg evaluate
 	}
 
 	if isFound && !inWhitelist {
-		if cfg.hstsDB {
+		// issue #3805: the switch gates this, not a loaded preload list: the built-in TLDs need no file.
+		if cfg.pythonHsts {
 			inHsts, pType = hstsCheckDomain(qName, containers.hstsDB, cfg.hstsTlds, tld)
 		}
 
@@ -622,7 +623,7 @@ func (m *pfbUnbound) evaluateCfg(snap *snapshot) evaluateConfig {
 		importantRules:              snap.importantRules,
 		regexWarnMs:                 settings.regexWarnMs,
 		pythonTldSeg:                settings.pythonTldSeg,
-		hstsDB:                      len(snap.hstsDB) > 0,
+		pythonHsts:                  settings.pythonHsts,
 		hstsTlds:                    settings.hstsTlds,
 		builtinLogFlag:              snap.builtinLogFlag,
 		regex:                       m.regexRuntime,

@@ -122,6 +122,8 @@ func (f *queryFixture) snapshot(t *testing.T) *snapshot {
 		idnMode: IdnMode(f.Settings.IdnMode), pythonIdnBlockMalicious: f.Settings.PythonIdnBlockMalicious,
 		pythonIdnEscalateSuspicious: f.Settings.PythonIdnEscalateSuspicious, regexWarnMs: f.Settings.RegexWarnMs,
 		pythonTldSeg: f.Settings.PythonTldSeg, hstsTlds: f.Settings.HstsTlds,
+		// The generator's settings carry no python_hsts: the recorded Python read the HSTS gate off the preload list.
+		pythonHsts: len(f.Hsts) > 0,
 	}
 	s.importantRules = f.ImportantRules
 	for index, fg := range f.FeedGroupIndex {
