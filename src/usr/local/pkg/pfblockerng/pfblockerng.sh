@@ -401,7 +401,8 @@ aliastables() {
 # nothing) -- dnsbl_psl rides PFB_PY_SHIPPED with the same source/chroot basename like every other
 # entry; no NAME-MAPPED shipped file (source basename != chroot basename) remains (issue #1541
 # retired the last one, dnsbl_tld). A file that stops being read from the chroot moves to
-# PFB_PY_RETIRED, so the next stage clears the copy an upgraded box still holds.
+# PFB_PY_RETIRED, so the next stage clears the copy an upgraded box still holds (the module only
+# once unbound.conf stops naming it).
 dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
@@ -427,8 +428,9 @@ dnsbl_cache() {
 			pfb_unbound.py|pfb_dnsbl_regex_rules.py) ;;
 			*) return 1 ;;
 		esac
-		grep -qs 'python-script:[[:space:]]*"\{0,1\}pfb_unbound\.py' "${pfbchroot}/unbound.conf" || return 1
+		grep -qs 'python-script:[[:space:]]*pfb_unbound\.py' "${pfbchroot}/unbound.conf" || return 1
 		echo "dnsbl_cache: keeping ${1}: Unbound loads pfb_unbound.py and unbound.conf still names it" >&2
+		return 0 # kept whether or not the reason could be written
 	}
 
 	dnsbl_cache_stage() {

@@ -258,6 +258,23 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
+  # Saying why is a courtesy: a run that cannot write it (stderr closed) keeps the module all the same.
+  stage_with_stderr_closed() {
+    dnsbl_cache stage 2>&- || true
+    module_files_state
+  }
+
+  It 'stage keeps the module when it cannot say why (#3838)'
+    setup_sandbox
+    mkdir -p "${pfbchroot}"
+    plant_retired
+    name_module_in_conf
+    When call stage_with_stderr_closed
+    The line 1 of output should equal 'pfb_unbound.py:kept'
+    The line 2 of output should equal 'pfb_dnsbl_regex_rules.py:kept'
+    cleanup_sandbox
+  End
+
   It 'stage copies the upstream observer from dns_proxy/ flat into the chroot'
     setup_sandbox
     When call dc stage

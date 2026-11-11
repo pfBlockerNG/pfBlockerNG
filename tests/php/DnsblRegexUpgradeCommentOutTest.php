@@ -448,9 +448,8 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 		$this->assertStringNotContainsString('pfb_dnsbl_regex_upgrade_comment_out', $page);
 	}
 
-	public function testFeedRegexStaysLogOnlyAndIsNeverRewritten(): void
+	public function testTheDeciderStillLogsARegexPatternItDrops(): void
 	{
-		// The decider logs a refused feed pattern and moves on: the literal is the only place it speaks (positive control).
 		$src = self::source(self::DECIDER);
 		$this->assertStringContainsString(
 			'[pfBlockerNG]: dropping user regex [ %s ] pattern [ %s ]',
@@ -463,12 +462,10 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 		);
 	}
 
-	public function testARejectedRegexFeedNeitherRewritesTheStoredListNorRaisesANotice(): void
+	public function testTheUpgradeHandsTheValidatorOnlyTheStoredRegexListAndLeavesAValidOneAlone(): void
 	{
-		// Given a feed carrying a pattern the validator rejects, and a stored Regex List that is valid
-		$rejectedFeed = "(unclosed-feed-pattern\n";
+		// Given a stored Regex List that is valid (a feed's patterns are the decider's to drop and log; the upgrade has no feed input)
 		$list = "^keep\\.example\\.com$\n";
-		$this->assertNotSame([], self::realProbe($rejectedFeed, FALSE), 'positive control: the validator rejects the feed pattern');
 		$this->assertSame([], self::realProbe($list, FALSE), 'positive control: the stored list is valid');
 
 		// When the upgrade runs over the stored list (the real validator, spying on what it is handed)
@@ -482,7 +479,7 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 		]);
 
 		// Then only the stored list reached the validator, nothing is rewritten and no upgrade notice is produced
-		$this->assertSame([$list], $handed, 'the validator is handed the stored Regex List and nothing from a feed');
+		$this->assertSame([$list], $handed, 'the validator is handed the stored Regex List and nothing else');
 		$this->assertSilent($result);
 	}
 
