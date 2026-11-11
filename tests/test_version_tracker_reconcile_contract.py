@@ -146,7 +146,6 @@ def _write_fakes(tmp_path: Path) -> dict[str, str]:
         ("gh", FAKE_GH),
         ("git", FAKE_GIT),
         ("oras", FAKE_ORAS),
-        ("sudo", '#!/bin/sh\ncase "$1" in tee) cat >/dev/null ;; esac\nexit 0\n'),
     ):
         fake = tmp_path / name
         fake.write_text(content, encoding="utf-8")

@@ -25,7 +25,6 @@ _CONTRACT = ROOT / "tests" / "test_version_tracker_reconcile_contract.py"
 _WORKFLOW = ROOT / ".github" / "workflows" / "version-tracker.yml"
 
 _FAKE_ORAS_ASSIGN = re.compile(r'^FAKE_ORAS = """(.*?)"""', re.M | re.S)
-_SUDO_TUPLE = re.compile(r'\("sudo",\s*(?P<q>[\'"])(?P<body>.*?)(?P=q)\)', re.S)
 
 
 def _fake_oras() -> str:
@@ -33,13 +32,6 @@ def _fake_oras() -> str:
     match = _FAKE_ORAS_ASSIGN.search(text)
     assert match is not None, "FAKE_ORAS assignment missing from contract test"
     return match.group(1)
-
-
-def _fake_sudo() -> str:
-    text = _CONTRACT.read_text(encoding="utf-8")
-    match = _SUDO_TUPLE.search(text)
-    assert match is not None, "sudo fake assignment missing from contract test"
-    return bytes(match.group("body"), "utf-8").decode("unicode_escape")
 
 
 def _assert_drains(argv: list[str], label: str) -> None:
@@ -109,14 +101,6 @@ def test_fake_oras_login_consumes_piped_password(tmp_path: Path) -> None:
         [str(oras), "login", "ghcr.io", "--username", "u", "--password-stdin"],
         "FAKE_ORAS login",
     )
-
-
-def test_fake_sudo_tee_consumes_piped_rules(tmp_path: Path) -> None:
-    """The gather-step ``echo | sudo tee`` stub must drain, same class as oras."""
-    sudo = tmp_path / "sudo"
-    sudo.write_text(_fake_sudo(), encoding="utf-8")
-    sudo.chmod(0o755)
-    _assert_drains([str(sudo), "tee", "/etc/udev/rules.d/99-kvm4all.rules"], "sudo tee")
 
 
 def test_gather_step_still_pipes_token_under_pipefail() -> None:

@@ -2,10 +2,9 @@
 
 ``smoke-single.yml`` (job ``smoke``) and ``ui-tests.yml`` (job ``ui``) check out
 ``inputs.checkout_ref``: the code under test can come from a ref the caller names.
-Anything such a run saves into the Actions cache (the pfSense/civm image dirs via
-``actions/cache/save``, uv's download cache via ``astral-sh/setup-uv``) is then
-restored by later runs of the default ref, so the named ref could poison them.
-Restores stay unguarded: a custom-ref run still READS the cache.
+Anything such a run saves into the Actions cache (the pfSense/civm image dirs and uv's download
+cache, all via ``actions/cache/save``) is then restored by later runs of the default ref, so the
+named ref could poison them. Restores stay unguarded: a custom-ref run still READS the cache.
 """
 
 from __future__ import annotations
@@ -49,11 +48,13 @@ def test_cache_save_steps_are_skipped_for_a_caller_named_ref(workflow: str, job:
 
 
 @JOBS
-def test_uv_cache_is_not_saved_for_a_caller_named_ref(workflow: str, job: str) -> None:
-    setup_uv = _steps(workflow, job, "astral-sh/setup-uv@")
+def test_uv_cache_is_saved_only_by_a_guarded_step(workflow: str, job: str) -> None:
+    """The uv cache has no setup-uv (its post step would save it for any ref); one of the guarded
+    ``actions/cache/save`` steps, checked by the test above, is its only writer."""
+    assert _steps(workflow, job, "astral-sh/setup-uv@") == []
+    uv_saves = [s for s in _steps(workflow, job, "actions/cache/save@") if s["with"]["path"] == "~/.cache/uv"]
 
-    assert len(setup_uv) == 1, f"{workflow}:{job} setup-uv steps: {[s['name'] for s in setup_uv]}"
-    assert setup_uv[0]["with"].get("save-cache") == f"${{{{ {UNTRUSTED_REF_CLAUSE} }}}}"
+    assert len(uv_saves) == 1, f"{workflow}:{job} uv cache save steps: {[s['name'] for s in uv_saves]}"
 
 
 @JOBS

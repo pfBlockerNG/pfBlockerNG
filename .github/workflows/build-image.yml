@@ -91,6 +91,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Builds the ci and ci-vm images once per .github/docker/ content hash (an unchanged directory
+  # reuses the published ones); publish-image and verify-image run inside ci-vm (#3852).
+  ci-image:
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   # ── 0. Map the target CE version to its FreeBSD base + PHP runtime ────────
   # The branch .pkg MUST be built against the FreeBSD ABI + PHP runtime of the
   # target pfSense CE version (else `pkg add` ABI-mismatches / the wrong PHP is
@@ -155,8 +163,13 @@ jobs:
   # ── 1. Publish the version-tagged qcow2 to private GHCR ──────────────────
   publish-image:
     name: Publish pfSense CE ${{ inputs.pfsense_ce_version }} to GHCR
-    needs: resolve-version
+    needs: [ci-image, resolve-version]
     runs-on: ubuntu-latest
+    # ci-vm bakes qemu, oras and the openssh/dns/curl tools (.github/docker/Dockerfile). /dev/kvm is
+    # passed through; NET_ADMIN matches the other VM jobs' container options.
+    container:
+      image: ${{ needs.ci-image.outputs.ci_vm }}
+      options: --init --device /dev/kvm --cap-add NET_ADMIN
     timeout-minutes: 90
     outputs:
       version: ${{ inputs.pfsense_ce_version }}
@@ -176,42 +189,6 @@ jobs:
             echo "::error::base_source=upgrade requires from_version (the prior published tag to upgrade)"
             exit 1
           fi
-
-      - name: Enable KVM access for the runner user
-        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
-        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
-        # /dev/kvm world-RW fixes it in the same login session (no group-membership
-        # re-login needed). Same fix as the other KVM jobs.
-        run: |
-          set -eu
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Install host tools (qemu)
-        run: |
-          set -eu
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils openssh-client
-
-      - name: Install oras
-        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
-        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
-        # latest on every run, so the tool that moves the images could change under a
-        # green gate with no diff.
-        env:
-          ORAS_VERSION: 1.3.3
-          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
-        run: |
-          set -eu
-          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
-            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
-          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
-          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
-          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
-          oras version
 
       - name: Write guest SSH key (mode 600)
         env:
@@ -305,8 +282,11 @@ jobs:
   # ── 3. Verify the published image passes the Phase-1 round-trip ──────────
   verify-image:
     name: Round-trip the freshly published image
-    needs: [publish-image, build-pkg]
+    needs: [ci-image, publish-image, build-pkg]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci_vm }}
+      options: --init --device /dev/kvm --cap-add NET_ADMIN
     # issue #2614: this job runs tests/smoke/roundtrip.sh, which drives the production
     # `pfblockerng.php update` entry point on the live image, so it reaches src/'s
     # unbounded file_put_contents(..., LOCK_EX) acquires. This budget is the only bound.
@@ -316,42 +296,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Enable KVM access for the runner user
-        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
-        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
-        # /dev/kvm world-RW fixes it in the same login session (no group-membership
-        # re-login needed). Same fix as the other KVM jobs.
-        run: |
-          set -eu
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Install host tools (qemu, dig, curl)
-        run: |
-          set -eu
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils curl openssh-client
-
-      - name: Install oras
-        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
-        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
-        # latest on every run, so the tool that moves the images could change under a
-        # green gate with no diff.
-        env:
-          ORAS_VERSION: 1.3.3
-          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
-        run: |
-          set -eu
-          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
-            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
-          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
-          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
-          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
-          oras version
 
       - name: Resolve the GHCR image ref
         id: ref

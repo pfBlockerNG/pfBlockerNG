@@ -1,4 +1,5 @@
 import re
+import tomllib
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -183,3 +184,15 @@ def test_the_doc_scan_still_reaches_the_checkouts_own_docs(tmp_path: Path) -> No
     found = sorted(str(path.relative_to(tmp_path)) for path in _docs_under(tmp_path))
 
     assert found == [".claude/rules.md", "README.md", "docs/misc/notes.md"]
+
+
+def test_the_baked_playwright_matches_the_locked_one() -> None:
+    """The ui job's `playwright install chromium` finds the browser baked into ci-vm at
+    PLAYWRIGHT_BROWSERS_PATH only while the locked playwright wants the same build. On a
+    mismatch it downloads a browser on every run instead of failing, so the drift is silent."""
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = [package["version"] for package in lock["package"] if package["name"] == "playwright"]
+    baked = re.findall(r"^ARG\s+PLAYWRIGHT_VERSION=(\S+)\s*$", _DOCKERFILE.read_text(encoding="utf-8"), re.MULTILINE)
+
+    assert len(locked) == 1, f"uv.lock must lock exactly one playwright, found {locked}"
+    assert baked == locked, f"the Dockerfile bakes playwright {baked}, uv.lock locks {locked}"

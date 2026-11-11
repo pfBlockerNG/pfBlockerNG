@@ -442,6 +442,10 @@ jobs:
     needs: [prepare-release, read-matrix, build-pkgs-portable]
     if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.read-matrix.outputs.run_suites == 'true' }}
     uses: ./.github/workflows/ui-tests.yml
+    # ui-tests.yml builds the CI images itself; its ci-image job needs packages: write, which only a caller can grant.
+    permissions:
+      contents: read
+      packages: write
     with:
       tier: all
       # Explicit (issue #906): a workflow_call callee sees the CALLER's event,
@@ -474,6 +478,10 @@ jobs:
     needs: [prepare-release, read-matrix, build-pkgs-portable]
     if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.read-matrix.outputs.run_suites == 'true' }}
     uses: ./.github/workflows/smoke.yml
+    # smoke.yml builds the CI images (and smoke-single.yml again per leg); that needs packages: write, which only a caller can grant.
+    permissions:
+      contents: read
+      packages: write
     with:
       scope: full
       pkg_artifact_prefix: pfBlockerNG-relpkg

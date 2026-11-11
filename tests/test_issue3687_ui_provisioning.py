@@ -151,10 +151,10 @@ esac""",
 
 
 @pytest.mark.parametrize(
-    "cache_id,key_id,path",
-    [("aptcache", "aptkey", "${{ steps.aptkey.outputs.dir }}")],
+    "cache_id,path",
+    [("uvcache", "~/.cache/uv")],
 )
-def test_caches_restore_and_only_save_successful_trusted_misses(cache_id: str, key_id: str, path: str) -> None:
+def test_caches_restore_and_only_save_successful_trusted_misses(cache_id: str, path: str) -> None:
     restore = _step(cache_id)
     assert "if" not in restore
     assert restore["with"]["path"] == path
@@ -169,76 +169,4 @@ def test_caches_restore_and_only_save_successful_trusted_misses(cache_id: str, k
         {"success()", f"steps.{cache_id}.outputs.cache-hit != 'true'", "inputs.checkout_ref == ''"},
     )
     assert restore["with"]["key"] == save["with"]["key"]
-    assert f"steps.{key_id}.outputs." in save["with"]["key"]
-
-
-def test_apt_key_tracks_only_runner_image_and_exact_install_line(tmp_path: Path) -> None:
-    step = _step("aptkey")
-    workflow = tmp_path / ".github/workflows/ui-tests.yml"
-    workflow.parent.mkdir(parents=True)
-    workflow.write_text(WORKFLOW.read_text())
-    output = tmp_path / "output"
-    env = {"GITHUB_OUTPUT": str(output), "ImageOS": "ubuntu24", "ImageVersion": "20261101"}
-
-    def key() -> str:
-        output.write_text("")
-        result = _run(step, tmp_path, env)
-        assert result.returncode == 0, result.stderr
-        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-        assert values["dir"].startswith("/var/tmp/")
-        return values["key"]
-
-    original_workflow = workflow.read_text()
-    original = key()
-    workflow.write_text(original_workflow + "\n# unrelated edit\n")
-    assert key() == original
-    workflow.write_text(original_workflow.replace("-y qemu-system-x86", "-y changed-package qemu-system-x86"))
-    assert key() != original
-    workflow.write_text(original_workflow)
-    env["ImageVersion"] = "20261102"
-    assert key() != original
-    env["ImageVersion"] = "20261101"
-    env["ImageOS"] = "ubuntu26"
-    assert key() != original
-
-
-@pytest.mark.parametrize("warm,fail", [(False, False), (True, False), (False, True)])
-def test_apt_downloads_are_reusable_bounded_and_runner_owned(tmp_path: Path, warm: bool, fail: bool) -> None:
-    step = _step("Install host tools")
-    assert 0 < step.get("timeout-minutes", 0) <= 5, "apt must have a finite step bound"
-    archives = tmp_path / "archives"
-    archives.mkdir()
-    if warm:
-        (archives / "tools.deb").write_text("cached")
-    archives.chmod(0o700)
-    _executable(tmp_path / "bin/sudo", 'if [ "$1" = chown ]; then printf "%s\\n" "$*" >> "$LOG"; else exec "$@"; fi')
-    _executable(
-        tmp_path / "bin/apt-get",
-        """printf '%s\n' "$*" >> "$LOG"
-[ "${FAIL_APT}" = 0 ] || exit 42
-case "$*" in *APT::Sandbox::User=root*) exit 43;; esac
-mode=$(stat -c %a "$APT_ARCHIVES")
-test "$((0$mode & 0007))" = 7 || exit 44
-if [ "$1" = install ]; then
-  [ -f "$APT_ARCHIVES/tools.deb" ] || echo downloaded > "$APT_ARCHIVES/tools.deb"
-fi""",
-    )
-    env = {
-        "PATH": f"{tmp_path}/bin:{os.environ['PATH']}",
-        "APT_ARCHIVES": str(archives),
-        "LOG": str(tmp_path / "log"),
-        "FAIL_APT": "1" if fail else "0",
-    }
-    result = _run(step, tmp_path, env)
-    assert result.returncode == (42 if fail else 0), result.stderr
-    calls = (tmp_path / "log").read_text().splitlines()
-    for call in calls:
-        if not call.startswith("chown"):
-            assert "Acquire::Retries=3" in call and "Acquire::http::Timeout=20" in call, calls
-    if not fail:
-        install = next(call for call in calls if call.startswith("install "))
-        assert "--no-install-recommends" in install
-        assert f"Dir::Cache::archives={archives}" in install
-        assert install.split("-y ")[1].split() == ["qemu-system-x86", "qemu-utils", "dnsutils", "openssh-client"]
-        assert calls[-1] == f"chown -R {os.getuid()}:{os.getgid()} {archives}"
-        assert (archives / "tools.deb").read_text() == ("cached" if warm else "downloaded\n")
+    assert "hashFiles('uv.lock')" in save["with"]["key"]

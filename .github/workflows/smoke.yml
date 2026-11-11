@@ -187,6 +187,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Builds the ci and ci-vm images once per .github/docker/ content hash, before any leg starts:
+  # every smoke-single leg below runs its own ci-image call (which then only finds both tags
+  # published) and would otherwise race N builds of a changed directory (#3852).
+  ci-image:
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   # ── 1. Read CI matrix (every ci:true entry, CE and Plus) ─────────────────────
   #
   # Emits `ci_matrix` (JSON array) as the `include` list for the smoke job's
@@ -341,7 +350,7 @@ jobs:
     # prepare output, so it also surfaces the impacted scope's auto-derived -k, not
     # just an explicit input. Empty filter + 'smoke' marker → no suffix, byte-identical.
     name: "Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }} shard ${{ matrix.shard_label }}/${{ matrix.shard_total }})${{ needs.prepare.outputs.pytest_filter && format(' [-k {0}]', needs.prepare.outputs.pytest_filter) || '' }}${{ (needs.prepare.outputs.pytest_marker && needs.prepare.outputs.pytest_marker != 'smoke') && format(' [marker: {0}]', needs.prepare.outputs.pytest_marker) || '' }}"
-    needs: [prepare, build-pkg]
+    needs: [ci-image, prepare, build-pkg]
     # Run once prepare produced legs, REGARDLESS of build-pkg's result: the
     # !cancelled() status function drops the implicit success() gate that
     # `needs: build-pkg` would otherwise impose, so ONE leg's build failure no
@@ -352,12 +361,17 @@ jobs:
     # boots), and the AND gate below still goes red. prepare must have succeeded
     # — a prepare failure yields no matrix, so we skip rather than fromJson an
     # empty string.
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.leg_count != '0' }}
+    if: ${{ !cancelled() && needs.ci-image.result == 'success' && needs.prepare.result == 'success' && needs.prepare.outputs.leg_count != '0' }}
     strategy:
       fail-fast: false   # REQUIRED: all legs run to completion; no cancellation on failure
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
     uses: ./.github/workflows/smoke-single.yml
+    # smoke-single.yml builds the images itself: its ci-image job needs packages: write, which only
+    # this caller can grant it.
+    permissions:
+      contents: read
+      packages: write
     with:
       # Pass the per-leg version/name/mac directly — pfsense_version IS the GHCR
       # floating tag (e.g. "2.8"), so no transformation needed. image_name selects

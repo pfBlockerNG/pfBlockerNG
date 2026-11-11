@@ -287,6 +287,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ci-image:
+    # Builds the ci and ci-vm images once per .github/docker/ content hash (an unchanged directory
+    # reuses the published ones); the smoke job runs inside ci-vm instead of installing its tools (#3852).
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   # Build the branch's .pkg on a PLAIN Linux runner via the portable builder
   # (scripts/build-pkg-portable.py) and publish it as the `pfBlockerNG-pkg`
   # artifact the smoke job installs. This replaces the old FreeBSD-VM build for
@@ -348,11 +356,11 @@ jobs:
 
   smoke:
     name: pytest -m smoke (live pfSense VM)
-    needs: build-pkg
+    needs: [ci-image, build-pkg]
     # Run whether build-pkg built (pkg_artifact blank) or was skipped
     # (pkg_artifact set — build-pkg's `if` above never even started it); skip
-    # only if build-pkg actually ran and failed/was cancelled.
-    if: ${{ always() && (needs.build-pkg.result == 'success' || needs.build-pkg.result == 'skipped') }}
+    # only if build-pkg actually ran and failed/was cancelled, or the image build failed.
+    if: ${{ always() && needs.ci-image.result == 'success' && (needs.build-pkg.result == 'success' || needs.build-pkg.result == 'skipped') }}
     # issue #1855: a leg the caller demoted to non-blocking still runs every step
     # and still reports its failure -- it just does not fail the run, so the
     # caller's fan-out (and the release it gates) is not vetoed by a pfSense
@@ -361,12 +369,15 @@ jobs:
     # other caller (PR gate, nightly, bare dispatch) keeps the hard veto.
     continue-on-error: ${{ inputs.nonblocking }}
     runs-on: ubuntu-latest
+    # ci-vm bakes qemu, Chromium, oras and the Go/uv toolchains (.github/docker/Dockerfile): nothing
+    # is installed per run. /dev/kvm is passed through; NET_ADMIN lets the egress gate edit iptables.
+    container:
+      image: ${{ needs.ci-image.outputs.ci_vm }}
+      options: --init --device /dev/kvm --cap-add NET_ADMIN
     # issue #2614: the smoke suite stands a real on-box flock holder up against the
     # feed-pass lock, and a flock(2) acquire has no timeout of its own, so this budget
     # is the only bound on a stuck lock. Observed worst sampled leg 17.8 min.
     timeout-minutes: 45
-    env:
-      GO_VERSION: "1.27.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -378,92 +389,9 @@ jobs:
           ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
-      - name: Enable KVM access for the runner user
-        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
-        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
-        # /dev/kvm world-RW fixes it in the same login session (no group-membership
-        # re-login needed). Same fix as the other KVM jobs.
-        #
-        # `udevadm trigger` queues the uevent and returns; udevd applies the rule
-        # asynchronously. `settle` (hard-capped, so it can never hang the job) makes the
-        # new mode a fact before anything opens /dev/kvm, rather than relying on the
-        # steps in between being slow enough.
-        run: |
-          set -eu
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          sudo udevadm settle --timeout=10
-
-      - name: Resolve apt download cache key
-        id: aptkey
-        run: |
-          set -eu
-          # Key on the install line only so unrelated edits stay warm; apt-g[e]t keeps the grep from matching itself.
-          install=$(grep -E '^ +sudo apt-g[e]t install ' .github/workflows/smoke-single.yml)
-          echo "key=apt-debs-${ImageOS}-${ImageVersion}-$(printf %s "$install" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-          # /var/tmp, not $HOME: apt's _apt user must reach it, or the download runs unsandboxed as root.
-          echo "dir=/var/tmp/smoke-apt-archives" >> "$GITHUB_OUTPUT"
-
-      # A slow mirror only costs a cold cache (#3744); the key is the runner image + the install line.
-      - name: Restore cached apt downloads
-        id: aptcache
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ steps.aptkey.outputs.dir }}
-          key: ${{ steps.aptkey.outputs.key }}
-
-      - name: Install host tools (qemu, dnsutils, iptables, zstd)
-        # A stalled mirror ate 24-27 min of the 45 on three legs (#3721): bound each attempt and the step.
-        timeout-minutes: 5
-        # zstd: the ADR-17 `repo` flow re-versions the branch .pkg (a zstd tar) on
-        # the runner to forge a lower+higher build for the pkg-upgrade transition
-        # test; the re-version helper decodes/encodes the .pkg via the zstd binary.
-        # Harmless for the default `smoke` marker (the helper just isn't called).
-        # iptables: the hermetic egress gate (tests/smoke/helpers.py block_egress,
-        # issue #2261) flips the runner's OUTPUT policy.
-        # --no-install-recommends: the runner is headless; the recommends are GUI/audio/video (#3744).
-        env:
-          APT_ARCHIVES: ${{ steps.aptkey.outputs.dir }}
-        run: |
-          set -eu
-          mkdir -p "$APT_ARCHIVES/partial"
-          chmod a+rwx "$APT_ARCHIVES" "$APT_ARCHIVES/partial"
-          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
-          sudo apt-get install --no-install-recommends -o Dir::Cache::archives="$APT_ARCHIVES" -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -y qemu-system-x86 qemu-utils dnsutils openssh-client iptables zstd
-          # apt ran as root: hand the files to the runner user so the cache action can read them.
-          sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"
-
-      # A caller-named checkout_ref run must not write the cache trusted runs restore (issue #3489).
-      - name: Save apt downloads to cache
-        if: steps.aptcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ steps.aptkey.outputs.dir }}
-          key: ${{ steps.aptkey.outputs.key }}
-
-      - name: Install oras
-        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
-        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
-        # latest on every run, so the tool that moves the images could change under a
-        # green gate with no diff.
-        env:
-          ORAS_VERSION: 1.3.3
-          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
-        run: |
-          set -eu
-          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
-            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
-          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
-          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
-          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
-          oras version
-
       - name: Assert KVM acceleration and the egress gate are available
-        # The udev rule above makes /dev/kvm world-RW. Assert rather than log:
-        # without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # The job container gets /dev/kvm through `--device /dev/kvm` (see `container:` above). Assert
+        # rather than log: without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
         # does not fail, it runs until the job's timeout and reads as a flake.
         run: |
           set -eu
@@ -685,32 +613,33 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "pkg=${PKGFILE}  img=${IMG}"
 
-      - name: Set up uv and the pinned Python
-        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
-        # exact versions only. enable-cache persists uv's download cache between runs;
-        # activate-environment puts the project environment on PATH, so the `python3`
-        # scripts/run-smoke.sh shells out to is the synced interpreter (.python-version
-        # pins the same minor the appliance carries).
-        # save-cache is off for a caller-named checkout_ref: that run must not write the
-        # uv cache trusted runs restore (issue #3489).
-        uses: astral-sh/setup-uv@v10.2.0
+      # uv's download cache is restored here and saved after the sync, as separate steps: a
+      # caller-named checkout_ref run must not write the cache trusted runs restore (issue #3489),
+      # and actions/cache@ would save implicitly in its post step.
+      - name: Restore cached uv downloads
+        id: uvcache
+        uses: actions/cache/restore@v6
         with:
-          enable-cache: true
-          save-cache: ${{ inputs.checkout_ref == '' }}
-          activate-environment: true
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
 
       - name: Install the smoke harness Python deps
         # --locked resolves against the committed uv.lock, so a transitive package
-        # cannot move this suite with no diff.
-        run: uv sync --locked --group smoke
+        # cannot move this suite with no diff. The venv goes on PATH so the `python3`
+        # scripts/run-smoke.sh shells out to is the synced interpreter (.python-version
+        # pins the same minor the appliance carries).
+        run: |
+          set -eu
+          uv sync --locked --group smoke
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
 
-      - name: Set up the pinned Go toolchain
-        # The repo-flow nightly .pkg below carries the cross-compiled pfB-DNS payload.
-        if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' }}
-        uses: actions/setup-go@v7
+      - name: Save uv downloads to cache
+        if: steps.uvcache.outputs.cache-hit != 'true' && inputs.checkout_ref == ''
+        uses: actions/cache/save@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
 
       # ADR-18: the `repo` flow's nightly cases (test_nightly_install.py) need a
       # builder-produced -nightly .pkg (the deep rename can't be cheaply forged).
@@ -934,12 +863,11 @@ jobs:
           export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"
           export SMOKE_CLIENT_IMAGE_DIR="$GITHUB_WORKSPACE/client-image"
           # pfSense's System DNS is 10.0.2.2 (libslirp's host alias); libslirp NATs
-          # guest->10.0.2.2:53 to the runner's 127.0.0.1:53 (the mock), the SAME host-alias
-          # path the mock-feed HTTP server already rides. So the ONLY runner-side prep is
-          # lowering the privileged-port floor so the non-root mock (in pytest) can bind
-          # :53 — the runner's /etc/resolv.conf is left untouched (host DNS keeps working
-          # throughout; nothing to restore, and immune to how the runner does resolution).
-          sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
+          # guest->10.0.2.2:53 to the job's 127.0.0.1:53 (the mock), the SAME host-alias
+          # path the mock-feed HTTP server already rides. No runner-side prep is left: the job
+          # container runs as root, which binds :53 without lowering the privileged-port floor
+          # (/proc/sys is read-only there, so `sysctl -w` would fail), and its /etc/resolv.conf
+          # is left untouched.
           # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
           # RUN_ID minted here (CI is the degenerate lease: runner IS the box,
           # --print-id emits the id without acquiring a real lease).

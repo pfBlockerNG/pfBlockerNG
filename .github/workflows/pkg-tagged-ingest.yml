@@ -143,6 +143,10 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.prepare-live-gate.outputs.matrix) }}
     uses: ./.github/workflows/smoke-single.yml
+    # smoke-single.yml builds the CI images itself; its ci-image job needs packages: write, which only a caller can grant.
+    permissions:
+      contents: read
+      packages: write
     with:
       pfsense_version: ${{ matrix.pfsense_version }}
       image_name: ${{ matrix.image_name }}

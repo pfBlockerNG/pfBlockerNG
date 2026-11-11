@@ -372,6 +372,10 @@ jobs:
     needs: [resolve]
     if: vars.PKG_PUBLICATION_ENABLED == 'true'
     uses: ./.github/workflows/pkg-tagged-ingest.yml
+    # pkg-tagged-ingest.yml runs the live gate through smoke-single.yml, whose ci-image job pushes the CI images: packages: write passes down from here.
+    permissions:
+      contents: read
+      packages: write
     with:
       source_repository: ${{ needs.resolve.outputs.source_repository }}
       release_id: ${{ needs.resolve.outputs.release_id }}

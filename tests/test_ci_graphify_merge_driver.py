@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -37,6 +37,8 @@ class PushJob:
     ensure_command: str
     first_mutation: str
     checkout_groups: tuple[tuple[str, ...], ...] = ()
+    # True when the job runs in the ci image, which bakes uv: a setup-uv step would only shadow it.
+    uv_from_image: bool = False
 
 
 PUSH_JOBS = (
@@ -67,6 +69,7 @@ PUSH_JOBS = (
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git -C "$WT" push --force origin "$BR"',
         checkout_groups=(("name: Checkout (for scripts/ + tests/smoke/)", "uses: actions/checkout@v7"),),
+        uv_from_image=True,
     ),
     PushJob(
         "module-durations.yml",
@@ -81,6 +84,7 @@ PUSH_JOBS = (
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$1"',
         checkout_groups=(("uses: actions/checkout@v7",),),
+        uv_from_image=True,
     ),
 )
 
@@ -151,20 +155,25 @@ def _assert_job_contract(job: str, spec: PushJob) -> None:
             )
         checkout_steps.append(matches[0])
     setup_uv_steps = [index for index, step in enumerate(steps) if _has_step_line(step, _SETUP_UV)]
-    assert len(setup_uv_steps) == 1, (
-        f"{label}: expected exactly one setup-uv step pinned to v10.2.0, found {len(setup_uv_steps)}"
-    )
-    setup_uv = setup_uv_steps[0]
-    assert _SETUP_UV in steps[setup_uv], f"{label}: setup-uv must be pinned to v10.2.0"
-
     ensure = _command_step(steps, spec.ensure_command, label)
     assert _DRIVER in steps[ensure]
     mutation = _first_mutation(steps)
     assert mutation is not None, f"{label}: no qualifying push/pull-rebase command found"
     mutation_step, mutation_command = mutation
     assert mutation_command == spec.first_mutation, f"{label}: first qualifying mutation changed: {mutation_command!r}"
-    assert max(checkout_steps) < setup_uv, f"{label}: setup-uv must run after every relevant checkout"
-    assert setup_uv < ensure, f"{label}: setup-uv v10.2.0 must run before merge-driver setup"
+    if spec.uv_from_image:
+        assert not any("astral-sh/setup-uv" in step for step in steps), (
+            f"{label}: uv comes from the ci image, so the job must carry no setup-uv step"
+        )
+    else:
+        assert len(setup_uv_steps) == 1, (
+            f"{label}: expected exactly one setup-uv step pinned to v10.2.0, found {len(setup_uv_steps)}"
+        )
+        setup_uv = setup_uv_steps[0]
+        assert _SETUP_UV in steps[setup_uv], f"{label}: setup-uv must be pinned to v10.2.0"
+        assert max(checkout_steps) < setup_uv, f"{label}: setup-uv must run after every relevant checkout"
+        assert setup_uv < ensure, f"{label}: setup-uv v10.2.0 must run before merge-driver setup"
+    assert max(checkout_steps) < ensure, f"{label}: merge-driver setup must run after every relevant checkout"
     assert ensure < mutation_step, f"{label}: merge-driver setup must run before {mutation_command!r}"
 
 
@@ -270,6 +279,13 @@ def test_guard_rejects_planted_missing_or_late_setup(broken: str) -> None:
     _assert_job_contract(_GOOD_FIXTURE, _FIXTURE_SPEC)
     with pytest.raises(AssertionError, match="setup-uv"):
         _assert_job_contract(broken, _FIXTURE_SPEC)
+
+
+def test_a_job_whose_uv_comes_from_the_image_rejects_a_setup_uv_step() -> None:
+    image_spec = replace(_FIXTURE_SPEC, uv_from_image=True)
+    _assert_job_contract(_GOOD_FIXTURE.replace(_SETUP_FIXTURE, "", 1), image_spec)
+    with pytest.raises(AssertionError, match="setup-uv"):
+        _assert_job_contract(_GOOD_FIXTURE, image_spec)
 
 
 def test_comments_cannot_spoof_tool_pins_or_checkout_paths() -> None:
