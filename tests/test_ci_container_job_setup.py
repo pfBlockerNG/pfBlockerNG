@@ -13,7 +13,7 @@ The image cannot prevent two failure modes:
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +49,16 @@ def _run(step: dict[str, Any]) -> str:
     return run if isinstance(run, str) else ""
 
 
+def _first(runs: list[tuple[str, bool]], match: Callable[[str], object]) -> int | None:
+    """Index of the first run matching ``match``; ``runs`` pairs each run with whether it always executes."""
+    return next((i for i, (run, _) in enumerate(runs) if match(run)), None)
+
+
+def _first_unconditional(runs: list[tuple[str, bool]], needle: str) -> int | None:
+    # A step behind `if:` may not run, so it cannot be the one that selects or takes ownership.
+    return next((i for i, (run, always) in enumerate(runs) if always and needle in run), None)
+
+
 def php_leg_violations(workflows: dict[str, Any]) -> list[str]:
     """Every php-version matrix job that does not select its leg's PHP before first using PHP."""
     violations: list[str] = []
@@ -56,16 +66,18 @@ def php_leg_violations(workflows: dict[str, Any]) -> list[str]:
         matrix = (job.get("strategy") or {}).get("matrix")
         if not isinstance(matrix, dict) or "php-version" not in matrix:
             continue
-        runs = [_run(step) for step in _steps(job)]
-        selected = next((i for i, run in enumerate(runs) if SELECT_PHP in run), None)
-        first_use = next((i for i, run in enumerate(runs) if SELECT_PHP not in run and _USES_PHP.search(run)), None)
+        runs = [(_run(step), "if" not in step) for step in _steps(job)]
+        selected = _first_unconditional(runs, SELECT_PHP)
+        first_use = _first(runs, lambda run: SELECT_PHP not in run and _USES_PHP.search(run))
         where = f"{name}:{job_id}"
         if selected is None:
             violations.append(f"{where} — never selects php {MATRIX_PHP}; the leg runs the image default")
         elif first_use is not None and first_use < selected:
             violations.append(f"{where} — uses PHP before selecting php {MATRIX_PHP}")
-        if any("vendor/bin/phpunit" in run for run in runs) and not any(SELECT_PHP_CGI in run for run in runs):
-            violations.append(f"{where} — runs PHPUnit without selecting php-cgi {MATRIX_PHP}")
+        phpunit = _first(runs, lambda run: "vendor/bin/phpunit" in run)
+        cgi = _first_unconditional(runs, SELECT_PHP_CGI)
+        if phpunit is not None and (cgi is None or cgi > phpunit):
+            violations.append(f"{where} — runs PHPUnit without first selecting php-cgi {MATRIX_PHP}")
     return violations
 
 
@@ -76,14 +88,15 @@ def workspace_owner_violations(workflows: dict[str, Any]) -> list[str]:
     for name, job_id, job in _jobs(workflows):
         steps = _steps(job)
         root_checkout = any(
-            str(step.get("uses", "")).startswith("actions/checkout@") and not (step.get("with") or {}).get("path")
+            str(step.get("uses", "")).startswith("actions/checkout@")
+            and (step.get("with") or {}).get("path") in (None, "", ".", "./")
             for step in steps
         )
         if "container" not in job or not root_checkout:
             continue
         for index, step in enumerate(steps):
             run = _run(step)
-            if OWN_WORKSPACE in run:
+            if OWN_WORKSPACE in run and "if" not in step:
                 break
             if _DROPS_GIT_CONFIG.search(run):
                 violations.append(
@@ -124,31 +137,42 @@ def test_deleting_a_real_workspace_chown_is_caught(workflow: str, job_id: str) -
     job = workflows[workflow]["jobs"][job_id]
     job["steps"] = [step for step in job["steps"] if OWN_WORKSPACE not in _run(step)]
     violations = workspace_owner_violations(workflows)
-    assert len(violations) == 1 and violations[0].startswith(f"{workflow}:{job_id}:"), violations
+    assert any(violation.startswith(f"{workflow}:{job_id}:") for violation in violations), violations
 
 
-def _php_leg(*runs: str) -> dict[str, Any]:
-    steps = [{"uses": "actions/checkout@v7"}, *({"run": run} for run in runs)]
-    job = {"strategy": {"matrix": {"php-version": ["8.3"]}}, "container": {"image": "x"}, "steps": steps}
+def _php_leg(*steps: str | dict[str, Any]) -> dict[str, Any]:
+    body = [{"uses": "actions/checkout@v7"}, *(step if isinstance(step, dict) else {"run": step} for step in steps)]
+    job = {"strategy": {"matrix": {"php-version": ["8.3"]}}, "container": {"image": "x"}, "steps": body}
     return {"w.yml": {"jobs": {"leg": job}}}
 
 
 def test_a_php_leg_that_selects_first_passes() -> None:
-    assert php_leg_violations(_php_leg(SELECT_PHP, "php -l x.php")) == []
+    assert php_leg_violations(_php_leg(SELECT_PHP, SELECT_PHP_CGI, "php -l x.php", "vendor/bin/phpunit")) == []
 
 
 @pytest.mark.parametrize(
-    ("runs", "expected"),
+    ("steps", "expected"),
     [
         (("php -l x.php",), "never selects php"),
         (('update-alternatives --set php "/usr/bin/php8.3"', "php -l x.php"), "never selects php"),
+        (({"if": "false", "run": SELECT_PHP}, "php -l x.php"), "never selects php"),
         (("composer install", SELECT_PHP), "uses PHP before selecting"),
-        ((SELECT_PHP, "vendor/bin/phpunit"), "runs PHPUnit without selecting php-cgi"),
+        ((SELECT_PHP, "vendor/bin/phpunit"), "runs PHPUnit without first selecting php-cgi"),
+        ((SELECT_PHP, "vendor/bin/phpunit", SELECT_PHP_CGI), "runs PHPUnit without first selecting php-cgi"),
+        ((SELECT_PHP, {"if": "false", "run": SELECT_PHP_CGI}, "vendor/bin/phpunit"), "without first selecting php-cgi"),
     ],
-    ids=["no-selection", "literal-version", "selected-too-late", "phpunit-without-cgi"],
+    ids=[
+        "no-selection",
+        "literal-version",
+        "conditional-selection",
+        "selected-too-late",
+        "phpunit-without-cgi",
+        "cgi-selected-too-late",
+        "conditional-cgi-selection",
+    ],
 )
-def test_a_php_leg_on_the_image_default_is_rejected(runs: tuple[str, ...], expected: str) -> None:
-    violations = php_leg_violations(_php_leg(*runs))
+def test_a_php_leg_on_the_image_default_is_rejected(steps: tuple[str | dict[str, Any], ...], expected: str) -> None:
+    violations = php_leg_violations(_php_leg(*steps))
     assert len(violations) == 1 and expected in violations[0], violations
 
 
@@ -175,6 +199,8 @@ _OWN = {"run": OWN_WORKSPACE}
     [
         (_builder(_CHECKOUT, _BUILD), True),
         (_builder(_CHECKOUT, _BUILD, _OWN), True),
+        (_builder(_CHECKOUT, {"if": "false", "run": OWN_WORKSPACE}, _BUILD), True),
+        (_builder({"uses": "actions/checkout@v7", "with": {"path": "."}}, _BUILD), True),
         (_builder(_CHECKOUT, {"run": "vendor/bin/phpunit"}), True),
         (_builder(_CHECKOUT, _OWN, _BUILD), False),
         (_builder({"uses": "actions/checkout@v7", "with": {"path": "source"}}, _BUILD), False),
@@ -184,6 +210,8 @@ _OWN = {"run": OWN_WORKSPACE}
     ids=[
         "no-chown",
         "chown-too-late",
+        "conditional-chown",
+        "checkout-at-dot-is-the-root",
         "phpunit-no-chown",
         "chown-first",
         "checkout-in-subdirectory",

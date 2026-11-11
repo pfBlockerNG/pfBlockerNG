@@ -1282,7 +1282,8 @@ jobs:
       - name: Own the workspace as the job user
         # The runner creates this directory as its own uid. build-pkg-portable.py's git probe drops
         # every GIT_* variable and the system/global config, so no safe.directory reaches it: git
-        # trusts only a repository whose top directory the caller owns.
+        # trusts a repository only when the caller owns its top directory and .git (checkout made
+        # .git as root).
         run: chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
 
       - name: Resolve release-line extras
