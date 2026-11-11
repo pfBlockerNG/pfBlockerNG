@@ -101,8 +101,8 @@ type pfbSettings struct {
 	pythonBlacklist             bool
 
 	// The "<x>DB loaded" flags a loader sets and operate() reads. dataDB, zoneDB, whiteDB, regexDB, allowRegexDB and
-	// hstsDB have flags in Python too, but nothing reads them: evaluate_domain's gates come from the snapshot's own
-	// dicts (ADR-10), so they are not here.
+	// hstsDB have flags in Python too, but nothing reads them: evaluate_domain's gates come from the snapshot (its own
+	// dicts, and python_hsts for HSTS; ADR-10), so they are not here.
 	gpListDB     bool
 	noAAAADB     bool
 	safeSearchDB bool

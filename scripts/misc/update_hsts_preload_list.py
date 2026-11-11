@@ -3,9 +3,10 @@
 preload list.
 
 src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt is the flat, one-name-per-line HSTS
-exclusion oracle the gateway's HSTS loader keys resolved domains against: a
-blocked domain on this list resolves real (HSTS bypass) instead of being
-null-blocked. This script refreshes it from Chromium's own preload source.
+exclusion oracle the gateway's HSTS loader keys blocked domains against: a VIP
+block of a domain on this list becomes a null block, since the browser would
+refuse the block page's certificate. This script refreshes it from Chromium's
+own preload source.
 
 Data source
 -----------

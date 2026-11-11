@@ -862,8 +862,8 @@ def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, client_vm: SmokeV
 def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Non-tautology guard: the SAME VIP-list HSTS-listed name, HSTS OFF → VIP.
 
-    With ``pfb_hsts`` off → ini ``python_hsts=off``, pfb_unbound.py never loads
-    hstsDB (``cfg["hstsDB"]`` False), so ``in_hsts`` stays False and the
+    With ``pfb_hsts`` off → ini ``python_hsts=off``, the decider neither loads the
+    preload list nor runs the HSTS check, so ``in_hsts`` stays False and the
     ``logging='enabled'`` (VIP) list yields the VIP even for a name we pinned into
     ``pfb_py_hsts.txt``. The name IS added to the HSTS file (then ignored) so the
     ONLY difference from ``test_dnsbl_hsts_override_forces_null`` is the toggle —
