@@ -186,6 +186,78 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
+  # Unbound's conf still naming the retired module (#3838). An upgrade whose removal of Unbound's python settings
+  # config.xml refused leaves unbound.conf loading pfb_unbound.py, and pfBlockerNG restarts Unbound from that conf:
+  # deleting the script under it makes that start fail, so DNS is down. The conf in the chroot decides, at deletion.
+  name_module_in_conf() {
+    printf 'server:\n\tmodule-config: "python validator iterator"\npython:\npython-script: pfb_unbound.py\n' > "${pfbchroot}/unbound.conf"
+  }
+  name_observer_in_conf() {
+    printf 'server:\n\tmodule-config: "python validator iterator"\npython:\npython-script: pfb_upstream_observer.py\n' > "${pfbchroot}/unbound.conf"
+  }
+  # The script and the rules it imports, by what a dnsbl_cache run left of them.
+  module_files_state() {
+    for _n in pfb_unbound.py pfb_dnsbl_regex_rules.py; do
+      if [ -e "${pfbchroot}/${_n}" ]; then echo "${_n}:kept"; else echo "${_n}:gone"; fi
+    done
+  }
+  # Before-state, a run under a conf that names the module, then the same run once the conf names another script.
+  named_then_not() {
+    [ -e "${pfbchroot}/pfb_unbound.py" ] && echo 'PRE:module-present'
+    dc "$1"
+    module_files_state
+    name_observer_in_conf
+    dc "$1"
+    module_files_state
+  }
+
+  It 'stage keeps the module and its rules while unbound.conf still names pfb_unbound.py, and drops them once it does not (#3838)'
+    setup_sandbox
+    mkdir -p "${pfbchroot}"
+    plant_retired
+    name_module_in_conf
+    When call named_then_not stage
+    The line 1 of output should equal 'PRE:module-present'
+    The line 2 of output should equal 'pfb_unbound.py:kept'
+    The line 3 of output should equal 'pfb_dnsbl_regex_rules.py:kept'
+    The line 4 of output should equal 'pfb_unbound.py:gone'
+    The line 5 of output should equal 'pfb_dnsbl_regex_rules.py:gone'
+    # What Unbound does not load goes either way.
+    The path "${pfbchroot}/pfb_py_module.applied" should not be exist
+    The path "${pfbchroot}/pfb_python.sh" should not be exist
+    cleanup_sandbox
+  End
+
+  It 'teardown keeps the module and its rules while unbound.conf still names pfb_unbound.py, and drops them once it does not (#3838)'
+    setup_sandbox
+    dc stage
+    plant_retired
+    name_module_in_conf
+    When call named_then_not teardown
+    The line 1 of output should equal 'PRE:module-present'
+    The line 2 of output should equal 'pfb_unbound.py:kept'
+    The line 3 of output should equal 'pfb_dnsbl_regex_rules.py:kept'
+    The line 4 of output should equal 'pfb_unbound.py:gone'
+    The line 5 of output should equal 'pfb_dnsbl_regex_rules.py:gone'
+    The path "${pfbchroot}/pfb_py_module.applied" should not be exist
+    cleanup_sandbox
+  End
+
+  # What the run says on stderr when it keeps the module (dc discards stderr with the off-appliance chown noise).
+  stage_says() {
+    dnsbl_cache stage 2>&1 >/dev/null | grep 'pfb_unbound.py' || true
+  }
+
+  It 'stage says why it keeps the module (#3838)'
+    setup_sandbox
+    mkdir -p "${pfbchroot}"
+    plant_retired
+    name_module_in_conf
+    When call stage_says
+    The output should include 'unbound.conf still names it'
+    cleanup_sandbox
+  End
+
   It 'stage copies the upstream observer from dns_proxy/ flat into the chroot'
     setup_sandbox
     When call dc stage

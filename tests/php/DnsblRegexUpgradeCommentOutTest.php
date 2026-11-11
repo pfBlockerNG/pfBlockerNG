@@ -450,6 +450,7 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 
 	public function testFeedRegexStaysLogOnlyAndIsNeverRewritten(): void
 	{
+		// The decider logs a refused feed pattern and moves on: the literal is the only place it speaks (positive control).
 		$src = self::source(self::DECIDER);
 		$this->assertStringContainsString(
 			'[pfBlockerNG]: dropping user regex [ %s ] pattern [ %s ]',
@@ -460,12 +461,29 @@ final class DnsblRegexUpgradeCommentOutTest extends TestCase
 			'[pfBlockerNG]: dropping %s regex feed [ %s ] pattern [ %s ] (%s)',
 			$src
 		);
-		$feed_at = strpos($src, '[pfBlockerNG]: dropping %s regex feed [ %s ] pattern [ %s ] (%s)');
-		$this->assertNotFalse($feed_at);
-		$region = substr($src, $feed_at, 400);
-		$this->assertStringNotContainsString('file_notice', $region);
-		$this->assertStringNotContainsString('pfb_regex_list', $region);
-		$this->assertStringNotContainsString('blocked at package upgrade', $region);
+	}
+
+	public function testARejectedRegexFeedNeitherRewritesTheStoredListNorRaisesANotice(): void
+	{
+		// Given a feed carrying a pattern the validator rejects, and a stored Regex List that is valid
+		$rejectedFeed = "(unclosed-feed-pattern\n";
+		$list = "^keep\\.example\\.com$\n";
+		$this->assertNotSame([], self::realProbe($rejectedFeed, FALSE), 'positive control: the validator rejects the feed pattern');
+		$this->assertSame([], self::realProbe($list, FALSE), 'positive control: the stored list is valid');
+
+		// When the upgrade runs over the stored list (the real validator, spying on what it is handed)
+		$handed = [];
+		$result = $this->runUpgrade([
+			'list'  => $list,
+			'probe' => static function (string $contents, bool $cap) use (&$handed): array {
+				$handed[] = $contents;
+				return self::realProbe($contents, $cap);
+			},
+		]);
+
+		// Then only the stored list reached the validator, nothing is rewritten and no upgrade notice is produced
+		$this->assertSame([$list], $handed, 'the validator is handed the stored Regex List and nothing from a feed');
+		$this->assertSilent($result);
 	}
 
 	public function testTheRetiredExceptionKeyAndFoldBackStayGoneFromSrc(): void

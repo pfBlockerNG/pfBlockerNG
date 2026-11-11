@@ -438,12 +438,14 @@ $pfb['unbound_py_conf'] = "{$state}/pfb_unbound.ini";
 $pfb['unbound_py_sources'] = "{$state}/pfb_py_sources.json";
 $pfb['unbound_py_rawdir'] = "{$state}/pfb_py_raw";
 if (!empty($scenario['observer'])) {
-	// Unbound's own conf, which the disable pass patches (pfb_unbound_dnsbl()): in the state directory, never the appliance's /var/unbound
+	// Unbound's own conf, which the disable pass patches (pfb_unbound_dnsbl()), and the staged script it loads: in the state directory,
+	// never the appliance's /var/unbound
 	$pfb['dnsbldir'] = "{$state}/unbound";
 	@mkdir($pfb['dnsbldir'], 0777, TRUE);
 	if (!is_file("{$pfb['dnsbldir']}/unbound.conf")) {
 		file_put_contents("{$pfb['dnsbldir']}/unbound.conf",
 			"server:\n\tinterface: 127.0.0.1\n\tmodule-config: \"python validator iterator\"\n\npython:\npython-script: pfb_upstream_observer.py\n");
+		touch("{$pfb['dnsbldir']}/pfb_upstream_observer.py");
 	}
 }
 $paths = ['pending' => "{$tmp}/pending", 'db' => "{$pfb['dbdir']}/canary.txt", 'log' => "{$pfb['logdir']}/canary.txt",

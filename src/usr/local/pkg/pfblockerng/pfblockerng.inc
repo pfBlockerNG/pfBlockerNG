@@ -13857,9 +13857,12 @@ function pfb_unbound_dnsbl($mode) {
 	// nothing. pfb_unbound_python() decides the same way.
 	$owned = pfb_dns_proxy_owns_resolver();
 	$script = $owned ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL;
-	// config.xml still names our script when its removal was refused (pfb_unbound_python()): unbound.conf and the staged files keep it
+	// config.xml still names our script when its removal was refused (pfb_unbound_python()): unbound.conf and the staged files keep it,
+	// while the script is in the chroot. Unbound does not start from a conf whose python-script is missing (a RAM-disk reboot loses
+	// pfb_unbound.py, which no package stages any more), and pfSense leaves such a script out of the conf it generates too.
 	$stored = config_get_path('unbound/python_script', '');
-	if ($script === NULL && !empty($pfb['python_removal_failed']) && in_array($stored, ['pfb_unbound', PFB_DNS_PROXY_OBSERVER], TRUE)) {
+	if ($script === NULL && !empty($pfb['python_removal_failed']) && in_array($stored, ['pfb_unbound', PFB_DNS_PROXY_OBSERVER], TRUE) &&
+	    file_exists("{$pfb['dnsbldir']}/{$stored}.py")) {
 		$script = "{$stored}.py";
 	}
 

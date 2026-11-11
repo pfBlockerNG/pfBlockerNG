@@ -390,8 +390,9 @@ aliastables() {
 # lifecycles).
 #   stage    = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot and drop the
 #              RETIRED set (PFB_PY_RETIRED: files an older package staged that nothing reads any more)
-#              and __pycache__; runs during the DNSBL pass and on restore, never during save
-#   teardown = remove both sets
+#              and __pycache__, keeping the module while unbound.conf still names it (dnsbl_cache_keeps);
+#              runs during the DNSBL pass and on restore, never during save
+#   teardown = remove both sets, keeping the module the same way
 #   save     = archive the GENERATED set plus exact TOP1M detector sidecars, with the caller holding
 #              the publication lock; the shipped and retired sets stay out
 #   restore  = boot earlyshellcmd: untar the cached files THEN stage
@@ -417,6 +418,19 @@ dnsbl_cache() {
 	# run the /usr/local copies).
 	PFB_PY_RETIRED='pfb_unbound.py pfb_py_module.applied pfb_dnsbl_regex_rules.py pfb_python.sh'
 
+	# Whether a retired file stays: the module and the rules it imports, while the chroot's unbound.conf still names
+	# pfb_unbound.py (an upgrade whose removal of Unbound's python settings config.xml refused). pfBlockerNG restarts
+	# Unbound from that conf, and a python-script that is missing fails the start, so DNS is down (#3838). Asked for
+	# each file at the point of deletion.
+	dnsbl_cache_keeps() {
+		case "${1}" in
+			pfb_unbound.py|pfb_dnsbl_regex_rules.py) ;;
+			*) return 1 ;;
+		esac
+		grep -qs 'python-script:[[:space:]]*"\{0,1\}pfb_unbound\.py' "${pfbchroot}/unbound.conf" || return 1
+		echo "dnsbl_cache: keeping ${1}: Unbound loads pfb_unbound.py and unbound.conf still names it" >&2
+	}
+
 	dnsbl_cache_stage() {
 		mkdir -p "${pfbchroot}"
 		chown -f unbound:unbound "${pfbchroot}"
@@ -425,6 +439,7 @@ dnsbl_cache() {
 			mkdir -p "${pfbchroot}/${_d}"
 		done
 		for _f in ${PFB_PY_RETIRED}; do
+			dnsbl_cache_keeps "${_f}" && continue
 			rm -f "${pfbchroot}/${_f}"
 		done
 		# Python's bytecode cache of the retired modules; nothing in the chroot imports any more.
@@ -442,6 +457,7 @@ dnsbl_cache() {
 	}
 	dnsbl_cache_teardown() {
 		for _f in ${PFB_PY_SHIPPED} ${PFB_PY_RETIRED}; do
+			dnsbl_cache_keeps "${_f}" && continue
 			rm -f "${pfbchroot}/${_f}"
 		done
 	}
