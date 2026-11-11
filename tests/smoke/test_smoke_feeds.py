@@ -3574,8 +3574,8 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
     The MUST-ACCOMPANY counterpart to ``test_validate_log_entries_reject_line``
     above: reuses the deliberate-skip corpus (comment, cosmetic/element-hiding,
     a tracking-script path anchor, an IP-valued anchor, a ``$badfilter`` rule on
-    an UNRELATED domain) that ``tests/test_adr06_build_module.py::
-    TestSkipClassesTallyZero`` already pins as tallying nothing at the unit
+    an UNRELATED domain) that ``TestBuildSkipOnlyFeedTalliesNothing``
+    (go/pfb_dns_gateway/decider) already pins as tallying nothing at the unit
     level -- this proves the same guarantee end-to-end on the live box: a feed
     built entirely of skips (plus one healthy block, proving the feed loaded)
     must never spam the operator with a spurious ``stage=entries`` line.

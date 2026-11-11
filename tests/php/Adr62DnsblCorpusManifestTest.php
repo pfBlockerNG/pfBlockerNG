@@ -23,7 +23,7 @@ use PHPUnit\Framework\TestCase;
  * or -- for D1's now-plain bare-domain rows -- the 6-col dialect) at the
  * surface this test owns (manifest-writer passthrough); their PARSED verdict
  * (block/allow/skip, zone vs data) is asserted downstream in
- * tests/test_adr62_byte_identity_corpus.py (surface a).
+ * the Go build tests (`TestDnsblBuildFromManifestMatchesPython`, `TestFixtureManifestV1BuildsAndConfigAffectsResult`; surface a).
  */
 #[CoversFunction('pfb_unbound_python_sources')]
 final class Adr62DnsblCorpusManifestTest extends TestCase
@@ -227,8 +227,9 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 	 * #752 (known divergence, ADR.md SS1.5): PHP's PFB_FILTER_DOMAIN accepts a
 	 * bare 254-char undotted name (strlen < 255 + every label <= 63); the
 	 * oversized_feed corpus fixture documents this row reaching the .txt/.raw
-	 * dialect. Python's build()/normalise() rejects it -- pinned downstream in
-	 * tests/test_adr62_byte_identity_corpus.py. This is NOT a delta (ADR.md
+	 * dialect. The Go build rejects it -- pinned downstream by
+	 * `TestBuildAbpFeedTalliesExactShapeAndWireCapCounts` and `TestNormalise`
+	 * (go/pfb_dns_gateway/decider). This is NOT a delta (ADR.md
 	 * SS1.5): the divergence pre-dates and is out of this ADR's scope.
 	 */
 	public function testPhp752OversizedUndottedNameValidatesAsDomain(): void

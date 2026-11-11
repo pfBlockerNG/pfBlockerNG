@@ -214,7 +214,7 @@ class DnsblMode(str, Enum):
       ``RCODE_NXDOMAIN`` with no DNSMessage. (The ``nxdomain`` / no-logging
       variant '4' yields the IDENTICAL shape — only the dnsbl.log line differs,
       which this on-box DNS-shape probe cannot observe, so it is unit-pinned in
-      ``tests/test_pfb_unbound.py`` rather than duplicated here.)
+      ``TestEvaluateDomainOracleRows`` (go/pfb_dns_gateway/decider) rather than duplicated here.)
 
     Before issue #31, NXDOMAIN was only reachable via SafeSearch; it is now a
     selectable per-list DNSBL block response.

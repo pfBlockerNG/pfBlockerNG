@@ -733,8 +733,8 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
 # a comma-first plain row alongside a verbatim-captured line — with NO
 # ABP-classified feed configured at all, so the old '$abp_feeds' marker glob was
 # always empty). Deep TLD-classification correctness (whole-TLD blacklisting,
-# the empty-feed-column skip itself) is the Python oracles' job
-# (tests/test_adr62_parity_oracle.py + tests/test_adr62_byte_identity_corpus.py;
+# the empty-feed-column skip itself) is the Go build tests' job
+# (TestDnsblBuildFromManifestMatchesPython in go/pfb_dns_gateway/decider;
 # classification lives in the manifest build since ADR-65) — this row is a coarse live
 # end-to-end regression guard that turning tld_wildcard on does not break normal
 # DNSBL blocking for the plain/anchor rows sharing that same update pass.

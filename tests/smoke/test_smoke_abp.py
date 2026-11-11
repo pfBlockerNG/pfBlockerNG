@@ -526,8 +526,8 @@ def test_cname_validation_on_off(
     Proves a REAL Unbound populates ``qstate.return_msg.rep`` with the CNAME chain
     ``pfb_unbound.py``'s validation walk reads (``an_numrrsets > 1``, the CNAME rrset
     carrying the blocked target) — the one thing the pure unit oracle
-    (`tests/test_pfb_unbound.py::TestOperateDnsbl::test_cname_*`) cannot, since it
-    hand-builds that ``return_msg``.
+    (``TestOperateCnameTargetBlocksAndMarksTheOriginal`` in go/pfb_dns_gateway/decider) cannot,
+    since it hand-builds that ``return_msg``.
 
     Controlled-chain delivery (issue #41). The chain MUST come from the resolver's
     answer, and a pfSense Host Override only expresses A/AAAA — never a CNAME. A raw

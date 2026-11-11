@@ -20,8 +20,8 @@ use PHPUnit\Framework\TestCase;
  * backslashes. No unescaping step is needed -- Python's re reads "\#" as a
  * literal '#' already -- so the pattern half reaches re.compile verbatim.
  *
- * Twin of tests/test_issue1867_regex_hash_escape.py, which pins the same rule on
- * the resolver's own load path.
+ * The resolver's load path applies the same rule; it is pinned in Go by the `escaped-hash` row of
+ * `TestLoadUserRegexEntriesMatchesPython` (go/pfb_dns_gateway/decider).
  */
 #[CoversFunction('pfb_dnsbl_regex_validation_errors')]
 #[CoversFunction('pfb_split_regex_line')]
