@@ -186,6 +186,10 @@ def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockF
     # the Resolver, BEFORE DNSBL is applied. The case carries no control records, so
     # the only legitimate delta is pfBlockerNG's python-module config.
     h.snapshot_unbound_effective(deployed_vm)
+    baseline = deployed_vm.ssh("cat", h.UNBOUND_SETUP)
+    assert baseline.returncode == 0 and baseline.stdout.strip(), (
+        f"baseline: the effective-config snapshot {h.UNBOUND_SETUP} is empty (the assertion would pass vacuously)"
+    )
     acls_before = h.unbound_access_control(deployed_vm)
     assert acls_before, "baseline: the live Unbound enforces no access-control"
     domain = h.unique_domain("cfgimmut")

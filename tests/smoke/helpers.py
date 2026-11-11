@@ -4418,8 +4418,9 @@ def unbound_access_control(vm: SmokeVM, *, timeout: float = 30.0) -> set[str]:
 def assert_unbound_adds_only_python_config(vm: SmokeVM, *, timeout: float = 30.0) -> None:
     """Assert a DNSBL reload only adds python-module config to the EFFECTIVE config.
 
-    DNSBL runs only through pfB-DNS, which moves the Resolver (``interface:`` lines, the forward-zone): take the
-    baseline after pfB-DNS's own apply, or its move reads as a loss.
+    DNSBL runs only through pfB-DNS, which moves the Resolver (``interface:`` lines,
+    the forward-zone): take the baseline after pfB-DNS's own apply, or its move reads
+    as a loss.
 
     Compares ``UNBOUND_SETUP`` (the effective config — unbound.conf + all *.conf
     includes — captured by snapshot_unbound_effective BEFORE the DNSBL reload)
