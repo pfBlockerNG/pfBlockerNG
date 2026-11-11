@@ -143,6 +143,7 @@ type gateway struct {
 	udpPerAddr, muxPerAddr, tcpPerAddr, dohPerAddr, doqPerAddr int    // per-address shares of the budgets below; a test lifts one to look at the global cap alone
 	doqAccepted                                                func() // test seam: DoQ's accept loop calls it with a connection taken and not yet registered
 	doqListenerClosed                                          func() // test seam: DoQ's closer calls it once ln.Close() has returned, before it waits for the accept loop
+	clientsClosed                                              func() // test seam: stop() calls it once it has closed the client connections, before its second wait
 
 	ddr                *ddr         // issue #3583: answers resolver.arpa. itself, after the ACL and before the decider; nil = off
 	names              *nameAnswers // issue #3694: answers A and AAAA for the DNS name, after the ACL and DDR; nil = no DNS name

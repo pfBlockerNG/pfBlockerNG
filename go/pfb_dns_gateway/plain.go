@@ -166,6 +166,9 @@ func (g *gateway) stop() (drained bool) {
 		_ = c.Close()
 	}
 	g.mu.Unlock()
+	if g.clientsClosed != nil {
+		g.clientsClosed()
+	}
 	if !g.waited(done) {
 		g.logf("stop: serving goroutines still running after %s; not waiting for them", 2*g.stopBound)
 		return false

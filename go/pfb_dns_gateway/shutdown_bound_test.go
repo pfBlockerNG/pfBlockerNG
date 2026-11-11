@@ -185,24 +185,18 @@ func (f *fakeBudgetClock) timer(d time.Duration) (<-chan time.Time, func() bool)
 func (f *fakeBudgetClock) config(cfg *config) { cfg.clock = budgetClock{now: f.now, timer: f.timer} }
 
 // The stop of the transports and the close of the decider share one budget: a stop that took some of it leaves the decider
-// only what is left, and a Close that never returns ends the shutdown when that runs out. The stop here takes 150 ms of the
-// fake time (the query is let go when it closes its client), so the decider is given the budget less that.
+// only what is left, and a Close that never returns ends the shutdown when that runs out. The fake time moves by 150 ms from
+// inside stop(), once it has closed the client connections (clientsClosed), so the advance is before stop() returns and
+// no goroutine races it. The held query is never let go: stop() gives up on it after its second bound, as production does,
+// and the decider is given the budget less the 150 ms.
 func TestShutdownGivesTheDeciderOnlyWhatTheStopLeftOfTheBudget(t *testing.T) {
 	const budget, stopTook = 800 * time.Millisecond, 150 * time.Millisecond
 	clock := newFakeBudgetClock()
 	fe := &heldFrontend{entered: make(chan struct{}, 1), release: make(chan struct{}), closeGate: make(chan struct{}), closing: make(chan struct{}, 1)}
-	letGo := sync.OnceFunc(func() { close(fe.release) })
-	t.Cleanup(letGo)
+	t.Cleanup(sync.OnceFunc(func() { close(fe.release) }))
 	t.Cleanup(sync.OnceFunc(func() { close(fe.closeGate) }))
-	srv, c, logs := startHeldQuery(t, fe, 20*time.Millisecond, budget, clock.config)
-	// The fake time moves while stop() is still waiting: it closes the client only after its first wait, and returns only
-	// when the held query is let go, which comes after the advance. So the advance happens before shutdown reads the clock
-	// for the decider's share, whatever the real 20 ms stopBound does; no real duration decides the 650 ms below.
-	go func() {
-		_, _ = c.Read(make([]byte, 1)) // stop() closed the client
-		clock.advance(stopTook)
-		letGo()
-	}()
+	srv, _, logs := startHeldQuery(t, fe, 20*time.Millisecond, budget, clock.config)
+	srv.g.clientsClosed = func() { clock.advance(stopTook) }
 	done := make(chan struct{})
 	go func() { srv.shutdown(); close(done) }()
 
