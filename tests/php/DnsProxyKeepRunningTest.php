@@ -226,10 +226,13 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$ready = $this->krEnsure();
 		$this->standInsStop();
 
-		// Then nothing restarts and no frame is the four 0xFF bytes that once asked the gateway to restart its decider
+		// Then nothing restarts: the pass asked the gateway what it serves (the list request, four bytes 0xFF 0xFF 0xFF 0xFC),
+		// found it as the rc script says, and sent no frame of the four 0xFF bytes that once asked the gateway to restart its decider
 		$this->assertTrue($ready);
 		$this->assertSame([], $this->krProxyCalls());
-		$this->assertSame([], array_values(array_filter(self::frames($record), static fn (array $frame): bool => $frame['head'] === 'ffffffff')));
+		$heads = array_column(self::frames($record), 'head');
+		$this->assertContains('fffffffc', $heads, 'the pass asked the gateway for its listener list');
+		$this->assertNotContains('ffffffff', $heads);
 		$this->assertNull($this->krMarker());
 	}
 
