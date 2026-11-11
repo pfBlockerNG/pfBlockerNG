@@ -2565,9 +2565,10 @@ def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", 
     previous test in this module left in place — keeps the comparison varying exactly one
     thing, independent of test order within the module.
 
-    Idempotent; written + ``services_unbound_configure`` (restarts Unbound). NOTE: that
-    regenerates the base unbound.conf WITHOUT pfBlockerNG's python module, so the caller
-    MUST run a pfBlockerNG reload afterwards to re-add the module + reload safeSearchDB.
+    Idempotent; written + ``services_unbound_configure`` (restarts Unbound). NOTE: Unbound
+    never loads ``pfb_unbound.py`` (the gateway's in-process decider hosts it), so this does not
+    touch the DNSBL module; the caller MUST still run a pfBlockerNG reload afterwards so the
+    decider reloads ``safeSearchDB``.
 
     Edits the Resolver only while pfB-DNS does not hold it: released first, stored on again after the edit.
     """
@@ -2621,9 +2622,9 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
     then probes a throwaway name to confirm the stub relay is live before returning.
     A failed self-check raises immediately with the mode and the answer received.
 
-    NOTE: ``services_unbound_configure`` regenerates ``unbound.conf`` WITHOUT
-    pfBlockerNG's python module.  The caller MUST run a pfBlockerNG reload AFTER
-    this call to re-add the module and reload ``safeSearchDB`` before any
+    NOTE: Unbound never loads ``pfb_unbound.py`` (the gateway's in-process decider hosts it), so
+    ``services_unbound_configure`` does not touch the DNSBL module.  The caller MUST still run a
+    pfBlockerNG reload AFTER this call so the decider reloads ``safeSearchDB`` before any
     SafeSearch probe.
 
     Edits the Resolver only while pfB-DNS does not hold it: released first, stored on again after the self-check.
