@@ -41,10 +41,14 @@ against source, not guessed):
   LAN client, is not answered in CI — so we don't use it.)
 
   Two domain constraints, both load-bearing (see ``helpers.unique_domain``):
-  test names must NOT use RFC 6761 TLDs (``.test`` / ``.example`` / …) — Unbound's
-  built-in ``local-zone``s shadow them (NXDOMAIN/NODATA) before DNSBL — and must
-  NOT be HSTS-preload — with HSTS on (the default ``pfb_hsts``), a preload domain's
-  VIP block is forced to NULL. A random ``uuid-*.com`` satisfies both.
+  test names must NOT use RFC 6761 TLDs (``.test`` / ``.example`` / …) — DNSBL runs in
+  the pfB-DNS decider, which answers a LISTED name there before Unbound is asked
+  (listed ``.test`` / ``.example`` / ``.invalid`` names get the VIP), but
+  an UNLISTED name (a not-blocked probe) under ``.test`` / ``.invalid`` reaches
+  Unbound's built-in ``local-zone`` and is answered NXDOMAIN, not by the stub upstream
+  — and must NOT be HSTS-preload — with HSTS on
+  (the default ``pfb_hsts``), a preload domain's VIP block is forced to NULL. A random
+  ``uuid-*.com`` satisfies both.
 * WHITELIST (``suppression``): ``whitelist_check_domain`` short-circuits before
   any block shape, so a suppressed name resolves via its control ``local-data``.
 * DNSBL-IP dual-stack (``action != 'Disabled'``): IP literals in the DNSBL feed
@@ -156,23 +160,34 @@ def test_ip_alias_table_and_rule(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
 
 
 def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """pfBlockerNG DNSBL reload only adds python-module config to unbound.conf.
+    """A DNSBL reload under pfB-DNS only adds python-module config to unbound.conf.
 
-    When DNSBL is enabled, pfBlockerNG is allowed to make exactly ONE class of
-    change to Unbound's configuration: adding the python iterator module directives
-    (``module-config``, ``python-script``, and pfBlockerNG managed ``include``
-    lines, plus the DNSBL VIP ``interface:`` entry).  No other configuration —
+    DNSBL runs only through pfB-DNS (#3770), and pfB-DNS moves the DNS Resolver
+    (``interface-automatic`` becomes ``interface: 127.0.0.1`` / ``::1`` and the
+    forward-zone is rewritten): those lines are pfB-DNS's to change, not the DNSBL
+    reload's. The baseline is therefore taken AFTER pfB-DNS has moved the Resolver
+    and BEFORE the DNSBL reload. From there pfBlockerNG is allowed exactly ONE
+    class of change to Unbound's configuration: adding python-module directives
+    (``module-config``, ``python-script``, pfBlockerNG managed ``include`` lines,
+    plus the DNSBL VIP ``interface:`` entry).  No other configuration —
     access-control, forward-zones, server tuning — may be removed or altered.
 
     This guards against pfBlockerNG silently clobbering custom Unbound config
     (e.g. the DNS-Resolver ACLs in access_lists.conf) during a reload.
     """
+    # pfB-DNS first, with no DNSBL list: pfBlockerNG enabled and the toggle on make its
+    # apply move the Resolver (the proxy runs --no-module). Its own changes are not under test here.
+    h.config_set(deployed_vm, f"{h.CFG_GLOBAL}/enable_cb", "on")
+    h.config_set(deployed_vm, h.dns_config_path("pfb_dns"), "on")
+    h.reload(deployed_vm, "updatednsbl")
+    assert h._pfb_dns_moved(deployed_vm), "baseline: pfB-DNS did not take the Resolver"
     # Baseline the EFFECTIVE unbound config (unbound.conf + all *.conf includes,
-    # so access_lists.conf etc. are covered) AND the live ACLs, BEFORE DNSBL is
-    # applied. The case carries no control records, so the only legitimate delta
-    # is pfBlockerNG's python-module config.
+    # so access_lists.conf etc. are covered) AND the live ACLs, with pfB-DNS holding
+    # the Resolver, BEFORE DNSBL is applied. The case carries no control records, so
+    # the only legitimate delta is pfBlockerNG's python-module config.
     h.snapshot_unbound_effective(deployed_vm)
     acls_before = h.unbound_access_control(deployed_vm)
+    assert acls_before, "baseline: the live Unbound enforces no access-control"
     domain = h.unique_domain("cfgimmut")
     feed_url = h.write_local_feed(deployed_vm, "smoke_cfgimmut.txt", f"{domain}\n")
     spec = h.DnsblCase(aliasname="smokecfgimmut", feed_url=feed_url, header="smokecfgimmut")
@@ -669,8 +684,8 @@ def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fee
     ``RCODE_NXDOMAIN`` with no DNSMessage (neither the VIP nor the 0.0.0.0 null
     shape). The rcode is name-level, so BOTH the A and AAAA queries answer
     NXDOMAIN. A unique non-HSTS-preload ``.com`` is used so the result is the
-    NXDOMAIN block path itself, not an Unbound built-in ``local-zone`` shadowing
-    an RFC-6761 TLD (which would also NXDOMAIN, ahead of DNSBL). Contrast the
+    NXDOMAIN block path itself, not the NXDOMAIN Unbound's built-in ``local-zone``
+    gives an unlisted name under an RFC-6761 TLD. Contrast the
     VIP/null cases above: same feed match, different per-list ``logging`` →
     different response shape, proving '3' is a distinct, live branch.
     """
