@@ -260,6 +260,27 @@ final class PfbDnsAppliedStatusDispositionTest extends TestCase
 		$this->assertContains(['start_service', 'pfb_dns_proxy'], $GLOBALS['pfb_test_service_calls']);
 	}
 
+	public function testARestartForcedByChangedListenAddressesIsNotConfirmedWhenItsAppliedStatusStaysUnanswered(): void
+	{
+		// Given a live and ready gateway whose applied status never answers, and an rc script whose listen addresses changed
+		pfb_dns_proxy_service();
+		file_put_contents(PFB_DNS_PROXY_RCFILE, str_replace(' --port ', " --listen '192.0.2.9' --port ", (string) file_get_contents(PFB_DNS_PROXY_RCFILE)));
+		$this->proxyServes();
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service): void {
+			if ($fn === 'restart_service' && $service === 'pfb_dns_proxy') {
+				$this->proxyServes();
+			}
+		};
+		[$clock, $ensure] = $this->clockedEnsureRunning();
+
+		// When the apply restarts it for the new addresses and waits for it to serve
+		$ready = $ensure();
+
+		// Then the restart is an activation: it is not confirmed by a status that never answers
+		$this->assertContains(['restart_service', 'pfb_dns_proxy'], $GLOBALS['pfb_test_service_calls']);
+		$this->assertFalse($ready, 'a restart waits for an applied status, and an unanswered one is not confirmation');
+	}
+
 	public function testServingReadinessNeedsAnAnsweredAppliedStatus(): void
 	{
 		// Given a ready gateway whose Unbound backend is healthy, but no control socket answers the status

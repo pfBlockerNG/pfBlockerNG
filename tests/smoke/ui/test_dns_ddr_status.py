@@ -111,7 +111,12 @@ def _states(page: Page) -> dict[str, str]:
 
 def _track_requests(page: Page) -> list[str]:
     requests: list[str] = []
-    page.on("request", lambda request: requests.append(request.url) if STATUS_QUERY in request.url else None)
+    page.on(
+        "request",
+        lambda request: (
+            requests.append(request.url) if STATUS_QUERY in request.url and request.redirected_from is None else None
+        ),
+    )
     return requests
 
 
@@ -295,6 +300,13 @@ def test_dns_ddr_failed_refresh_retains_snapshot_then_recovers(
     requests = _track_requests(page)
     _open(page, webui, DNS_PAGE)
     assert not requests, requests
+    hops: list[str] = []
+    page.on(
+        "request",
+        lambda request: (
+            hops.append(request.url) if STATUS_QUERY in request.url and request.redirected_from is not None else None
+        ),
+    )
     before = _states(page)
     page.evaluate("window.originalOverview = document.getElementById('pfb-dns-status-overview')")
     duplicate = '<div id="pfb-dns-status"></div>' * 2
@@ -325,6 +337,8 @@ def test_dns_ddr_failed_refresh_retains_snapshot_then_recovers(
     note = page.locator("#pfb-dns-ddr-refresh-status")
     note.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
     assert len(requests) == 1, requests
+    expected_hops = [webui.url(DNS_PAGE + "?ajax=ddr&redirected=1")] if failure == "redirect" else []
+    assert hops == expected_hops, hops
     assert len(held) == (1 if failure == "timeout" else 0), held
     assert _states(page) == before, "Failure changed the previous applied snapshot"
     assert page.evaluate("window.originalOverview === document.getElementById('pfb-dns-status-overview')")
@@ -361,7 +375,7 @@ def test_dns_ddr_refresh_replaces_complete_status_preserving_form_and_collapse(
     toggle.focus()
     replacement = _snapshot_html(webui).replace(DDR_DNS_NAME.rstrip("."), "changed.example.com")
     replacement = replacement.replace('data-address="127.0.0.1:53"', 'data-address="127.0.0.9:53"')
-    assert "changed.example.com" in replacement, replacement
+    assert _shared_name(replacement) == "changed.example.com", replacement
     assert 'data-address="127.0.0.9:53"' in replacement, replacement
     page.route(
         ENDPOINT, lambda route: route.fulfill(content_type="application/json", body=json.dumps({"html": replacement}))
