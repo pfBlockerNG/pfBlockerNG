@@ -373,7 +373,7 @@ class GoToolchain:
 
 @pytest.fixture(scope="module")
 def go_toolchain(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GoToolchain]:
-    """The Go that built the package, reused: the `go` on PATH (smoke-on-box.sh's pinned one, or CI's setup-go).
+    """The Go that built the package, reused: the `go` on PATH (smoke-on-box.sh's pinned one, or the CI image's).
 
     A run with none installs the pinned toolchain (scripts/go_toolchain.py) in this module's scratch directory and
     removes it after; a toolchain it did not install is never touched.
