@@ -404,7 +404,8 @@ function pfb_test_as_unprivileged(callable $callback, array $owned_paths = []): 
 	if ($pid === 0) {
 		fclose($sockets[0]);
 		try {
-			if (!posix_setgid($uid) || !posix_setuid($uid)) {
+			// Docker starts root with supplementary group 0; initgroups replaces it ('nobody' is uid 65534 in the image).
+			if (!posix_initgroups('nobody', $uid) || !posix_setgid($uid) || !posix_setuid($uid)) {
 				throw new RuntimeException('could not drop privileges in permission-denial fixture');
 			}
 			$payload = ['ok' => TRUE, 'value' => $callback()];
