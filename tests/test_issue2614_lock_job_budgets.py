@@ -63,12 +63,13 @@ ALL_ROOTS: tuple[str, ...] = tuple(sorted({root for roots in REACHED_ROOTS.value
 # `python -m pytest`, `timeout 600 vendor/bin/phpunit`, `nice -n 5 shellspec`,
 # `if ! pytest`, `{ pytest; }`. `command`/`builtin` cover `command pytest`; that also
 # makes `command -v shellspec` read as an invocation, which is over-inclusion in the safe
-# direction.
+# direction. `$CI_RUN` is the docker-run prefix of test.yml's docker-wrapped jobs.
 _PREFIX_WORDS = frozenset(
     {
         "sh",
         "bash",
         "sudo",
+        "$CI_RUN",
         "env",
         "time",
         "exec",
@@ -476,6 +477,7 @@ def test_a_budget_that_is_not_the_job_s_own_does_not_satisfy_the_gate(label: str
     (
         ("shellspec --shell dash", {"shellspec"}),
         ("uv run pytest --junitxml=/tmp/x.xml", {"pytest"}),
+        ("$CI_RUN uv run pytest --junitxml=/tmp/x.xml", {"pytest"}),
         ("python -m pytest -q", {"pytest"}),
         ("python3.11 -m pytest", {"pytest"}),
         ("uv run python -m pytest", {"pytest"}),

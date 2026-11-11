@@ -211,9 +211,11 @@ def test_echoed_checker_text_is_not_a_checker_invocation() -> None:
 
 def test_direct_reporter_flags_must_stay_on_the_producer_command() -> None:
     texts = _workflow_texts()
+    real = "run: $CI_RUN uv run pytest --junitxml=/tmp/pytest-junit.xml"
+    assert real in texts["test.yml"], "the planted mutation target is absent -- the guard would be vacuous"
     texts["test.yml"] = texts["test.yml"].replace(
-        "run: uv run pytest --junitxml=/tmp/pytest-junit.xml",
-        "run: |\n          uv run pytest\n          echo --junitxml=/tmp/pytest-junit.xml",
+        real,
+        "run: |\n          $CI_RUN uv run pytest\n          echo --junitxml=/tmp/pytest-junit.xml",
         1,
     )
     errors = _validation_errors(texts)

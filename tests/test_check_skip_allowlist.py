@@ -678,8 +678,8 @@ def test_issue_3282_locale_skips_are_allowlisted(tmp_path: Path, capsys: pytest.
     tests/shell/module_durations_spec.sh:192 tests/shell/pfblockerng_adr26_locale_spec.sh:163
     tests/shell/shard_modules_spec.sh:657`` run on such a host (the issue's own baseline
     command), never guessed from source. Each self-skips ('Skip if') when the locale it
-    needs (a comma-decimal locale, or de_DE.UTF-8 specifically) is absent -- CI provisions
-    and probes de_DE.UTF-8 (.github/workflows/test.yml "Install the de_DE.UTF-8 locale") and
+    needs (a comma-decimal locale, or de_DE.UTF-8 specifically) is absent -- the ci image generates
+    de_DE.UTF-8 and test.yml's "Prove the de_DE.UTF-8 locale and mawk" step probes it, and CI
     runs them for real there; this allowlisting only covers the local skip superset
     testing.md's "Divergence shows up as a SKIP" already recognises."""
     root = Path(__file__).resolve().parents[1]

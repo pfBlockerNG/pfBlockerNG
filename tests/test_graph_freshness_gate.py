@@ -25,7 +25,6 @@ JOB = "graph-freshness"
 CHECK = "sh scripts/agent/check-graph-fresh.sh"
 REAL_CHECK = f"{CHECK} ."
 INSTALL = "sh scripts/agent/ensure-graphify.sh ."
-SETUP_UV = "astral-sh/setup-uv@v10.2.0"
 CANARY_SOURCE = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
 PR_ONLY = "github.event_name == 'pull_request'"
 HEAD_SHA = "${{ github.event.pull_request.head.sha }}"
@@ -82,12 +81,19 @@ def assert_job_checks_out_the_pr_head(text: str) -> None:
 def assert_graphify_installed_before_the_check(text: str) -> None:
     markers = _step_markers(_job(text))
     checkout = _index_of(markers, "actions/checkout@")
-    setup_uv = _index_of(markers, SETUP_UV)
     install = _index_of(markers, INSTALL)
     check = _index_of(markers, CHECK)
-    assert checkout < setup_uv < install < check, (
-        f"{JOB}: steps must run checkout, then uv, then the shared installer (it provides the "
-        f".inc override), then the check; got checkout={checkout} uv={setup_uv} install={install} check={check}"
+    assert checkout < install < check, (
+        f"{JOB}: steps must run checkout, then the shared installer (it provides the "
+        f".inc override), then the check; got checkout={checkout} install={install} check={check}"
+    )
+
+
+def assert_job_runs_in_the_ci_image(text: str) -> None:
+    # The shared installer runs `uv tool install`: uv is baked into the ci image, no setup step provides it.
+    image = (_job(text).get("container") or {}).get("image", "")
+    assert re.fullmatch(r"\$\{\{\s*needs\.ci-image\.outputs\.ci\s*\}\}", image), (
+        f"{JOB} must run in the ci image that bakes uv, got {image!r}"
     )
 
 
@@ -132,6 +138,10 @@ def test_graphify_is_installed_through_the_shared_installer_before_the_check() -
     assert_graphify_installed_before_the_check(_workflow_text())
 
 
+def test_graph_freshness_job_runs_in_the_ci_image_that_bakes_uv() -> None:
+    assert_job_runs_in_the_ci_image(_workflow_text())
+
+
 def test_graph_freshness_job_checks_out_the_pr_head_not_the_merge_ref() -> None:
     assert_job_checks_out_the_pr_head(_workflow_text())
 
@@ -174,6 +184,11 @@ def _in_job(job: str, old: str, new: str) -> Callable[[str], str]:
             "pin ref to the PR head",
         ),
         (
+            _in_job(JOB, "    container:\n      image: ${{ needs.ci-image.outputs.ci }}\n      options: --init\n", ""),
+            assert_job_runs_in_the_ci_image,
+            "must run in the ci image",
+        ),
+        (
             _in_job(JOB, f"run: {INSTALL}", "run: echo installer dropped"),
             assert_graphify_installed_before_the_check,
             "exactly one step",
@@ -194,6 +209,7 @@ def _in_job(job: str, old: str, new: str) -> Callable[[str], str]:
         "job-deleted",
         "job-unconditional",
         "checkout-merge-ref",
+        "image-dropped",
         "installer-dropped",
         "canary-accepts-fresh",
         "canary-comment-only",

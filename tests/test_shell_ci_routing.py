@@ -62,11 +62,11 @@ def test_kcov_coverage_selectors_are_focused() -> None:
     assert not re.search(r"shellspec --kcov --shell bash\s*$", body, re.MULTILINE)
 
 
-# Every proof has to FAIL when de_DE.UTF-8 is missing or dotted, which is what the
-# pipe into a quiet grep buys: `locale -a` and `locale -k LC_NUMERIC` both exit 0 with
-# the locale absent, so a bare listing proves nothing about what got generated.
+# The ci image generates de_DE.UTF-8 (its Dockerfile); the shellspec job proves it took. Every
+# proof has to FAIL when de_DE.UTF-8 is missing or dotted, which is what the pipe into a quiet
+# grep buys: `locale -a` and `locale -k LC_NUMERIC` both exit 0 with the locale absent, so a
+# bare listing proves nothing about what got generated.
 _LOCALE_PROOFS = (
-    ("generates the locale", re.compile(r"locale-gen de_DE\.UTF-8")),
     ("fails when `locale -a` omits it", re.compile(r"locale -a\s*\|[^\n]*grep[^\n]*de_DE", re.IGNORECASE)),
     ("fails when LC_NUMERIC stays dotted", re.compile(r"LC_ALL=de_DE\.UTF-8 locale -k LC_NUMERIC\s*\|[^\n]*grep")),
     ("fails when awk stays dotted", re.compile(r"LC_ALL=de_DE\.UTF-8 awk[^\n]*\|[^\n]*grep")),
@@ -80,29 +80,34 @@ def _locale_proof_gaps(job: str) -> list[str]:
     return [what for what, pattern in _LOCALE_PROOFS if not pattern.search(code)]
 
 
-def test_the_shellspec_job_provides_the_locale_the_adr26_contract_needs() -> None:
-    """`pfblockerng_adr26_locale_spec.sh` skips itself when de_DE.UTF-8 is absent, so
-    a CI runner without that locale turns the ADR-26 collation contract off in silence
-    rather than failing. The job must therefore generate the locale AND prove it
-    resolves, in the job itself, through commands that exit NONZERO when it does not:
-    that it is listed at all, that LC_NUMERIC carries the decimal comma, and that awk
-    — the interpreter the shard and module-duration specs probe through — reads it."""
+def test_the_ci_image_generates_the_locale_the_adr26_contract_needs() -> None:
+    """`pfblockerng_adr26_locale_spec.sh` skips itself when de_DE.UTF-8 is absent; the image the
+    shellspec job runs in is what has to generate it."""
+    dockerfile = "\n".join(
+        line for line in _read(".github/docker/Dockerfile").splitlines() if not line.lstrip().startswith("#")
+    )
+    assert re.search(r"locale-gen de_DE\.UTF-8", dockerfile), "the ci image must run `locale-gen de_DE.UTF-8`"
+
+
+def test_the_shellspec_job_proves_the_locale_the_adr26_contract_needs() -> None:
+    """A job without that locale turns the ADR-26 collation contract off in silence rather than
+    failing, so the job must prove, through commands that exit NONZERO when it does not
+    resolve, that the locale is listed at all, that LC_NUMERIC carries the decimal comma, and
+    that awk -- the interpreter the shard and module-duration specs probe through -- reads it."""
     rest = extract_after(_read(".github/workflows/test.yml"), "\n  shell-tests:\n")
     end = re.search(r"^  [A-Za-z0-9_.-]+:\s*$", rest, re.MULTILINE)
     job = rest[: end.start()] if end else rest
     gaps = _locale_proof_gaps(job)
     assert gaps == [], (
-        "the shellspec job must generate de_DE.UTF-8 and prove it took, with checks that "
-        f"fail when it did not — ubuntu-latest ships no such locale. Missing: {gaps}"
+        f"the shellspec job must prove de_DE.UTF-8 took, with checks that fail when it did not. Missing: {gaps}"
     )
 
 
 def test_the_locale_proof_scan_rejects_a_listing_that_cannot_fail() -> None:
     """Vacuity guard: a bare `locale -a` exits 0 with the locale absent, and a
-    commented command runs nothing at all — neither may satisfy a proof."""
+    commented command runs nothing at all -- neither may satisfy a proof."""
     complete = (
         "        run: |\n"
-        "          sudo locale-gen de_DE.UTF-8\n"
         "          locale -a | grep -Eqi '^de_DE\\.utf-?8$'\n"
         "          LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC | grep -Fq 'decimal_point=\",\"'\n"
         "          LC_ALL=de_DE.UTF-8 awk 'BEGIN { printf \"%.2f\", 1.5 }' | grep -q ','\n"

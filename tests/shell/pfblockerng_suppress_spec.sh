@@ -32,7 +32,7 @@ Describe 'suppress() (ADR-53 Phase 1 oracle)'
 
   # Real iprange --except performs actual CIDR set-subtraction with a minimal
   # covering-CIDR remainder (ADR-53 §1.2) -- a stub cannot fake that math, so
-  # cases (c, d, j) below need the real binary. CI installs it (test.yml);
+  # cases (c, d, j) below need the real binary. CI bakes it into the ci image;
   # locally, absent = skip (house pattern: missing tool reported + skipped,
   # CI is the hard gate).
   # spec_helper.sh prepends PFB_SHIMS onto PATH with its OWN `iprange` stand-in
@@ -47,8 +47,8 @@ Describe 'suppress() (ADR-53 Phase 1 oracle)'
   # a command in POSIX sh, so wrap the negation in a function.
   #
   # Hardened (adversarial-review item E on PR #768): GitHub Actions sets
-  # CI=true and test.yml installs the real iprange binary for these specs --
-  # a silent skip there would be coverage theater (the install step broke and
+  # CI=true and the ci image bakes the real iprange binary for these specs --
+  # a silent skip there would be coverage theater (the image lost the tool and
   # nothing would notice). In CI, refuse to skip: if the real binary is truly
   # absent, let the example run and FAIL against the empty pathaggregate (the
   # stderr line below explains why) rather than silently reporting green-via-
@@ -58,7 +58,7 @@ Describe 'suppress() (ADR-53 Phase 1 oracle)'
     have_iprange && return 1
     if [ -n "${CI:-}" ]; then
       echo 'FATAL (adversarial-review item E): real iprange binary not found on PATH in CI;' \
-        'refusing to silently skip -- test.yml is supposed to install it (ADR-53 §1.2)' >&2
+        'refusing to silently skip -- the ci image is supposed to bake it (ADR-53 §1.2)' >&2
       return 1
     fi
     return 0

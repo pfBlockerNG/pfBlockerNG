@@ -133,7 +133,8 @@ def _shell_line(raw: str) -> tuple[str, ...]:
         argv = tuple(shlex.split(raw, comments=True, posix=True))
     except ValueError:
         return ()
-    return argv[1:] if argv[:1] == ("command",) else argv
+    # `$CI_RUN` is the docker-run prefix the docker-wrapped `test` job puts before every tool command.
+    return argv[1:] if argv[:1] in (("command",), ("$CI_RUN",)) else argv
 
 
 def _shell_commands(script: str) -> list[tuple[str, ...]]:
@@ -340,6 +341,7 @@ def test_source_derived_table_covers_every_blocking_test_row_and_all_wiring_is_c
         (lambda text: text.replace("/tmp/widget-js-junit.xml", "/tmp/wrong-widget.xml", 1), "widget-js"),
         (lambda text: text.replace("--suite widget-js", "--suite unknown-widget", 1), "widget-js"),
         (lambda text: text.replace("skip-allowlist-node-canary.test.mjs", "missing-canary.test.mjs", 1), "widget-js"),
+        (lambda text: text.replace("--junitxml=/tmp/pytest-junit.xml", "--junitxml=/tmp/wrong.xml", 1), "pytest"),
         (
             lambda text: text.replace(
                 "tests/js/*.test.js", "tests/js/*.test.js\n          node --test surprise.test.js", 1

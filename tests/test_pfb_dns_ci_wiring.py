@@ -1,9 +1,10 @@
 """CI provides the Go compiler wherever the pfB-DNS payload is built (issue #3513, dual-arch package).
 
 build-pkg-portable.py cross-compiles the gateway, so every job that runs it needs the pinned Go
-toolchain on PATH BEFORE the build step, and the job that runs this repository's own test suite needs
-it for the real cross-build cases. The pin is one literal per job, kept equal everywhere by
-test_ci_tool_pins.py and at least the module's own `go` directive.
+toolchain on PATH BEFORE the build step. The job that runs this repository's own test suite needs it
+for the real cross-build cases and gets it from the ci image, whose GO_VERSION ARG test_ci_tool_pins.py
+keeps equal to GO_PIN; the other jobs pin one literal per job, kept equal everywhere by the same file
+and at least the module's own `go` directive.
 """
 
 from __future__ import annotations
@@ -74,9 +75,15 @@ def test_every_job_that_runs_the_package_builder_pins_go_before_building() -> No
     assert {key: p for key, p in problems.items() if p} == {}
 
 
-def test_the_test_job_provides_go_for_the_real_cross_build_cases() -> None:
+def test_the_test_job_runs_pytest_in_the_ci_image_that_bakes_the_pinned_go() -> None:
     job = _jobs()[TEST_JOB]
-    assert go_wiring_problems(job, "pytest") == []
+    prefix = str((job.get("env") or {}).get("CI_RUN", ""))
+    assert re.search(r"needs\.ci-image\.outputs\.ci\b", prefix), f"CI_RUN does not run the ci image: {prefix!r}"
+    pytest_steps = [step for step in job["steps"] if "pytest" in (step.get("run") or "")]
+    assert pytest_steps, "no step runs pytest"
+    for step in pytest_steps:
+        code = "\n".join(line for line in step["run"].splitlines() if not line.lstrip().startswith("#"))
+        assert "$CI_RUN" in code, f"pytest runs outside the ci image (no Go baked there): {step['run']!r}"
 
 
 def test_go_wiring_check_rejects_each_planted_defect() -> None:

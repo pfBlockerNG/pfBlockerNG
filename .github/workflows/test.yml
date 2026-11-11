@@ -67,6 +67,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  ci-image:
+    # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses
+    # the published image); every job below runs inside it instead of installing a toolchain (#3852).
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
   # Derive the pytest + PHP test matrices from the single-source-of-truth
   # supported-versions matrix (ci-metadata orphan branch). The pytest matrix is
   # the distinct python versions (from each entry's py_flavor) and the PHP matrix
@@ -96,14 +104,18 @@ jobs:
 
   test:
     name: pytest / Python ${{ matrix.python-version }}
-    needs: read-matrix
+    needs: [read-matrix, ci-image]
     runs-on: ubuntu-latest
     # issue #2614: kernel-lock reachable, and a flock(2) acquire has no timeout of its
     # own -- without this budget a stuck lock burns GitHub's 360-minute default rather
     # than failing here. Observed median 3.5 min, worst 3.9.
     timeout-minutes: 20
+    # Owner decision A (#3852): this job stays on the bare runner and runs every tool step inside
+    # the ci image, because the suite starts sibling containers. The mounted Docker socket gives
+    # those steps the host daemon; --network host and the shared /tmp make a path a sibling
+    # container binds the same file on both sides. $CI_RUN is that prefix.
     env:
-      GO_VERSION: "1.27.0"
+      CI_RUN: docker run --rm --init --network host -v /var/run/docker.sock:/var/run/docker.sock -v ${{ github.workspace }}:${{ github.workspace }} -v /tmp:/tmp -w ${{ github.workspace }} -e UV_CACHE_DIR=/tmp/uv-cache ${{ needs.ci-image.outputs.ci }}
 
     strategy:
       fail-fast: false
@@ -119,7 +131,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up PHP (lowest supported)
+      - name: Require the lowest supported PHP
         # Not a PHP job, but part of the unit suite shells out to `php` — the ADR-45
         # archive cases, the DNSBL CSV quoting oracle, the landing generator and the
         # portable builders all cross-check real PHP behaviour, and they FAIL rather
@@ -127,45 +139,33 @@ jobs:
         # floor a diagnostic has to clear; the PHP-version matrix that catches
         # divergence between 8.3 and 8.5 lives in the php-* jobs, so paying for a
         # second full 5500-test leg here would buy nothing those already cover.
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions)[0] }}
-          tools: none
-
-      - name: Install libarchive-tools
-        # The PHP test bootstrap (tests/php/bootstrap.php) requires bsdtar on Linux;
-        # Python tests shelling out to PHP load that bootstrap.
+        # The image's default php is its lowest baked version; this fails loudly when the
+        # matrix floor moves past it.
+        env:
+          LOWEST_PHP: ${{ fromJSON(needs.read-matrix.outputs.php_versions)[0] }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools
+          got="$($CI_RUN php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
+          [ "$got" = "$LOWEST_PHP" ] || { echo "the image's php is $got, the lowest supported is $LOWEST_PHP"; exit 1; }
 
-      - name: Install uv
-        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
-        # exact versions only. enable-cache persists uv's download cache between runs.
-        uses: astral-sh/setup-uv@v10.2.0
+      - name: Cache the uv downloads
+        uses: actions/cache@v6
         with:
-          enable-cache: true
+          path: /tmp/uv-cache
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
 
       - name: Sync the test environment (Python ${{ matrix.python-version }})
         # --locked resolves against the committed uv.lock, so a transitive package cannot
         # move a gate with no diff. --python carries the matrix version: without it the
         # leg runs whatever interpreter uv defaults to, so a second matrix entry would
         # silently test the same one twice and report two green legs for one version.
-        run: uv sync --locked --group dev --python "${{ matrix.python-version }}"
-
-      - name: Set up the pinned Go toolchain
-        # tests/test_build_pfb_dns.py and tests/test_build_pkg_portable_pfb_dns.py run the real
-        # FreeBSD cross-build (GOTOOLCHAIN=local): this is the compiler they run.
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
+        run: $CI_RUN uv sync --locked --group dev --python "${{ matrix.python-version }}"
 
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml. --junitxml feeds
         # the skip-allowlist gate below (issue #2359) -- additive only, never
         # changes what runs or this step's own pass/fail verdict.
-        run: uv run pytest --junitxml=/tmp/pytest-junit.xml
+        run: $CI_RUN uv run pytest --junitxml=/tmp/pytest-junit.xml
 
       - name: Skip allowlist
         # Issue #2359: nothing failed when the SET of skipped tests grew (#2356
@@ -174,14 +174,17 @@ jobs:
         # the identical command shape and requires nonzero before trusting the
         # real report below (testing.md's red-canary rule).
         run: |
+          # shellcheck disable=SC2016  # $canary_status expands in the sh child, not here
+          $CI_RUN sh -c '
           python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt /tmp/pytest-junit.xml
+          '
 
       - name: Root-only integration (control-socket pushes need uid 0)
-        # The gateway takes a push or a listener frame only from uid 0 (ctl.go ctlUID), so the runner's account skips these tests.
-        # This step runs them as root; the euid guard runs in the same process before pytest is imported and fails, never skips, when not root.
+        # The gateway takes a push or a listener frame only from uid 0 (ctl.go ctlUID); the container runs as root.
+        # The euid guard runs in the same process before pytest is imported and fails, never skips, when not root.
         run: |
-          sudo -n env PATH="$PATH" "$PWD/.venv/bin/python" -c '
+          $CI_RUN .venv/bin/python -c '
           import os, sys
           if os.geteuid() != 0:
               sys.exit(f"root-only integration: euid {os.geteuid()}, not 0")
@@ -192,6 +195,10 @@ jobs:
   test-typing:
     name: Test type checking (mypy)
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
 
     steps:
       - name: Checkout
@@ -199,12 +206,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
-        # exact versions only. enable-cache persists uv's download cache between runs.
-        uses: astral-sh/setup-uv@v10.2.0
+      - name: Cache the uv downloads
+        uses: actions/cache@v6
         with:
-          enable-cache: true
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
 
       - name: Sync the dev environment
         # --locked resolves against the committed uv.lock, so a transitive package
@@ -220,6 +227,10 @@ jobs:
   ruff:
     name: Ruff (lint + format)
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
 
     steps:
       - name: Checkout
@@ -227,12 +238,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
-        # exact versions only. enable-cache persists uv's download cache between runs.
-        uses: astral-sh/setup-uv@v10.2.0
+      - name: Cache the uv downloads
+        uses: actions/cache@v6
         with:
-          enable-cache: true
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
 
       - name: Sync the dev environment
         # --locked resolves against the committed uv.lock, so a transitive package
@@ -249,33 +260,16 @@ jobs:
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Install ShellCheck
-        # Pinned upstream release, verified by SHA-256. Installing it from apt was a silent
-        # no-op: ubuntu-24.04 preinstalls 0.9.0, so the lint verdict tracked whatever the
-        # runner image happened to carry and moved whenever GitHub rolled it (#2185).
-        # The pin matches the version CONTRIBUTING.md tells contributors to install, so a
-        # clean local run and CI agree — 0.9.0 rejects `A && B || C` (SC2015) where 0.11.0
-        # accepts it. Same shape as the shellspec and kcov pins already in this workflow.
-        env:
-          SHELLCHECK_VERSION: v0.11.0
-          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-        run: |
-          curl -fsSLo shellcheck.tar.xz \
-            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
-          tar -xJf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
-          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
-          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
-          installed="$(shellcheck --version | awk '/^version:/ { print $2 }')"
-          [ "$installed" = "${SHELLCHECK_VERSION#v}" ] || {
-            echo "shellcheck on PATH is $installed, expected ${SHELLCHECK_VERSION#v}"; exit 1; }
 
       - name: Forbid bash shebangs
         # Repo is #!/bin/sh POSIX (no /bin/bash on FreeBSD/pfSense; macOS /bin/bash is
@@ -319,14 +313,14 @@ jobs:
         # Preventative: a query value jammed straight into a URL (`?ip=$VAR`) breaks
         # on empty/space-bearing values (e.g. pfBlockerNG's PFB_CHANGED_IP_ALIASES).
         # Use `--data-urlencode` instead. Scans tracked src shell + Markdown shell
-        # fences (the checker's defaults). ubuntu-latest ships python3.
+        # fences (the checker's defaults). The ci image ships python3.
         run: python3 scripts/check_url_encoding.py
 
       - name: Forbid target="_blank" links with no adjacent rel="noopener noreferrer"
         # Reverse-tabnabbing defence-in-depth (issue #1217): a new-tab link whose
         # page can reach back via window.opener. Scans tracked src/usr/local/www
         # and src/usr/local/pkg .php/.inc/.xml (the checker's defaults; pkg holds
-        # help text rendering on those pages, issue #3075). ubuntu-latest ships python3.
+        # help text rendering on those pages, issue #3075). The ci image ships python3.
         run: python3 scripts/check_noopener.py
 
       - name: Forbid an on/off toggle declaring its default in the page
@@ -378,6 +372,10 @@ jobs:
   actionlint:
     name: actionlint (workflow files)
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
 
     steps:
       - name: Checkout
@@ -385,52 +383,12 @@ jobs:
         with:
           persist-credentials: false # lint-only job; no git writes
 
-      - name: Install ShellCheck
-        # Pinned upstream release, verified by SHA-256. Installing it from apt was a silent
-        # no-op: ubuntu-24.04 preinstalls 0.9.0, so the lint verdict tracked whatever the
-        # runner image happened to carry and moved whenever GitHub rolled it (#2185).
-        # The pin matches the version CONTRIBUTING.md tells contributors to install, so a
-        # clean local run and CI agree — 0.9.0 rejects `A && B || C` (SC2015) where 0.11.0
-        # accepts it. Same shape as the shellspec and kcov pins already in this workflow.
-        env:
-          SHELLCHECK_VERSION: v0.11.0
-          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-        run: |
-          curl -fsSLo shellcheck.tar.xz \
-            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
-          tar -xJf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
-          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
-          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
-          installed="$(shellcheck --version | awk '/^version:/ { print $2 }')"
-          [ "$installed" = "${SHELLCHECK_VERSION#v}" ] || {
-            echo "shellcheck on PATH is $installed, expected ${SHELLCHECK_VERSION#v}"; exit 1; }
-
-      - name: Install actionlint
-        # Pinned upstream release asset, verified by SHA-256 before extraction — same
-        # shape as the ShellCheck pin above (#2185): a lint verdict is only as
-        # trustworthy as the tool that decides it, and an unpinned actionlint would
-        # move this gate on its own schedule.
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-        run: |
-          curl -fsSLo actionlint.tar.gz \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
-          tar -xzf actionlint.tar.gz actionlint
-          sudo install -m 0755 actionlint /usr/local/bin/actionlint
-          rm -f actionlint.tar.gz actionlint
-          installed="$(actionlint -version | head -n1)"
-          [ "$installed" = "${ACTIONLINT_VERSION}" ] || {
-            echo "actionlint on PATH is $installed, expected ${ACTIONLINT_VERSION}"; exit 1; }
-
       - name: Lint the workflow files
         # GitHub silently disables a workflow whose YAML its parser rejects (a
         # duplicate mapping key disabled five scheduled workflows — issue #2231);
         # PyYAML-based checks could never see that class. actionlint's own parser
         # rejects what GitHub rejects, plus expression/schema errors. The binary is
-        # pinned and checksum-verified in the step above (#2232).
+        # pinned and checksum-verified in the ci image (Dockerfile ACTIONLINT_*, #2232).
         # The embedded shellcheck pass over `run:` bodies is ON (#2241). It reads no
         # .shellcheckrc (actionlint runs shellcheck --norc), and a body-level directive is
         # ignored: suppress per statement with `# shellcheck disable=` inside the body.
@@ -450,7 +408,7 @@ jobs:
           fi
           # Second canary: actionlint SKIPS its embedded shellcheck pass in silence
           # when the binary is unresolvable (exit 0, no diagnostic), so run-body
-          # coverage would go quiet if the install step above ever stopped landing it.
+          # coverage would go quiet if the ci image ever stopped baking it.
           # shellcheck disable=SC2016  # $CANARY is fixture text for actionlint to flag
           printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo $CANARY\n' \
             > "$RUNNER_TEMP/canary-sc.yml"
@@ -466,10 +424,13 @@ jobs:
   go-quality:
     name: Go quality (gofmt, vet, race + Docker oracle, FreeBSD builds)
     runs-on: ubuntu-latest
+    needs: ci-image
     # The Docker Unbound oracle builds its image on a cold runner (up to 15 min) before the race suite runs.
     timeout-minutes: 30
+    # Same owner decision A prefix as the test job: the Docker Unbound oracle starts sibling
+    # containers, so every tool step runs in the ci image against the host daemon.
     env:
-      GO_VERSION: "1.27.0"
+      CI_RUN: docker run --rm --init --network host -v /var/run/docker.sock:/var/run/docker.sock -v ${{ github.workspace }}:${{ github.workspace }} -v /tmp:/tmp -w ${{ github.workspace }} -e UV_CACHE_DIR=/tmp/uv-cache ${{ needs.ci-image.outputs.ci }}
 
     steps:
       - name: Checkout
@@ -479,48 +440,41 @@ jobs:
 
       - name: Probe Docker (the oracle must fail closed)
         # The oracle tests fail on an unreachable daemon too; this step names that cause first.
-        run: docker version --format '{{.Server.Version}}'
-
-      - name: Set up the pinned Go toolchain
-        # Same pin as the pytest job and the package builds; test_ci_tool_pins.py keeps them equal.
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
+        run: $CI_RUN docker version --format '{{.Server.Version}}'
 
       - name: Go gate (gofmt, vet, race incl. Docker oracle, FreeBSD builds)
         # Same chain as scripts/agent/run-gates.sh's go/** line. The canary leads this run: block and must fail
         # both fixtures first (testing.md red canary). `gofmt -l` exits 0 even when it lists files, so the gate
         # tests its output; no pipe, because a pipe hides go test's exit status.
-        run: |
-          # Privilege-drop and ownership checks must execute, not skip on the runner's unprivileged account.
-          go_gate() (
-            cd "$1" && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && sudo -n "$(command -v go)" test -race -count=1 -v ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .
-          )
-          canary="$(mktemp -d)"
-          mkdir "$canary/unformatted" "$canary/failing"
-          printf 'module canary\n\ngo 1.27.0\n' > "$canary/unformatted/go.mod"
-          printf 'package main\n\nfunc  main() {}\n' > "$canary/unformatted/main.go"
-          printf 'module canary\n\ngo 1.27.0\n' > "$canary/failing/go.mod"
-          printf 'package main\n\nfunc main() {}\n' > "$canary/failing/main.go"
-          printf 'package main\n\nimport "testing"\n\nfunc TestCanary(t *testing.T) { t.Fatal("intentional red canary") }\n' > "$canary/failing/canary_test.go"
-          go_gate "$canary/unformatted" && unformatted_status=0 || unformatted_status=$?
-          go_gate "$canary/failing" && failing_status=0 || failing_status=$?
-          rm -rf "$canary"
-          [ "$unformatted_status" -ne 0 ] || { echo "red canary failed: an unformatted module passed the Go gate (gofmt -l lists it with exit 0; the gate must reject it)"; exit 1; }
-          [ "$failing_status" -ne 0 ] || { echo "red canary failed: a module with a failing test passed the Go gate (go test must fail the gate)"; exit 1; }
-          go_gate go/pfb_dns_gateway
+        env:
+          GATE: |
+            # Privilege-drop and ownership checks must execute, not skip on an unprivileged account.
+            go_gate() (
+              cd "$1" && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && sudo -n "$(command -v go)" test -race -count=1 -v ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .
+            )
+            canary="$(mktemp -d)"
+            mkdir "$canary/unformatted" "$canary/failing"
+            printf 'module canary\n\ngo 1.27.0\n' > "$canary/unformatted/go.mod"
+            printf 'package main\n\nfunc  main() {}\n' > "$canary/unformatted/main.go"
+            printf 'module canary\n\ngo 1.27.0\n' > "$canary/failing/go.mod"
+            printf 'package main\n\nfunc main() {}\n' > "$canary/failing/main.go"
+            printf 'package main\n\nimport "testing"\n\nfunc TestCanary(t *testing.T) { t.Fatal("intentional red canary") }\n' > "$canary/failing/canary_test.go"
+            go_gate "$canary/unformatted" && unformatted_status=0 || unformatted_status=$?
+            go_gate "$canary/failing" && failing_status=0 || failing_status=$?
+            rm -rf "$canary"
+            [ "$unformatted_status" -ne 0 ] || { echo "red canary failed: an unformatted module passed the Go gate (gofmt -l lists it with exit 0; the gate must reject it)"; exit 1; }
+            [ "$failing_status" -ne 0 ] || { echo "red canary failed: a module with a failing test passed the Go gate (go test must fail the gate)"; exit 1; }
+            go_gate go/pfb_dns_gateway
+        run: $CI_RUN bash -ec "$GATE"
 
   shell-tests:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     timeout-minutes: 20
-
-    # kcov v43 — the commit that tag pointed at when the pin was taken. Job-level so the
-    # cache keys below can carry it: a tag is a moving reference, so re-pinning kcov has
-    # to roll the cache over too, or a stale build would answer the new key (#2198).
-    env:
-      KCOV_COMMIT: a39874f938ce13f7a65f253120d1ec946b349ffe
 
     steps:
       - name: Checkout
@@ -528,79 +482,43 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v10.2.0
+      - name: Cache the uv downloads
+        uses: actions/cache@v6
         with:
-          enable-cache: true
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
 
       - name: Sync the dev environment
         run: uv sync --locked --group dev
 
       - name: Require jq and dash
         # jq drives the ip_pre_AWS_*.sh region filters; dash is the test shell the
-        # shellspec run below pins. The runner image ships both, and neither changes a gate
-        # verdict by version, so installing them over the image bought nothing. Assert
-        # them instead: a runner image that drops one must fail this job loudly rather
-        # than let the suite fall back to whatever /bin/sh is (#2185).
+        # shellspec run below pins. The ci image bakes both, and neither changes a gate
+        # verdict by version. Assert them anyway: an image that drops one must fail this
+        # job loudly rather than let the suite fall back to whatever /bin/sh is (#2185).
         run: |
           command -v jq >/dev/null 2>&1 || {
-            echo 'required tool missing from the runner image: jq'; exit 1; }
+            echo 'required tool missing from the ci image: jq'; exit 1; }
           command -v dash >/dev/null 2>&1 || {
-            echo 'required tool missing from the runner image: dash'; exit 1; }
+            echo 'required tool missing from the ci image: dash'; exit 1; }
           jq --version
           # shellcheck disable=SC2016  # the substitution runs in the dash child, not here
           dash -c 'echo "dash: $(command -v dash)"'
 
-      - name: Install iprange
-        # Real `iprange --except` set-subtraction (ADR-53 P3): the same
-        # FireHOL iprange tool pfblockerng.sh's pathaggregate assumes at
-        # /usr/local/bin/iprange on the appliance. Locally the shellspec
-        # cases needing it skip when absent (house pattern); here it must be
-        # present so they actually run.
-        run: sudo apt-get update && sudo apt-get install -y iprange
-
-      - name: Install the de_DE.UTF-8 locale
+      - name: Prove the de_DE.UTF-8 locale and mawk
         # ADR-26's collation contract is asserted against a real non-C locale:
         # tests/shell/pfblockerng_adr26_locale_spec.sh SELF-SKIPS when it is absent, so
         # without this the contract goes untested while the suite still reads green
-        # (issue #2318). ubuntu-latest ships C/C.UTF-8 only.
+        # (issue #2318). The ci image generates the locale and keeps mawk as the awk; this
+        # step is the in-job proof, because the self-skip cannot tell either from a pass.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mawk locales
-          # The runner defaults `awk` to gawk, which honours LC_NUMERIC only in POSIX
-          # mode; Debian (and so the old image) defaults to mawk, which takes the decimal
-          # point from the C library. The locale-independence specs probe through `awk`,
-          # so the alternative decides whether they demonstrate their guard or skip.
-          sudo update-alternatives --set awk /usr/bin/mawk
-          sudo locale-gen de_DE.UTF-8
           locale -a | grep -Eqi '^de_DE\.utf-?8$'
           LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC | grep -Fq 'decimal_point=","'
           # The specs probe the locale through awk, not through locale(1): assert the
           # same thing they do, so a libc that generates the locale but leaves awk
           # dotted fails HERE with a reason instead of silently skipping them.
           LC_ALL=de_DE.UTF-8 awk 'BEGIN { printf "%.2f", 1.5 }' | grep -q ','
-
-      - name: Install shellspec
-        # Pinned upstream release ASSET, verified by SHA-256 before anything is extracted;
-        # the executable then runs from that tree. This replaced a source-archive tarball
-        # piped straight into tar: GitHub generates that archive on demand from the tag,
-        # so its bytes are not a stable artifact — a re-tag upstream would swap what runs
-        # the POSIX gate and the workflow would not notice (#2194). An uploaded release
-        # asset is immutable. Extracted outside the checkout so the repo tree stays clean.
-        # Same shape as the ShellCheck pin above.
-        env:
-          SHELLSPEC_VERSION: 0.28.1
-          SHELLSPEC_SHA256: 350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
-        run: |
-          curl -fsSLo shellspec-dist.tar.gz \
-            "https://github.com/shellspec/shellspec/releases/download/${SHELLSPEC_VERSION}/shellspec-dist.tar.gz"
-          echo "${SHELLSPEC_SHA256}  shellspec-dist.tar.gz" | sha256sum -c -
-          tar -xzf shellspec-dist.tar.gz -C "$HOME"
-          rm -f shellspec-dist.tar.gz
-          echo "$HOME/shellspec" >> "$GITHUB_PATH"
-          installed="$("$HOME/shellspec/shellspec" --version)"
-          [ "$installed" = "$SHELLSPEC_VERSION" ] || {
-            echo "shellspec is $installed, expected $SHELLSPEC_VERSION"; exit 1; }
 
       - name: Run shellspec
         # Functional gate for the shell scripts, pinned to dash — the
@@ -637,65 +555,6 @@ jobs:
         # PG-1: gate that no workflow bypasses the shared build/smoke scripts.
         run: sh scripts/parity-guard.sh .github/workflows
 
-      - name: Resolve runner image id for the kcov cache key
-        # ImageOS/ImageVersion are runner machine env vars, NOT part of the GHA
-        # `env` context — `${{ env.ImageOS }}` renders empty, so a key built from it
-        # never rolls over with the runner image. Export them via a step output.
-        id: runner-image
-        run: echo "id=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
-
-      - name: Restore cached kcov binary
-        # kcov builds from source at the pinned KCOV_COMMIT; cache the install dir so
-        # subsequent runs skip the compile step.
-        id: cache-kcov
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/.local/kcov
-          key: kcov-${{ env.KCOV_COMMIT }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
-
-      - name: Build kcov from source (cache miss)
-        # Only runs when the cache is cold. best-effort: a compile failure still
-        # leaves CI green (coverage is informational).
-        # KCOV_COMMIT (kcov v43) is fetched by commit id, so a re-tag upstream cannot
-        # change what gets built: the moving reference is never consulted. `git clone
-        # --branch` takes a ref only, hence the init + fetch-by-SHA + checkout shape —
-        # GitHub serves any reachable commit over smart HTTP (#2202).
-        # kcov's CMakeLists derives its version from `git describe --tags` when a .git is
-        # present; a commit-only shallow fetch has no tags, so that aborts configure. The
-        # checkout is dropped to its working tree, which takes the ChangeLog path instead.
-        id: build-kcov
-        if: steps.cache-kcov.outputs.cache-hit != 'true'
-        continue-on-error: true
-        run: |
-          sudo apt-get update && sudo apt-get install -y \
-            binutils-dev libssl-dev libcurl4-openssl-dev libelf-dev libdw-dev zlib1g-dev cmake g++
-          git init -q kcov
-          git -C kcov remote add origin https://github.com/SimonKagstrom/kcov
-          git -C kcov fetch --depth 1 origin "$KCOV_COMMIT"
-          git -C kcov checkout -q FETCH_HEAD
-          rm -rf kcov/.git
-          cmake -S kcov -B kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/kcov"
-          cmake --build kcov/build --parallel "$(nproc)"
-          cmake --install kcov/build
-
-      - name: Save kcov binary to cache
-        # Persist the install dir so the next run restores instead of rebuilding.
-        # Gate on build success: a failed (swallowed) build would otherwise cache an
-        # empty/partial dir and poison the key until the runner image rolls over.
-        if: steps.cache-kcov.outputs.cache-hit != 'true' && steps.build-kcov.outcome == 'success'
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.local/kcov
-          key: kcov-${{ env.KCOV_COMMIT }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
-
-      - name: Install kcov runtime deps and add to PATH
-        # Runtime shared libs (libcurl, libelf, libdw) needed on both cache hit
-        # and fresh build; also adds the install dir to PATH for the coverage step.
-        continue-on-error: true
-        run: |
-          sudo apt-get update && sudo apt-get install -y libcurl4 libelf1 libdw1
-          echo "$HOME/.local/kcov/bin" >> "$GITHUB_PATH"
-
       - name: Coverage (kcov)
         # The coverage figure is informational (no floor yet, mirroring #38), but the
         # specs it re-runs must pass, so a failing example cannot hide behind a green
@@ -727,8 +586,11 @@ jobs:
 
   php-syntax:
     name: PHP syntax check (php -l) / PHP ${{ matrix.php-version }}
-    needs: read-matrix
+    needs: [read-matrix, ci-image]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
 
     strategy:
       fail-fast: false
@@ -743,19 +605,22 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up PHP ${{ matrix.php-version }}
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php-version }}
-          tools: none
+      - name: Select PHP ${{ matrix.php-version }}
+        # The image bakes every supported PHP side by side; an unbaked version fails here, loudly.
+        run: |
+          update-alternatives --set php "/usr/bin/php${{ matrix.php-version }}"
+          php -v
 
       - name: Syntax-check all PHP and .inc files
         run: find src -name '*.php' -o -name '*.inc' | sort | xargs -n1 php -l
 
   php-static-analysis:
     name: PHPStan static analysis / PHP ${{ matrix.php-version }}
-    needs: read-matrix
+    needs: [read-matrix, ci-image]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     timeout-minutes: 10
 
     strategy:
@@ -770,11 +635,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up PHP ${{ matrix.php-version }}
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php-version }}
-          tools: composer:2.10.2
+      - name: Select PHP ${{ matrix.php-version }}
+        # The image bakes every supported PHP side by side; an unbaked version fails here, loudly.
+        run: |
+          update-alternatives --set php "/usr/bin/php${{ matrix.php-version }}"
+          php -v
 
       - name: Resolve the Composer cache directory
         # actions/cache takes a literal path, and composer's own cache-dir setting is
@@ -811,8 +676,11 @@ jobs:
 
   php-codesniffer:
     name: PHPCS custom sniffs / PHP ${{ matrix.php-version }}
-    needs: read-matrix
+    needs: [read-matrix, ci-image]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
 
     strategy:
       fail-fast: false
@@ -826,11 +694,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up PHP ${{ matrix.php-version }}
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php-version }}
-          tools: composer:2.10.2
+      - name: Select PHP ${{ matrix.php-version }}
+        # The image bakes every supported PHP side by side; an unbaked version fails here, loudly.
+        run: |
+          update-alternatives --set php "/usr/bin/php${{ matrix.php-version }}"
+          php -v
 
       - name: Resolve the Composer cache directory
         # actions/cache takes a literal path, and composer's own cache-dir setting is
@@ -858,8 +726,11 @@ jobs:
 
   php-unit:
     name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
-    needs: read-matrix
+    needs: [read-matrix, ci-image]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     # issue #2614: PHPUnit loads the real .inc and its fixtures fork workers that
     # contend for the same lock, and a flock(2) acquire has no timeout of its own, so
     # this budget is the only bound. Observed median 2.2 min, worst 2.6.
@@ -878,39 +749,26 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up uv
-        # PfbFeedNormalizeTest's converter leg shells out to `python3 -c "import
-        # charset_normalizer"` and SKIPS without it, so this job needs the locked
-        # environment even though it is a PHP leg. activate-environment puts the venv
-        # python first on PATH, which is what the test's `command -v python3` finds.
-        uses: astral-sh/setup-uv@v10.2.0
-        with:
-          enable-cache: true
-          activate-environment: true
-
-      - name: Sync the test environment
-        run: uv sync --locked --group dev
-
-      - name: Install libarchive-tools for bsdtar
-        # Issue #3195: bootstrap resolves bsdtar cleanly on Linux; install libarchive-tools
-        # without mutating host binaries or dpkg-divert.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools
+      - name: Own the workspace as the job user
+        # The runner creates this directory as its own uid. The suite's git calls drop every GIT_*
+        # variable and the system/global config, so no safe.directory reaches them: git trusts
+        # only a repository whose top directory the caller owns.
+        run: chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
 
       - name: Put bsdunzip at /usr/bin/unzip
-        # Same reasoning as the tar step above, for the binary issue #3068 moved the ZIP
-        # probe and lister onto. The appliance's /usr/bin/unzip is bsdunzip (libarchive);
-        # Ubuntu's is Info-ZIP, and the two disagree on inputs the code meets in
+        # The image bakes libarchive-tools (bsdtar, issue #3195); this step does the same for
+        # the binary issue #3068 moved the ZIP probe and lister onto. The appliance's
+        # /usr/bin/unzip is bsdunzip (libarchive);
+        # Debian's is Info-ZIP, and the two disagree on inputs the code meets in
         # production — Info-ZIP rejects an SFX/junk-prefixed zip that bsdunzip reads, and
         # rejects a truncated zip that bsdunzip lists. Grading the zip arm on Info-ZIP
         # would therefore test a toolchain the appliance does not run, and would turn the
         # octet-stream recovery case into a silent skip.
         #
-        # Same --no-rename + explicit mv + /usr/sbin diversion as tar, and for the same
-        # reason: everything resolving `unzip` by NAME (composer's --prefer-dist zip
-        # extraction, setup-* actions) keeps Info-ZIP, while the absolute path the code
-        # under test hardcodes becomes bsdunzip. Hence the two checks, one per lookup.
+        # The --no-rename + explicit mv + /usr/sbin diversion keeps Info-ZIP reachable:
+        # everything resolving `unzip` by NAME (composer's --prefer-dist zip extraction) keeps
+        # Info-ZIP, while the absolute path the code under test hardcodes becomes bsdunzip.
+        # Hence the two checks, one per lookup.
         run: |
           sudo dpkg-divert --no-rename --divert /usr/sbin/unzip --add /usr/bin/unzip
           sudo mv /usr/bin/unzip /usr/sbin/unzip
@@ -918,25 +776,22 @@ jobs:
           /usr/bin/unzip --version | grep -q '^bsdunzip'
           unzip -v | grep -q 'Info-ZIP'
 
-      - name: Put rsync at /usr/local/bin/rsync
+      - name: Require rsync at /usr/local/bin/rsync
         # The code under test execs the absolute path /usr/local/bin/rsync (where the
-        # appliance ships it); Debian's package installs /usr/bin/rsync, so without the
-        # symlink the issue #2667 rsync cases skip on every matrix leg while the suite
-        # still reads green -- the same trap as the bsdtar step above.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends rsync
-          sudo ln -sf "$(command -v rsync)" /usr/local/bin/rsync
-          /usr/local/bin/rsync --version | grep -qi '^rsync'
+        # appliance ships it); the image links Debian's /usr/bin/rsync there. Without the
+        # link the issue #2667 rsync cases skip on every matrix leg while the suite still
+        # reads green -- the same trap as bsdunzip above. Re-linking from `command -v rsync`
+        # is not an option: it resolves to the link itself.
+        run: /usr/local/bin/rsync --version | grep -qi '^rsync'
 
-      - name: Set up PHP ${{ matrix.php-version }}
-        uses: shivammathur/setup-php@v2
-        with:
-          # pcov drives informational coverage.
-          php-version: ${{ matrix.php-version }}
-          extensions: curl, intl, mbstring, ctype, filter
-          coverage: pcov
-          tools: composer:2.10.2
+      - name: Select PHP ${{ matrix.php-version }}
+        # The image bakes every supported PHP side by side, each with pcov (informational
+        # coverage); an unbaked version fails here, loudly.
+        run: |
+          update-alternatives --set php "/usr/bin/php${{ matrix.php-version }}"
+          update-alternatives --set php-cgi "/usr/bin/php-cgi${{ matrix.php-version }}"
+          php -v
+          php-cgi -v
 
       - name: Resolve the Composer cache directory
         # actions/cache takes a literal path, and composer's own cache-dir setting is
@@ -988,21 +843,16 @@ jobs:
   markdownlint:
     name: markdownlint
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Set up Node.js
-        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
-        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
-        # runner image's preinstalled Node, which satisfies npx/node --test here.
-        continue-on-error: true
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24.19.0'
 
       - name: Run markdownlint-cli2
         # Reads .markdownlint.jsonc (rules) + .markdownlint-cli2.jsonc (globs/ignores).
@@ -1013,17 +863,16 @@ jobs:
   widget-js-tests:
     name: Widget JS unit tests (node --test)
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24.19.0'
 
       - name: Run the Dashboard widget JS tests
         # Native Node JUnit keeps this dependency-free. The spec reporter preserves
@@ -1037,6 +886,10 @@ jobs:
   webassets-vendor:
     name: Webassets vendor drift guard + Lezer grammar tests (issue #1669)
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     timeout-minutes: 15
 
     steps:
@@ -1045,11 +898,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24.19.0'
-
       - name: Rebuild the vendor tree and diff against what's committed
         # Node/npm are dev+CI-only (never shipped to the appliance): this
         # re-runs scripts/build-webassets.sh from the pinned tools/webassets/
@@ -1057,7 +905,7 @@ jobs:
         # devDependency pins, and the cm-regex.js esbuild entry, all
         # exact-pinned in package-lock.json) and fails if the committed
         # src/usr/local/www/pfblockerng/vendor/codemirror/ tree has drifted.
-        # ubuntu-latest ships python3.
+        # The ci image ships python3.
         run: python3 scripts/check_webassets_vendor.py
 
       - name: Lezer grammar parse tests (regexp + pfb regex-list)
@@ -1090,6 +938,10 @@ jobs:
     # ReDoS gate stays a useful offline check here. Never in `all-tests-passed.needs`.
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_benchmarks }}
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     # Job-specific timeout: the 1M-entry build spike is the slow step; bound it here
     # rather than touching any shared/default timeout.
     timeout-minutes: 15
@@ -1100,12 +952,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
-        # exact versions only. enable-cache persists uv's download cache between runs.
-        uses: astral-sh/setup-uv@v10.2.0
+      - name: Cache the uv downloads
+        uses: actions/cache@v6
         with:
-          enable-cache: true
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
 
       - name: Sync the benchmark environment
         # pympler drives the retained-bytes/entry RAM gate in spike_adr06_build.py;
@@ -1141,6 +993,12 @@ jobs:
   ui-suite:
     name: UI fan-out (all CI legs, live pfSense VM)
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ui-tests')
+    # ui-tests.yml builds the images it needs itself, ahead of its own jobs; needing ci-image here
+    # publishes them once for it. packages: write lets the callee's nested ci-image call do so.
+    needs: ci-image
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/ui-tests.yml
     with:
       tier: all
@@ -1282,6 +1140,10 @@ jobs:
     name: Graph freshness (graphify-out/graph.json equals a rebuild)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
     # Two rebuilds run in a few minutes; `graphify update` holds a blocking flock,
     # so a hung rebuild must not sit on GitHub's six-hour default.
     timeout-minutes: 20
@@ -1295,11 +1157,13 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Install uv
-        # Same pin as the test job: the shared installer runs `uv tool install`.
-        uses: astral-sh/setup-uv@v10.2.0
+      - name: Cache the uv downloads
+        # The shared installer runs `uv tool install`; uv's downloads cache persists between runs.
+        uses: actions/cache@v6
         with:
-          enable-cache: true
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
 
       - name: Install Graphify through the shared installer
         # ensure-graphify.sh installs the PyPI package at or above the floor, whose rcfile
