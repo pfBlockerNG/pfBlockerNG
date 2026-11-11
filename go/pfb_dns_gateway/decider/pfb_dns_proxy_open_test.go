@@ -1,6 +1,6 @@
 // Tests of the decider's in-process surface (#3791 step A): Open, Resolve and Close, which the gateway calls in place of the
 // Python decision protocol. The behaviour they pin is serve_decisions and Frontend.resolve of
-// src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py, tests/dns_proxy/test_no_module.py and test_decider_cli.py.
+// src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py and tests/dns_proxy/test_no_module.py (both removed in #3791).
 package decider
 
 import (
@@ -90,7 +90,7 @@ func TestOpenWithNoModuleBootsNoModuleAndNeedsNoModuleDir(t *testing.T) {
 	}
 }
 
-// argparse's two rules of pfb_dns_proxy.py: --reply-log needs --no-module, --observer excludes it.
+// argparse's two rules of pfb_dns_proxy.py (removed in #3791): --reply-log needs --no-module, --observer excludes it.
 func TestOpenRejectsTheFlagCombinationsTheCLIRejects(t *testing.T) {
 	for name, tc := range map[string]struct {
 		opts Options

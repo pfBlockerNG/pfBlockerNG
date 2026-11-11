@@ -1,5 +1,5 @@
 // A seeded mutation loop over the decider's wire code (issue #3517, maintainer fuzz note; ported from
-// tests/dns_proxy/test_seeded_fuzz.py when the Python decider went, issue #3791). Every input is a mutation of a
+// tests/dns_proxy/test_seeded_fuzz.py (removed in #3791) when the Python decider went, issue #3791). Every input is a mutation of a
 // well-formed message and the seed is fixed, so a failure reproduces exactly: each message names the seed and the step.
 // Two properties: dnswire.Parse fails only with a *WireError, and a message it accepts encodes and parses again;
 // Frontend.Resolve never panics, and its reply is nil or a message dnswire.Parse accepts. In Python "never raises" was an

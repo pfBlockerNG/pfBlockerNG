@@ -1,5 +1,5 @@
-// Tests of the module-less reply log (#3791 step A): dns_reply_log.py's ReplyLog in Go. The rows are the Python oracle's:
-// tests/fixtures/dns_reply_standalone_rows.json, taken from tests/dns_proxy/test_reply_log.py running the shipped
+// Tests of the module-less reply log (#3791 step A): ReplyLog of dns_reply_log.py (removed in #3791), in Go. The rows are the Python oracle's:
+// tests/fixtures/dns_reply_standalone_rows.json, taken from tests/dns_proxy/test_reply_log.py (removed in #3791) running the shipped
 // pfb_unbound.py's own row writer behind a fake Unbound.
 package decider
 
@@ -64,7 +64,7 @@ func replyLogRows(t *testing.T) (*Frontend, *[]string) {
 	return f, rows
 }
 
-// oracleZone, oracleVerdicts and fakeUnbound are test_reply_log.py's ZONE and VERDICTS behind frontend_helpers.FakeUnbound.
+// oracleZone, oracleVerdicts and fakeUnbound are the ZONE and VERDICTS of test_reply_log.py (removed in #3791) behind frontend_helpers.FakeUnbound.
 var oracleZone = map[string][]string{
 	"allowed.example.|1":   {"allowed.example. 300 IN A 192.0.2.77"},
 	"allowed.example.|28":  {"allowed.example. 300 IN AAAA 2001:db8::77"},
@@ -293,8 +293,8 @@ func TestReplyLogSetsUpOnlyTheRowWriter(t *testing.T) {
 	}
 }
 
-// The table is a literal copy of RCODES in src/usr/local/pkg/pfblockerng/dns_proxy/dns_reply_log.py, so that a name edited
-// on one side only fails here; comparing the table with itself would not.
+// The table is a literal copy of the RCODES of dns_reply_log.py (removed in #3791, the table init_standard of pfb_unbound.py
+// builds), so that a name edited in rcodeNames alone fails here; comparing the table with itself would not.
 func TestReplyLogRcodeNamesAreTheModulesOwnTable(t *testing.T) {
 	want := map[int]string{
 		0: "NoError", 1: "FormErr", 2: "ServFail", 3: "NXDOMAIN", 4: "NotImp", 5: "Refused", 6: "YXDomain", 7: "YXRRSet",
@@ -302,7 +302,7 @@ func TestReplyLogRcodeNamesAreTheModulesOwnTable(t *testing.T) {
 		19: "BADMODE", 20: "BADNAME", 21: "BADALG", 22: "BADTRUNC", 23: "BADCOOKIE",
 	}
 	if got := rcodeNames(); !reflect.DeepEqual(got, want) {
-		t.Errorf("rcodeNames() = %v, want dns_reply_log.py's RCODES %v", got, want)
+		t.Errorf("rcodeNames() = %v, want the RCODES table of pfb_unbound.py's init_standard %v", got, want)
 	}
 	f := openOK(t, Options{LogDir: testLogDir, NoModule: true, ReplyLog: true})
 	module := modMust(t, moduleDir(t))

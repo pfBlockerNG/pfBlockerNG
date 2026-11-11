@@ -1,4 +1,4 @@
-// Go translation of serve_decisions and parse_args' two flag rules of src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py,
+// Ported from serve_decisions and parse_args' two flag rules of src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py (removed in #3791),
 // with the decision protocol and its socket left out: the gateway calls Resolve in its own process. Open is what
 // serve_decisions did before it served (the module boot, the reply log, the observer socket), Close its `finally`.
 package decider
@@ -8,7 +8,7 @@ import (
 	"fmt"
 )
 
-// Options are pfb_dns_proxy.py's flags.
+// Options are the flags of pfb_dns_proxy.py (removed in #3791).
 type Options struct {
 	ModuleDir string // the module dir (/var/unbound): pfb_unbound.ini, manifest, feed files; observer socket lives here
 	NoModule  bool   // boot no module: every query is forwarded (Python --no-module)

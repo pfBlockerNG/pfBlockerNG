@@ -1,5 +1,5 @@
 // Tests of unbound_shim.go: what the module reads of Unbound's reply and query objects, as
-// tests/dns_proxy/test_unbound_shim.py checks them for the Python shim.
+// tests/dns_proxy/test_unbound_shim.py (removed in #3791) checked them for the Python shim.
 package decider
 
 import (

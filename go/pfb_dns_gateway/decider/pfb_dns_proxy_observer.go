@@ -1,4 +1,4 @@
-// Go translation of the observer's receiving half of dns_proxy/pfb_dns_proxy.py: _upstream_report, which validates one
+// Ported from the observer's receiving half of dns_proxy/pfb_dns_proxy.py (removed in #3791): _upstream_report, which validates one
 // datagram from pfb_upstream_observer.py, and Frontend.relay_upstream_response, which fires the module's query_response
 // callback on it. The socket the datagrams arrive on (serve_observer) is pfb_dns_proxy_socket.go's: a datagram's bytes
 // come in through relayUpstreamResponse.

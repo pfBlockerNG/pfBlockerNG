@@ -1,5 +1,5 @@
-// Go translation of Frontend.serve_observer, Frontend.stop (its observer half) and _serve_observer of
-// src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py: the Unix datagram socket pfb_upstream_observer.py reports
+// Ported from Frontend.serve_observer, Frontend.stop (its observer half) and _serve_observer of
+// src/usr/local/pkg/pfblockerng/dns_proxy/pfb_dns_proxy.py (removed in #3791): the Unix datagram socket pfb_upstream_observer.py reports
 // Unbound's upstream blocks on. What a datagram means is pfb_dns_proxy_observer.go's.
 package decider
 
