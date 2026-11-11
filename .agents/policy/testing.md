@@ -45,7 +45,7 @@ coverage; mark unexecuted live checks pending, never passed.
 
 ## Running tests
 
-**Tools run directly on the host — no container** (issue #2513 deleted `scripts/run-in-docker.sh` and the `ci-runner` images). Python comes from `uv` against the committed `uv.lock`; PHP tools from `vendor/bin` after `composer install`.
+**Local tools run directly on the host — no container** (issue #2513 deleted `scripts/run-in-docker.sh`; CI's own images are #3852's). Python comes from `uv` against the committed `uv.lock`; PHP tools from `vendor/bin` after `composer install`.
 
 ```sh
 uv sync --locked --group dev    # pyproject [dependency-groups]; .python-version pins 3.11
