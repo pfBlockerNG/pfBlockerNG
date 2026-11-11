@@ -70,7 +70,8 @@ import os
 import re
 import shlex
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from functools import partial
 from typing import Any
 
 import pytest
@@ -182,11 +183,7 @@ def _seed_resolver_fixtures(vm: SmokeVM, host: str) -> None:
     assert result.returncode == 0 and "OK" in result.stdout, f"seeding Custom Options failed: {result!r}"
 
 
-def _restore_resolver_fixtures(vm: SmokeVM, host: str, prior: dict[str, tuple[bool, str]]) -> None:
-    """Give the Resolver back (pfB-DNS off first, so its snapshot is restored), then undo every seeded value."""
-    h.release_pfb_dns(vm)
-    for path, state in prior.items():
-        h.config_restore_state(vm, path, state)
+def _remove_host_override(vm: SmokeVM, host: str) -> None:
     label, _, domain = host.partition(".")
     result = h.php_eval(
         vm,
@@ -200,6 +197,28 @@ def _restore_resolver_fixtures(vm: SmokeVM, host: str, prior: dict[str, tuple[bo
         "echo 'OK';",
     )
     assert result.returncode == 0 and "OK" in result.stdout, f"removing the host override failed: {result!r}"
+
+
+def _restore_resolver_fixtures(vm: SmokeVM, host: str, prior: dict[str, tuple[bool, str]]) -> list[Exception]:
+    """Give the Resolver back (pfB-DNS off first, so its snapshot is restored), then undo every seeded value.
+
+    Every step runs, in this order, whatever an earlier one raised, so one failure cannot leave a seeded value
+    behind for later modules. The failures come back, each noted with its step, for the caller to report.
+    """
+    errors: list[Exception] = []
+
+    def step(what: str, run: Callable[[], None]) -> None:
+        try:
+            run()
+        except Exception as exc:
+            exc.add_note(f"restoring the Resolver fixtures: {what}")
+            errors.append(exc)
+
+    step("release pfB-DNS", lambda: h.release_pfb_dns(vm))
+    for path, state in prior.items():
+        step(f"restore {path}", partial(h.config_restore_state, vm, path, state))
+    step("remove the host override", lambda: _remove_host_override(vm, host))
+    return errors
 
 
 def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -266,8 +285,13 @@ def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockF
             assert acls_after == acls_before, (
                 f"DNSBL reload changed Unbound ACLs: before={sorted(acls_before)} after={sorted(acls_after)}"
             )
-    finally:
-        _restore_resolver_fixtures(vm, host, prior)
+    except BaseException as failure:
+        for error in _restore_resolver_fixtures(vm, host, prior):
+            failure.add_note(f"restoring the Resolver fixtures also failed: {error!r}")
+        raise
+    errors = _restore_resolver_fixtures(vm, host, prior)
+    if errors:
+        raise ExceptionGroup("restoring the Resolver fixtures failed", errors)
 
 
 def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
