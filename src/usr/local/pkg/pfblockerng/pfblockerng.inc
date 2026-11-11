@@ -14045,7 +14045,7 @@ function pfb_unbound_python_whitelist($mode='') {
 }
 
 
-// ADR-06: Collect the user DNSBL whitelist as normalised source lines for the Python build
+// ADR-06: Collect the user DNSBL whitelist as normalised source lines for the gateway's build
 // manifest (config.user_whitelist); pfb_text_area_decode() below already lower-cases, strips
 // '#' comments and punycodes IDN. Python does the www-strip/leading-dot->wildcard
 // normalisation, trailing-dot handling and the domain-shape gate, and re-normalises as a
@@ -14076,7 +14076,7 @@ function pfb_dnsbl_whitelist_lines() {
 }
 
 // ADR-06 (#51): collect the TEMPORARY per-alert DNSBL unlock store ($pfb['dnsbl_unlock'], CSV
-// "domain,type" rows toggled by the alerts Lock/Unlock icon) as domains for the Python build
+// "domain,type" rows toggled by the alerts Lock/Unlock icon) as domains for the gateway's build
 // manifest (config.user_unlock), merged into whiteDB as band-6 user allows. Deliberately
 // temporary: lives in /tmp, deleted by a full update/Force/Cron, so a FULL build emits an EMPTY
 // user_unlock and re-locks every unlock (documented in the alerts icon tooltip); only the
@@ -15539,7 +15539,7 @@ function pfb_unbound_py_swap_fits_ram() {
 	$bytes_per_entry = 276;
 	$headroom	 = 64 * 1024 * 1024;
 
-	// Loaded entry count = the live snapshot size the Python build emits (data+zone).
+	// Loaded entry count = the live snapshot size the gateway's build emits (data+zone).
 	$loaded = @file_get_contents($pfb['unbound_py_count']);
 	if ($loaded === FALSE) {
 		return FALSE;
@@ -15829,7 +15829,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	}
 	unset($manifest_feed);
 
-	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the Python build emits these
+	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the gateway's build emits these
 	// as whole-TLD ZONE entries from config.tld_wildcard_blacklist, so no raw file is needed.
 
 	// TOP1M (Tranco/Cisco) popularity whitelist is a fixed sidecar. Publish it

@@ -4220,8 +4220,8 @@ const PFB_REGEX_DESCRIPTION_MAX = 15;
  * way to re.compile().
  *
  * Twins that must agree, each with its own tests: pfb_split_regex_line() in
- * pfb_dnsbl_regex_rules.py (the ONE Python copy -- the resolver imports it and this
- * file's validator probe runs it), and the Pattern/Comment token pair in
+ * pfb_dnsbl_regex_rules.py (the ONE Python copy -- this
+ * file's validator probe runs it; the gateway's regexrules package mirrors it), and the Pattern/Comment token pair in
  * tools/webassets/lezer-pfb-regex-list/src/pfb-regex-list.grammar (the editor).
  *
  * @return array{0: string, 1: ?string} [pattern, description]; description NULL
