@@ -124,7 +124,7 @@ if (!defined('PFB_UNBOUND_CONTROL_BIN')) {
 $GLOBALS['pfb']['chroot_cmd'] = $pfb_test_chroot_cmd;
 unset($pfb_test_chroot_cmd);
 
-// 4f. Seams for the experimental DNS proxy (issue #3515): its rc script path, so a unit test never reads or
+// 4f. Seams for the DNS proxy (issue #3515): its rc script path, so a unit test never reads or
 //     unlinks the appliance's, and the readiness wait for a proxy at 0 s. A start double makes the proxy ready
 //     synchronously, so the first probe decides and a proxy that never serves costs no wait; the tick-driven
 //     budget is proven on the virtual clock instead (DnsProxyReadinessTest).

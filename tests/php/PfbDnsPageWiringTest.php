@@ -54,13 +54,17 @@ final class PfbDnsPageWiringTest extends TestCase
 		unset($GLOBALS['priv_list']);
 	}
 
-	public function testThePageCarriesTheEnableToggleAndAnExperimentalWarning(): void
+	public function testThePageCarriesTheEnableToggleWithoutCallingPfbDnsExperimental(): void
 	{
 		$page = self::src(self::PAGE);
 
 		$this->assertStringContainsString("'pfb_dns',", $page, 'the enable checkbox');
 		$this->assertStringContainsString("PfbConfig::read('dns/pfb_dns')", $page, 'read through the gateway');
-		$this->assertMatchesRegularExpression('/<strong>Experimental\./', $page, 'the help says so plainly, in bold');
+		// issue #3846: pfB-DNS is the only way DNSBL runs, so its enable help drops the label; DoT, DoH, DoQ and DDR keep theirs
+		$this->assertSame(1, preg_match("/'pfb_dns',.*?->setHelp\\((.*?)\\);/s", $page, $help), 'the enable checkbox carries help');
+		$this->assertStringContainsString('answers client DNS', $help[1], 'the matched help is the enable checkbox\'s');
+		$this->assertStringNotContainsStringIgnoringCase('experimental', $help[1], 'the pfB-DNS enable help does not call pfB-DNS experimental');
+		$this->assertSame(4, substr_count($page, '<strong>Experimental.</strong>'), 'only the DoT, DoH, DoQ and DDR options are marked experimental');
 	}
 
 	public function testTheHelpNamesTheCustomOptionsLinesThatStopTheMove(): void

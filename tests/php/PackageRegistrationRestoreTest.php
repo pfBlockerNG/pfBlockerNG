@@ -114,7 +114,7 @@ final class PackageRegistrationRestoreTest extends TestCase
 		$this->assertSame(self::SQUID_MENU, config_get_path('installedpackages/menu/0'), 'and so is its menu entry');
 		$this->assertSame([
 			'name' => 'pfb_dns_proxy', 'rcfile' => 'pfb_dns_proxy.sh',
-			'custom_php_service_status_command' => "isvalidpid('/var/run/pfb_dns_proxy.pid')", 'description' => 'pfB-DNS (experimental DNS proxy)',
+			'custom_php_service_status_command' => "isvalidpid('/var/run/pfb_dns_proxy.pid')", 'description' => 'pfB-DNS (DNS proxy)',
 		], $services[2], 'an entry is exactly what the XML lists, status command included: that is what Status > Services reads');
 		$this->assertSame(['name' => 'pfBlockerNG', 'section' => 'Firewall', 'url' => '/pfblockerng/pfblockerng_general.php'], config_get_path('installedpackages/menu/1'));
 	}

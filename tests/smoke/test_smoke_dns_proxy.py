@@ -1,4 +1,4 @@
-"""Issue #3515: pfB-DNS, the experimental DNS proxy, driven the way an operator drives it, proven live.
+"""Issue #3515: pfB-DNS, the DNS proxy, driven the way an operator drives it, proven live.
 
 pfB-DNS (``dns/pfb_dns``, on DNS > General) moves the DNS Resolver onto loopback (its port stays 53, so the firewall
 keeps resolving through it) and runs the Go gateway ``pfb-dns`` on the Resolver's client-facing addresses. pfB-DNS is
@@ -75,8 +75,8 @@ What it proves, in file order:
   gateway nor its supervisor and no query for a listed name goes unanswered; a changed gateway binary restarts the
   pair once.
 
-pfB-DNS on DNS General (enable, experimental help, status panel) is covered by the Tier A render
-test ``test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status``
+pfB-DNS on DNS General (enable, its help, status panel) is covered by the Tier A render
+test ``test_pfb_dns_page_renders_the_toggle_its_help_and_the_status``
 (tests/smoke/ui/test_render_smoke.py) and the toggle flow ``pfb_dns``
 (tests/smoke/ui/test_functional.py).
 

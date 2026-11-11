@@ -154,7 +154,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     # redirect and its markers are ones only DNS General has; test_retired_pfb_dns_address_redirects_once_to_dns_general
     # pins the redirect itself.
     Page("dns", "/pfblockerng/pfblockerng_dns.php", ("DNS Reply Logging", "pfB-DNS Settings")),
-    # issues #3515, #3771: DNS General carries the pfB-DNS settings (experimental DNS proxy) and status beside its own
+    # issues #3515, #3771: DNS General carries the pfB-DNS settings (the DNS proxy) and status beside its own
     # settings. The section titles are the page's own: the tab label alone is on every page's tab bar and proves
     # nothing. The oracle matches markers with any(), so test_dns_settings_order pins every section and both forms.
     Page(
@@ -2126,11 +2126,12 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
     )
 
 
-def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
+def test_pfb_dns_page_renders_the_toggle_its_help_and_the_status(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
     """issues #3515, #3771: DNS General carries the pfB-DNS enable checkbox in its order, then its own settings, and the
     pfB-DNS status panel names the service and the mode and, once the Resolver is moved, a table per transport (#3555).
+    issue #3846: the enable help no longer calls pfB-DNS experimental.
     """
     path = "/pfblockerng/pfblockerng_dns_general.php"
     resp = webui.get(path)
@@ -2155,6 +2156,9 @@ def test_pfb_dns_page_renders_the_toggle_the_experimental_help_and_the_status(
     assert checkboxes == expected, (
         f"expected the pfB-DNS checkboxes then DNS General's three, in order; got {checkboxes}"
     )
+    enable_help = html[html.index('name="pfb_dns"') : html.index('name="pfb_dns_interface')]
+    assert "answers client DNS" in enable_help, f"the pfB-DNS enable help is missing: {enable_help!r}"
+    assert "experimental" not in enable_help.lower(), f"the pfB-DNS enable help calls it experimental: {enable_help!r}"
     status_html = html[html.index('id="pfb-dns-status"') :]
     service = re.search(r'<tr id="pfb-dns-status-service"><th>Service</th><td>([^<]+)</td></tr>', status_html)
     toggles = re.findall(
@@ -2436,8 +2440,8 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     Given DNS General renders, Then the DNS interfaces, the SSL/TLS Certificate (or the Resolver's no-certificate
     text), the DNS Name (a text input, issue #3694), DoT (enable, port, interfaces), DoH (enable, port, interfaces,
     trusted front ends) and DoQ (enable, port, interfaces) appear in that order between the enable checkbox and DDR,
-    as the right input kinds. Every
-    interface list offers All and Localhost first and says one entry is required. The help says experimental, sends the
+    as the right input kinds. Every interface list offers All and Localhost first and says one entry is required. The
+    transport help says experimental, sends the
     operator to the certificate selector, says DoQ is UDP, names the HAProxy options and the binary the package ships
     (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
     """

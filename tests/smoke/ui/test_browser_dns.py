@@ -82,8 +82,8 @@ DNS_SAVED_KEYS = (
 )
 REPLY_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
 INTERFACE_LABELS = ("DNS Interface(s)", "DoT Interface(s)", "DoH Interface(s)", "DoQ Interface(s)")
-# The enable checkbox's, the DoT's, the DoH's, the DoQ's and the DDR's "Experimental." disclosure.
-EXPERIMENTAL_DISCLOSURES = 5
+# The DoT's, the DoH's, the DoQ's and the DDR's "Experimental." disclosure; pfB-DNS itself carries none (issue #3846).
+EXPERIMENTAL_DISCLOSURES = 4
 WCAG_AA_TEXT_CONTRAST = 4.5
 
 # The painted backdrop: the nearest ancestor with a non-transparent background, else the white canvas.

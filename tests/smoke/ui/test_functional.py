@@ -254,7 +254,7 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
-    # issue #3515: pfB-DNS, the experimental DNS proxy (default '' = off). Since issue #3771 it is the first form of
+    # issue #3515: pfB-DNS, the DNS proxy (default '' = off). Since issue #3771 it is the first form of
     # DNS General and saves with its own button.
     ToggleFlow(
         name="pfb_dns",

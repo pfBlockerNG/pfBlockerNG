@@ -9,7 +9,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- while the experimental DNS proxy is on, the proxy hosts pfb_unbound.py and Unbound runs only the inert
+ * issue #3515 -- while the DNS proxy is on, the proxy hosts pfb_unbound.py and Unbound runs only the inert
  * observer; every path that turns the proxy off (toggle, the setup wizard's reset, the package's own uninstall pass) hands the
  * Resolver back exactly as it was. issue #3770 -- the proxy is the only host: Unbound never loads pfb_unbound.py, proxy on or
  * off (UnboundNeverHostsDnsblModuleTest holds the every-mode matrix).

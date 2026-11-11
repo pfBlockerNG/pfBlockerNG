@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3515 -- the experimental DNS proxy takes the Resolver's client-facing place, so
+ * issue #3515 -- the DNS proxy takes the Resolver's client-facing place, so
  * pfb_dns_proxy_resolver() moves the Resolver onto loopback (its port stays 53: the firewall resolves through the
  * proxy, which takes that port on loopback too) and adds a marked server clause to custom_options that moves
  * Unbound's own listener to loopback port 5354 (plain, unused) and has it listen on 127.0.0.1 and ::1 port 5353 for
