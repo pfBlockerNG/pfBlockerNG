@@ -34,18 +34,20 @@ repo. This guide is the *how-to* (setup, subsystems, build, test, release); `AGE
 
 ### Toolchain setup
 
-CI runs every gate directly on the runner with pinned tool versions, and a local run is
-graded by whatever is on your `PATH` — so install the same versions. What the workflows
-pin today:
+CI runs every gate inside the `ci` and `ci-vm` images built from
+[`.github/docker/Dockerfile`](.github/docker/Dockerfile), whose `ARG`s are the single home of
+each pinned tool version. A local run is graded by whatever is on your `PATH` — so install
+the same versions. What the image pins today:
 
 | Tool | Version | Used by |
 | --- | --- | --- |
 | Python | 3.11 (`.python-version`); packages from `uv.lock` | pytest, mypy, Ruff, the policy checkers |
-| PHP | 8.3 **and** 8.5 (from the supported-version matrix) | `php -l`, PHPStan, PHPCS, PHPUnit |
+| PHP | 8.3, 8.4 **and** 8.5 (from the supported-version matrix) | `php -l`, PHPStan, PHPCS, PHPUnit |
 | ShellCheck | v0.11.0 | shell lint |
 | shellspec | 0.28.1 | the shell suite (run under `dash`) |
 | actionlint | 1.7.12 | workflow lint |
-| Node | current LTS | markdownlint, the widget and webassets JS tests |
+| Node | 24.19.0 | markdownlint, the widget and webassets JS tests |
+| Go | 1.27.0 | the pfB-DNS gateway build and the Go gate |
 
 macOS (Homebrew):
 
@@ -68,10 +70,10 @@ sudo apt-get install -y jq dash shellcheck composer unzip iprange \
 
 `uv`, `shellspec`, `actionlint` and `kcov` are not in the Ubuntu 24.04 archive: install
 `uv` per [the Astral install docs](https://docs.astral.sh/uv/getting-started/installation/),
-and shellspec/actionlint from the same pinned, checksum-verified release assets the
-workflows use (see [`.github/workflows/test.yml`](.github/workflows/test.yml)). PHP 8.5 is
-not in that archive either — covering the second matrix leg locally needs a third-party PHP
-repository or a source build, and CI covers it in any case.
+and shellspec/actionlint from the same pinned, checksum-verified release assets the CI
+image uses (see [`.github/docker/Dockerfile`](.github/docker/Dockerfile)). PHP 8.4 and 8.5
+are not in that archive either — covering those matrix legs locally needs a third-party PHP
+repository or a source build, and CI covers them in any case.
 
 Then create the Python environment once. `uv` puts it in a project-local `.venv`, resolved
 from the committed lock file:
