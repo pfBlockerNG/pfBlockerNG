@@ -19,9 +19,8 @@ Scope: writing or changing Python. Load when: any touched `*.py` file.
   architecture-notes "Change detection / content hashing".
 - **No fixed-time waits to coordinate concurrency (issue #456).** Use synchronisation
   primitive (`threading.Event`/`Condition`/`Semaphore`, `queue.Queue`); timeout is
-  deadlock guard only, must **raise loudly**, never return silently (exemplar
-  `_Harness.wait_builds`, `tests/test_adr10_watcher.py`). Poll = last resort against
-  unsignalable production code.
+  deadlock guard only, must **raise loudly**, never return silently. Poll = last resort
+  against unsignalable production code.
 - Unbound inject API symbols (`log_warn`, `MODULE_*`, …) are runtime globals; the ones the
   upstream observer uses are declared once in `stubs/python/unboundmodule.py`, a type-checking
   stand-in only (nothing copies it onto `builtins`). Add a new injected symbol there.

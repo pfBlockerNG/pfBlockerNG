@@ -23,7 +23,8 @@ deliberately does NOT track the shipped analyzer. The production TR39 analyzer
 shipped) and derives scripts via unicodedata.name(), while this script times
 its own scoped-dict lookup -- so the ~0.70us cost figure and the tier model
 cited by ADR-08 describe THIS simplified model, not production. Production
-FP/TP behaviour is re-proven by tests/test_adr08_analyzer.py; do not re-run
+FP/TP behaviour is re-proven by the Go decider's TestAnalyzerMatchesCorpus
+(go/pfb_dns_gateway/decider/pfb_unbound_idn_test.go); do not re-run
 this script expecting production numbers.
 """
 

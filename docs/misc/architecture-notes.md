@@ -2582,8 +2582,8 @@ Off-appliance (PHPUnit): `PfbSyncStatusLedgerTest` (ledger library — open/refr
 corrupt-file), `PfbSyncStatusIpWritersTest`, `PfbDnsblConvergedTest` + `PfbSyncStatusDnsblWritersTest`,
 `PfbPySyncStatusReaderTest` (PHP-side Python-file reader + hostile inputs), `TickApplyReconciliationTest`
 (retry dispatch, Semantics-#5 non-interference, the `$dispatched`-flag guard), `PfbWidgetOracleTest`
-(icon/report logic, both rows, both ledger sources). Off-appliance (pytest):
-`tests/test_adr61_py_status.py` (Python-side writer/clearer pairs + hostile-input reads).
+(icon/report logic, both rows, both ledger sources). Off-appliance (Go): the decider's
+`TestPfbPyStatus*` in `pfb_unbound_status_test.go` (writer/clearer pairs + hostile-input reads).
 Live-VM (ADR-04/ADR-14, authored this ADR run but not yet executed against a live box — no VM
 was reachable in the implementing session): `tests/smoke/ui/test_render_widget_ledger.py`
 (Tier A `ui_render`, both rows' empty/populated states, the reporting list's link/plain-text
