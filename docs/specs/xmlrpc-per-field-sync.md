@@ -200,7 +200,7 @@ The checkbox becomes a select stored as the registered field `sync/syncscope`
 - pfB-DNS is per node, except its enable (#3770). `pfb_dns_saved` (the Resolver snapshot), `pfb_dns_dnsbl_migrated` (the run-once marker of the #3770 enable migration), the twelve listener settings and the two DDR settings are local and live in their own
   `dns` section, a settings section of `pfb_sync_policy_sections()` whose only policy key is `pfb_dns`: DNSBL runs only through pfB-DNS, so the enable travels with the DNSBL enable. pfSense's own DNS Resolver sync does copy the
   moved `unbound` section to a secondary, so a secondary needs pfB-DNS on before the primary syncs a moved Resolver
-  (architecture-notes "pfB-DNS: the experimental DNS proxy", known limits).
+  (architecture-notes "pfB-DNS: the DNS gateway", known limits).
 - Each node applies its own classification. The sender's classification never decides what the
   receiver keeps.
 

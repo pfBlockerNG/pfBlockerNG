@@ -4030,7 +4030,7 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
 }
 
-// issue #3515: the experimental DNS proxy takes the Resolver's client-facing place, so the Resolver is moved onto
+// issue #3515: the DNS proxy takes the Resolver's client-facing place, so the Resolver is moved onto
 // loopback through config.xml (its port and lo0 stay: pfSense keeps 127.0.0.1 in the firewall's resolv.conf) and
 // our clause moves Unbound's own sockets off the Listen Port, onto loopback 5354 (plain) and 5353 (PROXYv2: it trusts
 // the proxy's source address). The proxy serves the Listen Port on loopback and on pfB-DNS's own interface list (dns/pfb_dns_interface).
@@ -4216,7 +4216,7 @@ function pfb_global() {
 	$pfb['dnsbl_top1m']	= PfbConfig::read('dnsbl/top1m_enable');							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
-	$pfb['pfb_dns']	= PfbConfig::read('dns/pfb_dns');							// [ #3515 ] pfB-DNS: experimental DNS proxy front end, the only host of DNSBL (default off)
+	$pfb['pfb_dns']	= PfbConfig::read('dns/pfb_dns');							// [ #3515 ] pfB-DNS: DNS proxy front end, the only host of DNSBL (default off)
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
 	// (strict); existing installs are grandfathered to 'on' by the registry pass at

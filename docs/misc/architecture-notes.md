@@ -385,7 +385,7 @@ Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher)
 decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. See
 `legacy/ADRs/ADR_10_Zero_Downtime_DNSBL/`.
 
-### pfB-DNS: the experimental DNS gateway (issues #3515, #3517)
+### pfB-DNS: the DNS gateway (issues #3515, #3517)
 
 pfB-DNS (its settings are on **DNS > General**; registered toggle `dns/pfb_dns`, runtime mirror `$pfb['pfb_dns']`, `sync` policy: only the enable syncs, like the DNSBL enable; its saved Resolver snapshot, listener lists and transports stay node-local) runs
 the Go gateway `pfb-dns` (UDP, TCP, DoT, DoH, DoQ), which decides DNSBL in its own process (`go/pfb_dns_gateway/decider`; there is no child), on the addresses of
@@ -801,7 +801,7 @@ Saving the remaining settings ignores legacy submissions and removes only the st
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is in the DNS General form on **DNS > General**,
 which is reachable in either mode; the DNSBL tab no longer has it, and its save never assigns the key, so what the DNS General
-save stored survives every DNSBL save. The experimental pfB-DNS settings, retaining their experimental notices, are a
+save stored survives every DNSBL save. The pfB-DNS settings, whose DoT, DoH, DoQ and DDR options retain their experimental notices, are a
 separate form above it on the same page. DNSBL on (module hosted by Unbound or by the proxy): the ini's `python_reply` carries
 it as before and the module writes `dns_reply.log`; `--reply-log` is never passed, and the proxy refuses it without
 `--no-module`, so a reply is never logged twice. DNSBL off: `pfb_dns_proxy_service()` adds `--reply-log` to `--no-module` iff

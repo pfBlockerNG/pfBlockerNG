@@ -871,7 +871,7 @@ const PFB_SECTIONS = [
 	// sibling still passes a section write through byte-identical.
 	'global' => 'installedpackages/pfblockerngglobal',
 	'sync'   => 'installedpackages/pfblockerngsync/config/0',
-	// issue #3515: pfB-DNS, the experimental DNS proxy (settings on DNS > General). Its own section, so the DNSBL page's section save cannot touch
+	// issue #3515: pfB-DNS, the DNS proxy (settings on DNS > General). Its own section, so the DNSBL page's section save cannot touch
 	// the Resolver snapshot kept beside the toggle; only the enable syncs (#3770, a settings section of pfb_sync_policy_sections()).
 	'dns'    => 'installedpackages/pfblockerngdns/config/0',
 	// issue #3649: shared transport settings, separate from the receiver's Resolver recovery state.

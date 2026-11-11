@@ -219,7 +219,7 @@ Authorization = property of **write**, not call site (generalises
     DNSBL preference; saved settings-family snapshots, including 3.3, remain unchanged.
   - **`dns/pfb_dns` → `PfbToggle`** (issue #3515, pfB-DNS, mirror `$pfb['pfb_dns']`; section `dns` =
     `installedpackages/pfblockerngdns/config/0`, the pfB-DNS settings' own, on **DNS > General**): default Off, sync `policy` (the only `dns` key that syncs, #3770); opt-in,
-    experimental pfBlockerNG DNS proxy in front of the DNS Resolver. DNSBL runs only through it, so DNSBL
+    pfBlockerNG DNS proxy in front of the DNS Resolver. DNSBL runs only through it, so DNSBL
     requires it (issue #3770). Migration `issue3770-pfb-dns-for-dnsbl` stores On where `dnsbl/pfb_dnsbl` is On
     and changes no other key; it runs once per install base (marker `dns/pfb_dns_dnsbl_migrated`, next bullet), so a
     pfB-DNS Off the administrator saves afterwards survives every reinstall and upgrade. There is no grandfather map,

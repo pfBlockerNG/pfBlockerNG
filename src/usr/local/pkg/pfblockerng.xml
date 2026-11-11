@@ -50,7 +50,7 @@
 		<name>pfb_dns_proxy</name>
 		<rcfile>pfb_dns_proxy.sh</rcfile>
 		<custom_php_service_status_command>isvalidpid('/var/run/pfb_dns_proxy.pid')</custom_php_service_status_command>
-		<description>pfB-DNS (experimental DNS proxy)</description>
+		<description>pfB-DNS (DNS proxy)</description>
 	</service>
 	<service>
 		<name>pfb_filter</name>
