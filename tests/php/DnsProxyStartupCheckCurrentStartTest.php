@@ -204,7 +204,7 @@ final class DnsProxyStartupCheckCurrentStartTest extends TestCase
 	{
 		$clock = new PfbFlockClockFixture();
 		$namespace = $clock->loadChain(
-			array_values(array_unique([...$entries, 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready', 'pfb_dns_proxy_startup_check'])),
+			array_values(array_unique([...$entries, 'pfb_dns_proxy_confirm_started', 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready', 'pfb_dns_proxy_startup_check'])),
 			['PFB_DNS_PROXY_START_WAIT' => 1]
 		);
 

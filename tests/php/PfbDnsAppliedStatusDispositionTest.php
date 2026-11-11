@@ -168,7 +168,7 @@ final class PfbDnsAppliedStatusDispositionTest extends TestCase
 	{
 		$clock = new PfbFlockClockFixture();
 		$namespace = $clock->loadChain(
-			['pfb_dns_proxy_ensure_running', 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready'],
+			['pfb_dns_proxy_ensure_running', 'pfb_dns_proxy_confirm_started', 'pfb_dns_proxy_confirm_ready', 'pfb_dns_proxy_await_ready'],
 			['PFB_DNS_PROXY_START_WAIT' => 1]
 		);
 		return [$clock, $namespace . '\\pfb_dns_proxy_ensure_running'];

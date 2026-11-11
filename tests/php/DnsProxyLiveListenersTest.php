@@ -910,6 +910,110 @@ final class DnsProxyLiveListenersTest extends TestCase
 	// The cron tick (D4, D5(d))
 	// -----------------------------------------------------------------------
 
+	public static function unansweredAppliedStatus(): array
+	{
+		return [
+			'no control socket' => [FALSE],
+			'an older gateway refuses the status verb' => ["error: a message of 4294967290 bytes is not between 1 and 65536\n"],
+			'the gateway closes the connection unanswered' => [NULL],
+		];
+	}
+
+	#[DataProvider('unansweredAppliedStatus')]
+	public function testTheTickKeepsAServingGatewayRetainedAcrossAnUpgradeWhenItsAppliedStatusIsUnknown(string|false|null $answer): void
+	{
+		// Given a ready gateway retained by an upgrade, with a different binary waiting for the next update and no applied status
+		$this->quiet(['marker' => 'the package installed a new gateway', 'gateway' => 'different']);
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
+		PfbConfig::write('dns/pfb_dns', PfbToggle::On);
+		config_set_path('unbound/enable', TRUE);
+		$this->standInsStop();
+		$record = $answer === FALSE ? NULL : $this->standIn($this->socket, [], ['listening' => $this->listed(self::ADDRESSES), 'status_wire' => $answer]);
+		$activationFailed = "{$this->krDir}/activation_failed";
+		$GLOBALS['pfb']['dns_proxy_activation_failed'] = $activationFailed;
+		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the retained gateway is ready');
+		$commandsBefore = count($GLOBALS['pfb_test_mwexec'] ?? []);
+
+		// When the tick runs before the next update
+		$this->krTick();
+
+		// Then the serving gateway and its Resolver snapshot stay in place, with no new restart or rollback
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertNotContains(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore));
+		$this->assertNotNull(pfb_dns_proxy_saved());
+		$this->assertFileDoesNotExist($activationFailed, 'unknown status must not be claimed as a failed activation');
+		$this->assertTrue(pfb_dns_proxy_ready());
+		$this->assertSame('the package installed a new gateway', $this->krMarker());
+		if ($record !== NULL) {
+			$this->assertSame([], self::changeFrames($record));
+		}
+	}
+
+	public function testATickRestartStillConfirmsAnActivationWhoseAppliedStatusNeverAnswers(): void
+	{
+		// Given a serving gateway that refuses a live listener add, and a restart whose new gateway never answers its status
+		$this->quiet();
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
+		PfbConfig::write('dns/pfb_dns', PfbToggle::On);
+		config_set_path('unbound/enable', TRUE);
+		$activationFailed = "{$this->krDir}/activation_failed";
+		$GLOBALS['pfb']['dns_proxy_activation_failed'] = $activationFailed;
+		$this->gateway(['error: refused'], $this->listed(['192.0.2.1', '[::1]']));
+		$serviceHook = $GLOBALS['pfb_test_service_hook'];
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use ($serviceHook): void {
+			$serviceHook($fn, $service);
+			if ($fn === 'restart_service' && $service === 'pfb_dns_proxy') {
+				$this->standInsStop();
+				$this->standIn($this->socket, [], ['status_wire' => "error: the applied status is unavailable\n"]);
+			}
+		};
+		$commandsBefore = count($GLOBALS['pfb_test_mwexec'] ?? []);
+
+		// When the tick itself restarts the gateway
+		$this->krTick();
+
+		// Then this activation still fails closed through the existing rollback
+		$this->assertContains('restart_service pfb_dns_proxy', $this->krProxyCalls());
+		$this->assertContains(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore));
+		$this->assertFileExists($activationFailed, 'this tick restarted the gateway, so its unanswered activation is still claimed as failed');
+		$this->assertStringContainsString('did not become ready', $this->krLog());
+	}
+
+	public static function reconciliationPasses(): array
+	{
+		return ['update pass' => ['update'], 'cron tick' => ['tick']];
+	}
+
+	#[DataProvider('reconciliationPasses')]
+	public function testAnUnchangedServingGatewayIsKeptWhenOnlyTheFirstAppliedStatusAnswers(string $pass): void
+	{
+		// Given a serving gateway whose first snapshot answers, but every later status read closes unanswered
+		$this->quiet();
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
+		PfbConfig::write('dns/pfb_dns', PfbToggle::On);
+		config_set_path('unbound/enable', TRUE);
+		$record = $this->standIn($this->socket, [], ['listening' => $this->listed(self::ADDRESSES), 'status_later' => NULL]);
+		$activationFailed = "{$this->krDir}/activation_failed";
+		$GLOBALS['pfb']['dns_proxy_activation_failed'] = $activationFailed;
+		$commandsBefore = count($GLOBALS['pfb_test_mwexec'] ?? []);
+		$saved = PfbConfig::read('dns/pfb_dns_saved');
+
+		// When a pass reconciles the listeners and then reads status again
+		if ($pass === 'update') {
+			$this->assertTrue($this->krEnsure());
+		} else {
+			$this->krTick();
+		}
+
+		// Then the failed later read does not turn this no-op into an activation
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertNotContains(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore));
+		$this->assertFileDoesNotExist($activationFailed);
+		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
+		$this->assertTrue(pfb_dns_proxy_ready());
+		$this->assertGreaterThanOrEqual(2, count(array_filter(self::requests($record), static fn (string $request): bool => $request === 'status')));
+	}
+
 	/** @return array<string,array{string,string}> host as the rc script and the gateway spell it, and as a bind takes it */
 	public static function refusedAddressesTheBoxBindsNow(): array
 	{

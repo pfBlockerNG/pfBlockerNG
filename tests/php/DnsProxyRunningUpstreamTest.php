@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -12,6 +13,7 @@ use PHPUnit\Framework\TestCase;
  * or an orphaned Resolver must not override the running gateway. Unbound must own that applied endpoint over both TCP and UDP.
  */
 #[CoversFunction('pfb_dns_proxy_upstream_ready')]
+#[CoversFunction('pfb_dns_proxy_upstream_state')]
 #[CoversFunction('pfb_dns_proxy_serving_ready')]
 #[CoversFunction('pfb_dns_status')]
 final class DnsProxyRunningUpstreamTest extends TestCase
@@ -237,4 +239,82 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 		// Then the proxy serves: the applied endpoint is the one Unbound owns over TCP and UDP
 		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the applied endpoint 127.0.0.1:5353 is owned by Unbound');
 	}
+
+	public static function upstreamOwnershipRows(): array
+	{
+		$own = "unbound unbound 5151 3 tcp4 127.0.0.1:5353 *:*\nunbound unbound 5151 4 udp4 127.0.0.1:5353 *:*\n";
+		$foreign = "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\nroot nc 6161 4 udp4 127.0.0.1:5353 *:*\n";
+		return [
+			'owned' => ['127.0.0.1:5353', TRUE, $own, 'ready'],
+			'foreign command' => ['127.0.0.1:5353', TRUE, str_replace('nc 6161', 'nc 5151', $foreign), 'foreign'],
+			'foreign pid' => ['127.0.0.1:5353', TRUE, str_replace('nc', 'unbound', $foreign), 'foreign'],
+			'foreign tcp' => ['127.0.0.1:5353', TRUE, "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\n", 'foreign'],
+			'foreign udp' => ['127.0.0.1:5353', TRUE, "root nc 6161 4 udp4 127.0.0.1:5353 *:*\n", 'foreign'],
+			'mixed holders' => ['127.0.0.1:5353', TRUE, $own . $foreign, 'foreign'],
+			'other port' => ['127.0.0.1:5353', TRUE, str_replace(':5353', ':5354', $foreign), 'unknown'],
+			'other address' => ['127.0.0.1:5353', TRUE, str_replace('127.0.0.1', '127.0.0.2', $foreign), 'unknown'],
+			'dead Unbound' => ['127.0.0.1:5353', FALSE, $foreign, 'unknown'],
+			'malformed inventory' => ['127.0.0.1:5353', TRUE, "root nc 6161\n", 'unknown'],
+			'malformed pid' => ['127.0.0.1:5353', TRUE, str_replace('6161', 'invalid', $foreign), 'unknown'],
+			'foreign IPv6' => ['[::1]:5353', TRUE, str_replace(['tcp4', 'udp4', '127.0.0.1'], ['tcp6', 'udp6', '[::1]'], $foreign), 'foreign'],
+		];
+	}
+
+	#[DataProvider('upstreamOwnershipRows')]
+	public function testOnlyPositiveForeignOwnershipIsReported(string $endpoint, bool $alive, string $rows, string $expected): void
+	{
+		$this->runningGateway($endpoint);
+		$this->seedUnbound($endpoint, '5151', $alive);
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], $rows);
+
+		$this->assertSame($expected, pfb_dns_proxy_upstream_state());
+		$this->assertSame($expected === 'ready', pfb_dns_proxy_upstream_ready());
+	}
+
+	public function testEachOwnershipClassificationUsesOnlyItsCurrentEvidence(): void
+	{
+		$this->runningGateway();
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\n");
+		$this->assertSame('foreign', pfb_dns_proxy_upstream_state());
+		unlink($this->unboundPidfile());
+		$this->assertSame('unknown', pfb_dns_proxy_upstream_state(), 'a missing pidfile is not positive evidence of a foreign owner');
+
+		$this->seedUnbound(alive: FALSE);
+		$this->assertSame('unknown', pfb_dns_proxy_upstream_state(), 'a missing Unbound is not positive evidence of a foreign owner');
+		$this->seedUnbound();
+		$this->standInsStop();
+		$this->assertSame('unknown', pfb_dns_proxy_upstream_state(), 'an unknown status is not positive evidence of a foreign owner');
+		$this->seedRunningGateway();
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
+		$this->assertSame('unknown', pfb_dns_proxy_upstream_state(), 'a failed native inventory is not positive evidence of a foreign owner');
+	}
+
+	public static function invalidAppliedEndpoints(): array
+	{
+		return [
+			'absent upstream' => [[]],
+			'unparseable upstream' => [['upstream' => 'not-an-endpoint']],
+			'invalid host' => [['upstream' => '999.0.0.1:5353']],
+			'invalid port' => [['upstream' => '127.0.0.1:0']],
+		];
+	}
+
+	#[DataProvider('invalidAppliedEndpoints')]
+	public function testAnInvalidAppliedEndpointCannotProveForeignOwnership(array $status): void
+	{
+		$this->runningGateway();
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\n");
+		$this->assertSame('foreign', pfb_dns_proxy_upstream_state(), 'the fixture can prove a foreign owner for a known endpoint');
+		$this->assertSame('unknown', pfb_dns_proxy_upstream_state($status));
+		$this->assertFalse(pfb_dns_proxy_upstream_ready($status));
+	}
+
+	public function testANonCanonicalPidfileIsUnknownRatherThanForeign(): void
+	{
+		$this->runningGateway();
+		file_put_contents($this->unboundPidfile(), "05151\n");
+		$this->assertSame('unknown', pfb_dns_proxy_upstream_state());
+		$this->assertFalse(pfb_dns_proxy_upstream_ready());
+	}
+
 }

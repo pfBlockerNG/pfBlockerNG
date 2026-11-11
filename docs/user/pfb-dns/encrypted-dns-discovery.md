@@ -296,6 +296,12 @@ The page refresh reads one snapshot from pfB-DNS's existing private control sock
 - Advertisements describe what pfB-DNS would answer locally. They do **not** verify client reachability,
   reverse-proxy routing, certificate trust or encrypted endpoint connectivity.
 
+An update pass or cron tick leaves an existing gateway running when its status is unavailable or the Resolver backend is down.
+**Service** then shows **Starting**, not **Running**; this does not prove DNS is answering.
+Positively confirmed foreign ownership of the upstream port still takes the existing rollback, as on devel.
+[#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848) tracks a clearer status/notice and replacing that recovery
+with moving Unbound to a free port. This change adds no port migration; actual starts/restarts remain fail-closed.
+
 Rare IPv4-compatible (`::/96`) and mapped address spellings retain the existing acceptance behavior and may show
 unavailable or refused status. Their normalization is tracked separately in
 [#3849](https://github.com/pfBlockerNG/pfBlockerNG/issues/3849).

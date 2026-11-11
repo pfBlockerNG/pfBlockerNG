@@ -22,10 +22,20 @@ final class KeepRunningWorker
 	public function run(array $scenario, string $resultFile): void
 	{
 		$this->krSeed(sys_get_temp_dir() . '/pfb_keep_running_worker_' . getmypid() . '_' . bin2hex(random_bytes(4)));
-		// The package rows keep the Unbound backend dead: a deferred pass must need no confirmation to stand
+		// The default dead backend proves a deferred pass needs no upstream confirmation; foreign-owner cases seed it explicitly.
 		$scenario += ['serving' => FALSE];
 		$this->krApply($scenario);
+		$foreignFixture = !empty($scenario['foreign_upstream']);
+		if ($foreignFixture) {
+			file_put_contents($GLOBALS['pfb_test_sockstat_output'], "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\nroot nc 6161 4 udp4 127.0.0.1:5353 *:*\n");
+		}
+		$unboundBefore = $foreignFixture ? isvalidpid($GLOBALS['g']['varrun_path'] . '/unbound.pid') : NULL;
+		$gatewayBefore = $foreignFixture ? pfb_dns_proxy_ready() : NULL;
+		$servingBefore = $foreignFixture ? pfb_dns_proxy_serving_ready() : NULL;
 		$operation = pfb_pkg_operation();
+		$savedBefore = PfbConfig::read('dns/pfb_dns_saved');
+		$resolverBefore = config_get_path('unbound', []);
+		$commandsBefore = count($GLOBALS['pfb_test_mwexec'] ?? []);
 		$returned = NULL;
 		if ($scenario['op'] === 'ensure') {
 			$returned = $this->krEnsure();
@@ -40,6 +50,15 @@ final class KeepRunningWorker
 			'calls' => $this->krProxyCalls(),
 			'marker' => $this->krMarker(),
 			'log' => $this->krLog(),
+			'saved_before' => $savedBefore,
+			'saved_after' => PfbConfig::read('dns/pfb_dns_saved'),
+			'resolver_before' => $resolverBefore,
+			'resolver_after' => config_get_path('unbound', []),
+			'running' => pfb_dns_proxy_running(),
+			'stopped' => in_array(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore), TRUE),
+			'unbound_before' => $unboundBefore,
+			'gateway_before' => $gatewayBefore,
+			'serving_before' => $servingBefore,
 		], JSON_THROW_ON_ERROR));
 		$this->standInsStop();
 		rmdir_recursive($this->krDir);

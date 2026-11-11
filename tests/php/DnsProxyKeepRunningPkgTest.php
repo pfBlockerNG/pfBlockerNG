@@ -111,14 +111,19 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$this->assertStringContainsString('did not become ready', $result['log']);
 	}
 
-	public function testADeferredPassWhoseGatewayIsNotReadyGetsTheFullConfirmation(): void
+	public function testADeferredPassLeavesAnUnreadyGatewayAndItsResolverUntouchedWhenItStartsNothing(): void
 	{
 		// Given a live gateway that never publishes its marker, and an rc script the package changed
 		$result = $this->runUnderPkg(['op' => 'ensure', 'proxy' => 'lives', 'rc' => 'stale']);
 
-		// Then the pass is not taken as quiet: the full confirmation runs and, the gateway never ready, rolls the start back
+		// Then the existing startup notice reports it as unready, but this pass never stops it or restores the Resolver
 		$this->assertFalse($result['returned']);
 		$this->assertStringContainsString('did not become ready', $result['log']);
+		$this->assertSame([], $result['calls']);
+		$this->assertFalse($result['stopped']);
+		$this->assertSame($result['saved_before'], $result['saved_after']);
+		$this->assertSame($result['resolver_before'], $result['resolver_after']);
+		$this->assertTrue($result['running']);
 	}
 
 	public function testAReloadStartsADeadProxyEvenUnderAPackageOperation(): void
@@ -245,5 +250,26 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		// Then the proxy is not touched and nothing is recorded as pending
 		$this->assertSame([], $result['calls']);
 		$this->assertNull($result['marker']);
+	}
+
+	public static function foreignOwnershipUnderPackage(): array
+	{
+		return ['update defers' => ['ensure', TRUE, FALSE], 'tick retains rollback' => ['tick', NULL, TRUE]];
+	}
+
+	#[DataProvider('foreignOwnershipUnderPackage')]
+	public function testForeignOwnershipKeepsDevelsPackageOperationPolicy(string $op, ?bool $returned, bool $stopped): void
+	{
+		$result = $this->runUnderPkg(['op' => $op, 'serving' => TRUE, 'foreign_upstream' => TRUE]);
+		$this->assertTrue($result['unbound_before'], 'the live Unbound exists despite the foreign port holder');
+		$this->assertTrue($result['gateway_before']);
+		$this->assertFalse($result['serving_before']);
+		$this->assertSame($returned, $result['returned']);
+		$this->assertSame($stopped, $result['stopped']);
+		if (!$stopped) {
+			$this->assertSame($result['saved_before'], $result['saved_after']);
+			$this->assertSame($result['resolver_before'], $result['resolver_after']);
+			$this->assertTrue($result['running']);
+		}
 	}
 }

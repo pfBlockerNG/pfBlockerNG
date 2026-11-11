@@ -951,21 +951,30 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		$this->assertStringContainsString('listener-interface 192.0.2.1=' . base64_encode('Renamed,"\\'), $table['body']);
 	}
 
-	public function testALiveProxyThatNeverPublishedItsMarkerIsNotTakenForServing(): void
+	public function testAnUnchangedLiveProxyWithoutAReadyMarkerIsReportedButNotRolledBack(): void
 	{
 		// Given a live proxy whose script is unchanged (the old check was: the pidfile names a live process), no marker
 		$this->activate(TRUE);
 		pfb_dns_proxy_service();
 		$this->proxyLivesButNeverServes();
 		$GLOBALS['pfb_test_service_calls'] = [];
+		$resolver = config_get_path('unbound');
+		$saved = PfbConfig::read('dns/pfb_dns_saved');
 
 		// When the apply checks it
 		$ok = pfb_dns_proxy_ensure_running();
 
-		// Then it is not ready after the budget, and the activation is rolled back: a crash-looping listener is no proxy
+		// Then it is reported as unready, but a pass that started nothing leaves the gateway and Resolver untouched
 		$this->assertFalse($ok);
 		$this->assertSame('on', $this->toggleStored());
-		$this->assertResolverIsTheOriginal('rolled back');
+		$this->assertSame($resolver, config_get_path('unbound'));
+		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
+		$this->assertTrue(pfb_dns_proxy_running());
+		$this->assertSame([], $this->proxyCalls);
+		$startup = array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy startup'));
+		$this->assertCount(1, $startup);
+		$this->assertStringContainsString('did not become ready', $startup[0]['notice']);
+		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
 	}
 
 	public function testTheRollbackCalledDirectlyReportsWhetherTheOldIntegrationIsBack(): void
@@ -2071,7 +2080,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// B -- the boot check and the cron tick roll back like an apply (issue #3556)
+	// B -- the boot check confirms its start; the cron tick reports a gateway it did not start
 	// -----------------------------------------------------------------------
 
 	/** The cron tick with every scheduled job behind a seam, so only its pfB-DNS check acts; its ledger and state stay in the sandbox. */
@@ -2124,7 +2133,7 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	}
 
 	#[DataProvider('aliveGateways')]
-	public function testTheTickRollsBackAProxyThatIsAliveButNeverBecomesReady(string $alive): void
+	public function testTheTickReportsAnUnreadyGatewayWithoutRollingBackAStartItDidNotMake(string $alive): void
 	{
 		// Given pfB-DNS on with the Resolver moved, and a gateway process alive that never becomes ready
 		$this->activate(TRUE);
@@ -2132,18 +2141,30 @@ final class DnsProxyActivationRollbackTest extends TestCase
 			$this->proxyLivesButNeverServes();
 			$this->assertTrue(pfb_dns_proxy_running(), 'before: the child is alive');
 		} else {
-			// alive until the rollback's rc stop, which unsets it: the stop double models the supervisor's exit there
+			// The supervisor is alive between starts; this tick did not launch it.
 			$GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE] = TRUE;
 			$this->assertTrue(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE), 'before: the supervisor is alive');
 		}
 		$this->assertSame('on', $this->toggleStored(), 'before: pfB-DNS is requested');
 		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the snapshot is stored');
+		$resolver = config_get_path('unbound');
+		$saved = PfbConfig::read('dns/pfb_dns_saved');
 
 		// When the cron tick runs
 		$this->tick();
 
-		// Then the tick rolls the activation back as an apply does
-		$this->assertRolledBackWithNotices('rolled back by the tick');
+		// Then the existing startup notice reports the unready gateway, without a stop or Resolver restore
+		$this->assertSame('on', $this->toggleStored());
+		$this->assertSame($resolver, config_get_path('unbound'));
+		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertContains('pfBlockerNG DNS Proxy startup', array_column($this->notices(), 'id'));
+		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
+		if ($alive === 'child') {
+			$this->assertTrue(pfb_dns_proxy_running());
+		} else {
+			$this->assertTrue(isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE));
+		}
 	}
 
 	public function testTheTickWaitsForNothingAndRollsNothingBackWhenNoGatewayProcessLives(): void
@@ -2207,7 +2228,6 @@ final class DnsProxyActivationRollbackTest extends TestCase
 	{
 		return [
 			'boot with missing Unbound' => ['boot', FALSE],
-			'tick with missing Unbound' => ['tick', FALSE],
 			'boot with foreign listeners' => ['boot', TRUE],
 			'tick with foreign listeners' => ['tick', TRUE],
 		];
@@ -2234,6 +2254,59 @@ final class DnsProxyActivationRollbackTest extends TestCase
 		}
 
 		$this->assertRolledBackWithNotices("{$path} rejected the unavailable Unbound upstream");
+	}
+
+	public function testTheTickKeepsAReadyGatewayAndResolverWhenUnboundIsMissing(): void
+	{
+		// Given a ready gateway left by an earlier pass, with its Resolver backend now missing
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$this->seedUnbound(alive: FALSE);
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
+		$this->assertNull(pfb_dns_proxy_certificate_export());
+		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
+		$resolver = config_get_path('unbound');
+		$saved = PfbConfig::read('dns/pfb_dns_saved');
+
+		// When the tick checks a gateway it did not start
+		$this->tick();
+
+		// Then no rollback runs: the existing gateway and Resolver stay untouched, with Service visibly not Running
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame($resolver, config_get_path('unbound'));
+		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
+		$this->assertTrue(pfb_dns_proxy_running());
+		$this->assertTrue(pfb_dns_proxy_ready());
+		$this->assertFalse(pfb_dns_proxy_serving_ready());
+		$this->assertSame('Starting', pfb_dns_status()['service']);
+		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
+	}
+
+	public function testTheTickKeepsItsGatewayWhenUnboundAndAppliedStatusAreBothUnavailable(): void
+	{
+		// Given a gateway left running, a missing Unbound and an unanswered status, even if a socket inventory could name another holder
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$this->seedUnbound(alive: FALSE);
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\nroot nc 6161 4 udp4 127.0.0.1:5353 *:*\n");
+		$this->standInsStop();
+		$this->assertNull(pfb_dns_proxy_certificate_export());
+		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
+		$resolver = config_get_path('unbound');
+		$saved = PfbConfig::read('dns/pfb_dns_saved');
+
+		// When the tick has no positive evidence of foreign upstream ownership
+		$this->tick();
+
+		// Then absence and unknown status cannot trigger the foreign-owner exception
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame($resolver, config_get_path('unbound'));
+		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
+		$this->assertTrue(pfb_dns_proxy_running());
+		$this->assertSame('Starting', pfb_dns_status()['service']);
+		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
 	}
 
 	public function testTheBootCheckDoesNothingWithoutASnapshot(): void

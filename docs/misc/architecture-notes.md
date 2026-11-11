@@ -689,11 +689,22 @@ Port 5354 is not the gateway's upstream.
 the status panel's Service reads as Running. The frontend listeners, the unlogged check, the active-transport gate, the installer's
 keep, the certificate push and the apply's change gate use the gateway-level READY alone.
 
-A deferred package-operation pass that acted on nothing and finds the gateway READY retains its existing upstream-confirmation
-exception: startup diagnostics run without an activation wait. An unchanged-rc no-op pass also leaves the gateway alone when
-control status is unknown (issue #3845): unknown is not evidence that DNS is unhealthy. It adds no fallback, restart or retry;
-the page still reports unavailable. A real start/restart and the serving-ready wait remain fail-closed and retain devel's
-existing rollback behavior. Whether failed activation should later return port 53 to the Resolver is a separate owner decision.
+The update pass and cron tick use one shared guard, `pfb_dns_proxy_confirm_started()`: a start or restart made
+by that pass is an activation to confirm. Otherwise startup diagnostics run without rollback for failed status
+reads or a missing Resolver backend, regardless of which read fails (owner decision, 2026-11-11; issue #3845).
+The narrow exception preserves devel's rollback for positively confirmed foreign upstream ownership.
+`pfb_dns_proxy_upstream_state()` returns `ready` only for both transports owned by the live Unbound,
+`foreign` for a matching port held by a different command/PID while that Unbound is alive (mixed holders count),
+and `unknown` without sufficient status, PID or native inventory evidence. Only `foreign` triggers that exception.
+A running gateway whose Resolver backend is down stays up and shows **Service: Starting**.
+[#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848) tracks explicit backend-down reporting and replacing
+the foreign-owner rollback with moving Unbound to a free port. No port migration, fallback, new restart or retry is added here.
+Actual starts/restarts retain the existing fail-closed serving-ready wait and activation rollback.
+
+The update pass retains devel's package-operation deferral, including a confirmed foreign owner, by passing its
+existing `$deferred` context to the guard. The tick passes `FALSE`, preserving its devel foreign-owner rollback.
+Actual starts/restarts still confirm under a package operation. The controlled Unbound restart waits for old
+`unbound` processes to exit and refuses a second start while one survives; deferred updates also avoid judging that handoff.
 
 The socket inventory uses the bounded control-command seam with a one-second budget plus its kill grace; the outer wait
 keeps its startup deadline, with at most that final probe's bound beyond it. `pfb_dns_proxy_running()` remains pidfile-only
@@ -706,14 +717,14 @@ the marker only when it names a process that stop signalled, and `start` runs un
 variable): the boot hook's background start and an apply's `start_service()` otherwise both pass the "already serving?"
 check before `daemon(8)` has written a pidfile and both launch. A start that cannot take the lock logs an error and exits 75.
 
-Every caller that starts or restarts the proxy waits for serving readiness (`pfb_dns_proxy_await_ready()`, which waits on `pfb_dns_proxy_serving_ready()`: 30 s, the Unbound
-startup budget `PFB_UNBOUND_START_WAIT`, no setting of its own, never under a lock): `pfb_dns_proxy_restart()` (the reload's
-restart path and the installer) and `pfb_dns_proxy_ensure_running()` (the apply; it also checks a proxy that is alive with an
-unchanged script, so a crash-looping listener is noticed). The boot check (`dns_check`, which the boot hook backgrounds) confirms a
-stored snapshot's start through the same `pfb_dns_proxy_confirm_ready()`, and so does the cron tick, but only while a gateway pidfile
-is live: with none live the tick waits for nothing and rolls nothing back. It may first change the proxy's listeners live, and restart the
-pair once only for a change the gateway does not take (issues #3598 and #3599, below). A proxy that is not ready within the budget has FAILED its
-activation, and `pfb_dns_proxy_roll_back()` runs: it claims the failure under the config lock (`pfb_dns_proxy_claim_failure()`). The pfB-DNS
+Every caller that starts or restarts the proxy waits for serving readiness (`pfb_dns_proxy_await_ready()`, on
+`pfb_dns_proxy_serving_ready()`: the 30 s Unbound startup budget, never under a lock): `pfb_dns_proxy_restart()`
+(the reload and installer), and `pfb_dns_proxy_ensure_running()` only when it started or restarted the gateway.
+The boot check (`dns_check`, backgrounded beside its own start) uses the same `pfb_dns_proxy_confirm_ready()`.
+The tick first reconciles live listeners and restarts once only for a change the gateway does not take
+(issues #3598 and #3599). It confirms its own restart, with the narrow foreign-owner exception above for an existing gateway.
+A proxy this pass started that is not ready within the budget has failed its activation, and
+`pfb_dns_proxy_roll_back()` claims the failure under the config lock (`pfb_dns_proxy_claim_failure()`). The pfB-DNS
 enable is not written and stays On, so nothing propagates by sync; a one-line record of why (`$pfb['dns_proxy_activation_failed']`, in
 `/var/run`) is what the pfB-DNS status reads ("Activation failed: ... The next Update retries"). Then `pfb_unbound_python($mode, FALSE)`
 stops the proxy and gives the Resolver exactly its saved settings back (the `FALSE` says pfB-DNS is not wanted for that call, so the restore
@@ -728,7 +739,7 @@ admin corrects it. A rollback that cannot finish (the config lock stays taken, c
 stop) keeps the snapshot and the moved Resolver, runs nothing destructive after the failure, and says that recovery is needed
 (for a failed activation: nothing answers DNS on the Resolver's port until the restore succeeds): it never claims success. With the snapshot
 kept and pfB-DNS still On, the next apply re-applies the move on that snapshot (`pfb_dns_proxy_resolver_locked()` takes no second one), and
-the proxy check or the next tick rolls it back again while the proxy is not ready. The restore's stop is
+only a later start/restart or positively confirmed foreign upstream ownership is confirmed again. The restore's stop is
 the rc script's own, so it also ends a supervisor that keeps respawning a gateway that never becomes ready while pfSense has no
 service entry for the package (an install runs this before pfSense registers it, and the Resolver's start hook starts the proxy without one).
 The reload, the apply and the installer each read the result. Pinned by `DnsProxyReadinessTest`,
@@ -746,8 +757,8 @@ address that cannot be bound is logged and skipped, plain.go and tlsbind.go). Af
 `pfb_dns_proxy_startup_check()`, which takes the readiness as a `bool`. Ready, it asks the gateway what it serves through
 the applied-status inventory on the control socket (`FF FF FF FA`), bounded by `PFB_DNS_PROXY_CTL_TIMEOUT`, with no polling.
 Not ready, it reads the log (below). The rollback diagnoses a start that is not ready once its guard has won and before the
-restore consumes the snapshot. The cron tick confirms the start the same way while a snapshot is
-stored, no update pass runs and a gateway pidfile is live (with none live it waits for nothing). The boot hook backgrounds
+restore consumes the snapshot. Without its own restart, the cron tick runs startup diagnostics directly rather than confirming
+an activation; no update pass may be running, and a gateway pidfile must be live. The boot hook backgrounds
 `php -f pfblockerng.inc dns_check` under `timeout(1)` (certificate sync, then, while a snapshot is stored, the same confirmation),
 because boot has no apply to confirm the start. One notice, id
 `pfBlockerNG DNS Proxy startup`, names every problem, each as a sentence, in this order: the proxy never became ready (with the last
@@ -863,11 +874,11 @@ before `rc.start_packages` begins, and the proxy must keep its pids and keep ans
 prints the daemon launch, the listening socket, Unbound's process start, the first correct answers and Unbound's sync as
 separate times; a launch is not an answer.
 
-The named recovery component waits total 340 s before the upstream socket inventory. A readiness check (`pfb_dns_proxy_serving_ready()`)
-runs two bounded probes in order: `ps` for the running gateway's command line, then `sockstat` for its owner. Each has a one-second budget
-plus the 5 s kill grace (a hung probe was measured to end 6.0 s after it starts). A check that starts before the wait's deadline can finish up to 12 s after it, making the component-budget sum 352 s. This is not a whole-path hard bound: pfSense's core restart path
-also runs untimed mount, sync and other OS commands. The existing 360 s outer deadline (TERM, then KILL after 5 s) is a
-salvage limit and can interrupt unfinished core work; it does not guarantee completion or prove 8 s of hard headroom.
+The named recovery component waits total 340 s before the final readiness probes. A readiness check now reads a bounded
+applied-status response from the private control socket, then the bounded native `sockstat` ownership probe.
+The earlier `ps`/`sockstat` timing sum does not describe this path; the current component bounds are documented in
+`external-process-waits.md`. They are not a measured whole-path bound: core restart work also runs untimed mount,
+sync and other OS commands. The existing 360 s outer deadline is a salvage limit, not proof of completion or spare headroom.
 
 **Known limits.**
 

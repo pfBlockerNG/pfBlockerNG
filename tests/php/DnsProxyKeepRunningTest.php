@@ -78,21 +78,34 @@ final class DnsProxyKeepRunningTest extends TestCase
 		$this->assertNull($this->krMarker());
 	}
 
-	public function testAPlainUpdateRollsBackAReadyGatewayWhoseBackendIsDead(): void
+	public function testAPlainUpdateKeepsAReadyGatewayWithADeadBackendWhenItStartsNothing(): void
 	{
 		// Given a ready gateway whose Unbound backend is dead, with nothing changed and no package operation
 		$this->krApply(['serving' => FALSE]);
+		PfbConfig::write('gen/enable_cb', PfbToggle::On);
+		PfbConfig::write('dns/pfb_dns', PfbToggle::On);
+		config_set_path('unbound/enable', TRUE);
 		// The gateway answers for its applied identity, so the backend's state is known, not unknown: only its Unbound backend is dead
 		$this->seedRunningGateway();
 		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the gateway is ready');
 		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'before: the backend is dead');
+		$this->assertSame('Starting', pfb_dns_status()['service'], 'the existing Service line does not claim Running with a dead backend');
+		$saved = PfbConfig::read('dns/pfb_dns_saved');
+		$resolver = config_get_path('unbound', []);
+		$commandsBefore = count($GLOBALS['pfb_test_mwexec'] ?? []);
 
 		// When the apply's pass runs
 		$ready = $this->krEnsure();
 
-		// Then the full confirmation judges the upstream: the activation is rolled back and the notice says why
-		$this->assertFalse($ready);
-		$this->assertStringContainsString('did not become ready', $this->krLog());
+		// Then this pass leaves the Resolver and serving gateway alone, while the existing Service line still shows it is not Running
+		$this->assertTrue($ready);
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertNotContains(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore));
+		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
+		$this->assertSame($resolver, config_get_path('unbound', []));
+		$this->assertTrue(pfb_dns_proxy_ready());
+		$this->assertFalse(pfb_dns_proxy_serving_ready());
+		$this->assertSame('Starting', pfb_dns_status()['service']);
 	}
 
 	public function testTheChangeGateStaysStrictWhileTheBackendIsDead(): void

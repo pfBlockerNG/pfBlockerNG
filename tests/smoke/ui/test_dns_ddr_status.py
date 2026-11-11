@@ -375,6 +375,7 @@ def test_dns_ddr_refresh_replaces_complete_status_preserving_form_and_collapse(
     toggle.focus()
     replacement = _snapshot_html(webui).replace(DDR_DNS_NAME.rstrip("."), "changed.example.com")
     replacement = replacement.replace('data-address="127.0.0.1:53"', 'data-address="127.0.0.9:53"')
+    replacement = replacement.replace("<td>127.0.0.1:53</td>", "<td>127.0.0.9:53</td>")
     assert _shared_name(replacement) == "changed.example.com", replacement
     assert 'data-address="127.0.0.9:53"' in replacement, replacement
     page.route(
@@ -389,6 +390,9 @@ def test_dns_ddr_refresh_replaces_complete_status_preserving_form_and_collapse(
     assert toggle.evaluate("el => el === document.activeElement"), "Refresh lost keyboard focus"
     toggle.click()
     body.wait_for(state="visible", timeout=JS_TIMEOUT_MS)
+    assert section.locator('tr[data-address="127.0.0.9:53"] td').nth(1).inner_text() == "127.0.0.9:53", (
+        section.inner_html()
+    )
     dimensions = section.evaluate("""el => ({right: el.getBoundingClientRect().right, width: innerWidth,
         tables: [...el.querySelectorAll('.table-responsive')].map(n => getComputedStyle(n).overflowX)})""")
     assert dimensions["right"] <= dimensions["width"], dimensions

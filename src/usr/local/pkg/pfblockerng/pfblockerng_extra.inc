@@ -7241,19 +7241,20 @@ function pfblockerng_tick(
 	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies, pushed on its control socket
 	pfb_dns_proxy_certificate_sync();
 
-	// issue #3556: a proxy that does not become ready within the budget is rolled back as a failed apply is; with no gateway process alive
-	// nothing is waited for or rolled back: a stopped service, or a restart between its stop and its launch, is no failed start
+	// Existing gateways stay running unless native ownership proves a foreign upstream holder; only this tick's restart is an activation.
 	if (!$pass_running && pfb_dns_proxy_saved() !== NULL && (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE))) {
 		// issues #3598, #3599: an address the gateway's start could not assign yet is added live once it can be bound, and a listener the
 		// command no longer names is removed live; the pair restarts only when the gateway does not take it. Every other restart stays with
 		// the update pass (pfb_dns_proxy_ensure_running())
 		$since = NULL;
+		$acted = FALSE;
 		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred() && ($why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()))) !== NULL) {
 			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
 			$since = pfb_dns_proxy_log_size();
 			restart_service('pfb_dns_proxy');
+			$acted = TRUE;
 		}
-		pfb_dns_proxy_confirm_ready($since);
+		pfb_dns_proxy_confirm_started($acted, $since, FALSE);
 	}
 
 	$now   = time();

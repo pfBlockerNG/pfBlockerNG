@@ -191,6 +191,14 @@ It compares `pfb_dns_proxy_command_listeners()` (what the rc script asks for) wi
 - **(e) A failed live add.** A bind that fails is logged (unless the address is just not there yet) and named by the
   startup check's notice as not served; nothing restarts. A send or reply that fails restarts once (D4.4).
 
+> **Amendment 2026-11-11 (#3845).** Applied listener inventory now comes from the versioned status operation
+> (`FF FF FF FA`) on the same control socket. D5(d) passes its explicit restart fact and `$since` to
+> `pfb_dns_proxy_confirm_started()`; that shared guard also serves the update pass. A start/restart made
+> by that pass takes activation confirmation. In P9, an ordinary tick runs existing diagnostics without rollback.
+> Positively confirmed foreign upstream ownership is the narrow exception and retains devel's rollback;
+> [#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848) will replace it with moving Unbound to a free port.
+> Actual activation confirmation remains fail-closed.
+
 ## Acceptance criteria
 
 - WHEN the rc script changes only in listen addresses and the proxy is READY THEN no restart, the new addresses are

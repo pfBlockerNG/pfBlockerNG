@@ -156,6 +156,39 @@ final class PfbDnsAppliedStatusTest extends TestCase
 		$this->assertNull($this->read());
 	}
 
+	public static function embeddedNulAddresses(): iterable
+	{
+		// inet_pton() throws ValueError on NUL: each address field must reject it before the native call.
+		$bad = self::snapshot();
+		$bad['upstream'] = "127.0.0.1\0:5353";
+		yield 'upstream' => [self::wire($bad)];
+		$bad = self::snapshot();
+		$bad['listeners'][0]['address'] = "192.0.2.1\0:53";
+		yield 'listener' => [self::wire($bad)];
+		$bad = self::snapshot();
+		$bad['name_answers'] = (object) ["192.0.2.1\0" => ['a' => [], 'aaaa' => []]];
+		yield 'name answer key' => [self::wire($bad)];
+		$bad = self::snapshot();
+		$bad['name_answers'] = (object) ['192.0.2.1' => ['a' => ["192.0.2.9\0"], 'aaaa' => []]];
+		yield 'A value' => [self::wire($bad)];
+		$bad = self::snapshot();
+		$bad['name_answers'] = (object) ['192.0.2.1' => ['a' => [], 'aaaa' => ["2001:db8::9\0"]]];
+		yield 'AAAA value' => [self::wire($bad)];
+		$bad = self::snapshot();
+		$bad['advertisements']->{'192.0.2.1'}['records'][0]['hint'] = "192.0.2.1\0";
+		yield 'record hint' => [self::wire($bad)];
+		$bad = self::snapshot();
+		$bad['advertisements']->{'192.0.2.1'}['additional'] = ["192.0.2.1\0"];
+		yield 'additional address' => [self::wire($bad)];
+	}
+
+	#[DataProvider('embeddedNulAddresses')]
+	public function testEmbeddedNulInAddressFieldFailsClosed(string $wire): void
+	{
+		$this->serve($wire);
+		$this->assertNull($this->read());
+	}
+
 	public function testAnAbsentUpstreamIsAValidOptionalFieldAndTheRestOfTheSnapshotIsKept(): void
 	{
 		$data = self::snapshot();

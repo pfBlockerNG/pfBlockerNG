@@ -121,8 +121,14 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   Unknown, malformed, oversized or unavailable status is unavailable, never a saved-setting fallback.
   One response supplies the page or widget refresh; readiness still independently requires the live Unbound PID to
   own TCP and UDP sockets on the reported upstream. Advertised state does not prove client reachability or TLS trust.
-  An unchanged-rc no-op update does not roll DNS back merely because this control read is unavailable; it does not
-  infer health, add a fallback, restart or retry. Actual starts/restarts retain their existing fail-closed confirmation.
+  The update pass and cron tick confirm their own starts/restarts. An existing gateway stays running when status
+  reads fail or the Resolver backend is down; existing startup diagnostics still run. Positively confirmed foreign
+  ownership of the applied upstream port is the narrow exception and retains devel's rollback.
+  A dead backend shows **Service: Starting**. [#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)
+  tracks clearer reporting and replacing the foreign-owner rollback with moving Unbound to a free port.
+  No port migration, fallback, new restart or retry is added here. Actual activations remain fail-closed.
+  Package-operation update passes keep devel's existing deferral even for a foreign holder; the tick retains its
+  foreign-owner rollback. An actual start/restart is never exempted by that deferral.
   Rare IPv4-compatible (`::/96`), mapped and equivalent-spelling normalization is deferred to
   [#3849](https://github.com/pfBlockerNG/pfBlockerNG/issues/3849). Existing exact-spelling acceptance/refusal is retained;
   this status change does not introduce a new address codec.

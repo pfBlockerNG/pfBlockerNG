@@ -45,6 +45,7 @@ final class PfbDnsStatusNameEligibilityTest extends TestCase
 			'enable' => PfbToggle::On,
 		]);
 		$GLOBALS['config'] = [];
+		PfbConfig::write('dns/pfb_dns_name', 'saved.example.com');
 		// Nothing saved: a box that was never moved, rather than one whose saved copy is invalid (recovery)
 		config_set_path(self::SAVED, '');
 		$GLOBALS['pfb_test_service_calls'] = [];

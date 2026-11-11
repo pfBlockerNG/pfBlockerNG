@@ -6184,7 +6184,8 @@ function pfb_dns_proxy_applied_status(?string $socket = NULL, float $timeout = P
 		return NULL;
 	}
 	$ip = static function (mixed $value): bool {
-		if (!is_string($value) || pfb_ipv4_from_mapped($value) !== NULL) {
+		// inet_pton() throws ValueError on NUL and '@' does not suppress it: reject NUL before any native call.
+		if (!is_string($value) || str_contains($value, "\0") || pfb_ipv4_from_mapped($value) !== NULL) {
 			return FALSE;
 		}
 		$packed = @inet_pton($value);
@@ -6290,44 +6291,52 @@ function pfb_dns_proxy_applied_listeners(?array $status): ?array {
 	return $list;
 }
 
-/** The applied upstream must have TCP and UDP sockets owned by the live Unbound pidfile's process. */
+/** The applied upstream must have TCP and UDP sockets owned exclusively by the live Unbound pidfile's process. */
 function pfb_dns_proxy_upstream_ready(?array $status = NULL): bool {
+	return pfb_dns_proxy_upstream_state($status) === 'ready';
+}
+
+/** @return 'ready'|'foreign'|'unknown' Native ownership evidence for the applied endpoint, never an inference from a failed probe. */
+function pfb_dns_proxy_upstream_state(?array $status = NULL): string {
 	global $g, $pfb;
 
 	$pidfile = "{$g['varrun_path']}/unbound.pid";
 	if (!isvalidpid($pidfile)) {
-		return FALSE;
+		return 'unknown';
 	}
 	$pid = rtrim((string) @file_get_contents($pidfile), "\n");
+	if (!ctype_digit($pid) || (int) $pid < 1 || (string) (int) $pid !== $pid) {
+		return 'unknown';
+	}
 	$status ??= pfb_dns_proxy_applied_status();
 	if ($status === NULL) {
-		return FALSE;
+		return 'unknown';
 	}
 	// Absent when the gateway spells the upstream as a hostname or scoped address: no endpoint is proven, so readiness fails closed.
 	if (!array_key_exists('upstream', $status)) {
-		return FALSE;
+		return 'unknown';
 	}
 	$argument = $status['upstream'];
 	if (preg_match('/\A(\[[0-9A-Fa-f:.]+\]|[0-9.]+):([0-9]+)\z/', $argument, $endpoint) !== 1) {
-		return FALSE;
+		return 'unknown';
 	}
 	$host = trim($endpoint[1], '[]');
 	$packed = @inet_pton($host);
 	$port = pfb_dns_proxy_listener_port($endpoint[2]);
 	if ($packed === FALSE || $port === NULL) {
-		return FALSE;
+		return 'unknown';
 	}
 	$family = strlen($packed) === 16 ? '6' : '4';
 	$expected = pfb_dns_proxy_host_port($host, $port);
 	$lines = [];
 	if (pfb_unbound_control_exec(escapeshellarg(PFB_DNS_PROXY_SOCKSTAT) . ' -46lw -p ' . escapeshellarg($port) . ' 2>/dev/null',
 	    'DNS proxy upstream sockets', $lines, FALSE, 1) !== 0) {
-		return FALSE;
+		return 'unknown';
 	}
 	$transports = [];
 	foreach ($lines as $line) {
 		$fields = preg_split('/\s+/', trim($line)) ?: [];
-		if (count($fields) < 7 || $fields[1] !== 'unbound' || $fields[2] !== $pid ||
+		if (count($fields) < 7 || !ctype_digit($fields[2]) || (int) $fields[2] < 1 ||
 		    !in_array($fields[4], ["tcp{$family}", "udp{$family}"], TRUE) ||
 		    preg_match('/\A(?:\[([0-9A-Fa-f:.]+)\]|([0-9A-Fa-f:.]+)):([0-9]+)\z/', $fields[5], $local) !== 1) {
 			continue;
@@ -6336,10 +6345,13 @@ function pfb_dns_proxy_upstream_ready(?array $status = NULL): bool {
 		$local_port = pfb_dns_proxy_listener_port($local[3]);
 		if (@inet_pton($address) !== FALSE && $local_port !== NULL &&
 		    pfb_dns_proxy_host_port($address, $local_port) === $expected) {
+			if ($fields[1] !== 'unbound' || (int) $fields[2] !== (int) $pid) {
+				return 'foreign';
+			}
 			$transports[$fields[4]] = TRUE;
 		}
 	}
-	return isset($transports["tcp{$family}"], $transports["udp{$family}"]);
+	return isset($transports["tcp{$family}"], $transports["udp{$family}"]) ? 'ready' : 'unknown';
 }
 
 /**
@@ -6389,7 +6401,7 @@ function pfb_dns_proxy_await_ready(): bool {
 }
 
 /**
- * After a start or restart the proxy was asked for, and on the boot check and the cron tick (issue #3556): wait for it to become ready,
+ * After a requested start or restart, including the boot check or a tick's own restart (issue #3556): wait for it to become ready,
  * outside any lock, then check what the start left (pfb_dns_proxy_startup_check(): one notice for every problem). One that does not
  * become ready within the budget has failed its activation: the activation is rolled back (pfb_dns_proxy_roll_back()), which diagnoses
  * the start once it has won its guard, and then restores.
@@ -6411,6 +6423,16 @@ function pfb_dns_proxy_confirm_ready(?int $since = NULL): bool {
 	}
 	pfb_dns_proxy_roll_back(NULL, NULL, $expected_saved, $since);
 	return FALSE;
+}
+
+/** Existing gateways keep their diagnostics; confirmed foreign ownership retains rollback except in a deferred package update. */
+function pfb_dns_proxy_confirm_started(bool $started, ?int $since = NULL, bool $deferred = FALSE): bool {
+	if ($started || (!$deferred && pfb_dns_proxy_upstream_state() === 'foreign')) {
+		return pfb_dns_proxy_confirm_ready($since);
+	}
+	$ready = pfb_dns_proxy_ready();
+	pfb_dns_proxy_startup_check($ready, $since);
+	return $ready;
 }
 
 /**
@@ -6594,8 +6616,8 @@ function pfb_dns_proxy_listeners_sync(?array $served): ?string {
 }
 
 /**
- * After a pfB-DNS start (an apply, the boot start) and on the cron tick, from pfb_dns_proxy_confirm_ready(), while the proxy is meant
- * to serve: raise ONE notice, id `pfBlockerNG DNS Proxy startup`, that names every problem, or close the standing notice of that id
+ * After a pfB-DNS activation from pfb_dns_proxy_confirm_ready(), and on a no-start apply or tick from pfb_dns_proxy_confirm_started(),
+ * while the proxy is meant to serve: raise ONE notice, id `pfBlockerNG DNS Proxy startup`, that names every problem, or close that notice
  * when there is none. The notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are never closed or
  * replaced here. The problems, in this order, each one sentence that says what is not served and why:
  *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one (this start's own, with a $since);
@@ -6609,8 +6631,8 @@ function pfb_dns_proxy_listeners_sync(?array $served): ?string {
  * A notice is closed only when the gateway's list was known and nothing was found; file_notice() files a row for every changed text and
  * close_notice() removes one row per call, so every row of the id is closed, by its key.
  *
- * @param bool $ready whether the proxy became ready (the caller waited for it). With no snapshot stored (nothing is meant to serve)
- *        and the proxy ready, nothing is checked, closed or waited for
+ * @param bool $ready serving readiness after an activation wait, or marker readiness when the caller started nothing. With no snapshot
+ *        stored and the proxy ready, nothing is checked, closed or waited for
  * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
  *        it; NULL = no start was made (a cron tick that restarted nothing, an apply that restarted nothing). It bounds only the gateway
  *        error looked for when the proxy is not ready: the bytes after it (none quoted when this start logged none; a log now shorter
@@ -6743,8 +6765,8 @@ function pfb_dns_proxy_claim_failure(string $why, ?string $expected_saved = NULL
  * When the config lock stays taken, config.xml does not take the restore's write, or the proxy outlives its stop, the snapshot, the moved Resolver
  * and Unbound are left as they are (the restore keeps them, and nothing destructive runs after it), and the operator is told that recovery is
  * needed: a rollback that did not finish never says it did. There is no retry state of its own: with the snapshot kept and pfB-DNS still On, the
- * next apply's Resolver step re-applies the move on that snapshot (pfb_dns_proxy_resolver_locked() takes no second one), and the proxy check or
- * the next tick rolls it back again while the proxy is not ready.
+ * next apply's Resolver step re-applies the move on that snapshot (pfb_dns_proxy_resolver_locked() takes no second one). Confirmation
+ * runs again only for a later start/restart or positively confirmed foreign upstream ownership, not an ordinary unready tick.
  *
  * @param string|null $what why pfB-DNS is rolled back, as a clause that follows "pfB-DNS activation failed: "; NULL = the proxy did not become ready
  * @param string|null $next the operator's last sentence after a rollback that worked; NULL = read the proxy log and correct the cause
@@ -6853,10 +6875,8 @@ function pfb_dns_proxy_gateway_changed(string $proxyDir): bool {
  * (every ordinary or fixed-port `--listen`/`--dot-listen`/`--doh-listen`/`--doq-listen` argument masked out of both texts) and its name
  * answers (every `--dns-name-answer` and `--ddr-doh-443`) is reconciled
  * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket: the pass
- * asks once (pfb_dns_proxy_applied_status()) and the sync acts on that inventory; with the proxy not READY, or with a gateway that gives
- * no list (nothing to compare with), it restarts the pair. Whatever it did, the proxy must then serve (pfb_dns_proxy_serving_ready()):
- * one that is alive but never published its marker (restarted every few seconds) fails the activation and is rolled back, which a
- * pidfile alone would never notice.
+ * asks once (pfb_dns_proxy_applied_status()) and the sync acts on that inventory. An address-only rc change that cannot be reconciled
+ * restarts the pair. A start/restart this pass made, or positively confirmed foreign upstream ownership, takes the existing confirmation.
  *
  * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
  * pending restart (pfb_dns_proxy_defer_restart()), and nothing else is looked at. The next pass outside one restarts the whole pair
@@ -6867,9 +6887,9 @@ function pfb_dns_proxy_gateway_changed(string $proxyDir): bool {
  * adds, live, an address the gateway could not assign when it started and the box can bind now (issue #3598), and restarts the pair only when
  * the gateway does not take a change: looked for only while READY, and never under a package operation.
  *
- * Only a deferred pass (under a package operation) that acted on nothing and finds the gateway READY skips the upstream confirmation: it
- * files the startup problems the gateway's list shows and returns ready (issue #3560, D-a). The tick and the boot check confirm the upstream and roll
- * back a failed one; every other pass gets the full confirmation.
+ * A pass that started or restarted nothing leaves the gateway running when status or its backend is unavailable. The shared
+ * pfb_dns_proxy_confirm_started() keeps the existing rollback only for positively confirmed foreign upstream ownership outside a
+ * deferred package update; otherwise it files startup notices and returns marker readiness. Actual activations remain fail-closed.
  *
  * @param string $proxyDir the package's dns_proxy directory, as for pfb_dns_proxy_service()
  * @return bool TRUE iff nothing is moved or the proxy is ready; FALSE after a failed activation (rolled back or not)
@@ -6888,13 +6908,13 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	pfb_dns_proxy_service($proxyDir);
 	$deferred = pfb_dns_proxy_restart_deferred();
 	$why = NULL;		// why the running proxy restarts as a whole pair
-	$unanswered = FALSE;
+	$acted = FALSE;
 	if (!pfb_dns_proxy_running()) {
 		pfb_logger("\nStarting the DNS proxy", 1);
 		$since = pfb_dns_proxy_log_size();
 		start_service('pfb_dns_proxy');
-		unlink_if_exists($pfb['dns_proxy_restart_pending']);
 		$acted = TRUE;
+		unlink_if_exists($pfb['dns_proxy_restart_pending']);
 	} else {
 		$after = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 		$rc_changed = $before !== $after;
@@ -6910,7 +6930,6 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 			$why = 'a restart was deferred to this update';
 		} elseif (pfb_dns_proxy_ready()) {
 			$applied = pfb_dns_proxy_applied_status();
-			$unanswered = $applied === NULL;
 			if (pfb_dns_proxy_gateway_changed($proxyDir)) {
 				$why = 'the package installed another gateway';
 			} elseif (($served = pfb_dns_proxy_applied_listeners($applied)) === NULL && $rc_changed) {
@@ -6922,26 +6941,15 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 			$why = 'its listen addresses changed';
 		}
 		$since = NULL;
-		$acted = ($why !== NULL);
 		if ($why !== NULL) {
 			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
 			$since = pfb_dns_proxy_log_size();
 			restart_service('pfb_dns_proxy');
+			$acted = TRUE;
 			unlink_if_exists($pfb['dns_proxy_restart_pending']);
 		}
 	}
-	// A deferred pass that acted on nothing keeps a gateway that is ready as it is: the package operation does not judge its
-	// upstream; the tick and the boot check do, with their rollback (issue #3560 D-a).
-	if ($deferred && !$acted && pfb_dns_proxy_ready()) {
-		pfb_dns_proxy_startup_check(TRUE);
-		return TRUE;
-	}
-	// An unanswered applied status is unknown, not unhealthy: with nothing started or restarted, the ready gateway is kept as it is.
-	// Only an activation waits for an answered status (confirm_ready()).
-	if (!$acted && $unanswered) {
-		return TRUE;
-	}
-	$ready = pfb_dns_proxy_confirm_ready($since);
+	$ready = pfb_dns_proxy_confirm_started($acted, $since, $deferred);
 	if ($acted && $ready) {
 		pfb_logger(' completed: the DNS proxy is ready', 1);
 	}
