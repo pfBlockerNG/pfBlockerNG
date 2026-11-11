@@ -41,10 +41,14 @@ against source, not guessed):
   LAN client, is not answered in CI — so we don't use it.)
 
   Two domain constraints, both load-bearing (see ``helpers.unique_domain``):
-  test names must NOT use RFC 6761 TLDs (``.test`` / ``.example`` / …) — Unbound's
-  built-in ``local-zone``s shadow them (NXDOMAIN/NODATA) before DNSBL — and must
-  NOT be HSTS-preload — with HSTS on (the default ``pfb_hsts``), a preload domain's
-  VIP block is forced to NULL. A random ``uuid-*.com`` satisfies both.
+  test names must NOT use RFC 6761 TLDs (``.test`` / ``.example`` / …) — DNSBL runs in
+  the pfB-DNS decider, which answers a LISTED name there before Unbound is asked
+  (listed ``.test`` / ``.example`` / ``.invalid`` names get the VIP), but
+  an UNLISTED name (a not-blocked probe) under ``.test`` / ``.invalid`` reaches
+  Unbound's built-in ``local-zone`` and is answered NXDOMAIN, not by the stub upstream
+  — and must NOT be HSTS-preload — with HSTS on
+  (the default ``pfb_hsts``), a preload domain's VIP block is forced to NULL. A random
+  ``uuid-*.com`` satisfies both.
 * WHITELIST (``suppression``): ``whitelist_check_domain`` short-circuits before
   any block shape, so a suppressed name resolves via its control ``local-data``.
 * DNSBL-IP dual-stack (``action != 'Disabled'``): IP literals in the DNSBL feed
@@ -59,13 +63,15 @@ and the smoke deps; without them they skip cleanly.
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import os
 import re
 import shlex
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from functools import partial
 from typing import Any
 
 import pytest
@@ -155,35 +161,137 @@ def test_ip_alias_table_and_rule(deployed_vm: SmokeVM, mock_feeds: _MockFeedServ
 # --------------------------------------------------------------------------- #
 
 
-def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """pfBlockerNG DNSBL reload only adds python-module config to unbound.conf.
+# Resolver fixtures the immutability test seeds BEFORE pfB-DNS moves the Resolver, so the baseline carries a host
+# entry and a server directive whose loss a DNSBL reload could cause.
+_IMMUT_HOST_IP = "192.0.2.77"  # RFC 5737 documentation address, inert
+_IMMUT_TUNING = "outbound-msg-retry: 7"  # a server directive pfSense never generates, with a non-default value
+_IMMUT_CUSTOM_OPTIONS = f"server:\n{_IMMUT_TUNING}\n"
+_CFG_CUSTOM_OPTIONS = "unbound/custom_options"
 
-    When DNSBL is enabled, pfBlockerNG is allowed to make exactly ONE class of
-    change to Unbound's configuration: adding the python iterator module directives
-    (``module-config``, ``python-script``, and pfBlockerNG managed ``include``
-    lines, plus the DNSBL VIP ``interface:`` entry).  No other configuration —
-    access-control, forward-zones, server tuning — may be removed or altered.
+
+def _seed_resolver_fixtures(vm: SmokeVM, host: str) -> None:
+    """A Host Override for ``host`` and a server directive in the Resolver's Custom Options, applied to Unbound."""
+    h.set_control_records(vm, {host: {"A": _IMMUT_HOST_IP}}, {})
+    encoded = base64.b64encode(_IMMUT_CUSTOM_OPTIONS.encode()).decode()
+    result = h.php_eval(
+        vm,
+        f"config_set_path({h._php_str(_CFG_CUSTOM_OPTIONS)}, {h._php_str(encoded)});\n"
+        "write_config('pfBlockerNG smoke: seed a Resolver server directive');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';",
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, f"seeding Custom Options failed: {result!r}"
+
+
+def _remove_host_override(vm: SmokeVM, host: str) -> None:
+    label, _, domain = host.partition(".")
+    result = h.php_eval(
+        vm,
+        f"$hosts = config_get_path({h._php_str(h.CFG_UNBOUND_HOSTS)}, array());\n"
+        "$hosts = array_values(array_filter($hosts, function($r) {\n"
+        f"  return ($r['host'] ?? '') !== {h._php_str(label)} || ($r['domain'] ?? '') !== {h._php_str(domain)};\n"
+        "}));\n"
+        f"config_set_path({h._php_str(h.CFG_UNBOUND_HOSTS)}, $hosts);\n"
+        "write_config('pfBlockerNG smoke: remove the immutability host override');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';",
+    )
+    assert result.returncode == 0 and "OK" in result.stdout, f"removing the host override failed: {result!r}"
+
+
+def _restore_resolver_fixtures(vm: SmokeVM, host: str, prior: dict[str, tuple[bool, str]]) -> list[Exception]:
+    """Give the Resolver back (pfB-DNS off first, so its snapshot is restored), then undo every seeded value.
+
+    Every step runs, in this order, whatever an earlier one raised, so one failure cannot leave a seeded value
+    behind for later modules. The failures come back, each noted with its step, for the caller to report.
+    """
+    errors: list[Exception] = []
+
+    def step(what: str, run: Callable[[], None]) -> None:
+        try:
+            run()
+        except Exception as exc:
+            exc.add_note(f"restoring the Resolver fixtures: {what}")
+            errors.append(exc)
+
+    step("release pfB-DNS", lambda: h.release_pfb_dns(vm))
+    for path, state in prior.items():
+        step(f"restore {path}", partial(h.config_restore_state, vm, path, state))
+    step("remove the host override", lambda: _remove_host_override(vm, host))
+    return errors
+
+
+def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A DNSBL reload under pfB-DNS only adds python-module config to unbound.conf.
+
+    DNSBL runs only through pfB-DNS (#3770), and pfB-DNS moves the DNS Resolver
+    (``interface-automatic`` becomes ``interface: 127.0.0.1`` / ``::1`` and the
+    forward-zone is rewritten): those lines are pfB-DNS's to change, not the DNSBL
+    reload's. The baseline is therefore taken AFTER pfB-DNS has moved the Resolver
+    and BEFORE the DNSBL reload. From there pfBlockerNG is allowed exactly ONE
+    class of change to Unbound's configuration: adding python-module directives
+    (``module-config``, ``python-script``, pfBlockerNG managed ``include`` lines,
+    plus the DNSBL VIP ``interface:`` entry).  No other configuration —
+    access-control, forward-zones, host entries, server tuning — may be removed or
+    altered.
+
+    The Resolver carries a unique Host Override and a server directive in Custom
+    Options before pfB-DNS moves it, and the baseline must hold both, so a reload
+    that dropped either class is caught; every seeded value is restored afterwards.
 
     This guards against pfBlockerNG silently clobbering custom Unbound config
     (e.g. the DNS-Resolver ACLs in access_lists.conf) during a reload.
     """
-    # Baseline the EFFECTIVE unbound config (unbound.conf + all *.conf includes,
-    # so access_lists.conf etc. are covered) AND the live ACLs, BEFORE DNSBL is
-    # applied. The case carries no control records, so the only legitimate delta
-    # is pfBlockerNG's python-module config.
-    h.snapshot_unbound_effective(deployed_vm)
-    acls_before = h.unbound_access_control(deployed_vm)
-    domain = h.unique_domain("cfgimmut")
-    feed_url = h.write_local_feed(deployed_vm, "smoke_cfgimmut.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokecfgimmut", feed_url=feed_url, header="smokecfgimmut")
-    with h.CaseContext(deployed_vm, spec):
-        h.assert_unbound_adds_only_python_config(deployed_vm)
-        # Authoritative ACL check via the daemon itself (unbound-control), not a
-        # file grep: the DNSBL reload must not drop/alter the resolver ACLs.
-        acls_after = h.unbound_access_control(deployed_vm)
-        assert acls_after == acls_before, (
-            f"DNSBL reload changed Unbound ACLs: before={sorted(acls_before)} after={sorted(acls_after)}"
+    vm = deployed_vm
+    host = h.unique_domain("cfgimmut-host")
+    prior = {
+        path: h.config_get_state(vm, path)
+        for path in (_CFG_CUSTOM_OPTIONS, f"{h.CFG_GLOBAL}/enable_cb", h.dns_config_path("pfb_dns"))
+    }
+    try:
+        _seed_resolver_fixtures(vm, host)
+        # pfB-DNS next, with no DNSBL list: pfBlockerNG enabled and the toggle on make its
+        # apply move the Resolver (the proxy runs --no-module). Its own changes are not under test here.
+        h.config_set(vm, f"{h.CFG_GLOBAL}/enable_cb", "on")
+        h.config_set(vm, h.dns_config_path("pfb_dns"), "on")
+        h.reload(vm, "updatednsbl")
+        assert h._pfb_dns_moved(vm), "baseline: pfB-DNS did not take the Resolver"
+        # Baseline the EFFECTIVE unbound config (unbound.conf + all *.conf includes,
+        # so access_lists.conf, host_entries.conf etc. are covered) AND the live ACLs, with pfB-DNS
+        # holding the Resolver, BEFORE DNSBL is applied. The case carries no control records, so
+        # the only legitimate delta is pfBlockerNG's python-module config.
+        h.snapshot_unbound_effective(vm)
+        baseline = vm.ssh("cat", h.UNBOUND_SETUP)
+        assert baseline.returncode == 0 and baseline.stdout.strip(), (
+            f"baseline: the effective-config snapshot {h.UNBOUND_SETUP} is empty (the assertion would pass vacuously)"
         )
+        lines = [ln.strip() for ln in baseline.stdout.splitlines()]
+        assert any(ln.startswith("local-data:") and host in ln and _IMMUT_HOST_IP in ln for ln in lines), (
+            f"baseline: the host override for {host} is not a local-data line:\n{baseline.stdout}"
+        )
+        assert _IMMUT_TUNING in lines, (
+            f"baseline: Custom Options' {_IMMUT_TUNING!r} is not in the config:\n{baseline.stdout}"
+        )
+        acls_before = h.unbound_access_control(vm)
+        assert acls_before, "baseline: the live Unbound enforces no access-control"
+        domain = h.unique_domain("cfgimmut")
+        feed_url = h.write_local_feed(vm, "smoke_cfgimmut.txt", f"{domain}\n")
+        spec = h.DnsblCase(aliasname="smokecfgimmut", feed_url=feed_url, header="smokecfgimmut")
+        with h.CaseContext(vm, spec):
+            h.assert_unbound_adds_only_python_config(vm)
+            # Authoritative ACL check via the daemon itself (unbound-control), not a
+            # file grep: the DNSBL reload must not drop/alter the resolver ACLs.
+            acls_after = h.unbound_access_control(vm)
+            assert acls_after == acls_before, (
+                f"DNSBL reload changed Unbound ACLs: before={sorted(acls_before)} after={sorted(acls_after)}"
+            )
+    except BaseException as failure:
+        for error in _restore_resolver_fixtures(vm, host, prior):
+            failure.add_note(f"restoring the Resolver fixtures also failed: {error!r}")
+        raise
+    errors = _restore_resolver_fixtures(vm, host, prior)
+    if errors:
+        raise ExceptionGroup("restoring the Resolver fixtures failed", errors)
 
 
 def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -669,8 +777,8 @@ def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fee
     ``RCODE_NXDOMAIN`` with no DNSMessage (neither the VIP nor the 0.0.0.0 null
     shape). The rcode is name-level, so BOTH the A and AAAA queries answer
     NXDOMAIN. A unique non-HSTS-preload ``.com`` is used so the result is the
-    NXDOMAIN block path itself, not an Unbound built-in ``local-zone`` shadowing
-    an RFC-6761 TLD (which would also NXDOMAIN, ahead of DNSBL). Contrast the
+    NXDOMAIN block path itself, not the NXDOMAIN Unbound's built-in ``local-zone``
+    gives an unlisted name under an RFC-6761 TLD. Contrast the
     VIP/null cases above: same feed match, different per-list ``logging`` →
     different response shape, proving '3' is a distinct, live branch.
     """

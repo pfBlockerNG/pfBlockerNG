@@ -141,10 +141,11 @@ def unique_domain(label: str = "pfbsmoke") -> str:
     """A collision-proof, NON-reserved test domain, e.g. ``blocked-<uuid4hex>.com``.
 
     Test domains MUST avoid the RFC 6761 special-use TLDs (``.test``, ``.example``,
-    ``.invalid``, ``.localhost``, ``.onion``) and ``home.arpa``: Unbound serves
-    those as built-in ``local-zone``s and answers them (NXDOMAIN/NODATA) itself, so a
-    probe of such a name would show Unbound's own answer, not the DNSBL block or the
-    upstream answer under test. A random
+    ``.invalid``, ``.localhost``, ``.onion``) and ``home.arpa``: DNSBL runs in the
+    pfB-DNS decider, which answers a listed name before Unbound is asked, but an
+    unlisted name under ``.test`` / ``.invalid`` reaches Unbound's built-in
+    ``local-zone`` and is answered NXDOMAIN, so a not-blocked name there never gets
+    the upstream's answer. A random
     UUIDv4 under ``.com`` can't collide with a real domain and isn't on the HSTS
     preload list (which would flip the block shape to NULL when HSTS is on). The
     ``<label>-`` prefix keeps the first label from starting with a digit.
@@ -4416,6 +4417,10 @@ def unbound_access_control(vm: SmokeVM, *, timeout: float = 30.0) -> set[str]:
 
 def assert_unbound_adds_only_python_config(vm: SmokeVM, *, timeout: float = 30.0) -> None:
     """Assert a DNSBL reload only adds python-module config to the EFFECTIVE config.
+
+    DNSBL runs only through pfB-DNS, which moves the Resolver (``interface:`` lines,
+    the forward-zone): take the baseline after pfB-DNS's own apply, or its move reads
+    as a loss.
 
     Compares ``UNBOUND_SETUP`` (the effective config — unbound.conf + all *.conf
     includes — captured by snapshot_unbound_effective BEFORE the DNSBL reload)
