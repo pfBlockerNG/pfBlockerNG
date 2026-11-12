@@ -237,6 +237,9 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
         assert _dnsbl_log_hits(adr65_vm, domain1) == 0, f"{domain1} already in dnsbl.log before listing"
         assert _dnsbl_log_hits(adr65_vm, domain2) == 0, f"{domain2} already in dnsbl.log before listing"
 
+        # The group's counter before any block: the subject's own increment is counted from it.
+        c0 = max(_read_group_counter(adr65_vm, f"DNSBL_{spec.aliasname}")[0], 0)
+
         # Real block #1 (the query subject): domain1.
         answer1 = h.dns_probe(adr65_vm, domain1)
         assert h.is_vip(answer1), f"expected VIP block for {domain1!r}, got {answer1!r}"
@@ -261,20 +264,20 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
         fields1 = line1.split(",")
         assert len(fields1) > 8, f"unexpected dnsbl.log line shape for {domain1}: {line1!r}"
         group1, feed1 = fields1[6], fields1[8]
-        assert group1, f"empty group parsed from dnsbl.log line: {line1!r}"
+        assert group1 == f"DNSBL_{spec.aliasname}", f"group {group1!r} is not the one baselined: {line1!r}"
 
         # The stats writer flushes the counter apart from the log line: wait for domain1's own increment, so the
         # baseline holds it before the query runs (issue #3895: a baseline of 0 took the barrier's flush for the query).
         deadline = time.monotonic() + 30.0
         while True:
             c1, detail1 = _read_group_counter(adr65_vm, group1)
-            if c1 >= 1:
+            if c1 >= c0 + 1:
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError(
                     "salvage cap expired / stuck or environment: "
-                    f"query-channel awaited the {group1!r} counter >= 1 after {domain1}'s block; "
+                    f"query-channel awaited the {group1!r} counter >= {c0 + 1} after {domain1}'s block; "
                     f"observed {c1} detail={detail1!r}"
                 )
             time.sleep(min(1.0, remaining))

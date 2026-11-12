@@ -1659,9 +1659,9 @@ def test_safesearch_doh_list_multiselect_valid_and_bogus_clears(
     submitted key is NOT in the opts map -> implode of '' -> '' stored (NOT the
     bogus value). A valid 'dns.google' -> 'dns.google'. We pair the list save with
     ``safesearch_doh='Disable'`` so the doh-Enable-needs-a-list guard never fires
-    while exercising the list validator in isolation. An explicit override is
-    required (scrape_form_fields harvests only the first <selected>/first option of
-    the multi-select). write_config() only -- hermetic.
+    while exercising the list validator in isolation. An explicit override sets the
+    value under test (scrape_form_fields posts only the multi-select's selected
+    options). write_config() only -- hermetic.
     """
     vm = smoke_vm
     cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh_list"
@@ -1707,8 +1707,8 @@ def test_safesearch_doh_enable_requires_list_guard(
 
     * PASS: ``{safesearch_doh:'Enable', safesearch_doh_list:'dns.google'}`` -> guard
       NOT tripped -> node == 'Enable' AND the list == 'dns.google'.
-    * REJECT: ``{safesearch_doh:'Enable', safesearch_doh_list:''}`` (explicit empty,
-      defeating the scraped first-option default) -> guard fires -> the ENTIRE save
+    * REJECT: ``{safesearch_doh:'Enable', safesearch_doh_list:''}`` (explicit empty)
+      -> guard fires -> the ENTIRE save
       aborts -> safesearch_doh stays at its prior value (the captured before-state),
       NOT 'Enable'.
 
