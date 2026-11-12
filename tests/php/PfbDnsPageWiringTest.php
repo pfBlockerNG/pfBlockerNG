@@ -83,6 +83,14 @@ final class PfbDnsPageWiringTest extends TestCase
 		}
 	}
 
+	/** Issue #3873: a holder with no free loopback pair left stops pfB-DNS, keeps the Resolver moved, names the holder and retries; the help says so. */
+	public function testTheHelpSaysWhatHappensWhenNoLoopbackPairIsFree(): void
+	{
+		$page = self::src(self::PAGE);
+
+		$this->assertStringContainsString('If another process holds one of them and no pair is free, <strong>pfB-DNS</strong> stops serving DNS and the Resolver stays moved; a notice names the holder, and a later tick or <strong>Update</strong> tries again.', $page);
+	}
+
 	public function testTheDnsblPageNoLongerCarriesTheToggleOrItsHelp(): void
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');

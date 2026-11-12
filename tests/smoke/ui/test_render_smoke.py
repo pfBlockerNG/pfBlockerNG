@@ -2513,8 +2513,10 @@ def test_pfb_dns_enable_help_says_a_later_conflict_and_a_disabled_resolver_keep_
 
     Given DNS General renders, Then the pfB-DNS enable help says a conflict added later keeps pfB-DNS running with the
     Resolver still moved and raises a notice, and that disabling the Resolver leaves pfB-DNS running without a backend
-    (DNS queries fail and a notice says so) until the Resolver is enabled or pfB-DNS is turned off; the page carries
-    neither the old "restores the Resolver" nor the old "activation failed" wording.
+    (DNS queries fail and a notice says so) until the Resolver is enabled or pfB-DNS is turned off; and (issue #3873)
+    that a holder with no free loopback pair left stops pfB-DNS with the Resolver still moved, a notice naming the
+    holder and a later retry; the page carries neither the old "restores the Resolver" nor the old "activation failed"
+    wording.
     """
     path = "/pfblockerng/pfblockerng_dns_general.php"
     resp = webui.get(path)
@@ -2527,6 +2529,8 @@ def test_pfb_dns_enable_help_says_a_later_conflict_and_a_disabled_resolver_keep_
         "Disabling the DNS Resolver leaves pfB-DNS running without a backend: DNS queries fail and a notice says so "
         "until the Resolver is enabled or pfB-DNS is turned off.",
         "Turning pfB-DNS off, disabling pfBlockerNG or removing the package restores the saved Resolver settings.",
+        "If another process holds one of them and no pair is free, pfB-DNS stops serving DNS and the Resolver stays "
+        "moved; a notice names the holder, and a later tick or Update tries again.",
     ):
         assert sentence in text, f"the pfB-DNS enable help is missing: {sentence!r}"
     for retired in (
