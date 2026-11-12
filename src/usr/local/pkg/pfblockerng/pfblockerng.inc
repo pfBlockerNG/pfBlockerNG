@@ -8732,8 +8732,6 @@ function pfb_log_mgmt() {
 	global $g, $pfb;
 	pfb_global();
 
-	$chroot_folder = '/var/unbound';
-
 	// The RAW value, never a parsed one: the guards clamp it themselves (#1258), so no
 	// caller can hand them an out-of-range margin. Hoisting the read is fine; hoisting
 	// the parse is what let an unclamped margin reach the window arithmetic.
@@ -8756,80 +8754,32 @@ function pfb_log_mgmt() {
 		}
 
 		if (file_exists($pfb[$logtype])) {
-			if ($logtype == 'dnslog' || $logtype == 'dnsreplylog' || $logtype == 'unilog') {
-
-				// Set DNSBL python logfile permissions using chroot folder
-				if (is_dir("{$chroot_folder}/var/log/pfblockerng")) {
-					$final_log_file = "{$chroot_folder}{$pfb[$logtype]}";
-					$temp = tempnam("{$chroot_folder}/var/log/pfblockerng", 'pfb_log_');
-				} else {
-					$final_log_file = $pfb[$logtype];
-					$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
-				}
-
-				if (file_exists($final_log_file)) {
-					// issue #1109: skip this tick's whole pass unless an active cap is
-					// past its margin-widened high-water mark (the hysteresis trigger).
-					if (!pfb_log_trim_needed($logmax, $agedays, $final_log_file, $logtype, $margin_raw)) {
-						unlink_if_exists($temp);
-						continue;
-					}
-
-					// Truncate in place to preserve the inode (#264): mv replaces the
-					// inode, so a remote syslog shipper keyed on (inode, offset) treats
-					// it as a rotation and re-sends the whole log. cat over '>' keeps the
-					// same inode - the file just shrinks - and so keeps its ownership.
-					// Gate on each exit code: unlike the atomic mv, '>' truncates first,
-					// so a failed tail/cat must not be allowed to leave an empty/partial log.
-					if ($logmax === 'nolimit') {
-						// No line-count candidate exists (ADR-60 S2.2): age-cutoff
-						// scans the whole file instead of a tail(1) candidate.
-						$ret = @copy($final_log_file, $temp) ? 0 : 1;
-					} else {
-						exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " " . escapeshellarg($final_log_file) . " > " . escapeshellarg($temp), $out, $ret);
-					}
-					if ($ret !== 0) {
-						pfb_logger("\npfb_log_mgmt: failed to produce {$final_log_file}'s truncation candidate", 2);
-					} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype, $logmax === 'nolimit')) {
-						pfb_logger("\npfb_log_mgmt: failed to age-trim {$final_log_file}'s truncation candidate", 2);
-						$ret = 1;
-					}
-					if ($ret === 0) {
-						exec("/bin/cat " . escapeshellarg($temp) . " > " . escapeshellarg($final_log_file), $out, $ret);
-						if ($ret === 0) {
-							@chown($final_log_file, 'unbound');
-							@chgrp($final_log_file, 'unbound');
-						} else {
-							pfb_logger("\npfb_log_mgmt: failed to overwrite {$final_log_file} during truncation", 2);
-						}
-					}
-				}
+			// issue #3850: every log is on the host (pfB-DNS writes the DNSBL ones; nothing mounts them into Unbound's chroot)
+			$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
+			// issue #1109: skip this tick's whole pass unless an active cap is past its margin-widened high-water mark.
+			if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $margin_raw)) {
+				unlink_if_exists($temp);
+				continue;
 			}
-			else {
-				$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
-				// issue #1109: same unified high-water guard as the chroot branch above.
-				if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $margin_raw)) {
-					unlink_if_exists($temp);
-					continue;
-				}
-				// Truncate in place to preserve the inode (#264) - see above. Gate on
-				// each exit code so a failed tail/cat cannot truncate the live log.
-				if ($logmax === 'nolimit') {
-					$ret = @copy($pfb[$logtype], $temp) ? 0 : 1;
-				} else {
-					exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp), $out, $ret);
-				}
+			// Truncate in place to preserve the inode (#264): mv would replace it, and a remote syslog shipper keyed
+			// on (inode, offset) would re-send the whole log. '>' truncates first, so gate on each exit code: a failed
+			// tail/cat must not leave an empty or partial log.
+			if ($logmax === 'nolimit') {
+				// No line-count candidate exists (ADR-60 S2.2): age-cutoff scans the whole file.
+				$ret = @copy($pfb[$logtype], $temp) ? 0 : 1;
+			} else {
+				exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp), $out, $ret);
+			}
+			if ($ret !== 0) {
+				pfb_logger("\npfb_log_mgmt: failed to produce {$pfb[$logtype]}'s truncation candidate", 2);
+			} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype, $logmax === 'nolimit')) {
+				pfb_logger("\npfb_log_mgmt: failed to age-trim {$pfb[$logtype]}'s truncation candidate", 2);
+				$ret = 1;
+			}
+			if ($ret === 0) {
+				exec("/bin/cat " . escapeshellarg($temp) . " > {$pfb[$logtype]}", $out, $ret);
 				if ($ret !== 0) {
-					pfb_logger("\npfb_log_mgmt: failed to produce {$pfb[$logtype]}'s truncation candidate", 2);
-				} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype, $logmax === 'nolimit')) {
-					pfb_logger("\npfb_log_mgmt: failed to age-trim {$pfb[$logtype]}'s truncation candidate", 2);
-					$ret = 1;
-				}
-				if ($ret === 0) {
-					exec("/bin/cat " . escapeshellarg($temp) . " > {$pfb[$logtype]}", $out, $ret);
-					if ($ret !== 0) {
-						pfb_logger("\npfb_log_mgmt: failed to overwrite {$pfb[$logtype]} during truncation", 2);
-					}
+					pfb_logger("\npfb_log_mgmt: failed to overwrite {$pfb[$logtype]} during truncation", 2);
 				}
 			}
 			unlink_if_exists($temp);
