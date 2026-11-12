@@ -195,6 +195,289 @@ function pfb_dnsbl_custom_row(string $aliasname, mixed $custom): array {
 	];
 }
 
+// Parsed-failure log is skipped for these names: hosts-file boilerplate and HTML scraps, not feed content.
+const PFB_DNSBL_SKIP_NAMES = [
+	'broadcasthost' => TRUE, 'local' => TRUE, 'localhost' => TRUE, '<pre>' => TRUE, 'Vault' => TRUE, 'Site' => TRUE,
+	'list' => TRUE, '::1' => TRUE, ':' => TRUE, 'ip6-localhost' => TRUE, 'ip6-localnet' => TRUE,
+	'ip6-mcastprefix' => TRUE, 'ip6-allnodes' => TRUE, 'ip6-allrouters' => TRUE, 'ip6-allhosts' => TRUE,
+];
+
+// Alienvault OTX indicator types that name a domain.
+const PFB_DNSBL_OTX_TYPES = ['domain' => TRUE, 'hostname' => TRUE, 'URL' => TRUE];
+
+// pfb_dnsbl_parse_line() result for a line that writes no row and does not end the feed.
+const PFB_DNSBL_LINE_NO_ROW = ['row' => NULL, 'stop' => FALSE];
+
+/**
+ * Per-feed state of pfb_dnsbl_parse_line(): CSV detection, the reverse (Spamhaus) host format, the IPs found in the
+ * feed and the strict-scheme skip count.
+ *
+ * @return array{csv_type:string,csv_parser:bool,run_once:bool,rev_format:bool,ip4:list<string>,ip6:list<string>,scheme_skipped:int,updateip:bool}
+ */
+function pfb_dnsbl_parse_state(): array {
+	return [
+		'csv_type'       => '',
+		'csv_parser'     => FALSE,
+		'run_once'       => FALSE,
+		'rev_format'     => FALSE,
+		'ip4'            => array(),
+		'ip6'            => array(),
+		'scheme_skipped' => 0,
+		'updateip'       => FALSE,
+	];
+}
+
+/**
+ * One line of a downloaded DNSBL feed (as fgets() returns it): the body of the DNSBL download loop. Returns the NDJSON
+ * row to write ('row', NULL when the line yields none) and whether the line ends the feed ('stop', the hpHosts end
+ * marker). IPs found go to $state['ip4'] / $state['ip6'] and set $state['updateip'].
+ *
+ * @param array{csv_type:string,csv_parser:bool,run_once:bool,rev_format:bool,ip4:list<string>,ip6:list<string>,scheme_skipped:int,updateip:bool} $state
+ * @param array{header:string,custom:bool,dnsbl_ip:bool,lenient:bool,parse_err:string} $ctx
+ * @return array{row:?string,stop:bool}
+ */
+function pfb_dnsbl_parse_line(string $line, int $lineno, array &$state, array $ctx): array {
+	$header = $ctx['header'];
+	$custom = $ctx['custom'];
+	$parse_err = $ctx['parse_err'];
+
+	// Collect original line
+	$oline = $line;
+
+	// Issue #946: strip a UTF-8 BOM before ANY per-line classification -- the
+	// control-line skip, the ADR-62 per-line capture guard and the CSV
+	// autodetection below do not handle a BOM themselves; a BOM-led first line
+	// would be misclassified by all three. $oline keeps the original bytes for
+	// the parse-error log. This also strips a BOM from captured ABP-shaped
+	// lines before their verbatim passthrough to the decider -- intentional and
+	// harmless (its parser is byte-oriented too).
+	$line = pfb_dnsbl_strip_bom($line);
+
+	$line = pfb_dnsbl_scrub_line($line);
+
+	// ADR-06 fact 7 / ADR-62: an ABP network anchor or
+	// hosts-line target that is itself an IP address is
+	// pulled to the firewall alias here -- never passed to
+	// the decider (no double-handling, no leak) -- checked BEFORE
+	// the generic verbatim capture below.
+	if ($ctx['dnsbl_ip']) {
+		$abp_ip = pfb_dnsbl_abp_extract_ip($line);
+		if ($abp_ip === FALSE) {
+			pfb_parse_fail_log($header, $line, $oline, $parse_err, $lineno);
+			return PFB_DNSBL_LINE_NO_ROW;
+		}
+		if ($abp_ip !== '') {
+			if (!str_contains($line, $abp_ip)) {
+				pfb_logger("\n  IP literal decoded: [ {$line} ] -> [ {$abp_ip} ]", 1);
+			}
+			if (pfb_dnsbl_collect_feed_ip(explode('/', $abp_ip, 2)[0], $abp_ip, $custom, $state['ip4'], $state['ip6'])) {
+				$state['updateip'] = TRUE;
+			}
+			return PFB_DNSBL_LINE_NO_ROW;
+		}
+		// issue #3434: an IPv4-shaped regex rule also feeds its CIDRs to the IP table; the line still goes to the decider.
+		foreach (pfb_dnsbl_abp_regex_ip4_cidrs($line, $header) as $abp_cidr) {
+			if (pfb_dnsbl_collect_feed_ip(explode('/', $abp_cidr, 2)[0], $abp_cidr, $custom, $state['ip4'], $state['ip6'])) {
+				$state['updateip'] = TRUE;
+			}
+		}
+	}
+
+	// ADR-62 Decision 2: any self-identifying ABP shape (||/@@
+	// anchors, /regex/[$opts], ##-family) is captured BEFORE
+	// CSV autodetection and URL/path/'?'-query stripping (which
+	// would otherwise truncate/mangle them) and written VERBATIM
+	// to the '.bk'/'.txt' staging file; the manifest builder
+	// copies it to the '.raw' and the decider's build() routes it to
+	// parse_abp() (never a domain/IP/path anchor -> silently
+	// skipped).
+	if (pfb_dnsbl_is_abp_rule_line($line)) {
+		return ['row' => pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $line), 'stop' => FALSE];
+	}
+
+	// If 'tab' character found, replace with whitespace
+	if (strpos($line, "\x09") !== FALSE) {
+		$line = str_replace("\x09", ' ', $line);
+	}
+
+	// If '%20' found, remove.
+	if (strpos($line, '%20') !== FALSE) {
+		$line = str_replace('%20', '', $line);
+	}
+
+	// Remove comment lines and special format considerations. Checked
+	// BEFORE the generic '!'/'//' skip below since these side effects
+	// (hpHosts end marker, Spamhaus format, h3x CSV header) must run.
+	if (str_starts_with($line, '#')) {
+		$pfb_hash_class = pfb_dnsbl_hash_line_classify($line);
+		// Exit (hpHosts) when end of domain names found.
+		if ($pfb_hash_class['stop']) {
+			return ['row' => NULL, 'stop' => TRUE];
+		}
+
+		// Spamhaus format validation
+		if ($pfb_hash_class['rev_format']) {
+			$state['rev_format'] = TRUE;
+		}
+
+		if ($pfb_hash_class['csv_type'] !== NULL) {
+			$state['csv_type'] = $pfb_hash_class['csv_type'];
+		}
+		if ($pfb_hash_class['csv_parser']) {
+			$state['csv_parser'] = TRUE;
+		}
+		return PFB_DNSBL_LINE_NO_ROW;
+	}
+
+	// ADR-62 Decision 4: universal control-line skip
+	// (blank / '!' / '//' / non-IPv6 '[...]'); the '#'
+	// classifier above already ran (side effects). A
+	// bracketed IPv6 literal is never skipped here --
+	// the helper consults pfb_dnsbl_unbracket_ip6().
+	if (pfb_dnsbl_is_skippable_control_line($line)) {
+		return PFB_DNSBL_LINE_NO_ROW;
+	}
+
+	// Remove any 'End of line' comments (Some contains commas)
+	if (strpos($line, ' #') !== FALSE) {
+		$line = strstr($line, ' #', TRUE);
+	}
+
+	// Default per line so $csvline is defined for the count()/index reads below;
+	// str_getcsv overwrites it whenever the CSV path runs. Behaviour-preserving.
+	$csvline = array();
+
+	// Convert CSV line into array
+	if ($state['csv_parser']) {
+		$csvline = str_getcsv($line, ',', '"', '"');
+	}
+	elseif (!$state['run_once']) {
+		if (substr_count($line, ',') >= 2) {
+			$csvline = str_getcsv($line, ',', '"', '"');
+			$state['csv_parser'] = TRUE;
+		}
+		$state['run_once'] = TRUE;
+	}
+
+	// Remove blank lines
+	if (empty($line)) {
+		return PFB_DNSBL_LINE_NO_ROW;
+	}
+
+	// issue #1118: pfb_dnsbl_csv_extract() owns the whole upstream-CSV
+	// classify/extract switch (unit-tested off-appliance); action='skip'
+	// matches every one of the original block's `continue`/`continue 2` sites.
+	$csv_result = pfb_dnsbl_csv_extract($line, $csvline, $state['csv_type'], $state['csv_parser'],
+		$state['run_once'], PFB_DNSBL_OTX_TYPES, $ctx['dnsbl_ip'], $custom,
+		$state['ip4'], $state['ip6'], $header, $oline, $lineno, $parse_err);
+	$line = $csv_result['line'];
+	$state['csv_type'] = $csv_result['csv_type'];
+	$state['csv_parser'] = $csv_result['csv_parser'];
+	$state['run_once'] = $csv_result['run_once'];
+	if ($csv_result['ip_collected']) {
+		$state['updateip'] = TRUE;
+	}
+	if ($csv_result['action'] === 'skip') {
+		return PFB_DNSBL_LINE_NO_ROW;
+	}
+	$line = trim($line);
+
+	// Typical Host Feed format - Remove characters before space
+	if (!$state['rev_format'] && strpos($line, ' ') !== FALSE) {
+		$line = trim(strstr($line, ' ', FALSE));
+	}
+
+	// Remove characters after space
+	if (strpos($line, ' ') !== FALSE) {
+		$line = strstr($line, ' ', TRUE);
+	}
+
+	// Determine if line contains only an alpha-numeric Domain name
+	$lite = FALSE;
+	if (strpos($line, '.') !== FALSE &&
+	    ctype_alnum(str_replace('.', '', $line))) {
+		$lite = TRUE;
+	}
+
+	if (!$lite) {
+		$line = pfb_dnsbl_extract_host($line, !$ctx['lenient'], $header, $oline,
+			$lineno, $parse_err, $state['scheme_skipped']);
+		if ($line === FALSE) {
+			return PFB_DNSBL_LINE_NO_ROW;
+		}
+	}
+	$line = trim($line);
+
+	// Padded decimal octets ('192.168.010.1') are decimal, as in an IP feed.
+	$line = pfb_ipv4_unpad($line) ?? $line;
+
+	// A non-canonical IPv4 spelling ('0xc0.0xa8.0x1.0x64', '192.168.356')
+	// is the address a client dials, never a domain: decode it (WHATWG
+	// rules) for the IP branch below, or log it when it is invalid.
+	if (($pfb_numeric = pfb_ipv4_numeric_host($line)) !== NULL && $pfb_numeric['ip'] !== $line) {
+		if ($pfb_numeric['ip'] === NULL) {
+			pfb_parse_fail_log($header, $line, $oline, $parse_err, $lineno);
+			return PFB_DNSBL_LINE_NO_ROW;
+		}
+		pfb_logger("\n  IP literal decoded: [ {$line} ] -> [ {$pfb_numeric['ip']} ]", 1);
+		$line = $pfb_numeric['ip'];
+	}
+
+	// Collect any IPs (v4 or v6) found in domain feed. The family
+	// check gates the 'continue' regardless of dnsbl_ip -- an IP
+	// line never falls through to domain validation either way.
+	// A CIDR line is family-checked on its address part and collected whole.
+	$pfb_ip_host = explode('/', $line, 2)[0];
+	if (is_ipaddrv4($pfb_ip_host) || is_ipaddrv6($pfb_ip_host)) {
+		if ($ctx['dnsbl_ip'] &&
+		    pfb_dnsbl_collect_feed_ip($pfb_ip_host, $line, $custom, $state['ip4'], $state['ip6'])) {
+			$state['updateip'] = TRUE;
+		}
+		return PFB_DNSBL_LINE_NO_ROW;
+	}
+
+	// Convert IDN (Unicode domains) to ASCII (punycode)
+	if (!empty($line) && !ctype_print($line)) {
+
+		// Convert encodings to UTF-8
+		$line = mb_convert_encoding($line, 'UTF-8',
+			mb_detect_encoding($line, 'UTF-8, ASCII, ISO-8859-1'));
+
+		$log = "\n  IDN converted: [ {$line} ]\t";
+		$line = pfb_idn_to_ascii_wildcard($line);
+		if (!empty($line)) {
+			pfb_logger("{$log} [ {$line} ]", 1);
+		}
+		else {
+			// Record failed parsed line
+			pfb_parse_fail_log($header, '', $oline, $parse_err, $lineno);
+			return PFB_DNSBL_LINE_NO_ROW;
+		}
+	}
+
+	// Remove leading/trailing dots ($line is already
+	// whitespace-trimmed above)
+	$line = trim($line, '.');
+
+	// Domain Validation
+	if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, 'DNSBL_Download'))) {
+
+		// Skip yHost '@' prefixed lines
+		if (str_starts_with($line, '@')) {
+			return PFB_DNSBL_LINE_NO_ROW;
+		}
+
+		// Log invalid Domains
+		if (!isset(PFB_DNSBL_SKIP_NAMES[$line])) {
+			pfb_parse_fail_log($header, $line, $oline, $parse_err, $lineno);
+		}
+		return PFB_DNSBL_LINE_NO_ROW;
+	}
+
+	// For the DNSBL decider, save domain and Logging type
+	return ['row' => pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, strtolower($line)), 'stop' => FALSE];
+}
+
 /** @return array{count:int,loggable:bool} */
 function pfb_dnsbl_ipv4_count_decision(string $path): array {
 	$count = pfb_count_lines($path) ?? 0;
@@ -2105,27 +2388,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			}
 			pfb_logger("\n", 1);
 
-			// List of invalid Domains to skip parsed failed logging function
-			$dnsbl_skip = array_flip (array('broadcasthost',
-							'local',
-							'localhost',
-							'<pre>',
-							'Vault',
-							'Site',
-							'list',
-							'::1',
-							':',
-							'ip6-localhost',
-							'ip6-localnet',
-							'ip6-mcastprefix',
-							'ip6-allnodes',
-							'ip6-allrouters',
-							'ip6-allhosts'
-							));
-
-			// List of Alienvault OTX Indicator Types
-			$alienvault_types = array_flip(array('domain', 'hostname', 'URL'));
-
 			// Collect feeds and custom list configuration and format into one array ($lists).
 			$lists = array();
 
@@ -2327,9 +2589,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 							$header_esc	= escapeshellarg($header);
 
-							$rev_format	= FALSE;	// Host style format is reversed
-							$domain_data_ip	= array();	// Array of IPs found in feed
-							$domain_data_ip6 = array();	// Array of IPv6 IPs found in feed
 							$domain_data	= '';		// List of Domains found in feed
 
 							// If row is a custom_list, set flag.
@@ -2598,12 +2857,17 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									$pfb_staged_path = $pfb_pre['path'];
 								}
 
-								$run_once = $csv_parser = FALSE;
-								$csv_type = '';
-								$ipcount = $ip_cnt = $ip_cnt6 = 0;
+								$ip_cnt = $ip_cnt6 = 0;
 								$ip_decision = ['count' => 0, 'loggable' => FALSE];
 								$ip6_decision = ['count' => 0, 'loggable' => FALSE];
-								$pfb_scheme_skipped = 0;	// ADR-22: per-feed strict scheme/path skips
+								$pfb_dnsbl_state = pfb_dnsbl_parse_state();	// CSV detection, reverse format, IPs found, ADR-22 strict scheme skips
+								$pfb_dnsbl_ctx = [
+									'header'    => $header,
+									'custom'    => (bool) $custom,
+									'dnsbl_ip'  => $pfb['dnsbl_ip'] != 'Disabled',
+									'lenient'   => $pfb['dnsbl_lenient'] === PfbToggle::On,
+									'parse_err' => $pfb['dnsbl_parse_err'],
+								];
 								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
 
 								// Parse downloaded file for Domain names
@@ -2614,250 +2878,16 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// issue #1004: incremented every iteration, regardless of outcome
 											$dnsbl_lineno++;
 
-											// Collect original line
-											$oline = $line;
-
-											// Issue #946: strip a UTF-8 BOM before ANY per-line classification -- the
-											// control-line skip, the ADR-62 per-line capture guard and the CSV
-											// autodetection below do not handle a BOM themselves; a BOM-led first line
-											// would be misclassified by all three. $oline keeps the original bytes for
-											// the parse-error log. This also strips a BOM from captured ABP-shaped
-											// lines before their verbatim passthrough to the decider -- intentional and
-											// harmless (its parser is byte-oriented too).
-											$line = pfb_dnsbl_strip_bom($line);
-
-											$line = pfb_dnsbl_scrub_line($line);
-
-											// ADR-06 fact 7 / ADR-62: an ABP network anchor or
-											// hosts-line target that is itself an IP address is
-											// pulled to the firewall alias here -- never passed to
-											// the decider (no double-handling, no leak) -- checked BEFORE
-											// the generic verbatim capture below.
-											if ($pfb['dnsbl_ip'] != 'Disabled') {
-												$abp_ip = pfb_dnsbl_abp_extract_ip($line);
-												if ($abp_ip === FALSE) {
-													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
-													continue;
-												}
-												if ($abp_ip !== '') {
-													if (!str_contains($line, $abp_ip)) {
-														pfb_logger("\n  IP literal decoded: [ {$line} ] -> [ {$abp_ip} ]", 1);
-													}
-													if (pfb_dnsbl_collect_feed_ip(explode('/', $abp_ip, 2)[0], $abp_ip, $custom, $domain_data_ip, $domain_data_ip6)) {
-														$pfb['updateip'] = TRUE;
-														$ipcount++;
-													}
-													continue;
-												}
-												// issue #3434: an IPv4-shaped regex rule also feeds its CIDRs to the IP table; the line still goes to the decider.
-												foreach (pfb_dnsbl_abp_regex_ip4_cidrs($line, $header) as $abp_cidr) {
-													if (pfb_dnsbl_collect_feed_ip(explode('/', $abp_cidr, 2)[0], $abp_cidr, $custom, $domain_data_ip, $domain_data_ip6)) {
-														$pfb['updateip'] = TRUE;
-														$ipcount++;
-													}
-												}
+											$parsed = pfb_dnsbl_parse_line($line, $dnsbl_lineno, $pfb_dnsbl_state, $pfb_dnsbl_ctx);
+											// Exit (hpHosts) when end of domain names found.
+											if ($parsed['stop']) {
+												break;
 											}
-
-											// ADR-62 Decision 2: any self-identifying ABP shape (||/@@
-											// anchors, /regex/[$opts], ##-family) is captured BEFORE
-											// CSV autodetection and URL/path/'?'-query stripping (which
-											// would otherwise truncate/mangle them) and written VERBATIM
-											// to the '.bk'/'.txt' staging file; the manifest builder
-											// copies it to the '.raw' and the decider's build() routes it to
-											// parse_abp() (never a domain/IP/path anchor -> silently
-											// skipped).
-											if (pfb_dnsbl_is_abp_rule_line($line)) {
-												$domain_data = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Abp, $line);
+											if ($parsed['row'] !== NULL) {
+												// For the DNSBL decider, save domain and Logging type
+												$domain_data = $parsed['row'];
 												@fwrite($dhandle, $domain_data);
-												continue;
 											}
-
-											// If 'tab' character found, replace with whitespace
-											if (strpos($line, "\x09") !== FALSE) {
-												$line = str_replace("\x09", ' ', $line);
-											}
-
-											// If '%20' found, remove.
-											if (strpos($line, '%20') !== FALSE) {
-												$line = str_replace('%20', '', $line);
-											}
-
-											// Remove comment lines and special format considerations. Checked
-											// BEFORE the generic '!'/'//' skip below since these side effects
-											// (hpHosts end marker, Spamhaus format, h3x CSV header) must run.
-											if (str_starts_with($line, '#')) {
-												$pfb_hash_class = pfb_dnsbl_hash_line_classify($line);
-												// Exit (hpHosts) when end of domain names found.
-												if ($pfb_hash_class['stop']) {
-													break;
-												}
-
-												// Spamhaus format validation
-												if ($pfb_hash_class['rev_format']) {
-													$rev_format = TRUE;
-												}
-
-												if ($pfb_hash_class['csv_type'] !== NULL) {
-													$csv_type	= $pfb_hash_class['csv_type'];
-												}
-												if ($pfb_hash_class['csv_parser']) {
-													$csv_parser	= TRUE;
-												}
-												continue;
-											}
-
-											// ADR-62 Decision 4: universal control-line skip
-											// (blank / '!' / '//' / non-IPv6 '[...]'); the '#'
-											// classifier above already ran (side effects). A
-											// bracketed IPv6 literal is never skipped here --
-											// the helper consults pfb_dnsbl_unbracket_ip6().
-											if (pfb_dnsbl_is_skippable_control_line($line)) {
-												continue;
-											}
-
-											// Remove any 'End of line' comments (Some contains commas)
-											if (strpos($line, ' #') !== FALSE) {
-												$line = strstr($line, ' #', TRUE);
-											}
-
-											// Default per line so $csvline is defined for the count()/index reads below;
-											// str_getcsv overwrites it whenever the CSV path runs. Behaviour-preserving.
-											$csvline = array();
-
-											// Convert CSV line into array
-											if ($csv_parser) {
-												$csvline = str_getcsv($line, ',', '"', '"');
-											}
-											elseif (!$run_once) {
-												if (substr_count($line, ',') >= 2) {
-													$csvline = str_getcsv($line, ',', '"', '"');
-													$csv_parser = TRUE;
-												}
-												$run_once = TRUE;
-											}
-
-											// Remove blank lines
-											if (empty($line)) {
-												continue;
-											}
-
-											// issue #1118: pfb_dnsbl_csv_extract() owns the whole upstream-CSV
-											// classify/extract switch (unit-tested off-appliance); action='skip'
-											// matches every one of the original block's `continue`/`continue 2` sites.
-											$csv_result = pfb_dnsbl_csv_extract($line, $csvline, $csv_type, $csv_parser,
-												$run_once, $alienvault_types, $pfb['dnsbl_ip'] != 'Disabled', $custom,
-												$domain_data_ip, $domain_data_ip6, $header, $oline, $dnsbl_lineno,
-												$pfb['dnsbl_parse_err']);
-											$line		= $csv_result['line'];
-											$csv_type	= $csv_result['csv_type'];
-											$csv_parser	= $csv_result['csv_parser'];
-											$run_once	= $csv_result['run_once'];
-											if ($csv_result['ip_collected']) {
-												$pfb['updateip'] = TRUE;
-												$ipcount++;
-											}
-											if ($csv_result['action'] === 'skip') {
-												continue;
-											}
-											$line = trim($line);
-
-											// Typical Host Feed format - Remove characters before space
-											if (!$rev_format && strpos($line, ' ') !== FALSE) {
-												$line = trim(strstr($line, ' ', FALSE));
-											}
-
-											// Remove characters after space
-											if (strpos($line, ' ') !== FALSE) {
-												$line = strstr($line, ' ', TRUE);
-											}
-
-											// Determine if line contains only an alpha-numeric Domain name
-											$lite = FALSE;
-											if (strpos($line, '.') !== FALSE &&
-											    ctype_alnum(str_replace('.', '', $line))) {
-												$lite = TRUE;
-											}
-
-											if (!$lite) {
-												$strict = ($pfb['dnsbl_lenient'] !== PfbToggle::On);
-												$line = pfb_dnsbl_extract_host($line, $strict, $header, $oline,
-													$dnsbl_lineno, $pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
-												if ($line === FALSE) {
-													continue;
-												}
-											}
-											$line = trim($line);
-
-											// Padded decimal octets ('192.168.010.1') are decimal, as in an IP feed.
-											$line = pfb_ipv4_unpad($line) ?? $line;
-
-											// A non-canonical IPv4 spelling ('0xc0.0xa8.0x1.0x64', '192.168.356')
-											// is the address a client dials, never a domain: decode it (WHATWG
-											// rules) for the IP branch below, or log it when it is invalid.
-											if (($pfb_numeric = pfb_ipv4_numeric_host($line)) !== NULL && $pfb_numeric['ip'] !== $line) {
-												if ($pfb_numeric['ip'] === NULL) {
-													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
-													continue;
-												}
-												pfb_logger("\n  IP literal decoded: [ {$line} ] -> [ {$pfb_numeric['ip']} ]", 1);
-												$line = $pfb_numeric['ip'];
-											}
-
-											// Collect any IPs (v4 or v6) found in domain feed. The family
-											// check gates the 'continue' regardless of dnsbl_ip -- an IP
-											// line never falls through to domain validation either way.
-											// A CIDR line is family-checked on its address part and collected whole.
-											$pfb_ip_host = explode('/', $line, 2)[0];
-											if (is_ipaddrv4($pfb_ip_host) || is_ipaddrv6($pfb_ip_host)) {
-												if ($pfb['dnsbl_ip'] != 'Disabled' &&
-												    pfb_dnsbl_collect_feed_ip($pfb_ip_host, $line, $custom, $domain_data_ip, $domain_data_ip6)) {
-													$pfb['updateip'] = TRUE;
-													$ipcount++;
-												}
-												continue;
-											}
-
-											// Convert IDN (Unicode domains) to ASCII (punycode)
-											if (!empty($line) && !ctype_print($line)) {
-
-												// Convert encodings to UTF-8
-												$line = mb_convert_encoding($line, 'UTF-8',
-													mb_detect_encoding($line, 'UTF-8, ASCII, ISO-8859-1'));
-
-												$log = "\n  IDN converted: [ {$line} ]\t";
-												$line = pfb_idn_to_ascii_wildcard($line);
-												if (!empty($line)) {
-													pfb_logger("{$log} [ {$line} ]", 1);
-												}
-												else {
-													// Record failed parsed line
-													pfb_parse_fail_log($header, '', $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
-													continue;
-												}
-											}
-
-											// Remove leading/trailing dots ($line is already
-											// whitespace-trimmed above)
-											$line = trim($line, '.');
-
-											// Domain Validation
-											if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, 'DNSBL_Download'))) {
-
-												// Skip yHost '@' prefixed lines
-												if (str_starts_with($line, '@')) {
-													continue;
-												}
-
-												// Log invalid Domains
-												if (!isset($dnsbl_skip[$line])) {
-													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
-												}
-												continue;
-											}
-
-											// For the DNSBL decider, save domain and Logging type
-											$domain_data = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, strtolower($line));
-											@fwrite($dhandle, $domain_data);
 										}
 									}
 									if ($dhandle) {
@@ -2866,6 +2896,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								}
 								if ($fhandle) {
 									@fclose($fhandle);
+								}
+								$domain_data_ip = $pfb_dnsbl_state['ip4'];
+								$domain_data_ip6 = $pfb_dnsbl_state['ip6'];
+								if ($pfb_dnsbl_state['updateip']) {
+									$pfb['updateip'] = TRUE;
 								}
 								// issue #1926: the staged pre-script copy is transient -- parsed above.
 								pfb_list_script_cleanup_staged($pfb_parse_path, $pfb_staged_path, "{$file_dwn}.pre");
@@ -2879,7 +2914,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 								// ADR-22: one WARNING per feed summarising strict-mode skips (silent
 								// when none -- lenient never increments the counter).
-								pfb_dnsbl_scheme_skip_warn($pfb_scheme_skipped, $header);
+								pfb_dnsbl_scheme_skip_warn($pfb_dnsbl_state['scheme_skipped'], $header);
 
 								// issue #1926: DNSBL post-script runs on a throwaway copy of the
 								// download — nothing downstream re-parses it (same observable as
@@ -2899,10 +2934,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									} else {
 										pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its input; skipping\n", 2);
 									}
-								}
-
-								if (isset($csvline)) {
-									unset($csvline);
 								}
 
 								// Remove duplicates and save any IPs found in domain feed
