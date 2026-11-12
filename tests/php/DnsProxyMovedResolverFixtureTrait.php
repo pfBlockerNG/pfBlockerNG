@@ -96,6 +96,7 @@ trait DnsProxyMovedResolverFixtureTrait
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE], 'opt1' => ['status' => 'up', 'enable' => TRUE]];
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => '', 'opt1' => ''];
 		@unlink($GLOBALS['pfb']['dns_proxy_backend_blocked']);
+		@unlink($GLOBALS['pfb']['dns_proxy_scan_failed']);
 		$this->proxyCalls = [];
 		$this->lockHeldWhileWaiting = [];
 		$this->behaviour = 'lives';

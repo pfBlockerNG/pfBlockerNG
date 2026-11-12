@@ -114,6 +114,8 @@ trait DnsProxyRcSandboxTrait
 		sockstat)
 			# the listening sockets the test arranged (state/sockstat.out), and the status it asked sockstat to exit with
 			printf '%s\n' "$*" >> "$S/sockstat.calls"
+			# A scan that hangs (sockstat.hangs) never answers: only the limit of its timeout(1) ends it, which the timeout stand-in gives it
+			[ ! -e "$S/sockstat.hangs" ] || /bin/sleep 3600
 			cat "$S/sockstat.out"
 			read -r status < "$S/sockstat.status"
 			exit "$status"
@@ -155,12 +157,14 @@ trait DnsProxyRcSandboxTrait
 			printf '%s\n' "3002|$child|||$*" >> "$S/procs"
 			;;
 		timeout)
-			# timeout(1): -s TERM -k 5 <seconds> command ... -- the limits are not exercised here, the command runs
+			# timeout(1): -s TERM -k 5 <seconds> command ... -- the limits fire only for a TIMEOUT_FIRES run or a hung scan (sockstat.hangs); otherwise the command runs
 			{ [ "$1" = -s ] && [ "$2" = TERM ] && [ "$3" = -k ] && [ "$#" -ge 6 ]; } || { ev bad-timeout; exit 2; }
 			echo "$*" >> "$S/timeout.args"
 			# A limit that fires: the command is killed before it did anything (status 124, as timeout(1) says)
 			[ -z "$TIMEOUT_FIRES" ] || exit 124
 			shift 5
+			# A hung scan's limit fires before it answers: the command never runs, and timeout(1) reports 124
+			if [ -e "$S/sockstat.hangs" ] && [ "${1##*/}" = sockstat ]; then exit 124; fi
 			exec "$@"
 			;;
 		php)
@@ -323,6 +327,7 @@ trait DnsProxyRcSandboxTrait
 			file_put_contents("{$state}/{$file}", '');
 		}
 		@unlink("{$state}/ps.fail");
+		@unlink("{$state}/sockstat.hangs");
 		if ($running) {
 			file_put_contents("{$this->dir}/run/pfb_dns_proxy_daemon.pid", "1001\n");
 			file_put_contents("{$this->dir}/run/pfb_dns_proxy.pid", "1002\n");

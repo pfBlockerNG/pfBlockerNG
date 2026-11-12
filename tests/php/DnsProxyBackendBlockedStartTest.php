@@ -114,6 +114,12 @@ final class DnsProxyBackendBlockedStartTest extends TestCase
 		file_put_contents("{$this->dir}/state/sockstat.out", "USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n" . implode('', array_map(static fn (string $row): string => "{$row}\n", $rows)));
 	}
 
+	/** A sockstat that hangs: its scan never answers, and only the limit of its timeout(1) ends it. */
+	private function sockstatHangs(): void
+	{
+		file_put_contents("{$this->dir}/state/sockstat.hangs", '');
+	}
+
 	/** A box whose script was generated with the gateway's upstream on $port, and a stopped gateway. */
 	private function armed(string $port = '5353'): void
 	{
@@ -215,5 +221,36 @@ final class DnsProxyBackendBlockedStartTest extends TestCase
 		$this->assertSame(0, $status, "rc restart failed: {$output}");
 		$this->assertSame([], $this->events());
 		$this->assertFileExists($this->marker());
+	}
+
+	public function testTheGeneratedStartBoundsItsSockstatScanWithTimeout(): void
+	{
+		// Given the generated script on the default upstream port
+		$this->moveResolver();
+		pfb_dns_proxy_service();
+		$start = (string) $GLOBALS['pfb_test_rcfiles']['pfb_dns_proxy.sh']['start'];
+
+		// Then the scan runs under timeout(1), limited to 2 s with a KILL 1 s later, the bound the script's other external calls carry
+		$this->assertStringContainsString('rows="$(/usr/bin/timeout -s TERM -k 1 2 /usr/bin/sockstat -46lw -p 5353 2>/dev/null)"', $start,
+			'the start bounds its sockstat scan');
+		$this->assertStringNotContainsString('rows="$(/usr/bin/sockstat', $start, 'no unbounded scan is left in the start');
+	}
+
+	public function testAStartWhoseScanHangsLaunchesAndNamesNobody(): void
+	{
+		// Given a stopped gateway, a stranger that a scan which answered would name, and a sockstat that never answers
+		$this->armed();
+		$this->sockets('root nc 6161 3 tcp4 127.0.0.1:5353 *:*');
+		$this->sockstatHangs();
+
+		// When the proxy is started
+		[$status, $output] = $this->rc('start', 5);
+
+		// Then the limit ends the scan, a timed-out scan is a failed scan: it names nobody, so the launch proceeds
+		$this->assertSame(0, $status, "rc start failed: {$output}");
+		$this->assertSame(['launch'], $this->events(), 'a timed-out scan is a failed scan: it names nobody and the launch proceeds');
+		$this->assertFileDoesNotExist($this->marker());
+		$this->assertStringContainsString("-s TERM -k 1 2 {$this->dir}/bin/sockstat -46lw -p 5353", (string) file_get_contents("{$this->dir}/state/timeout.args"),
+			'the scan ran under its limit');
 	}
 }

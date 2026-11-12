@@ -4120,6 +4120,8 @@ $pfb['dns_proxy_restart_pending'] = '/var/run/pfb_dns_proxy_restart_pending';
 // down because of it. The status says so, the rc script's start refuses while it stands, and the next tick and update pass look again: three lines, the
 // kind (`nopair` or `holder`), the PROXYv2 port, the stranger.
 $pfb['dns_proxy_backend_blocked'] = PFB_DNS_PROXY_BACKEND_BLOCKED;
+// The marker of a failed scan of the backend pair's sockets (pfb_dns_proxy_backend_holder()): one warning is logged per streak of failed scans, and the next scan that answers removes it.
+$pfb['dns_proxy_scan_failed'] = '/var/run/pfb_dns_proxy_scan_failed';
 // The gateway's log (daemon(8) -o): read only for the last `pfb_dns_gateway:` error of a start that never became ready.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
 // The certificate selected on the DNS General page (dns/pfb_dns_sslcertref): its chain and key for the gateway's DoT, DoH and DoQ, one PEM file written by pfb_dns_proxy_certificate_export().
@@ -5929,9 +5931,9 @@ EOF;
 
 	# A process that is not Unbound on the port this script forwards to is never forwarded to (issue #3848), whether or not an apply or a
 	# tick has seen it yet: the boot hook with Unbound not up, a restart from the apply or the installer, a recovery's start. The scan is the
-	# same one the package makes (-w keeps long addresses whole); one that fails names nobody. The marker has the format the package reads.
+	# same one the package makes (-w keeps long addresses whole), bounded by timeout(1) like the script's other external calls (2 s); one that fails or does not answer in time names nobody. The marker has the format the package reads.
 	holder=''
-	if rows="\$(/usr/bin/sockstat -46lw -p {$backendPort} 2>/dev/null)"; then
+	if rows="\$(/usr/bin/timeout -s TERM -k 1 2 /usr/bin/sockstat -46lw -p {$backendPort} 2>/dev/null)"; then
 		holder="\$(printf '%s\\n' "\${rows}" | while read -r _ cmd pid _ proto laddr _; do
 			case "\${pid}" in
 				''|*[!0-9]*) continue ;;
@@ -6510,13 +6512,21 @@ function pfb_dns_proxy_backend_port(): string {
  * @return string|null `COMMAND (pid N) on ADDR:PORT` (a wildcard address is `*`), NULL when nobody holds the pair or the scan failed
  */
 function pfb_dns_proxy_backend_holder(?bool &$scanned = NULL): ?string {
+	global $pfb;
+
 	$scanned = FALSE;
 	$port = pfb_dns_proxy_backend_port();
 	$pair = [$port, (string) ((int) $port + 1)];
 	$sockets = pfb_dns_proxy_listening_sockets(implode(',', $pair));
 	if ($sockets === NULL) {
+		// One line per streak of failed scans: the marker stands until a scan answers, so passes that fail one after another log it once
+		if (!is_file($pfb['dns_proxy_scan_failed'])) {
+			@file_put_contents($pfb['dns_proxy_scan_failed'], "1\n");
+			pfb_logger("\nThe sockstat scan of Unbound's backend ports " . implode('/', $pair) . ' failed: no holder is known, so the backend is left as it is; the next pass scans again', 2);
+		}
 		return NULL;
 	}
+	unlink_if_exists($pfb['dns_proxy_scan_failed']);
 	$scanned = TRUE;
 	$unbound = pfb_dns_proxy_unbound_pid();
 	foreach ($sockets as $socket) {

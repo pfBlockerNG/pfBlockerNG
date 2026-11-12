@@ -203,6 +203,8 @@ $GLOBALS['pfb']['dns_proxy_restart_pending'] = "{$pfb_test_tmp}/pfb_dns_proxy_re
 $GLOBALS['pfb']['dns_proxy_rc_kept'] = "{$pfb_test_tmp}/pfb_dns_proxy_rc.kept";
 // Issue #3848: the marker a move that found no free loopback port pair leaves (the status and the tick read it).
 $GLOBALS['pfb']['dns_proxy_backend_blocked'] = "{$pfb_test_tmp}/pfb_dns_proxy_backend_blocked";
+// Issue #3848: the marker of a failed backend socket scan, logged once per streak of failures (the PHP side of the scan the rc start bounds).
+$GLOBALS['pfb']['dns_proxy_scan_failed'] = "{$pfb_test_tmp}/pfb_dns_proxy_scan_failed";
 // The gateway's log, where the startup check reads which listeners it bound (issue #3538): a sandbox file, never /var/log.
 $GLOBALS['pfb']['dns_proxy_log'] = "{$pfb_test_tmp}/dns_proxy.log";
 $pfb_test_timeout_out = [];

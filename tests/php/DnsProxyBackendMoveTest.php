@@ -631,6 +631,100 @@ final class DnsProxyBackendMoveTest extends TestCase
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_backend_blocked']);
 	}
 
+	/** The failed-scan lines the pfB log holds (the error log repeats them, so it is not read). */
+	private function scanFailureLines(): int
+	{
+		return substr_count((string) @file_get_contents($GLOBALS['pfb']['log']), "The sockstat scan of Unbound's backend ports");
+	}
+
+	public function testAFailedBackendScanIsLoggedOncePerStreakAndAgainAfterAScanThatAnswers(): void
+	{
+		// Given a box whose sockstat fails: the first failed scan is logged, and a second one in a row adds no line
+		$this->box();
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
+		$this->assertSame(0, $this->scanFailureLines(), 'before: nothing is logged');
+
+		$this->assertNull(pfb_dns_proxy_backend_holder($scanned));
+		$this->assertFalse($scanned, 'the scan failed: nothing was seen');
+		$this->assertNull(pfb_dns_proxy_backend_holder());
+		$this->assertSame(1, $this->scanFailureLines(), 'two failed scans in a row are one streak: one line');
+
+		// When a scan answers, and then the next one fails
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "0\n");
+		pfb_dns_proxy_backend_holder($scanned);
+		$this->assertTrue($scanned, 'the scan answered');
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
+		pfb_dns_proxy_backend_holder();
+
+		// Then the new streak is logged once more
+		$this->assertSame(2, $this->scanFailureLines(), 'a failure after a scan that answered starts a new streak: one more line');
+	}
+
+	/** @return array<string,array{bool}> whether a free pair is left for the stranger on Unbound's port to move to */
+	public static function holderAfterAFailedScan(): array
+	{
+		return ['a free pair is left' => [TRUE], 'no free pair is left' => [FALSE]];
+	}
+
+	#[DataProvider('holderAfterAFailedScan')]
+	public function testAFailedScanWhileAHolderStandsStartsTheGatewayAndTheNextGoodScanMovesOrStopsIt(bool $freePair): void
+	{
+		// Given a stopped gateway, a stranger on Unbound's port, and a sockstat that fails: no scan sees the stranger, so nothing holds the start back
+		$this->box();
+		$stranger = $freePair ? [self::row('nc', 6161, 'tcp4', '127.0.0.1:5353')] : self::strangerAndEveryPairTaken();
+		$this->foreignHolds(...$stranger);
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
+
+		// When the update pass runs
+		pfb_dns_proxy_ensure_running();
+
+		// Then the gateway starts (a scan that failed names nobody), and nothing is moved or stopped on the way
+		$this->assertSame(['start_service'], $this->events, 'a failed scan is no holder: the gateway starts');
+		$this->assertSame('5353', pfb_dns_proxy_backend_port(), 'nothing moved');
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_backend_blocked']);
+
+		// When a later tick's scan answers and sees the stranger
+		$this->events = [];
+		$this->proxyCalls = [];
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "0\n");
+		$this->newPass();
+		$this->tick();
+
+		// Then the tick moves Unbound off it when a pair is free, and stops the gateway when none is; the Resolver is not given back either way
+		if ($freePair) {
+			$this->assertBackendOn(5355, 'the tick moved Unbound off the stranger');
+			$this->assertSame(['configure', 'restart_service'], $this->events, 'Unbound first, then the gateway');
+			$this->assertStillMoved($snapshot, 'the tick');
+		} else {
+			$this->assertFileExists($GLOBALS['pfb']['dns_proxy_backend_blocked'], 'with no free pair the marker is left');
+			$this->assertContains('stop_service', $this->proxyCalls, 'the tick stopped the gateway');
+			$this->assertStillMoved($snapshot, 'the tick', TRUE);
+		}
+	}
+
+	public function testATickWhoseBackendScanFailsStopsNothingAndMovesNothing(): void
+	{
+		// Given a serving gateway, a stranger on Unbound's port, and a sockstat that fails: a failed scan is unknown, not foreign
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'));
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
+		$snapshot = (string) config_get_path(self::SAVED, '');
+
+		// When the cron tick checks the gateway
+		$this->tick();
+
+		// Then it neither stops the gateway nor moves Unbound's pair, and leaves no marker
+		$this->assertSame([], $this->events, 'nothing was restarted, moved or regenerated');
+		$this->assertSame([], $this->proxyCalls, 'a scan that fails is not a holder: the gateway is not stopped');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'config.xml was not written');
+		$this->assertSame('5353', pfb_dns_proxy_backend_port(), 'the pair was not moved');
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_backend_blocked']);
+		$this->assertTrue(pfb_dns_proxy_running(), 'the gateway keeps running');
+		$this->assertStillMoved($snapshot, 'the tick');
+	}
+
 	// -----------------------------------------------------------------------
 	// A move the gateway does not follow
 	// -----------------------------------------------------------------------
