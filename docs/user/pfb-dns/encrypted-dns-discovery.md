@@ -298,9 +298,9 @@ The page refresh reads one snapshot from pfB-DNS's existing private control sock
 
 An update pass or cron tick leaves an existing gateway running when its status is unavailable or the Resolver backend is down.
 **Service** then shows **Starting**, not **Running**; this does not prove DNS is answering.
-A foreign holder of the upstream port changes nothing either: pfB-DNS never gives the Resolver back by itself, only turning it
-off does. [#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848) tracks a clearer status/notice and moving Unbound to
-a free port. This change adds no port migration; a start that does not serve is reported and left running.
+A foreign process on the port Unbound's backend uses is the exception: pfB-DNS moves Unbound's backend to a free loopback port pair,
+or stops the gateway when no move is possible, and a notice says which. It never gives the Resolver back by itself, only turning it
+off does. A start that does not serve is reported and left running.
 
 Rare IPv4-compatible (`::/96`) and mapped address spellings retain the existing acceptance behavior and may show
 unavailable or refused status. Their normalization is tracked separately in
