@@ -10,7 +10,7 @@ turns DoH and DoQ on next to the toggle, and watches the box and the LAN client 
 there is none, the pinned one scripts/go_toolchain.py installs in this module's scratch directory and deletes).
 
 Module setup, put back in ``finally`` (``test_smoke_dns_proxy.py`` drives the same gateway through the toggle's
-lifecycle: modes, restarts, boot, rollback, removal)::
+lifecycle: modes, restarts, boot, removal)::
 
     Resolver: DoT on with a self-signed certificate, ``log-queries: yes`` in Custom Options
     DNSBL:    one feed listing every name the tests expect to be blocked; DoH on 4443 and DoQ on 853 on the LAN

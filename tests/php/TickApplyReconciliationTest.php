@@ -250,7 +250,7 @@ final class TickApplyReconciliationTest extends TestCase
 			'custom_options' => ['present' => FALSE, 'value' => NULL],
 		])));
 		$GLOBALS['pfb']['enable'] = $GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['dnsbl'] = PfbToggle::On;
-		// pfB-DNS is on and the Resolver it fronts is enabled: the tick has nothing to stand down
+		// pfB-DNS is on and the Resolver it fronts is enabled: the tick has no disabled-Resolver notice to raise
 		$GLOBALS['config']['unbound']['enable'] = '';
 		// The manifest exists, so the tick dispatches no feed pass to rebuild it: this suite stays isolated to apply reconciliation.
 		$GLOBALS['pfb']['unbound_py_sources'] = "{$this->dir}/pfb_py_sources.json";

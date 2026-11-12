@@ -721,7 +721,7 @@ The tick first reconciles live listeners and restarts once only for a change the
 (issues #3598 and #3599). It confirms its own restart; an existing gateway it did not restart is only diagnosed.
 A proxy that is not serving within the budget changes nothing about the Resolver (owner decision, 2026-11-11; issue #3848): pfB-DNS never
 fails to start, and only the admin gives the Resolver back, by turning pfB-DNS off, disabling pfBlockerNG, removing the package or running
-the setup wizard's reset. The only callers of `pfb_dns_proxy_resolver()` are those three and the apply's Resolver step
+the setup wizard's reset. The only callers of `pfb_dns_proxy_resolver()` are the package removal, the wizard's reset and the apply's Resolver step
 (`pfb_unbound_python()`), which restores only while pfB-DNS is not wanted; `DnsProxyNeverRollsBackTest` scans `src/` for any other.
 `pfb_dns_proxy_confirm_ready()` runs `pfb_dns_proxy_startup_check()` with the gateway-level readiness and returns FALSE: the stored
 enable, the snapshot, the moved Resolver, `unbound.conf` and Unbound are untouched, config.xml is not written, and the proxy keeps
@@ -859,7 +859,7 @@ pfSense master and confirmed on the live box by the reboot smoke), before it sta
 Resolver restart. pfB-DNS therefore keeps the python keys naming the observer in every mode, and ships
 `dns_proxy/pfb_upstream_observer_include.inc` (in `PFB_PY_SHIPPED`, staged flat into `/var/unbound`), which runs
 `pfb_dns_proxy.sh start` in the background unless a pidfile (the proxy's or its supervisor's) is live, and backgrounds beside it a
-bounded `timeout --foreground` run (360 s, an outer salvage deadline and not a proved bound on normal completion; see external-process-waits) of `pfblockerng.inc dns_check <size>` (the confirmation and the startup check above, told the log's size from before the start: a start that never becomes ready is reported there and the Resolver stays moved; the hook itself still waits for nothing), with core
+bounded `timeout` run in its default reaper mode (360 s, an outer salvage deadline and not a proved bound on normal completion; see external-process-waits) of `pfblockerng.inc dns_check <size>` (the confirmation and the startup check above, told the log's size from before the start: a start that never becomes ready is reported there and the Resolver stays moved; the hook itself still waits for nothing), with core
 functions only (the non-verbose boot path loads none of pfBlockerNG; the rc script itself refuses without a snapshot). The
 same hook keeps the proxy up after any Resolver restart from the GUI. On a RAM-disk `/var` the restore earlyshellcmd
 (`pfb_dnsbl_cache('conf')`) is registered while DNSBL or pfB-DNS is on, so the hook is staged before rc.bootup. Pinned by

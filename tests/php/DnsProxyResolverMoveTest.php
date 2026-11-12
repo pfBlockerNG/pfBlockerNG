@@ -789,7 +789,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 	}
 
 	#[DataProvider('unsafeLinesAddedAfterTheMove')]
-	public function testAnUnsafeLineAddedAfterTheMoveIsReportedForRollbackAndTheAdminsLineIsKeptInTheSnapshot(string $line): void
+	public function testAnUnsafeLineAddedAfterTheMoveIsReportedToTheCallerAndTheAdminsLineIsKeptInTheSnapshot(string $line): void
 	{
 		// Given a moved Resolver, then an admin who appends a line that can take a listener, a second port or another file.
 		$this->seedResolver();
@@ -802,14 +802,14 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$unsafe = NULL;
 		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
 
-		// Then the line is reported to the caller, which rolls pfB-DNS back (a refusal that keeps serving would leave Unbound one
+		// Then the line is reported to the caller, which says so in a notice and keeps pfB-DNS serving (a refusal would leave Unbound one
 		// restart away from a bind collision): nothing here refuses, and the Resolver text is not touched ...
 		$this->assertSame($line, $unsafe);
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'the caller speaks, not a refusal');
 		$this->assertSame($edited, config_get_path('unbound/custom_options'));
 		$this->assertSame(1, $this->markerCount());
 
-		// ... and the snapshot now holds the admin's text as it stands, minus our block, so that the restore keeps the line.
+		// ... and the snapshot now holds the admin's text as it stands, minus our block, so that a restore the admin asks for later keeps the line.
 		$this->assertTrue($changed, 'the snapshot was rewritten');
 		$saved = pfb_dns_proxy_saved();
 		$this->assertNotNull($saved);
@@ -1380,7 +1380,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 	}
 
 	#[DataProvider('refusedWrites')]
-	public function testAnUnsafeLineWhoseKeepWriteIsRefusedIsNotReportedForRollbackAndChangesNothing(mixed $answer): void
+	public function testAnUnsafeLineWhoseKeepWriteIsRefusedIsNotReportedAndChangesNothing(mixed $answer): void
 	{
 		// Given a moved Resolver, an admin who then added an unsafe line, and a config.xml that refuses every write
 		$this->seedResolver();

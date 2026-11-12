@@ -234,7 +234,7 @@ final class PfbDnsAppliedStatusDispositionTest extends TestCase
 		// When the apply finds nothing to reload
 		$ready = $ensure();
 
-		// Then the gateway is kept as it is: nothing is started, restarted or rolled back
+		// Then the gateway is kept as it is: nothing is started, restarted or restored
 		$this->assertTrue($ready, 'an unanswered status is unknown, not an unhealthy gateway');
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls']);
 		$this->assertTrue(pfb_dns_proxy_ready());

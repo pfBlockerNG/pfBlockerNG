@@ -2309,7 +2309,7 @@ def test_boot_check_without_a_gateway_keeps_the_resolver_moved_and_files_the_sta
         assert h.is_vip(blocked), f"blocked name before stopping pfB-DNS: {blocked}\n{raw}"
         allowed, raw = _query(rig.client, h.unique_domain("bootcheck-before"))
         assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name before stopping pfB-DNS: {allowed}\n{raw}"
-        notices = _php_ok(vm, clear_notices + read_notices, "clear startup and rollback notices")
+        notices = _php_ok(vm, clear_notices + read_notices, "clear startup and Resolver notices")
         found = re.search(r"<<<NOTICES>>>(.*?)<<<END>>>", notices, re.DOTALL)
         assert found is not None, f"no notices in {notices!r}"
         rows = json.loads(found.group(1))
@@ -2370,7 +2370,7 @@ def test_boot_check_without_a_gateway_keeps_the_resolver_moved_and_files_the_sta
             _set_proxy_toggle(vm, False)
             _apply(vm)
         finally:
-            _php_ok(vm, clear_notices, "clear this test's startup and rollback notices")
+            _php_ok(vm, clear_notices, "clear this test's startup and Resolver notices")
 
 
 @pytest.mark.timeout(900)

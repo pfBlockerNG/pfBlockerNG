@@ -172,7 +172,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertSame(1, $seen[0]['rcfile'], 'the rc script was regenerated before the restart');
 	}
 
-	public function testARestartedProxyThatServesIsLoggedAsReadyAndNothingIsRolledBack(): void
+	public function testARestartedProxyThatServesIsLoggedAsReadyAndNothingIsRestored(): void
 	{
 		// Given the restart path and a proxy that publishes its marker once restarted
 		$this->setProxyMode();

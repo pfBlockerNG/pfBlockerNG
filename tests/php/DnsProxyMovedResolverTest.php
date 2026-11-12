@@ -385,7 +385,7 @@ final class DnsProxyMovedResolverTest extends TestCase
 		// When the pass runs
 		pfb_unbound_python('disabled');
 
-		// Then the Resolver is restored as for any disabled package: the toggle the admin set stays, and there is no stand-down notice
+		// Then the Resolver is restored as for any disabled package: the toggle the admin set stays, and there is no disabled-Resolver notice
 		$this->assertNull(pfb_dns_proxy_saved());
 		$this->assertSame('on', $this->toggleStored());
 		$this->assertSame([], $this->notices());
@@ -400,7 +400,7 @@ final class DnsProxyMovedResolverTest extends TestCase
 		$this->assertSame(0, $started['retval']);
 		$this->assertSame($before + 1, $this->startAttempts(), 'before: an enabled Resolver is started by the restart');
 
-		// When the admin disables the Resolver (the stand-down above leaves it so) and a pass restarts Unbound again
+		// When the admin disables the Resolver and a pass restarts Unbound again
 		config_del_path('unbound/enable');
 		$disabled = pfb_stop_start_unbound('');
 
@@ -650,7 +650,7 @@ final class DnsProxyMovedResolverTest extends TestCase
 		$this->activate(TRUE);
 		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
 		pfb_unbound_python('enabled', FALSE);
-		$this->assertNull(pfb_dns_proxy_saved(), 'before: nothing is stored to roll back to');
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: nothing is stored to restore');
 		$GLOBALS['pfb_test_file_notices'] = [];
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 		$this->proxyCalls = [];
