@@ -71,6 +71,8 @@ def _stats_tempfiles(vm: helpers.SmokeVM) -> list[str]:
 
 
 def _settle(page: Page, view: str) -> None:
+    # pfSense's document-ready handler focuses the first visible input: a focus taken before it runs is lost.
+    page.evaluate("() => new Promise((ready) => jQuery(ready))")
     if view == "dnsbl_reply_stat":  # DNS panels arrive over fetch; IP panels are server-rendered
         _expect()(page.locator("#Alert_Stats_Loading")).to_have_attribute("aria-busy", "false", timeout=60_000)
         _expect()(page.locator("#Alert_Stats_Retry")).not_to_be_visible()
