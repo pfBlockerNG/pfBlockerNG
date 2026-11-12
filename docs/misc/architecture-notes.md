@@ -481,8 +481,13 @@ before the takeover or after it, which `pfb_dns_proxy_resolver_locked()` moves i
 under the config lock (`pfb_dns_proxy_resolver()` with the port), regenerates the rc script (its `--upstream`) and `unbound.conf`, restarts Unbound
 (`services_unbound_configure()`), restarts the gateway if it runs and waits for the live Unbound to own TCP and UDP on P' (bounded by `PFB_DNS_PROXY_START_WAIT`). The notice
 (id `pfBlockerNG DNS Proxy`) reads `<why>, so Unbound's backend moved from ports P/P+1 to P'/P'+1`, and, when the gateway did not follow, that it is not forwarding to it yet: the
-next update restarts a gateway whose applied upstream is not the stored pair. With no free pair nothing changes and a notice says so. No move is made while the Resolver is
-disabled, under a package operation, or twice in one pass (`$pfb['dns_proxy_backend_move_tried']`). The Service line and the startup notice name what is true now: a gateway
+next update restarts a gateway whose applied upstream is not the stored pair. With no free pair (owner decision, 2026-11-12) the proxy cannot serve: a running gateway is stopped, none is started, the Resolver stays moved (nothing is
+restored), the marker `$pfb['dns_proxy_backend_blocked']` is written, the notice names the holder (process, pid and endpoint) and says DNS is not served on
+the Listen Port until a loopback port pair is free or pfB-DNS is turned off, and the Service line reads `Not serving: no free loopback port pair for the Resolver backend`.
+The marker makes the next cron tick call `pfb_dns_proxy_ensure_running()` for the stopped gateway, as every update pass does: a holder moves Unbound as above and the
+gateway starts, and no holder at all starts it on the pair it had; either clears the marker. A sockstat scan that fails proves nothing and stops nothing. No move is made while the Resolver is
+disabled, under a package operation, or twice in one pass (`$pfb['dns_proxy_backend_move']`, set by a holder move and by a Listen Port move; each apply, tick and boot check is its own process).
+An `unbound`-named socket is never the holder while Unbound's pidfile names no live process (a restart in progress). The Service line and the startup notice name what is true now: a gateway
 still forwarding to the pair Unbound left reads `the gateway still forwards to port N, but Unbound's backend moved to port P'`, never the stranger that holds the old pair. The
 boot check runs under `timeout --foreground`, since the move restarts Unbound and the gateway (docs/misc/external-process-waits.md). Pinned by `DnsProxyBackendPortTest` and
 `DnsProxyBackendMoveTest`; the smoke test is `tests/smoke/test_smoke_pfb_dns_resolver_state.py`.
@@ -784,7 +789,7 @@ Neither placeholder is a bound-listener claim, and an unavailable applied DNS Na
 **Service line and degraded parts (issue #3848).** `pfb_dns_status_service()` reads the applied status, first match wins: `Running` (status
 readable, Unbound owns the upstream); `Resolver backend not answering: <why>` (status readable, Unbound does not: the DNS Resolver is
 disabled, the gateway still forwards to a pair Unbound has left (`the gateway still forwards to port <N>, but Unbound's backend moved to port <P>; the next update restarts the gateway`), `<process> (pid <pid>) holds Unbound's port <port>` from the same `sockstat` scan, or Unbound does not answer on the upstream);
-`Not serving: <error>` (the gateway lives, is not ready, and its latest start, the lines after the last `starting pid`, logged a
+`Not serving: no free loopback port pair for the Resolver backend` (the gateway is stopped for want of a pair, above); `Not serving: <error>` (the gateway lives, is not ready, and its latest start, the lines after the last `starting pid`, logged a
 `pfb_dns_gateway:` error); `Starting`; `Stopped`. A ready gateway that gives no status is `Starting`: there is no endpoint to blame. The
 status's `degraded` list (absent is none; a list that breaks the contract makes the whole status unavailable) is a row
 `pfb-dns-status-degraded-<part>` under Service, a line of the widget's service title (which stays yellow) and a problem of the startup

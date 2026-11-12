@@ -7251,8 +7251,13 @@ function pfblockerng_tick(
 	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies, pushed on its control socket
 	pfb_dns_proxy_certificate_sync();
 
+	// issue #3848: a gateway stopped because no loopback port pair was free for Unbound's backend is not started by a tick that finds nothing: it
+	// looks for a pair again (the update pass's check: a holder moves Unbound and starts the gateway, no holder starts it as it was)
+	if (!$pass_running && pfb_dns_proxy_cannot_serve() && !pfb_dns_proxy_running() && !isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
+		pfb_dns_proxy_ensure_running();
+	}
 	// An existing gateway stays running whatever its backend does; only this tick's restart is an activation to confirm.
-	if (!$pass_running && pfb_dns_proxy_saved() !== NULL && (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE))) {
+	elseif (!$pass_running && pfb_dns_proxy_saved() !== NULL && (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE))) {
 		// issues #3598, #3599: an address the gateway's start could not assign yet is added live once it can be bound, and a listener the
 		// command no longer names is removed live; the pair restarts only when the gateway does not take it. Every other restart stays with
 		// the update pass (pfb_dns_proxy_ensure_running())

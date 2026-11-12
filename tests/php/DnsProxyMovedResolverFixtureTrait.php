@@ -95,6 +95,7 @@ trait DnsProxyMovedResolverFixtureTrait
 		$GLOBALS['pfb_test_interface_ip'] = ['lan' => '192.0.2.1', 'opt1' => '198.51.100.1'];
 		$GLOBALS['pfb_test_interface_info'] = ['lan' => ['status' => 'up', 'enable' => TRUE], 'opt1' => ['status' => 'up', 'enable' => TRUE]];
 		$GLOBALS['pfb_test_interfaces'] = ['lan' => '', 'opt1' => ''];
+		@unlink($GLOBALS['pfb']['dns_proxy_backend_blocked']);
 		$this->proxyCalls = [];
 		$this->lockHeldWhileWaiting = [];
 		$this->behaviour = 'lives';
@@ -170,6 +171,7 @@ trait DnsProxyMovedResolverFixtureTrait
 
 	protected function tearDown(): void
 	{
+		@unlink($GLOBALS['pfb']['dns_proxy_backend_blocked']);
 		$this->standInsStop();
 		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();

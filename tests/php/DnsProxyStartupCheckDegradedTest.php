@@ -244,7 +244,13 @@ final class DnsProxyStartupCheckDegradedTest extends TestCase
 	// the Resolver backend
 	// -----------------------------------------------------------------------
 
-	#[DataProvider('lostBackends')]
+	/** @return array<string,array{string,string}> the losses a confirmation leaves alone: a stranger on Unbound's port is moved off or stops the gateway (DnsProxyBackendMoveTest) */
+	public static function lostBackendsTheConfirmationLeavesAlone(): array
+	{
+		return array_diff_key(self::lostBackends(), ['another process holds Unbound\'s port and no pair is free to move it to' => TRUE]);
+	}
+
+	#[DataProvider('lostBackendsTheConfirmationLeavesAlone')]
 	public function testAReadyGatewayWhoseBackendIsLostAfterTheActivationWaitIsFiledAndNeverClosesTheNotice(string $loss, string $cause): void
 	{
 		// Given a ready gateway with Unbound serving it, and a standing notice that an earlier check filed

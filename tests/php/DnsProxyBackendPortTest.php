@@ -178,16 +178,25 @@ final class DnsProxyBackendPortTest extends TestCase
 		$this->assertSame(['-46lw -p 5400,5401'], $this->scans());
 	}
 
-	public function testWithNoLiveUnboundEveryListenerOnThePairIsAHolder(): void
+	public function testWithNoValidUnboundPidfileAnUnboundNamedListenerIsNobodysHolderButAStrangerStillIs(): void
 	{
-		// Given Unbound is down (it could not start for the port): its pidfile names no live process
+		// Given Unbound is down or restarting: its pidfile names no live process, and sockets named unbound sit on the pair
 		$this->seedUnbound(alive: FALSE);
 		$this->sockets(self::row('unbound', 5151, 'tcp4', '127.0.0.1:5353'));
 
-		$this->assertSame('unbound (pid 5151) on 127.0.0.1:5353', pfb_dns_proxy_backend_holder(), 'a dead Unbound\'s pid is nobody\'s');
+		$this->assertNull(pfb_dns_proxy_backend_holder(), 'the restart race: the same "unknown" the upstream state gives, never a stranger');
 
 		unlink($this->unboundPidfile());
-		$this->assertSame('unbound (pid 5151) on 127.0.0.1:5353', pfb_dns_proxy_backend_holder(), 'and so is any pid with no pidfile');
+		$this->assertNull(pfb_dns_proxy_backend_holder(), 'and so with no pidfile at all');
+
+		// ... while a process of any other name is a holder whatever the pidfile says
+		$this->sockets(self::row('unbound', 5151, 'tcp4', '127.0.0.1:5353'), self::row('nc', 6161, 'udp4', '127.0.0.1:5354'));
+		$this->assertSame('nc (pid 6161) on 127.0.0.1:5354', pfb_dns_proxy_backend_holder());
+
+		// ... and with a valid pidfile an unbound of another pid is one too (a second Unbound that took the port)
+		$this->seedUnbound(pid: '5151');
+		$this->sockets(self::row('unbound', 9999, 'tcp4', '127.0.0.1:5353'));
+		$this->assertSame('unbound (pid 9999) on 127.0.0.1:5353', pfb_dns_proxy_backend_holder());
 	}
 
 	public function testAScanThatFailsNamesNoHolder(): void
@@ -280,7 +289,9 @@ final class DnsProxyBackendPortTest extends TestCase
 		// Given a socket on every port the search may pick from: 5355..5419
 		$this->sockets(...array_map(static fn (int $port): string => self::row('nc', 6000 + $port % 1000, 'tcp4', "127.0.0.1:{$port}"), range(5355, 5419)));
 
-		$this->assertNull(pfb_dns_proxy_backend_pick());
+		$scanned = NULL;
+		$this->assertNull(pfb_dns_proxy_backend_pick($scanned));
+		$this->assertTrue($scanned, 'the sockets were seen: there really is no free pair');
 	}
 
 	public function testThePickerSearchesSixtyFourPairsAndNoMore(): void
@@ -312,7 +323,9 @@ final class DnsProxyBackendPortTest extends TestCase
 		$this->sockets();
 		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
 
-		$this->assertNull(pfb_dns_proxy_backend_pick(), 'with no sight of the sockets no pair is known free');
+		$scanned = NULL;
+		$this->assertNull(pfb_dns_proxy_backend_pick($scanned), 'with no sight of the sockets no pair is known free');
+		$this->assertFalse($scanned, 'and the caller can tell that from a search that found none: it must not stop DNS for a scan that failed');
 	}
 
 	// -----------------------------------------------------------------------

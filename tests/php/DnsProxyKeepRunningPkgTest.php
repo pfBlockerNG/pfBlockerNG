@@ -173,7 +173,7 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		// Then it is not restarted under the package operation, and a pending restart records it for the next pass
 		$this->assertTrue($result['returned']);
 		$this->assertSame([], $result['calls']);
-		$this->assertSame('its listen addresses or DoH/DoQ/DDR settings changed', $result['marker']);
+		$this->assertSame('its listen addresses, upstream port or DoH/DoQ/DDR settings changed', $result['marker']);
 		$this->assertStringContainsString('deferred', $result['log']);
 	}
 

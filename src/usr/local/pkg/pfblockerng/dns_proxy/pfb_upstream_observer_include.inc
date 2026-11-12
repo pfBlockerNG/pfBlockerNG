@@ -33,16 +33,17 @@
  * (a Resolver restart from the GUI must not bounce it). The rc script refuses to start without a moved-Resolver snapshot.
  *
  * The rc script serializes its starts (lockf), so this background start and an apply's start_service() cannot both launch a
- * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command,
- * bounded by timeout(1) (360 s: an outer salvage deadline, not a proved bound on normal completion; the components include the 30 s
- * readiness budget, the bounded status and socket probes of the startup check and, when a stranger holds Unbound's backend ports, a move of that
- * pair: its config lock wait (10 s) and its own 30 s wait for the restarted gateway; pfSense's services_unbound_configure() is outside any
- * total), confirms the start as an apply does, told the gateway log's size from before the start:
- * a start with problems, or one that does not become ready, gets the pfB-DNS startup notice and the Resolver stays moved
- * (pfb_dns_proxy_confirm_ready()). The ready marker says the front end can answer queries; it is no proof that recursion works,
- * which needs the Unbound this hook runs before. That confirmation can move Unbound's backend pair off a stranger that holds it (issue #3848),
- * which restarts Unbound and the gateway: daemons meant to outlive the check, so timeout(1) runs in its --foreground mode, which kills
- * only the check itself and never reaps what it started (docs/misc/external-process-waits.md, "Choosing the mode").
+ * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command confirms
+ * the start as an apply does, told the gateway log's size from before the start: a start with problems, or one that does not become ready,
+ * gets the pfB-DNS startup notice and the Resolver stays moved (pfb_dns_proxy_confirm_ready()). The ready marker says the front end can answer
+ * queries; it is no proof that recursion works, which needs the Unbound this hook runs before.
+ *
+ * That command is bounded by timeout(1), 360 s: an outer salvage deadline, not a proved bound on normal completion. Its parts are the 30 s
+ * readiness budget, the bounded status and socket probes of the startup check and, when another process holds Unbound's loopback backend ports
+ * (issue #3848), a move of that pair: one bounded socket scan to find a free pair, the config lock wait (10 s) and a second 30 s wait for the
+ * restarted gateway. pfSense's services_unbound_configure(), which the move calls, is outside any total. The move restarts Unbound and the gateway,
+ * daemons meant to outlive the check, so timeout(1) runs in its --foreground mode: it signals only the check itself and never reaps what the check
+ * started (docs/misc/external-process-waits.md, "Choosing the mode").
  *
  * Core functions only: on the non-verbose boot path none of pfBlockerNG's own includes are loaded. This file runs inside
  * pfSense's function, so it must leave no variable behind.

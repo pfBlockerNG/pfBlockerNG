@@ -201,6 +201,8 @@ $GLOBALS['pfb']['dns_proxy_ready'] = "{$pfb_test_tmp}/pfb_dns_ready";
 $GLOBALS['pfb']['dns_proxy_gateway_applied'] = "{$pfb_test_tmp}/pfb_dns_ready.sha256";
 $GLOBALS['pfb']['dns_proxy_restart_pending'] = "{$pfb_test_tmp}/pfb_dns_proxy_restart_pending";
 $GLOBALS['pfb']['dns_proxy_rc_kept'] = "{$pfb_test_tmp}/pfb_dns_proxy_rc.kept";
+// Issue #3848: the marker a move that found no free loopback port pair leaves (the status and the tick read it).
+$GLOBALS['pfb']['dns_proxy_backend_blocked'] = "{$pfb_test_tmp}/pfb_dns_proxy_backend_blocked";
 // The gateway's log, where the startup check reads which listeners it bound (issue #3538): a sandbox file, never /var/log.
 $GLOBALS['pfb']['dns_proxy_log'] = "{$pfb_test_tmp}/dns_proxy.log";
 $pfb_test_timeout_out = [];
