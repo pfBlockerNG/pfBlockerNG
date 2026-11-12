@@ -90,6 +90,10 @@ per-feed state (CSV detection, reverse format, the hpHosts end marker) carried b
   - Hyphens: ICU rejects a leading or trailing hyphen and `--` at positions 3 and 4 of a label, the profile converts it.
   - Bidi: the profile applies the RFC 5893 rule (`אa.com` fails), ICU's default does not.
   - U+180E: ignorable since Unicode 16 (the profile drops it), disallowed in the appliance's older ICU.
+  - Newer code points: converting each code point from U+0080 alone as `X.com` (host PHP 8.4.27 with ICU 76.1 against x/net v0.56.0
+    on go1.27.0) never gives two different answers. Core accepts 4,763 the host rejects (4,761 are unassigned in Unicode 16;
+    U+FE63 and U+FF0D map to a hyphen) and rejects 81 the host accepts (63 Arabic-number and 16 Arabic-letter code points that
+    fail the bidi rule alone, ZWNJ and ZWJ).
   A trailing root dot is not a divergence: ICU accepts it and Core strips one before converting and puts it back. Sharp s and
   final sigma (`idn_uts46`) are the non-transitional answers; the appliance's transitional ICU probably answers `ss` and `σ`,
   which no replay has confirmed (the smoke replay decides; add an `old_expect` with `"appliance": true` if it differs).
