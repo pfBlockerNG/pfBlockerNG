@@ -4146,6 +4146,8 @@ const PFB_CORE_RCFILE = '/usr/local/etc/rc.d/pfb_core.sh';
 const PFB_CORE_API_VERSION = 'v1';
 // Kept in $pfb like the other runtime paths, so a unit test points them at its own files. The socket's directory is root's alone (0700).
 $pfb['core_socket'] = '/var/run/pfb_core/api.sock';
+// issue #3842: Core's own storage (the settings store), root's alone (0700). Not under /var: it survives a RAM-disk reboot.
+$pfb['core_state'] = '/usr/local/etc/pfb_core';
 $pfb['core_log'] = '/var/log/pfblockerng/core.log';
 $pfb['core_pidfile'] = '/var/run/pfb_core.pid';
 $pfb['core_daemon_pidfile'] = '/var/run/pfb_core_daemon.pid';
@@ -4395,9 +4397,21 @@ function pfb_pkg_ver() {
 
 
 /**
+ * Package removal, once pfb_core is stopped: Keep Settings off deletes Core's state directory (the settings store, secrets
+ * included); on, it stays for the reinstall, like the package's config.xml sections (issue #3842).
+ */
+function pfb_core_state_teardown(PfbToggle $keep): void {
+	global $pfb;
+	if ($keep !== PfbToggle::On) {
+		rmdir_recursive($pfb['core_state']);
+	}
+}
+
+
+/**
  * (Re)generate /usr/local/etc/rc.d/pfb_core.sh, the Core API service (issue #3841). Start: keeps a pfb_core supervisor its pidfile
  * names; otherwise runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64, by `uname -p`) under daemon(8), restarted 5 s
- * after it exits, with its output in $pfb['core_log'] and its API on $pfb['core_socket']. No executable pfb-core for this machine
+ * after it exits, with its output in $pfb['core_log'], its API on $pfb['core_socket'] and its storage in $pfb['core_state']. No executable pfb-core for this machine
  * starts nothing and is not a failure (a package built without it); an unknown machine fails. Stop: TERM to the supervisor and
  * pfb-core, KILL at 5 s, each signalled only while its pidfile names it and its command line is pfb_core's.
  *
@@ -4410,6 +4424,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$childpid = escapeshellarg($pfb['core_pidfile']);
 	$log = escapeshellarg($pfb['core_log']);
 	$socket = escapeshellarg($pfb['core_socket']);
+	$state = escapeshellarg($pfb['core_state']);
 	$dir = escapeshellarg($coreDir);
 	// pgrep/pkill -f patterns (extended regular expressions): daemon(8)'s title, and pfb-core as daemon(8) runs it
 	$supervisor = escapeshellarg('^daemon: pfb_core\[');
@@ -4441,7 +4456,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 
 	rc_stop
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} </dev/null >/dev/null 2>&1
 	/usr/bin/logger -p daemon.info -t pfb_core "INFO [{$prefix}] Core API started"
 
 EOF;
@@ -27852,6 +27867,7 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	unlink_if_exists('/usr/local/sbin/clog_pfb');
 	unlink_if_exists('/usr/bin/tail_pfb');
 	stop_service('pfb_core');
+	pfb_core_state_teardown($pfb['keep']);
 	unlink_if_exists(PFB_CORE_RCFILE);
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_filter.sh');
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh');

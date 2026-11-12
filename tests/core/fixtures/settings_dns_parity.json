@@ -1,0 +1,1235 @@
+{
+	"schema": 1,
+	"projection": "dns",
+	"cases": [
+		{
+			"id": "defaults",
+			"description": "Nothing stored: every field is its registry default as the ini carries it.",
+			"source": "stored",
+			"values": {},
+			"valid": true,
+			"native": {
+				"replyLogging": true,
+				"hstsNullBlocking": true,
+				"tldWildcard": false,
+				"pslIncludePrivate": true,
+				"pslAllowPrivate": false,
+				"pslFeedPrivatePolicy": "honor",
+				"pslFeedIcannPolicy": "honor",
+				"idnMode": "off",
+				"idnBlockMalicious": true,
+				"idnEscalateSuspicious": false,
+				"decisionCacheMax": 10000,
+				"logViaWebserver": false,
+				"cnameValidation": false,
+				"control": false,
+				"controlLegacy": false,
+				"regexCap": false,
+				"metricsClientIp": false
+			}
+		},
+		{
+			"id": "replyLogging-on",
+			"description": "dnsbl/pfb_py_reply stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_reply": "on"
+			},
+			"input": {
+				"replyLogging": true
+			},
+			"valid": true,
+			"native": {
+				"replyLogging": true
+			}
+		},
+		{
+			"id": "replyLogging-empty",
+			"description": "dnsbl/pfb_py_reply stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_reply": ""
+			},
+			"input": {
+				"replyLogging": false
+			},
+			"valid": true,
+			"native": {
+				"replyLogging": false
+			}
+		},
+		{
+			"id": "replyLogging-case",
+			"description": "dnsbl/pfb_py_reply stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_reply": "ON"
+			},
+			"valid": true,
+			"native": {
+				"replyLogging": true
+			}
+		},
+		{
+			"id": "replyLogging-junk",
+			"description": "dnsbl/pfb_py_reply stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_reply": "yes"
+			},
+			"valid": true,
+			"native": {
+				"replyLogging": false
+			}
+		},
+		{
+			"id": "hstsNullBlocking-on",
+			"description": "dnsbl/pfb_hsts stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_hsts": "on"
+			},
+			"input": {
+				"hstsNullBlocking": true
+			},
+			"valid": true,
+			"native": {
+				"hstsNullBlocking": true
+			}
+		},
+		{
+			"id": "hstsNullBlocking-empty",
+			"description": "dnsbl/pfb_hsts stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_hsts": ""
+			},
+			"input": {
+				"hstsNullBlocking": false
+			},
+			"valid": true,
+			"native": {
+				"hstsNullBlocking": false
+			}
+		},
+		{
+			"id": "hstsNullBlocking-case",
+			"description": "dnsbl/pfb_hsts stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_hsts": "ON"
+			},
+			"valid": true,
+			"native": {
+				"hstsNullBlocking": true
+			}
+		},
+		{
+			"id": "hstsNullBlocking-junk",
+			"description": "dnsbl/pfb_hsts stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_hsts": "yes"
+			},
+			"valid": true,
+			"native": {
+				"hstsNullBlocking": false
+			}
+		},
+		{
+			"id": "pslIncludePrivate-on",
+			"description": "dnsbl/pfb_psl_include_private stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_include_private": "on"
+			},
+			"input": {
+				"pslIncludePrivate": true
+			},
+			"valid": true,
+			"native": {
+				"pslIncludePrivate": true
+			}
+		},
+		{
+			"id": "pslIncludePrivate-empty",
+			"description": "dnsbl/pfb_psl_include_private stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_include_private": ""
+			},
+			"input": {
+				"pslIncludePrivate": false
+			},
+			"valid": true,
+			"native": {
+				"pslIncludePrivate": false
+			}
+		},
+		{
+			"id": "pslIncludePrivate-case",
+			"description": "dnsbl/pfb_psl_include_private stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_include_private": "ON"
+			},
+			"valid": true,
+			"native": {
+				"pslIncludePrivate": true
+			}
+		},
+		{
+			"id": "pslIncludePrivate-junk",
+			"description": "dnsbl/pfb_psl_include_private stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_include_private": "yes"
+			},
+			"valid": true,
+			"native": {
+				"pslIncludePrivate": false
+			}
+		},
+		{
+			"id": "pslAllowPrivate-on",
+			"description": "dnsbl/pfb_psl_allow_private stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_allow_private": "on"
+			},
+			"input": {
+				"pslAllowPrivate": true
+			},
+			"valid": true,
+			"native": {
+				"pslAllowPrivate": true
+			}
+		},
+		{
+			"id": "pslAllowPrivate-empty",
+			"description": "dnsbl/pfb_psl_allow_private stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_allow_private": ""
+			},
+			"input": {
+				"pslAllowPrivate": false
+			},
+			"valid": true,
+			"native": {
+				"pslAllowPrivate": false
+			}
+		},
+		{
+			"id": "pslAllowPrivate-case",
+			"description": "dnsbl/pfb_psl_allow_private stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_allow_private": "ON"
+			},
+			"valid": true,
+			"native": {
+				"pslAllowPrivate": true
+			}
+		},
+		{
+			"id": "pslAllowPrivate-junk",
+			"description": "dnsbl/pfb_psl_allow_private stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_allow_private": "yes"
+			},
+			"valid": true,
+			"native": {
+				"pslAllowPrivate": false
+			}
+		},
+		{
+			"id": "idnBlockMalicious-on",
+			"description": "dnsbl/pfb_idn_block_malicious stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn_block_malicious": "on"
+			},
+			"input": {
+				"idnBlockMalicious": true
+			},
+			"valid": true,
+			"native": {
+				"idnBlockMalicious": true
+			}
+		},
+		{
+			"id": "idnBlockMalicious-empty",
+			"description": "dnsbl/pfb_idn_block_malicious stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn_block_malicious": ""
+			},
+			"input": {
+				"idnBlockMalicious": false
+			},
+			"valid": true,
+			"native": {
+				"idnBlockMalicious": false
+			}
+		},
+		{
+			"id": "idnBlockMalicious-case",
+			"description": "dnsbl/pfb_idn_block_malicious stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn_block_malicious": "ON"
+			},
+			"valid": true,
+			"native": {
+				"idnBlockMalicious": true
+			}
+		},
+		{
+			"id": "idnBlockMalicious-junk",
+			"description": "dnsbl/pfb_idn_block_malicious stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn_block_malicious": "yes"
+			},
+			"valid": true,
+			"native": {
+				"idnBlockMalicious": false
+			}
+		},
+		{
+			"id": "idnEscalateSuspicious-on",
+			"description": "dnsbl/pfb_idn_escalate_suspicious stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn_escalate_suspicious": "on"
+			},
+			"input": {
+				"idnEscalateSuspicious": true
+			},
+			"valid": true,
+			"native": {
+				"idnEscalateSuspicious": true
+			}
+		},
+		{
+			"id": "idnEscalateSuspicious-empty",
+			"description": "dnsbl/pfb_idn_escalate_suspicious stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn_escalate_suspicious": ""
+			},
+			"input": {
+				"idnEscalateSuspicious": false
+			},
+			"valid": true,
+			"native": {
+				"idnEscalateSuspicious": false
+			}
+		},
+		{
+			"id": "idnEscalateSuspicious-case",
+			"description": "dnsbl/pfb_idn_escalate_suspicious stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn_escalate_suspicious": "ON"
+			},
+			"valid": true,
+			"native": {
+				"idnEscalateSuspicious": true
+			}
+		},
+		{
+			"id": "idnEscalateSuspicious-junk",
+			"description": "dnsbl/pfb_idn_escalate_suspicious stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn_escalate_suspicious": "yes"
+			},
+			"valid": true,
+			"native": {
+				"idnEscalateSuspicious": false
+			}
+		},
+		{
+			"id": "logViaWebserver-on",
+			"description": "dnsbl/pfb_py_nolog stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_nolog": "on"
+			},
+			"input": {
+				"logViaWebserver": true
+			},
+			"valid": true,
+			"native": {
+				"logViaWebserver": true
+			}
+		},
+		{
+			"id": "logViaWebserver-empty",
+			"description": "dnsbl/pfb_py_nolog stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_nolog": ""
+			},
+			"input": {
+				"logViaWebserver": false
+			},
+			"valid": true,
+			"native": {
+				"logViaWebserver": false
+			}
+		},
+		{
+			"id": "logViaWebserver-case",
+			"description": "dnsbl/pfb_py_nolog stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_nolog": "ON"
+			},
+			"valid": true,
+			"native": {
+				"logViaWebserver": true
+			}
+		},
+		{
+			"id": "logViaWebserver-junk",
+			"description": "dnsbl/pfb_py_nolog stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_nolog": "yes"
+			},
+			"valid": true,
+			"native": {
+				"logViaWebserver": false
+			}
+		},
+		{
+			"id": "cnameValidation-on",
+			"description": "dnsbl/pfb_cname stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_cname": "on"
+			},
+			"input": {
+				"cnameValidation": true
+			},
+			"valid": true,
+			"native": {
+				"cnameValidation": true
+			}
+		},
+		{
+			"id": "cnameValidation-empty",
+			"description": "dnsbl/pfb_cname stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_cname": ""
+			},
+			"input": {
+				"cnameValidation": false
+			},
+			"valid": true,
+			"native": {
+				"cnameValidation": false
+			}
+		},
+		{
+			"id": "cnameValidation-case",
+			"description": "dnsbl/pfb_cname stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_cname": "ON"
+			},
+			"valid": true,
+			"native": {
+				"cnameValidation": true
+			}
+		},
+		{
+			"id": "cnameValidation-junk",
+			"description": "dnsbl/pfb_cname stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_cname": "yes"
+			},
+			"valid": true,
+			"native": {
+				"cnameValidation": false
+			}
+		},
+		{
+			"id": "control-on",
+			"description": "dnsbl/pfb_control stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_control": "on"
+			},
+			"input": {
+				"control": true
+			},
+			"valid": true,
+			"native": {
+				"control": true
+			}
+		},
+		{
+			"id": "control-empty",
+			"description": "dnsbl/pfb_control stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_control": ""
+			},
+			"input": {
+				"control": false
+			},
+			"valid": true,
+			"native": {
+				"control": false
+			}
+		},
+		{
+			"id": "control-case",
+			"description": "dnsbl/pfb_control stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_control": "ON"
+			},
+			"valid": true,
+			"native": {
+				"control": true
+			}
+		},
+		{
+			"id": "control-junk",
+			"description": "dnsbl/pfb_control stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_control": "yes"
+			},
+			"valid": true,
+			"native": {
+				"control": false
+			}
+		},
+		{
+			"id": "regexCap-on",
+			"description": "dnsbl/pfb_regex_cap stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_regex_cap": "on"
+			},
+			"input": {
+				"regexCap": true
+			},
+			"valid": true,
+			"native": {
+				"regexCap": true
+			}
+		},
+		{
+			"id": "regexCap-empty",
+			"description": "dnsbl/pfb_regex_cap stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_regex_cap": ""
+			},
+			"input": {
+				"regexCap": false
+			},
+			"valid": true,
+			"native": {
+				"regexCap": false
+			}
+		},
+		{
+			"id": "regexCap-case",
+			"description": "dnsbl/pfb_regex_cap stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_regex_cap": "ON"
+			},
+			"valid": true,
+			"native": {
+				"regexCap": true
+			}
+		},
+		{
+			"id": "regexCap-junk",
+			"description": "dnsbl/pfb_regex_cap stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_regex_cap": "yes"
+			},
+			"valid": true,
+			"native": {
+				"regexCap": false
+			}
+		},
+		{
+			"id": "metricsClientIp-on",
+			"description": "gen/pfb_metrics_client_ip stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"gen/pfb_metrics_client_ip": "on"
+			},
+			"input": {
+				"metricsClientIp": true
+			},
+			"valid": true,
+			"native": {
+				"metricsClientIp": true
+			}
+		},
+		{
+			"id": "metricsClientIp-empty",
+			"description": "gen/pfb_metrics_client_ip stored '' is a deliberate off, whatever the default.",
+			"source": "stored",
+			"values": {
+				"gen/pfb_metrics_client_ip": ""
+			},
+			"input": {
+				"metricsClientIp": false
+			},
+			"valid": true,
+			"native": {
+				"metricsClientIp": false
+			}
+		},
+		{
+			"id": "metricsClientIp-case",
+			"description": "gen/pfb_metrics_client_ip stored 'ON' reads on: either toggle token in any case (issue #1887).",
+			"source": "stored",
+			"values": {
+				"gen/pfb_metrics_client_ip": "ON"
+			},
+			"valid": true,
+			"native": {
+				"metricsClientIp": true
+			}
+		},
+		{
+			"id": "metricsClientIp-junk",
+			"description": "gen/pfb_metrics_client_ip stored 'yes' is junk and reads off, never on.",
+			"source": "stored",
+			"values": {
+				"gen/pfb_metrics_client_ip": "yes"
+			},
+			"valid": true,
+			"native": {
+				"metricsClientIp": false
+			}
+		},
+		{
+			"id": "controlLegacy-with-control",
+			"description": "Legacy control is on while control is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_control": "on",
+				"dnsbl/pfb_control_legacy": "on"
+			},
+			"input": {
+				"control": true,
+				"controlLegacy": true
+			},
+			"valid": true,
+			"native": {
+				"control": true,
+				"controlLegacy": true
+			}
+		},
+		{
+			"id": "controlLegacy-without-control",
+			"description": "Legacy control stored on with control off: the ini says off, and Core holds it off.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_control": "",
+				"dnsbl/pfb_control_legacy": "on"
+			},
+			"input": {
+				"control": false,
+				"controlLegacy": true
+			},
+			"valid": true,
+			"native": {
+				"control": false,
+				"controlLegacy": false
+			}
+		},
+		{
+			"id": "controlLegacy-off",
+			"description": "Legacy control off with control on stays off.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_control": "on",
+				"dnsbl/pfb_control_legacy": ""
+			},
+			"input": {
+				"control": true,
+				"controlLegacy": false
+			},
+			"valid": true,
+			"native": {
+				"control": true,
+				"controlLegacy": false
+			}
+		},
+		{
+			"id": "tldWildcard-on",
+			"description": "tld_wildcard stored 'on' is on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/tld_wildcard": "on"
+			},
+			"input": {
+				"tldWildcard": true
+			},
+			"valid": true,
+			"native": {
+				"tldWildcard": true
+			}
+		},
+		{
+			"id": "tldWildcard-empty",
+			"description": "tld_wildcard stored '' is off.",
+			"source": "stored",
+			"values": {
+				"dnsbl/tld_wildcard": ""
+			},
+			"input": {
+				"tldWildcard": false
+			},
+			"valid": true,
+			"native": {
+				"tldWildcard": false
+			}
+		},
+		{
+			"id": "tldWildcard-off-token",
+			"description": "tld_wildcard has no adapter: the ini says on for any non-empty value, 'off' included.",
+			"source": "stored",
+			"values": {
+				"dnsbl/tld_wildcard": "off"
+			},
+			"valid": true,
+			"native": {
+				"tldWildcard": true
+			}
+		},
+		{
+			"id": "tldWildcard-zero",
+			"description": "tld_wildcard stored '0' is empty() in PHP: off.",
+			"source": "stored",
+			"values": {
+				"dnsbl/tld_wildcard": "0"
+			},
+			"valid": true,
+			"native": {
+				"tldWildcard": false
+			}
+		},
+		{
+			"id": "pslFeedPrivatePolicy-ignore",
+			"description": "dnsbl/pfb_psl_feed_private_policy stored 'ignore' is ignore.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_private_policy": "ignore"
+			},
+			"input": {
+				"pslFeedPrivatePolicy": "ignore"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedPrivatePolicy": "ignore"
+			}
+		},
+		{
+			"id": "pslFeedPrivatePolicy-apex",
+			"description": "dnsbl/pfb_psl_feed_private_policy stored 'apex' is apex.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_private_policy": "apex"
+			},
+			"input": {
+				"pslFeedPrivatePolicy": "apex"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedPrivatePolicy": "apex"
+			}
+		},
+		{
+			"id": "pslFeedPrivatePolicy-honor",
+			"description": "dnsbl/pfb_psl_feed_private_policy stored 'honor' is honor.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_private_policy": "honor"
+			},
+			"input": {
+				"pslFeedPrivatePolicy": "honor"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedPrivatePolicy": "honor"
+			}
+		},
+		{
+			"id": "pslFeedPrivatePolicy-empty",
+			"description": "dnsbl/pfb_psl_feed_private_policy stored '' reads honor (issue #2371).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_private_policy": ""
+			},
+			"valid": true,
+			"native": {
+				"pslFeedPrivatePolicy": "honor"
+			}
+		},
+		{
+			"id": "pslFeedPrivatePolicy-case",
+			"description": "dnsbl/pfb_psl_feed_private_policy stored 'APEX': the policy has no case-folding, so it reads honor.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_private_policy": "APEX"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedPrivatePolicy": "honor"
+			}
+		},
+		{
+			"id": "pslFeedPrivatePolicy-junk",
+			"description": "dnsbl/pfb_psl_feed_private_policy stored junk reads honor.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_private_policy": "bogus"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedPrivatePolicy": "honor"
+			}
+		},
+		{
+			"id": "pslFeedIcannPolicy-ignore",
+			"description": "dnsbl/pfb_psl_feed_icann_policy stored 'ignore' is ignore.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_icann_policy": "ignore"
+			},
+			"input": {
+				"pslFeedIcannPolicy": "ignore"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedIcannPolicy": "ignore"
+			}
+		},
+		{
+			"id": "pslFeedIcannPolicy-apex",
+			"description": "dnsbl/pfb_psl_feed_icann_policy stored 'apex' is apex.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_icann_policy": "apex"
+			},
+			"input": {
+				"pslFeedIcannPolicy": "apex"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedIcannPolicy": "apex"
+			}
+		},
+		{
+			"id": "pslFeedIcannPolicy-honor",
+			"description": "dnsbl/pfb_psl_feed_icann_policy stored 'honor' is honor.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_icann_policy": "honor"
+			},
+			"input": {
+				"pslFeedIcannPolicy": "honor"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedIcannPolicy": "honor"
+			}
+		},
+		{
+			"id": "pslFeedIcannPolicy-empty",
+			"description": "dnsbl/pfb_psl_feed_icann_policy stored '' reads honor (issue #2371).",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_icann_policy": ""
+			},
+			"valid": true,
+			"native": {
+				"pslFeedIcannPolicy": "honor"
+			}
+		},
+		{
+			"id": "pslFeedIcannPolicy-case",
+			"description": "dnsbl/pfb_psl_feed_icann_policy stored 'APEX': the policy has no case-folding, so it reads honor.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_icann_policy": "APEX"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedIcannPolicy": "honor"
+			}
+		},
+		{
+			"id": "pslFeedIcannPolicy-junk",
+			"description": "dnsbl/pfb_psl_feed_icann_policy stored junk reads honor.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_psl_feed_icann_policy": "bogus"
+			},
+			"valid": true,
+			"native": {
+				"pslFeedIcannPolicy": "honor"
+			}
+		},
+		{
+			"id": "idnMode-stored-on",
+			"description": "pfb_idn stored 'on' is IDN mode on.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn": "on"
+			},
+			"input": {
+				"idnMode": "on"
+			},
+			"valid": true,
+			"native": {
+				"idnMode": "on"
+			}
+		},
+		{
+			"id": "idnMode-stored-confusable",
+			"description": "pfb_idn stored 'confusable' is IDN mode confusable.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn": "confusable"
+			},
+			"input": {
+				"idnMode": "confusable"
+			},
+			"valid": true,
+			"native": {
+				"idnMode": "confusable"
+			}
+		},
+		{
+			"id": "idnMode-stored-empty",
+			"description": "pfb_idn stored '' is IDN mode off.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn": ""
+			},
+			"valid": true,
+			"native": {
+				"idnMode": "off"
+			}
+		},
+		{
+			"id": "idnMode-stored-off",
+			"description": "pfb_idn stored 'off' is IDN mode off.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn": "off"
+			},
+			"input": {
+				"idnMode": "off"
+			},
+			"valid": true,
+			"native": {
+				"idnMode": "off"
+			}
+		},
+		{
+			"id": "idnMode-stored-alpha-all",
+			"description": "pfb_idn stored as the dropped 4.0.0-alpha 'all' token reads off.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_idn": "all"
+			},
+			"valid": true,
+			"native": {
+				"idnMode": "off"
+			}
+		},
+		{
+			"id": "idnMode-posted-off",
+			"description": "The DNSBL page accepts IDN mode 'off'.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_idn": "off"
+			},
+			"input": {
+				"idnMode": "off"
+			},
+			"valid": true,
+			"native": {
+				"idnMode": "off"
+			}
+		},
+		{
+			"id": "idnMode-posted-confusable",
+			"description": "The DNSBL page accepts IDN mode 'confusable'.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_idn": "confusable"
+			},
+			"input": {
+				"idnMode": "confusable"
+			},
+			"valid": true,
+			"native": {
+				"idnMode": "confusable"
+			}
+		},
+		{
+			"id": "idnMode-posted-on",
+			"description": "The DNSBL page accepts IDN mode 'on'.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_idn": "on"
+			},
+			"input": {
+				"idnMode": "on"
+			},
+			"valid": true,
+			"native": {
+				"idnMode": "on"
+			}
+		},
+		{
+			"id": "idnMode-posted-all",
+			"description": "The DNSBL page refuses an IDN mode outside its select options: 'all'.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_idn": "all"
+			},
+			"input": {
+				"idnMode": "all"
+			},
+			"valid": false
+		},
+		{
+			"id": "idnMode-posted-empty",
+			"description": "The DNSBL page refuses an empty IDN mode.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_idn": ""
+			},
+			"input": {
+				"idnMode": ""
+			},
+			"valid": false
+		},
+		{
+			"id": "decisionCacheMax-stored-empty",
+			"description": "pfb_py_cache_max stored '' is the 10000 default.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_cache_max": ""
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 10000
+			}
+		},
+		{
+			"id": "decisionCacheMax-stored-0",
+			"description": "0 is kept: unlimited.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "0"
+			},
+			"input": {
+				"decisionCacheMax": 0
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 0
+			}
+		},
+		{
+			"id": "decisionCacheMax-stored-5000000",
+			"description": "The ceiling is kept.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "5000000"
+			},
+			"input": {
+				"decisionCacheMax": 5000000
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 5000000
+			}
+		},
+		{
+			"id": "decisionCacheMax-stored-9999999",
+			"description": "A stored value above the ceiling is capped to 5000000.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "9999999"
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 5000000
+			}
+		},
+		{
+			"id": "decisionCacheMax-stored-abc",
+			"description": "A non-numeric stored value falls back to 10000.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "abc"
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 10000
+			}
+		},
+		{
+			"id": "decisionCacheMax-stored-007",
+			"description": "Leading zeros read as the number.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "007"
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 7
+			}
+		},
+		{
+			"id": "decisionCacheMax-stored-1",
+			"description": "A small cap is kept.",
+			"source": "stored",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "1"
+			},
+			"input": {
+				"decisionCacheMax": 1
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 1
+			}
+		},
+		{
+			"id": "decisionCacheMax-posted-empty",
+			"description": "The page accepts an empty cap: the 10000 default (null in Core resets the field).",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_py_cache_max": ""
+			},
+			"input": {
+				"decisionCacheMax": null
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 10000
+			}
+		},
+		{
+			"id": "decisionCacheMax-posted-42",
+			"description": "The page accepts a whole number.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "42"
+			},
+			"input": {
+				"decisionCacheMax": 42
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 42
+			}
+		},
+		{
+			"id": "decisionCacheMax-posted-max",
+			"description": "The page accepts 5000000.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "5000000"
+			},
+			"input": {
+				"decisionCacheMax": 5000000
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 5000000
+			}
+		},
+		{
+			"id": "decisionCacheMax-posted-zero",
+			"description": "The page accepts 0: unlimited.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "0"
+			},
+			"input": {
+				"decisionCacheMax": 0
+			},
+			"valid": true,
+			"native": {
+				"decisionCacheMax": 0
+			}
+		},
+		{
+			"id": "decisionCacheMax-posted-5000001",
+			"description": "The page refuses a cap above 5000000.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "5000001"
+			},
+			"input": {
+				"decisionCacheMax": 5000001
+			},
+			"valid": false
+		},
+		{
+			"id": "decisionCacheMax-posted--1",
+			"description": "The page refuses a cap negative.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "-1"
+			},
+			"input": {
+				"decisionCacheMax": -1
+			},
+			"valid": false
+		},
+		{
+			"id": "decisionCacheMax-posted-abc",
+			"description": "The page refuses a cap not a number.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "abc"
+			},
+			"input": {
+				"decisionCacheMax": "abc"
+			},
+			"valid": false
+		},
+		{
+			"id": "decisionCacheMax-posted-1.5",
+			"description": "The page refuses a cap not whole.",
+			"source": "posted",
+			"values": {
+				"dnsbl/pfb_py_cache_max": "1.5"
+			},
+			"input": {
+				"decisionCacheMax": 1.5
+			},
+			"valid": false
+		}
+	]
+}

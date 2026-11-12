@@ -1,0 +1,34 @@
+{
+ "schema": 1,
+ "description": "An rsync feed is always due, without starting rsync.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "seed": {
+  "published": "old\n"
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "format": "rsync",
+   "url": "rsync://feed.example/feeds/list.txt",
+   "rsync": {
+    "exit": 0,
+    "body": "r\n"
+   },
+   "expect": {
+    "ok": true,
+    "published": "old\n",
+    "decision": "changed",
+    "requests": []
+   }
+  }
+ ]
+}

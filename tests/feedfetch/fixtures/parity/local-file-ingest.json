@@ -1,0 +1,28 @@
+{
+ "schema": 1,
+ "description": "A local file directly in an allowed directory is read and published.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "local_files": {
+  "src.txt": "1.2.3.4"
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "{local}/src.txt",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n",
+    "requests": []
+   }
+  }
+ ]
+}

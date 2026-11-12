@@ -1,0 +1,55 @@
+{
+ "schema": 1,
+ "description": "A 200 whose raw bytes hash like the last ingest is unchanged; the hash is of the raw body, before the newline is added (#713).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "x\ny"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "x\ny\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  },
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "x\ny\n",
+    "decision": "unchanged",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  }
+ ]
+}

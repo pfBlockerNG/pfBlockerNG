@@ -143,6 +143,7 @@ final class PfbCoreServiceTest extends TestCase
 
 		$GLOBALS['pfb'] = array_merge($this->savedPfb, [
 			'core_socket'         => "{$this->dir}/run/pfb_core/api.sock",
+			'core_state'          => "{$this->dir}/db/pfb_core",
 			'core_log'            => "{$this->dir}/log/core.log",
 			'core_pidfile'        => "{$this->dir}/run/pfb_core.pid",
 			'core_daemon_pidfile' => "{$this->dir}/run/pfb_core_daemon.pid",
@@ -238,7 +239,7 @@ final class PfbCoreServiceTest extends TestCase
 	}
 
 	#[DataProvider('machines')]
-	public function testStartRunsThisMachinesBinaryUnderDaemonWithTheSocketAndLog(string $machine, string $target): void
+	public function testStartRunsThisMachinesBinaryUnderDaemonWithTheSocketStateAndLog(string $machine, string $target): void
 	{
 		// Given both architectures' pfb-core are installed
 		$this->install('freebsd-amd64');
@@ -248,12 +249,13 @@ final class PfbCoreServiceTest extends TestCase
 		// When the service starts
 		[$status, $out] = $this->rc('start');
 
-		// Then daemon(8) supervises this machine's binary, restarting it, with the package log and the API socket
+		// Then daemon(8) supervises this machine's binary, restarting it, with the package log, the API socket and Core's state directory
 		$this->assertSame(0, $status, $out);
 		$this->assertSame([
 			'-r', '-R', '5', '-t', 'pfb_core',
 			'-P', $GLOBALS['pfb']['core_daemon_pidfile'], '-p', $GLOBALS['pfb']['core_pidfile'], '-o', $GLOBALS['pfb']['core_log'],
 			"{$this->dir}/core/bin/{$target}/pfb-core", '--socket', $GLOBALS['pfb']['core_socket'],
+			'--state-dir', $GLOBALS['pfb']['core_state'],
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}

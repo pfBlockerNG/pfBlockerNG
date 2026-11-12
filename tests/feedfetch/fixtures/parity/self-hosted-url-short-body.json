@@ -1,0 +1,42 @@
+{
+ "schema": 1,
+ "description": "A self-hosted body shorter than its Content-Length is refused after one request.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/feed.txt": {
+    "body": "ab",
+    "declared_length": 10
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://127.0.0.1:{port:origin}/feed.txt",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "local feed body incomplete (2 of 10 bytes)",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/feed.txt"
+     }
+    ]
+   }
+  }
+ ]
+}

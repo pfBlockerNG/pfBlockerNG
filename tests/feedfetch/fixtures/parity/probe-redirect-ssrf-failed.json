@@ -1,0 +1,55 @@
+{
+ "schema": 1,
+ "description": "The probe re-vets redirect hops like the ingest.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "internal.example": [
+   "127.0.0.1",
+   "10.1.2.3"
+  ]
+ },
+ "servers": [
+  "origin",
+  "target"
+ ],
+ "seed": {
+  "published": "old\n"
+ },
+ "routes": {
+  "origin": {
+   "/evil": {
+    "status": 302,
+    "location": "http://internal.example:{port:target}/hop"
+   }
+  },
+  "target": {
+   "/hop": {
+    "body": "PWNED\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/evil",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "decision": "failed",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/evil"
+     }
+    ]
+   }
+  }
+ ]
+}

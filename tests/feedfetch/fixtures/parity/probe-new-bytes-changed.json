@@ -1,0 +1,78 @@
+{
+ "schema": 1,
+ "description": "A 200 with different bytes is a change and the following ingest publishes the probe's body without a second request.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "v1\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "v1\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  },
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "routes": {
+    "origin": {
+     "/list": {
+      "body": "v2\n"
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "published": "v1\n",
+    "decision": "changed",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "routes": {
+    "origin": {
+     "/list": {
+      "body": "v3\n"
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "published": "v2\n",
+    "requests": []
+   }
+  }
+ ]
+}

@@ -1,0 +1,59 @@
+{
+ "schema": 1,
+ "description": "A redirect to a host resolving to a non-permitted internal address is refused before it is dialled; the published copy is kept.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "internal.example": [
+   "127.0.0.1",
+   "10.1.2.3"
+  ]
+ },
+ "servers": [
+  "origin",
+  "target"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "routes": {
+  "origin": {
+   "/evil": {
+    "status": 302,
+    "location": "http://internal.example:{port:target}/hop"
+   }
+  },
+  "target": {
+   "/hop": {
+    "body": "PWNED\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/evil",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "feed host resolves to a non-permitted address",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/evil"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

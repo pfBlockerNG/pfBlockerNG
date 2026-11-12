@@ -1,0 +1,37 @@
+{
+ "schema": 1,
+ "description": "A host that does not resolve is refused.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "nx.example": []
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://nx.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host did not resolve",
+    "requests": []
+   }
+  }
+ ]
+}
