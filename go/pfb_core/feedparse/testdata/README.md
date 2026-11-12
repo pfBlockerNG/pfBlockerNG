@@ -33,16 +33,23 @@ for bytes that are not valid UTF-8.
   and private use printable; NBSP and U+2028 in `[:space:]`, U+0085 not. Separately, a PHP assertion that is not valid
   UTF-8 needs a host sed that passes invalid sequences through; the PHP runner probes both and skips where the host differs.
 
-## `ip.json`: IP feed lines (`pfb_ip_parse_line_replay()`)
+## `ip.json`: IP feed lines (`pfb_ip_parse_line_replay()`) and parser types
+
+Top level: `{"schema": 1, "cases": [...], "types": [...]}`. Ids are unique within `cases` and within `types`.
 
 Case: `id`, `description`, `config` and `rows`.
 
 - `config`: `vtype` (`_v4`/`_v6`), `pftype` (`auto`/`regex`), `custom` (bool), `cidr_floor_v4` and `cidr_floor_v6`
   (`"Disabled"` or a decimal string), `suppression` (bool).
 - `rows`: non-empty list, run in order; each `{"line" | "line_hex", "expect"}`, the line as `fgets()` returns it (its
-  `\n` included). `expect` is `{"entries": [...], "line": "...", "suppressed": bool, "parse_fail": int,
-  "detailed_parse_fail": bool, "messages": [...]}`: the entries appended to the list, and the replay's other fields for
-  this line alone (`parse_fail` is this line's increment).
+  `\n` included, none inside). `expect` is `{"entries": [...], "line" | "line_hex", "suppressed": bool, "parse_fail": int,
+  "detailed_parse_fail": bool, "messages" | "messages_hex": [...]}`: the entries appended to the list, the line as the
+  parse-error log shows it, and the replay's other fields for this line alone (`parse_fail` is this line's increment).
+  `messages_hex` (hex of each message) replaces `messages` when one is not valid UTF-8.
+
+Type (`IPParseType()`, the parser the apply script picks for a feed): `id`, `description`, `format` (the list's
+`format`), `url`, `expect` (`auto`/`regex`). The PHP runner cuts the dispatch block out of the apply script and
+evaluates it, since it is inline code there.
 
 ## `dnsbl.json`: DNSBL feed lines (`pfb_dnsbl_parse_line()`)
 
