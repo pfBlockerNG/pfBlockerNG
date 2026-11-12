@@ -77,6 +77,55 @@ func dnsblFeedBytes(m map[string]json.RawMessage, where string) (string, error) 
 	return s, nil
 }
 
+// dnsblExpect decodes one expect object: rows, ip4, ip6, fail, scheme_skipped and stop.
+func dnsblExpect(t *testing.T, raw json.RawMessage, where string) DNSBLLine {
+	t.Helper()
+	em, err := dnsblObject(raw, where, "rows", "ip4", "ip6", "fail", "scheme_skipped", "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows [][2]string
+	var failItems []json.RawMessage
+	exp := DNSBLLine{}
+	for k, dst := range map[string]any{"rows": &rows, "ip4": &exp.IP4, "ip6": &exp.IP6, "fail": &failItems, "scheme_skipped": &exp.SchemeSkipped, "stop": &exp.Stop} {
+		if err := dnsblUnmarshal(em[k], where+"."+k, dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range rows {
+		switch r[0] {
+		case "d", "a":
+			exp.Rows = append(exp.Rows, DNSBLRow{ABP: r[0] == "a", Text: r[1]})
+		default:
+			t.Fatalf("%s: row kind %q must be d or a", where, r[0])
+		}
+	}
+	for _, fi := range failItems {
+		if len(fi) > 0 && fi[0] == '{' {
+			fm, err := dnsblObject(fi, where+" fail item", "hex")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var s string
+			if err := dnsblUnmarshal(fm["hex"], where+" fail hex", &s); err != nil {
+				t.Fatal(err)
+			}
+			b, err := hex.DecodeString(s)
+			if !dnsblHexRE.MatchString(s) || err != nil || utf8.Valid(b) {
+				t.Fatalf("%s: fail hex must be lower-case hex of bytes that are not UTF-8", where)
+			}
+			exp.Fail = append(exp.Fail, string(b))
+			continue
+		}
+		var s string
+		if err := dnsblUnmarshal(fi, where+" fail item", &s); err != nil {
+			t.Fatal(err)
+		}
+		exp.Fail = append(exp.Fail, s)
+	}
+	return exp
+}
+
 func dnsblLoadCorpus(t *testing.T) []dnsblCorpusCase {
 	t.Helper()
 	data, err := os.ReadFile("testdata/dnsbl.json")
@@ -145,6 +194,9 @@ func dnsblLoadCorpus(t *testing.T) []dnsblCorpusCase {
 			if _, ok := lm["appliance"]; ok { // the pfSense appliance's result; Core asserts it like any other line
 				keys = append(keys, "appliance")
 			}
+			if _, ok := lm["old_expect"]; ok {
+				keys = append(keys, "old_expect")
+			}
 			lm, err := dnsblObject(rl, lw, keys...)
 			if err != nil {
 				t.Fatal(err)
@@ -156,48 +208,11 @@ func dnsblLoadCorpus(t *testing.T) []dnsblCorpusCase {
 			if err != nil {
 				t.Fatal(err)
 			}
-			em, err := dnsblObject(lm["expect"], lw+" expect", "rows", "ip4", "ip6", "fail", "scheme_skipped", "stop")
-			if err != nil {
-				t.Fatal(err)
-			}
-			var rows [][2]string
-			var failItems []json.RawMessage
-			exp := DNSBLLine{}
-			for k, dst := range map[string]any{"rows": &rows, "ip4": &exp.IP4, "ip6": &exp.IP6, "fail": &failItems, "scheme_skipped": &exp.SchemeSkipped, "stop": &exp.Stop} {
-				if err := dnsblUnmarshal(em[k], lw+" expect."+k, dst); err != nil {
-					t.Fatal(err)
+			exp := dnsblExpect(t, lm["expect"], lw+" expect")
+			if oldRaw, ok := lm["old_expect"]; ok { // the old path's answer; the PHP runner asserts it, this runner only checks its shape
+				if old := dnsblExpect(t, oldRaw, lw+" old_expect"); reflect.DeepEqual(dnsblNorm(old), dnsblNorm(exp)) {
+					t.Fatalf("%s: old_expect equals expect; it is present only where Core differs from the old path", lw)
 				}
-			}
-			for _, r := range rows {
-				switch r[0] {
-				case "d", "a":
-					exp.Rows = append(exp.Rows, DNSBLRow{ABP: r[0] == "a", Text: r[1]})
-				default:
-					t.Fatalf("%s: row kind %q must be d or a", lw, r[0])
-				}
-			}
-			for _, fi := range failItems {
-				if len(fi) > 0 && fi[0] == '{' {
-					fm, err := dnsblObject(fi, lw+" fail item", "hex")
-					if err != nil {
-						t.Fatal(err)
-					}
-					var s string
-					if err := dnsblUnmarshal(fm["hex"], lw+" fail hex", &s); err != nil {
-						t.Fatal(err)
-					}
-					b, err := hex.DecodeString(s)
-					if !dnsblHexRE.MatchString(s) || err != nil || utf8.Valid(b) {
-						t.Fatalf("%s: fail hex must be lower-case hex of bytes that are not UTF-8", lw)
-					}
-					exp.Fail = append(exp.Fail, string(b))
-					continue
-				}
-				var s string
-				if err := dnsblUnmarshal(fi, lw+" fail item", &s); err != nil {
-					t.Fatal(err)
-				}
-				exp.Fail = append(exp.Fail, s)
 			}
 			if exp.Stop && n != len(rawLines)-1 {
 				t.Fatalf("%s: nothing is read after a stop", lw)

@@ -197,7 +197,7 @@ def test_dnsbl_corpus_matches_the_appliance(results: dict[str, Any]) -> None:
     for case in _corpus("dnsbl")["cases"]:
         for n, (line, got) in enumerate(zip(case["lines"], results["dnsbl"][case["id"]], strict=True)):
             raw = _bytes(line, "line")
-            e = dict(line["expect"])
+            e = dict(line.get("old_expect", line["expect"]))
             e["fail"] = [bytes.fromhex(f["hex"]) if isinstance(f, dict) else f.encode() for f in e["fail"]]
             actual = dict(got)
             actual["fail"] = _fail_fields(bytes.fromhex(actual.pop("fail_log")), raw, n + 1)

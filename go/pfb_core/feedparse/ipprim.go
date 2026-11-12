@@ -2,7 +2,6 @@ package feedparse
 
 import (
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 )
@@ -572,50 +571,9 @@ func isIPAddrV4(s string) bool {
 	return true
 }
 
-// is_linklocal(): 4 for a 169.254/16 IPv4, 6 for fe80::/10-shaped, else 0.
-func isLinkLocal(s string) int {
-	if isIPAddrV4(s) {
-		if p := strings.Split(s, "."); p[0] == "169" && p[1] == "254" {
-			return 4
-		}
-		return 0
-	}
-	if len(s) >= 5 && (s[0] == 'f' || s[0] == 'F') && (s[1] == 'e' || s[1] == 'E') &&
-		strings.IndexByte("89abAB", s[2]) >= 0 && isHexDigit(s[3]) && s[4] == ':' {
-		return 6
-	}
-	return 0
-}
+func isSubnetV4(s string) bool { return pfSenseIsSubnet(s) == 4 }
 
-// is_ipaddrv6(): no mask, a link-local %zone stripped, one `::` at most, then filter_var(FILTER_FLAG_IPV6).
-func isIPAddrV6(s string) bool {
-	if phpEmpty(s) || strings.IndexByte(s, '/') >= 0 {
-		return false
-	}
-	if i := strings.IndexByte(s, '%'); i >= 0 && isLinkLocal(s) != 0 {
-		s = s[:i]
-	}
-	if strings.Count(s, "::") > 1 {
-		return false
-	}
-	return phpFilterIP(s, false, true, false, false)
-}
-
-// preg_match('/^\d{1,3}$/', $bits) === 1 && (int) $bits <= max; `$` also matches before a final newline.
-func subnetBitsOK(bits string, max int64) bool {
-	bits = strings.TrimSuffix(bits, "\n")
-	return len(bits) >= 1 && len(bits) <= 3 && ctypeDigit(bits) && digitsInt(bits) <= max
-}
-
-func isSubnetV4(s string) bool {
-	ip, bits, ok := strings.Cut(s, "/")
-	return ok && isIPAddrV4(ip) && subnetBitsOK(bits, 32)
-}
-
-func isSubnetV6(s string) bool {
-	ip, bits, ok := strings.Cut(s, "/")
-	return ok && isIPAddrV6(ip) && strings.IndexByte(ip, '%') < 0 && subnetBitsOK(bits, 128)
-}
+func isSubnetV6(s string) bool { return pfSenseIsSubnet(s) == 6 }
 
 // validate_ipv4()/validate_ipv6(): NUL rejected, then address or subnet.
 func validateIPv4(s string) bool {
@@ -636,101 +594,6 @@ func validateIPv6(s string) bool {
 		return isSubnetV6(s)
 	}
 	return isIPAddrV6(s)
-}
-
-// ip_range_to_subnet_array(): the minimal CIDR cover of the range, vendored algorithm on bit strings.
-func ipRangeToSubnets(ip1, ip2 string) []string {
-	var bits int
-	var b1, b2 string
-	v4 := false
-	switch {
-	case isIPAddrV4(ip1) && isIPAddrV4(ip2):
-		v4, bits = true, 32
-		l1, _ := ip2long(ip1)
-		l2, _ := ip2long(ip2)
-		b1, b2 = strconv.FormatUint(uint64(l1), 2), strconv.FormatUint(uint64(l2), 2)
-	case isIPAddrV6(ip1) && isIPAddrV6(ip2):
-		bits = 128
-		b1, b2 = ip6ToBin(ip1), ip6ToBin(ip2)
-	default:
-		return nil
-	}
-	pad := func(s string) string { return strings.Repeat("0", bits-len(s)) + s }
-	b1, b2 = pad(b1), pad(b2)
-	if b1 == b2 {
-		return []string{ip1 + "/" + strconv.Itoa(bits)}
-	}
-	if b1 > b2 {
-		b1, b2 = b2, b1
-	}
-	zeros := func(n int) string { return strings.Repeat("0", n) }
-	rs := map[string]int{}
-	netsize := 0
-	for {
-		if b1[bits-1] == '1' {
-			rs[b1[netsize:]+zeros(netsize)] = bits - netsize
-			n := max(strings.LastIndexByte(b1, '0'), 0)
-			b1 = b1[:n] + "1" + zeros(bits-n-1)
-		}
-		if b2[bits-1] == '0' {
-			rs[b2[netsize:]+zeros(netsize)] = bits - netsize
-			n := max(strings.LastIndexByte(b2, '1'), 0)
-			b2 = b2[:n] + "0" + strings.Repeat("1", bits-n-1)
-		}
-		if b2 >= b1 {
-			shift := bits - max(strings.LastIndexByte(b1, '0'), strings.LastIndexByte(b2, '1'), 0)
-			b1 = zeros(shift) + b1[:bits-shift]
-			b2 = zeros(shift) + b2[:bits-shift]
-			netsize += shift
-			if b1 == b2 {
-				rs[b1[netsize:]+zeros(netsize)] = bits - netsize
-			}
-		}
-		if b1 >= b2 {
-			break
-		}
-	}
-	keys := make([]string, 0, len(rs))
-	for k := range rs {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		mask := strconv.Itoa(rs[k])
-		if v4 {
-			var o [4]string
-			for i := range o {
-				n, _ := strconv.ParseUint(k[i*8:i*8+8], 2, 8)
-				o[i] = strconv.FormatUint(n, 10)
-			}
-			out = append(out, strings.Join(o[:], ".")+"/"+mask)
-			continue
-		}
-		var raw [16]byte
-		for i := range raw {
-			n, _ := strconv.ParseUint(k[i*8:i*8+8], 2, 8)
-			raw[i] = byte(n)
-		}
-		out = append(out, phpInetNtop(raw[:])+"/"+mask)
-	}
-	return out
-}
-
-// ip6_to_bin(): 128 bits of the address (any "/mask" dropped); an unparseable one reads as all zeros.
-func ip6ToBin(s string) string {
-	if i := strings.IndexByte(s, '/'); i >= 0 {
-		s = s[:i]
-	}
-	b, ok := phpInetPton(s)
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	for _, c := range b {
-		sb.WriteString(strconv.FormatUint(uint64(c)|0x100, 2)[1:])
-	}
-	return sb.String()
 }
 
 // --- pfblockerng.inc ---
