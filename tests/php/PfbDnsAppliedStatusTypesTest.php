@@ -78,6 +78,33 @@ final class PfbDnsAppliedStatusTypesTest extends TestCase
 		$this->assertSame(['a' => ['192.0.2.1'], 'aaaa' => ['2001:db8::1']], $status['name_answers']['192.0.2.1']);
 	}
 
+	/** @return iterable<string,array{array<string,mixed>,Closure(array<string,mixed>):mixed,mixed}> issue #3849: a snapshot with one address in another numeric spelling of its bytes, where it is read back, and PHP's spelling of it */
+	public static function addressesInAnotherNumericSpelling(): iterable
+	{
+		$data = self::snapshot();
+		$data['name_answers']->{'192.0.2.1'}['a'] = ['::ffff:192.0.2.1'];
+		yield 'an IPv4-mapped IPv6 address is an A answer as its IPv4 address' => [$data, static fn (array $status): mixed => $status['name_answers']['192.0.2.1']['a'], ['192.0.2.1']];
+		$data = self::snapshot();
+		$data['name_answers']->{'192.0.2.1'}['aaaa'] = ['2001:0db8::1'];
+		yield 'an IPv6 address with a zero-padded group is an AAAA answer without it' => [$data, static fn (array $status): mixed => $status['name_answers']['192.0.2.1']['aaaa'], ['2001:db8::1']];
+		$data = self::snapshot();
+		$data['advertisements']->{'192.0.2.1'}['records'][0]['hint'] = '::ffff:192.0.2.1';
+		yield 'an IPv4-mapped hint is the IPv4 address of its local' => [$data, static fn (array $status): mixed => $status['advertisements']['192.0.2.1']['records'][0]['hint'], '192.0.2.1'];
+		$data = self::snapshot();
+		$data['name_answers'] = (object) ['::ffff:192.0.2.1' => $data['name_answers']->{'192.0.2.1'}];
+		yield 'an IPv4-mapped local that is the only key of the name answers is keyed by its IPv4 address' => [$data, static fn (array $status): mixed => array_keys($status['name_answers']), ['192.0.2.1']];
+	}
+
+	/** @param Closure(array<string,mixed>):mixed $read */
+	#[DataProvider('addressesInAnotherNumericSpelling')]
+	public function testAnAddressInAnotherNumericSpellingOfItsBytesIsReadAsPhpsSpellingOfThem(array $snapshot, Closure $read, mixed $expected): void
+	{
+		$status = $this->ask($snapshot);
+
+		$this->assertNotNull($status, 'the same bytes in another numeric spelling are a valid snapshot');
+		$this->assertSame($expected, $read($status));
+	}
+
 	public static function hostileTypes(): iterable
 	{
 		foreach (['version', 'pid', 'executable', 'upstream', 'dns_name', 'listeners', 'name_answers', 'advertisements'] as $field) {
@@ -96,12 +123,12 @@ final class PfbDnsAppliedStatusTypesTest extends TestCase
 			$data['listeners'][0][$field] = TRUE;
 			yield "boolean listener {$field}" => [$data];
 		}
-		foreach ([TRUE, (object) [], ['192.0.2.1', '192.0.2.2'], [TRUE], ['2001:db8::1'], ['::ffff:192.0.2.1'], ['192.000.2.1']] as $index => $value) {
+		foreach ([TRUE, (object) [], ['192.0.2.1', '192.0.2.2'], [TRUE], ['2001:db8::1'], ['192.000.2.1']] as $index => $value) {
 			$data = self::snapshot();
 			$data['name_answers']->{'192.0.2.1'}['a'] = $value;
 			yield "invalid A family {$index}" => [$data];
 		}
-		foreach ([TRUE, (object) [], [TRUE], ['192.0.2.1'], ['2001:0db8::1'], ['fe80::1%em0']] as $index => $value) {
+		foreach ([TRUE, (object) [], [TRUE], ['192.0.2.1'], ['fe80::1%em0']] as $index => $value) {
 			$data = self::snapshot();
 			$data['name_answers']->{'192.0.2.1'}['aaaa'] = $value;
 			yield "invalid AAAA family {$index}" => [$data];
@@ -111,7 +138,7 @@ final class PfbDnsAppliedStatusTypesTest extends TestCase
 			$data['advertisements']->{'192.0.2.1'}['records'][0][$field] = TRUE;
 			yield "boolean advertisement {$field}" => [$data];
 		}
-		foreach (['priority' => '2', 'port' => 0, 'target' => "bad\";touch example", 'hint' => '::ffff:192.0.2.1', 'path' => "\nforged"] as $field => $value) {
+		foreach (['priority' => '2', 'port' => 0, 'target' => "bad\";touch example", 'hint' => '::ffff:192.0.2.2', 'path' => "\nforged"] as $field => $value) {
 			$data = self::snapshot();
 			$data['advertisements']->{'192.0.2.1'}['records'][0][$field] = $value;
 			yield "invalid advertisement {$field}" => [$data];
@@ -123,11 +150,15 @@ final class PfbDnsAppliedStatusTypesTest extends TestCase
 				yield "invalid advertisement {$field} {$index}" => [$data];
 			}
 		}
-		foreach (['192.000.2.1', 'fe80::1%em0', '::ffff:192.0.2.1'] as $local) {
+		foreach (['192.000.2.1', 'fe80::1%em0'] as $local) {
 			$data = self::snapshot();
 			$data['name_answers']->$local = ['a' => [], 'aaaa' => []];
 			yield "invalid local {$local}" => [$data];
 		}
+		// issue #3849: another spelling of the address of a local the snapshot already keys is that local again, not a new one
+		$data = self::snapshot();
+		$data['name_answers']->{'::ffff:192.0.2.1'} = ['a' => [], 'aaaa' => []];
+		yield 'a mapped local that repeats the name-answer key 192.0.2.1' => [$data];
 		$data = self::snapshot();
 		$data['ddr'] = FALSE;
 		yield 'disabled DDR with records' => [$data];

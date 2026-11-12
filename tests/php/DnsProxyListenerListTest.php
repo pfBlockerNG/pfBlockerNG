@@ -19,12 +19,12 @@ use PHPUnit\Framework\TestCase;
  *   - a reply that arrives in pieces, or that has `ok` inside a reason, is read as the gateway wrote it;
  *   - whatever is not a whole, well-formed list is UNKNOWN (NULL), never a partial list: no socket, no answer in time, an older
  *     gateway's error, a hang-up or the 64 KiB cap before the final `ok`, and any line that is not exactly one of the two forms
- *     (spacing, control bytes, an address that is not the canonical `host:port` the gateway prints, an unknown kind, an empty reason,
+ *     (spacing, control bytes, an address that is not a numeric `host:port`, an unknown kind, an empty reason,
  *     `ok` or `error:` anywhere but last).
  *   - the reply is the whole of what the gateway sends, as the real one writes it in one write and closes: a byte after its final line,
  *     or no hang-up by the timeout, makes the list unknown, so every row that expects a list has the stand-in hang up after it;
  *   - pfb_dns_proxy_host_port() spells a host and a port as the gateway prints them (compressed and bracketed IPv6, an IPv4-mapped
- *     address as the IPv4 one), which is the spelling every `host:port` of a list is compared with.
+ *     address as the IPv4 one); a numeric spelling of the same bytes is listed under that spelling (DnsProxyListenerListAddressBytesTest).
  */
 #[CoversFunction('pfb_dns_proxy_listener_list')]
 #[CoversFunction('pfb_dns_proxy_ctl_exchange')]
@@ -314,15 +314,10 @@ final class DnsProxyListenerListTest extends TestCase
 			'a name for the host' => ["listening udp+tcp localhost:53\nok\n"],
 			'no port' => ["listening udp+tcp 127.0.0.1\nok\n"],
 			'a port above 65535' => ["listening udp+tcp 127.0.0.1:99999\nok\n"],
-			'a port with a leading zero' => ["listening udp+tcp 127.0.0.1:053\nok\n"],
 			'a negative port' => ["listening udp+tcp 127.0.0.1:-1\nok\n"],
 			'an IPv4 address in brackets' => ["listening udp+tcp [127.0.0.1]:53\nok\n"],
 			'an IPv6 address without brackets' => ["listening udp+tcp ::1:53\nok\n"],
-			'an IPv6 address that is not canonical' => ["listening udp+tcp [::0001]:53\nok\n"],
-			'an IPv4-mapped IPv6 address in uppercase' => ["listening udp+tcp [::FFFF:192.0.2.1]:53\nok\n"],
-			'an IPv4-mapped IPv6 address' => ["listening udp+tcp [::ffff:192.0.2.1]:53\nok\n"],
 			'an IPv6 address with a zone' => ["listening udp+tcp [fe80::1%em0]:53\nok\n"],
-			'an IPv6 address in uppercase' => ["listening udp+tcp [2001:DB8::1]:53\nok\n"],
 			'a refused line with a bad address' => ["refused dot localhost:853 bind: x\nok\n"],
 			'an unknown kind' => ["listening dns 127.0.0.1:53\nok\n"],
 			'a kind in uppercase' => ["listening UDP+TCP 127.0.0.1:53\nok\n"],
@@ -362,6 +357,8 @@ final class DnsProxyListenerListTest extends TestCase
 			'an IPv4-mapped address in dotted form' => ['::ffff:127.0.0.1', '53', '127.0.0.1:53'],
 			'an IPv4-mapped address in hex form' => ['::FFFF:7f00:1', '53', '127.0.0.1:53'],
 			'an IPv4-mapped wildcard' => ['::ffff:0.0.0.0', '853', '0.0.0.0:853'],
+			// issue #3849: Go prints these bytes as [::c000:201]:53; go/pfb_dns_gateway/live_listen_spelling_linux_test.go pins that side
+			'an IPv4-compatible address, which Go prints in hex' => ['::c000:201', '53', '[::192.0.2.1]:53'],
 			'an address that is not mapped but has the same tail' => ['64:ff9b::7f00:1', '53', '[64:ff9b::7f00:1]:53'],
 			'a text that is no address' => ['127.1', '53', '127.1:53'],
 		];

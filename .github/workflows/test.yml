@@ -189,7 +189,7 @@ jobs:
           if os.geteuid() != 0:
               sys.exit(f"root-only integration: euid {os.geteuid()}, not 0")
           import pytest
-          sys.exit(pytest.main(["-o", "addopts=", "tests/dns_proxy/test_gateway_e2e.py::test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing", "tests/dns_proxy/test_gateway_e2e.py::test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_the_real_gateway"]))
+          sys.exit(pytest.main(["-o", "addopts=", "tests/dns_proxy/test_gateway_e2e.py::test_a_certificate_pushed_on_the_control_socket_is_served_by_the_next_handshake_and_a_bad_push_changes_nothing", "tests/dns_proxy/test_gateway_e2e.py::test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_the_real_gateway", "tests/dns_proxy/test_gateway_e2e.py::test_the_real_php_lists_the_listeners_the_real_gateway_prints_in_spellings_php_does_not_use"]))
           '
 
   test-typing:

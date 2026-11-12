@@ -811,19 +811,34 @@ def _assert_listed(ctl: Path, addresses: set[str], refused: dict[str, str], poin
     assert listed == expected, f"{point}: the PHP probe read {listed}, expected {expected}"
 
 
-def _port_free_on_every_listener_address() -> int:
-    """A port free for UDP and TCP on 127.0.0.1, 127.0.0.2 and ::1."""
+def _port_free_on_every_listener_address(
+    hosts: tuple[tuple[int, str], ...] = ((socket.AF_INET, "127.0.0.2"), (socket.AF_INET6, "::1")),
+) -> int:
+    """A port free for UDP and TCP on 127.0.0.1 and on each of `hosts` (socket family, address)."""
     for _ in range(PORT_PICKS * 8):
         port = free_loopback_port()
         try:
-            for family, host in ((socket.AF_INET, "127.0.0.2"), (socket.AF_INET6, "::1")):
+            for family, host in hosts:
                 for kind in (socket.SOCK_DGRAM, socket.SOCK_STREAM):
                     with socket.socket(family, kind) as probe:
                         probe.bind((host, port))
         except OSError:
             continue
         return port
-    raise RuntimeError("no port free for UDP and TCP on 127.0.0.1, 127.0.0.2 and ::1")
+    raise RuntimeError(f"no port free for UDP and TCP on 127.0.0.1 and {[host for _, host in hosts]}")
+
+
+def _gateway_list_reply(ctl: Path) -> list[str]:
+    """The lines of the gateway's own answer to the list verb (FF FF FF FC), before PHP reads them."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(WATCHDOG)
+        with watched("the gateway's listener list"):
+            client.connect(str(ctl))
+            client.sendall(b"\xff\xff\xff\xfc")
+            reply = b""
+            while chunk := client.recv(4096):
+                reply += chunk
+    return reply.decode().splitlines()
 
 
 def _refuses(host: str, port: int) -> bool:
@@ -905,6 +920,43 @@ def test_listeners_the_real_php_binds_and_hands_over_are_served_then_dropped_by_
         assert _answers(_udp(original, ALLOWED, "127.0.0.1")) == [ALLOWED_ANSWER]
         assert _answers(_tcp(original, ALLOWED, "127.0.0.1")) == [ALLOWED_ANSWER]
         assert _outcome(_tcp(("::1", port), ALLOWED, "::1")) == served["::1"], "the other added listener stays"
+
+
+# issue #3849: Go prints --listen ::192.0.2.1 as [::c000:201]; PHP's inet_ntop spells the same address [::192.0.2.1]
+@NEEDS_ROOT
+def test_the_real_php_lists_the_listeners_the_real_gateway_prints_in_spellings_php_does_not_use(
+    gateway_binary: Path, module_dir: Path, unbound: RunningUnbound, tmp_path: Path, acl_text: str
+) -> None:
+    port = _port_free_on_every_listener_address(((socket.AF_INET, "127.0.0.3"),))
+    cannot_assign = "bind: cannot assign requested address"  # nothing on this box has ::192.0.2.1 or 2001:db8::1
+    with (
+        control_socket() as ctl,
+        _gateway_process(
+            gateway_binary,
+            module_dir,
+            unbound,
+            tmp_path,
+            acl_text,
+            [
+                *("--listen", "::192.0.2.1", "--listen", "::ffff:127.0.0.3", "--listen", "2001:0db8::0001"),
+                *("--port", str(port), "--ctl-socket", str(ctl)),
+            ],
+        ),
+    ):
+        printed = _gateway_list_reply(ctl)
+        assert sorted(printed) == [
+            f"listening udp+tcp 127.0.0.1:{port}",
+            f"listening udp+tcp 127.0.0.3:{port}",
+            "ok",
+            f"refused udp+tcp [2001:db8::1]:{port} {cannot_assign}",
+            f"refused udp+tcp [::c000:201]:{port} {cannot_assign}",
+        ], "the gateway prints the mapped address as IPv4 and the IPv4-compatible one in hex"
+        expected = {
+            "listening": {"udp+tcp": {f"127.0.0.1:{port}": True, f"127.0.0.3:{port}": True}},
+            "refused": {"udp+tcp": {f"[::192.0.2.1]:{port}": cannot_assign, f"[2001:db8::1]:{port}": cannot_assign}},
+        }
+        listed = _live_list(ctl)
+        assert listed == expected, f"the PHP probe read {listed}, expected {expected}"
 
 
 def test_readiness_lines_name_every_tls_listener_before_ready(tls_gateway: TlsRunning) -> None:

@@ -130,11 +130,15 @@ final class PfbDnsAppliedStatusTest extends TestCase
 			$bad['upstream'] = $value;
 			yield 'present upstream ' . json_encode($value) => [self::wire($bad)];
 		}
-		foreach (['192.0.2.1:0', '192.0.2.1:65536', '192.0.2.1:053', '[2001:0db8::1]:53', '[::ffff:192.0.2.1]:53', '[fe80::1%em0]:53'] as $endpoint) {
+		foreach (['192.0.2.1:0', '192.0.2.1:65536', '[fe80::1%em0]:53'] as $endpoint) {
 			$bad = $valid;
 			$bad['listeners'][0]['address'] = $endpoint;
 			yield $endpoint => [self::wire($bad)];
 		}
+		// issue #3849: another spelling of the address of the listener below it is that listener again, not a new one
+		$bad = $valid;
+		$bad['listeners'][0]['address'] = '[2001:0db8::1]:53';
+		yield 'a listener spelled differently from the one it repeats' => [self::wire($bad)];
 		$bad = $valid;
 		$bad['listeners'][] = $bad['listeners'][0];
 		yield 'duplicate listener' => [self::wire($bad)];
@@ -153,6 +157,27 @@ final class PfbDnsAppliedStatusTest extends TestCase
 	{
 		$this->serve($wire);
 		$this->assertNull($this->read());
+	}
+
+	/** @return iterable<string,array{int,string,string}> the listener row, its endpoint in another numeric spelling of its bytes, and PHP's spelling of it */
+	public static function listenersInAnotherNumericSpelling(): iterable
+	{
+		yield 'a leading-zero port' => [0, '192.0.2.1:053', '192.0.2.1:53'];
+		yield 'an IPv6 address with a zero-padded group' => [1, '[2001:0db8::1]:53', '[2001:db8::1]:53'];
+		yield 'an IPv4-mapped IPv6 address' => [0, '[::ffff:192.0.2.1]:53', '192.0.2.1:53'];
+	}
+
+	#[DataProvider('listenersInAnotherNumericSpelling')]
+	public function testAListenerInAnotherNumericSpellingOfItsBytesIsAcceptedAsPhpsSpellingOfThem(int $row, string $endpoint, string $expected): void
+	{
+		$snapshot = self::snapshot();
+		$snapshot['listeners'][$row]['address'] = $endpoint;
+		$this->serve(self::wire($snapshot));
+
+		$status = $this->read();
+
+		$this->assertNotNull($status, "the numeric spelling {$endpoint} of the same bytes is a valid snapshot");
+		$this->assertSame($expected, $status['listeners'][$row]['address']);
 	}
 
 	public static function embeddedNulAddresses(): iterable

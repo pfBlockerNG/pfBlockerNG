@@ -1,0 +1,5 @@
+listening dot [::c000:201]:853
+listening udp+tcp 127.0.0.1:53
+listening udp+tcp [::c000:201]:53
+refused doh [::c000:201]:443 bind: address already in use
+ok

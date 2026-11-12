@@ -61,8 +61,9 @@ then the status lists `tls_certificate` in `degraded`.
 - **Add and remove a listener** (issue #3599). The gateway binds only before it drops root; root PHP binds the socket and hands
   it over here with `SCM_RIGHTS`, in the same `sendmsg()` as the frame. `FF FF FF FE` (add) or `FF FF FF FD` (remove), a 4-byte
   big-endian length 1 to 256 (judged before the body is read), then `<kind> <host:port>` in ASCII: `kind` is `udp+tcp`, `dot`,
-  `doh` or `doq`, exactly; `host:port` is Go's `netip.AddrPort` spelling and must equal its own `String()` (IPv6 bracketed and
-  compressed; no zone, no IPv4-mapped form, no port 0; no space, tab, NUL or non-ASCII byte anywhere else). An add carries
+  `doh` or `doq`, exactly; `host:port` is any numeric spelling Go's `netip.ParseAddrPort` reads (IPv6 bracketed; no zone, no
+  port 0; no space, tab, NUL or non-ASCII byte anywhere else), parsed once and keyed by its value with an IPv4-mapped address
+  unmapped, so PHP's `[::192.0.2.1]:53` and Go's `[::c000:201]:53` name one listener (#3849). An add carries
   `udp+tcp` the UDP socket then the listening TCP socket, `dot` and `doh` one listening TCP socket, `doq` one UDP socket. It is
   taken only when the kind is served by this gateway (`udp+tcp` always; a TLS kind when its ordinary or fixed listen list was given),
   the port is its configured family port or its own standard port (plain DNS 53, DoT/DoQ 853, DoH 443; #3699), and
@@ -85,7 +86,8 @@ then the status lists `tls_certificate` in `degraded`.
   `\n` with no trailing newline or empty line. Rows are `dns-name-answer LOCAL=ADDR[,ADDR]`, `ddr-doh-443 ADDR`,
   or `listener-interface IP=BASE64UTF8`; the first two retain their corresponding flag formats.
   `dns-name-answer LOCAL=` explicitly owns the Name without either address family. A `listener-interface` entry (a row, or
-  a `--listener-interface` flag) is valid when its IP is canonical, unscoped and not unspecified, and its label is canonical
+  a `--listener-interface` flag) is valid when its IP is a numeric, unscoped, specified address in any spelling (keyed by value,
+  IPv4-mapped unmapped; #3849), and its label is canonical
   standard base64 of at most 65535 bytes of valid UTF-8 with no control, format, line-separator or paragraph-separator
   character (so `Län` and `日本` are valid, a zero-width joiner or U+2028 is not; an empty label is valid). An entry that is
   not valid is logged (`listener-interface "<entry>" skipped: <reason>`) and skipped, and the first of two entries for one

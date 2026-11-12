@@ -98,6 +98,24 @@ final class PfbDnsDdrCollectionTest extends TestCase
 		}
 	}
 
+	public function testAVipWhoseSubnetIsIpv4MappedIsTheVipOfTheIpv4AddressTheGatewayServes(): void
+	{
+		// Given a manual VIP on lan whose subnet is spelled ::ffff:192.0.2.9, and a gateway row for the address it is: 192.0.2.9
+		config_set_path('virtualip/vip', [['subnet' => '::ffff:192.0.2.9', 'interface' => 'lan', 'descr' => 'Admin <VIP>']]);
+
+		// When the applied DDR table is built
+		$status = pfb_dns_ddr_status(self::applied(
+			[['kind' => 'udp+tcp', 'address' => '192.0.2.9:53', 'state' => 'listening', 'reason' => '']],
+			['192.0.2.9' => ['records' => [], 'additional' => []]]
+		));
+
+		// Then the row has the VIP's identity and lan's description, not the bare address of an interface (issue #3849)
+		$this->assertSame(
+			[['LAN <guest>', 'Manual VIP: Admin <VIP>', '192.0.2.9:53']],
+			array_map(static fn (array $row): array => [$row['interface'], $row['identity'], $row['address']], $status['rows'])
+		);
+	}
+
 	public function testAnIpAliasOnACarpVipShowsTheInterfaceOfTheCarpVipNotItsInternalId(): void
 	{
 		// Given a CARP VIP on lan, and an IP alias on it that pfSense stores as `_vip<uniqid>`, which the gateway serves

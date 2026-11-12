@@ -85,6 +85,8 @@ Then a 4-byte big-endian length `L` (1 to 256) and `L` bytes of ASCII `<kind> <h
 IPv4-mapped IPv6), which `pfb_dns_proxy_host_port()` produces. One reply line, `ok` or `error: <reason>`, as for the
 other verbs.
 
+> **Amendment 2026-11-12 (#3849).** The frame's `host:port` is any numeric spelling `netip.ParseAddrPort` reads (IPv6 bracketed; no zone; no port 0), parsed once and keyed by its value with an IPv4-mapped address unmapped, so PHP's `[::192.0.2.1]:53` and the gateway's `[::c000:201]:53` name one listener. `pfb_dns_proxy_host_port()` still produces PHP's own spelling.
+
 An add carries its sockets as `SCM_RIGHTS` in the same `sendmsg()` as the frame: `udp+tcp` exactly two, the UDP socket
 then the TCP listening socket; `dot` and `doh` exactly one TCP listening socket; `doq` exactly one UDP socket. The
 gateway takes it only when all of these hold; otherwise it replies `error: <reason>` and closes every descriptor it
@@ -134,6 +136,8 @@ it. The startup check and the status panel read `pfb_dns_proxy_listeners()`, so 
 of their own.
 
 > **Amendment 2026-10-31 (#3625).** This section is superseded, and this amendment is the one statement of the #3625 change; the other #3625 amendments in this file point here. What is served is what the gateway lists, not what its log holds. `pfb_dns_proxy_listener_list()` sends `FF FF FF FC` (nothing after it) on the control socket and reads one `listening <kind> <host:port>` line per served listener, one `refused <kind> <host:port> <reason>` line per start-time bind the gateway refused and has not served since, then `ok`. A refusal is keyed by kind and host:port, and a live add of that key clears it. The list is unknown (NULL) when there is no socket, no complete reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed or repeated line, any byte after the final `ok` before the gateway closes the connection, or a reply over 64 KiB. Each caller then judges on its own: the startup check judges no listener (it files and closes no listener notice); the status panel shows `configured_unconfirmed` for a ready gateway; the sync changes nothing; the update pass restarts an address-only change. The update pass and the cron tick each ask once and hand that answer to the sync; the startup check that follows asks again on its own. Deleted: `pfb_dns_proxy_listeners()`, `pfb_dns_proxy_ready_listeners()` and its `partial` flag, `PFB_DNS_PROXY_LOG_WAIT`, the sync's wait for the log after a change, and the startup check's log poll. The log lines (`starting pid`, `ready upstream`, `listening`, `stopped listening`, `cannot listen on`) stay human-readable, and nothing reads them for listener state.
+>
+> **Amendment 2026-11-12 (#3849).** A `host:port` the gateway lists (here and in the status snapshot) is read by value: `pfb_dns_proxy_endpoint()` accepts a numeric address in any spelling (Go's `[::c000:201]` for an IPv4-compatible one, upper-case or zero-padded IPv6, an IPv4-mapped address, a leading-zero port) and keys it as `pfb_dns_proxy_host_port()` spells it, so the list need not be exactly that spelling. A zone, a hostname, a NUL byte, port 0, a port over 65535 or of six digits, IPv4 in brackets and IPv6 without brackets still make the list unknown, and two spellings of one listener are a repeated line.
 
 ### D4. The reconcile (`pfb_dns_proxy_listeners_sync()`)
 
@@ -269,6 +273,8 @@ and remove.
 | rc text where a non-address flag changes next to an address change | not address-only |
 
 > **Amendment 2026-10-31 (#3625).** The log row above is superseded: the reply is read as exactly `listening` and `refused` lines then `ok`, and any other reply is unknown. See the #3625 amendment under D3.
+>
+> **Amendment 2026-11-12 (#3849).** IPv4-mapped IPv6 and another spelling of an IPv6 address (zero-padded, upper case, `::192.0.2.1` for `::c000:201`) are no longer `error:` in the `host:port` row above: they name the listener of their value. A zone, a name, no port, unbracketed IPv6, port 0 and a port over 65535 stay `error:`.
 
 ## Out of scope
 

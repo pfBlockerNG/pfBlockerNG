@@ -824,6 +824,25 @@ final class DnsProxyLiveListenersTest extends TestCase
 		$this->assertSame([], $this->krProxyCalls());
 	}
 
+	public function testAnIpv6HostTheGatewayPrintsInHexIsTheListenerTheCommandNamesAsInetNtopSpellsItSoTheTickChangesNothing(): void
+	{
+		// Given a ready proxy whose rc script names ::192.0.2.1, and a gateway that lists it as [::c000:201], the way Go prints it
+		$this->quiet();
+		$rc = (string) file_get_contents(PFB_DNS_PROXY_RCFILE);
+		file_put_contents(PFB_DNS_PROXY_RCFILE, str_replace("--listen '127.0.0.1'", "--listen '::192.0.2.1'", $rc));
+		$record = $this->gateway([], $this->listed(['192.0.2.1', '[::c000:201]', '[::1]']));
+		$this->assertStringContainsString("--listen '::192.0.2.1'", (string) file_get_contents(PFB_DNS_PROXY_RCFILE), 'before: the script names the address as inet_ntop spells it');
+		$this->assertContains("[::192.0.2.1]:{$this->port}", pfb_dns_proxy_command_listeners()['udp+tcp'], 'before: the command is compared in that spelling');
+		$this->assertNotContains("[::c000:201]:{$this->port}", pfb_dns_proxy_command_listeners()['udp+tcp'], 'before: and not in the spelling the gateway prints');
+
+		// When the cron tick runs
+		$this->krTick();
+
+		// Then it is the same listener: nothing is removed or added (the ownership table is the one frame), and nothing restarts (issue #3849)
+		$this->assertSame([self::tableFrame([self::LAN_ROW])], self::changeFrames($record));
+		$this->assertSame([], $this->krProxyCalls());
+	}
+
 	// -----------------------------------------------------------------------
 	// A change the gateway does not take restarts the pair once (D4.4)
 	// -----------------------------------------------------------------------

@@ -1060,22 +1060,72 @@ final class PfbDnsStatusTest extends TestCase
 		], pfb_dns_proxy_listener_interface_entries());
 	}
 
-	public function testAnAddressTheGatewaySpellsDifferentlyFromInetNtopGetsNoEntry(): void
+	public function testAnAddressTheGatewaySpellsDifferentlyFromInetNtopGetsAnEntryKeyedByItsValue(): void
 	{
-		// Given the embedded-IPv4 spellings PHP prints for ::ffff:192.0.2.9 and ::1.2.3.4 (Go prints the second as ::102:304 and rejects the first)
+		// Given the embedded-IPv4 spellings PHP prints for ::ffff:192.0.2.9 and ::1.2.3.4 (the gateway reads the first as 192.0.2.9 and
+		// compares the second by value; it prints it as ::102:304)
 		$this->interfaces(
 			['lan' => 'LAN', 'opt1' => 'GUEST', 'opt2' => 'DMZ'],
 			['lan' => '192.0.2.1'],
 			['lan' => '2001:db8::1', 'opt1' => '::ffff:192.0.2.9', 'opt2' => '::1.2.3.4']
 		);
 
-		// Then only the addresses both spell alike are sent
+		// Then every address is sent: the mapped one as its IPv4 address, the other as inet_ntop prints it (issue #3849)
 		$this->assertSame([
 			'127.0.0.1=' . base64_encode('Localhost'),
 			'::1=' . base64_encode('Localhost'),
 			'192.0.2.1=' . base64_encode('LAN'),
 			'2001:db8::1=' . base64_encode('LAN'),
+			'192.0.2.9=' . base64_encode('GUEST'),
+			'::1.2.3.4=' . base64_encode('DMZ'),
 		], pfb_dns_proxy_listener_interface_entries());
+	}
+
+	public function testAnIpv4MappedAddressOfAnInterfaceOrVipIsLabelledUnderItsIpv4AddressWhichIsHowTheGatewayLogsIt(): void
+	{
+		// Given an interface IPv6 address and a VIP that are IPv4-mapped, and one embedded-IPv4 address that is not
+		$this->interfaces(
+			['lan' => 'LAN', 'opt1' => 'GUEST', 'opt2' => 'DMZ'],
+			['lan' => '192.0.2.1'],
+			['opt1' => '::ffff:192.0.2.9', 'opt2' => '::1.2.3.4']
+		);
+		config_set_path('virtualip/vip', [['interface' => 'lan', 'subnet' => '::ffff:192.0.2.50']]);
+
+		// When the owners are asked for
+		$labels = pfb_dns_proxy_address_interfaces();
+
+		// Then the mapped ones are keyed by their IPv4 address and the other by inet_ntop's spelling of it
+		$this->assertSame([
+			'127.0.0.1'    => 'Localhost',
+			'::1'          => 'Localhost',
+			'192.0.2.1'    => 'LAN',
+			'192.0.2.9'    => 'GUEST',
+			'::1.2.3.4'    => 'DMZ',
+			'192.0.2.50'   => 'LAN',
+		], $labels);
+
+		// And a gateway address read as that IPv4 address is on the interface's row, not on a row of its own
+		$this->assertSame([self::row('GUEST', ['192.0.2.9:53'], 'listening')], pfb_dns_status_rows([self::entry('192.0.2.9:53')], $labels));
+	}
+
+	public function testAnIpv6AddressTheGatewayPrintsInHexIsListeningForThePanelWhenTheCommandNamesItAsInetNtopSpellsIt(): void
+	{
+		// Given lan has the IPv6 address ::192.0.2.1, which the rc script names so, and which the gateway prints as [::c000:201]
+		$this->box();
+		$GLOBALS['pfb_test_configured_ipv6'] = ['lan' => '::192.0.2.1'];
+		pfb_dns_proxy_service();
+		$this->assertStringContainsString("--listen '::192.0.2.1'", pfb_dns_proxy_rc_command(), 'before: the command names it as inet_ntop spells it');
+		$this->assertContains('[::192.0.2.1]:53', pfb_dns_proxy_command_listeners()['udp+tcp'], 'before: the panel compares with that spelling');
+		$this->gatewayServes([...self::PLAIN, 'udp+tcp [::c000:201]:53']);
+
+		// When the status is read
+		$plain = $this->transports()['plain'];
+
+		// Then the address is listening, on lan's row, and not reported as one the gateway did not report
+		$this->assertSame(['state' => 'rows', 'rows' => [
+			self::row('Localhost', ['127.0.0.1:53', '[::1]:53'], 'listening'),
+			self::row('LAN', ['192.0.2.1:53', '[::192.0.2.1]:53'], 'listening'),
+		]], $plain);
 	}
 
 	public function testAnIpAliasOnACarpVipIsLabelledWithTheInterfaceOfTheCarpVip(): void

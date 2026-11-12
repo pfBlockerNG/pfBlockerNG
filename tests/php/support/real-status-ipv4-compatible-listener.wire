@@ -1,0 +1,2 @@
+{"version":1,"pid":1254844,"executable":"/var/tmp/go-build4080279316/b001/pfb_dns_gateway.test","ready":true,"upstream":"127.0.0.1:5353","dns_name":"","listeners":[{"kind":"udp+tcp","address":"[::c000:201]:53","state":"listening","reason":""}],"name_answers":{},"ddr":false,"advertisements":{"::c000:201":{"records":[],"additional":[]}}}
+ok

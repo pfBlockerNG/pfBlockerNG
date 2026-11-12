@@ -4675,9 +4675,8 @@ function pfb_dns_proxy_listen(?array &$skipped = NULL): array {
  * VIP is on (pfb_vip_interface()). In display order: Localhost, then the interfaces as get_configured_interface_with_descr() lists
  * them. An address two interfaces carry belongs to the first whose description is a safe label (pfb_dns_listener_label_valid()): an
  * interface or VIP with any other description owns nothing, so that the panel and the gateway own the same addresses. An address that
- * is none (an interface with nothing assigned, a non-address) is left out. IPv6 keys are spelled as the gateway prints them
- * (pfb_dns_proxy_host_port()), except the embedded-IPv4 forms (::a.b.c.d, ::ffff:a.b.c.d), so that a lookup by a logged address finds
- * them.
+ * is none (an interface with nothing assigned, a non-address) is left out. Keys are the host as pfb_dns_proxy_host_port() spells it
+ * (an IPv4-mapped address as its IPv4 one), so that a lookup by the host of a gateway address finds them (issue #3849).
  *
  * @return array<string,string> address (no port, no brackets) => label
  */
@@ -4693,7 +4692,7 @@ function pfb_dns_proxy_address_interfaces(): array {
 		}
 		foreach ([get_interface_ip($interface), get_interface_ipv6($interface)] as $address) {
 			if (($canonical = pfb_dns_canonical_ip($address)) !== NULL) {
-				$labels[$canonical] ??= $description;
+				$labels[pfb_ipv4_from_mapped($canonical) ?? $canonical] ??= $description;
 			}
 		}
 	}
@@ -4701,23 +4700,21 @@ function pfb_dns_proxy_address_interfaces(): array {
 		$interface = pfb_vip_interface($vip);
 		$description = $interface === 'lo0' ? 'Localhost' : ($interfaces[$interface] ?? NULL);
 		if (pfb_dns_listener_label_valid($description) && ($canonical = pfb_dns_canonical_ip($vip['subnet'] ?? '')) !== NULL) {
-			$labels[$canonical] ??= $description;
+			$labels[pfb_ipv4_from_mapped($canonical) ?? $canonical] ??= $description;
 		}
 	}
 	return $labels;
 }
 
 /**
- * The address=base64(description) entries shared by the startup flags and live ownership table. An address that holds both ':' and '.'
- * is an embedded-IPv4 spelling (::a.b.c.d, ::ffff:a.b.c.d) that the gateway prints or accepts differently, so it gets no entry.
+ * The address=base64(description) entries shared by the startup flags and live ownership table: one for every address of
+ * pfb_dns_proxy_address_interfaces(), because the gateway compares each by its value, whatever its spelling (issue #3849).
  * @return list<string>
  */
 function pfb_dns_proxy_listener_interface_entries(): array {
 	$entries = [];
 	foreach (pfb_dns_proxy_address_interfaces() as $address => $description) {
-		if (!(str_contains($address, ':') && str_contains($address, '.'))) {
-			$entries[] = $address . '=' . base64_encode($description);
-		}
+		$entries[] = $address . '=' . base64_encode($description);
 	}
 	return $entries;
 }
@@ -5705,9 +5702,10 @@ function pfb_dns_proxy_address_table(array $lines, ?string $socket = NULL, float
  * Ask the running gateway which listeners it serves, on its control socket (FF FF FF FC, nothing after it; ctl.go): it answers a line
  * `listening <kind> <host:port>` for each it serves and `refused <kind> <host:port> <reason>` for each it could not take, then a final
  * `ok` line, or one `error: <reason>` line (a gateway older than this verb answers it as a bad message length). <kind> is udp+tcp, dot,
- * doh or doq; <host:port> is spelled as pfb_dns_proxy_host_port() spells it (IPv6 bracketed). The reply is taken only when every line
+ * doh or doq; <host:port> is a numeric address in any spelling (IPv6 bracketed, IPv4 never) and a port of 1-65535, read once by
+ * pfb_dns_proxy_endpoint() (issue #3849) and keyed as pfb_dns_proxy_host_port() spells it. The reply is taken only when every line
  * is exactly that wire: any other byte, spacing, kind, address or order makes the whole list unknown, and there is no fallback to the log.
- * A <kind> <host:port> named on more than one line, `listening` or `refused` in any combination, makes it unknown too: the gateway names each once.
+ * A <kind> <host:port> named on more than one line, `listening` or `refused` in any combination and in any spelling, makes it unknown too.
  * The gateway writes the reply in one write and closes: a byte after its last line, or no close within $timeout, makes it unknown too.
  *
  * @param string|null $socket NULL = $pfb['dns_proxy_ctl'] (a test points it at its own)
@@ -5735,19 +5733,15 @@ function pfb_dns_proxy_listener_list(?string $socket = NULL, float $timeout = PF
 		if (preg_match('/\A(listening|refused) (udp\+tcp|dot|doh|doq) (\S+)(?: ([^ ].*))?\z/', $line, $m) !== 1 || ($m[1] === 'refused') !== isset($m[4])) {
 			return NULL;
 		}
-		// host:port exactly as the gateway prints it: re-spelling the parts must give back the same text
-		$colon = (int) strrpos($m[3], ':');
-		$host = trim(substr($m[3], 0, $colon), '[]');
-		$port = substr($m[3], $colon + 1);
-		if (@inet_pton($host) === FALSE || !ctype_digit($port) || (string) (int) $port !== $port || (int) $port > 65535 || pfb_dns_proxy_host_port($host, $port) !== $m[3]) {
+		if (($at = pfb_dns_proxy_endpoint($m[3])) === NULL) {
 			return NULL;
 		}
-		$key = "{$m[2]} {$m[3]}";
+		$key = "{$m[2]} {$at}";
 		if (isset($named[$key])) {
 			return NULL;
 		}
 		$named[$key] = TRUE;
-		$list[$m[1]][$m[2]][$m[3]] = $m[4] ?? TRUE;
+		$list[$m[1]][$m[2]][$at] = $m[4] ?? TRUE;
 	}
 	return $list;
 }
@@ -6224,7 +6218,7 @@ function pfb_dns_proxy_upstream_address(): string {
 	return get_interface_ip('lo0') === '127.0.0.1' ? '127.0.0.1' : '::1';
 }
 
-/** One bounded applied-state snapshot, authenticated by the live ready-marker identity; NULL is unavailable, never saved intent. */
+/** One bounded applied-state snapshot, authenticated by the live ready-marker identity; NULL is unavailable, never saved intent. Addresses are parsed once and returned in PHP's spelling (issue #3849). */
 function pfb_dns_proxy_applied_status(?string $socket = NULL, float $timeout = PFB_DNS_PROXY_CTL_TIMEOUT): ?array {
 	global $pfb;
 
@@ -6253,25 +6247,16 @@ function pfb_dns_proxy_applied_status(?string $socket = NULL, float $timeout = P
 	    !$data->name_answers instanceof stdClass || !$data->advertisements instanceof stdClass) {
 		return NULL;
 	}
-	$ip = static function (mixed $value): bool {
+	$ip = static function (mixed $value): ?string {
 		// inet_pton() throws ValueError on NUL and '@' does not suppress it: reject NUL before any native call.
-		if (!is_string($value) || str_contains($value, "\0") || pfb_ipv4_from_mapped($value) !== NULL) {
-			return FALSE;
+		if (!is_string($value) || str_contains($value, "\0")) {
+			return NULL;
 		}
-		$packed = @inet_pton($value);
-		return $packed !== FALSE && inet_ntop($packed) === $value;
+		$packed = @inet_pton(pfb_ipv4_from_mapped($value) ?? $value);
+		return $packed === FALSE ? NULL : (string) inet_ntop($packed);
 	};
-	$endpoint = static function (mixed $value) use ($ip): bool {
-		if (!is_string($value) || ($colon = strrpos($value, ':')) === FALSE) {
-			return FALSE;
-		}
-		$host = trim(substr($value, 0, $colon), '[]');
-		$port = substr($value, $colon + 1);
-		return $ip($host) && ctype_digit($port) && (string) (int) $port === $port && (int) $port >= 1 &&
-		    (int) $port <= 65535 && pfb_dns_proxy_host_port($host, $port) === $value;
-	};
-	// The gateway omits an upstream it does not canonicalise (hostname, scoped IPv6, odd port); a present one must be a canonical endpoint.
-	if (property_exists($data, 'upstream') && !$endpoint($data->upstream)) {
+	// The gateway omits an upstream it does not canonicalise (hostname, scoped IPv6, odd port); a present one must be a numeric endpoint.
+	if (property_exists($data, 'upstream') && ($data->upstream = pfb_dns_proxy_endpoint($data->upstream)) === NULL) {
 		return NULL;
 	}
 	// issue #3848: absent from a gateway older than the field (nothing degraded); present, a list of {part, reason} rows, each part of the closed set once
@@ -6290,44 +6275,45 @@ function pfb_dns_proxy_applied_status(?string $socket = NULL, float $timeout = P
 		}
 	}
 	$data->degraded = array_values($degraded);
-	$seen = $locals = [];
+	$seen = $locals = $names = [];
 	foreach ($data->listeners as $index => $row) {
 		if (!$row instanceof stdClass || !isset($row->kind, $row->address, $row->state, $row->reason) ||
-		    !in_array($row->kind, ['udp+tcp', 'dot', 'doh', 'doq'], TRUE) || !$endpoint($row->address) ||
+		    !in_array($row->kind, ['udp+tcp', 'dot', 'doh', 'doq'], TRUE) || ($at = pfb_dns_proxy_endpoint($row->address)) === NULL ||
 		    !in_array($row->state, ['listening', 'refused'], TRUE) || !is_string($row->reason) ||
 		    preg_match('/\p{C}/u', $row->reason) !== 0 || ($row->state === 'listening' && $row->reason !== '')) {
 			return NULL;
 		}
-		$key = "{$row->kind} {$row->address}";
+		$key = "{$row->kind} {$at}";
 		if (isset($seen[$key])) {
 			return NULL;
 		}
 		$seen[$key] = TRUE;
 		if ($row->state === 'listening') {
-			$locals[trim(substr($row->address, 0, (int) strrpos($row->address, ':')), '[]')] = TRUE;
+			$locals[trim(substr($at, 0, (int) strrpos($at, ':')), '[]')] = TRUE;
 		}
+		$row->address = $at;
 		$data->listeners[$index] = get_object_vars($row);
 	}
-	foreach ($data->name_answers as $local => $answers) {
-		if (!$ip($local) || !$answers instanceof stdClass || !isset($answers->a, $answers->aaaa)) {
+	foreach ($data->name_answers as $name => $answers) {
+		if (($local = $ip($name)) === NULL || isset($names[$local]) || !$answers instanceof stdClass || !isset($answers->a, $answers->aaaa)) {
 			return NULL;
 		}
+		$owned = get_object_vars($answers);
 		foreach (['a' => 4, 'aaaa' => 16] as $family => $length) {
 			$values = $answers->$family;
 			if (!is_array($values) || !array_is_list($values) || count($values) > 1 ||
-			    ($values !== [] && (!$ip($values[0]) || strlen((string) inet_pton($values[0])) !== $length))) {
+			    ($values !== [] && (($values[0] = $ip($values[0])) === NULL || strlen((string) inet_pton($values[0])) !== $length))) {
 				return NULL;
 			}
+			$owned[$family] = $values;
 		}
 		$locals[$local] = TRUE;
-		$data->name_answers->$local = get_object_vars($answers);
+		$names[$local] = $owned;
 	}
-	$advertisements = get_object_vars($data->advertisements);
-	if (array_diff_key($locals, $advertisements) !== [] || array_diff_key($advertisements, $locals) !== []) {
-		return NULL;
-	}
-	foreach ($advertisements as $local => $advertisement) {
-		if (!$ip($local) || !$advertisement instanceof stdClass || !isset($advertisement->records, $advertisement->additional) ||
+	$advertisements = [];
+	foreach (get_object_vars($data->advertisements) as $name => $advertisement) {
+		if (($local = $ip($name)) === NULL || isset($advertisements[$local]) || !$advertisement instanceof stdClass ||
+		    !isset($advertisement->records, $advertisement->additional) ||
 		    !is_array($advertisement->records) || !array_is_list($advertisement->records) ||
 		    !is_array($advertisement->additional) || !array_is_list($advertisement->additional) ||
 		    (!$data->ddr && ($advertisement->records !== [] || $advertisement->additional !== [])) ||
@@ -6340,27 +6326,32 @@ function pfb_dns_proxy_applied_status(?string $socket = NULL, float $timeout = P
 			    !is_int($record->priority) || $record->priority < 1 || $record->priority > 65535 ||
 			    !is_string($record->target) || $record->target === '' || pfb_dns_proxy_name_normalized($record->target) !== $record->target ||
 			    !in_array($record->alpn, ['h2', 'dot', 'doq'], TRUE) ||
-			    !is_int($record->port) || $record->port < 1 || $record->port > 65535 || !$ip($record->hint) || $record->hint !== $local ||
+			    !is_int($record->port) || $record->port < 1 || $record->port > 65535 || $ip($record->hint) !== $local ||
 			    !is_string($record->path) || $record->path !== ($record->alpn === 'h2' ? '/dns-query{?dns}' : '')) {
 				return NULL;
 			}
-			$key = json_encode($record);
-			if (isset($records[$key])) {
+			$record->hint = $local;
+			$duplicate = json_encode($record);
+			if (isset($records[$duplicate])) {
 				return NULL;
 			}
-			$records[$key] = TRUE;
+			$records[$duplicate] = TRUE;
 			$advertisement->records[$index] = get_object_vars($record);
 		}
 		$additional = [];
 		foreach ($advertisement->additional as $address) {
-			if (!$ip($address) || isset($additional[$address])) {
+			if (($address = $ip($address)) === NULL || isset($additional[$address])) {
 				return NULL;
 			}
 			$additional[$address] = TRUE;
 		}
+		$advertisement->additional = array_keys($additional);
 		$advertisements[$local] = get_object_vars($advertisement);
 	}
-	$data->name_answers = get_object_vars($data->name_answers);
+	if (array_diff_key($locals, $advertisements) !== [] || array_diff_key($advertisements, $locals) !== []) {
+		return NULL;
+	}
+	$data->name_answers = $names;
 	$data->advertisements = $advertisements;
 	return get_object_vars($data);
 }
@@ -6984,6 +6975,19 @@ function pfb_dns_proxy_host_port(string $host, string $port): string {
 	$packed = @inet_pton($host);
 	$host = ($packed === FALSE) ? $host : (string) inet_ntop($packed);
 	return (str_contains($host, ':') ? "[{$host}]" : $host) . ":{$port}";
+}
+
+/**
+ * A host:port the gateway sent, parsed once (issue #3849) and spelled as pfb_dns_proxy_host_port() spells it, so that one endpoint is
+ * one string whatever its spelling: a numeric IP address, IPv6 (IPv4-mapped too) in brackets and IPv4 without, and a port of 1-65535
+ * in at most five digits (pfb_dns_proxy_listener_port()); NULL for anything else (a hostname, a zone, a NUL byte, port 0).
+ */
+function pfb_dns_proxy_endpoint(mixed $value): ?string {
+	if (!is_string($value) || preg_match('/\A(?:\[([0-9A-Fa-f.]*:[0-9A-Fa-f:.]*)\]|([0-9.]+)):([0-9]+)\z/', $value, $m) !== 1 ||
+	    ($port = pfb_dns_proxy_listener_port($m[3])) === NULL || @inet_pton($m[1] . $m[2]) === FALSE) {
+		return NULL;
+	}
+	return pfb_dns_proxy_host_port($m[1] . $m[2], $port);
 }
 
 /** The daemon line of the rc script, the command the proxy runs; '' when there is none. */
@@ -17217,7 +17221,8 @@ function pfb_dns_ddr_status(?array $applied = NULL): array {
 	$interfaces = (array) get_configured_interface_with_descr();
 	$vips = [];
 	foreach (config_get_path('virtualip/vip', []) as $vip) {
-		$packed = @inet_pton((string) ($vip['subnet'] ?? ''));
+		$subnet = (string) ($vip['subnet'] ?? '');
+		$packed = @inet_pton(pfb_ipv4_from_mapped($subnet) ?? $subnet);
 		if ($packed === FALSE) {
 			continue;
 		}

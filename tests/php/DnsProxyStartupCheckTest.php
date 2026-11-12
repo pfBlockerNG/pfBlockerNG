@@ -624,6 +624,38 @@ final class DnsProxyStartupCheckTest extends TestCase
 		);
 	}
 
+	public function testAnIpv6ListenerTheGatewayPrintsInHexIsTheOneTheCommandNamesAsInetNtopSpellsIt(): void
+	{
+		// Given the command names lan's IPv6 address ::192.0.2.1, which the gateway prints as [::c000:201], and an old startup notice stands
+		$this->box([], ['lan' => '192.0.2.1'], ['lan' => '::192.0.2.1']);
+		$this->assertStringContainsString("--listen '::192.0.2.1'", pfb_dns_proxy_rc_command(), 'before: the command names it as inet_ntop spells it');
+		$this->gatewayServes([...self::PLAIN, 'udp+tcp [::c000:201]:53']);
+		$this->fileOther(self::ID, 'pfB-DNS started with problems: Plain DNS is not served on [::192.0.2.1]:53: old.');
+		$this->assertCount(1, $this->startupTexts(), 'before: the old notice stands');
+
+		// When the check runs
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the gateway's list was judged and the address is served: no problem, and the old notice is closed (issue #3849)
+		$this->assertSame([], $this->startupTexts(), 'the same address in two spellings is one listener');
+	}
+
+	public function testAnIpv6ListenerTheGatewayDoesNotListIsNotServedWhateverItsSpelling(): void
+	{
+		// Given the same command, and a gateway that lists a different address in hex
+		$this->box([], ['lan' => '192.0.2.1'], ['lan' => '::192.0.2.1']);
+		$this->gatewayServes([...self::PLAIN, 'udp+tcp [::c000:202]:53']);
+
+		// When the check runs
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the one the command names is the problem
+		$this->assertSame(
+			[$this->problemText('Plain DNS is not served on [::192.0.2.1]:53: the gateway did not report it listening.')],
+			$this->startupTexts()
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// Rows 9, 10 -- a gateway that gives no list judges nothing; the log is not what a listener is judged by
 	// -----------------------------------------------------------------------
