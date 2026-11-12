@@ -18055,9 +18055,9 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	}
 	$owned = pfb_dns_proxy_owns_resolver();
 
-	// Ensure log file permissions are set as 'unbound:unbound' (unified.log excluded:
-	// the host daemon is now its sole writer, as root — ADR-38 Amendment 1).
-	foreach (array('dnsbl.log', 'dns_reply.log') as $logfile) {
+	// The logs pfB-DNS appends to as unbound, in a log directory that is root's: create them as unbound's (issue #3895; unified.log
+	// excluded: the host daemon is its sole writer, as root — ADR-38 Amendment 1).
+	foreach (array('dnsbl.log', 'dns_reply.log', 'py_error.log') as $logfile) {
 
 		if (!file_exists("{$pfb['logdir']}/{$logfile}")) {
 			touch("{$pfb['logdir']}/{$logfile}");

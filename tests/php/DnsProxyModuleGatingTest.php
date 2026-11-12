@@ -305,6 +305,26 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertSame([TRUE, 'pre_validator', 'pfb_upstream_observer'], $this->pythonKeys());
 	}
 
+	public function testProxyOnCreatesEveryLogTheGatewayAppendsTo(): void
+	{
+		// Given the proxy on and a log directory holding none of the gateway's logs: the directory is root's, and pfB-DNS runs as unbound,
+		// so it can append only to a log that already exists as unbound's (issue #3895: with no py_error.log the decider's errors went unlogged)
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$logs = ['dnsbl.log', 'dns_reply.log', 'py_error.log'];
+		foreach ($logs as $log) {
+			$this->assertFileDoesNotExist("{$this->tmp}/{$log}", "before: no {$log}");
+		}
+
+		// When DNSBL is applied.
+		pfb_unbound_python('enabled');
+
+		// Then every log the gateway writes is there for it (as unbound's on the appliance).
+		foreach ($logs as $log) {
+			$this->assertFileExists("{$this->tmp}/{$log}", "pfB-DNS cannot create {$log} in the log directory itself");
+		}
+	}
+
 	public function testProxyOnAppliedAgainRegeneratesNothingAndSignalsNoRestart(): void
 	{
 		// Given the proxy on and one pass already applied.
