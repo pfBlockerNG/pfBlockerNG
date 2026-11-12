@@ -263,8 +263,21 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
         group1, feed1 = fields1[6], fields1[8]
         assert group1, f"empty group parsed from dnsbl.log line: {line1!r}"
 
-        c1, detail1 = _read_group_counter(adr65_vm, group1)
-        assert c1 >= 0, f"could not read the {group1!r} counter after {domain1}'s block: {detail1}"
+        # The stats writer flushes the counter apart from the log line: wait for domain1's own increment, so the
+        # baseline holds it before the query runs (issue #3895: a baseline of 0 took the barrier's flush for the query).
+        deadline = time.monotonic() + 30.0
+        while True:
+            c1, detail1 = _read_group_counter(adr65_vm, group1)
+            if c1 >= 1:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "salvage cap expired / stuck or environment: "
+                    f"query-channel awaited the {group1!r} counter >= 1 after {domain1}'s block; "
+                    f"observed {c1} detail={detail1!r}"
+                )
+            time.sleep(min(1.0, remaining))
 
         # THE QUERY: same domain, read-only channel.
         verdict = _query_domain(adr65_vm, domain1)
