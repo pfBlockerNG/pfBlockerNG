@@ -1,0 +1,38 @@
+{
+ "schema": 1,
+ "description": "A port spelled with a leading zero is refused: it is not a valid URL, and a dial of it would bypass the pin.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "localhost": [
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/x": {
+    "body": "INTERNAL\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://localhost:0{port:origin}/x",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "requests": []
+   }
+  }
+ ]
+}

@@ -1,0 +1,31 @@
+{
+ "schema": 1,
+ "description": "rsync connects to the vetted address, substituted into the rsync:// source.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "format": "rsync",
+   "url": "rsync://feed.example/feeds/list.txt",
+   "rsync": {
+    "exit": 0,
+    "body": "r\n"
+   },
+   "expect": {
+    "ok": true,
+    "published": "r\n",
+    "requests": [],
+    "rsync_source": "rsync://127.0.0.1/feeds/list.txt"
+   }
+  }
+ ]
+}

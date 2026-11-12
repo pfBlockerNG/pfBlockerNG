@@ -1,0 +1,49 @@
+{
+ "schema": 1,
+ "description": "Without an ETag the probe sends If-Modified-Since from the stored Last-Modified.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "lastmod": 1700000000
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "new\n",
+    "last_modified": 1700000000
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "old\n",
+    "decision": "unchanged",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "if_modified_since": "Tue, 14 Nov 2023 22:13:20 GMT"
+     }
+    ],
+    "etag": null,
+    "lastmod": 1700000000
+   }
+  }
+ ]
+}

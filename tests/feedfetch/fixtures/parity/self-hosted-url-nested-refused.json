@@ -1,0 +1,35 @@
+{
+ "schema": 1,
+ "description": "A self-hosted URL below the web root is refused.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/dir/feed.txt": {
+    "body": "s\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://127.0.0.1:{port:origin}/dir/feed.txt",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "requests": []
+   }
+  }
+ ]
+}
