@@ -300,7 +300,7 @@ An update pass or cron tick leaves an existing gateway running when its status i
 **Service** then shows **Starting**, not **Running**; this does not prove DNS is answering.
 A foreign process on the port Unbound's backend uses is the exception: pfB-DNS moves Unbound's backend to a free loopback port pair,
 or stops the gateway when no move is possible, and a notice says which. It never gives the Resolver back by itself, only turning it
-off does. A start that does not serve is reported and left running.
+off does. Any other start that does not serve is reported and left running.
 
 Rare IPv4-compatible (`::/96`) and mapped address spellings retain the existing acceptance behavior and may show
 unavailable or refused status. Their normalization is tracked separately in

@@ -505,7 +505,10 @@ lines), logs one line and exits 0 before the start lock, so the boot hook with U
 Unbound restart and Status > Services never start the gateway onto the stranger; the boot hook itself, which then starts nothing; the status; and the cron tick, which calls `pfb_dns_proxy_ensure_running()` for a stopped gateway, as every
 update pass does: a holder moves Unbound as above (if a move is possible now) and the gateway starts, no holder starts it on the pair it had, and either clears the marker before the start. `/var/run`
 does not survive a reboot, so a boot looks again: the boot's start finds a stranger still there, refuses and writes the marker, and the boot check (`dns_check`), which has no start to
-confirm while the marker stands, runs `pfb_dns_proxy_ensure_running()`: a free pair moves Unbound and starts the gateway, none keeps the gateway stopped with the notice. A pending-restart marker
+confirm while the marker stands, runs `pfb_dns_proxy_ensure_running()`: a free pair moves Unbound and starts the gateway, none keeps the gateway stopped with the notice. A boot check that began before the rc
+script's scan (up to 2 s) found the stranger waits for a gateway that never starts; the marker that appears meanwhile ends that wait without a startup problem (`pfb_dns_proxy_confirm_ready()` looks at the marker
+again), and the next tick or update pass takes it from there. The marker also ends with the snapshot it belongs to: the restore (pfB-DNS off) removes it with the snapshot, and a takeover removes one left
+while nothing was moved (the rc start run with pfB-DNS off), so a Resolver taken over again is judged afresh instead of reading `Not serving` for a stranger long gone. A pending-restart marker
 (`$pfb['dns_proxy_restart_pending']`) is left alone by the stop: the start that ends the stopped state removes it, and clearing it earlier could lose a restart a package operation deferred.
 The Service line and the startup notice name what is true now: a gateway still forwarding to the pair Unbound left reads `the gateway still forwards to port N, but Unbound's backend moved
 to port P'`, never the stranger that holds the old pair. The boot check runs under `timeout --foreground`, since the move restarts Unbound and the gateway
