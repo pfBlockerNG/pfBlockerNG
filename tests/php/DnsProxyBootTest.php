@@ -137,6 +137,17 @@ final class DnsProxyBootTest extends TestCase
 		$this->assertSame([], $this->runHook([], 0644)['calls'], 'not executable');
 	}
 
+	public function testTheBootCheckRunsUnderTimeoutForegroundBecauseItsConfirmationCanRestartUnboundAndTheGateway(): void
+	{
+		// When the hook starts the proxy and backgrounds its confirmation
+		$calls = $this->runHook([], 0755)['calls'];
+
+		// Then the confirmation runs under timeout(1)'s --foreground mode: it can move Unbound's backend pair (issue #3848), which restarts Unbound and the
+		// gateway, daemons meant to outlive it, and the default mode's reaper would kill them when the check exits (docs/misc/external-process-waits.md)
+		$this->assertCount(2, $calls, 'the rc start, then the confirmation');
+		$this->assertStringStartsWith('/usr/bin/timeout --foreground -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ', $calls[1]);
+	}
+
 	// -----------------------------------------------------------------------
 	// The RAM-disk /var restore follows pfB-DNS as well as DNSBL
 	// -----------------------------------------------------------------------

@@ -409,10 +409,11 @@ Forwarding `forward-zone:` block, so a bare line there is a syntax error), then 
 regenerates `unbound.conf`. `unbound/port` and `lo0` are **not** changed, so pfSense keeps `127.0.0.1` and `::1` in the
 firewall's `/etc/resolv.conf` (it does only while the port is 53): the proxy serves that loopback port itself, so the
 firewall's own lookups are DNSBL-filtered, and Unbound's own sockets move off it. The clause, between the marker lines
-`# pfBlockerNG DNS proxy` and `# end pfBlockerNG DNS proxy`, sets `port: 5354` (a later `port:` overrides the earlier
-one for every `interface:` line without its own port, so Unbound's `127.0.0.1`/`::1` listeners land on loopback 5354,
-plain and unused), has Unbound also listen on `127.0.0.1@5353` and `::1@5353` for the proxy's PROXYv2
-stream (`proxy-protocol-port: 5353`; the IPv4 line is omitted when native `lo0` has no `127.0.0.1`) and grants the IPv6 networks pfSense would no longer grant:
+`# pfBlockerNG DNS proxy` and `# end pfBlockerNG DNS proxy`, sets `port: P+1` (a later `port:` overrides the earlier
+one for every `interface:` line without its own port, so Unbound's `127.0.0.1`/`::1` listeners land on loopback P+1,
+plain and unused), has Unbound also listen on `127.0.0.1@P` and `::1@P` for the proxy's PROXYv2
+stream (`proxy-protocol-port: P`; the IPv4 line is omitted when native `lo0` has no `127.0.0.1`), where P is the node-local registered setting
+`dns/pfb_dns_unbound_port` (`pfb_dns_proxy_backend_port()`: 5353 until a move, see "Unbound's backend ports" below), and grants the IPv6 networks pfSense would no longer grant:
 `unbound_acls_config()` derives its IPv6 `access-control` rows from `active_interface` (the IPv4 rows come from
 the NAT networks and stay), so `pfb_dns_proxy_acl_networks()` repeats that derivation for pfB-DNS's interface lists of the transports that are on (plain DNS always; DoT, DoH and DoQ each only while its toggle is on)
 (non-link-local subnet of each interface without a gateway, plus the enabled static routes through such an
@@ -425,7 +426,7 @@ restored exactly (Unbound never hosts the module) when the toggle is turned off,
 is disabled, the setup wizard resets the package config, or the package is removed (its disable pass: the apply hands
 `pfb_unbound_python()` the `pfb_dns_wanted()` it took from the runtime that computed `$mode`, because a removal pass turns
 pfBlockerNG off only there and the function re-reads config.xml). A move that cannot be made safely is refused, before any
-write, stop or snapshot, with a log line and a `file_notice`: a Resolver Listen Port of 5353 or 5354; a directive of the admin's
+write, stop or snapshot, with a log line and a `file_notice`: a Resolver Listen Port on Unbound's loopback pair with no free pair to move it to (a free one is moved to instead, below); a directive of the admin's
 own in `custom_options` that could take a listener, a second port or another file (an `interface`, `port` or `include` word,
 comments aside, see below); a quote or a backslash left open at a line's end; pfBlockerNG's marker lines unless they are
 exactly one complete start and end pair (a partial pair is never cut, so the admin's text survives byte for byte); values that
@@ -462,9 +463,29 @@ restart away from an address-in-use failure), and it restores nothing (owner dec
 reports it through its `$unsafe_line` argument and writes the admin's text as it stands (our block cut out) into the snapshot's
 `custom_options`, once, so that a restore the admin asks for later keeps the line; `pfb_unbound_python()` raises one notice naming
 the line (id `pfBlockerNG DNS Proxy`; an unchanged text is filed once). pfB-DNS keeps serving with the Resolver as moved. A Listen
-Port of 5353 or 5354 that the admin sets after the move is reported the same way (`$unsafe_line` = `Listen Port N`, nothing written)
-and gets a notice that names the port; the gateway keeps the rc script it serves with, so the proxy is not restarted onto that port.
+Port on Unbound's loopback pair (P or P+1) that the admin sets after the move moves the pair to a free one instead (below, "Unbound's backend ports"); with no
+free pair it is reported the same way (`$unsafe_line` = `Listen Port N`, nothing written) and gets a notice that names the port; the gateway keeps the
+rc script it serves with, so the proxy is not restarted onto that port.
 The other refusals above (a partial marker pair, a quote left open) stay refusals on a moved Resolver too.
+
+**Unbound's backend ports (issue #3848).** The loopback pair Unbound's backend lives on (PROXYv2 on P, plain on P+1) moves instead of failing (owner decision,
+2026-11-11). P is `dns/pfb_dns_unbound_port` (registered, node-local, default 5353; a stored value that is no whole number from 1025 to 65534 reads as the default),
+read by `pfb_dns_proxy_backend_port()`: it names the clause, the gateway's `--upstream` and the ports `pfb_dns_proxy_listen_port_conflict()` tests the Listen Port
+against. One run of `sockstat -46lw -p <ports>` (`pfb_dns_proxy_listening_sockets()`, the only parser of its output, which `pfb_dns_proxy_upstream_state()` reads too)
+answers both questions: `pfb_dns_proxy_backend_holder()` is the first listening socket on P or P+1, on 127.0.0.1, `::1` or a wildcard address, of a process other than the
+live Unbound pidfile's (`COMMAND (pid N) on ADDR:PORT`), and `pfb_dns_proxy_backend_pick()` the lowest P' from P+2 on, among 64 pairs, with no socket at all on P' or P'+1
+that is neither the Listen Port nor a configured DoT, DoH or DoQ port (NULL when none). The triggers: (a) `pfb_dns_proxy_ensure_running()` asks for a holder before it starts,
+restarts or keeps the gateway; (b) a READY gateway whose applied upstream a foreign process owns (`pfb_dns_proxy_upstream_state()` `foreign`, on the pair Unbound is on now), in
+`pfb_dns_proxy_confirm_started()` and, once its wait ran out, `pfb_dns_proxy_confirm_ready()`, so the apply, the tick and the boot check; (c) a Listen Port on P or P+1,
+before the takeover or after it, which `pfb_dns_proxy_resolver_locked()` moves itself. `pfb_dns_proxy_backend_move()` stores P' and rewrites the clause in one `write_config()`
+under the config lock (`pfb_dns_proxy_resolver()` with the port), regenerates the rc script (its `--upstream`) and `unbound.conf`, restarts Unbound
+(`services_unbound_configure()`), restarts the gateway if it runs and waits for the live Unbound to own TCP and UDP on P' (bounded by `PFB_DNS_PROXY_START_WAIT`). The notice
+(id `pfBlockerNG DNS Proxy`) reads `<why>, so Unbound's backend moved from ports P/P+1 to P'/P'+1`, and, when the gateway did not follow, that it is not forwarding to it yet: the
+next update restarts a gateway whose applied upstream is not the stored pair. With no free pair nothing changes and a notice says so. No move is made while the Resolver is
+disabled, under a package operation, or twice in one pass (`$pfb['dns_proxy_backend_move_tried']`). The Service line and the startup notice name what is true now: a gateway
+still forwarding to the pair Unbound left reads `the gateway still forwards to port N, but Unbound's backend moved to port P'`, never the stranger that holds the old pair. The
+boot check runs under `timeout --foreground`, since the move restarts Unbound and the gateway (docs/misc/external-process-waits.md). Pinned by `DnsProxyBackendPortTest` and
+`DnsProxyBackendMoveTest`; the smoke test is `tests/smoke/test_smoke_pfb_dns_resolver_state.py`.
 
 A Resolver the admin disables in Services > DNS Resolver while pfB-DNS fronts it (the toggle on, pfBlockerNG enabled, a
 snapshot, `unbound/enable` absent) leaves the proxy on its listen addresses with no backend: every allowed name gets SERVFAIL (measured
@@ -547,7 +568,7 @@ script has one launch line:
 --port P --upstream 127.0.0.1:5353 --tls-pem /var/etc/pfb_dns/tls.pem --ctl-socket /var/run/pfb_dns/ctl.sock [--dot-listen T ... --dot-port D] [the DoH/DoQ flags below] [--listen-53 VIP ...] [--dot-listen-853 VIP ...] [--doh-listen-443 VIP ...] [--doq-listen-853 VIP ...] [--dns-name NAME [--ddr [--ddr-doh-443 ADDR ...]] [--dns-name-answer L=A[,B] ...]]
 [--no-module [--reply-log]|--observer] --module-dir /var/unbound --unbound-conf /var/unbound/unbound.conf --user unbound
 --ready-file /var/unbound/pfb_dns_ready` (`P` is `unbound/port` when it is a port, else 53;
-`--upstream` uses `127.0.0.1:5353` when pfSense reports that IPv4 address on `lo0`, otherwise `[::1]:5353`;
+`--upstream` uses `127.0.0.1:P'` when pfSense reports that IPv4 address on `lo0`, otherwise `[::1]:P'`, where P' is Unbound's PROXYv2 port, `dns/pfb_dns_unbound_port` (5353 until a move);
 `--no-module` iff DNSBL is off, so no DNSBL module is built and every query is forwarded;
 `--observer` iff DNSBL is on and the Resolver forwards, so the gateway creates the observer's report socket). No `--`
 and no command follow the flags: the gateway decides in its own process (`go/pfb_dns_gateway/decider`) and has no child. Ordinary `--listen` addresses come from
@@ -663,8 +684,8 @@ alone): the apply raises a `file_notice` naming the Resolver settings to check a
 recovery and the retry round trip), `DnsProxyGatewayOnlyTest` (the single launch line and the wrapper's failure for a package it cannot run), `PackageRegistrationRestoreTest` and the gateway's own tests under `go/pfb_dns_gateway` (`process_test.go`: an unbindable address is skipped, none binding exits 1); the live
 sockets and resolv.conf are pinned by `tests/smoke/test_smoke_dns_gateway.py` and `tests/smoke/test_smoke_dns_proxy.py`.
 
-A conflicting Listen Port added after the move is a recovery limit. While a snapshot remains and the selected port is
-5353 or 5354, service generation keeps the old script when it exists rather than write a colliding gateway listener.
+A conflicting Listen Port added after the move is a recovery limit only when no free loopback pair is left to move Unbound's backend to (otherwise the pair moves, see "Unbound's
+backend ports"). While a snapshot remains and the selected port is still on Unbound's pair (P or P+1), service generation keeps the old script when it exists rather than write a colliding gateway listener.
 If pfSense has already unlinked that script, the last serving listener cannot be reconstructed: the snapshot does not
 record its port. Recovery reports that the proxy did not become ready, and DNS can remain unavailable pending repair.
 After resolving the lock or stop failure, turn pfB-DNS off and apply to restore the ordinary Resolver on its currently
@@ -682,21 +703,21 @@ PHP validates the response's PID against the live child's ready marker and requi
 The rc script and saved settings are desired state, not evidence of what the process forwards to.
 A foreign port holder, or Unbound running elsewhere, cannot satisfy readiness. Only the selected endpoint is required:
 dual-stack and `do-ip6: no` hosts using IPv4 need no IPv6 upstream, and a host without `127.0.0.1` uses IPv6.
-Port 5354 is not the gateway's upstream.
+The plain port P+1 is not the gateway's upstream.
 `pfb_dns_proxy_serving_ready()` is `pfb_dns_proxy_ready()` and `pfb_dns_proxy_upstream_ready()`: what an activation waits for and what
 the status panel's Service reads as Running. The frontend listeners, the unlogged check, the active-transport gate, the installer's
 keep, the certificate push and the apply's change gate use the gateway-level READY alone.
 
 The update pass and cron tick use one shared guard, `pfb_dns_proxy_confirm_started()`: a start or restart made
 by that pass is an activation to confirm. Otherwise startup diagnostics run, and nothing else, for failed status
-reads, a missing Resolver backend or a foreign holder of Unbound's loopback port, regardless of which read fails (owner decisions,
-2026-11-11; issues #3845 and #3848): no pass gives the Resolver back.
+reads or a missing Resolver backend, regardless of which read fails (owner decisions,
+2026-11-11; issues #3845 and #3848): no pass gives the Resolver back. The one finding that acts is a foreign holder of the port Unbound's backend is on, which moves Unbound
+to a free loopback port pair (above, "Unbound's backend ports").
 `pfb_dns_proxy_upstream_state()` returns `ready` only for both transports owned by the live Unbound,
 `foreign` for a matching port held by a different command/PID while that Unbound is alive (mixed holders count; it hands back that
-process, its PID and the port from the same scan), and `unknown` without sufficient status, PID or native inventory evidence.
+process, its PID, the port and the endpoint from the same scan), and `unknown` without sufficient status, PID or native inventory evidence.
 `pfb_dns_proxy_backend_problem()` turns it into the one reason the Service line and the startup notice share (see "Service line and
-degraded parts"). A running gateway whose Resolver backend is down stays up. Moving Unbound off a foreign holder's port to a free loopback
-port pair is still [#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)'s.
+degraded parts"). A running gateway whose Resolver backend is down stays up.
 
 The update pass retains devel's package-operation deferral of restarts (`pfb_dns_proxy_restart_deferred()`).
 Actual starts/restarts still confirm under a package operation. The controlled Unbound restart waits for old
@@ -742,7 +763,7 @@ the applied-status inventory on the control socket (`FF FF FF FA`), bounded by `
 Not ready, it reads the log (below); the check runs whether or not the wait ended ready, and the Resolver stays moved either way.
 Without its own restart, the cron tick runs startup diagnostics directly rather than confirming
 an activation; no update pass may be running, and a gateway pidfile must be live. The boot hook backgrounds
-`php -f pfblockerng.inc dns_check` under `timeout(1)` (certificate sync, then, while a snapshot is stored, the same confirmation),
+`php -f pfblockerng.inc dns_check` under `timeout --foreground` (certificate sync, then, while a snapshot is stored, the same confirmation, which can move Unbound's backend ports and so restart Unbound and the gateway),
 because boot has no apply to confirm the start. One notice, id
 `pfBlockerNG DNS Proxy startup`, names every problem, each as a sentence, in this order: the proxy never became ready (with the last
 `pfb_dns_gateway:` line of `dns_proxy.log`); a ready gateway whose Unbound backend does not serve it (`the DNS Resolver backend does not answer: <why>`, issue #3848); a `--listen`, `--dot-listen`, `--doh-listen` or `--doq-listen` address of the rc
@@ -762,7 +783,7 @@ Neither placeholder is a bound-listener claim, and an unavailable applied DNS Na
 
 **Service line and degraded parts (issue #3848).** `pfb_dns_status_service()` reads the applied status, first match wins: `Running` (status
 readable, Unbound owns the upstream); `Resolver backend not answering: <why>` (status readable, Unbound does not: the DNS Resolver is
-disabled, `<process> (pid <pid>) holds Unbound's port <port>` from the same `sockstat` scan, or Unbound does not answer on the upstream);
+disabled, the gateway still forwards to a pair Unbound has left (`the gateway still forwards to port <N>, but Unbound's backend moved to port <P>; the next update restarts the gateway`), `<process> (pid <pid>) holds Unbound's port <port>` from the same `sockstat` scan, or Unbound does not answer on the upstream);
 `Not serving: <error>` (the gateway lives, is not ready, and its latest start, the lines after the last `starting pid`, logged a
 `pfb_dns_gateway:` error); `Starting`; `Stopped`. A ready gateway that gives no status is `Starting`: there is no endpoint to blame. The
 status's `degraded` list (absent is none; a list that breaks the contract makes the whole status unavailable) is a row
@@ -859,7 +880,7 @@ pfSense master and confirmed on the live box by the reboot smoke), before it sta
 Resolver restart. pfB-DNS therefore keeps the python keys naming the observer in every mode, and ships
 `dns_proxy/pfb_upstream_observer_include.inc` (in `PFB_PY_SHIPPED`, staged flat into `/var/unbound`), which runs
 `pfb_dns_proxy.sh start` in the background unless a pidfile (the proxy's or its supervisor's) is live, and backgrounds beside it a
-bounded `timeout` run in its default reaper mode (360 s, an outer salvage deadline and not a proved bound on normal completion; see external-process-waits) of `pfblockerng.inc dns_check <size>` (the confirmation and the startup check above, told the log's size from before the start: a start that never becomes ready is reported there and the Resolver stays moved; the hook itself still waits for nothing), with core
+bounded `timeout --foreground` run (360 s, an outer salvage deadline and not a proved bound on normal completion; `--foreground` because the confirmation can move Unbound's backend ports, which restarts Unbound and the gateway, and they must outlive it; see external-process-waits) of `pfblockerng.inc dns_check <size>` (the confirmation and the startup check above, told the log's size from before the start: a start that never becomes ready is reported there and the Resolver stays moved; the hook itself still waits for nothing), with core
 functions only (the non-verbose boot path loads none of pfBlockerNG; the rc script itself refuses without a snapshot). The
 same hook keeps the proxy up after any Resolver restart from the GUI. On a RAM-disk `/var` the restore earlyshellcmd
 (`pfb_dnsbl_cache('conf')`) is registered while DNSBL or pfB-DNS is on, so the hook is staged before rc.bootup. Pinned by

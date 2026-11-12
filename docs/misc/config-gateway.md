@@ -249,6 +249,12 @@ Authorization = property of **write**, not call site (generalises
     Manual repair means checking the Resolver (restoring a known-good configuration backup if necessary), then clearing
     the invalid marker only after that check. To start pfB-DNS again, turn it on and apply to regenerate its refusing
     service script. Package removal can instead be retried directly after the repair.
+  - **`dns/pfb_dns_unbound_port`** (issue #3848, plain string — `NULL`/`NULL` adapters, not a GUI field): the PROXYv2 port P of the
+    loopback pair Unbound's backend lives on (the plain port is P+1), default `'5353'`, sync `local` (a node's own sockets: another
+    node's Unbound may sit elsewhere). Read only by `pfb_dns_proxy_backend_port()`, which gives the default for a stored value that is
+    no whole number from 1025 to 65534; written only under `pfb_dns_config_lock()` by `pfb_dns_proxy_resolver_locked()` through
+    `PfbConfig::writeSystem()`, in the same `write_config()` that rewrites Unbound's clause, when `pfb_dns_proxy_backend_move()` or a
+    Listen Port on the pair moves it. New key, no grandfather: absent reads 5353, the pair every earlier release used.
   - **`dns_shared/pfb_dns_doh` / `dns_shared/pfb_dns_doq` → `PfbToggle`** (issue #3513, the pfB-DNS section): default Off, sync
     `local`; serve DoH / DoQ from pfB-DNS through the Go binary, with or without DNSBL. New keys, no grandfather:
     absent reads Off = pre-feature behaviour. They never lived anywhere else in a release: the first version kept them

@@ -34,15 +34,21 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 		return ['marker' => (string) config_get_path(self::SAVED, ''), 'resolver' => self::sorted(config_get_path('unbound'))];
 	}
 
-	/** @param array{marker:string,resolver:array<string,mixed>} $before */
-	private function assertNothingWasRestored(array $before, string $why): void
+	/**
+	 * What every case below holds, whatever else it changes: the Resolver was not given back. pfB-DNS stays on and active, the snapshot is
+	 * byte for byte what the move stored, the keys the takeover changed stay as it left them, the proxy was never stopped and no notice or
+	 * status says the Resolver was restored or the activation failed.
+	 *
+	 * @param array{marker:string,resolver:array<string,mixed>} $before
+	 */
+	private function assertResolverNotGivenBack(array $before, string $why): void
 	{
 		$this->assertSame('on', $this->toggleStored(), "{$why}: pfB-DNS stays on");
 		$this->assertNotNull(pfb_dns_proxy_saved(), "{$why}: the Resolver is still moved");
 		$this->assertSame($before['marker'], (string) config_get_path(self::SAVED, ''), "{$why}: the snapshot is kept byte for byte");
-		$this->assertSame($before['resolver'], self::sorted(config_get_path('unbound')), "{$why}: every Resolver key stays as the move left it");
-		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], "{$why}: nothing was written to config.xml");
-		$this->assertSame([], $GLOBALS['pfb_test_unbound_configure_calls'], "{$why}: Unbound was not regenerated");
+		foreach (['active_interface', 'enablessl'] as $key) {
+			$this->assertSame($before['resolver'][$key] ?? NULL, config_get_path("unbound/{$key}"), "{$why}: {$key} stays as the move left it");
+		}
 		$this->assertSame([], array_values(array_intersect($this->proxyCalls, ['stop_service', 'rc stop'])), "{$why}: the proxy was not stopped");
 		$texts = implode("\n", array_column($this->notices(), 'notice'));
 		$this->assertStringNotContainsStringIgnoringCase('restored', $texts, "{$why}: no notice says the Resolver was given back");
@@ -51,6 +57,22 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 		$status = pfb_dns_status();
 		$this->assertStringNotContainsString('Activation failed', $status['mode'], "{$why}: the status knows no failed activation");
 		$this->assertTrue($status['active'], "{$why}: the status keeps pfB-DNS active");
+	}
+
+	/** @param array{marker:string,resolver:array<string,mixed>} $before */
+	private function assertNothingWasRestored(array $before, string $why): void
+	{
+		$this->assertResolverNotGivenBack($before, $why);
+		$this->assertSame($before['resolver'], self::sorted(config_get_path('unbound')), "{$why}: every Resolver key stays as the move left it");
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], "{$why}: nothing was written to config.xml");
+		$this->assertSame([], $GLOBALS['pfb_test_unbound_configure_calls'], "{$why}: Unbound was not regenerated");
+	}
+
+	/** Every port the backend pair's search could pick from is taken (5355..5419), whatever else sockstat lists: there is no free pair to move to. */
+	private function takeEveryBackendPair(): void
+	{
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'],
+			implode('', array_map(static fn (int $port): string => "root nc 6162 3 udp4 127.0.0.1:{$port} *:*\n", range(5355, 5419))), FILE_APPEND);
 	}
 
 	/** The gateway already holds the certificate it serves (the fixture an earlier apply leaves), so no pass pushes one to it. */
@@ -175,9 +197,10 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 	#[DataProvider('entriesThatConfirmAReadyGateway')]
 	public function testAReadyGatewayWhoseBackendDoesNotServeKeepsTheResolverMoved(string $entry): void
 	{
-		// Given a moved Resolver, a gateway that becomes ready, and an Unbound backend that is dead
+		// Given a moved Resolver, a gateway that becomes ready, and an Unbound backend that is dead: its process is gone and so are its sockets
 		$this->activate(TRUE);
 		$this->seedUnbound(alive: FALSE);
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], "USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n");
 		$this->behaviour = 'serves';
 		if ($entry === 'boot check') {
 			$this->proxyServes();
@@ -207,7 +230,7 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 	}
 
 	#[DataProvider('entriesWithNoStart')]
-	public function testAForeignHolderOfUnboundsLoopbackPortKeepsTheResolverMoved(string $entry): void
+	public function testAForeignHolderOfUnboundsLoopbackPortMovesUnboundsPairAndNeverGivesTheResolverBack(string $entry): void
 	{
 		// Given a serving gateway, and another process that holds Unbound's loopback port while Unbound lives
 		$this->activate(TRUE);
@@ -227,10 +250,11 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 			pfb_dns_proxy_ensure_running();
 		}
 
-		// Then the gateway and the Resolver stay as they are
-		$this->assertSame([], $this->proxyCalls, 'the proxy was neither stopped nor restarted');
-		$this->assertTrue(pfb_dns_proxy_ready(), 'the gateway stays up');
-		$this->assertNothingWasRestored($before, $entry);
+		// Then Unbound's pair moved off the stranger's port (DnsProxyBackendMoveTest pins how), and the Resolver is not given back
+		$this->assertSame('5355', pfb_dns_proxy_backend_port(), 'Unbound moved to a free pair');
+		$this->assertNotSame($before['resolver']['custom_options'], config_get_path('unbound/custom_options'), 'with the new pair in its clause');
+		$this->assertResolverNotGivenBack($before, $entry);
+		$this->assertStringContainsString('nc (pid 6161) on 127.0.0.1:5353', implode("\n", array_column($this->notices(), 'notice')), 'the notice names the holder');
 	}
 
 	// -----------------------------------------------------------------------
@@ -378,15 +402,17 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 	}
 
 	#[DataProvider('reservedListenPorts')]
-	public function testAListenPortSetOnAProxyPortAfterTheMoveKeepsPfbDnsServingAndSaysSo(string $port, bool $dnsbl): void
+	public function testAListenPortSetOnAProxyPortAfterTheMoveWithNoFreePairKeepsPfbDnsServingAndSaysSo(string $port, bool $dnsbl): void
 	{
-		// Given a moved Resolver whose proxy serves on the port the Resolver had, and an admin who then sets the Listen Port to a proxy port
+		// Given a moved Resolver whose proxy serves on the port the Resolver had, no free pair to move Unbound's backend to, and an admin who then sets the
+		// Listen Port to a proxy port (with a free pair it moves instead: DnsProxyBackendMoveTest)
 		$this->activate($dnsbl);
 		if (!$dnsbl) {
 			$this->useMountState(FALSE);
 		}
 		$this->proxyServes();
 		$this->seedRunningGateway();
+		$this->takeEveryBackendPair();
 		$served = $this->servedPort();
 		$this->gatewayHoldsItsCertificate();
 		config_set_path('unbound/port', $port);
@@ -589,8 +615,10 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 		// When every use of the restore under src/ is collected from the tokens
 		$scan = $this->sourceScan();
 
-		// Then the only callers are the Resolver pass (which restores only while pfB-DNS is not wanted), the package removal and the wizard's reset
+		// Then the only callers are the Resolver pass (which restores only while pfB-DNS is not wanted), the package removal, the wizard's reset and the
+		// backend port move, which calls it with TRUE and a port: it rewrites Unbound's clause and restores nothing
 		$this->assertSame([
+			'usr/local/pkg/pfblockerng/pfblockerng.inc::pfb_dns_proxy_backend_move',
 			'usr/local/pkg/pfblockerng/pfblockerng.inc::pfb_dns_proxy_deinstall',
 			'usr/local/pkg/pfblockerng/pfblockerng.inc::pfb_unbound_python',
 			'usr/local/www/wizards/pfblockerng_wizard.inc::step4_submitphpaction',

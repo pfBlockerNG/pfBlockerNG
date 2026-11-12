@@ -153,12 +153,17 @@ final class DnsProxyStartupCheckDegradedTest extends TestCase
 		return [$clock, $namespace . '\\pfb_dns_proxy_confirm_ready'];
 	}
 
-	/** Unbound is lost in one of the ways the status names; what the notice and the status both say of it. */
+	/**
+	 * Unbound is lost in one of the ways the status names; what the notice and the status both say of it. A stranger on Unbound's port is moved
+	 * off by the confirmation that follows an activation wait (DnsProxyBackendMoveTest), so here no pair is free to move to: a socket on every
+	 * port the search could pick from (5355..5419).
+	 */
 	private function loseTheBackend(string $loss): void
 	{
 		if ($loss === 'foreign') {
 			file_put_contents($GLOBALS['pfb_test_sockstat_output'],
-				"USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\nroot dnsmasq 777 5 tcp4 127.0.0.1:5353 *:*\nroot dnsmasq 777 6 udp4 127.0.0.1:5353 *:*\n");
+				"USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\nroot dnsmasq 777 5 tcp4 127.0.0.1:5353 *:*\nroot dnsmasq 777 6 udp4 127.0.0.1:5353 *:*\n"
+				. implode('', array_map(static fn (int $port): string => "root nc 6162 3 udp4 127.0.0.1:{$port} *:*\n", range(5355, 5419))));
 			return;
 		}
 		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
@@ -172,7 +177,7 @@ final class DnsProxyStartupCheckDegradedTest extends TestCase
 	{
 		return [
 			'the Resolver is disabled' => ['disabled', 'the DNS Resolver is disabled'],
-			'another process holds Unbound\'s port' => ['foreign', 'dnsmasq (pid 777) holds Unbound\'s port 5353'],
+			'another process holds Unbound\'s port and no pair is free to move it to' => ['foreign', 'dnsmasq (pid 777) holds Unbound\'s port 5353'],
 			'Unbound does not answer' => ['dead', 'Unbound does not answer on 127.0.0.1:5353'],
 		];
 	}

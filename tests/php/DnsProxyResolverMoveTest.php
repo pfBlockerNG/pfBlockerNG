@@ -50,9 +50,16 @@ final class DnsProxyResolverMoveTest extends TestCase
 	private array $originalConfig = [];
 	private array $originalInterfaceIp = [];
 	private bool $hadInterfaceIp = FALSE;
+	/** @var array<string,string|false> the sockstat double's output and status files before the test: the backend port's pair picker reads them */
+	private array $sockstatFiles = [];
 
 	protected function setUp(): void
 	{
+		foreach ([$GLOBALS['pfb_test_sockstat_output'], $GLOBALS['pfb_test_sockstat_status']] as $file) {
+			$this->sockstatFiles[$file] = is_file($file) ? file_get_contents($file) : FALSE;
+		}
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "0\n");
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->hadConfig = array_key_exists('config', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
@@ -74,6 +81,14 @@ final class DnsProxyResolverMoveTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		foreach ($this->sockstatFiles as $file => $contents) {
+			if ($contents === FALSE) {
+				@unlink($file);
+			} else {
+				file_put_contents($file, $contents);
+			}
+		}
+		$this->sockstatFiles = [];
 		if ($this->hadInterfaceIp) {
 			$GLOBALS['pfb_test_interface_ip'] = $this->originalInterfaceIp;
 		} else {
@@ -141,6 +156,13 @@ final class DnsProxyResolverMoveTest extends TestCase
 	private function savedRaw(): string
 	{
 		return (string) config_get_path(self::SAVED, '');
+	}
+
+	/** A socket on every port the backend pair's search could pick from (5355..5419): there is no free pair to move to. */
+	private function takeEveryBackendPair(): void
+	{
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], "USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n"
+			. implode('', array_map(static fn (int $port): string => "root nc 6162 3 udp4 127.0.0.1:{$port} *:*\n", range(5355, 5419))));
 	}
 
 	private function errorLog(): string
@@ -559,38 +581,115 @@ final class DnsProxyResolverMoveTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Port 5353 -- our clause binds it on loopback, and Unbound cannot bind it twice
+	// A Listen Port on one of the clause's loopback ports -- Unbound's pair moves to a free one (issue #3848); with none free the old refusal stands
 	// -----------------------------------------------------------------------
 
-	public function testMoveOnRefusesWhenTheListenPortIsTheProxysLoopbackPortAndNamesTheListenPort(): void
+	/** @return array<string,array{0:string}> the loopback ports our clause owns: 5353 (PROXYv2) and 5354 (Unbound's plain listener) */
+	public static function ownedPorts(): array
 	{
-		// Given a Resolver whose Listen Port is 5353: our clause would bind 127.0.0.1 and ::1 on it a second time,
-		// which makes Unbound exit at start (live: "address already in use").
-		$this->seedResolver(['port' => '5353']);
-		$config = $GLOBALS['config'];
+		return ['the PROXYv2 port' => ['5353'], 'the plain listener port' => ['5354']];
+	}
 
-		// When the proxy is turned on.
+	/** Unbound's pair is on 5355/5356 (the lowest free pair above 5353/5354, stored with the clause), and the clause says so. */
+	private function assertPairMovedTo5355(): void
+	{
+		$this->assertSame('5355', pfb_dns_proxy_backend_port());
+		$this->assertSame('5355', (string) config_get_path('installedpackages/pfblockerngdns/config/0/pfb_dns_unbound_port'));
+		$lines = $this->customLines();
+		foreach (['port: 5356', 'interface: 127.0.0.1@5355', 'interface: ::1@5355', 'proxy-protocol-port: 5355'] as $line) {
+			$this->assertContains($line, $lines);
+		}
+		$this->assertNotContains('proxy-protocol-port: 5353', $lines);
+	}
+
+	#[DataProvider('ownedPorts')]
+	public function testMoveOnMovesUnboundsPairOffTheListenPortInsteadOfRefusing(string $port): void
+	{
+		// Given a Resolver whose Listen Port is one of the two loopback ports our clause gives Unbound, and a free pair above them:
+		// our clause on that port would make Unbound exit at start (live: "address already in use")
+		$this->seedResolver(['port' => $port]);
+
+		// When the proxy is turned on
 		$changed = pfb_dns_proxy_resolver(TRUE);
 
-		// Then nothing moves and no snapshot is kept ...
+		// Then the Resolver is taken over with Unbound's pair on the lowest free one, stored with the clause in one write, and the Listen Port is the admin's
+		$this->assertTrue($changed);
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'taken over, not refused');
+		$this->assertSame(1, $this->writeCalls(), 'one write carries the stored pair and the clause');
+		$this->assertPairMovedTo5355();
+		$this->assertSame($port, config_get_path('unbound/port'));
+
+		// ... and the operator is told which setting forced the move
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$notice = $GLOBALS['pfb_test_file_notices'][0];
+		$this->assertSame('pfBlockerNG DNS Proxy', $notice['id']);
+		$this->assertSame('/services_unbound.php', $notice['url']);
+		$this->assertStringContainsString("the DNS Resolver's Listen Port is {$port}", $notice['notice']);
+		$this->assertStringContainsString("so Unbound's backend moved from ports 5353/5354 to 5355/5356", $notice['notice']);
+		$this->assertStringNotContainsString('pfB-DNS is not active', $notice['notice']);
+	}
+
+	#[DataProvider('ownedPorts')]
+	public function testMoveOnMovesTheClausePairOfAMovedResolverWhoseListenPortWasLaterSetToOneOfThem(string $port): void
+	{
+		// Given a moved Resolver, then an admin who sets its Listen Port to one of the clause's ports on the Resolver page
+		$this->seedResolver();
+		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
+		$GLOBALS['pfb_test_file_notices'] = [];
+		config_set_path('unbound/port', $port);
+		$writes = $this->writeCalls();
+
+		// When the proxy is applied again
+		$unsafe = NULL;
+		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
+
+		// Then the pair moved in one write, nothing is left for the caller to report, and the notice names the Listen Port
+		$this->assertTrue($changed);
+		$this->assertNull($unsafe);
+		$this->assertSame($writes + 1, $this->writeCalls());
+		$this->assertPairMovedTo5355();
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the Resolver is still moved');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString("the DNS Resolver's Listen Port is {$port}", $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertStringContainsString("so Unbound's backend moved from ports 5353/5354 to 5355/5356", $GLOBALS['pfb_test_file_notices'][0]['notice']);
+
+		// ... and a second apply finds nothing to change
+		$writes = $this->writeCalls();
+		$this->assertFalse(pfb_dns_proxy_resolver(TRUE));
+		$this->assertSame($writes, $this->writeCalls());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+	}
+
+	#[DataProvider('ownedPorts')]
+	public function testMoveOnStillRefusesAListenPortOnTheClausesLoopbackPortsWhenNoPairIsFreeAndNamesIt(string $port): void
+	{
+		// Given a Resolver whose Listen Port is one of the two loopback ports our clause gives Unbound, and no free pair to move it to:
+		// the proxy would need that port for the firewall's own lookups on loopback
+		$this->seedResolver(['port' => $port]);
+		$this->takeEveryBackendPair();
+		$config = $GLOBALS['config'];
+
+		// When the proxy is turned on
+		$changed = pfb_dns_proxy_resolver(TRUE);
+
+		// Then nothing moves, no snapshot is kept, and the operator is told which setting to change and that nothing was taken over
 		$this->assertFalse($changed);
 		$this->assertSame(0, $this->writeCalls());
 		$this->assertSame($config, $GLOBALS['config']);
-
-		// ... and the operator is told which setting to change, and that nothing was taken over.
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the refusal is an operator-visible notice');
 		$notice = $GLOBALS['pfb_test_file_notices'][0];
 		$this->assertStringContainsString('Listen Port', $notice['notice']);
-		$this->assertStringContainsString('5353', $notice['notice']);
+		$this->assertStringContainsString($port, $notice['notice']);
 		$this->assertStringContainsString('pfB-DNS is not active', $notice['notice']);
 		$this->assertSame('/services_unbound.php', $notice['url']);
 		$this->assertStringContainsString('Listen Port', $this->errorLog());
 	}
 
-	public function testARefusalThatRepeatsOnEveryApplyRaisesOneNoticeNotOnePerApply(): void
+	public function testARefusalForWantOfAFreePairThatRepeatsOnEveryApplyRaisesOneNoticeNotOnePerApply(): void
 	{
-		// Given a Resolver whose Listen Port is 5353: every apply and cron tick refuses the move again
+		// Given a Resolver whose Listen Port is 5353 and no free pair: every apply and cron tick refuses the move again
 		$this->seedResolver(['port' => '5353']);
+		$this->takeEveryBackendPair();
 
 		// When three applies run
 		pfb_dns_proxy_resolver(TRUE);
@@ -601,64 +700,18 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the same refusal is one notice');
 	}
 
-	public function testMoveOnSignalsAMovedResolverWhoseListenPortWasLaterSetToTheProxysLoopbackPort(): void
-	{
-		// Given a moved Resolver, then an admin who sets its Listen Port to 5353 on the Resolver page.
-		$this->seedResolver();
-		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
-		config_set_path('unbound/port', '5353');
-		$config = $GLOBALS['config'];
-		$writes = $this->writeCalls();
-
-		// When the proxy is applied again.
-		$unsafe = NULL;
-		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
-
-		// Then nothing changes, the setting is named for the caller, which raises the notice (pfB-DNS keeps serving), and no notice is raised here
-		$this->assertFalse($changed);
-		$this->assertSame('Listen Port 5353', $unsafe);
-		$this->assertSame($writes, $this->writeCalls());
-		$this->assertSame($config, $GLOBALS['config']);
-		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
-	}
-
-	/** @return array<string,array{0:string}> the loopback ports our clause owns: 5353 (PROXYv2) and 5354 (Unbound's plain listener) */
-	public static function ownedPorts(): array
-	{
-		return ['the PROXYv2 port' => ['5353'], 'the plain listener port' => ['5354']];
-	}
-
 	#[DataProvider('ownedPorts')]
-	public function testMoveOnRefusesEitherOfTheClausesLoopbackPortsAsTheListenPortAndNamesIt(string $port): void
+	public function testMoveOnStillSignalsAMovedResolverWhoseListenPortWasLaterSetToOneOfThemWhenNoPairIsFree(string $port): void
 	{
-		// Given a Resolver whose Listen Port is one of the two loopback ports our clause gives Unbound: the proxy
-		// would need that port for the firewall's own lookups on loopback.
-		$this->seedResolver(['port' => $port]);
-		$config = $GLOBALS['config'];
-
-		// When the proxy is turned on.
-		$changed = pfb_dns_proxy_resolver(TRUE);
-
-		// Then nothing moves, and the notice names the Listen Port and the port to change.
-		$this->assertFalse($changed);
-		$this->assertSame(0, $this->writeCalls());
-		$this->assertSame($config, $GLOBALS['config']);
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
-		$this->assertStringContainsString('Listen Port', $GLOBALS['pfb_test_file_notices'][0]['notice']);
-		$this->assertStringContainsString($port, $GLOBALS['pfb_test_file_notices'][0]['notice']);
-	}
-
-	#[DataProvider('ownedPorts')]
-	public function testMoveOnSignalsAMovedResolverWhoseListenPortWasLaterSetToOneOfThem(string $port): void
-	{
-		// Given a moved Resolver, then an admin who sets its Listen Port to that port on the Resolver page.
+		// Given a moved Resolver, then an admin who sets its Listen Port to that port on the Resolver page, and no free pair to move it to
 		$this->seedResolver();
 		$this->assertTrue(pfb_dns_proxy_resolver(TRUE));
 		config_set_path('unbound/port', $port);
+		$this->takeEveryBackendPair();
 		$config = $GLOBALS['config'];
 		$writes = $this->writeCalls();
 
-		// When the proxy is applied again.
+		// When the proxy is applied again
 		$unsafe = NULL;
 		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
 
@@ -669,7 +722,6 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertSame($config, $GLOBALS['config']);
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 	}
-
 
 	/** @return array<string,array{0:string}> the admin's own `interface:` directives, wherever they sit and on whatever address or port: each is refused */
 	public static function userInterfaceLines(): array
@@ -774,6 +826,20 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertStringContainsString('Custom Options', $notice['notice']);
 		$this->assertStringContainsString('port:', $notice['notice']);
 		$this->assertSame('/services_unbound.php', $notice['url']);
+	}
+
+	public function testThePortLineRefusalNamesThePlainPortOfTheStoredPair(): void
+	{
+		// Given Unbound's pair stored on 5400/5401 and Custom Options that set `port:` themselves
+		PfbConfig::writeSystem('dns/pfb_dns_unbound_port', '5400');
+		$this->seedResolver(['custom_options' => base64_encode("server:\nport: 5300")]);
+
+		// When the proxy is turned on
+		$this->assertFalse(pfb_dns_proxy_resolver(TRUE));
+
+		// Then the notice names the port our clause would set, which is the stored pair's plain port
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$this->assertStringContainsString('the DNS proxy sets port: to 5401 for Unbound', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
 
 	/** @return array<string,array{0:string}> the admin's own `port:`, `interface:` and `include:` lines, each appended after our block once it was written */

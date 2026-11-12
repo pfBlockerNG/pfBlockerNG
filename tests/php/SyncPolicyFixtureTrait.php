@@ -67,6 +67,7 @@ trait SyncPolicyFixtureTrait
 			'dnsbl/pfb_dnsport_ssl',
 			'dnsbl/pfb_cache_flush',
 			'dns/pfb_dns_saved',
+			'dns/pfb_dns_unbound_port',
 			'dns/pfb_dns_dnsbl_migrated',
 			'dns_shared/pfb_dns_doh',
 			'dns_shared/pfb_dns_doh_port',

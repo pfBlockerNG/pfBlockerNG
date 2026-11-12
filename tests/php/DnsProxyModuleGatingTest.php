@@ -39,9 +39,16 @@ final class DnsProxyModuleGatingTest extends TestCase
 	private array $originalPfb = [];
 	private array $originalConfig = [];
 	private array $originalG = [];
+	/** @var array<string,string|false> the sockstat double's output and status files before the test: the backend port's pair picker reads them */
+	private array $sockstatFiles = [];
 
 	protected function setUp(): void
 	{
+		foreach ([$GLOBALS['pfb_test_sockstat_output'], $GLOBALS['pfb_test_sockstat_status']] as $file) {
+			$this->sockstatFiles[$file] = is_file($file) ? file_get_contents($file) : FALSE;
+		}
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "0\n");
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->hadConfig = array_key_exists('config', $GLOBALS);
 		$this->hadG = array_key_exists('g', $GLOBALS);
@@ -73,6 +80,14 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		foreach ($this->sockstatFiles as $file => $contents) {
+			if ($contents === FALSE) {
+				@unlink($file);
+			} else {
+				file_put_contents($file, $contents);
+			}
+		}
+		$this->sockstatFiles = [];
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
@@ -315,11 +330,12 @@ final class DnsProxyModuleGatingTest extends TestCase
 		pfb_unbound_python('enabled');
 		$this->assertStringContainsString('Mounting: /usr/local/bin', $this->pfbLog(), 'before: the observer goes into Unbound with mounts');
 
-		// When pfB-DNS is on but its move is refused (Listen Port 5353) and DNSBL is off: nothing owns the Resolver, so no python
-		// script at all
+		// When pfB-DNS is on but its move is refused (Listen Port 5353 and no free pair to move Unbound's backend to) and DNSBL is off: nothing owns
+		// the Resolver, so no python script at all
 		@unlink($GLOBALS['pfb']['log']);
 		config_set_path(self::SAVED, '');
 		$GLOBALS['config']['unbound'] = ['port' => '5353'] + self::originalResolver();
+		$this->takeEveryBackendPair();
 		pfb_unbound_python('disabled');
 
 		// Then Unbound is not given python's mounts ...
@@ -790,11 +806,12 @@ final class DnsProxyModuleGatingTest extends TestCase
 
 	public function testAMoveTheResolverRefusedTakesTheLegacyDnsblModuleOutOfUnboundAndGivesItNoObserver(): void
 	{
-		// Given pfB-DNS on and DNSBL on with the Resolver forwarding, a Resolver whose Listen Port the proxy cannot work with
-		// (the move is refused), still loading the DNSBL module an older version put in.
+		// Given pfB-DNS on and DNSBL on with the Resolver forwarding, a Resolver whose Listen Port the proxy cannot work with (it is on Unbound's
+		// loopback pair and no free pair is left to move it to: the move is refused), still loading the DNSBL module an older version put in.
 		$this->setProxy(TRUE);
 		$this->enableDnsbl();
 		$GLOBALS['config']['unbound'] = ['port' => '5353'] + self::originalResolver() + self::MODULE_KEYS;
+		$this->takeEveryBackendPair();
 		$this->setForwarding(TRUE);
 
 		// When DNSBL is applied.
@@ -820,8 +837,8 @@ final class DnsProxyModuleGatingTest extends TestCase
 	public static function takeoverFailures(): array
 	{
 		return [
-			'Listen Port 5353'                          => ['port5353'],
-			'Listen Port 5354'                          => ['port5354'],
+			'Listen Port 5353, no free backend pair'    => ['port5353'],
+			'Listen Port 5354, no free backend pair'    => ['port5354'],
 			'own loopback interface line in Custom Options' => ['interface'],
 			'own port: line in Custom Options'          => ['port'],
 			'Resolver value that cannot be stored'      => ['unstorable'],
@@ -836,10 +853,11 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$resolver = self::originalResolver() + self::MODULE_KEYS;
 		switch ($cause) {
 			case 'port5353':
-				$resolver['port'] = '5353';
-				break;
 			case 'port5354':
-				$resolver['port'] = '5354';
+				// A Listen Port on one of Unbound's loopback ports takes the Resolver over with the pair moved (issue #3848); only with no
+				// free pair to move to is it a takeover that cannot happen: a socket on every port the search could pick from
+				$resolver['port'] = substr($cause, 4);
+				$this->takeEveryBackendPair();
 				break;
 			case 'interface':
 				$resolver['custom_options'] = base64_encode("do-ip6: no\ninterface: 127.0.0.1@5353");
@@ -859,6 +877,13 @@ final class DnsProxyModuleGatingTest extends TestCase
 		}
 		$GLOBALS['config']['unbound'] = $resolver;
 		$this->setForwarding(TRUE);
+	}
+
+	/** A socket on every port the backend pair's search could pick from (5355..5419): a Listen Port on Unbound's pair then has no free pair to move it to. */
+	private function takeEveryBackendPair(): void
+	{
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'],
+			implode('', array_map(static fn (int $port): string => "root nc 6162 3 udp4 127.0.0.1:{$port} *:*\n", range(5355, 5419))));
 	}
 
 	/** @return list<string> */
@@ -926,7 +951,7 @@ final class DnsProxyModuleGatingTest extends TestCase
 	/** @return array<string,array{string}> */
 	public static function takeoverFailuresWithDnsblOff(): array
 	{
-		return ['Listen Port' => ['port5353'], 'config.xml locked' => ['lock']];
+		return ['Listen Port, no free backend pair' => ['port5353'], 'config.xml locked' => ['lock']];
 	}
 
 	#[DataProvider('takeoverFailuresWithDnsblOff')]

@@ -248,7 +248,7 @@ $section->addInput(new Form_Checkbox(
 		. '<ul>'
 		. '<li><strong>Network Interfaces</strong> becomes <strong>Localhost</strong>.</li>'
 		. '<li><strong>SSL/TLS Service</strong> is turned off; configure encrypted listeners with <strong>DoT</strong>, <strong>DoH</strong> and <strong>DoQ</strong> below.</li>'
-		. '<li>The Resolver uses loopback ports <code>5353</code> and <code>5354</code>. Its <strong>Listen Port</strong> must use neither port.</li>'
+		. '<li>The Resolver uses a pair of loopback ports, <code>5353</code> and <code>5354</code> at first. If another process holds one of them, or its <strong>Listen Port</strong> is set to one of them, pfBlockerNG moves the pair to a free one and raises a notice.</li>'
 		. '</ul>'
 		. '<p>A <strong>Custom options</strong> line containing <code>interface:</code>, <code>port:</code> or <code>include:</code>, or an unmatched proxy marker, prevents activation. '
 		. 'A notice identifies the conflict. Adding such a conflict later keeps <strong>pfB-DNS</strong> running, with the Resolver still moved, and raises a notice. '

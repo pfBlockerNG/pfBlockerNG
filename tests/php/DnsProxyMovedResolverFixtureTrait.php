@@ -35,7 +35,7 @@ trait DnsProxyMovedResolverFixtureTrait
 		'pfb_test_write_config_args', 'pfb_test_rcfile_dir',
 		'pfb_test_mwexec', 'pfb_test_mwexec_hook',
 		'pfb_test_lock_holders', 'pfb_test_try_lock_busy_for', 'pfb_test_config_read_fails',
-		'pfb_test_config_read_fails_for',
+		'pfb_test_config_read_fails_for', 'pfb_test_unbound_configure_hook',
 	];
 
 	private string $tmp;
@@ -220,8 +220,11 @@ trait DnsProxyMovedResolverFixtureTrait
 	 * The box as a first activation leaves it just before the proxy has to answer: pfBlockerNG on, DNSBL on or off, pfB-DNS
 	 * on, the Resolver moved aside by the real pass (so the snapshot is the one the real writer made); with DNSBL on, Unbound
 	 * stored the legacy DNSBL module keys before that, as an upgraded box does (the pass takes them out).
+	 *
+	 * @param array<string,string> $resolver keys of the user's Resolver that differ from originalResolver()
+	 * @param bool $takeover FALSE leaves the Resolver as the user had it, for a test that drives the takeover itself
 	 */
-	private function activate(bool $dnsbl): void
+	private function activate(bool $dnsbl, array $resolver = [], bool $takeover = TRUE): void
 	{
 		PfbConfig::writeSectionSystem('installedpackages/pfblockerng/config/0', [
 			'pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'skipfeed' => '0', 'enable_cb' => 'on',
@@ -244,14 +247,16 @@ trait DnsProxyMovedResolverFixtureTrait
 		$GLOBALS['pfb']['dnsbl_control'] = PfbToggle::Off;
 		$GLOBALS['pfb']['dnsbl_control_legacy'] = PfbToggle::Off;
 
-		$GLOBALS['config']['unbound'] = self::originalResolver() + ($dnsbl
+		$GLOBALS['config']['unbound'] = array_merge(self::originalResolver(), $resolver) + ($dnsbl
 			? ['python' => '', 'python_order' => 'pre_validator', 'python_script' => 'pfb_unbound']
 			: []);
-		$mode = $dnsbl ? 'enabled' : 'disabled';
-		pfb_unbound_python($mode, TRUE);
-		$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the Resolver was moved for the proxy');
-		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'before: the Resolver is on loopback');
-		$this->assertSame('pfb_upstream_observer', config_get_path('unbound/python_script'), 'before: Unbound runs the observer, not the module');
+		if ($takeover) {
+			$mode = $dnsbl ? 'enabled' : 'disabled';
+			pfb_unbound_python($mode, TRUE);
+			$this->assertNotNull(pfb_dns_proxy_saved(), 'before: the Resolver was moved for the proxy');
+			$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'before: the Resolver is on loopback');
+			$this->assertSame('pfb_upstream_observer', config_get_path('unbound/python_script'), 'before: Unbound runs the observer, not the module');
+		}
 		// The unbound.conf the proxy-mode Resolver runs with: the python module slot holds the observer, which the proxy's
 		// takeover put there
 		file_put_contents("{$this->tmp}/unbound.conf", "server:\nmodule-config: \"python validator iterator\"\npython:\npython-script: pfb_upstream_observer.py\n");

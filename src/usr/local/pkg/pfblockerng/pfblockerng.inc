@@ -4045,10 +4045,11 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 
 // issue #3515: the DNS proxy takes the Resolver's client-facing place, so the Resolver is moved onto
 // loopback through config.xml (its port and lo0 stay: pfSense keeps 127.0.0.1 in the firewall's resolv.conf) and
-// our clause moves Unbound's own sockets off the Listen Port, onto loopback 5354 (plain) and 5353 (PROXYv2: it trusts
-// the proxy's source address). The proxy serves the Listen Port on loopback and on pfB-DNS's own interface list (dns/pfb_dns_interface).
-const PFB_DNS_PROXY_UNBOUND_PORT = '5353';
-const PFB_DNS_PROXY_UNBOUND_PLAIN_PORT = '5354';
+// our clause moves Unbound's own sockets off the Listen Port, onto a pair of loopback ports: P (PROXYv2: it trusts the proxy's source
+// address) and P+1 (plain), P being dns/pfb_dns_unbound_port, 5353 by default (pfb_dns_proxy_backend_port()). The proxy serves the Listen Port
+// on loopback and on pfB-DNS's own interface list (dns/pfb_dns_interface). A holder of the pair, or a Listen Port on it, moves the pair
+// (pfb_dns_proxy_backend_move(), issue #3848); this many pairs above the stored one are tried, lowest first.
+const PFB_DNS_PROXY_BACKEND_SEARCH = 64;
 const PFB_DNS_PROXY_LOOPBACK = ['127.0.0.1', '::1'];
 // Unbound's python_script value (and, with .py, its file in /var/unbound) whenever pfB-DNS fronts the Resolver: a script
 // that only reports what the upstream answered, inert unless the proxy was started with --observer. Unbound loads it in
@@ -5792,7 +5793,8 @@ function pfb_dns_proxy_certificate_sync(): void {
  * plain DNS interface list dns/pfb_dns_interface, DoT dns/pfb_dns_dot*, the DoH/DoQ settings and the certificate dns/pfb_dns_sslcertref;
  * the SAVED Resolver is the restore source only), the Resolver's Listen Port (unbound/port, which stays on loopback for Unbound;
  * 53 when absent or not a port) and DNSBL's runtime state ($pfb as pfb_global() left it, so callers hold a fresh one).
- * Written on each call unless a moved Resolver's Listen Port conflicts with a backend port; then the current script is kept.
+ * Written on each call unless a moved Resolver's Listen Port is still on a port of Unbound's backend pair (the apply moves the pair off it
+ * and finds a free one, issue #3848; until then, or with none free); then the current script is kept. --upstream is the stored pair's PROXYv2 port.
  * Warnings are logged only when the content changed.
  *
  * DNSBL on: the gateway builds the DNSBL module from the files under --module-dir, and while the Resolver forwards it also listens
@@ -5847,7 +5849,7 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$daemonpid = PFB_DNS_PROXY_DAEMON_PIDFILE;
 	$childpid = PFB_DNS_PROXY_PIDFILE;
 	$log = PFB_DNS_PROXY_LOG;
-	$upstream = escapeshellarg(pfb_dns_proxy_host_port(pfb_dns_proxy_upstream_address(), PFB_DNS_PROXY_UNBOUND_PORT));
+	$upstream = escapeshellarg(pfb_dns_proxy_host_port(pfb_dns_proxy_upstream_address(), pfb_dns_proxy_backend_port()));
 	$lockfile = PFB_DNS_PROXY_LOCKFILE;
 	$ready = escapeshellarg($pfb['dns_proxy_ready']);
 	$cert = escapeshellarg($pfb['dns_proxy_cert']);
@@ -5856,8 +5858,8 @@ function pfb_dns_proxy_service(string $proxyDir = PFB_DNS_PROXY_DIR): void {
 	$kept = escapeshellarg($pfb['dns_proxy_rc_kept']);
 
 	$saved = pfb_dns_proxy_saved();
-	// A Listen Port set after the move on a proxy port while the snapshot stands (the Resolver stays moved and pfB-DNS keeps serving): keep the rc
-	// script the gateway serves with, since a regenerated one would restart it onto a port Unbound's own sockets hold.
+	// A Listen Port on a port of Unbound's backend pair that no move has cleared yet (the next apply moves the pair, or there is no free one to move
+	// it to), while the snapshot stands: keep the rc script the gateway serves with, since a regenerated one would restart it onto a port Unbound's own sockets hold.
 	if ($saved !== NULL && pfb_dns_proxy_listen_port_conflict() !== NULL) {
 		return;
 	}
@@ -6343,20 +6345,60 @@ function pfb_dns_proxy_upstream_ready(?array $status = NULL): bool {
 	return pfb_dns_proxy_upstream_state($status) === 'ready';
 }
 
-/**
- * @param array{process:string,pid:int,port:string}|null $holder set when the answer is 'foreign': the process of the same socket scan that
- *        holds the endpoint's port, as sockstat names it, and that port
- * @return 'ready'|'foreign'|'unknown' Native ownership evidence for the applied endpoint, never an inference from a failed probe.
- */
-function pfb_dns_proxy_upstream_state(?array $status = NULL, ?array &$holder = NULL): string {
-	global $g, $pfb;
+/** The live Unbound's pid: its pidfile names a live process and holds a clean decimal pid; NULL otherwise. */
+function pfb_dns_proxy_unbound_pid(): ?int {
+	global $g;
 
 	$pidfile = "{$g['varrun_path']}/unbound.pid";
 	if (!isvalidpid($pidfile)) {
-		return 'unknown';
+		return NULL;
 	}
 	$pid = rtrim((string) @file_get_contents($pidfile), "\n");
-	if (!ctype_digit($pid) || (int) $pid < 1 || (string) (int) $pid !== $pid) {
+	return (ctype_digit($pid) && (int) $pid >= 1 && (string) (int) $pid === $pid) ? (int) $pid : NULL;
+}
+
+/**
+ * The box's listening TCP and UDP sockets on the local ports $ports, from one sockstat run: the only parser of its output, which the upstream's
+ * ownership check (pfb_dns_proxy_upstream_state()) and the backend pair's holder and free-pair checks (pfb_dns_proxy_backend_holder(),
+ * pfb_dns_proxy_backend_pick()) all read. Bounded (1 s). Rows sockstat gives for a foreign port or that do not parse are left out.
+ *
+ * @param string $ports a sockstat -p list of local ports: "5353", "5353,5354" or "5355-5419"
+ * @return list<array{process:string,pid:int,proto:string,host:string,port:string}>|null host is the address spelled as the gateway prints it, or `*`
+ *         for a wildcard; NULL when sockstat could not be run or failed: nothing is known then, and nothing may be inferred from it
+ */
+function pfb_dns_proxy_listening_sockets(string $ports): ?array {
+	$lines = [];
+	if (pfb_unbound_control_exec(escapeshellarg(PFB_DNS_PROXY_SOCKSTAT) . ' -46lw -p ' . escapeshellarg($ports) . ' 2>/dev/null',
+	    'DNS proxy upstream sockets', $lines, FALSE, 1) !== 0) {
+		return NULL;
+	}
+	$sockets = [];
+	foreach ($lines as $line) {
+		$fields = preg_split('/\s+/', trim($line)) ?: [];
+		if (count($fields) < 7 || !ctype_digit($fields[2]) || (int) $fields[2] < 1 || preg_match('/\A(?:tcp|udp)[46]\z/', $fields[4]) !== 1 ||
+		    preg_match('/\A(?:\[([0-9A-Fa-f:.]+)\]|([0-9A-Fa-f:.]+|\*)):([0-9]+)\z/', $fields[5], $local) !== 1) {
+			continue;
+		}
+		$address = $local[1] !== '' ? $local[1] : $local[2];
+		$packed = ($address === '*') ? FALSE : @inet_pton(pfb_ipv4_from_mapped($address) ?? $address);
+		$port = pfb_dns_proxy_listener_port($local[3]);
+		if ($port === NULL || ($address !== '*' && $packed === FALSE)) {
+			continue;
+		}
+		$sockets[] = ['process' => pfb_sanitize_text($fields[1]), 'pid' => (int) $fields[2], 'proto' => $fields[4],
+		    'host' => ($address === '*') ? '*' : (string) inet_ntop((string) $packed), 'port' => $port];
+	}
+	return $sockets;
+}
+
+/**
+ * @param array{process:string,pid:int,port:string,at:string}|null $holder set when the answer is 'foreign': the process of the same socket scan that
+ *        holds the endpoint, as sockstat names it, the endpoint's port, and the endpoint (host:port)
+ * @return 'ready'|'foreign'|'unknown' Native ownership evidence for the applied endpoint, never an inference from a failed probe.
+ */
+function pfb_dns_proxy_upstream_state(?array $status = NULL, ?array &$holder = NULL): string {
+	$pid = pfb_dns_proxy_unbound_pid();
+	if ($pid === NULL) {
 		return 'unknown';
 	}
 	$status ??= pfb_dns_proxy_applied_status();
@@ -6379,36 +6421,101 @@ function pfb_dns_proxy_upstream_state(?array $status = NULL, ?array &$holder = N
 	}
 	$family = strlen($packed) === 16 ? '6' : '4';
 	$expected = pfb_dns_proxy_host_port($host, $port);
-	$lines = [];
-	if (pfb_unbound_control_exec(escapeshellarg(PFB_DNS_PROXY_SOCKSTAT) . ' -46lw -p ' . escapeshellarg($port) . ' 2>/dev/null',
-	    'DNS proxy upstream sockets', $lines, FALSE, 1) !== 0) {
+	$sockets = pfb_dns_proxy_listening_sockets($port);
+	if ($sockets === NULL) {
 		return 'unknown';
 	}
 	$transports = [];
-	foreach ($lines as $line) {
-		$fields = preg_split('/\s+/', trim($line)) ?: [];
-		if (count($fields) < 7 || !ctype_digit($fields[2]) || (int) $fields[2] < 1 ||
-		    !in_array($fields[4], ["tcp{$family}", "udp{$family}"], TRUE) ||
-		    preg_match('/\A(?:\[([0-9A-Fa-f:.]+)\]|([0-9A-Fa-f:.]+)):([0-9]+)\z/', $fields[5], $local) !== 1) {
+	foreach ($sockets as $socket) {
+		if (!in_array($socket['proto'], ["tcp{$family}", "udp{$family}"], TRUE) || $socket['host'] === '*' ||
+		    pfb_dns_proxy_host_port($socket['host'], $socket['port']) !== $expected) {
 			continue;
 		}
-		$address = $local[1] !== '' ? $local[1] : $local[2];
-		$local_port = pfb_dns_proxy_listener_port($local[3]);
-		if (@inet_pton($address) !== FALSE && $local_port !== NULL &&
-		    pfb_dns_proxy_host_port($address, $local_port) === $expected) {
-			if ($fields[1] !== 'unbound' || (int) $fields[2] !== (int) $pid) {
-				$holder = ['process' => pfb_sanitize_text($fields[1]), 'pid' => (int) $fields[2], 'port' => $port];
-				return 'foreign';
-			}
-			$transports[$fields[4]] = TRUE;
+		if ($socket['process'] !== 'unbound' || $socket['pid'] !== $pid) {
+			$holder = ['process' => $socket['process'], 'pid' => $socket['pid'], 'port' => $port, 'at' => $expected];
+			return 'foreign';
 		}
+		$transports[$socket['proto']] = TRUE;
 	}
 	return isset($transports["tcp{$family}"], $transports["udp{$family}"]) ? 'ready' : 'unknown';
 }
 
 /**
+ * The PROXYv2 port P of Unbound's loopback backend pair, where the plain port is P+1 (issue #3848): the stored dns/pfb_dns_unbound_port, or 5353
+ * when it is no whole number from 1025 to 65534 (the registry's default, and P+1 must stay a port).
+ */
+function pfb_dns_proxy_backend_port(): string {
+	$port = PfbConfig::read('dns/pfb_dns_unbound_port');
+	return (is_string($port) && ctype_digit($port) && (string) (int) $port === $port && (int) $port >= 1025 && (int) $port <= 65534) ? $port : '5353';
+}
+
+/**
+ * Who holds a port of Unbound's backend pair that is not the live Unbound: one scan (pfb_dns_proxy_listening_sockets()) of P and P+1, and the first listening
+ * socket on 127.0.0.1, ::1 or a wildcard address (the addresses Unbound's clause binds, or a bind on them would meet) whose process is not the live
+ * Unbound pidfile's. A scan that fails names nobody.
+ *
+ * @return string|null `COMMAND (pid N) on ADDR:PORT` (a wildcard address is `*`), NULL when nobody holds the pair
+ */
+function pfb_dns_proxy_backend_holder(): ?string {
+	$port = pfb_dns_proxy_backend_port();
+	$pair = [$port, (string) ((int) $port + 1)];
+	$sockets = pfb_dns_proxy_listening_sockets(implode(',', $pair));
+	if ($sockets === NULL) {
+		return NULL;
+	}
+	$unbound = pfb_dns_proxy_unbound_pid();
+	foreach ($sockets as $socket) {
+		if (!in_array($socket['port'], $pair, TRUE) || !in_array($socket['host'], ['127.0.0.1', '::1', '*', '0.0.0.0', '::'], TRUE) ||
+		    ($socket['process'] === 'unbound' && $socket['pid'] === $unbound)) {
+			continue;
+		}
+		return "{$socket['process']} (pid {$socket['pid']}) on " .
+		    ($socket['host'] === '*' ? "*:{$socket['port']}" : pfb_dns_proxy_host_port($socket['host'], $socket['port']));
+	}
+	return NULL;
+}
+
+/**
+ * The PROXYv2 port of the lowest pair above the stored one that nothing uses: one scan (pfb_dns_proxy_listening_sockets()) of the next
+ * PFB_DNS_PROXY_BACKEND_SEARCH pairs, and the first P' from P+2 on (the new pair never overlaps the old) where neither P' nor P'+1 has a socket
+ * (any process, any address: Unbound's own too), is the Resolver's Listen Port, or is a configured DoT, DoH or DoQ port (whatever their toggle: it
+ * would be taken the moment the toggle is on). P'+1 stays a port.
+ *
+ * @return string|null NULL when no pair in the search is free, and when the scan fails: with no sight of the sockets no pair is known to be free
+ */
+function pfb_dns_proxy_backend_pick(): ?string {
+	$from = (int) pfb_dns_proxy_backend_port() + 2;
+	$last = min($from + PFB_DNS_PROXY_BACKEND_SEARCH - 1, 65534);
+	if ($last < $from) {
+		return NULL;
+	}
+	$sockets = pfb_dns_proxy_listening_sockets("{$from}-" . ($last + 1));
+	if ($sockets === NULL) {
+		return NULL;
+	}
+	$taken = [(int) pfb_dns_proxy_port() => TRUE];
+	foreach ($sockets as $socket) {
+		$taken[(int) $socket['port']] = TRUE;
+	}
+	foreach (['dot', 'doh', 'doq'] as $kind) {
+		foreach ([pfb_dns_proxy_setting("pfb_dns_{$kind}_port"), PfbConfig::read("dns_shared/pfb_dns_{$kind}_port6")] as $configured) {
+			if (($reserved = pfb_dns_proxy_listener_port($configured)) !== NULL) {
+				$taken[(int) $reserved] = TRUE;
+			}
+		}
+	}
+	for ($port = $from; $port <= $last; $port++) {
+		if (!isset($taken[$port]) && !isset($taken[$port + 1])) {
+			return (string) $port;
+		}
+	}
+	return NULL;
+}
+
+/**
  * Why a READY gateway's Unbound backend does not serve it, as the Service line and the startup notice both say it (issue #3848): the
- * Resolver is disabled (nothing starts it), another process holds the upstream port, or Unbound does not answer on the gateway's upstream.
+ * Resolver is disabled (nothing starts it), the gateway forwards to a pair Unbound has left (a move its restart has not followed yet), another
+ * process holds the upstream port, or Unbound does not answer on the gateway's upstream.
  *
  * @param array<string,mixed>|null $applied the gateway's validated applied status (pfb_dns_proxy_applied_status())
  * @return string|null NULL when Unbound serves the gateway, and with no status: without it there is no endpoint to check
@@ -6420,6 +6527,11 @@ function pfb_dns_proxy_backend_problem(?array $applied): ?string {
 	}
 	if (!config_path_enabled('unbound')) {
 		return 'the DNS Resolver is disabled';
+	}
+	// Not the pair Unbound is on: whoever holds the pair the gateway forwards to is no news, and the gateway is what is behind
+	$stored = pfb_dns_proxy_backend_port();
+	if (preg_match('/:([0-9]+)\z/', (string) ($applied['upstream'] ?? ''), $forwards) === 1 && $forwards[1] !== $stored) {
+		return "the gateway still forwards to port {$forwards[1]}, but Unbound's backend moved to port {$stored}; the next update restarts the gateway";
 	}
 	return $holder !== NULL
 	    ? "{$holder['process']} (pid {$holder['pid']}) holds Unbound's port {$holder['port']}"
@@ -6473,17 +6585,34 @@ function pfb_dns_proxy_await_ready(): bool {
 }
 
 /**
+ * A READY gateway whose Unbound upstream another process owns (pfb_dns_proxy_upstream_state() 'foreign', and that process the same scan's holder): move
+ * Unbound's backend pair off it (pfb_dns_proxy_backend_move(), issue #3848). Only a holder of the pair Unbound is on now counts: a gateway still
+ * forwarding to a pair Unbound has left is stale, not blocked, and the update pass restarts it (pfb_dns_proxy_ensure_running()).
+ *
+ * @return bool TRUE iff the pair moved and the gateway serves it
+ */
+function pfb_dns_proxy_backend_move_off_holder(): bool {
+	$holder = NULL;
+	if (!pfb_dns_proxy_ready() || pfb_dns_proxy_upstream_state(NULL, $holder) !== 'foreign' || $holder === NULL ||
+	    $holder['port'] !== pfb_dns_proxy_backend_port()) {
+		return FALSE;
+	}
+	return pfb_dns_proxy_backend_move("{$holder['process']} (pid {$holder['pid']}) on {$holder['at']} holds one of Unbound's loopback ports");
+}
+
+/**
  * After a requested start or restart, including the boot check or a tick's own restart (issue #3556): wait for it to become ready,
  * outside any lock, then check what the start left (pfb_dns_proxy_startup_check(): one notice for every problem). One that does not
  * become ready within the budget is checked the same way and stays: the Resolver stays moved, pfB-DNS keeps trying to serve, and only
- * the admin's own switches give the Resolver back (issue #3848).
+ * the admin's own switches give the Resolver back (issue #3848). The one cure that comes first: a ready gateway whose Unbound upstream a stranger
+ * owns has Unbound's backend pair moved off it (pfb_dns_proxy_backend_move_off_holder()), which restarts Unbound and the gateway.
  *
  * @param int|null $since the gateway log's size from before the start (pfb_dns_proxy_log_size()), so that a start that never became ready
  *        is blamed only for the gateway error it logged itself; NULL = nothing was started: the log's whole tail is read for it
  * @return bool TRUE iff the proxy serves (the gateway is ready and its Unbound upstream too)
  */
 function pfb_dns_proxy_confirm_ready(?int $since = NULL): bool {
-	if (pfb_dns_proxy_await_ready()) {
+	if (pfb_dns_proxy_await_ready() || pfb_dns_proxy_backend_move_off_holder()) {
 		pfb_dns_proxy_startup_check(TRUE, $since);
 		return TRUE;
 	}
@@ -6491,14 +6620,74 @@ function pfb_dns_proxy_confirm_ready(?int $since = NULL): bool {
 	return FALSE;
 }
 
-/** A start or restart this pass made waits for serving readiness; an existing gateway keeps its diagnostics and nothing else. */
+/**
+ * A start or restart this pass made waits for serving readiness; an existing gateway keeps its diagnostics, and has Unbound's backend pair moved off a
+ * stranger that owns its upstream (pfb_dns_proxy_backend_move_off_holder()).
+ */
 function pfb_dns_proxy_confirm_started(bool $started, ?int $since = NULL): bool {
 	if ($started) {
 		return pfb_dns_proxy_confirm_ready($since);
 	}
+	if (pfb_dns_proxy_backend_move_off_holder()) {
+		pfb_dns_proxy_startup_check(TRUE, $since);
+		return TRUE;
+	}
 	$ready = pfb_dns_proxy_ready();
 	pfb_dns_proxy_startup_check($ready, $since);
 	return $ready;
+}
+
+/**
+ * Move Unbound's loopback backend pair (PROXYv2 on P, plain on P+1) to a free one when another process holds a port of it (issue #3848): pick the lowest
+ * free pair above (pfb_dns_proxy_backend_pick()), store it and rewrite Unbound's clause in one write under the config lock
+ * (pfb_dns_proxy_resolver() with the port), regenerate the gateway's rc script (its --upstream) and unbound.conf, restart Unbound (pfSense's own
+ * regeneration, as the Resolver pass makes it), then restart the gateway if it runs and wait, bounded (PFB_DNS_PROXY_START_WAIT), for the live Unbound
+ * to own TCP and UDP on the new P and the gateway to forward to it. A gateway that does not run is left to the caller's start, which finds the new
+ * script. The Resolver is never restored: a move that cannot be made leaves everything as it was.
+ *
+ * Notice `pfBlockerNG DNS Proxy`: "<why>, so Unbound's backend moved from ports P/P+1 to P'/P'+1", with, when the gateway did not follow, that it is not
+ * forwarding to it yet and the next update retries (the update pass restarts a gateway whose upstream is not the stored pair); no free pair, or a scan that
+ * cannot be made, says so and changes nothing. Not made, and quietly so: while the Resolver is disabled (nothing would take the new pair), under a
+ * package operation (nothing restarts under one, and the next pass outside it moves), and a second time in one pass.
+ *
+ * @param string $why what forces the move, a clause that follows "pfB-DNS: ", e.g. "nc (pid 6161) on 127.0.0.1:5353 holds one of Unbound's loopback ports"
+ * @return bool TRUE iff the pair moved and, when the gateway runs, it forwards to the new one
+ */
+function pfb_dns_proxy_backend_move(string $why): bool {
+	global $pfb;
+
+	if (!config_path_enabled('unbound') || pfb_dns_proxy_restart_deferred() || !empty($pfb['dns_proxy_backend_move_tried'])) {
+		return FALSE;
+	}
+	$pfb['dns_proxy_backend_move_tried'] = TRUE;
+	$from = pfb_dns_proxy_backend_port();
+	$plain = (int) $from + 1;
+	$to = pfb_dns_proxy_backend_pick();
+	if ($to === NULL) {
+		pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', "pfB-DNS: {$why}, and there is no free loopback port pair above {$from} for Unbound's backend, so nothing was moved. " .
+		    'Free the port, or stop the process that holds it.', '/services_unbound.php');
+		return FALSE;
+	}
+	$now = (int) $to + 1;
+	$unsafe = NULL;
+	pfb_dns_proxy_resolver(TRUE, $unsafe, $to);
+	if (pfb_dns_proxy_backend_port() !== $to) {
+		pfb_logger("\nUnbound's backend could not be moved from ports {$from}/{$plain} to {$to}/{$now} ({$why}): the Resolver settings were not written", 2);
+		return FALSE;
+	}
+	pfb_logger("\nMoving Unbound's backend from ports {$from}/{$plain} to {$to}/{$now}: {$why}", 1);
+	$running = pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE);
+	pfb_dns_proxy_service();
+	services_unbound_configure(FALSE);
+	$followed = TRUE;
+	if ($running) {
+		restart_service('pfb_dns_proxy');
+		unlink_if_exists($pfb['dns_proxy_restart_pending']);
+		$followed = pfb_dns_proxy_await_ready();
+	}
+	pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', "pfB-DNS: {$why}, so Unbound's backend moved from ports {$from}/{$plain} to {$to}/{$now}" .
+	    ($followed ? '.' : ', but the gateway is not forwarding to it yet; the next update retries.'), '/services_unbound.php');
+	return $followed;
 }
 
 /**
@@ -6816,7 +7005,7 @@ function pfb_dns_proxy_gateway_changed(string $proxyDir): bool {
  * answers (every `--dns-name-answer` and `--ddr-doh-443`) is reconciled
  * live by pfb_dns_proxy_listeners_sync() while the proxy is READY and its gateway lists what it serves on its control socket: the pass
  * asks once (pfb_dns_proxy_applied_status()) and the sync acts on that inventory. An address-only rc change that cannot be reconciled
- * restarts the pair. A start/restart this pass made, or positively confirmed foreign upstream ownership, takes the existing confirmation.
+ * restarts the pair. A start/restart this pass made takes the existing confirmation.
  *
  * Under a package operation (pfb_dns_proxy_restart_deferred()) a live proxy is never restarted: a changed rc script is recorded as a
  * pending restart (pfb_dns_proxy_defer_restart()), and nothing else is looked at. The next pass outside one restarts the whole pair
@@ -6827,7 +7016,10 @@ function pfb_dns_proxy_gateway_changed(string $proxyDir): bool {
  * adds, live, an address the gateway could not assign when it started and the box can bind now (issue #3598), and restarts the pair only when
  * the gateway does not take a change: looked for only while READY, and never under a package operation.
  *
- * A pass that started or restarted nothing leaves the gateway running whatever its status or backend say. The shared
+ * Unbound's backend pair first (issue #3848): a process on it moves Unbound to a free pair before anything starts or restarts onto it
+ * (pfb_dns_proxy_backend_move(), which restarts the gateway it moved if it runs). A running, READY gateway whose applied upstream is not the stored pair
+ * (the Resolver pass moved the pair for a Listen Port on it, or an earlier move's restart was not followed) is restarted onto it, unless a move this
+ * pass already restarted it. Otherwise a pass that started or restarted nothing leaves the gateway running whatever its status or backend say. The shared
  * pfb_dns_proxy_confirm_started() files the startup notice and returns marker readiness for it; a start or restart this pass made waits
  * for serving readiness (pfb_dns_proxy_confirm_ready()). Neither gives the Resolver back: only the admin's own switches do.
  *
@@ -6843,6 +7035,10 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 	// Our block with no snapshot: nothing valid to serve and no listen addresses to write, so nothing is started
 	if (pfb_dns_proxy_saved() === NULL) {
 		return FALSE;
+	}
+	$holder = pfb_dns_proxy_backend_holder();
+	if ($holder !== NULL) {
+		pfb_dns_proxy_backend_move("{$holder} holds one of Unbound's loopback ports");
 	}
 	$before = @file_get_contents(PFB_DNS_PROXY_RCFILE);
 	pfb_dns_proxy_service($proxyDir);
@@ -6872,6 +7068,9 @@ function pfb_dns_proxy_ensure_running(string $proxyDir = PFB_DNS_PROXY_DIR): boo
 			$applied = pfb_dns_proxy_applied_status();
 			if (pfb_dns_proxy_gateway_changed($proxyDir)) {
 				$why = 'the package installed another gateway';
+			} elseif ($holder === NULL && isset($applied['upstream']) &&
+			    $applied['upstream'] !== pfb_dns_proxy_host_port(pfb_dns_proxy_upstream_address(), pfb_dns_proxy_backend_port())) {
+				$why = 'Unbound\'s backend pair moved to port ' . pfb_dns_proxy_backend_port();
 			} elseif (($served = pfb_dns_proxy_applied_listeners($applied)) === NULL && $rc_changed) {
 				$why = 'its listen addresses changed';
 			} else {
@@ -17072,12 +17271,17 @@ function pfb_dns_proxy_unmoved_effect(bool $fronted): string {
 	    (pfb_dnsbl_active() ? ': DNSBL does not block until pfB-DNS is active.' : '.');
 }
 
-/** The DNS proxy's loopback port (5353 or 5354) that the Resolver's Listen Port takes, or NULL when it takes neither. */
-function pfb_dns_proxy_listen_port_conflict(): ?string {
+/**
+ * The port of Unbound's loopback backend pair (P or P+1) that the Resolver's Listen Port takes, or NULL when it takes neither.
+ *
+ * @param string|null $backend the pair's PROXYv2 port to test; NULL = the stored one (pfb_dns_proxy_backend_port())
+ */
+function pfb_dns_proxy_listen_port_conflict(?string $backend = NULL): ?string {
 	$listen_port = (int) config_get_path('unbound/port', 0);
-	foreach ([PFB_DNS_PROXY_UNBOUND_PORT, PFB_DNS_PROXY_UNBOUND_PLAIN_PORT] as $own_port) {
-		if ($listen_port === (int) $own_port) {
-			return $own_port;
+	$backend = (int) ($backend ?? pfb_dns_proxy_backend_port());
+	foreach ([$backend, $backend + 1] as $own_port) {
+		if ($listen_port === $own_port) {
+			return (string) $own_port;
 		}
 	}
 	return NULL;
@@ -17193,12 +17397,13 @@ function pfb_dns_proxy_backend_disabled_notice(): bool {
  * ON snapshots the PFB_DNS_PROXY_RESOLVER_KEYS (presence and value) once, then sets
  * active_interface lo0, drops enablessl (the proxy terminates DoT) and appends our block to custom_options: pfSense
  * writes that text after its forward-zone block, so a bare line (first or last) would be a syntax error, and a server
- * clause opened last is valid wherever the user's own text ends. The block sets `port: 5354` (a later `port:` overrides
+ * clause opened last is valid wherever the user's own text ends. The block sets `port: P+1` (a later `port:` overrides
  * the earlier one for every interface line without its own port, so Unbound leaves loopback <Listen Port> to the
- * proxy), has Unbound listen on 127.0.0.1 and ::1 port 5353 for the proxy's PROXYv2 stream and grants the IPv6 networks
+ * proxy), has Unbound listen on 127.0.0.1 and ::1 port P for the proxy's PROXYv2 stream (P is the stored backend port,
+ * pfb_dns_proxy_backend_port(), 5353 until a move) and grants the IPv6 networks
  * pfSense would no longer (see pfb_dns_proxy_acl_networks()); it is rewritten in place when the networks changed or
  * it predates the port line, and is found by its marker lines, never by a user's own PROXYv2 setup. A refused move is
- * announced with a notice, and nothing is changed: a Listen Port of 5353 or 5354; a directive of the admin's own in Custom
+ * announced with a notice, and nothing is changed: a Listen Port on P or P+1 with no free pair to move the pair to; a directive of the admin's own in Custom
  * Options that could take a listener, a second port or another file (any `interface`, `port` or `include` line, comments
  * aside: see pfb_dns_proxy_directive_text()); a quote or backslash left open at a line's end; our marker lines that are not
  * exactly one complete block (a partial or repeated pair is never cut); values that cannot be stored verbatim; our
@@ -17226,19 +17431,22 @@ function pfb_dns_proxy_backend_disabled_notice(): bool {
  * pfB-DNS in use, issue #3559: a box that never enabled it gets no notice). A write that config.xml does not take
  * is no change: this process's copy is read again from the file, FALSE is returned, and the same notice is raised.
  *
- * ON with the Resolver already moved reports a conflicting Listen Port through $unsafe_line without changing the snapshot.
- * The caller says so in a notice: nothing is restored, and the admin's selected port stays.
+ * ON with a Listen Port on a port of Unbound's backend pair (pfb_dns_proxy_backend_port(), P or P+1) moves the pair to a free one instead of refusing the
+ * takeover or leaving the Resolver as it is (issue #3848): the new pair is stored with the clause in the same write, and a notice names the Listen Port.
+ * With no free pair the takeover is refused, and a Resolver already moved reports the Listen Port through $unsafe_line without changing the snapshot:
+ * the caller says so in a notice, nothing is restored, and the admin's selected port stays.
  * It reads the admin's Custom Options the same way, but an `interface`, `port` or `include` line is reported through
  * $unsafe_line instead of refused there: the saved copy takes the admin's text as it stands (our block cut out), so that a
  * restore the admin asks for later keeps the line, and the caller says so in a notice. While the Advanced page's EDNS
  * size is automatic and nothing of the admin's sets one, the clause also carries `edns-buffer-size:` for pfB-DNS's plain DNS interface list (dns/pfb_dns_interface)
  * (pfb_dns_proxy_edns_line()): the Resolver on lo0 would otherwise advertise the loopback MTU.
  *
- * @param string|null $unsafe_line set to the admin's own setting that conflicts after the move: the Listen Port (FALSE is returned,
- *        nothing changed) or a Custom Options line (TRUE is returned: the saved copy changed; NULL and FALSE when config.xml did not take that)
+ * @param string|null $unsafe_line set to the admin's own setting that conflicts after the move: the Listen Port when no free pair is left to move the
+ *        backend to (FALSE is returned, nothing changed) or a Custom Options line (TRUE is returned: the saved copy changed; NULL and FALSE when config.xml did not take that)
+ * @param string|null $backend_port the PROXYv2 port of the pair to store with the clause, for a move that pfb_dns_proxy_backend_move() has picked; NULL = the stored pair
  * @return bool TRUE iff config.xml changed (write_config was called once and config.xml took it).
  */
-function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
+function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL, ?string $backend_port = NULL): bool {
 	$lock = pfb_dns_config_lock();
 	if ($lock === NULL) {
 		if ($on) {
@@ -17251,7 +17459,7 @@ function pfb_dns_proxy_resolver(bool $on, ?string &$unsafe_line = NULL): bool {
 		return FALSE;
 	}
 	try {
-		$changed = pfb_dns_proxy_resolver_locked($on, $unsafe_line);
+		$changed = pfb_dns_proxy_resolver_locked($on, $unsafe_line, $backend_port);
 		pfb_dns_listen_vips_apply();
 	} finally {
 		unlock($lock);
@@ -17386,8 +17594,9 @@ function pfb_dns_proxy_edns_line(string $admin_code): ?string {
  * @param string|null $unsafe_line set to the admin's own setting that conflicts with the proxy on a Resolver that is already moved,
  *        instead of the refusal a move that has not happened yet gets: "Listen Port {port}" (FALSE returned, nothing changed), or
  *        an interface:, port: or include: line of the admin's in Custom Options (TRUE returned: the saved copy changed)
+ * @param string|null $backend_port the pair's PROXYv2 port to store with the clause (a move pfb_dns_proxy_backend_move() has picked); NULL = the stored one
  */
-function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): bool {
+function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL, ?string $backend_port = NULL): bool {
 	global $pfb;
 
 	$saved = pfb_dns_proxy_saved();
@@ -17441,18 +17650,27 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 		return TRUE;
 	}
 
-	// Our clause gives Unbound loopback ports 5353 (PROXYv2) and 5354 (plain, through a later `port:`). A Listen Port,
-	// interface line or `port:` line of the admin's that meets them makes Unbound exit at start ("address already in
-	// use") or listen elsewhere, although unbound-checkconf passes.
-	$own_port = pfb_dns_proxy_listen_port_conflict();
+	// Our clause gives Unbound a pair of loopback ports: P (PROXYv2) and P+1 (plain, through a later `port:`). A Listen Port, interface
+	// line or `port:` line of the admin's that meets them makes Unbound exit at start ("address already in use") or listen elsewhere,
+	// although unbound-checkconf passes. A Listen Port on the pair moves the pair to a free one (issue #3848), stored with the clause in the
+	// one write below; with none free it is refused before the takeover, and reported to the caller after it.
+	$was = pfb_dns_proxy_backend_port();
+	$backend = $backend_port ?? $was;
+	$forced = NULL;
+	$own_port = pfb_dns_proxy_listen_port_conflict($backend);
 	if ($own_port !== NULL) {
-		if ($saved !== NULL) {
+		$picked = pfb_dns_proxy_backend_pick();
+		if ($picked !== NULL) {
+			$forced = "the DNS Resolver's Listen Port is {$own_port}, one of Unbound's loopback ports";
+			$backend = $picked;
+		} elseif ($saved !== NULL) {
 			// Set after the move: reported to the caller, which says so in a notice and changes nothing
 			$unsafe_line = "Listen Port {$own_port}";
 			return FALSE;
+		} else {
+			return pfb_dns_proxy_refuse("the DNS Resolver's Listen Port is {$own_port}, a loopback port the DNS proxy gives Unbound, and no free pair of loopback ports " .
+			    'was found to move it to; set the Listen Port to another port (the default is 53)');
 		}
-		return pfb_dns_proxy_refuse("the DNS Resolver's Listen Port is {$own_port}, a loopback port the DNS proxy gives Unbound; " .
-		    'set the Listen Port to another port (the default is 53)');
 	}
 	// pfBlockerNG's block is cut out only when the marker lines are exactly one complete block: a start line, then an end
 	// line, each found once and alone on its line (trimmed and exact alike), in that order. Anything else is refused whole,
@@ -17514,7 +17732,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 			    'remove the line and choose the addresses in Network Interfaces');
 		}
 		return pfb_dns_proxy_refuse('the DNS Resolver\'s Custom Options contain "' . $name . ':", and every port: line is refused: the DNS ' .
-		    'proxy sets port: to ' . PFB_DNS_PROXY_UNBOUND_PLAIN_PORT . ' for Unbound, and the Listen Port field sets the port: remove that line');
+		    'proxy sets port: to ' . ((int) $backend + 1) . ' for Unbound, and the Listen Port field sets the port: remove that line');
 	}
 
 	$changed = FALSE;
@@ -17559,12 +17777,13 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 		$changed = TRUE;
 	}
 
-	$lines = ['server:', PFB_DNS_PROXY_MARKER, 'port: ' . PFB_DNS_PROXY_UNBOUND_PLAIN_PORT];
+	$plain = (int) $backend + 1;
+	$lines = ['server:', PFB_DNS_PROXY_MARKER, "port: {$plain}"];
 	if (pfb_dns_proxy_upstream_address() === '127.0.0.1') {
-		$lines[] = 'interface: 127.0.0.1@' . PFB_DNS_PROXY_UNBOUND_PORT;
+		$lines[] = "interface: 127.0.0.1@{$backend}";
 	}
-	$lines[] = 'interface: ::1@' . PFB_DNS_PROXY_UNBOUND_PORT;
-	$lines[] = 'proxy-protocol-port: ' . PFB_DNS_PROXY_UNBOUND_PORT;
+	$lines[] = "interface: ::1@{$backend}";
+	$lines[] = "proxy-protocol-port: {$backend}";
 	$size_line = pfb_dns_proxy_edns_line($code);
 	if ($size_line !== NULL) {
 		$lines[] = $size_line;
@@ -17574,6 +17793,10 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 	}
 	$lines[] = PFB_DNS_PROXY_MARKER_END;
 	$block = implode("\n", $lines);
+	if ($backend !== pfb_dns_proxy_backend_port()) {
+		PfbConfig::writeSystem('dns/pfb_dns_unbound_port', $backend);
+		$changed = TRUE;
+	}
 
 	if (!str_contains($custom, $block)) {
 		// An older block (other networks, or cut short by an edit) is replaced where it stands; otherwise ours goes last.
@@ -17596,6 +17819,10 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL): 
 			return FALSE;
 		}
 		pfb_logger("\n{$log}", 1);
+		if ($forced !== NULL) {
+			pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', "pfB-DNS: {$forced}, so Unbound's backend moved from ports {$was}/" . ((int) $was + 1) .
+			    " to {$backend}/{$plain}.", '/services_unbound.php');
+		}
 	}
 	return $changed;
 }
@@ -17619,7 +17846,8 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	// forwards, and the one script that makes pfSense run the boot hook (pfb_upstream_observer_include.inc) which starts pfB-DNS
 	// early. Without that ownership Unbound runs no pfBlockerNG python at all, and a stored 'pfb_unbound' is removed below.
 	// Nothing here gives the Resolver back unless pfB-DNS is turned off: a Resolver disabled under pfB-DNS (pfb_dns_wanted() is FALSE only for
-	// that), an unsafe Custom Options line and a Listen Port on a proxy port set after the move each raise a notice and leave it moved.
+	// that), an unsafe Custom Options line and a Listen Port on Unbound's backend pair with no free pair to move it to, set after the move, each raise
+	// a notice and leave it moved; a Listen Port on the pair with a free one moves the pair (pfb_dns_proxy_resolver_locked(), issue #3848).
 	$unsafe_line = NULL;
 	$moved = !pfb_dns_proxy_backend_disabled_notice() && pfb_dns_proxy_resolver($dns_wanted ?? pfb_dns_wanted(), $unsafe_line);
 	if ($unsafe_line !== NULL) {

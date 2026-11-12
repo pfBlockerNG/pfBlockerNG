@@ -2446,6 +2446,16 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
 		],
 
+		// issue #3848: the PROXYv2 port P of the loopback pair Unbound's backend lives on (the plain port is P+1), moved by
+		// pfb_dns_proxy_backend_move() off a process that holds the pair or a Listen Port on it; read via pfb_dns_proxy_backend_port().
+		'dns/pfb_dns_unbound_port' => [
+			'default'       => '5353',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'sync'          => 'local',
+			'no_grandfather' => 'new key; absent reads 5353, the pair every earlier release gave Unbound, so a node that never moved it behaves as before; a per-node port of this node\'s own sockets, never synced',
+		],
+
 		// issue #3513: DoH / DoQ default off; only their interface lists remain node-local (#3649).
 		'dns_shared/pfb_dns_doh' => [
 			'default'       => '',

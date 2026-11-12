@@ -1,0 +1,563 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/DnsProxyMovedResolverFixtureTrait.php';
+
+use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * issue #3848 -- Unbound's loopback backend pair (PROXYv2 on P, plain on P+1, from 5353/5354) moves instead of failing: when another process
+ * holds a port of the pair, or the Resolver's Listen Port is P or P+1, pfBlockerNG picks a free pair, stores it (`dns/pfb_dns_unbound_port`), writes
+ * it into Unbound's clause and the gateway's --upstream, restarts Unbound and the gateway, and waits for the live Unbound to own the new P. A notice
+ * names the holder (or the Listen Port). Nothing here restores the Resolver, and the gateway is never started or left forwarding to a port the live
+ * Unbound does not own when the pass can see that.
+ *
+ * The box: the real takeover pass moved the Resolver; the sockets are the sockstat double's rows, which the configure hook rewrites the way a restarted
+ * Unbound would (it binds the pair its regenerated clause names); the gateway is the stand-in whose upstream follows the rc script a restart runs.
+ */
+#[CoversFunction('pfb_dns_proxy_backend_move')]
+#[CoversFunction('pfb_dns_proxy_backend_holder')]
+#[CoversFunction('pfb_dns_proxy_backend_problem')]
+#[CoversFunction('pfb_dns_proxy_confirm_ready')]
+#[CoversFunction('pfb_dns_proxy_confirm_started')]
+#[CoversFunction('pfb_dns_proxy_ensure_running')]
+#[CoversFunction('pfb_dns_proxy_resolver')]
+#[CoversFunction('pfb_dns_proxy_service')]
+#[CoversFunction('pfb_unbound_python')]
+final class DnsProxyBackendMoveTest extends TestCase
+{
+	use DnsProxyMovedResolverFixtureTrait;
+
+	private const PORT = 'installedpackages/pfblockerngdns/config/0/pfb_dns_unbound_port';
+
+	/** @var list<string> what asked for Unbound or the gateway to (re)start, in order: `configure` is services_unbound_configure() */
+	private array $events = [];
+	/** @var list<?string> the --upstream the rc script carried at each start or restart of the gateway */
+	private array $upstreamAtStart = [];
+	/** @var list<string> sockstat rows of processes that are not Unbound */
+	private array $foreign = [];
+	/** @var list<int> the ports the live Unbound listens on (TCP and UDP, 127.0.0.1) */
+	private array $unboundPorts = [];
+	private int $unboundPid = 5151;
+	/** Whether a start or restart makes the gateway serve what its rc script says; FALSE leaves it as it was, so it never follows a move. */
+	private bool $gatewayFollows = TRUE;
+
+	// -----------------------------------------------------------------------
+	// The box
+	// -----------------------------------------------------------------------
+
+	/** The moved Resolver, Unbound on the default pair, and the doubles that carry a move through: Unbound binds its clause's pair, the gateway its rc script's upstream. */
+	private function box(bool $dnsbl = TRUE, array $resolver = [], bool $takeover = TRUE): void
+	{
+		$this->activate($dnsbl, $resolver, $takeover);
+		if (!$dnsbl) {
+			$this->useMountState(FALSE);
+		}
+		$this->behaviour = 'serves';
+		$fixture = $GLOBALS['pfb_test_service_hook'];
+		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use ($fixture): void {
+			if ($service !== 'pfb_dns_proxy' || !in_array($fn, ['start_service', 'restart_service'], TRUE)) {
+				$fixture($fn, $service);
+				return;
+			}
+			$this->events[] = $fn;
+			$this->proxyCalls[] = $fn;
+			$this->upstreamAtStart[] = $this->rcUpstream();
+			if ($this->gatewayFollows) {
+				// A gateway that comes up serves what its rc script names: that upstream, and those listeners
+				$this->proxyServes();
+				$this->standInsStop();
+				$this->seedRunningGateway('4242', $this->rcUpstream());
+			}
+		};
+		$GLOBALS['pfb_test_unbound_configure_hook'] = function (): void {
+			$this->events[] = 'configure';
+			$port = $this->clausePort();
+			if ($port !== NULL) {
+				$this->unboundPid++;
+				$this->unboundPorts = [$port, $port + 1];
+			}
+			$this->publishSockets();
+		};
+		$this->unboundPorts = [5353, 5354];
+		$this->publishSockets();
+	}
+
+	/** The Unbound pid and the sockets as the doubles show them: the foreign rows, and the live Unbound's own on its ports. */
+	private function publishSockets(): void
+	{
+		$rows = $this->foreign;
+		foreach ($this->unboundPorts as $port) {
+			foreach (['tcp4', 'udp4'] as $protocol) {
+				$rows[] = "unbound unbound {$this->unboundPid} 3 {$protocol} 127.0.0.1:{$port} *:*";
+			}
+		}
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'],
+			"USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n" . implode('', array_map(static fn (string $row): string => "{$row}\n", $rows)));
+		file_put_contents($this->unboundPidfile(), "{$this->unboundPid}\n");
+		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = TRUE;
+	}
+
+	/** The pair the Resolver's clause asks Unbound to bind (its `proxy-protocol-port:` line), NULL when the clause is gone. */
+	private function clausePort(): ?int
+	{
+		return preg_match('/^proxy-protocol-port: (\d+)$/m', $this->customText(), $match) === 1 ? (int) $match[1] : NULL;
+	}
+
+	/** The --upstream of the rc script the gateway would start with. */
+	private function rcUpstream(): ?string
+	{
+		return preg_match("/ --upstream '([^']+)'/", (string) @file_get_contents(PFB_DNS_PROXY_RCFILE), $match) === 1 ? $match[1] : NULL;
+	}
+
+	private static function row(string $command, int $pid, string $protocol, string $local): string
+	{
+		return "root {$command} {$pid} 3 {$protocol} {$local} *:*";
+	}
+
+	/** Another process holds sockets; Unbound, which could not bind where they are, holds none (its process lives on). */
+	private function foreignHolds(string ...$rows): void
+	{
+		$this->foreign = $rows;
+		$this->unboundPorts = [];
+		$this->publishSockets();
+	}
+
+	/** The gateway runs, forwards to the default pair and holds the certificate it serves with. */
+	private function gatewayRuns(): void
+	{
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$this->assertNull(pfb_dns_proxy_certificate_export(), 'before: the certificate the gateway holds is exported');
+		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
+	}
+
+	/** @return list<array<string,mixed>> the notices filed under $id */
+	private function noticesOf(string $id): array
+	{
+		return array_values(array_filter($this->notices(), static fn (array $notice): bool => $notice['id'] === $id));
+	}
+
+	/** Unbound's backend lives on $port/$port+1 now: stored, in the clause, in the rc script, and the live Unbound owns it. */
+	private function assertBackendOn(int $port, string $why): void
+	{
+		$this->assertSame((string) $port, (string) config_get_path(self::PORT), "{$why}: the pair is stored");
+		$this->assertSame((string) $port, pfb_dns_proxy_backend_port(), "{$why}: and read back");
+		$lines = $this->customLines();
+		foreach (['port: ' . ($port + 1), "interface: 127.0.0.1@{$port}", "interface: ::1@{$port}", "proxy-protocol-port: {$port}"] as $line) {
+			$this->assertContains($line, $lines, "{$why}: the clause carries '{$line}'");
+		}
+		$this->assertSame("127.0.0.1:{$port}", $this->rcUpstream(), "{$why}: the gateway's --upstream names it");
+	}
+
+	/** Nothing gave the Resolver back: the snapshot is byte for byte what the takeover stored and the Resolver stays moved onto loopback. */
+	private function assertStillMoved(string $snapshot, string $why): void
+	{
+		$this->assertSame('on', $this->toggleStored(), "{$why}: pfB-DNS stays on");
+		$this->assertSame($snapshot, (string) config_get_path(self::SAVED, ''), "{$why}: the snapshot is kept byte for byte");
+		$this->assertNotNull(pfb_dns_proxy_saved(), "{$why}: the Resolver is still moved");
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'), "{$why}: and on loopback");
+		$this->assertSame([], array_values(array_intersect($this->proxyCalls, ['stop_service', 'rc stop'])), "{$why}: the proxy was never stopped");
+		$texts = implode("\n", array_column($this->notices(), 'notice'));
+		$this->assertStringNotContainsStringIgnoringCase('restored', $texts, "{$why}: no notice says the Resolver was given back");
+	}
+
+	// -----------------------------------------------------------------------
+	// (a) the update pass: a holder on the pair moves Unbound first
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{string,string}> the sockets a stranger holds, and how the notice names them */
+	public static function holdersOfThePair(): array
+	{
+		return [
+			'a TCP listener on P' => [self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'), 'nc (pid 6161) on 127.0.0.1:5353'],
+			'a UDP socket on P' => [self::row('dnsmasq', 777, 'udp4', '127.0.0.1:5353'), 'dnsmasq (pid 777) on 127.0.0.1:5353'],
+			'a listener on P+1' => [self::row('nc', 6161, 'tcp4', '127.0.0.1:5354'), 'nc (pid 6161) on 127.0.0.1:5354'],
+			'a wildcard listener' => [self::row('nc', 6161, 'tcp4', '*:5353'), 'nc (pid 6161) on *:5353'],
+			'an IPv6 loopback listener' => [self::row('nc', 6161, 'tcp6', '[::1]:5353'), 'nc (pid 6161) on [::1]:5353'],
+		];
+	}
+
+	#[DataProvider('holdersOfThePair')]
+	public function testAHolderOfThePairMovesUnboundToAFreePairAndTheRunningGatewayFollows(string $socket, string $named): void
+	{
+		// Given a serving gateway on the default pair, and another process that holds a port of it, so Unbound owns nothing there
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds($socket);
+		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'before: Unbound does not serve the gateway');
+		$snapshot = (string) config_get_path(self::SAVED, '');
+
+		// When the update pass checks the proxy
+		$this->assertTrue(pfb_dns_proxy_ensure_running(), 'the proxy serves in the end');
+
+		// Then Unbound's backend is on the lowest free pair above, in every place it is written, restarted once and followed by the gateway once
+		$this->assertBackendOn(5355, 'after the move');
+		$this->assertSame(['configure', 'restart_service'], $this->events, 'Unbound first, then the gateway');
+		$this->assertCount(1, $GLOBALS['pfb_test_unbound_configure_calls'], 'Unbound was regenerated once');
+		$this->assertSame(['127.0.0.1:5355'], $this->upstreamAtStart, 'the gateway restarted with the new --upstream');
+		$this->assertSame('ready', pfb_dns_proxy_upstream_state(), 'the live Unbound owns TCP and UDP on the new P');
+		$this->assertTrue(pfb_dns_proxy_serving_ready());
+		$this->assertStillMoved($snapshot, 'after the move');
+
+		// ... one notice names the holder and the move, and nothing else is filed
+		$notices = $this->noticesOf('pfBlockerNG DNS Proxy');
+		$this->assertCount(1, $notices);
+		$this->assertSame('/services_unbound.php', $notices[0]['url']);
+		$this->assertStringContainsString($named, $notices[0]['notice']);
+		$this->assertStringContainsString("so Unbound's backend moved from ports 5353/5354 to 5355/5356", $notices[0]['notice']);
+		$this->assertStringNotContainsString('not forwarding', $notices[0]['notice'], 'the gateway followed');
+		$this->assertSame(['pfBlockerNG DNS Proxy'], array_values(array_unique(array_column($this->notices(), 'id'))), 'no startup problem is left');
+	}
+
+	public function testALaterPassKeepsTheMovedPairAndMovesNothingAgain(): void
+	{
+		// Given a move that happened
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'));
+		pfb_dns_proxy_ensure_running();
+		$this->assertBackendOn(5355, 'before');
+		$writes = count($GLOBALS['pfb_test_write_config_calls']);
+		$events = $this->events;
+
+		// When later passes run: the update pass, the Resolver pass and the cron tick, with the stranger still on the old pair
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+		pfb_unbound_python('enabled', TRUE);
+		$this->tick();
+
+		// Then the pair stays, config.xml is not written, and neither Unbound nor the gateway is restarted
+		$this->assertBackendOn(5355, 'after later passes');
+		$this->assertCount($writes, $GLOBALS['pfb_test_write_config_calls'], 'config.xml was not written again');
+		$this->assertSame($events, $this->events, 'nothing was restarted again');
+		$this->assertCount(1, $this->noticesOf('pfBlockerNG DNS Proxy'), 'and the notice is not filed again');
+	}
+
+	public function testAHolderBeforeTheGatewayStartsMovesUnboundFirstAndTheGatewayStartsWithTheNewUpstream(): void
+	{
+		// Given no gateway running yet, and a stranger on Unbound's port
+		$this->box();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'));
+		$this->assertFalse(pfb_dns_proxy_running(), 'before: no gateway');
+
+		// When the update pass starts the proxy
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+
+		// Then it starts once, after Unbound moved, with the new --upstream: never onto a port the live Unbound does not own
+		$this->assertSame(['configure', 'start_service'], $this->events);
+		$this->assertSame(['127.0.0.1:5355'], $this->upstreamAtStart);
+		$this->assertBackendOn(5355, 'after the start');
+		$this->assertTrue(pfb_dns_proxy_serving_ready());
+	}
+
+	public function testAMoveCarriesTheSavedMarkerAndEveryOtherKeyOfTheMovedResolverThrough(): void
+	{
+		// Given a moved Resolver with the admin's own Custom Options, and a stranger on the pair
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'));
+		$before = config_get_path('unbound');
+		$snapshot = (string) config_get_path(self::SAVED, '');
+
+		pfb_dns_proxy_ensure_running();
+
+		// Then only the clause inside the pair's markers changed: the admin's lines, the keys, and the snapshot are as they were
+		$after = config_get_path('unbound');
+		$this->assertSame(array_diff_key($before, ['custom_options' => 1]), array_diff_key($after, ['custom_options' => 1]), 'every other Resolver key');
+		$admin = static fn (string $options): string => (string) preg_replace('/^server:\n# pfBlockerNG DNS proxy\n.*?^# end pfBlockerNG DNS proxy$/ms', '', (string) base64_decode($options, TRUE));
+		$this->assertSame($admin($before['custom_options']), $admin($after['custom_options']), 'the admin\'s Custom Options outside our block');
+		$this->assertNotSame($before['custom_options'], $after['custom_options'], 'and the block moved');
+		$this->assertSame($snapshot, (string) config_get_path(self::SAVED, ''), 'the snapshot');
+	}
+
+	public function testAHolderIsNotMovedFromWhileTheResolverIsDisabled(): void
+	{
+		// Given the admin disabled the Resolver (nothing starts Unbound), and a process on 5353
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'));
+		$this->disableTheResolver();
+		$resolver = config_get_path('unbound');
+
+		// When the update pass runs
+		pfb_dns_proxy_ensure_running();
+
+		// Then nothing moves: no Unbound would take the new pair
+		$this->assertSame('5353', pfb_dns_proxy_backend_port());
+		$this->assertSame($resolver, config_get_path('unbound'));
+		$this->assertSame([], $this->events);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	public function testNoFreePairIsSaidAndNothingIsChanged(): void
+	{
+		// Given a stranger on the pair and a socket on every port the search could use
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'),
+			...array_map(static fn (int $port): string => self::row('nc', 6162, 'udp4', "127.0.0.1:{$port}"), range(5355, 5419)));
+		$resolver = config_get_path('unbound');
+
+		// When the update pass runs
+		pfb_dns_proxy_ensure_running();
+
+		// Then nothing is moved, written or restarted, and the notice says why not
+		$this->assertSame('5353', pfb_dns_proxy_backend_port());
+		$this->assertSame($resolver, config_get_path('unbound'));
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'config.xml was not written');
+		$this->assertSame([], $this->events, 'nothing was restarted');
+		$this->assertSame([], $this->proxyCalls);
+		$notice = $this->noticesOf('pfBlockerNG DNS Proxy');
+		$this->assertCount(1, $notice);
+		$this->assertStringContainsString('nc (pid 6161) on 127.0.0.1:5353', $notice[0]['notice']);
+		$this->assertStringContainsString('no free loopback port pair above 5353', $notice[0]['notice']);
+		$this->assertStringContainsString('nothing was moved', $notice[0]['notice']);
+		$this->assertSame(1, substr_count((string) @file_get_contents($GLOBALS['pfb']['errlog']), 'nothing was moved'), 'one attempt in a pass, though the same pass checks the gateway again afterwards');
+		// ... and the Service line says the backend does not answer, naming the holder, since it is still the case
+		pfb_global();
+		$this->assertSame('Resolver backend not answering: nc (pid 6161) holds Unbound\'s port 5353', pfb_dns_status()['service']);
+	}
+
+	public function testAScanThatCannotBeMadeMovesNothing(): void
+	{
+		// Given a stranger on the pair but a sockstat that fails: no pair is known to be free
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'));
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
+
+		pfb_dns_proxy_ensure_running();
+
+		$this->assertSame('5353', pfb_dns_proxy_backend_port());
+		$this->assertSame([], $this->events);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+	}
+
+	// -----------------------------------------------------------------------
+	// A move the gateway does not follow
+	// -----------------------------------------------------------------------
+
+	public function testAGatewayThatDoesNotFollowIsSaidNotToForwardYetAndTheStatusNamesTheNewSituation(): void
+	{
+		// Given a stranger on the pair, and a gateway that does not come back on the new one
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'), self::row('nc', 6161, 'udp4', '127.0.0.1:5353'));
+		$this->gatewayFollows = FALSE;
+		$snapshot = (string) config_get_path(self::SAVED, '');
+
+		// When the update pass runs
+		pfb_dns_proxy_ensure_running();
+
+		// Then Unbound moved, the pass restarted the gateway once and no move was made twice, though the stranger still holds the old pair
+		$this->assertBackendOn(5355, 'after the move');
+		$this->assertSame(['configure', 'restart_service'], $this->events);
+		$this->assertCount(1, $GLOBALS['pfb_test_unbound_configure_calls']);
+		$this->assertStillMoved($snapshot, 'after the move');
+		$move = $this->noticesOf('pfBlockerNG DNS Proxy');
+		$this->assertCount(1, $move);
+		$this->assertStringContainsString("so Unbound's backend moved from ports 5353/5354 to 5355/5356, but the gateway is not forwarding to it yet; the next update retries", $move[0]['notice']);
+
+		// ... and neither the Service line nor the startup notice says the stranger holds Unbound's port: Unbound is not there any more
+		pfb_global();
+		$service = pfb_dns_status()['service'];
+		$this->assertSame("Resolver backend not answering: the gateway still forwards to port 5353, but Unbound's backend moved to port 5355; the next update restarts the gateway", $service);
+		$startup = $this->noticesOf('pfBlockerNG DNS Proxy startup');
+		$this->assertCount(1, $startup);
+		$this->assertStringContainsString("the gateway still forwards to port 5353, but Unbound's backend moved to port 5355", $startup[0]['notice']);
+		$this->assertStringNotContainsString("holds Unbound's port 5353", $startup[0]['notice'] . $service);
+
+		// When the next update pass runs, with the gateway now able to follow
+		$this->gatewayFollows = TRUE;
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+
+		// Then the gateway is restarted onto the new pair, and Unbound is not moved again
+		$this->assertSame(['configure', 'restart_service', 'restart_service'], $this->events);
+		$this->assertSame('127.0.0.1:5355', $this->upstreamAtStart[1]);
+		$this->assertCount(1, $GLOBALS['pfb_test_unbound_configure_calls'], 'Unbound is not regenerated again');
+		$this->assertBackendOn(5355, 'after the retry');
+		$this->assertTrue(pfb_dns_proxy_serving_ready());
+		$this->assertSame('Running', pfb_dns_status()['service']);
+	}
+
+	// -----------------------------------------------------------------------
+	// (b) a gateway whose upstream a stranger owns: the no-start passes
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{string}> the passes that find a ready gateway whose Unbound upstream a stranger owns */
+	public static function passesThatFindAForeignUpstream(): array
+	{
+		return ['the cron tick' => ['tick'], 'the boot check' => ['boot check']];
+	}
+
+	#[DataProvider('passesThatFindAForeignUpstream')]
+	public function testAForeignOwnerOfTheGatewaysUpstreamMovesUnboundOnAPassThatStartedNothing(string $entry): void
+	{
+		// Given a serving gateway, a live Unbound, and another process that owns Unbound's upstream endpoint
+		$this->box();
+		$this->gatewayRuns();
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'before: the gateway and its Unbound upstream serve');
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'), self::row('nc', 6161, 'udp4', '127.0.0.1:5353'));
+		$this->assertSame('foreign', pfb_dns_proxy_upstream_state(), 'before: the stranger owns it');
+		$snapshot = (string) config_get_path(self::SAVED, '');
+
+		// When the pass that started nothing checks the gateway
+		if ($entry === 'tick') {
+			$this->tick();
+		} else {
+			$this->dnsCheckArm('0');
+		}
+
+		// Then Unbound moved to a free pair, the gateway follows, and the Resolver is still moved
+		$this->assertBackendOn(5355, $entry);
+		$this->assertSame(['configure', 'restart_service'], $this->events);
+		$this->assertTrue(pfb_dns_proxy_serving_ready());
+		$this->assertStillMoved($snapshot, $entry);
+		$notices = $this->noticesOf('pfBlockerNG DNS Proxy');
+		$this->assertCount(1, $notices);
+		$this->assertStringContainsString('nc (pid 6161) on 127.0.0.1:5353', $notices[0]['notice']);
+		$this->assertStringContainsString("so Unbound's backend moved from ports 5353/5354 to 5355/5356", $notices[0]['notice']);
+	}
+
+	// -----------------------------------------------------------------------
+	// (c) the Listen Port on a pair port
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{string}> */
+	public static function pairPorts(): array
+	{
+		return ['the PROXYv2 port' => ['5353'], 'the plain port' => ['5354']];
+	}
+
+	#[DataProvider('pairPorts')]
+	public function testAListenPortOnAPairPortBeforeTheTakeoverMovesTheBackendInsteadOfRefusing(string $listen): void
+	{
+		// Given pfB-DNS on and a Resolver that has not been taken over, whose Listen Port is a port of our pair
+		$this->box(TRUE, ['port' => $listen], FALSE);
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: not taken over');
+
+		// When the apply's Resolver pass runs, and then the update pass starts the proxy
+		pfb_unbound_python('enabled', TRUE);
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+
+		// Then the Resolver was taken over, with Unbound's pair moved off the Listen Port, which the proxy serves
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'taken over, not refused');
+		$this->assertBackendOn(5355, 'after the takeover');
+		$this->assertSame($listen, config_get_path('unbound/port'), 'the Listen Port is the admin\'s, as set');
+		$this->assertSame($listen, $this->servedPort(), 'and the proxy serves it');
+		$this->assertTrue(pfb_dns_proxy_serving_ready());
+		$notices = $this->noticesOf('pfBlockerNG DNS Proxy');
+		$this->assertCount(1, $notices);
+		$this->assertStringContainsString("the DNS Resolver's Listen Port is {$listen}", $notices[0]['notice']);
+		$this->assertStringContainsString("so Unbound's backend moved from ports 5353/5354 to 5355/5356", $notices[0]['notice']);
+		$this->assertStringNotContainsString('pfB-DNS is not active', $notices[0]['notice'], 'not a refusal');
+	}
+
+	#[DataProvider('pairPorts')]
+	public function testAListenPortSetOnAPairPortAfterTheTakeoverMovesTheBackendAndTheGatewayFollows(string $listen): void
+	{
+		// Given a moved Resolver whose proxy serves on 53, and an admin who then sets the Listen Port to a port of our pair
+		$this->box();
+		$this->gatewayRuns();
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		config_set_path('unbound/port', $listen);
+
+		// When the apply runs: its Resolver pass, then its update pass
+		pfb_unbound_python('enabled', TRUE);
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+
+		// Then Unbound moved, the regenerated rc script serves the Listen Port and forwards to the new pair, and the gateway was restarted onto it
+		$this->assertBackendOn(5355, 'after the apply');
+		$this->assertSame($listen, config_get_path('unbound/port'), 'the Listen Port stays as set');
+		$this->assertSame($listen, $this->servedPort(), 'the proxy serves it');
+		$this->assertSame(['configure', 'restart_service'], $this->events, 'Unbound once, then the gateway once');
+		$this->assertSame(['127.0.0.1:5355'], $this->upstreamAtStart);
+		$this->assertTrue(pfb_dns_proxy_serving_ready());
+		$this->assertStillMoved($snapshot, 'after the apply');
+		$notices = $this->noticesOf('pfBlockerNG DNS Proxy');
+		$this->assertCount(1, $notices);
+		$this->assertStringContainsString("the DNS Resolver's Listen Port is {$listen}", $notices[0]['notice']);
+		$this->assertStringContainsString("so Unbound's backend moved from ports 5353/5354 to 5355/5356", $notices[0]['notice']);
+		$this->assertStringNotContainsString('set after pfB-DNS took the Resolver', $notices[0]['notice'], 'not the old "keeps serving, set another port" notice');
+
+		// ... and a second apply changes nothing
+		pfb_unbound_python('enabled', TRUE);
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+		$this->assertSame(['configure', 'restart_service'], $this->events);
+		$this->assertCount(1, $this->noticesOf('pfBlockerNG DNS Proxy'));
+
+		// ... and when the admin turns pfB-DNS off, the saved Resolver comes back with the Listen Port the admin set
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		pfb_unbound_python('enabled');
+		$this->assertNull(pfb_dns_proxy_saved());
+		$this->assertSame($listen, config_get_path('unbound/port'));
+		$this->assertSame('lan,opt1', config_get_path('unbound/active_interface'));
+	}
+
+	public function testTheMovedPairAvoidsTheListenPortAndTheTransportPortsItWouldMeet(): void
+	{
+		// Given a Listen Port on P, a DoT port on the pair the picker would take first, and a DoH port on the next
+		$this->box(TRUE, ['port' => '5353'], FALSE);
+		PfbConfig::writeSystem(pfb_dns_config_key('pfb_dns_dot_port'), '5355');
+		PfbConfig::writeSystem(pfb_dns_config_key('pfb_dns_doh_port'), '5357');
+
+		pfb_unbound_python('enabled', TRUE);
+
+		// Then the pair starts where neither port is in it
+		$this->assertSame('5358', pfb_dns_proxy_backend_port(), '5355 is the DoT port, 5356/5357 meets the DoH port, 5357 is it');
+	}
+
+	/** @return array<string,array{bool}> whether the box was already taken over */
+	public static function takenOverOrNot(): array
+	{
+		return ['before the takeover' => [FALSE], 'after the takeover' => [TRUE]];
+	}
+
+	#[DataProvider('takenOverOrNot')]
+	public function testAListenPortOnAPairPortWithNoFreePairKeepsTheOldNotices(bool $takenOver): void
+	{
+		// Given a Listen Port of 5353 and a socket on every port the search could use
+		$this->box(TRUE, $takenOver ? [] : ['port' => '5353'], $takenOver);
+		$this->foreign = array_map(static fn (int $port): string => self::row('nc', 6162, 'udp4', "127.0.0.1:{$port}"), range(5355, 5419));
+		$this->publishSockets();
+		if ($takenOver) {
+			$this->proxyServes();
+			$this->seedRunningGateway();
+			config_set_path('unbound/port', '5353');
+		}
+
+		// When the apply's Resolver pass runs
+		pfb_unbound_python('enabled', TRUE);
+
+		// Then nothing moved and the notice is the one the situation had before there was a move to make
+		$this->assertSame('5353', pfb_dns_proxy_backend_port());
+		$this->assertSame([], $this->events, 'nothing was restarted');
+		$notices = $this->noticesOf('pfBlockerNG DNS Proxy');
+		$this->assertCount(1, $notices);
+		$this->assertStringContainsString('Listen Port is 5353', $notices[0]['notice']);
+		$this->assertStringContainsString($takenOver ? 'pfB-DNS keeps serving' : 'pfB-DNS is not active', $notices[0]['notice']);
+		$this->assertSame($takenOver, pfb_dns_proxy_saved() !== NULL);
+	}
+
+	// -----------------------------------------------------------------------
+	// The status and the notices name what is now, not what was
+	// -----------------------------------------------------------------------
+
+	public function testAStrangerOnTheNewPairIsNamedAsHoldingUnboundsPortThere(): void
+	{
+		// Given Unbound moved to 5355 and a gateway that follows, and then a stranger takes 5355 from Unbound
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'));
+		pfb_dns_proxy_ensure_running();
+		$this->assertBackendOn(5355, 'before');
+		$this->foreignHolds(self::row('nc', 6163, 'tcp4', '127.0.0.1:5355'), self::row('nc', 6163, 'udp4', '127.0.0.1:5355'));
+
+		// Then the status names the holder of the port Unbound is on now
+		pfb_global();
+		$this->assertSame("Resolver backend not answering: nc (pid 6163) holds Unbound's port 5355", pfb_dns_status()['service']);
+	}
+}

@@ -135,6 +135,9 @@ trait KeepRunningScenario
 			if ($s['proxy'] === 'serves') {
 				$this->seedRunningGateway();
 			}
+		} else {
+			// A dead backend holds no sockets: rows of a process that is gone would read as a stranger on Unbound's ports (issue #3848)
+			file_put_contents($GLOBALS['pfb_test_sockstat_output'], "USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n");
 		}
 		if ($s['dot']) {
 			$this->krEnableDot();
