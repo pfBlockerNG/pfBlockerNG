@@ -17,48 +17,15 @@ use PHPUnit\Framework\TestCase;
  * suppression still applies; numeric-but-invalid hosts go to the parse-error log. A URL's
  * userinfo ('http://decoy@host/') is removed so the real host is what gets classified.
  *
- * The plain-line step and the ABP-anchor step live inside sync_package_pfblockerng()'s feed loop
- * and are not unit-reachable, so both regions are eval-extracted verbatim from the REAL source
- * (house precedent: tests/php/DnsblFeedIdnWildcardTest.php).
+ * The rows run the production per-line parser, pfb_dnsbl_parse_line().
  */
 #[CoversFunction('pfb_dnsbl_abp_extract_ip')]
 #[CoversFunction('pfb_dnsbl_extract_host')]
 final class DnsblNumericHostTest extends TestCase
 {
-	private static string $plainRegion;
-	private static string $abpRegion;
-	private static string $hostsRegion;
-
 	private string $failLog = '';
 	private string $mainLog = '';
 	private mixed $savedPfb = NULL;
-
-	public static function setUpBeforeClass(): void
-	{
-		$src = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
-		}
-		if (!preg_match('/(\t+\$lite = FALSE;\n.*?@fwrite\(\$dhandle, \$domain_data\);)/s', $src, $plain)) {
-			throw new RuntimeException('test bootstrap: DNSBL plain-line region not found');
-		}
-		if (!preg_match(
-			'/(\t+if \(\$pfb\[\'dnsbl_ip\'\] != \'Disabled\'\) \{\n\t+\$abp_ip = pfb_dnsbl_abp_extract_ip\(\$line\);' .
-			'.*?PfbDnsblRowKind::Abp, \$line\);\n\t+@fwrite\(\$dhandle, \$domain_data\);\n\t+continue;\n\t+\})/s',
-			$src,
-			$abp
-		)) {
-			throw new RuntimeException('test bootstrap: DNSBL ABP-anchor region not found');
-		}
-		// The hosts-line space split runs before the plain region; start there to reach it.
-		if (!preg_match('/(\t+\/\/ Typical Host Feed format.*?@fwrite\(\$dhandle, \$domain_data\);)/s', $src, $hosts)) {
-			throw new RuntimeException('test bootstrap: DNSBL hosts-line region not found');
-		}
-		self::$hostsRegion = "\$rev_format = FALSE;\nforeach ([0] as \$pfb_test_iter) {\n{$hosts[1]}\n}\n";
-		// Both regions drop a line with `continue`; give them a loop of their own inside eval().
-		self::$plainRegion = "foreach ([0] as \$pfb_test_iter) {\n{$plain[1]}\n}\n";
-		self::$abpRegion = "foreach ([0] as \$pfb_test_iter) {\n{$abp[1]}\n}\n";
-	}
 
 	protected function setUp(): void
 	{
@@ -74,51 +41,28 @@ final class DnsblNumericHostTest extends TestCase
 		$GLOBALS['pfb'] = $this->savedPfb;
 	}
 
-	public function testRegionsStartAtExecutableCode(): void
-	{
-		$this->assertStringContainsString('$lite = FALSE;', self::$plainRegion);
-		$this->assertStringContainsString('PFB_FILTER_DOMAIN', self::$plainRegion);
-		$this->assertStringContainsString('pfb_dnsbl_abp_extract_ip($line)', self::$abpRegion);
-		$this->assertStringContainsString('pfb_dnsbl_is_abp_rule_line($line)', self::$abpRegion);
-	}
-
 	/**
-	 * Run one extracted region over one feed line.
+	 * Run the production per-line parser over one feed line.
 	 *
 	 * @return array{rows: list<array{0: string, 1: string}>, ip4: list<string>, ip6: list<string>, fail: string, log: string}
 	 */
-	private function runRegion(string $region, string $feedLine, bool $lenient = TRUE, bool $custom = TRUE,
+	private function runRegion(string $feedLine, bool $lenient = TRUE, bool $custom = TRUE,
 		PfbToggle $supp = PfbToggle::Off, string $dnsblIp = 'Deny_Both'): array
 	{
-		$pfb = [
-			'dnsbl_lenient'   => $lenient ? PfbToggle::On : PfbToggle::Off,
-			'dnsbl_parse_err' => $this->failLog,
-			'dnsbl_ip'        => $dnsblIp,
-			'supp'            => $supp,
-			'log'             => $this->mainLog,
+		$GLOBALS['pfb'] = ['supp' => $supp, 'log' => $this->mainLog];
+		$state = pfb_dnsbl_parse_state();
+		$ctx = [
+			'header'    => 'testfeed',
+			'custom'    => $custom,
+			'dnsbl_ip'  => $dnsblIp !== 'Disabled',
+			'lenient'   => $lenient,
+			'parse_err' => $this->failLog,
 		];
-		$GLOBALS['pfb'] = $pfb;
-		$line = $feedLine;
-		$oline = $feedLine;
-		$header = 'testfeed';
-		$dnsbl_lineno = 1;
-		$pfb_scheme_skipped = 0;
-		$domain_data_ip = [];
-		$domain_data_ip6 = [];
-		$ipcount = 0;
-		$dnsbl_skip = [];
-		$dhandle = fopen('php://memory', 'w+');
-		eval($region);
-		rewind($dhandle);
-		$rows = [];
-		while (($row = fgets($dhandle)) !== FALSE) {
-			$rows[] = json_decode($row, TRUE, 512, JSON_THROW_ON_ERROR);
-		}
-		fclose($dhandle);
+		$res = pfb_dnsbl_parse_line($feedLine, 1, $state, $ctx);
 		return [
-			'rows' => $rows,
-			'ip4'  => $domain_data_ip,
-			'ip6'  => $domain_data_ip6,
+			'rows' => $res['row'] === NULL ? [] : [json_decode($res['row'], TRUE, 512, JSON_THROW_ON_ERROR)],
+			'ip4'  => $state['ip4'],
+			'ip6'  => $state['ip6'],
 			'fail' => (string) file_get_contents($this->failLog),
 			'log'  => (string) file_get_contents($this->mainLog),
 		];
@@ -144,7 +88,7 @@ final class DnsblNumericHostTest extends TestCase
 	#[DataProvider('decodedPlainLineProvider')]
 	public function testPlainNumericHostIsCollectedAsItsIpv4AndNeverADomain(string $feedLine): void
 	{
-		$out = $this->runRegion(self::$plainRegion, $feedLine);
+		$out = $this->runRegion($feedLine);
 		$this->assertSame(
 			[[], ['192.168.1.100'], [], ''],
 			[$out['rows'], $out['ip4'], $out['ip6'], $out['fail']],
@@ -181,20 +125,20 @@ final class DnsblNumericHostTest extends TestCase
 	public function testPaddedDecimalQuadIsReadAsDecimal(string $feedLine, string $ip): void
 	{
 		foreach ([TRUE, FALSE] as $lenient) {
-			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$out = $this->runRegion($feedLine, $lenient);
 			$this->assertSame([[], [$ip], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']], "line {$feedLine}");
 		}
 	}
 
 	public function testHostsLinePaddedDecimalTargetIsReadAsDecimal(): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, '0.0.0.0 08.08.08.08');
+		$out = $this->runRegion('0.0.0.0 08.08.08.08');
 		$this->assertSame([[], ['8.8.8.8'], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']]);
 	}
 
 	public function testCanonicalQuadWithTrailingDotIsCollected(): void
 	{
-		$out = $this->runRegion(self::$plainRegion, '8.8.8.8.');
+		$out = $this->runRegion('8.8.8.8.');
 		$this->assertSame([[], ['8.8.8.8']], [$out['rows'], $out['ip4']]);
 	}
 
@@ -212,7 +156,7 @@ final class DnsblNumericHostTest extends TestCase
 	#[DataProvider('invalidPlainLineProvider')]
 	public function testPlainNumericButInvalidHostIsLoggedNotEmitted(string $feedLine): void
 	{
-		$out = $this->runRegion(self::$plainRegion, $feedLine);
+		$out = $this->runRegion($feedLine);
 		$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']], "line {$feedLine}: rows=" . json_encode($out['rows']));
 		$this->assertStringContainsString($feedLine, $out['fail'], "line {$feedLine} missing from the parse-error log");
 	}
@@ -230,14 +174,14 @@ final class DnsblNumericHostTest extends TestCase
 	#[DataProvider('hostsLineProvider')]
 	public function testHostsLineNumericTargetIsDecodedOnThePlainPath(string $feedLine, string $target): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, $feedLine);
+		$out = $this->runRegion($feedLine);
 		$this->assertSame([[], ['192.168.1.100'], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']]);
 		$this->assertStringContainsString("IP literal decoded: [ {$target} ] -> [ 192.168.1.100 ]", $out['log']);
 	}
 
 	public function testHostsLineInvalidNumericTargetIsLoggedNotEmitted(): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, '0.0.0.0 1.2.3.4.5');
+		$out = $this->runRegion('0.0.0.0 1.2.3.4.5');
 		$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']]);
 		$this->assertStringContainsString('1.2.3.4.5', $out['fail']);
 	}
@@ -259,7 +203,7 @@ final class DnsblNumericHostTest extends TestCase
 	public function testEmptySchemeTrailingDotPrefixIsCollectedAsItsSlash24(string $feedLine, string $cidr): void
 	{
 		foreach ([TRUE, FALSE] as $lenient) {
-			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$out = $this->runRegion($feedLine, $lenient);
 			$this->assertSame(
 				[[], [$cidr], [], ''],
 				[$out['rows'], $out['ip4'], $out['ip6'], $out['fail']],
@@ -288,7 +232,7 @@ final class DnsblNumericHostTest extends TestCase
 	public function testTrailingDotPrefixIsLoggedNotCollectedAsAnAddress(string $feedLine): void
 	{
 		foreach ([TRUE, FALSE] as $lenient) {
-			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$out = $this->runRegion($feedLine, $lenient);
 			$this->assertSame(
 				[[], [], []],
 				[$out['rows'], $out['ip4'], $out['ip6']],
@@ -300,7 +244,7 @@ final class DnsblNumericHostTest extends TestCase
 
 	public function testHostsLineTrailingDotPrefixTargetIsLoggedNotCollected(): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, '0.0.0.0 5.68.45.');
+		$out = $this->runRegion('0.0.0.0 5.68.45.');
 		$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']]);
 		$this->assertStringContainsString('5.68.45.', $out['fail']);
 	}
@@ -318,7 +262,7 @@ final class DnsblNumericHostTest extends TestCase
 	public function testDoubleTrailingDotIsNeverCollectedAsAnAddress(string $feedLine): void
 	{
 		foreach ([TRUE, FALSE] as $lenient) {
-			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$out = $this->runRegion($feedLine, $lenient);
 			$this->assertSame([[], []], [$out['ip4'], $out['ip6']], "line {$feedLine} lenient=" . var_export($lenient, TRUE));
 		}
 	}
@@ -338,7 +282,7 @@ final class DnsblNumericHostTest extends TestCase
 	public function testFullQuadWithTrailingDotIsStillCollected(string $feedLine, string $ip): void
 	{
 		foreach ([TRUE, FALSE] as $lenient) {
-			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$out = $this->runRegion($feedLine, $lenient);
 			$this->assertSame([[], [$ip], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']], "line {$feedLine}");
 		}
 	}
@@ -347,7 +291,7 @@ final class DnsblNumericHostTest extends TestCase
 	public function testExplicitWildcardPrefixKeepsItsHandling(): void
 	{
 		foreach ([TRUE, FALSE] as $lenient) {
-			$out = $this->runRegion(self::$plainRegion, '://193.143.1.*', $lenient);
+			$out = $this->runRegion('://193.143.1.*', $lenient);
 			$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']], 'lenient=' . var_export($lenient, TRUE));
 			$this->assertStringContainsString('://193.143.1.*', $out['fail'], 'lenient=' . var_export($lenient, TRUE));
 		}
@@ -355,23 +299,23 @@ final class DnsblNumericHostTest extends TestCase
 
 	public function testUserinfoIsRemovedSoTheRealDomainIsBlocked(): void
 	{
-		$out = $this->runRegion(self::$plainRegion, 'http://user@evil.com/');
+		$out = $this->runRegion('http://user@evil.com/');
 		$this->assertSame([[['d', 'evil.com']], '', ], [$out['rows'], $out['fail']]);
 	}
 
 	public function testStrictModeAlsoResolvesUserinfo(): void
 	{
-		$decoy = $this->runRegion(self::$plainRegion, 'http://secure.bank.com@3232235876/', lenient: FALSE);
+		$decoy = $this->runRegion('http://secure.bank.com@3232235876/', lenient: FALSE);
 		$this->assertSame([[], ['192.168.1.100']], [$decoy['rows'], $decoy['ip4']]);
-		$domain = $this->runRegion(self::$plainRegion, 'http://user@evil.com/', lenient: FALSE);
+		$domain = $this->runRegion('http://user@evil.com/', lenient: FALSE);
 		$this->assertSame([['d', 'evil.com']], $domain['rows']);
 	}
 
 	public function testSuppressionStillAppliesToADecodedAddress(): void
 	{
-		$control = $this->runRegion(self::$plainRegion, '0xC0A80164', custom: FALSE, supp: PfbToggle::Off);
+		$control = $this->runRegion('0xC0A80164', custom: FALSE, supp: PfbToggle::Off);
 		$this->assertContains('192.168.1.100', $control['ip4'], 'control: without suppression the decode collects the address');
-		$out = $this->runRegion(self::$plainRegion, '0xC0A80164', custom: FALSE, supp: PfbToggle::On);
+		$out = $this->runRegion('0xC0A80164', custom: FALSE, supp: PfbToggle::On);
 		$this->assertSame([[], []], [$out['rows'], $out['ip4']], 'a suppressed RFC1918 decode must not be collected or become a domain');
 	}
 
@@ -395,7 +339,7 @@ final class DnsblNumericHostTest extends TestCase
 	#[DataProvider('unchangedPlainLineProvider')]
 	public function testNamesAndCanonicalAddressesKeepTheirPath(string $feedLine, array $rows, array $ip4, array $ip6, bool $logged): void
 	{
-		$out = $this->runRegion(self::$plainRegion, $feedLine);
+		$out = $this->runRegion($feedLine);
 		$this->assertSame([$rows, $ip4, $ip6, $logged], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail'] !== ''], "line {$feedLine}");
 	}
 
@@ -415,7 +359,7 @@ final class DnsblNumericHostTest extends TestCase
 	public function testAbpNumericAnchorIsExtractedAsItsIpv4(string $feedLine, string $ip): void
 	{
 		$this->assertSame($ip, pfb_dnsbl_abp_extract_ip($feedLine));
-		$out = $this->runRegion(self::$abpRegion, $feedLine);
+		$out = $this->runRegion($feedLine);
 		$this->assertSame([[], [$ip]], [$out['rows'], $out['ip4']], "line {$feedLine}: rows=" . json_encode($out['rows']));
 	}
 
@@ -436,7 +380,7 @@ final class DnsblNumericHostTest extends TestCase
 	public function testAbpNumericButInvalidAnchorIsLoggedNotPassedToPython(string $feedLine): void
 	{
 		$this->assertFalse(pfb_dnsbl_abp_extract_ip($feedLine));
-		$out = $this->runRegion(self::$abpRegion, $feedLine);
+		$out = $this->runRegion($feedLine);
 		$this->assertSame([[], []], [$out['rows'], $out['ip4']], "line {$feedLine}: rows=" . json_encode($out['rows']));
 		$this->assertStringContainsString($feedLine, $out['fail']);
 	}
@@ -463,14 +407,14 @@ final class DnsblNumericHostTest extends TestCase
 	public function testAbpPortIsDroppedAndCidrIsCollectedNeverPassedToPython(string $feedLine, array $ip4, array $ip6): void
 	{
 		foreach ([TRUE, FALSE] as $lenient) {
-			$out = $this->runRegion(self::$abpRegion, $feedLine, lenient: $lenient);
+			$out = $this->runRegion($feedLine, lenient: $lenient);
 			$this->assertSame([[], $ip4, $ip6, ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']], "line {$feedLine}");
 		}
 	}
 
 	public function testAbpPortAnchorWithDnsblIpDisabledStillGoesToPython(): void
 	{
-		$out = $this->runRegion(self::$abpRegion, '||192.168.1.100:8080^', dnsblIp: 'Disabled');
+		$out = $this->runRegion('||192.168.1.100:8080^', dnsblIp: 'Disabled');
 		$this->assertSame([[['a', '||192.168.1.100:8080^']], [], ''], [$out['rows'], $out['ip4'], $out['fail']]);
 	}
 
@@ -479,7 +423,7 @@ final class DnsblNumericHostTest extends TestCase
 		$this->assertSame('', pfb_dnsbl_abp_extract_ip('||example.com^'));
 		$this->assertSame('', pfb_dnsbl_abp_extract_ip('||1.2.example.com^'));
 		$this->assertSame('', pfb_dnsbl_abp_extract_ip('0.0.0.0 0xC0A80164'), 'hosts targets stay on the plain path');
-		$out = $this->runRegion(self::$abpRegion, '||example.com^');
+		$out = $this->runRegion('||example.com^');
 		$this->assertSame([['a', '||example.com^']], $out['rows']);
 	}
 
@@ -487,7 +431,7 @@ final class DnsblNumericHostTest extends TestCase
 	{
 		// The extract block is skipped when DNSBL IP is off; Python then skips the anchor, the same
 		// outcome as a dotted-quad anchor with the feature off.
-		$out = $this->runRegion(self::$abpRegion, '||0xC0A80164^', dnsblIp: 'Disabled');
+		$out = $this->runRegion('||0xC0A80164^', dnsblIp: 'Disabled');
 		$this->assertSame([[['a', '||0xC0A80164^']], []], [$out['rows'], $out['ip4']]);
 	}
 
@@ -539,14 +483,14 @@ final class DnsblNumericHostTest extends TestCase
 	#[DataProvider('strictNumericHostWithPathProvider')]
 	public function testStrictModeDecodesANumericHostWhateverThePath(string $feedLine): void
 	{
-		$out = $this->runRegion(self::$plainRegion, $feedLine, lenient: FALSE);
+		$out = $this->runRegion($feedLine, lenient: FALSE);
 		$this->assertSame([[], ['192.168.1.100'], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']], "line {$feedLine}");
 		$this->assertStringContainsString('IP literal decoded: [ 3232235876 ] -> [ 192.168.1.100 ]', $out['log']);
 	}
 
 	public function testStrictModeDecodesTheHostAfterTheLastAt(): void
 	{
-		$out = $this->runRegion(self::$plainRegion, 'http://a@b@c@192.168.010.100/x', lenient: FALSE);
+		$out = $this->runRegion('http://a@b@c@192.168.010.100/x', lenient: FALSE);
 		$this->assertSame([[], ['192.168.10.100']], [$out['rows'], $out['ip4']]);
 	}
 
@@ -564,7 +508,7 @@ final class DnsblNumericHostTest extends TestCase
 	#[DataProvider('strictRejectedProvider')]
 	public function testStrictModeStillRejectsWhatIsNotANumericHost(string $feedLine): void
 	{
-		$out = $this->runRegion(self::$plainRegion, $feedLine, lenient: FALSE);
+		$out = $this->runRegion($feedLine, lenient: FALSE);
 		$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']], "line {$feedLine}: rows=" . json_encode($out['rows']));
 		$this->assertStringContainsString($feedLine, $out['fail'], "line {$feedLine} missing from the parse-error log");
 	}
@@ -620,14 +564,14 @@ final class DnsblNumericHostTest extends TestCase
 	public function testPlainCidrLineIsCollectedAsARange(string $feedLine, bool $lenient, bool $custom,
 		PfbToggle $supp, array $ip4, array $ip6): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, $custom, $supp);
+		$out = $this->runRegion($feedLine, $lenient, $custom, $supp);
 
 		$this->assertSame([$ip4, $ip6, [], ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
 	}
 
 	public function testFeedV6SlashZeroIsDroppedAndClampLogged(): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, '::/0', TRUE, FALSE);
+		$out = $this->runRegion('::/0', TRUE, FALSE);
 
 		$this->assertSame([[], [], [], ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
 		$this->assertStringContainsString('Feed /0 CIDR clamped to single host', $out['log']);
@@ -635,7 +579,7 @@ final class DnsblNumericHostTest extends TestCase
 
 	public function testCustomV6SlashZeroIsDroppedWithoutClampLog(): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, '::/0', TRUE, TRUE);
+		$out = $this->runRegion('::/0', TRUE, TRUE);
 
 		$this->assertSame([[], [], [], ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
 		$this->assertStringNotContainsString('clamped', $out['log']);
@@ -643,7 +587,7 @@ final class DnsblNumericHostTest extends TestCase
 
 	public function testHonoredCidrWithDnsblIpDisabledIsSilent(): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, '192.168.1.0/24', TRUE, FALSE, dnsblIp: 'Disabled');
+		$out = $this->runRegion('192.168.1.0/24', TRUE, FALSE, dnsblIp: 'Disabled');
 
 		$this->assertSame([[], [], [], ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
 	}
@@ -668,7 +612,7 @@ final class DnsblNumericHostTest extends TestCase
 	#[DataProvider('plainCidrRejectProvider')]
 	public function testBadCidrLineCollectsNothingAndWritesParseError(string $feedLine, bool $lenient, string $ip): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, FALSE, dnsblIp: $ip);
+		$out = $this->runRegion($feedLine, $lenient, FALSE, dnsblIp: $ip);
 
 		$this->assertSame([[], [], []], [$out['ip4'], $out['ip6'], $out['rows']]);
 		$this->assertStringContainsString(
@@ -717,7 +661,7 @@ final class DnsblNumericHostTest extends TestCase
 	public function testNearMissCidrShapesAreStillCollected(string $feedLine, bool $lenient, array $ip4,
 		array $ip6, array $domains): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, FALSE);
+		$out = $this->runRegion($feedLine, $lenient, FALSE);
 
 		$this->assertSame([$ip4, $ip6, $domains, ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
 	}

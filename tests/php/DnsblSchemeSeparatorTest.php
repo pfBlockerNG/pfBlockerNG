@@ -22,37 +22,16 @@ use PHPUnit\Framework\TestCase;
  * lenient and the strict outcome. Rows marked RED fail on the code before the scheme-separator
  * rule; the rest are controls that must not move.
  *
- * The parse loop lives inside sync_package_pfblockerng() and is not unit-reachable, so the region
- * from the per-line scrub through the first plain-path domain write is eval-extracted verbatim
- * from the REAL source (house precedent: DnsblNumericHostTest).
+ * Each row runs the production per-line parser, pfb_dnsbl_parse_line().
  */
 #[CoversFunction('pfb_dnsbl_extract_host')]
 #[CoversFunction('pfb_dnsbl_strip_scheme')]
 #[CoversFunction('pfb_dnsbl_scheme_pos')]
 final class DnsblSchemeSeparatorTest extends TestCase
 {
-	private static string $region;
-
 	private string $failLog = '';
 	private string $mainLog = '';
 	private mixed $savedPfb = NULL;
-
-	public static function setUpBeforeClass(): void
-	{
-		$src = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
-		}
-		if (!preg_match(
-			'/(\t+\$line = pfb_dnsbl_scrub_line\(\$line\);\n.*?\$lite = FALSE;\n.*?@fwrite\(\$dhandle, \$domain_data\);)/s',
-			$src,
-			$m
-		)) {
-			throw new RuntimeException('test bootstrap: DNSBL scrub-to-plain-path region not found');
-		}
-		// The region drops a line with `continue`; give it a loop of its own inside eval().
-		self::$region = "foreach ([0] as \$pfb_test_iter) {\n{$m[1]}\n}\n";
-	}
 
 	protected function setUp(): void
 	{
@@ -69,47 +48,27 @@ final class DnsblSchemeSeparatorTest extends TestCase
 	}
 
 	/**
-	 * Run the extracted loop body over one feed line.
+	 * Run the production per-line parser over one feed line.
 	 *
 	 * @return array{ip4: list<string>, ip6: list<string>, domains: list<string>, pe: bool}
 	 */
 	private function parseLine(string $feedLine, bool $lenient, PfbToggle $supp = PfbToggle::Off,
 		string $dnsblIp = 'Deny_Both', bool $custom = TRUE): array
 	{
-		$pfb = [
-			'dnsbl_lenient'   => $lenient ? PfbToggle::On : PfbToggle::Off,
-			'dnsbl_parse_err' => $this->failLog,
-			'dnsbl_ip'        => $dnsblIp,
-			'supp'            => $supp,
-			'log'             => $this->mainLog,
+		$GLOBALS['pfb'] = ['supp' => $supp, 'log' => $this->mainLog];
+		$state = pfb_dnsbl_parse_state();
+		$ctx = [
+			'header'    => 'testfeed',
+			'custom'    => $custom,
+			'dnsbl_ip'  => $dnsblIp !== 'Disabled',
+			'lenient'   => $lenient,
+			'parse_err' => $this->failLog,
 		];
-		$GLOBALS['pfb'] = $pfb;
-		$line = $feedLine;
-		$oline = $feedLine;
-		$header = 'testfeed';
-		$dnsbl_lineno = 1;
-		$pfb_scheme_skipped = 0;
-		$domain_data_ip = [];
-		$domain_data_ip6 = [];
-		$ipcount = 0;
-		$dnsbl_skip = [];
-		$csv_parser = FALSE;
-		$run_once = TRUE;
-		$csv_type = '';
-		$rev_format = FALSE;
-		$alienvault_types = [];
-		$dhandle = fopen('php://memory', 'w+');
-		eval(self::$region);
-		rewind($dhandle);
-		$domains = [];
-		while (($row = fgets($dhandle)) !== FALSE) {
-			$domains[] = json_decode($row, TRUE, 512, JSON_THROW_ON_ERROR)[1];
-		}
-		fclose($dhandle);
+		$res = pfb_dnsbl_parse_line($feedLine, 1, $state, $ctx);
 		return [
-			'ip4'     => $domain_data_ip,
-			'ip6'     => $domain_data_ip6,
-			'domains' => $domains,
+			'ip4'     => $state['ip4'],
+			'ip6'     => $state['ip6'],
+			'domains' => $res['row'] === NULL ? [] : [json_decode($res['row'], TRUE, 512, JSON_THROW_ON_ERROR)[1]],
 			'pe'      => filesize($this->failLog) > 0,
 		];
 	}

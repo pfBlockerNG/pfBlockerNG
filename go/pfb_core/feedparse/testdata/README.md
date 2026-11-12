@@ -56,6 +56,16 @@ evaluates it, since it is inline code there.
 Case: `id`, `description`, `config` and `lines`; one case is one feed file, its lines parsed in order with the parser's
 per-feed state (CSV detection, reverse format, the hpHosts end marker) carried between them.
 
-- `config`: `dnsbl_ip` (bool: IPs in a domain feed are collected), `lenient` (bool), `custom` (bool).
-- `lines`: each `{"line" | "line_hex", "expect"}`; `expect` is `{"rows": [NDJSON rows written], "ip4": [...], "ip6":
-  [...], "fail": [logged failure line fields], "stop": bool}`. After a `stop`, no further line is read.
+- `config`: `dnsbl_ip` (bool: IPs in a domain feed are collected), `lenient` (bool: permissive scheme handling),
+  `custom` (bool: a user list), `suppression` (bool: the global Suppression setting, `$pfb['supp']`).
+- `lines`: non-empty; each `{"line" | "line_hex", "expect"}`, the line as `fgets()` returns it (its `\n` included).
+  `expect` is `{"rows", "ip4", "ip6", "fail", "scheme_skipped", "stop"}` for this line alone:
+  - `rows`: the NDJSON rows written, each `["d" | "a", text]` (domain or verbatim ABP rule); `text` is what the row
+    carries after the writer's invalid-UTF-8 substitution (U+FFFD), so it is always valid UTF-8.
+  - `ip4`, `ip6`: the entries appended to the feed's IPv4 / IPv6 lists, before the feed's de-duplication.
+  - `fail`: the `line` field of each parse-failure record (`pfb_parse_fail_log()`) written for this line; `"null"` is
+    the placeholder for an empty line. An item is a JSON string, or `{"hex": "..."}` when its bytes are not UTF-8.
+  - `scheme_skipped`: this line's increment of the feed's strict-scheme skip counter (0 or 1).
+  - `stop`: the line ended the feed (hpHosts end marker). It is only ever the last line of its case.
+- Rows are produced with `LC_CTYPE=C` (as the appliance runs) and the default `mbstring`/`intl` settings. A line that
+  makes the old path throw (an interior NUL reaching `ip2long()`) has no row.
