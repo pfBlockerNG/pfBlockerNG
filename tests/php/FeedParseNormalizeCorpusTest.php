@@ -135,7 +135,7 @@ final class FeedParseNormalizeCorpusTest extends TestCase
 	{
 		$want = $case['old_expect'] ?? $case['expect'];
 		if ($case['appliance'] && !$this->hostClassesMatchAppliance()) {
-			$this->markTestSkipped('host sed lacks the appliance C.UTF-8 classes (BOM/ZWJ non-printable, NBSP as [:space:]); the case pins the appliance result');
+			$this->markTestSkipped('host sed lacks the appliance C.UTF-8 classes (BOM/ZWJ non-printable, NBSP as [:space:], U+2028 printable); the case pins the appliance result');
 		}
 		if (!mb_check_encoding($want, 'UTF-8') && !$this->hostSedPassesInvalidBytes()) {
 			$this->markTestSkipped('host sed does not pass invalid UTF-8 sequences through, as the appliance sed does');
@@ -174,7 +174,8 @@ final class FeedParseNormalizeCorpusTest extends TestCase
 
 	private function hostClassesMatchAppliance(): bool
 	{
-		return $this->hostSed("\xEF\xBB\xBFa\xE2\x80\x8Db") === 'ab' && $this->hostSed("end\xC2\xA0") === 'end';
+		return $this->hostSed("\xEF\xBB\xBFa\xE2\x80\x8Db") === 'ab' && $this->hostSed("end\xC2\xA0") === 'end'
+			&& $this->hostSed("a\xE2\x80\xA8b") === "a\xE2\x80\xA8b";
 	}
 
 	private function hostSedPassesInvalidBytes(): bool

@@ -29,9 +29,9 @@ for bytes that are not valid UTF-8.
   host has none), `false` is `''`, today's conversion-unavailable path. The Go runner ignores it.
 - `old_expect`: present only where Core differs from the old path on purpose (owner rule, #3906). The Go runner asserts
   `expect`, the PHP runner asserts `old_expect`.
-- `appliance`: the PHP assertion depends on the appliance's C.UTF-8 class data (BOM/ZWJ non-printable, NBSP in `[:space:]`).
-  Separately, a PHP assertion that is not valid UTF-8 needs a host sed that passes invalid sequences through; the PHP runner
-  probes both and skips where the host differs.
+- `appliance`: the PHP assertion depends on the appliance's C.UTF-8 class data: BOM/ZWJ non-printable; NBSP, U+2028/2029
+  and private use printable; NBSP and U+2028 in `[:space:]`, U+0085 not. Separately, a PHP assertion that is not valid
+  UTF-8 needs a host sed that passes invalid sequences through; the PHP runner probes both and skips where the host differs.
 
 ## `ip.json`: IP feed lines (`pfb_ip_parse_line_replay()`)
 
