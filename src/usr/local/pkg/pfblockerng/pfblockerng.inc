@@ -4581,9 +4581,10 @@ function pfb_core_settings_sync(callable $call, array $want): ?string {
 		$r = $call('InitializeSettings', ['requestId' => $requestId, 'settings' => $want]);
 	} else {
 		$held = [];
-		foreach ($r['body']['projections'] ?? [] as $projection) {
-			if (($projection['resourceId'] ?? NULL) === 'settings/dns') {
-				$held = $projection['value'] ?? [];
+		// A reply of another shape (a version-skewed Core) reads as holding nothing, so the values are sent again
+		foreach ((array) ($r['body']['projections'] ?? []) as $projection) {
+			if (is_array($projection) && ($projection['resourceId'] ?? NULL) === 'settings/dns' && is_array($projection['value'] ?? NULL)) {
+				$held = $projection['value'];
 			}
 		}
 		$held = array_intersect_key($held, $want['dns']);
@@ -4653,10 +4654,12 @@ function pfb_core_settings_validate(?callable $call = NULL): array {
 		return [];
 	}
 	$messages = [];
-	foreach ($error['fieldErrors'] ?? [] as $fault) {
-		$messages[] = 'pfBlockerNG Core refused the DNS settings: ' . preg_replace('/^changes\./', '', (string) ($fault['field'] ?? '')) . ': ' . ($fault['message'] ?? '');
+	$text = static fn(mixed $value): string => is_scalar($value) ? (string) $value : '';
+	foreach ((array) ($error['fieldErrors'] ?? []) as $fault) {
+		$fault = (array) $fault;
+		$messages[] = 'pfBlockerNG Core refused the DNS settings: ' . preg_replace('/^changes\./', '', $text($fault['field'] ?? '')) . ': ' . $text($fault['message'] ?? '');
 	}
-	return $messages ?: ['pfBlockerNG Core refused the DNS settings: ' . ($error['message'] ?? '')];
+	return $messages ?: ['pfBlockerNG Core refused the DNS settings: ' . $text($error['message'] ?? '')];
 }
 
 
