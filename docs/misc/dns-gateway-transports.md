@@ -93,9 +93,12 @@ then the status lists `tls_certificate` in `degraded`.
   and DDR rows and the framing of the body (no empty line, no trailing newline, a known first word) are still validated as a
   whole before any table changes, and a body that fails them leaves the previous tables intact.
   Ownership-only or empty updates work without `--dns-name` or DDR; name rows still require `--dns-name` and DoH 443
-  rows still require DDR. An empty body empties all tables. The gateway replaces each immutable table snapshot, logs
-  only a changed table as `address table: <N> name answers, <N> DoH 443 addresses, <N> listener interfaces` (an
-  ownership-only change too; the count is the entries applied), and replies `ok`.
+  rows still require DDR (`error: started without --dns-name`, `error: started without --ddr`), unless the gateway started
+  without them because it could not use them (`dns_name` or `ddr` in the status `degraded` list, issue #3848): it then takes
+  the table, drops those rows and replies `ok`, because PHP restarts the gateway on any error reply. An empty body empties
+  all tables. The gateway replaces each immutable table snapshot, logs only a changed table as
+  `address table: <N> name answers, <N> DoH 443 addresses, <N> listener interfaces` (an ownership-only change too; the count
+  is the entries applied), and replies `ok`.
   Repeatable `--listener-interface IP=BASE64UTF8` flags initialize the owner snapshot at startup. PHP uses the existing
   address-table push after listener synchronization to refresh ownership as well as name/DDR rows; in-flight queries
   retain their captured description. A gateway older than the verb answers

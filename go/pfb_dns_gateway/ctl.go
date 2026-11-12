@@ -214,7 +214,8 @@ func (c *ctlServer) handle(conn *net.UnixConn) {
 // addressTable is the reply to the address table verb: the body, read in full whatever it holds, is validated whole, so that a
 // bad line leaves both tables as they were; only a listener-interface entry that is not valid is skipped, with a log line, and
 // the rest applies. A good body replaces both, and is logged only when it differs from them. A query reads one table, so no
-// query sees one replaced and the other not.
+// query sees one replaced and the other not. The rows for the DNS name (or DDR) are refused by a gateway started without it, but
+// dropped, with the reply for success, by one that lost it (issue #3848): PHP restarts the gateway on any error reply.
 func (c *ctlServer) addressTable(in io.Reader) string {
 	var size [4]byte
 	if _, err := io.ReadFull(in, size[:]); err != nil {
@@ -236,6 +237,12 @@ func (c *ctlServer) addressTable(in io.Reader) string {
 	table, err := parseAddressTable(body, func(format string, args ...any) { skipped = append(skipped, fmt.Sprintf(format, args...)) })
 	if err != nil {
 		return "error: " + err.Error()
+	}
+	if _, lost := c.lost["dns_name"]; lost && c.names == nil {
+		table.names = nil
+	}
+	if _, lost := c.lost["ddr"]; lost && c.ddr == nil {
+		table.doh443 = nil
 	}
 	if c.names == nil && len(table.names) > 0 {
 		return "error: started without --dns-name"
