@@ -8754,7 +8754,7 @@ function pfb_log_mgmt() {
 		}
 
 		if (file_exists($pfb[$logtype])) {
-			// issue #3850: every log is on the host (pfB-DNS writes the DNSBL ones; nothing mounts them into Unbound's chroot)
+			// issue #3850: every log is written on the host (pfB-DNS: dnsbl.log, dns_reply.log; the filterlog daemon: unified.log)
 			$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
 			// issue #1109: skip this tick's whole pass unless an active cap is past its margin-widened high-water mark.
 			if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $margin_raw)) {
