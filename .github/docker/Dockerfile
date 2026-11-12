@@ -4,8 +4,8 @@
 # Toolchains every CI job runs inside (#3852), instead of installing them per job. Target
 # `ci` serves the non-VM jobs; `ci-vm` adds qemu + Chromium for smoke and the Web-UI tiers.
 # The ARG pins here are the single home of each tool version (tests/test_ci_tool_pins.py
-# reads them). ci-image.yml tags the images with a hash of this directory, so any change
-# under it yields a new image.
+# reads them). ci-image.yml tags the images with a hash of this directory plus the Go module's
+# go.mod and go.sum (the `gomod` build context), so a change to either yields a new image.
 
 ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
@@ -147,6 +147,22 @@ RUN set -eu; \
 
 COPY --from=kcov-builder /opt/kcov /opt/kcov
 ENV PATH=/usr/local/go/bin:/opt/kcov/bin:${PATH}
+
+# Go's modules are baked in. Settings go in $GOROOT/go.env: sudo drops env vars, container jobs have
+# another HOME and build-pfb-dns.py sets GOENV=off, but all still read it. `|direct` also falls back
+# on a proxy transport error, where `,direct` only does on 404/410.
+COPY --from=gomod go.mod go.sum /tmp/gomod/
+RUN set -eu; \
+    sed -i 's#^GOPROXY=.*#GOPROXY=https://proxy.golang.org|direct#' /usr/local/go/go.env; \
+    grep -qx 'GOPROXY=https://proxy.golang.org|direct' /usr/local/go/go.env; \
+    echo 'GOMODCACHE=/opt/go/pkg/mod' >> /usr/local/go/go.env; \
+    cd /tmp/gomod; \
+    go mod download; \
+    [ "$(go env GOMODCACHE)" = /opt/go/pkg/mod ]; \
+    GOPROXY=off go mod download; \
+    cd /; \
+    rm -rf /tmp/gomod; \
+    go clean -cache
 
 # The job workspace directory belongs to the runner's uid, not root; without this git refuses
 # the "dubious ownership" repository. The ENV copy is command-scope config, which survives the

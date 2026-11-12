@@ -1,17 +1,18 @@
 name: CI image
 
 # Builds the `ci` and `ci-vm` images that every installing job runs inside (#3852). The tag
-# is a hash of the build context, so an unchanged .github/docker/ reuses the published
-# image and a changed one is built once, here, before any job needs it.
+# is a hash of the build inputs (.github/docker/ plus the Go module's go.mod and go.sum), so
+# unchanged inputs reuse the published image and changed ones are built once, here, before
+# any job needs it.
 
 on:
   workflow_call:
     outputs:
       ci:
-        description: Full ref of the ci image for this commit's .github/docker/
+        description: Full ref of the ci image for this commit's build inputs
         value: ${{ jobs.build.outputs.ci }}
       ci_vm:
-        description: Full ref of the ci-vm image for this commit's .github/docker/
+        description: Full ref of the ci-vm image for this commit's build inputs
         value: ${{ jobs.build.outputs.ci_vm }}
   workflow_dispatch:
 
@@ -30,6 +31,9 @@ env:
   # Hashed for the tag AND passed to buildx as the build context: one path, so a file the
   # Dockerfile can COPY can never be missing from the hash.
   CONTEXT_DIR: .github/docker
+  # The named context `gomod` holds this whole directory, but only its go.mod and go.sum are
+  # hashed, so the Dockerfile may COPY nothing else from it.
+  GO_MODULE_DIR: go/pfb_dns_gateway
 
 jobs:
   build:
@@ -49,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           # mode, blob id and path of every tracked file: COPY keeps a file's mode as well as its bytes.
-          hash=$(git ls-files -s -z "$CONTEXT_DIR" | sha256sum | cut -d' ' -f1)
+          hash=$(git ls-files -s -z "$CONTEXT_DIR" "$GO_MODULE_DIR/go.mod" "$GO_MODULE_DIR/go.sum" | sha256sum | cut -d' ' -f1)
           echo "ci=ghcr.io/pfblockerng/pfblockerng-ci:$hash" >> "$GITHUB_OUTPUT"
           echo "ci_vm=ghcr.io/pfblockerng/pfblockerng-ci-vm:$hash" >> "$GITHUB_OUTPUT"
 
@@ -73,8 +77,8 @@ jobs:
             exit 0
           fi
           if [ "$EVENT_NAME" = pull_request ] && [ "$HEAD_REPO" != "$REPO" ]; then
-            echo "::error::fork PRs cannot publish images: this PR changes .github/docker/, so the CI images for it do not exist yet. A maintainer must run ci-image.yml from a branch of this repository first."
+            echo "::error::fork PRs cannot publish images: this PR changes .github/docker/ or the Go module files, so the CI images for it do not exist yet. A maintainer must run ci-image.yml from a branch of this repository first."
             exit 1
           fi
-          docker buildx build --target ci -t "$CI_REF" --push "$CONTEXT_DIR"
-          docker buildx build --target ci-vm -t "$CI_VM_REF" --push "$CONTEXT_DIR"
+          docker buildx build --target ci -t "$CI_REF" --build-context gomod="$GO_MODULE_DIR" --push "$CONTEXT_DIR"
+          docker buildx build --target ci-vm -t "$CI_VM_REF" --build-context gomod="$GO_MODULE_DIR" --push "$CONTEXT_DIR"
