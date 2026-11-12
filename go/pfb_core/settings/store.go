@@ -289,6 +289,27 @@ func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMess
 	return res, nil
 }
 
+// Validate is Save's validation without the write: changes are checked over the current settings (the defaults while
+// uninitialized), and the store, its revision and its generations stay as they are.
+func (s *Store) Validate(changes map[string]map[string]json.RawMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var errs []FieldError
+	for _, p := range s.schema.Projections {
+		base := defaults(p)
+		if s.doc != nil {
+			base = s.doc.Projections[p.ID].Values
+		}
+		_, perr := apply(p, base, changes[p.ID], p.ID)
+		errs = append(errs, perr...)
+	}
+	errs = append(errs, unknownProjections(s, changes)...)
+	if errs != nil {
+		return &ValidationError{Fields: errs}
+	}
+	return nil
+}
+
 func unknownProjections(s *Store, given map[string]map[string]json.RawMessage) []FieldError {
 	var errs []FieldError
 	for _, id := range slices.Sorted(maps.Keys(given)) {

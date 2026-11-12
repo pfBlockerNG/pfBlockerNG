@@ -275,13 +275,20 @@ if ($_POST) {
 			$pfb['gconfig']['pfb_metrics_export']	= $metrics_export_posted ?: '';
 			$pfb['gconfig']['pfb_metrics_client_ip'] = pfb_filter($_POST['pfb_metrics_client_ip'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
 
-			$privacy_error = pfb_metrics_client_save(pfb_cfg_toggle_read($pfb['gconfig']['pfb_metrics_client_ip']), static function () use (&$pfb): void {
+			// Core's dry run comes before the privacy change: a refused save must not purge or expose client identities
+			$pfb_core_errors = pfb_core_settings_validate(NULL, ['metricsClientIp' => pfb_cfg_toggle_read($pfb['gconfig']['pfb_metrics_client_ip']) === PfbToggle::On]);
+			$pfb_written = FALSE;
+			$privacy_error = $pfb_core_errors ? NULL : pfb_metrics_client_save(pfb_cfg_toggle_read($pfb['gconfig']['pfb_metrics_client_ip']), static function () use (&$pfb, &$pfb_written): void {
 				PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
-				write_config('[pfBlockerNG] save General settings');
+				$pfb_written = write_config('[pfBlockerNG] save General settings');
 			});
+			if ($pfb_written !== FALSE && $pfb_written !== -1) {
+				pfb_core_settings_push(NULL, TRUE);	// outside the metrics lock (a slow Core must not hold it); a failure never undoes the save
+			}
+			$input_errors = array_merge($input_errors, $pfb_core_errors);
 			if ($privacy_error !== NULL) {
 				$input_errors[] = $privacy_error . ' ' . gettext('No General settings were saved.');
-			} else {
+			} elseif (!$pfb_core_errors) {
 				$runtime_model = pfb_schedule_runtime_config();
 				$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
 				$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();

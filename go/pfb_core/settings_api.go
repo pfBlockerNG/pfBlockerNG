@@ -8,7 +8,7 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
-// settingsMethods are the four settings methods over st (docs/misc/core-api-protocol.md, "Settings").
+// settingsMethods are the five settings methods over st (docs/misc/core-api-protocol.md, "Settings").
 func settingsMethods(st *settings.Store) map[string]method {
 	return map[string]method{
 		"GetSettingsSchema": {call: func(_ context.Context, params []byte) (any, error) {
@@ -53,6 +53,15 @@ func settingsMethods(st *settings.Store) map[string]method {
 			}
 			res, err := st.Save(*p.ExpectedRevision, p.Changes)
 			return res, settingsError(err, "changes.")
+		}},
+		"ValidateSettings": {call: func(_ context.Context, params []byte) (any, error) {
+			var p struct {
+				Changes map[string]map[string]json.RawMessage `json:"changes"`
+			}
+			if err := decodeParams(params, &p); err != nil {
+				return nil, err
+			}
+			return struct{}{}, settingsError(st.Validate(p.Changes), "changes.")
 		}},
 	}
 }

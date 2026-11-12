@@ -149,6 +149,8 @@ final class PfbCoreServiceTest extends TestCase
 			'core_daemon_pidfile' => "{$this->dir}/run/pfb_core_daemon.pid",
 		]);
 		$GLOBALS['pfb_test_rcfile_dir'] = "{$this->dir}/rc";
+		// Every generated start names timeout(1) and the PHP binary of its settings push (issue #3913)
+		$this->installPushDouble();
 	}
 
 	protected function tearDown(): void
@@ -189,7 +191,8 @@ final class PfbCoreServiceTest extends TestCase
 			},
 			$text
 		);
-		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace($this->dir, '', $script),
+		// pfblockerng.inc, which the start's settings push runs, is the one host path an argument may name
+		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/usr/local/pkg/pfblockerng/pfblockerng.inc'], '', $script),
 			"the rc script names a host path the test did not redirect:\n{$script}");
 		file_put_contents("{$this->dir}/run.sh", $script);
 		$state = "{$this->dir}/state";
@@ -338,6 +341,96 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertSame(0, $status, $out);
 		$this->assertSame([], $this->lines('events'), 'an unrelated process was signalled');
 		$this->assertSame(['1001', '1002'], $this->livePids());
+	}
+
+	/** The timeout(1) double of the settings push: records its argv, which descriptors are /dev/null, and an event, then holds until released. */
+	private function installPushDouble(): void
+	{
+		$state = escapeshellarg("{$this->dir}/state");
+		$double = <<<SH
+			#!/bin/sh
+			S={$state}
+			printf '%s\\n' "\$@" > "\$S/push.argv"
+			attached=
+			for fd in 0 1 2; do
+				if [ "/dev/fd/\$fd" -ef /dev/null ]; then attached="\$attached\$fd "; fi
+			done
+			echo "\${attached:-none}" > "\$S/push.fds"
+			printf 'push\\n' >> "\$S/events"
+			echo ready > "\$S/push.ready"
+			n=0
+			while [ ! -e "\$S/push.release" ] && [ "\$n" -lt 200 ]; do /bin/sleep 0.05; n=\$((n + 1)); done
+			echo done > "\$S/push.done"
+
+			SH;
+		file_put_contents("{$this->dir}/bin/timeout", $double);
+		chmod("{$this->dir}/bin/timeout", 0755);
+		$GLOBALS['pfb']['php'] = "{$this->dir}/bin/php";
+	}
+
+	/** Wait (bounded) for a file the backgrounded push writes. */
+	private function awaitState(string $file): bool
+	{
+		$deadline = hrtime(TRUE) + 10_000_000_000;
+		while (!file_exists("{$this->dir}/state/{$file}")) {
+			if (hrtime(TRUE) > $deadline) {
+				return FALSE;
+			}
+			usleep(10_000);
+		}
+		return TRUE;
+	}
+
+	public function testStartPushesTheSettingsOnceCoreListens(): void
+	{
+		// Given Core's socket is up and the push's timeout(1) holds until released
+		$this->install('freebsd-amd64');
+		$this->installPushDouble();
+		$this->arrange('amd64');
+		$this->assertTrue(mkdir(dirname($GLOBALS['pfb']['core_socket']), 0700, TRUE));
+		$server = stream_socket_server('unix://' . $GLOBALS['pfb']['core_socket'], $errno, $errstr);
+		$this->assertNotFalse($server, "socket: {$errstr}");
+
+		try {
+			// When the service starts
+			[$status, $out] = $this->rc('start');
+
+			// Then the start returned while the push still runs, and the push is the core_push verb under timeout(1), after the daemon launch
+			$this->assertSame(0, $status, $out);
+			$this->assertTrue($this->awaitState('push.ready'), 'the start never ran the settings push');
+			$this->assertSame([
+				'-s', 'TERM', '-k', '5', '60', "{$this->dir}/bin/php", '-f', '/usr/local/pkg/pfblockerng/pfblockerng.inc', 'core_push',
+			], $this->lines('push.argv'));
+			$this->assertSame(['launch', 'push'], $this->lines('events'));
+			$this->assertSame(['0 1 2 '], $this->lines('push.fds'), 'the push inherited a descriptor of the caller');
+			$this->assertFileDoesNotExist("{$this->dir}/state/push.done", 'the start waited for the push');
+		} finally {
+			touch("{$this->dir}/state/push.release");
+			$this->awaitState('push.done');
+			fclose($server);
+		}
+	}
+
+	public function testStartGivesUpWaitingForTheSocketAfterThirtySeconds(): void
+	{
+		// Given Core never listens
+		$this->install('freebsd-amd64');
+		$this->installPushDouble();
+		$this->arrange('amd64');
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then the start returns, the backgrounded wait counts thirty 1 s steps and stops, and no push ran
+		$this->assertSame(0, $status, $out);
+		$deadline = hrtime(TRUE) + 10_000_000_000;
+		while ((int) trim((string) @file_get_contents("{$this->dir}/state/ticks")) < 30 && hrtime(TRUE) < $deadline) {
+			usleep(10_000);
+		}
+		usleep(300_000);
+		$this->assertSame('30', trim((string) file_get_contents("{$this->dir}/state/ticks")), 'the wait is bounded at 30 one-second steps');
+		$this->assertFileDoesNotExist("{$this->dir}/state/push.argv");
+		$this->assertSame(['launch'], $this->lines('events'));
 	}
 
 	public function testTheServiceIsRegisteredWithPfSense(): void

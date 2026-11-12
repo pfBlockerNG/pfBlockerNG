@@ -1,9 +1,9 @@
 # Core API protocol
 
 Scope: the HTTP+JSON API of the pfBlockerNG Core daemon (`go/pfb_core`, binary `pfb-core`, issue #3841; map #3813), the
-conventions every Core method follows, the settings methods and store (issue #3842), who may call it, and how the package
-runs it. Load when: adding a Core method or settings projection, calling Core from PHP or another local process, or
-changing `go/pfb_core`, `pfb_core_service()` or `pfb_core_call()`.
+conventions every Core method follows, the settings methods, store and authority modes (issues #3842, #3913), who may
+call it, and how the package runs it. Load when: adding a Core method or settings projection, calling Core from PHP or
+another local process, or changing `go/pfb_core`, `pfb_core_service()` or `pfb_core_call()`.
 
 Core is its own process and binary, separate from `pfb-dns`: either keeps running when the other fails. It runs whether
 pfB-DNS is enabled or not.
@@ -33,13 +33,14 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `GetSettings` | `projectionIds` (optional; none: all) | `{"initialized", "revision", "projections": [{"resourceId", "generation", "value"}]}` |
 | `InitializeSettings` | `requestId`, `settings` | `{"revision": 1, "projections": [...]}`: every projection |
 | `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed |
+| `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give; changes nothing |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
 
 ## Settings
 
-Core's native settings (issue #3842). PHP will translate between pfSense settings and these; no pfSense page reads them
-yet.
+Core's native settings (issue #3842). On pfSense the Outpost is authoritative and pushes these settings (see
+[Settings authority](#settings-authority)).
 
 - **Schema.** A projection is a group of fields, published as the resource `settings/<id>`. A field has a `name`, a
   `type` (`bool`, `int`, `enum`, `string`) and a `default`. It may also have:
@@ -72,6 +73,48 @@ yet.
   generation 1. A stored projection or field the schema no longer has stops the start: removing one needs a migration.
 - **Replay and restarts.** The `requestId` memory is the process's own. A retry after a restart gets `conflict` (the
   revision moved, or the settings are initialized) instead of the first result; the client then reads `GetSettings`.
+
+### Settings authority
+
+The settings have one authority, in one of two modes. Core has no mode flag: the same methods serve both, and the mode is
+the client's discipline. The *Outpost* is the client that joins Core to its host platform and holds that platform's own
+configuration.
+
+- **Core-authoritative.** Core's store is the authority. A client changes settings with `SaveSettings` against the
+  revision it read, and reads again on `conflict`.
+- **Outpost-authoritative.** The Outpost's own configuration is the authority and Core's store holds a copy of its last
+  push. The Outpost is the only writer.
+
+Push contract (Outpost-authoritative):
+
+1. The Outpost translates its stored settings to the native values of each projection.
+2. `GetSettings`. Uninitialized: `InitializeSettings` with those values, and the push is done.
+3. Otherwise, for each projection whose value differs, `SaveSettings` with `expectedRevision` set to the revision just read
+   and the whole projection value as `changes`. Nothing differs: nothing is sent.
+
+When to push:
+
+- After every change the Outpost persists.
+- Right after Core starts, whatever the Outpost last pushed.
+- On a periodic tick. Change detection belongs to the Outpost, never to Core: it records what it last pushed (its
+  configuration's own change marker, compared by inequality, plus a hash of the projected values) only after Core accepts
+  the push. The hash decides: the tick pushes when it differs from the record, whatever the marker says, so a change to
+  unrelated settings sends nothing and two pushes that finish out of order are corrected. Core keeps no knowledge of the Outpost's
+  configuration. So a failed push, or a change made outside the Outpost's save path (a restore, a revert, a replicated
+  change), reaches Core by the next tick.
+
+A push failure never blocks or undoes the Outpost's change: it is reported, and the next tick retries it.
+
+Validation: before the Outpost persists a change, it calls [`ValidateSettings`](#validatesettings) with it. An
+`invalid_argument` blocks the change, with nothing persisted. When Core does not answer, the Outpost's own checks decide.
+
+### ValidateSettings
+
+A dry run of `SaveSettings`: `changes` is validated over the current settings (the defaults while Core is uninitialized)
+and the reply is `{}`. It takes no `requestId` and no `expectedRevision`, and it changes nothing: no write, no revision or
+generation change. A fault is the same `invalid_argument` with the same field errors `SaveSettings` gives for these
+`changes` (`changes.dns.decisionCacheMax`). A pass says the values are valid, not that a later `SaveSettings` finds the
+revision unchanged.
 
 ### Projection `dns`
 
@@ -208,3 +251,15 @@ $r = pfb_core_call('GetVersion');
 object, the error envelope included. When no HTTP reply came (Core down, socket missing, timeout: connect 5 s, total
 30 s), `status` is 0 and `error` says why. Pinned by `PfbCoreCallTest`; the rc script by `PfbCoreServiceTest`; the
 server by `go/pfb_core/*_test.go`.
+
+On pfSense the Outpost (PHP) is authoritative: `config.xml` holds the settings, and `pfb_core_settings_push()` pushes
+`settings/dns` to Core after a page save, at Core's start (the rc script runs the `core_push` verb once the socket
+exists) and on each tick. A push records config.xml's `revision/time` and the hash of what Core holds in
+`/var/db/pfblockerng/core_pushed`. The tick's push is unforced: values whose hash is the recorded one call nothing, whatever
+the time (pushes of one second can finish out of order), unless an earlier push failed (it then asks Core until one
+succeeds). A page save and the `core_push` verb push forced and always ask Core,
+so a second save within the same second is never skipped.
+`pfb_core_settings_validate()` is the dry run a page calls after its own checks and before `write_config()`: only
+`invalid_argument` refuses the save, which then writes nothing; DNS > General, DNS > DNSBL and General are the pages. A
+failed push is logged once per outage and kept in `/var/db/pfblockerng/core_push_failed` until a push succeeds; DNS General
+shows it as a notice. Pinned by `CoreSettingsPushTest` and `CoreSettingsPageSavesTest`.
