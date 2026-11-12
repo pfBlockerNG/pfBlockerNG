@@ -15,6 +15,9 @@ var degradedParts = []string{"dnsbl", "dnsbl_settings", "dns_name", "ddr", "tls_
 
 const degradedReasonMax = 300 // bytes
 
+// degradedReasonNone is the reason of a part with nothing printable left in its reason: the status rejects an empty one.
+const degradedReasonNone = "no reason given"
+
 // statusDegraded is one part the gateway serves without, and why in one line.
 type statusDegraded struct {
 	Part   string `json:"part"`
@@ -92,7 +95,7 @@ func (c *ctlServer) degraded() []statusDegraded {
 
 // degradedReason is reason as the status carries it: one line, with every character of Unicode category C (control, format,
 // private use, surrogate, unassigned) dropped, as PHP's `\p{C}` check of a status reason rejects them, and no bytes that are no
-// UTF-8, which JSON would widen; cut to degradedReasonMax bytes where a character ends.
+// UTF-8, which JSON would widen; cut to degradedReasonMax bytes where a character ends, and degradedReasonNone if nothing is left.
 func degradedReason(reason string) string {
 	reason = strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.C, r) {
@@ -106,6 +109,9 @@ func degradedReason(reason string) string {
 			cut--
 		}
 		reason = reason[:cut]
+	}
+	if reason == "" {
+		return degradedReasonNone
 	}
 	return reason
 }

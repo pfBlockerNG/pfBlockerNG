@@ -167,3 +167,27 @@ func TestAReasonLosesItsControlCharactersAndIsCutAtThreeHundredBytes(t *testing.
 		}
 	}
 }
+
+// S2b: a reason with nothing printable left is still a reason: the status names the part with "no reason given", since the
+// consumer rejects an empty one and so the whole status.
+func TestAReasonWithNothingPrintableLeftIsNoReasonGiven(t *testing.T) {
+	cases := map[string]string{
+		"nul":          "\x00",
+		"newlines":     "\n\r\t",
+		"zero-width":   "\u200b\u2060",
+		"invalid utf8": "\xff\xfe",
+		"printable":    "disk full",
+	}
+	want := map[string]string{
+		"nul":          "no reason given",
+		"newlines":     "no reason given",
+		"zero-width":   "no reason given",
+		"invalid utf8": "no reason given",
+		"printable":    "disk full",
+	}
+	for name, in := range cases {
+		if got := degradedReason(in); got != want[name] {
+			t.Errorf("%s: degradedReason(%q) = %q, want %q", name, in, got, want[name])
+		}
+	}
+}
