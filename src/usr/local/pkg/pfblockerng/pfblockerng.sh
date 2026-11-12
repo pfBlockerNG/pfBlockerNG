@@ -394,6 +394,8 @@ aliastables() {
 #              (dnsbl_cache_keeps, which restages the hook from /usr/local); runs during the DNSBL pass and on
 #              restore, never during save
 #   teardown = remove both sets, keeping the module and its mount hook the same way
+#   retire   = drop the RETIRED set as stage does, nothing else; the DNSBL pass runs it once Unbound has started from the
+#              conf the pass wrote (or the one a failed start rolled back to), so the module leaves on that pass (#3896)
 #   save     = archive the GENERATED set plus exact TOP1M detector sidecars, with the caller holding
 #              the publication lock; the shipped and retired sets stay out
 #   restore  = boot earlyshellcmd: untar the cached files THEN stage
@@ -435,13 +437,8 @@ dnsbl_cache() {
 		return 0 # kept whether or not the reason could be written
 	}
 
-	dnsbl_cache_stage() {
-		mkdir -p "${pfbchroot}"
-		chown -f unbound:unbound "${pfbchroot}"
-		# The nullfs/devfs mount-point dirs pfb_python_mount expects (fresh-MFS safety).
-		for _d in lib dev var/log/pfblockerng usr/local/share/GeoIP; do
-			mkdir -p "${pfbchroot}/${_d}"
-		done
+	# The retired files, each kept by dnsbl_cache_keeps.
+	dnsbl_cache_retire() {
 		for _f in ${PFB_PY_RETIRED}; do
 			if dnsbl_cache_keeps "${_f}"; then
 				# The package still ships the mount hook: restage its current copy for the kept module.
@@ -453,6 +450,16 @@ dnsbl_cache() {
 			fi
 			rm -f "${pfbchroot}/${_f}"
 		done
+	}
+
+	dnsbl_cache_stage() {
+		mkdir -p "${pfbchroot}"
+		chown -f unbound:unbound "${pfbchroot}"
+		# The nullfs/devfs mount-point dirs pfb_python_mount expects (fresh-MFS safety).
+		for _d in lib dev var/log/pfblockerng usr/local/share/GeoIP; do
+			mkdir -p "${pfbchroot}/${_d}"
+		done
+		dnsbl_cache_retire
 		# Python's bytecode cache of the retired modules; nothing in the chroot imports any more.
 		rm -rf "${pfbchroot}/__pycache__"
 		# Copy the shipped files from /usr/local into the chroot (current code). A file that is not in the package
@@ -479,6 +486,9 @@ dnsbl_cache() {
 			;;
 		teardown)
 			dnsbl_cache_teardown
+			;;
+		retire)
+			dnsbl_cache_retire
 			;;
 		save)
 			# Archive the generated chroot set plus exact TOP1M detector sidecars,
@@ -2667,7 +2677,7 @@ case "${1}" in
 		aliastables
 		;;
 	dnsbl_cache)
-		# #468: DNSBL python-integration cache. $2 = stage | save | restore.
+		# #468: DNSBL python-integration cache. $2 = stage | teardown | retire | save | restore.
 		dnsbl_cache "${2}"
 		;;
 	pfb_compress)

@@ -19015,6 +19015,10 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 		$final = pfb_stop_start_unbound();
 	}
 
+	// issue #3896: the pass staged the chroot before it rewrote unbound.conf; now that Unbound has started from its conf, or from
+	// the one rolled back above, the retired module files go unless that conf still names the module.
+	exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache retire >/dev/null 2>&1');
+
 	// Only a completed successful command can own the daemon observed here. A failed or
 	// incomplete start may race with an unrelated external restart (#3100).
 	if ($final['start_completed'] && $final['retval'] === 0 && is_process_running('unbound')) {

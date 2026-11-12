@@ -244,6 +244,24 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
+  It 'retire keeps the module and its rules while unbound.conf still names pfb_unbound.py, drops them once it does not, and leaves the shipped files (#3896)'
+    setup_sandbox
+    dc stage
+    plant_retired
+    name_module_in_conf
+    When call named_then_not retire
+    The line 1 of output should equal 'PRE:module-present'
+    The line 2 of output should equal 'pfb_unbound.py:kept'
+    The line 3 of output should equal 'pfb_dnsbl_regex_rules.py:kept'
+    The line 4 of output should equal 'pfb_unbound.py:gone'
+    The line 5 of output should equal 'pfb_dnsbl_regex_rules.py:gone'
+    The path "${pfbchroot}/pfb_py_module.applied" should not be exist
+    # Only the retired set: what the chroot still reads stays.
+    The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
+    The path "${pfbchroot}/dnsbl_psl" should be exist
+    cleanup_sandbox
+  End
+
   # The retired module's mount hook (pfb_unbound_include.inc) follows the module (#3795): pfSense runs it before it
   # starts Unbound and it nullfs-mounts the folders pfb_unbound.py reads, so it stays exactly while unbound.conf
   # still names the module, and goes once it does not.
