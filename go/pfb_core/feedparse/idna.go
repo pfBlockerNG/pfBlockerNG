@@ -11,10 +11,15 @@ import (
 // testdata/README.md lists old_expect lines.
 var idnaProfile = idna.New(idna.MapForLookup(), idna.BidiRule(), idna.StrictDomainName(false), idna.CheckHyphens(false), idna.VerifyDNSLength(true))
 
-// idnToASCII is idn_to_ascii(); ok is false where the conversion fails. ICU accepts one root dot, the profile does not
-// (Unicode >= 16 with VerifyDNSLength), so it is set aside and put back.
+// idnToASCII is idn_to_ascii(); ok is false where the conversion fails. ICU accepts one root dot, ASCII or a UTS #46 full
+// stop, the profile does not (Unicode >= 16 with VerifyDNSLength), so it is set aside and put back as ".".
 func idnToASCII(s string) (string, bool) {
-	host, root := strings.CutSuffix(s, ".")
+	host, root := s, false
+	for _, dot := range []string{".", "\u3002", "\uff0e", "\uff61"} {
+		if host, root = strings.CutSuffix(s, dot); root {
+			break
+		}
+	}
 	out, err := idnaProfile.ToASCII(host)
 	if err != nil {
 		return "", false
