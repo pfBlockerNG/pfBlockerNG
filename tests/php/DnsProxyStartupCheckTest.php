@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  * gateway's last error from its log); a listener the rc script's command names that the running gateway does not serve, as the
  * gateway itself lists them on its control socket (issue #3625), with the reason it refused that listener when it did; and a setting
  * skipped, or an interface that adds no listener, while the command line was built. A gateway that gives no list judges nothing: no
- * listener problem, and nothing closed. The notices `pfBlockerNG DNS Proxy` (rollback) and `pfBlockerNG DNS Proxy certificate` are
+ * listener problem, and nothing closed. The notices `pfBlockerNG DNS Proxy` (the Resolver's) and `pfBlockerNG DNS Proxy certificate` are
  * never closed or replaced by it.
  *
  * pfSense's close_notice($id) removes ONE row per call (the one keyed $id, else the oldest row of that id), and file_notice()
@@ -274,7 +274,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 
 	public function testANotReadyStartWithNoSnapshotStillNamesTheFailure(): void
 	{
-		// Given no snapshot (nothing stored: the rollback of this very start may already have consumed it)
+		// Given no snapshot (nothing stored: the admin's restore may already have consumed it)
 		$this->log('pfb_dns_gateway: bind failed');
 
 		pfb_dns_proxy_startup_check(FALSE);
@@ -746,7 +746,7 @@ final class DnsProxyStartupCheckTest extends TestCase
 	{
 		// Given two starts that failed differently: pfb_dns_proxy_notify() files a row for each text
 		$this->box(self::DOT_ON);
-		$this->fileOther('pfBlockerNG DNS Proxy', 'rollback text');
+		$this->fileOther('pfBlockerNG DNS Proxy', 'resolver notice text');
 		$this->gatewayLacksDotOnLan();
 		pfb_dns_proxy_startup_check(TRUE);
 		$this->gatewayServes([...self::PLAIN, 'dot [::1]:853']);
@@ -757,8 +757,8 @@ final class DnsProxyStartupCheckTest extends TestCase
 		$this->gatewayServesEverything();
 		pfb_dns_proxy_startup_check(TRUE);
 
-		// Then no row of the id is left (close_notice() removes one row per call), and the rollback row is untouched
-		$this->assertSame([['pfBlockerNG DNS Proxy', 'rollback text']], $this->standing());
+		// Then no row of the id is left (close_notice() removes one row per call), and the Resolver notice row is untouched
+		$this->assertSame([['pfBlockerNG DNS Proxy', 'resolver notice text']], $this->standing());
 	}
 
 	// -----------------------------------------------------------------------
@@ -867,10 +867,9 @@ final class DnsProxyStartupCheckTest extends TestCase
 		);
 	}
 
-	public function testAProxyThatNeverBecameReadyWhileConfigXmlIsLockedIsNotDiagnosedAsAStartupFailure(): void
+	public function testAProxyThatNeverBecameReadyIsDiagnosedWhetherOrNotConfigXmlIsLocked(): void
 	{
-		// Given a moved box whose proxy never becomes ready, and a rollback that cannot turn pfB-DNS off (the config lock stays
-		// taken): ownership is not validated, so nothing about this start is diagnosed from this process's copy
+		// Given a moved box whose proxy never becomes ready, with the config lock taken by another save: nothing here needs the lock
 		$this->box();
 		// Lives and never publishes its marker: not ready, whatever applied identity the box seeded
 		$this->proxyLivesButNeverServes();
@@ -881,11 +880,11 @@ final class DnsProxyStartupCheckTest extends TestCase
 		// When the activation confirms it
 		$ready = $confirm();
 
-		// Then the wait ran out, and the only notice is the rollback's recovery failure: no startup diagnosis is filed
+		// Then the wait ran out, and the startup notice names the gateway's last error
 		$this->assertFalse($ready);
 		$this->assertSame(array_fill(0, 10, 100000), $clock->sleeps);
-		$this->assertSame(['pfBlockerNG DNS Proxy'], array_column($GLOBALS['pfb_test_file_notices'], 'id'), 'the recovery failure only');
-		$this->assertStringNotContainsString('boom', implode("\n", array_column($GLOBALS['pfb_test_file_notices'], 'notice')));
+		$this->assertSame(['pfBlockerNG DNS Proxy startup'], array_column($GLOBALS['pfb_test_file_notices'], 'id'), 'the startup notice only');
+		$this->assertStringContainsString('boom', implode("\n", array_column($GLOBALS['pfb_test_file_notices'], 'notice')));
 	}
 
 }

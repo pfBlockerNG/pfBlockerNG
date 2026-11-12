@@ -212,7 +212,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 
 		$this->assertContains('interface: ::1@5353', $this->customLines(), 'the backend is reachable on IPv6 loopback');
 		$this->assertNotContains('interface: 127.0.0.1@5353', $this->customLines(), 'Unbound must not bind an address absent from lo0');
-		$this->assertNotNull(pfb_dns_proxy_saved(), 'the original Resolver remains available for rollback');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the original Resolver remains available for a restore');
 	}
 
 	// -----------------------------------------------------------------------
@@ -614,8 +614,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$unsafe = NULL;
 		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
 
-		// Then nothing changes, the setting is named for the caller's rollback, and no notice is raised here: a notice would
-		// say the proxy keeps serving the Resolver, which the rollback that follows ends
+		// Then nothing changes, the setting is named for the caller, which raises the notice (pfB-DNS keeps serving), and no notice is raised here
 		$this->assertFalse($changed);
 		$this->assertSame('Listen Port 5353', $unsafe);
 		$this->assertSame($writes, $this->writeCalls());
@@ -663,7 +662,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$unsafe = NULL;
 		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
 
-		// Then nothing changes, and the setting is named for the caller's rollback instead of a notice
+		// Then nothing changes, and the setting is named for the caller's notice instead of a refusal
 		$this->assertFalse($changed);
 		$this->assertSame("Listen Port {$port}", $unsafe);
 		$this->assertSame($writes, $this->writeCalls());
@@ -806,7 +805,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		// Then the line is reported to the caller, which rolls pfB-DNS back (a refusal that keeps serving would leave Unbound one
 		// restart away from a bind collision): nothing here refuses, and the Resolver text is not touched ...
 		$this->assertSame($line, $unsafe);
-		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'the rollback speaks, not a refusal');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'the caller speaks, not a refusal');
 		$this->assertSame($edited, config_get_path('unbound/custom_options'));
 		$this->assertSame(1, $this->markerCount());
 
@@ -1395,7 +1394,7 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$unsafe = NULL;
 		$changed = pfb_dns_proxy_resolver(TRUE, $unsafe);
 
-		// Then no rollback is asked for (it would restore from a snapshot that does not hold the admin's line, and drop it)
+		// Then no notice names the line (the saved copy does not hold it, so a later restore would drop it)
 		$this->assertNull($unsafe);
 		$this->assertFalse($changed, 'the snapshot was not rewritten');
 		$this->assertSame($snapshot, $this->savedRaw());

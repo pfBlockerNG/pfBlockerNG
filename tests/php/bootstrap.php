@@ -200,8 +200,6 @@ $GLOBALS['pfb']['dns_proxy_ready'] = "{$pfb_test_tmp}/pfb_dns_ready";
 // Issue #3566: the gateway's record of what it runs, and the pending-restart marker.
 $GLOBALS['pfb']['dns_proxy_gateway_applied'] = "{$pfb_test_tmp}/pfb_dns_ready.sha256";
 $GLOBALS['pfb']['dns_proxy_restart_pending'] = "{$pfb_test_tmp}/pfb_dns_proxy_restart_pending";
-// Issue #3770: the one-line reason of the last failed pfB-DNS activation, which pfb_dns_status() reads: a sandbox file too.
-$GLOBALS['pfb']['dns_proxy_activation_failed'] = "{$pfb_test_tmp}/pfb_dns_proxy_activation_failed";
 $GLOBALS['pfb']['dns_proxy_rc_kept'] = "{$pfb_test_tmp}/pfb_dns_proxy_rc.kept";
 // The gateway's log, where the startup check reads which listeners it bound (issue #3538): a sandbox file, never /var/log.
 $GLOBALS['pfb']['dns_proxy_log'] = "{$pfb_test_tmp}/dns_proxy.log";

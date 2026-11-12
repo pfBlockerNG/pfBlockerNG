@@ -40,7 +40,6 @@ final class PfbDnsStatusNameEligibilityTest extends TestCase
 			'log' => "{$this->dir}/pfb.log",
 			'errlog' => "{$this->dir}/pfb.err",
 			'dns_proxy_ctl' => "{$this->dir}/ctl.sock",
-			'dns_proxy_activation_failed' => "{$this->dir}/activation_failed",
 			'pfb_dns' => PfbToggle::On,
 			'enable' => PfbToggle::On,
 		]);

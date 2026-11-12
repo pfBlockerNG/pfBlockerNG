@@ -26,7 +26,6 @@ final class PfbDnsAppliedStatusRegressionTest extends TestCase
 		$GLOBALS['pfb']['dns_proxy_pidfile'] = "{$this->dir}/pid";
 		$GLOBALS['pfb']['dns_proxy_ready'] = "{$this->dir}/ready";
 		$GLOBALS['pfb']['dns_proxy_ctl'] = "{$this->dir}/ctl";
-		$GLOBALS['pfb']['dns_proxy_activation_failed'] = "{$this->dir}/failed";
 		$GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['enable'] = PfbToggle::On;
 		$GLOBALS['pfb_test_valid_pids']["{$this->dir}/pid"] = TRUE;
 		$GLOBALS['pfb_test_valid_pids']["{$this->dir}/unbound.pid"] = TRUE;

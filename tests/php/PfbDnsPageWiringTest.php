@@ -74,6 +74,18 @@ final class PfbDnsPageWiringTest extends TestCase
 		$this->assertStringContainsString('<code>include:</code>', $page, 'an include is named: the move refuses it');
 	}
 
+	public function testTheHelpSaysALaterConflictAndADisabledResolverKeepPfbDnsRunningAndRestoreNothing(): void
+	{
+		$page = self::src(self::PAGE);
+
+		$this->assertStringContainsString('Adding such a conflict later keeps <strong>pfB-DNS</strong> running, with the Resolver still moved, and raises a notice.', $page);
+		$this->assertStringContainsString('Disabling the DNS Resolver leaves <strong>pfB-DNS</strong> running without a backend: DNS queries fail and a notice says so until the Resolver is enabled or <strong>pfB-DNS</strong> is turned off.', $page);
+		$this->assertStringContainsString('Turning <strong>pfB-DNS</strong> off, disabling pfBlockerNG or removing the package restores the saved Resolver settings.', $page, 'the admin\'s own switches still restore');
+		foreach (['restores the Resolver with the conflicting line kept', 'the activation failed', 'stops <strong>pfB-DNS</strong> and restores the saved fields'] as $retired) {
+			$this->assertStringNotContainsString($retired, $page, "the retired sentence is gone: {$retired}");
+		}
+	}
+
 	public function testTheDnsblPageNoLongerCarriesTheToggleOrItsHelp(): void
 	{
 		$page = self::src('www/pfblockerng/pfblockerng_dnsbl.php');

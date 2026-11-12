@@ -253,7 +253,7 @@ final class DnsProxyKeepRunningTest extends TestCase
 
 	public function testAProxyThatIsAliveButNotReadyIsNotRestartedForADifferingGateway(): void
 	{
-		// Given a live proxy that never published its marker, with a gateway binary that differs; the rollback its failed
+		// Given a live proxy that never published its marker, with a gateway binary that differs; the confirmation its failed
 		// readiness leads to finds the config locked
 		$this->krApply(['gateway' => 'different']);
 		$this->proxyLivesButNeverServes();

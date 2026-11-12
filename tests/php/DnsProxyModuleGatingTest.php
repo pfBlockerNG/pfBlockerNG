@@ -406,23 +406,23 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertCount(1, $this->configureCalls());
 	}
 
-	public function testPfbDnsOnWithTheResolverDisabledPutsItBack(): void
+	public function testPfbDnsOnWithTheResolverDisabledLeavesItMovedAndPutsNothingBack(): void
 	{
 		// Given pfB-DNS on and a moved Resolver, and the admin disables the Resolver itself (nothing left to front).
 		$this->setProxy(TRUE);
 		$this->seedMovedResolver();
 		config_del_path('unbound/enable');
+		$custom = config_get_path('unbound/custom_options');
+		$snapshot = $this->savedRaw();
 
 		// When the pass runs with no mode (DNSBL on, Resolver disabled).
-		$changed = pfb_unbound_python('');
+		pfb_unbound_python('');
 
-		// Then the Resolver is back as the user had it (its own enable flag stays absent) and the snapshot is cleared.
-		$expected = self::originalResolver();
-		unset($expected['enable']);
-		$this->assertTrue($changed);
-		$this->assertSame(self::sorted($expected), self::sorted(config_get_path('unbound')));
-		$this->assertSame('', $this->savedRaw());
-		$this->assertSame([FALSE], $this->configureCalls());
+		// Then a disabled Resolver is not the admin turning pfB-DNS off: the Resolver stays moved, the snapshot stays, and Unbound is not regenerated.
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'the Resolver stays moved');
+		$this->assertSame($custom, config_get_path('unbound/custom_options'), 'with our block in Custom Options');
+		$this->assertSame($snapshot, $this->savedRaw());
+		$this->assertSame([], $this->configureCalls());
 	}
 
 	public function testPfBlockerNgDisabledPutsTheResolverBackWhateverPfbDnsSays(): void

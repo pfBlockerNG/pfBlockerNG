@@ -779,7 +779,7 @@ final class DnsProxyLifecycleTest extends TestCase
 	{
 		// The installer is a script that runs at include time, so its order is pinned in the source: the proxy reads its module,
 		// lists and ini only at start, so its block runs only once the staging command has copied the new modules into
-		// /var/unbound. What the block does is run as shipped in DnsProxyActivationRollbackTest.
+		// /var/unbound. What the block does is run as shipped in DnsProxyMovedResolverTest.
 		$install = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
 		$stage = "exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&1');";
 		$this->assertSame(1, substr_count($install, $stage), 'test bootstrap: the installer stages the module files once');

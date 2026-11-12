@@ -198,6 +198,11 @@ It compares `pfb_dns_proxy_command_listeners()` (what the rc script asks for) wi
 > Positively confirmed foreign upstream ownership is the narrow exception and retains devel's rollback;
 > [#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848) will replace it with moving Unbound to a free port.
 > Actual activation confirmation remains fail-closed.
+>
+> **Amendment 2026-11-11 (#3848).** The foreign-owner rollback of the amendment above is gone, and so is every other
+> automatic restore of the Resolver (owner decision): `pfb_dns_proxy_confirm_started()` no longer takes a deferral argument, a
+> start or restart that does not serve is reported by the startup check and left running, and only the admin turning pfB-DNS off,
+> disabling pfBlockerNG, removing the package or running the setup wizard's reset gives the Resolver back.
 
 ## Acceptance criteria
 

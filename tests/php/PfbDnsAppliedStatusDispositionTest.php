@@ -11,7 +11,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * Configured listeners stay visible beside the applied inventory: an address the rc script asks for that the gateway neither serves nor
  * refuses is a row of its own. An applied status that does not answer is not an unhealthy gateway while nothing is started or restarted;
- * an activation that starts the gateway still waits for an answered status and rolls back when it never comes (as it does today).
+ * an activation that starts the gateway still waits for an answered status and is reported, with the Resolver left moved, when it never comes.
  */
 #[CoversFunction('pfb_dns_status')]
 #[CoversFunction('pfb_dns_proxy_ensure_running')]
@@ -45,7 +45,6 @@ final class PfbDnsAppliedStatusDispositionTest extends TestCase
 			'log' => "{$this->dir}/pfb.log",
 			'errlog' => "{$this->dir}/pfb.err",
 			'dns_proxy_ctl' => "{$this->dir}/ctl.sock",
-			'dns_proxy_activation_failed' => "{$this->dir}/activation_failed",
 			'pfb_dns' => PfbToggle::On,
 			'enable' => PfbToggle::On,
 		]);
@@ -57,7 +56,7 @@ final class PfbDnsAppliedStatusDispositionTest extends TestCase
 		$this->clearProxyFiles();
 		$this->setUpUpstreamFixture();
 		$this->setProxyMode();
-		// A rollback re-reads the package's settings: the keys it reads are present, as in DnsMetricLifecycleTest, not undefined.
+		// A restart re-reads the package's settings: the keys it reads are present, as in DnsMetricLifecycleTest, not undefined.
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', ['pfb_dnsport' => '8081', 'pfb_dnsport_ssl' => '8443']);
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '192.0.2.53');
 		config_set_path('installedpackages/pfblockerng/config/0/skipfeed', '');
@@ -238,7 +237,6 @@ final class PfbDnsAppliedStatusDispositionTest extends TestCase
 		// Then the gateway is kept as it is: nothing is started, restarted or rolled back
 		$this->assertTrue($ready, 'an unanswered status is unknown, not an unhealthy gateway');
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls']);
-		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_activation_failed']);
 		$this->assertTrue(pfb_dns_proxy_ready());
 	}
 

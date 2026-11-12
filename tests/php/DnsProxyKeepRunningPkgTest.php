@@ -101,14 +101,17 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$this->assertNull($result['marker']);
 	}
 
-	public function testADeadProxyStartedUnderAPackageOperationIsRolledBackWhenItsBackendIsDead(): void
+	public function testADeadProxyStartedUnderAPackageOperationLeavesTheResolverMovedWhenItsBackendIsDead(): void
 	{
 		// Given a proxy that is down with a restart pending, and no Unbound answering behind the gateway it starts
 		$result = $this->runUnderPkg(['op' => 'ensure', 'proxy' => 'dead', 'marker' => 'the package changed its rc script']);
 
-		// Then the start is judged in full: the gateway serves, but its upstream does not, so the start is rolled back
+		// Then the start is judged in full: the gateway serves, but its upstream does not, so it is not ready, and nothing is given back
 		$this->assertFalse($result['returned']);
-		$this->assertStringContainsString('did not become ready', $result['log']);
+		$this->assertFalse($result['stopped'], 'the gateway is not stopped');
+		$this->assertSame($result['saved_before'], $result['saved_after'], 'the snapshot is kept');
+		$this->assertSame($result['resolver_before'], $result['resolver_after'], 'the Resolver stays moved');
+		$this->assertTrue($result['running']);
 	}
 
 	public function testADeferredPassLeavesAnUnreadyGatewayAndItsResolverUntouchedWhenItStartsNothing(): void
@@ -254,22 +257,20 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 
 	public static function foreignOwnershipUnderPackage(): array
 	{
-		return ['update defers' => ['ensure', TRUE, FALSE], 'tick retains rollback' => ['tick', NULL, TRUE]];
+		return ['the update pass' => ['ensure', TRUE], 'the cron tick' => ['tick', NULL]];
 	}
 
 	#[DataProvider('foreignOwnershipUnderPackage')]
-	public function testForeignOwnershipKeepsDevelsPackageOperationPolicy(string $op, ?bool $returned, bool $stopped): void
+	public function testForeignOwnershipChangesNothingUnderAPackageOperation(string $op, ?bool $returned): void
 	{
 		$result = $this->runUnderPkg(['op' => $op, 'serving' => TRUE, 'foreign_upstream' => TRUE]);
 		$this->assertTrue($result['unbound_before'], 'the live Unbound exists despite the foreign port holder');
 		$this->assertTrue($result['gateway_before']);
 		$this->assertFalse($result['serving_before']);
 		$this->assertSame($returned, $result['returned']);
-		$this->assertSame($stopped, $result['stopped']);
-		if (!$stopped) {
-			$this->assertSame($result['saved_before'], $result['saved_after']);
-			$this->assertSame($result['resolver_before'], $result['resolver_after']);
-			$this->assertTrue($result['running']);
-		}
+		$this->assertFalse($result['stopped'], 'the gateway is not stopped');
+		$this->assertSame($result['saved_before'], $result['saved_after'], 'the snapshot is kept');
+		$this->assertSame($result['resolver_before'], $result['resolver_after'], 'the Resolver stays moved');
+		$this->assertTrue($result['running']);
 	}
 }

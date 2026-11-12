@@ -182,7 +182,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		// When the Resolver is reloaded
 		pfb_reload_unbound('enabled', TRUE);
 
-		// Then the log says the proxy is ready, and no rollback ran (no notice, no second service call)
+		// Then the log says the proxy is ready, and nothing was restored (no notice, no second service call)
 		$this->assertStringContainsString('the DNS proxy is ready', (string) file_get_contents($GLOBALS['pfb']['log']));
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 		$this->assertCount(1, $seen);
@@ -274,15 +274,13 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertGreaterThanOrEqual(3, $state['probes'], 'the marker was waited for until it appeared');
 		$this->assertSame([100000, 100000], $clock->sleeps, 'the ledger waited two ticks of 100 ms for the marker, then read it');
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'), 'a proxy that came up converged');
-		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'and nothing was rolled back');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'and nothing was restored');
 	}
 
-	public function testAProxyThatNeverComesUpAndCannotBeRolledBackOpensTheLedgerEntryWordedForTheProxy(): void
+	public function testAProxyThatNeverComesUpOpensTheLedgerEntryWordedForTheProxy(): void
 	{
-		// Given a restart-path apply whose proxy never becomes ready, and a rollback that cannot start: another process holds
-		// the config lock, so the Resolver stays moved and the proxy stays the host of the module
+		// Given a restart-path apply whose proxy never becomes ready: the Resolver stays moved and the proxy stays the host of the module
 		$this->setProxyMode();
-		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 		$seen = [];
 		$this->observeServiceCalls($seen, FALSE);
 

@@ -18,7 +18,7 @@ use PHPUnit\Framework\TestCase;
  *     is not executable, a machine the package has no binary for) is not started by anything else: the launch line
  *     the daemon is given exits nonzero with the wrapper's reason on its stderr, which daemon(8) writes to the proxy
  *     log, and runs no binary. The supervisor starts it again, no ready marker is ever published, and the activation's
- *     readiness wait rolls back (DnsProxyActivationRollbackTest);
+ *     readiness wait fails and the Resolver stays moved (DnsProxyNeverRollsBackTest);
  *   - a package with a binary for this machine launches it through the wrapper, with no decider command.
  *
  * The real script runs under dash in the sandbox of DnsProxyRcSandboxTrait, with the SHIPPED pfb_dns.sh beside the

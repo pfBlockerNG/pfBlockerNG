@@ -126,7 +126,7 @@ final class DnsProxyRuntimePredicateTest extends TestCase
 	}
 
 	/**
-	 * A proxy the reload or the rollback starts comes up ready, as the real one does: its child and its ready marker. A stop
+	 * A proxy the reload starts comes up ready, as the real one does: its child and its ready marker. A stop
 	 * leaves it stopped, with neither.
 	 */
 	private function proxyComesUpReadyWhenStarted(): void

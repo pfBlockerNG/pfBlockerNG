@@ -586,9 +586,8 @@ final class DnsProxyLiveListenersTest extends TestCase
 		}
 		$this->assertStringContainsString('Restarting the DNS proxy: its listen addresses changed', $this->krLog());
 		if ($restartReplacesGateway) {
-			// The activation the restart started completes on the gateway that replaced the old one: a rollback would still pass the assertions above
+			// The activation the restart started completes on the gateway that replaced the old one
 			$this->assertTrue(pfb_dns_proxy_serving_ready(), 'the restarted gateway serves its applied status and its upstream');
-			$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_activation_failed'], 'the activation the restart started was not rolled back');
 		}
 	}
 
@@ -929,19 +928,16 @@ final class DnsProxyLiveListenersTest extends TestCase
 		config_set_path('unbound/enable', TRUE);
 		$this->standInsStop();
 		$record = $answer === FALSE ? NULL : $this->standIn($this->socket, [], ['listening' => $this->listed(self::ADDRESSES), 'status_wire' => $answer]);
-		$activationFailed = "{$this->krDir}/activation_failed";
-		$GLOBALS['pfb']['dns_proxy_activation_failed'] = $activationFailed;
 		$this->assertTrue(pfb_dns_proxy_ready(), 'before: the retained gateway is ready');
 		$commandsBefore = count($GLOBALS['pfb_test_mwexec'] ?? []);
 
 		// When the tick runs before the next update
 		$this->krTick();
 
-		// Then the serving gateway and its Resolver snapshot stay in place, with no new restart or rollback
+		// Then the serving gateway and its Resolver snapshot stay in place, with no new restart
 		$this->assertSame([], $this->krProxyCalls());
 		$this->assertNotContains(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore));
 		$this->assertNotNull(pfb_dns_proxy_saved());
-		$this->assertFileDoesNotExist($activationFailed, 'unknown status must not be claimed as a failed activation');
 		$this->assertTrue(pfb_dns_proxy_ready());
 		$this->assertSame('the package installed a new gateway', $this->krMarker());
 		if ($record !== NULL) {
@@ -949,15 +945,13 @@ final class DnsProxyLiveListenersTest extends TestCase
 		}
 	}
 
-	public function testATickRestartStillConfirmsAnActivationWhoseAppliedStatusNeverAnswers(): void
+	public function testATickRestartStillConfirmsItsActivationButNeverRestoresTheResolverWhenItsAppliedStatusNeverAnswers(): void
 	{
 		// Given a serving gateway that refuses a live listener add, and a restart whose new gateway never answers its status
 		$this->quiet();
 		PfbConfig::write('gen/enable_cb', PfbToggle::On);
 		PfbConfig::write('dns/pfb_dns', PfbToggle::On);
 		config_set_path('unbound/enable', TRUE);
-		$activationFailed = "{$this->krDir}/activation_failed";
-		$GLOBALS['pfb']['dns_proxy_activation_failed'] = $activationFailed;
 		$this->gateway(['error: refused'], $this->listed(['192.0.2.1', '[::1]']));
 		$serviceHook = $GLOBALS['pfb_test_service_hook'];
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service) use ($serviceHook): void {
@@ -972,11 +966,10 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// When the tick itself restarts the gateway
 		$this->krTick();
 
-		// Then this activation still fails closed through the existing rollback
+		// Then this activation is still confirmed (not serving), and nothing stops the gateway or gives the Resolver back
 		$this->assertContains('restart_service pfb_dns_proxy', $this->krProxyCalls());
-		$this->assertContains(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore));
-		$this->assertFileExists($activationFailed, 'this tick restarted the gateway, so its unanswered activation is still claimed as failed');
-		$this->assertStringContainsString('did not become ready', $this->krLog());
+		$this->assertNotContains(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore));
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the Resolver stays moved');
 	}
 
 	public static function reconciliationPasses(): array
@@ -993,8 +986,6 @@ final class DnsProxyLiveListenersTest extends TestCase
 		PfbConfig::write('dns/pfb_dns', PfbToggle::On);
 		config_set_path('unbound/enable', TRUE);
 		$record = $this->standIn($this->socket, [], ['listening' => $this->listed(self::ADDRESSES), 'status_later' => NULL]);
-		$activationFailed = "{$this->krDir}/activation_failed";
-		$GLOBALS['pfb']['dns_proxy_activation_failed'] = $activationFailed;
 		$commandsBefore = count($GLOBALS['pfb_test_mwexec'] ?? []);
 		$saved = PfbConfig::read('dns/pfb_dns_saved');
 
@@ -1008,7 +999,6 @@ final class DnsProxyLiveListenersTest extends TestCase
 		// Then the failed later read does not turn this no-op into an activation
 		$this->assertSame([], $this->krProxyCalls());
 		$this->assertNotContains(PFB_DNS_PROXY_RCFILE . ' stop', array_slice($GLOBALS['pfb_test_mwexec'] ?? [], $commandsBefore));
-		$this->assertFileDoesNotExist($activationFailed);
 		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
 		$this->assertTrue(pfb_dns_proxy_ready());
 		$this->assertGreaterThanOrEqual(2, count(array_filter(self::requests($record), static fn (string $request): bool => $request === 'status')));
@@ -1221,7 +1211,7 @@ final class DnsProxyLiveListenersTest extends TestCase
 	public function testATickNeverChangesTheListenersOfAProxyThatIsAliveButNotReady(): void
 	{
 		// Given a live proxy that never published its marker, whose gateway refused 127.0.0.1 (which this box binds); the
-		// rollback its failed readiness leads to finds the config locked
+		// config.xml is locked, which a failed readiness no longer cares about
 		$this->quiet(['proxy' => 'lives']);
 		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 		$record = $this->gateway([], $this->listed(['192.0.2.1', '[::1]']), array_fill_keys($this->listed(['127.0.0.1']), self::CANT));
