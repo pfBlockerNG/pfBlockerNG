@@ -130,7 +130,7 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
         general = "/pfblockerng/pfblockerng_dns_general.php"
         for page, markers, field, original, submitted, submit in (
             (general, ("DNS Reply Logging",), "pfb_py_reply", "on", "", ("save", "save")),
-            (general, ("pfB-DNS Settings",), "pfb_dns", "on", "", ("save_pfb_dns", "Save pfB-DNS settings")),
+            (general, ("pfB-DNS Settings",), "pfb_dns", "on", "", ("save", "save")),
             (
                 "/pfblockerng/pfblockerng_dnsbl.php",
                 ("DNSBL Webserver Configuration",),
@@ -140,7 +140,7 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
                 ("save", "save"),
             ),
         ):
-            where = f"{page} [{submit[0]}]"
+            where = f"{page} [{field}]"
             before_page = scoped.get(page)
             rendered = evaluate_render(page, before_page.status_code, before_page.text, markers)
             assert rendered.ok, f"read-only GET {where}: {rendered.detail}"

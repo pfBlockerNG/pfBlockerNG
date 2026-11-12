@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/support/ProcessRunner.php';
@@ -9,24 +10,27 @@ require_once __DIR__ . '/support/ProcessRunner.php';
 /**
  * issue #3771 -- the pfB-DNS enable and all its settings (DoT, DoH, DoQ, DDR) moved from DNS > pfB-DNS onto DNS > General. The pfB-DNS
  * subtab is gone and pfblockerng_dns.php only redirects to DNS > General. Stored keys and save semantics did not change.
+ * issue #3856 -- DNS > General is ONE form with ONE "Save DNS settings" button; the settings of the two forms it replaced are saved together.
  *
  * Verification rows (the live UI half of each is tests/smoke/ui):
- *   V1 DNS > General shows the pfB-DNS enable and the DoT/DoH/DoQ/DDR sections as the first of two independent forms, each with its own
- *      submit button; saving one writes the same keys the old page wrote and nothing of the other form's.
+ *   V1 DNS > General shows the pfB-DNS enable, the DoT/DoH/DoQ/DDR sections, DNS Reply Logging and the Resolver addresses in one form with one
+ *      submit button; one save writes the same keys the two old saves wrote, in one write_config(), or writes nothing when any field is invalid.
  *   V2 no page prints a pfB-DNS subtab; the old page's URL survives only in the privilege and the GeoIP navigation migration.
  *   V3 requesting pfblockerng_dns.php ends on DNS > General.
  *   V4 the DDR check endpoint and its refresh script now live on DNS > General.
  *
  * The pages render and exit, so their source is pinned; the saves are executed: support/DnsSaveWorker.php runs the page's real POST
- * region (both handlers, gates and validation included) over the doubles in a child process, as a browser posts either form.
+ * region (the one handler, validation included) over the doubles in a child process, as a browser posts the form.
  */
 final class DnsGeneralPfbDnsFoldTest extends TestCase
 {
 	private const WWW = __DIR__ . '/../../src/usr/local/www/pfblockerng/';
 	private const SRC = __DIR__ . '/../../src/';
 	private const DNS_GENERAL = 'pfblockerng_dns_general.php';
-	private const SAVE_PFB_DNS = '[pfBlockerNG] save pfB-DNS settings';
-	private const SAVE_GENERAL = '[pfBlockerNG] save DNS General settings';
+	private const SAVE = '[pfBlockerNG] save DNS settings';
+	private const VIP_ONLY_REFUSAL = 'VIP-only mode requires pfB-DNS and Resolver addresses enabled';
+	/** The DNS General fields a browser posts with VIP-only mode on: Resolver addresses on, a VIP created automatically. */
+	private const VIP_ONLY_FORM = ['pfb_dns_listen_vip' => 'on', 'pfb_dns_listen_vip4' => 'auto', 'pfb_dns_listen_vip_only' => 'on'];
 
 	/** The only sources that may still name the old page's URL: the privilege and the legacy GeoIP rows (both MATCH old pages), and the redirect stub itself. */
 	private const OLD_URL_ALLOWED = [
@@ -102,18 +106,26 @@ final class DnsGeneralPfbDnsFoldTest extends TestCase
 		return self::leaves($config)[$path] ?? NULL;
 	}
 
+	/** The config.xml path of a registry key such as `gen/pfb_dns_listen_vip`. */
+	private static function path(string $registryKey): string
+	{
+		[$alias, $bare] = explode('/', $registryKey, 2);
+		return PFB_SECTIONS[$alias] . "/{$bare}";
+	}
+
 	/**
-	 * The page's whole POST region run in a child process, with only this form's button and fields posted.
+	 * The page's whole POST region run in a child process: the complete form a browser posts, shaped by $case (see support/DnsSaveWorker.php).
 	 *
-	 * @return array<string,mixed> the worker's result: before, disk, posted, writes, inputErrors, pendingMarked, returned, lockHeld
+	 * @param array<string,mixed> $case `stored`: registry key => value config.xml holds; `post`: field => value posted (NULL: not posted)
+	 * @return array<string,mixed> the worker's result: before, disk, posted, pconfig, writes, inputErrors, pendingMarked, returned, lockHeld
 	 */
-	private function runForm(string $button): array
+	private function runSave(array $case = []): array
 	{
 		$dir = sys_get_temp_dir() . '/pfb_dns_fold_' . bin2hex(random_bytes(6));
 		mkdir($dir, 0700, TRUE);
 		$result = "{$dir}/result.json";
 		try {
-			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . '/support/DnsSaveWorker.php', 'plain', $result, 'region', $button], 60.0);
+			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . '/support/DnsSaveWorker.php', 'plain', $result, json_encode($case, JSON_THROW_ON_ERROR | JSON_FORCE_OBJECT)], 60.0);
 			$this->assertFileExists($result, "the worker reported nothing (exit {$process['exit']}): {$process['stderr']}");
 			$this->assertStringNotContainsString('worker:', $process['stdout'] . $process['stderr'], 'the worker found the save region on DNS General');
 			return json_decode((string) file_get_contents($result), TRUE, 512, JSON_THROW_ON_ERROR);
@@ -123,60 +135,75 @@ final class DnsGeneralPfbDnsFoldTest extends TestCase
 		}
 	}
 
+	/** A save that was refused: no write, config.xml as it was, the page rendered again with its error instead of a redirect. */
+	private function assertNothingSaved(array $result): void
+	{
+		$this->assertSame([], $result['writes'], 'no write_config() for a refused save');
+		$this->assertSame($result['before'], $result['disk'], 'config.xml is exactly as it was');
+		$this->assertFalse($result['pendingMarked'], 'a refused save marks no pending change');
+		$this->assertTrue($result['returned'], 'the page renders its errors instead of redirecting');
+		$this->assertFalse($result['lockHeld'], 'the config lock is released');
+	}
+
 	// -----------------------------------------------------------------------
 	// V1: the page, as source
 	// -----------------------------------------------------------------------
 
-	public function testDnsGeneralHoldsThePfbDnsFormFirstWithItsOwnSaveButtonAndTheFiveSectionsInOrderThenTheDnsGeneralForm(): void
+	public function testDnsGeneralHoldsOneFormWithOneSaveDnsSettingsButtonAndItsSevenSectionsInOrder(): void
 	{
 		$page = self::page();
 
-		$this->assertSame(2, preg_match_all('/new Form\(/', $page), 'two forms: pfB-DNS, then DNS General');
+		$this->assertSame(1, preg_match_all('/new Form\(/', $page), 'one form');
 		self::inOrder($page, [
-			"/new Form_Button\\(\\s*'save_pfb_dns',\\s*'Save pfB-DNS settings',\\s*NULL,\\s*'fa-solid fa-save'\\s*\\)/",
-			"/\\\$btn->addClass\\('btn-primary'\\);/",
-			'/\$form = new Form\(\$btn\);/',
+			"/\\\$form = new Form\\('Save DNS settings'\\);/",
 			"/new Form_Section\\('pfB-DNS Settings'\\)/",
 			"/new Form_Section\\('DNS over TLS \\(DoT\\)'\\)/",
 			"/new Form_Section\\('DNS over HTTPS \\(DoH\\)'\\)/",
 			"/new Form_Section\\('DNS over QUIC \\(DoQ\\)'\\)/",
 			"/new Form_Section\\('Discovery of Designated Resolvers \\(DDR\\)'\\)/",
-			'/print \(\$form\);/',
-			"/new Form\\('Save DNS General settings'\\)/",
 			"/new Form_Section\\('DNS Reply Logging'\\)/",
 			"/new Form_Section\\('Resolver addresses'\\)/",
 			'/print \(\$form\);/',
 			'/pfb_dns_status_panel\(/',
 			"/include\\('foot\\.inc'\\);/",
 		], 'the page');
-		$this->assertLacks("new Form('Save pfB-DNS settings')", $page, 'the pfB-DNS form is built from its own button, not the default save button');
+		$this->assertSame(1, substr_count($page, 'print ($form);'), 'the one form is printed once');
+		$this->assertLacks('save_pfb_dns', $page, 'the pfB-DNS form and its own button are gone');
+		$this->assertLacks('Form_Button(', $page, 'the save button is the default one of the form');
+		$this->assertLacks('Save DNS General settings', $page, 'there is no second form');
 		$this->assertSame(1, substr_count($page, "'pfb_dns',"), 'the pfB-DNS enable checkbox is on this page once');
 	}
 
-	public function testThePfbDnsHandlerIsGatedOnItsOwnButtonAndTheDnsGeneralHandlerOnItsOwnAndOnlyOneInputErrorsListIsStarted(): void
+	public function testOneHandlerGatedOnTheSaveButtonSavesBothPartsUnderOneConfigLockInOneWrite(): void
 	{
 		$page = self::page();
 
-		$this->assertSame(1, substr_count($page, '$input_errors = array();'), 'one error list for both handlers');
-		[, , , , $pfbDns, $general, $title] = self::inOrder($page, [
+		$this->assertSame(1, substr_count($page, '$input_errors = array();'), 'one error list');
+		$this->assertSame(1, substr_count($page, "isset(\$_POST['save'])"), 'one handler');
+		[, , , $gate, $title] = self::inOrder($page, [
 			"/\\\$_GET\\['ajax'\\] \\?\\? ''\\) === 'ddr'/",	// the DDR endpoint answers before anything else loads
 			'/pfb_dns_proxy_seed_values\(\) !== \[\]/',
 			'/\$pconfig = array\(\);/',
-			'/\$input_errors = array\(\);/',
-			"/isset\\(\\\$_POST\\['save_pfb_dns'\\]\\)/",
-			"/if \\(\\\$_POST && isset\\(\\\$_POST\\['save'\\]\\)\\)/",
+			"/\\\$input_errors = array\\(\\);\\s*if \\(\\\$_POST && isset\\(\\\$_POST\\['save'\\]\\)\\) \\{/",
 			'/\$pgtitle = /',
 		], 'the page top');
 
-		$pfbDnsHandler = substr($page, $pfbDns, $general - $pfbDns);
-		$this->assertSame(1, substr_count($pfbDnsHandler, "header('Location: /pfblockerng/pfblockerng_dns_general.php');"), 'a saved pfB-DNS form comes back to DNS > General');
-		$this->assertHas("write_config('" . self::SAVE_PFB_DNS . "')", $pfbDnsHandler, 'the pfB-DNS handler keeps its write');
-		$this->assertHas('pfb_dns_proxy_listeners_stored($_POST)', $pfbDnsHandler, 'the same keys as before');
-		$this->assertLacks("isset(\$_POST['save'])", $pfbDnsHandler, 'the pfB-DNS handler does not answer the DNS General button');
-
-		$generalHandler = substr($page, $general, $title - $general);
-		$this->assertHas("write_config('" . self::SAVE_GENERAL . "')", $generalHandler, 'the DNS General handler keeps its write');
-		$this->assertLacks('save_pfb_dns', $generalHandler, 'the DNS General handler does not answer the pfB-DNS button');
+		$handler = substr($page, $gate, $title - $gate);
+		self::inOrder($handler, [
+			'/pfb_validate_dns_proxy_listeners_post\(/',
+			'/pfb_dns_config_lock\(\)/',
+			'/pfb_dns_proxy_listeners_stored\(\$_POST\)/',
+			'/pfb_validate_dns_listen_vip_only_post\(\$pconfig\)/',
+			"/write_config\\('/",
+			'/pfb_mark_pending_changes\(\)/',
+			"/header\\('Location: \\/pfblockerng\\/pfblockerng_dns_general\\.php'\\);/",
+		], 'the handler');
+		$this->assertSame(1, substr_count($handler, 'pfb_dns_config_lock()'), 'the config lock is taken once, for both parts');
+		$this->assertSame(1, substr_count($handler, "write_config('"), 'one write for both parts');
+		$this->assertHas("write_config('" . self::SAVE . "')", $handler, 'the one write has the one description');
+		$this->assertSame(1, substr_count($handler, "header('Location: /pfblockerng/pfblockerng_dns_general.php');"), 'a saved form comes back to DNS > General');
+		$this->assertLacks('[pfBlockerNG] save pfB-DNS settings', $page, 'the old pfB-DNS write is gone');
+		$this->assertLacks('[pfBlockerNG] save DNS General settings', $page, 'the old DNS General write is gone');
 	}
 
 	public function testThePageStaysTitledDnsGeneralAndPrintsTheDdrWarningsThenTheForeignWarningsRightAfterThePendingChangesBox(): void
@@ -186,73 +213,143 @@ final class DnsGeneralPfbDnsFoldTest extends TestCase
 		$this->assertHas("\$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('DNS'), gettext('General'));", $page, 'the page is DNS > General');
 		$this->assertSame(1, preg_match(
 			'/pfb_print_pending_changes_box\(\);\s*foreach \(pfb_dns_proxy_ddr_warnings\(\) as (\$\w+)\) \{\s*print_info_box\(\1, \'warning\', FALSE\);\s*\}'
-			. '\s*foreach \(pfb_dns_listen_foreign_warnings\(\) as (\$\w+)\) \{\s*print_info_box\(\2, \'warning\', FALSE\);\s*\}\s*\$btn = new Form_Button\(/',
+			. '\s*foreach \(pfb_dns_listen_foreign_warnings\(\) as (\$\w+)\) \{\s*print_info_box\(\2, \'warning\', FALSE\);\s*\}\s*\$form = new Form\(\'Save DNS settings\'\);/',
 			$page
-		), 'pending changes box, the DDR certificate warnings, the foreign DNS server warnings, then the pfB-DNS form');
+		), 'pending changes box, the DDR certificate warnings, the foreign DNS server warnings, then the form');
 	}
 
 	// -----------------------------------------------------------------------
 	// V1: the saves, executed
 	// -----------------------------------------------------------------------
 
-	public function testSavingOnlyThePfbDnsFormWritesExactlyTheKeysTheOldPfbDnsPageWroteAndNoneOfDnsGeneral(): void
+	public function testOnePostChangingBothPartsSavesBothInOneWriteAndWritesExactlyTheKeysOfBoth(): void
 	{
-		$result = $this->runForm('save_pfb_dns');
+		$result = $this->runSave();
 
-		// Given a box with pfB-DNS Off and a complete valid pfB-DNS form that turns it On, posted with its own button only
-		$dns = PFB_SECTIONS['dns'];
-		$this->assertArrayHasKey('save_pfb_dns', $result['posted']);
-		$this->assertArrayNotHasKey('save', $result['posted'], 'a browser posts the clicked form only');
-		$this->assertSame('', self::at($result['before'], "{$dns}/pfb_dns"), 'before: pfB-DNS is Off');
-		$this->assertSame('on', self::at($result['before'], PFB_SECTIONS['dnsbl'] . '/pfb_py_reply'), 'before: DNS Reply Logging is On');
+		// Given pfB-DNS Off and DNS Reply Logging On, and one POST that turns pfB-DNS On (with its listeners) and DNS Reply Logging Off
+		$this->assertArrayHasKey('save', $result['posted']);
+		$this->assertSame('', self::at($result['before'], self::path('dns/pfb_dns')), 'before: pfB-DNS is Off');
+		$this->assertSame('on', self::at($result['before'], self::path('dnsbl/pfb_py_reply')), 'before: DNS Reply Logging is On');
 
-		// Then the save went through its redirect with no error, and the pfB-DNS handler alone ran
+		// Then the save went through its redirect with no error, in one write
 		$this->assertSame([], $result['inputErrors']);
-		$this->assertSame([self::SAVE_PFB_DNS], $result['writes'], 'one write_config(), the pfB-DNS one');
+		$this->assertSame([self::SAVE], $result['writes'], 'one write_config() for both parts');
 		$this->assertTrue($result['pendingMarked'], 'applies on the next Update');
 		$this->assertFalse($result['returned'], 'ends through the redirect');
 		$this->assertFalse($result['lockHeld'], 'the config lock is released');
 
-		// And the keys written are exactly the enable and the canonical listener settings, each as the registry places them
-		$expected = ["{$dns}/pfb_dns" => 'on'];
+		// And the keys written are the enable and the canonical listener settings, then the preference and the Resolver address settings, each as the registry places them
+		$expected = [self::path('dns/pfb_dns') => 'on'];
 		foreach (pfb_dns_proxy_listeners_stored($result['posted']) as $key => $value) {
-			[$alias, $bare] = explode('/', pfb_dns_config_key($key), 2);
-			$expected[PFB_SECTIONS[$alias] . "/{$bare}"] = $value;
+			$expected[self::path(pfb_dns_config_key($key))] = $value;
 		}
-		$paths = array_keys($expected);
-		sort($paths);
-		$this->assertSame($paths, self::changedLeaves($result['before'], $result['disk']), 'the leaves the save changed: only pfB-DNS ones');
+		$expected += [
+			self::path('dnsbl/pfb_py_reply') => '',
+			self::path('gen/pfb_dns_listen_vip') => '', self::path('gen/pfb_dns_listen_vip_only') => '',
+			self::path('gen/pfb_dns_listen_vip4') => '', self::path('gen/pfb_dns_listen_vip6') => '', self::path('gen/pfb_dns_listen_interface') => 'lo0',
+		];
+		$moved = array_keys(array_filter($expected, static fn (mixed $value, string $path): bool => self::at($result['before'], $path) !== $value, ARRAY_FILTER_USE_BOTH));
+		sort($moved);
+		$this->assertSame($moved, self::changedLeaves($result['before'], $result['disk']), 'the leaves the save changed: the union of both parts');
 		foreach ($expected as $path => $value) {
 			$this->assertSame($value, self::at($result['disk'], $path), $path);
 		}
-		$this->assertSame('on', self::at($result['disk'], PFB_SECTIONS['dnsbl'] . '/pfb_py_reply'), 'the shared DNS Reply Logging preference is DNS General\'s: untouched');
 	}
 
-	public function testSavingOnlyTheDnsGeneralFormSavesItsOwnKeysAndLeavesEveryPfbDnsKeyAlone(): void
+	/** @return array<string,array{array<string,mixed>,string,array<string,mixed>}> a pfB-DNS field the validator refuses: the post, the one error, the posted value the form shows again */
+	public static function invalidPfbDnsFields(): array
 	{
-		$result = $this->runForm('save');
+		return [
+			'a bad DoT port'               => [['pfb_dns_dot_port' => 'abc'], 'DoT Port must be a whole number from 1 to 65535.', ['pfb_dns_dot_port' => 'abc']],
+			'an empty DNS interface list'  => [['pfb_dns_interface' => NULL], 'DNS: select at least one interface.', ['pfb_dns_interface' => []]],
+		];
+	}
 
-		// Given pfB-DNS On and DNS Reply Logging On, and a DNS General form posted with its own button only and the reply logging box unticked
-		$this->assertArrayHasKey('save', $result['posted']);
-		$this->assertArrayNotHasKey('save_pfb_dns', $result['posted'], 'a browser posts the clicked form only');
-		$this->assertSame('on', self::at($result['before'], PFB_SECTIONS['dns'] . '/pfb_dns'), 'before: pfB-DNS is On');
-		$this->assertSame('on', self::at($result['before'], PFB_SECTIONS['dnsbl'] . '/pfb_py_reply'), 'before: DNS Reply Logging is On');
+	/**
+	 * @param array<string,mixed> $post
+	 * @param array<string,mixed> $shown
+	 */
+	#[DataProvider('invalidPfbDnsFields')]
+	public function testAnInvalidPfbDnsFieldBesideAValidDnsGeneralChangeSavesNothingAndTheFormKeepsBothPartsAsPosted(array $post, string $error, array $shown): void
+	{
+		$result = $this->runSave(['post' => $post]);
 
-		// Then the DNS General handler alone ran and saved the unticked preference
-		$this->assertSame([], $result['inputErrors'], 'the pfB-DNS handler did not run: it would refuse a form with no listener fields');
-		$this->assertContains(self::SAVE_GENERAL, $result['writes']);
-		$this->assertNotContains(self::SAVE_PFB_DNS, $result['writes']);
-		$this->assertSame('', self::at($result['disk'], PFB_SECTIONS['dnsbl'] . '/pfb_py_reply'), 'DNS Reply Logging saved Off');
-		$this->assertTrue($result['pendingMarked']);
+		// Given pfB-DNS Off and DNS Reply Logging On, and a POST with an invalid pfB-DNS field, pfB-DNS On and DNS Reply Logging Off
+		$this->assertSame('', self::at($result['before'], self::path('dns/pfb_dns')), 'before: pfB-DNS is Off');
+		$this->assertSame('on', self::at($result['before'], self::path('dnsbl/pfb_py_reply')), 'before: DNS Reply Logging is On');
+
+		// Then the save is refused whole: the error is shown, nothing is written, not even the valid DNS General change
+		$this->assertSame([$error], $result['inputErrors']);
+		$this->assertNothingSaved($result);
+
+		// And the form comes back with what was posted in both parts
+		foreach (['pfb_dns' => 'on', 'pfb_py_reply' => ''] + $shown as $field => $value) {
+			$this->assertSame($value, $result['pconfig'][$field] ?? NULL, "the form shows the posted {$field}");
+		}
+	}
+
+	public function testAnInvalidDnsGeneralFieldBesideAValidPfbDnsChangeSavesNothingAndTheFormKeepsBothPartsAsPosted(): void
+	{
+		// Given pfB-DNS Off and DNS Reply Logging On, and a POST with an IPv4 VIP that is not an option, a new DoT port and DNS Reply Logging Off
+		$result = $this->runSave(['post' => ['pfb_dns_listen_vip4' => 'bogus', 'pfb_dns_dot_port' => '8530']]);
+		$this->assertSame('', self::at($result['before'], self::path('dns/pfb_dns')), 'before: pfB-DNS is Off');
+		$this->assertNotSame('8530', self::at($result['before'], self::path(pfb_dns_config_key('pfb_dns_dot_port'))), 'before: not the posted DoT port');
+
+		// Then the save is refused whole: the error is shown, nothing is written, not even the valid pfB-DNS change
+		$this->assertSame(['DNS General: select an available VIP and interface.'], $result['inputErrors']);
+		$this->assertNothingSaved($result);
+
+		// And the form comes back with what was posted in both parts
+		foreach (['pfb_dns' => 'on', 'pfb_dns_dot_port' => '8530', 'pfb_py_reply' => '', 'pfb_dns_listen_vip4' => 'bogus'] as $field => $value) {
+			$this->assertSame($value, $result['pconfig'][$field] ?? NULL, "the form shows the posted {$field}");
+		}
+	}
+
+	public function testVipOnlyModeTurnedOnTogetherWithPfbDnsIsAcceptedAndBothAreStoredOn(): void
+	{
+		// Given pfB-DNS and VIP-only mode both Off, and one POST that turns pfB-DNS, Resolver addresses and VIP-only mode On
+		$result = $this->runSave(['post' => self::VIP_ONLY_FORM]);
+		$this->assertSame('', self::at($result['before'], self::path('dns/pfb_dns')), 'before: pfB-DNS is Off');
+		$this->assertNotSame('on', self::at($result['before'], self::path('gen/pfb_dns_listen_vip_only')), 'before: VIP-only mode is not On');
+		$this->assertSame('on', $result['posted']['pfb_dns'] ?? NULL);
+
+		// Then the save is accepted: the pfB-DNS enable it writes first is what the VIP-only check judges
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertContains(self::SAVE, $result['writes']);
 		$this->assertFalse($result['returned'], 'ends through the redirect');
+		$this->assertSame('on', self::at($result['disk'], self::path('dns/pfb_dns')), 'pfB-DNS is stored On');
+		$this->assertSame('on', self::at($result['disk'], self::path('gen/pfb_dns_listen_vip_only')), 'VIP-only mode is stored On');
+	}
 
-		// And not one pfB-DNS leaf (the enable, the listeners, the shared transport settings, the snapshot) moved
-		$pfbDnsLeaves = array_values(array_filter(
-			self::changedLeaves($result['before'], $result['disk']),
-			static fn (string $path): bool => str_starts_with($path, PFB_SECTIONS['dns']) || str_starts_with($path, PFB_SECTIONS['dns_shared'])
-		));
-		$this->assertSame([], $pfbDnsLeaves);
-		$this->assertSame('on', self::at($result['disk'], PFB_SECTIONS['dns'] . '/pfb_dns'), 'pfB-DNS stays On');
+	public function testPfbDnsTurnedOffWhileVipOnlyModeStaysOnIsAcceptedAndVipOnlyModeStaysStored(): void
+	{
+		// Given pfB-DNS and VIP-only mode On with Resolver addresses on a created VIP, and a POST that turns pfB-DNS Off and leaves VIP-only mode On
+		$stored = ['dns/pfb_dns' => 'on', 'gen/pfb_dns_listen_vip' => 'on', 'gen/pfb_dns_listen_vip4' => 'auto', 'gen/pfb_dns_listen_vip_only' => 'on'];
+		$result = $this->runSave(['stored' => $stored, 'post' => ['pfb_dns' => NULL] + self::VIP_ONLY_FORM]);
+		$this->assertSame('on', self::at($result['before'], self::path('dns/pfb_dns')), 'before: pfB-DNS is On');
+		$this->assertSame('on', self::at($result['before'], self::path('gen/pfb_dns_listen_vip_only')), 'before: VIP-only mode is On');
+		$this->assertArrayNotHasKey('pfb_dns', $result['posted'], 'the form posts no pfB-DNS enable');
+
+		// Then the save is accepted: VIP-only mode stays stored (inactive) while pfB-DNS is Off
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertContains(self::SAVE, $result['writes']);
+		$this->assertFalse($result['returned'], 'ends through the redirect');
+		$this->assertSame('', self::at($result['disk'], self::path('dns/pfb_dns')), 'pfB-DNS is stored Off');
+		$this->assertSame('on', self::at($result['disk'], self::path('gen/pfb_dns_listen_vip_only')), 'VIP-only mode stays stored On');
+	}
+
+	public function testVipOnlyModeNewlyTurnedOnWhilePfbDnsStaysOffIsRefusedAndNothingIsWritten(): void
+	{
+		// Given pfB-DNS and VIP-only mode both Off, and a POST that turns VIP-only mode On and leaves pfB-DNS Off
+		$result = $this->runSave(['post' => ['pfb_dns' => NULL] + self::VIP_ONLY_FORM]);
+		$this->assertSame('', self::at($result['before'], self::path('dns/pfb_dns')), 'before: pfB-DNS is Off');
+		$this->assertNotSame('on', self::at($result['before'], self::path('gen/pfb_dns_listen_vip_only')), 'before: VIP-only mode is not On');
+
+		// Then the save is refused whole with the VIP-only error, and the form shows VIP-only mode On again
+		$this->assertCount(1, $result['inputErrors']);
+		$this->assertStringContainsString(self::VIP_ONLY_REFUSAL, $result['inputErrors'][0]);
+		$this->assertNothingSaved($result);
+		$this->assertSame('on', $result['pconfig']['pfb_dns_listen_vip_only'] ?? NULL, 'the form shows the posted VIP-only mode');
 	}
 
 	// -----------------------------------------------------------------------

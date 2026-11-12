@@ -89,9 +89,6 @@ class ToggleFlow:
     # the IP/DNSBL settings saves only write_config(). Generous default covers
     # the heavy one without hanging the job (pytest-timeout caps the test).
     post_timeout: float = 300.0
-    # The save button's (name, value). Handlers gate on isset($_POST['save']) except pfB-DNS, the first form of DNS
-    # General, which saves with its own button so a post runs only that form's handler (issue #3771).
-    submit: tuple[str, str] = ("save", "save")
 
 
 # The three Tier-B flows -- one per major settings page. Each toggles a pure-
@@ -254,14 +251,13 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush",
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
-    # issue #3515: pfB-DNS, the DNS proxy (default '' = off). Since issue #3771 it is the first form of
-    # DNS General and saves with its own button.
+    # issue #3515: pfB-DNS, the DNS proxy (default '' = off). Since issue #3856 it saves with the rest of DNS General,
+    # on the page's one Save button.
     ToggleFlow(
         name="pfb_dns",
         page="/pfblockerng/pfblockerng_dns_general.php",
         field="pfb_dns",
         config_path="installedpackages/pfblockerngdns/config/0/pfb_dns",
-        submit=("save_pfb_dns", "Save pfB-DNS settings"),
         # Adapter-backed unchecked saves use the canonical empty Off token.
     ),
     # DNS Reply Logging is edited on DNS General but stored in the DNSBL section (default on).
@@ -352,7 +348,7 @@ def _set_and_confirm(webui: WebUI, vm: helpers.SmokeVM, flow: ToggleFlow, target
     # the empty override models the browser's cleared checkbox, which every handler is
     # designed for. The STORED outcome is asserted against flow.on/flow.off below.
     overrides = {flow.field: flow.on} if target == flow.on else {flow.field: flow.post_off}
-    resp = webui.post(flow.page, overrides, submit=flow.submit, timeout=flow.post_timeout)
+    resp = webui.post(flow.page, overrides, timeout=flow.post_timeout)
     # Sanity only: the POST must not bounce to the login form (a dropped session
     # would otherwise read as "no change" against config). NOT the pass oracle.
     assert not looks_like_login_page(resp.text), f"{flow.name}: POST returned the login form (session lost)"
@@ -1858,7 +1854,6 @@ def test_dnsbl_py_cache_max_unlimited_and_reject_unchanged(
 
 
 DNS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # holds the pfB-DNS settings since issue #3771
-SAVE_PFB_DNS = ("save_pfb_dns", "Save pfB-DNS settings")
 DNS_PROXY_CFG = "installedpackages/pfblockerngdns/config/0/"
 DNS_PROXY_LISTENER_KEYS = (
     "pfb_dns_doh",
@@ -1938,7 +1933,7 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
             helpers.config_set(vm, helpers.dns_config_path(key), value)
         assert stored() == seeded, "seed did not take: DoH/DoQ must start Off with the default ports"
 
-        accepted = webui.post(DNS_PAGE, posted, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT)
+        accepted = webui.post(DNS_PAGE, posted, timeout=SAVE_TIMEOUT)
         assert not looks_like_login_page(accepted.text), "the Save lost its authenticated session"
         assert stored() == expected, (
             f"a valid DoH/DoQ configuration must persist, canonically: {_input_errors_text(accepted.text)}"
@@ -1956,11 +1951,11 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
                 "DoH: Trusted front ends must be IP addresses or CIDR prefixes",
             ),
         ):
-            rejected = webui.post(DNS_PAGE, override, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT)
+            rejected = webui.post(DNS_PAGE, override, timeout=SAVE_TIMEOUT)
             assert error in rejected.text, f"{override}: the page must show {error!r}"
             assert stored() == expected, f"{override}: a rejected Save must leave config.xml unchanged"
 
-        no_cert = webui.post(DNS_PAGE, {"pfb_dns_sslcertref": ""}, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT)
+        no_cert = webui.post(DNS_PAGE, {"pfb_dns_sslcertref": ""}, timeout=SAVE_TIMEOUT)
         assert "DoT, DoH and DoQ need a certificate: select one in SSL/TLS Certificate." in no_cert.text, (
             "DoH/DoQ on with no certificate selected must show the certificate input error"
         )
@@ -2019,9 +2014,7 @@ def test_pfb_dns_ddr_toggle_saves_on_and_clearing_it_stores_the_off_token(
         helpers.config_set(vm, DDR_CFG, "")
         assert helpers.config_get(vm, DDR_CFG) == "", "seed did not take: DDR must start Off"
         for posted, expected in (("on", "on"), ("", "")):
-            saved = webui.post(
-                DNS_PAGE, {"pfb_dns_ddr": posted, "pfb_dns_name": DDR_NAME}, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT
-            )
+            saved = webui.post(DNS_PAGE, {"pfb_dns_ddr": posted, "pfb_dns_name": DDR_NAME}, timeout=SAVE_TIMEOUT)
             assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
             now = helpers.config_get(vm, DDR_CFG)
             assert now == expected, (
@@ -2048,9 +2041,7 @@ def test_pfb_dns_doh_443_interfaces_persist_and_a_choice_that_is_no_option_abort
         helpers.config_set(vm, DDR_443_CFG, "")
         assert helpers.config_get(vm, DDR_443_CFG) == "", "seed did not take: nothing is advertised on 443"
 
-        saved = webui.post(
-            DNS_PAGE, {"pfb_dns_ddr_doh_443_interfaces[]": "lan"}, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT
-        )
+        saved = webui.post(DNS_PAGE, {"pfb_dns_ddr_doh_443_interfaces[]": "lan"}, timeout=SAVE_TIMEOUT)
         assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"
         now = helpers.config_get(vm, DDR_443_CFG)
         assert now == "lan", (
@@ -2058,9 +2049,7 @@ def test_pfb_dns_doh_443_interfaces_persist_and_a_choice_that_is_no_option_abort
         )
 
         for token in ("lo0", "opt99"):
-            refused = webui.post(
-                DNS_PAGE, {"pfb_dns_ddr_doh_443_interfaces[]": token}, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT
-            )
+            refused = webui.post(DNS_PAGE, {"pfb_dns_ddr_doh_443_interfaces[]": token}, timeout=SAVE_TIMEOUT)
             error = f"Advertise DoH on port 443: Invalid selection: {token}"
             assert error in refused.text, (
                 f"{token!r} must be refused with {error!r}: {_input_errors_text(refused.text)}"
@@ -2115,9 +2104,7 @@ def test_pfb_dns_name_is_saved_without_its_trailing_dot_and_ddr_needs_one(
         )
         before = _write_state(vm)
 
-        refused = webui.post(
-            DNS_PAGE, {"pfb_dns_ddr": "on", "pfb_dns_name": ""}, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT
-        )
+        refused = webui.post(DNS_PAGE, {"pfb_dns_ddr": "on", "pfb_dns_name": ""}, timeout=SAVE_TIMEOUT)
         assert input_errors_block(refused.text) and "DNS Name" in _input_errors_text(refused.text), (
             f"DDR on with no name must be refused; the page's input errors: {_input_errors_text(refused.text)}"
         )
@@ -2125,9 +2112,7 @@ def test_pfb_dns_name_is_saved_without_its_trailing_dot_and_ddr_needs_one(
         assert _write_state(vm) == before, "missing DNS Name: a refused Save changed config.xml or apply markers"
 
         for bad in ("fw", "10.0.0.1", "fw.resolver.arpa", "*.example.lan"):
-            rejected = webui.post(
-                DNS_PAGE, {"pfb_dns_ddr": "", "pfb_dns_name": bad}, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT
-            )
+            rejected = webui.post(DNS_PAGE, {"pfb_dns_ddr": "", "pfb_dns_name": bad}, timeout=SAVE_TIMEOUT)
             assert input_errors_block(rejected.text) and "DNS Name" in _input_errors_text(rejected.text), (
                 f"{bad!r} must be refused naming the field; the page's input errors: "
                 f"{_input_errors_text(rejected.text)}"
@@ -2138,7 +2123,6 @@ def test_pfb_dns_name_is_saved_without_its_trailing_dot_and_ddr_needs_one(
         saved = webui.post(
             DNS_PAGE,
             {"pfb_dns_ddr": "on", "pfb_dns_name": " FW.Example.LAN. "},
-            submit=SAVE_PFB_DNS,
             timeout=SAVE_TIMEOUT,
         )
         assert not looks_like_login_page(saved.text), "the Save lost its authenticated session"

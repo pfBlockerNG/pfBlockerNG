@@ -3660,7 +3660,8 @@ function pfb_validate_dns_listen_vip_only_post(array $post): array {
 	if (pfb_cfg_toggle_read($post['pfb_dns_listen_vip_only'] ?? '') !== PfbToggle::On) {
 		return [];
 	}
-	if (PfbConfig::read('dns/pfb_dns') !== PfbToggle::On || pfb_cfg_toggle_read($post['pfb_dns_listen_vip'] ?? '') !== PfbToggle::On) {
+	// The caller has written the posted pfB-DNS enable first; VIP-only already stored on stays accepted with pfB-DNS off.
+	if ((PfbConfig::read('dns/pfb_dns') !== PfbToggle::On && PfbConfig::read('gen/pfb_dns_listen_vip_only') !== PfbToggle::On) || pfb_cfg_toggle_read($post['pfb_dns_listen_vip'] ?? '') !== PfbToggle::On) {
 		return [gettext('VIP-only mode requires pfB-DNS and Resolver addresses enabled. Enable both first, or disable VIP-only mode.')];
 	}
 	foreach ([4, 6] as $family) {

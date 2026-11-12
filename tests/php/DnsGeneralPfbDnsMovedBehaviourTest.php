@@ -9,7 +9,7 @@ require_once __DIR__ . '/PageStatementLoader.php';
 /**
  * issue #3771 -- two behaviours the pfB-DNS settings brought with them onto DNS > General, executed from the shipped page:
  *   - the first load takes pfB-DNS's unset listener settings from the DNS Resolver once (issue #3538), now on the DNS tab's landing page;
- *   - the pfB-DNS save strips control characters from its text fields before anything reads them (issue #1723).
+ *   - the one Save DNS settings save strips control characters from its pfB-DNS text fields before anything reads them (issue #1723).
  */
 final class DnsGeneralPfbDnsMovedBehaviourTest extends TestCase
 {
@@ -74,7 +74,7 @@ final class DnsGeneralPfbDnsMovedBehaviourTest extends TestCase
 	{
 		// Given a pfB-DNS post whose ports, trusted front ends and DNS Name carry control characters
 		$_POST = [
-			'save_pfb_dns' => 'Save',
+			'save' => 'Save DNS settings',
 			'pfb_dns_dot_port' => "853\x1b", 'pfb_dns_dot_port6' => "\x00", 'pfb_dns_doh_port' => "\t4443 ",
 			'pfb_dns_doh_port6' => '', 'pfb_dns_doq_port' => "8853\x07", 'pfb_dns_doq_port6' => '',
 			'pfb_dns_doh_trusted' => "10.0.0.0/8\x07 192.0.2.1\x00", 'pfb_dns_name' => "fw.example.lan\x07",
@@ -95,7 +95,7 @@ final class DnsGeneralPfbDnsMovedBehaviourTest extends TestCase
 	public function testANonTextDnsNameIsLeftAsPostedForTheValidatorToRefuse(): void
 	{
 		// Given a DNS Name posted as an array (a hand-crafted request)
-		$_POST = ['save_pfb_dns' => 'Save', 'pfb_dns_name' => ['fw.example.lan']];
+		$_POST = ['save' => 'Save DNS settings', 'pfb_dns_name' => ['fw.example.lan']];
 
 		// When the save's ingestion step runs
 		self::runRegion('// issue #1723: sanitize at ingestion', '$pfb_dns = pfb_filter(');

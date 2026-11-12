@@ -8,34 +8,35 @@ use PHPUnit\Framework\Attributes\DataProvider;
 require_once __DIR__ . '/support/ProcessRunner.php';
 
 /**
- * issue #3515 -- the pfB-DNS form and the DNS General form (both on DNS > General since issue #3771) save the pfB-DNS toggle and DNS Reply Logging, while write_config() writes the
- * whole copy of config.xml the request read when it started. An apply's Resolver move (snapshot, moved interface) that
- * landed in between would be overwritten with the values this request loaded.
+ * issue #3515 -- DNS > General saves the pfB-DNS toggle and its listener settings, DNS Reply Logging and the Resolver addresses with its one
+ * "Save DNS settings" button (issue #3856), while write_config() writes the whole copy of config.xml the request read when it started.
+ * An apply's Resolver move (snapshot, moved interface) that landed in between would be overwritten with the values this request loaded.
  *
  * The page takes the config lock the apply's Resolver move takes, reads config.xml afresh under it, writes its own leaves
- * and holds the lock through write_config():
- *   - the move the apply made survives either form's save, and that form's posted toggle or preference is saved;
+ * and holds the lock through its one write_config():
+ *   - the move the apply made survives the save, and both parts of the posted form are saved: the pfB-DNS toggle and DNS Reply Logging;
  *   - a lock that stays taken, or a failed fresh read, is an input error: nothing is written;
  *   - a config.xml write that throws still releases the lock.
- *   - a failed save re-displays the reply-logging preference the form submitted, not the stored one;
+ *   - a failed save re-displays what the form submitted, both its parts, not what is stored;
  *
  * The save runs in a child process (support/DnsSaveWorker.php: the page's real save code over the doubles), because the
- * page ends with exit().
+ * page ends with exit(). Its default form turns pfB-DNS Off to On and DNS Reply Logging On to Off.
  */
 final class DnsSettingsSaveRaceTest extends TestCase
 {
 	private const DNS = 'installedpackages/pfblockerngdns/config/0';
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
+	private const SAVE = '[pfBlockerNG] save DNS settings';
 
-	/** @return array{disk:array,events:list<list<string>>,lockHeld:bool,inputErrors:list<string>} */
-	private function runScenario(string $scenario, bool $general = FALSE): array
+	/** @return array{disk:array,before:array,events:list<list<string>>,lockHeld:bool,inputErrors:list<string>} */
+	private function runScenario(string $scenario): array
 	{
 		$dir = sys_get_temp_dir() . '/pfb_dns_save_race_' . bin2hex(random_bytes(6));
 		mkdir($dir, 0700, TRUE);
 		$result = "{$dir}/result.json";
 		try {
-			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . '/support/DnsSaveWorker.php', $scenario, $result, $general ? 'general' : 'dns'], 60.0);
+			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . '/support/DnsSaveWorker.php', $scenario, $result], 60.0);
 			$this->assertFileExists($result, "the worker reported nothing (exit {$process['exit']}): {$process['stderr']}");
 			$this->assertStringNotContainsString('worker:', $process['stdout'] . $process['stderr'], 'the worker found the save code it runs on DNS General');
 			return json_decode((string) file_get_contents($result), TRUE, 512, JSON_THROW_ON_ERROR);
@@ -56,35 +57,36 @@ final class DnsSettingsSaveRaceTest extends TestCase
 		return $config;
 	}
 
-	public function testPfbDnsSaveKeepsTheMoveAndItsSnapshotAndDoesNotChangeTheSharedPreference(): void
+	/** The before-state of every save here: pfB-DNS Off and DNS Reply Logging On, so that the posted On and Off are both changes. */
+	private function assertStoredBefore(array $result): void
+	{
+		$this->assertSame('', self::at($result['before'], self::DNS . '/pfb_dns'), 'before: pfB-DNS is Off');
+		$this->assertSame('on', self::at($result['before'], self::DNSBL . '/pfb_py_reply'), 'before: DNS Reply Logging is On');
+	}
+
+	public function testASaveKeepsTheMoveAndItsSnapshotAndSavesBothPartsOfTheForm(): void
 	{
 		$result = $this->runScenario('interleave');
 
+		$this->assertStoredBefore($result);
 		$this->assertSame([], $result['inputErrors'], 'the posted form is valid');
-		$this->assertSame('', self::at($result['disk'], self::DNS . '/pfb_dns'), 'the toggle is saved as posted: Off');
-		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'pfB-DNS must not change the preference now owned by DNS General');
+		$this->assertSame([self::SAVE], $result['writes'], 'one write_config() for both parts');
+		$this->assertSame('on', self::at($result['disk'], self::DNS . '/pfb_dns'), 'the pfB-DNS part is saved as posted: On');
+		$this->assertSame('', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'the DNS General part is saved as posted: Off');
 		$this->assertSame('lo0', self::at($result['disk'], 'unbound/active_interface'), 'the Resolver move the apply made is kept');
 		$this->assertNotSame('', (string) self::at($result['disk'], self::SAVED), 'and so is its snapshot');
 		$this->assertFalse($result['lockHeld'], 'the lock is released');
-	}
-
-	public function testGeneralSaveKeepsTheMoveAndItsSnapshotAndSavesThePreference(): void
-	{
-		$result = $this->runScenario('interleave', TRUE);
-		$this->assertSame([], $result['inputErrors']);
-		$this->assertSame('', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'));
-		$this->assertSame('on', self::at($result['disk'], self::DNS . '/pfb_dns'));
-		$this->assertSame('lo0', self::at($result['disk'], 'unbound/active_interface'));
-		$this->assertNotEmpty(self::at($result['disk'], self::SAVED));
-		$this->assertFalse($result['lockHeld']);
 	}
 
 	public function testALockThatStaysTakenIsAnInputErrorThatSavesNothing(): void
 	{
 		$result = $this->runScenario('lock_taken');
 
+		$this->assertStoredBefore($result);
 		$this->assertCount(1, $result['inputErrors']);
-		$this->assertSame('on', self::at($result['disk'], self::DNS . '/pfb_dns'), 'nothing posted was saved');
+		$this->assertSame('', self::at($result['disk'], self::DNS . '/pfb_dns'), 'nothing posted was saved: pfB-DNS stays Off');
+		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'nothing posted was saved: DNS Reply Logging stays On');
+		$this->assertSame([], $result['writes']);
 		$this->assertNotContains('write', array_map(static fn (array $event): string => $event[0], $result['events']));
 		$this->assertFalse($result['lockHeld']);
 	}
@@ -93,8 +95,11 @@ final class DnsSettingsSaveRaceTest extends TestCase
 	{
 		$result = $this->runScenario('read_fails');
 
+		$this->assertStoredBefore($result);
 		$this->assertCount(1, $result['inputErrors']);
-		$this->assertSame('on', self::at($result['disk'], self::DNS . '/pfb_dns'), 'nothing posted was saved');
+		$this->assertSame('', self::at($result['disk'], self::DNS . '/pfb_dns'), 'nothing posted was saved: pfB-DNS stays Off');
+		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'nothing posted was saved: DNS Reply Logging stays On');
+		$this->assertSame([], $result['writes']);
 		$this->assertNotContains('write', array_map(static fn (array $event): string => $event[0], $result['events']));
 		$this->assertFalse($result['lockHeld']);
 	}
@@ -118,22 +123,25 @@ final class DnsSettingsSaveRaceTest extends TestCase
 	}
 
 	#[DataProvider('failedSaves')]
-	public function testAFailedSaveRedisplaysTheSubmittedReplyLoggingPreferenceNotTheStoredOne(string $scenario): void
+	public function testAFailedSaveRedisplaysWhatBothPartsOfTheFormSubmittedNotWhatIsStored(string $scenario): void
 	{
-		// Given the stored preference On, and a form that posts it Off (the checkbox absent)
-		$result = $this->runScenario($scenario, TRUE);
+		// Given pfB-DNS Off and DNS Reply Logging On stored, and a form that posts pfB-DNS On and DNS Reply Logging Off (the checkbox absent)
+		$result = $this->runScenario($scenario);
+		$this->assertStoredBefore($result);
 
-		// Then the save is an input error, the form comes back with the submitted Off, and nothing was saved
+		// Then the save is an input error, the form comes back with what it submitted, and nothing was saved
 		$this->assertNotSame([], $result['inputErrors'], 'before: the save failed');
 		$this->assertSame('', $result['reply'], 'the form re-displays the preference it submitted, not the stored one');
-		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'and config.xml keeps the stored preference');
+		$this->assertSame('on', $result['pconfig']['pfb_dns'] ?? NULL, 'and the pfB-DNS enable it submitted');
+		$this->assertSame('', self::at($result['disk'], self::DNS . '/pfb_dns'), 'config.xml keeps pfB-DNS Off');
+		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'and the stored preference');
 		$this->assertFalse($result['pendingMarked'], 'a failed save marks no pending change');
 		$this->assertTrue($result['returned'], 'a failed save renders its errors instead of exiting through a redirect');
 	}
 
-	public function testAFailedListenerAdvertisementWriteIsAnInputErrorEvenWhenTheGeneralPageWriteSucceeds(): void
+	public function testAFailedListenerAdvertisementWriteIsAnInputErrorEvenWhenThePageWriteSucceeds(): void
 	{
-		$result = $this->runScenario('advert_write_fails', TRUE);
+		$result = $this->runScenario('advert_write_fails');
 
 		$this->assertContains('pfBlockerNG: saving DNS listener advertisements', $result['writes'], 'the advertisement write was attempted');
 		$this->assertNotSame([], $result['inputErrors'], 'the operator is told the save failed');

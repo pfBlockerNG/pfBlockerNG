@@ -147,6 +147,40 @@ final class DnsVipOnlyModeTest extends TestCase
 		$this->assertSame([], $this->validate(['pfb_dns_listen_vip_only' => '']), 'disable is unconditional');
 	}
 
+	public function testPfbDnsOffRefusesOnlyAVipOnlyModeThatIsNewlyTurnedOn(): void
+	{
+		// Given pfB-DNS Off and a post with VIP-only mode On, Resolver addresses on and a VIP created automatically
+		PfbConfig::write('dns/pfb_dns', '');
+
+		// When VIP-only mode is not stored On, the post turns it On with pfB-DNS Off: refused, with the pfB-DNS and Resolver addresses message
+		$this->mode(FALSE);
+		$errors = $this->validate($this->post());
+		$this->assertCount(1, $errors, json_encode($errors));
+		$this->assertStringContainsString('VIP-only mode requires pfB-DNS and Resolver addresses enabled', $errors[0]);
+
+		// Then with VIP-only mode already stored On, the same post is accepted: it stays stored, inactive, while pfB-DNS is Off
+		$this->mode(TRUE);
+		$this->assertSame([], $this->validate($this->post()), 'VIP-only mode already stored On stays when pfB-DNS is turned Off');
+	}
+
+	public function testVipOnlyModeStoredOnWithPfbDnsOffStillRequiresResolverAddressesAndAnAvailableVipFamily(): void
+	{
+		// Given pfB-DNS Off and VIP-only mode stored On
+		PfbConfig::write('dns/pfb_dns', '');
+		$this->mode(TRUE);
+		$this->assertSame([], $this->validate($this->post()), 'before: the complete post is accepted');
+
+		// When the post turns Resolver addresses off, it is refused with the pfB-DNS and Resolver addresses message
+		$errors = $this->validate(array_replace($this->post(), ['pfb_dns_listen_vip' => '']));
+		$this->assertCount(1, $errors, json_encode($errors));
+		$this->assertStringContainsString('VIP-only mode requires pfB-DNS and Resolver addresses enabled', $errors[0]);
+
+		// When the post selects no VIP family, it is refused with the family message, not the pfB-DNS one
+		$errors = $this->validate(array_replace($this->post(), ['pfb_dns_listen_vip4' => 'none', 'pfb_dns_listen_vip6' => '']));
+		$this->assertCount(1, $errors, json_encode($errors));
+		$this->assertStringContainsString('VIP-only mode requires at least one available Resolver VIP family', $errors[0]);
+	}
+
 	public function testOwnDnsListsRemainAppendOnlyAndSharedRaListIsNotInvented(): void
 	{
 		$this->vips([4, 6]);

@@ -410,7 +410,7 @@ def test_dns_ddr_snapshot_is_available_after_saving(
     _open(page, webui, DNS_PAGE)
     assert "matched" in _states(page).values(), _states(page)
     with page.expect_navigation(wait_until="domcontentloaded"):
-        page.locator('button[type="submit"][name="save_pfb_dns"]').click()
+        page.locator('button[type="submit"][name="save"]').click()
     assert page.locator(".input-errors").count() == 0, page.locator("body").inner_text()
     assert "matched" in _states(page).values(), _states(page)
 
