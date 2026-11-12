@@ -98,7 +98,8 @@ When to push:
 - Right after Core starts, whatever the Outpost last pushed.
 - On a periodic tick. Change detection belongs to the Outpost, never to Core: it records what it last pushed (its
   configuration's own change marker, compared by inequality, plus a hash of the projected values) only after Core accepts
-  the push, and the tick pushes when either differs from the record. Core keeps no knowledge of the Outpost's
+  the push. The tick looks again when the marker differs from the record, and pushes only when the hash differs too, so a
+  change to unrelated settings sends nothing. Core keeps no knowledge of the Outpost's
   configuration. So a failed push, or a change made outside the Outpost's save path (a restore, a revert, a replicated
   change), reaches Core by the next tick.
 
