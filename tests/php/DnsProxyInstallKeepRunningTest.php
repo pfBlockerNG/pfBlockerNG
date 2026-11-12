@@ -51,7 +51,7 @@ final class DnsProxyInstallKeepRunningTest extends TestCase
 		rmdir_recursive($this->krDir);
 	}
 
-	/** The installer's DNS proxy block, cut out of the shipped file between its anchors and run as shipped. */
+	/** The installer's DNS proxy block, cut out of the shipped file between its anchors and run as shipped, its gateway binaries in the sandbox. */
 	private function runInstallProxyBlock(): void
 	{
 		$install = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
@@ -62,7 +62,7 @@ final class DnsProxyInstallKeepRunningTest extends TestCase
 		(static function (string $code): void {
 			global $pfb;
 			eval($code);
-		})(substr($install, $from, $to - $from));
+		})(str_replace('PFB_DNS_PROXY_DIR', var_export($this->krProxyDir, TRUE), substr($install, $from, $to - $from)));
 	}
 
 	/**
@@ -166,5 +166,94 @@ final class DnsProxyInstallKeepRunningTest extends TestCase
 		$this->assertSame(['stop_service pfb_dns_proxy'], $this->krProxyCalls());
 		$this->assertNull($this->krMarker());
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_rc_kept']);
+	}
+
+	/** The pending-changes marker in the sandbox, as the tick reads it: the one a settings save sets. */
+	private function noPendingChanges(): void
+	{
+		$GLOBALS['pfb']['pending_marker'] = "{$this->krDir}/pfb_pending_changes";
+		$this->assertFalse(pfb_pending_changes(), 'before: no changes are pending');
+	}
+
+	public function testAnUpgradeThatLeavesThePreviousGatewayRunningMarksThePendingChanges(): void
+	{
+		// Given a serving gateway that runs another binary than the one the package installed, and the same rc script (issue #3855)
+		$this->upgradeLeavesTheProxyServing('', ['gateway' => 'different']);
+		$this->noPendingChanges();
+		$this->assertTrue(pfb_dns_proxy_gateway_changed($this->krProxyDir), 'before: the running gateway is not the installed binary');
+
+		// When the installer's proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the gateway keeps running and the changes are pending, as a settings save leaves them: the next schedule check applies them
+		$this->assertSame([], $this->krProxyCalls());
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertNull($this->krMarker(), 'the rc script did not change: no restart is recorded for it');
+	}
+
+	public function testAnRcScriptOnlyChangeMarksNoPendingChanges(): void
+	{
+		// Given a serving gateway that runs the installed binary, and an rc script the package changed
+		$this->upgradeLeavesTheProxyServing("#!/bin/sh\n# the rc script the old package wrote\n");
+		$this->noPendingChanges();
+
+		// When the installer's proxy block runs
+		$this->runInstallProxyBlock();
+
+		// Then the restart waits for the next Update, as before, and no changes are pending
+		$this->assertIsString($this->krMarker(), 'the restart is still recorded');
+		$this->assertFalse(pfb_pending_changes());
+	}
+
+	public function testAnUpgradeThatChangesNothingMarksNoPendingChanges(): void
+	{
+		$this->upgradeLeavesTheProxyServing('');
+		$this->noPendingChanges();
+
+		$this->runInstallProxyBlock();
+
+		$this->assertFalse(pfb_pending_changes());
+	}
+
+	public function testAGatewayThatDoesNotServeIsRestartedOntoTheInstalledBinaryAndMarksNoPendingChanges(): void
+	{
+		// Given a gateway that is down after the upgrade, whose last record names the previous binary
+		$this->upgradeLeavesTheProxyServing('', ['proxy' => 'dead', 'gateway' => 'different']);
+		$this->noPendingChanges();
+
+		$this->runInstallProxyBlock();
+
+		// Then the installer restarts it as before: nothing is left for the next schedule check
+		$this->assertSame(['restart_service pfb_dns_proxy'], $this->krProxyCalls());
+		$this->assertFalse(pfb_pending_changes());
+	}
+
+	public function testTheNextScheduleCheckAppliesThePendingChangesAndItsUpdateRestartsTheGatewayOntoTheInstalledBinary(): void
+	{
+		// Given the installer left the previous gateway running and the changes pending, the Unbound backend answering
+		$this->upgradeLeavesTheProxyServing('', ['gateway' => 'different', 'serving' => TRUE]);
+		$this->noPendingChanges();
+		$this->runInstallProxyBlock();
+		pfb_dns_proxy_service($this->krProxyDir);	// the installer's rc script, naming the sandbox's dns_proxy directory as the update pass does
+		$this->assertTrue(pfb_pending_changes(), 'before: the installer marked the changes pending');
+
+		// When the next schedule check runs, outside the package operation; the Update it dispatches is the pass's own gateway check
+		// (pfb_dns_proxy_ensure_running()) and its settle of the version it saw, as sync_package_pfblockerng() makes them
+		$dispatched = 0;
+		$ready = FALSE;
+		$this->krTick([], function () use (&$dispatched, &$ready): bool {
+			$dispatched++;
+			$seen = pfb_pending_changes_token();
+			$ready = $this->krEnsure();
+			pfb_settle_pending_changes($seen);
+			return TRUE;
+		});
+
+		// Then the tick dispatched the Update once, which restarted the gateway once, and nothing is pending any more
+		$this->assertSame(1, $dispatched, 'the tick dispatches the pending apply');
+		$this->assertSame(['restart_service pfb_dns_proxy'], $this->krProxyCalls());
+		$this->assertStringContainsString('the package installed another gateway', $this->krLog());
+		$this->assertTrue($ready, 'the restarted gateway is ready');
+		$this->assertFalse(pfb_pending_changes());
 	}
 }

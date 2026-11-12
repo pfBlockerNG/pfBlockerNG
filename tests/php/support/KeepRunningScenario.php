@@ -221,8 +221,8 @@ trait KeepRunningScenario
 		return pfb_dns_proxy_ensure_running($this->krProxyDir);
 	}
 
-	/** The cron tick with every scheduled job behind a seam, so only its pfB-DNS check acts; its ledger and state stay under krDir. */
-	private function krTick(array $ps = []): void
+	/** The cron tick with every scheduled job behind a seam, so only its pfB-DNS check acts; its ledger and state stay under krDir. $apply runs a pending apply it dispatches. */
+	private function krTick(array $ps = [], ?callable $apply = NULL): void
 	{
 		$GLOBALS['pfb']['schedule_state_dir'] = $this->krDir;
 		$GLOBALS['pfb']['runlog'] = "{$this->krDir}/run.log";
@@ -238,7 +238,7 @@ trait KeepRunningScenario
 			$ps, static function (): void {}, NULL, 5.0, static function (): void {}, NULL, 5.0,
 			static fn (string $_job, string $_argument = ''): bool => TRUE,
 			static function (): void {},
-			static fn (): bool => TRUE
+			$apply ?? static fn (): bool => TRUE
 		);
 	}
 

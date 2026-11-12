@@ -807,6 +807,10 @@ if (pfb_dns_proxy_saved() !== NULL && pfb_dns_proxy_ready()) {
 	if ($pfb_rc === FALSE || $pfb_rc !== @file_get_contents($pfb['dns_proxy_rc_kept'])) {
 		pfb_dns_proxy_defer_restart('the package changed its rc script');
 	}
+	// issue #3855: a running gateway that is not the installed binary is a pending change: the next schedule check's update restarts it
+	if (pfb_dns_proxy_gateway_changed(PFB_DNS_PROXY_DIR)) {
+		pfb_mark_pending_changes();
+	}
 	unset($pfb_rc);
 } elseif (pfb_dns_proxy_saved() !== NULL) {
 	if (!pfb_dns_proxy_restart()) {
