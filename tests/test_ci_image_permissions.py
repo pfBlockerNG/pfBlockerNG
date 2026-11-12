@@ -67,6 +67,13 @@ def _effective_packages(workflow_doc: Any, job: dict[str, Any]) -> str:
 def packages_write_violations(workflows: Docs) -> list[str]:
     needing = _needs_packages_write(workflows)
     violations = []
+    builder = workflows.get(CI_IMAGE)
+    for job_id, job in _jobs(builder).items():
+        if not isinstance(job, dict) or _callee(job) is not None:
+            continue
+        granted = _effective_packages(builder, job)
+        if granted != "write":
+            violations.append(f"{CI_IMAGE}:{job_id} — pushes the ci images but grants packages: {granted}")
     for fname, doc in sorted(workflows.items()):
         for job_id, job in _jobs(doc).items():
             callee = _callee(job)
@@ -192,4 +199,17 @@ def test_cycle_terminates() -> None:
 
 def test_non_mapping_job_and_empty_document_are_ignored() -> None:
     docs = _docs(a_yml={"jobs": {"odd": None}}, b_yml=None)
+    assert packages_write_violations(docs) == []
+
+
+_BUILD_JOB = {"runs-on": "ubuntu-latest", "steps": [{"run": "docker buildx build --push ."}]}
+
+
+def test_the_image_builder_without_packages_write_is_flagged() -> None:
+    docs = {CI_IMAGE: {"permissions": {"contents": "read"}, "jobs": {"build": dict(_BUILD_JOB)}}}
+    assert packages_write_violations(docs) == ["ci-image.yml:build — pushes the ci images but grants packages: none"]
+
+
+def test_the_image_builder_with_packages_write_is_accepted() -> None:
+    docs = {CI_IMAGE: {"permissions": {"contents": "read", "packages": "write"}, "jobs": {"build": dict(_BUILD_JOB)}}}
     assert packages_write_violations(docs) == []

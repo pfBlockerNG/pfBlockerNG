@@ -13,7 +13,7 @@ from tests._workflow_steps import extract_job
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 # A real `uses:` step line: a comment that merely names the action is not a step.
-_SETUP_UV = re.compile(r"^\s*(?:- )?uses:\s*astral-sh/setup-uv\b", re.MULTILINE)
+_SETUP_UV = re.compile(r"^\s*(?:- )?uses\s*:\s*astral-sh/setup-uv\b", re.MULTILINE)
 _DRIVER = "ensure-graphify-merge-driver.sh"
 _STEP_RE = re.compile(r"^      - [A-Za-z_][A-Za-z0-9_-]*:", re.MULTILINE)
 _JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$", re.MULTILINE)
@@ -252,8 +252,9 @@ _SETUP_UV_STEP = """\
         _SETUP_UV_STEP + _GOOD_FIXTURE,
         _GOOD_FIXTURE + _SETUP_UV_STEP,
         (_SETUP_UV_STEP + _GOOD_FIXTURE).replace("setup-uv@v10.2.0", "setup-uv@v9"),
+        (_SETUP_UV_STEP + _GOOD_FIXTURE).replace("uses: astral-sh", "uses : astral-sh"),
     ),
-    ids=("before-the-driver", "after-the-push", "another-version"),
+    ids=("before-the-driver", "after-the-push", "another-version", "space-before-the-colon"),
 )
 def test_a_job_whose_uv_comes_from_the_image_rejects_a_setup_uv_step(planted: str) -> None:
     _assert_job_contract(_GOOD_FIXTURE, _FIXTURE_SPEC)
