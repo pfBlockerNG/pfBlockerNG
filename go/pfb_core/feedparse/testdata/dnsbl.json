@@ -2545,7 +2545,7 @@
   },
   {
    "id": "idn_uts46",
-   "description": "UTS #46 conversion by Core's x/net/idna profile (owner sign-off 2026-11-12 (#3906): Core uses golang.org/x/net/idna, the pfb-dns profile): fullwidth, NFD (Latin, Greek, Cyrillic), ligature U+FB01, circled U+2460, U+01C6, sharp s, final sigma, U+2024, U+2026, U+0E33, U+115F, U+0345 and the bidi rule. Lines without an old_expect agree with ICU's idn_to_ascii(); sharp s and final sigma are the non-transitional answers",
+   "description": "UTS #46 conversion by Core's x/net/idna profile (owner sign-off 2026-11-12 (#3906): Core uses golang.org/x/net/idna, the pfb-dns profile): fullwidth, NFD (Latin, Greek, Cyrillic), ligature U+FB01, circled U+2460, U+01C6, sharp s, final sigma, U+2024, U+2026, U+0E33, U+115F, U+0345 and the bidi rule. Lines without an old_expect agree with ICU's idn_to_ascii(); sharp s and final sigma are the non-transitional answers; their old_expect is the appliance's transitional ICU (ss.com, xn--4xa.com), replayed live",
    "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
    "lines": [
     {"line": "\uff25\uff38\uff21\uff2d\uff30\uff2c\uff25.com\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
@@ -2555,8 +2555,8 @@
     {"line": "\ufb01.com\n", "expect": {"rows": [["d", "fi.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\u2460.com\n", "expect": {"rows": [["d", "1.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
     {"line": "\u01c6.com\n", "expect": {"rows": [["d", "xn--d-toa.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "\u00df.com\n", "expect": {"rows": [["d", "xn--zca.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
-    {"line": "\u03c2.com\n", "expect": {"rows": [["d", "xn--3xa.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "\u00df.com\n", "expect": {"rows": [["d", "xn--zca.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}, "old_expect": {"rows": [["d", "ss.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}, "appliance": true},
+    {"line": "\u03c2.com\n", "expect": {"rows": [["d", "xn--3xa.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}, "old_expect": {"rows": [["d", "xn--4xa.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}, "appliance": true},
     {"line": "\u2024.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "\u2026.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
     {"line": "\u0e33.com\n", "expect": {"rows": [], "ip4": [], "ip6": [], "fail": ["null"], "scheme_skipped": 0, "stop": false}},
