@@ -174,7 +174,23 @@ final class DnsGeneralPfbDnsFoldTest extends TestCase
 		$this->assertSame(1, substr_count($page, "'pfb_dns',"), 'the pfB-DNS enable checkbox is on this page once');
 	}
 
-	public function testOneHandlerGatedOnTheSaveButtonSavesBothPartsUnderOneConfigLockInOneWrite(): void
+	public function testTheSslTlsCertificateSelectOffersNoneFirstSoASaveThatLeavesItAloneStoresNoCertificateNobodyChose(): void
+	{
+		// Given no stored certificate, a select without an empty option shows its first certificate and the whole-form save stores it
+		$page = self::page();
+
+		$this->assertSame(1, preg_match("/new Form_Select\\(\\s*'pfb_dns_sslcertref',[^;]*?\\[\\s*''\\s*=>\\s*gettext\\('None'\\)\\s*\\]\\s*\\+\\s*\\\$options_dns_cert\\s*\\)/s", $page), "the select lists '' (None) before the certificates");
+	}
+
+	public function testTheCertificateListStaysTheRealCertificatesSoNoneIsNeitherAValidCertificateNorHidesTheNoCertificatesNotice(): void
+	{
+		$page = self::page();
+
+		$this->assertStringContainsString("\$options_dns_cert = cert_build_list('cert', 'IPsec');", $page, 'None is added at the select only');
+		$this->assertStringContainsString("array_map('strval', array_keys(\$options_dns_cert))", $page, 'the validator is given the real certificates');
+	}
+
+	public function testOneHandlerGatedOnTheSaveButtonSavesBothPartsUnderOneConfigLockInOneWriteThenAppliesTheListenerVipsBeforeReleasingTheLock(): void
 	{
 		$page = self::page();
 
@@ -195,11 +211,14 @@ final class DnsGeneralPfbDnsFoldTest extends TestCase
 			'/pfb_dns_proxy_listeners_stored\(\$_POST\)/',
 			'/pfb_validate_dns_listen_vip_only_post\(\$pconfig\)/',
 			"/write_config\\('/",
+			'/pfb_dns_listen_vips_apply\(\)/',	// only after the page's own write: a refused apply write re-reads config.xml
 			'/pfb_mark_pending_changes\(\)/',
+			'/\}\s*finally\s*\{\s*unlock\(\$pfb_config_lock\);/',	// the lock is held through the apply
 			"/header\\('Location: \\/pfblockerng\\/pfblockerng_dns_general\\.php'\\);/",
 		], 'the handler');
 		$this->assertSame(1, substr_count($handler, 'pfb_dns_config_lock()'), 'the config lock is taken once, for both parts');
 		$this->assertSame(1, substr_count($handler, "write_config('"), 'one write for both parts');
+		$this->assertSame(1, substr_count($handler, 'pfb_dns_listen_vips_apply()'), 'the listener apply runs once per save');
 		$this->assertHas("write_config('" . self::SAVE . "')", $handler, 'the one write has the one description');
 		$this->assertSame(1, substr_count($handler, "header('Location: /pfblockerng/pfblockerng_dns_general.php');"), 'a saved form comes back to DNS > General');
 		$this->assertLacks('[pfBlockerNG] save pfB-DNS settings', $page, 'the old pfB-DNS write is gone');

@@ -20,6 +20,7 @@ from ..test_smoke_dns_gateway import go_toolchain as go_toolchain
 from ..test_smoke_dns_gateway import gw as gw
 from ..test_smoke_dns_gateway import probe_binary as probe_binary
 from .test_browser_feeds import JS_TIMEOUT_MS, _open
+from .test_render_smoke import _resolver_address_keys_restored
 from .test_sync_status_panels import panel
 from .webui import CSRF_FIELD, extract_csrf_token, looks_like_login_page
 
@@ -407,12 +408,13 @@ def test_dns_ddr_snapshot_is_available_after_saving(
 ) -> None:
     _ensure_ddr(gw, on=True)
     page = browser_page
-    _open(page, webui, DNS_PAGE)
-    assert "matched" in _states(page).values(), _states(page)
-    with page.expect_navigation(wait_until="domcontentloaded"):
-        page.locator('button[type="submit"][name="save"]').click()
-    assert page.locator(".input-errors").count() == 0, page.locator("body").inner_text()
-    assert "matched" in _states(page).values(), _states(page)
+    with _resolver_address_keys_restored(gw.vm):
+        _open(page, webui, DNS_PAGE)
+        assert "matched" in _states(page).values(), _states(page)
+        with page.expect_navigation(wait_until="domcontentloaded"):
+            page.locator('button[type="submit"][name="save"]').click()
+        assert page.locator(".input-errors").count() == 0, page.locator("body").inner_text()
+        assert "matched" in _states(page).values(), _states(page)
 
 
 @pytest.mark.ui_render

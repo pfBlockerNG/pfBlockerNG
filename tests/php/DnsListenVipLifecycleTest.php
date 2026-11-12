@@ -436,6 +436,48 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertSame([], config_get_path('virtualip/vip'));
 	}
 
+	public function testAFailedAdvertisementWriteIsCompletedByTheNextApplyWithoutNewInputAndAFurtherApplyWritesNothing(): void
+	{
+		// Given an automatic VIP and an interface whose DHCPv6 list names only its own address, and an advertisement write that fails once
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
+		config_set_path('dhcpdv6/lan/dnsserver', ['2001:db8::1']);
+		$disk = $GLOBALS['config'];
+		$fail = TRUE;
+		$writes = [];
+		$GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$disk, &$fail, &$writes): void {
+			$GLOBALS['pfb_test_write_config_result'] = !($fail && str_contains($description, 'DNS listener advertisements'));
+			$writes[] = $description;
+			if ($GLOBALS['pfb_test_write_config_result']) {
+				$disk = $GLOBALS['config'];
+			}
+		};
+		$GLOBALS['pfb_test_config_read_hook'] = static function () use (&$disk): void {
+			$GLOBALS['config'] = $disk;
+		};
+		$vip = 'fd00:53:53:53:53:53:53:53';
+
+		// When the first apply cannot write the advertisement
+		$this->assertFalse(pfb_dns_listen_vips_apply());
+		// Then config.xml holds the VIP but no advertisement
+		$this->assertSame($vip, config_get_path('virtualip/vip/0/subnet'), 'the VIP write landed');
+		$this->assertSame(['2001:db8::1'], config_get_path('dhcpdv6/lan/dnsserver'), 'the advertisement did not');
+
+		// When the next apply runs (the next save, Update or Resolver apply), with no new input
+		$fail = FALSE;
+		$this->assertTrue(pfb_dns_listen_vips_apply(), 'the retry succeeds');
+		// Then the VIP is not created twice and the advertisement and its record are complete in config.xml
+		$this->assertCount(1, config_get_path('virtualip/vip'), 'one VIP');
+		$this->assertSame(['2001:db8::1', $vip], $disk['dhcpdv6']['lan']['dnsserver'], 'the DHCPv6 list gained the VIP on disk');
+		$ledger = json_decode((string) PfbConfig::read('gen/pfb_dns_listen_added'), TRUE);
+		$this->assertSame([$vip], $ledger['dhcpdv6/lan/dnsserver'] ?? NULL, 'the advertisement is recorded');
+		$this->assertSame([$vip], $ledger['vip6'] ?? NULL, 'beside the VIP');
+
+		// And once complete, a further apply is a no-op
+		$count = count($writes);
+		$this->assertTrue(pfb_dns_listen_vips_apply());
+		$this->assertCount($count, $writes, 'nothing left to write');
+	}
+
 	public function testDroppingAnEmptyLedgerDoesNotRegenerateServices(): void
 	{
 		PfbConfig::write('gen/pfb_dns_listen_added', '{}');

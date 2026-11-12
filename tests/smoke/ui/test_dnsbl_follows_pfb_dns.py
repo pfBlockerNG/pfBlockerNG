@@ -17,6 +17,7 @@ import pytest
 
 from .. import helpers
 from .render_oracle import NO_INPUT_ERRORS, input_errors_block
+from .test_render_smoke import _resolver_address_keys_restored
 from .test_render_widget_ledger import ICON_RED, WIDGET_PAGE
 
 if TYPE_CHECKING:
@@ -99,7 +100,7 @@ def test_pfb_dns_page_saves_pfb_dns_off_while_dnsbl_is_on(webui: WebUI, smoke_vm
     """Given DNSBL and pfB-DNS stored On, When pfB-DNS Off is posted, Then pfB-DNS is stored Off, DNSBL stays On."""
     vm = smoke_vm
     siblings = {helpers.dns_config_path(key): value for key, value in PFB_DNS_SIBLINGS.items()}
-    with _seeded(vm, {DNSBL_ENABLE: "on", PFB_DNS_ENABLE: "on"} | siblings):
+    with _resolver_address_keys_restored(vm), _seeded(vm, {DNSBL_ENABLE: "on", PFB_DNS_ENABLE: "on"} | siblings):
         saved = webui.post(DNS_PAGE, {"pfb_dns": ""}, timeout=SAVE_TIMEOUT)
 
         assert _errors_text(saved.text) == NO_INPUT_ERRORS, (

@@ -18,8 +18,10 @@ declare(strict_types=1);
  * Scenarios: `interleave` (an apply's Resolver move lands on disk after this request started), `lock_taken` (another
  * process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (config.xml cannot be written),
  * `write_refused` (write_config answers FALSE), `write_failed` (file write fails: -1), `advert_write_fails` (DNS General selects a
- * listener VIP whose advertisement write_config answers FALSE while every other write succeeds), `dnsbl_on` (issue #3770: DNSBL is
- * stored On, which a save of pfB-DNS Off leaves as it is); any other name saves with nothing interleaved.
+ * listener VIP whose advertisement write_config answers FALSE while every other write succeeds), `page_write_refused_with_vip` and
+ * `page_write_failed_with_vip` (the same listener VIP, while the page's own write answers FALSE, or -1 for config.xml not written, and
+ * every other write succeeds), `dnsbl_on` (issue #3770: DNSBL is stored On, which a save of pfB-DNS Off leaves as it is); any other name
+ * saves with nothing interleaved.
  * The result file holds what config.xml would contain afterwards ("disk") and before the save ("before"), the lock/read/write order,
  * the page's input errors, whether the config lock is still held, the page's $pconfig after the save ("pconfig": what the form shows
  * again when the save fails), the reply-logging preference it would show ("reply"), the write_config() descriptions ("writes"),
@@ -149,7 +151,7 @@ if ($scenario === 'interleave') {
 	$GLOBALS['pfb_test_write_config_result'] = FALSE;
 } elseif ($scenario === 'write_failed') {
 	$GLOBALS['pfb_test_write_config_result'] = -1;
-} elseif ($scenario === 'advert_write_fails') {
+} elseif (in_array($scenario, ['advert_write_fails', 'page_write_refused_with_vip', 'page_write_failed_with_vip'], TRUE)) {
 	unset($_POST['pfb_dns']);	// pfB-DNS stays Off: the Resolver's own interfaces are what the listener advertisement edits
 	$_POST['pfb_dns_listen_vip'] = 'on';
 	$_POST['pfb_dns_listen_vip6'] = '_vipx';
@@ -163,6 +165,13 @@ $GLOBALS['pfb_test_write_config_hook'] = static function (string $description) u
 		$refused = str_contains($description, 'DNS listener advertisements');
 		$GLOBALS['pfb_test_write_config_result'] = !$refused;
 		if ($refused) {
+			return;
+		}
+	}
+	if (str_starts_with($scenario, 'page_write_')) {
+		$failed = str_contains($description, 'save DNS settings');
+		$GLOBALS['pfb_test_write_config_result'] = $failed ? ($scenario === 'page_write_failed_with_vip' ? -1 : FALSE) : TRUE;
+		if ($failed) {
 			return;
 		}
 	}

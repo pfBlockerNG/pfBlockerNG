@@ -150,7 +150,7 @@ if ($_POST && isset($_POST['save'])) {
 				}
 				PfbConfig::write('dns/pfb_dns', $pfb_dns);
 				$input_errors = pfb_validate_dns_listen_vip_only_post($pconfig);
-				$pfb_written = FALSE;
+				$pfb_written = $pfb_applied = FALSE;
 				if (!$input_errors) {
 					PfbConfig::write('dnsbl/pfb_py_reply', $pconfig['pfb_py_reply']);
 					PfbConfig::write('gen/pfb_dns_listen_vip', $pconfig['pfb_dns_listen_vip']);
@@ -158,20 +158,26 @@ if ($_POST && isset($_POST['save'])) {
 					PfbConfig::write('gen/pfb_dns_listen_vip4', $pconfig['pfb_dns_listen_vip4'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip4']);
 					PfbConfig::write('gen/pfb_dns_listen_vip6', $pconfig['pfb_dns_listen_vip6'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip6']);
 					PfbConfig::write('gen/pfb_dns_listen_interface', $pconfig['pfb_dns_listen_interface']);
-					// A refused advertisement write re-read config.xml: the page write would hide it behind a success.
-					$pfb_written = pfb_dns_listen_vips_apply() ? write_config('[pfBlockerNG] save DNS settings') : FALSE;
+					// The page write goes first: a refused apply write re-reads config.xml, which would drop these unsaved settings.
+					$pfb_written = write_config('[pfBlockerNG] save DNS settings');
+					if ($pfb_written !== FALSE && $pfb_written !== -1) {
+						$pfb_applied = pfb_dns_listen_vips_apply();
+						pfb_mark_pending_changes();	// applies on the next Update, not on save
+					}
 				}
 			} finally {
 				unlock($pfb_config_lock);
 			}
 			// pfSense's write_config() answers FALSE when it refuses the write and -1 when config.xml was not written: nothing was
-			// saved, so the save is an input error and the form comes back as submitted
+			// saved, so the save is an input error and the form comes back as submitted. A written save whose Resolver VIP or
+			// advertisement write failed stays saved and pending: the next Update or save retries the apply.
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
-				pfb_mark_pending_changes();	// applies on the next Update, not on save
-				header('Location: /pfblockerng/pfblockerng_dns_general.php');
-				exit;
-			}
-			if (!$input_errors) {
+				if ($pfb_applied) {
+					header('Location: /pfblockerng/pfblockerng_dns_general.php');
+					exit;
+				}
+				$input_errors[] = gettext('DNS settings saved, but the Resolver VIP/advertisement could not be written; it is retried at the next Update or save.');
+			} elseif (!$input_errors) {
 				$input_errors[] = gettext('DNS: the configuration could not be written, so these settings were not saved. Save again in a moment.');
 			}
 		}
@@ -279,12 +285,13 @@ $section->addInput(new Form_Select(
 		. 'Package-owned Resolver VIPs automatically serve plain DNS on port <strong>53</strong>. '
 		. '<strong>Localhost</strong>: loopback. <strong>All</strong>: every eligible firewall address except link-local. At least one entry is required.');
 
+// None first: with no stored certificate the select must not preselect (and a whole-form save then store) the first certificate.
 if ($options_dns_cert) {
 	$section->addInput(new Form_Select(
 		'pfb_dns_sslcertref',
 		gettext('SSL/TLS Certificate'),
 		$pconfig['pfb_dns_sslcertref'] ?? '',
-		$options_dns_cert
+		['' => gettext('None')] + $options_dns_cert
 	))->setHelp('The server certificate DoT, DoH and DoQ serve. The CA chain is determined automatically.');
 } else {
 	$section->addInput(new Form_StaticText(

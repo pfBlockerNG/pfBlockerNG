@@ -28,6 +28,10 @@ final class DnsSettingsSaveRaceTest extends TestCase
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const SAVE = '[pfBlockerNG] save DNS settings';
+	private const GEN = 'installedpackages/pfblockerng/config/0';
+	private const ADVERT = 'pfBlockerNG: saving DNS listener advertisements';
+	private const AUTO_VIP = 'pfBlockerNG: saving DNSBL auto-VIP changes';
+	private const APPLY_ERROR = 'DNS settings saved, but the Resolver VIP/advertisement could not be written; it is retried at the next Update or save.';
 
 	/** @return array{disk:array,before:array,events:list<list<string>>,lockHeld:bool,inputErrors:list<string>} */
 	private function runScenario(string $scenario): array
@@ -142,14 +146,52 @@ final class DnsSettingsSaveRaceTest extends TestCase
 		$this->assertTrue($result['returned'], 'a failed save renders its errors instead of exiting through a redirect');
 	}
 
-	public function testAFailedListenerAdvertisementWriteIsAnInputErrorEvenWhenThePageWriteSucceeds(): void
+	/** @return array<string,array{string}> the two answers pfSense gives a write that did not happen: FALSE (refused) and -1 (not written) */
+	public static function failedPageWrites(): array
+	{
+		return ['refused (FALSE)' => ['page_write_refused_with_vip'], 'not written (-1)' => ['page_write_failed_with_vip']];
+	}
+
+	public function testAListenerAdvertisementWriteThatFailsAfterThePageWriteKeepsTheSavedSettingsMarksPendingAndNamesTheRetry(): void
+	{
+		// Given a save that selects a listener VIP whose advertisement write_config answers FALSE while the page's own write succeeds
+		$result = $this->runScenario('advert_write_fails');
+
+		// Then the page's write came first and config.xml holds the posted settings
+		$this->assertSame([self::SAVE, self::AUTO_VIP, self::ADVERT], $result['writes'], 'the page write precedes the VIP write and the advertisement write');
+		$this->assertSame('', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'config.xml holds the posted DNS Reply Logging');
+		$this->assertSame('on', self::at($result['disk'], self::GEN . '/pfb_dns_listen_vip'), 'and the posted Resolver addresses');
+		// and the one error says the settings are saved and the advertisement is retried, so the operator is not told to save again
+		$this->assertSame([self::APPLY_ERROR], $result['inputErrors'], 'one error: saved, but the advertisement is retried');
+		$this->assertTrue($result['pendingMarked'], 'the pending change stays marked: the next Update retries the advertisement');
+		$this->assertTrue($result['returned'], 'the page renders its error instead of redirecting');
+		$this->assertSame(0, $result['unboundCalls'], 'Unbound is not regenerated for an advertisement that was not written');
+	}
+
+	public function testASaveWhoseApplyWriteFailsLeavesConfigXmlHoldingEverythingThePageReportsSaved(): void
 	{
 		$result = $this->runScenario('advert_write_fails');
 
-		$this->assertContains('pfBlockerNG: saving DNS listener advertisements', $result['writes'], 'the advertisement write was attempted');
-		$this->assertNotSame([], $result['inputErrors'], 'the operator is told the save failed');
+		$this->assertStoredBefore($result);
+		$this->assertStringContainsString('DNS settings saved', (string) ($result['inputErrors'][0] ?? ''), 'the page reports the settings saved');
+		$this->assertSame('fw.example.lan', self::at($result['disk'], self::DNS . '/pfb_dns_name'), 'so the pfB-DNS part is in config.xml');
+		$this->assertSame('', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'and the DNS Reply Logging part');
+		$this->assertSame('on', self::at($result['disk'], self::GEN . '/pfb_dns_listen_vip'), 'and the Resolver addresses switch');
+		$this->assertSame('_vipx', self::at($result['disk'], self::GEN . '/pfb_dns_listen_vip6'), 'and the selected VIP');
+	}
+
+	#[DataProvider('failedPageWrites')]
+	public function testAPageWriteThatFailsNeverReachesTheListenerApplyAndMarksNothing(string $scenario): void
+	{
+		// Given a save that selects a listener VIP (the apply would write its advertisement) and a page write pfSense refuses
+		$result = $this->runScenario($scenario);
+
+		$this->assertStoredBefore($result);
+		$this->assertSame([self::SAVE], $result['writes'], 'the apply never ran: no advertisement write, no VIP write');
+		$this->assertSame([self::WRITE_ERROR], $result['inputErrors'], 'the save is an input error');
+		$this->assertFalse($result['pendingMarked'], 'nothing is marked pending');
 		$this->assertTrue($result['returned'], 'the page renders its error instead of redirecting');
-		$this->assertFalse($result['pendingMarked'], 'a failed save marks no pending change');
-		$this->assertSame(0, $result['unboundCalls'], 'Unbound is not regenerated for a save that failed');
+		$this->assertSame('on', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'config.xml keeps the stored preference');
+		$this->assertNull(self::at($result['disk'], self::GEN . '/pfb_dns_listen_added'), 'and records no advertisement');
 	}
 }

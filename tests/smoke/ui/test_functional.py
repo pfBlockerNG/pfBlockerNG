@@ -44,6 +44,9 @@ import pytest
 from .. import helpers
 from .render_oracle import NO_INPUT_ERRORS, PhpErrorLogGuard, input_errors_block
 from .test_render_smoke import (
+    RESOLVER_ADDRESS_KEYS,
+    _offered_certificate,
+    _resolver_address_keys_restored,
     software_panel_forced,
 )
 from .webui import looks_like_login_page, scrape_form_fields
@@ -348,7 +351,9 @@ def _set_and_confirm(webui: WebUI, vm: helpers.SmokeVM, flow: ToggleFlow, target
     # the empty override models the browser's cleared checkbox, which every handler is
     # designed for. The STORED outcome is asserted against flow.on/flow.off below.
     overrides = {flow.field: flow.on} if target == flow.on else {flow.field: flow.post_off}
-    resp = webui.post(flow.page, overrides, timeout=flow.post_timeout)
+    # DNS General's whole-form save rewrites the Resolver-address keys from what the form shows: put them back.
+    with _resolver_address_keys_restored(vm) if flow.page == DNS_PAGE else contextlib.nullcontext():
+        resp = webui.post(flow.page, overrides, timeout=flow.post_timeout)
     # Sanity only: the POST must not bounce to the login form (a dropped session
     # would otherwise read as "no change" against config). NOT the pass oracle.
     assert not looks_like_login_page(resp.text), f"{flow.name}: POST returned the login form (session lost)"
@@ -1884,7 +1889,7 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
     """issues #3513, #3538: pfB-DNS's DoH/DoQ settings persist canonically; invalid input aborts the whole save.
 
     Given DoH and DoQ are stored Off with the default ports (before-state, seeded directly so it does not depend on
-      the save path under test) and the box offers a certificate (the form posts the first one it lists).
+      the save path under test) and the box offers a certificate (posted explicitly: the select starts at None).
     When a valid DoH/DoQ configuration is saved, Then all seven values persist (the trusted list
       space-joined) -- none was stored before the POST -- and so does the certificate.
     When one value is invalid (a port outside 1-65535, an unknown interface, a trusted entry that is
@@ -1893,11 +1898,6 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
       certificate and config.xml is unchanged.
     """
     vm = smoke_vm
-    originals = {
-        key: helpers.config_get_state(vm, helpers.dns_config_path(key))
-        for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS, *DNS_PROXY_V6_KEYS)
-    }
-    original_cert = helpers.config_get_state(vm, CERT_CFG)
     seeded = {
         "pfb_dns_doh": "",
         "pfb_dns_doh_port": "4443",
@@ -1925,7 +1925,7 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
     def stored() -> dict[str, str]:
         return {key: helpers.config_get(vm, helpers.dns_config_path(key)) for key in DNS_PROXY_LISTENER_KEYS}
 
-    try:
+    with _dns_page_settings_restored(vm):
         helpers.config_set(vm, CERT_CFG, "")
         helpers.config_set(vm, DDR_443_CFG, "lan")
         assert helpers.config_get(vm, DDR_443_CFG) == "lan", "seed did not take: LAN must be advertised on 443"
@@ -1933,6 +1933,8 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
             helpers.config_set(vm, helpers.dns_config_path(key), value)
         assert stored() == seeded, "seed did not take: DoH/DoQ must start Off with the default ports"
 
+        posted["pfb_dns_sslcertref"] = _offered_certificate(webui.get(DNS_PAGE).text)
+        assert posted["pfb_dns_sslcertref"], "the box offers no certificate with a private key: nothing to select"
         accepted = webui.post(DNS_PAGE, posted, timeout=SAVE_TIMEOUT)
         assert not looks_like_login_page(accepted.text), "the Save lost its authenticated session"
         assert stored() == expected, (
@@ -1960,10 +1962,6 @@ def test_pfb_dns_doh_doq_settings_persist_and_invalid_input_aborts_the_save(
             "DoH/DoQ on with no certificate selected must show the certificate input error"
         )
         assert stored() == expected, "a rejected Save must leave config.xml unchanged"
-    finally:
-        for key, state in originals.items():
-            helpers.config_restore_state(vm, helpers.dns_config_path(key), state)
-        helpers.config_restore_state(vm, CERT_CFG, original_cert)
 
 
 # issue #3583: DDR, saved like the other pfB-DNS toggles: posted `on` is stored `on`, posted `''` is stored as the empty
@@ -1982,7 +1980,7 @@ def _dns_page_settings_restored(vm: helpers.SmokeVM) -> Iterator[None]:
     paths = [
         helpers.dns_config_path(key) for key in (*DNS_PROXY_LISTENER_KEYS, *DNS_PROXY_OWN_KEYS, *DNS_PROXY_V6_KEYS)
     ]
-    paths += [CERT_CFG, DDR_CFG, helpers.dns_config_path("pfb_dns")]
+    paths += [CERT_CFG, DDR_CFG, helpers.dns_config_path("pfb_dns"), *RESOLVER_ADDRESS_KEYS]
     originals = {path: helpers.config_get_state(vm, path) for path in paths}
     try:
         yield

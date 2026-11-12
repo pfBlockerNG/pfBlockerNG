@@ -43,6 +43,7 @@ from .. import helpers
 from .test_browser_feeds import JS_TIMEOUT_MS, _contrast_ratio, _open, _shot
 from .test_dns_general_forms import PFB_DNS_DOT_PORT, REPLY_LOGGING, _both_parts_seeded, _stored
 from .test_dns_settings_order import PFB_DNS_SECTIONS
+from .test_render_smoke import RESOLVER_ADDRESS_KEYS
 
 pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 
@@ -82,6 +83,8 @@ DNS_SAVED_KEYS = (
     "pfb_dns_ddr_doh_443_interfaces",
 )
 REPLY_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
+# What a whole-form save rewrites and a test must put back: pfB-DNS keys, reply logging, Resolver addresses.
+SAVE_RESTORED = [*(helpers.dns_config_path(key) for key in DNS_SAVED_KEYS), REPLY_CFG, *RESOLVER_ADDRESS_KEYS]
 INTERFACE_LABELS = ("DNS Interface(s)", "DoT Interface(s)", "DoH Interface(s)", "DoQ Interface(s)")
 # The DoT's, the DoH's, the DoQ's and the DDR's "Experimental." disclosure; pfB-DNS itself carries none (issue #3846).
 EXPERIMENTAL_DISCLOSURES = 4
@@ -191,14 +194,14 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
     page is opened and put back, presence included, afterwards.
     """
     page = browser_page
-    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = SAVE_RESTORED
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     try:
         _open(page, webui, DNS_GENERAL_PAGE)
         cert = page.locator('select[name="pfb_dns_sslcertref"]')
         assert cert.count() == 1, "the box offers no certificate with a private key: nothing to select"
-        cert_ref = cert.locator("option").first.get_attribute("value")
-        assert cert_ref, "the first certificate option has no refid"
+        cert_ref = cert.locator('option:not([value=""])').first.get_attribute("value")
+        assert cert_ref, "the box offers no certificate option besides None"
         cert.select_option(cert_ref)
         page.get_by_role("listbox", name="DNS Interface(s)", exact=True).select_option("lo0")
         page.get_by_role("listbox", name="DoT Interface(s)", exact=True).select_option("lo0")
@@ -288,7 +291,7 @@ def test_resolver_addresses_off_saves_with_no_listener_vip(
     on the shared box it would create a live VIP.
     """
     page = browser_page
-    paths = [f"{helpers.CFG_GLOBAL}/{key}" for key in (*RESOLVER_SAVED, "pfb_dns_listen_added")] + [REPLY_CFG]
+    paths = [*RESOLVER_ADDRESS_KEYS, f"{helpers.CFG_GLOBAL}/pfb_dns_listen_added", REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     vips_before = _listener_vip_rows(smoke_vm)
     try:
@@ -366,7 +369,7 @@ def test_saving_ddr_and_a_doh_on_port_443_choice_persists_both(
     opened and put back.
     """
     page = browser_page
-    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = SAVE_RESTORED
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     ddr_path = helpers.dns_config_path("pfb_dns_ddr")
     try:
@@ -420,7 +423,7 @@ def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save
     page = browser_page
     vip = f"_vip{_VIP_UNIQID}"
     stored = f"lo0,{vip},{_GONE}"
-    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = SAVE_RESTORED
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     entry = {"mode": "ipalias", "interface": "lo0", "type": "single", "subnet": _VIP_ADDR, "subnet_bits": "32"}
     lists = [f"{DNS_CFG}pfb_dns{kind}_interface" for kind in ("", "_dot", "_doh", "_doq")]
@@ -784,8 +787,9 @@ def test_clicking_save_dns_settings_stores_the_changed_pfb_dns_field_and_the_cha
     """
     page = browser_page
     with _both_parts_seeded(smoke_vm):
-        before = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
-        assert before == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: "on"}, f"before-state: got {before}"
+        cert = helpers.dns_config_path("pfb_dns_sslcertref")
+        before = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING, cert])
+        assert before == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: "on", cert: ""}, f"before-state: got {before}"
         _open(page, webui, DNS_GENERAL_PAGE)
         page.locator('input[name="pfb_dns_dot_port"]').fill("8853")
         page.locator('input[name="pfb_py_reply"]').set_checked(False)
@@ -795,9 +799,9 @@ def test_clicking_save_dns_settings_stores_the_changed_pfb_dns_field_and_the_cha
         _save(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
-        after = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
-        assert after == {PFB_DNS_DOT_PORT: "8853", REPLY_LOGGING: ""}, (
-            f"expected the DoT port stored as 8853 and the reply logging stored off, got {after}"
+        after = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING, cert])
+        assert after == {PFB_DNS_DOT_PORT: "8853", REPLY_LOGGING: "", cert: ""}, (
+            f"expected the DoT port stored as 8853, the reply logging off and the certificate still unset, got {after}"
         )
 
 

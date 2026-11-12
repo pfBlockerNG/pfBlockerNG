@@ -214,6 +214,36 @@ final class DnsVipOnlyModeTest extends TestCase
 		$this->assertSame(['198.51.100.53'], config_get_path('dhcpd/unknown/dnsserver'), 'frozen lists remain untouched on apply');
 	}
 
+	public function testApplyCreatesTheMissingAutomaticVipSoTheVipOnlyListenerSetIsTheVipNotEmpty(): void
+	{
+		// Given VIP-only mode saved On with an automatic IPv4 VIP that no VIP row backs yet (a save writes its settings before the apply creates it)
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		$this->mode(TRUE);
+		$this->assertSame([], pfb_dns_proxy_listen(), 'premise: before the apply the VIP-only listener set is empty');
+
+		// When the apply runs
+		pfb_dns_listen_vips_apply();
+
+		// Then the VIP exists and it is the whole listener set
+		$this->assertSame(self::VIP4, config_get_path('virtualip/vip/0/subnet'), 'the apply created the automatic VIP');
+		$this->assertSame([self::VIP4], pfb_dns_proxy_listen(), 'the VIP-only listener set is the VIP');
+	}
+
+	public function testTheUpdateAppliesTheListenerVipsBeforeAnyStepThatBuildsOrStartsThePfbDnsListeners(): void
+	{
+		// The Update's listener apply (gated on the Resolver addresses setting) runs first, so a save that left the VIP to the Update
+		// never lets the Resolver step or the proxy's rc script read an empty VIP-only listener set.
+		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$offsets = [];
+		foreach (['if (!pfb_dns_listen_vips_apply()) {', '$pfbpython = pfb_unbound_python($mode, $pfb_dns_wanted);', 'if (!pfb_dns_proxy_ensure_running()) {'] as $call) {
+			$this->assertSame(1, substr_count($source, $call), "{$call} appears once in the Update");
+			$offsets[] = strpos($source, $call);
+		}
+		$sorted = $offsets;
+		sort($sorted);
+		$this->assertSame($sorted, $offsets, 'the listener apply, then the Resolver step (pfb_unbound_python), then the rc script and proxy start');
+	}
+
 	public function testDefaultOffRoundtripAndPolicyProjection(): void
 	{
 		$key = 'gen/pfb_dns_listen_vip_only';

@@ -84,16 +84,19 @@ def test_one_post_with_a_changed_pfb_dns_field_and_a_changed_reply_logging_saves
     """
     vm = smoke_vm
     with _both_parts_seeded(vm):
-        before = _stored(vm, [*PFB_DNS_SEED, *GENERAL_SEED])
-        assert (before[PFB_DNS_ENABLE], before[PFB_DNS_DOT_PORT], before[REPLY_LOGGING]) == ("", "853", "on"), (
-            f"before-state: expected pfB-DNS Off, DoT port 853 and reply logging On, got {before}"
-        )
-
-        # The seed stores no certificate, which the select renders as its first option: post the stored one back.
         cert = helpers.dns_config_path("pfb_dns_sslcertref")
+        before = _stored(vm, [*PFB_DNS_SEED, *GENERAL_SEED])
+        assert (before[PFB_DNS_ENABLE], before[PFB_DNS_DOT_PORT], before[REPLY_LOGGING], before[cert]) == (
+            "",
+            "853",
+            "on",
+            "",
+        ), f"before-state: expected pfB-DNS Off, DoT port 853, reply logging On and no certificate, got {before}"
+
+        # The whole-form scrape itself must keep the certificate "": the select's first option is None.
         saved = webui.post(
             DNS_GENERAL_PAGE,
-            {"pfb_dns": "on", "pfb_dns_dot_port": "8853", "pfb_py_reply": "", "pfb_dns_sslcertref": before[cert]},
+            {"pfb_dns": "on", "pfb_dns_dot_port": "8853", "pfb_py_reply": ""},
             timeout=SAVE_TIMEOUT,
         )
 
