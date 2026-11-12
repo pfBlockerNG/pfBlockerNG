@@ -21,8 +21,17 @@ result, and the PHP runner skips it where the host's probe differs.
 
 ## `normalize.json`: encoding normalization (`pfb_feed_normalize_generate()`, `pfb_feed_normalize.py`)
 
-Case: `id`, `description`, `input` or `input_hex` (the `.orig` bytes), `expect` or `expect_hex` (the `.norm` bytes after
-the trailing-newline guarantee), optional `appliance`.
+Case: `id`, `description`, `converter`, `input` or `input_hex` (the `.orig` bytes), `expect` or `expect_hex` (the `.norm` bytes
+after the trailing-newline guarantee), optional `old_expect` or `old_expect_hex`, optional `appliance`. A hex form is used only
+for bytes that are not valid UTF-8.
+
+- `converter` (bool): the PHP runner's interpreter. `true` is a python3 with charset_normalizer (the case is skipped where the
+  host has none), `false` is `''`, today's conversion-unavailable path. The Go runner ignores it.
+- `old_expect`: present only where Core differs from the old path on purpose (owner rule, #3906). The Go runner asserts
+  `expect`, the PHP runner asserts `old_expect`.
+- `appliance`: the PHP assertion depends on the appliance's C.UTF-8 class data (BOM/ZWJ non-printable, NBSP in `[:space:]`).
+  Separately, a PHP assertion that is not valid UTF-8 needs a host sed that passes invalid sequences through; the PHP runner
+  probes both and skips where the host differs.
 
 ## `ip.json`: IP feed lines (`pfb_ip_parse_line_replay()`)
 
