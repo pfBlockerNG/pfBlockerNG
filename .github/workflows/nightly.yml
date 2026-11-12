@@ -240,6 +240,13 @@ jobs:
           persist-credentials: false
           path: source
 
+      - name: Cache the uv downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('trusted/uv.lock') }}
+          restore-keys: uv-
+
       - name: Sync the locked dependency-package toolchain
         run: uv sync --project trusted --locked --only-group dep-pkg-build
 
@@ -542,6 +549,13 @@ jobs:
           ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Cache the uv downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
 
       - name: Install the pinned catalogue decoder
         # The synced venv goes on PATH so the `python3` below has the decoder.

@@ -149,6 +149,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache the uv downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-
+
       - name: Sync the locked dependency-package toolchain
         # build-leg.sh shells out to `python3`: the image's CPython is the .python-version pin
         # the appliance carries, and the synced venv goes on PATH so that `python3` has the

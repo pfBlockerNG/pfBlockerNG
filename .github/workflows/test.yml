@@ -861,9 +861,7 @@ jobs:
 
       - name: Run markdownlint-cli2
         # Reads .markdownlint.jsonc (rules) + .markdownlint-cli2.jsonc (globs/ignores).
-        env:
-          MARKDOWNLINT_CLI2_VERSION: 0.23.2
-        run: npx --yes "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}"
+        run: markdownlint-cli2
 
   widget-js-tests:
     name: Widget JS unit tests (node --test)
@@ -902,6 +900,13 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Cache the npm downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('tools/webassets/package-lock.json') }}
+          restore-keys: npm-
 
       - name: Rebuild the vendor tree and diff against what's committed
         # Node/npm are dev+CI-only (never shipped to the appliance): this

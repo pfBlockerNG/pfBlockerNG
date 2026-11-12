@@ -107,6 +107,7 @@ ARG GO_VERSION=1.27.0
 ARG GO_SHA256=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685
 ARG NODE_VERSION=24.19.0
 ARG NODE_SHA256=14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647
+ARG MARKDOWNLINT_CLI2_VERSION=0.23.2
 RUN set -eu; \
     curl -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"; \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c -; \
@@ -115,6 +116,10 @@ RUN set -eu; \
     echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c -; \
     tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner; \
     rm -f /tmp/go.tar.gz /tmp/node.tar.xz
+
+# Baked so the markdownlint job lints offline instead of fetching the package on every run (#3884).
+RUN npm install -g --no-audit --no-fund "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" \
+ && rm -rf /root/.npm
 
 # Release ASSETS pinned by SHA-256: apt would re-pin a lint verdict to whatever the base
 # ships (#2185), and a source archive is generated on demand from a tag, so its bytes are
@@ -205,6 +210,7 @@ RUN set -eu; \
     go version | grep -q " go${GO_VERSION} "; \
     [ "$(go env CGO_ENABLED)" = 1 ]; \
     [ "$(node --version)" = "v${NODE_VERSION}" ]; \
+    markdownlint-cli2 --help | grep -q "^markdownlint-cli2 v${MARKDOWNLINT_CLI2_VERSION} "; \
     shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION#v}"; \
     [ "$(shellspec --version)" = "${SHELLSPEC_VERSION}" ]; \
     [ "$(actionlint -version | sed -n 1p)" = "${ACTIONLINT_VERSION}" ]; \

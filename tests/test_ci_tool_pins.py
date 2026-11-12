@@ -130,7 +130,14 @@ def test_a_tool_pin_the_image_owns_is_declared_only_in_the_dockerfile() -> None:
         name for name, values in pins.items() if any(s.startswith("Dockerfile:") for v in values.values() for s in v)
     }
     # Floor: a scan that stopped reading the Dockerfile's ARGs would find nothing to compare.
-    assert {"GO_VERSION", "NODE_VERSION", "ORAS_VERSION", "SHELLSPEC_VERSION", "KCOV_COMMIT"} <= owned
+    assert {
+        "GO_VERSION",
+        "NODE_VERSION",
+        "ORAS_VERSION",
+        "SHELLSPEC_VERSION",
+        "KCOV_COMMIT",
+        "MARKDOWNLINT_CLI2_VERSION",
+    } <= owned
     assert _declared_outside_the_dockerfile(pins) == {}
 
 
