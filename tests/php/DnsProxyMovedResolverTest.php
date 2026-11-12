@@ -396,13 +396,13 @@ final class DnsProxyMovedResolverTest extends TestCase
 		// Given a Resolver with nothing of ours moved, and Unbound stopped; first enabled: a restart starts it once
 		$GLOBALS['config']['unbound'] = self::originalResolver();
 		$before = $this->startAttempts();
-		$started = pfb_stop_start_unbound('');
+		$started = pfb_stop_start_unbound();
 		$this->assertSame(0, $started['retval']);
 		$this->assertSame($before + 1, $this->startAttempts(), 'before: an enabled Resolver is started by the restart');
 
 		// When the admin disables the Resolver and a pass restarts Unbound again
 		config_del_path('unbound/enable');
-		$disabled = pfb_stop_start_unbound('');
+		$disabled = pfb_stop_start_unbound();
 
 		// Then nothing is started, and the restart reports no failure
 		$this->assertSame($before + 1, $this->startAttempts(), 'a disabled Resolver is not started');

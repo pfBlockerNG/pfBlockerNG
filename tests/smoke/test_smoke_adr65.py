@@ -87,10 +87,10 @@ def adr65_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]: 
 
 
 # --------------------------------------------------------------------------- #
-# dnsbl.log helpers. ONE path only: pfb_unbound_include.inc nullfs-mounts
-# /var/log/pfblockerng rw at {chroot}/var/log/pfblockerng, so the chroot path is
-# the SAME file -- grepping both counts every line twice, which an exact-count
-# assertion (this module pins "the query adds NO line") cannot tolerate.
+# dnsbl.log helpers. ONE path only: pfB-DNS writes dnsbl.log on the host; the
+# chroot copy an older package's nullfs mount exposed was the SAME file, so
+# grepping both would count every line twice, which an exact-count assertion
+# (this module pins "the query adds NO line") cannot tolerate.
 # --------------------------------------------------------------------------- #
 
 _DNSBL_LOG_PATHS = ("/var/log/pfblockerng/dnsbl.log",)

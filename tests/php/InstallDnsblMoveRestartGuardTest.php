@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
  *
  * The bug: the reset was misspelled `$u_found = FALSE;` (an orphan that is assigned
  * but never read), so `$ufound` was NOT reset and carried the prior block's value
- * into the `if ($ufound) { pfb_stop_start_unbound('') }` guard.
+ * into the `if ($ufound) { pfb_stop_start_unbound() }` guard.
  *
 	 * install.inc is a procedural migration script (host-absolute requires, sqlite,
 	 * exec, real Unbound control) and is not loadable by the unit harness. The pin therefore
