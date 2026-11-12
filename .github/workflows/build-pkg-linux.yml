@@ -122,7 +122,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses the
+  # Builds the ci image once per ci-image.yml input hash (an unchanged hash reuses the
   # published one); `build` runs inside it instead of installing tools (#3852).
   ci-image:
     uses: ./.github/workflows/ci-image.yml
@@ -153,8 +153,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/uv
-          key: uv-${{ hashFiles('uv.lock') }}
-          restore-keys: uv-
+          key: uv-dep-pkg-build-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-dep-pkg-build-
 
       - name: Sync the locked dependency-package toolchain
         # build-leg.sh shells out to `python3`: the image's CPython is the .python-version pin

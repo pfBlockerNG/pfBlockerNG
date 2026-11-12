@@ -288,7 +288,7 @@ concurrency:
 
 jobs:
   ci-image:
-    # Builds the ci and ci-vm images once per .github/docker/ content hash (an unchanged directory
+    # Builds the ci and ci-vm images once per ci-image.yml input hash (an unchanged hash
     # reuses the published ones); the smoke job runs inside ci-vm instead of installing its tools (#3852).
     uses: ./.github/workflows/ci-image.yml
     permissions:

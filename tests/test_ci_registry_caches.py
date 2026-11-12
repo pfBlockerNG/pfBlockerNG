@@ -100,6 +100,22 @@ def test_a_job_that_syncs_uv_caches_the_downloads_first(workflow: str, job: str)
     assert gaps == [], f"{workflow} job {job} must cache ~/.cache/uv: {gaps}"
 
 
+@pytest.mark.parametrize(("workflow", "job"), _UV_JOBS, ids=[f"{w}:{j}" for w, j in _UV_JOBS])
+def test_a_job_that_syncs_one_uv_group_keys_its_cache_on_that_group(workflow: str, job: str) -> None:
+    """test.yml's jobs save the `dev` group under `uv-<lock hash>`. Sharing that key, a job syncing
+    another group gets an exact hit holding none of its packages, and an exact hit never saves."""
+    steps = _steps(workflow, job)
+    sync = _first_running(steps, r"\buv sync\b")
+    assert sync is not None, f"{workflow} job {job} has no `uv sync` step, so the test guards nothing"
+    group = re.search(r"--only-group\s+(\S+)", steps[sync]["run"])
+    assert group, f"{workflow} job {job} syncs no single group: {steps[sync]['run']!r}"
+    cache = next(s for s in steps if (s.get("with") or {}).get("path") == "~/.cache/uv")
+    prefix = f"uv-{group.group(1)}-"
+
+    assert cache["with"]["key"].startswith(prefix), f"{workflow} job {job} key {cache['with']['key']!r}"
+    assert cache["with"].get("restore-keys") == prefix, f"{workflow} job {job} restore-keys must be {prefix!r}"
+
+
 def test_the_cache_check_rejects_each_way_a_cache_can_cache_nothing() -> None:
     """Vacuity guard: a compliant job passes; no cache, a late cache, a key on the wrong lock and a
     cache that skips when the install runs are each reported."""

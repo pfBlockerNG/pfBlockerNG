@@ -68,7 +68,7 @@ concurrency:
 
 jobs:
   ci-image:
-    # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses
+    # Builds the ci image once per ci-image.yml input hash (an unchanged hash reuses
     # the published image); every job below runs inside it instead of installing a toolchain (#3852).
     uses: ./.github/workflows/ci-image.yml
     permissions:

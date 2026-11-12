@@ -36,7 +36,7 @@ env:
   PORTS_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ports_ref || vars.NIGHTLY_PORTS_REF || 'pfblockerng/use-github' }}
 
 jobs:
-  # Builds the ci image once per .github/docker/ content hash (an unchanged directory reuses the
+  # Builds the ci image once per ci-image.yml input hash (an unchanged hash reuses the
   # published one); the jobs that install tools run inside it instead (#3852).
   ci-image:
     uses: ./.github/workflows/ci-image.yml
@@ -244,8 +244,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/uv
-          key: uv-${{ hashFiles('trusted/uv.lock') }}
-          restore-keys: uv-
+          key: uv-dep-pkg-build-${{ hashFiles('trusted/uv.lock') }}
+          restore-keys: uv-dep-pkg-build-
 
       - name: Sync the locked dependency-package toolchain
         run: uv sync --project trusted --locked --only-group dep-pkg-build
@@ -554,8 +554,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/uv
-          key: uv-${{ hashFiles('uv.lock') }}
-          restore-keys: uv-
+          key: uv-dep-pkg-build-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-dep-pkg-build-
 
       - name: Install the pinned catalogue decoder
         # The synced venv goes on PATH so the `python3` below has the decoder.

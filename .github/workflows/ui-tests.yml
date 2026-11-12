@@ -188,7 +188,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Builds the ci and ci-vm images once per .github/docker/ content hash (an unchanged directory
+  # Builds the ci and ci-vm images once per ci-image.yml input hash (an unchanged hash
   # reuses the published ones); the jobs below run inside them instead of installing tools (#3852).
   ci-image:
     uses: ./.github/workflows/ci-image.yml

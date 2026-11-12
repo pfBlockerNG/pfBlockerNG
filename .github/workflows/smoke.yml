@@ -187,9 +187,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Builds the ci and ci-vm images once per .github/docker/ content hash, before any leg starts:
+  # Builds the ci and ci-vm images once per ci-image.yml input hash, before any leg starts:
   # every smoke-single leg below runs its own ci-image call (which then only finds both tags
-  # published) and would otherwise race N builds of a changed directory (#3852).
+  # published) and would otherwise race N builds of changed inputs (#3852).
   ci-image:
     uses: ./.github/workflows/ci-image.yml
     permissions:

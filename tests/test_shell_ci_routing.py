@@ -82,6 +82,9 @@ def test_the_kcov_step_fails_rather_than_skips_when_kcov_is_missing() -> None:
     assert "shellspec --kcov" in run, "the kcov step must run shellspec under kcov"
     assert "command -v kcov" not in run, f"the kcov step probes for kcov instead of requiring it:\n{run}"
     assert not re.search(r"\b(?:else|elif)\b|\bskip", run, re.IGNORECASE), f"the kcov step has a skip branch:\n{run}"
+    # Nothing may follow the selectors either: `|| true` or `; exit 0` would mask a failing run.
+    command = " ".join(run.replace("\\\n", " ").split())
+    assert re.fullmatch(r"shellspec --kcov --shell bash(?: [\w./*-]+)+", command), f"not one bare kcov run:\n{run}"
 
 
 # The ci image generates de_DE.UTF-8 (its Dockerfile); the shellspec job proves it took. Every
