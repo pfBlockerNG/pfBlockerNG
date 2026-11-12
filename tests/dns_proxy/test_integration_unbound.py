@@ -26,7 +26,8 @@ from frontend_helpers import (
     FakeUnbound,
 )
 
-IMAGE = "pfb-dns-frontend-unbound:trixie-py"
+# CI hands the image ci-image.yml pre-built; unset, the tests self-build DOCKERFILE under the local tag.
+IMAGE = os.environ.get("PFB_UNBOUND_PY_IMAGE") or "pfb-dns-frontend-unbound:trixie-py"
 DOCKERFILE = (
     "FROM debian:trixie-slim\n"
     "RUN apt-get update && apt-get install -y --no-install-recommends unbound python3-unbound"

@@ -86,7 +86,7 @@ def test_buildx_builds_the_context_the_tag_hashes() -> None:
     for hashed in ('"$CONTEXT_DIR"', '"$GO_MODULE_DIR/go.mod"', '"$GO_MODULE_DIR/go.sum"'):
         assert hashed in hash_run, f"the hash step must cover {hashed}"
     builds = re.findall(r"docker buildx build .*", build_run)
-    assert len(builds) == 2
+    assert len(builds) == 4  # ci, ci-vm, unbound, unbound-py
     assert all(build.endswith('"$CONTEXT_DIR"') for build in builds), builds
     assert all('--build-context gomod="$GO_MODULE_DIR"' in build for build in builds), builds
 

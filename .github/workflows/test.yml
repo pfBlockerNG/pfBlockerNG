@@ -115,7 +115,9 @@ jobs:
     # those steps the host daemon; --network host and the shared /tmp make a path a sibling
     # container binds the same file on both sides. $CI_RUN is that prefix.
     env:
-      CI_RUN: docker run --rm --init --network host -v /var/run/docker.sock:/var/run/docker.sock -v ${{ github.workspace }}:${{ github.workspace }} -v /tmp:/tmp -w ${{ github.workspace }} -e UV_CACHE_DIR=/tmp/uv-cache ${{ needs.ci-image.outputs.ci }}
+      CI_RUN: docker run --rm --init --network host -v /var/run/docker.sock:/var/run/docker.sock -v ${{ github.workspace }}:${{ github.workspace }} -v /tmp:/tmp -w ${{ github.workspace }} -e UV_CACHE_DIR=/tmp/uv-cache -e PFB_UNBOUND_PY_IMAGE ${{ needs.ci-image.outputs.ci }}
+      # The dns_proxy integration tests run Unbound from this pre-built image (ci-image.yml); unset, they self-build.
+      PFB_UNBOUND_PY_IMAGE: ${{ needs.ci-image.outputs.unbound_py }}
 
     strategy:
       fail-fast: false
@@ -160,6 +162,9 @@ jobs:
         # leg runs whatever interpreter uv defaults to, so a second matrix entry would
         # silently test the same one twice and report two green legs for one version.
         run: $CI_RUN uv sync --locked --group dev --python "${{ matrix.python-version }}"
+
+      - name: Pull the Unbound integration image (built by ci-image.yml)
+        run: $CI_RUN docker pull "$PFB_UNBOUND_PY_IMAGE"
 
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml. --junitxml feeds
@@ -425,12 +430,13 @@ jobs:
     name: Go quality (gofmt, vet, race + Docker oracle, FreeBSD builds)
     runs-on: ubuntu-latest
     needs: ci-image
-    # The Docker Unbound oracle builds its image on a cold runner (up to 15 min) before the race suite runs.
+    # The Docker Unbound oracle runs the image ci-image.yml pre-built: a cold runner no longer builds one first.
     timeout-minutes: 30
     # Same owner decision A prefix as the test job: the Docker Unbound oracle starts sibling
     # containers, so every tool step runs in the ci image against the host daemon.
     env:
-      CI_RUN: docker run --rm --init --network host -v /var/run/docker.sock:/var/run/docker.sock -v ${{ github.workspace }}:${{ github.workspace }} -v /tmp:/tmp -w ${{ github.workspace }} -e UV_CACHE_DIR=/tmp/uv-cache ${{ needs.ci-image.outputs.ci }}
+      CI_RUN: docker run --rm --init --network host -v /var/run/docker.sock:/var/run/docker.sock -v ${{ github.workspace }}:${{ github.workspace }} -v /tmp:/tmp -w ${{ github.workspace }} -e UV_CACHE_DIR=/tmp/uv-cache -e PFB_UNBOUND_IMAGE ${{ needs.ci-image.outputs.ci }}
+      PFB_UNBOUND_IMAGE: ${{ needs.ci-image.outputs.unbound }}
 
     steps:
       - name: Checkout
@@ -442,6 +448,9 @@ jobs:
         # The oracle tests fail on an unreachable daemon too; this step names that cause first.
         run: $CI_RUN docker version --format '{{.Server.Version}}'
 
+      - name: Pull the Unbound oracle image (built by ci-image.yml)
+        run: $CI_RUN docker pull "$PFB_UNBOUND_IMAGE"
+
       - name: Go gate (gofmt, vet, race incl. Docker oracle, FreeBSD builds)
         # Same chain as scripts/agent/run-gates.sh's go/** line. The canary leads this run: block and must fail
         # both fixtures first (testing.md red canary). `gofmt -l` exits 0 even when it lists files, so the gate
@@ -449,8 +458,9 @@ jobs:
         env:
           GATE: |
             # Privilege-drop and ownership checks must execute, not skip on an unprivileged account.
+            # --preserve-env: sudo's env_reset would drop the oracle image ref and the oracle would self-build.
             go_gate() (
-              cd "$1" && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && sudo -n "$(command -v go)" test -race -count=1 -v ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .
+              cd "$1" && gofmt_out=$(gofmt -l .) && test -z "$gofmt_out" && go vet ./... && sudo -n --preserve-env=PFB_UNBOUND_IMAGE "$(command -v go)" test -race -count=1 -v ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .
             )
             canary="$(mktemp -d)"
             mkdir "$canary/unformatted" "$canary/failing"

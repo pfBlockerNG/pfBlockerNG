@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -21,8 +22,10 @@ import (
 	"time"
 )
 
+// CI hands the image ci-image.yml pre-built; unset, the oracle self-builds oracleDockerfile under the local tag.
+var oracleImage = cmp.Or(os.Getenv("PFB_UNBOUND_IMAGE"), "pfb-dns-frontend-unbound:trixie")
+
 const (
-	oracleImage      = "pfb-dns-frontend-unbound:trixie"
 	oracleDockerfile = "FROM debian:trixie-slim\n" +
 		"RUN apt-get update && apt-get install -y --no-install-recommends unbound && rm -rf /var/lib/apt/lists/*\n"
 	oracleBuildTimeout = 15 * time.Minute

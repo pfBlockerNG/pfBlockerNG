@@ -238,3 +238,21 @@ RUN set -eu; \
     qemu-img --version; \
     UV_CACHE_DIR=/tmp/uv-cache uv run --no-project --with "playwright==${PLAYWRIGHT_VERSION}" python /tmp/check-chromium.py; \
     rm -rf /tmp/check-chromium.py /tmp/uv-cache
+
+# Unbound for the two suites that run it in Docker (acl_oracle_test.go, tests/dns_proxy/test_integration_unbound.py).
+# The apt line is the one each suite's own self-build recipe uses, so a local run tests the same Unbound.
+FROM ${DEBIAN_IMAGE} AS unbound
+ARG DEBIAN_FRONTEND=noninteractive
+LABEL org.opencontainers.image.source=https://github.com/pfBlockerNG/pfBlockerNG
+LABEL org.opencontainers.image.description="pfBlockerNG CI Unbound (Go ACL oracle)"
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends unbound \
+ && rm -rf /var/lib/apt/lists/*
+
+FROM ${DEBIAN_IMAGE} AS unbound-py
+ARG DEBIAN_FRONTEND=noninteractive
+LABEL org.opencontainers.image.source=https://github.com/pfBlockerNG/pfBlockerNG
+LABEL org.opencontainers.image.description="pfBlockerNG CI Unbound with python3-unbound (dns_proxy integration tests)"
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends unbound python3-unbound \
+ && rm -rf /var/lib/apt/lists/*
