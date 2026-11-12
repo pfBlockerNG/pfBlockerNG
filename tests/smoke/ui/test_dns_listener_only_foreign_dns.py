@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 
 PAGE = "/pfblockerng/pfblockerng_dns_general.php"
 MODE_PATH = f"{helpers.CFG_GLOBAL}/pfb_dns_listen_vip_only"
+NOTICES = ("require_once('notices.inc');", "json_encode(get_notices() ?: new stdClass())")  # pending, by filing time
 
 
 @pytest.mark.ui_browser
@@ -31,6 +33,7 @@ def test_listener_only_mode_saves_without_rewriting_foreign_dhcp_or_ra_dns(
     """General saves preserve foreign lists and append-only ownership through listener-mode transitions."""
     paths = (helpers.CFG_GLOBAL, "installedpackages/pfblockerngdns", "virtualip/vip", "dhcpd", "dhcpdv6")
     originals = {path: _snapshot(smoke_vm, path) for path in paths}
+    notices = json.loads(helpers._php_read_scalar(smoke_vm, *NOTICES))
     vip = {
         "mode": "ipalias",
         "interface": "lo0",
@@ -109,3 +112,8 @@ def test_listener_only_mode_saves_without_rewriting_foreign_dhcp_or_ra_dns(
     finally:
         for path, value in originals.items():
             _put(smoke_vm, path, value)
+    left = {
+        key: row for key, row in json.loads(helpers._php_read_scalar(smoke_vm, *NOTICES)).items() if key not in notices
+    }
+    # Every later page renders a pending notice, a second .modal beside any dialog it opens (issue #3836)
+    assert not left, f"the saves left system notices behind: {left}"
