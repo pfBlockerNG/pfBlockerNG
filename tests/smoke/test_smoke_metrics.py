@@ -920,7 +920,7 @@ def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool, *, refused: bool = F
         print(f"PRIVACY_SAVE {stage} config={json.dumps(state, sort_keys=True)}\n{script.stdout}", flush=True)
         return state
 
-    def controls() -> dict[str, str]:
+    def controls() -> dict[str, str | list[str]]:
         page = gui.get(general)
         assert page.status_code == 200, page.text
         return {
@@ -959,7 +959,7 @@ def _save_client_privacy(vm: SmokeVM, gui: WebUI, on: bool, *, refused: bool = F
     else:
         assert h.config_get(vm, f"{h.CFG_GLOBAL}/pfb_metrics_client_ip") == ("on" if on else ""), response.text
     assert {key: values for key, values in submitted.items() if key not in ("save", "pfb_metrics_client_ip")} == {
-        key: [value] for key, value in submitted_controls.items()
+        key: value if isinstance(value, list) else [value] for key, value in submitted_controls.items()
     }, (submitted_controls, submitted)
     assert after["effectiveGen"] == before["effectiveGen"], (before, after)
     assert after["foreignGen"] == before["foreignGen"], (before, after)

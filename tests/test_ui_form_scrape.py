@@ -52,7 +52,7 @@ def _load_webui() -> Any:
 
 
 _webui = _load_webui()
-scrape_form_fields: Callable[[str], dict[str, str]] = _webui.scrape_form_fields
+scrape_form_fields: Callable[[str], dict[str, str | list[str]]] = _webui.scrape_form_fields
 extract_csrf_token: Callable[[str], str] = _webui.extract_csrf_token
 has_flag: Callable[[str, str], bool] = _webui._has_flag
 WebUILoginError: type[Exception] = _webui.WebUILoginError
@@ -106,6 +106,28 @@ def test_select_takes_selected_option_else_first() -> None:
 def test_disabled_select_is_skipped() -> None:
     """A disabled ``<select>`` is not submitted."""
     assert scrape_form_fields("<select name='s' disabled><option value='a' selected>A</option></select>") == {}
+
+
+def test_multiple_select_with_nothing_selected_contributes_nothing() -> None:
+    """A ``<select multiple>`` with no option selected sends NOTHING, as a browser does -- never its first option.
+
+    issue #3895: the one DNS General form carries the empty "Advertise DoH on port 443" list; sending its first option
+    (the LAN) told DDR to advertise DoH on 443 at the LAN address.
+    """
+    html = (
+        "<select name='m[]' multiple='multiple'><option value='lan'>LAN</option>"
+        "<option value='opt1'>OPT1</option></select>"
+    )
+    assert scrape_form_fields(html) == {}
+
+
+def test_multiple_select_contributes_every_selected_option() -> None:
+    """A ``<select multiple>`` sends every selected option in document order (``requests`` repeats the name)."""
+    html = (
+        "<select name='m[]' multiple><option value='a' selected>A</option><option value='b'>B</option>"
+        "<option value='c' selected>C</option></select>"
+    )
+    assert scrape_form_fields(html) == {"m[]": ["a", "c"]}
 
 
 def test_textarea_inner_text_is_the_value_unescaped() -> None:

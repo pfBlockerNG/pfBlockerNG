@@ -284,6 +284,7 @@ def test_add_new_dnsbl_alias_full_save_persists_default(webui: WebUI, smoke_vm: 
             response = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
             assert response.ok and not looks_like_login_page(response.text), "new-group GET failed"
             selected = scrape_form_fields(response.text)["logging"]
+            assert isinstance(selected, str), f"the logging select renders one value, got {selected!r}"
             _post_form(webui, _dnsbl_payload(rowid, "smoke3288add", logging=selected))
             assert helpers.config_get(vm, f"{base}/logging") == "default", (
                 "a brand-new DNSBL alias's 'default' default must be accepted and persisted verbatim"
@@ -447,6 +448,7 @@ def test_legacy_group_unchanged_save_migrates_marker_and_persists_default_token(
             # (3) An UNCHANGED Save runs the facade: marker + grandfather values persist,
             # THEN the submitted 'default' choice lands for THIS group.
             selected = scrape_form_fields(reload.text)["logging"]
+            assert isinstance(selected, str), f"the logging select renders one value, got {selected!r}"
             _post_form(webui, _dnsbl_payload(rowid, aliasname, logging=selected))
             assert helpers.config_get(vm, GLOBAL_LOG_MODE_CFG) == "default", (
                 "a valid category_edit.php Save on a legacy no-override system must run the "

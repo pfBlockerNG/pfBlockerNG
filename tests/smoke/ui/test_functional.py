@@ -415,7 +415,7 @@ def test_toggle_flow_changes_effective_config(
             helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
 
 
-def _pin_posted_value(rendered: dict[str, str], flow: ToggleFlow) -> bool:
+def _pin_posted_value(rendered: dict[str, str | list[str]], flow: ToggleFlow) -> bool:
     """Assert a CHECKED box submits the token its save path accepts; report whether it ran."""
     if flow.field not in rendered:
         return False

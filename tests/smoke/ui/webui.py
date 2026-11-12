@@ -164,7 +164,7 @@ def _has_flag(tag_body: str, flag: str) -> bool:
     return re.search(rf"(?:^|\s){re.escape(flag)}(?=\s|=|/|>|$)", without_values, re.IGNORECASE) is not None
 
 
-def scrape_form_fields(page_html: str) -> dict[str, str]:
+def scrape_form_fields(page_html: str) -> dict[str, str | list[str]]:
     """Reconstruct the submittable ``{field: value}`` set from a rendered form.
 
     Mirrors what a browser would send on submit, so a functional POST that
@@ -175,7 +175,8 @@ def scrape_form_fields(page_html: str) -> dict[str, str]:
       nothing, exactly like a browser — so an off checkbox is absent from the
       dict, and toggling it on is `overrides={name: value}`);
     * ``<select>`` — the ``selected`` option's value (or the first option's, the
-      browser default when none is marked);
+      browser default when none is marked); a ``multiple`` select contributes the
+      list of its selected values, and nothing when none is selected;
     * ``<textarea>`` — its inner text (HTML-unescaped).
 
     ``disabled`` controls are skipped (a disabled control is not submitted — this
@@ -184,7 +185,7 @@ def scrape_form_fields(page_html: str) -> dict[str, str]:
     Includes the ``__csrf_magic`` hidden input, so the returned dict already
     carries the per-render token.
     """
-    fields: dict[str, str] = {}
+    fields: dict[str, str | list[str]] = {}
 
     for body in _INPUT_RE.findall(page_html):
         attrs = _attrs(body)
@@ -207,21 +208,17 @@ def scrape_form_fields(page_html: str) -> dict[str, str]:
         name = attrs.get("name")
         if not name or _has_flag(body, "disabled"):
             continue
-        # A multi-select can submit several values; the smoke flows target only
-        # single-value selects, so take the first selected (or first option).
-        selected: str | None = None
-        first: str | None = None
-        for opt_body, _label in _OPTION_RE.findall(inner):
-            opt = _attrs(opt_body)
-            value = opt.get("value", "")
-            if first is None:
-                first = value
-            if _has_flag(opt_body, "selected"):
-                selected = value
-                break
-        chosen = selected if selected is not None else first
-        if chosen is not None:
-            fields[name] = chosen
+        options = [
+            (_attrs(opt_body).get("value", ""), _has_flag(opt_body, "selected"))
+            for opt_body, _ in _OPTION_RE.findall(inner)
+        ]
+        selected = [value for value, chosen in options if chosen]
+        if _has_flag(body, "multiple"):
+            # A browser sends every selected option, and nothing for none (never the first: issue #3895).
+            if selected:
+                fields[name] = selected
+        elif options:
+            fields[name] = selected[0] if selected else options[0][0]
 
     for body, inner in _TEXTAREA_RE.findall(page_html):
         attrs = _attrs(body)

@@ -900,10 +900,12 @@ def test_the_resolver_pages_own_save_keeps_pfblockerngs_block_and_the_resolver_m
         assert MARKER in before, "before: our block is in Custom Options"
         page = gui.get(RESOLVER_PAGE)
         assert page.status_code == 200
-        fields = scrape_form_fields(page.text)
-        assert MARKER in fields["custom_options"], "the page renders our block in the Custom Options textarea"
+        custom_options = scrape_form_fields(page.text)["custom_options"]
+        assert isinstance(custom_options, str) and MARKER in custom_options, (
+            "the page renders our block in the Custom Options textarea"
+        )
 
-        saved = gui.post(RESOLVER_PAGE, {"custom_options": fields["custom_options"].replace("\n", "\r\n")})
+        saved = gui.post(RESOLVER_PAGE, {"custom_options": custom_options.replace("\n", "\r\n")})
         assert saved.status_code == 200
         assert gui.post(RESOLVER_PAGE, {}, submit=("apply", "Apply Changes")).status_code == 200
         h.wait_unbound_ready(vm)
