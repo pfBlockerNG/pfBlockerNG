@@ -7242,8 +7242,9 @@ function pfblockerng_tick(
 	pfb_dns_proxy_certificate_sync();
 
 	// issue #3848: a gateway stopped because no loopback port pair was free for Unbound's backend is not started by a tick that finds nothing: it
-	// looks for a pair again (the update pass's check: a holder moves Unbound and starts the gateway, no holder starts it as it was)
-	if (!$pass_running && pfb_dns_proxy_cannot_serve() && !pfb_dns_proxy_running() && !isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
+	// looks for a pair again (the update pass's check: a holder moves Unbound and starts the gateway, no holder clears the marker). Issue #3869:
+	// so does a tick whose gateway survived that stop, which the branch below would leave beside the marker for good
+	if (!$pass_running && pfb_dns_proxy_cannot_serve()) {
 		pfb_dns_proxy_ensure_running();
 	}
 	// An existing gateway stays running whatever its backend does; only this tick's restart is an activation to confirm.
@@ -7257,7 +7258,8 @@ function pfblockerng_tick(
 		$acted = FALSE;
 		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred()) {
 			$applied = pfb_dns_proxy_applied_status();
-			$stale = pfb_dns_proxy_upstream_stale($applied) && pfb_dns_proxy_backend_holder() === NULL;
+			// issue #3871: a failed scan names no holder, and proves no pair free: the gateway keeps its upstream
+			$stale = pfb_dns_proxy_upstream_stale($applied) && pfb_dns_proxy_backend_holder($scanned) === NULL && $scanned;
 			if ($stale) {
 				pfb_dns_proxy_service();
 			}

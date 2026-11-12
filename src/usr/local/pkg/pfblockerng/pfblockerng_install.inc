@@ -814,7 +814,7 @@ if (pfb_dns_proxy_saved() !== NULL && pfb_dns_proxy_ready()) {
 	unset($pfb_rc);
 } elseif (pfb_dns_proxy_saved() !== NULL) {
 	if (!pfb_dns_proxy_restart()) {
-		update_status(pfb_dns_proxy_cannot_serve()
+		update_status((pfb_dns_proxy_backend_blocked() || pfb_dns_proxy_cannot_serve())
 		    ? " pfB-DNS is not serving: a foreign process holds Unbound's backend port (see the notices);"
 		    : " the DNS proxy did not become ready (see the notices);");
 	}

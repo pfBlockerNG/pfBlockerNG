@@ -3626,9 +3626,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// the last pass, and restart one whose rc script changed. A reload above has already restarted a proxy that hosts the module.
 	// A proxy that does not become ready is reported (its startup notice) and left running with the Resolver moved: only the admin's
 	// own switches give the Resolver back, so the pass goes on with the Resolver as the move left it. A gateway stopped for a foreign
-	// process on Unbound's backend port is a deliberate stop (pfb_dns_proxy_backend_block() filed its notice), not a start that failed.
+	// process on Unbound's backend port is a deliberate stop (pfb_dns_proxy_backend_block() filed its notice), not a start that failed;
+	// issue #3872: so is one whose marker could not be written, which this pass still knows of
 	if (!pfb_dns_proxy_ensure_running()) {
-		pfb_logger(pfb_dns_proxy_cannot_serve()
+		pfb_logger((pfb_dns_proxy_backend_blocked() || pfb_dns_proxy_cannot_serve())
 		    ? "\npfB-DNS is not serving: a foreign process holds Unbound's backend port; see the notices"
 		    : "\npfB-DNS: the DNS proxy did not become ready; see the notices", 2);
 	}

@@ -993,6 +993,43 @@ final class DnsProxyBackendMoveTest extends TestCase
 		$this->assertNotContains(" pfB-DNS is not serving: a foreign process holds Unbound's backend port (see the notices);", $GLOBALS['pfb_test_update_status']);
 	}
 
+	/** @return array<string,array{string}> each start check that reports a pass's failure, and the line it must give for a stop made for a stranger */
+	public static function startChecksThatReportTheStop(): array
+	{
+		return [
+			'the apply' => ['apply'],
+			'the install' => ['install'],
+		];
+	}
+
+	#[DataProvider('startChecksThatReportTheStop')]
+	public function testAStopForAStrangerWhoseMarkerCannotBeWrittenIsStillReportedAsNotServing(string $check): void
+	{
+		// Given a stranger on Unbound's port with no free pair, and a /var/run that takes no marker (issue #3872)
+		$this->box();
+		if ($check === 'apply') {
+			$this->gatewayRuns();
+		}
+		$this->foreignHolds(...self::strangerAndEveryPairTaken());
+		$GLOBALS['pfb']['dns_proxy_backend_blocked'] = "{$this->tmp}/nowhere/pfb_dns_proxy_backend_blocked";
+		unset($GLOBALS['pfb_test_update_status']);
+
+		// When the start check runs, stops or keeps down the gateway for the stranger, and cannot leave the marker
+		if ($check === 'apply') {
+			$this->runTheApplysStartCheck();
+			$said = $this->pfbLog();
+		} else {
+			$this->runInstallProxyBlock();
+			$said = implode("\n", $GLOBALS['pfb_test_update_status'] ?? []);
+		}
+
+		// Then it reports the deliberate stop as not serving, never as a start that did not become ready
+		$this->assertFalse(pfb_dns_proxy_cannot_serve(), 'before the line is read: no marker could be written');
+		$this->assertCount(1, $this->noticesOf('pfBlockerNG DNS Proxy'), 'the gateway was kept down for the stranger');
+		$this->assertStringContainsString("pfB-DNS is not serving: a foreign process holds Unbound's backend port", $said);
+		$this->assertStringNotContainsString('did not become ready', $said);
+	}
+
 	// -----------------------------------------------------------------------
 	// (c) the Listen Port on a pair port
 	// -----------------------------------------------------------------------
@@ -1224,6 +1261,80 @@ final class DnsProxyBackendMoveTest extends TestCase
 		$this->assertFalse(pfb_dns_proxy_running());
 		pfb_global();
 		$this->assertSame(self::NO_PAIR_STATUS, pfb_dns_status()['service']);
+	}
+
+	/** The gateway was stopped for a stranger and no pair was free, but it survived its stop: the marker stands beside a running gateway. */
+	private function aMarkerBesideAGatewayThatSurvivedItsStop(): void
+	{
+		$this->box();
+		$this->gatewayRuns();
+		$this->survivesStop = TRUE;
+		$this->foreignHolds(...self::strangerAndEveryPairTaken());
+		$this->assertFalse(pfb_dns_proxy_ensure_running(), 'before: nothing serves');
+		$this->assertContains('stop_service', $this->proxyCalls, 'before: the gateway was asked to stop');
+		$this->assertTrue(pfb_dns_proxy_running(), 'before: the gateway survived its stop');
+		$this->assertTrue(pfb_dns_proxy_cannot_serve(), 'before: the marker stands');
+		$this->events = [];
+		$this->proxyCalls = [];
+	}
+
+	public function testATickClearsAMarkerBesideASurvivingGatewayOnceTheStrangerLeaves(): void
+	{
+		// Given a marker beside a gateway that survived its stop (issue #3869), and then the stranger exits
+		$this->aMarkerBesideAGatewayThatSurvivedItsStop();
+		$this->foreign = [];
+		$this->unboundPorts = [5353, 5354];
+		$this->publishSockets();
+
+		// When the next tick runs
+		$this->newPass();
+		$this->tick();
+
+		// Then the marker is gone and the gateway serves again on the pair it had
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_backend_blocked'], 'the marker is cleared');
+		$this->assertFalse(pfb_dns_proxy_cannot_serve());
+		$this->assertSame('5353', pfb_dns_proxy_backend_port(), 'nothing moved');
+		pfb_global();
+		$this->assertSame('Running', pfb_dns_status()['service']);
+	}
+
+	public function testATickMovesUnboundForAnUnreadySurvivingGatewayOnceAPairIsFree(): void
+	{
+		// Given a marker beside a gateway that survived its stop but is not ready (issue #3869), the stranger still there, and a pair free again
+		$this->aMarkerBesideAGatewayThatSurvivedItsStop();
+		unlink($GLOBALS['pfb']['dns_proxy_ready']);
+		$this->assertFalse(pfb_dns_proxy_ready(), 'before: the gateway is not ready');
+		$this->everyPairFreeButTheStrangerStays();
+
+		// When the next tick runs
+		$this->newPass();
+		$this->tick();
+
+		// Then Unbound moved off the stranger, the gateway was restarted onto the new pair, and the marker is gone
+		$this->assertSame(['configure', 'restart_service'], $this->events);
+		$this->assertBackendOn(5355, 'after the tick');
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_backend_blocked'], 'the marker is cleared');
+		$this->assertTrue(pfb_dns_proxy_serving_ready(), 'DNS is served again');
+	}
+
+	public function testATickWhoseBackendScanFailsDoesNotFollowAStaleUpstreamOntoAnUnknownPair(): void
+	{
+		// Given the synced clause (P = 5355) beside a gateway that forwards to 5353, and a sockstat that fails (issue #3871)
+		$this->box();
+		$this->gatewayRuns();
+		$synced = preg_replace(['/@5353\b/', '/proxy-protocol-port: 5353/', '/^port: 5354$/m'], ['@5355', 'proxy-protocol-port: 5355', 'port: 5356'], $this->customText());
+		config_set_path('unbound/custom_options', base64_encode((string) $synced));
+		$this->unboundPorts = [5355, 5356];
+		$this->publishSockets();
+		$this->assertSame('5355', pfb_dns_proxy_backend_port(), 'before: the clause names the primary\'s pair');
+		file_put_contents($GLOBALS['pfb_test_sockstat_status'], "1\n");
+
+		// When one tick runs
+		$this->tick();
+
+		// Then a scan that saw nothing proves no pair free: the gateway is not restarted and keeps its script
+		$this->assertSame([], $this->events, 'nothing was restarted');
+		$this->assertSame('127.0.0.1:5353', $this->rcUpstream());
 	}
 
 	public function testAQuietSkipOfTheMoveNeverFallsThroughToAStartOntoAKnownHolder(): void
