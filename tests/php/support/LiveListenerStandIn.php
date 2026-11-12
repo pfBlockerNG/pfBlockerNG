@@ -185,7 +185,8 @@ trait LiveListenerStandIn
 	}
 
 	/**
-	 * Distinct ports above 1024 that a TCP and a UDP socket on loopback both bind now (a CI user that is not root binds them too).
+	 * Distinct ports above 1024 that a TCP and a UDP socket on loopback both bind now, on 127.0.0.1 and on ::1 (the rc script names both;
+	 * a host daemon may hold only the IPv6 UDP port, as tailscaled held [::]:39293 in issue #3853). A CI user that is not root binds them too.
 	 *
 	 * @return list<int>
 	 */
@@ -200,11 +201,11 @@ trait LiveListenerStandIn
 			$name = (string) stream_socket_get_name($tcp, FALSE);
 			$port = (int) substr($name, (int) strrpos($name, ':') + 1);
 			$udp = @stream_socket_server("udp://127.0.0.1:{$port}", $errno, $errstr, STREAM_SERVER_BIND);
-			if ($port > 1024 && $udp !== FALSE) {
+			if ($port > 1024 && $udp !== FALSE && self::binds("[::1]:{$port}")) {
 				array_push($open, $tcp, $udp);
 				$ports[] = $port;
 			} else {
-				fclose($tcp);
+				array_map('fclose', array_filter([$tcp, $udp]));
 			}
 		}
 		foreach ($open as $socket) {
