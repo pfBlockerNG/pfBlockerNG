@@ -2445,9 +2445,9 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     text), the DNS Name (a text input, issue #3694), DoT (enable, port, interfaces), DoH (enable, port, interfaces,
     trusted front ends) and DoQ (enable, port, interfaces) appear in that order between the enable checkbox and DDR,
     as the right input kinds. Every interface list offers All and Localhost first and says one entry is required. The
-    transport help says experimental, sends the
-    operator to the certificate selector, says DoQ is UDP, names the HAProxy options and the binary the package ships
-    (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`.
+    help sends the operator to the certificate selector, says DoQ is UDP, names the HAProxy options and the binary the
+    package ships (`pfb-dns`, twice: DoH and DoQ), never the retired `pfb_dns_gateway`, and calls no setting
+    experimental (issue #3877).
     """
     path = "/pfblockerng/pfblockerng_dns_general.php"
     resp = webui.get(path)
@@ -2495,11 +2495,11 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
 
     block = html[start:end]
     for needle in (
-        "Experimental",
         "send-proxy-v2",
         "option forwardfor",
     ):
         assert needle in block, f"the listener help is missing {needle!r}"
+    assert "experimental" not in html.lower(), "DNS General still calls a setting experimental"
     assert block.count("At least one entry is required.") == len(_DNS_INTERFACE_LISTS), "every interface list says so"
     for stale in ("Requires the DNS Resolver", "None selected"):
         assert stale not in block, f"the listener help still says {stale!r}"
