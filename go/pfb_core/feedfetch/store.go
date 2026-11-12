@@ -84,6 +84,9 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 	if err := os.Remove(feed.path(".orig.sha1")); err != nil && !os.IsNotExist(err) {
 		return errors.New("published digest could not be replaced")
 	}
+	if err := os.Remove(feed.path(".orig.sha256")); err != nil && !os.IsNotExist(err) {
+		return errors.New("published digest could not be replaced")
+	}
 	if err := os.Rename(staged, published); err != nil {
 		return errors.New("published copy could not be replaced")
 	}
@@ -92,6 +95,15 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 		os.Chtimes(published, lastMod, lastMod)
 	}
 	return nil
+}
+
+// legacyDigest reports a SHA-256 baseline a previous version left: ".orig.sha256", or 64 hex digits in ".orig.sha1".
+func legacyDigest(feed Feed) bool {
+	if _, err := os.Stat(feed.path(".orig.sha256")); err == nil {
+		return true
+	}
+	b, _ := os.ReadFile(feed.path(".orig.sha1"))
+	return len(b) == 64
 }
 
 // localDecision compares a local source with the published copy's digest (pfb_local_feed_changed); without a recorded

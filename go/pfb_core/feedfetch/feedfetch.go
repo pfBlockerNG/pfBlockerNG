@@ -179,6 +179,10 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	if _, err := os.Stat(published); err != nil {
 		return Result{OK: true, Decision: Changed}
 	}
+	// A previous version's SHA-256 baseline is none: re-ingest, whatever a validator or the bytes say (#3914).
+	if legacyDigest(feed) {
+		return Result{OK: true, Decision: Changed}
+	}
 	switch src.kind {
 	case kindRsync, kindSelfHosted:
 		return Result{OK: true, Decision: Changed}
