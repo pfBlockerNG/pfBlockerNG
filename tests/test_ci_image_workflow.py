@@ -77,3 +77,18 @@ def test_buildx_builds_the_directory_the_tag_hashes() -> None:
     builds = re.findall(r"docker buildx build .*", build_run)
     assert len(builds) == 2
     assert all(build.endswith('"$CONTEXT_DIR"') for build in builds), builds
+
+
+def test_an_executable_bit_change_moves_the_tag(tmp_path: Path) -> None:
+    """Docker's COPY keeps a file's mode, so a mode-only change is a different image."""
+    repo = tmp_path / "repo"
+    (repo / CONTEXT_DIR).mkdir(parents=True)
+    script = repo / CONTEXT_DIR / "check.py"
+    script.write_text("print('ok')\n")
+    _git(repo, "init", "-q")
+    _git(repo, "-c", "core.fileMode=true", "add", "-A")
+    before = _tag(repo)
+
+    _git(repo, "update-index", "--chmod=+x", f"{CONTEXT_DIR}/check.py")
+
+    assert _tag(repo) != before, "making a build-context file executable must move the tag"

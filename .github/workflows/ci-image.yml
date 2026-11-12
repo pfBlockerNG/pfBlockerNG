@@ -48,8 +48,8 @@ jobs:
         id: hash
         run: |
           set -euo pipefail
-          # sha256 of the sorted per-file sha256 lines: the name AND content of every tracked file.
-          hash=$(git ls-files -z "$CONTEXT_DIR" | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          # mode, blob id and path of every tracked file: COPY keeps a file's mode as well as its bytes.
+          hash=$(git ls-files -s -z "$CONTEXT_DIR" | sha256sum | cut -d' ' -f1)
           echo "ci=ghcr.io/pfblockerng/pfblockerng-ci:$hash" >> "$GITHUB_OUTPUT"
           echo "ci_vm=ghcr.io/pfblockerng/pfblockerng-ci-vm:$hash" >> "$GITHUB_OUTPUT"
 
