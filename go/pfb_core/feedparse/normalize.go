@@ -61,27 +61,32 @@ func decodeUTF16(b []byte) []byte {
 	return out
 }
 
+// kept is what the sed expression leaves alone: a tab or a [:print:] character. These are the appliance's C.UTF-8 classes,
+// not the Unicode tables': private use and U+2028/2029 print, BOM and ZWJ do not, and U+0085 is a control but not [:space:].
+func kept(r rune) bool {
+	return r == '\t' || unicode.IsGraphic(r) || unicode.Is(unicode.Co, r) || r == 0x2028 || r == 0x2029
+}
+
 // sedLine appends to dst what LC_ALL=C.UTF-8 sed -E 's/[^[:print:]\t]+|[[:space:]]+$//g' leaves of one line: a single pass
 // that never rescans a removal, and an invalid byte (it decodes as the printable U+FFFD) is matched by neither class.
-// The classes are the appliance's: unicode.IsGraphic is [:print:] (BOM and ZWJ out, NBSP in), unicode.IsSpace is [:space:].
 func sedLine(dst, line []byte) []byte {
 	tail := len(line)
 	for tail > 0 {
 		r, size := utf8.DecodeLastRune(line[:tail])
-		if !unicode.IsSpace(r) {
+		if !unicode.IsSpace(r) || r == 0x85 {
 			break
 		}
 		tail -= size
 	}
 	for i := 0; i < tail; {
 		r, size := utf8.DecodeRune(line[i:])
-		if r == '\t' || unicode.IsGraphic(r) {
+		if kept(r) {
 			dst = append(dst, line[i:i+size]...)
 			i += size
 			continue
 		}
 		for i += size; i < len(line); i += size {
-			if r, size = utf8.DecodeRune(line[i:]); r == '\t' || unicode.IsGraphic(r) {
+			if r, size = utf8.DecodeRune(line[i:]); kept(r) {
 				break
 			}
 		}
