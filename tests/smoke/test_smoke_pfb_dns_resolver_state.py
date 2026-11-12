@@ -16,6 +16,11 @@ handler (services_unbound.php over HTTP). Nothing is faked on the box.
 * Another process on Unbound's loopback port (127.0.0.1:5353, tcp and udp) while pfB-DNS is turned on: Unbound's backend
   pair moves to a free one (the marked clause), the live Unbound owns it, the gateway forwards to it, the
   holder is named in a notice, nothing is restored and a following Update keeps the pair (issue #3848).
+* The same holder with no free pair left (a port of every pair the free-pair search scans is taken too) while pfB-DNS
+  serves: pfB-DNS cannot serve and says so, and never gives the Resolver back. The gateway is stopped, the snapshot and
+  every Resolver key stay as they were, port 53 answers nothing, the Service line says no free loopback port pair is
+  left and the newest notice names the holder; when one pair frees up the next tick moves Unbound there and serves
+  again (issue #3848).
 * A Resolver disabled in Services > DNS Resolver while pfB-DNS fronts it: the proxy kept LAN:53 and answered SERVFAIL
   for every allowed name. A disabled Resolver is not the admin turning pfB-DNS off: the next apply, or the next tick,
   restores nothing and raises one notice that says pfB-DNS has no backend until the Resolver is enabled or pfB-DNS is
@@ -51,22 +56,31 @@ from .conftest import STUB_DNS_A, SmokeVM, _StubDnsServer
 from .test_smoke_dns_proxy import (
     CFG_MARKER,
     CFG_PROXY,
+    DAEMON_PID_FILE,
     MARKER,
     MARKER_END,
+    OCCUPANTS,
+    PROXY_PID_FILE,
     PROXY_RC,
+    RESOLVER_KEYS,
     Rig,
     State,
     _apply,
     _capture,
     _diagnostics,
+    _dns_status,
     _listeners,
     _occupy,
+    _php_cli,
     _php_ok,
+    _pid_file,
     _query,
     _release,
     _service_status,
     _set_proxy_toggle,
+    _sh,
     _toggle_on,
+    _wait_proxy_serves,
     proxy_on,  # noqa: F401 -- a fixture of the rig module, requested by name below
     rig,  # noqa: F401 -- the module's fixture
 )
@@ -79,6 +93,8 @@ CFG_EDNS = "unbound/edns_buffer_size"
 CFG_CUSTOM = "unbound/custom_options"
 CFG_RESOLVER_ENABLE = "unbound/enable"
 NOTICE_ID = "pfBlockerNG DNS Proxy"
+NO_PAIR_STATUS = "Not serving: no free loopback port pair for the Resolver backend"
+NOT_SERVED = "DNS is not served on port 53 until a loopback port pair is free or pfB-DNS is turned off"
 # the PROXYv2 port of Unbound's loopback pair: the marked clause's own line is its only stored source
 CLAUSE_BACKEND_PORT = re.compile(r"^proxy-protocol-port:\s*(\d+)\s*$", re.MULTILINE)
 LAN_SIZE = 1432  # a 1500-byte LAN's pfSense-automatic size; the same box with lo0 as its only interface gives 16316
@@ -433,6 +449,149 @@ def test_a_foreign_listener_on_unbounds_port_moves_its_backend_pair_and_pfb_dns_
             assert again.service == "running" and _snapshot_present(vm), f"still moved and serving: {again.service}"
             allowed, raw = _query(rig.client, h.unique_domain("upstream-kept"), tcp=False)
             assert h.resolves_to(allowed, STUB_DNS_A), f"DNS still resolves after the Update: {raw}"
+        finally:
+            _release(vm)
+
+
+def _stop_unbound(vm: SmokeVM, port: int) -> None:
+    """Unbound exits, as it does when it dies or restarts, and its loopback pair is free for another process to take
+    (a process cannot bind next to a live Unbound)."""
+    killed = vm.ssh(f"kill {h.unbound_pid(vm)}")
+    assert killed.returncode == 0, f"kill unbound failed: {killed.stdout!r} {killed.stderr!r}"
+    h.wait_until(
+        lambda: not [s for s in _listeners(vm) if s.command == "unbound" and s.port in (port, port + 1)],
+        timeout=30.0,
+        interval=1.0,
+    )
+
+
+def _backend_search(vm: SmokeVM) -> int:
+    """PFB_DNS_PROXY_BACKEND_SEARCH as the installed package has it: how many pairs above Unbound's the search scans."""
+    out = _php_cli(vm, "echo '<<<N>>>' . PFB_DNS_PROXY_BACKEND_SEARCH . '<<<E>>>';", "PFB_DNS_PROXY_BACKEND_SEARCH")
+    found = re.search(r"<<<N>>>(\d+)<<<E>>>", out)
+    assert found is not None, f"PFB_DNS_PROXY_BACKEND_SEARCH printed no number: {out!r}"
+    return int(found.group(1))
+
+
+def _hold_a_port_of_every_pair_above(vm: SmokeVM, port: int) -> tuple[int, list[int]]:
+    """Hold 127.0.0.1:<p> with an nc(1) TCP listener on every second port of what pfb_dns_proxy_backend_pick() scans
+    (the pairs P' from port+2 on, PFB_DNS_PROXY_BACKEND_SEARCH of them): each pair (P', P'+1) then has a port in use and
+    none is free. Their pidfiles sit beside _occupy's, which must have run: _release ends them.
+
+    :returns: the lowest candidate pair's P' (its ports stay free) and the ports held.
+    """
+    first = port + 2
+    last = min(first + _backend_search(vm) - 1, 65534)
+    held = list(range(first + 1, last + 2, 2))
+    in_use = {s.port for s in _listeners(vm)}
+    assert in_use.isdisjoint({first, first + 1}), (
+        f"before: the lowest candidate pair {first}/{first + 1} must be free: {sorted(p for p in in_use if p)}"
+    )
+    lines = [
+        f"/usr/sbin/daemon -f -p {OCCUPANTS}/fill-{p}.pid /usr/bin/nc -4 -l 127.0.0.1 {p} </dev/null >/dev/null 2>&1"
+        for p in held
+    ]
+    started = _sh(vm, "\n".join(lines) + "\n")
+    assert started.returncode == 0, f"starting the listeners failed: {started.stdout!r} {started.stderr!r}"
+    h.wait_until(lambda: set(held) <= {s.port for s in _listeners(vm)}, timeout=60.0, interval=1.0)
+    return first, held
+
+
+def _stop_holding(vm: SmokeVM, port: int) -> None:
+    """End the listener _hold_a_port_of_every_pair_above() started on `port`, until the port shows free."""
+    stopped = _sh(vm, f"kill $(cat {OCCUPANTS}/fill-{port}.pid) && rm -f {OCCUPANTS}/fill-{port}.pid")
+    assert stopped.returncode == 0, f"stopping the listener on {port} failed: {stopped.stdout!r} {stopped.stderr!r}"
+    h.wait_until(lambda: port not in {s.port for s in _listeners(vm)}, timeout=30.0, interval=1.0)
+
+
+@pytest.mark.timeout(1500)
+@pytest.mark.usefixtures("proxy_on", "_clear_dns_proxy_notices")
+def test_every_free_pair_taken_stops_pfb_dns_without_restoring_the_resolver_and_a_freed_pair_serves_again(
+    rig: Rig,
+) -> None:
+    """Given pfB-DNS serving (a listed name is blocked with the DNSBL VIP) and another process holding both transports
+    of 127.0.0.1:P, Unbound's loopback port (P is the marked clause's), and a port of every pair the free-pair search
+    scans,
+    When an Update runs,
+    Then pfB-DNS cannot serve and says so (#3848): the gateway is stopped, nothing restores the Resolver (the snapshot
+    and every Resolver key are as they were, pfB-DNS is still on), port 53 answers nothing, the Service line says no
+    free loopback port pair is left, and the newest notice names the holder and that DNS is not served until a
+    loopback port pair is free or pfB-DNS is turned off;
+    and when one pair frees up the next tick moves Unbound to it, starts the gateway, blocks the listed name again and
+    resolves an allowed one while the holder still holds P.
+
+    Unbound is stopped before the holders bind, as when something else takes its port while it is down: nothing can
+    bind next to a live Unbound. Unbound's own state is not read while it cannot bind.
+    """
+    vm = rig.vm
+    with _unmoved_afterwards(rig):
+        before = _moved(rig)
+        port = _backend_port(vm)
+        assert port is not None, f"before: the clause names no backend port: {before.resolver}"
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"before: pfB-DNS must block the listed name with the DNSBL VIP: {raw}"
+        prior_notices = len(_notices(vm))
+
+        try:
+            _stop_unbound(vm, port)
+            _occupy(vm, ["127.0.0.1"], str(port))
+            holders = {s.pid for s in _listeners(vm, connected=True) if s.command == "nc" and s.port == port}
+            lowest, held = _hold_a_port_of_every_pair_above(vm, port)
+            try:
+                # Returns before Unbound is awaited: with the pair held it cannot start, and nothing here needs it
+                h.reload(vm, "updatednsbl", wait_unbound=False)
+            finally:
+                tail = f"tail -n 80 {h.PFB_LOGDIR}/error.log {h.PFB_DNS_PROXY_LOG} /var/log/resolver.log 2>&1"
+                print(
+                    f"[3848] update with every free pair taken ({len(held)} ports held):\n{vm.ssh(tail).stdout}",
+                    flush=True,
+                )
+
+            # the gateway is stopped and the Resolver is kept as it was
+            ps = vm.ssh("ps -axww -o pid,user,args | grep -E 'pfb_dns_prox[y]|/pfb-dn[s]'").stdout.splitlines()
+            assert ps == [] and _service_status(vm) == "stopped", f"the gateway must be stopped: {ps}"
+            assert _pid_file(vm, PROXY_PID_FILE) is None and _pid_file(vm, DAEMON_PID_FILE) is None, (
+                "the gateway's pidfiles are gone"
+            )
+            assert _toggle_on_in_config(vm), "pfB-DNS stays on"
+            assert {key: _config_text(vm, f"unbound/{key}") for key in RESOLVER_KEYS} == before.resolver, (
+                "every Resolver key is as it was: nothing was restored or moved"
+            )
+            assert (_config_text(vm, CFG_MARKER) or "") == before.marker, "the snapshot is kept byte for byte"
+
+            # port 53 answers nothing (the Update is over), and the status and the notice say why
+            answer, raw = _query(rig.client, rig.names.blocked)
+            assert answer.rcode == "UNKNOWN" and not answer.records, f"nothing may answer on port 53: {raw}"
+            assert not [s for s in _listeners(vm) if s.port == 53], "nothing listens on port 53"
+            assert _dns_status(vm)["service"] == NO_PAIR_STATUS, f"the Service line: {_dns_status(vm)['service']!r}"
+            new = _notices(vm)[prior_notices:]
+            assert new, "a notice must say DNS is not served"
+            assert any(f"nc (pid {pid}) on 127.0.0.1:{port}" in new[-1] for pid in holders), (
+                f"the newest notice must name nc and its pid {sorted(holders)}: {new[-1]}"
+            )
+            assert f"no free loopback port pair above {port}" in new[-1], f"it says no pair is left: {new[-1]}"
+            assert NOT_SERVED in new[-1], f"it says what to do: {new[-1]}"
+            assert not any("restored" in text.lower() for text in new), f"nothing is given back: {new}"
+
+            # a pair frees up: the next tick moves Unbound there and pfB-DNS serves again, the holder still on P
+            _stop_holding(vm, lowest + 1)
+            h.reload(vm, "tick", wait_unbound=False)
+            h.wait_until(lambda: _backend_port(vm) == lowest, timeout=120.0, interval=3.0)
+            h.wait_until(lambda: _service_status(vm) == "running", timeout=120.0, interval=3.0)
+            h.wait_unbound_ready(vm)
+            _wait_proxy_serves(rig)
+            blocked, raw = _query(rig.client, rig.names.blocked)
+            assert h.is_vip(blocked), f"the listed name must be blocked again with the DNSBL VIP: {raw}"
+            allowed, raw = _query(rig.client, h.unique_domain("pair-freed"))
+            assert h.resolves_to(allowed, STUB_DNS_A), f"an allowed name must resolve: {raw}"
+            assert _dns_status(vm)["service"] == "Running", f"the Service line: {_dns_status(vm)['service']!r}"
+            still = {s.pid for s in _listeners(vm, connected=True) if s.command == "nc" and s.port == port}
+            assert holders & still, f"the other process must still hold {port}: {sorted(still)}"
+            new = _notices(vm)[prior_notices:]
+            assert f"moved from ports {port}/{port + 1} to {lowest}/{lowest + 1}" in new[-1], (
+                f"the newest notice must name the move: {new[-1]}"
+            )
+            assert not any("restored" in text.lower() for text in new), f"nothing is given back: {new}"
         finally:
             _release(vm)
 

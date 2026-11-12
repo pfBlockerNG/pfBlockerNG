@@ -319,13 +319,19 @@ final class DnsProxyBackendMoveTest extends TestCase
 
 	private const HOLDER_STATUS = 'Not serving: nc (pid 6161) on 127.0.0.1:5353 holds the Resolver backend port 5353';
 
-	/** The facts of a gateway stopped for a stranger on its upstream that no move could clear: nothing started, moved or restored, the holder named. */
-	private function assertStoppedForAHolder(string $snapshot, string $whyNoMove, string $why, string $status = self::HOLDER_STATUS): void
+	/**
+	 * The facts of a gateway stopped for a stranger on its upstream that no move could clear: nothing started, moved or restored, the holder named, and the
+	 * marker one of kind `holder` (not `nopair`: a pair was never found missing). $writes: the config.xml writes the pass attempted (a move whose write was refused).
+	 *
+	 * @param list<string> $writes
+	 */
+	private function assertStoppedForAHolder(string $snapshot, string $whyNoMove, string $why, string $status = self::HOLDER_STATUS, array $writes = []): void
 	{
 		$this->assertFalse(pfb_dns_proxy_running(), "{$why}: the gateway is not running");
 		$this->assertSame([], $this->events, "{$why}: nothing was started, restarted or regenerated");
 		$this->assertSame('5353', pfb_dns_proxy_backend_port(), "{$why}: the pair was not moved");
-		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], "{$why}: config.xml was not written");
+		$this->assertSame($writes, $GLOBALS['pfb_test_write_config_calls'], "{$why}: config.xml was written only as the pass attempted");
+		$this->assertSame("holder\n5353\nnc (pid 6161) on 127.0.0.1:5353\n", (string) @file_get_contents($GLOBALS['pfb']['dns_proxy_backend_blocked']), "{$why}: the marker names the holder");
 		$this->assertStillMoved($snapshot, $why, TRUE);
 		$texts = array_column($this->noticesOf('pfBlockerNG DNS Proxy'), 'notice');
 		$this->assertNotEmpty($texts, "{$why}: a notice is filed");
@@ -364,6 +370,65 @@ final class DnsProxyBackendMoveTest extends TestCase
 		$this->assertBackendOn(5355, 'after the Resolver is enabled again');
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_backend_blocked']);
 		$this->assertTrue(pfb_dns_proxy_serving_ready());
+	}
+
+	/** Runs $pass with sockstat failing for a port range (the free-pair search's scan) and answering the pair's own ports (the holder's scan) as ever. */
+	private function withTheFreePairScanFailing(callable $pass): void
+	{
+		$original = (string) file_get_contents(PFB_DNS_PROXY_SOCKSTAT);
+		$failing = str_replace("\ncat ", "\ncase \"\$3\" in *-*) exit 1 ;; esac\ncat ", $original);
+		$this->assertNotSame($original, $failing, 'test bootstrap: the sockstat double has its cat line');
+		file_put_contents(PFB_DNS_PROXY_SOCKSTAT, $failing);
+		try {
+			$pass();
+		} finally {
+			file_put_contents(PFB_DNS_PROXY_SOCKSTAT, $original);
+		}
+	}
+
+	#[DataProvider('gatewayStates')]
+	public function testAProvenStrangerWhoseFreePairScanFailsStopsTheGatewayAndNeverRestoresTheResolver(bool $running): void
+	{
+		// Given a stranger on Unbound's port, and a sockstat that lists that pair but cannot list the ports above it
+		$this->box();
+		if ($running) {
+			$this->gatewayRuns();
+		}
+		$this->foreignHolds(...array_slice(self::strangerAndEveryPairTaken(), 0, 2));
+		$snapshot = (string) config_get_path(self::SAVED, '');
+
+		// When the update pass runs
+		$this->withTheFreePairScanFailing(function () use (&$served): void {
+			$this->assertSame('nc (pid 6161) on 127.0.0.1:5353', pfb_dns_proxy_backend_holder($proven), 'before: the stranger is proven on the pair');
+			$this->assertTrue($proven);
+			$this->assertNull(pfb_dns_proxy_backend_pick($seen), 'before: no pair is known free');
+			$this->assertFalse($seen, 'before: because the sockets above the pair could not be listed');
+			$served = pfb_dns_proxy_ensure_running();
+		});
+
+		// Then the gateway is stopped (or stays stopped), the Resolver is kept, and the status names the holder, not a missing pair
+		$this->assertFalse($served, 'nothing serves');
+		$this->assertSame($running ? ['stop_service'] : [], $this->proxyCalls);
+		$this->assertStoppedForAHolder($snapshot, 'the sockets could not be listed to find a free pair', 'a failed free-pair scan');
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testAProvenStrangerWithAFreePairButARefusedClauseWriteStopsTheGatewayAndNeverRestoresTheResolver(mixed $answer): void
+	{
+		// Given a serving gateway, a stranger on Unbound's port, a free pair above it, and a config.xml that does not take the write that would move the pair
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(...array_slice(self::strangerAndEveryPairTaken(), 0, 2));
+		$this->configXmlOnDisk($answer);
+		$snapshot = (string) config_get_path(self::SAVED, '');
+		$this->assertSame('5355', pfb_dns_proxy_backend_pick(), 'before: a pair is free');
+
+		// When the update pass runs
+		$this->assertFalse(pfb_dns_proxy_ensure_running(), 'nothing serves');
+
+		// Then the gateway is stopped, the pair stays where it was, the Resolver is kept, and the status names the holder
+		$this->assertSame(['stop_service'], $this->proxyCalls, 'the gateway was stopped, once');
+		$this->assertStoppedForAHolder($snapshot, 'the Resolver settings could not be written', 'a refused clause write', writes: ['pfBlockerNG: Moved the DNS Resolver onto loopback for the DNS proxy']);
 	}
 
 	public function testNoFreePairStopsARunningGatewayRaisesTheNoticeAndNeverRestoresTheResolver(): void
