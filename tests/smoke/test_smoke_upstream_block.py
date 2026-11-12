@@ -38,7 +38,9 @@ and the smoke deps.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import time
 from collections.abc import Iterator
 
@@ -532,3 +534,61 @@ class TestUpstreamCounterIncrement:
             f"delta other than exactly 1 means the counter is stuck (delta<=0) or another "
             f"probe's increment leaked into this window (delta>1)."
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #3879 — the stored Resolver checkbox turns detection and the Upstream row on
+# ---------------------------------------------------------------------------
+
+_PY_INI = "/var/unbound/pfb_unbound.ini"
+_ROW_OPEN = "<<<UPROW>>>"
+_ROW_CLOSE = "<<<UPROWEND>>>"
+
+
+def _read_upstream_entries(vm: SmokeVM) -> object:
+    """The ``entries`` column of the ``Upstream`` row (None when the row is absent), as the widget reads it."""
+    snippet = (
+        f"$__db = new SQLite3('{_DNSBL_DB}', SQLITE3_OPEN_READONLY);\n"
+        "$__db->busyTimeout(15000);\n"
+        "$__r = $__db->querySingle(\"SELECT entries FROM dnsbl WHERE groupname = 'Upstream'\");\n"
+        "$__db->close();\n"
+        f"echo '{_ROW_OPEN}' . json_encode($__r) . '{_ROW_CLOSE}';\n"
+    )
+    res = h.php_eval(vm, snippet)
+    match = re.search(f"{_ROW_OPEN}(.*?){_ROW_CLOSE}", res.stdout or "")
+    if res.returncode != 0 or match is None:
+        raise RuntimeError(
+            f"reading the Upstream row failed: rc={res.returncode} {res.stderr[-500:]!r} {res.stdout[-500:]!r}"
+        )
+    return json.loads(match.group(1))
+
+
+class TestUpstreamDetectionFollowsTheStoredCheckbox:
+    """Issue #3879: config.xml keeps the forwarding checkbox as an empty element; detection and the row follow it."""
+
+    def test_the_module_ini_turns_forwarding_on(self, deployed_vm: tuple[SmokeVM, SmokeVM]) -> None:
+        """
+        Given: the Resolver forwards, stored as config.xml keeps the checkbox (an empty ``<forwarding>`` element).
+        Then: the module's ini says ``forwarding = on``, so upstream-block detection runs.
+        """
+        vm, _ = deployed_vm
+        state = h.config_get_state(vm, "unbound/forwarding")
+        assert state == (True, ""), f"precondition: forwarding stored as an empty element, got {state!r}"
+        ini = vm.ssh("cat", _PY_INI).stdout
+        assert re.search(r"^forwarding\s*=\s*on\s*$", ini, re.MULTILINE), (
+            f"{_PY_INI} does not turn forwarding on:\n{ini}"
+        )
+
+    def test_an_update_while_forwarding_leaves_the_upstream_row_enabled(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM]
+    ) -> None:
+        """
+        Given: the Resolver forwards and the module has seeded the Upstream row.
+        When: an Update runs (it saves the DNSBL statistics).
+        Then: the Upstream row is not marked disabled, so the widget shows it enabled.
+        """
+        vm, _ = deployed_vm
+        assert _read_upstream_entries(vm) is not None, "precondition: the module seeded the Upstream row"
+        h.reload(vm, "update")
+        entries = _read_upstream_entries(vm)
+        assert entries not in (None, "disabled"), f"after an Update the Upstream row reads entries={entries!r}"

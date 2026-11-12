@@ -3105,6 +3105,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Regex';
 			dnsbl_stats_update('update', 'DNSBL_Regex', $regex_cnt);
 		}
+		// Upstream blocks are detected while the Resolver forwards (pfb_unbound.ini's forwarding), with pfB-DNS on or off.
+		if (config_path_enabled('unbound', 'forwarding')) {
+			$pfb['alias_dnsbl_all'][] = 'Upstream';
+			dnsbl_stats_update('update', 'Upstream', 0);
+		}
 
 	}
 

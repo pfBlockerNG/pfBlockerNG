@@ -55,7 +55,7 @@ def test_upstream_configuration_reaches_the_stub_and_preserves_forwarding(
     unbound = state["config"]["unbound"]
     assert system["dnsserver"] == [GUEST_TO_HOST_ALIAS]
     assert "dnsallowoverride" not in system
-    assert unbound["forwarding"] == "on"
+    assert unbound["forwarding"] == ""
     assert "dnssec" not in unbound
     assert (state["writes"], state["reloads"]) == (1, 1)
     if port == EPHEMERAL_PORT:

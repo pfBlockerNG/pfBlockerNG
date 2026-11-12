@@ -147,7 +147,7 @@ CFG_DNSBL = f"{h.CFG_DNSBL_SETTINGS}/pfb_dnsbl"
 CFG_GROUP_POLICY = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp"
 CFG_GROUP_POLICY_LIST = f"{h.CFG_DNSBL_SETTINGS}/pfb_gp_bypass_list"
 CFG_WHITELIST = f"{h.CFG_DNSBL_SETTINGS}/whitelist"
-CFG_FORWARDING = "unbound/forwarding"  # present (on) while the Resolver forwards to the System DNS server
+CFG_FORWARDING = "unbound/forwarding"  # present ('') while the Resolver forwards to the System DNS server
 OBSERVER_SCRIPT = "pfb_upstream_observer.py"  # Unbound's python-script in proxy mode while it forwards
 
 UPSTREAM_PORT = "5353"  # Unbound's loopback port for the proxy's PROXYv2 stream

@@ -67,7 +67,7 @@ _JSON_CLOSE = "<<<DNSISOEND>>>"
 #     ``(is_bool($val) && ($val == true)) ... "<{$ent}></{$ent}>\n"`` branch) becomes an
 #     EMPTY element, which parses back as ``""`` -- so the real "checked" config.xml
 #     value for either field is present/``""``, never a literal ``'on'`` string.
-#   - unbound/forwarding: ABSENT (use_system_dns_upstream always sets it 'on').
+#   - unbound/forwarding: ABSENT (use_system_dns_upstream always sets it present, ``""``).
 #   - unbound/custom_options: base64-encoded, matching the pfBlockerNG textarea
 #     convention helpers.use_stub_for_safesearch's forward-zone also uses.
 _SEED_DNSSERVER = ["198.51.100.53"]  # RFC 5737 TEST-NET-2

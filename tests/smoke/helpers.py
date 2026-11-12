@@ -2448,7 +2448,8 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
       * ``system/dnsserver = [192.168.89.2]`` and DHCP-override OFF — so ``192.168.89.2`` is the
         SOLE forwarder (drops the baked image's dead 1.1.1.1/1.0.0.1, which egress-block
         makes unreachable and would only add forward timeouts).
-      * ``unbound/forwarding = on`` — forward to the System DNS server.
+      * ``unbound/forwarding = ''`` — forward to the System DNS server (config.xml keeps the checkbox as an
+        empty element).
       * ``unset unbound/dnssec`` — the mock's answers are unsigned; a validator would
         mark them bogus (SERVFAIL).
       * ``unset unbound/custom_options`` — drop any prior custom forward-zone. A stub NOT on :53 (the UI
@@ -2470,7 +2471,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         "unset($s['dnsallowoverride']);\n"
         "config_set_path('system', $s);\n"
         "$u = config_get_path('unbound', array());\n"
-        "$u['forwarding'] = 'on';\n"
+        "$u['forwarding'] = '';\n"
         "unset($u['dnssec']);\n"
         f"{custom_options}"
         "config_set_path('unbound', $u);\n"
@@ -2528,7 +2529,7 @@ def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", 
         "unset($s['dnsallowoverride']);\n"
         "config_set_path('system', $s);\n"
         "$u = config_get_path('unbound', array());\n"
-        + ("$u['forwarding'] = 'on';\n" if on else "unset($u['forwarding']);\n")
+        + ("$u['forwarding'] = '';\n" if on else "unset($u['forwarding']);\n")
         + "unset($u['dnssec']);\n"  # held OFF in both states (unsigned upstream answers)
         "unset($u['custom_options']);\n"  # drop any leftover forward-zone
         "config_set_path('unbound', $u);\n"
@@ -2553,7 +2554,7 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
 
     ``forwarding_on=True`` (FORWARDING mode): delegates to the same config as
     :func:`use_system_dns_upstream` — sets ``system/dnsserver = [192.168.89.2]``,
-    ``unbound/forwarding = on``, clears ``dnssec`` and ``custom_options``.
+    ``unbound/forwarding = ''``, clears ``dnssec`` and ``custom_options``.
     Queries forward to ``192.168.89.2`` (the WAN SLIRP host alias), which NATs
     ``guest->192.168.89.2:53`` to the stub on the runner's loopback.
 
