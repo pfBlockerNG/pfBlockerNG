@@ -3,7 +3,7 @@
 # rsync.body and rsync.exit: it records its arguments one per line in rsync.argv, writes rsync.body to its last
 # argument (the destination) only when it exits 0, as rsync renames its temp file only on success, and exits with rsync.exit.
 here=$(dirname "$0")
-: >"${here}/rsync.argv"
+true >"${here}/rsync.argv"
 for arg; do
 	printf '%s\n' "${arg}" >>"${here}/rsync.argv"
 done
