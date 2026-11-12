@@ -591,7 +591,7 @@ final class DnsProxyMovedResolverTest extends TestCase
 		$this->assertSame([], $this->proxyCalls, 'the proxy is neither stopped nor started');
 	}
 
-	public function testTheTickKeepsAReadyGatewayAndResolverWhenUnboundIsMissing(): void
+	public function testTheTickKeepsAReadyGatewayAndResolverWhenUnboundIsMissingAndTheServiceLineNamesTheBackend(): void
 	{
 		// Given a ready gateway left by an earlier pass, with its Resolver backend now missing
 		$this->activate(TRUE);
@@ -607,14 +607,14 @@ final class DnsProxyMovedResolverTest extends TestCase
 		// When the tick checks a gateway it did not start
 		$this->tick();
 
-		// Then nothing is restored: the existing gateway and Resolver stay untouched, with Service visibly not Running
+		// Then nothing is restored: the existing gateway and Resolver stay untouched, with Service saying the backend does not answer
 		$this->assertSame([], $this->proxyCalls);
 		$this->assertSame($resolver, config_get_path('unbound'));
 		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
 		$this->assertTrue(pfb_dns_proxy_running());
 		$this->assertTrue(pfb_dns_proxy_ready());
 		$this->assertFalse(pfb_dns_proxy_serving_ready());
-		$this->assertSame('Starting', pfb_dns_status()['service']);
+		$this->assertSame('Resolver backend not answering: Unbound does not answer on 127.0.0.1:5353', pfb_dns_status()['service']);
 		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
 	}
 

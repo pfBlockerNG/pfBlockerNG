@@ -381,6 +381,7 @@ final class PfbDnsStatusTest extends TestCase
 					['interface' => 'Localhost', 'identity' => 'Interface', 'address' => '[::1]:53', 'state' => 'off', 'reason' => 'DDR is disabled; DNS Name queries are forwarded'],
 				],
 			],
+			'degraded'   => [],
 		], $status);
 	}
 
@@ -449,9 +450,10 @@ final class PfbDnsStatusTest extends TestCase
 		$this->assertSame($only, $this->transports()[$kind], 'a pending disable cannot hide listeners the gateway lists when the command is missing');
 	}
 
-	public function testAFailedUpstreamDoesNotEraseTheGatewaysConfirmedFrontendListeners(): void
+	public function testALostBackendDoesNotEraseTheGatewaysConfirmedFrontendListenersAndTheServiceLineNamesIt(): void
 	{
-		// Given every transport on, and a healthy gateway: it lists its listeners and Unbound serves both transports
+		// Given every transport on, and a healthy gateway: it lists its listeners and Unbound serves both transports, the Resolver being enabled
+		config_set_path('unbound/enable', '');
 		$this->box(self::DOT_ON + self::DOH_ON + self::DOQ_ON);
 		$this->gatewayServes($this->everything());
 		$served = [
@@ -467,14 +469,14 @@ final class PfbDnsStatusTest extends TestCase
 		$GLOBALS['pfb_test_valid_pids'][$this->unboundPidfile()] = FALSE;
 		$status = pfb_dns_status();
 
-		// Then the gateway is live with the PID and marker it had, the proxy is not ready, and the status is Starting
+		// Then the gateway is live with the PID and marker it had, the proxy is not ready, and the Service line says the backend does not answer
 		$this->assertTrue(pfb_dns_proxy_running(), 'the gateway child still lives');
 		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyPidfile()), 'the child pidfile is kept');
 		$this->assertSame("4242\n", (string) @file_get_contents($this->proxyMarker()), 'the ready marker is kept');
 		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the backend is dead: the proxy is not serving');
-		$this->assertSame('Starting', $status['service']);
+		$this->assertSame('Resolver backend not answering: Unbound does not answer on 127.0.0.1:5353', $status['service']);
 
-		// And the rendered panel says Starting, and each of the same rows says Listening, through its icon and its screen-reader text
+		// And the rendered panel says so, and each of the same rows says Listening, through its icon and its screen-reader text
 		$document = new DOMDocument();
 		$previous = libxml_use_internal_errors(TRUE);
 		$loaded = $document->loadXML('<root>' . pfb_dns_status_panel(pfb_dns_status()) . '</root>');
@@ -482,7 +484,7 @@ final class PfbDnsStatusTest extends TestCase
 		libxml_use_internal_errors($previous);
 		$this->assertTrue($loaded, 'the panel is well-formed markup');
 		$xpath = new DOMXPath($document);
-		$this->assertSame('Starting', $xpath->evaluate("string(//tr[@id='pfb-dns-status-service']/td)"));
+		$this->assertSame('Resolver backend not answering: Unbound does not answer on 127.0.0.1:5353', $xpath->evaluate("string(//tr[@id='pfb-dns-status-service']/td)"));
 		foreach (['plain', 'dot', 'doh', 'doq'] as $transport) {
 			$rows = "//div[@id='pfb-dns-status-{$transport}']//tbody/tr";
 			$this->assertSame(2, (int) $xpath->evaluate("count({$rows})"), "{$transport}: the Localhost and LAN rows");
@@ -783,6 +785,7 @@ final class PfbDnsStatusTest extends TestCase
 			'dnsbl'      => FALSE,
 			'name'       => NULL,
 			'ddr'        => ['notice' => 'Applied pfB-DNS status unavailable.', 'queried' => NULL, 'rows' => []],
+			'degraded'   => [],
 		], pfb_dns_status());
 	}
 

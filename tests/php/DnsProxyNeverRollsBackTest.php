@@ -193,11 +193,11 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 			'boot check' => $this->dnsCheckArm('0'),
 		};
 
-		// Then the gateway stays up with the Resolver moved, the status shows it is not Running, and nothing was restored
+		// Then the gateway stays up with the Resolver moved, the Service line says the backend does not answer, and nothing was restored
 		$this->assertTrue(pfb_dns_proxy_ready(), 'the gateway is ready');
 		$this->assertFalse(pfb_dns_proxy_serving_ready(), 'the backend is not');
 		$this->assertNothingWasRestored($before, $entry);
-		$this->assertSame('Starting', pfb_dns_status()['service']);
+		$this->assertSame('Resolver backend not answering: Unbound does not answer on 127.0.0.1:5353', pfb_dns_status()['service']);
 	}
 
 	/** @return array<string,array{string}> */

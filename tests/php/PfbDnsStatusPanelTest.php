@@ -229,6 +229,7 @@ final class PfbDnsStatusPanelTest extends TestCase
 			'listening' => ['listening', 'fa-solid fa-check-circle text-success', 'Listening', ''],
 			'not listening, with the gateway\'s reason' => ['not_listening', 'fa-solid fa-times-circle text-danger', 'Not listening', self::REASON],
 			'not listening, no reason given' => ['not_listening', 'fa-solid fa-times-circle text-danger', 'Not listening', 'the gateway did not report it'],
+			'not served, with the reason it has no certificate' => ['not_served', 'fa-solid fa-times-circle text-danger', 'Not served', 'no usable certificate: the PEM holds no private key'],
 			'configured, the service is not running' => ['configured_not_bound', 'fa-solid fa-exclamation-circle text-warning', 'Configured, not bound', ''],
 			'configured, pfB-DNS does not confirm it' => ['configured_unconfirmed', 'fa-solid fa-exclamation-circle text-warning', 'Configured, not confirmed by pfB-DNS', ''],
 		];
@@ -303,5 +304,54 @@ final class PfbDnsStatusPanelTest extends TestCase
 		$this->assertSame('Off', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-dnsbl']//span[@class='sr-only'])"));
 		$this->assertSame('dns.example.com', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-name']/td)"));
 		$this->assertStringNotContainsString('forwards', $panel->evaluate("string({$overview})"), 'no mode explanation');
+	}
+
+	/** A Running service with every encrypted transport off, and these degraded rows. @param list<array{part:string,reason:string}> $degraded */
+	private static function degradedStatus(array $degraded): array
+	{
+		return self::withTransports(['state' => 'off'], ['state' => 'off'], ['state' => 'off']) + ['degraded' => $degraded];
+	}
+
+	public function testEveryDegradedPartIsARowUnderServiceInTheOrderGivenWithItsOwnId(): void
+	{
+		$panel = $this->panel(self::degradedStatus([
+			['part' => 'dnsbl', 'reason' => 'the module did not boot'],
+			['part' => 'tls_certificate', 'reason' => 'expired'],
+			['part' => 'observer', 'reason' => 'address in use'],
+		]));
+		$overview = "//div[@id='pfb-dns-status-overview']";
+
+		$this->assertSame(
+			['pfb-dns-status-service', 'pfb-dns-status-degraded-dnsbl', 'pfb-dns-status-degraded-tls_certificate', 'pfb-dns-status-degraded-observer', 'pfb-dns-status-pfbdns', 'pfb-dns-status-dnsbl', 'pfb-dns-status-name'],
+			array_map(static fn (DOMNode $row): string => $row->attributes->getNamedItem('id')->nodeValue ?? '', iterator_to_array($panel->query("{$overview}//tr")))
+		);
+		$this->assertSame('Degraded', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-degraded-dnsbl']/th)"));
+		$this->assertSame('DNSBL is not blocking: the module did not boot', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-degraded-dnsbl']/td)"));
+		$this->assertSame('DoT, DoH and DoQ are not served: no usable certificate: expired', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-degraded-tls_certificate']/td)"));
+		$this->assertSame('The upstream observer is not running: address in use', $panel->evaluate("string({$overview}//tr[@id='pfb-dns-status-degraded-observer']/td)"));
+	}
+
+	/** @return array<string,array{array<string,mixed>}> a status with nothing degraded: no key, or an empty list */
+	public static function statusesWithNothingDegraded(): array
+	{
+		return ['no degraded key' => [self::withTransports(['state' => 'off'], ['state' => 'off'], ['state' => 'off'])], 'an empty list' => [self::degradedStatus([])]];
+	}
+
+	/** @param array<string,mixed> $status */
+	#[DataProvider('statusesWithNothingDegraded')]
+	public function testAStatusWithNothingDegradedHasNoDegradedRow(array $status): void
+	{
+		$this->assertSame(0, $this->panel($status)->query("//tr[starts-with(@id, 'pfb-dns-status-degraded-')]")->length);
+	}
+
+	public function testADegradedReasonIsEscapedExactlyOnce(): void
+	{
+		$panel = $this->panel(self::degradedStatus([['part' => 'acl', 'reason' => self::HOSTILE]]));
+
+		$this->assertSame(0, $panel->query('//script')->length, 'no element came from a reason');
+		$this->assertSame(
+			'Client access control is not applied, so every client is forwarded: ' . self::HOSTILE,
+			$panel->evaluate("string(//tr[@id='pfb-dns-status-degraded-acl']/td)")
+		);
 	}
 }

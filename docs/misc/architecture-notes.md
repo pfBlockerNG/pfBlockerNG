@@ -692,11 +692,11 @@ by that pass is an activation to confirm. Otherwise startup diagnostics run, and
 reads, a missing Resolver backend or a foreign holder of Unbound's loopback port, regardless of which read fails (owner decisions,
 2026-11-11; issues #3845 and #3848): no pass gives the Resolver back.
 `pfb_dns_proxy_upstream_state()` returns `ready` only for both transports owned by the live Unbound,
-`foreign` for a matching port held by a different command/PID while that Unbound is alive (mixed holders count),
-and `unknown` without sufficient status, PID or native inventory evidence; no decision reads it yet.
-A running gateway whose Resolver backend is down stays up and shows **Service: Starting**.
-[#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848) tracks explicit backend-down reporting and moving Unbound off
-a foreign holder's port to a free loopback port pair.
+`foreign` for a matching port held by a different command/PID while that Unbound is alive (mixed holders count; it hands back that
+process, its PID and the port from the same scan), and `unknown` without sufficient status, PID or native inventory evidence.
+`pfb_dns_proxy_backend_problem()` turns it into the one reason the Service line and the startup notice share (see "Service line and
+degraded parts"). A running gateway whose Resolver backend is down stays up. Moving Unbound off a foreign holder's port to a free loopback
+port pair is still [#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)'s.
 
 The update pass retains devel's package-operation deferral of restarts (`pfb_dns_proxy_restart_deferred()`).
 Actual starts/restarts still confirm under a package operation. The controlled Unbound restart waits for old
@@ -704,7 +704,7 @@ Actual starts/restarts still confirm under a package operation. The controlled U
 
 The socket inventory uses the bounded control-command seam with a one-second budget plus its kill grace; the outer wait
 keeps its startup deadline, with at most that final probe's bound beyond it. `pfb_dns_proxy_running()` remains pidfile-only
-liveness for the zero-downtime swap and apply ledger. The status shows Starting until the serving predicate holds, but retains
+liveness for the zero-downtime swap and apply ledger. The Service line is Running only while the serving predicate holds, but retains
 the current gateway's PID-confirmed front-end bindings independently. Listener ownership does not prove successful recursion;
 the boot query probe and the smoke tests prove actual DNS answers. The rc script
 removes a previous marker only before a fresh launch (a healthy repeated `start` keeps the serving proxy's), its stop removes
@@ -726,8 +726,8 @@ the setup wizard's reset. The only callers of `pfb_dns_proxy_resolver()` are tho
 `pfb_dns_proxy_confirm_ready()` runs `pfb_dns_proxy_startup_check()` with the gateway-level readiness and returns FALSE: the stored
 enable, the snapshot, the moved Resolver, `unbound.conf` and Unbound are untouched, config.xml is not written, and the proxy keeps
 running (or its supervisor keeps starting it). The operator gets the startup notice ("pfB-DNS is not serving: the DNS proxy did not
-become ready within N s", with the gateway's last error) and the status stays "On" with **Service: Starting**. A gateway that is ready
-with a backend that does not serve is checked for listener problems only: explicit backend-down reporting is issue #3848's. A cause
+become ready within N s", with the gateway's last error) and the Service line says why the proxy does not serve (see "Service line and
+degraded parts"). A gateway that is ready with a backend that does not serve is checked too: the notice names the backend and why. A cause
 that stands is not fixed by pfB-DNS (a gateway that exits at every start is started again by its supervisor every 5 s): the admin
 corrects it, or turns pfB-DNS off, which restores the Resolver. The reload, the apply and the installer each read the result. Pinned by
 `DnsProxyReadinessTest`, `DnsProxyNeverRollsBackTest`, `DnsProxyMovedResolverTest`, the marker and lock rows of `DnsProxyServiceTest`
@@ -745,8 +745,8 @@ an activation; no update pass may be running, and a gateway pidfile must be live
 `php -f pfblockerng.inc dns_check` under `timeout(1)` (certificate sync, then, while a snapshot is stored, the same confirmation),
 because boot has no apply to confirm the start. One notice, id
 `pfBlockerNG DNS Proxy startup`, names every problem, each as a sentence, in this order: the proxy never became ready (with the last
-`pfb_dns_gateway:` line of `dns_proxy.log`); a `--listen`, `--dot-listen`, `--doh-listen` or `--doq-listen` address of the rc
-script's command that the list does not give as `listening <kind> <host:port>`, with the `refused` reason the list gives for it or else `the gateway did not report it listening`; and every warning building the command line gives now (`pfb_dns_proxy_plain_listen()` and `pfb_dns_proxy_tls_flags()`, the code
+`pfb_dns_gateway:` line of `dns_proxy.log`); a ready gateway whose Unbound backend does not serve it (`the DNS Resolver backend does not answer: <why>`, issue #3848); a `--listen`, `--dot-listen`, `--doh-listen` or `--doq-listen` address of the rc
+script's command that the list does not give as `listening <kind> <host:port>`, with the `refused` reason the list gives for it or else `the gateway did not report it listening`; each part of the status's `degraded` list, worded as the panel words it; and every warning building the command line gives now (`pfb_dns_proxy_plain_listen()` and `pfb_dns_proxy_tls_flags()`, the code
 the service uses). Addresses are compared as the gateway prints them (IPv6 compressed and bracketed). An unknown list (NULL: no socket, no reply within `PFB_DNS_PROXY_CTL_TIMEOUT`, an `error:` line, a malformed reply, or one over 64 KiB) judges no listener and closes none of the notice's rows, though the warnings still file. A start with no problem closes the notice, every row of the id: pfSense's `close_notice()` removes ONE row per call and `file_notice()` files a row for every changed text, so rows are closed by key. The notices `pfBlockerNG DNS Proxy` and `pfBlockerNG DNS Proxy certificate` are never touched.
 Every caller that makes a start reads the log's size BEFORE it (`pfb_dns_proxy_log_size()`; the boot hook, with core functions only, `filesize()`) and passes it on as `$since`: `pfb_dns_proxy_restart()` and `pfb_dns_proxy_ensure_running()` (when it started or restarted the proxy) through `pfb_dns_proxy_confirm_ready()`, the boot hook to the `dns_check` arm as `argv[2]` (digits only; anything else, or none, and the arm takes the size now). `$since` bounds only the not-ready error lookup: with a `$since` only the bytes after it are searched (a log now shorter than it was rotated is searched from its start), so an error of an older start is never quoted for this one (none is quoted when this start logged none); with no `$since` (the tick; an apply that restarted nothing) the lookup searches the log's last 64 KiB. A ready start never reads the log for what it serves: the list answers for the gateway running now, so the ready marker, which the gateway publishes before its log lines are relayed, cannot make it judge a previous start. Pinned by `DnsProxyStartupCheckTest`, `DnsProxyStartupCheckCurrentStartTest`, `DnsProxyBootTest` and `DnsProxyNeverRollsBackTest`.
 
@@ -756,9 +756,21 @@ upstream endpoint; no process argument scraping or automatic DNS queries are nee
 The existing configured-versus-applied projection is preserved: `pfb_dns_proxy_command_listeners()` supplies desired rc-script
 addresses, the snapshot supplies actual bindings/refusals, and a configured address absent from both retains its
 `not_listening` row and existing reason. Startup diagnostics and live add/remove checks keep the same comparison.
-These front-end rows remain visible when an unavailable upstream leaves the service Starting. An unavailable snapshot uses
+These front-end rows remain visible when a lost backend leaves the service not Running. An unavailable snapshot uses
 explicitly configured placeholders: `configured_not_bound` without a ready gateway, otherwise `configured_unconfirmed`.
 Neither placeholder is a bound-listener claim, and an unavailable applied DNS Name never falls back to saved intent.
+
+**Service line and degraded parts (issue #3848).** `pfb_dns_status_service()` reads the applied status, first match wins: `Running` (status
+readable, Unbound owns the upstream); `Resolver backend not answering: <why>` (status readable, Unbound does not: the DNS Resolver is
+disabled, `<process> (pid <pid>) holds Unbound's port <port>` from the same `sockstat` scan, or Unbound does not answer on the upstream);
+`Not serving: <error>` (the gateway lives, is not ready, and its latest start, the lines after the last `starting pid`, logged a
+`pfb_dns_gateway:` error); `Starting`; `Stopped`. A ready gateway that gives no status is `Starting`: there is no endpoint to blame. The
+status's `degraded` list (absent is none; a list that breaks the contract makes the whole status unavailable) is a row
+`pfb-dns-status-degraded-<part>` under Service, a line of the widget's service title (which stays yellow) and a problem of the startup
+notice, all worded by `pfb_dns_proxy_degraded_text()`. `dnsbl` also turns the mode into `On, with DNSBL: DNSBL is not blocking:
+<reason>; the proxy forwards every query`, and `tls_certificate` turns each listening DoT, DoH and DoQ row into `not_served`. Pinned by
+`PfbDnsStatusDegradedTest`, `PfbDnsAppliedStatusDegradedTest`, `PfbDnsStatusPanelTest`, `PfbDnsWidgetStatusTest` and
+`DnsProxyStartupCheckDegradedTest`.
 
 **Status panel tables (issues #3555, #3586).** `pfb_dns_status_panel()` renders that status under the form as sections like the
 page's own (the markup of an open `COLLAPSIBLE` `Form_Section`, toggled from its title): `pfB-DNS Status` with the service and the

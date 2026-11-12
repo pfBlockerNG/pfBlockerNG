@@ -126,8 +126,8 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   The update pass and cron tick confirm their own starts/restarts. An existing gateway stays running when status
   reads fail or the Resolver backend is down; existing startup diagnostics still run. A foreign holder of the applied
   upstream port changes nothing either: no pass gives the Resolver back (owner decision, 2026-11-11).
-  A dead backend shows **Service: Starting**. [#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)
-  tracks clearer reporting and moving Unbound off a foreign holder's port to a free loopback port pair.
+  A dead or foreign-held backend makes **Service** say `Resolver backend not answering: <why>` and is a problem of the startup notice
+  ([#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)), which also tracks moving Unbound off a foreign holder's port to a free loopback port pair.
   No port migration, fallback, new restart or retry is added here. An actual start/restart still waits for serving
   readiness, also under a package operation, and reports a start that does not serve without restoring the Resolver.
   Rare IPv4-compatible (`::/96`), mapped and equivalent-spelling normalization is deferred to

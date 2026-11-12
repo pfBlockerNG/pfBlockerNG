@@ -4066,6 +4066,18 @@ if (!defined('PFB_DNS_PROXY_DAEMON_PIDFILE')) {
 	define('PFB_DNS_PROXY_DAEMON_PIDFILE', '/var/run/pfb_dns_proxy_daemon.pid');
 }
 const PFB_DNS_PROXY_LOG = '/var/log/pfblockerng/dns_proxy.log';
+// issue #3848: the parts the gateway's applied status reports `degraded` (the closed set of its ctl_status.go, in its order), each with
+// what is lost; the status panel, the widget and the startup notice say it as "<label>: <reason>"
+const PFB_DNS_PROXY_DEGRADED = [
+	'dnsbl'           => 'DNSBL is not blocking',
+	'dnsbl_settings'  => 'DNSBL settings are only partly read',
+	'dns_name'        => 'DNS Name answers are not served',
+	'ddr'             => 'DDR is off',
+	'tls_certificate' => 'DoT, DoH and DoQ are not served: no usable certificate',
+	'acl'             => 'Client access control is not applied, so every client is forwarded',
+	'statistics'      => 'DNSBL statistics are not recorded',
+	'observer'        => 'The upstream observer is not running',
+];
 // The lock file that serializes the rc script's starts (lockf(1), kept between starts): the boot hook's background start and an
 // apply's start_service() both run `rc start`, and both could pass its "already serving?" check before the first daemon wrote a pidfile.
 const PFB_DNS_PROXY_LOCKFILE = '/var/run/pfb_dns_proxy.lock';
@@ -6214,6 +6226,22 @@ function pfb_dns_proxy_applied_status(?string $socket = NULL, float $timeout = P
 	if (property_exists($data, 'upstream') && !$endpoint($data->upstream)) {
 		return NULL;
 	}
+	// issue #3848: absent from a gateway older than the field (nothing degraded); present, a list of {part, reason} rows, each part of the closed set once
+	$degraded = [];
+	if (property_exists($data, 'degraded')) {
+		if (!is_array($data->degraded) || !array_is_list($data->degraded)) {
+			return NULL;
+		}
+		foreach ($data->degraded as $row) {
+			if (!$row instanceof stdClass || !isset($row->part, $row->reason) || !is_string($row->part) || !is_string($row->reason) ||
+			    !isset(PFB_DNS_PROXY_DEGRADED[$row->part]) || isset($degraded[$row->part]) || $row->reason === '' ||
+			    strlen($row->reason) > 300 || preg_match('/\p{C}/u', $row->reason) !== 0) {
+				return NULL;
+			}
+			$degraded[$row->part] = ['part' => $row->part, 'reason' => $row->reason];
+		}
+	}
+	$data->degraded = array_values($degraded);
 	$seen = $locals = [];
 	foreach ($data->listeners as $index => $row) {
 		if (!$row instanceof stdClass || !isset($row->kind, $row->address, $row->state, $row->reason) ||
@@ -6301,13 +6329,26 @@ function pfb_dns_proxy_applied_listeners(?array $status): ?array {
 	return $list;
 }
 
+/**
+ * What a degraded row of the applied status says is lost and why: the one sentence the status panel, the widget and the startup notice share.
+ *
+ * @param array{part:string,reason:string} $row
+ */
+function pfb_dns_proxy_degraded_text(array $row): string {
+	return PFB_DNS_PROXY_DEGRADED[$row['part']] . ": {$row['reason']}";
+}
+
 /** The applied upstream must have TCP and UDP sockets owned exclusively by the live Unbound pidfile's process. */
 function pfb_dns_proxy_upstream_ready(?array $status = NULL): bool {
 	return pfb_dns_proxy_upstream_state($status) === 'ready';
 }
 
-/** @return 'ready'|'foreign'|'unknown' Native ownership evidence for the applied endpoint, never an inference from a failed probe. */
-function pfb_dns_proxy_upstream_state(?array $status = NULL): string {
+/**
+ * @param array{process:string,pid:int,port:string}|null $holder set when the answer is 'foreign': the process of the same socket scan that
+ *        holds the endpoint's port, as sockstat names it, and that port
+ * @return 'ready'|'foreign'|'unknown' Native ownership evidence for the applied endpoint, never an inference from a failed probe.
+ */
+function pfb_dns_proxy_upstream_state(?array $status = NULL, ?array &$holder = NULL): string {
 	global $g, $pfb;
 
 	$pidfile = "{$g['varrun_path']}/unbound.pid";
@@ -6356,12 +6397,33 @@ function pfb_dns_proxy_upstream_state(?array $status = NULL): string {
 		if (@inet_pton($address) !== FALSE && $local_port !== NULL &&
 		    pfb_dns_proxy_host_port($address, $local_port) === $expected) {
 			if ($fields[1] !== 'unbound' || (int) $fields[2] !== (int) $pid) {
+				$holder = ['process' => pfb_sanitize_text($fields[1]), 'pid' => (int) $fields[2], 'port' => $port];
 				return 'foreign';
 			}
 			$transports[$fields[4]] = TRUE;
 		}
 	}
 	return isset($transports["tcp{$family}"], $transports["udp{$family}"]) ? 'ready' : 'unknown';
+}
+
+/**
+ * Why a READY gateway's Unbound backend does not serve it, as the Service line and the startup notice both say it (issue #3848): the
+ * Resolver is disabled (nothing starts it), another process holds the upstream port, or Unbound does not answer on the gateway's upstream.
+ *
+ * @param array<string,mixed>|null $applied the gateway's validated applied status (pfb_dns_proxy_applied_status())
+ * @return string|null NULL when Unbound serves the gateway, and with no status: without it there is no endpoint to check
+ */
+function pfb_dns_proxy_backend_problem(?array $applied): ?string {
+	$holder = NULL;
+	if ($applied === NULL || pfb_dns_proxy_upstream_state($applied, $holder) === 'ready') {
+		return NULL;
+	}
+	if (!config_path_enabled('unbound')) {
+		return 'the DNS Resolver is disabled';
+	}
+	return $holder !== NULL
+	    ? "{$holder['process']} (pid {$holder['pid']}) holds Unbound's port {$holder['port']}"
+	    : 'Unbound does not answer on ' . ($applied['upstream'] ?? 'the gateway\'s upstream');
 }
 
 /**
@@ -6489,6 +6551,26 @@ function pfb_dns_proxy_log_lines(?int $from = NULL): array {
 	$lines = array_map('rtrim', explode("\n", (string) @stream_get_contents($handle)));
 	fclose($handle);
 	return $cut ? array_slice($lines, 1) : $lines;
+}
+
+/**
+ * The error the gateway's latest start ended with (issue #3848): its last `pfb_dns_gateway:` line after the last `starting pid` line of
+ * the log's tail, without that prefix. A fatal error with no start line before it belongs to a start the tail does not show: not blamed.
+ *
+ * @return string|null NULL when the latest start logged none
+ */
+function pfb_dns_proxy_start_error(): ?string {
+	$started = FALSE;
+	$error = NULL;
+	foreach (pfb_dns_proxy_log_lines() as $line) {
+		if (str_starts_with($line, 'starting pid ')) {
+			$started = TRUE;
+			$error = NULL;
+		} elseif ($started && str_starts_with($line, 'pfb_dns_gateway:')) {
+			$error = trim(substr($line, strlen('pfb_dns_gateway:')));
+		}
+	}
+	return ($error === '') ? NULL : $error;
 }
 
 /**
@@ -6625,18 +6707,20 @@ function pfb_dns_proxy_listeners_sync(?array $served): ?string {
  * when there is none. The notices `pfBlockerNG DNS Proxy` (the Resolver's) and `pfBlockerNG DNS Proxy certificate` are never closed or
  * replaced here. The problems, in this order, each one sentence that says what is not served and why:
  *   1. the proxy is not ready, with the gateway's last `pfb_dns_gateway:` error from its log when it has one (this start's own, with a $since);
- *   2. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the running
+ *   2. a ready gateway whose Unbound backend does not serve it, with why (pfb_dns_proxy_backend_problem()); issue #3848;
+ *   3. a listener the rc script's command names (--listen, --dot-listen, --doh-listen, --doq-listen, with their ports) that the running
  *      gateway does not serve, as its validated applied inventory reports (pfb_dns_proxy_applied_status()), with the reason it
  *      refused that address when it did, else that it did not report it. A gateway that gives no list (no socket, no answer in time, an
  *      older gateway, a reply that is not the list) cannot be judged: it gives no problem and closes nothing, and the log is never read for it;
- *   3. each warning that building the command line gives now (a stored setting skipped, an interface that adds no listener), asked of
+ *   4. each part the gateway reports `degraded`, in its own order, as the status panel words it (pfb_dns_proxy_degraded_text());
+ *   5. each warning that building the command line gives now (a stored setting skipped, an interface that adds no listener), asked of
  *      the code the service uses (pfb_dns_proxy_plain_listen(), pfb_dns_proxy_tls_flags()), except an interface that is down or
  *      disabled: its link coming back restores its listeners, so there is nothing to correct (issue #3627; the service still logs it).
  * A notice is closed only when the gateway's list was known and nothing was found; file_notice() files a row for every changed text and
  * close_notice() removes one row per call, so every row of the id is closed, by its key.
  *
- * @param bool $ready serving readiness after an activation wait, or marker readiness when the caller started nothing. With no snapshot
- *        stored and the proxy ready, nothing is checked, closed or waited for
+ * @param bool $ready whether the gateway is READY (pfb_dns_proxy_ready()): after an activation wait that ran out too, so that a ready gateway
+ *        with a lost backend is judged by its status. With no snapshot stored and the proxy ready, nothing is checked, closed or waited for
  * @param int|null $since the log's size from before the start being checked (pfb_dns_proxy_log_size()), taken by the caller that made
  *        it; NULL = no start was made (a cron tick that restarted nothing, an apply that restarted nothing). It bounds only the gateway
  *        error looked for when the proxy is not ready: the bytes after it (none quoted when this start logged none; a log now shorter
@@ -6661,9 +6745,13 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 		$problems[] = 'pfB-DNS is not serving: the DNS proxy did not become ready within ' . PFB_DNS_PROXY_START_WAIT . ' s' .
 		    (($error === '') ? '' : " (last gateway error: {$error})");
 	} else {
-		$listeners = pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status());
+		$applied = pfb_dns_proxy_applied_status();
+		$listeners = pfb_dns_proxy_applied_listeners($applied);
 		$judged = ($listeners !== NULL);
 		if ($listeners !== NULL) {
+			if (($backend = pfb_dns_proxy_backend_problem($applied)) !== NULL) {
+				$problems[] = "the DNS Resolver backend does not answer: {$backend}";
+			}
 			$labels = ['udp+tcp' => 'Plain DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'];
 			foreach (pfb_dns_proxy_command_listeners() as $kind => $addresses) {
 				foreach ($addresses as $at) {
@@ -6671,6 +6759,9 @@ function pfb_dns_proxy_startup_check(bool $ready, ?int $since = NULL): void {
 						$problems[] = "{$labels[$kind]} is not served on {$at}: " . ($listeners['refused'][$kind][$at] ?? 'the gateway did not report it listening');
 					}
 				}
+			}
+			foreach ($applied['degraded'] ?? [] as $row) {
+				$problems[] = pfb_dns_proxy_degraded_text($row);
 			}
 		}
 	}
@@ -16295,14 +16386,36 @@ function pfb_dns_proxy_port(): string {
 }
 
 /**
+ * The Service line of the status panel (issue #3848): `Running` while the gateway's applied status is readable and Unbound serves it; with
+ * the gateway ready and Unbound not, why (pfb_dns_proxy_backend_problem()); with the gateway running and not ready, the error its latest
+ * start ended with, else `Starting`; `Stopped` when it is not running. A ready gateway that gives no status is `Starting`: no endpoint is
+ * known to blame.
+ *
+ * @param array<string,mixed>|null $applied pfb_dns_proxy_applied_status()
+ */
+function pfb_dns_status_service(?array $applied, bool $ready): string {
+	if ($applied !== NULL) {
+		$backend = pfb_dns_proxy_backend_problem($applied);
+		return ($backend === NULL) ? 'Running' : "Resolver backend not answering: {$backend}";
+	}
+	if (!pfb_dns_proxy_running()) {
+		return 'Stopped';
+	}
+	$error = $ready ? NULL : pfb_dns_proxy_start_error();
+	return ($error === NULL) ? 'Starting' : "Not serving: {$error}";
+}
+
+/**
  * What the DNS General page's status panel (pfb_dns_status_panel()) shows: the service, the mode as text, and for each transport (plain DNS,
  * DoT, DoH, DoQ) its state. The box is moved or it is not (a valid snapshot, or our block with none: recovery required); a toggle that
  * is on while nothing is moved is never running: it is said not to be active, with the reason (pfBlockerNG or the Resolver disabled, or
  * the Resolver not moved yet or refused), and claims no transport (`transports` is NULL).
  * Applied listeners, the DNS Name and DDR rows share one validated control snapshot. An unavailable snapshot never supplies an applied
  * value; command addresses may still be labelled configured/not confirmed. Backend readiness is independently proved by sockstat.
+ * A moved box also lists what the gateway reports `degraded`; DNSBL not blocking is said by the mode, and no usable certificate makes every
+ * listening DoT, DoH and DoQ row `not_served`.
  *
- * @return array{service:string,mode:string,transports:?array<string,array<string,mixed>>,active:bool,dnsbl:bool,name:?string,ddr?:array}
+ * @return array{service:string,mode:string,transports:?array<string,array<string,mixed>>,active:bool,dnsbl:bool,name:?string,ddr?:array,degraded?:list<array{part:string,reason:string}>}
  */
 function pfb_dns_status(): array {
 	global $pfb;
@@ -16310,7 +16423,7 @@ function pfb_dns_status(): array {
 	$saved = pfb_dns_proxy_saved();
 	$applied = pfb_dns_proxy_applied_status();
 	$ready = pfb_dns_proxy_ready();
-	$service = $applied !== NULL && pfb_dns_proxy_upstream_ready($applied) ? 'Running' : (pfb_dns_proxy_running() ? 'Starting' : 'Stopped');
+	$service = pfb_dns_status_service($applied, $ready);
 	$dnsbl = pfb_dnsbl_active();
 	$off = ['active' => FALSE, 'dnsbl' => $dnsbl, 'name' => ''];
 	if ($saved === NULL && pfb_dns_proxy_recovery_required()) {
@@ -16340,17 +16453,22 @@ function pfb_dns_status(): array {
 		] + $off;
 	}
 
+	$degraded = $applied['degraded'] ?? [];
+	$reasons = array_column($degraded, 'reason', 'part');
 	if (($pfb['pfb_dns'] ?? NULL) !== PfbToggle::On) {
 		$mode = 'Turning off: pfB-DNS is off, and the DNS Resolver restore is pending: see the notices';
 	} elseif (($pfb['enable'] ?? NULL) !== PfbToggle::On) {
 		$mode = 'Off: pfBlockerNG is disabled, and the DNS Resolver restore is pending: see the notices';
 	} elseif (pfb_dnsbl_active()) {
-		$mode = 'On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else';
+		$mode = isset($reasons['dnsbl'])
+		    ? 'On, with DNSBL: ' . pfb_dns_proxy_degraded_text(['part' => 'dnsbl', 'reason' => $reasons['dnsbl']]) . '; the proxy forwards every query'
+		    : 'On, with DNSBL: the proxy answers DNSBL blocks and forwards everything else';
 	} else {
 		$mode = 'On, without DNSBL: the proxy forwards every query';
 	}
 
 	$listeners = pfb_dns_proxy_applied_listeners($applied);
+	$certificate = isset($reasons['tls_certificate']) ? "no usable certificate: {$reasons['tls_certificate']}" : NULL;
 	// The rc script's listeners stay configured when the gateway does not report them: not_listening, with the reason it gave.
 	$configured = pfb_dns_proxy_command_listeners();
 	$unconfirmed = $ready ? 'configured_unconfirmed' : 'configured_not_bound';
@@ -16369,7 +16487,7 @@ function pfb_dns_status(): array {
 			$transports[$row] = ['state' => 'rows', 'rows' => pfb_dns_status_rows(array_map(static fn (string $at): array => $entry($at, $unconfirmed), $addresses), $labels)];
 		} else {
 			$entries = [
-				...array_map(static fn (string $at): array => $entry($at, 'listening'), $bound),
+				...array_map(static fn (string $at): array => ($certificate !== NULL && $kind !== 'udp+tcp') ? $entry($at, 'not_served', $certificate) : $entry($at, 'listening'), $bound),
 				...array_map(
 				    static fn (string $at): array => $entry($at, 'not_listening', $listeners['refused'][$kind][$at] ?? 'the gateway did not report it'),
 				    array_diff($addresses, $bound)
@@ -16381,7 +16499,7 @@ function pfb_dns_status(): array {
 	$on = ($pfb['pfb_dns'] ?? NULL) === PfbToggle::On && ($pfb['enable'] ?? NULL) === PfbToggle::On;
 	// A valid applied snapshot names the gateway. Without one: NULL (Unavailable) where it is expected to run (on) or its child is alive, else ''.
 	return ['service' => $service, 'mode' => $mode, 'transports' => $transports, 'active' => $on, 'dnsbl' => $dnsbl,
-	    'name' => $applied['dns_name'] ?? (($on || pfb_dns_proxy_running()) ? NULL : ''), 'ddr' => pfb_dns_ddr_status($applied)];
+	    'name' => $applied['dns_name'] ?? (($on || pfb_dns_proxy_running()) ? NULL : ''), 'ddr' => pfb_dns_ddr_status($applied), 'degraded' => $degraded];
 }
 
 /**
@@ -16391,7 +16509,8 @@ function pfb_dns_status(): array {
  * with the address; an interface with no address has no row. Within a row the addresses keep the order given.
  *
  * @param list<array{address:string,state:string,reason:string}> $entries address as host:port, IPv6 bracketed (pfb_dns_proxy_host_port()),
- *        state `listening`, `not_listening`, `configured_not_bound` or `configured_unconfirmed`, reason '' unless `not_listening`
+ *        state `listening`, `not_listening`, `not_served` (listening, but with no usable certificate), `configured_not_bound` or `configured_unconfirmed`,
+ *        reason '' unless `not_listening` or `not_served`
  * @param array<string,string> $labels pfb_dns_proxy_address_interfaces(), asked once per page by the caller
  * @return list<array{interface:string,addresses:list<string>,state:string,reason:string}>
  */
@@ -16756,14 +16875,15 @@ function pfb_dns_ddr_status_panel(array $status): string {
 }
 
 /**
- * The DNS General page's status panel for a pfb_dns_status() result: a section for the service and the mode, then a section per transport
+ * The DNS General page's status panel for a pfb_dns_status() result: a section for the service and the mode, with a row under Service for
+ * each degraded part (issue #3848), then a section per transport
  * holding a table of Interface | Address | State rows (header only when the transport is off) or, when it is on with no listener, the
  * notice; no transport section when the status claims no transport. Each section is the markup of an open COLLAPSIBLE Form_Section,
  * and a transport's table sits in a table-responsive container, so on a phone it scrolls inside its section instead of widening the
  * page. A state is an icon that carries its meaning in its hover title and, for screen readers, as text, so colour or shape never says
  * it alone; a refusal also shows its reason. Every value is escaped here, once.
  *
- * @param array{service:string,mode:string,transports:?array<string,array<string,mixed>>} $status
+ * @param array{service:string,mode:string,transports:?array<string,array<string,mixed>>,degraded?:list<array{part:string,reason:string}>} $status
  */
 function pfb_dns_status_panel(array $status): string {
 	$section = static fn (string $id, string $title, string $body): string => "<div class=\"panel panel-default\" id=\"{$id}\"><div class=\"panel-heading\">"
@@ -16772,8 +16892,12 @@ function pfb_dns_status_panel(array $status): string {
 	$toggle = static fn (string $id, string $label, bool $on): string => "<tr id=\"pfb-dns-status-{$id}\"><th>{$label}</th><td>"
 	    . ($on ? '<i class="fa-solid fa-check-circle text-success" title="On" aria-hidden="true"></i><span class="sr-only">On</span>'
 	        : '<i class="fa-solid fa-times-circle text-danger" title="Off" aria-hidden="true"></i><span class="sr-only">Off</span>') . '</td></tr>';
+	$degraded = '';
+	foreach ($status['degraded'] ?? [] as $row) {
+		$degraded .= "<tr id=\"pfb-dns-status-degraded-{$row['part']}\"><th>Degraded</th><td>" . htmlspecialchars(pfb_dns_proxy_degraded_text($row)) . '</td></tr>';
+	}
 	$html = $section('pfb-dns-status-overview', 'pfB-DNS Status', '<table class="table table-condensed"><tr id="pfb-dns-status-service"><th>Service</th><td>'
-	    . htmlspecialchars($status['service']) . '</td></tr>' . $toggle('pfbdns', 'pfB-DNS', $status['active']) . $toggle('dnsbl', 'DNSBL', $status['dnsbl'])
+	    . htmlspecialchars($status['service']) . '</td></tr>' . $degraded . $toggle('pfbdns', 'pfB-DNS', $status['active']) . $toggle('dnsbl', 'DNSBL', $status['dnsbl'])
 	    . '<tr id="pfb-dns-status-name"><th>DNS Name</th><td>' . htmlspecialchars($status['name'] === NULL ? 'Unavailable' : ($status['name'] === '' ? 'None' : $status['name'])) . '</td></tr></table>');
 	foreach (['plain' => 'Plain DNS', 'dot' => 'DNS over TLS', 'doh' => 'DNS over HTTPS', 'doq' => 'DNS over QUIC'] as $key => $title) {
 		$transport = $status['transports'][$key] ?? NULL;
@@ -16789,6 +16913,7 @@ function pfb_dns_status_panel(array $status): string {
 			[$icon, $meaning] = match ($row['state']) {
 				'listening'              => ['fa-check-circle text-success', 'Listening'],
 				'not_listening'          => ['fa-times-circle text-danger', 'Not listening'],
+				'not_served'             => ['fa-times-circle text-danger', 'Not served'],
 				'configured_not_bound'   => ['fa-exclamation-circle text-warning', 'Configured, not bound'],
 				'configured_unconfirmed' => ['fa-exclamation-circle text-warning', 'Configured, not confirmed by pfB-DNS'],
 			};
@@ -16809,10 +16934,11 @@ function pfb_dns_status_panel(array $status): string {
 /**
  * The dashboard widget's pfB-DNS status row for a pfb_dns_status() result: the service, then DNS, DoT, DoH and DoQ, each a cell of
  * anchor (the class its icon is polled by), label, icon classes and a hover title that says why. Green: on and working; yellow: on with a
- * fault; red: off, or pfBlockerNG disabled (nothing is served). A status that claims no transport is yellow for every transport whose
+ * fault, which a degraded part is (issue #3848: the service title then names it, unless the mode already does); red: off, or pfBlockerNG
+ * disabled (nothing is served). A status that claims no transport is yellow for every transport whose
  * toggle is on (plain DNS always is). A title is one line of plain text with no `||`, which the widget's AJAX payload cannot carry.
  *
- * @param array{service:string,mode:string,transports:?array<string,array<string,mixed>>} $status
+ * @param array{service:string,mode:string,transports:?array<string,array<string,mixed>>,degraded?:list<array{part:string,reason:string}>} $status
  * @return list<array{anchor:string,label:string,icon:string,title:string}>
  */
 function pfb_dns_widget_status(array $status): array {
@@ -16824,11 +16950,17 @@ function pfb_dns_widget_status(array $status): array {
 	$line = static fn (string $text): string => trim((string) preg_replace('/\s*(?:[\r\n]+|\|{2,})\s*/', ' ', $text));
 
 	$enabled = ($pfb['enable'] ?? NULL) === PfbToggle::On;
+	$serviceTitle = "{$status['service']}: {$status['mode']}";
+	foreach ($status['degraded'] ?? [] as $row) {
+		if (!str_contains($serviceTitle, $text = pfb_dns_proxy_degraded_text($row))) {
+			$serviceTitle .= "; {$text}";
+		}
+	}
 	$cells = [[
 	    'anchor' => 'PFBDNSSTATUS_service',
 	    'label'  => 'pfB-DNS',
-	    'icon'   => !$enabled ? $red : (($status['service'] === 'Running' && $status['transports'] !== NULL) ? $green : $yellow),
-	    'title'  => $line("{$status['service']}: {$status['mode']}"),
+	    'icon'   => !$enabled ? $red : (($status['service'] === 'Running' && $status['transports'] !== NULL && ($status['degraded'] ?? []) === []) ? $green : $yellow),
+	    'title'  => $line($serviceTitle),
 	]];
 	foreach (['plain' => 'DNS', 'dot' => 'DoT', 'doh' => 'DoH', 'doq' => 'DoQ'] as $key => $label) {
 		$transport = $status['transports'][$key] ?? NULL;
