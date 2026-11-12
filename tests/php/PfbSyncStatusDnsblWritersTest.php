@@ -760,7 +760,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$writable = sys_get_temp_dir() . '/pfb_dnsbl_writable_' . getmypid() . '_' . uniqid();
 		mkdir($writable, 0777, TRUE);
 
-		// The proxy keeps serving, so the restart tail confirms it ready and nothing is rolled back
+		// The proxy keeps serving, so the restart tail confirms it ready and nothing is restored
 		$this->proxyServes();
 		$this->seedRunningGateway();
 		$this->pfbDnsHostsTheModule(TRUE);

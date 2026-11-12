@@ -130,4 +130,23 @@ final class DnsProxyNoticeDedupeTest extends TestCase
 
 		$this->assertSame([[$id, 'Same text']], self::filed(), 'the same id and text is one notice');
 	}
+
+	public function testAConditionThatStandsIsLoggedWhenItIsFiledAndNotOnEveryPass(): void
+	{
+		// Given a condition a cron tick finds every 15 minutes
+		pfb_dns_proxy_notify(self::ID, 'the Resolver is disabled', self::URL);
+		pfb_dns_proxy_notify(self::ID, 'the Resolver is disabled', self::URL);
+		pfb_dns_proxy_notify(self::ID, 'the Resolver is disabled', self::URL);
+
+		// Then it is filed once and logged once; the next pass adds neither a notice nor a log line
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertSame(1, substr_count($logs, 'the Resolver is disabled'), 'one log line for one notice');
+
+		// ... and a changed text is a new condition: filed and logged again
+		pfb_dns_proxy_notify(self::ID, 'the Resolver is back', self::URL);
+		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertCount(2, $GLOBALS['pfb_test_file_notices']);
+		$this->assertSame(1, substr_count($logs, 'the Resolver is back'));
+	}
 }

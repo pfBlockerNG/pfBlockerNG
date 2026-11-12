@@ -20,7 +20,7 @@ type Options struct {
 // Open boots the decider: the module (unless NoModule), then the reply log (ReplyLog), then the observer socket
 // (Observer). A flag combination argparse refuses (ReplyLog without NoModule, Observer with it) or a module that cannot
 // initialise is the returned error, with nothing left running. A reply log or an observer socket that cannot be opened is
-// logged once and the decider serves without it: DNS must not go down with them.
+// logged once and the decider serves without it: DNS must not go down with them (Degraded lists the observer).
 func Open(opts Options) (*Frontend, error) {
 	if opts.ReplyLog && !opts.NoModule {
 		return nil, errors.New("--reply-log needs --no-module: the module logs its own replies")
@@ -43,7 +43,8 @@ func Open(opts Options) (*Frontend, error) {
 		// before the gateway serves: it serves only once the module can hear Unbound
 		observer, err := f.listenObserver(opts.ModuleDir)
 		if err != nil {
-			logErr(fmt.Sprintf("upstream-block detection is off: cannot listen on %s: %v", observerSocketName, err))
+			f.observerLost = fmt.Sprintf("upstream-block detection is off: cannot listen on %s: %v", observerSocketName, err)
+			logErr(f.observerLost)
 		}
 		f.observer = observer
 	}

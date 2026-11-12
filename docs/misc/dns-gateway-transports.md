@@ -30,7 +30,8 @@ When a TLS transport is requested and the file is unusable or absent at start, t
 (`TLS certificate not loaded: <reason>; DoT, DoH and DoQ handshakes fail until one is pushed`), the TLS listeners are bound
 with no certificate (a handshake fails with `no TLS certificate is loaded`), plain UDP and TCP keep serving (under `daemon -r` a
 broken certificate must not crash-loop the only :53 listener), and the first certificate pushed is served by the listeners that were
-there all along, with no restart: the next apply or cron tick pushes it (the start has PHP write a missing file first).
+there all along, with no restart: the next apply or cron tick pushes it (the start has PHP write a missing file first). Until
+then the status lists `tls_certificate` in `degraded`.
 
 ### The control socket
 
@@ -92,9 +93,12 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   and DDR rows and the framing of the body (no empty line, no trailing newline, a known first word) are still validated as a
   whole before any table changes, and a body that fails them leaves the previous tables intact.
   Ownership-only or empty updates work without `--dns-name` or DDR; name rows still require `--dns-name` and DoH 443
-  rows still require DDR. An empty body empties all tables. The gateway replaces each immutable table snapshot, logs
-  only a changed table as `address table: <N> name answers, <N> DoH 443 addresses, <N> listener interfaces` (an
-  ownership-only change too; the count is the entries applied), and replies `ok`.
+  rows still require DDR (`error: started without --dns-name`, `error: started without --ddr`), unless the gateway started
+  without them because it could not use them (`dns_name` or `ddr` in the status `degraded` list, issue #3848): it then takes
+  the table, drops those rows and replies `ok`, because PHP restarts the gateway on any error reply. An empty body empties
+  all tables. The gateway replaces each immutable table snapshot, logs only a changed table as
+  `address table: <N> name answers, <N> DoH 443 addresses, <N> listener interfaces` (an ownership-only change too; the count
+  is the entries applied), and replies `ok`.
   Repeatable `--listener-interface IP=BASE64UTF8` flags initialize the owner snapshot at startup. PHP uses the existing
   address-table push after listener synchronization to refresh ownership as well as name/DDR rows; in-flight queries
   retain their captured description. A gateway older than the verb answers
@@ -116,6 +120,20 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   - `ddr` and `advertisements`: applied DDR enablement and each local address's `records` and `additional` addresses.
     Records carry `priority`, `target`, `alpn`, `port`, `hint` and `path`, converted from the same designation builder
     that answers DNS queries, including its certificate and actual-listener checks.
+  - `degraded` (issue #3848): always present, `[]` when nothing is lost (a gateway older than the field sends none). A row is
+    `part` and `reason` (one line, no control characters, at most 300 bytes). The parts, in the order the rows come, each at
+    most once:
+    - `dnsbl`: the DNSBL does not block. The decider could not boot (an error, or no boot within 300 s), so it was booted again
+      with no module and every query is forwarded; or it booted with no DNSBL build (manifest absent, unreadable or unbuildable).
+      A zero-downtime reload that builds the DNSBL ends the second case; a reload that fails after a good build keeps the last
+      good lists and lists nothing.
+    - `dnsbl_settings`: `pfb_unbound.ini` could not be parsed; the DNSBL runs with what was read.
+    - `dns_name`: `--dns-name` or `--dns-name-answer` cannot be used: no DNS name answers, and no DDR (see DNS name).
+    - `ddr`: DDR is off although it was asked for (see DDR).
+    - `tls_certificate`: no usable certificate; DoT, DoH and DoQ handshakes fail until one is pushed.
+    - `acl`: Unbound's config cannot be loaded for the ACL, so every client is forwarded (Unbound still applies its own ACL).
+    - `statistics`: a statistics database (`pfb_py_resolver.sqlite` or `pfb_py_dnsbl.sqlite`) could not be opened; nothing is counted in it.
+    - `observer`: the upstream observer's socket could not be bound; upstream blocks are not detected.
 
   The existing serial control handler builds the snapshot between mutations, off the DNS query path. No certificate,
   private key or configuration blob is returned. The same root peer credential and filesystem permissions apply.
@@ -124,13 +142,12 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
   One response supplies the page or widget refresh; readiness still independently requires the live Unbound PID to
   own TCP and UDP sockets on the reported upstream. Advertised state does not prove client reachability or TLS trust.
   The update pass and cron tick confirm their own starts/restarts. An existing gateway stays running when status
-  reads fail or the Resolver backend is down; existing startup diagnostics still run. Positively confirmed foreign
-  ownership of the applied upstream port is the narrow exception and retains devel's rollback.
-  A dead backend shows **Service: Starting**. [#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)
-  tracks clearer reporting and replacing the foreign-owner rollback with moving Unbound to a free port.
-  No port migration, fallback, new restart or retry is added here. Actual activations remain fail-closed.
-  Package-operation update passes keep devel's existing deferral even for a foreign holder; the tick retains its
-  foreign-owner rollback. An actual start/restart is never exempted by that deferral.
+  reads fail or the Resolver backend is down; existing startup diagnostics still run, and no pass gives the Resolver back
+  (owner decisions, 2026-11-11). A dead Unbound makes **Service** say `Resolver backend not answering: <why>` and is a problem
+  of the startup notice ([#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)).
+  Another process on Unbound's loopback port pair is moved off by moving the pair to a free one, and when no move is possible the gateway
+  is stopped instead of forwarding to it: see "Unbound's backend ports" in `architecture-notes.md`. An actual start/restart still waits for serving
+  readiness, also under a package operation, and reports a start that does not serve without restoring the Resolver.
   Rare IPv4-compatible (`::/96`), mapped and equivalent-spelling normalization is deferred to
   [#3849](https://github.com/pfBlockerNG/pfBlockerNG/issues/3849). Existing exact-spelling acceptance/refusal is retained;
   this status change does not introduce a new address codec.
@@ -416,8 +433,8 @@ Its target name is the DNS name (below): there is no predefined name, and DDR wi
 
 | Flag | Meaning |
 |---|---|
-| `--ddr` | DDR on; every record names the DNS name. Needs `--dns-name`: without it the gateway does not start (`--ddr needs --dns-name`). |
-| `--ddr-doh-443 ADDR` | Repeatable (issue #3694). On the address ADDR the DoH record carries no `port` parameter, whatever port DoH listens on there, so clients reach DoH on 443 (a reverse proxy in front). ADDR is a valid IP address with no zone (an IPv4-mapped one is unmapped; a duplicate is harmless). Needs `--ddr`: otherwise `--ddr-doh-443 needs --ddr`. |
+| `--ddr` | DDR on; every record names the DNS name. Needs a usable `--dns-name`: without one the gateway still starts, with DDR off, and lists `ddr` in `degraded` (`--ddr needs --dns-name`, or `--ddr needs a --dns-name that can be served`). |
+| `--ddr-doh-443 ADDR` | Repeatable (issue #3694). On the address ADDR the DoH record carries no `port` parameter, whatever port DoH listens on there, so clients reach DoH on 443 (a reverse proxy in front). ADDR is a valid IP address with no zone (an IPv4-mapped one is unmapped; a duplicate is harmless). Needs `--ddr`, and a value that is not valid has no use: either way the gateway still starts, with DDR off, and lists `ddr` in `degraded` (`--ddr-doh-443 needs --ddr`, or the bad value). |
 
 With `--ddr`, after the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and before the decider, the
 gateway answers every query for a name at or under `resolver.arpa.` itself, on every transport; the decider never sees it
@@ -459,8 +476,8 @@ configuration policy, not a new restriction on the standalone gateway's generic 
 
 | Flag | Meaning |
 |---|---|
-| `--dns-name NAME` | The DNS name, with or without one trailing dot: labels of 1 to 63 characters, at most 253 in all. Empty or absent: no name, so no DDR and no name answers. The Save DNS settings save also refuses an IP literal, a wildcard, a single label and `resolver.arpa.` or a name under it. |
-| `--dns-name-answer LOCAL=ADDR[,ADDR]` | Repeatable. A query for the name that arrives on LOCAL is answered with the ADDR of the family it asked for, or local NOERROR/NODATA when that family is absent. `LOCAL=` owns the Name without any addresses. LOCAL and every ADDR are IP addresses without a zone (an IPv4-mapped one is read as its IPv4 address); at most one ADDR per family; a LOCAL named twice is an error, and so is any of these flags without `--dns-name` (`--dns-name-answer needs --dns-name`). LOCAL need not be one of its ADDRs. |
+| `--dns-name NAME` | The DNS name, with or without one trailing dot: labels of 1 to 63 characters, at most 253 in all. Empty or absent: no name, so no DDR and no name answers. A NAME that is not valid leaves the gateway starting without the name, and so without DDR, with `dns_name` in `degraded`. The Save DNS settings save also refuses an IP literal, a wildcard, a single label and `resolver.arpa.` or a name under it. |
+| `--dns-name-answer LOCAL=ADDR[,ADDR]` | Repeatable. A query for the name that arrives on LOCAL is answered with the ADDR of the family it asked for, or local NOERROR/NODATA when that family is absent. `LOCAL=` owns the Name without any addresses. LOCAL and every ADDR are IP addresses without a zone (an IPv4-mapped one is read as its IPv4 address); at most one ADDR per family. A LOCAL named twice, a value that is not valid, and any of these flags without `--dns-name` (`--dns-name-answer needs --dns-name`) are not usage errors: the gateway starts, serves plain DNS, answers no name and no DDR, and lists `dns_name` in `degraded`. LOCAL need not be one of its ADDRs. |
 
 After the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and after DDR, before the decider, the gateway
 answers a query for exactly the DNS name itself, on every transport, when LOCAL is in the table: the question is one `IN` `QUERY` of type `A` or

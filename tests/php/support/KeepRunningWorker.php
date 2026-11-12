@@ -27,6 +27,8 @@ final class KeepRunningWorker
 		$this->krApply($scenario);
 		$foreignFixture = !empty($scenario['foreign_upstream']);
 		if ($foreignFixture) {
+			// The Resolver is enabled, so only the package operation keeps Unbound from moving to the free pair above the stranger's
+			config_set_path('unbound/enable', '');
 			file_put_contents($GLOBALS['pfb_test_sockstat_output'], "root nc 6161 3 tcp4 127.0.0.1:5353 *:*\nroot nc 6161 4 udp4 127.0.0.1:5353 *:*\n");
 		}
 		$unboundBefore = $foreignFixture ? isvalidpid($GLOBALS['g']['varrun_path'] . '/unbound.pid') : NULL;
@@ -44,6 +46,11 @@ final class KeepRunningWorker
 		} else {
 			pfb_reload_unbound('enabled', TRUE);
 		}
+		$service = NULL;
+		if ($foreignFixture) {
+			pfb_global();
+			$service = pfb_dns_status()['service'];
+		}
 		file_put_contents($resultFile, json_encode([
 			'operation' => $operation,
 			'returned' => $returned,
@@ -59,6 +66,10 @@ final class KeepRunningWorker
 			'unbound_before' => $unboundBefore,
 			'gateway_before' => $gatewayBefore,
 			'serving_before' => $servingBefore,
+			'configures' => count($GLOBALS['pfb_test_unbound_configure_calls'] ?? []),
+			'blocked' => @file_get_contents($GLOBALS['pfb']['dns_proxy_backend_blocked']) ?: NULL,
+			'notices' => array_column($GLOBALS['pfb_test_file_notices'] ?? [], 'notice'),
+			'service' => $service,
 		], JSON_THROW_ON_ERROR));
 		$this->standInsStop();
 		rmdir_recursive($this->krDir);

@@ -55,9 +55,15 @@ trait KeepRunningScenario
 		$GLOBALS['pfb_test_configured_ipv6'] = [];
 		$this->krCalls = [];
 		$this->clearProxyFiles();
+		@unlink($GLOBALS['pfb']['dns_proxy_backend_blocked']);
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service): void {
 			$this->krCalls[] = [$fn, $service];
+			// A stopped proxy is gone: no pidfile, no marker, no control socket
+			if ($fn === 'stop_service') {
+				$this->clearProxyFiles();
+				unset($GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE]);
+			}
 			// A started or restarted proxy is up at once, as the readiness wait's first probe finds it
 			if ($fn !== 'stop_service') {
 				$this->proxyServes();
@@ -135,6 +141,9 @@ trait KeepRunningScenario
 			if ($s['proxy'] === 'serves') {
 				$this->seedRunningGateway();
 			}
+		} else {
+			// A dead backend holds no sockets: rows of a process that is gone would read as a stranger on Unbound's ports (issue #3848)
+			file_put_contents($GLOBALS['pfb_test_sockstat_output'], "USER COMMAND PID FD PROTO LOCAL ADDRESS FOREIGN ADDRESS\n");
 		}
 		if ($s['dot']) {
 			$this->krEnableDot();

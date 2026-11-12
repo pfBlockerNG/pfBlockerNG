@@ -300,7 +300,7 @@ architecture's binary. Exit status `3` means no payload is installed at all; sta
 means a payload is installed but unusable on this machine (unknown machine, or its binary
 is missing or not executable). Each says why on stderr. pfB-DNS has no other front end, so
 the caller must not fall back to anything: the supervisor starts the wrapper again, no ready
-marker is ever published, and the activation's readiness wait rolls pfB-DNS back.
+marker is ever published, and the activation's readiness wait fails with the Resolver left moved (the startup notice says why).
 
 - **Source.** Project builds compile the `go/` tree of the attested commit (the same
   `git archive` snapshot as `src/`), never the working tree. Native builds read the live

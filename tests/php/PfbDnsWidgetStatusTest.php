@@ -272,4 +272,47 @@ final class PfbDnsWidgetStatusTest extends TestCase
 		$this->assertSame(0, $row->query('//script')->length, 'no markup came out of a title');
 		$this->assertSame("DoT: {$hostile}", $row->evaluate('string(//tr/td[3]/@title)'), 'reads back as the original text, escaped once');
 	}
+
+	/** @return array<string,array{list<array{part:string,reason:string}>,string}> degraded rows, and what the service cell's title adds to the service and the mode */
+	public static function degradedRows(): array
+	{
+		return [
+			'one part' => [[['part' => 'acl', 'reason' => 'unbound.conf is unreadable']], '; Client access control is not applied, so every client is forwarded: unbound.conf is unreadable'],
+			'two parts' => [
+				[['part' => 'ddr', 'reason' => 'no usable name'], ['part' => 'observer', 'reason' => 'address in use']],
+				'; DDR is off: no usable name; The upstream observer is not running: address in use',
+			],
+			'DNSBL, which the mode already says' => [[['part' => 'dnsbl', 'reason' => 'boot timeout']], ''],
+		];
+	}
+
+	/** @param list<array{part:string,reason:string}> $degraded */
+	#[DataProvider('degradedRows')]
+	public function testADegradedPartMakesTheServiceCellYellowAndItsTitleSaysWhat(array $degraded, string $added): void
+	{
+		// Given a Running service that is green
+		$healthy = self::running();
+		$this->assertCell(self::cells($healthy), 'PFBDNSSTATUS_service', self::GREEN, 'Running: ' . self::MODE);
+
+		// When parts are degraded (the mode already says DNSBL does not block)
+		$mode = in_array('dnsbl', array_column($degraded, 'part'), TRUE) ? 'On, with DNSBL: DNSBL is not blocking: boot timeout; the proxy forwards every query' : self::MODE;
+		$status = ['degraded' => $degraded, 'mode' => $mode] + $healthy;
+
+		// Then the service cell is yellow, and its title names every part once
+		$this->assertCell(self::cells($status), 'PFBDNSSTATUS_service', self::YELLOW, "Running: {$mode}{$added}");
+	}
+
+	public function testAnEmptyDegradedListLeavesTheServiceCellGreen(): void
+	{
+		$this->assertCell(self::cells(['degraded' => []] + self::running()), 'PFBDNSSTATUS_service', self::GREEN, 'Running: ' . self::MODE);
+	}
+
+	public function testDegradedPartsNeverMakeADisabledPfBlockerNgAnythingButRed(): void
+	{
+		$GLOBALS['pfb']['enable'] = PfbToggle::Off;
+
+		$cells = self::cells(['degraded' => [['part' => 'acl', 'reason' => 'x']]] + self::running());
+
+		$this->assertSame(self::RED, $cells['PFBDNSSTATUS_service']['icon']);
+	}
 }

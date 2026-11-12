@@ -130,9 +130,11 @@ type Frontend struct {
 	replyLog       *pfbUnbound
 	replyLogFailed sync.Once // ReplyLog._failed: a row that cannot be written is reported once
 	// observer is the socket the upstream observer reports on, nil when there is none.
-	observer  *observerSocket
-	closeOnce sync.Once
-	monotonic func() time.Duration
+	observer *observerSocket
+	// observerLost is why the observer's socket is not bound ("" when it is, or was not asked for); set by Open, read by Degraded.
+	observerLost string
+	closeOnce    sync.Once
+	monotonic    func() time.Duration
 
 	mu sync.Mutex
 	// when "no reply from Unbound" and an oversized SafeSearch chase were last logged

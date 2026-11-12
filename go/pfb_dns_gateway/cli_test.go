@@ -133,8 +133,8 @@ func TestConfigRejectsModeFlagsThatContradictEachOther(t *testing.T) {
 }
 
 // issue #3583, as issue #3694 changed it: --ddr turns DDR on and names --dns-name; --ddr-doh-443 leaves the port out of the DoH
-// record and needs --ddr. PHP is the primary trust boundary; these are the gateway's own checks, so a bad flag is a usage
-// error and never a broken record.
+// record and needs --ddr. PHP is the primary trust boundary; the gateway's own checks never give a broken record: what it
+// cannot use is served without (issue #3848).
 func TestConfigDDRFlagsAreParsedAndOffByDefault(t *testing.T) {
 	cases := map[string]struct {
 		flags  []string
@@ -162,25 +162,34 @@ func TestConfigDDRFlagsAreParsedAndOffByDefault(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsBadDDRUsage(t *testing.T) {
+// issue #3848: a DDR flag that cannot be built is no usage error. parseConfig takes it as given; start serves without DDR and the
+// status names the loss (TestADNSNameOrDDRFlagThatCannotBeBuiltStartsTheGatewayWithoutIt).
+func TestConfigAcceptsDDRFlagsThatCannotBeBuiltAndLeavesTheOutcomeToStart(t *testing.T) {
+	longName := strings.Repeat(strings.Repeat("a", 60)+".", 4) + "example.lan"
 	cases := map[string]struct {
-		flags []string
-		want  string // the flag the error names
+		flags   []string
+		dnsName string
+		ddr     bool
+		doh443  []string
 	}{
-		"--ddr-doh-443 without --ddr":      {[]string{"--ddr-doh-443", "192.0.2.1"}, "--ddr-doh-443"},
-		"--ddr-doh-443 with an empty name": {[]string{"--dns-name", "", "--ddr-doh-443", "192.0.2.1"}, "--ddr-doh-443"},
-		"--ddr without a name":             {[]string{"--ddr"}, "--ddr needs --dns-name"},
-		"name with an empty label":         {[]string{"--dns-name", "fw..lan", "--ddr"}, `--dns-name "`},
-		"name with a leading dot":          {[]string{"--dns-name", ".fw.lan", "--ddr"}, `--dns-name "`},
-		"name with two trailing dots":      {[]string{"--dns-name", "fw.lan..", "--ddr"}, `--dns-name "`},
-		"the root as the name":             {[]string{"--dns-name", ".", "--ddr"}, `--dns-name "`},
-		"name with a label over 63 bytes":  {[]string{"--dns-name", strings.Repeat("a", 64) + ".lan", "--ddr"}, `--dns-name "`},
-		"name over 253 characters":         {[]string{"--dns-name", strings.Repeat(strings.Repeat("a", 60)+".", 4) + "example.lan", "--ddr"}, `--dns-name "`},
+		"--ddr-doh-443 without --ddr":      {[]string{"--ddr-doh-443", "192.0.2.1"}, "", false, []string{"192.0.2.1"}},
+		"--ddr-doh-443 with an empty name": {[]string{"--dns-name", "", "--ddr-doh-443", "192.0.2.1"}, "", false, []string{"192.0.2.1"}},
+		"--ddr without a name":             {[]string{"--ddr"}, "", true, nil},
+		"name with an empty label":         {[]string{"--dns-name", "fw..lan", "--ddr"}, "fw..lan", true, nil},
+		"name with a leading dot":          {[]string{"--dns-name", ".fw.lan", "--ddr"}, ".fw.lan", true, nil},
+		"name with two trailing dots":      {[]string{"--dns-name", "fw.lan..", "--ddr"}, "fw.lan..", true, nil},
+		"the root as the name":             {[]string{"--dns-name", ".", "--ddr"}, ".", true, nil},
+		"name with a label over 63 bytes":  {[]string{"--dns-name", strings.Repeat("a", 64) + ".lan", "--ddr"}, strings.Repeat("a", 64) + ".lan", true, nil},
+		"name over 253 characters":         {[]string{"--dns-name", longName, "--ddr"}, longName, true, nil},
 	}
 	for label, c := range cases {
 		t.Run(label, func(t *testing.T) {
-			if cfg, err := parse(t, slices.Clone(c.flags)...); err == nil || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("got cfg=%+v err=%v, want an error mentioning %q", cfg, err, c.want)
+			cfg, err := parse(t, slices.Clone(c.flags)...)
+			if err != nil {
+				t.Fatalf("got err=%v, want the flags accepted", err)
+			}
+			if cfg.dnsName != c.dnsName || cfg.ddr != c.ddr || !slices.Equal(cfg.ddrDoH443, c.doh443) {
+				t.Fatalf("got dnsName=%q ddr=%v ddrDoH443=%q, want %q %v %q", cfg.dnsName, cfg.ddr, cfg.ddrDoH443, c.dnsName, c.ddr, c.doh443)
 			}
 		})
 	}

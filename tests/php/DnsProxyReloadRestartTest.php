@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -172,7 +173,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertSame(1, $seen[0]['rcfile'], 'the rc script was regenerated before the restart');
 	}
 
-	public function testARestartedProxyThatServesIsLoggedAsReadyAndNothingIsRolledBack(): void
+	public function testARestartedProxyThatServesIsLoggedAsReadyAndNothingIsRestored(): void
 	{
 		// Given the restart path and a proxy that publishes its marker once restarted
 		$this->setProxyMode();
@@ -182,7 +183,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 		// When the Resolver is reloaded
 		pfb_reload_unbound('enabled', TRUE);
 
-		// Then the log says the proxy is ready, and no rollback ran (no notice, no second service call)
+		// Then the log says the proxy is ready, and nothing was restored (no notice, no second service call)
 		$this->assertStringContainsString('the DNS proxy is ready', (string) file_get_contents($GLOBALS['pfb']['log']));
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 		$this->assertCount(1, $seen);
@@ -218,6 +219,44 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertTrue($swapped, 'before: the swap took the fast path');
 		$this->assertSame([], $seen, 'the proxy applies the swap itself: no restart');
 		$this->assertSame($before, $this->startAttempts());
+	}
+
+	/** @return array<string,array{string,bool}> the part the gateway reports degraded, and whether the zero-downtime swap is still taken */
+	public static function degradedParts(): array
+	{
+		return [
+			'DNSBL is not blocking: the gateway booted without its module' => ['dnsbl', FALSE],
+			'another part is degraded: the module is there to swap' => ['ddr', TRUE],
+		];
+	}
+
+	#[DataProvider('degradedParts')]
+	public function testTheSwapIsNotTakenWhileTheGatewayBootedWithoutItsModule(string $part, bool $swapped): void
+	{
+		// Given a data update, a live proxy that hosts the module, and a gateway whose applied status lists a degraded part
+		$this->setProxyMode();
+		$this->seedSwapFixture();
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$this->gatewayStatus(['degraded' => [['part' => $part, 'reason' => 'boot timeout']]]);
+		$flipped = FALSE;
+		$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string $path, int $generation) use (&$flipped): void {
+			$flipped = TRUE;
+			file_put_contents("{$path}.applied", "{$generation}\n");
+		};
+		$seen = [];
+		$this->observeServiceCalls($seen);
+		$before = $this->startAttempts();
+
+		// When the reload runs as a data-only update
+		$taken = pfb_reload_unbound('enabled', FALSE, TRUE);
+
+		// Then a module-less gateway is restarted (the restart boots the module again) instead of being sent a generation it cannot apply,
+		// which the swap would wait out for the whole PFB_DNSBL_SWAP_WAIT; any other degraded part leaves the swap as it was
+		$this->assertSame($swapped, $taken);
+		$this->assertSame($swapped, $flipped, 'the sentinel was published only for a swap');
+		$this->assertSame($swapped ? [] : [['restart_service', 'pfb_dns_proxy']], array_column($seen, 'call'));
+		$this->assertSame($swapped, $this->startAttempts() === $before, 'Unbound restarted only on the restart path');
 	}
 
 	public function testWithoutProxyModeTheRestartPathNeverTouchesTheProxyService(): void
@@ -274,15 +313,13 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertGreaterThanOrEqual(3, $state['probes'], 'the marker was waited for until it appeared');
 		$this->assertSame([100000, 100000], $clock->sleeps, 'the ledger waited two ticks of 100 ms for the marker, then read it');
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'), 'a proxy that came up converged');
-		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'and nothing was rolled back');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'and nothing was restored');
 	}
 
-	public function testAProxyThatNeverComesUpAndCannotBeRolledBackOpensTheLedgerEntryWordedForTheProxy(): void
+	public function testAProxyThatNeverComesUpOpensTheLedgerEntryWordedForTheProxy(): void
 	{
-		// Given a restart-path apply whose proxy never becomes ready, and a rollback that cannot start: another process holds
-		// the config lock, so the Resolver stays moved and the proxy stays the host of the module
+		// Given a restart-path apply whose proxy never becomes ready: the Resolver stays moved and the proxy stays the host of the module
 		$this->setProxyMode();
-		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
 		$seen = [];
 		$this->observeServiceCalls($seen, FALSE);
 

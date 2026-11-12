@@ -17,7 +17,6 @@ final class PfbDnsAppliedStatusMixedCaseTest extends TestCase
 			$GLOBALS['pfb']['dns_proxy_pidfile'] = "{$dir}/pid";
 			$GLOBALS['pfb']['dns_proxy_ready'] = "{$dir}/ready";
 			$GLOBALS['pfb']['dns_proxy_ctl'] = "{$dir}/ctl";
-			$GLOBALS['pfb']['dns_proxy_activation_failed'] = "{$dir}/failed";
 			$GLOBALS['pfb']['pfb_dns'] = $GLOBALS['pfb']['enable'] = PfbToggle::On;
 			$GLOBALS['pfb_test_valid_pids']["{$dir}/pid"] = TRUE;
 			file_put_contents("{$dir}/pid", "4242\n");

@@ -130,14 +130,15 @@ final class DnsProxyRunningUpstreamTest extends TestCase
 		$this->assertStringStartsWith('Recovery required', $status['mode']);
 	}
 
-	public function testAnOrphanedResolverWithADeadBackendReadsStartingNotRunning(): void
+	public function testAnOrphanedResolverWithADeadBackendNamesTheBackendNotRunning(): void
 	{
 		$this->orphanedResolver();
+		config_set_path('unbound/enable', '');
 		$this->runningGateway('127.0.0.1:5353');
 		file_put_contents(PFB_DNS_PROXY_RCFILE, self::ORPHAN_RC);
 		$this->seedUnbound('127.0.0.1:5353', '5151', FALSE);
 
-		$this->assertSame('Starting', pfb_dns_status()['service']);
+		$this->assertSame('Resolver backend not answering: Unbound does not answer on 127.0.0.1:5353', pfb_dns_status()['service']);
 	}
 
 	public function testAGatewayStatusWithNoUpstreamFailsClosedEvenWhenTheRcNamesAHealthyOne(): void

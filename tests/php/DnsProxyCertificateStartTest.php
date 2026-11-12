@@ -65,11 +65,17 @@ final class DnsProxyCertificateStartTest extends TestCase
 		$this->assertSame(['export', 'launch'], $this->events());
 		$this->assertSame(
 			["-s TERM -k 5 30 {$this->dir}/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_cert"],
-			$this->recorded('timeout.args'),
+			$this->certificateRuns(),
 			'one bounded run: 5 s from TERM to KILL, 30 s in all'
 		);
 		$this->assertSame(['-f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_cert'], $this->recorded('php.args'));
 		$this->assertFileExists($this->certFile());
+	}
+
+	/** Every timeout(1) run of the start except its bounded sockstat scan of Unbound's port: only the certificate export may remain. */
+	private function certificateRuns(): array
+	{
+		return array_values(array_filter($this->recorded('timeout.args'), static fn (string $args): bool => !str_contains($args, '/sockstat ')));
 	}
 
 	public function testAFileThatIsThereIsNeverTouchedByTheStart(): void
@@ -83,7 +89,7 @@ final class DnsProxyCertificateStartTest extends TestCase
 
 		$this->assertSame(0, $status, "rc start failed: {$output}");
 		$this->assertSame(['launch'], $this->events());
-		$this->assertSame([], $this->recorded('timeout.args'), 'PHP is not even started');
+		$this->assertSame([], $this->certificateRuns(), 'PHP is not even started');
 	}
 
 	public function testAStartForgetsWhatWasPushedToTheGatewayBeforeIt(): void

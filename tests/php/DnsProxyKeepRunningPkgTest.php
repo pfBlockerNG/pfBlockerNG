@@ -101,14 +101,17 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		$this->assertNull($result['marker']);
 	}
 
-	public function testADeadProxyStartedUnderAPackageOperationIsRolledBackWhenItsBackendIsDead(): void
+	public function testADeadProxyStartedUnderAPackageOperationLeavesTheResolverMovedWhenItsBackendIsDead(): void
 	{
 		// Given a proxy that is down with a restart pending, and no Unbound answering behind the gateway it starts
 		$result = $this->runUnderPkg(['op' => 'ensure', 'proxy' => 'dead', 'marker' => 'the package changed its rc script']);
 
-		// Then the start is judged in full: the gateway serves, but its upstream does not, so the start is rolled back
+		// Then the start is judged in full: the gateway serves, but its upstream does not, so it is not ready, and nothing is given back
 		$this->assertFalse($result['returned']);
-		$this->assertStringContainsString('did not become ready', $result['log']);
+		$this->assertFalse($result['stopped'], 'the gateway is not stopped');
+		$this->assertSame($result['saved_before'], $result['saved_after'], 'the snapshot is kept');
+		$this->assertSame($result['resolver_before'], $result['resolver_after'], 'the Resolver stays moved');
+		$this->assertTrue($result['running']);
 	}
 
 	public function testADeferredPassLeavesAnUnreadyGatewayAndItsResolverUntouchedWhenItStartsNothing(): void
@@ -170,7 +173,7 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 		// Then it is not restarted under the package operation, and a pending restart records it for the next pass
 		$this->assertTrue($result['returned']);
 		$this->assertSame([], $result['calls']);
-		$this->assertSame('its listen addresses or DoH/DoQ/DDR settings changed', $result['marker']);
+		$this->assertSame('its listen addresses, upstream port or DoH/DoQ/DDR settings changed', $result['marker']);
 		$this->assertStringContainsString('deferred', $result['log']);
 	}
 
@@ -254,22 +257,31 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 
 	public static function foreignOwnershipUnderPackage(): array
 	{
-		return ['update defers' => ['ensure', TRUE, FALSE], 'tick retains rollback' => ['tick', NULL, TRUE]];
+		return ['the update pass' => ['ensure', FALSE], 'the cron tick' => ['tick', NULL]];
 	}
 
 	#[DataProvider('foreignOwnershipUnderPackage')]
-	public function testForeignOwnershipKeepsDevelsPackageOperationPolicy(string $op, ?bool $returned, bool $stopped): void
+	public function testAForeignHolderUnderAPackageOperationStopsTheGatewayMovesNothingAndRestoresNothing(string $op, ?bool $returned): void
 	{
+		// Given a serving gateway whose Unbound port a stranger holds, the DNS Resolver enabled and a free pair above it, in a pass that runs as a descendant of pkg(8): nothing restarts under one
 		$result = $this->runUnderPkg(['op' => $op, 'serving' => TRUE, 'foreign_upstream' => TRUE]);
 		$this->assertTrue($result['unbound_before'], 'the live Unbound exists despite the foreign port holder');
 		$this->assertTrue($result['gateway_before']);
 		$this->assertFalse($result['serving_before']);
 		$this->assertSame($returned, $result['returned']);
-		$this->assertSame($stopped, $result['stopped']);
-		if (!$stopped) {
-			$this->assertSame($result['saved_before'], $result['saved_after']);
-			$this->assertSame($result['resolver_before'], $result['resolver_after']);
-			$this->assertTrue($result['running']);
-		}
+
+		// Then the pair is not moved and Unbound is not restarted (the package operation defers both), but the gateway is not left
+		// forwarding to the stranger either: it is stopped and the status says who holds the port; the Resolver and the snapshot are kept
+		$this->assertSame(['stop_service pfb_dns_proxy'], $result['calls'], 'the gateway was stopped once and nothing was restarted');
+		$this->assertSame(0, $result['configures'], 'Unbound was not regenerated or restarted');
+		$this->assertFalse($result['running'], 'the gateway is not running');
+		$this->assertIsString($result['blocked'], 'the stopped state stands for the next pass outside the package operation');
+		$this->assertStringStartsWith("holder\n5353\nnc (pid 6161) on 127.0.0.1:5353\n", $result['blocked'], 'a holder that no move cleared, not a lack of pairs');
+		$this->assertSame('Not serving: nc (pid 6161) on 127.0.0.1:5353 holds the Resolver backend port 5353', $result['service']);
+		$this->assertCount(1, $result['notices'], 'one notice');
+		$this->assertStringContainsString("Unbound's backend cannot be moved (a package operation is running)", $result['notices'][0], 'the package operation is why, not a disabled Resolver');
+		$this->assertFalse($result['stopped'], 'the Resolver restore\'s rc stop never ran');
+		$this->assertSame($result['saved_before'], $result['saved_after'], 'the snapshot is kept');
+		$this->assertSame($result['resolver_before'], $result['resolver_after'], 'the Resolver stays moved');
 	}
 }

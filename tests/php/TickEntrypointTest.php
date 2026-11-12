@@ -1122,15 +1122,16 @@ final class TickEntrypointTest extends TestCase
 	}
 
 	/**
-	 * issue #3515: the DNS Resolver disabled while pfB-DNS fronts it leaves the proxy answering SERVFAIL for every allowed name
-	 * until something notices. An idle tick is such a something: it does not wait for the next apply.
+	 * issue #3515, #3848: the DNS Resolver disabled while pfB-DNS fronts it leaves the proxy answering SERVFAIL for every allowed name
+	 * until something notices. An idle tick is such a something: it does not wait for the next apply. A disabled Resolver is not the
+	 * admin turning pfB-DNS off, so the tick restores nothing.
 	 *
 	 * Scenario:
 	 *   Given pfB-DNS on with the Resolver moved (a snapshot), then the Resolver disabled; nothing else is due.
 	 *   When  pfblockerng_tick() is called twice.
-	 *   Then  the first stands pfB-DNS down (the Resolver restored and still disabled, pfB-DNS still on, one notice); the second does nothing.
+	 *   Then  the Resolver stays moved and disabled, pfB-DNS stays on, and one notice says pfB-DNS has no backend.
 	 */
-	public function testAnIdleTickStandsPfbDnsDownWhenTheResolverWasDisabled(): void
+	public function testAnIdleTickKeepsPfbDnsAndSaysThereIsNoBackendWhenTheResolverWasDisabled(): void
 	{
 		$this->seedTickPrereqs('Disabled');
 		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', 'on');
@@ -1158,18 +1159,18 @@ final class TickEntrypointTest extends TestCase
 		// Act.
 		pfblockerng_tick([]);
 
-		// Assert: stood down once, the Resolver is back as saved and still disabled, and pfB-DNS stays on (nothing writes the enable).
+		// Assert: pfB-DNS stays on, the Resolver stays moved and disabled (nothing is restored), and one notice says there is no backend.
 		$this->assertSame(PfbToggle::On, PfbConfig::read('dns/pfb_dns'), 'pfB-DNS stays on');
-		$this->assertNull(pfb_dns_proxy_saved(), 'the snapshot is consumed');
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the snapshot is kept');
 		$this->assertFalse(config_path_enabled('unbound'), 'the Resolver stays disabled');
-		$this->assertSame('lan,opt1', config_get_path('unbound/active_interface'));
-		$this->assertSame($original['custom_options'], config_get_path('unbound/custom_options'));
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
-		$this->assertStringContainsString('DNS Resolver is disabled', $GLOBALS['pfb_test_file_notices'][0]['notice']);
-		$this->assertStringContainsString('pfB-DNS stays on', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'), 'the Resolver stays moved');
+		$resolver = static fn (): array => array_values(array_filter($GLOBALS['pfb_test_file_notices'], static fn (array $notice): bool => $notice['id'] === 'pfBlockerNG DNS Proxy'));
+		$this->assertCount(1, $resolver());
+		$this->assertStringContainsString('DNS Resolver is disabled', $resolver()[0]['notice']);
+		$this->assertStringContainsString('pfB-DNS has no backend', $resolver()[0]['notice']);
 
-		// And the next tick finds nothing to do.
+		// And the next tick says the same thing again without filing the same notice twice.
 		pfblockerng_tick([]);
-		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'one notice for the one stand-down');
+		$this->assertCount(1, $resolver(), 'one notice for the one condition');
 	}
 }

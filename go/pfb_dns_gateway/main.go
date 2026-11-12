@@ -92,6 +92,7 @@ type config struct {
 	trace          func(step string)                       // called after bind and the privilege drop, and when the decider has booted (the drop hook records itself)
 	open           func(decider.Options) (frontend, error) // boots the decider; nil is the real one (openDecider)
 	readyTimeout   time.Duration
+	bootTimer      func(d time.Duration) (expired <-chan time.Time, stop func() bool) // the deadline of a decider's boot; nil is a time.Timer of d
 	shutdownBudget time.Duration
 	clock          budgetClock     // what shutdown measures its budget by; the zero value is the wall clock
 	interrupt      <-chan struct{} // closed on SIGINT/SIGTERM: start stops waiting for the decider
@@ -150,12 +151,12 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: listen for the upstream observer's reports")
 	fs.BoolVar(&cfg.replyLog, "reply-log", false, "log each relayed reply to dns_reply.log (needs --no-module)")
 	fs.StringVar(&cfg.readyFile, "ready-file", "", "write the gateway's pid here, mode 0600, once it serves; removed at stop while it still names the gateway")
-	fs.StringVar(&cfg.dnsName, "dns-name", "", "the firewall's DNS name: DDR's target, and the one name answered (A and AAAA) from the address the query reached; empty = none")
-	fs.BoolVar(&cfg.ddr, "ddr", false, "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462), naming --dns-name; needs --dns-name")
+	fs.StringVar(&cfg.dnsName, "dns-name", "", "the firewall's DNS name: DDR's target, and the one name answered (A and AAAA) from the address the query reached; empty = none; one that is not valid is served without")
+	fs.BoolVar(&cfg.ddr, "ddr", false, "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462), naming --dns-name; needs --dns-name, else DDR is served without")
 	var answers listFlag
-	fs.Var(&answers, "dns-name-answer", "LOCAL=ADDR[,ADDR], repeatable: a query for --dns-name that reached LOCAL is answered with the ADDR of the family asked; needs --dns-name")
+	fs.Var(&answers, "dns-name-answer", "LOCAL=ADDR[,ADDR], repeatable: a query for --dns-name that reached LOCAL is answered with the ADDR of the family asked; needs --dns-name; an unusable value is served without")
 	var ddrDoH443, dohListen443 listFlag
-	fs.Var(&ddrDoH443, "ddr-doh-443", "ADDR, repeatable: DDR leaves the port out of the DoH record on ADDR, so clients use 443 (something on 443 in front of DoH); needs --ddr")
+	fs.Var(&ddrDoH443, "ddr-doh-443", "ADDR, repeatable: DDR leaves the port out of the DoH record on ADDR, so clients use 443 (something on 443 in front of DoH); needs --ddr; an unusable value is served without")
 	fs.Var(&dohListen443, "doh-listen-443", "DoH address on port 443, repeatable")
 	var interfaces listFlag
 	fs.Var(&interfaces, "listener-interface", "IP=BASE64UTF8 interface description for a listener address, repeatable")
@@ -233,23 +234,6 @@ func (c config) validate() error {
 			return fmt.Errorf("--%s %d is outside 0..65535", p.name, p.port)
 		}
 	}
-	if !c.ddr && len(c.ddrDoH443) > 0 {
-		return errors.New("--ddr-doh-443 needs --ddr")
-	}
-	if c.ddr && c.dnsName == "" {
-		return errors.New("--ddr needs --dns-name")
-	}
-	if c.dnsName == "" && len(c.nameAnswers) > 0 {
-		return errors.New("--dns-name-answer needs --dns-name")
-	}
-	if c.dnsName != "" {
-		if _, err := newNameAnswers(c.dnsName, c.nameAnswers); err != nil {
-			return err
-		}
-	}
-	if _, err := doh443Set(c.ddrDoH443); err != nil {
-		return err
-	}
 	for _, fixed := range []struct {
 		flag   string
 		values []string
@@ -270,9 +254,10 @@ func (c config) validate() error {
 	return nil
 }
 
-// frontend is the decider the gateway asks: (*decider.Frontend) in production.
+// frontend is the decider the gateway asks: (*decider.Frontend) in production. Degraded is what it serves without.
 type frontend interface {
 	Resolve(wire []byte, clientIP string, fwd func([]byte) []byte, transport, listenerIP, listenerInterface string) []byte
+	Degraded() []decider.DegradedPart
 	Close()
 }
 
@@ -295,7 +280,9 @@ type server struct {
 }
 
 // start logs `starting pid`, binds every --listen address (one that fails is logged and skipped), gives up root, boots the
-// decider in this process, reports readiness and begins serving. On any error nothing is left running or bound.
+// decider in this process, reports readiness and begins serving. Nothing but a plain DNS service is required: a DNS name, DDR
+// or DNSBL that cannot be had is served without (issue #3848) and listed in the status. On any error nothing is left running
+// or bound.
 func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	logf("starting pid %d", os.Getpid()) // first, so that a reader of the log finds where this start begins
 	trace := cfg.trace
@@ -368,22 +355,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 			logf("control socket: %v; the certificate cannot be renewed without a restart", err)
 		}
 	}
-	var names *nameAnswers
-	if cfg.dnsName != "" {
-		var err error
-		if names, err = newNameAnswers(cfg.dnsName, cfg.nameAnswers); err != nil {
-			closeListeners()
-			return nil, err
-		}
-	}
-	var ddrAnswers *ddr
-	if cfg.ddr {
-		var err error
-		if ddrAnswers, err = ddrOnListeners(cfg, secure); err != nil {
-			closeListeners()
-			return nil, err
-		}
-	}
+	names, ddrAnswers, lost := nameAndDDR(cfg, secure, logf)
 	trace("bind")
 
 	// The drop comes before the boot, as the Python decider's did: the module opens its files as the unprivileged user.
@@ -394,6 +366,14 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 		}
 	}
 	fe, err := bootDecider(cfg)
+	if err != nil && !errors.Is(err, errInterrupted) && !cfg.noModule {
+		// The DNSBL is not worth the gateway: boot again with no module, so that every query is forwarded.
+		logf("%v; booting the decider again with no module: the DNSBL does not block", err)
+		lost["dnsbl"] = err.Error()
+		withoutModule := cfg
+		withoutModule.noModule, withoutModule.observer, withoutModule.replyLog = true, false, false
+		fe, err = bootDecider(withoutModule)
+	}
 	if err != nil {
 		closeListeners()
 		return nil, err
@@ -412,7 +392,7 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	}
 	secure.serve(set)
 	if ctl != nil {
-		ctl.listeners, ctl.names, ctl.ddr = set, names, ddrAnswers
+		ctl.listeners, ctl.names, ctl.ddr, ctl.lost, ctl.frontend = set, names, ddrAnswers, lost, fe
 		ctl.serve(g)
 	}
 	g.wg.Add(1)
@@ -456,8 +436,8 @@ func start(cfg config, logf func(format string, args ...any)) (*server, error) {
 	return s, nil
 }
 
-// bootDecider boots the decider, giving up after readyTimeout or when cfg.interrupt closes (errInterrupted). Open runs on
-// its own goroutine so that neither waits for it; a result that arrives after the wait ended is Closed.
+// bootDecider boots the decider, giving up after readyTimeout (cfg.bootTimer) or when cfg.interrupt closes (errInterrupted).
+// Open runs on its own goroutine so that neither waits for it; a result that arrives after the wait ended is Closed.
 func bootDecider(cfg config) (frontend, error) {
 	type booted struct {
 		f   frontend
@@ -472,8 +452,12 @@ func bootDecider(cfg config) (frontend, error) {
 		f, err := open(decider.Options{ModuleDir: cfg.moduleDir, LogDir: cfg.logDir, NoModule: cfg.noModule, ReplyLog: cfg.replyLog, Observer: cfg.observer})
 		done <- booted{f, err}
 	}()
-	bound := time.NewTimer(cfg.readyTimeout)
-	defer bound.Stop()
+	timer := cfg.bootTimer
+	if timer == nil {
+		timer = wallTimer
+	}
+	expired, stopBound := timer(cfg.readyTimeout)
+	defer stopBound()
 	var err error
 	select {
 	case b := <-done:
@@ -483,7 +467,7 @@ func bootDecider(cfg config) (frontend, error) {
 		return b.f, nil
 	case <-cfg.interrupt:
 		err = errInterrupted
-	case <-bound.C:
+	case <-expired:
 		err = fmt.Errorf("decider did not boot within %s", cfg.readyTimeout)
 	}
 	go func() {
@@ -492,6 +476,12 @@ func bootDecider(cfg config) (frontend, error) {
 		}
 	}()
 	return nil, err
+}
+
+// wallTimer is a time.Timer of d: the channel it fires on, and its stop.
+func wallTimer(d time.Duration) (<-chan time.Time, func() bool) {
+	t := time.NewTimer(d)
+	return t.C, t.Stop
 }
 
 // shutdown stops accepting and drains the queries in flight, then closes the decider, also when a query is still running
@@ -505,10 +495,7 @@ func (s *server) shutdown() {
 			now = time.Now
 		}
 		if timer == nil {
-			timer = func(d time.Duration) (<-chan time.Time, func() bool) {
-				t := time.NewTimer(d)
-				return t.C, t.Stop
-			}
+			timer = wallTimer
 		}
 		deadline := now().Add(s.cfg.shutdownBudget)
 		if err := removeReady(s.cfg.readyFile); err != nil {

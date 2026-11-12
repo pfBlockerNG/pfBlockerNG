@@ -318,8 +318,8 @@ final class DnsProxyApplyStartTest extends TestCase
 		// When the apply checks the proxy
 		$ready = pfb_dns_proxy_ensure_running();
 
-		// Then the activation fails, and nothing is started, restarted or written
-		$this->assertFalse($ready, 'nothing serves the Resolver: the activation failed');
+		// Then the apply reports the proxy not ready, and nothing is started, restarted or written
+		$this->assertFalse($ready, 'nothing serves the Resolver: the proxy is not ready');
 		$this->assertSame([], $GLOBALS['pfb_test_service_calls'], 'no start, no restart');
 		$this->assertFileDoesNotExist(PFB_DNS_PROXY_RCFILE, 'no rc script with invented listen addresses');
 	}

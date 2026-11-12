@@ -149,25 +149,27 @@ def test_dnsbl_enable_help_says_dnsbl_runs_only_while_pfb_dns_is_on(webui: WebUI
     ) in text, "the DNSBL enable help must say DNSBL requires pfB-DNS and pfBlockerNG"
 
 
-def test_pfb_dns_help_says_dnsbl_stops_with_it_and_what_a_failed_activation_leaves(webui: WebUI) -> None:
-    """When DNS General renders, Then its pfB-DNS enable help states the parent switch and a failed activation."""
+def test_pfb_dns_help_says_dnsbl_stops_with_it_and_that_a_later_conflict_keeps_it_running(webui: WebUI) -> None:
+    """When DNS General renders, Then its pfB-DNS enable help states the parent switch and a later conflict's effect."""
     text = _plain_text(webui.get(DNS_PAGE).text)
 
     assert "DNSBL runs only through pfB-DNS: turning pfB-DNS off stops DNSBL; the DNSBL setting is kept." in text, (
         "the pfB-DNS enable help must say that turning it off stops DNSBL and keeps the DNSBL setting"
     )
     assert (
-        "Adding such a conflict later restores the Resolver with the conflicting line kept; pfB-DNS stays on, "
-        "its status shows the activation failed and the next Update retries."
-    ) in text, "the help must say a conflict added later keeps pfB-DNS on and the next Update retries"
+        "Adding such a conflict later keeps pfB-DNS running, with the Resolver still moved, and raises a notice."
+    ) in text, "the help must say a conflict added later keeps pfB-DNS running and raises a notice"
     assert "Turning the option off is never refused." in text, "turning pfB-DNS off is never refused"
     assert (
-        "Disabling the DNS Resolver stops pfB-DNS and restores the saved fields; this option stays on "
-        "and pfB-DNS starts again once the Resolver is enabled."
-    ) in text, "the help must say disabling the Resolver keeps the option on and pfB-DNS starts with the Resolver"
+        "Disabling the DNS Resolver leaves pfB-DNS running without a backend: DNS queries fail and a notice says so "
+        "until the Resolver is enabled or pfB-DNS is turned off."
+    ) in text, "the help must say disabling the Resolver leaves pfB-DNS running without a backend"
     for retired in (
         "Adding such a conflict later turns pfB-DNS off",
+        "Adding such a conflict later restores the Resolver",
+        "its status shows the activation failed",
         "Disabling the DNS Resolver stops pfB-DNS, restores the saved fields and turns this option off",
+        "Disabling the DNS Resolver stops pfB-DNS and restores the saved fields",
         "DNSBL requires pfB-DNS, so turn DNSBL off first",
         "turning pfB-DNS off turns DNSBL off too",
     ):

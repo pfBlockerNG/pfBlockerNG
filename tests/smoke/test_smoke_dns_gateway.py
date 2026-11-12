@@ -10,7 +10,7 @@ turns DoH and DoQ on next to the toggle, and watches the box and the LAN client 
 there is none, the pinned one scripts/go_toolchain.py installs in this module's scratch directory and deletes).
 
 Module setup, put back in ``finally`` (``test_smoke_dns_proxy.py`` drives the same gateway through the toggle's
-lifecycle: modes, restarts, boot, rollback, removal)::
+lifecycle: modes, restarts, boot, removal)::
 
     Resolver: DoT on with a self-signed certificate, ``log-queries: yes`` in Custom Options
     DNSBL:    one feed listing every name the tests expect to be blocked; DoH on 4443 and DoQ on 853 on the LAN
@@ -27,8 +27,8 @@ What it proves, in file order:
   loopback too, for a local HAProxy) and Unbound listens on loopback 5353 and 5354 only;
 * DNS General's status panel is one table per transport with a Localhost row (loopbacks plus the served lo0 VIP
   for plain DNS and DoT) and a LAN row (the LAN address), each reading ``Listening`` for a screen reader (issue #3555);
-* when Unbound stops under the live gateway (issue #3560), the status panel reads ``Starting`` and every table keeps its
-  ``Listening`` rows; the Resolver is restored afterwards and an allowed name resolves again;
+* when Unbound stops under the live gateway (issues #3560, #3848), the status panel names the lost backend and every
+  table keeps its ``Listening`` rows; the Resolver is restored afterwards and an allowed name resolves again;
 * Unbound runs the upstream observer, an upstream EDE block is logged with the real client, and the firewall's own
   lookup of a listed name gets the VIP, logged as 127.0.0.1;
 * from the LAN client (192.168.1.10), over UDP, TCP, DoT, DoH (POST and GET) and DoQ: a listed name gets the VIP and a
@@ -1098,12 +1098,13 @@ def test_the_status_panel_lists_each_transport_the_gateway_serves_with_a_localho
 def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
     gw: Gateway, gateway_on: State, gui: WebUI
 ) -> None:
-    """issue #3560: Unbound stopping under a live gateway reads Starting; the gateway's rows stay Listening.
+    """issues #3560, #3848: Unbound stopping under a live gateway names the lost backend; the rows stay Listening.
 
     Given the gateway serves every transport: its pid is the ready file's, it owns the LAN front sockets, the proxy is
       ready, and the status panel reads Running with all four tables Listening,
     When `unbound-control stop` ends the Unbound behind it while the gateway keeps its pid, ready file and sockets,
-    Then the panel reads Starting and each table keeps the same rows as before, each reading `Listening`.
+    Then the panel reads `Resolver backend not answering: Unbound does not answer on ...`, and each table keeps the
+      same rows as before, each reading `Listening`.
     Finally Unbound is running again and allowed names resolve over UDP and TCP.
     """
     vm, client = gw.vm, gw.client
@@ -1165,7 +1166,10 @@ def test_the_status_panel_keeps_live_gateway_bindings_when_the_upstream_stops(
 
         h.wait_until(backend_down, timeout=60.0, interval=2.0)
         down_page = gui.get(STATUS_PAGE).text
-        assert service_of(down_page) == "Starting", f"backend down: the service reads {service_of(down_page)!r}"
+        said = service_of(down_page) or ""
+        assert said.startswith("Resolver backend not answering: Unbound does not answer on "), (
+            f"backend down: the service reads {said!r}"
+        )
         down = {t: _status_rows(down_page, t) for t in tables}
         _say(f"status panel with Unbound stopped: {down}")
         assert down == healthy, (

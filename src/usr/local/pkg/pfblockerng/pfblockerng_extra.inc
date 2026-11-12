@@ -7229,32 +7229,47 @@ function pfblockerng_tick(
 {
 	global $pfb;
 
-	// issue #3515: a DNS Resolver disabled under pfB-DNS must not wait for the next apply; a pass that is running does it itself
+	// issue #3515: a DNS Resolver disabled under pfB-DNS is said so by every tick, not only by the next apply (a pass that is running says it itself)
 	// issue #3538: so does the check of a pfB-DNS start (a listener the gateway did not bind, a start that never became ready), which the
 	// tick reports as a notice while pfB-DNS is meant to serve and closes once a start is healthy; it also changes the proxy's listeners
 	// live for an address that now binds or is gone (below)
 	$pass_running = pfb_update_pass_running($ps_lines);
 	if (!$pass_running) {
-		pfb_dns_proxy_stand_down();
+		pfb_dns_proxy_backend_disabled_notice();
 	}
 
 	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies, pushed on its control socket
 	pfb_dns_proxy_certificate_sync();
 
-	// Existing gateways stay running unless native ownership proves a foreign upstream holder; only this tick's restart is an activation.
-	if (!$pass_running && pfb_dns_proxy_saved() !== NULL && (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE))) {
+	// issue #3848: a gateway stopped because no loopback port pair was free for Unbound's backend is not started by a tick that finds nothing: it
+	// looks for a pair again (the update pass's check: a holder moves Unbound and starts the gateway, no holder starts it as it was)
+	if (!$pass_running && pfb_dns_proxy_cannot_serve() && !pfb_dns_proxy_running() && !isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE)) {
+		pfb_dns_proxy_ensure_running();
+	}
+	// An existing gateway stays running whatever its backend does; only this tick's restart is an activation to confirm.
+	elseif (!$pass_running && pfb_dns_proxy_saved() !== NULL && (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE))) {
 		// issues #3598, #3599: an address the gateway's start could not assign yet is added live once it can be bound, and a listener the
 		// command no longer names is removed live; the pair restarts only when the gateway does not take it. Every other restart stays with
-		// the update pass (pfb_dns_proxy_ensure_running())
+		// the update pass (pfb_dns_proxy_ensure_running()), except this one (issue #3848): a gateway that forwards to another port than the
+		// clause in the Resolver names (a move another process made, or the Resolver sync copying the primary's clause to this node) is
+		// restarted onto it with a regenerated script, unless a stranger holds that pair: the confirmation below moves it off first
 		$since = NULL;
 		$acted = FALSE;
-		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred() && ($why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()))) !== NULL) {
-			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
-			$since = pfb_dns_proxy_log_size();
-			restart_service('pfb_dns_proxy');
-			$acted = TRUE;
+		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred()) {
+			$applied = pfb_dns_proxy_applied_status();
+			$stale = pfb_dns_proxy_upstream_stale($applied) && pfb_dns_proxy_backend_holder() === NULL;
+			if ($stale) {
+				pfb_dns_proxy_service();
+			}
+			$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners($applied)) ?? ($stale ? 'Unbound\'s backend pair is on port ' . pfb_dns_proxy_backend_port() : NULL);
+			if ($why !== NULL) {
+				pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
+				$since = pfb_dns_proxy_log_size();
+				restart_service('pfb_dns_proxy');
+				$acted = TRUE;
+			}
 		}
-		pfb_dns_proxy_confirm_started($acted, $since, FALSE);
+		pfb_dns_proxy_confirm_started($acted, $since);
 	}
 
 	$now   = time();

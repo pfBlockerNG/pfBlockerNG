@@ -558,7 +558,7 @@ if (!function_exists('config_read_file')) {
 
 if (!function_exists('try_lock')) {
 	// pfSense util.inc: a named flock() polled once a second for up to $timeout seconds; the handle on success,
-	// NULL when the lock stayed taken. Locks are per NAME: a process holds several at once (a rollback's operation lock
+	// NULL when the lock stayed taken. Locks are per NAME: a process holds several at once (a restore's config lock
 	// is held while it takes the DNS config lock), and only a name it already holds fails. Every attempt is recorded in
 	// $GLOBALS['pfb_test_lock_events'] as ['try_lock', name, timeout].
 	// The DNS config lock ('pfb_dns_config') keeps its own observation and faults: $GLOBALS['pfb_test_lock_held'] is TRUE
@@ -790,8 +790,10 @@ if (!function_exists('file_notice')) {
 }
 
 if (!function_exists('update_status')) {
-	// no-op: pfblockerng_install.inc progress-text only, never asserted on.
-	function update_status($status) {}
+	// pfblockerng_install.inc progress text: recorded in $GLOBALS['pfb_test_update_status'] for the tests that read it; a test that does resets it first.
+	function update_status($status) {
+		$GLOBALS['pfb_test_update_status'][] = $status;
+	}
 }
 
 if (!function_exists('is_subsystem_dirty')) {

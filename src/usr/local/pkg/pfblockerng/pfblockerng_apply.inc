@@ -3619,10 +3619,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	// issue #3515: pfB-DNS serves with DNSBL on or off ($mode only says whether DNSBL is): bring up a proxy that died since
 	// the last pass, and restart one whose rc script changed. A reload above has already restarted a proxy that hosts the module.
-	// A proxy that does not become ready has failed its activation: it is rolled back (the Resolver restored, with a notice; pfB-DNS
-	// stays on, so the next pass's Resolver step retries the takeover), and the pass goes on with the Resolver as that left it.
+	// A proxy that does not become ready is reported (its startup notice) and left running with the Resolver moved: only the admin's
+	// own switches give the Resolver back, so the pass goes on with the Resolver as the move left it. A gateway stopped for a foreign
+	// process on Unbound's backend port is a deliberate stop (pfb_dns_proxy_backend_block() filed its notice), not a start that failed.
 	if (!pfb_dns_proxy_ensure_running()) {
-		pfb_logger("\npfB-DNS: the DNS proxy did not become ready; see the notices", 2);
+		pfb_logger(pfb_dns_proxy_cannot_serve()
+		    ? "\npfB-DNS is not serving: a foreign process holds Unbound's backend port; see the notices"
+		    : "\npfB-DNS: the DNS proxy did not become ready; see the notices", 2);
 	}
 
 	// issue #3539: the conf means "the last published generation may still answer with the VIP". The hold is released once the

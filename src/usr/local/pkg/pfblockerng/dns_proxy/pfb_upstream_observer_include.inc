@@ -30,27 +30,34 @@
  * With pfB-DNS on, Unbound has left the client-facing port, so nothing answers on it until the proxy does, and the
  * package's own service start (rc.start_packages) only runs after rc.bootup returns: the firewall's own lookups would
  * fail for the rest of boot. Start the proxy here, in the background, and only when it is not already serving
- * (a Resolver restart from the GUI must not bounce it). The rc script refuses to start without a moved-Resolver snapshot.
+ * (a Resolver restart from the GUI must not bounce it) and not stopped on purpose: a gateway stopped because another process holds Unbound's
+ * loopback backend port and none could be moved (issue #3848) leaves a marker, and neither this hook nor the rc script it runs starts the
+ * proxy onto that process while it stands; the tick or Update that finds the port free clears it. The rc script refuses to start without a
+ * moved-Resolver snapshot.
  *
  * The rc script serializes its starts (lockf), so this background start and an apply's start_service() cannot both launch a
- * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command,
- * bounded by timeout(1) (360 s: an outer salvage deadline, not a proved bound on normal completion; the components include the 30 s
- * readiness budget, a rollback's 30 s operation-lock wait, the config-lock and proxy-stop waits it bounds and its Unbound restarts; untimed
- * pfBlockerNG mount/umount execs and pfSense services_unbound_configure() are outside any total), confirms the start as an apply does, told the gateway log's size from before the start:
- * a start with problems gets the pfB-DNS startup notice, and one that does not become ready is rolled back
- * (pfb_dns_proxy_confirm_ready()). The ready marker says the front end can answer queries; it is no proof that recursion works,
- * which needs the Unbound this hook runs before. timeout(1) runs it in --foreground mode: the Unbound a rollback restarts must outlive
- * the check, and the default (reaper) mode would wait for it and kill it at the deadline (docs/misc/external-process-waits.md).
+ * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command confirms
+ * the start as an apply does, told the gateway log's size from before the start: a start with problems, or one that does not become ready,
+ * gets the pfB-DNS startup notice and the Resolver stays moved (pfb_dns_proxy_confirm_ready()). The ready marker says the front end can answer
+ * queries; it is no proof that recursion works, which needs the Unbound this hook runs before.
+ *
+ * That command is bounded by timeout(1), 360 s: an outer salvage deadline, not a proved bound on normal completion. Its parts are the 30 s
+ * readiness budget, the bounded status and socket probes of the startup check and, when another process holds Unbound's loopback backend ports
+ * (issue #3848), a move of that pair: one bounded socket scan to find a free pair, the config lock wait (10 s) and a second 30 s wait for the
+ * restarted gateway. pfSense's services_unbound_configure(), which the move calls, is outside any total. The move restarts Unbound and the gateway,
+ * daemons meant to outlive the check, so timeout(1) runs in its --foreground mode: it signals only the check itself and never reaps what the check
+ * started (docs/misc/external-process-waits.md, "Choosing the mode").
  *
  * Core functions only: on the non-verbose boot path none of pfBlockerNG's own includes are loaded. This file runs inside
  * pfSense's function, so it must leave no variable behind.
  */
 $pfb_dns_rc = defined('PFB_DNS_PROXY_RCFILE') ? PFB_DNS_PROXY_RCFILE : '/usr/local/etc/rc.d/pfb_dns_proxy.sh';
-if (is_executable($pfb_dns_rc) && !isvalidpid('/var/run/pfb_dns_proxy.pid') && !isvalidpid('/var/run/pfb_dns_proxy_daemon.pid')) {
+$pfb_dns_blocked = defined('PFB_DNS_PROXY_BACKEND_BLOCKED') ? PFB_DNS_PROXY_BACKEND_BLOCKED : '/var/run/pfb_dns_proxy_backend_blocked';
+if (is_executable($pfb_dns_rc) && !file_exists($pfb_dns_blocked) && !isvalidpid('/var/run/pfb_dns_proxy.pid') && !isvalidpid('/var/run/pfb_dns_proxy_daemon.pid')) {
 	// The gateway log's size from before the start, handed to the check so that it judges only the lines this start writes: taken
 	// after the start was backgrounded, it could already include them
 	$pfb_dns_since = (int) @filesize(defined('PFB_DNS_PROXY_LOG') ? PFB_DNS_PROXY_LOG : '/var/log/pfblockerng/dns_proxy.log');
 	mwexec_bg($pfb_dns_rc . ' start');
 	mwexec_bg('/usr/bin/timeout --foreground -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ' . $pfb_dns_since);
 }
-unset($pfb_dns_rc, $pfb_dns_since);
+unset($pfb_dns_rc, $pfb_dns_blocked, $pfb_dns_since);

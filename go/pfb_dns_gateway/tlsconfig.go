@@ -18,10 +18,13 @@ import (
 
 const defaultDoTPort = 853
 
+const noCertificate = "no TLS certificate is loaded"
+
 // certStore is the certificate the transports serve.
 type certStore struct {
-	logf func(format string, args ...any)
-	cert atomic.Pointer[tls.Certificate] // nil until the file at start or a push provides one
+	logf    func(format string, args ...any)
+	cert    atomic.Pointer[tls.Certificate] // nil until the file at start or a push provides one
+	missing string                          // why the file at start gave none (the status's reason while cert is nil); set by bindTLS before the store is shared
 }
 
 // newCertStore loads the file; every error names it and the reason. bindTLS starts an empty store when it fails.
@@ -81,7 +84,7 @@ func (s *certStore) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, erro
 	if cert := s.cert.Load(); cert != nil {
 		return cert, nil
 	}
-	return nil, errors.New("no TLS certificate is loaded")
+	return nil, errors.New(noCertificate)
 }
 
 // dot is the TLS 1.2+ configuration of DoT.

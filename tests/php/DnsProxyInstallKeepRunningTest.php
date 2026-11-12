@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  *   - a proxy that does not serve is restarted as before, and with pfB-DNS off the service is written and stopped as before.
  *
  * The block is cut out of the shipped installer between its anchors and run as shipped (the same seam as
- * DnsProxyActivationRollbackTest::runInstallProxyBlock()).
+ * DnsProxyMovedResolverFixtureTrait::runInstallProxyBlock()).
  */
 #[CoversNothing]
 final class DnsProxyInstallKeepRunningTest extends TestCase

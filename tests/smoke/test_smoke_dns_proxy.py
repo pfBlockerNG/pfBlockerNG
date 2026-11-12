@@ -60,13 +60,17 @@ What it proves, in file order:
   and no longer blocks (pfB-DNS is off, so is DNSBL);
 * a failed activation: pfB-DNS requested, the Resolver already moved, every address the proxy would serve held by nc(1)
   on the guest, then the real apply: the proxy cannot bind and never becomes ready, pfB-DNS stays on, the Resolver
-  and Unbound are back exactly as before the toggle, and the client's listed name gets the upstream's answer from that
-  Unbound: DNSBL does not block until an activation serves.
+  stays moved exactly as the move left it, and the startup notice says why: nothing gives the Resolver back but the
+  admin's off (issue #3848).
+* a part that cannot start never takes port 53 down (issue #3848): a corrupt DNSBL manifest, and an unusable TLS
+  certificate with DoT on, each restarted the way the package restarts the gateway: pfB-DNS keeps answering on 53 (an
+  allowed name is forwarded), the status says Running and lists the degraded part (DNSBL not blocking, DoT not served),
+  the startup notice names it and the Resolver snapshot stays set; an Update puts the part back.
 * a gateway that exits before READY at every start (issue #3561: the installed binary is not executable, so
   pfb_dns.sh exits with its reason): the supervisor waiting out its restart delay still names pfb_dns_proxy and the rc
   stop ends it; started by the Resolver's start hook, with the package's service entry registered or absent (an
-  install's window, where pfSense's stop_service() does nothing), the real apply's rollback leaves no supervisor, the
-  Resolver as before the toggle and the snapshot marker empty.
+  install's window, where pfSense's stop_service() does nothing), the real apply leaves a supervisor trying, the
+  Resolver as the move left it and the snapshot marker kept.
 * a restore that config.xml refuses (issue #3561's recovery): with the package's service entry absent and a process
   whose write_config() answers -1, pfb_dns_proxy_resolver(FALSE) stops the proxy, abandons the restore (the snapshot and
   the moved Resolver stay in config.xml) and starts the proxy again through its rc script: a new child publishes the
@@ -92,6 +96,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import csv
+import html
 import io
 import json
 import os
@@ -103,6 +108,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -173,7 +179,7 @@ BYPASSED_ALIAS_IP = "192.168.1.12"  # a second LAN address on the client; on the
 DONE = "PFB3515-DONE"
 
 # What a python-module Unbound carries in unbound.conf (module-config + the python clause). Since #3770 DNSBL runs only
-# in the pfB-DNS decider: with pfB-DNS off, or after a rolled-back activation, unbound.conf has neither.
+# in the pfB-DNS decider: with pfB-DNS off, unbound.conf has neither (a moved Resolver carries the observer).
 MODULE_LINE = re.compile(r'^\s*module-config:\s*"\s*python\b', re.MULTILINE)
 SCRIPT_LINE = re.compile(r"^\s*python-script\s*:", re.MULTILINE)
 # python anywhere on the module-config line, wherever it stands in the chain, with or without a script line
@@ -607,7 +613,7 @@ def _apply(vm: SmokeVM) -> None:
 
 def _apply_of_an_activation_that_cannot_serve(vm: SmokeVM) -> None:
     """The same apply for a test whose proxy never becomes ready: `h.reload` raises for DNSBL and pfB-DNS both on but
-    not serving, the very state this apply must end in (rolled back, pfB-DNS still on). Waits for Unbound itself."""
+    not serving, the very state this apply must end in (Resolver still moved, pfB-DNS on). Waits for Unbound itself."""
     h.reload(vm, "updatednsbl", wait_unbound=False)
     h.wait_unbound_ready(vm)
 
@@ -1878,9 +1884,9 @@ def test_a_package_upgrade_keeps_pfb_dns_on_and_serving(rig: Rig, proxy_on: Stat
 
     pfSense's delete_package_xml() stops and deregisters the package's services, and install_package_xml() runs the
     install command before it registers them again; start_service() acts only on a registered service, so the
-    installer's restart of the proxy has to reach the service all the same, or the readiness wait times out and
-    pfB-DNS is rolled back off. Only a real version move runs pfSense's removal step: `pkg add -f` of the installed
-    version is an in-place overwrite that skips it.
+    installer's restart of the proxy has to reach the service all the same, or the restart is a silent no-op and the
+    readiness wait times out. Only a real version move runs pfSense's removal step:
+    `pkg add -f` of the installed version is an in-place overwrite that skips it.
 
     Given the toggle on and the proxy serving, its gateway and supervisor pids, and an on-box probe asking for
       a listed name every 0.2 s,
@@ -2131,7 +2137,7 @@ def test_toggle_off_stops_the_proxy_and_puts_the_resolver_back_exactly(rig: Rig,
 
 
 # --------------------------------------------------------------------------- #
-# A proxy that cannot serve: the activation is rolled back to the Unbound DNSBL that ran before
+# A proxy that cannot serve: the Resolver stays moved and pfB-DNS keeps trying (issue #3848)
 # --------------------------------------------------------------------------- #
 
 OCCUPANTS = "/tmp/pfb3515_occupants"  # on the guest: pidfiles of the nc(1) listeners that hold the client-facing ports
@@ -2209,22 +2215,18 @@ def _stop_the_proxy_the_move_started(vm: SmokeVM) -> None:
 
 
 @pytest.mark.timeout(1500)
-def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_unbound_answers_without_dnsbl(rig: Rig) -> None:
-    """A proxy that never serves leaves the Resolver exactly as it was, and DNSBL does not block until one serves.
+def test_a_proxy_that_cannot_bind_after_the_move_leaves_the_resolver_moved_and_says_so(rig: Rig) -> None:
+    """A proxy that never serves leaves the Resolver moved and pfB-DNS on, with a notice: nothing gives it back (#3848).
 
     Given pfB-DNS requested and the Resolver already moved (the first half of an activation), the proxy stopped again
       (the move's Unbound restart had started it), and every address the proxy would serve held by another process on
       port 53,
     When the real apply runs (pfb_trigger scope=dnsbl) and the proxy, which cannot bind, never becomes ready,
-    Then pfB-DNS stays on in config.xml, the proxy and its supervisor are gone with their pidfiles, every Resolver
-      key equals its pre-toggle value, the marker is cleared, unbound.conf loads no python module and Unbound
-      listens on 53 and 853 as before; the proxy's own log says no address could be bound and the package log says it
-      did not become ready;
-      And the LAN client's listed name gets the upstream's answer from that Unbound (the activation did not serve, so
-      DNSBL blocks nothing, #3770), an allowed name resolves, and DoT works: the original Resolver answers, not merely a
-      config file that says so.
+    Then pfB-DNS stays on in config.xml, every Resolver key and the marker are exactly what the move left, Unbound
+      still listens where the move put it, and no package log says the Resolver was restored; the proxy's own log
+      says no address could be bound and the package log says it did not become ready.
     """
-    vm, before = rig.vm, rig.before
+    vm = rig.vm
     if _is_on(_capture(vm)):  # an earlier test left pfB-DNS on: start from the baseline the rig recorded
         _set_proxy_toggle(vm, False)
         _apply(vm)
@@ -2251,48 +2253,38 @@ def test_a_proxy_that_cannot_bind_after_the_move_is_rolled_back_and_unbound_answ
         root = _config_xml(vm)
         toggle = _xml_text(root, "installedpackages/pfblockerngdns/config/pfb_dns") or ""
         assert toggle == "on", f"pfB-DNS was turned off: {toggle!r}\n{diagnostics}"
-        assert after.service == "stopped" and after.ps == [], f"proxy left running: {after.service} {after.ps}"
-        assert after.proxy_pid is None and after.daemon_pid is None, (after.proxy_pid, after.daemon_pid)
-        assert after.resolver == before.resolver, (
-            f"Resolver keys after the rollback:\n{after.resolver}\nbefore the toggle:\n{before.resolver}"
+        assert after.resolver == state.resolver, (
+            f"Resolver keys after the apply:\n{after.resolver}\nafter the move:\n{state.resolver}\n{diagnostics}"
         )
-        assert after.marker == "", f"pfb_dns_proxy_saved is not cleared: {after.marker!r}"
-        _assert_no_python_module(after.conf, "after the rollback")
-        assert after.unbound_dns() == before.unbound_dns(), (
-            f"Unbound sockets {sorted(after.unbound_dns())}, before the toggle {sorted(before.unbound_dns())}"
+        assert after.marker == state.marker, f"pfb_dns_proxy_saved changed: {after.marker!r}\n{diagnostics}"
+        assert after.unbound_dns() == state.unbound_dns(), (
+            f"Unbound sockets {sorted(after.unbound_dns())}, after the move {sorted(state.unbound_dns())}"
         )
         assert "no address could be bound" in _proxy_log(vm, 200), (
             f"the proxy did not fail on the held ports:\n{diagnostics}"
         )
         logs = vm.ssh(f"cat {h.PFB_LOG} {h.PFB_LOGDIR}/error.log 2>&1").stdout
-        assert "did not become ready" in logs and "was restored to its previous settings" in logs, (
-            f"the package logs do not report the rollback:\n{diagnostics}"
-        )
-        # The holders are this test's own LAN-address listeners: left up, they answer the client checks, not Unbound.
-        _release(vm)
-
-        blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.resolves_to(blocked, STUB_DNS_A), f"listed name through Unbound after the rollback: {blocked}\n{raw}"
-        allowed, raw = _query(rig.client, h.unique_domain("rolledback"))
-        assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name through Unbound again: {allowed}\n{raw}"
-        dot, raw = _query(rig.client, rig.names.blocked, dot=True)
-        assert h.resolves_to(dot, STUB_DNS_A), f"listed name over Unbound's own DoT after the rollback: {dot}\n{raw}"
+        assert "did not become ready" in logs, f"the package logs do not report the start:\n{diagnostics}"
+        assert "restored to its previous settings" not in logs, f"the package logs report a restore:\n{diagnostics}"
     finally:
         _release(vm)
         _force_stop_proxy(vm)
         _set_proxy_toggle(vm, False)
+        _apply(vm)  # the admin's off is what restores the Resolver
 
 
 @pytest.mark.timeout(1200)
-def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, proxy_on: State) -> None:
-    """Given a moved Resolver whose gateway fails every start, the boot start hook's own check restores DNS and files
-    both failure notices.
+def test_boot_check_without_a_gateway_keeps_the_resolver_moved_and_files_the_startup_notice(
+    rig: Rig, proxy_on: State
+) -> None:
+    """Given a moved Resolver whose gateway fails every start, the boot start hook's own check leaves the Resolver
+    moved and pfB-DNS on, and files the startup notice (#3848).
 
     services_unbound_configure() is what rc.bootup runs: it requires the staged start hook, which backgrounds the rc
     start and the bounded `dns_check` beside it. Scheduled ticks are off on a smoke box and nothing here applies, so
-    only that check can roll pfB-DNS back.
+    only that check can say anything, and nothing it does gives the Resolver back.
     """
-    vm, before = rig.vm, rig.before
+    vm = rig.vm
     notice_ids = ("pfBlockerNG DNS Proxy startup", "pfBlockerNG DNS Proxy")
     clear_notices = (
         "require_once('notices.inc');\n"
@@ -2323,7 +2315,7 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
         assert h.is_vip(blocked), f"blocked name before stopping pfB-DNS: {blocked}\n{raw}"
         allowed, raw = _query(rig.client, h.unique_domain("bootcheck-before"))
         assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name before stopping pfB-DNS: {allowed}\n{raw}"
-        notices = _php_ok(vm, clear_notices + read_notices, "clear startup and rollback notices")
+        notices = _php_ok(vm, clear_notices + read_notices, "clear startup and Resolver notices")
         found = re.search(r"<<<NOTICES>>>(.*?)<<<END>>>", notices, re.DOTALL)
         assert found is not None, f"no notices in {notices!r}"
         rows = json.loads(found.group(1))
@@ -2338,60 +2330,239 @@ def test_boot_check_without_a_gateway_restores_the_resolver_and_dns(rig: Rig, pr
         assert state.proxy_pid is None and state.daemon_pid is None, (state.proxy_pid, state.daemon_pid)
         assert state.service == "stopped" and state.ps == [], f"rc stop left a proxy: {state.service} {state.ps}"
 
-        def rolled_back() -> bool:
-            return h.config_get(vm, CFG_PROXY) == "on" and _capture(vm).marker == ""
+        def notice_rows() -> list[dict[str, str]]:
+            out = _php_ok(vm, read_notices, "read boot-check notices")
+            found = re.search(r"<<<NOTICES>>>(.*?)<<<END>>>", out, re.DOTALL)
+            assert found is not None, f"no notices in {out!r}"
+            rows: list[dict[str, str]] = json.loads(found.group(1))
+            return rows
+
+        def startup_notice_filed() -> bool:
+            return any(row["id"] == notice_ids[0] and "did not become ready" in row["notice"] for row in notice_rows())
 
         with _gateway_exits_at_every_start(vm):
             _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the boot start hook)")
             try:
-                h.wait_until(rolled_back, timeout=420.0, interval=5.0)
+                h.wait_until(startup_notice_filed, timeout=420.0, interval=5.0)
             except RuntimeError as exc:
                 raise AssertionError(
-                    f"{exc}\nthe boot start hook did not roll pfB-DNS back: toggle {h.config_get(vm, CFG_PROXY)!r}, "
-                    f"snapshot kept {bool(_capture(vm).marker)}\n{_diagnostics(vm)}"
+                    f"{exc}\nthe boot check filed no startup notice: toggle {h.config_get(vm, CFG_PROXY)!r}\n"
+                    f"{_diagnostics(vm)}"
                 ) from exc
-            # The check files its notices after the Unbound restart that ends its rollback: let it finish (360 s cap)
+            # The check ends with its notice: let it finish (360 s cap) before anything is read
             h.wait_until(
                 lambda: _sh(vm, "pgrep -f 'pfblockerng.inc dns_check' >/dev/null").returncode != 0,
                 timeout=420.0,
                 interval=5.0,
             )
             h.wait_unbound_ready(vm)
-            # Read before the binaries' mode is put back: putting it back force-stops any proxy a failed rollback left
+            # Read before the binaries' mode is put back: putting it back force-stops the proxy
             after = _capture(vm)
             toggle = h.config_get(vm, CFG_PROXY)
             diagnostics = _diagnostics(vm)
+            rows = notice_rows()
 
         assert toggle == "on", f"pfB-DNS did not stay on:\n{diagnostics}"
-        assert after.resolver == before.resolver, (
-            f"Resolver after boot-check rollback:\n{after.resolver}\nbefore:\n{before.resolver}"
+        assert after.resolver == proxy_on.resolver, (
+            f"Resolver after the boot check:\n{after.resolver}\nbefore it:\n{proxy_on.resolver}\n{diagnostics}"
         )
-        assert after.marker == "", f"boot check did not consume the saved Resolver: {after.marker!r}"
-        assert after.proxy_pid is None and after.daemon_pid is None, (after.proxy_pid, after.daemon_pid)
-        assert after.service == "stopped" and after.ps == [], f"proxy left running: {after.service} {after.ps}"
-        _assert_no_python_module(after.conf, "after the boot-check rollback")
-        assert after.unbound_dns() == before.unbound_dns(), (
-            f"Unbound sockets {sorted(after.unbound_dns())}, before the toggle {sorted(before.unbound_dns())}"
+        assert after.marker == proxy_on.marker, f"boot check changed the saved Resolver: {after.marker!r}"
+        assert not any(row["id"] == notice_ids[1] and "restored" in row["notice"] for row in rows), (
+            f"a notice says the Resolver was restored: {rows}"
         )
-        notices = _php_ok(vm, read_notices, "read boot-check failure notices")
-        found = re.search(r"<<<NOTICES>>>(.*?)<<<END>>>", notices, re.DOTALL)
-        assert found is not None, f"no notices in {notices!r}"
-        rows = json.loads(found.group(1))
-        for notice_id, phrase in zip(notice_ids, ("did not become ready", "DNS Resolver was restored"), strict=True):
-            assert any(row["id"] == notice_id and phrase in row["notice"] for row in rows), (
-                f"missing {notice_id!r} notice containing {phrase!r}: {rows}"
-            )
-        blocked, raw = _query(rig.client, rig.names.blocked)
-        assert h.resolves_to(blocked, STUB_DNS_A), f"first listed query after boot-check rollback: {blocked}\n{raw}"
-        allowed, raw = _query(rig.client, h.unique_domain("bootcheck-restored"))
-        assert h.resolves_to(allowed, STUB_DNS_A), f"allowed name after boot-check rollback: {allowed}\n{raw}"
     finally:
         try:
             _force_stop_proxy(vm)
             _set_proxy_toggle(vm, False)
             _apply(vm)
         finally:
-            _php_ok(vm, clear_notices, "clear this test's startup and rollback notices")
+            _php_ok(vm, clear_notices, "clear this test's startup and Resolver notices")
+
+
+STARTUP_NOTICE_ID = "pfBlockerNG DNS Proxy startup"
+MANIFEST = "/var/unbound/pfb_py_sources.json"  # the DNSBL manifest the gateway builds its module from
+TLS_PEM = "/var/etc/pfb_dns/tls.pem"  # DoT's certificate and key; the rc start rewrites it only when missing
+PHP_BIN = "/usr/local/bin/php"
+DNS_CHECK = f"{PHP_BIN} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check"  # the boot hook's own confirmation
+STATUS_BOOTSTRAP = (
+    "require_once('util.inc'); require_once('functions.inc'); require_once('pkg-utils.inc');"
+    " require_once('globals.inc');"
+    " require_once('services.inc'); require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+    " require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc'); global $g, $pfb; pfb_global();"
+)
+
+
+def _drill_local(vm: SmokeVM, name: str) -> tuple[h.DnsAnswer, str]:
+    """drill on the box at pfB-DNS's own port 53 (Unbound is on 5354): the answer and drill's full output."""
+    out = vm.ssh(f"/usr/bin/timeout 15 {h.DRILL_BIN} -p 53 A {name} @127.0.0.1 2>&1", timeout=30.0).stdout
+    return h._parse_drill(out, "A"), out
+
+
+def _wait_local_forwards(vm: SmokeVM, name: str) -> None:
+    """Poll until port 53 on the box forwards `name` to the upstream: the restarted gateway serves."""
+    try:
+        h.wait_until(lambda: h.resolves_to(_drill_local(vm, name)[0], STUB_DNS_A), timeout=120.0, interval=3.0)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\n{_diagnostics(vm)}") from exc
+
+
+def _php_cli(vm: SmokeVM, code: str, what: str) -> str:
+    """A read-only PHP one-liner through /bin/sh (`php -r`, no pfSsh lock); stdout, or raise."""
+    result = _sh(vm, f"{PHP_BIN} -r {shlex.quote(STATUS_BOOTSTRAP + code)}", timeout=300.0)
+    if result.returncode != 0:
+        raise RuntimeError(f"{what} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+    return result.stdout
+
+
+def _dns_status(vm: SmokeVM) -> dict[str, Any]:
+    """pfb_dns_status(): what the DNS General status panel shows."""
+    out = _php_cli(vm, "echo '<<<STATUS>>>' . json_encode(pfb_dns_status()) . '<<<END>>>';", "pfb_dns_status")
+    found = re.search(r"<<<STATUS>>>(.*?)<<<END>>>", out, re.DOTALL)
+    assert found is not None, f"pfb_dns_status() printed no status: {out!r}"
+    status: dict[str, Any] = json.loads(found.group(1))
+    return status
+
+
+def _degraded(status: dict[str, Any]) -> dict[str, str]:
+    """The status's degraded rows as part -> reason."""
+    return {row["part"]: row["reason"] for row in status["degraded"]}
+
+
+def _startup_notices(vm: SmokeVM) -> list[str]:
+    """The text of every startup notice on the box."""
+    out = _php_ok(
+        vm,
+        "require_once('notices.inc');\n"
+        "echo '<<<NOTICES>>>' . json_encode(array_values(get_notices() ?: [])) . '<<<END>>>';",
+        "read notices",
+    )
+    found = re.search(r"<<<NOTICES>>>(.*?)<<<END>>>", out, re.DOTALL)
+    assert found is not None, f"no notices in {out!r}"
+    return [html.unescape(row["notice"]) for row in json.loads(found.group(1)) if row["id"] == STARTUP_NOTICE_ID]
+
+
+def _close_startup_notices(vm: SmokeVM) -> None:
+    _php_ok(
+        vm,
+        "require_once('notices.inc');\n"
+        "foreach ((get_notices() ?: []) as $key => $row) {\n"
+        f"  if (($row['id'] ?? '') === {h._php_str(STARTUP_NOTICE_ID)}) {{ close_notice($key); }}\n"
+        "}\n",
+        "close the startup notice",
+    )
+
+
+def _restart_gateway(vm: SmokeVM) -> None:
+    """The package's own restart of the gateway: the rc script's restart verb."""
+    restarted = _sh(vm, f"{PROXY_RC} restart", timeout=120.0)
+    assert restarted.returncode == 0, f"rc restart failed: {restarted.stdout!r} {restarted.stderr!r}"
+
+
+def _assert_degraded_but_serving(rig: Rig, proxy_on: State, part: str, notice_text: str, allowed: str) -> None:
+    """The gateway restarted with `part` broken still serves: the Resolver stays moved, an allowed name is forwarded on
+    port 53, the status is Running with `part` degraded and the startup notice names it."""
+    vm = rig.vm
+    _wait_local_forwards(vm, allowed)
+    after = _capture(vm)
+    diagnostics = _diagnostics(vm)
+    assert after.resolver == proxy_on.resolver and after.marker == proxy_on.marker, (
+        f"the Resolver snapshot changed:\nexpected {proxy_on.resolver} {proxy_on.marker!r}\n"
+        f"actual {after.resolver} {after.marker!r}\n{diagnostics}"
+    )
+    assert h.config_get(vm, CFG_PROXY) == "on", f"pfB-DNS did not stay on:\n{diagnostics}"
+    status = _dns_status(vm)
+    assert status["service"] == "Running", f"service: expected 'Running', got {status['service']!r}\n{diagnostics}"
+    degraded = _degraded(status)
+    assert part in degraded, f"degraded: expected a {part!r} row, got {degraded}\n{diagnostics}"
+    notices = _startup_notices(vm)
+    assert any(notice_text in text for text in notices), (
+        f"startup notice: expected one naming {notice_text!r}, got {notices}\n{diagnostics}"
+    )
+
+
+@pytest.mark.timeout(1200)
+def test_a_corrupt_dnsbl_manifest_leaves_pfb_dns_answering_with_dnsbl_not_blocking(rig: Rig, proxy_on: State) -> None:
+    """A gateway that cannot build DNSBL still serves port 53 and forwards, and says DNSBL is not blocking (#3848).
+
+    Given pfB-DNS and DNSBL on, a listed name blocked, and /var/unbound/pfb_py_sources.json overwritten with invalid
+      JSON,
+    When the gateway is restarted the way the package does (rc restart, then dns_check),
+    Then port 53 on the box forwards an allowed name and the listed name's first answer is the upstream's (DNSBL is not
+      blocking); pfb_dns_status() says Running with a `dnsbl` degraded row; the startup notice names it; the Resolver
+      snapshot is still set. An Update puts the manifest and the blocking back.
+    """
+    vm, names = rig.vm, rig.names
+    allowed = h.unique_domain("degraded-dnsbl")
+    try:
+        assert _is_on(proxy_on) and proxy_on.marker, f"pfB-DNS is not serving with a saved Resolver: {proxy_on}"
+        before, raw = _drill_local(vm, names.blocked)
+        assert h.is_vip(before), f"before the corruption {names.blocked}: expected the block {before}\n{raw}"
+        assert "dnsbl" not in _degraded(_dns_status(vm)), "DNSBL is degraded before the test corrupts anything"
+        _close_startup_notices(vm)
+
+        written = _sh(vm, f"echo 'not json {{' > {MANIFEST}")
+        assert written.returncode == 0, f"corrupting {MANIFEST} failed: {written.stderr!r}"
+        _restart_gateway(vm)
+        checked = _sh(vm, DNS_CHECK, timeout=420.0)
+        assert checked.returncode == 0, f"dns_check failed: {checked.stdout!r} {checked.stderr!r}"
+
+        _assert_degraded_but_serving(rig, proxy_on, "dnsbl", "DNSBL is not blocking", allowed)
+        forwarded, raw = _drill_local(vm, allowed)
+        assert h.resolves_to(forwarded, STUB_DNS_A), f"allowed {allowed}: expected {STUB_DNS_A}, got {forwarded}\n{raw}"
+        listed, raw = _drill_local(
+            vm, names.blocked
+        )  # the first answer is authoritative: asked for the first time here
+        assert h.resolves_to(listed, STUB_DNS_A) and not h.is_vip(listed), (
+            f"listed {names.blocked}: expected the upstream's {STUB_DNS_A} (DNSBL not blocking), got {listed}\n{raw}"
+        )
+    finally:
+        try:
+            _apply(vm)  # a normal Update rebuilds the manifest and swaps the built snapshot in
+            _wait_proxy_serves(rig)
+        finally:
+            _close_startup_notices(vm)
+
+
+@pytest.mark.timeout(1200)
+def test_an_unusable_tls_certificate_leaves_pfb_dns_answering_with_dot_not_served(rig: Rig, proxy_on: State) -> None:
+    """A gateway with no usable certificate still serves port 53 and forwards, and says DoT is not served (#3848).
+
+    Given pfB-DNS on with DoT, a DoT query for a listed name blocked, and /var/etc/pfb_dns/tls.pem overwritten with
+      non-empty garbage (the rc start rewrites it only when missing),
+    When the gateway is restarted the way the package does and the start is confirmed (without dns_check's certificate
+      sync, which would rewrite the file from config.xml and push it to the gateway: the garbage would be gone),
+    Then port 53 on the box forwards an allowed name; pfb_dns_status() says Running with a `tls_certificate` degraded
+      row and every DoT row not served; the startup notice names the certificate; the Resolver snapshot is still set.
+      An Update writes and pushes the certificate again, and DoT blocks the listed name again.
+    """
+    vm, client, names = rig.vm, rig.client, rig.names
+    allowed = h.unique_domain("degraded-tls")
+    try:
+        assert _is_on(proxy_on) and proxy_on.marker, f"pfB-DNS is not serving with a saved Resolver: {proxy_on}"
+        blocked, raw = _query(client, names.blocked, dot=True)
+        assert h.is_vip(blocked), f"before the corruption, DoT {names.blocked}: expected the block {blocked}\n{raw}"
+        assert "tls_certificate" not in _degraded(_dns_status(vm)), "the certificate is degraded before the test"
+        _close_startup_notices(vm)
+
+        written = _sh(vm, f"echo 'not a certificate' > {TLS_PEM}")
+        assert written.returncode == 0, f"corrupting {TLS_PEM} failed: {written.stderr!r}"
+        _restart_gateway(vm)
+        _php_ok(vm, STATUS_BOOTSTRAP + "pfb_dns_proxy_confirm_ready();", "confirm the gateway's start")
+
+        _assert_degraded_but_serving(rig, proxy_on, "tls_certificate", "no usable certificate", allowed)
+        forwarded, raw = _drill_local(vm, allowed)
+        assert h.resolves_to(forwarded, STUB_DNS_A), f"allowed {allowed}: expected {STUB_DNS_A}, got {forwarded}\n{raw}"
+        transports = _dns_status(vm)["transports"]
+        rows = (transports or {}).get("dot", {}).get("rows") or []
+        states = {row["state"] for row in rows}
+        assert rows and states == {"not_served"}, f"DoT rows: expected only 'not_served', got {states}: {transports}"
+    finally:
+        try:
+            _apply(vm)  # a normal Update writes the certificate again and pushes it to the running gateway
+            _wait_proxy_serves(rig)
+            h.wait_until(lambda: h.is_vip(_query(client, names.blocked, dot=True)[0]), timeout=120.0, interval=3.0)
+        finally:
+            _close_startup_notices(vm)
 
 
 @pytest.mark.timeout(900)
@@ -2611,25 +2782,26 @@ def test_a_supervisor_waiting_between_failed_starts_still_names_the_proxy_and_th
 
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize("registered", [True, False], ids=["service-registered", "service-entry-absent"])
-def test_a_gateway_that_exits_at_every_start_is_rolled_back_with_no_supervisor_left(
+def test_a_gateway_that_exits_at_every_start_leaves_the_resolver_moved_and_its_supervisor_trying(
     rig: Rig, proxy_on: State, registered: bool
 ) -> None:
-    """A failed activation ends with the supervisor gone and the Resolver restored, registered service entry or not.
+    """A failed activation leaves the Resolver moved and the supervisor trying, registered service entry or not (#3848).
 
     Given pfB-DNS on, a gateway that exits before READY at every start, the package's service entry
       registered or taken out (an install's window: pfSense's stop_service() then does nothing), and the proxy started
       by the Resolver's start hook (services_unbound_configure(), as the install's resync restarts Unbound),
     When the real apply runs (pfb_trigger scope=dnsbl) and the proxy never becomes ready,
-    Then pfB-DNS stays on, no supervisor or gateway runs and no pidfile is left (nothing keeps respawning), every
-      Resolver key equals its pre-toggle value and the snapshot marker is empty.
+    Then pfB-DNS stays on, a supervisor still runs and starts the gateway again (nothing stops a proxy pfB-DNS keeps
+      trying to start), every Resolver key and the snapshot marker are as the move left them, and no package log says
+      the Resolver was restored.
     """
-    vm, before = rig.vm, rig.before
+    vm = rig.vm
     _force_stop_proxy(vm)
     try:
         with _gateway_exits_at_every_start(vm), _proxy_service_entry(vm, registered=registered):
             _php_ok(vm, "services_unbound_configure();", "services_unbound_configure (the start hook)")
             h.wait_unbound_ready(vm)
-            supervisor, _ = _between_starts(vm)
+            _between_starts(vm)
 
             _apply_of_an_activation_that_cannot_serve(vm)
 
@@ -2637,20 +2809,19 @@ def test_a_gateway_that_exits_at_every_start_is_rolled_back_with_no_supervisor_l
             diagnostics = _diagnostics(vm)
             toggle = _xml_text(_config_xml(vm), "installedpackages/pfblockerngdns/config/pfb_dns") or ""
             assert toggle == "on", f"pfB-DNS was turned off: {toggle!r}\n{diagnostics}"
-            assert not _alive(vm, supervisor), (
-                f"the hook's supervisor {supervisor} survived the rollback:\n{diagnostics}"
+            assert after.daemon_pid is not None and _alive(vm, after.daemon_pid), (
+                f"no supervisor keeps trying: {after.ps} {after.daemon_pid} {after.proxy_pid}\n{diagnostics}"
             )
-            assert after.ps == [] and after.daemon_pid is None and after.proxy_pid is None, (
-                f"a proxy is left after the rollback: {after.ps} {after.daemon_pid} {after.proxy_pid}\n{diagnostics}"
+            assert after.resolver == proxy_on.resolver, (
+                f"Resolver keys after the apply:\n{after.resolver}\nafter the move:\n{proxy_on.resolver}\n{diagnostics}"
             )
-            assert after.resolver == before.resolver, (
-                f"Resolver keys after the rollback:\n{after.resolver}\nbefore the toggle:\n{before.resolver}\n"
-                f"{diagnostics}"
-            )
-            assert after.marker == "", f"pfb_dns_saved is not cleared: {after.marker!r}\n{diagnostics}"
+            assert after.marker == proxy_on.marker, f"pfb_dns_saved changed: {after.marker!r}\n{diagnostics}"
+            logs = vm.ssh(f"cat {h.PFB_LOG} {h.PFB_LOGDIR}/error.log 2>&1").stdout
+            assert "restored to its previous settings" not in logs, f"the package logs report a restore:\n{diagnostics}"
     finally:
         _force_stop_proxy(vm)
         _set_proxy_toggle(vm, False)
+        _apply(vm)  # the admin's off is what restores the Resolver
 
 
 # $g['cf_conf_path'] is per process (pfsense/pfsense@209b8baa8 config.lib.inc): a scratch dir with a writable backup/
@@ -2693,8 +2864,8 @@ def test_a_refused_restore_starts_the_proxy_again_with_the_service_entry_absent(
 
     Given pfB-DNS on and serving, the package's service entry absent (an install's window: pfSense's restart_service()
       starts nothing), and a process whose write_config() answers -1,
-    When pfb_dns_proxy_resolver(FALSE) runs in it (the restore of an apply or a rollback: it stops the proxy, then its
-      write of the restored Resolver is refused),
+    When pfb_dns_proxy_resolver(FALSE) runs in it (the restore of an apply or of the admin's off: it stops the proxy,
+      then its write of the restored Resolver is refused),
     Then it answers FALSE and logs that the Resolver was not put back, config.xml still holds the snapshot and the moved
       Resolver, and the proxy serves again: a new child whose pid is the ready marker, pfb-dns alone holding port 53 on
       the LAN address, and the client's listed name getting the VIP.

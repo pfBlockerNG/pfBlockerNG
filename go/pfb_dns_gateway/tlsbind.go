@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
@@ -65,8 +66,9 @@ func bindTLS(cfg config, logf func(format string, args ...any), refused map[stri
 	}
 	certs, err := newCertStore(cfg.tlsPEM, logf)
 	if err != nil {
-		logf("TLS certificate not loaded: %v; DoT, DoH and DoQ handshakes fail until one is pushed", err)
 		certs = newEmptyCertStore(logf)
+		certs.missing = fmt.Sprintf("TLS certificate not loaded: %v; DoT, DoH and DoQ handshakes fail until one is pushed", err)
+		logf("%s", certs.missing)
 	}
 	t := &tlsListeners{certs: certs}
 	bindStream := func(kind, host string, port int, listeners *[]*net.TCPListener) {
