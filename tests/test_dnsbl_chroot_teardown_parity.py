@@ -46,6 +46,7 @@ def test_teardown_derivation_includes_the_psl_authority() -> None:
 
 RETIRED_CHROOT_FILES = [
     "pfb_unbound.py",
+    "pfb_unbound_include.inc",
     "pfb_py_module.applied",
     "pfb_dnsbl_regex_rules.py",
     "pfb_python.sh",

@@ -390,9 +390,10 @@ aliastables() {
 # lifecycles).
 #   stage    = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot and drop the
 #              RETIRED set (PFB_PY_RETIRED: files an older package staged that nothing reads any more)
-#              and __pycache__, keeping the module while unbound.conf still names it (dnsbl_cache_keeps);
-#              runs during the DNSBL pass and on restore, never during save
-#   teardown = remove both sets, keeping the module the same way
+#              and __pycache__, keeping the module and its mount hook while unbound.conf still names it
+#              (dnsbl_cache_keeps, which restages the hook from /usr/local); runs during the DNSBL pass and on
+#              restore, never during save
+#   teardown = remove both sets, keeping the module and its mount hook the same way
 #   save     = archive the GENERATED set plus exact TOP1M detector sidecars, with the caller holding
 #              the publication lock; the shipped and retired sets stay out
 #   restore  = boot earlyshellcmd: untar the cached files THEN stage
@@ -401,8 +402,8 @@ aliastables() {
 # nothing) -- dnsbl_psl rides PFB_PY_SHIPPED with the same source/chroot basename like every other
 # entry; no NAME-MAPPED shipped file (source basename != chroot basename) remains (issue #1541
 # retired the last one, dnsbl_tld). A file that stops being read from the chroot moves to
-# PFB_PY_RETIRED, so the next stage clears the copy an upgraded box still holds (the module only
-# once unbound.conf stops naming it).
+# PFB_PY_RETIRED, so the next stage clears the copy an upgraded box still holds (the module and its
+# mount hook only once unbound.conf stops naming the module).
 dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
@@ -411,21 +412,22 @@ dnsbl_cache() {
 	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar}"
 	pathtar="${pathtar:-/usr/bin/tar}"
 
-	# The shipped (static) files the chroot reads: the PSL authority, the HSTS list, the observer and the mount hook.
-	PFB_PY_SHIPPED='dnsbl_psl pfb_unbound_include.inc pfb_py_hsts.txt pfb_upstream_observer.py pfb_upstream_observer_include.inc'
-	# Files an older package staged into the chroot that nothing reads any more (#3791): the module and its code
-	# fingerprint (pfb_py_module.applied, which the pfb_py_* archive glob would restore on every RAM-disk reboot), and
-	# the regex rules and launcher that only the module used from there (the save-time probe and every other consumer
-	# run the /usr/local copies).
-	PFB_PY_RETIRED='pfb_unbound.py pfb_py_module.applied pfb_dnsbl_regex_rules.py pfb_python.sh'
+	# The shipped (static) files the chroot reads: the PSL authority, the HSTS list, the observer and its boot hook.
+	PFB_PY_SHIPPED='dnsbl_psl pfb_py_hsts.txt pfb_upstream_observer.py pfb_upstream_observer_include.inc'
+	# Files an older package staged into the chroot that nothing reads any more (#3791): the module, its mount hook
+	# (pfb_unbound_include.inc, #3795), its code fingerprint (pfb_py_module.applied, which the pfb_py_* archive glob
+	# would restore on every RAM-disk reboot), and the regex rules and launcher that only the module used from there
+	# (the save-time probe and every other consumer run the /usr/local copies).
+	PFB_PY_RETIRED='pfb_unbound.py pfb_unbound_include.inc pfb_py_module.applied pfb_dnsbl_regex_rules.py pfb_python.sh'
 
-	# Whether a retired file stays: the module and the rules it imports, while the chroot's unbound.conf still names
-	# pfb_unbound.py (an upgrade whose removal of Unbound's python settings config.xml refused). pfBlockerNG restarts
-	# Unbound from that conf, and a python-script that is missing fails the start, so DNS is down (#3838). Asked for
-	# each file at the point of deletion.
+	# Whether a retired file stays: the module, its mount hook and the rules it imports, while the chroot's unbound.conf
+	# still names pfb_unbound.py (an upgrade whose removal of Unbound's python settings config.xml refused).
+	# pfBlockerNG restarts Unbound from that conf, and a python-script that is missing fails the start, so DNS is down
+	# (#3838); pfSense runs the mount hook before it starts Unbound, and without it the module cannot load (#3795).
+	# Asked for each file at the point of deletion.
 	dnsbl_cache_keeps() {
 		case "${1}" in
-			pfb_unbound.py|pfb_dnsbl_regex_rules.py) ;;
+			pfb_unbound.py|pfb_unbound_include.inc|pfb_dnsbl_regex_rules.py) ;;
 			*) return 1 ;;
 		esac
 		grep -qs 'python-script:[[:space:]]*pfb_unbound\.py' "${pfbchroot}/unbound.conf" || return 1
@@ -441,7 +443,14 @@ dnsbl_cache() {
 			mkdir -p "${pfbchroot}/${_d}"
 		done
 		for _f in ${PFB_PY_RETIRED}; do
-			dnsbl_cache_keeps "${_f}" && continue
+			if dnsbl_cache_keeps "${_f}"; then
+				# The package still ships the mount hook: restage its current copy for the kept module.
+				if [ "${_f}" = 'pfb_unbound_include.inc' ] && [ -f "${pfbpkgdir}/${_f}" ]; then
+					cp -f "${pfbpkgdir}/${_f}" "${pfbchroot}/${_f}"
+					chown -f unbound:unbound "${pfbchroot}/${_f}"
+				fi
+				continue
+			fi
 			rm -f "${pfbchroot}/${_f}"
 		done
 		# Python's bytecode cache of the retired modules; nothing in the chroot imports any more.

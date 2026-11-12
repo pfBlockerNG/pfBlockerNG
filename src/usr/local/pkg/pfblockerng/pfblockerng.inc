@@ -27653,8 +27653,8 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 
 	// pfb_unbound_include.inc (the retired DNSBL module's mount hook) nullfs-mounted host dirs into the chroot
 	// (var/log/pfblockerng, usr/local/share/GeoIP); a box that ran an older package can still hold them. A keep=off
-	// uninstall would rmdir the host log source under a live mount (#484), so unmount them before the include is
-	// removed. Bounded loop clears any stacked mounts.
+	// uninstall would rmdir the host log source under a live mount (#484), so unmount them first; teardown keeps the
+	// include only while unbound.conf still names the module (#3795). Bounded loop clears any stacked mounts.
 	foreach (array('var/log/pfblockerng', 'usr/local/share/GeoIP') as $pfb_cmnt) {
 		$pfb_cmnt_path = "{$g['unbound_chroot_path']}/{$pfb_cmnt}";
 		for ($pfb_cmnt_i = 0; $pfb_cmnt_i < 8; $pfb_cmnt_i++) {
