@@ -2519,6 +2519,8 @@ def test_a_corrupt_dnsbl_manifest_leaves_pfb_dns_answering_with_dnsbl_not_blocki
         try:
             _apply(vm)  # a normal Update rebuilds the manifest and swaps the built snapshot in
             _wait_proxy_serves(rig)
+            after = _degraded(_dns_status(vm))
+            assert "dnsbl" not in after, f"after the Update: expected no dnsbl degraded row, got {after}"
         finally:
             _close_startup_notices(vm)
 
@@ -2561,6 +2563,8 @@ def test_an_unusable_tls_certificate_leaves_pfb_dns_answering_with_dot_not_serve
             _apply(vm)  # a normal Update writes the certificate again and pushes it to the running gateway
             _wait_proxy_serves(rig)
             h.wait_until(lambda: h.is_vip(_query(client, names.blocked, dot=True)[0]), timeout=120.0, interval=3.0)
+            after = _degraded(_dns_status(vm))
+            assert "tls_certificate" not in after, f"after the Update: expected no tls_certificate row, got {after}"
         finally:
             _close_startup_notices(vm)
 
