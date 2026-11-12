@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `27b6af1bf4`  test: keep the LAN DHCP pool so the listener-only DNS test leaves no notice  (#3862) — two quota notices; two review rounds and Codex clean
 - `fd9e201400`  dns: translate the DNSBL matcher to the Go decider  (#3807) — rate limit, then skipped at 115 files; condensed review and Codex clean
 - `c908dd2688`  unbound: wait for a SIGKILLed start group to be gone before returning  (#3682) — one quota notice; owner squash-merged; review and Codex clean
 - `e1ff3f6cc7`  dns: let an in-flight query outlive the idle read  (#3666) — two quota responses; condensed review and Codex clean
