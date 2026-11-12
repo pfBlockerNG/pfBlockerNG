@@ -39,6 +39,15 @@ func TestAModuleWithNoManifestReportsTheDNSBLAsLost(t *testing.T) {
 	}
 }
 
+// issue #3870: a module that booted with no pfb_unbound.ini leaves python_enable off and blocks nothing: the status must say so.
+func TestAModuleWithNoIniReportsTheDNSBLAsLost(t *testing.T) {
+	modCaptureLog(t)
+	got := requireDegraded(t, newFrontend(modMust(t, t.TempDir())), "no ini", "dnsbl")
+	if want := "Failed to load ini configuration. Ini file missing."; got[0].Reason != want {
+		t.Errorf("reason = %q, want %q", got[0].Reason, want)
+	}
+}
+
 func TestAModuleWhoseManifestCannotBeReadOrBuiltReportsTheDNSBLAsLostWithTheLoadError(t *testing.T) {
 	for name, tc := range map[string]struct{ manifest, reasonPrefix string }{
 		"corrupt JSON":          {"{not json", "Failed to load DNSBL manifest '%s': "},

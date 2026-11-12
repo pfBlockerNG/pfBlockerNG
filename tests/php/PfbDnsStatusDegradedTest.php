@@ -358,6 +358,18 @@ final class PfbDnsStatusDegradedTest extends TestCase
 		$this->assertSame(1, $panel->query("//tr[starts-with(@id, 'pfb-dns-status-degraded-')]")->length, 'one row for one part');
 	}
 
+	/** issue #3870: the decider's reason for a missing pfb_unbound.ini passes the status check and is the panel's dnsbl row. */
+	public function testAMissingIniIsTheDnsblRowWithTheDecidersReason(): void
+	{
+		$this->box();
+		$this->degrade([['part' => 'dnsbl', 'reason' => 'Failed to load ini configuration. Ini file missing.']]);
+
+		$this->assertSame(
+			'DNSBL is not blocking: Failed to load ini configuration. Ini file missing.',
+			$this->panel(pfb_dns_status())->evaluate("string(//tr[@id='pfb-dns-status-degraded-dnsbl']/td)")
+		);
+	}
+
 	public function testSeveralDegradedPartsAreRowsInTheOrderTheGatewayGaveThem(): void
 	{
 		$this->box();

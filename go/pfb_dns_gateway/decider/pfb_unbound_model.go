@@ -232,7 +232,7 @@ type snapshot struct {
 	// stores it. A builder that fills them itself (init, a test) leaves it false.
 	carryRuntime bool
 
-	// dnsblUnbuilt is why init's snapshot has no DNSBL build (the manifest was absent, unreadable or unbuildable): "" for a
+	// dnsblUnbuilt is why init's snapshot has no DNSBL build (no ini, or the manifest was absent, unreadable or unbuildable): "" for a
 	// built one. A reload builds a fresh snapshot, so only a swap that builds ends it; a control edit copies it.
 	dnsblUnbuilt string
 }

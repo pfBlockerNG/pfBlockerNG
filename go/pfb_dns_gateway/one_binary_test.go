@@ -154,8 +154,8 @@ func TestOneBinaryRefusesADeciderCommandAfterTheDoubleDash(t *testing.T) {
 
 // issue #3848: a module that cannot boot no longer stops the gateway. The decider boots again with no module, the gateway is
 // ready (ready file included) and relays every query, a listed name too, and the status says the DNSBL is not blocking. (A
-// directory with no ini at all is not such a module: the decider logs "Ini file missing" and serves without DNSBL, as the
-// Python decider did.)
+// directory with no ini at all is not such a module: the decider logs "Ini file missing" and serves without DNSBL, reporting
+// the DNSBL as lost, issue #3870.)
 func TestOneBinaryServesWithNoModuleWhenTheModuleCannotBoot(t *testing.T) {
 	dir, ready, sock := shortTempDir(t), filepath.Join(t.TempDir(), "ready"), filepath.Join(shortTempDir(t), "run", "ctl.sock")
 	writeModuleDir(t, dir) // blocked.example is listed: it is relayed only because the module did not boot

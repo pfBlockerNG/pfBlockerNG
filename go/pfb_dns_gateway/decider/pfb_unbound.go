@@ -671,7 +671,9 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 			}
 		}
 	} else {
-		logInfo("[pfBlockerNG]: Failed to load ini configuration. Ini file missing.")
+		// issue #3870: with no ini python_enable stays off and nothing is blocked: report the DNSBL as lost.
+		scratch.dnsblUnbuilt = "Failed to load ini configuration. Ini file missing."
+		logInfo("[pfBlockerNG]: " + scratch.dnsblUnbuilt)
 	}
 
 	// ADR-10: bundle the loaded strata into ONE immutable snapshot and install it through rebuildAndSwap, on every
