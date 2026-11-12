@@ -1,0 +1,50 @@
+{
+ "schema": 1,
+ "description": "A redirect to a port spelled with a leading zero is refused.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "localhost": [
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin",
+  "target"
+ ],
+ "routes": {
+  "origin": {
+   "/r": {
+    "status": 302,
+    "location": "http://localhost:0{port:target}/x"
+   }
+  },
+  "target": {
+   "/x": {
+    "body": "INTERNAL\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/r",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/r"
+     }
+    ]
+   }
+  }
+ ]
+}

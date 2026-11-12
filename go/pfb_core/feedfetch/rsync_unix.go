@@ -3,6 +3,7 @@
 package feedfetch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -32,13 +33,20 @@ func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst 
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `ulimit -f "$1" || exit 1; shift; exec "$@"`, "sh",
 		strconv.FormatInt(limit/256, 10), f.RsyncBin, "--timeout=5", from, dst)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var kill *time.Timer
 	cmd.Cancel = func() error {
 		pgid := -cmd.Process.Pid
-		time.AfterFunc(killGrace, func() { syscall.Kill(pgid, syscall.SIGKILL) })
+		kill = time.AfterFunc(killGrace, func() { syscall.Kill(pgid, syscall.SIGKILL) })
 		return syscall.Kill(pgid, syscall.SIGTERM)
 	}
 	cmd.WaitDelay = killGrace + time.Second
-	out, err := cmd.CombinedOutput()
+	var out bytes.Buffer
+	cmd.Stdout = &capped{&out, 4096}
+	cmd.Stderr = cmd.Stdout
+	err := cmd.Run()
+	if kill != nil {
+		kill.Stop() // the group is gone; never signal a reused pgid
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		os.Remove(dst)
 		return transfer{reason: "rsync transfer timed out"}
@@ -47,7 +55,7 @@ func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst 
 		os.Remove(dst)
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return transfer{reason: "rsync exit " + strconv.Itoa(exit.ExitCode()) + ": " + string(out)}
+			return transfer{reason: "rsync exit " + strconv.Itoa(exit.ExitCode()) + ": " + out.String()}
 		}
 		return transfer{reason: "rsync could not run: " + err.Error()}
 	}
@@ -56,4 +64,17 @@ func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst 
 		return transfer{reason: "rsync_too_large"}
 	}
 	return transfer{status: 200}
+}
+
+// capped keeps the first n bytes of rsync's output (a daemon's message can be arbitrarily long) and drops the rest.
+type capped struct {
+	b *bytes.Buffer
+	n int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.n - c.b.Len(); room > 0 {
+		c.b.Write(p[:min(room, len(p))])
+	}
+	return len(p), nil
 }

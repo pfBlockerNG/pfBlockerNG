@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -62,7 +61,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 				return transfer{reason: "download file could not be reset"}
 			}
 			out.Seek(0, io.SeekStart)
-			resp, lastErr = f.attempt(ctx, req, current, host, port, pin, flex, onOrigin, headers, out)
+			resp, lastErr = f.attempt(ctx, req, current, pin, flex, onOrigin, headers, out)
 			if lastErr == nil {
 				break
 			}
@@ -104,7 +103,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 }
 
 // attempt makes one request and, for a final answer, copies its body to out under the ceiling.
-func (f *Fetcher) attempt(ctx context.Context, req Request, target, host string, port int, pin netip.Addr, flex,
+func (f *Fetcher) attempt(ctx context.Context, req Request, target string, pin netip.Addr, flex,
 	onOrigin bool, headers [][2]string, out *os.File) (*http.Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, req.timeout())
 	defer cancel()
@@ -125,7 +124,7 @@ func (f *Fetcher) attempt(ctx context.Context, req Request, target, host string,
 		r.SetBasicAuth(req.Username, req.Password)
 	}
 
-	tr := f.transport(req, host, port, pin, flex)
+	tr := f.transport(req, pin, flex)
 	defer tr.CloseIdleConnections()
 	resp, err := tr.RoundTrip(r)
 	if err != nil {
@@ -151,20 +150,20 @@ func (f *Fetcher) attempt(ctx context.Context, req Request, target, host string,
 
 // transport dials host:port at the pinned address (SNI and Host stay the URL's), through the proxy when one is set,
 // with a fresh connection per request and no Accept-Encoding offered (#2634: the digest is of the raw bytes).
-func (f *Fetcher) transport(req Request, host string, port int, pin netip.Addr, flex bool) *http.Transport {
+func (f *Fetcher) transport(req Request, pin netip.Addr, flex bool) *http.Transport {
 	dialer := &net.Dialer{Timeout: connectTimeout}
 	if req.BindAddr.IsValid() {
 		dialer.LocalAddr = &net.TCPAddr{IP: req.BindAddr.AsSlice()}
 	}
-	pinned := strings.ToLower(net.JoinHostPort(host, strconv.Itoa(port)))
 	tlsConf := &tls.Config{RootCAs: f.RootCAs, MinVersion: tls.VersionTLS12}
 	if flex {
 		tlsConf.InsecureSkipVerify, tlsConf.MinVersion = true, tls.VersionTLS10
 	}
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if pin.IsValid() && strings.ToLower(addr) == pinned {
-				addr = netip.AddrPortFrom(pin, uint16(port)).String()
+			// Only the feed's own host is ever dialled here, except the proxy, which is not pinned.
+			if _, p, err := net.SplitHostPort(addr); err == nil && pin.IsValid() && f.Proxy == nil {
+				addr = net.JoinHostPort(pin.String(), p)
 			}
 			return dialer.DialContext(ctx, network, addr)
 		},

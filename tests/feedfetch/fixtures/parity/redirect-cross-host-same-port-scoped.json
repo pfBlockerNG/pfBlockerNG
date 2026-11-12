@@ -1,0 +1,51 @@
+{
+ "schema": 1,
+ "description": "Another host on the same port is another origin: no credentials.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/xs": {
+    "status": 302,
+    "location": "http://rdr.example:{port:origin}/land"
+   },
+   "/land": {
+    "body": "BODY\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/xs",
+   "username": "user",
+   "password": "secret",
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/xs",
+      "authorization": "Basic dXNlcjpzZWNyZXQ="
+     },
+     {
+      "server": "origin",
+      "path": "/land"
+     }
+    ]
+   }
+  }
+ ]
+}

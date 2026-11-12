@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -32,6 +33,7 @@ type source struct {
 
 var (
 	schemeName  = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*$`)
+	portNumber  = regexp.MustCompile(`^(0|[1-9][0-9]{0,4})$`)
 	absoluteRef = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://`)
 )
 
@@ -62,6 +64,10 @@ func parseRaw(s string) (rawURL, bool) {
 			r.host = authority[:j+1]
 			r.port = strings.TrimPrefix(authority[j+1:], ":")
 		}
+	}
+	// FILTER_VALIDATE_URL refuses any other spelling; one such as "080" would also dial unpinned.
+	if n, err := strconv.Atoi(r.port); r.port != "" && (!portNumber.MatchString(r.port) || err != nil || n > 65535) {
+		return rawURL{}, false
 	}
 	tail, _, _ = strings.Cut(tail, "#")
 	r.path, r.query, _ = strings.Cut(tail, "?")
@@ -160,6 +166,8 @@ func ipv4Number(p string) (uint64, bool) {
 	return n, true
 }
 
+const wordChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+
 func allIn(s, set string) bool {
 	for i := range len(s) {
 		if !strings.ContainsRune(set, rune(s[i])) {
@@ -198,12 +206,7 @@ func internal(a netip.Addr) bool {
 }
 
 func (p *Policy) self(a netip.Addr) bool {
-	for _, s := range append(loopbacks, p.Self...) {
-		if a == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(loopbacks, a) || slices.Contains(p.Self, a)
 }
 
 func (p *Policy) allowed(a netip.Addr) bool {

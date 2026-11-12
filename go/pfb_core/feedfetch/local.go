@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 )
 
@@ -22,7 +23,7 @@ func fetchFile(path string, req Request, dst string) transfer {
 // fetchSelfHosted reads a URL served by the host itself (issues #3362, #3368): no proxy, no pin, no redirect (a 3xx is
 // refused on its status), only 200/221/226, the request's timeout over the whole read, the ceiling, and a body shorter
 // than its Content-Length refused.
-func fetchSelfHosted(ctx context.Context, u fmt.Stringer, req Request, dst string) transfer {
+func fetchSelfHosted(ctx context.Context, u *url.URL, req Request, dst string) transfer {
 	ctx, cancel := context.WithTimeout(ctx, req.timeout())
 	defer cancel()
 	r, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)

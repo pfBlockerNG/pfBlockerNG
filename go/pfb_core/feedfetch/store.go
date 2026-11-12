@@ -79,6 +79,10 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 		return errors.New("staged body could not be written")
 	}
 	published := feed.path(".orig")
+	// A digest that outlived its copy would let an upstream revert to those older bytes read as unchanged.
+	if err := os.Remove(feed.path(".orig.sha256")); err != nil && !os.IsNotExist(err) {
+		return errors.New("published digest could not be replaced")
+	}
 	if err := os.Rename(staged, published); err != nil {
 		return errors.New("published copy could not be replaced")
 	}

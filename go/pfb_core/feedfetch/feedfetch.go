@@ -64,6 +64,9 @@ type Feed struct{ Dir, Name string }
 
 func (f Feed) path(suffix string) string { return filepath.Join(f.Dir, f.Name+suffix) }
 
+// valid holds the name to a word, as pfb_update_check() holds the feed header (PFB_FILTER_WORD).
+func (f Feed) valid() bool { return f.Name != "" && allIn(f.Name, wordChars) }
+
 // Decision is a probe's verdict.
 type Decision int
 
@@ -122,6 +125,9 @@ func (f *Fetcher) Ingest(ctx context.Context, feed Feed, req Request) Result {
 }
 
 func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
+	if !feed.valid() {
+		return fail("invalid feed name")
+	}
 	src, reason := f.entry(ctx, req)
 	if src == nil {
 		return fail(reason)
@@ -162,6 +168,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 // content hash for a local file; a self-hosted URL and an rsync feed are always due. A changed remote body is kept for
 // the next Ingest.
 func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
+	if !feed.valid() {
+		return Result{Decision: Failed, Reason: "invalid feed name"}
+	}
 	src, reason := f.entry(ctx, req)
 	if src == nil {
 		return Result{Decision: Failed, Reason: reason}
@@ -177,15 +186,18 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 		return Result{OK: true, Decision: localDecision(src.path, feed)}
 	}
 
-	probe := feed.path(".probe")
-	t := f.fetch(ctx, src, req, probe, readValidators(feed))
+	// The body becomes ".probe", which the next Ingest publishes, only once the probe decided: a probe killed
+	// mid-body leaves only ".probe.part", which nothing reads.
+	part := feed.path(".probe.part")
+	defer os.Remove(part)
+	t := f.fetch(ctx, src, req, part, readValidators(feed))
 	res := Result{Status: t.status, Reason: t.reason}
 	switch {
 	case t.reason == "" && t.status == 304:
 		writeValidators(feed, t.etag, t.lastMod)
 		res.OK, res.Decision = true, Unchanged
 	case t.reason == "" && t.status == 200:
-		digest, err := fileDigest(probe)
+		digest, err := fileDigest(part)
 		baseline, _ := os.ReadFile(feed.path(".orig.sha256"))
 		writeValidators(feed, t.etag, t.lastMod)
 		res.OK, res.Decision = true, Changed
@@ -195,8 +207,8 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	default:
 		res.Decision = Failed
 	}
-	if res.Decision != Changed {
-		os.Remove(probe)
+	if res.Decision == Changed && os.Rename(part, feed.path(".probe")) != nil {
+		return Result{Status: t.status, Decision: Failed, Reason: "probe body could not be kept"}
 	}
 	return res
 }
