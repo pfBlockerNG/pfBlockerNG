@@ -2762,28 +2762,25 @@ def test_managed_vips_exclude_all_custom_ports_and_ddr_uses_bound_standard_ports
                 assert h.is_vip(answer), f"VIP-only {transport} failed: {answer}\n{raw}"
         status = gui.get(STATUS_PAGE)
         assert status.status_code == 200, status.text
+        refreshed = gui.get(f"{STATUS_PAGE}?ajax=ddr")
+        assert refreshed.status_code == 200, refreshed.text
         from .ui.test_sync_status_panels import panel
 
-        section = panel(status.text, "pfb-dns-status-ddr")
-        assert section is not None, status.text
-        table = re.search(r"<table\b.*?</table>", section, re.DOTALL)
-        assert table, section
-        observations = {row.attrib["data-address"]: row for row in ET.fromstring(table.group()).findall("./tbody/tr")}
-        assert "<pre" not in section and "Refresh DDR advertisements" not in section, section
-        for vip in vips:
-            endpoint = f"[{vip}]:53" if ":" in vip else f"{vip}:53"
-            status_row = observations.get(endpoint)
-            assert status_row is not None, f"DDR status omitted {endpoint}: {observations}"
-            _say(f"VIP-only DDR status {endpoint}: {ET.tostring(status_row, encoding='unicode')}")
-            assert status_row.attrib["data-state"] == "pending", ET.tostring(status_row, encoding="unicode")
-            checked = gui.get(f"{STATUS_PAGE}?ajax=ddr", params={"listener": endpoint})
-            assert checked.status_code == 200, checked.text
-            checked_section = panel(checked.json()["html"], "pfb-dns-status-ddr")
-            assert checked_section is not None, checked.text
-            checked_root = ET.fromstring(checked_section)
-            checked_rows = checked_root.findall(".//tbody/tr")
-            assert len(checked_rows) == 1 and checked_rows[0].attrib["data-address"] == endpoint, checked_section
-            assert checked_rows[0].attrib["data-state"] == "matched", checked_section
+        # PR #3851: the page and its refresh both render the applied snapshot; no row waits for a per-address check
+        for view, html in (("page", status.text), ("refresh", refreshed.json()["html"])):
+            section = panel(html, "pfb-dns-status-ddr")
+            assert section is not None, html
+            table = re.search(r"<table\b.*?</table>", section, re.DOTALL)
+            assert table, section
+            rows = ET.fromstring(table.group()).findall("./tbody/tr")
+            observations = {row.attrib["data-address"]: row for row in rows}
+            assert "<pre" not in section and "Refresh DDR advertisements" not in section, section
+            for vip in vips:
+                endpoint = f"[{vip}]:53" if ":" in vip else f"{vip}:53"
+                status_row = observations.get(endpoint)
+                assert status_row is not None, f"DDR status ({view}) omitted {endpoint}: {observations}"
+                _say(f"VIP-only DDR status ({view}) {endpoint}: {ET.tostring(status_row, encoding='unicode')}")
+                assert status_row.attrib["data-state"] == "matched", ET.tostring(status_row, encoding="unicode")
         applied = re.search(r'<tr id="pfb-dns-status-name"><th>DNS Name</th><td>([^<]*)</td></tr>', status.text)
         assert applied and applied.group(1).rstrip(".").lower() == DDR_TARGET.rstrip(".").lower(), status.text
     finally:
