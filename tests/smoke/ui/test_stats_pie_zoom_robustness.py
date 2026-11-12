@@ -70,6 +70,9 @@ DRAWN = """(scope) => {
 
 # Everything the zoom dialog creates outside its own markup.
 ZOOM_NODES = """() => Array.from(document.querySelectorAll('[id$="_zoom"], [id*="tooltip" i]')).map((e) => e.id)"""
+# The pies on the page that have an svg but no tooltips yet: d3pie adds them on a timer tick after the svg.
+UNDRAWN = """() => Array.from(document.querySelectorAll('[id^="pieChart_"] > svg'))
+    .filter((svg) => !svg.querySelector('g[class$="_tooltips"]')).map((svg) => svg.parentElement.id)"""
 
 ARM = """(seconds) => {
     const old = document.getElementById('AlertRefresh');
@@ -94,6 +97,14 @@ def _drawn(page: Page, scope: str) -> dict[str, float]:
         previous = current
         page.wait_for_timeout(150)
     pytest.fail(f"{scope}: the pie never stopped changing, last {previous}")
+
+
+def _pies_drawn(page: Page) -> None:
+    """Wait until every pie on the page has its tooltips, so a snapshot of them holds no pie still drawing."""
+    try:
+        page.wait_for_function(f"() => ({UNDRAWN})().length === 0", timeout=30_000)
+    except pytest.importorskip("playwright.sync_api").TimeoutError:
+        pytest.fail(f"these pies never got their tooltips: {page.evaluate(UNDRAWN)}")
 
 
 def _zoom_button(page: Page, stat: str) -> Locator:
@@ -253,6 +264,7 @@ def test_stats_pie_zoom_opens_once_is_named_and_leaves_nothing_behind(
         button = _zoom_button(page, short)
         name = button.get_attribute("aria-label")
         assert name, "the zoom button has no accessible name"
+        _pies_drawn(page)
         before: list[str] = page.evaluate(ZOOM_NODES)
 
         button.focus()
