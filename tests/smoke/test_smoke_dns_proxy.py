@@ -62,6 +62,10 @@ What it proves, in file order:
   on the guest, then the real apply: the proxy cannot bind and never becomes ready, pfB-DNS stays on, the Resolver
   stays moved exactly as the move left it, and the startup notice says why: nothing gives the Resolver back but the
   admin's off (issue #3848).
+* a part that cannot start never takes port 53 down (issue #3848): a corrupt DNSBL manifest, and an unusable TLS
+  certificate with DoT on, each restarted the way the package restarts the gateway: pfB-DNS keeps answering on 53 (an
+  allowed name is forwarded), the status says Running and lists the degraded part (DNSBL not blocking, DoT not served),
+  the startup notice names it and the Resolver snapshot stays set; an Update puts the part back.
 * a gateway that exits before READY at every start (issue #3561: the installed binary is not executable, so
   pfb_dns.sh exits with its reason): the supervisor waiting out its restart delay still names pfb_dns_proxy and the rc
   stop ends it; started by the Resolver's start hook, with the package's service entry registered or absent (an
@@ -92,6 +96,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import csv
+import html
 import io
 import json
 import os
@@ -103,6 +108,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -2371,6 +2377,192 @@ def test_boot_check_without_a_gateway_keeps_the_resolver_moved_and_files_the_sta
             _apply(vm)
         finally:
             _php_ok(vm, clear_notices, "clear this test's startup and Resolver notices")
+
+
+STARTUP_NOTICE_ID = "pfBlockerNG DNS Proxy startup"
+MANIFEST = "/var/unbound/pfb_py_sources.json"  # the DNSBL manifest the gateway builds its module from
+TLS_PEM = "/var/etc/pfb_dns/tls.pem"  # DoT's certificate and key; the rc start rewrites it only when missing
+PHP_BIN = "/usr/local/bin/php"
+DNS_CHECK = f"{PHP_BIN} -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check"  # the boot hook's own confirmation
+STATUS_BOOTSTRAP = (
+    "require_once('util.inc'); require_once('functions.inc'); require_once('pkg-utils.inc');"
+    " require_once('globals.inc');"
+    " require_once('services.inc'); require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+    " require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc'); global $g, $pfb; pfb_global();"
+)
+
+
+def _drill_local(vm: SmokeVM, name: str) -> tuple[h.DnsAnswer, str]:
+    """drill on the box at pfB-DNS's own port 53 (Unbound is on 5354): the answer and drill's full output."""
+    out = vm.ssh(f"/usr/bin/timeout 15 {h.DRILL_BIN} -p 53 A {name} @127.0.0.1 2>&1", timeout=30.0).stdout
+    return h._parse_drill(out, "A"), out
+
+
+def _wait_local_forwards(vm: SmokeVM, name: str) -> None:
+    """Poll until port 53 on the box forwards `name` to the upstream: the restarted gateway serves."""
+    try:
+        h.wait_until(lambda: h.resolves_to(_drill_local(vm, name)[0], STUB_DNS_A), timeout=120.0, interval=3.0)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}\n{_diagnostics(vm)}") from exc
+
+
+def _php_cli(vm: SmokeVM, code: str, what: str) -> str:
+    """A read-only PHP one-liner through /bin/sh (`php -r`, no pfSsh lock); stdout, or raise."""
+    result = _sh(vm, f"{PHP_BIN} -r {shlex.quote(STATUS_BOOTSTRAP + code)}", timeout=300.0)
+    if result.returncode != 0:
+        raise RuntimeError(f"{what} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+    return result.stdout
+
+
+def _dns_status(vm: SmokeVM) -> dict[str, Any]:
+    """pfb_dns_status(): what the DNS General status panel shows."""
+    out = _php_cli(vm, "echo '<<<STATUS>>>' . json_encode(pfb_dns_status()) . '<<<END>>>';", "pfb_dns_status")
+    found = re.search(r"<<<STATUS>>>(.*?)<<<END>>>", out, re.DOTALL)
+    assert found is not None, f"pfb_dns_status() printed no status: {out!r}"
+    status: dict[str, Any] = json.loads(found.group(1))
+    return status
+
+
+def _degraded(status: dict[str, Any]) -> dict[str, str]:
+    """The status's degraded rows as part -> reason."""
+    return {row["part"]: row["reason"] for row in status["degraded"]}
+
+
+def _startup_notices(vm: SmokeVM) -> list[str]:
+    """The text of every startup notice on the box."""
+    out = _php_ok(
+        vm,
+        "require_once('notices.inc');\n"
+        "echo '<<<NOTICES>>>' . json_encode(array_values(get_notices() ?: [])) . '<<<END>>>';",
+        "read notices",
+    )
+    found = re.search(r"<<<NOTICES>>>(.*?)<<<END>>>", out, re.DOTALL)
+    assert found is not None, f"no notices in {out!r}"
+    return [html.unescape(row["notice"]) for row in json.loads(found.group(1)) if row["id"] == STARTUP_NOTICE_ID]
+
+
+def _close_startup_notices(vm: SmokeVM) -> None:
+    _php_ok(
+        vm,
+        "require_once('notices.inc');\n"
+        "foreach ((get_notices() ?: []) as $key => $row) {\n"
+        f"  if (($row['id'] ?? '') === {h._php_str(STARTUP_NOTICE_ID)}) {{ close_notice($key); }}\n"
+        "}\n",
+        "close the startup notice",
+    )
+
+
+def _restart_gateway(vm: SmokeVM) -> None:
+    """The package's own restart of the gateway: the rc script's restart verb."""
+    restarted = _sh(vm, f"{PROXY_RC} restart", timeout=120.0)
+    assert restarted.returncode == 0, f"rc restart failed: {restarted.stdout!r} {restarted.stderr!r}"
+
+
+def _assert_degraded_but_serving(rig: Rig, proxy_on: State, part: str, notice_text: str, allowed: str) -> None:
+    """The gateway restarted with `part` broken still serves: the Resolver stays moved, an allowed name is forwarded on
+    port 53, the status is Running with `part` degraded and the startup notice names it."""
+    vm = rig.vm
+    _wait_local_forwards(vm, allowed)
+    after = _capture(vm)
+    diagnostics = _diagnostics(vm)
+    assert after.resolver == proxy_on.resolver and after.marker == proxy_on.marker, (
+        f"the Resolver snapshot changed:\nexpected {proxy_on.resolver} {proxy_on.marker!r}\n"
+        f"actual {after.resolver} {after.marker!r}\n{diagnostics}"
+    )
+    assert h.config_get(vm, CFG_PROXY) == "on", f"pfB-DNS did not stay on:\n{diagnostics}"
+    status = _dns_status(vm)
+    assert status["service"] == "Running", f"service: expected 'Running', got {status['service']!r}\n{diagnostics}"
+    degraded = _degraded(status)
+    assert part in degraded, f"degraded: expected a {part!r} row, got {degraded}\n{diagnostics}"
+    notices = _startup_notices(vm)
+    assert any(notice_text in text for text in notices), (
+        f"startup notice: expected one naming {notice_text!r}, got {notices}\n{diagnostics}"
+    )
+
+
+@pytest.mark.timeout(1200)
+def test_a_corrupt_dnsbl_manifest_leaves_pfb_dns_answering_with_dnsbl_not_blocking(rig: Rig, proxy_on: State) -> None:
+    """A gateway that cannot build DNSBL still serves port 53 and forwards, and says DNSBL is not blocking (#3848).
+
+    Given pfB-DNS and DNSBL on, a listed name blocked, and /var/unbound/pfb_py_sources.json overwritten with invalid
+      JSON,
+    When the gateway is restarted the way the package does (rc restart, then dns_check),
+    Then port 53 on the box forwards an allowed name and the listed name's first answer is the upstream's (DNSBL is not
+      blocking); pfb_dns_status() says Running with a `dnsbl` degraded row; the startup notice names it; the Resolver
+      snapshot is still set. An Update puts the manifest and the blocking back.
+    """
+    vm, names = rig.vm, rig.names
+    allowed = h.unique_domain("degraded-dnsbl")
+    try:
+        assert _is_on(proxy_on) and proxy_on.marker, f"pfB-DNS is not serving with a saved Resolver: {proxy_on}"
+        before, raw = _drill_local(vm, names.blocked)
+        assert h.is_vip(before), f"before the corruption {names.blocked}: expected the block {before}\n{raw}"
+        assert "dnsbl" not in _degraded(_dns_status(vm)), "DNSBL is degraded before the test corrupts anything"
+        _close_startup_notices(vm)
+
+        written = _sh(vm, f"echo 'not json {{' > {MANIFEST}")
+        assert written.returncode == 0, f"corrupting {MANIFEST} failed: {written.stderr!r}"
+        _restart_gateway(vm)
+        checked = _sh(vm, DNS_CHECK, timeout=420.0)
+        assert checked.returncode == 0, f"dns_check failed: {checked.stdout!r} {checked.stderr!r}"
+
+        _assert_degraded_but_serving(rig, proxy_on, "dnsbl", "DNSBL is not blocking", allowed)
+        forwarded, raw = _drill_local(vm, allowed)
+        assert h.resolves_to(forwarded, STUB_DNS_A), f"allowed {allowed}: expected {STUB_DNS_A}, got {forwarded}\n{raw}"
+        listed, raw = _drill_local(
+            vm, names.blocked
+        )  # the first answer is authoritative: asked for the first time here
+        assert h.resolves_to(listed, STUB_DNS_A) and not h.is_vip(listed), (
+            f"listed {names.blocked}: expected the upstream's {STUB_DNS_A} (DNSBL not blocking), got {listed}\n{raw}"
+        )
+    finally:
+        try:
+            _apply(vm)  # a normal Update rebuilds the manifest and swaps the built snapshot in
+            _wait_proxy_serves(rig)
+        finally:
+            _close_startup_notices(vm)
+
+
+@pytest.mark.timeout(1200)
+def test_an_unusable_tls_certificate_leaves_pfb_dns_answering_with_dot_not_served(rig: Rig, proxy_on: State) -> None:
+    """A gateway with no usable certificate still serves port 53 and forwards, and says DoT is not served (#3848).
+
+    Given pfB-DNS on with DoT, a DoT query for a listed name blocked, and /var/etc/pfb_dns/tls.pem overwritten with
+      non-empty garbage (the rc start rewrites it only when missing),
+    When the gateway is restarted the way the package does and the start is confirmed (without dns_check's certificate
+      sync, which would rewrite the file from config.xml and push it to the gateway: the garbage would be gone),
+    Then port 53 on the box forwards an allowed name; pfb_dns_status() says Running with a `tls_certificate` degraded
+      row and every DoT row not served; the startup notice names the certificate; the Resolver snapshot is still set.
+      An Update writes and pushes the certificate again, and DoT blocks the listed name again.
+    """
+    vm, client, names = rig.vm, rig.client, rig.names
+    allowed = h.unique_domain("degraded-tls")
+    try:
+        assert _is_on(proxy_on) and proxy_on.marker, f"pfB-DNS is not serving with a saved Resolver: {proxy_on}"
+        blocked, raw = _query(client, names.blocked, dot=True)
+        assert h.is_vip(blocked), f"before the corruption, DoT {names.blocked}: expected the block {blocked}\n{raw}"
+        assert "tls_certificate" not in _degraded(_dns_status(vm)), "the certificate is degraded before the test"
+        _close_startup_notices(vm)
+
+        written = _sh(vm, f"echo 'not a certificate' > {TLS_PEM}")
+        assert written.returncode == 0, f"corrupting {TLS_PEM} failed: {written.stderr!r}"
+        _restart_gateway(vm)
+        _php_ok(vm, STATUS_BOOTSTRAP + "pfb_dns_proxy_confirm_ready();", "confirm the gateway's start")
+
+        _assert_degraded_but_serving(rig, proxy_on, "tls_certificate", "no usable certificate", allowed)
+        forwarded, raw = _drill_local(vm, allowed)
+        assert h.resolves_to(forwarded, STUB_DNS_A), f"allowed {allowed}: expected {STUB_DNS_A}, got {forwarded}\n{raw}"
+        transports = _dns_status(vm)["transports"]
+        rows = (transports or {}).get("dot", {}).get("rows") or []
+        states = {row["state"] for row in rows}
+        assert rows and states == {"not_served"}, f"DoT rows: expected only 'not_served', got {states}: {transports}"
+    finally:
+        try:
+            _apply(vm)  # a normal Update writes the certificate again and pushes it to the running gateway
+            _wait_proxy_serves(rig)
+            h.wait_until(lambda: h.is_vip(_query(client, names.blocked, dot=True)[0]), timeout=120.0, interval=3.0)
+        finally:
+            _close_startup_notices(vm)
 
 
 @pytest.mark.timeout(900)
