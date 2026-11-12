@@ -89,7 +89,7 @@ if (!defined('PFB_UNBOUND_START_WAIT')) {
 }
 unset($pfb_test_unbound_start_cmd);
 
-// 4c. Replace the mount-executing include even on hosts with pfBlockerNG installed.
+// 4c. A tripwire for the retired DNSBL mount include (issue #3850): a restart that ran it again would log here.
 $GLOBALS['pfb_test_unbound_include_log'] = "{$pfb_test_tmp}/unbound_include.log";
 $pfb_test_unbound_include_file = "{$pfb_test_tmp}/pfb-unbound-include-double.inc";
 file_put_contents($pfb_test_unbound_include_file, '<?php file_put_contents('

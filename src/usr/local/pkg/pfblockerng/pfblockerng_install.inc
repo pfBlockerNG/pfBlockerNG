@@ -826,7 +826,7 @@ unlink_if_exists($pfb['dns_proxy_rc_kept']);
 update_status(" done.\n");
 
 if ($ufound) {
-	$final = pfb_stop_start_unbound('');
+	$final = pfb_stop_start_unbound();
 	// issue #3216: the restart mirrors its own progress (dots, "\nStarting Unbound Resolver")
 	// to the pkg output and leaves the line open -- close it so the status below, and the
 	// migration rows after it, are not appended to that line.

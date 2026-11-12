@@ -4697,7 +4697,7 @@ PFB_RUNLOG = f"{PFB_LOGDIR}/pfblockerng_run.log"
 # manifest" / "DNSBL rebuild failed, keeping current snapshot" here — the fail-closed signal.
 PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
 # The fast-path swap marker PHP logs when the no-restart path is TAKEN: inc:3956 writes
-# "Reloading Unbound Resolver (DNSBL python) [ zero-downtime swap ]". Match the BRACKETED
+# "Reloading Unbound Resolver (DNSBL) [ zero-downtime swap ]". Match the BRACKETED
 # form specifically — the RAM-decline RESTART-fallback line (inc:3974) also contains the
 # bare phrase "the zero-downtime swap", so matching the unbracketed substring would
 # false-positive on a fallback (restart) as if the swap had been taken.

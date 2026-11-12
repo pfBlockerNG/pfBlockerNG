@@ -4038,11 +4038,6 @@ if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
 	define('PFB_UNBOUND_CONTROL_WAIT', 30);
 }
 
-// The installed include executes mounts at load time; unit tests must replace it.
-if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
-	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
-}
-
 // issue #3515: the DNS proxy takes the Resolver's client-facing place, so the Resolver is moved onto
 // loopback through config.xml (its port and lo0 stay: pfSense keeps 127.0.0.1 in the firewall's resolv.conf) and
 // our clause moves Unbound's own sockets off the Listen Port, onto a pair of loopback ports: P (PROXYv2: it trusts the proxy's source
@@ -14453,7 +14448,7 @@ function pfb_unbound_dnsbl($mode) {
 					// after the loop, so do NOT infer its presence from this line.
 					if (strpos($line, 'module-config: "python') === FALSE) {
 						$u_update = TRUE;
-						$u_msg .= "  Added DNSBL Unbound Python mode\n";
+						$u_msg .= "  Added Unbound python module\n";
 						$conf[$key] = str_replace('module-config: "', 'module-config: "python ', $line);
 					}
 				}
@@ -14463,7 +14458,7 @@ function pfb_unbound_dnsbl($mode) {
 					    (in_array("python-script: pfb_unbound.py\n", $conf) ||
 					    in_array('python-script: ' . PFB_DNS_PROXY_OBSERVER . ".py\n", $conf))) {
 						$u_update = TRUE;
-						$u_msg .= "  Removed DNSBL Unbound Python mode\n";
+						$u_msg .= "  Removed Unbound python module\n";
 						$conf[$key] = str_replace('module-config: "python ', 'module-config: "', $line);
 					}
 				}
@@ -14483,7 +14478,7 @@ function pfb_unbound_dnsbl($mode) {
 					$unbound_py_script = TRUE;
 				} else {
 					$u_update = TRUE;
-					$u_msg .= "  Removed DNSBL Unbound Python mode script\n";
+					$u_msg .= "  Removed Unbound python script\n";
 					unset($conf[$key-1]); // remove 'python:' line above
 					unset($conf[$key]);
 				}
@@ -14493,7 +14488,7 @@ function pfb_unbound_dnsbl($mode) {
 		// Add python script line
 		if (!$unbound_py_script && $script !== NULL) {
 			$u_update = TRUE;
-			$u_msg .= "  Added DNSBL Unbound Python mode script\n";
+			$u_msg .= "  Added Unbound python script\n";
 			$conf[] = "\npython:\npython-script: {$script}\n";
 		}
 
@@ -18146,7 +18141,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 		config_set_path('unbound/python_order', '');
 		config_set_path('unbound/python_script', '');
 
-		$log = 'Removing DNSBL Unbound python integration settings';
+		$log = 'Removing pfBlockerNG Unbound python script settings';
 		pfb_logger("\n{$log}", 1);
 		if (pfb_dns_config_write_failed(write_config("pfBlockerNG: {$log}"))) {
 			// Stored and loaded as before: Unbound keeps its script, so nothing below unmounts its libraries and a package removal stops
@@ -18215,7 +18210,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	}
 
 	if (!empty($log)) {
-		pfb_logger("\nAdding DNSBL Unbound python mounts:{$log}\n", 1);
+		pfb_logger("\nAdding Unbound python mounts for the upstream observer:{$log}\n", 1);
 	}
 
 	// The Resolver move/restore changed what unbound.conf is generated from: regenerate it now that the
@@ -18272,7 +18267,7 @@ function pfb_unbound_python_unmount() {
 	}
 
 	if (!empty($log)) {
-		pfb_logger("\nRemoving DNSBL Unbound python mounts:{$log}\n", 1);
+		pfb_logger("\nRemoving Unbound python mounts:{$log}\n", 1);
 	}
 }
 
@@ -18345,7 +18340,7 @@ function pfb_dnsbl_tld_stats_finalize(array $group_counts): bool {
 }
 
 // Function to Start Unbound
-function pfb_stop_start_unbound($type) {
+function pfb_stop_start_unbound() {
 	global $g, $pfb;
 
 	// TRUE only after the supervisor's completion record has been validated. Pre-start,
@@ -18397,14 +18392,6 @@ function pfb_stop_start_unbound($type) {
 				"second instance. Resolver NOT restarted", 2);
 			return $final;
 		}
-	}
-
-	// Add/Remove additional python mounts
-	if (file_exists(PFB_UNBOUND_INCLUDE_FILE)) {
-		$g['pfblockerng_include_verbose'] = TRUE;
-		pfb_logger("\nAdditional mounts{$type}:", 1);
-		require_once(PFB_UNBOUND_INCLUDE_FILE);
-		unset($g['pfblockerng_include_verbose']);
 	}
 
 	// Remove Unbound python mounts
@@ -18938,7 +18925,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 	$final = array();
 	$type = '';
 	if ($mode == 'enabled') {
-		$type = ' (DNSBL python)';
+		$type = ' (DNSBL)';
 	}
 
 	// ZERO-DOWNTIME DATA FAST PATH (no restart). Eligible iff this is a data-only update
@@ -19040,7 +19027,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 		pfb_logger($log, 1);
 	}
 
-	$final = pfb_stop_start_unbound($type);
+	$final = pfb_stop_start_unbound();
 	pfb_logger('.', 1);
 
 	// issue #3094: a refused stop is not a config fault -- the quarantine/rollback/retry
@@ -19075,7 +19062,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 
 		$log = htmlspecialchars(implode("\n", $final['result']));
 		pfb_logger("\n\n====================\n\n{$log}\n\n====================\n\n", 2);
-		$final = pfb_stop_start_unbound($type);
+		$final = pfb_stop_start_unbound();
 	}
 
 	// Only a completed successful command can own the daemon observed here. A failed or
@@ -27714,16 +27701,10 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	unlink_if_exists($pfb['metrics_lock']);
 	unlink_if_exists($pfb['pass_status']);
 
-	// The chrooted Unbound python integration nullfs-mounts host dirs into the chroot
-	// (var/log/pfblockerng for the DNSBL logs, usr/local/share/GeoIP).  A disable goes
-	// through pfb_unbound_include.inc, which unmounts them; an uninstall instead just
-	// deletes that include (below) and only pfb_unbound_python_unmount()s bin/lib — so
-	// these data mounts are left ORPHANED on every uninstall.  A keep=off uninstall then
-	// rmdir's the host log source under the live mount, leaving it stale: chrooted
-	// dnsbl.log writes fail "No such file or directory" for the rest of the session
-	// (surfaced once #484 added the first live keep=off uninstall coverage).  Unmount
-	// them here, before the include is removed, so every uninstall (keep on or off) tears
-	// the chroot down as cleanly as a disable.  Bounded loop clears any stacked mounts.
+	// pfb_unbound_include.inc (the retired DNSBL module's mount hook) nullfs-mounted host dirs into the chroot
+	// (var/log/pfblockerng, usr/local/share/GeoIP); a box that ran an older package can still hold them. A keep=off
+	// uninstall would rmdir the host log source under a live mount (#484), so unmount them before the include is
+	// removed. Bounded loop clears any stacked mounts.
 	foreach (array('var/log/pfblockerng', 'usr/local/share/GeoIP') as $pfb_cmnt) {
 		$pfb_cmnt_path = "{$g['unbound_chroot_path']}/{$pfb_cmnt}";
 		for ($pfb_cmnt_i = 0; $pfb_cmnt_i < 8; $pfb_cmnt_i++) {
