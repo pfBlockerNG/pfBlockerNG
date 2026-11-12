@@ -1,0 +1,58 @@
+{
+ "schema": 1,
+ "description": "A redirect to an allowlisted internal address is followed.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "internal.example": [
+   "127.0.0.1",
+   "10.1.2.3"
+  ]
+ },
+ "allowlist": [
+  "10.1.0.0/16"
+ ],
+ "servers": [
+  "origin",
+  "target"
+ ],
+ "routes": {
+  "origin": {
+   "/evil": {
+    "status": 302,
+    "location": "http://internal.example:{port:target}/hop"
+   }
+  },
+  "target": {
+   "/hop": {
+    "body": "FINE\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/evil",
+   "expect": {
+    "ok": true,
+    "published": "FINE\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/evil"
+     },
+     {
+      "server": "target",
+      "path": "/hop"
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,47 @@
+{
+ "schema": 1,
+ "description": "An internal address equal to an allowlisted IP is permitted.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "internal.example": [
+   "127.0.0.1",
+   "10.1.2.3"
+  ]
+ },
+ "allowlist": [
+  "10.1.2.3"
+ ],
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://internal.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "a\nb\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  }
+ ]
+}

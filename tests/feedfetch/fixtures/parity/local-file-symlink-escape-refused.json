@@ -1,0 +1,31 @@
+{
+ "schema": 1,
+ "description": "A symlink whose target is not directly in an allowed directory is refused.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "local_files": {
+  "sub/src.txt": "1.2.3.4\n"
+ },
+ "local_symlinks": {
+  "link.txt": "sub/src.txt"
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "{local}/link.txt",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "requests": []
+   }
+  }
+ ]
+}

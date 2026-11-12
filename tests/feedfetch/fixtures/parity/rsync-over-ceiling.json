@@ -1,0 +1,40 @@
+{
+ "schema": 1,
+ "description": "An rsync body over the ceiling is refused and removed (#2667).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "format": "rsync",
+   "url": "rsync://feed.example/feeds/list.txt",
+   "ceiling": 512,
+   "rsync": {
+    "exit": 0,
+    "body": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456\n"
+   },
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "rsync_too_large",
+    "requests": [],
+    "rsync_source": "rsync://127.0.0.1/feeds/list.txt",
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

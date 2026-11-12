@@ -1,0 +1,43 @@
+{
+ "schema": 1,
+ "description": "The probe applies the same host vetting: an internal host is never asked.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "internal.example": [
+   "127.0.0.1",
+   "10.1.2.3"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://internal.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "decision": "failed",
+    "requests": []
+   }
+  }
+ ]
+}

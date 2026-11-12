@@ -1,0 +1,35 @@
+{
+ "schema": 1,
+ "description": "A local file in a subdirectory of an allowed directory is refused.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "local_files": {
+  "sub/src.txt": "1.2.3.4\n"
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "{local}/sub/src.txt",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "requests": [],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

@@ -1,0 +1,143 @@
+{
+ "schema": 1,
+ "description": "A relative-path Location resolves against the current URL's directory.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin",
+  "target",
+  "alt"
+ ],
+ "routes": {
+  "origin": {
+   "/cross": {
+    "status": 302,
+    "location": "http://rdr.example:{port:target}/hop"
+   },
+   "/hop": {
+    "status": 302,
+    "location": "http://feed.example:{port:origin}/back"
+   },
+   "/portjump": {
+    "status": 302,
+    "location": "http://feed.example:{port:alt}/land"
+   },
+   "/same": {
+    "status": 302,
+    "location": "/final"
+   },
+   "/dir/start": {
+    "status": 302,
+    "location": "next"
+   },
+   "/back": {
+    "body": "BODY\n"
+   },
+   "/land": {
+    "body": "BODY\n"
+   },
+   "/final": {
+    "body": "BODY\n"
+   },
+   "/dir/next": {
+    "body": "BODY\n"
+   }
+  },
+  "target": {
+   "/cross": {
+    "status": 302,
+    "location": "http://rdr.example:{port:target}/hop"
+   },
+   "/hop": {
+    "status": 302,
+    "location": "http://feed.example:{port:origin}/back"
+   },
+   "/portjump": {
+    "status": 302,
+    "location": "http://feed.example:{port:alt}/land"
+   },
+   "/same": {
+    "status": 302,
+    "location": "/final"
+   },
+   "/dir/start": {
+    "status": 302,
+    "location": "next"
+   },
+   "/back": {
+    "body": "BODY\n"
+   },
+   "/land": {
+    "body": "BODY\n"
+   },
+   "/final": {
+    "body": "BODY\n"
+   },
+   "/dir/next": {
+    "body": "BODY\n"
+   }
+  },
+  "alt": {
+   "/cross": {
+    "status": 302,
+    "location": "http://rdr.example:{port:target}/hop"
+   },
+   "/hop": {
+    "status": 302,
+    "location": "http://feed.example:{port:origin}/back"
+   },
+   "/portjump": {
+    "status": 302,
+    "location": "http://feed.example:{port:alt}/land"
+   },
+   "/same": {
+    "status": 302,
+    "location": "/final"
+   },
+   "/dir/start": {
+    "status": 302,
+    "location": "next"
+   },
+   "/back": {
+    "body": "BODY\n"
+   },
+   "/land": {
+    "body": "BODY\n"
+   },
+   "/final": {
+    "body": "BODY\n"
+   },
+   "/dir/next": {
+    "body": "BODY\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/dir/start",
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/dir/start"
+     },
+     {
+      "server": "origin",
+      "path": "/dir/next"
+     }
+    ]
+   }
+  }
+ ]
+}

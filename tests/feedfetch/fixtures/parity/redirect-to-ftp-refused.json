@@ -1,0 +1,42 @@
+{
+ "schema": 1,
+ "description": "A redirect may only lead to http or https.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/ftp": {
+    "status": 302,
+    "location": "ftp://feed.example/list"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/ftp",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed redirect target is not an http(s) URL",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/ftp"
+     }
+    ]
+   }
+  }
+ ]
+}

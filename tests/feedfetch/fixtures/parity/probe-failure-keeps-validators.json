@@ -1,0 +1,49 @@
+{
+ "schema": 1,
+ "description": "A failed probe keeps the stored validators and the published copy.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v1\""
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "status": 500,
+    "body": "err\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "decision": "failed",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "if_none_match": "\"v1\""
+     }
+    ],
+    "etag": "\"v1\"",
+    "lastmod": null
+   }
+  }
+ ]
+}
