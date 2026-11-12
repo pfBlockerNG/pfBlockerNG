@@ -345,7 +345,7 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertSame('on', $dnsbl['pfb_py_block']);
 		// The exact write_config message from the original block.
 		$this->assertContains(
-			'pfBlockerNG: migrated DNSBL to Python-only mode',
+			'pfBlockerNG: moved DNSBL off Unbound mode to pfB-DNS',
 			$this->writeConfigCalls()
 		);
 	}
@@ -410,7 +410,7 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertSame('alexa', $dnsbl['top1m_source'],
 			'the bystander legacy token must survive RAW write-back');
 		$this->assertContains(
-			'pfBlockerNG: disable python-gated DNSBL toggles inert under pre-upgrade Unbound mode (issue #1907)',
+			'pfBlockerNG: disable DNSBL toggles that were inert under pre-upgrade Unbound mode (issue #1907)',
 			$this->writeConfigCalls()
 		);
 	}
@@ -440,11 +440,11 @@ final class MigrationRegistryTest extends TestCase
 
 		$writes         = $this->writeConfigCalls();
 		$issue1907_pos  = array_search(
-			'pfBlockerNG: disable python-gated DNSBL toggles inert under pre-upgrade Unbound mode (issue #1907)',
+			'pfBlockerNG: disable DNSBL toggles that were inert under pre-upgrade Unbound mode (issue #1907)',
 			$writes,
 			TRUE
 		);
-		$adr02_pos = array_search('pfBlockerNG: migrated DNSBL to Python-only mode', $writes, TRUE);
+		$adr02_pos = array_search('pfBlockerNG: moved DNSBL off Unbound mode to pfB-DNS', $writes, TRUE);
 		$this->assertNotFalse($issue1907_pos, 'issue #1907 write_config must be called');
 		$this->assertNotFalse($adr02_pos, 'ADR-02 write_config must be called');
 		$this->assertLessThan($adr02_pos, $issue1907_pos,
@@ -594,7 +594,7 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertSame('on', $dnsbl['pfb_control_legacy_seeded']);
 
 		// ADR-02 message precedes PFBL-03 message in the write log.
-		$adr02_pos   = array_search('pfBlockerNG: migrated DNSBL to Python-only mode', $writes, TRUE);
+		$adr02_pos   = array_search('pfBlockerNG: moved DNSBL off Unbound mode to pfB-DNS', $writes, TRUE);
 		$pfbl03_pos  = array_search('pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)', $writes, TRUE);
 		$this->assertNotFalse($adr02_pos,  'ADR-02 write_config must be called');
 		$this->assertNotFalse($pfbl03_pos, 'PFBL-03 write_config must be called');
@@ -631,7 +631,7 @@ final class MigrationRegistryTest extends TestCase
 
 		$writes = $this->writeConfigCalls();
 
-		$this->assertContains('pfBlockerNG: migrated DNSBL to Python-only mode', $writes);
+		$this->assertContains('pfBlockerNG: moved DNSBL off Unbound mode to pfB-DNS', $writes);
 		$this->assertContains('pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)', $writes);
 	}
 }

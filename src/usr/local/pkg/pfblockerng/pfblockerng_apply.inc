@@ -1932,7 +1932,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 					// pfBlockerNG <= 3.2.x wrote the SafeSearch CNAMEs (duckduckgo /
 					// pixabay) to a native Unbound-mode local-data conf and included it.
-					// The CNAME redirect is now done in Python (issue #149), so drop any
+					// The CNAME redirect is now done by the decider (issue #149), so drop any
 					// leftover native conf on upgrade (its include line is stripped in
 					// pfb_unbound_dnsbl()).
 					unlink_if_exists("{$pfb['dnsbldir']}/pfb_dnsbl.{$safe_type[2]}.conf");
@@ -1958,7 +1958,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$safesearch_hosts[$domain]['AAAA'] = $host_ip;
 
 							// CNAME SafeSearch (duckduckgo.com / pixabay.com): redirected in
-							// Python via a cache-planted CNAME the iterator chases (issue
+							// the decider via a cache-planted CNAME the iterator chases (issue
 							// #149). Store a 'cname' entry; the CSV writer below bakes the
 							// target's A/AAAA as the #2 fallback.
 							} elseif (strpos($line, ' CNAME ') !== FALSE) {
@@ -1978,7 +1978,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				}
 			}
 
-			// Python mode create a CSV list of SafeSearch hosts
+			// Create the decider's CSV list of SafeSearch hosts
 			if (!empty($safesearch_hosts)) {
 				foreach ($safesearch_hosts as $host => $data) {
 					$v4 = $v6 = '';
@@ -2021,7 +2021,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			}
 			pfb_logger("{$s_log}{$CNAME_LOG}", 1);
 
-			// Fingerprint the Python-loaded input files BEFORE this pass rewrites them.
+			// Fingerprint the decider's input files BEFORE this pass rewrites them.
 			// issue #1255: pfb_dnsbl_reload_fingerprint() narrows the path set (excludes
 			// data/zone) in TLD mode instead of nulling the whole comparison -- see its
 			// docblock.
@@ -2622,8 +2622,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// autodetection below do not handle a BOM themselves; a BOM-led first line
 											// would be misclassified by all three. $oline keeps the original bytes for
 											// the parse-error log. This also strips a BOM from captured ABP-shaped
-											// lines before their verbatim passthrough to Python -- intentional and
-											// harmless (Python's parser is byte-oriented too).
+											// lines before their verbatim passthrough to the decider -- intentional and
+											// harmless (its parser is byte-oriented too).
 											$line = pfb_dnsbl_strip_bom($line);
 
 											$line = pfb_dnsbl_scrub_line($line);
@@ -2631,7 +2631,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// ADR-06 fact 7 / ADR-62: an ABP network anchor or
 											// hosts-line target that is itself an IP address is
 											// pulled to the firewall alias here -- never passed to
-											// Python (no double-handling, no leak) -- checked BEFORE
+											// the decider (no double-handling, no leak) -- checked BEFORE
 											// the generic verbatim capture below.
 											if ($pfb['dnsbl_ip'] != 'Disabled') {
 												$abp_ip = pfb_dnsbl_abp_extract_ip($line);
@@ -2649,7 +2649,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 													}
 													continue;
 												}
-												// issue #3434: an IPv4-shaped regex rule also feeds its CIDRs to the IP table; the line still goes to Python.
+												// issue #3434: an IPv4-shaped regex rule also feeds its CIDRs to the IP table; the line still goes to the decider.
 												foreach (pfb_dnsbl_abp_regex_ip4_cidrs($line, $header) as $abp_cidr) {
 													if (pfb_dnsbl_collect_feed_ip(explode('/', $abp_cidr, 2)[0], $abp_cidr, $custom, $domain_data_ip, $domain_data_ip6)) {
 														$pfb['updateip'] = TRUE;
@@ -2663,7 +2663,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// CSV autodetection and URL/path/'?'-query stripping (which
 											// would otherwise truncate/mangle them) and written VERBATIM
 											// to the '.bk'/'.txt' staging file; the manifest builder
-											// copies it to the '.raw' and Python's build() routes it to
+											// copies it to the '.raw' and the decider's build() routes it to
 											// parse_abp() (never a domain/IP/path anchor -> silently
 											// skipped).
 											if (pfb_dnsbl_is_abp_rule_line($line)) {
@@ -2855,7 +2855,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 												continue;
 											}
 
-											// For DNSBL python, save domain and Logging type
+											// For the DNSBL decider, save domain and Logging type
 											$domain_data = pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, strtolower($line));
 											@fwrite($dhandle, $domain_data);
 										}
@@ -2942,7 +2942,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									@file_put_contents("{$pfb['dnsbldir']}/check.conf", $conf, LOCK_EX);
 
 									// ADR-06: The build-time De-Duplication / user-whitelist /
-									// TOP1M removal passes (dnsbl_scrub) are DROPPED. The Python
+									// TOP1M removal passes (dnsbl_scrub) are DROPPED. The decider's
 									// dict load dedups keys for free, the user whitelist + TOP1M
 									// are applied at QUERY TIME via the whiteDB, and redundant
 									// subdomains are matched by their parent zone -- so no
@@ -3054,10 +3054,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 		}
 
-		// Add DNSBL Python options to widget statistics. ADR-08: All-IDN keeps the
+		// Add DNSBL decider options to widget statistics. ADR-08: All-IDN keeps the
 		// DNSBL_IDN alias exactly as before; Confusable mode surfaces the homoglyph +
 		// suspect groups so the Reports/Alerts pages render their counts. Counts are
-		// symbolic (=1) markers -- the Python matcher decides per-query at runtime.
+		// symbolic (=1) markers -- the decider's matcher decides per-query at runtime.
 		if ($pfb['dnsbl_idn'] === PfbIdnMode::All) {
 			$idn_cnt = 1;
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_IDN';
@@ -3083,7 +3083,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
 			dnsbl_stats_update('update', 'DNSBL_TLD_Allow', $tld_allow_cnt);
 		}
-		// ADR-07: use Python's admitted regex count (feed and user, block and allow) after the
+		// ADR-07: use the decider's admitted regex count (feed and user, block and allow) after the
 		// shared admission gate and opt-in length cap; otherwise fall back to the
 		// configured user-regex count.
 		$py_regex_cnt = NULL;
@@ -3188,8 +3188,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 			pfb_logger('Assembling DNSBL database...', 1);
 
-			// ADR-06: Write the per-feed manifest + IP-stripped raw that the Python
-			// plugin's init builds the DNSBL structures from. Python then owns
+			// ADR-06: Write the per-feed manifest + IP-stripped raw that the decider
+			// builds the DNSBL structures from at load. The decider then owns
 			// parse/normalise/classify (the dropped shell/PHP passes) and emits
 			// pfb_py_count itself.
 			$pfb_dnsbl_published = pfb_dnsbl_publish_result(pfb_unbound_python_sources($pfb_py_feeds) !== FALSE);
@@ -3285,7 +3285,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		pfb_manage_dnsbl_vip($mode);
 	}
 
-	// Modify Unbound python configuration and mount lib/bin folders, as required
+	// Modify Unbound's python settings (the upstream observer) and mount lib/bin folders, as required
 	$pfbpython = pfb_unbound_python($mode, $pfb_dns_wanted);
 
 	// Modify Unbound.conf file, as required
@@ -3530,7 +3530,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	}
 
 	// Fingerprint the loaded input files AFTER this pass rebuilt them.
-	// Equal fingerprints => Python would produce a byte-identical blocklist => skip reload.
+	// Equal fingerprints => the decider would produce a byte-identical blocklist => skip reload.
 	// fp_old === null => DNSBL was not active this pass (the block above never ran) --
 	// fall back to domain_update / domain_clear as before.
 	// The all-missing stable sentinel means empty→empty always yields equal fingerprints,
@@ -3572,7 +3572,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		// Create backup of existing DNSBL Unbound database
 
 		// SafeSearch data (safeSearchDB, incl. the issue #149 CNAME redirect rows) is
-		// loaded ONLY at python-module init, so a SafeSearch CSV change must RESTART
+		// loaded ONLY when the decider starts, so a SafeSearch CSV change must RESTART
 		// Unbound, not take the zero-downtime data swap (which rebuilds only the DNSBL
 		// matcher, not safeSearchDB). Force the config-change/restart path. Pre-#149
 		// this restart was an incidental side effect of toggling the native SafeSearch

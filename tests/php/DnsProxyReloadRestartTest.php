@@ -221,6 +221,37 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertSame($before, $this->startAttempts());
 	}
 
+	public function testAnUpdateThatRestartsUnboundLogsNoMountsAndNeverCallsDnsblPython(): void
+	{
+		// Given an Update whose DNSBL config changed: the restart path (issue #3850)
+		$this->setProxyMode();
+
+		// When the Resolver is reloaded
+		pfb_reload_unbound('enabled', TRUE);
+
+		// Then Unbound was restarted, with no mount step and no "python" anywhere in what the Update logged
+		$log = (string) file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringContainsString('Starting Unbound Resolver', $log, 'before: the Update restarted Unbound');
+		$this->assertStringNotContainsStringIgnoringCase('mounts', $log, 'the Update logged a mount step: ' . $log);
+		$this->assertStringNotContainsStringIgnoringCase('python', $log, 'the Update calls DNSBL python: ' . $log);
+	}
+
+	public function testAnUpdateTakingTheZeroDowntimeSwapNamesDnsblWithoutPython(): void
+	{
+		// Given a data update the live proxy applies in place (issue #3850)
+		$this->setProxyMode();
+		$this->seedSwapFixture();
+		$GLOBALS['pfb_test_valid_pids'][self::PROXY_PIDFILE] = TRUE;
+		$this->applyEveryPublishedGeneration();
+
+		$this->assertTrue(pfb_reload_unbound('enabled', FALSE, TRUE), 'before: the swap took the fast path');
+
+		// Then the swap's line names DNSBL, not python
+		$log = (string) file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringContainsString("Reloading Unbound Resolver (DNSBL) [ zero-downtime swap ]", $log, $log);
+		$this->assertStringNotContainsStringIgnoringCase('python', $log, $log);
+	}
+
 	/** @return array<string,array{string,bool}> the part the gateway reports degraded, and whether the zero-downtime swap is still taken */
 	public static function degradedParts(): array
 	{

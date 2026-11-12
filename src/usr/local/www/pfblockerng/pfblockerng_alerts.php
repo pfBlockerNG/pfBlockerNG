@@ -4331,7 +4331,7 @@ if (!$alert_summary):
 
 	foreach (array (	'Block'		=> "{$pfb['ip_blocklog']}",
 				'DNSBL Block'	=> "{$pfb['dnslog']}",
-				'DNSBL Python'	=> "{$pfb['dnslog']}",
+				'DNSBL'		=> "{$pfb['dnslog']}",
 				'DNS Reply'	=> "{$pfb['dnsreplylog']}",
 				'Permit'	=> "{$pfb['ip_permitlog']}",
 				'Match'		=> "{$pfb['ip_matchlog']}",
@@ -4357,7 +4357,7 @@ if (!$alert_summary):
 					if ($logtype == 'DNSBL Block') {
 						continue 2;
 					}
-					elseif ($logtype == 'DNSBL Python') {
+					elseif ($logtype == 'DNSBL') {
 						break;
 					}
 				}
@@ -4517,7 +4517,7 @@ if (!$alert_summary):
 		}
 
 		// Process dns array for DNSBL and generate output
-		if (($logtype == 'DNSBL Block' || $logtype == 'DNSBL Python') && file_exists("{$pfb_log}")) {
+		if (($logtype == 'DNSBL Block' || $logtype == 'DNSBL') && file_exists("{$pfb_log}")) {
 	?>
 			<thead>
 				<tr>
@@ -4525,7 +4525,7 @@ if (!$alert_summary):
 					<th><?=gettext("IF")?></th>
 					<th><?=gettext("Source")?></th>
 					<th style="width: 5.3%;"><!----- Buttons -----></th>
-					<th><?=$logtype == 'DNSBL Python' ? gettext("Domain/Block mode") : gettext("Domain/Referer|URI|Agent")?></th>
+					<th><?=$logtype == 'DNSBL' ? gettext("Domain/Block mode") : gettext("Domain/Referer|URI|Agent")?></th>
 					<th><?=gettext("Feed/Group")?></th>
 					<th><?=gettext("Transport")?></th>
 					<th><?=gettext("Receiving IP")?></th>
@@ -4805,7 +4805,7 @@ if (!$alert_summary):
 				$pfbfilterlimit = $ipfilterlimit;
 				break;
 			case 'DNSBL Block':
-			case 'DNSBL Python':
+			case 'DNSBL':
 				$colspan = "colspan='9'";
 				$fcounter = $counter['DNSBL'];
 				$pfbfilterlimit = $dnsblfilterlimit;

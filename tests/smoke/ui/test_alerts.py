@@ -2282,13 +2282,13 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
         Both are tested by injecting a synthetic ``Upstream_Block`` CSV line directly
         into ``dnsbl.log`` and asserting the rendered HTML.
 
-    Given: DNSBL is enabled (required for the DNSBL Python tab to appear); the
+    Given: DNSBL is enabled (required for the DNSBL tab to appear); the
         Alerts page GET BEFORE the seed shows neither the fresh domain nor the
         cloud icon (before-state -- no false pass); a synthetic ``Upstream_Block``
         line for a unique domain is appended to ``/var/log/pfblockerng/dnsbl.log``.
 
     When: the Reports/Alerts page is GET-ted again (default ``alert`` view, which
-        renders the ``DNSBL Python`` tab from ``dnsbl.log``).
+        renders the ``DNSBL`` tab from ``dnsbl.log``).
 
     Then, all scoped to the domain's OWN ``<tr>`` row (never a byte-distance
     window, which can straddle a neighbouring row):
@@ -2347,7 +2347,7 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
             f"rc={append_result.returncode}, stderr={append_result.stderr!r}"
         )
 
-        # WHEN: GET the Alerts page (default alert view → DNSBL Python tab).
+        # WHEN: GET the Alerts page (default alert view → DNSBL tab).
         resp = webui.get(ALERTS_PAGE)
         assert not looks_like_login_page(resp.text), (
             "alerts page GET returned login form (session lost before upstream-block render test)"

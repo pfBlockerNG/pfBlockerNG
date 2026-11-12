@@ -1195,7 +1195,7 @@ def test_ip_block_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, 
     Given: 39 non-dup Block rows were fed (30 filler + 9 scenarios -- S7 is a
     dup marker, not its own row).
     Then: the Block panel's <tbody> (region 0 -- alert_view='alert' iterates
-    Block, DNSBL Python, Permit, Match in that literal array order; the
+    Block, DNSBL, Permit, Match in that literal array order; the
     Unlocked-IP/Domain panel is absent since no unlock entries were seeded)
     renders AT MOST 25 rows.
     """
@@ -1219,11 +1219,11 @@ def test_ip_block_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, 
 
 
 def test_dnsbl_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """The default alert view never renders more than pfbdnscnt=25 DNSBL Python rows.
+    """The default alert view never renders more than pfbdnscnt=25 DNSBL rows.
 
     Given: 37 non-dup DNSBL rows were fed (30 filler + 7 scenarios -- D6 is a
     dup marker, not its own row).
-    Then: the DNSBL Python panel's <tbody> (region 1, see the ordering note on
+    Then: the DNSBL panel's <tbody> (region 1, see the ordering note on
     the Block-cap test above) renders AT MOST 25 rows.
     """
     body = render_diff_state["captures"]["alert"].body
@@ -1234,10 +1234,10 @@ def test_dnsbl_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, Cap
         "state left by another module; region indexes below would be shifted"
     )
     regions = _extract_tbody_regions(body)
-    assert len(regions) >= 2, f"expected >= 2 <tbody> regions (Block, DNSBL Python, ...); got {len(regions)}"
+    assert len(regions) >= 2, f"expected >= 2 <tbody> regions (Block, DNSBL, ...); got {len(regions)}"
     dnsbl_rows = len(_TR_RE.findall(regions[1]))
     assert dnsbl_rows <= 25, (
-        f"DNSBL Python panel rendered {dnsbl_rows} rows -- expected <= 25 (pfbdnscnt default); "
+        f"DNSBL panel rendered {dnsbl_rows} rows -- expected <= 25 (pfbdnscnt default); "
         f"37 non-dup rows were fed, so the cap must have truncated"
     )
 

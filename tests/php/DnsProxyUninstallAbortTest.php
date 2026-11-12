@@ -344,12 +344,12 @@ final class DnsProxyUninstallAbortTest extends TestCase
 	public function testARemovalOfUnboundsPythonSettingsThatConfigXmlDoesNotTakeStopsTheRemovalBeforeTheScriptsTheyNameAreDeleted(mixed $answer): void
 	{
 		// Given pfB-DNS serving (Unbound runs the observer), and a config.xml that refuses the write that removes those settings
-		$removal = $this->removal('none', 'off', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing DNSBL Unbound python integration settings', 'answer' => $answer]]);
+		$removal = $this->removal('none', 'off', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing pfBlockerNG Unbound python script settings', 'answer' => $answer]]);
 
 		// When the removal runs: the Resolver is put back, then the disable pass tries to remove the python settings
 		$writes = $this->writes($removal);
 		$this->assertContains('Restored the DNS Resolver settings the DNS proxy had moved', $writes, 'before: the Resolver was put back: ' . json_encode($writes));
-		$this->assertContains('Removing DNSBL Unbound python integration settings', $writes, 'before: the settings\' removal was attempted: ' . json_encode($writes));
+		$this->assertContains('Removing pfBlockerNG Unbound python script settings', $writes, 'before: the settings\' removal was attempted: ' . json_encode($writes));
 
 		// Then the removal stops with pkg's abort status, before the teardown that deletes the staged scripts
 		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'the package hook exits with the one status that makes pkg abandon the removal: ' . json_encode($removal['notices']));
@@ -380,7 +380,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 	public function testARemovalStoppedOnARefusedPythonSettingsRemovalFinishesOnceConfigXmlTakesTheWrite(): void
 	{
 		// Given a removal that stopped because config.xml did not take the write that removes Unbound's python settings
-		$aborted = $this->removal('none', 'on', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing DNSBL Unbound python integration settings', 'answer' => FALSE]]);
+		$aborted = $this->removal('none', 'on', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing pfBlockerNG Unbound python script settings', 'answer' => FALSE]]);
 		$this->assertSame(self::PKG_ABORT, $aborted['exit'], 'before: the removal stopped');
 		$this->assertSame('pfb_upstream_observer', $aborted['pythonScript'], 'before: the settings are still stored');
 
@@ -404,7 +404,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 	public function testARemovalStoppedOnARefusedPythonSettingsRemovalLeavesUnboundLoadingTheScriptConfigXmlStillNames(mixed $answer): void
 	{
 		// Given Unbound's conf loading the observer, and a config.xml that refuses the write that removes the python settings
-		$removal = $this->removal('none', 'off', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing DNSBL Unbound python integration settings', 'answer' => $answer]]);
+		$removal = $this->removal('none', 'off', ['observer' => TRUE, 'refuseWrite' => ['match' => 'Removing pfBlockerNG Unbound python script settings', 'answer' => $answer]]);
 		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'before: the removal stopped');
 		$this->assertSame('pfb_upstream_observer', $removal['pythonScript'], 'before: config.xml still names the observer');
 

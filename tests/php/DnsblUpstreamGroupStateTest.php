@@ -18,7 +18,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('dnsbl_save_stats')]
 final class DnsblUpstreamGroupStateTest extends TestCase
 {
-	private const START = "\t\t// Add DNSBL Python options to widget statistics.";
+	private const START = "\t\t// Add DNSBL decider options to widget statistics.";
 	private const END = "\n\t}\n\n\t// Collect all DNSBL IP feeds";
 
 	private static string $builtinRegion;

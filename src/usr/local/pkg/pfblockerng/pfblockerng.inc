@@ -4038,11 +4038,6 @@ if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
 	define('PFB_UNBOUND_CONTROL_WAIT', 30);
 }
 
-// The installed include executes mounts at load time; unit tests must replace it.
-if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
-	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
-}
-
 // issue #3515: the DNS proxy takes the Resolver's client-facing place, so the Resolver is moved onto
 // loopback through config.xml (its port and lo0 stay: pfSense keeps 127.0.0.1 in the firewall's resolv.conf) and
 // our clause moves Unbound's own sockets off the Listen Port, onto a pair of loopback ports: P (PROXYv2: it trusts the proxy's source
@@ -8737,8 +8732,6 @@ function pfb_log_mgmt() {
 	global $g, $pfb;
 	pfb_global();
 
-	$chroot_folder = '/var/unbound';
-
 	// The RAW value, never a parsed one: the guards clamp it themselves (#1258), so no
 	// caller can hand them an out-of-range margin. Hoisting the read is fine; hoisting
 	// the parse is what let an unclamped margin reach the window arithmetic.
@@ -8761,80 +8754,32 @@ function pfb_log_mgmt() {
 		}
 
 		if (file_exists($pfb[$logtype])) {
-			if ($logtype == 'dnslog' || $logtype == 'dnsreplylog' || $logtype == 'unilog') {
-
-				// Set DNSBL python logfile permissions using chroot folder
-				if (is_dir("{$chroot_folder}/var/log/pfblockerng")) {
-					$final_log_file = "{$chroot_folder}{$pfb[$logtype]}";
-					$temp = tempnam("{$chroot_folder}/var/log/pfblockerng", 'pfb_log_');
-				} else {
-					$final_log_file = $pfb[$logtype];
-					$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
-				}
-
-				if (file_exists($final_log_file)) {
-					// issue #1109: skip this tick's whole pass unless an active cap is
-					// past its margin-widened high-water mark (the hysteresis trigger).
-					if (!pfb_log_trim_needed($logmax, $agedays, $final_log_file, $logtype, $margin_raw)) {
-						unlink_if_exists($temp);
-						continue;
-					}
-
-					// Truncate in place to preserve the inode (#264): mv replaces the
-					// inode, so a remote syslog shipper keyed on (inode, offset) treats
-					// it as a rotation and re-sends the whole log. cat over '>' keeps the
-					// same inode - the file just shrinks - and so keeps its ownership.
-					// Gate on each exit code: unlike the atomic mv, '>' truncates first,
-					// so a failed tail/cat must not be allowed to leave an empty/partial log.
-					if ($logmax === 'nolimit') {
-						// No line-count candidate exists (ADR-60 S2.2): age-cutoff
-						// scans the whole file instead of a tail(1) candidate.
-						$ret = @copy($final_log_file, $temp) ? 0 : 1;
-					} else {
-						exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " " . escapeshellarg($final_log_file) . " > " . escapeshellarg($temp), $out, $ret);
-					}
-					if ($ret !== 0) {
-						pfb_logger("\npfb_log_mgmt: failed to produce {$final_log_file}'s truncation candidate", 2);
-					} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype, $logmax === 'nolimit')) {
-						pfb_logger("\npfb_log_mgmt: failed to age-trim {$final_log_file}'s truncation candidate", 2);
-						$ret = 1;
-					}
-					if ($ret === 0) {
-						exec("/bin/cat " . escapeshellarg($temp) . " > " . escapeshellarg($final_log_file), $out, $ret);
-						if ($ret === 0) {
-							@chown($final_log_file, 'unbound');
-							@chgrp($final_log_file, 'unbound');
-						} else {
-							pfb_logger("\npfb_log_mgmt: failed to overwrite {$final_log_file} during truncation", 2);
-						}
-					}
-				}
+			// issue #3850: every log is written on the host (pfB-DNS: dnsbl.log, dns_reply.log; the filterlog daemon: unified.log)
+			$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
+			// issue #1109: skip this tick's whole pass unless an active cap is past its margin-widened high-water mark.
+			if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $margin_raw)) {
+				unlink_if_exists($temp);
+				continue;
 			}
-			else {
-				$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
-				// issue #1109: same unified high-water guard as the chroot branch above.
-				if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $margin_raw)) {
-					unlink_if_exists($temp);
-					continue;
-				}
-				// Truncate in place to preserve the inode (#264) - see above. Gate on
-				// each exit code so a failed tail/cat cannot truncate the live log.
-				if ($logmax === 'nolimit') {
-					$ret = @copy($pfb[$logtype], $temp) ? 0 : 1;
-				} else {
-					exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp), $out, $ret);
-				}
+			// Truncate in place to preserve the inode (#264): mv would replace it, and a remote syslog shipper keyed
+			// on (inode, offset) would re-send the whole log. '>' truncates first, so gate on each exit code: a failed
+			// tail/cat must not leave an empty or partial log.
+			if ($logmax === 'nolimit') {
+				// No line-count candidate exists (ADR-60 S2.2): age-cutoff scans the whole file.
+				$ret = @copy($pfb[$logtype], $temp) ? 0 : 1;
+			} else {
+				exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp), $out, $ret);
+			}
+			if ($ret !== 0) {
+				pfb_logger("\npfb_log_mgmt: failed to produce {$pfb[$logtype]}'s truncation candidate", 2);
+			} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype, $logmax === 'nolimit')) {
+				pfb_logger("\npfb_log_mgmt: failed to age-trim {$pfb[$logtype]}'s truncation candidate", 2);
+				$ret = 1;
+			}
+			if ($ret === 0) {
+				exec("/bin/cat " . escapeshellarg($temp) . " > {$pfb[$logtype]}", $out, $ret);
 				if ($ret !== 0) {
-					pfb_logger("\npfb_log_mgmt: failed to produce {$pfb[$logtype]}'s truncation candidate", 2);
-				} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype, $logmax === 'nolimit')) {
-					pfb_logger("\npfb_log_mgmt: failed to age-trim {$pfb[$logtype]}'s truncation candidate", 2);
-					$ret = 1;
-				}
-				if ($ret === 0) {
-					exec("/bin/cat " . escapeshellarg($temp) . " > {$pfb[$logtype]}", $out, $ret);
-					if ($ret !== 0) {
-						pfb_logger("\npfb_log_mgmt: failed to overwrite {$pfb[$logtype]} during truncation", 2);
-					}
+					pfb_logger("\npfb_log_mgmt: failed to overwrite {$pfb[$logtype]} during truncation", 2);
 				}
 			}
 			unlink_if_exists($temp);
@@ -14453,7 +14398,7 @@ function pfb_unbound_dnsbl($mode) {
 					// after the loop, so do NOT infer its presence from this line.
 					if (strpos($line, 'module-config: "python') === FALSE) {
 						$u_update = TRUE;
-						$u_msg .= "  Added DNSBL Unbound Python mode\n";
+						$u_msg .= "  Added Unbound python module\n";
 						$conf[$key] = str_replace('module-config: "', 'module-config: "python ', $line);
 					}
 				}
@@ -14463,7 +14408,7 @@ function pfb_unbound_dnsbl($mode) {
 					    (in_array("python-script: pfb_unbound.py\n", $conf) ||
 					    in_array('python-script: ' . PFB_DNS_PROXY_OBSERVER . ".py\n", $conf))) {
 						$u_update = TRUE;
-						$u_msg .= "  Removed DNSBL Unbound Python mode\n";
+						$u_msg .= "  Removed Unbound python module\n";
 						$conf[$key] = str_replace('module-config: "python ', 'module-config: "', $line);
 					}
 				}
@@ -14483,7 +14428,7 @@ function pfb_unbound_dnsbl($mode) {
 					$unbound_py_script = TRUE;
 				} else {
 					$u_update = TRUE;
-					$u_msg .= "  Removed DNSBL Unbound Python mode script\n";
+					$u_msg .= "  Removed Unbound python script\n";
 					unset($conf[$key-1]); // remove 'python:' line above
 					unset($conf[$key]);
 				}
@@ -14493,7 +14438,7 @@ function pfb_unbound_dnsbl($mode) {
 		// Add python script line
 		if (!$unbound_py_script && $script !== NULL) {
 			$u_update = TRUE;
-			$u_msg .= "  Added DNSBL Unbound Python mode script\n";
+			$u_msg .= "  Added Unbound python script\n";
 			$conf[] = "\npython:\npython-script: {$script}\n";
 		}
 
@@ -18146,7 +18091,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 		config_set_path('unbound/python_order', '');
 		config_set_path('unbound/python_script', '');
 
-		$log = 'Removing DNSBL Unbound python integration settings';
+		$log = 'Removing pfBlockerNG Unbound python script settings';
 		pfb_logger("\n{$log}", 1);
 		if (pfb_dns_config_write_failed(write_config("pfBlockerNG: {$log}"))) {
 			// Stored and loaded as before: Unbound keeps its script, so nothing below unmounts its libraries and a package removal stops
@@ -18215,7 +18160,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	}
 
 	if (!empty($log)) {
-		pfb_logger("\nAdding DNSBL Unbound python mounts:{$log}\n", 1);
+		pfb_logger("\nAdding Unbound python mounts for the upstream observer:{$log}\n", 1);
 	}
 
 	// The Resolver move/restore changed what unbound.conf is generated from: regenerate it now that the
@@ -18272,7 +18217,7 @@ function pfb_unbound_python_unmount() {
 	}
 
 	if (!empty($log)) {
-		pfb_logger("\nRemoving DNSBL Unbound python mounts:{$log}\n", 1);
+		pfb_logger("\nRemoving Unbound python mounts:{$log}\n", 1);
 	}
 }
 
@@ -18345,7 +18290,7 @@ function pfb_dnsbl_tld_stats_finalize(array $group_counts): bool {
 }
 
 // Function to Start Unbound
-function pfb_stop_start_unbound($type) {
+function pfb_stop_start_unbound() {
 	global $g, $pfb;
 
 	// TRUE only after the supervisor's completion record has been validated. Pre-start,
@@ -18397,14 +18342,6 @@ function pfb_stop_start_unbound($type) {
 				"second instance. Resolver NOT restarted", 2);
 			return $final;
 		}
-	}
-
-	// Add/Remove additional python mounts
-	if (file_exists(PFB_UNBOUND_INCLUDE_FILE)) {
-		$g['pfblockerng_include_verbose'] = TRUE;
-		pfb_logger("\nAdditional mounts{$type}:", 1);
-		require_once(PFB_UNBOUND_INCLUDE_FILE);
-		unset($g['pfblockerng_include_verbose']);
 	}
 
 	// Remove Unbound python mounts
@@ -18938,7 +18875,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 	$final = array();
 	$type = '';
 	if ($mode == 'enabled') {
-		$type = ' (DNSBL python)';
+		$type = ' (DNSBL)';
 	}
 
 	// ZERO-DOWNTIME DATA FAST PATH (no restart). Eligible iff this is a data-only update
@@ -19040,7 +18977,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 		pfb_logger($log, 1);
 	}
 
-	$final = pfb_stop_start_unbound($type);
+	$final = pfb_stop_start_unbound();
 	pfb_logger('.', 1);
 
 	// issue #3094: a refused stop is not a config fault -- the quarantine/rollback/retry
@@ -19075,7 +19012,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 
 		$log = htmlspecialchars(implode("\n", $final['result']));
 		pfb_logger("\n\n====================\n\n{$log}\n\n====================\n\n", 2);
-		$final = pfb_stop_start_unbound($type);
+		$final = pfb_stop_start_unbound();
 	}
 
 	// Only a completed successful command can own the daemon observed here. A failed or
@@ -27714,16 +27651,10 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	unlink_if_exists($pfb['metrics_lock']);
 	unlink_if_exists($pfb['pass_status']);
 
-	// The chrooted Unbound python integration nullfs-mounts host dirs into the chroot
-	// (var/log/pfblockerng for the DNSBL logs, usr/local/share/GeoIP).  A disable goes
-	// through pfb_unbound_include.inc, which unmounts them; an uninstall instead just
-	// deletes that include (below) and only pfb_unbound_python_unmount()s bin/lib — so
-	// these data mounts are left ORPHANED on every uninstall.  A keep=off uninstall then
-	// rmdir's the host log source under the live mount, leaving it stale: chrooted
-	// dnsbl.log writes fail "No such file or directory" for the rest of the session
-	// (surfaced once #484 added the first live keep=off uninstall coverage).  Unmount
-	// them here, before the include is removed, so every uninstall (keep on or off) tears
-	// the chroot down as cleanly as a disable.  Bounded loop clears any stacked mounts.
+	// pfb_unbound_include.inc (the retired DNSBL module's mount hook) nullfs-mounted host dirs into the chroot
+	// (var/log/pfblockerng, usr/local/share/GeoIP); a box that ran an older package can still hold them. A keep=off
+	// uninstall would rmdir the host log source under a live mount (#484), so unmount them before the include is
+	// removed. Bounded loop clears any stacked mounts.
 	foreach (array('var/log/pfblockerng', 'usr/local/share/GeoIP') as $pfb_cmnt) {
 		$pfb_cmnt_path = "{$g['unbound_chroot_path']}/{$pfb_cmnt}";
 		for ($pfb_cmnt_i = 0; $pfb_cmnt_i < 8; $pfb_cmnt_i++) {

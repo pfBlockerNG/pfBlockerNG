@@ -3823,7 +3823,7 @@ function pfb_migration_registry(): array
 			'id'      => 'issue1907-python-gated-toggles',
 			'section' => $dnsbl,
 			'apply'   => 'pfb_python_gated_toggles_migrate',
-			'message' => 'pfBlockerNG: disable python-gated DNSBL toggles inert under pre-upgrade Unbound mode (issue #1907)',
+			'message' => 'pfBlockerNG: disable DNSBL toggles that were inert under pre-upgrade Unbound mode (issue #1907)',
 			'since'   => '3.2.0',
 		],
 		// 3. ADR-02: force DNSBL to python-only mode.
@@ -3831,7 +3831,7 @@ function pfb_migration_registry(): array
 			'id'      => 'adr02-dnsbl-python-mode',
 			'section' => $dnsbl,
 			'apply'   => 'pfb_dnsbl_python_migrate',
-			'message' => 'pfBlockerNG: migrated DNSBL to Python-only mode',
+			'message' => 'pfBlockerNG: moved DNSBL off Unbound mode to pfB-DNS',
 			'since'   => '2.0.0',
 		],
 		// 4. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle --
