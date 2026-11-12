@@ -2503,6 +2503,37 @@ def test_pfb_dns_page_renders_its_interface_dot_certificate_doh_and_doq_settings
     assert "pfb_dns_gateway" not in html, "the page still names the retired binary pfb_dns_gateway"
 
 
+def test_pfb_dns_enable_help_says_a_later_conflict_and_a_disabled_resolver_keep_pfb_dns_running(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """issue #3848: nothing gives the Resolver back but the admin's own switches, and the help says so.
+
+    Given DNS General renders, Then the pfB-DNS enable help says a conflict added later keeps pfB-DNS running with the
+    Resolver still moved and raises a notice, and that disabling the Resolver leaves pfB-DNS running without a backend
+    (DNS queries fail and a notice says so) until the Resolver is enabled or pfB-DNS is turned off; the page carries
+    neither the old "restores the Resolver" nor the old "activation failed" wording.
+    """
+    path = "/pfblockerng/pfblockerng_dns_general.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("pfB-DNS Settings",))
+    assert result.ok, f"pfB-DNS help render oracle failed: {result.detail}"
+    text = " ".join(re.sub(r"<[^>]+>", "", resp.text).split())
+
+    for sentence in (
+        "Adding such a conflict later keeps pfB-DNS running, with the Resolver still moved, and raises a notice.",
+        "Disabling the DNS Resolver leaves pfB-DNS running without a backend: DNS queries fail and a notice says so "
+        "until the Resolver is enabled or pfB-DNS is turned off.",
+        "Turning pfB-DNS off, disabling pfBlockerNG or removing the package restores the saved Resolver settings.",
+    ):
+        assert sentence in text, f"the pfB-DNS enable help is missing: {sentence!r}"
+    for retired in (
+        "Adding such a conflict later restores the Resolver",
+        "its status shows the activation failed",
+        "Disabling the DNS Resolver stops pfB-DNS and restores the saved fields",
+    ):
+        assert retired not in text, f"the pfB-DNS enable help still says: {retired!r}"
+
+
 _PFB_DNS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # holds the pfB-DNS settings since issue #3771
 # Empty local interfaces and absent shared DoT values mark the first Resolver seed.
 _DNS_UNSEEDED = {

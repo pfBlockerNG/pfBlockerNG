@@ -10,12 +10,13 @@ handler (services_unbound.php over HTTP). Nothing is faked on the box.
   is 16316, where the LAN gave 1432. The marked clause carries pfSense's own value for the SAVED interfaces, read on
   the wire at the stub upstream (the OPT UDP size of the query Unbound sends), and carries none when the Advanced page
   sets a size or the admin's Custom Options do.
-* An ``interface:``, ``port:`` or ``include:`` line the admin adds to Custom Options after the move takes the pfB-DNS
-  activation back like a failed one: pfB-DNS stays on, the Resolver restored, the admin's line kept, one notice
-  naming it.
+* An ``interface:``, ``port:`` or ``include:`` line the admin adds to Custom Options after the move changes nothing
+  but the saved copy (the admin's line is kept in it for a later restore): pfB-DNS stays on and keeps serving, the
+  Resolver stays moved, one notice names the line.
 * A Resolver disabled in Services > DNS Resolver while pfB-DNS fronts it: the proxy kept LAN:53 and answered SERVFAIL
-  for every allowed name. The next apply, or the next tick, stops pfB-DNS, restores the saved Resolver settings (the
-  Resolver stays disabled) and raises one notice that says pfB-DNS stays on and the next Update retries.
+  for every allowed name. A disabled Resolver is not the admin turning pfB-DNS off: the next apply, or the next tick,
+  restores nothing and raises one notice that says pfB-DNS has no backend until the Resolver is enabled or pfB-DNS is
+  turned off.
 * The Resolver page's own save keeps pfBlockerNG's marked block (the textarea is filled from the stored Custom Options
   and posted back), so an admin who saves the page without touching Custom Options does not unmove the Resolver.
 
@@ -52,7 +53,6 @@ from .test_smoke_dns_proxy import (
     Rig,
     State,
     _apply,
-    _apply_of_an_activation_that_cannot_serve,
     _capture,
     _diagnostics,
     _listeners,
@@ -185,8 +185,9 @@ _NOTICE_CLEAR_LIMIT = 20
 
 @pytest.fixture
 def _clear_dns_proxy_notices(rig: Rig) -> None:
-    """Stand-down cases start with no NOTICE_ID row. pfb_dns_proxy_notify() files nothing while the newest row with the
-    same id already says the same text, and an earlier case's row stands on the shared VM. Only NOTICE_ID rows go."""
+    """Disabled-Resolver and unsafe-line cases start with no NOTICE_ID row. pfb_dns_proxy_notify() files nothing while
+    the newest row with the same id already says the same text, and an earlier case's row stands on the shared VM.
+    Only NOTICE_ID rows go."""
     vm = rig.vm
     removed = 0
     while _notices(vm):
@@ -196,7 +197,7 @@ def _clear_dns_proxy_notices(rig: Rig) -> None:
             f"close_notice failed: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr!r}"
         )
         removed += 1
-    print(f"[3515] stand-down case starts with {removed} {NOTICE_ID!r} notice(s) closed", flush=True)
+    print(f"[3515] notice case starts with {removed} {NOTICE_ID!r} notice(s) closed", flush=True)
 
 
 def _toggle_on_in_config(vm: SmokeVM) -> bool:
@@ -416,10 +417,14 @@ def test_unbound_upstream_bind_failure_rolls_pfb_dns_back(rig: Rig) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_an_unsafe_line_added_after_the_move_rolls_pfb_dns_back_and_keeps_the_line(rig: Rig, proxy_on: State) -> None:
+@pytest.mark.usefixtures("_clear_dns_proxy_notices")
+def test_an_unsafe_line_added_after_the_move_keeps_pfb_dns_serving_and_names_the_line(
+    rig: Rig, proxy_on: State
+) -> None:
     """Given a moved Resolver, When the admin adds `interface: 0.0.0.0@53` to Custom Options and the next apply runs,
-    Then pfB-DNS stays on, the proxy is stopped, the Resolver has its saved settings, the line is still in Custom
-    Options, one notice names it, and Unbound (no DNSBL module: pfB-DNS did not serve) answers a listed name on 53.
+    Then pfB-DNS stays on and nothing is restored: the Resolver stays moved with the line in Custom Options, the saved
+    copy keeps the line for a restore the admin asks for later, the proxy keeps running, and one notice names the line
+    and says pfB-DNS keeps serving (issue #3848). Unbound may not start with that line: the apply does not wait for it.
     """
     vm = rig.vm
     line = "interface: 0.0.0.0@53"
@@ -428,25 +433,21 @@ def test_an_unsafe_line_added_after_the_move_rolls_pfb_dns_back_and_keeps_the_li
         assert _snapshot_present(vm) and _toggle_on_in_config(vm), "before: pfB-DNS is on and the Resolver is moved"
         _put_custom_options(vm, f"{_custom_options(vm)}\nserver:\n{line}\n")
 
-        _apply_of_an_activation_that_cannot_serve(vm)
+        h.reload(vm, "updatednsbl", wait_unbound=False)
 
         after = _capture(vm)
         assert _toggle_on_in_config(vm), "pfB-DNS stays on"
-        assert after.service == "stopped", f"the proxy is stopped: {after.service}"
-        assert not _snapshot_present(vm), "the snapshot is consumed"
-        for key in RESTORED_KEYS:
-            assert after.resolver[key] == rig.before.resolver[key], (
-                f"{key}: {after.resolver[key]!r} != {rig.before.resolver[key]!r}"
-            )
+        assert after.service == "running", f"the proxy keeps running: {after.service}"
+        assert _snapshot_present(vm), "the snapshot stays: nothing is restored"
+        assert after.resolver["active_interface"] == "lo0", f"the Resolver stays moved: {after.resolver}"
         custom = _custom_options(vm)
-        assert line in custom.splitlines(), f"the admin's line is kept in Custom Options:\n{custom}"
-        assert MARKER not in custom, f"our block is gone:\n{custom}"
+        assert line in custom.splitlines(), f"the admin's line stands in Custom Options:\n{custom}"
+        assert MARKER in custom, f"our block stays:\n{custom}"
+        saved = json.loads(base64.b64decode(after.marker, validate=True))
+        kept = base64.b64decode(saved["custom_options"]["value"]).decode()
+        assert line in kept.splitlines(), f"the saved copy keeps the line for a later restore:\n{kept}"
         new = _notices(vm)[prior_notices:]
-        assert len(new) == 1 and line in new[0] and "kept" in new[0], f"one notice naming the line: {new}"
-        answer, raw = _query(rig.client, rig.names.blocked)
-        assert h.resolves_to(answer, STUB_DNS_A), (
-            f"Unbound answers the listed name from the upstream on 53 again: {raw}"
-        )
+        assert len(new) == 1 and line in new[0] and "keeps serving" in new[0], f"one notice naming the line: {new}"
 
 
 # --------------------------------------------------------------------------- #
@@ -489,48 +490,51 @@ def _unbound_state(vm: SmokeVM, label: str) -> _UnboundState:
     return state
 
 
-def _assert_stood_down(rig: Rig, prior_notices: int, how: str, unbound: _UnboundState) -> None:
+def _assert_kept_with_a_notice(rig: Rig, prior_notices: int, how: str, unbound: _UnboundState) -> None:
     vm = rig.vm
     assert _toggle_on_in_config(vm), f"{how}: pfB-DNS stays on"
-    assert _service_status(vm) == "stopped", f"{how}: the proxy is stopped"
-    assert not _snapshot_present(vm), f"{how}: the snapshot is consumed"
-    for key in RESTORED_KEYS:
-        assert _config_text(vm, f"unbound/{key}") == rig.before.resolver[key], f"{how}: {key} is not as saved"
+    assert _service_status(vm) == "running", f"{how}: the proxy keeps running"
+    assert _snapshot_present(vm), f"{how}: the snapshot stays: nothing is restored"
+    assert _config_text(vm, "unbound/active_interface") == "lo0", f"{how}: the Resolver stays moved"
     assert not _resolver_enabled(vm), f"{how}: the Resolver stays disabled"
     assert not unbound.running, f"{how}: something started the Resolver the admin disabled: {unbound}"
     new = _notices(vm)[prior_notices:]
-    assert len(new) == 1 and "disabled" in new[0], f"{how}: exactly one notice says so: {new}"
+    assert len(new) == 1 and "disabled" in new[0] and "no backend" in new[0], (
+        f"{how}: exactly one notice says the Resolver is disabled and pfB-DNS has no backend: {new}"
+    )
 
 
-def _stand_down_on_its_own(vm: SmokeVM) -> None:
-    """pfb_dns_proxy_stand_down() alone, in a plain CLI php process as the package's own scripts load it."""
+def _say_the_resolver_is_disabled_on_its_own(vm: SmokeVM) -> None:
+    """pfb_dns_proxy_backend_disabled_notice() alone, in a plain CLI php process as the package's own scripts load it"""
     code = (
         "require_once('config.inc'); require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); "
-        "pfb_dns_proxy_stand_down();"
+        "pfb_dns_proxy_backend_disabled_notice();"
     )
     result = vm.ssh(f"{h.PHP_BIN} -r {shlex.quote(code)} 2>&1", timeout=300.0)
-    assert result.returncode == 0, f"pfb_dns_proxy_stand_down() failed: rc={result.returncode} {result.stdout[-1500:]}"
+    assert result.returncode == 0, (
+        f"pfb_dns_proxy_backend_disabled_notice() failed: rc={result.returncode} {result.stdout[-1500:]}"
+    )
 
 
-_STAND_DOWN_TRIGGERS = {
+_DISABLED_RESOLVER_TRIGGERS = {
     "apply": lambda vm: h.reload(vm, "updatednsbl", wait_unbound=False),
     "tick": lambda vm: h.reload(vm, "tick", wait_unbound=False),
-    "direct": _stand_down_on_its_own,
+    "direct": _say_the_resolver_is_disabled_on_its_own,
 }
 
 
-@pytest.mark.parametrize("how", list(_STAND_DOWN_TRIGGERS))
+@pytest.mark.parametrize("how", list(_DISABLED_RESOLVER_TRIGGERS))
 @pytest.mark.usefixtures("proxy_on", "_clear_dns_proxy_notices")
-def test_a_resolver_disabled_under_pfb_dns_is_stood_down_by_the_next_apply_or_tick(
+def test_a_resolver_disabled_under_pfb_dns_keeps_pfb_dns_and_says_so_on_the_next_apply_or_tick(
     rig: Rig, proxy_on: State, how: str
 ) -> None:
     """Given pfB-DNS serving and the Resolver then disabled (the proxy keeps LAN:53 and cannot answer an allowed name),
-    When the next apply or tick runs (or the stand-down is called on its own), Then pfB-DNS is stopped and off, the
-    Resolver has its saved settings and stays disabled with nothing started, one notice says why, and a second run
-    raises no second notice.
+    When the next apply or tick runs (or the notice is raised on its own), Then pfB-DNS stays on and nothing is
+    restored: the proxy keeps running, the Resolver stays moved and disabled with nothing started, one notice says the
+    Resolver is disabled and pfB-DNS has no backend, and a second run raises no second notice (issue #3848).
     """
     vm = rig.vm
-    trigger = _STAND_DOWN_TRIGGERS[how]
+    trigger = _DISABLED_RESOLVER_TRIGGERS[how]
     prior_notices = len(_notices(vm))
     with _unmoved_afterwards(rig):
         _moved(rig)
@@ -547,7 +551,7 @@ def test_a_resolver_disabled_under_pfb_dns_is_stood_down_by_the_next_apply_or_ti
 
         trigger(vm)
         after = _unbound_state(vm, f"{how}: after the trigger")
-        _assert_stood_down(rig, prior_notices, how, after)
+        _assert_kept_with_a_notice(rig, prior_notices, how, after)
 
         trigger(vm)
         assert len(_notices(vm)) == prior_notices + 1, f"{how}: a second run raised another notice"
