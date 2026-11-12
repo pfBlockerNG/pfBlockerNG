@@ -4614,8 +4614,10 @@ function pfb_core_settings_push(?callable $call = NULL, bool $force = FALSE): ?s
 	$known = json_decode((string) @file_get_contents($pfb['core_pushed']), TRUE);
 	$known = is_array($known) ? $known : [];
 	$reason = NULL;
-	if ($force || ($known['time'] ?? NULL) !== $now['time']) {
-		if ($force || ($known['hash'] ?? NULL) !== $now['hash']) {
+	// A failed push stays pending until Core takes one: the record may still match after a forced push failed
+	$ask = $force || is_file($pfb['core_push_failed']);
+	if ($ask || ($known['time'] ?? NULL) !== $now['time']) {
+		if ($ask || ($known['hash'] ?? NULL) !== $now['hash']) {
 			$reason = pfb_core_settings_sync($call ?? 'pfb_core_call', $want);
 		}
 		if ($reason === NULL) {
