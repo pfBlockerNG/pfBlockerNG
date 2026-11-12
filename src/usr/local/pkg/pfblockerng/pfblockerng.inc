@@ -4615,18 +4615,17 @@ function pfb_core_settings_push(?callable $call = NULL, bool $force = FALSE): ?s
 	$known = json_decode((string) @file_get_contents($pfb['core_pushed']), TRUE);
 	$known = is_array($known) ? $known : [];
 	$reason = NULL;
-	// A failed push stays pending until Core takes one: the record may still match after a forced push failed
+	// The hash decides: a revision/time equal to the record's never skips a push whose values differ (pushes of one second can
+	// finish out of order). A failed push stays pending until Core takes one: the record may still match after a forced push failed
 	$ask = $force || is_file($pfb['core_push_failed']);
-	if ($ask || ($known['time'] ?? NULL) !== $now['time']) {
-		if ($ask || ($known['hash'] ?? NULL) !== $now['hash']) {
-			$reason = pfb_core_settings_sync($call ?? 'pfb_core_call', $want);
-		}
-		if ($reason === NULL) {
-			// Staged and renamed: a reader never sees a half-written record
-			$tmp = @tempnam(dirname($pfb['core_pushed']), '.pfbpush_');
-			if ($tmp !== FALSE && (@file_put_contents($tmp, json_encode($now)) === FALSE || !@rename($tmp, $pfb['core_pushed']))) {
-				@unlink($tmp);
-			}
+	if ($ask || ($known['hash'] ?? NULL) !== $now['hash']) {
+		$reason = pfb_core_settings_sync($call ?? 'pfb_core_call', $want);
+	}
+	if ($reason === NULL && $known !== $now) {
+		// Staged and renamed: a reader never sees a half-written record
+		$tmp = @tempnam(dirname($pfb['core_pushed']), '.pfbpush_');
+		if ($tmp !== FALSE && (@file_put_contents($tmp, json_encode($now)) === FALSE || !@rename($tmp, $pfb['core_pushed']))) {
+			@unlink($tmp);
 		}
 	}
 	if ($reason === NULL) {
@@ -4644,11 +4643,12 @@ function pfb_core_settings_push(?callable $call = NULL, bool $force = FALSE): ?s
  * own checks decide then, and the push after the save reports Core's state. Messages are not HTML-escaped.
  *
  * @param ?callable $call pfb_core_call() by default (a test seam)
+ * @param array<string, bool|int|string> $dns native fields a save will change but has not put into config.xml yet
  * @return list<string>
  */
-function pfb_core_settings_validate(?callable $call = NULL): array {
+function pfb_core_settings_validate(?callable $call = NULL, array $dns = []): array {
 	$call ??= 'pfb_core_call';
-	$r = $call('ValidateSettings', ['changes' => ['dns' => pfb_core_dns_settings()]]);
+	$r = $call('ValidateSettings', ['changes' => ['dns' => array_merge(pfb_core_dns_settings(), $dns)]]);
 	$error = $r['body']['error'] ?? [];
 	if ($r['status'] !== 400 || ($error['code'] ?? NULL) !== 'invalid_argument') {
 		return [];

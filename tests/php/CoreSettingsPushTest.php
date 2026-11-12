@@ -365,17 +365,17 @@ final class CoreSettingsPushTest extends TestCase
 		$this->assertSame('1500', $this->record()['time']);
 	}
 
-	public function testTheRecordsRevisionTimeShortCircuitsEvenWhenCoreDiffers(): void
+	public function testARecordOfTheSameValuesShortCircuitsEvenWhenCoreDiffers(): void
 	{
-		// Given the record of the current revision time
-		$this->seedRecord('1000', self::hashOf(self::defaults()));
+		// Given the record of the current values (Core is only asked again by a forced push or a pending failure)
 		$this->store(['dnsbl/pfb_hsts' => '']);
+		$this->seedRecord('1000', self::hashOf(self::defaultsWith(['hstsNullBlocking' => FALSE])));
 		$this->revisionTime('1000');
 		$core = $this->core([]);
 
 		$this->assertNull(pfb_core_settings_push($core));
 
-		$this->assertSame([], $this->calls, 'same revision time: nothing to compare');
+		$this->assertSame([], $this->calls, 'the recorded values: nothing to compare');
 	}
 
 	public function testAForcedPushAsksCoreWhateverTheRecordSays(): void

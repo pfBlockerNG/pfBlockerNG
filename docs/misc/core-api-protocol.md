@@ -98,8 +98,8 @@ When to push:
 - Right after Core starts, whatever the Outpost last pushed.
 - On a periodic tick. Change detection belongs to the Outpost, never to Core: it records what it last pushed (its
   configuration's own change marker, compared by inequality, plus a hash of the projected values) only after Core accepts
-  the push. The tick looks again when the marker differs from the record, and pushes only when the hash differs too, so a
-  change to unrelated settings sends nothing. Core keeps no knowledge of the Outpost's
+  the push. The hash decides: the tick pushes when it differs from the record, whatever the marker says, so a change to
+  unrelated settings sends nothing and two pushes that finish out of order are corrected. Core keeps no knowledge of the Outpost's
   configuration. So a failed push, or a change made outside the Outpost's save path (a restore, a revert, a replicated
   change), reaches Core by the next tick.
 
@@ -255,11 +255,10 @@ server by `go/pfb_core/*_test.go`.
 On pfSense the Outpost (PHP) is authoritative: `config.xml` holds the settings, and `pfb_core_settings_push()` pushes
 `settings/dns` to Core after a page save, at Core's start (the rc script runs the `core_push` verb once the socket
 exists) and on each tick. A push records config.xml's `revision/time` and the hash of what Core holds in
-`/var/db/pfblockerng/core_pushed`. The tick's push is unforced: a time that has not moved calls nothing, unless an earlier
-push failed (it then asks Core until one succeeds). A page save and the `core_push` verb push forced and always ask Core,
-so a second save within the same second is never skipped. Two writes within one second by a writer that does not push (a
-restore, an HA receive) share a `revision/time`, so the tick misses the second one until config.xml changes again or Core
-starts.
+`/var/db/pfblockerng/core_pushed`. The tick's push is unforced: values whose hash is the recorded one call nothing, whatever
+the time (pushes of one second can finish out of order), unless an earlier push failed (it then asks Core until one
+succeeds). A page save and the `core_push` verb push forced and always ask Core,
+so a second save within the same second is never skipped.
 `pfb_core_settings_validate()` is the dry run a page calls after its own checks and before `write_config()`: only
 `invalid_argument` refuses the save, which then writes nothing; DNS > General, DNS > DNSBL and General are the pages. A
 failed push is logged once per outage and kept in `/var/db/pfblockerng/core_push_failed` until a push succeeds; DNS General
