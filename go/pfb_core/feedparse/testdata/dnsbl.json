@@ -2544,6 +2544,19 @@
    ]
   },
   {
+   "id": "idn_trailing_root_dot",
+   "description": "One trailing root dot, ASCII or a UTS #46 full stop (U+3002, U+FF0E, U+FF61), is dropped before the domain row, as ICU does",
+   "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},
+   "lines": [
+    {"line": "example.com\u3002\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com\uff0e\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com\uff61\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": ".example.com\u3002\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "evil.co\u3002m\u3002\n", "expect": {"rows": [["d", "evil.co.m"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}},
+    {"line": "example.com.\n", "expect": {"rows": [["d", "example.com"]], "ip4": [], "ip6": [], "fail": [], "scheme_skipped": 0, "stop": false}}
+   ]
+  },
+  {
    "id": "idn_uts46",
    "description": "UTS #46 conversion by Core's x/net/idna profile (owner sign-off 2026-11-12 (#3906): Core uses golang.org/x/net/idna, the pfb-dns profile): fullwidth, NFD (Latin, Greek, Cyrillic), ligature U+FB01, circled U+2460, U+01C6, sharp s, final sigma, U+2024, U+2026, U+0E33, U+115F, U+0345 and the bidi rule. Lines without an old_expect agree with ICU's idn_to_ascii(); sharp s and final sigma are the non-transitional answers; their old_expect is the appliance's transitional ICU (ss.com, xn--4xa.com), replayed live",
    "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false},

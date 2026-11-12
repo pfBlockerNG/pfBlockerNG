@@ -135,11 +135,10 @@ final class FeedParseDnsblCorpusTest extends TestCase
 	#[DataProvider('applianceLineProvider')]
 	public function testApplianceLineMatchesTheProductionParser(array $case, int $n): void
 	{
-		$problems = $this->replay($case, $n);
-		if ($problems !== []) {
-			$this->markTestSkipped("the host's PHP, ICU, PCRE2 or pfSense doubles differ from the appliance on this line; the corpus pins the appliance result (smoke replay):\n  " . implode("\n  ", $problems));
+		if (is_ipaddrv6('1:2:3:4:5:6:7:8 ') !== TRUE) {
+			$this->markTestSkipped("not the appliance (the pfSense doubles' is_ipaddrv6 is filter_var, not Net_IPv6): the line pins the appliance's result, replayed by tests/smoke/test_smoke_feedparse_corpus.py");
 		}
-		$this->assertSame([], $problems);
+		$this->assertSame([], $this->replay($case, $n));
 	}
 
 	/**
