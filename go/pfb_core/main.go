@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"os/signal"
 	"strconv"
@@ -50,8 +51,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	group, groupSet := 0, false
 	fl.Func("socket-group", "the group the socket is opened to", func(v string) error {
 		gid, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return err
+		}
+		if gid > math.MaxInt32 { // chown(2) takes it as a Go int
+			return fmt.Errorf("group id %d is out of range", gid)
+		}
 		group, groupSet = int(gid), true
-		return err
+		return nil
 	})
 	if err := fl.Parse(args); err != nil {
 		return 2
