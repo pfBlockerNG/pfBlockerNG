@@ -345,9 +345,9 @@ def test_a_foreign_listener_on_unbounds_port_moves_its_backend_pair_and_pfb_dns_
     """Given working native Resolver DNS (pfB-DNS off, so no DNSBL: a listed name is answered by the upstream) and both
     transports of 127.0.0.1:5353 held by another process before enabling pfB-DNS,
     When the real toggle and apply run, Then pfB-DNS serves with Unbound's backend moved to a free pair (#3848): the
-    stored port is not 5353, the live Unbound owns TCP and UDP on it, the gateway's --upstream names it, a listed and an
-    allowed name are answered through pfB-DNS on port 53 over UDP and TCP, one notice names the holder, nothing was
-    restored, the holder still holds 5353, and a following Update keeps the pair.
+    stored port is not 5353, the live Unbound owns TCP and UDP on it, the gateway's --upstream names it, through pfB-DNS
+    on port 53 over UDP and TCP DNSBL blocks a listed name and an allowed name resolves, one notice names the holder,
+    nothing was restored, the holder still holds 5353, and a following Update keeps the pair.
     """
     vm = rig.vm
     held = {("tcp4", "127.0.0.1:5353"), ("udp4", "127.0.0.1:5353")}
@@ -419,11 +419,11 @@ def test_a_foreign_listener_on_unbounds_port_moves_its_backend_pair_and_pfb_dns_
                 ), f"a notice must name the holder and the move: {new}"
                 assert not any("restored" in text.lower() for text in new), f"nothing is given back: {new}"
 
-                # a listed and an allowed name are answered through pfB-DNS on port 53
+                # pfB-DNS serves port 53 through the moved pair: DNSBL blocks the listed name, the allowed one resolves
                 for tcp in (False, True):
                     blocked, raw = _query(rig.client, rig.names.blocked, tcp=tcp)
-                    assert h.resolves_to(blocked, STUB_DNS_A), (
-                        f"the listed name must be answered through pfB-DNS (tcp={tcp}): {raw}"
+                    assert h.is_vip(blocked), (
+                        f"the listed name must be blocked by pfB-DNS with the DNSBL VIP (tcp={tcp}): {raw}"
                     )
                     allowed, raw = _query(rig.client, h.unique_domain("upstream-moved"), tcp=tcp)
                     assert h.resolves_to(allowed, STUB_DNS_A), f"an allowed name must resolve (tcp={tcp}): {raw}"
