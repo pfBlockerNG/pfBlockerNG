@@ -144,14 +144,16 @@ def mask_page_identity(page: Page) -> None:
     page.evaluate(_DOM_MASK_JS, values)
 
 
-def wait_for_document_ready(page: Page) -> None:
+def wait_for_document_ready(page: Page, *, require_jquery: bool = True) -> None:
     """Wait until jQuery has run ``page``'s document-ready handlers (#3864, #3867).
 
     pfSense.js's ready handler focuses the first visible input, so a focus taken before it runs is lost.
-    jQuery runs ready callbacks in registration order, so this one resolves after pfSense's. A page without jQuery,
-    such as a bare dashboard widget, has no ready handlers to wait for.
+    jQuery runs ready callbacks in registration order, so this one resolves after pfSense's. A full page that lost
+    jQuery fails here; only a bare fragment that loads none, such as the dashboard widget, passes
+    ``require_jquery=False``.
     """
-    page.evaluate("() => window.jQuery && new Promise((ready) => jQuery(ready))")
+    guard = "" if require_jquery else "window.jQuery && "
+    page.evaluate(f"() => {guard}new Promise((ready) => jQuery(ready))")
 
 
 # Re-export so the browser test modules import REDACTED from one place.

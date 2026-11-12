@@ -92,7 +92,7 @@ HOOKS_PAGE = "/pfblockerng/pfblockerng_hooks.php"
 JS_TIMEOUT_MS = 10_000
 
 
-def _open(page: Page, webui: WebUI, path: str) -> None:
+def _open(page: Page, webui: WebUI, path: str, *, require_jquery: bool = True) -> None:
     """Navigate the (cookie-authenticated) page to ``path`` and settle the DOM.
 
     Asserts the load did NOT bounce to the login form -- proving the injected
@@ -104,7 +104,7 @@ def _open(page: Page, webui: WebUI, path: str) -> None:
     page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
     # The login form carries #usernamefld; its absence proves we are authed.
     assert page.locator("#usernamefld").count() == 0, f"GET {path} showed the login form -- cookie not authenticated"
-    wait_for_document_ready(page)
+    wait_for_document_ready(page, require_jquery=require_jquery)
 
 
 def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
@@ -278,7 +278,7 @@ def test_dashboard_widget_renders(
     captured for human review.
     """
     page = browser_page
-    _open(page, webui, WIDGET_PAGE)
+    _open(page, webui, WIDGET_PAGE, require_jquery=False)  # the bare widget GET loads no jQuery
 
     expect(page.locator("#pfblockerngack")).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(page.locator("#formicons")).to_be_attached(timeout=JS_TIMEOUT_MS)
@@ -300,7 +300,7 @@ def test_widget_header_sort_keeps_ip_aliases_before_dnsbl_groups(
     rows are seeded through the widget's own row builder before ``sortable.js`` initialises.
     """
     page = browser_page
-    _open(page, webui, WIDGET_PAGE)
+    _open(page, webui, WIDGET_PAGE, require_jquery=False)
     expect(page.locator("#pfb-tbl")).to_have_attribute("data-pfb-sortmix", "off", timeout=JS_TIMEOUT_MS)
 
     page.evaluate("window.events = []")  # the dashboard's deferred-init queue the widget JS pushes to
