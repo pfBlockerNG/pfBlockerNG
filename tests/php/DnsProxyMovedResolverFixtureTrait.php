@@ -35,7 +35,7 @@ trait DnsProxyMovedResolverFixtureTrait
 		'pfb_test_write_config_args', 'pfb_test_rcfile_dir',
 		'pfb_test_mwexec', 'pfb_test_mwexec_hook',
 		'pfb_test_lock_holders', 'pfb_test_try_lock_busy_for', 'pfb_test_config_read_fails',
-		'pfb_test_config_read_fails_for', 'pfb_test_unbound_configure_hook',
+		'pfb_test_config_read_fails_for', 'pfb_test_unbound_configure_hook', 'pfb_test_update_status',
 	];
 
 	private string $tmp;

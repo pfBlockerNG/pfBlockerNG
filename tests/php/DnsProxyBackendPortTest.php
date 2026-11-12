@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * issue #3848 -- the loopback port pair Unbound's backend lives on (PROXYv2 on P, plain on P+1) is stored once, as the `proxy-protocol-port:` line of the
  * marked clause in the Resolver's Custom Options (default 5353), and read by one function; and the two questions the port move asks of the box's sockets, who
  * holds P or P+1 and which pair above is free, both read the one `sockstat` scan that tells whether Unbound owns the gateway's upstream
- * (pfb_dns_proxy_upstream_state()): there is one parser of that output, and the holder and the picker each make one scan.
+ * (pfb_dns_proxy_upstream_state()): PHP has one parser of that output (the rc script's start has its own sh check of its upstream port), and the holder and the picker each make one scan.
  */
 #[CoversFunction('pfb_dns_proxy_backend_port')]
 #[CoversFunction('pfb_dns_proxy_backend_holder')]

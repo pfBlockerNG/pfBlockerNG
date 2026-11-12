@@ -864,6 +864,135 @@ final class DnsProxyBackendMoveTest extends TestCase
 		$this->assertSame(['pfBlockerNG DNS Proxy'], array_values(array_unique(array_column($this->notices(), 'id'))), 'no startup problem is filed on top');
 	}
 
+	public function testTheBootCheckWithNoMarkerNeverStartsTheGatewayBesideTheRcStartThatIsLaunchingIt(): void
+	{
+		// Given the boot's rc start still launching the gateway: no pidfile yet, and no marker because no stranger holds Unbound's port
+		$this->box();
+		$this->assertFalse(pfb_dns_proxy_cannot_serve(), 'before: nothing is blocked');
+		$this->assertFalse(pfb_dns_proxy_running(), 'before: the gateway is not up yet');
+
+		// When the boot check runs
+		$this->dnsCheckArm('0');
+
+		// Then it only confirms that start: a second launch is what the rc script's start lock prevents, never this check's to make
+		$this->assertSame([], $this->events, 'nothing was started, restarted or regenerated');
+		$this->assertSame([], $this->proxyCalls, 'the gateway was neither started nor stopped');
+	}
+
+	public function testAMarkerThatAppearsWhileTheBootCheckWaitsFilesNoStartupProblemOnTopOfIt(): void
+	{
+		// Given a boot check that began before the rc start's own scan (up to 2 s) found a stranger: no marker yet, and no gateway
+		$this->box();
+		$this->assertFalse(pfb_dns_proxy_cannot_serve(), 'before: nothing is blocked yet');
+		// ... and that scan finishing, with its marker, while the readiness wait probes for the gateway (not before: only that wait is asked)
+		$GLOBALS['pfb_test_valid_pids'][$this->proxyPidfile()] = function (): bool {
+			if (in_array('pfb_dns_proxy_await_ready', array_column(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS), 'function'), TRUE)) {
+				$this->theRcStartRefusedForAStranger();
+			}
+			return FALSE;
+		};
+
+		// When the boot check runs
+		$this->dnsCheckArm('0');
+
+		// Then the wait that ran out is no startup problem: the marker stands, and the next pass says why DNS is down
+		$this->assertTrue(pfb_dns_proxy_cannot_serve(), 'the marker stands');
+		$this->assertSame([], $this->noticesOf('pfBlockerNG DNS Proxy startup'), 'no startup problem on top of the marker');
+		$this->assertSame([], $this->proxyCalls, 'nothing was started or stopped');
+		$this->assertSame([], $this->events);
+	}
+
+	public function testAMarkerThatCannotBeWrittenStillEndsTheConfirmationWithoutAStartupProblem(): void
+	{
+		// Given a stranger on Unbound's port with no free pair, and a /var/run that takes no marker
+		$this->box();
+		$this->foreignHolds(...self::strangerAndEveryPairTaken());
+		$GLOBALS['pfb']['dns_proxy_backend_blocked'] = "{$this->tmp}/nowhere/pfb_dns_proxy_backend_blocked";
+
+		// When a restart's confirmation waits it out and its move finds no pair
+		$this->assertFalse(pfb_dns_proxy_restart());
+
+		// Then the gateway is stopped for the stranger, and the notice says that, not that a start failed
+		$this->assertContains('stop_service', $this->proxyCalls, 'the gateway was stopped');
+		$this->assertFalse(pfb_dns_proxy_cannot_serve(), 'no marker could be written');
+		$this->assertSame([], $this->noticesOf('pfBlockerNG DNS Proxy startup'), 'no startup problem: the gateway was stopped on purpose');
+		$this->assertCount(1, $this->noticesOf('pfBlockerNG DNS Proxy'), 'the cannot-serve notice');
+	}
+
+	/** The apply's own statement that asks for the update pass's start check and logs its failure, cut out of the shipped file and run as shipped. */
+	private function runTheApplysStartCheck(): void
+	{
+		$apply = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertSame(1, preg_match('~\n\tif \(!pfb_dns_proxy_ensure_running\(\)\) \{.*?\n\t\}\n~s', $apply, $statement), 'test bootstrap: the apply\'s start check lost its anchor');
+		(static function (string $code): void {
+			global $pfb;
+			eval($code);
+		})($statement[0]);
+	}
+
+	public function testTheApplyLogsAGatewayStoppedForAStrangerAsNotServingNotAsUnready(): void
+	{
+		// Given a serving gateway whose Unbound port a stranger holds, and no free pair
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(...self::strangerAndEveryPairTaken());
+
+		// When the apply runs its start check
+		$this->runTheApplysStartCheck();
+
+		// Then the log says pfB-DNS is not serving because of the foreign process, not that a start failed
+		$this->assertTrue(pfb_dns_proxy_cannot_serve(), 'before the log is read: the gateway was stopped for the stranger');
+		$this->assertStringContainsString("pfB-DNS is not serving: a foreign process holds Unbound's backend port; see the notices", $this->pfbLog());
+		$this->assertStringNotContainsString('did not become ready; see the notices', $this->pfbLog());
+	}
+
+	public function testTheApplyLogsAGatewayThatNeverComesUpAsNotReady(): void
+	{
+		// Given a gateway that never serves what it is started with, and no stranger
+		$this->box();
+		$this->gatewayFollows = FALSE;
+		$this->assertFalse(pfb_dns_proxy_cannot_serve(), 'before: nothing is blocked');
+
+		// When the apply runs its start check
+		$this->runTheApplysStartCheck();
+
+		// Then the log says the proxy did not become ready
+		$this->assertStringContainsString('pfB-DNS: the DNS proxy did not become ready; see the notices', $this->pfbLog());
+		$this->assertStringNotContainsString('a foreign process holds', $this->pfbLog());
+	}
+
+	public function testTheInstallSaysARestartThatFoundAStrangerIsNotServingNotUnready(): void
+	{
+		// Given a moved Resolver whose gateway is down, a stranger on Unbound's port and no free pair
+		$this->box();
+		$this->foreignHolds(...self::strangerAndEveryPairTaken());
+		unset($GLOBALS['pfb_test_update_status']);
+
+		// When the installer restarts the proxy
+		$this->runInstallProxyBlock();
+
+		// Then its status line says pfB-DNS is not serving because of the foreign process
+		$this->assertTrue(pfb_dns_proxy_cannot_serve(), 'before the line is read: the gateway was stopped for the stranger');
+		$this->assertContains(" pfB-DNS is not serving: a foreign process holds Unbound's backend port (see the notices);", $GLOBALS['pfb_test_update_status']);
+		$this->assertNotContains(' the DNS proxy did not become ready (see the notices);', $GLOBALS['pfb_test_update_status']);
+	}
+
+	public function testTheInstallSaysARestartThatNeverComesUpIsNotReady(): void
+	{
+		// Given a moved Resolver whose gateway is down and never serves what it is started with, and no stranger
+		$this->box();
+		$this->gatewayFollows = FALSE;
+		unset($GLOBALS['pfb_test_update_status']);
+
+		// When the installer restarts the proxy
+		$this->runInstallProxyBlock();
+
+		// Then its status line says the proxy did not become ready
+		$this->assertFalse(pfb_dns_proxy_cannot_serve(), 'before the line is read: nothing is blocked');
+		$this->assertContains(' the DNS proxy did not become ready (see the notices);', $GLOBALS['pfb_test_update_status']);
+		$this->assertNotContains(" pfB-DNS is not serving: a foreign process holds Unbound's backend port (see the notices);", $GLOBALS['pfb_test_update_status']);
+	}
+
 	// -----------------------------------------------------------------------
 	// (c) the Listen Port on a pair port
 	// -----------------------------------------------------------------------
@@ -1115,7 +1244,7 @@ final class DnsProxyBackendMoveTest extends TestCase
 
 	public function testAMarkerThatOutlivesPfbDnsIsNeverReadAsNotServing(): void
 	{
-		// Given a gateway stopped for a stranger with no free pair, whose marker stands, and an admin who then turns pfB-DNS off
+		// Given a gateway stopped for a stranger with no free pair, an admin who then turns pfB-DNS off, and a start by hand that leaves a marker again
 		$this->box();
 		$this->foreignHolds(...self::strangerAndEveryPairTaken());
 		pfb_dns_proxy_ensure_running();
@@ -1124,12 +1253,70 @@ final class DnsProxyBackendMoveTest extends TestCase
 		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
 		pfb_unbound_python('enabled');
 		$this->assertNull(pfb_dns_proxy_saved(), 'the restore consumed the snapshot');
-		$this->assertFileExists($GLOBALS['pfb']['dns_proxy_backend_blocked'], 'nothing of the restore removes the marker: it is stale now');
+		// ... the rc script's start, run by hand with pfB-DNS off, finds the stranger and leaves its marker with no snapshot to belong to
+		$this->theRcStartRefusedForAStranger();
+		$this->assertFileExists($GLOBALS['pfb']['dns_proxy_backend_blocked'], 'before: a marker stands with nothing moved');
 
 		// Then pfB-DNS off has nothing blocked and no gateway to say anything of
 		$this->assertFalse(pfb_dns_proxy_cannot_serve());
 		$this->assertNull(pfb_dns_proxy_cannot_serve_text());
 		$this->assertSame('Stopped', pfb_dns_status_service(NULL, FALSE));
+	}
+
+	public function testTurningPfbDnsOffAndOnAfterAGatewayStoppedForAStrangerServesOnceTheStrangerIsGone(): void
+	{
+		// Given a gateway stopped because a stranger holds Unbound's port and no pair is free
+		$this->box();
+		$this->gatewayRuns();
+		$this->foreignHolds(...self::strangerAndEveryPairTaken());
+		pfb_dns_proxy_ensure_running();
+		$this->assertFileExists($GLOBALS['pfb']['dns_proxy_backend_blocked'], 'before: the gateway cannot serve');
+		$this->assertSame(self::NO_PAIR_STATUS, pfb_dns_status_service(NULL, FALSE), 'before: the Service line says so');
+
+		// When the admin turns pfB-DNS off ...
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::Off);
+		pfb_unbound_python('enabled', FALSE);
+
+		// Then the restore ended the stopped state it belonged to
+		$this->assertNull(pfb_dns_proxy_saved(), 'the restore consumed the snapshot');
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_backend_blocked'], 'the marker went with the snapshot');
+
+		// ... the stranger leaves, and the admin turns pfB-DNS on again
+		$this->newPass();
+		$this->foreign = [];
+		$this->unboundPorts = [5353, 5354];
+		$this->publishSockets();
+		PfbConfig::writeSystem('dns/pfb_dns', PfbToggle::On);
+		pfb_unbound_python('enabled', TRUE);
+
+		// Then the new takeover finds nothing blocked: the Service line does not say "Not serving", and the update pass starts the gateway
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'the Resolver is moved again');
+		$this->assertFalse(pfb_dns_proxy_cannot_serve());
+		$this->assertSame('Stopped', pfb_dns_status_service(NULL, FALSE));
+		$this->events = [];
+		$this->assertTrue(pfb_dns_proxy_ensure_running());
+		$this->assertContains('start_service', $this->events);
+		$this->assertTrue(pfb_dns_proxy_serving_ready());
+		pfb_global();
+		$this->assertSame('Running', pfb_dns_status()['service']);
+	}
+
+	public function testATakeoverEndsAMarkerLeftWhileNothingWasMoved(): void
+	{
+		// Given pfB-DNS on and a Resolver never taken over, and a marker the rc script's start left for a stranger while nothing was moved
+		$this->box(TRUE, [], FALSE);
+		$this->theRcStartRefusedForAStranger();
+		$this->assertNull(pfb_dns_proxy_saved(), 'before: not taken over');
+		$this->assertFileExists($GLOBALS['pfb']['dns_proxy_backend_blocked'], 'before: the marker stands');
+		$this->assertFalse(pfb_dns_proxy_cannot_serve(), 'before: with no snapshot it says nothing');
+
+		// When the apply's Resolver pass takes the Resolver over
+		pfb_unbound_python('enabled', TRUE);
+
+		// Then the marker did not outlive the state it was left in: the update pass judges the new takeover afresh
+		$this->assertNotNull(pfb_dns_proxy_saved(), 'taken over');
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dns_proxy_backend_blocked']);
+		$this->assertFalse(pfb_dns_proxy_cannot_serve());
 	}
 
 	public function testTheMarkerTheRcScriptWritesIsTheOnePhpReads(): void

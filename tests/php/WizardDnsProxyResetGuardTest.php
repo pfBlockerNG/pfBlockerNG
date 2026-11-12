@@ -52,6 +52,8 @@ final class WizardDnsProxyResetGuardTest extends TestCase
 		foreach (self::SWEPT as $key) {
 			$GLOBALS['pfb'][$key] = "{$this->dir}/{$key}";
 		}
+		// The restore removes the cannot-serve marker with the snapshot: its path is the sandbox's, never /var/run
+		$GLOBALS['pfb']['dns_proxy_backend_blocked'] = "{$this->dir}/dns_proxy_backend_blocked";
 		$GLOBALS['config'] = [];
 		$GLOBALS['input_errors'] = [];
 		$GLOBALS['pfb_test_file_notices'] = [];

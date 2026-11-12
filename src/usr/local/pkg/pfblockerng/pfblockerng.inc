@@ -6778,7 +6778,9 @@ function pfb_dns_proxy_confirm_ready(?int $since = NULL): bool {
 		pfb_dns_proxy_startup_check(TRUE, $since);
 		return TRUE;
 	}
-	if (pfb_dns_proxy_backend_blocked()) {
+	// A pass that stopped the gateway for a stranger, or the rc start's own scan finding one while this waited (it leaves the marker): the
+	// next pass says why DNS is down, and a wait that ran out is no startup problem on top of that
+	if (pfb_dns_proxy_backend_blocked() || pfb_dns_proxy_cannot_serve()) {
 		return FALSE;
 	}
 	pfb_dns_proxy_startup_check(pfb_dns_proxy_ready(), $since);
@@ -17649,7 +17651,8 @@ function pfb_dns_proxy_backend_disabled_notice(): bool {
  * stop abandons the restore (snapshot kept, notice raised) for the next apply to retry, and so does a config.xml that does
  * not take the write (pfb_dns_config_write_failed()); the proxy is started again through its rc script once the lock
  * is released (that start takes up to 17 s, 10 s on the start lock plus 7 s to stop a survivor, and stays outside the lock), so the moved
- * Resolver keeps being served. Otherwise it restores each key exactly and clears the snapshot. No snapshot and no
+ * Resolver keeps being served. Otherwise it restores each key exactly and clears the snapshot, and with it the cannot-serve marker a stranger on
+ * Unbound's backend port left ($pfb['dns_proxy_backend_blocked']); a takeover that stores a snapshot removes a marker left while nothing was moved. No snapshot and no
  * block of ours on the fresh read = nothing to do (no stop, no write, no reload); a Resolver carrying our block with no snapshot is
  * reported to the operator (file_notice): it cannot be put back automatically. Idempotent.
  *
@@ -17875,6 +17878,8 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL, ?
 			pfb_dns_proxy_resolver_unchanged(FALSE, 'config.xml could not be written');
 			return FALSE;
 		}
+		// The stopped state a stranger left belonged to the snapshot just consumed: nothing is moved now, so nothing is stopped for it
+		unlink_if_exists($pfb['dns_proxy_backend_blocked']);
 		pfb_logger("\n{$log}", 1);
 		return TRUE;
 	}
@@ -17965,6 +17970,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL, ?
 	}
 
 	$changed = FALSE;
+	$took_snapshot = FALSE;
 	if ($saved === NULL) {
 		$current = [];
 		foreach (PFB_DNS_PROXY_RESOLVER_KEYS as $key) {
@@ -17992,6 +17998,7 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL, ?
 		PfbConfig::writeSystem('dns/pfb_dns_saved', base64_encode($json));
 		$saved = $current;
 		$changed = TRUE;
+		$took_snapshot = TRUE;
 	}
 
 	// After the refusals and the snapshot (which hold the live values), before enablessl is deleted.
@@ -18042,6 +18049,10 @@ function pfb_dns_proxy_resolver_locked(bool $on, ?string &$unsafe_line = NULL, ?
 		if (pfb_dns_config_write_failed(write_config("pfBlockerNG: {$log}"))) {
 			pfb_dns_proxy_resolver_unchanged(TRUE, 'config.xml could not be written');
 			return FALSE;
+		}
+		// A marker left while nothing was moved (the rc start run with pfB-DNS off) is no state of this takeover: the update pass judges it afresh
+		if ($took_snapshot) {
+			unlink_if_exists($pfb['dns_proxy_backend_blocked']);
 		}
 		pfb_logger("\n{$log}", 1);
 		if ($forced !== NULL) {
