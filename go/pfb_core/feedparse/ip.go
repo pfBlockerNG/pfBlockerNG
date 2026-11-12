@@ -3,7 +3,6 @@ package feedparse
 import (
 	"regexp"
 	"strings"
-	"unicode/utf8"
 )
 
 // IPConfig is what the old path's pfb_ip_parse_line() reads for one feed: the list family (VType "_v4" or "_v6"), the
@@ -438,42 +437,6 @@ func nulCut(tok string) bool {
 func isBlankOrComment(line string) bool {
 	s := pfbStrip(line)
 	return s == "" || strings.HasPrefix(s, "#") || strings.HasPrefix(s, "!") || strings.HasPrefix(s, "//")
-}
-
-func pfbStrip(v string) string {
-	v = phpTrim(v)
-	if v == "" || (v[0] < 0x80 && v[len(v)-1] < 0x80) {
-		return v
-	}
-	// The preg passes fail on invalid UTF-8 and the PHP helper keeps the ASCII-trimmed value then.
-	if !utf8.ValidString(v) {
-		return v
-	}
-	for v != "" {
-		r, n := utf8.DecodeLastRuneInString(v)
-		if !isUnicodeSpace(r) {
-			break
-		}
-		v = v[:len(v)-n]
-	}
-	for v != "" {
-		r, n := utf8.DecodeRuneInString(v)
-		if !isUnicodeSpace(r) {
-			break
-		}
-		v = v[n:]
-	}
-	return v
-}
-
-// [\s\p{Z}\x{FEFF}] under PCRE2 /u.
-func isUnicodeSpace(r rune) bool {
-	switch {
-	case r >= 9 && r <= 13, r == ' ', r == 0x85, r == 0xa0, r == 0x1680, r == 0x180e, r >= 0x2000 && r <= 0x200a,
-		r == 0x2028, r == 0x2029, r == 0x202f, r == 0x205f, r == 0x3000, r == 0xfeff:
-		return true
-	}
-	return false
 }
 
 // --- the feed regexes of pfb_ip_regex_config(), as backtracking matchers (RE2 has no lookaround) ---
