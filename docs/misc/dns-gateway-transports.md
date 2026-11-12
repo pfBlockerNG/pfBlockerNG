@@ -102,7 +102,9 @@ there all along, with no restart: the next apply or cron tick pushes it (the sta
 - **Applied status** (issue #3845). `FF FF FF FA`, with no body, returns one compact JSON line, then `ok`, then EOF.
   The complete response is at most 65536 bytes; an oversized snapshot returns an error, never partial status.
   Version 1 includes:
-  - `version`, `pid`, `executable` and `ready`: runtime identity and frontend readiness.
+  - `version`, `pid`, `executable` and `ready`: runtime identity and frontend readiness. `executable` is the path the
+    gateway started from, read at start: a package upgrade replaces that file under a running gateway, and FreeBSD then
+    reports no path for the process (issue #3857).
   - Optional `upstream`: the canonical numeric applied endpoint. Supported forms are package-generated loopback endpoints
     and the prior readiness check's unscoped numeric IP forms (including bracketed IPv4), with a raw port of one to five
     ASCII digits in the range 1–65535. Leading zeros normalize. Hostnames, scoped IPv6 and unsupported port spellings omit

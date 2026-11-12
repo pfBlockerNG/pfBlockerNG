@@ -70,14 +70,17 @@ func canonicalUpstream(upstream string) string {
 	return netip.AddrPortFrom(addr.Unmap(), uint16(p)).String()
 }
 
+// The file this process was started from, read at start: a package upgrade replaces it under a running gateway, and FreeBSD then
+// reports no path for the process (issue #3857).
+var startExecutable, startExecutableErr = os.Executable()
+
 // status runs only on the control goroutine, which owns listener and address-table updates.
 func (c *ctlServer) status() ([]byte, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, err
+	if startExecutableErr != nil {
+		return nil, startExecutableErr
 	}
 	s := appliedStatus{
-		Version: 1, PID: os.Getpid(), Executable: exe,
+		Version: 1, PID: os.Getpid(), Executable: startExecutable,
 		Ready:     c.ready.Load() && c.g != nil && c.g.ctx.Err() == nil,
 		Listeners: []statusListener{}, NameAnswers: map[string]statusNameAnswers{},
 		DDR: c.ddr != nil, Advertisements: map[string]statusAdvertisement{},

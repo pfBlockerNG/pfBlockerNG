@@ -93,6 +93,32 @@ func TestStatusWireReportsAppliedLongConfiguration(t *testing.T) {
 	}
 }
 
+// issue #3857: a package upgrade replaces the file a running gateway was started from, and FreeBSD then reports no path for the
+// process, so a status that looked its executable up per request failed until a restart. It names the start-time path instead.
+func TestStatusNamesTheExecutableItStartedFromAfterTheFileMoves(t *testing.T) {
+	cfg, logs, sock := ctlConfig(t)
+	srv, err := start(cfg, logs.logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.shutdown()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(exe, exe+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Rename(exe+".moved", exe); err != nil {
+			t.Errorf("putting the test binary back: %v", err)
+		}
+	}()
+	if got := statusObject(t, sock); got["executable"] != exe {
+		t.Fatalf("executable once the started file moved: %v, want %s", got["executable"], exe)
+	}
+}
+
 func TestStatusWireEmptyRefusedAndBounded(t *testing.T) {
 	for _, oversized := range []bool{false, true} {
 		t.Run(fmt.Sprint(oversized), func(t *testing.T) {
