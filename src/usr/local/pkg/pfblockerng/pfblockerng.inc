@@ -27610,7 +27610,7 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	update_status(" Removing live firewall objects and generated files...");
 
 	// Remove all pfB aliastables
-	exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
+	exec("{$pfb['pfctl']} -s Tables 2>/dev/null | {$pfb['grep']} '^pfB_'", $pfb_tables);
 	if (isset($pfb_tables)) {
 		foreach ($pfb_tables as $pfb_table) {
 			pfb_pfctl_table_op($pfb_table, 'kill');

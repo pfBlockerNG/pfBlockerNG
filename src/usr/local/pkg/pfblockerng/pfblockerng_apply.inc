@@ -5148,7 +5148,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			}
 		}
 
-		exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
+		exec("{$pfb['pfctl']} -s Tables 2>/dev/null | {$pfb['grep']} '^pfB_'", $pfb_tables);
 		if (isset($pfb_tables)) {
 			// ADR-40: $pfb_alias_lists is the content-diff set (aliases whose
 			// canonical membership set changed this pass).
