@@ -82,6 +82,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		logger.Printf("cannot read the settings store: %v", err)
 		return 1
 	}
+	defer store.Close()
 	methods := productionMethods()
 	maps.Copy(methods, settingsMethods(store))
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,

@@ -147,8 +147,10 @@ func TestAFailedDirectorySyncAfterTheRenameServesWhatIsOnDisk(t *testing.T) {
 	if _, err := st.Save(1, changes(t, `{"dns": {"control": true}}`)); err == nil {
 		t.Error("Save hid the failed directory sync")
 	}
+	mem := get(t, st)
+	_ = st.Close()
 	disk := get(t, open(t, dir))
-	if mem := get(t, st); jsonOf(t, mem) != jsonOf(t, disk) || mem.Revision != 2 {
+	if jsonOf(t, mem) != jsonOf(t, disk) || mem.Revision != 2 {
 		t.Errorf("memory %s, disk %s: want both at revision 2", jsonOf(t, mem), jsonOf(t, disk))
 	}
 }

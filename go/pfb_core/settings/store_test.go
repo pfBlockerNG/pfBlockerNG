@@ -27,6 +27,7 @@ func open(t *testing.T, dir string) *Store {
 	if err != nil {
 		t.Fatalf("Open(%s): %v", dir, err)
 	}
+	t.Cleanup(func() { _ = st.Close() })
 	return st
 }
 
@@ -309,6 +310,7 @@ func TestTheStoreSurvivesARestartWithRevisionAndGenerationsIntact(t *testing.T) 
 		t.Fatal(err)
 	}
 	before := jsonOf(t, get(t, st))
+	_ = st.Close() // the restart: the old process lets the state directory go
 	again := open(t, dir)
 	if after := jsonOf(t, get(t, again)); after != before {
 		t.Errorf("after a restart:\n have %s\n want %s", after, before)
@@ -361,7 +363,8 @@ func TestCrashHelperProcess(t *testing.T) {
 }
 
 func TestACrashDuringASaveLeavesThePreviousRevisionReadable(t *testing.T) {
-	_, dir := initialized(t)
+	parent, dir := initialized(t)
+	_ = parent.Close() // the child is the one Core on the directory
 	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashHelperProcess$")
 	cmd.Env = append(os.Environ(), crashEnv+"="+dir)
 	err := cmd.Run()

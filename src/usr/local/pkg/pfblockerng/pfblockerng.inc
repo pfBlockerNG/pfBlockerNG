@@ -4397,6 +4397,18 @@ function pfb_pkg_ver() {
 
 
 /**
+ * Package removal, once pfb_core is stopped: Keep Settings off deletes Core's state directory (the settings store, secrets
+ * included); on, it stays for the reinstall, like the package's config.xml sections (issue #3842).
+ */
+function pfb_core_state_teardown(PfbToggle $keep): void {
+	global $pfb;
+	if ($keep !== PfbToggle::On) {
+		rmdir_recursive($pfb['core_state']);
+	}
+}
+
+
+/**
  * (Re)generate /usr/local/etc/rc.d/pfb_core.sh, the Core API service (issue #3841). Start: keeps a pfb_core supervisor its pidfile
  * names; otherwise runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64, by `uname -p`) under daemon(8), restarted 5 s
  * after it exits, with its output in $pfb['core_log'], its API on $pfb['core_socket'] and its storage in $pfb['core_state']. No executable pfb-core for this machine
@@ -27855,6 +27867,7 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	unlink_if_exists('/usr/local/sbin/clog_pfb');
 	unlink_if_exists('/usr/bin/tail_pfb');
 	stop_service('pfb_core');
+	pfb_core_state_teardown($pfb['keep']);
 	unlink_if_exists(PFB_CORE_RCFILE);
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_filter.sh');
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh');

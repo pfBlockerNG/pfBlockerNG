@@ -12,11 +12,15 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"syscall"
 )
 
 // storeFile, in the state directory, holds the whole store. A save writes storeFile+".tmp", syncs it and renames it over
 // storeFile, so a crash leaves the previous document whole; a leftover .tmp is ignored and overwritten by the next save.
 const storeFile = "settings.json"
+
+// lockFile, in the state directory, carries the flock that keeps the directory to one Store.
+const lockFile = "settings.lock"
 
 // beforeRename runs between writing the new document and renaming it into place: a test kills the process there.
 var beforeRename func()
@@ -84,11 +88,34 @@ type Store struct {
 	dir    string
 	schema Schema
 	doc    *document // nil: not initialized
+	lock   *os.File  // the state directory's flock, held until Close
 }
 
-// Open reads the store in dir, which the caller made private. No store file is an uninitialized Core; a file that does
-// not read whole under schema is an error, never an uninitialized Core.
+// Open takes the state directory dir (which the caller made private) for this process and reads its store: a directory
+// another open Store holds is refused, since two writers would each accept a save at one revision. No store file is an
+// uninitialized Core; a file that does not read whole under schema is an error, never an uninitialized Core.
 func Open(dir string, schema Schema) (*Store, error) {
+	lock, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("the state directory %s is in use by another Core: %w", dir, err)
+	}
+	s, err := read(dir, schema)
+	if err != nil {
+		lock.Close()
+		return nil, err
+	}
+	s.lock = lock
+	return s, nil
+}
+
+// Close lets the state directory go; the Store must not be used after it.
+func (s *Store) Close() error { return s.lock.Close() }
+
+func read(dir string, schema Schema) (*Store, error) {
 	s := &Store{dir: dir, schema: schema}
 	raw, err := os.ReadFile(filepath.Join(dir, storeFile))
 	if errors.Is(err, fs.ErrNotExist) {
