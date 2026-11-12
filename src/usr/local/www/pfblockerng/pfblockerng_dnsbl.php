@@ -838,7 +838,7 @@ if ($_POST) {
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
-			// issue #3515: the DNS General page's pfB-DNS save and the Resolver move write config.xml under this lock; this whole-section save, and
+			// issue #3515: the DNS General page's save and the Resolver move write config.xml under this lock; this whole-section save, and
 			// write_config() with it (it writes the whole copy this request read), must not put back what they wrote since.
 			$pfb_config_lock = pfb_dns_config_lock();
 			if ($pfb_config_lock === NULL) {

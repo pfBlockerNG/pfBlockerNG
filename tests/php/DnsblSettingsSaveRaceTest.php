@@ -93,7 +93,7 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 
 		$this->assertSame(['try_lock', 'read', 'write', 'unlock'], array_map(static fn (array $event): string => $event[0], $result['events']),
 			'lock, fresh read under it, one write, then release');
-		$this->assertSame('pfb_dns_config', $result['events'][0][1], 'the lock the DNS General saves and the Resolver move take');
+		$this->assertSame('pfb_dns_config', $result['events'][0][1], 'the lock the DNS settings save and the Resolver move take');
 		$this->assertFalse($result['lockHeld'], 'released');
 	}
 

@@ -568,7 +568,8 @@ interfaces and administrator-managed VIPs retain their configured family ports (
 four interface selectors, including stored-token recovery; administrator-managed VIPs and other unavailable stored tokens remain.
 The opt-in `gen/pfb_dns_listen_vip_only` policy, off by default, restricts pfB-DNS's client-facing listeners to the selected Resolver VIPs,
 without interface fallback for a missing VIP or family. Internal loopback remains. Its DNS Name answers use the available VIP pair,
-including queries on loopback. The mode is dormant with pfB-DNS off and does not restrict standalone Unbound.
+including queries on loopback. The mode is dormant with pfB-DNS off and does not restrict standalone Unbound. While pfB-DNS is off,
+a save refuses only a VIP-only mode newly turned on and stores an already stored one with its VIP settings unchecked; every check runs again once pfB-DNS is on (#3856).
 Activation checks only the basic pfB-DNS, Resolver-address and selected-family prerequisites. VIP-only is a listener policy,
 not certification of DHCP/RA advertisements: native defaults, pool/reservation overrides and custom DHCP configuration remain
 the administrator's responsibility. Existing Resolver VIP advertisement and ownership handling remain; custom DNS lists do not
@@ -936,7 +937,7 @@ collides), a `--dot-*`/`--doh-*`/`--doq-*`
 group appears only while its toggle is on, its stored port is a whole number 1-65535 (else the group is left out with
 one warning), and the trusted entries (IPs or CIDRs without zero-padded prefixes, a bare
 address passed as a host prefix) are validated again when the script is generated, so a hand-edited `config.xml` cannot
-reach the shell or hand the gateway a value it rejects. The pfB-DNS settings save validates with `pfb_validate_dns_proxy_listeners_post()`
+reach the shell or hand the gateway a value it rejects. The Save DNS settings save validates with `pfb_validate_dns_proxy_listeners_post()`
 (ports 1-65535, a non-empty list of offered entries (`all`, `lo0`, configured interfaces) for each of the DNS, DoT, DoH and DoQ
 interface lists, IP/CIDR entries, and an offered SSL/TLS Certificate (`cert_build_list('cert', 'IPsec')`, the Resolver's own
 list), required while DoT, DoH or DoQ is on). Stop recognises the gateway child

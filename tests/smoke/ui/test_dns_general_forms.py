@@ -89,9 +89,11 @@ def test_one_post_with_a_changed_pfb_dns_field_and_a_changed_reply_logging_saves
             f"before-state: expected pfB-DNS Off, DoT port 853 and reply logging On, got {before}"
         )
 
+        # The seed stores no certificate, which the select renders as its first option: post the stored one back.
+        cert = helpers.dns_config_path("pfb_dns_sslcertref")
         saved = webui.post(
             DNS_GENERAL_PAGE,
-            {"pfb_dns": "on", "pfb_dns_dot_port": "8853", "pfb_py_reply": ""},
+            {"pfb_dns": "on", "pfb_dns_dot_port": "8853", "pfb_py_reply": "", "pfb_dns_sslcertref": before[cert]},
             timeout=SAVE_TIMEOUT,
         )
 
