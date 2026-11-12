@@ -30,6 +30,13 @@ OWN_WORKSPACE = 'chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"'
 
 _USES_PHP = re.compile(r"\bphp\b|\bcomposer\b|vendor/bin/")
 _DROPS_GIT_CONFIG = re.compile(r"vendor/bin/phpunit|--build-record\b")
+# The ownership command as an executed line, never inside a comment or a string.
+_OWNS_WORKSPACE = re.compile(rf"^[ \t]*{re.escape(OWN_WORKSPACE)}[ \t]*$", re.MULTILINE)
+
+
+def _before(run: str, needle: str) -> str:
+    """The part of ``run`` that executes before ``needle`` (all of it when ``needle`` is absent)."""
+    return run.split(needle, 1)[0]
 
 
 def _jobs(workflows: dict[str, Any]) -> Iterator[tuple[str, str, dict[str, Any]]]:
@@ -68,15 +75,15 @@ def php_leg_violations(workflows: dict[str, Any]) -> list[str]:
             continue
         runs = [(_run(step), "if" not in step) for step in _steps(job)]
         selected = _first_unconditional(runs, SELECT_PHP)
-        first_use = _first(runs, lambda run: SELECT_PHP not in run and _USES_PHP.search(run))
+        first_use = _first(runs, lambda run: _USES_PHP.search(_before(run, SELECT_PHP)))
         where = f"{name}:{job_id}"
         if selected is None:
             violations.append(f"{where} — never selects php {MATRIX_PHP}; the leg runs the image default")
-        elif first_use is not None and first_use < selected:
+        elif first_use is not None and first_use <= selected:
             violations.append(f"{where} — uses PHP before selecting php {MATRIX_PHP}")
-        phpunit = _first(runs, lambda run: "vendor/bin/phpunit" in run)
+        phpunit = _first(runs, lambda run: "vendor/bin/phpunit" in _before(run, SELECT_PHP_CGI))
         cgi = _first_unconditional(runs, SELECT_PHP_CGI)
-        if phpunit is not None and (cgi is None or cgi > phpunit):
+        if phpunit is not None and (cgi is None or cgi >= phpunit):
             violations.append(f"{where} — runs PHPUnit without first selecting php-cgi {MATRIX_PHP}")
     return violations
 
@@ -96,12 +103,13 @@ def workspace_owner_violations(workflows: dict[str, Any]) -> list[str]:
             continue
         for index, step in enumerate(steps):
             run = _run(step)
-            if OWN_WORKSPACE in run and "if" not in step:
-                break
-            if _DROPS_GIT_CONFIG.search(run):
+            owned = _OWNS_WORKSPACE.search(run)
+            if _DROPS_GIT_CONFIG.search(run[: owned.start()] if owned else run):
                 violations.append(
                     f"{name}:{job_id}:{step.get('name', index)} — drops the git config on a workspace root does not own"
                 )
+                break
+            if owned and "if" not in step:
                 break
     return violations
 
@@ -160,6 +168,8 @@ def test_a_php_leg_that_selects_first_passes() -> None:
         ((SELECT_PHP, "vendor/bin/phpunit"), "runs PHPUnit without first selecting php-cgi"),
         ((SELECT_PHP, "vendor/bin/phpunit", SELECT_PHP_CGI), "runs PHPUnit without first selecting php-cgi"),
         ((SELECT_PHP, {"if": "false", "run": SELECT_PHP_CGI}, "vendor/bin/phpunit"), "without first selecting php-cgi"),
+        ((f"php -v\n{SELECT_PHP}",), "uses PHP before selecting"),
+        ((SELECT_PHP, f"vendor/bin/phpunit\n{SELECT_PHP_CGI}"), "without first selecting php-cgi"),
     ],
     ids=[
         "no-selection",
@@ -169,6 +179,8 @@ def test_a_php_leg_that_selects_first_passes() -> None:
         "phpunit-without-cgi",
         "cgi-selected-too-late",
         "conditional-cgi-selection",
+        "php-used-before-selection-in-the-same-step",
+        "phpunit-before-cgi-selection-in-the-same-step",
     ],
 )
 def test_a_php_leg_on_the_image_default_is_rejected(steps: tuple[str | dict[str, Any], ...], expected: str) -> None:
@@ -206,6 +218,10 @@ _OWN = {"run": OWN_WORKSPACE}
         (_builder({"uses": "actions/checkout@v7", "with": {"path": "source"}}, _BUILD), False),
         (_builder(_CHECKOUT, _BUILD, container=False), False),
         (_builder(_CHECKOUT, {"run": "sh scripts/build-leg.sh"}), False),
+        (_builder(_CHECKOUT, {"run": f"# {OWN_WORKSPACE}"}, _BUILD), True),
+        (_builder(_CHECKOUT, {"run": f"echo '{OWN_WORKSPACE}'"}, _BUILD), True),
+        (_builder(_CHECKOUT, {"run": f"{_BUILD['run']}\n{OWN_WORKSPACE}"}), True),
+        (_builder(_CHECKOUT, {"run": f"{OWN_WORKSPACE}\n{_BUILD['run']}"}), False),
     ],
     ids=[
         "no-chown",
@@ -217,6 +233,10 @@ _OWN = {"run": OWN_WORKSPACE}
         "checkout-in-subdirectory",
         "bare-runner",
         "no-git-config-dropping-tool",
+        "commented-out-chown",
+        "chown-only-echoed",
+        "chown-after-the-build-in-the-same-step",
+        "chown-before-the-build-in-the-same-step",
     ],
 )
 def test_workspace_ownership_is_required_exactly_where_git_config_is_dropped(
