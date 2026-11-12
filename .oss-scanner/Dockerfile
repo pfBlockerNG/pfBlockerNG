@@ -1,8 +1,8 @@
 # Offline audit image for Anthropic's OSS Scanner (https://github.com/anthropics/oss-scanner).
 # The scanner builds this with the repository root as the context; the network is cut afterwards,
-# so everything the test suites need is fetched here. It mirrors the `test.yml` CI jobs: Ubuntu
-# 24.04 is the runner image, and current PHP 8.3 (Ondřej Surý's PPA, as setup-php uses) is the
-# lowest supported PHP.
+# so everything the test suites need is fetched here. It is the scanner's own Ubuntu 24.04 image,
+# not the CI image (.github/docker/Dockerfile); PHP 8.3 is the lowest supported PHP. Its shellspec
+# pin is held equal to the ci image's by tests/test_ci_tool_pins.py.
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python \
@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     && rm -rf /var/lib/apt/lists/* \
     && update-alternatives --set awk /usr/bin/mawk \
     && sed -i -E 's/^# *((de_DE|en_US).UTF-8)/\1/' /etc/locale.gen && locale-gen \
-    # The appliance runs FreeBSD sh (pipefail) and libarchive's unzip at /usr/bin/unzip; CI does the same.
+    # The appliance runs FreeBSD sh (pipefail) and libarchive's unzip at /usr/bin/unzip.
     && ln -sf bash /bin/sh \
     && ln -sf bsdunzip /usr/bin/unzip \
     && ln -sf /usr/bin/rsync /usr/local/bin/rsync

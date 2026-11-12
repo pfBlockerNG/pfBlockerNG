@@ -22,14 +22,14 @@ Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
   `tar`, `unzip`. On Debian those come from `git`, `jq`, `curl`, `qemu-system-x86` +
   `qemu-utils`, `dnsutils` (`dig`), `iptables`, `openssh-client`, `zstd`, `tar`, `unzip`,
   and `python3`. `rsync` is needed too, but only by `test_install_from_repo` (the host runs it in
-  `scripts/install-from-repo.sh`; CI runners install it), so `smoke-on-box.sh` does not preflight it.
+  `scripts/install-from-repo.sh`; the ci image bakes it), so `smoke-on-box.sh` does not preflight it.
   Dependency package builds use the repository's exact Python and
   packaging toolchain rather than Debian's ambient pip; prepare it with
   `uv sync --locked --group smoke --group dep-pkg-build`.
 - Everything but `uv` and `oras` comes from apt. Those two are not packaged for Debian:
   install them from their release tarballs, SHA-256 verified, into `/usr/local/bin`.
-  Boxes currently carry **uv 0.12.3** and **oras 1.3.3**. Release workflows pin
-  uv separately; the locked environment is what fixes dependency-package bytes.
+  Boxes currently carry **uv 0.12.3** and **oras 1.3.3**. CI uses the uv the ci image bakes;
+  the locked environment is what fixes dependency-package bytes.
 - Guest SSH key (baked into smoke images) at `/root/smoke-ssh-key`.
 - pfBlockerNG clone at `/root/pfBlockerNG`, with its remote named `origin` (the
   default unless `--git-remote`/`PFB_GIT_REMOTE` says otherwise). The orchestrator's
@@ -164,12 +164,6 @@ default `civm:v1`) and exports `SMOKE_CLIENT_IMAGE_DIR`. Set the
 DHCP lease. It is masked and redacted on CE and Plus alike; Plus still requires
 its own `SMOKE_PLUS_MAC` / `SMOKE_PLUS_SMBIOS_UUID` secrets. Missing-client skips
 are not allowlisted.
-
-CI host apt downloads use `/var/tmp/ui-apt-archives`, keyed by runner image and
-the exact package-install line. Restore is available to caller-named
-`checkout_ref` runs, but only successful cache misses on the normal checkout
-save downloads. Host-tool installation omits recommended packages and has
-bounded apt retries/timeouts plus a five-minute step limit.
 
 ```sh
 # Explicit ref:

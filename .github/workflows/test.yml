@@ -669,8 +669,8 @@ jobs:
         # phpstan.neon configures paths, level, stubs, and includes the
         # baseline (phpstan-baseline.neon) so existing legacy errors are
         # suppressed; new errors introduced by future changes will fail CI.
-        # 2G is permanent, and not because the tree needs it: bisected on this
-        # very setup-php build (issue #2671), the run passes at 448M and fails
+        # 2G is permanent, and not because the tree needs it: bisected on a former
+        # setup-php build (issue #2671), the run passes at 448M and fails
         # at 384M once phpstan.neon's parallel.jobSize keeps it off a single
         # accumulating worker. The limit is a crash guard on a 16 GB runner, not
         # a budget — the one unexplained worker crash this job ever had happened

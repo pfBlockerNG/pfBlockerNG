@@ -215,7 +215,7 @@ SHIM
     After 'cleanup'
 
     It 'carves the /32 hole out of the /24, publishing the 8 minimal covering CIDRs -- NEVER a host explosion (Phase 3: was 254 host lines pre-rewrite)'
-      Skip if 'needs the real iprange binary (apt-get install iprange in CI; absent locally)' no_iprange
+      Skip if 'needs the real iprange binary (baked in the ci image; absent locally)' no_iprange
       printf '10.9.8.4/32\n' > "${pfbsuppression}"
       When call silently suppress
       The status should be success
@@ -237,7 +237,7 @@ SHIM
     End
 
     It 'a SECOND /32 suppression inside the same containing /24 is carved in the SAME iprange call (no dedup bookkeeping needed): both holes gone, minimal cover, no duplicates'
-      Skip if 'needs the real iprange binary (apt-get install iprange in CI; absent locally)' no_iprange
+      Skip if 'needs the real iprange binary (baked in the ci image; absent locally)' no_iprange
       # Given: two DIFFERENT /32 holes that both map to the same containing
       # /24 -- iprange --except subtracts every hole in ONE pass, so there is
       # no per-hole dedup guard left to prove (the old dupfile/"dcheck" check
@@ -287,7 +287,7 @@ SHIM
     After 'cleanup'
 
     It 'CARVES the suppressed host out of the containing /16 (was a silent no-op pre-Phase-3, ADR-53 §1.2) -- 16 covering CIDRs, suppressed host gone, siblings still covered'
-      Skip if 'needs the real iprange binary (apt-get install iprange in CI; absent locally)' no_iprange
+      Skip if 'needs the real iprange binary (baked in the ci image; absent locally)' no_iprange
       When call silently suppress
       The status should be success
       # Before Phase 3, this line was pinned BYTE-IDENTICAL '10.0.0.0/16' --
@@ -470,7 +470,7 @@ SHIM
     After 'cleanup'
 
     It 'publishes an EMPTY member list when suppression removes every entry -- a LEGITIMATE outcome (iprange rc=0 either way; no grepcidr-style rc=1 quirk to special-case)'
-      Skip if 'needs the real iprange binary (apt-get install iprange in CI; absent locally)' no_iprange
+      Skip if 'needs the real iprange binary (baked in the ci image; absent locally)' no_iprange
       When call silently suppress
       The status should be success
       The contents of file "${member}" should equal ''

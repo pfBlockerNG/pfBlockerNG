@@ -456,7 +456,9 @@ def _zstd_decompress(data: bytes) -> bytes:
     """zstd-decode the ``.pkg`` framing (the ``zstd`` binary; runner host-tool)."""
     zstd = shutil.which("zstd")
     if not zstd:
-        raise RuntimeError("re-versioning a .pkg needs the `zstd` binary on the runner (apt-get install -y zstd)")
+        raise RuntimeError(
+            "re-versioning a .pkg needs the `zstd` binary (the ci image bakes it; elsewhere: apt-get install -y zstd)"
+        )
     return subprocess.run([zstd, "-dc"], input=data, stdout=subprocess.PIPE, check=True).stdout
 
 
@@ -464,7 +466,9 @@ def _zstd_compress(data: bytes) -> bytes:
     """zstd-encode back to the ``tzst`` framing pkg(8) expects (``packing_format = tzst``)."""
     zstd = shutil.which("zstd")
     if not zstd:
-        raise RuntimeError("re-versioning a .pkg needs the `zstd` binary on the runner (apt-get install -y zstd)")
+        raise RuntimeError(
+            "re-versioning a .pkg needs the `zstd` binary (the ci image bakes it; elsewhere: apt-get install -y zstd)"
+        )
     return subprocess.run([zstd, "-q", "-19", "-c"], input=data, stdout=subprocess.PIPE, check=True).stdout
 
 

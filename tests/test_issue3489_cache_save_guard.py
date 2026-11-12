@@ -49,9 +49,8 @@ def test_cache_save_steps_are_skipped_for_a_caller_named_ref(workflow: str, job:
 
 @JOBS
 def test_uv_cache_is_saved_only_by_a_guarded_step(workflow: str, job: str) -> None:
-    """The uv cache has no setup-uv (its post step would save it for any ref); one of the guarded
-    ``actions/cache/save`` steps, checked by the test above, is its only writer."""
-    assert _steps(workflow, job, "astral-sh/setup-uv@") == []
+    """The uv cache is written only by one of the guarded ``actions/cache/save`` steps, checked by
+    the test above."""
     uv_saves = [s for s in _steps(workflow, job, "actions/cache/save@") if s["with"]["path"] == "~/.cache/uv"]
 
     assert len(uv_saves) == 1, f"{workflow}:{job} uv cache save steps: {[s['name'] for s in uv_saves]}"

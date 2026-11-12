@@ -48,7 +48,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bzip2 ca-certificates curl dash dnsutils docker-buildx docker-cli file gcc git gnupg iproute2 iprange \
       iptables jq libarchive-tools libc6-dev libcurl4t64 libdw1t64 libelf1t64 locales mawk netbase \
-      openssh-client patch procps rsync sqlite3 sudo time unzip uuid-runtime xz-utils zstd \
+      openssh-client patch procps rsync sudo time unzip xz-utils zstd \
  && rm -rf /var/lib/apt/lists/* \
  && sed -i 's/^# *de_DE.UTF-8 UTF-8/de_DE.UTF-8 UTF-8/' /etc/locale.gen \
  && locale-gen de_DE.UTF-8 \
@@ -180,7 +180,7 @@ ENV GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=*
 # sh has no pipefail), and `! cmd` is not used because errexit ignores a negated command.
 RUN set -eu; \
     for tool in bsdtar bzip2 curl dash dig docker file gcc git gpg ip iprange iptables jq patch ps \
-                rsync sqlite3 ssh sudo unzip uuidgen xz zstd; do \
+                rsync ssh sudo unzip xz zstd; do \
       command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }; \
     done; \
     [ -x /usr/bin/time ]; \

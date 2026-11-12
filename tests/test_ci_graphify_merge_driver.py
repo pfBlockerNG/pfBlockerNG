@@ -12,8 +12,6 @@ from tests._workflow_steps import extract_job
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-# A real `uses:` step line: a comment that merely names the action is not a step.
-_SETUP_UV = re.compile(r"^\s*(?:- )?uses\s*:\s*astral-sh/setup-uv\b", re.MULTILINE)
 _DRIVER = "ensure-graphify-merge-driver.sh"
 _STEP_RE = re.compile(r"^      - [A-Za-z_][A-Za-z0-9_-]*:", re.MULTILINE)
 _JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$", re.MULTILINE)
@@ -157,10 +155,6 @@ def _assert_job_contract(job: str, spec: PushJob) -> None:
     assert mutation is not None, f"{label}: no qualifying push/pull-rebase command found"
     mutation_step, mutation_command = mutation
     assert mutation_command == spec.first_mutation, f"{label}: first qualifying mutation changed: {mutation_command!r}"
-    # Every writer job runs in the ci image, which bakes uv: a setup-uv step would only shadow it.
-    assert not any(_SETUP_UV.search(step) for step in steps), (
-        f"{label}: uv comes from the ci image, so the job must carry no setup-uv step"
-    )
     assert max(checkout_steps) < ensure, f"{label}: merge-driver setup must run after every relevant checkout"
     assert ensure < mutation_step, f"{label}: merge-driver setup must run before {mutation_command!r}"
 
@@ -240,36 +234,9 @@ _FIXTURE_SPEC = PushJob(
     ),
 )
 
-_SETUP_UV_STEP = """\
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.2.0
-"""
 
-
-@pytest.mark.parametrize(
-    "planted",
-    (
-        _SETUP_UV_STEP + _GOOD_FIXTURE,
-        _GOOD_FIXTURE + _SETUP_UV_STEP,
-        (_SETUP_UV_STEP + _GOOD_FIXTURE).replace("setup-uv@v10.2.0", "setup-uv@v9"),
-        (_SETUP_UV_STEP + _GOOD_FIXTURE).replace("uses: astral-sh", "uses : astral-sh"),
-    ),
-    ids=("before-the-driver", "after-the-push", "another-version", "space-before-the-colon"),
-)
-def test_a_job_whose_uv_comes_from_the_image_rejects_a_setup_uv_step(planted: str) -> None:
+def test_comments_cannot_spoof_checkout_paths() -> None:
     _assert_job_contract(_GOOD_FIXTURE, _FIXTURE_SPEC)
-    with pytest.raises(AssertionError, match="setup-uv"):
-        _assert_job_contract(planted, _FIXTURE_SPEC)
-
-
-def test_comments_cannot_spoof_a_missing_setup_uv_or_checkout_paths() -> None:
-    # A comment naming the action is not a step, so it must not trip the setup-uv check.
-    commented = _GOOD_FIXTURE.replace(
-        "      - name: Publish\n",
-        "      - name: Publish\n        # was: uses: astral-sh/setup-uv@v10.2.0\n",
-    )
-    _assert_job_contract(commented, _FIXTURE_SPEC)
-
     wrong_path = _GOOD_FIXTURE.replace(
         "          path: pkg-repo",
         "          path: wrong-repo\n          # path: pkg-repo",

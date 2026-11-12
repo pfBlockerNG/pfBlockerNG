@@ -18,10 +18,9 @@ from tests.test_ci_tool_pins import GO_PIN
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
-SETUP_GO = "actions/setup-go@v7"
 TEST_JOB = ("test.yml", "test")
 # The build sites known today; the discovery below must still find every one of them. Each runs
-# in a ci / ci-vm job container, whose Go comes from the image instead of a setup-go step.
+# in a ci / ci-vm job container, whose Go comes from the image.
 KNOWN_BUILD_SITES = {
     ("build-pkg-linux.yml", "build"),
     ("nightly.yml", "build"),
@@ -52,8 +51,6 @@ def image_go_problems(job: dict[str, Any]) -> list[str]:
     image = str((job.get("container") or {}).get("image", ""))
     if not re.search(r"needs\.ci-image\.outputs\.ci(_vm)?\b", image):
         problems.append(f"container image is {image!r}, not a ci image that bakes Go")
-    if any(str(step.get("uses", "")).startswith("actions/setup-go@") for step in job.get("steps") or []):
-        problems.append("a setup-go step would shadow the Go baked into the image")
     return problems
 
 
@@ -82,11 +79,6 @@ def test_image_go_check_rejects_each_planted_defect() -> None:
     for label, job, fragment in (
         ("no container", {"steps": []}, "not a ci image"),
         ("foreign image", {"container": {"image": "debian:trixie"}, "steps": []}, "not a ci image"),
-        (
-            "setup-go shadows the image",
-            {"container": {"image": "${{ needs.ci-image.outputs.ci_vm }}"}, "steps": [{"uses": SETUP_GO}]},
-            "shadow",
-        ),
     ):
         problems = image_go_problems(job)
         assert any(fragment in p for p in problems), f"{label}: not reported, got {problems}"

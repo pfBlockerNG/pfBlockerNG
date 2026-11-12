@@ -43,7 +43,7 @@ final class PfblockerngSapiGuardTest extends TestCase
 			}
 		}
 		$this->assertNotNull($cgi, 'php-cgi not found: it is the non-CLI SAPI these tests need '
-			. '(CI setup-php ships it; Debian/Ubuntu: apt install php-cgi)');
+			. '(the ci image bakes it; Debian/Ubuntu: apt install php-cgi)');
 		$this->php_cgi = $cgi;
 
 		$this->dir = sys_get_temp_dir() . '/pfb_sapi_guard_' . getmypid() . '_' . uniqid();

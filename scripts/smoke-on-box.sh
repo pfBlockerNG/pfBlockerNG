@@ -546,7 +546,7 @@ fi
 
 
 # The Tier-B browser marker needs the Chromium BINARY (the playwright wheel ships the
-# bindings only); mirrors ui-tests.yml. The install order and its apt-failure fallback are
+# bindings only). The install order and its apt-failure fallback are
 # the testable bit — they live in the lib, pinned by tests/shell/smoke_tier_spec.sh.
 if pfb_smoke_tier_needs_browser "$_MARKER"; then
     printf 'smoke-on-box: provisioning headless Chromium (browser tier)...\n' >&2
