@@ -86,18 +86,18 @@ func (s *listenerSet) port(kind string) (port int, served bool) {
 	return s.cfg.doqPort, len(s.cfg.doqListen)+len(s.cfg.doqListen853) > 0
 }
 
-// parseListener reads `<kind> <host:port>` in its one canonical spelling: netip's, with no zone, no IPv4-mapped IPv6 and
-// no port 0.
+// parseListener reads `<kind> <host:port>`: any numeric spelling netip reads, with no zone and no port 0. An IPv4-mapped
+// IPv6 address is its IPv4 address, so every spelling of one listener parses to one value.
 func parseListener(body []byte) (kind string, ap netip.AddrPort, err error) {
 	kind, hostPort, ok := strings.Cut(string(body), " ")
 	if !ok || !slices.Contains(listenerKinds, kind) {
 		return "", ap, fmt.Errorf("%q is not `<kind> <host:port>` with a kind of %s", body, strings.Join(listenerKinds, ", "))
 	}
 	ap, err = netip.ParseAddrPort(hostPort)
-	if err != nil || ap.Addr().Zone() != "" || ap.Addr().Is4In6() || ap.Port() == 0 || ap.String() != hostPort {
-		return "", ap, fmt.Errorf("%q is not a host:port of an IP address, in its canonical spelling, without a zone, IPv4-mapped form or port 0", hostPort)
+	if err != nil || ap.Addr().Zone() != "" || ap.Port() == 0 {
+		return "", ap, fmt.Errorf("%q is not a host:port of an IP address without a zone or port 0", hostPort)
 	}
-	return kind, ap, nil
+	return kind, netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), nil
 }
 
 // change takes an add (add set, the descriptors of in) or a remove and returns its reply. An add that is not taken leaves

@@ -171,15 +171,17 @@ func parseAddressTable(body []byte, logf func(format string, args ...any)) (addr
 	return addressTable{names: names, doh443: doh443, interfaces: listenerInterfaceTable(listeners, logf)}, nil
 }
 
-// addListenerInterface adds an `IP=BASE64` value to table: the IP canonical, unscoped, not unspecified and new to table; the
-// label canonical base64 of at most 65535 bytes of UTF-8 with no control, format, line or paragraph separator character. An
-// empty label is valid.
+// addListenerInterface adds an `IP=BASE64` value to table: any numeric spelling of an unscoped, specified IP, keyed by its
+// value (an IPv4-mapped IPv6 address is its IPv4 address) and new to table; the label canonical base64 of at most 65535
+// bytes of UTF-8 with no control, format, line or paragraph separator character. An empty label is valid.
 func addListenerInterface(table map[netip.Addr]string, value string) error {
 	text, encoded, found := strings.Cut(value, "=")
 	ip, err := netip.ParseAddr(text)
-	if !found || err != nil || ip.Zone() != "" || ip.IsUnspecified() || ip.Is4In6() || ip.String() != text {
-		return fmt.Errorf("invalid canonical listener IP %.64q", text)
+	// Zone first: Unmap drops it from an IPv4-mapped address.
+	if !found || err != nil || ip.Zone() != "" || ip.Unmap().IsUnspecified() {
+		return fmt.Errorf("invalid listener IP %.64q", text)
 	}
+	ip = ip.Unmap()
 	if _, exists := table[ip]; exists {
 		return fmt.Errorf("duplicate listener IP %s", ip)
 	}

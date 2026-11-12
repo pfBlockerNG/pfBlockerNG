@@ -45,7 +45,7 @@ func TestRemovingAListenerThatIsNotServedIsAnError(t *testing.T) {
 	}
 }
 
-// A remove whose text is not the canonical spelling of what is served does not take it down.
+// A remove whose text is malformed (a space, a newline, capitals, a missing address) does not take down what is served.
 func TestARemoveThatSpellsTheListenerAnotherWayLeavesItServing(t *testing.T) {
 	r := newLiveRig(t)
 	ap := r.at("dot", "127.0.0.2")
@@ -341,10 +341,8 @@ func TestAnAddOrRemoveWithAMalformedFrameIsRefusedAndItsDescriptorsAreClosed(t *
 		{"unbracketed IPv6", "udp+tcp ::1:" + p},
 		{"a name", "udp+tcp localhost:" + p},
 		{"a zone", "udp+tcp [fe80::1%lo]:" + p},
-		{"IPv4-mapped IPv6", "udp+tcp [::ffff:127.0.0.2]:" + p},
 		{"port 0", "udp+tcp 127.0.0.2:0"},
 		{"port 65536", "udp+tcp 127.0.0.2:65536"},
-		{"a port with a leading zero", "udp+tcp 127.0.0.2:0" + p},
 		{"an address with leading zeros", "udp+tcp 127.000.000.002:" + p},
 		{"a trailing space", "udp+tcp 127.0.0.2:" + p + " "},
 		{"a trailing newline", "udp+tcp 127.0.0.2:" + p + "\n"},
@@ -362,26 +360,36 @@ func TestAnAddOrRemoveWithAMalformedFrameIsRefusedAndItsDescriptorsAreClosed(t *
 		})
 		r.refuse("remove of "+row.name, false, func() []livePart { return []livePart{{liveFrame(liveRemove, row.body), nil}} })
 	}
-	// The sockets of this row are bound to the mapped address itself: only the spelling of the frame is wrong.
+	// The frame's address is unmapped, so IPv6 sockets bound to the mapped address are in the wrong family for it.
 	mapped := netip.AddrPortFrom(netip.MustParseAddr("::ffff:127.0.0.2"), v4.Port())
-	r.refuse("add of IPv4-mapped IPv6 with sockets bound to that very address", false, func() []livePart {
+	reply := r.refuse("add of IPv4-mapped IPv6 with sockets bound to the mapped address", false, func() []livePart {
 		return []livePart{{liveFrame(liveAdd, "udp+tcp "+mapped.String()), liveSockets(t, "udp+tcp", mapped)}}
 	})
+	if want := "is bound to " + mapped.String() + ", not " + v4.String(); !strings.Contains(reply, want) {
+		t.Fatalf("add of IPv4-mapped IPv6 with sockets bound to the mapped address: reply %q, want one that says %q", reply, want)
+	}
 	r.add("udp+tcp", v4) // none of the refusals took the address
 	r.ask("udp+tcp", v4)
 }
 
-// A spelling of an IPv6 address that is not its canonical one is refused although the sockets are exactly right.
-func TestAnAddWithANonCanonicalIPv6SpellingIsRefused(t *testing.T) {
+// A zero-padded spelling of an IPv6 address is that address: the add is served as [::1]:p and answers. A space is no spelling.
+func TestAnAddWithAZeroPaddedIPv6SpellingIsServedAsTheCanonicalListener(t *testing.T) {
 	liveNeedAddr(t, "::1")
 	r := newLiveRig(t)
 	v6 := r.at("udp+tcp", "::1")
 	p := strconv.Itoa(r.port["udp+tcp"])
-	for _, spelling := range []string{"[0:0::1]:", "[0000:0000:0000:0000:0000:0000:0000:0001]:", "[::0001]:", "[::1 ]:"} {
-		r.refuse("add of "+spelling, false, func() []livePart {
-			return []livePart{{liveFrame(liveAdd, "udp+tcp "+spelling+p), liveSockets(t, "udp+tcp", v6)}}
-		})
+	for _, spelling := range []string{"[0:0::1]:", "[0000:0000:0000:0000:0000:0000:0000:0001]:", "[::0001]:"} {
+		if got := r.send(liveFrame(liveAdd, "udp+tcp "+spelling+p), liveSockets(t, "udp+tcp", v6)...); got != "ok" {
+			t.Fatalf("add of %s: reply %q, want ok; log:\n%s", spelling, got, r.logs.text())
+		}
+		r.requireListed("after the add of "+spelling, liveKey("udp+tcp", v6))
+		r.ask("udp+tcp", v6)
+		r.remove("udp+tcp", v6)
+		r.requireListed("after the remove of " + spelling)
 	}
+	r.refuse("add of [::1 ]", false, func() []livePart {
+		return []livePart{{liveFrame(liveAdd, "udp+tcp [::1 ]:"+p), liveSockets(t, "udp+tcp", v6)}}
+	})
 	r.add("udp+tcp", v6)
 	r.ask("udp+tcp", v6)
 }

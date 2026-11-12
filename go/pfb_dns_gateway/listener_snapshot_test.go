@@ -62,30 +62,29 @@ func listenerValue(ip, label string) string {
 
 // badListenerInterfaces are the entries that are skipped, as a flag and as a pushed row, whatever else is given.
 var badListenerInterfaces = map[string]string{
-	"base64 that is not base64":             "127.0.0.1=%%%",
-	"base64 with its trailing bits set":     "127.0.0.1=TF==",
-	"base64 with a carriage return in it":   "127.0.0.1=TE\rFO",
-	"base64 of a label with a line feed":    "127.0.0.1=YmFkCg==",
-	"no equals sign":                        "127.0.0.1",
-	"no value at all":                       "",
-	"an unspecified IPv4 address":           listenerValue("0.0.0.0", "bad"),
-	"an unspecified IPv6 address":           listenerValue("::", "bad"),
-	"an IPv6 address with a zone":           listenerValue("fe80::1%lo", "bad"),
-	"an address in brackets":                listenerValue("[::1]", "bad"),
-	"an address with a port":                listenerValue("127.0.0.1:53", "bad"),
-	"an address with a prefix length":       listenerValue("127.0.0.1/8", "bad"),
-	"an IPv4-mapped IPv6 address":           listenerValue("::ffff:127.0.0.1", "bad"),
-	"an IPv6 address Go spells differently": listenerValue("::1.2.3.4", "bad"),
-	"an IPv6 address in upper case":         listenerValue("2001:DB8::1", "bad"),
-	"a label with a line feed":              listenerValue("127.0.0.1", "bad\nlabel"),
-	"a label with a NUL":                    listenerValue("127.0.0.1", "bad\x00label"),
-	"a label with a DEL":                    listenerValue("127.0.0.1", "bad\x7flabel"),
-	"a label with a C1 control":             listenerValue("127.0.0.1", "bad\u0085label"),
-	"a label that is not UTF-8":             listenerValue("127.0.0.1", string([]byte{0xff})),
-	"a label with a zero-width joiner":      listenerValue("127.0.0.1", "bad\u200dlabel"),
-	"a label with a left-to-right mark":     listenerValue("127.0.0.1", "bad\u200elabel"),
-	"a label with a line separator":         listenerValue("127.0.0.1", "bad\u2028label"),
-	"a label with a paragraph separator":    listenerValue("127.0.0.1", "bad\u2029label"),
+	"base64 that is not base64":               "127.0.0.1=%%%",
+	"base64 with its trailing bits set":       "127.0.0.1=TF==",
+	"base64 with a carriage return in it":     "127.0.0.1=TE\rFO",
+	"base64 of a label with a line feed":      "127.0.0.1=YmFkCg==",
+	"no equals sign":                          "127.0.0.1",
+	"no value at all":                         "",
+	"an unspecified IPv4 address":             listenerValue("0.0.0.0", "bad"),
+	"an unspecified IPv6 address":             listenerValue("::", "bad"),
+	"an IPv6 address with a zone":             listenerValue("fe80::1%lo", "bad"),
+	"an address in brackets":                  listenerValue("[::1]", "bad"),
+	"an address with a port":                  listenerValue("127.0.0.1:53", "bad"),
+	"an address with a prefix length":         listenerValue("127.0.0.1/8", "bad"),
+	"an IPv4-mapped unspecified address":      listenerValue("::ffff:0.0.0.0", "bad"),
+	"an IPv4-mapped IPv6 address with a zone": listenerValue("::ffff:127.0.0.1%lo", "bad"),
+	"a label with a line feed":                listenerValue("127.0.0.1", "bad\nlabel"),
+	"a label with a NUL":                      listenerValue("127.0.0.1", "bad\x00label"),
+	"a label with a DEL":                      listenerValue("127.0.0.1", "bad\x7flabel"),
+	"a label with a C1 control":               listenerValue("127.0.0.1", "bad\u0085label"),
+	"a label that is not UTF-8":               listenerValue("127.0.0.1", string([]byte{0xff})),
+	"a label with a zero-width joiner":        listenerValue("127.0.0.1", "bad\u200dlabel"),
+	"a label with a left-to-right mark":       listenerValue("127.0.0.1", "bad\u200elabel"),
+	"a label with a line separator":           listenerValue("127.0.0.1", "bad\u2028label"),
+	"a label with a paragraph separator":      listenerValue("127.0.0.1", "bad\u2029label"),
 }
 
 // goodListenerLabels are text: the rule skips controls, format characters and line breaks, not what is not ASCII.
@@ -213,6 +212,62 @@ func TestTheFirstOfTwoListenerInterfaceRowsForOneAddressWins(t *testing.T) {
 			pushTable(t, k, listenerRow("127.0.0.2", "kept")+"\n"+initial+"\n"+second)
 			requireListenerSnapshot(t, k, map[string]string{"127.0.0.2": "kept", "127.0.0.1": "LAN"}, "after the push")
 			requireSkipped(t, k.r.logs.joined(), strings.TrimPrefix(second, "listener-interface "))
+		})
+	}
+}
+
+// An IP in any numeric spelling is keyed by its value, as a flag and as a pushed row: an IPv4-mapped address is the IPv4
+// address and netip's text names the rest. Issue #3849.
+func TestListenerInterfaceIPsAreKeyedByValue(t *testing.T) {
+	for name, row := range map[string]struct{ spelling, key string }{
+		"an IPv4-mapped IPv6 address":           {"::ffff:127.0.0.1", "127.0.0.1"},
+		"an IPv6 address Go spells differently": {"::1.2.3.4", "::102:304"},
+		"an IPv6 address in upper case":         {"2001:DB8::1", "2001:db8::1"},
+	} {
+		want := map[string]string{row.key: "LAN"}
+		t.Run(name+" pushed", func(t *testing.T) {
+			k := newCtlRig(t)
+			pushTable(t, k, listenerRow(row.spelling, "LAN"))
+			requireListenerSnapshot(t, k, want, "after the push")
+			requireSkipped(t, k.r.logs.joined())
+		})
+		t.Run(name+" as a flag", func(t *testing.T) {
+			cfg, logs := lifecycleConfig(t)
+			cfg.listenerInterfaces = []string{listenerValue(row.spelling, "LAN")}
+			srv, err := start(cfg, logs.logf)
+			if err != nil {
+				t.Fatalf("start with listener-interface %q: %v", row.spelling, err)
+			}
+			defer srv.shutdown()
+			got := map[string]string{}
+			if table := srv.g.listenerInterfaces.Load(); table != nil {
+				for ip, label := range *table {
+					got[ip.String()] = label
+				}
+			}
+			if !maps.Equal(got, want) {
+				t.Fatalf("listener interfaces %q, want %q", got, want)
+			}
+			requireSkipped(t, logs.text())
+		})
+	}
+}
+
+// Two spellings of one address are two rows for one address: the first is applied and the second is skipped as a duplicate.
+func TestTheFirstOfTwoSpellingsOfOneListenerInterfaceAddressWins(t *testing.T) {
+	for name, row := range map[string]struct{ first, second, key string }{
+		"IPv4-mapped, then IPv4":      {"::ffff:127.0.0.1", "127.0.0.1", "127.0.0.1"},
+		"IPv4, then IPv4-mapped":      {"127.0.0.1", "::ffff:127.0.0.1", "127.0.0.1"},
+		"lower case, then upper case": {"2001:db8::1", "2001:DB8::1", "2001:db8::1"},
+		"dotted, then netip":          {"::1.2.3.4", "::102:304", "::102:304"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := newCtlRig(t)
+			pushTable(t, k, listenerRow("127.0.0.2", "kept")+"\n"+listenerRow(row.first, "first")+"\n"+listenerRow(row.second, "second"))
+			requireListenerSnapshot(t, k, map[string]string{"127.0.0.2": "kept", row.key: "first"}, "after the push")
+			second := listenerValue(row.second, "second")
+			requireSkipped(t, k.r.logs.joined(), second)
+			requireLogLine(t, k.r.logs.joined(), fmt.Sprintf("listener-interface %.64q skipped: duplicate listener IP %s", second, row.key))
 		})
 	}
 }
