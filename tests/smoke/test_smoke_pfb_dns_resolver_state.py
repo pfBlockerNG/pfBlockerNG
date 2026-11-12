@@ -21,6 +21,9 @@ handler (services_unbound.php over HTTP). Nothing is faked on the box.
   every Resolver key stay as they were, port 53 answers nothing, the Service line says no free loopback port pair is
   left and the newest notice names the holder; when one pair frees up the next tick moves Unbound there and serves
   again (issue #3848).
+* The boot path without a reboot: the gateway and Unbound down, the same holder on Unbound's port, a free pair left. The
+  rc script's start (as the boot hook runs it) exits 0 having started nothing and leaves the backend-blocked marker; the
+  boot check (as the hook runs it) moves Unbound to the free pair, starts the gateway and clears the marker (#3848).
 * A Resolver disabled in Services > DNS Resolver while pfB-DNS fronts it: the proxy kept LAN:53 and answered SERVFAIL
   for every allowed name. A disabled Resolver is not the admin turning pfB-DNS off: the next apply, or the next tick,
   restores nothing and raises one notice that says pfB-DNS has no backend until the Resolver is enabled or pfB-DNS is
@@ -594,6 +597,125 @@ def test_every_free_pair_taken_stops_pfb_dns_without_restoring_the_resolver_and_
             assert not any("restored" in text.lower() for text in new), f"nothing is given back: {new}"
         finally:
             _release(vm)
+
+
+BLOCKED_MARKER = "/var/run/pfb_dns_proxy_backend_blocked"
+# What pfb_upstream_observer_include.inc backgrounds beside the rc script's start (its `since` argument is 0 here)
+BOOT_CHECK = (
+    "/usr/bin/timeout --foreground -s TERM -k 5 360 /usr/local/bin/php"
+    " -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check 0"
+)
+
+
+def _blocked_marker(vm: SmokeVM) -> list[str] | None:
+    """The lines of the backend-blocked marker (kind, port, holder), None when the file is absent."""
+    result = vm.ssh("cat", BLOCKED_MARKER)
+    return result.stdout.splitlines() if result.returncode == 0 else None
+
+
+@pytest.mark.timeout(1500)
+@pytest.mark.usefixtures("proxy_on", "_clear_dns_proxy_notices")
+def test_the_boot_start_refuses_a_foreign_holder_and_the_boot_check_moves_the_backend_and_serves(rig: Rig) -> None:
+    """Given pfB-DNS serving (a listed name is blocked with the DNSBL VIP), the gateway and Unbound stopped, and another
+    process holding both transports of 127.0.0.1:P, Unbound's loopback port (P is the marked clause's), with a free pair
+    above it, as at a boot where something took the port first,
+    When the rc script's start runs as the boot hook runs it,
+    Then it exits 0 having started nothing (no gateway process or pidfile) and leaves the backend-blocked marker with
+    kind `holder`, P and the holder (#3848);
+    and when the boot check runs exactly as the hook runs it, Then the clause port moved off P, the live Unbound owns
+    TCP and UDP on the new pair, the gateway's --upstream names it, the marker is gone, the listed name is blocked
+    again, an allowed name resolves through port 53, one notice names the holder and the move, the Resolver snapshot is
+    still set and the holder still holds P.
+    """
+    vm = rig.vm
+    with _unmoved_afterwards(rig):
+        before = _moved(rig)
+        port = _backend_port(vm)
+        assert port is not None, f"before: the clause names no backend port: {before.resolver}"
+        blocked, raw = _query(rig.client, rig.names.blocked)
+        assert h.is_vip(blocked), f"before: pfB-DNS must block the listed name with the DNSBL VIP: {raw}"
+        assert _blocked_marker(vm) is None, "before: no backend-blocked marker may stand"
+        prior_notices = len(_notices(vm))
+
+        try:
+            # the boot's state: gateway down, Unbound down, a stranger on Unbound's port, the pair above it free
+            stopped = _sh(vm, f"{PROXY_RC} stop")
+            assert stopped.returncode == 0, f"stopping the gateway failed: {stopped.stdout!r} {stopped.stderr!r}"
+            h.wait_until(lambda: _service_status(vm) == "stopped", timeout=60.0, interval=2.0)
+            _stop_unbound(vm, port)
+            _occupy(vm, ["127.0.0.1"], str(port))
+            holders = {s.pid for s in _listeners(vm, connected=True) if s.command == "nc" and s.port == port}
+            assert holders, f"before: nc must hold {port}"
+            in_use = {s.port for s in _listeners(vm)}
+            assert in_use.isdisjoint({port + 2, port + 3}), f"before: the pair above {port} must be free: {in_use}"
+
+            # the boot hook's start: refused, and the refusal is a marker, not a failure
+            started = _sh(vm, f"{PROXY_RC} start")
+            ps = vm.ssh("ps -axww -o pid,user,args | grep -E 'pfb_dns_prox[y]|/pfb-dn[s]'").stdout.splitlines()
+            print(f"[3848] boot start with {port} held: rc={started.returncode} {started.stdout!r}", flush=True)
+            assert started.returncode == 0, f"the start must exit 0: rc={started.returncode} {started.stderr!r}"
+            assert ps == [], f"the start must have started nothing: {ps}"
+            assert _pid_file(vm, PROXY_PID_FILE) is None and _pid_file(vm, DAEMON_PID_FILE) is None, (
+                "the start left a gateway pidfile"
+            )
+            marker = _blocked_marker(vm)
+            assert marker is not None and len(marker) == 3, (
+                f"the start must leave the marker (kind, port, holder): {marker}"
+            )
+            found = re.fullmatch(rf"nc \(pid (\d+)\) on 127\.0\.0\.1:{port}", marker[2])
+            assert marker[:2] == ["holder", str(port)] and found and int(found.group(1)) in holders, (
+                f"marker: expected holder, {port} and nc's line (pids {sorted(holders)}): {marker}"
+            )
+
+            # the boot check, as the hook runs it: it finds the way out
+            try:
+                check = _sh(vm, BOOT_CHECK, timeout=400.0)
+            finally:
+                tail = f"tail -n 80 {h.PFB_LOGDIR}/error.log {h.PFB_DNS_PROXY_LOG} /var/log/resolver.log 2>&1"
+                print(f"[3848] boot check with {port} held:\n{vm.ssh(tail).stdout}", flush=True)
+            assert check.returncode == 0, f"the boot check must exit 0: rc={check.returncode} {check.stderr!r}"
+            h.wait_until(lambda: _service_status(vm) == "running", timeout=120.0, interval=3.0)
+            h.wait_unbound_ready(vm)
+            _wait_proxy_serves(rig)
+
+            after = _capture(vm)
+            moved = _backend_port(vm)
+            assert moved is not None and moved != port, f"the clause's pair must have moved off {port}: {moved!r}"
+            ours = {
+                (s.proto, s.local)
+                for s in _listeners(vm)
+                if s.command == "unbound" and s.pid == after.unbound_pid and s.port == moved
+            }
+            assert {("tcp4", f"127.0.0.1:{moved}"), ("udp4", f"127.0.0.1:{moved}")} <= ours, (
+                f"Unbound's pid {after.unbound_pid} must own TCP and UDP on 127.0.0.1:{moved}: {sorted(ours)}"
+            )
+            rc = vm.ssh("cat", PROXY_RC).stdout
+            assert f"--upstream '127.0.0.1:{moved}'" in rc, f"the rc script's --upstream must name {moved}:\n{rc}"
+            assert any(f"--upstream 127.0.0.1:{moved}" in line for line in after.ps), (
+                f"the running gateway's --upstream must name {moved}: {after.ps}"
+            )
+            assert after.service == "running", f"the gateway serves: {after.service} {after.ps}"
+            assert _blocked_marker(vm) is None, f"the marker must be gone: {_blocked_marker(vm)}"
+            assert _toggle_on_in_config(vm) and _snapshot_present(vm), f"pfB-DNS on, the Resolver moved: {after}"
+            assert (_config_text(vm, CFG_MARKER) or "") == before.marker, "the snapshot is kept byte for byte"
+
+            blocked, raw = _query(rig.client, rig.names.blocked)
+            assert h.is_vip(blocked), f"the listed name must be blocked again with the DNSBL VIP: {raw}"
+            allowed, raw = _query(rig.client, h.unique_domain("boot-moved"))
+            assert h.resolves_to(allowed, STUB_DNS_A), f"an allowed name must resolve through port 53: {raw}"
+            still = {s.pid for s in _listeners(vm, connected=True) if s.command == "nc" and s.port == port}
+            assert holders & still, f"the other process must still hold {port}: {sorted(still)}"
+            new = _notices(vm)[prior_notices:]
+            assert any(
+                "nc (pid " in text
+                and f"on 127.0.0.1:{port}" in text
+                and f"moved from ports {port}/{port + 1} to {moved}/{moved + 1}" in text
+                for text in new
+            ), f"a notice must name nc and the move: {new}"
+            assert not any("restored" in text.lower() for text in new), f"nothing is given back: {new}"
+        finally:
+            _release(vm)
+            vm.ssh("rm", "-f", BLOCKED_MARKER)
 
 
 # --------------------------------------------------------------------------- #
