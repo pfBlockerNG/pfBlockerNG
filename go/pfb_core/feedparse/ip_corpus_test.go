@@ -25,8 +25,9 @@ type ipExpect struct {
 }
 
 type ipRow struct {
-	Line   string
-	Expect ipExpect
+	Line      string
+	Appliance bool // the expectation is the pfSense appliance's; the Go runner asserts it like any other
+	Expect    ipExpect
 }
 
 type ipCase struct {
@@ -44,8 +45,9 @@ type ipCorpus struct {
 	Types []ipType
 }
 
-// keysOf fails unless raw is a JSON object whose keys are exactly required plus, per group, exactly one of its members.
-func keysOf(raw json.RawMessage, what string, required []string, oneOf ...[2]string) (map[string]json.RawMessage, error) {
+// keysOf fails unless raw is a JSON object whose keys are the required ones, any of the optional ones and, per group,
+// exactly one of its members.
+func keysOf(raw json.RawMessage, what string, required, optional []string, oneOf ...[2]string) (map[string]json.RawMessage, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
 		return nil, fmt.Errorf("%s: not an object", what)
@@ -63,14 +65,14 @@ func keysOf(raw json.RawMessage, what string, required []string, oneOf ...[2]str
 			want = append(want, pair[1])
 		}
 	}
-	for k := range m {
-		if !slices.Contains(want, k) {
-			return nil, fmt.Errorf("%s: unknown key %q", what, k)
-		}
-	}
 	for _, k := range want {
 		if _, ok := m[k]; !ok {
 			return nil, fmt.Errorf("%s: missing key %q", what, k)
+		}
+	}
+	for k := range m {
+		if !slices.Contains(want, k) && !slices.Contains(optional, k) {
+			return nil, fmt.Errorf("%s: unknown key %q", what, k)
 		}
 	}
 	return m, nil
@@ -103,7 +105,7 @@ func feedBytes(m map[string]json.RawMessage, key string) (string, error) {
 }
 
 func parseIPCorpus(data []byte) (*ipCorpus, error) {
-	top, err := keysOf(data, "corpus", []string{"schema", "cases", "types"})
+	top, err := keysOf(data, "corpus", []string{"schema", "cases", "types"}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +141,7 @@ func parseIPCorpus(data []byte) (*ipCorpus, error) {
 	}
 	seen = map[string]bool{}
 	for _, raw := range types {
-		if _, err := keysOf(raw, "type", []string{"id", "description", "format", "url", "expect"}); err != nil {
+		if _, err := keysOf(raw, "type", []string{"id", "description", "format", "url", "expect"}, nil); err != nil {
 			return nil, err
 		}
 		var t ipType
@@ -164,7 +166,7 @@ func parseIPCorpus(data []byte) (*ipCorpus, error) {
 }
 
 func parseIPCase(raw json.RawMessage) (*ipCase, error) {
-	m, err := keysOf(raw, "case", []string{"id", "description", "config", "rows"})
+	m, err := keysOf(raw, "case", []string{"id", "description", "config", "rows"}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +174,7 @@ func parseIPCase(raw json.RawMessage) (*ipCase, error) {
 	if json.Unmarshal(m["id"], &c.ID) != nil || json.Unmarshal(m["description"], &c.Description) != nil {
 		return nil, fmt.Errorf("case: id and description must be strings")
 	}
-	if _, err := keysOf(m["config"], c.ID+" config", []string{"vtype", "pftype", "custom", "cidr_floor_v4", "cidr_floor_v6", "suppression"}); err != nil {
+	if _, err := keysOf(m["config"], c.ID+" config", []string{"vtype", "pftype", "custom", "cidr_floor_v4", "cidr_floor_v6", "suppression"}, nil); err != nil {
 		return nil, err
 	}
 	if err := strictInto(m["config"], &struct {
@@ -194,15 +196,20 @@ func parseIPCase(raw json.RawMessage) (*ipCase, error) {
 	}
 	for i, rr := range rows {
 		what := fmt.Sprintf("%s row %d", c.ID, i)
-		rm, err := keysOf(rr, what, []string{"expect"}, [2]string{"line", "line_hex"})
+		rm, err := keysOf(rr, what, []string{"expect"}, []string{"appliance"}, [2]string{"line", "line_hex"})
 		if err != nil {
 			return nil, err
 		}
 		row := ipRow{}
+		if raw, ok := rm["appliance"]; ok {
+			if json.Unmarshal(raw, &row.Appliance) != nil || !row.Appliance {
+				return nil, fmt.Errorf("%s: appliance, if present, is true", what)
+			}
+		}
 		if row.Line, err = feedBytes(rm, "line"); err != nil {
 			return nil, fmt.Errorf("%s: %v", what, err)
 		}
-		em, err := keysOf(rm["expect"], what+" expect", []string{"entries", "suppressed", "parse_fail", "detailed_parse_fail"},
+		em, err := keysOf(rm["expect"], what+" expect", []string{"entries", "suppressed", "parse_fail", "detailed_parse_fail"}, nil,
 			[2]string{"line", "line_hex"}, [2]string{"messages", "messages_hex"})
 		if err != nil {
 			return nil, err
@@ -279,7 +286,8 @@ func TestIPCorpus(t *testing.T) {
 				actual := ipExpect{Entries: got.Entries, Line: got.Line, Suppressed: got.Suppressed, ParseFail: got.ParseFail, Detailed: got.DetailedParseFail, Messages: got.Messages}
 				if !reflect.DeepEqual(nilToEmpty(actual.Entries), nilToEmpty(row.Expect.Entries)) || actual.Line != row.Expect.Line || actual.Suppressed != row.Expect.Suppressed ||
 					actual.ParseFail != row.Expect.ParseFail || actual.Detailed != row.Expect.Detailed || !reflect.DeepEqual(nilToEmpty(actual.Messages), nilToEmpty(row.Expect.Messages)) {
-					t.Errorf("%s row %d (%s)\nexpected %s\nactual   %s", c.ID, i, c.Description, describeIPLine(row.Line, row.Expect), describeIPLine(row.Line, actual))
+					t.Errorf("%s row %d (%s%s)\nexpected %s\nactual   %s", c.ID, i, c.Description, map[bool]string{true: "; appliance row", false: ""}[row.Appliance],
+						describeIPLine(row.Line, row.Expect), describeIPLine(row.Line, actual))
 				}
 			}
 		})
@@ -310,6 +318,10 @@ func TestIPCorpusLoaderIsStrict(t *testing.T) {
 	if _, err := parseIPCorpus([]byte(corpus(kase("a", ""), typ))); err != nil {
 		t.Fatalf("control corpus rejected: %v", err)
 	}
+	applianceRow := strings.Replace(kase("a", ""), `{"line": "1.2.3.4\n",`, `{"line": "1.2.3.4\n", "appliance": true,`, 1)
+	if c, err := parseIPCorpus([]byte(corpus(applianceRow, typ))); err != nil || !c.Cases[0].Rows[0].Appliance {
+		t.Fatalf("appliance row not accepted and read: %v", err)
+	}
 	bad := map[string]string{
 		"unknown case key":    corpus(kase("a", `, "extra": 1`), typ),
 		"duplicate id":        corpus(kase("a", "")+","+kase("a", ""), typ),
@@ -318,6 +330,8 @@ func TestIPCorpusLoaderIsStrict(t *testing.T) {
 		"unknown expect key":  corpus(strings.Replace(kase("a", ""), `"parse_fail": 0`, `"parse_fail": 0, "x": 1`, 1), typ),
 		"missing expect key":  corpus(strings.Replace(kase("a", ""), `"suppressed": false, `, "", 1), typ),
 		"line and line_hex":   corpus(strings.Replace(kase("a", ""), `{"line": "1.2.3.4\n",`, `{"line": "1.2.3.4\n", "line_hex": "00",`, 1), typ),
+		"appliance false":     corpus(strings.Replace(kase("a", ""), `{"line": "1.2.3.4\n",`, `{"line": "1.2.3.4\n", "appliance": false,`, 1), typ),
+		"appliance a string":  corpus(strings.Replace(kase("a", ""), `{"line": "1.2.3.4\n",`, `{"line": "1.2.3.4\n", "appliance": "yes",`, 1), typ),
 		"unknown row key":     corpus(strings.Replace(kase("a", ""), `{"line": "1.2.3.4\n",`, `{"x": 1, "line": "1.2.3.4\n",`, 1), typ),
 		"unknown type key":    corpus(kase("a", ""), strings.Replace(typ, `"url": "u"`, `"url": "u", "x": 1`, 1)),
 		"type duplicate id":   corpus(kase("a", ""), typ+","+typ),

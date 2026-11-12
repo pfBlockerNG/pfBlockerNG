@@ -92,8 +92,13 @@ final class FeedParseIpCorpusTest extends TestCase
 		self::check(is_string($c['cidr_floor_v4']) && is_string($c['cidr_floor_v6']), "{$id}: floors are strings");
 		self::check(is_array($case['rows']) && $case['rows'] !== [] && array_is_list($case['rows']), "{$id}: rows must be a non-empty list");
 		foreach ($case['rows'] as $n => $row) {
-			self::check(is_array($row) && count($row) === 2 && isset($row['expect']), "{$id} row {$n}: line and expect");
-			self::check(array_key_exists('line', $row) !== array_key_exists('line_hex', $row), "{$id} row {$n}: exactly one of line, line_hex");
+			self::check(is_array($row) && isset($row['expect']), "{$id} row {$n}: line and expect");
+			$rowKeys = ['expect', array_key_exists('line', $row) ? 'line' : 'line_hex'];
+			if (array_key_exists('appliance', $row)) {
+				self::check($row['appliance'] === TRUE, "{$id} row {$n}: appliance, if present, is true");
+				$rowKeys[] = 'appliance';
+			}
+			self::exactKeys($row, $rowKeys, "{$id} row {$n}");
 			self::check(array_key_exists('line', $row) ? is_string($row['line']) : (is_string($row['line_hex']) && preg_match('/^(?:[0-9a-f]{2})*$/', $row['line_hex']) === 1), "{$id} row {$n}: line bytes");
 			$e = $row['expect'];
 			self::check(is_array($e), "{$id} row {$n}: expect object");
@@ -111,14 +116,35 @@ final class FeedParseIpCorpusTest extends TestCase
 		return array_key_exists($key, $o) ? $o[$key] : (string) hex2bin($o[$key . '_hex']);
 	}
 
-	/** @return array<string, array{array<string, mixed>}> */
+	/**
+	 * One data set per case for its rows the host can answer, and one per `appliance` row, which the host can answer only
+	 * where pfSense's own is_ipaddrv6() (PEAR Net_IPv6) is installed.
+	 *
+	 * @return array<string, array{string, string, array<string, mixed>, list<array<string, mixed>>, bool}>
+	 */
 	public static function caseProvider(): array
 	{
-		$cases = [];
+		$sets = [];
 		foreach (self::corpus()['cases'] as $case) {
-			$cases[$case['id']] = [$case];
+			$plain = [];
+			foreach ($case['rows'] as $n => $row) {
+				if (isset($row['appliance'])) {
+					$sets["{$case['id']} appliance row {$n}"] = [$case['id'], $case['description'], $case['config'], [$row], TRUE];
+				} else {
+					$plain[] = $row;
+				}
+			}
+			if ($plain !== []) {
+				$sets[$case['id']] = [$case['id'], $case['description'], $case['config'], $plain, FALSE];
+			}
 		}
-		return $cases;
+		return $sets;
+	}
+
+	/** The appliance's is_ipaddrv6() ends in Net_IPv6::checkIPv6(), which takes a trailing blank; the doubles' filter_var does not. */
+	private static function hostIsAppliance(): bool
+	{
+		return is_ipaddrv6('1:2:3:4:5:6:7:8 ') === TRUE;
 	}
 
 	/** @return array<string, array{array<string, mixed>}> */
@@ -139,11 +165,16 @@ final class FeedParseIpCorpusTest extends TestCase
 			'messages' => array_map(static fn(string $m): string => addcslashes($m, "\0..\37\177..\377"), $r['messages'])], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 	}
 
-	/** @param array<string, mixed> $case */
+	/**
+	 * @param array<string, mixed> $c
+	 * @param list<array<string, mixed>> $rows
+	 */
 	#[DataProvider('caseProvider')]
-	public function testCase(array $case): void
+	public function testCase(string $id, string $description, array $c, array $rows, bool $appliance): void
 	{
-		$c = $case['config'];
+		if ($appliance && !self::hostIsAppliance()) {
+			$this->markTestSkipped('old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var');
+		}
 		$config = pfb_ip_regex_config() + [
 			'vtype'         => $c['vtype'],
 			'pftype'        => $c['pftype'],
@@ -161,7 +192,7 @@ final class FeedParseIpCorpusTest extends TestCase
 			throw new RuntimeException("PHP diagnostic while replaying: {$str}");
 		});
 		try {
-			foreach ($case['rows'] as $n => $row) {
+			foreach ($rows as $row) {
 				$line = self::bytes($row, 'line');
 				$e = $row['expect'];
 				$expected[] = self::show($line, [
@@ -179,7 +210,7 @@ final class FeedParseIpCorpusTest extends TestCase
 		} finally {
 			restore_error_handler();
 		}
-		$this->assertSame($expected, $actual, "{$case['id']}: {$case['description']}");
+		$this->assertSame($expected, $actual, "{$id}: {$description}");
 	}
 
 	/** The apply script's inline parser-type dispatch, cut out verbatim (it is not a function). */
@@ -231,6 +262,8 @@ final class FeedParseIpCorpusTest extends TestCase
 			'unknown expect key'  => [$doc(str_replace('"parse_fail": 0', '"parse_fail": 0, "x": 1', $case('a')), $type)],
 			'missing expect key'  => [$doc(str_replace('"suppressed": false, ', '', $case('a')), $type)],
 			'line and line_hex'   => [$doc(str_replace('{"line": "1.2.3.4\n",', '{"line": "1.2.3.4\n", "line_hex": "00",', $case('a')), $type)],
+			'appliance false'     => [$doc(str_replace('{"line": "1.2.3.4\n",', '{"line": "1.2.3.4\n", "appliance": false,', $case('a')), $type)],
+			'appliance a string'  => [$doc(str_replace('{"line": "1.2.3.4\n",', '{"line": "1.2.3.4\n", "appliance": "yes",', $case('a')), $type)],
 			'unknown row key'     => [$doc(str_replace('{"line": "1.2.3.4\n",', '{"x": 1, "line": "1.2.3.4\n",', $case('a')), $type)],
 			'unknown type key'    => [$doc($case('a'), str_replace('"url": "u"', '"url": "u", "x": 1', $type))],
 			'type duplicate id'   => [$doc($case('a'), $type . ',' . $type)],
@@ -245,7 +278,8 @@ final class FeedParseIpCorpusTest extends TestCase
 		$row = '{"line": "1.2.3.4\n", "expect": {"entries": ["1.2.3.4"], "line": "1.2.3.4", "suppressed": false, "parse_fail": 0, "detailed_parse_fail": false, "messages": []}}';
 		$config = '{"vtype": "_v4", "pftype": "auto", "custom": false, "cidr_floor_v4": "Disabled", "cidr_floor_v6": "Disabled", "suppression": false}';
 		$type = '{"id": "t", "description": "d", "format": "auto", "url": "u", "expect": "auto"}';
-		self::validate(json_decode('{"schema": 1, "cases": [{"id": "a", "description": "d", "config": ' . $config . ', "rows": [' . $row . ']}], "types": [' . $type . ']}', TRUE, 512, JSON_THROW_ON_ERROR));
+		$applianceRow = str_replace('{"line": "1.2.3.4\n",', '{"line": "1.2.3.4\n", "appliance": true,', $row);
+		self::validate(json_decode('{"schema": 1, "cases": [{"id": "a", "description": "d", "config": ' . $config . ', "rows": [' . $row . ', ' . $applianceRow . ']}], "types": [' . $type . ']}', TRUE, 512, JSON_THROW_ON_ERROR));
 		$this->addToAssertionCount(1);
 	}
 
