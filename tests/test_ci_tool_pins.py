@@ -223,12 +223,31 @@ def test_the_doc_scan_still_reaches_the_checkouts_own_docs(tmp_path: Path) -> No
 
 
 def test_the_baked_playwright_matches_the_locked_one() -> None:
-    """The ui job's `playwright install chromium` finds the browser baked into ci-vm at
-    PLAYWRIGHT_BROWSERS_PATH only while the locked playwright wants the same build. On a
-    mismatch it downloads a browser on every run instead of failing, so the drift is silent."""
+    """No job runs `playwright install`: the browser tier uses the Chromium baked into ci-vm at
+    PLAYWRIGHT_BROWSERS_PATH. On a mismatch the locked playwright cannot find its browser build
+    there and the tier fails, so the drift cannot pass silently."""
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     locked = [package["version"] for package in lock["package"] if package["name"] == "playwright"]
     baked = re.findall(r"^ARG\s+PLAYWRIGHT_VERSION=(\S+)\s*$", _DOCKERFILE.read_text(encoding="utf-8"), re.MULTILINE)
 
     assert len(locked) == 1, f"uv.lock must lock exactly one playwright, found {locked}"
     assert baked == locked, f"the Dockerfile bakes playwright {baked}, uv.lock locks {locked}"
+
+
+def test_no_workflow_downloads_a_playwright_browser() -> None:
+    """The Chromium for the browser tier comes only from the ci-vm image. A workflow or composite
+    action that runs `playwright install` fetches a browser on every run, or no-ops while the
+    baked build matches, so the step hides a drift the pin test is there to catch."""
+    actions = ROOT / ".github/actions"
+    paths = sorted([*_WORKFLOWS.glob("*.yml"), *_WORKFLOWS.glob("*.yaml"), *actions.glob("**/action.y*ml")])
+    assert [path for path in paths if path.parent == _WORKFLOWS], "the scan read no workflow file"
+    offenders = [
+        f"{path.relative_to(ROOT)}:{line_no}"
+        for path in paths
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if re.search(r"\bplaywright\s+install\b", line)
+    ]
+
+    assert not offenders, (
+        f"the browser comes only from the ci-vm image, but these run `playwright install`: {offenders}"
+    )

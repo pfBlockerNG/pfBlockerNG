@@ -730,15 +730,6 @@ jobs:
           path: ~/.cache/uv
           key: uv-${{ hashFiles('uv.lock') }}
 
-      - name: Install the headless Chromium browser (browser tier only)
-        # The `playwright` wheel in the smoke group ships the Python bindings only; the Chromium
-        # BINARY is a separate download. The ci-vm image bakes it, with its shared libraries, at
-        # PLAYWRIGHT_BROWSERS_PATH: while the wheel matches the baked pin (tests/test_ci_tool_pins.py)
-        # this is a no-op, and on a mismatch it downloads the browser, never touching apt. Only the
-        # browser tier needs it.
-        if: matrix.tier == 'browser'
-        run: uv run playwright install chromium
-
       # NOTE: unlike the smoke matrix, the UI tier does NOT set SMOKE_BLOCK_EGRESS:
       # the render/functional/browser tiers are hermetic from the box's own config
       # (no feed download to render chrome) but want a working resolver + the
