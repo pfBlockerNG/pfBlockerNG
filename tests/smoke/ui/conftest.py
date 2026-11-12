@@ -148,9 +148,10 @@ def wait_for_document_ready(page: Page) -> None:
     """Wait until jQuery has run ``page``'s document-ready handlers (#3864, #3867).
 
     pfSense.js's ready handler focuses the first visible input, so a focus taken before it runs is lost.
-    jQuery runs ready callbacks in registration order, so this one resolves after pfSense's.
+    jQuery runs ready callbacks in registration order, so this one resolves after pfSense's. A page without jQuery,
+    such as a bare dashboard widget, has no ready handlers to wait for.
     """
-    page.evaluate("() => new Promise((ready) => jQuery(ready))")
+    page.evaluate("() => window.jQuery && new Promise((ready) => jQuery(ready))")
 
 
 # Re-export so the browser test modules import REDACTED from one place.
