@@ -158,6 +158,10 @@ if ($_POST && isset($_POST['save'])) {
 					PfbConfig::write('gen/pfb_dns_listen_vip4', $pconfig['pfb_dns_listen_vip4'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip4']);
 					PfbConfig::write('gen/pfb_dns_listen_vip6', $pconfig['pfb_dns_listen_vip6'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip6']);
 					PfbConfig::write('gen/pfb_dns_listen_interface', $pconfig['pfb_dns_listen_interface']);
+					// Core's dry run judges the settings as this save leaves them in memory; a refusal saves nothing
+					$input_errors = pfb_core_settings_validate();
+				}
+				if (!$input_errors) {
 					// The page write goes first: a refused apply write re-reads config.xml, which would drop these unsaved settings.
 					$pfb_written = write_config('[pfBlockerNG] save DNS settings');
 					if ($pfb_written !== FALSE && $pfb_written !== -1) {
@@ -172,6 +176,7 @@ if ($_POST && isset($_POST['save'])) {
 			// saved, so the save is an input error and the form comes back as submitted. A written save whose Resolver VIP or
 			// advertisement write failed stays saved and pending: the next Update or save retries the apply.
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
+				pfb_core_settings_push(NULL, TRUE);	// outside the lock (a slow Core must not hold it); a failure never undoes the save
 				if ($pfb_applied) {
 					header('Location: /pfblockerng/pfblockerng_dns_general.php');
 					exit;
@@ -222,6 +227,9 @@ $tab_array[] = array(gettext('DNSBL Groups'), FALSE, '/pfblockerng/pfblockerng_c
 $tab_array[] = array(gettext('DNSBL Category'), FALSE, '/pfblockerng/pfblockerng_blacklist.php');
 $tab_array[] = array(gettext('DNSBL SafeSearch'), FALSE, '/pfblockerng/pfblockerng_safesearch.php');
 display_top_tabs($tab_array, TRUE);
+if (is_file($pfb['core_push_failed'])) {
+	print_info_box(sprintf(gettext('pfBlockerNG Core does not have the saved settings yet: %s. They are saved in the pfSense configuration; the next tick sends them again.'), htmlspecialchars((string) file_get_contents($pfb['core_push_failed']))), 'warning', FALSE);
+}
 pfb_print_pending_changes_box();
 foreach (pfb_dns_proxy_ddr_warnings() as $pfb_ddr_warning) {
 	print_info_box($pfb_ddr_warning, 'warning', FALSE);

@@ -1019,17 +1019,25 @@ if ($_POST) {
 			PfbConfig::write('dnsbl/dnsbl_dot_block_action', pfb_dot_block_action($dot_block_action_raw));
 			PfbConfig::write('dnsbl/dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
+			// Core's dry run judges the settings as this save leaves them in memory; a refusal saves nothing
+			$input_errors = pfb_core_settings_validate();
+			$pfb_written = FALSE;
 			try {
-				$pfb_written = write_config('[pfBlockerNG] save DNSBL settings');
+				if (!$input_errors) {
+					$pfb_written = write_config('[pfBlockerNG] save DNSBL settings');
+				}
 			} finally {
 				unlock($pfb_config_lock);
 			}
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
 				pfb_mark_pending_changes();	// applies on the next Update, not on save
+				pfb_core_settings_push(NULL, TRUE);	// outside the lock (a slow Core must not hold it); a failure never undoes the save
 				header('Location: /pfblockerng/pfblockerng_dnsbl.php');
 				exit;
 			}
-			$input_errors[] = 'DNSBL: the configuration could not be written, so these settings were not saved. Save again in a moment.';
+			if (!$input_errors) {
+				$input_errors[] = 'DNSBL: the configuration could not be written, so these settings were not saved. Save again in a moment.';
+			}
 		}
 		if ($input_errors) {
 			$pconfig = $_POST;	// Restore $_POST data on input errors
