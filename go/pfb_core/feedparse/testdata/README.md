@@ -46,10 +46,14 @@ Case: `id`, `description`, `config` and `rows`.
 
 - `config`: `vtype` (`_v4`/`_v6`), `pftype` (`auto`/`regex`), `custom` (bool), `cidr_floor_v4` and `cidr_floor_v6`
   (`"Disabled"` or a decimal string), `suppression` (bool).
-- `rows`: non-empty list, run in order; each `{"line" | "line_hex", "expect"}`, the line as `fgets()` returns it (its
-  `\n` included, none inside). `expect` is `{"entries": [...], "line" | "line_hex", "suppressed": bool, "parse_fail": int,
-  "detailed_parse_fail": bool, "messages" | "messages_hex": [...]}`: the entries appended to the list, the line as the
-  parse-error log shows it, and the replay's other fields for this line alone (`parse_fail` is this line's increment).
+- `rows`: non-empty list, run in order; each `{"line" | "line_hex", "expect"}` plus an optional `"appliance": true`, the
+  line as `fgets()` returns it (its `\n` included, none inside). `appliance` marks a row whose old-path result is the
+  pfSense appliance's: there `is_ipaddrv6()` ends in PEAR Net_IPv6 (1.3.0b4 with pfSense's patch) where the off-appliance
+  double uses `filter_var`. The PHP runner skips such a row unless the host's `is_ipaddrv6()` accepts a trailing blank after
+  `1:2:3:4:5:6:7:8` (as Net_IPv6 does); the Go runner and the appliance smoke test always run it. `expect` is `{"entries": [...],
+  "line" | "line_hex", "suppressed": bool, "parse_fail": int, "detailed_parse_fail": bool, "messages" | "messages_hex":
+  [...]}`: the entries appended to the list, the line as the parse-error log shows it, and the replay's other fields for
+  this line alone (`parse_fail` is this line's increment).
   `messages_hex` (hex of each message) replaces `messages` when one is not valid UTF-8.
 
 Type (`IPParseType()`, the parser the apply script picks for a feed): `id`, `description`, `format` (the list's

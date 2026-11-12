@@ -183,3 +183,14 @@ phpunit:FeedParseNormalizeCorpusTest::testNormalizeMatchesTheCorpus with data se
 phpunit:FeedParseNormalizeCorpusTest::testNormalizeMatchesTheCorpus with data set "raw-fallback-encoded-surrogate"  # a sed that aborts on invalid UTF-8 (macOS) instead of passing it through as the appliance and GNU sed do; Linux CI runs it
 phpunit:FeedParseNormalizeCorpusTest::testNormalizeMatchesTheCorpus with data set "raw-fallback-overlong-encoding"  # a sed that aborts on invalid UTF-8 (macOS) instead of passing it through as the appliance and GNU sed do; Linux CI runs it
 phpunit:FeedParseNormalizeCorpusTest::testNormalizeMatchesTheCorpus with data set "sample-easylist-arabic-truncated-tail"  # a sed that aborts on invalid UTF-8 (macOS) instead of passing it through as the appliance and GNU sed do; Linux CI runs it
+
+# PHPUnit -- FeedParseIpCorpusTest (issue #3906): IP corpus rows pinned to the appliance result.
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6a-canonical appliance row 40"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6a-comments appliance row 0"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6a-comments appliance row 20"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6a-comments appliance row 23"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6a-comments appliance row 24"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6a-comments appliance row 25"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6a-range appliance row 19"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6r-extract appliance row 20"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
+phpunit:FeedParseIpCorpusTest::testCase with data set "v6r-hostile appliance row 21"  # old path differs off-appliance: pfSense is_ipaddrv6 is Net_IPv6, the double is filter_var (PHP 8.3, 8.4 and 8.5)
