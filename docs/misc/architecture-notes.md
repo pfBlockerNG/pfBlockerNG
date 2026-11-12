@@ -868,7 +868,7 @@ Saving the remaining settings ignores legacy submissions and removes only the st
 **DNS Reply Logging: one preference, both modes.** The preference is the existing `dnsbl/pfb_py_reply` (mirror
 `$pfb['dnsbl_py_reply']`, default On, `sync` local; path and default unchanged), and its control is in the DNS General form on **DNS > General**,
 which is reachable in either mode; the DNSBL tab no longer has it, and its save never assigns the key, so what the DNS General
-save stored survives every DNSBL save. The pfB-DNS settings, whose DoT, DoH, DoQ and DDR options retain their experimental notices, are a
+save stored survives every DNSBL save. The pfB-DNS settings are a
 separate form above it on the same page. DNSBL on (module hosted by Unbound or by the proxy): the ini's `python_reply` carries
 it as before and the module writes `dns_reply.log`; `--reply-log` is never passed, and the proxy refuses it without
 `--no-module`, so a reply is never logged twice. DNSBL off: `pfb_dns_proxy_service()` adds `--reply-log` to `--no-module` iff

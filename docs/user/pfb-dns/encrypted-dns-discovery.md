@@ -310,7 +310,7 @@ unavailable or refused status. Their normalization is tracked separately in
 
 Under **Discovery of Designated Resolvers (DDR)** on **DNS > General**:
 
-- **DDR — Enable** (`dns_shared/pfb_dns_ddr`): experimental, disabled by default, applied on the next **Update**. It lets
+- **DDR — Enable** (`dns_shared/pfb_dns_ddr`): disabled by default, applied on the next **Update**. It lets
   pfB-DNS answer `resolver.arpa` discovery queries, naming the **DNS Name** as the target, so it needs one. A plain DNS query
   to an address gets designation only for encrypted transports listening on that address with a certificate loaded. With DDR
   disabled, or pfB-DNS off, the DNS Resolver answers as before. Enabling it alone does not make private-address DDR usable by

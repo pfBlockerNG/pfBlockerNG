@@ -324,8 +324,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dns_dot'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Encrypt client DNS traffic using TLS over TCP.'
+))->setHelp('Encrypt client DNS traffic using TLS over TCP.'
 		. '<div class="infoblock"><ul>'
 		. '<li>Enable <strong>pfB-DNS</strong>.</li>'
 		. '<li>Set <strong>DNS Name</strong> and select an <strong>SSL/TLS Certificate</strong> covering that name.</li>'
@@ -367,8 +366,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doh'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Serve encrypted client DNS over HTTPS at <code>/dns-query</code>.'
+))->setHelp('Serve encrypted client DNS over HTTPS at <code>/dns-query</code>.'
 		. '<div class="infoblock"><ul>'
 		. '<li>Enable <strong>pfB-DNS</strong>.</li>'
 		. '<li>Set <strong>DNS Name</strong> and select an <strong>SSL/TLS Certificate</strong> covering that name.</li>'
@@ -421,8 +419,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_dns_doq'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Encrypt client DNS traffic using QUIC over UDP.'
+))->setHelp('Encrypt client DNS traffic using QUIC over UDP.'
 		. '<div class="infoblock"><ul>'
 		. '<li>Enable <strong>pfB-DNS</strong>.</li>'
 		. '<li>Set <strong>DNS Name</strong> and select an <strong>SSL/TLS Certificate</strong> covering that name.</li>'
@@ -465,8 +462,7 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['pfb_dns_ddr'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setAttribute('aria-label', gettext('DDR'))
-  ->setHelp('<i class="fa fa-exclamation-triangle"></i> <strong>Experimental.</strong> '
-		. 'Let compatible clients discover this firewall\'s encrypted DNS services.'
+  ->setHelp('Let compatible clients discover this firewall\'s encrypted DNS services.'
 		. '<div class="infoblock"><ul>'
 		. '<li>Enable <strong>pfB-DNS</strong> and set <strong>DNS Name</strong>.</li>'
 		. '<li>Enable the <strong>DoT</strong>, <strong>DoH</strong> or <strong>DoQ</strong> services clients should discover.</li>'
