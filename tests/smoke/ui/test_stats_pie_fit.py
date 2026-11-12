@@ -64,6 +64,9 @@ PIES = """(stats) => stats.map((stat) => {
     return {svgs: svgs.length, box: size(box), svg: size(svgs[0]),
         texts: Array.from(svgs[0].querySelectorAll('text')).map((e) => e.textContent).sort()};
 })"""
+# The pies on the page that have an svg but no tooltips yet: d3pie adds them on a timer tick after the svg.
+UNDRAWN = """() => Array.from(document.querySelectorAll('[id^="pieChart_"] > svg'))
+    .filter((svg) => !svg.querySelector('g[class$="_tooltips"]')).map((svg) => svg.parentElement.id)"""
 
 
 def _seed(view: str, stamp: str) -> str:
@@ -88,6 +91,14 @@ def _show_pie(page: Page, stat: str) -> None:
     expect = _expect()
     expect(page.locator(f"#Alert_Stats_{stat}_panel-body")).not_to_have_class(re.compile("collapsing"))
     expect(page.locator(f"#pieChart_{stat} svg")).to_have_count(1, timeout=30_000)
+
+
+def _pies_drawn(page: Page) -> None:
+    """Wait until every pie on the page has its tooltips, so a snapshot of them holds no pie still drawing."""
+    try:
+        page.wait_for_function(f"() => ({UNDRAWN})().length === 0", timeout=30_000)
+    except pytest.importorskip("playwright.sync_api").TimeoutError:
+        pytest.fail(f"these pies never got their tooltips: {page.evaluate(UNDRAWN)}")
 
 
 def _geometry(page: Page, stat: str) -> dict[str, Any]:
@@ -232,6 +243,7 @@ def test_stats_pie_zoom_opens_one_dialog_and_returns_focus(
             _open(page, webui, view, "&range=max")
             for stat in stats:
                 _show_pie(page, stat)
+            _pies_drawn(page)
             before = page.evaluate(PIES, list(stats))
             assert [pie["svgs"] for pie in before] == [1, 1]
             inline_area = before[0]["svg"][0] * before[0]["svg"][1]
@@ -256,6 +268,7 @@ def test_stats_pie_zoom_opens_one_dialog_and_returns_focus(
                     f"{where}: zoomed svg {rect['width']:.0f}x{rect['height']:.0f} is under {ZOOM_FACTOR}x the "
                     f"inline pie's {inline_area}px²"
                 )
+                _pies_drawn(page)  # the zoomed pie, too, draws its labels on a tick after its svg
                 assert sorted(zoomed.locator("text").all_text_contents()) == before[0]["texts"], f"{where}: other data"
 
                 if how == "Escape":
