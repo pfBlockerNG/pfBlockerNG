@@ -1527,7 +1527,7 @@ func TestOperateCnameMemoizedTargetRespectsTheOriginalsWhitelist(t *testing.T) {
 }
 
 // Bug #3775 must not be reproduced: a whitelisted alias's CNAME-context allow is not the blocked target's own
-// verdict, so a direct query for the target is still blocked. The corpus never queries in this order.
+// verdict, so a direct query for the target is still blocked. The corpus pins the same order in cname-memo-alias-first.
 func TestOperateCnameContextAllowIsNotMemoizedAsTheTargetsVerdict(t *testing.T) {
 	m := opCnameModule(t, func(s *snapshot) { opEvilCname(s); s.whiteDB["trusted.example"] = whiteEntry{legacy: true} }, true)
 	alias := opQstate("trusted.example.", RR_TYPE_A, "192.0.2.10")

@@ -76,7 +76,7 @@
     {
       "id": "whitelisted-alias-of-a-blocked-target-is-relayed",
       "family": "cname",
-      "description": "the original name is on the user whitelist, so its blocked CNAME target does not block it (issue #3222); the target is deliberately not queried afterwards: open bug #3775 memoizes this alias-context allow as the target's own verdict, so that direct query would resolve instead of being blocked",
+      "description": "the original name is on the user whitelist, so its blocked CNAME target does not block it (issue #3222); a direct query for the target afterwards is cname-memo-alias-first (issue #3775)",
       "query": {"name": "trusted.example.", "type": "A"},
       "expect": {
         "decision": "relay",
