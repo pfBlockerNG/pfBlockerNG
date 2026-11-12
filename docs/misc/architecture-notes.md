@@ -404,7 +404,7 @@ reconciles it whatever the DNSBL `$mode` is.
 | on | off | nowhere (`--reply-log`: only its row writer, see below) | the inert observer | `--no-module`: every query is forwarded over PROXYv2; `--no-module --reply-log` also writes the DNS Reply log |
 
 Unbound never loads `pfb_unbound.py` (issue #3770): neither the `unbound/python*` config.xml keys
-(`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it, and both strip a stored one (if config.xml refuses that removal, `unbound.conf` keeps the stored script while its file is in the chroot, and `dnsbl_cache` keeps `pfb_unbound.py` there while `unbound.conf` names it, #3838); while pfB-DNS owns the Resolver they carry the observer. With DNSBL on the gateway's in-process decider
+(`pfb_unbound_python()`) nor the `unbound.conf` patch (`pfb_unbound_dnsbl()`) carry it, and both strip a stored one (if config.xml refuses that removal, `unbound.conf` keeps the stored script while its file is in the chroot, and `dnsbl_cache` keeps `pfb_unbound.py` there while `unbound.conf` names it, #3838, together with its mount hook `pfb_unbound_include.inc`, which it stages only then, #3795); while pfB-DNS owns the Resolver they carry the observer. With DNSBL on the gateway's in-process decider
 still reads the ini/whitelist/manifest those passes write. `pfb_dns_proxy_resolver()`
 moves the Resolver through config.xml (never `unbound.conf` directly): `active_interface` `lo0`, `enablessl`
 removed (DoT then comes from pfB-DNS's own `dns_shared/pfb_dns_dot`, seeded once from it unless an explicit shared choice exists), and a marked `server:` clause appended to `custom_options` (pfSense writes custom options after its

@@ -89,8 +89,9 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     setup_sandbox
     # Before: the chroot does not exist at all (fresh MFS).
     When call dc stage
+    # The retired module's mount hook is not staged: no unbound.conf names pfb_unbound.py here (#3795).
+    The path "${pfbchroot}/pfb_unbound_include.inc" should not be exist
     # The shipped files landed in the chroot.
-    The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
     The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
     The path "${pfbchroot}/dnsbl_psl" should be exist
     # The retired files are not staged even though the package still ships two of them under /usr/local (#3791).
@@ -240,6 +241,51 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The line 4 of output should equal 'pfb_unbound.py:gone'
     The line 5 of output should equal 'pfb_dnsbl_regex_rules.py:gone'
     The path "${pfbchroot}/pfb_py_module.applied" should not be exist
+    cleanup_sandbox
+  End
+
+  # The retired module's mount hook (pfb_unbound_include.inc) follows the module (#3795): pfSense runs it before it
+  # starts Unbound and it nullfs-mounts the folders pfb_unbound.py reads, so it stays exactly while unbound.conf
+  # still names the module, and goes once it does not.
+  include_state() {
+    if [ -e "${pfbchroot}/pfb_unbound_include.inc" ]; then
+      echo "include:$(cat "${pfbchroot}/pfb_unbound_include.inc")"
+    else
+      echo 'include:gone'
+    fi
+  }
+  include_named_then_not() {
+    include_state
+    dc "$1"
+    include_state
+    name_observer_in_conf
+    dc "$1"
+    include_state
+  }
+  plant_old_include() {
+    mkdir -p "${pfbchroot}"
+    echo 'INC-OLD' > "${pfbchroot}/pfb_unbound_include.inc"
+  }
+
+  It 'stage restages the package mount hook while unbound.conf still names pfb_unbound.py, and drops it once it does not (#3795)'
+    setup_sandbox
+    plant_old_include
+    name_module_in_conf
+    When call include_named_then_not stage
+    The line 1 of output should equal 'include:INC-OLD'
+    The line 2 of output should equal 'include:INC-CODE-v1'
+    The line 3 of output should equal 'include:gone'
+    cleanup_sandbox
+  End
+
+  It 'teardown keeps the mount hook while unbound.conf still names pfb_unbound.py, and drops it once it does not (#3795)'
+    setup_sandbox
+    plant_old_include
+    name_module_in_conf
+    When call include_named_then_not teardown
+    The line 1 of output should equal 'include:INC-OLD'
+    The line 2 of output should equal 'include:INC-OLD'
+    The line 3 of output should equal 'include:gone'
     cleanup_sandbox
   End
 
@@ -404,6 +450,8 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
   It 'save archives the generated set only (never the shipped files)'
     setup_sandbox
     dc stage
+    # A mount hook an older package staged: it must stay out of the archive like the shipped files.
+    echo 'INC-OLD' > "${pfbchroot}/pfb_unbound_include.inc"
     # A generation-consistent manifest + versioned raw dir + stale stage.
     generation='pfb_py_raw.0123456789abcdef0123456789abcdef'
     stage='pfb_py_raw.stage.abcdef0123456789abcdef0123456789'
@@ -561,7 +609,9 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     When call dc restore
     arc="$(pfb_spec_archive_path "${dnsblarchive}")"
     The value "$arc" should equal ''
-    The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
+    The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
+    # A wiped chroot has no unbound.conf naming pfb_unbound.py, so the module's mount hook stays out (#3795).
+    The path "${pfbchroot}/pfb_unbound_include.inc" should not be exist
     The path "${pfbchroot}/lib" should be directory
     cleanup_sandbox
   End
