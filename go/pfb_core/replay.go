@@ -54,9 +54,16 @@ func (c *replayCache) do(ctx context.Context, method, id string, digest [32]byte
 	e := &replayEntry{digest: digest, done: make(chan struct{})}
 	c.entries[key] = e
 	c.order = append(c.order, key)
-	if len(c.order) > c.limit {
-		delete(c.entries, c.order[0])
-		c.order = c.order[1:]
+	// Forget the oldest finished entries above the limit; one still running is kept, or its repeat would run it again
+	for i := 0; len(c.order) > c.limit && i < len(c.order); {
+		key := c.order[i]
+		select {
+		case <-c.entries[key].done:
+			delete(c.entries, key)
+			c.order = append(c.order[:i], c.order[i+1:]...)
+		default:
+			i++
+		}
 	}
 	c.mu.Unlock()
 	e.resp = run()

@@ -27,9 +27,9 @@ const (
 	defaultMaxBody           = 1 << 20
 	defaultReadHeaderTimeout = 5 * time.Second
 	defaultReadTimeout       = 10 * time.Second
-	defaultWriteTimeout      = 30 * time.Second
+	defaultWriteTimeout      = 45 * time.Second // runs from the end of the header: above the body read plus the method
 	defaultIdleTimeout       = 60 * time.Second
-	defaultMethodTimeout     = 25 * time.Second // below the write timeout, so the reply still goes out
+	defaultMethodTimeout     = 25 * time.Second
 	maxRequestIDLength       = 128
 )
 
@@ -123,6 +123,7 @@ type options struct {
 	readHeaderTimeout time.Duration
 	methods           map[string]method
 	logf              func(format string, args ...any)
+	peerUID           func(*net.UnixConn) (uint32, error) // nil: the kernel's credential (a test replaces it)
 }
 
 type server struct {
@@ -145,6 +146,9 @@ type peer struct {
 func listen(o options) (*server, error) {
 	if o.maxBody == 0 {
 		o.maxBody = defaultMaxBody
+	}
+	if o.peerUID == nil {
+		o.peerUID = peerUID
 	}
 	if o.readHeaderTimeout == 0 {
 		o.readHeaderTimeout = defaultReadHeaderTimeout
@@ -198,14 +202,15 @@ func listen(o options) (*server, error) {
 			if !ok {
 				return context.WithValue(ctx, peerKey{}, peer{err: errors.New("not a Unix socket connection")})
 			}
-			uid, err := peerUID(uc)
+			uid, err := o.peerUID(uc)
 			return context.WithValue(ctx, peerKey{}, peer{uid: uid, err: err})
 		},
 	}
 	return s, nil
 }
 
-// privateDir creates dir with mode or checks the one there: a real directory of the server's user, set to mode if it differs.
+// privateDir creates dir with mode, or takes the one there only while it is a real directory of the server's user that is
+// already private (0700 or 0750, no other bit) and sets it to mode: a shared directory such as /tmp is refused, never chmod'ed.
 func privateDir(dir string, mode os.FileMode) error {
 	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
@@ -219,6 +224,9 @@ func privateDir(dir string, mode os.FileMode) error {
 	}
 	if st, ok := info.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Geteuid() {
 		return fmt.Errorf("%s is not owned by the user running the server", dir)
+	}
+	if have := info.Mode() &^ fs.ModeDir; have != 0o700 && have != 0o750 {
+		return fmt.Errorf("%s is not a private directory (mode %v)", dir, info.Mode())
 	}
 	if info.Mode().Perm() != mode {
 		return os.Chmod(dir, mode)
@@ -252,11 +260,16 @@ type response struct {
 	body   []byte
 }
 
+// errorResponse is the envelope of e; a code outside the table is answered as internal (an incomplete status is never sent).
 func errorResponse(e *apiError) response {
+	status, ok := statusOf[e.Code]
+	if !ok {
+		e, status = newError(codeInternal, "the method failed"), http.StatusInternalServerError
+	}
 	body, _ := json.Marshal(struct {
 		Error *apiError `json:"error"`
 	}{e})
-	return response{status: statusOf[e.Code], body: body}
+	return response{status: status, body: body}
 }
 
 func (s *server) write(w http.ResponseWriter, r response) {
@@ -306,9 +319,9 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		s.write(w, errorResponse(e))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), defaultMethodTimeout)
-	defer cancel()
 	if !m.mutating {
+		ctx, cancel := context.WithTimeout(r.Context(), defaultMethodTimeout)
+		defer cancel()
 		s.write(w, s.call(ctx, name, m, body))
 		return
 	}
@@ -317,7 +330,13 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		s.write(w, errorResponse(e))
 		return
 	}
-	s.write(w, s.replay.do(ctx, name, id, sha256.Sum256(body), func() response { return s.call(ctx, name, m, body) }))
+	// A mutating method runs to its end even when its caller goes away: its result is what a retry of the requestId gets
+	run := func() response {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultMethodTimeout)
+		defer cancel()
+		return s.call(ctx, name, m, body)
+	}
+	s.write(w, s.replay.do(r.Context(), name, id, sha256.Sum256(body), run))
 }
 
 // checkObject accepts exactly one JSON object and nothing after it.

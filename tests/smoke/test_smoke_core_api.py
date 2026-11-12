@@ -79,5 +79,10 @@ def test_an_unprivileged_user_cannot_reach_the_api_and_root_can(core_vm: SmokeVM
     modes = core_vm.ssh(f"/usr/bin/stat -f '%Sp %Su' {SOCKET.rsplit('/', 1)[0]} {SOCKET}", timeout=30)
     assert modes.stdout.split("\n")[:2] == ["drwx------ root", "srw------- root"], f"modes: {modes.stdout}"
     nobody = core_vm.ssh(f"/usr/bin/su -m nobody -c {shlex.quote(call)}", timeout=30)
-    assert nobody.returncode != 0, f"nobody reached the Core API: {nobody.stdout} {nobody.stderr}"
-    assert "Permission denied" in nobody.stderr or "Couldn't connect" in nobody.stderr, nobody.stderr
+    # curl's exit 7 (could not connect) with no HTTP status: the connect itself was refused
+    assert (nobody.returncode, nobody.stdout) == (7, "000"), (
+        f"nobody reached the Core API: {nobody.stdout} {nobody.stderr}"
+    )
+    # ...because the socket's directory is closed to it
+    entry = core_vm.ssh(f"/usr/bin/su -m nobody -c {shlex.quote('ls ' + SOCKET)}", timeout=30)
+    assert entry.returncode != 0 and "Permission denied" in entry.stderr, f"{entry.returncode} {entry.stderr}"

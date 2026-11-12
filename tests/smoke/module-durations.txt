@@ -208,6 +208,10 @@ test_smoke_autorule_immutable.py::test_user_rules_preserved_after_force_update 9
 test_smoke_boot.py 2.51
 test_smoke_boot.py::test_control_name_resolves 2.32
 test_smoke_boot.py::test_pfctl_ruleset_nonempty 0.19
+test_smoke_core_api.py 68.08
+test_smoke_core_api.py::test_php_gets_the_version_reply 59.72
+test_smoke_core_api.py::test_an_unprivileged_user_cannot_reach_the_api_and_root_can 8.02
+test_smoke_core_api.py::test_pfb_core_holds_no_network_socket 0.29
 test_smoke_dns_gateway.py 261.17
 test_smoke_dns_gateway.py::test_a_client_no_resolver_acl_row_names_is_refused_on_every_transport_and_an_ipv6_lan_client_gets_the_vip 13.40
 test_smoke_dns_gateway.py::test_a_listed_name_gets_the_vip_and_a_log_row_naming_the_client[doh-get] 1.39

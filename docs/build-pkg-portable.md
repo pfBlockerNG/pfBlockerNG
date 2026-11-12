@@ -307,7 +307,8 @@ built the same way, by the same helper, into `freebsd-<arch>/pfb-core` beside `p
 records it under `pfb_core` and refuses a Core module with a `require` or a `vendor/` of its own (Core
 builds from the standard library alone, so the go recipe's vendor tree is the gateway's only). A recipe
 without `do-build` has the builder stage it at `/usr/local/pkg/pfblockerng/core/bin/freebsd-<arch>/pfb-core`,
-mode `0555`; the go recipe installs it from its own `do-build` output. The rc script `pfb_core.sh` picks
+mode `0555`. The go recipe ships it only when the port's `do-install` installs it and its
+`NO_ARCH_IGNORE` names it (pfBlockerNG/FreeBSD-ports, nightly); its `do-build` builds it either way. The rc script `pfb_core.sh` picks
 this machine's binary (`pfb_core_service()`).
 
 - **Source.** Project builds compile the `go/` tree of the attested commit (the same

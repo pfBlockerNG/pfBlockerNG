@@ -4495,7 +4495,6 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 	$reply = curl_exec($ch);
 	$status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 	$curlError = curl_error($ch);
-	curl_close($ch);
 	if (!is_string($reply)) {
 		return ['status' => 0, 'body' => NULL, 'error' => "the Core API did not answer: {$curlError}"];
 	}

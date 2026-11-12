@@ -10,7 +10,7 @@
 //	                    not root can connect; who is served is still decided by uid
 //
 // Every path Core uses arrives as a flag: Core names no pfSense path (boundary_test.go). Log lines go to stderr; the rc
-// script points it at the package log. TERM or INT stops it: requests in flight finish (up to 5 s) and the socket is removed.
+// script points it at the package log. TERM or INT stops it: requests in flight finish (up to 3 s) and the socket is removed.
 //
 // Exit status: 0 after a clean stop, 1 when it cannot serve, 2 for a usage error.
 package main
@@ -29,13 +29,18 @@ import (
 	"time"
 )
 
-const shutdownGrace = 5 * time.Second
+const shutdownGrace = 3 * time.Second // below the rc script's 5 s before KILL
 
 func run(ctx context.Context, args []string, stderr io.Writer) int {
 	fl := flag.NewFlagSet("pfb-core", flag.ContinueOnError)
 	fl.SetOutput(stderr)
 	socket := fl.String("socket", "", "the API's Unix socket (required)")
-	allowUID := fl.Uint("allow-uid", 0, "the privileged caller's uid")
+	var allowUID uint32
+	fl.Func("allow-uid", "the privileged caller's uid (default 0)", func(v string) error {
+		uid, err := strconv.ParseUint(v, 10, 32)
+		allowUID = uint32(uid)
+		return err
+	})
 	var clients []uint32
 	fl.Func("client-uid", "a further local client's uid (repeatable)", func(v string) error {
 		uid, err := strconv.ParseUint(v, 10, 32)
@@ -52,11 +57,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 2
 	}
 	if *socket == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH [--allow-uid UID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
-	srv, err := listen(options{socket: *socket, allowUID: uint32(*allowUID), clientUIDs: clients, socketGroup: group, groupSet: groupSet,
+	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: productionMethods(), logf: logger.Printf})
 	if err != nil {
 		logger.Printf("cannot listen on %s: %v", *socket, err)
@@ -64,7 +69,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	}
 	served := make(chan error, 1)
 	go func() { served <- srv.serve() }()
-	logger.Printf("serving API %s on %s for uid %d, clients %v", apiVersion, *socket, *allowUID, clients)
+	logger.Printf("serving API %s on %s for uid %d, clients %v", apiVersion, *socket, allowUID, clients)
 	select {
 	case err := <-served:
 		logger.Printf("stopped serving: %v", err)

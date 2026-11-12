@@ -15,8 +15,9 @@ pfB-DNS is enabled or not.
 - The request body is one JSON object: the method's parameters. An empty body is the empty object `{}`. Anything else, a
   second value after the object included, is `invalid_argument`. An unknown parameter is `invalid_argument` with a field
   error naming it.
-- Every reply is one JSON object, `Content-Type: application/json`, `Cache-Control: no-store`. A client ignores reply
-  fields it does not know.
+- Every reply to a request that reached a method's routing is one JSON object, `Content-Type: application/json`,
+  `Cache-Control: no-store`. A client ignores reply fields it does not know. A request that is not valid HTTP (a malformed
+  or oversized header) gets Go's own plain-text `400` or `431` before any routing.
 - Any HTTP method but `POST` is `method_not_allowed` (`Allow: POST`). A path that is not `/v1/<a method Core has>` is
   `not_found`, an unknown version included.
 
@@ -49,20 +50,23 @@ Every error is the same envelope, with the HTTP status its code maps to:
 | `method_not_allowed` | 405 | Not `POST` |
 | `conflict` | 409 | A `requestId` reused with a different body |
 | `payload_too_large` | 413 | Body over the limit |
-| `internal` | 500 | The method failed unexpectedly (logged) |
+| `internal` | 500 | The method failed unexpectedly or ran past its deadline (logged); also any code a method returns that is not in this table |
 | `unavailable` | 503 | A repeat of a `requestId` whose first request still ran when the repeat's own deadline passed |
 
 ## requestId and replay
 
 A mutating method (none is public yet; tests use a test-only one) takes a `requestId` in its parameters: a string of 1 to
-128 printable ASCII characters without spaces. The client makes one per logical operation (a UUID will do) and sends it
+128 printable ASCII characters without spaces. The method declares `requestId` in its own parameters, since unknown
+parameters are refused. The client makes one per logical operation (a UUID will do) and sends it
 again, with the byte-identical body, to resolve an unknown outcome such as a timeout.
 
-- The first request with a `requestId` runs the method. Every repeat with the same method, `requestId` and body gets the
+- The first request with a `requestId` runs the method, to its end even when its caller disconnects (up to the method
+  deadline). Every repeat with the same method, `requestId` and body gets the
   first response, status and bytes, whatever it was (an error included), and the method does not run again.
 - A repeat that arrives while the first still runs waits for its result; it never runs the method itself.
 - The same `requestId` with a different body is `conflict`, and nothing runs.
-- Core remembers the last 4096 `requestId`s, in memory only: a restarted Core remembers none. A client that cannot tell
+- Core remembers the last 4096 finished `requestId`s (one still running is never forgotten), in memory only: a
+  restarted Core remembers none. A client that cannot tell
   whether its request ran before a restart reads the state it changed instead of repeating it.
 
 A read-only method takes no `requestId` and is never replayed.
@@ -76,7 +80,7 @@ A read-only method takes no `requestId` and is never replayed.
 | Reading the header | 5 s; a client that has not sent it by then is disconnected |
 | Reading the whole request | 10 s |
 | Running a method | 25 s (its context is cancelled) |
-| Writing the reply | 30 s |
+| Writing the reply | 45 s from the end of the header (covers the body read and the method) |
 | Idle keep-alive connection | 60 s |
 
 ## Local authentication
@@ -90,7 +94,9 @@ everything would rest on keeping the token file secret, and a client would need 
 
 Two fences, each enough on its own against an unprivileged user:
 
-1. **File permissions.** Core creates the socket's directory mode 0700 and the socket 0600, both its own (root's). Another
+1. **File permissions.** Core creates the socket's directory mode 0700 and the socket 0600, both its own (root's). An
+   existing directory is used only while it is a real directory (not a symlink) of Core's user with mode 0700 or 0750;
+   anything else, a shared directory such as `/tmp` included, stops the start instead of being changed. Another
    user cannot even connect (`EACCES`).
 2. **Caller uid.** Every request is checked against the admitted uids. Any other caller gets `unauthenticated` and no
    method runs.
@@ -120,7 +126,7 @@ pfb-dns ticket decides it.
   unknown machine is a failure.
 - **Stop** sends TERM to the supervisor and to pfb-core, then KILL at 5 s. It signals a process only while its pidfile names it
   and its command line is pfb_core's, so a reused pid is never signalled. pfb-core finishes the requests in flight (up to
-  5 s) and removes its socket.
+  3 s) and removes its socket.
 - **Package lifecycle.** The install and every upgrade regenerate the script and restart the service. pfSense starts it at
   boot with the package's services. A removal stops it and deletes the script.
 - **Paths.** Core reads every path from a flag. It names no pfSense path and imports nothing but the standard library and
