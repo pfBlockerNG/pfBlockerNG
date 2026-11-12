@@ -284,6 +284,56 @@ final class DnsProxyStartupCheckDegradedTest extends TestCase
 		$this->assertSame([$this->problemText("the DNS Resolver backend does not answer: {$cause}.")], $this->startupTexts());
 	}
 
+	private const CONTROL_FAILED = 'control socket: listen unix /var/run/pfb_dns/ctl.sock: address already in use; the certificate cannot be renewed without a restart';
+	private const CONTROL_PROBLEM = "the gateway's control socket could not be made, so its status cannot be read and a renewed certificate is not pushed until a restart.";
+
+	/** The gateway's log as the latest start left it. */
+	private function gatewayLog(string ...$lines): void
+	{
+		file_put_contents($GLOBALS['pfb']['dns_proxy_log'], implode("\n", $lines) . "\n");
+	}
+
+	public function testAControlSocketTheLatestStartCouldNotMakeIsAProblemWhileNoStatusCanBeRead(): void
+	{
+		// Given a ready gateway that logged the control-socket error at its latest start, so no status can be read
+		$this->box();
+		$this->standInsStop();
+		$this->gatewayLog('starting pid 100', 'control socket: old start\'s error; the certificate cannot be renewed without a restart', 'starting pid 4242',
+			self::CONTROL_FAILED, 'listening udp+tcp 127.0.0.1:53');
+
+		// When the check runs
+		pfb_dns_proxy_startup_check(TRUE);
+
+		// Then the notice says so, and it does not read as a judged list: nothing else is claimed or closed
+		$this->assertSame([$this->problemText(self::CONTROL_PROBLEM)], $this->startupTexts());
+	}
+
+	/** @return array<string,array{list<string>,bool}> the gateway's log, and whether the status is readable */
+	public static function noControlSocketProblem(): array
+	{
+		return [
+			'the status is readable' => [['starting pid 4242', self::CONTROL_FAILED], TRUE],
+			'the error belongs to an earlier start' => [[self::CONTROL_FAILED, 'starting pid 4242', 'listening udp+tcp 127.0.0.1:53'], FALSE],
+			'a runtime control-socket line is not the bind error' => [['starting pid 4242', 'control socket: accept: too many open files'], FALSE],
+			'no log' => [[], FALSE],
+		];
+	}
+
+	/** @param list<string> $log */
+	#[DataProvider('noControlSocketProblem')]
+	public function testNoControlSocketProblemWithoutThatLineInTheLatestStartOrWithAReadableStatus(array $log, bool $readable): void
+	{
+		$this->box();
+		if (!$readable) {
+			$this->standInsStop();
+		}
+		$this->gatewayLog(...$log);
+
+		pfb_dns_proxy_startup_check(TRUE);
+
+		$this->assertSame([], $this->startupTexts());
+	}
+
 	public function testAGatewayThatGivesNoStatusIsNotBlamedForABackendItCannotNameAndNothingIsClosed(): void
 	{
 		// Given a ready gateway whose control socket answers nothing, Unbound dead, and a standing notice

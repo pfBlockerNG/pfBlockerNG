@@ -620,7 +620,34 @@ final class DnsProxyMovedResolverTest extends TestCase
 
 	public function testTheTickKeepsItsGatewayWhenUnboundAndAppliedStatusAreBothUnavailable(): void
 	{
-		// Given a gateway left running, a missing Unbound and an unanswered status, even if a socket inventory could name another holder
+		// Given a gateway left running, a missing Unbound and an unanswered status, and nobody on Unbound's pair
+		$this->activate(TRUE);
+		$this->proxyServes();
+		$this->seedRunningGateway();
+		$this->seedUnbound(alive: FALSE);
+		file_put_contents($GLOBALS['pfb_test_sockstat_output'], '');
+		$this->standInsStop();
+		$this->assertNull(pfb_dns_proxy_certificate_export());
+		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
+		$resolver = config_get_path('unbound');
+		$saved = PfbConfig::read('dns/pfb_dns_saved');
+
+		// When the tick has no evidence of a holder
+		$this->tick();
+
+		// Then a missing Unbound and an unknown status alone change nothing
+		$this->assertSame([], $this->proxyCalls);
+		$this->assertSame($resolver, config_get_path('unbound'));
+		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
+		$this->assertTrue(pfb_dns_proxy_running());
+		$this->assertSame('Starting', pfb_dns_status()['service']);
+		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
+	}
+
+	public function testTheTickMovesUnboundOffAStrangerEvenWhenUnboundIsDownAndTheStatusIsUnavailable(): void
+	{
+		// Given the same box, with another process on Unbound's pair: it is the very reason Unbound could not start (issue #3848). The tick
+		// reads the holder from the sockets (pfb_dns_proxy_backend_holder()), as the apply does, not from an applied status it cannot get
 		$this->activate(TRUE);
 		$this->proxyServes();
 		$this->seedRunningGateway();
@@ -629,19 +656,16 @@ final class DnsProxyMovedResolverTest extends TestCase
 		$this->standInsStop();
 		$this->assertNull(pfb_dns_proxy_certificate_export());
 		file_put_contents(pfb_dns_proxy_certificate_pushed_path(), hash('sha256', (string) file_get_contents($GLOBALS['pfb']['dns_proxy_cert'])));
-		$resolver = config_get_path('unbound');
 		$saved = PfbConfig::read('dns/pfb_dns_saved');
 
-		// When the tick has no positive evidence of foreign upstream ownership
+		// When the tick runs
 		$this->tick();
 
-		// Then absence and unknown status cannot trigger the foreign-owner exception
-		$this->assertSame([], $this->proxyCalls);
-		$this->assertSame($resolver, config_get_path('unbound'));
+		// Then Unbound's pair moved off the stranger and the gateway was restarted onto it; the Resolver stays moved and nothing is restored
+		$this->assertSame('5355', pfb_dns_proxy_backend_port());
+		$this->assertSame(['restart_service'], $this->proxyCalls);
 		$this->assertSame($saved, PfbConfig::read('dns/pfb_dns_saved'));
-		$this->assertTrue(pfb_dns_proxy_running());
-		$this->assertSame('Starting', pfb_dns_status()['service']);
-		$this->assertNotContains('pfBlockerNG DNS Proxy', array_column($this->notices(), 'id'));
+		$this->assertSame('lo0', config_get_path('unbound/active_interface'));
 	}
 
 	public function testTheBootCheckDoesNothingWithoutASnapshot(): void

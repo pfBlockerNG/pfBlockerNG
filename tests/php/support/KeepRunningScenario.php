@@ -55,9 +55,15 @@ trait KeepRunningScenario
 		$GLOBALS['pfb_test_configured_ipv6'] = [];
 		$this->krCalls = [];
 		$this->clearProxyFiles();
+		@unlink($GLOBALS['pfb']['dns_proxy_backend_blocked']);
 		@unlink(PFB_DNS_PROXY_RCFILE);
 		$GLOBALS['pfb_test_service_hook'] = function (string $fn, string $service): void {
 			$this->krCalls[] = [$fn, $service];
+			// A stopped proxy is gone: no pidfile, no marker, no control socket
+			if ($fn === 'stop_service') {
+				$this->clearProxyFiles();
+				unset($GLOBALS['pfb_test_valid_pids'][PFB_DNS_PROXY_DAEMON_PIDFILE]);
+			}
 			// A started or restarted proxy is up at once, as the readiness wait's first probe finds it
 			if ($fn !== 'stop_service') {
 				$this->proxyServes();

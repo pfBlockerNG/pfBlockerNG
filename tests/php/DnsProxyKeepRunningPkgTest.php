@@ -257,20 +257,28 @@ final class DnsProxyKeepRunningPkgTest extends TestCase
 
 	public static function foreignOwnershipUnderPackage(): array
 	{
-		return ['the update pass' => ['ensure', TRUE], 'the cron tick' => ['tick', NULL]];
+		return ['the update pass' => ['ensure', FALSE], 'the cron tick' => ['tick', NULL]];
 	}
 
 	#[DataProvider('foreignOwnershipUnderPackage')]
-	public function testForeignOwnershipChangesNothingUnderAPackageOperation(string $op, ?bool $returned): void
+	public function testAForeignHolderUnderAPackageOperationStopsTheGatewayMovesNothingAndRestoresNothing(string $op, ?bool $returned): void
 	{
+		// Given a serving gateway whose Unbound port a stranger holds, in a pass that runs as a descendant of pkg(8): nothing restarts under one
 		$result = $this->runUnderPkg(['op' => $op, 'serving' => TRUE, 'foreign_upstream' => TRUE]);
 		$this->assertTrue($result['unbound_before'], 'the live Unbound exists despite the foreign port holder');
 		$this->assertTrue($result['gateway_before']);
 		$this->assertFalse($result['serving_before']);
 		$this->assertSame($returned, $result['returned']);
-		$this->assertFalse($result['stopped'], 'the gateway is not stopped');
+
+		// Then the pair is not moved and Unbound is not restarted (the package operation defers both), but the gateway is not left
+		// forwarding to the stranger either: it is stopped and the status says who holds the port; the Resolver and the snapshot are kept
+		$this->assertSame(['stop_service pfb_dns_proxy'], $result['calls'], 'the gateway was stopped once and nothing was restarted');
+		$this->assertSame(0, $result['configures'], 'Unbound was not regenerated or restarted');
+		$this->assertFalse($result['running'], 'the gateway is not running');
+		$this->assertTrue($result['blocked'], 'the stopped state stands for the next pass outside the package operation');
+		$this->assertSame('Not serving: nc (pid 6161) on 127.0.0.1:5353 holds the Resolver backend port 5353', $result['service']);
+		$this->assertFalse($result['stopped'], 'the Resolver restore\'s rc stop never ran');
 		$this->assertSame($result['saved_before'], $result['saved_after'], 'the snapshot is kept');
 		$this->assertSame($result['resolver_before'], $result['resolver_after'], 'the Resolver stays moved');
-		$this->assertTrue($result['running']);
 	}
 }

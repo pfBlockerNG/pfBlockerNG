@@ -2446,16 +2446,6 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new key in an unreleased feature, so nothing is migrated; absent reads \'\' = no snapshot = Resolver untouched (pre-feature behaviour); a per-node marker of this node\'s Resolver state, never synced',
 		],
 
-		// issue #3848: the PROXYv2 port P of the loopback pair Unbound's backend lives on (the plain port is P+1), moved by
-		// pfb_dns_proxy_backend_move() off a process that holds the pair or a Listen Port on it; read via pfb_dns_proxy_backend_port().
-		'dns/pfb_dns_unbound_port' => [
-			'default'       => '5353',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'sync'          => 'local',
-			'no_grandfather' => 'new key; absent reads 5353, the pair every earlier release gave Unbound, so a node that never moved it behaves as before; a per-node port of this node\'s own sockets, never synced',
-		],
-
 		// issue #3513: DoH / DoQ default off; only their interface lists remain node-local (#3649).
 		'dns_shared/pfb_dns_doh' => [
 			'default'       => '',
@@ -7260,14 +7250,24 @@ function pfblockerng_tick(
 	elseif (!$pass_running && pfb_dns_proxy_saved() !== NULL && (pfb_dns_proxy_running() || isvalidpid(PFB_DNS_PROXY_DAEMON_PIDFILE))) {
 		// issues #3598, #3599: an address the gateway's start could not assign yet is added live once it can be bound, and a listener the
 		// command no longer names is removed live; the pair restarts only when the gateway does not take it. Every other restart stays with
-		// the update pass (pfb_dns_proxy_ensure_running())
+		// the update pass (pfb_dns_proxy_ensure_running()), except this one (issue #3848): a gateway that forwards to another port than the
+		// clause in the Resolver names (a move another process made, or the Resolver sync copying the primary's clause to this node) is
+		// restarted onto it with a regenerated script, unless a stranger holds that pair: the confirmation below moves it off first
 		$since = NULL;
 		$acted = FALSE;
-		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred() && ($why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners(pfb_dns_proxy_applied_status()))) !== NULL) {
-			pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
-			$since = pfb_dns_proxy_log_size();
-			restart_service('pfb_dns_proxy');
-			$acted = TRUE;
+		if (pfb_dns_proxy_ready() && !pfb_dns_proxy_restart_deferred()) {
+			$applied = pfb_dns_proxy_applied_status();
+			$stale = pfb_dns_proxy_upstream_stale($applied) && pfb_dns_proxy_backend_holder() === NULL;
+			if ($stale) {
+				pfb_dns_proxy_service();
+			}
+			$why = pfb_dns_proxy_listeners_sync(pfb_dns_proxy_applied_listeners($applied)) ?? ($stale ? 'Unbound\'s backend pair is on port ' . pfb_dns_proxy_backend_port() : NULL);
+			if ($why !== NULL) {
+				pfb_logger("\nRestarting the DNS proxy: {$why}", 1);
+				$since = pfb_dns_proxy_log_size();
+				restart_service('pfb_dns_proxy');
+				$acted = TRUE;
+			}
 		}
 		pfb_dns_proxy_confirm_started($acted, $since);
 	}

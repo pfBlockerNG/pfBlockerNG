@@ -9,8 +9,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #3848 -- the loopback port pair Unbound's backend lives on (PROXYv2 on P, plain on P+1) is the node-local setting
- * `dns/pfb_dns_unbound_port` (default 5353), read by one function; and the two questions the port move asks of the box's sockets, who
+ * issue #3848 -- the loopback port pair Unbound's backend lives on (PROXYv2 on P, plain on P+1) is stored once, as the `proxy-protocol-port:` line of the
+ * marked clause in the Resolver's Custom Options (default 5353), and read by one function; and the two questions the port move asks of the box's sockets, who
  * holds P or P+1 and which pair above is free, both read the one `sockstat` scan that tells whether Unbound owns the gateway's upstream
  * (pfb_dns_proxy_upstream_state()): there is one parser of that output, and the holder and the picker each make one scan.
  */
@@ -23,7 +23,6 @@ final class DnsProxyBackendPortTest extends TestCase
 	use DnsProxyReadySeedTrait;
 
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-	private const PORT = 'dns/pfb_dns_unbound_port';
 
 	private array $savedGlobals = [];
 	private string $scanLog;
@@ -83,17 +82,29 @@ final class DnsProxyBackendPortTest extends TestCase
 	// The reader
 	// -----------------------------------------------------------------------
 
-	public function testTheSettingIsRegisteredNodeLocalWithDefault5353(): void
+	/** The Resolver's Custom Options as a move leaves them: the admin's line, then our marked clause naming the pair (`proxy-protocol-port:` is the only stored P). */
+	private function clauseFor(string $port, ?string $plain = NULL): string
 	{
-		$entry = pfb_cfg_registry()[self::PORT] ?? NULL;
-
-		$this->assertIsArray($entry, 'dns/pfb_dns_unbound_port is registered');
-		$this->assertSame('5353', $entry['default']);
-		$this->assertSame('local', $entry['sync'], 'the port is this node\'s own: another node\'s Unbound may sit elsewhere');
-		$this->assertNotSame('', trim((string) ($entry['no_grandfather'] ?? '')), 'a new key says why nothing is migrated');
+		$plain ??= (string) ((int) $port + 1);
+		return "do-ip6: no\nserver:\n# pfBlockerNG DNS proxy\nport: {$plain}\ninterface: 127.0.0.1@{$port}\ninterface: ::1@{$port}\n"
+			. "proxy-protocol-port: {$port}\n# end pfBlockerNG DNS proxy";
 	}
 
-	/** @return array<string,array{?string,string}> the stored value (NULL = absent) and what the reader gives */
+	/** Unbound's backend pair is $port/$port+1 as the clause in Custom Options says. */
+	private function backendPortIs(string $port): void
+	{
+		config_set_path('unbound/custom_options', base64_encode($this->clauseFor($port)));
+	}
+
+	public function testThePortIsNoRegisteredKeyBecauseTheClauseInTheResolverIsItsOnlyStoredSource(): void
+	{
+		// pfSense's Resolver sync copies Custom Options to a secondary, so a per-node key would disagree with the clause the secondary received
+		$this->assertArrayNotHasKey('dns/pfb_dns_unbound_port', pfb_cfg_registry());
+		$this->backendPortIs('5400');
+		$this->assertSame('5400', pfb_dns_proxy_backend_port(), 'the clause alone names it');
+	}
+
+	/** @return array<string,array{?string,string}> the `proxy-protocol-port:` value the clause carries (NULL = no clause) and what the reader gives */
 	public static function storedPorts(): array
 	{
 		return [
@@ -110,18 +121,45 @@ final class DnsProxyBackendPortTest extends TestCase
 			'a fraction' => ['5353.5', '5353'],
 			'a sign' => ['+5400', '5353'],
 			'a leading zero' => ['05400', '5353'],
-			'a space' => [' 5400', '5353'],
+			'extra spaces after the colon' => [' 5400', '5400'],
 		];
 	}
 
 	#[DataProvider('storedPorts')]
-	public function testTheReaderGivesTheStoredPortInRangeAndTheDefaultOtherwise(?string $stored, string $expected): void
+	public function testTheReaderGivesTheClausesPortInRangeAndTheDefaultOtherwise(?string $stored, string $expected): void
 	{
 		if ($stored !== NULL) {
-			PfbConfig::writeSystem(self::PORT, $stored);
+			config_set_path('unbound/custom_options', base64_encode($this->clauseFor($stored, '5354')));
 		}
 
 		$this->assertSame($expected, pfb_dns_proxy_backend_port());
+	}
+
+	/** @return array<string,array{string}> Custom Options that carry no clause of ours naming a port */
+	public static function textsWithNoClause(): array
+	{
+		return [
+			'an admin line outside our block' => ["server:\nproxy-protocol-port: 5400"],
+			'a start marker with no end marker' => ["server:\n# pfBlockerNG DNS proxy\nproxy-protocol-port: 5400"],
+			'a clause with no proxy-protocol-port line' => ["server:\n# pfBlockerNG DNS proxy\nport: 5354\n# end pfBlockerNG DNS proxy"],
+			'a commented line inside the block' => ["server:\n# pfBlockerNG DNS proxy\n# proxy-protocol-port: 5400\n# end pfBlockerNG DNS proxy"],
+			'a longer key inside the block' => ["server:\n# pfBlockerNG DNS proxy\nx-proxy-protocol-port: 5400\n# end pfBlockerNG DNS proxy"],
+		];
+	}
+
+	#[DataProvider('textsWithNoClause')]
+	public function testTheReaderIgnoresWhatIsNotOurClauseNamingAPort(string $custom): void
+	{
+		config_set_path('unbound/custom_options', base64_encode($custom));
+
+		$this->assertSame('5353', pfb_dns_proxy_backend_port());
+	}
+
+	public function testTheReaderReadsOnlyOurBlockEvenWhenTheAdminHasTheSameLineBeforeIt(): void
+	{
+		config_set_path('unbound/custom_options', base64_encode("server:\nproxy-protocol-port: 5999\n" . $this->clauseFor('5400')));
+
+		$this->assertSame('5400', pfb_dns_proxy_backend_port());
 	}
 
 	// -----------------------------------------------------------------------
@@ -169,9 +207,9 @@ final class DnsProxyBackendPortTest extends TestCase
 		$this->assertSame(['-46lw -p 5353,5354'], $this->scans(), 'one scan, of both ports');
 	}
 
-	public function testTheHolderFollowsThePortTheSettingStores(): void
+	public function testTheHolderFollowsThePortTheClauseNames(): void
 	{
-		PfbConfig::writeSystem(self::PORT, '5400');
+		$this->backendPortIs('5400');
 		$this->sockets(self::row('nc', 6161, 'tcp4', '127.0.0.1:5353'), self::row('nc', 6162, 'tcp4', '127.0.0.1:5401'));
 
 		$this->assertSame('nc (pid 6162) on 127.0.0.1:5401', pfb_dns_proxy_backend_holder(), '5353 is nobody\'s now; 5401 is the plain port');
@@ -306,7 +344,7 @@ final class DnsProxyBackendPortTest extends TestCase
 
 	public function testThePickerStaysBelowTheTopPort(): void
 	{
-		PfbConfig::writeSystem(self::PORT, '65530');
+		$this->backendPortIs('65530');
 		$this->sockets();
 		$this->assertSame('65532', pfb_dns_proxy_backend_pick());
 		$this->assertSame(['-46lw -p 65532-65535'], $this->scans(), 'the scan ends at 65535');

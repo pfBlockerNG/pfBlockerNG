@@ -66,12 +66,15 @@ final class DnsProxyBootTest extends TestCase
 	 * @param list<string> $livePidfiles pidfiles isvalidpid() answers TRUE for
 	 * @return array{calls: list<string>, leaked: list<string>}
 	 */
-	private function runHook(array $livePidfiles, ?int $rcMode): array
+	private function runHook(array $livePidfiles, ?int $rcMode, bool $blocked = FALSE): array
 	{
 		$rc = "{$this->dir}/pfb_dns_proxy.sh";
 		if ($rcMode !== NULL) {
 			file_put_contents($rc, "#!/bin/sh\n");
 			chmod($rc, $rcMode);
+		}
+		if ($blocked) {
+			file_put_contents("{$this->dir}/backend_blocked", "holder\n5353\nnc (pid 6161) on 127.0.0.1:5353\n");
 		}
 		$driver = <<<'PHP'
 			<?php
@@ -82,6 +85,7 @@ final class DnsProxyBootTest extends TestCase
 				$calls[] = $command;
 			}
 			define('PFB_DNS_PROXY_RCFILE', (string) getenv('RC'));
+			define('PFB_DNS_PROXY_BACKEND_BLOCKED', (string) getenv('BLOCKED'));
 			$leaked = (function () {
 				$before = array_keys(get_defined_vars());
 				require_once getenv('HOOK');
@@ -92,7 +96,7 @@ final class DnsProxyBootTest extends TestCase
 		$run = pfb_test_run_process(
 			[PHP_BINARY, '-d', 'display_errors=stderr', '-r', substr($driver, strlen("<?php\n"))],
 			10.0,
-			['LIVE' => json_encode($livePidfiles), 'RC' => $rc, 'HOOK' => self::HOOK]
+			['LIVE' => json_encode($livePidfiles), 'RC' => $rc, 'HOOK' => self::HOOK, 'BLOCKED' => "{$this->dir}/backend_blocked"]
 		);
 		$out = $run['stdout'];
 		$err = $run['stderr'];
@@ -129,6 +133,18 @@ final class DnsProxyBootTest extends TestCase
 	public function testItStartsNothingWhileTheProxyIsServing(array $live): void
 	{
 		$this->assertSame([], $this->runHook($live, 0755)['calls'], 'a Resolver restart from the GUI must not bounce the proxy');
+	}
+
+	public function testItStartsNothingWhileTheBackendBlockedMarkerStandsAndNothingChecksTheStart(): void
+	{
+		// Given a gateway stopped because a stranger holds Unbound's port and no pair could take its place (issue #3848), and a Resolver restart
+		// from the GUI or a boot: the marker says the proxy must not start onto the stranger, and the tick or Update that finds the port free clears it
+		$calls = $this->runHook([], 0755, TRUE)['calls'];
+
+		// Then the hook starts nothing and backgrounds no confirmation either: there is no start to confirm
+		$this->assertSame([], $calls);
+		unlink("{$this->dir}/backend_blocked");
+		$this->assertCount(2, $this->runHook([], 0755)['calls'], 'and without the marker it starts the proxy and its check');
 	}
 
 	public function testItStartsNothingWithoutAnExecutableRcScript(): void

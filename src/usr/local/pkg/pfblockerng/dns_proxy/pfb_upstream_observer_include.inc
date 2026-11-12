@@ -30,7 +30,10 @@
  * With pfB-DNS on, Unbound has left the client-facing port, so nothing answers on it until the proxy does, and the
  * package's own service start (rc.start_packages) only runs after rc.bootup returns: the firewall's own lookups would
  * fail for the rest of boot. Start the proxy here, in the background, and only when it is not already serving
- * (a Resolver restart from the GUI must not bounce it). The rc script refuses to start without a moved-Resolver snapshot.
+ * (a Resolver restart from the GUI must not bounce it) and not stopped on purpose: a gateway stopped because another process holds Unbound's
+ * loopback backend port and none could be moved (issue #3848) leaves a marker, and neither this hook nor the rc script it runs starts the
+ * proxy onto that process while it stands; the tick or Update that finds the port free clears it. The rc script refuses to start without a
+ * moved-Resolver snapshot.
  *
  * The rc script serializes its starts (lockf), so this background start and an apply's start_service() cannot both launch a
  * proxy. This hook never waits for readiness (it must not hold up rc.bootup or a Resolver restart). A second background command confirms
@@ -49,11 +52,12 @@
  * pfSense's function, so it must leave no variable behind.
  */
 $pfb_dns_rc = defined('PFB_DNS_PROXY_RCFILE') ? PFB_DNS_PROXY_RCFILE : '/usr/local/etc/rc.d/pfb_dns_proxy.sh';
-if (is_executable($pfb_dns_rc) && !isvalidpid('/var/run/pfb_dns_proxy.pid') && !isvalidpid('/var/run/pfb_dns_proxy_daemon.pid')) {
+$pfb_dns_blocked = defined('PFB_DNS_PROXY_BACKEND_BLOCKED') ? PFB_DNS_PROXY_BACKEND_BLOCKED : '/var/run/pfb_dns_proxy_backend_blocked';
+if (is_executable($pfb_dns_rc) && !file_exists($pfb_dns_blocked) && !isvalidpid('/var/run/pfb_dns_proxy.pid') && !isvalidpid('/var/run/pfb_dns_proxy_daemon.pid')) {
 	// The gateway log's size from before the start, handed to the check so that it judges only the lines this start writes: taken
 	// after the start was backgrounded, it could already include them
 	$pfb_dns_since = (int) @filesize(defined('PFB_DNS_PROXY_LOG') ? PFB_DNS_PROXY_LOG : '/var/log/pfblockerng/dns_proxy.log');
 	mwexec_bg($pfb_dns_rc . ' start');
 	mwexec_bg('/usr/bin/timeout --foreground -s TERM -k 5 360 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc dns_check ' . $pfb_dns_since);
 }
-unset($pfb_dns_rc, $pfb_dns_since);
+unset($pfb_dns_rc, $pfb_dns_blocked, $pfb_dns_since);

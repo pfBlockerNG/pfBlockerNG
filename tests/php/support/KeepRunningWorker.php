@@ -44,6 +44,11 @@ final class KeepRunningWorker
 		} else {
 			pfb_reload_unbound('enabled', TRUE);
 		}
+		$service = NULL;
+		if ($foreignFixture) {
+			pfb_global();
+			$service = pfb_dns_status()['service'];
+		}
 		file_put_contents($resultFile, json_encode([
 			'operation' => $operation,
 			'returned' => $returned,
@@ -59,6 +64,9 @@ final class KeepRunningWorker
 			'unbound_before' => $unboundBefore,
 			'gateway_before' => $gatewayBefore,
 			'serving_before' => $servingBefore,
+			'configures' => count($GLOBALS['pfb_test_unbound_configure_calls'] ?? []),
+			'blocked' => file_exists($GLOBALS['pfb']['dns_proxy_backend_blocked']),
+			'service' => $service,
 		], JSON_THROW_ON_ERROR));
 		$this->standInsStop();
 		rmdir_recursive($this->krDir);

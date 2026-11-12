@@ -19,7 +19,7 @@ trait DnsProxyRcSandboxTrait
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const RC = 'pfb_dns_proxy.sh';
 
-	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger', 'lockf', 'uname', 'php', 'timeout'];
+	private const DOUBLES = ['read_xml_tag.sh', 'daemon', 'kill', 'sleep', 'ps', 'logger', 'lockf', 'uname', 'php', 'timeout', 'sockstat'];
 
 	/** One script installed under every command name the rc body uses; $0 picks the role. */
 	private const DOUBLE = <<<'SH'
@@ -110,6 +110,13 @@ trait DnsProxyRcSandboxTrait
 				if [ "$pid" = "$5" ]; then printf '%s\n' "$args"; exit 0; fi
 			done < "$S/procs"
 			exit 1
+			;;
+		sockstat)
+			# the listening sockets the test arranged (state/sockstat.out), and the status it asked sockstat to exit with
+			printf '%s\n' "$*" >> "$S/sockstat.calls"
+			cat "$S/sockstat.out"
+			read -r status < "$S/sockstat.status"
+			exit "$status"
 			;;
 		logger)
 			ev log
@@ -242,6 +249,7 @@ trait DnsProxyRcSandboxTrait
 			'dns_proxy_cert' => $this->certFile(),
 			'dns_proxy_cert_legacy' => "{$this->dir}/chroot/pfb_dns_cert.pem",
 			'dns_proxy_ctl' => $this->ctlSocket(),
+			'dns_proxy_backend_blocked' => '/var/run/pfb_dns_proxy_backend_blocked',
 		]);
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_rcfile_dir'] = "{$this->dir}/rc";
@@ -310,7 +318,8 @@ trait DnsProxyRcSandboxTrait
 			array_values($vars)
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
-		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls', 'timeout.args', 'php.args', 'ancestry', 'ancestry.self', 'ancestry.queries'] as $file) {
+		file_put_contents("{$state}/sockstat.status", "0\n");
+		foreach (['events', 'fds', 'procs', 'logger', 'daemon.argv', 'launch.marker', 'launch.fds', 'lockf.calls', 'timeout.args', 'php.args', 'ancestry', 'ancestry.self', 'ancestry.queries', 'sockstat.out', 'sockstat.calls'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
 		@unlink("{$state}/ps.fail");

@@ -541,14 +541,60 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 	// Structure: nothing else can bring a restore back
 	// -----------------------------------------------------------------------
 
+	/** Is the T_STRING at $index a call (an opening parenthesis follows, no `function` keyword precedes)? */
+	private static function isCallOf(array $tokens, int $index): bool
+	{
+		$next = $index + 1;
+		while (is_array($tokens[$next] ?? NULL) && $tokens[$next][0] === T_WHITESPACE) {
+			$next++;
+		}
+		$previous = $index - 1;
+		while ($previous >= 0 && is_array($tokens[$previous]) && $tokens[$previous][0] === T_WHITESPACE) {
+			$previous--;
+		}
+		return ($tokens[$next] ?? NULL) === '(' && !(is_array($tokens[$previous] ?? NULL) && in_array($tokens[$previous][0], [T_FUNCTION, T_OBJECT_OPERATOR, T_DOUBLE_COLON], TRUE));
+	}
+
+	/** Is the second argument of the call at $index exactly the token FALSE (any case)? */
+	private static function secondArgumentIsLiteralFalse(array $tokens, int $index): bool
+	{
+		$depth = 0;
+		$argument = 0;
+		$words = [];
+		for ($i = $index + 1; isset($tokens[$i]); $i++) {
+			$token = $tokens[$i];
+			if ($token === '(' || $token === '[') {
+				$depth++;
+				if ($depth === 1) {
+					continue;
+				}
+			} elseif ($token === ')' || $token === ']') {
+				$depth--;
+				if ($depth === 0) {
+					break;
+				}
+			} elseif ($token === ',' && $depth === 1) {
+				$argument++;
+				continue;
+			}
+			if ($argument === 1 && $depth >= 1 && !(is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE))) {
+				$words[] = is_array($token) ? $token[1] : $token;
+			}
+		}
+		return count($words) === 1 && strtoupper($words[0]) === 'FALSE';
+	}
+
 	/**
-	 * @return array{calls:list<string>,functions:list<string>} "<file>::<enclosing function>" of each use of pfb_dns_proxy_resolver (a call, or
-	 *         its name as a string), and the name of every function or method defined under src/
+	 * @return array{calls:list<string>,functions:list<string>,falseCalls:list<string>} "<file>::<enclosing function>" of each use of
+	 *         pfb_dns_proxy_resolver (a call, or its name as a string), the name of every function or method defined under src/, and the
+	 *         "<file>::<enclosing function>" of each call of pfb_unbound_python() whose second argument (the pass's own answer to "is pfB-DNS
+	 *         wanted") is the literal FALSE, which is the restore
 	 */
 	private function sourceScan(): array
 	{
 		$calls = [];
 		$functions = [];
+		$falseCalls = [];
 		$root = dirname(__DIR__, 2) . '/src';
 		$files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
 		foreach ($files as $file) {
@@ -593,6 +639,10 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 							break;		// a closure: it has no name of its own
 						}
 					}
+				} elseif ($token[0] === T_STRING && $token[1] === 'pfb_unbound_python' && self::isCallOf($tokens, $index)) {
+					if (self::secondArgumentIsLiteralFalse($tokens, $index)) {
+						$falseCalls[] = "{$relative}::" . ($stack === [] ? '' : end($stack)[0]);
+					}
 				} elseif ($token[0] === T_STRING && $token[1] === 'pfb_dns_proxy_resolver') {
 					$previous = $index - 1;
 					while (is_array($tokens[$previous]) && $tokens[$previous][0] === T_WHITESPACE) {
@@ -607,7 +657,8 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 			}
 		}
 		sort($calls);
-		return ['calls' => $calls, 'functions' => $functions];
+		sort($falseCalls);
+		return ['calls' => $calls, 'functions' => $functions, 'falseCalls' => $falseCalls];
 	}
 
 	public function testOnlyTheAdminsSwitchesTheRemovalAndTheWizardCallTheRestore(): void
@@ -634,5 +685,30 @@ final class DnsProxyNeverRollsBackTest extends TestCase
 		$this->assertContains('pfb_dns_proxy_resolver', $names, 'test bootstrap: the scan saw the restore\'s own definition');
 		$offenders = array_values(array_filter($names, static fn (string $name): bool => preg_match('/roll_?back|stand_?down/i', $name) === 1));
 		$this->assertSame([], $offenders);
+	}
+
+	public function testNoPassAsksTheResolverPassToRestoreWithALiteralFalse(): void
+	{
+		// When every call of pfb_unbound_python() under src/ is read from the tokens
+		$scan = $this->sourceScan();
+
+		// Then none hands it a literal FALSE as the answer to "is pfB-DNS wanted": that is the restore, and only the admin's switches (the
+		// callers above) may ask for it, through pfb_dns_wanted(). A restore added to the apply wrapper after a proxy that never became
+		// ready (the old rollback's shape) fails here, though no test can drive sync_package_pfblockerng()
+		$this->assertContains('pfb_unbound_python', $scan['functions'], 'test bootstrap: the scan saw the pass\'s own definition');
+		$this->assertSame([], $scan['falseCalls'], 'a pass that restores the Resolver by handing pfb_unbound_python() a literal FALSE');
+	}
+
+	public function testTheScanSeesALiteralFalseInTheShapesTheOldRollbackUsed(): void
+	{
+		// The scan's own proof: each shape of the old rollback's call is flagged, a variable or a computed answer is not
+		foreach (["pfb_unbound_python('disabled', FALSE);" => TRUE, "pfb_unbound_python(\$mode, false);" => TRUE, "pfb_unbound_python( \$mode ,\n\tFALSE );" => TRUE,
+			"pfb_unbound_python(\$mode, \$wanted);" => FALSE, "pfb_unbound_python(\$mode, pfb_dns_wanted());" => FALSE, "pfb_unbound_python(\$mode);" => FALSE,
+			"pfb_unbound_python(\$mode, FALSE || \$x);" => FALSE, "pfb_unbound_python(f(1, FALSE), \$x);" => FALSE] as $code => $flagged) {
+			$tokens = token_get_all("<?php {$code}");
+			$index = array_key_first(array_filter($tokens, static fn ($t): bool => is_array($t) && $t[0] === T_STRING));
+			$this->assertTrue(self::isCallOf($tokens, $index), $code);
+			$this->assertSame($flagged, self::secondArgumentIsLiteralFalse($tokens, $index), $code);
+		}
 	}
 }

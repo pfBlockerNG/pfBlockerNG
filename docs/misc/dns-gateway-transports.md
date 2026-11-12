@@ -142,11 +142,11 @@ then the status lists `tls_certificate` in `degraded`.
   One response supplies the page or widget refresh; readiness still independently requires the live Unbound PID to
   own TCP and UDP sockets on the reported upstream. Advertised state does not prove client reachability or TLS trust.
   The update pass and cron tick confirm their own starts/restarts. An existing gateway stays running when status
-  reads fail or the Resolver backend is down; existing startup diagnostics still run. A foreign holder of the applied
-  upstream port changes nothing either: no pass gives the Resolver back (owner decision, 2026-11-11).
-  A dead or foreign-held backend makes **Service** say `Resolver backend not answering: <why>` and is a problem of the startup notice
-  ([#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)), which also tracks moving Unbound off a foreign holder's port to a free loopback port pair.
-  No port migration, fallback, new restart or retry is added here. An actual start/restart still waits for serving
+  reads fail or the Resolver backend is down; existing startup diagnostics still run, and no pass gives the Resolver back
+  (owner decisions, 2026-11-11). A dead Unbound makes **Service** say `Resolver backend not answering: <why>` and is a problem
+  of the startup notice ([#3848](https://github.com/pfBlockerNG/pfBlockerNG/issues/3848)).
+  Another process on Unbound's loopback port pair is moved off by moving the pair to a free one, and when no move is possible the gateway
+  is stopped instead of forwarding to it: see "Unbound's backend ports" in `architecture-notes.md`. An actual start/restart still waits for serving
   readiness, also under a package operation, and reports a start that does not serve without restoring the Resolver.
   Rare IPv4-compatible (`::/96`), mapped and equivalent-spelling normalization is deferred to
   [#3849](https://github.com/pfBlockerNG/pfBlockerNG/issues/3849). Existing exact-spelling acceptance/refusal is retained;

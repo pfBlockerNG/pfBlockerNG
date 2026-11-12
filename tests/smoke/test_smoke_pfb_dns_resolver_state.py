@@ -14,7 +14,7 @@ handler (services_unbound.php over HTTP). Nothing is faked on the box.
   but the saved copy (the admin's line is kept in it for a later restore): pfB-DNS stays on and keeps serving, the
   Resolver stays moved, one notice names the line.
 * Another process on Unbound's loopback port (127.0.0.1:5353, tcp and udp) while pfB-DNS is turned on: Unbound's backend
-  pair moves to a free one (``dns/pfb_dns_unbound_port``), the live Unbound owns it, the gateway forwards to it, the
+  pair moves to a free one (the marked clause), the live Unbound owns it, the gateway forwards to it, the
   holder is named in a notice, nothing is restored and a following Update keeps the pair (issue #3848).
 * A Resolver disabled in Services > DNS Resolver while pfB-DNS fronts it: the proxy kept LAN:53 and answered SERVFAIL
   for every allowed name. A disabled Resolver is not the admin turning pfB-DNS off: the next apply, or the next tick,
@@ -79,9 +79,8 @@ CFG_EDNS = "unbound/edns_buffer_size"
 CFG_CUSTOM = "unbound/custom_options"
 CFG_RESOLVER_ENABLE = "unbound/enable"
 NOTICE_ID = "pfBlockerNG DNS Proxy"
-UNBOUND_PORT = h.dns_config_path(
-    "pfb_dns_unbound_port"
-)  # the PROXYv2 port of the loopback pair Unbound's backend lives on
+# the PROXYv2 port of Unbound's loopback pair: the marked clause's own line is its only stored source
+CLAUSE_BACKEND_PORT = re.compile(r"^proxy-protocol-port:\s*(\d+)\s*$", re.MULTILINE)
 LAN_SIZE = 1432  # a 1500-byte LAN's pfSense-automatic size; the same box with lo0 as its only interface gives 16316
 LOOPBACK_SIZE = 16316
 RESOLVER_PAGE = "/services_unbound.php"
@@ -156,6 +155,12 @@ def _clause(text: str) -> str:
     start = text.find(MARKER)
     end = text.find(MARKER_END)
     return text[start : end + len(MARKER_END)] if start != -1 and end != -1 else ""
+
+
+def _backend_port(vm: SmokeVM) -> int | None:
+    """The PROXYv2 port the clause in Custom Options names (None: no clause)."""
+    match = CLAUSE_BACKEND_PORT.search(_clause(_custom_options(vm)))
+    return int(match.group(1)) if match else None
 
 
 def _clause_size(vm: SmokeVM) -> int | None:
@@ -351,96 +356,85 @@ def test_a_foreign_listener_on_unbounds_port_moves_its_backend_pair_and_pfb_dns_
     """
     vm = rig.vm
     held = {("tcp4", "127.0.0.1:5353"), ("udp4", "127.0.0.1:5353")}
-    stored_before = h.config_get_state(vm, UNBOUND_PORT)
-    try:
-        with _unmoved_afterwards(rig):
-            _set_proxy_toggle(vm, False)
-            _apply(vm)
-            before = _capture(vm)
-            assert not _toggle_on_in_config(vm) and not _snapshot_present(vm), (
-                f"before: pfB-DNS must be off with no saved move: {before}"
-            )
-            assert before.service == "stopped" and not before.ps, (
-                f"before: the proxy must be stopped: {before.service} {before.ps}"
-            )
-            assert before.unbound_dns(), f"before: native Unbound has no DNS listeners: {before.listeners}"
-            prior_notices = len(_notices(vm))
+    with _unmoved_afterwards(rig):
+        _set_proxy_toggle(vm, False)
+        _apply(vm)
+        before = _capture(vm)
+        assert not _toggle_on_in_config(vm) and not _snapshot_present(vm), (
+            f"before: pfB-DNS must be off with no saved move: {before}"
+        )
+        assert before.service == "stopped" and not before.ps, (
+            f"before: the proxy must be stopped: {before.service} {before.ps}"
+        )
+        assert before.unbound_dns(), f"before: native Unbound has no DNS listeners: {before.listeners}"
+        prior_notices = len(_notices(vm))
 
+        try:
+            _occupy(vm, ["127.0.0.1"], "5353")
+            _set_proxy_toggle(vm, True)
             try:
-                _occupy(vm, ["127.0.0.1"], "5353")
-                _set_proxy_toggle(vm, True)
-                try:
-                    h.reload(vm, "updatednsbl")
-                finally:
-                    print(f"[3848] activation with 5353 held:\n{_diagnostics(vm)}", flush=True)
-                    print(
-                        vm.ssh(f"tail -n 80 {h.PFB_LOGDIR}/error.log /var/log/resolver.log 2>&1").stdout,
-                        flush=True,
-                    )
-
-                after = _capture(vm)
-                assert _toggle_on_in_config(vm) and _snapshot_present(vm), (
-                    f"pfB-DNS stays on, the Resolver moved: {after}"
-                )
-                assert after.resolver["active_interface"] == "lo0", f"the Resolver is moved: {after.resolver}"
-                assert after.service == "running", f"the proxy serves: {after.service} {after.ps}"
-
-                # Unbound's pair moved: stored, owned by the live Unbound on TCP and UDP, named by the rc script
-                present, port_text = h.config_get_state(vm, UNBOUND_PORT)
-                assert present and port_text.isdigit() and port_text != "5353", (
-                    f"the stored pair must have moved off 5353: {present} {port_text!r}"
-                )
-                port = int(port_text)
-                ours = {
-                    (s.proto, s.local)
-                    for s in _listeners(vm)
-                    if s.command == "unbound" and s.pid == after.unbound_pid and s.port == port
-                }
-                assert {("tcp4", f"127.0.0.1:{port}"), ("udp4", f"127.0.0.1:{port}")} <= ours, (
-                    f"Unbound's pid {after.unbound_pid} must own TCP and UDP on 127.0.0.1:{port}: {sorted(ours)}"
-                )
-                rc = vm.ssh("cat", PROXY_RC).stdout
-                assert f"--upstream '127.0.0.1:{port}'" in rc, f"the rc script's --upstream must name {port}:\n{rc}"
-                assert any(local.endswith(":53") for _, local in after.proxy_sockets()), (
-                    f"the gateway serves port 53: {sorted(after.proxy_sockets())}"
-                )
-
-                # the holder is left alone and named
-                holders = {
-                    (s.proto, s.local) for s in _listeners(vm, connected=True) if s.port == 5353 and s.command == "nc"
-                }
-                assert held <= holders, f"the other process must still hold 5353: {sorted(holders)}"
-                new = _notices(vm)[prior_notices:]
-                assert any(
-                    "nc (pid " in text
-                    and "on 127.0.0.1:5353" in text
-                    and f"moved from ports 5353/5354 to {port}/{port + 1}" in text
-                    for text in new
-                ), f"a notice must name the holder and the move: {new}"
-                assert not any("restored" in text.lower() for text in new), f"nothing is given back: {new}"
-
-                # pfB-DNS serves port 53 through the moved pair: DNSBL blocks the listed name, the allowed one resolves
-                for tcp in (False, True):
-                    blocked, raw = _query(rig.client, rig.names.blocked, tcp=tcp)
-                    assert h.is_vip(blocked), (
-                        f"the listed name must be blocked by pfB-DNS with the DNSBL VIP (tcp={tcp}): {raw}"
-                    )
-                    allowed, raw = _query(rig.client, h.unique_domain("upstream-moved"), tcp=tcp)
-                    assert h.resolves_to(allowed, STUB_DNS_A), f"an allowed name must resolve (tcp={tcp}): {raw}"
-
-                # a following Update keeps the pair, and the answers
                 h.reload(vm, "updatednsbl")
-                assert h.config_get_state(vm, UNBOUND_PORT) == (True, port_text), (
-                    "a following Update keeps the new port"
-                )
-                again = _capture(vm)
-                assert again.service == "running" and _snapshot_present(vm), f"still moved and serving: {again.service}"
-                allowed, raw = _query(rig.client, h.unique_domain("upstream-kept"), tcp=False)
-                assert h.resolves_to(allowed, STUB_DNS_A), f"DNS still resolves after the Update: {raw}"
             finally:
-                _release(vm)
-    finally:
-        h.config_restore_state(vm, UNBOUND_PORT, stored_before)
+                print(f"[3848] activation with 5353 held:\n{_diagnostics(vm)}", flush=True)
+                print(
+                    vm.ssh(f"tail -n 80 {h.PFB_LOGDIR}/error.log /var/log/resolver.log 2>&1").stdout,
+                    flush=True,
+                )
+
+            after = _capture(vm)
+            assert _toggle_on_in_config(vm) and _snapshot_present(vm), f"pfB-DNS stays on, the Resolver moved: {after}"
+            assert after.resolver["active_interface"] == "lo0", f"the Resolver is moved: {after.resolver}"
+            assert after.service == "running", f"the proxy serves: {after.service} {after.ps}"
+
+            # Unbound's pair moved: stored, owned by the live Unbound on TCP and UDP, named by the rc script
+            port = _backend_port(vm)
+            assert port is not None and port != 5353, f"the clause's pair must have moved off 5353: {port!r}"
+            ours = {
+                (s.proto, s.local)
+                for s in _listeners(vm)
+                if s.command == "unbound" and s.pid == after.unbound_pid and s.port == port
+            }
+            assert {("tcp4", f"127.0.0.1:{port}"), ("udp4", f"127.0.0.1:{port}")} <= ours, (
+                f"Unbound's pid {after.unbound_pid} must own TCP and UDP on 127.0.0.1:{port}: {sorted(ours)}"
+            )
+            rc = vm.ssh("cat", PROXY_RC).stdout
+            assert f"--upstream '127.0.0.1:{port}'" in rc, f"the rc script's --upstream must name {port}:\n{rc}"
+            assert any(local.endswith(":53") for _, local in after.proxy_sockets()), (
+                f"the gateway serves port 53: {sorted(after.proxy_sockets())}"
+            )
+
+            # the holder is left alone and named
+            holders = {
+                (s.proto, s.local) for s in _listeners(vm, connected=True) if s.port == 5353 and s.command == "nc"
+            }
+            assert held <= holders, f"the other process must still hold 5353: {sorted(holders)}"
+            new = _notices(vm)[prior_notices:]
+            assert any(
+                "nc (pid " in text
+                and "on 127.0.0.1:5353" in text
+                and f"moved from ports 5353/5354 to {port}/{port + 1}" in text
+                for text in new
+            ), f"a notice must name the holder and the move: {new}"
+            assert not any("restored" in text.lower() for text in new), f"nothing is given back: {new}"
+
+            # pfB-DNS serves port 53 through the moved pair: DNSBL blocks the listed name, the allowed one resolves
+            for tcp in (False, True):
+                blocked, raw = _query(rig.client, rig.names.blocked, tcp=tcp)
+                assert h.is_vip(blocked), (
+                    f"the listed name must be blocked by pfB-DNS with the DNSBL VIP (tcp={tcp}): {raw}"
+                )
+                allowed, raw = _query(rig.client, h.unique_domain("upstream-moved"), tcp=tcp)
+                assert h.resolves_to(allowed, STUB_DNS_A), f"an allowed name must resolve (tcp={tcp}): {raw}"
+
+            # a following Update keeps the pair, and the answers
+            h.reload(vm, "updatednsbl")
+            assert _backend_port(vm) == port, "a following Update keeps the new port"
+            again = _capture(vm)
+            assert again.service == "running" and _snapshot_present(vm), f"still moved and serving: {again.service}"
+            allowed, raw = _query(rig.client, h.unique_domain("upstream-kept"), tcp=False)
+            assert h.resolves_to(allowed, STUB_DNS_A), f"DNS still resolves after the Update: {raw}"
+        finally:
+            _release(vm)
 
 
 # --------------------------------------------------------------------------- #

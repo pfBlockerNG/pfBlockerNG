@@ -594,7 +594,6 @@ final class DnsProxyResolverMoveTest extends TestCase
 	private function assertPairMovedTo5355(): void
 	{
 		$this->assertSame('5355', pfb_dns_proxy_backend_port());
-		$this->assertSame('5355', (string) config_get_path('installedpackages/pfblockerngdns/config/0/pfb_dns_unbound_port'));
 		$lines = $this->customLines();
 		foreach (['port: 5356', 'interface: 127.0.0.1@5355', 'interface: ::1@5355', 'proxy-protocol-port: 5355'] as $line) {
 			$this->assertContains($line, $lines);
@@ -828,16 +827,16 @@ final class DnsProxyResolverMoveTest extends TestCase
 		$this->assertSame('/services_unbound.php', $notice['url']);
 	}
 
-	public function testThePortLineRefusalNamesThePlainPortOfTheStoredPair(): void
+	public function testThePortLineRefusalNamesThePlainPortOfThePairTheClauseNames(): void
 	{
-		// Given Unbound's pair stored on 5400/5401 and Custom Options that set `port:` themselves
-		PfbConfig::writeSystem('dns/pfb_dns_unbound_port', '5400');
-		$this->seedResolver(['custom_options' => base64_encode("server:\nport: 5300")]);
+		// Given our clause naming the pair 5400/5401 and Custom Options that set `port:` themselves outside it
+		$this->seedResolver(['custom_options' => base64_encode("server:\nport: 5300\n# pfBlockerNG DNS proxy\nport: 5401\ninterface: 127.0.0.1@5400\n"
+			. "interface: ::1@5400\nproxy-protocol-port: 5400\n# end pfBlockerNG DNS proxy")]);
 
 		// When the proxy is turned on
 		$this->assertFalse(pfb_dns_proxy_resolver(TRUE));
 
-		// Then the notice names the port our clause would set, which is the stored pair's plain port
+		// Then the notice names the port our clause would set, which is that pair's plain port
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
 		$this->assertStringContainsString('the DNS proxy sets port: to 5401 for Unbound', $GLOBALS['pfb_test_file_notices'][0]['notice']);
 	}
