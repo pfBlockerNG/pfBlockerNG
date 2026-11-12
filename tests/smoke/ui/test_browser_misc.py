@@ -54,7 +54,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .conftest import mask_page_identity
+from .conftest import mask_page_identity, wait_for_document_ready
 from .test_render_smoke import (
     _SOFTWARE_CHECK_FAILED_QUERY,
     _SOFTWARE_CHECKED_MARKER,
@@ -111,6 +111,7 @@ def _open(page: Page, webui: WebUI, path: str) -> None:
     page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
     # The login form carries #usernamefld; its absence proves we are authed.
     assert page.locator("#usernamefld").count() == 0, f"GET {path} showed the login form -- cookie not authenticated"
+    wait_for_document_ready(page)
 
 
 def _shot(page: Page, screenshot_dir: Path, name: str) -> None:

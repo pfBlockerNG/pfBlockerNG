@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from .conftest import wait_for_document_ready
+
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 
 if TYPE_CHECKING:
@@ -245,6 +247,7 @@ def reorder_fixtures(deployed_vm: SmokeVM, webui: WebUI) -> Iterator[dict[str, s
 
 def _open(page: Page, webui: WebUI, path: str) -> None:
     page.goto(webui.url(path), wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3)
+    wait_for_document_ready(page)
 
 
 def _rows(page: Page) -> Locator:

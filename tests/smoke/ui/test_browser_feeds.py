@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .conftest import mask_page_identity
+from .conftest import mask_page_identity, wait_for_document_ready
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
@@ -106,6 +106,7 @@ def _open(page: Page, webui: WebUI, path: str) -> None:
     page.wait_for_load_state("networkidle", timeout=JS_TIMEOUT_MS * 3)
     # The login form carries #usernamefld; its absence proves we are authed.
     assert page.locator("#usernamefld").count() == 0, f"GET {path} showed the login form -- cookie not authenticated"
+    wait_for_document_ready(page)
 
 
 def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
