@@ -1,5 +1,6 @@
 package feedparse
 
+// Derived from php-src ext/mbstring/common_codepoints.txt, Copyright (c) The PHP Group, PHP License 3.01.
 // mbRareBitvecHex is mbstring's table of "rare" code points U+0000..U+FFFF, one bit each, 32 per big-endian word
 // (ext/mbstring/common_codepoints.txt, identical in PHP 8.3-8.5): code points outside the common set cost an encoding
 // candidate demerits in mb_detect_encoding().
