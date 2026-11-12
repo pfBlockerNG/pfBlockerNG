@@ -1,9 +1,10 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
+//	--state-dir DIR     Core's own storage (the settings store, settings.json): made 0700, the server's user's alone
 //	--allow-uid UID     the privileged caller's uid, read from the kernel's credential of each connection (default 0, root)
 //	--client-uid UID    a further local client's uid also served (pfb-dns's user); repeatable
 //	--socket-group GID  open the socket's directory (0750) and the socket (0660) to this group, so that a client that is
@@ -22,12 +23,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
 const shutdownGrace = 3 * time.Second // below the rc script's 5 s before KILL
@@ -36,6 +40,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	fl := flag.NewFlagSet("pfb-core", flag.ContinueOnError)
 	fl.SetOutput(stderr)
 	socket := fl.String("socket", "", "the API's Unix socket (required)")
+	stateDir := fl.String("state-dir", "", "Core's storage directory (required)")
 	var allowUID uint32
 	fl.Func("allow-uid", "the privileged caller's uid (default 0)", func(v string) error {
 		uid, err := strconv.ParseUint(v, 10, 32)
@@ -63,13 +68,24 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	if err := fl.Parse(args); err != nil {
 		return 2
 	}
-	if *socket == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
+	if err := privateDir(*stateDir, 0o700); err != nil {
+		logger.Printf("cannot use the state directory %s: %v", *stateDir, err)
+		return 1
+	}
+	store, err := settings.Open(*stateDir, settings.Production())
+	if err != nil {
+		logger.Printf("cannot read the settings store: %v", err)
+		return 1
+	}
+	methods := productionMethods()
+	maps.Copy(methods, settingsMethods(store))
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
-		methods: productionMethods(), logf: logger.Printf})
+		methods: methods, logf: logger.Printf})
 	if err != nil {
 		logger.Printf("cannot listen on %s: %v", *socket, err)
 		return 1

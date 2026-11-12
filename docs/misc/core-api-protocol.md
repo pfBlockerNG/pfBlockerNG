@@ -1,8 +1,9 @@
 # Core API protocol
 
 Scope: the HTTP+JSON API of the pfBlockerNG Core daemon (`go/pfb_core`, binary `pfb-core`, issue #3841; map #3813), the
-conventions every Core method follows, who may call it, and how the package runs it. Load when: adding a Core method,
-calling Core from PHP or another local process, or changing `go/pfb_core`, `pfb_core_service()` or `pfb_core_call()`.
+conventions every Core method follows, the settings methods and store (issue #3842), who may call it, and how the package
+runs it. Load when: adding a Core method or settings projection, calling Core from PHP or another local process, or
+changing `go/pfb_core`, `pfb_core_service()` or `pfb_core_call()`.
 
 Core is its own process and binary, separate from `pfb-dns`: either keeps running when the other fails. It runs whether
 pfB-DNS is enabled or not.
@@ -28,8 +29,58 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | Method | Parameters | Reply |
 |---|---|---|
 | `GetVersion` | none | `{"service": "pfblockerng-core", "apiVersion": "v1", "status": "serving"}` |
+| `GetSettingsSchema` | none | the native schema: `{"schemaVersion", "projections": [{"id", "fields": [...]}]}` |
+| `GetSettings` | `projectionIds` (optional; none: all) | `{"initialized", "revision", "projections": [{"resourceId", "generation", "value"}]}` |
+| `InitializeSettings` | `requestId`, `settings` | `{"revision": 1, "projections": [...]}`: every projection |
+| `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
+
+## Settings
+
+Core's native settings (issue #3842). PHP will translate between pfSense settings and these; no pfSense page reads them
+yet.
+
+- **Schema.** A projection is a group of fields, published as the resource `settings/<id>`. A field has a `name`, a
+  `type` (`bool`, `int`, `enum`, `string`) and a `default`. It may also have:
+  - `enum`: the allowed values;
+  - `min` / `max`;
+  - `secret: true`;
+  - `requires`: a bool field of the same projection; while that one is false, this bool is held false.
+- **Revision and generations.** The configuration *revision* is the optimistic lock: it is 1 after `InitializeSettings`
+  and advances on every accepted `SaveSettings`. A projection's *generation* is 1 after initialization and advances only
+  when its value changes.
+- **`settings` / `changes`.** An object of projection id → field → value. JSON `null` resets a field to its default.
+  `InitializeSettings` fills every field it is not given with its default.
+- **Validation.** The whole resulting configuration is checked before anything is written. Any error rejects it all:
+  `invalid_argument`, with one field error per fault (`changes.dns.decisionCacheMax`, `changes.<unknown projection>`).
+- **Conflicts** (`conflict`):
+  - `InitializeSettings` on an initialized Core;
+  - `SaveSettings` before initialization;
+  - `SaveSettings` whose `expectedRevision` is not the current revision (a field error names `expectedRevision`). The
+    client reads again and reapplies its change.
+- **No run.** A save starts no run.
+- **Secrets are write-only.** A read shows a secret field as `{"present": true|false}`, never its value.
+- **Store.** One document, `settings.json`, in `--state-dir` (0600, in a 0700 directory). A save writes
+  `settings.json.tmp`, syncs it, renames it into place and syncs the directory, so a crash leaves the previous
+  revision readable. A store file Core cannot read stops the start; Core never comes up uninitialized over it.
+
+### Projection `dns`
+
+The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. `pfb-dns` will fetch them as `settings/dns`
+(map #3813, owner 2026-11-12). The field list with registry keys is on [#3842](https://github.com/pfBlockerNG/pfBlockerNG/issues/3842#issuecomment-6834529521).
+
+| Field | Type, default |
+|---|---|
+| `replyLogging`, `hstsNullBlocking`, `pslIncludePrivate`, `idnBlockMalicious` | bool, `true` |
+| `tldWildcard`, `pslAllowPrivate`, `idnEscalateSuspicious`, `logViaWebserver`, `cnameValidation`, `control`, `regexCap`, `metricsClientIp` | bool, `false` |
+| `controlLegacy` | bool, `false`; `requires` `control` |
+| `pslFeedPrivatePolicy`, `pslFeedIcannPolicy` | enum `ignore` / `apex` / `honor`, `honor` |
+| `idnMode` | enum `off` / `confusable` / `on`, `off` |
+| `decisionCacheMax` | int 0 to 5000000 (0: unlimited), `10000` |
+
+Parity fixture: `tests/core/fixtures/settings_dns_parity.json`. `CoreSettingsDnsParityTest` (PHPUnit) freezes it against
+today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it.
 
 ## Errors
 
@@ -48,14 +99,14 @@ Every error is the same envelope, with the HTTP status its code maps to:
 | `unauthenticated` | 401 | The caller is not an admitted local process (see [Local authentication](#local-authentication)) |
 | `not_found` | 404 | No such method, or no such API version |
 | `method_not_allowed` | 405 | Not `POST` |
-| `conflict` | 409 | A `requestId` reused with a different body |
+| `conflict` | 409 | A `requestId` reused with a different body; a settings call the store's state refuses ([Settings](#settings)) |
 | `payload_too_large` | 413 | Body over the limit |
 | `internal` | 500 | The method failed unexpectedly or ran past its deadline (logged); also any code a method returns that is not in this table |
 | `unavailable` | 503 | A repeat of a `requestId` whose first request still ran when the repeat's own deadline passed |
 
 ## requestId and replay
 
-A mutating method (none is public yet; tests use a test-only one) takes a `requestId` in its parameters: a string of 1 to
+A mutating method (`InitializeSettings`, `SaveSettings`) takes a `requestId` in its parameters: a string of 1 to
 128 printable ASCII characters without spaces. The method declares `requestId` in its own parameters, since unknown
 parameters are refused. The client makes one per logical operation (a UUID will do) and sends it
 again, with the byte-identical body, to resolve an unknown outcome such as a timeout.
@@ -120,6 +171,7 @@ pfb-dns ticket decides it.
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
 | Socket | `/var/run/pfb_core/api.sock` |
+| State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): outside `/var`, so it survives a RAM-disk reboot |
 
 - **Start** keeps a pfb_core supervisor that already runs. Otherwise it runs this machine's binary (picked by `uname -p`).
   A package without an executable `pfb-core` for this machine starts nothing and logs why. That is not a failure. An
