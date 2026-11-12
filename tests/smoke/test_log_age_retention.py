@@ -4,9 +4,8 @@ Proves the §2.2/§2.3 contract on a real pfSense CE VM:
 
   1. Host-side CSV log (``ip_blocklog``): lines older than the configured
      ``log_max_days_<type>`` cutoff are dropped, newer ones kept, inode preserved.
-  2. Chrooted python-side CSV log (``dnslog``): same age-cutoff trim, PLUS inode and
-     ``unbound`` ownership preserved (the chroot + ``chown unbound`` path Phase 6
-     could only unit-test with a stubbed filesystem).
+  2. pfB-DNS's CSV log (``dnslog``) on the host, beside the empty chroot log dir: same
+     age-cutoff trim, PLUS inode and ``unbound`` ownership preserved.
   3. Control: ``log_max_days_<type>='0'`` (the default) is a total no-op for the age
      logic — the log stays byte-identical, proving line-count-only behaviour is
      unchanged for every operator who never opts in (§2.3 item 2).
@@ -54,11 +53,8 @@ _PFB_EXTRA_INC = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 # Host-side (non-chrooted) PHP-written CSV log; timestamp at CSV field 0.
 LOG_IP_BLOCKLOG = f"{PFB_LOGDIR}/ip_block.log"
 
-# Python-written CSV log — chrooted to /var/unbound on pfSense; timestamp at CSV
-# field 1. pfb_log_mgmt() resolves it as /var/unbound/var/log/pfblockerng/dnsbl.log
-# when the chroot dir exists, otherwise falls back to the host path (inc:2907).
+# pfB-DNS's CSV log, written on the host; timestamp at CSV field 1.
 LOG_DNSLOG_HOST = f"{PFB_LOGDIR}/dnsbl.log"
-LOG_DNSLOG_CHROOT = f"/var/unbound{PFB_LOGDIR}/dnsbl.log"
 
 CFG_GENERAL = "installedpackages/pfblockerng/config/0"
 
@@ -293,16 +289,14 @@ def _tick(vm: SmokeVM) -> None:
 
 
 def _resolve_dnslog_path(vm: SmokeVM) -> str:
-    """Return the effective dnslog path: chrooted if /var/unbound's log dir exists.
-
-    Mirrors pfb_log_mgmt()'s own chroot-path resolution (inc:2907) and the retired
-    ADR-30 test's identical resolution logic.
-    """
-    chroot_dir = vm.ssh("test", "-d", "/var/unbound/var/log/pfblockerng", timeout=10)
-    if chroot_dir.returncode == 0:
-        return LOG_DNSLOG_CHROOT
+    """Return the host dnslog path, with the empty chroot log dir ``dnsbl_cache stage`` leaves (issue #3850)."""
     mk = vm.ssh("/bin/mkdir", "-p", "/var/unbound/var/log/pfblockerng", timeout=30)
-    return LOG_DNSLOG_CHROOT if mk.returncode == 0 else LOG_DNSLOG_HOST
+    assert mk.returncode == 0, f"could not create the chroot log dir: {mk.stderr!r}"
+    mounted = vm.ssh("/sbin/mount", timeout=30).stdout
+    assert " on /var/unbound/var/log/pfblockerng (" not in mounted, (
+        f"precondition: the chroot log dir is mounted:\n{mounted}"
+    )
+    return LOG_DNSLOG_HOST
 
 
 def _ts(days_ago: float) -> str:
@@ -414,18 +408,18 @@ def test_age_cutoff_trims_expired_lines_host_path_ip_blocklog(deployed_vm: Smoke
 # --------------------------------------------------------------------------- #
 
 
-def test_age_cutoff_trims_expired_lines_chrooted_dnslog_preserves_ownership(
+def test_age_cutoff_trims_the_host_dnslog_beside_an_unmounted_chroot_log_dir(
     deployed_vm: SmokeVM,
 ) -> None:
-    """Scenario 2 — chrooted dnslog age cutoff: same trim, PLUS inode + unbound ownership held.
+    """Scenario 2 — dnslog age cutoff: same trim, PLUS inode + unbound ownership held.
 
-    pfBlockerNG's dnslog (dnsbl.log) is written by the Unbound Python module, which runs
-    chrooted at /var/unbound. pfb_log_mgmt() resolves the chrooted path when it exists and
-    re-chowns to unbound after every trim (inc:2907/:2936-2937).
+    pfB-DNS writes dnsbl.log on the host. Nothing mounts the host log dir into Unbound's
+    chroot any more (issue #3850), yet ``dnsbl_cache stage`` still leaves an empty
+    /var/unbound/var/log/pfblockerng: pfb_log_mgmt() must trim the host file regardless.
 
     Given:
-      - dnslog seeded with 2 expired + 2 current lines at the effective (chroot-aware) path.
-      - File owned by unbound (mirrors production state).
+      - that empty chroot log dir, and dnslog seeded on the host with 2 expired + 2 current lines.
+      - File owned by unbound (an older package's ownership).
       - ``log_max_days_dnslog`` = 7.
       - Inode + owner captured before the cron runs.
 
