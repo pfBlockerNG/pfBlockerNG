@@ -46,7 +46,10 @@ def test_listener_only_mode_saves_without_rewriting_foreign_dhcp_or_ra_dns(
     core_hash = "hash('sha256', serialize([config_get_path('dhcpd', NULL), config_get_path('dhcpdv6', NULL)]))"
     try:
         _put(smoke_vm, "virtualip/vip", [*(originals["virtualip/vip"] or []), vip])
-        _put(smoke_vm, "dhcpd", {helpers.IPV6_LOCAL_IFACE: {"enable": "", "dnsserver": ["192.0.2.53"]}})
+        # The scope keeps the box's own pool: the saves that add the VIP regenerate the DHCP server, and pfSense files a
+        # notice for an enabled scope without a valid pool
+        lan = (originals["dhcpd"] or {}).get(helpers.IPV6_LOCAL_IFACE, {})
+        _put(smoke_vm, "dhcpd", {helpers.IPV6_LOCAL_IFACE: {**lan, "enable": "", "dnsserver": ["192.0.2.53"]}})
         _put(
             smoke_vm,
             "dhcpdv6",
