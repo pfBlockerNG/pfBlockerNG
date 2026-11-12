@@ -89,7 +89,7 @@ func TestRunTakesClientUIDsAndASocketGroup(t *testing.T) {
 	var stderr syncBuffer
 	code := make(chan int, 1)
 	go func() {
-		code <- run(ctx, []string{"--socket", socket, "--allow-uid", strconv.Itoa(os.Getuid() + 1),
+		code <- run(ctx, []string{"--socket", socket, "--state-dir", filepath.Join(dir, "state"), "--allow-uid", strconv.Itoa(os.Getuid() + 1),
 			"--client-uid", strconv.Itoa(os.Getuid() + 2), "--client-uid", strconv.Itoa(os.Getuid()),
 			"--socket-group", strconv.Itoa(os.Getgid())}, &stderr)
 	}()

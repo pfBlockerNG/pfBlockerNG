@@ -455,7 +455,7 @@ func TestRunServesUntilCancelledAndRemovesTheSocket(t *testing.T) {
 	var stderr syncBuffer
 	code := make(chan int, 1)
 	go func() {
-		code <- run(ctx, []string{"--socket", socket, "--allow-uid", strconv.Itoa(os.Getuid())}, &stderr)
+		code <- run(ctx, []string{"--socket", socket, "--state-dir", filepath.Join(dir, "state"), "--allow-uid", strconv.Itoa(os.Getuid())}, &stderr)
 	}()
 	waitFor(t, func() bool { return strings.Contains(stderr.String(), "serving API v1 on "+socket) })
 	client := &http.Client{Timeout: watchdog, Transport: &http.Transport{
