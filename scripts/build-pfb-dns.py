@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# build-pfb-dns.py — cross-compile the pfB-DNS gateway for both FreeBSD architectures.
+# build-pfb-dns.py — cross-compile the pfB-DNS gateway, and the Core daemon beside it, for both FreeBSD architectures.
 #
 # usage: build-pfb-dns.py --source-root DIR --out-dir DIR --freebsd-major N [--go GO] [--vendored]
 #                         [--modules-txt FILE]
@@ -7,9 +7,10 @@
 #   --source-root  a source tree holding go/pfb_dns_gateway (the module, with its committed
 #                  go.mod and go.sum). A tree without that module is a legacy source: nothing is
 #                  built, nothing is written, no Go is needed, and the result is {"targets": {}}.
-#   --out-dir      receives freebsd-amd64/pfb-dns and freebsd-arm64/pfb-dns (mtime = go.mod's, so
-#                  the bytes and stamps are a function of the source alone). Relative paths are
-#                  taken from the caller's directory; a directory inside the module is refused.
+#   --out-dir      receives freebsd-amd64/pfb-dns and freebsd-arm64/pfb-dns, and freebsd-<arch>/pfb-core
+#                  when the tree also holds go/pfb_core (each mtime = its module's go.mod's, so the bytes
+#                  and stamps are a function of the source alone). Relative paths are taken from the
+#                  caller's directory; a directory inside either module is refused.
 #   --go           the Go toolchain to run (default: `go` on PATH); a relative path is resolved from the
 #                  caller's directory.
 #   --vendored     build the module in place from its ready-made vendor/ tree (a ports recipe's
@@ -25,9 +26,11 @@
 #
 # stdout: one JSON object, {"go": "go1.x.y", "freebsd_major": N, "modules_txt_sha256": "<hex>" or
 # null when the module vendors nothing, "targets": {"freebsd-amd64": {"goarch", "path", "sha256",
-# "size", "freebsd_abi_note"}, ...}}. Everything else goes to stderr. Exit 1, with every output it
-# wrote removed (a modules.txt installed into a --vendored tree stays: it is that tree's state), when
-# Go is missing or older than go.mod requires, a compile fails, or an output
+# "size", "freebsd_abi_note"}, ...}, "pfb_core": the same per target for pfb-core, {} for a tree without
+# go/pfb_core}. --modules-txt and --vendored concern the gateway: the Core module builds from the standard
+# library alone (a go.mod `require` or a vendor/ of its own exits 1). Everything else goes to stderr.
+# Exit 1, with every output it wrote removed (a modules.txt installed into a --vendored tree stays: it is
+# that tree's state), when Go is missing or older than go.mod requires, a compile fails, or an output
 # fails a check: ELF64 little-endian, OS/ABI FreeBSD, ET_EXEC, the architecture's e_machine; static
 # (no PT_INTERP, no PT_DYNAMIC); a FreeBSD ABI-tag note whose __FreeBSD_version // 100000 is at
 # most N; and `go version -m` showing GOOS=freebsd, GOARCH, CGO_ENABLED=0 and GOAMD64=v1 or
@@ -58,6 +61,8 @@ from pathlib import Path
 
 MODULE = Path("go") / "pfb_dns_gateway"
 BINARY = "pfb-dns"
+CORE_MODULE = Path("go") / "pfb_core"
+CORE_BINARY = "pfb-core"
 # install-layout directory -> (GOARCH, ELF e_machine)
 TARGETS = {"freebsd-amd64": ("amd64", 62), "freebsd-arm64": ("arm64", 183)}
 ELFOSABI_FREEBSD = 9
@@ -211,6 +216,40 @@ def _settle_modules_txt(tree: Path, wanted: bytes | None, *, install: bool) -> s
     return hashlib.sha256(have).hexdigest() if have is not None else None
 
 
+def _check_core_module(core: Path) -> None:
+    """Core must build from the standard library alone: the ports recipe vendors only the gateway's modules."""
+    directives = [
+        line.split()[0] for line in (core / "go.mod").read_text(encoding="utf-8").splitlines() if line.split()
+    ]
+    if "require" in directives or (core / "vendor").exists():
+        raise BuildError(f"{CORE_MODULE} must build from the standard library alone (it has a require or a vendor/)")
+
+
+def _build_one(
+    go: str, tree: Path, dest: Path, target: str, goarch: str, machine: int, major: int, stamp: int
+) -> dict[str, object]:
+    """Build the module at ``tree`` into ``dest`` for one target, check the output, and describe it."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _run_go(
+        go,
+        ["build", "-mod=vendor", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", str(dest), "."],
+        tree,
+        goarch,
+        f"{dest.name} {target} build",
+    )
+    data = dest.read_bytes()
+    abi_tag = _check_elf(dest, data, target, machine, major)
+    _check_build_settings(go, dest, tree, target, goarch)
+    os.utime(dest, (stamp, stamp))
+    return {
+        "goarch": goarch,
+        "path": str(dest),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+        "freebsd_abi_note": abi_tag,
+    }
+
+
 def build_pfb_dns(
     source_root: Path,
     out_dir: Path,
@@ -225,11 +264,18 @@ def build_pfb_dns(
         return {"targets": {}}
     go = _require_go(go, module)
     wanted = _read_modules_txt(modules_txt)
+    core = source_root / CORE_MODULE
+    has_core = (core / "go.mod").is_file()
     out_dir = out_dir.resolve()  # Go runs inside the module: a relative path would land in the source tree
-    if out_dir.is_relative_to(module.resolve()):
-        raise BuildError(f"--out-dir {out_dir} is inside the module being built")
+    for built in (module, core) if has_core else (module,):
+        if out_dir.is_relative_to(built.resolve()):
+            raise BuildError(f"--out-dir {out_dir} is inside the module being built")
+    if has_core:
+        _check_core_module(core)
     stamp = int((module / "go.mod").stat().st_mtime)
+    core_stamp = int((core / "go.mod").stat().st_mtime) if has_core else 0
     targets: dict[str, dict[str, object]] = {}
+    core_targets: dict[str, dict[str, object]] = {}
     out_dir.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix=".vendor-", dir=out_dir))
     try:
@@ -237,36 +283,28 @@ def build_pfb_dns(
         modules_sha256 = _settle_modules_txt(tree, wanted, install=vendored)
         version = _run_go(go, ["env", "GOVERSION"], tree, "amd64", "reading the Go version")
         for target, (goarch, machine) in TARGETS.items():
-            dest = out_dir / target / BINARY
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            _run_go(
-                go,
-                ["build", "-mod=vendor", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", str(dest), "."],
-                tree,
-                goarch,
-                f"{target} build",
-            )
-            data = dest.read_bytes()
-            abi_tag = _check_elf(dest, data, target, machine, freebsd_major)
-            _check_build_settings(go, dest, tree, target, goarch)
-            os.utime(dest, (stamp, stamp))
-            targets[target] = {
-                "goarch": goarch,
-                "path": str(dest),
-                "sha256": hashlib.sha256(data).hexdigest(),
-                "size": len(data),
-                "freebsd_abi_note": abi_tag,
-            }
-            sys.stderr.write(
-                f"==> pfb-dns {target}: sha256={targets[target]['sha256']} ({len(data)} bytes, {version})\n"
-            )
+            builds = [(tree, BINARY, stamp, targets)]
+            if has_core:
+                builds.append((core, CORE_BINARY, core_stamp, core_targets))
+            for built, binary, mtime, record in builds:
+                record[target] = _build_one(
+                    go, built, out_dir / target / binary, target, goarch, machine, freebsd_major, mtime
+                )
+                done = record[target]
+                sys.stderr.write(f"==> {binary} {target}: sha256={done['sha256']} ({done['size']} bytes, {version})\n")
     except BaseException:
         for target in TARGETS:
             shutil.rmtree(out_dir / target, ignore_errors=True)
         raise
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    return {"go": version, "freebsd_major": freebsd_major, "modules_txt_sha256": modules_sha256, "targets": targets}
+    return {
+        "go": version,
+        "freebsd_major": freebsd_major,
+        "modules_txt_sha256": modules_sha256,
+        "targets": targets,
+        "pfb_core": core_targets,
+    }
 
 
 def _positive_int(text: str) -> int:
@@ -277,10 +315,10 @@ def _positive_int(text: str) -> int:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
-        prog="build-pfb-dns.py", description="Cross-compile pfB-DNS for FreeBSD amd64 and arm64."
+        prog="build-pfb-dns.py", description="Cross-compile pfB-DNS and pfb-core for FreeBSD amd64 and arm64."
     )
     ap.add_argument("--source-root", type=Path, required=True, help="source tree holding go/pfb_dns_gateway")
-    ap.add_argument("--out-dir", type=Path, required=True, help="receives freebsd-<arch>/pfb-dns")
+    ap.add_argument("--out-dir", type=Path, required=True, help="receives freebsd-<arch>/pfb-dns and pfb-core")
     ap.add_argument("--go", default="go", help="Go toolchain to run (default: go on PATH)")
     ap.add_argument("--vendored", action="store_true", help="build in place from the module's ready-made vendor/")
     ap.add_argument("--modules-txt", type=Path, help="the vendor/modules.txt the module must carry (or be given)")

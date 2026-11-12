@@ -1069,6 +1069,7 @@ _GO_SOURCE_DIR = "go"
 _GO_MODULE = Path(_GO_SOURCE_DIR) / "pfb_dns_gateway"
 _PFB_DNS_HELPER = Path(__file__).resolve().with_name("build-pfb-dns.py")
 _DNS_PROXY_DIR = "pkg/pfblockerng/dns_proxy"
+_CORE_DIR = "core"  # pkg/pfblockerng/core, beside dns_proxy: pfb-core's bin/<target>/
 
 
 def _run_pfb_dns_helper(
@@ -1094,6 +1095,8 @@ def _run_pfb_dns_helper(
 def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, workdir: Path, freebsd_major: str) -> None:
     """Cross-build pfB-DNS from the acquired source and stage both binaries under ``dns_proxy``/bin.
 
+    A source that also carries go/pfb_core gets both pfb-core binaries staged under the sibling core/bin (issue #3841).
+
     For a port whose recipe has no `do-build` (it builds and installs nothing of pfB-DNS itself). The
     package stays NO_ARCH: every architecture's binary ships and the runtime picks one. The
     binaries are built here, never read from the source, so a tree that already carries a bin/ fails.
@@ -1101,15 +1104,20 @@ def stage_pfb_dns(recipe: Recipe, dns_proxy: Path, source_tree: Path | None, wor
     The leg's ``freebsd_major`` goes to the helper, which refuses a binary linked for a newer FreeBSD.
     """
     bin_dir = dns_proxy / "bin"
-    if bin_dir.exists():
-        raise BuildError(
-            f"the source ships {bin_dir.relative_to(recipe.stagedir)}: "
-            "pfB-DNS binaries are built by the package builder, never committed"
-        )
+    core_bin = dns_proxy.parent / _CORE_DIR / "bin"
+    for committed in (bin_dir, core_bin):
+        if committed.exists():
+            raise BuildError(
+                f"the source ships {committed.relative_to(recipe.stagedir)}: "
+                "pfB-DNS and pfb-core binaries are built by the package builder, never committed"
+            )
     if source_tree is None or not dns_proxy.is_dir():
         return
-    for target, built in _run_pfb_dns_helper(source_tree, workdir, freebsd_major)["targets"].items():
+    record = _run_pfb_dns_helper(source_tree, workdir, freebsd_major)
+    for target, built in record["targets"].items():
         recipe._cmd_install_script([built["path"], f"{bin_dir / target}/"])
+    for target, built in record.get("pfb_core", {}).items():
+        recipe._cmd_install_script([built["path"], f"{core_bin / target}/"])
 
 
 # The one `do-build` line of the go recipe (FreeBSD-ports), flag for flag: the helper that runs is the
@@ -1218,11 +1226,11 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
 
 
 def _refuse_committed_binaries(wrksrc: Path) -> None:
-    found = next(wrksrc.rglob("dns_proxy/bin"), None)
+    found = next(wrksrc.rglob("dns_proxy/bin"), None) or next(wrksrc.rglob(f"pfblockerng/{_CORE_DIR}/bin"), None)
     if found is not None:
         raise BuildError(
             f"the source ships {found.relative_to(wrksrc)}: "
-            "pfB-DNS binaries are built by the package builder, never committed"
+            "pfB-DNS and pfb-core binaries are built by the package builder, never committed"
         )
 
 

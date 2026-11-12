@@ -825,6 +825,13 @@ if (pfb_dns_proxy_saved() !== NULL && pfb_dns_proxy_ready()) {
 unlink_if_exists($pfb['dns_proxy_rc_kept']);
 update_status(" done.\n");
 
+// issue #3841: the Core API daemon runs whether pfB-DNS is on or not; an upgrade restarts it on the new binary. The services were
+// registered above, and restart_service() acts only on a registered one.
+update_status("Starting the Core API service...");
+pfb_core_service();
+restart_service('pfb_core');
+update_status(" done.\n");
+
 if ($ufound) {
 	$final = pfb_stop_start_unbound();
 	// issue #3216: the restart mirrors its own progress (dots, "\nStarting Unbound Resolver")

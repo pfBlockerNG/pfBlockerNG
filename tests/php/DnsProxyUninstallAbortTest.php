@@ -41,7 +41,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 	private const PKG_ABORT = 3;
 
 	/** What the package registers, next to the two services of other packages the worker seeds. */
-	private const OURS = ['pfb_dnsbl', 'pfb_dns_proxy', 'pfb_filter'];
+	private const OURS = ['pfb_core', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_filter'];
 	private const THEIRS = ['squid', 'zeek'];
 
 	/** @var list<string> */
@@ -124,8 +124,8 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'before: the removal aborted');
 		$services = $removal['services'];
 		sort($services);
-		$this->assertSame(['pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services,
-			'the package\'s three services are registered again, once each, and the other packages\' are all still there: ' . json_encode($removal['services']));
+		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services,
+			'the package\'s four services are registered again, once each, and the other packages\' are all still there: ' . json_encode($removal['services']));
 		$this->assertSame(1, count(array_keys($removal['menus'], 'Firewall:pfBlockerNG', TRUE)), 'its menu entry is back, once: ' . json_encode($removal['menus']));
 		$this->assertTrue($removal['foreign'], 'another package\'s service and menu entry are untouched, field for field');
 	}
@@ -158,7 +158,8 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertSame(self::PKG_ABORT, $removal['exit'], 'before: the removal aborted');
 		$this->assertContains('pfb_filter', $removal['running'], 'the filter daemon: pfBlockerNG is enabled');
 		$this->assertContains('pfb_dnsbl', $removal['running'], 'the DNSBL web server: DNSBL is enabled');
-		$this->assertEqualsCanonicalizing(['pfb_dns_proxy', 'pfb_filter', 'pfb_dnsbl', 'squid', 'zeek'], $removal['running'], 'and nothing else comes up');
+		$this->assertContains('pfb_core', $removal['running'], 'the Core API: it runs whatever the settings say (issue #3841)');
+		$this->assertEqualsCanonicalizing(['pfb_core', 'pfb_dns_proxy', 'pfb_filter', 'pfb_dnsbl', 'squid', 'zeek'], $removal['running'], 'and nothing else comes up');
 		$this->assertNotSame([], array_filter($removal['notices'], static fn (string $notice): bool => str_contains($notice, 'removal was stopped')
 			&& str_contains($notice, 'service entries were registered again') && str_contains($notice, 'DNS proxy is running')),
 			'the notice says the removal stopped and that the registrations and the proxy are back: ' . json_encode($removal['notices']));
@@ -193,8 +194,8 @@ final class DnsProxyUninstallAbortTest extends TestCase
 	public static function whatConfigXmlSaysIsOn(): array
 	{
 		return [
-			'DNSBL off: the proxy only forwards, there is no web server to start'            => ['dnsbl_off', ['pfb_dns_proxy', 'pfb_filter']],
-			'pfBlockerNG off: the moved Resolver is still served, nothing else is started'   => ['disabled', ['pfb_dns_proxy']],
+			'DNSBL off: the proxy only forwards, there is no web server to start'            => ['dnsbl_off', ['pfb_core', 'pfb_dns_proxy', 'pfb_filter']],
+			'pfBlockerNG off: the moved Resolver is still served and the Core API runs, nothing else is started'   => ['disabled', ['pfb_core', 'pfb_dns_proxy']],
 		];
 	}
 
@@ -307,7 +308,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertContains('pfb_dns_proxy', $removal['running'], 'the proxy that answers the moved Resolver\'s clients is running');
 		$services = $removal['services'];
 		sort($services);
-		$this->assertSame(['pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
+		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
 		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
 
 		// ... and the operator is told why the Resolver was not put back, and that the removal stopped
@@ -365,7 +366,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		// ... what pfSense took before the hook is put back, but no proxy is started: there is no snapshot for it to serve
 		$services = $removal['services'];
 		sort($services);
-		$this->assertSame(['pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
+		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s services are registered again, once each: ' . json_encode($removal['services']));
 		$this->assertNotContains('pfb_dns_proxy', $removal['running'], 'nothing is started for a proxy that has nothing to serve');
 		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
 
@@ -482,7 +483,7 @@ final class DnsProxyUninstallAbortTest extends TestCase
 		$this->assertContains('pfb_dnsbl', $removal['running'], 'with the DNSBL web server');
 		$services = $removal['services'];
 		sort($services);
-		$this->assertSame(['pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s three services are registered again');
+		$this->assertSame(['pfb_core', 'pfb_dns_proxy', 'pfb_dnsbl', 'pfb_filter', 'squid', 'zeek'], $services, 'the package\'s four services are registered again');
 		$this->assertFalse($removal['lockHeld'], 'no config lock is left held');
 		$this->assertNotSame([], array_filter($removal['notices'], static fn (string $notice): bool => str_contains($notice, 'removal was stopped')
 			&& str_contains($notice, 'service entries were registered again') && str_contains($notice, 'DNS proxy is running')),

@@ -765,3 +765,104 @@ def test_an_abi_note_that_ends_where_its_segment_ends_is_accepted(tmp_path: Path
     # Then it is a complete note, accepted, and its value is recorded
     assert result.returncode == 0, f"a note that fits its segment was refused:\n{result.stderr}"
     assert {t: v["freebsd_abi_note"] for t, v in json.loads(result.stdout)["targets"].items()} == own
+
+
+# --- pfb-core (issue #3841): the Core daemon's go/pfb_core module is built beside pfb-dns, by the same pinned build ---
+
+CORE_MAIN_GO = 'package main\n\nfunc main() { println("TINY-CORE") }\n'
+
+
+def write_tiny_core(
+    root: Path, *, go_mod: str = "module example.test/core\n\ngo 1.21\n", extra: dict[str, str] | None = None
+) -> Path:
+    """A `go/pfb_core` module under ``root`` (beside the gateway); returns ``root``."""
+    module = root / "go" / "pfb_core"
+    module.mkdir(parents=True)
+    (module / "go.mod").write_text(go_mod)
+    (module / "main.go").write_text(CORE_MAIN_GO)
+    for name, text in (extra or {}).items():
+        (module / name).write_text(text)
+    return root
+
+
+def test_real_core_cross_builds_a_freebsd_elf_for_each_architecture(real_build: tuple[Path, dict[str, Any]]) -> None:
+    out_dir, record = real_build
+    core = record["pfb_core"]
+    assert sorted(core) == sorted(TARGETS), f"the record does not list pfb-core for both targets: {record}"
+    for target, machine in TARGETS.items():
+        binary = out_dir / target / "pfb-core"
+        data = binary.read_bytes()
+        assert elf_facts(data) == expected_facts(machine), f"{binary} is not the {target} ELF"
+        assert os.access(binary, os.X_OK), f"{target}/pfb-core is not executable"
+        assert core[target]["path"] == str(binary)
+        assert core[target]["sha256"] == hashlib.sha256(data).hexdigest()
+        assert core[target]["size"] == len(data)
+        assert core[target]["freebsd_abi_note"] == record["targets"][target]["freebsd_abi_note"]
+
+
+@pytest.mark.parametrize("mode", ["builder", "vendored"])
+def test_a_source_with_a_core_module_builds_it_in_both_modes(tmp_path: Path, mode: str) -> None:
+    root = write_tiny_core(write_tiny_module(tmp_path / "src-tree"))
+    result = run_helper(root, tmp_path / "out", extra=["--vendored"] if mode == "vendored" else [])
+    assert result.returncode == 0, result.stderr
+    assert sorted(json.loads(result.stdout)["pfb_core"]) == sorted(TARGETS)
+    for target in TARGETS:
+        assert b"TINY-CORE" in (tmp_path / "out" / target / "pfb-core").read_bytes(), (
+            f"{target}/pfb-core is not the core"
+        )
+        assert b"TINY-CORE" not in (tmp_path / "out" / target / "pfb-dns").read_bytes(), f"{target}/pfb-dns is the core"
+
+
+def test_a_source_without_a_core_module_builds_pfb_dns_alone(tmp_path: Path) -> None:
+    root = write_tiny_module(tmp_path / "src-tree")
+    result = run_helper(root, tmp_path / "out")
+    assert result.returncode == 0, result.stderr
+    record = json.loads(result.stdout)
+    assert record["pfb_core"] == {}
+    assert sorted(record["targets"]) == sorted(TARGETS)
+    assert list((tmp_path / "out").rglob("pfb-core")) == []
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["require", "vendor"],
+)
+def test_a_core_module_that_is_not_standard_library_only_is_refused_and_writes_nothing(
+    tmp_path: Path, shape: str
+) -> None:
+    # The ports recipe vendors the gateway's modules only: a Core dependency would not exist in the port's build
+    go_mod = "module example.test/core\n\ngo 1.21\n"
+    if shape == "require":
+        go_mod += "\nrequire example.test/dep v1.0.0\n"
+    root = write_tiny_core(write_tiny_module(tmp_path / "src-tree"), go_mod=go_mod)
+    if shape == "vendor":
+        (root / "go" / "pfb_core" / "vendor").mkdir()
+        (root / "go" / "pfb_core" / "vendor" / "modules.txt").write_text("")
+    result = run_helper(root, tmp_path / "out")
+    assert result.returncode == 1, f"a Core module with a dependency was built:\n{result.stderr}"
+    assert "standard library" in result.stderr, f"the error does not say why:\n{result.stderr}"
+    assert result.stdout.strip() == ""
+    assert list((tmp_path / "out").rglob("pfb-*")) == [], "binaries were left behind"
+
+
+def test_a_core_compile_error_leaves_no_partial_payload(tmp_path: Path) -> None:
+    root = write_tiny_core(
+        write_tiny_module(tmp_path / "src-tree"), extra={"broken_arm64.go": "package main\n\nvar _ = undefinedSymbol\n"}
+    )
+    result = run_helper(root, tmp_path / "out")
+    assert result.returncode == 1, "a failing pfb-core compile still exited 0"
+    assert "pfb-core" in result.stderr and "freebsd-arm64" in result.stderr, (
+        f"error does not name the failing build:\n{result.stderr}"
+    )
+    assert list((tmp_path / "out").rglob("pfb-*")) == [], "binaries were left behind after the pfb-core failure"
+
+
+def test_core_binary_mtime_follows_its_own_module(tmp_path: Path) -> None:
+    root = write_tiny_core(write_tiny_module(tmp_path / "src-tree"))
+    os.utime(root / "go" / "pfb_dns_gateway" / "go.mod", (1_600_000_000, 1_600_000_000))
+    os.utime(root / "go" / "pfb_core" / "go.mod", (1_700_000_000, 1_700_000_000))
+    result = run_helper(root, tmp_path / "out")
+    assert result.returncode == 0, result.stderr
+    for target in TARGETS:
+        assert int((tmp_path / "out" / target / "pfb-dns").stat().st_mtime) == 1_600_000_000
+        assert int((tmp_path / "out" / target / "pfb-core").stat().st_mtime) == 1_700_000_000

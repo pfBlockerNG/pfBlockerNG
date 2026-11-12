@@ -302,6 +302,15 @@ is missing or not executable). Each says why on stderr. pfB-DNS has no other fro
 the caller must not fall back to anything: the supervisor starts the wrapper again, no ready
 marker is ever published, and the activation's readiness wait fails with the Resolver left moved (the startup notice says why).
 
+**pfb-core** (issue #3841, the Core API daemon). A source that also carries `go/pfb_core` gets it
+built the same way, by the same helper, into `freebsd-<arch>/pfb-core` beside `pfb-dns`; the helper
+records it under `pfb_core` and refuses a Core module with a `require` or a `vendor/` of its own (Core
+builds from the standard library alone, so the go recipe's vendor tree is the gateway's only). A recipe
+without `do-build` has the builder stage it at `/usr/local/pkg/pfblockerng/core/bin/freebsd-<arch>/pfb-core`,
+mode `0555`. The go recipe ships it only when the port's `do-install` installs it and its
+`NO_ARCH_IGNORE` names it (pfBlockerNG/FreeBSD-ports, nightly); its `do-build` builds it either way. The rc script `pfb_core.sh` picks
+this machine's binary (`pfb_core_service()`).
+
 - **Source.** Project builds compile the `go/` tree of the attested commit (the same
   `git archive` snapshot as `src/`), never the working tree. Native builds read the live
   tree like every other file; `--gh-tagname` builds read `go/` from the downloaded tarball.
@@ -321,7 +330,7 @@ marker is ever published, and the activation's readiness wait fails with the Res
   library, so one set of bytes serves every leg from 12 up; the check refuses a toolchain
   that ever stamps newer.
 - **Never committed.** The builder reads no binary from the source: a tree that already
-  carries `dns_proxy/bin` fails the build, and the path is gitignored. A dirty or
+  carries `dns_proxy/bin` or `pfblockerng/core/bin` fails the build, and both paths are gitignored. A dirty or
   untracked tree still fails project attestation.
 - **Provenance.** Each binary's sha256 is the file checksum in `+MANIFEST`; in project
   mode the build record's `source_sha` pins the source. The same source and toolchain give
