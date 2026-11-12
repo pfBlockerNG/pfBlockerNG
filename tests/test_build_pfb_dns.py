@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -823,28 +824,6 @@ def test_a_source_without_a_core_module_builds_pfb_dns_alone(tmp_path: Path) -> 
     assert list((tmp_path / "out").rglob("pfb-core")) == []
 
 
-@pytest.mark.parametrize(
-    "shape",
-    ["require", "vendor"],
-)
-def test_a_core_module_that_is_not_standard_library_only_is_refused_and_writes_nothing(
-    tmp_path: Path, shape: str
-) -> None:
-    # The ports recipe vendors the gateway's modules only: a Core dependency would not exist in the port's build
-    go_mod = "module example.test/core\n\ngo 1.21\n"
-    if shape == "require":
-        go_mod += "\nrequire example.test/dep v1.0.0\n"
-    root = write_tiny_core(write_tiny_module(tmp_path / "src-tree"), go_mod=go_mod)
-    if shape == "vendor":
-        (root / "go" / "pfb_core" / "vendor").mkdir()
-        (root / "go" / "pfb_core" / "vendor" / "modules.txt").write_text("")
-    result = run_helper(root, tmp_path / "out")
-    assert result.returncode == 1, f"a Core module with a dependency was built:\n{result.stderr}"
-    assert "standard library" in result.stderr, f"the error does not say why:\n{result.stderr}"
-    assert result.stdout.strip() == ""
-    assert list((tmp_path / "out").rglob("pfb-*")) == [], "binaries were left behind"
-
-
 def test_a_core_compile_error_leaves_no_partial_payload(tmp_path: Path) -> None:
     root = write_tiny_core(
         write_tiny_module(tmp_path / "src-tree"), extra={"broken_arm64.go": "package main\n\nvar _ = undefinedSymbol\n"}
@@ -866,3 +845,223 @@ def test_core_binary_mtime_follows_its_own_module(tmp_path: Path) -> None:
     for target in TARGETS:
         assert int((tmp_path / "out" / target / "pfb-dns").stat().st_mtime) == 1_600_000_000
         assert int((tmp_path / "out" / target / "pfb-core").stat().st_mtime) == 1_700_000_000
+
+
+# --- pfb-core dependencies (issue #3906): Core may require golang.org/x/net and golang.org/x/text, and nothing else.
+# The ports recipe vendors the gateway's modules only, so Core's vendor/ is cut from the gateway's tree. ---
+
+X_NET, X_TEXT, X_SYS = "golang.org/x/net", "golang.org/x/text", "golang.org/x/sys"
+REAL_GATEWAY = ROOT / "go" / "pfb_dns_gateway"
+REAL_GO_MOD = (REAL_GATEWAY / "go.mod").read_text(encoding="utf-8")
+
+
+def pinned_by_the_real_gateway(module: str) -> str:
+    found = re.search(rf"^\s*{re.escape(module)} (v\S+)", REAL_GO_MOD, re.MULTILINE)
+    assert found, f"the real gateway no longer requires {module}"
+    return found.group(1)
+
+
+PINS = {module: pinned_by_the_real_gateway(module) for module in (X_NET, X_TEXT, X_SYS)}
+_directive = re.search(r"^go (\S+)$", REAL_GO_MOD, re.MULTILINE)
+assert _directive, "the real gateway's go.mod has no go directive"
+GO_DIRECTIVE = _directive.group(1)
+CORE_REQUIRES = f"require (\n\t{X_NET} {PINS[X_NET]}\n\t{X_TEXT} {PINS[X_TEXT]} // indirect\n)\n"
+MODES = ["builder", "vendored"]
+
+
+def idna_main(marker: str) -> str:
+    return (
+        'package main\n\nimport "golang.org/x/net/idna"\n\n'
+        'func main() {\n\tascii, err := idna.Lookup.ToASCII("b\\u00fccher.example")\n'
+        f'\tprintln("{marker}", ascii, err == nil)\n}}\n'
+    )
+
+
+def core_go_mod(tail: str) -> str:
+    return f"module example.test/core\n\ngo {GO_DIRECTIVE}\n\n{tail}"
+
+
+def write_x_gateway(root: Path) -> Path:
+    """A `go/pfb_dns_gateway` module that imports idna and requires x/net, x/text and x/sys as the real gateway does."""
+    write_tiny_module(root, go_directive=GO_DIRECTIVE, extra={"main.go": idna_main("GATEWAY-IDNA")})
+    module = root / "go" / "pfb_dns_gateway"
+    requires = "".join(f"\t{module_path} {version}\n" for module_path, version in PINS.items())
+    (module / "go.mod").write_text(f"module example.test/gateway\n\ngo {GO_DIRECTIVE}\n\nrequire (\n{requires})\n")
+    sums = (REAL_GATEWAY / "go.sum").read_text(encoding="utf-8").splitlines()
+    (module / "go.sum").write_text("".join(f"{line}\n" for line in sums if line.startswith("golang.org/x/")))
+    return root
+
+
+@pytest.fixture(scope="module")
+def vendored_x_gateway(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The x/net-using gateway beside its `go mod vendor` tree (read-only for the module; tests copy it)."""
+    root = write_x_gateway(tmp_path_factory.mktemp("pfb-x-gateway"))
+    vendor = subprocess.run(
+        ["go", "mod", "vendor"],
+        cwd=root / "go" / "pfb_dns_gateway",
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=WATCHDOG_SECONDS,
+    )
+    assert vendor.returncode == 0, f"go mod vendor failed on the x/net gateway:\n{vendor.stderr}"
+    return root
+
+
+def x_source(tmp_path: Path, mode: str, vendored_gateway: Path, *, core_tail: str = CORE_REQUIRES, **core: Any) -> Path:
+    """A source tree whose gateway needs x/net (vendored ahead of the build in `vendored` mode), plus a Core module."""
+    root = tmp_path / "src-tree"
+    if mode == "vendored":
+        shutil.copytree(vendored_gateway, root)
+    else:
+        write_x_gateway(root)
+    return write_tiny_core(root, go_mod=core_go_mod(core_tail), **core)
+
+
+def mode_args(mode: str) -> list[str]:
+    return ["--vendored"] if mode == "vendored" else []
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_core_requiring_x_net_and_x_text_at_the_gateways_versions_builds_in_both_modes(
+    tmp_path: Path, vendored_x_gateway: Path, mode: str
+) -> None:
+    root = x_source(tmp_path, mode, vendored_x_gateway, extra={"main.go": idna_main("CORE-IDNA")})
+    result = run_helper(root, tmp_path / "out", extra=mode_args(mode))
+    assert result.returncode == 0, f"a Core on x/net and x/text at the gateway's versions was refused:\n{result.stderr}"
+    assert sorted(json.loads(result.stdout)["pfb_core"]) == sorted(TARGETS)
+    for target, machine in TARGETS.items():
+        binary = tmp_path / "out" / target / "pfb-core"
+        data = binary.read_bytes()
+        assert elf_facts(data) == expected_facts(machine), f"{binary} is not the {target} ELF"
+        assert b"CORE-IDNA" in data and b"GATEWAY-IDNA" not in data, f"{binary} is not the Core"
+        info = subprocess.run(["go", "version", "-m", str(binary)], capture_output=True, text=True, check=True).stdout
+        for module in (X_NET, X_TEXT):
+            assert re.search(rf"\tdep\t{re.escape(module)}\t{re.escape(PINS[module])}(\t|$)", info, re.MULTILINE), (
+                f"{target}/pfb-core was not built with {module} {PINS[module]}:\n{info}"
+            )
+
+
+def snapshot_vendor_on_build(tmp_path: Path, snapshots: Path) -> Path:
+    """A `go` that copies the vendor/ of the first module it builds in each directory name, then runs the real Go."""
+    real_go = shutil.which("go")
+    assert real_go is not None, "the real Go toolchain is required"
+    snapshots.mkdir()
+    spy = tmp_path / "spy" / "go"
+    spy.parent.mkdir()
+    spy.write_text(
+        "#!/bin/sh\n"
+        f'snap={shlex.quote(str(snapshots))}/$(basename "$PWD")\n'
+        'if [ "$1" = build ] && [ -d vendor ] && [ ! -e "$snap" ]; then cp -R vendor "$snap"; fi\n'
+        f'exec {shlex.quote(real_go)} "$@"\n'
+    )
+    spy.chmod(0o755)
+    return spy
+
+
+def files_under(directory: Path) -> set[str]:
+    return {p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file()}
+
+
+def sections_of(modules_txt: str, modules: tuple[str, ...]) -> str:
+    kept: list[str] = []
+    keep = False
+    for line in modules_txt.splitlines():
+        if line.startswith("# "):
+            keep = line[2:].split()[0] in modules
+        if keep:
+            kept.append(line)
+    return "".join(f"{line}\n" for line in kept)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_cores_vendor_tree_is_the_gateways_packages_and_modules_txt_sections_of_the_modules_core_requires(
+    tmp_path: Path, vendored_x_gateway: Path, mode: str
+) -> None:
+    # Given a gateway whose vendor/ also lists x/sys (required, not imported), which Core does not require
+    root = x_source(tmp_path, mode, vendored_x_gateway, extra={"main.go": idna_main("CORE-IDNA")})
+    snapshots = tmp_path / "snapshots"
+    spy = snapshot_vendor_on_build(tmp_path, snapshots)
+
+    # When Core is built
+    result = run_helper(root, tmp_path / "out", go=str(spy), extra=mode_args(mode))
+    assert result.returncode == 0, result.stderr
+
+    # Then its vendor/ holds exactly the gateway's x/net and x/text package directories with their LICENSE files,
+    # and exactly those modules' sections of the gateway's modules.txt, `## explicit; go` lines included
+    gateway, core = snapshots / "pfb_dns_gateway", snapshots / "pfb_core"
+    gateway_txt = (gateway / "modules.txt").read_text(encoding="utf-8")
+    assert f"# {X_SYS} {PINS[X_SYS]}" in gateway_txt, "the gateway's vendor/modules.txt does not list x/sys"
+    assert (core / "modules.txt").read_text(encoding="utf-8") == sections_of(gateway_txt, (X_NET, X_TEXT))
+    assert "## explicit; go " in (core / "modules.txt").read_text(encoding="utf-8")
+    taken = {f for f in files_under(gateway) if f.startswith((f"{X_NET}/", f"{X_TEXT}/"))}
+    assert files_under(core) == taken | {"modules.txt"}
+    assert {f"{X_NET}/LICENSE", f"{X_TEXT}/LICENSE", f"{X_NET}/idna/idna.go"} <= taken
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_core_package_the_gateways_vendor_tree_lacks_fails_loudly_and_writes_nothing(
+    tmp_path: Path, vendored_x_gateway: Path, mode: str
+) -> None:
+    # Given a Core importing x/net/html, which the gateway does not use, so its vendor/ does not hold it
+    html_main = 'package main\n\nimport "golang.org/x/net/html"\n\nvar _ = html.EscapeString\n\nfunc main() {}\n'
+    root = x_source(tmp_path, mode, vendored_x_gateway, extra={"main.go": html_main})
+    result = run_helper(root, tmp_path / "out", extra=mode_args(mode))
+    assert result.returncode == 1, f"Core built against a package the gateway's vendor/ lacks:\n{result.stderr}"
+    assert f"{X_NET}/html" in result.stderr, f"the error does not name the missing package:\n{result.stderr}"
+    assert result.stdout.strip() == ""
+    assert written_files(tmp_path / "out") == [], "binaries were left behind"
+
+
+def test_a_vendored_build_whose_gateway_has_no_modules_txt_cannot_vendor_cores_modules(tmp_path: Path) -> None:
+    # Given a ready-made vendor tree that is missing entirely and no modules.txt to install
+    root = write_tiny_core(write_x_gateway(tmp_path / "src-tree"), go_mod=core_go_mod(CORE_REQUIRES))
+    result = run_helper(root, tmp_path / "out", extra=["--vendored"])
+    assert result.returncode == 1
+    assert "modules.txt" in result.stderr, f"the error does not say what is missing:\n{result.stderr}"
+    assert "Traceback" not in result.stderr, f"the helper crashed instead of refusing:\n{result.stderr}"
+    assert written_files(tmp_path / "out") == []
+    assert not (root / "go" / "pfb_dns_gateway" / "vendor").exists(), "a vendor/ directory was created"
+
+
+# (Core's go.mod after its header, a vendor/ of Core's own, whether the gateway requires the x modules, what the
+# error must say)
+REFUSED_CORES = {
+    "other-module": (CORE_REQUIRES + "\nrequire example.test/dep v1.0.0\n", False, True, ["example.test/dep"]),
+    "x-sys-which-the-gateway-requires": (CORE_REQUIRES + f"\nrequire {X_SYS} {PINS[X_SYS]}\n", False, True, [X_SYS]),
+    "other-version-in-a-single-line-require": (
+        f"require {X_NET} v0.0.1\nrequire {X_TEXT} {PINS[X_TEXT]}\n",
+        False,
+        True,
+        [X_NET, "v0.0.1", PINS[X_NET]],
+    ),
+    "replace": (CORE_REQUIRES + f"\nreplace {X_NET} => ../x_net\n", False, True, ["go.mod has a replace"]),
+    "replace-block": (
+        CORE_REQUIRES + f"\nreplace (\n\t{X_NET} => ../x_net\n)\n",
+        False,
+        True,
+        ["go.mod has a replace"],
+    ),
+    "committed-vendor": (CORE_REQUIRES, True, True, ["vendor/"]),
+    "modules-the-gateway-does-not-require": (CORE_REQUIRES, False, False, [X_NET, "gateway"]),
+}
+
+
+@pytest.mark.parametrize("shape", REFUSED_CORES)
+def test_a_core_module_outside_the_gateways_x_net_and_x_text_is_refused_and_writes_nothing(
+    tmp_path: Path, shape: str
+) -> None:
+    tail, own_vendor, gateway_requires_x, says = REFUSED_CORES[shape]
+    gateway = write_x_gateway(tmp_path / "src-tree") if gateway_requires_x else write_tiny_module(tmp_path / "src-tree")
+    root = write_tiny_core(gateway, go_mod=core_go_mod(tail))
+    if own_vendor:
+        (root / "go" / "pfb_core" / "vendor").mkdir()
+        (root / "go" / "pfb_core" / "vendor" / "modules.txt").write_text("")
+    result = run_helper(root, tmp_path / "out")
+    assert result.returncode == 1, (
+        f"a Core module outside x/net and x/text at the gateway's versions was built:\n{result.stderr}"
+    )
+    for text in says:
+        assert text in result.stderr, f"the error does not say {text!r}:\n{result.stderr}"
+    assert result.stdout.strip() == ""
+    assert written_files(tmp_path / "out") == [], "files were left behind"
