@@ -36,7 +36,7 @@ final class PfbCoreServiceTest extends TestCase
 		tick() { read -r t < "$S/ticks"; echo "$t"; }
 		reap() {
 			now="$(tick)"
-			: > "$S/procs.new"
+			true > "$S/procs.new"
 			while IFS='|' read -r pid args due; do
 				[ -n "$pid" ] || continue
 				if [ -n "$due" ] && [ "$now" -ge "$due" ]; then continue; fi
@@ -63,7 +63,7 @@ final class PfbCoreServiceTest extends TestCase
 			pid="$(match "$2" "$4")" || exit 1
 			[ -n "$sig" ] || exit 0
 			ev "$sig $pid"
-			: > "$S/procs.new"
+			true > "$S/procs.new"
 			while IFS='|' read -r p args due; do
 				[ -n "$p" ] || continue
 				if [ "$p" = "$pid" ]; then
@@ -87,7 +87,7 @@ final class PfbCoreServiceTest extends TestCase
 			printf '%s\n' "$MACHINE"
 			;;
 		daemon)
-			: > "$S/daemon.argv"
+			true > "$S/daemon.argv"
 			for arg in "$@"; do printf '%s\n' "$arg" >> "$S/daemon.argv"; done
 			attached=
 			for fd in 0 1 2; do

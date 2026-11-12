@@ -107,7 +107,7 @@ final class PackageRegistrationRestoreTest extends TestCase
 		$why = pfb_package_registration_restore();
 
 		$this->assertNull($why);
-		$this->assertSame(['squid', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_filter'], $this->serviceNames(), 'the XML\'s services, in its order, after the other package\'s');
+		$this->assertSame(['squid', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_core', 'pfb_filter'], $this->serviceNames(), 'the XML\'s services, in its order, after the other package\'s');
 		$this->assertSame(['Services:Squid', 'Firewall:pfBlockerNG'], $this->menuNames());
 		$services = config_get_path('installedpackages/service');
 		$this->assertSame(self::SQUID, $services[0], 'the other package\'s service is untouched, field for field');
@@ -124,7 +124,7 @@ final class PackageRegistrationRestoreTest extends TestCase
 		pfb_package_registration_restore();
 
 		$this->assertCount(1, $this->written, 'config.xml is written once');
-		$this->assertSame(['squid', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_filter'],
+		$this->assertSame(['squid', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_core', 'pfb_filter'],
 			array_column($this->written[0]['installedpackages']['service'], 'name'), 'and what is written holds the registration');
 	}
 
@@ -137,7 +137,7 @@ final class PackageRegistrationRestoreTest extends TestCase
 
 		$this->assertNull($why);
 		$this->assertSame($once, config_get_path('installedpackages'), 'nothing is added twice: neither a service nor the menu entry');
-		$this->assertSame(['squid', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_filter'], $this->serviceNames());
+		$this->assertSame(['squid', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_core', 'pfb_filter'], $this->serviceNames());
 	}
 
 	public function testAnEntryAlreadyRegisteredKeepsItsOwnFieldsAndOnlyTheMissingOnesAreAdded(): void
@@ -151,7 +151,7 @@ final class PackageRegistrationRestoreTest extends TestCase
 		$why = pfb_package_registration_restore();
 
 		$this->assertNull($why);
-		$this->assertSame(['squid', 'pfb_filter', 'pfb_dnsbl', 'pfb_dns_proxy'], $this->serviceNames(), 'the other two come in after it, it is not added again');
+		$this->assertSame(['squid', 'pfb_filter', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_core'], $this->serviceNames(), 'the others come in after it, it is not added again');
 		$this->assertSame($filter, config_get_path('installedpackages/service/1'), 'and it keeps the fields it was registered with');
 		$this->assertSame(['Services:Squid', 'Firewall:pfBlockerNG'], $this->menuNames(), 'the menu entry is matched by name and section');
 		$this->assertSame($menu, config_get_path('installedpackages/menu/1'), 'and kept as it was');
@@ -207,7 +207,7 @@ final class PackageRegistrationRestoreTest extends TestCase
 		$why = pfb_package_registration_restore();
 
 		$this->assertNull($why);
-		$this->assertSame(['squid', 'redis', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_filter'], array_column($this->written[0]['installedpackages']['service'], 'name'),
+		$this->assertSame(['squid', 'redis', 'pfb_dnsbl', 'pfb_dns_proxy', 'pfb_core', 'pfb_filter'], array_column($this->written[0]['installedpackages']['service'], 'name'),
 			'what was written is the fresh copy plus the registration: the other process\'s save is not erased');
 	}
 

@@ -7617,6 +7617,7 @@ function pfb_package_removal_recover(): array {
 		pfb_filter_service();
 		pfb_dnsbl_service();
 		pfb_dns_proxy_service();
+		pfb_core_service();
 		if (pfb_dnsbl_active()) {
 			// The apply pass's own ini inputs, from the settings config.xml stores
 			pfb_dnsbl_ini_inputs();
@@ -7637,6 +7638,10 @@ function pfb_package_removal_recover(): array {
 			}
 			if (pfb_dnsbl_active() && !is_service_running('pfb_dnsbl')) {
 				start_service('pfb_dnsbl');
+			}
+			// issue #3841: the Core API runs whatever the settings say
+			if (!is_service_running('pfb_core')) {
+				start_service('pfb_core');
 			}
 		}
 	} catch (\Throwable $e) {
