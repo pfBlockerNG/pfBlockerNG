@@ -18142,7 +18142,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 
 	$log = '';
 	foreach (array('/bin', '/lib') as $dir) {
-		$validate = exec("/sbin/mount | {$pfb['grep']} " . escapeshellarg("{$pfb['dnsbldir']}{$base_py}{$dir}") . " 2>&1");
+		$validate = exec("/sbin/mount 2>/dev/null | {$pfb['grep']} " . escapeshellarg("{$pfb['dnsbldir']}{$base_py}{$dir}") . " 2>&1");
 
 		if ($owned && empty($validate)) {
 			if (!is_dir("{$pfb['dnsbldir']}{$base_py}{$dir}")) {
@@ -18194,7 +18194,7 @@ function pfb_unbound_python_unmount() {
 
 	$log = '';
 	foreach (array('/bin', '/lib') as $dir) {
-		$validate = exec("/sbin/mount | {$pfb['grep']} " . escapeshellarg("{$pfb['dnsbldir']}{$base_py}{$dir}") . " 2>&1");
+		$validate = exec("/sbin/mount 2>/dev/null | {$pfb['grep']} " . escapeshellarg("{$pfb['dnsbldir']}{$base_py}{$dir}") . " 2>&1");
 		if (!empty($validate)) {
 			$log .= "\n  Unmounting: /usr/local{$dir}";
 			exec("/sbin/umount -t nullfs " . escapeshellarg("{$pfb['dnsbldir']}{$base_py}{$dir}") . " 2>&1", $output, $retval);
@@ -27662,7 +27662,7 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	foreach (array('var/log/pfblockerng', 'usr/local/share/GeoIP') as $pfb_cmnt) {
 		$pfb_cmnt_path = "{$g['unbound_chroot_path']}/{$pfb_cmnt}";
 		for ($pfb_cmnt_i = 0; $pfb_cmnt_i < 8; $pfb_cmnt_i++) {
-			if (empty(exec("/sbin/mount | {$pfb['grep']} " . escapeshellarg($pfb_cmnt_path) . " 2>&1"))) {
+			if (empty(exec("/sbin/mount 2>/dev/null | {$pfb['grep']} " . escapeshellarg($pfb_cmnt_path) . " 2>&1"))) {
 				break;
 			}
 			exec("/sbin/umount -t nullfs " . escapeshellarg($pfb_cmnt_path) . " 2>&1", $pfb_cmnt_out, $pfb_cmnt_rv);
