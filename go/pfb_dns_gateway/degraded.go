@@ -90,8 +90,9 @@ func (c *ctlServer) degraded() []statusDegraded {
 	return rows
 }
 
-// degradedReason is reason as the status carries it: one line with no control characters (and no bytes that are no UTF-8,
-// which JSON would widen), cut to degradedReasonMax bytes where a character ends.
+// degradedReason is reason as the status carries it: one line, with every character of Unicode category C (control, format,
+// private use, surrogate, unassigned) dropped, as PHP's `\p{C}` check of a status reason rejects them, and no bytes that are no
+// UTF-8, which JSON would widen; cut to degradedReasonMax bytes where a character ends.
 func degradedReason(reason string) string {
 	reason = strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.C, r) {

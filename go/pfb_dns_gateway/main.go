@@ -151,12 +151,12 @@ func parseConfig(args []string, usage io.Writer) (config, error) {
 	fs.BoolVar(&cfg.observer, "observer", false, "DNSBL on, Resolver forwarding: listen for the upstream observer's reports")
 	fs.BoolVar(&cfg.replyLog, "reply-log", false, "log each relayed reply to dns_reply.log (needs --no-module)")
 	fs.StringVar(&cfg.readyFile, "ready-file", "", "write the gateway's pid here, mode 0600, once it serves; removed at stop while it still names the gateway")
-	fs.StringVar(&cfg.dnsName, "dns-name", "", "the firewall's DNS name: DDR's target, and the one name answered (A and AAAA) from the address the query reached; empty = none")
-	fs.BoolVar(&cfg.ddr, "ddr", false, "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462), naming --dns-name; needs --dns-name")
+	fs.StringVar(&cfg.dnsName, "dns-name", "", "the firewall's DNS name: DDR's target, and the one name answered (A and AAAA) from the address the query reached; empty = none; one that is not valid is served without")
+	fs.BoolVar(&cfg.ddr, "ddr", false, "answer resolver.arpa. itself and designate the encrypted transports (DDR, RFC 9462), naming --dns-name; needs --dns-name, else DDR is served without")
 	var answers listFlag
-	fs.Var(&answers, "dns-name-answer", "LOCAL=ADDR[,ADDR], repeatable: a query for --dns-name that reached LOCAL is answered with the ADDR of the family asked; needs --dns-name")
+	fs.Var(&answers, "dns-name-answer", "LOCAL=ADDR[,ADDR], repeatable: a query for --dns-name that reached LOCAL is answered with the ADDR of the family asked; needs --dns-name; an unusable value is served without")
 	var ddrDoH443, dohListen443 listFlag
-	fs.Var(&ddrDoH443, "ddr-doh-443", "ADDR, repeatable: DDR leaves the port out of the DoH record on ADDR, so clients use 443 (something on 443 in front of DoH); needs --ddr")
+	fs.Var(&ddrDoH443, "ddr-doh-443", "ADDR, repeatable: DDR leaves the port out of the DoH record on ADDR, so clients use 443 (something on 443 in front of DoH); needs --ddr; an unusable value is served without")
 	fs.Var(&dohListen443, "doh-listen-443", "DoH address on port 443, repeatable")
 	var interfaces listFlag
 	fs.Var(&interfaces, "listener-interface", "IP=BASE64UTF8 interface description for a listener address, repeatable")

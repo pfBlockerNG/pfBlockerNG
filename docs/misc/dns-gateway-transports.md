@@ -132,7 +132,7 @@ then the status lists `tls_certificate` in `degraded`.
     - `ddr`: DDR is off although it was asked for (see DDR).
     - `tls_certificate`: no usable certificate; DoT, DoH and DoQ handshakes fail until one is pushed.
     - `acl`: Unbound's config cannot be loaded for the ACL, so every client is forwarded (Unbound still applies its own ACL).
-    - `statistics`: a DNSBL statistics database could not be opened; nothing is counted in it.
+    - `statistics`: a statistics database (`pfb_py_resolver.sqlite` or `pfb_py_dnsbl.sqlite`) could not be opened; nothing is counted in it.
     - `observer`: the upstream observer's socket could not be bound; upstream blocks are not detected.
 
   The existing serial control handler builds the snapshot between mutations, off the DNS query path. No certificate,
