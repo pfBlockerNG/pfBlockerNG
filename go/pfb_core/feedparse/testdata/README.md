@@ -27,9 +27,14 @@ for bytes that are not valid UTF-8.
 
 - `converter` (bool): the PHP runner's interpreter. `true` is a python3 with charset_normalizer (the case is skipped where the
   host has none), `false` is `''`, today's conversion-unavailable path. The Go runner ignores it.
-- `old_expect`: present only where Core differs from the old path on purpose (owner rule, #3906). The Go runner asserts
-  `expect`, the PHP runner asserts `old_expect`.
-- `appliance`: the PHP assertion depends on the appliance's C.UTF-8 class data: BOM/ZWJ non-printable; NBSP, U+2028/2029
+- `old_expect`: present only where Core differs from the old path on purpose. The Go runner asserts `expect`, the PHP
+  runner asserts `old_expect`.
+- Owner sign-off (2026-11-12, #3906): Core does no charset guessing. Valid UTF-8 is kept, BOM-marked UTF-16 is decoded,
+  and any other input takes today's conversion-unavailable path (raw bytes, controls stripped). charset_normalizer's
+  verdicts on short feeds are noise (probed on 3.4.2: a Latin-1 comment header read as `big5hkscs`, `a.com\n\x80\n` as
+  `utf_16_be`, KOI8-R as `big5`), so Core diverges from them on purpose.
+- `appliance`: the PHP assertion depends on the appliance's C.UTF-8 class data (replayed on a real pfSense box by
+  `tests/smoke/test_smoke_feedparse_corpus.py`): BOM/ZWJ non-printable; NBSP, U+2028/2029
   and private use printable; NBSP and U+2028 in `[:space:]`, U+0085 not. Separately, a PHP assertion that is not valid
   UTF-8 needs a host sed that passes invalid sequences through; the PHP runner probes both and skips where the host differs.
 
