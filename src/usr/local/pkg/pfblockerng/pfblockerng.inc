@@ -16590,7 +16590,7 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 	$python_nolog = ($pfb['dnsbl_py_nolog'] === PfbToggle::On) ? 'on' : 'off';
 	$regex_cap = ($pfb['dnsbl_regex_cap'] === PfbToggle::On) ? 'on' : 'off';
 	$decisiondb_max = $pfb['dnsbl_decisiondb_max'] ?? '10000';
-	$forwarding = (config_get_path('unbound/forwarding') == 'on') ? 'on' : 'off';
+	$forwarding = config_path_enabled('unbound', 'forwarding') ? 'on' : 'off';
 	$now ??= date('Y-m-d H:i:s', time());
 
 	$pfb_py_conf = <<<EOF
