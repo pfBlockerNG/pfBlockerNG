@@ -231,6 +231,10 @@ type snapshot struct {
 	// state in Python (module globals a swap never touches), so rebuildAndSwap gives it the live snapshot's tables when it
 	// stores it. A builder that fills them itself (init, a test) leaves it false.
 	carryRuntime bool
+
+	// dnsblUnbuilt is why init's snapshot has no DNSBL build (the manifest was absent, unreadable or unbuildable): "" for a
+	// built one. A reload builds a fresh snapshot, so only a swap that builds ends it; a control edit copies it.
+	dnsblUnbuilt string
 }
 
 // newSnapshot returns a snapshot with Python's dataclass defaults and fresh writable dicts; the builder fills it in

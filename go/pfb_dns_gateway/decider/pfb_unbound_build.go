@@ -1307,11 +1307,19 @@ func parseManifestJSON(data []byte) (any, error) {
 // from config["top1m_enabled"]. It returns nil when the manifest is absent or cannot be built -- ADR-65: the caller
 // then leaves dataDB/zoneDB/whiteDB EMPTY (no fallback); the open ledger entry is the signal.
 func (m *pfbUnbound) dnsblBuildFromManifest(manifestPath string) *buildResult {
+	result, _ := m.dnsblBuildFromManifestWhy(manifestPath)
+	return result
+}
+
+// dnsblBuildFromManifestWhy is dnsblBuildFromManifest with the reason it returned nil: the message of the ledger entry it
+// opened, which init gives the snapshot (snapshot.dnsblUnbuilt).
+func (m *pfbUnbound) dnsblBuildFromManifestWhy(manifestPath string) (*buildResult, string) {
 	if info, err := os.Stat(manifestPath); err != nil || !info.Mode().IsRegular() {
 		// ADR-65: fail LOUD, never stale-serve -- open (never close-only) so the missing manifest surfaces via the
 		// ledger instead of silently doing nothing.
-		m.pfbPyStatusOpen("dnsbl", manifestPath, "parse", "DNSBL manifest absent: "+manifestPath+" -- DNSBL not loaded")
-		return nil
+		why := "DNSBL manifest absent: " + manifestPath + " -- DNSBL not loaded"
+		m.pfbPyStatusOpen("dnsbl", manifestPath, "parse", why)
+		return nil, why
 	}
 
 	data, err := os.ReadFile(manifestPath)
@@ -1325,20 +1333,22 @@ func (m *pfbUnbound) dnsblBuildFromManifest(manifestPath string) *buildResult {
 		if errors.As(err, &pathErr) {
 			message = pyOSError(pathErr.Err, manifestPath)
 		}
-		pyStderr(fmt.Sprintf("[pfBlockerNG]: Failed to load DNSBL manifest '%s': %s", manifestPath, message))
-		m.pfbPyStatusOpen("dnsbl", manifestPath, "parse", fmt.Sprintf("Failed to load DNSBL manifest '%s': %s", manifestPath, message))
-		return nil
+		why := fmt.Sprintf("Failed to load DNSBL manifest '%s': %s", manifestPath, message)
+		pyStderr("[pfBlockerNG]: " + why)
+		m.pfbPyStatusOpen("dnsbl", manifestPath, "parse", why)
+		return nil, why
 	}
 
 	result, err := m.buildFromManifestDocument(manifestPath, document)
 	if err != nil {
-		pyStderr("[pfBlockerNG]: Failed to build DNSBL structures from raw: " + err.Error())
-		m.pfbPyStatusOpen("dnsbl", manifestPath, "parse", "Failed to build DNSBL structures from raw: "+err.Error())
-		return nil
+		why := "Failed to build DNSBL structures from raw: " + err.Error()
+		pyStderr("[pfBlockerNG]: " + why)
+		m.pfbPyStatusOpen("dnsbl", manifestPath, "parse", why)
+		return nil, why
 	}
 
 	m.pfbPyStatusClose("dnsbl", manifestPath, "parse")
-	return result
+	return result, ""
 }
 
 // buildFromManifestDocument is the try-block of dnsbl_build_from_manifest: any error is one Python raises there.

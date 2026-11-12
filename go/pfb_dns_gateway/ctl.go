@@ -56,8 +56,10 @@ type ctlServer struct {
 	deadline   time.Duration                       // for reading the message, and again for writing the reply
 	refusing   atomic.Bool                         // set when a burst of refusals is logged, cleared by the next push taken
 	listeners  *listenerSet                        // what an add or remove changes; start() sets it. nil in a test of the PEM alone: no add or remove may be sent to it (a nil set would panic)
-	names      *nameAnswers                        // what the address table verb replaces; start() sets it. nil: the gateway started without --dns-name
-	ddr        *ddr                                // whose 443 set the verb replaces; start() sets it. nil: the gateway started without --ddr
+	names      *nameAnswers                        // what the address table verb replaces; start() sets it. nil: the gateway started without a usable --dns-name
+	ddr        *ddr                                // whose 443 set the verb replaces; start() sets it. nil: the gateway started without a usable --ddr
+	lost       map[string]string                   // the parts the gateway started without, by part (dnsbl, dns_name, ddr), with why; start() sets it
+	frontend   frontend                            // the decider, whose own losses the status lists; start() sets it. nil in a test of the control socket alone
 	interfaces *atomic.Pointer[map[netip.Addr]string]
 	g          *gateway
 	ready      atomic.Bool

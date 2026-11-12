@@ -8,8 +8,41 @@ import (
 
 // issue #3694: --ddr-doh-443 ADDR (repeatable) is an address DDR advertises DoH on without a port, and --doh-listen-443 ADDR
 // (repeatable) is an address DoH is also served on, on port 443. The per-family bool flags are gone. PHP is the primary trust
-// boundary; these are the gateway's own checks, so a bad flag is a usage error and never a wrong record.
+// boundary; the gateway's own checks never give a wrong record: what it cannot use is served without (issue #3848).
 
+// issue #3848: a --ddr-doh-443 that cannot be used is no usage error. parseConfig takes it as given; start serves without DDR and
+// the status names the loss (TestADNSNameOrDDRFlagThatCannotBeBuiltStartsTheGatewayWithoutIt).
+func TestConfigAcceptsDoH443FlagsThatCannotBeUsedAndLeavesTheOutcomeToStart(t *testing.T) {
+	ddr := []string{"--dns-name", "fw.example.lan", "--ddr"}
+	with := func(flags ...string) []string { return append(slices.Clone(ddr), flags...) }
+	cases := map[string]struct {
+		flags  []string
+		doh443 []string
+	}{
+		"--ddr-doh-443 without --ddr":                   {[]string{"--dns-name", "fw.example.lan", "--ddr-doh-443", "192.0.2.1"}, []string{"192.0.2.1"}},
+		"--ddr-doh-443 with no name and no --ddr":       {[]string{"--ddr-doh-443", "192.0.2.1"}, []string{"192.0.2.1"}},
+		"--ddr-doh-443 with an empty address":           {with("--ddr-doh-443", ""), []string{""}},
+		"--ddr-doh-443 with a zone":                     {with("--ddr-doh-443", "fe80::1%em0"), []string{"fe80::1%em0"}},
+		"--ddr-doh-443 with a port":                     {with("--ddr-doh-443", "192.0.2.1:443"), []string{"192.0.2.1:443"}},
+		"--ddr-doh-443 with a name":                     {with("--ddr-doh-443", "fw.example.lan"), []string{"fw.example.lan"}},
+		"--ddr-doh-443 with two addresses in one value": {with("--ddr-doh-443", "192.0.2.1,192.0.2.2"), []string{"192.0.2.1,192.0.2.2"}},
+		"--ddr-doh-443 with a space after the address":  {with("--ddr-doh-443", "192.0.2.1 "), []string{"192.0.2.1 "}},
+		"a good --ddr-doh-443 then a bad one":           {with("--ddr-doh-443", "192.0.2.1", "--ddr-doh-443", "192.0.2.1:443"), []string{"192.0.2.1", "192.0.2.1:443"}},
+	}
+	for label, c := range cases {
+		t.Run(label, func(t *testing.T) {
+			cfg, err := parse(t, slices.Clone(c.flags)...)
+			if err != nil {
+				t.Fatalf("got err=%v, want the flags accepted", err)
+			}
+			if !slices.Equal(cfg.ddrDoH443, c.doh443) {
+				t.Fatalf("got ddrDoH443=%q, want %q", cfg.ddrDoH443, c.doh443)
+			}
+		})
+	}
+}
+
+// What is not a value of the flags at all stays a usage error: a flag with no value, a retired flag, and an empty fixed-port address.
 func TestConfigRejectsBadDoH443Usage(t *testing.T) {
 	ddr := []string{"--dns-name", "fw.example.lan", "--ddr"}
 	with := func(flags ...string) []string { return append(slices.Clone(ddr), flags...) }
@@ -17,19 +50,10 @@ func TestConfigRejectsBadDoH443Usage(t *testing.T) {
 		flags []string
 		want  string // what the error says
 	}{
-		"--ddr-doh-443 without --ddr":                   {[]string{"--dns-name", "fw.example.lan", "--ddr-doh-443", "192.0.2.1"}, "--ddr-doh-443 needs --ddr"},
-		"--ddr-doh-443 with no name and no --ddr":       {[]string{"--ddr-doh-443", "192.0.2.1"}, "--ddr-doh-443 needs --ddr"},
-		"--ddr-doh-443 with no address (the old bool)":  {with("--ddr-doh-443"), "ddr-doh-443"},
-		"--ddr-doh-443 with an empty address":           {with("--ddr-doh-443", ""), `--ddr-doh-443 "`},
-		"--ddr-doh-443 with a zone":                     {with("--ddr-doh-443", "fe80::1%em0"), `--ddr-doh-443 "`},
-		"--ddr-doh-443 with a port":                     {with("--ddr-doh-443", "192.0.2.1:443"), `--ddr-doh-443 "`},
-		"--ddr-doh-443 with a name":                     {with("--ddr-doh-443", "fw.example.lan"), `--ddr-doh-443 "`},
-		"--ddr-doh-443 with two addresses in one value": {with("--ddr-doh-443", "192.0.2.1,192.0.2.2"), `--ddr-doh-443 "`},
-		"--ddr-doh-443 with a space after the address":  {with("--ddr-doh-443", "192.0.2.1 "), `--ddr-doh-443 "`},
-		"a good --ddr-doh-443 then a bad one":           {with("--ddr-doh-443", "192.0.2.1", "--ddr-doh-443", "192.0.2.1:443"), `--ddr-doh-443 "`},
-		"--ddr-doh-4436, the retired IPv6 flag":         {with("--ddr-doh-4436"), "ddr-doh-4436"},
-		"--doh-listen-443 with no address":              {[]string{"--doh-listen", "192.0.2.1", "--doh-listen-443"}, "doh-listen-443"},
-		"--doh-listen-443 with an empty address":        {[]string{"--doh-listen", "192.0.2.1", "--doh-listen-443", ""}, "--doh-listen-443 must not be empty"},
+		"--ddr-doh-443 with no address (the old bool)": {with("--ddr-doh-443"), "ddr-doh-443"},
+		"--ddr-doh-4436, the retired IPv6 flag":        {with("--ddr-doh-4436"), "ddr-doh-4436"},
+		"--doh-listen-443 with no address":             {[]string{"--doh-listen", "192.0.2.1", "--doh-listen-443"}, "doh-listen-443"},
+		"--doh-listen-443 with an empty address":       {[]string{"--doh-listen", "192.0.2.1", "--doh-listen-443", ""}, "--doh-listen-443 must not be empty"},
 	}
 	for label, c := range cases {
 		t.Run(label, func(t *testing.T) {

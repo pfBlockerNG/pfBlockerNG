@@ -8,7 +8,7 @@ import (
 
 // issue #3694: --dns-name NAME is DDR's target and the one name the gateway answers A and AAAA for; --ddr is a bool that needs
 // it; --dns-name-answer LOCAL=ADDR[,ADDR] says what a query that reached LOCAL is answered. PHP is the primary trust
-// boundary; these are the gateway's own checks, so a bad flag is a usage error and never a wrong answer.
+// boundary; the gateway's own checks never give a wrong answer: what it cannot use is served without (issue #3848).
 
 // badNameValues are LOCAL=ADDR[,ADDR] values that are errors, wherever the syntax is read: the flag, and a line of the
 // address table verb.
@@ -34,40 +34,55 @@ var badNameValues = map[string]string{
 	"a leading zero":                  "10.0.0.1=01.2.3.4",
 }
 
-func TestConfigRejectsBadDNSNameUsage(t *testing.T) {
+// issue #3848: a DNS name flag that cannot be built is no usage error. parseConfig takes it as given; start serves without the name
+// (and without DDR) and the status names the loss (TestADNSNameOrDDRFlagThatCannotBeBuiltStartsTheGatewayWithoutIt).
+func TestConfigAcceptsDNSNameFlagsThatCannotBeBuiltAndLeavesTheOutcomeToStart(t *testing.T) {
 	const answer = "10.0.0.1=10.0.0.1"
+	longName := strings.Repeat(strings.Repeat("a", 60)+".", 4) + "example.lan"
 	cases := map[string]struct {
-		flags []string
-		want  string // what the error says
+		flags   []string
+		dnsName string
+		answers []string
 	}{
-		"--ddr without a name":                                 {[]string{"--ddr"}, "--ddr needs --dns-name"},
-		"--ddr with an empty name":                             {[]string{"--dns-name", "", "--ddr"}, "--ddr needs --dns-name"},
-		"an answer without a name":                             {[]string{"--dns-name-answer", answer}, "--dns-name-answer needs --dns-name"},
-		"an answer with an empty name":                         {[]string{"--dns-name", "", "--dns-name-answer", answer}, "--dns-name-answer needs --dns-name"},
-		"--ddr-doh-443 without --ddr":                          {[]string{"--ddr-doh-443", "192.0.2.1"}, "--ddr-doh-443 needs --ddr"},
-		"--ddr-doh-443 with a name, without --ddr":             {[]string{"--dns-name", "fw.example.lan", "--ddr-doh-443", "192.0.2.1"}, "--ddr-doh-443 needs --ddr"},
-		"--ddr NAME, the old form, is not a flag with a value": {[]string{"--ddr", "fw.example.lan", "--dns-name", "fw.example.lan"}, "unexpected argument"},
-		"name with an empty label":                             {[]string{"--dns-name", "fw..lan"}, `--dns-name "`},
-		"name with a leading dot":                              {[]string{"--dns-name", ".fw.lan"}, `--dns-name "`},
-		"name with two trailing dots":                          {[]string{"--dns-name", "fw.lan.."}, `--dns-name "`},
-		"the root as the name":                                 {[]string{"--dns-name", "."}, `--dns-name "`},
-		"name with a label over 63 bytes":                      {[]string{"--dns-name", strings.Repeat("a", 64) + ".lan"}, `--dns-name "`},
-		"name over 253 characters":                             {[]string{"--dns-name", strings.Repeat(strings.Repeat("a", 60)+".", 4) + "example.lan"}, `--dns-name "`},
-		"the same LOCAL twice":                                 {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", "10.0.0.1=10.0.0.1", "--dns-name-answer", "10.0.0.1=10.0.0.2"}, `--dns-name-answer "`},
-		"the same LOCAL twice, once IPv4-mapped":               {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", "::ffff:10.0.0.1=10.0.0.1", "--dns-name-answer", "10.0.0.1=10.0.0.2"}, `--dns-name-answer "`},
-		"a good answer then a bad one":                         {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", answer, "--dns-name-answer", "10.0.0.2=bad"}, `--dns-name-answer "`},
+		"--ddr without a name":                     {[]string{"--ddr"}, "", nil},
+		"--ddr with an empty name":                 {[]string{"--dns-name", "", "--ddr"}, "", nil},
+		"an answer without a name":                 {[]string{"--dns-name-answer", answer}, "", []string{answer}},
+		"an answer with an empty name":             {[]string{"--dns-name", "", "--dns-name-answer", answer}, "", []string{answer}},
+		"--ddr-doh-443 without --ddr":              {[]string{"--ddr-doh-443", "192.0.2.1"}, "", nil},
+		"--ddr-doh-443 with a name, without --ddr": {[]string{"--dns-name", "fw.example.lan", "--ddr-doh-443", "192.0.2.1"}, "fw.example.lan", nil},
+		"name with an empty label":                 {[]string{"--dns-name", "fw..lan"}, "fw..lan", nil},
+		"name with a leading dot":                  {[]string{"--dns-name", ".fw.lan"}, ".fw.lan", nil},
+		"name with two trailing dots":              {[]string{"--dns-name", "fw.lan.."}, "fw.lan..", nil},
+		"the root as the name":                     {[]string{"--dns-name", "."}, ".", nil},
+		"name with a label over 63 bytes":          {[]string{"--dns-name", strings.Repeat("a", 64) + ".lan"}, strings.Repeat("a", 64) + ".lan", nil},
+		"name over 253 characters":                 {[]string{"--dns-name", longName}, longName, nil},
+		"the same LOCAL twice":                     {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", "10.0.0.1=10.0.0.1", "--dns-name-answer", "10.0.0.1=10.0.0.2"}, "fw.example.lan", []string{"10.0.0.1=10.0.0.1", "10.0.0.1=10.0.0.2"}},
+		"the same LOCAL twice, once IPv4-mapped":   {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", "::ffff:10.0.0.1=10.0.0.1", "--dns-name-answer", "10.0.0.1=10.0.0.2"}, "fw.example.lan", []string{"::ffff:10.0.0.1=10.0.0.1", "10.0.0.1=10.0.0.2"}},
+		"a good answer then a bad one":             {[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", answer, "--dns-name-answer", "10.0.0.2=bad"}, "fw.example.lan", []string{answer, "10.0.0.2=bad"}},
 	}
 	for label, value := range badNameValues {
 		cases["answer value: "+label] = struct {
-			flags []string
-			want  string
-		}{[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", value}, `--dns-name-answer "`}
+			flags   []string
+			dnsName string
+			answers []string
+		}{[]string{"--dns-name", "fw.example.lan", "--dns-name-answer", value}, "fw.example.lan", []string{value}}
 	}
 	for label, c := range cases {
 		t.Run(label, func(t *testing.T) {
-			if cfg, err := parse(t, slices.Clone(c.flags)...); err == nil || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("got cfg=%+v err=%v, want an error mentioning %q", cfg, err, c.want)
+			cfg, err := parse(t, slices.Clone(c.flags)...)
+			if err != nil {
+				t.Fatalf("got err=%v, want the flags accepted", err)
+			}
+			if cfg.dnsName != c.dnsName || !slices.Equal(cfg.nameAnswers, c.answers) {
+				t.Fatalf("got dnsName=%q answers=%q, want %q %q", cfg.dnsName, cfg.nameAnswers, c.dnsName, c.answers)
 			}
 		})
+	}
+}
+
+// The old `--ddr NAME` form is not a flag with a value: the name is a stray argument, which stays a usage error.
+func TestConfigRejectsTheOldDDRNameForm(t *testing.T) {
+	if cfg, err := parse(t, "--ddr", "fw.example.lan", "--dns-name", "fw.example.lan"); err == nil || !strings.Contains(err.Error(), "unexpected argument") {
+		t.Fatalf("got cfg=%+v err=%v, want an error mentioning an unexpected argument", cfg, err)
 	}
 }

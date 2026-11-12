@@ -31,7 +31,7 @@ func cliStatusObject(t *testing.T, upstream string) map[string]any {
 // requireSnapshot fails unless the status carries every field the consumers read; upstream is optional and checked by callers.
 func requireSnapshot(t *testing.T, got map[string]any) {
 	t.Helper()
-	for _, field := range []string{"version", "pid", "executable", "ready", "dns_name", "listeners", "name_answers", "ddr", "advertisements"} {
+	for _, field := range []string{"version", "pid", "executable", "ready", "dns_name", "listeners", "name_answers", "ddr", "advertisements", "degraded"} {
 		if _, ok := got[field]; !ok {
 			t.Fatalf("snapshot lacks %q: %#v", field, got)
 		}

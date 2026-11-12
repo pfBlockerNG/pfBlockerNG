@@ -223,6 +223,10 @@ type pfbUnbound struct {
 	metricsPrivacyEpochs map[int]string
 	dbWorker             atomic.Pointer[dbWorker]
 	dbDropped            atomic.Int64
+
+	// What the module serves without besides the DNSBL build (Frontend.Degraded): the ini that could not be parsed, and the
+	// stats databases that could not be opened.
+	iniFailure, resolverDbFailure, dnsblDbFailure lossReason
 }
 
 // parseTldAllow turns the MAIN-ini tld_allow_list value into a cleaned list: stripped, lower-cased, blank entries
@@ -264,12 +268,13 @@ func warnIfLegacyControlEnabled(enabled bool) {
 }
 
 // loadIniConfig parses the module's ini: nil when the file is absent, otherwise the (partially) read config. A read
-// failure is written to the error log and opens the ini's parse-stage ledger entry; an absent file or a good read
-// closes it.
+// failure is written to the error log, opens the ini's parse-stage ledger entry and is the module's iniFailure; an absent
+// file or a good read closes the entry and clears it.
 func (m *pfbUnbound) loadIniConfig() *configParser {
 	path := m.pfb.pfbUnboundIni
 	if !isFile(path) {
 		m.pfbPyStatusClose("dnsbl", path, "parse")
+		m.iniFailure.clear()
 		return nil
 	}
 	config := newConfigParser()
@@ -277,10 +282,18 @@ func (m *pfbUnbound) loadIniConfig() *configParser {
 		failure := "Failed to load ini configuration: " + err.Error()
 		pyStderr("[pfBlockerNG]: " + failure)
 		m.pfbPyStatusOpen("dnsbl", path, "parse", failure)
+		m.iniFailure.set(failure)
 	} else {
 		m.pfbPyStatusClose("dnsbl", path, "parse")
+		m.iniFailure.clear()
 	}
 	return config
+}
+
+// dbOpenFailed logs that a stats database could not be opened and keeps the message as why its part is lost.
+func (m *pfbUnbound) dbOpenFailed(loss *lossReason, message string) {
+	pyStderr("[pfBlockerNG]: " + message + "\n")
+	loss.set(message)
 }
 
 func mainOptionError(option string, err error) error {
@@ -587,8 +600,11 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 			m.loadSafesearchDb(scratch.safeSearchDB)
 
 			// ADR-65: the manifest is the SOLE DNSBL source: an absent, unparseable or unbuildable manifest leaves the
-			// dicts EMPTY (no fallback); the ledger entry the build opens signals the failure instead.
-			if build := m.dnsblBuildFromManifest(pfb.pfbPySources); build != nil {
+			// dicts EMPTY (no fallback); the ledger entry the build opens, and snapshot.dnsblUnbuilt, signal the failure instead.
+			build, unbuilt := m.dnsblBuildFromManifestWhy(pfb.pfbPySources)
+			if build == nil {
+				scratch.dnsblUnbuilt = unbuilt
+			} else {
 				scratch.dataDB = build.dataDB
 				scratch.zoneDB = build.zoneDB
 				scratch.feedGroupIndexDB = build.feedGroupIndexDB
@@ -634,14 +650,14 @@ func initStandard(id int, moduleDir, logDir string) (module *pfbUnbound, err err
 			if m.validateDbWithRecovery(dbResolver) {
 				m.sqlite3ResolverCon.Store(true)
 			} else {
-				pyStderr("[pfBlockerNG]: Failed to open pfb_py_resolver.sqlite database\n")
+				m.dbOpenFailed(&m.resolverDbFailure, "Failed to open pfb_py_resolver.sqlite database")
 			}
 			// Enable DNSBL statistics: forwarding-gated too, not just blacklist-gated (issue #860).
 			if m.dnsblStatsWanted(pfb) {
 				if m.validateDbWithRecovery(dbDnsbl) {
 					m.sqlite3DnsblCon.Store(true)
 				} else {
-					pyStderr("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database\n")
+					m.dbOpenFailed(&m.dnsblDbFailure, "Failed to open pfb_py_dnsbl.sqlite database")
 				}
 			}
 

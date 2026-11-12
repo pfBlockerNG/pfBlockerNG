@@ -152,30 +152,34 @@ func TestOneBinaryRefusesADeciderCommandAfterTheDoubleDash(t *testing.T) {
 	}
 }
 
-// A module that cannot boot is exit 1 with the reason, nothing stays bound, no ready file. (A directory with no ini at all
-// is not such a module: the decider logs "Ini file missing" and serves without DNSBL, as the Python decider did.)
-func TestOneBinaryExitsOneWhenTheModuleCannotBoot(t *testing.T) {
-	dir, ready := t.TempDir(), filepath.Join(t.TempDir(), "ready")
+// issue #3848: a module that cannot boot no longer stops the gateway. The decider boots again with no module, the gateway is
+// ready (ready file included) and relays every query, a listed name too, and the status says the DNSBL is not blocking. (A
+// directory with no ini at all is not such a module: the decider logs "Ini file missing" and serves without DNSBL, as the
+// Python decider did.)
+func TestOneBinaryServesWithNoModuleWhenTheModuleCannotBoot(t *testing.T) {
+	dir, ready, sock := shortTempDir(t), filepath.Join(t.TempDir(), "ready"), filepath.Join(shortTempDir(t), "run", "ctl.sock")
+	writeModuleDir(t, dir) // blocked.example is listed: it is relayed only because the module did not boot
 	if err := os.WriteFile(filepath.Join(dir, "pfb_unbound.ini"), []byte("[MAIN]\npython_enable = banana\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	port := freePort(t)
-	gw := startGatewayProcessWith(t, oneBinaryFlags("127.0.0.1:5353", "--port", strconv.Itoa(port), "--module-dir", dir, "--ready-file", ready))
-	if code := gw.exit(); code != 1 {
-		t.Fatalf("exit code %d, want 1; log:\n%s", code, gw.logText())
+	up := newFakeUpstream(t)
+	gw := startGatewayProcessWith(t, oneBinaryFlags(up.addr, "--module-dir", dir, "--ready-file", ready, "--ctl-socket", sock))
+	serving := listenAddr(t, gw.waitLine("listening udp+tcp "))
+	gw.waitLine("ready upstream ")
+	query := buildQuery(t, 0x0b0c, blockedName, true)
+	if got, want := udpQuery(t, serving, query), echoWithQR(seenQuery{wire: query})[0]; !bytes.Equal(got, want) {
+		t.Fatalf("a listed name with no module: got %x, want Unbound's reply %x", got, want)
 	}
-	text := gw.logText()
-	if !strings.Contains(text, "pfb_dns_gateway: decider: ") || !strings.Contains(text, "python_enable") || strings.Contains(text, "listening") || strings.Contains(text, "ready upstream") {
-		t.Fatalf("want the boot error and no readiness line, got:\n%s", text)
+	if seen := up.next(); !bytes.Equal(seen.wire, query) {
+		t.Fatalf("Unbound saw %x, want the listed name's query %x", seen.wire, query)
 	}
-	l, err := bindPlain("127.0.0.1", port)
-	if err != nil {
-		t.Fatalf("the port is still held after a failed boot: %v", err)
+	if text := gw.logText(); !strings.Contains(text, "python_enable") || !strings.Contains(text, "booting the decider again with no module") {
+		t.Fatalf("want the boot error and the second boot logged, got:\n%s", text)
 	}
-	l.close()
-	if _, err := os.Stat(ready); err == nil {
-		t.Fatal("a ready file exists although the decider never booted")
+	if _, err := os.Stat(ready); err != nil {
+		t.Fatalf("no ready file although the gateway serves: %v", err)
 	}
+	requireLost(t, sock, "a module that cannot boot", map[string]string{"dnsbl": "python_enable", "acl": "/nonexistent/unbound.conf"}, "dnsbl", "acl")
 }
 
 // SIGTERM while the decider is still booting stops the gateway at once: exit 0, the stopped-by-signal line, no ready file.

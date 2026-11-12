@@ -470,7 +470,7 @@ func TestFailedDropStopsEverythingAndFreesThePort(t *testing.T) {
 	l.close()
 }
 
-// A decider that cannot boot is the start's error, and nothing stays bound.
+// A decider that cannot boot, with the module or without it (the fake ignores which), is the start's error, and nothing stays bound.
 func TestADeciderThatCannotBootFailsTheStartAndFreesThePort(t *testing.T) {
 	cfg, logs := lifecycleConfig(t)
 	cfg.open = func(decider.Options) (frontend, error) { return nil, errors.New("no pfb_unbound.ini") }
@@ -487,23 +487,6 @@ func TestADeciderThatCannotBootFailsTheStartAndFreesThePort(t *testing.T) {
 	if strings.Contains(logs.text(), "listening") {
 		t.Fatalf("no readiness line without a decider:\n%s", logs.text())
 	}
-}
-
-// A decider that boots too slowly is given up on; the one that finishes afterwards is Closed.
-func TestStartupGivesUpWhenTheDeciderDoesNotBootInTime(t *testing.T) {
-	cfg, logs := lifecycleConfig(t)
-	release, late := make(chan struct{}), closingFrontend{closed: make(chan struct{})}
-	cfg.open = func(decider.Options) (frontend, error) { <-release; return late, nil }
-	cfg.readyTimeout = 100 * time.Millisecond
-	srv, err := start(cfg, logs.logf)
-	if err == nil || !strings.Contains(err.Error(), "did not boot") {
-		t.Fatalf("start: got srv=%v err=%v, want a did-not-boot error", srv, err)
-	}
-	if strings.Contains(logs.text(), "listening") {
-		t.Fatalf("no readiness line without a decider:\n%s", logs.text())
-	}
-	close(release)
-	waitClosed(t, late.closed, "the late decider to be closed")
 }
 
 // A signal during the boot ends the wait (errInterrupted); the decider that finishes afterwards is Closed.

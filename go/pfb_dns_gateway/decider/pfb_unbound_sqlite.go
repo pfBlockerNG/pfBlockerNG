@@ -383,8 +383,9 @@ func (m *pfbUnbound) openDnsblStatsDb(wanted bool) {
 	if wanted && !m.sqlite3DnsblCon.Load() && !m.retired.Load() {
 		if m.validateDbWithRecovery(dbDnsbl) {
 			m.sqlite3DnsblCon.Store(true)
+			m.dnsblDbFailure.clear()
 		} else {
-			pyStderr("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database after recovery attempt\n")
+			m.dbOpenFailed(&m.dnsblDbFailure, "Failed to open pfb_py_dnsbl.sqlite database after recovery attempt")
 		}
 	}
 }

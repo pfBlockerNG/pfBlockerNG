@@ -1091,23 +1091,21 @@ func TestDDRStartWithoutTLSListenersAnswersNODATA(t *testing.T) {
 	requireDDR(t, query, udpQuery(t, plain, query), ddrNODATA)
 }
 
-func TestDDRStartWithAnUnusableNameFailsAndLeavesNothingBound(t *testing.T) {
-	cfg, logs := lifecycleConfig(t)
-	cfg.port = freePort(t)
+// issue #3848: a name that is no name is no reason to stop: the gateway starts without the name and without DDR (which names
+// it), still answers plain DNS, and the status says both are gone.
+func TestDDRStartWithAnUnusableNameServesWithoutTheNameOrDDRAndSaysWhy(t *testing.T) {
+	cfg, logs, sock := healthyConfig(t)
 	cfg.dnsName, cfg.ddr = "a..b", true
 	srv, err := start(cfg, logs.logf)
-	if err == nil {
-		srv.shutdown()
-		t.Fatal("start with --ddr a..b succeeded, want an error: an empty label is no name")
-	}
-	if !strings.Contains(err.Error(), "--dns-name") {
-		t.Fatalf("the error must name the flag: %v", err)
-	}
-	l, err := bindPlain("127.0.0.1", cfg.port)
 	if err != nil {
-		t.Fatalf("the plain port is still held after the failed start: %v", err)
+		t.Fatalf("start with --ddr a..b = %v, want the gateway to serve without the name", err)
 	}
-	l.close()
+	defer srv.shutdown()
+	requirePlainDNS(t, logs)
+	if status := statusObject(t, sock); status["dns_name"] != "" || status["ddr"] != false {
+		t.Fatalf("applied dns_name=%v ddr=%v, want neither", status["dns_name"], status["ddr"])
+	}
+	requireLost(t, sock, "an unusable name", map[string]string{"dns_name": "--dns-name", "ddr": "--ddr needs"}, "dns_name", "ddr")
 }
 
 // the process the rc script starts: flags in, DDR answers out

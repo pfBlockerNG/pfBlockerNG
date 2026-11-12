@@ -53,6 +53,7 @@ type appliedStatus struct {
 	NameAnswers    map[string]statusNameAnswers   `json:"name_answers"`
 	DDR            bool                           `json:"ddr"`
 	Advertisements map[string]statusAdvertisement `json:"advertisements"`
+	Degraded       []statusDegraded               `json:"degraded"`
 }
 
 // canonicalUpstream is the applied upstream in its numeric spelling, or "" for a spelling that has none: a hostname, a scoped
@@ -83,7 +84,7 @@ func (c *ctlServer) status() ([]byte, error) {
 		Version: 1, PID: os.Getpid(), Executable: startExecutable,
 		Ready:     c.ready.Load() && c.g != nil && c.g.ctx.Err() == nil,
 		Listeners: []statusListener{}, NameAnswers: map[string]statusNameAnswers{},
-		DDR: c.ddr != nil, Advertisements: map[string]statusAdvertisement{},
+		DDR: c.ddr != nil, Advertisements: map[string]statusAdvertisement{}, Degraded: c.degraded(),
 	}
 	locals := map[netip.Addr]struct{}{}
 	if c.names != nil {

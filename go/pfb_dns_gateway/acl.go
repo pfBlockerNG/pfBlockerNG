@@ -49,7 +49,8 @@ type aclRules struct {
 type aclSnapshot struct {
 	deps   aclDeps
 	rules  aclRules
-	broken bool // no good load yet: Lookup forwards every client
+	broken bool   // no good load yet: Lookup forwards every client
+	why    string // what the log said about it, while broken
 }
 
 // ACL mirrors the client part of Unbound's access-control list: the rows of its config file and of every file the
@@ -116,12 +117,20 @@ func (a *ACL) load() *aclSnapshot {
 			return &aclSnapshot{deps: w.deps, rules: prev.rules}
 		}
 		a.logf("acl: %v; forwarding every query", err)
-		return &aclSnapshot{deps: w.deps, broken: true}
+		return &aclSnapshot{deps: w.deps, broken: true, why: err.Error() + "; forwarding every query"}
 	}
 	w.allowImplicit()
 	rules := newACLRules(w.rows)
 	a.logf("acl: loaded %d entries from %d files starting at %s", rules.entries, w.opened, a.path)
 	return &aclSnapshot{deps: w.deps, rules: rules}
+}
+
+// lost is why every client is forwarded because the config has not loaded yet; "" once a load has worked.
+func (a *ACL) lost() string {
+	if snap := a.snap.Load(); snap != nil && snap.broken {
+		return snap.why
+	}
+	return ""
 }
 
 // newACLRules adds Unbound's localhost defaults to rows (of identical prefixes the last row read won, as in Unbound:
