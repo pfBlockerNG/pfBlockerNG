@@ -116,9 +116,6 @@ if ($_POST && isset($_POST['save'])) {
 		array_map('strval', array_keys($options_dns_cert))
 	));
 
-	// issue #3515: the apply moves and restores the Resolver (config.xml keys and the snapshot kept in this section) under the
-	// config lock, from a fresh read. The save below holds that lock from a fresh read through write_config(), so it cannot
-	// write back a copy that predates a move or a restore.
 	foreach (array('pfb_dns_listen_vip4', 'pfb_dns_listen_vip6', 'pfb_dns_listen_interface') as $field) {
 		$value = $_POST[$field] ?? '';
 		if (!is_string($value)) {
@@ -138,6 +135,9 @@ if ($_POST && isset($_POST['save'])) {
 		}
 	}
 
+	// issue #3515: the apply moves and restores the Resolver (config.xml keys and the snapshot kept in this section) under the
+	// config lock, from a fresh read. The save below holds that lock from a fresh read through write_config(), so it cannot
+	// write back a copy that predates a move or a restore.
 	if (!$input_errors) {
 		$pfb_config_lock = pfb_dns_config_lock();
 		if ($pfb_config_lock === NULL) {

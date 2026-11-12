@@ -64,8 +64,8 @@ def _stored(vm: SmokeVM, paths: list[str]) -> dict[str, str]:
 
 
 @contextlib.contextmanager
-def _both_forms_seeded(vm: SmokeVM) -> Iterator[None]:
-    """Store both forms' settings directly (the before-state must not depend on the saves under test); restore after."""
+def _both_parts_seeded(vm: SmokeVM) -> Iterator[None]:
+    """Store both parts' settings directly (the before-state must not depend on the saves under test); restore after."""
     seeds = {**PFB_DNS_SEED, **GENERAL_SEED}
     priors = _read_config_paths(vm, list(seeds))
     try:
@@ -83,7 +83,7 @@ def test_one_post_with_a_changed_pfb_dns_field_and_a_changed_reply_logging_saves
     logging, Then all three keys are written and the last write is the one "save DNS settings" write.
     """
     vm = smoke_vm
-    with _both_forms_seeded(vm):
+    with _both_parts_seeded(vm):
         before = _stored(vm, [*PFB_DNS_SEED, *GENERAL_SEED])
         assert (before[PFB_DNS_ENABLE], before[PFB_DNS_DOT_PORT], before[REPLY_LOGGING]) == ("", "853", "on"), (
             f"before-state: expected pfB-DNS Off, DoT port 853 and reply logging On, got {before}"
@@ -127,7 +127,7 @@ def test_one_post_with_an_invalid_field_in_either_part_changes_neither_part(
     Then the page answers with the input errors and no key of either part changes.
     """
     vm = smoke_vm
-    with _both_forms_seeded(vm):
+    with _both_parts_seeded(vm):
         before = _stored(vm, [*PFB_DNS_SEED, *GENERAL_SEED])
         assert (before[PFB_DNS_ENABLE], before[PFB_DNS_DOT_PORT], before[REPLY_LOGGING]) == ("", "853", "on"), (
             f"before-state: expected pfB-DNS Off, DoT port 853 and reply logging On, got {before}"

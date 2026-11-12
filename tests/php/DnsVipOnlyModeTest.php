@@ -163,20 +163,25 @@ final class DnsVipOnlyModeTest extends TestCase
 		$this->assertSame([], $this->validate($this->post()), 'VIP-only mode already stored On stays when pfB-DNS is turned Off');
 	}
 
-	public function testVipOnlyModeStoredOnWithPfbDnsOffStillRequiresResolverAddressesAndAnAvailableVipFamily(): void
+	public function testVipOnlyModeStoredOnWithPfbDnsOffSkipsTheVipChecksWhichRunAgainOncePfbDnsIsOn(): void
 	{
-		// Given pfB-DNS Off and VIP-only mode stored On
+		// Given pfB-DNS Off and VIP-only mode stored On: VIP-only mode is inactive, so no VIP check refuses the post
 		PfbConfig::write('dns/pfb_dns', '');
 		$this->mode(TRUE);
-		$this->assertSame([], $this->validate($this->post()), 'before: the complete post is accepted');
+		$noAddresses = array_replace($this->post(), ['pfb_dns_listen_vip' => '']);
+		$noFamily = array_replace($this->post(), ['pfb_dns_listen_vip4' => 'none', 'pfb_dns_listen_vip6' => '']);
+		$this->assertSame([], $this->validate($this->post()), 'the complete post is accepted');
+		$this->assertSame([], $this->validate($noAddresses), 'Resolver addresses off is accepted while pfB-DNS is Off');
+		$this->assertSame([], $this->validate($noFamily), 'no VIP family is accepted while pfB-DNS is Off');
 
-		// When the post turns Resolver addresses off, it is refused with the pfB-DNS and Resolver addresses message
-		$errors = $this->validate(array_replace($this->post(), ['pfb_dns_listen_vip' => '']));
+		// When pfB-DNS is On, the same posts are refused: Resolver addresses off with the pfB-DNS and Resolver addresses message
+		PfbConfig::write('dns/pfb_dns', 'on');
+		$errors = $this->validate($noAddresses);
 		$this->assertCount(1, $errors, json_encode($errors));
 		$this->assertStringContainsString('VIP-only mode requires pfB-DNS and Resolver addresses enabled', $errors[0]);
 
-		// When the post selects no VIP family, it is refused with the family message, not the pfB-DNS one
-		$errors = $this->validate(array_replace($this->post(), ['pfb_dns_listen_vip4' => 'none', 'pfb_dns_listen_vip6' => '']));
+		// And no VIP family with the family message
+		$errors = $this->validate($noFamily);
 		$this->assertCount(1, $errors, json_encode($errors));
 		$this->assertStringContainsString('VIP-only mode requires at least one available Resolver VIP family', $errors[0]);
 	}

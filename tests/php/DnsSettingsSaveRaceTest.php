@@ -111,26 +111,29 @@ final class DnsSettingsSaveRaceTest extends TestCase
 		$this->assertFalse($result['lockHeld'], 'the lock is released even when config.xml cannot be written');
 	}
 
-	/** @return array<string,array{string}> the failed saves: the lock stays taken, the fresh read fails, pfSense refuses the write */
+	private const LOCK_ERROR = 'DNS: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+	private const WRITE_ERROR = 'DNS: the configuration could not be written, so these settings were not saved. Save again in a moment.';
+
+	/** @return array<string,array{string,string}> the failed saves (the lock stays taken, the fresh read fails, pfSense refuses the write) and the one error each shows */
 	public static function failedSaves(): array
 	{
 		return [
-			'the config lock stays taken'     => ['lock_taken'],
-			'the fresh config.xml read fails' => ['read_fails'],
-			'pfSense refuses the write'       => ['write_refused'],
-			'config.xml file write fails'      => ['write_failed'],
+			'the config lock stays taken'     => ['lock_taken', self::LOCK_ERROR],
+			'the fresh config.xml read fails' => ['read_fails', self::LOCK_ERROR],
+			'pfSense refuses the write'       => ['write_refused', self::WRITE_ERROR],
+			'config.xml file write fails'      => ['write_failed', self::WRITE_ERROR],
 		];
 	}
 
 	#[DataProvider('failedSaves')]
-	public function testAFailedSaveRedisplaysWhatBothPartsOfTheFormSubmittedNotWhatIsStored(string $scenario): void
+	public function testAFailedSaveRedisplaysWhatBothPartsOfTheFormSubmittedNotWhatIsStored(string $scenario, string $error): void
 	{
 		// Given pfB-DNS Off and DNS Reply Logging On stored, and a form that posts pfB-DNS On and DNS Reply Logging Off (the checkbox absent)
 		$result = $this->runScenario($scenario);
 		$this->assertStoredBefore($result);
 
-		// Then the save is an input error, the form comes back with what it submitted, and nothing was saved
-		$this->assertNotSame([], $result['inputErrors'], 'before: the save failed');
+		// Then the save is an input error naming why, the form comes back with what it submitted, and nothing was saved
+		$this->assertSame([$error], $result['inputErrors'], 'before: the save failed');
 		$this->assertSame('', $result['reply'], 'the form re-displays the preference it submitted, not the stored one');
 		$this->assertSame('on', $result['pconfig']['pfb_dns'] ?? NULL, 'and the pfB-DNS enable it submitted');
 		$this->assertSame('', self::at($result['disk'], self::DNS . '/pfb_dns'), 'config.xml keeps pfB-DNS Off');

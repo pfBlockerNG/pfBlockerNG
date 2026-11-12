@@ -505,7 +505,7 @@ Only an admin who deletes the block text unmoves the Resolver, and the next appl
 Custom Options (the probe that first showed the block dropped and Unbound unable to bind) is not that path; the page's save is
 exercised live by `test_the_resolver_pages_own_save_keeps_pfblockerngs_block_and_the_resolver_moved`.
 
-The **Save pfB-DNS settings** save on **DNS > General** writes its own leaves: the toggle, the twelve listener settings, the DNS Name and the DDR settings. The **Save DNS General settings** save on the same page writes the DNS Reply Logging preference in the DNSBL section and the Resolver address settings. The Resolver move
+The one **Save DNS settings** save on **DNS > General** (issue #3856) writes the pfB-DNS leaves (the toggle, the twelve listener settings, the DNS Name and the DDR settings), the DNS Reply Logging preference in the DNSBL section and the Resolver address settings, in one `write_config()`. The Resolver move
 rewrites that section and the unbound keys, each from the copy of config.xml its own process read at start (`write_config()`
 writes that whole copy back). Both therefore hold one named lock, `pfb_dns_config_lock()` (pfSense `try_lock()`,
 bounded at 10 s), from a fresh `config_read_file()` under it through `write_config()`: `pfb_dns_proxy_resolver()` takes

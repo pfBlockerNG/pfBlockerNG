@@ -94,7 +94,7 @@ final class DnsProxySettingsPolicyRegressionTest extends TestCase
 	{
 		require_once __DIR__ . '/PageStatementLoader.php';
 		$page = 'src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
-		$code = pfb_test_page_region($page, '$pfb_dns = pfb_filter(', '// issue #3515:');
+		$code = pfb_test_page_region($page, '$pfb_dns = pfb_filter(', "foreach (array('pfb_dns_listen_vip4', 'pfb_dns_listen_vip6', 'pfb_dns_listen_interface') as \$field) {");
 		$_POST = self::post() + ['pfb_dns_' . $kind => 'on'];
 		$vars = ['input_errors' => [], 'options_dns_interface' => ['lo0' => 'Localhost'], 'options_dns_cert' => ['cert' => 'Certificate']];
 		$before = $GLOBALS['config'];

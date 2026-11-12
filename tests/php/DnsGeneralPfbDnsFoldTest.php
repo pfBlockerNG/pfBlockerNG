@@ -256,6 +256,25 @@ final class DnsGeneralPfbDnsFoldTest extends TestCase
 		}
 	}
 
+	public function testSavingThePageWithOnlyDnsReplyLoggingChangedLeavesEveryPfbDnsLeafAsStored(): void
+	{
+		// Given the pfB-DNS and Resolver address settings stored exactly as the page posts them back, and DNS Reply Logging On
+		$stored = ['dns/pfb_dns' => 'on', 'gen/pfb_dns_listen_vip' => '', 'gen/pfb_dns_listen_vip_only' => '',
+			'gen/pfb_dns_listen_vip4' => '', 'gen/pfb_dns_listen_vip6' => '', 'gen/pfb_dns_listen_interface' => 'lo0'];
+		foreach (pfb_dns_proxy_listeners_stored($this->runSave()['posted']) as $key => $value) {
+			$stored[pfb_dns_config_key($key)] = $value;
+		}
+		$result = $this->runSave(['stored' => $stored]);
+		$this->assertSame('on', self::at($result['before'], self::path('dns/pfb_dns')), 'before: pfB-DNS is On');
+		$this->assertSame('on', self::at($result['before'], self::path('dnsbl/pfb_py_reply')), 'before: DNS Reply Logging is On');
+
+		// When the page is saved with only DNS Reply Logging unticked
+		// Then that one leaf changes: rewriting the pfB-DNS part from the post leaves every stored pfB-DNS leaf as it was
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame([self::SAVE], $result['writes']);
+		$this->assertSame([self::path('dnsbl/pfb_py_reply')], self::changedLeaves($result['before'], $result['disk']), 'the leaves the save changed');
+	}
+
 	/** @return array<string,array{array<string,mixed>,string,array<string,mixed>}> a pfB-DNS field the validator refuses: the post, the one error, the posted value the form shows again */
 	public static function invalidPfbDnsFields(): array
 	{
@@ -336,6 +355,24 @@ final class DnsGeneralPfbDnsFoldTest extends TestCase
 		$this->assertFalse($result['returned'], 'ends through the redirect');
 		$this->assertSame('', self::at($result['disk'], self::path('dns/pfb_dns')), 'pfB-DNS is stored Off');
 		$this->assertSame('on', self::at($result['disk'], self::path('gen/pfb_dns_listen_vip_only')), 'VIP-only mode stays stored On');
+	}
+
+	public function testPfbDnsTurnedOffWithVipOnlyModeStoredOnAndNoVipFamilyIsAcceptedAndStoresTheVipSettingsAsPosted(): void
+	{
+		// Given pfB-DNS and VIP-only mode On, and a POST that turns pfB-DNS Off, keeps VIP-only mode On and selects no VIP family
+		$stored = ['dns/pfb_dns' => 'on', 'gen/pfb_dns_listen_vip' => 'on', 'gen/pfb_dns_listen_vip4' => 'auto', 'gen/pfb_dns_listen_vip_only' => 'on'];
+		$post = ['pfb_dns' => NULL, 'pfb_dns_listen_vip' => NULL, 'pfb_dns_listen_vip4' => 'none', 'pfb_dns_listen_vip6' => 'none'] + self::VIP_ONLY_FORM;
+		$result = $this->runSave(['stored' => $stored, 'post' => $post]);
+		$this->assertSame('on', self::at($result['before'], self::path('dns/pfb_dns')), 'before: pfB-DNS is On');
+		$this->assertSame('on', self::at($result['before'], self::path('gen/pfb_dns_listen_vip_only')), 'before: VIP-only mode is On');
+
+		// Then turning pfB-DNS Off is never refused: the VIP checks guard only an active VIP-only mode, and the posted VIP settings are stored as they are
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertContains(self::SAVE, $result['writes']);
+		$this->assertSame('', self::at($result['disk'], self::path('dns/pfb_dns')), 'pfB-DNS is stored Off');
+		$this->assertSame('on', self::at($result['disk'], self::path('gen/pfb_dns_listen_vip_only')), 'VIP-only mode stays stored On');
+		$this->assertSame('', self::at($result['disk'], self::path('gen/pfb_dns_listen_vip')), 'Resolver addresses stored Off as posted');
+		$this->assertSame('', self::at($result['disk'], self::path('gen/pfb_dns_listen_vip4')), 'no IPv4 VIP stored, as posted');
 	}
 
 	public function testVipOnlyModeNewlyTurnedOnWhilePfbDnsStaysOffIsRefusedAndNothingIsWritten(): void

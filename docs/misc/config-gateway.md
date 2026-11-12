@@ -209,7 +209,7 @@ Authorization = property of **write**, not call site (generalises
     before ADR-02 python force would otherwise activate it.
   - **`dnsbl/pfb_py_reply` is read in both DNS modes** (issue #3515): it stays the DNSBL-section key,
     with the same default, grandfathering and `local` sync, but it is edited on **DNS > General**
-    (the DNS General save writes it through `PfbConfig::write()` under `pfb_dns_config_lock()`, the lock the pfB-DNS settings save takes;
+    (the **Save DNS settings** save writes it through `PfbConfig::write()` under `pfb_dns_config_lock()`, with the pfB-DNS settings;
     the DNSBL save no longer assigns it). The DNSBL module's ini carries it as `python_reply`; with
     DNSBL off, `pfb_dns_proxy_service()` turns it into the proxy's `--reply-log`.
   - **`pfb_cache_flush` → `PfbToggle`**: default Off; enables post-handshake full Unbound

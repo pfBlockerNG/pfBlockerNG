@@ -41,7 +41,7 @@ import pytest
 
 from .. import helpers
 from .test_browser_feeds import JS_TIMEOUT_MS, _contrast_ratio, _open, _shot
-from .test_dns_general_forms import PFB_DNS_DOT_PORT, REPLY_LOGGING, _both_forms_seeded, _stored
+from .test_dns_general_forms import PFB_DNS_DOT_PORT, REPLY_LOGGING, _both_parts_seeded, _stored
 from .test_dns_settings_order import PFB_DNS_SECTIONS
 
 pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
@@ -783,7 +783,7 @@ def test_clicking_save_dns_settings_stores_the_changed_pfb_dns_field_and_the_cha
     Then the DoT port and the reply logging are both stored: one form, one save.
     """
     page = browser_page
-    with _both_forms_seeded(smoke_vm):
+    with _both_parts_seeded(smoke_vm):
         before = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
         assert before == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: "on"}, f"before-state: got {before}"
         _open(page, webui, DNS_GENERAL_PAGE)
@@ -810,7 +810,7 @@ def test_an_invalid_pfb_dns_value_beside_a_changed_reply_logging_saves_neither_a
     """
     page = browser_page
     interface_cfg = helpers.dns_config_path("pfb_dns_interface")
-    with _both_forms_seeded(smoke_vm):
+    with _both_parts_seeded(smoke_vm):
         before = _stored(smoke_vm, [interface_cfg, REPLY_LOGGING])
         assert before == {interface_cfg: "lo0", REPLY_LOGGING: "on"}, f"before-state: got {before}"
         _open(page, webui, DNS_GENERAL_PAGE)
