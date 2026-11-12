@@ -4120,7 +4120,7 @@ $pfb['dns_proxy_restart_pending'] = '/var/run/pfb_dns_proxy_restart_pending';
 // down because of it. The status says so, the rc script's start refuses while it stands, and the next tick and update pass look again: three lines, the
 // kind (`nopair` or `holder`), the PROXYv2 port, the stranger.
 $pfb['dns_proxy_backend_blocked'] = PFB_DNS_PROXY_BACKEND_BLOCKED;
-// The marker of a failed scan of the backend pair's sockets (pfb_dns_proxy_backend_holder()): one warning is logged per streak of failed scans, and the next scan that answers removes it.
+// The marker of a failed scan of the backend pair's sockets (pfb_dns_proxy_backend_holder()): one error-log line is written per streak of failed scans, and the next scan that answers removes it.
 $pfb['dns_proxy_scan_failed'] = '/var/run/pfb_dns_proxy_scan_failed';
 // The gateway's log (daemon(8) -o): read only for the last `pfb_dns_gateway:` error of a start that never became ready.
 $pfb['dns_proxy_log'] = PFB_DNS_PROXY_LOG;
@@ -6404,9 +6404,9 @@ function pfb_dns_proxy_unbound_pid(): ?int {
 }
 
 /**
- * The box's listening TCP and UDP sockets on the local ports $ports, from one sockstat run: the only parser of its output, which the upstream's
- * ownership check (pfb_dns_proxy_upstream_state()) and the backend pair's holder and free-pair checks (pfb_dns_proxy_backend_holder(),
- * pfb_dns_proxy_backend_pick()) all read. Bounded (1 s). Rows sockstat gives for a foreign port or that do not parse are left out.
+ * The box's listening TCP and UDP sockets on the local ports $ports, from one sockstat run: PHP's one parser of its output (the rc script's start
+ * has its own sh check of its upstream port), which the upstream's ownership check (pfb_dns_proxy_upstream_state()) and the backend pair's holder
+ * and free-pair checks (pfb_dns_proxy_backend_holder(), pfb_dns_proxy_backend_pick()) all read. Bounded (1 s). Rows sockstat gives for a foreign port or that do not parse are left out.
  *
  * @param string $ports a sockstat -p list of local ports: "5353", "5353,5354" or "5355-5419"
  * @return list<array{process:string,pid:int,proto:string,host:string,port:string}>|null host is the address spelled as the gateway prints it, or `*`
@@ -7638,13 +7638,19 @@ if (isset($argv[1])) {
 	// log from the size the hook took BEFORE the start (argv[2], digits only; none: the size now), since the gateway needs seconds to
 	// become ready and logs nothing before. The certificate that could not be exported or pushed gets its notice; then, while a snapshot
 	// is stored, the start is confirmed as an apply confirms its own (issue #3556): its problems become the one startup notice, and a
-	// proxy that does not become ready is reported there and left running with the Resolver moved
+	// proxy that does not become ready is reported there and left running with the Resolver moved. A start the rc script refused for a
+	// stranger on Unbound's port (issue #3848: it left its marker) has nothing to confirm, so the update pass's own check looks for the way
+	// out instead (pfb_dns_proxy_ensure_running()): a free pair moves Unbound and starts the gateway, none keeps it blocked with its notice
 	elseif ($argv[1] == 'dns_check') {
 			$since = (isset($argv[2]) && ctype_digit($argv[2])) ? (int) $argv[2] : pfb_dns_proxy_log_size();
 			pfb_global();
 			pfb_dns_proxy_certificate_sync();
 			if (pfb_dns_proxy_saved() !== NULL) {
-				pfb_dns_proxy_confirm_ready($since);
+				if (pfb_dns_proxy_cannot_serve()) {
+					pfb_dns_proxy_ensure_running();
+				} else {
+					pfb_dns_proxy_confirm_ready($since);
+				}
 			}
 			exit(0);
 	}

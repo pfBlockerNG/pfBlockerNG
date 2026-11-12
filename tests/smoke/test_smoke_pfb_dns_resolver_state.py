@@ -478,7 +478,7 @@ def _hold_a_port_of_every_pair_above(vm: SmokeVM, port: int) -> tuple[int, list[
     (the pairs P' from port+2 on, PFB_DNS_PROXY_BACKEND_SEARCH of them): each pair (P', P'+1) then has a port in use and
     none is free. Their pidfiles sit beside _occupy's, which must have run: _release ends them.
 
-    :returns: the lowest candidate pair's P' (its ports stay free) and the ports held.
+    :returns: the lowest candidate pair's P' (its P'+1 is held too; the caller frees that pair) and the ports held.
     """
     first = port + 2
     last = min(first + _backend_search(vm) - 1, 65534)

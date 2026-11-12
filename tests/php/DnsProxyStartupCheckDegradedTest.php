@@ -79,6 +79,7 @@ final class DnsProxyStartupCheckDegradedTest extends TestCase
 		$this->standInsStop();
 		$this->tearDownUpstreamFixture();
 		$this->clearProxyFiles();
+		@unlink($GLOBALS['pfb']['dns_proxy_backend_blocked']);
 		foreach ($this->savedGlobals as $name => [$existed, $value]) {
 			if ($existed) {
 				$GLOBALS[$name] = $value;
@@ -282,6 +283,45 @@ final class DnsProxyStartupCheckDegradedTest extends TestCase
 		pfb_dns_proxy_startup_check(TRUE);
 
 		$this->assertSame([$this->problemText("the DNS Resolver backend does not answer: {$cause}.")], $this->startupTexts());
+	}
+
+	public function testAConfirmationWhileTheCannotServeMarkerStandsWaitsForNoStartAndFilesNothing(): void
+	{
+		// Given a gateway the rc script refused to start for a stranger on Unbound's port: nothing runs, and its marker stands
+		$this->box();
+		$this->standInsStop();
+		$this->clearProxyFiles();
+		file_put_contents($GLOBALS['pfb']['dns_proxy_backend_blocked'], "holder\n5353\nnc (pid 6161) on 127.0.0.1:5353\n");
+		$this->assertTrue(pfb_dns_proxy_cannot_serve(), 'before: the marker stands');
+		$this->assertFalse(pfb_dns_proxy_ready(), 'before: no gateway');
+
+		// When the confirmation of a start runs
+		[$clock, $confirm] = $this->clockedConfirm();
+		$ready = $confirm();
+
+		// Then it does not serve, waited for nothing, and filed no startup problem: there was no start to wait for or to diagnose
+		$this->assertFalse($ready);
+		$this->assertSame([], $clock->sleeps, 'no wait for a start the rc script refused');
+		$this->assertSame([], $this->startupTexts(), 'no startup problem');
+	}
+
+	public function testAConfirmationThatStoppedTheGatewayForAStrangerFilesNoStartupProblemOnTopOfTheCannotServeNotice(): void
+	{
+		// Given a ready gateway whose Unbound upstream a stranger owns, with no free pair to move Unbound to
+		$this->box();
+		$this->loseTheBackend('foreign');
+		$this->assertFalse(pfb_dns_proxy_cannot_serve(), 'before: nothing is blocked yet');
+
+		// When the confirmation of a start waits it out and finds no way to move
+		[$clock, $confirm] = $this->clockedConfirm();
+		$ready = $confirm();
+
+		// Then the gateway cannot serve, and the only notice is the cannot-serve one
+		$this->assertFalse($ready);
+		$this->assertSame(array_fill(0, 10, 100000), $clock->sleeps, 'the wait ran its whole budget first');
+		$this->assertTrue(pfb_dns_proxy_cannot_serve(), 'the marker stands');
+		$this->assertSame([], $this->startupTexts(), 'no startup problem on top');
+		$this->assertSame(['pfBlockerNG DNS Proxy'], array_values(array_unique(array_column($GLOBALS['pfb_test_file_notices'], 'id'))));
 	}
 
 	private const CONTROL_FAILED = 'control socket: listen unix /var/run/pfb_dns/ctl.sock: address already in use; the certificate cannot be renewed without a restart';

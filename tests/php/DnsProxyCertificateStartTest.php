@@ -72,10 +72,10 @@ final class DnsProxyCertificateStartTest extends TestCase
 		$this->assertFileExists($this->certFile());
 	}
 
-	/** The timeout(1) runs of the certificate export; the start's bounded sockstat scan of Unbound's port is not one. */
+	/** Every timeout(1) run of the start except its bounded sockstat scan of Unbound's port: only the certificate export may remain. */
 	private function certificateRuns(): array
 	{
-		return array_values(array_filter($this->recorded('timeout.args'), static fn (string $args): bool => str_contains($args, ' dns_cert')));
+		return array_values(array_filter($this->recorded('timeout.args'), static fn (string $args): bool => !str_contains($args, '/sockstat ')));
 	}
 
 	public function testAFileThatIsThereIsNeverTouchedByTheStart(): void
