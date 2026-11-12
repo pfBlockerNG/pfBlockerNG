@@ -429,7 +429,7 @@ func stagedLeftover(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	keep := map[string]bool{}
-	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.sha256", ".probe"} {
+	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.sha1", ".probe"} {
 		keep[name+s] = true
 	}
 	for _, e := range entries {
