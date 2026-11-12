@@ -6248,8 +6248,9 @@ function pfb_dns_proxy_applied_status(?string $socket = NULL, float $timeout = P
 		return NULL;
 	}
 	$ip = static function (mixed $value): ?string {
-		// inet_pton() throws ValueError on NUL and '@' does not suppress it: reject NUL before any native call.
-		if (!is_string($value) || str_contains($value, "\0")) {
+		// inet_pton() throws ValueError on NUL and '@' does not suppress it: reject NUL before any native call. A zone is refused here,
+		// not left to the libc (some inet_pton() strip it).
+		if (!is_string($value) || strpbrk($value, "\0%") !== FALSE) {
 			return NULL;
 		}
 		$packed = @inet_pton(pfb_ipv4_from_mapped($value) ?? $value);
