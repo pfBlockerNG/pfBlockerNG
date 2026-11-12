@@ -4151,6 +4151,9 @@ $pfb['core_state'] = '/usr/local/etc/pfb_core';
 $pfb['core_log'] = '/var/log/pfblockerng/core.log';
 $pfb['core_pidfile'] = '/var/run/pfb_core.pid';
 $pfb['core_daemon_pidfile'] = '/var/run/pfb_core_daemon.pid';
+// issue #3913: the Outpost's push of settings/dns to Core: the revision time and hash it last got Core to hold, and why the last push failed (kept until one succeeds)
+$pfb['core_pushed'] = "{$pfb['dbdir']}/core_pushed";
+$pfb['core_push_failed'] = "{$pfb['dbdir']}/core_push_failed";
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -4458,6 +4461,15 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
 	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} </dev/null >/dev/null 2>&1
 	/usr/bin/logger -p daemon.info -t pfb_core "INFO [{$prefix}] Core API started"
+	# Push config.xml's settings to the Core just started once its socket exists (issue #3913); the start never waits on it, the tick retries a failure
+	(
+		waited=0
+		while [ ! -S {$socket} ] && [ "\${waited}" -lt 30 ]; do
+			/bin/sleep 1
+			waited=\$((waited + 1))
+		done
+		[ -S {$socket} ] && exec /usr/bin/timeout -s TERM -k 5 60 {$pfb['php']} -f /usr/local/pkg/pfblockerng/pfblockerng.inc core_push
+	) </dev/null >/dev/null 2>&1 &
 
 EOF;
 	$rc['stop']	= <<<EOF
@@ -4518,6 +4530,131 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 		return ['status' => $status, 'body' => NULL, 'error' => 'the Core API reply is not a JSON object'];
 	}
 	return ['status' => $status, 'body' => $body, 'error' => NULL];
+}
+
+/**
+ * Core's native `settings/dns` fields (docs/misc/core-api-protocol.md, issue #3913), from config.xml: each value is what
+ * pfb_unbound_python_ini() writes for it, so the in-memory config of a page that has not saved yet answers too.
+ *
+ * @return array<string, bool|int|string> the 17 fields, in the protocol's order
+ */
+function pfb_core_dns_settings(): array {
+	$on = static fn(string $key): bool => pfb_cfg_toggle_read(PfbConfig::read($key)) === PfbToggle::On;
+	$cap = (string) PfbConfig::read('dnsbl/pfb_py_cache_max');
+	$control = $on('dnsbl/pfb_control');
+	return [
+		'replyLogging'          => $on('dnsbl/pfb_py_reply'),
+		'hstsNullBlocking'      => $on('dnsbl/pfb_hsts'),
+		'tldWildcard'           => !empty(PfbConfig::read('dnsbl/tld_wildcard')),
+		'pslIncludePrivate'     => $on('dnsbl/pfb_psl_include_private'),
+		'pslAllowPrivate'       => $on('dnsbl/pfb_psl_allow_private'),
+		'pslFeedPrivatePolicy'  => PfbConfig::read('dnsbl/pfb_psl_feed_private_policy')->value,
+		'pslFeedIcannPolicy'    => PfbConfig::read('dnsbl/pfb_psl_feed_icann_policy')->value,
+		'idnMode'               => PfbConfig::read('dnsbl/pfb_idn')->value,
+		'idnBlockMalicious'     => $on('dnsbl/pfb_idn_block_malicious'),
+		'idnEscalateSuspicious' => $on('dnsbl/pfb_idn_escalate_suspicious'),
+		'decisionCacheMax'      => ctype_digit($cap) ? min(5000000, (int) $cap) : 10000,
+		'logViaWebserver'       => $on('dnsbl/pfb_py_nolog'),
+		'cnameValidation'       => $on('dnsbl/pfb_cname'),
+		'control'               => $control,
+		'controlLegacy'         => $control && $on('dnsbl/pfb_control_legacy'),
+		'regexCap'              => $on('dnsbl/pfb_regex_cap'),
+		'metricsClientIp'       => $on('gen/pfb_metrics_client_ip'),
+	];
+}
+
+/**
+ * Core's side of pfb_core_settings_push(): GetSettings, then InitializeSettings (Core not initialized) or SaveSettings (its
+ * `settings/dns` differs from $want in a field $want names). NULL when Core holds $want, else why not.
+ *
+ * @param array{dns: array<string, bool|int|string>} $want
+ */
+function pfb_core_settings_sync(callable $call, array $want): ?string {
+	$failure = static fn(array $r): string => $r['error']
+		?? "the Core API answered {$r['status']}: " . ($r['body']['error']['code'] ?? '') . ': ' . ($r['body']['error']['message'] ?? '');
+	$r = $call('GetSettings', ['projectionIds' => ['dns']]);
+	if ($r['status'] !== 200 || $r['body'] === NULL) {
+		return $failure($r);
+	}
+	$requestId = bin2hex(random_bytes(16));
+	if (empty($r['body']['initialized'])) {
+		$r = $call('InitializeSettings', ['requestId' => $requestId, 'settings' => $want]);
+	} else {
+		$held = [];
+		foreach ($r['body']['projections'] ?? [] as $projection) {
+			if (($projection['resourceId'] ?? NULL) === 'settings/dns') {
+				$held = $projection['value'] ?? [];
+			}
+		}
+		$held = array_intersect_key($held, $want['dns']);
+		$mine = $want['dns'];
+		ksort($held);
+		ksort($mine);
+		if ($held === $mine) {
+			return NULL;
+		}
+		$r = $call('SaveSettings', ['requestId' => $requestId, 'expectedRevision' => (int) ($r['body']['revision'] ?? 0), 'changes' => $want]);
+	}
+	return $r['status'] === 200 ? NULL : $failure($r);
+}
+
+/**
+ * Push config.xml's `settings/dns` values to Core (issue #3913): the Outpost is authoritative on pfSense. NULL when Core holds
+ * them, else why not. $pfb['core_pushed'] records config.xml's revision/time and the hash of the values Core holds: unforced, the
+ * recorded time makes this a no-op and a moved time with the same values only re-records, so a tick costs no Core call; $force
+ * (Core's start) always asks Core. A failure is logged once per outage and kept in $pfb['core_push_failed'] until a push
+ * succeeds; the record stays, so the next call retries.
+ *
+ * @param ?callable $call pfb_core_call() by default (a test seam)
+ */
+function pfb_core_settings_push(?callable $call = NULL, bool $force = FALSE): ?string {
+	global $pfb;
+	$want = ['dns' => pfb_core_dns_settings()];
+	$now = ['time' => (string) config_get_path('revision/time', ''), 'hash' => hash('sha256', (string) json_encode($want))];
+	$known = json_decode((string) @file_get_contents($pfb['core_pushed']), TRUE);
+	$known = is_array($known) ? $known : [];
+	$reason = NULL;
+	if ($force || ($known['time'] ?? NULL) !== $now['time']) {
+		if ($force || ($known['hash'] ?? NULL) !== $now['hash']) {
+			$reason = pfb_core_settings_sync($call ?? 'pfb_core_call', $want);
+		}
+		if ($reason === NULL) {
+			// Staged and renamed: a reader never sees a half-written record
+			$tmp = @tempnam(dirname($pfb['core_pushed']), '.pfbpush_');
+			if ($tmp !== FALSE && (@file_put_contents($tmp, json_encode($now)) === FALSE || !@rename($tmp, $pfb['core_pushed']))) {
+				@unlink($tmp);
+			}
+		}
+	}
+	if ($reason === NULL) {
+		unlink_if_exists($pfb['core_push_failed']);
+		return NULL;
+	}
+	pfb_metrics_log_once($pfb['core_push_failed'], "Core settings: the DNS settings were not pushed to pfBlockerNG Core: {$reason}\n");
+	@file_put_contents($pfb['core_push_failed'], $reason);
+	return $reason;
+}
+
+/**
+ * Core's dry run of `settings/dns` as config.xml holds it NOW (a page calls this after its in-memory writes, before write_config()).
+ * One message per fault Core refuses it for; [] when Core accepts it or cannot judge (down, no such method, an error): the page's
+ * own checks decide then, and the push after the save reports Core's state. Messages are not HTML-escaped.
+ *
+ * @param ?callable $call pfb_core_call() by default (a test seam)
+ * @return list<string>
+ */
+function pfb_core_settings_validate(?callable $call = NULL): array {
+	$call ??= 'pfb_core_call';
+	$r = $call('ValidateSettings', ['changes' => ['dns' => pfb_core_dns_settings()]]);
+	$error = $r['body']['error'] ?? [];
+	if ($r['status'] !== 400 || ($error['code'] ?? NULL) !== 'invalid_argument') {
+		return [];
+	}
+	$messages = [];
+	foreach ($error['fieldErrors'] ?? [] as $fault) {
+		$messages[] = 'pfBlockerNG Core refused the DNS settings: ' . preg_replace('/^changes\./', '', (string) ($fault['field'] ?? '')) . ': ' . ($fault['message'] ?? '');
+	}
+	return $messages ?: ['pfBlockerNG Core refused the DNS settings: ' . ($error['message'] ?? '')];
 }
 
 
@@ -7774,6 +7911,11 @@ if (isset($argv[1])) {
 	// The certificate selected on the DNS General page (dns/pfb_dns_sslcertref) for the gateway's DoT, DoH and DoQ, written where the rc script's start finds it missing
 	elseif ($argv[1] == 'dns_cert') {
 			exit(pfb_dns_proxy_certificate_refresh(TRUE) ? 0 : 1);
+	}
+
+	// The rc script's start pushes config.xml's settings to the Core it just started (issue #3913); forced: Core may have lost its store
+	elseif ($argv[1] == 'core_push') {
+			exit(pfb_core_settings_push(NULL, TRUE) === NULL ? 0 : 1);
 	}
 
 	// Whether pfb_dns_saved holds a valid Resolver snapshot (exit 0): what the rc script's start asks for a marker it was not written for

@@ -250,3 +250,11 @@ $r = pfb_core_call('GetVersion');
 object, the error envelope included. When no HTTP reply came (Core down, socket missing, timeout: connect 5 s, total
 30 s), `status` is 0 and `error` says why. Pinned by `PfbCoreCallTest`; the rc script by `PfbCoreServiceTest`; the
 server by `go/pfb_core/*_test.go`.
+
+On pfSense the Outpost (PHP) is authoritative: `config.xml` holds the settings, and `pfb_core_settings_push()` pushes
+`settings/dns` to Core after a page save, at Core's start (the rc script runs the `core_push` verb once the socket
+exists) and on each tick. A push records config.xml's `revision/time` and the hash of what Core holds in
+`/var/db/pfblockerng/core_pushed`, so an unforced push whose time is unchanged calls nothing; the verb is forced and
+always asks Core. `pfb_core_settings_validate()` is the dry run before a save: only `invalid_argument` refuses it. A
+failed push is logged once per outage and kept in `/var/db/pfblockerng/core_push_failed` until a push succeeds. Pinned by
+`CoreSettingsPushTest`.

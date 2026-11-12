@@ -7213,6 +7213,7 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  * the production SafeSearch refresher. $ss_lock_opener and $ss_lock_timeout are test seams
  * for the bounded refresh lock; defaults use fopen() and a 5-second budget. The apply
  * reconciliation callable, lock opener, and timeout are equivalent test seams.
+ * $core_push is the test seam of the settings push (NULL: pfb_core_settings_push()).
  */
 function pfblockerng_tick(
 	?array $ps_lines = NULL,
@@ -7224,7 +7225,8 @@ function pfblockerng_tick(
 	float $apply_lock_timeout = 5.0,
 	?callable $extra_runner = NULL,
 	?callable $feed_runner = NULL,
-	?callable $manual_runner = NULL
+	?callable $manual_runner = NULL,
+	?callable $core_push = NULL
 ): void
 {
 	global $pfb;
@@ -7240,6 +7242,9 @@ function pfblockerng_tick(
 
 	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies, pushed on its control socket
 	pfb_dns_proxy_certificate_sync();
+
+	// issue #3913: the catch-up of the Outpost-authoritative push of settings/dns to Core (a failed push, a restore, an HA receive), also while a pass runs
+	($core_push ?? 'pfb_core_settings_push')();
 
 	// issue #3848: a gateway stopped because no loopback port pair was free for Unbound's backend is not started by a tick that finds nothing: it
 	// looks for a pair again (the update pass's check: a holder moves Unbound and starts the gateway, no holder clears the marker). Issue #3869:
