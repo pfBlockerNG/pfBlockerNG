@@ -237,8 +237,10 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
         assert _dnsbl_log_hits(adr65_vm, domain1) == 0, f"{domain1} already in dnsbl.log before listing"
         assert _dnsbl_log_hits(adr65_vm, domain2) == 0, f"{domain2} already in dnsbl.log before listing"
 
-        # The group's counter before any block: the subject's own increment is counted from it.
-        c0 = max(_read_group_counter(adr65_vm, f"DNSBL_{spec.aliasname}")[0], 0)
+        # The group's counter before any block (-1: no row yet): the subject's own increment is counted from it.
+        c0, detail0 = _read_group_counter(adr65_vm, f"DNSBL_{spec.aliasname}")
+        assert c0 >= -1, f"could not read the DNSBL_{spec.aliasname} counter before the block: {detail0}"
+        c0 = max(c0, 0)
 
         # Real block #1 (the query subject): domain1.
         answer1 = h.dns_probe(adr65_vm, domain1)
