@@ -468,12 +468,20 @@ final class PfbDnsStatusDegradedTest extends TestCase
 
 	public function testAStatusThatClaimsNoGatewayCarriesNoDegradedPart(): void
 	{
-		// Given pfB-DNS turned on with nothing moved: no gateway is claimed
+		// Given a moved box whose gateway reports DNSBL degraded
+		$this->box();
+		$this->degrade([['part' => 'dnsbl', 'reason' => 'boot timeout']]);
 		$GLOBALS['pfb']['unbound_state'] = PfbToggle::On;
+		$this->assertSame([['part' => 'dnsbl', 'reason' => 'boot timeout']], pfb_dns_status()['degraded'], 'before: the row is listed');
+		$this->assertSame(1, $this->panel()->query("//tr[starts-with(@id, 'pfb-dns-status-degraded-')]")->length, 'before: the panel has the row');
 
+		// When the Resolver snapshot is gone: pfB-DNS is on with nothing moved, so no gateway is claimed
+		config_del_path(self::SAVED);
 		$status = pfb_dns_status();
 
+		// Then the gateway's degraded rows are not carried over: no degraded part and no row
 		$this->assertNull($status['transports']);
+		$this->assertSame([], $status['degraded'] ?? [], 'a status that claims no gateway lists no degraded part');
 		$this->assertSame(0, $this->panel($status)->query("//tr[starts-with(@id, 'pfb-dns-status-degraded-')]")->length);
 	}
 }
