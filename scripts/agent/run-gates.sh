@@ -145,8 +145,12 @@ gates_for() {
 	# issue #3513: go/** holds the Go gateway module; gate_command() resolves the toolchain.
 	# shortcut: deleting the whole module fails the `cd`; upgrade when a diff may do that.
 	# gofmt's own status is tested (a missing gofmt prints nothing); -race needs cgo and a C compiler.
-	if printf '%s\n' "$suite_files" | LC_ALL=C grep -q '^go/'; then
+	# issue #3841: go/pfb_core is the Core daemon's own module; the same chain runs there for a change under it.
+	if printf '%s\n' "$suite_files" | LC_ALL=C grep '^go/' | LC_ALL=C grep -vq '^go/pfb_core/'; then
 		out="${out}cd go/pfb_dns_gateway && gofmt_out=\$(gofmt -l .) && test -z \"\$gofmt_out\" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .${nl}"
+	fi
+	if printf '%s\n' "$suite_files" | LC_ALL=C grep -q '^go/pfb_core/'; then
+		out="${out}cd go/pfb_core && gofmt_out=\$(gofmt -l .) && test -z \"\$gofmt_out\" && go vet ./... && go test -race -count=1 ./... && CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -o /dev/null . && CGO_ENABLED=0 GOOS=freebsd GOARCH=arm64 go build -o /dev/null .${nl}"
 	fi
 	# issue #3425: ShellSpec's repository-wide guards scan more than *.sh (truncate_survival:
 	# every file under src/ scripts/ tests/; parity_guard: workflow YAML; agent_config_parity:
@@ -188,7 +192,7 @@ gate_command() {
 	'shellspec --shell $(command -v dash || command -v sh)')
 		printf '%s' 'shellspec --shell $(command -v dash || command -v sh) -o junit --reportdir "$PFB_SKIP_REPORT_DIR/shellspec" || exit $?; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/shellspec/results_junit.xml"'
 		;;
-	'cd go/pfb_dns_gateway && '*)
+	'cd go/pfb_dns_gateway && '* | 'cd go/pfb_core && '*)
 		# issue #3513: go from PATH, else $go_fallback; neither FAILS the gate, even under --allow-missing.
 		printf '%s' 'PATH="$PATH:'"$go_fallback"'"; command -v go >/dev/null 2>&1 || { echo "TOOL-MISSING: go (not on PATH, not in '"$go_fallback"')"; exit 1; }; '"$1"
 		;;

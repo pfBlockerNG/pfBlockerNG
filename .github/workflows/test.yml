@@ -475,6 +475,7 @@ jobs:
             [ "$unformatted_status" -ne 0 ] || { echo "red canary failed: an unformatted module passed the Go gate (gofmt -l lists it with exit 0; the gate must reject it)"; exit 1; }
             [ "$failing_status" -ne 0 ] || { echo "red canary failed: a module with a failing test passed the Go gate (go test must fail the gate)"; exit 1; }
             go_gate go/pfb_dns_gateway
+            go_gate go/pfb_core
         run: $CI_RUN bash -ec "$GATE"
 
   shell-tests:

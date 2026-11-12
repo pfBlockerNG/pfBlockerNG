@@ -53,6 +53,12 @@
 		<description>pfB-DNS (DNS proxy)</description>
 	</service>
 	<service>
+		<name>pfb_core</name>
+		<rcfile>pfb_core.sh</rcfile>
+		<custom_php_service_status_command>isvalidpid('/var/run/pfb_core.pid')</custom_php_service_status_command>
+		<description>pfBlockerNG Core API</description>
+	</service>
+	<service>
 		<name>pfb_filter</name>
 		<rcfile>pfb_filter.sh</rcfile>
 		<executable>php_pfb</executable>

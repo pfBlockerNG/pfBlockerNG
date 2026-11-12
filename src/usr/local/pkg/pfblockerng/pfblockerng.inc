@@ -4139,6 +4139,16 @@ if (!defined('PFB_PACKAGE_XML')) {
 const PFB_DNS_PROXY_DIR = '/usr/local/pkg/pfblockerng/dns_proxy';
 // The sha256 the gateway records of its own binary when it publishes the ready marker: the next update compares it with what the package installed.
 $pfb['dns_proxy_gateway_applied'] = $pfb['dns_proxy_ready'] . '.sha256';
+// issue #3841: pfb-core, the Core API daemon (go/pfb_core), ships once per FreeBSD architecture (bin/<target>/pfb-core) and runs as the
+// supervised rc service pfb_core (pfb_core_service()); PHP calls it with pfb_core_call(). docs/misc/core-api-protocol.md is the contract.
+const PFB_CORE_DIR = '/usr/local/pkg/pfblockerng/core';
+const PFB_CORE_RCFILE = '/usr/local/etc/rc.d/pfb_core.sh';
+const PFB_CORE_API_VERSION = 'v1';
+// Kept in $pfb like the other runtime paths, so a unit test points them at its own files. The socket's directory is root's alone (0700).
+$pfb['core_socket'] = '/var/run/pfb_core/api.sock';
+$pfb['core_log'] = '/var/log/pfblockerng/core.log';
+$pfb['core_pidfile'] = '/var/run/pfb_core.pid';
+$pfb['core_daemon_pidfile'] = '/var/run/pfb_core_daemon.pid';
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -4381,6 +4391,119 @@ function pfb_pkg_ver() {
 		}
 	}
 	return $pkg_ver;
+}
+
+
+/**
+ * (Re)generate /usr/local/etc/rc.d/pfb_core.sh, the Core API service (issue #3841). Start: keeps a pfb_core supervisor its pidfile
+ * names; otherwise runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64, by `uname -p`) under daemon(8), restarted 5 s
+ * after it exits, with its output in $pfb['core_log'] and its API on $pfb['core_socket']. No executable pfb-core for this machine
+ * starts nothing and is not a failure (a package built without it); an unknown machine fails. Stop: TERM to the supervisor and
+ * pfb-core, KILL at 5 s, each signalled only while its pidfile names it and its command line is pfb_core's.
+ *
+ * @param string $coreDir the package's core directory (a test points it at a temp directory)
+ */
+function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
+	global $pfb;
+	$prefix = LOG_PREFIX_PKG_PFBLOCKERNG;
+	$daemonpid = escapeshellarg($pfb['core_daemon_pidfile']);
+	$childpid = escapeshellarg($pfb['core_pidfile']);
+	$log = escapeshellarg($pfb['core_log']);
+	$socket = escapeshellarg($pfb['core_socket']);
+	$dir = escapeshellarg($coreDir);
+	// pgrep/pkill -f patterns (extended regular expressions): daemon(8)'s title, and pfb-core as daemon(8) runs it
+	$supervisor = escapeshellarg('^daemon: pfb_core\[');
+	$child = escapeshellarg('^' . str_replace('.', '\.', $coreDir) . '/bin/freebsd-[a-z0-9]+/pfb-core( |$)');
+
+	$rc		= array();
+	$rc['file']	= 'pfb_core.sh';
+	$rc['start']	= <<<EOF
+
+	# Already serving: keep it (the package start after the boot start must not bounce it)
+	if /bin/pgrep -F {$daemonpid} -f {$supervisor} >/dev/null 2>&1; then
+		exit 0
+	fi
+
+	machine="\$(/usr/bin/uname -p)"
+	case "\${machine}" in
+		amd64) target=freebsd-amd64 ;;
+		aarch64|arm64) target=freebsd-arm64 ;;
+		*)
+			/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: no pfb-core for machine '\${machine}' - not started"
+			exit 1
+			;;
+	esac
+	binary={$dir}"/bin/\${target}/pfb-core"
+	if [ ! -f "\${binary}" ] || [ ! -x "\${binary}" ]; then
+		/usr/bin/logger -p daemon.info -t pfb_core "INFO [{$prefix}] Core API: pfb-core is not installed for \${target} - not started"
+		exit 0
+	fi
+
+	rc_stop
+	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} </dev/null >/dev/null 2>&1
+	/usr/bin/logger -p daemon.info -t pfb_core "INFO [{$prefix}] Core API started"
+
+EOF;
+	$rc['stop']	= <<<EOF
+
+	# A pid is signalled only while its command line is pfb_core's: a stale pidfile may name a reused pid
+	/bin/pkill -TERM -F {$daemonpid} -f {$supervisor} 2>/dev/null
+	/bin/pkill -TERM -F {$childpid} -f {$child} 2>/dev/null
+	waited=0
+	while /bin/pgrep -F {$daemonpid} -f {$supervisor} >/dev/null 2>&1 || /bin/pgrep -F {$childpid} -f {$child} >/dev/null 2>&1; do
+		if [ "\${waited}" -ge 5 ]; then
+			/usr/bin/logger -p daemon.warning -t pfb_core "WARNING [{$prefix}] Core API ignored TERM for 5 s, sending KILL"
+			/bin/pkill -KILL -F {$daemonpid} -f {$supervisor} 2>/dev/null
+			/bin/pkill -KILL -F {$childpid} -f {$child} 2>/dev/null
+			break
+		fi
+		/bin/sleep 1
+		waited=\$((waited + 1))
+	done
+	/bin/rm -f {$daemonpid} {$childpid}
+
+EOF;
+	write_rcfile($rc);
+}
+
+
+/**
+ * Call a Core API method (docs/misc/core-api-protocol.md): POST /v1/<Method> on the Core's Unix socket, $params sent as one JSON object.
+ *
+ * @param array<string, mixed> $params the method's parameters (a mutating method's include its requestId)
+ * @return array{status: int, body: ?array, error: ?string} the HTTP status and the decoded reply object, the error envelope included;
+ *   status 0 when no HTTP reply came, and error set (with body NULL) whenever there is no reply object to hand back
+ */
+function pfb_core_call(string $method, array $params = [], ?string $socket = NULL): array {
+	global $pfb;
+	$payload = json_encode((object) $params);
+	if ($payload === FALSE) {
+		return ['status' => 0, 'body' => NULL, 'error' => 'the parameters cannot be encoded as JSON: ' . json_last_error_msg()];
+	}
+	$ch = curl_init('http://localhost/' . PFB_CORE_API_VERSION . '/' . rawurlencode($method));
+	curl_setopt_array($ch, [
+		CURLOPT_UNIX_SOCKET_PATH => $socket ?? $pfb['core_socket'],
+		CURLOPT_POST             => TRUE,
+		CURLOPT_POSTFIELDS       => $payload,
+		CURLOPT_HTTPHEADER       => ['Content-Type: application/json', 'Expect:'],
+		CURLOPT_RETURNTRANSFER   => TRUE,
+		CURLOPT_NOPROXY          => '*',
+		CURLOPT_CONNECTTIMEOUT   => 5,
+		CURLOPT_TIMEOUT          => 30,
+	]);
+	$reply = curl_exec($ch);
+	$status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+	$curlError = curl_error($ch);
+	curl_close($ch);
+	if (!is_string($reply)) {
+		return ['status' => 0, 'body' => NULL, 'error' => "the Core API did not answer: {$curlError}"];
+	}
+	$body = json_decode($reply, TRUE);
+	if (!is_array($body) || ($body !== [] && array_is_list($body))) {
+		return ['status' => $status, 'body' => NULL, 'error' => 'the Core API reply is not a JSON object'];
+	}
+	return ['status' => $status, 'body' => $body, 'error' => NULL];
 }
 
 
@@ -27724,6 +27847,8 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	unlink_if_exists('/usr/local/bin/php_pfb');
 	unlink_if_exists('/usr/local/sbin/clog_pfb');
 	unlink_if_exists('/usr/bin/tail_pfb');
+	stop_service('pfb_core');
+	unlink_if_exists(PFB_CORE_RCFILE);
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_filter.sh');
 	unlink_if_exists('/usr/local/etc/rc.d/pfb_dnsbl.sh');
 
