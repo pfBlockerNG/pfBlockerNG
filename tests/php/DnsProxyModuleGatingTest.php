@@ -1602,4 +1602,72 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringNotContainsString('pfb_upstream_observer.py', $this->patchedConf());
 		$this->assertStringNotContainsString('someone_elses_script', $this->patchedConf(), 'a python script that is not pfBlockerNG\'s is never kept or added to unbound.conf, whatever config.xml stores');
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #3899: the write that gives Unbound the observer, refused by config.xml
+	// -----------------------------------------------------------------------
+
+	public function testAnObserverWriteConfigXmlTakesStoresItAndMountsItsLibrariesWithoutANotice(): void
+	{
+		// Given nothing mounted, pfB-DNS on, an untouched Resolver and a config.xml that takes every write
+		$this->useMountState(FALSE);
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->configXmlOnDisk();
+
+		// When DNSBL is applied
+		pfb_unbound_python('enabled');
+
+		// Then config.xml names the observer, unbound.conf is rendered with it, its libraries are mounted and nothing is said
+		$this->assertSame('pfb_upstream_observer', $this->onDisk('unbound/python_script'));
+		$this->assertSame('pfb_upstream_observer', $this->resolverWhenConfigured()['python_script']);
+		$this->assertStringContainsString('Mounting: /usr/local/bin', $this->pfbLog());
+		$this->assertStringNotContainsString('could not be written', $this->pfbLogs());
+		$this->assertSame([], $this->notices());
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testAnObserverWriteConfigXmlRefusesIsReportedAndNothingActsOnTheUnstoredObserver(mixed $answer): void
+	{
+		// Given the same state, and a config.xml that takes the move but refuses the write that adds the observer
+		$this->useMountState(FALSE);
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->configXmlOnDisk($answer, 'Added DNSBL Unbound upstream observer');
+
+		// When DNSBL is applied
+		pfb_unbound_python('enabled');
+
+		// Then the move is stored, the observer is not: here, in config.xml, or in the unbound.conf rendered from it ...
+		$this->assertSame('lo0', $this->onDisk('unbound/active_interface'), 'the move was written');
+		$this->assertNull($this->onDisk('unbound/python_script'), 'config.xml does not name the observer');
+		$this->assertSame('', (string) config_get_path('unbound/python_script', ''), 'and this process holds what config.xml holds');
+		$this->assertArrayNotHasKey('python_script', $this->resolverWhenConfigured(), 'unbound.conf is rendered without it');
+
+		// ... Unbound loads no python, so none of its libraries are mounted ...
+		$this->assertStringNotContainsString('Mounting:', $this->pfbLog());
+
+		// ... and the refusal is logged as an error and raised as a notice
+		$this->assertStringContainsString('could not be written', (string) @file_get_contents($GLOBALS['pfb']['errlog']));
+		$this->assertCount(1, array_filter($this->notices(), static fn(string $n): bool => str_contains($n, 'upstream observer')), 'one notice names the observer');
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testAnObserverWriteConfigXmlRefusesKeepsTheObserverOutOfThePatchedUnboundConf(mixed $answer): void
+	{
+		// Given a conf without python, pfB-DNS on, an untouched Resolver and a config.xml that refuses the write that adds the observer
+		$this->writeUnboundConf(self::CONF_WITHOUT_MODULE);
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->configXmlOnDisk($answer, 'Added DNSBL Unbound upstream observer');
+		pfb_unbound_python('enabled');
+		$this->assertNull($this->onDisk('unbound/python_script'), 'before: config.xml does not name the observer');
+
+		// When the apply patches unbound.conf, as it does right after
+		pfb_unbound_dnsbl('enabled');
+
+		// Then the patched conf loads no python either: Unbound is not started with a script config.xml lacks and nothing mounted for
+		$this->assertStringNotContainsString('python-script', $this->patchedConf());
+		$this->assertStringNotContainsString('module-config: "python', $this->patchedConf());
+	}
 }

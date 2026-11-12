@@ -14314,7 +14314,8 @@ function pfb_unbound_dnsbl($mode) {
 	// upstream observer, in every mode (inert unless the proxy listens for it; it is what makes pfSense run the boot hook), else
 	// nothing. pfb_unbound_python() decides the same way.
 	$owned = pfb_dns_proxy_owns_resolver();
-	$script = $owned ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL;
+	// issue #3899: nor while config.xml refused the observer (pfb_unbound_python()): nothing mounted for it
+	$script = ($owned && empty($pfb['python_observer_failed'])) ? PFB_DNS_PROXY_OBSERVER . '.py' : NULL;
 	// config.xml still names our script when its removal was refused (pfb_unbound_python()): unbound.conf and the staged files keep it,
 	// while the script is in the chroot. Unbound does not start from a conf whose python-script is missing (a RAM-disk reboot loses
 	// pfb_unbound.py, which no package stages any more), and pfSense leaves such a script out of the conf it generates too.
@@ -18030,7 +18031,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	config_read_file(FALSE, TRUE);
 
 	$pfbpython = FALSE;
-	$pfb['python_removal_failed'] = FALSE;
+	$pfb['python_removal_failed'] = $pfb['python_observer_failed'] = FALSE;
 
 	// issue #3515: pfB-DNS asks for the Resolver whenever it is wanted, DNSBL on or off ($mode only says whether DNSBL is).
 	// issue #3770: Unbound never loads the DNSBL module (the proxy hosts it). While the proxy owns the Resolver (a valid snapshot,
@@ -18080,10 +18081,17 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 			config_set_path('unbound/python_order', 'pre_validator');
 			config_set_path('unbound/python_script', $script);
 
-			$pfbpython = TRUE;
 			$log = 'Added DNSBL Unbound upstream observer settings';
 			pfb_logger("\n{$log}", 1);
-			write_config("pfBlockerNG: {$log}");
+			if (pfb_dns_config_write_failed(write_config("pfBlockerNG: {$log}"))) {
+				// issue #3899: this process holds config.xml again, so unbound.conf is rendered without the observer and nothing mounts for it
+				$script = NULL;
+				$pfb['python_observer_failed'] = TRUE;
+				pfb_dns_proxy_notify('pfBlockerNG DNS Proxy', 'DNS proxy: the DNS Resolver was not given the pfBlockerNG upstream observer because config.xml ' .
+				    'could not be written; the next apply retries.', '/services_unbound.php');
+			} else {
+				$pfbpython = TRUE;
+			}
 		}
 	}
 
@@ -18147,7 +18155,7 @@ function pfb_unbound_python($mode, ?bool $dns_wanted = NULL) {
 	foreach (array('/bin', '/lib') as $dir) {
 		$validate = exec("/sbin/mount 2>/dev/null | {$pfb['grep']} " . escapeshellarg("{$pfb['dnsbldir']}{$base_py}{$dir}") . " 2>&1");
 
-		if ($owned && empty($validate)) {
+		if ($script !== NULL && empty($validate)) {
 			if (!is_dir("{$pfb['dnsbldir']}{$base_py}{$dir}")) {
 				$log .= "\n  Creating: {$pfb['dnsbldir']}{$base_py}{$dir}";
 				safe_mkdir("{$pfb['dnsbldir']}{$base_py}{$dir}");
