@@ -1,7 +1,7 @@
 package feedfetch
 
 import (
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -50,7 +50,8 @@ func fileDigest(path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	h := sha256.New()
+	// Content-change detection only: the feed server controls the bytes, so collision resistance is no security property.
+	h := sha1.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
@@ -80,13 +81,13 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 	}
 	published := feed.path(".orig")
 	// A digest that outlived its copy would let an upstream revert to those older bytes read as unchanged.
-	if err := os.Remove(feed.path(".orig.sha256")); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(feed.path(".orig.sha1")); err != nil && !os.IsNotExist(err) {
 		return errors.New("published digest could not be replaced")
 	}
 	if err := os.Rename(staged, published); err != nil {
 		return errors.New("published copy could not be replaced")
 	}
-	os.WriteFile(feed.path(".orig.sha256"), []byte(digest), 0o600)
+	os.WriteFile(feed.path(".orig.sha1"), []byte(digest), 0o600)
 	if !lastMod.IsZero() {
 		os.Chtimes(published, lastMod, lastMod)
 	}
@@ -96,7 +97,7 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 // localDecision compares a local source with the published copy's digest (pfb_local_feed_changed); without a recorded
 // digest the published copy itself is hashed, and any read failure means changed.
 func localDecision(path string, feed Feed) Decision {
-	baseline, err := os.ReadFile(feed.path(".orig.sha256"))
+	baseline, err := os.ReadFile(feed.path(".orig.sha1"))
 	if err != nil || len(baseline) == 0 {
 		d, err := fileDigest(feed.path(".orig"))
 		if err != nil {
