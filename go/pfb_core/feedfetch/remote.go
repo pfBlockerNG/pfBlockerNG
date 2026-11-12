@@ -157,6 +157,7 @@ func (f *Fetcher) transport(req Request, pin netip.Addr, flex bool) *http.Transp
 	}
 	tlsConf := &tls.Config{RootCAs: f.RootCAs, MinVersion: tls.VersionTLS12}
 	if flex {
+		// Opt-in per feed, only after a failed verified attempt: pfb_download_fetch()'s Flex (pfblockerng.inc:22489-22496).
 		tlsConf.InsecureSkipVerify, tlsConf.MinVersion = true, tls.VersionTLS10
 	}
 	tr := &http.Transport{
