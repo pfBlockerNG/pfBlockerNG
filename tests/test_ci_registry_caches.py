@@ -65,15 +65,22 @@ def _cache_gaps(steps: list[Step], fetching: int, path: str, lock: str) -> list[
     return gaps
 
 
+_NPX = r"\bnpx\b"
+
+
 def test_the_markdownlint_job_runs_the_baked_binary_not_npx() -> None:
     steps = _steps("test.yml", "markdownlint")
 
     assert _first_running(steps, r"\bmarkdownlint-cli2\b") is not None, (
         "the markdownlint job must run markdownlint-cli2"
     )
-    assert _first_running(steps, r"\bnpx\b") is None, (
-        "the markdownlint job fetches markdownlint-cli2 with npx on every run"
-    )
+    assert _first_running(steps, _NPX) is None, "the markdownlint job fetches markdownlint-cli2 with npx on every run"
+
+
+def test_the_npx_check_rejects_an_npx_run_and_accepts_the_baked_binary() -> None:
+    """Vacuity guard for the check above."""
+    assert _first_running([{"run": 'npx --yes "markdownlint-cli2@0.23.2"'}], _NPX) == 0
+    assert _first_running([{"run": "markdownlint-cli2"}], _NPX) is None
 
 
 def test_the_webassets_job_caches_the_npm_downloads_before_its_first_npm_step() -> None:

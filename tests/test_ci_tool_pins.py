@@ -263,23 +263,39 @@ def test_the_baked_playwright_matches_the_locked_one() -> None:
     assert baked == locked, f"the Dockerfile bakes playwright {baked}, uv.lock locks {locked}"
 
 
-def test_no_workflow_downloads_a_playwright_browser() -> None:
-    """The Chromium for the browser tier comes only from the ci-vm image. A workflow or composite
-    action that runs `playwright install` fetches a browser on every run, or no-ops while the
-    baked build matches, so the step hides a drift the pin test is there to catch."""
-    actions = ROOT / ".github/actions"
-    paths = sorted([*_WORKFLOWS.glob("*.yml"), *_WORKFLOWS.glob("*.yaml"), *actions.glob("**/action.y*ml")])
-    assert [path for path in paths if path.parent == _WORKFLOWS], "the scan read no workflow file"
-    offenders = [
-        f"{path.relative_to(ROOT)}:{line_no}"
+def _playwright_installs(root: Path) -> list[str]:
+    """`file:line` of every `playwright install` in root's workflows and composite actions."""
+    workflows, actions = root / ".github/workflows", root / ".github/actions"
+    paths = sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml"), *actions.glob("**/action.y*ml")])
+    assert [path for path in paths if path.parent == workflows], "the scan read no workflow file"
+    return [
+        f"{path.relative_to(root)}:{line_no}"
         for path in paths
         for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if re.search(r"\bplaywright\s+install\b", line)
     ]
 
+
+def test_no_workflow_downloads_a_playwright_browser() -> None:
+    """The Chromium for the browser tier comes only from the ci-vm image. A workflow or composite
+    action that runs `playwright install` fetches a browser on every run, or no-ops while the
+    baked build matches, so the step hides a drift the pin test is there to catch."""
+    offenders = _playwright_installs(ROOT)
+
     assert not offenders, (
         f"the browser comes only from the ci-vm image, but these run `playwright install`: {offenders}"
     )
+
+
+def test_the_playwright_scan_reports_a_workflow_and_a_composite_action(tmp_path: Path) -> None:
+    """Vacuity guard: both places a job can run the install are reported, a clean file is not."""
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/actions/ui").mkdir(parents=True)
+    (tmp_path / ".github/workflows/clean.yml").write_text("steps:\n  - run: uv sync\n", encoding="utf-8")
+    (tmp_path / ".github/workflows/w.yml").write_text("steps:\n  - run: uv run playwright install chromium\n")
+    (tmp_path / ".github/actions/ui/action.yml").write_text("runs:\n  steps:\n    - run: playwright  install\n")
+
+    assert _playwright_installs(tmp_path) == [".github/actions/ui/action.yml:3", ".github/workflows/w.yml:2"]
 
 
 def _image_pin(name: str) -> str:
