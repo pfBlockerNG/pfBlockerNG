@@ -63,7 +63,7 @@ function pfb_python_mount($python_mode, $verbose, $type_mount, $type_umount, $ty
 	// Force Resolver path
 	$unbound_chroot_path = '/var/unbound';
 
-	exec("/sbin/mount | /usr/bin/grep '{$grep_string}' 2>&1", $validate, $retval);
+	exec("/sbin/mount 2>/dev/null | /usr/bin/grep '{$grep_string}' 2>&1", $validate, $retval);
 
 	// Temporary workaround for Redmine: https://redmine.pfsense.org/issues/11456
 	if ($type_umount == 'devfs' && is_array($validate) && count($validate) > 1) {
