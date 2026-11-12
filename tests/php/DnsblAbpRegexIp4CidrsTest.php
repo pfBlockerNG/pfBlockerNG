@@ -13,9 +13,8 @@ require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
  * it matches to the DNSBL IP table, as merged CIDRs (no wider than /16, at most 256 per rule). The rule is
  * still staged for Python byte-identical.
  *
- * The helper rows call pfb_dnsbl_abp_regex_ip4_cidrs() directly; the parse-loop rows run the ABP region
- * eval-extracted verbatim from the REAL pfblockerng_apply.inc (house precedent:
- * tests/php/DnsblNumericHostTest.php) and never name the helper, so they pin the wiring by behaviour.
+ * The helper rows call pfb_dnsbl_abp_regex_ip4_cidrs() directly; the parse-loop rows run the production per-line
+ * parser, pfb_dnsbl_parse_line(), and never name the helper, so they pin the wiring by behaviour.
  *
  * The oracle rows are the 51 IPv4-shaped regex lines of DandelionSprout's Anti-Malware List for AdGuard Home,
  * version 19September2026v1 (the provider key is the list line number): 50 qualify, line 13150 does not.
@@ -25,29 +24,10 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 {
 	use PfbNoPhpWarningTrait;
 
-	private static string $abpRegion;
-
 	private string $failLog = '';
 	private string $mainLog = '';
 	private mixed $savedPfb = NULL;
 	private string|false $savedLimit = FALSE;
-
-	public static function setUpBeforeClass(): void
-	{
-		$src = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
-		}
-		if (!preg_match(
-			'/(\t+if \(\$pfb\[\'dnsbl_ip\'\] != \'Disabled\'\) \{\n\t+\$abp_ip = pfb_dnsbl_abp_extract_ip\(\$line\);' .
-			'.*?PfbDnsblRowKind::Abp, \$line\);\n\t+@fwrite\(\$dhandle, \$domain_data\);\n\t+continue;\n\t+\})/s',
-			$src,
-			$abp
-		)) {
-			throw new RuntimeException('test bootstrap: DNSBL ABP-anchor region not found');
-		}
-		self::$abpRegion = "foreach ([0] as \$pfb_test_iter) {\n{$abp[1]}\n}\n";
-	}
 
 	protected function setUp(): void
 	{
@@ -68,51 +48,38 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 	}
 
 	/**
-	 * Run the extracted ABP region over one (already scrubbed) feed line.
+	 * Run the production per-line parser over one feed line.
 	 *
 	 * @return array{rows: list<array{0: string, 1: string}>, ip4: list<string>, ip6: list<string>, ipcount: int, updateip: mixed, warnings: list<string>}
 	 */
 	private function runRegion(string $feedLine, bool $custom = TRUE, PfbToggle $supp = PfbToggle::Off,
 		string $dnsblIp = 'Deny_Both'): array
 	{
-		$pfb = [
-			'dnsbl_lenient'   => PfbToggle::On,
-			'dnsbl_parse_err' => $this->failLog,
-			'dnsbl_ip'        => $dnsblIp,
-			'supp'            => $supp,
-			'log'             => $this->mainLog,
+		$GLOBALS['pfb'] = ['supp' => $supp, 'log' => $this->mainLog];
+		$state = pfb_dnsbl_parse_state();
+		$ctx = [
+			'header'    => 'testfeed',
+			'custom'    => $custom,
+			'dnsbl_ip'  => $dnsblIp !== 'Disabled',
+			'lenient'   => TRUE,
+			'parse_err' => $this->failLog,
 		];
-		$GLOBALS['pfb'] = $pfb;
-		$line = $feedLine;
-		$oline = $feedLine;
-		$header = 'testfeed';
-		$dnsbl_lineno = 1;
-		$domain_data_ip = [];
-		$domain_data_ip6 = [];
-		$ipcount = 0;
-		$dhandle = fopen('php://memory', 'w+');
 		$warnings = [];
 		set_error_handler(static function (int $no, string $str) use (&$warnings): bool {
 			$warnings[] = $str;
 			return TRUE;
 		});
 		try {
-			eval(self::$abpRegion);
+			$res = pfb_dnsbl_parse_line($feedLine, 1, $state, $ctx);
 		} finally {
 			restore_error_handler();
 		}
-		rewind($dhandle);
-		$rows = [];
-		while (($row = fgets($dhandle)) !== FALSE) {
-			$rows[] = json_decode($row, TRUE, 512, JSON_THROW_ON_ERROR);
-		}
-		fclose($dhandle);
 		return [
-			'rows'     => $rows,
-			'ip4'      => $domain_data_ip,
-			'ip6'      => $domain_data_ip6,
-			'ipcount'  => $ipcount,
-			'updateip' => $pfb['updateip'] ?? FALSE,
+			'rows'     => $res['row'] === NULL ? [] : [json_decode($res['row'], TRUE, 512, JSON_THROW_ON_ERROR)],
+			'ip4'      => $state['ip4'],
+			'ip6'      => $state['ip6'],
+			'ipcount'  => count($state['ip4']) + count($state['ip6']),
+			'updateip' => $state['updateip'],
 			'warnings' => $warnings,
 		];
 	}
@@ -518,6 +485,18 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 		$custom = $opts['custom'] ?? TRUE;
 		$supp = $opts['supp'] ?? PfbToggle::Off;
 		$expected = $opts['ip4'] ?? self::collected($cidrs);
+		$scrubbed = pfb_dnsbl_scrub_line($line);
+		if ($scrubbed !== $line) {
+			// The loop scrubs the line before it judges the rule, so a line ending is never part of the pattern.
+			$this->assertSame($this->runRegion($scrubbed, $custom, $supp), $this->runRegion($line, $custom, $supp));
+			return;
+		}
+		if (!pfb_dnsbl_is_abp_rule_line($line)) {
+			// Not a rule: the rest of the parser handles the line; the regex step must add nothing.
+			$this->assertSame([], $expected);
+			$this->assertSame([], $this->helper($line));
+			return;
+		}
 		$out = $this->runRegion($line, $custom, $supp);
 		$this->assertSame([], $out['warnings']);
 		$this->assertSame([], $out['ip6']);

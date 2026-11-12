@@ -236,7 +236,7 @@ final class ListScriptExitStatusTest extends TestCase
 		$dnsbl_loop  = 'if (($dhandle = @fopen("{$pfbfolder}/{$header}.bk", \'w\')) !== FALSE) {';
 		$dnsbl_end   = 'if (!empty($domain_data)) {';
 		$dnsbl_stage = $this->applyScope($source, $dnsbl_loop, $dnsbl_end);
-		$dnsbl_post  = $this->applyScope($source, 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {', 'if (isset($csvline)) {');
+		$dnsbl_post  = $this->applyScope($source, 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {', 'if (!empty($domain_data_ip)) {');
 		$ip_pre      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', 'pfb_ip_script_failure_continue($alias,');
 		$ip_stage    = $this->applyScope($source, '$file_chk = pfb_ip_script_probe_staged(', 'if (!$custom && $file_chk == 0 && pfb_is_empty($ip_data)) {');
 		$ip_post     = $this->applyScope($source, 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {', '$file_chk = pfb_ip_script_probe_staged(');

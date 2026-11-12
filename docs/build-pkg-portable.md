@@ -304,8 +304,11 @@ marker is ever published, and the activation's readiness wait fails with the Res
 
 **pfb-core** (issue #3841, the Core API daemon). A source that also carries `go/pfb_core` gets it
 built the same way, by the same helper, into `freebsd-<arch>/pfb-core` beside `pfb-dns`; the helper
-records it under `pfb_core` and refuses a Core module with a `require` or a `vendor/` of its own (Core
-builds from the standard library alone, so the go recipe's vendor tree is the gateway's only). A recipe
+records it under `pfb_core`. Core may require `golang.org/x/net` and `golang.org/x/text` at exactly the
+versions the gateway's `go.mod` requires; the helper builds it from a scratch copy whose `vendor/` is cut from
+the gateway's (those modules' packages, licenses and `modules.txt` sections), so the go recipe's vendor tree
+stays the gateway's only. Any other `require`, a `replace`, a `vendor/` of Core's own, or a package the
+gateway's vendor tree lacks fails the build. A recipe
 without `do-build` has the builder stage it at `/usr/local/pkg/pfblockerng/core/bin/freebsd-<arch>/pfb-core`,
 mode `0555`. The go recipe ships it only when the port's `do-install` installs it and its
 `NO_ARCH_IGNORE` names it (pfBlockerNG/FreeBSD-ports, nightly); its `do-build` builds it either way. The rc script `pfb_core.sh` picks

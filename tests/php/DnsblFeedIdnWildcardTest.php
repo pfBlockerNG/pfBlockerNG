@@ -14,40 +14,12 @@ use PHPUnit\Framework\TestCase;
  * conversion must preserve the leading dot so the existing trim() reduces the
  * line to its bare domain.
  *
- * The step lives deep inside sync_package_pfblockerng()'s feed loop and is not
- * unit-reachable, so it is eval-extracted verbatim from the REAL source (house
- * precedent: tests/php/CategoryEditPostGuardTest.php).
+ * The step is part of the production per-line parser, pfb_dnsbl_parse_line(): the
+ * surviving line is the domain of the row it writes.
  */
 final class DnsblFeedIdnWildcardTest extends TestCase
 {
-	private static string $region;
-
 	private string $failLog = '';
-
-	public static function setUpBeforeClass(): void
-	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
-		$src = file_get_contents($path);
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
-		}
-		if (!preg_match(
-			'/((?:\t+if \(!empty\(\$line\) && !ctype_print\(\$line\)\) \{).*?\$line = trim\(\$line, \'\.\'\);)/s',
-			$src,
-			$m
-		)) {
-			throw new RuntimeException('test bootstrap: DNSBL feed IDN region not found');
-		}
-		// The region uses `continue` to drop a line; wrap it in a loop of its
-		// own so that keeps working inside eval().
-		self::$region = "foreach ([0] as \$pfb_test_iter) {\n{$m[1]}\n\$pfb_test_kept = TRUE;\n}\n";
-	}
-
-	public function testExtractionStartsAtExecutableCodeNotProductionComment(): void
-	{
-		$this->assertStringContainsString("if (!empty(\$line) && !ctype_print(\$line))", self::$region);
-		$this->assertStringNotContainsString('Convert IDN (Unicode domains)', self::$region);
-	}
 
 	protected function setUp(): void
 	{
@@ -61,10 +33,10 @@ final class DnsblFeedIdnWildcardTest extends TestCase
 	}
 
 	/**
-	 * Run the extracted step over one feed line.
+	 * Run the production per-line parser over one feed line.
 	 *
 	 * @return array{0: ?string, 1: string} the surviving line (NULL when the
-	 *         step dropped it) and the parse-failure log contents.
+	 *         parser dropped it) and the parse-failure log contents.
 	 *
 	 * The step is gated on !ctype_print(), which is locale-sensitive; pfSense's
 	 * PHP runs under the C locale (high bytes non-printable), so pin that to
@@ -72,22 +44,19 @@ final class DnsblFeedIdnWildcardTest extends TestCase
 	 */
 	private function convertFeedLine(string $feedLine): array
 	{
-		$line = $feedLine;
-		$oline = $feedLine;
-		$header = 'testfeed';
-		$dnsbl_lineno = 1;
-		$pfb = ['dnsbl_parse_err' => $this->failLog];
-		$pfb_test_kept = FALSE;
+		$state = pfb_dnsbl_parse_state();
+		$ctx = ['header' => 'testfeed', 'custom' => FALSE, 'dnsbl_ip' => FALSE, 'lenient' => TRUE, 'parse_err' => $this->failLog];
 
 		$prev = setlocale(LC_CTYPE, '0');
 		setlocale(LC_CTYPE, 'C');
 		try {
-			eval(self::$region);
+			$res = pfb_dnsbl_parse_line($feedLine, 1, $state, $ctx);
 		} finally {
 			setlocale(LC_CTYPE, $prev);
 		}
 
-		return [$pfb_test_kept ? $line : NULL, (string) file_get_contents($this->failLog)];
+		$line = $res['row'] === NULL ? NULL : json_decode($res['row'], TRUE, 512, JSON_THROW_ON_ERROR)[1];
+		return [$line, (string) file_get_contents($this->failLog)];
 	}
 
 	public function testWildcardIdnFeedLineConvertsToItsBareDomain(): void

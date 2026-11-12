@@ -15203,7 +15203,7 @@ function pfb_dnsbl_hash_line_classify(string $line): array {
 // collected as its IPv4 range, any other v6 CIDR is sanitized, and a bare v6 stays raw.
 // $guard_value is the family-check target (equal to
 // $candidate_value at two sites; a distinct CSV column at the pon-feed CSV site).
-// $pfb['updateip']/$ipcount and any 'continue' differ per call site and stay there;
+// $state['updateip'] and the no-row return differ per call site and stay there;
 // this returns TRUE iff an IP was appended.
 function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value, bool $custom, array &$domain_data_ip, array &$domain_data_ip6): bool {
 	$is_cidr = str_contains($candidate_value, '/');
@@ -15248,7 +15248,7 @@ function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value,
 // the download/parse loop's `if ($csv_parser) { ... }` block (mirrors
 // pfb_dnsbl_extract_host()'s sentinel-action pattern). $csv_parser=FALSE is a pure
 // passthrough (nothing ran in the original block either). Every `continue 2` site
-// becomes action='skip' -- the caller's own `continue` replaces it, same as the
+// becomes action='skip' -- pfb_dnsbl_parse_line()'s no-row return replaces it, same as the
 // fail-path (pfb_parse_fail_log() moved in here, mirroring pfb_dnsbl_scheme_line()'s
 // own logging inside pfb_dnsbl_extract_host()).
 function pfb_dnsbl_csv_extract(string $line, array $csvline, string $csv_type, bool $csv_parser,

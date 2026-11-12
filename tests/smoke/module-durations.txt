@@ -333,6 +333,10 @@ test_smoke_download_loop.py::test_710_dnsblip_auto_rule_keeps_configured_invert 
 test_smoke_download_loop.py::test_712_dnsbl_source_interface_used_on_download 15.73
 test_smoke_feed_literal_host.py 15.89
 test_smoke_feed_literal_host.py::test_feed_literal_host_refused_then_canonical_loads 15.89
+test_smoke_feedparse_corpus.py 82.87
+test_smoke_feedparse_corpus.py::test_normalize_corpus_matches_the_appliance 66.11
+test_smoke_feedparse_corpus.py::test_dnsbl_corpus_matches_the_appliance 10.63
+test_smoke_feedparse_corpus.py::test_ip_corpus_matches_the_appliance 6.13
 test_smoke_feeds.py 540.75
 test_smoke_feeds.py::test_abp_bom_header_still_detected 3.11
 test_smoke_feeds.py::test_abp_perline_detection_in_plain_feed 3.61

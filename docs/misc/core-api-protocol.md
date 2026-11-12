@@ -189,9 +189,10 @@ pfb-dns ticket decides it.
   3 s) and removes its socket.
 - **Package lifecycle.** The install and every upgrade regenerate the script and restart the service. pfSense starts it at
   boot with the package's services. A removal stops it and deletes the script.
-- **Paths.** Core reads every path from a flag. It names no pfSense path and imports nothing but the standard library and
-  its own packages. `go/pfb_core/boundary_test.go` enforces this, build-constrained files included, and fails on a
-  violation. The CI Go gate (`test.yml` `go-quality`, `scripts/agent/run-gates.sh`) runs it.
+- **Paths.** Core reads every path from a flag. It names no pfSense path and imports nothing but the standard library, its
+  own packages and `golang.org/x/net` and `golang.org/x/text` (the feed parser's UTS #46 conversion, pinned in `go.mod` to the
+  versions of `go/pfb_dns_gateway`). `go/pfb_core/boundary_test.go` enforces this, build-constrained files included, and fails
+  on a violation. The CI Go gate (`test.yml` `go-quality`, `scripts/agent/run-gates.sh`) runs it.
 
 Log lines (stderr): `serving API v1 on <socket> for uid <uid>, clients [<uids>]` once it listens; `refused a caller of uid
 <uid>: ...` per refused request; `<Method> failed: ...` for an internal error; `stopped` after a clean stop.

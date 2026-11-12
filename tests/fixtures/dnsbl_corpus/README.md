@@ -14,8 +14,8 @@ the ADR's enumerated delta table (D1-D5) — a row whose delta has already lande
   `{"kind":"domain","domain":...,"log":...,"feed":...,"group":...}` and ABP/ADR-21 anchors
   use `{"kind":"abp","raw":...}`. Issue #1177 changed current writers to compact tagged arrays,
   but the reader deliberately retains these fixtures as its shipped-object compatibility corpus.
-  The download loop itself has no off-appliance driver (ADR.md §6 Phase 1); live smoke rows pin
-  the current raw-feed-to-`.txt` output.
+  The loop's per-line body is `pfb_dnsbl_parse_line()`, pinned line by line by
+  `go/pfb_core/feedparse/testdata/dnsbl.json`; live smoke rows pin the whole raw-feed-to-`.txt` output.
 - `raw/<header>.raw` — the **golden** per-feed `.raw` that `pfb_unbound_python_sources()`
   produces from the matching `txt/<header>.txt`, captured by actually running the real
   function once (not hand-derived) so the PHPUnit oracle (re-running the function) and the
@@ -32,14 +32,12 @@ files named by the manifest's `feeds[].raw` rows from
 
 ## What the corpus is NOT
 
-- **Not a loop-level oracle.** The DNSBL download loop
-  (`sync_package_pfblockerng()`) has no off-appliance driver; this corpus pins the
+- **Not a loop-level oracle.** The raw-feed -> row transform is pinned by
+  `go/pfb_core/feedparse/testdata/dnsbl.json` (`pfb_dnsbl_parse_line()`); this corpus pins the
   **manifest-writer** (`pfb_unbound_python_sources()`) and **Go build** (`dnsblBuildFromManifest`
   with `parseEntry`/`parseAbp` in `go/pfb_dns_gateway/decider`) surfaces downstream of
   it, plus the **TLD-Wildcard classification** pass (`tld/tld_master.txt`, read by the Go
-  oracle generator -- ADR-65 moved classification out of PHP's `tld_analysis()` entirely). The
-  loop's own raw-feed -> `.txt` transform is verified live (deferred smoke rows, listed in the
-  Phase-1 handoff).
+  oracle generator -- ADR-65 moved classification out of PHP's `tld_analysis()` entirely).
 - **Not shipped.** `tests/` is dev-only; release archives contain `src/` only.
 
 Consumed by `tests/php/Adr62DnsblCorpusManifestTest.php` and by the Go build tests in
