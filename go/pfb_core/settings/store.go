@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -19,6 +20,9 @@ const storeFile = "settings.json"
 
 // beforeRename runs between writing the new document and renaming it into place: a test kills the process there.
 var beforeRename func()
+
+// syncDir syncs the state directory after the rename (a test makes it fail).
+var syncDir = (*os.File).Sync
 
 // FieldError names one field at fault: "<projection>.<field>", a projection id, or a parameter.
 type FieldError struct {
@@ -106,14 +110,22 @@ func Open(dir string, schema Schema) (*Store, error) {
 	if err := dec.Decode(&stored); err != nil {
 		return nil, fmt.Errorf("%s: %w", storeFile, err)
 	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%s: data after its document", storeFile)
+	}
 	if stored.Format != 1 || stored.Revision == 0 {
 		return nil, fmt.Errorf("%s: format %d, revision %d: not a store this Core reads", storeFile, stored.Format, stored.Revision)
 	}
 	doc := &document{Format: 1, Revision: stored.Revision, Projections: map[string]*projectionState{}}
+	// A projection or field the store does not hold yet (the schema grew) is its default; one this schema does not
+	// know (it shrank) refuses the start, since dropping a stored setting needs a migration.
 	for _, p := range schema.Projections {
 		sp, ok := stored.Projections[p.ID]
-		if !ok || sp.Generation == 0 {
-			return nil, fmt.Errorf("%s: no projection %s", storeFile, p.ID)
+		if !ok {
+			sp.Generation = 1
+		}
+		if sp.Generation == 0 {
+			return nil, fmt.Errorf("%s: projection %s has generation 0", storeFile, p.ID)
 		}
 		values, errs := apply(p, defaults(p), sp.Values, p.ID)
 		if errs != nil {
@@ -121,8 +133,10 @@ func Open(dir string, schema Schema) (*Store, error) {
 		}
 		doc.Projections[p.ID] = &projectionState{Generation: sp.Generation, Values: values}
 	}
-	if len(stored.Projections) != len(schema.Projections) {
-		return nil, fmt.Errorf("%s: it holds a projection this Core does not know", storeFile)
+	for id := range stored.Projections {
+		if _, ok := doc.Projections[id]; !ok {
+			return nil, fmt.Errorf("%s: it holds projection %s, which this Core does not know", storeFile, id)
+		}
 	}
 	s.doc = doc
 	return s, nil
@@ -172,7 +186,7 @@ func (s *Store) read(p Projection) ProjectionValue {
 	value := maps.Clone(ps.Values)
 	for _, f := range p.Fields {
 		if f.Secret {
-			value[f.Name] = map[string]bool{"present": ps.Values[f.Name] != ""}
+			value[f.Name] = map[string]bool{"present": ps.Values[f.Name] != f.Default}
 		}
 	}
 	return ProjectionValue{ResourceID: "settings/" + p.ID, Generation: ps.Generation, Value: value}
@@ -197,10 +211,9 @@ func (s *Store) Initialize(settings map[string]map[string]json.RawMessage) (Resu
 	if errs != nil {
 		return Result{}, &ValidationError{Fields: errs}
 	}
-	if err := s.persist(doc); err != nil {
+	if err := s.commit(doc); err != nil {
 		return Result{}, err
 	}
-	s.doc = doc
 	res := Result{Revision: 1}
 	for _, p := range s.schema.Projections {
 		res.Projections = append(res.Projections, s.read(p))
@@ -239,10 +252,9 @@ func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMess
 	if errs != nil {
 		return Result{}, &ValidationError{Fields: errs}
 	}
-	if err := s.persist(doc); err != nil {
+	if err := s.commit(doc); err != nil {
 		return Result{}, err
 	}
-	s.doc = doc
 	res := Result{Revision: doc.Revision, Projections: []ProjectionValue{}}
 	for _, p := range changed {
 		res.Projections = append(res.Projections, s.read(p))
@@ -311,8 +323,11 @@ func decode(f Field, raw json.RawMessage) (any, error) {
 		if json.Unmarshal(raw, &n) != nil {
 			return nil, errors.New("must be a whole number")
 		}
-		if (f.Min != nil && n < *f.Min) || (f.Max != nil && n > *f.Max) {
-			return nil, fmt.Errorf("must be between %d and %d", *f.Min, *f.Max)
+		if f.Min != nil && n < *f.Min {
+			return nil, fmt.Errorf("must be at least %d", *f.Min)
+		}
+		if f.Max != nil && n > *f.Max {
+			return nil, fmt.Errorf("must be at most %d", *f.Max)
 		}
 		return n, nil
 	case TypeEnum, TypeString:
@@ -328,8 +343,9 @@ func decode(f Field, raw json.RawMessage) (any, error) {
 	return nil, fmt.Errorf("field type %q is not supported", f.Type)
 }
 
-// persist writes doc as the store: the new file whole and synced, then renamed over the old one, then the directory synced.
-func (s *Store) persist(doc *document) error {
+// commit writes doc as the store: the new file whole and synced, then renamed over the old one, then the directory synced.
+// From the rename on, doc is the store, so it is served even when the directory sync then fails (that error is returned).
+func (s *Store) commit(doc *document) error {
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return err
@@ -355,10 +371,11 @@ func (s *Store) persist(doc *document) error {
 	if err := os.Rename(path+".tmp", path); err != nil {
 		return err
 	}
+	s.doc = doc
 	d, err := os.Open(s.dir)
 	if err != nil {
 		return err
 	}
 	defer d.Close()
-	return d.Sync()
+	return syncDir(d)
 }

@@ -64,6 +64,10 @@ yet.
 - **Store.** One document, `settings.json`, in `--state-dir` (0600, in a 0700 directory). A save writes
   `settings.json.tmp`, syncs it, renames it into place and syncs the directory, so a crash leaves the previous
   revision readable. A store file Core cannot read stops the start; Core never comes up uninitialized over it.
+- **Schema growth.** A projection or field the store does not hold yet reads as its default; a new projection starts at
+  generation 1. A stored projection or field the schema no longer has stops the start: removing one needs a migration.
+- **Replay and restarts.** The `requestId` memory is the process's own. A retry after a restart gets `conflict` (the
+  revision moved, or the settings are initialized) instead of the first result; the client then reads `GetSettings`.
 
 ### Projection `dns`
 
