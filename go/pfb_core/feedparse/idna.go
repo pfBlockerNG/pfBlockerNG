@@ -208,7 +208,7 @@ func idnToASCII(s string) (string, bool) {
 				mapped = append(mapped, []rune(m)...)
 				continue
 			}
-			if r != 0x200C && r != 0x200D && !idnRuneValid(r) {
+			if !idnRuneValid(r) {
 				return "", false
 			}
 			r = unicode.ToLower(r)
@@ -287,12 +287,13 @@ func idnToASCII(s string) (string, bool) {
 	return res, true
 }
 
-// idnMapped is the UTS46 mapping this port knows beyond lower-casing: ignored characters, spaces,
-// ideographic stops and the Latin-1 compatibility mappings.
+// idnMapped is the UTS46 mapping this port knows beyond lower-casing: ignored characters (the appliance's ICU is
+// transitional, so ZWNJ and ZWJ go too), spaces, ideographic stops and the Latin-1 compatibility mappings.
 func idnMapped(r rune) (string, bool) {
 	switch {
-	case r == 0xAD || r == 0x34F || (r >= 0x180B && r <= 0x180F) || r == 0x200B || r == 0x2060 ||
-		(r >= 0xFE00 && r <= 0xFE0F) || r == 0xFEFF || (r >= 0xE0100 && r <= 0xE01EF):
+	case r == 0xAD || r == 0x34F || (r >= 0x180B && r <= 0x180D) || r == 0x180F || r == 0x200B || r == 0x2060 ||
+		(r >= 0xFE00 && r <= 0xFE0F) || r == 0xFEFF || (r >= 0xE0100 && r <= 0xE01EF) ||
+		r == 0x200C || r == 0x200D: // transitional processing drops the joiners; U+180E stays disallowed
 		return "", true
 	case r == 0xA0 || (r >= 0x2000 && r <= 0x200A) || r == 0x202F || r == 0x205F || r == 0x3000:
 		return " ", true

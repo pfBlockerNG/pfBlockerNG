@@ -75,7 +75,14 @@ final class FeedParseDnsblCorpusTest extends TestCase
 			$last = count($case['lines']) - 1;
 			foreach ($case['lines'] as $n => $line) {
 				$lw = "{$where} line {$n}";
-				self::keys($line, array_key_exists('line_hex', $line) ? ['line_hex', 'expect'] : ['line', 'expect'], $lw);
+				$keys = array_key_exists('line_hex', $line) ? ['line_hex', 'expect'] : ['line', 'expect'];
+				if (array_key_exists('appliance', $line)) {
+					if ($line['appliance'] !== TRUE) {
+						throw new RuntimeException("{$lw}: appliance, when present, must be true");
+					}
+					$keys[] = 'appliance';
+				}
+				self::keys($line, $keys, $lw);
 				self::feedBytes($line, $lw);
 				self::keys($line['expect'], ['rows', 'ip4', 'ip6', 'fail', 'scheme_skipped', 'stop'], "{$lw} expect");
 				$e = $line['expect'];
@@ -92,9 +99,52 @@ final class FeedParseDnsblCorpusTest extends TestCase
 		return $out;
 	}
 
+	/**
+	 * One test per line the appliance answers differently from a typical host (the `appliance` flag): the case's other lines
+	 * run in testCaseMatchesTheProductionParser(); these are replayed alone and skipped where the host differs.
+	 *
+	 * @return array<string, array{array<string, mixed>, int}>
+	 */
+	public static function applianceLineProvider(): array
+	{
+		$out = [];
+		foreach (self::caseProvider() as $id => [$case]) {
+			foreach ($case['lines'] as $n => $line) {
+				if (($line['appliance'] ?? FALSE) === TRUE) {
+					$out["{$id} line {$n}"] = [$case, $n];
+				}
+			}
+		}
+		return $out;
+	}
+
 	/** @param array<string, mixed> $case */
 	#[DataProvider('caseProvider')]
 	public function testCaseMatchesTheProductionParser(array $case): void
+	{
+		$problems = $this->replay($case, NULL);
+		$this->assertSame([], $problems, "case {$case['id']}:\n  " . implode("\n  ", array_slice($problems, 0, 12)));
+	}
+
+	/** @param array<string, mixed> $case */
+	#[DataProvider('applianceLineProvider')]
+	public function testApplianceLineMatchesTheProductionParser(array $case, int $n): void
+	{
+		$problems = $this->replay($case, $n);
+		if ($problems !== []) {
+			$this->markTestSkipped("the host's PHP, ICU, PCRE2 or pfSense doubles differ from the appliance on this line; the corpus pins the appliance result (smoke replay):\n  " . implode("\n  ", $problems));
+		}
+		$this->assertSame([], $problems);
+	}
+
+	/**
+	 * Replay a case through pfb_dnsbl_parse_line(); every line runs, for the parser's state. $only NULL checks the lines the
+	 * host is expected to agree on, an index checks that one line.
+	 *
+	 * @param array<string, mixed> $case
+	 * @return list<string>
+	 */
+	private function replay(array $case, ?int $only): array
 	{
 		$cfg = $case['config'];
 		$GLOBALS['pfb']['supp'] = $cfg['suppression'] ? PfbToggle::On : PfbToggle::Off;
@@ -115,6 +165,9 @@ final class FeedParseDnsblCorpusTest extends TestCase
 			$ip6 = count($state['ip6']);
 			$skipped = $state['scheme_skipped'];
 			$res = pfb_dnsbl_parse_line($raw, $n + 1, $state, $ctx);
+			if ($only === NULL ? ($line['appliance'] ?? FALSE) === TRUE : $n !== $only) {
+				continue;
+			}
 			$actual = [
 				'rows'           => $res['row'] === NULL ? [] : [json_decode(rtrim($res['row'], "\n"), TRUE, 512, JSON_THROW_ON_ERROR)],
 				'ip4'            => array_slice($state['ip4'], $ip4),
@@ -131,7 +184,7 @@ final class FeedParseDnsblCorpusTest extends TestCase
 				}
 			}
 		}
-		$this->assertSame([], $problems, "case {$case['id']}:\n  " . implode("\n  ", array_slice($problems, 0, 12)));
+		return $problems;
 	}
 
 	/**
