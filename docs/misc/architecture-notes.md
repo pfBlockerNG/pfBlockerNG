@@ -354,9 +354,11 @@ exited, taking the reload-watcher thread that applies generations with it — fa
 restart. That probe is process-level by design: a watcher thread that died inside a still-live
 process is NOT detected, so its generation stays unapplied until the next restart, with the
 open apply-stage ledger entry as the only signal.
-A gateway that booted with no module is not taken for a live one either (issue #3848): while its applied status lists `dnsbl` in `degraded` (a boot error or timeout, or no DNSBL
-build), `pfb_reload_unbound()` takes the restart path, which boots the module again, instead of publishing a generation nothing can apply and waiting out the whole
-`PFB_DNSBL_SWAP_WAIT`. Any other degraded part leaves the swap as it is (`pfb_dns_proxy_dnsbl_degraded()`, `DnsProxyReloadRestartTest`).
+A gateway that booted with no module is not taken for a live one either (issue #3848): while its applied status lists `dnsbl` in `degraded` with the gateway's
+own `decider` reason (a boot error or timeout), `pfb_reload_unbound()` takes the restart path, which boots the module again, instead of publishing a generation
+nothing can apply and waiting out the whole `PFB_DNSBL_SWAP_WAIT`. A module that booted with no DNSBL build (manifest absent, unreadable or unbuildable) lists
+`dnsbl` with its own reason and takes the swap, which builds the DNSBL (issue #3895), as does any other degraded part
+(`pfb_dns_proxy_booted_without_module()`, `DnsProxyReloadRestartTest`).
 
 The full writer and scalar manifest patchers share one publication lock. Old raw generations
 and staging directories remain harmless until watcher/restart convergence, then strict-name GC

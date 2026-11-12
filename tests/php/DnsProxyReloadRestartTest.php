@@ -252,24 +252,31 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$this->assertStringNotContainsStringIgnoringCase('python', $log, $log);
 	}
 
-	/** @return array<string,array{string,bool}> the part the gateway reports degraded, and whether the zero-downtime swap is still taken */
+	/**
+	 * @return array<string,array{string,string,bool}> the part the gateway reports degraded, its reason, and whether the zero-downtime swap is still
+	 *   taken (docs/misc/dns-gateway-transports.md "Applied status": a decider that could not boot gives the gateway's `decider` reason)
+	 */
 	public static function degradedParts(): array
 	{
 		return [
-			'DNSBL is not blocking: the gateway booted without its module' => ['dnsbl', FALSE],
-			'another part is degraded: the module is there to swap' => ['ddr', TRUE],
+			'DNSBL is not blocking: the gateway booted without its module (a boot error)' =>
+				['dnsbl', 'decider: init_standard: [MAIN] python_enable: not a boolean', FALSE],
+			'DNSBL is not blocking: the gateway booted without its module (a boot timeout)' => ['dnsbl', 'decider did not boot within 5m0s', FALSE],
+			'DNSBL is not blocking: the module booted with no DNSBL build, which the swap that builds it ends (issue #3895)' =>
+				['dnsbl', 'DNSBL manifest absent: /var/unbound/pfb_py_sources.json -- DNSBL not loaded', TRUE],
+			'another part is degraded: the module is there to swap' => ['ddr', '--ddr needs --dns-name', TRUE],
 		];
 	}
 
 	#[DataProvider('degradedParts')]
-	public function testTheSwapIsNotTakenWhileTheGatewayBootedWithoutItsModule(string $part, bool $swapped): void
+	public function testTheSwapIsNotTakenWhileTheGatewayBootedWithoutItsModule(string $part, string $reason, bool $swapped): void
 	{
 		// Given a data update, a live proxy that hosts the module, and a gateway whose applied status lists a degraded part
 		$this->setProxyMode();
 		$this->seedSwapFixture();
 		$this->proxyServes();
 		$this->seedRunningGateway();
-		$this->gatewayStatus(['degraded' => [['part' => $part, 'reason' => 'boot timeout']]]);
+		$this->gatewayStatus(['degraded' => [['part' => $part, 'reason' => $reason]]]);
 		$flipped = FALSE;
 		$GLOBALS['pfb_test_unbound_py_sentinel_published'] = static function (string $path, int $generation) use (&$flipped): void {
 			$flipped = TRUE;
@@ -283,7 +290,8 @@ final class DnsProxyReloadRestartTest extends TestCase
 		$taken = pfb_reload_unbound('enabled', FALSE, TRUE);
 
 		// Then a module-less gateway is restarted (the restart boots the module again) instead of being sent a generation it cannot apply,
-		// which the swap would wait out for the whole PFB_DNSBL_SWAP_WAIT; any other degraded part leaves the swap as it was
+		// which the swap would wait out for the whole PFB_DNSBL_SWAP_WAIT; a module with no DNSBL build applies the swap, and any other
+		// degraded part leaves the swap as it was
 		$this->assertSame($swapped, $taken);
 		$this->assertSame($swapped, $flipped, 'the sentinel was published only for a swap');
 		$this->assertSame($swapped ? [] : [['restart_service', 'pfb_dns_proxy']], array_column($seen, 'call'));

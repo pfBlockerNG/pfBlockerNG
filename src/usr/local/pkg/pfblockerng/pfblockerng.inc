@@ -6699,13 +6699,14 @@ function pfb_dns_proxy_upstream_stale(?array $applied): bool {
 }
 
 /**
- * Does the gateway's applied status list `dnsbl` as degraded: it booted without its module (a boot error or timeout) or without a DNSBL build? Such a
- * gateway cannot apply a published generation, so the zero-downtime swap would wait out its whole budget; the restart path boots the module again.
- * No readable status is no evidence.
+ * Did the gateway boot without its module: does its applied status list `dnsbl` as degraded with the gateway's own reason, which starts with `decider`
+ * (a boot error or timeout)? Such a gateway cannot apply a published generation, so the zero-downtime swap would wait out its whole budget; the
+ * restart path boots the module again. A module that booted with no DNSBL build lists `dnsbl` with its own reason and applies the swap that builds
+ * it (issue #3895). No readable status is no evidence.
  */
-function pfb_dns_proxy_dnsbl_degraded(): bool {
+function pfb_dns_proxy_booted_without_module(): bool {
 	foreach (pfb_dns_proxy_applied_status()['degraded'] ?? [] as $row) {
-		if (($row['part'] ?? NULL) === 'dnsbl') {
+		if (($row['part'] ?? NULL) === 'dnsbl' && str_starts_with((string) ($row['reason'] ?? ''), 'decider')) {
 			return TRUE;
 		}
 	}
@@ -18886,7 +18887,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 	if ($datapath &&
 	    $mode == 'enabled' &&
 	    pfb_unbound_py_host_running() &&
-	    !pfb_dns_proxy_dnsbl_degraded() &&
+	    !pfb_dns_proxy_booted_without_module() &&
 	    empty($pfb['dnsbl_python_unmount']) &&
 	    !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
 
