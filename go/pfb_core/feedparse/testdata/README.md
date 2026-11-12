@@ -6,10 +6,11 @@ replay every case and must agree with it:
 - Go: `go/pfb_core/feedparse/*_corpus_test.go` (the Core package).
 - PHP/Python (the old path): `tests/php/FeedParse*CorpusTest.php`, through the production functions themselves.
 
-The expectations were produced by the old path and then reviewed row by row; they are frozen. A case where Core differs
-from the old path on purpose holds Core's result, and its `description` names the owner's sign-off. A case the old path
-answers differently per platform (sed locale data) has `"appliance": true`: its expectation is the pfSense appliance's
-result, and the PHP runner skips it where the host's probe differs.
+The expectations were produced by the old path and then reviewed row by row; they are frozen. A case (`normalize.json`) or
+line (`dnsbl.json`) where Core differs from the old path on purpose holds Core's result in `expect` and the old path's in
+`old_expect`, and its `description` names the owner's sign-off. A case the old path answers differently per platform (sed
+locale data, ICU version) has `"appliance": true`: the old path's expectation is the pfSense appliance's result, and the
+PHP runner skips it where the host's probe differs.
 
 ## Common rules
 
@@ -63,10 +64,13 @@ per-feed state (CSV detection, reverse format, the hpHosts end marker) carried b
 
 - `config`: `dnsbl_ip` (bool: IPs in a domain feed are collected), `lenient` (bool: permissive scheme handling),
   `custom` (bool: a user list), `suppression` (bool: the global Suppression setting, `$pfb['supp']`).
-- `lines`: non-empty; each `{"line" | "line_hex", "expect", optional "appliance"}`, the line as `fgets()` returns it (its `\n`
-  included). `"appliance": true` (only ever `true`): the expectation is the pfSense appliance's result, which the PHP runner's host
-  may not reproduce (the appliance's `is_ipaddrv6` is Net_IPv6, its ICU does transitional UTS46, its PCRE2/ICU classify U+180E
-  differently); the PHP runner replays the line in its own test and skips it where the host differs, the Go runner always asserts it.
+- `lines`: non-empty; each `{"line" | "line_hex", "expect", optional "old_expect", optional "appliance"}`, the line as
+  `fgets()` returns it (its `\n` included). `old_expect` has the shape of `expect` and is present only where Core differs from
+  the old path on purpose (never equal to `expect`): the Go runner asserts `expect`, the PHP runner `old_expect`, the smoke
+  replay `old_expect` too. `"appliance": true` (only ever `true`): the old path's expectation (`old_expect` when present) is the
+  pfSense appliance's result, which the PHP runner's host may not reproduce (the appliance's `is_ipaddrv6` is Net_IPv6, its
+  ICU does transitional UTS46, its PCRE2/ICU classify U+180E differently); the PHP runner replays the line in its own test and
+  skips it where the host differs, the Go runner always asserts `expect`.
   `expect` is `{"rows", "ip4", "ip6", "fail", "scheme_skipped", "stop"}` for this line alone:
   - `rows`: the NDJSON rows written, each `["d" | "a", text]` (domain or verbatim ABP rule); `text` is what the row
     carries after the writer's invalid-UTF-8 substitution (U+FFFD), so it is always valid UTF-8.
@@ -77,3 +81,18 @@ per-feed state (CSV detection, reverse format, the hpHosts end marker) carried b
   - `stop`: the line ended the feed (hpHosts end marker). It is only ever the last line of its case.
 - Rows are produced with `LC_CTYPE=C` (as the appliance runs) and the default `mbstring`/`intl` settings. A line that
   makes the old path throw (an interior NUL reaching `ip2long()`) has no row.
+- Owner sign-off (2026-11-12, #3906): Core converts IDNs with `golang.org/x/net/idna` in the pfb-dns profile (`pslIdna` in
+  `go/pfb_dns_gateway/decider/pfb_unbound_psl.go`: `MapForLookup`, `BidiRule`, `StrictDomainName(false)`,
+  `CheckHyphens(false)`, `VerifyDNSLength(true)`; UTS #46 non-transitional), not a port of ICU's default
+  `idn_to_ascii()`. The Unicode tables come from the pinned x/net and the Go toolchain (go1.27 selects Unicode 17). The `old_expect`
+  lines are where the two differ:
+  - ZWNJ/ZWJ: the appliance's transitional ICU drops them (`ab.com`), the profile rejects the label.
+  - Hyphens: ICU rejects a leading or trailing hyphen and `--` at positions 3 and 4 of a label, the profile converts it.
+  - Bidi: the profile applies the RFC 5893 rule (`אa.com` fails), ICU's default does not.
+  - U+180E: ignorable since Unicode 16 (the profile drops it), disallowed in the appliance's older ICU.
+  A trailing root dot is not a divergence: ICU accepts it and Core strips one before converting and puts it back. Sharp s and
+  final sigma (`idn_uts46`) are the non-transitional answers; the appliance's transitional ICU probably answers `ss` and `σ`,
+  which no replay has confirmed (the smoke replay decides; add an `old_expect` with `"appliance": true` if it differs).
+- Known limits of the ABP regex-IP gate (RE2 stands in for PCRE): a possessive quantifier (`*+`, `++`) in an octet pattern
+  is refused by Core and accepted by PCRE; `{,n}` is read as `{0,n}`, which is PCRE2 >= 10.43 (probed on 10.46); an older
+  PCRE2 may read it differently.

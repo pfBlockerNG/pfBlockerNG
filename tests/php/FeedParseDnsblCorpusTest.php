@@ -7,7 +7,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Replays go/pfb_core/feedparse/testdata/dnsbl.json (issue #3906) through the production per-line DNSBL parser,
- * pfb_dnsbl_parse_line(). The Go runner replays the same file against Core's port; the two must agree line for line.
+ * pfb_dnsbl_parse_line(). The Go runner replays the same file against Core's port; the two agree line for line except where a
+ * line carries old_expect (an owner-signed divergence): this runner asserts old_expect, the Go runner asserts expect.
  * The file's schema is documented in testdata/README.md; every unknown or missing key and every duplicate id is an error.
  */
 final class FeedParseDnsblCorpusTest extends TestCase
@@ -82,15 +83,19 @@ final class FeedParseDnsblCorpusTest extends TestCase
 					}
 					$keys[] = 'appliance';
 				}
+				if (array_key_exists('old_expect', $line)) {
+					$keys[] = 'old_expect';
+				}
 				self::keys($line, $keys, $lw);
 				self::feedBytes($line, $lw);
-				self::keys($line['expect'], ['rows', 'ip4', 'ip6', 'fail', 'scheme_skipped', 'stop'], "{$lw} expect");
-				$e = $line['expect'];
-				if (!is_bool($e['stop']) || !is_int($e['scheme_skipped']) || !is_array($e['rows']) || !is_array($e['ip4'])
-				    || !is_array($e['ip6']) || !is_array($e['fail'])) {
-					throw new RuntimeException("{$lw}: expect has a field of the wrong type");
+				self::expectShape($line['expect'], "{$lw} expect");
+				if (array_key_exists('old_expect', $line)) {
+					self::expectShape($line['old_expect'], "{$lw} old_expect");
+					if ($line['old_expect'] === $line['expect']) {
+						throw new RuntimeException("{$lw}: old_expect equals expect; it is present only where Core differs from the old path");
+					}
 				}
-				if ($e['stop'] && $n !== $last) {
+				if ($line['expect']['stop'] && $n !== $last) {
 					throw new RuntimeException("{$lw}: nothing is read after a stop");
 				}
 			}
@@ -176,7 +181,7 @@ final class FeedParseDnsblCorpusTest extends TestCase
 				'scheme_skipped' => $state['scheme_skipped'] - $skipped,
 				'stop'           => $res['stop'],
 			];
-			$expect = $line['expect'];
+			$expect = $line['old_expect'] ?? $line['expect'];
 			$expect['fail'] = array_map(static fn($f) => is_array($f) ? hex2bin($f['hex']) : $f, $expect['fail']);
 			foreach ($expect as $field => $want) {
 				if ($want !== $actual[$field]) {
@@ -212,6 +217,16 @@ final class FeedParseDnsblCorpusTest extends TestCase
 			$log = substr($rest, $p + strlen($tail));
 		}
 		return $fields;
+	}
+
+	/** @param array<mixed> $expect */
+	private static function expectShape(mixed $expect, string $where): void
+	{
+		self::keys($expect, ['rows', 'ip4', 'ip6', 'fail', 'scheme_skipped', 'stop'], $where);
+		if (!is_bool($expect['stop']) || !is_int($expect['scheme_skipped']) || !is_array($expect['rows']) || !is_array($expect['ip4'])
+		    || !is_array($expect['ip6']) || !is_array($expect['fail'])) {
+			throw new RuntimeException("{$where}: a field has the wrong type");
+		}
 	}
 
 	/** @param array<mixed> $arr @param list<string> $keys */
