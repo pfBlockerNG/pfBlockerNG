@@ -55,15 +55,33 @@ def test_linux_dependency_builder_uses_structured_locked_reproducibility_contrac
     assert '--source-date-epoch "$SOURCE_DATE_EPOCH"' in build["run"]
 
 
+def _kcov_step_run() -> str:
+    """The `run:` text of the shell-tests job's `Coverage (kcov)` step, from the parsed workflow."""
+    steps = yaml.safe_load(_read(".github/workflows/test.yml"))["jobs"]["shell-tests"]["steps"]
+    runs = [step["run"] for step in steps if step.get("name") == "Coverage (kcov)"]
+    assert len(runs) == 1, f"shell-tests must have exactly one `Coverage (kcov)` step with a run, found {len(runs)}"
+    return runs[0]
+
+
 def test_kcov_coverage_selectors_are_focused() -> None:
-    workflow = _read(".github/workflows/test.yml")
-    match = re.search(r"shellspec --kcov --shell bash(?P<body>[\s\S]*?)(?:\n\s*else|\n\s*fi)", workflow)
-    assert match, "kcov step must invoke shellspec with an explicit selector"
-    body = match.group(0)
+    body = _kcov_step_run()
+    assert re.search(r"shellspec --kcov --shell bash", body), (
+        "kcov step must invoke shellspec with an explicit selector"
+    )
     assert "tests/shell/ip_pre_aws_spec.sh" in body
     assert "tests/shell/pfb_python_spec.sh" in body
     assert "tests/shell/pfblockerng_*_spec.sh" in body
     assert not re.search(r"shellspec --kcov --shell bash\s*$", body, re.MULTILINE)
+
+
+def test_the_kcov_step_fails_rather_than_skips_when_kcov_is_missing() -> None:
+    """The ci image copies kcov in and its build fails without it, so a kcov that is missing at job
+    time is a broken image. A `command -v kcov` guard with a skip branch would let the coverage run
+    vanish from the job with the job still green."""
+    run = _kcov_step_run()
+    assert "shellspec --kcov" in run, "the kcov step must run shellspec under kcov"
+    assert "command -v kcov" not in run, f"the kcov step probes for kcov instead of requiring it:\n{run}"
+    assert not re.search(r"\b(?:else|elif)\b|\bskip", run, re.IGNORECASE), f"the kcov step has a skip branch:\n{run}"
 
 
 # The ci image generates de_DE.UTF-8 (its Dockerfile); the shellspec job proves it took. Every
