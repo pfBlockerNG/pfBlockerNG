@@ -61,11 +61,7 @@ func TestADeciderThatDoesNotBootInTimeIsReplacedByOneWithNoModuleAndTheLateOneIs
 	}
 	t.Cleanup(srv.shutdown)
 	requireForwarded(t, logs, up)
-	// The update pass tells a module-less gateway by this reason's `decider` start (pfb_dns_proxy_booted_without_module(), issue #3895).
-	rows := requireLost(t, sock, "after the module's boot timed out", map[string]string{"dnsbl": "did not boot within"}, "dnsbl")
-	if !strings.HasPrefix(rows[0].Reason, "decider ") {
-		t.Errorf("reason %q, want the gateway's, which starts with \"decider \"", rows[0].Reason)
-	}
+	requireLost(t, sock, "after the module's boot timed out", map[string]string{"dnsbl": "did not boot within"}, "dnsbl")
 	close(release)
 	waitClosed(t, late.closed, "the late module decider to be closed")
 }

@@ -254,7 +254,7 @@ final class DnsProxyReloadRestartTest extends TestCase
 
 	/**
 	 * @return array<string,array{string,string,bool}> the part the gateway reports degraded, its reason, and whether the zero-downtime swap is still
-	 *   taken (docs/misc/dns-gateway-transports.md "Applied status": a decider that could not boot gives the gateway's `decider` reason)
+	 *   taken (docs/misc/dns-gateway-transports.md "Applied status": only the decider's three manifest reasons are a module the swap can rebuild)
 	 */
 	public static function degradedParts(): array
 	{
@@ -262,8 +262,15 @@ final class DnsProxyReloadRestartTest extends TestCase
 			'DNSBL is not blocking: the gateway booted without its module (a boot error)' =>
 				['dnsbl', 'decider: init_standard: [MAIN] python_enable: not a boolean', FALSE],
 			'DNSBL is not blocking: the gateway booted without its module (a boot timeout)' => ['dnsbl', 'decider did not boot within 5m0s', FALSE],
-			'DNSBL is not blocking: the module booted with no DNSBL build, which the swap that builds it ends (issue #3895)' =>
+			'DNSBL is not blocking: the module booted with no ini, which only a restart reads (issue #3889)' =>
+				['dnsbl', 'Failed to load ini configuration. Ini file missing.', FALSE],
+			'DNSBL is not blocking for a reason this package does not know: the restart is the safe path' => ['dnsbl', 'a newer gateway\'s reason', FALSE],
+			'DNSBL is not blocking: the module booted with its manifest absent, which the swap that builds it ends (issue #3895)' =>
 				['dnsbl', 'DNSBL manifest absent: /var/unbound/pfb_py_sources.json -- DNSBL not loaded', TRUE],
+			'DNSBL is not blocking: the module booted with a manifest it could not read' =>
+				['dnsbl', "Failed to load DNSBL manifest '/var/unbound/pfb_py_sources.json': Expecting value: line 1 column 1 (char 0)", TRUE],
+			'DNSBL is not blocking: the module booted with a manifest it could not build' =>
+				['dnsbl', 'Failed to build DNSBL structures from raw: feed list is not a list', TRUE],
 			'another part is degraded: the module is there to swap' => ['ddr', '--ddr needs --dns-name', TRUE],
 		];
 	}

@@ -6699,14 +6699,16 @@ function pfb_dns_proxy_upstream_stale(?array $applied): bool {
 }
 
 /**
- * Did the gateway boot without its module: does its applied status list `dnsbl` as degraded with the gateway's own reason, which starts with `decider`
- * (a boot error or timeout)? Such a gateway cannot apply a published generation, so the zero-downtime swap would wait out its whole budget; the
- * restart path boots the module again. A module that booted with no DNSBL build lists `dnsbl` with its own reason and applies the swap that builds
- * it (issue #3895). No readable status is no evidence.
+ * Must a data update restart the gateway instead of swapping: does its applied status list `dnsbl` as degraded for any reason but the decider's three
+ * manifest reasons? Only a module that booted with a manifest it could not use (absent, unreadable, unbuildable) applies the generation that ends the
+ * loss (issue #3895). A gateway that booted without its module cannot apply one, a module that booted with no ini reads it again only on a restart
+ * (#3889), and an unknown reason restarts too: a restart always converges. No readable status is no evidence.
  */
-function pfb_dns_proxy_booted_without_module(): bool {
+function pfb_dns_proxy_dnsbl_restart_wanted(): bool {
 	foreach (pfb_dns_proxy_applied_status()['degraded'] ?? [] as $row) {
-		if (($row['part'] ?? NULL) === 'dnsbl' && str_starts_with((string) ($row['reason'] ?? ''), 'decider')) {
+		$reason = (string) ($row['reason'] ?? '');
+		if (($row['part'] ?? NULL) === 'dnsbl' && !str_starts_with($reason, 'DNSBL manifest absent: ') &&
+		    !str_starts_with($reason, "Failed to load DNSBL manifest '") && !str_starts_with($reason, 'Failed to build DNSBL structures from raw: ')) {
 			return TRUE;
 		}
 	}
@@ -18887,7 +18889,7 @@ function pfb_reload_unbound($mode, $pfbpython=FALSE, $datapath=FALSE, ?callable 
 	if ($datapath &&
 	    $mode == 'enabled' &&
 	    pfb_unbound_py_host_running() &&
-	    !pfb_dns_proxy_booted_without_module() &&
+	    !pfb_dns_proxy_dnsbl_restart_wanted() &&
 	    empty($pfb['dnsbl_python_unmount']) &&
 	    !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
 

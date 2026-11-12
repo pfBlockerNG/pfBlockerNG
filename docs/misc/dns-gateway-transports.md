@@ -126,9 +126,11 @@ then the status lists `tls_certificate` in `degraded`.
     `part` and `reason` (one line, no control characters, at most 300 bytes). The parts, in the order the rows come, each at
     most once:
     - `dnsbl`: the DNSBL does not block. The decider could not boot (an error, or no boot within 300 s), so it was booted again
-      with no module and every query is forwarded: the reason is then the gateway's, starting with `decider`; or it booted with no
-      DNSBL build (manifest absent, unreadable or unbuildable), with the decider's own reason. A zero-downtime reload that builds the
-      DNSBL ends the second case; a reload that fails after a good build keeps the last good lists and lists nothing.
+      with no module and every query is forwarded; or it booted with no ini (`Failed to load ini configuration. Ini file missing.`);
+      or it booted with no DNSBL build because the manifest was absent, unreadable or unbuildable (`DNSBL manifest absent: …`,
+      `Failed to load DNSBL manifest '…`, `Failed to build DNSBL structures from raw: …`). Only that last case ends with a zero-downtime
+      reload that builds the DNSBL; the update pass restarts the gateway for every other `dnsbl` reason. A reload that fails after a
+      good build keeps the last good lists and lists nothing.
     - `dnsbl_settings`: `pfb_unbound.ini` could not be parsed; the DNSBL runs with what was read.
     - `dns_name`: `--dns-name` or `--dns-name-answer` cannot be used: no DNS name answers, and no DDR (see DNS name).
     - `ddr`: DDR is off although it was asked for (see DDR).
