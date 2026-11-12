@@ -138,13 +138,19 @@ func dnsblLoadCorpus(t *testing.T) []dnsblCorpusCase {
 			if err := json.Unmarshal(rl, &lm); err != nil {
 				t.Fatalf("%s: object expected: %v", lw, err)
 			}
-			key := "line"
+			keys := []string{"line", "expect"}
 			if _, ok := lm["line_hex"]; ok {
-				key = "line_hex"
+				keys[0] = "line_hex"
 			}
-			lm, err := dnsblObject(rl, lw, key, "expect")
+			if _, ok := lm["appliance"]; ok { // the pfSense appliance's result; Core asserts it like any other line
+				keys = append(keys, "appliance")
+			}
+			lm, err := dnsblObject(rl, lw, keys...)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if ra, ok := lm["appliance"]; ok && string(ra) != "true" {
+				t.Fatalf("%s: appliance, when present, must be true", lw)
 			}
 			raw, err := dnsblFeedBytes(lm, lw)
 			if err != nil {

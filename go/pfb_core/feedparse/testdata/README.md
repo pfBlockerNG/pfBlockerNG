@@ -63,7 +63,10 @@ per-feed state (CSV detection, reverse format, the hpHosts end marker) carried b
 
 - `config`: `dnsbl_ip` (bool: IPs in a domain feed are collected), `lenient` (bool: permissive scheme handling),
   `custom` (bool: a user list), `suppression` (bool: the global Suppression setting, `$pfb['supp']`).
-- `lines`: non-empty; each `{"line" | "line_hex", "expect"}`, the line as `fgets()` returns it (its `\n` included).
+- `lines`: non-empty; each `{"line" | "line_hex", "expect", optional "appliance"}`, the line as `fgets()` returns it (its `\n`
+  included). `"appliance": true` (only ever `true`): the expectation is the pfSense appliance's result, which the PHP runner's host
+  may not reproduce (the appliance's `is_ipaddrv6` is Net_IPv6, its ICU does transitional UTS46, its PCRE2/ICU classify U+180E
+  differently); the PHP runner replays the line in its own test and skips it where the host differs, the Go runner always asserts it.
   `expect` is `{"rows", "ip4", "ip6", "fail", "scheme_skipped", "stop"}` for this line alone:
   - `rows`: the NDJSON rows written, each `["d" | "a", text]` (domain or verbatim ABP rule); `text` is what the row
     carries after the writer's invalid-UTF-8 substitution (U+FFFD), so it is always valid UTF-8.
