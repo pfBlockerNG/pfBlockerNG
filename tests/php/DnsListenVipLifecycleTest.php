@@ -478,6 +478,22 @@ final class DnsListenVipLifecycleTest extends TestCase
 		$this->assertCount($count, $writes, 'nothing left to write');
 	}
 
+	public function testAFailedAutomaticVipWriteMakesTheApplyReportFailureSoTheSaveNamesTheRetry(): void
+	{
+		// Given an automatic VIP to create and a VIP write that config.xml refuses while every other write succeeds
+		PfbConfig::write('gen/pfb_dns_listen_vip6', 'auto');
+		$writes = [];
+		$GLOBALS['pfb_test_write_config_hook'] = static function (string $description) use (&$writes): void {
+			$GLOBALS['pfb_test_write_config_result'] = !str_contains($description, 'auto-VIP changes');
+			$writes[] = $description;
+		};
+		$this->assertSame([], config_get_path('virtualip/vip', []), 'before: no VIP');
+
+		// When the apply runs, Then it reports the failure (the page then shows its retry notice) and writes nothing after the refused VIP write
+		$this->assertFalse(pfb_dns_listen_vips_apply(), 'a refused VIP write is a failed apply');
+		$this->assertSame(['pfBlockerNG: saving DNSBL auto-VIP changes'], $writes, 'no advertisement write follows the refused VIP write');
+	}
+
 	public function testDroppingAnEmptyLedgerDoesNotRegenerateServices(): void
 	{
 		PfbConfig::write('gen/pfb_dns_listen_added', '{}');
