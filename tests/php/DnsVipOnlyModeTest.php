@@ -147,6 +147,45 @@ final class DnsVipOnlyModeTest extends TestCase
 		$this->assertSame([], $this->validate(['pfb_dns_listen_vip_only' => '']), 'disable is unconditional');
 	}
 
+	public function testPfbDnsOffRefusesOnlyAVipOnlyModeThatIsNewlyTurnedOn(): void
+	{
+		// Given pfB-DNS Off and a post with VIP-only mode On, Resolver addresses on and a VIP created automatically
+		PfbConfig::write('dns/pfb_dns', '');
+
+		// When VIP-only mode is not stored On, the post turns it On with pfB-DNS Off: refused, with the pfB-DNS and Resolver addresses message
+		$this->mode(FALSE);
+		$errors = $this->validate($this->post());
+		$this->assertCount(1, $errors, json_encode($errors));
+		$this->assertStringContainsString('VIP-only mode requires pfB-DNS and Resolver addresses enabled', $errors[0]);
+
+		// Then with VIP-only mode already stored On, the same post is accepted: it stays stored, inactive, while pfB-DNS is Off
+		$this->mode(TRUE);
+		$this->assertSame([], $this->validate($this->post()), 'VIP-only mode already stored On stays when pfB-DNS is turned Off');
+	}
+
+	public function testVipOnlyModeStoredOnWithPfbDnsOffSkipsTheVipChecksWhichRunAgainOncePfbDnsIsOn(): void
+	{
+		// Given pfB-DNS Off and VIP-only mode stored On: VIP-only mode is inactive, so no VIP check refuses the post
+		PfbConfig::write('dns/pfb_dns', '');
+		$this->mode(TRUE);
+		$noAddresses = array_replace($this->post(), ['pfb_dns_listen_vip' => '']);
+		$noFamily = array_replace($this->post(), ['pfb_dns_listen_vip4' => 'none', 'pfb_dns_listen_vip6' => '']);
+		$this->assertSame([], $this->validate($this->post()), 'the complete post is accepted');
+		$this->assertSame([], $this->validate($noAddresses), 'Resolver addresses off is accepted while pfB-DNS is Off');
+		$this->assertSame([], $this->validate($noFamily), 'no VIP family is accepted while pfB-DNS is Off');
+
+		// When pfB-DNS is On, the same posts are refused: Resolver addresses off with the pfB-DNS and Resolver addresses message
+		PfbConfig::write('dns/pfb_dns', 'on');
+		$errors = $this->validate($noAddresses);
+		$this->assertCount(1, $errors, json_encode($errors));
+		$this->assertStringContainsString('VIP-only mode requires pfB-DNS and Resolver addresses enabled', $errors[0]);
+
+		// And no VIP family with the family message
+		$errors = $this->validate($noFamily);
+		$this->assertCount(1, $errors, json_encode($errors));
+		$this->assertStringContainsString('VIP-only mode requires at least one available Resolver VIP family', $errors[0]);
+	}
+
 	public function testOwnDnsListsRemainAppendOnlyAndSharedRaListIsNotInvented(): void
 	{
 		$this->vips([4, 6]);
@@ -173,6 +212,36 @@ final class DnsVipOnlyModeTest extends TestCase
 		config_set_path('dhcpd/unknown/dnsserver', ['198.51.100.53']);
 		pfb_dns_listen_vips_apply();
 		$this->assertSame(['198.51.100.53'], config_get_path('dhcpd/unknown/dnsserver'), 'frozen lists remain untouched on apply');
+	}
+
+	public function testApplyCreatesTheMissingAutomaticVipSoTheVipOnlyListenerSetIsTheVipNotEmpty(): void
+	{
+		// Given VIP-only mode saved On with an automatic IPv4 VIP that no VIP row backs yet (a save writes its settings before the apply creates it)
+		PfbConfig::write('gen/pfb_dns_listen_vip4', 'auto');
+		$this->mode(TRUE);
+		$this->assertSame([], pfb_dns_proxy_listen(), 'premise: before the apply the VIP-only listener set is empty');
+
+		// When the apply runs
+		pfb_dns_listen_vips_apply();
+
+		// Then the VIP exists and it is the whole listener set
+		$this->assertSame(self::VIP4, config_get_path('virtualip/vip/0/subnet'), 'the apply created the automatic VIP');
+		$this->assertSame([self::VIP4], pfb_dns_proxy_listen(), 'the VIP-only listener set is the VIP');
+	}
+
+	public function testTheUpdateAppliesTheListenerVipsBeforeAnyStepThatBuildsOrStartsThePfbDnsListeners(): void
+	{
+		// The Update's listener apply (gated on the Resolver addresses setting) runs first, so a save that left the VIP to the Update
+		// never lets the Resolver step or the proxy's rc script read an empty VIP-only listener set.
+		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$offsets = [];
+		foreach (['if (!pfb_dns_listen_vips_apply()) {', '$pfbpython = pfb_unbound_python($mode, $pfb_dns_wanted);', 'if (!pfb_dns_proxy_ensure_running()) {'] as $call) {
+			$this->assertSame(1, substr_count($source, $call), "{$call} appears once in the Update");
+			$offsets[] = strpos($source, $call);
+		}
+		$sorted = $offsets;
+		sort($sorted);
+		$this->assertSame($sorted, $offsets, 'the listener apply, then the Resolver step (pfb_unbound_python), then the rc script and proxy start');
 	}
 
 	public function testDefaultOffRoundtripAndPolicyProjection(): void

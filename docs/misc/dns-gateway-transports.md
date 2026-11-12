@@ -459,7 +459,7 @@ configuration policy, not a new restriction on the standalone gateway's generic 
 
 | Flag | Meaning |
 |---|---|
-| `--dns-name NAME` | The DNS name, with or without one trailing dot: labels of 1 to 63 characters, at most 253 in all. Empty or absent: no name, so no DDR and no name answers. The pfB-DNS settings save also refuses an IP literal, a wildcard, a single label and `resolver.arpa.` or a name under it. |
+| `--dns-name NAME` | The DNS name, with or without one trailing dot: labels of 1 to 63 characters, at most 253 in all. Empty or absent: no name, so no DDR and no name answers. The Save DNS settings save also refuses an IP literal, a wildcard, a single label and `resolver.arpa.` or a name under it. |
 | `--dns-name-answer LOCAL=ADDR[,ADDR]` | Repeatable. A query for the name that arrives on LOCAL is answered with the ADDR of the family it asked for, or local NOERROR/NODATA when that family is absent. `LOCAL=` owns the Name without any addresses. LOCAL and every ADDR are IP addresses without a zone (an IPv4-mapped one is read as its IPv4 address); at most one ADDR per family; a LOCAL named twice is an error, and so is any of these flags without `--dns-name` (`--dns-name-answer needs --dns-name`). LOCAL need not be one of its ADDRs. |
 
 After the Resolver ACL (a refused client still gets REFUSED, a denied one nothing) and after DDR, before the decider, the gateway

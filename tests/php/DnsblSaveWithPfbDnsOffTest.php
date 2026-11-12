@@ -11,7 +11,7 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  * issue #3770 -- pfB-DNS is the parent switch of DNSBL, as the pfBlockerNG enable is of everything: DNSBL stored On with
  * pfB-DNS Off is a state like DNSBL On with pfBlockerNG Off (DNSBL does not run), never a refused save.
  *   - the DNSBL page stores DNSBL On while config.xml holds pfB-DNS Off or nothing, and leaves the pfB-DNS enable as it found it;
- *   - the pfB-DNS form (on DNS > General) stores pfB-DNS Off while config.xml holds DNSBL On, and leaves the DNSBL enable as it found it.
+ *   - DNS > General's one save (issue #3856) stores pfB-DNS Off while config.xml holds DNSBL On, and leaves the DNSBL enable as it found it.
  * Either save is as posted, marks the change pending for the next Update and ends through its redirect.
  *
  * Each save runs in a child process (support/DnsblSaveWorker.php and support/DnsSaveWorker.php: the page's real save code over
@@ -22,14 +22,17 @@ final class DnsblSaveWithPfbDnsOffTest extends TestCase
 	private const DNS = 'installedpackages/pfblockerngdns/config/0';
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
 
-	/** @return array<string,mixed> the worker's result: disk, before, events, lockHeld, inputErrors, pendingMarked, returned, ... */
-	private function runWorker(string $worker, string $scenario): array
+	/**
+	 * @param array<string,mixed> $case what DnsSaveWorker stores and posts differently from its default form (ignored by DnsblSaveWorker)
+	 * @return array<string,mixed> the worker's result: disk, before, events, lockHeld, inputErrors, pendingMarked, returned, ...
+	 */
+	private function runWorker(string $worker, string $scenario, array $case = []): array
 	{
 		$dir = sys_get_temp_dir() . '/pfb_dnsbl_save_pfb_dns_off_' . bin2hex(random_bytes(6));
 		mkdir($dir, 0700, TRUE);
 		$result = "{$dir}/result.json";
 		try {
-			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . "/support/{$worker}.php", $scenario, $result], 60.0);
+			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . "/support/{$worker}.php", $scenario, $result, json_encode($case, JSON_THROW_ON_ERROR | JSON_FORCE_OBJECT)], 60.0);
 			$this->assertFileExists($result, "the worker reported nothing (exit {$process['exit']}): {$process['stderr']}");
 			$this->assertStringNotContainsString('worker:', $process['stdout'] . $process['stderr'], 'the worker found the save code it runs');
 			return json_decode((string) file_get_contents($result), TRUE, 512, JSON_THROW_ON_ERROR);
@@ -84,10 +87,11 @@ final class DnsblSaveWithPfbDnsOffTest extends TestCase
 
 	public function testSavingPfbDnsOffWhileDnsblIsOnIsStoredAsPosted(): void
 	{
-		// Given DNSBL and pfB-DNS On in config.xml, and a pfB-DNS form that posts pfB-DNS Off (the checkbox unticked)
-		$result = $this->runWorker('DnsSaveWorker', 'dnsbl_on');
+		// Given DNSBL and pfB-DNS On in config.xml, and the DNS General form posted with pfB-DNS unticked (and DNS Reply Logging unticked too)
+		$result = $this->runWorker('DnsSaveWorker', 'dnsbl_on', ['stored' => ['dns/pfb_dns' => 'on'], 'post' => ['pfb_dns' => NULL]]);
 		$this->assertSame('on', self::at($result['before'], self::DNSBL . '/pfb_dnsbl'), 'before: DNSBL is On');
 		$this->assertSame('on', self::at($result['before'], self::DNS . '/pfb_dns'), 'before: pfB-DNS is On');
+		$this->assertArrayNotHasKey('pfb_dns', $result['posted'], 'the form posts no pfB-DNS enable');
 
 		// Then the save goes through with no error: pfB-DNS is stored Off
 		$this->assertSame([], $result['inputErrors']);

@@ -7,12 +7,12 @@ use PHPUnit\Framework\TestCase;
 /**
  * issue #3515 -- DNS Reply Logging is ONE preference (dnsbl/pfb_py_reply, unchanged path and default) that both DNS modes
  * read: the DNSBL module's ini (python_reply) and, with DNSBL off, the pfB-DNS proxy's --reply-log. Its control therefore
- * lives on DNS General, which is reachable in either mode, and no longer on either mode-specific page. The pfB-DNS settings are a
- * second form on that same page (issue #3771), so the contract is also that this form and its save leave the preference alone.
+ * lives on DNS General, which is reachable in either mode, and no longer on either mode-specific page. The pfB-DNS settings share that
+ * page's one form (issue #3856: one form, one Save DNS settings button), so the contract is also that one save writes the preference with them.
  *
  * The pages are scripts that render on include, so the contract is pinned in their source (like DnsProxySettingsSaveTest):
  *   - DNS General renders the checkbox from the stored preference and saves it through the gateway, under the config
- *     lock and in the same write_config() as its resolver VIP settings;
+ *     lock and in the same write_config() as its pfB-DNS settings and resolver VIP settings;
  *   - the DNSBL page neither renders nor assigns it: its section save writes the section it read afresh under the config
  *     lock (DnsblSettingsSaveRaceTest), so a key it never assigns keeps what DNS General stored, even from a save
  *     that overlapped (assigning '' for the missing checkbox would turn logging off on every DNSBL save).
@@ -49,27 +49,33 @@ final class DnsReplyLoggingPreferencePageTest extends TestCase
 		return preg_match($pattern, $page, $match, PREG_OFFSET_CAPTURE) === 1 ? (int) $match[0][1] : NULL;
 	}
 
-	public function testTheDnsGeneralPageHoldsTheOnlyReplyLoggingCheckboxAndThePfbDnsFormAndItsSaveNeverTouchThePreference(): void
+	public function testTheDnsGeneralPageHoldsTheOnlyReplyLoggingCheckboxInItsOneFormAndItsOneSaveReadsAndWritesThePreferenceInTheOneWrite(): void
 	{
 		$page = self::page('pfblockerng_dns_general.php');
-		$saveGate = self::offsetOf("~isset\\(\\\$_POST\\['save_pfb_dns'\\]\\)~", $page);
-		$generalSave = self::offsetOf("~if \\(\\\$_POST && isset\\(\\\$_POST\\['save'\\]\\)\\)~", $page);
-		$formOne = self::offsetOf("~new Form_Button\\(\\s*'save_pfb_dns'~", $page);
-		$formTwo = self::offsetOf("~new Form\\(\\s*'Save DNS General settings'\\s*\\)~", $page);
-		$this->assertNotNull($saveGate, 'the pfB-DNS save is gated on its own button, save_pfb_dns');
-		$this->assertNotNull($generalSave, 'the DNS General save is gated on its own button, save');
-		$this->assertNotNull($formOne, 'the pfB-DNS form has its own save button');
-		$this->assertNotNull($formTwo, 'the DNS General form follows it');
-		$this->assertLessThan($generalSave, $saveGate, 'the pfB-DNS save handler comes before the DNS General one');
-		$this->assertLessThan($formTwo, $formOne, 'the pfB-DNS form comes before the DNS General form');
+		$form = self::offsetOf("~\\\$form = new Form\\(\\s*'Save DNS settings'\\s*\\)~", $page);
+		$saveGate = self::offsetOf("~if \\(\\\$_POST && isset\\(\\\$_POST\\['save'\\]\\)\\)~", $page);
+		$title = self::offsetOf('~\\$pgtitle = ~', $page);
+		$replySection = self::offsetOf("~new Form_Section\\(\\s*'DNS Reply Logging'\\s*\\)~", $page);
+		$addressesSection = self::offsetOf("~new Form_Section\\(\\s*'Resolver addresses'\\s*\\)~", $page);
+		$this->assertNotNull($form, 'the page has the one form, with the one Save DNS settings button');
+		$this->assertNotNull($saveGate, 'the one save is gated on that button, save');
+		$this->assertNotNull($title, 'the save handler ends before the page title');
+		$this->assertNotNull($replySection, 'the form has a DNS Reply Logging section');
+		$this->assertNotNull($addressesSection, 'and a Resolver addresses section after it');
+		$this->assertSame(1, substr_count($page, 'new Form('), 'one form');
+		$this->assertSame(1, substr_count($page, "isset(\$_POST['save'])"), 'one save handler');
 
-		// The single control is the DNS General form's own
+		// The single control is in the one form's own DNS Reply Logging section
 		$checkboxes = (int) preg_match_all("~new Form_Checkbox\\(\\s*'pfb_py_reply'~", $page, $found, PREG_OFFSET_CAPTURE);
 		$this->assertSame(1, $checkboxes, 'exactly one DNS Reply Logging checkbox');
-		$this->assertGreaterThan($formTwo, $found[0][0][1], 'and it is in the DNS General form, not the pfB-DNS one');
+		$this->assertGreaterThan($form, $replySection, 'the section is in the form');
+		$this->assertGreaterThan($replySection, $found[0][0][1], 'and the checkbox is in the DNS Reply Logging section');
+		$this->assertLessThan($addressesSection, $found[0][0][1], 'not in the Resolver addresses section');
 
-		// Neither the pfB-DNS save handler nor the pfB-DNS form reads, assigns or posts the preference
-		$this->assertStringNotContainsString('pfb_py_reply', substr($page, $saveGate, $generalSave - $saveGate), 'the pfB-DNS save never reads or writes it');
-		$this->assertStringNotContainsString('pfb_py_reply', substr($page, $formOne, $formTwo - $formOne), 'the pfB-DNS form has no control for it');
+		// The one save reads the posted preference, writes it once, and does so before its one write_config()
+		$handler = substr($page, $saveGate, $title - $saveGate);
+		$this->assertSame(1, substr_count($handler, "\$_POST['pfb_py_reply']"), 'the save reads the posted preference once');
+		$this->assertSame(1, substr_count($handler, "PfbConfig::write('dnsbl/pfb_py_reply'"), 'and writes it once');
+		$this->assertLessThan((int) strpos($handler, "write_config('[pfBlockerNG] save DNS settings')"), (int) strpos($handler, "PfbConfig::write('dnsbl/pfb_py_reply'"), 'before the write that saves it with the pfB-DNS settings');
 	}
 }

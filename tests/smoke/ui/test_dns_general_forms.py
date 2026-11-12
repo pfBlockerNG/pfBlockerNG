@@ -1,9 +1,9 @@
-"""Tier B (``ui_e2e``): on DNS General each form's button saves only its own form (issue #3771).
+"""Tier B (``ui_e2e``): on DNS General one form and one Save button save both parts together (issue #3856).
 
-DNS General holds the pfB-DNS form (button ``save_pfb_dns``) and its own form (button ``save``). A post that carries the
-fields of both forms, as the page's whole-page scrape does, must still run only the handler its button names. The
-oracle is the effective config.xml read back over SSH, never the HTTP body: the keys each save writes, the keys it must
-leave alone, and the description of the last write_config() (which handler ran).
+DNS General is one form (button ``save``, "Save DNS settings") holding the pfB-DNS settings and the DNS General ones
+(reply logging, Resolver addresses). One post, as the page's whole-form scrape sends it, saves every changed field in
+one write, and a post with an invalid field in either part changes neither part. The oracle is the effective config.xml
+read back over SSH, never the HTTP body: the keys that change and the description of the last write_config().
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_e2e
 
 DNS_GENERAL_PAGE = "/pfblockerng/pfblockerng_dns_general.php"
-SAVE_PFB_DNS = ("save_pfb_dns", "Save pfB-DNS settings")
 SAVE_TIMEOUT = 300.0
 LAST_WRITE = "revision/description"
 
@@ -65,8 +64,8 @@ def _stored(vm: SmokeVM, paths: list[str]) -> dict[str, str]:
 
 
 @contextlib.contextmanager
-def _both_forms_seeded(vm: SmokeVM) -> Iterator[None]:
-    """Store both forms' settings directly (the before-state must not depend on the saves under test); restore after."""
+def _both_parts_seeded(vm: SmokeVM) -> Iterator[None]:
+    """Store both parts' settings directly (the before-state must not depend on the saves under test); restore after."""
     seeds = {**PFB_DNS_SEED, **GENERAL_SEED}
     priors = _read_config_paths(vm, list(seeds))
     try:
@@ -77,60 +76,71 @@ def _both_forms_seeded(vm: SmokeVM) -> Iterator[None]:
         _write_config_paths(vm, priors)
 
 
-def test_save_pfb_dns_button_writes_the_pfb_dns_keys_and_leaves_the_dns_general_keys_unchanged(
+def test_one_post_with_a_changed_pfb_dns_field_and_a_changed_reply_logging_saves_both(
     webui: WebUI, smoke_vm: SmokeVM
 ) -> None:
-    """Given both forms stored, When the page posts a changed pfB-DNS enable and DoT port beside a changed reply logging
-    with the pfB-DNS button, Then the two pfB-DNS keys are written and every DNS General key keeps its stored value.
+    """Given both parts stored, When one post carries a changed pfB-DNS enable and DoT port beside a changed reply
+    logging, Then all three keys are written and the last write is the one "save DNS settings" write.
     """
     vm = smoke_vm
-    with _both_forms_seeded(vm):
-        before = _stored(vm, [PFB_DNS_ENABLE, PFB_DNS_DOT_PORT, *GENERAL_SEED])
-        assert (before[PFB_DNS_ENABLE], before[PFB_DNS_DOT_PORT], before[REPLY_LOGGING]) == ("", "853", "on"), (
-            f"before-state: expected pfB-DNS Off, DoT port 853 and reply logging On, got {before}"
-        )
+    with _both_parts_seeded(vm):
+        cert = helpers.dns_config_path("pfb_dns_sslcertref")
+        before = _stored(vm, [*PFB_DNS_SEED, *GENERAL_SEED])
+        assert (before[PFB_DNS_ENABLE], before[PFB_DNS_DOT_PORT], before[REPLY_LOGGING], before[cert]) == (
+            "",
+            "853",
+            "on",
+            "",
+        ), f"before-state: expected pfB-DNS Off, DoT port 853, reply logging On and no certificate, got {before}"
 
+        # The whole-form scrape itself must keep the certificate "": the select's first option is None.
         saved = webui.post(
             DNS_GENERAL_PAGE,
             {"pfb_dns": "on", "pfb_dns_dot_port": "8853", "pfb_py_reply": ""},
-            submit=SAVE_PFB_DNS,
             timeout=SAVE_TIMEOUT,
         )
 
-        assert _errors_text(saved.text) == NO_INPUT_ERRORS, f"the pfB-DNS save was refused: {_errors_text(saved.text)}"
+        assert _errors_text(saved.text) == NO_INPUT_ERRORS, f"the save was refused: {_errors_text(saved.text)}"
         after = _stored(vm, list(before))
         changed = {path: (before[path], after[path]) for path in before if before[path] != after[path]}
-        assert changed == {PFB_DNS_ENABLE: ("", "on"), PFB_DNS_DOT_PORT: ("853", "8853")}, (
-            f"expected only the pfB-DNS enable and DoT port to change, got {changed}"
-        )
+        assert changed == {
+            PFB_DNS_ENABLE: ("", "on"),
+            PFB_DNS_DOT_PORT: ("853", "8853"),
+            REPLY_LOGGING: ("on", ""),
+        }, f"expected the pfB-DNS enable, the DoT port and the reply logging to change, got {changed}"
         last = _stored(vm, [LAST_WRITE])[LAST_WRITE]
-        assert "save pfB-DNS settings" in last, f"expected the pfB-DNS handler's write to be the last, got {last!r}"
+        assert "save DNS settings" in last, f"expected the one save's write to be the last, got {last!r}"
 
 
-def test_save_dns_general_button_writes_a_dns_general_key_and_leaves_the_pfb_dns_keys_unchanged(
-    webui: WebUI, smoke_vm: SmokeVM
+@pytest.mark.parametrize(
+    ("invalid", "valid_change"),
+    [
+        pytest.param(
+            {"pfb_dns_dot_port": "70000"}, {"pfb_py_reply": ""}, id="invalid_pfb_dns_dot_port_beside_reply_logging"
+        ),
+        pytest.param(
+            {"pfb_dns_listen_interface": "nosuchif"},
+            {"pfb_dns": "on", "pfb_dns_dot_port": "8853"},
+            id="invalid_listen_interface_beside_pfb_dns_fields",
+        ),
+    ],
+)
+def test_one_post_with_an_invalid_field_in_either_part_changes_neither_part(
+    webui: WebUI, smoke_vm: SmokeVM, invalid: dict[str, str], valid_change: dict[str, str]
 ) -> None:
-    """Given both forms stored, When the page posts a changed reply logging beside a changed pfB-DNS enable and DoT port
-    with the DNS General button, Then the reply logging is written and every pfB-DNS key keeps its stored value.
+    """Given both parts stored, When one post carries an invalid field in one part beside changed fields in the other,
+    Then the page answers with the input errors and no key of either part changes.
     """
     vm = smoke_vm
-    with _both_forms_seeded(vm):
-        before = _stored(vm, [*PFB_DNS_SEED, REPLY_LOGGING])
+    with _both_parts_seeded(vm):
+        before = _stored(vm, [*PFB_DNS_SEED, *GENERAL_SEED])
         assert (before[PFB_DNS_ENABLE], before[PFB_DNS_DOT_PORT], before[REPLY_LOGGING]) == ("", "853", "on"), (
             f"before-state: expected pfB-DNS Off, DoT port 853 and reply logging On, got {before}"
         )
 
-        saved = webui.post(
-            DNS_GENERAL_PAGE,
-            {"pfb_py_reply": "", "pfb_dns": "on", "pfb_dns_dot_port": "8853"},
-            timeout=SAVE_TIMEOUT,
-        )
+        refused = webui.post(DNS_GENERAL_PAGE, {**invalid, **valid_change}, timeout=SAVE_TIMEOUT)
 
-        assert _errors_text(saved.text) == NO_INPUT_ERRORS, (
-            f"the DNS General save was refused: {_errors_text(saved.text)}"
-        )
+        assert _errors_text(refused.text) != NO_INPUT_ERRORS, f"the page accepted the invalid post {invalid}"
         after = _stored(vm, list(before))
         changed = {path: (before[path], after[path]) for path in before if before[path] != after[path]}
-        assert changed == {REPLY_LOGGING: ("on", "")}, f"expected only the reply logging to change, got {changed}"
-        last = _stored(vm, [LAST_WRITE])[LAST_WRITE]
-        assert "save DNS General settings" in last, f"expected the DNS General handler's last write, got {last!r}"
+        assert changed == {}, f"expected no key of either part to change, got {changed}"

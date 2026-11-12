@@ -3270,12 +3270,13 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 // pinned by tests/php/PfbFilterContractTest.php.
 // issue #3540: a policy receiver creates the VIP only at the synced pfb_dnsvip_auto4/6 address (not free =
 // no VIP + $pfb['dnsbl_vip_conflict'] finding); any other node publishes the address it uses.
-function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
+// Returns FALSE iff config.xml did not take the VIP write (nothing is brought up live then).
+function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): bool {
 	global $pfb;
 
 	// Only the two lifecycle modes drive VIP management; anything else is a no-op.
 	if ($mode !== 'enabled' && $mode !== 'disabled') {
-		return;
+		return TRUE;
 	}
 
 	$auto      = $listen || ($pfb['dnsbl_vip_auto'] ?? PfbToggle::Off) === PfbToggle::On;
@@ -3289,7 +3290,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 	if (empty(pfb_filter($interface, PFB_FILTER_WORD, 'pfb_manage_dnsbl_vip'))) {
 		pfb_logger("\npfb_manage_dnsbl_vip: DNSBL VIP interface failed validation [ " .
 			substr(htmlspecialchars((string) $interface), 0, 100) . " ] *aborting*", 2);
-		return;
+		return TRUE;
 	}
 
 	// issue #3540: a node that accepted a policy payload follows its sender's synced address.
@@ -3518,14 +3519,17 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 	$pfb[$listen ? 'dns_listen_vip_conflict' : 'dnsbl_vip_conflict'] = $conflicts;
 
 	if (!$changed) {
-		return;
+		return TRUE;
 	}
 
 	// Apply order mirrors upstream firewall_virtual_ip.inc: persist config first,
 	// then bring the alias(es) up.
 	config_set_path('virtualip/vip', $vips_config);
 	PfbConfig::writeSectionSystem($dnsblcfg_path, $dnsblconfig);	// registered VIP ids and synced addresses go through the gateway
-	write_config('pfBlockerNG: saving DNSBL auto-VIP changes');
+	$written = write_config('pfBlockerNG: saving DNSBL auto-VIP changes');
+	if ($written === FALSE || $written === -1) {
+		return FALSE;
+	}
 
 	// Apply any created/ensured marked VIP live (config-first, then configure).
 	if ($mode === 'enabled' && $auto) {
@@ -3545,6 +3549,7 @@ function pfb_manage_dnsbl_vip(string $mode, bool $listen = FALSE): void {
 	if (!$listen) {
 		pfb_global();
 	}
+	return TRUE;
 }
 
 /** Active listener VIP address => core VIP id. A stale manual id is warned about, never substituted; a receiver advertises only the synced address. */
@@ -3660,8 +3665,14 @@ function pfb_validate_dns_listen_vip_only_post(array $post): array {
 	if (pfb_cfg_toggle_read($post['pfb_dns_listen_vip_only'] ?? '') !== PfbToggle::On) {
 		return [];
 	}
-	if (PfbConfig::read('dns/pfb_dns') !== PfbToggle::On || pfb_cfg_toggle_read($post['pfb_dns_listen_vip'] ?? '') !== PfbToggle::On) {
-		return [gettext('VIP-only mode requires pfB-DNS and Resolver addresses enabled. Enable both first, or disable VIP-only mode.')];
+	// The caller writes the posted pfB-DNS enable first. VIP-only is active only with pfB-DNS on: while it is off, an already stored
+	// VIP-only mode is kept unchecked and only one newly turned on is refused, so turning pfB-DNS off is never refused.
+	$error = gettext('VIP-only mode requires pfB-DNS and Resolver addresses enabled. Enable both first, or disable VIP-only mode.');
+	if (PfbConfig::read('dns/pfb_dns') !== PfbToggle::On) {
+		return PfbConfig::read('gen/pfb_dns_listen_vip_only') === PfbToggle::On ? [] : [$error];
+	}
+	if (pfb_cfg_toggle_read($post['pfb_dns_listen_vip'] ?? '') !== PfbToggle::On) {
+		return [$error];
 	}
 	foreach ([4, 6] as $family) {
 		$id = $post["pfb_dns_listen_vip{$family}"] ?? '';
@@ -3716,10 +3727,12 @@ function pfb_dns_listen_auto_vips(): array {
 	return $auto;
 }
 
-/** Save and policy apply share the VIP lifecycle and append-only DNS-list ownership. @return bool FALSE iff config.xml did not take the advertisement write */
+/** Save and policy apply share the VIP lifecycle and append-only DNS-list ownership. @return bool FALSE iff config.xml did not take the VIP or the advertisement write */
 function pfb_dns_listen_vips_apply(): bool {
 	$before = array_column(config_get_path('virtualip/vip', []), 'subnet');
-	pfb_manage_dnsbl_vip('enabled', TRUE);
+	if (!pfb_manage_dnsbl_vip('enabled', TRUE)) {
+		return FALSE;
+	}
 	$vips = pfb_dns_listen_vips();
 	$addresses = pfb_dns_listen_family_addresses($vips);
 	$raw = (string) PfbConfig::read('gen/pfb_dns_listen_added');

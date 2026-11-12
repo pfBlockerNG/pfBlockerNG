@@ -98,70 +98,24 @@ $options_dns_listen_vip4 = array_merge(pfb_get_vip_options(AF_INET), array('auto
 $options_dns_listen_vip6 = array_merge(pfb_get_vip_options(AF_INET6), array('auto' => gettext('Create VIP automatically')));
 $input_errors = array();
 
-if ($_POST) {
-	if (isset($_POST['save_pfb_dns'])) {
-		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
-		foreach (array('pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_doh_trusted') as $pfb_text_field) {
-			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
-		}
-		// issue #3694: a name that is not text (an array post) stays as posted, for the validator to refuse; casting it would warn
-		if (is_string($_POST['pfb_dns_name'] ?? '')) {
-			$_POST['pfb_dns_name'] = pfb_sanitize_text((string) ($_POST['pfb_dns_name'] ?? ''));
-		}
-
-		$pfb_dns = pfb_filter($_POST['pfb_dns'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
-
-		$input_errors = array_merge($input_errors, pfb_validate_dns_proxy_listeners_post(
-			$_POST,
-			array_map('strval', array_keys($options_dns_interface)),
-			array_map('strval', array_keys($options_dns_cert))
-		));
-
-		// issue #3515: the apply moves and restores the Resolver (config.xml keys and the snapshot kept in this section)
-		// under this lock, from a fresh read. Hold it from a fresh read through write_config(), so this save cannot write
-		// back a copy that predates a move or a restore.
-		$pfb_config_lock = NULL;
-		if (!$input_errors) {
-			$pfb_config_lock = pfb_dns_config_lock();
-			if ($pfb_config_lock === NULL) {
-				$input_errors[] = 'pfB-DNS: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
-			}
-		}
-
-		if (!$input_errors) {
-			foreach (pfb_dns_proxy_listeners_stored($_POST) as $pfb_dns_key => $pfb_dns_value) {
-				PfbConfig::write(pfb_dns_config_key($pfb_dns_key), $pfb_dns_value);
-			}
-			PfbConfig::write('dns/pfb_dns', $pfb_dns);
-			try {
-				$pfb_written = write_config('[pfBlockerNG] save pfB-DNS settings');
-			} finally {
-				unlock($pfb_config_lock);
-			}
-			// pfSense's write_config() answers FALSE when it refuses the write and -1 when config.xml was not written: nothing was
-			// saved, so the save is an input error and the form comes back as submitted
-			if ($pfb_written !== FALSE && $pfb_written !== -1) {
-				pfb_mark_pending_changes();	// applies on the next Update, not on save
-				header('Location: /pfblockerng/pfblockerng_dns_general.php');
-				exit;
-			}
-			$input_errors[] = 'pfB-DNS: the configuration could not be written, so these settings were not saved. Save again in a moment.';
-		}
-
-		$pconfig['pfb_dns'] = $_POST['pfb_dns'] ?? '';	// Restore the submitted state on input errors
-		foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_ddr', 'pfb_dns_sslcertref', 'pfb_dns_name') as $pfb_dns_field) {
-			$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
-		}
-		foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface', 'pfb_dns_ddr_doh_443_interfaces') as $pfb_dns_field) {
-			$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
-		}
-		if (!is_string($pconfig['pfb_dns_name'])) {
-			$pconfig['pfb_dns_name'] = '';	// the validator refused a non-text name: the form cannot show it
-		}
-	}
-}
-
 if ($_POST && isset($_POST['save'])) {
+	// issue #1723: sanitize at ingestion -- first step, before any evaluation.
+	foreach (array('pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_doh_trusted') as $pfb_text_field) {
+		$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
+	}
+	// issue #3694: a name that is not text (an array post) stays as posted, for the validator to refuse; casting it would warn
+	if (is_string($_POST['pfb_dns_name'] ?? '')) {
+		$_POST['pfb_dns_name'] = pfb_sanitize_text((string) ($_POST['pfb_dns_name'] ?? ''));
+	}
+
+	$pfb_dns = pfb_filter($_POST['pfb_dns'] ?? '', PFB_FILTER_ON_OFF, 'pfb_dns') ?: '';
+
+	$input_errors = array_merge($input_errors, pfb_validate_dns_proxy_listeners_post(
+		$_POST,
+		array_map('strval', array_keys($options_dns_interface)),
+		array_map('strval', array_keys($options_dns_cert))
+	));
+
 	foreach (array('pfb_dns_listen_vip4', 'pfb_dns_listen_vip6', 'pfb_dns_listen_interface') as $field) {
 		$value = $_POST[$field] ?? '';
 		if (!is_string($value)) {
@@ -180,14 +134,23 @@ if ($_POST && isset($_POST['save'])) {
 			$input_errors[] = gettext('DNS General: select an available VIP and interface.');
 		}
 	}
+
+	// issue #3515: the apply moves and restores the Resolver (config.xml keys and the snapshot kept in this section) under the
+	// config lock, from a fresh read. The save below holds that lock from a fresh read through write_config(), so it cannot
+	// write back a copy that predates a move or a restore.
 	if (!$input_errors) {
 		$pfb_config_lock = pfb_dns_config_lock();
 		if ($pfb_config_lock === NULL) {
-			$input_errors[] = gettext('DNS General: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.');
+			$input_errors[] = gettext('DNS: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.');
 		} else {
 			try {
+				// The pfB-DNS enable goes into memory first: the VIP-only check judges the configuration this save leaves.
+				foreach (pfb_dns_proxy_listeners_stored($_POST) as $pfb_dns_key => $pfb_dns_value) {
+					PfbConfig::write(pfb_dns_config_key($pfb_dns_key), $pfb_dns_value);
+				}
+				PfbConfig::write('dns/pfb_dns', $pfb_dns);
 				$input_errors = pfb_validate_dns_listen_vip_only_post($pconfig);
-				$pfb_written = FALSE;
+				$pfb_written = $pfb_applied = FALSE;
 				if (!$input_errors) {
 					PfbConfig::write('dnsbl/pfb_py_reply', $pconfig['pfb_py_reply']);
 					PfbConfig::write('gen/pfb_dns_listen_vip', $pconfig['pfb_dns_listen_vip']);
@@ -195,21 +158,40 @@ if ($_POST && isset($_POST['save'])) {
 					PfbConfig::write('gen/pfb_dns_listen_vip4', $pconfig['pfb_dns_listen_vip4'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip4']);
 					PfbConfig::write('gen/pfb_dns_listen_vip6', $pconfig['pfb_dns_listen_vip6'] === 'none' ? '' : $pconfig['pfb_dns_listen_vip6']);
 					PfbConfig::write('gen/pfb_dns_listen_interface', $pconfig['pfb_dns_listen_interface']);
-					// A refused advertisement write re-read config.xml: the page write would hide it behind a success.
-					$pfb_written = pfb_dns_listen_vips_apply() ? write_config('[pfBlockerNG] save DNS General settings') : FALSE;
+					// The page write goes first: a refused apply write re-reads config.xml, which would drop these unsaved settings.
+					$pfb_written = write_config('[pfBlockerNG] save DNS settings');
+					if ($pfb_written !== FALSE && $pfb_written !== -1) {
+						$pfb_applied = pfb_dns_listen_vips_apply();
+						pfb_mark_pending_changes();	// applies on the next Update, not on save
+					}
 				}
 			} finally {
 				unlock($pfb_config_lock);
 			}
+			// pfSense's write_config() answers FALSE when it refuses the write and -1 when config.xml was not written: nothing was
+			// saved, so the save is an input error and the form comes back as submitted. A written save whose Resolver VIP or
+			// advertisement write failed stays saved and pending: the next Update or save retries the apply.
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
-				pfb_mark_pending_changes();
-				header('Location: /pfblockerng/pfblockerng_dns_general.php');
-				exit;
-			}
-			if (!$input_errors) {
-				$input_errors[] = gettext('DNS General: the configuration could not be written, so these settings were not saved. Save again in a moment.');
+				if ($pfb_applied) {
+					header('Location: /pfblockerng/pfblockerng_dns_general.php');
+					exit;
+				}
+				$input_errors[] = gettext('DNS settings saved, but the Resolver VIP/advertisement could not be written; it is retried at the next Update or save.');
+			} elseif (!$input_errors) {
+				$input_errors[] = gettext('DNS: the configuration could not be written, so these settings were not saved. Save again in a moment.');
 			}
 		}
+	}
+
+	$pconfig['pfb_dns'] = $_POST['pfb_dns'] ?? '';	// Restore the submitted state on input errors
+	foreach (array('pfb_dns_dot', 'pfb_dns_dot_port', 'pfb_dns_dot_port6', 'pfb_dns_doh', 'pfb_dns_doh_port', 'pfb_dns_doh_port6', 'pfb_dns_doh_trusted', 'pfb_dns_doq', 'pfb_dns_doq_port', 'pfb_dns_doq_port6', 'pfb_dns_ddr', 'pfb_dns_sslcertref', 'pfb_dns_name') as $pfb_dns_field) {
+		$pconfig[$pfb_dns_field] = $_POST[$pfb_dns_field] ?? '';
+	}
+	foreach (array('pfb_dns_interface', 'pfb_dns_dot_interface', 'pfb_dns_doh_interface', 'pfb_dns_doq_interface', 'pfb_dns_ddr_doh_443_interfaces') as $pfb_dns_field) {
+		$pconfig[$pfb_dns_field] = array_filter((array) ($_POST[$pfb_dns_field] ?? array()), 'is_string');
+	}
+	if (!is_string($pconfig['pfb_dns_name'])) {
+		$pconfig['pfb_dns_name'] = '';	// the validator refused a non-text name: the form cannot show it
 	}
 }
 
@@ -249,9 +231,7 @@ foreach (pfb_dns_listen_foreign_warnings() as $pfb_foreign_warning) {
 	print_info_box($pfb_foreign_warning, 'warning', FALSE);
 }
 
-$btn = new Form_Button('save_pfb_dns', 'Save pfB-DNS settings', NULL, 'fa-solid fa-save');
-$btn->addClass('btn-primary');
-$form = new Form($btn);
+$form = new Form('Save DNS settings');
 
 $section = new Form_Section('pfB-DNS Settings');
 $section->addInput(new Form_Checkbox(
@@ -305,12 +285,13 @@ $section->addInput(new Form_Select(
 		. 'Package-owned Resolver VIPs automatically serve plain DNS on port <strong>53</strong>. '
 		. '<strong>Localhost</strong>: loopback. <strong>All</strong>: every eligible firewall address except link-local. At least one entry is required.');
 
+// None first: with no stored certificate the select must not preselect (and a whole-form save then store) the first certificate.
 if ($options_dns_cert) {
 	$section->addInput(new Form_Select(
 		'pfb_dns_sslcertref',
 		gettext('SSL/TLS Certificate'),
 		$pconfig['pfb_dns_sslcertref'] ?? '',
-		$options_dns_cert
+		['' => gettext('None')] + $options_dns_cert
 	))->setHelp('The server certificate DoT, DoH and DoQ serve. The CA chain is determined automatically.');
 } else {
 	$section->addInput(new Form_StaticText(
@@ -515,9 +496,6 @@ $section->addInput(new Form_Select(
 		. '<p>Default: <strong>None</strong></p></div>');
 $form->add($section);
 
-print ($form);
-
-$form = new Form('Save DNS General settings');
 $section = new Form_Section('DNS Reply Logging');
 $section->addInput(new Form_Checkbox(
 	'pfb_py_reply',

@@ -17,6 +17,7 @@ import pytest
 
 from .. import helpers
 from .render_oracle import NO_INPUT_ERRORS, input_errors_block
+from .test_render_smoke import _resolver_address_keys_restored
 from .test_render_widget_ledger import ICON_RED, WIDGET_PAGE
 
 if TYPE_CHECKING:
@@ -27,7 +28,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_e2e
 
 DNS_PAGE = "/pfblockerng/pfblockerng_dns_general.php"  # holds the pfB-DNS settings since issue #3771
-SAVE_PFB_DNS = ("save_pfb_dns", "Save pfB-DNS settings")
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 PACKAGE_ENABLE = "installedpackages/pfblockerng/config/0/enable_cb"
@@ -100,8 +100,8 @@ def test_pfb_dns_page_saves_pfb_dns_off_while_dnsbl_is_on(webui: WebUI, smoke_vm
     """Given DNSBL and pfB-DNS stored On, When pfB-DNS Off is posted, Then pfB-DNS is stored Off, DNSBL stays On."""
     vm = smoke_vm
     siblings = {helpers.dns_config_path(key): value for key, value in PFB_DNS_SIBLINGS.items()}
-    with _seeded(vm, {DNSBL_ENABLE: "on", PFB_DNS_ENABLE: "on"} | siblings):
-        saved = webui.post(DNS_PAGE, {"pfb_dns": ""}, submit=SAVE_PFB_DNS, timeout=SAVE_TIMEOUT)
+    with _resolver_address_keys_restored(vm), _seeded(vm, {DNSBL_ENABLE: "on", PFB_DNS_ENABLE: "on"} | siblings):
+        saved = webui.post(DNS_PAGE, {"pfb_dns": ""}, timeout=SAVE_TIMEOUT)
 
         assert _errors_text(saved.text) == NO_INPUT_ERRORS, (
             f"pfB-DNS Off with DNSBL On must save; input errors: {_errors_text(saved.text)}"

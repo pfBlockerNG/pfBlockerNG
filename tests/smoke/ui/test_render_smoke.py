@@ -2815,6 +2815,36 @@ def _restore_config_paths(vm: SmokeVM, priors: Mapping[str, str | None]) -> None
     assert now == dict(priors), f"the restore did not take: expected {dict(priors)}, got {now}"
 
 
+# The Resolver-address leaves DNS General's whole-form save rewrites from whatever the form shows.
+RESOLVER_ADDRESS_KEYS = tuple(
+    f"{helpers.CFG_GLOBAL}/{key}"
+    for key in (
+        "pfb_dns_listen_vip",
+        "pfb_dns_listen_vip_only",
+        "pfb_dns_listen_vip4",
+        "pfb_dns_listen_vip6",
+        "pfb_dns_listen_interface",
+    )
+)
+
+
+@contextmanager
+def _resolver_address_keys_restored(vm: SmokeVM) -> Iterator[None]:
+    """Put the five Resolver-address keys back (absent stays absent) after a test saves DNS General."""
+    priors = _read_config_paths(vm, list(RESOLVER_ADDRESS_KEYS))
+    try:
+        yield
+    finally:
+        _restore_config_paths(vm, priors)
+
+
+def _offered_certificate(html: str) -> str:
+    """The first certificate DNS General's SSL/TLS Certificate select offers after None, or "" when it offers none."""
+    select = re.search(r'<select\b[^>]*\bname="pfb_dns_sslcertref"[^>]*>(.*?)</select>', html, re.DOTALL)
+    option = re.search(r'<option\b[^>]*\bvalue="([^"]+)"', select.group(1)) if select else None
+    return option.group(1) if option else ""
+
+
 @contextmanager
 def _ddr_on_with_a_certificate_and_a_public_vip(vm: SmokeVM, webui: WebUI) -> Iterator[None]:
     """DDR on with a DNS Name, a certificate selected, DoT, DoH and DoQ off on the interface list All, and a lo0
@@ -2826,9 +2856,9 @@ def _ddr_on_with_a_certificate_and_a_public_vip(vm: SmokeVM, webui: WebUI) -> It
     paths = [helpers.dns_config_path(key) for key in _DDR_WARNING_KEYS]
     priors = _read_config_paths(vm, paths)
     try:
-        # An unseeded box is seeded by this first load (the keys above, restored below); the form's first certificate
-        # is the one used.
-        cert = scrape_form_fields(webui.get(_PFB_DNS_PAGE).text).get("pfb_dns_sslcertref", "")
+        # An unseeded box is seeded by this first load (the keys above, restored below); the first certificate the
+        # select offers after None is the one used.
+        cert = _offered_certificate(webui.get(_PFB_DNS_PAGE).text)
         assert cert, (
             "the pfB-DNS form offers no certificate (this box has none with a private key): criterion 8 needs one"
         )

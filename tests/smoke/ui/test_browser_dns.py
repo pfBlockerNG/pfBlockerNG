@@ -10,7 +10,8 @@ holds the pfB-DNS settings since issue #3771, and measures the live DOM, not the
 * saving with a DNS interface list empty shows the input error and leaves config.xml alone, saving
   Localhost with DoT on and a certificate persists them, and stored virtual IP and gone-interface
   tokens render selected and survive a save that leaves the lists alone;
-* the pfB-DNS form and DNS General's own form save independently: a browser posts only the clicked form;
+* the pfB-DNS settings and DNS General's reply logging and Resolver addresses are one form with one "Save DNS settings"
+  button: one click stores a changed field of each part, and an invalid value in one part saves neither;
 * the retired ``pfblockerng_dns.php`` address ends on DNS General with the pfB-DNS enable visible;
 * DNS General's Resolver addresses save off with no listener VIP;
 * DDR's checkbox resolves by ``DDR`` and its interfaces multi-select by ``Advertise DoH on port 443``;
@@ -40,8 +41,9 @@ import pytest
 
 from .. import helpers
 from .test_browser_feeds import JS_TIMEOUT_MS, _contrast_ratio, _open, _shot
-from .test_dns_general_forms import PFB_DNS_DOT_PORT, REPLY_LOGGING, _both_forms_seeded, _stored
+from .test_dns_general_forms import PFB_DNS_DOT_PORT, REPLY_LOGGING, _both_parts_seeded, _stored
 from .test_dns_settings_order import PFB_DNS_SECTIONS
+from .test_render_smoke import RESOLVER_ADDRESS_KEYS
 
 pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 
@@ -58,7 +60,7 @@ pytestmark = pytest.mark.ui_browser
 RETIRED_PFB_DNS_PAGE = "/pfblockerng/pfblockerng_dns.php"
 DNS_GENERAL_PAGE = "/pfblockerng/pfblockerng_dns_general.php"
 DNS_CFG = "installedpackages/pfblockerngdns/config/0/"
-# Everything the pfB-DNS form's Save writes.
+# Everything the pfB-DNS settings' Save writes.
 DNS_SAVED_KEYS = (
     "pfb_dns",
     "pfb_dns_interface",
@@ -81,6 +83,8 @@ DNS_SAVED_KEYS = (
     "pfb_dns_ddr_doh_443_interfaces",
 )
 REPLY_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_reply"
+# What a whole-form save rewrites and a test must put back: pfB-DNS keys, reply logging, Resolver addresses.
+SAVE_RESTORED = [*(helpers.dns_config_path(key) for key in DNS_SAVED_KEYS), REPLY_CFG, *RESOLVER_ADDRESS_KEYS]
 INTERFACE_LABELS = ("DNS Interface(s)", "DoT Interface(s)", "DoH Interface(s)", "DoQ Interface(s)")
 # The DoT's, the DoH's, the DoQ's and the DDR's "Experimental." disclosure; pfB-DNS itself carries none (issue #3846).
 EXPERIMENTAL_DISCLOSURES = 4
@@ -154,15 +158,9 @@ def test_experimental_disclosures_keep_text_contrast(browser_page: Page, webui: 
 
 
 def _save(page: Page) -> None:
-    """Click DNS General's own Save (button ``save``) and wait for the page the POST answers with."""
+    """Click Save DNS settings (button ``save``) and wait for the page the POST answers with."""
     with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
         page.locator('button[type="submit"][name="save"]').click()
-
-
-def _save_pfb_dns(page: Page) -> None:
-    """Click Save pfB-DNS settings (button ``save_pfb_dns``) and wait for the page the POST answers with."""
-    with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
-        page.locator('button[type="submit"][name="save_pfb_dns"]').click()
 
 
 def test_saving_with_no_dns_interface_selected_shows_the_input_error_and_leaves_config_unchanged(
@@ -178,7 +176,7 @@ def test_saving_with_no_dns_interface_selected_shows_the_input_error_and_leaves_
     listbox.evaluate("el => { for (const option of el.options) option.selected = false; }")
     assert listbox.evaluate(_SELECTED_VALUES_JS) == [], "the test could not deselect every option"
 
-    _save_pfb_dns(page)
+    _save(page)
 
     errors = page.locator(".input-errors")
     assert errors.count() == 1, "the empty list must show the input errors box"
@@ -196,20 +194,20 @@ def test_saving_localhost_with_dot_on_and_a_certificate_persists_them(
     page is opened and put back, presence included, afterwards.
     """
     page = browser_page
-    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = SAVE_RESTORED
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     try:
         _open(page, webui, DNS_GENERAL_PAGE)
         cert = page.locator('select[name="pfb_dns_sslcertref"]')
         assert cert.count() == 1, "the box offers no certificate with a private key: nothing to select"
-        cert_ref = cert.locator("option").first.get_attribute("value")
-        assert cert_ref, "the first certificate option has no refid"
+        cert_ref = cert.locator('option:not([value=""])').first.get_attribute("value")
+        assert cert_ref, "the box offers no certificate option besides None"
         cert.select_option(cert_ref)
         page.get_by_role("listbox", name="DNS Interface(s)", exact=True).select_option("lo0")
         page.get_by_role("listbox", name="DoT Interface(s)", exact=True).select_option("lo0")
         page.locator('input[name="pfb_dns_dot"]').check()
 
-        _save_pfb_dns(page)
+        _save(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         assert helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns_dot")) == "on"
@@ -230,10 +228,10 @@ DOH_443_CFG = helpers.dns_config_path("pfb_dns_ddr_doh_443_interfaces")
 DOH_INTERFACE_CFG = helpers.dns_config_path("pfb_dns_doh_interface")
 
 
-def test_dns_general_holds_the_pfb_dns_enable_and_reply_logging_each_in_its_own_form(
+def test_dns_general_holds_the_pfb_dns_enable_and_reply_logging_in_one_form_with_one_save_button(
     browser_page: Page, webui: WebUI, screenshot_dir: Path
 ) -> None:
-    """DNS General shows the pfB-DNS enable and the shared reply logging, each operable in the form of its own Save."""
+    """DNS General shows the pfB-DNS enable and the shared reply logging, both operable in the one form of its Save."""
     page = browser_page
     _open(page, webui, DNS_GENERAL_PAGE)
     _assert_dns_navigation(page, "General")
@@ -249,12 +247,15 @@ def test_dns_general_holds_the_pfb_dns_enable_and_reply_logging_each_in_its_own_
     _shot(page, screenshot_dir, "dns_general_reply_logging")
     enable = page.locator('input[name="pfb_dns"]')
     assert enable.is_visible() and enable.is_enabled(), "the pfB-DNS enable is not operable on DNS General"
-    pfb_dns_form = page.locator('form:has(button[name="save_pfb_dns"])')
-    general_form = page.locator('form:has(button[name="save"])')
-    assert pfb_dns_form.locator('input[name="pfb_dns"]').count() == 1, "the pfB-DNS enable is not in the pfB-DNS form"
-    assert pfb_dns_form.locator('input[name="pfb_py_reply"]').count() == 0, "reply logging is in the pfB-DNS form"
-    assert general_form.locator('input[name="pfb_py_reply"]').count() == 1, "reply logging is not in the General form"
-    assert general_form.locator('input[name="pfb_dns"]').count() == 0, "the pfB-DNS enable is in the General form"
+    forms = page.locator('form:has(button[name="save"])')
+    assert forms.count() == 1, f"expected one form with the save button, got {forms.count()}"
+    form = forms.first
+    assert form.locator('input[name="pfb_dns"]').count() == 1, "the pfB-DNS enable is not in the form"
+    assert form.locator('input[name="pfb_py_reply"]').count() == 1, "reply logging is not in the form"
+    assert form.locator('button[type="submit"]').count() == 1, "the form has more than one submit button"
+    label = form.locator('button[type="submit"][name="save"]').inner_text().strip()
+    assert label == "Save DNS settings", f"the save button reads {label!r}"
+    assert page.locator('button[name="save_pfb_dns"]').count() == 0, "the retired pfB-DNS save button is on the page"
 
 
 # The Resolver addresses controls on DNS General, as stored after a save with the option off and both VIPs at none.
@@ -290,7 +291,7 @@ def test_resolver_addresses_off_saves_with_no_listener_vip(
     on the shared box it would create a live VIP.
     """
     page = browser_page
-    paths = [f"{helpers.CFG_GLOBAL}/{key}" for key in (*RESOLVER_SAVED, "pfb_dns_listen_added")] + [REPLY_CFG]
+    paths = [*RESOLVER_ADDRESS_KEYS, f"{helpers.CFG_GLOBAL}/pfb_dns_listen_added", REPLY_CFG]
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     vips_before = _listener_vip_rows(smoke_vm)
     try:
@@ -368,7 +369,7 @@ def test_saving_ddr_and_a_doh_on_port_443_choice_persists_both(
     opened and put back.
     """
     page = browser_page
-    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = SAVE_RESTORED
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     ddr_path = helpers.dns_config_path("pfb_dns_ddr")
     try:
@@ -395,7 +396,7 @@ def test_saving_ddr_and_a_doh_on_port_443_choice_persists_both(
         page.locator('input[name="pfb_dns_ddr"]').check()
         page.get_by_role("listbox", name=DOH_443_LABEL, exact=True).select_option("lan")
 
-        _save_pfb_dns(page)
+        _save(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         stored = (helpers.config_get(smoke_vm, ddr_path), helpers.config_get(smoke_vm, DOH_443_CFG))
@@ -422,7 +423,7 @@ def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save
     page = browser_page
     vip = f"_vip{_VIP_UNIQID}"
     stored = f"lo0,{vip},{_GONE}"
-    paths = [helpers.dns_config_path(key) for key in DNS_SAVED_KEYS] + [REPLY_CFG]
+    paths = SAVE_RESTORED
     originals = {path: helpers.config_get_state(smoke_vm, path) for path in paths}
     entry = {"mode": "ipalias", "interface": "lo0", "type": "single", "subnet": _VIP_ADDR, "subnet_bits": "32"}
     lists = [f"{DNS_CFG}pfb_dns{kind}_interface" for kind in ("", "_dot", "_doh", "_doq")]
@@ -453,7 +454,7 @@ def test_a_stored_vip_and_a_gone_interface_render_selected_and_an_unchanged_save
             gone_text = listbox.locator(f'option[value="{_GONE}"]').inner_text()
             assert gone_text == f"{_GONE} (not currently available)", f"{label!r}: the gone option reads {gone_text!r}"
 
-        _save_pfb_dns(page)
+        _save(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
         for path in lists:
@@ -778,51 +779,57 @@ def test_the_retired_pfb_dns_address_ends_on_dns_general_with_the_pfb_dns_enable
     _shot(page, screenshot_dir, "dns_retired_pfb_dns_address")
 
 
-def test_clicking_save_pfb_dns_stores_the_changed_pfb_dns_field_and_not_the_changed_dns_general_field(
+def test_clicking_save_dns_settings_stores_the_changed_pfb_dns_field_and_the_changed_reply_logging(
     browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
 ) -> None:
-    """Given both forms stored, When the DoT port and the reply logging are changed and Save pfB-DNS settings is
-    clicked, Then the DoT port is stored and the reply logging keeps its stored value: only the clicked form posted.
+    """Given both parts stored, When the DoT port and the reply logging are changed and Save DNS settings is clicked,
+    Then the DoT port and the reply logging are both stored: one form, one save.
     """
     page = browser_page
-    with _both_forms_seeded(smoke_vm):
-        before = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
-        assert before == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: "on"}, f"before-state: got {before}"
-        _open(page, webui, DNS_GENERAL_PAGE)
-        page.locator('input[name="pfb_dns_dot_port"]').fill("8853")
-        page.locator('input[name="pfb_py_reply"]').set_checked(False)
-        label = page.locator('button[type="submit"][name="save_pfb_dns"]').inner_text().strip()
-        assert label == "Save pfB-DNS settings", f"the pfB-DNS save button reads {label!r}"
-
-        _save_pfb_dns(page)
-
-        assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
-        after = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
-        assert after == {PFB_DNS_DOT_PORT: "8853", REPLY_LOGGING: "on"}, (
-            f"expected the DoT port stored as 8853 and the reply logging still on, got {after}"
-        )
-
-
-def test_clicking_save_dns_general_stores_the_changed_dns_general_field_and_not_the_changed_pfb_dns_field(
-    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
-) -> None:
-    """Given both forms stored, When the DoT port and the reply logging are changed and Save DNS General settings is
-    clicked, Then the reply logging is stored and the DoT port keeps its stored value: only the clicked form posted.
-    """
-    page = browser_page
-    with _both_forms_seeded(smoke_vm):
-        before = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
-        assert before == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: "on"}, f"before-state: got {before}"
+    with _both_parts_seeded(smoke_vm):
+        cert = helpers.dns_config_path("pfb_dns_sslcertref")
+        before = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING, cert])
+        assert before == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: "on", cert: ""}, f"before-state: got {before}"
         _open(page, webui, DNS_GENERAL_PAGE)
         page.locator('input[name="pfb_dns_dot_port"]').fill("8853")
         page.locator('input[name="pfb_py_reply"]').set_checked(False)
         label = page.locator('button[type="submit"][name="save"]').inner_text().strip()
-        assert label == "Save DNS General settings", f"the DNS General save button reads {label!r}"
+        assert label == "Save DNS settings", f"the save button reads {label!r}"
 
         _save(page)
 
         assert page.locator(".input-errors").count() == 0, page.locator(".input-errors").inner_text()
-        after = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING])
-        assert after == {PFB_DNS_DOT_PORT: "853", REPLY_LOGGING: ""}, (
-            f"expected the reply logging stored off and the DoT port still 853, got {after}"
+        after = _stored(smoke_vm, [PFB_DNS_DOT_PORT, REPLY_LOGGING, cert])
+        assert after == {PFB_DNS_DOT_PORT: "8853", REPLY_LOGGING: "", cert: ""}, (
+            f"expected the DoT port stored as 8853, the reply logging off and the certificate still unset, got {after}"
         )
+
+
+def test_an_invalid_pfb_dns_value_beside_a_changed_reply_logging_saves_neither_and_keeps_both_as_posted(
+    browser_page: Page, webui: WebUI, smoke_vm: helpers.SmokeVM
+) -> None:
+    """Given both parts stored, When no DNS interface is selected and the reply logging is unticked and Save DNS
+    settings is clicked, Then one input-errors box shows, neither stored key changes and both fields keep the posted
+    values.
+    """
+    page = browser_page
+    interface_cfg = helpers.dns_config_path("pfb_dns_interface")
+    with _both_parts_seeded(smoke_vm):
+        before = _stored(smoke_vm, [interface_cfg, REPLY_LOGGING])
+        assert before == {interface_cfg: "lo0", REPLY_LOGGING: "on"}, f"before-state: got {before}"
+        _open(page, webui, DNS_GENERAL_PAGE)
+        listbox = page.get_by_role("listbox", name="DNS Interface(s)", exact=True)
+        listbox.evaluate("el => { for (const option of el.options) option.selected = false; }")
+        assert listbox.evaluate(_SELECTED_VALUES_JS) == [], "the test could not deselect every option"
+        page.locator('input[name="pfb_py_reply"]').set_checked(False)
+
+        _save(page)
+
+        errors = page.locator(".input-errors")
+        assert errors.count() == 1, f"expected one input-errors box, got {errors.count()}"
+        assert "DNS: select at least one interface." in errors.inner_text()
+        after = _stored(smoke_vm, [interface_cfg, REPLY_LOGGING])
+        assert after == before, f"a rejected save changed config.xml: expected {before}, got {after}"
+        shown = listbox.evaluate(_SELECTED_VALUES_JS)
+        assert shown == [], f"the DNS Interface(s) list must come back as posted (empty), got {shown}"
+        assert not page.locator('input[name="pfb_py_reply"]').is_checked(), "the reply logging must come back unticked"
