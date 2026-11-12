@@ -55,7 +55,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Locator, Page
+    from playwright.sync_api import Locator, Page, Route
 
     from .webui import WebUI
 
@@ -358,3 +358,18 @@ def test_painted_feed_rows_scope_legible_link_foregrounds(
         helpers.config_restore_state(smoke_vm, _THEME_CFG, prior_theme)
         restored_theme = helpers.config_get_state(smoke_vm, _THEME_CFG)
         assert restored_theme == prior_theme, f"{_THEME_CFG} restored as {restored_theme!r}, expected {prior_theme!r}"
+
+
+def test_open_fails_on_a_full_page_whose_jquery_never_loads(browser_page: Page, webui: WebUI) -> None:
+    """issue #3867: the shared document-ready wait is strict, so a full page that lost jQuery fails loudly."""
+    page = browser_page
+    blocked: list[str] = []
+
+    def block(route: Route) -> None:
+        blocked.append(route.request.url)
+        route.abort()
+
+    page.route(re.compile(r"/jquery-\d[^/]*\.js"), block)
+    with pytest.raises(sync_api.Error, match="jQuery is not defined"):
+        _open(page, webui, f"{FEEDS_BASE}?type=ipv4")
+    assert blocked, "no jQuery script request was blocked, so the page never lost jQuery"
