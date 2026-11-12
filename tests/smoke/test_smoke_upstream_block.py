@@ -592,3 +592,34 @@ class TestUpstreamDetectionFollowsTheStoredCheckbox:
         h.reload(vm, "update")
         entries = _read_upstream_entries(vm)
         assert entries not in (None, "disabled"), f"after an Update the Upstream row reads entries={entries!r}"
+
+
+class TestNoMountsForTheRetiredDnsblModule:
+    """Issue #3850: Unbound loads only the upstream observer, so no restart prepares its chroot for the old module."""
+
+    def test_restarts_and_updates_log_no_mounts_and_leave_only_the_observers(
+        self, deployed_vm: tuple[SmokeVM, SmokeVM]
+    ) -> None:
+        """
+        Given: the observer in Unbound (forwarding on) and the deploy's Update, which restarted Unbound.
+        When: another Update runs.
+        Then: pfblockerng.log has no mount step and never calls DNSBL python, the chroot holds none of the
+          retired module's mounts (lib, the pfBlockerNG logs, GeoIP), and the observer's python libraries stay mounted.
+        """
+        vm, _ = deployed_vm
+        h.reload(vm, "update")
+        log = h.read_log_file(vm, h.PFB_LOG)
+        assert "Starting Unbound Resolver" in log, "precondition: pfBlockerNG restarted Unbound on this box"
+        stale = [line for line in log.splitlines() if "Additional mounts" in line or "DNSBL python" in line]
+        assert not stale, f"pfblockerng.log still logs the retired module's mounts: {stale}"
+        mounts = vm.ssh("/sbin/mount").stdout
+        retired = [
+            line
+            for line in mounts.splitlines()
+            if any(
+                f" on /var/unbound/{leaf} (" in line for leaf in ("lib", "var/log/pfblockerng", "usr/local/share/GeoIP")
+            )
+        ]
+        assert not retired, f"the chroot still holds the retired module's mounts: {retired}\n{mounts}"
+        observer_libs = " on /var/unbound/usr/local/lib ("
+        assert observer_libs in mounts, f"the observer's python libraries are not mounted:\n{mounts}"

@@ -1056,6 +1056,37 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringContainsString('Mounting: /usr/local/lib', $this->pfbLog());
 	}
 
+	public function testTheObserversMountsAreLoggedAsItsOwnNotDnsbls(): void
+	{
+		// Given nothing mounted, the proxy on and the Resolver forwarding (issue #3850)
+		$this->useMountState(FALSE);
+		$this->setProxy(TRUE);
+		$GLOBALS['config']['unbound'] = self::originalResolver();
+		$this->setForwarding(TRUE);
+
+		// When DNSBL is applied
+		pfb_unbound_python('enabled');
+
+		// Then the mount step names the upstream observer, not DNSBL
+		$this->assertStringContainsString('Mounting: /usr/local/bin', $this->pfbLog(), 'before: the mounts were made');
+		$this->assertStringContainsString('Adding Unbound python mounts for the upstream observer:', $this->pfbLog());
+		$this->assertStringNotContainsString('DNSBL Unbound python', $this->pfbLog());
+	}
+
+	public function testRemovedPythonMountsAreLoggedWithoutCallingDnsblPython(): void
+	{
+		// Given Unbound's python bin and lib folders mounted (issue #3850)
+		$this->useMountState(TRUE);
+
+		// When they are unmounted
+		pfb_unbound_python_unmount();
+
+		// Then the log names Unbound's python mounts, not DNSBL
+		$this->assertStringContainsString('Unmounting: /usr/local/bin', $this->pfbLog(), 'before: the unmount ran');
+		$this->assertStringContainsString('Removing Unbound python mounts:', $this->pfbLog());
+		$this->assertStringNotContainsString('DNSBL Unbound python', $this->pfbLog());
+	}
+
 	public function testUnboundConfGainsTheObserverWhileASnapshotExistsAndForwardingIsOn(): void
 	{
 		// Given a conf without any python module, a snapshot (the proxy owns the module) and forwarding.
@@ -1105,6 +1136,34 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertStringNotContainsString('python-script', $patched);
 		$this->assertStringNotContainsString('pfb_unbound.py', $patched);
 		$this->assertStringNotContainsString('pfb_upstream_observer', $patched);
+	}
+
+	public function testAddingTheObserverToUnboundConfIsLoggedAsUnboundsPythonModuleAndScript(): void
+	{
+		// Given a conf without any python module, a snapshot and forwarding (issue #3850)
+		$this->seedMovedResolver();
+		$this->setForwarding(TRUE);
+		$this->writeUnboundConf(self::CONF_WITHOUT_MODULE);
+
+		// When the enabled pass adds the observer
+		$this->assertTrue(pfb_unbound_dnsbl('enabled'), 'before: unbound.conf was changed');
+
+		// Then the modifications name Unbound's python module and script, not DNSBL
+		$this->assertStringContainsString("  Added Unbound python module\n  Added Unbound python script\n", $this->pfbLog());
+		$this->assertStringNotContainsString('DNSBL Unbound Python', $this->pfbLog());
+	}
+
+	public function testRemovingTheObserverFromUnboundConfIsLoggedAsUnboundsPythonModuleAndScript(): void
+	{
+		// Given a conf that loads the observer and no snapshot (issue #3850)
+		$this->writeUnboundConf(self::CONF_WITH_OBSERVER);
+
+		// When the enabled pass takes it out
+		$this->assertTrue(pfb_unbound_dnsbl('enabled'), 'before: unbound.conf was changed');
+
+		// Then the modifications name Unbound's python module and script, not DNSBL
+		$this->assertStringContainsString("  Removed Unbound python module\n  Removed Unbound python script\n", $this->pfbLog());
+		$this->assertStringNotContainsString('DNSBL Unbound Python', $this->pfbLog());
 	}
 
 	public function testUnboundConfKeepsTheObserverWhenForwardingIsOff(): void
@@ -1404,13 +1463,29 @@ final class DnsProxyModuleGatingTest extends TestCase
 		$this->assertTrue($GLOBALS['pfb']['dnsbl_python_unmount']);
 	}
 
+	public function testTheDisabledPassLogsTheRemovalAsUnboundsScriptNotDnsblPython(): void
+	{
+		// Given the observer in Unbound beside a moved Resolver, pfB-DNS off and DNSBL disabled (issue #3850)
+		$this->seedObserverInUnbound();
+		$this->setProxy(FALSE);
+		$this->configXmlOnDisk();
+
+		// When the disabled pass removes Unbound's python settings
+		pfb_unbound_python('disabled');
+
+		// Then the log names pfBlockerNG's Unbound python script, not DNSBL
+		$this->assertSame('', $this->onDisk('unbound/python_script'), 'before: the settings were removed');
+		$this->assertStringContainsString('Removing pfBlockerNG Unbound python script settings', $this->pfbLogs());
+		$this->assertStringNotContainsString('DNSBL Unbound python', $this->pfbLogs());
+	}
+
 	#[DataProvider('refusedWrites')]
 	public function testTheDisabledPassWhoseRemovalOfTheObserverConfigXmlRefusesKeepsItStoredAndUnmountsNothing(mixed $answer): void
 	{
 		// Given the same state, and a config.xml that refuses the write that removes the python settings (it takes the Resolver's restore)
 		$this->seedObserverInUnbound();
 		$this->setProxy(FALSE);
-		$this->configXmlOnDisk($answer, 'Removing DNSBL Unbound python');
+		$this->configXmlOnDisk($answer, 'Removing pfBlockerNG Unbound python');
 		$this->assertSame('pfb_upstream_observer', $this->onDisk('unbound/python_script'), 'before: config.xml names the observer');
 
 		// When the disabled pass runs
