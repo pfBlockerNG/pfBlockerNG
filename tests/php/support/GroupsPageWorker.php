@@ -10,7 +10,8 @@ declare(strict_types=1);
  * from its custom-list validation (the last check before the writes) to the end of the `save` branch.
  *
  * argv: page (`list` | `edit`), scenario, result file, case (JSON, optional): `type` the group type (`dnsbl` | `ipv4` | `geoip`),
- * `post`/`get` the request over the worker's defaults, `emptyFirstRow` the stored list starts with an empty `<config></config>`,
+ * `post`/`get` the request over the worker's defaults (the editor's save posts, as its form does, `aliasname_loaded`: the name of the group at `rowid`
+ * in the config the request read, empty for a free row; a `post` value of null leaves that field out of the request), `emptyFirstRow` the stored list starts with an empty `<config></config>`,
  * `bravoName` the stored name of the second group when it is not Bravo (a name with markup characters: only for scenarios that leave it in place),
  * `ledger` TRUE (an open download entry for DNSBL_Bravo) or a list of group names with one in the sync-status ledger, `core.socket` the Core API socket the notice talks to
  * (default: none listens), `timeline` a file every lock/read/write event is appended to as {"event": ...} (a Core stand-in given the
@@ -18,7 +19,8 @@ declare(strict_types=1);
  *
  * Scenarios: `plain` (nothing else wrote), `interleave` (Core patched another group and appended a group after this request read
  * config.xml), `row_deleted` (the group this request addresses was removed on disk), `first_deleted` (the first group, Alpha, was
- * removed on disk: the row at its index is now another group), `cleaned_elsewhere` (the empty row was already
+ * removed on disk: the row at its index is now another group), `first_deleted_before` (Alpha was already gone when this request read
+ * config.xml: the row at its index is Bravo in the request's own read too), `cleaned_elsewhere` (the empty row was already
  * removed on disk), `lock_taken` (another process holds the config lock), `read_fails` (the fresh read fails), `write_refused`
  * (write_config answers FALSE), `write_failed` (answers -1), `write_throws` (exception).
  * The result holds the disk config after and before the request, the config the request read, lock/read/write events, the lock state after, the write_config()
@@ -161,6 +163,9 @@ if ($type === 'geoip') {
 	$other['installedpackages']['pfblockerngeurope']['config'][0]['cron'] = 'Weekly';	// the adapter patched another continent
 } else {
 	$groups = [$group('Alpha'), $group($case['bravoName'] ?? 'Bravo')];
+	if ($scenario === 'first_deleted_before') {
+		array_shift($groups);
+	}
 	if (!empty($case['emptyFirstRow'])) {
 		array_unshift($groups, []);
 	}
@@ -169,8 +174,10 @@ if ($type === 'geoip') {
 	// What the settings adapter wrote after this request read config.xml: another group patched, a new group appended
 	$patched = $groups;
 	$alpha = array_key_last(array_filter($patched, static fn (mixed $g): bool => ($g['aliasname'] ?? '') === 'Alpha'));
-	$patched[$alpha]['cron'] = '06hours';
-	$patched[$alpha]['description'] = 'patched by Core';
+	if ($alpha !== NULL) {
+		$patched[$alpha]['cron'] = '06hours';
+		$patched[$alpha]['description'] = 'patched by Core';
+	}
 	$other = $before;
 	if ($scenario === 'interleave') {
 		$other['installedpackages'][$conf]['config'] = [...$patched, $group('Charlie')];
@@ -249,7 +256,9 @@ $_POST = array_replace($_POST, [
 	'logging' => 'default', 'order' => 'default', 'aliaslog' => 'enabled', 'stateremoval' => 'enabled', 'autoproto_in' => 'any',
 	'autoproto_out' => 'any', 'agateway_in' => 'default', 'agateway_out' => 'default', 'suppression_cidr' => 'Disabled',
 	'state-0' => 'Enabled', 'header-0' => 'BravoFeed', 'url-0' => 'https://example.invalid/bravo-edited.txt', 'format-0' => 'auto',
+	'aliasname_loaded' => config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", ''),
 ], $case['post'] ?? []);
+$_POST = array_filter($_POST, static fn (mixed $value): bool => $value !== NULL);
 $pconfig = $_POST;
 eval($block);
 $returned = TRUE;

@@ -19,9 +19,9 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  *   - a lock that stays taken, or a failed fresh read, writes nothing and says so (an input error, the delete's message, the update's
  *     AJAX error array): no side effect of the action (the sync-status ledger) happens either;
  *   - a group the request addresses that is gone from the fresh config is never written back as a half-built or resurrected group;
- *   - the row at the posted index must still be the group the request meant: the editor compares it with the row its request loaded,
- *     the delete with the group name the list page posts. Another group at that index (the first group was deleted since) is never
- *     overwritten or deleted;
+ *   - the row at the posted index must still be the group the request meant: the editor's form posts the name of the group it loaded
+ *     (aliasname_loaded, empty for a new group) and the save compares it with the row under the lock, the delete with the group name
+ *     the list page posts. Another group at that index (the first group was deleted since) is never overwritten or deleted;
  *   - the list's bulk update posts, with every row it changes or reorders, the name of the group the page showed there (aliasname-N, a
  *     GeoIP row's continent); a row posted without its name, or under a name that is not the group at that index now, refuses the
  *     whole update on the AJAX error channel and nothing is written;
@@ -220,6 +220,131 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertSame($result['diskBefore'], $result['disk'], 'config.xml is as the other save left it');
 		$this->assertSame(['DNSBL_Alpha/download', 'DNSBL_Bravo/download'], $result['ledger'], 'no ledger entry is closed');
 		$this->assertSame(['try_lock', 'read', 'unlock'], self::eventNames($result));
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	/** @return array<string, array{string}> the name the form is posted under: the loaded group's own name, or a rename */
+	public static function postedNamesOfAReplacedGroup(): array
+	{
+		return ['a save under its own name' => ['Alpha'], 'a rename' => ['AlphaRenamed']];
+	}
+
+	#[DataProvider('postedNamesOfAReplacedGroup')]
+	public function testAGroupSaveNeverOverwritesAnotherGroupThatReplacedTheOneTheFormLoaded(string $name): void
+	{
+		// Given the form loaded for Alpha at row 0, and Alpha deleted before this request read config.xml: Bravo is row 0 in its own read
+		$result = $this->worker('edit', 'first_deleted_before', ['rowid' => 0, 'post' => ['aliasname' => $name, 'aliasname_loaded' => 'Alpha'], 'ledger' => ['Alpha', 'Bravo']]);
+		$this->assertSame(['Bravo'], self::names($result['before']), 'before-state: the request read Bravo at row 0');
+		$this->assertSame(['Bravo'], self::names($result['diskBefore']), 'before-state: on disk row 0 is Bravo');
+
+		// Then the save is refused: Bravo is not overwritten, renamed or closed
+		$this->assertCount(1, $result['inputErrors']);
+		$this->assertStringContainsString('changed by another save', $result['inputErrors'][0]);
+		$this->assertTrue($result['returned']);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['diskBefore'], $result['disk'], 'config.xml is as the other save left it');
+		$this->assertSame(['DNSBL_Alpha/download', 'DNSBL_Bravo/download'], $result['ledger'], 'no ledger entry is closed');
+		$this->assertSame(['try_lock', 'read', 'unlock'], self::eventNames($result));
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	/** @return array<string, array{mixed}> what a save of Bravo (row 1) can post as the group its form loaded, none of it Bravo's name */
+	public static function unusableLoadedNames(): array
+	{
+		return [
+			'no loaded name' => [NULL],
+			'an empty loaded name' => [''],
+			'a loaded name that is an array' => [['Bravo']],
+			'the name of another group' => ['Alpha'],
+		];
+	}
+
+	#[DataProvider('unusableLoadedNames')]
+	public function testAGroupSaveThatDoesNotNameTheGroupItLoadedIsRefusedAndWritesNothing(mixed $loaded): void
+	{
+		// Given a save of Bravo whose request carries no usable name for the group the form loaded
+		$result = $this->worker('edit', 'plain', ['post' => ['aliasname_loaded' => $loaded], 'ledger' => TRUE]);
+		$this->assertSame('Bravo', $result['before']['installedpackages']['pfblockerngdnsbl']['config'][1]['aliasname'], 'before-state: Bravo is stored at row 1');
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledgerBefore'], 'before-state: Bravo has an open entry');
+
+		// Then it is refused and nothing is written
+		$this->assertCount(1, $result['inputErrors']);
+		$this->assertStringContainsString('changed by another save', $result['inputErrors'][0]);
+		$this->assertTrue($result['returned']);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['before'], $result['disk'], 'nothing is saved');
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledger'], 'no ledger entry is closed');
+		$this->assertSame(['try_lock', 'read', 'unlock'], self::eventNames($result));
+		$this->assertFalse($result['pendingMarked']);
+		$this->assertNull($result['settingsFailed'], 'Core is not told');
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testALoadedNameThatOnlyComparesEqualAsANumberIsNotTheStoredName(): void
+	{
+		// Given Bravo stored as '1e1', and a form that loaded a group called '10': PHP's loose == calls them equal, both are valid names
+		$result = $this->worker('edit', 'plain', ['bravoName' => '1e1', 'post' => ['aliasname' => '1e1', 'aliasname_loaded' => '10']]);
+		$this->assertSame('1e1', $result['before']['installedpackages']['pfblockerngdnsbl']['config'][1]['aliasname'], 'before-state: Bravo is stored as 1e1');
+
+		// Then the save is refused: the names are compared as the strings they are
+		$this->assertCount(1, $result['inputErrors']);
+		$this->assertStringContainsString('changed by another save', $result['inputErrors'][0]);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['before'], $result['disk'], 'nothing is saved');
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testAFormLoadedForAGroupThatIsGoneIsNotSavedBackAsANewGroup(): void
+	{
+		// Given the form loaded for Bravo, which was deleted before this request read config.xml: its old row 1 is free
+		$result = $this->worker('edit', 'plain', ['rowid' => 2, 'post' => ['aliasname' => 'Bravo', 'aliasname_loaded' => 'Bravo']]);
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['before']), 'before-state: row 2 is free');
+
+		// Then it is refused: the group is not created again
+		$this->assertCount(1, $result['inputErrors']);
+		$this->assertStringContainsString('changed by another save', $result['inputErrors'][0]);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['before'], $result['disk'], 'nothing is saved');
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testARenameIsSavedWhenTheFormLoadedTheStoredNameOfThatGroup(): void
+	{
+		// Given Bravo, loaded under its stored name, saved under another name
+		$result = $this->worker('edit', 'plain', ['post' => ['aliasname' => 'BravoRenamed', 'aliasname_loaded' => 'Bravo'], 'ledger' => TRUE]);
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledgerBefore'], 'before-state: the old name has an open entry');
+
+		// Then the group is renamed, and only now is the old name's ledger entry closed
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame(['Alpha', 'BravoRenamed'], self::names($result['disk']));
+		$this->assertSame('edited on the page', self::group($result['disk'], 'BravoRenamed')['description'] ?? NULL, 'the posted fields are saved');
+		$this->assertSame([], $result['ledger'], "the old name's entry is closed");
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testAGroupWhoseNameHasMarkupCharactersIsSavedWhenTheFormLoadedItByThatName(): void
+	{
+		// Given Bravo stored under a name with quote and markup characters (an imported or restored name), loaded and posted as it is stored
+		$name = 'Br"a<v>&o';
+		$result = $this->worker('edit', 'plain', ['bravoName' => $name, 'post' => ['aliasname' => $name, 'aliasname_loaded' => $name]]);
+		$this->assertSame($name, $result['before']['installedpackages']['pfblockerngdnsbl']['config'][1]['aliasname'], 'before-state: the name is stored as it is');
+
+		// Then the group is saved, under the same name byte for byte
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame(['Alpha', $name], self::names($result['disk']));
+		$this->assertSame('edited on the page', self::group($result['disk'], $name)['description'] ?? NULL);
+	}
+
+	public function testANewGroupIsSavedAtARowIndexThatIsStillFree(): void
+	{
+		// Given a new group for row 2, which the form found free (it loads no group: an empty loaded name)
+		$result = $this->worker('edit', 'plain', ['rowid' => 2, 'post' => ['aliasname' => 'Delta']]);
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['before']), 'before-state: row 2 is free');
+
+		// Then it is saved there
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame(['Alpha', 'Bravo', 'Delta'], self::names($result['disk']));
+		$this->assertSame(['pfBlockerNG: Saved [ Type:DNSBL, Name:Delta ] configuration'], $result['writes']);
 		$this->assertFalse($result['lockHeld']);
 	}
 
@@ -578,6 +703,39 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertStringContainsString($says, $this->ajaxErrors($result)[0] ?? '');
 		$this->assertSame([], $result['writes']);
 		$this->assertSame($result['before'], $result['disk'], 'nothing is saved');
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	/** @return array<string, array{string}> an `ids` that names its first row in a way the Groups list never posts (it posts rN), the second row r0 */
+	public static function handBuiltIds(): array
+	{
+		return [
+			'a bare number' => ['ids[0]=1&ids[1]=r0'],
+			'a trailing r' => ['ids[0]=r1r&ids[1]=r0'],
+			'a doubled r' => ['ids[0]=rr1&ids[1]=r0'],
+			'an r without digits' => ['ids[0]=r&ids[1]=r0'],
+			'a negative number' => ['ids[0]=r-1&ids[1]=r0'],
+			'a trailing space' => ['ids[0]=r1%20&ids[1]=r0'],
+			'an array' => ['ids[0][]=r1&ids[1]=r0'],
+			'another letter than r' => ['ids[0]=x1&ids[1]=r0'],
+			'an upper-case R' => ['ids[0]=R1&ids[1]=r0'],
+		];
+	}
+
+	#[DataProvider('handBuiltIds')]
+	public function testAReorderWhoseRowIsNotWrittenAsRNIsRefusedEvenWithValidNamesForTheOtherRows(string $ids): void
+	{
+		// Given a reorder that swaps the two groups, whose second row is a plain r0 named correctly, and whose first row is hand-built
+		$result = $this->worker('list', 'plain', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '0', 'ids' => $ids, 'postdata' => 'aliasname-0=Alpha&aliasname-1=Bravo']]);
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['before']), 'before-state: Alpha is row 0, Bravo row 1');
+
+		// Then the AJAX error channel names the row, and the order is not written
+		$errors = $this->ajaxErrors($result);
+		$this->assertStringContainsString('IDS Failed Rowid', implode("\n", $errors), 'the update says which part of ids it refused');
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['before'], $result['disk'], 'nothing is saved');
+		$this->assertFalse($result['pendingMarked']);
+		$this->assertNull($result['settingsFailed'], 'Core is not told');
 		$this->assertFalse($result['lockHeld']);
 	}
 
