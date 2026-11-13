@@ -71,6 +71,17 @@ func hashFile(path string, h hash.Hash) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// dropDigests removes the digest sidecars of the published copy, to be called before the copy is replaced: a digest that
+// outlived its copy would let a source holding the older bytes read as unchanged.
+func dropDigests(feed Feed) error {
+	for _, s := range [...]string{".orig.xxhash128", ".orig.md5"} {
+		if err := os.Remove(feed.path(s)); err != nil && !os.IsNotExist(err) {
+			return errors.New("published digest could not be replaced")
+		}
+	}
+	return nil
+}
+
 // publish makes the staged body the published copy in one rename: its raw-byte digest is recorded first (the probe
 // hashes raw bytes, #713), then a missing trailing newline is added (#1263).
 func publish(feed Feed, staged string, lastMod time.Time) error {
@@ -94,11 +105,8 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 		return errors.New("staged body could not be written")
 	}
 	published := feed.path(".orig")
-	// A digest that outlived its copy would let an upstream revert to those older bytes read as unchanged.
-	for _, s := range [...]string{".orig.xxhash128", ".orig.md5"} {
-		if err := os.Remove(feed.path(s)); err != nil && !os.IsNotExist(err) {
-			return errors.New("published digest could not be replaced")
-		}
+	if err := dropDigests(feed); err != nil {
+		return err
 	}
 	if err := os.Rename(staged, published); err != nil {
 		return errors.New("published copy could not be replaced")

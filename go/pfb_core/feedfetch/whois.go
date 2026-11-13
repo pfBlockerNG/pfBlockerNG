@@ -54,7 +54,9 @@ func WhoisBudget(override string) time.Duration {
 // Whois is whoisconvert() in Core: it resolves a feed's Domain/AS list into the published copy ".orig". Every entry that
 // resolves is kept, in order, whatever fails around it; a copy is never left half-built. Nothing resolving keeps the
 // previous copy, or writes an empty one (one newline) when there is none. A failed entry, or a batch that ran out of
-// time, leaves the ".fail" marker. A cancelled ctx abandons the run with every file untouched.
+// time, leaves the ".fail" marker. A write over a copy drops its digest sidecars, which whoisconvert() leaves behind (a
+// deliberate divergence: they would describe bytes the copy no longer holds). A cancelled ctx abandons the run with
+// every file untouched.
 func (f *Fetcher) Whois(ctx context.Context, feed Feed, req WhoisRequest) WhoisResult {
 	if !feed.valid() {
 		return WhoisResult{Reason: "invalid feed name"}
@@ -226,6 +228,15 @@ func (b *whoisBatch) publish(feed Feed) WhoisResult {
 	if b.failed {
 		if err := touch(feed.path(".fail")); err != nil {
 			fail("failure marker could not be written", err)
+		}
+	}
+	// Every outcome but keeping the existing copy replaces ".orig", and the digests of the copy it replaces go first.
+	if b.found || !regularFile(orig) {
+		if err := dropDigests(feed); err != nil {
+			res.Found = false
+			fail("published copy could not be replaced", err) // the previous copy, or its backup, stays
+			res.Log = b.log.String()
+			return res
 		}
 	}
 	switch {
