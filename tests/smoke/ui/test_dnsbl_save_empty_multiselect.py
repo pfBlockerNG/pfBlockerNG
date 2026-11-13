@@ -26,10 +26,15 @@ DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 _ALLOW_INT = "installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_allow_int"
 
 
-def _dnsbl_undefined_key_count(vm: SmokeVM) -> int:
-    """``Undefined array key`` lines raised in the DNSBL page, over every candidate php_error.log."""
+def _allow_int_undefined_key_count(vm: SmokeVM) -> int:
+    """``Undefined array key "dnsbl_allow_int"`` lines raised in the DNSBL page, over every candidate php_error.log.
+
+    Scoped to the key: the page's re-render logs other, unrelated keys of the same class.
+    """
     logs = " ".join(PHP_ERROR_LOG_CANDIDATES)
-    result = vm.ssh(f"cat {logs} 2>/dev/null | grep 'Undefined array key' | grep -c 'pfblockerng_dnsbl.php'")
+    result = vm.ssh(
+        f"cat {logs} 2>/dev/null | grep -F 'Undefined array key \"dnsbl_allow_int\"' | grep -c 'pfblockerng_dnsbl.php'"
+    )
     return int(result.stdout.strip() or 0)
 
 
@@ -43,7 +48,7 @@ def test_dnsbl_save_without_allow_interface_logs_no_php_diagnostic(smoke_vm: Smo
         )
         guard = PhpErrorLogGuard(smoke_vm)
         guard.snapshot()
-        undefined_keys = _dnsbl_undefined_key_count(smoke_vm)
+        undefined_keys = _allow_int_undefined_key_count(smoke_vm)
         response = webui.post(DNSBL_PAGE, {"pfb_py_cache_max": "not-a-number"}, allow_redirects=False)
         assert response.status_code == 200, f"invalid POST must re-render, not redirect: {response.status_code}"
         errors = input_errors_block(response.text)
@@ -51,8 +56,8 @@ def test_dnsbl_save_without_allow_interface_logs_no_php_diagnostic(smoke_vm: Smo
             f"POST must reach the save validator: {response.text[-4000:]}"
         )
         guard.assert_no_growth()
-        assert _dnsbl_undefined_key_count(smoke_vm) == undefined_keys, (
-            "the save logged an Undefined array key warning in pfblockerng_dnsbl.php"
+        assert _allow_int_undefined_key_count(smoke_vm) == undefined_keys, (
+            'the save logged Undefined array key "dnsbl_allow_int" in pfblockerng_dnsbl.php'
         )
     finally:
         helpers.config_restore_state(smoke_vm, _ALLOW_INT, original)
