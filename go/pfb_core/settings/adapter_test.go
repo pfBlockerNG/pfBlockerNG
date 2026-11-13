@@ -29,7 +29,7 @@ func newFakeAdapter(t *testing.T, reply string) *fakeAdapter {
 	t.Helper()
 	f := &fakeAdapter{t: t, dir: t.TempDir()}
 	f.path = filepath.Join(f.dir, "adapter.sh")
-	f.script(`cat > "$D/req"; echo run >> "$D/runs"; cat "$D/reply"`)
+	f.script(`cat > "$D/req"; echo run >> "$D/runs"; grep -q '"op":"write"' "$D/req" && cp "$D/req" "$D/wreq"; cat "$D/reply"`)
 	f.reply(reply)
 	return f
 }
@@ -56,6 +56,16 @@ func (f *fakeAdapter) replyBytes(b []byte) {
 func (f *fakeAdapter) request() string {
 	f.t.Helper()
 	b, err := os.ReadFile(filepath.Join(f.dir, "req"))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// lastWrite is the last write request the program read: a Save asks for a read after it.
+func (f *fakeAdapter) lastWrite() string {
+	f.t.Helper()
+	b, err := os.ReadFile(filepath.Join(f.dir, "wreq"))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -355,14 +365,17 @@ const allDnsFields = `{"cnameValidation":false,"control":true,"controlLegacy":fa
 func TestSaveWritesThroughTheAdapter(t *testing.T) {
 	f := newFakeAdapter(t, readReply(t, 7, nil))
 	st := loadFake(t, f, 0)
-	f.reply(`{"version":1,"revision":9}`)
+	f.reply(readReply(t, 9, map[string]any{"control": true})) // answers the write (its revision) and the read after it
 	res, err := st.Save(7, changes(t, `{"dns": {"control": true}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	if want := `{"version":1,"op":"write","expectedRevision":7,"settings":{"dns":` + allDnsFields +
-		`,"feeds/dnsbl":{"groups":[]},"feeds/ipv4":{"groups":[]},"feeds/ipv6":{"groups":[]}}}`; f.request() != want {
-		t.Errorf("the adapter was sent\n %s\n want\n %s", f.request(), want)
+		`,"feeds/dnsbl":{"groups":[]},"feeds/ipv4":{"groups":[]},"feeds/ipv6":{"groups":[]}}}`; f.lastWrite() != want {
+		t.Errorf("the adapter was sent\n %s\n want\n %s", f.lastWrite(), want)
+	}
+	if f.runs() != 3 || f.request() != `{"version":1,"op":"read"}` {
+		t.Errorf("the adapter ran %d times, last asked %s: want the Load, the write, then a read of what it stored", f.runs(), f.request())
 	}
 	if res.Revision != 9 || len(res.Projections) != 1 || res.Projections[0].Value["control"] != true {
 		t.Errorf("Save = %s, want the adapter's revision 9 and settings/dns with control on", jsonOf(t, res))
@@ -446,8 +459,12 @@ func TestAnAdapterThatRefusesAWriteLeavesTheValuesAsTheyWere(t *testing.T) {
 				t.Fatal("Save took the adapter's refusal")
 			}
 			c.check(t, err)
-			if f.runs() != 2 {
-				t.Errorf("the adapter ran %d times, want the Load and the one write", f.runs())
+			wantRuns := 2 // the Load and the one write
+			if isConflict(err) {
+				wantRuns++ // and the read of the configuration that moved
+			}
+			if f.runs() != wantRuns {
+				t.Errorf("the adapter ran %d times, want %d", f.runs(), wantRuns)
 			}
 			if after := jsonOf(t, get(t, st)); after != before {
 				t.Errorf("a refused write changed the values:\n before %s\n after  %s", before, after)

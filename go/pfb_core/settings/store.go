@@ -189,11 +189,16 @@ func generation(values map[string]any) uint64 {
 }
 
 // write has the backend store values at expected. The new values are the state as soon as the backend took them, even when
-// it then reports an error, and not before: a refused or failed write changes nothing. The caller holds wmu.
+// it then reports an error, and not before: a refused or failed write changes nothing, except that a *ConflictError (the
+// configuration moved under Core) has the state re-read, best effort: a failed read keeps the state. The caller holds wmu.
 func (s *Store) write(expected uint64, values map[string]map[string]any) (uint64, error) {
 	revision, err := s.backend.Write(expected, values)
 	if revision != 0 {
 		s.set(true, revision, values)
+	}
+	var conflict *ConflictError
+	if errors.As(err, &conflict) {
+		_ = s.fetch()
 	}
 	return revision, err
 }
@@ -230,7 +235,9 @@ func (s *Store) Initialize(settings map[string]map[string]json.RawMessage) (Resu
 
 // Save applies changes (projection → field → value; null resets a field to its default) to the configuration at
 // expected. The whole result is validated before the backend is asked: any error rejects it all. An accepted save moves
-// to the revision the backend answers.
+// to the revision the backend answers, then reads the backend again (best effort: a failed read keeps the written values)
+// so Core holds what it stored, which it may have normalized. The result is that state: its revision, and the projections
+// whose values differ from before the save.
 func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMessage) (Result, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
@@ -243,26 +250,25 @@ func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMess
 	}
 	values := make(map[string]map[string]any, len(s.schema.Projections))
 	var errs []FieldError
-	var changed []Projection
 	for _, p := range s.schema.Projections {
 		v, perr := apply(p, s.values[p.ID], changes[p.ID], p.ID)
 		errs = append(errs, perr...)
 		values[p.ID] = v
-		if !reflect.DeepEqual(v, s.values[p.ID]) {
-			changed = append(changed, p)
-		}
 	}
 	errs = append(errs, unknownProjections(s, changes)...)
 	if errs != nil {
 		return Result{}, &ValidationError{Fields: errs}
 	}
-	revision, err := s.write(expected, values)
-	if err != nil {
+	before := s.values
+	if _, err := s.write(expected, values); err != nil {
 		return Result{}, err
 	}
-	res := Result{Revision: revision, Projections: []ProjectionValue{}}
-	for _, p := range changed {
-		res.Projections = append(res.Projections, show(p, values[p.ID]))
+	_ = s.fetch()
+	res := Result{Revision: s.revision, Projections: []ProjectionValue{}}
+	for _, p := range s.schema.Projections {
+		if !reflect.DeepEqual(s.values[p.ID], before[p.ID]) {
+			res.Projections = append(res.Projections, show(p, s.values[p.ID]))
+		}
 	}
 	return res, nil
 }

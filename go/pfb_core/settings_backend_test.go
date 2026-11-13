@@ -31,7 +31,7 @@ func newFakeAdapter(t *testing.T, reply string) *fakeAdapter {
 	t.Helper()
 	f := &fakeAdapter{t: t, dir: t.TempDir()}
 	f.path = filepath.Join(f.dir, "adapter.sh")
-	f.script(`cat > "$D/req"; echo run >> "$D/runs"; cat "$D/reply"`)
+	f.script(`cat > "$D/req"; echo run >> "$D/runs"; grep -q '"op":"write"' "$D/req" && cp "$D/req" "$D/wreq"; cat "$D/reply"`)
 	f.reply(reply)
 	return f
 }
@@ -54,6 +54,16 @@ func (f *fakeAdapter) reply(s string) {
 func (f *fakeAdapter) request() string {
 	f.t.Helper()
 	b, err := os.ReadFile(filepath.Join(f.dir, "req"))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// lastWrite is the last write request the program read: a SaveSettings asks for a read after it.
+func (f *fakeAdapter) lastWrite() string {
+	f.t.Helper()
+	b, err := os.ReadFile(filepath.Join(f.dir, "wreq"))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -257,12 +267,12 @@ func TestSettingsChangedAnswersUnavailableWhileTheAdapterFailsAndRecovers(t *tes
 func TestSaveSettingsGoesThroughTheAdapterAndWritesNothingInTheStateDirectory(t *testing.T) {
 	f := newFakeAdapter(t, readReply(t, 5, nil))
 	c := startCore(t, scratchDir(t), "--settings-backend-cmd", f.path)
-	f.reply(`{"version":1,"revision":9}`)
+	f.reply(readReply(t, 9, map[string]any{"control": true})) // answers the write (its revision) and the read after it
 	saved := c.post("SaveSettings", `{"requestId":"s1","expectedRevision":5,"changes":{"dns":{"control":true}}}`)
 	if saved.status != http.StatusOK || !bytes.Contains(saved.body, []byte(`"revision":9`)) {
 		t.Fatalf("SaveSettings = %d %s, want the adapter's revision 9", saved.status, saved.body)
 	}
-	if req := f.request(); !strings.HasPrefix(req, `{"version":1,"op":"write","expectedRevision":5,"settings":{"dns":{`) ||
+	if req := f.lastWrite(); !strings.HasPrefix(req, `{"version":1,"op":"write","expectedRevision":5,"settings":{"dns":{`) ||
 		!strings.Contains(req, `"control":true`) {
 		t.Errorf("the adapter was sent %s, want a version 1 write at revision 5 with control on", req)
 	}
