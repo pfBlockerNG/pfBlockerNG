@@ -438,6 +438,34 @@ func TestAnUpdatesOutcomesAreRecordedInTheStateDirectory(t *testing.T) {
 	}
 }
 
+func TestGetScheduleAnswersEachFeedsLastSuccessfulCheck(t *testing.T) {
+	c, f := startUpdateCore(t)
+	c.initialize()
+	lastSuccess := func() map[string]int64 {
+		t.Helper()
+		var v struct {
+			Last map[string]int64 `json:"lastSuccessfulCheck"`
+		}
+		got := c.post("GetSchedule", `{}`)
+		if got.status != http.StatusOK || json.Unmarshal(got.body, &v) != nil || v.Last == nil {
+			t.Fatalf("GetSchedule = %d %s, want an object lastSuccessfulCheck", got.status, got.body)
+		}
+		return v.Last
+	}
+	if got := lastSuccess(); len(got) != 0 {
+		t.Fatalf("lastSuccessfulCheck before any Update = %v, want none", got)
+	}
+
+	f.result(`{"version":1,"outcomes":{"ipv4:Feed1_v4":"success"},"attempted":["ipv4:Feed1_v4"],"geoipReady":true}`)
+	f.release()
+	wantJSON(t, c.post("StartUpdate", `{"requestId":"s1","trigger":"retry"}`), http.StatusOK, `{}`)
+	c.waitFinished("retry")
+
+	if got := lastSuccess(); got["ipv4:Feed1_v4"] <= 0 || len(got) != 1 {
+		t.Errorf("lastSuccessfulCheck after the Update that reported the feed's success = %v, want only ipv4:Feed1_v4 with a time", got)
+	}
+}
+
 func TestStoppingCoreDuringAnUpdateKillsTheProgram(t *testing.T) {
 	c, f := startUpdateCore(t)
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"k1","trigger":"manual"}`), http.StatusOK, `{}`)

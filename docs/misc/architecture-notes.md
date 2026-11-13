@@ -2522,16 +2522,19 @@ midnight-wrapping ranges.
 
 ### Operator surface — the Update page & the knobs
 
-The **Update page** (`www/pfblockerng/pfblockerng_update.php`) is rebuilt on the API: an explicit
+The **Update page** (`www/pfblockerng/pfblockerng_update.php`) starts and views the one Update through Core (issue #3941): an explicit
 **Run Scope** selector (`pfb_scope`: ip/dnsbl/both) + a **Force** radio group (`pfb_force_mode`:
-none/parse/download/both) feeding one **Run now**. **None** — plain detector-respecting pass via
-`pfb_trigger`. **Parse** — reparse cached lists without re-downloading (`force=true`). **Download**
-— clear `.etag`/`.lastmod` sidecars for in-scope feeds, then run the per-feed detector
-on-demand (bypassing the hour-gate) via the `forcecheck` verb so every feed is re-fetched; feeds
+none/parse/download/both) feeding one **Run now**, which is `StartUpdate {trigger: manual, scope, force}`
+(`pfb_update_start()`). An Update already running is Core's `conflict`: the page says "An Update is running." and views it. The
+Outpost's `core_update` verb runs the request: **None** — plain detector-respecting pass. **Parse** — reparse cached lists without
+re-downloading. **Download** — clear `.etag`/`.lastmod` sidecars for in-scope feeds, then run the per-feed detector
+on-demand (bypassing the hour-gate) so every feed is re-fetched; feeds
 whose body is unchanged are still skipped. **Both** — also clears `.xxhash128`/`.md5` hash sidecars
-so every re-fetched feed re-ingests regardless of content. A read-only **Schedule** view is sourced
-from the ledger (last-run / next-due per job); a tidied update-log pane. No raw verb strings in
-the UI.
+so every re-fetched feed re-ingests regardless of content. The log is polled, not streamed: the client calls
+`?ajax=update[&after=<cursor>]` once a second, which relays `GetUpdate` (`pfb_update_view_response()`); the cursor is Core's opaque
+`next` string, and `update.startedAt` changing starts a clean log. A read-only **Schedule** view is Core's `GetSchedule`
+(last-run / next-due per job; "Core is not answering" in each row when it gives none); a tidied update-log pane. No raw verb
+strings in the UI.
 
 One registered `PfbConfig` knob remains (ADR-29), with a safe default and **no GUI control** — set
 via config/CLI for advanced tuning:

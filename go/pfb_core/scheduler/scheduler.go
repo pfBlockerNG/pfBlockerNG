@@ -221,11 +221,13 @@ type Entry struct {
 	NextDue int64 `json:"nextDue"`
 }
 
-// View is what GetSchedule answers: the feeds' entry (nil when none is or will be due) and the Extras' by id.
+// View is what GetSchedule answers: the feeds' entry (nil when none is or will be due), the Extras' by id, and the time of
+// the last successful check of every item that has had one (the metrics export's per-feed gauge).
 type View struct {
-	Scheduled bool             `json:"scheduled"`
-	Feeds     *Entry           `json:"feeds"`
-	Extras    map[string]Entry `json:"extras"`
+	Scheduled           bool             `json:"scheduled"`
+	Feeds               *Entry           `json:"feeds"`
+	Extras              map[string]Entry `json:"extras"`
+	LastSuccessfulCheck map[string]int64 `json:"lastSuccessfulCheck"`
 }
 
 // View computes the schedule view now from the model and the state.
@@ -236,7 +238,12 @@ func (s *Scheduler) View() (View, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v := View{Scheduled: m.Scheduled, Extras: map[string]Entry{}}
+	v := View{Scheduled: m.Scheduled, Extras: map[string]Entry{}, LastSuccessfulCheck: map[string]int64{}}
+	for id, it := range s.st {
+		if it.LastSuccessfulCheck != nil {
+			v.LastSuccessfulCheck[id] = *it.LastSuccessfulCheck
+		}
+	}
 	for id, e := range schedule.CacheEntries(m, s.st, s.cfg.Now().Unix(), s.cfg.Loc) {
 		if id == cronKey {
 			v.Feeds = &Entry{e.LastRun, e.NextDue}

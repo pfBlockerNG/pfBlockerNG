@@ -7,8 +7,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * pfb_update_pass_running — the tick's "is an update pass dispatching/running right now"
- * guard (issue #573 review finding, PR #790). Deliberately narrower than the sibling
- * pfb_feed_task_running(): it EXCLUDES 'tick' (the only caller IS the tick, which would
+ * guard (issue #573 review finding, PR #790). Deliberately not every pfBlockerNG verb:
+ * it EXCLUDES 'tick' (the only caller IS the tick, which would
  * always see itself in `ps` and permanently close its own gate) and INCLUDES 'dcc'/'bl'
  * (both append to $pfb['extraslog'] for potentially minutes, so a dispatched/running dcc
  * or bl pass must also hold pfblockerng_tick()'s log-maintenance gate closed).

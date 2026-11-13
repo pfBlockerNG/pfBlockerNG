@@ -2691,8 +2691,8 @@ def test_update_page_cron_status_reports_permanent_suppression_with_tick_install
 # ---------------------------------------------------------------------------
 # Force mode — Download / Both sidecar-clear wiring (ADR-43)
 #
-# These tests prove that pfb_force_clear_validators() is called by the handler
-# and clears the right sidecar files before dispatching forcecheck.
+# These tests prove that the Update Core runs for a Run Now (StartUpdate, issue #3941) clears
+# the right sidecar files before its Force Check pass (pfb_force_clear_validators()).
 #
 # Full re-fetch / reload-if-changed / reload-all behaviour requires configured
 # feeds and is validated on a maintainer live-VM run; the hermetic harness has
@@ -2891,7 +2891,7 @@ def test_force_mode_parse_keeps_sidecars(
     When the Update page is submitted with pfb_force_mode=parse and pfb_scope=ip,
 
     Then the .orig.etag sidecar STILL EXISTS afterwards — proving Parse routes to
-      pfb_runnow(force=TRUE) and does NOT call pfb_force_clear_validators.
+      a manual Update with force=parse, which does NOT clear the validators (issue #3941).
 
     Red→green: before this change there was no pfb_force_mode dispatch split; this pins
     that Parse and Download/Both take different paths (the former never clears sidecars).

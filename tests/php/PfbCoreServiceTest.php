@@ -733,10 +733,12 @@ final class PfbCoreServiceTest extends TestCase
 		file_put_contents("{$stateDir}/pfb_schedule_state.json.lock", '');
 		file_put_contents("{$stateDir}/pfb_schedule_dispatch.lock", '');
 		$entry = static fn (array $more = []): array => ['last_run' => 5, 'next_due' => 9, 'jitter' => 0] + $more;
-		$this->assertTrue(pfb_due_ledger_write_cache([
-			'cron' => $entry(['pending_apply' => TRUE]), 'extra:dcc' => $entry(), 'extra:bl' => $entry(),
-			'ss_refresh' => $entry(), 'apply_reconcile' => $entry(),
-		], str_repeat('a', 64), $GLOBALS['pfb']['dbdir']));
+		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_due_ledger.json", json_encode(
+			['_meta' => ['schema' => 1, 'config_hash' => str_repeat('a', 64)]] + [
+				'cron' => $entry(['pending_apply' => TRUE]), 'extra:dcc' => $entry(), 'extra:bl' => $entry(),
+				'ss_refresh' => $entry(), 'apply_reconcile' => $entry(),
+			]
+		));
 
 		// When the service is generated (every install and upgrade does)
 		pfb_core_service("{$this->dir}/core");

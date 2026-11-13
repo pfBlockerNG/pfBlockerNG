@@ -396,7 +396,7 @@ func viewJSON(t *testing.T, f *fixture) string {
 func TestViewAnswersTheScheduleOfCacheEntries(t *testing.T) {
 	f := newFixture(t, allEntries(), quiet)
 
-	want := fmt.Sprintf(`{"scheduled":true,"feeds":{"lastRun":%d,"nextDue":%d},"extras":{"extra:bl":{"lastRun":%d,"nextDue":%d},"extra:dcc":{"lastRun":%d,"nextDue":%d}}}`,
+	want := fmt.Sprintf(`{"scheduled":true,"feeds":{"lastRun":%d,"nextDue":%d},"extras":{"extra:bl":{"lastRun":%d,"nextDue":%d},"extra:dcc":{"lastRun":%d,"nextDue":%d}},"lastSuccessfulCheck":{}}`,
 		occ10, occ10+3600, occ03, nextBL, occ03, nextDCC)
 	if got := viewJSON(t, f); got != want {
 		t.Errorf("view = %s\nwant   %s", got, want)
@@ -407,7 +407,7 @@ func TestViewOfAnUnscheduledModelHasNoFeedsAndOnlyEnabledExtras(t *testing.T) {
 	m := model(false, hourly(feedA), daily(dcc), entry(bl, "Weekly", false))
 	f := newFixture(t, m, quiet)
 
-	want := fmt.Sprintf(`{"scheduled":false,"feeds":null,"extras":{"extra:dcc":{"lastRun":%d,"nextDue":%d}}}`, occ03, nextDCC)
+	want := fmt.Sprintf(`{"scheduled":false,"feeds":null,"extras":{"extra:dcc":{"lastRun":%d,"nextDue":%d}},"lastSuccessfulCheck":{}}`, occ03, nextDCC)
 	if got := viewJSON(t, f); got != want {
 		t.Errorf("view = %s\nwant   %s", got, want)
 	}
@@ -416,8 +416,39 @@ func TestViewOfAnUnscheduledModelHasNoFeedsAndOnlyEnabledExtras(t *testing.T) {
 func TestViewOfAModelWithNothingScheduledHasAnEmptyExtrasObject(t *testing.T) {
 	f := newFixture(t, model(true), "")
 
-	want := `{"scheduled":true,"feeds":null,"extras":{}}`
+	want := `{"scheduled":true,"feeds":null,"extras":{},"lastSuccessfulCheck":{}}`
 	if got := viewJSON(t, f); got != want {
 		t.Errorf("view = %s\nwant   %s", got, want)
+	}
+}
+
+// Scenario: the metrics export reads each item's last successful check from the schedule view (issue #3941).
+func TestViewListsTheLastSuccessfulCheckOfEveryItemThatHasOne(t *testing.T) {
+	state := stateText(map[string]string{
+		feedA:          `{"last_successful_check":1700000000,"last_completed_occurrence":` + fmt.Sprint(occ10) + `,"completion_outcome":"success"}`,
+		dcc:            `{"last_successful_check":1700000100,"last_completed_occurrence":` + fmt.Sprint(occ03) + `,"completion_outcome":"success"}`,
+		bl:             completed(occ03),              // completed an occurrence, never a successful check
+		"ipv4:gone_v4": `{"last_successful_check":5}`, // no longer in the model: its last success is still the last
+	})
+	f := newFixture(t, allEntries(), state)
+
+	v, err := f.s.View()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int64{feedA: 1700000000, dcc: 1700000100, "ipv4:gone_v4": 5}
+	if !reflect.DeepEqual(v.LastSuccessfulCheck, want) {
+		t.Errorf("lastSuccessfulCheck = %v, want %v", v.LastSuccessfulCheck, want)
+	}
+	if got := viewJSON(t, f); !strings.Contains(got, `"lastSuccessfulCheck":{"extra:dcc":1700000100,"ipv4:alpha_v4":1700000000,"ipv4:gone_v4":5}`) {
+		t.Errorf("view = %s, want the map as an object keyed by item id", got)
+	}
+}
+
+func TestViewHasAnEmptyLastSuccessfulCheckObjectNotNullWhenNothingSucceeded(t *testing.T) {
+	f := newFixture(t, allEntries(), quiet)
+
+	if got := viewJSON(t, f); !strings.Contains(got, `"lastSuccessfulCheck":{}`) {
+		t.Errorf("view = %s, want lastSuccessfulCheck to be an empty object", got)
 	}
 }

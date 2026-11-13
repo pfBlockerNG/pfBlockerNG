@@ -6,9 +6,10 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Pin pfb_log_tail_chunk() -- the read primitive behind the AJAX live-log tail endpoint
- * (issue #671). The client polls with the byte offset it last received; this function returns
- * the next slice and the offset to ask for next time. The contract that keeps the tail correct:
+ * Pin pfb_log_tail_chunk() -- the read primitive that follows a hook's output file while the hook
+ * runs (pfb_run_hooks(); the Update page's own view is Core's, issue #3941). The caller holds the
+ * byte offset it last received; this function returns the next slice and the offset to ask for
+ * next time. The contract that keeps the tail correct:
  *
  *   - whole lines only by default (a trailing partial line is held back), so a multibyte UTF-8
  *     char is never split across two polls and corrupted by the JSON encoder;

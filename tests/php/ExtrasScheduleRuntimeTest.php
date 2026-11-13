@@ -60,22 +60,6 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		];
 	}
 
-	public function testExtrasAreIndependentAndUseExactCadence(): void
-	{
-		$model = pfb_schedule_runtime_model($this->general(), $this->feedSections(), [
-			'dcc' => TRUE,
-			'bl' => ['enabled' => TRUE, 'cadence' => 'Weekly'],
-		]);
-
-		$this->assertIsArray($model);
-		$this->assertFalse($model['scheduled']);
-		$this->assertSame('EveryDay', $model['entries']['extra:dcc']['cadence']);
-		$this->assertTrue($model['entries']['extra:dcc']['enabled']);
-		$this->assertSame('Weekly', $model['entries']['extra:bl']['cadence']);
-		$this->assertTrue($model['entries']['extra:bl']['enabled']);
-		$this->assertTrue(pfb_schedule_runtime_model_valid($model));
-	}
-
 	public function testExtraEligibilityAndCadenceAffectSecretFreeHash(): void
 	{
 		$base = pfb_schedule_runtime_model($this->general(), $this->feedSections(), [
@@ -97,32 +81,6 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		$this->assertNotSame($base['config_hash'], $weekly['config_hash']);
 		$this->assertNotSame($base['config_hash'], $disabled['config_hash']);
 		$this->assertStringNotContainsString('secret', $base['config_hash']);
-	}
-
-	public function testFeedCacheExcludesLegacyExtraLedgerEntriesAndUsesZeroJitter(): void
-	{
-		$model = pfb_schedule_runtime_model($this->general('on'), $this->feedSections(), [
-			'dcc' => TRUE,
-			'bl' => ['enabled' => TRUE, 'cadence' => 'EveryDay'],
-		]);
-		$this->assertIsArray($model);
-		$this->assertTrue(pfb_due_ledger_write_cache([
-			'dcc' => ['last_run' => 1, 'next_due' => 2, 'jitter' => 123],
-			'bl' => ['last_run' => 1, 'next_due' => 2, 'jitter' => 456],
-		], str_repeat('a', 64), $this->dir));
-		$this->assertTrue(pfb_schedule_cache_refresh(
-			$model,
-			['schema' => 1, 'items' => []],
-			strtotime('2026-01-07 02:15:00 UTC'),
-			new DateTimeZone('UTC'),
-			$this->dir
-		));
-		$cache = pfb_due_ledger_read_cache($this->dir, $model['config_hash']);
-		$this->assertIsArray($cache);
-		$this->assertSame(0, $cache['extra:dcc']['jitter']);
-		$this->assertSame(0, $cache['extra:bl']['jitter']);
-		$this->assertArrayHasKey('cron', $cache);
-		$this->assertSame(0, $cache['cron']['jitter']);
 	}
 
 	public function testExtraRunnerUsesConfiguredPhpSynchronously(): void

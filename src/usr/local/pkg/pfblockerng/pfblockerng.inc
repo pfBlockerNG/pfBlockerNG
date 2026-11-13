@@ -190,13 +190,109 @@ function pfb_lint_response(array $server, array $post, callable $allowed, callab
 	return $reply(200, ['diagnostics' => $diagnostics($lang, $content, $cap)]);
 }
 
-function pfb_update_tail_response(array $query, callable $tail): array {
-	$has_offset = isset($query['offset']) && ctype_digit((string) $query['offset']);
-	$payload = $tail('update', $has_offset ? (int) $query['offset'] : -1, $has_offset);
+/**
+ * Why a call to Core gave no usable answer, as one line: the transport's error, else Core's own `code: message`; NULL when it
+ * answered 200 with a reply object. For the Update page (issue #3941), which relays Core's answers to a person.
+ *
+ * @param array{status: int, body: ?array, error: ?string} $answer pfb_core_call()'s answer
+ */
+function pfb_update_core_failure(array $answer): ?string {
+	if ($answer['status'] === 200 && $answer['body'] !== NULL) {
+		return NULL;
+	}
+	if ($answer['error'] !== NULL) {
+		return $answer['error'];
+	}
+	$error = (array) ($answer['body']['error'] ?? []);
+	$code = is_scalar($error['code'] ?? NULL) ? (string) $error['code'] : '';
+	$message = is_scalar($error['message'] ?? NULL) ? (string) $error['message'] : '';
+	return $code === '' && $message === '' ? "the Core API answered {$answer['status']}" : trim("{$code}: {$message}", ': ');
+}
+
+/**
+ * The Update page's `?ajax=update` poll (issue #3941): one GetUpdate relayed as the poller's JSON, `{running, done, log, next,
+ * update}` with `done` the negation of `running`. `after` is Core's opaque cursor, the `next` of an earlier reply: only a string
+ * of decimal digits that fits 63 bits goes to Core, as that string (a number would be refused); anything else is dropped and the
+ * view reads from the start. Core not answering is `{error, running: false, done: true}`, so the poller stops.
+ *
+ * @param array<string, mixed> $query $_GET
+ * @param callable(string, array): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @return array{headers: list<string>, body: string}
+ */
+function pfb_update_view_response(array $query, callable $call): array {
+	$after = $query['after'] ?? NULL;
+	$params = [];
+	if (is_string($after) && ctype_digit($after) && (strlen($after) < 19 || (strlen($after) === 19 && strcmp($after, '9223372036854775807') <= 0))) {
+		$params['after'] = $after;
+	}
+	$answer = $call('GetUpdate', $params);
+	$failure = pfb_update_core_failure($answer);
+	if ($failure !== NULL) {
+		$payload = ['error' => $failure, 'running' => FALSE, 'done' => TRUE, 'log' => '', 'next' => '0', 'update' => NULL];
+	} else {
+		$body = $answer['body'];
+		$running = ($body['running'] ?? FALSE) === TRUE;
+		$payload = [
+			'running' => $running,
+			'done'    => !$running,
+			'log'     => is_string($body['log'] ?? NULL) ? $body['log'] : '',
+			'next'    => is_string($body['next'] ?? NULL) ? $body['next'] : '0',
+			'update'  => is_array($body['update'] ?? NULL) ? $body['update'] : NULL,
+		];
+	}
 	return [
 		'headers' => ['Content-Type: application/json', 'Cache-Control: no-cache, no-store, must-revalidate'],
 		'body'    => (string) json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE),
 	];
+}
+
+/**
+ * Run Now, Force and the Wizard reload (issue #3941): ask Core for a `manual` Update of $scope with $force, and say what came of
+ * it. An Update already running is Core's `conflict`; the page then views the one that runs. $scope and $force are allow-listed
+ * here, before the call: an unknown value falls back to `both` / `none`, so what the page was sent never reaches Core.
+ *
+ * @param callable(string, array): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ */
+function pfb_update_start(string $scope, string $force, callable $call): string {
+	$scope = in_array($scope, ['ip', 'dnsbl', 'both'], TRUE) ? $scope : 'both';
+	$force = in_array($force, ['none', 'parse', 'download', 'both'], TRUE) ? $force : 'none';
+	$answer = $call('StartUpdate', ['requestId' => bin2hex(random_bytes(16)), 'trigger' => 'manual', 'scope' => $scope, 'force' => $force]);
+	$failure = pfb_update_core_failure($answer);
+	if ($failure === NULL) {
+		return sprintf(gettext('Running: scope=%s force=%s'), $scope, $force);
+	}
+	if (($answer['body']['error']['code'] ?? NULL) === 'conflict') {
+		return gettext('An Update is running.');
+	}
+	return gettext('The Update was not started: ') . $failure;
+}
+
+/**
+ * The Update page's Schedule section (issue #3941): Core's GetSchedule as the section's rows take it. `feeds`, `dcc` and `bl` are
+ * `['last_run' => int, 'next_due' => int]` (no `last_run` when the job never ran) or NULL when Core schedules none; `error` is why
+ * Core did not give the schedule, else NULL.
+ *
+ * @param callable(string, array): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @return array{error: ?string, feeds: ?array<string, int>, dcc: ?array<string, int>, bl: ?array<string, int>}
+ */
+function pfb_update_schedule_view(callable $call): array {
+	$answer = $call('GetSchedule', []);
+	$view = ['error' => pfb_update_core_failure($answer), 'feeds' => NULL, 'dcc' => NULL, 'bl' => NULL];
+	if ($view['error'] !== NULL) {
+		return $view;
+	}
+	$entry = static function (mixed $time): ?array {
+		if (!is_array($time) || !is_int($time['nextDue'] ?? NULL)) {
+			return NULL;
+		}
+		return (is_int($time['lastRun'] ?? NULL) && $time['lastRun'] > 0 ? ['last_run' => $time['lastRun']] : []) + ['next_due' => $time['nextDue']];
+	};
+	$body = $answer['body'];
+	$extras = is_array($body['extras'] ?? NULL) ? $body['extras'] : [];
+	$view['feeds'] = $entry($body['feeds'] ?? NULL);
+	$view['dcc'] = $entry($extras['extra:dcc'] ?? NULL);
+	$view['bl'] = $entry($extras['extra:bl'] ?? NULL);
+	return $view;
 }
 
 function pfb_widget_table_call(array $table, string $mode = '', ?callable $render = NULL): mixed {
@@ -10897,7 +10993,7 @@ function pfb_software_failed_at(array $cache, bool $cache_current): int {
  * The handler POSTs, checks, and redirects, so before #2674 an admin who explicitly asked for
  * a fresh answer was silently re-served the old page. A failed forced check carries a query
  * token the page's render arm turns into a warning box; a successful one redirects clean, so a
- * benign load never raises it. Same shape as pfb_general_schedule_save_redirect().
+ * benign load never raises it.
  */
 function pfb_software_check_redirect(
 	bool $check_ok,
@@ -13015,8 +13111,10 @@ function pfb_metrics_sqlite_snapshot(string $path, string $sql, string $detail_t
 }
 
 // Collects the renderer's input. Each source is independent: a failed or throwing one clears its source_up and drops only its own families.
-function pfb_metrics_collect(): array {
+// $core_call is the test seam of the call to Core (NULL: pfb_core_call()).
+function pfb_metrics_collect(?callable $core_call = NULL): array {
 	global $pfb;
+	$core_call ??= 'pfb_core_call';
 	$up = array();
 	$client_policy_epochs = array();
 	$client_on = PfbConfig::read('gen/pfb_metrics_client_ip') === PfbToggle::On;
@@ -13216,19 +13314,15 @@ function pfb_metrics_collect(): array {
 		$up['dnsbl_db'] = $up['resolver_db'] = TRUE;
 	}
 
-	$feed_success = $guard('schedule_state', function () use (&$up, $pfb): ?array {
-		$state = pfb_schedule_state_read((string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc'));
-		$up['schedule_state'] = $state !== NULL;
-		if ($state === NULL) {
+	// issue #3941: the per-feed last success is Core's (GetSchedule); Core not answering, or an answer without the map, is a source down
+	$feed_success = $guard('schedule_state', function () use (&$up, $core_call): ?array {
+		$answer = $core_call('GetSchedule', []);
+		$success = pfb_update_core_failure($answer) === NULL ? ($answer['body']['lastSuccessfulCheck'] ?? NULL) : NULL;
+		$up['schedule_state'] = is_array($success);
+		if (!is_array($success)) {
 			return NULL;
 		}
-		$success = array();
-		foreach ($state['items'] as $id => $item) {
-			if (is_int($item['last_successful_check'] ?? NULL)) {
-				$success[$id] = $item['last_successful_check'];
-			}
-		}
-		return $success;
+		return array_filter($success, static fn ($time): bool => is_int($time));
 	});
 
 	// One snapshot gives both health and rows. A lock timeout or a damaged file is a failed read, not an empty ledger.
@@ -27894,23 +27988,8 @@ function pfb_dnsbl_lastevent($p_group, $p_entry, $p_details) {
 }
 
 
-// TRUE when a pfBlockerNG feed task (cron/update/pfb_trigger/tick/forcecheck) is
-// currently running. The GLOBAL active-process guard for the Update-page Run-Now
-// dispatchers (pfb_active_task_running): it refuses a second run while ANY pfB feed task
-// is running -- including a cron tick this page never launched, so it must scan ps rather
-// than rely on a per-run pidfile. (The Run-Now livetail tracks its OWN dispatched process
-// by pidfile via isvalidpid() -- a narrower check; this ps scan is the broad one the guard needs.)
-function pfb_feed_task_running(?array $ps_lines = NULL): bool {
-	if ($ps_lines === NULL) {
-		$ps_lines = [];
-		exec('/bin/ps -wax', $ps_lines);
-	}
-	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron-tick|cron|update(ip|dnsbl)?|pfb_trigger|tick|forcecheck|dc|dcc|bu|uc|gc|ugc|al|asn|asn_shell|bl|bls)(?![-\w])/', $ps_lines);
-}
-
-
-// TRUE when a pfBlockerNG UPDATE pass (cron/update/pfb_trigger/forcecheck/dcc/bl) is
-// currently running -- deliberately narrower than pfb_feed_task_running() above:
+// TRUE when a pfBlockerNG UPDATE pass (cron/update/pfb_trigger/forcecheck/dcc/bl, or the Update Core runs) is
+// currently running -- deliberately not the whole process list of pfBlockerNG verbs:
 //   - EXCLUDES 'tick' AND 'cron-tick' (the scheduled tick's own verb): the only caller is
 //     pfblockerng_tick() itself (the scheduled log maintenance gate at its tail), and a tick
 //     always sees its OWN process in `ps` -- including it here would make the gate permanently
@@ -27949,7 +28028,7 @@ function pfb_feed_pass_deferral_message(string $deferred_by): string {
 }
 
 // issue #1175: cross-process mutual exclusion for a feed pass --
-// pfb_feed_task_running()/pfb_update_pass_running() above are ps-scan guards
+// pfb_update_pass_running() above is a ps-scan guard
 // (advisory-by-process-list); this flock-based sibling actually serializes two
 // overlapping passes so they cannot corrupt shared recompute staging. Reentrant
 // within a process: a second acquire by the same process is a no-op success.
@@ -28085,7 +28164,7 @@ function pfb_js_string(string $text): string {
 }
 
 
-// Read the next slice of a live log file for the AJAX tail endpoint, starting at byte $offset.
+// Read the next slice of a live log file, starting at byte $offset.
 // Returns ['data' => <new text>, 'offset' => <next byte offset to request>]. Whole lines only
 // by default — a trailing partial line is held back ($offset advances only past the last
 // newline) so a multibyte UTF-8 char is never split across two polls; pass $flush = TRUE on the
@@ -28130,60 +28209,6 @@ function pfb_log_tail_chunk(string $file, int $offset, bool $flush = FALSE): arr
 	}
 
 	return ['data' => str_replace("\r", '', $raw), 'offset' => $offset + strlen($raw)];
-}
-
-
-// Build the JSON payload for the AJAX live-log tail (the ?ajax=tail branch on the Update page).
-// Returns an array the caller json_encode()s; no print/exit here (library code).
-//
-// $which selects the source: 'update' tails the per-run pfblockerng_run.log, falling back to the
-// last ~15KB of the cumulative log for a View when no run file exists yet. $offset is the client's
-// last byte position; $has_offset is FALSE on the first poll (the function then picks the source +
-// starting offset). 'done' (process gone, via isvalidpid on the pidfile) tells the client to stop
-// polling; the final read is flushed so the trailing partial line is not lost.
-function pfb_log_tail_payload(string $which, int $offset, bool $has_offset): array {
-	global $pfb;
-
-	switch ($which) {
-		case 'update':
-			$pidfile  = '/var/run/pfb_runnow.pid';
-			$runfile  = $pfb['runlog'];
-			$fallback = $pfb['log'];
-			break;
-		default:
-			return ['error' => 'invalid source'];
-	}
-
-	$running = isvalidpid($pidfile);
-
-	// First poll: choose the source + initial offset.
-	if (!$has_offset) {
-		clearstatcache(FALSE, $runfile);
-		$runsize = @filesize($runfile);
-		// Fall back to the cumulative log's tail ONLY when the run log is empty AND no run is in
-		// flight (a View with nothing current). While a run IS alive, an empty run log just means
-		// the dispatched daemon has not written its first line yet -- the client's first poll
-		// commonly beats the fork/exec/bootstrap -- so fall through to the run-log follow and keep
-		// polling (done = FALSE), never a one-shot fallback that would stop the tail prematurely.
-		if (($runsize === FALSE || $runsize === 0) && !$running) {
-			// No current/last run log and nothing running -> one-shot View of the cumulative tail.
-			$fsize = '';
-			if ($fallback !== '') {
-				clearstatcache(FALSE, $fallback);
-				$fsize = @filesize($fallback);
-			}
-			if ($fsize !== '' && $fsize !== FALSE && $fsize > 0) {
-				$chunk = pfb_log_tail_chunk($fallback, ($fsize > 15000) ? ($fsize - 15000) : 0, TRUE);
-				return ['data' => $chunk['data'], 'offset' => $chunk['offset'], 'running' => FALSE, 'done' => TRUE, 'source' => 'fallback'];
-			}
-			return ['data' => '', 'offset' => 0, 'running' => $running, 'done' => !$running, 'source' => 'none'];
-		}
-		$offset = 0;
-	}
-
-	// Follow the run log; flush the final partial line once the process is gone.
-	$chunk = pfb_log_tail_chunk($runfile, $offset, !$running);
-	return ['data' => $chunk['data'], 'offset' => $chunk['offset'], 'running' => $running, 'done' => !$running, 'source' => 'run'];
 }
 
 

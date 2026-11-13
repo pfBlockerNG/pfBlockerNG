@@ -35,7 +35,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 import pytest
@@ -762,7 +762,7 @@ def test_update_page_cron_status_reports_harness_disable_flag(
 
     Read-only (no config write) — the flag is deploy()'s always-on harness state, so
     this needs no ``ui_e2e`` isolation. The flag-absent healthy-cron branch is pinned
-    off-appliance by UpdateRunNowScheduleOwnershipTest.
+    off-appliance by UpdatePageCronStatusTest.
 
     Given the harness flag present (deploy()'s default state),
     When GET pfblockerng_update.php,
@@ -1074,28 +1074,45 @@ def test_log_page_lists_ip_parsed_error_log(webui: WebUI, php_error_log_guard: P
     assert "ip_parsed_error.log" in body, "Log page's default file list is missing ip_parsed_error.log"
 
 
-def test_update_ajax_tail_returns_wellformed_json(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """The ?ajax=tail live-log poll endpoint returns well-formed JSON with the poller's contract keys.
+def test_update_ajax_update_returns_wellformed_json(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The ?ajax=update poll endpoint relays Core's GetUpdate as well-formed JSON with the poller's contract keys.
 
-    The handler now calls session_write_close() before reading the log so the poll never holds the
-    PHP session write-lock — otherwise every 1s poll serialises behind any other same-session
-    request, and one such blocked poll freezes the live tail during a long no-output gap (an
-    HAProxy graceful-restart drain in an update hook). This guards that early close: it must not
-    emit a warning/notice into the response (which would corrupt the JSON) and the endpoint must
-    still return the {running, done, offset} contract the client poller consumes.
+    The handler calls session_write_close() before it asks Core, so the poll never holds the PHP
+    session write-lock — otherwise every 1s poll serialises behind any other same-session request,
+    and one blocked poll freezes the live view during a long no-output gap (an HAProxy
+    graceful-restart drain in an update hook). This guards that early close: it must not emit a
+    warning/notice into the response (which would corrupt the JSON), and the endpoint must return
+    the {running, done, log, next} contract the client poller consumes (issue #3941).
 
-    Given the Update page's AJAX tail endpoint,
-    When it is fetched with no offset (the client's first poll),
-    Then the body parses as JSON and carries the running/done/offset keys (done is a bool).
+    Given the Update page's AJAX endpoint,
+    When it is fetched with no cursor (the client's first poll),
+    Then the body parses as JSON and carries running/done/log/next with their types (running and
+      done bools, done its negation; log and next strings; an Update that ended cannot still run);
+    And a hostile cursor (negative, letters, an exponent, an array) is dropped, not an error:
+      the same well-formed contract comes back.
     """
-    resp = webui.get(_UPDATE_PAGE + "?ajax=tail")
-    assert resp.status_code == 200, f"ajax=tail returned HTTP {resp.status_code}, body={resp.text[:200]!r}"
+    resp = webui.get(_UPDATE_PAGE + "?ajax=update")
+    assert resp.status_code == 200, f"ajax=update returned HTTP {resp.status_code}, body={resp.text[:200]!r}"
     # json.loads FAILS if a PHP warning/notice leaked into the body ahead of the JSON — exactly
     # the failure a misplaced session_write_close() (or an un-started session) would produce.
     payload = json.loads(resp.text)
-    for key in ("running", "done", "offset"):
-        assert key in payload, f"ajax=tail JSON missing the poller-contract key {key!r}: {payload!r}"
+    assert "error" not in payload, f"Core did not answer the page's GetUpdate: {payload!r}"
+    _assert_update_poll_contract(payload)
+    for hostile in ("after=-1", "after=abc", "after=1e9", "after[]=1"):
+        resp = webui.get(f"{_UPDATE_PAGE}?ajax=update&{hostile}")
+        assert resp.status_code == 200, f"ajax=update&{hostile} returned HTTP {resp.status_code}: {resp.text[:200]!r}"
+        _assert_update_poll_contract(json.loads(resp.text))
+
+
+def _assert_update_poll_contract(payload: dict[str, Any]) -> None:
+    """The keys and types the Update page's poller reads from one ?ajax=update reply."""
+    for key in ("running", "done", "log", "next"):
+        assert key in payload, f"ajax=update JSON missing the poller-contract key {key!r}: {payload!r}"
+    assert isinstance(payload["running"], bool), f"'running' must be a bool: {payload!r}"
     assert isinstance(payload["done"], bool), f"'done' must be a bool for the client stop-check: {payload!r}"
+    assert payload["done"] is (not payload["running"]), f"'done' must be the negation of 'running': {payload!r}"
+    assert isinstance(payload["log"], str), f"'log' must be a string: {payload!r}"
+    assert isinstance(payload["next"], str), f"'next' is an opaque cursor, a string (not a number): {payload!r}"
 
 
 def test_update_revamp_controls_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
@@ -1221,59 +1238,41 @@ def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard:
 
 
 _LEDGER_DIR = "/var/db/pfblockerng"
-_PFB_EXTRA_INC = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 
-def _write_ledger_entry(vm: SmokeVM, job_key: str, last_run: int, next_due: int, jitter: int = 0) -> None:
-    """Seed one due-ledger job entry via the package's own PHP ledger writer (ADR-43's
-    format) -- a hand-written JSON file risks drifting from pfb_due_ledger_write_entry()'s
-    own shape. Mirrors tests/smoke/test_smoke_tick.py's local helper of the same shape.
+def test_update_page_schedule_section_is_cores_schedule(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The Schedule section's three rows come from Core's GetSchedule (issue #3941).
+
+    The rows used to be read from the PHP due ledger and schedule state, which the cutover retired.
+    Whether Core has a feed run due depends on the box's configuration, so the rows are pinned by
+    what they may say, never by a time: a Core that answers gives a Last/Next entry or an honest
+    "not scheduled"; a row that says Core is not answering on a box whose poll endpoint just answered
+    would be the page failing to reach the Core the poller reaches.
+
+    Given the Update page renders cleanly (200, no PHP diagnostic, section markers),
+    When each Schedule row's value cell is inspected,
+    Then it is a Last/Next entry with a Y-m-d H:i:s time or one of the "not scheduled" wordings, and
+      none says "Core is not answering".
     """
-    snippet = (
-        f"require_once('{_PFB_EXTRA_INC}');"
-        f"pfb_due_ledger_write_entry('{job_key}', array("
-        f"'last_run' => {int(last_run)}, 'next_due' => {int(next_due)}, 'jitter' => {int(jitter)}"
-        f"), '{_LEDGER_DIR}');"
-        "echo 'OK';"
-    )
-    result = helpers.php_eval(vm, snippet)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"_write_ledger_entry failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-
-
-def test_update_page_schedule_shows_seconds_precision(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:
-    """The Schedule section's Last/Next timestamps now include seconds (ADR-60 P10):
-    pfb_ledger_entry_html() switched from 'Y-m-d H:i' to 'Y-m-d H:i:s'.
-
-    Scenario: a due-ledger 'cron' entry with a known last_run/next_due epoch is seeded,
-    then the Update page is rendered.
-
-    Given a 'cron' ledger entry with last_run/next_due epochs whose seconds component is
-      deliberately non-zero (':45'),
-    When the Update page is GET,
-    Then the rendered Schedule line shows BOTH timestamps WITH those seconds -- the
-      pre-fix minute-only format would have silently dropped them.
-    """
-    last_run = 1735722045  # 2025-01-01 09:00:45 UTC -- non-zero seconds so a minute-only
-    # render (the pre-fix format) would visibly truncate them.
-    next_due = last_run + 900  # +15 minutes, still :45s
-
-    _write_ledger_entry(smoke_vm, "cron", last_run, next_due)
-
+    assert "error" not in json.loads(webui.get(_UPDATE_PAGE + "?ajax=update").text), "precondition: Core must answer"
     resp = webui.get(_UPDATE_PAGE)
     result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings", "Schedule"))
     assert result.ok, f"Update page render oracle failed: {result.detail}"
 
-    assert re.search(r"Last:\s*<strong>[\d-]+ \d{2}:\d{2}:45</strong>", resp.text), (
-        "Update page Schedule 'Last' timestamp must show seconds precision (':45') -- "
-        f"the pre-fix 'Y-m-d H:i' format truncates them; body snippet around 'Last:': "
-        f"{resp.text[resp.text.find('Last:') : resp.text.find('Last:') + 80]!r}"
-    )
-    assert re.search(r"Next:\s*<strong>[\d-]+ \d{2}:\d{2}:45</strong>", resp.text), (
-        "Update page Schedule 'Next' timestamp must show seconds precision (':45')"
-    )
+    entry = r"Last: <strong>(?:[\d-]+ [\d:]{8}|—)</strong>&emsp;Next: <strong>[\d-]+ [\d:]{8}</strong>"
+    rows = {
+        "Feed groups": ("Not scheduled",),
+        "Extras (MaxMind, ASN, TOP1M)": ("Not scheduled",),
+        "DNSBL Category": ("Not scheduled", "Disabled", "None selected"),
+    }
+    for label, words in rows.items():
+        assert label in resp.text, f"Update page missing the {label!r} schedule row"
+        cell = resp.text.split(label, 1)[1][:600]
+        assert "Core is not answering" not in cell, f"{label!r} row says Core is not answering: {cell[:300]!r}"
+        accepted = "|".join([entry, *(f"<em>{w}</em>" for w in words)])
+        assert re.search(accepted, cell), (
+            f"{label!r} row is neither a Last/Next entry nor one of {words}: {cell[:300]!r}"
+        )
 
 
 _CFG_PFB_ENABLE = "installedpackages/pfblockerng/config/0/enable_cb"
@@ -4407,7 +4406,7 @@ def test_log_output_never_prefilled(smoke_vm: SmokeVM, webui: WebUI, php_error_l
       Given the pfBlockerNG log seeded with a unique marker,
       When the Update page is GET -> pfb_output EMPTY.
 
-    The live log is streamed by the client poller (``?ajax=tail``), so the rendered box is always
+    The live log is streamed by the client poller (``?ajax=update``), so the rendered box is always
     empty; the #666 post-upgrade prefill is removed. The seeded marker makes the empty assertion
     meaningful (empty by choice, not an empty log). (The Software page no longer has an output
     textarea at all — its Update/Uninstall now link to pfSense's Package Manager, issue #684.)
@@ -4422,31 +4421,27 @@ def test_log_output_never_prefilled(smoke_vm: SmokeVM, webui: WebUI, php_error_l
     assert upd_marker not in _pfb_output_value(resp.text), "Update page must not prefill pfb_output"
 
 
-def test_ajax_tail_endpoint_returns_json(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:
-    """The ``?ajax=tail`` poll endpoint returns a well-formed JSON tail payload (#671).
+def test_ajax_update_cursor_round_trips_as_a_string(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The ``?ajax=update`` cursor is Core's opaque ``next`` string; the poller hands it straight back (#671, #3941).
 
-    The live log is served by this endpoint instead of a blocking inline-<script> stream, which
-    is why the page now completes loading (foot.inc + nav menu). A GET with no offset must return
-    the JSON contract the client poller consumes — parseable JSON (not an HTML page) carrying the
-    data/offset/done/source keys — on BOTH pages.
+    The live log is served by this endpoint instead of a blocking inline-<script> stream, which is
+    why the page completes loading (foot.inc + nav menu). Core's cursor exceeds 2^53 from the 8193rd
+    Update of a Core, so it travels as a string end to end: a reply's ``next`` sent back as ``after``
+    must be accepted as is (a number, or a float round trip, would be refused by Core).
 
-    For the Update source the per-run log is seeded, so the payload tails it: source 'run' with the
-    marker present. fail-before: there was no such endpoint, so the request rendered the full HTML
-    page and ``json.loads`` would raise. (The Software page no longer has an ``?ajax=tail`` endpoint
-    — its Update/Uninstall link to pfSense's Package Manager, issue #684.)
+    Given the endpoint answers a first poll,
+    When its ``next`` is sent back as ``after``,
+    Then the second reply is well-formed JSON with no error and a string ``next`` of its own,
+    And the cursor "0" (read the whole log again) is accepted the same way.
     """
-    run_marker = f"pfb-tail-{uuid.uuid4().hex[:8]}"
-    _seed_vm_file(smoke_vm, _PFB_RUNLOG, run_marker + "\n")
-
-    resp = webui.get(f"{_UPDATE_PAGE}?ajax=tail")
-    assert resp.status_code == 200, f"ajax=tail status {resp.status_code}"
-    payload = json.loads(resp.text)  # must parse as JSON, not HTML
-    for key in ("data", "offset", "done", "source"):
-        assert key in payload, f"update ajax=tail payload missing {key!r}: {payload}"
-    assert payload["source"] == "run", f"seeded run log should be tailed (source 'run'): {payload}"
-    assert run_marker in payload["data"], f"seeded run-log marker missing from tail data: {payload}"
+    first = json.loads(webui.get(f"{_UPDATE_PAGE}?ajax=update").text)
+    _assert_update_poll_contract(first)
+    for cursor in (first["next"], "0"):
+        resp = webui.get(f"{_UPDATE_PAGE}?ajax=update&after={cursor}")
+        assert resp.status_code == 200, f"after={cursor!r} returned HTTP {resp.status_code}: {resp.text[:200]!r}"
+        again = json.loads(resp.text)  # must parse as JSON, not HTML
+        assert "error" not in again, f"Core refused the cursor {cursor!r} it handed out: {again!r}"
+        _assert_update_poll_contract(again)
 
 
 def test_software_page_hidden_when_override_forces_off(
