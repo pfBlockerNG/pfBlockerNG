@@ -66,7 +66,7 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 			'options_top1m_inclusion'	=> ['com' => 'COM', 'net' => 'NET', 'org' => 'ORG'],
 		];
 		foreach (self::SCALAR_DEFAULTS as $key => $default) {
-			$vars["options_{$key}"] = [$default => $default, 'other' => 'Other'];
+			$vars["options_{$key}"] = ['other' => 'Other'];	// the default is not an option: an omitted field must be set to it
 		}
 
 		$_POST = $post;
