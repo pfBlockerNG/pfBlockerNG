@@ -43,6 +43,9 @@ HSTS = f"{h.CFG_DNSBL_SETTINGS}/pfb_hsts"
 CORE_STATE = "/usr/local/etc/pfb_core"
 CONFIG_HISTORY = "/conf/backup/config-*.xml"
 SAVE_MESSAGE = "pfBlockerNG Core saved the DNS settings"
+ADAPTER = "/usr/local/pkg/pfblockerng/pfb_core_settings.sh"
+# The adapter deadlines Core enforces (docs/misc/core-api-protocol.md, "Adapter backend")
+READ_DEADLINE, WRITE_DEADLINE = 10.0, 20.0
 
 
 @pytest.fixture(scope="module")
@@ -191,6 +194,23 @@ def config_history(vm: SmokeVM) -> set[str]:
     return set(listing.stdout.split())
 
 
+def newest_config_backup(vm: SmokeVM) -> str:
+    """The newest Config History backup: the configuration the last write_config() replaced."""
+    listing = vm.ssh(f"ls -t {CONFIG_HISTORY} | head -n 1", timeout=30)
+    assert listing.returncode == 0 and listing.stdout.strip(), f"no config history: {listing.stderr}"
+    return listing.stdout.strip()
+
+
+def adapter_seconds(vm: SmokeVM, request: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    """One run of the settings adapter as Core runs it: its wall time on the box (``time -p``) and its reply."""
+    body = shlex.quote(json.dumps(request))
+    run = vm.ssh(f"/usr/bin/time -p /bin/sh -c {shlex.quote(f'printf %s {body} | {ADAPTER}')}", timeout=60)
+    assert run.returncode == 0, f"the adapter failed: {run.stdout}{run.stderr}"
+    real = next(line.split()[1] for line in run.stderr.splitlines() if line.startswith("real "))
+    reply: dict[str, Any] = json.loads(run.stdout)
+    return float(real), reply
+
+
 def _flipped(state: tuple[bool, str]) -> str:
     """The other toggle value for a stored one: On becomes the Off token, anything else On."""
     return "" if state[1] == "on" else "on"
@@ -287,17 +307,17 @@ def test_a_core_save_changes_config_xml_and_leaves_a_config_history_entry(core_v
         after = config_dns_settings(core_vm)
         assert after == {**before, "hstsNullBlocking": not before["hstsNullBlocking"]}, f"config.xml now says {after}"
         assert core_dns(core_vm) == (config_revision(core_vm), after), "Core is at config.xml's values and revision"
-        added = config_history(core_vm) - history
-        assert added, "the save left no new config history entry"
-        message = core_vm.ssh(f"grep -l {shlex.quote(SAVE_MESSAGE)} {' '.join(sorted(added))}", timeout=30)
-        assert message.returncode == 0, f"no new history entry carries '{SAVE_MESSAGE}':\n{sorted(added)}"
+        # write_config() backs up the configuration it replaces; Config History lists the new one by its description
+        assert config_history(core_vm) - history, "the save left no new config history entry"
+        description = h.config_get(core_vm, "revision/description")
+        assert SAVE_MESSAGE in description, f"config.xml's revision says {description!r}, not the Core save"
     finally:
         h.config_restore_state(core_vm, HSTS, original)
         tell_core(core_vm)
 
 
 def test_an_older_config_restored_reaches_core_with_the_next_tick(core_vm: SmokeVM) -> None:
-    """Writing the older value back (a config history restore) is a change no page made: the tick tells Core."""
+    """Config History's restore (pfSense ``config_restore()``) of the config before a Core save: the tick tells Core."""
     original = h.config_get_state(core_vm, HSTS)
     try:
         tell_core(core_vm)
@@ -307,14 +327,44 @@ def test_an_older_config_restored_reaches_core_with_the_next_tick(core_vm: Smoke
         assert saved["status"] == 200, f"before-state: Core refused the save: {saved}"
         newer = config_dns_settings(core_vm)
         assert newer != older, "before-state: the Core save changed config.xml"
+        backup = newest_config_backup(core_vm)
 
-        h.config_restore_state(core_vm, HSTS, original)
+        restored = php_json(core_vm, f"config_restore({backup!r})")
+        assert restored == 0, f"pfSense's config_restore({backup}) answered {restored}"
 
         assert config_dns_settings(core_vm) == older, "before-state: the older value is back in config.xml"
         held = core_dns(core_vm)
         assert held is not None and held[1] == newer, f"before-state: Core must still hold the newer value: {held}"
         run_tick(core_vm)
         await_core_dns(core_vm, older)
+    finally:
+        h.config_restore_state(core_vm, HSTS, original)
+        tell_core(core_vm)
+
+
+def test_the_settings_adapter_reads_and_writes_well_inside_cores_deadlines(core_vm: SmokeVM) -> None:
+    """The adapter as Core runs it: five reads and two writes (a flip and back), each timed on the box and recorded."""
+    original = h.config_get_state(core_vm, HSTS)
+    try:
+        reads = [adapter_seconds(core_vm, {"version": 1, "op": "read"}) for _ in range(5)]
+        for _, reply in reads:
+            assert reply["settings"]["dns"] == config_dns_settings(core_vm), f"the read answered {reply}"
+        current = reads[-1][1]
+        writes = []
+        hsts = current["settings"]["dns"]["hstsNullBlocking"]
+        for value in (not hsts, hsts):
+            wanted = {**current["settings"]["dns"], "hstsNullBlocking": value}
+            seconds, reply = adapter_seconds(
+                core_vm,
+                {"version": 1, "op": "write", "expectedRevision": current["revision"], "settings": {"dns": wanted}},
+            )
+            assert "error" not in reply and config_dns_settings(core_vm) == wanted, f"the write answered {reply}"
+            writes.append(seconds)
+            current = {"revision": reply["revision"], "settings": {"dns": wanted}}
+        read_times = [seconds for seconds, _ in reads]
+        print(f"PFB_ADAPTER_LATENCY read {read_times} write {writes}", flush=True)
+        assert max(read_times) < READ_DEADLINE / 2, f"reads took {read_times} s against Core's {READ_DEADLINE} s"
+        assert max(writes) < WRITE_DEADLINE / 2, f"writes took {writes} s against Core's {WRITE_DEADLINE} s"
     finally:
         h.config_restore_state(core_vm, HSTS, original)
         tell_core(core_vm)
