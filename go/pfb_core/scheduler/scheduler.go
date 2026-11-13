@@ -291,11 +291,12 @@ func writeState(path string, st schedule.State) error {
 	if err != nil {
 		return err
 	}
-	tmpPath := path + ".tmp"
-	tmp, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// A new file, never an existing one: CreateTemp makes it 0600, where reusing a file would keep that file's mode.
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
+	tmpPath := tmp.Name()
 	_, err = tmp.Write(raw)
 	if err == nil {
 		err = tmp.Sync()
@@ -307,7 +308,7 @@ func writeState(path string, st schedule.State) error {
 		err = os.Rename(tmpPath, path)
 	}
 	if err != nil {
-		_ = os.Remove(tmpPath) // a leftover would only be overwritten by the next write, never read
+		_ = os.Remove(tmpPath) // a leftover is never read as state, but nothing would remove it
 		return err
 	}
 	dir, err := os.Open(filepath.Dir(path))

@@ -80,9 +80,8 @@ sections, in this order, are `feed_plan` and `reserve`; the runners:
 - `feed_plan` plans the entries that are not `extra:*`, only when `scheduled`, with `last_completed_occurrence` alone as
   the cursor: a pending occurrence, attempted or not, never counts as completed (unlike the ledger's `next_due` above). The
   old path's `next_due` is not part of the answer.
-- `reserve` is `set_pending` followed by a raise: an item whose pending occurrence is absent or older takes the planned
+- `reserve` is `set_pending` and a raise in one state update: an item whose pending occurrence is absent or older takes the planned
   one and loses its `pending_attempted`; an equal or newer one is kept. An occurrence not after the item's completed one
   is `"rejected"`, as are a bad id, a negative occurrence and an existing state that is not valid. Occurrence 0 is valid.
-- Known limit: a rejected call is all or nothing in Core. The old path publishes `set_pending` before the raise, so when
-  the raise fails (a completed item) the other ids' pending occurrences stay written; the tick then suppresses its pass.
-  The corpus pins the answer, not that leftover write.
+- A rejected call writes nothing, the valid ids of the call included: Go returns no state, and the PHP runner asserts that
+  the state file is byte-for-byte unchanged.

@@ -116,8 +116,37 @@ func TestPersistedStateRoundTripsThroughParseStateWithMode0600(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("state file mode = %v, want 0600", info.Mode().Perm())
 	}
-	if _, err := os.Stat(f.path + ".tmp"); !os.IsNotExist(err) {
-		t.Errorf("a temporary file was left behind (stat error %v)", err)
+	if strays := f.strays(); len(strays) != 0 {
+		t.Errorf("temporary files were left behind: %v", strays)
+	}
+}
+
+// Scenario: an earlier write left a temporary file next to the state file with a world-readable mode (0644). A write must not
+// reuse it, which would keep its mode through the rename, but make a new private one: the state file is 0600 whatever
+// the directory holds, and no temporary file of this write is left.
+func TestPersistedStateIsPrivateEvenWhenATemporaryFileWithAWiderModeExists(t *testing.T) {
+	f := newFixture(t, model(true), "")
+	stale := f.path + ".tmp"
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stale, 0o644); err != nil { // WriteFile is subject to the umask
+		t.Fatal(err)
+	}
+
+	if err := f.s.Start("retry", "", ""); err != nil { // an admitted start persists the state
+		t.Fatalf("Start(retry): %v", err)
+	}
+
+	info, err := os.Stat(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("state file mode = %v, want 0600", info.Mode().Perm())
+	}
+	if strays := f.strays(filepath.Base(stale)); len(strays) != 0 {
+		t.Errorf("temporary files were left behind: %v", strays)
 	}
 }
 

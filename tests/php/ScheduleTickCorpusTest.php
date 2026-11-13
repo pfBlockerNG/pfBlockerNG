@@ -71,6 +71,12 @@ final class ScheduleTickCorpusTest extends TestCase
 	#[DataProvider('cases')]
 	public function testTickMatchesCorpus(string $section, array $case): void
 	{
+		$file = "{$this->dir}/pfb_schedule_state.json";
+		if ($section === 'reserve') {
+			$items = array_map(static fn (array $item): object => (object) $item, $case['state']);
+			file_put_contents($file, json_encode(['schema' => 1, 'items' => (object) $items], self::JSON_FLAGS));
+		}
+		$before = is_file($file) ? file_get_contents($file) : NULL;
 		$expect = self::canon($case['expect']);
 		$actual = self::canon(self::evaluate($section, $case, $this->dir));
 		$this->assertSame(
@@ -79,6 +85,10 @@ final class ScheduleTickCorpusTest extends TestCase
 			"{$section}/{$case['id']}: {$case['description']}\nexpected " . json_encode($expect, self::JSON_FLAGS)
 				. "\nactual   " . json_encode($actual, self::JSON_FLAGS)
 		);
+		if ($section === 'reserve' && $actual === 'rejected') {
+			// A rejected reservation is all or nothing: not even the valid ids of the call are written.
+			$this->assertSame($before, file_get_contents($file), "{$section}/{$case['id']}: a rejected reservation changed the state file");
+		}
 	}
 
 	/**
@@ -103,8 +113,6 @@ final class ScheduleTickCorpusTest extends TestCase
 				);
 				return ['due' => $plan['due'], 'occurrences' => $plan['occurrences']];
 			case 'reserve':
-				$items = array_map(static fn (array $item): object => (object) $item, $case['state']);
-				file_put_contents("{$dir}/pfb_schedule_state.json", json_encode(['schema' => 1, 'items' => (object) $items], self::JSON_FLAGS));
 				if (!pfb_schedule_reserve($case['occurrences'], $dir)) {
 					return 'rejected';
 				}

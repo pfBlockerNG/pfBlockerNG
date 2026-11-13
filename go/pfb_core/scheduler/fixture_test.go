@@ -195,6 +195,23 @@ func (f *fixture) noFile() {
 	}
 }
 
+// strays lists what sits in the state file's directory besides the state file itself and the names in keep: the temporary
+// files a write leaves behind.
+func (f *fixture) strays(keep ...string) []string {
+	f.t.Helper()
+	entries, err := os.ReadDir(filepath.Dir(f.path))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		if name := e.Name(); name != filepath.Base(f.path) && !slices.Contains(keep, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // removeFile deletes the state file that New loaded, so that a later write is visible as the file's return.
 func (f *fixture) removeFile() {
 	f.t.Helper()

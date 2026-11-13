@@ -129,7 +129,7 @@ func TestAFailedWriteLeavesNoTemporaryFile(t *testing.T) {
 	if !strings.Contains(f.logText(), "not written") {
 		t.Fatalf("the failed write was not logged: %q", f.logText())
 	}
-	if _, err := os.Stat(f.path + ".tmp"); !os.IsNotExist(err) {
-		t.Errorf("the temporary file was left behind (stat error: %v)", err)
+	if strays := f.strays(); len(strays) != 0 {
+		t.Errorf("temporary files were left behind: %v", strays)
 	}
 }

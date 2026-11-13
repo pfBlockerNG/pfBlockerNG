@@ -6268,6 +6268,32 @@ function pfb_schedule_state_update(
 	);
 }
 
+/** Whether every id is a non-empty, non-numeric string and every occurrence a non-negative integer. */
+function pfb_schedule_occurrences_valid(array $occurrences): bool
+{
+	foreach ($occurrences as $id => $occurrence) {
+		if (!is_string($id) || $id === '' || is_numeric($id) || !is_int($occurrence) || $occurrence < 0) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+/** The state with each occurrence pending for an item that has no pending one and has not completed it. */
+function pfb_schedule_state_with_pending(array $state, array $occurrences): array
+{
+	foreach ($occurrences as $id => $occurrence) {
+		$item = $state['items'][$id] ?? [];
+		$completed = $item['last_completed_occurrence'] ?? NULL;
+		if (!array_key_exists('pending_occurrence', $item)
+		    && (!is_int($completed) || $occurrence > $completed)) {
+			$item['pending_occurrence'] = $occurrence;
+		}
+		$state['items'][$id] = $item;
+	}
+	return $state;
+}
+
 function pfb_schedule_state_set_pending(
 	array $occurrences,
 	string $ledger_dir,
@@ -6277,52 +6303,42 @@ function pfb_schedule_state_set_pending(
 	if ($occurrences === []) {
 		return TRUE;
 	}
-	foreach ($occurrences as $id => $occurrence) {
-		if (!is_string($id) || $id === '' || is_numeric($id) || !is_int($occurrence) || $occurrence < 0) {
-			return FALSE;
-		}
+	if (!pfb_schedule_occurrences_valid($occurrences)) {
+		return FALSE;
 	}
 	return pfb_schedule_state_update(
-		static function (array $state) use ($occurrences): array {
-			foreach ($occurrences as $id => $occurrence) {
-				$item = $state['items'][$id] ?? [];
-				$completed = $item['last_completed_occurrence'] ?? NULL;
-				if (!array_key_exists('pending_occurrence', $item)
-				    && (!is_int($completed) || $occurrence > $completed)) {
-					$item['pending_occurrence'] = $occurrence;
-				}
-				$state['items'][$id] = $item;
-			}
-			return $state;
-		},
+		static fn (array $state): array => pfb_schedule_state_with_pending($state, $occurrences),
 		$ledger_dir,
 		$io,
 		$timeout_s
 	);
 }
 
-/** Reserve the planned occurrences: pending where an item has none, then raised over an older pending one. */
+/** Reserve the planned occurrences in one state update: pending where an item has none, raised over an older one. */
 function pfb_schedule_reserve(array $occurrences, string $state_dir, array $io = []): bool
 {
 	if ($occurrences === []) {
 		return TRUE;
 	}
-	return pfb_schedule_state_set_pending($occurrences, $state_dir, $io)
-		&& pfb_schedule_state_update(
-			static function (array $state) use ($occurrences): array {
-				foreach ($occurrences as $id => $occurrence) {
-					$item = $state['items'][$id] ?? [];
-					if (($item['pending_occurrence'] ?? -1) < $occurrence) {
-						$item['pending_occurrence'] = $occurrence;
-						unset($item['pending_attempted']);
-						$state['items'][$id] = $item;
-					}
+	if (!pfb_schedule_occurrences_valid($occurrences)) {
+		return FALSE;
+	}
+	return pfb_schedule_state_update(
+		static function (array $state) use ($occurrences): array {
+			$state = pfb_schedule_state_with_pending($state, $occurrences);
+			foreach ($occurrences as $id => $occurrence) {
+				$item = $state['items'][$id];
+				if (($item['pending_occurrence'] ?? -1) < $occurrence) {
+					$item['pending_occurrence'] = $occurrence;
+					unset($item['pending_attempted']);
+					$state['items'][$id] = $item;
 				}
-				return $state;
-			},
-			$state_dir,
-			$io
-		);
+			}
+			return $state;
+		},
+		$state_dir,
+		$io
+	);
 }
 
 /** Stable feed identity shared by scheduler and synchronous apply loops. */
