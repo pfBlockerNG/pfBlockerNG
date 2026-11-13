@@ -231,6 +231,9 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 					$rowdata = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
 				}
 				if (is_array($rowdata)) {
+					// issue #3945: every posted row names its group; the rowids are indexes into $rowdata as the lock just re-read it
+					$input_errors = pfb_category_update_identity_errors($post_data ?? array(), $post_ids ?? array(), $rowdata);
+
 					$cron_values = array(	'Never',
 								'01hour',
 								'02hours',
@@ -269,6 +272,7 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 
 								// Validate Variable names
 								$valid_vars = ($gtype === 'dnsbl') ? array('action', 'cron', 'logging') : array('action', 'cron', 'aliaslog');
+								$valid_vars[] = 'aliasname';	// issue #3945: names the group shown at the row; judged by pfb_category_update_identity_errors()
 								if (in_array($k_field[0], $valid_vars)) {
 									$variable = $k_field[0];
 								} else {
@@ -316,11 +320,13 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 											$input_errors[] = "Failed Logging: " . htmlspecialchars($value);
 										}
 										break;
+									case 'aliasname':
+										break;
 									default:
 										$input_errors[] = "Failed variable name: " . htmlspecialchars($variable);
 								}
 
-								if (!$input_errors) {
+								if (!$input_errors && $variable !== 'aliasname') {
 									if ($gtype != 'geoip') {
 										$rowdata[$rowid][$variable] = pfb_filter($value, PFB_FILTER_HTML, 'Category');
 										if (isset($rowdata_path)) {
@@ -535,6 +541,7 @@ if (isset($savemsg)) {
 							print ($row['aliasname']);
 						}
 					?>
+					<input type="hidden" name="aliasname-<?=$r_id?>" value="<?=htmlspecialchars($aliasname_raw, ENT_QUOTES)?>"/>
 					</td>
 
 					<td>

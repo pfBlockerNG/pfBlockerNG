@@ -3549,6 +3549,45 @@ function pfb_group_action_valid(mixed $action, string $gtype): bool {
 	), TRUE);
 }
 
+/**
+ * issue #3945: the Groups list's bulk update names, for every row it changes or reorders, the group the page showed there
+ * ('aliasname-N' in postdata). The row index alone can be another group once the update has re-read config.xml under the config
+ * lock (the group shown there was deleted since), so a row that carries no name, or a name that is not the group stored at that
+ * index now ('aliasname' as stored: a GeoIP row is its continent), refuses the whole update. Rows the request does not mention are
+ * not judged.
+ *
+ * @param array<mixed> $post_data parsed `postdata`: 'action-N', 'cron-N', 'logging-N' / 'aliaslog-N' fields, 'aliasname-N' names
+ * @param array<mixed> $post_ids  parsed `ids`: ['ids' => [position => 'rN']]
+ * @param array<mixed> $rowdata   the groups as stored now, by row index
+ * @return list<string> one error per such row, in row order
+ */
+function pfb_category_update_identity_errors(array $post_data, array $post_ids, array $rowdata): array {
+	$rows = array();
+	foreach (array_keys($post_data) as $key) {
+		$field = explode('-', (string) $key);
+		if (count($field) === 2 && in_array($field[0], array('action', 'cron', 'logging', 'aliaslog'), TRUE) && ctype_digit($field[1])) {
+			$rows[(int) $field[1]] = TRUE;
+		}
+	}
+	foreach (is_array($post_ids['ids'] ?? NULL) ? $post_ids['ids'] : array() as $position) {
+		if (is_string($position) && str_starts_with($position, 'r') && ctype_digit(substr($position, 1))) {
+			$rows[(int) substr($position, 1)] = TRUE;
+		}
+	}
+	ksort($rows);
+
+	$errors = array();
+	foreach (array_keys($rows) as $row) {
+		$posted = $post_data["aliasname-{$row}"] ?? NULL;
+		if (!is_string($posted)) {
+			$errors[] = "Groups: row {$row} was posted without its group name, so nothing was saved. Reload the Groups page.";
+		} elseif (($rowdata[$row]['aliasname'] ?? NULL) !== $posted) {
+			$errors[] = "Groups: row {$row} was changed by another save, so nothing was saved. Reload the Groups page.";
+		}
+	}
+	return $errors;
+}
+
 /** Consumers must not read a GeoIP generation interrupted during publication. */
 function pfb_geoip_generation_ready(): bool {
 	global $pfb;
