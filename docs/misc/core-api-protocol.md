@@ -1,9 +1,10 @@
 # Core API protocol
 
 Scope: the HTTP+JSON API of the pfBlockerNG Core daemon (`go/pfb_core`, binary `pfb-core`, issue #3841; map #3813), the
-conventions every Core method follows, the settings methods and backends (issues #3842, #3913, #3924), who may
-call it, and how the package runs it. Load when: adding a Core method or settings projection, calling Core from PHP or
-another local process, or changing `go/pfb_core`, `pfb_core_service()` or `pfb_core_call()`.
+conventions every Core method follows, the settings methods and backends (issues #3842, #3913, #3924), the singleton Update,
+its scheduler and `--update-cmd` (issue #3941), who may call it, and how the package runs it. Load when: adding a Core
+method or settings projection, calling Core from PHP or another local process, or changing `go/pfb_core`,
+`pfb_core_service()` or `pfb_core_call()`.
 
 Core is its own process and binary, separate from `pfb-dns`: either keeps running when the other fails. It runs whether
 pfB-DNS is enabled or not.
@@ -35,6 +36,9 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed, and the revision, as Core read the backend again after the write (a failed read keeps what was written) |
 | `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give; changes nothing |
 | `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
+| `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry` | `{}` once the Update is admitted; `conflict` while one runs |
+| `GetUpdate` | `after` (optional log offset, default 0) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log |
+| `GetSchedule` | none | `{"scheduled", "feeds", "extras"}`: when the scheduled Updates last ran and are next due |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
 
@@ -72,7 +76,8 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
 - **No run.** A save starts no run.
 - **Secrets are write-only.** A read shows a secret field as `{"present": true|false}`, never its value, in list items too.
 - **One Core per state directory.** Core holds an exclusive `flock` on `core.lock` in `--state-dir` while it runs, with
-  either backend. A second `pfb-core` on the same directory does not start.
+  either backend. A second `pfb-core` on the same directory does not start. With `--update-cmd` the directory also holds
+  `schedule_state.json` and `update.log` ([Update command](#update-command)).
 - **Schema growth.** A projection or field the backend does not hold yet reads as its default. A projection or field
   the schema no longer has stops the start (file backend) or fails the read (adapter): removing one needs a migration.
 - **Replay and restarts.** The `requestId` memory is the process's own. A retry after a restart gets `conflict` (the
@@ -258,6 +263,95 @@ read and PHP runtime model; `go/pfb_core/settings/schedule_parity_test.go` check
 `go/pfb_core/schedule/settings_test.go` compares the models, including `config_hash`. Rejected PHP models are recorded
 as `null`, separately from the valid defaulted projection.
 
+## Update and schedule
+
+Core runs the singleton Update and its quarter-hour scheduler (issue #3941, map #3813) when it starts with
+`--update-cmd PATH` ([Update command](#update-command)). Without the flag Core runs no scheduler and `StartUpdate`,
+`GetUpdate` and `GetSchedule` answer `unavailable` ("Core runs no scheduler: start it with --update-cmd"). The pfSense
+layer relays these calls from its authenticated pages; Core is never exposed to a browser.
+
+- **One Update at a time.** Every trigger goes through one gate: the scheduler's own `scheduled`, and `manual`, `apply` and
+  `retry` from `StartUpdate`. The gate is a nonblocking lock held for the whole run: a second Update is refused, never
+  queued. A `scheduled` trigger that finds it taken is skipped (its occurrences stay unreserved, so the next quarter hour
+  plans them again); a `StartUpdate` gets `conflict` ("an Update is running") and can read the running Update with
+  `GetUpdate`.
+- **Scheduler.** At every quarter-hour boundary (a Unix time that is a multiple of 900 s, read in the host's time zone)
+  Core plans what is due from `settings/schedule` and the `settings/feeds/*` projections as they are then (a save or
+  `SettingsChanged` refreshes them), reserves the occurrences and starts a `scheduled` Update with the feeds and Extras
+  (`extra:dcc`, `extra:bl`) that are due. Nothing due starts nothing.
+- **Restarts.** Core starts idle. The pending occurrences and outcomes are kept in `schedule_state.json`; a missing or
+  unusable file starts empty and the next quarter hour plans what is due. The Update, its log and its result are in
+  memory and in `update.log`, which a new Update starts again: nothing of an Update survives a restart. A stop while an
+  Update runs ends it, and the next Core starts fresh and resumes nothing.
+
+### StartUpdate
+
+Asks for an Update. It takes a `requestId` ([replay](#requestid-and-replay)) and `trigger`, which is required:
+
+| `trigger` | Runs | Other parameters |
+|---|---|---|
+| `manual` | the feeds and Extras of `scope` (`ip`, `dnsbl` or `both`, default `both`) with `force` (`none`, `parse`, `download` or `both`, default `none`) | `scope`, `force` |
+| `apply` | the apply, without feeds or Extras | none: `scope` and `force` are refused |
+| `retry` | the pending feeds and due Extras, the way a quarter-hour run plans them, even when nothing is due | none: `scope` and `force` are refused |
+
+The reply is `{}` once the Update is admitted, not when it ends: read it with `GetUpdate`. A value the table does not allow
+(`scheduled` is not one) is `invalid_argument` with one field error per fault (`trigger`, `scope`, `force`) and nothing
+starts. `conflict` means an Update is running. `unavailable` means Core is stopping or runs no scheduler. A `retry` plans like
+a quarter-hour run, so one whose model cannot be built from the settings (not initialized, or a value the schedule refuses)
+starts nothing and fails as `internal` (logged); a `scheduled` one is logged and skipped.
+
+### GetUpdate
+
+Progress is polled, not streamed. `after` is a byte offset into the Update's log, `0` or more (a negative one is
+`invalid_argument`). The reply is:
+
+| Field | Value |
+|---|---|
+| `running` | `true` while an Update runs, explicitly `false` otherwise |
+| `update` | `null` until this Core's first Update; else `{"trigger", "scope", "force", "startedAt", "finishedAt", "result"}`: `startedAt` and `finishedAt` in Unix seconds, `finishedAt` and `result` only once it ended, `result` `success` (the program exited 0 and its result, if any, was usable) or `failed` |
+| `log` | the log's bytes from `after`, at most 64 KiB, never ending inside a UTF-8 character; `""` while idle |
+| `next` | `after` plus the bytes of `log`: the `after` of the next call; `0` while idle |
+
+The last Update stays readable until the next one starts. A client follows an Update by calling again with `after` set to
+the last `next`, and detects a new Update by `update.startedAt` differing from the one it follows: the log then starts
+again at 0. An `after` beyond the log's end reads from 0.
+
+### GetSchedule
+
+Takes no parameters; the reply is computed from the settings and the scheduler's state at the call:
+`{"scheduled": bool, "feeds": {"lastRun", "nextDue"} or null, "extras": {"extra:dcc": {...}, "extra:bl": {...}}}`. `scheduled`
+is the General switch for scheduled feed updates. `feeds` is the feeds' entry, `null` when scheduled updates are off or no
+feed is or will be due. `extras` holds the Extras that are enabled and will be due. A time is Unix seconds, `lastRun` 0 when
+never run. When the model cannot be built (the settings are not initialized, or hold a value the schedule refuses) the call is
+`unavailable` with the reason.
+
+### Update command
+
+`--update-cmd PATH` names the program that runs each Update; the path comes only from the flag. Core runs it once per Update:
+
+- **stdin:** one JSON object, `{"version": 1, "trigger": "scheduled|manual|apply|retry", "scope": "ip|dnsbl|both",
+  "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"]}`. `feeds` and `extras` are left out
+  when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
+  Update names what to run; a `manual` one runs its scope.
+- **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
+  restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it.
+- **fd 3:** a second regular file, for the result: `{"version": 1, "outcomes": {id: "success"|"retry-cap-reached"},
+  "attempted": [ids], "geoipReady": bool}`. Nothing written is nothing reported. Anything else that is not exactly one such
+  object of at most 1 MiB fails the Update and records nothing.
+- **Exit status:** 0 is success. A non-zero exit fails the Update, and a valid result it wrote still counts.
+- **Process group and bounds:** the program runs in its own process group. The group is killed (TERM, then KILL after 5 s)
+  at a hard cap of 4 hours, when the Update is cancelled and when Core stops; never when the program exits by itself, so a
+  daemon it started keeps running.
+
+Core then records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically): each
+feed's outcome, the attempted ids that stay pending, and the GeoIP readiness the program saw (`true` until the first report).
+The Extras plan uses the last readiness reported. The cutover imports configuration only, so a Core that finds no state file
+starts empty.
+
+**Stopping.** TERM or INT during an Update cancels it: the program's group gets TERM, and KILL 5 s later if it is still there,
+and Core stops after that. A program that ignores TERM keeps Core's stop past the rc script's 5 s before KILL. The Update is
+not resumed: the next Core starts idle and the scheduler plans from its state file.
+
 ## Errors
 
 Every error is the same envelope, with the HTTP status its code maps to:
@@ -275,14 +369,14 @@ Every error is the same envelope, with the HTTP status its code maps to:
 | `unauthenticated` | 401 | The caller is not an admitted local process (see [Local authentication](#local-authentication)) |
 | `not_found` | 404 | No such method, or no such API version |
 | `method_not_allowed` | 405 | Not `POST` |
-| `conflict` | 409 | A `requestId` reused with a different body; a settings call the store's state refuses ([Settings](#settings)) |
+| `conflict` | 409 | A `requestId` reused with a different body; a settings call the store's state refuses ([Settings](#settings)); `StartUpdate` while an Update runs ([Update and schedule](#update-and-schedule)) |
 | `payload_too_large` | 413 | Body over the limit |
 | `internal` | 500 | The method failed unexpectedly or ran past its deadline (logged); also any code a method returns that is not in this table |
-| `unavailable` | 503 | A repeat of a `requestId` whose first request still ran when the repeat's own deadline passed |
+| `unavailable` | 503 | A repeat of a `requestId` whose first request still ran when the repeat's own deadline passed; the settings backend failed; Core runs no scheduler (no `--update-cmd`) or is stopping; the schedule cannot be computed ([Update and schedule](#update-and-schedule)) |
 
 ## requestId and replay
 
-A mutating method (`InitializeSettings`, `SaveSettings`) takes a `requestId` in its parameters: a string of 1 to
+A mutating method (`InitializeSettings`, `SaveSettings`, `StartUpdate`) takes a `requestId` in its parameters: a string of 1 to
 128 printable ASCII characters without spaces. The method declares `requestId` in its own parameters, since unknown
 parameters are refused. The client makes one per logical operation (a UUID will do) and sends it
 again, with the byte-identical body, to resolve an unknown outcome such as a timeout.
@@ -347,7 +441,7 @@ pfb-dns ticket decides it.
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
 | Socket | `/var/run/pfb_core/api.sock` |
-| State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): Core's data and its lock, never settings; outside `/var`, so it survives a RAM-disk reboot |
+| State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): Core's data and its lock, never settings; with `--update-cmd` also `schedule_state.json` and `update.log`; outside `/var`, so it survives a RAM-disk reboot |
 | Settings backend | `/usr/local/pkg/pfblockerng/pfb_core_settings.sh` (`--settings-backend-cmd`): `config.xml` through PHP |
 
 - **Start** and **Stop** run under one lock (`lockf -k -t 20 /var/run/pfb_core.lock`; status 75 when another start or
@@ -356,7 +450,8 @@ pfb-dns ticket decides it.
   the socket listens. A package without an executable `pfb-core` for this machine starts nothing and logs why. That is not
   a failure. An unknown machine is a failure.
 - **Stop** sends TERM to the supervisor and to pfb-core, then KILL at 5 s. It signals a process only while its pidfile names it
-  and its command line is pfb_core's, so a reused pid is never signalled. pfb-core finishes the requests in flight (up to
+  and its command line is pfb_core's, so a reused pid is never signalled. pfb-core first ends a running Update (the
+  program's process group gets TERM, and KILL 5 s later), then finishes the requests in flight (up to
   3 s) and removes its socket. A process still running at 7 s fails the stop, keeps the pidfiles and fails a start or
   restart over it.
 - **Package lifecycle.** The install and every upgrade regenerate the script and restart the service. pfSense starts it at
