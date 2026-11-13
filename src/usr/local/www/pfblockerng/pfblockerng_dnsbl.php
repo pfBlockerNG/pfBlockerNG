@@ -604,7 +604,12 @@ if ($_POST) {
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
-			if (is_array($_POST[$s_option] ?? NULL)) {
+			// issue #3947: a crafted nested value, anywhere in the list, is not an option key (array_key_exists() throws on it)
+			if (is_array($_POST[$s_option] ?? NULL) && array_filter($_POST[$s_option], 'is_array')) {
+				$input_errors[] = "DNSBL: the {$s_option} selection is invalid!";
+				$_POST[$s_option] = $s_default;
+			}
+			elseif (is_array($_POST[$s_option] ?? NULL)) {
 				foreach ($_POST[$s_option] as $post_option) {
 					if (!array_key_exists($post_option, ${"options_$s_option"})) {
 						$_POST[$s_option] = $s_default;
@@ -797,11 +802,16 @@ if ($_POST) {
 			$input_errors[] = 'Warning: With DoH/DoT/DoQ Blocking enabled, you must select at least one List';
 		}
 
-		if (!array_key_exists($_POST['safesearch_doh'] ?? '', $options_safesearch_doh)) {
+		if (!is_string($_POST['safesearch_doh'] ?? '') || !array_key_exists($_POST['safesearch_doh'] ?? '', $options_safesearch_doh)) {
 			$_POST['safesearch_doh'] = 'Disable';
 		}
 
-		if (is_array($_POST['safesearch_doh_list'] ?? '')) {
+		// issue #3947: a crafted nested value, anywhere in the list, is not an option key (array_key_exists() throws on it)
+		if (is_array($_POST['safesearch_doh_list'] ?? '') && array_filter($_POST['safesearch_doh_list'], 'is_array')) {
+			$input_errors[] = 'DNSBL: the safesearch_doh_list selection is invalid!';
+			$_POST['safesearch_doh_list'] = '';
+		}
+		elseif (is_array($_POST['safesearch_doh_list'] ?? '')) {
 			foreach ($_POST['safesearch_doh_list'] as $validate) {
 				if (!array_key_exists($validate, $options_safesearch_doh_list)) {
 					$_POST['safesearch_doh_list'] = '';
