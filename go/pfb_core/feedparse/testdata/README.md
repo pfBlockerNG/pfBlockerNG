@@ -148,7 +148,8 @@ DNSBL case (`dnsbl`):
   `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE`); `ip4`, `ip6`, the lists written to `_v4.ip` and
   `_v6.ip` (`array_unique`, first-seen order, the IPs the feed carried); `updateip`; `scheme_skipped`, the strict-scheme count behind
   the warning; `stop`, whether the feed ended at the hpHosts marker; `details`, as above; `messages`, every notice the parser logged, in
-  order, as in an IP case (`IP literal decoded`, `IDN converted`).
+  order, as in an IP case (`IP literal decoded`, `IDN converted` and, from the IP sanitizer the line parser collects through, `Feed /0 CIDR
+  clamped to single host`; these are all the per-line parser logs, over the 696 runs of every `dnsbl.json` case under both Suppression and custom settings).
 - The parse-error records and the notices are not kept in the result: Core hands each to the sink (`Sink.Fail`, `Sink.Message`) as the
   feed is read, as the old path writes them to its log files.
 - `pfb_dnsbl_abp_regex_ip4_cidrs()` also logs `ABP IPv4 regex rule expansion failed`, from a `catch (\Throwable)` around its own
