@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/TickExtrasOrderingTest.php';
+require_once __DIR__ . '/CoreUpdateServeTest.php';
 require_once __DIR__ . '/Issue1840SuppUpdateNullPostinstallTest.php';
 
 final class Issue1840SuppUpdateNullPostinstallFixtureIsolationTest extends TestCase
 {
-	public function testTickExtrasRestoresWholeGlobalG(): void
+	public function testCoreUpdateServeRestoresWholeGlobalG(): void
 	{
 		$hadPfb = array_key_exists('pfb', $GLOBALS);
 		$originalPfb = $GLOBALS['pfb'] ?? NULL;
@@ -19,13 +19,13 @@ final class Issue1840SuppUpdateNullPostinstallFixtureIsolationTest extends TestC
 		$originalG = $GLOBALS['g'] ?? NULL;
 		$incomingG = [
 			'pfblockerng_install' => FALSE,
-			'unbound_chroot_path' => '/sentinel/tick-extras',
+			'unbound_chroot_path' => '/sentinel/core-update',
 			'unrelated_sentinel' => ['keep' => 'exactly'],
 		];
 
 		try {
 			$GLOBALS['g'] = $incomingG;
-			$fixture = new TickExtrasOrderingTest('testDueExtrasRunDccThenBlThenFeedAndIgnoreApplyWindow');
+			$fixture = new CoreUpdateServeTest('testScheduledExtrasRunDccThenBlAndAreReportedAsSuccessfulOutcomes');
 			$setUp = new ReflectionMethod($fixture, 'setUp');
 			$tearDown = new ReflectionMethod($fixture, 'tearDown');
 
@@ -38,7 +38,7 @@ final class Issue1840SuppUpdateNullPostinstallFixtureIsolationTest extends TestC
 			$this->assertSame(
 				$incomingG,
 				$GLOBALS['g'] ?? NULL,
-				"TickExtrasOrderingTest::tearDown() must restore the exact incoming \$GLOBALS['g'] array"
+				"CoreUpdateServeTest::tearDown() must restore the exact incoming \$GLOBALS['g'] array"
 			);
 		} finally {
 			if ($hadPfb) {

@@ -10,15 +10,15 @@ use PHPUnit\Framework\TestCase;
  * Issue #3938 (map #3813): replays the schedule evaluation parity corpus, go/pfb_core/schedule/testdata/schedule.json
  * (schema: that directory's README.md), through the REAL old-path functions. Core's Go port (package schedule) replays
  * the same file and must give the same answers: a case that diverges fails on one side or the other.
+ *
+ * Issue #3941: Core owns the scheduler's state and the Extras' plan now, so the PHP functions behind the `extra_plan`,
+ * `set_pending` and `record_outcome` sections are gone (RETIRED): the corpus keeps them, Go replays them alone.
  */
 #[CoversFunction('pfb_schedule_next_occurrence')]
 #[CoversFunction('pfb_schedule_plan')]
-#[CoversFunction('pfb_schedule_extra_plan')]
 #[CoversFunction('pfb_schedule_cache_refresh')]
 #[CoversFunction('pfb_quiet_hours_in_window')]
 #[CoversFunction('pfb_schedule_state_valid')]
-#[CoversFunction('pfb_schedule_state_set_pending')]
-#[CoversFunction('pfb_schedule_state_record_outcome')]
 #[CoversFunction('pfb_schedule_runtime_model')]
 #[CoversFunction('pfb_schedule_runtime_config')]
 final class ScheduleCorpusTest extends TestCase
@@ -37,6 +37,8 @@ final class ScheduleCorpusTest extends TestCase
 		'model'           => ['general', 'sections', 'extras'],
 		'blacklist'       => ['blacklist'],
 	];
+	/** Sections whose PHP function the cutover removed; the corpus still holds them for Core's runner. */
+	private const RETIRED = ['extra_plan', 'set_pending', 'record_outcome'];
 	private const JSON_FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR;
 
 	private string $dir = '';
@@ -86,7 +88,9 @@ final class ScheduleCorpusTest extends TestCase
 				if (isset($out[$name])) {
 					throw new RuntimeException("schedule.json: duplicate id {$name}");
 				}
-				$out[$name] = [$section, $case];
+				if (!in_array($section, self::RETIRED, TRUE)) {
+					$out[$name] = [$section, $case];
+				}
 			}
 		}
 		return $out;
@@ -133,18 +137,6 @@ final class ScheduleCorpusTest extends TestCase
 					}
 				}
 				return pfb_schedule_plan($groups, $case['default'], NULL, $case['now'], $zone);
-			case 'extra_plan':
-				$GLOBALS['pfb']['ccdir'] = $dir;
-				if (!$case['geoip_ready']) {
-					touch("{$dir}/.pfb_generation_swapping");
-				}
-				return pfb_schedule_extra_plan(
-					['default' => $case['default'], 'entries' => self::entries($case['entries'])],
-					['schema' => 1, 'items' => $case['state']],
-					$case['now'],
-					$zone,
-					$case['cache']
-				);
 			case 'next_due':
 				$model = ['scheduled' => $case['scheduled'], 'default' => $case['default'], 'entries' => self::entries($case['entries'])];
 				$model = ['config_hash' => hash('sha256', json_encode(pfb_schedule_runtime_hash_projection($model), self::JSON_FLAGS))] + $model;
@@ -160,14 +152,6 @@ final class ScheduleCorpusTest extends TestCase
 			case 'state_valid':
 				file_put_contents("{$dir}/pfb_schedule_state.json", $case['input']);
 				return pfb_schedule_state_read($dir) !== NULL;
-			case 'set_pending':
-				self::writeState($dir, $case['state']);
-				return pfb_schedule_state_set_pending($case['occurrences'], $dir) ? self::readItems($dir) : 'rejected';
-			case 'record_outcome':
-				self::writeState($dir, $case['state']);
-				return pfb_schedule_state_record_outcome(
-					$case['item'], PfbScheduleTerminalResult::from($case['outcome']), $dir, $case['now'], [], $case['expected_occurrence']
-				) ? self::readItems($dir) : 'rejected';
 			case 'model':
 				$reason = NULL;
 				$model = pfb_schedule_runtime_model($case['general'], $case['sections'], $case['extras'] ?? [], $reason);
@@ -214,21 +198,6 @@ final class ScheduleCorpusTest extends TestCase
 				'override' => $entry['override'] ?? NULL];
 		}
 		return $entries;
-	}
-
-	private static function writeState(string $dir, array $items): void
-	{
-		$items = array_map(static fn (array $item): object => (object) $item, $items);
-		file_put_contents("{$dir}/pfb_schedule_state.json", json_encode(['schema' => 1, 'items' => (object) $items], self::JSON_FLAGS));
-	}
-
-	private static function readItems(string $dir): array
-	{
-		$state = pfb_schedule_state_read($dir);
-		if ($state === NULL) {
-			throw new RuntimeException('published schedule state is unreadable');
-		}
-		return $state['items'];
 	}
 
 	/** Key order of JSON objects is not part of an answer; list order is. */

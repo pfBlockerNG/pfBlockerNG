@@ -74,22 +74,19 @@ final class ScheduledFeedOutcomeTest extends TestCase
 		$this->assertSame('retry-cap-reached', $result?->value, 'skipfeed cap must complete with a retry-cap outcome');
 	}
 
-	public function testFailureBelowCapLeavesOccurrencePending(): void
+	public function testFailureBelowCapReportsNoTerminalOutcome(): void
 	{
 		$GLOBALS['pfb_test_resolve_map']['example.test.'] = [['type' => 'A', 'data' => '203.0.113.20']];
 		$GLOBALS['pfb']['grep'] = 'grep';
 		$GLOBALS['pfb']['skipfeed'] = 3;
-		$occurrence = time() - 900;
-		$this->assertTrue(pfb_schedule_state_set_pending(['ipv4:retry_v4' => $occurrence], $this->dir));
+		unset($GLOBALS['pfb']['scheduled_outcomes']);
 
 		$result = pfb_update_check(
 			'retry', 'https://example.test/feed', $this->dir, $this->dir, FALSE, '', '_v4'
 		);
 
-		$this->assertNull($result);
-		$state = pfb_schedule_state_read($this->dir);
-		$this->assertSame($occurrence, $state['items']['ipv4:retry_v4']['pending_occurrence']);
-		$this->assertArrayNotHasKey('last_completed_occurrence', $state['items']['ipv4:retry_v4']);
+		$this->assertNull($result, 'no terminal result: the occurrence stays pending in Core');
+		$this->assertArrayNotHasKey('scheduled_outcomes', $GLOBALS['pfb']);
 	}
 
 	public function testAlwaysRefreshFormatsReturnSuccessfulSourceOutcome(): void
@@ -130,18 +127,12 @@ final class ScheduledFeedOutcomeTest extends TestCase
 
 	public function testDownstreamFailureDoesNotUndoSuccessfulSourceOutcome(): void
 	{
-		$occurrence = time() - 900;
 		$marker = $this->dir . '/feed.update';
-		$this->assertTrue(pfb_schedule_state_set_pending(['ipv4:feed_v4' => $occurrence], $this->dir));
-		$this->assertTrue(pfb_schedule_state_record_outcome(
-			'ipv4:feed_v4', PfbScheduleTerminalResult::Success, $this->dir, $occurrence + 10
-		));
+		unset($GLOBALS['pfb']['scheduled_outcomes']);
+		pfb_schedule_outcome_record('ipv4:feed_v4', PfbScheduleTerminalResult::Success);
 		pfb_list_script_failure_record('ip', 'feed_v4', 'transform failed', $this->dir, $marker);
 
-		$state = pfb_schedule_state_read($this->dir);
-		$this->assertSame($occurrence, $state['items']['ipv4:feed_v4']['last_completed_occurrence']);
-		$this->assertSame('success', $state['items']['ipv4:feed_v4']['completion_outcome']);
-		$this->assertSame($occurrence + 10, $state['items']['ipv4:feed_v4']['last_successful_check']);
+		$this->assertSame(['ipv4:feed_v4' => 'success'], $GLOBALS['pfb']['scheduled_outcomes']);
 		$this->assertFileExists($marker);
 	}
 

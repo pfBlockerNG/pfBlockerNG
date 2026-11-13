@@ -590,15 +590,15 @@ final class TickEntrypointTest extends TestCase
 			'a pfblockerng.php worker owned by this PHPUnit run leaked from an earlier test');
 
 		// Act.
-		$manualRuns = 0;
+		$starts = 0;
 		pfblockerng_tick(
 			ps_lines: $psLines,
-			manual_runner: static function () use (&$manualRuns): bool {
-				$manualRuns++;
-				return TRUE;
+			core_call: static function (string $method) use (&$starts): array {
+				$starts += $method === 'StartUpdate' ? 1 : 0;
+				return ['status' => 200, 'body' => ['running' => FALSE], 'error' => NULL];
 			}
 		);
-		$this->assertSame(0, $manualRuns, 'future non-pending cron entry must not dispatch');
+		$this->assertSame(0, $starts, 'future non-pending cron entry must not ask Core for an Update');
 
 		// After: log maintenance ran anyway.
 		clearstatcache(TRUE, $logPath);
@@ -891,6 +891,41 @@ final class TickEntrypointTest extends TestCase
 	}
 
 	/**
+	 * Issue #3941: an Update Core runs is no `pfblockerng.php` process the ps scan can see; Core says so in GetUpdate, and the tick
+	 * defers log maintenance exactly as it does for a pass in the process table.
+	 */
+	public function testTickDefersLogMaintenanceWhileCoreReportsAnUpdateRunning(): void
+	{
+		$this->seedTickPrereqs('24');
+		pfb_global();
+		$this->ensureLogDir();
+		$now = time();
+		$this->seedFutureLedgerEntry('cron', $now);
+		$this->seedFutureLedgerEntry('dcc',  $now);
+		$this->seedFutureLedgerEntry('bl',   $now);
+		$logPath = $this->logPath('log');
+		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
+		$running = FALSE;
+		$core = static function (string $method) use (&$running): array {
+			return ['status' => 200, 'body' => $method === 'GetUpdate' ? ['running' => $running] : [], 'error' => NULL];
+		};
+
+		pfblockerng_tick(ps_lines: [], core_call: $core);
+		$this->assertSame(['l3', 'l4', 'l5'], array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen')),
+			'before-state: with no Update running, the tick trims the log');
+
+		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
+		$running = TRUE;
+		pfblockerng_tick(ps_lines: [], core_call: $core);
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame(['l1', 'l2', 'l3', 'l4', 'l5'], array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen')),
+			'log maintenance is skipped while Core runs an Update');
+		$deferred = array_filter($GLOBALS['pfb_test_syslog_calls'] ?? [], static fn (array $c): bool => str_contains($c['body'], 'log maintenance deferred'));
+		$this->assertNotEmpty($deferred, 'the skip is observable on the syslog surface');
+	}
+
+	/**
 	 * Spawn a REAL background process whose /bin/ps -wax command line matches
 	 * pfb_update_pass_running()'s regex: a tiny sleeper script invoked as
 	 * "/bin/sh <sandbox>/pfblockerng.php dcc" -- the literal substring
@@ -1044,28 +1079,19 @@ final class TickEntrypointTest extends TestCase
 		$this->assertSame(5, $linesBefore, "Before: expected 'log' to have 5 lines, got {$linesBefore}");
 
 		// Act.
-		$manualRuns = 0;
+		$starts = [];
 		pfblockerng_tick(
-			$psLines,
-			NULL,
-			NULL,
-			5.0,
-			NULL,
-			NULL,
-			5.0,
-			NULL,
-			NULL,
-			static function () use (&$manualRuns): bool {
-				$manualRuns++;
-				return TRUE;
+			ps_lines: $psLines,
+			core_call: static function (string $method, array $params = []) use (&$starts): array {
+				if ($method === 'StartUpdate') {
+					$starts[] = $params['trigger'];
+				}
+				return ['status' => 200, 'body' => ['running' => FALSE], 'error' => NULL];
 			}
 		);
-		$this->assertSame(1, $manualRuns, 'pending manual apply must run exactly once');
-
-		// The pending cron entry WAS dispatched despite pfb_interval='Disabled' --
-		// pending_apply bypasses $cron_disabled (pfblockerng_extra.inc).
-		$this->assertFalse(pfb_due_ledger_is_pending('cron', $GLOBALS['pfb']['dbdir']),
-			'pending_apply must have been cleared by the dispatch branch');
+		$this->assertSame(['apply'], $starts, 'the pending apply is asked of Core exactly once (issue #3941)');
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $GLOBALS['pfb']['dbdir']),
+			'the tick clears nothing: the Update that runs the apply clears the flag');
 
 		// The precondition above proves this test entered through the $dispatched half.
 		// After: log maintenance was skipped -- 'log' still has its original 5 lines.

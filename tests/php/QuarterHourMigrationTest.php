@@ -85,7 +85,7 @@ require {$extra};
 		'extra:dcc' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL],
 	],
 ];
-\$extras = pfb_schedule_extra_plan(\$model, ['schema' => 1, 'items' => []], strtotime('2026-01-07 07:00:00 UTC'), new DateTimeZone('UTC'));
+\$extras = pfb_schedule_plan(\$model['entries'], \$model['default'], NULL, strtotime('2026-01-07 07:00:00 UTC'), new DateTimeZone('UTC'));
 \$runtime = pfb_schedule_runtime_config();
 echo json_encode([
 	'group' => \$migrated[\$v4][0],

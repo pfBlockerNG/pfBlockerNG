@@ -63,7 +63,7 @@ final class SyncCronPflexOrderTest extends TestCase
 		);
 	}
 
-	public function testCronOwnsDispatcherBeforeFeedLockThroughOutcomePublication(): void
+	public function testCronOwnsDispatcherBeforeFeedLockThroughTheFeedChecks(): void
 	{
 		$dispatch = strpos(self::$functionBody, 'pfb_schedule_dispatch_begin(0.1, $pfb_dispatch_contended)');
 		$feed = strpos(self::$functionBody, "pfb_feed_pass_begin('cron', \$pfb_feed_pass_contended)");
@@ -126,7 +126,7 @@ final class SyncCronPflexOrderTest extends TestCase
 		$this->assertNotFalse($end);
 		$body = substr(self::$functionBody, $check, $end - $check);
 		$pending = strpos($body, 'pfb_due_ledger_set_pending');
-		$outcome = strpos($body, 'pfb_schedule_state_record_outcome');
+		$outcome = strpos($body, 'pfb_schedule_outcome_record');
 		$this->assertNotFalse($pending);
 		$this->assertNotFalse($outcome);
 		$this->assertLessThan($outcome, $pending);
@@ -140,7 +140,7 @@ final class SyncCronPflexOrderTest extends TestCase
 		$this->assertNotFalse($hold);
 		$continue = strpos(self::$functionBody, 'continue;', $hold);
 		$this->assertNotFalse($continue);
-		$outcome = strpos(self::$functionBody, 'pfb_schedule_state_record_outcome', $hold);
+		$outcome = strpos(self::$functionBody, 'pfb_schedule_outcome_record', $hold);
 		$this->assertNotFalse($outcome);
 		$this->assertLessThan($continue, $outcome);
 		$clearFail = strpos(self::$functionBody, 'unlink_if_exists', $hold);

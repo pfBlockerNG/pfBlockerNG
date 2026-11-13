@@ -2482,6 +2482,14 @@ per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helper
   **once** on the next tick (`mark_ran` advances `next_due` past now, so no double-run).
 - **Corrupt/partial ledger ⇒ treated as absent** (fail-safe due).
 
+**Core owns the schedule (issue #3941).** The ledger no longer holds the schedule: the feeds' and Extras'
+cadence, their pending occurrences and outcomes live in Core (`schedule_state.json`, `docs/misc/core-api-protocol.md`
+"Update and schedule"), and Core starts every Update through the `core_update` verb (`pfb_core_update_serve()`).
+`pfb_due_ledger.json` keeps only the Outpost's entries: `ss_refresh`, `apply_reconcile` and the `cron` entry's
+`pending_apply` flag. The tick (`pfblockerng_tick()`) reads no schedule state or cache; it asks Core for an `apply`
+(pending change inside the apply window) or a `retry` (a `*.fail` marker of an enabled feed, an absent DNSBL manifest).
+Every install and upgrade drops the PHP state file and the retired ledger entries once (`pfb_core_service()`).
+
 The ledger rides issue #468's persist/restore set (added to `pfb_aliastables('update')`'s backup),
 so a **clean** reboot keeps the schedule; only a true RAM-disk wipe falls back to due-now-jittered.
 A missing aliastables archive (when any of its files exists), or a missing DNSBL cache archive (when

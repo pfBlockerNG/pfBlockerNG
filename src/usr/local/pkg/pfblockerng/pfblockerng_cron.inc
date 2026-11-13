@@ -254,13 +254,16 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 //   Defaults to FALSE to preserve the existing cron behaviour byte-identically.
 // $scope — 'both' (default), 'ip', or 'dnsbl'; filters which list types are probed.
 //   Defaults to 'both' so existing callers (case 'cron') are unchanged.
+// $feed_ids — issue #3941: the feeds (pfb_schedule_feed_id()) a scheduled pass checks, as Core named them; the
+//   `*.fail` retries are added as always. Each terminal check is reported through pfb_schedule_outcome_record().
 function pfblockerng_sync_cron(
 	// issue #2491: typed because the RETURN VALUE now depends on its truthiness.
 	bool $force_all = FALSE,
 	$scope = 'both',
 	bool $pending_change = FALSE,
 	bool $clear_hashes = FALSE,
-	?string &$deferred_by = NULL
+	?string &$deferred_by = NULL,
+	array $feed_ids = []
 ): bool {
 	global $pfb, $pfbarr;
 	$deferred_by = NULL;
@@ -316,32 +319,7 @@ function pfblockerng_sync_cron(
 
 	$pfb['update_cron'] = FALSE;
 	$scheduled_runtime = !$force_all;
-	$state_dir = (string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc');
-	$runtime_model = NULL;
-	$runtime_state = NULL;
-	$pending_ids = [];
-	if ($scheduled_runtime) {
-		$runtime_model = pfb_schedule_runtime_config();
-		$runtime_state = pfb_schedule_state_read($state_dir);
-		if ($runtime_model === NULL || $runtime_state === NULL) {
-			pfb_logger("\n Scheduled feed runtime unavailable; cron selection suppressed.\n", 2);
-			if ($pfb_feed_pass_owner) {
-				pfb_feed_pass_release();
-			}
-			if ($pfb_dispatch_owner) {
-				pfb_schedule_dispatch_release();
-			}
-			return FALSE;
-		}
-		if ($runtime_model['scheduled']) {
-			foreach ($runtime_model['entries'] as $id => $entry) {
-				$item = $runtime_state['items'][$id] ?? NULL;
-				if ($entry['enabled'] && is_array($item) && array_key_exists('pending_occurrence', $item)) {
-					$pending_ids[$id] = TRUE;
-				}
-			}
-		}
-	}
+	$pending_ids = $scheduled_runtime ? array_fill_keys($feed_ids, TRUE) : [];
 	$pfb['scheduled_runtime_cron'] = $scheduled_runtime;
 	$pfb['scheduled_selected_ids'] = $pending_ids;
 	$check = static function (
@@ -354,7 +332,7 @@ function pfblockerng_sync_cron(
 		string $format,
 		string $vtype,
 		mixed $srcint
-	) use ($scheduled_runtime, $state_dir): void {
+	) use ($scheduled_runtime): void {
 		global $pfb;
 		$result = pfb_update_check($header, $url, $folder, $orig, $flex, $format, $vtype, $srcint);
 		if ($scheduled_runtime && $result !== NULL) {
@@ -365,7 +343,7 @@ function pfblockerng_sync_cron(
 					return;
 				}
 			}
-			pfb_schedule_state_record_outcome($feed_id, $result, $state_dir);
+			pfb_schedule_outcome_record($feed_id, $result);
 		}
 	};
 	$log = " CRON  PROCESS  START [ " . pfb_pkg_ver() . " ]\n";
@@ -414,9 +392,7 @@ function pfblockerng_sync_cron(
 						if ($row['state'] == 'Hold' && file_exists("{$pfbfolder}/{$header}.txt")) {
 							unlink_if_exists("{$pfbfolder}/{$header}.fail");
 							if ($scheduled_runtime && isset($pending_ids[$feed_id])) {
-								pfb_schedule_state_record_outcome(
-									$feed_id, PfbScheduleTerminalResult::Success, $state_dir
-								);
+								pfb_schedule_outcome_record($feed_id, PfbScheduleTerminalResult::Success);
 							}
 							continue;
 						}

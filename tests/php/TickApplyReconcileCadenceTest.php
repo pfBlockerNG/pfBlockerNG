@@ -75,7 +75,7 @@ final class TickApplyReconcileCadenceTest extends TestCase
 			'jitter' => 0,
 		], $this->dir);
 
-		pfblockerng_tick(core_settings: static fn(): ?string => NULL);
+		pfblockerng_tick(core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
 
 		$this->assertFileDoesNotExist($counter, 'future apply_reconcile entry must suppress the retry');
 		$entry = pfb_due_ledger_read_entry('apply_reconcile', $this->dir);

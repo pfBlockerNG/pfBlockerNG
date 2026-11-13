@@ -156,8 +156,8 @@ final class GeneralScheduleUiTest extends TestCase
 		$this->assertStringNotContainsString('pfb_schedule_cache_refresh(', $window,
 			'the page must not publish directly; the stage helper owns the publication');
 		$this->assertStringContainsString('$pfb[\'save\'] = TRUE; sync_package_pfblockerng();', $source);
-		$this->assertMatchesRegularExpression('/pfblockerng_configure_tick_cron\(\s*\$pfb\[\'enable\'\]\s*===\s*PfbToggle::On,\s*\$pfb\[\'log\'\],\s*NULL,\s*FALSE\s*\)/', php_strip_whitespace(self::APPLY),
-			'settings-save sync must not regenerate or replace the active cache');
+		$this->assertMatchesRegularExpression('/pfblockerng_configure_tick_cron\(\s*\$pfb\[\'enable\'\]\s*===\s*PfbToggle::On,\s*\$pfb\[\'log\'\]\s*\)/', php_strip_whitespace(self::APPLY),
+			'settings-save sync installs the tick cron only: no schedule cache is regenerated or replaced (issue #3941)');
 	}
 
 	public function testSaveRemovesEveryDisposableCandidateArtifact(): void

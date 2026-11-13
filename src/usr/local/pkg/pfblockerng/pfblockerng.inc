@@ -4149,6 +4149,8 @@ const PFB_CORE_RCFILE = '/usr/local/etc/rc.d/pfb_core.sh';
 const PFB_CORE_API_VERSION = 'v1';
 // issue #3924: the settings adapter Core runs once per settings call (--settings-backend-cmd): pfblockerng.inc's `core_settings` verb behind a sh wrapper (the package installs *.sh executable)
 const PFB_CORE_SETTINGS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_settings.sh';
+// issue #3941: the program Core runs once per Update (--update-cmd): the `core_update` verb behind a sh wrapper (pfb_core_update_serve(), pfblockerng_extra.inc)
+const PFB_CORE_UPDATE_CMD = '/usr/local/pkg/pfblockerng/pfb_core_update.sh';
 // The adapter reads at most this many bytes of request from stdin
 const PFB_CORE_SETTINGS_MAX_REQUEST = 33554432;	// 32 MiB, as Core takes a reply: the feed projections carry custom lists
 // issue #3927: the adapter's metrics waits, so the waits it chooses on a client-IP change (DNS config lock, metrics lock, three passes
@@ -4435,14 +4437,15 @@ function pfb_core_state_teardown(PfbToggle $keep): void {
  * waited for at most 20 s; a start or stop that cannot get it does nothing and exits 75). Start: keeps a pfb_core supervisor its pidfile names;
  * otherwise stops what is left (a survivor fails the start) and runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64,
  * by `uname -p`) under daemon(8), restarted 5 s after it exits, with its output in $pfb['core_log'], its API on $pfb['core_socket'], its
- * storage in $pfb['core_state'] and its settings read and written through PFB_CORE_SETTINGS_CMD (issue #3924: the start pushes nothing).
+ * storage in $pfb['core_state'], its settings read and written through PFB_CORE_SETTINGS_CMD (issue #3924: the start pushes nothing) and its
+ * Updates run by PFB_CORE_UPDATE_CMD (issue #3941).
  * A daemon(8) that fails, or no supervisor named by its pidfile within 5 s, fails the start; the start returns once the supervisor is
  * confirmed, not once the API socket listens (a caller that needs the API handles pfb_core_call()'s status 0). No executable pfb-core
  * for this machine starts nothing and is not a failure (a package built without it); an unknown machine fails. Stop: TERM to the
  * supervisor and pfb-core, KILL at 5 s, each signalled only while its pidfile names it and its command line is pfb_core's (the
  * supervisor's, also before daemon(8) sets its title); a Core still running at 7 s fails the stop and keeps the pidfiles, and a start
  * (or the script's own restart) over it fails. Generating the service also retires the settings store and the push records of the earlier model (every install and
- * upgrade regenerates it).
+ * upgrade regenerates it), and the PHP scheduler's state and schedule entries of the due ledger (issue #3941).
  *
  * @param string $coreDir the package's core directory (a test points it at a temp directory)
  */
@@ -4455,6 +4458,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$socket = escapeshellarg($pfb['core_socket']);
 	$state = escapeshellarg($pfb['core_state']);
 	$settingsCmd = escapeshellarg(PFB_CORE_SETTINGS_CMD);
+	$updateCmd = escapeshellarg(PFB_CORE_UPDATE_CMD);
 	$dir = escapeshellarg($coreDir);
 	$lockfile = escapeshellarg($pfb['core_lockfile']);
 	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own command
@@ -4469,6 +4473,12 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	foreach (['core_pushed', 'core_push_failed'] as $retired) {
 		unlink_if_exists("{$pfb['dbdir']}/{$retired}");
 	}
+	// issue #3941: Core owns the schedule and its state (--update-cmd; the cutover imports configuration only): the PHP scheduler's
+	// state file, and the schedule entries of the due ledger beside the Outpost's own, go
+	foreach (['pfb_schedule_state.json', 'pfb_schedule_state.json.lock'] as $retired) {
+		unlink_if_exists(((string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc')) . "/{$retired}");
+	}
+	pfb_due_ledger_retire_schedule((string) $pfb['dbdir']);
 
 	$rc		= array();
 	$rc['file']	= 'pfb_core.sh';
@@ -4510,7 +4520,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	# Anything the daemon runs that starts this service again must take the lock
 	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"
@@ -10073,7 +10083,8 @@ function pfb_log_mgmt() {
 // widening of issue #690's lifecycle-only mirror to add the terminal case. Test-overridable.
 function pfb_run_streams_to_stdout(): bool {
 	global $pfb;
-	return $pfb['run_stdout_override'] ?? (!empty($pfb['hook_lifecycle']) || pfb_stdout_is_terminal());
+	// issue #3941: an Update Core runs (pfb_core_update_serve()) has Core's progress log as STDOUT, which nothing else writes through this process
+	return !empty($pfb['core_update']) || ($pfb['run_stdout_override'] ?? (!empty($pfb['hook_lifecycle']) || pfb_stdout_is_terminal()));
 }
 
 // Whether this process's real STDOUT (fd 1) is an interactive terminal. FALSE when redirected to a
@@ -14823,20 +14834,11 @@ function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_
 
 // issue #1204: extracted from sync_package_pfblockerng() so PHPUnit can pin the
 // tick cron's install/teardown behaviour without driving the whole sync pass.
-function pfblockerng_configure_tick_cron(
-	bool $enabled,
-	string $log,
-	?callable $regenerate = NULL,
-	bool $regenerate_cache = TRUE
-): void {
+function pfblockerng_configure_tick_cron(bool $enabled, string $log): void {
 	$pfb_tick_min = '*/15';
 	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$log} 2>&1";
 
 	if ($enabled) {
-		$regenerate ??= function_exists('pfb_schedule_cache_regenerate') ? 'pfb_schedule_cache_regenerate' : NULL;
-		if ($regenerate_cache && $regenerate !== NULL) {
-			$regenerate();
-		}
 		if (!pfblockerng_cron_exists($pfb_tick_cmd, $pfb_tick_min, '*', '*', '*')) {
 			install_cron_job('pfblockerng.php cron-tick', FALSE);	// remove stale cron-tick (interval changed)
 			install_cron_job('pfblockerng.php tick', FALSE);	// remove legacy pre-#1204 entry
@@ -27914,6 +27916,7 @@ function pfb_feed_task_running(?array $ps_lines = NULL): bool {
 //     always sees its OWN process in `ps` -- including it here would make the gate permanently
 //     closed. Hence (?![-\w]) rather than \b: a hyphen SATISFIES \b, so a bare 'cron' arm would
 //     match the 'cron-tick' process (issue #1204).
+//   - INCLUDES the `core_update` verb of pfblockerng.inc, the Update Core runs (issue #3941), whose PHP process is no `pfblockerng.php` line.
 //   - INCLUDES 'dcc'/'bl': both append to $pfb['extraslog'] for potentially minutes,
 //     the same log pfb_log_mgmt()'s tail-to-temp-then-cat-over trim can race and lose
 //     lines from, so a due-ledger-dispatched dcc/bl pass must also hold this gate closed.
@@ -27922,7 +27925,7 @@ function pfb_update_pass_running(?array $ps_lines = NULL): bool {
 	if ($ps_lines === NULL) {
 		exec('/bin/ps -wax', $ps_lines);
 	}
-	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron|update(ip|dnsbl)?|pfb_trigger|forcecheck|dcc|bl)(?![-\w])/', $ps_lines);
+	return (bool) preg_grep('/pfblockerng[.](?:php\s+?(cron|update(ip|dnsbl)?|pfb_trigger|forcecheck|dcc|bl)|inc\s+core_update)(?![-\w])/', $ps_lines);
 }
 
 
@@ -28191,7 +28194,8 @@ function pfb_log_tail_payload(string $which, int $offset, bool $has_offset): arr
 // would wipe the feed-pass output the client is already tailing). Idempotent within a process.
 function pfb_runlog_begin() {
 	global $pfb;
-	if (!empty($pfb['runlog']) && empty($pfb['runlog_active'])) {
+	// issue #3941: an Update Core runs logs to Core's progress log; the run log is never opened (or truncated) for it
+	if (!empty($pfb['runlog']) && empty($pfb['runlog_active']) && empty($pfb['core_update'])) {
 		@file_put_contents($pfb['runlog'], '');
 		$pfb['runlog_active'] = TRUE;
 	}
@@ -28204,6 +28208,10 @@ function pfb_runlog_begin() {
 // inheriting a pipe would hang exec() on missing EOF (see pfb_run_hooks).
 function pfb_run_log_target(): string {
 	global $pfb;
+	// issue #3941: during an Update Core runs, Core's progress log (update.log, its STDOUT, opened O_APPEND): a hook's output lands in it
+	if (!empty($pfb['core_update'])) {
+		return "{$pfb['core_state']}/update.log";
+	}
 	return (!empty($pfb['runlog_active']) && !empty($pfb['runlog'])) ? $pfb['runlog'] : $pfb['log'];
 }
 
@@ -28831,6 +28839,13 @@ function pfb_build_autorule_list(
 require_once __DIR__ . '/pfblockerng_apply.inc';
 require_once __DIR__ . '/pfblockerng_cron.inc';
 require_once __DIR__ . '/pfblockerng_geoip.inc';
+
+// issue #3941: the update program Core runs once per Update (--update-cmd, behind pfb_core_update.sh): the request on stdin, the progress on stdout,
+// the result on fd 3. It runs after the requires above: the pass it serves lives in them.
+if (isset($argv[1]) && $argv[1] == 'core_update') {
+	pfb_global();
+	exit(pfb_core_update_serve((string) stream_get_contents(STDIN, PFB_CORE_UPDATE_MAX_REQUEST + 1)));
+}
 
 // Remove owned firewall objects (VIP, NAT, filter rules) BEFORE the config reference data is
 // wiped by pfb_remove_config_settings(). Catches orphans that the normal disable teardown missed.

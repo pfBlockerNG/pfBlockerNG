@@ -164,20 +164,4 @@ final class CronDeferralExitCodeTest extends TestCase
 			stream_wrapper_unregister('pfbcronfeederror');
 		}
 	}
-
-	public function testRuntimeUnavailableStillFailsWithoutDeferralReason(): void
-	{
-		file_put_contents("{$this->dbdir}/pfb_schedule_state.json", 'not json at all');
-		$deferredBy = NULL;
-
-		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
-
-		$log = $this->mainLog();
-		$this->assertStringContainsString('runtime unavailable', $log,
-			'before-state: the run must actually have reached the genuine-failure guard');
-		$this->assertStringNotContainsString('lock unavailable', $log,
-			'this row must not be taking a deferral path — that would pass for the wrong reason');
-		$this->assertFalse($result, 'a genuine runtime failure must retain its FALSE internal return');
-		$this->assertNull($deferredBy, 'a real failure must map to rc=1, not lock-deferral rc=75');
-	}
 }
