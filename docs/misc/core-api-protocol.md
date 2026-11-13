@@ -240,7 +240,7 @@ provider id is `invalid_argument` naming the field: this projection cannot creat
 is unchanged, not deleted. Provider selection removes its id from `blacklist_selected` or appends it, preserving the
 other ids' order. Category changes write the existing item's `selected` CSV. Group patches apply after feed merges;
 a group deleted by a feed projection in the same save is not patched. All these values participate in the revision.
-After a `SaveSettings`, derived schedule membership is current from the next `SettingsChanged`.
+After a `SaveSettings`, Core reads its backend again, so derived schedule membership is current at once.
 
 Parity fixture: `tests/core/fixtures/settings_schedule_parity.json`. `CoreSettingsScheduleParityTest` freezes the adapter
 read and PHP runtime model; `go/pfb_core/settings/schedule_parity_test.go` checks validation and read-back, and
