@@ -1,0 +1,81 @@
+{
+ "schema": 1,
+ "description": "A probe that finds the published bytes again drops an earlier changed probe's body (#3911): the next ingest fetches, it does not publish the stale body.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "A\n",
+  "digest": "5405a954e75678086484dccf17e13e10"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "B\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "A\n",
+    "decision": "changed",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  },
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "routes": {
+    "origin": {
+     "/list": {
+      "body": "A\n"
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "published": "A\n",
+    "decision": "unchanged",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "A\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  }
+ ]
+}

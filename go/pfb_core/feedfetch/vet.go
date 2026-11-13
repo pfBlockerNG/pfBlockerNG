@@ -28,7 +28,9 @@ type source struct {
 	scheme string
 	host   string // as written in the URL (rsync: the host part)
 	port   int
-	path   string // local: the resolved file; rsync: the source as configured
+	path   string       // local: the resolved file; rsync: the source as configured
+	self   []netip.Addr // self-hosted: the addresses the host was classified self at
+	file   os.FileInfo  // local: the file that was checked
 }
 
 var (
@@ -179,7 +181,7 @@ func allIn(s, set string) bool {
 
 var (
 	internalV4 = prefixes("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16")
-	internalV6 = prefixes("::1/128", "fc00::/7", "fe80::/10")
+	internalV6 = prefixes("::/128", "::1/128", "fc00::/7", "fe80::/10")
 	loopbacks  = []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")}
 )
 
@@ -306,8 +308,8 @@ func (f *Fetcher) entry(ctx context.Context, req Request) (*source, string) {
 	case selfOnly && dir != "/":
 		return nil, ""
 	case selfOnly && src.kind == kindRemote:
-		src.kind = kindSelfHosted
-	case !selfOnly && f.Filter:
+		src.kind, src.self = kindSelfHosted, addrs // read from these addresses, never resolved again (#3911)
+	case !selfOnly && !f.NoFilter:
 		if _, reason := f.vet(ctx, src.host); reason != "" {
 			return nil, reason
 		}
@@ -338,7 +340,7 @@ func (f *Fetcher) localSource(raw string) (*source, string) {
 	}
 	for _, d := range f.LocalDirs {
 		if rd, err := filepath.EvalSymlinks(d); err == nil && filepath.Dir(real) == rd {
-			return &source{kind: kindLocal, path: real}, ""
+			return &source{kind: kindLocal, path: real, file: info}, ""
 		}
 	}
 	return nil, ""
@@ -430,7 +432,7 @@ func (f *Fetcher) redirectTarget(ctx context.Context, location, current string) 
 	if !ok || r.host == "" || (r.scheme != "http" && r.scheme != "https") {
 		return "", rawURL{}, netip.Addr{}, "feed redirect target is not an http(s) URL"
 	}
-	if !f.Filter {
+	if f.NoFilter {
 		return target, r, netip.Addr{}, "" // as cURL's own following: no vetting, no pin
 	}
 	pin, reason := f.vet(ctx, r.host)

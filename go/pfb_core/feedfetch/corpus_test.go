@@ -31,7 +31,8 @@ package feedfetch_test
 //	  rsync      {exit, body}: the stand-in rsync (tests/feedfetch/fixtures/fake-rsync.sh) for this step.
 //	  expect     ok; decision (probe: changed|unchanged|failed); published (string or null); etag, lastmod, digest
 //	             (absent: unchanged by the step); requests [{server, path, and only the headers sent among authorization,
-//	             if_none_match, if_modified_since, x_feed_probe, accept_encoding}] in order; reason (optional: the
+//	             if_none_match, if_modified_since, x_feed_probe, accept_encoding}] in order, plus host (the Host header as
+//	             received, "name:port"), which is checked only when the expectation names it; reason (optional: the
 //	             refusal reason); rsync_source (absent: rsync never started). No non-empty staged body may survive a step.
 
 import (
@@ -127,7 +128,7 @@ type corpusServer struct {
 }
 
 func (s corpusServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	rec := map[string]string{"server": s.name, "path": r.URL.Path}
+	rec := map[string]string{"server": s.name, "path": r.URL.Path, "host": r.Host}
 	for key, header := range map[string]string{
 		"authorization": "Authorization", "if_none_match": "If-None-Match", "if_modified_since": "If-Modified-Since",
 		"x_feed_probe": "X-Feed-Probe", "accept_encoding": "Accept-Encoding",
@@ -311,7 +312,7 @@ func runScenario(t *testing.T, file string) {
 
 	f := &feedfetch.Fetcher{
 		Policy: feedfetch.Policy{
-			Filter:    sc.Filter == nil || *sc.Filter,
+			NoFilter:  sc.Filter != nil && !*sc.Filter,
 			LocalDirs: []string{dir},
 			Resolve: func(_ context.Context, host string) ([]netip.Addr, error) {
 				addrs, ok := sc.Hosts[host]
@@ -326,7 +327,8 @@ func runScenario(t *testing.T, file string) {
 				return out, nil
 			},
 		},
-		RsyncBin: filepath.Join(tools, "rsync"),
+		RsyncBin:   filepath.Join(tools, "rsync"),
+		RetryDelay: time.Millisecond, // the PHP side runs with curl_retry_sleep 0
 	}
 	for _, a := range sc.Allowlist {
 		p, err := netip.ParsePrefix(a)
@@ -409,6 +411,11 @@ func runScenario(t *testing.T, file string) {
 			}
 			wantReq = append(wantReq, e)
 		}
+		for i := range gotReq {
+			if i >= len(wantReq) || wantReq[i]["host"] == "" {
+				delete(gotReq[i], "host") // recorded for every request, compared only where an expectation names it
+			}
+		}
 		got["requests"], want["requests"] = gotReq, wantReq
 		got["rsync_source"], want["rsync_source"] = nil, nilOr(st.Expect.RsyncSource)
 		if argv, err := os.ReadFile(filepath.Join(tools, "rsync.argv")); err == nil {
@@ -430,14 +437,15 @@ func runScenario(t *testing.T, file string) {
 	}
 }
 
-// stagedLeftover names a non-empty file of the feed that is neither published state nor the pending probe body.
+// stagedLeftover names a non-empty file of the feed that is neither published state nor the pending probe body and
+// its validators.
 func stagedLeftover(t *testing.T, dir, name string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	keep := map[string]bool{}
-	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.xxhash128", ".probe"} {
+	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.xxhash128", ".probe", ".probe.etag", ".probe.lastmod"} {
 		keep[name+s] = true
 	}
 	for _, e := range entries {

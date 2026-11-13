@@ -1,0 +1,55 @@
+{
+ "schema": 1,
+ "description": "With the feed-host filter off, cURL follows natively and keeps the URL's userinfo for a redirect to the same host (#3911).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "localhost": [
+   "10.1.2.3"
+  ]
+ },
+ "filter": false,
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/rel": {
+    "status": 302,
+    "location": "/dest"
+   },
+   "/dest": {
+    "body": "BODY\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://user:secret@localhost:{port:origin}/rel",
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "digest": "f688192737a93ab01f03c9345b0ab795",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/rel",
+      "authorization": "Basic dXNlcjpzZWNyZXQ="
+     },
+     {
+      "server": "origin",
+      "path": "/dest",
+      "authorization": "Basic dXNlcjpzZWNyZXQ="
+     }
+    ]
+   }
+  }
+ ]
+}

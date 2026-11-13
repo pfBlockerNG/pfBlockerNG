@@ -1,0 +1,42 @@
+{
+ "schema": 1,
+ "description": "A host resolving to the unspecified address :: is refused before any connection (#3911): a connection to :: reaches the host itself.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "unspec.example": [
+   "::"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://unspec.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "feed host resolves to a non-permitted address",
+    "requests": []
+   }
+  }
+ ]
+}

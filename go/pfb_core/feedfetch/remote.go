@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -28,7 +29,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 	defer out.Close()
 
 	var pin netip.Addr
-	if f.Filter {
+	if !f.NoFilter {
 		var reason string
 		if pin, reason = f.vet(ctx, src.host); reason != "" {
 			return transfer{reason: reason}
@@ -47,6 +48,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 
 	var t transfer
 	current, scheme, host, port := strings.TrimSpace(req.URL), src.scheme, src.host, src.port
+	chains := 0
 	flex := false
 	for hop := 0; ; hop++ {
 		onOrigin := strings.EqualFold(host, src.host) && scheme == src.scheme && port == src.port
@@ -61,7 +63,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 				return transfer{reason: "download file could not be reset"}
 			}
 			out.Seek(0, io.SeekStart)
-			resp, lastErr = f.attempt(ctx, req, current, pin, flex, onOrigin, headers, out)
+			resp, lastErr = f.attempt(ctx, req, withUser(current, src, f.NoFilter && onOrigin), pin, flex, onOrigin, headers, out)
 			if lastErr == nil {
 				break
 			}
@@ -72,9 +74,9 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 				flex = true
 				continue
 			}
-			if attempt < attempts && f.RetryDelay > 0 {
+			if attempt < attempts {
 				select {
-				case <-time.After(f.RetryDelay):
+				case <-time.After(f.retryDelay()):
 				case <-ctx.Done():
 				}
 			}
@@ -92,7 +94,19 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 			return t
 		}
 		if hop >= maxRedirects {
-			return transfer{status: t.status, reason: "too many redirects"}
+			if !f.NoFilter {
+				return transfer{status: t.status, reason: "too many redirects"}
+			}
+			// With the filter off cURL follows natively: error 47 fails the attempt, which is retried whole.
+			if chains++; chains == attempts {
+				return transfer{reason: "curl_incomplete"}
+			}
+			select {
+			case <-time.After(f.retryDelay()):
+			case <-ctx.Done():
+			}
+			current, scheme, host, port, pin, hop = strings.TrimSpace(req.URL), src.scheme, src.host, src.port, netip.Addr{}, -1
+			continue
 		}
 		target, next, nextPin, reason := f.redirectTarget(ctx, location, current)
 		if reason != "" {
@@ -122,6 +136,10 @@ func (f *Fetcher) attempt(ctx context.Context, req Request, target string, pin n
 	}
 	if onOrigin && !hasAuth && (req.Username != "" || req.Password != "") {
 		r.SetBasicAuth(req.Username, req.Password)
+	} else if u := r.URL.User; u != nil && !hasAuth && req.Username == "" && req.Password == "" {
+		// cURL sends a URL's userinfo as Basic to that URL only (#3911); no other hop carries it.
+		pw, _ := u.Password()
+		r.SetBasicAuth(u.Username(), pw)
 	}
 
 	tr := f.transport(req, pin, flex)
@@ -178,6 +196,17 @@ func (f *Fetcher) transport(req Request, pin netip.Addr, flex bool) *http.Transp
 		tr.Proxy = http.ProxyURL(f.Proxy)
 	}
 	return tr
+}
+
+// withUser gives target the feed URL's userinfo when keep is set and target has none: with the filter off cURL follows
+// natively and keeps it for the same origin (#3911).
+func withUser(target string, src *source, keep bool) string {
+	u, err := url.Parse(target)
+	if !keep || src.url == nil || src.url.User == nil || err != nil || u.User != nil {
+		return target
+	}
+	u.User = src.url.User
+	return u.String()
 }
 
 // tlsFailure is what cURL reports as 35, 51 or 60: a failed handshake or certificate check.

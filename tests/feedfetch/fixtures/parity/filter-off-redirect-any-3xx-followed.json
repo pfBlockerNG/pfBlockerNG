@@ -1,0 +1,147 @@
+{
+ "schema": 1,
+ "description": "With the feed-host filter off, cURL follows any 3xx that carries a Location, 300, 304, 305 and 306 included (#3911).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "localhost": [
+   "10.1.2.3"
+  ]
+ },
+ "filter": false,
+ "servers": [
+  "origin"
+ ],
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://localhost:{port:origin}/list",
+   "routes": {
+    "origin": {
+     "/list": {
+      "status": 300,
+      "location": "/final",
+      "body": "page\n"
+     },
+     "/final": {
+      "body": "BODY300\n"
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "published": "BODY300\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     },
+     {
+      "server": "origin",
+      "path": "/final"
+     }
+    ],
+    "digest": "0ce042a82191c98d99591b8305bfeb66"
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://localhost:{port:origin}/list",
+   "routes": {
+    "origin": {
+     "/list": {
+      "status": 304,
+      "location": "/final",
+      "body": "page\n"
+     },
+     "/final": {
+      "body": "BODY304\n"
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "published": "BODY304\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     },
+     {
+      "server": "origin",
+      "path": "/final"
+     }
+    ],
+    "digest": "66a1bc2c0fcaa3e66e66055233746caf"
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://localhost:{port:origin}/list",
+   "routes": {
+    "origin": {
+     "/list": {
+      "status": 305,
+      "location": "/final",
+      "body": "page\n"
+     },
+     "/final": {
+      "body": "BODY305\n"
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "published": "BODY305\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     },
+     {
+      "server": "origin",
+      "path": "/final"
+     }
+    ],
+    "digest": "537bfa1615168cb62846d09985e3edf7"
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://localhost:{port:origin}/list",
+   "routes": {
+    "origin": {
+     "/list": {
+      "status": 306,
+      "location": "/final",
+      "body": "page\n"
+     },
+     "/final": {
+      "body": "BODY306\n"
+     }
+    }
+   },
+   "expect": {
+    "ok": true,
+    "published": "BODY306\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     },
+     {
+      "server": "origin",
+      "path": "/final"
+     }
+    ],
+    "digest": "a6dd3f012f6a84efc8d00ccbaea8f369"
+   }
+  }
+ ]
+}

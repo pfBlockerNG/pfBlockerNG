@@ -189,8 +189,8 @@ final class DownloadRejectValidatorClearTest extends TestCase
 		$this->assertTrue((bool) $GLOBALS['pfb']['cron_update'],
 			'the first pass must find the changed body');
 		// Before-state: the promotion this issue is about really happened.
-		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.orig.etag"),
-			'premise: the detector promotes the response ETag before the ingest has run');
+		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.md5.raw.etag"),
+			'premise: the detector keeps the response ETag beside the probe body (#3911) until the ingest publishes it');
 
 		$this->assertFalse($this->ingest()->success, 'the refused body must fail the ingest');
 		$this->assertStringContainsString(
@@ -234,8 +234,8 @@ final class DownloadRejectValidatorClearTest extends TestCase
 
 		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
 			'the first detector pass must complete');
-		$this->assertSame((string) self::BAD_LASTMOD, file_get_contents("{$base}.orig.lastmod"),
-			'premise: the detector promotes the response Last-Modified before the ingest has run');
+		$this->assertSame((string) self::BAD_LASTMOD, file_get_contents("{$base}.md5.raw.lastmod"),
+			'premise: the detector keeps the response Last-Modified beside the probe body (#3911) until the ingest publishes it');
 		$this->assertFileDoesNotExist("{$base}.orig.etag",
 			'premise: this origin issues no ETag, so only the Last-Modified axis is live');
 
@@ -274,8 +274,8 @@ final class DownloadRejectValidatorClearTest extends TestCase
 
 		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
 			'the first detector pass must complete');
-		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.orig.etag"),
-			'premise: the detector promotes the response ETag before the ingest has run');
+		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.md5.raw.etag"),
+			'premise: the detector keeps the response ETag beside the probe body (#3911) until the ingest publishes it');
 
 		$this->assertFalse($this->ingest()->success, 'the refused payload must fail the ingest');
 		$this->assertStringContainsString(
@@ -437,8 +437,8 @@ final class DownloadRejectValidatorClearTest extends TestCase
 
 		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
 			'the first detector pass must complete');
-		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.orig.etag"),
-			'premise: the detector promotes the response ETag');
+		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.md5.raw.etag"),
+			'premise: the detector keeps the response ETag beside the probe body (#3911)');
 
 		$this->assertTrue($this->ingest()->success, 'a healthy body must still ingest');
 		$this->assertSame(self::HEALTHY, file_get_contents("{$base}.orig"),

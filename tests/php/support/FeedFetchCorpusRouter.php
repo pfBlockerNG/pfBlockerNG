@@ -12,7 +12,7 @@ if ($uri === '/__pfb_ready') {
 $server = (string) getenv('CORPUS_SERVER');
 $path = (string) parse_url($uri, PHP_URL_PATH);
 
-$record = ['server' => $server, 'path' => $path];
+$record = ['server' => $server, 'path' => $path, 'host' => (string) ($_SERVER['HTTP_HOST'] ?? '')];
 foreach ([
 	'authorization'     => 'HTTP_AUTHORIZATION',
 	'if_none_match'     => 'HTTP_IF_NONE_MATCH',

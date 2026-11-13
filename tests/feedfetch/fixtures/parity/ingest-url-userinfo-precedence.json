@@ -1,0 +1,106 @@
+{
+ "schema": 1,
+ "description": "URL userinfo against configured credentials, as cURL sends them (#3911): configured ones win on the origin; a redirect Location's userinfo is sent to that hop, unless credentials are configured, which blank it off the origin.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin",
+  "target"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "BODY\n"
+   },
+   "/cross": {
+    "status": 302,
+    "location": "http://u2:p2@rdr.example:{port:target}/hop"
+   },
+   "/hop": {
+    "body": "HOP\n"
+   }
+  },
+  "target": {
+   "/list": {
+    "body": "BODY\n"
+   },
+   "/cross": {
+    "status": 302,
+    "location": "http://u2:p2@rdr.example:{port:target}/hop"
+   },
+   "/hop": {
+    "body": "HOP\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://user:secret@feed.example:{port:origin}/list",
+   "username": "cfg",
+   "password": "pw",
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "digest": "f688192737a93ab01f03c9345b0ab795",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "authorization": "Basic Y2ZnOnB3"
+     }
+    ]
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/cross",
+   "expect": {
+    "ok": true,
+    "published": "HOP\n",
+    "digest": "6287c12cb82098e9b035b7305895a4c5",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/cross"
+     },
+     {
+      "server": "target",
+      "path": "/hop",
+      "authorization": "Basic dTI6cDI="
+     }
+    ]
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/cross",
+   "expect": {
+    "ok": true,
+    "published": "HOP\n",
+    "digest": "6287c12cb82098e9b035b7305895a4c5",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/cross",
+      "authorization": "Basic Y2ZnOnB3"
+     },
+     {
+      "server": "target",
+      "path": "/hop"
+     }
+    ]
+   },
+   "username": "cfg",
+   "password": "pw"
+  }
+ ]
+}

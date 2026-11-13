@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "A 200 to the conditional probe is a change; the new ETag is stored, the ingest reuses the probe body, and the next probe gets a 304.",
+ "description": "A 200 to the conditional probe is a change; the new ETag is kept with the probe body until the ingest publishes that body, and the next probe gets a 304.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -41,7 +41,7 @@
       "if_none_match": "\"v0\""
      }
     ],
-    "etag": "\"v1\"",
+    "etag": "\"v0\"",
     "lastmod": null
    }
   },

@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "The probe sends the stored ETag; a 304 means unchanged and nothing is fetched or published.",
+ "description": "The probe sends the stored ETag alone, never If-Modified-Since beside it, even with a Last-Modified stored; a 304 means unchanged and nothing is fetched or published.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -16,7 +16,8 @@
  ],
  "seed": {
   "published": "old\n",
-  "etag": "\"v1\""
+  "etag": "\"v1\"",
+  "lastmod": 1700000000
  },
  "routes": {
   "origin": {
@@ -42,7 +43,7 @@
      }
     ],
     "etag": "\"v1\"",
-    "lastmod": null
+    "lastmod": 1700000000
    }
   }
  ]

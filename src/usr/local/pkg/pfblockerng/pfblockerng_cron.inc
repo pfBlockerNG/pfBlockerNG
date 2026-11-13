@@ -202,9 +202,12 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 				if ($changed) {
 					$log = "\n" . pfb_log_status_line($header, '( content changed )', 'Update found') . "\n";
 					pfb_logger("{$log}", 1);
-					// Persist the validators from this 200 response so the next run
-					// can send a conditional GET.
-					pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
+					// #3911: these validators describe the probe body, not the published copy. They stay
+					// beside the body until the ingest publishes it (pfb_download), so a lost ingest cannot
+					// make the next probe a 304 over the stale copy.
+					unlink_if_exists("{$pfborig}/{$header}.md5.raw.etag");
+					unlink_if_exists("{$pfborig}/{$header}.md5.raw.lastmod");
+					pfb_validator_write("{$pfborig}/{$header}.md5.raw", $probe_meta['etag'], $probe_meta['lastmod']);
 					$pfb['cron_update'] = TRUE;
 					$pfb['update_cron'] = TRUE;
 					touch("{$pfbfolder}/{$header}.update");

@@ -134,15 +134,18 @@
      {
       "server": "origin",
       "path": "/cross",
+      "host": "feed.example:{port:origin}",
       "authorization": "Basic dXNlcjpzZWNyZXQ="
      },
      {
       "server": "target",
-      "path": "/hop"
+      "path": "/hop",
+      "host": "rdr.example:{port:target}"
      },
      {
       "server": "origin",
       "path": "/back",
+      "host": "feed.example:{port:origin}",
       "authorization": "Basic dXNlcjpzZWNyZXQ="
      }
     ]

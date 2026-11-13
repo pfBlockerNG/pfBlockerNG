@@ -28,11 +28,10 @@ func fetcherFor(t *testing.T) (*feedfetch.Fetcher, feedfetch.Feed) {
 	t.Helper()
 	dir := t.TempDir()
 	return &feedfetch.Fetcher{Policy: feedfetch.Policy{
-		Filter: true,
 		Resolve: func(context.Context, string) ([]netip.Addr, error) {
 			return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("203.0.113.5")}, nil
 		},
-	}}, feedfetch.Feed{Dir: dir, Name: "FEED"}
+	}, RetryDelay: time.Millisecond}, feedfetch.Feed{Dir: dir, Name: "FEED"}
 }
 
 func published(t *testing.T, feed feedfetch.Feed) string {

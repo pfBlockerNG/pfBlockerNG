@@ -1,0 +1,97 @@
+{
+ "schema": 1,
+ "description": "A changed probe keeps its validators beside its body until the ingest publishes it (#3911): with the ingest lost, the next probe still sends the published copy's ETag and still reports changed.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v1\""
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "new\n",
+    "etag": "\"v2\""
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "old\n",
+    "decision": "changed",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "if_none_match": "\"v1\""
+     }
+    ],
+    "etag": "\"v1\"",
+    "lastmod": null
+   }
+  },
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "old\n",
+    "decision": "changed",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "if_none_match": "\"v1\""
+     }
+    ],
+    "etag": "\"v1\"",
+    "lastmod": null
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "new\n",
+    "digest": "07baf267a0c0ef53ec95a82711cc4758",
+    "requests": [],
+    "etag": "\"v2\"",
+    "lastmod": null
+   }
+  },
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "new\n",
+    "decision": "unchanged",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "if_none_match": "\"v2\""
+     }
+    ],
+    "etag": "\"v2\"",
+    "lastmod": null
+   }
+  }
+ ]
+}

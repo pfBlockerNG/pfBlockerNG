@@ -1,0 +1,93 @@
+{
+ "schema": 1,
+ "description": "Credentials in the feed URL's userinfo are sent as Basic to that URL only, as cURL sends them (#3911): no redirect hop gets them, not even one back to the origin.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin",
+  "target"
+ ],
+ "routes": {
+  "origin": {
+   "/cross": {
+    "status": 302,
+    "location": "http://rdr.example:{port:target}/hop"
+   },
+   "/hop": {
+    "status": 302,
+    "location": "http://feed.example:{port:origin}/back"
+   },
+   "/back": {
+    "body": "BODY\n"
+   },
+   "/list": {
+    "body": "BODY\n"
+   }
+  },
+  "target": {
+   "/cross": {
+    "status": 302,
+    "location": "http://rdr.example:{port:target}/hop"
+   },
+   "/hop": {
+    "status": 302,
+    "location": "http://feed.example:{port:origin}/back"
+   },
+   "/back": {
+    "body": "BODY\n"
+   },
+   "/list": {
+    "body": "BODY\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://user:secret@feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "digest": "f688192737a93ab01f03c9345b0ab795",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "authorization": "Basic dXNlcjpzZWNyZXQ="
+     }
+    ]
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://user:secret@feed.example:{port:origin}/cross",
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/cross",
+      "authorization": "Basic dXNlcjpzZWNyZXQ="
+     },
+     {
+      "server": "target",
+      "path": "/hop"
+     },
+     {
+      "server": "origin",
+      "path": "/back"
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -26,11 +26,12 @@ const (
 	maxRedirects   = 10
 	attempts       = 3
 	killGrace      = 5 * time.Second
+	retryDelay     = 5 * time.Second // pfb_download()'s pause between attempts
 )
 
 // Policy decides which hosts a feed may be fetched from.
 type Policy struct {
-	Filter    bool                                                         // the feed-host internal-address filter
+	NoFilter  bool                                                         // turns the feed-host internal-address filter off (on by default, as in PHP)
 	Allow     []netip.Prefix                                               // internal-address exemptions (an IP is a full-length prefix)
 	Self      []netip.Addr                                                 // the host's own addresses; 127.0.0.1 and ::1 always are
 	LocalDirs []string                                                     // a file:// source must sit directly in one of these
@@ -44,7 +45,7 @@ type Fetcher struct {
 	UserAgent  string         // empty: Go's default
 	RootCAs    *x509.CertPool // nil: the system roots
 	RsyncBin   string         // the rsync executable
-	RetryDelay time.Duration  // pause between attempts (5 s in pfb_download)
+	RetryDelay time.Duration  // pause between attempts; zero is pfb_download()'s 5 s
 }
 
 // Request is one feed's source as the Outpost translated it.
@@ -67,7 +68,7 @@ func (f Feed) path(suffix string) string { return filepath.Join(f.Dir, f.Name+su
 // valid holds the name to a word, as pfb_update_check() holds the feed header (PFB_FILTER_WORD).
 func (f Feed) valid() bool { return f.Name != "" && allIn(f.Name, wordChars) }
 
-// Decision is a probe's verdict.
+// Decision is a probe's verdict; the zero Decision is Failed, so an unset verdict fails closed.
 type Decision int
 
 const (
@@ -96,6 +97,13 @@ func (r Request) maxBytes() int64 {
 		return r.MaxBytes
 	}
 	return DefaultMaxBytes
+}
+
+func (f *Fetcher) retryDelay() time.Duration {
+	if f.RetryDelay > 0 {
+		return f.RetryDelay
+	}
+	return retryDelay
 }
 
 func (r Request) timeout() time.Duration {
@@ -137,7 +145,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	defer os.Remove(probe)
 
 	var t transfer
+	fromProbe := false
 	if _, err := os.Stat(probe); err == nil && src.kind != kindRsync {
+		fromProbe = true
 		// The probe already fetched this body.
 		if err := os.Rename(probe, staged); err != nil {
 			return fail("probe body could not be staged")
@@ -160,6 +170,13 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	}
 	if err := publish(feed, staged, t.lastMod); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
+	}
+	if fromProbe {
+		// The probe's validators describe the body just published (#3911).
+		for _, v := range [...]string{".etag", ".lastmod"} {
+			os.Remove(published + v)
+			os.Rename(probe+v, published+v)
+		}
 	}
 	return Result{OK: true, Status: t.status}
 }
@@ -188,7 +205,7 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 
 	// The body becomes ".probe", which the next Ingest publishes, only once the probe decided: a probe killed
 	// mid-body leaves only ".probe.part", which nothing reads.
-	part := feed.path(".probe.part")
+	part, probe := feed.path(".probe.part"), feed.path(".probe")
 	defer os.Remove(part)
 	t := f.fetch(ctx, src, req, part, readValidators(feed))
 	res := Result{Status: t.status, Reason: t.reason}
@@ -199,17 +216,29 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	case t.reason == "" && t.status == 200:
 		digest, err := fileDigest(part)
 		algo, baseline := readBaseline(feed)
-		writeValidators(feed, t.etag, t.lastMod)
 		res.OK, res.Decision = true, Changed
 		// An md5 baseline cannot confirm unchanged (pfb_update_check): it re-ingests once and the ingest replaces it.
 		if err == nil && algo == "xxhash128" && digest == baseline {
 			res.Decision = Unchanged
+			writeValidators(feed, t.etag, t.lastMod)
 		}
 	default:
 		res.Decision = Failed
 	}
-	if res.Decision == Changed && os.Rename(part, feed.path(".probe")) != nil {
-		return Result{Status: t.status, Decision: Failed, Reason: "probe body could not be kept"}
+	switch res.Decision {
+	case Unchanged:
+		// An earlier changed probe's body is stale now (PHP unlinks {header}.md5.raw here).
+		for _, s := range [...]string{"", ".etag", ".lastmod"} {
+			os.Remove(probe + s)
+		}
+	case Changed:
+		os.Remove(probe + ".etag")
+		os.Remove(probe + ".lastmod")
+		if os.Rename(part, probe) != nil {
+			return Result{Status: t.status, Decision: Failed, Reason: "probe body could not be kept"}
+		}
+		// They describe the probe body, not the published copy: kept beside it until the ingest publishes it (#3911).
+		writeValidatorsAt(probe, t.etag, t.lastMod)
 	}
 	return res
 }
@@ -220,9 +249,9 @@ func (f *Fetcher) fetch(ctx context.Context, src *source, req Request, dst strin
 	case kindRsync:
 		return f.fetchRsync(ctx, src, req, dst)
 	case kindLocal:
-		return fetchFile(src.path, req, dst)
+		return fetchFile(src, req, dst)
 	case kindSelfHosted:
-		return fetchSelfHosted(ctx, src.url, req, dst)
+		return fetchSelfHosted(ctx, src, req, dst)
 	}
 	return f.fetchHTTP(ctx, src, req, dst, cond)
 }

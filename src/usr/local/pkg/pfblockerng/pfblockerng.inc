@@ -21128,6 +21128,7 @@ function pfb_ip_is_internal($ip) {
 		'192.168.0.0/16',	// private (RFC 1918)
 	);
 	static $ranges_v6 = array(
+		'::/128',		// unspecified: a connection to it reaches the host itself (#3911)
 		'::1/128',		// loopback
 		'fc00::/7',		// unique-local (RFC 4193)
 		'fe80::/10',		// link-local (RFC 4291)
@@ -22415,11 +22416,21 @@ final class PfbDownloadResult
 // so no reject stage can diverge -- or the rejected body 304s the next conditional GET.
 // Untouched: the served '.orig' and its last-good '.orig.xxhash128' baseline (#2660/#2668).
 // Standard list feeds only; the extras lanes promote only after a successful publication.
+// #3911: a changed probe keeps its validators beside its body ({header}.md5.raw.etag/.lastmod);
+// an ingest that publishes that body promotes them.
 function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
+	$base = $request->downloadPath;
+	$from_probe = $request->type === '' && file_exists("{$base}.md5.raw");
 	$result = pfb_download_fetch($request);
-	if (!$result->success && $request->type === '') {
-		unlink_if_exists("{$request->downloadPath}.orig.etag");
-		unlink_if_exists("{$request->downloadPath}.orig.lastmod");
+	if ($request->type === '') {
+		foreach (array('etag', 'lastmod') as $sfx) {
+			if (!$result->success || $from_probe) {
+				unlink_if_exists("{$base}.orig.{$sfx}");
+			}
+			if ($result->success && $from_probe) {
+				@rename("{$base}.md5.raw.{$sfx}", "{$base}.orig.{$sfx}");
+			}
+		}
 	}
 	return $result;
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -18,7 +19,7 @@ import (
 // named refusal over it (#2667), and under the request's wall deadline, which ends the whole process group (#2876).
 func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst string) transfer {
 	from := src.path
-	if f.Filter {
+	if !f.NoFilter {
 		pin, reason := f.vet(ctx, src.host)
 		if reason != "" {
 			return transfer{reason: reason}
@@ -27,6 +28,10 @@ func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst 
 			return transfer{reason: "feed host could not be pinned"}
 		}
 	}
+	// rsync's temporary file (".NAME.XXXXXX" beside dst) outlives a kill, this run's or an earlier one's (#3911).
+	temps := filepath.Join(filepath.Dir(dst), "."+filepath.Base(dst)+".*")
+	removeAll(temps)
+	defer removeAll(temps)
 	limit := req.maxBytes()
 	ctx, cancel := context.WithTimeout(ctx, req.timeout())
 	defer cancel()
@@ -64,6 +69,13 @@ func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst 
 		return transfer{reason: "rsync_too_large"}
 	}
 	return transfer{status: 200}
+}
+
+func removeAll(pattern string) {
+	matches, _ := filepath.Glob(pattern)
+	for _, m := range matches {
+		os.Remove(m)
+	}
 }
 
 // capped keeps the first n bytes of rsync's output (a daemon's message can be arbitrarily long) and drops the rest.
