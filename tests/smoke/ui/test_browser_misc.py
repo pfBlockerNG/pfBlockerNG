@@ -17,10 +17,11 @@ handler is taken from the pages' own inline ``events.push`` scripts:
   radio set (shared ``name``), so selecting one unchecks its siblings -- there is no
   custom show/hide JS in this revamp (the page's other scripts are layout/scroll and
   the live-log poller, covered below).
-* Update page live-log poller (``pfblockerng_update.php`` php:564-610, issue #678):
-  the AJAX tail's sticky auto-follow (measure before append, re-pin only when already
-  at the bottom, php:590-592), driven end-to-end against a controlled stream -- a
-  daemon(8)+pidfile dummy run plus incremental run-log seeding over ssh.
+* Update page live-log poller (``pfblockerng_update.php``, issues #678, #3941): the poller of
+  ``?ajax=update`` -- the sticky auto-follow (measure before append, re-pin only when already at the
+  bottom), Core's cursor handed back unchanged, the stop once the Update is done and the log drained, a
+  new Update (its ``startedAt``) starting a clean log, and a Core error stopping the poll. Core's answers
+  are controlled at the network edge (``_FakeCore``), so each stream is deterministic.
 * Sync page (``pfblockerng_sync.php``): the ``XMLRPC Replication Targets`` section
   is a pfSense ``.repeatable`` rowhelper (php:236) with an ``#addrow`` Add button
   (php:303) and a per-row ``Delete`` button (php:292-297). Each row carries exactly
@@ -46,14 +47,15 @@ module without it installed does not hard-error.
 
 from __future__ import annotations
 
+import json
+import re
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from .. import helpers
 from .conftest import mask_page_identity, wait_for_document_ready
 from .test_render_smoke import (
     _SOFTWARE_CHECK_FAILED_QUERY,
@@ -66,9 +68,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-    from playwright.sync_api import Page
+    from playwright.sync_api import Page, Route
 
     from ..conftest import SmokeVM
     from .webui import WebUI
@@ -492,40 +492,6 @@ def test_onload_survives_hash_with_no_matching_element(
     assert "IP Configuration" in page.content(), "IP page did not render its 'IP Configuration' section after onload"
 
 
-# The real dispatch's pidfile (pfblockerng_update.php pfb_runnow()/pfb_runnow_forcecheck()):
-# `isvalidpid()` on this path is exactly what pfb_log_tail_payload() polls to decide `done`.
-_PFB_RUNNOW_PIDFILE = "/var/run/pfb_runnow.pid"
-
-
-@contextmanager
-def _dummy_pfb_task_running(vm: SmokeVM) -> Iterator[None]:
-    """Simulate an in-flight pfBlockerNG run so the live-log poller keeps polling.
-
-    Starts a ``daemon -p <pidfile> sleep 300`` survivor -- the same daemon(8)+pidfile contract
-    the real dispatch uses -- so ``isvalidpid('/var/run/pfb_runnow.pid')`` reports TRUE and
-    ``pfb_log_tail_payload()``'s ``done`` stays FALSE for as long as this context is open. The
-    run log is truncated (not deleted -- the poller reads it, and the file always exists after
-    install) both before starting and in ``finally``, so a prior aborted run's leftovers can
-    never leak into this test's overflow/marker assertions (self-encapsulated -- CLAUDE.md).
-    """
-
-    def _teardown() -> None:
-        vm.ssh("pkill", "-F", _PFB_RUNNOW_PIDFILE)  # tolerated: no dummy running yet/anymore
-        vm.ssh("/bin/rm", "-f", _PFB_RUNNOW_PIDFILE)
-        vm.ssh(f": > {helpers.PFB_RUNLOG}")
-
-    _teardown()  # clean slate first, in case a previous run of this test aborted mid-scenario
-    # -f detaches the child's std fds to /dev/null: without it the daemonized sleep inherits the
-    # ssh capture pipe and subprocess.run blocks on EOF until its 60s timeout (the CLAUDE.md
-    # "external process waits" gotcha -- the pipe outlives the ssh command).
-    start = vm.ssh("/usr/sbin/daemon", "-f", "-p", _PFB_RUNNOW_PIDFILE, "/bin/sleep", "300")
-    assert start.returncode == 0, f"failed to start the dummy pfb-task daemon: {start.stderr!r}"
-    try:
-        yield
-    finally:
-        _teardown()
-
-
 def _scroll_metrics(page: Page) -> dict[str, float]:
     """Read scrollTop/scrollHeight/clientHeight off the ``pfb_output`` textarea."""
     return page.eval_on_selector(
@@ -562,21 +528,84 @@ def _wait_for_marker(page: Page, marker: str) -> None:
         ) from exc
 
 
+class _FakeCore:
+    """Core's GetUpdate as the Update page's poll endpoint relays it, under the test's control (issue #3941).
+
+    The page's poller is the code under test, so the server side is replaced at the network edge: every
+    ``?ajax=update`` is answered from this object, with Core's cursor semantics -- ``next`` is an opaque string, an
+    ``after`` that is not the one this Update handed out reads from the start. ``requests`` records the ``after``
+    of each poll (None: none sent), which is how the cursor round trip is asserted.
+    """
+
+    def __init__(self) -> None:
+        self.log = ""
+        self.running = True
+        self.started_at = 1_700_000_000
+        self.error: str | None = None
+        self.requests: list[str | None] = []
+
+    def append(self, text: str) -> None:
+        self.log += text
+
+    def new_update(self, log: str) -> None:
+        """A new Update (or a restarted Core): another startedAt and a log that starts again."""
+        self.started_at += 1
+        self.log = log
+        self.running = True
+
+    def handle(self, route: Route) -> None:
+        after = parse_qs(urlsplit(route.request.url).query).get("after", [None])[0]
+        self.requests.append(after)
+        if self.error is not None:
+            body: dict[str, object] = {
+                "error": self.error,
+                "running": False,
+                "done": True,
+                "log": "",
+                "next": "0",
+                "update": None,
+            }
+        else:
+            start = int(after) if after is not None and after.isdigit() and int(after) <= len(self.log) else 0
+            body = {
+                "running": self.running,
+                "done": not self.running,
+                "log": self.log[start:],
+                "next": str(len(self.log)),
+                "update": {"trigger": "manual", "scope": "dnsbl", "force": "none", "startedAt": self.started_at},
+            }
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+
+def _follow_with(page: Page, webui: WebUI, core: _FakeCore) -> None:
+    """Open the Update page, answer its poll from ``core`` and click View, which wires the poller."""
+    _open(page, webui, UPDATE_PAGE)
+    page.route(re.compile(r"pfblockerng_update\.php\?ajax=update"), core.handle)
+    page.locator('button[name="log_view"], #log_view').first.click()
+    page.wait_for_load_state("load")  # View submits/reloads the page with the poller wired
+
+
+def _status(page: Page) -> str:
+    return page.locator('textarea[name="pfb_status"]').input_value()
+
+
+def _wait_for_status(page: Page, text: str) -> None:
+    """Block until the status box says ``text``; on timeout, expected next to the actual status."""
+    try:
+        page.wait_for_function("t => document.forms[0].pfb_status.value.includes(t)", arg=text, timeout=15_000)
+    except sync_api.TimeoutError as exc:
+        raise AssertionError(f"status never said {text!r} within 15s; it says {_status(page)!r}") from exc
+
+
 @pytest.mark.ui_browser
-def test_update_livelog_sticky_follow_scroll(
-    smoke_vm: SmokeVM,
-    browser_page: Page,
-    webui: WebUI,
-) -> None:
+def test_update_livelog_sticky_follow_scroll(browser_page: Page, webui: WebUI) -> None:
     """The live-log viewer sticky-follows the tail, but only while parked at the bottom (#678).
 
-    The auto-follow logic moved out of the unit-tested ``pfb_term_write_js()`` into the inline
-    poller JS in PR #674 (pfblockerng_update.php:590-592); the old unit tests were deleted with
-    it, leaving the contract unguarded. This pins it end-to-end against the real poll loop.
+    The auto-follow logic lives in the inline poller JS (pfblockerng_update.php). This pins it end-to-end against
+    the real poll loop, with Core's answers controlled (``_FakeCore``), so the stream is deterministic.
 
     Scenario:
-      Given a dummy pfBlockerNG task is "running" (daemon(8)+pidfile, same contract as the real
-            dispatch) and its run log is seeded past the textarea's capacity,
+      Given Core's Update is running and its log is past the textarea's capacity,
       When the Update page's View button wires the live-log poller and the seed arrives,
       Then the view starts pinned at the bottom (overflow precondition asserted first, else the
            scroll assertions below would be vacuous);
@@ -596,55 +625,122 @@ def test_update_livelog_sticky_follow_scroll(
     marker_b = f"pfb-678-{run_id}-b"
     marker_c = f"pfb-678-{run_id}-c"
     seed_last = f"pfb-678-{run_id}-seed-0150"
-    seed = "".join(f"pfb-678-{run_id}-seed-{i:04d} {'x' * 80}\n" for i in range(1, 151))
+    core = _FakeCore()
+    core.append("".join(f"pfb-678-{run_id}-seed-{i:04d} {'x' * 80}\n" for i in range(1, 151)))
 
-    # Guard: don't collide with a real pfBlockerNG task using the same pidfile/run log.
-    helpers.wait_no_active_pfb_task(smoke_vm)
+    _follow_with(page, webui, core)
+    _wait_for_marker(page, seed_last)
 
-    with _dummy_pfb_task_running(smoke_vm):
-        # Known (narrow) flake vector: the tick cron stays installed, and a tick whose feed job
-        # comes due mid-test calls pfb_runlog_begin() -> truncates this run log, vanishing the
-        # seeded markers (the marker wait then reports expected-vs-actual for the diagnosis).
-        _seed_vm_file(smoke_vm, helpers.PFB_RUNLOG, seed)
+    # Given: the seed overflows the box AND starts pinned at the bottom. Overflow must exceed
+    # the poller's 16px at-bottom slack, else scrollTop=0 would still read as "at bottom" and
+    # phase 2 could fail against a correct poller.
+    metrics = _scroll_metrics(page)
+    assert metrics["scrollHeight"] - metrics["clientHeight"] > 16, (
+        f"seed must overflow the textarea past the 16px pin slack, got {metrics}"
+    )
+    assert _is_pinned(metrics), f"expected pinned at the bottom right after the seed loaded, got {metrics}"
 
-        _open(page, webui, UPDATE_PAGE)
-        page.locator('button[name="log_view"], #log_view').first.click()
-        page.wait_for_load_state("load")  # View submits/reloads the page with the poller wired
-        _wait_for_marker(page, seed_last)
+    # Phase 1 -- pinned follow: new lines arrive while at the bottom -> stays pinned.
+    core.append(f"{marker_a}\n")
+    _wait_for_marker(page, marker_a)
+    metrics = _scroll_metrics(page)
+    assert _is_pinned(metrics), f"expected still pinned at the bottom after batch A, got {metrics}"
 
-        # Given: the seed overflows the box AND starts pinned at the bottom. Overflow must exceed
-        # the poller's 16px at-bottom slack, else scrollTop=0 would still read as "at bottom" and
-        # phase 2 could fail against a correct poller.
-        metrics = _scroll_metrics(page)
-        assert metrics["scrollHeight"] - metrics["clientHeight"] > 16, (
-            f"seed must overflow the textarea past the 16px pin slack, got {metrics}"
-        )
-        assert _is_pinned(metrics), f"expected pinned at the bottom right after the seed loaded, got {metrics}"
+    # Phase 2 -- follow paused when scrolled up: new lines must NOT yank the view down.
+    page.eval_on_selector('textarea[name="pfb_output"]', "el => { el.scrollTop = 0; }")
+    metrics = _scroll_metrics(page)
+    assert metrics["scrollTop"] == 0, f"expected scrollTop 0 right after scrolling to the top, got {metrics}"
 
-        # Phase 1 -- pinned follow: new lines arrive while at the bottom -> stays pinned.
-        _seed_vm_file(smoke_vm, helpers.PFB_RUNLOG, f"{marker_a}\n")
-        _wait_for_marker(page, marker_a)
-        metrics = _scroll_metrics(page)
-        assert _is_pinned(metrics), f"expected still pinned at the bottom after batch A, got {metrics}"
+    core.append(f"{marker_b}\n")
+    _wait_for_marker(page, marker_b)
+    metrics = _scroll_metrics(page)
+    assert metrics["scrollTop"] == 0, (
+        f"batch B must NOT yank the scrolled-up-to-read view back to the bottom, got {metrics}"
+    )
 
-        # Phase 2 -- follow paused when scrolled up: new lines must NOT yank the view down.
-        page.eval_on_selector('textarea[name="pfb_output"]', "el => { el.scrollTop = 0; }")
-        metrics = _scroll_metrics(page)
-        assert metrics["scrollTop"] == 0, f"expected scrollTop 0 right after scrolling to the top, got {metrics}"
+    # Phase 3 -- follow resumes at the bottom: scrolling back down re-arms auto-follow.
+    page.eval_on_selector('textarea[name="pfb_output"]', "el => { el.scrollTop = el.scrollHeight; }")
+    metrics = _scroll_metrics(page)
+    assert _is_pinned(metrics), f"expected pinned immediately after scrolling back to the bottom, got {metrics}"
 
-        _seed_vm_file(smoke_vm, helpers.PFB_RUNLOG, f"{marker_b}\n")
-        _wait_for_marker(page, marker_b)
-        metrics = _scroll_metrics(page)
-        assert metrics["scrollTop"] == 0, (
-            f"batch B must NOT yank the scrolled-up-to-read view back to the bottom, got {metrics}"
-        )
+    core.append(f"{marker_c}\n")
+    _wait_for_marker(page, marker_c)
+    metrics = _scroll_metrics(page)
+    assert _is_pinned(metrics), f"expected still pinned at the bottom after batch C, got {metrics}"
 
-        # Phase 3 -- follow resumes at the bottom: scrolling back down re-arms auto-follow.
-        page.eval_on_selector('textarea[name="pfb_output"]', "el => { el.scrollTop = el.scrollHeight; }")
-        metrics = _scroll_metrics(page)
-        assert _is_pinned(metrics), f"expected pinned immediately after scrolling back to the bottom, got {metrics}"
 
-        _seed_vm_file(smoke_vm, helpers.PFB_RUNLOG, f"{marker_c}\n")
-        _wait_for_marker(page, marker_c)
-        metrics = _scroll_metrics(page)
-        assert _is_pinned(metrics), f"expected still pinned at the bottom after batch C, got {metrics}"
+@pytest.mark.ui_browser
+def test_update_poller_hands_the_cursor_back_and_stops_once_the_log_is_drained(
+    browser_page: Page, webui: WebUI
+) -> None:
+    """The poller sends Core's ``next`` back as ``after`` unchanged, and stops when Update is done and the log drained.
+
+    Scenario:
+      Given Core's last Update has ended and left a four-byte log,
+      When the View button wires the poller,
+      Then the first poll carries no cursor, the log appears, and the next poll carries exactly the ``next`` the
+           first reply gave (a string, not re-derived by the page);
+      And once that poll finds nothing more the status says the viewer is idle, and no further poll is made.
+    """
+    page = browser_page
+    core = _FakeCore()
+    core.running = False
+    core.append("a\nb\n")
+
+    _follow_with(page, webui, core)
+    _wait_for_status(page, "Log viewer idle.")
+
+    assert page.locator('textarea[name="pfb_output"]').input_value() == "a\nb\n"
+    assert core.requests == [None, "4"], (
+        f"expected a first poll without a cursor then the cursor 'next' gave, got {core.requests!r}"
+    )
+    with pytest.raises(sync_api.TimeoutError):  # absence, asserted only after the drain barrier above
+        page.wait_for_request(lambda r: "ajax=update" in r.url, timeout=2_500)
+
+
+@pytest.mark.ui_browser
+def test_update_poller_clears_the_log_when_a_new_update_starts(browser_page: Page, webui: WebUI) -> None:
+    """A new Update (its ``startedAt`` changes) starts a clean log and is read from its start.
+
+    Scenario:
+      Given the viewer follows a running Update whose log shows,
+      When Core starts a new Update (another startedAt, a log that starts again),
+      Then the old Update's lines are gone, the new Update's log shows from its first line, and the poll that
+           follows carries no cursor (the page dropped the one it held: it may belong to a restarted Core).
+    """
+    page = browser_page
+    core = _FakeCore()
+    core.append("old-update-line-1\nold-update-line-2\n")
+
+    _follow_with(page, webui, core)
+    _wait_for_marker(page, "old-update-line-2")
+    polls_before = len(core.requests)
+
+    core.new_update("new-update-line-1\n")
+    _wait_for_marker(page, "new-update-line-1")
+
+    out = page.locator('textarea[name="pfb_output"]').input_value()
+    assert out == "new-update-line-1\n", f"the new Update's log must replace the old one, the box holds {out!r}"
+    assert None in core.requests[polls_before:], (
+        f"the page must re-read the new Update from its start: {core.requests!r}"
+    )
+
+
+@pytest.mark.ui_browser
+def test_update_poller_reports_a_core_error_and_stops(browser_page: Page, webui: WebUI) -> None:
+    """An error from the poll endpoint is shown in the status box and ends the polling.
+
+    Scenario:
+      Given Core does not answer the page's GetUpdate (the endpoint's {error, done:true}),
+      When the View button wires the poller,
+      Then the status box carries the error text, and no further poll is made.
+    """
+    page = browser_page
+    core = _FakeCore()
+    core.error = "the Core API did not answer: Failed to connect"
+
+    _follow_with(page, webui, core)
+    _wait_for_status(page, core.error)
+
+    with pytest.raises(sync_api.TimeoutError):  # absence, asserted only after the status barrier above
+        page.wait_for_request(lambda r: "ajax=update" in r.url, timeout=2_500)
