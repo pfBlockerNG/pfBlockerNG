@@ -18,6 +18,9 @@ type NormResult struct {
 // downloaded <name>.orig becomes <name>.norm, rebuilt only when <name>.norm is missing or <name>.norm.src.xxhash128 (the xxh128
 // of the .orig the .norm was built from) names another .orig. The .norm is written beside its target and renamed into place.
 //
+// The .orig is read whole: at the download ceiling (2 GiB) the peak is more than twice the feed, and about three times more for a
+// UTF-16 one. The .norm and the sidecar are 0644, as the old path writes them, for a pre-script that drops privileges.
+//
 // Path is the .norm, or the .orig on any failure: a feed degrades to raw parsing, never to an empty one. Changed is false only
 // when the normalized content is proven unchanged against a recorded baseline (a fresh sidecar, or a rebuild that is byte for
 // byte the .norm it replaces); a missing or corrupt sidecar, or a legacy md5 one, is no baseline and reports true, so that
@@ -48,6 +51,9 @@ func NormalizeFile(dir, name string) NormResult {
 		return fallback
 	}
 	_, werr := tmp.Write(out)
+	if cerr := tmp.Chmod(0o644); werr == nil { // CreateTemp makes 0600
+		werr = cerr
+	}
 	if serr := tmp.Sync(); werr == nil { // the .norm survives a power loss whole, not as an empty file behind a fresh sidecar
 		werr = serr
 	}
@@ -58,6 +64,6 @@ func NormalizeFile(dir, name string) NormResult {
 		os.Remove(tmp.Name())
 		return fallback
 	}
-	os.WriteFile(srcBase+"."+digest.XXH128, []byte(srcDigest), 0o600)
+	os.WriteFile(srcBase+"."+digest.XXH128, []byte(srcDigest), 0o644)
 	return NormResult{Path: norm, Changed: !(hadBaseline && digest.Bytes(out) == prev), Normalized: true}
 }
