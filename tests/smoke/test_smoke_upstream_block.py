@@ -611,9 +611,13 @@ class TestNoMountsForTheRetiredDnsblModule:
         # An earlier build on this box (the HA mixed-version module's previous build, #3917) logged its own mount steps.
         logged_before = len(h.read_log_file(vm, h.PFB_LOG))
         h.reload(vm, "update")
-        log = h.read_log_file(vm, h.PFB_LOG)[logged_before:]
-        assert "Starting Unbound Resolver" in log, "precondition: pfBlockerNG restarted Unbound on this box"
-        stale = [line for line in log.splitlines() if "Additional mounts" in line or "DNSBL python" in line]
+        full_log = h.read_log_file(vm, h.PFB_LOG)
+        assert "Starting Unbound Resolver" in full_log, "precondition: pfBlockerNG restarted Unbound on this box"
+        stale = [
+            line
+            for line in full_log[logged_before:].splitlines()
+            if "Additional mounts" in line or "DNSBL python" in line
+        ]
         assert not stale, f"pfblockerng.log still logs the retired module's mounts: {stale}"
         mounts = vm.ssh("/sbin/mount").stdout
         retired = [
