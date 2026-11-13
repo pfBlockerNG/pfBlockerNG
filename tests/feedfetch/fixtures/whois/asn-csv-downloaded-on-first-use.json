@@ -13,6 +13,7 @@
   "lookups": [],
   "downloads": 1,
   "error_log": [],
+  "log": "\nDownloading [ IPinfo databases ] [ {now} ]... completed  Collecting ASN: AS64500  Collecting ASN: AS64501",
   "log_includes": [
    "Downloading [ IPinfo databases ]"
   ]

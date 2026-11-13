@@ -34,6 +34,7 @@
   "error_log": [
    "WHOIS batch [ CorpusList ] TIMED OUT after 2s total; remaining Domain/AS entries skipped"
   ],
+  "log": "\n  Collecting host IP: first.example... completed\nWHOIS batch [ CorpusList ] TIMED OUT after 2s total; remaining Domain/AS entries skipped\n",
   "log_includes": [
    "Collecting host IP: first.example... completed",
    "TIMED OUT after 2s total"

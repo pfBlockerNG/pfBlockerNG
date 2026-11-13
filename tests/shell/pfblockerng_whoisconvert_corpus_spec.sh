@@ -9,6 +9,9 @@
 # always CorpusList. A blocking lookup waits on a fifo nobody writes, so only the batch deadline's own kill ends it.
 # A lookup that "takes" N seconds moves a date(1) stand-in's clock instead of waiting. No duration is ever asserted.
 
+# The batch's start time as ${now} holds it (1,000,000 s after the epoch, UTC): the corpus writes it as {now}.
+WHOIS_NOW='1970-01-12 13:46:40'
+
 WHOIS_CORPUS="${SHELLSPEC_PROJECT_ROOT}/tests/feedfetch/fixtures/whois"
 
 whois_corpus_real_timeout() {
@@ -146,7 +149,7 @@ whois_corpus_case() {
   if whois_corpus_has '[(.hosts // {})[] | select(type == "object" and has("takes"))] | length > 0'; then
     wc_path="${work}/bin:${PATH}"
   fi
-  ( PATH="${wc_path}" && cd "${work}/cwd" && whoisconvert > "${work}/stdout" 2> "${work}/stderr" )
+  ( PATH="${wc_path}" && now="${WHOIS_NOW}" && cd "${work}/cwd" && whoisconvert > "${work}/stdout" 2> "${work}/stderr" )
   wc_status=$?
   whois_corpus_differ 'whoisconvert exit status' 0 "${wc_status}"
   whois_corpus_differ 'stderr' '' "$(cat "${work}/stderr")"
@@ -161,6 +164,14 @@ whois_corpus_case() {
   elif ! cmp -s "${work}/expect.orig" "${pfborig}${alias}.orig"; then
     printf 'case %s: .orig differs (expected -> actual)\n' "${wc_name}" >&2
     diff -u "${work}/expect.orig" "${pfborig}${alias}.orig" >&2
+    wc_rc=1
+  fi
+
+  # The update log, byte for byte; {now} stands for the batch's start time.
+  whois_corpus_get -j --arg now "${WHOIS_NOW}" '.expect.log | gsub("\\{now\\}"; $now)' > "${work}/expect.log"
+  if ! cmp -s "${work}/expect.log" "${work}/stdout"; then
+    printf 'case %s: the update log differs (expected -> actual)\n' "${wc_name}" >&2
+    diff -u "${work}/expect.log" "${work}/stdout" >&2
     wc_rc=1
   fi
 

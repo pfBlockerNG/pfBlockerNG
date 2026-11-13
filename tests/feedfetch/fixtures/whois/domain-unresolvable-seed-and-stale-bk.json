@@ -1,0 +1,25 @@
+{
+ "schema": 1,
+ "description": "An earlier backup beside the previous copy is removed when nothing resolves: the previous copy stays, alone.",
+ "vtype": "_v4",
+ "list": "nx.example",
+ "hosts": {
+  "nx.example": "nxdomain"
+ },
+ "seed": "203.0.113.9\n",
+ "seed_bk": "198.51.100.99\n",
+ "expect": {
+  "orig": "203.0.113.9\n",
+  "found": false,
+  "fail": true,
+  "lookups": [
+   "A nx.example"
+  ],
+  "error_log": [],
+  "log": "\n  Collecting host IP: nx.example... Failed to resolve host [ nx.example ]... Restoring previous data\n",
+  "log_includes": [
+   "Failed to resolve host [ nx.example ]",
+   "... Restoring previous data"
+  ]
+ }
+}

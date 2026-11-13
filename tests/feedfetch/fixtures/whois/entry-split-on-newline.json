@@ -1,0 +1,30 @@
+{
+ "schema": 1,
+ "description": "A newline inside the list separates entries like a comma does: three lookups, not two with one name holding a newline.",
+ "vtype": "_v4",
+ "list": "a.example\nb.example,c.example",
+ "hosts": {
+  "a.example": [
+   "203.0.113.1"
+  ],
+  "b.example": [
+   "203.0.113.2"
+  ],
+  "c.example": [
+   "203.0.113.3"
+  ]
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: a.example ###\n203.0.113.1\n### Domain: b.example ###\n203.0.113.2\n### Domain: c.example ###\n203.0.113.3\n",
+  "found": true,
+  "fail": false,
+  "lookups": [
+   "A a.example",
+   "A b.example",
+   "A c.example"
+  ],
+  "error_log": [],
+  "log": "\n  Collecting host IP: a.example... completed\n  Collecting host IP: b.example... completed\n  Collecting host IP: c.example... completed\n"
+ }
+}

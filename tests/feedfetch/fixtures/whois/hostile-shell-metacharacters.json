@@ -38,6 +38,7 @@
    "A a%s.example",
    "A $HOME.example"
   ],
-  "error_log": []
+  "error_log": [],
+  "log": "\n  Collecting host IP: $(touch pwned).example... completed\n  Collecting host IP: `touch pwned`.example... Failed to resolve host [ `touch pwned`.example ]  Collecting host IP: a;touch pwned.example... Failed to resolve host [ a;touch pwned.example ]  Collecting host IP: a|b.example... Failed to resolve host [ a|b.example ]  Collecting host IP: a&b.example... Failed to resolve host [ a&b.example ]  Collecting host IP: *.example... Failed to resolve host [ *.example ]  Collecting host IP: a'b.example... Failed to resolve host [ a'b.example ]  Collecting host IP: a\"b.example... Failed to resolve host [ a\"b.example ]  Collecting host IP: a b.example... completed\n  Collecting host IP: a%s.example... Failed to resolve host [ a%s.example ]  Collecting host IP: $HOME.example... Failed to resolve host [ $HOME.example ]"
  }
 }

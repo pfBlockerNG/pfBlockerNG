@@ -20,6 +20,7 @@
    "AAAA ok.example"
   ],
   "error_log": [],
+  "log": "\n  Collecting host IP: ok.example... completed\n",
   "log_includes": [
    "  Collecting host IP: ok.example... completed"
   ]

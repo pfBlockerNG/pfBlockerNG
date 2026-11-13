@@ -18,6 +18,7 @@
    "A bücher.example",
    "A ＢÜCHER.example"
   ],
-  "error_log": []
+  "error_log": [],
+  "log": "\n  Collecting host IP: bücher.example... completed\n  Collecting host IP: ＢÜCHER.example... Failed to resolve host [ ＢÜCHER.example ]"
  }
 }

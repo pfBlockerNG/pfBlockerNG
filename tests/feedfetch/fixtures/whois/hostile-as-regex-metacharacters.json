@@ -12,6 +12,7 @@
   "fail": true,
   "lookups": [],
   "error_log": [],
+  "log": "\n  Collecting ASN: AS1*... Invalid ASN [ AS1* ]  Collecting ASN: AS64500|1... Invalid ASN [ AS64500|AS1 ]  Collecting ASN: AS[1]... Invalid ASN [ AS[1] ]  Collecting ASN: AS(1)... Invalid ASN [ AS(1) ]  Collecting ASN: AS^1... Invalid ASN [ AS^1 ]  Collecting ASN: AS$1... Invalid ASN [ AS$1 ]  Collecting ASN: AS64500",
   "log_includes": [
    "Invalid ASN [ AS1* ]",
    "Invalid ASN [ AS64500|AS1 ]",

@@ -23,6 +23,7 @@
    "A nx.example"
   ],
   "error_log": [],
+  "log": "\n  Collecting host IP: ok.example... completed\n  Collecting host IP: nx.example... Failed to resolve host [ nx.example ]  Collecting ASN: AS64500  Collecting ASN: AS12x... Invalid ASN [ AS12x ]  Collecting ASN: AS64599... Failed to collect ASN",
   "log_includes": [
    "Failed to resolve host [ nx.example ]",
    "Invalid ASN [ AS12x ]",

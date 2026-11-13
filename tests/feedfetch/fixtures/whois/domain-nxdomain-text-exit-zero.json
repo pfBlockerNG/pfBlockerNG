@@ -15,6 +15,7 @@
    "A nx.example"
   ],
   "error_log": [],
+  "log": "\n  Collecting host IP: nx.example... Failed to resolve host [ nx.example ]... Restoring previous data\n",
   "log_includes": [
    "Failed to resolve host [ nx.example ]",
    "... Restoring previous data"

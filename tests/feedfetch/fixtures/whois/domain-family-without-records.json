@@ -17,6 +17,7 @@
    "A v6only.example"
   ],
   "error_log": [],
+  "log": "\n  Collecting host IP: v6only.example... Failed to resolve host [ v6only.example ]... Restoring previous data\n",
   "log_includes": [
    "Failed to resolve host [ v6only.example ]"
   ]

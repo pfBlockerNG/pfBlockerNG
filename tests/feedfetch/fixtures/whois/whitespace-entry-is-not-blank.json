@@ -21,6 +21,7 @@
    "A ok.example"
   ],
   "error_log": [],
+  "log": "\n  Collecting ASN: AS ... Invalid ASN [   ]  Collecting host IP: ok.example... completed\n",
   "log_includes": [
    "Invalid ASN [   ]"
   ]

@@ -20,6 +20,7 @@
   "lookups": [
    "A ok.example"
   ],
-  "error_log": []
+  "error_log": [],
+  "log": "\n  Collecting host IP: ok.example... completed\n  Collecting ASN: AS64500"
  }
 }

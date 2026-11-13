@@ -12,6 +12,7 @@
   "fail": false,
   "lookups": [],
   "error_log": [],
+  "log": "\n  Collecting ASN: AS64500  Collecting ASN: AS64500",
   "log_includes": [
    "  Collecting ASN: AS64500"
   ]

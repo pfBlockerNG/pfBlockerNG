@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net"
 	"net/netip"
@@ -24,7 +23,7 @@ const (
 
 // WhoisRequest is one Domain/AS list as whoisconvert() receives it.
 type WhoisRequest struct {
-	List   string        // comma-separated entries: a domain (it has a dot) or an AS number; blank entries are skipped
+	List   string        // entries separated by a comma or a newline: a domain (it has a dot) or an AS number; blank entries are skipped
 	IPv6   bool          // the list's family (vtype _v6): AAAA lookups and IPv6 ranges, else A and IPv4
 	Budget time.Duration // the whole batch; zero is 1800 s (see WhoisBudget)
 }
@@ -72,10 +71,8 @@ func (f *Fetcher) Whois(ctx context.Context, feed Feed, req WhoisRequest) WhoisR
 	b := &whoisBatch{f: f, ctx: ctx, ipv6: req.IPv6, started: start}
 	b.log.WriteString("\n")
 	expired := false
-	for _, entry := range strings.Split(req.List, ",") {
-		if entry == "" {
-			continue
-		}
+	// whoisconvert() turns the commas into newlines and reads a line per entry: both separate.
+	for _, entry := range strings.FieldsFunc(req.List, func(r rune) bool { return r == ',' || r == '\n' }) {
 		if ctx.Err() != nil {
 			break
 		}
@@ -133,7 +130,7 @@ func (b *whoisBatch) domain(host string, limit time.Duration) {
 	if err == nil {
 		for _, a := range addrs {
 			if (b.ipv6 && a.Is6()) || (!b.ipv6 && a.Is4()) {
-				lines.WriteString(a.WithZone("").String() + "\n")
+				lines.WriteString(a.String() + "\n")
 			}
 		}
 	}
@@ -193,27 +190,28 @@ func asnRanges(path, number string, ipv6 bool) []string {
 		return nil
 	}
 	defer in.Close()
-	needle := ",AS" + number + ","
+	needle := []byte(",AS" + number + ",")
 	var out []string
-	rd := bufio.NewReader(in)
-	for {
-		line, err := rd.ReadString('\n')
-		line = strings.TrimSuffix(line, "\n")
-		if strings.Contains(line, needle) {
-			first := strings.IndexByte(line, ',')
-			second := first + 1 + strings.IndexByte(line[first+1:], ',')
-			span := strings.ReplaceAll(line[:second], ",", "-")
-			if (ipv6 && !strings.Contains(span, ".")) || (!ipv6 && !strings.Contains(span, ":")) {
-				out = append(out, span)
-			}
+	// The real file has hundreds of thousands of rows: scan them as bytes and build a string only for a match.
+	// shortcut: a row past 16 MiB ends the scan with no ranges, where grep reads any length; nothing asn.csv holds is near.
+	sc := bufio.NewScanner(in)
+	sc.Buffer(make([]byte, 0, 64<<10), 16<<20)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if !bytes.Contains(line, needle) {
+			continue
 		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				return nil
-			}
-			return out
+		first := bytes.IndexByte(line, ',')
+		second := first + 1 + bytes.IndexByte(line[first+1:], ',')
+		span := strings.ReplaceAll(string(line[:second]), ",", "-")
+		if (ipv6 && !strings.Contains(span, ".")) || (!ipv6 && !strings.Contains(span, ":")) {
+			out = append(out, span)
 		}
 	}
+	if sc.Err() != nil {
+		return nil
+	}
+	return out
 }
 
 // publish writes the batch's outcome: the failure marker, then the published copy (or the previous one back).

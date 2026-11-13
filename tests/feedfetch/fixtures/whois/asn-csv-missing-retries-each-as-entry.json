@@ -14,6 +14,7 @@
   "error_log": [
    "Database ASN [ asn.csv ] not found. Register for IPinfo Token.",
    "Database ASN [ asn.csv ] not found. Register for IPinfo Token."
-  ]
+  ],
+  "log": "\nDownloading [ IPinfo databases ] [ {now} ]... completedDatabase ASN [ asn.csv ] not found. Register for IPinfo Token.\n... Failed to collect ASNDownloading [ IPinfo databases ] [ {now} ]... completedDatabase ASN [ asn.csv ] not found. Register for IPinfo Token.\n... Failed to collect ASN... Restoring previous data\n"
  }
 }

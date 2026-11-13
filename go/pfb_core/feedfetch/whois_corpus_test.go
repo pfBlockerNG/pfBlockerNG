@@ -20,7 +20,8 @@ package feedfetch_test
 //	expect                orig (the published bytes), found (at least one entry resolved), fail (".fail" present),
 //	                      lookups ["A name" | "AAAA name"] in order, error_log [lines], and optionally
 //	                      first_lookup_timeout [lo, hi] (whole seconds the first lookup was bounded by), downloads (the
-//	                      first-use downloads attempted; default 0), log_includes [substrings of the update log].
+//	                      first-use downloads attempted; default 0), log (the update log, byte for byte; {now} stands for the
+//	                      batch's start time), log_includes [substrings of the update log: what the case is about].
 //
 // The batch clock is injected, so no case waits and no duration is asserted.
 
@@ -43,7 +44,10 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 )
 
-const whoisCorpusDir = "../../../tests/feedfetch/fixtures/whois"
+const (
+	whoisCorpusDir = "../../../tests/feedfetch/fixtures/whois"
+	whoisCorpusNow = "1970-01-12 13:46:40" // the batch's start time, 1,000,000 s after the epoch in UTC: {now} in a log
+)
 
 type whoisExpect struct {
 	Orig               string   `json:"orig"`
@@ -53,6 +57,7 @@ type whoisExpect struct {
 	ErrorLog           []string `json:"error_log"`
 	FirstLookupTimeout []int    `json:"first_lookup_timeout"`
 	Downloads          int      `json:"downloads"`
+	Log                string   `json:"log"`
 	LogIncludes        []string `json:"log_includes"`
 }
 
@@ -169,7 +174,7 @@ func runWhoisCase(t *testing.T, file string) {
 	for host, rawHost := range sc.Hosts {
 		hosts[host] = parseWhoisHost(t, host, rawHost)
 	}
-	clock := time.Unix(1_000_000, 0)
+	clock := time.Unix(1_000_000, 0).UTC()
 	var lookups []string
 	first := -1
 	downloads := 0
@@ -263,6 +268,9 @@ func runWhoisCase(t *testing.T, file string) {
 	}
 	if w := exp.FirstLookupTimeout; len(w) == 2 && (first < w[0] || first > w[1]) {
 		t.Errorf("first lookup bounded by %d s, want %d..%d", first, w[0], w[1])
+	}
+	if want := strings.ReplaceAll(exp.Log, "{now}", whoisCorpusNow); res.Log != want {
+		t.Errorf("update log\n got %q\nwant %q", res.Log, want)
 	}
 	for _, s := range exp.LogIncludes {
 		if !strings.Contains(res.Log, s) {
