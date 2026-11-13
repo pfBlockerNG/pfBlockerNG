@@ -3,11 +3,15 @@
 * PHP gets the documented version reply through pfb_core_call() (docs/misc/core-api-protocol.md);
 * pfb-core holds no network socket, so no other host can reach it: its only listener is the Unix socket;
 * the socket's directory is root's alone, so an unprivileged local user cannot connect, while root can;
+* ``--socket-group`` opens the socket to a group, never the API: on a second Core opened to nobody's group, ``nobody``
+  connects and is refused with ``401 unauthenticated`` (who is served stays decided by uid), while root is served;
 * issue #3924: config.xml is the only store of ``settings/dns``: Core keeps no settings file and reads config.xml
   through the settings adapter. The install leaves Core at the revision config.xml projects, a change made without a
   page (or an older config restored) reaches Core with the next tick, a Core that was down when the setting changed
   reads it at its start, and a Core ``SaveSettings`` changes config.xml through the adapter and leaves a config history
   entry.
+* issue #3908: two ``start`` calls at once leave one supervisor, the one the daemon pidfile names, and Core answers
+  afterwards: the start is serialized by a lock and returns once the pidfile names the supervisor;
 
 The module deploys the branch package once; its install starts the service, and the socket is awaited (bounded) before
 anything is asked of it.
@@ -45,6 +49,12 @@ CONFIG_HISTORY = "/conf/backup/config-*.xml"
 SAVE_MESSAGE = "pfBlockerNG Core saved the DNS settings"
 RETIRED_SETTINGS = ("settings.json", "settings.json.tmp", "settings.lock")
 ADAPTER = "/usr/local/pkg/pfblockerng/pfb_core_settings.sh"
+# The package's pfb-core for this machine, as the rc script picks it (uname -p says aarch64 where the target is arm64)
+CORE_BIN = "/usr/local/pkg/pfblockerng/core/bin/freebsd-$(uname -p | sed s/aarch64/arm64/)/pfb-core"
+NOBODY_GROUP = 65534  # the group of the user `nobody`
+CORE_DAEMON_PID = "/var/run/pfb_core_daemon.pid"
+# The rc script's supervisor as pgrep -f finds it: by daemon(8)'s title, or by its command line until the title is set
+SUPERVISORS = r"{ /bin/pgrep -f '^daemon: pfb_core\[' ; /bin/pgrep -f '^/usr/sbin/daemon .*-t pfb_core ' ; }"
 
 
 @pytest.fixture(scope="module")
@@ -104,6 +114,70 @@ def test_an_unprivileged_user_cannot_reach_the_api_and_root_can(core_vm: SmokeVM
     # ...because the socket's directory is closed to it
     entry = core_vm.ssh(f"/usr/bin/su -m nobody -c {shlex.quote('ls ' + SOCKET)}", timeout=30)
     assert entry.returncode != 0 and "Permission denied" in entry.stderr, f"{entry.returncode} {entry.stderr}"
+
+
+def await_group_socket(vm: SmokeVM, api: str, pid: str, log: str) -> None:
+    """Block until the second Core's socket is open to its group (the mode is the last thing Core sets on it).
+
+    A Core that exited fails at once with its log; the watchdog only salvages a stuck run.
+    """
+    deadline = time.monotonic() + READY_WATCHDOG
+    while True:
+        held = vm.ssh(f"/usr/bin/stat -f '%Sp %Sg' {api}", timeout=30)
+        if held.returncode == 0 and held.stdout.strip() == "srw-rw---- nobody":
+            return
+        if vm.ssh(f"kill -0 {pid}", timeout=30).returncode != 0:
+            pytest.fail(
+                f"the second Core exited before it opened {api}:\n{vm.ssh(f'tail -n 20 {log}', timeout=30).stdout}"
+            )
+        if time.monotonic() > deadline:
+            said = vm.ssh(f"tail -n 20 {log}", timeout=30).stdout
+            pytest.fail(f"STUCK: {api} never opened to group nobody (stat: {held.stdout}{held.stderr}):\n{said}")
+        time.sleep(1)
+
+
+def test_a_socket_group_member_that_is_not_admitted_gets_401(core_vm: SmokeVM) -> None:
+    """--socket-group lets a member of the group connect, never be served: who is served stays decided by uid."""
+    made = core_vm.ssh("mktemp -d /tmp/pfbcorefence.XXXXXX", timeout=30)
+    fence = made.stdout.strip()
+    assert made.returncode == 0 and fence.startswith("/tmp/pfbcorefence."), (
+        f"no scratch directory: {made.stdout}{made.stderr}"
+    )
+    api, log = f"{fence}/api.sock", f"{fence}/log"
+    call = f"/usr/local/bin/curl -sS -w '\\n%{{http_code}}' --unix-socket {api} -X POST http://localhost/v1/GetVersion"
+    pid = ""
+    try:
+        start = core_vm.ssh(
+            f"nohup {CORE_BIN} --socket {api} --state-dir {fence}/state --socket-group {NOBODY_GROUP} "
+            f"</dev/null >{log} 2>&1 & echo $!",
+            timeout=30,
+        )
+        pid = start.stdout.strip()
+        assert start.returncode == 0 and pid.isdigit(), f"the second Core did not start: {start.stdout}{start.stderr}"
+        await_group_socket(core_vm, api, pid, log)
+
+        # Before: root is admitted on the same socket, so the 401 below is the uid check, not a dead Core
+        root = core_vm.ssh(call, timeout=30)
+        root_body, _, root_status = root.stdout.rpartition("\n")
+        assert (root.returncode, root_status) == (0, "200"), (
+            f"root could not call the second Core: {root.stdout}{root.stderr}"
+        )
+        assert json.loads(root_body) == VERSION, f"root's reply: {root_body}"
+
+        nobody = core_vm.ssh(f"/usr/bin/su -m nobody -c {shlex.quote(call)}", timeout=30)
+        body, _, status = nobody.stdout.rpartition("\n")
+        # curl exit 0 with a status: the connect succeeded (the group's permission) and the Core answered
+        assert (nobody.returncode, status) == (0, "401"), (
+            f"nobody was not refused with 401: {nobody.stdout}{nobody.stderr}"
+        )
+        assert json.loads(body)["error"]["code"] == "unauthenticated", f"nobody's reply: {body}"
+    finally:
+        # TERM, KILL after a bounded wait (salvage only); the scratch directory goes either way
+        reap = (
+            f"kill {pid}; for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 {pid} 2>/dev/null || break; sleep 1; done; "
+            f"kill -9 {pid} 2>/dev/null; "
+        )
+        core_vm.ssh(f"{reap if pid else ''}rm -rf {fence}", timeout=60)
 
 
 def php_json(vm: SmokeVM, expression: str) -> Any:
@@ -294,6 +368,28 @@ def test_core_that_was_down_when_the_setting_changed_reads_it_at_its_start(core_
         h.config_restore_state(core_vm, HSTS, original)
         await_core_up(core_vm)
         tell_core(core_vm)
+
+
+def test_concurrent_starts_leave_one_supervisor(core_vm: SmokeVM) -> None:
+    """Boot and package starts can overlap: the start lock lets one launch Core, and the other finds it serving."""
+    try:
+        stop = core_vm.ssh(f"{CORE_RC} stop", timeout=60)
+        assert stop.returncode == 0, f"{CORE_RC} stop failed: {stop.stdout}{stop.stderr}"
+        left = core_vm.ssh(SUPERVISORS, timeout=30).stdout.split()
+        assert left == [], f"before-state: a supervisor is left after the stop: {left}"
+
+        both = core_vm.ssh(
+            f"{CORE_RC} start & a=$!; {CORE_RC} start & b=$!; wait $a; echo A=$?; wait $b; echo B=$?", timeout=120
+        )
+        assert both.stdout.split() == ["A=0", "B=0"], f"the starts did not both succeed: {both.stdout}{both.stderr}"
+
+        supervisors = core_vm.ssh(SUPERVISORS, timeout=30).stdout.split()
+        named = core_vm.ssh(f"cat {CORE_DAEMON_PID}", timeout=30).stdout.strip()
+        assert supervisors == [named], f"supervisors running: {supervisors}; {CORE_DAEMON_PID} names {named!r}"
+        await_core_up(core_vm)
+    finally:
+        core_vm.ssh(f"{CORE_RC} start", timeout=60)
+        await_core_up(core_vm)
 
 
 def test_a_core_save_changes_config_xml_and_leaves_a_config_history_entry(core_vm: SmokeVM) -> None:

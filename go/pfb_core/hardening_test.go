@@ -1,18 +1,25 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // Hardening of the skeleton's fences: an error code outside the table, an unreadable caller credential, a socket
@@ -200,5 +207,189 @@ func TestReplayNeverForgetsARequestStillRunning(t *testing.T) {
 	<-first
 	if runs.Load() != 1 || got.status != http.StatusOK {
 		t.Errorf("the running request ran %d times and its repeat got %d, want 1 run and the first's 200", runs.Load(), got.status)
+	}
+}
+
+// limits is what listen configured on the HTTP server (docs/misc/core-api-protocol.md, Limits and timeouts).
+type limits struct {
+	readHeader, read, write, idle time.Duration
+	maxHeaderBytes                int
+	maxBody                       int64
+}
+
+func limitsOf(s *server) limits {
+	return limits{s.http.ReadHeaderTimeout, s.http.ReadTimeout, s.http.WriteTimeout, s.http.IdleTimeout, s.http.MaxHeaderBytes, s.o.maxBody}
+}
+
+func TestListenDefaultsAreTheDocumentedLimits(t *testing.T) {
+	h := start(t, nil, nil)
+	want := limits{readHeader: 5 * time.Second, read: 10 * time.Second, write: 45 * time.Second, idle: 60 * time.Second, maxHeaderBytes: 16384, maxBody: 1 << 20}
+	if got := limitsOf(h.srv); got != want {
+		t.Errorf("limits = %+v, want %+v", got, want)
+	}
+}
+
+func TestListenTakesItsLimitsFromItsOptions(t *testing.T) {
+	h := start(t, func(o *options) {
+		o.readHeaderTimeout, o.readTimeout, o.idleTimeout = 1*time.Second, 2*time.Second, 3*time.Second
+		o.maxHeaderBytes, o.maxBody = 4096, 2048
+	}, nil)
+	want := limits{readHeader: 1 * time.Second, read: 2 * time.Second, write: 45 * time.Second, idle: 3 * time.Second, maxHeaderBytes: 4096, maxBody: 2048}
+	if got := limitsOf(h.srv); got != want {
+		t.Errorf("limits = %+v, want %+v", got, want)
+	}
+}
+
+// rawConn is a client connection for a hand-written HTTP exchange; its deadline is the outer salvage watchdog only.
+func rawConn(t *testing.T, h *harness) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	_ = conn.SetDeadline(time.Now().Add(watchdog))
+	return conn
+}
+
+// notStuck fails the test when err is the watchdog expiring: the server kept open what it had to close by itself.
+func notStuck(t *testing.T, err error, what string) {
+	t.Helper()
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("STUCK: the server kept %s open past the %v watchdog", what, watchdog)
+	}
+}
+
+func TestStalledRequestBodyIsCutOff(t *testing.T) {
+	h := start(t, func(o *options) { o.readTimeout = 50 * time.Millisecond }, nil)
+	conn := rawConn(t, h)
+	// The header is complete and promises 10 body bytes; 1 comes and no more
+	if _, err := conn.Write([]byte("POST /v1/GetVersion HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\nx")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(conn)
+	notStuck(t, err, "a request whose body never ended")
+	if bytes.Contains(got, []byte("200 OK")) {
+		t.Errorf("a request whose body never ended was answered: %q", got)
+	}
+}
+
+func TestAnIdleKeepAliveConnectionIsClosed(t *testing.T) {
+	// readTimeout above the watchdog: net/http falls back to it when IdleTimeout is unset, so only idleTimeout can close it
+	h := start(t, func(o *options) { o.idleTimeout, o.readTimeout = 50*time.Millisecond, time.Hour }, nil)
+	conn := rawConn(t, h)
+	br := bufio.NewReader(conn)
+	if _, err := conn.Write([]byte("POST /v1/GetVersion HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{}")); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("reading the first reply: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first reply status = %d, want 200", resp.StatusCode)
+	}
+	// The reply is complete and nothing else is sent: the server must hang up by itself
+	_, err = br.ReadByte()
+	notStuck(t, err, "an idle keep-alive connection")
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("reading an idle connection = %v, want io.EOF (closed by the server)", err)
+	}
+}
+
+func TestAHeaderOverMaxHeaderBytesIsRefused(t *testing.T) {
+	h := start(t, func(o *options) { o.maxHeaderBytes = 1024 }, nil)
+	conn := rawConn(t, h)
+	// net/http reads a few KiB beyond MaxHeaderBytes before it refuses: the pad is far beyond that, yet below the default
+	pad := strings.Repeat("a", 8<<10)
+	if _, err := conn.Write([]byte("POST /v1/GetVersion HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nX-Pad: " + pad + "\r\n\r\n{}")); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	notStuck(t, err, "an oversized header")
+	if err != nil {
+		t.Fatalf("reading the reply: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusRequestHeaderFieldsTooLarge)
+	}
+}
+
+func TestAPanickingMethodIsAnInternalErrorAndLogged(t *testing.T) {
+	var logs syncBuffer
+	h := start(t, func(o *options) {
+		o.methods["Boom"] = method{call: func(context.Context, []byte) (any, error) { panic("kaboom") }}
+		o.logf = func(format string, args ...any) { fmt.Fprintf(&logs, format+"\n", args...) }
+	}, nil)
+	wantError(t, h.post("/v1/Boom", `{}`), http.StatusInternalServerError, "internal")
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, "Boom") && strings.Contains(line, "panicked") {
+			return
+		}
+	}
+	t.Errorf("no log line names the method and says it panicked; log:\n%s", logs.String())
+}
+
+func TestEveryAnswerIsNotCacheable(t *testing.T) {
+	h := start(t, nil, nil)
+	for _, c := range []struct {
+		name, path string
+		status     int
+	}{{"a result", "/v1/GetVersion", http.StatusOK}, {"an error", "/v1/NoSuchMethod", http.StatusNotFound}} {
+		t.Run(c.name, func(t *testing.T) {
+			got := h.post(c.path, `{}`)
+			if got.status != c.status {
+				t.Fatalf("status = %d, want %d (body %s)", got.status, c.status, got.body)
+			}
+			if cc := got.header.Get("Cache-Control"); cc != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", cc)
+			}
+		})
+	}
+}
+
+func TestRequestIDIsPrintableASCIIWithoutSpaces(t *testing.T) {
+	c := &counter{}
+	h := start(t, nil, c)
+	body := func(id string) string {
+		b, _ := json.Marshal(map[string]string{"requestId": id})
+		return string(b)
+	}
+	// The ends of the printable range 0x21 to 0x7e: just outside it is refused, on it is accepted
+	refused := []string{"a b", "a\x7f", "a\u00e9"}
+	accepted := []string{"!", "~"}
+	for _, id := range refused {
+		t.Run("refuses "+strconv.QuoteToASCII(id), func(t *testing.T) {
+			wantError(t, h.post("/v1/TestIncrement", body(id)), http.StatusBadRequest, "invalid_argument", "requestId")
+		})
+	}
+	for _, id := range accepted {
+		t.Run("accepts "+strconv.QuoteToASCII(id), func(t *testing.T) {
+			if got := h.post("/v1/TestIncrement", body(id)); got.status != http.StatusOK {
+				t.Errorf("status = %d, want 200 (body %s)", got.status, got.body)
+			}
+		})
+	}
+	if n := c.runs.Load(); n != int64(len(accepted)) {
+		t.Errorf("TestIncrement ran %d times, want %d (only the accepted requestIds)", n, len(accepted))
+	}
+}
+
+func TestDecodeParamsNamesTheFieldOfAWrongTypedValue(t *testing.T) {
+	var p struct {
+		A int `json:"a"`
+	}
+	err := decodeParams([]byte(`{"a":"x"}`), &p)
+	var e *apiError
+	if !errors.As(err, &e) {
+		t.Fatalf("error = %v (%T), want an *apiError", err, err)
+	}
+	want := []fieldError{{Field: "a", Message: "must be a JSON int"}}
+	if e.Code != codeInvalidArgument || !reflect.DeepEqual(e.FieldErrors, want) {
+		t.Errorf("error code %q with fields %+v, want %q with %+v", e.Code, e.FieldErrors, codeInvalidArgument, want)
 	}
 }

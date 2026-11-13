@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/support/ProcessRunner.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -39,19 +40,38 @@ final class PfbCoreCallTest extends TestCase
 	{
 		$socket = "{$this->dir}/api.sock";
 		$started = pfb_test_start_process([PHP_BINARY, __DIR__ . '/support/CoreApiStandIn.php', $socket, "{$this->dir}/request", (string) $status, $body]);
-		// Readiness: the stand-in prints "ready" once it listens; the deadline only salvages a stuck run
-		$deadline = hrtime(TRUE) + 10_000_000_000;
-		while (!file_exists($socket)) {
-			if (hrtime(TRUE) > $deadline) {
-				pfb_test_finish_process($started, 1.0);
-				throw new RuntimeException('STUCK/ENVIRONMENT: the stand-in never listened');
-			}
-			usleep(1000);
-		}
+		$this->awaitListening($started);
 		$result = $call($socket);
 		$run = pfb_test_finish_process($started, 10.0);
 		$this->assertSame(0, $run['exit'], "stand-in failed: {$run['stderr']}");
 		return [$result, (string) file_get_contents("{$this->dir}/request")];
+	}
+
+	/**
+	 * Block until the stand-in prints "ready" (its socket FILE exists from bind(), before listen()). A stand-in that exits first fails
+	 * at once with what it said; the deadline only salvages a stuck run.
+	 *
+	 * @param array{0: resource, 1: array<int, resource>, 2: string} $started
+	 */
+	private function awaitListening(array $started): void
+	{
+		$stdout = $started[1][1];
+		$said = '';
+		$deadline = hrtime(TRUE) + 10_000_000_000;
+		while (!str_contains($said, "ready\n")) {
+			if (feof($stdout)) {
+				$run = pfb_test_finish_process($started, 5.0);
+				$this->fail("the stand-in exited ({$run['exit']}) before it listened: {$run['stderr']}");
+			}
+			if (hrtime(TRUE) > $deadline) {
+				pfb_test_finish_process($started, 1.0);
+				throw new RuntimeException('STUCK/ENVIRONMENT: the stand-in never listened');
+			}
+			$read = [$stdout];
+			$write = $except = NULL;
+			stream_select($read, $write, $except, 0, 100_000);
+			$said .= (string) fread($stdout, 64);
+		}
 	}
 
 	public function testTheVersionCallPostsAnEmptyObjectToTheVersionedPathAndReturnsTheDecodedReply(): void
@@ -91,6 +111,43 @@ final class PfbCoreCallTest extends TestCase
 		$this->assertNull($result['body']);
 		$this->assertIsString($result['error']);
 		$this->assertStringContainsString('JSON', (string) $result['error']);
+	}
+
+	public function testAReplyThatIsAJsonListIsAnErrorWithItsStatus(): void
+	{
+		[$result] = $this->exchange(200, '[1,2]', static fn (string $s): array => pfb_core_call('GetVersion', [], $s));
+
+		$this->assertSame(200, $result['status']);
+		$this->assertNull($result['body'], 'a JSON list was handed back as the reply object');
+		$this->assertIsString($result['error']);
+		$this->assertStringContainsString('not a JSON object', (string) $result['error']);
+	}
+
+	/** @return array<string, array{string}> */
+	public static function emptyReplies(): array
+	{
+		return ['an empty object' => ['{}'], 'an empty list' => ['[]']];
+	}
+
+	#[DataProvider('emptyReplies')]
+	public function testAnEmptyReplyIsAnEmptyBodyNotAnError(string $reply): void
+	{
+		[$result] = $this->exchange(200, $reply, static fn (string $s): array => pfb_core_call('GetVersion', [], $s));
+
+		$this->assertSame(['status' => 200, 'body' => [], 'error' => NULL], $result);
+	}
+
+	public function testACallAboveCurlsExpectThresholdIsSentWithoutAnExpectHeaderAndArrivesWhole(): void
+	{
+		// libcurl adds "Expect: 100-continue" to a POST body above 1 MiB; pfb_core_call opts out of it
+		$params = ['blob' => str_repeat('a', 1024 * 1024)];
+		$sent = (string) json_encode((object) $params);
+		[$result, $request] = $this->exchange(200, '{"ok":true}', static fn (string $s): array => pfb_core_call('TestIncrement', $params, $s));
+		[$head, $body] = explode("\r\n\r\n", $request, 2);
+
+		$this->assertSame(200, $result['status']);
+		$this->assertDoesNotMatchRegularExpression('~^Expect:~mi', $head, 'the call carried an Expect header');
+		$this->assertSame([strlen($sent), sha1($sent)], [strlen($body), sha1($body)], 'the body did not arrive whole (length, sha1)');
 	}
 
 	public function testNoServerIsStatusZeroWithTheReason(): void

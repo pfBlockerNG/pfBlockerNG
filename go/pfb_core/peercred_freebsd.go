@@ -26,6 +26,17 @@ type xucred struct {
 	_       uint64
 }
 
+// The kernel's layout on the 64-bit targets (amd64, arm64): sizeof 88, uid at 4, groups at 12. A struct that drifts from it
+// fails the build, not the credential read; each pair is a negative array length in one direction or the other.
+var (
+	_ [unsafe.Sizeof(xucred{}) - 88]byte
+	_ [88 - unsafe.Sizeof(xucred{})]byte
+	_ [unsafe.Offsetof(xucred{}.uid) - 4]byte
+	_ [4 - unsafe.Offsetof(xucred{}.uid)]byte
+	_ [unsafe.Offsetof(xucred{}.groups) - 12]byte
+	_ [12 - unsafe.Offsetof(xucred{}.groups)]byte
+)
+
 // peerUID is the user id the kernel recorded for the process that connected c: LOCAL_PEERCRED.
 func peerUID(c *net.UnixConn) (uint32, error) {
 	raw, err := c.SyscallConn()

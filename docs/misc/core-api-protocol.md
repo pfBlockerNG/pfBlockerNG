@@ -243,12 +243,15 @@ pfb-dns ticket decides it.
 | State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): Core's data and its lock, never settings; outside `/var`, so it survives a RAM-disk reboot |
 | Settings backend | `/usr/local/pkg/pfblockerng/pfb_core_settings.sh` (`--settings-backend-cmd`): `config.xml` through PHP |
 
-- **Start** keeps a pfb_core supervisor that already runs. Otherwise it runs this machine's binary (picked by `uname -p`).
-  A package without an executable `pfb-core` for this machine starts nothing and logs why. That is not a failure. An
-  unknown machine is a failure.
+- **Start** and **Stop** run under one lock (`lockf -k -t 20 /var/run/pfb_core.lock`; status 75 when another start or
+  stop holds it). **Start** keeps a pfb_core supervisor that already runs. Otherwise it runs this machine's binary (picked by `uname -p`), and it
+  fails when `daemon(8)` fails or its pidfile names no supervisor within 5 s; it returns once the supervisor runs, not once
+  the socket listens. A package without an executable `pfb-core` for this machine starts nothing and logs why. That is not
+  a failure. An unknown machine is a failure.
 - **Stop** sends TERM to the supervisor and to pfb-core, then KILL at 5 s. It signals a process only while its pidfile names it
   and its command line is pfb_core's, so a reused pid is never signalled. pfb-core finishes the requests in flight (up to
-  3 s) and removes its socket.
+  3 s) and removes its socket. A process still running at 7 s fails the stop, keeps the pidfiles and fails a start or
+  restart over it.
 - **Package lifecycle.** The install and every upgrade regenerate the script and restart the service. pfSense starts it at
   boot with the package's services. A removal stops it and deletes the script. Regenerating the script deletes
   the #3842/#3913 leftovers: `settings.json`, `settings.json.tmp` and `settings.lock` in the state directory, and

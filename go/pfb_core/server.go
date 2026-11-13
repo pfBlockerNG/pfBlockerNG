@@ -25,6 +25,7 @@ import (
 const (
 	apiVersion               = "v1"
 	defaultMaxBody           = 1 << 20
+	defaultMaxHeaderBytes    = 16 << 10
 	defaultReadHeaderTimeout = 5 * time.Second
 	defaultReadTimeout       = 10 * time.Second
 	defaultWriteTimeout      = 45 * time.Second // runs from the end of the header: above the body read plus the method
@@ -121,6 +122,9 @@ type options struct {
 	groupSet          bool
 	maxBody           int64 // 0: defaultMaxBody
 	readHeaderTimeout time.Duration
+	readTimeout       time.Duration
+	idleTimeout       time.Duration
+	maxHeaderBytes    int
 	methods           map[string]method
 	logf              func(format string, args ...any)
 	peerUID           func(*net.UnixConn) (uint32, error) // nil: the kernel's credential (a test replaces it)
@@ -152,6 +156,15 @@ func listen(o options) (*server, error) {
 	}
 	if o.readHeaderTimeout == 0 {
 		o.readHeaderTimeout = defaultReadHeaderTimeout
+	}
+	if o.readTimeout == 0 {
+		o.readTimeout = defaultReadTimeout
+	}
+	if o.idleTimeout == 0 {
+		o.idleTimeout = defaultIdleTimeout
+	}
+	if o.maxHeaderBytes == 0 {
+		o.maxHeaderBytes = defaultMaxHeaderBytes
 	}
 	dirMode, sockMode := os.FileMode(0o700), os.FileMode(0o600)
 	if o.groupSet {
@@ -193,10 +206,10 @@ func listen(o options) (*server, error) {
 	s.http = &http.Server{
 		Handler:           http.HandlerFunc(s.handle),
 		ReadHeaderTimeout: o.readHeaderTimeout,
-		ReadTimeout:       defaultReadTimeout,
+		ReadTimeout:       o.readTimeout,
 		WriteTimeout:      defaultWriteTimeout,
-		IdleTimeout:       defaultIdleTimeout,
-		MaxHeaderBytes:    16 << 10,
+		IdleTimeout:       o.idleTimeout,
+		MaxHeaderBytes:    o.maxHeaderBytes,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			uc, ok := c.(*net.UnixConn)
 			if !ok {
@@ -242,14 +255,12 @@ func (s *server) serve() error {
 	return nil
 }
 
-// shutdown stops taking connections, waits for the requests in flight (up to ctx, then closes them) and removes the socket.
+// shutdown stops taking connections and waits for the requests in flight (up to ctx, then closes them); closing the
+// listener removes the socket.
 func (s *server) shutdown(ctx context.Context) error {
 	err := s.http.Shutdown(ctx)
 	if err != nil {
 		_ = s.http.Close()
-	}
-	if rmErr := os.Remove(s.o.socket); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) && err == nil {
-		err = rmErr
 	}
 	return err
 }
