@@ -370,9 +370,10 @@ $r = pfb_core_call('GetVersion');
 ```
 
 `pfb_core_call($method, $params)` posts `$params` as one JSON object. It returns the HTTP status and the decoded reply
-object, the error envelope included. When no HTTP reply came (Core down, socket missing, timeout: connect 5 s, total
-30 s), `status` is 0 and `error` says why. Pinned by `PfbCoreCallTest`; the rc script by `PfbCoreServiceTest`; the
-server by `go/pfb_core/*_test.go`.
+object, the error envelope included. When no HTTP reply came (Core down, socket missing, timeout), `status` is 0 and `error`
+says why. The optional last parameter `$timeout` is the total time in seconds (default 30; the connect time is the
+smaller of 5 and `$timeout`). Pinned by `PfbCoreCallTest`; the rc script by `PfbCoreServiceTest`; the server by
+`go/pfb_core/*_test.go`.
 
 On pfSense `config.xml` is Core's settings backend. The rc script starts Core with `--settings-backend-cmd
 /usr/local/pkg/pfblockerng/pfb_core_settings.sh`, which runs `pfblockerng.inc core_settings`: `pfb_core_settings_backend()`
@@ -382,8 +383,17 @@ change), marks the changes pending for the next Update, and reports a refused `w
 of `metricsClientIp` goes through `pfb_metrics_client_save()`, as the General page's does. The revision is
 `pfb_core_settings_revision()`: 52 bits of the SHA-256 of the projected values.
 `pfb_core_settings_validate()` is the dry run a page calls after its own checks and before `write_config()`: only
-`invalid_argument` refuses the save, which then writes nothing; DNS > General, DNS > DNSBL and General are the pages. After
+`invalid_argument` refuses the save, which then writes nothing; DNS > General, DNS > DNSBL and General are the pages. The dry
+run runs under the DNS config lock, which other saves wait for at most `PFB_DNS_CONFIG_LOCK_WAIT` (10 s), so it asks with
+`PFB_CORE_VALIDATE_TIMEOUT` (3 s) instead of the default 30 s: a Core that has not answered by then could not judge, and the
+page's own checks decide. A save's other side effects wait for the written config too: DNS > DNSBL invalidates the TOP1M
+baseline, requests the TOP1M rebuild and replaces the served block page only after `write_config()` succeeded. After
 a written save they call `pfb_core_settings_changed(NULL, TRUE)` (`SettingsChanged`); the tick calls it unforced (compare,
 then notify). A save works while Core is down. A failed notice is logged once per outage and kept in
 `/var/db/pfblockerng/core_settings_failed` until one succeeds; DNS General shows it as a notice. Pinned by
-`CoreSettingsBackendTest`, `CoreSettingsChangedTest` and `CoreSettingsPageSavesTest`.
+`CoreSettingsBackendTest`, `CoreSettingsChangedTest`, `CoreSettingsPageSavesTest` and `CoreSettingsValidateTimeoutTest`.
+
+A package without `pfb-core` is not supported. `stage_pfb_dns()` in `scripts/build-pkg-portable.py` stages `pfb-core` in the
+same helper run as pfB-DNS whenever the source carries `go/pfb_core`, so a package built from this tree always ships it. On a
+build without it no Core ever reads `config.xml`, and the notice "pfBlockerNG Core has not read the saved settings yet" stays
+on DNS General for good: by design, nothing hides it.

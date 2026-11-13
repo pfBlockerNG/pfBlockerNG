@@ -17,6 +17,10 @@ declare(strict_types=1);
  * The result holds disk config, the config before the save, lock events, input errors, pending marker presence, whether control
  * returned to render instead of exiting through the redirect, the submitted port rendered after a failure, the write_config()
  * descriptions ("writes") and the record of a failed notice to Core the save left ("settingsFailed": the reason, or NULL).
+ * "effects" holds the save's file side effects before and after it ran, in the sandbox: the TOP1M baseline files present
+ * ("baseline"), the TOP1M rebuild marker ("updateMarker") and the blocked-page file DNSBL serves ("activePage": its content, or NULL
+ * when there is none). The case's `webpageChanged` (default true) is whether the posted block page differs from the stored one;
+ * `activePage` is the content seeded as the served block page (default "ACTIVE ORIGINAL", NULL for none).
  */
 
 $workerArgv = $argv;
@@ -31,7 +35,22 @@ $input_errors = [];
 $returned = FALSE;
 $pconfig = [];
 
-register_shutdown_function(static function () use ($resultFile, &$disk, &$before, &$input_errors, &$returned, &$pconfig): void {
+$effectsBefore = NULL;
+
+/** @return array{baseline: list<string>, updateMarker: bool, activePage: ?string} the save's file side effects, as they stand */
+function dnsbl_save_worker_effects(): array
+{
+	global $pfb;
+	$sidecars = ['.orig', '.xxhash128', '.md5', '.source', '.orig.etag', '.orig.lastmod'];
+	$active = @file_get_contents("{$pfb['dnsbl_www']}/dnsbl_active.php");
+	return [
+		'baseline'     => array_values(array_filter($sidecars, static fn (string $suffix): bool => file_exists("{$pfb['dbdir']}/top-1m.csv.zip{$suffix}"))),
+		'updateMarker' => file_exists("{$pfb['dbdir']}/top-1m.update"),
+		'activePage'   => $active === FALSE ? NULL : $active,
+	];
+}
+
+register_shutdown_function(static function () use ($resultFile, &$disk, &$before, &$input_errors, &$returned, &$pconfig, &$effectsBefore): void {
 	file_put_contents($resultFile, json_encode([
 		'disk'        => $disk,
 		'before'      => $before,
@@ -43,6 +62,7 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$before
 		'postedPort'    => $pconfig['pfb_dnsport'] ?? NULL,
 		'writes'        => $GLOBALS['pfb_test_write_config_calls'] ?? [],
 		'settingsFailed' => ($failed = @file_get_contents($GLOBALS['pfb']['core_settings_failed'] ?? '')) === FALSE ? NULL : $failed,
+		'effects'       => ['before' => $effectsBefore, 'after' => dnsbl_save_worker_effects()],
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -115,10 +135,25 @@ $pfb['dconfig'] = PfbConfig::readSection($dnsbl);	// the page's first statement:
 // Core: the case's socket, else one nothing listens on (Core down); the failure record stays in the sandbox either way
 $pfb['core_socket'] = $case['core']['socket'] ?? "{$tmp}/core.sock";
 $pfb['core_settings_failed'] = "{$tmp}/core_settings_failed";
+// The save's file side effects land in the sandbox: the TOP1M baseline (six files beside the download), the block pages DNSBL serves
+$pfb['dbdir'] = "{$tmp}/db/pfblockerng";
+$pfb['dnsbl_www'] = "{$tmp}/www";
+foreach ([$pfb['dbdir'], $pfb['dnsbl_www']] as $workerDir) {
+	is_dir($workerDir) || mkdir($workerDir, 0700, TRUE);
+}
+foreach (['.orig', '.xxhash128', '.md5', '.source', '.orig.etag', '.orig.lastmod'] as $workerSuffix) {
+	file_put_contents("{$pfb['dbdir']}/top-1m.csv.zip{$workerSuffix}", 'baseline');
+}
+file_put_contents("{$pfb['dnsbl_www']}/dnsbl_alt.php", 'ALTERNATIVE PAGE');
+$workerActive = array_key_exists('activePage', $case) ? $case['activePage'] : 'ACTIVE ORIGINAL';
+if ($workerActive !== NULL) {
+	file_put_contents("{$pfb['dnsbl_www']}/dnsbl_active.php", $workerActive);
+}
+$effectsBefore = dnsbl_save_worker_effects();
 
 // The page's validation, as it leaves them for the save.
 $dnsbl_webpage_file = 'dnsbl_alt.php';
-$dnsbl_webpage = TRUE;
+$dnsbl_webpage = (bool) ($case['webpageChanged'] ?? TRUE);
 $pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
 config_set_path("{$dnsbl}/dnsbl_webpage", $dnsbl_webpage_file);
 $pfb_auto = FALSE;

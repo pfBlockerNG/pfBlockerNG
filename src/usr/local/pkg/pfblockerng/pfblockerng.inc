@@ -286,6 +286,7 @@ $pfb['ip_cache']	= "{$pfb['dbdir']}/ip_cache.sqlite";
 
 $pfb['script']		= '/usr/local/pkg/pfblockerng/pfblockerng.sh';
 $pfb['feeds']		= '/usr/local/www/pfblockerng/pfblockerng_feeds.json';
+$pfb['dnsbl_www']	= '/usr/local/www/pfblockerng/www';	// the block pages: dnsbl_active.php is the one the DNSBL web server shows
 // #468: extension-less BASES. pfb_archive_{compress,extract} (pfblockerng.sh) append
 // .zst (zstd) or .bz2 (bzip2 fallback / pre-#468 legacy) and pick the codec by what is
 // available; teardown removes both extensions.
@@ -4085,6 +4086,8 @@ const PFB_DNS_PROXY_LOCKFILE = '/var/run/pfb_dns_proxy.lock';
 // stops the proxy (up to 7 s) under it, so the wait must stay above that plus the restore's own read and write.
 const PFB_DNS_CONFIG_LOCK = 'pfb_dns_config';
 const PFB_DNS_CONFIG_LOCK_WAIT = 10;
+// The Core dry run of a settings save (pfb_core_settings_validate()) runs under that lock: this plus a second for the save's own read and write stays below the wait.
+const PFB_CORE_VALIDATE_TIMEOUT = 3;
 // Overridable before load (a unit test must not touch the appliance's rc.d), like the Unbound start budgets above;
 // the wait is the seconds an activation gives the proxy to become READY, the Unbound startup budget (30 s) with no
 // setting of its own: pfb_dns_proxy_await_ready().
@@ -4574,10 +4577,11 @@ EOF;
  * Call a Core API method (docs/misc/core-api-protocol.md): POST /v1/<Method> on the Core's Unix socket, $params sent as one JSON object.
  *
  * @param array<string, mixed> $params the method's parameters (a mutating method's include its requestId)
+ * @param int $timeout seconds the whole call may take (the connect, at most 5 of them)
  * @return array{status: int, body: ?array, error: ?string} the HTTP status and the decoded reply object, the error envelope included;
  *   status 0 when no HTTP reply came, and error set (with body NULL) whenever there is no reply object to hand back
  */
-function pfb_core_call(string $method, array $params = [], ?string $socket = NULL): array {
+function pfb_core_call(string $method, array $params = [], ?string $socket = NULL, int $timeout = 30): array {
 	global $pfb;
 	$payload = json_encode((object) $params);
 	if ($payload === FALSE) {
@@ -4590,8 +4594,8 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 		CURLOPT_POSTFIELDS       => $payload,
 		CURLOPT_HTTPHEADER       => ['Content-Type: application/json', 'Expect:'],
 		CURLOPT_RETURNTRANSFER   => TRUE,
-		CURLOPT_CONNECTTIMEOUT   => 5,
-		CURLOPT_TIMEOUT          => 30,
+		CURLOPT_CONNECTTIMEOUT   => min(5, $timeout),
+		CURLOPT_TIMEOUT          => $timeout,
 	]);
 	$reply = curl_exec($ch);
 	$status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
@@ -5523,16 +5527,17 @@ function pfb_core_settings_changed(?callable $call = NULL, bool $force = FALSE):
 
 /**
  * Core's dry run of `settings/dns` as config.xml holds it NOW (a page calls this after its in-memory writes, before write_config()).
- * One message per fault Core refuses it for; [] when Core accepts it or cannot judge (down, no such method, an error): the page's
- * own checks decide then, and the notice after the save reports Core's state. Messages are not HTML-escaped.
+ * One message per fault Core refuses it for; [] when Core accepts it or cannot judge (down, no such method, an error, no answer within
+ * PFB_CORE_VALIDATE_TIMEOUT: a page calls this under the DNS config lock): the page's own checks decide then, and the notice after
+ * the save reports Core's state. Messages are not HTML-escaped.
  *
- * @param ?callable $call pfb_core_call() by default (a test seam)
+ * @param ?callable $call pfb_core_call() by default (a test seam); gets the method, the parameters, NULL and the timeout
  * @param array<string, bool|int|string> $dns native fields a save will change but has not put into config.xml yet
  * @return list<string>
  */
 function pfb_core_settings_validate(?callable $call = NULL, array $dns = []): array {
 	$call ??= 'pfb_core_call';
-	$r = $call('ValidateSettings', ['changes' => ['dns' => array_merge(pfb_core_dns_settings(), $dns)]]);
+	$r = $call('ValidateSettings', ['changes' => ['dns' => array_merge(pfb_core_dns_settings(), $dns)]], NULL, PFB_CORE_VALIDATE_TIMEOUT);
 	$error = $r['body']['error'] ?? [];
 	if ($r['status'] !== 400 || ($error['code'] ?? NULL) !== 'invalid_argument') {
 		return [];

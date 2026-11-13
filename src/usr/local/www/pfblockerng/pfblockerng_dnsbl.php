@@ -972,9 +972,6 @@ if ($_POST) {
 			if ($pfb_top1m_token_post !== '') {
 				$pfb['dconfig']['top1m_token'] = $pfb_top1m_token_post;
 			}
-			if ($pfb_top1m_identity_changed) {
-				pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
-			}
 
 			$pfb['dconfig']['top1m_count']		= $_POST['top1m_count']							?: '1000';
 			$pfb['dconfig']['top1m_inclusion']	= implode(',', (array) $_POST['top1m_inclusion']);
@@ -984,9 +981,8 @@ if ($_POST) {
 				'tld'      => $pfb['dconfig']['top1m_inclusion'],
 				'provider' => $pfb['dconfig']['top1m_source'],
 			);
-			if (pfb_top1m_settings_reprocess($pfb_top1m_settings_before, $pfb_top1m_settings_after)) {
-				touch("{$pfb['dbdir']}/top-1m.update");
-			}
+			// issue #3922: the TOP1M baseline, the rebuild marker and the served block page change only once write_config() succeeded (below)
+			$pfb_top1m_reprocess = pfb_top1m_settings_reprocess($pfb_top1m_settings_before, $pfb_top1m_settings_after);
 			// 0 (unlimited) is meaningful; ctype_digit keeps "0", else fall back to the default.
 			$pfb['dconfig']['pfb_py_cache_max']	= ctype_digit((string) $_POST['pfb_py_cache_max']) ? (string) ((int) $_POST['pfb_py_cache_max']) : '10000';
 
@@ -997,9 +993,7 @@ if ($_POST) {
 			$pfb['dconfig']['dnsbl_interface']	= $_POST['dnsbl_interface']						?: 'lo0';
 
 			// Replace DNSBL active blocked webpage with user selection
-			if ($dnsbl_webpage || !file_exists('/usr/local/www/pfblockerng/www/dnsbl_active.php')) {
-				@copy("/usr/local/www/pfblockerng/www/{$pfb['dconfig']['dnsbl_webpage']}", '/usr/local/www/pfblockerng/www/dnsbl_active.php');
-			}
+			$pfb_dnsbl_page_copy = $dnsbl_webpage || !file_exists("{$pfb['dnsbl_www']}/dnsbl_active.php");
 
 			// Flush the bulk DNSBL settings snapshot FIRST. writeSection() replaces the whole
 			// pfblockerngdnsblsettings/config/0 section with $pfb['dconfig'], which does NOT carry
@@ -1040,6 +1034,15 @@ if ($_POST) {
 				unlock($pfb_config_lock);
 			}
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
+				if ($pfb_top1m_identity_changed) {
+					pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
+				}
+				if ($pfb_top1m_reprocess) {
+					touch("{$pfb['dbdir']}/top-1m.update");
+				}
+				if ($pfb_dnsbl_page_copy) {
+					@copy("{$pfb['dnsbl_www']}/{$pfb['dconfig']['dnsbl_webpage']}", "{$pfb['dnsbl_www']}/dnsbl_active.php");
+				}
 				pfb_mark_pending_changes();	// applies on the next Update, not on save
 				pfb_core_settings_changed(NULL, TRUE);	// outside the lock (a slow Core must not hold it); a failure never undoes the save
 				header('Location: /pfblockerng/pfblockerng_dnsbl.php');

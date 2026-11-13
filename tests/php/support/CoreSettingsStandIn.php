@@ -12,8 +12,13 @@ declare(strict_types=1);
  *
  * The script maps a method to [status, reply object]: {"ValidateSettings": [200, {}], "GetSettings": [200, {...}]}. A method
  * the script does not name answers 404 with the API's `not_found` error envelope.
+ *
+ * An optional fourth argument is a delay in seconds (default 0): a stalled Core. The request is recorded at once, then held unanswered
+ * until the client hangs up (the stand-in exits) or the delay has passed (the scripted answer follows).
+ *
+ *   php CoreSettingsStandIn.php <socket> <record file> <script JSON> <delay seconds>
  */
-[, $socket, $record, $scriptJson] = $argv + [NULL, NULL, NULL, '{}'];
+[, $socket, $record, $scriptJson, $delay] = $argv + [NULL, NULL, NULL, '{}', '0'];
 $script = json_decode((string) $scriptJson, TRUE, 512, JSON_THROW_ON_ERROR);
 
 $server = stream_socket_server("unix://{$socket}", $errno, $errstr);
@@ -53,6 +58,18 @@ while (time() < $deadline) {
 	}
 	$method = preg_match('~^POST /v1/([A-Za-z]+) HTTP/~', $head, $m) === 1 ? $m[1] : '';
 	file_put_contents($record, json_encode(['method' => $method, 'body' => json_decode($body, TRUE)]) . "\n", FILE_APPEND);
+	$until = microtime(TRUE) + (float) $delay;
+	while (($left = $until - microtime(TRUE)) > 0) {
+		$read = [$conn];
+		$write = $except = NULL;
+		if (stream_select($read, $write, $except, (int) $left, (int) (fmod($left, 1.0) * 1_000_000)) > 0) {
+			$chunk = fread($conn, 8192);
+			if ($chunk === FALSE || ($chunk === '' && feof($conn))) {
+				@unlink($socket);
+				exit(0);	// the client hung up: nobody is left to answer
+			}
+		}
+	}
 	[$status, $reply] = $script[$method] ?? [404, ['error' => ['code' => 'not_found', 'message' => "no such method: {$method}"]]];
 	$payload = json_encode((object) $reply);
 	fwrite($conn, "HTTP/1.1 {$status} Stand-in\r\nContent-Type: application/json\r\nContent-Length: " . strlen($payload)
