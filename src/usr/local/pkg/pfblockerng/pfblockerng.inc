@@ -5177,12 +5177,13 @@ function pfb_core_schedule_providers(array $blacklist): array {
  * (the feed projections: read here when not given) and nothing else.
  *
  * @param ?array<string, array<string, mixed>> $feeds
+ * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
  * @return array<string, mixed>
  */
-function pfb_core_schedule_settings(?array $feeds = NULL): array {
+function pfb_core_schedule_settings(?array $feeds = NULL, ?callable $interfaces = NULL): array {
 	$groups = [];
 	foreach (PFB_CORE_FEED_SECTIONS as $projection => $section) {
-		$native = $feeds[$projection]['groups'] ?? pfb_core_feed_groups($projection, static fn(): array => []);
+		$native = $feeds[$projection]['groups'] ?? pfb_core_feed_groups($projection, $interfaces ?? 'pfb_core_interface_addresses');
 		$stored = config_get_path("installedpackages/{$section}/config", []);
 		$at = pfb_core_schedule_group_slots($stored);
 		foreach ($native as $group) {
@@ -5428,7 +5429,7 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 	foreach (array_keys(PFB_CORE_FEED_SECTIONS) as $projection) {
 		$faults = array_merge($faults, pfb_core_feed_projection_faults($settings[$projection], $projection, $interfaces ?? 'pfb_core_interface_addresses'));
 	}
-	$faults = array_merge($faults, pfb_core_schedule_faults($settings['schedule'], pfb_core_schedule_settings()));
+	$faults = array_merge($faults, pfb_core_schedule_faults($settings['schedule'], pfb_core_schedule_settings(NULL, $interfaces)));
 	return $faults === [] ? NULL : pfb_core_settings_refusal('invalid_argument', 'the settings are not valid', $faults);
 }
 
