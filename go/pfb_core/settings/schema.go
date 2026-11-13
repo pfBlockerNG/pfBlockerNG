@@ -44,10 +44,13 @@ type Field struct {
 	CheckList func(list []any) []FieldError          `json:"-"` // field names relative to the list: "[i].…"
 }
 
-// Projection is a group of fields read and versioned together, published as the resource settings/<ID>.
+// Projection is a group of fields read and versioned together, published as the resource settings/<ID>. A ReadOnly projection
+// is Core's view of the platform: it is read from the backend and never written through the API (a change set that names it
+// is refused whole), and Initialize gives it its defaults.
 type Projection struct {
-	ID     string  `json:"id"`
-	Fields []Field `json:"fields"`
+	ID       string  `json:"id"`
+	ReadOnly bool    `json:"readOnly,omitempty"`
+	Fields   []Field `json:"fields"`
 }
 
 // Schema is what GetSettingsSchema answers.
@@ -59,8 +62,9 @@ type Schema struct {
 // Production is Core's schema. dns: the DNSBL resolver settings pfb-dns reads from pfb_unbound.ini today, each with
 // the default and range today's PHP gives (tests/core/fixtures/settings_dns_parity.json). feeds/<type>: the IP and
 // DNSBL groups and their feeds, as far as downloading and parsing them needs (tests/core/fixtures/settings_feeds_parity.json).
+// ingest: what the feed phase reads of the package settings and the platform (tests/core/fixtures/settings_ingest_parity.json).
 func Production() Schema {
-	return Schema{Version: 1, Projections: []Projection{dnsProjection(), feeds("ipv4"), feeds("ipv6"), feeds("dnsbl"), scheduleProjection()}}
+	return Schema{Version: 1, Projections: []Projection{dnsProjection(), feeds("ipv4"), feeds("ipv6"), feeds("dnsbl"), scheduleProjection(), ingestProjection()}}
 }
 
 func dnsProjection() Projection {

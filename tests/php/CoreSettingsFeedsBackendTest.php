@@ -131,7 +131,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 	private function read(): array
 	{
 		$reply = $this->backend(['version' => 1, 'op' => 'read']);
-		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl', 'schedule'], array_keys($reply['settings'] ?? []), 'the read answers: ' . json_encode($reply));
+		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl', 'schedule', 'ingest'], array_keys($reply['settings'] ?? []), 'the read answers: ' . json_encode($reply));
 		return $reply;
 	}
 

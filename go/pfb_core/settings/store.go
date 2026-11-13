@@ -155,6 +155,11 @@ func (s *Store) Get(ids []string) (Snapshot, error) {
 	return snap, nil
 }
 
+// GetClear is Get for one projection with every secret in clear, for code inside Core's process: stub.
+func (s *Store) GetClear(id string) (map[string]any, error) {
+	return nil, errors.New("GetClear: not implemented")
+}
+
 // show is a projection's values as a read shows them, every secret as its presence.
 func show(p Projection, values map[string]any) ProjectionValue {
 	value := hide(p.Fields, values)

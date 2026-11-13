@@ -166,7 +166,7 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 	{
 		$read = $this->read();
 
-		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl', 'schedule'], array_keys($read['settings']));
+		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl', 'schedule', 'ingest'], array_keys($read['settings']));
 		$this->assertSame([
 			'scheduledUpdates' => TRUE, 'weekday' => 3, 'hour' => 2, 'minute' => 15,
 			'groups' => [

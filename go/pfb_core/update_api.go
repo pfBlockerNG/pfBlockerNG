@@ -31,6 +31,11 @@ func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(s
 	return sched, gate
 }
 
+// refreshingRun is run with the settings read again before each Update: stub.
+func refreshingRun(st *settings.Store, run update.RunFunc, logf func(string, ...any)) update.RunFunc {
+	return run
+}
+
 // hostZone is the scheduler's zone for --zoneinfo path (nil without one): the time zone file at path, read at every call, so
 // that a change of the host's time zone is in effect at the next evaluation without a restart. A file that is missing or is not
 // a time zone is the process's local zone, said once per outage in the log and again when it breaks anew.
