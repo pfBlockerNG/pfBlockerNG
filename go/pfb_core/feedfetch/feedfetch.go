@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
 // DefaultMaxBytes is the transfer ceiling when a request names none (PFB_DOWNLOAD_MAX_BYTES).
@@ -223,11 +225,11 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 		writeValidators(feed, t.etag, t.lastMod)
 		res.OK, res.Decision = true, Unchanged
 	case t.reason == "" && t.status == 200:
-		digest, err := fileDigest(part)
-		algo, baseline := readBaseline(feed)
+		sum, err := digest.File(part)
+		algo, baseline := digest.Read(feed.path(".orig"))
 		res.OK, res.Decision = true, Changed
 		// An md5 baseline cannot confirm unchanged (pfb_update_check): it re-ingests once and the ingest replaces it.
-		if err == nil && algo == "xxhash128" && digest == baseline {
+		if err == nil && algo == digest.XXH128 && sum == baseline {
 			res.Decision = Unchanged
 			writeValidators(feed, t.etag, t.lastMod)
 		}
