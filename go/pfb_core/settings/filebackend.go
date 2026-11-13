@@ -45,7 +45,7 @@ type document struct {
 
 // Read returns the stored document; no file is an uninitialized backend, a file that does not read whole is an error, never
 // an uninitialized one.
-func (f *FileBackend) Read(context.Context) (Stored, error) { // local and fast: ctx is not consulted
+func (f *FileBackend) Read(_ context.Context) (Stored, error) {
 	raw, err := os.ReadFile(filepath.Join(f.dir, storeFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		f.revision = 0

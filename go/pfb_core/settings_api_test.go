@@ -192,7 +192,11 @@ const (
 	adapterWrites = `echo '{"version":1,"revision":2}'`
 	// adapterStalls records its pid and a child's, says it started, and never answers.
 	adapterStalls = `sleep 600 & echo $! > "$D/child"; echo $$ > "$D/pid"; true > "$D/started"; exec sleep 600`
-	saveParams    = `{"requestId":"r1","expectedRevision":1,"changes":{"dns":{"idnMode":"on"}}}`
+	// adapterConflicts refuses a write: the configuration moved under Core.
+	adapterConflicts = `echo '{"version":1,"error":{"code":"conflict","message":"the configuration moved"}}'`
+	// adapterStallsAfterLoad answers the read that loads the store and stalls on every read after it.
+	adapterStallsAfterLoad = `if [ -e "$D/loaded" ]; then ` + adapterStalls + `; fi; true > "$D/loaded"; ` + adapterReads
+	saveParams             = `{"requestId":"r1","expectedRevision":1,"changes":{"dns":{"idnMode":"on"}}}`
 )
 
 // pidIn is the pid the adapter recorded in dir/name.
@@ -213,10 +217,34 @@ func exited(pid int) bool {
 	return err == nil && bytes.HasPrefix(stat[bytes.LastIndexByte(stat, ')')+2:], []byte("Z"))
 }
 
+// awaitExit reports through t unless pid stops being a live process within the watchdog: the kill that ends a call lands
+// a moment after the call returns.
+func awaitExit(t *testing.T, what string, pid int) {
+	t.Helper()
+	for deadline := time.Now().Add(watchdog); !exited(pid); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Errorf("STUCK: the adapter's %s %d is still alive %v after the call returned", what, pid, watchdog)
+			return
+		}
+	}
+}
+
+// awaitAdapterGone waits for the stalled adapter in dir and the child it started to be gone.
+func awaitAdapterGone(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{"pid", "child"} {
+		pid, err := pidIn(dir, name)
+		if err != nil {
+			t.Fatalf("ENVIRONMENT: the adapter's %s: %v", name, err)
+		}
+		awaitExit(t, name, pid)
+	}
+}
+
 // stalledCall runs method on a store whose adapter stalls in the leg onRead/onWrite names, cancels the call's context once
-// the adapter says it started, and returns the call's error and the adapter's directory. The adapter's group dies with
+// the adapter says it started, and returns the adapter's directory and the call's result. The adapter's group dies with
 // the test whatever happens.
-func stalledCall(t *testing.T, method, params, onRead, onWrite string) (string, error) {
+func stalledCall(t *testing.T, method, params, onRead, onWrite string) (string, any, error) {
 	t.Helper()
 	st, dir := adapterStore(t, onRead, onWrite)
 	t.Cleanup(func() {
@@ -226,19 +254,23 @@ func stalledCall(t *testing.T, method, params, onRead, onWrite string) (string, 
 	})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	done := make(chan error, 1)
+	type outcome struct {
+		res any
+		err error
+	}
+	done := make(chan outcome, 1)
 	go func() {
-		_, err := settingsMethods(st)[method].call(ctx, []byte(params))
-		done <- err
+		res, err := settingsMethods(st)[method].call(ctx, []byte(params))
+		done <- outcome{res, err}
 	}()
 	waitFor(t, func() bool { _, err := os.Stat(filepath.Join(dir, "started")); return err == nil })
 	cancel()
 	select {
-	case err := <-done:
-		return dir, err
+	case o := <-done:
+		return dir, o.res, o.err
 	case <-time.After(watchdog):
 		t.Fatalf("STUCK: %s did not end within the %v watchdog after its context was cancelled", method, watchdog)
-		return dir, nil
+		return dir, nil, nil
 	}
 }
 
@@ -265,26 +297,17 @@ func TestASaveSettingsWhoseMethodDeadlineHasPassedWritesNothing(t *testing.T) {
 }
 
 func TestAStalledAdapterWriteEndsWhenTheMethodsContextEnds(t *testing.T) {
-	dir, err := stalledCall(t, "SaveSettings", saveParams, adapterReads, adapterStalls)
+	dir, _, err := stalledCall(t, "SaveSettings", saveParams, adapterReads, adapterStalls)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("SaveSettings = %T: %v, want an error that is context.Canceled", err, err)
 	}
 	notAnAPIError(t, err)
-	for _, name := range []string{"pid", "child"} {
-		pid, perr := pidIn(dir, name)
-		if perr != nil {
-			t.Fatalf("ENVIRONMENT: the adapter's %s: %v", name, perr)
-		}
-		if !exited(pid) {
-			t.Errorf("the adapter's %s %d outlived the call", name, pid)
-		}
-	}
+	awaitAdapterGone(t, dir)
 }
 
 func TestAStalledAdapterReadEndsWhenTheMethodsContextEnds(t *testing.T) {
 	// The Load read answers; every read after it stalls, so SettingsChanged's Reload is the one that hangs.
-	onRead := `if [ -e "$D/loaded" ]; then ` + adapterStalls + `; fi; true > "$D/loaded"; ` + adapterReads
-	_, err := stalledCall(t, "SettingsChanged", `{}`, onRead, adapterWrites)
+	_, _, err := stalledCall(t, "SettingsChanged", `{}`, adapterStallsAfterLoad, adapterWrites)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("SettingsChanged = %T: %v, want an error that is context.Canceled", err, err)
 	}
@@ -293,4 +316,26 @@ func TestAStalledAdapterReadEndsWhenTheMethodsContextEnds(t *testing.T) {
 	if errors.As(err, &b) {
 		t.Errorf("SettingsChanged = %v, want no *settings.BackendError (it maps to unavailable)", err)
 	}
+}
+
+func TestASaveSettingsWhoseReReadIsCutOffStillAnswersTheRevisionItWrote(t *testing.T) {
+	// The write answers; the read that follows it stalls until the method's context ends, and that read is best effort.
+	dir, res, err := stalledCall(t, "SaveSettings", saveParams, adapterStallsAfterLoad, adapterWrites)
+	if err != nil {
+		t.Fatalf("SaveSettings = %T: %v, want the save the adapter took", err, err)
+	}
+	if got, ok := res.(settings.Result); !ok || got.Revision != 2 {
+		t.Errorf("SaveSettings = %#v, want a settings.Result at revision 2, the one the adapter wrote", res)
+	}
+	awaitAdapterGone(t, dir)
+}
+
+func TestASaveSettingsConflictIsStillAConflictWhenTheReReadItStartsIsCutOff(t *testing.T) {
+	// The adapter refuses the write as a conflict; Core reads again (best effort) and that read stalls.
+	dir, _, err := stalledCall(t, "SaveSettings", saveParams, adapterStallsAfterLoad, adapterConflicts)
+	var e *apiError
+	if !errors.As(err, &e) || e.Code != codeConflict {
+		t.Errorf("SaveSettings = %T: %v, want the %s *apiError the adapter's refusal maps to", err, err, codeConflict)
+	}
+	awaitAdapterGone(t, dir)
 }
