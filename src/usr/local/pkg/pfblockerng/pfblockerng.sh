@@ -440,6 +440,15 @@ dnsbl_cache() {
 		return 0 # kept whether or not the reason could be written
 	}
 
+	# The deleted mount hook's nullfs mounts outlive it until reboot (an upgraded box, #3917): they go with it.
+	# A busy mount fails its umount and stays.
+	dnsbl_cache_unmount_hook() {
+		for _d in lib var/log/pfblockerng usr/local/share/GeoIP; do
+			while "${pfbmount}" -t nullfs 2>/dev/null | grep -qF " on ${pfbchroot}/${_d} (" &&
+				"${pfbumount}" -t nullfs "${pfbchroot}/${_d}" 2>/dev/null; do :; done
+		done
+	}
+
 	# The retired files, each kept by dnsbl_cache_keeps.
 	dnsbl_cache_retire() {
 		for _f in ${PFB_PY_RETIRED}; do
@@ -452,13 +461,7 @@ dnsbl_cache() {
 				continue
 			fi
 			rm -f "${pfbchroot}/${_f}"
-			# The hook's nullfs mounts outlive it until reboot (an upgraded box, #3917): they go with it.
-			if [ "${_f}" = 'pfb_unbound_include.inc' ]; then
-				for _d in lib var/log/pfblockerng usr/local/share/GeoIP; do
-					while "${pfbmount}" -t nullfs 2>/dev/null | grep -qF " on ${pfbchroot}/${_d} (" &&
-						"${pfbumount}" "${pfbchroot}/${_d}" 2>/dev/null; do :; done
-				done
-			fi
+			if [ "${_f}" = 'pfb_unbound_include.inc' ]; then dnsbl_cache_unmount_hook; fi
 		done
 	}
 
@@ -487,6 +490,7 @@ dnsbl_cache() {
 		for _f in ${PFB_PY_SHIPPED} ${PFB_PY_RETIRED}; do
 			dnsbl_cache_keeps "${_f}" && continue
 			rm -f "${pfbchroot}/${_f}"
+			if [ "${_f}" = 'pfb_unbound_include.inc' ]; then dnsbl_cache_unmount_hook; fi
 		done
 	}
 

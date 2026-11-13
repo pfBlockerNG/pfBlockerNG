@@ -603,12 +603,15 @@ class TestNoMountsForTheRetiredDnsblModule:
         """
         Given: the observer in Unbound (forwarding on) and the deploy's Update, which restarted Unbound.
         When: another Update runs.
-        Then: pfblockerng.log has no mount step and never calls DNSBL python, the chroot holds none of the
-          retired module's mounts (lib, the pfBlockerNG logs, GeoIP), and the observer's python libraries stay mounted.
+        Then: the lines that Update adds to pfblockerng.log have no mount step and never call DNSBL python, the chroot
+          holds none of the retired module's mounts (lib, the pfBlockerNG logs, GeoIP), and the observer's python
+          libraries stay mounted.
         """
         vm, _ = deployed_vm
+        # An earlier build on this box (the HA mixed-version module's previous build, #3917) logged its own mount steps.
+        logged_before = len(h.read_log_file(vm, h.PFB_LOG))
         h.reload(vm, "update")
-        log = h.read_log_file(vm, h.PFB_LOG)
+        log = h.read_log_file(vm, h.PFB_LOG)[logged_before:]
         assert "Starting Unbound Resolver" in log, "precondition: pfBlockerNG restarted Unbound on this box"
         stale = [line for line in log.splitlines() if "Additional mounts" in line or "DNSBL python" in line]
         assert not stale, f"pfblockerng.log still logs the retired module's mounts: {stale}"

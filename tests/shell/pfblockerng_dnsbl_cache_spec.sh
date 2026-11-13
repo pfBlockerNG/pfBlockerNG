@@ -307,19 +307,20 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
-  # The hook's nullfs mounts outlive it until reboot (#3917): an older package's hook mounted these, and pfSense's own
-  # python mounts (usr/local/lib) sit beside them. Fake mount(8)/umount(8) over a mount table file.
+  # The hook's nullfs mounts outlive it until reboot (#3917): an older package's hook mounted these (lib twice: stacked
+  # mounts), and pfSense's own python mounts (usr/local/lib) sit beside them. Fake mount(8)/umount(8) over a mount
+  # table file; the fake umount takes `-t nullfs <dir>` and drops the topmost mount on <dir> only.
   fake_mounts() {
     mounttab="${sandbox}/mounttab"
     true > "${mounttab}"
-    for _d in lib var/log/pfblockerng usr/local/share/GeoIP usr/local/lib; do
+    for _d in lib lib var/log/pfblockerng usr/local/share/GeoIP usr/local/lib; do
       echo "/${_d} on ${pfbchroot}/${_d} (nullfs, local, read-only)" >> "${mounttab}"
     done
     pfbmount="${sandbox}/mount"
     pfbumount="${sandbox}/umount"
     printf '#!/bin/sh\ncat "%s"\n' "${mounttab}" > "${pfbmount}"
-    # shellcheck disable=SC2016  # $1 is the fake umount's own argument
-    printf '#!/bin/sh\ngrep -vF " on $1 (" "%s" > "%s.new"; mv "%s.new" "%s"\n' \
+    # shellcheck disable=SC2016  # $3 and the awk fields belong to the fake umount
+    printf '#!/bin/sh\n[ "$1 $2" = "-t nullfs" ] || exit 64\nawk -v m=" on $3 (" '"'"'!d && index($0, m) { d = 1; next } 1'"'"' "%s" > "%s.new"; mv "%s.new" "%s"\n' \
       "${mounttab}" "${mounttab}" "${mounttab}" "${mounttab}" > "${pfbumount}"
     chmod +x "${pfbmount}" "${pfbumount}"
   }
@@ -337,7 +338,18 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     name_module_in_conf
     fake_mounts
     When call mounts_named_then_not retire
-    The line 1 of output should equal 'named:lib var/log/pfblockerng usr/local/share/GeoIP usr/local/lib '
+    The line 1 of output should equal 'named:lib lib var/log/pfblockerng usr/local/share/GeoIP usr/local/lib '
+    The line 2 of output should equal 'observer:usr/local/lib '
+    cleanup_sandbox
+  End
+
+  It 'teardown unmounts the retired hook'"'"'s chroot mounts once unbound.conf stops naming pfb_unbound.py, and leaves the others (#3917)'
+    setup_sandbox
+    plant_old_include
+    name_module_in_conf
+    fake_mounts
+    When call mounts_named_then_not teardown
+    The line 1 of output should equal 'named:lib lib var/log/pfblockerng usr/local/share/GeoIP usr/local/lib '
     The line 2 of output should equal 'observer:usr/local/lib '
     cleanup_sandbox
   End
