@@ -130,8 +130,9 @@ final class MetricsWriteTest extends TestCase
 			]);
 		}
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip', 'on');
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+			return TRUE;
 		}));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_metrics_client_ip'));
 		foreach (['dnsbl_info' => 'dns_metric_blocks', 'dnsbl_resolver' => 'dns_metric_queries'] as $path => $table) {
@@ -154,8 +155,9 @@ final class MetricsWriteTest extends TestCase
 		file_put_contents($GLOBALS['pfb']['dnsbl_resolver'], 'corrupt');
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip', 'on');
 		$saved = FALSE;
-		$error = pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): void {
+		$error = pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): bool {
 			$saved = TRUE;
+			return TRUE;
 		});
 		$this->assertStringContainsString('still enabled', $error);
 		$this->assertFalse($saved);
@@ -165,8 +167,9 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame('', $db->querySingle('SELECT client_ip FROM dns_metric_blocks'));
 		$db->close();
 		unlink($GLOBALS['pfb']['dnsbl_resolver']);
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+			return TRUE;
 		}));
 	}
 
@@ -174,8 +177,9 @@ final class MetricsWriteTest extends TestCase
 	{
 		file_put_contents($GLOBALS['pfb']['dnsbl_info'], 'corrupt');
 		$saved = FALSE;
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): bool {
 			$saved = TRUE;
+			return TRUE;
 		}));
 		$this->assertTrue($saved);
 	}
@@ -221,12 +225,14 @@ final class MetricsWriteTest extends TestCase
 		$body = pfb_metrics_render($snapshot);
 		$this->assertStringContainsString('client_ip="198.51.100.1"', $body);
 		$this->assertTrue(pfb_metrics_publish($body, "{$this->root}/node", 10.0, $snapshot['client_policy_epochs']));
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+			return TRUE;
 		}, "{$this->root}/node"));
 		$this->assertFileDoesNotExist("{$this->root}/node/pfblockerng.prom");
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function (): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function (): bool {
 			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+			return TRUE;
 		}, "{$this->root}/node"));
 		$this->assertFalse(pfb_metrics_publish($body, "{$this->root}/node", 10.0, $snapshot['client_policy_epochs']));
 		$this->assertTrue(pfb_metrics_write("{$this->root}/node"));
@@ -243,7 +249,7 @@ final class MetricsWriteTest extends TestCase
 			"CREATE TRIGGER refuse BEFORE INSERT ON dns_metric_blocks BEGIN SELECT RAISE(ABORT,'refuse'); END;",
 		]);
 		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
-		$this->assertStringContainsString('refuse', pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+		$this->assertStringContainsString('refuse', pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 			self::fail('failed privacy transaction must not persist');
 		}));
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
@@ -266,7 +272,7 @@ final class MetricsWriteTest extends TestCase
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
 		$db->exec('BEGIN IMMEDIATE');
 		try {
-			$error = pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+			$error = pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 				self::fail('locked privacy transaction must not persist');
 			});
 			$this->assertStringContainsString('still enabled', $error);
@@ -276,6 +282,51 @@ final class MetricsWriteTest extends TestCase
 			$db->exec('ROLLBACK');
 			$db->close();
 		}
+	}
+
+	private function clientIpPolicy(): array
+	{
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$row = $db->querySingle('SELECT client_ip, epoch FROM dns_metric_settings WHERE row=0', TRUE);
+		$db->close();
+		return $row;
+	}
+
+	/** @return array<string,array{PfbToggle,PfbToggle,int}> the stored preference, the one asked for, the database policy before */
+	public static function refusedClientIpWrites(): array
+	{
+		return ['off to on' => [PfbToggle::Off, PfbToggle::On, 0], 'on to off' => [PfbToggle::On, PfbToggle::Off, 1]];
+	}
+
+	#[DataProvider('refusedClientIpWrites')]
+	public function testARefusedConfigWriteLeavesTheClientIpPolicyAsItWasAndReportsNothingSaved(PfbToggle $stored, PfbToggle $desired, int $policy): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_blocks (qtype TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('A','198.51.100.1',2);",
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,{$policy},'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', $stored);
+
+		$error = pfb_metrics_client_save($desired, static fn (): bool => FALSE, "{$this->root}/node");
+
+		$this->assertStringContainsString('refused the configuration write', (string) $error);
+		$this->assertSame($policy, $this->clientIpPolicy()['client_ip'], 'the database policy is what config.xml still says');
+		$this->assertSame($stored, PfbConfig::read('gen/pfb_metrics_client_ip'));
+	}
+
+	public function testARefusedConfigWriteWithNoClientIpChangeIsReportedAndLeavesTheDatabasesAlone(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+
+		$error = pfb_metrics_client_save(PfbToggle::Off, static fn (): bool => FALSE, "{$this->root}/node");
+
+		$this->assertStringContainsString('refused the configuration write', (string) $error);
+		$this->assertSame(['client_ip' => 0, 'epoch' => str_repeat('a', 32)], $this->clientIpPolicy(), 'nothing changed, so the epoch did not rotate');
 	}
 
 	/** @return array<string,array{string,string}> */
@@ -363,8 +414,9 @@ final class MetricsWriteTest extends TestCase
 	public function testMissingAccountingDoesNotGateExplicitPreferenceTransitions(): void
 	{
 		foreach ([PfbToggle::On, PfbToggle::Off] as $desired) {
-			$this->assertNull(pfb_metrics_client_save($desired, static function () use ($desired): void {
+			$this->assertNull(pfb_metrics_client_save($desired, static function () use ($desired): bool {
 				PfbConfig::write('gen/pfb_metrics_client_ip', $desired);
+				return TRUE;
 			}));
 			$this->assertSame($desired, PfbConfig::read('gen/pfb_metrics_client_ip'));
 			$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_info']);
@@ -377,8 +429,9 @@ final class MetricsWriteTest extends TestCase
 		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
 		file_put_contents($GLOBALS['pfb']['dnsbl_info'], 'corrupt');
 		$saved = FALSE;
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function () use (&$saved): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function () use (&$saved): bool {
 			$saved = TRUE;
+			return TRUE;
 		}));
 		$this->assertTrue($saved);
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_metrics_client_ip'));

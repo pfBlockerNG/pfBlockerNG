@@ -405,6 +405,33 @@ final class CoreSettingsBackendTest extends TestCase
 		$this->assertNothingWritten($before, 'a failed privacy step');
 	}
 
+	#[DataProvider('failedWrites')]
+	public function testARefusedWriteConfigAfterAClientIpChangePutsThePrivacyPolicyBack(bool|int $result): void
+	{
+		// Given client IP metrics off, and the database that records the policy
+		$this->arrange([]);
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$db->exec('CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL)');
+		$db->exec("INSERT INTO dns_metric_settings VALUES (0,0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')");
+		$db->close();
+		$current = pfb_core_dns_settings();
+		$before = $GLOBALS['config'];
+		$GLOBALS['pfb_test_write_config_result'] = $result;
+
+		// When Core turns it on and pfSense refuses the write
+		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['metricsClientIp' => TRUE])));
+
+		// Then the write is unavailable, and neither config.xml nor the database policy changed
+		$this->assertSame('unavailable', $reply['error']['code']);
+		$this->assertStringContainsString('refused the configuration write', $reply['error']['message']);
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$this->assertSame(0, $db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0'), 'the policy is what config.xml still says');
+		$db->close();
+		$this->assertSame([], self::changedLeaves($before, $GLOBALS['config']));
+		$this->assertFileDoesNotExist("{$this->dir}/pending");
+		$this->assertEmpty($GLOBALS['pfb_test_lock_held'], 'the lock is released');
+	}
+
 	// ----- a malformed request -----
 
 	/** @return array<string, mixed> a valid write request over the defaults that changes two fields */

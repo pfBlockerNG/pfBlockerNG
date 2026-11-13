@@ -4716,12 +4716,13 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			$changed[] = 'controlLegacy';
 		}
 		$written = NULL;
-		$persist = static function () use ($changed, $wanted, $fields, &$written): void {
+		$persist = static function () use ($changed, $wanted, $fields, &$written): bool {
 			foreach ($changed as $field) {
 				$value = $wanted[$field];
 				PfbConfig::writeSystem($fields[$field][0], is_bool($value) ? ($value ? 'on' : '') : (string) $value);
 			}
 			$written = write_config('[pfBlockerNG] pfBlockerNG Core saved the DNS settings');
+			return $written !== FALSE && $written !== -1;
 		};
 		if ($wanted['metricsClientIp'] === $current['metricsClientIp']) {
 			$persist();
@@ -4729,6 +4730,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			// The General page's order: the privacy change (purge or expose client identities) before the configuration that says so
 			$error = pfb_metrics_client_save($wanted['metricsClientIp'] ? PfbToggle::On : PfbToggle::Off, $persist, $metricsDir);
 			if ($error !== NULL) {
+				pfb_dns_config_write_failed($written);	// a refused write leaves its change in this copy of config.xml: read the file again
 				return pfb_core_settings_refusal('unavailable', $error);
 			}
 		}
@@ -12550,12 +12552,13 @@ function pfb_metrics_client_apply(): void {
 	}
 }
 
-// Save-time privacy is serialized with publication and config persistence, not with DNS service availability.
+// Save-time privacy is serialized with publication and config persistence, not with DNS service availability. $persist writes
+// config.xml and answers TRUE when it was written; a refused write puts the databases back to the stored preference, so they
+// never keep a policy that config.xml does not say.
 function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $dir = '/var/tmp/node_exporter'): ?string {
 	$previous = PfbConfig::read('gen/pfb_metrics_client_ip');
 	if ($previous === $desired) {
-		$persist();
-		return NULL;
+		return $persist() ? NULL : 'pfSense refused the configuration write.';
 	}
 	$lock = pfb_metrics_lock(10.0);
 	if ($lock === FALSE) {
@@ -12569,7 +12572,11 @@ function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $
 		if ($desired === PfbToggle::Off && !is_link($dir)) {
 			unlink_if_exists("{$dir}/pfblockerng.prom");
 		}
-		$persist();
+		if (!$persist()) {
+			$undo = pfb_metrics_client_reconcile($previous === PfbToggle::On);
+			return 'Client IP metrics could not be changed: pfSense refused the configuration write' . ($undo === NULL ? '' : "; putting the metrics databases back failed too: {$undo}") . '. '
+			    . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled; retry Save.' : 'Client IP metrics remain disabled; retry Save.');
+		}
 		return NULL;
 	} finally {
 		fclose($lock);

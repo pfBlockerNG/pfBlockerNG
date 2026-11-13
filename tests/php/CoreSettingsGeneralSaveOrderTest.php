@@ -12,8 +12,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_core_settings_validate')]
 final class CoreSettingsGeneralSaveOrderTest extends TestCase
 {
-	private const GENERAL_PAGE = 'src/usr/local/www/pfblockerng/pfblockerng_general.php';
-
 	private string $dir;
 	private ?array $standIn = NULL;
 	private array $priorConfig;
@@ -74,10 +72,8 @@ final class CoreSettingsGeneralSaveOrderTest extends TestCase
 		}
 
 		// When: General is saved with client-IP metrics off and Core refuses it
-		$region = pfb_test_page_region(self::GENERAL_PAGE, "\$pfb['gconfig']['pfb_metrics_client_ip'] = pfb_filter(", 'if ($privacy_error !== NULL) {');
-		$_POST['pfb_metrics_client_ip'] = '';
 		$GLOBALS['pfb_test_write_config_calls'] = [];
-		$scope = pfb_test_page_eval($region, ['pfb' => ['gconfig' => ['enable_cb' => 'on']], 'input_errors' => []]);
+		$scope = pfb_test_general_save(['pfb_metrics_client_ip' => '']);
 
 		// Then: nothing is saved and the stored identity is still there
 		$this->assertSame(['pfBlockerNG Core refused the DNS settings: dns.metricsClientIp: refused by the stand-in'], $scope['input_errors']);

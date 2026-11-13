@@ -1,11 +1,15 @@
 package settings
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -208,6 +212,54 @@ func TestAGrandchildHoldingStdoutDoesNotHangTheCall(t *testing.T) {
 			t.Errorf("Reload = %s, %v: the adapter exited 0 with a whole reply, want it taken (revision 8)", jsonOf(t, snap), err)
 		}
 	})
+}
+
+// gone reports whether pid stops being a live process within slow; a zombie counts as gone (a bare container may not reap it).
+func gone(pid int) bool {
+	for deadline := time.Now().Add(slow); ; time.Sleep(20 * time.Millisecond) {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return true
+		}
+		if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil && bytes.HasPrefix(stat[bytes.LastIndexByte(stat, ')')+2:], []byte("Z")) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
+}
+
+func TestNoDescendantOfTheAdapterOutlivesTheCall(t *testing.T) {
+	cases := []struct {
+		name, script string
+		ok           bool // the call returns the reply
+	}{
+		{"a reply, exit 0, the child's pipes closed", `sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$D/child"; cat "$D/reply"`, true},
+		{"exit 1, the child's pipes closed", `sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$D/child"; exit 1`, false},
+		{"a reply, exit 0, the child holding stdout", `sleep 30 & echo $! > "$D/child"; cat "$D/reply"`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeAdapter(t, readReply(t, 7, nil))
+			f.script(`cat > "$D/req"; ` + c.script)
+			_, err := (&AdapterBackend{Path: f.path}).Read()
+			if (err == nil) != c.ok {
+				t.Fatalf("Read = %v, want ok=%v", err, c.ok)
+			}
+			raw, rerr := os.ReadFile(filepath.Join(f.dir, "child"))
+			if rerr != nil {
+				t.Fatal(rerr)
+			}
+			pid, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if perr != nil {
+				t.Fatal(perr)
+			}
+			t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+			if !gone(pid) {
+				t.Errorf("the adapter's background child %d was still running after the call returned", pid)
+			}
+		})
+	}
 }
 
 func TestAFailingAdapterFailsTheCallAndKeepsTheLastValues(t *testing.T) {

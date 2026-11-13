@@ -32,7 +32,7 @@ const (
 //
 // Its settings always exist, so Read is always Initialized. Every failure is a *BackendError: a non-zero exit (with the
 // adapter's stderr tail), a deadline, a reply that is not exactly one such object. ReadTimeout and WriteTimeout default to
-// 10 s and 20 s; the deadline kills the adapter's whole process group.
+// 10 s and 20 s; the end of every call, a deadline or not, kills the adapter's whole process group.
 type AdapterBackend struct {
 	Path                      string
 	ReadTimeout, WriteTimeout time.Duration
@@ -93,11 +93,14 @@ func (a *AdapterBackend) call(timeout time.Duration, req request) (*reply, error
 	out, errTail := &capped{limit: maxReply, stop: cancel}, &tail{limit: maxStderr}
 	cmd := exec.CommandContext(ctx, a.Path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(body), out, errTail
-	// One process group for the adapter and whatever it starts, so that the deadline leaves no child behind.
+	// One process group for the adapter and whatever it starts, so that no child outlives the call.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = waitDelay
 	err = cmd.Run()
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // whatever the adapter left behind dies with the call (ESRCH: nothing left)
+	}
 	switch {
 	case out.over:
 		return nil, backendErr("the reply is over 1 MiB")

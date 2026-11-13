@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/support/ProcessRunner.php';
 require_once __DIR__ . '/PageStatementLoader.php';
+require_once __DIR__ . '/ConfigXmlDiskTrait.php';
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -16,12 +17,13 @@ use PHPUnit\Framework\TestCase;
  * DNS > DNSBL (the other DNSBL fields) and General (`gen/pfb_metrics_client_ip`).
  *
  * The saves of DNS > General and DNS > DNSBL are the pages' real POST code (support/DnsSaveWorker.php, DnsblSaveWorker.php) and
- * General's is the page's own callback region run in-process; each talks to a Core stand-in (support/CoreSettingsStandIn.php) that
+ * General's is the page's own save region run in-process (pfb_test_general_save()); each talks to a Core stand-in (support/CoreSettingsStandIn.php) that
  * answers from a script and records every request it gets.
  */
 final class CoreSettingsPageSavesTest extends TestCase
 {
-	private const GENERAL_PAGE = 'src/usr/local/www/pfblockerng/pfblockerng_general.php';
+	use ConfigXmlDiskTrait;
+
 	private const DNS_PAGE = 'src/usr/local/www/pfblockerng/pfblockerng_dns_general.php';
 	private const DNS_SAVE = '[pfBlockerNG] save DNS settings';
 	private const DNSBL_SAVE = '[pfBlockerNG] save DNSBL settings';
@@ -64,7 +66,9 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$GLOBALS['config'] = $this->priorConfig;
 		$GLOBALS['pfb'] = $this->priorPfb;
 		$_POST = $this->priorPost;
-		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_write_config_result'], $GLOBALS['pfb_test_info_boxes']);
+		unset($GLOBALS['pfb_test_write_config_calls'], $GLOBALS['pfb_test_write_config_result'], $GLOBALS['pfb_test_info_boxes'],
+			$GLOBALS['pfb_test_write_config_hook'], $GLOBALS['pfb_test_config_read_hook'], $GLOBALS['pfb_test_config_read_calls'],
+			$GLOBALS['pfb_test_try_lock_fail'], $GLOBALS['pfb_test_lock_held'], $GLOBALS['pfb_test_lock_events']);
 		rmdir_recursive($this->dir);
 	}
 
@@ -290,18 +294,15 @@ final class CoreSettingsPageSavesTest extends TestCase
 	// ----- W3: General -----
 
 	/**
-	 * The General page's save of `gen/pfb_metrics_client_ip`: its own region, from the posted value to the verdict on the privacy
-	 * save, run over the doubles. The setting is stored Off and posted On: the dry run sees the new value only if it runs after
-	 * the section is written in memory.
+	 * The General page's save over the doubles (its own region: pfb_test_general_save()). The setting is stored Off and posted On:
+	 * the dry run sees the new value only if it runs after the section is written in memory.
 	 *
 	 * @return array<string, mixed> the region's variables afterwards
 	 */
 	private function generalSave(): array
 	{
-		$region = pfb_test_page_region(self::GENERAL_PAGE, "\$pfb['gconfig']['pfb_metrics_client_ip'] = pfb_filter(", 'if ($privacy_error !== NULL) {');
-		$_POST['pfb_metrics_client_ip'] = 'on';
 		$GLOBALS['pfb_test_write_config_calls'] = [];
-		return pfb_test_page_eval($region, ['pfb' => ['gconfig' => ['enable_cb' => 'on']], 'input_errors' => []]);
+		return pfb_test_general_save(['pfb_metrics_client_ip' => 'on']);
 	}
 
 	public function testACoreRefusalBlocksTheGeneralSaveAndIsReportedAsInputErrors(): void
@@ -334,9 +335,10 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->core(self::accepting());
 		$GLOBALS['pfb_test_write_config_result'] = $result;
 
-		$this->generalSave();
+		$scope = $this->generalSave();
 
 		$this->assertSame(['ValidateSettings'], $this->methods(), 'the dry run ran before the write; Core was not told after it');
+		$this->assertSame(['Client IP metrics could not be changed: pfSense refused the configuration write. Client IP metrics remain disabled; retry Save. No General settings were saved.'], $scope['input_errors'], 'a refused write is reported, not shown as a save');
 	}
 
 	/** @return array<string, array{bool|int}> what pfSense's write_config() answers for a refusal and for a file-write failure */
@@ -352,6 +354,58 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->assertSame([], $scope['input_errors']);
 		$this->assertSame([self::GENERAL_SAVE], $GLOBALS['pfb_test_write_config_calls']);
 		$this->assertStringContainsString('did not answer', (string) @file_get_contents($GLOBALS['pfb']['core_settings_failed']));
+	}
+
+	public function testAGeneralSaveKeepsWhatAnotherWriterChangedInAnotherSectionSinceThePageLoaded(): void
+	{
+		// Given the page loaded HSTS on, and the Core settings adapter then wrote it off under the config lock
+		$hsts = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts';
+		config_set_path($hsts, 'on');
+		$this->configXmlOnDisk();
+		$this->disk['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_hsts'] = '';
+		$this->core(self::accepting());
+
+		// When General is saved
+		$scope = $this->generalSave();
+
+		// Then the adapter's write survives it, and General's own field is saved
+		$this->assertSame([], $scope['input_errors']);
+		$this->assertSame([self::GENERAL_SAVE], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame('', $this->onDisk($hsts), 'the other section is what the adapter wrote, not the copy the page loaded');
+		$this->assertSame('on', $this->onDisk('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip'));
+		$this->assertEmpty($GLOBALS['pfb_test_lock_held'], 'the lock is released');
+	}
+
+	public function testAGeneralSaveWritesUnderTheDnsConfigLockAndInsideItTheMetricsLock(): void
+	{
+		$this->core(self::accepting());
+		$held = [];
+		$GLOBALS['pfb_test_write_config_hook'] = static function () use (&$held): void {
+			$metrics = pfb_metrics_lock(0.0);
+			if ($metrics !== FALSE) {
+				fclose($metrics);
+			}
+			$held = ['dns' => !empty($GLOBALS['pfb_test_lock_held']), 'metrics' => $metrics === FALSE];
+		};
+
+		$this->generalSave();
+
+		$this->assertSame(['dns' => TRUE, 'metrics' => TRUE], $held, 'write_config() runs under both locks');
+		$this->assertSame('pfb_dns_config', $GLOBALS['pfb_test_lock_events'][0][1] ?? NULL, 'the DNS config lock is the outer one: it is taken before anything else');
+		$this->assertEmpty($GLOBALS['pfb_test_lock_held'], 'the DNS config lock is released');
+		$this->assertSame(['ValidateSettings', 'SettingsChanged'], $this->methods());
+	}
+
+	public function testAGeneralSaveWhoseConfigLockStaysTakenWritesNothingAndShowsAnError(): void
+	{
+		$this->core(self::accepting());
+		$GLOBALS['pfb_test_try_lock_fail'] = TRUE;
+
+		$scope = $this->generalSave();
+
+		$this->assertSame(['General: another save of the pfSense configuration is in progress. No General settings were saved.'], $scope['input_errors']);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'nothing is written');
+		$this->assertSame([], $this->methods(), 'a save that was refused asks Core nothing and tells it nothing');
 	}
 
 	// ----- DNS General: the notice that Core has not read the saved settings -----
