@@ -1,0 +1,27 @@
+{
+ "schema": 1,
+ "description": "A fullwidth-digit feed host that maps to the canonical literal 127.0.0.1 is still refused: the mapped form differs from the host as written.",
+ "hosts": {},
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://\uff11\uff12\uff17.\uff10.\uff10.\uff11:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is a non-canonical IP literal",
+    "requests": []
+   }
+  }
+ ]
+}

@@ -1,0 +1,37 @@
+{
+ "schema": 1,
+ "description": "A feed host with an unmappable label (U+FFFD, a private-use code point) is refused as an invalid IDN name.",
+ "hosts": {},
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://bad�.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is not a valid IDN name",
+    "requests": []
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://bad\ue000.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is not a valid IDN name",
+    "requests": []
+   }
+  }
+ ]
+}

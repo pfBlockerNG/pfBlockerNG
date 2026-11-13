@@ -1,0 +1,53 @@
+{
+ "schema": 1,
+ "description": "A redirect to a host that only the UTS #46 mapping turns into the vetted name (fullwidth, uppercase) is requested on that mapped name: the transport's own punycode step would dial another one.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "xn--bcher-kva.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin",
+  "target"
+ ],
+ "routes": {
+  "origin": {
+   "/evil": {
+    "status": 302,
+    "location": "http://ＢÜCHER.example:{port:target}/hop"
+   }
+  },
+  "target": {
+   "/hop": {
+    "body": "FINE\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/evil",
+   "expect": {
+    "ok": true,
+    "published": "FINE\n",
+    "digest": "f74f7ee8336463394b68d31791071c26",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/evil"
+     },
+     {
+      "server": "target",
+      "path": "/hop",
+      "host": "xn--bcher-kva.example:{port:target}"
+     }
+    ]
+   }
+  }
+ ]
+}

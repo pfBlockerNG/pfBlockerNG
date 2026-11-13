@@ -20,7 +20,7 @@ import (
 func (f *Fetcher) fetchRsync(ctx context.Context, src *source, req Request, dst string) transfer {
 	from := src.path
 	if !f.NoFilter {
-		pin, reason := f.vet(ctx, src.host)
+		pin, _, reason := f.vet(ctx, src.host)
 		if reason != "" {
 			return transfer{reason: reason}
 		}

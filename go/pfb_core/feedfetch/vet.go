@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedparse"
 )
 
 type sourceKind int
@@ -26,9 +28,9 @@ type source struct {
 	kind   sourceKind
 	url    *url.URL // remote and self-hosted
 	scheme string
-	host   string // as written in the URL (rsync: the host part)
+	host   string // UTS #46-mapped (a non-ASCII host as its A-label); rsync: the host part
 	port   int
-	path   string       // local: the resolved file; rsync: the source as configured
+	path   string       // local: the resolved file; remote: the URL requested, host mapped; rsync: the source as configured
 	self   []netip.Addr // self-hosted: the addresses the host was classified self at
 	file   os.FileInfo  // local: the file that was checked
 }
@@ -39,9 +41,10 @@ var (
 	absoluteRef = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://`)
 )
 
-// rawURL is parse_url()'s view of an absolute URL: the host is taken verbatim, before any decoding.
+// rawURL is parse_url()'s view of an absolute URL: the host is taken verbatim, before any decoding. userinfo and query
+// keep their '@' and '?', an empty one included, as parse_url() reports and pfb_feed_redirect_target rebuilds them.
 type rawURL struct {
-	scheme, user, host, port, path, query string
+	scheme, userinfo, host, port, path, query string
 }
 
 func parseRaw(s string) (rawURL, bool) {
@@ -56,7 +59,7 @@ func parseRaw(s string) (rawURL, bool) {
 	}
 	authority, tail := rest[:end], rest[end:]
 	if at := strings.LastIndex(authority, "@"); at >= 0 {
-		r.user, authority = authority[:at], authority[at+1:]
+		r.userinfo, authority = authority[:at+1], authority[at+1:]
 	}
 	r.host = authority
 	if i := strings.LastIndex(authority, ":"); i >= 0 && !strings.HasPrefix(authority, "[") {
@@ -72,7 +75,10 @@ func parseRaw(s string) (rawURL, bool) {
 		return rawURL{}, false
 	}
 	tail, _, _ = strings.Cut(tail, "#")
-	r.path, r.query, _ = strings.Cut(tail, "?")
+	r.path = tail
+	if i := strings.IndexByte(tail, '?'); i >= 0 {
+		r.path, r.query = tail[:i], tail[i:]
+	}
 	return r, true
 }
 
@@ -85,24 +91,46 @@ func (r rawURL) portNum() int {
 	return schemePorts[r.scheme]
 }
 
-// literalReason refuses a host that a client would not dial as written (pfb_feed_host_literal_reason). A non-ASCII
-// host is refused: UTS46 mapping needs golang.org/x/net/idna, which the Core boundary keeps out.
-func literalReason(host string) string {
+// withHost is the URL with its host replaced and the fragment dropped (pfb_feed_redirect_target's rebuild).
+func (r rawURL) withHost(host string) string {
+	u := r.scheme + "://" + r.userinfo + host
+	if r.port != "" {
+		u += ":" + r.port
+	}
+	return u + r.path + r.query
+}
+
+// mapHost is the host a client dials: a non-ASCII host through feedparse.IDNToASCII (the pfb-dns profile and not ICU's,
+// owner decision #3813), any other as written; ok is false where the conversion fails.
+func mapHost(host string) (string, bool) {
+	if strings.IndexFunc(host, func(r rune) bool { return r >= 0x80 }) < 0 {
+		return host, true
+	}
+	return feedparse.IDNToASCII(host)
+}
+
+// literalReason refuses a host that a client would not dial as written (pfb_feed_host_literal_reason: same checks, same
+// order, same reasons) and returns the host to resolve, vet and dial: the mapped host, a plain DNS name and no IP literal.
+func literalReason(host string) (mapped, reason string) {
 	if strings.HasPrefix(host, "[") {
-		return "feed host is a bracketed IPv6 literal"
+		return "", "feed host is a bracketed IPv6 literal"
 	}
-	for i := range len(host) {
-		if host[i] >= 0x80 {
-			return "feed host is not a valid IDN name"
-		}
+	mapped, ok := mapHost(host)
+	if !ok {
+		return "", "feed host is not a valid IDN name"
 	}
-	if strings.Contains(host, "%") {
-		return "feed host is percent-encoded"
+	if strings.Contains(mapped, "%") {
+		return "", "feed host is percent-encoded"
 	}
-	if shaped, ip := ipv4Numeric(host); shaped && ip != host {
-		return "feed host is a non-canonical IP literal"
+	// The mapping can yield URL delimiters ('@', '/'): only a plain DNS host name stays.
+	if mapped != host && !validHostname(mapped) {
+		return "", "feed host is not a valid IDN name"
 	}
-	return ""
+	// A mapped host is never canonical: it differs from the host as written.
+	if shaped, ip := ipv4Numeric(mapped); shaped && ip != host {
+		return "", "feed host is a non-canonical IP literal"
+	}
+	return mapped, ""
 }
 
 // ipv4Numeric decodes a numeric-shaped host as the WHATWG URL parser and libcurl do (pfb_ipv4_numeric_host): shaped
@@ -239,24 +267,26 @@ func (p *Policy) candidates(ctx context.Context, host string) []netip.Addr {
 }
 
 // vet is the feed-host guard (pfb_feed_host_allowed): it refuses a host with any non-public address that is neither
-// the host's own nor exempted, and returns the first address for the connection to be pinned to.
-func (p *Policy) vet(ctx context.Context, host string) (netip.Addr, string) {
+// the host's own nor exempted, and returns the first address for the connection to be pinned to and the mapped host
+// that address was resolved for ("" on a refusal).
+func (p *Policy) vet(ctx context.Context, host string) (pin netip.Addr, mapped, reason string) {
 	if host == "" {
-		return netip.Addr{}, "feed host is empty"
+		return netip.Addr{}, "", "feed host is empty"
 	}
-	if r := literalReason(host); r != "" {
-		return netip.Addr{}, r
+	mapped, reason = literalReason(host)
+	if reason != "" {
+		return netip.Addr{}, "", reason
 	}
-	addrs := p.candidates(ctx, host)
+	addrs := p.candidates(ctx, mapped)
 	if len(addrs) == 0 {
-		return netip.Addr{}, "feed host did not resolve"
+		return netip.Addr{}, "", "feed host did not resolve"
 	}
 	for _, a := range addrs {
 		if internal(a) && !p.self(a) && !p.allowed(a) {
-			return netip.Addr{}, "feed host resolves to a non-permitted address"
+			return netip.Addr{}, "", "feed host resolves to a non-permitted address"
 		}
 	}
-	return addrs[0], ""
+	return addrs[0], mapped, ""
 }
 
 // entry is the feed-URL gate (PFB_FILTER_URL) plus the source classification pfb_download() makes after it.
@@ -271,11 +301,12 @@ func (f *Fetcher) entry(ctx context.Context, req Request) (*source, string) {
 
 	src := &source{kind: kindRemote, path: raw}
 	var dir string
+	var r rawURL
 	if host, module, ok := strings.Cut(raw, "::"); ok && req.Rsync && !strings.Contains(module, "::") &&
 		host != "" && validHostname(host) {
 		src.kind, src.scheme, src.host, dir = kindRsync, "rsync", host, phpDirname(module)
 	} else {
-		r, ok := parseRaw(raw)
+		r, ok = parseRaw(raw)
 		if !ok {
 			return nil, ""
 		}
@@ -290,9 +321,15 @@ func (f *Fetcher) entry(ctx context.Context, req Request) (*source, string) {
 		}
 		src.scheme, src.host, src.port, dir = r.scheme, r.host, r.portNum(), phpDirname(r.path)
 	}
-	if reason := literalReason(src.host); reason != "" {
+	mapped, reason := literalReason(src.host)
+	if reason != "" {
 		return nil, reason
 	}
+	// The source is requested on the mapped host (an rsync source: the vetted address replaces it, filter on).
+	if mapped != src.host {
+		src.path = r.withHost(mapped)
+	}
+	src.host = mapped
 	addrs := f.candidates(ctx, src.host)
 	if len(addrs) == 0 {
 		return nil, "feed host did not resolve"
@@ -310,12 +347,12 @@ func (f *Fetcher) entry(ctx context.Context, req Request) (*source, string) {
 	case selfOnly && src.kind == kindRemote:
 		src.kind, src.self = kindSelfHosted, addrs // read from these addresses, never resolved again (#3911)
 	case !selfOnly && !f.NoFilter:
-		if _, reason := f.vet(ctx, src.host); reason != "" {
+		if _, _, reason := f.vet(ctx, src.host); reason != "" {
 			return nil, reason
 		}
 	}
 	if src.kind != kindRsync {
-		u, err := url.Parse(raw)
+		u, err := url.Parse(src.path)
 		if err != nil {
 			return nil, ""
 		}
@@ -433,9 +470,16 @@ func (f *Fetcher) redirectTarget(ctx context.Context, location, current string) 
 		return "", rawURL{}, netip.Addr{}, "feed redirect target is not an http(s) URL"
 	}
 	if f.NoFilter {
-		return target, r, netip.Addr{}, "" // as cURL's own following: no vetting, no pin
+		// As cURL's own following: no vetting, no pin; the host is mapped only to compare origins for the credentials.
+		if m, ok := mapHost(r.host); ok {
+			r.host = m
+		}
+		return target, r, netip.Addr{}, ""
 	}
-	pin, reason := f.vet(ctx, r.host)
+	pin, mapped, reason := f.vet(ctx, r.host)
+	if reason == "" && mapped != r.host {
+		target, r.host = r.withHost(mapped), mapped // the request stays on the name that was vetted, as PHP rebuilds it
+	}
 	return target, r, pin, reason
 }
 

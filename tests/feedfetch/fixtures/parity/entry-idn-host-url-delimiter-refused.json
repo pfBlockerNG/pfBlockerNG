@@ -1,0 +1,37 @@
+{
+ "schema": 1,
+ "description": "A feed host with a code point that maps to a URL delimiter is refused as an invalid IDN name instead of dialled.",
+ "hosts": {},
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://bücher.exa\uff0fmple:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is not a valid IDN name",
+    "requests": []
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://bücher.exa\uff20mple:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is not a valid IDN name",
+    "requests": []
+   }
+  }
+ ]
+}

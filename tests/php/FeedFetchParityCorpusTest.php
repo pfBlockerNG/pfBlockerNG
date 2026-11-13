@@ -23,6 +23,8 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  *   reason          the last "reason=<code>" or "[ FEED ] <text> — skipped" in the step's log.
  *   requests        what the servers recorded (the Host header too, kept only where the expectation names it);
  *                   rsync_source the stand-in's second-to-last argument.
+ *   old_expect      a step's optional override, present only where Core differs from this path on purpose (never equal
+ *                   to expect, which the Go runner asserts); this runner asserts it in place of expect.
  * Scheduler state that is not transfer behaviour is reset before a probe: the list file exists, no failure marker.
  */
 #[CoversFunction('pfb_download')]
@@ -201,7 +203,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$actual['rsync_source'] = $argv === NULL ? NULL : $argv[count($argv) - 2];
 			$actual['reason'] = $this->reason();
 
-			$want = $step['expect'];
+			$want = $step['old_expect'] ?? $step['expect'];
 			$want['requests'] = array_map(fn (array $r): array => $this->expandRecord($r), $want['requests']);
 			foreach (array_keys($actual['requests']) as $n) {
 				if (!isset($want['requests'][$n]['host'])) {

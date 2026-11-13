@@ -31,7 +31,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 	var pin netip.Addr
 	if !f.NoFilter {
 		var reason string
-		if pin, reason = f.vet(ctx, src.host); reason != "" {
+		if pin, _, reason = f.vet(ctx, src.host); reason != "" {
 			return transfer{reason: reason}
 		}
 	}
@@ -47,7 +47,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 	}
 
 	var t transfer
-	current, scheme, host, port := strings.TrimSpace(req.URL), src.scheme, src.host, src.port
+	current, scheme, host, port := src.path, src.scheme, src.host, src.port
 	chains := 0
 	flex := false
 	for hop := 0; ; hop++ {
@@ -105,7 +105,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context, src *source, req Request, dst s
 			case <-time.After(f.retryDelay()):
 			case <-ctx.Done():
 			}
-			current, scheme, host, port, pin, hop = strings.TrimSpace(req.URL), src.scheme, src.host, src.port, netip.Addr{}, -1
+			current, scheme, host, port, pin, hop = src.path, src.scheme, src.host, src.port, netip.Addr{}, -1
 			continue
 		}
 		target, next, nextPin, reason := f.redirectTarget(ctx, location, current)

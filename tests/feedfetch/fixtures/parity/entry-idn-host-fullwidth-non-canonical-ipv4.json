@@ -1,0 +1,27 @@
+{
+ "schema": 1,
+ "description": "A fullwidth-digit feed host that maps to a non-canonical IPv4 literal is refused instead of dialled as 127.0.0.1.",
+ "hosts": {},
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://\uff11\uff12\uff17.\uff11:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is a non-canonical IP literal",
+    "requests": []
+   }
+  }
+ ]
+}

@@ -1,0 +1,34 @@
+{
+ "schema": 1,
+ "description": "An rsync:// source on a non-ASCII host is vetted on the mapped name and connects to the vetted address. The old path refuses a non-ASCII URL at FILTER_VALIDATE_URL (old_expect).",
+ "hosts": {
+  "xn--bcher-kva.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "format": "rsync",
+   "url": "rsync://bücher.example/feeds/list.txt",
+   "rsync": {
+    "exit": 0,
+    "body": "r\n"
+   },
+   "expect": {
+    "ok": true,
+    "published": "r\n",
+    "digest": "0500ff9fb08faa789c8a42d344bc37c7",
+    "requests": [],
+    "rsync_source": "rsync://127.0.0.1/feeds/list.txt"
+   },
+   "old_expect": {
+    "ok": false,
+    "published": null,
+    "reason": null,
+    "requests": []
+   }
+  }
+ ]
+}
