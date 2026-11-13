@@ -43,7 +43,7 @@ $pfbarr['anot' . $dir] = $toggle_enabled('autonot' . $dir) ? 'on' : '';
 $pfbarr['aaddrnot' . $dir] = $toggle_enabled('autoaddrnot' . $dir) ? 'on' : '';
 if ($toggle_enabled($akey . $dir)) {}
 $conf_value = static function (string $field) use ($conf_config, $registered): mixed {
-	return $registered ? PfbConfig::read("dnsbl/{$field}") : $conf_config[$field];
+	return $registered ? PfbConfig::read("dnsbl/{$field}") : ($conf_config[$field] ?? '');
 };
 $pfbarr['aproto' . $dir] = $conf_value('autoproto' . $dir);
 $pfbarr['agateway' . $dir] = $conf_value('agateway' . $dir);
