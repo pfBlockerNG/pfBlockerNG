@@ -174,7 +174,7 @@ func (c *sniffConn) Write(p []byte) (int, error) {
 }
 
 // corpusPKI is the corpus's test PKI, made when a scenario needs it: a CA, a leaf it signed ("trusted") and a
-// self-signed leaf it did not sign ("untrusted"). Both leaves name feed.example, rdr.example and 127.0.0.1.
+// self-signed leaf it did not sign ("untrusted"). Both leaves name feed.example and rdr.example only, never an IP address.
 type corpusPKI struct {
 	pool  *x509.CertPool
 	certs map[string]tls.Certificate
@@ -218,7 +218,7 @@ func newCorpusPKI(t testing.TB) corpusPKI {
 			NotBefore: now.Add(-time.Minute), NotAfter: now.Add(48 * time.Hour),
 			BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
 			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-			DNSNames:    []string{"feed.example", "rdr.example"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+			DNSNames:    []string{"feed.example", "rdr.example"},
 		}
 		if parent == nil {
 			parent, parentKey = tmpl, k

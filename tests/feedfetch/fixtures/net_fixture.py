@@ -156,7 +156,10 @@ class ProxyHandler(socketserver.BaseRequestHandler):
             conn.sendall(BAD_REQUEST)
             return
         authority, _, path = target[len("http://") :].partition("/")
-        upstream = dial(authority.rsplit(":", 1)[-1] if ":" in authority else 80)
+        if ":" not in authority:  # every corpus URL names its port; a portless target is a client bug, not port 80
+            conn.sendall(BAD_REQUEST)
+            return
+        upstream = dial(authority.rsplit(":", 1)[-1])
         if upstream is None:
             conn.sendall(BAD_GATEWAY)
             return

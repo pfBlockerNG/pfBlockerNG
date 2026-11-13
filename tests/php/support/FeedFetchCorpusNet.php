@@ -8,7 +8,7 @@ declare(strict_types=1);
 
 /**
  * Generates the corpus's test PKI into $dir: a CA, a leaf signed by it ("trusted") and a self-signed leaf the CA did not
- * sign ("untrusted"). Both leaves name feed.example, rdr.example and 127.0.0.1. Keys are made here, at test time, and
+ * sign ("untrusted"). Both leaves name feed.example and rdr.example only, never an IP address. Keys are made here, at test time, and
  * die with the case's temp directory; nothing is committed.
  *
  * @return array{ca:string, trusted:array{cert:string,key:string}, untrusted:array{cert:string,key:string}}
@@ -33,7 +33,7 @@ subjectKeyIdentifier = hash
 basicConstraints = critical,CA:FALSE
 keyUsage = critical,digitalSignature
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:feed.example,DNS:rdr.example,IP:127.0.0.1
+subjectAltName = DNS:feed.example,DNS:rdr.example
 CNF);
 	$cfg = ['config' => $cnf, 'digest_alg' => 'sha256'];
 	$newKey = static fn () => openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1']);
