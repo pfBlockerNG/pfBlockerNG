@@ -41,6 +41,8 @@ func TestABaselinePHPWroteReadsAsUnchanged(t *testing.T) {
 	for kind, sidecar := range map[string]string{ // xxh128("same\n")
 		"as PHP writes it": "7e1402559176eb98e66aa82c39de3587",
 		"with a newline":   "7e1402559176eb98e66aa82c39de3587\n",
+		// PHP's trim() set, each character on both sides.
+		"in PHP's trim() set": " \t\n\r\x00\x0B7e1402559176eb98e66aa82c39de3587 \t\n\r\x00\x0B",
 	} {
 		seed := func(feed feedfetch.Feed) {
 			os.WriteFile(filepath.Join(feed.Dir, "FEED.orig"), []byte(body), 0o600)
@@ -136,6 +138,8 @@ func TestAnUnreadableXXH128SidecarIsNoBaseline(t *testing.T) {
 		"7e1402559176eb98e66aa82c39de358",          // 31 digits
 		"7e1402559176eb98e66aa82c39de3587 x",       // trailing word
 		"a9993e364706816aba3e25717850c26c9cd0d89d", // a 40-hex SHA-1
+		"\f7e1402559176eb98e66aa82c39de3587",       // form feed: outside PHP's trim() set
+		"\u00a07e1402559176eb98e66aa82c39de3587",   // no-break space: outside PHP's trim() set
 	} {
 		seed := func(feed feedfetch.Feed, published string) {
 			os.WriteFile(filepath.Join(feed.Dir, "FEED.orig"), []byte(published), 0o600)

@@ -842,6 +842,11 @@ CORE_PARITY_ACCEPTED = [
         gh_tuples_for(XXH3, vendor=CORE_VENDOR),
         f"module example.test/pfbcore\n\ngo 1.21\n\nrequire {XXH3[0]} {XXH3[1]} // indirect\n",
     ),
+    (
+        "core-own-module-required-in-a-block-with-no-space",  # Go reads `require(` as `require (` (#3930)
+        gh_tuples_for(XXH3, vendor=CORE_VENDOR),
+        core_go_mod(XXH3).replace("require (", "require("),
+    ),
 ]
 
 
