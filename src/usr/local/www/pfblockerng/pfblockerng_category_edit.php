@@ -459,7 +459,7 @@ $options_srcint			= array_merge(array('' => 'Default'), $src_interfaces);
 // Validate input fields
 if ($_POST && isset($_POST['save'])) {
 
-	$pconfig = $_POST;
+	$pconfig = $_POST + ['aliasname_loaded' => ''];	// issue #3955: a form posted without its loaded name shows none again
 	$line = 1;
 	// issue #1496: $input_errors is now unconditionally initialised top-of-file
 	// (array()); the old unset() here would have undone that. Nothing appends to
@@ -1072,7 +1072,7 @@ else {
 	$pconfig['custom']			= base64_decode($rowdata[$rowid]['custom'] ?? '');
 }
 
-// issue #3955: the group as this form loads it ('' for a new one); a form shown again after an error keeps the name it was posted with.
+// issue #3955: the group as this form loads it ('' for a new one). Set here for a GET only: a POST re-render holds the posted name (or '') already.
 if (!isset($pconfig['aliasname_loaded'])) {
 	$pconfig['aliasname_loaded'] = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '');
 }
