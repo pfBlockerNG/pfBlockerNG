@@ -4148,6 +4148,10 @@ const PFB_CORE_API_VERSION = 'v1';
 const PFB_CORE_SETTINGS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_settings.sh';
 // The adapter reads at most this many bytes of request from stdin
 const PFB_CORE_SETTINGS_MAX_REQUEST = 33554432;	// 32 MiB, as Core takes a reply: the feed projections carry custom lists
+// issue #3927: the adapter's metrics waits, so its longest client-IP change (DNS config lock, metrics lock, three passes over both
+// metrics databases) ends inside Core's 20 s write deadline (go/pfb_core/settings/adapter.go writeTimeout; CoreSettingsAdapterDeadlineTest)
+const PFB_CORE_SETTINGS_METRICS_LOCK_WAIT = 2.0;
+const PFB_CORE_SETTINGS_SQLITE_WAIT_MS = 500;
 // issue #3937: Core's feed projections, each over one config.xml section of groups, in the protocol's order
 const PFB_CORE_FEED_SECTIONS = ['feeds/ipv4' => 'pfblockernglistsv4', 'feeds/ipv6' => 'pfblockernglistsv6', 'feeds/dnsbl' => 'pfblockerngdnsbl'];
 // The Groups editor's update frequencies, and its feed states (native => stored)
@@ -5233,7 +5237,8 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			$persist();
 		} else {
 			// The General page's order: the privacy change (purge or expose client identities) before the configuration that says so
-			$error = pfb_metrics_client_save($wanted['metricsClientIp'] ? PfbToggle::On : PfbToggle::Off, $persist, $metricsDir);
+			$error = pfb_metrics_client_save($wanted['metricsClientIp'] ? PfbToggle::On : PfbToggle::Off, $persist, $metricsDir,
+			    PFB_CORE_SETTINGS_METRICS_LOCK_WAIT, PFB_CORE_SETTINGS_SQLITE_WAIT_MS);
 			if ($error !== NULL) {
 				pfb_dns_config_write_failed($written);	// a refused write leaves its change in this copy of config.xml: read the file again
 				return pfb_core_settings_refusal('unavailable', $error);
@@ -12967,8 +12972,8 @@ function pfb_metrics_lock(float $wait_s) {
 	return $lock;
 }
 
-// Each existing database commits independently: a failed retry never restores purged identities.
-function pfb_metrics_client_reconcile(bool $enabled, bool $rotate = TRUE): ?string {
+// Each existing database commits independently: a failed retry never restores purged identities. $busy_ms caps each database's wait.
+function pfb_metrics_client_reconcile(bool $enabled, bool $rotate = TRUE, int $busy_ms = 5000): ?string {
 	global $pfb;
 	foreach (array('dnsbl_info' => 'dns_metric_blocks', 'dnsbl_resolver' => 'dns_metric_queries') as $key => $table) {
 		if (!is_file($pfb[$key])) {
@@ -12978,7 +12983,7 @@ function pfb_metrics_client_reconcile(bool $enabled, bool $rotate = TRUE): ?stri
 		try {
 			$db = new SQLite3($pfb[$key], SQLITE3_OPEN_READWRITE);
 			$db->enableExceptions(TRUE);
-			$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
+			$db->busyTimeout(min($busy_ms, (int) ($pfb['sqlite_timeout'] ?? 5000)));
 			$db->exec('BEGIN IMMEDIATE');
 			if (!$rotate && $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dns_metric_settings'")
 			    && $db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0') === 1) {
@@ -13059,8 +13064,9 @@ function pfb_metrics_client_apply(): void {
 }
 
 // Each metrics database's client-IP policy read back after a reconcile that stopped part way (each database commits on its own).
-// The policy only permits collection (the ini setting and a matching epoch decide the rest); one that cannot be read is unknown.
-function pfb_metrics_client_collecting(): string {
+// The policy only permits collection (the ini setting and a matching epoch decide the rest); one that cannot be read is unknown,
+// so collection is not ruled out there. $busy_ms caps each database's wait.
+function pfb_metrics_client_collecting(int $busy_ms = 5000): string {
 	global $pfb;
 	$on = $unknown = array();
 	foreach (array('dnsbl_info', 'dnsbl_resolver') as $key) {
@@ -13071,7 +13077,7 @@ function pfb_metrics_client_collecting(): string {
 		try {
 			$db = new SQLite3($pfb[$key], SQLITE3_OPEN_READONLY);
 			$db->enableExceptions(TRUE);
-			$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
+			$db->busyTimeout(min($busy_ms, (int) ($pfb['sqlite_timeout'] ?? 5000)));
 			$table = $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dns_metric_settings'");
 			if ($table && $db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0') === 1) {
 				$on[] = basename($pfb[$key]);
@@ -13082,19 +13088,23 @@ function pfb_metrics_client_collecting(): string {
 			$db?->close();
 		}
 	}
-	$state = $on ? 'client-IP collection is permitted in: ' . implode(', ', $on) : 'no metrics database permits client-IP collection';
-	return $unknown ? "{$state}; unknown (policy unreadable) in: " . implode(', ', $unknown) : $state;
+	$unread = implode(', ', $unknown);
+	if (!$on) {
+		return $unknown ? "client-IP collection could not be ruled out in: {$unread} (policy unreadable)" : 'no metrics database permits client-IP collection';
+	}
+	$state = 'client-IP collection is permitted in: ' . implode(', ', $on);
+	return $unknown ? "{$state}; unknown (policy unreadable) in: {$unread}" : $state;
 }
 
 // Save-time privacy is serialized with publication and config persistence, not with DNS service availability. $persist writes
 // config.xml and answers TRUE when it was written; a refused write puts the databases back to the stored preference, so they
-// never keep a policy that config.xml does not say.
-function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $dir = '/var/tmp/node_exporter'): ?string {
+// never keep a policy that config.xml does not say. $lock_wait_s bounds the wait for the metrics lock, $busy_ms each database's.
+function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $dir = '/var/tmp/node_exporter', float $lock_wait_s = 10.0, int $busy_ms = 5000): ?string {
 	$previous = PfbConfig::read('gen/pfb_metrics_client_ip');
 	if ($previous === $desired) {
 		return $persist() ? NULL : 'pfSense refused the configuration write.';
 	}
-	$lock = pfb_metrics_lock(10.0);
+	$lock = pfb_metrics_lock($lock_wait_s);
 	if ($lock === FALSE) {
 		return 'Client IP metrics could not be changed: metrics publication is busy. ' . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled.' : 'Client IP metrics remain disabled.');
 	}
@@ -13104,14 +13114,14 @@ function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $
 			if (!$persist()) {
 				return 'Client IP metrics could not be changed: pfSense refused the configuration write. Client IP metrics remain disabled; retry Save.';
 			}
-			$error = pfb_metrics_client_reconcile(TRUE);
+			$error = pfb_metrics_client_reconcile(TRUE, TRUE, $busy_ms);
 			if ($error !== NULL) {
-				pfb_logger("\nClient IP metrics are saved as enabled, but {$error}: " . pfb_metrics_client_collecting() . '; the next Update applies the rest.', 2);
+				pfb_logger("\nClient IP metrics are saved as enabled, but {$error}: " . pfb_metrics_client_collecting($busy_ms) . '; the next Update applies the rest.', 2);
 			}
 			return NULL;
 		}
 		// Off purges before config.xml says so: client identities never outlive the request to drop them
-		$error = pfb_metrics_client_reconcile(FALSE);
+		$error = pfb_metrics_client_reconcile(FALSE, TRUE, $busy_ms);
 		if ($error !== NULL) {
 			return 'Client IP metrics could not be changed: ' . $error . '. Client IP metrics are still enabled; retry Save.';
 		}
@@ -13119,10 +13129,10 @@ function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $
 			unlink_if_exists("{$dir}/pfblockerng.prom");
 		}
 		if (!$persist()) {
-			$undo = pfb_metrics_client_reconcile(TRUE);
+			$undo = pfb_metrics_client_reconcile(TRUE, TRUE, $busy_ms);
 			return 'Client IP metrics could not be changed: pfSense refused the configuration write. '
 			    . ($undo === NULL ? 'Client IP metrics are still enabled; retry Save.'
-			        : "Turning client IP collection back on failed too ({$undo}), so " . pfb_metrics_client_collecting() . ' until the next Update applies the stored setting; retry Save.');
+			        : "Turning client IP collection back on failed too ({$undo}), so " . pfb_metrics_client_collecting($busy_ms) . ' until the next Update applies the stored setting; retry Save.');
 		}
 		return NULL;
 	} finally {
