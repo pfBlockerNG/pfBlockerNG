@@ -203,7 +203,7 @@ def test_category_delete_closes_orphaned_ipv4_download_ledger_entry(
         # BEFORE: the download entry is genuinely open first.
         assert _ledger_is_open(vm, "ip", item, "download"), "seed did not open the download ledger entry"
 
-        _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0"})
+        _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0", "aliasname": alias})
 
         assert not _ledger_is_open(vm, "ip", item, "download"), (
             "act=del must close the removed alias's orphaned stage=download entry"
@@ -279,7 +279,7 @@ def test_category_delete_closes_orphaned_dnsbl_download_ledger_entry(
         _ledger_open(vm, "dnsbl", item, "download", "smoke: synthetic download failure")
         assert _ledger_is_open(vm, "dnsbl", item, "download"), "seed did not open the download ledger entry"
 
-        _ajax_post_typed(webui, "dnsbl", {"act": "del", "type": "dnsbl", "rowid": "0"})
+        _ajax_post_typed(webui, "dnsbl", {"act": "del", "type": "dnsbl", "rowid": "0", "aliasname": alias})
 
         assert not _ledger_is_open(vm, "dnsbl", item, "download"), (
             "act=del must close the removed DNSBL group's orphaned stage=download entry"

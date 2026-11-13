@@ -113,7 +113,7 @@ def test_a_group_delete_with_core_stopped_is_written_and_says_core_does_not_have
             assert NOTICE not in _render(vm, webui), "before-state: no notice before the delete"
 
             with _tier_a(vm, webui, "ipv4", ("Summary", "pfBlockerNG")):
-                _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0"})
+                _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0", "aliasname": alias})
 
             assert helpers.config_get(vm, name) == "", "the delete must be written while Core is down"
             assert NOTICE in _render(vm, webui), "DNS General must say that Core does not have the saved settings"

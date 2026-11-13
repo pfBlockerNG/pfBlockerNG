@@ -240,14 +240,16 @@ def _ajax_post(webui: WebUI, data: dict[str, str], *, page: str = IPV4_PAGE) -> 
     return resp.text
 
 
-def _update_action(webui: WebUI, rowid: int, action: str) -> str:
+def _update_action(webui: WebUI, rowid: int, action: str, name: str) -> str:
     """Fire ``act=update`` setting ``action-<rowid>=<action>`` via ``postdata``.
 
     ``postdata`` is itself a urlencoded query string the handler ``parse_str``s,
-    so a minimal one-field payload is sent (avoids the multi-value same-name
-    collision a full form scrape would introduce). Returns the response body.
+    so a minimal payload is sent (avoids the multi-value same-name collision a full
+    form scrape would introduce): the field, and ``aliasname-<rowid>=<name>``, the
+    group the page showed at that row, which the handler requires (issue #3945).
+    Returns the response body.
     """
-    postdata = urlencode({f"action-{rowid}": action})
+    postdata = urlencode({f"aliasname-{rowid}": name, f"action-{rowid}": action})
     return _ajax_post(webui, {"act": "update", "type": "ipv4", "rowid": "0", "postdata": postdata})
 
 
@@ -278,13 +280,13 @@ def test_category_update_row_action_changes_config(
         # BEFORE: the seeded row holds the original action.
         assert helpers.config_get(vm, cfg) == "Deny_Inbound", "seed did not land Deny_Inbound at row 0"
         # VALID: a different whitelisted action is written through.
-        _update_action(webui, 0, "Deny_Outbound")
+        _update_action(webui, 0, "Deny_Outbound", alias)
         assert helpers.config_get(vm, cfg) == "Deny_Outbound", "valid act=update did not change the row action"
         # Restore the row to its original valid action (reverse transition).
-        _update_action(webui, 0, "Deny_Inbound")
+        _update_action(webui, 0, "Deny_Inbound", alias)
         assert helpers.config_get(vm, cfg) == "Deny_Inbound", "restore act=update did not revert the row action"
         # REJECT: a non-whitelisted action aborts the whole save -> config UNCHANGED.
-        _update_action(webui, 0, "BogusAction")
+        _update_action(webui, 0, "BogusAction", alias)
         got = helpers.config_get(vm, cfg)
         assert got == "Deny_Inbound", f"bogus action must leave config unchanged at 'Deny_Inbound', got {got!r}"
     finally:
@@ -301,7 +303,7 @@ def test_category_update_rejects_cross_group_and_array_actions(
     dnsbl_snap = _snapshot_node(vm, DNSBL_GROUPS)
     try:
         _seed_single_ipv4_row(vm, "pfbactip", "Deny_Inbound")
-        _update_action(webui, 0, "unbound")
+        _update_action(webui, 0, "unbound", "pfbactip")
         assert helpers.config_get(vm, f"{IPV4_LISTS}/0/action") == "Deny_Inbound"
 
         row = {
@@ -323,14 +325,24 @@ def test_category_update_rejects_cross_group_and_array_actions(
 
         body = _ajax_post(
             webui,
-            {"act": "update", "type": "dnsbl", "rowid": "0", "postdata": urlencode({"action-0": "Deny_Both"})},
+            {
+                "act": "update",
+                "type": "dnsbl",
+                "rowid": "0",
+                "postdata": urlencode({"aliasname-0": "pfbactdns", "action-0": "Deny_Both"}),
+            },
             page=_page_url("dnsbl"),
         )
         assert helpers.config_get(vm, f"{DNSBL_GROUPS}/0/action") == "unbound"
 
         body = _ajax_post(
             webui,
-            {"act": "update", "type": "dnsbl", "rowid": "0", "postdata": urlencode({"action-0[]": "unbound"})},
+            {
+                "act": "update",
+                "type": "dnsbl",
+                "rowid": "0",
+                "postdata": urlencode({"aliasname-0": "pfbactdns", "action-0[]": "unbound"}),
+            },
             page=_page_url("dnsbl"),
         )
         assert "Fatal error" not in body
@@ -374,15 +386,15 @@ def test_category_update_row_cron_valid_and_reject_unchanged(
         # BEFORE: seeded cron is 'Never'.
         assert helpers.config_get(vm, cfg) == "Never", "seed did not land cron 'Never' at row 0"
         # VALID cron key -> written through.
-        postdata = urlencode({"cron-0": "12hours"})
+        postdata = urlencode({"aliasname-0": alias, "cron-0": "12hours"})
         _ajax_post(webui, {"act": "update", "type": "ipv4", "rowid": "0", "postdata": postdata})
         assert helpers.config_get(vm, cfg) == "12hours", "valid act=update did not change the row cron"
         # Restore (reverse transition).
-        postdata = urlencode({"cron-0": "Never"})
+        postdata = urlencode({"aliasname-0": alias, "cron-0": "Never"})
         _ajax_post(webui, {"act": "update", "type": "ipv4", "rowid": "0", "postdata": postdata})
         assert helpers.config_get(vm, cfg) == "Never", "restore act=update did not revert the row cron"
         # REJECT: a non-whitelisted cron aborts the whole save -> config UNCHANGED.
-        postdata = urlencode({"cron-0": "99hours"})
+        postdata = urlencode({"aliasname-0": alias, "cron-0": "99hours"})
         _ajax_post(webui, {"act": "update", "type": "ipv4", "rowid": "0", "postdata": postdata})
         got = helpers.config_get(vm, cfg)
         assert got == "Never", f"bogus cron must leave config unchanged at 'Never', got {got!r}"
@@ -419,7 +431,7 @@ def test_category_update_via_get_does_not_mutate_config(
         assert helpers.config_get(vm, cfg) == "Deny_Inbound", "seed did not land Deny_Inbound at row 0"
 
         # WHEN: the crafted-link GET (authenticated session, no CSRF token — GETs never carry one).
-        postdata = urlencode({"action-0": "Permit_Both"})
+        postdata = urlencode({"aliasname-0": alias, "action-0": "Permit_Both"})
         query = urlencode({"act": "update", "type": "ipv4", "rowid": "0", "postdata": postdata})
         page = webui.get(f"{CATEGORY_PAGE}?{query}")
         assert not looks_like_login_page(page.text), "Category GET returned the login form (session lost)"
@@ -432,7 +444,7 @@ def test_category_update_via_get_does_not_mutate_config(
         )
 
         # CONTROL: the same parameters via the token POST DO mutate — the branch is the method.
-        _update_action(webui, 0, "Permit_Both")
+        _update_action(webui, 0, "Permit_Both", alias)
         got = helpers.config_get(vm, cfg)
         assert got == "Permit_Both", (
             f"the CSRF-token POST with identical params must still change the row action, got {got!r}"
@@ -450,7 +462,8 @@ def test_category_delete_row_removes_config_node(
     True lifecycle transition: seed one row, assert it is PRESENT
     (``installedpackages/pfblockernglistsv4/config/0/aliasname`` == the seeded
     name), POST ``act=del`` with ``rowid=0``, then assert the node is GONE
-    (config_get returns '' for the removed leaf). The del handler
+    (config_get returns '' for the removed leaf; the request names the group, as the page's
+    trash icon does). The del handler
     (pfblockerng_category.php:158-172) requires the row's aliasname to be a clean
     word and then ``config_del_path("{$rowdata_path}/0")``; it 302-redirects, so
     requests follows to the post-delete page (the oracle is config, not that body).
@@ -464,7 +477,7 @@ def test_category_delete_row_removes_config_node(
         # BEFORE: the seeded row is present at index 0.
         assert helpers.config_get(vm, cfg) == alias, "seed did not land the row aliasname at index 0"
         # DELETE the row via the AJAX del op.
-        _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0"})
+        _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0", "aliasname": alias})
         # AFTER: the row's config node is gone (the only row was at index 0).
         got = helpers.config_get(vm, cfg)
         assert got == "", f"act=del must remove the row node (aliasname now ''), got {got!r}"
@@ -513,7 +526,13 @@ def test_category_ids_order_save_persists_row_permutation(
         # WHEN: the 3-cycle permutation is POSTed.
         _ajax_post(
             webui,
-            {"act": "update", "type": gtype, "rowid": "0", "ids": "ids[]=r2&ids[]=r0&ids[]=r1"},
+            {
+                "act": "update",
+                "type": gtype,
+                "rowid": "0",
+                "ids": "ids[]=r2&ids[]=r0&ids[]=r1",
+                "postdata": urlencode({f"aliasname-{i}": name for i, name in enumerate(names)}),
+            },
             page=page,
         )
 
@@ -555,7 +574,7 @@ def test_category_ids_and_postdata_bundle_applies_both_in_one_save(
         before_action = helpers.config_get(vm, f"{IPV4_LISTS}/0/action")
         assert before_action == "Deny_Inbound", f"seed action must start Deny_Inbound, got {before_action!r}"
 
-        postdata = urlencode({"action-0": "Deny_Outbound"})
+        postdata = urlencode({**{f"aliasname-{i}": name for i, name in enumerate(names)}, "action-0": "Deny_Outbound"})
         _ajax_post(
             webui,
             {
@@ -617,7 +636,13 @@ def test_category_ids_order_save_geoip_is_silent_no_op(
     try:
         body = _ajax_post(
             webui,
-            {"act": "update", "type": "geoip", "rowid": "0", "ids": "ids[]=r1&ids[]=r0"},
+            {
+                "act": "update",
+                "type": "geoip",
+                "rowid": "0",
+                "ids": "ids[]=r1&ids[]=r0",
+                "postdata": urlencode({"aliasname-0": "Top Spammers", "aliasname-1": "Africa"}),
+            },
             page=page,
         )
         assert body == "", f"a well-formed GeoIP ids[] POST must not report input_errors, got {body!r}"

@@ -98,7 +98,7 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 				"// Remove any empty '<config></config>' XML tags", 'if (!empty($action) && isset($gtype) && isset($rowid)) {',
 				['rowdata' => [[], $group], 'rowdata_path' => self::V4], 'pfBlockerNG: Removed empty rowdata'],
 			'the group list deletes a group' => [self::LIST,
-				"\$name = pfb_filter(\$rowdata[\$rowid]['aliasname'], PFB_FILTER_WORD, 'Category');", 'header("Location: /pfblockerng/pfblockerng_category.php?type={$gtype}&savemsg={$savemsg}");',
+				"try {\n\t\t\t\t\$name = pfb_filter(\$rowdata[\$rowid]['aliasname'] ?? '', PFB_FILTER_WORD, 'Category');", 'header("Location: /pfblockerng/pfblockerng_category.php?type={$gtype}&savemsg={$savemsg}");',
 				['rowdata' => [$group], 'rowid' => 0, 'rowdata_path' => self::V4, 'gtype' => 'ipv4', 'type' => 'IPv4'], 'pfBlockerNG: Removed [ IPv4 | Spam ]'],
 			'the group list saves its order' => [self::LIST,
 				'// Save postdata and Table re-ordering', "\n\t\t\t}\n\t}\n\texit;",
@@ -110,7 +110,27 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 	private function runPage(string $page, string $start, string $end, array $vars): void
 	{
 		config_set_path(self::V4, [['aliasname' => 'Spam', 'action' => 'Deny_Inbound', 'cron' => 'Never']]);
-		pfb_test_page_eval(pfb_test_page_region($page, $start, $end), $vars + ['pfb' => $GLOBALS['pfb']]);
+		$code = pfb_test_page_region($page, $start, $end);
+		// The editor and update snippets now cross try/finally boundaries: supply their surrounding openers/closers.
+		if ($page === self::EDIT) {
+			$code = 'try {' . $code . "\n}";
+		} elseif (str_starts_with($start, '// Save postdata')) {
+			$code = 'try { if (TRUE) {' . $code . "\n}";
+		}
+		$lock = pfb_dns_config_lock();
+		$post = $_POST;
+		$_POST = ['aliasname' => 'Spam'];	// the group name the list page's delete posts with the row index
+		ob_start();
+		try {
+			pfb_test_page_eval($code, $vars + [
+				'pfb' => $GLOBALS['pfb'], 'pfb_config_lock' => $lock, 'pfb_groups_changed' => FALSE,
+				'action' => '', 'input_errors' => [],
+			]);
+		} finally {
+			ob_end_clean();
+			$_POST = $post;
+			unlock($lock);
+		}
 	}
 
 	/** @param array<string, mixed> $vars */

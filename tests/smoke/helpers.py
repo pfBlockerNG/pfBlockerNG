@@ -40,6 +40,7 @@ so importing this module does not require the smoke deps.
 from __future__ import annotations
 
 import base64
+import contextlib
 import functools
 import hashlib
 import ipaddress
@@ -54,7 +55,7 @@ import tarfile
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -3068,6 +3069,53 @@ def hook_marker_exists(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> bool
     filesystem, since the hook writes there as root in host context.
     """
     return vm.ssh("test", "-f", path, timeout=timeout).returncode == 0
+
+
+@contextlib.contextmanager
+def config_lock_held(vm: SmokeVM) -> Iterator[None]:
+    """Hold pfSense's pfb_dns_config lock in another process for the body, as a concurrent save does.
+
+    The holder is the aborted-removal case's holder (test_smoke_dns_proxy.py): it touches the ready file once it holds
+    the lock, then waits for the go file under a bound and unlocks. The body runs only once the holder is observed
+    either holding the lock (ready file) or ending before it did (failed file, written by its shutdown function).
+    The finally releases the holder and kills it if it is still running.
+    """
+    lock_dir = "/tmp/pfb_ui_config_lock"
+    ready, go = f"{lock_dir}/ready", f"{lock_dir}/go"
+    failed = f"{lock_dir}/failed"
+    for argv in (("/bin/rm", "-rf", lock_dir), ("/bin/mkdir", "-p", lock_dir)):
+        result = vm.ssh(*argv)
+        assert result.returncode == 0, f"guest command {argv!r} failed: {result.stderr!r}"
+    holder = (
+        # Whatever ends the holder before it holds the lock (a refused lock, a fatal error) leaves the failed file
+        "/* pfb_ui_config_lock_holder */ "
+        f'register_shutdown_function(function () {{ if (!file_exists("{ready}")) {{ touch("{failed}"); }} }}); '
+        'require_once("globals.inc"); require_once("util.inc"); '
+        '$k = lock("pfb_dns_config", LOCK_EX); if (!is_resource($k)) { exit(1); } '
+        f'touch("{ready}"); $i = 0; while (!file_exists("{go}") && $i++ < 1800) {{ usleep(100000); }} unlock($k);'
+    )
+    vm.ssh(f"nohup {PHP_BIN} -r '{holder}' >/dev/null 2>&1 &")
+    try:
+        wait_until(
+            lambda: hook_marker_exists(vm, ready) or hook_marker_exists(vm, failed),
+            timeout=60.0,
+            interval=1.0,
+        )
+        assert hook_marker_exists(vm, ready), (
+            "the config-lock holder did not take pfb_dns_config: expected the ready marker, the holder ended first "
+            f"(failed marker present: {hook_marker_exists(vm, failed)}); holder: {holder}"
+        )
+        probe_php = (
+            'require_once("globals.inc"); require_once("util.inc"); '
+            '$x = try_lock("pfb_dns_config", 1); echo is_resource($x) ? "ACQUIRED" : "NULL";'
+        )
+        probe = vm.ssh(f"{PHP_BIN} -r '{probe_php}'").stdout.strip()
+        assert probe == "NULL", f"a fresh process got pfb_dns_config while the holder has it: {probe!r}"
+        yield
+    finally:
+        vm.ssh(f"touch {go}")
+        vm.ssh("/usr/bin/pkill", "-9", "-f", "pfb_ui_config_lock_hold[e]r")
+        vm.ssh("/bin/rm", "-rf", lock_dir)
 
 
 def read_hook_env(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> dict[str, str] | None:
