@@ -51,7 +51,8 @@ if (!class_exists('Form', FALSE)) {
  *
  * Scenario R1: the form of a stored group -> the hidden field holds its stored name, whole and as it is
  * Scenario R2: the form of a group that does not exist yet (an add) -> the hidden field is empty
- * Scenario R3: the form shown again after a refused save -> the hidden field keeps the name the form was posted with
+ * Scenario R3: the field is written from the name $pconfig holds for it, never read from config.xml there (which name $pconfig holds after a
+ *              refused save is decided where it is prepared: GroupsEditLoadedNameRerenderTest)
  */
 final class GroupsEditLoadedNameFieldTest extends TestCase
 {
@@ -122,15 +123,15 @@ final class GroupsEditLoadedNameFieldTest extends TestCase
 		$this->assertSame('', $fields[0]->getAttribute('value'), 'no group is loaded: a new group saves only at a row that is still free');
 	}
 
-	public function testTheFormShownAgainAfterAnErrorKeepsTheNameItWasLoadedWithNotTheOneStoredNow(): void
+	public function testTheHiddenFieldIsWrittenFromTheNamePconfigHoldsForItNotFromTheNameStoredAtTheRow(): void
 	{
-		// Given a save refused for another reason, whose form was loaded for Alpha, while row 0 holds Bravo now
+		// Given $pconfig holding Alpha for the field, while the config holds Bravo at the row
 		$GLOBALS['config'] = ['installedpackages' => ['pfblockerngdnsbl' => ['config' => [['aliasname' => 'Bravo']]]]];
 
-		// When the page shows the form again with what was posted ($pconfig = $_POST)
+		// When the field's own statement runs (the one before it, that prepares $pconfig, does not)
 		$fields = $this->hiddenFields(['conf_type' => 'pfblockerngdnsbl', 'rowid' => 0, 'pconfig' => ['aliasname' => 'Alpha', 'aliasname_loaded' => 'Alpha']], FALSE);
 
-		// Then a second Save is refused as the first was: the field is not refreshed to the group that took the row
+		// Then the field holds Alpha
 		$this->assertCount(1, $fields);
 		$this->assertSame('Alpha', $fields[0]->getAttribute('value'));
 	}

@@ -50,6 +50,7 @@ real settings, plus seeded groups). Two distinct scenarios follow:
 from __future__ import annotations
 
 import contextlib
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -64,6 +65,7 @@ from .test_category_edit import (
     _dnsbl_payload,
     _free_rowid,
     _ipv4_payload,
+    _loaded_name,
     _post_form,
 )
 from .webui import looks_like_login_page, scrape_form_fields
@@ -549,5 +551,78 @@ def test_catalog_feed_append_preserves_existing_group_mode(webui: WebUI, smoke_v
             fields = scrape_form_fields(response.text)
             assert fields["rowid"] == str(rowid), "catalog add must reuse the existing group"
             assert fields["logging"] == "nxdomain_log", "catalog add must preserve the existing group's mode"
+        finally:
+            _del_rowid(vm, CFG_DNSBL, rowid)
+
+
+@pytest.mark.ui_e2e
+def test_addgroup_form_carries_no_loaded_name_and_its_save_is_accepted(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """A Feeds-tab addgroup form carries no loaded name; saving the form as rendered works (#3955).
+
+    Given: the addgroup page of a catalog alias, whose in-memory group already carries the alias's name
+    When:  the page is rendered and the save is posted with the hidden fields it rendered
+    Then:  the loaded name is empty (the row is free), and the group is stored under the name saved
+    """
+    vm = smoke_vm
+    page = webui.get(_ADDGROUP_DNSBL_PAGE)
+    assert page.ok and not looks_like_login_page(page.text), "addgroup GET failed"
+    fields = scrape_form_fields(page.text)
+    free = _free_rowid(vm, CFG_DNSBL)
+    assert fields["rowid"] == str(free), (
+        f"before-state: addgroup must target the next free row {free}: {fields['rowid']!r}"
+    )
+    loaded = _loaded_name(page.text)
+    assert loaded == "", f"the addgroup form must carry no loaded name, not the catalog's alias name: {loaded!r}"
+
+    name = f"smoke3955add{uuid.uuid4().hex[:8]}"
+    with _dnsbl_policy(vm, mode="default", mechanism="enabled"):
+        try:
+            _post_form(
+                webui,
+                _dnsbl_payload(free, name, act="addgroup", atype="ADs_Basic", aliasname_loaded=loaded),
+            )
+            assert helpers.config_get(vm, f"{CFG_DNSBL}/{free}/aliasname") == name, "the addgroup save did not persist"
+        finally:
+            _del_rowid(vm, CFG_DNSBL, free)
+
+
+@pytest.mark.ui_e2e
+def test_catalog_feed_add_form_carries_the_existing_groups_name_and_its_save_is_accepted(
+    webui: WebUI, smoke_vm: helpers.SmokeVM
+) -> None:
+    """A feed added to an existing group loads that group by its stored name; saving the form as rendered works (#3955).
+
+    Given: a stored group named like the alias of the catalog feed (ADs_Basic holds StevenBlack_ADs)
+    When:  the act=add page of that feed is rendered and its save is posted with the hidden fields it rendered
+    Then:  the form edits that group's row and carries its stored name, and the save is accepted
+    """
+    vm = smoke_vm
+    with _alias_name_parked(vm, CFG_DNSBL, "ADs_Basic"), _dnsbl_policy(vm, mode="default", mechanism="enabled"):
+        rowid = _free_rowid(vm, CFG_DNSBL)
+        try:
+            _post_form(webui, _dnsbl_payload(rowid, "ADs_Basic", logging="nxdomain_log"))
+            page = webui.get(_ADD_DNSBL_PAGE)
+            assert page.ok and not looks_like_login_page(page.text), "catalog add GET failed"
+            assert scrape_form_fields(page.text)["rowid"] == str(rowid), (
+                "before-state: the add form edits the stored group"
+            )
+            loaded = _loaded_name(page.text)
+            assert loaded == "ADs_Basic", f"the add form must carry the stored group's name: {loaded!r}"
+
+            _post_form(
+                webui,
+                _dnsbl_payload(
+                    rowid,
+                    "ADs_Basic",
+                    description="feed added",
+                    logging="nxdomain_log",
+                    act="add",
+                    atype="StevenBlack_ADs",
+                    aliasname_loaded=loaded,
+                ),
+            )
+            assert helpers.config_get(vm, f"{CFG_DNSBL}/{rowid}/description") == "feed added", (
+                "the add save did not persist"
+            )
         finally:
             _del_rowid(vm, CFG_DNSBL, rowid)

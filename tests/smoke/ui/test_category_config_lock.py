@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 import pytest
 
 from .. import helpers
+from .render_oracle import input_errors_block, rejection_verdict
 from .test_category import (
     IPV4_LISTS,
     IPV4_PAGE,
@@ -22,12 +23,14 @@ from .test_category import (
 from .test_category_edit import (
     CATEGORY_PAGE,
     CFG_DNSBL,
+    SAVE_TIMEOUT,
     _del_rowid,
     _dnsbl_payload,
     _free_rowid,
     _loaded_name,
     _post_form,
 )
+from .webui import extract_csrf_token
 
 if TYPE_CHECKING:
     from .webui import WebUI
@@ -301,3 +304,39 @@ def test_group_reorder_refuses_a_row_the_list_never_writes_that_way(
         assert stored == [names[2], names[1], names[0]], f"the rN reorder must persist: {stored}"
     finally:
         _restore_lists(vm, snapshot)
+
+
+def test_group_save_without_a_loaded_name_is_refused_and_its_form_shows_none(
+    smoke_vm: helpers.SmokeVM, webui: WebUI
+) -> None:
+    """A Save posted without the loaded name is refused, and the form it answers with carries none.
+
+    Given: group B stored at a row, and a save posted for that row by a page rendered before the field existed
+    When:  it is refused, and the form it answers with is saved again as rendered
+    Then:  the answer carries no loaded name (not B's), the second Save is refused as well, and B is as it was
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    name = f"LockC{uuid.uuid4().hex[:12]}"
+    path = f"{CFG_DNSBL}/{rowid}"
+    try:
+        _post_form(webui, _dnsbl_payload(rowid, name, description="stored"))
+        assert helpers.config_get(vm, f"{path}/aliasname") == name, "before-state: the group is stored"
+
+        get = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
+        data = _dnsbl_payload(rowid, name, description="must not save")
+        data.update({"__csrf_magic": extract_csrf_token(get.text), "save": "save"})
+        first = webui.session.post(webui.url(CATEGORY_PAGE), data=data, verify=webui._verify, timeout=SAVE_TIMEOUT)
+        assert first.ok, f"category POST returned HTTP {first.status_code}"
+        verdict = rejection_verdict(input_errors_block(first.text), SAVE_CHANGED_REFUSAL)
+        assert verdict is None, verdict
+        assert _loaded_name(first.text) == "", "the refused form must carry no loaded name, not the stored group's"
+
+        _post_form(
+            webui,
+            _dnsbl_payload(rowid, name, description="must not save either", aliasname_loaded=_loaded_name(first.text)),
+            expect_rejection=SAVE_CHANGED_REFUSAL,
+        )
+        assert helpers.config_get(vm, f"{path}/description") == "stored", "a refused save must change nothing"
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)

@@ -280,6 +280,20 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertFalse($result['lockHeld']);
 	}
 
+	public function testALoadedNameThatOnlyComparesEqualAsANumberIsNotTheStoredName(): void
+	{
+		// Given Bravo stored as '1e1', and a form that loaded a group called '10': PHP's loose == calls them equal, both are valid names
+		$result = $this->worker('edit', 'plain', ['bravoName' => '1e1', 'post' => ['aliasname' => '1e1', 'aliasname_loaded' => '10']]);
+		$this->assertSame('1e1', $result['before']['installedpackages']['pfblockerngdnsbl']['config'][1]['aliasname'], 'before-state: Bravo is stored as 1e1');
+
+		// Then the save is refused: the names are compared as the strings they are
+		$this->assertCount(1, $result['inputErrors']);
+		$this->assertStringContainsString('changed by another save', $result['inputErrors'][0]);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['before'], $result['disk'], 'nothing is saved');
+		$this->assertFalse($result['lockHeld']);
+	}
+
 	public function testAFormLoadedForAGroupThatIsGoneIsNotSavedBackAsANewGroup(): void
 	{
 		// Given the form loaded for Bravo, which was deleted before this request read config.xml: its old row 1 is free
@@ -703,6 +717,8 @@ final class GroupsPageConfigLockTest extends TestCase
 			'a negative number' => ['ids[0]=r-1&ids[1]=r0'],
 			'a trailing space' => ['ids[0]=r1%20&ids[1]=r0'],
 			'an array' => ['ids[0][]=r1&ids[1]=r0'],
+			'another letter than r' => ['ids[0]=x1&ids[1]=r0'],
+			'an upper-case R' => ['ids[0]=R1&ids[1]=r0'],
 		];
 	}
 
