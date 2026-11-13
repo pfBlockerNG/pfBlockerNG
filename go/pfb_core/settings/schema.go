@@ -89,6 +89,9 @@ func dnsProjection() Projection {
 const (
 	word      = `^[A-Za-z0-9_]+$`
 	printable = `^[^\p{C}<>"]*$` // the Groups editor refuses control characters and < > " in a source
+	// script is none or a plain file name: no "/" or control character, not "." or "..", no leading "-" (RE2 has no lookahead:
+	// a first character that is none of - . /, or a "." followed by a character that is not ".", or ".." and at least one more)
+	script = `^(?:|[^-./\p{C}][^/\p{C}]*|\.[^./\p{C}][^/\p{C}]*|\.\.[^/\p{C}]+)$`
 )
 
 // reservedHeaders are the alias names pfBlockerNG builds itself: DNSBL-IP and the GeoIP continents (pfb_header_reserved_error).
@@ -123,8 +126,8 @@ func feeds(kind string) Projection {
 		{Name: "updateFrequency", Type: TypeEnum, Default: "Never",
 			Enum: []string{"Never", "01hour", "02hours", "03hours", "04hours", "06hours", "08hours", "12hours", "EveryDay", "Weekly"}},
 		{Name: "bindAddress", Type: TypeString, Default: ""},
-		{Name: "preScript", Type: TypeString, Default: "", Pattern: `^[^/\p{C}]*$`},
-		{Name: "postScript", Type: TypeString, Default: "", Pattern: `^[^/\p{C}]*$`},
+		{Name: "preScript", Type: TypeString, Default: "", Pattern: script},
+		{Name: "postScript", Type: TypeString, Default: "", Pattern: script},
 		{Name: "customList", Type: TypeString, Default: ""},
 	}
 	if kind == "ipv4" {
