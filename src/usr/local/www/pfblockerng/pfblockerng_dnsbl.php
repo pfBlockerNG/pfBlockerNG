@@ -202,7 +202,7 @@ $options_global_log_mode	= [	'default'	=> 'Default',
 					'override'	=> 'Override'];
 
 $options_dnsbl_webpage = array();
-$indexdir = '/usr/local/www/pfblockerng/www';
+$indexdir = $pfb['dnsbl_www'];
 if (is_dir("{$indexdir}")) {
 	$list = glob("{$indexdir}/*.{php,html}", GLOB_BRACE);
 	if (!empty($list)) {
@@ -211,7 +211,7 @@ if (is_dir("{$indexdir}")) {
 				continue;
 			} else {
 				$file = basename($line);
-				if (@filesize("/usr/local/www/pfblockerng/www/{$file}") > 0) {
+				if (@filesize("{$pfb['dnsbl_www']}/{$file}") > 0) {
 					$options_dnsbl_webpage = array_merge($options_dnsbl_webpage, array($file => $file));
 				}
 			}
@@ -626,9 +626,9 @@ if ($_POST) {
 		$dnsbl_webpage		= FALSE;
 		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
 		$dnsbl_webpage_file	= pfb_filter(basename($_POST['dnsbl_webpage'] ?? ''), PFB_FILTER_WORD_DOT, 'dnsbl', 'dnsbl_default.php');
-		if (file_exists("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}") &&
-		    @filesize("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}") > 0 &&
-		    pfb_filter(array("/usr/local/www/pfblockerng/www/{$dnsbl_webpage_file}", 'text/html'), PFB_FILTER_FILE_MIME_COMPARE, 'dnsbl')) {
+		if (file_exists("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}") &&
+		    @filesize("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}") > 0 &&
+		    pfb_filter(array("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}", 'text/html'), PFB_FILTER_FILE_MIME_COMPARE, 'dnsbl')) {
 
 			// Check if DNSBL Webpage has been changed.
 			if ($dnsbl_webpage_file != $pfb['dconfig']['dnsbl_webpage']) {
@@ -858,8 +858,6 @@ if ($_POST) {
 
 		if (!$input_errors) {
 			// The fresh read replaced the config the validation above chose the block page in: take the section from it again.
-			// foreign key — out of ADR-29 gateway scope (dnsbl_webpage is out-of-scope; see CfgGatewayTest $out_of_scope)
-			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', $dnsbl_webpage_file);
 			$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 
 			// issue #3288: facade runs BEFORE persisting the submitted policy choice.
@@ -868,6 +866,8 @@ if ($_POST) {
 			if (pfb_dnsbl_policy_upgrade()) {
 				$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 			}
+			// The chosen block page is saved with the section below, never before: the facade above writes config.xml by itself
+			$pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
 
 			$pfb_top1m_settings_before = array(
 				'enable'   => PfbConfig::read('dnsbl/top1m_enable')->toStored(),
@@ -972,9 +972,6 @@ if ($_POST) {
 			if ($pfb_top1m_token_post !== '') {
 				$pfb['dconfig']['top1m_token'] = $pfb_top1m_token_post;
 			}
-			if ($pfb_top1m_identity_changed) {
-				pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
-			}
 
 			$pfb['dconfig']['top1m_count']		= $_POST['top1m_count']							?: '1000';
 			$pfb['dconfig']['top1m_inclusion']	= implode(',', (array) $_POST['top1m_inclusion']);
@@ -984,9 +981,8 @@ if ($_POST) {
 				'tld'      => $pfb['dconfig']['top1m_inclusion'],
 				'provider' => $pfb['dconfig']['top1m_source'],
 			);
-			if (pfb_top1m_settings_reprocess($pfb_top1m_settings_before, $pfb_top1m_settings_after)) {
-				touch("{$pfb['dbdir']}/top-1m.update");
-			}
+			// issue #3922: the TOP1M baseline, the rebuild marker and the served block page change only once write_config() succeeded (below)
+			$pfb_top1m_reprocess = pfb_top1m_settings_reprocess($pfb_top1m_settings_before, $pfb_top1m_settings_after);
 			// 0 (unlimited) is meaningful; ctype_digit keeps "0", else fall back to the default.
 			$pfb['dconfig']['pfb_py_cache_max']	= ctype_digit((string) $_POST['pfb_py_cache_max']) ? (string) ((int) $_POST['pfb_py_cache_max']) : '10000';
 
@@ -997,9 +993,7 @@ if ($_POST) {
 			$pfb['dconfig']['dnsbl_interface']	= $_POST['dnsbl_interface']						?: 'lo0';
 
 			// Replace DNSBL active blocked webpage with user selection
-			if ($dnsbl_webpage || !file_exists('/usr/local/www/pfblockerng/www/dnsbl_active.php')) {
-				@copy("/usr/local/www/pfblockerng/www/{$pfb['dconfig']['dnsbl_webpage']}", '/usr/local/www/pfblockerng/www/dnsbl_active.php');
-			}
+			$pfb_dnsbl_page_copy = $dnsbl_webpage || !file_exists("{$pfb['dnsbl_www']}/dnsbl_active.php");
 
 			// Flush the bulk DNSBL settings snapshot FIRST. writeSection() replaces the whole
 			// pfblockerngdnsblsettings/config/0 section with $pfb['dconfig'], which does NOT carry
@@ -1035,6 +1029,18 @@ if ($_POST) {
 			try {
 				if (!$input_errors) {
 					$pfb_written = write_config('[pfBlockerNG] save DNSBL settings');
+				}
+				// Under the lock, so two saves cannot leave the served block page out of step with config.xml
+				if ($pfb_written !== FALSE && $pfb_written !== -1) {
+					if ($pfb_top1m_identity_changed) {
+						pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
+					}
+					if ($pfb_top1m_reprocess) {
+						touch("{$pfb['dbdir']}/top-1m.update");
+					}
+					if ($pfb_dnsbl_page_copy) {
+						@copy("{$pfb['dnsbl_www']}/{$pfb['dconfig']['dnsbl_webpage']}", "{$pfb['dnsbl_www']}/dnsbl_active.php");
+					}
 				}
 			} finally {
 				unlock($pfb_config_lock);

@@ -291,6 +291,139 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->assertStringContainsString('did not answer', $result['settingsFailed']);
 	}
 
+	// ----- W2: the DNSBL save's file side effects (issue #3922) -----
+
+	/** The TOP1M download's baseline files the save invalidates when the provider changes: all of them, as the worker seeds them. */
+	private const BASELINE = ['.orig', '.xxhash128', '.md5', '.source', '.orig.etag', '.orig.lastmod'];
+	/** The posts that give every side effect its trigger: a new TOP1M provider (baseline), a new count (rebuild marker). */
+	private const TRIGGERS = ['top1m_source' => 'majestic', 'top1m_count' => '2000'];
+
+	/** @return array<string, array{string, bool, bool}> the worker scenario, whether Core refuses the dry run, and whether the page reports an input error */
+	public static function unwrittenSaves(): array
+	{
+		return [
+			'Core refuses the settings' => ['plain', TRUE, TRUE],
+			'write refused'             => ['write_refused', FALSE, TRUE],
+			'file write failed'         => ['write_failed', FALSE, TRUE],
+			'write throws'              => ['write_throws', FALSE, FALSE],
+		];
+	}
+
+	#[DataProvider('unwrittenSaves')]
+	public function testASaveThatIsNotWrittenLeavesTheTop1mBaselineTheRebuildMarkerAndTheBlockPageAlone(string $scenario, bool $coreRefuses, bool $inputError): void
+	{
+		// Given a Core that refuses the settings (or accepts them, with pfSense then failing the write), and a save that posts a new
+		// block page, a new TOP1M provider and a new TOP1M count
+		$socket = $this->core($coreRefuses ? ['ValidateSettings' => self::refusal('hstsNullBlocking')] : self::accepting());
+
+		$result = $this->save('DnsblSaveWorker', $scenario, ['core' => ['socket' => $socket], 'post' => self::TRIGGERS + ['pfb_hsts' => 'on']]);
+
+		// Then the save failed, and before it all three effects were waiting to happen: the baseline in place, no marker, the old page
+		$this->assertSame($inputError, $result['inputErrors'] !== [], 'the save was not written, and the page says so unless it threw');
+		['before' => $before, 'after' => $after] = $result['effects'];
+		$this->assertSame(['baseline' => self::BASELINE, 'updateMarker' => FALSE, 'activePage' => 'ACTIVE ORIGINAL'], $before, 'before the save');
+		$this->assertSame($before, $after, 'a save that was not written must leave the TOP1M baseline, the TOP1M rebuild marker and the served block page as they were');
+		$this->assertSame([$before], $result['effects']['atUnlock'], 'the lock was released once, with nothing done yet');
+	}
+
+	public function testAnAcceptedDnsblSaveInvalidatesTheTop1mBaselineRequestsTheRebuildAndServesTheNewBlockPage(): void
+	{
+		$socket = $this->core(self::accepting());
+
+		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => self::TRIGGERS]);
+
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame([self::DNSBL_SAVE], $result['writes']);
+		['before' => $before, 'after' => $after] = $result['effects'];
+		$this->assertSame(['baseline' => self::BASELINE, 'updateMarker' => FALSE, 'activePage' => 'ACTIVE ORIGINAL'], $before, 'before the save');
+		$this->assertSame(['baseline' => [], 'updateMarker' => TRUE, 'activePage' => 'ALTERNATIVE PAGE'], $after, 'after the save');
+	}
+
+	public function testAnAcceptedDnsblSaveRunsItsFileSideEffectsBeforeItReleasesTheConfigLock(): void
+	{
+		// Given an accepted save that gives every effect its trigger
+		$socket = $this->core(self::accepting());
+
+		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => self::TRIGGERS]);
+
+		// Then the lock was released once, and by then the baseline, the marker and the served page were all done: another save
+		// cannot take the lock between the write and the effects and leave the served block page out of step with config.xml
+		$effects = $result['effects'];
+		$this->assertSame([self::DNSBL_SAVE], $result['writes']);
+		$this->assertSame(['baseline' => self::BASELINE, 'updateMarker' => FALSE, 'activePage' => 'ACTIVE ORIGINAL'], $effects['before'], 'before the save');
+		$this->assertSame([$effects['after']], $effects['atUnlock'], 'the effects belong under the config lock');
+		$this->assertSame(['baseline' => [], 'updateMarker' => TRUE, 'activePage' => 'ALTERNATIVE PAGE'], $effects['after'], 'after the save');
+	}
+
+	private const MIGRATION_SAVE = 'pfBlockerNG: migrated DNSBL global logging policy to Default/Override (issue #3288)';
+	private const BLOCK_PAGE = 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage';
+
+	/** @param array<string, mixed> $config */
+	private static function storedBlockPage(array $config): mixed
+	{
+		return $config['installedpackages']['pfblockerngdnsblsettings']['config'][0]['dnsbl_webpage'] ?? NULL;
+	}
+
+	public function testACoreRefusedSaveOverAPreMigrationPolicyDoesNotStoreTheChosenBlockPageThroughTheUpgradeFacade(): void
+	{
+		// Given a stored policy the upgrade facade has to migrate, which it writes to config.xml in the middle of the save, and a
+		// Core that refuses the save that picks another block page
+		$socket = $this->core(['ValidateSettings' => self::refusal('hstsNullBlocking')]);
+
+		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on'], 'seed' => ['migrated' => FALSE]]);
+
+		// Then the facade's write happened (so the save was in a position to persist the page), config.xml still names the old page,
+		// the served page is the old one, and a later save still copies the page it chooses
+		$this->assertSame([self::refusedMessage('hstsNullBlocking')], $result['inputErrors']);
+		$this->assertSame([self::MIGRATION_SAVE], $result['writes'], 'the facade wrote config.xml itself; the refused save wrote nothing');
+		$this->assertSame('dnsbl_default.php', self::storedBlockPage($result['before']), 'before the save');
+		$this->assertSame('dnsbl_default.php', self::storedBlockPage($result['disk']), 'a refused save stores the block page it chose');
+		$this->assertSame('ACTIVE ORIGINAL', $result['effects']['after']['activePage']);
+	}
+
+	public function testAnAcceptedSaveOverAPreMigrationPolicyStoresTheChosenBlockPageAndServesIt(): void
+	{
+		$socket = $this->core(self::accepting());
+
+		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on'], 'seed' => ['migrated' => FALSE]]);
+
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame([self::MIGRATION_SAVE, self::DNSBL_SAVE], $result['writes'], 'the facade writes, then the save');
+		$this->assertSame('dnsbl_default.php', self::storedBlockPage($result['before']), 'before the save');
+		$this->assertSame('dnsbl_alt.php', self::storedBlockPage($result['disk']), 'the save stores the block page it chose');
+		$this->assertSame('ALTERNATIVE PAGE', $result['effects']['after']['activePage'], 'and serves it');
+	}
+
+	/** @return array<string, array{array<string, string>, array<string, mixed>, list<string>, bool, string}> each trigger on its own: posts, case, baseline left, marker, served page */
+	public static function sideEffectTriggers(): array
+	{
+		$still = ['webpageChanged' => FALSE];
+		return [
+			'a new TOP1M provider invalidates only the baseline'     => [['top1m_source' => 'majestic'], $still, [], FALSE, 'ACTIVE ORIGINAL'],
+			'a new TOP1M count requests only the rebuild'            => [['top1m_count' => '2000'], $still, self::BASELINE, TRUE, 'ACTIVE ORIGINAL'],
+			'a new block page replaces only the served page'         => [[], [], self::BASELINE, FALSE, 'ALTERNATIVE PAGE'],
+			'a block page that is missing is served again unchanged' => [[], ['webpageChanged' => FALSE, 'activePage' => NULL], self::BASELINE, FALSE, 'ALTERNATIVE PAGE'],
+			'an unchanged save touches none of them'                 => [[], $still, self::BASELINE, FALSE, 'ACTIVE ORIGINAL'],
+		];
+	}
+
+	/**
+	 * @param array<string, string> $post
+	 * @param array<string, mixed> $case
+	 * @param list<string> $baseline
+	 */
+	#[DataProvider('sideEffectTriggers')]
+	public function testAnAcceptedDnsblSavePerformsEachFileSideEffectOnlyForItsOwnTrigger(array $post, array $case, array $baseline, bool $marker, string $servedPage): void
+	{
+		$socket = $this->core(self::accepting());
+
+		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => $post] + $case);
+
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame([self::DNSBL_SAVE], $result['writes'], 'the save was written');
+		$this->assertSame(['baseline' => $baseline, 'updateMarker' => $marker, 'activePage' => $servedPage], $result['effects']['after']);
+	}
+
 	// ----- W3: General -----
 
 	/**
@@ -354,6 +487,36 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->assertSame([], $scope['input_errors']);
 		$this->assertSame([self::GENERAL_SAVE], $GLOBALS['pfb_test_write_config_calls']);
 		$this->assertStringContainsString('did not answer', (string) @file_get_contents($GLOBALS['pfb']['core_settings_failed']));
+	}
+
+	// ----- W3: General, past the verdict: the schedule-cache branch and its redirect -----
+
+	public function testACoreRefusedGeneralSaveSkipsTheScheduleCacheBranchAndRendersTheErrors(): void
+	{
+		$socket = $this->core(['ValidateSettings' => self::refusal('metricsClientIp')]);
+
+		$result = $this->save('GeneralSaveWorker', 'plain', ['core' => ['socket' => $socket]]);
+
+		$this->assertSame([self::refusedMessage('metricsClientIp')], $result['inputErrors']);
+		$this->assertTrue($result['returned'], 'the page renders the errors, rather than exiting through its redirect');
+		$this->assertFalse($result['synced'], 'a refused save applies nothing');
+		$this->assertNull($result['syncSawSave']);
+		$this->assertNull($result['redirect'], 'a refused save redirects nowhere');
+		$this->assertSame([], $result['writes'], 'nothing is written');
+	}
+
+	public function testAnAcceptedGeneralSaveRunsTheScheduleCacheBranchSyncsAndRedirects(): void
+	{
+		$socket = $this->core(self::accepting());
+
+		$result = $this->save('GeneralSaveWorker', 'plain', ['core' => ['socket' => $socket]]);
+
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame([self::GENERAL_SAVE], $result['writes'], 'the save was written');
+		$this->assertTrue($result['synced'], 'the saved settings are applied');
+		$this->assertTrue($result['syncSawSave'], 'the sync runs as a save: the page sets its save flag first');
+		$this->assertFalse($result['returned'], 'the save ends in its redirect');
+		$this->assertSame('Location: /pfblockerng/pfblockerng_general.php', $result['redirect'], 'the schedule cache was generated: the plain page, no failure flag');
 	}
 
 	public function testAGeneralSaveKeepsWhatAnotherWriterChangedInAnotherSectionSinceThePageLoaded(): void
