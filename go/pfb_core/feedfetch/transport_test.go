@@ -1,8 +1,9 @@
 package feedfetch_test
 
-// Transfer behaviour the parity corpus cannot drive on the PHP side yet (it needs TLS and forward-proxy fixtures there),
-// pinned against the PHP source directly: cURL flex (pfb_download_fetch, cURL 35/51/60), the system proxy
-// (pfb_global(), CURLOPT_PROXY*), a body over the ceiling without a declared length, and the rsync wall deadline (#2876).
+// Transfer behaviour pinned beside the parity corpus. TLS Flex and the system proxy are corpus rows now (tls-*, proxy-*,
+// proxy-credentials-*); what stays here is Core's own side of them: Flex over a pinned address, the proxy's
+// credentials sent on the first request (PHP sends none, a documented divergence), a body over the ceiling without a
+// declared length, and the rsync wall deadline (#2876).
 
 import (
 	"context"

@@ -7,6 +7,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/support/HttpFixtureReadiness.php';
+require_once __DIR__ . '/support/FeedFetchCorpusNet.php';
 
 /**
  * The feed-transfer parity corpus (#3905) driven against today's PHP: every scenario under
@@ -25,6 +26,19 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  *                   rsync_source the stand-in's second-to-last argument.
  *   old_expect      a step's optional override, present only where Core differs from this path on purpose (never equal
  *                   to expect, which the Go runner asserts); this runner asserts it in place of expect.
+ * TLS and proxy (the schema of go/pfb_core/feedfetch/corpus_test.go):
+ *   servers         an entry may be an object {name, tls: true, cert: "trusted"|"untrusted", plain_too}: `php -S` behind a
+ *                   TLS front (tests/feedfetch/fixtures/net_fixture.py tls) whose certificate comes from a test CA made
+ *                   here, at test time. PHP trusts that CA through $pfb['curl_defaults'][CURLOPT_CAINFO], the option
+ *                   pfb_download() applies to its handle; the "untrusted" certificate is self-signed and not signed by
+ *                   it. With plain_too the same port also serves plain http (the first byte decides), so a redirect can
+ *                   change the scheme and nothing else. Each TLS connection is recorded as {server, tls: "connect"}.
+ *   proxy           {server, auth: {user, password}, requires: {user, password}}: the system proxy. `server` names a
+ *                   forward proxy this runner starts (net_fixture.py proxy; "closed" is nothing listening) and `auth`
+ *                   is the system proxy's user and password. The proxy settings go through config
+ *                   system/proxyurl|proxyport|proxyuser|proxypass and the real pfb_global(), which turns them into
+ *                   $pfb['curl_defaults']; `requires` makes the proxy demand those Basic credentials (407 otherwise).
+ *   step.flex       the feed's Flex flag (PfbDownloadRequest::$flex, pfb_update_check()'s $pflex).
  * Scheduler state that is not transfer behaviour is reset before a probe: the list file exists, no failure marker.
  */
 #[CoversFunction('pfb_download')]
@@ -67,13 +81,18 @@ final class FeedFetchParityCorpusTest extends TestCase
 				$this->savedGlobals[$g] = $GLOBALS[$g];
 			}
 		}
-		foreach (['log', 'errlog', 'pnow', 'dbdir', 'mime_types', 'skipfeed', 'failed', 'runlog', 'runlog_active',
+		foreach (['log', 'errlog', 'pnow', 'dbdir', 'mime_types', 'skipfeed', 'failed', 'runlog', 'runlog_active', 'config',
 			'curl_defaults', 'curl_retry_sleep', 'rsync_bin', 'rsync_max_bytes', 'local_max_bytes', 'cron_update'] as $k) {
 			if (array_key_exists($k, $GLOBALS['pfb'] ?? [])) {
 				$this->savedPfb[$k] = $GLOBALS['pfb'][$k];
 			}
 		}
 		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
+		// A case starts as a process that has not yet read a system proxy: pfb_global() adds either the proxy options or
+		// TCP fast-open to $pfb['curl_defaults'] and never removes the other, so an earlier test's choice must not stay.
+		foreach ([CURLOPT_PROXY, CURLOPT_PROXYPORT, CURLOPT_PROXYAUTH, CURLOPT_PROXYUSERPWD, CURLOPT_TCP_FASTOPEN] as $opt) {
+			unset($GLOBALS['pfb']['curl_defaults'][$opt]);
+		}
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb']['dbdir'] = $this->dir;
 		$GLOBALS['pfb']['log'] = "{$base}/pfblockerng.log";
@@ -97,7 +116,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 		foreach ($this->savedPfb as $k => $v) {
 			$GLOBALS['pfb'][$k] = $v;
 		}
-		foreach (['dbdir', 'log', 'errlog', 'pnow', 'skipfeed', 'failed', 'mime_types', 'curl_defaults', 'curl_retry_sleep',
+		foreach (['dbdir', 'log', 'errlog', 'pnow', 'skipfeed', 'failed', 'mime_types', 'config', 'curl_defaults', 'curl_retry_sleep',
 			'rsync_bin', 'rsync_max_bytes', 'local_max_bytes', 'cron_update'] as $k) {
 			if (!array_key_exists($k, $this->savedPfb)) {
 				unset($GLOBALS['pfb'][$k]);
@@ -146,8 +165,23 @@ final class FeedFetchParityCorpusTest extends TestCase
 		$closed = stream_socket_server('tcp://127.0.0.1:0');
 		$this->ports['closed'] = (int) substr(strrchr((string) stream_socket_get_name($closed, FALSE), ':'), 1);
 		fclose($closed);
-		foreach ($case['servers'] ?? [] as $name) {
-			$this->startServer($name);
+		$pki = NULL;
+		foreach ($case['servers'] ?? [] as $spec) {
+			$spec = is_string($spec) ? ['name' => $spec] : $spec;
+			$tls = NULL;
+			if (($spec['tls'] ?? FALSE) === TRUE) {
+				$pki ??= pfb_test_corpus_pki("{$this->tools}/pki");
+				$cert = $pki[$spec['cert']] ?? $this->fail("server {$spec['name']}: cert must be trusted or untrusted");
+				$tls = $cert + ['plain_too' => ($spec['plain_too'] ?? FALSE) === TRUE];
+			}
+			$this->startServer($spec['name'], $tls);
+		}
+		$curlDefaults = $this->savedPfb['curl_defaults'] ?? [];
+		if ($pki !== NULL) {
+			$curlDefaults[CURLOPT_CAINFO] = $pki['ca'];
+		}
+		if (isset($case['proxy'])) {
+			$curlDefaults = $this->systemProxy($case['proxy']) + $curlDefaults;
 		}
 		$routes = $case['routes'] ?? [];
 
@@ -162,7 +196,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			file_put_contents("{$this->tools}/rsync.body", (string) ($step['rsync']['body'] ?? ''));
 			file_put_contents("{$this->tools}/rsync.exit", (string) ($step['rsync']['exit'] ?? 0));
 			$ceiling = $step['ceiling'] ?? PFB_DOWNLOAD_MAX_BYTES;
-			$GLOBALS['pfb']['curl_defaults'] = [CURLOPT_MAXFILESIZE_LARGE => $ceiling] + ($this->savedPfb['curl_defaults'] ?? []);
+			$GLOBALS['pfb']['curl_defaults'] = [CURLOPT_MAXFILESIZE_LARGE => $ceiling] + $curlDefaults;
 			$GLOBALS['pfb']['rsync_max_bytes'] = $ceiling;
 			$GLOBALS['pfb']['local_max_bytes'] = $ceiling;
 			$url = $this->expand($step['url']);
@@ -173,7 +207,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 				$result = pfb_download(new PfbDownloadRequest(
 					listUrl: $url,
 					downloadPath: $base,
-					flex: FALSE,
+					flex: $step['flex'] ?? FALSE,
 					header: self::FEED,
 					format: $format,
 					logType: 1,
@@ -188,7 +222,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 				touch("{$this->dir}/" . self::FEED . '.txt');
 				@unlink("{$this->dir}/" . self::FEED . '.fail');
 				$GLOBALS['pfb']['cron_update'] = FALSE;
-				$verdict = pfb_update_check(self::FEED, $url, $this->dir, $this->dir, FALSE, $format, '');
+				$verdict = pfb_update_check(self::FEED, $url, $this->dir, $this->dir, $step['flex'] ?? FALSE, $format, '');
 				$decision = $verdict === NULL ? 'failed' : ($GLOBALS['pfb']['cron_update'] ? 'changed' : 'unchanged');
 				$actual['ok'] = $decision !== 'failed';
 				$actual['decision'] = $decision;
@@ -209,6 +243,10 @@ final class FeedFetchParityCorpusTest extends TestCase
 				if (!isset($want['requests'][$n]['host'])) {
 					unset($actual['requests'][$n]['host']);
 				}
+				ksort($actual['requests'][$n]);
+			}
+			foreach (array_keys($want['requests']) as $n) {
+				ksort($want['requests'][$n]);
 			}
 			$want += ['etag' => $seed['etag'] ?? NULL, 'lastmod' => $seed['lastmod'] ?? NULL,
 				'digest' => $seed['digest'] ?? NULL, 'staged' => FALSE, 'rsync_source' => NULL];
@@ -288,7 +326,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 		return $found;
 	}
 
-	private function startServer(string $name): void
+	private function startServer(string $name, ?array $tls = NULL): void
 	{
 		$failures = [];
 		for ($try = 0; $try < 10; $try++) {
@@ -312,7 +350,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			for ($i = 0; $port > 0 && $i < 40; $i++) {
 				if (pfb_test_http_fixture_event_received($port, $nonce)) {
 					$this->servers[$name] = $proc;
-					$this->ports[$name] = $port;
+					$this->ports[$name] = $tls === NULL ? $port : $this->startTlsFront($name, $tls, $port);
 					return;
 				}
 				usleep(50000);
@@ -322,5 +360,67 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$failures[] = "port {$port}: " . trim((string) @file_get_contents($stderr));
 		}
 		$this->fail("could not start corpus server {$name}: " . implode(' | ', $failures));
+	}
+
+	/** The TLS front of the `php -S` server $name (net_fixture.py tls); returns its port, the one a feed URL names. */
+	private function startTlsFront(string $name, array $cert, int $backend): int
+	{
+		$stderr = "{$this->tools}/{$name}-tls.stderr";
+		$args = ['tls', '--name', $name, '--log', "{$this->tools}/requests.log",
+			'--cert', $cert['cert'], '--key', $cert['key'], '--backend', (string) $backend];
+		if ($cert['plain_too']) {
+			$args[] = '--plain-too';
+		}
+		$started = pfb_test_corpus_net_fixture($args, $stderr);
+		if ($started === NULL) {
+			$this->fail("could not start the TLS front of {$name}: " . trim((string) @file_get_contents($stderr)));
+		}
+		$this->servers["{$name}:tls"] = $started[0];
+		return $started[1];
+	}
+
+	/**
+	 * The system proxy as pfSense keeps it (system/proxyurl, proxyport, proxyuser, proxypass), read by the real
+	 * pfb_global() into $pfb['curl_defaults']; returns the proxy options that left in it.
+	 *
+	 * @return array<int,mixed>
+	 */
+	private function systemProxy(array $proxy): array
+	{
+		$name = $proxy['server'];
+		if ($name === 'closed') {
+			$port = $this->ports['closed'];
+		} else {
+			$args = ['proxy', '--name', $name, '--log', "{$this->tools}/requests.log"];
+			if (isset($proxy['requires'])) {
+				array_push($args, '--user', $proxy['requires']['user'], '--password', $proxy['requires']['password']);
+			}
+			$stderr = "{$this->tools}/{$name}.stderr";
+			$started = pfb_test_corpus_net_fixture($args, $stderr);
+			if ($started === NULL) {
+				$this->fail("could not start the corpus proxy {$name}: " . trim((string) @file_get_contents($stderr)));
+			}
+			$this->servers[$name] = $started[0];
+			$port = $this->ports[$name] = $started[1];
+		}
+		$system = ['proxyurl' => '127.0.0.1', 'proxyport' => (string) $port];
+		if (isset($proxy['auth'])) {
+			$system += ['proxyuser' => $proxy['auth']['user'], 'proxypass' => $proxy['auth']['password']];
+		}
+		foreach ($system as $leaf => $value) {
+			config_set_path("system/{$leaf}", $value);
+		}
+		// What the rest of pfb_global() reads without a default; none of it touches the transfer.
+		config_set_path('installedpackages/pfblockerng/config/0/skipfeed', '0');
+		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport', '8081');
+		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport_ssl', '8443');
+		$GLOBALS['g']['unbound_chroot_path'] ??= '/var/unbound';
+		pfb_global();
+		$defaults = $GLOBALS['pfb']['curl_defaults'];
+		$this->assertSame('127.0.0.1', $defaults[CURLOPT_PROXY] ?? NULL, 'pfb_global() reads system/proxyurl');
+		$this->assertArrayNotHasKey(CURLOPT_TCP_FASTOPEN, $defaults, 'with a proxy there is no TCP fast-open');
+		return array_intersect_key($defaults,
+			array_flip([CURLOPT_PROXY, CURLOPT_PROXYPORT, CURLOPT_PROXYAUTH, CURLOPT_PROXYUSERPWD]));
 	}
 }
