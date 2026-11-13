@@ -19,7 +19,7 @@ import json
 import os
 import shlex
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -43,6 +43,7 @@ HSTS = f"{h.CFG_DNSBL_SETTINGS}/pfb_hsts"
 CORE_STATE = "/usr/local/etc/pfb_core"
 CONFIG_HISTORY = "/conf/backup/config-*.xml"
 SAVE_MESSAGE = "pfBlockerNG Core saved the DNS settings"
+RETIRED_SETTINGS = ("settings.json", "settings.json.tmp", "settings.lock")
 ADAPTER = "/usr/local/pkg/pfblockerng/pfb_core_settings.sh"
 
 
@@ -192,6 +193,11 @@ def config_history(vm: SmokeVM) -> set[str]:
     return set(listing.stdout.split())
 
 
+def retired_settings_present(state_dir: str, exists: Callable[[str], bool]) -> list[str]:
+    """The #3842/#3913 settings files still in ``state_dir``, each asked on its own: one missing never hides another."""
+    return [f"{state_dir}/{name}" for name in RETIRED_SETTINGS if exists(f"{state_dir}/{name}")]
+
+
 def newest_config_backup(vm: SmokeVM) -> str:
     """The newest Config History backup: the configuration the last write_config() replaced."""
     listing = vm.ssh(f"ls -t {CONFIG_HISTORY} | head -n 1", timeout=30)
@@ -218,8 +224,8 @@ def test_the_install_leaves_no_settings_file_for_core(core_vm: SmokeVM) -> None:
     """Core keeps no settings store: config.xml is it, so the state directory never holds a settings file."""
     lock = core_vm.ssh(f"test -f {CORE_STATE}/core.lock", timeout=30)
     assert lock.returncode == 0, f"before-state: {CORE_STATE} must be the running Core's directory (its lock is there)"
-    retired = [f"{CORE_STATE}/{name}" for name in ("settings.json", "settings.json.tmp", "settings.lock")]
-    stray = [path for path in retired if core_vm.ssh(f"test -e {path}", timeout=30).returncode == 0]
+    on_box = lambda path: core_vm.ssh(f"test -e {path}", timeout=30).returncode == 0  # noqa: E731
+    stray = retired_settings_present(CORE_STATE, on_box)
     assert stray == [], f"a settings store is left in Core's state directory: {stray}"
 
 
