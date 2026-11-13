@@ -1183,7 +1183,8 @@ def _core_own_requires(source_tree: Path | None) -> set[tuple[str, str]]:
     required: set[tuple[str, str]] = set()
     block = ""  # the directive of the `name (` block the line is in
     for line in text.splitlines():
-        fields = line.split("//")[0].split()  # `// indirect` and comments carry no module
+        # `// indirect` and comments carry no module; Go reads `require(` as `require (`
+        fields = line.split("//")[0].replace("(", " ( ").split()
         if not fields:
             continue
         if fields == [")"]:

@@ -246,7 +246,7 @@ def _parse_go_mod(path: Path) -> tuple[list[tuple[str, str]], bool]:
     replaced = False
     block = ""
     for line in path.read_text(encoding="utf-8").splitlines():
-        fields = line.split("//")[0].split()
+        fields = line.split("//")[0].replace("(", " ( ").split()  # Go reads `require(` as `require (`
         if not fields:
             continue
         if fields == [")"]:
