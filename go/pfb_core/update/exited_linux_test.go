@@ -1,7 +1,6 @@
 package update
 
 import (
-	"os"
 	"os/exec"
 	"testing"
 )
@@ -39,13 +38,21 @@ func TestAnExitedChildIsExitedAndStaysUnreaped(t *testing.T) {
 func TestARunningChildIsNotExited(t *testing.T) {
 	cmd := start(t, "sleep", "60")
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	if exitedUnreaped(cmd.Process.Pid) {
+	checked := make(chan bool, 1)
+	go func() { checked <- exitedUnreaped(cmd.Process.Pid) }()
+	if recv(t, checked, "the check blocked on a running child") {
 		t.Fatal("a running child was reported exited")
 	}
 }
 
 func TestAProcessThatIsNotAChildIsExited(t *testing.T) {
-	if !exitedUnreaped(os.Getppid()) {
+	if !exitedUnreaped(1) { // init: never this test's child
 		t.Fatal("a process of someone else's was reported running")
+	}
+}
+
+func TestACheckThatCannotBeAnsweredIsNotExited(t *testing.T) {
+	if exitedUnreaped(-1) { // waitid(P_PID, -1) is EINVAL
+		t.Fatal("an unanswerable check reported exited: Run would leave a running program's group alone")
 	}
 }
