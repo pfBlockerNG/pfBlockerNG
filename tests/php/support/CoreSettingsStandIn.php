@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * A stand-in for the Core API's Unix socket (go/pfb_core) for the tests of the pages that validate and push settings: serves
+ * A stand-in for the Core API's Unix socket (go/pfb_core) for the tests of the pages that validate settings and tell Core they changed: serves
  * one connection after another until it is killed (it gives up after 120 s), answers each request from a script, and appends
  * one JSON line per request to the record file: {"method": "<Method>", "body": <the request's JSON object>}. Prints "ready"
  * once it listens.

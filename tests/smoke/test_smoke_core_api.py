@@ -3,9 +3,11 @@
 * PHP gets the documented version reply through pfb_core_call() (docs/misc/core-api-protocol.md);
 * pfb-core holds no network socket, so no other host can reach it: its only listener is the Unix socket;
 * the socket's directory is root's alone, so an unprivileged local user cannot connect, while root can;
-* issue #3913: config.xml is the authority for ``settings/dns``: the install leaves Core holding what config.xml says,
-  a change made without a page (a restore) reaches Core with the next tick, and a Core that was down when the setting
-  changed gets it from the start of the service.
+* issue #3924: config.xml is the only store of ``settings/dns``: Core keeps no settings file and reads config.xml
+  through the settings adapter. The install leaves Core at the revision config.xml projects, a change made without a
+  page (or an older config restored) reaches Core with the next tick, a Core that was down when the setting changed
+  reads it at its start, and a Core ``SaveSettings`` changes config.xml through the adapter and leaves a config history
+  entry.
 
 The module deploys the branch package once; its install starts the service, and the socket is awaited (bounded) before
 anything is asked of it.
@@ -32,12 +34,15 @@ VERSION = {"service": "pfblockerng-core", "apiVersion": "v1", "status": "serving
 OPEN, CLOSE = "<<<CORE>>>", "<<<CORE-END>>>"
 # Outer bound on the service coming up after the install: salvage only, never an assertion about duration.
 READY_WATCHDOG = 60.0
-# Outer bound on a push reaching Core (the service's start, a tick): salvage only, never an assertion about duration.
-PUSH_WATCHDOG = 90.0
+# Outer bound on Core reading a change (the service's start, a tick): salvage only, never an assertion about duration.
+SYNC_WATCHDOG = 90.0
 CORE_RC = "/usr/local/etc/rc.d/pfb_core.sh"
 PHP = "/usr/local/bin/php"
 PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 HSTS = f"{h.CFG_DNSBL_SETTINGS}/pfb_hsts"
+CORE_STATE = "/usr/local/etc/pfb_core"
+CONFIG_HISTORY = "/conf/backup/config-*.xml"
+SAVE_MESSAGE = "pfBlockerNG Core saved the DNS settings"
 
 
 @pytest.fixture(scope="module")
@@ -128,7 +133,7 @@ def core_dns(vm: SmokeVM) -> tuple[int, dict[str, Any] | None] | None:
     return int(body.get("revision", 0)), held
 
 
-def await_core_dns(vm: SmokeVM, want: dict[str, Any], *, watchdog: float = PUSH_WATCHDOG) -> int:
+def await_core_dns(vm: SmokeVM, want: dict[str, Any], *, watchdog: float = SYNC_WATCHDOG) -> int:
     """Block until Core's ``settings/dns`` equals ``want``; returns its revision. The watchdog only salvages."""
     deadline = time.monotonic() + watchdog
     while True:
@@ -149,10 +154,41 @@ def await_core_up(vm: SmokeVM, *, watchdog: float = READY_WATCHDOG) -> None:
         time.sleep(1)
 
 
-def push_now(vm: SmokeVM) -> None:
-    """The service start's forced push, run by hand: Core holds config.xml's settings afterwards."""
-    reason = php_json(vm, "pfb_core_settings_push(NULL, TRUE)")
-    assert reason is None, f"the push to Core failed: {reason}"
+def config_revision(vm: SmokeVM) -> int:
+    """The revision config.xml projects for ``settings/dns``: what the settings adapter answers a read with."""
+    revision: int = php_json(vm, "pfb_core_settings_revision(['dns' => pfb_core_dns_settings()])")
+    return revision
+
+
+def tell_core(vm: SmokeVM) -> None:
+    """A page save's notice, run by hand: Core reads config.xml again through its adapter, whatever it holds."""
+    reason = php_json(vm, "pfb_core_settings_changed(NULL, TRUE)")
+    assert reason is None, f"Core was not told that the settings changed: {reason}"
+
+
+def run_tick(vm: SmokeVM) -> None:
+    """One tick by hand: it tells Core when config.xml moved past the revision Core holds."""
+    h.wait_no_active_pfb_task(vm)
+    tick = vm.ssh(f"{PHP} {PFB_PHP} tick 2>&1", timeout=180)
+    assert tick.returncode == 0, f"the tick failed: {tick.stdout}"
+
+
+def core_save_hsts(vm: SmokeVM, revision: int, value: bool) -> dict[str, Any]:
+    """Core's ``SaveSettings`` of hstsNullBlocking at ``revision``: the reply as ``pfb_core_call`` gives it."""
+    flag = "TRUE" if value else "FALSE"
+    reply: dict[str, Any] = php_json(
+        vm,
+        "pfb_core_call('SaveSettings', ['requestId' => bin2hex(random_bytes(16)), "
+        f"'expectedRevision' => {revision}, 'changes' => ['dns' => ['hstsNullBlocking' => {flag}]]])",
+    )
+    return reply
+
+
+def config_history(vm: SmokeVM) -> set[str]:
+    """The config history files (``/conf/backup``) now on the box."""
+    listing = vm.ssh(f"ls {CONFIG_HISTORY}", timeout=30)
+    assert listing.returncode == 0, f"no config history: {listing.stderr}"
+    return set(listing.stdout.split())
 
 
 def _flipped(state: tuple[bool, str]) -> str:
@@ -160,8 +196,18 @@ def _flipped(state: tuple[bool, str]) -> str:
     return "" if state[1] == "on" else "on"
 
 
-def test_the_install_leaves_core_holding_what_config_xml_says(core_vm: SmokeVM) -> None:
-    """The service's start pushed config.xml's ``settings/dns``: Core holds exactly those 17 values."""
+def test_the_install_leaves_no_settings_file_for_core(core_vm: SmokeVM) -> None:
+    """Core keeps no settings store: config.xml is it, so the state directory never holds a settings file."""
+    lock = core_vm.ssh(f"test -f {CORE_STATE}/core.lock", timeout=30)
+    assert lock.returncode == 0, f"before-state: {CORE_STATE} must be the running Core's directory (its lock is there)"
+    stray = core_vm.ssh(
+        f"ls {CORE_STATE}/settings.json {CORE_STATE}/settings.json.tmp {CORE_STATE}/settings.lock", timeout=30
+    )
+    assert stray.returncode != 0, f"a settings store is left in Core's state directory:\n{stray.stdout}"
+
+
+def test_the_install_leaves_core_at_the_revision_config_xml_projects(core_vm: SmokeVM) -> None:
+    """Core read config.xml through the adapter at its start: its values and its revision are config.xml's."""
     want = config_dns_settings(core_vm)
     assert len(want) == 17, f"before-state: expected the 17 native fields, got {want}"
 
@@ -169,13 +215,15 @@ def test_the_install_leaves_core_holding_what_config_xml_says(core_vm: SmokeVM) 
 
     held = core_dns(core_vm)
     assert held is not None and held[1] == want, f"Core holds {held}, config.xml says {want}"
+    projected = config_revision(core_vm)
+    assert held[0] == projected, f"Core is at revision {held[0]}, config.xml projects {projected}"
 
 
 def test_a_change_made_without_a_page_reaches_core_with_the_next_tick(core_vm: SmokeVM) -> None:
-    """A restore or an HA receive writes config.xml with no page save: the tick finds the difference and pushes it."""
+    """A restore or an HA receive writes config.xml with no page save: the tick finds Core's revision differs."""
     original = h.config_get_state(core_vm, HSTS)
     try:
-        push_now(core_vm)
+        tell_core(core_vm)
         before = config_dns_settings(core_vm)
 
         h.config_set(core_vm, HSTS, _flipped(original))
@@ -184,21 +232,19 @@ def test_a_change_made_without_a_page_reaches_core_with_the_next_tick(core_vm: S
         assert after["hstsNullBlocking"] != before["hstsNullBlocking"], f"before-state: the write did not change {HSTS}"
         held = core_dns(core_vm)
         assert held is not None and held[1] == before, f"before-state: Core must still hold the old value, holds {held}"
-        h.wait_no_active_pfb_task(core_vm)
-        tick = core_vm.ssh(f"{PHP} {PFB_PHP} tick 2>&1", timeout=180)
-        assert tick.returncode == 0, f"the tick failed: {tick.stdout}"
+        run_tick(core_vm)
         await_core_dns(core_vm, after)
     finally:
         h.config_restore_state(core_vm, HSTS, original)
-        push_now(core_vm)
+        tell_core(core_vm)
 
 
-def test_core_that_was_down_when_the_setting_changed_gets_it_from_the_service_start(core_vm: SmokeVM) -> None:
-    """A stopped Core never blocks or undoes a save: config.xml keeps the value, and the service's start sends it."""
+def test_core_that_was_down_when_the_setting_changed_reads_it_at_its_start(core_vm: SmokeVM) -> None:
+    """A stopped Core never blocks or undoes a change: config.xml keeps the value, and Core reads it when it starts."""
     original = h.config_get_state(core_vm, HSTS)
     stopped = False
     try:
-        push_now(core_vm)
+        tell_core(core_vm)
         before = config_dns_settings(core_vm)
         stop = core_vm.ssh(f"{CORE_RC} stop", timeout=60)
         assert stop.returncode == 0, f"{CORE_RC} stop failed: {stop.stdout}{stop.stderr}"
@@ -217,9 +263,58 @@ def test_core_that_was_down_when_the_setting_changed_gets_it_from_the_service_st
         stopped = False
 
         await_core_dns(core_vm, want)
+        assert core_dns(core_vm) == (config_revision(core_vm), want), "Core is at config.xml's values and revision"
     finally:
         if stopped:
             core_vm.ssh(f"{CORE_RC} start", timeout=60)
         h.config_restore_state(core_vm, HSTS, original)
         await_core_up(core_vm)
-        push_now(core_vm)
+        tell_core(core_vm)
+
+
+def test_a_core_save_changes_config_xml_and_leaves_a_config_history_entry(core_vm: SmokeVM) -> None:
+    """Core's SaveSettings goes through the adapter: config.xml holds the value and pfSense keeps a revision of it."""
+    original = h.config_get_state(core_vm, HSTS)
+    try:
+        tell_core(core_vm)
+        before = config_dns_settings(core_vm)
+        revision = await_core_dns(core_vm, before)
+        history = config_history(core_vm)
+
+        reply = core_save_hsts(core_vm, revision, not before["hstsNullBlocking"])
+
+        assert reply["status"] == 200, f"Core refused the save: {reply}"
+        after = config_dns_settings(core_vm)
+        assert after == {**before, "hstsNullBlocking": not before["hstsNullBlocking"]}, f"config.xml now says {after}"
+        assert core_dns(core_vm) == (config_revision(core_vm), after), "Core is at config.xml's values and revision"
+        added = config_history(core_vm) - history
+        assert added, "the save left no new config history entry"
+        message = core_vm.ssh(f"grep -l {shlex.quote(SAVE_MESSAGE)} {' '.join(sorted(added))}", timeout=30)
+        assert message.returncode == 0, f"no new history entry carries '{SAVE_MESSAGE}':\n{sorted(added)}"
+    finally:
+        h.config_restore_state(core_vm, HSTS, original)
+        tell_core(core_vm)
+
+
+def test_an_older_config_restored_reaches_core_with_the_next_tick(core_vm: SmokeVM) -> None:
+    """Writing the older value back (a config history restore) is a change no page made: the tick tells Core."""
+    original = h.config_get_state(core_vm, HSTS)
+    try:
+        tell_core(core_vm)
+        older = config_dns_settings(core_vm)
+        revision = await_core_dns(core_vm, older)
+        saved = core_save_hsts(core_vm, revision, not older["hstsNullBlocking"])
+        assert saved["status"] == 200, f"before-state: Core refused the save: {saved}"
+        newer = config_dns_settings(core_vm)
+        assert newer != older, "before-state: the Core save changed config.xml"
+
+        h.config_restore_state(core_vm, HSTS, original)
+
+        assert config_dns_settings(core_vm) == older, "before-state: the older value is back in config.xml"
+        held = core_dns(core_vm)
+        assert held is not None and held[1] == newer, f"before-state: Core must still hold the newer value: {held}"
+        run_tick(core_vm)
+        await_core_dns(core_vm, older)
+    finally:
+        h.config_restore_state(core_vm, HSTS, original)
+        tell_core(core_vm)

@@ -16,7 +16,9 @@ use PHPUnit\Framework\TestCase;
  *     daemon(8): restarted when it exits, its output in the package log, its socket the one PHP calls, stdio detached;
  *   - a package that ships no pfb-core for this machine starts nothing and is not a failure; an unknown machine is;
  *   - a start over a Core that serves keeps it; a restart stops first;
- *   - stop signals only the processes its own pidfiles name while their command line is pfb-core's, TERM first, KILL at 5 s.
+ *   - stop signals only the processes its own pidfiles name while their command line is pfb-core's, TERM first, KILL at 5 s;
+ *   - issue #3924: Core reads and writes its settings through the adapter script the daemon line names (--settings-backend-cmd),
+ *     the start pushes nothing, and generating the service retires the settings store and push records of the earlier model.
  *
  * The real generator's output is written through the write_rcfile() double and executed under dash. Every absolute
  * command path is redirected to a command double (a path with no double fails the test instead of running a host
@@ -144,13 +146,12 @@ final class PfbCoreServiceTest extends TestCase
 		$GLOBALS['pfb'] = array_merge($this->savedPfb, [
 			'core_socket'         => "{$this->dir}/run/pfb_core/api.sock",
 			'core_state'          => "{$this->dir}/db/pfb_core",
+			'dbdir'               => "{$this->dir}/dbdir",
 			'core_log'            => "{$this->dir}/log/core.log",
 			'core_pidfile'        => "{$this->dir}/run/pfb_core.pid",
 			'core_daemon_pidfile' => "{$this->dir}/run/pfb_core_daemon.pid",
 		]);
 		$GLOBALS['pfb_test_rcfile_dir'] = "{$this->dir}/rc";
-		// Every generated start names timeout(1) and the PHP binary of its settings push (issue #3913)
-		$this->installPushDouble();
 	}
 
 	protected function tearDown(): void
@@ -191,8 +192,8 @@ final class PfbCoreServiceTest extends TestCase
 			},
 			$text
 		);
-		// pfblockerng.inc, which the start's settings push runs, is the one host path an argument may name
-		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/usr/local/pkg/pfblockerng/pfblockerng.inc'], '', $script),
+		// The settings adapter script, which Core runs, is the one host path an argument may name
+		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh'], '', $script),
 			"the rc script names a host path the test did not redirect:\n{$script}");
 		file_put_contents("{$this->dir}/run.sh", $script);
 		$state = "{$this->dir}/state";
@@ -242,7 +243,7 @@ final class PfbCoreServiceTest extends TestCase
 	}
 
 	#[DataProvider('machines')]
-	public function testStartRunsThisMachinesBinaryUnderDaemonWithTheSocketStateAndLog(string $machine, string $target): void
+	public function testStartRunsThisMachinesBinaryUnderDaemonWithTheSocketStateLogAndSettingsAdapter(string $machine, string $target): void
 	{
 		// Given both architectures' pfb-core are installed
 		$this->install('freebsd-amd64');
@@ -252,13 +253,14 @@ final class PfbCoreServiceTest extends TestCase
 		// When the service starts
 		[$status, $out] = $this->rc('start');
 
-		// Then daemon(8) supervises this machine's binary, restarting it, with the package log, the API socket and Core's state directory
+		// Then daemon(8) supervises this machine's binary, restarting it, with the package log, the API socket, Core's state directory and the settings adapter
 		$this->assertSame(0, $status, $out);
 		$this->assertSame([
 			'-r', '-R', '5', '-t', 'pfb_core',
 			'-P', $GLOBALS['pfb']['core_daemon_pidfile'], '-p', $GLOBALS['pfb']['core_pidfile'], '-o', $GLOBALS['pfb']['core_log'],
 			"{$this->dir}/core/bin/{$target}/pfb-core", '--socket', $GLOBALS['pfb']['core_socket'],
 			'--state-dir', $GLOBALS['pfb']['core_state'],
+			'--settings-backend-cmd', '/usr/local/pkg/pfblockerng/pfb_core_settings.sh',
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}
@@ -343,94 +345,55 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertSame(['1001', '1002'], $this->livePids());
 	}
 
-	/** The timeout(1) double of the settings push: records its argv, which descriptors are /dev/null, and an event, then holds until released. */
-	private function installPushDouble(): void
+	public function testStartPushesNothingToCoreAndNamesNoPhpVerb(): void
 	{
-		$state = escapeshellarg("{$this->dir}/state");
-		$double = <<<SH
-			#!/bin/sh
-			S={$state}
-			printf '%s\\n' "\$@" > "\$S/push.argv"
-			attached=
-			for fd in 0 1 2; do
-				if [ "/dev/fd/\$fd" -ef /dev/null ]; then attached="\$attached\$fd "; fi
-			done
-			echo "\${attached:-none}" > "\$S/push.fds"
-			printf 'push\\n' >> "\$S/events"
-			echo ready > "\$S/push.ready"
-			n=0
-			while [ ! -e "\$S/push.release" ] && [ "\$n" -lt 200 ]; do /bin/sleep 0.05; n=\$((n + 1)); done
-			echo done > "\$S/push.done"
-
-			SH;
-		file_put_contents("{$this->dir}/bin/timeout", $double);
-		chmod("{$this->dir}/bin/timeout", 0755);
-		$GLOBALS['pfb']['php'] = "{$this->dir}/bin/php";
-	}
-
-	/** Wait (bounded) for a file the backgrounded push writes. */
-	private function awaitState(string $file): bool
-	{
-		$deadline = hrtime(TRUE) + 10_000_000_000;
-		while (!file_exists("{$this->dir}/state/{$file}")) {
-			if (hrtime(TRUE) > $deadline) {
-				return FALSE;
-			}
-			usleep(10_000);
-		}
-		return TRUE;
-	}
-
-	public function testStartPushesTheSettingsOnceCoreListens(): void
-	{
-		// Given Core's socket is up and the push's timeout(1) holds until released
+		// Given a Core whose socket exists, as soon as the service starts
 		$this->install('freebsd-amd64');
-		$this->installPushDouble();
 		$this->arrange('amd64');
 		$this->assertTrue(mkdir(dirname($GLOBALS['pfb']['core_socket']), 0700, TRUE));
 		$server = stream_socket_server('unix://' . $GLOBALS['pfb']['core_socket'], $errno, $errstr);
 		$this->assertNotFalse($server, "socket: {$errstr}");
+		$text = (string) file_get_contents("{$this->dir}/rc/pfb_core.sh");
 
 		try {
 			// When the service starts
 			[$status, $out] = $this->rc('start');
-
-			// Then the start returned while the push still runs, and the push is the core_push verb under timeout(1), after the daemon launch
-			$this->assertSame(0, $status, $out);
-			$this->assertTrue($this->awaitState('push.ready'), 'the start never ran the settings push');
-			$this->assertSame([
-				'-s', 'TERM', '-k', '5', '60', "{$this->dir}/bin/php", '-f', '/usr/local/pkg/pfblockerng/pfblockerng.inc', 'core_push',
-			], $this->lines('push.argv'));
-			$this->assertSame(['launch', 'push'], $this->lines('events'));
-			$this->assertSame(['0 1 2 '], $this->lines('push.fds'), 'the push inherited a descriptor of the caller');
-			$this->assertFileDoesNotExist("{$this->dir}/state/push.done", 'the start waited for the push');
 		} finally {
-			touch("{$this->dir}/state/push.release");
-			$this->awaitState('push.done');
 			fclose($server);
 		}
+
+		// Then it launched the daemon and nothing else: Core reads the settings itself, through the adapter
+		$this->assertSame(0, $status, $out);
+		$this->assertSame(['launch'], $this->lines('events'));
+		$this->assertStringNotContainsString('core_push', $text);
+		$this->assertStringNotContainsString('pfblockerng.inc', $text, 'the rc script runs no PHP verb');
 	}
 
-	public function testStartGivesUpWaitingForTheSocketAfterThirtySeconds(): void
+	public function testGeneratingTheServiceRetiresTheSettingsStoreAndPushRecordsOfTheEarlierModel(): void
 	{
-		// Given Core never listens
-		$this->install('freebsd-amd64');
-		$this->installPushDouble();
-		$this->arrange('amd64');
-
-		// When the service starts
-		[$status, $out] = $this->rc('start');
-
-		// Then the start returns, the backgrounded wait counts thirty 1 s steps and stops, and no push ran
-		$this->assertSame(0, $status, $out);
-		$deadline = hrtime(TRUE) + 10_000_000_000;
-		while ((int) trim((string) @file_get_contents("{$this->dir}/state/ticks")) < 30 && hrtime(TRUE) < $deadline) {
-			usleep(10_000);
+		// Given Core's state directory with the old store, and the old push records
+		$state = $GLOBALS['pfb']['core_state'];
+		$this->assertTrue(mkdir($state, 0700, TRUE));
+		$this->assertTrue(mkdir($GLOBALS['pfb']['dbdir'], 0700, TRUE));
+		$old = [
+			"{$state}/settings.json", "{$state}/settings.json.tmp", "{$state}/settings.lock",
+			"{$GLOBALS['pfb']['dbdir']}/core_pushed", "{$GLOBALS['pfb']['dbdir']}/core_push_failed",
+		];
+		$keep = ["{$state}/core.lock", "{$state}/other.dat", "{$GLOBALS['pfb']['dbdir']}/core_settings_failed"];
+		foreach ([...$old, ...$keep] as $file) {
+			$this->assertNotFalse(file_put_contents($file, 'x'), "fixture {$file}");
 		}
-		usleep(300_000);
-		$this->assertSame('30', trim((string) file_get_contents("{$this->dir}/state/ticks")), 'the wait is bounded at 30 one-second steps');
-		$this->assertFileDoesNotExist("{$this->dir}/state/push.argv");
-		$this->assertSame(['launch'], $this->lines('events'));
+
+		// When the service is generated (every install and upgrade does)
+		pfb_core_service("{$this->dir}/core");
+
+		// Then the old files are gone and nothing else is
+		foreach ($old as $file) {
+			$this->assertFileDoesNotExist($file);
+		}
+		foreach ($keep as $file) {
+			$this->assertFileExists($file);
+		}
 	}
 
 	public function testTheServiceIsRegisteredWithPfSense(): void

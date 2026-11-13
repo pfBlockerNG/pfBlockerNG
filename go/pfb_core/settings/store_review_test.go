@@ -107,8 +107,8 @@ func TestOpenRefusesAStoreHoldingAProjectionThisCoreDoesNotKnow(t *testing.T) {
 	}
 }
 
-// A Core whose schema grew reads the store an older Core wrote: a field or projection it does not hold is its default,
-// the projection at generation 1, and the revision is unchanged.
+// A Core whose schema grew reads the store an older Core wrote: a field or projection it does not hold is its default and
+// the revision is unchanged. The generation that older store carries is ignored: a generation comes from the values.
 func TestOpenFillsWhatAnOlderStoreDoesNotHoldWithDefaults(t *testing.T) {
 	dir := writeStore(t, `{"format":1,"revision":4,"projections":{"dns":{"generation":3,"values":{"control":true}}}}`)
 	st, err := Open(dir, testSchema())
@@ -117,10 +117,15 @@ func TestOpenFillsWhatAnOlderStoreDoesNotHoldWithDefaults(t *testing.T) {
 	}
 	snap := get(t, st)
 	dns, auth := projection(t, snap, "dns"), projection(t, snap, "feedauth")
-	if snap.Revision != 4 || dns.Generation != 3 || dns.Value["control"] != true || dns.Value["replyLogging"] != true ||
-		auth.Generation != 1 || auth.Value["user"] != "" {
-		t.Errorf("older store read as %s, want revision 4, dns generation 3 with control on and defaults, feedauth generation 1",
-			jsonOf(t, snap))
+	fresh := open(t, t.TempDir())
+	if _, err := fresh.Initialize(changes(t, `{"dns": {"control": true}}`)); err != nil {
+		t.Fatal(err)
+	}
+	want := get(t, fresh)
+	if snap.Revision != 4 || dns.Value["control"] != true || dns.Value["replyLogging"] != true || auth.Value["user"] != "" ||
+		dns.Generation != projection(t, want, "dns").Generation || auth.Generation != projection(t, want, "feedauth").Generation {
+		t.Errorf("older store read as %s, want revision 4, control on and defaults, and the generations of equal values %s",
+			jsonOf(t, snap), jsonOf(t, want))
 	}
 	if _, err := st.Save(4, changes(t, `{"feedauth": {"user": "u"}}`)); err != nil {
 		t.Errorf("the grown store takes a save: %v", err)
@@ -148,7 +153,6 @@ func TestAFailedDirectorySyncAfterTheRenameServesWhatIsOnDisk(t *testing.T) {
 		t.Error("Save hid the failed directory sync")
 	}
 	mem := get(t, st)
-	_ = st.Close()
 	disk := get(t, open(t, dir))
 	if jsonOf(t, mem) != jsonOf(t, disk) || mem.Revision != 2 {
 		t.Errorf("memory %s, disk %s: want both at revision 2", jsonOf(t, mem), jsonOf(t, disk))

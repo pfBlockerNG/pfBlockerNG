@@ -283,7 +283,7 @@ if ($_POST) {
 				$pfb_written = write_config('[pfBlockerNG] save General settings');
 			});
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
-				pfb_core_settings_push(NULL, TRUE);	// outside the metrics lock (a slow Core must not hold it); a failure never undoes the save
+				pfb_core_settings_changed(NULL, TRUE);	// outside the metrics lock (a slow Core must not hold it); a failure never undoes the save
 			}
 			$input_errors = array_merge($input_errors, $pfb_core_errors);
 			if ($privacy_error !== NULL) {

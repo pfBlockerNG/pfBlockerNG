@@ -6,14 +6,11 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #3913, PR #3919 review:
- *   - the projected values' hash decides a push: config.xml's revision/time only skips one when the hash is the recorded one
- *     too. Two saves in one second whose pushes finish out of order leave the older values in Core and a record of that
- *     second; the next tick must still push the newer values;
- *   - General asks Core before the client-IP metrics privacy change: a refused save leaves the stored client identities alone.
+ * Issue #3913: General asks Core's dry run before the client-IP metrics privacy change: a refused save leaves the stored client
+ * identities alone.
  */
-#[CoversFunction('pfb_core_settings_push')]
-final class CoreSettingsPushOrderTest extends TestCase
+#[CoversFunction('pfb_core_settings_validate')]
+final class CoreSettingsGeneralSaveOrderTest extends TestCase
 {
 	private const GENERAL_PAGE = 'src/usr/local/www/pfblockerng/pfblockerng_general.php';
 
@@ -32,8 +29,7 @@ final class CoreSettingsPushOrderTest extends TestCase
 		$this->assertTrue(mkdir($this->dir, 0700));
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb']['core_socket'] = "{$this->dir}/api.sock";
-		$GLOBALS['pfb']['core_pushed'] = "{$this->dir}/core_pushed";
-		$GLOBALS['pfb']['core_push_failed'] = "{$this->dir}/core_push_failed";
+		$GLOBALS['pfb']['core_settings_failed'] = "{$this->dir}/core_settings_failed";
 		$GLOBALS['pfb']['metrics_lock'] = "{$this->dir}/metrics.lock";
 		$GLOBALS['pfb']['dnsbl_info'] = "{$this->dir}/dnsbl_info.sqlite";
 		$GLOBALS['pfb']['dnsbl_resolver'] = "{$this->dir}/dnsbl_resolver.sqlite";
@@ -56,31 +52,6 @@ final class CoreSettingsPushOrderTest extends TestCase
 		$_POST = $this->priorPost;
 		unset($GLOBALS['pfb_test_write_config_calls']);
 		rmdir_recursive($this->dir);
-	}
-
-	public function testATickPushesWhenTheHashDiffersEvenAtTheRecordedRevisionTime(): void
-	{
-		// Given: an out-of-order push left Core with the older values and a record of this second with their hash
-		config_set_path('revision/time', '1700000000');
-		config_set_path(PFB_SECTIONS['dnsbl'] . '/pfb_py_reply', '');
-		$older = hash('sha256', (string) json_encode(['dns' => pfb_core_dns_settings()]));
-		config_set_path(PFB_SECTIONS['dnsbl'] . '/pfb_py_reply', 'on');
-		file_put_contents("{$this->dir}/core_pushed", json_encode(['time' => '1700000000', 'hash' => $older]));
-		$methods = [];
-		$call = static function (string $method, array $params = []) use (&$methods): array {
-			$methods[] = $method;
-			$held = array_merge(pfb_core_dns_settings(), ['replyLogging' => FALSE]);
-			return $method === 'GetSettings'
-				? ['status' => 200, 'body' => ['initialized' => TRUE, 'revision' => 5, 'projections' => [['resourceId' => 'settings/dns', 'generation' => 2, 'value' => $held]]], 'error' => NULL]
-				: ['status' => 200, 'body' => ['revision' => 6, 'projections' => []], 'error' => NULL];
-		};
-
-		// When: the next tick runs, config.xml unchanged
-		$reason = pfb_core_settings_push($call);
-
-		// Then: it pushes the newer values
-		$this->assertSame(['GetSettings', 'SaveSettings'], $methods, 'the hash differs from the record: Core is asked and corrected');
-		$this->assertNull($reason);
 	}
 
 	public function testACoreRefusedGeneralSaveLeavesTheStoredClientIdentities(): void

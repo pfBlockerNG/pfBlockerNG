@@ -9,11 +9,11 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #3913: every page that writes a `settings/dns` field asks Core's dry run (ValidateSettings) after its own checks and its
- * in-memory writes and before write_config(), and pushes the settings to Core (forced: always asks Core) after a successful
- * write_config() only. A Core refusal is shown as input errors and nothing is written; a Core that does not answer never blocks
- * the save and leaves the push failure for DNS General to show. The writers: DNS > General (`dnsbl/pfb_py_reply`), DNS > DNSBL (the
- * other DNSBL fields) and General (`gen/pfb_metrics_client_ip`).
+ * Issues #3913, #3924: every page that writes a `settings/dns` field asks Core's dry run (ValidateSettings) after its own checks and
+ * its in-memory writes and before write_config(), and tells Core (SettingsChanged: it reads config.xml through its settings adapter)
+ * after a successful write_config() only. A Core refusal is shown as input errors and nothing is written; a Core that does not
+ * answer never blocks the save and leaves the failure for DNS General to show. The writers: DNS > General (`dnsbl/pfb_py_reply`),
+ * DNS > DNSBL (the other DNSBL fields) and General (`gen/pfb_metrics_client_ip`).
  *
  * The saves of DNS > General and DNS > DNSBL are the pages' real POST code (support/DnsSaveWorker.php, DnsblSaveWorker.php) and
  * General's is the page's own callback region run in-process; each talks to a Core stand-in (support/CoreSettingsStandIn.php) that
@@ -43,8 +43,7 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->assertTrue(mkdir($this->dir, 0700));
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb']['core_socket'] = "{$this->dir}/api.sock";
-		$GLOBALS['pfb']['core_pushed'] = "{$this->dir}/core_pushed";
-		$GLOBALS['pfb']['core_push_failed'] = "{$this->dir}/core_push_failed";
+		$GLOBALS['pfb']['core_settings_failed'] = "{$this->dir}/core_settings_failed";
 		$GLOBALS['pfb']['metrics_lock'] = "{$this->dir}/metrics.lock";
 		$GLOBALS['pfb']['dnsbl_info'] = "{$this->dir}/dnsbl_info.sqlite";
 		$GLOBALS['pfb']['dnsbl_resolver'] = "{$this->dir}/dnsbl_resolver.sqlite";
@@ -111,17 +110,16 @@ final class CoreSettingsPageSavesTest extends TestCase
 	}
 
 	/**
-	 * A Core that accepts the dry run, holds `$held` for settings/dns and takes the push.
+	 * A Core that accepts the dry run and takes the notice that config.xml changed.
 	 *
-	 * @param array<string, bool|int|string> $held
 	 * @return array<string, array{0: int, 1: array}>
 	 */
-	private static function accepting(array $held): array
+	private static function accepting(): array
 	{
 		return [
 			'ValidateSettings' => [200, []],
-			'GetSettings'      => [200, ['initialized' => TRUE, 'revision' => 3, 'projections' => [['resourceId' => 'settings/dns', 'generation' => 1, 'value' => $held]]]],
-			'SaveSettings'     => [200, ['revision' => 4]],
+			'GetSettings'      => [200, ['initialized' => TRUE, 'revision' => 3, 'projections' => []]],
+			'SettingsChanged'  => [200, ['initialized' => TRUE, 'revision' => 4, 'projections' => []]],
 		];
 	}
 
@@ -158,40 +156,40 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->assertTrue($result['returned'], 'the page renders the errors, rather than exiting through its redirect');
 		$this->assertFalse($result['pendingMarked']);
 		$this->assertFalse($result['lockHeld'], 'the lock is released');
-		$this->assertSame(['ValidateSettings'], $this->methods(), 'a refused save pushes nothing');
+		$this->assertSame(['ValidateSettings'], $this->methods(), 'a refused save tells Core nothing');
 	}
 
-	/** @return array<string, array{0: string, 1: ?string, 2: bool}> posted value, stored value, the replyLogging Core is pushed */
+	/** @return array<string, array{0: string, 1: ?string, 2: bool}> posted value, stored value, the replyLogging the dry run judges */
 	public static function replyLoggingSaves(): array
 	{
 		return ['unticked over a stored on' => [NULL, 'on', FALSE], 'ticked over a stored off' => ['on', '', TRUE]];
 	}
 
 	#[DataProvider('replyLoggingSaves')]
-	public function testAnAcceptedDnsGeneralSaveValidatesTheSavedValuesThenPushesThemAfterTheWrite(?string $posted, string $stored, bool $expected): void
+	public function testAnAcceptedDnsGeneralSaveValidatesTheSavedValuesThenTellsCoreAfterTheWrite(?string $posted, string $stored, bool $expected): void
 	{
-		$socket = $this->core(self::accepting(['replyLogging' => !$expected]));
+		$socket = $this->core(self::accepting());
 
 		$result = $this->save('DnsSaveWorker', 'plain', ['core' => ['socket' => $socket], 'stored' => ['dnsbl/pfb_py_reply' => $stored], 'post' => ['pfb_py_reply' => $posted]]);
 
-		$this->assertSame($stored, $result['before']['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_py_reply'], 'before the save Core and config.xml differ');
+		$this->assertSame($stored, $result['before']['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_py_reply'], 'before the save config.xml holds the other value');
 		$this->assertSame([], $result['inputErrors']);
 		$this->assertSame([self::DNS_SAVE], $result['writes']);
 		$this->assertFalse($result['returned'], 'the save ends in its redirect');
 		$requests = $this->requests();
-		$this->assertSame(['ValidateSettings', 'GetSettings', 'SaveSettings'], array_column($requests, 'method'));
+		$this->assertSame(['ValidateSettings', 'SettingsChanged'], array_column($requests, 'method'));
 		$this->assertSame($expected, $requests[0]['body']['changes']['dns']['replyLogging'], 'the dry run judges the values this save leaves, in memory');
-		$this->assertSame($expected, $requests[2]['body']['changes']['dns']['replyLogging'], 'the push sends the saved value');
-		$this->assertNull($result['pushFailed']);
+		$this->assertSame([], $requests[1]['body'], 'Core reads the saved values itself: the notice carries none');
+		$this->assertNull($result['settingsFailed']);
 	}
 
-	public function testTheDnsGeneralPushIsForcedSoARecordOfTheSameSecondDoesNotSkipIt(): void
+	public function testTheDnsGeneralNoticeIsForcedSoCoreIsToldWithoutAskingItsRevision(): void
 	{
-		$socket = $this->core(self::accepting(['replyLogging' => TRUE]));
+		$socket = $this->core(self::accepting());
 
-		$this->save('DnsSaveWorker', 'plain', ['core' => ['socket' => $socket, 'pushed' => ['time' => '', 'hash' => 'seeded']]]);
+		$this->save('DnsSaveWorker', 'plain', ['core' => ['socket' => $socket]]);
 
-		$this->assertSame(['ValidateSettings', 'GetSettings', 'SaveSettings'], $this->methods(), 'config.xml has no revision time and the record has none: an unforced push would skip');
+		$this->assertSame(['ValidateSettings', 'SettingsChanged'], $this->methods(), 'an unforced notice would call GetSettings first');
 	}
 
 	/** @return array<string, array{string}> pfSense returns FALSE for a refusal, -1 for a file-write failure */
@@ -201,25 +199,25 @@ final class CoreSettingsPageSavesTest extends TestCase
 	}
 
 	#[DataProvider('failedWrites')]
-	public function testAFailedDnsGeneralWriteIsNotPushed(string $scenario): void
+	public function testAFailedDnsGeneralWriteIsNotNotifiedToCore(string $scenario): void
 	{
-		$socket = $this->core(self::accepting(['replyLogging' => TRUE]));
+		$socket = $this->core(self::accepting());
 
 		$result = $this->save('DnsSaveWorker', $scenario, ['core' => ['socket' => $socket]]);
 
 		$this->assertNotSame([], $result['inputErrors'], 'a refused write is a save error');
-		$this->assertSame(['ValidateSettings'], $this->methods(), 'the dry run ran before the write; nothing was pushed after it');
+		$this->assertSame(['ValidateSettings'], $this->methods(), 'the dry run ran before the write; Core was not told after it');
 	}
 
-	public function testACoreThatDoesNotAnswerNeverBlocksTheDnsGeneralSaveAndLeavesThePushFailure(): void
+	public function testACoreThatDoesNotAnswerNeverBlocksTheDnsGeneralSaveAndLeavesTheFailure(): void
 	{
 		$result = $this->save('DnsSaveWorker', 'plain', []);
 
 		$this->assertSame([self::DNS_SAVE], $result['writes']);
 		$this->assertSame([], $result['inputErrors']);
 		$this->assertFalse($result['returned'], 'the save ends in its redirect');
-		$this->assertIsString($result['pushFailed']);
-		$this->assertStringContainsString('did not answer', $result['pushFailed']);
+		$this->assertIsString($result['settingsFailed']);
+		$this->assertStringContainsString('did not answer', $result['settingsFailed']);
 	}
 
 	// ----- W2: DNS > DNSBL -----
@@ -237,12 +235,12 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->assertSame('8082', $result['postedPort'], 'the form re-displays what was submitted');
 		$this->assertFalse($result['pendingMarked']);
 		$this->assertFalse($result['lockHeld'], 'the lock is released');
-		$this->assertSame(['ValidateSettings'], $this->methods(), 'a refused save pushes nothing');
+		$this->assertSame(['ValidateSettings'], $this->methods(), 'a refused save tells Core nothing');
 	}
 
-	public function testAnAcceptedDnsblSaveValidatesTheSavedValuesThenPushesThemAfterTheWrite(): void
+	public function testAnAcceptedDnsblSaveValidatesTheSavedValuesThenTellsCoreAfterTheWrite(): void
 	{
-		$socket = $this->core(self::accepting(['hstsNullBlocking' => FALSE, 'tldWildcard' => FALSE, 'idnMode' => 'off']));
+		$socket = $this->core(self::accepting());
 
 		$result = $this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on']]);
 
@@ -250,45 +248,43 @@ final class CoreSettingsPageSavesTest extends TestCase
 		$this->assertSame([self::DNSBL_SAVE], $result['writes']);
 		$this->assertFalse($result['returned'], 'the save ends in its redirect');
 		$requests = $this->requests();
-		$this->assertSame(['ValidateSettings', 'GetSettings', 'SaveSettings'], array_column($requests, 'method'));
-		foreach ([0, 2] as $index) {
-			$dns = $requests[$index]['body']['changes']['dns'];
-			$this->assertTrue($dns['hstsNullBlocking'], "{$requests[$index]['method']}: the posted HSTS");
-			$this->assertTrue($dns['tldWildcard'], "{$requests[$index]['method']}: the posted TLD wildcard");
-			$this->assertSame('confusable', $dns['idnMode'], "{$requests[$index]['method']}: the posted IDN mode");
-		}
-		$this->assertNull($result['pushFailed']);
+		$this->assertSame(['ValidateSettings', 'SettingsChanged'], array_column($requests, 'method'));
+		$dns = $requests[0]['body']['changes']['dns'];
+		$this->assertTrue($dns['hstsNullBlocking'], 'the dry run judges the posted HSTS');
+		$this->assertTrue($dns['tldWildcard'], 'the dry run judges the posted TLD wildcard');
+		$this->assertSame('confusable', $dns['idnMode'], 'the dry run judges the posted IDN mode');
+		$this->assertNull($result['settingsFailed']);
 	}
 
-	public function testTheDnsblPushIsForcedSoARecordOfTheSameSecondDoesNotSkipIt(): void
+	public function testTheDnsblNoticeIsForcedSoCoreIsToldWithoutAskingItsRevision(): void
 	{
-		$socket = $this->core(self::accepting(['hstsNullBlocking' => FALSE]));
+		$socket = $this->core(self::accepting());
 
-		$this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket, 'pushed' => ['time' => '', 'hash' => 'seeded']], 'post' => ['pfb_hsts' => 'on']]);
+		$this->save('DnsblSaveWorker', 'plain', ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on']]);
 
-		$this->assertSame(['ValidateSettings', 'GetSettings', 'SaveSettings'], $this->methods());
+		$this->assertSame(['ValidateSettings', 'SettingsChanged'], $this->methods());
 	}
 
 	#[DataProvider('failedWrites')]
-	public function testAFailedDnsblWriteIsNotPushed(string $scenario): void
+	public function testAFailedDnsblWriteIsNotNotifiedToCore(string $scenario): void
 	{
-		$socket = $this->core(self::accepting(['hstsNullBlocking' => FALSE]));
+		$socket = $this->core(self::accepting());
 
 		$result = $this->save('DnsblSaveWorker', $scenario, ['core' => ['socket' => $socket], 'post' => ['pfb_hsts' => 'on']]);
 
 		$this->assertNotSame([], $result['inputErrors'], 'a refused write is a save error');
-		$this->assertSame(['ValidateSettings'], $this->methods(), 'the dry run ran before the write; nothing was pushed after it');
+		$this->assertSame(['ValidateSettings'], $this->methods(), 'the dry run ran before the write; Core was not told after it');
 	}
 
-	public function testACoreThatDoesNotAnswerNeverBlocksTheDnsblSaveAndLeavesThePushFailure(): void
+	public function testACoreThatDoesNotAnswerNeverBlocksTheDnsblSaveAndLeavesTheFailure(): void
 	{
 		$result = $this->save('DnsblSaveWorker', 'plain', []);
 
 		$this->assertSame([self::DNSBL_SAVE], $result['writes']);
 		$this->assertSame([], $result['inputErrors']);
 		$this->assertFalse($result['returned'], 'the save ends in its redirect');
-		$this->assertIsString($result['pushFailed']);
-		$this->assertStringContainsString('did not answer', $result['pushFailed']);
+		$this->assertIsString($result['settingsFailed']);
+		$this->assertStringContainsString('did not answer', $result['settingsFailed']);
 	}
 
 	// ----- W3: General -----
@@ -316,42 +312,31 @@ final class CoreSettingsPageSavesTest extends TestCase
 
 		$this->assertSame([self::refusedMessage('metricsClientIp')], $scope['input_errors']);
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'nothing is written');
-		$this->assertSame(['ValidateSettings'], $this->methods(), 'a refused save pushes nothing');
+		$this->assertSame(['ValidateSettings'], $this->methods(), 'a refused save tells Core nothing');
 	}
 
-	public function testAnAcceptedGeneralSaveValidatesTheSavedValuesThenPushesThemAfterTheWrite(): void
+	public function testAnAcceptedGeneralSaveValidatesTheSavedValuesThenTellsCoreAfterTheWrite(): void
 	{
-		$this->core(self::accepting(['metricsClientIp' => FALSE]));
+		$this->core(self::accepting());
 
 		$scope = $this->generalSave();
 
 		$this->assertSame([], $scope['input_errors']);
 		$this->assertSame([self::GENERAL_SAVE], $GLOBALS['pfb_test_write_config_calls']);
 		$requests = $this->requests();
-		$this->assertSame(['ValidateSettings', 'GetSettings', 'SaveSettings'], array_column($requests, 'method'));
+		$this->assertSame(['ValidateSettings', 'SettingsChanged'], array_column($requests, 'method'), 'forced: Core is told without asking its revision');
 		$this->assertTrue($requests[0]['body']['changes']['dns']['metricsClientIp'], 'the dry run judges the section as this save leaves it');
-		$this->assertTrue($requests[2]['body']['changes']['dns']['metricsClientIp'], 'the push sends the saved value');
-	}
-
-	public function testAGeneralSaveForcesThePushSoARecordOfTheSameSecondDoesNotSkipIt(): void
-	{
-		$this->core(self::accepting(['metricsClientIp' => FALSE]));
-		file_put_contents($GLOBALS['pfb']['core_pushed'], json_encode(['time' => '', 'hash' => 'seeded']));
-
-		$this->generalSave();
-
-		$this->assertSame(['ValidateSettings', 'GetSettings', 'SaveSettings'], $this->methods());
 	}
 
 	#[DataProvider('failedWriteResults')]
-	public function testAFailedGeneralWriteIsNotPushed(bool|int $result): void
+	public function testAFailedGeneralWriteIsNotNotifiedToCore(bool|int $result): void
 	{
-		$this->core(self::accepting(['metricsClientIp' => FALSE]));
+		$this->core(self::accepting());
 		$GLOBALS['pfb_test_write_config_result'] = $result;
 
 		$this->generalSave();
 
-		$this->assertSame(['ValidateSettings'], $this->methods(), 'the dry run ran before the write; nothing was pushed after it');
+		$this->assertSame(['ValidateSettings'], $this->methods(), 'the dry run ran before the write; Core was not told after it');
 	}
 
 	/** @return array<string, array{bool|int}> what pfSense's write_config() answers for a refusal and for a file-write failure */
@@ -360,41 +345,41 @@ final class CoreSettingsPageSavesTest extends TestCase
 		return ['write refused' => [FALSE], 'file write failed' => [-1]];
 	}
 
-	public function testACoreThatDoesNotAnswerNeverBlocksTheGeneralSaveAndLeavesThePushFailure(): void
+	public function testACoreThatDoesNotAnswerNeverBlocksTheGeneralSaveAndLeavesTheFailure(): void
 	{
 		$scope = $this->generalSave();
 
 		$this->assertSame([], $scope['input_errors']);
 		$this->assertSame([self::GENERAL_SAVE], $GLOBALS['pfb_test_write_config_calls']);
-		$this->assertStringContainsString('did not answer', (string) @file_get_contents($GLOBALS['pfb']['core_push_failed']));
+		$this->assertStringContainsString('did not answer', (string) @file_get_contents($GLOBALS['pfb']['core_settings_failed']));
 	}
 
-	// ----- DNS General: the push-failure notice -----
+	// ----- DNS General: the notice that Core has not read the saved settings -----
 
-	/** @return list<array{0: string, 1: string}> the info boxes DNS General's push-failure notice prints (its own region of the page) */
+	/** @return list<array{0: string, 1: string}> the info boxes DNS General's notice about Core not having read the settings prints (its own region of the page) */
 	private function dnsGeneralBoxes(): array
 	{
 		$GLOBALS['pfb_test_info_boxes'] = [];
-		pfb_test_page_eval(pfb_test_page_region(self::DNS_PAGE, "if (is_file(\$pfb['core_push_failed'])) {", 'pfb_print_pending_changes_box();'), ['pfb' => $GLOBALS['pfb']]);
+		pfb_test_page_eval(pfb_test_page_region(self::DNS_PAGE, "if (is_file(\$pfb['core_settings_failed'])) {", 'pfb_print_pending_changes_box();'), ['pfb' => $GLOBALS['pfb']]);
 		return $GLOBALS['pfb_test_info_boxes'];
 	}
 
-	public function testDnsGeneralShowsTheEscapedPushFailureInAWarningBox(): void
+	public function testDnsGeneralShowsTheEscapedFailureInAWarningBox(): void
 	{
-		file_put_contents($GLOBALS['pfb']['core_push_failed'], 'the Core API did not answer: <b>"refused"</b> & more');
+		file_put_contents($GLOBALS['pfb']['core_settings_failed'], 'the Core API did not answer: <b>"refused"</b> & more');
 
-		$boxes = array_values(array_filter($this->dnsGeneralBoxes(), static fn (array $box): bool => str_contains($box[0], 'does not have the saved settings yet')));
+		$boxes = array_values(array_filter($this->dnsGeneralBoxes(), static fn (array $box): bool => str_contains($box[0], 'has not read the saved settings yet')));
 
 		$this->assertSame([[
-			'pfBlockerNG Core does not have the saved settings yet: the Core API did not answer: &lt;b&gt;&quot;refused&quot;&lt;/b&gt; &amp; more. '
-			. 'They are saved in the pfSense configuration; the next tick sends them again.',
+			'pfBlockerNG Core has not read the saved settings yet: the Core API did not answer: &lt;b&gt;&quot;refused&quot;&lt;/b&gt; &amp; more. '
+			. 'They are saved in the pfSense configuration; the next tick tells Core again.',
 			'warning',
 		]], $boxes);
 	}
 
-	public function testDnsGeneralShowsNoPushFailureNoticeWhenThereIsNoFailure(): void
+	public function testDnsGeneralShowsNoNoticeWhenThereIsNoFailure(): void
 	{
-		$boxes = array_filter($this->dnsGeneralBoxes(), static fn (array $box): bool => str_contains($box[0], 'does not have the saved settings yet'));
+		$boxes = array_filter($this->dnsGeneralBoxes(), static fn (array $box): bool => str_contains($box[0], 'has not read the saved settings yet'));
 
 		$this->assertSame([], array_values($boxes));
 	}

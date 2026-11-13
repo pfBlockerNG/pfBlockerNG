@@ -1031,7 +1031,7 @@ if ($_POST) {
 			}
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
 				pfb_mark_pending_changes();	// applies on the next Update, not on save
-				pfb_core_settings_push(NULL, TRUE);	// outside the lock (a slow Core must not hold it); a failure never undoes the save
+				pfb_core_settings_changed(NULL, TRUE);	// outside the lock (a slow Core must not hold it); a failure never undoes the save
 				header('Location: /pfblockerng/pfblockerng_dnsbl.php');
 				exit;
 			}

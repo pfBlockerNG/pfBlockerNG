@@ -2,31 +2,15 @@ package settings
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"maps"
-	"os"
-	"path/filepath"
 	"slices"
 	"sync"
-	"syscall"
 )
-
-// storeFile, in the state directory, holds the whole store. A save writes storeFile+".tmp", syncs it and renames it over
-// storeFile, so a crash leaves the previous document whole; a leftover .tmp is ignored and overwritten by the next save.
-const storeFile = "settings.json"
-
-// lockFile, in the state directory, carries the flock that keeps the directory to one Store.
-const lockFile = "settings.lock"
-
-// beforeRename runs between writing the new document and renaming it into place: a test kills the process there.
-var beforeRename func()
-
-// syncDir syncs the state directory after the rename (a test makes it fail).
-var syncDir = (*os.File).Sync
 
 // FieldError names one field at fault: "<projection>.<field>", a projection id, or a parameter.
 type FieldError struct {
@@ -70,103 +54,64 @@ type Result struct {
 	Projections []ProjectionValue `json:"projections"`
 }
 
-type projectionState struct {
-	Generation uint64         `json:"generation"`
-	Values     map[string]any `json:"values"`
-}
-
-// document is storeFile's content; absent until initialization.
-type document struct {
-	Format      int                         `json:"format"`
-	Revision    uint64                      `json:"revision"`
-	Projections map[string]*projectionState `json:"projections"`
-}
-
-// Store is safe for concurrent use; every call sees one whole revision.
+// Store is Core's settings in memory, loaded from a Backend; it is safe for concurrent use and every call sees one whole
+// revision. Initialize, Save and Reload hold wmu across their backend call and mu only to swap the state in, so a slow
+// backend never blocks Get or Validate.
 type Store struct {
-	mu     sync.Mutex
-	dir    string
-	schema Schema
-	doc    *document // nil: not initialized
-	lock   *os.File  // the state directory's flock, held until Close
+	wmu         sync.Mutex
+	mu          sync.Mutex // guards the state below; it changes only with wmu and mu both held
+	backend     Backend
+	schema      Schema
+	initialized bool
+	revision    uint64
+	values      map[string]map[string]any // projection → field → value; replaced whole, never changed in place
 }
 
-// Open takes the state directory dir (which the caller made private) for this process and reads its store: a directory
-// another open Store holds is refused, since two writers would each accept a save at one revision. No store file is an
-// uninitialized Core; a file that does not read whole under schema is an error, never an uninitialized Core.
-func Open(dir string, schema Schema) (*Store, error) {
-	lock, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
+// Load reads b once. An empty FileBackend is an uninitialized Core; a configuration that does not read whole under schema
+// is an error, never an uninitialized Core.
+func Load(b Backend, schema Schema) (*Store, error) {
+	s := &Store{backend: b, schema: schema}
+	if err := s.fetch(); err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lock.Close()
-		return nil, fmt.Errorf("the state directory %s is in use by another Core: %w", dir, err)
-	}
-	s, err := read(dir, schema)
-	if err != nil {
-		lock.Close()
-		return nil, err
-	}
-	s.lock = lock
 	return s, nil
 }
 
-// Close lets the state directory go; the Store must not be used after it.
-func (s *Store) Close() error { return s.lock.Close() }
+// Open is Load over the FileBackend of the state directory dir.
+func Open(dir string, schema Schema) (*Store, error) { return Load(NewFileBackend(dir), schema) }
 
-func read(dir string, schema Schema) (*Store, error) {
-	s := &Store{dir: dir, schema: schema}
-	raw, err := os.ReadFile(filepath.Join(dir, storeFile))
-	if errors.Is(err, fs.ErrNotExist) {
-		return s, nil
-	}
+// fetch replaces the state with what the backend holds now; on any error the state is as it was.
+func (s *Store) fetch() error {
+	stored, err := s.backend.Read()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var stored struct {
-		Format      int    `json:"format"`
-		Revision    uint64 `json:"revision"`
-		Projections map[string]struct {
-			Generation uint64                     `json:"generation"`
-			Values     map[string]json.RawMessage `json:"values"`
-		} `json:"projections"`
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&stored); err != nil {
-		return nil, fmt.Errorf("%s: %w", storeFile, err)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("%s: data after its document", storeFile)
-	}
-	if stored.Format != 1 || stored.Revision == 0 {
-		return nil, fmt.Errorf("%s: format %d, revision %d: not a store this Core reads", storeFile, stored.Format, stored.Revision)
-	}
-	doc := &document{Format: 1, Revision: stored.Revision, Projections: map[string]*projectionState{}}
-	// A projection or field the store does not hold yet (the schema grew) is its default; one this schema does not
-	// know (it shrank) refuses the start, since dropping a stored setting needs a migration.
-	for _, p := range schema.Projections {
-		sp, ok := stored.Projections[p.ID]
-		if !ok {
-			sp.Generation = 1
+	var values map[string]map[string]any
+	if stored.Initialized {
+		// A projection or field the backend does not hold yet (the schema grew) is its default; one this schema does not
+		// know (it shrank) refuses the read, since dropping a stored setting needs a migration.
+		values = make(map[string]map[string]any, len(s.schema.Projections))
+		for _, p := range s.schema.Projections {
+			v, errs := apply(p, defaults(p), stored.Projections[p.ID], p.ID)
+			if errs != nil {
+				return fmt.Errorf("the stored settings are not valid: %s: %s", errs[0].Field, errs[0].Message)
+			}
+			values[p.ID] = v
 		}
-		if sp.Generation == 0 {
-			return nil, fmt.Errorf("%s: projection %s has generation 0", storeFile, p.ID)
-		}
-		values, errs := apply(p, defaults(p), sp.Values, p.ID)
-		if errs != nil {
-			return nil, fmt.Errorf("%s: %v", storeFile, errs[0])
-		}
-		doc.Projections[p.ID] = &projectionState{Generation: sp.Generation, Values: values}
-	}
-	for id := range stored.Projections {
-		if _, ok := doc.Projections[id]; !ok {
-			return nil, fmt.Errorf("%s: it holds projection %s, which this Core does not know", storeFile, id)
+		for _, id := range slices.Sorted(maps.Keys(stored.Projections)) {
+			if _, ok := values[id]; !ok {
+				return fmt.Errorf("the stored settings hold projection %s, which this Core does not know", id)
+			}
 		}
 	}
-	s.doc = doc
-	return s, nil
+	s.set(stored.Initialized, stored.Revision, values)
+	return nil
+}
+
+func (s *Store) set(initialized bool, revision uint64, values map[string]map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initialized, s.revision, s.values = initialized, revision, values
 }
 
 // Schema is the store's schema.
@@ -195,98 +140,130 @@ func (s *Store) Get(ids []string) (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	snap := Snapshot{Projections: []ProjectionValue{}}
-	if s.doc == nil {
+	if !s.initialized {
 		return snap, nil
 	}
-	snap.Initialized, snap.Revision = true, s.doc.Revision
+	snap.Initialized, snap.Revision = true, s.revision
 	for _, p := range s.schema.Projections {
 		if len(ids) == 0 || slices.Contains(ids, p.ID) {
-			snap.Projections = append(snap.Projections, s.read(p))
+			snap.Projections = append(snap.Projections, show(p, s.values[p.ID]))
 		}
 	}
 	return snap, nil
 }
 
-// read shows a projection's values with every secret as its presence.
-func (s *Store) read(p Projection) ProjectionValue {
-	ps := s.doc.Projections[p.ID]
-	value := maps.Clone(ps.Values)
+// show is a projection's values as a read shows them, every secret as its presence.
+func show(p Projection, values map[string]any) ProjectionValue {
+	value := maps.Clone(values)
 	for _, f := range p.Fields {
 		if f.Secret {
-			value[f.Name] = map[string]bool{"present": ps.Values[f.Name] != f.Default}
+			value[f.Name] = map[string]bool{"present": values[f.Name] != f.Default}
 		}
 	}
-	return ProjectionValue{ResourceID: "settings/" + p.ID, Generation: ps.Generation, Value: value}
+	return ProjectionValue{ResourceID: "settings/" + p.ID, Generation: generation(values), Value: value}
 }
 
-// Initialize accepts the first settings: every projection is its defaults with the given values over them, at revision 1
-// and generation 1. An initialized store refuses it.
+// generation derives a projection's generation from its values (53 bits, exact in a JSON number): equal values give the
+// same one in any Core, a change of value moves it, and nothing is stored. Secrets are part of the values, so one set to
+// a guessable value would be guessable from the generation; the production schema has none.
+func generation(values map[string]any) uint64 {
+	raw, _ := json.Marshal(values) // bools, ints and strings: cannot fail; keys are sorted
+	sum := sha256.Sum256(raw)
+	return binary.BigEndian.Uint64(sum[:8]) >> 11
+}
+
+// write has the backend store values at expected. The new values are the state as soon as the backend took them, even when
+// it then reports an error, and not before: a refused or failed write changes nothing. The caller holds wmu.
+func (s *Store) write(expected uint64, values map[string]map[string]any) (uint64, error) {
+	revision, err := s.backend.Write(expected, values)
+	if revision != 0 {
+		s.set(true, revision, values)
+	}
+	return revision, err
+}
+
+// Initialize accepts the first settings: every projection is its defaults with the given values over them. An initialized
+// store, whatever its backend, refuses it.
 func (s *Store) Initialize(settings map[string]map[string]json.RawMessage) (Result, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.doc != nil {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if s.initialized {
 		return Result{}, &ConflictError{Message: "the settings are already initialized"}
 	}
-	doc := &document{Format: 1, Revision: 1, Projections: map[string]*projectionState{}}
+	values := make(map[string]map[string]any, len(s.schema.Projections))
 	var errs []FieldError
 	for _, p := range s.schema.Projections {
-		values, perr := apply(p, defaults(p), settings[p.ID], p.ID)
+		v, perr := apply(p, defaults(p), settings[p.ID], p.ID)
 		errs = append(errs, perr...)
-		doc.Projections[p.ID] = &projectionState{Generation: 1, Values: values}
+		values[p.ID] = v
 	}
 	errs = append(errs, unknownProjections(s, settings)...)
 	if errs != nil {
 		return Result{}, &ValidationError{Fields: errs}
 	}
-	if err := s.commit(doc); err != nil {
+	revision, err := s.write(0, values)
+	if err != nil {
 		return Result{}, err
 	}
-	res := Result{Revision: 1}
+	res := Result{Revision: revision}
 	for _, p := range s.schema.Projections {
-		res.Projections = append(res.Projections, s.read(p))
+		res.Projections = append(res.Projections, show(p, values[p.ID]))
 	}
 	return res, nil
 }
 
 // Save applies changes (projection → field → value; null resets a field to its default) to the configuration at
-// expected. The whole result is validated before anything is written: any error rejects it all. An accepted save
-// advances the revision; a projection's generation advances only when its value changed.
+// expected. The whole result is validated before the backend is asked: any error rejects it all. An accepted save moves
+// to the revision the backend answers.
 func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMessage) (Result, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.doc == nil {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if !s.initialized {
 		return Result{}, &ConflictError{Message: "the settings are not initialized yet"}
 	}
-	if expected != s.doc.Revision {
+	if expected != s.revision {
 		return Result{}, &ConflictError{Field: "expectedRevision",
-			Message: fmt.Sprintf("the settings are at revision %d, not %d", s.doc.Revision, expected)}
+			Message: fmt.Sprintf("the settings are at revision %d, not %d", s.revision, expected)}
 	}
-	doc := &document{Format: 1, Revision: s.doc.Revision + 1, Projections: map[string]*projectionState{}}
+	values := make(map[string]map[string]any, len(s.schema.Projections))
 	var errs []FieldError
 	var changed []Projection
 	for _, p := range s.schema.Projections {
-		old := s.doc.Projections[p.ID]
-		values, perr := apply(p, old.Values, changes[p.ID], p.ID)
+		v, perr := apply(p, s.values[p.ID], changes[p.ID], p.ID)
 		errs = append(errs, perr...)
-		ps := &projectionState{Generation: old.Generation, Values: values}
-		if !maps.Equal(values, old.Values) {
-			ps.Generation++
+		values[p.ID] = v
+		if !maps.Equal(v, s.values[p.ID]) {
 			changed = append(changed, p)
 		}
-		doc.Projections[p.ID] = ps
 	}
 	errs = append(errs, unknownProjections(s, changes)...)
 	if errs != nil {
 		return Result{}, &ValidationError{Fields: errs}
 	}
-	if err := s.commit(doc); err != nil {
+	revision, err := s.write(expected, values)
+	if err != nil {
 		return Result{}, err
 	}
-	res := Result{Revision: doc.Revision, Projections: []ProjectionValue{}}
+	res := Result{Revision: revision, Projections: []ProjectionValue{}}
 	for _, p := range changed {
-		res.Projections = append(res.Projections, s.read(p))
+		res.Projections = append(res.Projections, show(p, values[p.ID]))
 	}
 	return res, nil
+}
+
+// Reload reads the backend again, as when the configuration was changed behind Core's back, and answers what Get(nil)
+// would. A backend that fails, or a configuration that does not validate, is a *BackendError and the last values stay.
+func (s *Store) Reload() (Snapshot, error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if err := s.fetch(); err != nil {
+		var b *BackendError
+		if !errors.As(err, &b) {
+			err = &BackendError{Err: err}
+		}
+		return Snapshot{}, err
+	}
+	return s.Get(nil)
 }
 
 // Validate is Save's validation without the write: changes are checked over the current settings (the defaults while
@@ -297,8 +274,8 @@ func (s *Store) Validate(changes map[string]map[string]json.RawMessage) error {
 	var errs []FieldError
 	for _, p := range s.schema.Projections {
 		base := defaults(p)
-		if s.doc != nil {
-			base = s.doc.Projections[p.ID].Values
+		if s.initialized {
+			base = s.values[p.ID]
 		}
 		_, perr := apply(p, base, changes[p.ID], p.ID)
 		errs = append(errs, perr...)
@@ -389,41 +366,4 @@ func decode(f Field, raw json.RawMessage) (any, error) {
 		return str, nil
 	}
 	return nil, fmt.Errorf("field type %q is not supported", f.Type)
-}
-
-// commit writes doc as the store: the new file whole and synced, then renamed over the old one, then the directory synced.
-// From the rename on, doc is the store, so it is served even when the directory sync then fails (that error is returned).
-func (s *Store) commit(doc *document) error {
-	raw, err := json.Marshal(doc)
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(s.dir, storeFile)
-	tmp, err := os.OpenFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = tmp.Write(raw)
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return err
-	}
-	if beforeRename != nil {
-		beforeRename()
-	}
-	if err := os.Rename(path+".tmp", path); err != nil {
-		return err
-	}
-	s.doc = doc
-	d, err := os.Open(s.dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return syncDir(d)
 }

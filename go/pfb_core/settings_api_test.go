@@ -19,7 +19,15 @@ import (
 // startSettings serves the production methods and the settings methods over a store in a fresh state directory.
 func startSettings(t *testing.T) *harness {
 	t.Helper()
-	st, err := settings.Open(t.TempDir(), settings.Production())
+	h, _ := startSettingsIn(t)
+	return h
+}
+
+// startSettingsIn is startSettings that also names the state directory the store's file lives in.
+func startSettingsIn(t *testing.T) (*harness, string) {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := settings.Open(dir, settings.Production())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +35,22 @@ func startSettings(t *testing.T) *harness {
 		for name, m := range settingsMethods(st) {
 			o.methods[name] = m
 		}
-	}, nil)
+	}, nil), dir
+}
+
+// dnsGeneration is the generation GetSettings shows for settings/dns.
+func dnsGeneration(t *testing.T, h *harness) uint64 {
+	t.Helper()
+	got := h.post("/v1/GetSettings", `{"projectionIds":["dns"]}`)
+	var snap struct {
+		Projections []struct {
+			Generation uint64 `json:"generation"`
+		} `json:"projections"`
+	}
+	if err := json.Unmarshal(got.body, &snap); err != nil || len(snap.Projections) != 1 {
+		t.Fatalf("GetSettings = %s (%v), want one projection", got.body, err)
+	}
+	return snap.Projections[0].Generation
 }
 
 func TestGetSettingsSchemaAnswersTheNativeSchema(t *testing.T) {
@@ -51,6 +74,7 @@ func TestTheSettingsMethodsOverTheAPI(t *testing.T) {
 		t.Fatalf("InitializeSettings = %d %s, want revision 1 with settings/dns", init.status, init.body)
 	}
 	wantError(t, h.post("/v1/InitializeSettings", `{"requestId":"i2","settings":{}}`), http.StatusConflict, codeConflict)
+	initialGeneration := dnsGeneration(t, h)
 
 	wantError(t, h.post("/v1/SaveSettings", `{"requestId":"s1","expectedRevision":1,"changes":{"dns":{"decisionCacheMax":5000001,"control":true}}}`),
 		http.StatusBadRequest, codeInvalidArgument, "changes.dns.decisionCacheMax")
@@ -81,9 +105,10 @@ func TestTheSettingsMethodsOverTheAPI(t *testing.T) {
 	if err := json.Unmarshal(got.body, &snap); err != nil {
 		t.Fatalf("GetSettings: %v\n%s", err, got.body)
 	}
-	if !snap.Initialized || snap.Revision != 2 || len(snap.Projections) != 1 || snap.Projections[0].Generation != 2 ||
+	if !snap.Initialized || snap.Revision != 2 || len(snap.Projections) != 1 || snap.Projections[0].Generation == initialGeneration ||
 		snap.Projections[0].Value["control"] != true || snap.Projections[0].Value["decisionCacheMax"] != float64(500) {
-		t.Errorf("GetSettings = %s, want revision 2 (the replay ran once), dns generation 2, control on, cap 500", got.body)
+		t.Errorf("GetSettings = %s, want revision 2 (the replay ran once), a dns generation other than %d, control on, cap 500",
+			got.body, initialGeneration)
 	}
 	wantError(t, h.post("/v1/GetSettings", `{"projectionIds":["nosuch"]}`), http.StatusBadRequest, codeInvalidArgument,
 		"projectionIds[0]")
