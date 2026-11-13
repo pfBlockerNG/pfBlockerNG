@@ -2963,7 +2963,6 @@ PFB_MASTERFILE = "/var/db/pfblockerng/masterfile"
 WIZARD_CONFIG_BACKUP = "/root/pfb_wizard_finish_config.xml"
 WIZARD_MASTERFILE_BACKUP = "/root/pfb_wizard_finish_masterfile.bak"
 WIZARD_FEEDS_BACKUP = "/root/pfb_wizard_finish_feeds.json.bak"
-WIZARD_LOCK_DIR = "/tmp/pfb3517_wizard_lock"
 RECOVERY_REFUSAL = "so what the Resolver was before cannot be confirmed and pfBlockerNG was not reset"
 OWNED_REFUSAL = "the DNS Resolver could not be put back"
 FEEDS_REFUSAL = "Feeds database missing"
@@ -2976,10 +2975,6 @@ _RESOLVER_SNAPSHOT = json.dumps(
     }
 ).encode()
 _VALID_SNAPSHOT = base64.b64encode(_RESOLVER_SNAPSHOT).decode("ascii")
-_PROBE_LOCK_PHP = (
-    'require_once("globals.inc"); require_once("util.inc"); '
-    '$x = try_lock("pfb_dns_config", 1); echo is_resource($x) ? "ACQUIRED" : "NULL";'
-)
 
 
 def _truncated_snapshot() -> str:
@@ -3033,47 +3028,6 @@ def _feeds_catalog_removed(vm: helpers.SmokeVM) -> Iterator[None]:
     finally:
         _guest_ok(vm, "/bin/cp", "-p", WIZARD_FEEDS_BACKUP, PFB_FEEDS_JSON)
         _guest_ok(vm, "/usr/bin/cmp", "-s", WIZARD_FEEDS_BACKUP, PFB_FEEDS_JSON)
-
-
-@contextlib.contextmanager
-def _config_lock_held(vm: helpers.SmokeVM) -> Iterator[None]:
-    """Hold pfSense's pfb_dns_config lock in another process for the body, as a concurrent save does.
-
-    The holder is the aborted-removal case's holder (test_smoke_dns_proxy.py): it touches the ready file once it holds
-    the lock, then waits for the go file under a bound and unlocks. The body runs only once the holder is observed
-    either holding the lock (ready file) or ending before it did (failed file, written by its shutdown function).
-    The finally releases the holder and kills it if it is still running.
-    """
-    ready, go = f"{WIZARD_LOCK_DIR}/ready", f"{WIZARD_LOCK_DIR}/go"
-    failed = f"{WIZARD_LOCK_DIR}/failed"
-    _guest_ok(vm, "/bin/rm", "-rf", WIZARD_LOCK_DIR)
-    _guest_ok(vm, "/bin/mkdir", "-p", WIZARD_LOCK_DIR)
-    holder = (
-        # Whatever ends the holder before it holds the lock (a refused lock, a fatal error) leaves the failed file
-        "/* pfb_ui_wizard_lock_holder */ "
-        f'register_shutdown_function(function () {{ if (!file_exists("{ready}")) {{ touch("{failed}"); }} }}); '
-        'require_once("globals.inc"); require_once("util.inc"); '
-        '$k = lock("pfb_dns_config", LOCK_EX); if (!is_resource($k)) { exit(1); } '
-        f'touch("{ready}"); $i = 0; while (!file_exists("{go}") && $i++ < 1800) {{ usleep(100000); }} unlock($k);'
-    )
-    vm.ssh(f"nohup {helpers.PHP_BIN} -r '{holder}' >/dev/null 2>&1 &")
-    try:
-        helpers.wait_until(
-            lambda: helpers.hook_marker_exists(vm, ready) or helpers.hook_marker_exists(vm, failed),
-            timeout=60.0,
-            interval=1.0,
-        )
-        assert helpers.hook_marker_exists(vm, ready), (
-            "the config-lock holder did not take pfb_dns_config: expected the ready marker, the holder ended first "
-            f"(failed marker present: {helpers.hook_marker_exists(vm, failed)}); holder: {holder}"
-        )
-        probe = vm.ssh(f"{helpers.PHP_BIN} -r '{_PROBE_LOCK_PHP}'").stdout.strip()
-        assert probe == "NULL", f"a fresh process got pfb_dns_config while the holder has it: {probe!r}"
-        yield
-    finally:
-        vm.ssh(f"touch {go}")
-        vm.ssh("/usr/bin/pkill", "-9", "-f", "pfb_ui_wizard_lock_hold[e]r")
-        vm.ssh("/bin/rm", "-rf", WIZARD_LOCK_DIR)
 
 
 def _assert_finalize_page(text: str, case: _FinishCase) -> None:
@@ -3132,7 +3086,7 @@ def test_a_refused_wizard_finish_keeps_the_data_and_renders_the_finalize_step(
             if case.holds == "feeds":
                 held.enter_context(_feeds_catalog_removed(vm))
             elif case.holds == "lock":
-                held.enter_context(_config_lock_held(vm))
+                held.enter_context(helpers.config_lock_held(vm))
             resp = webui.post(WIZARD_FINISH_PATH, {}, submit=("finish", "Finish"), timeout=SAVE_TIMEOUT)
         assert not looks_like_login_page(resp.text), "Finish POST returned the login form (session lost)"
 
