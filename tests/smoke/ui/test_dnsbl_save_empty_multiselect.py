@@ -29,7 +29,7 @@ def test_dnsbl_save_without_allow_interface_logs_no_php_diagnostic(smoke_vm: Smo
     original = helpers.config_get_state(smoke_vm, _ALLOW_INT)
     try:
         helpers.config_set(smoke_vm, _ALLOW_INT, "")
-        assert "dnsbl_allow_int" not in scrape_form_fields(webui.get(DNSBL_PAGE).text), (
+        assert "dnsbl_allow_int[]" not in scrape_form_fields(webui.get(DNSBL_PAGE).text), (
             "fixture: no interface selected, so the form must submit no dnsbl_allow_int"
         )
         guard = PhpErrorLogGuard(smoke_vm)
