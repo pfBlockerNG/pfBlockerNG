@@ -55,11 +55,11 @@ func TestTheFeedProjectionsMatchTodaysPhpOnEveryFixtureCase(t *testing.T) {
 		for _, id := range doc.Projections {
 			for _, field := range []string{"preScript", "postScript"} {
 				st := open(t, t.TempDir())
-				if _, err := st.Initialize(nil); err != nil {
+				if _, err := st.Initialize(t.Context(), nil); err != nil {
 					t.Fatal(err)
 				}
 				group := jsonOf(t, map[string]string{"name": "G", field: n.Name})
-				_, err := st.Save(1, map[string]map[string]json.RawMessage{id: {"groups": json.RawMessage("[" + group + "]")}})
+				_, err := st.Save(t.Context(), 1, map[string]map[string]json.RawMessage{id: {"groups": json.RawMessage("[" + group + "]")}})
 				if accepted := err == nil; accepted != n.Valid {
 					t.Errorf("Core's verdict on %s %q in %s: accepted %v (%v), PHP's %v", field, n.Name, id, accepted, err, n.Valid)
 				}
