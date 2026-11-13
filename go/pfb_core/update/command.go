@@ -24,6 +24,12 @@ const (
 
 var killGrace = 5 * time.Second // how long the program's whole group has to end on TERM, and again after KILL, before Run goes on
 
+// leaderExited reports whether the program has exited, when the context ends; replaced only by tests.
+var leaderExited = exitedUnreaped
+
+// reap waits for the program and reaps it; replaced only by tests, to hold the window between its exit and its reap open.
+var reap = (*exec.Cmd).Wait
+
 // Command runs the update program at Path once per Update: stdin is {"version":1,<Request>}, stdout and stderr are the log, and
 // fd 3 is the result {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool}; all four
 // are regular files, never pipes (a daemon an Update restarts would hold one open). The program's group gets TERM when ctx ends
@@ -85,8 +91,8 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 			killed <- false
 		case <-ctx.Done():
 			pid := cmd.Process.Pid
-			if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
-				killed <- false // the program has exited and been reaped: what it left running is not Run's to kill
+			if leaderExited(pid) {
+				killed <- false // the program has exited, reaped or not: what it left running is not Run's to kill
 				return
 			}
 			group := -pid
@@ -98,7 +104,7 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 			killed <- true
 		}
 	}()
-	err = cmd.Wait()
+	err = reap(cmd)
 	close(exited)
 	switch wasKilled := <-killed; {
 	case wasKilled:
