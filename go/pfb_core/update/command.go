@@ -25,7 +25,7 @@ const (
 var killGrace = 5 * time.Second // how long the program's whole group has to end on TERM, and again after KILL, before Run goes on
 
 // leaderExited reports whether the program has exited, when the context ends; replaced only by tests.
-var leaderExited = func(pid int) bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) }
+var leaderExited = exitedUnreaped
 
 // reap waits for the program and reaps it; replaced only by tests, to hold the window between its exit and its reap open.
 var reap = (*exec.Cmd).Wait
@@ -92,7 +92,7 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 		case <-ctx.Done():
 			pid := cmd.Process.Pid
 			if leaderExited(pid) {
-				killed <- false // the program has exited and been reaped: what it left running is not Run's to kill
+				killed <- false // the program has exited, reaped or not: what it left running is not Run's to kill
 				return
 			}
 			group := -pid
