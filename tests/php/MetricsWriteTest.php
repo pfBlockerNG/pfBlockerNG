@@ -445,6 +445,24 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame('client-IP collection is permitted in: pfb_py_dnsbl.sqlite; unknown (policy unreadable) in: pfb_py_resolver.sqlite', $state);
 	}
 
+	/** issue #3932: every readable database is off but one cannot be read: collection is not ruled out for it, never denied outright. */
+	public function testAnUnreadablePolicyBesideOnlyDisabledOnesIsNotReportedAsNoCollection(): void
+	{
+		$this->bothPolicies(0);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_resolver']);
+		$db->exec('BEGIN EXCLUSIVE');
+		$db->exec('UPDATE dns_metric_settings SET epoch=epoch');
+		try {
+			$state = pfb_metrics_client_collecting();
+		} finally {
+			$db->exec('ROLLBACK');
+			$db->close();
+		}
+
+		$this->assertSame('client-IP collection could not be ruled out in: pfb_py_resolver.sqlite (policy unreadable)', $state);
+	}
+
 	private function clientIpPolicy(): array
 	{
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);

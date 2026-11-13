@@ -417,6 +417,47 @@ final class CoreSettingsBackendTest extends TestCase
 		$this->assertNothingWritten($before, 'a failed privacy step');
 	}
 
+	/** Issue #3927: the adapter gives up on a busy metrics lock after its own short wait (CoreSettingsAdapterDeadlineTest's budget), not the page's 10 s. */
+	public function testABusyMetricsLockIsWaitedForOnlyTheAdaptersShortWait(): void
+	{
+		$this->arrange([]);
+		$current = pfb_core_dns_settings();
+		$before = $GLOBALS['config'];
+		$holder = fopen($GLOBALS['pfb']['metrics_lock'], 'c');
+		$this->assertTrue(flock($holder, LOCK_EX | LOCK_NB), 'before-state: the test holds the metrics lock');
+		try {
+			$reply = $this->backend(self::writeRequest($current, array_merge($current, ['metricsClientIp' => TRUE])));
+		} finally {
+			fclose($holder);
+		}
+
+		$this->assertSame('unavailable', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertStringContainsString('metrics publication stayed busy for 2 s', $reply['error']['message']);
+		$this->assertNothingWritten($before, 'a busy metrics lock');
+	}
+
+	/** Issue #3927: a metrics database another writer holds is waited for only the adapter's SQLite wait, whatever the process's own. */
+	public function testABusyMetricsDatabaseIsWaitedForOnlyTheAdaptersSqliteWait(): void
+	{
+		$this->arrange(['gen/pfb_metrics_client_ip' => 'on']);
+		$GLOBALS['pfb']['sqlite_timeout'] = 100000;
+		$current = pfb_core_dns_settings();
+		$before = $GLOBALS['config'];
+		$holder = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$holder->exec('CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL)');
+		$holder->exec('BEGIN IMMEDIATE');
+		try {
+			$reply = $this->backend(self::writeRequest($current, array_merge($current, ['metricsClientIp' => FALSE])));
+		} finally {
+			$holder->exec('ROLLBACK');
+			$holder->close();
+		}
+
+		$this->assertSame('unavailable', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertStringContainsString('dnsbl_info.sqlite: database is locked (waited 500 ms)', $reply['error']['message']);
+		$this->assertNothingWritten($before, 'a busy metrics database');
+	}
+
 	#[DataProvider('failedWrites')]
 	public function testARefusedWriteConfigAfterAClientIpChangePutsThePrivacyPolicyBack(bool|int $result): void
 	{
