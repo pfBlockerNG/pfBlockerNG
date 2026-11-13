@@ -14,7 +14,7 @@ func idnToASCIIWildcard(host string) string {
 	if pfbIsBlank(host) {
 		return ""
 	}
-	ascii, ok := idnToASCII(host)
+	ascii, ok := IDNToASCII(host)
 	if !ok || phpEmpty(ascii) {
 		return ""
 	}

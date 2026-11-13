@@ -1,0 +1,53 @@
+{
+ "schema": 1,
+ "description": "A redirect to a non-ASCII host that resolves to a permitted address is followed by the mapped name.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "xn--bcher-kva.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin",
+  "target"
+ ],
+ "routes": {
+  "origin": {
+   "/evil": {
+    "status": 302,
+    "location": "http://bücher.example:{port:target}/hop"
+   }
+  },
+  "target": {
+   "/hop": {
+    "body": "FINE\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/evil",
+   "expect": {
+    "ok": true,
+    "published": "FINE\n",
+    "digest": "f74f7ee8336463394b68d31791071c26",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/evil"
+     },
+     {
+      "server": "target",
+      "path": "/hop",
+      "host": "xn--bcher-kva.example:{port:target}"
+     }
+    ]
+   }
+  }
+ ]
+}

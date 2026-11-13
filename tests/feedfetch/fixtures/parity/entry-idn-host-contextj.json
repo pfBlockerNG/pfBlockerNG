@@ -1,0 +1,63 @@
+{
+ "schema": 1,
+ "description": "A joiner or non-joiner outside its context (CONTEXTJ) is refused as an invalid IDN name; a ZWNJ inside its context is mapped and requested (the old path refuses that URL at FILTER_VALIDATE_URL: old_expect).",
+ "hosts": {
+  "xn--mgbn2ecje63gr19l.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://a\u200db.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is not a valid IDN name",
+    "requests": []
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://a\u200cb.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is not a valid IDN name",
+    "requests": []
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://می\u200cخواهم.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "a\nb\n",
+    "digest": "895ce4f567238372b6307d6feb690ac7",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "host": "xn--mgbn2ecje63gr19l.example:{port:origin}"
+     }
+    ]
+   },
+   "old_expect": {
+    "ok": false,
+    "published": null,
+    "requests": []
+   }
+  }
+ ]
+}
