@@ -354,6 +354,7 @@ def _vendor_own(go: str, core: Path, copy: Path, module: str, version: str, *, v
     if not directive:
         raise BuildError(f"{go_mod} has no go directive")
     # shortcut: a root .go file tagged `//go:build ignore` is copied (Go's vendor drops it), upgrade if one appears
+    # shortcut: only the module's root package is vendored (all Core imports today); a subpackage import fails go build
     _copy_files(
         tree, copy / "vendor" / module, lambda name: not name.endswith("_test.go") and name not in ("go.mod", "go.sum")
     )
