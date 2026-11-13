@@ -67,7 +67,7 @@ The expectations were produced by the old path (PHP 8.4 reading the host's syste
 `tick.json` pins the two steps of `pfblockerng_tick()` that Core takes over besides the schedule evaluation above
 (issue #3941). It follows the common rules above (same ids, entries, state shape and strictness); the expectations were
 produced by running the tick's inline code before it became those functions (PHP 8.4), then reviewed row by row. The
-sections, in this order:
+sections, in this order, are `feed_plan` and `reserve`; the runners:
 
 - Go: `go/pfb_core/schedule/tick_corpus_test.go`, on the same loader as `corpus_test.go`.
 - PHP: `tests/php/ScheduleTickCorpusTest.php`, through the functions the tick itself calls.

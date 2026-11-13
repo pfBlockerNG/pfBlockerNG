@@ -32,9 +32,9 @@ var (
 	forces = []string{"none", "parse", "download", "both"}
 )
 
-// Config: Model returns the current model (built from the settings elsewhere); StatePath is the file the scheduler owns;
-// Loc is the zone the schedule is read in (nil: time.Local); Now is the clock (nil: time.Now); Logf is the logger (nil:
-// discard).
+// Config: Model returns the current model (built from the settings elsewhere), called without the scheduler's lock and
+// possibly by several goroutines at once; StatePath is the file the scheduler owns; Loc is the zone the schedule is read in
+// (nil: time.Local); Now is the clock (nil: time.Now); Logf is the logger (nil: discard).
 type Config struct {
 	Model     func() (schedule.Model, error)
 	StatePath string
@@ -99,15 +99,15 @@ func (s *Scheduler) Tick() error {
 // evaluate plans what is due and asks for an Update with it (always: force), reserving the occurrences only if the gate
 // admits the request. It returns the gate's error unchanged.
 func (s *Scheduler) evaluate(trigger string, force bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	cfg := s.cfg
-	now := cfg.Now().Unix()
-	m, err := cfg.Model()
+	m, err := cfg.Model() // before the lock: it needs none of the state, and a slow read must not hold up Done
 	if err != nil {
 		cfg.Logf("scheduler: the schedule model is unavailable, nothing started: %v", err)
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := cfg.Now().Unix()
 	// The cache is recomputed first, as the PHP tick refreshed its own before planning.
 	nextDue := map[string]int64{}
 	for id, e := range schedule.CacheEntries(m, s.st, now, cfg.Loc) {
@@ -180,29 +180,27 @@ func (s *Scheduler) Start(trigger, scope, force string) error {
 	return s.launch(req)
 }
 
-// Done records what an Update reported: each outcome (an Extra's only for its pending occurrence), the attempted ids that
-// are still pending, and the GeoIP readiness the Outpost saw. The state is written once; a failed run's outcomes still count.
+// Done records what an Update reported: all its outcomes in one pass over the state, the Extras among the attempted ids that
+// are still pending, and the GeoIP readiness the Outpost saw. A success for an id with no pending occurrence only stamps
+// its last_successful_check. The state is written once; a failed run's outcomes still count.
 func (s *Scheduler) Done(req update.Request, res update.Result, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
 		s.cfg.Logf("scheduler: the %s Update failed: %v", req.Trigger, err)
 	}
-	now := s.cfg.Now().Unix()
+	outcomes := make(map[string]schedule.Outcome, len(res.Outcomes))
 	for id, outcome := range res.Outcomes {
-		var expected *int64
-		if strings.HasPrefix(id, extraPrefix) {
-			expected = s.st[id].PendingOccurrence
-		}
-		st, err := schedule.RecordOutcome(s.st, id, schedule.Outcome(outcome), now, expected)
-		if err != nil {
-			s.cfg.Logf("scheduler: the outcome %q of %q was rejected: %v", outcome, id, err)
-			continue
-		}
-		s.st = st
+		outcomes[id] = schedule.Outcome(outcome)
 	}
+	st, rejected := schedule.RecordOutcomes(s.st, outcomes, s.cfg.Now().Unix())
+	for _, id := range slices.Sorted(maps.Keys(rejected)) {
+		s.cfg.Logf("scheduler: the outcome %q of %q was rejected: %v", outcomes[id], id, rejected[id])
+	}
+	s.st = st
 	for _, id := range res.Attempted {
-		if it := s.st[id]; it.PendingOccurrence != nil {
+		// A failed Extra waits for its next occurrence; a failed feed is retried through its pending occurrence alone.
+		if it := s.st[id]; strings.HasPrefix(id, extraPrefix) && it.PendingOccurrence != nil {
 			it.PendingAttempted = true
 			s.st[id] = it
 		}
@@ -228,12 +226,12 @@ type View struct {
 
 // View computes the schedule view now from the model and the state.
 func (s *Scheduler) View() (View, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	m, err := s.cfg.Model()
+	m, err := s.cfg.Model() // before the lock, as in evaluate
 	if err != nil {
 		return View{}, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	v := View{Scheduled: m.Scheduled, Extras: map[string]Entry{}}
 	for id, e := range schedule.CacheEntries(m, s.st, s.cfg.Now().Unix(), s.cfg.Loc) {
 		if id == cronKey {
@@ -293,7 +291,8 @@ func writeState(path string, st schedule.State) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.OpenFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	tmpPath := path + ".tmp"
+	tmp, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -304,10 +303,11 @@ func writeState(path string, st schedule.State) error {
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
-	if err != nil {
-		return err
+	if err == nil {
+		err = os.Rename(tmpPath, path)
 	}
-	if err := os.Rename(path+".tmp", path); err != nil {
+	if err != nil {
+		_ = os.Remove(tmpPath) // a leftover would only be overwritten by the next write, never read
 		return err
 	}
 	dir, err := os.Open(filepath.Dir(path))
