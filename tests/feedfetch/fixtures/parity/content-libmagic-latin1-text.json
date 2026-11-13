@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "Libmagic difference: libmagic takes ISO-8859-1 text for text/plain; Core takes a body that is not valid UTF-8 for binary and refuses it.",
+ "description": "Libmagic agreement: libmagic takes ISO-8859-1 text for text/plain; Core takes any body without a NUL for text, so the feed is published as it is, as the PHP path does.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -28,21 +28,6 @@
    "op": "ingest",
    "url": "http://feed.example:{port:origin}/list",
    "expect": {
-    "ok": false,
-    "published": "old\n",
-    "stage": "mime",
-    "reason": "mime_not_allowed",
-    "detected": "application/octet-stream rc=0",
-    "requests": [
-     {
-      "server": "origin",
-      "path": "/list"
-     }
-    ],
-    "etag": null,
-    "lastmod": null
-   },
-   "old_expect": {
     "ok": true,
     "published_b64": "Y2Fm6QoxLjIuMy40Cg==",
     "digest": "9b527e9510afe4059402e84f4eb79f62",

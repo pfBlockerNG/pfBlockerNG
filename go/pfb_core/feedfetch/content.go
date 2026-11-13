@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-	"unicode/utf8"
 )
 
 // The content gates of pfb_download() ($type === ''), run on the staged ".raw" after the transfer: the MIME verdict
@@ -46,9 +45,10 @@ var boms = [][]byte{{0xff, 0xfe, 0, 0}, {0, 0, 0xfe, 0xff}, {0xff, 0xfe}, {0xfe,
 // classify is `file -b --mime-type` for the head of a body, as far as the gates need it: the magic numbers of the
 // containers the allow-list names, then text or binary. more tells that the body goes on past head.
 //
-// Text is valid UTF-8 without a NUL, or UTF-16/32 behind its mark. Text takes the label of its opening where a cheap
-// rule gives libmagic's: text/html for an HTML opening, else text/plain. Every other body is application/octet-stream,
-// whatever libmagic would call it (a PDF, an executable).
+// Text is any body without a NUL, or UTF-16/32 behind its mark: a Latin-1 or Windows-1252 feed is text, as libmagic takes
+// it, and goes on to the parser's raw-byte path (#3906) instead of being refused here. Text takes the label of its
+// opening where a cheap rule gives libmagic's: text/html for an HTML opening, else text/plain. Every other body is
+// application/octet-stream, whatever libmagic would call it (a PDF, an executable).
 func classify(head []byte, more bool) string {
 	switch {
 	case len(head) == 0:
@@ -61,7 +61,7 @@ func classify(head []byte, more bool) string {
 		return mimeZip
 	case len(head) >= 262 && string(head[257:262]) == "ustar":
 		return mimeTar
-	case isText(head, more):
+	case isText(head):
 		if htmlOpening(head) {
 			return mimeHTML
 		}
@@ -70,26 +70,13 @@ func classify(head []byte, more bool) string {
 	return mimeOctet
 }
 
-func isText(b []byte, more bool) bool {
+func isText(b []byte) bool {
 	for _, bom := range boms {
 		if bytes.HasPrefix(b, bom) {
 			return true
 		}
 	}
-	if bytes.IndexByte(b, 0) >= 0 {
-		return false
-	}
-	if more { // a rune cut by the end of the sample is not an invalid one
-		for i := 1; i <= min(utf8.UTFMax-1, len(b)); i++ {
-			if utf8.RuneStart(b[len(b)-i]) {
-				if !utf8.FullRune(b[len(b)-i:]) {
-					b = b[:len(b)-i]
-				}
-				break
-			}
-		}
-	}
-	return utf8.Valid(b)
+	return bytes.IndexByte(b, 0) < 0
 }
 
 // htmlOpening is libmagic's "<!doctype html" / "<html" at the start, case-blind, after white space and a UTF-8 mark.

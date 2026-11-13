@@ -283,10 +283,12 @@ func TestClassifyAnswersTheLabelsTheGatesNeed(t *testing.T) {
 		{"utf-32be bom", []byte("\x00\x00\xfe\xff\x00\x00\x001"), false, "text/plain"},
 		{"a nul outside a bom encoding", []byte("a\x00b"), false, "application/octet-stream"},
 		{"binary", bytes.Repeat([]byte{0, 1, 2, 3}, 8), false, "application/octet-stream"},
-		{"not utf-8", []byte("caf\xe9\n"), false, "application/octet-stream"},
+		{"latin-1 text", []byte("caf\xe9\n"), false, "text/plain"},
+		{"windows-1252 text", []byte("\x93quoted\x94 \x80 5\n"), false, "text/plain"},
+		{"a nul behind latin-1 text", []byte("caf\xe9\x00\n"), false, "application/octet-stream"},
 		{"utf-8", []byte("caf\u00e9\n"), false, "text/plain"},
 		{"a rune cut by the end of the sample", []byte("abc\xe2\x82"), true, "text/plain"},
-		{"a rune cut by the end of the body", []byte("abc\xe2\x82"), false, "application/octet-stream"},
+		{"a rune cut by the end of the body", []byte("abc\xe2\x82"), false, "text/plain"},
 	}
 	for _, c := range cases {
 		if got := feedfetch.Classify(c.head, c.more); got != c.want {
