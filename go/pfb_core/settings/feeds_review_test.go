@@ -1,6 +1,8 @@
 package settings
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -47,5 +49,31 @@ func TestAnEditedFeedKeepsItsCredentialsUnlessTheSaveClearsThem(t *testing.T) {
 	}
 	if v := saved(6, `{"header": "H", "url": "https://example.org/h"}`); strings.Contains(v, "s3cret") || strings.Contains(v, "again") {
 		t.Errorf("a feed under another header inherited credentials: %s", v)
+	}
+}
+
+// Issue #3946: a script is a plain file name in Core's script directory: not "." or "..", no leading "-", no "/" or control
+// character, the rule the Outpost's settings adapter refuses a write by, so Core's dry run accepts what the adapter takes.
+func TestAScriptNameIsAPlainFileName(t *testing.T) {
+	st := open(t, t.TempDir())
+	names := map[string]bool{
+		".": false, "..": false, "-x": false, "--": false, "a/b": false, "x\x01": false,
+		"": true, "ok.sh": true, "a-b": true, " leading space": true, ".hook": true, "..x": true, ".-x": true,
+	}
+	for _, field := range []string{"preScript", "postScript"} {
+		for name, ok := range names {
+			quoted, err := json.Marshal(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := fmt.Sprintf(`{"feeds/ipv4": {"groups": [{"name": "G", %q: %s}]}}`, field, quoted)
+			err = st.Validate(changes(t, text))
+			switch {
+			case ok && err != nil:
+				t.Errorf("Validate(%s) = %v, want %s %q accepted", text, err, field, name)
+			case !ok && (err == nil || !strings.Contains(err.Error(), "feeds/ipv4.groups[0]."+field)):
+				t.Errorf("Validate(%s) = %v, want %s %q refused by name", text, err, field, name)
+			}
+		}
 	}
 }

@@ -172,9 +172,9 @@ options stay with the Outpost; the schedule override is in [`settings/schedule`]
 | `name` (key) | string `[A-Za-z0-9_]+`, IP at most 24 characters |
 | `action` | enum: IP `Disabled` `Deny_*` `Permit_*` `Match_*` (`Inbound`/`Outbound`/`Both`) `Alias_Deny` `Alias_Permit` `Alias_Match` `Alias_Native`; DNSBL `Disabled` `unbound`; `Disabled` |
 | `updateFrequency` | enum `Never` `01hour` `02hours` `03hours` `04hours` `06hours` `08hours` `12hours` `EveryDay` `Weekly`, `Never` |
-| `bindAddress` | string, an IP address or `""` (the source interface, translated by the Outpost), `""` |
-| `preScript`, `postScript` | string, a file name in Core's script directory or `""`, `""` |
-| `customList` | string, `""` |
+| `bindAddress` | string, an interface's IPv4 address, `127.0.0.1` for `lo0`, or `""` for the default route; `""` |
+| `preScript`, `postScript` | string, a file name in Core's script directory or `""`; not `.` or `..`, no leading `-`, `/` or control character; `""` |
+| `customList` | UTF-8 string (invalid stored bytes scrubbed on read without rewriting storage), `""` |
 | `suppressionCidr` (IPv4) | int 0 to 32 (0: off), `0` |
 | `whoisConvert` (IP) | bool, `false` |
 | `feeds` | list keyed by `header`, `[]` |
@@ -196,6 +196,17 @@ deleted name or header goes with every stored duplicate of it. A feed added to a
 is refused (pfBlockerNG ignores every row of such a group). The revision is keyed (HMAC with a per-box key, root's
 alone, in `/var/db/pfblockerng/core_revision.key`), so it confirms no guess of a credential. `bindAddress` is the
 interface's IPv4 address, so a changed interface address moves the revision.
+
+A group whose stored Source Interface is missing or has no IPv4 address does not project, including IPv6 groups. Hiding a
+group never promotes a later one: a group of the same name stays hidden too, and so does a feed whose header a row of an
+earlier group holds (a row of a hidden group included). A new group cannot take the name of a stored group that does not
+project; a new feed cannot take the header of any stored row of its type that does not project. Edit these entries on
+the Groups page first. A write leaves a hidden group's own fields and rows untouched; the one exception is the type-wide
+rule above: a header Core drops from the type is removed from every group of the type, hidden ones included.
+After a successful write, each changed custom list (new non-empty lists included) is flagged for the next Update
+with `<folder>/<name>_custom<suffix>.update`, as on the Groups page: the stored action determines the folder,
+including Advanced Invert routing; the suffix is `_v4`, `_v6` or empty for DNSBL. An action with no list folder
+(Disabled), an unchanged list, or a refused or failed write flags nothing.
 
 Parity fixture: `tests/core/fixtures/settings_feeds_parity.json`. `CoreSettingsFeedsParityTest` (PHPUnit) freezes it
 against today's PHP and the adapter. `go/pfb_core/settings/feeds_parity_test.go` runs Core against it.

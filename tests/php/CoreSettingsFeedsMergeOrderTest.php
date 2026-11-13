@@ -174,4 +174,18 @@ final class CoreSettingsFeedsMergeOrderTest extends TestCase
 		$this->assertSame([[], ['G']], [array_column($stored[0]['row'] ?? [], 'header'), array_column($stored[1]['row'], 'header')],
 			'no feed F is left to become the projected F');
 	}
+
+	public function testDeletingAHeaderAlsoDeletesItsDuplicateInAGroupWhoseInterfaceDoesNotResolve(): void
+	{
+		$hidden = self::group('Hidden', [self::row('F'), self::row('G')]) + ['srcint' => 'missing'];
+		$stored = $this->writeV4([self::group('A', [self::row('F')]), $hidden], static function (array $g): array {
+			$thisNames = array_column($g, 'name');
+			self::assertSame(['A'], $thisNames, 'the unresolved group does not project');
+			$g[0]['feeds'] = [];
+			return $g;
+		});
+
+		$hidden['row'] = [$hidden['row'][1]];
+		$this->assertSame($hidden, $stored[1], 'only the type-wide dropped header goes; its other rows and fields stay');
+	}
 }

@@ -4721,6 +4721,11 @@ function pfb_core_feed_name_valid(mixed $name, string $gtype): bool {
 	return is_string($name) && preg_match('/^[A-Za-z0-9_]+$/D', $name) === 1 && ($gtype === 'dnsbl' || strlen($name) <= 24);
 }
 
+/** A script name Core may run from its script directory (issue #3946): a file name that is not `.` or `..`, does not start with `-` and holds no `/` or control character. */
+function pfb_core_script_name_valid(string $name): bool {
+	return $name !== '' && $name !== '.' && $name !== '..' && $name[0] !== '-' && preg_match('/^[^\/\p{C}]+$/uD', $name) === 1;
+}
+
 /**
  * A stored feed source as Core's [url, credentials] (issue #3937): an ASN source unescaped (the editor stores it htmlentities()d), a
  * local path as a file:// URL, and a scheme URL's userinfo (from :// to the last @ before the first /, ? or #) split off.
@@ -4807,35 +4812,14 @@ function pfb_core_feed_faults(mixed $feed, string $gtype, string $prefix): array
 }
 
 /**
- * One stored group as Core's native group (issue #3937), its `feeds` keyed by row index: each token as the download path reads it
- * (an invalid action is Disabled, an unknown frequency Never, a script its file name), and a feed that breaks a rule of
- * pfb_core_feed_faults() or repeats a header before it left out.
+ * One stored group's feeds as Core's native feeds, keyed by row index (issue #3937): each token as the download path reads it, and
+ * a row that breaks a rule of pfb_core_feed_faults() or repeats a header before it left out.
  *
  * @param array<mixed> $stored
- * @param callable(): array<string, string> $interfaces
- * @return array<string, mixed>
+ * @return array<int, array<string, mixed>>
  */
-function pfb_core_feed_group_native(array $stored, string $gtype, callable $interfaces): array {
-	$text = static fn(string $key): string => is_scalar($stored[$key] ?? NULL) ? (string) $stored[$key] : '';
-	$script = static fn(string $path): string => preg_match('/^[^\/\p{C}]+$/uD', basename($path)) === 1 ? basename($path) : '';
-	$srcint = $text('srcint');
-	$group = [
-		'name'            => $text('aliasname'),
-		'action'          => pfb_group_action_valid($stored['action'] ?? NULL, $gtype) ? $stored['action'] : 'Disabled',
-		'updateFrequency' => in_array($stored['cron'] ?? NULL, PFB_CORE_FEED_CRON, TRUE) ? $stored['cron'] : 'Never',
-		'bindAddress'     => match ($srcint) { '' => '', 'lo0' => '127.0.0.1', default => $interfaces()[$srcint] ?? '' },
-		'preScript'       => $script($text('script_pre')),
-		'postScript'      => $script($text('script_post')),
-		'customList'      => (string) base64_decode($text('custom')),
-	];
-	if ($gtype === 'ipv4') {
-		$cidr = $text('suppression_cidr');
-		$group['suppressionCidr'] = ctype_digit($cidr) && (int) $cidr <= 32 ? (int) $cidr : 0;
-	}
-	if ($gtype !== 'dnsbl') {
-		$group['whoisConvert'] = ($stored['whois_convert'] ?? NULL) === 'on';
-	}
-	$group['feeds'] = $headers = [];
+function pfb_core_feed_rows_native(array $stored, string $gtype): array {
+	$feeds = $headers = [];
 	foreach (is_array($stored['row'] ?? NULL) ? $stored['row'] : [] as $r => $row) {
 		if (!is_array($row)) {
 			continue;
@@ -4850,16 +4834,59 @@ function pfb_core_feed_group_native(array $stored, string $gtype, callable $inte
 			$feed['action'] = ($row['action'] ?? NULL) === 'Permit' ? 'permit' : 'deny';
 		}
 		if (!isset($headers[$feed['header']]) && pfb_core_feed_faults($feed, $gtype, '') === []) {
-			$group['feeds'][$r] = $feed;
+			$feeds[$r] = $feed;
 			$headers[$feed['header']] = TRUE;
 		}
 	}
+	return $feeds;
+}
+
+/**
+ * One stored group as Core's native group (issue #3937), its `feeds` keyed by row index (pfb_core_feed_rows_native()): each token as
+ * the download path reads it (an invalid action is Disabled, an unknown frequency Never, a script its file name or none, a custom
+ * list as valid UTF-8). NULL when its Source Interface names an interface with no IPv4 address or none that exists: such a group
+ * has no address to bind, and the default route is not one (issue #3946).
+ *
+ * @param array<mixed> $stored
+ * @param callable(): array<string, string> $interfaces
+ * @return ?array<string, mixed>
+ */
+function pfb_core_feed_group_native(array $stored, string $gtype, callable $interfaces): ?array {
+	$text = static fn(string $key): string => is_scalar($stored[$key] ?? NULL) ? (string) $stored[$key] : '';
+	$script = static function (string $path): string {
+		$name = basename($path);
+		return pfb_core_script_name_valid($name) ? $name : '';
+	};
+	$srcint = $text('srcint');
+	$bindAddress = match ($srcint) { '' => '', 'lo0' => '127.0.0.1', default => $interfaces()[$srcint] ?? '' };
+	if ($srcint !== '' && $bindAddress === '') {
+		return NULL;
+	}
+	$group = [
+		'name'            => $text('aliasname'),
+		'action'          => pfb_group_action_valid($stored['action'] ?? NULL, $gtype) ? $stored['action'] : 'Disabled',
+		'updateFrequency' => in_array($stored['cron'] ?? NULL, PFB_CORE_FEED_CRON, TRUE) ? $stored['cron'] : 'Never',
+		'bindAddress'     => $bindAddress,
+		'preScript'       => $script($text('script_pre')),
+		'postScript'      => $script($text('script_post')),
+		'customList'      => mb_scrub((string) base64_decode($text('custom')), 'UTF-8'),
+	];
+	if ($gtype === 'ipv4') {
+		$cidr = $text('suppression_cidr');
+		$group['suppressionCidr'] = ctype_digit($cidr) && (int) $cidr <= 32 ? (int) $cidr : 0;
+	}
+	if ($gtype !== 'dnsbl') {
+		$group['whoisConvert'] = ($stored['whois_convert'] ?? NULL) === 'on';
+	}
+	$group['feeds'] = pfb_core_feed_rows_native($stored, $gtype);
 	return $group;
 }
 
 /**
  * config.xml's groups of $projection as Core's native groups, keyed by their index in the section (issue #3937): a group whose name
- * the download path refuses (pfb_core_feed_name_valid()) or that repeats a name before it does not project.
+ * the download path refuses (pfb_core_feed_name_valid()), that repeats the name of an earlier group, or whose Source Interface does
+ * not resolve (pfb_core_feed_group_native()) does not project. A name or a header an earlier group holds stays that group's, whether or
+ * not it projects, so hiding a group never promotes a later duplicate (issue #3946).
  *
  * @param callable(): array<string, string> $interfaces
  * @return array<int, array<string, mixed>>
@@ -4867,14 +4894,18 @@ function pfb_core_feed_group_native(array $stored, string $gtype, callable $inte
 function pfb_core_feed_groups(string $projection, callable $interfaces): array {
 	$gtype = substr($projection, 6);
 	$section = config_get_path('installedpackages/' . PFB_CORE_FEED_SECTIONS[$projection] . '/config', []);
-	$groups = $seen = [];
+	$groups = $named = $seen = [];
 	foreach (is_array($section) ? $section : [] as $n => $stored) {
-		if (is_array($stored) && pfb_core_feed_name_valid($stored['aliasname'] ?? NULL, $gtype)
-		    && !in_array($stored['aliasname'], array_column($groups, 'name'), TRUE)) {
-			$group = pfb_core_feed_group_native($stored, $gtype, $interfaces);
-			// A header names one file in the type's directory: an earlier group's feed has it
-			$group['feeds'] = array_filter($group['feeds'], static fn(array $feed): bool => !isset($seen[$feed['header']]));
-			$seen += array_fill_keys(array_column($group['feeds'], 'header'), TRUE);
+		if (!is_array($stored) || !pfb_core_feed_name_valid($stored['aliasname'] ?? NULL, $gtype) || isset($named[$stored['aliasname']])) {
+			continue;
+		}
+		$named[$stored['aliasname']] = TRUE;
+		$group = pfb_core_feed_group_native($stored, $gtype, $interfaces);
+		// A header names one file in the type's directory: an earlier group's feed has it
+		$feeds = array_filter($group['feeds'] ?? pfb_core_feed_rows_native($stored, $gtype), static fn(array $feed): bool => !isset($seen[$feed['header']]));
+		$seen += array_fill_keys(array_column($feeds, 'header'), TRUE);
+		if ($group !== NULL) {
+			$group['feeds'] = $feeds;
 			$groups[$n] = $group;
 		}
 	}
@@ -4882,8 +4913,19 @@ function pfb_core_feed_groups(string $projection, callable $interfaces): array {
 }
 
 /**
- * The faults of Core's value for a feed projection (issue #3937): exactly `groups`, a list of groups with unique names, each with
- * exactly its type's fields within their rules, and its feeds as pfb_core_feed_faults() checks them, with unique headers.
+ * Every feed header of $groups (native groups, as pfb_core_feed_groups() gives them), in order.
+ *
+ * @param array<int|string, array<string, mixed>> $groups
+ * @return list<string>
+ */
+function pfb_core_feed_headers(array $groups): array {
+	return array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), array_values($groups)));
+}
+
+/**
+ * The faults of Core's value for a feed projection (issue #3937): exactly `groups`, a list of groups with unique names that no stored
+ * group the read left out holds, each with exactly its type's fields within their rules, and its feeds as pfb_core_feed_faults() checks
+ * them, with unique headers that no stored row the read left out holds (issue #3946).
  *
  * @param callable(): array<string, string> $interfaces
  * @return list<array{field: string, message: string}>
@@ -4895,7 +4937,8 @@ function pfb_core_feed_projection_faults(mixed $value, string $projection, calla
 	if ($faults !== [] || !is_array($value)) {
 		return $faults;
 	}
-	$script = static fn(mixed $v): ?string => $v === '' || (is_string($v) && preg_match('/^[^\/\p{C}]+$/uD', $v) === 1) ? NULL : 'not a file name';
+	$script = static fn(mixed $v): ?string => $v === '' || (is_string($v) && pfb_core_script_name_valid($v)) ? NULL
+		: 'not a file name: not "." or "..", no leading "-", no "/" or control character';
 	$fields = [
 		'name'            => static fn(mixed $v): ?string => pfb_core_feed_name_valid($v, $gtype) ? NULL : 'not a word (of at most 24 characters for an IP group)',
 		'action'          => static fn(mixed $v): ?string => pfb_group_action_valid($v, $gtype) ? NULL : 'not a valid value',
@@ -4917,6 +4960,11 @@ function pfb_core_feed_projection_faults(mixed $value, string $projection, calla
 	$section = config_get_path('installedpackages/' . PFB_CORE_FEED_SECTIONS[$projection] . '/config', []);
 	$current = pfb_core_feed_groups($projection, $interfaces);
 	$byName = array_combine(array_column($current, 'name'), array_keys($current));
+	// What the read left out still holds its name and its headers in config.xml, and Core may repeat neither
+	$section = is_array($section) ? $section : [];
+	$storedNames = array_column($section, 'aliasname');
+	$storedHeaders = array_column(array_merge([], ...array_filter(array_column($section, 'row'), 'is_array')), 'header');
+	$projectedHeaders = pfb_core_feed_headers($current);
 	foreach ($value['groups'] as $i => $group) {
 		$prefix = "{$projection}.groups[{$i}]";
 		$faults = array_merge($faults, pfb_core_object_faults($group, $fields, $prefix));
@@ -4928,12 +4976,22 @@ function pfb_core_feed_projection_faults(mixed $value, string $projection, calla
 			$faults[] = ['field' => "{$prefix}.name", 'message' => 'not unique'];
 		}
 		$names[$name] = TRUE;
+		if ($name !== '' && !isset($byName[$name]) && in_array($name, $storedNames, TRUE)) {
+			$faults[] = ['field' => "{$prefix}.name", 'message' => 'a stored group of this name does not project: edit it on the Groups page'];
+		}
 		$feeds = is_array($group['feeds'] ?? NULL) && array_is_list($group['feeds']) ? $group['feeds'] : [];
 		foreach ($feeds as $j => $feed) {
 			$faults = array_merge($faults, pfb_core_feed_faults($feed, $gtype, "{$prefix}.feeds[{$j}]"));
 			$header = is_array($feed) && is_string($feed['header'] ?? NULL) ? $feed['header'] : '';
 			if ($header !== '' && isset($headers[$header])) {
 				$faults[] = ['field' => "{$prefix}.feeds[{$j}].header", 'message' => "not unique in {$projection}: a header names one file of the type"];
+			}
+			// A row of the group's own that does not project would be the one that stays when the header comes to this group
+			$n = $byName[$name] ?? NULL;
+			$ownHidden = $n !== NULL && !in_array($header, array_column($current[$n]['feeds'], 'header'), TRUE)
+				&& in_array($header, array_column(is_array($section[$n]['row'] ?? NULL) ? $section[$n]['row'] : [], 'header'), TRUE);
+			if ($header !== '' && ($ownHidden || (!in_array($header, $projectedHeaders, TRUE) && in_array($header, $storedHeaders, TRUE)))) {
+				$faults[] = ['field' => "{$prefix}.feeds[{$j}].header", 'message' => 'a stored row of this header does not project: edit or remove it on the Groups page'];
 			}
 			$headers[$header] = TRUE;
 		}
@@ -5011,6 +5069,27 @@ function pfb_core_feed_group_patch(array $stored, array $current, array $wanted,
 }
 
 /**
+ * Flags the custom lists of $projection's groups that differ from $was (name => the list before the write) for a rebuild on the next
+ * update pass, as the Groups editor does when it changes one (issue #3946): `<list folder of the group's action>/<name>_custom<_v4|_v6|>.update`.
+ * A group whose action has no list folder (Disabled) is not flagged. Call once the write is stored.
+ *
+ * @param array<string, string> $was
+ * @param callable(): array<string, string> $interfaces
+ */
+function pfb_core_custom_list_flag(string $projection, array $was, callable $interfaces): void {
+	$section = PFB_CORE_FEED_SECTIONS[$projection];
+	$suffix = ['feeds/ipv4' => '_v4', 'feeds/ipv6' => '_v6'][$projection] ?? '';
+	foreach (pfb_core_feed_groups($projection, $interfaces) as $n => $group) {
+		if ($group['customList'] !== ($was[$group['name']] ?? '')) {
+			$folder = pfb_determine_list_detail($group['action'], '', $section, $n)['folder'] ?? '';
+			if ($folder !== '') {
+				touch("{$folder}/{$group['name']}_custom{$suffix}.update");
+			}
+		}
+	}
+}
+
+/**
  * $stored (a section's groups or a group's rows) with Core's $wanted list merged in by key (issue #3937): the entries Core keeps take
  * the slots of the projected ones it keeps ($current, by stored index) in Core's order, each built by $patch(its stored index, the wanted entry);
  * new ones are appended (index NULL); every stored entry under a key Core dropped goes, the duplicates the read left out included; an
@@ -5060,8 +5139,7 @@ function pfb_core_feed_merge(string $projection, array $wanted, callable $interf
 	$merged = pfb_core_merge_keyed($section, $current, $wanted, 'name', 'aliasname', static fn(?int $n, array $group): array =>
 		pfb_core_feed_group_patch($n === NULL ? [] : $section[$n], $n === NULL ? [] : $current[$n], $group, $interfaces));
 	// A header Core dropped from the type goes from every group: a duplicate the read left out never becomes it
-	$dropped = array_diff(array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), array_values($current))),
-		array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), $wanted)));
+	$dropped = array_diff(pfb_core_feed_headers($current), pfb_core_feed_headers($wanted));
 	foreach ($merged as $n => $group) {
 		if ($dropped !== [] && is_array($group) && is_array($group['row'] ?? NULL)) {
 			$rows = array_values(array_filter($group['row'], static fn(mixed $row): bool => !is_array($row) || !in_array($row['header'] ?? NULL, $dropped, TRUE)));
@@ -5080,7 +5158,8 @@ function pfb_core_schedule_token(mixed $value, int $min, int $max, int $default,
 }
 
 /**
- * The index in $section of the first group of each name (the one the feed projections project).
+ * The index in $section of the first group of each name: the only one of that name the feed projections can project (a later one
+ * never does, nor does the first when it is hidden, pfb_core_feed_groups()).
  *
  * @return array<string, int>
  */
@@ -5125,12 +5204,13 @@ function pfb_core_schedule_providers(array $blacklist): array {
  * (the feed projections: read here when not given) and nothing else.
  *
  * @param ?array<string, array<string, mixed>> $feeds
+ * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
  * @return array<string, mixed>
  */
-function pfb_core_schedule_settings(?array $feeds = NULL): array {
+function pfb_core_schedule_settings(?array $feeds = NULL, ?callable $interfaces = NULL): array {
 	$groups = [];
 	foreach (PFB_CORE_FEED_SECTIONS as $projection => $section) {
-		$native = $feeds[$projection]['groups'] ?? pfb_core_feed_groups($projection, static fn(): array => []);
+		$native = $feeds[$projection]['groups'] ?? pfb_core_feed_groups($projection, $interfaces ?? 'pfb_core_interface_addresses');
 		$stored = config_get_path("installedpackages/{$section}/config", []);
 		$at = pfb_core_schedule_group_slots($stored);
 		foreach ($native as $group) {
@@ -5376,7 +5456,7 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 	foreach (array_keys(PFB_CORE_FEED_SECTIONS) as $projection) {
 		$faults = array_merge($faults, pfb_core_feed_projection_faults($settings[$projection], $projection, $interfaces ?? 'pfb_core_interface_addresses'));
 	}
-	$faults = array_merge($faults, pfb_core_schedule_faults($settings['schedule'], pfb_core_schedule_settings()));
+	$faults = array_merge($faults, pfb_core_schedule_faults($settings['schedule'], pfb_core_schedule_settings(NULL, $interfaces)));
 	return $faults === [] ? NULL : pfb_core_settings_refusal('invalid_argument', 'the settings are not valid', $faults);
 }
 
@@ -5388,7 +5468,8 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
  * issue #3941). It refuses with `conflict` when config.xml is no longer
  * at the revision Core read, and with `unavailable` when it could not change config.xml (a lock that stays taken, a refused
  * write_config(), a client-IP metrics privacy step that failed). A malformed request is `invalid_argument` and touches nothing.
- * Never calls Core: Core waits on this.
+ * Once the write is stored, each custom list it changed is flagged for a rebuild (pfb_core_custom_list_flag(), issue #3946). The
+ * interface lookup runs at most once per request. Never calls Core: Core waits on this.
  *
  * @param array<mixed> $request
  * @param string $metricsDir node_exporter's textfile directory (a test seam)
@@ -5396,7 +5477,12 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
  * @return array<string, mixed> the reply
  */
 function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tmp/node_exporter', ?callable $interfaces = NULL): array {
-	$interfaces ??= 'pfb_core_interface_addresses';
+	$lookup = $interfaces ?? 'pfb_core_interface_addresses';
+	$addresses = NULL;
+	// One answer per request: an address the request was validated against cannot vanish before it is stored as its interface
+	$interfaces = static function () use ($lookup, &$addresses): array {
+		return $addresses ??= $lookup();
+	};
 	$refusal = pfb_core_settings_request_refusal($request, $interfaces);
 	if ($refusal !== NULL) {
 		return $refusal;
@@ -5416,13 +5502,19 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		if (pfb_core_settings_revision($now) !== $request['expectedRevision']) {
 			return pfb_core_settings_refusal('conflict', 'the configuration is not at expectedRevision');
 		}
+		// A group or row that does not project leaves the revision as it is yet reserves its name and header: check the fresh config
+		$refusal = pfb_core_settings_request_refusal($request, $interfaces);
+		if ($refusal !== NULL) {
+			return $refusal;
+		}
 		$current = pfb_core_dns_settings();
 		$changed = array_keys(array_filter($wanted, static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));
-		$sections = [];
+		$sections = $lists = [];
 		foreach (PFB_CORE_FEED_SECTIONS as $projection => $section) {
 			$merged = pfb_core_feed_merge($projection, $request['settings'][$projection]['groups'], $interfaces);
 			if ($merged !== NULL) {
 				$sections["installedpackages/{$section}/config"] = $merged;
+				$lists[$projection] = array_column(pfb_core_feed_groups($projection, $interfaces), 'customList', 'name');
 			}
 		}
 		$schedule = pfb_core_schedule_merge($request['settings']['schedule'], $now['schedule'], $sections);
@@ -5462,6 +5554,9 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		}
 		if (pfb_dns_config_write_failed($written)) {
 			return pfb_core_settings_refusal('unavailable', 'pfSense refused the configuration write');
+		}
+		foreach ($lists as $projection => $was) {
+			pfb_core_custom_list_flag($projection, $was, $interfaces);
 		}
 		pfb_mark_pending_changes();	// applies on the next Update, as the DNSBL and DNS General saves
 		return ['version' => 1, 'revision' => pfb_core_settings_revision(pfb_core_settings($interfaces))];
@@ -12452,25 +12547,25 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 		case 'Deny_Inbound':
 		case 'Deny_Outbound':
 		case 'Alias_Deny':
-			$pfbarr = array('adv' => TRUE, 'folder' => "{$pfb['denydir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => "{$pfb['reuse']}");
+			$pfbarr = array('adv' => TRUE, 'folder' => "{$pfb['denydir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => (string) ($pfb['reuse'] ?? ''));
 			break;
 		case 'unbound':
-			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['dnsdir']}", 'orig' => "{$pfb['dnsorigdir']}", 'reuse' => "{$pfb['reuse_dnsbl']}");
+			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['dnsdir']}", 'orig' => "{$pfb['dnsorigdir']}", 'reuse' => (string) ($pfb['reuse_dnsbl'] ?? ''));
 			break;
 		case 'Permit_Both':
 		case 'Permit_Inbound':
 		case 'Permit_Outbound':
 		case 'Alias_Permit':
-			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['permitdir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => "{$pfb['reuse']}");
+			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['permitdir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => (string) ($pfb['reuse'] ?? ''));
 			break;
 		case 'Match_Both':
 		case 'Match_Inbound':
 		case 'Match_Outbound':
 		case 'Alias_Match':
-			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['matchdir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => "{$pfb['reuse']}");
+			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['matchdir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => (string) ($pfb['reuse'] ?? ''));
 			break;
 		case 'Alias_Native':
-			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['nativedir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => "{$pfb['reuse']}");
+			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['nativedir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => (string) ($pfb['reuse'] ?? ''));
 			break;
 	}
 
@@ -12497,7 +12592,7 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 			return pfb_dnsbl_toggle_enabled($conf_config[$field] ?? '');
 		};
 		$conf_value	= static function (string $field) use ($conf_config, $registered): mixed {
-			return $registered ? PfbConfig::read("dnsbl/{$field}") : $conf_config[$field];
+			return $registered ? PfbConfig::read("dnsbl/{$field}") : ($conf_config[$field] ?? '');
 		};
 		$autotype	= array( 'autoports' => 'aliasports', 'autoaddr' => 'aliasaddr');
 
@@ -12532,7 +12627,7 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 
 	// Force 'Alias Native' setting to any Alias with 'Advanced Inbound/Outbound -Invert src/dst' settings.
 	// This will bypass Deduplication and Reputation features.
-	if ($pfbarr['aaddrnot_in'] === 'on' || $pfbarr['aaddrnot_out'] === 'on') {
+	if (($pfbarr['aaddrnot_in'] ?? '') === 'on' || ($pfbarr['aaddrnot_out'] ?? '') === 'on') {
 		$pfbarr['adv'] = FALSE;
 		$pfbarr['folder'] = "{$pfb['nativedir']}";
 	}
