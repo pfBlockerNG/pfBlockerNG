@@ -27,7 +27,7 @@ func settingsMethods(st *settings.Store) map[string]method {
 			snap, err := st.Get(p.ProjectionIDs)
 			return snap, settingsError(err, "")
 		}},
-		"InitializeSettings": {mutating: true, call: func(_ context.Context, params []byte) (any, error) {
+		"InitializeSettings": {mutating: true, call: func(ctx context.Context, params []byte) (any, error) {
 			var p struct {
 				RequestID string                                `json:"requestId"`
 				Settings  map[string]map[string]json.RawMessage `json:"settings"`
@@ -35,10 +35,10 @@ func settingsMethods(st *settings.Store) map[string]method {
 			if err := decodeParams(params, &p); err != nil {
 				return nil, err
 			}
-			res, err := st.Initialize(p.Settings)
+			res, err := st.Initialize(ctx, p.Settings)
 			return res, settingsError(err, "settings.")
 		}},
-		"SaveSettings": {mutating: true, call: func(_ context.Context, params []byte) (any, error) {
+		"SaveSettings": {mutating: true, call: func(ctx context.Context, params []byte) (any, error) {
 			var p struct {
 				RequestID        string                                `json:"requestId"`
 				ExpectedRevision *uint64                               `json:"expectedRevision"`
@@ -51,7 +51,7 @@ func settingsMethods(st *settings.Store) map[string]method {
 				return nil, newError(codeInvalidArgument, "SaveSettings needs the revision the changes were made against",
 					fieldError{Field: "expectedRevision", Message: "required"})
 			}
-			res, err := st.Save(*p.ExpectedRevision, p.Changes)
+			res, err := st.Save(ctx, *p.ExpectedRevision, p.Changes)
 			return res, settingsError(err, "changes.")
 		}},
 		"ValidateSettings": {call: func(_ context.Context, params []byte) (any, error) {
@@ -63,11 +63,11 @@ func settingsMethods(st *settings.Store) map[string]method {
 			}
 			return struct{}{}, settingsError(st.Validate(p.Changes), "changes.")
 		}},
-		"SettingsChanged": {call: func(_ context.Context, params []byte) (any, error) {
+		"SettingsChanged": {call: func(ctx context.Context, params []byte) (any, error) {
 			if err := decodeParams(params, &struct{}{}); err != nil {
 				return nil, err
 			}
-			snap, err := st.Reload()
+			snap, err := st.Reload(ctx)
 			return snap, settingsError(err, "")
 		}},
 	}

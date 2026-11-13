@@ -132,7 +132,7 @@ func TestReloadPicksUpTheAdaptersNewValuesAndRevision(t *testing.T) {
 	f := newFakeAdapter(t, readReply(t, 7, nil))
 	st := loadFake(t, f, 0)
 	f.reply(readReply(t, 8, map[string]any{"idnMode": "on", "control": true}))
-	snap, err := st.Reload()
+	snap, err := st.Reload(t.Context())
 	if err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestAHungAdapterFailsTheCallAndItsWholeProcessGroupDies(t *testing.T) {
 	before := jsonOf(t, get(t, st))
 	f.script(beat + "\nsleep 30")
 	start := time.Now()
-	_, err = st.Reload()
+	_, err = st.Reload(t.Context())
 	if elapsed := time.Since(start); elapsed > slow {
 		t.Errorf("Reload of a hung adapter took %v, want it cut at the 300ms deadline", elapsed)
 	}
@@ -200,7 +200,7 @@ func TestAGrandchildHoldingStdoutDoesNotHangTheCall(t *testing.T) {
 		}
 		f.script(beat) // exits 0 at once; the background loop keeps the stdout pipe open
 		start := time.Now()
-		_, err = st.Reload()
+		_, err = st.Reload(t.Context())
 		if elapsed := time.Since(start); elapsed > slow {
 			t.Errorf("Reload took %v with a grandchild holding stdout, want it back within %v", elapsed, slow)
 		}
@@ -214,7 +214,7 @@ func TestAGrandchildHoldingStdoutDoesNotHangTheCall(t *testing.T) {
 		f.script(`cat > "$D/req"; cat "$D/reply"; ` + beat) // the reply is whole; the background child outlives the adapter
 		f.reply(readReply(t, 8, map[string]any{"control": true}))
 		start := time.Now()
-		snap, err := st.Reload()
+		snap, err := st.Reload(t.Context())
 		if elapsed := time.Since(start); elapsed > slow {
 			t.Errorf("Reload took %v with a grandchild holding stdout, want it back within %v", elapsed, slow)
 		}
@@ -252,7 +252,7 @@ func TestNoDescendantOfTheAdapterOutlivesTheCall(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeAdapter(t, readReply(t, 7, nil))
 			f.script(`cat > "$D/req"; ` + c.script)
-			_, err := (&AdapterBackend{Path: f.path}).Read()
+			_, err := (&AdapterBackend{Path: f.path}).Read(t.Context())
 			if (err == nil) != c.ok {
 				t.Fatalf("Read = %v, want ok=%v", err, c.ok)
 			}
@@ -326,7 +326,7 @@ func TestAFailingAdapterFailsTheCallAndKeepsTheLastValues(t *testing.T) {
 				f.reply(c.reply)
 			}
 			start := time.Now()
-			_, err := st.Reload()
+			_, err := st.Reload(t.Context())
 			if elapsed := time.Since(start); elapsed > slow {
 				t.Errorf("Reload took %v, want a failure at once", elapsed)
 			}
@@ -366,7 +366,7 @@ func TestSaveWritesThroughTheAdapter(t *testing.T) {
 	f := newFakeAdapter(t, readReply(t, 7, nil))
 	st := loadFake(t, f, 0)
 	f.reply(readReply(t, 9, map[string]any{"control": true})) // answers the write (its revision) and the read after it
-	res, err := st.Save(7, changes(t, `{"dns": {"control": true}}`))
+	res, err := st.Save(t.Context(), 7, changes(t, `{"dns": {"control": true}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -389,14 +389,14 @@ func TestSaveWritesThroughTheAdapter(t *testing.T) {
 func TestAnAdapterThatRefusesAWriteLeavesTheValuesAsTheyWere(t *testing.T) {
 	good := readReply(t, 7, nil)
 	save := func(st *Store) error {
-		_, err := st.Save(7, changes(t, `{"dns": {"control": true}}`))
+		_, err := st.Save(t.Context(), 7, changes(t, `{"dns": {"control": true}}`))
 		return err
 	}
 	t.Run("a stale expectedRevision never reaches the adapter", func(t *testing.T) {
 		f := newFakeAdapter(t, good)
 		st := loadFake(t, f, 0)
 		before := jsonOf(t, get(t, st))
-		_, err := st.Save(3, changes(t, `{"dns": {"control": true}}`))
+		_, err := st.Save(t.Context(), 3, changes(t, `{"dns": {"control": true}}`))
 		var c *ConflictError
 		if !errors.As(err, &c) || c.Field != "expectedRevision" {
 			t.Errorf("Save at revision 3 over 7 = %v, want a *ConflictError on expectedRevision", err)
@@ -497,7 +497,7 @@ func TestAnAdapterThatRefusesAWriteLeavesTheValuesAsTheyWere(t *testing.T) {
 func TestTheAdapterBackendRefusesInitializeAndNeverAsksTheAdapterToWrite(t *testing.T) {
 	f := newFakeAdapter(t, readReply(t, 7, nil))
 	st := loadFake(t, f, 0)
-	_, err := st.Initialize(changes(t, `{"dns": {"control": true}}`))
+	_, err := st.Initialize(t.Context(), changes(t, `{"dns": {"control": true}}`))
 	if !isConflict(err) {
 		t.Errorf("Initialize over an adapter = %v, want a *ConflictError: its settings always exist", err)
 	}
@@ -514,7 +514,7 @@ func TestASlowAdapterWriteDoesNotBlockReadsOrValidation(t *testing.T) {
 	f.reply(`{"version":1,"revision":9}`)
 	saved := make(chan error, 1)
 	go func() {
-		_, err := st.Save(7, changes(t, `{"dns": {"control": true}}`))
+		_, err := st.Save(t.Context(), 7, changes(t, `{"dns": {"control": true}}`))
 		saved <- err
 	}()
 	for deadline := time.Now().Add(slow); ; time.Sleep(5 * time.Millisecond) {

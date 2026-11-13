@@ -9,7 +9,7 @@ func TestAGenerationCountsASecretOnlyByItsPresence(t *testing.T) {
 	gen := func(password string) uint64 {
 		t.Helper()
 		st := open(t, t.TempDir())
-		if _, err := st.Initialize(changes(t, `{"feedauth": {"user": "u", "password": "`+password+`"}}`)); err != nil {
+		if _, err := st.Initialize(t.Context(), changes(t, `{"feedauth": {"user": "u", "password": "`+password+`"}}`)); err != nil {
 			t.Fatal(err)
 		}
 		return projection(t, get(t, st, "feedauth"), "feedauth").Generation

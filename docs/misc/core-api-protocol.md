@@ -68,7 +68,8 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
   - `SaveSettings` whose `expectedRevision` is not the current revision (a field error names `expectedRevision`), as
     Core holds it or as the backend finds it when it writes (Core then reads the backend again, so the next
     `GetSettings` shows the revision that moved). The client reads again and reapplies its change.
-- **Backend failure** (`unavailable`): the backend could not be read or written. Core keeps the values it last read.
+- **Backend failure** (`unavailable`): the backend could not be read or written. Core keeps the values it last read. A
+  call that the method's 25 s deadline cut off answers `internal` (logged) instead.
 - **No run.** A save starts no run.
 - **Secrets are write-only.** A read shows a secret field as `{"present": true|false}`, never its value, in list items too.
 - **One Core per state directory.** Core holds an exclusive `flock` on `core.lock` in `--state-dir` while it runs, with
@@ -98,13 +99,14 @@ over it.
 
 **Adapter backend.** Core holds no platform path or name: the command comes only from the flag. Each call runs the
 command once, writes one JSON request to its stdin and reads one JSON reply from its stdout (exit status 0). A read may
-take 10 s, a write 20 s; past it the command's whole process group is killed, and the group is killed when any call ends, so
-nothing the command started outlives the call. Calls run one at a time, so a call queued behind another can take the sum of
-both bounds. A write that timed out may still have been applied: the Outpost's next
-tick finds the revision moved and Core reads it. A reply
-over 32 MiB (the feed projections carry custom lists), a non-zero exit, a reply that is not exactly one JSON object of version 1, a revision of 0, or read values
-the schema refuses fail the call. The configuration always exists, so `InitializeSettings` is refused, and Core never
-writes `settings.json`.
+take 10 s, a write 20 s, and neither outlasts the 25 s of the method that asked: past either, the command's whole process
+group is killed, and the group is killed when any call ends, so nothing the command started outlives the call. Calls run
+one at a time. The method's 25 s starts with the method, so the wait for a turn counts against it: a call whose deadline
+has passed when its turn comes never starts the command. The wait itself is not cut short by the deadline. A write that
+timed out may still have been applied: the Outpost's next tick finds the revision moved and Core reads it. A reply over
+32 MiB (the feed projections carry custom lists), a non-zero exit, a reply that is not exactly one JSON object of
+version 1, a revision of 0, or read values the schema refuses fail the call. The configuration always exists, so
+`InitializeSettings` is refused, and Core never writes `settings.json`.
 
 Protocol, version 1:
 
@@ -122,8 +124,9 @@ written: a lock stayed taken, the platform refused the write, ...). The adapter 
 ### SettingsChanged
 
 The Outpost's notice that its configuration may have changed. Core reads the backend again and answers what
-`GetSettings` answers for every projection. It takes no parameters and no `requestId`. A failed read is `unavailable`,
-and Core keeps the values it last read. The Outpost calls it:
+`GetSettings` answers for every projection. It takes no parameters and no `requestId`. A failed read is `unavailable`
+(`internal`, logged, when the method's 25 s deadline cut it off), and Core keeps the values it last read. The Outpost
+calls it:
 
 - after every `write_config()` of a save page that writes a Core-modelled setting;
 - on its periodic tick, when the revision its configuration projects differs from the one `GetSettings` reports. So a

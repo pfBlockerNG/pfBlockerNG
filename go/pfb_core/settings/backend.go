@@ -1,6 +1,9 @@
 package settings
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Stored is a backend's configuration: Initialized is false only for a FileBackend that holds nothing yet.
 type Stored struct {
@@ -9,14 +12,15 @@ type Stored struct {
 	Projections map[string]map[string]json.RawMessage // projection → field → JSON value, as stored: the Store validates it
 }
 
-// Backend is where a Store's settings live. A Store calls it one call at a time.
+// Backend is where a Store's settings live. A Store calls it one call at a time. A call that ctx ends before it finishes
+// returns an error that wraps ctx's (a *BackendError never does): the method's deadline reaches the backend.
 type Backend interface {
-	Read() (Stored, error)
+	Read(ctx context.Context) (Stored, error)
 	// Write stores values (every field of every projection, already validated by the Store) if the backend is at expected
 	// (0: create the first configuration, FileBackend only) and returns the new revision. A *ConflictError or
 	// *ValidationError refuses it: nothing was written. Any other error is a failure; when the new revision took effect
 	// before the failure (a directory sync after the rename) it is returned beside the error, else the revision is 0.
-	Write(expected uint64, values map[string]map[string]any) (uint64, error)
+	Write(ctx context.Context, expected uint64, values map[string]map[string]any) (uint64, error)
 }
 
 // BackendError reports that a backend could not be read or written: the API's unavailable.

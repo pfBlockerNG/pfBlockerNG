@@ -44,7 +44,7 @@ func initialized(t *testing.T) (*Store, string) {
 	t.Helper()
 	dir := t.TempDir()
 	st := open(t, dir)
-	if _, err := st.Initialize(changes(t, `{"dns": {"decisionCacheMax": 500}}`)); err != nil {
+	if _, err := st.Initialize(t.Context(), changes(t, `{"dns": {"decisionCacheMax": 500}}`)); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 	return st, dir
@@ -129,7 +129,7 @@ func TestAnUninitializedStoreSaysSoAndHoldsNothing(t *testing.T) {
 	if snap.Initialized || snap.Revision != 0 || len(snap.Projections) != 0 {
 		t.Errorf("uninitialized Get = %s, want initialized false, revision 0, no projection", jsonOf(t, snap))
 	}
-	if _, err := st.Save(0, changes(t, `{"dns": {"control": true}}`)); !isConflict(err) {
+	if _, err := st.Save(t.Context(), 0, changes(t, `{"dns": {"control": true}}`)); !isConflict(err) {
 		t.Errorf("Save before Initialize = %v, want a conflict", err)
 	}
 }
@@ -153,7 +153,7 @@ func validationFields(err error) []string {
 
 func TestInitializeTakesSettingsOnceAndRefusesASecondTime(t *testing.T) {
 	st := open(t, t.TempDir())
-	res, err := st.Initialize(changes(t, `{"dns": {"decisionCacheMax": 500, "idnMode": "confusable"}}`))
+	res, err := st.Initialize(t.Context(), changes(t, `{"dns": {"decisionCacheMax": 500, "idnMode": "confusable"}}`))
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestInitializeTakesSettingsOnceAndRefusesASecondTime(t *testing.T) {
 		dns.Value["replyLogging"] != true {
 		t.Errorf("dns after Initialize = %s, want the given values and the defaults", jsonOf(t, dns))
 	}
-	if _, err := st.Initialize(changes(t, `{"dns": {"decisionCacheMax": 7}}`)); !isConflict(err) {
+	if _, err := st.Initialize(t.Context(), changes(t, `{"dns": {"decisionCacheMax": 7}}`)); !isConflict(err) {
 		t.Errorf("second Initialize = %v, want a conflict", err)
 	}
 	if snap := get(t, st, "dns"); snap.Revision != 1 || projection(t, snap, "dns").Value["decisionCacheMax"] != int64(500) {
@@ -175,7 +175,7 @@ func TestInitializeTakesSettingsOnceAndRefusesASecondTime(t *testing.T) {
 
 func TestInitializeRefusesInvalidSettingsWhole(t *testing.T) {
 	st := open(t, t.TempDir())
-	_, err := st.Initialize(changes(t, `{"dns": {"decisionCacheMax": 5000001, "idnMode": "all", "control": true}}`))
+	_, err := st.Initialize(t.Context(), changes(t, `{"dns": {"decisionCacheMax": 5000001, "idnMode": "all", "control": true}}`))
 	if got := strings.Join(validationFields(err), ","); got != "dns.decisionCacheMax,dns.idnMode" {
 		t.Errorf("Initialize field errors = %q (%v), want dns.decisionCacheMax,dns.idnMode", got, err)
 	}
@@ -186,11 +186,11 @@ func TestInitializeRefusesInvalidSettingsWhole(t *testing.T) {
 
 func TestSaveWithAStaleRevisionConflictsAndChangesNothing(t *testing.T) {
 	st, _ := initialized(t)
-	if _, err := st.Save(1, changes(t, `{"dns": {"control": true}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true}}`)); err != nil {
 		t.Fatalf("Save at revision 1: %v", err)
 	}
 	before := jsonOf(t, get(t, st))
-	if _, err := st.Save(1, changes(t, `{"dns": {"cnameValidation": true}}`)); !isConflict(err) {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"cnameValidation": true}}`)); !isConflict(err) {
 		t.Errorf("Save with stale revision 1 = %v, want a conflict", err)
 	}
 	if after := jsonOf(t, get(t, st)); after != before {
@@ -201,7 +201,7 @@ func TestSaveWithAStaleRevisionConflictsAndChangesNothing(t *testing.T) {
 func TestAnInvalidChangeSetIsRejectedWhole(t *testing.T) {
 	st, _ := initialized(t)
 	before := jsonOf(t, get(t, st))
-	_, err := st.Save(1, changes(t, `{"dns": {"control": true, "decisionCacheMax": -1, "idnMode": 3, "nosuch": 1},
+	_, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true, "decisionCacheMax": -1, "idnMode": 3, "nosuch": 1},
 		"nosuchprojection": {"x": 1}}`))
 	want := "dns.decisionCacheMax,dns.idnMode,dns.nosuch,nosuchprojection"
 	if got := strings.Join(validationFields(err), ","); got != want {
@@ -215,7 +215,7 @@ func TestAnInvalidChangeSetIsRejectedWhole(t *testing.T) {
 func TestSaveAdvancesTheRevisionAndOnlyTheChangedProjectionsGeneration(t *testing.T) {
 	st, _ := initialized(t)
 	before := get(t, st)
-	res, err := st.Save(1, changes(t, `{"dns": {"decisionCacheMax": 500}, "feedauth": {"user": "u"}}`))
+	res, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"decisionCacheMax": 500}, "feedauth": {"user": "u"}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -235,14 +235,14 @@ func TestSaveAdvancesTheRevisionAndOnlyTheChangedProjectionsGeneration(t *testin
 
 func TestCoreHoldsLegacyControlOffWhileControlIsOff(t *testing.T) {
 	st, _ := initialized(t)
-	res, err := st.Save(1, changes(t, `{"dns": {"controlLegacy": true}}`))
+	res, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"controlLegacy": true}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	if len(res.Projections) != 0 {
 		t.Errorf("changed projections = %s, want none: controlLegacy stays false while control is off", jsonOf(t, res.Projections))
 	}
-	if res, err = st.Save(2, changes(t, `{"dns": {"control": true, "controlLegacy": true}}`)); err != nil {
+	if res, err = st.Save(t.Context(), 2, changes(t, `{"dns": {"control": true, "controlLegacy": true}}`)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	if v := res.Projections[0].Value; v["control"] != true || v["controlLegacy"] != true {
@@ -252,7 +252,7 @@ func TestCoreHoldsLegacyControlOffWhileControlIsOff(t *testing.T) {
 
 func TestNullResetsAFieldToItsDefault(t *testing.T) {
 	st, _ := initialized(t)
-	res, err := st.Save(1, changes(t, `{"dns": {"decisionCacheMax": null}}`))
+	res, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"decisionCacheMax": null}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestASecretNeverAppearsInARead(t *testing.T) {
 	if got := jsonOf(t, projection(t, snap, "feedauth").Value["password"]); got != `{"present":false}` {
 		t.Errorf("unset password reads %s, want {\"present\":false}", got)
 	}
-	res, err := st.Save(1, changes(t, `{"feedauth": {"password": "hunter2-secret"}}`))
+	res, err := st.Save(t.Context(), 1, changes(t, `{"feedauth": {"password": "hunter2-secret"}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -306,10 +306,10 @@ func TestGetRefusesAnUnknownProjection(t *testing.T) {
 
 func TestTheStoreSurvivesARestartWithItsRevisionAndGenerationsIntact(t *testing.T) {
 	st, dir := initialized(t)
-	if _, err := st.Save(1, changes(t, `{"dns": {"idnMode": "on"}, "feedauth": {"password": "p"}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"idnMode": "on"}, "feedauth": {"password": "p"}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Save(2, changes(t, `{"dns": {"cnameValidation": true}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 2, changes(t, `{"dns": {"cnameValidation": true}}`)); err != nil {
 		t.Fatal(err)
 	}
 	before := jsonOf(t, get(t, st))
@@ -320,7 +320,7 @@ func TestTheStoreSurvivesARestartWithItsRevisionAndGenerationsIntact(t *testing.
 	if snap := get(t, again); snap.Revision != 3 {
 		t.Errorf("restarted store = %s, want revision 3", before)
 	}
-	if _, err := again.Save(3, changes(t, `{"dns": {"regexCap": true}}`)); err != nil {
+	if _, err := again.Save(t.Context(), 3, changes(t, `{"dns": {"regexCap": true}}`)); err != nil {
 		t.Errorf("the restarted store takes a save at its revision: %v", err)
 	}
 }
@@ -359,7 +359,7 @@ func TestCrashHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	beforeRename = func() { os.Exit(42) }
-	_, _ = st.Save(1, changes(t, `{"dns": {"decisionCacheMax": 777}}`))
+	_, _ = st.Save(t.Context(), 1, changes(t, `{"dns": {"decisionCacheMax": 777}}`))
 	os.Exit(3) // the save returned: the hook never ran
 }
 
@@ -381,7 +381,7 @@ func TestACrashDuringASaveLeavesThePreviousRevisionReadable(t *testing.T) {
 	if snap.Revision != 1 || projection(t, snap, "dns").Value["decisionCacheMax"] != int64(500) {
 		t.Errorf("after the crash = %s, want revision 1 with decisionCacheMax 500", jsonOf(t, snap))
 	}
-	if _, err := st.Save(1, changes(t, `{"dns": {"decisionCacheMax": 9}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"decisionCacheMax": 9}}`)); err != nil {
 		t.Errorf("the store takes the next save after a crash: %v", err)
 	}
 }

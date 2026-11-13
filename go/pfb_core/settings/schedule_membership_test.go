@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -11,7 +12,7 @@ import (
 // stores lists only the groups its feeds projections hold, so deleting a feed group takes its schedule item along.
 type membershipBackend struct{ *refreshBackend }
 
-func (m membershipBackend) Write(expected uint64, values map[string]map[string]any) (uint64, error) {
+func (m membershipBackend) Write(ctx context.Context, expected uint64, values map[string]map[string]any) (uint64, error) {
 	held := map[string]bool{}
 	for _, g := range m.values["schedule"]["groups"].([]any) {
 		held[g.(map[string]any)["id"].(string)] = true
@@ -21,7 +22,7 @@ func (m membershipBackend) Write(expected uint64, values map[string]map[string]a
 			return 0, &BackendError{Err: errors.New("schedule.groups: the configuration holds no group " + id)}
 		}
 	}
-	revision, err := m.refreshBackend.Write(expected, values)
+	revision, err := m.refreshBackend.Write(ctx, expected, values)
 	if err != nil {
 		return revision, err
 	}
@@ -63,7 +64,7 @@ func TestAFeedGroupDeletedWhileTheScheduleListsItLeavesNoGroupBehindAndTheNextSa
 		t.Fatalf("before the save: schedule.groups %v, want [ipv4/A]", ids)
 	}
 
-	if _, err := st.Save(1, changes(t, `{"feeds/ipv4": {"groups": []}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"feeds/ipv4": {"groups": []}}`)); err != nil {
 		t.Fatalf("Save deleting feed group A while schedule.groups lists ipv4/A = %v, want it accepted", err)
 	}
 	if ids := scheduleGroupIDs(t, st); len(ids) != 0 {
@@ -71,7 +72,7 @@ func TestAFeedGroupDeletedWhileTheScheduleListsItLeavesNoGroupBehindAndTheNextSa
 	}
 
 	snap := get(t, st)
-	if _, err := st.Save(snap.Revision, changes(t, `{"dns": {"idnMode": "on"}}`)); err != nil {
+	if _, err := st.Save(t.Context(), snap.Revision, changes(t, `{"dns": {"idnMode": "on"}}`)); err != nil {
 		t.Fatalf("Save of dns.idnMode after it = %v, want it accepted", err)
 	}
 	if got := projection(t, get(t, st, "dns"), "dns").Value["idnMode"]; got != "on" {
