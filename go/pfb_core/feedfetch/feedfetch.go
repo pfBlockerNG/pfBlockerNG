@@ -5,6 +5,9 @@
 // A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", its validators ".orig.etag" and
 // ".orig.lastmod", the xxh128 of the raw bytes it was published from ".orig.xxhash128", a changed probe's body ".probe"
 // (the next ingest publishes it instead of fetching again), and the staged body ".raw", which never outlives a call.
+//
+// A whois or asn feed has no body to fetch: Whois resolves its Domain/AS list (the translation of whoisconvert(), #3974)
+// into the published copy "<name>.orig", and leaves "<name>.fail" when an entry failed or the batch ran out of time.
 package feedfetch
 
 import (
