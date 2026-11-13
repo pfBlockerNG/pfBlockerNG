@@ -1112,4 +1112,68 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$this->assertNothingWritten($before, 'a group whose interface is gone');
 		$this->assertSame([], $this->markers());
 	}
+
+	public function testAHiddenGroupThatClaimsTheHeaderAfterCoreValidatedItIsRefusedUnderTheLock(): void
+	{
+		// Given Core read, then another writer stored a group on a gone interface whose row holds H (no projection changes)
+		$this->arrange([self::V4 => [array_replace(self::v4Group(), ['row' => [self::sourceRow('A')]])]]);
+		$read = $this->read();
+		$settings = $read['settings'];
+		$settings['feeds/ipv4']['groups'][0]['feeds'][] = ['header' => 'H', 'state' => 'enabled', 'format' => 'auto', 'url' => 'https://example.org/h.txt', 'credentials' => ''];
+		$this->assertNull(pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings], static fn(): array => self::INTERFACES),
+			'before-state: the request is valid against the config Core read');
+		$this->disk['installedpackages']['pfblockernglistsv4']['config'][] = ['aliasname' => 'Late', 'action' => 'Deny_Both', 'cron' => 'Never', 'srcint' => 'em9', 'row' => [self::sourceRow('H')]];
+		$before = $this->disk;
+
+		// When Core writes
+		$reply = $this->write($settings, $read['revision']);
+
+		// Then the fresh config is checked too: refused, nothing written
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertContains('feeds/ipv4.groups[0].feeds[1].header', array_column($reply['error']['fieldErrors'] ?? [], 'field'), json_encode($reply));
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
+		$this->assertSame($before, $this->disk, 'config.xml is as the other writer left it');
+		$this->assertEmpty($GLOBALS['pfb_test_lock_held'] ?? FALSE, 'the lock is released');
+	}
+
+	/** @return list<array<string, mixed>> A with the projected row H, B with a row H that does not project (it repeats A's header) */
+	private static function movedHeaderGroups(): array
+	{
+		return [['aliasname' => 'A', 'action' => 'Deny_Both', 'cron' => 'Never', 'row' => [self::sourceRow('H')]],
+			['aliasname' => 'B', 'action' => 'Deny_Both', 'cron' => 'Never', 'row' => [self::sourceRow('X'), self::sourceRow('H')]]];
+	}
+
+	public function testAHeaderCannotMoveIntoAGroupThatStoresAnUnprojectedRowOfIt(): void
+	{
+		$this->arrange([self::V4 => self::movedHeaderGroups()]);
+		$read = $this->read();
+		$settings = $read['settings'];
+		$row = $settings['feeds/ipv4']['groups'][0]['feeds'][0];
+		$settings['feeds/ipv4']['groups'][0]['feeds'] = [];
+		$settings['feeds/ipv4']['groups'][1]['feeds'][] = $row;
+		$before = $GLOBALS['config'];
+
+		$reply = $this->write($settings, $read['revision']);
+
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertContains('feeds/ipv4.groups[1].feeds[1].header', array_column($reply['error']['fieldErrors'] ?? [], 'field'), json_encode($reply));
+		$this->assertNothingWritten($before, 'a header moved next to an unprojected row of it');
+	}
+
+	public function testAHeaderTheGroupAlreadyProjectsMayBeEditedEvenIfItRepeatsAnUnprojectedRow(): void
+	{
+		$groups = self::movedHeaderGroups();
+		$groups[0]['row'] = [self::sourceRow('Y')];
+		$groups[1]['row'] = [self::sourceRow('H'), self::sourceRow('H')];
+		$this->arrange([self::V4 => $groups]);
+		$read = $this->read();
+		$settings = $read['settings'];
+		$this->assertSame(['H'], array_column($settings['feeds/ipv4']['groups'][1]['feeds'], 'header'), 'before-state: B projects H');
+		$settings['feeds/ipv4']['groups'][1]['feeds'][0]['url'] = 'https://example.org/moved.txt';
+
+		$reply = $this->write($settings, $read['revision']);
+
+		$this->assertWritten($reply);
+		$this->assertSame('https://example.org/moved.txt', config_get_path(self::V4 . '/1/row/0/url'));
+	}
 }

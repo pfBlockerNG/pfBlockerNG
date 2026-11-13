@@ -4986,7 +4986,11 @@ function pfb_core_feed_projection_faults(mixed $value, string $projection, calla
 			if ($header !== '' && isset($headers[$header])) {
 				$faults[] = ['field' => "{$prefix}.feeds[{$j}].header", 'message' => "not unique in {$projection}: a header names one file of the type"];
 			}
-			if ($header !== '' && !in_array($header, $projectedHeaders, TRUE) && in_array($header, $storedHeaders, TRUE)) {
+			// A row of the group's own that does not project would be the one that stays when the header comes to this group
+			$n = $byName[$name] ?? NULL;
+			$ownHidden = $n !== NULL && !in_array($header, array_column($current[$n]['feeds'], 'header'), TRUE)
+				&& in_array($header, array_column(is_array($section[$n]['row'] ?? NULL) ? $section[$n]['row'] : [], 'header'), TRUE);
+			if ($header !== '' && ($ownHidden || (!in_array($header, $projectedHeaders, TRUE) && in_array($header, $storedHeaders, TRUE)))) {
 				$faults[] = ['field' => "{$prefix}.feeds[{$j}].header", 'message' => 'a stored row of this header does not project: edit or remove it on the Groups page'];
 			}
 			$headers[$header] = TRUE;
@@ -5497,6 +5501,11 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		$now = pfb_core_settings($interfaces);
 		if (pfb_core_settings_revision($now) !== $request['expectedRevision']) {
 			return pfb_core_settings_refusal('conflict', 'the configuration is not at expectedRevision');
+		}
+		// A group or row that does not project leaves the revision as it is yet reserves its name and header: check the fresh config
+		$refusal = pfb_core_settings_request_refusal($request, $interfaces);
+		if ($refusal !== NULL) {
+			return $refusal;
 		}
 		$current = pfb_core_dns_settings();
 		$changed = array_keys(array_filter($wanted, static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));
