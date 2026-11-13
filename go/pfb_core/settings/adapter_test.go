@@ -371,7 +371,8 @@ func TestSaveWritesThroughTheAdapter(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	if want := `{"version":1,"op":"write","expectedRevision":7,"settings":{"dns":` + allDnsFields +
-		`,"feeds/dnsbl":{"groups":[]},"feeds/ipv4":{"groups":[]},"feeds/ipv6":{"groups":[]}}}`; f.lastWrite() != want {
+		`,"feeds/dnsbl":{"groups":[]},"feeds/ipv4":{"groups":[]},"feeds/ipv6":{"groups":[]},"schedule":{"categoryFrequency":"Never",` +
+		`"categoryProviders":[],"categoryUpdates":false,"groups":[],"hour":0,"minute":0,"scheduledUpdates":true,"weekday":7}}}`; f.lastWrite() != want {
 		t.Errorf("the adapter was sent\n %s\n want\n %s", f.lastWrite(), want)
 	}
 	if f.runs() != 3 || f.request() != `{"version":1,"op":"read"}` {

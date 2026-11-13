@@ -110,7 +110,7 @@ Protocol, version 1:
 
 | Request | Reply |
 |---|---|
-| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}}}` |
+| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}}}` |
 | `{"version": 1, "op": "write", "expectedRevision": N, "settings": {...every projection, every field}}` | `{"version": 1, "revision": M}` |
 
 A read carries secrets (feed credentials) to Core; only Core's API hides them.
@@ -199,6 +199,53 @@ interface's IPv4 address, so a changed interface address moves the revision.
 
 Parity fixture: `tests/core/fixtures/settings_feeds_parity.json`. `CoreSettingsFeedsParityTest` (PHPUnit) freezes it
 against today's PHP and the adapter. `go/pfb_core/settings/feeds_parity_test.go` runs Core against it.
+
+### Projection `schedule`
+
+The scheduler's inputs beside `feeds/*` (issue #3941), published as `settings/schedule`.
+`ModelFromSettings` (`go/pfb_core/schedule/settings.go`) builds the runtime model from these values and the three feed
+projections, keyed by `feeds/ipv4`, `feeds/ipv6` and `feeds/dnsbl`.
+
+| Field | Type, default | config.xml |
+|---|---|---|
+| `scheduledUpdates` | bool, `true` | `gen/pfb_scheduled_feed_updates` |
+| `weekday` | int 1 to 7, `7` | `gen/pfb_schedule_weekday` |
+| `hour` | int 0 to 23, `0` | `gen/pfb_schedule_hour` |
+| `minute` | int 0 to 45, a multiple of 15, `0` | `gen/pfb_schedule_minute` |
+| `groups` | list keyed by `id`, `[]` | the same groups as `feeds/*`, families in IPv4, IPv6, DNSBL order, config order within each |
+| `categoryUpdates` | bool, `false` | Blacklist `blacklist_enable` is `Enable` |
+| `categoryFrequency` | enum `Never` `EveryDay` `Weekly`, `Never` | Blacklist `blacklist_freq` |
+| `categoryProviders` | list keyed by `id`, `[]` | Blacklist `item`, in config order |
+
+| Group field | Type, default |
+|---|---|
+| `id` (key) | string `(ipv4\|ipv6\|dnsbl)/[A-Za-z0-9_]+`: family/group name |
+| `override` | bool, `false`: `schedule_override` is `on` |
+| `weekday`, `hour`, `minute` | the same types and defaults as the default slot; `schedule_weekday`, `schedule_hour`, `schedule_minute` |
+
+| Provider field | Type, default |
+|---|---|
+| `id` (key) | string `[A-Za-z0-9_-]+`, not `0`: the item's `xml` |
+| `selected` | bool, `false`: id in `blacklist_selected` |
+| `categories` | string `[A-Za-z0-9_,.-]*`, `""`: the item's `selected` CSV |
+
+A missing or invalid stored slot field reads as its default, independently of the other slot fields. This differs from
+the old PHP runtime model: an override on with an invalid slot rejects that entire model, while the projection gives
+Core a valid defaulted slot. A provider with an invalid identity or categories, titled `Shallalist`, with no feed, or
+repeating an earlier id is left out. Blacklist updates run only when enabled, with a selected provider whose categories
+are not PHP-empty (`""` or `"0"`), and frequency `EveryDay` or `Weekly`; only `Weekly` gives weekly cadence.
+
+Writes change only changed keys, together with the other projections in one `write_config()`. An unknown group or
+provider id is `invalid_argument` naming the field: this projection cannot create them. An item left out of either list
+is unchanged, not deleted. Provider selection removes its id from `blacklist_selected` or appends it, preserving the
+other ids' order. Category changes write the existing item's `selected` CSV. Group patches apply after feed merges;
+a group deleted by a feed projection in the same save is not patched. All these values participate in the revision.
+After a `SaveSettings`, derived schedule membership is current from the next `SettingsChanged`.
+
+Parity fixture: `tests/core/fixtures/settings_schedule_parity.json`. `CoreSettingsScheduleParityTest` freezes the adapter
+read and PHP runtime model; `go/pfb_core/settings/schedule_parity_test.go` checks validation and read-back, and
+`go/pfb_core/schedule/settings_test.go` compares the models, including `config_hash`. Rejected PHP models are recorded
+as `null`, separately from the valid defaulted projection.
 
 ## Errors
 

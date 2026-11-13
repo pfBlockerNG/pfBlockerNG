@@ -59,7 +59,7 @@ type Schema struct {
 // the default and range today's PHP gives (tests/core/fixtures/settings_dns_parity.json). feeds/<type>: the IP and
 // DNSBL groups and their feeds, as far as downloading and parsing them needs (tests/core/fixtures/settings_feeds_parity.json).
 func Production() Schema {
-	return Schema{Version: 1, Projections: []Projection{dnsProjection(), feeds("ipv4"), feeds("ipv6"), feeds("dnsbl")}}
+	return Schema{Version: 1, Projections: []Projection{dnsProjection(), feeds("ipv4"), feeds("ipv6"), feeds("dnsbl"), scheduleProjection()}}
 }
 
 func dnsProjection() Projection {

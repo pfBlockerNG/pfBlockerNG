@@ -124,6 +124,8 @@ final class CoreSettingsFeedsParityTest extends TestCase
 			$settings[$other] = ['groups' => []];
 		}
 		$settings[$projection]['groups'] = [$group];
+		$settings['schedule'] = ['scheduledUpdates' => TRUE, 'weekday' => 7, 'hour' => 0, 'minute' => 0, 'groups' => [], 'categoryUpdates' => FALSE,
+			'categoryFrequency' => 'Never', 'categoryProviders' => []];
 
 		$refusal = pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => 1, 'settings' => $settings]);
 

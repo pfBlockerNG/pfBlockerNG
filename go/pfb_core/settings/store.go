@@ -327,7 +327,8 @@ func defaults(p Projection) map[string]any {
 	return values
 }
 
-// apply returns base with given over it, validated, and with each Requires rule enforced; base is not modified.
+// apply returns base with given over it, validated, and with each Requires rule enforced; base is not modified. A scalar field's
+// Check sees the decoded value as {name: value} and refuses it with errors naming the field.
 func apply(p Projection, base map[string]any, given map[string]json.RawMessage, prefix string) (map[string]any, []FieldError) {
 	values := maps.Clone(base)
 	var errs []FieldError
@@ -350,6 +351,14 @@ func apply(p Projection, base map[string]any, given map[string]json.RawMessage, 
 		if err != nil {
 			errs = append(errs, FieldError{Field: prefix + "." + name, Message: err.Error()})
 			continue
+		}
+		if f.Check != nil {
+			if cerrs := f.Check(map[string]any{name: v}); cerrs != nil {
+				for _, e := range cerrs {
+					errs = append(errs, FieldError{Field: prefix + "." + e.Field, Message: e.Message})
+				}
+				continue
+			}
 		}
 		values[name] = v
 	}
