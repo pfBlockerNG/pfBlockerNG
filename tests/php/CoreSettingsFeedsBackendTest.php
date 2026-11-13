@@ -44,6 +44,9 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 	private array $priorPfb;
 	private string $dir;
 
+	/** @var list<string> every PHP warning, notice or deprecation the adapter raised in this test */
+	private array $warnings = [];
+
 	protected function setUp(): void
 	{
 		$this->priorConfig = $GLOBALS['config'] ?? [];
@@ -62,11 +65,18 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 			$this->assertTrue(mkdir("{$this->dir}/{$folder}", 0700));
 			$GLOBALS['pfb'][$key] = "{$this->dir}/{$folder}";
 		}
-		$GLOBALS['pfb']['reuse'] = $GLOBALS['pfb']['reuse_dnsbl'] = '';
+		// The adapter process never sets these (only the update pass does)
+		unset($GLOBALS['pfb']['reuse'], $GLOBALS['pfb']['reuse_dnsbl']);
+		$this->warnings = [];
+		set_error_handler(function (int $level, string $message): bool {
+			$this->warnings[] = $message;
+			return TRUE;
+		});
 	}
 
 	protected function tearDown(): void
 	{
+		restore_error_handler();
 		$GLOBALS['config'] = $this->priorConfig;
 		$GLOBALS['pfb'] = $this->priorPfb;
 		foreach (['write_config_calls', 'write_config_args', 'write_config_result', 'write_config_hook', 'config_read_hook', 'config_read_calls',
@@ -824,6 +834,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 
 		$this->assertWritten($reply);
 		$this->assertSame([$marker], $this->markers());
+		$this->assertSame([], $this->warnings, 'flagging the list raised no PHP warning');
 	}
 
 	public function testAWriteThatLeavesEveryCustomListAloneFlagsNothing(): void
@@ -838,6 +849,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 
 		$this->assertWritten($reply);
 		$this->assertSame([], $this->markers());
+		$this->assertSame([], $this->warnings);
 	}
 
 	public function testOnlyAGroupWhoseCustomListChangedIsFlagged(): void
@@ -854,6 +866,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 
 		$this->assertWritten($reply);
 		$this->assertSame(['deny/Other_custom_v4.update'], $this->markers());
+		$this->assertSame([], $this->warnings);
 	}
 
 	public function testANewGroupWithACustomListIsFlaggedAndOneWithoutIsNot(): void
@@ -870,6 +883,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 
 		$this->assertWritten($reply);
 		$this->assertSame(['deny/Listed_custom_v4.update'], $this->markers());
+		$this->assertSame([], $this->warnings, 'a group Core created lacks the keys the editor stores, and flagging it raised no PHP warning');
 	}
 
 	/** @return array<string, array{0: string, 1: string, 2: list<string>}> the stored action, the action Core writes with a changed list, and the markers */
@@ -898,6 +912,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 
 			$this->assertWritten($reply);
 			$this->assertSame($markers, $this->markers());
+			$this->assertSame([], $this->warnings, 'a group with no list folder raised no touch() warning (an unprivileged user cannot create a file at the root)');
 			$this->assertFileDoesNotExist('/Spam_custom_v4.update', 'a group with no list folder is not flagged at the root of the filesystem');
 		} finally {
 			@unlink('/Spam_custom_v4.update');
@@ -989,5 +1004,112 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$this->assertArrayNotHasKey('error', $reply, json_encode($reply));
 		$this->assertSame('em1', config_get_path(self::V4 . '/0/srcint'));
 		$this->assertSame('10.0.0.1', $this->read()['settings']['feeds/ipv4']['groups'][0]['bindAddress']);
+	}
+
+	/** @return array<string, mixed> a stored row that projects: auto format, enabled, a source of its own */
+	private static function sourceRow(string $header): array
+	{
+		return ['format' => 'auto', 'state' => 'Enabled', 'url' => "https://example.org/{$header}.txt", 'header' => $header];
+	}
+
+	/** @return list<array<string, mixed>> the name Dup twice, the first on an interface that is gone (it does not project), and another group */
+	private static function duplicateNameGroups(): array
+	{
+		$first = ['aliasname' => 'Dup', 'description' => 'first', 'action' => 'Deny_Inbound', 'cron' => 'Never', 'srcint' => 'em9', 'row' => [self::sourceRow('One')]];
+		$second = ['aliasname' => 'Dup', 'description' => 'second', 'action' => 'Deny_Both', 'cron' => 'Weekly', 'srcint' => '', 'row' => [self::sourceRow('Two')]];
+		return [$first, $second, ['aliasname' => 'Other', 'action' => 'Deny_Both', 'cron' => 'Never']];
+	}
+
+	public function testAGroupNameAHiddenGroupHoldsStaysHiddenInEveryLaterGroupOfThatName(): void
+	{
+		// Given the name Dup twice, the first copy hidden
+		$groups = self::duplicateNameGroups();
+		$this->arrange([self::V4 => $groups]);
+
+		// Then the read has neither copy, in the feeds and in the schedule alike
+		$read = $this->read();
+		$this->assertSame(['Other'], array_column($read['settings']['feeds/ipv4']['groups'], 'name'), 'the later Dup does not take the place of the hidden one');
+		$this->assertSame(['ipv4/Other'], array_column($read['settings']['schedule']['groups'], 'id'));
+
+		// When Core writes an unrelated change, then neither copy is touched
+		$settings = $read['settings'];
+		$settings['feeds/ipv4']['groups'][0]['updateFrequency'] = 'Weekly';
+		$before = $GLOBALS['config'];
+		$this->assertWritten($this->write($settings, $read['revision']));
+		$this->assertSame([self::V4 . '/2/cron'], self::changedLeaves($before, $GLOBALS['config']));
+		$this->assertSame([$groups[0], $groups[1]], array_slice(config_get_path(self::V4), 0, 2));
+	}
+
+	public function testCoreCannotWriteTheScheduleOfANameAHiddenGroupHolds(): void
+	{
+		// Given the name Dup twice, the first copy hidden, and a schedule write that overrides the slot of ipv4/Dup
+		$groups = self::duplicateNameGroups();
+		$this->arrange([self::V4 => $groups]);
+		$read = $this->read();
+		$other = array_values(array_filter($read['settings']['schedule']['groups'], static fn(array $g): bool => $g['id'] === 'ipv4/Other'));
+		$this->assertCount(1, $other, 'before-state: the group that projects has its slot');
+		$settings = $read['settings'];
+		$settings['schedule']['groups'] = [['id' => 'ipv4/Dup', 'override' => TRUE, 'weekday' => 7, 'hour' => 5, 'minute' => 0], $other[0]];
+		$before = $GLOBALS['config'];
+
+		// When Core writes it
+		$reply = $this->write($settings, $read['revision']);
+
+		// Then it is refused: no group of that name projects, and neither copy takes the override
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertContains('schedule.groups[0].id', array_column($reply['error']['fieldErrors'] ?? [], 'field'), json_encode($reply));
+		$this->assertNothingWritten($before, 'a schedule slot of a group that does not project');
+		$this->assertSame([$groups[0], $groups[1]], array_slice(config_get_path(self::V4), 0, 2));
+	}
+
+	public function testAHeaderAHiddenGroupHoldsStaysHiddenInEveryLaterGroup(): void
+	{
+		// Given a group on an interface that is gone with the rows F and E, and a later group with the rows F and K
+		$hidden = ['aliasname' => 'Hidden', 'action' => 'Deny_Both', 'cron' => 'Never', 'srcint' => 'em9', 'row' => [self::sourceRow('F'), self::sourceRow('E')]];
+		$shown = ['aliasname' => 'Shown', 'action' => 'Deny_Both', 'cron' => 'Never', 'row' => [self::sourceRow('F'), self::sourceRow('K')]];
+		$this->arrange([self::V4 => [$hidden, $shown]]);
+
+		// Then the read gives the later group the one feed whose header no earlier group's row holds
+		$read = $this->read();
+		$this->assertSame([['K']], array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), $read['settings']['feeds/ipv4']['groups']),
+			'a header an earlier group holds is that group\'s, hidden or not');
+
+		// When Core writes back what it read, nothing is written
+		$before = $GLOBALS['config'];
+		$reply = $this->write($read['settings'], $read['revision']);
+		$this->assertSame(['version' => 1, 'revision' => $read['revision']], $reply);
+		$this->assertNothingWritten($before, 'an unchanged write');
+
+		// When Core drops K, no row of F or E goes with it
+		$settings = $read['settings'];
+		$settings['feeds/ipv4']['groups'][0]['feeds'] = [];
+		$this->assertWritten($this->write($settings, $read['revision']));
+		$this->assertSame(['F', 'E'], array_column(config_get_path(self::V4 . '/0/row'), 'header'));
+		$this->assertSame(['F'], array_column(config_get_path(self::V4 . '/1/row'), 'header'), 'only K was dropped');
+	}
+
+	public function testAGroupThatProjectedAtCoresReadButLostItsInterfaceSinceIsRefusedAndNothingChanges(): void
+	{
+		// Given Core read a group bound to em0
+		$bound = ['aliasname' => 'Bound', 'action' => 'Deny_Both', 'cron' => 'Never', 'srcint' => 'em0', 'custom' => '', 'row' => [self::sourceRow('F')]];
+		$this->arrange([self::V4 => [$bound]]);
+		$read = $this->read();
+		$this->assertSame('192.0.2.1', $read['settings']['feeds/ipv4']['groups'][0]['bindAddress'], 'before-state: the group projected');
+		$settings = $read['settings'];
+		$settings['feeds/ipv4']['groups'][0]['updateFrequency'] = 'Weekly';
+		$settings['feeds/ipv4']['groups'][0]['customList'] = "x\n";
+		$before = $GLOBALS['config'];
+
+		// When em0 is gone by the time Core writes
+		$reply = pfb_core_settings_backend(['version' => 1, 'op' => 'write', 'expectedRevision' => $read['revision'], 'settings' => $settings],
+			"{$this->dir}/node_exporter", static fn(): array => ['em1' => '10.0.0.1']);
+
+		// Then the write is refused for the group's name and its address, and nothing is written or flagged
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$fields = array_column($reply['error']['fieldErrors'] ?? [], 'field');
+		$this->assertContains('feeds/ipv4.groups[0].name', $fields, json_encode($reply));
+		$this->assertContains('feeds/ipv4.groups[0].bindAddress', $fields, json_encode($reply));
+		$this->assertNothingWritten($before, 'a group whose interface is gone');
+		$this->assertSame([], $this->markers());
 	}
 }

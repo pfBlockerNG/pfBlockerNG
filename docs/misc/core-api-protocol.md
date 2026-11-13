@@ -197,11 +197,12 @@ is refused (pfBlockerNG ignores every row of such a group). The revision is keye
 alone, in `/var/db/pfblockerng/core_revision.key`), so it confirms no guess of a credential. `bindAddress` is the
 interface's IPv4 address, so a changed interface address moves the revision.
 
-A group whose stored Source Interface is missing or has no IPv4 address does not project, including IPv6 groups.
-A new group cannot take the name of a stored group that does not project; a new feed cannot take the header of any
-stored row of its type that does not project. Edit these entries on the Groups page first.
-As with every hidden duplicate, a header Core drops from the type is removed from these groups too; their other rows
-and fields stay untouched.
+A group whose stored Source Interface is missing or has no IPv4 address does not project, including IPv6 groups. Hiding a
+group never promotes a later one: a group of the same name stays hidden too, and so does a feed whose header a row of an
+earlier group holds (a row of a hidden group included). A new group cannot take the name of a stored group that does not
+project; a new feed cannot take the header of any stored row of its type that does not project. Edit these entries on
+the Groups page first. A write leaves a hidden group's own fields and rows untouched; the one exception is the type-wide
+rule above: a header Core drops from the type is removed from every group of the type, hidden ones included.
 After a successful write, each changed custom list (new non-empty lists included) is flagged for the next Update
 with `<folder>/<name>_custom<suffix>.update`, as on the Groups page: the stored action determines the folder,
 including Advanced Invert routing; the suffix is `_v4`, `_v6` or empty for DNSBL. An action with no list folder

@@ -4812,10 +4812,40 @@ function pfb_core_feed_faults(mixed $feed, string $gtype, string $prefix): array
 }
 
 /**
- * One stored group as Core's native group (issue #3937), its `feeds` keyed by row index: each token as the download path reads it
- * (an invalid action is Disabled, an unknown frequency Never, a script its file name or none, a custom list as valid UTF-8), and a
- * feed that breaks a rule of pfb_core_feed_faults() or repeats a header before it left out. NULL when its Source Interface names an
- * interface with no IPv4 address or none that exists: such a group has no address to bind, and the default route is not one (issue #3946).
+ * One stored group's feeds as Core's native feeds, keyed by row index (issue #3937): each token as the download path reads it, and
+ * a row that breaks a rule of pfb_core_feed_faults() or repeats a header before it left out.
+ *
+ * @param array<mixed> $stored
+ * @return array<int, array<string, mixed>>
+ */
+function pfb_core_feed_rows_native(array $stored, string $gtype): array {
+	$feeds = $headers = [];
+	foreach (is_array($stored['row'] ?? NULL) ? $stored['row'] : [] as $r => $row) {
+		if (!is_array($row)) {
+			continue;
+		}
+		$cell = static fn(string $key): string => is_scalar($row[$key] ?? NULL) ? (string) $row[$key] : '';
+		$format = strtolower($cell('format'));
+		$format = in_array($format, pfb_core_feed_formats($gtype), TRUE) ? $format : 'auto';
+		[$url, $credentials] = pfb_core_feed_url_read($cell('url'), $format);
+		$feed = ['header' => $cell('header'), 'state' => array_search($cell('state'), PFB_CORE_FEED_STATES, TRUE) ?: 'enabled', 'format' => $format,
+			'url' => $url, 'credentials' => $credentials];
+		if ($gtype === 'dnsbl') {
+			$feed['action'] = ($row['action'] ?? NULL) === 'Permit' ? 'permit' : 'deny';
+		}
+		if (!isset($headers[$feed['header']]) && pfb_core_feed_faults($feed, $gtype, '') === []) {
+			$feeds[$r] = $feed;
+			$headers[$feed['header']] = TRUE;
+		}
+	}
+	return $feeds;
+}
+
+/**
+ * One stored group as Core's native group (issue #3937), its `feeds` keyed by row index (pfb_core_feed_rows_native()): each token as
+ * the download path reads it (an invalid action is Disabled, an unknown frequency Never, a script its file name or none, a custom
+ * list as valid UTF-8). NULL when its Source Interface names an interface with no IPv4 address or none that exists: such a group
+ * has no address to bind, and the default route is not one (issue #3946).
  *
  * @param array<mixed> $stored
  * @param callable(): array<string, string> $interfaces
@@ -4848,32 +4878,15 @@ function pfb_core_feed_group_native(array $stored, string $gtype, callable $inte
 	if ($gtype !== 'dnsbl') {
 		$group['whoisConvert'] = ($stored['whois_convert'] ?? NULL) === 'on';
 	}
-	$group['feeds'] = $headers = [];
-	foreach (is_array($stored['row'] ?? NULL) ? $stored['row'] : [] as $r => $row) {
-		if (!is_array($row)) {
-			continue;
-		}
-		$cell = static fn(string $key): string => is_scalar($row[$key] ?? NULL) ? (string) $row[$key] : '';
-		$format = strtolower($cell('format'));
-		$format = in_array($format, pfb_core_feed_formats($gtype), TRUE) ? $format : 'auto';
-		[$url, $credentials] = pfb_core_feed_url_read($cell('url'), $format);
-		$feed = ['header' => $cell('header'), 'state' => array_search($cell('state'), PFB_CORE_FEED_STATES, TRUE) ?: 'enabled', 'format' => $format,
-			'url' => $url, 'credentials' => $credentials];
-		if ($gtype === 'dnsbl') {
-			$feed['action'] = ($row['action'] ?? NULL) === 'Permit' ? 'permit' : 'deny';
-		}
-		if (!isset($headers[$feed['header']]) && pfb_core_feed_faults($feed, $gtype, '') === []) {
-			$group['feeds'][$r] = $feed;
-			$headers[$feed['header']] = TRUE;
-		}
-	}
+	$group['feeds'] = pfb_core_feed_rows_native($stored, $gtype);
 	return $group;
 }
 
 /**
  * config.xml's groups of $projection as Core's native groups, keyed by their index in the section (issue #3937): a group whose name
- * the download path refuses (pfb_core_feed_name_valid()), that repeats a name before it, or whose Source Interface does not resolve
- * (pfb_core_feed_group_native()) does not project.
+ * the download path refuses (pfb_core_feed_name_valid()), that repeats the name of an earlier group, or whose Source Interface does
+ * not resolve (pfb_core_feed_group_native()) does not project. A name or a header an earlier group holds stays that group's, whether or
+ * not it projects, so hiding a group never promotes a later duplicate (issue #3946).
  *
  * @param callable(): array<string, string> $interfaces
  * @return array<int, array<string, mixed>>
@@ -4881,21 +4894,32 @@ function pfb_core_feed_group_native(array $stored, string $gtype, callable $inte
 function pfb_core_feed_groups(string $projection, callable $interfaces): array {
 	$gtype = substr($projection, 6);
 	$section = config_get_path('installedpackages/' . PFB_CORE_FEED_SECTIONS[$projection] . '/config', []);
-	$groups = $seen = [];
+	$groups = $named = $seen = [];
 	foreach (is_array($section) ? $section : [] as $n => $stored) {
-		if (!is_array($stored) || !pfb_core_feed_name_valid($stored['aliasname'] ?? NULL, $gtype)
-		    || in_array($stored['aliasname'], array_column($groups, 'name'), TRUE)) {
+		if (!is_array($stored) || !pfb_core_feed_name_valid($stored['aliasname'] ?? NULL, $gtype) || isset($named[$stored['aliasname']])) {
 			continue;
 		}
+		$named[$stored['aliasname']] = TRUE;
 		$group = pfb_core_feed_group_native($stored, $gtype, $interfaces);
+		// A header names one file in the type's directory: an earlier group's feed has it
+		$feeds = array_filter($group['feeds'] ?? pfb_core_feed_rows_native($stored, $gtype), static fn(array $feed): bool => !isset($seen[$feed['header']]));
+		$seen += array_fill_keys(array_column($feeds, 'header'), TRUE);
 		if ($group !== NULL) {
-			// A header names one file in the type's directory: an earlier group's feed has it
-			$group['feeds'] = array_filter($group['feeds'], static fn(array $feed): bool => !isset($seen[$feed['header']]));
-			$seen += array_fill_keys(array_column($group['feeds'], 'header'), TRUE);
+			$group['feeds'] = $feeds;
 			$groups[$n] = $group;
 		}
 	}
 	return $groups;
+}
+
+/**
+ * Every feed header of $groups (native groups, as pfb_core_feed_groups() gives them), in order.
+ *
+ * @param array<int|string, array<string, mixed>> $groups
+ * @return list<string>
+ */
+function pfb_core_feed_headers(array $groups): array {
+	return array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), array_values($groups)));
 }
 
 /**
@@ -4940,7 +4964,7 @@ function pfb_core_feed_projection_faults(mixed $value, string $projection, calla
 	$section = is_array($section) ? $section : [];
 	$storedNames = array_column($section, 'aliasname');
 	$storedHeaders = array_column(array_merge([], ...array_filter(array_column($section, 'row'), 'is_array')), 'header');
-	$projectedHeaders = array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), array_values($current)));
+	$projectedHeaders = pfb_core_feed_headers($current);
 	foreach ($value['groups'] as $i => $group) {
 		$prefix = "{$projection}.groups[{$i}]";
 		$faults = array_merge($faults, pfb_core_object_faults($group, $fields, $prefix));
@@ -5049,14 +5073,13 @@ function pfb_core_feed_group_patch(array $stored, array $current, array $wanted,
  * @param callable(): array<string, string> $interfaces
  */
 function pfb_core_custom_list_flag(string $projection, array $was, callable $interfaces): void {
-	global $pfbarr;
 	$section = PFB_CORE_FEED_SECTIONS[$projection];
 	$suffix = ['feeds/ipv4' => '_v4', 'feeds/ipv6' => '_v6'][$projection] ?? '';
 	foreach (pfb_core_feed_groups($projection, $interfaces) as $n => $group) {
 		if ($group['customList'] !== ($was[$group['name']] ?? '')) {
-			pfb_determine_list_detail($group['action'], '', $section, $n);
-			if (($pfbarr['folder'] ?? '') !== '') {
-				touch("{$pfbarr['folder']}/{$group['name']}_custom{$suffix}.update");
+			$folder = pfb_determine_list_detail($group['action'], '', $section, $n)['folder'] ?? '';
+			if ($folder !== '') {
+				touch("{$folder}/{$group['name']}_custom{$suffix}.update");
 			}
 		}
 	}
@@ -5112,8 +5135,7 @@ function pfb_core_feed_merge(string $projection, array $wanted, callable $interf
 	$merged = pfb_core_merge_keyed($section, $current, $wanted, 'name', 'aliasname', static fn(?int $n, array $group): array =>
 		pfb_core_feed_group_patch($n === NULL ? [] : $section[$n], $n === NULL ? [] : $current[$n], $group, $interfaces));
 	// A header Core dropped from the type goes from every group: a duplicate the read left out never becomes it
-	$dropped = array_diff(array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), array_values($current))),
-		array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), $wanted)));
+	$dropped = array_diff(pfb_core_feed_headers($current), pfb_core_feed_headers($wanted));
 	foreach ($merged as $n => $group) {
 		if ($dropped !== [] && is_array($group) && is_array($group['row'] ?? NULL)) {
 			$rows = array_values(array_filter($group['row'], static fn(mixed $row): bool => !is_array($row) || !in_array($row['header'] ?? NULL, $dropped, TRUE)));
@@ -5132,7 +5154,8 @@ function pfb_core_schedule_token(mixed $value, int $min, int $max, int $default,
 }
 
 /**
- * The index in $section of the first group of each name (the one the feed projections project).
+ * The index in $section of the first group of each name: the only one of that name the feed projections can project (a later one
+ * never does, nor does the first when it is hidden, pfb_core_feed_groups()).
  *
  * @return array<string, int>
  */
@@ -12515,25 +12538,25 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 		case 'Deny_Inbound':
 		case 'Deny_Outbound':
 		case 'Alias_Deny':
-			$pfbarr = array('adv' => TRUE, 'folder' => "{$pfb['denydir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => "{$pfb['reuse']}");
+			$pfbarr = array('adv' => TRUE, 'folder' => "{$pfb['denydir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => (string) ($pfb['reuse'] ?? ''));
 			break;
 		case 'unbound':
-			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['dnsdir']}", 'orig' => "{$pfb['dnsorigdir']}", 'reuse' => "{$pfb['reuse_dnsbl']}");
+			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['dnsdir']}", 'orig' => "{$pfb['dnsorigdir']}", 'reuse' => (string) ($pfb['reuse_dnsbl'] ?? ''));
 			break;
 		case 'Permit_Both':
 		case 'Permit_Inbound':
 		case 'Permit_Outbound':
 		case 'Alias_Permit':
-			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['permitdir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => "{$pfb['reuse']}");
+			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['permitdir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => (string) ($pfb['reuse'] ?? ''));
 			break;
 		case 'Match_Both':
 		case 'Match_Inbound':
 		case 'Match_Outbound':
 		case 'Alias_Match':
-			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['matchdir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => "{$pfb['reuse']}");
+			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['matchdir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => (string) ($pfb['reuse'] ?? ''));
 			break;
 		case 'Alias_Native':
-			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['nativedir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => "{$pfb['reuse']}");
+			$pfbarr = array('adv' => FALSE, 'folder' => "{$pfb['nativedir']}", 'orig' => "{$pfb['origdir']}", 'reuse' => (string) ($pfb['reuse'] ?? ''));
 			break;
 	}
 
