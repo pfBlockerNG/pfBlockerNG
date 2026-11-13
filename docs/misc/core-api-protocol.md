@@ -91,7 +91,9 @@ over it.
 
 **Adapter backend.** Core holds no platform path or name: the command comes only from the flag. Each call runs the
 command once, writes one JSON request to its stdin and reads one JSON reply from its stdout (exit status 0). A read may
-take 10 s, a write 20 s (under the 25 s method deadline); past it the command's whole process group is killed. A reply
+take 10 s, a write 20 s; past it the command's whole process group is killed. Calls run one at a time, so a call queued
+behind another can take the sum of both bounds. A write that timed out may still have been applied: the Outpost's next
+tick finds the revision moved and Core reads it. A reply
 over 1 MiB, a non-zero exit, a reply that is not exactly one JSON object of version 1, a revision of 0, or read values
 the schema refuses fail the call. The configuration always exists, so `InitializeSettings` is refused, and Core never
 writes `settings.json`.

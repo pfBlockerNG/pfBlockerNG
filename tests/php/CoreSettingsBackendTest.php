@@ -652,9 +652,23 @@ final class CoreSettingsBackendTest extends TestCase
 		$this->assertCount(3, $lines);
 		$this->assertSame('#!/bin/sh', $lines[0]);
 		$this->assertStringStartsWith('# ', $lines[1]);
-		$this->assertSame('exec /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc core_settings', $lines[2]);
+		$this->assertSame('exec /usr/local/bin/php -d display_errors=stderr -f /usr/local/pkg/pfblockerng/pfblockerng.inc core_settings', $lines[2]);
 		$this->assertTrue(is_executable(self::WRAPPER), 'the nightly port installs *.sh with their mode; Core execs it');
 		$syntax = pfb_test_run_process(['/bin/sh', '-n', self::WRAPPER]);
 		$this->assertSame(0, $syntax['exit'], $syntax['stderr']);
+	}
+
+	/** A warning or notice PHP prints while it loads or serves goes to stderr: Core reads stdout as exactly one JSON object. */
+	public function testTheWrappersPhpOptionsKeepAWarningOffStdout(): void
+	{
+		$lines = file(self::WRAPPER, FILE_IGNORE_NEW_LINES);
+		$this->assertIsArray($lines, 'the wrapper exists');
+		$this->assertSame(1, preg_match('#^exec /usr/local/bin/php((?: \S+)*?) -f /usr/local/pkg/pfblockerng/pfblockerng\.inc core_settings$#', $lines[2], $m), $lines[2]);
+		$options = array_values(array_filter(explode(' ', $m[1])));
+
+		$run = pfb_test_run_process([PHP_BINARY, '-d', 'display_errors=1', '-d', 'error_reporting=-1', ...$options, '-r', 'echo $undefined; echo "{}";']);
+
+		$this->assertSame('{}', $run['stdout'], 'stdout holds the reply only');
+		$this->assertStringContainsString('Undefined variable $undefined', $run['stderr'], 'the warning went to stderr');
 	}
 }

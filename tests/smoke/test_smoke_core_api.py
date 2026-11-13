@@ -329,8 +329,8 @@ def test_an_older_config_restored_reaches_core_with_the_next_tick(core_vm: Smoke
         assert newer != older, "before-state: the Core save changed config.xml"
         backup = newest_config_backup(core_vm)
 
-        restored = php_json(core_vm, f"config_restore({backup!r})")
-        assert restored == 0, f"pfSense's config_restore({backup}) answered {restored}"
+        restored = php_json(core_vm, f"config_restore({backup!r}, 'pfBlockerNG #3924 smoke')")
+        assert restored is True, f"pfSense's config_restore({backup}) answered {restored}"
 
         assert config_dns_settings(core_vm) == older, "before-state: the older value is back in config.xml"
         held = core_dns(core_vm)
