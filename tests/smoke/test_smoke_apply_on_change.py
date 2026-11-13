@@ -8,10 +8,14 @@ Dispatch (when ready):
     gh workflow run smoke.yml -f pytest_marker="apply_on_change"
 
 Tests:
-    test_apply_no_window_dispatches_immediately — no window → tick fires the feed without deferral
-    test_apply_inside_window_dispatches         — inside window → tick fires the feed
-    test_apply_outside_window_defers            — outside window → pending recorded, no dispatch
-    test_apply_pending_cleared_by_window_open   — pending → tick fires when window opens
+    test_apply_no_window_dispatches_immediately — no window → tick asks Core for the apply without deferral
+    test_apply_inside_window_dispatches         — inside window → tick asks Core for the apply
+    test_apply_outside_window_defers            — outside window → pending recorded, Core asked for nothing
+    test_apply_pending_cleared_by_window_open   — pending → tick asks Core when the window opens
+
+The tick does not run the apply: it asks Core for an `apply` Update (StartUpdate, issue #3941), which runs the
+pending apply and clears the flag. Each dispatching test therefore waits for that Update to end before it reads
+the ledger.
 """
 
 import json
@@ -22,6 +26,7 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
+from .test_smoke_core_api import await_core_up
 
 # Module mark: 'apply_on_change' on every test; 'smoke' per-test.
 pytestmark = [pytest.mark.apply_on_change]
@@ -40,16 +45,10 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
-    # issue #2506: the due ledger is a derived cache post-ADR-43 — without a configured
-    # feed group the runtime model has nothing to schedule, so pfb_schedule_cache_refresh
-    # legitimately PRUNES the 'cron' row, and every "entry must exist" assertion in this
-    # module goes vacuous. Configure one real feed group, then immediately consume its
-    # reservation so the module's own quiet-hours/pending-apply scenarios (which arrange
-    # their own due-ness via _seed_pending_apply) never race a surprise scheduled feed pass.
+    # One real feed group, as a configured box has; the scenarios below arrange their own pending apply.
     feed_url = h.write_local_feed(smoke_vm, "smoke_apply_ip.txt", "192.0.2.20/32\n192.0.2.21/32\n")
     h.inject(smoke_vm, h.IpCase(aliasname="smokeapply", feed_url=feed_url, header="smokeapply", family="v4"))
-    h.pin_cron_due(smoke_vm)
-    _complete_feed_reservation(smoke_vm)
+    await_core_up(smoke_vm)
     try:
         yield smoke_vm
     finally:
@@ -67,44 +66,16 @@ _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 # The ledger lives at $pfb['dbdir']/pfb_due_ledger.json (dbdir = /var/db/pfblockerng).
 _LEDGER_DIR = "/var/db/pfblockerng"
 _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
-# issue #2506: the model id pin_cron_due()/pfb_schedule_runtime_config() derive for the
-# module's IpCase feed group ("ipv4:<header>_v4").
-_FEED_GROUP_ID = "ipv4:smokeapply_v4"
-# Logged by sync_package_pfblockerng (pfblockerng_apply.inc) when the package master switch is
-# on and the pass is not save-only. The scheduled cron pass tail-calls the same function, so
-# the marker is NOT manual-apply-exclusive in general — it discriminates here only because the
-# fixture keeps this module's one feed group never-due, so no scheduled pass can contribute.
+# Logged by sync_package_pfblockerng (pfblockerng_apply.inc) when the package master switch is on and the pass is not
+# save-only. The apply Update Core runs is the only pass this module starts, so a rise of the marker is that apply.
 _UPDATE_MARKER = "UPDATE PROCESS START"
+# Outer bound on an Update Core runs: salvage only, never an assertion about duration.
+_UPDATE_WATCHDOG = 300.0
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _complete_feed_reservation(vm: SmokeVM) -> None:
-    """Consume the durable pending reservation :func:`h.pin_cron_due` made for the module's feed group.
-
-    Same rationale as the tick module's sibling helper (#2506): completes the reservation right
-    after pin_cron_due so this module's scenarios never race a surprise scheduled feed pass —
-    module-local duplication is the house pattern here (this module already duplicates
-    _read_ledger/_write_ledger_entry rather than importing the tick module's copies).
-    """
-    # State dir derived the way pin_cron_due derives it (pfb_global guarded + the production
-    # `?? '/usr/local/etc'` fallback), and record_outcome's bool — its only failure signal —
-    # is echoed rather than discarded.
-    snippet = (
-        f"require_once('{_PFB_EXTRA}');"
-        "if (function_exists('pfb_global')) { pfb_global(); }"
-        "$state_dir = $pfb['schedule_state_dir'] ?? '/usr/local/etc';"
-        f"echo pfb_schedule_state_record_outcome('{_FEED_GROUP_ID}', "
-        "PfbScheduleTerminalResult::Success, $state_dir) ? 'OK' : 'FAIL';"
-    )
-    result = h.php_eval(vm, snippet)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"_complete_feed_reservation failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
 
 
 def _read_ledger(vm: SmokeVM) -> dict:
@@ -195,6 +166,19 @@ def _is_pending(vm: SmokeVM) -> bool:
     return bool(entry and entry.get("pending_apply"))
 
 
+def _tick_and_await_apply(vm: SmokeVM) -> dict:
+    """Fire one tick and wait for the `apply` Update it asked Core for; returns that Update's view.
+
+    The tick returns once Core admitted the Update, not when it ends. Core's last Update before the tick is the
+    baseline: the view returned is the first newer one to have ended, and it must be an `apply`.
+    """
+    before = h.core_update_view(vm)["update"]
+    _run_tick(vm)
+    view = h.await_core_update_end(vm, before=before, watchdog=_UPDATE_WATCHDOG)
+    assert view["update"]["trigger"] == "apply", f"the tick must ask Core for the apply; Core ran {view['update']}"
+    return view
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -221,17 +205,17 @@ def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM) -> None:
     assert _is_pending(vm), "before tick: pending_apply must be set"
     before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
 
-    _run_tick(vm)
+    _tick_and_await_apply(vm)
 
-    entry = _cron_ledger(vm)
-    assert entry is not None, f"after tick: ledger entry for 'cron' must exist; ledger={_read_ledger(vm)}"
-    assert not _is_pending(vm), f"after tick (no window): pending_apply must NOT be set; ledger={entry}"
+    assert not _is_pending(vm), (
+        f"after the apply Update (no window): pending_apply must NOT be set; ledger={_read_ledger(vm)}"
+    )
     assert h.wait_until(
         lambda: h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER) > before_updates,
         timeout=60,
         interval=2,
     ), (
-        f"after tick (no window): the pending apply must have actually dispatched — "
+        f"after the apply Update (no window): the pending apply must have actually run — "
         f"' {_UPDATE_MARKER}' marker count did not rise "
         f"(before={before_updates}, after={h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)})"
     )
@@ -258,17 +242,17 @@ def test_apply_inside_window_dispatches(deployed_vm: SmokeVM) -> None:
     assert _is_pending(vm), "before tick: pending_apply must be set"
     before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
 
-    _run_tick(vm)
+    _tick_and_await_apply(vm)
 
-    entry = _cron_ledger(vm)
-    assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
-    assert not _is_pending(vm), f"after tick (inside window): pending_apply must NOT be set; ledger={entry}"
+    assert not _is_pending(vm), (
+        f"after the apply Update (inside window): pending_apply must NOT be set; ledger={_read_ledger(vm)}"
+    )
     assert h.wait_until(
         lambda: h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER) > before_updates,
         timeout=60,
         interval=2,
     ), (
-        f"after tick (inside window): the pending apply must have actually dispatched — "
+        f"after the apply Update (inside window): the pending apply must have actually run — "
         f"' {_UPDATE_MARKER}' marker count did not rise "
         f"(before={before_updates}, after={h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)})"
     )
@@ -279,7 +263,7 @@ def test_apply_inside_window_dispatches(deployed_vm: SmokeVM) -> None:
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
 def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
-    """Window that excludes now → tick defers (pending set, job NOT dispatched).
+    """Window that excludes now → tick defers (pending set, Core NOT asked for the apply).
 
     Scenario:
       Background: pfb_quiet_hours set to a window that EXCLUDES the current time.
@@ -290,17 +274,15 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
       Then pending_apply IS set (deferred).
       And the previously-absent 'ss_refresh' ledger row APPEARS (positive control: the tick
           genuinely ran its due-jobs pass),
-      And the UPDATE PROCESS marker count is UNCHANGED (job did not run — exec() not called).
+      And Core's last Update is unchanged (no `apply` was asked for) and the UPDATE PROCESS marker
+          count is UNCHANGED (the apply did not run).
 
     Note: This test must be run outside 00:00-00:01 local time. It asserts the
     clock is not in the window before proceeding; if the VM clock is in that
     1-minute window the test is skipped (not failed) to avoid false positives.
 
-    issue #2506: previously asserted ``last_run == 0`` directly, which breaks once the module
-    fixture seeds durable schedule state for its feed group — the derived-cache refresh
-    recomputes 'cron' last_run from the schedule state's last_successful_check, not from the
-    forced-0 seed. The UPDATE PROCESS marker count is the discriminator that survives that:
-    it only rises when sync_package_pfblockerng actually runs.
+    The UPDATE PROCESS marker count only rises when sync_package_pfblockerng actually runs; Core's
+    last Update is the direct record of whether the tick asked for one.
     """
     vm = deployed_vm
 
@@ -323,6 +305,7 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         f"ledger={_read_ledger(vm)}"
     )
     before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
+    update_before = h.core_update_view(vm)["update"]
 
     _run_tick(vm)
 
@@ -338,14 +321,16 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         f"cannot tell 'deferred correctly' from 'the tick itself never ran'; ledger={_read_ledger(vm)}"
     )
 
-    entry = _cron_ledger(vm)
-    assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
     assert _is_pending(vm), (
         f"after tick (outside window): pending_apply must be TRUE;\n"
-        f"  ledger={entry}\n"
+        f"  ledger={_cron_ledger(vm)}\n"
         f"  (if this failed, verify the VM clock is outside 00:00-00:01 local time)"
     )
-    # The dispatch discriminator: the deferred job must NOT have actually run.
+    # The dispatch discriminators: Core was not asked for the apply, and it did not run.
+    update_after = h.core_update_view(vm)["update"]
+    assert update_after == update_before or update_after["trigger"] == "scheduled", (
+        f"after tick (outside window): the tick asked Core for an Update: before={update_before} after={update_after}"
+    )
     after_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
     assert after_updates == before_updates, (
         f"after tick (outside window): the deferred apply must NOT have dispatched — "
@@ -384,19 +369,18 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
     _set_quiet_hours(vm, "00:00-23:59")
     before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
 
-    _run_tick(vm)
+    _tick_and_await_apply(vm)
 
-    entry = _cron_ledger(vm)
-    assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
     assert not _is_pending(vm), (
-        f"after tick (pending + window open): pending_apply must be FALSE (cleared by dispatch); ledger={entry}"
+        f"after the apply Update (pending + window open): pending_apply must be FALSE (cleared by the apply); "
+        f"ledger={_read_ledger(vm)}"
     )
     assert h.wait_until(
         lambda: h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER) > before_updates,
         timeout=60,
         interval=2,
     ), (
-        f"after tick (pending + window open): the pending apply must have actually dispatched — "
+        f"after the apply Update (pending + window open): the pending apply must have actually run — "
         f"' {_UPDATE_MARKER}' marker count did not rise "
         f"(before={before_updates}, after={h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)})"
     )
