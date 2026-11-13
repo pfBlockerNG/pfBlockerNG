@@ -150,6 +150,7 @@ final class CoreSettingsFeedsParityTest extends TestCase
 		$settings[$projection]['groups'] = [$group];
 		$settings['schedule'] = ['scheduledUpdates' => TRUE, 'weekday' => 7, 'hour' => 0, 'minute' => 0, 'groups' => [], 'categoryUpdates' => FALSE,
 			'categoryFrequency' => 'Never', 'categoryProviders' => []];
+		$settings['ingest'] = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_ingest_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
 
 		$refusal = pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => 1, 'settings' => $settings]);
 

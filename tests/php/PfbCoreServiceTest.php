@@ -386,9 +386,11 @@ final class PfbCoreServiceTest extends TestCase
 		// When the service starts
 		[$status, $out] = $this->rc('start');
 
-		// Then the user agent is the package's, whole, on one line
+		// Then the user agent is the package's, whole, on one line: the daemon double writes each argument and a newline, so one that held a
+		// line break would leave a blank line that lines() skips; the raw file must end with the flag and the agent alone
 		$this->assertSame(0, $status, $out);
-		$this->assertSame(['--user-agent', self::USER_AGENT], array_slice($this->lines('daemon.argv'), -2));
+		$raw = (string) file_get_contents("{$this->dir}/state/daemon.argv");
+		$this->assertStringEndsWith("\n--user-agent\n" . self::USER_AGENT . "\n", $raw, 'the user agent argument holds a line break');
 	}
 
 	public function testStartWithNoBinaryForThisMachineStartsNothingAndSaysSo(): void
