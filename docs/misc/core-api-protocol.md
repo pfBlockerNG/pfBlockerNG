@@ -32,7 +32,7 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `GetSettingsSchema` | none | the native schema: `{"schemaVersion", "projections": [{"id", "fields": [...]}]}` |
 | `GetSettings` | `projectionIds` (optional; none: all) | `{"initialized", "revision", "projections": [{"resourceId", "generation", "value"}]}` |
 | `InitializeSettings` | `requestId`, `settings` | `{"revision": 1, "projections": [...]}`: every projection |
-| `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed, as the backend stored them |
+| `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed, and the revision, as Core read the backend again after the write (a failed read keeps what was written) |
 | `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give; changes nothing |
 | `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
 
@@ -62,7 +62,8 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
 - **Validation.** The whole resulting configuration is checked before anything is written. Any error rejects it all:
   `invalid_argument`, with one field error per fault (`changes.dns.decisionCacheMax`, `changes.<unknown projection>`).
 - **Conflicts** (`conflict`):
-  - `InitializeSettings` on an initialized Core (always, on the adapter backend);
+  - `InitializeSettings` on an initialized Core (always, on the adapter backend), or whose write the backend refuses as a
+    conflict (Core then reads the backend again);
   - `SaveSettings` before initialization;
   - `SaveSettings` whose `expectedRevision` is not the current revision (a field error names `expectedRevision`), as
     Core holds it or as the backend finds it when it writes (Core then reads the backend again, so the next
