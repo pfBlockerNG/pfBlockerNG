@@ -350,7 +350,7 @@ this machine's binary (`pfb_core_service()`).
   the binaries from this script (the transitional path for channels whose ports have not
   adopted the recipe).
 - **Parity with `make package`.** The port compiles with the Go of its own `USES=go`
-  (the fork's `lang/go126`), the builder with the toolchain pinned in
+  (the fork's `lang/go127`), the builder with the toolchain pinned in
   [`scripts/go_toolchain.py`](../scripts/go_toolchain.py). Byte parity between the two is
   **not required**; what both share is the source, the build flags, the vendored modules
   (`files/modules.txt`) and the ELF and ABI checks above.
@@ -373,7 +373,9 @@ this machine's binary (`pfb_core_service()`).
 A FreeBSD-ports recipe that builds pfB-DNS itself (nightly now; edge once its release
 line carries `go/`) has these parts:
 
-- `USES=go:1.26+,modules,no_targets`, `NO_ARCH_IGNORE=pfb-dns` (`qa.sh` flags every
+- `USES=go:1.27+,modules,no_targets` (x/net picks its IDNA tables by compiler: go1.27
+  selects Unicode 17, which Core's feed corpus and pfb-dns assume, #3982; the modules'
+  `go 1.27.0` refuses an older Go), `NO_ARCH_IGNORE=pfb-dns` (`qa.sh` flags every
   FreeBSD ELF in a `NO_ARCH` package otherwise) and an empty `STRIP=` (Go linked the
   binaries stripped already; `INSTALL_PROGRAM` must not rewrite the bytes `do-build` checked).
 - `GH_TUPLE`: one entry per module the gateway vendors, each unpacked to
