@@ -394,8 +394,9 @@ aliastables() {
 #              (dnsbl_cache_keeps, which restages the hook from /usr/local); runs during the DNSBL pass and on
 #              restore, never during save
 #   teardown = remove both sets, keeping the module and its mount hook the same way
-#   retire   = drop the RETIRED set as stage does, nothing else; the DNSBL pass runs it once Unbound has started from the
-#              conf the pass wrote (or the one a failed start rolled back to), so the module leaves on that pass (#3896)
+#   retire   = drop the RETIRED set as stage does (with the chroot mounts of the dropped mount hook, #3917), nothing else;
+#              the DNSBL pass runs it once Unbound has started from the conf the pass wrote (or the one a failed start
+#              rolled back to), so the module leaves on that pass (#3896)
 #   save     = archive the GENERATED set plus exact TOP1M detector sidecars, with the caller holding
 #              the publication lock; the shipped and retired sets stay out
 #   restore  = boot earlyshellcmd: untar the cached files THEN stage
@@ -413,6 +414,8 @@ dnsbl_cache() {
 	pfbdb="${pfbdb:-/var/db/pfblockerng}"
 	dnsblarchive="${dnsblarchive:-/usr/local/etc/pfb_dnsbl_cache.tar}"
 	pathtar="${pathtar:-/usr/bin/tar}"
+	pfbmount="${pfbmount:-/sbin/mount}"
+	pfbumount="${pfbumount:-/sbin/umount}"
 
 	# The shipped (static) files the chroot reads: the PSL authority, the HSTS list, the observer and its boot hook.
 	PFB_PY_SHIPPED='dnsbl_psl pfb_py_hsts.txt pfb_upstream_observer.py pfb_upstream_observer_include.inc'
@@ -449,6 +452,13 @@ dnsbl_cache() {
 				continue
 			fi
 			rm -f "${pfbchroot}/${_f}"
+			# The hook's nullfs mounts outlive it until reboot (an upgraded box, #3917): they go with it.
+			if [ "${_f}" = 'pfb_unbound_include.inc' ]; then
+				for _d in lib var/log/pfblockerng usr/local/share/GeoIP; do
+					while "${pfbmount}" -t nullfs 2>/dev/null | grep -qF " on ${pfbchroot}/${_d} (" &&
+						"${pfbumount}" "${pfbchroot}/${_d}" 2>/dev/null; do :; done
+				done
+			fi
 		done
 	}
 

@@ -307,6 +307,41 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
+  # The hook's nullfs mounts outlive it until reboot (#3917): an older package's hook mounted these, and pfSense's own
+  # python mounts (usr/local/lib) sit beside them. Fake mount(8)/umount(8) over a mount table file.
+  fake_mounts() {
+    mounttab="${sandbox}/mounttab"
+    true > "${mounttab}"
+    for _d in lib var/log/pfblockerng usr/local/share/GeoIP usr/local/lib; do
+      echo "/${_d} on ${pfbchroot}/${_d} (nullfs, local, read-only)" >> "${mounttab}"
+    done
+    pfbmount="${sandbox}/mount"
+    pfbumount="${sandbox}/umount"
+    printf '#!/bin/sh\ncat "%s"\n' "${mounttab}" > "${pfbmount}"
+    # shellcheck disable=SC2016  # $1 is the fake umount's own argument
+    printf '#!/bin/sh\ngrep -vF " on $1 (" "%s" > "%s.new"; mv "%s.new" "%s"\n' \
+      "${mounttab}" "${mounttab}" "${mounttab}" "${mounttab}" > "${pfbumount}"
+    chmod +x "${pfbmount}" "${pfbumount}"
+  }
+  mounts_named_then_not() {
+    dc "$1"
+    echo "named:$(sed 's#^/\([^ ]*\) .*#\1#' "${mounttab}" | tr '\n' ' ')"
+    name_observer_in_conf
+    dc "$1"
+    echo "observer:$(sed 's#^/\([^ ]*\) .*#\1#' "${mounttab}" | tr '\n' ' ')"
+  }
+
+  It 'retire unmounts the retired hook'"'"'s chroot mounts once unbound.conf stops naming pfb_unbound.py, and leaves the others (#3917)'
+    setup_sandbox
+    plant_old_include
+    name_module_in_conf
+    fake_mounts
+    When call mounts_named_then_not retire
+    The line 1 of output should equal 'named:lib var/log/pfblockerng usr/local/share/GeoIP usr/local/lib '
+    The line 2 of output should equal 'observer:usr/local/lib '
+    cleanup_sandbox
+  End
+
   # What the run says on stderr when it keeps the module (dc discards stderr with the off-appliance chown noise).
   stage_says() {
     dnsbl_cache stage 2>&1 >/dev/null | grep 'pfb_unbound.py' || true
