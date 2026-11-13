@@ -1,0 +1,45 @@
+{
+ "schema": 1,
+ "description": "A baseline PHP wrote (pfb_hash_write: the xxh128 of the raw bytes in .orig.xxhash128) makes a 200 with the same bytes unchanged, with no re-ingest.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "same\n"
+   }
+  }
+ },
+ "seed": {
+  "published": "same\n",
+  "digest": "7e1402559176eb98e66aa82c39de3587"
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "same\n",
+    "decision": "unchanged",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ]
+   }
+  }
+ ]
+}

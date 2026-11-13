@@ -1067,6 +1067,7 @@ def acquire_source(mk: Makefile, workdir: Path, args: argparse.Namespace) -> Pat
 # The tracked top-level dir holding the Go modules build-pfb-dns.py builds from (go/pfb_dns_gateway).
 _GO_SOURCE_DIR = "go"
 _GO_MODULE = Path(_GO_SOURCE_DIR) / "pfb_dns_gateway"
+_CORE_MODULE = Path(_GO_SOURCE_DIR) / "pfb_core"
 _PFB_DNS_HELPER = Path(__file__).resolve().with_name("build-pfb-dns.py")
 _DNS_PROXY_DIR = "pkg/pfblockerng/dns_proxy"
 _CORE_DIR = "core"  # pkg/pfblockerng/core, beside dns_proxy: pfb-core's bin/<target>/
@@ -1129,6 +1130,10 @@ _DO_BUILD_LINE = re.compile(
     r"(?:--modules-txt (?P<modules>[\w${}:./-]+) )?--freebsd-major \$\{OSREL:R\}\)"
 )
 _VENDOR_PREFIX = "../go/pfb_dns_gateway/vendor/"
+_CORE_VENDOR_PREFIX = "../go/pfb_core/vendor/"
+# Owner decision (#3925): the only module Core vendors itself, from a GH_TUPLE under its own vendor/ (the rest of
+# Core's vendor/ is cut from the gateway's). Widening is an owner call, like the GL_TUPLE allow-list below.
+_CORE_OWN_MODULES = frozenset({"github.com/pfBlockerNG/xxh3"})
 # Go's three pseudo-version forms: vX.0.0-<ts>-<rev>, vX.Y.Z-0.<ts>-<rev>, vX.Y.Z-pre.0.<ts>-<rev> (any rev).
 _PSEUDO_VERSION = re.compile(r"^v\d+\.(?:0\.0-|\d+\.\d+-(?:[^+]*\.)?0\.)\d{14}-[0-9A-Za-z]+(?:\+.*)?$")
 # Owner decision (#3511/#3779): the only modules GL_TUPLE may supply (their `go-import` is gitlab.com/cznic/<project>)
@@ -1166,12 +1171,39 @@ def _read_modules_txt(path: Path | None) -> str:
         raise BuildError(f"cannot read the recipe's modules.txt {path}: {exc}") from None
 
 
-def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
+def _core_own_requires(source_tree: Path | None) -> set[tuple[str, str]]:
+    """The (module, version) of each _CORE_OWN_MODULES module the source's go/pfb_core/go.mod requires."""
+    go_mod = None if source_tree is None else source_tree / _CORE_MODULE / "go.mod"
+    if go_mod is None or not go_mod.is_file():
+        return set()
+    try:
+        text = go_mod.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BuildError(f"cannot read the source's {_CORE_MODULE}/go.mod: {exc}") from None
+    required: set[tuple[str, str]] = set()
+    block = ""  # the directive of the `name (` block the line is in
+    for line in text.splitlines():
+        fields = line.split("//")[0].split()  # `// indirect` and comments carry no module
+        if not fields:
+            continue
+        if fields == [")"]:
+            block = ""
+        elif fields[-1] == "(":
+            block = fields[0]
+        else:
+            directive, args = (block, fields) if block else (fields[0], fields[1:])
+            if directive == "require" and len(args) >= 2 and args[0] in _CORE_OWN_MODULES:
+                required.add((args[0], args[1]))
+    return required
+
+
+def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None, core_requires: set[tuple[str, str]]) -> None:
     """GH_TUPLE and GL_TUPLE (what the port unpacks into vendor/) must name exactly the modules of modules.txt.
 
     GH_TUPLE names a tag, so the versions agree; a GL_TUPLE commit cannot be checked against a tag offline, so only its
     shape is and the module counts at the version modules.txt lists. An allowlisted pseudo-version module is named by
-    the revision its version ends in.
+    the revision its version ends in. A GH_TUPLE under Core's own vendor/ is no gateway module: those entries must be
+    exactly ``core_requires`` (the _CORE_OWN_MODULES the source's Core go.mod requires, see `_core_own_requires`).
     """
     listed: dict[str, str] = {}
     for line in _read_modules_txt(modules_txt).splitlines():
@@ -1186,6 +1218,7 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
             raise BuildError(f"{modules_txt}: {fields[0]} is listed twice ({listed[fields[0]]} and {fields[1]})")
         listed[fields[0]] = fields[1]
     unpacked: dict[tuple[str, str], str] = {}  # (path, version) -> the variable that unpacks it
+    core_unpacked: set[tuple[str, str]] = set()  # (path, version) of the GH_TUPLE entries under Core's vendor/
     for variable in ("GH_TUPLE", "GL_TUPLE"):
         try:
             entries = shlex.split(mk.get(variable))
@@ -1196,9 +1229,13 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
             if len(parts) != 4:
                 raise BuildError(f"{variable} entry {entry!r} is not account:project:tag:group/subdir")
             _group, _, subdir = parts[3].partition("/")
+            if variable == "GH_TUPLE" and subdir.startswith(_CORE_VENDOR_PREFIX):
+                core_unpacked.add((subdir[len(_CORE_VENDOR_PREFIX) :], parts[2]))
+                continue
             if not subdir.startswith(_VENDOR_PREFIX):
+                core = f" or {_CORE_VENDOR_PREFIX} (Core's own modules)" if variable == "GH_TUPLE" else ""
                 raise BuildError(
-                    f"{variable} entry {entry!r} does not unpack under {_VENDOR_PREFIX} (the gateway's vendor/)"
+                    f"{variable} entry {entry!r} does not unpack under {_VENDOR_PREFIX} (the gateway's vendor/){core}"
                 )
             path, tag = subdir[len(_VENDOR_PREFIX) :], parts[2]
             if variable == "GL_TUPLE":
@@ -1223,6 +1260,13 @@ def _check_gh_tuple_parity(mk: Makefile, modules_txt: Path | None) -> None:
         differences = [f"{unpacked[key]} only: {key[0]} {key[1]}" for key in sorted(unpacked.keys() - modules)]
         differences += [f"modules.txt only: {path} {version}" for path, version in sorted(modules - unpacked.keys())]
         raise BuildError("GH_TUPLE/GL_TUPLE and the recipe's modules.txt disagree:\n  " + "\n  ".join(differences))
+    if core_unpacked != core_requires:
+        differences = [f"GH_TUPLE only: {path} {tag}" for path, tag in sorted(core_unpacked - core_requires)]
+        differences += [f"go.mod only: {path} {tag}" for path, tag in sorted(core_requires - core_unpacked)]
+        raise BuildError(
+            f"GH_TUPLE under {_CORE_VENDOR_PREFIX} and Core's own modules in {_CORE_MODULE}/go.mod disagree:\n  "
+            + "\n  ".join(differences)
+        )
 
 
 def _refuse_committed_binaries(wrksrc: Path) -> None:
@@ -1239,10 +1283,11 @@ def run_do_build(mk: Makefile, source_tree: Path | None, freebsd_major: str) -> 
 
     The recipe runs the source's `build-pfb-dns.py --vendored` over GH_TUPLE's vendor tree; here the
     builder's own copy builds the same module from go.mod, and the shared checks (modules.txt, the
-    leg's FreeBSD, the ELF facts) hold either way. The recipe's two modules lists must agree first.
+    leg's FreeBSD, the ELF facts) hold either way. The recipe's tuples must agree first: the gateway's
+    with modules.txt, Core's own modules with the source's Core go.mod.
     """
     out_dir, modules_txt = _parse_do_build(mk)
-    _check_gh_tuple_parity(mk, modules_txt)
+    _check_gh_tuple_parity(mk, modules_txt, _core_own_requires(source_tree))
     if source_tree is None or not (source_tree / _GO_MODULE / "go.mod").is_file():
         raise BuildError(
             f"this FreeBSD-ports recipe builds pfb-dns, but the source has no {_GO_MODULE} "

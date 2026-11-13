@@ -23,6 +23,7 @@
    "expect": {
     "ok": true,
     "published": "r\n",
+    "digest": "0500ff9fb08faa789c8a42d344bc37c7",
     "requests": [],
     "rsync_source": "127.0.0.1::feeds/list.txt"
    }

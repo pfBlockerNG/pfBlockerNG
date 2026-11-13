@@ -28,6 +28,7 @@
    "expect": {
     "ok": true,
     "published": "x\ny\n",
+    "digest": "633c7805223ca8ac05186860464f0c4e",
     "requests": [
      {
       "server": "origin",

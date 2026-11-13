@@ -42,6 +42,7 @@
    "expect": {
     "ok": true,
     "published": "FINE\n",
+    "digest": "f74f7ee8336463394b68d31791071c26",
     "requests": [
      {
       "server": "origin",

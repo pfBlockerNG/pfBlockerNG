@@ -1,14 +1,17 @@
 package feedfetch
 
 import (
-	"crypto/sha1"
+	"crypto/md5"
 	"encoding/hex"
 	"errors"
+	"hash"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pfBlockerNG/xxh3"
 )
 
 type validators struct {
@@ -44,14 +47,19 @@ func writeValidators(feed Feed, etag string, lastMod time.Time) {
 	}
 }
 
-func fileDigest(path string) (string, error) {
+// fileDigest is the file's xxh128, hex: what PHP's hash('xxh128') writes to ".orig.xxhash128".
+func fileDigest(path string) (string, error) { return hashFile(path, xxh3.New128()) }
+
+// md5Digest reads only a legacy ".orig.md5" baseline PHP wrote (pfb_local_feed_changed); nothing writes an md5.
+func md5Digest(path string) (string, error) { return hashFile(path, md5.New()) }
+
+func hashFile(path string, h hash.Hash) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
 	// Content-change detection only: the feed server controls the bytes, so collision resistance is no security property.
-	h := sha1.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
@@ -81,43 +89,53 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 	}
 	published := feed.path(".orig")
 	// A digest that outlived its copy would let an upstream revert to those older bytes read as unchanged.
-	if err := os.Remove(feed.path(".orig.sha1")); err != nil && !os.IsNotExist(err) {
-		return errors.New("published digest could not be replaced")
-	}
-	if err := os.Remove(feed.path(".orig.sha256")); err != nil && !os.IsNotExist(err) {
-		return errors.New("published digest could not be replaced")
+	for _, s := range [...]string{".orig.xxhash128", ".orig.md5"} {
+		if err := os.Remove(feed.path(s)); err != nil && !os.IsNotExist(err) {
+			return errors.New("published digest could not be replaced")
+		}
 	}
 	if err := os.Rename(staged, published); err != nil {
 		return errors.New("published copy could not be replaced")
 	}
-	os.WriteFile(feed.path(".orig.sha1"), []byte(digest), 0o600)
+	os.WriteFile(feed.path(".orig.xxhash128"), []byte(digest), 0o600)
 	if !lastMod.IsZero() {
 		os.Chtimes(published, lastMod, lastMod)
 	}
 	return nil
 }
 
-// legacyDigest reports a SHA-256 baseline a previous version left: ".orig.sha256", or 64 hex digits in ".orig.sha1".
-func legacyDigest(feed Feed) bool {
-	if _, err := os.Stat(feed.path(".orig.sha256")); err == nil {
-		return true
+// readBaseline is pfb_hash_read: ".orig.xxhash128", else a legacy ".orig.md5", named by its suffix. A missing,
+// unreadable or malformed sidecar is no baseline, and a bad xxh128 never falls back to the md5 behind it.
+func readBaseline(feed Feed) (algo, digest string) {
+	for _, a := range [...]string{"xxhash128", "md5"} {
+		b, err := os.ReadFile(feed.path(".orig." + a))
+		if os.IsNotExist(err) {
+			continue
+		}
+		digest = strings.Trim(string(b), " \t\n\r\x00\x0B")
+		if err != nil || len(digest) != 32 || !allIn(digest, "0123456789abcdef") {
+			return "", ""
+		}
+		return a, digest
 	}
-	b, _ := os.ReadFile(feed.path(".orig.sha1"))
-	return len(b) == 64
+	return "", ""
 }
 
-// localDecision compares a local source with the published copy's digest (pfb_local_feed_changed); without a recorded
-// digest the published copy itself is hashed, and any read failure means changed.
+// localDecision compares a local source with the published copy's digest (pfb_local_feed_changed); without a baseline
+// the published copy itself is hashed, and any read failure means changed.
 func localDecision(path string, feed Feed) Decision {
-	baseline, err := os.ReadFile(feed.path(".orig.sha1"))
-	if err != nil || len(baseline) == 0 {
-		d, err := fileDigest(feed.path(".orig"))
-		if err != nil {
+	algo, baseline := readBaseline(feed)
+	digest := fileDigest
+	if algo == "md5" {
+		digest = md5Digest
+	}
+	if algo == "" {
+		var err error
+		if baseline, err = fileDigest(feed.path(".orig")); err != nil {
 			return Changed
 		}
-		baseline = []byte(d)
 	}
-	if d, err := fileDigest(path); err == nil && d == string(baseline) {
+	if d, err := digest(path); err == nil && d == baseline {
 		return Unchanged
 	}
 	return Changed

@@ -13,14 +13,16 @@ import (
 )
 
 // The Core boundary (map #3813): Core runs unchanged off pfSense, so its code imports nothing but the standard library, its
-// own packages and the two golang.org/x modules the feed parser's UTS #46 conversion needs (owner decision, #3906), and
+// own packages, the golang.org/x modules the feed parser's UTS #46 conversion needs (owner decision, #3906) and the
+// pfBlockerNG fork of xxh3 for the xxh128 feed digest the PHP side writes (owner decision, #3925), and
 // names no pfSense path. A path reaches Core only as a flag value. Every non-test Go file of the module is read, whatever
 // its build constraints, so a file built only for FreeBSD is held to the rule on any host.
 
 const coreModule = "github.com/pfBlockerNG/pfBlockerNG/go/pfb_core"
 
-// The only third-party modules Core may import or require, pinned in go.mod to the versions of go/pfb_dns_gateway.
-var allowedModules = []string{"golang.org/x/net", "golang.org/x/text"}
+// The only third-party modules Core may import or require: the golang.org/x ones (x/sys for the fork's CPU detection)
+// are pinned in go.mod to the versions of go/pfb_dns_gateway; the fork is vendored by Core itself, at any version.
+var allowedModules = []string{"golang.org/x/net", "golang.org/x/sys", "golang.org/x/text", "github.com/pfBlockerNG/xxh3"}
 
 func moduleAllowed(path string) bool {
 	for _, m := range allowedModules {
@@ -132,9 +134,10 @@ func TestCoreImportsNothingPfSenseSpecificAndNamesNoPfSensePath(t *testing.T) {
 	}
 }
 
-// The rule on synthetic modules: golang.org/x/net and golang.org/x/text, in imports and in go.mod, are the only third-party
-// code Core may take (owner decision, #3906: the feed parser's UTS #46 conversion); everything else still fails.
-func TestBoundaryRuleAllowsOnlyTheIdnModules(t *testing.T) {
+// The rule on synthetic modules: golang.org/x/net, x/text and x/sys, and the pfBlockerNG xxh3 fork, in imports and in
+// go.mod, are the only third-party code Core may take (owner decisions #3906 and #3925: the feed parser's UTS #46
+// conversion; the xxh128 digest through the fork); everything else, lookalikes and upstream xxh3 included, still fails.
+func TestBoundaryRuleAllowsOnlyTheNamedModules(t *testing.T) {
 	const idnImport = "import _ \"golang.org/x/net/idna\"\n"
 	cases := []struct {
 		name, gomod, src string
@@ -146,9 +149,16 @@ func TestBoundaryRuleAllowsOnlyTheIdnModules(t *testing.T) {
 		{"x/text import", "module m\n", "import _ \"golang.org/x/text/unicode/norm\"\n", ""},
 		{"other module required", "module m\n\nrequire github.com/pires/go-proxyproto v0.15.0\n", "", "go.mod: require github.com/pires/go-proxyproto"},
 		{"other module in a require block", "module m\n\nrequire (\n\tgolang.org/x/net v0.56.0\n\tgithub.com/pires/go-proxyproto v0.15.0\n)\n", "", "go.mod: require github.com/pires/go-proxyproto"},
-		{"other golang.org/x module required", "module m\n\nrequire golang.org/x/sys v0.49.0\n", "", "go.mod: require golang.org/x/sys"},
+		{"x/sys required", "module m\n\nrequire golang.org/x/sys v0.49.0 // indirect\n", "", ""},
+		{"x/sys imported", "module m\n", "import _ \"golang.org/x/sys/cpu\"\n", ""},
+		{"xxh3 fork import and require", "module m\n\nrequire github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1\n", "import _ \"github.com/pfBlockerNG/xxh3\"\n", ""},
+		{"other golang.org/x module required", "module m\n\nrequire golang.org/x/crypto v0.1.0\n", "", "go.mod: require golang.org/x/crypto"},
+		{"upstream xxh3 required", "module m\n\nrequire github.com/zeebo/xxh3 v1.0.2\n", "", "go.mod: require github.com/zeebo/xxh3"},
+		{"lookalike of the xxh3 fork required", "module m\n\nrequire github.com/pfBlockerNG/xxh3x v1.0.0\n", "", "go.mod: require github.com/pfBlockerNG/xxh3x"},
 		{"other module imported", "module m\n", "import _ \"github.com/pires/go-proxyproto\"\n", "imports github.com/pires/go-proxyproto"},
-		{"other golang.org/x module imported", "module m\n", "import _ \"golang.org/x/sys/unix\"\n", "imports golang.org/x/sys/unix"},
+		{"other golang.org/x module imported", "module m\n", "import _ \"golang.org/x/crypto/ssh\"\n", "imports golang.org/x/crypto/ssh"},
+		{"upstream xxh3 imported", "module m\n", "import _ \"github.com/zeebo/xxh3\"\n", "imports github.com/zeebo/xxh3"},
+		{"lookalike of the xxh3 fork imported", "module m\n", "import _ \"github.com/pfBlockerNG/xxh3x\"\n", "imports github.com/pfBlockerNG/xxh3x"},
 		{"lookalike module path", "module m\n", "import _ \"golang.org/x/netx/idna\"\n", "imports golang.org/x/netx/idna"},
 		{"replace", "module m\n\nreplace golang.org/x/net => ../net\n", "", "go.mod: replace golang.org/x/net"},
 		{"pfSense path", "module m\n", "var _ = \"/usr/local/etc\"\n", "pfSense path literal"},

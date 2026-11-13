@@ -271,13 +271,15 @@ def written_files(directory: Path) -> list[Path]:
 
 
 @pytest.fixture(scope="module")
-def vendored_gateway(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, bytes]:
+def vendored_gateway(tmp_path_factory: pytest.TempPathFactory, xxh3_fork: Path) -> tuple[Path, bytes]:
     """A copy of the real gateway beside its `go mod vendor` tree, plus the vendor/modules.txt Go wrote.
 
+    Core's xxh3 fork is extracted into Core's vendor/ as the ports recipe's GH_TUPLE does.
     Tests that change the tree copy it first; this one stays pristine for the module.
     """
     root = tmp_path_factory.mktemp("pfb-dns-vendored")
     shutil.copytree(ROOT / "go", root / "go")
+    copy_writable(xxh3_fork, root / "go" / "pfb_core" / "vendor" / XXH3)
     module = root / "go" / "pfb_dns_gateway"
     vendor = subprocess.run(
         ["go", "mod", "vendor"], cwd=module, capture_output=True, text=True, check=False, timeout=WATCHDOG_SECONDS
@@ -847,10 +849,12 @@ def test_core_binary_mtime_follows_its_own_module(tmp_path: Path) -> None:
         assert int((tmp_path / "out" / target / "pfb-core").stat().st_mtime) == 1_700_000_000
 
 
-# --- pfb-core dependencies (issue #3906): Core may require golang.org/x/net and golang.org/x/text, and nothing else.
-# The ports recipe vendors the gateway's modules only, so Core's vendor/ is cut from the gateway's tree. ---
+# --- pfb-core dependencies (issue #3906): Core may require golang.org/x/net, x/sys and x/text at the gateway's
+# versions, and (issue #3925) the pfBlockerNG xxh3 fork, and nothing else. The ports recipe vendors the gateway's
+# modules, so Core's vendor/ is cut from the gateway's tree. ---
 
 X_NET, X_TEXT, X_SYS = "golang.org/x/net", "golang.org/x/text", "golang.org/x/sys"
+XXH3 = "github.com/pfBlockerNG/xxh3"
 REAL_GATEWAY = ROOT / "go" / "pfb_dns_gateway"
 REAL_GO_MOD = (REAL_GATEWAY / "go.mod").read_text(encoding="utf-8")
 
@@ -869,9 +873,14 @@ CORE_REQUIRES = f"require (\n\t{X_NET} {PINS[X_NET]}\n\t{X_TEXT} {PINS[X_TEXT]} 
 MODES = ["builder", "vendored"]
 
 
-def idna_main(marker: str) -> str:
+def idna_main(marker: str, *, cpu: bool = False) -> str:
+    imports = (
+        'import (\n\t_ "golang.org/x/sys/cpu"\n\t"golang.org/x/net/idna"\n)'
+        if cpu
+        else 'import "golang.org/x/net/idna"'
+    )
     return (
-        'package main\n\nimport "golang.org/x/net/idna"\n\n'
+        f"package main\n\n{imports}\n\n"
         'func main() {\n\tascii, err := idna.Lookup.ToASCII("b\\u00fccher.example")\n'
         f'\tprintln("{marker}", ascii, err == nil)\n}}\n'
     )
@@ -881,9 +890,9 @@ def core_go_mod(tail: str) -> str:
     return f"module example.test/core\n\ngo {GO_DIRECTIVE}\n\n{tail}"
 
 
-def write_x_gateway(root: Path) -> Path:
-    """A `go/pfb_dns_gateway` module that imports idna and requires x/net, x/text and x/sys as the real gateway does."""
-    write_tiny_module(root, go_directive=GO_DIRECTIVE, extra={"main.go": idna_main("GATEWAY-IDNA")})
+def write_x_gateway(root: Path, *, cpu: bool = False) -> Path:
+    """A `go/pfb_dns_gateway` module importing idna (and x/sys/cpu if ``cpu``), requiring x/net, x/text and x/sys."""
+    write_tiny_module(root, go_directive=GO_DIRECTIVE, extra={"main.go": idna_main("GATEWAY-IDNA", cpu=cpu)})
     module = root / "go" / "pfb_dns_gateway"
     requires = "".join(f"\t{module_path} {version}\n" for module_path, version in PINS.items())
     (module / "go.mod").write_text(f"module example.test/gateway\n\ngo {GO_DIRECTIVE}\n\nrequire (\n{requires})\n")
@@ -892,10 +901,9 @@ def write_x_gateway(root: Path) -> Path:
     return root
 
 
-@pytest.fixture(scope="module")
-def vendored_x_gateway(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The x/net-using gateway beside its `go mod vendor` tree (read-only for the module; tests copy it)."""
-    root = write_x_gateway(tmp_path_factory.mktemp("pfb-x-gateway"))
+def vendor_x_gateway(root: Path, *, cpu: bool = False) -> Path:
+    """``write_x_gateway`` at ``root``, then `go mod vendor` in it."""
+    write_x_gateway(root, cpu=cpu)
     vendor = subprocess.run(
         ["go", "mod", "vendor"],
         cwd=root / "go" / "pfb_dns_gateway",
@@ -908,13 +916,21 @@ def vendored_x_gateway(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
-def x_source(tmp_path: Path, mode: str, vendored_gateway: Path, *, core_tail: str = CORE_REQUIRES, **core: Any) -> Path:
+@pytest.fixture(scope="module")
+def vendored_x_gateway(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The x/net-using gateway beside its `go mod vendor` tree (read-only for the module; tests copy it)."""
+    return vendor_x_gateway(tmp_path_factory.mktemp("pfb-x-gateway"))
+
+
+def x_source(
+    tmp_path: Path, mode: str, vendored_gateway: Path, *, core_tail: str = CORE_REQUIRES, cpu: bool = False, **core: Any
+) -> Path:
     """A source tree whose gateway needs x/net (vendored ahead of the build in `vendored` mode), plus a Core module."""
     root = tmp_path / "src-tree"
     if mode == "vendored":
         shutil.copytree(vendored_gateway, root)
     else:
-        write_x_gateway(root)
+        write_x_gateway(root, cpu=cpu)
     return write_tiny_core(root, go_mod=core_go_mod(core_tail), **core)
 
 
@@ -1027,8 +1043,26 @@ def test_a_vendored_build_whose_gateway_has_no_modules_txt_cannot_vendor_cores_m
 # (Core's go.mod after its header, a vendor/ of Core's own, whether the gateway requires the x modules, what the
 # error must say)
 REFUSED_CORES = {
-    "other-module": (CORE_REQUIRES + "\nrequire example.test/dep v1.0.0\n", False, True, ["example.test/dep"]),
-    "x-sys-which-the-gateway-requires": (CORE_REQUIRES + f"\nrequire {X_SYS} {PINS[X_SYS]}\n", False, True, [X_SYS]),
+    "other-module": (
+        CORE_REQUIRES + "\nrequire example.test/dep v1.0.0\n",
+        False,
+        True,
+        ["example.test/dep", X_NET, X_SYS, X_TEXT, XXH3],
+    ),
+    "x-sys-at-another-version": (
+        f"require {X_NET} {PINS[X_NET]}\nrequire {X_SYS} v0.0.1\n",
+        False,
+        True,
+        [X_SYS, "v0.0.1", PINS[X_SYS]],
+    ),
+    "another-x-module": (
+        CORE_REQUIRES + "\nrequire golang.org/x/crypto v0.1.0\n",
+        False,
+        True,
+        ["golang.org/x/crypto"],
+    ),
+    "upstream-xxh3": (CORE_REQUIRES + "\nrequire github.com/zeebo/xxh3 v1.0.2\n", False, True, ["zeebo/xxh3"]),
+    "lookalike-of-the-xxh3-fork": (CORE_REQUIRES + f"\nrequire {XXH3}x v1.0.0\n", False, True, [f"{XXH3}x"]),
     "other-version-in-a-single-line-require": (
         f"require {X_NET} v0.0.1\nrequire {X_TEXT} {PINS[X_TEXT]}\n",
         False,
@@ -1048,9 +1082,7 @@ REFUSED_CORES = {
 
 
 @pytest.mark.parametrize("shape", REFUSED_CORES)
-def test_a_core_module_outside_the_gateways_x_net_and_x_text_is_refused_and_writes_nothing(
-    tmp_path: Path, shape: str
-) -> None:
+def test_a_core_module_outside_the_allowed_ones_is_refused_and_writes_nothing(tmp_path: Path, shape: str) -> None:
     tail, own_vendor, gateway_requires_x, says = REFUSED_CORES[shape]
     gateway = write_x_gateway(tmp_path / "src-tree") if gateway_requires_x else write_tiny_module(tmp_path / "src-tree")
     root = write_tiny_core(gateway, go_mod=core_go_mod(tail))
@@ -1058,10 +1090,203 @@ def test_a_core_module_outside_the_gateways_x_net_and_x_text_is_refused_and_writ
         (root / "go" / "pfb_core" / "vendor").mkdir()
         (root / "go" / "pfb_core" / "vendor" / "modules.txt").write_text("")
     result = run_helper(root, tmp_path / "out")
-    assert result.returncode == 1, (
-        f"a Core module outside x/net and x/text at the gateway's versions was built:\n{result.stderr}"
-    )
+    assert result.returncode == 1, f"a Core module outside the allowed ones was built:\n{result.stderr}"
     for text in says:
         assert text in result.stderr, f"the error does not say {text!r}:\n{result.stderr}"
     assert result.stdout.strip() == ""
     assert written_files(tmp_path / "out") == [], "files were left behind"
+
+
+# --- pfb-core's own module (issue #3925): Core also vendors the pfBlockerNG xxh3 fork, which the gateway does not
+# carry: from go/pfb_core/vendor/ (--vendored) or `go mod download` (go.sum verifies), not the gateway's tree. ---
+
+REAL_CORE = ROOT / "go" / "pfb_core"
+_found = re.search(rf"^\s*{re.escape(XXH3)} (v\S+)", (REAL_CORE / "go.mod").read_text(encoding="utf-8"), re.MULTILINE)
+assert _found, "the real Core no longer requires the xxh3 fork"
+XXH3_VERSION = _found.group(1)
+CORE_SUMS = (REAL_CORE / "go.sum").read_text(encoding="utf-8")
+
+
+def xxh3_requires(version: str = XXH3_VERSION) -> str:
+    return (
+        f"require (\n\t{XXH3} {version}\n\t{X_NET} {PINS[X_NET]}\n)\n\n"
+        f"require (\n\t{X_SYS} {PINS[X_SYS]} // indirect\n\t{X_TEXT} {PINS[X_TEXT]} // indirect\n)\n"
+    )
+
+
+def xxh3_main(marker: str) -> str:
+    return (
+        'package main\n\nimport (\n\t"github.com/pfBlockerNG/xxh3"\n\t"golang.org/x/net/idna"\n)\n\n'
+        'func main() {\n\tascii, err := idna.Lookup.ToASCII("b\\u00fccher.example")\n'
+        f'\tprintln("{marker}", ascii, err == nil, xxh3.Hash128([]byte(ascii)).Hi)\n}}\n'
+    )
+
+
+@pytest.fixture(scope="module")
+def vendored_xxh3_gateway(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The x/net gateway that also imports x/sys/cpu (Core's xxh3 needs it), beside its `go mod vendor` tree."""
+    return vendor_x_gateway(tmp_path_factory.mktemp("pfb-xxh3-gateway"), cpu=True)
+
+
+@pytest.fixture(scope="module")
+def xxh3_fork() -> Path:
+    """The fork's whole module tree, as the module cache holds it: what the ports recipe's GH_TUPLE extracts."""
+    done = subprocess.run(
+        ["go", "mod", "download", "-json", f"{XXH3}@{XXH3_VERSION}"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=WATCHDOG_SECONDS,
+    )
+    assert done.returncode == 0, f"go mod download of the xxh3 fork failed:\n{done.stdout}{done.stderr}"
+    return Path(json.loads(done.stdout)["Dir"])
+
+
+def copy_writable(src: Path, dst: Path) -> None:
+    """``src`` copied to ``dst``, owner-writable (the module cache is read-only)."""
+    shutil.copytree(src, dst, copy_function=shutil.copyfile)
+    for path in [dst, *dst.rglob("*")]:
+        path.chmod(path.stat().st_mode | 0o200)
+
+
+def xxh3_source(
+    tmp_path: Path, mode: str, gateway: Path, fork: Path | None, *, version: str = XXH3_VERSION, sums: str = CORE_SUMS
+) -> Path:
+    """A source tree whose Core imports the fork, with the fork's tree in Core's vendor/ in `vendored` mode."""
+    extra = {"main.go": xxh3_main("CORE-XXH3"), "go.sum": sums}
+    root = x_source(tmp_path, mode, gateway, core_tail=xxh3_requires(version), cpu=True, extra=extra)
+    if mode == "vendored" and fork is not None:
+        copy_writable(fork, root / "go" / "pfb_core" / "vendor" / XXH3)
+    return root
+
+
+def vendor_bytes(directory: Path) -> dict[str, bytes]:
+    return {p.relative_to(directory).as_posix(): p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+
+
+def assert_refused(result: subprocess.CompletedProcess[str], out: Path, says: list[str]) -> None:
+    assert result.returncode == 1, f"the helper did not refuse:\n{result.stderr}"
+    for text in says:
+        assert text in result.stderr, f"the error does not say {text!r}:\n{result.stderr}"
+    assert "Traceback" not in result.stderr, f"the helper crashed instead of refusing:\n{result.stderr}"
+    assert result.stdout.strip() == ""
+    assert written_files(out) == [], "files were left behind"
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_core_requiring_the_xxh3_fork_and_x_sys_builds_in_both_modes(
+    tmp_path: Path, vendored_xxh3_gateway: Path, xxh3_fork: Path, mode: str
+) -> None:
+    root = xxh3_source(tmp_path, mode, vendored_xxh3_gateway, xxh3_fork)
+    result = run_helper(root, tmp_path / "out", extra=mode_args(mode))
+    assert result.returncode == 0, f"a Core on the xxh3 fork was refused:\n{result.stderr}"
+    for target, machine in TARGETS.items():
+        binary = tmp_path / "out" / target / "pfb-core"
+        data = binary.read_bytes()
+        assert elf_facts(data) == expected_facts(machine), f"{binary} is not the {target} ELF"
+        assert b"CORE-XXH3" in data and b"GATEWAY-IDNA" not in data, f"{binary} is not the Core"
+        info = subprocess.run(["go", "version", "-m", str(binary)], capture_output=True, text=True, check=True).stdout
+        wanted = [(XXH3, XXH3_VERSION)] + ([(X_SYS, PINS[X_SYS])] if machine == EM_X86_64 else [])  # arm64: no cpu
+        for module, version in wanted:
+            assert re.search(rf"\tdep\t{re.escape(module)}\t{re.escape(version)}(\t|$)", info, re.MULTILINE), (
+                f"{target}/pfb-core was not built with {module} {version}:\n{info}"
+            )
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_cores_vendor_tree_is_what_go_mod_vendor_writes_for_that_core(
+    tmp_path: Path, vendored_xxh3_gateway: Path, xxh3_fork: Path, mode: str
+) -> None:
+    # Given a Core on x/net, x/text, x/sys and the xxh3 fork
+    root = xxh3_source(tmp_path, mode, vendored_xxh3_gateway, xxh3_fork)
+    snapshots = tmp_path / "snapshots"
+    spy = snapshot_vendor_on_build(tmp_path, snapshots)
+
+    # When it is built
+    result = run_helper(root, tmp_path / "out", go=str(spy), extra=mode_args(mode))
+    assert result.returncode == 0, result.stderr
+
+    # Then its vendor/ is, file for file and byte for byte, what a real `go mod vendor` of that Core writes
+    reference = tmp_path / "reference"
+    shutil.copytree(root / "go" / "pfb_core", reference, ignore=shutil.ignore_patterns("vendor"))
+    done = subprocess.run(
+        ["go", "mod", "vendor"], cwd=reference, capture_output=True, text=True, check=False, timeout=WATCHDOG_SECONDS
+    )
+    assert done.returncode == 0, f"go mod vendor failed on the reference Core:\n{done.stderr}"
+    got, want = vendor_bytes(snapshots / "pfb_core"), vendor_bytes(reference / "vendor")
+    assert sorted(got) == sorted(want)
+    assert [name for name in want if got[name] != want[name]] == []
+
+    # and that is the fork's root package with its license: no tests, go.mod or subdirectories
+    assert {f"{XXH3}/hash128.go", f"{XXH3}/LICENSE", "modules.txt"} <= set(got)
+    own = [name for name in got if name.startswith(f"{XXH3}/")]
+    assert [n for n in own if n.endswith("_test.go") or n.endswith(("/go.mod", "/go.sum")) or n.count("/") > 3] == []
+
+
+def test_a_vendored_own_module_is_taken_at_whatever_version_cores_go_mod_requires(
+    tmp_path: Path, vendored_xxh3_gateway: Path, xxh3_fork: Path
+) -> None:
+    root = xxh3_source(tmp_path, "vendored", vendored_xxh3_gateway, xxh3_fork, version="v1.99.0")
+    snapshots = tmp_path / "snapshots"
+    spy = snapshot_vendor_on_build(tmp_path, snapshots)
+    result = run_helper(root, tmp_path / "out", go=str(spy), extra=["--vendored"])
+    assert result.returncode == 0, f"an own module at a version the gateway never saw was refused:\n{result.stderr}"
+    assert f"# {XXH3} v1.99.0\n" in (snapshots / "pfb_core" / "modules.txt").read_text(encoding="utf-8")
+
+
+# (the files of vendor/<fork> under Core, or None for no such directory; what the error must say)
+BAD_VENDORED_OWN_MODULES = {
+    "missing-directory": (None, [f"vendor/{XXH3}"]),
+    "no-go-mod": ({}, ["go.mod"]),
+    "another-module": ({"go.mod": "module example.test/other\n\ngo 1.26.0\n"}, [XXH3, "does not name"]),
+    "no-go-directive": ({"go.mod": f"module {XXH3}\n"}, ["no go directive"]),
+}
+
+
+@pytest.mark.parametrize("shape", BAD_VENDORED_OWN_MODULES)
+def test_a_vendored_own_module_directory_that_is_missing_or_is_not_the_module_is_refused(
+    tmp_path: Path, vendored_xxh3_gateway: Path, shape: str
+) -> None:
+    files, says = BAD_VENDORED_OWN_MODULES[shape]
+    root = xxh3_source(tmp_path, "vendored", vendored_xxh3_gateway, None)
+    if files is not None:
+        fork = root / "go" / "pfb_core" / "vendor" / XXH3
+        fork.mkdir(parents=True)
+        for name, text in files.items():
+            (fork / name).write_text(text)
+    assert_refused(run_helper(root, tmp_path / "out", extra=["--vendored"]), tmp_path / "out", says)
+
+
+@pytest.mark.parametrize("shape", ["missing", "wrong"])
+def test_a_download_that_go_sum_does_not_pin_is_refused_and_go_sum_is_not_repaired(tmp_path: Path, shape: str) -> None:
+    # Given a Core whose go.sum lacks the fork's zip checksum, or holds another one
+    kept = [line for line in CORE_SUMS.splitlines() if not line.startswith(f"{XXH3} {XXH3_VERSION} h1:")]
+    wrong = [f"{XXH3} {XXH3_VERSION} h1:{'A' * 43}="] if shape == "wrong" else []
+    sums = "".join(f"{line}\n" for line in kept + wrong)
+    root = xxh3_source(tmp_path, "builder", ROOT, None, sums=sums)
+
+    # When Core is built, then the download is not trusted and go.sum is left as it was
+    assert_refused(run_helper(root, tmp_path / "out"), tmp_path / "out", ["go.sum"])
+    assert (root / "go" / "pfb_core" / "go.sum").read_text(encoding="utf-8") == sums
+
+
+# (the mode, a file Core's vendor/ holds, what the error must say)
+STRAY_VENDOR_ENTRIES = {
+    "builder-refuses-even-the-fork": ("builder", f"{XXH3}/xxh3.go", ["vendor/"]),
+    "modules-txt": ("vendored", "modules.txt", ["modules.txt"]),
+    "another-module": ("vendored", f"{X_NET}/idna/idna.go", ["golang.org"]),
+    "sibling-of-the-fork": ("vendored", "github.com/pfBlockerNG/other/other.go", ["github.com/pfBlockerNG/other"]),
+    "file-beside-the-fork": ("vendored", "github.com/stray.txt", ["github.com/stray.txt"]),
+}
+
+
+@pytest.mark.parametrize("shape", STRAY_VENDOR_ENTRIES)
+def test_a_core_vendor_dir_is_refused_unless_it_holds_only_own_modules_in_vendored_mode(
+    tmp_path: Path, vendored_xxh3_gateway: Path, shape: str
+) -> None:
+    mode, name, says = STRAY_VENDOR_ENTRIES[shape]
+    root = xxh3_source(tmp_path, mode, vendored_xxh3_gateway, None)
+    stray = root / "go" / "pfb_core" / "vendor" / name
+    stray.parent.mkdir(parents=True)
+    stray.write_text("")
+    assert_refused(run_helper(root, tmp_path / "out", extra=mode_args(mode)), tmp_path / "out", says)

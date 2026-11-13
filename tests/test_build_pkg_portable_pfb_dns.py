@@ -569,11 +569,10 @@ def modules_txt_for(*modules: tuple[str, str]) -> str:
     return "".join(f"# {path} {version}\n## explicit; go 1.21\n{path}\n" for path, version in modules)
 
 
-def gh_tuples_for(*modules: tuple[str, str]) -> tuple[str, ...]:
-    """GH_TUPLE entries that unpack the given (module path, version) pairs into the vendor tree."""
+def gh_tuples_for(*modules: tuple[str, str], vendor: str = GO_VENDOR) -> tuple[str, ...]:
+    """GH_TUPLE entries that unpack the given (module path, version) pairs into a vendor tree (the gateway's)."""
     return tuple(
-        f"owner:project{index}:{version}:group{index}/{GO_VENDOR}/{path}"
-        for index, (path, version) in enumerate(modules)
+        f"owner:project{index}:{version}:group{index}/{vendor}/{path}" for index, (path, version) in enumerate(modules)
     )
 
 
@@ -586,12 +585,14 @@ def gl_tuples_for(*paths: str, commit: str = COMMIT) -> tuple[str, ...]:
     return tuple(f"cznic:project{index}:{commit}:cznic{index}/{GO_VENDOR}/{path}" for index, path in enumerate(paths))
 
 
-def fixture_with_tuples(root: Path, entries: tuple[str, ...], modules_txt: str | bytes | None) -> Fixture:
+def fixture_with_tuples(
+    root: Path, entries: tuple[str, ...], modules_txt: str | bytes | None, source_files: dict[str, bytes] | None = None
+) -> Fixture:
     """The go recipe over a mixed list of entries: GitLab ones are its ``GL_TUPLE``, the others its ``GH_TUPLE``."""
     is_gl = [entry.startswith(("cznic:", GITLAB_SITE)) for entry in entries]
     gh = tuple(e for e, gl in zip(entries, is_gl, strict=True) if not gl)
     gl = tuple(e for e, gl in zip(entries, is_gl, strict=True) if gl)
-    return make_fixture(root, recipe="go", gh_tuple=gh, gl_tuple=gl, modules_txt=modules_txt)
+    return make_fixture(root, recipe="go", gh_tuple=gh, gl_tuple=gl, modules_txt=modules_txt, source_files=source_files)
 
 
 QUIC = ("github.com/quic-go/quic-go", "v0.64.0")
@@ -783,6 +784,113 @@ def test_tuples_that_match_modules_txt_go_on_to_the_go_build(
     assert build(fx, mode, tmp_path / "out") == 1
 
     assert "Go toolchain not found" in capfd.readouterr().err, "the matching modules were refused before Go"
+
+
+CORE_VENDOR = "../go/pfb_core/vendor"
+XXH3 = ("github.com/pfBlockerNG/xxh3", "v1.1.1-pfblockerng.1")
+OLDER_XXH3 = ("github.com/pfBlockerNG/xxh3", "v1.1.0-pfblockerng.1")
+PIRES = ("github.com/pires/go-proxyproto", "v0.8.0")
+
+
+def core_go_mod(*requires: tuple[str, str]) -> str:
+    """A Core go.mod requiring the given modules in Go's block form, `// indirect` as `go mod tidy` writes it."""
+    block = "".join(f"\t{path} {version} // indirect\n" for path, version in requires)
+    return f"module example.test/pfbcore\n\ngo 1.21\n\nrequire (\n{block})\n"
+
+
+# (id, the GH_TUPLE and GL_TUPLE entries beside the gateway's, the source's go/pfb_core/go.mod, what the error says)
+CORE_PARITY_FAILURES = [
+    ("core-requires-xxh3-and-the-recipe-has-no-tuple", (), core_go_mod(XXH3), f"go.mod only: {XXH3[0]} {XXH3[1]}"),
+    (
+        "core-tuple-at-another-tag-than-go-mod",
+        gh_tuples_for(OLDER_XXH3, vendor=CORE_VENDOR),
+        core_go_mod(XXH3),
+        f"GH_TUPLE only: {OLDER_XXH3[0]} {OLDER_XXH3[1]}",
+    ),
+    (
+        "core-tuple-for-a-module-that-is-not-core-own",
+        gh_tuples_for(XXH3, PIRES, vendor=CORE_VENDOR),
+        core_go_mod(XXH3, PIRES),
+        f"GH_TUPLE only: {PIRES[0]} {PIRES[1]}",
+    ),
+    (
+        "core-tuple-for-an-own-module-core-does-not-require",
+        gh_tuples_for(XXH3, vendor=CORE_VENDOR),
+        core_go_mod(),
+        f"GH_TUPLE only: {XXH3[0]} {XXH3[1]}",
+    ),
+    (
+        "core-tuple-for-an-own-module-the-go-mod-only-comments-out",
+        gh_tuples_for(XXH3, vendor=CORE_VENDOR),
+        core_go_mod().replace(")\n", f"\t// {XXH3[0]} {XXH3[1]}\n)\n"),
+        f"GH_TUPLE only: {XXH3[0]} {XXH3[1]}",
+    ),
+    (
+        "gitlab-tuple-under-the-core-vendor-tree",
+        (*gh_tuples_for(XXH3, vendor=CORE_VENDOR), f"cznic:p:{COMMIT}:g/{CORE_VENDOR}/{XXH3[0]}"),
+        core_go_mod(XXH3),
+        "GL_TUPLE entry",
+    ),
+]
+
+# (id, the GH_TUPLE entries beside the gateway's, the source's go/pfb_core/go.mod) the builder accepts
+CORE_PARITY_ACCEPTED = [
+    ("core-own-module-at-the-go-mod-tag", gh_tuples_for(XXH3, vendor=CORE_VENDOR), core_go_mod(XXH3)),
+    ("core-requires-no-own-module", (), core_go_mod(NET)),
+    (
+        "core-own-module-required-on-a-single-line",
+        gh_tuples_for(XXH3, vendor=CORE_VENDOR),
+        f"module example.test/pfbcore\n\ngo 1.21\n\nrequire {XXH3[0]} {XXH3[1]} // indirect\n",
+    ),
+]
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+@pytest.mark.parametrize(
+    ("tuples", "go_mod", "says"),
+    [row[1:] for row in CORE_PARITY_FAILURES],
+    ids=[row[0] for row in CORE_PARITY_FAILURES],
+)
+def test_core_tuples_that_disagree_with_cores_go_mod_fail_before_go_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    mode: str,
+    tuples: tuple[str, ...],
+    go_mod: str,
+    says: str,
+) -> None:
+    entries = (*gh_tuples_for(QUIC), *tuples)
+    fx = fixture_with_tuples(tmp_path, entries, modules_txt_for(QUIC), {"go/pfb_core/go.mod": go_mod.encode()})
+    without_go_on_path(tmp_path, monkeypatch)
+
+    assert build(fx, mode, tmp_path / "out") == 1
+
+    err = capfd.readouterr().err
+    assert says in err, err
+    assert "Go toolchain not found" not in err, "Go was started although Core's vendor tuples disagree with its go.mod"
+    assert not list((tmp_path / "out").glob("*.pkg")), "a package was written from disagreeing Core modules"
+
+
+@pytest.mark.parametrize("mode", ["native", "project"])
+@pytest.mark.parametrize(
+    ("tuples", "go_mod"), [row[1:] for row in CORE_PARITY_ACCEPTED], ids=[row[0] for row in CORE_PARITY_ACCEPTED]
+)
+def test_core_tuples_that_match_cores_go_mod_go_on_to_the_go_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    mode: str,
+    tuples: tuple[str, ...],
+    go_mod: str,
+) -> None:
+    entries = (*gh_tuples_for(QUIC), *tuples)
+    fx = fixture_with_tuples(tmp_path, entries, modules_txt_for(QUIC), {"go/pfb_core/go.mod": go_mod.encode()})
+    without_go_on_path(tmp_path, monkeypatch)
+
+    assert build(fx, mode, tmp_path / "out") == 1
+
+    assert "Go toolchain not found" in capfd.readouterr().err, "the matching Core modules were refused before Go"
 
 
 DO_BUILD = go_do_build(modules_txt=False)
