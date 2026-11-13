@@ -1069,6 +1069,13 @@ REFUSED_CORES = {
         True,
         [X_NET, "v0.0.1", PINS[X_NET]],
     ),
+    # Go reads `require(` with no space as `require (` (#3930).
+    "module-in-a-require-block-with-no-space": (
+        CORE_REQUIRES + "\nrequire(\n\tgolang.org/x/crypto v0.1.0\n)\n",
+        False,
+        True,
+        ["requires golang.org/x/crypto; Core may require only"],
+    ),
     "replace": (CORE_REQUIRES + f"\nreplace {X_NET} => ../x_net\n", False, True, ["go.mod has a replace"]),
     "replace-block": (
         CORE_REQUIRES + f"\nreplace (\n\t{X_NET} => ../x_net\n)\n",
