@@ -89,7 +89,9 @@ final class SyncPolicyStatusPanelTest extends TestCase
 	{
 		$diagnostics = [];
 		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
-			if (error_reporting() & $errno) {
+			// PHPUnit lowers error_reporting() to its unhandleable levels while a test runs, so "& $errno"
+			// is 0 for every diagnostic; only '@' leaves no bit outside PHP's insuppressible levels.
+			if ((error_reporting() & ~(E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR)) !== 0) {
 				$diagnostics[] = $errstr;
 			}
 			return TRUE;

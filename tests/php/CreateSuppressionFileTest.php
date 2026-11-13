@@ -115,7 +115,9 @@ final class CreateSuppressionFileTest extends TestCase
 	{
 		$warnings = [];
 		set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
-			if ((error_reporting() & $errno) === 0) {
+			// PHPUnit lowers error_reporting() to its unhandleable levels while a test runs, so "& $errno"
+			// is 0 for every warning; only '@' leaves no bit outside PHP's insuppressible levels.
+			if ((error_reporting() & ~(E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR)) === 0) {
 				return true; // @-suppressed (production-silent, e.g. unlink_if_exists' @unlink) -- not a finding
 			}
 			$warnings[] = $errstr;
