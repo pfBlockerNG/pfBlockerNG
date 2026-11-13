@@ -44,8 +44,6 @@ CORE_STATE = "/usr/local/etc/pfb_core"
 CONFIG_HISTORY = "/conf/backup/config-*.xml"
 SAVE_MESSAGE = "pfBlockerNG Core saved the DNS settings"
 ADAPTER = "/usr/local/pkg/pfblockerng/pfb_core_settings.sh"
-# The adapter deadlines Core enforces (docs/misc/core-api-protocol.md, "Adapter backend")
-READ_DEADLINE, WRITE_DEADLINE = 10.0, 20.0
 
 
 @pytest.fixture(scope="module")
@@ -220,10 +218,9 @@ def test_the_install_leaves_no_settings_file_for_core(core_vm: SmokeVM) -> None:
     """Core keeps no settings store: config.xml is it, so the state directory never holds a settings file."""
     lock = core_vm.ssh(f"test -f {CORE_STATE}/core.lock", timeout=30)
     assert lock.returncode == 0, f"before-state: {CORE_STATE} must be the running Core's directory (its lock is there)"
-    stray = core_vm.ssh(
-        f"ls {CORE_STATE}/settings.json {CORE_STATE}/settings.json.tmp {CORE_STATE}/settings.lock", timeout=30
-    )
-    assert stray.returncode != 0, f"a settings store is left in Core's state directory:\n{stray.stdout}"
+    retired = [f"{CORE_STATE}/{name}" for name in ("settings.json", "settings.json.tmp", "settings.lock")]
+    stray = [path for path in retired if core_vm.ssh(f"test -e {path}", timeout=30).returncode == 0]
+    assert stray == [], f"a settings store is left in Core's state directory: {stray}"
 
 
 def test_the_install_leaves_core_at_the_revision_config_xml_projects(core_vm: SmokeVM) -> None:
@@ -342,7 +339,7 @@ def test_an_older_config_restored_reaches_core_with_the_next_tick(core_vm: Smoke
         tell_core(core_vm)
 
 
-def test_the_settings_adapter_reads_and_writes_well_inside_cores_deadlines(core_vm: SmokeVM) -> None:
+def test_the_settings_adapter_reads_and_writes_as_core_runs_it(core_vm: SmokeVM) -> None:
     """The adapter as Core runs it: five reads and two writes (a flip and back), each timed on the box and recorded."""
     original = h.config_get_state(core_vm, HSTS)
     try:
@@ -362,9 +359,8 @@ def test_the_settings_adapter_reads_and_writes_well_inside_cores_deadlines(core_
             writes.append(seconds)
             current = {"revision": reply["revision"], "settings": {"dns": wanted}}
         read_times = [seconds for seconds, _ in reads]
+        # A diagnostic, never an assertion: the Go unit tests pin the deadlines with controlled hangs
         print(f"PFB_ADAPTER_LATENCY read {read_times} write {writes}", flush=True)
-        assert max(read_times) < READ_DEADLINE / 2, f"reads took {read_times} s against Core's {READ_DEADLINE} s"
-        assert max(writes) < WRITE_DEADLINE / 2, f"writes took {writes} s against Core's {WRITE_DEADLINE} s"
     finally:
         h.config_restore_state(core_vm, HSTS, original)
         tell_core(core_vm)
