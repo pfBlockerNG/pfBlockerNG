@@ -4577,7 +4577,7 @@ EOF;
  * Call a Core API method (docs/misc/core-api-protocol.md): POST /v1/<Method> on the Core's Unix socket, $params sent as one JSON object.
  *
  * @param array<string, mixed> $params the method's parameters (a mutating method's include its requestId)
- * @param int $timeout seconds the whole call may take (the connect, at most 5 of them)
+ * @param int $timeout seconds the whole call may take
  * @return array{status: int, body: ?array, error: ?string} the HTTP status and the decoded reply object, the error envelope included;
  *   status 0 when no HTTP reply came, and error set (with body NULL) whenever there is no reply object to hand back
  */
@@ -4594,7 +4594,7 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 		CURLOPT_POSTFIELDS       => $payload,
 		CURLOPT_HTTPHEADER       => ['Content-Type: application/json', 'Expect:'],
 		CURLOPT_RETURNTRANSFER   => TRUE,
-		CURLOPT_CONNECTTIMEOUT   => min(5, $timeout),
+		CURLOPT_CONNECTTIMEOUT   => 5,
 		CURLOPT_TIMEOUT          => $timeout,
 	]);
 	$reply = curl_exec($ch);

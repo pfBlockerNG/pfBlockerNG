@@ -40,6 +40,7 @@ pytestmark = pytest.mark.ui_render
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 WWW = "/usr/local/www/pfblockerng/www"
 ACTIVE = f"{WWW}/dnsbl_active.php"
+BLOCK_PAGE_CFG = f"{helpers.CFG_DNSBL_SETTINGS}/dnsbl_webpage"
 OTHER_PAGE = "dnsbl_smoke3922.php"
 OTHER_PAGE_HTML = (
     "<!DOCTYPE html>\n<html><body>smoke #3922: a block page the refused save must not serve</body></html>\n"
@@ -119,14 +120,18 @@ def _digest(vm: SmokeVM, path: str) -> str:
 
 @contextlib.contextmanager
 def _other_block_page(vm: SmokeVM) -> Iterator[None]:
-    """A second block page beside the shipped one, which DNSBL's page list offers; the files are as they were after."""
+    """A second block page, offered by DNSBL's page list; the files and the stored choice are restored."""
     other = f"{WWW}/{OTHER_PAGE}"
     backup = f"{ACTIVE}.smoke3922"
+    chosen = helpers.config_get_state(vm, BLOCK_PAGE_CFG)
     saved = vm.ssh(f"test -f {ACTIVE} && cp -p {ACTIVE} {backup}")
     try:
         _put(vm, other, OTHER_PAGE_HTML)
         yield
     finally:
+        # A save that wrongly stored the page must not leave config.xml naming a file that is deleted here
+        if helpers.config_get_state(vm, BLOCK_PAGE_CFG) != chosen:
+            helpers.config_restore_state(vm, BLOCK_PAGE_CFG, chosen)
         vm.ssh(f"rm -f {other}")
         if saved.returncode == 0:
             vm.ssh(f"mv -f {backup} {ACTIVE}")

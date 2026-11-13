@@ -596,6 +596,9 @@ if (!function_exists('unlock')) {
 			return;
 		}
 		$GLOBALS['pfb_test_lock_events'][] = ['unlock'];
+		if (is_callable($GLOBALS['pfb_test_unlock_hook'] ?? NULL)) {
+			$GLOBALS['pfb_test_unlock_hook']();	// what a test observes at the instant of the release, before the lock is let go
+		}
 		$name = array_search($cfglckkey, $GLOBALS['pfb_test_lock_holders'] ?? [], TRUE);
 		if ($name !== FALSE) {
 			unset($GLOBALS['pfb_test_lock_holders'][$name]);

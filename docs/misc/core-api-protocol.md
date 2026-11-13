@@ -371,9 +371,8 @@ $r = pfb_core_call('GetVersion');
 
 `pfb_core_call($method, $params)` posts `$params` as one JSON object. It returns the HTTP status and the decoded reply
 object, the error envelope included. When no HTTP reply came (Core down, socket missing, timeout), `status` is 0 and `error`
-says why. The optional last parameter `$timeout` is the total time in seconds (default 30; the connect time is the
-smaller of 5 and `$timeout`). Pinned by `PfbCoreCallTest`; the rc script by `PfbCoreServiceTest`; the server by
-`go/pfb_core/*_test.go`.
+says why. The optional last parameter `$timeout` is the total time in seconds (default 30). Pinned by `PfbCoreCallTest`;
+the rc script by `PfbCoreServiceTest`; the server by `go/pfb_core/*_test.go`.
 
 On pfSense `config.xml` is Core's settings backend. The rc script starts Core with `--settings-backend-cmd
 /usr/local/pkg/pfblockerng/pfb_core_settings.sh`, which runs `pfblockerng.inc core_settings`: `pfb_core_settings_backend()`
@@ -394,6 +393,7 @@ then notify). A save works while Core is down. A failed notice is logged once pe
 `CoreSettingsBackendTest`, `CoreSettingsChangedTest`, `CoreSettingsPageSavesTest` and `CoreSettingsValidateTimeoutTest`.
 
 A package without `pfb-core` is not supported. `stage_pfb_dns()` in `scripts/build-pkg-portable.py` stages `pfb-core` in the
-same helper run as pfB-DNS whenever the source carries `go/pfb_core`, so a package built from this tree always ships it. On a
-build without it no Core ever reads `config.xml`, and the notice "pfBlockerNG Core has not read the saved settings yet" stays
-on DNS General for good: by design, nothing hides it.
+same helper run as pfB-DNS whenever the source carries `go/pfb_core` and the port installs the `dns_proxy` payload (it
+returns early otherwise), so a package built from this tree with the port as it is always ships it. On a build without it no
+Core ever reads `config.xml`, and the notice "pfBlockerNG Core has not read the saved settings yet" stays on DNS General for
+good: by design, nothing hides it.

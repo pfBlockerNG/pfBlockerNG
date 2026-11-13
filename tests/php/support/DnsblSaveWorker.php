@@ -20,7 +20,11 @@ declare(strict_types=1);
  * "effects" holds the save's file side effects before and after it ran, in the sandbox: the TOP1M baseline files present
  * ("baseline"), the TOP1M rebuild marker ("updateMarker") and the blocked-page file DNSBL serves ("activePage": its content, or NULL
  * when there is none). The case's `webpageChanged` (default true) is whether the posted block page differs from the stored one;
- * `activePage` is the content seeded as the served block page (default "ACTIVE ORIGINAL", NULL for none).
+ * `activePage` is the content seeded as the served block page (default "ACTIVE ORIGINAL", NULL for none). "effects.atUnlock" lists
+ * the same state at each release of the DNS config lock. The case's `seed.migrated` (default true) is whether the stored DNSBL
+ * policy is already migrated: when false the page's upgrade facade writes config.xml itself, mid-save.
+ * The page's fresh read of config.xml under the lock gives back what is on disk: the block page chosen in the validation is in
+ * memory only until the save writes it.
  */
 
 $workerArgv = $argv;
@@ -36,6 +40,7 @@ $returned = FALSE;
 $pconfig = [];
 
 $effectsBefore = NULL;
+$effectsAtUnlock = [];
 
 /** @return array{baseline: list<string>, updateMarker: bool, activePage: ?string} the save's file side effects, as they stand */
 function dnsbl_save_worker_effects(): array
@@ -50,7 +55,7 @@ function dnsbl_save_worker_effects(): array
 	];
 }
 
-register_shutdown_function(static function () use ($resultFile, &$disk, &$before, &$input_errors, &$returned, &$pconfig, &$effectsBefore): void {
+register_shutdown_function(static function () use ($resultFile, &$disk, &$before, &$input_errors, &$returned, &$pconfig, &$effectsBefore, &$effectsAtUnlock): void {
 	file_put_contents($resultFile, json_encode([
 		'disk'        => $disk,
 		'before'      => $before,
@@ -62,7 +67,7 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$before
 		'postedPort'    => $pconfig['pfb_dnsport'] ?? NULL,
 		'writes'        => $GLOBALS['pfb_test_write_config_calls'] ?? [],
 		'settingsFailed' => ($failed = @file_get_contents($GLOBALS['pfb']['core_settings_failed'] ?? '')) === FALSE ? NULL : $failed,
-		'effects'       => ['before' => $effectsBefore, 'after' => dnsbl_save_worker_effects()],
+		'effects'       => ['before' => $effectsBefore, 'after' => dnsbl_save_worker_effects(), 'atUnlock' => $effectsAtUnlock],
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -115,7 +120,9 @@ config_set_path("{$dnsbl}/pfb_dnsport", '8081');
 config_set_path("{$dnsbl}/dnsbl_webpage", 'dnsbl_default.php');
 config_set_path('unbound/active_interface', 'lan');
 config_set_path('unbound/custom_options', base64_encode('do-ip6: no'));
-config_set_path("{$dnsbl}/global_log_mode", 'default');	// a migrated policy: the upgrade facade writes nothing
+if ($case['seed']['migrated'] ?? TRUE) {
+	config_set_path("{$dnsbl}/global_log_mode", 'default');	// a migrated policy: the upgrade facade writes nothing
+}
 
 // What the other requests wrote after this one started: the pfB-DNS form's Off (DNS > General), and an apply's Resolver move.
 $other = $GLOBALS['config'];
@@ -155,7 +162,6 @@ $effectsBefore = dnsbl_save_worker_effects();
 $dnsbl_webpage_file = 'dnsbl_alt.php';
 $dnsbl_webpage = (bool) ($case['webpageChanged'] ?? TRUE);
 $pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
-config_set_path("{$dnsbl}/dnsbl_webpage", $dnsbl_webpage_file);
 $pfb_auto = FALSE;
 $pfb_top1m_token_post = '';
 $redir_ifaces_raw = [];
@@ -193,6 +199,13 @@ if ($scenario === 'pfb_dns_off') {
 	config_set_path("{$dns}/pfb_dns", '');
 }
 $disk = $before = $GLOBALS['config'];
+config_set_path("{$dnsbl}/dnsbl_webpage", $dnsbl_webpage_file);	// the validation's write, in memory only: the fresh read under the lock drops it
+$GLOBALS['pfb_test_config_read_hook'] = static function () use (&$disk): void {
+	$GLOBALS['config'] = $disk;
+};
+$GLOBALS['pfb_test_unlock_hook'] = static function () use (&$effectsAtUnlock): void {
+	$effectsAtUnlock[] = dnsbl_save_worker_effects();
+};
 if ($scenario === 'interleave') {
 	$disk = $other;
 	$GLOBALS['pfb_test_config_read_hook'] = static function () use ($other): void {
