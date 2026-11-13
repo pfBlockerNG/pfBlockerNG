@@ -4148,8 +4148,8 @@ const PFB_CORE_API_VERSION = 'v1';
 const PFB_CORE_SETTINGS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_settings.sh';
 // The adapter reads at most this many bytes of request from stdin
 const PFB_CORE_SETTINGS_MAX_REQUEST = 33554432;	// 32 MiB, as Core takes a reply: the feed projections carry custom lists
-// issue #3927: the adapter's metrics waits, so its longest client-IP change (DNS config lock, metrics lock, three passes over both
-// metrics databases) ends inside Core's 20 s write deadline (go/pfb_core/settings/adapter.go writeTimeout; CoreSettingsAdapterDeadlineTest)
+// issue #3927: the adapter's metrics waits, so the waits it chooses on a client-IP change (DNS config lock, metrics lock, three passes
+// over both metrics databases) end inside Core's 20 s write deadline (adapter.go writeTimeout); write_config()'s own pfSense lock is not one
 const PFB_CORE_SETTINGS_METRICS_LOCK_WAIT = 2.0;
 const PFB_CORE_SETTINGS_SQLITE_WAIT_MS = 500;
 // issue #3937: Core's feed projections, each over one config.xml section of groups, in the protocol's order
@@ -12975,6 +12975,7 @@ function pfb_metrics_lock(float $wait_s) {
 // Each existing database commits independently: a failed retry never restores purged identities. $busy_ms caps each database's wait.
 function pfb_metrics_client_reconcile(bool $enabled, bool $rotate = TRUE, int $busy_ms = 5000): ?string {
 	global $pfb;
+	$busy_ms = min($busy_ms, (int) ($pfb['sqlite_timeout'] ?? 5000));
 	foreach (array('dnsbl_info' => 'dns_metric_blocks', 'dnsbl_resolver' => 'dns_metric_queries') as $key => $table) {
 		if (!is_file($pfb[$key])) {
 			continue;
@@ -12983,7 +12984,7 @@ function pfb_metrics_client_reconcile(bool $enabled, bool $rotate = TRUE, int $b
 		try {
 			$db = new SQLite3($pfb[$key], SQLITE3_OPEN_READWRITE);
 			$db->enableExceptions(TRUE);
-			$db->busyTimeout(min($busy_ms, (int) ($pfb['sqlite_timeout'] ?? 5000)));
+			$db->busyTimeout($busy_ms);
 			$db->exec('BEGIN IMMEDIATE');
 			if (!$rotate && $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dns_metric_settings'")
 			    && $db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0') === 1) {
@@ -13019,7 +13020,8 @@ function pfb_metrics_client_reconcile(bool $enabled, bool $rotate = TRUE, int $b
 					// A failed BEGIN has no transaction to roll back.
 				}
 			}
-			return basename($pfb[$key]) . ': ' . $e->getMessage();
+			// SQLITE_BUSY: another writer held the database for the whole wait
+			return basename($pfb[$key]) . ': ' . $e->getMessage() . ($e->getCode() === 5 ? " (waited {$busy_ms} ms)" : '');
 		} finally {
 			if ($db !== NULL) {
 				$db->close();
@@ -13106,7 +13108,7 @@ function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $
 	}
 	$lock = pfb_metrics_lock($lock_wait_s);
 	if ($lock === FALSE) {
-		return 'Client IP metrics could not be changed: metrics publication is busy. ' . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled.' : 'Client IP metrics remain disabled.');
+		return "Client IP metrics could not be changed: metrics publication stayed busy for {$lock_wait_s} s. " . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled.' : 'Client IP metrics remain disabled.');
 	}
 	try {
 		if ($desired === PfbToggle::On) {
