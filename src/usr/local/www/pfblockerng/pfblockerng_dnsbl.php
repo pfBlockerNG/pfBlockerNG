@@ -590,7 +590,7 @@ if ($_POST) {
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
-			if (is_array($_POST[$s_option])) {
+			if (is_array($_POST[$s_option] ?? NULL)) {
 				$_POST[$s_option] = $s_default;
 			}
 			elseif (!array_key_exists($_POST[$s_option] ?? '', ${"options_$s_option"})) {
@@ -604,7 +604,7 @@ if ($_POST) {
 						);
 
 		foreach ($select_options as $s_option => $s_default) {
-			if (is_array($_POST[$s_option])) {
+			if (is_array($_POST[$s_option] ?? NULL)) {
 				foreach ($_POST[$s_option] as $post_option) {
 					if (!array_key_exists($post_option, ${"options_$s_option"})) {
 						$_POST[$s_option] = $s_default;
