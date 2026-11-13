@@ -24,15 +24,10 @@ const (
 
 var killGrace = 5 * time.Second // how long the program's group has to end on TERM before it is killed
 
-// Command runs the Outpost's update program at Path once per Update.
-//
-//	stdin   {"version":1,<Request>}
-//	stdout and stderr   the progress log itself, a regular file: an Update restarts daemons, and one that inherited a pipe would hold it open
-//	fd 3    a regular file next to the log: {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool}
-//	exit    0 is success
-//
-// The program leads its own process group. The group is killed (TERM, then KILL after 5 s) when ctx ends or Cap passes
-// (0: 4 hours), never when the program exits on its own: a reload it started in the background must survive.
+// Command runs the update program at Path once per Update: stdin is {"version":1,<Request>}, stdout and stderr are the log, and
+// fd 3 is the result {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool}; all are
+// regular files, never pipes (a daemon an Update restarts would hold one open). The program's group is killed (TERM, then KILL
+// after 5 s) when ctx ends or Cap (0: 4 hours) passes, never when the program exits by itself.
 type Command struct {
 	Path string
 	Cap  time.Duration
