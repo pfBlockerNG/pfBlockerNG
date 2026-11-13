@@ -400,7 +400,7 @@ final class MetricsWriteTest extends TestCase
 		}
 
 		$this->assertSame([1, 0], [$this->policyOf('dnsbl_info'), $this->policyOf('dnsbl_resolver')], 'before-state of the claim below');
-		$this->assertStringContainsString('client IPs are collected only in: pfb_py_dnsbl.sqlite', $error);
+		$this->assertStringContainsString('client-IP collection is permitted in: pfb_py_dnsbl.sqlite', $error);
 		$this->assertStringContainsString('next Update', $error);
 		$this->assertStringNotContainsString('stays off', $error);
 	}
@@ -423,8 +423,26 @@ final class MetricsWriteTest extends TestCase
 		$this->assertNull($error);
 		$this->assertSame([1, 0], [$this->policyOf('dnsbl_info'), $this->policyOf('dnsbl_resolver')], 'before-state of the claim below');
 		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
-		$this->assertStringContainsString('client IPs are collected only in: pfb_py_dnsbl.sqlite', $log);
+		$this->assertStringContainsString('client-IP collection is permitted in: pfb_py_dnsbl.sqlite', $log);
 		$this->assertStringContainsString('next Update', $log);
+	}
+
+	/** A policy that cannot be read (an exclusive lock on an enabled database) is reported as unknown, never as off. */
+	public function testAnUnreadablePolicyIsReportedAsUnknown(): void
+	{
+		$this->bothPolicies(1);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_resolver']);
+		$db->exec('BEGIN EXCLUSIVE');
+		$db->exec('UPDATE dns_metric_settings SET epoch=epoch');
+		try {
+			$state = pfb_metrics_client_collecting();
+		} finally {
+			$db->exec('ROLLBACK');
+			$db->close();
+		}
+
+		$this->assertSame('client-IP collection is permitted in: pfb_py_dnsbl.sqlite; unknown (policy unreadable) in: pfb_py_resolver.sqlite', $state);
 	}
 
 	private function clientIpPolicy(): array

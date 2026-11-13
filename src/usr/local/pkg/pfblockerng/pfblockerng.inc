@@ -12552,23 +12552,32 @@ function pfb_metrics_client_apply(): void {
 	}
 }
 
-// What the metrics databases do now, read back after a reconcile that stopped part way (each database commits on its own).
+// Each metrics database's client-IP policy read back after a reconcile that stopped part way (each database commits on its own).
+// The policy only permits collection (the ini setting and a matching epoch decide the rest); one that cannot be read is unknown.
 function pfb_metrics_client_collecting(): string {
 	global $pfb;
-	$on = array();
+	$on = $unknown = array();
 	foreach (array('dnsbl_info', 'dnsbl_resolver') as $key) {
+		if (!is_file($pfb[$key])) {
+			continue;
+		}
+		$db = NULL;
 		try {
 			$db = new SQLite3($pfb[$key], SQLITE3_OPEN_READONLY);
+			$db->enableExceptions(TRUE);
 			$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
-			if (@$db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0') === 1) {
+			$table = $db->querySingle("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dns_metric_settings'");
+			if ($table && $db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0') === 1) {
 				$on[] = basename($pfb[$key]);
 			}
-			$db->close();
 		} catch (Throwable) {
-			// No database or no policy table: it collects no client IPs
+			$unknown[] = basename($pfb[$key]);
+		} finally {
+			$db?->close();
 		}
 	}
-	return $on ? 'client IPs are collected only in: ' . implode(', ', $on) : 'no metrics database collects client IPs';
+	$state = $on ? 'client-IP collection is permitted in: ' . implode(', ', $on) : 'no metrics database permits client-IP collection';
+	return $unknown ? "{$state}; unknown (policy unreadable) in: " . implode(', ', $unknown) : $state;
 }
 
 // Save-time privacy is serialized with publication and config persistence, not with DNS service availability. $persist writes
