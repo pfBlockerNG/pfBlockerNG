@@ -524,6 +524,11 @@ serves, `pfb_logger()` mirrors to stdout, which is Core's `update.log`, and a ho
 `pfblockerng_run.log` is not opened. The result goes to fd 3, the exit status is 0 on success and 1 on a failed Extra, pass or
 apply. Pinned by `CoreUpdateServeTest`.
 
+The `.pfb_cron_disable` sentinel (`pfb_cron_disabled()`) suppresses scheduled work, and Core starts the scheduled Update by itself, so
+the verb honours it for trigger `scheduled` only: it runs nothing, writes an empty result (no outcome, nothing attempted, GeoIP
+not reported: the feeds Core reserved stay pending and are planned again), logs one line naming the sentinel and exits 75.
+`manual`, `apply` and `retry` are unaffected. Pinned by `CoreUpdateCronDisableTest`.
+
 **The Update page** (`pfblockerng_update.php`) is Core's client. Run Now, Force and the Wizard reload call `pfb_update_start()`: a
 `StartUpdate` of `manual` with the page's scope and force (allow-listed before the call), and an Update that already runs is
 `conflict`, reported as "An Update is running." The live view polls `?ajax=update[&after=<cursor>]` once a second:
