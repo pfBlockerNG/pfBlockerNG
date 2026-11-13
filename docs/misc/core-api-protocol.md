@@ -32,7 +32,7 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `GetSettingsSchema` | none | the native schema: `{"schemaVersion", "projections": [{"id", "fields": [...]}]}` |
 | `GetSettings` | `projectionIds` (optional; none: all) | `{"initialized", "revision", "projections": [{"resourceId", "generation", "value"}]}` |
 | `InitializeSettings` | `requestId`, `settings` | `{"revision": 1, "projections": [...]}`: every projection |
-| `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed |
+| `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed, as the backend stored them |
 | `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give; changes nothing |
 | `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
 
@@ -65,7 +65,8 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
   - `InitializeSettings` on an initialized Core (always, on the adapter backend);
   - `SaveSettings` before initialization;
   - `SaveSettings` whose `expectedRevision` is not the current revision (a field error names `expectedRevision`), as
-    Core holds it or as the backend finds it when it writes. The client reads again and reapplies its change.
+    Core holds it or as the backend finds it when it writes (Core then reads the backend again, so the next
+    `GetSettings` shows the revision that moved). The client reads again and reapplies its change.
 - **Backend failure** (`unavailable`): the backend could not be read or written. Core keeps the values it last read.
 - **No run.** A save starts no run.
 - **Secrets are write-only.** A read shows a secret field as `{"present": true|false}`, never its value, in list items too.
