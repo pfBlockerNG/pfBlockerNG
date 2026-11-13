@@ -22,6 +22,9 @@ package feedfetch_test
 //	             its handshake, as {server, tls: "connect"}: the attempts the fetcher made, whether or not the handshake
 //	             held. With plain_too the same port also serves plain http (the first byte decides, 0x16 being a TLS
 //	             handshake), so a redirect can change the scheme and nothing else.
+//	             {name, kind: "ftp", users, epsv, pasv_host, quirk} is an ftp server instead: the Python server
+//	             tests/feedfetch/fixtures/ftp_server.py, whose header documents the options. It records into the shared
+//	             request order {server, command} per command and {server, data_to} per data connection.
 //	proxy        optional {server, auth: {user, password}, requires: {user, password}}: the system proxy. server names
 //	             a forward proxy the runner starts (tests/feedfetch/fixtures/net_fixture.py, run by both runners: an
 //	             absolute-form GET for http, CONNECT for https, to 127.0.0.1 at the target's port; "closed" is nothing
@@ -33,6 +36,8 @@ package feedfetch_test
 //	             An unknown path is a 404 "missing\n". With etag the server answers 304 when If-None-Match equals it;
 //	             otherwise with last_modified, when If-Modified-Since is not older. declared_length is the Content-Length
 //	             sent; the server then closes after the body.
+//	files        optional {server: {absolute path: {body, size, mdtm, cut}}}: an ftp server's files (the header of
+//	             ftp_server.py says what each field does); a step may replace it, as it may replace routes.
 //	seed         optional {published, etag, lastmod, digest}: the feed's published copy, stored validators and content
 //	             digest (the xxh128 sidecar ".orig.xxhash128", as PHP's pfb_hash_write() leaves it) before step 0.
 //	local_files  optional {relative path: content}; local_symlinks optional {relative path: target}. A step may write
@@ -43,7 +48,8 @@ package feedfetch_test
 //	  Flex flag, default false),
 //	  rsync      {exit, body}: the stand-in rsync (tests/feedfetch/fixtures/fake-rsync.sh) for this step.
 //	  expect     ok; decision (probe: changed|unchanged|failed); published (string or null); etag, lastmod, digest
-//	             (absent: unchanged by the step); requests [{server, path, and only the headers sent among authorization,
+//	             (absent: unchanged by the step); mtime (the published copy's modification time, Unix seconds; checked
+//	             only where named); requests [{server, path, and only the headers sent among authorization,
 //	             if_none_match, if_modified_since, x_feed_probe, accept_encoding}] in order, plus host (the Host header as
 //	             received, "name:port"), which is checked only when the expectation names it; reason (optional: the
 //	             refusal reason; a null in an old_expect pins "no reason" for the PHP runner, this one ignores it);
@@ -52,6 +58,7 @@ package feedfetch_test
 //	             asserts expect and refuses an old_expect equal to it; the PHP runner asserts old_expect instead.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -65,6 +72,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -98,9 +106,19 @@ type expect struct {
 	LastMod     json.RawMessage     `json:"lastmod"`
 	Digest      json.RawMessage     `json:"digest"`
 	Requests    []map[string]string `json:"requests"`
+	Mtime       *int64              `json:"mtime"`
 	Reason      *string             `json:"reason"`
 	RsyncSource *string             `json:"rsync_source"`
 }
+
+type ftpFile struct {
+	Body string          `json:"body"`
+	Size json.RawMessage `json:"size,omitempty"`
+	Mdtm *int64          `json:"mdtm,omitempty"`
+	Cut  *int            `json:"cut,omitempty"`
+}
+
+type ftpFiles map[string]map[string]ftpFile
 
 type step struct {
 	Op         string            `json:"op"`
@@ -111,6 +129,7 @@ type step struct {
 	Headers    []string          `json:"headers"`
 	Ceiling    int64             `json:"ceiling"`
 	Routes     routes            `json:"routes"`
+	Files      ftpFiles          `json:"files"`
 	LocalFiles map[string]string `json:"local_files"`
 	Rsync      *struct {
 		Exit int    `json:"exit"`
@@ -131,6 +150,7 @@ type scenario struct {
 	Servers     []serverSpec        `json:"servers"`
 	Proxy       *proxySpec          `json:"proxy"`
 	Routes      routes              `json:"routes"`
+	Files       ftpFiles            `json:"files"`
 	Seed        *struct {
 		Published *string `json:"published"`
 		ETag      *string `json:"etag"`
@@ -262,8 +282,14 @@ func runScenario(t *testing.T, file string) {
 	reqLog := &requestLog{path: filepath.Join(tools, "requests.log")}
 	table := routes{}
 	var pki *corpusPKI
+	var ftpServers []serverSpec
 	for _, spec := range sc.Servers {
 		spec := spec
+		if spec.Kind == "ftp" {
+			ftpServers = append(ftpServers, spec)
+			ports[spec.Name] = startFTP(t, tools, spec, reqLog.path)
+			continue
+		}
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -331,6 +357,14 @@ func runScenario(t *testing.T, file string) {
 			}
 		}
 	}
+
+	// writeFTP gives every ftp server its files; the server reads its config afresh for each connection.
+	writeFTP := func(files ftpFiles) {
+		for _, decl := range ftpServers {
+			writeFTPConfig(t, tools, decl, files[decl.Name])
+		}
+	}
+	writeFTP(sc.Files)
 
 	writeLocal := func(files map[string]string) {
 		for rel, content := range files {
@@ -408,7 +442,7 @@ func runScenario(t *testing.T, file string) {
 		f.Self = append(f.Self, netip.MustParseAddr(a))
 	}
 
-	current := sc.Routes
+	current, currentFiles := sc.Routes, sc.Files
 	for i, st := range sc.Steps {
 		label := fmt.Sprintf("step %d (%s): %s", i, st.Op, sc.Description)
 		if st.OldExpect != nil && reflect.DeepEqual(*st.OldExpect, st.Expect) {
@@ -418,7 +452,11 @@ func runScenario(t *testing.T, file string) {
 		if st.Routes != nil {
 			current = st.Routes
 		}
+		if st.Files != nil {
+			currentFiles = st.Files
+		}
 		setRoutes(current)
+		writeFTP(currentFiles)
 		writeLocal(st.LocalFiles)
 		reqLog.reset(t)
 		os.Remove(filepath.Join(tools, "rsync.argv"))
@@ -490,6 +528,12 @@ func runScenario(t *testing.T, file string) {
 		if exp.Reason != nil {
 			got["reason"], want["reason"] = res.Reason, *exp.Reason
 		}
+		if exp.Mtime != nil {
+			got["mtime"], want["mtime"] = nil, *exp.Mtime
+			if info, err := os.Stat(orig); err == nil {
+				got["mtime"] = info.ModTime().Unix()
+			}
+		}
 		got["staged"], want["staged"] = stagedLeftover(t, dir, name), ""
 		if !reflect.DeepEqual(got, want) {
 			gj, _ := json.MarshalIndent(got, "", " ")
@@ -497,6 +541,59 @@ func runScenario(t *testing.T, file string) {
 			t.Fatalf("%s\nwant %s\n got %s\n(result %+v)", label, wj[:min(len(wj), readCap)], gj[:min(len(gj), readCap)], res)
 		}
 		prevETag, prevLastMod, prevDigest = got["etag"], got["lastmod"], got["digest"]
+	}
+}
+
+// startFTP runs the ftp server of a scenario and returns its port: the server prints "PORT <n>" once it listens, and
+// ends when its stdin closes.
+func startFTP(t *testing.T, tools string, decl serverSpec, logPath string) string {
+	t.Helper()
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatalf("the ftp corpus servers need python3: %v", err)
+	}
+	writeFTPConfig(t, tools, decl, nil)
+	cmd := exec.Command(python, "../../../tests/feedfetch/fixtures/ftp_server.py", ftpConfigPath(tools, decl.Name), logPath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stdin.Close()
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	n, ok := strings.CutPrefix(strings.TrimSpace(line), "PORT ")
+	if _, convErr := strconv.Atoi(n); err != nil || !ok || convErr != nil {
+		t.Fatalf("ftp server %s did not announce its port: %q (%v) %s", decl.Name, line, err, stderr.String())
+	}
+	return n
+}
+
+func ftpConfigPath(tools, name string) string { return filepath.Join(tools, name+".ftp.json") }
+
+func writeFTPConfig(t *testing.T, tools string, decl serverSpec, files map[string]ftpFile) {
+	t.Helper()
+	cfg := struct {
+		serverSpec
+		Files map[string]ftpFile `json:"files"`
+	}{decl, files}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ftpConfigPath(tools, decl.Name), raw, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

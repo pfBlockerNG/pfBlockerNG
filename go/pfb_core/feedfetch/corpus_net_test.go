@@ -26,12 +26,18 @@ import (
 
 const netFixture = "../../../tests/feedfetch/fixtures/net_fixture.py"
 
-// serverSpec is a scenario's "servers" entry: a name, or {name, tls: true, cert: "trusted"|"untrusted", plain_too}.
+// serverSpec is a scenario's "servers" entry: a name, or {name, tls: true, cert: "trusted"|"untrusted", plain_too}, or
+// {name, kind: "ftp", ...}: an ftp server (tests/feedfetch/fixtures/ftp_server.py) with the options it reads.
 type serverSpec struct {
-	Name     string `json:"name"`
-	TLS      bool   `json:"tls"`
-	Cert     string `json:"cert"`
-	PlainToo bool   `json:"plain_too"`
+	Name     string            `json:"name"`
+	TLS      bool              `json:"tls"`
+	Cert     string            `json:"cert"`
+	PlainToo bool              `json:"plain_too"`
+	Kind     string            `json:"kind,omitempty"`
+	Users    map[string]string `json:"users,omitempty"`
+	Epsv     *bool             `json:"epsv,omitempty"`
+	PasvHost string            `json:"pasv_host,omitempty"`
+	Quirk    string            `json:"quirk,omitempty"`
 }
 
 func (s *serverSpec) UnmarshalJSON(b []byte) error {

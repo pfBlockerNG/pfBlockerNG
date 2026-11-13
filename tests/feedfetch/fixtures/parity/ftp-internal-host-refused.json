@@ -1,0 +1,50 @@
+{
+ "schema": 1,
+ "description": "An ftp host resolving to a non-permitted internal address is refused before any connection.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "internal.example": [
+   "127.0.0.1",
+   "10.1.2.3"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "1.2.3.4\n5.6.7.8\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://internal.example:{port:ftp}/list.txt",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "feed host resolves to a non-permitted address",
+    "requests": [],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

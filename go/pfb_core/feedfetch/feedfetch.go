@@ -61,7 +61,7 @@ type Fetcher struct {
 
 // Request is one feed's source as the Outpost translated it.
 type Request struct {
-	URL                string        // http(s)://, a self-hosted http URL, file://, or for Rsync rsync:// or host::module
+	URL                string        // http(s):// or ftp://, a self-hosted http URL, file://, or for Rsync rsync:// or host::module
 	Rsync              bool          // the feed's format is rsync
 	Username, Password string        // Basic credentials, sent to the feed's origin only
 	Headers            []string      // extra "Name: value" headers; an Authorization header is scoped like credentials
@@ -263,6 +263,9 @@ func (f *Fetcher) fetch(ctx context.Context, src *source, req Request, dst strin
 		return fetchFile(src, req, dst)
 	case kindSelfHosted:
 		return fetchSelfHosted(ctx, src, req, dst)
+	}
+	if src.ftp != nil {
+		return f.fetchFTP(ctx, src, req, dst) // no conditional GET exists for ftp: the probe's cond is not sent
 	}
 	return f.fetchHTTP(ctx, src, req, dst, cond)
 }

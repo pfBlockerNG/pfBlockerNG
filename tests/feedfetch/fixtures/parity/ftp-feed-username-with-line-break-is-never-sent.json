@@ -1,0 +1,81 @@
+{
+ "schema": 1,
+ "description": "A feed username holding CR LF is refused before any connection. The old path sent it, so the rest of the line ran as a command (DELE).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "1.2.3.4\n5.6.7.8\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/list.txt",
+   "username": "bob\r\nDELE x",
+   "password": "pw",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "feed ftp credentials contain a control character",
+    "requests": [],
+    "etag": null,
+    "lastmod": null
+   },
+   "old_expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "curl_incomplete",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER bob"
+     },
+     {
+      "server": "ftp",
+      "command": "DELE x"
+     },
+     {
+      "server": "ftp",
+      "command": "USER bob"
+     },
+     {
+      "server": "ftp",
+      "command": "DELE x"
+     },
+     {
+      "server": "ftp",
+      "command": "USER bob"
+     },
+     {
+      "server": "ftp",
+      "command": "DELE x"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

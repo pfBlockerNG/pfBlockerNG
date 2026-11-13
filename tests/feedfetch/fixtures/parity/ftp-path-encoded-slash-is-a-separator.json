@@ -1,0 +1,227 @@
+{
+ "schema": 1,
+ "description": "The path is percent-decoded and then split on slashes, as cURL does: %2F separates directories, an empty first part is CWD /, later empty parts are skipped.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "files": {
+  "ftp": {
+   "/b.txt": {
+    "body": "bee\n"
+   },
+   "/dir/x.txt": {
+    "body": "x\n"
+   },
+   "/a/b.txt": {
+    "body": "ab\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/dir%2Fx.txt",
+   "expect": {
+    "ok": true,
+    "published": "x\n",
+    "digest": "2528250d92619b8e1bf67208bddf1edb",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "CWD dir"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM x.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE x.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR x.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/%2Fdir/x.txt",
+   "expect": {
+    "ok": true,
+    "published": "x\n",
+    "digest": "2528250d92619b8e1bf67208bddf1edb",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "CWD /"
+     },
+     {
+      "server": "ftp",
+      "command": "CWD dir"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM x.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE x.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR x.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}//b.txt",
+   "expect": {
+    "ok": true,
+    "published": "bee\n",
+    "digest": "b552309e634cd2800cf266d7184d641c",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "CWD /"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM b.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE b.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR b.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/a//b.txt",
+   "expect": {
+    "ok": true,
+    "published": "ab\n",
+    "digest": "95e83a9a3a29398a7ca4df98a9c80c4b",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "CWD a"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM b.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE b.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR b.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  }
+ ]
+}
