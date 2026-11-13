@@ -821,145 +821,164 @@ if ($_POST && isset($_POST['save'])) {
 	}
 
 	if (!$input_errors) {
-		// issue #3288: a VALIDATED per-row Save runs the upgrade facade BEFORE
-		// persisting the submitted choice, or an explicit choice on a still-legacy
-		// box leaves the marker unset and gets reconverted by a later migration.
-		if ($gtype == 'dnsbl') {
-			pfb_dnsbl_policy_upgrade();
+		// issue #3945: Core writes these groups under this lock; never write back the request's stale config.xml.
+		$pfb_saved_row = config_get_path("installedpackages/{$conf_type}/config/{$rowid}");
+		$pfb_config_lock = pfb_dns_config_lock();
+		if ($pfb_config_lock === NULL) {
+			$input_errors[] = 'Groups: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+		} elseif (($pfb_saved_row === NULL) !== (config_get_path("installedpackages/{$conf_type}/config/{$rowid}") === NULL)) {
+			unlock($pfb_config_lock);
+			$input_errors[] = 'Groups: this group was changed by another save, so these settings were not saved. Reload the Groups page.';
 		}
-
-		// issue #1014/#1019/#2060: close the OLD alias's alias-pass-managed ledger entries
-		// (download, script) before aliasname is overwritten -- a rename must not orphan them.
-		$pfb_old_aliasname = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '');
-		if ($pfb_old_aliasname !== '' && $pfb_old_aliasname !== ($_POST['aliasname'] ?: '')) {
-			pfb_sync_status_close_removed_alias($gtype, $pfb_old_aliasname, $pfb['dbdir']);
-		}
-
-		// foreign structure: pfblockernglistsv4/v6/dnsbl per-row keys are not in registry
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", $_POST['aliasname'] ?: '');
-
-		if (isset($_POST['description']) && !empty($_POST['description'])) {
-			// issue #1723: already sanitized by the ingestion prologue above -- pfb_filter()'s
-			// own universal control-char gate would otherwise reject the whole (unsanitized)
-			// value instead of just the control char, and silently store '' instead.
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", pfb_filter($_POST['description'], PFB_FILTER_HTML, 'Category_edit') ?: '');
-		} else {
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", '');
-		}
-
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/action", $_POST['action'] ?: 'Disabled');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/cron", $_POST['cron'] ?: 'Never');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_override", $_POST['schedule_override'] ?? '');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_weekday", $_POST['schedule_weekday']);
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_hour", $_POST['schedule_hour']);
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_minute", $_POST['schedule_minute']);
-		config_del_path("installedpackages/{$conf_type}/config/{$rowid}/dow");
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/sort", $_POST['sort'] ?: 'sort');
-
-		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/srcint", $_POST['srcint'] ?: '');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_pre", $_POST['script_pre'] ?: '');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_post", $_POST['script_post'] ?: '');
-
-		if ($gtype == 'ipv4' || $gtype == 'ipv6') {
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliaslog", $_POST['aliaslog'] ?: 'enabled');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/stateremoval", $_POST['stateremoval'] ?: 'enabled');
-
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoaddrnot_in", pfb_filter($_POST['autoaddrnot_in'], PFB_FILTER_ON_OFF, 'Category_edit'));
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoports_in", pfb_filter($_POST['autoports_in'], PFB_FILTER_ON_OFF, 'Category_edit'));
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasports_in", $_POST['aliasports_in'] ?: '');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoaddr_in", pfb_filter($_POST['autoaddr_in'], PFB_FILTER_ON_OFF, 'Category_edit'));
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autonot_in", pfb_filter($_POST['autonot_in'], PFB_FILTER_ON_OFF, 'Category_edit'));
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasaddr_in", $_POST['aliasaddr_in'] ?: '');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoproto_in", $_POST['autoproto_in'] ?: 'any');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/agateway_in", $_POST['agateway_in'] ?: 'default');
-
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoaddrnot_out", pfb_filter($_POST['autoaddrnot_out'], PFB_FILTER_ON_OFF, 'Category_edit'));
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoports_out", pfb_filter($_POST['autoports_out'], PFB_FILTER_ON_OFF, 'Category_edit'));
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasports_out", $_POST['aliasports_out'] ?: '');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoaddr_out", pfb_filter($_POST['autoaddr_out'], PFB_FILTER_ON_OFF, 'Category_edit'));
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autonot_out", pfb_filter($_POST['autonot_out'], PFB_FILTER_ON_OFF, 'Category_edit'));
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasaddr_out", $_POST['aliasaddr_out'] ?: '');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoproto_out", $_POST['autoproto_out'] ?: 'any');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/agateway_out", $_POST['agateway_out'] ?: 'default');
-
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/suppression_cidr", $_POST['suppression_cidr'] ?: 'Disabled');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/whois_convert", pfb_filter($_POST['whois_convert'], PFB_FILTER_ON_OFF, 'Category_edit'));
-		}
-		else {
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/logging", $_POST['logging'] ?: $pfb_logging_default);
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/order", $_POST['order'] ?: 'default');
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/filter_top1m", pfb_filter($_POST['filter_top1m'], PFB_FILTER_ON_OFF, 'Category_edit'));
-		}
-
-		// Set flag to update CustomList on the next update pass
-		// foreign key: installedpackages/{conf_type} list structure not in registry
-		// issue #1768: no default -> config_get_path() returns NULL on a fresh row -> base64_decode(NULL) deprecation.
-		if (base64_decode(config_get_path("installedpackages/{$conf_type}/config/{$rowid}/custom", '')) != $_POST['custom']) {
-			$action = $_POST['action'];
-			$aname  = $_POST['aliasname'];
-
-			pfb_determine_list_detail($action, '', $conf_type, $rowid);
-			// issue #1080: an action with no list folder (Disabled) leaves the
-			// detail array empty; an unguarded touch() landed the flag at "/".
-			if (!empty($pfbarr['folder'])) {
-				touch("{$pfbarr['folder']}/{$aname}_custom{$suffix}.update");
-			}
-		}
-
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", base64_encode($_POST['custom'] ?? ''));
-
-		$rowhelper_exist = array();
-		foreach ($_POST as $key => $value) {
-
-			// Parse 'rowhelper' tables and save new values
-			if (strpos($key, '-') !== FALSE) {
-				$k_field = explode('-', $key);
-
-				// Collect all rowhelper keys
-				$rowhelper_exist[$k_field[1]] = '';
-
-				// issue #1737: header/url already sanitized by the ingestion
-				// prologue above -- plain read here, same bytes the validation
-				// loop evaluated.
-				if (!empty($value) && $k_field[0] != 'url') {
-					$value = pfb_filter($value, PFB_FILTER_HTML, 'Category_edit save');
-				}
-				if (($k_field[0] == 'url') && ($_POST["format-{$k_field[1]}"] == 'asn')) {
-					$value = htmlentities($value);
-				}
-				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/row/{$k_field[1]}/{$k_field[0]}", $value);
-			}
-		}
-
-		// Remove all undefined rowhelpers
-		foreach (config_get_path("installedpackages/{$conf_type}/config/{$rowid}/row", []) as $r_key => $row) {
-			if (!isset($rowhelper_exist[$r_key])) {
-				config_del_path("installedpackages/{$conf_type}/config/{$rowid}/row/{$r_key}");
-			}
-		}
-
-		// Remove unused xml tag
-		config_del_path("installedpackages/{$conf_type}/config/{$rowid}/infolists");
-
-		$name = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname") ?: 'Unknown';
-		$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";
-		$pfb_written = write_config("pfBlockerNG: {$savemsg}");
-		if ($pfb_written !== FALSE && $pfb_written !== -1) {
-			pfb_core_settings_changed(NULL, TRUE);	// issue #3937: Core reads the groups again; a failure never undoes the save
-		}
-		$runtime_model = pfb_schedule_runtime_config();
-		$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
-		$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();
-		// issue #2888: name which check failed, as the General page does; the helper logs it.
-		$cache_stage = pfb_schedule_cache_candidate_stage($runtime_model, $runtime_state, $runtime_timezone);
-		$cache_ok = $cache_stage === '';
-		pfb_mark_pending_changes();	// applies on the next Update, not on save
-		$failure = $cache_ok ? '' : '&schcache=failed&schstage=' . $cache_stage;
-		header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}{$failure}");
-		exit;
 	}
-	else {
+
+	if (!$input_errors) {
+		try {
+			// issue #3288: a VALIDATED per-row Save runs the upgrade facade BEFORE
+			// persisting the submitted choice, or an explicit choice on a still-legacy
+			// box leaves the marker unset and gets reconverted by a later migration.
+			if ($gtype == 'dnsbl') {
+				pfb_dnsbl_policy_upgrade();
+			}
+
+			// issue #1014/#1019/#2060: close the OLD alias's alias-pass-managed ledger entries
+			// (download, script) before aliasname is overwritten -- a rename must not orphan them.
+			$pfb_old_aliasname = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '');
+			if ($pfb_old_aliasname !== '' && $pfb_old_aliasname !== ($_POST['aliasname'] ?: '')) {
+				pfb_sync_status_close_removed_alias($gtype, $pfb_old_aliasname, $pfb['dbdir']);
+			}
+
+			// foreign structure: pfblockernglistsv4/v6/dnsbl per-row keys are not in registry
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", $_POST['aliasname'] ?: '');
+
+			if (isset($_POST['description']) && !empty($_POST['description'])) {
+				// issue #1723: already sanitized by the ingestion prologue above -- pfb_filter()'s
+				// own universal control-char gate would otherwise reject the whole (unsanitized)
+				// value instead of just the control char, and silently store '' instead.
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", pfb_filter($_POST['description'], PFB_FILTER_HTML, 'Category_edit') ?: '');
+			} else {
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/description", '');
+			}
+
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/action", $_POST['action'] ?: 'Disabled');
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/cron", $_POST['cron'] ?: 'Never');
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_override", $_POST['schedule_override'] ?? '');
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_weekday", $_POST['schedule_weekday']);
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_hour", $_POST['schedule_hour']);
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_minute", $_POST['schedule_minute']);
+			config_del_path("installedpackages/{$conf_type}/config/{$rowid}/dow");
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/sort", $_POST['sort'] ?: 'sort');
+
+			// issue #1723: already sanitized by the ingestion prologue above -- plain read.
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/srcint", $_POST['srcint'] ?: '');
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_pre", $_POST['script_pre'] ?: '');
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/script_post", $_POST['script_post'] ?: '');
+
+			if ($gtype == 'ipv4' || $gtype == 'ipv6') {
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliaslog", $_POST['aliaslog'] ?: 'enabled');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/stateremoval", $_POST['stateremoval'] ?: 'enabled');
+
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoaddrnot_in", pfb_filter($_POST['autoaddrnot_in'], PFB_FILTER_ON_OFF, 'Category_edit'));
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoports_in", pfb_filter($_POST['autoports_in'], PFB_FILTER_ON_OFF, 'Category_edit'));
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasports_in", $_POST['aliasports_in'] ?: '');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoaddr_in", pfb_filter($_POST['autoaddr_in'], PFB_FILTER_ON_OFF, 'Category_edit'));
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autonot_in", pfb_filter($_POST['autonot_in'], PFB_FILTER_ON_OFF, 'Category_edit'));
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasaddr_in", $_POST['aliasaddr_in'] ?: '');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoproto_in", $_POST['autoproto_in'] ?: 'any');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/agateway_in", $_POST['agateway_in'] ?: 'default');
+
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoaddrnot_out", pfb_filter($_POST['autoaddrnot_out'], PFB_FILTER_ON_OFF, 'Category_edit'));
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoports_out", pfb_filter($_POST['autoports_out'], PFB_FILTER_ON_OFF, 'Category_edit'));
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasports_out", $_POST['aliasports_out'] ?: '');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoaddr_out", pfb_filter($_POST['autoaddr_out'], PFB_FILTER_ON_OFF, 'Category_edit'));
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autonot_out", pfb_filter($_POST['autonot_out'], PFB_FILTER_ON_OFF, 'Category_edit'));
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasaddr_out", $_POST['aliasaddr_out'] ?: '');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/autoproto_out", $_POST['autoproto_out'] ?: 'any');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/agateway_out", $_POST['agateway_out'] ?: 'default');
+
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/suppression_cidr", $_POST['suppression_cidr'] ?: 'Disabled');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/whois_convert", pfb_filter($_POST['whois_convert'], PFB_FILTER_ON_OFF, 'Category_edit'));
+			}
+			else {
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/logging", $_POST['logging'] ?: $pfb_logging_default);
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/order", $_POST['order'] ?: 'default');
+				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/filter_top1m", pfb_filter($_POST['filter_top1m'], PFB_FILTER_ON_OFF, 'Category_edit'));
+			}
+
+			// Set flag to update CustomList on the next update pass
+			// foreign key: installedpackages/{conf_type} list structure not in registry
+			// issue #1768: no default -> config_get_path() returns NULL on a fresh row -> base64_decode(NULL) deprecation.
+			if (base64_decode(config_get_path("installedpackages/{$conf_type}/config/{$rowid}/custom", '')) != $_POST['custom']) {
+				$action = $_POST['action'];
+				$aname  = $_POST['aliasname'];
+
+				pfb_determine_list_detail($action, '', $conf_type, $rowid);
+				// issue #1080: an action with no list folder (Disabled) leaves the
+				// detail array empty; an unguarded touch() landed the flag at "/".
+				if (!empty($pfbarr['folder'])) {
+					touch("{$pfbarr['folder']}/{$aname}_custom{$suffix}.update");
+				}
+			}
+
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", base64_encode($_POST['custom'] ?? ''));
+
+			$rowhelper_exist = array();
+			foreach ($_POST as $key => $value) {
+
+				// Parse 'rowhelper' tables and save new values
+				if (strpos($key, '-') !== FALSE) {
+					$k_field = explode('-', $key);
+
+					// Collect all rowhelper keys
+					$rowhelper_exist[$k_field[1]] = '';
+
+					// issue #1737: header/url already sanitized by the ingestion
+					// prologue above -- plain read here, same bytes the validation
+					// loop evaluated.
+					if (!empty($value) && $k_field[0] != 'url') {
+						$value = pfb_filter($value, PFB_FILTER_HTML, 'Category_edit save');
+					}
+					if (($k_field[0] == 'url') && ($_POST["format-{$k_field[1]}"] == 'asn')) {
+						$value = htmlentities($value);
+					}
+					config_set_path("installedpackages/{$conf_type}/config/{$rowid}/row/{$k_field[1]}/{$k_field[0]}", $value);
+				}
+			}
+
+			// Remove all undefined rowhelpers
+			foreach (config_get_path("installedpackages/{$conf_type}/config/{$rowid}/row", []) as $r_key => $row) {
+				if (!isset($rowhelper_exist[$r_key])) {
+					config_del_path("installedpackages/{$conf_type}/config/{$rowid}/row/{$r_key}");
+				}
+			}
+
+			// Remove unused xml tag
+			config_del_path("installedpackages/{$conf_type}/config/{$rowid}/infolists");
+
+			$name = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname") ?: 'Unknown';
+			$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";
+			$pfb_written = write_config("pfBlockerNG: {$savemsg}");
+			$pfb_write_failed = pfb_dns_config_write_failed($pfb_written);
+		} finally {
+			unlock($pfb_config_lock);
+		}
+		if ($pfb_write_failed) {
+			$input_errors[] = 'Groups: the configuration could not be written, so these settings were not saved. Save again in a moment.';
+		} else {
+			pfb_core_settings_changed(NULL, TRUE);	// outside the lock: a slow Core must not hold it
+			$runtime_model = pfb_schedule_runtime_config();
+			$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
+			$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();
+			// issue #2888: name which check failed, as the General page does; the helper logs it.
+			$cache_stage = pfb_schedule_cache_candidate_stage($runtime_model, $runtime_state, $runtime_timezone);
+			$cache_ok = $cache_stage === '';
+			pfb_mark_pending_changes();	// applies on the next Update, not on save
+			$failure = $cache_ok ? '' : '&schcache=failed&schstage=' . $cache_stage;
+			header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}{$failure}");
+			exit;
+		}
+	}
+	if ($input_errors) {
 		// Restore $_POST data on input errors
 		foreach ($_POST as $key => $value) {
 			if (strpos($key, '-') !== FALSE) {

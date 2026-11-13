@@ -117,6 +117,24 @@ switch ($gtype) {
 		break;
 }
 
+// issue #3945: actions and empty-row cleanup share Core's config lock, from a fresh read through the write.
+$pfb_config_lock = NULL;
+$pfb_groups_changed = FALSE;
+$pfb_first_row = $conf_type !== '' ? config_get_path("installedpackages/{$conf_type}/config/0") : NULL;
+if ($action !== '' || ($pfb_first_row !== NULL && empty($pfb_first_row))) {
+	$pfb_config_lock = pfb_dns_config_lock();
+	if ($pfb_config_lock === NULL && $action !== '') {
+		$pfb_lock_error = 'Groups: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
+		if ($action === 'del') {
+			$savemsg = "Could not delete [ Type: {$type} ]: {$pfb_lock_error}";
+			header("Location: /pfblockerng/pfblockerng_category.php?type={$gtype}&savemsg={$savemsg}");
+		} else {
+			print(json_encode(array($pfb_lock_error)));
+		}
+		exit;
+	}
+}
+
 // Collect rowdata
 if ($type != 'GeoIP') {
 	$rowdata_path = "installedpackages/{$conf_type}/config";
@@ -142,200 +160,242 @@ if ($type != 'GeoIP') {
 }
 
 // Remove any empty '<config></config>' XML tags
-if (isset($rowdata[0]) && empty($rowdata[0])) {
+if ($pfb_config_lock !== NULL && isset($rowdata[0]) && empty($rowdata[0]) && isset($rowdata_path)) {
 	unset($rowdata[0]);
 	$rowdata = array_values($rowdata);
-	if (isset($rowdata_path)) {
-		config_set_path($rowdata_path, $rowdata);
+	config_set_path($rowdata_path, $rowdata);
+	$pfb_cleanup_completed = FALSE;
+	try {
+		$pfb_written = write_config("pfBlockerNG: Removed empty rowdata", FALSE);
+		$pfb_groups_changed = !pfb_dns_config_write_failed($pfb_written);
+		$pfb_cleanup_completed = TRUE;
+	} finally {
+		if ($action === '' || !$pfb_cleanup_completed) {
+			unlock($pfb_config_lock);
+			$pfb_config_lock = NULL;
+		}
 	}
-	$pfb_written = write_config("pfBlockerNG: Removed empty rowdata", FALSE);
-	if ($pfb_written !== FALSE && $pfb_written !== -1) {
-		pfb_core_settings_changed(NULL, TRUE);	// issue #3937: Core reads the groups again; a failure never undoes the save
-	}
+}
+if ($action === '' && $pfb_config_lock !== NULL) {
+	unlock($pfb_config_lock);
+}
+if ($action === '' && $pfb_groups_changed) {
+	pfb_core_settings_changed(NULL, TRUE);
 }
 
 if (!empty($action) && isset($gtype) && isset($rowid)) {
 
 	switch ($action) {
 		case 'del':
-			// Delete Table row (via POST)
-			$name = pfb_filter($rowdata[$rowid]['aliasname'], PFB_FILTER_WORD, 'Category');
-			if (!empty($name) && isset($rowdata[$rowid])) {
-				// issue #1014/#1019/#2060: close the deleted alias's alias-pass-managed
-				// ledger entries (download, script) before the row config node is gone.
-				pfb_sync_status_close_removed_alias($gtype, $name, $pfb['dbdir']);
-				unset($rowdata[$rowid]);
-				if (isset($rowdata_path)) {
-					config_del_path("{$rowdata_path}/{$rowid}");
+			try {
+				$name = pfb_filter($rowdata[$rowid]['aliasname'] ?? '', PFB_FILTER_WORD, 'Category');
+				if (!empty($name) && isset($rowdata[$rowid])) {
+					// issue #1014/#1019/#2060: close the alias-pass ledger before the row config node is gone.
+					pfb_sync_status_close_removed_alias($gtype, $name, $pfb['dbdir']);
+					if (isset($rowdata_path)) {
+						unset($rowdata[$rowid]);
+						config_set_path($rowdata_path, array_values($rowdata));
+					}
+					$pfb_written = write_config("pfBlockerNG: Removed [ {$type} | {$name} ]", FALSE);
+					if (pfb_dns_config_write_failed($pfb_written)) {
+						$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ]: the configuration could not be written. Save again in a moment.";
+					} else {
+						$pfb_groups_changed = TRUE;
+						pfb_mark_pending_changes();	// applies on the next Update, not on save
+						$savemsg = "Removed [ Type: {$type}, Name: {$name} ]";
+					}
+				} else {
+					$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ], not found";
 				}
-				$pfb_written = write_config("pfBlockerNG: Removed [ {$type} | {$name} ]", FALSE);
-				pfb_mark_pending_changes();	// applies on the next Update, not on save
-				if ($pfb_written !== FALSE && $pfb_written !== -1) {
-					pfb_core_settings_changed(NULL, TRUE);	// issue #3937: Core reads the groups again; a failure never undoes the save
-				}
-				$savemsg = "Removed [ Type: {$type}, Name: {$name} ]";
-			} else {
-				$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ], not found";
+			} finally {
+				unlock($pfb_config_lock);
+			}
+			if ($pfb_groups_changed) {
+				pfb_core_settings_changed(NULL, TRUE);	// outside the lock: a slow Core must not hold it
 			}
 			header("Location: /pfblockerng/pfblockerng_category.php?type={$gtype}&savemsg={$savemsg}");
 			exit;
 
 		case 'update':
-			// issue #1496: reads at 251/286/300 hit undefined on normal AJAX
-			// act=update/reorder flows with no init (the old idiom was a no-op).
-			// No isset($input_errors) consumer downstream -- safe unconditional init.
-			$input_errors = array();
-			// issue #3288: a VALIDATED bulk Save runs the upgrade facade BEFORE
-			// persisting choices. $rowdata (read at :123) is now stale for any row
-			// the facade just converted -- refresh before postdata/ids[] below.
-			if ($gtype == 'dnsbl' && pfb_dnsbl_policy_upgrade()) {
-				$rowdata = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
-			}
-			if (is_array($rowdata)) {
-				$cron_values = array(	'Never',
-							'01hour',
-							'02hours',
-							'03hours',
-							'04hours',
-							'06hours',
-							'08hours',
-							'12hours',
-							'EveryDay',
-							'Weekly'
-							);
+			try {
+				// issue #1496: reads at 251/286/300 hit undefined on normal AJAX
+				// act=update/reorder flows with no init (the old idiom was a no-op).
+				// No isset($input_errors) consumer downstream -- safe unconditional init.
+				$input_errors = array();
+				// issue #3288: a VALIDATED bulk Save runs the upgrade facade BEFORE
+				// persisting choices. $rowdata (read at :123) is now stale for any row
+				// the facade just converted -- refresh before postdata/ids[] below.
+				if ($gtype == 'dnsbl' && pfb_dnsbl_policy_upgrade()) {
+					$rowdata = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
+				}
+				if (is_array($rowdata)) {
+					$cron_values = array(	'Never',
+								'01hour',
+								'02hours',
+								'03hours',
+								'04hours',
+								'06hours',
+								'08hours',
+								'12hours',
+								'EveryDay',
+								'Weekly'
+								);
 
-				$aliaslog_values = array('enabled',
-							'disabled',
-							'disabled_log',
-							'nxdomain_log',	// issue #31: NXDOMAIN logging
-							'nxdomain',	// issue #31: NXDOMAIN no logging
-							'nodata_log',	// issue #3243: NODATA logging
-							'nodata'	// issue #3243: NODATA no logging
-							);
+					$aliaslog_values = array('enabled',
+								'disabled',
+								'disabled_log',
+								'nxdomain_log',	// issue #31: NXDOMAIN logging
+								'nxdomain',	// issue #31: NXDOMAIN no logging
+								'nodata_log',	// issue #3243: NODATA logging
+								'nodata'	// issue #3243: NODATA no logging
+								);
 
-				// issue #3288: the DNSBL-only 'logging' field additionally accepts the
-				// live-inheritance 'default' token; 'aliaslog' (ipv4/ipv6) does not.
-				$logging_values = array_merge($aliaslog_values, array('default'));
+					// issue #3288: the DNSBL-only 'logging' field additionally accepts the
+					// live-inheritance 'default' token; 'aliaslog' (ipv4/ipv6) does not.
+					$logging_values = array_merge($aliaslog_values, array('default'));
 
 
-				// Parse POST and save new values
-				if (!empty($post_data) && is_array($post_data)) {
-					foreach ($post_data as $key => $value) {
-						if (strpos($key, '-') !== FALSE) {
-							$k_field = explode('-', $key);
+					// Parse POST and save new values
+					if (!empty($post_data) && is_array($post_data)) {
+						foreach ($post_data as $key => $value) {
+							if (strpos($key, '-') !== FALSE) {
+								$k_field = explode('-', $key);
 
-							if (count($k_field) != 2) {
-								$input_errors[] = "Failed too many fields: " . htmlspecialchars($key);
-							}
+								if (count($k_field) != 2) {
+									$input_errors[] = "Failed too many fields: " . htmlspecialchars($key);
+								}
 
-							// Validate Variable names
-							$valid_vars = ($gtype === 'dnsbl') ? array('action', 'cron', 'logging') : array('action', 'cron', 'aliaslog');
-							if (in_array($k_field[0], $valid_vars)) {
-								$variable = $k_field[0];
-							} else {
-								$input_errors[] = "Failed Variable: " . htmlspecialchars($k_field[0]);
-								// issue #1496: mirrors the sibling continue below (!is_string($value))
-								// -- without it, switch ($variable) runs with $variable undefined on
-								// an invalid prefix, producing a warning plus a second garbled error.
-								continue;
-							}
-
-							// Validate Rowid
-							$temp_value = pfb_filter($k_field[1], PFB_FILTER_NUM, 'Category');
-							if (!empty($temp_value) || $k_field[1] == 0) {
-								$rowid = $temp_value ?: 0;
-							} else {
-								$input_errors[] = "Failed Rowid: " . htmlspecialchars($k_field[1]);
-							}
-							if (!is_string($value)) {
-								$input_errors[] = 'Failed Value';
-								continue;
-							}
-
-							switch ($variable) {
-								case 'action':
-									if (!pfb_group_action_valid($value, $gtype)) {
-										$input_errors[] = "Failed Action: " . htmlspecialchars($value);
-									}
-									break;
-								case 'cron':
-									if (!in_array($value, $cron_values)) {
-										$input_errors[] = "Failed Cron: " . htmlspecialchars($value);
-									}
-									break;
-								case 'aliaslog':
-									if ($gtype === 'dnsbl' || !in_array($value, $aliaslog_values)) {
-										$input_errors[] = "Failed Aliaslog: " . htmlspecialchars($value);
-									}
-									break;
-								case 'logging':
-									if ($gtype !== 'dnsbl' || !in_array($value, $logging_values)) {
-										$input_errors[] = "Failed Logging: " . htmlspecialchars($value);
-									}
-									break;
-								default:
-									$input_errors[] = "Failed variable name: " . htmlspecialchars($variable);
-							}
-
-							if (!$input_errors) {
-								if ($gtype != 'geoip') {
-									$rowdata[$rowid][$variable] = pfb_filter($value, PFB_FILTER_HTML, 'Category');
-									if (isset($rowdata_path)) {
-										config_set_path("{$rowdata_path}/{$rowid}/{$variable}", $rowdata[$rowid][$variable]);
-									}
+								// Validate Variable names
+								$valid_vars = ($gtype === 'dnsbl') ? array('action', 'cron', 'logging') : array('action', 'cron', 'aliaslog');
+								if (in_array($k_field[0], $valid_vars)) {
+									$variable = $k_field[0];
 								} else {
-									$continent = pfb_filter(strtolower(str_replace(' ', '', $rowdata[$rowid]['aliasname'])), PFB_FILTER_HTML, 'Category');
+									$input_errors[] = "Failed Variable: " . htmlspecialchars($k_field[0]);
+									// issue #1496: mirrors the sibling continue below (!is_string($value))
+									// -- without it, switch ($variable) runs with $variable undefined on
+									// an invalid prefix, producing a warning plus a second garbled error.
+									continue;
+								}
 
-									config_set_path("installedpackages/pfblockerng{$continent}/config/0/{$variable}", pfb_filter($value, PFB_FILTER_HTML, 'Category'));
+								// Validate Rowid
+								$temp_value = pfb_filter($k_field[1], PFB_FILTER_NUM, 'Category');
+								if (!empty($temp_value) || $k_field[1] == 0) {
+									$rowid = $temp_value ?: 0;
+								} else {
+									$input_errors[] = "Failed Rowid: " . htmlspecialchars($k_field[1]);
+								}
+								if (!isset($rowdata[$rowid])) {
+									$input_errors[] = "Failed Rowid: group not found: " . htmlspecialchars($k_field[1]);
+									continue;
+								}
+								if (!is_string($value)) {
+									$input_errors[] = 'Failed Value';
+									continue;
+								}
+
+								switch ($variable) {
+									case 'action':
+										if (!pfb_group_action_valid($value, $gtype)) {
+											$input_errors[] = "Failed Action: " . htmlspecialchars($value);
+										}
+										break;
+									case 'cron':
+										if (!in_array($value, $cron_values)) {
+											$input_errors[] = "Failed Cron: " . htmlspecialchars($value);
+										}
+										break;
+									case 'aliaslog':
+										if ($gtype === 'dnsbl' || !in_array($value, $aliaslog_values)) {
+											$input_errors[] = "Failed Aliaslog: " . htmlspecialchars($value);
+										}
+										break;
+									case 'logging':
+										if ($gtype !== 'dnsbl' || !in_array($value, $logging_values)) {
+											$input_errors[] = "Failed Logging: " . htmlspecialchars($value);
+										}
+										break;
+									default:
+										$input_errors[] = "Failed variable name: " . htmlspecialchars($variable);
+								}
+
+								if (!$input_errors) {
+									if ($gtype != 'geoip') {
+										$rowdata[$rowid][$variable] = pfb_filter($value, PFB_FILTER_HTML, 'Category');
+										if (isset($rowdata_path)) {
+											config_set_path("{$rowdata_path}/{$rowid}/{$variable}", $rowdata[$rowid][$variable]);
+										}
+									} else {
+										$continent = pfb_filter(strtolower(str_replace(' ', '', $rowdata[$rowid]['aliasname'])), PFB_FILTER_HTML, 'Category');
+
+										config_set_path("installedpackages/pfblockerng{$continent}/config/0/{$variable}", pfb_filter($value, PFB_FILTER_HTML, 'Category'));
+									}
 								}
 							}
 						}
 					}
-				}
 
-				// Save new Table order format (via AJAX)
-				if (!empty($post_ids['ids']) && is_array($post_ids['ids'])) {
-					$new_rows = array();
-					foreach ($post_ids['ids'] as $key => $value) {
+					// Save new Table order format (via AJAX)
+					if (!empty($post_ids['ids']) && is_array($post_ids['ids'])) {
+						$new_rows = array();
+						$pfb_ordered_rows = array();
+						foreach ($post_ids['ids'] as $key => $value) {
 
-						$temp_value = pfb_filter($key, PFB_FILTER_NUM, 'Category');
-						if (!empty($temp_value) || $key == 0) {
-							$key = $temp_value ?: 0;
-						} else {
-							$input_errors[] = "IDS Failed " . htmlspecialchars($key);
-						}
+							$temp_value = pfb_filter($key, PFB_FILTER_NUM, 'Category');
+							if (!empty($temp_value) || $key == 0) {
+								$key = $temp_value ?: 0;
+							} else {
+								$input_errors[] = "IDS Failed " . htmlspecialchars($key);
+							}
 
-						$temp_value = pfb_filter(str_replace('r', '', $value), PFB_FILTER_NUM, 'Category');
-						if (!empty($temp_value) || $value == 'r0') {
-							$rowid = $temp_value ?: 0;
-						} else {
-							$input_errors[] = "IDS Failed Rowid: " . htmlspecialchars($value);
+							$temp_value = pfb_filter(str_replace('r', '', $value), PFB_FILTER_NUM, 'Category');
+							if (!empty($temp_value) || $value == 'r0') {
+								$rowid = $temp_value ?: 0;
+							} else {
+								$input_errors[] = "IDS Failed Rowid: " . htmlspecialchars($value);
+							}
+
+							if (!isset($rowdata[$rowid])) {
+								$input_errors[] = "IDS Failed Rowid: group not found: " . htmlspecialchars($value);
+							}
+							if (!$input_errors) {
+								$new_rows[$key] = $rowdata[$rowid];
+								$pfb_ordered_rows[$rowid] = TRUE;
+							}
 						}
 
 						if (!$input_errors) {
-							$new_rows[$key] = $rowdata[$rowid];
+							// Core may have appended groups since this form read the order: keep the unposted rows.
+							foreach ($rowdata as $pfb_row_key => $pfb_row) {
+								if (!isset($pfb_ordered_rows[$pfb_row_key])) {
+									$new_rows[] = $pfb_row;
+								}
+							}
+							$rowdata = $new_rows;
+							if (isset($rowdata_path)) {
+								config_set_path($rowdata_path, $rowdata);
+							}
 						}
 					}
 
+					// Save postdata and Table re-ordering
 					if (!$input_errors) {
-						$rowdata = $new_rows;
-						if (isset($rowdata_path)) {
-							config_set_path($rowdata_path, $rowdata);
+						$pfb_written = write_config("pfBlockerNG: Saved page order format/settings for [ {$type} ]", FALSE);
+						if (pfb_dns_config_write_failed($pfb_written)) {
+							$input_errors[] = 'Groups: the configuration could not be written, so these settings were not saved. Save again in a moment.';
+						} else {
+							$pfb_groups_changed = TRUE;
+							pfb_mark_pending_changes();	// applies on the next Update, not on save
 						}
 					}
-				}
-
-				// Save postdata and Table re-ordering
-				if (!$input_errors) {
-					$pfb_written = write_config("pfBlockerNG: Saved page order format/settings for [ {$type} ]", FALSE);
-					pfb_mark_pending_changes();	// applies on the next Update, not on save
-					if ($pfb_written !== FALSE && $pfb_written !== -1) {
-						pfb_core_settings_changed(NULL, TRUE);	// issue #3937: Core reads the groups again; a failure never undoes the save
+					if ($input_errors) {
+						print(json_encode($input_errors));
 					}
-				} else {
-					// return errors to AJAX request
-					print(json_encode($input_errors));
 				}
+			} finally {
+				unlock($pfb_config_lock);
+			}
+			if ($pfb_groups_changed) {
+				pfb_core_settings_changed(NULL, TRUE);	// outside the lock: a slow Core must not hold it
 			}
 	}
 	exit;
