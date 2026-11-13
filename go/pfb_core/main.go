@@ -1,14 +1,19 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
-//	--state-dir DIR     Core's own storage (its lock core.lock and, without --settings-backend-cmd, the settings store
-//	                    settings.json): made 0700, the server's user's alone; one Core at a time may use it
+//	--state-dir DIR     Core's own storage (its lock core.lock, the settings store settings.json without
+//	                    --settings-backend-cmd, and with --update-cmd the scheduler's schedule_state.json and the Update's
+//	                    update.log): made 0700, the server's user's alone; one Core at a time may use it
 //	--settings-backend-cmd PATH
 //	                    keep the settings in the program at PATH instead of settings.json: Core runs it once per read or
 //	                    write of the settings, a JSON request on its stdin and its JSON reply on stdout (settings.AdapterBackend)
+//	--update-cmd PATH   run the quarter-hour scheduler and serve the singleton Update (StartUpdate, GetUpdate, GetSchedule): Core
+//	                    runs the program at PATH once per Update, its request on stdin, stdout and stderr in update.log and
+//	                    its result on fd 3 (update.Command). Without it those methods answer unavailable. A stop while an
+//	                    Update runs ends it (TERM to its process group, KILL after 5 s) and nothing is resumed
 //	--allow-uid UID     the privileged caller's uid, read from the kernel's credential of each connection (default 0, root)
 //	--client-uid UID    a further local client's uid also served (pfb-dns's user); repeatable
 //	--socket-group GID  open the socket's directory (0750) and the socket (0660) to this group, so that a client that is
@@ -47,6 +52,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	socket := fl.String("socket", "", "the API's Unix socket (required)")
 	stateDir := fl.String("state-dir", "", "Core's storage directory (required)")
 	backendCmd := fl.String("settings-backend-cmd", "", "keep the settings in this program instead of the state directory's file")
+	updateCmd := fl.String("update-cmd", "", "run the scheduler and the Updates through this program")
 	var allowUID uint32
 	fl.Func("allow-uid", "the privileged caller's uid (default 0)", func(v string) error {
 		uid, err := strconv.ParseUint(v, 10, 32)
@@ -75,7 +81,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 2
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
@@ -103,6 +109,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	logger.Printf("settings: %s revision %d", kind, snap.Revision)
 	methods := productionMethods()
 	maps.Copy(methods, settingsMethods(store))
+	sched, gate := newUpdates(*updateCmd, *stateDir, store, logger.Printf) // nil without --update-cmd
+	maps.Copy(methods, updateMethods(sched, gate))
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})
 	if err != nil {
@@ -112,12 +120,15 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	served := make(chan error, 1)
 	go func() { served <- srv.serve() }()
 	logger.Printf("serving API %s on %s for uid %d, clients %v", apiVersion, *socket, allowUID, clients)
+	stopUpdates := runUpdates(ctx, sched, gate)
+	defer stopUpdates()
 	select {
 	case err := <-served:
 		logger.Printf("stopped serving: %v", err)
 		return 1
 	case <-ctx.Done():
 	}
+	stopUpdates() // the Update running ends before the server does: a client that asks again then gets unavailable
 	stop, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	if err := srv.shutdown(stop); err != nil && !errors.Is(err, context.DeadlineExceeded) {
