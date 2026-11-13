@@ -41,9 +41,10 @@ var (
 	absoluteRef = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://`)
 )
 
-// rawURL is parse_url()'s view of an absolute URL: the host is taken verbatim, before any decoding.
+// rawURL is parse_url()'s view of an absolute URL: the host is taken verbatim, before any decoding. userinfo and query
+// keep their '@' and '?', an empty one included, as parse_url() reports and pfb_feed_redirect_target rebuilds them.
 type rawURL struct {
-	scheme, user, host, port, path, query string
+	scheme, userinfo, host, port, path, query string
 }
 
 func parseRaw(s string) (rawURL, bool) {
@@ -58,7 +59,7 @@ func parseRaw(s string) (rawURL, bool) {
 	}
 	authority, tail := rest[:end], rest[end:]
 	if at := strings.LastIndex(authority, "@"); at >= 0 {
-		r.user, authority = authority[:at], authority[at+1:]
+		r.userinfo, authority = authority[:at+1], authority[at+1:]
 	}
 	r.host = authority
 	if i := strings.LastIndex(authority, ":"); i >= 0 && !strings.HasPrefix(authority, "[") {
@@ -74,7 +75,10 @@ func parseRaw(s string) (rawURL, bool) {
 		return rawURL{}, false
 	}
 	tail, _, _ = strings.Cut(tail, "#")
-	r.path, r.query, _ = strings.Cut(tail, "?")
+	r.path = tail
+	if i := strings.IndexByte(tail, '?'); i >= 0 {
+		r.path, r.query = tail[:i], tail[i:]
+	}
 	return r, true
 }
 
@@ -87,37 +91,33 @@ func (r rawURL) portNum() int {
 	return schemePorts[r.scheme]
 }
 
-// withHost is the URL with its host replaced, as pfb_feed_redirect_target rebuilds a redirect target on its mapped host.
+// withHost is the URL with its host replaced and the fragment dropped (pfb_feed_redirect_target's rebuild).
 func (r rawURL) withHost(host string) string {
-	u := r.scheme + "://"
-	if r.user != "" {
-		u += r.user + "@"
-	}
-	u += host
+	u := r.scheme + "://" + r.userinfo + host
 	if r.port != "" {
 		u += ":" + r.port
 	}
-	u += r.path
-	if r.query != "" {
-		u += "?" + r.query
-	}
-	return u
+	return u + r.path + r.query
 }
 
-// literalReason refuses a host that a client would not dial as written and returns the host to resolve, vet and dial
-// (pfb_feed_host_literal_reason: same checks, same order, same reasons). A non-ASCII host is converted by
-// feedparse.IDNToASCII, the pfb-dns profile and not ICU's (owner decision, #3813); the result must be a plain DNS host
-// name, and no IP literal.
+// mapHost is the host a client dials: a non-ASCII host through feedparse.IDNToASCII (the pfb-dns profile and not ICU's,
+// owner decision #3813), any other as written; ok is false where the conversion fails.
+func mapHost(host string) (string, bool) {
+	if strings.IndexFunc(host, func(r rune) bool { return r >= 0x80 }) < 0 {
+		return host, true
+	}
+	return feedparse.IDNToASCII(host)
+}
+
+// literalReason refuses a host that a client would not dial as written (pfb_feed_host_literal_reason: same checks, same
+// order, same reasons) and returns the host to resolve, vet and dial: the mapped host, a plain DNS name and no IP literal.
 func literalReason(host string) (mapped, reason string) {
 	if strings.HasPrefix(host, "[") {
 		return "", "feed host is a bracketed IPv6 literal"
 	}
-	mapped = host
-	if strings.IndexFunc(host, func(r rune) bool { return r >= 0x80 }) >= 0 {
-		var ok bool
-		if mapped, ok = feedparse.IDNToASCII(host); !ok {
-			return "", "feed host is not a valid IDN name"
-		}
+	mapped, ok := mapHost(host)
+	if !ok {
+		return "", "feed host is not a valid IDN name"
 	}
 	if strings.Contains(mapped, "%") {
 		return "", "feed host is percent-encoded"
@@ -325,8 +325,8 @@ func (f *Fetcher) entry(ctx context.Context, req Request) (*source, string) {
 	if reason != "" {
 		return nil, reason
 	}
-	// An rsync source goes on as written (the vetted address replaces its host); any other is requested on the mapped host.
-	if mapped != src.host && src.kind != kindRsync {
+	// The source is requested on the mapped host (an rsync source: the vetted address replaces it, filter on).
+	if mapped != src.host {
 		src.path = r.withHost(mapped)
 	}
 	src.host = mapped
@@ -470,7 +470,11 @@ func (f *Fetcher) redirectTarget(ctx context.Context, location, current string) 
 		return "", rawURL{}, netip.Addr{}, "feed redirect target is not an http(s) URL"
 	}
 	if f.NoFilter {
-		return target, r, netip.Addr{}, "" // as cURL's own following: no vetting, no pin
+		// As cURL's own following: no vetting, no pin; the host is mapped only to compare origins for the credentials.
+		if m, ok := mapHost(r.host); ok {
+			r.host = m
+		}
+		return target, r, netip.Addr{}, ""
 	}
 	pin, mapped, reason := f.vet(ctx, r.host)
 	if reason == "" && mapped != r.host {

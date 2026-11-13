@@ -1,0 +1,27 @@
+{
+ "schema": 1,
+ "description": "A feed host whose mapping yields a percent sign (fullwidth U+FF05) is refused as percent-encoded, not as an invalid IDN name: libcurl would decode it and dial another address.",
+ "hosts": {},
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "a\nb\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://a％b.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": null,
+    "reason": "feed host is percent-encoded",
+    "requests": []
+   }
+  }
+ ]
+}

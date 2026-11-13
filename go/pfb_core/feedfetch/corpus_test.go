@@ -33,7 +33,8 @@ package feedfetch_test
 //	             (absent: unchanged by the step); requests [{server, path, and only the headers sent among authorization,
 //	             if_none_match, if_modified_since, x_feed_probe, accept_encoding}] in order, plus host (the Host header as
 //	             received, "name:port"), which is checked only when the expectation names it; reason (optional: the
-//	             refusal reason); rsync_source (absent: rsync never started). No non-empty staged body may survive a step.
+//	             refusal reason; a null in an old_expect pins "no reason" for the PHP runner, this one ignores it);
+//	             rsync_source (absent: rsync never started). No non-empty staged body may survive a step.
 //	  old_expect optional, the shape of expect: present only where Core differs from the old path on purpose. This runner
 //	             asserts expect and refuses an old_expect equal to it; the PHP runner asserts old_expect instead.
 
