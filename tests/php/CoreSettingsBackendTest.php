@@ -12,7 +12,8 @@ use PHPUnit\Framework\TestCase;
  * Issue #3924: on pfSense Core keeps no settings store; it runs the settings adapter (pfb_core_settings.sh, the `core_settings`
  * verb of pfblockerng.inc) once per call, one JSON request on stdin and one JSON reply on stdout (docs/misc/core-api-protocol.md).
  * Pinned here, for the adapter that answers over config.xml:
- *   - read: the 17 native `settings/dns` fields as pfb_core_dns_settings() projects them, with their revision;
+ *   - read: the 17 native `settings/dns` fields as pfb_core_dns_settings() projects them, beside the feed projections (issue #3937,
+ *     CoreSettingsFeedsBackendTest; empty here: config.xml holds no group), with their revision;
  *   - write: every changed field reaches its registered config.xml key and only that key, under the config lock, with one
  *     write_config() and the pending-changes mark; the projection afterwards is what was asked for;
  *   - a stale revision, a refused or failed write_config(), a lock that stays taken and a failed client-IP privacy step answer
@@ -25,9 +26,12 @@ use PHPUnit\Framework\TestCase;
 final class CoreSettingsBackendTest extends TestCase
 {
 	private const FIXTURE = __DIR__ . '/../core/fixtures/settings_dns_parity.json';
-	private const MESSAGE = '[pfBlockerNG] pfBlockerNG Core saved the DNS settings';
+	private const MESSAGE = '[pfBlockerNG] pfBlockerNG Core saved the settings';
 	private const WRAPPER = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfb_core_settings.sh';
 	private const ENTRY = __DIR__ . '/bin/cli_dispatch_entry.php';
+
+	/** The feed projections of a config.xml with no group (issue #3937): every read and write carries them beside `dns`. */
+	private const FEEDS = ['feeds/ipv4' => ['groups' => []], 'feeds/ipv6' => ['groups' => []], 'feeds/dnsbl' => ['groups' => []]];
 
 	/** The native field => [registry key, default native, default stored, other native, other stored]: the table the adapter must honour. */
 	private const FIELDS = [
@@ -147,10 +151,16 @@ final class CoreSettingsBackendTest extends TestCase
 		};
 	}
 
+	/** @return array<string, mixed> every projection the adapter answers: $dns, and the feed projections of a config.xml with no group */
+	private static function settings(array $dns): array
+	{
+		return ['dns' => $dns] + self::FEEDS;
+	}
+
 	/** @return array<string, mixed> */
 	private static function writeRequest(array $current, array $wanted, ?int $expected = NULL): array
 	{
-		return ['version' => 1, 'op' => 'write', 'expectedRevision' => $expected ?? pfb_core_settings_revision(['dns' => $current]), 'settings' => ['dns' => $wanted]];
+		return ['version' => 1, 'op' => 'write', 'expectedRevision' => $expected ?? pfb_core_settings_revision(self::settings($current)), 'settings' => self::settings($wanted)];
 	}
 
 	private function backend(array $request): array
@@ -188,11 +198,13 @@ final class CoreSettingsBackendTest extends TestCase
 
 	public function testTheRevisionIsAPositiveIntThatMovesWithAnyFieldAndIsPinnedForTheDefaults(): void
 	{
-		$defaults = ['dns' => self::defaults()];
+		$defaults = self::settings(self::defaults());
 
 		$revision = pfb_core_settings_revision($defaults);
 
-		$this->assertSame(2061882488861947, $revision, 'the first 52 bits of the sha256 of the JSON of the defaults: Core compares it for equality only');
+		$key = (string) file_get_contents($GLOBALS['pfb']['core_revision_key']);
+		$this->assertSame((int) hexdec(substr(hash_hmac('sha256', (string) json_encode($defaults), $key), 0, 13)), $revision,
+			'the first 52 bits of the HMAC-SHA256 of the JSON of the defaults under the box key (#3937): Core compares it for equality only');
 		$this->assertSame($revision, pfb_core_settings_revision($defaults), 'equal settings: equal revision');
 		$this->assertLessThan(2 ** 52, $revision, 'exact in PHP, JSON and JS');
 		foreach (self::FIELDS as $field => [, , , $other]) {
@@ -215,8 +227,8 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$this->assertSame(['version', 'revision', 'settings'], array_keys($reply), "{$case['id']}: the reply's keys");
 		$this->assertSame(1, $reply['version']);
-		$this->assertSame(['dns' => $native], $reply['settings'], "{$case['id']}: the 17 native fields, in the protocol's order");
-		$this->assertSame(pfb_core_settings_revision(['dns' => $native]), $reply['revision'], "{$case['id']}: the projection's revision");
+		$this->assertSame(self::settings($native), $reply['settings'], "{$case['id']}: the 17 native fields, in the protocol's order");
+		$this->assertSame(pfb_core_settings_revision(self::settings($native)), $reply['revision'], "{$case['id']}: the projection's revision");
 		$this->assertGreaterThanOrEqual(1, $reply['revision']);
 		$this->assertSame([], $GLOBALS['pfb_test_lock_events'], 'a read takes no lock');
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
@@ -249,7 +261,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$reply = $this->backend(self::writeRequest($current, $wanted));
 
-		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(['dns' => $wanted])], $reply);
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($wanted))], $reply);
 		$this->assertSame($wanted, pfb_core_dns_settings(), 'the projection afterwards is what was asked for');
 		[$alias, $leaf] = explode('/', $key, 2);
 		$path = PFB_SECTIONS[$alias] . '/' . $leaf;
@@ -269,7 +281,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$reply = $this->backend(self::writeRequest($current, $wanted));
 
-		$this->assertSame(pfb_core_settings_revision(['dns' => $wanted]), $reply['revision']);
+		$this->assertSame(pfb_core_settings_revision(self::settings($wanted)), $reply['revision']);
 		$this->assertSame($wanted, pfb_core_dns_settings());
 		$this->assertSame([self::MESSAGE], $GLOBALS['pfb_test_write_config_calls'], 'one write_config() for all fields');
 	}
@@ -287,7 +299,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		// Then the projection is what Core asked for
 		$this->assertSame($wanted, pfb_core_dns_settings(), 'controlLegacy stays off');
-		$this->assertSame(pfb_core_settings_revision(['dns' => $wanted]), $reply['revision']);
+		$this->assertSame(pfb_core_settings_revision(self::settings($wanted)), $reply['revision']);
 	}
 
 	public function testWriteOfWhatConfigXmlAlreadyHoldsChangesNothing(): void
@@ -298,7 +310,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$reply = $this->backend(self::writeRequest($current, $current));
 
-		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(['dns' => $current])], $reply);
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings($current))], $reply);
 		$this->assertNothingWritten($before, 'nothing changed');
 	}
 
@@ -306,7 +318,7 @@ final class CoreSettingsBackendTest extends TestCase
 	{
 		$this->arrange([]);
 		$current = pfb_core_dns_settings();
-		$stale = pfb_core_settings_revision(['dns' => array_merge($current, ['regexCap' => TRUE])]);
+		$stale = pfb_core_settings_revision(self::settings(array_merge($current, ['regexCap' => TRUE])));
 		$before = $GLOBALS['config'];
 
 		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['hstsNullBlocking' => FALSE]), $stale));
@@ -380,7 +392,7 @@ final class CoreSettingsBackendTest extends TestCase
 		$reply = $this->backend(self::writeRequest($current, array_merge($current, ['metricsClientIp' => FALSE])));
 
 		// Then the stored identities were already purged when write_config() ran, and the counts remain
-		$this->assertSame(pfb_core_settings_revision(['dns' => array_merge($current, ['metricsClientIp' => FALSE])]), $reply['revision']);
+		$this->assertSame(pfb_core_settings_revision(self::settings(array_merge($current, ['metricsClientIp' => FALSE]))), $reply['revision']);
 		$this->assertSame(0, $identitiesAtWrite, 'the privacy change comes before the write');
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
 		$this->assertSame(1, $db->querySingle('SELECT count(*) FROM dns_metric_blocks'));
@@ -440,7 +452,7 @@ final class CoreSettingsBackendTest extends TestCase
 		$wanted = self::defaults();
 		$wanted['hstsNullBlocking'] = FALSE;
 		$wanted['regexCap'] = TRUE;
-		return ['version' => 1, 'op' => 'write', 'expectedRevision' => pfb_core_settings_revision(['dns' => self::defaults()]), 'settings' => ['dns' => $wanted]];
+		return ['version' => 1, 'op' => 'write', 'expectedRevision' => pfb_core_settings_revision(self::settings(self::defaults())), 'settings' => self::settings($wanted)];
 	}
 
 	/** @return array<string, array{0: array<string, mixed>, 1: ?string}> a hostile write request, and the `dns.` field its error names */
@@ -565,8 +577,12 @@ final class CoreSettingsBackendTest extends TestCase
 
 		$this->assertSame(0, $run['exit'], $run['stderr']);
 		$defaults = self::defaults();
+		// The verb's sandbox has its own revision key (#3937): its revision is any positive int, the rest is exact
+		$revision = json_decode($run['stdout'], TRUE)['revision'] ?? NULL;
+		$this->assertIsInt($revision, $run['stdout']);
+		$this->assertGreaterThan(0, $revision);
 		$this->assertSame(
-			json_encode(['version' => 1, 'revision' => pfb_core_settings_revision(['dns' => $defaults]), 'settings' => ['dns' => $defaults]]),
+			json_encode(['version' => 1, 'revision' => $revision, 'settings' => self::settings($defaults)]),
 			$run['stdout'],
 			'nothing but the reply on stdout: ' . $run['stderr']
 		);
@@ -582,7 +598,7 @@ final class CoreSettingsBackendTest extends TestCase
 			'a list'             => ['[1, 2]'],
 			'not JSON'           => ['{"version":'],
 			'nothing'            => [''],
-			'over 1 MiB'         => ['{"version":1,"op":"read"}' . str_repeat(' ', 1048576)],
+			'over 32 MiB'        => ['{"version":1,"op":"read"}' . str_repeat(' ', PFB_CORE_SETTINGS_MAX_REQUEST)],
 		];
 	}
 
@@ -602,8 +618,8 @@ final class CoreSettingsBackendTest extends TestCase
 	public function testTheVerbAnswersAWriteOfAStaleRevisionAsAConflictOnAnOtherwiseEmptyStdout(): void
 	{
 		// Given a write whose expected revision is not the one config.xml projects
-		$stale = pfb_core_settings_revision(['dns' => array_merge(self::defaults(), ['regexCap' => TRUE])]);
-		$request = ['version' => 1, 'op' => 'write', 'expectedRevision' => $stale, 'settings' => ['dns' => array_merge(self::defaults(), ['hstsNullBlocking' => FALSE])]];
+		$stale = pfb_core_settings_revision(self::settings(array_merge(self::defaults(), ['regexCap' => TRUE])));
+		$request = ['version' => 1, 'op' => 'write', 'expectedRevision' => $stale, 'settings' => self::settings(array_merge(self::defaults(), ['hstsNullBlocking' => FALSE]))];
 
 		// When the verb serves it
 		$run = $this->verb((string) json_encode($request));
@@ -663,7 +679,7 @@ final class CoreSettingsBackendTest extends TestCase
 
 		// Then both worked, and the stand-in got nothing
 		$this->assertArrayHasKey('settings', $read);
-		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(['dns' => array_merge($current, ['metricsClientIp' => FALSE, 'hstsNullBlocking' => FALSE])])], $write);
+		$this->assertSame(['version' => 1, 'revision' => pfb_core_settings_revision(self::settings(array_merge($current, ['metricsClientIp' => FALSE, 'hstsNullBlocking' => FALSE])))], $write);
 		$this->assertFileDoesNotExist($record, 'the adapter called Core');
 		$this->assertSame(200, pfb_core_call('GetVersion')['status'], 'positive control: a call is recorded');
 		$this->assertFileExists($record);

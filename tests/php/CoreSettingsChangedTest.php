@@ -68,10 +68,10 @@ final class CoreSettingsChangedTest extends TestCase
 		return self::ok(['initialized' => TRUE, 'revision' => $revision, 'projections' => []]);
 	}
 
-	/** The revision config.xml projects now: what Core's adapter would answer for a read. */
+	/** The revision config.xml projects now: what Core's adapter answers for a read (issue #3937: all of its projections). */
 	private static function projected(): int
 	{
-		return pfb_core_settings_revision(['dns' => pfb_core_dns_settings()]);
+		return pfb_core_settings_backend(['version' => 1, 'op' => 'read'])['revision'];
 	}
 
 	/**
@@ -136,6 +136,28 @@ final class CoreSettingsChangedTest extends TestCase
 		$this->assertNull(pfb_core_settings_changed($core));
 		$this->assertSame(['GetSettings', 'SettingsChanged'], $this->methods());
 		$this->assertNotSame($held, self::projected(), 'the change moved the projection');
+	}
+
+	public function testATickTellsCoreWhenOnlyAFeedGroupChangedInConfigXml(): void
+	{
+		// Given Core at the revision the adapter answers for a config.xml with one IPv4 group
+		$group = 'installedpackages/pfblockernglistsv4/config/0';
+		config_set_path($group, ['aliasname' => 'Spam', 'action' => 'Deny_Inbound', 'cron' => 'Never',
+			'row' => [['format' => 'auto', 'state' => 'Enabled', 'url' => 'https://example.org/drop.txt', 'header' => 'Drop']]]);
+		$held = self::projected();
+		$core = $this->core(['GetSettings' => self::held($held)]);
+		$this->assertNull(pfb_core_settings_changed($core), 'before-state: Core agrees');
+		$this->assertSame(['GetSettings'], $this->methods());
+
+		// When only the group's feed source changes (the DNS settings stay as they are)
+		$dns = pfb_core_dns_settings();
+		config_set_path("{$group}/row/0/url", 'https://example.org/edrop.txt');
+		$this->assertSame($dns, pfb_core_dns_settings());
+		$core = $this->core(['GetSettings' => self::held($held), 'SettingsChanged' => self::held(self::projected())]);
+
+		// Then the next tick tells Core: the revision it compares is the one of every projection the adapter answers
+		$this->assertNull(pfb_core_settings_changed($core));
+		$this->assertSame(['GetSettings', 'SettingsChanged'], $this->methods());
 	}
 
 	public function testATickReportsCoreBeingDownWithoutTellingItAndCoreComingBackClearsIt(): void

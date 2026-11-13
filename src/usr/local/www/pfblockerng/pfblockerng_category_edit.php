@@ -944,7 +944,10 @@ if ($_POST && isset($_POST['save'])) {
 
 		$name = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname") ?: 'Unknown';
 		$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";
-		write_config("pfBlockerNG: {$savemsg}");
+		$pfb_written = write_config("pfBlockerNG: {$savemsg}");
+		if ($pfb_written !== FALSE && $pfb_written !== -1) {
+			pfb_core_settings_changed(NULL, TRUE);	// issue #3937: Core reads the groups again; a failure never undoes the save
+		}
 		$runtime_model = pfb_schedule_runtime_config();
 		$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
 		$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();

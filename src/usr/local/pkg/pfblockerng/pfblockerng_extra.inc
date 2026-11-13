@@ -7243,7 +7243,7 @@ function pfblockerng_tick(
 	// issue #3515: a renewed Resolver certificate reaches the running gateway between applies, pushed on its control socket
 	pfb_dns_proxy_certificate_sync();
 
-	// issue #3924: tell Core when config.xml's settings/dns moved past what it holds (a failed notice, a restore, an HA receive), also while a pass runs
+	// issue #3924: tell Core when config.xml's settings (#3937: the feed groups too) moved past what it holds (a failed notice, a restore, an HA receive), also while a pass runs
 	($core_settings ?? 'pfb_core_settings_changed')();
 
 	// issue #3848: a gateway stopped because no loopback port pair was free for Unbound's backend is not started by a tick that finds nothing: it

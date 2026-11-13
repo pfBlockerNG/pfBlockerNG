@@ -16,7 +16,7 @@ import (
 
 const (
 	protocolVersion = 1
-	maxReply        = 1 << 20          // the stdout a call accepts
+	maxReply        = 32 << 20         // the stdout a call accepts: the feed projections carry custom lists
 	maxStderr       = 4 << 10          // the stderr tail kept for an error message
 	waitDelay       = time.Second      // how long a grandchild holding the adapter's pipes may keep a call waiting
 	readTimeout     = 10 * time.Second // under the API's 25 s method deadline
@@ -103,7 +103,7 @@ func (a *AdapterBackend) call(timeout time.Duration, req request) (*reply, error
 	}
 	switch {
 	case out.over:
-		return nil, backendErr("the reply is over 1 MiB")
+		return nil, backendErr("the reply is over 32 MiB")
 	case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return nil, backendErr("timed out after %s", timeout)
 	case errors.Is(err, exec.ErrWaitDelay):

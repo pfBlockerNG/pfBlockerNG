@@ -4147,7 +4147,12 @@ const PFB_CORE_API_VERSION = 'v1';
 // issue #3924: the settings adapter Core runs once per settings call (--settings-backend-cmd): pfblockerng.inc's `core_settings` verb behind a sh wrapper (the package installs *.sh executable)
 const PFB_CORE_SETTINGS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_settings.sh';
 // The adapter reads at most this many bytes of request from stdin
-const PFB_CORE_SETTINGS_MAX_REQUEST = 1048576;
+const PFB_CORE_SETTINGS_MAX_REQUEST = 33554432;	// 32 MiB, as Core takes a reply: the feed projections carry custom lists
+// issue #3937: Core's feed projections, each over one config.xml section of groups, in the protocol's order
+const PFB_CORE_FEED_SECTIONS = ['feeds/ipv4' => 'pfblockernglistsv4', 'feeds/ipv6' => 'pfblockernglistsv6', 'feeds/dnsbl' => 'pfblockerngdnsbl'];
+// The Groups editor's update frequencies, and its feed states (native => stored)
+const PFB_CORE_FEED_CRON = ['Never', '01hour', '02hours', '03hours', '04hours', '06hours', '08hours', '12hours', 'EveryDay', 'Weekly'];
+const PFB_CORE_FEED_STATES = ['enabled' => 'Enabled', 'disabled' => 'Disabled', 'hold' => 'Hold', 'flex' => 'Flex'];
 // Kept in $pfb like the other runtime paths, so a unit test points them at its own files. The socket's directory is root's alone (0700).
 $pfb['core_socket'] = '/var/run/pfb_core/api.sock';
 // issue #3842: Core's own storage and lock, root's alone (0700). Not under /var: it survives a RAM-disk reboot.
@@ -4159,6 +4164,8 @@ $pfb['core_daemon_pidfile'] = '/var/run/pfb_core_daemon.pid';
 $pfb['core_lockfile'] = '/var/run/pfb_core.lock';
 // issue #3924: why Core was last not told that the DNS settings changed (kept until a notice succeeds); DNS General shows it
 $pfb['core_settings_failed'] = "{$pfb['dbdir']}/core_settings_failed";
+// issue #3937: the key of the settings revision (root's alone, 0600), made on first use; a new key moves the revision once
+$pfb['core_revision_key'] = "{$pfb['dbdir']}/core_revision.key";
 
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
@@ -4627,13 +4634,434 @@ function pfb_core_dns_settings(): array {
 }
 
 /**
- * The revision of Core's settings as config.xml projects them (issue #3924): 52 bits of the sha256 of their JSON, exact in PHP,
- * JSON and JS and never 0. Core and the Outpost compare it for equality only: equal settings, equal revision, on any node.
+ * The revision of Core's settings as config.xml projects them (issue #3924): 52 bits of the HMAC-SHA256 of their JSON, exact in PHP,
+ * JSON and JS and never 0. Core and the Outpost compare it for equality only: equal settings, equal revision, on this box. Keyed
+ * (issue #3937) because the settings hold feed credentials and Core shows the revision to its clients: without the key it confirms
+ * no guess. Every caller passes all of the projections (pfb_core_settings()): Core sends the adapter's revision back as expectedRevision.
  *
- * @param array{dns: array<string, bool|int|string>} $settings
+ * @param array<string, array<string, mixed>> $settings
  */
 function pfb_core_settings_revision(array $settings): int {
-	return (int) hexdec(substr(hash('sha256', (string) json_encode($settings)), 0, 13)) ?: 1;
+	return (int) hexdec(substr(hash_hmac('sha256', (string) json_encode($settings, JSON_INVALID_UTF8_SUBSTITUTE), pfb_core_revision_key()), 0, 13)) ?: 1;
+}
+
+/** The revision key at $pfb['core_revision_key']: 32 random bytes, created 0600 when missing (issue #3937). Throws when unusable. */
+function pfb_core_revision_key(): string {
+	global $pfb;
+	$path = $pfb['core_revision_key'];
+	if (!file_exists($path)) {
+		@mkdir(dirname($path), 0755, TRUE);
+	}
+	$fh = file_exists($path) ? FALSE : @fopen($path, 'x');	// 'x': of two first callers, one creates it
+	if ($fh !== FALSE) {
+		chmod($path, 0600);
+		$written = fwrite($fh, random_bytes(32));
+		fclose($fh);
+		if ($written !== 32) {
+			@unlink($path);
+			throw new RuntimeException("cannot write the settings revision key {$path}");
+		}
+	}
+	$key = @file_get_contents($path);
+	if (!is_string($key) || strlen($key) !== 32) {
+		throw new RuntimeException("cannot read the settings revision key {$path}");
+	}
+	return $key;
+}
+
+/**
+ * Every projection Core reads through its settings adapter, in the protocol's order (issue #3937): `dns`, then each feed projection
+ * as `groups`, config.xml's groups that project (pfb_core_feed_groups()) with their feeds, in config order.
+ *
+ * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
+ * @return array<string, array<string, mixed>>
+ */
+function pfb_core_settings(?callable $interfaces = NULL): array {
+	$settings = ['dns' => pfb_core_dns_settings()];
+	foreach (array_keys(PFB_CORE_FEED_SECTIONS) as $projection) {
+		$groups = [];
+		foreach (pfb_core_feed_groups($projection, $interfaces ?? 'pfb_core_interface_addresses') as $group) {
+			$group['feeds'] = array_values($group['feeds']);
+			$groups[] = $group;
+		}
+		$settings[$projection] = ['groups' => $groups];
+	}
+	return $settings;
+}
+
+/**
+ * realif => its IPv4 address ('' when it has none), for every interface the Groups editor offers as a Source Interface (issue #3937).
+ *
+ * @return array<string, string>
+ */
+function pfb_core_interface_addresses(): array {
+	$addresses = [];
+	foreach (array_keys(get_configured_interface_list_by_realif()) as $realif) {
+		$addresses[(string) $realif] = (string) find_interface_ip($realif);
+	}
+	return $addresses;
+}
+
+/** The feed formats of a group type (the Groups editor's choices). @return list<string> */
+function pfb_core_feed_formats(string $gtype): array {
+	return $gtype === 'dnsbl' ? ['auto', 'rsync'] : ['auto', 'geoip', 'regex', 'whois', 'asn', 'rsync'];
+}
+
+/** A group name the download path takes: a word, at most 24 characters for an IP group (its alias is pfB_<name>_v4). */
+function pfb_core_feed_name_valid(mixed $name, string $gtype): bool {
+	return is_string($name) && preg_match('/^[A-Za-z0-9_]+$/D', $name) === 1 && ($gtype === 'dnsbl' || strlen($name) <= 24);
+}
+
+/**
+ * A stored feed source as Core's [url, credentials] (issue #3937): an ASN source unescaped (the editor stores it htmlentities()d), a
+ * local path as a file:// URL, and a scheme URL's userinfo (from :// to the last @ before the first /, ? or #) split off.
+ *
+ * @return array{0: string, 1: string}
+ */
+function pfb_core_feed_url_read(string $stored, string $format): array {
+	$url = $format === 'asn' ? html_entity_decode($stored) : $stored;
+	if (str_starts_with($url, '/')) {
+		return ["file://{$url}", ''];
+	}
+	if (preg_match('/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^\/?#]*)@/', $url, $m) === 1) {
+		return [$m[1] . substr($url, strlen($m[0])), $m[2]];
+	}
+	return [$url, ''];
+}
+
+/** Core's url and credentials as the Groups editor stores the source: what pfb_core_feed_url_read() reads back (issue #3937). */
+function pfb_core_feed_url_stored(string $url, string $credentials, string $format): string {
+	$scheme = strpos($url, '://');
+	if ($credentials !== '' && $scheme !== FALSE) {
+		$url = substr($url, 0, $scheme + 3) . "{$credentials}@" . substr($url, $scheme + 3);
+	}
+	if (str_starts_with($url, 'file:///')) {
+		$url = substr($url, 7);
+	}
+	return $format === 'asn' ? htmlentities($url) : $url;
+}
+
+/**
+ * The faults of a native object against $fields (field => its check: NULL when the value is valid, else why not): an object holds
+ * exactly those fields (issue #3937).
+ *
+ * @param array<string, callable(mixed): ?string> $fields
+ * @return list<array{field: string, message: string}>
+ */
+function pfb_core_object_faults(mixed $object, array $fields, string $prefix): array {
+	if (!is_array($object) || ($object !== [] && array_is_list($object))) {
+		return [['field' => $prefix, 'message' => 'not an object']];
+	}
+	$faults = [];
+	foreach (array_keys(array_diff_key($object, $fields)) as $name) {
+		$faults[] = ['field' => "{$prefix}.{$name}", 'message' => 'no such field'];
+	}
+	foreach ($fields as $name => $check) {
+		$message = array_key_exists($name, $object) ? $check($object[$name]) : 'required';
+		if ($message !== NULL) {
+			$faults[] = ['field' => "{$prefix}.{$name}", 'message' => $message];
+		}
+	}
+	return $faults;
+}
+
+/**
+ * The faults of one native feed of a $gtype group (issue #3937): a word header that is not reserved, its type's tokens, url and
+ * credentials free of control characters and < > ", a url (without the _API_KEY_ placeholder) unless the feed is disabled, and a url
+ * and credentials that read back as they are once stored.
+ *
+ * @return list<array{field: string, message: string}>
+ */
+function pfb_core_feed_faults(mixed $feed, string $gtype, string $prefix): array {
+	$text = static fn(mixed $v): ?string => is_string($v) && preg_match('/[\p{C}<>"]/u', $v) === 0 ? NULL : 'holds a control character, < > or "';
+	$fields = [
+		'header'      => static fn(mixed $v): ?string => is_string($v) && preg_match('/^[A-Za-z0-9_]+$/D', $v) === 1 && pfb_header_reserved_error($v) === ''
+			? NULL : 'not a word, or reserved',
+		'state'       => static fn(mixed $v): ?string => is_string($v) && isset(PFB_CORE_FEED_STATES[$v]) ? NULL : 'not a valid value',
+		'format'      => static fn(mixed $v): ?string => in_array($v, pfb_core_feed_formats($gtype), TRUE) ? NULL : 'not a valid value',
+		'url'         => $text,
+		'credentials' => $text,
+	];
+	if ($gtype === 'dnsbl') {
+		$fields['action'] = static fn(mixed $v): ?string => in_array($v, ['deny', 'permit'], TRUE) ? NULL : 'not a valid value';
+	}
+	$faults = pfb_core_object_faults($feed, $fields, $prefix);
+	if ($faults !== [] || !is_array($feed)) {
+		return $faults;
+	}
+	if ($feed['state'] !== 'disabled' && ($feed['url'] === '' || str_contains($feed['url'], '_API_KEY_'))) {
+		$faults[] = ['field' => "{$prefix}.url", 'message' => 'a feed that is not disabled needs a url without the _API_KEY_ placeholder'];
+	} elseif (pfb_core_feed_url_read(pfb_core_feed_url_stored($feed['url'], $feed['credentials'], $feed['format']), $feed['format']) !== [$feed['url'], $feed['credentials']]) {
+		$faults[] = ['field' => "{$prefix}.url", 'message' => 'does not read back as written: credentials need a scheme:// url without userinfo, a local path is a file:/// url'];
+	}
+	return $faults;
+}
+
+/**
+ * One stored group as Core's native group (issue #3937), its `feeds` keyed by row index: each token as the download path reads it
+ * (an invalid action is Disabled, an unknown frequency Never, a script its file name), and a feed that breaks a rule of
+ * pfb_core_feed_faults() or repeats a header before it left out.
+ *
+ * @param array<mixed> $stored
+ * @param callable(): array<string, string> $interfaces
+ * @return array<string, mixed>
+ */
+function pfb_core_feed_group_native(array $stored, string $gtype, callable $interfaces): array {
+	$text = static fn(string $key): string => is_scalar($stored[$key] ?? NULL) ? (string) $stored[$key] : '';
+	$script = static fn(string $path): string => preg_match('/^[^\/\p{C}]+$/uD', basename($path)) === 1 ? basename($path) : '';
+	$srcint = $text('srcint');
+	$group = [
+		'name'            => $text('aliasname'),
+		'action'          => pfb_group_action_valid($stored['action'] ?? NULL, $gtype) ? $stored['action'] : 'Disabled',
+		'updateFrequency' => in_array($stored['cron'] ?? NULL, PFB_CORE_FEED_CRON, TRUE) ? $stored['cron'] : 'Never',
+		'bindAddress'     => match ($srcint) { '' => '', 'lo0' => '127.0.0.1', default => $interfaces()[$srcint] ?? '' },
+		'preScript'       => $script($text('script_pre')),
+		'postScript'      => $script($text('script_post')),
+		'customList'      => (string) base64_decode($text('custom')),
+	];
+	if ($gtype === 'ipv4') {
+		$cidr = $text('suppression_cidr');
+		$group['suppressionCidr'] = ctype_digit($cidr) && (int) $cidr <= 32 ? (int) $cidr : 0;
+	}
+	if ($gtype !== 'dnsbl') {
+		$group['whoisConvert'] = ($stored['whois_convert'] ?? NULL) === 'on';
+	}
+	$group['feeds'] = $headers = [];
+	foreach (is_array($stored['row'] ?? NULL) ? $stored['row'] : [] as $r => $row) {
+		if (!is_array($row)) {
+			continue;
+		}
+		$cell = static fn(string $key): string => is_scalar($row[$key] ?? NULL) ? (string) $row[$key] : '';
+		$format = strtolower($cell('format'));
+		$format = in_array($format, pfb_core_feed_formats($gtype), TRUE) ? $format : 'auto';
+		[$url, $credentials] = pfb_core_feed_url_read($cell('url'), $format);
+		$feed = ['header' => $cell('header'), 'state' => array_search($cell('state'), PFB_CORE_FEED_STATES, TRUE) ?: 'enabled', 'format' => $format,
+			'url' => $url, 'credentials' => $credentials];
+		if ($gtype === 'dnsbl') {
+			$feed['action'] = ($row['action'] ?? NULL) === 'Permit' ? 'permit' : 'deny';
+		}
+		if (!isset($headers[$feed['header']]) && pfb_core_feed_faults($feed, $gtype, '') === []) {
+			$group['feeds'][$r] = $feed;
+			$headers[$feed['header']] = TRUE;
+		}
+	}
+	return $group;
+}
+
+/**
+ * config.xml's groups of $projection as Core's native groups, keyed by their index in the section (issue #3937): a group whose name
+ * the download path refuses (pfb_core_feed_name_valid()) or that repeats a name before it does not project.
+ *
+ * @param callable(): array<string, string> $interfaces
+ * @return array<int, array<string, mixed>>
+ */
+function pfb_core_feed_groups(string $projection, callable $interfaces): array {
+	$gtype = substr($projection, 6);
+	$section = config_get_path('installedpackages/' . PFB_CORE_FEED_SECTIONS[$projection] . '/config', []);
+	$groups = $seen = [];
+	foreach (is_array($section) ? $section : [] as $n => $stored) {
+		if (is_array($stored) && pfb_core_feed_name_valid($stored['aliasname'] ?? NULL, $gtype)
+		    && !in_array($stored['aliasname'], array_column($groups, 'name'), TRUE)) {
+			$group = pfb_core_feed_group_native($stored, $gtype, $interfaces);
+			// A header names one file in the type's directory: an earlier group's feed has it
+			$group['feeds'] = array_filter($group['feeds'], static fn(array $feed): bool => !isset($seen[$feed['header']]));
+			$seen += array_fill_keys(array_column($group['feeds'], 'header'), TRUE);
+			$groups[$n] = $group;
+		}
+	}
+	return $groups;
+}
+
+/**
+ * The faults of Core's value for a feed projection (issue #3937): exactly `groups`, a list of groups with unique names, each with
+ * exactly its type's fields within their rules, and its feeds as pfb_core_feed_faults() checks them, with unique headers.
+ *
+ * @param callable(): array<string, string> $interfaces
+ * @return list<array{field: string, message: string}>
+ */
+function pfb_core_feed_projection_faults(mixed $value, string $projection, callable $interfaces): array {
+	$gtype = substr($projection, 6);
+	$list = static fn(mixed $v): ?string => is_array($v) && array_is_list($v) ? NULL : 'not a list';
+	$faults = pfb_core_object_faults($value, ['groups' => $list], $projection);
+	if ($faults !== [] || !is_array($value)) {
+		return $faults;
+	}
+	$script = static fn(mixed $v): ?string => $v === '' || (is_string($v) && preg_match('/^[^\/\p{C}]+$/uD', $v) === 1) ? NULL : 'not a file name';
+	$fields = [
+		'name'            => static fn(mixed $v): ?string => pfb_core_feed_name_valid($v, $gtype) ? NULL : 'not a word (of at most 24 characters for an IP group)',
+		'action'          => static fn(mixed $v): ?string => pfb_group_action_valid($v, $gtype) ? NULL : 'not a valid value',
+		'updateFrequency' => static fn(mixed $v): ?string => in_array($v, PFB_CORE_FEED_CRON, TRUE) ? NULL : 'not a valid value',
+		'bindAddress'     => static fn(mixed $v): ?string => is_string($v) && ($v === '' || $v === '127.0.0.1' || in_array($v, $interfaces(), TRUE))
+			? NULL : 'no interface holds this IPv4 address',
+		'preScript'       => $script,
+		'postScript'      => $script,
+		'customList'      => static fn(mixed $v): ?string => is_string($v) ? NULL : 'not a string',
+	];
+	if ($gtype === 'ipv4') {
+		$fields['suppressionCidr'] = static fn(mixed $v): ?string => is_int($v) && $v >= 0 && $v <= 32 ? NULL : 'not an integer from 0 to 32';
+	}
+	if ($gtype !== 'dnsbl') {
+		$fields['whoisConvert'] = static fn(mixed $v): ?string => is_bool($v) ? NULL : 'not a bool';
+	}
+	$fields['feeds'] = $list;
+	$names = $headers = [];
+	$section = config_get_path('installedpackages/' . PFB_CORE_FEED_SECTIONS[$projection] . '/config', []);
+	$current = pfb_core_feed_groups($projection, $interfaces);
+	$byName = array_combine(array_column($current, 'name'), array_keys($current));
+	foreach ($value['groups'] as $i => $group) {
+		$prefix = "{$projection}.groups[{$i}]";
+		$faults = array_merge($faults, pfb_core_object_faults($group, $fields, $prefix));
+		if (!is_array($group)) {
+			continue;
+		}
+		$name = is_string($group['name'] ?? NULL) ? $group['name'] : '';
+		if ($name !== '' && isset($names[$name])) {
+			$faults[] = ['field' => "{$prefix}.name", 'message' => 'not unique'];
+		}
+		$names[$name] = TRUE;
+		$feeds = is_array($group['feeds'] ?? NULL) && array_is_list($group['feeds']) ? $group['feeds'] : [];
+		foreach ($feeds as $j => $feed) {
+			$faults = array_merge($faults, pfb_core_feed_faults($feed, $gtype, "{$prefix}.feeds[{$j}]"));
+			$header = is_array($feed) && is_string($feed['header'] ?? NULL) ? $feed['header'] : '';
+			if ($header !== '' && isset($headers[$header])) {
+				$faults[] = ['field' => "{$prefix}.feeds[{$j}].header", 'message' => "not unique in {$projection}: a header names one file of the type"];
+			}
+			$headers[$header] = TRUE;
+		}
+		// The apply path ignores every row of a group whose first row has no source: a feed added to one would never be downloaded
+		$n = $byName[$name] ?? NULL;
+		$first = $n === NULL ? NULL : ($section[$n]['row'][0] ?? NULL);
+		if (is_array($first) && ($first['url'] ?? '') === ''
+		    && array_diff(array_column(array_filter($feeds, 'is_array'), 'header'), array_column($current[$n]['feeds'], 'header')) !== []) {
+			$faults[] = ['field' => "{$prefix}.feeds", 'message' => 'the group\'s first row has no source, so pfBlockerNG ignores every row of it: remove that row on the Groups page before adding a feed'];
+		}
+	}
+	return $faults;
+}
+
+/**
+ * A stored group with Core's $wanted native group merged in (issue #3937): the config.xml key of every field whose native value
+ * differs from $current (what the read gives for $stored; [] for a new group), and the feeds matched by header the same way: a new
+ * one appended with its projected keys only, a projected one $wanted lacks deleted, every other row left where it is.
+ *
+ * @param array<mixed> $stored
+ * @param array<string, mixed> $current
+ * @param array<string, mixed> $wanted a group pfb_core_feed_projection_faults() accepts
+ * @param callable(): array<string, string> $interfaces
+ * @return array<mixed>
+ */
+function pfb_core_feed_group_patch(array $stored, array $current, array $wanted, callable $interfaces): array {
+	$keys = [
+		'name'            => ['aliasname', $wanted['name']],
+		'action'          => ['action', $wanted['action']],
+		'updateFrequency' => ['cron', $wanted['updateFrequency']],
+		'bindAddress'     => ['srcint', match ($wanted['bindAddress']) {
+			''          => '',
+			'127.0.0.1' => 'lo0',
+			default     => (string) array_search($wanted['bindAddress'], $interfaces(), TRUE),
+		}],
+		'preScript'       => ['script_pre', $wanted['preScript']],
+		'postScript'      => ['script_post', $wanted['postScript']],
+		'customList'      => ['custom', base64_encode($wanted['customList'])],
+	];
+	if (array_key_exists('suppressionCidr', $wanted)) {
+		$keys['suppressionCidr'] = ['suppression_cidr', $wanted['suppressionCidr'] === 0 ? 'Disabled' : (string) $wanted['suppressionCidr']];
+	}
+	if (array_key_exists('whoisConvert', $wanted)) {
+		$keys['whoisConvert'] = ['whois_convert', $wanted['whoisConvert'] ? 'on' : ''];
+	}
+	foreach ($keys as $field => [$key, $token]) {
+		if ($wanted[$field] !== ($current[$field] ?? NULL)) {
+			$stored[$key] = $token;
+		}
+	}
+
+	$rows = is_array($stored['row'] ?? NULL) ? $stored['row'] : [];
+	$was = $current['feeds'] ?? [];
+	$merged = pfb_core_merge_keyed($rows, $was, $wanted['feeds'], 'header', 'header', static function (?int $r, array $feed) use ($rows, $was): array {
+		$row = $r === NULL ? [] : $rows[$r];
+		$old = $r === NULL ? [] : $was[$r];
+		$url = pfb_core_feed_url_stored($feed['url'], $feed['credentials'], $feed['format']);
+		// The order the Groups editor stores a row in; the stored url depends on the format too (an ASN source is escaped)
+		$cells = ['format' => ['format', $feed['format']], 'state' => ['state', PFB_CORE_FEED_STATES[$feed['state']]], 'url' => ['url', $url],
+			'credentials' => ['url', $url], 'header' => ['header', $feed['header']]];
+		if (array_key_exists('action', $feed)) {
+			$cells['action'] = ['action', ucfirst($feed['action'])];
+		}
+		foreach ($cells as $field => [$key, $token]) {
+			if ($feed[$field] !== ($old[$field] ?? NULL) || ($key === 'url' && $feed['format'] !== ($old['format'] ?? NULL))) {
+				$row[$key] = $token;
+			}
+		}
+		return $row;
+	});
+	if ($merged !== array_values($rows)) {
+		$stored['row'] = $merged;
+	}
+	return $stored;
+}
+
+/**
+ * $stored (a section's groups or a group's rows) with Core's $wanted list merged in by key (issue #3937): the entries Core keeps take
+ * the slots of the projected ones it keeps ($current, by stored index) in Core's order, each built by $patch(its stored index, the wanted entry);
+ * new ones are appended (index NULL); every stored entry under a key Core dropped goes, the duplicates the read left out included; an
+ * entry that does not project keeps its slot.
+ *
+ * @param array<mixed> $stored
+ * @param array<int, array<string, mixed>> $current
+ * @param list<array<string, mixed>> $wanted
+ * @param callable(?int, array<string, mixed>): array<mixed> $patch
+ * @return list<mixed>
+ */
+function pfb_core_merge_keyed(array $stored, array $current, array $wanted, string $key, string $storedKey, callable $patch): array {
+	$index = array_combine(array_column($current, $key), array_keys($current));
+	$kept = $new = [];
+	foreach ($wanted as $entry) {
+		$i = $index[$entry[$key]] ?? NULL;
+		unset($index[$entry[$key]]);
+		if ($i === NULL) {
+			$new[] = $patch(NULL, $entry);
+		} else {
+			$kept[] = $patch($i, $entry);
+		}
+	}
+	$dropped = array_keys($index);
+	$merged = $stored;
+	$slots = array_keys(array_filter($current, static fn(array $c): bool => !in_array($c[$key], $dropped, TRUE)));
+	foreach ($slots as $k => $slot) {
+		$merged[$slot] = $kept[$k];
+	}
+	$merged = array_filter($merged, static fn(mixed $e): bool => !is_array($e) || !in_array($e[$storedKey] ?? NULL, $dropped, TRUE));
+	return array_values(array_merge($merged, $new));
+}
+
+/**
+ * config.xml's section of $projection with Core's $wanted groups merged in (issue #3937), NULL when nothing would change: groups are
+ * matched by name and patched (pfb_core_feed_group_patch()), a new one appended with its projected keys only, a projected one
+ * $wanted lacks deleted; a group that does not project stays where it is.
+ *
+ * @param list<array<string, mixed>> $wanted groups pfb_core_feed_projection_faults() accepts
+ * @param callable(): array<string, string> $interfaces
+ * @return ?list<mixed>
+ */
+function pfb_core_feed_merge(string $projection, array $wanted, callable $interfaces): ?array {
+	$section = config_get_path('installedpackages/' . PFB_CORE_FEED_SECTIONS[$projection] . '/config', []);
+	$section = is_array($section) ? $section : [];
+	$current = pfb_core_feed_groups($projection, $interfaces);
+	$merged = pfb_core_merge_keyed($section, $current, $wanted, 'name', 'aliasname', static fn(?int $n, array $group): array =>
+		pfb_core_feed_group_patch($n === NULL ? [] : $section[$n], $n === NULL ? [] : $current[$n], $group, $interfaces));
+	// A header Core dropped from the type goes from every group: a duplicate the read left out never becomes it
+	$dropped = array_diff(array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), array_values($current))),
+		array_merge([], ...array_map(static fn(array $g): array => array_column($g['feeds'], 'header'), $wanted)));
+	foreach ($merged as $n => $group) {
+		if ($dropped !== [] && is_array($group) && is_array($group['row'] ?? NULL)) {
+			$rows = array_values(array_filter($group['row'], static fn(mixed $row): bool => !is_array($row) || !in_array($row['header'] ?? NULL, $dropped, TRUE)));
+			if ($rows !== array_values($group['row'])) {
+				$merged[$n]['row'] = $rows;
+			}
+		}
+	}
+	return $merged === array_values($section) ? NULL : $merged;
 }
 
 /**
@@ -4677,12 +5105,14 @@ function pfb_core_settings_refusal(string $code, string $message, array $fieldEr
 
 /**
  * The refusal for a malformed settings adapter request, NULL for a well-formed one: nothing is locked or written before it passes.
- * A request holds exactly the keys of its op, and a write's `settings.dns` exactly the 17 fields, each of its native type and range.
+ * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 17 fields, each of its native type and
+ * range) and the feed projections (pfb_core_feed_projection_faults(), issue #3937).
  *
  * @param array<mixed> $request
+ * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
  * @return ?array{version: int, error: array<string, mixed>}
  */
-function pfb_core_settings_request_refusal(array $request): ?array {
+function pfb_core_settings_request_refusal(array $request, ?callable $interfaces = NULL): ?array {
 	if (($request['version'] ?? NULL) !== 1) {
 		return pfb_core_settings_refusal('invalid_argument', 'version must be 1');
 	}
@@ -4701,8 +5131,9 @@ function pfb_core_settings_request_refusal(array $request): ?array {
 		return pfb_core_settings_refusal('invalid_argument', 'expectedRevision must be a non-negative integer', [['field' => 'expectedRevision', 'message' => 'must be a non-negative integer']]);
 	}
 	$settings = $request['settings'];
-	if (!is_array($settings) || array_keys($settings) !== ['dns'] || !is_array($settings['dns'])) {
-		return pfb_core_settings_refusal('invalid_argument', 'settings must hold exactly dns');
+	$projections = ['dns', ...array_keys(PFB_CORE_FEED_SECTIONS)];
+	if (!is_array($settings) || count($settings) !== count($projections) || array_diff($projections, array_keys($settings)) !== [] || !is_array($settings['dns'])) {
+		return pfb_core_settings_refusal('invalid_argument', 'settings must hold exactly ' . implode(', ', $projections));
 	}
 	$dns = $settings['dns'];
 	$fields = pfb_core_dns_fields();
@@ -4729,29 +5160,35 @@ function pfb_core_settings_request_refusal(array $request): ?array {
 	if (($dns['controlLegacy'] ?? NULL) === TRUE && ($dns['control'] ?? NULL) !== TRUE) {
 		$faults[] = ['field' => 'dns.controlLegacy', 'message' => 'requires control'];
 	}
-	return $faults === [] ? NULL : pfb_core_settings_refusal('invalid_argument', 'the DNS settings are not valid', $faults);
+	foreach (array_keys(PFB_CORE_FEED_SECTIONS) as $projection) {
+		$faults = array_merge($faults, pfb_core_feed_projection_faults($settings[$projection], $projection, $interfaces ?? 'pfb_core_interface_addresses'));
+	}
+	return $faults === [] ? NULL : pfb_core_settings_refusal('invalid_argument', 'the settings are not valid', $faults);
 }
 
 /**
  * The settings adapter Core runs on pfSense (issue #3924, docs/misc/core-api-protocol.md): one request, one reply, over config.xml's
- * `settings/dns` values. `read` answers pfb_core_dns_settings() with its revision. `write` stores the fields that differ from
- * config.xml, each in its registered key, under the DNS config lock and with one write_config(); it refuses with `conflict` when
- * config.xml is no longer at the revision Core read, and with `unavailable` when it could not change config.xml (a lock that stays
- * taken, a refused write_config(), a client-IP metrics privacy step that failed). A malformed request is `invalid_argument` and
- * touches nothing. Never calls Core: Core waits on this.
+ * values of every projection (pfb_core_settings()). `read` answers them with their revision. `write` stores what differs from
+ * config.xml under the DNS config lock and with one write_config(): each changed `dns` field in its registered key, and each feed
+ * projection merged into its section (pfb_core_feed_merge(), issue #3937). It refuses with `conflict` when config.xml is no longer
+ * at the revision Core read, and with `unavailable` when it could not change config.xml (a lock that stays taken, a refused
+ * write_config(), a client-IP metrics privacy step that failed). A malformed request is `invalid_argument` and touches nothing.
+ * Never calls Core: Core waits on this.
  *
  * @param array<mixed> $request
  * @param string $metricsDir node_exporter's textfile directory (a test seam)
+ * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
  * @return array<string, mixed> the reply
  */
-function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tmp/node_exporter'): array {
-	$refusal = pfb_core_settings_request_refusal($request);
+function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tmp/node_exporter', ?callable $interfaces = NULL): array {
+	$interfaces ??= 'pfb_core_interface_addresses';
+	$refusal = pfb_core_settings_request_refusal($request, $interfaces);
 	if ($refusal !== NULL) {
 		return $refusal;
 	}
 	if ($request['op'] === 'read') {
-		$dns = pfb_core_dns_settings();
-		return ['version' => 1, 'revision' => pfb_core_settings_revision(['dns' => $dns]), 'settings' => ['dns' => $dns]];
+		$settings = pfb_core_settings($interfaces);
+		return ['version' => 1, 'revision' => pfb_core_settings_revision($settings), 'settings' => $settings];
 	}
 	$fields = pfb_core_dns_fields();
 	$wanted = $request['settings']['dns'];
@@ -4760,12 +5197,19 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		return pfb_core_settings_refusal('unavailable', 'the pfSense configuration is locked by another process or could not be read');
 	}
 	try {
-		$current = pfb_core_dns_settings();
-		if (pfb_core_settings_revision(['dns' => $current]) !== $request['expectedRevision']) {
+		if (pfb_core_settings_revision(pfb_core_settings($interfaces)) !== $request['expectedRevision']) {
 			return pfb_core_settings_refusal('conflict', 'the configuration is not at expectedRevision');
 		}
+		$current = pfb_core_dns_settings();
 		$changed = array_keys(array_filter($wanted, static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));
-		if ($changed === []) {
+		$sections = [];
+		foreach (PFB_CORE_FEED_SECTIONS as $projection => $section) {
+			$merged = pfb_core_feed_merge($projection, $request['settings'][$projection]['groups'], $interfaces);
+			if ($merged !== NULL) {
+				$sections["installedpackages/{$section}/config"] = $merged;
+			}
+		}
+		if ($changed === [] && $sections === []) {
 			return ['version' => 1, 'revision' => $request['expectedRevision']];
 		}
 		// A legacy token stored beneath a control that was off would surface when control turns on: write the off Core asked for
@@ -4774,12 +5218,15 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			$changed[] = 'controlLegacy';
 		}
 		$written = NULL;
-		$persist = static function () use ($changed, $wanted, $fields, &$written): bool {
+		$persist = static function () use ($changed, $wanted, $fields, $sections, &$written): bool {
 			foreach ($changed as $field) {
 				$value = $wanted[$field];
 				PfbConfig::writeSystem($fields[$field][0], is_bool($value) ? ($value ? 'on' : '') : (string) $value);
 			}
-			$written = write_config('[pfBlockerNG] pfBlockerNG Core saved the DNS settings');
+			foreach ($sections as $path => $groups) {
+				config_set_path($path, $groups);
+			}
+			$written = write_config('[pfBlockerNG] pfBlockerNG Core saved the settings');
 			return $written !== FALSE && $written !== -1;
 		};
 		if ($wanted['metricsClientIp'] === $current['metricsClientIp']) {
@@ -4796,7 +5243,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 			return pfb_core_settings_refusal('unavailable', 'pfSense refused the configuration write');
 		}
 		pfb_mark_pending_changes();	// applies on the next Update, as the DNSBL and DNS General saves
-		return ['version' => 1, 'revision' => pfb_core_settings_revision(['dns' => pfb_core_dns_settings()])];
+		return ['version' => 1, 'revision' => pfb_core_settings_revision(pfb_core_settings($interfaces))];
 	} finally {
 		unlock($lock);
 	}
@@ -4819,7 +5266,8 @@ function pfb_core_settings_serve(string $stdin): string {
 }
 
 /**
- * Tell Core that config.xml's `settings/dns` may have changed (issue #3924): Core reads them again through its settings adapter.
+ * Tell Core that config.xml's settings (`settings/dns`, the feed projections) may have changed (issue #3924): Core reads them again
+ * through its settings adapter.
  * Forced (a page save, after its write_config()) always tells; unforced (the tick) asks Core's revision first and tells only when it
  * is not the one config.xml projects, so a restore, a revert or an HA receive reaches Core by the next tick. NULL when Core was told
  * (or agrees), else the reason: logged once per outage and kept in $pfb['core_settings_failed'] until a notice succeeds, which the next
@@ -4838,7 +5286,7 @@ function pfb_core_settings_changed(?callable $call = NULL, bool $force = FALSE):
 	if (!$force) {
 		$r = $call('GetSettings', ['projectionIds' => ['dns']]);
 		if ($answered($r)) {
-			$tell = ($r['body']['revision'] ?? NULL) !== pfb_core_settings_revision(['dns' => pfb_core_dns_settings()]);
+			$tell = ($r['body']['revision'] ?? NULL) !== pfb_core_settings_revision(pfb_core_settings());
 		} else {
 			$reason = $failure($r);
 		}
@@ -4851,7 +5299,7 @@ function pfb_core_settings_changed(?callable $call = NULL, bool $force = FALSE):
 		unlink_if_exists($pfb['core_settings_failed']);
 		return NULL;
 	}
-	pfb_metrics_log_once($pfb['core_settings_failed'], "Core settings: pfBlockerNG Core was not told that the DNS settings changed: {$reason}\n");
+	pfb_metrics_log_once($pfb['core_settings_failed'], "Core settings: pfBlockerNG Core was not told that the settings changed: {$reason}\n");
 	@file_put_contents($pfb['core_settings_failed'], $reason);
 	return $reason;
 }

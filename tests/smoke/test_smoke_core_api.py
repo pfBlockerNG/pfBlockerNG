@@ -46,7 +46,7 @@ PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 HSTS = f"{h.CFG_DNSBL_SETTINGS}/pfb_hsts"
 CORE_STATE = "/usr/local/etc/pfb_core"
 CONFIG_HISTORY = "/conf/backup/config-*.xml"
-SAVE_MESSAGE = "pfBlockerNG Core saved the DNS settings"
+SAVE_MESSAGE = "pfBlockerNG Core saved the settings"
 RETIRED_SETTINGS = ("settings.json", "settings.json.tmp", "settings.lock")
 ADAPTER = "/usr/local/pkg/pfblockerng/pfb_core_settings.sh"
 # The package's pfb-core for this machine, as the rc script picks it (uname -p says aarch64 where the target is arm64)
@@ -232,8 +232,8 @@ def await_core_up(vm: SmokeVM, *, watchdog: float = READY_WATCHDOG) -> None:
 
 
 def config_revision(vm: SmokeVM) -> int:
-    """The revision config.xml projects for ``settings/dns``: what the settings adapter answers a read with."""
-    revision: int = php_json(vm, "pfb_core_settings_revision(['dns' => pfb_core_dns_settings()])")
+    """What the settings adapter answers a read with: the revision of every projection config.xml holds."""
+    revision: int = php_json(vm, "pfb_core_settings_revision(pfb_core_settings())")
     return revision
 
 
@@ -453,14 +453,14 @@ def test_the_settings_adapter_reads_and_writes_as_core_runs_it(core_vm: SmokeVM)
         writes = []
         hsts = current["settings"]["dns"]["hstsNullBlocking"]
         for value in (not hsts, hsts):
-            wanted = {**current["settings"]["dns"], "hstsNullBlocking": value}
+            wanted = {**current["settings"], "dns": {**current["settings"]["dns"], "hstsNullBlocking": value}}
             seconds, reply = adapter_seconds(
                 core_vm,
-                {"version": 1, "op": "write", "expectedRevision": current["revision"], "settings": {"dns": wanted}},
+                {"version": 1, "op": "write", "expectedRevision": current["revision"], "settings": wanted},
             )
-            assert "error" not in reply and config_dns_settings(core_vm) == wanted, f"the write answered {reply}"
+            assert "error" not in reply and config_dns_settings(core_vm) == wanted["dns"], f"the write answered {reply}"
             writes.append(seconds)
-            current = {"revision": reply["revision"], "settings": {"dns": wanted}}
+            current = {"revision": reply["revision"], "settings": wanted}
         read_times = [seconds for seconds, _ in reads]
         # A diagnostic, never an assertion: the Go unit tests pin the deadlines with controlled hangs
         print(f"PFB_ADAPTER_LATENCY read {read_times} write {writes}", flush=True)

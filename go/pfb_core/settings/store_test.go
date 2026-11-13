@@ -98,8 +98,8 @@ func TestTheSchemaNamesEveryDnsFieldWithItsTypeAndDefault(t *testing.T) {
 		"control": "bool false", "controlLegacy": "bool false requires control", "regexCap": "bool false",
 		"metricsClientIp": "bool false",
 	}
-	if len(s.Projections) != 1 || s.Projections[0].ID != "dns" {
-		t.Fatalf("projections = %s, want the one dns projection", got)
+	if s.Projections[0].ID != "dns" {
+		t.Fatalf("projections = %s, want dns first", got)
 	}
 	have := map[string]string{}
 	for _, f := range s.Projections[0].Fields {

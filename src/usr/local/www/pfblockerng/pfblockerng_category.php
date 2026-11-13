@@ -148,7 +148,10 @@ if (isset($rowdata[0]) && empty($rowdata[0])) {
 	if (isset($rowdata_path)) {
 		config_set_path($rowdata_path, $rowdata);
 	}
-	write_config("pfBlockerNG: Removed empty rowdata", FALSE);
+	$pfb_written = write_config("pfBlockerNG: Removed empty rowdata", FALSE);
+	if ($pfb_written !== FALSE && $pfb_written !== -1) {
+		pfb_core_settings_changed(NULL, TRUE);	// issue #3937: Core reads the groups again; a failure never undoes the save
+	}
 }
 
 if (!empty($action) && isset($gtype) && isset($rowid)) {
@@ -165,8 +168,11 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 				if (isset($rowdata_path)) {
 					config_del_path("{$rowdata_path}/{$rowid}");
 				}
-				write_config("pfBlockerNG: Removed [ {$type} | {$name} ]", FALSE);
+				$pfb_written = write_config("pfBlockerNG: Removed [ {$type} | {$name} ]", FALSE);
 				pfb_mark_pending_changes();	// applies on the next Update, not on save
+				if ($pfb_written !== FALSE && $pfb_written !== -1) {
+					pfb_core_settings_changed(NULL, TRUE);	// issue #3937: Core reads the groups again; a failure never undoes the save
+				}
 				$savemsg = "Removed [ Type: {$type}, Name: {$name} ]";
 			} else {
 				$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ], not found";
@@ -321,8 +327,11 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 
 				// Save postdata and Table re-ordering
 				if (!$input_errors) {
-					write_config("pfBlockerNG: Saved page order format/settings for [ {$type} ]", FALSE);
+					$pfb_written = write_config("pfBlockerNG: Saved page order format/settings for [ {$type} ]", FALSE);
 					pfb_mark_pending_changes();	// applies on the next Update, not on save
+					if ($pfb_written !== FALSE && $pfb_written !== -1) {
+						pfb_core_settings_changed(NULL, TRUE);	// issue #3937: Core reads the groups again; a failure never undoes the save
+					}
 				} else {
 					// return errors to AJAX request
 					print(json_encode($input_errors));

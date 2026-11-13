@@ -195,6 +195,8 @@ require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.i
 error_reporting($pfb_prev_er);
 // 4g. The DNS proxy's readiness is read from its child pidfile and its listener-ready marker (issue #3515). Both live in $pfb,
 //     like the other runtime paths, so a unit test reads its own files, never /var/run or /var/unbound.
+// Issue #3937: the settings revision key, made on first use in the sandbox, never in a host path.
+$GLOBALS['pfb']['core_revision_key'] = "{$pfb_test_tmp}/core_revision.key";
 $GLOBALS['pfb']['dns_proxy_pidfile'] = "{$pfb_test_tmp}/pfb_dns_proxy.pid";
 $GLOBALS['pfb']['dns_proxy_ready'] = "{$pfb_test_tmp}/pfb_dns_ready";
 // Issue #3566: the gateway's record of what it runs, and the pending-restart marker.

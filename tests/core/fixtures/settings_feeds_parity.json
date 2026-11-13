@@ -1,0 +1,217 @@
+{
+	"schema": 1,
+	"projections": ["feeds/ipv4", "feeds/ipv6", "feeds/dnsbl"],
+	"cases": [
+		{
+			"id": "ipv4-stored-full",
+			"description": "an IPv4 group as the Groups editor stores it: credentials in the URL's userinfo, a local path, the placeholder format Auto, a Flex and a Hold row",
+			"projection": "feeds/ipv4",
+			"source": "stored",
+			"stored": {"aliasname": "Spamhaus", "description": "d", "action": "Deny_Inbound", "cron": "EveryDay", "sort": "sort", "srcint": "", "script_pre": "pfb_pre_x.sh", "script_post": "", "custom": "", "suppression_cidr": "Disabled", "whois_convert": "", "aliaslog": "enabled",
+				"row": [
+					{"format": "Auto", "state": "Enabled", "url": "https://user:s3cret@www.spamhaus.org/drop/drop.txt", "header": "DROP"},
+					{"format": "auto", "state": "Flex", "url": "/var/db/pfblockerng/own.txt", "header": "Own"},
+					{"format": "regex", "state": "Hold", "url": "https://example.com/x.html", "header": "Held"}
+				]},
+			"valid": true,
+			"native": {"name": "Spamhaus", "action": "Deny_Inbound", "updateFrequency": "EveryDay", "bindAddress": "", "preScript": "pfb_pre_x.sh", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false,
+				"feeds": [
+					{"header": "DROP", "state": "enabled", "format": "auto", "url": "https://www.spamhaus.org/drop/drop.txt", "credentials": "user:s3cret"},
+					{"header": "Own", "state": "flex", "format": "auto", "url": "file:///var/db/pfblockerng/own.txt", "credentials": ""},
+					{"header": "Held", "state": "hold", "format": "regex", "url": "https://example.com/x.html", "credentials": ""}
+				]}
+		},
+		{
+			"id": "ipv4-stored-legacy-tokens",
+			"description": "tokens outside the enums read as the download path treats them: an unknown state is enabled, an unknown format auto; a numeric suppression CIDR and whois conversion; a custom list (base64) decodes",
+			"projection": "feeds/ipv4",
+			"source": "stored",
+			"stored": {"aliasname": "Mixed", "action": "Permit_Outbound", "cron": "Never", "srcint": "", "suppression_cidr": "16", "whois_convert": "on", "custom": "ZXhhbXBsZS5jb20KQVMxMzMzNQ==",
+				"row": [
+					{"format": "bogus", "state": "Whatever", "url": "https://example.org/a.txt", "header": "A"}
+				]},
+			"valid": true,
+			"native": {"name": "Mixed", "action": "Permit_Outbound", "updateFrequency": "Never", "bindAddress": "", "preScript": "", "postScript": "", "customList": "example.com\nAS13335", "suppressionCidr": 16, "whoisConvert": true,
+				"feeds": [
+					{"header": "A", "state": "enabled", "format": "auto", "url": "https://example.org/a.txt", "credentials": ""}
+				]}
+		},
+		{
+			"id": "ipv4-stored-geoip-asn",
+			"description": "GeoIP and ASN tokens stay as written (an ASN source is stored HTML-escaped and reads decoded); an empty disabled placeholder row and a row with an empty header do not project",
+			"projection": "feeds/ipv4",
+			"source": "stored",
+			"stored": {"aliasname": "Geo", "action": "Alias_Native", "cron": "Weekly", "srcint": "",
+				"row": [
+					{"format": "geoip", "state": "Enabled", "url": "US United States", "header": "US"},
+					{"format": "asn", "state": "Enabled", "url": "AS13335 &amp; Cloudflare", "header": "CF"},
+					{"format": "Auto", "state": "Disabled", "url": "", "header": ""},
+					{"format": "auto", "state": "Disabled", "url": "https://example.net/z.txt", "header": ""}
+				]},
+			"valid": true,
+			"native": {"name": "Geo", "action": "Alias_Native", "updateFrequency": "Weekly", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false,
+				"feeds": [
+					{"header": "US", "state": "enabled", "format": "geoip", "url": "US United States", "credentials": ""},
+					{"header": "CF", "state": "enabled", "format": "asn", "url": "AS13335 & Cloudflare", "credentials": ""}
+				]}
+		},
+		{
+			"id": "ipv4-stored-duplicate-and-reserved-headers",
+			"description": "a header that repeats one before it, and a reserved header (DNSBLIP, a GeoIP continent alias), do not project",
+			"projection": "feeds/ipv4",
+			"source": "stored",
+			"stored": {"aliasname": "Dups", "action": "Deny_Both", "cron": "01hour",
+				"row": [
+					{"format": "auto", "state": "Enabled", "url": "https://example.org/1.txt", "header": "One"},
+					{"format": "auto", "state": "Enabled", "url": "https://example.org/2.txt", "header": "One"},
+					{"format": "auto", "state": "Enabled", "url": "https://example.org/3.txt", "header": "DNSBLIP"},
+					{"format": "auto", "state": "Enabled", "url": "https://example.org/4.txt", "header": "pfB_Europe"}
+				]},
+			"valid": true,
+			"native": {"name": "Dups", "action": "Deny_Both", "updateFrequency": "01hour", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false,
+				"feeds": [
+					{"header": "One", "state": "enabled", "format": "auto", "url": "https://example.org/1.txt", "credentials": ""}
+				]}
+		},
+		{
+			"id": "ipv4-stored-invalid-action",
+			"description": "an action outside the IP tokens reads as Disabled: pfb_group_action_valid() skips the group",
+			"projection": "feeds/ipv4",
+			"source": "stored",
+			"stored": {"aliasname": "Odd", "action": "unbound", "cron": "Never", "row": []},
+			"valid": true,
+			"native": {"name": "Odd", "action": "Disabled", "updateFrequency": "Never", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "suppressionCidr": 0, "whoisConvert": false, "feeds": []}
+		},
+		{
+			"id": "ipv4-stored-bad-name",
+			"description": "a group whose name is not a word does not project",
+			"projection": "feeds/ipv4",
+			"source": "stored",
+			"stored": {"aliasname": "bad name", "action": "Deny_Inbound", "cron": "Never", "row": []},
+			"valid": true,
+			"native": null
+		},
+		{
+			"id": "ipv6-stored",
+			"description": "an IPv6 group has no suppression CIDR",
+			"projection": "feeds/ipv6",
+			"source": "stored",
+			"stored": {"aliasname": "Six", "action": "Match_Both", "cron": "12hours", "srcint": "", "suppression_cidr": "12",
+				"row": [
+					{"format": "rsync", "state": "Enabled", "url": "rsync://example.org/feeds/six.txt", "header": "SixFeed"}
+				]},
+			"valid": true,
+			"native": {"name": "Six", "action": "Match_Both", "updateFrequency": "12hours", "bindAddress": "", "preScript": "", "postScript": "", "customList": "", "whoisConvert": false,
+				"feeds": [
+					{"header": "SixFeed", "state": "enabled", "format": "rsync", "url": "rsync://example.org/feeds/six.txt", "credentials": ""}
+				]}
+		},
+		{
+			"id": "dnsbl-stored",
+			"description": "a DNSBL group: a per-feed Permit action, an absent action is deny, an unknown format is auto",
+			"projection": "feeds/dnsbl",
+			"source": "stored",
+			"stored": {"aliasname": "Ads", "action": "unbound", "cron": "EveryDay", "logging": "enabled", "order": "default", "filter_top1m": "", "srcint": "", "script_post": "pfb_dnsbl_post_y.py", "custom": "",
+				"row": [
+					{"format": "auto", "state": "Enabled", "url": "https://example.com/hosts", "header": "Hosts", "action": "Permit"},
+					{"format": "geoip", "state": "Enabled", "url": "https://example.com/more", "header": "More"}
+				]},
+			"valid": true,
+			"native": {"name": "Ads", "action": "unbound", "updateFrequency": "EveryDay", "bindAddress": "", "preScript": "", "postScript": "pfb_dnsbl_post_y.py", "customList": "",
+				"feeds": [
+					{"header": "Hosts", "state": "enabled", "format": "auto", "url": "https://example.com/hosts", "credentials": "", "action": "permit"},
+					{"header": "More", "state": "enabled", "format": "auto", "url": "https://example.com/more", "credentials": "", "action": "deny"}
+				]}
+		},
+		{
+			"id": "ipv4-posted-valid",
+			"description": "the Groups editor accepts an enabled row with a source and a header",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "Good", "action": "Deny_Inbound", "cron": "Never", "suppression_cidr": "Disabled", "format-0": "auto", "state-0": "Enabled", "url-0": "/var/db/pfblockerng/own.txt", "header-0": "Feed"},
+			"input": {"name": "Good", "action": "Deny_Inbound", "updateFrequency": "Never", "feeds": [{"header": "Feed", "state": "enabled", "format": "auto", "url": "file:///var/db/pfblockerng/own.txt"}]},
+			"valid": true
+		},
+		{
+			"id": "ipv4-posted-name-not-a-word",
+			"description": "a name with a space is refused",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "Bad Name", "action": "Disabled", "cron": "Never", "suppression_cidr": "Disabled"},
+			"input": {"name": "Bad Name", "action": "Disabled", "updateFrequency": "Never"},
+			"valid": false
+		},
+		{
+			"id": "ipv4-posted-name-too-long",
+			"description": "an IP group name over 24 characters is refused",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "ABCDEFGHIJKLMNOPQRSTUVWXY", "action": "Disabled", "cron": "Never", "suppression_cidr": "Disabled"},
+			"input": {"name": "ABCDEFGHIJKLMNOPQRSTUVWXY", "action": "Disabled", "updateFrequency": "Never"},
+			"valid": false
+		},
+		{
+			"id": "dnsbl-posted-long-name",
+			"description": "a DNSBL group name has no 24-character limit",
+			"projection": "feeds/dnsbl",
+			"source": "posted",
+			"posted": {"aliasname": "ABCDEFGHIJKLMNOPQRSTUVWXY", "action": "Disabled", "cron": "Never"},
+			"input": {"name": "ABCDEFGHIJKLMNOPQRSTUVWXY", "action": "Disabled", "updateFrequency": "Never"},
+			"valid": true
+		},
+		{
+			"id": "ipv4-posted-enabled-without-source",
+			"description": "an enabled row needs a source",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "G", "action": "Disabled", "cron": "Never", "suppression_cidr": "Disabled", "format-0": "auto", "state-0": "Enabled", "url-0": "", "header-0": "Feed"},
+			"input": {"name": "G", "action": "Disabled", "updateFrequency": "Never", "feeds": [{"header": "Feed", "state": "enabled", "format": "auto", "url": ""}]},
+			"valid": false
+		},
+		{
+			"id": "ipv4-posted-disabled-without-source",
+			"description": "a disabled row may have no source",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "G", "action": "Disabled", "cron": "Never", "suppression_cidr": "Disabled", "format-0": "auto", "state-0": "Disabled", "url-0": "", "header-0": "Feed"},
+			"input": {"name": "G", "action": "Disabled", "updateFrequency": "Never", "feeds": [{"header": "Feed", "state": "disabled", "format": "auto", "url": ""}]},
+			"valid": true
+		},
+		{
+			"id": "ipv4-posted-header-not-a-word",
+			"description": "a header with a dash is refused",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "G", "action": "Disabled", "cron": "Never", "suppression_cidr": "Disabled", "format-0": "auto", "state-0": "Disabled", "url-0": "", "header-0": "a-b"},
+			"input": {"name": "G", "action": "Disabled", "updateFrequency": "Never", "feeds": [{"header": "a-b", "state": "disabled", "format": "auto", "url": ""}]},
+			"valid": false
+		},
+		{
+			"id": "ipv4-posted-reserved-header",
+			"description": "a reserved header is refused even on a disabled row",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "G", "action": "Disabled", "cron": "Never", "suppression_cidr": "Disabled", "format-0": "auto", "state-0": "Disabled", "url-0": "", "header-0": "DNSBLIP"},
+			"input": {"name": "G", "action": "Disabled", "updateFrequency": "Never", "feeds": [{"header": "DNSBLIP", "state": "disabled", "format": "auto", "url": ""}]},
+			"valid": false
+		},
+		{
+			"id": "ipv4-posted-api-key-placeholder",
+			"description": "an enabled source still holding the _API_KEY_ placeholder is refused",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "G", "action": "Disabled", "cron": "Never", "suppression_cidr": "Disabled", "format-0": "geoip", "state-0": "Enabled", "url-0": "US_API_KEY_ x", "header-0": "Feed"},
+			"input": {"name": "G", "action": "Disabled", "updateFrequency": "Never", "feeds": [{"header": "Feed", "state": "enabled", "format": "geoip", "url": "US_API_KEY_ x"}]},
+			"valid": false
+		},
+		{
+			"id": "ipv4-posted-disallowed-character",
+			"description": "a source with < is refused even on a disabled row",
+			"projection": "feeds/ipv4",
+			"source": "posted",
+			"posted": {"aliasname": "G", "action": "Disabled", "cron": "Never", "suppression_cidr": "Disabled", "format-0": "auto", "state-0": "Disabled", "url-0": "https://example.org/<x>", "header-0": "Feed"},
+			"input": {"name": "G", "action": "Disabled", "updateFrequency": "Never", "feeds": [{"header": "Feed", "state": "disabled", "format": "auto", "url": "https://example.org/<x>"}]},
+			"valid": false
+		}
+	]
+}

@@ -44,14 +44,19 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
 (issue #3924), and serves `GetSettings`, `GetSettingsSchema` and `ValidateSettings` from memory.
 
 - **Schema.** A projection is a group of fields, published as the resource `settings/<id>`. A field has a `name`, a
-  `type` (`bool`, `int`, `enum`, `string`) and a `default`. It may also have:
+  `type` (`bool`, `int`, `enum`, `string`, `list`) and a `default`. It may also have:
   - `enum`: the allowed values;
   - `min` / `max`;
+  - `pattern`: a regular expression (RE2) a string matches whole; `reserved`: values a string may not take;
   - `secret: true`;
-  - `requires`: a bool field of the same projection; while that one is false, this bool is held false.
+  - `requires`: a bool field of the same projection; while that one is false, this bool is held false;
+  - for a `list`: `items`, the fields of each item (a JSON object), and `key`, the item field that identifies it,
+    required and unique in the list. A list is set whole: an item missing from it goes, and an item's missing fields
+    keep the values of the item with the same key (a secret the client cannot read survives), else take their defaults.
 - **Revision and generations.** The configuration *revision* is the optimistic lock. It comes from the backend and is
-  compared only for equality. A projection's *generation* is derived from its value (53 bits of the SHA-256 of its
-  JSON): it is never stored, stays equal across Core restarts while the value is unchanged, and moves when it changes.
+  compared only for equality. A projection's *generation* is derived from its value as a read shows it (53 bits of the
+  SHA-256 of its JSON, secrets as their presence): it is never stored, stays equal across Core restarts while the value
+  is unchanged, and moves when what a read shows changes.
 - **`settings` / `changes`.** An object of projection id → field → value. JSON `null` resets a field to its default.
   `InitializeSettings` fills every field it is not given with its default.
 - **Validation.** The whole resulting configuration is checked before anything is written. Any error rejects it all:
@@ -63,7 +68,7 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
     Core holds it or as the backend finds it when it writes. The client reads again and reapplies its change.
 - **Backend failure** (`unavailable`): the backend could not be read or written. Core keeps the values it last read.
 - **No run.** A save starts no run.
-- **Secrets are write-only.** A read shows a secret field as `{"present": true|false}`, never its value.
+- **Secrets are write-only.** A read shows a secret field as `{"present": true|false}`, never its value, in list items too.
 - **One Core per state directory.** Core holds an exclusive `flock` on `core.lock` in `--state-dir` while it runs, with
   either backend. A second `pfb-core` on the same directory does not start.
 - **Schema growth.** A projection or field the backend does not hold yet reads as its default. A projection or field
@@ -95,7 +100,7 @@ take 10 s, a write 20 s; past it the command's whole process group is killed, an
 nothing the command started outlives the call. Calls run one at a time, so a call queued behind another can take the sum of
 both bounds. A write that timed out may still have been applied: the Outpost's next
 tick finds the revision moved and Core reads it. A reply
-over 1 MiB, a non-zero exit, a reply that is not exactly one JSON object of version 1, a revision of 0, or read values
+over 32 MiB (the feed projections carry custom lists), a non-zero exit, a reply that is not exactly one JSON object of version 1, a revision of 0, or read values
 the schema refuses fail the call. The configuration always exists, so `InitializeSettings` is refused, and Core never
 writes `settings.json`.
 
@@ -103,8 +108,10 @@ Protocol, version 1:
 
 | Request | Reply |
 |---|---|
-| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}}}` |
-| `{"version": 1, "op": "write", "expectedRevision": N, "settings": {"dns": {...every field}}}` | `{"version": 1, "revision": M}` |
+| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}}}` |
+| `{"version": 1, "op": "write", "expectedRevision": N, "settings": {...every projection, every field}}` | `{"version": 1, "revision": M}` |
+
+A read carries secrets (feed credentials) to Core; only Core's API hides them.
 
 A refusal is `{"version": 1, "error": {"code", "message", "fieldErrors"}}`: `conflict` (the configuration is not at
 `expectedRevision`), `invalid_argument` (a malformed request or value; nothing written), `unavailable` (nothing was
@@ -150,6 +157,46 @@ The DNSBL resolver settings `pfb-dns` reads from `pfb_unbound.ini` today. `pfb-d
 
 Parity fixture: `tests/core/fixtures/settings_dns_parity.json`. `CoreSettingsDnsParityTest` (PHPUnit) freezes it against
 today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it.
+
+### Projections `feeds/ipv4`, `feeds/ipv6`, `feeds/dnsbl`
+
+The groups of the IPv4, IPv6 and DNSBL Groups pages, as far as downloading and parsing their feeds needs (issue #3937;
+the field inventory with config.xml keys and readers is on [#3937](https://github.com/pfBlockerNG/pfBlockerNG/issues/3937#issuecomment-6851184458)).
+Each holds one field, `groups`: a list keyed by `name`, in config order. Firewall rule options, the schedule override
+(`settings/schedule`) and the DNSBL build options stay with the Outpost.
+
+| Group field | Type, default |
+|---|---|
+| `name` (key) | string `[A-Za-z0-9_]+`, IP at most 24 characters |
+| `action` | enum: IP `Disabled` `Deny_*` `Permit_*` `Match_*` (`Inbound`/`Outbound`/`Both`) `Alias_Deny` `Alias_Permit` `Alias_Match` `Alias_Native`; DNSBL `Disabled` `unbound`; `Disabled` |
+| `updateFrequency` | enum `Never` `01hour` `02hours` `03hours` `04hours` `06hours` `08hours` `12hours` `EveryDay` `Weekly`, `Never` |
+| `bindAddress` | string, an IP address or `""` (the source interface, translated by the Outpost), `""` |
+| `preScript`, `postScript` | string, a file name in Core's script directory or `""`, `""` |
+| `customList` | string, `""` |
+| `suppressionCidr` (IPv4) | int 0 to 32 (0: off), `0` |
+| `whoisConvert` (IP) | bool, `false` |
+| `feeds` | list keyed by `header`, `[]` |
+
+| Feed field | Type, default |
+|---|---|
+| `header` (key) | string `[A-Za-z0-9_]+`, not `DNSBLIP` or a GeoIP continent alias; unique across the groups of the type (it names one file) |
+| `state` | enum `enabled` `disabled` `hold` `flex`, `enabled` |
+| `format` | enum: IP `auto` `geoip` `regex` `whois` `asn` `rsync`; DNSBL `auto` `rsync`; `auto` |
+| `url` | string without control characters or `<>"`, no userinfo, a local file as `file://`; unless `disabled`, required and without `_API_KEY_`; `""` |
+| `credentials` | secret string: the URL's userinfo (only beside a `scheme://` url; no `/`, `?`, `#`), `""` |
+| `action` (DNSBL) | enum `deny` `permit`, `deny` |
+
+The adapter answers only groups and feeds that pass these rules; one that does not (a duplicate or reserved header, a
+name that is not a word) is left out of the read and left alone by a write. A write changes only the config.xml keys
+whose value changed. Groups and feeds are matched by key: a rename is a delete and an add (the Outpost-only fields of
+the old one go); the ones Core keeps take their slots in Core's order, one that does not project keeps its slot; a
+deleted name or header goes with every stored duplicate of it. A feed added to a group whose first row has no source
+is refused (pfBlockerNG ignores every row of such a group). The revision is keyed (HMAC with a per-box key, root's
+alone, in `/var/db/pfblockerng/core_revision.key`), so it confirms no guess of a credential. `bindAddress` is the
+interface's IPv4 address, so a changed interface address moves the revision.
+
+Parity fixture: `tests/core/fixtures/settings_feeds_parity.json`. `CoreSettingsFeedsParityTest` (PHPUnit) freezes it
+against today's PHP and the adapter. `go/pfb_core/settings/feeds_parity_test.go` runs Core against it.
 
 ## Errors
 

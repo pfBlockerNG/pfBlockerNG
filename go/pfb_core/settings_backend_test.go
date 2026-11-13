@@ -196,7 +196,7 @@ func TestCoreServesTheAdaptersSettings(t *testing.T) {
 	f := newFakeAdapter(t, readReply(t, 5, map[string]any{"control": true, "decisionCacheMax": 500}))
 	c := startCore(t, scratchDir(t), "--settings-backend-cmd", f.path)
 	snap := snapshotOf(t, c.post("GetSettings", `{}`))
-	if !snap.Initialized || snap.Revision != 5 || len(snap.Projections) != 1 || snap.Projections[0].Value["control"] != true ||
+	if !snap.Initialized || snap.Revision != 5 || len(snap.Projections) != 4 || snap.Projections[0].Value["control"] != true ||
 		snap.Projections[0].Value["decisionCacheMax"] != float64(500) || snap.Projections[0].Value["replyLogging"] != true {
 		t.Errorf("GetSettings = %+v, want the adapter's revision 5, control on, cap 500 and the defaults", snap)
 	}
@@ -226,7 +226,7 @@ func TestSettingsChangedMakesCoreReadTheAdapterAgain(t *testing.T) {
 	c := startCore(t, scratchDir(t), "--settings-backend-cmd", f.path)
 	f.reply(readReply(t, 6, map[string]any{"idnMode": "on"}))
 	snap := snapshotOf(t, c.post("SettingsChanged", `{}`))
-	if !snap.Initialized || snap.Revision != 6 || len(snap.Projections) != 1 || snap.Projections[0].Value["idnMode"] != "on" {
+	if !snap.Initialized || snap.Revision != 6 || len(snap.Projections) != 4 || snap.Projections[0].Value["idnMode"] != "on" {
 		t.Errorf("SettingsChanged = %+v, want what the adapter now holds: revision 6, idnMode on", snap)
 	}
 	if got := snapshotOf(t, c.post("GetSettings", `{}`)); got.Revision != 6 || got.Projections[0].Value["idnMode"] != "on" {
@@ -394,4 +394,37 @@ func TestSettingsChangedOverTheFileBackendRereadsItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantJSON(t, h.post("/v1/SettingsChanged", `{}`), http.StatusOK, string(want.body))
+}
+
+// Issue #3937: a feed saved on the IP or DNSBL Groups page reaches Core when the Outpost reports SettingsChanged, and
+// GetSettings answers it with the feed's credentials only as their presence.
+func TestASavedFeedReachesCoreAndItsCredentialsNeverAppearInARead(t *testing.T) {
+	f := newFakeAdapter(t, readReply(t, 5, nil))
+	c := startCore(t, scratchDir(t), "--settings-backend-cmd", f.path)
+	if r := c.post("GetSettings", `{"projectionIds":["feeds/ipv4"]}`); bytes.Contains(r.body, []byte("DROP")) {
+		t.Fatalf("Core holds the feed before the page saved it: %s", r.body)
+	}
+	saved := `{"version":1,"revision":6,"settings":{"dns":{},` +
+		`"feeds/ipv4":{"groups":[{"name":"Spamhaus","action":"Deny_Inbound","feeds":[` +
+		`{"header":"DROP","url":"https://www.spamhaus.org/drop/drop.txt","credentials":"user:s3cret"}]}]},` +
+		`"feeds/dnsbl":{"groups":[{"name":"Ads","action":"unbound","feeds":[{"header":"Hosts","url":"https://example.com/hosts","action":"permit"}]}]}}}`
+	f.reply(saved)
+	changed := c.post("SettingsChanged", `{}`)
+	for _, r := range []reply{changed, c.post("GetSettings", `{}`), c.post("GetSettings", `{"projectionIds":["feeds/ipv4","feeds/dnsbl"]}`)} {
+		snap := snapshotOf(t, r)
+		if bytes.Contains(r.body, []byte("s3cret")) {
+			t.Fatalf("a read shows the credentials: %s", r.body)
+		}
+		groups := map[string]string{}
+		for _, p := range snap.Projections {
+			if p.Value["groups"] != nil {
+				b, _ := json.Marshal(p.Value["groups"])
+				groups[p.ResourceID] = string(b)
+			}
+		}
+		if !strings.Contains(groups["settings/feeds/ipv4"], `"credentials":{"present":true},"format":"auto","header":"DROP","state":"enabled","url":"https://www.spamhaus.org/drop/drop.txt"`) ||
+			!strings.Contains(groups["settings/feeds/dnsbl"], `"action":"permit","credentials":{"present":false},"format":"auto","header":"Hosts"`) {
+			t.Errorf("revision %d, groups %v: want the saved IPv4 and DNSBL feeds", snap.Revision, groups)
+		}
+	}
 }

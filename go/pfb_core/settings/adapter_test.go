@@ -264,7 +264,7 @@ func TestNoDescendantOfTheAdapterOutlivesTheCall(t *testing.T) {
 
 func TestAFailingAdapterFailsTheCallAndKeepsTheLastValues(t *testing.T) {
 	good := readReply(t, 7, map[string]any{"control": true})
-	huge := `{"version":1,"revision":8,"settings":{},"pad":"` + strings.Repeat("x", 2<<20) + `"}`
+	huge := `{"version":1,"revision":8,"settings":{},"pad":"` + strings.Repeat("x", 33<<20) + `"}`
 	cases := []struct {
 		name   string
 		script string // "": the plain fake, answering reply
@@ -293,8 +293,8 @@ func TestAFailingAdapterFailsTheCallAndKeepsTheLastValues(t *testing.T) {
 		{name: "an unknown projection", reply: `{"version":1,"revision":8,"settings":{"nosuch":{}}}`, want: "nosuch"},
 		{name: "an unknown field", reply: `{"version":1,"revision":8,"settings":{"dns":{"nosuch":1}}}`, want: "dns.nosuch"},
 		{name: "a projection that is not an object", reply: `{"version":1,"revision":8,"settings":{"dns":[]}}`, want: "not one JSON object"},
-		{name: "stdout over 1 MiB", reply: huge, want: "1 MiB"},
-		{name: "stdout that never ends", script: `cat > "$D/req"; yes xxxxxxxxxxxxxxxx`, want: "1 MiB"},
+		{name: "stdout over 32 MiB", reply: huge, want: "32 MiB"},
+		{name: "stdout that never ends", script: `cat > "$D/req"; yes xxxxxxxxxxxxxxxx`, want: "32 MiB"},
 		{name: "non-UTF-8 stdout", bytes: []byte{0xff, 0xfe, '{', '}', '\n'}, want: "not one JSON object"},
 		{name: "non-UTF-8 inside an enum", bytes: []byte(`{"version":1,"revision":8,"settings":{"dns":{"idnMode":"` + "\xff" + `"}}}`), want: "dns.idnMode"},
 		{name: "the adapter is unavailable", reply: `{"version":1,"error":{"code":"unavailable","message":"the config lock stayed taken"}}`,
@@ -360,7 +360,8 @@ func TestSaveWritesThroughTheAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if want := `{"version":1,"op":"write","expectedRevision":7,"settings":{"dns":` + allDnsFields + `}}`; f.request() != want {
+	if want := `{"version":1,"op":"write","expectedRevision":7,"settings":{"dns":` + allDnsFields +
+		`,"feeds/dnsbl":{"groups":[]},"feeds/ipv4":{"groups":[]},"feeds/ipv6":{"groups":[]}}}`; f.request() != want {
 		t.Errorf("the adapter was sent\n %s\n want\n %s", f.request(), want)
 	}
 	if res.Revision != 9 || len(res.Projections) != 1 || res.Projections[0].Value["control"] != true {

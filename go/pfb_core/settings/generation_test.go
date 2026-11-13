@@ -73,8 +73,8 @@ func TestAFileStoreKeepsNoGenerationAndEqualValuesGiveTheSameOneAgain(t *testing
 	if err := json.Unmarshal(doc["projections"], &projections); err != nil {
 		t.Fatal(err)
 	}
-	if len(projections) != 2 { // dns and feedauth: the loop below must have something to check
-		t.Fatalf("settings.json holds %d projections, want dns and feedauth", len(projections))
+	if len(projections) != len(testSchema().Projections) { // the loop below must have something to check
+		t.Fatalf("settings.json holds %d projections, want every one of the schema's", len(projections))
 	}
 	for id, p := range projections {
 		if got := slices.Sorted(maps.Keys(p)); !slices.Equal(got, []string{"values"}) {

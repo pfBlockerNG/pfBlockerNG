@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
+	"regexp"
 	"slices"
 	"sync"
 )
@@ -154,18 +156,32 @@ func (s *Store) Get(ids []string) (Snapshot, error) {
 
 // show is a projection's values as a read shows them, every secret as its presence.
 func show(p Projection, values map[string]any) ProjectionValue {
-	value := maps.Clone(values)
-	for _, f := range p.Fields {
-		if f.Secret {
-			value[f.Name] = map[string]bool{"present": values[f.Name] != f.Default}
-		}
-	}
-	return ProjectionValue{ResourceID: "settings/" + p.ID, Generation: generation(values), Value: value}
+	value := hide(p.Fields, values)
+	return ProjectionValue{ResourceID: "settings/" + p.ID, Generation: generation(value), Value: value}
 }
 
-// generation derives a projection's generation from its values (53 bits, exact in a JSON number): equal values give the
-// same one in any Core, a change of value moves it, and nothing is stored. Secrets are part of the values, so one set to
-// a guessable value would be guessable from the generation; the production schema has none.
+// hide is values with every secret, in list items too, replaced by its presence.
+func hide(fields []Field, values map[string]any) map[string]any {
+	value := maps.Clone(values)
+	for _, f := range fields {
+		switch {
+		case f.Secret:
+			value[f.Name] = map[string]bool{"present": values[f.Name] != f.Default}
+		case f.Type == TypeList:
+			items := values[f.Name].([]any)
+			shown := make([]any, len(items))
+			for i, item := range items {
+				shown[i] = hide(f.Items, item.(map[string]any))
+			}
+			value[f.Name] = shown
+		}
+	}
+	return value
+}
+
+// generation derives a projection's generation from its values as a read shows them (53 bits, exact in a JSON number):
+// equal values give the same one in any Core, a change of what a read shows moves it, and nothing is stored. A secret
+// counts only by its presence, so the generation never confirms a guess of it.
 func generation(values map[string]any) uint64 {
 	raw, _ := json.Marshal(values) // bools, ints and strings: cannot fail; keys are sorted
 	sum := sha256.Sum256(raw)
@@ -232,7 +248,7 @@ func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMess
 		v, perr := apply(p, s.values[p.ID], changes[p.ID], p.ID)
 		errs = append(errs, perr...)
 		values[p.ID] = v
-		if !maps.Equal(v, s.values[p.ID]) {
+		if !reflect.DeepEqual(v, s.values[p.ID]) {
 			changed = append(changed, p)
 		}
 	}
@@ -316,6 +332,14 @@ func apply(p Projection, base map[string]any, given map[string]json.RawMessage, 
 			continue
 		}
 		f := p.Fields[i]
+		if f.Type == TypeList {
+			v, lerrs := decodeList(f, values[name].([]any), given[name], prefix+"."+name)
+			errs = append(errs, lerrs...)
+			if lerrs == nil {
+				values[name] = v
+			}
+			continue
+		}
 		v, err := decode(f, given[name])
 		if err != nil {
 			errs = append(errs, FieldError{Field: prefix + "." + name, Message: err.Error()})
@@ -329,6 +353,70 @@ func apply(p Projection, base map[string]any, given map[string]json.RawMessage, 
 		}
 	}
 	return values, errs
+}
+
+// decodeList reads a list field over the current list: each item is the current item with the same key (else the item
+// fields' defaults) with the given fields over it, so a secret a client cannot read survives an edit that omits it. It is
+// validated, has a unique non-empty key and passes f.Check, and the whole list f.CheckList. JSON null is the default list.
+func decodeList(f Field, current []any, raw json.RawMessage, prefix string) ([]any, []FieldError) {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return f.Default.([]any), nil
+	}
+	var given []json.RawMessage
+	if json.Unmarshal(raw, &given) != nil {
+		return nil, []FieldError{{Field: prefix, Message: "must be a list"}}
+	}
+	items := Projection{Fields: f.Items}
+	keyField := items.Fields[slices.IndexFunc(items.Fields, func(i Field) bool { return i.Name == f.Key })]
+	list := make([]any, 0, len(given))
+	keys := make(map[any]bool, len(given))
+	var errs []FieldError
+	for i, raw := range given {
+		at := fmt.Sprintf("%s[%d]", prefix, i)
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil || fields == nil {
+			errs = append(errs, FieldError{Field: at, Message: "must be an object"})
+			continue
+		}
+		base := defaults(items)
+		if key, err := decode(keyField, fields[f.Key]); err == nil && fields[f.Key] != nil {
+			if i := slices.IndexFunc(current, func(c any) bool { return c.(map[string]any)[f.Key] == key }); i >= 0 {
+				base = current[i].(map[string]any)
+			}
+		}
+		item, ierrs := apply(items, base, fields, at)
+		if ierrs == nil && f.Check != nil {
+			for _, e := range f.Check(item) {
+				ierrs = append(ierrs, FieldError{Field: at + "." + e.Field, Message: e.Message})
+			}
+		}
+		switch key := item[f.Key]; {
+		case ierrs != nil:
+		case key == "":
+			ierrs = []FieldError{{Field: at + "." + f.Key, Message: "required"}}
+		case keys[key]:
+			ierrs = []FieldError{{Field: at + "." + f.Key, Message: "repeats an earlier item's"}}
+		}
+		errs = append(errs, ierrs...)
+		keys[item[f.Key]] = true
+		list = append(list, item)
+	}
+	if errs == nil && f.CheckList != nil {
+		for _, e := range f.CheckList(list) {
+			errs = append(errs, FieldError{Field: prefix + e.Field, Message: e.Message})
+		}
+	}
+	return list, errs
+}
+
+var patterns sync.Map // pattern → *regexp.Regexp: a list of thousands of feeds compiles each once
+
+func pattern(p string) *regexp.Regexp {
+	if re, ok := patterns.Load(p); ok {
+		return re.(*regexp.Regexp)
+	}
+	re, _ := patterns.LoadOrStore(p, regexp.MustCompile(p))
+	return re.(*regexp.Regexp)
 }
 
 // decode reads one value as f's type and checks its constraints; JSON null is f's default.
@@ -360,8 +448,13 @@ func decode(f Field, raw json.RawMessage) (any, error) {
 		if json.Unmarshal(raw, &str) != nil {
 			return nil, errors.New("must be a string")
 		}
-		if f.Type == TypeEnum && !slices.Contains(f.Enum, str) {
+		switch {
+		case f.Type == TypeEnum && !slices.Contains(f.Enum, str):
 			return nil, fmt.Errorf("must be one of %v", f.Enum)
+		case f.Pattern != "" && !pattern(f.Pattern).MatchString(str):
+			return nil, fmt.Errorf("must match %s", f.Pattern)
+		case slices.Contains(f.Reserved, str):
+			return nil, fmt.Errorf("%q is reserved", str)
 		}
 		return str, nil
 	}
