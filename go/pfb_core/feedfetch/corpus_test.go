@@ -32,7 +32,8 @@ package feedfetch_test
 //	             Basic credentials the proxy demands (407 otherwise). The proxy records each request as {server: the
 //	             proxy's name, method, target, and proxy_authorization when one was sent} in the shared request order.
 //	routes       optional {server: {path: route}}, a step may replace it (the replacement stays for later steps).
-//	             route: status (default 200), location, body, etag, last_modified (Unix seconds), declared_length.
+//	             route: status (default 200), location, body (text) or body_b64 (the bytes, base64, for a body that is
+//	             not text), etag, last_modified (Unix seconds), declared_length.
 //	             An unknown path is a 404 "missing\n". With etag the server answers 304 when If-None-Match equals it;
 //	             otherwise with last_modified, when If-Modified-Since is not older. declared_length is the Content-Length
 //	             sent; the server then closes after the body.
@@ -53,7 +54,11 @@ package feedfetch_test
 //	             if_none_match, if_modified_since, x_feed_probe, accept_encoding}] in order, plus host (the Host header as
 //	             received, "name:port"), which is checked only when the expectation names it; reason (optional: the
 //	             refusal reason; a null in an old_expect pins "no reason" for the PHP runner, this one ignores it);
-//	             rsync_source (absent: rsync never started). No non-empty staged body may survive a step.
+//	             rsync_source (absent: rsync never started). Content gates (#3973): stage and detected (optional: those
+//	             of a validation refusal's "stage=.. reason=.. detected=.." line); raw_retained (default false: a
+//	             non-empty staged ".raw" survives the step, as an archive success leaves it); published_b64 or
+//	             published_size in place of published, for bytes that are not text or are too large to inline. Apart
+//	             from raw_retained, no non-empty staged body may survive a step.
 //	  old_expect optional, the shape of expect: present only where Core differs from the old path on purpose. This runner
 //	             asserts expect and refuses an old_expect equal to it; the PHP runner asserts old_expect instead.
 
@@ -63,6 +68,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -91,6 +97,7 @@ type route struct {
 	Status         int     `json:"status"`
 	Location       string  `json:"location"`
 	Body           string  `json:"body"`
+	BodyB64        string  `json:"body_b64"`
 	ETag           *string `json:"etag"`
 	LastModified   *int64  `json:"last_modified"`
 	DeclaredLength *int    `json:"declared_length"`
@@ -98,17 +105,27 @@ type route struct {
 
 type routes map[string]map[string]route
 
+// expect, beyond the transfer keys of the header: stage and detected (optional: the validation stage and detail of the
+// refusal, as pfb_validate_log() writes them: "stage=<stage> reason=<reason> detected=<detail>"); raw_retained (default
+// false: a non-empty staged ".raw" survives the step, as an archive success leaves it); published_b64 (published, for
+// bytes that are not text) or published_size (the size of the published copy, for a body too large to inline) in
+// place of published.
 type expect struct {
-	OK          bool                `json:"ok"`
-	Decision    *string             `json:"decision"`
-	Published   *string             `json:"published"`
-	ETag        json.RawMessage     `json:"etag"`
-	LastMod     json.RawMessage     `json:"lastmod"`
-	Digest      json.RawMessage     `json:"digest"`
-	Requests    []map[string]string `json:"requests"`
-	Mtime       *int64              `json:"mtime"`
-	Reason      *string             `json:"reason"`
-	RsyncSource *string             `json:"rsync_source"`
+	OK            bool                `json:"ok"`
+	Decision      *string             `json:"decision"`
+	Published     *string             `json:"published"`
+	ETag          json.RawMessage     `json:"etag"`
+	LastMod       json.RawMessage     `json:"lastmod"`
+	Digest        json.RawMessage     `json:"digest"`
+	Requests      []map[string]string `json:"requests"`
+	Mtime         *int64              `json:"mtime"`
+	Reason        *string             `json:"reason"`
+	RsyncSource   *string             `json:"rsync_source"`
+	Stage         *string             `json:"stage"`
+	Detected      *string             `json:"detected"`
+	RawRetained   bool                `json:"raw_retained"`
+	PublishedB64  *string             `json:"published_b64"`
+	PublishedSize *int64              `json:"published_size"`
 }
 
 type ftpFile struct {
@@ -211,7 +228,11 @@ func (s corpusServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rt.Location != "" {
 		w.Header().Set("Location", rt.Location)
 	}
-	n := len(rt.Body)
+	body := []byte(rt.Body)
+	if rt.BodyB64 != "" {
+		body, _ = base64.StdEncoding.DecodeString(rt.BodyB64) // validated by loadScenario
+	}
+	n := len(body)
 	if rt.DeclaredLength != nil {
 		n = *rt.DeclaredLength
 	}
@@ -221,7 +242,7 @@ func (s corpusServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	w.WriteHeader(status)
-	io.WriteString(w, rt.Body)
+	w.Write(body)
 }
 
 func TestParityCorpus(t *testing.T) {
@@ -248,6 +269,19 @@ func loadScenario(t *testing.T, file string) scenario {
 	}
 	if sc.Schema != 1 || sc.Description == "" || len(sc.Steps) == 0 {
 		t.Fatalf("%s: schema 1 with a description and steps required", file)
+	}
+	checkRoutes := func(rs routes) {
+		for p, paths := range rs {
+			for path, rt := range paths {
+				if _, err := base64.StdEncoding.DecodeString(rt.BodyB64); err != nil {
+					t.Fatalf("%s: route %s %s: body_b64: %v", file, p, path, err)
+				}
+			}
+		}
+	}
+	checkRoutes(sc.Routes)
+	for _, st := range sc.Steps {
+		checkRoutes(st.Routes)
 	}
 	return sc
 }
@@ -492,8 +526,20 @@ func runScenario(t *testing.T, file string) {
 			got["decision"] = res.Decision.String()
 			want["decision"] = *exp.Decision
 		}
-		got["published"] = readOrNil(orig)
-		want["published"] = nilOr(exp.Published)
+		got["published"], want["published"] = readOrNil(orig), nilOr(exp.Published)
+		switch {
+		case exp.PublishedSize != nil:
+			delete(got, "published")
+			delete(want, "published")
+			got["published_size"], want["published_size"] = sizeOrNil(orig), *exp.PublishedSize
+		case exp.PublishedB64 != nil:
+			b, err := base64.StdEncoding.DecodeString(*exp.PublishedB64)
+			if err != nil {
+				t.Fatalf("%s: published_b64: %v", label, err)
+			}
+			want["published"] = string(b) // inline in a scenario, so under readCap: readOrNil reads it whole
+		}
+		got["raw_retained"], want["raw_retained"] = rawKept(filepath.Join(dir, name+".raw")), exp.RawRetained
 		got["etag"] = readOrNil(orig + ".etag")
 		got["lastmod"] = nil
 		if lm := readOrNil(orig + ".lastmod"); lm != nil {
@@ -533,6 +579,12 @@ func runScenario(t *testing.T, file string) {
 			if info, err := os.Stat(orig); err == nil {
 				got["mtime"] = info.ModTime().Unix()
 			}
+		}
+		if st.Expect.Stage != nil {
+			got["stage"], want["stage"] = res.Stage, *st.Expect.Stage
+		}
+		if st.Expect.Detected != nil {
+			got["detected"], want["detected"] = res.Detected, *st.Expect.Detected
 		}
 		got["staged"], want["staged"] = stagedLeftover(t, dir, name), ""
 		if !reflect.DeepEqual(got, want) {
@@ -605,10 +657,13 @@ func stagedLeftover(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	keep := map[string]bool{}
-	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.xxhash128", ".probe", ".probe.etag", ".probe.lastmod"} {
+	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.xxhash128", ".probe", ".probe.etag", ".probe.lastmod", ".raw"} {
 		keep[name+s] = true
 	}
 	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".pfbstage_") { // an extraction's staging file, whatever its size
+			return e.Name()
+		}
 		info, err := e.Info()
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || keep[e.Name()] {
 			continue
@@ -623,6 +678,21 @@ func stagedLeftover(t *testing.T, dir, name string) string {
 // readCap bounds what a step reads back (#3989): a larger file becomes its size and SHA-256, so a ceiling regression
 // still fails the comparison without holding the file.
 const readCap = 1 << 20
+
+// sizeOrNil is the size of the file at p, or nil when there is none.
+func sizeOrNil(p string) any {
+	info, err := os.Stat(p)
+	if err != nil {
+		return nil
+	}
+	return info.Size()
+}
+
+// rawKept reports whether p is a non-empty file: the staged body an archive success leaves behind.
+func rawKept(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && info.Size() > 0
+}
 
 func readOrNil(p string) any {
 	f, err := os.Open(p)

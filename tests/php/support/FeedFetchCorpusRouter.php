@@ -35,7 +35,8 @@ if ($route === NULL) {
 	return;
 }
 
-$body = (string) ($route['body'] ?? '');
+// body_b64 carries bytes that are not text (a route has one of body and body_b64).
+$body = isset($route['body_b64']) ? (string) base64_decode((string) $route['body_b64'], TRUE) : (string) ($route['body'] ?? '');
 if (isset($route['etag'])) {
 	header("ETag: {$route['etag']}");
 }

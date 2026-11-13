@@ -59,14 +59,15 @@ func dropDigests(feed Feed) error {
 	return nil
 }
 
-// publish makes the staged body the published copy in one rename: its raw-byte digest is recorded first (the probe
-// hashes raw bytes, #713), then a missing trailing newline is added (#1263).
-func publish(feed Feed, staged string, lastMod time.Time) error {
-	sum, err := digest.File(staged)
+// publish makes body the published copy in one rename. The digest recorded is of wire, the raw bytes the transfer left
+// (the probe hashes raw bytes, #713): body itself for a text feed, the archive for an extraction, and it is taken before
+// a missing trailing newline is added to body (#1263).
+func publish(feed Feed, body, wire string, lastMod time.Time) error {
+	digest, err := fileDigest(wire)
 	if err != nil {
 		return errors.New("staged body could not be read")
 	}
-	f, err := os.OpenFile(staged, os.O_RDWR, 0)
+	f, err := os.OpenFile(body, os.O_RDWR, 0)
 	if err != nil {
 		return errors.New("staged body could not be read")
 	}
@@ -85,7 +86,7 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 	if err := dropDigests(feed); err != nil {
 		return err
 	}
-	if err := os.Rename(staged, published); err != nil {
+	if err := os.Rename(body, published); err != nil {
 		return errors.New("published copy could not be replaced")
 	}
 	os.WriteFile(feed.path(".orig.xxhash128"), []byte(sum), 0o600)

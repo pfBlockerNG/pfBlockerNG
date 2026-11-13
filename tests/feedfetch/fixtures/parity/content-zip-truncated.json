@@ -1,0 +1,47 @@
+{
+ "schema": 1,
+ "description": "Row 11: a zip cut short (no central directory) fails its structural test and is refused.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "UEsDBBQAAAAIAAAAIVAGH6UUBwIAAMQOAAAFAAAAYS50eHTt1sttAzEQBNG7gxHYzX/+iRmwt2scgI97ok41grRvh/r40z/tSz+nntPP2Z9zPOd8zvWc+znPc950CKaoJJWmElWqSlbpKmGl7JTNd03ZKTtlp+yUnbJTdso95Z5y52dIuafcU+4p95R7yj3lkfJIeaQ8+IVTHimPlEfKI+WR8kx5pjxTnilP/ryUZ8oz5ZnyTHmlvFJeKa+UV8qL5yLllfJKeaW8U94p75R3yjvlnfLmkUt5p7xTPimflE/KJ+WT8kn5pHx4mlM+Kd+Ub8o35ZvyTfmmfFO+KV+glBSoNKw0sDS0NLg0vDTANMQ0yDRm/OHIjAJZIotkmSyUpbJY4lLAlMs8M7ApcAqdgqfwKYAKoYKoMKpeLxZmwFQ4FVCFVEFVWBVYhVbBVaPeXsxArCArzAq0Qq1gK9wKuEKuZr0imQFeoVfwFX4FYCFYEBaGBWKteg8zA8cCspAsKAvLArPQLDgLz9r1smcGpIVpgVqoFqyFawFbyBa0dWqjMAPdgrfwLYAL4YK4MC6QC+W6tbZqb7G4cG6cG+fGuXFunBvnxrlxbtVyZAbOjXPj3Dg3zo1z49y1f2sB/9nAzKgdXEu4tnCt4drDtYhxbpwb5+615pmBc+PcODfOjXPj3Dg3zo1zj7pLMAPnxrlxbpwb5++t6r1V/X54b1Xvreq9Vf1++v9b1TdQSwECFAMUAAAACAAAACFQBh+lFAcCAADEDgAABQAAAAAAAAAAAAAApAEAAAAAYS50eHRQSw=="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "structural",
+    "reason": "probe_failed",
+    "detected": "application/zip FEED.raw",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

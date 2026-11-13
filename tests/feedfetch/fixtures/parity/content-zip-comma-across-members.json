@@ -1,0 +1,38 @@
+{
+ "schema": 1,
+ "description": "The comma transform runs over the members as one stream: a comma ending a member and the white space opening the next become \"; \", and commas ending the last member are newlines.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "UEsDBBQAAAAIAAAAIVA5WjvdCgAAAAgAAAAFAAAAYS50eHQz1DPSM9Yz0QEAUEsDBBQAAAAIAAAAIVCPZeWgDAAAAAoAAAAFAAAAYi50eHRTMNUz0zPXs9DRAQBQSwECFAMUAAAACAAAACFQOVo73QoAAAAIAAAABQAAAAAAAAAAAAAApAEAAAAAYS50eHRQSwECFAMUAAAACAAAACFQj2XloAwAAAAKAAAABQAAAAAAAAAAAAAApAEtAAAAYi50eHRQSwUGAAAAAAIAAgBmAAAAXAAAAAAA"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4; 5.6.7.8\n\n",
+    "digest": "0210ad0b772c8b5306a540f33b719e6b",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "raw_retained": true
+   }
+  }
+ ]
+}

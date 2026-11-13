@@ -1,0 +1,38 @@
+{
+ "schema": 1,
+ "description": "Row 7: a zip with two members: the members are concatenated, then \",\" followed by white space becomes \"; \" and every other \",\" a newline (the SFS / hpHosts workaround).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "UEsDBBQAAAAIAAAAIVCamjkeFwAAABUAAAAFAAAAYS50eHQz1DPSM9Yz0VGo4DLVM9Mz17PQseQCAFBLAwQUAAAACAAAACFQ0+mZZAsAAAAJAAAABQAAAGIudHh0S9RJ4krW4UzhAgBQSwECFAMUAAAACAAAACFQmpo5HhcAAAAVAAAABQAAAAAAAAAAAAAApAEAAAAAYS50eHRQSwECFAMUAAAACAAAACFQ0+mZZAsAAAAJAAAABQAAAAAAAAAAAAAApAE6AAAAYi50eHRQSwUGAAAAAAIAAgBmAAAAaAAAAAAA"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4; x\n5.6.7.8\n9\na\nb\nc; d\n",
+    "digest": "d603de15a02f622ea8b368872da73b60",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "raw_retained": true
+   }
+  }
+ ]
+}

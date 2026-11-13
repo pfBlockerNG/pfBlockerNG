@@ -1,0 +1,56 @@
+{
+ "schema": 1,
+ "description": "Row 17: an archive success keeps the staged archive (the digest and the ET reuse need it); a plain text success consumes it.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/gz": {
+    "body_b64": "H4sIAAAAAAAC/zPUM9Iz1jPhMtUz0zPXs+ACAHMCLsAQAAAA"
+   },
+   "/txt": {
+    "body": "9.9.9.9\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/gz",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n5.6.7.8\n",
+    "digest": "b7ee2c8df9e913bc28874a405e7802bd",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/gz"
+     }
+    ],
+    "raw_retained": true
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/txt",
+   "expect": {
+    "ok": true,
+    "published": "9.9.9.9\n",
+    "digest": "4f6ce37d3239f73c75cb373ccaf95de1",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/txt"
+     }
+    ]
+   }
+  }
+ ]
+}

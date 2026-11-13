@@ -1,0 +1,45 @@
+{
+ "schema": 1,
+ "description": "Owner addendum (2026-11-13): the old path exempts text/x-asm from the easylist hosts, so the same list passes there; Core has no host exception and passes it on every host.",
+ "hosts": {
+  "easylist.to": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "! Title: Test\n.text\n||ads.example.com^\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://easylist.to:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "! Title: Test\n.text\n||ads.example.com^\n",
+    "digest": "5defaea737f0e79cec1f9e1b8b9e1df8",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000
+   }
+  }
+ ]
+}

@@ -1,0 +1,38 @@
+{
+ "schema": 1,
+ "description": "A gzip of several members is extracted as one stream: the payloads are concatenated.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "H4sIAAAAAAAC/zPUM9Iz1jPhAgDE3zYPCAAAAB+LCAAAAAAAAv8z1TPTM9ez4AIAc0s6MwgAAAA="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n5.6.7.8\n",
+    "digest": "24d064c180be36e0bd5405ab9337030a",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "raw_retained": true
+   }
+  }
+ ]
+}
