@@ -243,8 +243,8 @@ pfb-dns ticket decides it.
 | State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): Core's data and its lock, never settings; outside `/var`, so it survives a RAM-disk reboot |
 | Settings backend | `/usr/local/pkg/pfblockerng/pfb_core_settings.sh` (`--settings-backend-cmd`): `config.xml` through PHP |
 
-- **Start** runs under a start lock (`lockf -k -t 10 /var/run/pfb_core.lock`; status 75 when another start holds it) and
-  keeps a pfb_core supervisor that already runs. Otherwise it runs this machine's binary (picked by `uname -p`), and it
+- **Start** and **Stop** run under one lock (`lockf -k -t 20 /var/run/pfb_core.lock`; status 75 when another start or
+  stop holds it). **Start** keeps a pfb_core supervisor that already runs. Otherwise it runs this machine's binary (picked by `uname -p`), and it
   fails when `daemon(8)` fails or its pidfile names no supervisor within 5 s; it returns once the supervisor runs, not once
   the socket listens. A package without an executable `pfb-core` for this machine starts nothing and logs why. That is not
   a failure. An unknown machine is a failure.

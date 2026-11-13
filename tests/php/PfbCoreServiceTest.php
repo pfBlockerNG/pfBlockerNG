@@ -105,9 +105,9 @@ final class PfbCoreServiceTest extends TestCase
 			printf '%s\n' "$MACHINE"
 			;;
 		lockf)
-			# lockf(1) as the rc script must call it: -k (keep the lock file) -t 10 (wait at most 10 s) FILE COMMAND...; the lock itself
+			# lockf(1) as the rc script must call it: -k (keep the lock file) -t 20 (wait at most 20 s) FILE COMMAND...; the lock itself
 			# is not modelled, LOCKF_EXIT stands for a wait that ran out (75) and runs nothing
-			[ "$1" = -k ] && [ "$2" = -t ] && [ "$3" = 10 ] && [ "$#" -ge 5 ] || { ev bad-lockf; exit 2; }
+			[ "$1" = -k ] && [ "$2" = -t ] && [ "$3" = 20 ] && [ "$#" -ge 5 ] || { ev bad-lockf; exit 2; }
 			printf '%s\n' "$*" >> "$S/lockf.calls"
 			[ -z "$LOCKF_EXIT" ] || exit "$LOCKF_EXIT"
 			shift 4
@@ -123,6 +123,7 @@ final class PfbCoreServiceTest extends TestCase
 			done
 			echo "${attached:-none}" > "$S/fds"
 			ev launch
+			echo "${PFB_CORE_START_LOCKED-unset}" > "$S/daemon.env"
 			[ "$DAEMON_EXIT" = 0 ] || exit "$DAEMON_EXIT"
 			supervisor=; child=
 			while [ "$#" -gt 0 ]; do
@@ -240,7 +241,7 @@ final class PfbCoreServiceTest extends TestCase
 			array_values($vars)
 		)));
 		file_put_contents("{$state}/ticks", "0\n");
-		foreach (['events', 'procs', 'logger', 'daemon.argv', 'fds', 'lockf.calls', 'signal.ticks', 'pending'] as $file) {
+		foreach (['events', 'procs', 'logger', 'daemon.argv', 'daemon.env', 'fds', 'lockf.calls', 'signal.ticks', 'pending'] as $file) {
 			file_put_contents("{$state}/{$file}", '');
 		}
 		if ($running) {
@@ -413,10 +414,62 @@ final class PfbCoreServiceTest extends TestCase
 		// When the service starts
 		[$status, $out] = $this->rc('start');
 
-		// Then it ran itself once under lockf (lock file kept, 10 s wait), and that locked run launched without locking again
+		// Then it ran itself once under lockf (lock file kept, 20 s wait), and that locked run launched without locking again
 		$this->assertSame(0, $status, $out);
-		$this->assertSame(["-k -t 10 {$this->dir}/run/pfb_core.lock /bin/sh {$this->dir}/run.sh start"], $this->lines('lockf.calls'));
+		$this->assertSame(["-k -t 20 {$this->dir}/run/pfb_core.lock /bin/sh {$this->dir}/run.sh start"], $this->lines('lockf.calls'));
 		$this->assertSame(['launch'], $this->lines('events'));
+		// ...and the daemon does not inherit the locked run's marker: a start from anything it runs takes the lock again
+		$this->assertSame(['unset'], $this->lines('daemon.env'));
+	}
+
+	public function testStopRunsUnderTheStartLockSoItNeverRemovesThePidfileOfAStartInFlight(): void
+	{
+		// Given a start in flight: daemon(8) has created the supervisor's pidfile but not yet written its pid into it
+		$this->install('freebsd-amd64');
+		$this->arrange('amd64');
+		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['core_daemon_pidfile'], ''));
+
+		// When the service stops
+		[$status, $out] = $this->rc('stop');
+
+		// Then the stop ran itself under the same lock as the starts (so it waits for that start's confirmation), and only once
+		$this->assertSame(0, $status, $out);
+		$this->assertSame(["-k -t 20 {$this->dir}/run/pfb_core.lock /bin/sh {$this->dir}/run.sh stop"], $this->lines('lockf.calls'));
+	}
+
+	public function testStopThatCannotTakeTheLockInTimeSignalsNothingAndFails(): void
+	{
+		// Given a Core that serves, and a start holding the lock past lockf's wait
+		$this->install('freebsd-amd64');
+		$this->arrange('amd64', running: TRUE, scenario: ['LOCKF_EXIT' => '75']);
+
+		// When the service stops
+		[$status, $out] = $this->rc('stop');
+
+		// Then the stop fails with lockf's status, signals nothing, keeps the pidfiles and logs one error naming the lock
+		$this->assertSame(75, $status, $out);
+		$this->assertSame([], $this->lines('events'), 'something was signalled without the lock');
+		$this->assertFileExists($GLOBALS['pfb']['core_daemon_pidfile']);
+		$logged = $this->lines('logger');
+		$this->assertCount(1, $logged, 'expected one log line, got: ' . implode(' | ', $logged));
+		$this->assertStringContainsString('lock', $logged[0]);
+	}
+
+	public function testStopNeverSignalsAnotherDaemonWhoseTitleOnlyStartsWithPfbCore(): void
+	{
+		// Given the supervisor pidfile names a daemon(8) started for another service whose title begins with pfb_core
+		$this->install('freebsd-amd64');
+		$this->arrange('amd64');
+		file_put_contents($GLOBALS['pfb']['core_daemon_pidfile'], "1001\n");
+		file_put_contents("{$this->dir}/state/procs", "1001|{$this->dir}/bin/daemon -r -t pfb_core_other -P /x /usr/sbin/other|\n");
+
+		// When the service stops
+		[$status, $out] = $this->rc('stop');
+
+		// Then that daemon is left alone
+		$this->assertSame(0, $status, $out);
+		$this->assertSame([], $this->lines('events'), 'another service\'s daemon was signalled');
+		$this->assertSame(['1001'], $this->livePids());
 	}
 
 	public function testStartThatCannotTakeTheStartLockInTimeLaunchesNothingAndSaysSo(): void

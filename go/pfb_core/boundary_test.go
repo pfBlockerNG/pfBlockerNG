@@ -40,6 +40,7 @@ var pfSensePathMarks = []string{
 }
 
 // stringConst is the value of e when it is a string literal or a + of them, and false for anything else.
+// shortcut: named constants and fmt.Sprintf results are not folded; upgrade if Core ever builds paths that way.
 func stringConst(e ast.Expr) (string, bool) {
 	switch e := e.(type) {
 	case *ast.BasicLit:
@@ -51,6 +52,8 @@ func stringConst(e ast.Expr) (string, bool) {
 			value = e.Value
 		}
 		return value, true
+	case *ast.ParenExpr:
+		return stringConst(e.X)
 	case *ast.BinaryExpr:
 		if e.Op != token.ADD {
 			return "", false
@@ -198,6 +201,7 @@ func TestBoundaryRuleAllowsOnlyTheNamedModules(t *testing.T) {
 		{"pfSense path split by a constant concatenation", "module m\n", "var _ = \"/usr/lo\" + \"cal/etc\"\n", "pfSense path literal"},
 		{"pfSense tree split by a three-part concatenation", "module m\n", "var _ = \"/us\" + \"r/lo\" + \"cal\"\n", "pfSense path literal"},
 		{"a concatenation whose operand names a tree is one violation", "module m\n", "var _ = \"/etc\" + \"/x\"\n", "pfSense path literal"},
+		{"pfSense path split by a parenthesised concatenation", "module m\n", "var _ = (\"/usr/lo\") + \"cal/etc\"\n", "pfSense path literal"},
 		{"pfSense tree as a filepath.Join element", "module m\n", "import \"path/filepath\"\n\nvar _ = filepath.Join(\"/etc\", \"x\")\n", "pfSense path literal"},
 		{"root alone is no pfSense path", "module m\n", "var _ = \"/\"\n", ""},
 		{"the API route prefix is no pfSense path", "module m\n", "var _ = \"/v1/\"\n", ""},

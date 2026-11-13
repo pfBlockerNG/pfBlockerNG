@@ -4417,8 +4417,8 @@ function pfb_core_state_teardown(PfbToggle $keep): void {
 
 
 /**
- * (Re)generate /usr/local/etc/rc.d/pfb_core.sh, the Core API service (issue #3841). Start: runs under a start lock ($pfb['core_lockfile'],
- * waited for at most 10 s; a start that cannot get it launches nothing and exits 75), keeps a pfb_core supervisor its pidfile names;
+ * (Re)generate /usr/local/etc/rc.d/pfb_core.sh, the Core API service (issue #3841). Start and stop run under one lock ($pfb['core_lockfile'],
+ * waited for at most 20 s; a start or stop that cannot get it does nothing and exits 75). Start: keeps a pfb_core supervisor its pidfile names;
  * otherwise stops what is left (a survivor fails the start) and runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64,
  * by `uname -p`) under daemon(8), restarted 5 s after it exits, with its output in $pfb['core_log'], its API on $pfb['core_socket'], its
  * storage in $pfb['core_state'] and its settings read and written through PFB_CORE_SETTINGS_CMD (issue #3924: the start pushes nothing).
@@ -4426,8 +4426,8 @@ function pfb_core_state_teardown(PfbToggle $keep): void {
  * confirmed, not once the API socket listens (a caller that needs the API handles pfb_core_call()'s status 0). No executable pfb-core
  * for this machine starts nothing and is not a failure (a package built without it); an unknown machine fails. Stop: TERM to the
  * supervisor and pfb-core, KILL at 5 s, each signalled only while its pidfile names it and its command line is pfb_core's (the
- * supervisor's, also before daemon(8) sets its title); a Core still running at 7 s fails the stop and keeps the pidfiles, and a restart
- * fails with it. Generating the service also retires the settings store and the push records of the earlier model (every install and
+ * supervisor's, also before daemon(8) sets its title); a Core still running at 7 s fails the stop and keeps the pidfiles, and a start
+ * (or the script's own restart) over it fails. Generating the service also retires the settings store and the push records of the earlier model (every install and
  * upgrade regenerates it).
  *
  * @param string $coreDir the package's core directory (a test points it at a temp directory)
@@ -4461,13 +4461,13 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$rc['start']	= <<<EOF
 
 	# Starts are serialized: the boot start and a package start both run this, and without the lock both can pass the "already serving?"
-	# check before the first daemon(8) has written its pidfile and launch twice. lockf holds the lock (file kept, at most 10 s) while this
-	# script runs itself once more; the variable stops that run from locking again. The stop takes no lock.
+	# check before the first daemon(8) has written its pidfile and launch twice. lockf holds the lock (file kept, at most 20 s: a holder's
+	# stop and confirmation take up to 12 s) while this script runs itself once more; the variable stops that run from locking again.
 	if [ -z "\${PFB_CORE_START_LOCKED:-}" ]; then
-		PFB_CORE_START_LOCKED=1 /usr/bin/lockf -k -t 10 {$lockfile} /bin/sh "\$0" start
+		PFB_CORE_START_LOCKED=1 /usr/bin/lockf -k -t 20 {$lockfile} /bin/sh "\$0" start
 		lockstatus="\$?"
 		if [ "\${lockstatus}" -eq 75 ]; then
-			/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: another start held the start lock for 10 s - not started"
+			/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: another start or stop held the start lock for 20 s - not started"
 		fi
 		exit "\${lockstatus}"
 	fi
@@ -4493,6 +4493,8 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	fi
 
 	rc_stop || exit 1
+	# Anything the daemon runs that starts this service again must take the lock
+	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
 	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
@@ -4515,6 +4517,17 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 
 EOF;
 	$rc['stop']	= <<<EOF
+
+	# The stop takes the starts' lock too: between daemon(8) creating its pidfile and writing its pid, an unlocked stop would see no
+	# Core and remove the pidfile of a live supervisor. The start's own stop runs inside its lock (the variable is set)
+	if [ -z "\${PFB_CORE_START_LOCKED:-}" ]; then
+		PFB_CORE_START_LOCKED=1 /usr/bin/lockf -k -t 20 {$lockfile} /bin/sh "\$0" stop
+		lockstatus="\$?"
+		if [ "\${lockstatus}" -eq 75 ]; then
+			/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: another start or stop held the start lock for 20 s - not stopped"
+		fi
+		return "\${lockstatus}"
+	fi
 
 	# TERM at 0 s, KILL at 5 s, give up at 7 s keeping the pidfiles (they still name the survivor)
 	# A pid is signalled only while its command line is pfb_core's: a stale pidfile may name a reused pid
@@ -4540,7 +4553,7 @@ EOF;
 	/bin/rm -f {$daemonpid} {$childpid}
 
 EOF;
-	// A survivor must fail the restart: the start's serving check would otherwise report success over it
+	// `pfb_core.sh restart` by hand: a survivor must fail it (pfSense's restart_service() runs stop, then start, itself)
 	$rc['restart']	= "\trc_stop || return 1\n\trc_start\n";
 	write_rcfile($rc);
 }
