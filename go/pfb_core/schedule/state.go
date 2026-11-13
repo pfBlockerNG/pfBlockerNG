@@ -31,7 +31,8 @@ type Item struct {
 type State map[string]Item
 
 var (
-	errState = errors.New("schedule state is invalid")
+	errState   = errors.New("schedule state is invalid")
+	errOutcome = errors.New("schedule outcome rejected")
 	// PHP 8 is_numeric: optional surrounding whitespace, sign, digits[.digits] or .digits, exponent; never hex.
 	numericRe = regexp.MustCompile(`^[ \t\n\r\v\f]*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?[ \t\n\r\v\f]*$`)
 	feedIDRe  = regexp.MustCompile(`^(?:ipv4:[A-Za-z0-9_]+_v4|ipv6:[A-Za-z0-9_]+_v6|dnsbl:[A-Za-z0-9_]+|extra:(?:dcc|bl))$`)
@@ -237,27 +238,71 @@ func Reserve(st State, occurrences map[string]int64) (State, error) {
 	})
 }
 
+// applyOutcome is the item after a terminal source check, and whether it changed. Without a pending occurrence a success
+// only stamps the check (with stamp) and a retry-cap outcome changes nothing; expected, when set, must equal the pending
+// occurrence or nothing changes.
+func applyOutcome(it Item, outcome Outcome, stamp, expected *int64) (Item, bool) {
+	if expected != nil && (it.PendingOccurrence == nil || *it.PendingOccurrence != *expected) {
+		return it, false
+	}
+	if outcome == RetryCapReached && it.PendingOccurrence == nil {
+		return it, false
+	}
+	if outcome == Success {
+		it.LastSuccessfulCheck = stamp
+	}
+	if it.PendingOccurrence != nil {
+		it.LastCompletedOccurrence, it.CompletionOutcome = it.PendingOccurrence, outcome
+		it.PendingOccurrence, it.PendingAttempted = nil, false
+	}
+	return it, true
+}
+
 // RecordOutcome records a terminal source check. Without a pending occurrence a success only stamps the check and a
 // retry-cap outcome changes nothing; expected, when set, must equal the pending occurrence or nothing changes.
 func RecordOutcome(st State, id string, outcome Outcome, now int64, expected *int64) (State, error) {
 	if !feedIDRe.MatchString(id) || !validOutcome(outcome) {
-		return nil, errors.New("schedule outcome rejected")
+		return nil, errOutcome
 	}
 	return update(st, func(s State) {
-		it := s[id]
-		if expected != nil && (it.PendingOccurrence == nil || *it.PendingOccurrence != *expected) {
-			return
+		if it, changed := applyOutcome(s[id], outcome, &now, expected); changed {
+			s[id] = it
 		}
-		if outcome == RetryCapReached && it.PendingOccurrence == nil {
-			return
-		}
-		if outcome == Success {
-			it.LastSuccessfulCheck = &now
-		}
-		if it.PendingOccurrence != nil {
-			it.LastCompletedOccurrence, it.CompletionOutcome = it.PendingOccurrence, outcome
-			it.PendingOccurrence, it.PendingAttempted = nil, false
-		}
-		s[id] = it
 	})
+}
+
+// RecordOutcomes records the outcomes of many ids at once, with the answer of calling RecordOutcome for each in turn
+// (expected nil), for the cost of one: st is validated and copied once, not once per id. An id whose outcome is rejected
+// (not a feed id, not an outcome, or one that would leave an invalid item) is left out of the result and named, with the
+// reason, in the returned map (nil when none is); the others are recorded. An invalid st is returned unchanged and rejects
+// every id that is a well-formed outcome.
+func RecordOutcomes(st State, outcomes map[string]Outcome, now int64) (State, map[string]error) {
+	out := make(State, len(st))
+	maps.Copy(out, st)
+	stateErr := st.validate()
+	var rejected map[string]error
+	reject := func(id string, err error) {
+		if rejected == nil {
+			rejected = map[string]error{}
+		}
+		rejected[id] = err
+	}
+	for id, outcome := range outcomes {
+		switch {
+		case !feedIDRe.MatchString(id) || !validOutcome(outcome):
+			reject(id, errOutcome)
+		case stateErr != nil:
+			reject(id, stateErr)
+		default:
+			it, changed := applyOutcome(out[id], outcome, &now, nil)
+			switch {
+			case !changed:
+			case !it.valid():
+				reject(id, errState)
+			default:
+				out[id] = it
+			}
+		}
+	}
+	return out, rejected
 }
