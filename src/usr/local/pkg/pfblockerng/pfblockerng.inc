@@ -4155,6 +4155,8 @@ $pfb['core_state'] = '/usr/local/etc/pfb_core';
 $pfb['core_log'] = '/var/log/pfblockerng/core.log';
 $pfb['core_pidfile'] = '/var/run/pfb_core.pid';
 $pfb['core_daemon_pidfile'] = '/var/run/pfb_core_daemon.pid';
+// issue #3908: serializes the rc script's starts (the lockf file, kept between starts)
+$pfb['core_lockfile'] = '/var/run/pfb_core.lock';
 // issue #3924: why Core was last not told that the DNS settings changed (kept until a notice succeeds); DNS General shows it
 $pfb['core_settings_failed'] = "{$pfb['dbdir']}/core_settings_failed";
 
@@ -4415,13 +4417,18 @@ function pfb_core_state_teardown(PfbToggle $keep): void {
 
 
 /**
- * (Re)generate /usr/local/etc/rc.d/pfb_core.sh, the Core API service (issue #3841). Start: keeps a pfb_core supervisor its pidfile
- * names; otherwise runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64, by `uname -p`) under daemon(8), restarted 5 s
- * after it exits, with its output in $pfb['core_log'], its API on $pfb['core_socket'], its storage in $pfb['core_state'] and its settings
- * read and written through PFB_CORE_SETTINGS_CMD (issue #3924: the start pushes nothing). No executable pfb-core for this machine
- * starts nothing and is not a failure (a package built without it); an unknown machine fails. Stop: TERM to the supervisor and
- * pfb-core, KILL at 5 s, each signalled only while its pidfile names it and its command line is pfb_core's. Generating the service also
- * retires the settings store and the push records of the earlier model (every install and upgrade regenerates it).
+ * (Re)generate /usr/local/etc/rc.d/pfb_core.sh, the Core API service (issue #3841). Start: runs under a start lock ($pfb['core_lockfile'],
+ * waited for at most 10 s; a start that cannot get it launches nothing and exits 75), keeps a pfb_core supervisor its pidfile names;
+ * otherwise stops what is left (a survivor fails the start) and runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64,
+ * by `uname -p`) under daemon(8), restarted 5 s after it exits, with its output in $pfb['core_log'], its API on $pfb['core_socket'], its
+ * storage in $pfb['core_state'] and its settings read and written through PFB_CORE_SETTINGS_CMD (issue #3924: the start pushes nothing).
+ * A daemon(8) that fails, or no supervisor named by its pidfile within 5 s, fails the start; the start returns once the supervisor is
+ * confirmed, not once the API socket listens (a caller that needs the API handles pfb_core_call()'s status 0). No executable pfb-core
+ * for this machine starts nothing and is not a failure (a package built without it); an unknown machine fails. Stop: TERM to the
+ * supervisor and pfb-core, KILL at 5 s, each signalled only while its pidfile names it and its command line is pfb_core's (the
+ * supervisor's, also before daemon(8) sets its title); a Core still running at 7 s fails the stop and keeps the pidfiles, and a restart
+ * fails with it. Generating the service also retires the settings store and the push records of the earlier model (every install and
+ * upgrade regenerates it).
  *
  * @param string $coreDir the package's core directory (a test points it at a temp directory)
  */
@@ -4435,8 +4442,10 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$state = escapeshellarg($pfb['core_state']);
 	$settingsCmd = escapeshellarg(PFB_CORE_SETTINGS_CMD);
 	$dir = escapeshellarg($coreDir);
-	// pgrep/pkill -f patterns (extended regular expressions): daemon(8)'s title, and pfb-core as daemon(8) runs it
-	$supervisor = escapeshellarg('^daemon: pfb_core\[');
+	$lockfile = escapeshellarg($pfb['core_lockfile']);
+	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own command
+	// line; and pfb-core as daemon(8) runs it
+	$supervisor = escapeshellarg('^(daemon: pfb_core\[|/usr/sbin/daemon .*-t pfb_core )');
 	$child = escapeshellarg('^' . str_replace('.', '\.', $coreDir) . '/bin/freebsd-[a-z0-9]+/pfb-core( |$)');
 
 	// issue #3924: Core keeps no settings store any more (config.xml is the store); the earlier model's files go
@@ -4450,6 +4459,18 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$rc		= array();
 	$rc['file']	= 'pfb_core.sh';
 	$rc['start']	= <<<EOF
+
+	# Starts are serialized: the boot start and a package start both run this, and without the lock both can pass the "already serving?"
+	# check before the first daemon(8) has written its pidfile and launch twice. lockf holds the lock (file kept, at most 10 s) while this
+	# script runs itself once more; the variable stops that run from locking again. The stop takes no lock.
+	if [ -z "\${PFB_CORE_START_LOCKED:-}" ]; then
+		PFB_CORE_START_LOCKED=1 /usr/bin/lockf -k -t 10 {$lockfile} /bin/sh "\$0" start
+		lockstatus="\$?"
+		if [ "\${lockstatus}" -eq 75 ]; then
+			/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: another start held the start lock for 10 s - not started"
+		fi
+		exit "\${lockstatus}"
+	fi
 
 	# Already serving: keep it (the package start after the boot start must not bounce it)
 	if /bin/pgrep -F {$daemonpid} -f {$supervisor} >/dev/null 2>&1; then
@@ -4471,31 +4492,56 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 		exit 0
 	fi
 
-	rc_stop
+	rc_stop || exit 1
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
 	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} </dev/null >/dev/null 2>&1
+	daemonstatus="\$?"
+	if [ "\${daemonstatus}" -ne 0 ]; then
+		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"
+		exit 1
+	fi
+	# daemon(8) returns before its supervisor has written its pidfile: wait (5 s) until the pidfile names it, so that the next
+	# serialized start finds it serving
+	tick=0
+	while ! /bin/pgrep -F {$daemonpid} -f {$supervisor} >/dev/null 2>&1; do
+		if [ "\${tick}" -ge 5 ]; then
+			/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) started no supervisor"
+			exit 1
+		fi
+		/bin/sleep 1
+		tick="\$((tick + 1))"
+	done
 	/usr/bin/logger -p daemon.info -t pfb_core "INFO [{$prefix}] Core API started"
 
 EOF;
 	$rc['stop']	= <<<EOF
 
+	# TERM at 0 s, KILL at 5 s, give up at 7 s keeping the pidfiles (they still name the survivor)
 	# A pid is signalled only while its command line is pfb_core's: a stale pidfile may name a reused pid
 	/bin/pkill -TERM -F {$daemonpid} -f {$supervisor} 2>/dev/null
 	/bin/pkill -TERM -F {$childpid} -f {$child} 2>/dev/null
 	waited=0
+	killed=0
 	while /bin/pgrep -F {$daemonpid} -f {$supervisor} >/dev/null 2>&1 || /bin/pgrep -F {$childpid} -f {$child} >/dev/null 2>&1; do
-		if [ "\${waited}" -ge 5 ]; then
+		if [ "\${waited}" -ge 5 ] && [ "\${killed}" -eq 0 ]; then
 			/usr/bin/logger -p daemon.warning -t pfb_core "WARNING [{$prefix}] Core API ignored TERM for 5 s, sending KILL"
 			/bin/pkill -KILL -F {$daemonpid} -f {$supervisor} 2>/dev/null
 			/bin/pkill -KILL -F {$childpid} -f {$child} 2>/dev/null
-			break
+			killed=1
+			continue
+		fi
+		if [ "\${waited}" -ge 7 ]; then
+			/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API still running after KILL"
+			return 1
 		fi
 		/bin/sleep 1
-		waited=\$((waited + 1))
+		waited="\$((waited + 1))"
 	done
 	/bin/rm -f {$daemonpid} {$childpid}
 
 EOF;
+	// A survivor must fail the restart: the start's serving check would otherwise report success over it
+	$rc['restart']	= "\trc_stop || return 1\n\trc_start\n";
 	write_rcfile($rc);
 }
 

@@ -39,8 +39,42 @@ var pfSensePathMarks = []string{
 	"config.xml", "pfsense", "pfblockerng.inc", "rc.d/",
 }
 
+// stringConst is the value of e when it is a string literal or a + of them, and false for anything else.
+func stringConst(e ast.Expr) (string, bool) {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return "", false
+		}
+		value, err := strconv.Unquote(e.Value)
+		if err != nil {
+			value = e.Value
+		}
+		return value, true
+	case *ast.BinaryExpr:
+		if e.Op != token.ADD {
+			return "", false
+		}
+		x, okX := stringConst(e.X)
+		y, okY := stringConst(e.Y)
+		return x + y, okX && okY
+	}
+	return "", false
+}
+
+// namesPfSensePath reports whether value holds a mark or is a pfSense tree itself: a mark without its trailing slash.
+func namesPfSensePath(value string) bool {
+	lower := strings.ToLower(value)
+	for _, mark := range pfSensePathMarks {
+		if strings.Contains(lower, mark) || (mark[0] == '/' && lower == strings.TrimSuffix(mark, "/")) {
+			return true
+		}
+	}
+	return false
+}
+
 // boundaryViolations lists every import outside the standard library, the module and allowedModules, every go.mod
-// requirement outside allowedModules, every replace, and every string literal naming
+// requirement outside allowedModules, every replace, and every string constant (a literal or a + of literals) naming
 // a pfSense path, of the non-test Go files under root; files counts what was read.
 func boundaryViolations(t *testing.T, root string) (violations []string, files int) {
 	t.Helper()
@@ -71,22 +105,18 @@ func boundaryViolations(t *testing.T, root string) (violations []string, files i
 			}
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
+			e, ok := n.(ast.Expr)
+			if !ok {
 				return true
 			}
-			value, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				value = lit.Value
+			value, isConst := stringConst(e)
+			if !isConst {
+				return true
 			}
-			lower := strings.ToLower(value)
-			for _, mark := range pfSensePathMarks {
-				if strings.Contains(lower, mark) {
-					violations = append(violations, fset.Position(lit.Pos()).String()+": pfSense path literal "+lit.Value)
-					break
-				}
+			if namesPfSensePath(value) {
+				violations = append(violations, fset.Position(e.Pos()).String()+": pfSense path literal "+strconv.Quote(value))
 			}
-			return true
+			return false // a constant is judged whole, once: never again by its operands
 		})
 		return nil
 	})
@@ -162,6 +192,17 @@ func TestBoundaryRuleAllowsOnlyTheNamedModules(t *testing.T) {
 		{"lookalike module path", "module m\n", "import _ \"golang.org/x/netx/idna\"\n", "imports golang.org/x/netx/idna"},
 		{"replace", "module m\n\nreplace golang.org/x/net => ../net\n", "", "go.mod: replace golang.org/x/net"},
 		{"pfSense path", "module m\n", "var _ = \"/usr/local/etc\"\n", "pfSense path literal"},
+		{"etc tree named without its trailing slash", "module m\n", "var _ = \"/etc\"\n", "pfSense path literal"},
+		{"var tree named without its trailing slash", "module m\n", "var _ = \"/var\"\n", "pfSense path literal"},
+		{"usr local tree named without its trailing slash", "module m\n", "var _ = \"/usr/local\"\n", "pfSense path literal"},
+		{"pfSense path split by a constant concatenation", "module m\n", "var _ = \"/usr/lo\" + \"cal/etc\"\n", "pfSense path literal"},
+		{"pfSense tree split by a three-part concatenation", "module m\n", "var _ = \"/us\" + \"r/lo\" + \"cal\"\n", "pfSense path literal"},
+		{"a concatenation whose operand names a tree is one violation", "module m\n", "var _ = \"/etc\" + \"/x\"\n", "pfSense path literal"},
+		{"pfSense tree as a filepath.Join element", "module m\n", "import \"path/filepath\"\n\nvar _ = filepath.Join(\"/etc\", \"x\")\n", "pfSense path literal"},
+		{"root alone is no pfSense path", "module m\n", "var _ = \"/\"\n", ""},
+		{"the API route prefix is no pfSense path", "module m\n", "var _ = \"/v1/\"\n", ""},
+		{"a bare word etc is no pfSense path", "module m\n", "var _ = \"etc\"\n", ""},
+		{"a media type is no pfSense path", "module m\n", "var _ = \"application/json\"\n", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
