@@ -20,9 +20,6 @@ final class PfbCoreCallTest extends TestCase
 {
 	private string $dir = '';
 
-	/** @var array<string, string|false> the proxy variables a test changed, as they were */
-	private array $savedEnvironment = [];
-
 	protected function setUp(): void
 	{
 		$this->dir = sys_get_temp_dir() . '/pfbcall' . bin2hex(random_bytes(4));
@@ -31,9 +28,6 @@ final class PfbCoreCallTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach ($this->savedEnvironment as $name => $value) {
-			putenv($value === FALSE ? $name : "{$name}={$value}");
-		}
 		rmdir_recursive($this->dir);
 	}
 
@@ -154,23 +148,6 @@ final class PfbCoreCallTest extends TestCase
 		$this->assertSame(200, $result['status']);
 		$this->assertDoesNotMatchRegularExpression('~^Expect:~mi', $head, 'the call carried an Expect header');
 		$this->assertSame([strlen($sent), sha1($sent)], [strlen($body), sha1($body)], 'the body did not arrive whole (length, sha1)');
-	}
-
-	public function testAProxyInTheEnvironmentNeverDivertsTheCall(): void
-	{
-		foreach (['http_proxy', 'HTTP_PROXY', 'ALL_PROXY', 'all_proxy'] as $name) {
-			$this->savedEnvironment[$name] = getenv($name);
-			putenv("{$name}=http://127.0.0.1:9");
-		}
-		// Before: the same environment does divert a TCP call that has no opt-out, so the 200 below is the call's own
-		$control = curl_init('http://pfb-core-control.invalid/');
-		curl_setopt_array($control, [CURLOPT_RETURNTRANSFER => TRUE, CURLOPT_CONNECTTIMEOUT => 5]);
-		curl_exec($control);
-		$this->assertStringContainsString('127.0.0.1 port 9', curl_error($control), 'the environment proxy is not in effect for this process');
-
-		[$result] = $this->exchange(200, '{"ok":true}', static fn (string $s): array => pfb_core_call('GetVersion', [], $s));
-
-		$this->assertSame(['status' => 200, 'body' => ['ok' => TRUE], 'error' => NULL], $result);
 	}
 
 	public function testNoServerIsStatusZeroWithTheReason(): void

@@ -276,7 +276,8 @@ func TestStalledRequestBodyIsCutOff(t *testing.T) {
 }
 
 func TestAnIdleKeepAliveConnectionIsClosed(t *testing.T) {
-	h := start(t, func(o *options) { o.idleTimeout = 50 * time.Millisecond }, nil)
+	// readTimeout above the watchdog: net/http falls back to it when IdleTimeout is unset, so only idleTimeout can close it
+	h := start(t, func(o *options) { o.idleTimeout, o.readTimeout = 50*time.Millisecond, time.Hour }, nil)
 	conn := rawConn(t, h)
 	br := bufio.NewReader(conn)
 	if _, err := conn.Write([]byte("POST /v1/GetVersion HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{}")); err != nil {

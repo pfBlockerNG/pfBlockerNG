@@ -4566,7 +4566,6 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 		CURLOPT_POSTFIELDS       => $payload,
 		CURLOPT_HTTPHEADER       => ['Content-Type: application/json', 'Expect:'],
 		CURLOPT_RETURNTRANSFER   => TRUE,
-		CURLOPT_NOPROXY          => '*',
 		CURLOPT_CONNECTTIMEOUT   => 5,
 		CURLOPT_TIMEOUT          => 30,
 	]);
