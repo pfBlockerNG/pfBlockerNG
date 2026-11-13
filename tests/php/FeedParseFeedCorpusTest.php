@@ -293,7 +293,13 @@ final class FeedParseFeedCorpusTest extends TestCase
 		if ($path === FALSE || file_put_contents($path, $json) === FALSE) {
 			throw new RuntimeException('cannot write the scratch corpus');
 		}
-		register_shutdown_function(static fn() => @unlink($path));
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($path, $ownerPid): void {
+			// pcntl_fork() inherits shutdown callbacks: only the process that wrote the file removes it.
+			if (getmypid() === $ownerPid) {
+				@unlink($path);
+			}
+		});
 		return $path;
 	}
 

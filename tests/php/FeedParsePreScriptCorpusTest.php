@@ -250,7 +250,13 @@ final class FeedParsePreScriptCorpusTest extends TestCase
 	{
 		$path = (string) tempnam(sys_get_temp_dir(), 'pfb_fpps_doc_');
 		file_put_contents($path, $json);
-		register_shutdown_function(static fn() => @unlink($path));
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($path, $ownerPid): void {
+			// pcntl_fork() inherits shutdown callbacks: only the process that wrote the file removes it.
+			if (getmypid() === $ownerPid) {
+				@unlink($path);
+			}
+		});
 		return $path;
 	}
 }
