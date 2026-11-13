@@ -1,0 +1,27 @@
+{
+ "schema": 1,
+ "description": "Row 2: a domain gets an AAAA lookup; only its IPv6 answers are kept.",
+ "vtype": "_v6",
+ "list": "ok.example",
+ "hosts": {
+  "ok.example": [
+   "203.0.113.5",
+   "2001:db8::5",
+   "203.0.113.6",
+   "2001:db8::6"
+  ]
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: ok.example ###\n2001:db8::5\n2001:db8::6\n",
+  "found": true,
+  "fail": false,
+  "lookups": [
+   "AAAA ok.example"
+  ],
+  "error_log": [],
+  "log_includes": [
+   "  Collecting host IP: ok.example... completed"
+  ]
+ }
+}

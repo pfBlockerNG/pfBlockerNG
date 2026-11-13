@@ -1,0 +1,24 @@
+{
+ "schema": 1,
+ "description": "Row 15 (family): a name with answers only in the other family has none for this lookup and fails.",
+ "vtype": "_v4",
+ "list": "v6only.example",
+ "hosts": {
+  "v6only.example": [
+   "2001:db8::9"
+  ]
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "198.51.100.7\n",
+  "found": false,
+  "fail": true,
+  "lookups": [
+   "A v6only.example"
+  ],
+  "error_log": [],
+  "log_includes": [
+   "Failed to resolve host [ v6only.example ]"
+  ]
+ }
+}

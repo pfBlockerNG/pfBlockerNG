@@ -1,0 +1,19 @@
+{
+ "schema": 1,
+ "description": "Row 10: with asn.csv still missing every AS entry tries the download again and logs the error again.",
+ "vtype": "_v4",
+ "list": "AS64500,AS64501",
+ "hosts": {},
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "198.51.100.7\n",
+  "found": false,
+  "fail": true,
+  "lookups": [],
+  "downloads": 2,
+  "error_log": [
+   "Database ASN [ asn.csv ] not found. Register for IPinfo Token.",
+   "Database ASN [ asn.csv ] not found. Register for IPinfo Token."
+  ]
+ }
+}

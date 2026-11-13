@@ -1,0 +1,19 @@
+{
+ "schema": 1,
+ "description": "Row 5: an AS reads asn.csv rows matching exactly its number, as start-end ranges, IPv4 only, in file order; AS6450 and AS645001 rows are not AS64500's.",
+ "vtype": "_v4",
+ "list": "AS64500",
+ "hosts": {},
+ "asn_csv": "start_ip,end_ip,asn,name,domain\n203.0.113.64,203.0.113.127,AS64500,ExampleNet,example.net\n2001:db8::,2001:db8::ffff,AS64500,ExampleNet,example.net\n198.51.100.0,198.51.100.255,AS645001,PrefixNet,prefix.net\n198.51.100.0,198.51.100.63,AS6450,ShortNet,short.net\n203.0.113.200,203.0.113.255,AS64500,ExampleNet,example.net\n2001:db8:1::,2001:db8:1::ffff,AS64501,V6OnlyNet,v6only.net\n203.0.113.0,203.0.113.255,AS1,OneNet,one.net\n",
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "203.0.113.64-203.0.113.127\n203.0.113.200-203.0.113.255\n",
+  "found": true,
+  "fail": false,
+  "lookups": [],
+  "error_log": [],
+  "log_includes": [
+   "  Collecting ASN: AS64500"
+  ]
+ }
+}

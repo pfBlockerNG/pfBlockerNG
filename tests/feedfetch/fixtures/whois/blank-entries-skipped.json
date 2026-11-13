@@ -1,0 +1,25 @@
+{
+ "schema": 1,
+ "description": "Row 12: blank entries between, before and after the others are skipped without a lookup or a failure.",
+ "vtype": "_v4",
+ "list": ",ok.example,,AS64500,,",
+ "hosts": {
+  "ok.example": [
+   "203.0.113.5",
+   "2001:db8::5",
+   "203.0.113.6",
+   "2001:db8::6"
+  ]
+ },
+ "asn_csv": "start_ip,end_ip,asn,name,domain\n203.0.113.64,203.0.113.127,AS64500,ExampleNet,example.net\n2001:db8::,2001:db8::ffff,AS64500,ExampleNet,example.net\n198.51.100.0,198.51.100.255,AS645001,PrefixNet,prefix.net\n198.51.100.0,198.51.100.63,AS6450,ShortNet,short.net\n203.0.113.200,203.0.113.255,AS64500,ExampleNet,example.net\n2001:db8:1::,2001:db8:1::ffff,AS64501,V6OnlyNet,v6only.net\n203.0.113.0,203.0.113.255,AS1,OneNet,one.net\n",
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: ok.example ###\n203.0.113.5\n203.0.113.6\n203.0.113.64-203.0.113.127\n203.0.113.200-203.0.113.255\n",
+  "found": true,
+  "fail": false,
+  "lookups": [
+   "A ok.example"
+  ],
+  "error_log": []
+ }
+}

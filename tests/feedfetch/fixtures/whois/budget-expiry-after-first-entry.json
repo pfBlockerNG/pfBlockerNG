@@ -1,0 +1,42 @@
+{
+ "schema": 1,
+ "description": "Row 13: the first lookup answers and takes the whole 2 s budget (a clock the runners drive); the first entry is kept, the rest (an AS and a domain) is skipped, and the expiry alone leaves the failure marker and the log line.",
+ "vtype": "_v4",
+ "list": "first.example,AS64500,skipped.example",
+ "whoisbatchtimeout": "2",
+ "hosts": {
+  "first.example": {
+   "addresses": [
+    "203.0.113.5",
+    "2001:db8::5",
+    "203.0.113.6",
+    "2001:db8::6"
+   ],
+   "takes": 2
+  },
+  "skipped.example": [
+   "203.0.113.99"
+  ]
+ },
+ "asn_csv": "start_ip,end_ip,asn,name,domain\n203.0.113.64,203.0.113.127,AS64500,ExampleNet,example.net\n2001:db8::,2001:db8::ffff,AS64500,ExampleNet,example.net\n198.51.100.0,198.51.100.255,AS645001,PrefixNet,prefix.net\n198.51.100.0,198.51.100.63,AS6450,ShortNet,short.net\n203.0.113.200,203.0.113.255,AS64500,ExampleNet,example.net\n2001:db8:1::,2001:db8:1::ffff,AS64501,V6OnlyNet,v6only.net\n203.0.113.0,203.0.113.255,AS1,OneNet,one.net\n",
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: first.example ###\n203.0.113.5\n203.0.113.6\n",
+  "found": true,
+  "fail": true,
+  "lookups": [
+   "A first.example"
+  ],
+  "first_lookup_timeout": [
+   2,
+   2
+  ],
+  "error_log": [
+   "WHOIS batch [ CorpusList ] TIMED OUT after 2s total; remaining Domain/AS entries skipped"
+  ],
+  "log_includes": [
+   "Collecting host IP: first.example... completed",
+   "TIMED OUT after 2s total"
+  ]
+ }
+}

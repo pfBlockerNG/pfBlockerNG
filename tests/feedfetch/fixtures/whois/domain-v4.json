@@ -1,0 +1,27 @@
+{
+ "schema": 1,
+ "description": "Row 1: a domain gets an A lookup; only its IPv4 answers are kept, under a Domain header, replacing the seed.",
+ "vtype": "_v4",
+ "list": "ok.example",
+ "hosts": {
+  "ok.example": [
+   "203.0.113.5",
+   "2001:db8::5",
+   "203.0.113.6",
+   "2001:db8::6"
+  ]
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: ok.example ###\n203.0.113.5\n203.0.113.6\n",
+  "found": true,
+  "fail": false,
+  "lookups": [
+   "A ok.example"
+  ],
+  "error_log": [],
+  "log_includes": [
+   "  Collecting host IP: ok.example... completed"
+  ]
+ }
+}

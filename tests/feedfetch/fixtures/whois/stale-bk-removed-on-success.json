@@ -1,0 +1,25 @@
+{
+ "schema": 1,
+ "description": "A success replaces the copy and removes a stale backup.",
+ "vtype": "_v4",
+ "list": "ok.example",
+ "hosts": {
+  "ok.example": [
+   "203.0.113.5",
+   "2001:db8::5",
+   "203.0.113.6",
+   "2001:db8::6"
+  ]
+ },
+ "seed": "198.51.100.7\n",
+ "seed_bk": "203.0.113.10\n",
+ "expect": {
+  "orig": "### Domain: ok.example ###\n203.0.113.5\n203.0.113.6\n",
+  "found": true,
+  "fail": false,
+  "lookups": [
+   "A ok.example"
+  ],
+  "error_log": []
+ }
+}

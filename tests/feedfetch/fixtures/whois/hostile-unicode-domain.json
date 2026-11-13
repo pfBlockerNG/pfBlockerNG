@@ -1,0 +1,23 @@
+{
+ "schema": 1,
+ "description": "Hostile: a Unicode domain goes to the lookup as written (host(1) is handed the raw name) and is written under that name; no mapping happens in whoisconvert.",
+ "vtype": "_v4",
+ "list": "bücher.example,ＢÜCHER.example",
+ "hosts": {
+  "bücher.example": [
+   "203.0.113.5"
+  ],
+  "ＢÜCHER.example": "nxdomain"
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: bücher.example ###\n203.0.113.5\n",
+  "found": true,
+  "fail": true,
+  "lookups": [
+   "A bücher.example",
+   "A ＢÜCHER.example"
+  ],
+  "error_log": []
+ }
+}
