@@ -12552,6 +12552,25 @@ function pfb_metrics_client_apply(): void {
 	}
 }
 
+// What the metrics databases do now, read back after a reconcile that stopped part way (each database commits on its own).
+function pfb_metrics_client_collecting(): string {
+	global $pfb;
+	$on = array();
+	foreach (array('dnsbl_info', 'dnsbl_resolver') as $key) {
+		try {
+			$db = new SQLite3($pfb[$key], SQLITE3_OPEN_READONLY);
+			$db->busyTimeout(min(5000, (int) ($pfb['sqlite_timeout'] ?? 5000)));
+			if (@$db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0') === 1) {
+				$on[] = basename($pfb[$key]);
+			}
+			$db->close();
+		} catch (Throwable) {
+			// No database or no policy table: it collects no client IPs
+		}
+	}
+	return $on ? 'client IPs are collected only in: ' . implode(', ', $on) : 'no metrics database collects client IPs';
+}
+
 // Save-time privacy is serialized with publication and config persistence, not with DNS service availability. $persist writes
 // config.xml and answers TRUE when it was written; a refused write puts the databases back to the stored preference, so they
 // never keep a policy that config.xml does not say.
@@ -12572,7 +12591,7 @@ function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $
 			}
 			$error = pfb_metrics_client_reconcile(TRUE);
 			if ($error !== NULL) {
-				pfb_logger("\nClient IP metrics are saved as enabled, but the metrics databases do not collect client IPs yet ({$error}); the next Update applies it.", 2);
+				pfb_logger("\nClient IP metrics are saved as enabled, but {$error}: " . pfb_metrics_client_collecting() . '; the next Update applies the rest.', 2);
 			}
 			return NULL;
 		}
@@ -12588,7 +12607,7 @@ function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $
 			$undo = pfb_metrics_client_reconcile(TRUE);
 			return 'Client IP metrics could not be changed: pfSense refused the configuration write. '
 			    . ($undo === NULL ? 'Client IP metrics are still enabled; retry Save.'
-			        : "Turning client IP collection back on failed too ({$undo}), so it stays off until the next Update applies the stored setting; retry Save.");
+			        : "Turning client IP collection back on failed too ({$undo}), so " . pfb_metrics_client_collecting() . ' until the next Update applies the stored setting; retry Save.');
 		}
 		return NULL;
 	} finally {

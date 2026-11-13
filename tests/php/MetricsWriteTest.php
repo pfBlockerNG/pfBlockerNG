@@ -360,6 +360,73 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame(0, $this->clientIpPolicy()['client_ip']);
 	}
 
+	/** Both metrics databases with a client-IP policy of $policy. */
+	private function bothPolicies(int $policy): void
+	{
+		foreach (['dnsbl_info', 'dnsbl_resolver'] as $key) {
+			$this->sqlite($GLOBALS['pfb'][$key], [
+				'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+				"INSERT INTO dns_metric_settings VALUES (0,{$policy},'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+			]);
+		}
+	}
+
+	private function policyOf(string $key): int
+	{
+		$db = new SQLite3($GLOBALS['pfb'][$key]);
+		$policy = $db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0');
+		$db->close();
+		return (int) $policy;
+	}
+
+	/** A refused Off whose way back turns the first database on but not the locked second: the message names what collects. */
+	public function testARefusedOffWhoseWayBackFailsOnTheSecondDatabaseNamesTheOneThatCollects(): void
+	{
+		$this->bothPolicies(1);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$holder = NULL;
+		try {
+			$error = (string) pfb_metrics_client_save(PfbToggle::Off, static function () use (&$holder): bool {
+				$holder = new SQLite3($GLOBALS['pfb']['dnsbl_resolver']);
+				$holder->exec('BEGIN IMMEDIATE');
+				return FALSE;
+			}, "{$this->root}/node");
+		} finally {
+			if ($holder !== NULL) {
+				$holder->exec('ROLLBACK');
+				$holder->close();
+			}
+		}
+
+		$this->assertSame([1, 0], [$this->policyOf('dnsbl_info'), $this->policyOf('dnsbl_resolver')], 'before-state of the claim below');
+		$this->assertStringContainsString('client IPs are collected only in: pfb_py_dnsbl.sqlite', $error);
+		$this->assertStringContainsString('next Update', $error);
+		$this->assertStringNotContainsString('stays off', $error);
+	}
+
+	/** On is saved, the second database stays locked: the log names the database that collects and the one the next Update fixes. */
+	public function testTurningClientIpOnWithTheSecondDatabaseLockedLogsWhatCollects(): void
+	{
+		$this->bothPolicies(0);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_resolver']);
+		$db->exec('BEGIN IMMEDIATE');
+		try {
+			$error = pfb_metrics_client_save(PfbToggle::On, static fn (): bool => TRUE, "{$this->root}/node");
+		} finally {
+			$db->exec('ROLLBACK');
+			$db->close();
+		}
+
+		$this->assertNull($error);
+		$this->assertSame([1, 0], [$this->policyOf('dnsbl_info'), $this->policyOf('dnsbl_resolver')], 'before-state of the claim below');
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringContainsString('client IPs are collected only in: pfb_py_dnsbl.sqlite', $log);
+		$this->assertStringContainsString('next Update', $log);
+	}
+
 	private function clientIpPolicy(): array
 	{
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
