@@ -89,7 +89,9 @@ final class SyncPolicyStatusPanelTest extends TestCase
 	{
 		$diagnostics = [];
 		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
-			if (error_reporting() & $errno) {
+			// PHPUnit lowers error_reporting() to its unhandleable levels while a test runs, so "& $errno"
+			// is 0 for every diagnostic; only '@' leaves no bit outside PHP's insuppressible levels.
+			if ((error_reporting() & ~(E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR)) !== 0) {
 				$diagnostics[] = $errstr;
 			}
 			return TRUE;
@@ -557,11 +559,13 @@ final class SyncPolicyStatusPanelTest extends TestCase
 	public static function noPassProvider(): array
 	{
 		return [
-			'sync disabled'       => ['disabled'],
-			'receive suppressed'  => ['suppressed'],
+			'sync disabled'       => ['sync disabled'],
+			'receive suppressed'  => ['receive suppressed'],
 			'no replication rows' => ['no rows'],
 			'scope not stored'    => ['no scope'],
 			'every target off'    => ['all off'],
+			'only the installer\'s scope stored' => ['installer seed'],
+			'no timeout stored'   => ['no timeout'],
 		];
 	}
 
@@ -587,6 +591,15 @@ final class SyncPolicyStatusPanelTest extends TestCase
 			case 'all off':
 				$this->seedNode('manual', 'policy', [self::target('192.0.2.10', 'secret-a', FALSE), self::target('192.0.2.11', 'secret-b', FALSE)]);
 				break;
+			case 'installer seed':
+				// the install's registry writeback stores syncscope alone: a node whose sync page was never saved
+				$GLOBALS['config'] = ['installedpackages' => ['pfblockerngsync' => ['config' => [0 => ['syncscope' => 'policy']]]]];
+				break;
+			case 'no timeout':
+				$GLOBALS['config'] = ['installedpackages' => ['pfblockerngsync' => ['config' => [0 => ['varsynconchanges' => 'manual', 'row' => $rows]]]]];
+				break;
+			default:
+				$this->fail("unknown case {$case}");
 		}
 		$earlier = $this->seedEarlierPass();
 

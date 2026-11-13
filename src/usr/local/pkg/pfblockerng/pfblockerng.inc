@@ -29175,10 +29175,11 @@ function pfblockerng_sync_on_changes() {
 	// Create array of sync settings and exit if sync is disabled.
 	$pfb_sync = config_get_path('installedpackages/pfblockerngsync/config/0', []);
 	if (!empty($pfb_sync)) {
-		if ($pfb_sync['varsynconchanges'] == 'disabled' || empty($pfb_sync['varsynconchanges'])) {
+		// the installer stores syncscope alone, so a node whose sync page was never saved has neither key
+		if (empty($pfb_sync['varsynconchanges']) || $pfb_sync['varsynconchanges'] == 'disabled') {
 			return;
 		}
-		$synctimeout = $pfb_sync['varsynctimeout'] ?: 150;
+		$synctimeout = ($pfb_sync['varsynctimeout'] ?? '') ?: 150;
 	} else {
 		return;
 	}
