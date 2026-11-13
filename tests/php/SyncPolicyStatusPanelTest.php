@@ -559,11 +559,13 @@ final class SyncPolicyStatusPanelTest extends TestCase
 	public static function noPassProvider(): array
 	{
 		return [
-			'sync disabled'       => ['disabled'],
-			'receive suppressed'  => ['suppressed'],
+			'sync disabled'       => ['sync disabled'],
+			'receive suppressed'  => ['receive suppressed'],
 			'no replication rows' => ['no rows'],
 			'scope not stored'    => ['no scope'],
 			'every target off'    => ['all off'],
+			'only the installer\'s scope stored' => ['installer seed'],
+			'no timeout stored'   => ['no timeout'],
 		];
 	}
 
@@ -589,6 +591,15 @@ final class SyncPolicyStatusPanelTest extends TestCase
 			case 'all off':
 				$this->seedNode('manual', 'policy', [self::target('192.0.2.10', 'secret-a', FALSE), self::target('192.0.2.11', 'secret-b', FALSE)]);
 				break;
+			case 'installer seed':
+				// the install's registry writeback stores syncscope alone: a node whose sync page was never saved
+				$GLOBALS['config'] = ['installedpackages' => ['pfblockerngsync' => ['config' => [0 => ['syncscope' => 'policy']]]]];
+				break;
+			case 'no timeout':
+				$GLOBALS['config'] = ['installedpackages' => ['pfblockerngsync' => ['config' => [0 => ['varsynconchanges' => 'manual', 'row' => $rows]]]]];
+				break;
+			default:
+				$this->fail("unknown case {$case}");
 		}
 		$earlier = $this->seedEarlierPass();
 
