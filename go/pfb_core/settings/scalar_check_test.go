@@ -13,7 +13,7 @@ import (
 func TestAScalarFieldCheckRefusesTheSaveNamingTheFieldAndWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	st := open(t, dir)
-	if _, err := st.Initialize(nil); err != nil {
+	if _, err := st.Initialize(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(dir, "settings.json")
@@ -21,7 +21,7 @@ func TestAScalarFieldCheckRefusesTheSaveNamingTheFieldAndWritesNothing(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.Save(1, changes(t, `{"schedule": {"minute": 20}}`))
+	_, err = st.Save(t.Context(), 1, changes(t, `{"schedule": {"minute": 20}}`))
 	var v *ValidationError
 	if !errors.As(err, &v) || len(v.Fields) != 1 || v.Fields[0].Field != "schedule.minute" {
 		t.Fatalf("Save of minute 20 = %v, want a ValidationError naming schedule.minute", err)
@@ -32,10 +32,10 @@ func TestAScalarFieldCheckRefusesTheSaveNamingTheFieldAndWritesNothing(t *testin
 	if snap := get(t, st); snap.Revision != 1 || projection(t, snap, "schedule").Value["minute"] != int64(0) {
 		t.Errorf("a refused save moved the settings: %s", jsonOf(t, snap))
 	}
-	if _, err := st.Save(1, changes(t, `{"schedule": {"minute": 45}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"schedule": {"minute": 45}}`)); err != nil {
 		t.Errorf("Save of minute 45: %v", err)
 	}
-	if _, err := st.Save(2, changes(t, `{"schedule": {"minute": null}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 2, changes(t, `{"schedule": {"minute": null}}`)); err != nil {
 		t.Errorf("Save of minute null (the default 0): %v", err)
 	}
 }

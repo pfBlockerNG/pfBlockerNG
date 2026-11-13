@@ -38,20 +38,20 @@ func TestAGenerationIsDerivedFromTheValuesAndFromNothingElse(t *testing.T) {
 func TestAFileStoreKeepsNoGenerationAndEqualValuesGiveTheSameOneAgain(t *testing.T) {
 	dir := t.TempDir()
 	st := open(t, dir)
-	if _, err := st.Initialize(nil); err != nil {
+	if _, err := st.Initialize(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
 	dns := func(st *Store) uint64 { return projection(t, get(t, st), "dns").Generation }
 	if got := dns(st); got != defaultsGeneration {
 		t.Errorf("generation after Initialize with the defaults = %d, want %d", got, defaultsGeneration)
 	}
-	if _, err := st.Save(1, changes(t, `{"dns": {"control": true}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true}}`)); err != nil {
 		t.Fatal(err)
 	}
 	if got := dns(st); got != controlOnGeneration {
 		t.Errorf("generation after control on = %d, want %d", got, controlOnGeneration)
 	}
-	if _, err := st.Save(2, changes(t, `{"dns": {"control": false}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 2, changes(t, `{"dns": {"control": false}}`)); err != nil {
 		t.Fatal(err)
 	}
 	if got := dns(st); got != defaultsGeneration || get(t, st).Revision != 3 {

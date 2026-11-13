@@ -2,6 +2,7 @@ package settings
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,7 +45,7 @@ type document struct {
 
 // Read returns the stored document; no file is an uninitialized backend, a file that does not read whole is an error, never
 // an uninitialized one.
-func (f *FileBackend) Read() (Stored, error) {
+func (f *FileBackend) Read(context.Context) (Stored, error) { // local and fast: ctx is not consulted
 	raw, err := os.ReadFile(filepath.Join(f.dir, storeFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		f.revision = 0
@@ -83,7 +84,7 @@ func (f *FileBackend) Read() (Stored, error) {
 // Write stores values as revision expected+1 when the file is at expected (0: there is none): the new file whole and synced,
 // then renamed over the old one, then the directory synced. From the rename on, the new revision is the store, so it is
 // returned even when the directory sync then fails.
-func (f *FileBackend) Write(expected uint64, values map[string]map[string]any) (uint64, error) {
+func (f *FileBackend) Write(_ context.Context, expected uint64, values map[string]map[string]any) (uint64, error) {
 	if expected != f.revision {
 		return 0, &ConflictError{Field: "expectedRevision",
 			Message: fmt.Sprintf("%s is at revision %d, not %d", storeFile, f.revision, expected)}

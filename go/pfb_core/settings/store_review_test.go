@@ -38,7 +38,7 @@ func TestCoreDefaultsAreTheParityFixturesDefaults(t *testing.T) {
 	}
 	want := doc.Cases[i].Native
 	st := open(t, t.TempDir())
-	if _, err := st.Initialize(nil); err != nil {
+	if _, err := st.Initialize(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
 	value := projection(t, get(t, st, "dns"), "dns").Value
@@ -59,7 +59,7 @@ func TestConcurrentSavesAtOneRevisionAcceptExactlyOne(t *testing.T) {
 	results := make(chan error, n)
 	for i := range n {
 		wg.Go(func() {
-			_, err := st.Save(1, changes(t, `{"dns": {"decisionCacheMax": `+jsonOf(t, i+1)+`}}`))
+			_, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"decisionCacheMax": `+jsonOf(t, i+1)+`}}`))
 			results <- err
 		})
 	}
@@ -118,7 +118,7 @@ func TestOpenFillsWhatAnOlderStoreDoesNotHoldWithDefaults(t *testing.T) {
 	snap := get(t, st)
 	dns, auth := projection(t, snap, "dns"), projection(t, snap, "feedauth")
 	fresh := open(t, t.TempDir())
-	if _, err := fresh.Initialize(changes(t, `{"dns": {"control": true}}`)); err != nil {
+	if _, err := fresh.Initialize(t.Context(), changes(t, `{"dns": {"control": true}}`)); err != nil {
 		t.Fatal(err)
 	}
 	want := get(t, fresh)
@@ -127,7 +127,7 @@ func TestOpenFillsWhatAnOlderStoreDoesNotHoldWithDefaults(t *testing.T) {
 		t.Errorf("older store read as %s, want revision 4, control on and defaults, and the generations of equal values %s",
 			jsonOf(t, snap), jsonOf(t, want))
 	}
-	if _, err := st.Save(4, changes(t, `{"feedauth": {"user": "u"}}`)); err != nil {
+	if _, err := st.Save(t.Context(), 4, changes(t, `{"feedauth": {"user": "u"}}`)); err != nil {
 		t.Errorf("the grown store takes a save: %v", err)
 	}
 }
@@ -149,7 +149,7 @@ func TestAFailedDirectorySyncAfterTheRenameServesWhatIsOnDisk(t *testing.T) {
 	st, dir := initialized(t)
 	syncDir = func(*os.File) error { return errors.New("injected directory sync failure") }
 	t.Cleanup(func() { syncDir = (*os.File).Sync })
-	if _, err := st.Save(1, changes(t, `{"dns": {"control": true}}`)); err == nil {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true}}`)); err == nil {
 		t.Error("Save hid the failed directory sync")
 	}
 	mem := get(t, st)

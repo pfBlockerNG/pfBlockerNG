@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -23,7 +24,7 @@ func newRefreshBackend(revision uint64, values map[string]map[string]any) *refre
 	return &refreshBackend{revision: revision, values: values}
 }
 
-func (b *refreshBackend) Read() (Stored, error) {
+func (b *refreshBackend) Read(context.Context) (Stored, error) {
 	b.reads++
 	if b.readErr != nil {
 		return Stored{}, b.readErr
@@ -42,7 +43,7 @@ func (b *refreshBackend) Read() (Stored, error) {
 	return Stored{Initialized: b.values != nil, Revision: b.revision, Projections: projections}, nil
 }
 
-func (b *refreshBackend) Write(expected uint64, values map[string]map[string]any) (uint64, error) {
+func (b *refreshBackend) Write(_ context.Context, expected uint64, values map[string]map[string]any) (uint64, error) {
 	b.writes++
 	if b.onWrite != nil {
 		b.onWrite()
@@ -97,7 +98,7 @@ func TestSaveRereadsTheBackendWhenItsWriteConflicts(t *testing.T) {
 	}
 	movedUnderCore(b)
 
-	if _, err := st.Save(1, changes(t, `{"dns": {"cnameValidation": true}}`)); !isConflict(err) {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"cnameValidation": true}}`)); !isConflict(err) {
 		t.Fatalf("Save over a moved backend = %v, want a conflict", err)
 	}
 	snap := get(t, st, "dns")
@@ -117,7 +118,7 @@ func TestInitializeRereadsTheBackendWhenItsWriteConflicts(t *testing.T) {
 	b.values = map[string]map[string]any{"dns": {"decisionCacheMax": int64(900)}}
 	b.writeErr = &ConflictError{Field: "expectedRevision", Message: "the backend is at revision 5, not 0"}
 
-	if _, err := st.Initialize(nil); !isConflict(err) {
+	if _, err := st.Initialize(t.Context(), nil); !isConflict(err) {
 		t.Fatalf("Initialize over a moved backend = %v, want a conflict", err)
 	}
 	if snap := get(t, st, "dns"); !snap.Initialized || snap.Revision != 5 || decisionCacheMax(t, st) != int64(900) {
@@ -132,7 +133,7 @@ func TestSaveKeepsItsStateWhenTheRereadAfterAConflictFails(t *testing.T) {
 	b.readErr = errString("the backend is gone")
 	reads := b.reads
 
-	if _, err := st.Save(1, changes(t, `{"dns": {"cnameValidation": true}}`)); !isConflict(err) {
+	if _, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"cnameValidation": true}}`)); !isConflict(err) {
 		t.Fatalf("Save = %v, want the conflict, not the failed re-read", err)
 	}
 	if b.reads != reads+1 {
@@ -149,7 +150,7 @@ func TestSaveDoesNotRereadWhenTheBackendRefusesAValidationError(t *testing.T) {
 	b.writeErr = &ValidationError{Fields: []FieldError{{Field: "dns.cnameValidation", Message: "the adapter refuses it"}}}
 	reads := b.reads
 
-	_, err := st.Save(1, changes(t, `{"dns": {"cnameValidation": true}}`))
+	_, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"cnameValidation": true}}`))
 	if got := strings.Join(validationFields(err), ","); got != "dns.cnameValidation" {
 		t.Fatalf("Save = %v, want the backend's validation error", err)
 	}
@@ -166,7 +167,7 @@ func TestSaveDoesNotRereadOrCallTheBackendOnItsOwnStaleRevisionConflict(t *testi
 	st := storeOver(t, b)
 	reads := b.reads
 
-	if _, err := st.Save(7, changes(t, `{"dns": {"cnameValidation": true}}`)); !isConflict(err) {
+	if _, err := st.Save(t.Context(), 7, changes(t, `{"dns": {"cnameValidation": true}}`)); !isConflict(err) {
 		t.Fatalf("Save at a stale revision = %v, want a conflict", err)
 	}
 	if b.writes != 0 || b.reads != reads {
@@ -185,7 +186,7 @@ func TestSaveRereadShowsWhatTheBackendNormalized(t *testing.T) {
 	b.afterWrite = lowerUser
 	st := storeOver(t, b)
 
-	res, err := st.Save(1, changes(t, `{"dns": {"control": true}, "feedauth": {"user": "Alice"}}`))
+	res, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true}, "feedauth": {"user": "Alice"}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -214,7 +215,7 @@ func TestSaveRereadOmitsAProjectionTheBackendNormalizedBackToWhatItWas(t *testin
 	b.afterWrite = lowerUser
 	st := storeOver(t, b)
 
-	res, err := st.Save(1, changes(t, `{"dns": {"control": true}, "feedauth": {"user": "ALICE"}}`))
+	res, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true}, "feedauth": {"user": "ALICE"}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -233,7 +234,7 @@ func TestSaveRereadReportsTheRevisionTheStoreHolds(t *testing.T) {
 	b.afterWrite = func(b *refreshBackend) { b.revision++ } // another writer slipped in after this one
 	st := storeOver(t, b)
 
-	res, err := st.Save(1, changes(t, `{"dns": {"control": true}}`))
+	res, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestSaveKeepsTheWrittenValuesWhenTheRereadAfterItFails(t *testing.T) {
 	b.readErr = errString("the backend is gone")
 	reads := b.reads
 
-	res, err := st.Save(1, changes(t, `{"dns": {"control": true}}`))
+	res, err := st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -281,9 +282,9 @@ func TestSaveRaceWithAReloadIsSerializedByTheWriteLock(t *testing.T) {
 		reloaded  Snapshot
 		reloadErr error
 	)
-	wg.Go(func() { saved, saveErr = st.Save(1, changes(t, `{"dns": {"control": true}}`)) })
+	wg.Go(func() { saved, saveErr = st.Save(t.Context(), 1, changes(t, `{"dns": {"control": true}}`)) })
 	<-entered // the Save holds wmu and is inside the backend's Write
-	wg.Go(func() { reloaded, reloadErr = st.Reload() })
+	wg.Go(func() { reloaded, reloadErr = st.Reload(t.Context()) })
 	close(release)
 	wg.Wait()
 

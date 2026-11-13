@@ -31,8 +31,9 @@ const (
 //	        {"version":1,"error":{"code":"conflict"|"invalid_argument"|"unavailable","message":"...","fieldErrors":[{"field","message"}]}}
 //
 // Its settings always exist, so Read is always Initialized. Every failure is a *BackendError: a non-zero exit (with the
-// adapter's stderr tail), a deadline, a reply that is not exactly one such object. ReadTimeout and WriteTimeout default to
-// 10 s and 20 s; the end of every call, a deadline or not, kills the adapter's whole process group.
+// adapter's stderr tail), its own deadline, a reply that is not exactly one such object. ReadTimeout and WriteTimeout default
+// to 10 s and 20 s and never outlast the context of the call: when that ends first the call returns its error, not a
+// *BackendError. The end of every call, a deadline or not, kills the adapter's whole process group.
 type AdapterBackend struct {
 	Path                      string
 	ReadTimeout, WriteTimeout time.Duration
@@ -58,8 +59,8 @@ type reply struct {
 	Error    *replyError                           `json:"error"`
 }
 
-func (a *AdapterBackend) Read() (Stored, error) {
-	r, err := a.call(cmp.Or(a.ReadTimeout, readTimeout), request{Version: protocolVersion, Op: "read"})
+func (a *AdapterBackend) Read(ctx context.Context) (Stored, error) {
+	r, err := a.call(ctx, cmp.Or(a.ReadTimeout, readTimeout), request{Version: protocolVersion, Op: "read"})
 	if err != nil {
 		return Stored{}, err
 	}
@@ -69,8 +70,8 @@ func (a *AdapterBackend) Read() (Stored, error) {
 	return Stored{Initialized: true, Revision: r.Revision, Projections: r.Settings}, nil
 }
 
-func (a *AdapterBackend) Write(expected uint64, values map[string]map[string]any) (uint64, error) {
-	r, err := a.call(cmp.Or(a.WriteTimeout, writeTimeout),
+func (a *AdapterBackend) Write(ctx context.Context, expected uint64, values map[string]map[string]any) (uint64, error) {
+	r, err := a.call(ctx, cmp.Or(a.WriteTimeout, writeTimeout),
 		request{Version: protocolVersion, Op: "write", ExpectedRevision: &expected, Settings: values})
 	if err != nil {
 		return 0, err
@@ -83,12 +84,12 @@ func backendErr(format string, args ...any) *BackendError {
 }
 
 // call runs the adapter with req and returns its reply: a whole one with a revision, or the error its refusal maps to.
-func (a *AdapterBackend) call(timeout time.Duration, req request) (*reply, error) {
+func (a *AdapterBackend) call(parent context.Context, timeout time.Duration, req request) (*reply, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, &BackendError{Err: err}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	out, errTail := &capped{limit: maxReply, stop: cancel}, &tail{limit: maxStderr}
 	cmd := exec.CommandContext(ctx, a.Path)
@@ -104,6 +105,8 @@ func (a *AdapterBackend) call(timeout time.Duration, req request) (*reply, error
 	switch {
 	case out.over:
 		return nil, backendErr("the reply is over 32 MiB")
+	case err != nil && parent.Err() != nil:
+		return nil, fmt.Errorf("the adapter call was cut off: %w", parent.Err())
 	case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return nil, backendErr("timed out after %s", timeout)
 	case errors.Is(err, exec.ErrWaitDelay):

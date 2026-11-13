@@ -63,10 +63,10 @@ func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtu
 	for _, c := range loadScheduleFixture(t).Cases {
 		t.Run(c.ID, func(t *testing.T) {
 			st := open(t, t.TempDir())
-			if _, err := st.Initialize(nil); err != nil {
+			if _, err := st.Initialize(t.Context(), nil); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := st.Save(1, scheduleChanges(t, c.Schedule)); err != nil {
+			if _, err := st.Save(t.Context(), 1, scheduleChanges(t, c.Schedule)); err != nil {
 				t.Fatalf("%s\nCore refuses what the adapter reads: %v", c.Description, err)
 			}
 			var want map[string]any
@@ -82,7 +82,7 @@ func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtu
 
 func TestTheScheduleProjectionRefusesTheFixturesHostileInputNamingTheField(t *testing.T) {
 	st := open(t, t.TempDir())
-	if _, err := st.Initialize(nil); err != nil {
+	if _, err := st.Initialize(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range loadScheduleFixture(t).Refused {

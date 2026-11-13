@@ -94,7 +94,7 @@ func TestValidateSaysWhatSaveWouldSay(t *testing.T) {
 				t.Fatal("Validate changed the store")
 			}
 
-			_, saveErr := st.Save(1, ch)
+			_, saveErr := st.Save(t.Context(), 1, ch)
 			if sFields := validationErr(t, "Save", saveErr); !reflect.DeepEqual(vFields, sFields) {
 				t.Errorf("Validate fields %v, Save fields %v, want them equal", vFields, sFields)
 			}
@@ -132,7 +132,7 @@ func TestValidateOnAnUninitializedStoreChecksAgainstTheDefaultsAndStaysUninitial
 	}
 
 	other := open(t, t.TempDir())
-	_, initErr := other.Initialize(bad)
+	_, initErr := other.Initialize(t.Context(), bad)
 	if want := validationErr(t, "Initialize", initErr); !reflect.DeepEqual(got, want) {
 		t.Errorf("Validate fields %v, Initialize fields %v, want them equal", got, want)
 	}

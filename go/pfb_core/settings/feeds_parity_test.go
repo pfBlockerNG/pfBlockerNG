@@ -76,10 +76,10 @@ func TestTheFeedProjectionsMatchTodaysPhpOnEveryFixtureCase(t *testing.T) {
 				input = c.Native
 			}
 			st := open(t, t.TempDir())
-			if _, err := st.Initialize(nil); err != nil {
+			if _, err := st.Initialize(t.Context(), nil); err != nil {
 				t.Fatal(err)
 			}
-			_, err := st.Save(1, map[string]map[string]json.RawMessage{c.Projection: {"groups": json.RawMessage("[" + string(input) + "]")}})
+			_, err := st.Save(t.Context(), 1, map[string]map[string]json.RawMessage{c.Projection: {"groups": json.RawMessage("[" + string(input) + "]")}})
 			if accepted := err == nil; accepted != c.Valid {
 				t.Fatalf("%s\nCore's verdict on %s: accepted %v (%v), PHP's %v", c.Description, input, accepted, err, c.Valid)
 			}
@@ -114,10 +114,10 @@ func hideCredentials(t *testing.T, native json.RawMessage) string {
 // A secret inside a list item never appears in a read, Get's or Save's, and its presence follows the value.
 func TestFeedCredentialsAreWriteOnly(t *testing.T) {
 	st := open(t, t.TempDir())
-	if _, err := st.Initialize(nil); err != nil {
+	if _, err := st.Initialize(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
-	res, err := st.Save(1, changes(t, `{"feeds/dnsbl": {"groups": [{"name": "G", "feeds": [
+	res, err := st.Save(t.Context(), 1, changes(t, `{"feeds/dnsbl": {"groups": [{"name": "G", "feeds": [
 		{"header": "A", "url": "https://example.org/a", "credentials": "user:s3cret"},
 		{"header": "B", "url": "https://example.org/b"}]}]}}`))
 	if err != nil {
@@ -137,12 +137,12 @@ func TestFeedCredentialsAreWriteOnly(t *testing.T) {
 // distinct keys are accepted, so each refusal is the key's.
 func TestListKeysAreRequiredAndUnique(t *testing.T) {
 	st := open(t, t.TempDir())
-	if _, err := st.Initialize(nil); err != nil {
+	if _, err := st.Initialize(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
 	valid := `{"feeds/ipv4": {"groups": [{"name": "A"}, {"name": "B"}]},
 		"feeds/dnsbl": {"groups": [{"name": "A", "feeds": [{"header": "F", "state": "disabled"}, {"header": "G", "state": "disabled"}]}]}}`
-	if _, err := st.Save(1, changes(t, valid)); err != nil {
+	if _, err := st.Save(t.Context(), 1, changes(t, valid)); err != nil {
 		t.Fatalf("Save refused rows with distinct keys: %v", err)
 	}
 	for name, text := range map[string]string{

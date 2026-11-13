@@ -2,6 +2,7 @@ package settings
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -73,7 +74,7 @@ type Store struct {
 // is an error, never an uninitialized Core.
 func Load(b Backend, schema Schema) (*Store, error) {
 	s := &Store{backend: b, schema: schema}
-	if err := s.fetch(); err != nil {
+	if err := s.fetch(context.Background()); err != nil { // startup has no method deadline
 		return nil, err
 	}
 	return s, nil
@@ -83,8 +84,8 @@ func Load(b Backend, schema Schema) (*Store, error) {
 func Open(dir string, schema Schema) (*Store, error) { return Load(NewFileBackend(dir), schema) }
 
 // fetch replaces the state with what the backend holds now; on any error the state is as it was.
-func (s *Store) fetch() error {
-	stored, err := s.backend.Read()
+func (s *Store) fetch(ctx context.Context) error {
+	stored, err := s.backend.Read(ctx)
 	if err != nil {
 		return err
 	}
@@ -191,21 +192,21 @@ func generation(values map[string]any) uint64 {
 // write has the backend store values at expected. The new values are the state as soon as the backend took them, even when
 // it then reports an error, and not before: a refused or failed write changes nothing, except that a *ConflictError (the
 // configuration moved under Core) has the state re-read, best effort: a failed read keeps the state. The caller holds wmu.
-func (s *Store) write(expected uint64, values map[string]map[string]any) (uint64, error) {
-	revision, err := s.backend.Write(expected, values)
+func (s *Store) write(ctx context.Context, expected uint64, values map[string]map[string]any) (uint64, error) {
+	revision, err := s.backend.Write(ctx, expected, values)
 	if revision != 0 {
 		s.set(true, revision, values)
 	}
 	var conflict *ConflictError
 	if errors.As(err, &conflict) {
-		_ = s.fetch()
+		_ = s.fetch(ctx)
 	}
 	return revision, err
 }
 
 // Initialize accepts the first settings: every projection is its defaults with the given values over them. An initialized
 // store, whatever its backend, refuses it.
-func (s *Store) Initialize(settings map[string]map[string]json.RawMessage) (Result, error) {
+func (s *Store) Initialize(ctx context.Context, settings map[string]map[string]json.RawMessage) (Result, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if s.initialized {
@@ -222,7 +223,7 @@ func (s *Store) Initialize(settings map[string]map[string]json.RawMessage) (Resu
 	if errs != nil {
 		return Result{}, &ValidationError{Fields: errs}
 	}
-	revision, err := s.write(0, values)
+	revision, err := s.write(ctx, 0, values)
 	if err != nil {
 		return Result{}, err
 	}
@@ -238,7 +239,7 @@ func (s *Store) Initialize(settings map[string]map[string]json.RawMessage) (Resu
 // to the revision the backend answers, then reads the backend again (best effort: a failed read keeps the written values)
 // so Core holds what it stored, which it may have normalized. The result is that state: its revision, and the projections
 // whose values differ from before the save.
-func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMessage) (Result, error) {
+func (s *Store) Save(ctx context.Context, expected uint64, changes map[string]map[string]json.RawMessage) (Result, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if !s.initialized {
@@ -260,10 +261,10 @@ func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMess
 		return Result{}, &ValidationError{Fields: errs}
 	}
 	before := s.values
-	if _, err := s.write(expected, values); err != nil {
+	if _, err := s.write(ctx, expected, values); err != nil {
 		return Result{}, err
 	}
-	_ = s.fetch()
+	_ = s.fetch(ctx)
 	res := Result{Revision: s.revision, Projections: []ProjectionValue{}}
 	for _, p := range s.schema.Projections {
 		if !reflect.DeepEqual(s.values[p.ID], before[p.ID]) {
@@ -274,13 +275,14 @@ func (s *Store) Save(expected uint64, changes map[string]map[string]json.RawMess
 }
 
 // Reload reads the backend again, as when the configuration was changed behind Core's back, and answers what Get(nil)
-// would. A backend that fails, or a configuration that does not validate, is a *BackendError and the last values stay.
-func (s *Store) Reload() (Snapshot, error) {
+// would. A backend that fails, or a configuration that does not validate, is a *BackendError and the last values stay,
+// except that a call ctx ended keeps the error that says so.
+func (s *Store) Reload(ctx context.Context) (Snapshot, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	if err := s.fetch(); err != nil {
+	if err := s.fetch(ctx); err != nil {
 		var b *BackendError
-		if !errors.As(err, &b) {
+		if !errors.As(err, &b) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			err = &BackendError{Err: err}
 		}
 		return Snapshot{}, err

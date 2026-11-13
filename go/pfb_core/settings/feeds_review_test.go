@@ -26,12 +26,12 @@ func TestAFeedHeaderIsUniqueAcrossTheGroupsOfAType(t *testing.T) {
 // key is the base of an edited item); an explicit "" or null clears them.
 func TestAnEditedFeedKeepsItsCredentialsUnlessTheSaveClearsThem(t *testing.T) {
 	st := open(t, t.TempDir())
-	if _, err := st.Initialize(nil); err != nil {
+	if _, err := st.Initialize(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
 	saved := func(revision uint64, feed string) string {
 		t.Helper()
-		if _, err := st.Save(revision, changes(t, `{"feeds/ipv4": {"groups": [{"name": "G", "feeds": [`+feed+`]}]}}`)); err != nil {
+		if _, err := st.Save(t.Context(), revision, changes(t, `{"feeds/ipv4": {"groups": [{"name": "G", "feeds": [`+feed+`]}]}}`)); err != nil {
 			t.Fatal(err)
 		}
 		return jsonOf(t, st.values["feeds/ipv4"])

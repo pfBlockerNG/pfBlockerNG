@@ -47,10 +47,10 @@ func TestTheDnsProjectionMatchesTodaysPhpOnEveryFixtureCase(t *testing.T) {
 				input = c.Native
 			}
 			st := open(t, t.TempDir())
-			if _, err := st.Initialize(nil); err != nil {
+			if _, err := st.Initialize(t.Context(), nil); err != nil {
 				t.Fatal(err)
 			}
-			_, err := st.Save(1, map[string]map[string]json.RawMessage{"dns": input})
+			_, err := st.Save(t.Context(), 1, map[string]map[string]json.RawMessage{"dns": input})
 			if accepted := err == nil; accepted != c.Valid {
 				t.Fatalf("%s\nCore's verdict on %s: accepted %v (%v), PHP's %v", c.Description, jsonOf(t, input), accepted, err, c.Valid)
 			}
