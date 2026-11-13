@@ -12565,17 +12565,30 @@ function pfb_metrics_client_save(PfbToggle $desired, callable $persist, string $
 		return 'Client IP metrics could not be changed: metrics publication is busy. ' . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled.' : 'Client IP metrics remain disabled.');
 	}
 	try {
-		$error = pfb_metrics_client_reconcile($desired === PfbToggle::On);
-		if ($error !== NULL) {
-			return 'Client IP metrics could not be changed: ' . $error . '. ' . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled; retry Save.' : 'Client IP metrics remain disabled; retry Save.');
+		if ($desired === PfbToggle::On) {
+			// config.xml says on before any database collects client IPs: a refused write leaves the databases as they were
+			if (!$persist()) {
+				return 'Client IP metrics could not be changed: pfSense refused the configuration write. Client IP metrics remain disabled; retry Save.';
+			}
+			$error = pfb_metrics_client_reconcile(TRUE);
+			if ($error !== NULL) {
+				pfb_logger("\nClient IP metrics are saved as enabled, but the metrics databases do not collect client IPs yet ({$error}); the next Update applies it.", 2);
+			}
+			return NULL;
 		}
-		if ($desired === PfbToggle::Off && !is_link($dir)) {
+		// Off purges before config.xml says so: client identities never outlive the request to drop them
+		$error = pfb_metrics_client_reconcile(FALSE);
+		if ($error !== NULL) {
+			return 'Client IP metrics could not be changed: ' . $error . '. Client IP metrics are still enabled; retry Save.';
+		}
+		if (!is_link($dir)) {
 			unlink_if_exists("{$dir}/pfblockerng.prom");
 		}
 		if (!$persist()) {
-			$undo = pfb_metrics_client_reconcile($previous === PfbToggle::On);
-			return 'Client IP metrics could not be changed: pfSense refused the configuration write' . ($undo === NULL ? '' : "; putting the metrics databases back failed too: {$undo}") . '. '
-			    . ($previous === PfbToggle::On ? 'Client IP metrics are still enabled; retry Save.' : 'Client IP metrics remain disabled; retry Save.');
+			$undo = pfb_metrics_client_reconcile(TRUE);
+			return 'Client IP metrics could not be changed: pfSense refused the configuration write. '
+			    . ($undo === NULL ? 'Client IP metrics are still enabled; retry Save.'
+			        : "Turning client IP collection back on failed too ({$undo}), so it stays off until the next Update applies the stored setting; retry Save.");
 		}
 		return NULL;
 	} finally {

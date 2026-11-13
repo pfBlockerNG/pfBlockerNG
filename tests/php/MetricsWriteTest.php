@@ -284,6 +284,82 @@ final class MetricsWriteTest extends TestCase
 		}
 	}
 
+	/** Turning client IPs on: config.xml says so before any database collects them, so a refused write leaves the databases alone. */
+	public function testTurningClientIpOnWritesTheConfigurationBeforeAnyDatabaseCollects(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		$atWrite = NULL;
+
+		$error = pfb_metrics_client_save(PfbToggle::On, function () use (&$atWrite): bool {
+			$atWrite = $this->clientIpPolicy();
+			return TRUE;
+		}, "{$this->root}/node");
+
+		$this->assertNull($error);
+		$this->assertSame(['client_ip' => 0, 'epoch' => str_repeat('a', 32)], $atWrite, 'no database collected client IPs before config.xml said so');
+		$this->assertSame(1, $this->clientIpPolicy()['client_ip']);
+	}
+
+	/** A database that stays locked after config.xml says on collects nothing: the save stands and the next Update applies it. */
+	public function testTurningClientIpOnWithALockedDatabaseSavesAndCollectsNothing(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$db->exec('BEGIN IMMEDIATE');
+		$written = FALSE;
+		try {
+			$error = pfb_metrics_client_save(PfbToggle::On, static function () use (&$written): bool {
+				$written = TRUE;
+				return TRUE;
+			}, "{$this->root}/node");
+		} finally {
+			$db->exec('ROLLBACK');
+			$db->close();
+		}
+
+		$this->assertNull($error, 'the configuration was written');
+		$this->assertTrue($written);
+		$this->assertSame(0, $this->clientIpPolicy()['client_ip'], 'the locked database still collects nothing');
+	}
+
+	/** Turning client IPs off, refused, with the way back locked: the message says what is true (collection off until the next Update). */
+	public function testARefusedOffWhoseWayBackFailsSaysCollectionStaysOff(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$holder = NULL;
+		try {
+			$error = (string) pfb_metrics_client_save(PfbToggle::Off, static function () use (&$holder): bool {
+				$holder = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+				$holder->exec('BEGIN IMMEDIATE');
+				return FALSE;
+			}, "{$this->root}/node");
+		} finally {
+			if ($holder !== NULL) {
+				$holder->exec('ROLLBACK');
+				$holder->close();
+			}
+		}
+
+		$this->assertStringContainsString('refused the configuration write', $error);
+		$this->assertStringNotContainsString('still enabled', $error, 'collection is off, whatever config.xml says');
+		$this->assertStringContainsString('next Update', $error);
+		$this->assertSame(0, $this->clientIpPolicy()['client_ip']);
+	}
+
 	private function clientIpPolicy(): array
 	{
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
