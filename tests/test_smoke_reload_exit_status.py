@@ -45,8 +45,11 @@ def test_clean_exit_is_accepted_without_pass_marker_log_scraping() -> None:
 
 
 _FEEDS = ["dnsbl:smokefeed", "ipv4:smokeip_v4"]
+# The harness keeps .pfb_cron_disable set and the verb defers trigger `scheduled` under it (exit 75), so the driver
+# asks for the `retry` trigger: the verb runs it as it runs a scheduled one (the named feeds, the same pass) and the
+# sentinel leaves it alone.
 _SCHEDULED_COMMAND = (
-    'printf %s \'{"version": 1, "trigger": "scheduled", "scope": "both", "force": "none", '
+    'printf %s \'{"version": 1, "trigger": "retry", "scope": "both", "force": "none", '
     '"feeds": ["dnsbl:smokefeed", "ipv4:smokeip_v4"]}\' '
     "| /usr/local/pkg/pfblockerng/pfb_core_update.sh 3>/tmp/pfb_smoke_core_update_result.json"
 )

@@ -3779,9 +3779,10 @@ def reload(
     ``update`` (scope=both force=false trigger=cron — full update, respects change detector),
     ``updateip`` (scope=ip force=true trigger=force — IP-side force reload),
     ``updatednsbl`` (scope=dnsbl force=true trigger=force — DNSBL-side force reload),
-    ``scheduled`` (the Update program Core runs for a quarter-hour Update, with the ``feeds`` ids
+    ``scheduled`` (a quarter-hour Update Core asks the Update program for, with the ``feeds`` ids
     it is asked to check -- :func:`feed_id`; Core decides what is due, so a pass checks exactly the
-    feeds named, issue #3941), or ``tick`` (the scheduled tick via
+    feeds named, issue #3941; sent as trigger ``retry``, which runs the same pass but, unlike ``scheduled``, is not
+    deferred by the harness's ``.pfb_cron_disable`` sentinel), or ``tick`` (the scheduled tick via
     ``pfblockerng_tick()`` — the only path that runs ``pfb_log_mgmt()``, and only on an IDLE
     tick: skipped when this tick dispatches an update pass or one from an earlier tick is
     still running, see ``pfb_update_pass_running()`` in ``pfblockerng.inc``).
@@ -3831,7 +3832,9 @@ def reload(
     deadline = time.monotonic() + timeout
     argv: tuple[str, ...]
     if scope == "scheduled":
-        argv = (core_update_command("scheduled", feeds=feeds),)
+        # The harness keeps .pfb_cron_disable set and the verb defers trigger `scheduled` under it (rc 75);
+        # `retry` runs the same pass.
+        argv = (core_update_command("retry", feeds=feeds),)
     elif scope == "tick":
         argv = (PHP_BIN, PFB_CLI, scope)
     else:

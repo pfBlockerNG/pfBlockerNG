@@ -11,6 +11,7 @@ run on a box with no feeds that ends in seconds.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +32,8 @@ END_LINE = "UPDATE PROCESS ENDED"
 # Generous salvage caps, never assertions: an expiry is a stuck run (stuck/environment), not a verdict.
 HELD_SALVAGE_S = 90.0
 FINISH_SALVAGE_S = 300.0
+# What the page says in its status box once Core admitted a manual Update of scope dnsbl and force none.
+RUNNING_LINE = "Running: scope=dnsbl force=none"
 
 
 def _poll(webui: WebUI, after: str | None = None) -> dict[str, Any]:
@@ -48,8 +51,30 @@ def _wait_no_update_running(webui: WebUI) -> None:
     helpers.wait_until(lambda: not _poll(webui)["running"], timeout=FINISH_SALVAGE_S, interval=1.0)
 
 
+def _status_line(html: str) -> str | None:
+    """The line the page put in its status box (``pfbupdate_status()``); None when it printed none."""
+    found = re.findall(r'pfb_status\.value = ("(?:[^"\\]|\\.)*");', html)
+    return json.loads(found[-1]) if found else None
+
+
 @pytest.fixture
-def held_update(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[tuple[str, str]]:
+def package_enabled(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
+    """pfBlockerNG's master switch on, as it is for a Run Now: the page starts no Update while the package is disabled.
+
+    The smoke VM starts with it off; the switch goes back to what it was, as the other Run Now tests leave it.
+    """
+    was_on = helpers.config_get(smoke_vm, f"{helpers.CFG_GLOBAL}/enable_cb") == "on"
+    if not was_on:
+        helpers.set_package_enabled(smoke_vm, True)
+    try:
+        yield
+    finally:
+        if not was_on:
+            helpers.set_package_enabled(smoke_vm, False)
+
+
+@pytest.fixture
+def held_update(smoke_vm: helpers.SmokeVM, webui: WebUI, package_enabled: None) -> Iterator[tuple[str, str]]:
     """A pre-update hook that marks it was entered, then holds the Update until the release marker appears.
 
     Yields ``(entered_marker, release_marker)``. The hook's own wait is bounded (150 x 1 s) so a test that dies
@@ -120,9 +145,9 @@ def test_run_now_is_followed_to_its_end_and_a_second_run_is_refused(
     entered, release = held_update
     assert not _poll(webui)["running"], "precondition: no Update is running before Run Now"
 
-    answered = _run_now(webui)
-    assert "Running: scope=dnsbl force=none" in answered, (
-        "Run Now did not say it started the Update: the status line the POST answered was missing"
+    answered = _status_line(_run_now(webui))
+    assert answered == RUNNING_LINE, (
+        f"Run Now did not say it started the Update\n  expected status: {RUNNING_LINE!r}\n  actual status: {answered!r}"
     )
     helpers.wait_until(lambda: helpers.hook_marker_exists(smoke_vm, entered), timeout=HELD_SALVAGE_S, interval=1.0)
 
@@ -195,7 +220,10 @@ def test_a_cursor_of_a_finished_update_still_reads_and_a_new_run_starts_a_fresh_
     assert finished["update"]["finishedAt"] is not None, f"precondition: the first Update must have ended: {finished!r}"
 
     smoke_vm.ssh("/bin/rm", "-f", entered, release)  # the second Update is held again
-    assert "Running: scope=dnsbl force=none" in _run_now(webui), "the second Run Now must start an Update"
+    second = _status_line(_run_now(webui))
+    assert second == RUNNING_LINE, (
+        f"the second Run Now must start an Update\n  expected status: {RUNNING_LINE!r}\n  actual status: {second!r}"
+    )
     helpers.wait_until(lambda: helpers.hook_marker_exists(smoke_vm, entered), timeout=HELD_SALVAGE_S, interval=1.0)
 
     fresh = _poll(webui, old_cursor)
