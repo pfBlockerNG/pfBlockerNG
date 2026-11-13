@@ -1,7 +1,9 @@
-"""Issue #3916: a DNSBL save with no Permit Firewall Rules interface selected logs no PHP diagnostic.
+"""Issues #3916 and #3936: a DNSBL save with no Permit Firewall Rules interface selected logs no PHP diagnostic.
 
 A browser sends nothing for a ``multiple`` select with no selection, so ``dnsbl_allow_int`` is absent from
-the POST. PHP 8.5 deprecates the null key its validator then passed to ``array_key_exists()``.
+the POST. PHP 8.5 deprecates the null key its validator then passed to ``array_key_exists()`` (#3916), and
+reading the absent key logged ``Undefined array key`` (#3936), a class ``PhpErrorLogGuard`` reports but
+does not gate, so it is counted here.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .render_oracle import PhpErrorLogGuard, input_errors_block
+from .render_oracle import PHP_ERROR_LOG_CANDIDATES, PhpErrorLogGuard, input_errors_block
 from .webui import scrape_form_fields
 
 if TYPE_CHECKING:
@@ -24,6 +26,13 @@ DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
 _ALLOW_INT = "installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_allow_int"
 
 
+def _dnsbl_undefined_key_count(vm: SmokeVM) -> int:
+    """``Undefined array key`` lines raised in the DNSBL page, over every candidate php_error.log."""
+    logs = " ".join(PHP_ERROR_LOG_CANDIDATES)
+    result = vm.ssh(f"cat {logs} 2>/dev/null | grep 'Undefined array key' | grep -c 'pfblockerng_dnsbl.php'")
+    return int(result.stdout.strip() or 0)
+
+
 def test_dnsbl_save_without_allow_interface_logs_no_php_diagnostic(smoke_vm: SmokeVM, webui: WebUI) -> None:
     """The POST omits dnsbl_allow_int and stops at a validation error, so the save writes nothing."""
     original = helpers.config_get_state(smoke_vm, _ALLOW_INT)
@@ -34,6 +43,7 @@ def test_dnsbl_save_without_allow_interface_logs_no_php_diagnostic(smoke_vm: Smo
         )
         guard = PhpErrorLogGuard(smoke_vm)
         guard.snapshot()
+        undefined_keys = _dnsbl_undefined_key_count(smoke_vm)
         response = webui.post(DNSBL_PAGE, {"pfb_py_cache_max": "not-a-number"}, allow_redirects=False)
         assert response.status_code == 200, f"invalid POST must re-render, not redirect: {response.status_code}"
         errors = input_errors_block(response.text)
@@ -41,5 +51,8 @@ def test_dnsbl_save_without_allow_interface_logs_no_php_diagnostic(smoke_vm: Smo
             f"POST must reach the save validator: {response.text[-4000:]}"
         )
         guard.assert_no_growth()
+        assert _dnsbl_undefined_key_count(smoke_vm) == undefined_keys, (
+            "the save logged an Undefined array key warning in pfblockerng_dnsbl.php"
+        )
     finally:
         helpers.config_restore_state(smoke_vm, _ALLOW_INT, original)
