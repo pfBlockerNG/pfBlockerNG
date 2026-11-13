@@ -354,6 +354,17 @@ def test_the_go_quality_canary_declares_the_baked_go() -> None:
     )
 
 
+def test_core_and_pfb_dns_require_the_go_minor_the_image_bakes() -> None:
+    """x/net picks its IDNA tables by compiler (go1.27 selects Unicode 17, issue #3982), so the
+    `go` directive is the floor every builder must meet: CI, and a ports `make package` whose
+    lang/goNNN would otherwise build Core and pfb-dns with older tables (GOTOOLCHAIN=local)."""
+    minor = ".".join(_image_pin("GO_VERSION").split(".")[:2])
+    for module in ("pfb_core", "pfb_dns_gateway"):
+        go_mod = (ROOT / "go" / module / "go.mod").read_text(encoding="utf-8")
+        directives = re.findall(r"^go (\S+)$", go_mod, re.MULTILINE)
+        assert directives == [f"{minor}.0"], f"go/{module}/go.mod declares go {directives}, the ci image bakes {minor}"
+
+
 def test_the_go_toolchain_helper_installs_the_archive_the_image_bakes() -> None:
     """go_toolchain.py puts Go on a runner that has none; its archive must be the image's
     (GO_VERSION / GO_SHA256), or leased boxes and CI build the payload with different compilers."""
