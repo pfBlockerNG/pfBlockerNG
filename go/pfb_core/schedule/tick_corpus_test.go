@@ -7,8 +7,8 @@ import (
 )
 
 // Replays testdata/tick.json (schema: the "Tick corpus" section of testdata/README.md): the two steps of
-// pfblockerng_tick() that Core takes over. The PHP runner, tests/php/ScheduleTickCorpusTest.php, replays the same file
-// through the tick's own functions: a case where Core and the old path differ fails on one side.
+// pfblockerng_tick() that Core takes over. This is the only runner: the PHP one, ScheduleTickCorpusTest, and the functions it
+// replayed went with the cutover (#3941), so a change to this corpus is a change to Core's behavior.
 
 var tickSectionOrder = []string{"feed_plan", "reserve"}
 

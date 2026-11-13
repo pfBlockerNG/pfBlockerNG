@@ -11,10 +11,12 @@ import (
 	_ "time/tzdata" // the corpus's zones resolve on a host without zoneinfo too
 )
 
-// Replays testdata/schedule.json (schema: testdata/README.md). The PHP runner, tests/php/ScheduleCorpusTest.php, replays
-// the same file through the old path: a case where Core and the old path differ fails on one side.
+// Replays testdata/schedule.json (schema: testdata/README.md). This is the authority for every section. The PHP runner,
+// tests/php/ScheduleCorpusTest.php, still replays the sections whose PHP function remains (next_occurrence, plan, next_due,
+// quiet_hours, state_valid, model, blacklist), so a case where Core and PHP differ fails on one side; extra_plan, set_pending
+// and record_outcome lost their PHP functions with the cutover (#3941) and only this runner replays them.
 
-// sectionKeys are the keys of each section's cases, in order (the PHP runner holds the same list).
+// sectionKeys are the keys of each section's cases, in order (the PHP runner holds the same list, retired sections included).
 var sectionKeys = map[string][]string{
 	"next_occurrence": {"id", "description", "timezone", "cadence", "weekday", "hour", "minute", "reference", "expect"},
 	"plan":            {"id", "description", "timezone", "default", "now", "groups", "expect"},

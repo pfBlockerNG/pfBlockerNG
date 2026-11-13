@@ -27,6 +27,10 @@ const (
 // extraOrder is the order the PHP tick ran the Extras in, whatever order they are due in.
 var extraOrder = []string{extraPrefix + "dcc", extraPrefix + "bl"}
 
+// ErrModel marks an error that means the schedule model cannot be built from the settings (Config.Model failed): a caller tells
+// it from the gate's refusal, which is update.ErrRunning or update.ErrStopped. The model's own error is wrapped with it.
+var ErrModel = errors.New("the schedule model cannot be built")
+
 var (
 	scopes = []string{"ip", "dnsbl", "both"}
 	forces = []string{"none", "parse", "download", "both"}
@@ -103,7 +107,7 @@ func (s *Scheduler) evaluate(trigger string, force bool) error {
 	m, err := cfg.Model() // before the lock: it needs none of the state, and a slow read must not hold up Done
 	if err != nil {
 		cfg.Logf("scheduler: the schedule model is unavailable, nothing started: %v", err)
-		return err
+		return fmt.Errorf("%w: %w", ErrModel, err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -228,7 +232,7 @@ type View struct {
 func (s *Scheduler) View() (View, error) {
 	m, err := s.cfg.Model() // before the lock, as in evaluate
 	if err != nil {
-		return View{}, err
+		return View{}, fmt.Errorf("%w: %w", ErrModel, err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
