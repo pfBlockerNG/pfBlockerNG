@@ -1,8 +1,9 @@
 // Package schedule is the Go port of the scheduler's evaluation logic (issue #3938, map #3813). Core's scheduler package
-// calls it, and the PHP path stays authoritative until that package is wired; the frozen corpus in testdata/ proves both
-// sides answer alike.
+// calls it, and main.go runs that package when Core starts with --update-cmd (#3941). The frozen corpus in testdata/ is
+// replayed here for every section, and by PHP for the sections whose function remains there.
 //
-// Each function ports one of pfblockerng_extra.inc's:
+// Each function ports one of pfblockerng_extra.inc's (pfb_schedule_extra_plan, pfb_schedule_feed_plan, pfb_schedule_reserve,
+// pfb_schedule_state_set_pending and pfb_schedule_state_record_outcome were removed by the cutover, #3941: Go is their only copy):
 //
 //	NextOccurrence  pfb_schedule_next_occurrence
 //	Plan            pfb_schedule_plan (its $since and $next_occurrence arguments are always the defaults, so dropped)

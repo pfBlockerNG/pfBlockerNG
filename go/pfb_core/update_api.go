@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,10 @@ func newUpdates(path, stateDir string, st *settings.Store, logf func(string, ...
 	return sched, gate
 }
 
+// quarterTimer is the timer the quarter-hour loop waits on: nil is time.After, the real clock. Only a test sets it, to keep a
+// scheduled Update from starting under it (update_api_test.go).
+var quarterTimer func(time.Duration) <-chan time.Time
+
 // runUpdates starts the quarter-hour loop and returns the function that ends it: it stops the loop, then the Update
 // running, whose program's process group is killed (an Update stopped this way is not resumed). It may be called again.
 func runUpdates(ctx context.Context, sched *scheduler.Scheduler, gate *update.Gate) (stop func()) {
@@ -35,7 +40,7 @@ func runUpdates(ctx context.Context, sched *scheduler.Scheduler, gate *update.Ga
 	}
 	loop, endLoop := context.WithCancel(ctx)
 	ended := make(chan struct{})
-	go func() { sched.Run(loop, nil); close(ended) }()
+	go func() { sched.Run(loop, quarterTimer); close(ended) }()
 	return func() { endLoop(); <-ended; gate.Stop() }
 }
 
@@ -103,32 +108,37 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 			switch {
 			case errors.Is(err, update.ErrRunning):
 				return nil, newError(codeConflict, err.Error())
-			case errors.Is(err, update.ErrStopped):
+			case errors.Is(err, update.ErrStopped), errors.Is(err, scheduler.ErrModel):
 				return nil, newError(codeUnavailable, err.Error())
 			}
 			return struct{}{}, err
 		}},
 		"GetUpdate": {call: func(_ context.Context, params []byte) (any, error) {
 			var p struct {
-				After int64 `json:"after"`
+				After *string `json:"after"` // the cursor of an earlier reply, a decimal string
 			}
 			if err := decodeParams(params, &p); err != nil {
 				return nil, err
 			}
-			if p.After < 0 {
-				return nil, newError(codeInvalidArgument, "after is a log offset", fieldError{Field: "after", Message: "must not be negative"})
+			var after int64
+			if p.After != nil {
+				var ok bool
+				if after, ok = cursor(*p.After); !ok {
+					return nil, newError(codeInvalidArgument, "after is the next of an earlier GetUpdate, a string of decimal digits",
+						fieldError{Field: "after", Message: "must be a string of decimal digits that fits 63 bits"})
+				}
 			}
-			return gate.View(p.After, 0), nil
+			return gate.View(after, 0), nil
 		}},
 		"GetSchedule": {call: func(_ context.Context, params []byte) (any, error) {
 			if err := decodeParams(params, &struct{}{}); err != nil {
 				return nil, err
 			}
 			view, err := sched.View()
-			if err != nil {
-				return nil, newError(codeUnavailable, "the schedule cannot be computed: "+err.Error())
+			if errors.Is(err, scheduler.ErrModel) {
+				return nil, newError(codeUnavailable, err.Error())
 			}
-			return view, nil
+			return view, err
 		}},
 	}
 	if sched == nil {
@@ -151,4 +161,13 @@ func pick(field string, v *string, def string, allowed ...string) (string, []fie
 		return *v, nil
 	}
 	return def, []fieldError{{Field: field, Message: "must be one of " + strings.Join(allowed, ", ")}}
+}
+
+// cursor reads a GetUpdate cursor: decimal digits only (no sign, space or point) within 63 bits.
+func cursor(s string) (int64, bool) {
+	if s == "" || strings.Trim(s, "0123456789") != "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	return n, err == nil
 }

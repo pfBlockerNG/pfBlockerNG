@@ -37,7 +37,7 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give; changes nothing |
 | `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
 | `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry` | `{}` once the Update is admitted; `conflict` while one runs |
-| `GetUpdate` | `after` (optional log offset, default 0) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log |
+| `GetUpdate` | `after` (optional cursor, a decimal string; default: the start) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log; `next` is a string |
 | `GetSchedule` | none | `{"scheduled", "feeds", "extras"}`: when the scheduled Updates last ran and are next due |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
@@ -287,23 +287,31 @@ The reply is `{}` once the Update is admitted, not when it ends: read it with `G
 (`scheduled` is not one) is `invalid_argument` with one field error per fault (`trigger`, `scope`, `force`) and nothing
 starts. `conflict` means an Update is running. `unavailable` means Core is stopping or runs no scheduler. A `retry` plans like
 a quarter-hour run, so one whose model cannot be built from the settings (not initialized, or a value the schedule refuses)
-starts nothing and fails as `internal` (logged); a `scheduled` one is logged and skipped.
+starts nothing and is `unavailable` too, with the reason, as `GetSchedule` is; a `scheduled` one is logged and skipped. An
+`apply` plans nothing and needs no model.
 
 ### GetUpdate
 
-Progress is polled, not streamed. `after` is a byte offset into the Update's log, `0` or more (a negative one is
-`invalid_argument`). The reply is:
+Progress is polled, not streamed. `after` is an opaque cursor: the `next` of an earlier reply, passed back as the decimal
+string it is (`{"after": "1099511627800"}`). A client never builds, orders or does arithmetic on one. Absent (or `null`) and
+`"0"` read from the start of the Update's log. A value that is not a string of decimal digits, or does not fit 63 bits (a JSON
+number, `"-1"`, `"abc"`, `"1.5"`, `""`), is `invalid_argument` with a field error on `after`. The reply is:
 
 | Field | Value |
 |---|---|
 | `running` | `true` while an Update runs, explicitly `false` otherwise |
 | `update` | `null` until this Core's first Update; else `{"trigger", "scope", "force", "startedAt", "finishedAt", "result"}`: `startedAt` and `finishedAt` in Unix seconds, `finishedAt` and `result` only once it ended, `result` `success` (the program exited 0 and its result, if any, was usable) or `failed` |
-| `log` | the log's bytes from `after`, at most 64 KiB, never ending inside a UTF-8 character; `""` while idle |
-| `next` | `after` plus the bytes of `log`: the `after` of the next call; `0` while idle |
+| `log` | the log's bytes from the cursor, at most 64 KiB, never ending inside a UTF-8 character; `""` before the first Update |
+| `next` | the cursor after `log`, a JSON string: pass it as `after` in the next call; `"0"` before the first Update |
 
-The last Update stays readable until the next one starts. A client follows an Update by calling again with `after` set to
-the last `next`, and detects a new Update by `update.startedAt` differing from the one it follows: the log then starts
-again at 0. An `after` beyond the log's end reads from 0.
+The last Update stays readable until the next one starts. A client follows an Update by calling again with the last `next`
+as `after`. The cursor names the Update it belongs to, so the first call after a new Update has started reads that Update's
+log from its start: the client needs no other signal. A cursor of an earlier Update, or one past the log's end, reads from the
+start. It is a string because it exceeds 2^53, which a browser or a PHP float holds exactly, from the 8193rd Update of a Core.
+
+The cursor's Update is counted from this Core's start, so a cursor from before a restart can match the new Core's first
+Update and skip the start of its log. `update.startedAt` is the hint for that case only: a client that sees it differ from the
+one it followed drops its cursor and calls without `after`.
 
 ### GetSchedule
 
@@ -426,7 +434,7 @@ pfb-dns ticket decides it.
 | What | Where |
 |---|---|
 | Binary | `/usr/local/pkg/pfblockerng/core/bin/freebsd-amd64/pfb-core`, `.../freebsd-arm64/pfb-core` (static, `CGO_ENABLED=0`; built by `scripts/build-pfb-dns.py`) |
-| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core` |
+| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd` and `--update-cmd` |
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
 | Socket | `/var/run/pfb_core/api.sock` |
