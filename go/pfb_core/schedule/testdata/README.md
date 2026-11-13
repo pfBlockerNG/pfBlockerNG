@@ -59,8 +59,29 @@ The expectations were produced by the old path (PHP 8.4 reading the host's syste
 - `pfb_schedule_plan()`'s `$since` and `$next_occurrence` arguments are always the defaults in production; Core has
   neither. A model entry always has `has_active_rows` true (the runtime model only lists rows that have a URL and are not
   Disabled), so the corpus does not carry it.
-- Not in the corpus: the tick's feed plan (inline in `pfblockerng_tick()`: `pfb_schedule_plan()` over the feed entries with
-  `last_completed_occurrence` alone as the cursor, nothing when scheduled updates are off; `CacheEntries` also counts an
-  attempted pending occurrence, so the cutover must not reuse its cursor), the tick's own reservation step (raising `pending_occurrence` to a newer occurrence inside
-  `pfblockerng_tick()`), the merge of the ledger's other entries and its `pending_apply` flag, and the 900-second
-  `ss_refresh`/`apply_reconcile` ledger entries.
+- Not in this corpus: the merge of the ledger's other entries and its `pending_apply` flag, and the 900-second
+  `ss_refresh`/`apply_reconcile` ledger entries. The tick's feed plan and reservation are in `tick.json`, below.
+
+## Tick corpus
+
+`tick.json` pins the two steps of `pfblockerng_tick()` that Core takes over besides the schedule evaluation above
+(issue #3941). It follows the common rules above (same ids, entries, state shape and strictness); the expectations were
+produced by running the tick's inline code before it became those functions (PHP 8.4), then reviewed row by row. The
+sections, in this order, are `feed_plan` and `reserve`; the runners:
+
+- Go: `go/pfb_core/schedule/tick_corpus_test.go`, on the same loader as `corpus_test.go`.
+- PHP: `tests/php/ScheduleTickCorpusTest.php`, through the functions the tick itself calls.
+
+| Section | Old path | Inputs | `expect` |
+|---|---|---|---|
+| `feed_plan` | `pfb_schedule_feed_plan()` | `timezone`, `scheduled`, `default`, `now`, `entries` (feeds and Extras), `state` | `{due, occurrences}` |
+| `reserve` | `pfb_schedule_reserve()` | `state`, `occurrences` (id to occurrence) | the state written, or `"rejected"` |
+
+- `feed_plan` plans the entries that are not `extra:*`, only when `scheduled`, with `last_completed_occurrence` alone as
+  the cursor: a pending occurrence, attempted or not, never counts as completed (unlike the ledger's `next_due` above). The
+  old path's `next_due` is not part of the answer.
+- `reserve` is `set_pending` and a raise in one state update: an item whose pending occurrence is absent or older takes the planned
+  one and loses its `pending_attempted`; an equal or newer one is kept. An occurrence not after the item's completed one
+  is `"rejected"`, as are a bad id, a negative occurrence and an existing state that is not valid. Occurrence 0 is valid.
+- A rejected call writes nothing, the valid ids of the call included: Go returns no state, and the PHP runner asserts that
+  the state file is byte-for-byte unchanged.

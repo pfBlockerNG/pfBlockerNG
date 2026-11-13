@@ -79,37 +79,38 @@ func orderedKeys(raw []byte) ([]string, error) {
 	return keys, nil
 }
 
-func loadCorpus(t *testing.T) []corpusCase {
+// loadCorpus reads testdata/<file>: its top-level keys must be schema, then order; each case's keys are keys[section].
+func loadCorpus(t *testing.T, file string, order []string, keys map[string][]string) []corpusCase {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/schedule.json")
+	raw, err := os.ReadFile("testdata/" + file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	top, err := orderedKeys(raw)
 	if err != nil {
-		t.Fatalf("schedule.json: %v", err)
+		t.Fatalf("%s: %v", file, err)
 	}
-	if !reflect.DeepEqual(top, append([]string{"schema"}, sectionOrder...)) {
-		t.Fatalf("schedule.json keys %v, want schema then %v", top, sectionOrder)
+	if !reflect.DeepEqual(top, append([]string{"schema"}, order...)) {
+		t.Fatalf("%s keys %v, want schema then %v", file, top, order)
 	}
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
 	if string(doc["schema"]) != "1" {
-		t.Fatalf("schedule.json: schema %s, want 1", doc["schema"])
+		t.Fatalf("%s: schema %s, want 1", file, doc["schema"])
 	}
 	var cases []corpusCase
-	for _, section := range sectionOrder {
+	for _, section := range order {
 		var list []json.RawMessage
 		if err := json.Unmarshal(doc[section], &list); err != nil || len(list) == 0 {
-			t.Fatalf("schedule.json: %s must be a non-empty list", section)
+			t.Fatalf("%s: %s must be a non-empty list", file, section)
 		}
 		seen := map[string]bool{}
 		for i, item := range list {
-			keys, err := orderedKeys(item)
-			if err != nil || !reflect.DeepEqual(keys, sectionKeys[section]) {
-				t.Fatalf("schedule.json: %s[%d] has keys %v, want %v", section, i, keys, sectionKeys[section])
+			got, err := orderedKeys(item)
+			if err != nil || !reflect.DeepEqual(got, keys[section]) {
+				t.Fatalf("%s: %s[%d] has keys %v, want %v", file, section, i, got, keys[section])
 			}
 			c := corpusCase{section: section, raw: map[string]json.RawMessage{}}
 			if err := json.Unmarshal(item, &c.raw); err != nil {
@@ -118,10 +119,10 @@ func loadCorpus(t *testing.T) []corpusCase {
 			var description string
 			if json.Unmarshal(c.raw["id"], &c.id) != nil || c.id == "" ||
 				json.Unmarshal(c.raw["description"], &description) != nil || description == "" {
-				t.Fatalf("schedule.json: %s[%d] needs a non-empty id and description", section, i)
+				t.Fatalf("%s: %s[%d] needs a non-empty id and description", file, section, i)
 			}
 			if seen[c.id] {
-				t.Fatalf("schedule.json: duplicate id %s/%s", section, c.id)
+				t.Fatalf("%s: duplicate id %s/%s", file, section, c.id)
 			}
 			seen[c.id] = true
 			cases = append(cases, c)
@@ -179,7 +180,7 @@ func nonNil(m map[string]int64) map[string]int64 {
 }
 
 func TestScheduleCorpus(t *testing.T) {
-	for _, c := range loadCorpus(t) {
+	for _, c := range loadCorpus(t, "schedule.json", sectionOrder, sectionKeys) {
 		t.Run(c.section+"/"+c.id, func(t *testing.T) {
 			switch c.section {
 			case "next_occurrence":
