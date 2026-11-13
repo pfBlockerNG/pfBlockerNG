@@ -219,6 +219,24 @@ func SetPending(st State, occurrences map[string]int64) (State, error) {
 	})
 }
 
+// Reserve is the tick's reservation: SetPending, then an item whose pending occurrence is absent or older takes the planned
+// one and loses its attempted flag. An occurrence not after the item's completed one fails the validation, so the call
+// is rejected as a whole. An empty map returns a copy.
+func Reserve(st State, occurrences map[string]int64) (State, error) {
+	out, err := SetPending(st, occurrences)
+	if err != nil || len(occurrences) == 0 {
+		return out, err
+	}
+	return update(out, func(s State) {
+		for id, o := range occurrences {
+			if it := s[id]; it.PendingOccurrence == nil || *it.PendingOccurrence < o {
+				it.PendingOccurrence, it.PendingAttempted = &o, false
+				s[id] = it
+			}
+		}
+	})
+}
+
 // RecordOutcome records a terminal source check. Without a pending occurrence a success only stamps the check and a
 // retry-cap outcome changes nothing; expected, when set, must equal the pending occurrence or nothing changes.
 func RecordOutcome(st State, id string, outcome Outcome, now int64, expected *int64) (State, error) {
