@@ -11,6 +11,7 @@ declare(strict_types=1);
  *
  * argv: page (`list` | `edit`), scenario, result file, case (JSON, optional): `type` the group type (`dnsbl` | `ipv4` | `geoip`),
  * `post`/`get` the request over the worker's defaults, `emptyFirstRow` the stored list starts with an empty `<config></config>`,
+ * `bravoName` the stored name of the second group when it is not Bravo (a name with markup characters: only for scenarios that leave it in place),
  * `ledger` TRUE (an open download entry for DNSBL_Bravo) or a list of group names with one in the sync-status ledger, `core.socket` the Core API socket the notice talks to
  * (default: none listens), `timeline` a file every lock/read/write event is appended to as {"event": ...} (a Core stand-in given the
  * same file as its record puts the notice on the same line of events).
@@ -159,7 +160,7 @@ if ($type === 'geoip') {
 	$other = $before;
 	$other['installedpackages']['pfblockerngeurope']['config'][0]['cron'] = 'Weekly';	// the adapter patched another continent
 } else {
-	$groups = [$group('Alpha'), $group('Bravo')];
+	$groups = [$group('Alpha'), $group($case['bravoName'] ?? 'Bravo')];
 	if (!empty($case['emptyFirstRow'])) {
 		array_unshift($groups, []);
 	}

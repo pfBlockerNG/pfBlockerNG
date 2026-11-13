@@ -45,7 +45,7 @@ final class GroupsListNameFieldsTest extends TestCase
 		}
 		$document = new DOMDocument();
 		libxml_use_internal_errors(TRUE);
-		$document->loadHTML('<html><body><table><tr><td>' . $html . '</td></tr></table></body></html>');
+		$document->loadHTML('<html><head><meta charset="utf-8"></head><body><table><tr><td>' . $html . '</td></tr></table></body></html>');
 		libxml_clear_errors();
 		$fields = (new DOMXPath($document))->query('//td/input[@type="hidden"]');
 

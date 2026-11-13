@@ -602,6 +602,19 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertSame($result['before'], $result['disk']);
 	}
 
+	public function testAnUpdateLeavesTheStoredNameOfAGroupWithMarkupCharactersAsItIs(): void
+	{
+		// Given a group stored under a name with quote and markup characters (an imported or restored name), named as it is stored
+		$name = 'Br"a<v>&o';
+		$result = $this->worker('list', 'plain', ['bravoName' => $name, 'post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '1', 'postdata' => 'aliasname-1=' . rawurlencode($name) . '&action-1=Disabled']]);
+		$this->assertSame($name, $result['before']['installedpackages']['pfblockerngdnsbl']['config'][1]['aliasname'], 'before-state: the name is stored as it is');
+
+		// Then the action is saved, and the name is not rewritten as the HTML-escaped text the update filters its values to
+		$this->assertSame('', $result['output'], 'no error is printed');
+		$this->assertSame('Disabled', $result['disk']['installedpackages']['pfblockerngdnsbl']['config'][1]['action']);
+		$this->assertSame($name, $result['disk']['installedpackages']['pfblockerngdnsbl']['config'][1]['aliasname'], 'the name is the group\'s identity: it stays byte for byte');
+	}
+
 	#[DataProvider('refusedWrites')]
 	public function testAnUpdateWhoseWriteFailsSaysSoAndTellsCoreNothing(string $scenario): void
 	{
