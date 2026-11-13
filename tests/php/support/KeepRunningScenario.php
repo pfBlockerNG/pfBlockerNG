@@ -222,7 +222,7 @@ trait KeepRunningScenario
 	}
 
 	/** The cron tick with every scheduled job behind a seam, so only its pfB-DNS check acts; its ledger and state stay under krDir. $apply runs a pending apply it dispatches. */
-	private function krTick(array $ps = [], ?callable $apply = NULL): void
+	private function krTick(array $ps = [], ?callable $core = NULL): void
 	{
 		$GLOBALS['pfb']['schedule_state_dir'] = $this->krDir;
 		$GLOBALS['pfb']['runlog'] = "{$this->krDir}/run.log";
@@ -234,11 +234,11 @@ trait KeepRunningScenario
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport', '8081');
 		config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport_ssl', '8443');
 		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
+		// Core is not running here: the tick's calls to it are unanswered, so nothing is started
 		pfblockerng_tick(
 			$ps, static function (): void {}, NULL, 5.0, static function (): void {}, NULL, 5.0,
-			static fn (string $_job, string $_argument = ''): bool => TRUE,
-			static function (): void {},
-			$apply ?? static fn (): bool => TRUE
+			static fn (): ?string => NULL,
+			$core ?? static fn (): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']
 		);
 	}
 

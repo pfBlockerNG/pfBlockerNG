@@ -26,34 +26,20 @@ final class ScheduledFeedStateTest extends TestCase
 		@rmdir($this->dir);
 	}
 
-	public function testTerminalOutcomeUpdatesOnlyReservedCompletion(): void
+	public function testTerminalOutcomesAreReportedToTheRunningUpdateAndTheFirstOneStands(): void
 	{
-		$pending = 1_700_000_000;
-		$this->assertTrue(pfb_schedule_state_set_pending(['ipv4:feed_v4' => $pending], $this->dir));
-		$this->assertTrue(pfb_schedule_state_record_outcome(
-			'ipv4:feed_v4', PfbScheduleTerminalResult::Success, $this->dir, $pending + 20
-		));
-		$this->assertTrue(pfb_schedule_state_record_outcome(
-			'dnsbl:unreserved', PfbScheduleTerminalResult::Success, $this->dir, $pending + 30
-		));
+		unset($GLOBALS['pfb']['scheduled_outcomes']);
 
-		$state = pfb_schedule_state_read($this->dir);
-		$this->assertSame($pending, $state['items']['ipv4:feed_v4']['last_completed_occurrence']);
-		$this->assertSame('success', $state['items']['ipv4:feed_v4']['completion_outcome']);
-		$this->assertSame($pending + 20, $state['items']['ipv4:feed_v4']['last_successful_check']);
+		pfb_schedule_outcome_record('ipv4:feed_v4', PfbScheduleTerminalResult::RetryCapReached);
+		pfb_schedule_outcome_record('ipv4:feed_v4', PfbScheduleTerminalResult::Success);
+		pfb_schedule_outcome_record('dnsbl:other', PfbScheduleTerminalResult::Success);
+
 		$this->assertSame(
-			['last_successful_check' => $pending + 30],
-			$state['items']['dnsbl:unreserved'],
-			'an unreserved success is a check fact, not a fabricated occurrence completion'
+			['ipv4:feed_v4' => 'retry-cap-reached', 'dnsbl:other' => 'success'],
+			$GLOBALS['pfb']['scheduled_outcomes'],
+			'the check that closed the occurrence stands, as the first terminal outcome did in the state file'
 		);
-	}
-
-	public function testRetryCapWithoutReservationCreatesNoStateItem(): void
-	{
-		$this->assertTrue(pfb_schedule_state_record_outcome(
-			'ipv6:capped_v6', PfbScheduleTerminalResult::RetryCapReached, $this->dir, 1_700_000_000
-		));
-		$this->assertSame([], pfb_schedule_state_read($this->dir)['items']);
+		$this->assertSame([], glob($this->dir . '/*') ?: [], 'nothing is written: Core records the outcomes from the Update result');
 	}
 
 	public function testFeedIdentityAndScheduledSelectionCoverEveryFamily(): void

@@ -70,6 +70,15 @@ final class PfbUpdatePassRunningTest extends TestCase
 		$this->assertTrue(pfb_update_pass_running($this->psLine('bl')));
 	}
 
+	/** Issue #3941: an Update Core runs is the `core_update` verb of pfblockerng.inc, which holds the gate closed as the CLI verbs do. */
+	public function testACoreUpdateLineIsRunning(): void
+	{
+		$line = ['  1234  -  Is    0:00.12 /usr/local/bin/php -d display_errors=stderr -f /usr/local/pkg/pfblockerng/pfblockerng.inc core_update'];
+
+		$this->assertTrue(pfb_update_pass_running($line));
+		$this->assertFalse(pfb_update_pass_running(['  1234  -  Is    0:00.12 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc core_settings']), 'the settings adapter is no update');
+	}
+
 	/**
 	 * 'tick' is deliberately EXCLUDED: the only caller is pfblockerng_tick() itself, so
 	 * a ps snapshot always contains the running tick's own line -- including 'tick' here

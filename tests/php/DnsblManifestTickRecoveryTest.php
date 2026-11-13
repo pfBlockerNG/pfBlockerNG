@@ -14,8 +14,9 @@ use PHPUnit\Framework\TestCase;
  * So the resolver comes back up matching nothing and stays that way until a feed
  * happens to fall due: minutes on an hourly schedule, a day on a daily one.
  *
- * This is a failure condition, not a change waiting for a convenient moment, so it
- * dispatches on the same footing as a *.fail marker — outside the quiet-hours window
+ * This is a failure condition, not a change waiting for a convenient moment, so the tick asks
+ * Core for a `retry` Update (issue #3941: Core decides and starts every Update) on the same
+ * footing as a *.fail marker — outside the quiet-hours window
  * too (owner ruling, 2026-08-21: a box mid-upgrade has bigger concerns than deferring
  * a feed download). Quiet hours defer things the operator chose to defer; they must
  * not extend an outage.
@@ -122,58 +123,10 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		config_set_path('installedpackages/pfblockernglistsv6/config', []);
 		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
 
-		$model = pfb_schedule_runtime_model(
-			[
-				'pfb_scheduled_feed_updates' => 'on',
-				'pfb_schedule_weekday' => $slot->format('N'),
-				'pfb_schedule_hour' => $slot->format('G'),
-				'pfb_schedule_minute' => (string) $minute,
-			],
-			[
-				'ipv4' => config_get_path('installedpackages/pfblockernglistsv4/config', []),
-				'ipv6' => [],
-				'dnsbl' => [],
-			]
-		);
-		$this->assertIsArray($model);
-		$future = time() + 86400;
-		$this->assertTrue(pfb_due_ledger_write_cache([
-			'cron' => ['last_run' => time(), 'next_due' => $future, 'jitter' => 0],
-			'dcc' => ['last_run' => $future - 1, 'next_due' => $future, 'jitter' => 0],
-			'bl' => ['last_run' => $future - 1, 'next_due' => $future, 'jitter' => 0],
-			'ss_refresh' => ['last_run' => $future - 1, 'next_due' => $future, 'jitter' => 0],
-			'apply_reconcile' => ['last_run' => $future - 1, 'next_due' => $future, 'jitter' => 0],
-		], $model['config_hash'], $this->dir));
-
 		// A published manifest is the healthy baseline every test starts from.
 		file_put_contents($GLOBALS['pfb']['unbound_py_sources'], '{"version":1,"config":{},"feeds":[]}');
 
-		// Settle the schedule: a feed that has never run counts its current occurrence as
-		// pending, which would dispatch on its own and mask what these tests measure. One
-		// warm-up tick completes it, leaving a steady state with nothing outstanding.
-		$this->warmUp();
 		$GLOBALS['pfb_test_logger_calls'] = [];
-	}
-
-	/** Drive one tick that completes every pending occurrence, then reset the counters. */
-	private function warmUp(): void
-	{
-		pfblockerng_tick(
-			[], NULL, NULL, 5.0, static fn (): bool => TRUE, NULL, 5.0,
-			static fn (string $_job, string $_argument = ''): bool => TRUE,
-			function (): void {
-				$state = pfb_schedule_state_read($this->stateDir);
-				foreach ($state['items'] ?? [] as $id => $item) {
-					if (!str_starts_with($id, 'extra:') && isset($item['pending_occurrence'])) {
-						pfb_schedule_state_record_outcome(
-							$id, PfbScheduleTerminalResult::Success, $this->stateDir
-						);
-					}
-				}
-			},
-			static fn (): bool => TRUE
-		);
-		$this->feedRuns = 0;
 	}
 
 	protected function tearDown(): void
@@ -208,15 +161,20 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		@unlink($path);
 	}
 
+	/** One tick against a Core that admits every Update; each `StartUpdate` it makes counts in $this->feedRuns. */
 	private function tick(): void
 	{
 		pfblockerng_tick(
-			[], NULL, NULL, 5.0, static fn (): bool => TRUE, NULL, 5.0,
-			static fn (string $_job, string $_argument = ''): bool => TRUE,
-			function (): void {
-				$this->feedRuns++;
-			},
-			static fn (): bool => TRUE
+			ps_lines: [],
+			apply_reconcile: static fn (): bool => TRUE,
+			core_settings: static fn (): ?string => NULL,
+			core_call: function (string $method, array $params = []): array {
+				if ($method === 'StartUpdate') {
+					$this->assertSame('retry', $params['trigger'], 'a missing manifest asks for a retry, nothing else');
+					$this->feedRuns++;
+				}
+				return ['status' => 200, 'body' => $method === 'GetUpdate' ? ['running' => FALSE, 'update' => NULL, 'log' => '', 'next' => 0] : [], 'error' => NULL];
+			}
 		);
 	}
 
@@ -245,18 +203,13 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		$this->tick();
 
 		$this->assertSame(1, $this->feedRuns,
-			'a missing DNSBL manifest must dispatch an update pass on the next tick, rather than leaving '
+			'a missing DNSBL manifest must ask Core for an Update on the next tick, rather than leaving '
 			. 'the resolver matching nothing until a feed falls due');
 		$messages = array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message');
 		$this->assertContains(
-			'Tick: running scheduled feed pass.',
+			'Tick: DNSBL manifest absent - asking Core for a retry Update that rebuilds it.',
 			$messages,
-			'the recovery pass must be visible in the log, not silent'
-		);
-		$this->assertContains(
-			'Tick: DNSBL manifest absent - this pass rebuilds it.',
-			$messages,
-			'an out-of-window pass needs its reason on the record, or the operator sees only '
+			'an out-of-window Update needs its reason on the record, or the operator sees only '
 			. 'an update that ran when they asked for none to'
 		);
 	}

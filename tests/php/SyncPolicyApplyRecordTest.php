@@ -183,42 +183,44 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		];
 	}
 
-	private function tick(callable $manual): void
+	/** One tick against a Core that admits every Update; $start is called with the trigger of each `StartUpdate` (the work Core would run). */
+	private function tick(callable $start): void
 	{
 		pfblockerng_tick(
-			[], NULL, NULL, 5.0, NULL, NULL, 5.0,
-			static fn (string $_job, string $_argument = ''): bool => TRUE,
-			static function (): void {},
-			$manual
+			ps_lines: [],
+			ss_refresh: static fn (): bool => TRUE,
+			apply_reconcile: static fn (): bool => TRUE,
+			core_settings: static fn (): ?string => NULL,
+			core_call: static function (string $method, array $params = []) use ($start): array {
+				if ($method === 'StartUpdate') {
+					$start($params['trigger']);
+				}
+				return ['status' => 200, 'body' => ['running' => FALSE], 'error' => NULL];
+			}
 		);
 	}
 
-	/** A pending manual apply in the due ledger (or, with $ledgerPending FALSE, only due), the cache regenerated for the current model. */
+	/** The `apply` Update Core would run for that request (the `core_update` verb), the apply itself answering $applies. */
+	private function serveApply(bool $applies): int
+	{
+		return pfb_core_update_serve(
+			(string) json_encode(['version' => 1, 'trigger' => 'apply']),
+			"{$this->dir}/apply-result.json",
+			['sync' => static fn (): bool => $applies]
+		);
+	}
+
+	/** A pending manual apply in the due ledger (or, with $ledgerPending FALSE, none), inside the apply window unless $outsideWindow. */
 	private function seedPendingCron(bool $outsideWindow, bool $ledgerPending = TRUE): void
 	{
 		if ($outsideWindow) {
 			$start = ((int) date('G') + 12) % 24;
 			PfbConfig::writeSystem('gen/pfb_quiet_hours', sprintf('%02d:00-%02d:01', $start, $start));
 		}
-		$model = pfb_schedule_runtime_config();
-		$this->assertIsArray($model);
-		$this->assertTrue(pfb_schedule_cache_refresh(
-			$model, ['schema' => 1, 'items' => []], time(), new DateTimeZone(date_default_timezone_get()), $this->dir
-		));
-		$cache = pfb_due_ledger_read_cache($this->dir, $model['config_hash']);
-		$this->assertIsArray($cache);
-		$cache['cron'] = ['last_run' => time() - 3600, 'next_due' => time() - 1, 'jitter' => 0] + ($ledgerPending ? ['pending_apply' => TRUE] : []);
-		$state = ['schema' => 1, 'items' => []];
-		foreach ($model['entries'] as $id => $entry) {
-			if (str_starts_with($id, 'extra:') && $entry['enabled']) {
-				$cache[$id]         = ['last_run' => time(), 'next_due' => time() + 86400, 'jitter' => 0];
-				$state['items'][$id] = ['last_completed_occurrence' => time(), 'completion_outcome' => 'success'];
-			}
+		if ($ledgerPending) {
+			$this->assertTrue(pfb_due_ledger_set_pending('cron', $this->dir));
 		}
-		$this->assertTrue(pfb_schedule_state_write($state, $this->stateDir));
-		unset($cache['_meta']);
-		$this->assertTrue(pfb_due_ledger_write_cache($cache, $model['config_hash'], $this->dir));
-		foreach (['dcc', 'bl', 'ss_refresh', 'apply_reconcile'] as $job) {
+		foreach (['ss_refresh', 'apply_reconcile'] as $job) {
 			$entry = ['last_run' => time() + 86399, 'next_due' => time() + 86400, 'jitter' => 0];
 			$this->assertTrue(pfb_due_ledger_write_entry($job, $entry, $this->dir));
 		}
@@ -286,9 +288,8 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->seedPendingCron(TRUE);
 		$manualRuns = 0;
 
-		$this->tick(static function () use (&$manualRuns): bool {
+		$this->tick(static function () use (&$manualRuns): void {
 			$manualRuns++;
-			return TRUE;
 		});
 
 		$this->assertSame(0, $manualRuns, 'the apply stays deferred outside its window');
@@ -305,14 +306,8 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	{
 		$this->seedRecord('waiting');
 		$this->seedPendingCron(FALSE);
-		$manualRuns = 0;
 
-		$this->tick(static function () use (&$manualRuns): bool {
-			$manualRuns++;
-			return FALSE;
-		});
-
-		$this->assertSame(1, $manualRuns, 'the apply was dispatched');
+		$this->assertSame(1, $this->serveApply(FALSE), 'the apply failed');
 		$this->assertTrue(pfb_pending_changes(), 'the pending mark is kept for the next tick');
 		$apply = $this->apply();
 		$this->assertSame('failed', $apply['outcome'] ?? NULL);
@@ -649,9 +644,8 @@ final class SyncPolicyApplyRecordTest extends TestCase
 		$this->seedRecord('waiting');
 		$this->seedPendingCron(FALSE, FALSE);
 		$manualRuns = 0;
-		$manual     = static function () use (&$manualRuns): bool {
+		$manual     = static function () use (&$manualRuns): void {
 			$manualRuns++;
-			return TRUE;
 		};
 
 		$this->tick($manual);
@@ -751,12 +745,12 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	public function testLocalApplyWithNoOpenRecordLeavesTheApplyRecordNull(): void
 	{
 		$this->seedPendingCron(TRUE);
-		$this->tick(static fn (): bool => TRUE);
+		$this->tick(static function (): void {});
 		$this->assertNull($this->apply(), 'deferred outside the window');
 
 		$this->resetEnvironment();
 		$this->seedPendingCron(FALSE);
-		$this->tick(static fn (): bool => FALSE);
+		$this->assertSame(1, $this->serveApply(FALSE));
 		$this->assertNull($this->apply(), 'failed inside the window');
 
 		$this->resetEnvironment();
@@ -770,13 +764,13 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	{
 		$time = $this->seedRecord('applied');
 		$this->seedPendingCron(FALSE);
-		$this->tick(static fn (): bool => FALSE);
+		$this->assertSame(1, $this->serveApply(FALSE));
 		$this->assertSame(['time' => $time, 'outcome' => 'applied'], $this->apply(), 'a failed local apply');
 
 		$this->resetEnvironment();
 		$time = $this->seedRecord('applied');
 		$this->seedPendingCron(TRUE);
-		$this->tick(static fn (): bool => TRUE);
+		$this->tick(static function (): void {});
 		$this->assertSame(['time' => $time, 'outcome' => 'applied'], $this->apply(), 'a deferred local apply');
 	}
 

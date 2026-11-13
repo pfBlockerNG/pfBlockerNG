@@ -378,9 +378,8 @@ trait DnsProxyMovedResolverFixtureTrait
 		$GLOBALS['pfb']['pending_marker'] = "{$this->tmp}/pfb_pending_changes";
 		pfblockerng_tick(
 			[], static function (): void {}, NULL, 5.0, static function (): void {}, NULL, 5.0,
-			static fn (string $_job, string $_argument = ''): bool => TRUE,
-			static function (): void {},
-			static fn (): bool => TRUE
+			static fn (): ?string => NULL,
+			static fn (): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']
 		);
 	}
 

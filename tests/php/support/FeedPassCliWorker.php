@@ -118,7 +118,10 @@ $GLOBALS['config'] = [];
 if ($scenario === 'success') {
 	$GLOBALS['g']['pfblockerng_install'] = TRUE;
 } elseif ($scenario === 'real-failure') {
-	file_put_contents("{$lockDir}/pfb_schedule_state.json", 'not json at all');
+	// issue #3941: a GeoIP generation swap in progress aborts the pass with its changes kept and no lock involved (the state file no longer fails a pass)
+	$GLOBALS['pfb']['ccdir'] = "{$lockDir}/cc";
+	mkdir($GLOBALS['pfb']['ccdir'], 0755, TRUE);
+	file_put_contents("{$GLOBALS['pfb']['ccdir']}/.pfb_generation_swapping", 'interrupted');
 } elseif ($scenario === 'dispatcher-open-error') {
 	$GLOBALS['pfb']['schedule_state_dir'] = "{$lockDir}/missing/child";
 } elseif ($scenario === 'dispatcher-flock-error' || $scenario === 'feed-flock-error') {

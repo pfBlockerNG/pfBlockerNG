@@ -237,19 +237,22 @@ final class DnsProxyInstallKeepRunningTest extends TestCase
 		pfb_dns_proxy_service($this->krProxyDir);	// the installer's rc script, naming the sandbox's dns_proxy directory as the update pass does
 		$this->assertTrue(pfb_pending_changes(), 'before: the installer marked the changes pending');
 
-		// When the next schedule check runs, outside the package operation; the Update it dispatches is the pass's own gateway check
+		// When the next schedule check runs, outside the package operation; the Update it asks Core for is the pass's own gateway check
 		// (pfb_dns_proxy_ensure_running()) and its settle of the version it saw, as sync_package_pfblockerng() makes them
 		$dispatched = 0;
 		$ready = FALSE;
-		$this->krTick([], function () use (&$dispatched, &$ready): bool {
-			$dispatched++;
-			$seen = pfb_pending_changes_token();
-			$ready = $this->krEnsure();
-			pfb_settle_pending_changes($seen);
-			return TRUE;
+		$this->krTick([], function (string $method, array $params = []) use (&$dispatched, &$ready): array {
+			if ($method === 'StartUpdate') {
+				$dispatched++;
+				$seen = pfb_pending_changes_token();
+				$ready = $this->krEnsure();
+				pfb_settle_pending_changes($seen);
+				return ['status' => 200, 'body' => [], 'error' => NULL];
+			}
+			return ['status' => 200, 'body' => ['running' => FALSE], 'error' => NULL];
 		});
 
-		// Then the tick dispatched the Update once, which restarted the gateway once, and nothing is pending any more
+		// Then the tick asked for the Update once, which restarted the gateway once, and nothing is pending any more
 		$this->assertSame(1, $dispatched, 'the tick dispatches the pending apply');
 		$this->assertSame(['restart_service pfb_dns_proxy'], $this->krProxyCalls());
 		$this->assertStringContainsString('the package installed another gateway', $this->krLog());
