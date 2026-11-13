@@ -11,12 +11,13 @@ declare(strict_types=1);
  *
  * argv: page (`list` | `edit`), scenario, result file, case (JSON, optional): `type` the group type (`dnsbl` | `ipv4` | `geoip`),
  * `post`/`get` the request over the worker's defaults, `emptyFirstRow` the stored list starts with an empty `<config></config>`,
- * `ledger` an open download entry for DNSBL_Bravo in the sync-status ledger, `core.socket` the Core API socket the notice talks to
+ * `ledger` TRUE (an open download entry for DNSBL_Bravo) or a list of group names with one in the sync-status ledger, `core.socket` the Core API socket the notice talks to
  * (default: none listens), `timeline` a file every lock/read/write event is appended to as {"event": ...} (a Core stand-in given the
  * same file as its record puts the notice on the same line of events).
  *
  * Scenarios: `plain` (nothing else wrote), `interleave` (Core patched another group and appended a group after this request read
- * config.xml), `row_deleted` (the group this request addresses was removed on disk), `cleaned_elsewhere` (the empty row was already
+ * config.xml), `row_deleted` (the group this request addresses was removed on disk), `first_deleted` (the first group, Alpha, was
+ * removed on disk: the row at its index is now another group), `cleaned_elsewhere` (the empty row was already
  * removed on disk), `lock_taken` (another process holds the config lock), `read_fails` (the fresh read fails), `write_refused`
  * (write_config answers FALSE), `write_failed` (answers -1), `write_throws` (exception).
  * The result holds the disk config after and before the request, the config the request read, lock/read/write events, the lock state after, the write_config()
@@ -174,18 +175,20 @@ if ($type === 'geoip') {
 		$other['installedpackages'][$conf]['config'] = [...$patched, $group('Charlie')];
 	} elseif ($scenario === 'row_deleted') {
 		$other['installedpackages'][$conf]['config'] = array_values(array_filter($patched, static fn (mixed $g): bool => ($g['aliasname'] ?? '') !== 'Bravo'));
+	} elseif ($scenario === 'first_deleted') {
+		$other['installedpackages'][$conf]['config'] = array_values(array_filter($patched, static fn (mixed $g): bool => ($g['aliasname'] ?? '') !== 'Alpha'));
 	} elseif ($scenario === 'cleaned_elsewhere') {
 		$other['installedpackages'][$conf]['config'] = array_values(array_filter($patched, static fn (mixed $g): bool => $g !== []));
 	}
 }
-if (!empty($case['ledger'])) {
-	pfb_sync_status_open('dnsbl', 'DNSBL_Bravo', 'download', 'seeded', $tmp);
+foreach (($case['ledger'] ?? NULL) === TRUE ? ['Bravo'] : (array) ($case['ledger'] ?? []) as $ledgerName) {
+	pfb_sync_status_open('dnsbl', "DNSBL_{$ledgerName}", 'download', 'seeded', $tmp);
 }
 $ledgerBefore = array_map(static fn (array $entry): string => "{$entry['item']}/{$entry['stage']}", pfb_sync_status_list_open($tmp));
 
 $disk = $before;
 $GLOBALS['pfb_test_lock_events'] = new GroupsWorkerTimeline($case['timeline'] ?? NULL);
-if (in_array($scenario, ['interleave', 'row_deleted', 'cleaned_elsewhere', 'lock_taken', 'read_fails'], TRUE)) {
+if (in_array($scenario, ['interleave', 'row_deleted', 'first_deleted', 'cleaned_elsewhere', 'lock_taken', 'read_fails'], TRUE)) {
 	$disk = $other;
 }
 $diskBefore = $disk;

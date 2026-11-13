@@ -669,3 +669,47 @@ def test_reorder_geoip_page_injects_no_anchor_ui(
     assert anchors.count() == 0, f"GeoIP page must inject NO reorder anchors, found {anchors.count()}"
     checks = page.locator(".pfb-reorder-chk")
     assert checks.count() == 0, f"GeoIP page must inject NO reorder checkboxes, found {checks.count()}"
+
+
+def test_row_delete_icon_click_removes_exactly_that_group(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Clicking a row's trash icon and accepting the confirm deletes that group and no other (issue #3945).
+
+    The icon's onclick posts the group's name along with its row index, and the page refuses a delete whose name is
+    not the group at that index; a missing name would therefore leave every group in place.
+
+    Given: three stored IPv4 groups [a, b, c]
+    When:  the trash icon of the middle row is clicked and the delete confirm() is accepted
+    Then:  the stored groups are [a, c]
+    """
+    vm = smoke_vm
+    node = CONF_NODE_BY_GTYPE["ipv4"]
+    names = _names("ipv4")
+    snap = _snapshot_node(vm, node)
+    try:
+        _seed_three_rows(vm, node, "ipv4", names)
+        page = browser_page
+        _open(page, webui, _page_url("ipv4"))
+        before = _row_names(page)
+        assert before == names, f"seeded rows did not render in order {names}, got {before!r}"
+
+        seen: list[str] = []
+
+        def _on_dialog(dialog: object) -> None:
+            seen.append(dialog.message)  # type: ignore[attr-defined]
+            dialog.accept()  # type: ignore[attr-defined]
+
+        page.on("dialog", _on_dialog)
+        with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
+            _rows(page).nth(1).locator("i.fa-trash-can").click()
+        page.remove_listener("dialog", _on_dialog)
+
+        assert DELETE_CONFIRM_MSG in seen, f"delete confirm() did not fire; dialogs seen: {seen!r}"
+        assert _persisted_names(vm, node) == [names[0], names[2], ""], (
+            f"the trash icon of {names[1]!r} must delete that group only; stored: {_persisted_names(vm, node)!r}"
+        )
+    finally:
+        _restore_node(vm, node, snap)

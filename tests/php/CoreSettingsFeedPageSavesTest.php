@@ -118,6 +118,8 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 			$code = 'try { if (TRUE) {' . $code . "\n}";
 		}
 		$lock = pfb_dns_config_lock();
+		$post = $_POST;
+		$_POST = ['aliasname' => 'Spam'];	// the group name the list page's delete posts with the row index
 		ob_start();
 		try {
 			pfb_test_page_eval($code, $vars + [
@@ -126,6 +128,7 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 			]);
 		} finally {
 			ob_end_clean();
+			$_POST = $post;
 			unlock($lock);
 		}
 	}

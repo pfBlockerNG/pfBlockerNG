@@ -18,7 +18,11 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  *   - what the adapter wrote in between (another group patched, a new group appended) survives, and the posted change is applied;
  *   - a lock that stays taken, or a failed fresh read, writes nothing and says so (an input error, the delete's message, the update's
  *     AJAX error array): no side effect of the action (the sync-status ledger) happens either;
- *   - a group the request addresses that is gone from the fresh config is never written back as a half-built or resurrected group.
+ *   - a group the request addresses that is gone from the fresh config is never written back as a half-built or resurrected group;
+ *   - the row at the posted index must still be the group the request meant: the editor compares it with the row its request loaded,
+ *     the delete with the group name the list page posts. Another group at that index (the first group was deleted since) is never
+ *     overwritten or deleted;
+ *   - the sync-status ledger of a removed or renamed group is closed only after the write was made.
  *
  * Each case runs the pages' real code in a child process (support/GroupsPageWorker.php), because the pages end with exit().
  */
@@ -198,6 +202,58 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertFalse($result['lockHeld']);
 	}
 
+	public function testAGroupSaveNeverOverwritesAnotherGroupThatNowHoldsTheRowIndex(): void
+	{
+		// Given Alpha, the group the form edits at row 0, deleted by another save since the request read it: Bravo is row 0 now
+		$result = $this->worker('edit', 'first_deleted', ['rowid' => 0, 'post' => ['aliasname' => 'Alpha'], 'ledger' => ['Alpha', 'Bravo']]);
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['before']), 'before-state: the request read Alpha at row 0');
+		$this->assertSame(['Bravo'], self::names($result['diskBefore']), 'before-state: on disk row 0 is Bravo');
+
+		// Then the save is refused: Bravo is not overwritten, renamed or closed
+		$this->assertCount(1, $result['inputErrors']);
+		$this->assertStringContainsString('changed by another save', $result['inputErrors'][0]);
+		$this->assertTrue($result['returned']);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['diskBefore'], $result['disk'], 'config.xml is as the other save left it');
+		$this->assertSame(['DNSBL_Alpha/download', 'DNSBL_Bravo/download'], $result['ledger'], 'no ledger entry is closed');
+		$this->assertSame(['try_lock', 'read', 'unlock'], self::eventNames($result));
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testANewGroupIsNotSavedOverAGroupCoreAddedAtItsRowIndexSince(): void
+	{
+		// Given a new group for row 2, which the request found free, and Core appending Charlie at row 2 since
+		$result = $this->worker('edit', 'interleave', ['rowid' => 2, 'post' => ['aliasname' => 'Delta']]);
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['before']), 'before-state: row 2 was free');
+		$this->assertSame(['Alpha', 'Bravo', 'Charlie'], self::names($result['diskBefore']), 'before-state: on disk Core took row 2');
+
+		// Then the save is refused and Charlie stays
+		$this->assertCount(1, $result['inputErrors']);
+		$this->assertStringContainsString('changed by another save', $result['inputErrors'][0]);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame(['Alpha', 'Bravo', 'Charlie'], self::names($result['disk']));
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testARenameClosesTheOldNamesLedgerEntryOnceTheWriteIsMade(): void
+	{
+		$result = $this->worker('edit', 'plain', ['post' => ['aliasname' => 'BravoRenamed'], 'ledger' => TRUE]);
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledgerBefore'], 'before-state: the old name has an open entry');
+
+		$this->assertSame(['Alpha', 'BravoRenamed'], self::names($result['disk']), 'the group is renamed');
+		$this->assertSame([], $result['ledger'], "the old name's entry is closed");
+	}
+
+	#[DataProvider('refusedWrites')]
+	public function testARenameWhoseWriteFailsKeepsTheOldNamesLedgerEntryOpen(string $scenario): void
+	{
+		$result = $this->worker('edit', $scenario, ['post' => ['aliasname' => 'BravoRenamed'], 'ledger' => TRUE]);
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledgerBefore'], 'before-state: the old name has an open entry');
+
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['disk']), 'the group is not renamed');
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledger'], 'it keeps its name, so its entry stays open');
+	}
+
 	public function testACoreNoticeFollowsTheUnlockOfAGroupSave(): void
 	{
 		$socket = $this->core();
@@ -213,7 +269,7 @@ final class GroupsPageConfigLockTest extends TestCase
 	public function testADeleteRemovesTheGroupFromTheFreshConfigAndKeepsWhatCoreWroteSince(): void
 	{
 		// Given a delete of Bravo that read Alpha at Never, with Core patching Alpha and appending Charlie since, and Bravo's ledger entry open
-		$result = $this->worker('list', 'interleave', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1'], 'ledger' => TRUE]);
+		$result = $this->worker('list', 'interleave', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1', 'aliasname' => 'Bravo'], 'ledger' => TRUE]);
 		$this->assertSame('Never', self::group($result['before'], 'Alpha')['cron'], 'before-state: the request read Alpha at Never');
 		$this->assertSame(['DNSBL_Bravo/download'], $result['ledgerBefore'], 'before-state: the ledger entry is open');
 
@@ -224,17 +280,17 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertSame('Removed [ Type: DNSBL Groups, Name: Bravo ]', $result['savemsg']);
 		$this->assertSame([], $result['ledger'], "the removed group's ledger entry is closed");
 		$this->assertSame(['try_lock', 'read', 'write', 'unlock'], self::eventNames($result));
+		$this->assertTrue($result['pendingMarked'], 'the removal applies at the next Update');
 		$this->assertFalse($result['lockHeld']);
 	}
 
 	public function testADeleteIsRefusedWhileAnotherSaveHoldsTheConfigLockAndChangesNothing(): void
 	{
-		$result = $this->worker('list', 'lock_taken', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1'], 'ledger' => TRUE]);
+		$result = $this->worker('list', 'lock_taken', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1', 'aliasname' => 'Bravo'], 'ledger' => TRUE]);
 
 		$this->assertSame(['Alpha', 'Bravo'], self::names($result['disk']), 'the group is still there');
 		$this->assertSame($result['before'], $result['disk']);
-		$this->assertStringContainsString('another save of the pfSense configuration is in progress', (string) $result['savemsg']);
-		$this->assertStringContainsString('Could not delete', (string) $result['savemsg']);
+		$this->assertSame('The group was not deleted: another save of the pfSense configuration is in progress. Try again in a moment.', $result['savemsg'], 'a delete says it did not happen, and that retrying is for the delete');
 		$this->assertSame([], $result['writes']);
 		$this->assertSame([self::LOCK], $result['events'], 'only the bounded attempt');
 		$this->assertSame(['DNSBL_Bravo/download'], $result['ledger'], "the group stays, so its ledger entry stays open");
@@ -246,7 +302,7 @@ final class GroupsPageConfigLockTest extends TestCase
 	public function testADeleteOfAGroupAnotherSaveAlreadyRemovedWritesNothing(): void
 	{
 		// Given Bravo already deleted on disk (with Alpha patched) since the request read config.xml
-		$result = $this->worker('list', 'row_deleted', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1'], 'ledger' => TRUE]);
+		$result = $this->worker('list', 'row_deleted', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1', 'aliasname' => 'Bravo'], 'ledger' => TRUE]);
 		$this->assertContains('Bravo', self::names($result['before']), 'before-state: the request read Bravo');
 
 		// Then it is not found: nothing is written back, nothing is resurrected, and the lock is released
@@ -262,12 +318,71 @@ final class GroupsPageConfigLockTest extends TestCase
 	#[DataProvider('refusedWrites')]
 	public function testADeleteWhoseWriteFailsSaysSoAndTellsCoreNothing(string $scenario): void
 	{
-		$result = $this->worker('list', $scenario, ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1']]);
+		$result = $this->worker('list', $scenario, ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1', 'aliasname' => 'Bravo'], 'ledger' => TRUE]);
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledgerBefore'], 'before-state: the ledger entry is open');
 
+		$this->assertStringContainsString('The group was not deleted', (string) $result['savemsg']);
 		$this->assertStringContainsString('could not be written', (string) $result['savemsg']);
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledger'], 'the group stays, so its ledger entry stays open');
 		$this->assertSame($result['before'], $result['disk']);
 		$this->assertNull($result['settingsFailed'], 'config.xml did not change: Core is not told');
 		$this->assertFalse($result['pendingMarked']);
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testADeleteNeverRemovesAnotherGroupThatNowHoldsTheRowIndex(): void
+	{
+		// Given Alpha, the group the page showed at row 0, deleted by another save: Bravo is row 0 now
+		$result = $this->worker('list', 'first_deleted', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '0', 'aliasname' => 'Alpha'], 'ledger' => ['Alpha', 'Bravo']]);
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['before']), 'before-state: the request read Alpha at row 0');
+		$this->assertSame(['Bravo'], self::names($result['diskBefore']), 'before-state: on disk row 0 is Bravo');
+
+		// Then nothing is deleted, written or closed
+		$this->assertSame('The group was not deleted: it was changed by another save. Reload the page and try again.', $result['savemsg']);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame(['Bravo'], self::names($result['disk']), 'Bravo is still there');
+		$this->assertSame(['DNSBL_Alpha/download', 'DNSBL_Bravo/download'], $result['ledger'], 'no ledger entry is closed');
+		$this->assertSame(['try_lock', 'read', 'unlock'], self::eventNames($result));
+		$this->assertFalse($result['pendingMarked']);
+		$this->assertNull($result['settingsFailed'], 'Core is not told');
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	/** @return array<string, array{array<string, string|list<string>>}> what the list page's delete posts, apart from the action */
+	public static function deletesOfTheWrongGroup(): array
+	{
+		return [
+			'the name of another group' => [['rowid' => '1', 'aliasname' => 'Alpha']],
+			'no name at all' => [['rowid' => '1']],
+			'an empty name' => [['rowid' => '1', 'aliasname' => '']],
+			'a name that is no word' => [['rowid' => '1', 'aliasname' => 'Bravo; drop']],
+			'an array for the name' => [['rowid' => '1', 'aliasname' => ['Bravo']]],
+		];
+	}
+
+	/** @param array<string, string|list<string>> $post */
+	#[DataProvider('deletesOfTheWrongGroup')]
+	public function testADeleteThatDoesNotNameTheGroupAtTheRowIsRefused(array $post): void
+	{
+		$result = $this->worker('list', 'plain', ['post' => ['act' => 'del', 'type' => 'dnsbl'] + $post, 'ledger' => TRUE]);
+
+		$this->assertSame('The group was not deleted: it was changed by another save. Reload the page and try again.', $result['savemsg']);
+		$this->assertSame([], $result['writes']);
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['disk']), 'both groups are still there');
+		$this->assertSame(['DNSBL_Bravo/download'], $result['ledger']);
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testAnEmptyRowCleanupAndADeleteInOneRequestWriteTwiceUnderOneLock(): void
+	{
+		// Given a delete of Bravo that finds an empty <config></config> row first
+		$result = $this->worker('list', 'plain', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1', 'aliasname' => 'Bravo'], 'emptyFirstRow' => TRUE]);
+		$this->assertSame(['(empty)', 'Alpha', 'Bravo'], self::names($result['before']), 'before-state: the request read the empty first row');
+
+		// Then the cleanup and the delete both write inside the lock the request took once
+		$this->assertSame(['try_lock', 'read', 'write', 'write', 'unlock'], self::eventNames($result), 'one lock around both writes');
+		$this->assertSame(['pfBlockerNG: Removed empty rowdata', 'pfBlockerNG: Removed [ DNSBL Groups | Bravo ]'], $result['writes']);
+		$this->assertSame(['Alpha'], self::names($result['disk']));
 		$this->assertFalse($result['lockHeld']);
 	}
 
@@ -275,7 +390,7 @@ final class GroupsPageConfigLockTest extends TestCase
 	{
 		$socket = $this->core();
 
-		$this->worker('list', 'interleave', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1'], 'core' => ['socket' => $socket], 'timeline' => "{$this->dir}/timeline"]);
+		$this->worker('list', 'interleave', ['post' => ['act' => 'del', 'type' => 'dnsbl', 'rowid' => '1', 'aliasname' => 'Bravo'], 'core' => ['socket' => $socket], 'timeline' => "{$this->dir}/timeline"]);
 
 		$this->assertSame(['try_lock', 'read', 'write', 'unlock', 'SettingsChanged'], $this->timeline());
 	}
@@ -293,6 +408,7 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertCoreAlpha($result['disk']);
 		$this->assertSame(['pfBlockerNG: Saved page order format/settings for [ DNSBL Groups ]'], $result['writes']);
 		$this->assertSame(['try_lock', 'read', 'write', 'unlock'], self::eventNames($result));
+		$this->assertTrue($result['pendingMarked'], 'the change applies at the next Update');
 		$this->assertFalse($result['lockHeld']);
 	}
 
@@ -304,6 +420,7 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertSame(['Bravo', 'Alpha', 'Charlie'], self::names($result['disk']), 'the posted order, then the group the page did not know');
 		$this->assertCoreAlpha($result['disk']);
 		$this->assertSame(['try_lock', 'read', 'write', 'unlock'], self::eventNames($result));
+		$this->assertTrue($result['pendingMarked'], 'the new order applies at the next Update');
 	}
 
 	public function testAGeoipFieldUpdateReadsTheContinentsFromTheFreshConfig(): void

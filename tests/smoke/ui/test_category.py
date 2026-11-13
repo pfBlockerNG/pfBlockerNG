@@ -450,7 +450,8 @@ def test_category_delete_row_removes_config_node(
     True lifecycle transition: seed one row, assert it is PRESENT
     (``installedpackages/pfblockernglistsv4/config/0/aliasname`` == the seeded
     name), POST ``act=del`` with ``rowid=0``, then assert the node is GONE
-    (config_get returns '' for the removed leaf). The del handler
+    (config_get returns '' for the removed leaf; the request names the group, as the page's
+    trash icon does). The del handler
     (pfblockerng_category.php:158-172) requires the row's aliasname to be a clean
     word and then ``config_del_path("{$rowdata_path}/0")``; it 302-redirects, so
     requests follows to the post-delete page (the oracle is config, not that body).
@@ -464,7 +465,7 @@ def test_category_delete_row_removes_config_node(
         # BEFORE: the seeded row is present at index 0.
         assert helpers.config_get(vm, cfg) == alias, "seed did not land the row aliasname at index 0"
         # DELETE the row via the AJAX del op.
-        _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0"})
+        _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0", "aliasname": alias})
         # AFTER: the row's config node is gone (the only row was at index 0).
         got = helpers.config_get(vm, cfg)
         assert got == "", f"act=del must remove the row node (aliasname now ''), got {got!r}"
