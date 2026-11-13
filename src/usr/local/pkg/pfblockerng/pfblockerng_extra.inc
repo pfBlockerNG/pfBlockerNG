@@ -5412,7 +5412,7 @@ function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $t
  * Publish validated schedule JSON through a same-directory staging rename.
  *
  * @param string $path Target JSON path.
- * @param array|callable $document Document or lazy read-modify-write producer, run under the lock (NULL: nothing to change, the target is left as it is and the publish succeeds).
+ * @param array|callable $document Document or lazy read-modify-write producer.
  * @param callable $validator Validation callback for the staged decoded document.
  * @param array $io Test-only failure switches and pre-document callback.
  * @param float $timeout_s Bounded sidecar-lock budget.
@@ -5439,9 +5439,6 @@ function pfb_schedule_atomic_json_publish(
 		}
 		if (is_callable($document)) {
 			$document = $document();
-			if ($document === NULL) {
-				return TRUE;	// the callable found nothing to change under the lock: the target stays as it is
-			}
 		}
 		if (!is_array($document)) {
 			return FALSE;
@@ -5631,11 +5628,14 @@ function pfb_due_ledger_retire_schedule(string $ledger_dir, array $io = [], floa
 	if (!is_file($path)) {
 		return TRUE;
 	}
-	return pfb_schedule_atomic_json_publish(
+	// A producer that answers NULL publishes nothing (the publisher reports FALSE), so "nothing to drop" is told apart from a failure by the flag
+	$nothing = FALSE;
+	$published = pfb_schedule_atomic_json_publish(
 		$path,
-		static function () use ($path): ?array {
+		static function () use ($path, &$nothing): ?array {
 			$document = json_decode((string) @file_get_contents($path), TRUE);
 			if (!is_array($document)) {
+				$nothing = TRUE;
 				return NULL;
 			}
 			$kept = $document;
@@ -5647,12 +5647,14 @@ function pfb_due_ledger_retire_schedule(string $ledger_dir, array $io = [], floa
 					unset($kept['cron']);
 				}
 			}
-			return $kept === $document ? NULL : $kept;
+			$nothing = $kept === $document;
+			return $nothing ? NULL : $kept;
 		},
 		static fn (mixed $value): bool => pfb_due_ledger_document_valid($value),
 		$io,
 		$timeout_s
 	);
+	return $published || $nothing;
 }
 
 /** Build the strict, secret-free schedule image consumed by the tick planner. */
