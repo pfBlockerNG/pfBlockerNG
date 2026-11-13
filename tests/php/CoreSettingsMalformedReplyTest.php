@@ -30,6 +30,9 @@ final class CoreSettingsMalformedReplyTest extends TestCase
 		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog'] = "{$this->dir}/error.log";
 		$GLOBALS['pfb']['runlog'] = '';
+		// Its own revision key, made before the handler below: making it is not the reply handling
+		$GLOBALS['pfb']['core_revision_key'] = "{$this->dir}/core_revision.key";
+		pfb_core_revision_key();
 		// A pending failure exists, so the file the notice removes is there: any warning or notice left is the reply handling's
 		file_put_contents("{$this->dir}/core_settings_failed", 'earlier');
 		set_error_handler(static function (int $errno, string $errstr): never {

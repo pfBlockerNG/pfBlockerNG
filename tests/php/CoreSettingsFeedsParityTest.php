@@ -85,6 +85,29 @@ final class CoreSettingsFeedsParityTest extends TestCase
 		}
 	}
 
+	/** @return array<string, array{0: string, 1: bool}> */
+	public static function scriptNames(): array
+	{
+		$doc = json_decode((string) file_get_contents(self::FIXTURE), TRUE, 512, JSON_THROW_ON_ERROR);
+		$names = [];
+		foreach ($doc['scriptNames'] as $script) {
+			$names[json_encode($script['name'])] = [$script['name'], $script['valid']];
+		}
+		return $names;
+	}
+
+	/** A hostile script name gets the fixture's verdict from the adapter, in every projection, as preScript and as postScript. */
+	#[DataProvider('scriptNames')]
+	public function testTheAdapterGivesTheFixturesVerdictOnAScriptName(string $name, bool $valid): void
+	{
+		$this->assertSame($valid, pfb_core_script_name_valid($name), json_encode($name));
+		foreach (self::PROJECTIONS as $projection) {
+			foreach (['preScript', 'postScript'] as $field) {
+				$this->assertAdapterVerdict($valid, $projection, self::filled(['name' => 'G', $field => $name], $projection), "{$field} " . json_encode($name));
+			}
+		}
+	}
+
 	/** @param array<string, mixed> $case */
 	#[DataProvider('cases')]
 	public function testTodaysPhpGivesTheFixturesVerdictAndNativeValue(array $case): void

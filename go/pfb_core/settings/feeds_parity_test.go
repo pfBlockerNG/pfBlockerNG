@@ -21,7 +21,11 @@ func TestTheFeedProjectionsMatchTodaysPhpOnEveryFixtureCase(t *testing.T) {
 	var doc struct {
 		Schema      int      `json:"schema"`
 		Projections []string `json:"projections"`
-		Cases       []struct {
+		ScriptNames []struct {
+			Name  string `json:"name"`
+			Valid bool   `json:"valid"`
+		} `json:"scriptNames"`
+		Cases []struct {
 			ID          string          `json:"id"`
 			Description string          `json:"description"`
 			Projection  string          `json:"projection"`
@@ -44,6 +48,22 @@ func TestTheFeedProjectionsMatchTodaysPhpOnEveryFixtureCase(t *testing.T) {
 	for _, id := range doc.Projections {
 		if _, ok := open(t, t.TempDir()).projection(id); !ok {
 			t.Errorf("the schema has no projection %s", id)
+		}
+	}
+	// A hostile script name gets PHP's verdict in every projection, as preScript and as postScript.
+	for _, n := range doc.ScriptNames {
+		for _, id := range doc.Projections {
+			for _, field := range []string{"preScript", "postScript"} {
+				st := open(t, t.TempDir())
+				if _, err := st.Initialize(nil); err != nil {
+					t.Fatal(err)
+				}
+				group := jsonOf(t, map[string]string{"name": "G", field: n.Name})
+				_, err := st.Save(1, map[string]map[string]json.RawMessage{id: {"groups": json.RawMessage("[" + group + "]")}})
+				if accepted := err == nil; accepted != n.Valid {
+					t.Errorf("Core's verdict on %s %q in %s: accepted %v (%v), PHP's %v", field, n.Name, id, accepted, err, n.Valid)
+				}
+			}
 		}
 	}
 	for _, c := range doc.Cases {
