@@ -110,7 +110,7 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 	private function read(): array
 	{
 		$reply = $this->backend(['version' => 1, 'op' => 'read']);
-		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl'], array_keys($reply['settings'] ?? []), 'the read answers: ' . json_encode($reply));
+		$this->assertSame(['dns', 'feeds/ipv4', 'feeds/ipv6', 'feeds/dnsbl', 'schedule'], array_keys($reply['settings'] ?? []), 'the read answers: ' . json_encode($reply));
 		return $reply;
 	}
 
@@ -396,6 +396,9 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		$this->assertWritten($reply);
 		$this->assertSame($first, config_get_path("{$path}/0"), 'the group before it is untouched');
 		$this->assertSame(self::sorted($stored), self::sorted(config_get_path("{$path}/1")));
+		$settings['schedule']['groups'][] = ['id' => substr($projection, 6) . '/' . $group['name'], 'override' => FALSE, 'weekday' => 7, 'hour' => 0, 'minute' => 0];
+		usort($settings['schedule']['groups'], static fn(array $a, array $b): int => array_search(explode('/', $a['id'])[0], ['ipv4', 'ipv6', 'dnsbl'], TRUE)
+			<=> array_search(explode('/', $b['id'])[0], ['ipv4', 'ipv6', 'dnsbl'], TRUE));
 		$this->assertSame($settings, $this->read()['settings']);
 	}
 

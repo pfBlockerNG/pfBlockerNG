@@ -33,6 +33,10 @@ final class CoreSettingsBackendTest extends TestCase
 	/** The feed projections of a config.xml with no group (issue #3937): every read and write carries them beside `dns`. */
 	private const FEEDS = ['feeds/ipv4' => ['groups' => []], 'feeds/ipv6' => ['groups' => []], 'feeds/dnsbl' => ['groups' => []]];
 
+	/** The `schedule` projection of a config.xml that holds nothing of it (issue #3941): every field its default, after the feed projections. */
+	private const SCHEDULE = ['scheduledUpdates' => TRUE, 'weekday' => 7, 'hour' => 0, 'minute' => 0, 'groups' => [], 'categoryUpdates' => FALSE,
+		'categoryFrequency' => 'Never', 'categoryProviders' => []];
+
 	/** The native field => [registry key, default native, default stored, other native, other stored]: the table the adapter must honour. */
 	private const FIELDS = [
 		'replyLogging'          => ['dnsbl/pfb_py_reply', TRUE, 'on', FALSE, ''],
@@ -151,10 +155,10 @@ final class CoreSettingsBackendTest extends TestCase
 		};
 	}
 
-	/** @return array<string, mixed> every projection the adapter answers: $dns, and the feed projections of a config.xml with no group */
+	/** @return array<string, mixed> every projection the adapter answers: $dns, and the feed and schedule projections of a config.xml with no group */
 	private static function settings(array $dns): array
 	{
-		return ['dns' => $dns] + self::FEEDS;
+		return ['dns' => $dns] + self::FEEDS + ['schedule' => self::SCHEDULE];
 	}
 
 	/** @return array<string, mixed> */

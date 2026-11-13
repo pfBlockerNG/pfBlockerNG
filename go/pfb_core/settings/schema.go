@@ -24,7 +24,8 @@ const (
 // Field is one setting. A secret is write-only: a read shows only whether it is set. Requires names a bool field of the
 // same projection: while that one is false, this bool is held false. A string matches Pattern (when set) and is none of
 // Reserved. A list's items are objects of the fields Items, its Key field unique and non-empty across them; Check and
-// CheckList (not published) refuse an item whose fields, or a list whose items, do not hold together.
+// CheckList (not published) refuse an item whose fields, or a list whose items, do not hold together. Check also refuses a
+// scalar field's decoded value, which it gets as {Name: value}.
 type Field struct {
 	Name     string   `json:"name"`
 	Type     Type     `json:"type"`
@@ -59,7 +60,7 @@ type Schema struct {
 // the default and range today's PHP gives (tests/core/fixtures/settings_dns_parity.json). feeds/<type>: the IP and
 // DNSBL groups and their feeds, as far as downloading and parsing them needs (tests/core/fixtures/settings_feeds_parity.json).
 func Production() Schema {
-	return Schema{Version: 1, Projections: []Projection{dnsProjection(), feeds("ipv4"), feeds("ipv6"), feeds("dnsbl")}}
+	return Schema{Version: 1, Projections: []Projection{dnsProjection(), feeds("ipv4"), feeds("ipv6"), feeds("dnsbl"), scheduleProjection()}}
 }
 
 func dnsProjection() Projection {
