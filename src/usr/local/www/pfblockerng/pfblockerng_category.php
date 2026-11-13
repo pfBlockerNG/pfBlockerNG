@@ -124,12 +124,11 @@ $pfb_first_row = $conf_type !== '' ? config_get_path("installedpackages/{$conf_t
 if ($action !== '' || ($pfb_first_row !== NULL && empty($pfb_first_row))) {
 	$pfb_config_lock = pfb_dns_config_lock();
 	if ($pfb_config_lock === NULL && $action !== '') {
-		$pfb_lock_error = 'Groups: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
 		if ($action === 'del') {
-			$savemsg = "Could not delete [ Type: {$type} ]: {$pfb_lock_error}";
+			$savemsg = 'The group was not deleted: another save of the pfSense configuration is in progress. Try again in a moment.';
 			header("Location: /pfblockerng/pfblockerng_category.php?type={$gtype}&savemsg={$savemsg}");
 		} else {
-			print(json_encode(array($pfb_lock_error)));
+			print(json_encode(array('Groups: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.')));
 		}
 		exit;
 	}
@@ -189,23 +188,26 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 		case 'del':
 			try {
 				$name = pfb_filter($rowdata[$rowid]['aliasname'] ?? '', PFB_FILTER_WORD, 'Category');
-				if (!empty($name) && isset($rowdata[$rowid])) {
-					// issue #1014/#1019/#2060: close the alias-pass ledger before the row config node is gone.
-					pfb_sync_status_close_removed_alias($gtype, $name, $pfb['dbdir']);
+				if (empty($name) || !isset($rowdata[$rowid])) {
+					$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ], not found";
+				} elseif (pfb_filter($_POST['aliasname'] ?? '', PFB_FILTER_WORD, 'Category') !== $name) {
+					// issue #3945: the row index alone can be another group by now (the one the page showed was deleted since)
+					$savemsg = 'The group was not deleted: it was changed by another save. Reload the page and try again.';
+				} else {
 					if (isset($rowdata_path)) {
 						unset($rowdata[$rowid]);
 						config_set_path($rowdata_path, array_values($rowdata));
 					}
 					$pfb_written = write_config("pfBlockerNG: Removed [ {$type} | {$name} ]", FALSE);
 					if (pfb_dns_config_write_failed($pfb_written)) {
-						$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ]: the configuration could not be written. Save again in a moment.";
+						$savemsg = 'The group was not deleted: the configuration could not be written. Try again in a moment.';
 					} else {
 						$pfb_groups_changed = TRUE;
 						pfb_mark_pending_changes();	// applies on the next Update, not on save
+						// issue #1014/#1019/#2060: close the removed alias's alias-pass ledger entries, once the removal is written.
+						pfb_sync_status_close_removed_alias($gtype, $name, $pfb['dbdir']);
 						$savemsg = "Removed [ Type: {$type}, Name: {$name} ]";
 					}
-				} else {
-					$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ], not found";
 				}
 			} finally {
 				unlock($pfb_config_lock);
@@ -457,6 +459,7 @@ if (isset($savemsg)) {
 <div id="savemsg_json" class="alert" role="alert"></div>
 <input id="type" name="type" type="hidden" value="<?=$gtype?>"/>
 <input type="hidden" name="rowid" id="rowid" value="">
+<input type="hidden" name="aliasname" id="aliasname" value="">
 <input type="hidden" name="act" id="act" value="">
 
 <div class="panel panel-default">
@@ -646,7 +649,7 @@ if (isset($savemsg)) {
 						</a>
 						<i class="fa-solid fa-trash-can icon-pointer no-confirm"
 							title="<?=gettext('Delete selected entry') . ' [ ' . $row['aliasname'] .' ] ?' ?>"
-							onclick="$('#rowid').val('<?=$r_id?>');$('#act').val('del');pfb_rownamedelete();">
+							onclick="$('#rowid').val('<?=$r_id?>');$('#aliasname').val(<?=htmlspecialchars(json_encode($aliasname_raw, JSON_INVALID_UTF8_SUBSTITUTE), ENT_QUOTES)?>);$('#act').val('del');pfb_rownamedelete();">
 						</i>
 
 						<?php

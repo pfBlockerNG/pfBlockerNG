@@ -822,11 +822,12 @@ if ($_POST && isset($_POST['save'])) {
 
 	if (!$input_errors) {
 		// issue #3945: Core writes these groups under this lock; never write back the request's stale config.xml.
-		$pfb_saved_row = config_get_path("installedpackages/{$conf_type}/config/{$rowid}");
+		// The row at this index must still be the group this request loaded (or still free, for a new one).
+		$pfb_saved_name = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname");
 		$pfb_config_lock = pfb_dns_config_lock();
 		if ($pfb_config_lock === NULL) {
 			$input_errors[] = 'Groups: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
-		} elseif (($pfb_saved_row === NULL) !== (config_get_path("installedpackages/{$conf_type}/config/{$rowid}") === NULL)) {
+		} elseif ($pfb_saved_name !== config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname")) {
 			unlock($pfb_config_lock);
 			$input_errors[] = 'Groups: this group was changed by another save, so these settings were not saved. Reload the Groups page.';
 		}
@@ -841,12 +842,7 @@ if ($_POST && isset($_POST['save'])) {
 				pfb_dnsbl_policy_upgrade();
 			}
 
-			// issue #1014/#1019/#2060: close the OLD alias's alias-pass-managed ledger entries
-			// (download, script) before aliasname is overwritten -- a rename must not orphan them.
 			$pfb_old_aliasname = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '');
-			if ($pfb_old_aliasname !== '' && $pfb_old_aliasname !== ($_POST['aliasname'] ?: '')) {
-				pfb_sync_status_close_removed_alias($gtype, $pfb_old_aliasname, $pfb['dbdir']);
-			}
 
 			// foreign structure: pfblockernglistsv4/v6/dnsbl per-row keys are not in registry
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", $_POST['aliasname'] ?: '');
@@ -973,6 +969,11 @@ if ($_POST && isset($_POST['save'])) {
 			$cache_stage = pfb_schedule_cache_candidate_stage($runtime_model, $runtime_state, $runtime_timezone);
 			$cache_ok = $cache_stage === '';
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
+			// issue #1014/#1019/#2060: a rename closes the OLD alias's alias-pass-managed ledger entries (download, script)
+			// so it does not orphan them; issue #3945: only once the write is made, never for a save that was refused.
+			if ($pfb_old_aliasname !== '' && $pfb_old_aliasname !== ($_POST['aliasname'] ?: '')) {
+				pfb_sync_status_close_removed_alias($gtype, $pfb_old_aliasname, $pfb['dbdir']);
+			}
 			$failure = $cache_ok ? '' : '&schcache=failed&schstage=' . $cache_stage;
 			header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}{$failure}");
 			exit;
