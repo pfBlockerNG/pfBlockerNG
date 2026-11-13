@@ -1,9 +1,9 @@
-"""Issues #3916 and #3936: a DNSBL save with no Permit Firewall Rules interface selected logs no PHP diagnostic.
+"""Issues #3916, #3936 and #3947: DNSBL saves of the Permit Firewall Rules multi-select log no PHP diagnostic.
 
 A browser sends nothing for a ``multiple`` select with no selection, so ``dnsbl_allow_int`` is absent from
 the POST. PHP 8.5 deprecates the null key its validator then passed to ``array_key_exists()`` (#3916), and
 reading the absent key logged ``Undefined array key`` (#3936), a class ``PhpErrorLogGuard`` reports but
-does not gate, so it is counted here.
+does not gate, so it is counted here. A crafted POST nesting an array in it threw ``TypeError`` (#3947).
 """
 
 from __future__ import annotations
@@ -59,5 +59,24 @@ def test_dnsbl_save_without_allow_interface_logs_no_php_diagnostic(smoke_vm: Smo
         assert _allow_int_undefined_key_count(smoke_vm) == undefined_keys, (
             'the save logged Undefined array key "dnsbl_allow_int" in pfblockerng_dnsbl.php'
         )
+    finally:
+        helpers.config_restore_state(smoke_vm, _ALLOW_INT, original)
+
+
+def test_dnsbl_save_nested_allow_interface_is_an_input_error(smoke_vm: SmokeVM, webui: WebUI) -> None:
+    """A crafted ``dnsbl_allow_int[0][]=x`` gets the page's input error, logs no PHP error, and writes nothing."""
+    original = helpers.config_get_state(smoke_vm, _ALLOW_INT)
+    try:
+        helpers.config_set(smoke_vm, _ALLOW_INT, "")
+        guard = PhpErrorLogGuard(smoke_vm)
+        guard.snapshot()
+        response = webui.post(DNSBL_PAGE, {"dnsbl_allow_int[0][]": "x"}, allow_redirects=False)
+        assert response.status_code == 200, f"invalid POST must re-render, not redirect: {response.status_code}"
+        errors = input_errors_block(response.text)
+        assert errors and "the dnsbl_allow_int selection is invalid" in errors, (
+            f"nested dnsbl_allow_int must be refused with an input error: {response.text[-4000:]}"
+        )
+        guard.assert_no_growth()
+        assert helpers.config_get_state(smoke_vm, _ALLOW_INT) == (True, ""), "the refused save wrote dnsbl_allow_int"
     finally:
         helpers.config_restore_state(smoke_vm, _ALLOW_INT, original)

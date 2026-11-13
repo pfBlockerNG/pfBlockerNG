@@ -55,7 +55,7 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 	 * PHP diagnostic it raised.
 	 *
 	 * @param array<string, mixed> $post
-	 * @return array{post: array<string, mixed>, diagnostics: list<string>}
+	 * @return array{post: array<string, mixed>, diagnostics: list<string>, input_errors: list<string>}
 	 */
 	private static function validateSelects(array $post): array
 	{
@@ -64,6 +64,7 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 			'default_tlds'			=> self::DEFAULT_TLDS,
 			'options_dnsbl_allow_int'	=> ['lan' => 'LAN', 'opt1' => 'OPT1'],
 			'options_top1m_inclusion'	=> ['com' => 'COM', 'net' => 'NET', 'org' => 'ORG'],
+			'input_errors'			=> [],
 		];
 		foreach (self::SCALAR_DEFAULTS as $key => $default) {
 			$vars["options_{$key}"] = ['other' => 'Other'];	// the default is not an option: an omitted field must be set to it
@@ -76,14 +77,14 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 			return TRUE;
 		});
 		try {
-			pfb_test_page_eval(
+			$scope = pfb_test_page_eval(
 				pfb_test_page_region(self::PAGE, '// Validate Select field options', '// Validate DNSBL webserver block page'),
 				$vars
 			);
 		} finally {
 			restore_error_handler();
 		}
-		return ['post' => $_POST, 'diagnostics' => $diagnostics];
+		return ['post' => $_POST, 'diagnostics' => $diagnostics, 'input_errors' => $scope['input_errors']];
 	}
 
 	public function testOmittedSelectsTakeDefaultsWithoutDiagnostics(): void
@@ -121,5 +122,21 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 		$this->assertSame('tranco', $result['post']['top1m_source']);
 		$this->assertSame('', $result['post']['dnsbl_allow_int']);
 		$this->assertSame(self::DEFAULT_TLDS, $result['post']['top1m_inclusion']);
+	}
+
+	/**
+	 * A crafted POST nesting an array inside a multi-select (dnsbl_allow_int[0][]=x) is refused
+	 * with an input error, which blocks the save; array_key_exists() threw `Illegal offset type`
+	 * on it (issue #3947).
+	 */
+	public function testNestedMultiSelectValueIsAnInputError(): void
+	{
+		foreach (['dnsbl_allow_int' => '', 'top1m_inclusion' => self::DEFAULT_TLDS] as $field => $default) {
+			$result = self::validateSelects(['save' => '1', $field => [['x']]]);
+
+			$this->assertSame([], $result['diagnostics'], $field);
+			$this->assertSame(["DNSBL: the {$field} selection is invalid!"], $result['input_errors'], $field);
+			$this->assertSame($default, $result['post'][$field], $field);
+		}
 	}
 }
