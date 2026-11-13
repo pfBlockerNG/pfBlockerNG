@@ -13,6 +13,7 @@ use PHPUnit\Framework\TestCase;
  *     not project), and the adapter's own write validation accepts what the read answered.
  *   - A `posted` case is a Groups editor save: the page's own validation, run as shipped, decides `valid`, and the adapter's write
  *     validation gives the same verdict on the case's `input` filled with the native defaults.
+ *   - A `scriptNames` entry is a preScript/postScript name with the verdict both the adapter and Core give it (issue #3961).
  */
 #[CoversFunction('pfb_core_settings_backend')]
 #[CoversFunction('pfb_core_settings_request_refusal')]

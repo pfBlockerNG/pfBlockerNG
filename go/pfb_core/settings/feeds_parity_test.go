@@ -12,7 +12,7 @@ import (
 // The parity fixture of the feed projections (issue #3937): tests/core/fixtures/settings_feeds_parity.json, frozen against
 // today's PHP by tests/php/CoreSettingsFeedsParityTest.php. A stored case's native group (what the adapter reads from
 // config.xml) is saved as the projection's only group: Core accepts it and reads it back with credentials hidden. A
-// posted case's input (the Groups editor's form, natively) gets the page's verdict.
+// posted case's input (the Groups editor's form, natively) gets the page's verdict, and a script name PHP's.
 func TestTheFeedProjectionsMatchTodaysPhpOnEveryFixtureCase(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "core", "fixtures", "settings_feeds_parity.json"))
 	if err != nil {
@@ -42,8 +42,8 @@ func TestTheFeedProjectionsMatchTodaysPhpOnEveryFixtureCase(t *testing.T) {
 	if err := dec.Decode(&doc); err != nil {
 		t.Fatalf("the fixture does not read: %v", err)
 	}
-	if doc.Schema != 1 || len(doc.Cases) == 0 {
-		t.Fatalf("fixture schema %d with %d cases", doc.Schema, len(doc.Cases))
+	if doc.Schema != 1 || len(doc.Cases) == 0 || len(doc.ScriptNames) == 0 {
+		t.Fatalf("fixture schema %d with %d cases and %d script names", doc.Schema, len(doc.Cases), len(doc.ScriptNames))
 	}
 	for _, id := range doc.Projections {
 		if _, ok := open(t, t.TempDir()).projection(id); !ok {
