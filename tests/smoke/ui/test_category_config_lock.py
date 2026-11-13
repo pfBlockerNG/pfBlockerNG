@@ -1,4 +1,4 @@
-"""Issue #3945: Groups saves and deletes refuse a held config lock; deletes and bulk updates refuse another group."""
+"""Issues #3945/#3955: Groups saves and deletes refuse a held lock or a form for another group."""
 
 from __future__ import annotations
 
@@ -19,7 +19,15 @@ from .test_category import (
     _seed_three_rows,
     _snapshot_lists,
 )
-from .test_category_edit import CFG_DNSBL, _del_rowid, _dnsbl_payload, _free_rowid, _post_form
+from .test_category_edit import (
+    CATEGORY_PAGE,
+    CFG_DNSBL,
+    _del_rowid,
+    _dnsbl_payload,
+    _free_rowid,
+    _loaded_name,
+    _post_form,
+)
 
 if TYPE_CHECKING:
     from .webui import WebUI
@@ -29,6 +37,7 @@ pytestmark = pytest.mark.ui_e2e
 REFUSAL = "another save of the pfSense configuration is in progress"
 DELETE_REFUSAL = f"The group was not deleted: {REFUSAL}. Try again in a moment."
 CHANGED_REFUSAL = "The group was not deleted: it was changed by another save."
+SAVE_CHANGED_REFUSAL = "this group was changed by another save, so these settings were not saved"
 
 
 def test_group_save_refuses_config_lock_without_changing_stored_group(smoke_vm: helpers.SmokeVM, webui: WebUI) -> None:
@@ -186,5 +195,109 @@ def test_group_reorder_refuses_names_that_are_not_the_groups_at_the_rows(
         assert errors == [], f"the right names must apply the reorder: {errors}"
         stored = [helpers.config_get(vm, f"{IPV4_LISTS}/{i}/aliasname") for i in range(3)]
         assert stored == [names[2], names[0], names[1]], f"the named reorder must persist: {stored}"
+    finally:
+        _restore_lists(vm, snapshot)
+
+
+def test_group_save_refuses_a_form_loaded_for_a_group_that_was_replaced_at_its_row(
+    smoke_vm: helpers.SmokeVM, webui: WebUI
+) -> None:
+    """A Save posted with the loaded name of a deleted group, at a row another group took, is refused.
+
+    Given: group A stored at a free row, and its edit form rendered (it carries the loaded name A)
+    When:  A is deleted, group B is saved at the same row, and the stale form's Save is posted with the loaded name A
+    Then:  the refusal says the group changed, and B is stored as it was; B's own form then saves
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    first = f"LockA{uuid.uuid4().hex[:12]}"
+    second = f"LockB{uuid.uuid4().hex[:12]}"
+    path = f"{CFG_DNSBL}/{rowid}"
+    try:
+        _post_form(webui, _dnsbl_payload(rowid, first))
+        page = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
+        loaded = _loaded_name(page.text)
+        assert loaded == first, f"before-state: the rendered form must carry the stored name {first!r}: {loaded!r}"
+
+        _del_rowid(vm, CFG_DNSBL, rowid)
+        _post_form(webui, _dnsbl_payload(rowid, second, description="replacement"))
+        assert helpers.config_get(vm, f"{path}/aliasname") == second, "before-state: group B holds the row now"
+        assert helpers.config_get(vm, f"{path}/description") == "replacement"
+
+        _post_form(
+            webui,
+            _dnsbl_payload(rowid, first, description="must not save", aliasname_loaded=loaded),
+            expect_rejection=SAVE_CHANGED_REFUSAL,
+        )
+        assert helpers.config_get(vm, f"{path}/aliasname") == second, (
+            "a refused save must not rename the group at the row"
+        )
+        assert helpers.config_get(vm, f"{path}/description") == "replacement", "a refused save must change nothing"
+
+        _post_form(webui, _dnsbl_payload(rowid, second, description="saved by its own form"))
+        assert helpers.config_get(vm, f"{path}/description") == "saved by its own form", "B's own form must save"
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
+
+
+@pytest.mark.parametrize("name", ["Alpha_1", "a\"b'c<d>&e"], ids=["plain", "quotes-and-markup"])
+def test_group_edit_form_carries_the_stored_name_as_its_loaded_name(
+    smoke_vm: helpers.SmokeVM, webui: WebUI, name: str
+) -> None:
+    """The edit form's hidden loaded-name field decodes to exactly the stored name, whatever characters it holds.
+
+    Given: a group stored under the name (an imported or restored name may hold quotes and markup)
+    When:  its edit page is rendered, and a new group's page for a free row
+    Then:  the stored group's form carries the name, as a browser decodes it; the free row's form carries none
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    row = {"aliasname": name, "description": "smoke loaded name", "action": "unbound", "cron": "Never"}
+    snippet = (
+        f"config_set_path({helpers._php_str(f'{CFG_DNSBL}/{rowid}')}, {helpers._php_kv_array(row)});\n"
+        "write_config('pfBlockerNG smoke: seed DNSBL group');\n"
+        "echo 'OK';"
+    )
+    try:
+        seeded = helpers.php_eval(vm, snippet)
+        assert seeded.returncode == 0 and "OK" in seeded.stdout, f"seeding the group failed: {seeded.stdout!r}"
+        assert helpers.config_get(vm, f"{CFG_DNSBL}/{rowid}/aliasname") == name, (
+            "before-state: the name is stored as it is"
+        )
+
+        stored = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
+        assert _loaded_name(stored.text) == name, "the form of a stored group carries its stored name"
+        free = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid + 1)})
+        assert _loaded_name(free.text) == "", "the form of a row that holds no group carries no name"
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
+
+
+@pytest.mark.parametrize("token", ["1", "r1r", "rr1"])
+def test_group_reorder_refuses_a_row_the_list_never_writes_that_way(
+    smoke_vm: helpers.SmokeVM, webui: WebUI, token: str
+) -> None:
+    """A reorder whose row is hand-built (the list posts rN) is refused and changes no order; rN applies it.
+
+    Given: groups [a, b, c], and every row named right
+    When:  ids[]=r2&ids[]=<token>&ids[]=r0 is posted, the middle row written as 1, r1r or rr1
+    Then:  the error channel names the row and the order is still [a, b, c]; with r1 it becomes [c, b, a]
+    """
+    vm = smoke_vm
+    snapshot = _snapshot_lists(vm)
+    try:
+        names = _three_groups(vm)
+        named = {f"aliasname-{i}": name for i, name in enumerate(names)}
+        errors = _update(webui, named, f"ids[]=r2&ids[]={token}&ids[]=r0")
+        assert any("IDS Failed Rowid" in error for error in errors), (
+            f"the reorder must refuse the row {token!r}: {errors}"
+        )
+        stored = [helpers.config_get(vm, f"{IPV4_LISTS}/{i}/aliasname") for i in range(3)]
+        assert stored == names, f"a refused reorder must change no order: {stored}"
+
+        errors = _update(webui, named, "ids[]=r2&ids[]=r1&ids[]=r0")
+        assert errors == [], f"the same order written as rN must apply: {errors}"
+        stored = [helpers.config_get(vm, f"{IPV4_LISTS}/{i}/aliasname") for i in range(3)]
+        assert stored == [names[2], names[1], names[0]], f"the rN reorder must persist: {stored}"
     finally:
         _restore_lists(vm, snapshot)

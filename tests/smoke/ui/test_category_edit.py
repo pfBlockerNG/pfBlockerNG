@@ -35,6 +35,7 @@ feed download.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import subprocess
@@ -93,6 +94,18 @@ def _del_rowid(vm: helpers.SmokeVM, cfg_root: str, rowid: int) -> None:
         raise RuntimeError(f"_del_rowid({cfg_root}/{rowid}) failed: rc={result.returncode} {result.stdout!r}")
 
 
+def _loaded_name(page_body: str) -> str:
+    """The group name a rendered edit form carries in its hidden ``aliasname_loaded`` field (empty for a new group).
+
+    Decoded as a browser decodes the attribute, so it is what the form's own Save would post back (issue #3955).
+    """
+    tag = _input_tag(page_body, "aliasname_loaded")
+    assert tag, "the edit form must carry the hidden aliasname_loaded field"
+    value = re.search(r'\bvalue="([^"]*)"', tag)
+    assert value is not None, f"the aliasname_loaded field must carry a value attribute: {tag}"
+    return html.unescape(value.group(1))
+
+
 def _post_form(
     webui: WebUI,
     payload: dict[str, str],
@@ -101,16 +114,18 @@ def _post_form(
 ) -> None:
     """POST a fully-enumerated category-edit payload (token harvested fresh).
 
-    GETs the page to obtain a current ``__csrf_magic`` (the csrf-magic output
-    filter rotates it per render), injects it + the ``save`` submit button into
+    GETs the page for the payload's group to obtain a current ``__csrf_magic`` (the csrf-magic output
+    filter rotates it per render) and the loaded name its form carries (``aliasname_loaded``, sent unless
+    the payload sets it), injects them + the ``save`` submit button into
     ``payload``, and POSTs directly via the raw session -- NOT the form-scrape
     (the rowhelper table cannot be reproduced by the scrape). Mirrors the
     ``test_alerts.py`` direct-post pattern.
     """
-    get = webui.get(CATEGORY_PAGE, params={"type": payload.get("type", "dnsbl")})
+    get = webui.get(CATEGORY_PAGE, params={"type": payload.get("type", "dnsbl"), "rowid": payload.get("rowid", "0")})
     assert not looks_like_login_page(get.text), "category GET returned the login form (session lost)"
     token = extract_csrf_token(get.text)
     data = dict(payload)
+    data.setdefault("aliasname_loaded", _loaded_name(get.text))
     data["__csrf_magic"] = token
     data["save"] = "save"
     resp = webui.session.post(webui.url(CATEGORY_PAGE), data=data, verify=webui._verify, timeout=SAVE_TIMEOUT)

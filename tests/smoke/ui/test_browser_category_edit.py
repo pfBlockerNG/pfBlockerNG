@@ -71,6 +71,7 @@ from .test_category_edit import (
     _dnsbl_payload,
     _free_rowid,
     _ipv6_payload,
+    _loaded_name,
     _post_form,
 )
 from .webui import extract_csrf_token, looks_like_login_page
@@ -477,14 +478,16 @@ _CFG_IPV4 = "installedpackages/pfblockernglistsv4/config"
 def _post_ipv4_form(webui: WebUI, payload: dict[str, str]) -> str:
     """POST a fully-enumerated IPv4 category-edit payload and return the response body.
 
-    GETs the page first to harvest a fresh ``__csrf_magic`` token, then POSTs
+    GETs the page for the payload's group first to harvest a fresh ``__csrf_magic`` token and the
+    loaded name its form carries (sent unless the payload sets it), then POSTs
     directly via the raw session (same pattern as ``_post_form`` in
     ``test_category_edit.py`` — avoids the rowhelper scrape limitation).
     """
-    get = webui.get(_CATEGORY_PAGE, params={"type": "ipv4"})
+    get = webui.get(_CATEGORY_PAGE, params={"type": "ipv4", "rowid": payload.get("rowid", "0")})
     assert not looks_like_login_page(get.text), "category GET returned the login form (session lost)"
     token = extract_csrf_token(get.text)
     data = dict(payload)
+    data.setdefault("aliasname_loaded", _loaded_name(get.text))
     data["__csrf_magic"] = token
     data["save"] = "save"
     resp = webui.session.post(webui.url(_CATEGORY_PAGE), data=data, verify=webui._verify, timeout=_SAVE_TIMEOUT)
