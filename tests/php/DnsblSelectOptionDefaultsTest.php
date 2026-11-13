@@ -125,18 +125,63 @@ final class DnsblSelectOptionDefaultsTest extends TestCase
 	}
 
 	/**
-	 * A crafted POST nesting an array inside a multi-select (dnsbl_allow_int[0][]=x) is refused
-	 * with an input error, which blocks the save; array_key_exists() threw `Illegal offset type`
-	 * on it (issue #3947).
+	 * A crafted POST nesting an array inside a multi-select (dnsbl_allow_int[0][]=x), past a valid
+	 * value or not, is refused with an input error, which blocks the save; array_key_exists() threw
+	 * `Illegal offset type` on it (issue #3947).
 	 */
 	public function testNestedMultiSelectValueIsAnInputError(): void
 	{
-		foreach (['dnsbl_allow_int' => '', 'top1m_inclusion' => self::DEFAULT_TLDS] as $field => $default) {
-			$result = self::validateSelects(['save' => '1', $field => [['x']]]);
+		foreach (['dnsbl_allow_int' => ['lan', ''], 'top1m_inclusion' => ['com', self::DEFAULT_TLDS]] as $field => [$valid, $default]) {
+			foreach ([[['x']], [$valid, ['x']]] as $value) {
+				$result = self::validateSelects(['save' => '1', $field => $value]);
 
-			$this->assertSame([], $result['diagnostics'], $field);
-			$this->assertSame(["DNSBL: the {$field} selection is invalid!"], $result['input_errors'], $field);
-			$this->assertSame($default, $result['post'][$field], $field);
+				$this->assertSame([], $result['diagnostics'], $field);
+				$this->assertSame(["DNSBL: the {$field} selection is invalid!"], $result['input_errors'], $field);
+				$this->assertSame($default, $result['post'][$field], $field);
+			}
 		}
+	}
+
+	/**
+	 * The DoH/DoT/DoQ blocking selects on the same save: an array where the single select expects a
+	 * string falls back to its default, and a nested value in the list is an input error (issue #3947).
+	 *
+	 * @param array<string, mixed> $post
+	 * @return array{post: array<string, mixed>, diagnostics: list<string>, input_errors: list<string>}
+	 */
+	private static function validateDohSelects(array $post): array
+	{
+		$_POST = $post;
+		$diagnostics = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+			$diagnostics[] = $errstr;
+			return TRUE;
+		});
+		try {
+			$scope = pfb_test_page_eval(
+				pfb_test_page_region(self::PAGE, '// Validate DoH/DoT/DoQ blocking fields', '// Validate DNS Redirect fields.'),
+				[
+					'options_safesearch_doh'	=> ['Disable' => 'Disable', 'Enable' => 'Enable'],
+					'options_safesearch_doh_list'	=> ['dns.google' => 'Google', 'cloudflare-dns.com' => 'Cloudflare'],
+					'input_errors'			=> [],
+				]
+			);
+		} finally {
+			restore_error_handler();
+		}
+		return ['post' => $_POST, 'diagnostics' => $diagnostics, 'input_errors' => $scope['input_errors']];
+	}
+
+	public function testNestedDohSelectValues(): void
+	{
+		$result = self::validateDohSelects(['save' => '1', 'safesearch_doh' => ['Enable'], 'safesearch_doh_list' => ['dns.google']]);
+		$this->assertSame([], $result['diagnostics']);
+		$this->assertSame([], $result['input_errors']);
+		$this->assertSame('Disable', $result['post']['safesearch_doh']);
+
+		$result = self::validateDohSelects(['save' => '1', 'safesearch_doh' => 'Enable', 'safesearch_doh_list' => ['dns.google', ['x']]]);
+		$this->assertSame([], $result['diagnostics']);
+		$this->assertSame(['DNSBL: the safesearch_doh_list selection is invalid!'], $result['input_errors']);
+		$this->assertSame('', $result['post']['safesearch_doh_list']);
 	}
 }

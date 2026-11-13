@@ -63,20 +63,31 @@ def test_dnsbl_save_without_allow_interface_logs_no_php_diagnostic(smoke_vm: Smo
         helpers.config_restore_state(smoke_vm, _ALLOW_INT, original)
 
 
-def test_dnsbl_save_nested_allow_interface_is_an_input_error(smoke_vm: SmokeVM, webui: WebUI) -> None:
-    """A crafted ``dnsbl_allow_int[0][]=x`` gets the page's input error, logs no PHP error, and writes nothing."""
+def test_dnsbl_save_nested_multiselect_values_are_input_errors(smoke_vm: SmokeVM, webui: WebUI) -> None:
+    """Crafted nested values past a valid one get the page's input errors, log no PHP error, and write nothing.
+
+    ``dnsbl_allow_int`` is seeded with ``lan``, so a save that got through would reset it to the default ``""``.
+    """
     original = helpers.config_get_state(smoke_vm, _ALLOW_INT)
     try:
-        helpers.config_set(smoke_vm, _ALLOW_INT, "")
+        helpers.config_set(smoke_vm, _ALLOW_INT, "lan")
+        assert scrape_form_fields(webui.get(DNSBL_PAGE).text).get("dnsbl_allow_int[]") == ["lan"], (
+            "fixture: lan selected, so the form submits dnsbl_allow_int[0]=lan ahead of the crafted [1]"
+        )
         guard = PhpErrorLogGuard(smoke_vm)
         guard.snapshot()
-        response = webui.post(DNSBL_PAGE, {"dnsbl_allow_int[0][]": "x"}, allow_redirects=False)
-        assert response.status_code == 200, f"invalid POST must re-render, not redirect: {response.status_code}"
-        errors = input_errors_block(response.text)
-        assert errors and "the dnsbl_allow_int selection is invalid" in errors, (
-            f"nested dnsbl_allow_int must be refused with an input error: {response.text[-4000:]}"
+        response = webui.post(
+            DNSBL_PAGE,
+            {"dnsbl_allow_int[1][]": "x", "safesearch_doh_list[1][]": "x"},
+            allow_redirects=False,
         )
+        assert response.status_code == 200, f"invalid POST must re-render, not redirect: {response.status_code}"
+        errors = input_errors_block(response.text) or ""
+        for field in ("dnsbl_allow_int", "safesearch_doh_list"):
+            assert f"the {field} selection is invalid" in errors, (
+                f"nested {field} must be refused with an input error: {response.text[-4000:]}"
+            )
         guard.assert_no_growth()
-        assert helpers.config_get_state(smoke_vm, _ALLOW_INT) == (True, ""), "the refused save wrote dnsbl_allow_int"
+        assert helpers.config_get_state(smoke_vm, _ALLOW_INT) == (True, "lan"), "the refused save wrote the config"
     finally:
         helpers.config_restore_state(smoke_vm, _ALLOW_INT, original)
