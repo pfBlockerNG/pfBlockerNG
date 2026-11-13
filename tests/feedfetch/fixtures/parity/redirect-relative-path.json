@@ -127,6 +127,7 @@
    "expect": {
     "ok": true,
     "published": "BODY\n",
+    "digest": "f688192737a93ab01f03c9345b0ab795",
     "requests": [
      {
       "server": "origin",

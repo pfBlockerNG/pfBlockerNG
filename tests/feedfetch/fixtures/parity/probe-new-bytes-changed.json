@@ -28,6 +28,7 @@
    "expect": {
     "ok": true,
     "published": "v1\n",
+    "digest": "99320dce54026277a45b28d83301be3e",
     "requests": [
      {
       "server": "origin",
@@ -71,6 +72,7 @@
    "expect": {
     "ok": true,
     "published": "v2\n",
+    "digest": "2b82de3f35f8b030a3ab113f7dbef2cf",
     "requests": []
    }
   }

@@ -18,7 +18,8 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  * Logical outcome per step, mapped from this side's files and log:
  *   ok / decision   the PfbDownloadResult, or pfb_update_check()'s verdict (Success + cron_update = changed, Success
  *                   alone = unchanged, NULL = failed).
- *   published, etag, lastmod   {feed}.orig, {feed}.orig.etag, {feed}.orig.lastmod (null when absent).
+ *   published, etag, lastmod, digest   {feed}.orig, {feed}.orig.etag, {feed}.orig.lastmod, {feed}.orig.xxhash128
+ *                   (null when absent).
  *   reason          the last "reason=<code>" or "[ FEED ] <text> — skipped" in the step's log.
  *   requests        what the servers recorded; rsync_source the stand-in's second-to-last argument.
  * Scheduler state that is not transfer behaviour is reset before a probe: the list file exists, no failure marker.
@@ -132,7 +133,8 @@ final class FeedFetchParityCorpusTest extends TestCase
 		$this->seedLocal($case['local_files'] ?? [], $case['local_symlinks'] ?? []);
 		$base = "{$this->dir}/" . self::FEED;
 		$seed = $case['seed'] ?? [];
-		foreach (['published' => '.orig', 'etag' => '.orig.etag', 'lastmod' => '.orig.lastmod'] as $key => $suffix) {
+		foreach (['published' => '.orig', 'etag' => '.orig.etag', 'lastmod' => '.orig.lastmod',
+			'digest' => '.orig.xxhash128'] as $key => $suffix) {
 			if (isset($seed[$key])) {
 				file_put_contents("{$base}{$suffix}", (string) $seed[$key]);
 			}
@@ -191,6 +193,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$actual['published'] = is_file("{$base}.orig") ? file_get_contents("{$base}.orig") : NULL;
 			$actual['etag'] = is_file("{$base}.orig.etag") ? file_get_contents("{$base}.orig.etag") : NULL;
 			$actual['lastmod'] = is_file("{$base}.orig.lastmod") ? (int) file_get_contents("{$base}.orig.lastmod") : NULL;
+			$actual['digest'] = is_file("{$base}.orig.xxhash128") ? file_get_contents("{$base}.orig.xxhash128") : NULL;
 			$actual['requests'] = $this->requests();
 			$actual['staged'] = is_file("{$base}.raw") && filesize("{$base}.raw") > 0;
 			$argv = is_file("{$this->tools}/rsync.argv") ? file("{$this->tools}/rsync.argv", FILE_IGNORE_NEW_LINES) : NULL;
@@ -199,8 +202,8 @@ final class FeedFetchParityCorpusTest extends TestCase
 
 			$want = $step['expect'];
 			$want['requests'] = array_map(fn (array $r): array => $this->expandRecord($r), $want['requests']);
-			$want += ['etag' => $seed['etag'] ?? NULL, 'lastmod' => $seed['lastmod'] ?? NULL, 'staged' => FALSE,
-				'rsync_source' => NULL];
+			$want += ['etag' => $seed['etag'] ?? NULL, 'lastmod' => $seed['lastmod'] ?? NULL,
+				'digest' => $seed['digest'] ?? NULL, 'staged' => FALSE, 'rsync_source' => NULL];
 			if (!array_key_exists('reason', $want)) {
 				unset($actual['reason']);
 			}
@@ -214,6 +217,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			// The next step's default validators are what this one left behind.
 			$seed['etag'] = $actual['etag'];
 			$seed['lastmod'] = $actual['lastmod'];
+			$seed['digest'] = $actual['digest'];
 		}
 	}
 

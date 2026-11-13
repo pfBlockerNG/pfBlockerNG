@@ -21,6 +21,7 @@
    "expect": {
     "ok": true,
     "published": "1.2.3.4\n",
+    "digest": "58e4591c78f52321c1f46a00b34477f9",
     "requests": []
    }
   }

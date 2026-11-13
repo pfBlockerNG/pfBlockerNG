@@ -21,15 +21,16 @@ package feedfetch_test
 //	             An unknown path is a 404 "missing\n". With etag the server answers 304 when If-None-Match equals it;
 //	             otherwise with last_modified, when If-Modified-Since is not older. declared_length is the Content-Length
 //	             sent; the server then closes after the body.
-//	seed         optional {published, etag, lastmod}: the feed's published copy and stored validators before step 0.
+//	seed         optional {published, etag, lastmod, digest}: the feed's published copy, stored validators and content
+//	             digest (the xxh128 sidecar ".orig.xxhash128", as PHP's pfb_hash_write() leaves it) before step 0.
 //	local_files  optional {relative path: content}; local_symlinks optional {relative path: target}. A step may write
 //	             local_files again before it runs.
 //	steps        [step], run in order against one feed:
 //	  op         "ingest" (download and publish) or "probe" (change detection).
 //	  url, format ("rsync" or absent), username, password, headers ["Name: value"], ceiling (bytes),
 //	  rsync      {exit, body}: the stand-in rsync (tests/feedfetch/fixtures/fake-rsync.sh) for this step.
-//	  expect     ok; decision (probe: changed|unchanged|failed); published (string or null); etag, lastmod (absent:
-//	             unchanged by the step); requests [{server, path, and only the headers sent among authorization,
+//	  expect     ok; decision (probe: changed|unchanged|failed); published (string or null); etag, lastmod, digest
+//	             (absent: unchanged by the step); requests [{server, path, and only the headers sent among authorization,
 //	             if_none_match, if_modified_since, x_feed_probe, accept_encoding}] in order; reason (optional: the
 //	             refusal reason); rsync_source (absent: rsync never started). No non-empty staged body may survive a step.
 
@@ -74,6 +75,7 @@ type expect struct {
 	Published   *string             `json:"published"`
 	ETag        json.RawMessage     `json:"etag"`
 	LastMod     json.RawMessage     `json:"lastmod"`
+	Digest      json.RawMessage     `json:"digest"`
 	Requests    []map[string]string `json:"requests"`
 	Reason      *string             `json:"reason"`
 	RsyncSource *string             `json:"rsync_source"`
@@ -109,6 +111,7 @@ type scenario struct {
 		Published *string `json:"published"`
 		ETag      *string `json:"etag"`
 		LastMod   *int64  `json:"lastmod"`
+		Digest    *string `json:"digest"`
 	} `json:"seed"`
 	LocalFiles    map[string]string `json:"local_files"`
 	LocalSymlinks map[string]string `json:"local_symlinks"`
@@ -287,7 +290,7 @@ func runScenario(t *testing.T, file string) {
 	const name = "FEED"
 	feed := feedfetch.Feed{Dir: dir, Name: name}
 	orig := filepath.Join(dir, name+".orig")
-	var prevETag, prevLastMod any
+	var prevETag, prevLastMod, prevDigest any
 	if sc.Seed != nil {
 		if sc.Seed.Published != nil {
 			os.WriteFile(orig, []byte(*sc.Seed.Published), 0o600)
@@ -299,6 +302,10 @@ func runScenario(t *testing.T, file string) {
 		if sc.Seed.LastMod != nil {
 			os.WriteFile(orig+".lastmod", []byte(strconv.FormatInt(*sc.Seed.LastMod, 10)), 0o600)
 			prevLastMod = float64(*sc.Seed.LastMod)
+		}
+		if sc.Seed.Digest != nil {
+			os.WriteFile(orig+".xxhash128", []byte(*sc.Seed.Digest), 0o600)
+			prevDigest = *sc.Seed.Digest
 		}
 	}
 
@@ -387,6 +394,7 @@ func runScenario(t *testing.T, file string) {
 		}
 		want["etag"] = rawOr(st.Expect.ETag, prevETag)
 		want["lastmod"] = rawOr(st.Expect.LastMod, prevLastMod)
+		got["digest"], want["digest"] = readOrNil(orig+".xxhash128"), rawOr(st.Expect.Digest, prevDigest)
 		mu.Lock()
 		gotReq := append([]map[string]string{}, requests...)
 		mu.Unlock()
@@ -418,7 +426,7 @@ func runScenario(t *testing.T, file string) {
 			wj, _ := json.MarshalIndent(want, "", " ")
 			t.Fatalf("%s\nwant %s\n got %s\n(result %+v)", label, wj, gj, res)
 		}
-		prevETag, prevLastMod = got["etag"], got["lastmod"]
+		prevETag, prevLastMod, prevDigest = got["etag"], got["lastmod"], got["digest"]
 	}
 }
 
@@ -429,7 +437,7 @@ func stagedLeftover(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	keep := map[string]bool{}
-	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.sha1", ".probe"} {
+	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.xxhash128", ".probe"} {
 		keep[name+s] = true
 	}
 	for _, e := range entries {

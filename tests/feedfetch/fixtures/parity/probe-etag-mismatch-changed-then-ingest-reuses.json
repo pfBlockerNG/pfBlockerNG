@@ -51,6 +51,7 @@
    "expect": {
     "ok": true,
     "published": "new\n",
+    "digest": "07baf267a0c0ef53ec95a82711cc4758",
     "requests": [],
     "etag": "\"v1\"",
     "lastmod": null
