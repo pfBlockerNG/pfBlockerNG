@@ -12,14 +12,16 @@ use PHPUnit\Framework\TestCase;
  * Issue #3937: Core reads the IP and DNSBL groups through its settings adapter, so every page write of them tells Core
  * (SettingsChanged, forced: no GetSettings first, no parameters) after a successful write_config() only. A failed write tells Core
  * nothing; a Core that does not answer never undoes the save and leaves the failure for DNS General to show. The writers: the Groups
- * editor's save (pfblockerng_category_edit.php) and the group list's removal of an empty entry, delete and reorder
- * (pfblockerng_category.php). Each case runs the page's own statements, from before its write_config() through the notice, over the
+ * editor's save (pfblockerng_category_edit.php), the group list's removal of an empty entry, delete and reorder
+ * (pfblockerng_category.php), and, issue #3968, the Blacklist page's save, whose fields Core's scheduler reads as `extra:bl`
+ * (pfblockerng_blacklist.php). Each case runs the page's own statements, from before its write_config() through the notice, over the
  * doubles, against a Core stand-in (support/CoreSettingsStandIn.php) that records every request it gets.
  */
 final class CoreSettingsFeedPageSavesTest extends TestCase
 {
 	private const EDIT = 'src/usr/local/www/pfblockerng/pfblockerng_category_edit.php';
 	private const LIST = 'src/usr/local/www/pfblockerng/pfblockerng_category.php';
+	private const BLACKLIST = 'src/usr/local/www/pfblockerng/pfblockerng_blacklist.php';
 	private const V4 = 'installedpackages/pfblockernglistsv4/config';
 
 	private string $dir;
@@ -103,6 +105,9 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 			'the group list saves its order' => [self::LIST,
 				'// Save postdata and Table re-ordering', "\n\t\t\t}\n\t}\n\texit;",
 				['input_errors' => [], 'type' => 'IPv4'], 'pfBlockerNG: Saved page order format/settings for [ IPv4 ]'],
+			'the Blacklist page saves' => [self::BLACKLIST,
+				'if ($config_mod && empty($input_errors)) {', "\t\tif (\$savemsg) {\n\t\t\theader(",
+				['config_mod' => TRUE], '[ pfBlockerNG ] save DNSBL Category settings'],
 		];
 	}
 
@@ -116,6 +121,8 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 			$code = 'try {' . $code . "\n}";
 		} elseif (str_starts_with($start, '// Save postdata')) {
 			$code = 'try { if (TRUE) {' . $code . "\n}";
+		} elseif ($page === self::BLACKLIST) {
+			$code .= "\n}";	// the region ends inside the save's if, before its redirect
 		}
 		$lock = pfb_dns_config_lock();
 		$post = $_POST;
