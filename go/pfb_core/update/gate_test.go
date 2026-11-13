@@ -286,7 +286,7 @@ func TestAViewBeforeAnyStartIsIdleWithNoUpdateAndNoLog(t *testing.T) {
 				if !reflect.DeepEqual(v, View{}) {
 					t.Errorf("View(%d) before any Start = %s, want an idle View with no Update and no log", after, jsonOf(t, v))
 				}
-				if j := jsonOf(t, v); j != `{"running":false,"update":null,"log":"","next":0}` {
+				if j := jsonOf(t, v); j != `{"running":false,"update":null,"log":"","next":"0"}` {
 					t.Errorf("an idle View is %s, want running false and update null spelled out", j)
 				}
 			}

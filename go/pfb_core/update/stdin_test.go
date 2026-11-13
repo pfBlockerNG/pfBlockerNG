@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// A descendant that keeps the program's stdin open must not hold Run: the request is bigger than a pipe buffer and the
-// program never reads it, so only the bound on that wait (Cmd.WaitDelay) lets Run return.
-func TestAGrandchildHoldingStdinDoesNotHoldRunWhenTheRequestFillsThePipe(t *testing.T) {
+// A descendant that keeps the program's stdin open must not hold Run, whatever the size of the request: it is a regular
+// file, so nothing waits on it, and the program never reads it.
+func TestAGrandchildHoldingStdinDoesNotHoldRunWithALargeRequest(t *testing.T) {
 	var feeds []string
 	for i := range 20000 { // about 450 KB: far over a pipe buffer
 		feeds = append(feeds, fmt.Sprintf("ipv4:feed_%05d_v4", i))
@@ -19,7 +19,7 @@ func TestAGrandchildHoldingStdinDoesNotHoldRunWhenTheRequestFillsThePipe(t *test
 	if err != nil {
 		hint := ""
 		if strings.Contains(err.Error(), "killed") {
-			hint = " (STUCK: the wait on the stdin pipe never gave up, and the watchdog killed the program)"
+			hint = " (STUCK: the wait on the program's stdin never ended, and the watchdog killed the program)"
 		}
 		t.Fatalf("Run = %v, want it back with no error once the program exited 0%s", err, hint)
 	}
