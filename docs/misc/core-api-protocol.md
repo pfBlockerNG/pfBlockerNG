@@ -164,8 +164,8 @@ today's PHP. `go/pfb_core/settings/parity_test.go` runs Core against it.
 
 The groups of the IPv4, IPv6 and DNSBL Groups pages, as far as downloading and parsing their feeds needs (issue #3937;
 the field inventory with config.xml keys and readers is on [#3937](https://github.com/pfBlockerNG/pfBlockerNG/issues/3937#issuecomment-6851184458)).
-Each holds one field, `groups`: a list keyed by `name`, in config order. Firewall rule options, the schedule override
-(`settings/schedule`) and the DNSBL build options stay with the Outpost.
+Each holds one field, `groups`: a list keyed by `name`, in config order. Firewall rule options and the DNSBL build
+options stay with the Outpost; the schedule override is in [`settings/schedule`](#projection-schedule).
 
 | Group field | Type, default |
 |---|---|
@@ -213,7 +213,7 @@ projections, keyed by `feeds/ipv4`, `feeds/ipv6` and `feeds/dnsbl`.
 | `hour` | int 0 to 23, `0` | `gen/pfb_schedule_hour` |
 | `minute` | int 0 to 45, a multiple of 15, `0` | `gen/pfb_schedule_minute` |
 | `groups` | list keyed by `id`, `[]` | the same groups as `feeds/*`, families in IPv4, IPv6, DNSBL order, config order within each |
-| `categoryUpdates` | bool, `false` | Blacklist `blacklist_enable` is `Enable` |
+| `categoryUpdates` | bool, `false` | Blacklist `blacklist_enable` is not empty and not `Disable`, as the runtime model reads it; Core writes `Enable` or `Disable` |
 | `categoryFrequency` | enum `Never` `EveryDay` `Weekly`, `Never` | Blacklist `blacklist_freq` |
 | `categoryProviders` | list keyed by `id`, `[]` | Blacklist `item`, in config order |
 

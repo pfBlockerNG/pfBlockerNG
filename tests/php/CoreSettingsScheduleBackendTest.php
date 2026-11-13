@@ -20,6 +20,8 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_core_settings_backend')]
 #[CoversFunction('pfb_core_settings_request_refusal')]
+#[CoversFunction('pfb_core_schedule_faults')]
+#[CoversFunction('pfb_core_schedule_merge')]
 final class CoreSettingsScheduleBackendTest extends TestCase
 {
 	use ConfigXmlDiskTrait;
@@ -460,6 +462,212 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 
 		$this->assertSame('conflict', $reply['error']['code'] ?? NULL, json_encode($reply));
 		$this->assertNothingWritten($before, 'a stale revision');
+	}
+
+	// ----- an override keeps a whole slot (the runtime model rejects an override on with a partial one) -----
+
+	/** @return array<string, array{0: int, 1: int, 2: int}> */
+	public static function slots(): array
+	{
+		return ['3/0/0' => [3, 0, 0], '7/0/0, the default' => [7, 0, 0], '1/23/45' => [1, 23, 45]];
+	}
+
+	/** The runtime model pfb_schedule_runtime_config() builds from config.xml now, which must hold. @return array<string, mixed> */
+	private function runtimeModel(): array
+	{
+		$GLOBALS['pfb_test_logger_calls'] = [];
+		$model = pfb_schedule_runtime_config();
+		$this->assertNotNull($model, 'the runtime model rejects config.xml: ' . json_encode($GLOBALS['pfb_test_logger_calls']));
+		return $model;
+	}
+
+	#[DataProvider('slots')]
+	public function testAnOverrideTurnedOnOnAGroupWithNoStoredSlotLeavesAValidRuntimeModelWithThatSlot(int $weekday, int $hour, int $minute): void
+	{
+		$before = $GLOBALS['config'];
+
+		$reply = $this->writeSchedule(static function (array $s) use ($weekday, $hour, $minute): array {
+			$s['groups'][1] = ['id' => 'ipv4/B', 'override' => TRUE, 'weekday' => $weekday, 'hour' => $hour, 'minute' => $minute];
+			return $s;
+		});
+
+		$this->assertWrittenOnly([
+			self::V4 . '/1/schedule_override' => ['', 'on'],
+			self::V4 . '/1/schedule_weekday' => [NULL, (string) $weekday],
+			self::V4 . '/1/schedule_hour' => [NULL, (string) $hour],
+			self::V4 . '/1/schedule_minute' => [NULL, (string) $minute],
+		], $before, $reply);
+		$this->assertSame(['weekday' => $weekday, 'hour' => $hour, 'minute' => $minute], $this->runtimeModel()['entries']['ipv4:B_f_v4']['override'],
+			'the model of config.xml carries the override with the slot Core wrote');
+	}
+
+	public function testChangingOneFieldOfAnOverrideWritesTheWholeSlotAndRepairsAPartialOne(): void
+	{
+		$this->arrange([self::V4 => [self::group('A', ['schedule_override' => 'on', 'schedule_weekday' => '5'])]]);
+		$before = $GLOBALS['config'];
+		$this->assertSame(['weekday' => 5, 'hour' => 0, 'minute' => 0],
+			array_intersect_key($this->read()['settings']['schedule']['groups'][0], array_flip(['weekday', 'hour', 'minute'])), 'a stored partial slot reads with defaults');
+
+		$reply = $this->writeSchedule(static function (array $s): array {
+			$s['groups'][0]['hour'] = 6;
+			return $s;
+		});
+
+		$this->assertWrittenOnly([self::V4 . '/0/schedule_hour' => [NULL, '6'], self::V4 . '/0/schedule_minute' => [NULL, '0']], $before, $reply);
+		$this->assertSame(['weekday' => 5, 'hour' => 6, 'minute' => 0], $this->runtimeModel()['entries']['ipv4:A_f_v4']['override']);
+	}
+
+	public function testAnOverrideThatDoesNotChangeIsLeftWithItsStoredSlotWhateverItIs(): void
+	{
+		$this->arrange([self::V4 => [self::group('A', ['schedule_override' => 'on', 'schedule_weekday' => '5'])]]);
+		$before = $GLOBALS['config'];
+
+		$reply = $this->writeSchedule(static fn(array $s): array => $s);
+
+		$this->assertSame(['version' => 1, 'revision' => $this->read()['revision']], $reply);
+		$this->assertNothingWritten($before, 'a group that did not change');
+	}
+
+	// ----- a group name that three types hold -----
+
+	/** @return array<string, array{0: string, 1: string}> */
+	public static function families(): array
+	{
+		return ['ipv4' => ['ipv4', self::V4], 'ipv6' => ['ipv6', self::V6], 'dnsbl' => ['dnsbl', self::DNSBL]];
+	}
+
+	#[DataProvider('families')]
+	public function testAGroupNameThatAllThreeTypesHoldIsPatchedInTheTypeItsIdNames(string $type, string $path): void
+	{
+		$this->arrange([self::V4 => [self::group('X')], self::V6 => [self::group('X')], self::DNSBL => [self::group('X', ['action' => 'unbound'])]]);
+		$before = $GLOBALS['config'];
+		$this->assertSame(['ipv4/X', 'ipv6/X', 'dnsbl/X'], array_column($this->read()['settings']['schedule']['groups'], 'id'));
+
+		$reply = $this->writeSchedule(static function (array $s) use ($type): array {
+			foreach ($s['groups'] as $i => $group) {
+				if ($group['id'] === "{$type}/X") {
+					$s['groups'][$i] = ['id' => "{$type}/X", 'override' => TRUE, 'weekday' => 2, 'hour' => 3, 'minute' => 15];
+				}
+			}
+			return $s;
+		});
+
+		$this->assertWrittenOnly([
+			"{$path}/0/schedule_override" => ['', 'on'], "{$path}/0/schedule_weekday" => [NULL, '2'],
+			"{$path}/0/schedule_hour" => [NULL, '3'], "{$path}/0/schedule_minute" => [NULL, '15'],
+		], $before, $reply);
+	}
+
+	// ----- what the read normalizes -----
+
+	/** @return array<string, array{0: ?string, 1: bool}> blacklist_enable as stored => what the runtime model makes of it */
+	public static function enableTokens(): array
+	{
+		return ['Enable' => ['Enable', TRUE], 'a token other than Disable' => ['on', TRUE], 'a case variant of Disable' => ['disable', TRUE],
+			'Disable' => ['Disable', FALSE], 'empty' => ['', FALSE], 'absent' => [NULL, FALSE], 'PHP-empty zero' => ['0', FALSE]];
+	}
+
+	private static function blacklist(?string $enable): array
+	{
+		return ($enable === NULL ? [] : ['blacklist_enable' => $enable]) + ['blacklist_freq' => 'EveryDay', 'blacklist_selected' => 'ut1',
+			'item' => [['xml' => 'ut1', 'title' => 'UT1', 'feed' => 'https://example.org/ut1', 'selected' => 'adult']]];
+	}
+
+	#[DataProvider('enableTokens')]
+	public function testCategoryUpdatesReadAsTheRuntimeModelTakesBlacklistEnable(?string $token, bool $on): void
+	{
+		$this->arrange([self::BLACKLIST => self::blacklist($token)]);
+
+		$this->assertSame($on, $this->read()['settings']['schedule']['categoryUpdates']);
+		$this->assertSame($on, $this->runtimeModel()['entries']['extra:bl']['enabled'], 'the runtime model enables the Blacklist job exactly then');
+	}
+
+	public function testCategoryUpdatesTurnedOnAreStoredAsEnableAndOffAsDisable(): void
+	{
+		$this->arrange([self::BLACKLIST => self::blacklist('Disable')]);
+		$before = $GLOBALS['config'];
+		$reply = $this->writeSchedule(static function (array $s): array {
+			$s['categoryUpdates'] = TRUE;
+			return $s;
+		});
+		$this->assertWrittenOnly([self::BLACKLIST . '/blacklist_enable' => ['Disable', 'Enable']], $before, $reply);
+
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+		unlink("{$this->dir}/pending");
+		$before = $GLOBALS['config'];
+		$reply = $this->writeSchedule(static function (array $s): array {
+			$s['categoryUpdates'] = FALSE;
+			return $s;
+		});
+		$this->assertWrittenOnly([self::BLACKLIST . '/blacklist_enable' => ['Enable', 'Disable']], $before, $reply);
+	}
+
+	public function testABlacklistEnabledByAnotherTokenStaysAsItIsUntilCoreTurnsItOff(): void
+	{
+		$this->arrange([self::BLACKLIST => self::blacklist('on')]);
+		$before = $GLOBALS['config'];
+		$this->writeSchedule(static fn(array $s): array => $s);
+		$this->assertNothingWritten($before, 'the token on, which the model reads as enabled and Core reads as true');
+
+		$reply = $this->writeSchedule(static function (array $s): array {
+			$s['categoryUpdates'] = FALSE;
+			return $s;
+		});
+		$this->assertWrittenOnly([self::BLACKLIST . '/blacklist_enable' => ['on', 'Disable']], $before, $reply);
+	}
+
+	public function testABlacklistWithNoEnableKeyIsOffAndTurnedOnIsStoredAsEnable(): void
+	{
+		$this->arrange([self::BLACKLIST => self::blacklist(NULL)]);
+		$before = $GLOBALS['config'];
+
+		$reply = $this->writeSchedule(static function (array $s): array {
+			$s['categoryUpdates'] = TRUE;
+			return $s;
+		});
+
+		$this->assertWrittenOnly([self::BLACKLIST . '/blacklist_enable' => [NULL, 'Enable']], $before, $reply);
+	}
+
+	public function testAnOddOverrideTokenReadsAsNoOverrideAndADailyFrequencyAsNever(): void
+	{
+		$this->arrange([self::V4 => [self::group('A', ['schedule_override' => 'yes', 'schedule_weekday' => '1', 'schedule_hour' => '1', 'schedule_minute' => '0'])],
+			self::BLACKLIST => array_merge(self::blacklist('Enable'), ['blacklist_freq' => 'Daily'])]);
+
+		$schedule = $this->read()['settings']['schedule'];
+
+		$this->assertSame(['id' => 'ipv4/A', 'override' => FALSE, 'weekday' => 1, 'hour' => 1, 'minute' => 0], $schedule['groups'][0]);
+		$this->assertSame('Never', $schedule['categoryFrequency']);
+	}
+
+	// ----- the functions work from the current schedule they are given -----
+
+	public function testTheFaultsKnowTheGroupsAndProvidersOfTheCurrentScheduleTheyAreGiven(): void
+	{
+		$current = $this->read()['settings']['schedule'];
+		$value = $current;
+		$value['groups'][] = ['id' => 'ipv4/OnlyInCurrent', 'override' => FALSE, 'weekday' => 7, 'hour' => 0, 'minute' => 0];
+		$value['categoryProviders'][] = ['id' => 'only', 'selected' => FALSE, 'categories' => ''];
+		$known = $current;
+		$known['groups'][] = $value['groups'][4];
+		$known['categoryProviders'][] = $value['categoryProviders'][3];
+
+		$this->assertSame([], pfb_core_schedule_faults($value, $known), 'the ids of the given current schedule are the ones that exist');
+		$this->assertSame(['schedule.groups[4].id', 'schedule.categoryProviders[3].id'], array_column(pfb_core_schedule_faults($value, $current), 'field'),
+			'an id the given current schedule lacks is refused');
+	}
+
+	public function testTheMergeDiffsAgainstTheCurrentScheduleItIsGiven(): void
+	{
+		$current = $this->read()['settings']['schedule'];
+		$wanted = $current;
+		$current['weekday'] = 5;	// not what config.xml holds (3): the merge works from what it is given
+		$sections = [];
+
+		$keys = pfb_core_schedule_merge($wanted, $current, $sections);
+
+		$this->assertSame(['gen/pfb_schedule_weekday' => '3'], $keys);
+		$this->assertSame([], $sections);
 	}
 
 	public function testAWriteWithoutTheScheduleProjectionIsRefused(): void

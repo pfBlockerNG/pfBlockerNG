@@ -5099,15 +5099,16 @@ function pfb_core_schedule_group_slots(mixed $section): array {
  */
 function pfb_core_schedule_providers(array $blacklist): array {
 	$csv = $blacklist['blacklist_selected'] ?? NULL;
-	$chosen = is_string($csv) && $csv !== '' ? explode(',', $csv) : [];
-	$providers = [];
+	$chosen = is_string($csv) && $csv !== '' ? array_flip(explode(',', $csv)) : [];
+	$providers = $ids = [];
 	foreach (is_array($blacklist['item'] ?? NULL) ? $blacklist['item'] : [] as $n => $item) {
 		$id = is_array($item) ? ($item['xml'] ?? NULL) : NULL;
 		$categories = is_array($item) ? ($item['selected'] ?? '') : NULL;
 		if (pfb_blacklist_identity_valid($id) && !str_contains($id, ',') && ($item['title'] ?? NULL) !== 'Shallalist' && is_string($item['feed'] ?? NULL)
 		    && $item['feed'] !== '' && is_string($categories) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $categories) === 1
-		    && !in_array($id, array_column($providers, 'id'), TRUE)) {
-			$providers[$n] = ['id' => $id, 'selected' => in_array($id, $chosen, TRUE), 'categories' => $categories];
+		    && !isset($ids[$id])) {
+			$providers[$n] = ['id' => $id, 'selected' => isset($chosen[$id]), 'categories' => $categories];
+			$ids[$id] = TRUE;
 		}
 	}
 	return $providers;
@@ -5115,8 +5116,9 @@ function pfb_core_schedule_providers(array $blacklist): array {
 
 /**
  * Core's native `schedule` (issue #3941, docs/misc/core-api-protocol.md), from config.xml: the scheduler's inputs, each as
- * pfb_schedule_runtime_config() reads it, a slot that is not valid as its default (Sunday 00:00). `groups` are the ones the feed
- * projections project, in their order, so the groups of $feeds (the feed projections: read here when not given) and nothing else.
+ * pfb_schedule_runtime_config() reads it (categoryUpdates: a blacklist_enable that is not empty and not Disable), a slot that is not
+ * valid as its default (Sunday 00:00). `groups` are the ones the feed projections project, in their order, so the groups of $feeds
+ * (the feed projections: read here when not given) and nothing else.
  *
  * @param ?array<string, array<string, mixed>> $feeds
  * @return array<string, mixed>
@@ -5142,7 +5144,7 @@ function pfb_core_schedule_settings(?array $feeds = NULL): array {
 		'hour'              => pfb_core_schedule_token(PfbConfig::read('gen/pfb_schedule_hour'), 0, 23, 0),
 		'minute'            => pfb_core_schedule_token(PfbConfig::read('gen/pfb_schedule_minute'), 0, 45, 0, 15),
 		'groups'            => $groups,
-		'categoryUpdates'   => ($blacklist['blacklist_enable'] ?? NULL) === 'Enable',
+		'categoryUpdates'   => !empty($blacklist['blacklist_enable']) && $blacklist['blacklist_enable'] !== 'Disable',
 		'categoryFrequency' => in_array($blacklist['blacklist_freq'] ?? NULL, ['EveryDay', 'Weekly'], TRUE) ? $blacklist['blacklist_freq'] : 'Never',
 		'categoryProviders' => array_values(pfb_core_schedule_providers($blacklist)),
 	];
@@ -5150,11 +5152,12 @@ function pfb_core_schedule_settings(?array $feeds = NULL): array {
 
 /**
  * The faults of Core's value for `schedule` (issue #3941): exactly its fields within their rules, each group and provider once and one
- * config.xml holds (Core cannot create them here).
+ * $current (the schedule config.xml projects now) holds: Core cannot create them here.
  *
+ * @param array<string, mixed> $current
  * @return list<array{field: string, message: string}>
  */
-function pfb_core_schedule_faults(mixed $value): array {
+function pfb_core_schedule_faults(mixed $value, array $current): array {
 	$bool = static fn(mixed $v): ?string => is_bool($v) ? NULL : 'not a bool';
 	$int = static fn(int $min, int $max, int $step = 1): callable => static fn(mixed $v): ?string => is_int($v) && $v >= $min && $v <= $max && $v % $step === 0
 		? NULL : "not an integer from {$min} to {$max}" . ($step > 1 ? ", a multiple of {$step}" : '');
@@ -5172,9 +5175,8 @@ function pfb_core_schedule_faults(mixed $value): array {
 		'categoryProviders' => ['id' => $id('/^[A-Za-z0-9_-]+$/D'), 'selected' => $bool,
 			'categories' => static fn(mixed $v): ?string => is_string($v) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $v) === 1 ? NULL : 'holds a character outside A-Z a-z 0-9 _ , . -'],
 	];
-	$current = pfb_core_schedule_settings();
 	foreach ($items as $field => $fields) {
-		$known = array_column($current[$field], 'id');
+		$known = array_flip(array_column($current[$field], 'id'));
 		$seen = [];
 		foreach (is_array($value[$field] ?? NULL) && array_is_list($value[$field]) ? $value[$field] : [] as $i => $item) {
 			$prefix = "schedule.{$field}[{$i}]";
@@ -5185,7 +5187,7 @@ function pfb_core_schedule_faults(mixed $value): array {
 			}
 			if (isset($seen[$item['id']])) {
 				$faults[] = ['field' => "{$prefix}.id", 'message' => 'not unique'];
-			} elseif ($fields['id']($item['id']) === NULL && !in_array($item['id'], $known, TRUE)) {
+			} elseif ($fields['id']($item['id']) === NULL && !isset($known[$item['id']])) {
 				$faults[] = ['field' => "{$prefix}.id", 'message' => 'config.xml holds no such ' . ($field === 'groups' ? 'group' : 'provider') . ': Core cannot create one here'];
 			}
 			$seen[$item['id']] = TRUE;
@@ -5195,21 +5197,23 @@ function pfb_core_schedule_faults(mixed $value): array {
 }
 
 /**
- * Core's `schedule` merged into config.xml (issue #3941), what changed only: the General keys as registry key => stored value, which
- * the caller writes; every other changed value goes into $sections as config path => value, over what the feed merge put there (a
- * group it deleted is not patched). A group or provider Core leaves out of its list stays as it is.
+ * Core's `schedule` merged into config.xml (issue #3941), what differs from $current (the schedule config.xml projects now) only: the
+ * General keys as registry key => stored value, which the caller writes; every other changed value goes into $sections as config
+ * path => value, over what the feed merge put there (a group it deleted is not patched). A group or provider Core leaves out of its
+ * list stays as it is. A group whose override is on gets all three slot keys when any of its fields changes: the runtime model
+ * rejects a partial slot.
  *
  * @param array<string, mixed> $wanted a value pfb_core_schedule_faults() accepts
+ * @param array<string, mixed> $current
  * @param array<string, mixed> $sections config path => the value to set
  * @return array<string, string>
  */
-function pfb_core_schedule_merge(array $wanted, array &$sections): array {
-	$current = pfb_core_schedule_settings();
-	$stored = static fn(mixed $value): string => is_bool($value) ? ($value ? 'on' : '') : (string) $value;
+function pfb_core_schedule_merge(array $wanted, array $current, array &$sections): array {
+	$cell = static fn(mixed $value): string => is_bool($value) ? ($value ? 'on' : '') : (string) $value;
 	$keys = [];
 	foreach (['scheduledUpdates' => 'pfb_scheduled_feed_updates', 'weekday' => 'pfb_schedule_weekday', 'hour' => 'pfb_schedule_hour', 'minute' => 'pfb_schedule_minute'] as $field => $key) {
 		if ($wanted[$field] !== $current[$field]) {
-			$keys["gen/{$key}"] = $stored($wanted[$field]);
+			$keys["gen/{$key}"] = $cell($wanted[$field]);
 		}
 	}
 	$currentGroups = array_column($current['groups'], NULL, 'id');
@@ -5222,11 +5226,11 @@ function pfb_core_schedule_merge(array $wanted, array &$sections): array {
 		foreach ($wanted['groups'] as $group) {
 			$now = $currentGroups[$group['id']] ?? NULL;
 			$n = $now !== NULL && str_starts_with($group['id'], $prefix) ? ($at[substr($group['id'], strlen($prefix))] ?? NULL) : NULL;
-			foreach ($n === NULL ? [] : ['override' => 'schedule_override', 'weekday' => 'schedule_weekday', 'hour' => 'schedule_hour', 'minute' => 'schedule_minute'] as $field => $key) {
-				if ($group[$field] !== $now[$field]) {
-					$groups[$n][$key] = $stored($group[$field]);
-					$patched = TRUE;
-				}
+			$keysOf = ['override' => 'schedule_override', 'weekday' => 'schedule_weekday', 'hour' => 'schedule_hour', 'minute' => 'schedule_minute'];
+			$changed = $n === NULL ? [] : array_filter(array_keys($keysOf), static fn(string $field): bool => $group[$field] !== $now[$field]);
+			foreach ($changed === [] || !$group['override'] ? $changed : array_unique([...$changed, 'weekday', 'hour', 'minute']) as $field) {
+				$groups[$n][$keysOf[$field]] = $cell($group[$field]);
+				$patched = TRUE;
 			}
 		}
 		if ($patched) {
@@ -5240,11 +5244,11 @@ function pfb_core_schedule_merge(array $wanted, array &$sections): array {
 	if ($wanted['categoryFrequency'] !== $current['categoryFrequency']) {
 		$sections["{$blacklist}/blacklist_freq"] = $wanted['categoryFrequency'];
 	}
-	$stored = PfbConfig::readSection($blacklist);
-	$items = is_array($stored['item'] ?? NULL) ? $stored['item'] : [];
-	$providers = pfb_core_schedule_providers($stored);
+	$list = PfbConfig::readSection($blacklist);
+	$items = is_array($list['item'] ?? NULL) ? $list['item'] : [];
+	$providers = pfb_core_schedule_providers($list);
 	$at = array_combine(array_column($providers, 'id'), array_keys($providers));
-	$csv = is_string($stored['blacklist_selected'] ?? NULL) && $stored['blacklist_selected'] !== '' ? explode(',', $stored['blacklist_selected']) : [];
+	$csv = is_string($list['blacklist_selected'] ?? NULL) && $list['blacklist_selected'] !== '' ? explode(',', $list['blacklist_selected']) : [];
 	$was = $csv;
 	$categories = FALSE;
 	foreach ($wanted['categoryProviders'] as $provider) {
@@ -5368,7 +5372,7 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 	foreach (array_keys(PFB_CORE_FEED_SECTIONS) as $projection) {
 		$faults = array_merge($faults, pfb_core_feed_projection_faults($settings[$projection], $projection, $interfaces ?? 'pfb_core_interface_addresses'));
 	}
-	$faults = array_merge($faults, pfb_core_schedule_faults($settings['schedule']));
+	$faults = array_merge($faults, pfb_core_schedule_faults($settings['schedule'], pfb_core_schedule_settings()));
 	return $faults === [] ? NULL : pfb_core_settings_refusal('invalid_argument', 'the settings are not valid', $faults);
 }
 
@@ -5404,7 +5408,8 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		return pfb_core_settings_refusal('unavailable', 'the pfSense configuration is locked by another process or could not be read');
 	}
 	try {
-		if (pfb_core_settings_revision(pfb_core_settings($interfaces)) !== $request['expectedRevision']) {
+		$now = pfb_core_settings($interfaces);
+		if (pfb_core_settings_revision($now) !== $request['expectedRevision']) {
 			return pfb_core_settings_refusal('conflict', 'the configuration is not at expectedRevision');
 		}
 		$current = pfb_core_dns_settings();
@@ -5416,7 +5421,7 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 				$sections["installedpackages/{$section}/config"] = $merged;
 			}
 		}
-		$schedule = pfb_core_schedule_merge($request['settings']['schedule'], $sections);
+		$schedule = pfb_core_schedule_merge($request['settings']['schedule'], $now['schedule'], $sections);
 		if ($changed === [] && $sections === [] && $schedule === []) {
 			return ['version' => 1, 'revision' => $request['expectedRevision']];
 		}

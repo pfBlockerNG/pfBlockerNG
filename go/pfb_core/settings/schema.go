@@ -24,7 +24,8 @@ const (
 // Field is one setting. A secret is write-only: a read shows only whether it is set. Requires names a bool field of the
 // same projection: while that one is false, this bool is held false. A string matches Pattern (when set) and is none of
 // Reserved. A list's items are objects of the fields Items, its Key field unique and non-empty across them; Check and
-// CheckList (not published) refuse an item whose fields, or a list whose items, do not hold together.
+// CheckList (not published) refuse an item whose fields, or a list whose items, do not hold together. Check also refuses a
+// scalar field's decoded value, which it gets as {Name: value}.
 type Field struct {
 	Name     string   `json:"name"`
 	Type     Type     `json:"type"`

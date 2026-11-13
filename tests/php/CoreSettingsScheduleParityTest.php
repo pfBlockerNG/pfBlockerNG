@@ -85,7 +85,8 @@ final class CoreSettingsScheduleParityTest extends TestCase
 		$this->assertSame(array_values(array_unique($ids)), $ids, 'a case id appears once');
 		foreach (['defaults', 'scheduled-off', 'default-slot', 'override-on', 'override-on-absent-slot', 'override-on-invalid-slot', 'override-off-stored-slot',
 			'three-families-in-order', 'groups-that-do-not-project', 'blacklist-disabled', 'blacklist-weekly', 'blacklist-selected-without-categories',
-			'blacklist-provider-excluded', 'blacklist-provider-not-selected', 'blacklist-never'] as $id) {
+			'blacklist-provider-excluded', 'blacklist-provider-not-selected', 'blacklist-never', 'feed-states', 'override-token-not-on',
+			'blacklist-frequency-daily', 'blacklist-enable-on-token', 'blacklist-enable-lowercase-disable', 'blacklist-enable-zero-token'] as $id) {
 			$this->assertContains($id, $ids, "the coverage matrix row {$id}");
 		}
 		$refused = array_column($doc['refused'], 'id');

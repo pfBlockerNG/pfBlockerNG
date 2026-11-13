@@ -169,3 +169,22 @@ func TestModelFromSettingsRefusesWhatTheStoreNeverServes(t *testing.T) {
 		t.Error("ModelFromSettings(nil, nil) accepted it")
 	}
 }
+
+// Which fault ModelFromSettings reports does not depend on map order: with several bad slot fields it names the first of
+// weekday, hour and minute, so a log line and a test see the same one every time.
+func TestModelFromSettingsNamesTheFirstBadSlotFieldEveryTime(t *testing.T) {
+	feeds := map[string]map[string]any{"feeds/ipv4": {"groups": []any{}}, "feeds/ipv6": {"groups": []any{}}, "feeds/dnsbl": {"groups": []any{}}}
+	for i := 0; i < 50; i++ {
+		general := map[string]any{"scheduledUpdates": true, "weekday": "x", "hour": "y", "minute": "z", "groups": []any{},
+			"categoryUpdates": false, "categoryFrequency": "Never", "categoryProviders": []any{}}
+		if _, err := ModelFromSettings(general, feeds); err == nil || err.Error() != "schedule: weekday is not a whole number" {
+			t.Fatalf("run %d: the default slot's fault = %v, want the weekday's", i, err)
+		}
+		group := map[string]any{"id": "ipv4/A", "override": true, "weekday": "x", "hour": "y", "minute": "z"}
+		sched := map[string]any{"scheduledUpdates": true, "weekday": 7.0, "hour": 0.0, "minute": 0.0, "groups": []any{group},
+			"categoryUpdates": false, "categoryFrequency": "Never", "categoryProviders": []any{}}
+		if _, err := ModelFromSettings(sched, feeds); err == nil || err.Error() != "schedule: groups[0].weekday is not a whole number" {
+			t.Fatalf("run %d: the group slot's fault = %v, want the weekday's", i, err)
+		}
+	}
+}

@@ -9,6 +9,9 @@ import (
 // feedStates are the feeds projection's states as the config.xml rows spell them.
 var feedStates = map[string]string{"enabled": "Enabled", "disabled": "Disabled", "hold": "Hold", "flex": "Flex"}
 
+// slotFields are a slot's fields in the order a fault is reported; config.xml names them pfb_schedule_<f> (General) and schedule_<f> (a group).
+var slotFields = []string{"weekday", "hour", "minute"}
+
 // ModelFromSettings builds the scheduler's model from Core's settings instead of config.xml: sched is the value of settings/schedule
 // and feeds the values of settings/feeds/ipv4, settings/feeds/ipv6 and settings/feeds/dnsbl (keyed by that projection id), as
 // decoded JSON or as the settings store holds them (int64 or int integers). It is RuntimeModel over the same inputs the
@@ -27,12 +30,12 @@ func ModelFromSettings(sched map[string]any, feeds map[string]map[string]any) (M
 	if updates {
 		general["pfb_scheduled_feed_updates"] = "on"
 	}
-	for key, field := range map[string]string{"pfb_schedule_weekday": "weekday", "pfb_schedule_hour": "hour", "pfb_schedule_minute": "minute"} {
+	for _, field := range slotFields {
 		n, ok := intOf(sched[field])
 		if !ok {
 			return Model{}, fmt.Errorf("schedule: %s is not a whole number", field)
 		}
-		general[key] = strconv.Itoa(n)
+		general["pfb_schedule_"+field] = strconv.Itoa(n)
 	}
 	overrides, err := overridesOf(sched["groups"])
 	if err != nil {
@@ -83,12 +86,12 @@ func overridesOf(v any) (map[string]map[string]any, error) {
 			continue
 		}
 		slot := map[string]any{"schedule_override": "on"}
-		for key, field := range map[string]string{"schedule_weekday": "weekday", "schedule_hour": "hour", "schedule_minute": "minute"} {
+		for _, field := range slotFields {
 			n, ok := intOf(g[field])
 			if !ok {
 				return nil, fmt.Errorf("schedule: groups[%d].%s is not a whole number", i, field)
 			}
-			slot[key] = strconv.Itoa(n)
+			slot["schedule_"+field] = strconv.Itoa(n)
 		}
 		overrides[id] = slot
 	}
