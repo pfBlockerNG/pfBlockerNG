@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/schedule"
@@ -16,16 +18,42 @@ import (
 )
 
 // newUpdates builds Core's scheduler and its Update gate for --update-cmd: the program at path runs each Update (an empty
-// path: no scheduler, and both are nil). The scheduler's state and the Update's log live in stateDir.
-func newUpdates(path, stateDir string, st *settings.Store, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
+// path: no scheduler, and both are nil). The scheduler's state and the Update's log live in stateDir. The schedule is read in
+// the zone of the file zoneinfo names (--zoneinfo; empty: the process's local zone).
+func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
 	if path == "" {
 		return nil, nil
 	}
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
-		Loc: time.Local, Logf: logf})
+		Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
 	gate := update.New(filepath.Join(stateDir, "update.log"), (&update.Command{Path: path}).Run, sched.Done)
 	sched.Bind(gate.Start)
 	return sched, gate
+}
+
+// hostZone is the scheduler's zone for --zoneinfo path (nil without one): the time zone file at path, read at every call, so
+// that a change of the host's time zone is in effect at the next evaluation without a restart. A file that is missing or is not
+// a time zone is the process's local zone, said once per outage in the log and again when it breaks anew.
+func hostZone(path string, logf func(string, ...any)) func() *time.Location {
+	if path == "" {
+		return nil
+	}
+	var broken atomic.Bool
+	return func() *time.Location {
+		data, err := os.ReadFile(path)
+		var loc *time.Location
+		if err == nil {
+			loc, err = time.LoadLocationFromTZData("host", data)
+		}
+		if err != nil {
+			if broken.CompareAndSwap(false, true) {
+				logf("the time zone file %s cannot be used, the local zone is used: %v", path, err)
+			}
+			return time.Local
+		}
+		broken.Store(false)
+		return loc
+	}
 }
 
 // quarterTimer is the timer the quarter-hour loop waits on: nil is time.After, the real clock. Only a test sets it, to keep a

@@ -19,6 +19,7 @@ const (
 	protocolVersion = 1
 	maxResult       = 1 << 20 // the bytes of result the program may report
 	defaultCap      = 4 * time.Hour
+	deferredStatus  = 75 // EX_TEMPFAIL: the program chose not to run now (a lock held, the schedule switched off)
 )
 
 var killGrace = 5 * time.Second // how long the program's whole group has to end on TERM, and again after KILL, before Run goes on
@@ -36,7 +37,8 @@ type Command struct {
 func (c *Command) limit() time.Duration { return cmp.Or(c.Cap, defaultCap) }
 
 // Run returns the result the program reported, with the error of a failed run: a non-zero exit (the result still counts
-// when the program wrote a valid one), a kill, or a result that is not exactly one object of the shape above.
+// when the program wrote a valid one), a kill, or a result that is not exactly one object of the shape above. Exit status 75
+// is not a failure: Run returns ErrDeferred and no result, whatever the program wrote on fd 3.
 func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
@@ -101,11 +103,19 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	switch wasKilled := <-killed; {
 	case wasKilled:
 		err = fmt.Errorf("the update program was killed: %w", context.Cause(ctx))
+	case isDeferral(err):
+		return Result{}, fmt.Errorf("the update program deferred the Update (exit status %d): %w", deferredStatus, ErrDeferred)
 	case err != nil:
 		err = fmt.Errorf("the update program failed: %w", err)
 	}
 	res, resErr := readResult(fd3)
 	return res, cmp.Or(err, resErr)
+}
+
+// isDeferral reports whether err, from cmd.Wait, is the program's exit with status 75.
+func isDeferral(err error) bool {
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == deferredStatus
 }
 
 // scratch is a temp file in dir, with the func that closes and removes it.

@@ -21,6 +21,10 @@ const (
 var (
 	ErrRunning = errors.New("an Update is running")
 	ErrStopped = errors.New("Core is stopping")
+
+	// ErrDeferred is what a RunFunc returns when the Update chose not to run now (Command.Run: the program's exit status 75): it
+	// is not a failure, and it reported nothing. The gate ends such an Update with the result "skipped".
+	ErrDeferred = errors.New("the Update was deferred")
 )
 
 // Request is what an Update runs; the JSON is the program's stdin (with "version":1 added).
@@ -58,7 +62,7 @@ type Status struct {
 	Force      string `json:"force,omitempty"`
 	StartedAt  int64  `json:"startedAt"`
 	FinishedAt *int64 `json:"finishedAt,omitempty"`
-	Result     string `json:"result,omitempty"` // "success" when run returned nil, else "failed"
+	Result     string `json:"result,omitempty"` // "success" when run returned nil, "skipped" for ErrDeferred, else "failed"
 }
 
 // Gate admits one Update at a time.
@@ -118,7 +122,10 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Reque
 		g.done(req, res, err)
 	}
 	outcome := "success"
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrDeferred):
+		outcome = "skipped"
+	case err != nil:
 		outcome = "failed"
 	}
 	g.mu.Lock()
