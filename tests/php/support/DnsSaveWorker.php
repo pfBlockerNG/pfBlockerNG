@@ -14,8 +14,8 @@ declare(strict_types=1);
  * a plain save changes one setting of each part. The case (argv[3], JSON) shapes one save: `stored` maps a registry key to the value
  * config.xml holds before the save (`{"dns/pfb_dns": "on"}`), `post` maps a field to the value posted (a NULL removes the field, as
  * a browser omits an unticked box). The page's option lists are the ones a page load builds for this post.
- * `core.socket` is the Core API socket the page's validation and push talk to (default: none listens, so Core is down), `core.pushed`
- * the push record an earlier push left; the result's "pushFailed" is the push-failure record the save left (the reason), or NULL.
+ * `core.socket` is the Core API socket the page's validation and notice talk to (default: none listens, so Core is down); the result's
+ * "settingsFailed" is the record of a failed notice to Core the save left (the reason), or NULL.
  *
  * Scenarios: `interleave` (an apply's Resolver move lands on disk after this request started), `lock_taken` (another
  * process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (config.xml cannot be written),
@@ -56,7 +56,7 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$before
 		'returned'      => $returned,
 		'writes'        => $GLOBALS['pfb_test_write_config_calls'] ?? [],
 		'unboundCalls'  => count($GLOBALS['pfb_test_unbound_configure_calls'] ?? []),
-		'pushFailed'    => ($failed = @file_get_contents($GLOBALS['pfb']['core_push_failed'] ?? '')) === FALSE ? NULL : $failed,
+		'settingsFailed' => ($failed = @file_get_contents($GLOBALS['pfb']['core_settings_failed'] ?? '')) === FALSE ? NULL : $failed,
 		'posted'        => $handedPost,
 	], JSON_THROW_ON_ERROR));
 });
@@ -112,13 +112,9 @@ global $pfb;
 pfb_global();
 $tmp = $GLOBALS['pfb_test_tmp'];
 $pfb['pending_marker'] = "{$tmp}/pending";
-// Core: the case's socket, else one nothing listens on (Core down); its push records stay in the sandbox either way
+// Core: the case's socket, else one nothing listens on (Core down); the failure record stays in the sandbox either way
 $pfb['core_socket'] = $case['core']['socket'] ?? "{$tmp}/core.sock";
-$pfb['core_pushed'] = "{$tmp}/core_pushed";
-$pfb['core_push_failed'] = "{$tmp}/core_push_failed";
-if (isset($case['core']['pushed'])) {
-	file_put_contents($pfb['core_pushed'], json_encode($case['core']['pushed']));	// the record of an earlier push, as pfb_core_settings_push() keeps it
-}
+$pfb['core_settings_failed'] = "{$tmp}/core_settings_failed";
 // The page renders the stored preference before the save: a failed save re-displays what the form posted, not this.
 $pconfig['pfb_py_reply'] = PfbConfig::read('dnsbl/pfb_py_reply');
 // The page's option lists, as a page load builds them

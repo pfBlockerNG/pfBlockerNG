@@ -130,8 +130,9 @@ final class MetricsWriteTest extends TestCase
 			]);
 		}
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip', 'on');
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+			return TRUE;
 		}));
 		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_metrics_client_ip'));
 		foreach (['dnsbl_info' => 'dns_metric_blocks', 'dnsbl_resolver' => 'dns_metric_queries'] as $path => $table) {
@@ -154,8 +155,9 @@ final class MetricsWriteTest extends TestCase
 		file_put_contents($GLOBALS['pfb']['dnsbl_resolver'], 'corrupt');
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_client_ip', 'on');
 		$saved = FALSE;
-		$error = pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): void {
+		$error = pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): bool {
 			$saved = TRUE;
+			return TRUE;
 		});
 		$this->assertStringContainsString('still enabled', $error);
 		$this->assertFalse($saved);
@@ -165,8 +167,9 @@ final class MetricsWriteTest extends TestCase
 		$this->assertSame('', $db->querySingle('SELECT client_ip FROM dns_metric_blocks'));
 		$db->close();
 		unlink($GLOBALS['pfb']['dnsbl_resolver']);
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+			return TRUE;
 		}));
 	}
 
@@ -174,8 +177,9 @@ final class MetricsWriteTest extends TestCase
 	{
 		file_put_contents($GLOBALS['pfb']['dnsbl_info'], 'corrupt');
 		$saved = FALSE;
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function () use (&$saved): bool {
 			$saved = TRUE;
+			return TRUE;
 		}));
 		$this->assertTrue($saved);
 	}
@@ -221,12 +225,14 @@ final class MetricsWriteTest extends TestCase
 		$body = pfb_metrics_render($snapshot);
 		$this->assertStringContainsString('client_ip="198.51.100.1"', $body);
 		$this->assertTrue(pfb_metrics_publish($body, "{$this->root}/node", 10.0, $snapshot['client_policy_epochs']));
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+			return TRUE;
 		}, "{$this->root}/node"));
 		$this->assertFileDoesNotExist("{$this->root}/node/pfblockerng.prom");
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function (): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function (): bool {
 			PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+			return TRUE;
 		}, "{$this->root}/node"));
 		$this->assertFalse(pfb_metrics_publish($body, "{$this->root}/node", 10.0, $snapshot['client_policy_epochs']));
 		$this->assertTrue(pfb_metrics_write("{$this->root}/node"));
@@ -243,7 +249,7 @@ final class MetricsWriteTest extends TestCase
 			"CREATE TRIGGER refuse BEFORE INSERT ON dns_metric_blocks BEGIN SELECT RAISE(ABORT,'refuse'); END;",
 		]);
 		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
-		$this->assertStringContainsString('refuse', pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+		$this->assertStringContainsString('refuse', pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 			self::fail('failed privacy transaction must not persist');
 		}));
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
@@ -266,7 +272,7 @@ final class MetricsWriteTest extends TestCase
 		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
 		$db->exec('BEGIN IMMEDIATE');
 		try {
-			$error = pfb_metrics_client_save(PfbToggle::Off, static function (): void {
+			$error = pfb_metrics_client_save(PfbToggle::Off, static function (): bool {
 				self::fail('locked privacy transaction must not persist');
 			});
 			$this->assertStringContainsString('still enabled', $error);
@@ -276,6 +282,212 @@ final class MetricsWriteTest extends TestCase
 			$db->exec('ROLLBACK');
 			$db->close();
 		}
+	}
+
+	/** Turning client IPs on: config.xml says so before any database collects them, so a refused write leaves the databases alone. */
+	public function testTurningClientIpOnWritesTheConfigurationBeforeAnyDatabaseCollects(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		$atWrite = NULL;
+
+		$error = pfb_metrics_client_save(PfbToggle::On, function () use (&$atWrite): bool {
+			$atWrite = $this->clientIpPolicy();
+			return TRUE;
+		}, "{$this->root}/node");
+
+		$this->assertNull($error);
+		$this->assertSame(['client_ip' => 0, 'epoch' => str_repeat('a', 32)], $atWrite, 'no database collected client IPs before config.xml said so');
+		$this->assertSame(1, $this->clientIpPolicy()['client_ip']);
+	}
+
+	/** A database that stays locked after config.xml says on collects nothing: the save stands and the next Update applies it. */
+	public function testTurningClientIpOnWithALockedDatabaseSavesAndCollectsNothing(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$db->exec('BEGIN IMMEDIATE');
+		$written = FALSE;
+		try {
+			$error = pfb_metrics_client_save(PfbToggle::On, static function () use (&$written): bool {
+				$written = TRUE;
+				return TRUE;
+			}, "{$this->root}/node");
+		} finally {
+			$db->exec('ROLLBACK');
+			$db->close();
+		}
+
+		$this->assertNull($error, 'the configuration was written');
+		$this->assertTrue($written);
+		$this->assertSame(0, $this->clientIpPolicy()['client_ip'], 'the locked database still collects nothing');
+	}
+
+	/** Turning client IPs off, refused, with the way back locked: the message says what is true (collection off until the next Update). */
+	public function testARefusedOffWhoseWayBackFailsSaysCollectionStaysOff(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$holder = NULL;
+		try {
+			$error = (string) pfb_metrics_client_save(PfbToggle::Off, static function () use (&$holder): bool {
+				$holder = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+				$holder->exec('BEGIN IMMEDIATE');
+				return FALSE;
+			}, "{$this->root}/node");
+		} finally {
+			if ($holder !== NULL) {
+				$holder->exec('ROLLBACK');
+				$holder->close();
+			}
+		}
+
+		$this->assertStringContainsString('refused the configuration write', $error);
+		$this->assertStringNotContainsString('still enabled', $error, 'collection is off, whatever config.xml says');
+		$this->assertStringContainsString('next Update', $error);
+		$this->assertSame(0, $this->clientIpPolicy()['client_ip']);
+	}
+
+	/** Both metrics databases with a client-IP policy of $policy. */
+	private function bothPolicies(int $policy): void
+	{
+		foreach (['dnsbl_info', 'dnsbl_resolver'] as $key) {
+			$this->sqlite($GLOBALS['pfb'][$key], [
+				'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+				"INSERT INTO dns_metric_settings VALUES (0,{$policy},'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+			]);
+		}
+	}
+
+	private function policyOf(string $key): int
+	{
+		$db = new SQLite3($GLOBALS['pfb'][$key]);
+		$policy = $db->querySingle('SELECT client_ip FROM dns_metric_settings WHERE row=0');
+		$db->close();
+		return (int) $policy;
+	}
+
+	/** A refused Off whose way back turns the first database on but not the locked second: the message names what collects. */
+	public function testARefusedOffWhoseWayBackFailsOnTheSecondDatabaseNamesTheOneThatCollects(): void
+	{
+		$this->bothPolicies(1);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$holder = NULL;
+		try {
+			$error = (string) pfb_metrics_client_save(PfbToggle::Off, static function () use (&$holder): bool {
+				$holder = new SQLite3($GLOBALS['pfb']['dnsbl_resolver']);
+				$holder->exec('BEGIN IMMEDIATE');
+				return FALSE;
+			}, "{$this->root}/node");
+		} finally {
+			if ($holder !== NULL) {
+				$holder->exec('ROLLBACK');
+				$holder->close();
+			}
+		}
+
+		$this->assertSame([1, 0], [$this->policyOf('dnsbl_info'), $this->policyOf('dnsbl_resolver')], 'before-state of the claim below');
+		$this->assertStringContainsString('client-IP collection is permitted in: pfb_py_dnsbl.sqlite', $error);
+		$this->assertStringContainsString('next Update', $error);
+		$this->assertStringNotContainsString('stays off', $error);
+	}
+
+	/** On is saved, the second database stays locked: the log names the database that collects and the one the next Update fixes. */
+	public function testTurningClientIpOnWithTheSecondDatabaseLockedLogsWhatCollects(): void
+	{
+		$this->bothPolicies(0);
+		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::Off);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_resolver']);
+		$db->exec('BEGIN IMMEDIATE');
+		try {
+			$error = pfb_metrics_client_save(PfbToggle::On, static fn (): bool => TRUE, "{$this->root}/node");
+		} finally {
+			$db->exec('ROLLBACK');
+			$db->close();
+		}
+
+		$this->assertNull($error);
+		$this->assertSame([1, 0], [$this->policyOf('dnsbl_info'), $this->policyOf('dnsbl_resolver')], 'before-state of the claim below');
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringContainsString('client-IP collection is permitted in: pfb_py_dnsbl.sqlite', $log);
+		$this->assertStringContainsString('next Update', $log);
+	}
+
+	/** A policy that cannot be read (an exclusive lock on an enabled database) is reported as unknown, never as off. */
+	public function testAnUnreadablePolicyIsReportedAsUnknown(): void
+	{
+		$this->bothPolicies(1);
+		$GLOBALS['pfb']['sqlite_timeout'] = 1;
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_resolver']);
+		$db->exec('BEGIN EXCLUSIVE');
+		$db->exec('UPDATE dns_metric_settings SET epoch=epoch');
+		try {
+			$state = pfb_metrics_client_collecting();
+		} finally {
+			$db->exec('ROLLBACK');
+			$db->close();
+		}
+
+		$this->assertSame('client-IP collection is permitted in: pfb_py_dnsbl.sqlite; unknown (policy unreadable) in: pfb_py_resolver.sqlite', $state);
+	}
+
+	private function clientIpPolicy(): array
+	{
+		$db = new SQLite3($GLOBALS['pfb']['dnsbl_info']);
+		$row = $db->querySingle('SELECT client_ip, epoch FROM dns_metric_settings WHERE row=0', TRUE);
+		$db->close();
+		return $row;
+	}
+
+	/** @return array<string,array{PfbToggle,PfbToggle,int}> the stored preference, the one asked for, the database policy before */
+	public static function refusedClientIpWrites(): array
+	{
+		return ['off to on' => [PfbToggle::Off, PfbToggle::On, 0], 'on to off' => [PfbToggle::On, PfbToggle::Off, 1]];
+	}
+
+	#[DataProvider('refusedClientIpWrites')]
+	public function testARefusedConfigWriteLeavesTheClientIpPolicyAsItWasAndReportsNothingSaved(PfbToggle $stored, PfbToggle $desired, int $policy): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_blocks (qtype TEXT, client_ip TEXT, count INTEGER);',
+			"INSERT INTO dns_metric_blocks VALUES ('A','198.51.100.1',2);",
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,{$policy},'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+		PfbConfig::write('gen/pfb_metrics_client_ip', $stored);
+
+		$error = pfb_metrics_client_save($desired, static fn (): bool => FALSE, "{$this->root}/node");
+
+		$this->assertStringContainsString('refused the configuration write', (string) $error);
+		$this->assertSame($policy, $this->clientIpPolicy()['client_ip'], 'the database policy is what config.xml still says');
+		$this->assertSame($stored, PfbConfig::read('gen/pfb_metrics_client_ip'));
+	}
+
+	public function testARefusedConfigWriteWithNoClientIpChangeIsReportedAndLeavesTheDatabasesAlone(): void
+	{
+		$this->sqlite($GLOBALS['pfb']['dnsbl_info'], [
+			'CREATE TABLE dns_metric_settings (row INTEGER PRIMARY KEY, client_ip INTEGER NOT NULL, epoch TEXT NOT NULL);',
+			"INSERT INTO dns_metric_settings VALUES (0,0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');",
+		]);
+
+		$error = pfb_metrics_client_save(PfbToggle::Off, static fn (): bool => FALSE, "{$this->root}/node");
+
+		$this->assertStringContainsString('refused the configuration write', (string) $error);
+		$this->assertSame(['client_ip' => 0, 'epoch' => str_repeat('a', 32)], $this->clientIpPolicy(), 'nothing changed, so the epoch did not rotate');
 	}
 
 	/** @return array<string,array{string,string}> */
@@ -363,8 +575,9 @@ final class MetricsWriteTest extends TestCase
 	public function testMissingAccountingDoesNotGateExplicitPreferenceTransitions(): void
 	{
 		foreach ([PfbToggle::On, PfbToggle::Off] as $desired) {
-			$this->assertNull(pfb_metrics_client_save($desired, static function () use ($desired): void {
+			$this->assertNull(pfb_metrics_client_save($desired, static function () use ($desired): bool {
 				PfbConfig::write('gen/pfb_metrics_client_ip', $desired);
+				return TRUE;
 			}));
 			$this->assertSame($desired, PfbConfig::read('gen/pfb_metrics_client_ip'));
 			$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsbl_info']);
@@ -377,8 +590,9 @@ final class MetricsWriteTest extends TestCase
 		PfbConfig::write('gen/pfb_metrics_client_ip', PfbToggle::On);
 		file_put_contents($GLOBALS['pfb']['dnsbl_info'], 'corrupt');
 		$saved = FALSE;
-		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function () use (&$saved): void {
+		$this->assertNull(pfb_metrics_client_save(PfbToggle::On, static function () use (&$saved): bool {
 			$saved = TRUE;
+			return TRUE;
 		}));
 		$this->assertTrue($saved);
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_metrics_client_ip'));

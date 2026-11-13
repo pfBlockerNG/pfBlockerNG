@@ -46,8 +46,8 @@ func TestValidateAcceptsAValidChangeAndWritesNothing(t *testing.T) {
 		t.Errorf("Get after Validate:\n have %s\n want %s", jsonOf(t, after), jsonOf(t, before))
 	}
 	dns := projection(t, after, "dns")
-	if after.Revision != 1 || dns.Generation != 1 || dns.Value["control"] != false || dns.Value["decisionCacheMax"] != int64(500) {
-		t.Errorf("after Validate: revision %d, dns %+v, want revision 1, generation 1, control off, cap 500", after.Revision, dns)
+	if after.Revision != 1 || dns.Value["control"] != false || dns.Value["decisionCacheMax"] != int64(500) {
+		t.Errorf("after Validate: revision %d, dns %+v, want revision 1, control off, cap 500", after.Revision, dns)
 	}
 	if !bytes.Equal(storeBytes(t, dir), file) {
 		t.Error("Validate changed settings.json")
@@ -140,14 +140,15 @@ func TestValidateOnAnUninitializedStoreChecksAgainstTheDefaultsAndStaysUninitial
 
 func TestValidateOfARequiresRuleHoldsTheFieldAndWritesNothing(t *testing.T) {
 	st, dir := initialized(t)
+	before := projection(t, get(t, st), "dns")
 	file := storeBytes(t, dir)
 
 	if err := st.Validate(changes(t, `{"dns": {"controlLegacy": true}}`)); err != nil {
 		t.Fatalf("Validate = %v, want nil (controlLegacy is held false while control is off)", err)
 	}
 
-	if dns := projection(t, get(t, st), "dns"); dns.Value["controlLegacy"] != false || dns.Generation != 1 {
-		t.Errorf("dns after Validate = %+v, want controlLegacy false at generation 1", dns)
+	if dns := projection(t, get(t, st), "dns"); dns.Value["controlLegacy"] != false || dns.Generation != before.Generation {
+		t.Errorf("dns after Validate = %+v, want controlLegacy false at the unchanged generation %d", dns, before.Generation)
 	}
 	if !bytes.Equal(storeBytes(t, dir), file) {
 		t.Error("Validate changed settings.json")

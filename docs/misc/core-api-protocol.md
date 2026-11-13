@@ -1,7 +1,7 @@
 # Core API protocol
 
 Scope: the HTTP+JSON API of the pfBlockerNG Core daemon (`go/pfb_core`, binary `pfb-core`, issue #3841; map #3813), the
-conventions every Core method follows, the settings methods, store and authority modes (issues #3842, #3913), who may
+conventions every Core method follows, the settings methods and backends (issues #3842, #3913, #3924), who may
 call it, and how the package runs it. Load when: adding a Core method or settings projection, calling Core from PHP or
 another local process, or changing `go/pfb_core`, `pfb_core_service()` or `pfb_core_call()`.
 
@@ -34,13 +34,14 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `InitializeSettings` | `requestId`, `settings` | `{"revision": 1, "projections": [...]}`: every projection |
 | `SaveSettings` | `requestId`, `expectedRevision`, `changes` | `{"revision", "projections": [...]}`: the projections whose value changed |
 | `ValidateSettings` | `changes` | `{}`, or the errors `SaveSettings` would give; changes nothing |
+| `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
 
 ## Settings
 
-Core's native settings (issue #3842). On pfSense the Outpost is authoritative and pushes these settings (see
-[Settings authority](#settings-authority)).
+Core's native settings (issue #3842). Core holds them in memory, loaded from a [settings backend](#settings-backends)
+(issue #3924), and serves `GetSettings`, `GetSettingsSchema` and `ValidateSettings` from memory.
 
 - **Schema.** A projection is a group of fields, published as the resource `settings/<id>`. A field has a `name`, a
   `type` (`bool`, `int`, `enum`, `string`) and a `default`. It may also have:
@@ -48,62 +49,79 @@ Core's native settings (issue #3842). On pfSense the Outpost is authoritative an
   - `min` / `max`;
   - `secret: true`;
   - `requires`: a bool field of the same projection; while that one is false, this bool is held false.
-- **Revision and generations.** The configuration *revision* is the optimistic lock: it is 1 after `InitializeSettings`
-  and advances on every accepted `SaveSettings`. A projection's *generation* is 1 after initialization and advances only
-  when its value changes.
+- **Revision and generations.** The configuration *revision* is the optimistic lock. It comes from the backend and is
+  compared only for equality. A projection's *generation* is derived from its value (53 bits of the SHA-256 of its
+  JSON): it is never stored, stays equal across Core restarts while the value is unchanged, and moves when it changes.
 - **`settings` / `changes`.** An object of projection id → field → value. JSON `null` resets a field to its default.
   `InitializeSettings` fills every field it is not given with its default.
 - **Validation.** The whole resulting configuration is checked before anything is written. Any error rejects it all:
   `invalid_argument`, with one field error per fault (`changes.dns.decisionCacheMax`, `changes.<unknown projection>`).
 - **Conflicts** (`conflict`):
-  - `InitializeSettings` on an initialized Core;
+  - `InitializeSettings` on an initialized Core (always, on the adapter backend);
   - `SaveSettings` before initialization;
-  - `SaveSettings` whose `expectedRevision` is not the current revision (a field error names `expectedRevision`). The
-    client reads again and reapplies its change.
+  - `SaveSettings` whose `expectedRevision` is not the current revision (a field error names `expectedRevision`), as
+    Core holds it or as the backend finds it when it writes. The client reads again and reapplies its change.
+- **Backend failure** (`unavailable`): the backend could not be read or written. Core keeps the values it last read.
 - **No run.** A save starts no run.
 - **Secrets are write-only.** A read shows a secret field as `{"present": true|false}`, never its value.
-- **Store.** One document, `settings.json`, in `--state-dir` (0600, in a 0700 directory). A save writes
-  `settings.json.tmp`, syncs it, renames it into place and syncs the directory, so a crash leaves the previous
-  revision readable. A store file Core cannot read stops the start; Core never comes up uninitialized over it.
-- **One Core per state directory.** Core holds an exclusive `flock` on `settings.lock` in `--state-dir` while it runs.
-  A second `pfb-core` on the same directory does not start: two writers would each accept a save at one revision.
-- **Package removal.** With Keep Settings off, the state directory is deleted once `pfb_core` is stopped
-  (`pfb_core_state_teardown()`). With it on, the directory stays for the reinstall.
-- **Schema growth.** A projection or field the store does not hold yet reads as its default; a new projection starts at
-  generation 1. A stored projection or field the schema no longer has stops the start: removing one needs a migration.
+- **One Core per state directory.** Core holds an exclusive `flock` on `core.lock` in `--state-dir` while it runs, with
+  either backend. A second `pfb-core` on the same directory does not start.
+- **Schema growth.** A projection or field the backend does not hold yet reads as its default. A projection or field
+  the schema no longer has stops the start (file backend) or fails the read (adapter): removing one needs a migration.
 - **Replay and restarts.** The `requestId` memory is the process's own. A retry after a restart gets `conflict` (the
   revision moved, or the settings are initialized) instead of the first result; the client then reads `GetSettings`.
 
-### Settings authority
+### Settings backends
 
-The settings have one authority, in one of two modes. Core has no mode flag: the same methods serve both, and the mode is
-the client's discipline. The *Outpost* is the client that joins Core to its host platform and holds that platform's own
-configuration.
+`settings.Backend` (`go/pfb_core/settings/backend.go`) reads the projections with a revision and writes a whole new
+configuration against an expected revision. Core reads it at start (a failed read stops the start; `daemon(8)` starts
+Core again) and on `SettingsChanged`, and writes through it on `InitializeSettings` and `SaveSettings`. Values flow only
+from the backend into Core's memory.
 
-- **Core-authoritative.** Core's store is the authority. A client changes settings with `SaveSettings` against the
-  revision it read, and reads again on `conflict`.
-- **Outpost-authoritative.** The Outpost's own configuration is the authority and Core's store holds a copy of its last
-  push. The Outpost is the only writer.
+| Deployment | Flag | Backend |
+|---|---|---|
+| Standalone Core | none | **File** (`FileBackend`): `settings.json` in `--state-dir` |
+| Outpost-authoritative (pfSense) | `--settings-backend-cmd PATH` | **Adapter** (`AdapterBackend`): the platform configuration, through the Outpost's command |
 
-Push contract (Outpost-authoritative):
+**File backend.** One document, `settings.json` (0600, in the 0700 state directory): `{"format": 1, "revision": N,
+"projections": {"<id>": {"values": {...}}}}`. The revision is 1 after `InitializeSettings` and advances on every accepted
+`SaveSettings`. A save writes `settings.json.tmp`, syncs it, renames it into place and syncs the directory, so a crash
+leaves the previous revision readable. A store file Core cannot read stops the start; Core never comes up uninitialized
+over it.
 
-1. The Outpost translates its stored settings to the native values of each projection.
-2. `GetSettings`. Uninitialized: `InitializeSettings` with those values, and the push is done.
-3. Otherwise, for each projection whose value differs, `SaveSettings` with `expectedRevision` set to the revision just read
-   and the whole projection value as `changes`. Nothing differs: nothing is sent.
+**Adapter backend.** Core holds no platform path or name: the command comes only from the flag. Each call runs the
+command once, writes one JSON request to its stdin and reads one JSON reply from its stdout (exit status 0). A read may
+take 10 s, a write 20 s; past it the command's whole process group is killed, and the group is killed when any call ends, so
+nothing the command started outlives the call. Calls run one at a time, so a call queued behind another can take the sum of
+both bounds. A write that timed out may still have been applied: the Outpost's next
+tick finds the revision moved and Core reads it. A reply
+over 1 MiB, a non-zero exit, a reply that is not exactly one JSON object of version 1, a revision of 0, or read values
+the schema refuses fail the call. The configuration always exists, so `InitializeSettings` is refused, and Core never
+writes `settings.json`.
 
-When to push:
+Protocol, version 1:
 
-- After every change the Outpost persists.
-- Right after Core starts, whatever the Outpost last pushed.
-- On a periodic tick. Change detection belongs to the Outpost, never to Core: it records what it last pushed (its
-  configuration's own change marker, compared by inequality, plus a hash of the projected values) only after Core accepts
-  the push. The hash decides: the tick pushes when it differs from the record, whatever the marker says, so a change to
-  unrelated settings sends nothing and two pushes that finish out of order are corrected. Core keeps no knowledge of the Outpost's
-  configuration. So a failed push, or a change made outside the Outpost's save path (a restore, a revert, a replicated
-  change), reaches Core by the next tick.
+| Request | Reply |
+|---|---|
+| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}}}` |
+| `{"version": 1, "op": "write", "expectedRevision": N, "settings": {"dns": {...every field}}}` | `{"version": 1, "revision": M}` |
 
-A push failure never blocks or undoes the Outpost's change: it is reported, and the next tick retries it.
+A refusal is `{"version": 1, "error": {"code", "message", "fieldErrors"}}`: `conflict` (the configuration is not at
+`expectedRevision`), `invalid_argument` (a malformed request or value; nothing written), `unavailable` (nothing was
+written: a lock stayed taken, the platform refused the write, ...). The adapter never calls Core while it serves Core.
+
+### SettingsChanged
+
+The Outpost's notice that its configuration may have changed. Core reads the backend again and answers what
+`GetSettings` answers for every projection. It takes no parameters and no `requestId`. A failed read is `unavailable`,
+and Core keeps the values it last read. The Outpost calls it:
+
+- after every `write_config()` of a save page that writes a Core-modelled setting;
+- on its periodic tick, when the revision its configuration projects differs from the one `GetSettings` reports. So a
+  failed notice, or a change made outside the save pages (a restore, a config history revert, an HA receive, a
+  migration), reaches Core by the next tick.
+
+A failed notice never blocks or undoes the Outpost's change: it is reported, and the next tick sends it again.
 
 Validation: before the Outpost persists a change, it calls [`ValidateSettings`](#validatesettings) with it. An
 `invalid_argument` blocks the change, with nothing persisted. When Core does not answer, the Outpost's own checks decide.
@@ -222,7 +240,8 @@ pfb-dns ticket decides it.
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
 | Socket | `/var/run/pfb_core/api.sock` |
-| State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): outside `/var`, so it survives a RAM-disk reboot |
+| State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): Core's data and its lock, never settings; outside `/var`, so it survives a RAM-disk reboot |
+| Settings backend | `/usr/local/pkg/pfblockerng/pfb_core_settings.sh` (`--settings-backend-cmd`): `config.xml` through PHP |
 
 - **Start** keeps a pfb_core supervisor that already runs. Otherwise it runs this machine's binary (picked by `uname -p`).
   A package without an executable `pfb-core` for this machine starts nothing and logs why. That is not a failure. An
@@ -231,7 +250,10 @@ pfb-dns ticket decides it.
   and its command line is pfb_core's, so a reused pid is never signalled. pfb-core finishes the requests in flight (up to
   3 s) and removes its socket.
 - **Package lifecycle.** The install and every upgrade regenerate the script and restart the service. pfSense starts it at
-  boot with the package's services. A removal stops it and deletes the script.
+  boot with the package's services. A removal stops it and deletes the script. Regenerating the script deletes
+  the #3842/#3913 leftovers: `settings.json`, `settings.json.tmp` and `settings.lock` in the state directory, and
+  `core_pushed` / `core_push_failed` in `/var/db/pfblockerng`. With Keep Settings off, a removal also deletes the state
+  directory once `pfb_core` is stopped (`pfb_core_state_teardown()`).
 - **Paths.** Core reads every path from a flag. It names no pfSense path and imports nothing but the standard library, its
   own packages, `golang.org/x/net` and `golang.org/x/text` (the feed parser's UTS #46 conversion), `golang.org/x/sys` (CPU
   feature detection for xxh128), all pinned in `go.mod` to the versions of `go/pfb_dns_gateway`, and
@@ -253,14 +275,16 @@ object, the error envelope included. When no HTTP reply came (Core down, socket 
 30 s), `status` is 0 and `error` says why. Pinned by `PfbCoreCallTest`; the rc script by `PfbCoreServiceTest`; the
 server by `go/pfb_core/*_test.go`.
 
-On pfSense the Outpost (PHP) is authoritative: `config.xml` holds the settings, and `pfb_core_settings_push()` pushes
-`settings/dns` to Core after a page save, at Core's start (the rc script runs the `core_push` verb once the socket
-exists) and on each tick. A push records config.xml's `revision/time` and the hash of what Core holds in
-`/var/db/pfblockerng/core_pushed`. The tick's push is unforced: values whose hash is the recorded one call nothing, whatever
-the time (pushes of one second can finish out of order), unless an earlier push failed (it then asks Core until one
-succeeds). A page save and the `core_push` verb push forced and always ask Core,
-so a second save within the same second is never skipped.
+On pfSense `config.xml` is Core's settings backend. The rc script starts Core with `--settings-backend-cmd
+/usr/local/pkg/pfblockerng/pfb_core_settings.sh`, which runs `pfblockerng.inc core_settings`: `pfb_core_settings_backend()`
+answers `read` with `pfb_core_dns_settings()` and writes under the DNS config lock (`pfb_dns_config_lock()`): it checks the
+revision, writes only the fields that differ, runs `write_config()` (so Config History, backups and HA sync cover the
+change), marks the changes pending for the next Update, and reports a refused `write_config()` as `unavailable`. A change
+of `metricsClientIp` goes through `pfb_metrics_client_save()`, as the General page's does. The revision is
+`pfb_core_settings_revision()`: 52 bits of the SHA-256 of the projected values.
 `pfb_core_settings_validate()` is the dry run a page calls after its own checks and before `write_config()`: only
-`invalid_argument` refuses the save, which then writes nothing; DNS > General, DNS > DNSBL and General are the pages. A
-failed push is logged once per outage and kept in `/var/db/pfblockerng/core_push_failed` until a push succeeds; DNS General
-shows it as a notice. Pinned by `CoreSettingsPushTest` and `CoreSettingsPageSavesTest`.
+`invalid_argument` refuses the save, which then writes nothing; DNS > General, DNS > DNSBL and General are the pages. After
+a written save they call `pfb_core_settings_changed(NULL, TRUE)` (`SettingsChanged`); the tick calls it unforced (compare,
+then notify). A save works while Core is down. A failed notice is logged once per outage and kept in
+`/var/db/pfblockerng/core_settings_failed` until one succeeds; DNS General shows it as a notice. Pinned by
+`CoreSettingsBackendTest`, `CoreSettingsChangedTest` and `CoreSettingsPageSavesTest`.

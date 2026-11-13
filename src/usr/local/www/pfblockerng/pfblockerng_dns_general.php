@@ -176,7 +176,7 @@ if ($_POST && isset($_POST['save'])) {
 			// saved, so the save is an input error and the form comes back as submitted. A written save whose Resolver VIP or
 			// advertisement write failed stays saved and pending: the next Update or save retries the apply.
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
-				pfb_core_settings_push(NULL, TRUE);	// outside the lock (a slow Core must not hold it); a failure never undoes the save
+				pfb_core_settings_changed(NULL, TRUE);	// outside the lock (a slow Core must not hold it); a failure never undoes the save
 				if ($pfb_applied) {
 					header('Location: /pfblockerng/pfblockerng_dns_general.php');
 					exit;
@@ -227,8 +227,8 @@ $tab_array[] = array(gettext('DNSBL Groups'), FALSE, '/pfblockerng/pfblockerng_c
 $tab_array[] = array(gettext('DNSBL Category'), FALSE, '/pfblockerng/pfblockerng_blacklist.php');
 $tab_array[] = array(gettext('DNSBL SafeSearch'), FALSE, '/pfblockerng/pfblockerng_safesearch.php');
 display_top_tabs($tab_array, TRUE);
-if (is_file($pfb['core_push_failed'])) {
-	print_info_box(sprintf(gettext('pfBlockerNG Core does not have the saved settings yet: %s. They are saved in the pfSense configuration; the next tick sends them again.'), htmlspecialchars((string) file_get_contents($pfb['core_push_failed']))), 'warning', FALSE);
+if (is_file($pfb['core_settings_failed'])) {
+	print_info_box(sprintf(gettext('pfBlockerNG Core has not read the saved settings yet: %s. They are saved in the pfSense configuration; the next tick tells Core again.'), htmlspecialchars((string) file_get_contents($pfb['core_settings_failed']))), 'warning', FALSE);
 }
 pfb_print_pending_changes_box();
 foreach (pfb_dns_proxy_ddr_warnings() as $pfb_ddr_warning) {

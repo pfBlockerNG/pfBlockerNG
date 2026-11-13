@@ -7,11 +7,11 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #3913: a Core reply of the wrong shape (a version-skewed or broken Core) is a failed push or a Core that cannot judge,
- * never a PHP error: the push runs first in every tick and after every page save, so a throw there would abort the tick or
+ * Issue #3913: a Core reply of the wrong shape (a version-skewed or broken Core) is a failed notice or a Core that cannot judge,
+ * never a PHP error: the tick notifies Core first and every page save after its write, so a throw there would abort the tick or
  * turn the save into an HTTP 500.
  */
-#[CoversFunction('pfb_core_settings_push')]
+#[CoversFunction('pfb_core_settings_changed')]
 #[CoversFunction('pfb_core_settings_validate')]
 final class CoreSettingsMalformedReplyTest extends TestCase
 {
@@ -26,15 +26,12 @@ final class CoreSettingsMalformedReplyTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_core_malformed_' . bin2hex(random_bytes(8));
 		$this->assertTrue(mkdir($this->dir, 0700));
 		$GLOBALS['config'] = [];
-		$GLOBALS['pfb']['core_push_failed'] = "{$this->dir}/core_push_failed";
-		$GLOBALS['pfb']['core_pushed'] = "{$this->dir}/core_pushed";
+		$GLOBALS['pfb']['core_settings_failed'] = "{$this->dir}/core_settings_failed";
 		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog'] = "{$this->dir}/error.log";
 		$GLOBALS['pfb']['runlog'] = '';
-		// The record and a pending failure exist, so the files the push reads and removes are there: any warning or notice
-		// left is the reply handling's, and fails the test
-		file_put_contents("{$this->dir}/core_pushed", '{}');
-		file_put_contents("{$this->dir}/core_push_failed", 'earlier');
+		// A pending failure exists, so the file the notice removes is there: any warning or notice left is the reply handling's
+		file_put_contents("{$this->dir}/core_settings_failed", 'earlier');
 		set_error_handler(static function (int $errno, string $errstr): never {
 			throw new ErrorException($errstr, 0, $errno);
 		});
@@ -48,32 +45,34 @@ final class CoreSettingsMalformedReplyTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
-	/** @return array<string, array{0: mixed}> GetSettings `projections` values a broken Core could send */
-	public static function brokenProjections(): array
+	/** @return array<string, array{0: array<string, mixed>}> GetSettings bodies a broken Core could send */
+	public static function brokenSettingsBodies(): array
 	{
 		return [
-			'projections not a list'   => ['nope'],
-			'a projection not a map'   => [['x']],
-			'value not a map'          => [[['resourceId' => 'settings/dns', 'generation' => 1, 'value' => 'x']]],
+			'no revision'         => [[]],
+			'revision as text'    => [['revision' => 'x']],
+			'revision a list'     => [['revision' => [1]]],
+			'revision null'       => [['revision' => NULL]],
+			'revision a float'    => [['revision' => 1.5]],
 		];
 	}
 
-	#[DataProvider('brokenProjections')]
-	public function testABrokenSettingsReplyIsAFailedPushNeverAnError(mixed $projections): void
+	/** @param array<string, mixed> $body */
+	#[DataProvider('brokenSettingsBodies')]
+	public function testABrokenGetSettingsReplyIsACoreThatDiffersNeverAnError(array $body): void
 	{
-		$saved = [];
-		$call = static function (string $method, array $params = []) use ($projections, &$saved): array {
+		$told = [];
+		$call = static function (string $method, array $params = []) use ($body, &$told): array {
 			if ($method === 'GetSettings') {
-				return ['status' => 200, 'body' => ['initialized' => TRUE, 'revision' => 3, 'projections' => $projections], 'error' => NULL];
+				return ['status' => 200, 'body' => $body, 'error' => NULL];
 			}
-			$saved[] = $method;
-			return ['status' => 200, 'body' => ['revision' => 4, 'projections' => []], 'error' => NULL];
+			$told[] = $method;
+			return ['status' => 200, 'body' => [], 'error' => NULL];
 		};
 
-		$reason = pfb_core_settings_push($call, TRUE);
+		$reason = pfb_core_settings_changed($call);
 
-		// Nothing Core holds could be read, so the values are sent again: Core ends up holding config.xml's values
-		$this->assertSame(['SaveSettings'], $saved, 'a reply with no readable settings/dns value is a Core that differs');
+		$this->assertSame(['SettingsChanged'], $told, 'a reply without a usable revision is a Core that differs: it is told');
 		$this->assertNull($reason);
 	}
 

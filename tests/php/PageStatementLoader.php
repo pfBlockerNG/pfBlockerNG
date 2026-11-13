@@ -73,3 +73,33 @@ function pfb_test_page_eval(string $code, array $vars): array
 		return $scope;
 	})($code, $vars);
 }
+
+/**
+ * The General page's save, from its metrics export gate to the verdict on the save, run over the doubles. The region ends inside two
+ * blocks (`if (!$input_errors)` and `if ($privacy_error !== NULL)`): they are closed here. Every field the region reads is posted
+ * blank unless $post says otherwise.
+ *
+ * @param array<string, string> $post
+ * @return array<string, mixed> the region's variables afterwards
+ */
+function pfb_test_general_save(array $post): array
+{
+	$page   = 'src/usr/local/www/pfblockerng/pfblockerng_general.php';
+	$region = pfb_test_page_region($page, '// Server-side gate: a crafted POST', '} elseif (!$pfb_core_errors) {');
+	preg_match_all("~\\\$_POST\\['([a-z0-9_]+)'\\]~", $region, $keys);
+	$log_suffixes = pfb_test_page_eval(pfb_test_page_statement($page, '/\$log_suffixes\s*=/'), [])['log_suffixes'];
+	$_POST        = array_fill_keys($keys[1], '');
+	foreach ($log_suffixes as $suffix) {
+		$_POST["log_max_{$suffix}"] = $_POST["log_max_days_{$suffix}"] = '';
+	}
+	$_POST = array_replace($_POST, $post);
+
+	return pfb_test_page_eval($region . "\n}\n}", [
+		'pfb'                      => ['gconfig' => ['enable_cb' => 'on']],
+		'input_errors'             => [],
+		'log_suffixes'             => $log_suffixes,
+		'schedule_values'          => array_fill_keys(['pfb_scheduled_feed_updates', 'pfb_schedule_weekday', 'pfb_schedule_hour', 'pfb_schedule_minute', 'pfb_quiet_hours'], ''),
+		'metrics_export_pkg'       => FALSE,
+		'metrics_export_stored_on' => FALSE,
+	]);
+}

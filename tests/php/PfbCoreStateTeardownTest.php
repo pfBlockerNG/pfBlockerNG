@@ -6,7 +6,7 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #3842: Core's state directory ($pfb['core_state'], the settings store with its secrets) follows Keep Settings on
+ * Issue #3842: Core's state directory ($pfb['core_state'], Core's data and lock; issue #3924: no settings) follows Keep Settings on
  * package removal: a keep-off removal deletes it once pfb_core is stopped; a keep-on removal leaves it for the reinstall.
  */
 #[CoversFunction('pfb_core_state_teardown')]

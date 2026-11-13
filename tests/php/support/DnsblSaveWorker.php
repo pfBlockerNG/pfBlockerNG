@@ -7,8 +7,8 @@ declare(strict_types=1);
  * page's validation, extracted from the shipped pfblockerng_dnsbl.php by its tokens) over the PHPUnit doubles, with
  * another request's writes interleaved at the instant the save re-reads config.xml. The page cannot be included whole:
  * its validation reads files under /usr/local/www on the appliance. argv: scenario name, result file, case (JSON, optional): `post`
- * maps a field to the value posted over the worker's defaults, `core.socket` is the Core API socket the page's validation and push
- * talk to (default: none listens, so Core is down), `core.pushed` the push record an earlier push left.
+ * maps a field to the value posted over the worker's defaults, `core.socket` is the Core API socket the page's validation and notice
+ * talk to (default: none listens, so Core is down).
  *
  * Scenarios: `interleave` (a pfB-DNS save of Off and a Resolver move land on disk after this request started),
  * `lock_taken` (another process holds the config lock), `read_fails` (the fresh read fails), `write_throws` (exception),
@@ -16,7 +16,7 @@ declare(strict_types=1);
  * stored Off, which the save leaves as it is); any other name saves with nothing interleaved.
  * The result holds disk config, the config before the save, lock events, input errors, pending marker presence, whether control
  * returned to render instead of exiting through the redirect, the submitted port rendered after a failure, the write_config()
- * descriptions ("writes") and the push-failure record the save left ("pushFailed": the reason, or NULL).
+ * descriptions ("writes") and the record of a failed notice to Core the save left ("settingsFailed": the reason, or NULL).
  */
 
 $workerArgv = $argv;
@@ -42,7 +42,7 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$before
 		'returned'      => $returned,
 		'postedPort'    => $pconfig['pfb_dnsport'] ?? NULL,
 		'writes'        => $GLOBALS['pfb_test_write_config_calls'] ?? [],
-		'pushFailed'    => ($failed = @file_get_contents($GLOBALS['pfb']['core_push_failed'] ?? '')) === FALSE ? NULL : $failed,
+		'settingsFailed' => ($failed = @file_get_contents($GLOBALS['pfb']['core_settings_failed'] ?? '')) === FALSE ? NULL : $failed,
 	], JSON_THROW_ON_ERROR));
 });
 
@@ -112,13 +112,9 @@ pfb_global();
 $tmp = $GLOBALS['pfb_test_tmp'];
 $pfb['pending_marker'] = "{$tmp}/pending";
 $pfb['dconfig'] = PfbConfig::readSection($dnsbl);	// the page's first statement: this request's copy, pfb_py_reply still on
-// Core: the case's socket, else one nothing listens on (Core down); its push records stay in the sandbox either way
+// Core: the case's socket, else one nothing listens on (Core down); the failure record stays in the sandbox either way
 $pfb['core_socket'] = $case['core']['socket'] ?? "{$tmp}/core.sock";
-$pfb['core_pushed'] = "{$tmp}/core_pushed";
-$pfb['core_push_failed'] = "{$tmp}/core_push_failed";
-if (isset($case['core']['pushed'])) {
-	file_put_contents($pfb['core_pushed'], json_encode($case['core']['pushed']));	// the record of an earlier push, as pfb_core_settings_push() keeps it
-}
+$pfb['core_settings_failed'] = "{$tmp}/core_settings_failed";
 
 // The page's validation, as it leaves them for the save.
 $dnsbl_webpage_file = 'dnsbl_alt.php';

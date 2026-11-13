@@ -8,7 +8,7 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
 )
 
-// settingsMethods are the five settings methods over st (docs/misc/core-api-protocol.md, "Settings").
+// settingsMethods are the six settings methods over st (docs/misc/core-api-protocol.md, "Settings").
 func settingsMethods(st *settings.Store) map[string]method {
 	return map[string]method{
 		"GetSettingsSchema": {call: func(_ context.Context, params []byte) (any, error) {
@@ -63,6 +63,13 @@ func settingsMethods(st *settings.Store) map[string]method {
 			}
 			return struct{}{}, settingsError(st.Validate(p.Changes), "changes.")
 		}},
+		"SettingsChanged": {call: func(_ context.Context, params []byte) (any, error) {
+			if err := decodeParams(params, &struct{}{}); err != nil {
+				return nil, err
+			}
+			snap, err := st.Reload()
+			return snap, settingsError(err, "")
+		}},
 	}
 }
 
@@ -70,6 +77,7 @@ func settingsMethods(st *settings.Store) map[string]method {
 func settingsError(err error, prefix string) error {
 	var v *settings.ValidationError
 	var c *settings.ConflictError
+	var b *settings.BackendError
 	switch {
 	case errors.As(err, &v):
 		fields := make([]fieldError, len(v.Fields))
@@ -83,6 +91,8 @@ func settingsError(err error, prefix string) error {
 			fields = append(fields, fieldError{Field: c.Field, Message: c.Message})
 		}
 		return newError(codeConflict, c.Message, fields...)
+	case errors.As(err, &b):
+		return newError(codeUnavailable, "the settings backend failed: "+b.Error())
 	}
 	return err
 }

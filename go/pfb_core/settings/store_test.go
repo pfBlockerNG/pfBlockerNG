@@ -27,7 +27,6 @@ func open(t *testing.T, dir string) *Store {
 	if err != nil {
 		t.Fatalf("Open(%s): %v", dir, err)
 	}
-	t.Cleanup(func() { _ = st.Close() })
 	return st
 }
 
@@ -162,9 +161,9 @@ func TestInitializeTakesSettingsOnceAndRefusesASecondTime(t *testing.T) {
 		t.Errorf("revision after Initialize = %d, want 1", res.Revision)
 	}
 	dns := projection(t, get(t, st, "dns"), "dns")
-	if dns.Generation != 1 || dns.Value["decisionCacheMax"] != int64(500) || dns.Value["idnMode"] != "confusable" ||
+	if dns.Value["decisionCacheMax"] != int64(500) || dns.Value["idnMode"] != "confusable" ||
 		dns.Value["replyLogging"] != true {
-		t.Errorf("dns after Initialize = %s, want generation 1, the given values and the defaults", jsonOf(t, dns))
+		t.Errorf("dns after Initialize = %s, want the given values and the defaults", jsonOf(t, dns))
 	}
 	if _, err := st.Initialize(changes(t, `{"dns": {"decisionCacheMax": 7}}`)); !isConflict(err) {
 		t.Errorf("second Initialize = %v, want a conflict", err)
@@ -215,6 +214,7 @@ func TestAnInvalidChangeSetIsRejectedWhole(t *testing.T) {
 
 func TestSaveAdvancesTheRevisionAndOnlyTheChangedProjectionsGeneration(t *testing.T) {
 	st, _ := initialized(t)
+	before := get(t, st)
 	res, err := st.Save(1, changes(t, `{"dns": {"decisionCacheMax": 500}, "feedauth": {"user": "u"}}`))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
@@ -222,11 +222,14 @@ func TestSaveAdvancesTheRevisionAndOnlyTheChangedProjectionsGeneration(t *testin
 	if res.Revision != 2 {
 		t.Errorf("revision = %d, want 2: every accepted save advances it", res.Revision)
 	}
-	if len(res.Projections) != 1 || res.Projections[0].ResourceID != "settings/feedauth" || res.Projections[0].Generation != 2 {
-		t.Errorf("changed projections = %s, want only settings/feedauth at generation 2", jsonOf(t, res.Projections))
+	if len(res.Projections) != 1 || res.Projections[0].ResourceID != "settings/feedauth" ||
+		res.Projections[0].Generation == projection(t, before, "feedauth").Generation {
+		t.Errorf("changed projections = %s, want only settings/feedauth, at another generation than %d", jsonOf(t, res.Projections),
+			projection(t, before, "feedauth").Generation)
 	}
-	if dns := projection(t, get(t, st, "dns"), "dns"); dns.Generation != 1 {
-		t.Errorf("dns generation = %d after an unchanged value was saved, want 1", dns.Generation)
+	if dns := projection(t, get(t, st, "dns"), "dns"); dns.Generation != projection(t, before, "dns").Generation {
+		t.Errorf("dns generation = %d after an unchanged value was saved, want the unchanged %d", dns.Generation,
+			projection(t, before, "dns").Generation)
 	}
 }
 
@@ -301,7 +304,7 @@ func TestGetRefusesAnUnknownProjection(t *testing.T) {
 	}
 }
 
-func TestTheStoreSurvivesARestartWithRevisionAndGenerationsIntact(t *testing.T) {
+func TestTheStoreSurvivesARestartWithItsRevisionAndGenerationsIntact(t *testing.T) {
 	st, dir := initialized(t)
 	if _, err := st.Save(1, changes(t, `{"dns": {"idnMode": "on"}, "feedauth": {"password": "p"}}`)); err != nil {
 		t.Fatal(err)
@@ -310,14 +313,12 @@ func TestTheStoreSurvivesARestartWithRevisionAndGenerationsIntact(t *testing.T) 
 		t.Fatal(err)
 	}
 	before := jsonOf(t, get(t, st))
-	_ = st.Close() // the restart: the old process lets the state directory go
-	again := open(t, dir)
+	again := open(t, dir) // the restart
 	if after := jsonOf(t, get(t, again)); after != before {
 		t.Errorf("after a restart:\n have %s\n want %s", after, before)
 	}
-	if snap := get(t, again); snap.Revision != 3 || projection(t, snap, "dns").Generation != 3 ||
-		projection(t, snap, "feedauth").Generation != 2 {
-		t.Errorf("restarted store = %s, want revision 3, dns generation 3, feedauth generation 2", before)
+	if snap := get(t, again); snap.Revision != 3 {
+		t.Errorf("restarted store = %s, want revision 3", before)
 	}
 	if _, err := again.Save(3, changes(t, `{"dns": {"regexCap": true}}`)); err != nil {
 		t.Errorf("the restarted store takes a save at its revision: %v", err)
@@ -363,8 +364,7 @@ func TestCrashHelperProcess(t *testing.T) {
 }
 
 func TestACrashDuringASaveLeavesThePreviousRevisionReadable(t *testing.T) {
-	parent, dir := initialized(t)
-	_ = parent.Close() // the child is the one Core on the directory
+	_, dir := initialized(t)
 	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashHelperProcess$")
 	cmd.Env = append(os.Environ(), crashEnv+"="+dir)
 	err := cmd.Run()

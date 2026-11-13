@@ -93,7 +93,7 @@ final class TickSafeSearchReservationTest extends TestCase
 							usleep(1000);
 						}
 					};
-					pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, core_push: static fn(): ?string => NULL);
+					pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, core_settings: static fn(): ?string => NULL);
 					exit(0);
 				} catch (Throwable $e) {
 					file_put_contents("{$this->dir}/worker-error.log", $e::class . ': ' . $e->getMessage());

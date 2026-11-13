@@ -59,14 +59,14 @@ final class TickSafeSearchFailureTest extends TestCase
 		};
 		$opener = static fn(string $path): mixed => FALSE;
 
-		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, 5.0, core_push: static fn(): ?string => NULL);
+		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, 5.0, core_settings: static fn(): ?string => NULL);
 
 		$this->assertSame(0, $calls, 'lock-open failure must not call SafeSearch');
 		$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
 			'lock-open failure must not advance ss_refresh ledger');
 		$this->assertStringContainsString('SafeSearch lock open failed', $this->errorLog());
 
-		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_push: static fn(): ?string => NULL);
+		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_settings: static fn(): ?string => NULL);
 
 		$this->assertSame(1, $calls, 'SafeSearch must retry after lock-open failure');
 		$this->assertFutureReservation();
@@ -109,7 +109,7 @@ final class TickSafeSearchFailureTest extends TestCase
 		$status = NULL;
 		try {
 			$this->waitForPath($marker, 2.0);
-			pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, 0.01, core_push: static fn(): ?string => NULL);
+			pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, 0.01, core_settings: static fn(): ?string => NULL);
 
 			$this->assertSame(0, $calls, 'lock timeout must not call SafeSearch');
 			$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
@@ -125,7 +125,7 @@ final class TickSafeSearchFailureTest extends TestCase
 		$this->assertSame($pid, $waitResult, 'lock holder must be reaped after timeout attempt');
 		$this->assertTrue(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0,
 			'lock holder must exit cleanly before retry');
-		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_push: static fn(): ?string => NULL);
+		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_settings: static fn(): ?string => NULL);
 
 		$this->assertSame(1, $calls, 'SafeSearch must retry after the lock is released');
 		$this->assertFutureReservation();
@@ -143,7 +143,7 @@ final class TickSafeSearchFailureTest extends TestCase
 			return $handle;
 		};
 
-		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, 5.0, core_push: static fn(): ?string => NULL);
+		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, 5.0, core_settings: static fn(): ?string => NULL);
 
 		$this->assertSame(0, $calls, 'non-timeout acquire failure must not call SafeSearch');
 		$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
@@ -153,7 +153,7 @@ final class TickSafeSearchFailureTest extends TestCase
 		$this->assertSame(1, fwrite($handle, 'x'), 'failed acquire must not close the opener handle');
 		fclose($handle);
 
-		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_push: static fn(): ?string => NULL);
+		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_settings: static fn(): ?string => NULL);
 
 		$this->assertSame(1, $calls, 'SafeSearch must retry after non-timeout acquire failure');
 		$this->assertFutureReservation();
@@ -170,7 +170,7 @@ final class TickSafeSearchFailureTest extends TestCase
 		};
 
 		try {
-			pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_push: static fn(): ?string => NULL);
+			pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_settings: static fn(): ?string => NULL);
 		} catch (RuntimeException $e) {
 			$this->assertSame('refresh failed', $e->getMessage());
 		}
@@ -182,7 +182,7 @@ final class TickSafeSearchFailureTest extends TestCase
 		$retry = static function () use (&$successes): void {
 			$successes++;
 		};
-		pfblockerng_tick(['pfblockerng.php dcc'], $retry, core_push: static fn(): ?string => NULL);
+		pfblockerng_tick(['pfblockerng.php dcc'], $retry, core_settings: static fn(): ?string => NULL);
 
 		$this->assertSame(1, $successes, 'next tick must run exactly one retry after a thrown refresh');
 		$this->assertFutureReservation();

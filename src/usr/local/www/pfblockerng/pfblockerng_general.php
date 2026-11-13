@@ -219,71 +219,88 @@ if ($_POST) {
 
 		if (!$input_errors) {
 
-			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
-			$pfb['gconfig']['pfb_keep']			= pfb_filter($_POST['pfb_keep'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
-
-			$pfb['gconfig']['pfb_feed_internal_filter']	= pfb_filter($_POST['pfb_feed_internal_filter'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
-
-			// The allowlist textarea is greyed (disabled) when the filter is off, so the
-			// browser does not submit it. Preserve the previously stored value in that
-			// case rather than overwriting it with the absent POST field.
-			if ($pfb['gconfig']['pfb_feed_internal_filter'] === 'on') {
-				$pfb['gconfig']['pfb_feed_internal_allowlist']	= base64_encode($_POST['pfb_feed_internal_allowlist'] ?? '');
-			}
-			$pfb['gconfig']['pfb_scheduled_feed_updates'] = $schedule_values['pfb_scheduled_feed_updates'];
-			$pfb['gconfig']['pfb_schedule_weekday'] = $schedule_values['pfb_schedule_weekday'];
-			$pfb['gconfig']['pfb_schedule_hour'] = $schedule_values['pfb_schedule_hour'];
-			$pfb['gconfig']['pfb_schedule_minute'] = $schedule_values['pfb_schedule_minute'];
-			$pfb['gconfig']['pfb_quiet_hours'] = $schedule_values['pfb_quiet_hours'];
-			$pfb['gconfig']['skipfeed']			= $_POST['skipfeed']				?: 0;
-
-			// Remove old Line Limit setting
-			unset($pfb['gconfig']['log_maxlines']);
-
-			foreach ($log_suffixes as $log_suffix) {
-				$pfb['gconfig']['log_max_' . $log_suffix]	= $_POST['log_max_' . $log_suffix]	?: 20000;
-			}
-
-			// ADR-60: persist per-log age-based retention (validated above; default '0').
-			// Written into $pfb['gconfig'] so the writeSection() call below includes it in
-			// the section; a bare PfbConfig::write() would be overwritten by writeSection.
-			foreach ($log_suffixes as $log_suffix) {
-				$pfb['gconfig']['log_max_days_' . $log_suffix]	= $_POST['log_max_days_' . $log_suffix]	?: '0';
-			}
-
-			// issue #1109: persist the log-trim hysteresis margin (validated above; default
-			// '0'). Written into $pfb['gconfig'] so writeSection() below includes it -- a bare
-			// PfbConfig::write() would be overwritten by writeSection.
-			$pfb['gconfig']['pfb_log_trim_margin_pct']	= $_POST['pfb_log_trim_margin_pct']	?: '0';
-
-			// issue #2851: persist the nested-pass timeout (canonicalized above). Written
-			// into $pfb['gconfig'] so writeSection() below includes it -- a bare
-			// PfbConfig::write() would be overwritten by the section-level write.
-			$pfb['gconfig']['pfb_reentry_timeout']		= $_POST['pfb_reentry_timeout'];
-
-			// ADR-38: persist syslog export toggle. Written into $pfb['gconfig'] so the
-			// writeSection() call below includes it; a bare PfbConfig::write() before
-			// writeSection() would be clobbered by the section-level write.
-			// Facility and priority are fixed constants in pfb_syslog_event() and no
-			// longer stored; the daemon reads the toggle fresh on each event so no
-			// service restart is needed when the toggle changes.
-			$pfb['gconfig']['log_syslog']	= pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
-
-			$pfb['gconfig']['pfb_syntax_highlight']	= pfb_filter($_POST['pfb_syntax_highlight'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
-
-			// The gate above refuses a new 'on' without node_exporter, so only a valid value reaches here.
-			$pfb['gconfig']['pfb_metrics_export']	= $metrics_export_posted ?: '';
-			$pfb['gconfig']['pfb_metrics_client_ip'] = pfb_filter($_POST['pfb_metrics_client_ip'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
-
-			// Core's dry run comes before the privacy change: a refused save must not purge or expose client identities
-			$pfb_core_errors = pfb_core_settings_validate(NULL, ['metricsClientIp' => pfb_cfg_toggle_read($pfb['gconfig']['pfb_metrics_client_ip']) === PfbToggle::On]);
+			// issue #3924: the Core settings adapter writes config.xml under the DNS config lock, and write_config() writes the whole copy this
+			// request read: take the lock, read config.xml again, and put only this page's posted fields on top of it. $privacy_error carries a
+			// refusal of the lock too: either way nothing was saved.
+			$pfb_config_lock = pfb_dns_config_lock();
 			$pfb_written = FALSE;
-			$privacy_error = $pfb_core_errors ? NULL : pfb_metrics_client_save(pfb_cfg_toggle_read($pfb['gconfig']['pfb_metrics_client_ip']), static function () use (&$pfb, &$pfb_written): void {
-				PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
-				$pfb_written = write_config('[pfBlockerNG] save General settings');
-			});
+			$pfb_core_errors = array();
+			$privacy_error = NULL;
+			if ($pfb_config_lock === NULL) {
+				$privacy_error = gettext('General: another save of the pfSense configuration is in progress.');
+			} else {
+				try {
+					$pfb['gconfig'] = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
+
+					$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
+					$pfb['gconfig']['pfb_keep']			= pfb_filter($_POST['pfb_keep'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
+
+					$pfb['gconfig']['pfb_feed_internal_filter']	= pfb_filter($_POST['pfb_feed_internal_filter'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
+
+					// The allowlist textarea is greyed (disabled) when the filter is off, so the
+					// browser does not submit it. Preserve the previously stored value in that
+					// case rather than overwriting it with the absent POST field.
+					if ($pfb['gconfig']['pfb_feed_internal_filter'] === 'on') {
+						$pfb['gconfig']['pfb_feed_internal_allowlist']	= base64_encode($_POST['pfb_feed_internal_allowlist'] ?? '');
+					}
+					$pfb['gconfig']['pfb_scheduled_feed_updates'] = $schedule_values['pfb_scheduled_feed_updates'];
+					$pfb['gconfig']['pfb_schedule_weekday'] = $schedule_values['pfb_schedule_weekday'];
+					$pfb['gconfig']['pfb_schedule_hour'] = $schedule_values['pfb_schedule_hour'];
+					$pfb['gconfig']['pfb_schedule_minute'] = $schedule_values['pfb_schedule_minute'];
+					$pfb['gconfig']['pfb_quiet_hours'] = $schedule_values['pfb_quiet_hours'];
+					$pfb['gconfig']['skipfeed']			= $_POST['skipfeed']				?: 0;
+
+					// Remove old Line Limit setting
+					unset($pfb['gconfig']['log_maxlines']);
+
+					foreach ($log_suffixes as $log_suffix) {
+						$pfb['gconfig']['log_max_' . $log_suffix]	= $_POST['log_max_' . $log_suffix]	?: 20000;
+					}
+
+					// ADR-60: persist per-log age-based retention (validated above; default '0').
+					// Written into $pfb['gconfig'] so the writeSection() call below includes it in
+					// the section; a bare PfbConfig::write() would be overwritten by writeSection.
+					foreach ($log_suffixes as $log_suffix) {
+						$pfb['gconfig']['log_max_days_' . $log_suffix]	= $_POST['log_max_days_' . $log_suffix]	?: '0';
+					}
+
+					// issue #1109: persist the log-trim hysteresis margin (validated above; default
+					// '0'). Written into $pfb['gconfig'] so writeSection() below includes it -- a bare
+					// PfbConfig::write() would be overwritten by writeSection.
+					$pfb['gconfig']['pfb_log_trim_margin_pct']	= $_POST['pfb_log_trim_margin_pct']	?: '0';
+
+					// issue #2851: persist the nested-pass timeout (canonicalized above). Written
+					// into $pfb['gconfig'] so writeSection() below includes it -- a bare
+					// PfbConfig::write() would be overwritten by the section-level write.
+					$pfb['gconfig']['pfb_reentry_timeout']		= $_POST['pfb_reentry_timeout'];
+
+					// ADR-38: persist syslog export toggle. Written into $pfb['gconfig'] so the
+					// writeSection() call below includes it; a bare PfbConfig::write() before
+					// writeSection() would be clobbered by the section-level write.
+					// Facility and priority are fixed constants in pfb_syslog_event() and no
+					// longer stored; the daemon reads the toggle fresh on each event so no
+					// service restart is needed when the toggle changes.
+					$pfb['gconfig']['log_syslog']	= pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
+
+					$pfb['gconfig']['pfb_syntax_highlight']	= pfb_filter($_POST['pfb_syntax_highlight'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
+
+					// The gate above refuses a new 'on' without node_exporter, so only a valid value reaches here.
+					$pfb['gconfig']['pfb_metrics_export']	= $metrics_export_posted ?: '';
+					$pfb['gconfig']['pfb_metrics_client_ip'] = pfb_filter($_POST['pfb_metrics_client_ip'] ?? '', PFB_FILTER_ON_OFF, 'general') ?: '';
+
+					// Core's dry run comes before the privacy change: a refused save must not purge or expose client identities
+					$pfb_core_errors = pfb_core_settings_validate(NULL, ['metricsClientIp' => pfb_cfg_toggle_read($pfb['gconfig']['pfb_metrics_client_ip']) === PfbToggle::On]);
+					$privacy_error = $pfb_core_errors ? NULL : pfb_metrics_client_save(pfb_cfg_toggle_read($pfb['gconfig']['pfb_metrics_client_ip']), static function () use (&$pfb, &$pfb_written): bool {
+						PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
+						$pfb_written = write_config('[pfBlockerNG] save General settings');
+						return $pfb_written !== FALSE && $pfb_written !== -1;
+					});
+				} finally {
+					unlock($pfb_config_lock);
+				}
+			}
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
-				pfb_core_settings_push(NULL, TRUE);	// outside the metrics lock (a slow Core must not hold it); a failure never undoes the save
+				pfb_core_settings_changed(NULL, TRUE);	// outside the metrics lock (a slow Core must not hold it); a failure never undoes the save
 			}
 			$input_errors = array_merge($input_errors, $pfb_core_errors);
 			if ($privacy_error !== NULL) {

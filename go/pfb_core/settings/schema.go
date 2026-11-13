@@ -1,5 +1,5 @@
-// Package settings is Core's native settings store (issue #3842; map #3813): a schema of typed projections, and one
-// persisted document holding the configuration revision and, per projection, its generation and values.
+// Package settings is Core's native settings (issues #3842, #3924; map #3813): a schema of typed projections, held in
+// memory and loaded from a Backend (a file in the state directory, or the Outpost's adapter command).
 // docs/misc/core-api-protocol.md documents the API methods over it.
 package settings
 
