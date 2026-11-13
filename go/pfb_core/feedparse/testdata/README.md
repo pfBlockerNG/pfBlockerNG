@@ -114,7 +114,11 @@ Top level: `{"schema": 1, "ip": [...], "dnsbl": [...]}`; ids are unique across b
 reads it (after normalization and the pre-script), its config, and everything the loop leaves for the next stage.
 
 Case: `id`, `description`, `config`, the feed bytes and `expect`. The feed bytes are `input`, `input_hex`, or `input_parts`: a list
-of strings and `{"repeat": text, "count": n}` (a line over 64 KiB without 64 KiB of JSON). Exactly one of the three.
+of strings and `{"repeat": text, "count": n}` (a line over 64 KiB without 64 KiB of JSON). Exactly one of the three. An IP case may
+also have `"normalize": true` (only ever `true`): the feed bytes are then the raw download, the `.orig`: both runners normalize it
+(`pfb_feed_normalize("<dir>/feed.orig", '')` and `NormalizeFile(dir, "feed")`, the converter off as in `normcache.json`), parse the
+`.norm` and probe the `.orig` for content, which is what the old path does when the parse path is the `.norm`. A case without it feeds
+the same bytes to the parse and to the probe.
 
 A byte item of `details` and `messages` is a JSON string, or `{"hex": "..."}` when its bytes are not valid UTF-8.
 
@@ -128,10 +132,14 @@ IP case (`ip`):
   the record shows it, `"null"` for an empty one; `raw` the input line without its trailing CR and LF); `messages`, every notice
   the parser logged, in order; `placeholder`, the empty-feed block's outcome: `""` (none), `"empty"` (no content line and no entry:
   `<ip>` or `::<ip>`) or `"suppressed"` (an IPv6 feed all of whose entries were suppressed: `::<ip>`).
-- The empty-feed rule counts content lines of the file it parses: a line is content unless it is blank (ASCII whitespace only) or
-  starts, after leading whitespace, with `#`, `;`, `!` or `//`. A file of size 0 has no content line and still gets no placeholder
-  (the old path skips the probe of an empty file). The old path probes the raw `.orig` and, after a pre-script, the staged copy; the
-  corpus feeds both the same bytes, and Core counts what it parses.
+- The empty-feed rule is the caller's probe: the old path counts the content lines of the raw `.orig` (the staged copy after a
+  pre-script) with `grep -cv`, and writes the placeholder when that count is 0 and the loop found no entry. A line is content unless it
+  is blank (ASCII whitespace, vertical tab and form feed included) or starts, after leading whitespace, with `#`, `;`, `!` or `//`. A file
+  that is missing or has size 0 is not probed, which is no placeholder. `CountContent(path)` is that probe (`NoProbe` for no file or an
+  empty one) and `ParseIPFeed` takes its answer as an argument: what the loop parses (the `.norm`, with its BOM and control
+  characters stripped) says nothing about whether the download had content. The `normalize` cases pin the difference: a comment-only
+  `.orig` behind a BOM or a control character has a content line in the raw file and none in the `.norm`, so the old path writes no
+  placeholder there.
 
 DNSBL case (`dnsbl`):
 
@@ -139,7 +147,15 @@ DNSBL case (`dnsbl`):
 - `expect`: `out`/`out_hex`, the NDJSON rows written to the `.bk` (`["d","name"]` or `["a","rule"]` and a newline, `json_encode` with
   `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE`); `ip4`, `ip6`, the lists written to `_v4.ip` and
   `_v6.ip` (`array_unique`, first-seen order, the IPs the feed carried); `updateip`; `scheme_skipped`, the strict-scheme count behind
-  the warning; `stop`, whether the feed ended at the hpHosts marker; `details`, as above.
+  the warning; `stop`, whether the feed ended at the hpHosts marker; `details`, as above; `messages`, every notice the parser logged, in
+  order, as in an IP case (`IP literal decoded`, `IDN converted`).
+- The parse-error records and the notices are not kept in the result: Core hands each to the sink (`Sink.Fail`, `Sink.Message`) as the
+  feed is read, as the old path writes them to its log files.
+- `pfb_dnsbl_abp_regex_ip4_cidrs()` also logs `ABP IPv4 regex rule expansion failed`, from a `catch (\Throwable)` around its own
+  expansion. Nothing but its test seam (`pfb_test_abp_regex_fault`) reaches that catch: 400,000 generated rules of the shapes the function
+  accepts or refuses (PHP 8.4.27, 2026-11-13) never threw, and a PCRE failure there is a warning the function turns into an empty
+  expansion without a log line. Core's expansion cannot throw and returns nothing in those cases, so it has no such notice and the
+  corpus has no row for it.
 - A feed whose line makes the old path throw has no case (an interior NUL reaching `ip2long()`, as in `dnsbl.json`): a UTF-16 file
   read undecoded is one. Core decodes UTF-16 before it parses.
 
@@ -163,7 +179,8 @@ Case: `id`, `description`, `setup`, `script`, `list_type`, `blocks` and `expect`
 
 - `setup`: `norm`/`norm_hex` and `staged`/`staged_hex` (a stale staged copy), a key absent where the file is.
 - `script`: `name` (any bytes but `/` and NUL: spaces, quotes and `$( )` run the test's canary if a shell ever reads them), `body`
-  (after `#!/bin/sh`), and `mode`: `exec`, `noexec` (no execute bit) or `absent`. The script gets the staged path and `list_type`.
+  (after `#!/bin/sh`), `mode`: `exec`, `noexec` (no execute bit) or `absent`, and optionally `shebang` (only ever `false`: the script has
+  no `#!` line at all, which `execvp` runs as a `/bin/sh` script and so does Core). The script gets the staged path and `list_type`.
   The runners set `PFB_TEST_CANARY` (a path the script name must never create).
 - `blocks`: the script blocks until killed. It reads the fifo `PFB_TEST_BLOCK`, nobody writes it, and first writes the fifo
   `PFB_TEST_READY` when that is set. The PHP runner leaves that unset and shortens `timeout(1)`; the Go runner cancels the context

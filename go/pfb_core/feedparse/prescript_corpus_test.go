@@ -33,9 +33,10 @@ type psCaseJSON struct {
 	Description *string      `json:"description"`
 	Setup       *psFilesJSON `json:"setup"`
 	Script      *struct {
-		Name *string `json:"name"`
-		Body *string `json:"body"`
-		Mode *string `json:"mode"`
+		Name    *string `json:"name"`
+		Body    *string `json:"body"`
+		Mode    *string `json:"mode"`
+		Shebang *bool   `json:"shebang"`
 	} `json:"script"`
 	ListType *string `json:"list_type"`
 	Blocks   *bool   `json:"blocks"`
@@ -51,7 +52,7 @@ type psCase struct {
 	id                      string
 	setup, files            map[string]string
 	name, body, mode, vtype string
-	blocks, ok              bool
+	shebang, blocks, ok     bool
 	reason                  string
 	status                  int
 }
@@ -96,6 +97,9 @@ func loadPreScript(data []byte) ([]psCase, error) {
 			(*c.ListType != "_v4" && *c.ListType != "_v6" && *c.ListType != "dnsbl") {
 			return nil, fmt.Errorf("case %s: script name without / or NUL, mode exec, noexec or absent, list_type _v4, _v6 or dnsbl", *c.ID)
 		}
+		if s.Shebang != nil && *s.Shebang {
+			return nil, fmt.Errorf("case %s: shebang is only ever false (a script has its #! line unless the case says otherwise)", *c.ID)
+		}
 		switch *e.Reason {
 		case "", PreScriptStage, PreScriptExit, PreScriptTimeout, PreScriptDeleted:
 		default:
@@ -104,7 +108,7 @@ func loadPreScript(data []byte) ([]psCase, error) {
 		if *e.OK != (*e.Reason == "") || (*e.Reason == PreScriptExit) != (*e.Status != 0) {
 			return nil, fmt.Errorf("case %s: ok is true exactly when reason is empty, and status is non-zero exactly when reason is exit", *c.ID)
 		}
-		want := psCase{id: *c.ID, name: *s.Name, body: *s.Body, mode: *s.Mode, vtype: *c.ListType, blocks: *c.Blocks, ok: *e.OK, reason: *e.Reason, status: *e.Status}
+		want := psCase{id: *c.ID, name: *s.Name, body: *s.Body, mode: *s.Mode, shebang: s.Shebang == nil, vtype: *c.ListType, blocks: *c.Blocks, ok: *e.OK, reason: *e.Reason, status: *e.Status}
 		var err error
 		if want.setup, err = c.Setup.state(want.id); err != nil {
 			return nil, err
@@ -155,7 +159,11 @@ func replayPreScript(t *testing.T, c psCase) {
 		if c.mode == "noexec" {
 			perm = 0o644
 		}
-		if err := os.WriteFile(script, []byte("#!/bin/sh\n"+c.body+"\n"), perm); err != nil {
+		text := c.body + "\n"
+		if c.shebang {
+			text = "#!/bin/sh\n" + text
+		}
+		if err := os.WriteFile(script, []byte(text), perm); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chmod(script, perm); err != nil { // the umask does not apply to the mode asked for
@@ -257,6 +265,8 @@ func TestPreScriptCorpusLoaderIsStrict(t *testing.T) {
 		"unknown script key":  rep(`"mode": "exec"}`, `"mode": "exec", "x": 1}`),
 		"script name with /":  rep(`"name": "s.sh"`, `"name": "a/b"`),
 		"bad mode":            rep(`"mode": "exec"`, `"mode": "x"`),
+		"shebang true":        rep(`"mode": "exec"}`, `"mode": "exec", "shebang": true}`),
+		"shebang not a bool":  rep(`"mode": "exec"}`, `"mode": "exec", "shebang": 0}`),
 		"bad list type":       rep(`"list_type": "_v4"`, `"list_type": "x"`),
 		"blocks not a bool":   rep(`"blocks": false`, `"blocks": 0`),
 		"ok with a reason":    rep(`"reason": ""`, `"reason": "exit"`),

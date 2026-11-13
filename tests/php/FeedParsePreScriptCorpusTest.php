@@ -78,11 +78,12 @@ final class FeedParsePreScriptCorpusTest extends TestCase
 		$w = "case {$case['id']}";
 		FeedParseCorpusFile::keys($case, ['id', 'description', 'setup', 'script', 'list_type', 'blocks', 'expect'], $w);
 		self::checkFiles($case['setup'], ['norm', 'staged'], "{$w} setup");
-		FeedParseCorpusFile::keys($case['script'], ['name', 'body', 'mode'], "{$w} script");
+		$scriptKeys = (is_array($case['script']) && array_key_exists('shebang', $case['script'])) ? ['name', 'body', 'mode', 'shebang'] : ['name', 'body', 'mode'];
+		FeedParseCorpusFile::keys($case['script'], $scriptKeys, "{$w} script");
 		$s = $case['script'];
 		if (!is_string($s['name']) || $s['name'] === '' || str_contains($s['name'], '/') || str_contains($s['name'], "\0") || !is_string($s['body'])
-		    || !in_array($s['mode'], ['exec', 'noexec', 'absent'], TRUE)) {
-			throw new RuntimeException("{$w} script: a name without / or NUL, a body, and the mode exec, noexec or absent");
+		    || !in_array($s['mode'], ['exec', 'noexec', 'absent'], TRUE) || (array_key_exists('shebang', $s) && $s['shebang'] !== FALSE)) {
+			throw new RuntimeException("{$w} script: a name without / or NUL, a body, the mode exec, noexec or absent, and shebang only ever false");
 		}
 		if (!in_array($case['list_type'], ['_v4', '_v6', 'dnsbl'], TRUE) || !is_bool($case['blocks'])) {
 			throw new RuntimeException("{$w}: list_type is _v4, _v6 or dnsbl, blocks a bool");
@@ -162,7 +163,7 @@ final class FeedParsePreScriptCorpusTest extends TestCase
 		$s = $case['script'];
 		$script = "{$this->dir}/bin/{$s['name']}";
 		if ($s['mode'] !== 'absent') {
-			file_put_contents($script, "#!/bin/sh\n{$s['body']}\n");
+			file_put_contents($script, (($s['shebang'] ?? TRUE) ? "#!/bin/sh\n" : '') . "{$s['body']}\n");
 			chmod($script, $s['mode'] === 'exec' ? 0755 : 0644);
 		}
 		$canary = "{$this->dir}/canary";
@@ -216,6 +217,8 @@ final class FeedParsePreScriptCorpusTest extends TestCase
 			'norm and norm_hex'     => [$doc(str_replace('"setup": {"norm": "a.example\n"}', '"setup": {"norm": "a", "norm_hex": "ff"}', $ok))],
 			'unknown script key'    => [$doc(str_replace('"mode": "exec"}', '"mode": "exec", "x": 1}', $ok))],
 			'script name with /'    => [$doc(str_replace('"name": "s.sh"', '"name": "a/b"', $ok))],
+			'shebang true'          => [$doc(str_replace('"mode": "exec"}', '"mode": "exec", "shebang": true}', $ok))],
+			'shebang not a bool'    => [$doc(str_replace('"mode": "exec"}', '"mode": "exec", "shebang": 0}', $ok))],
 			'bad mode'              => [$doc(str_replace('"mode": "exec"', '"mode": "x"', $ok))],
 			'bad list type'         => [$doc(str_replace('"list_type": "_v4"', '"list_type": "x"', $ok))],
 			'blocks not a bool'     => [$doc(str_replace('"blocks": false', '"blocks": 0', $ok))],

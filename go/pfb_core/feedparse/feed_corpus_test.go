@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -13,6 +14,9 @@ import (
 
 // Replays testdata/feed.json (schema: testdata/README.md): whole feed files through ParseIPFeed and ParseDNSBLFeed. The PHP runner
 // (tests/php/FeedParseFeedCorpusTest.php) replays the same file through the production loops; the two agree case for case.
+//
+// The empty-feed probe is the caller's: each IP case writes its feed to a file and hands ParseIPFeed CountContent of the file the
+// old path probes, the raw .orig for a case with "normalize" (the .norm is what is parsed), else the file parsed.
 
 type feedCorpusFile struct {
 	Schema *int             `json:"schema"`
@@ -33,7 +37,8 @@ type ipFeedCaseJSON struct {
 		Placeholder *string `json:"placeholder"`
 	} `json:"config"`
 	feedInput
-	Expect *struct {
+	Normalize *bool `json:"normalize"`
+	Expect    *struct {
 		Out         *string            `json:"out"`
 		OutHex      *string            `json:"out_hex"`
 		ParseFail   *int               `json:"parse_fail"`
@@ -55,14 +60,15 @@ type dnsblCaseJSON struct {
 	} `json:"config"`
 	feedInput
 	Expect *struct {
-		Out           *string     `json:"out"`
-		OutHex        *string     `json:"out_hex"`
-		IP4           *[]string   `json:"ip4"`
-		IP6           *[]string   `json:"ip6"`
-		UpdateIP      *bool       `json:"updateip"`
-		SchemeSkipped *int        `json:"scheme_skipped"`
-		Stop          *bool       `json:"stop"`
-		Details       *[]failJSON `json:"details"`
+		Out           *string            `json:"out"`
+		OutHex        *string            `json:"out_hex"`
+		IP4           *[]string          `json:"ip4"`
+		IP6           *[]string          `json:"ip6"`
+		UpdateIP      *bool              `json:"updateip"`
+		SchemeSkipped *int               `json:"scheme_skipped"`
+		Stop          *bool              `json:"stop"`
+		Details       *[]failJSON        `json:"details"`
+		Messages      *[]json.RawMessage `json:"messages"`
 	} `json:"expect"`
 }
 
@@ -70,6 +76,7 @@ type ipFeedCase struct {
 	id          string
 	cfg         IPConfig
 	ph          string
+	normalize   bool
 	input, out  []byte
 	parseFail   int
 	suppressed  bool
@@ -87,6 +94,7 @@ type dnsblFeedCase struct {
 	schemeSkipped int
 	stop          bool
 	details       []FailRecord
+	messages      []string
 }
 
 func loadFeedCorpus(data []byte) ([]ipFeedCase, []dnsblFeedCase, error) {
@@ -140,8 +148,12 @@ func (c ipFeedCaseJSON) load() (ipFeedCase, error) {
 	if *e.Placeholder != "" && *e.Placeholder != PlaceholderEmpty && *e.Placeholder != PlaceholderSuppressed {
 		return ipFeedCase{}, errors.New("placeholder is empty, empty or suppressed")
 	}
+	if c.Normalize != nil && !*c.Normalize {
+		return ipFeedCase{}, errors.New("normalize is only ever true")
+	}
 	want := ipFeedCase{
 		id:          *c.ID,
+		normalize:   c.Normalize != nil,
 		cfg:         IPConfig{VType: *k.VType, PFType: *k.PFType, Custom: *k.Custom, FloorV4: *k.FloorV4, FloorV6: *k.FloorV6, Suppression: *k.Suppression},
 		ph:          *k.Placeholder,
 		parseFail:   *e.ParseFail,
@@ -158,20 +170,29 @@ func (c ipFeedCaseJSON) load() (ipFeedCase, error) {
 	if want.details, err = failRecords("expect.details", e.Details); err != nil {
 		return ipFeedCase{}, err
 	}
-	for i, m := range *e.Messages {
-		msg, err := corpusItem(fmt.Sprintf("expect.messages #%d", i), m)
-		if err != nil {
-			return ipFeedCase{}, err
-		}
-		want.messages = append(want.messages, msg)
+	if want.messages, err = corpusItems("expect.messages", *e.Messages); err != nil {
+		return ipFeedCase{}, err
 	}
 	return want, nil
+}
+
+// corpusItems is a list of byte items: each a JSON string, or {"hex": "..."}.
+func corpusItems(where string, raws []json.RawMessage) ([]string, error) {
+	var out []string
+	for i, m := range raws {
+		item, err := corpusItem(fmt.Sprintf("%s #%d", where, i), m)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 func (c dnsblCaseJSON) load() (dnsblFeedCase, error) {
 	k, e := c.Config, c.Expect
 	if k == nil || e == nil || k.DNSBLIP == nil || k.Lenient == nil || k.Custom == nil || k.Suppression == nil || e.IP4 == nil || e.IP6 == nil ||
-		e.UpdateIP == nil || e.SchemeSkipped == nil || e.Stop == nil {
+		e.UpdateIP == nil || e.SchemeSkipped == nil || e.Stop == nil || e.Messages == nil {
 		return dnsblFeedCase{}, errors.New("config and expect need every key")
 	}
 	want := dnsblFeedCase{
@@ -202,6 +223,9 @@ func (c dnsblCaseJSON) load() (dnsblFeedCase, error) {
 	if want.details, err = failRecords("expect.details", e.Details); err != nil {
 		return dnsblFeedCase{}, err
 	}
+	if want.messages, err = corpusItems("expect.messages", *e.Messages); err != nil {
+		return dnsblFeedCase{}, err
+	}
 	return want, nil
 }
 
@@ -229,12 +253,55 @@ func recordsShow(rs []FailRecord) string {
 	return b.String()
 }
 
+// recorder is the sink of a test: what the feed loop logs, kept in order.
+type recorder struct {
+	messages []string
+	fails    []FailRecord
+}
+
+func (r *recorder) sink() Sink {
+	return Sink{
+		Message: func(m string) { r.messages = append(r.messages, m) },
+		Fail:    func(f FailRecord) { r.fails = append(r.fails, f) },
+	}
+}
+
+// stageIPFeed writes the feed of a case where the old path has it and returns the file the loop parses and the file its
+// empty-feed probe reads: both the file written, or, for a raw download, the .norm NormalizeFile builds and the .orig.
+func stageIPFeed(t *testing.T, c ipFeedCase) (parse, probe string) {
+	t.Helper()
+	dir := t.TempDir()
+	if !c.normalize {
+		parse = filepath.Join(dir, "feed.in")
+		if err := os.WriteFile(parse, c.input, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return parse, parse
+	}
+	probe = filepath.Join(dir, "feed.orig")
+	if err := os.WriteFile(probe, c.input, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	norm := NormalizeFile(dir, "feed")
+	if !norm.Normalized {
+		t.Fatalf("NormalizeFile did not build a .norm: %+v", norm)
+	}
+	return norm.Path, probe
+}
+
 func TestIPFeedCorpus(t *testing.T) {
 	ips, _ := loadFeedCorpusFile(t)
 	for _, c := range ips {
 		t.Run(c.id, func(t *testing.T) {
+			parse, probe := stageIPFeed(t, c)
+			in, err := os.Open(parse)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
 			var out bytes.Buffer
-			got, err := ParseIPFeed(bytes.NewReader(c.input), c.cfg, c.ph, &out)
+			var rec recorder
+			got, err := ParseIPFeed(in, c.cfg, c.ph, CountContent(probe), &out, rec.sink())
 			if err != nil {
 				t.Fatalf("ParseIPFeed: %v", err)
 			}
@@ -251,11 +318,11 @@ func TestIPFeedCorpus(t *testing.T) {
 			if got.ParseFail != c.parseFail || got.Suppressed != c.suppressed || got.Placeholder != c.placeholder {
 				t.Errorf("ParseFail, Suppressed, Placeholder = %d, %v, %q; want %d, %v, %q", got.ParseFail, got.Suppressed, got.Placeholder, c.parseFail, c.suppressed, c.placeholder)
 			}
-			if !sameRecords(got.Details, c.details) {
-				t.Errorf("parse-error records\n  expected:%s\n  actual:  %s", recordsShow(c.details), recordsShow(got.Details))
+			if !sameRecords(rec.fails, c.details) {
+				t.Errorf("parse-error records\n  expected:%s\n  actual:  %s", recordsShow(c.details), recordsShow(rec.fails))
 			}
-			if !sameStrings(got.Messages, c.messages) {
-				t.Errorf("messages\n  expected: %q\n  actual:   %q", c.messages, got.Messages)
+			if !sameStrings(rec.messages, c.messages) {
+				t.Errorf("messages\n  expected: %q\n  actual:   %q", c.messages, rec.messages)
 			}
 		})
 	}
@@ -266,7 +333,8 @@ func TestDNSBLFeedCorpus(t *testing.T) {
 	for _, c := range dnsbls {
 		t.Run(c.id, func(t *testing.T) {
 			var out bytes.Buffer
-			got, err := ParseDNSBLFeed(bytes.NewReader(c.input), c.cfg, &out)
+			var rec recorder
+			got, err := ParseDNSBLFeed(bytes.NewReader(c.input), c.cfg, &out, rec.sink())
 			if err != nil {
 				t.Fatalf("ParseDNSBLFeed: %v", err)
 			}
@@ -282,8 +350,11 @@ func TestDNSBLFeedCorpus(t *testing.T) {
 			if got.UpdateIP != c.updateIP || got.SchemeSkipped != c.schemeSkipped || got.Stopped != c.stop {
 				t.Errorf("UpdateIP, SchemeSkipped, Stopped = %v, %d, %v; want %v, %d, %v", got.UpdateIP, got.SchemeSkipped, got.Stopped, c.updateIP, c.schemeSkipped, c.stop)
 			}
-			if !sameRecords(got.Details, c.details) {
-				t.Errorf("parse-error records\n  expected:%s\n  actual:  %s", recordsShow(c.details), recordsShow(got.Details))
+			if !sameRecords(rec.fails, c.details) {
+				t.Errorf("parse-error records\n  expected:%s\n  actual:  %s", recordsShow(c.details), recordsShow(rec.fails))
+			}
+			if !sameStrings(rec.messages, c.messages) {
+				t.Errorf("messages\n  expected: %q\n  actual:   %q", c.messages, rec.messages)
 			}
 		})
 	}
@@ -318,39 +389,39 @@ func TestFeedReadAndWriteErrors(t *testing.T) {
 	}
 	t.Run("IP read error after a line", func(t *testing.T) {
 		var out bytes.Buffer
-		_, err := ParseIPFeed(broken("1.2.3.4\n"), ipCfg, "127.1.7.7", &out)
+		_, err := ParseIPFeed(broken("1.2.3.4\n"), ipCfg, "127.1.7.7", NoProbe, &out, Sink{})
 		if !errors.Is(err, errRead) {
 			t.Fatalf("error = %v, want the read error", err)
 		}
 	})
 	t.Run("IP read error on an empty feed writes no placeholder", func(t *testing.T) {
 		var out bytes.Buffer
-		_, err := ParseIPFeed(iotest.ErrReader(errRead), ipCfg, "127.1.7.7", &out)
+		_, err := ParseIPFeed(iotest.ErrReader(errRead), ipCfg, "127.1.7.7", 0, &out, Sink{})
 		if !errors.Is(err, errRead) || out.Len() != 0 {
 			t.Fatalf("error = %v, wrote %q; want the read error and nothing written", err, out.String())
 		}
 	})
 	t.Run("IP write error", func(t *testing.T) {
-		_, err := ParseIPFeed(strings.NewReader("1.2.3.4\n5.6.7.8\n"), ipCfg, "127.1.7.7", &failingWriter{n: 8})
+		_, err := ParseIPFeed(strings.NewReader("1.2.3.4\n5.6.7.8\n"), ipCfg, "127.1.7.7", NoProbe, &failingWriter{n: 8}, Sink{})
 		if !errors.Is(err, errDisk) {
 			t.Fatalf("error = %v, want the write error", err)
 		}
 	})
 	t.Run("IP placeholder write error", func(t *testing.T) {
-		_, err := ParseIPFeed(strings.NewReader("# nothing\n"), ipCfg, "127.1.7.7", &failingWriter{})
+		_, err := ParseIPFeed(strings.NewReader("# nothing\n"), ipCfg, "127.1.7.7", 0, &failingWriter{}, Sink{})
 		if !errors.Is(err, errDisk) {
 			t.Fatalf("error = %v, want the write error", err)
 		}
 	})
 	t.Run("DNSBL read error after a line", func(t *testing.T) {
 		var out bytes.Buffer
-		_, err := ParseDNSBLFeed(broken("example.org\n"), dnsCfg, &out)
+		_, err := ParseDNSBLFeed(broken("example.org\n"), dnsCfg, &out, Sink{})
 		if !errors.Is(err, errRead) {
 			t.Fatalf("error = %v, want the read error", err)
 		}
 	})
 	t.Run("DNSBL write error", func(t *testing.T) {
-		_, err := ParseDNSBLFeed(strings.NewReader("example.org\nexample.net\n"), dnsCfg, &failingWriter{n: 5})
+		_, err := ParseDNSBLFeed(strings.NewReader("example.org\nexample.net\n"), dnsCfg, &failingWriter{n: 5}, Sink{})
 		if !errors.Is(err, errDisk) {
 			t.Fatalf("error = %v, want the write error", err)
 		}
@@ -375,42 +446,47 @@ func (r *thenError) Read(p []byte) (int, error) {
 // Malformed documents each break one rule of the schema; the runner must refuse every one.
 func TestFeedCorpusLoaderIsStrict(t *testing.T) {
 	const ip = `{"id": "a", "description": "d", "config": {"vtype": "_v4", "pftype": "auto", "custom": false, "cidr_floor_v4": "Disabled", "cidr_floor_v6": "Disabled", "suppression": false, "placeholder": "127.1.7.7"}, "input": "1.2.3.4\n", "expect": {"out": "1.2.3.4\n", "parse_fail": 0, "suppressed": false, "details": [], "messages": [], "placeholder": ""}}`
-	const dn = `{"id": "b", "description": "d", "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false}, "input": "a.example\n", "expect": {"out": "[\"d\",\"a.example\"]\n", "ip4": [], "ip6": [], "updateip": false, "scheme_skipped": 0, "stop": false, "details": []}}`
+	const dn = `{"id": "b", "description": "d", "config": {"dnsbl_ip": true, "lenient": true, "custom": false, "suppression": false}, "input": "a.example\n", "expect": {"out": "[\"d\",\"a.example\"]\n", "ip4": [], "ip6": [], "updateip": false, "scheme_skipped": 0, "stop": false, "details": [], "messages": []}}`
 	doc := func(ip, dn string) string { return `{"schema": 1, "ip": [` + ip + `], "dnsbl": [` + dn + `]}` }
 	if _, _, err := loadFeedCorpus([]byte(doc(ip, dn))); err != nil {
 		t.Fatalf("the well-formed document is refused: %v", err)
 	}
 	bad := map[string]string{
-		"unknown top key":       strings.Replace(doc(ip, dn), `"schema": 1`, `"schema": 1, "x": 1`, 1),
-		"schema 2":              strings.Replace(doc(ip, dn), `"schema": 1`, `"schema": 2`, 1),
-		"missing schema":        strings.Replace(doc(ip, dn), `"schema": 1, `, ``, 1),
-		"empty dnsbl list":      doc(ip, ""),
-		"duplicate id":          doc(ip, strings.Replace(dn, `"id": "b"`, `"id": "a"`, 1)),
-		"empty description":     doc(strings.Replace(ip, `"description": "d"`, `"description": ""`, 1), dn),
-		"unknown case key":      doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input": "1.2.3.4\n", "x": 1,`, 1), dn),
-		"input and input_hex":   doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input": "1.2.3.4\n", "input_hex": "ff",`, 1), dn),
-		"input_hex is UTF-8":    doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input_hex": "61",`, 1), dn),
-		"upper-case hex":        doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input_hex": "FF",`, 1), dn),
-		"no input":              doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, ``, 1), dn),
-		"unknown config key":    doc(strings.Replace(ip, `"custom": false,`, `"custom": false, "x": 1,`, 1), dn),
-		"bad vtype":             doc(strings.Replace(ip, `"_v4"`, `"_v5"`, 1), dn),
-		"bad floor":             doc(strings.Replace(ip, `"cidr_floor_v4": "Disabled"`, `"cidr_floor_v4": "x"`, 1), dn),
-		"empty placeholder":     doc(strings.Replace(ip, `"127.1.7.7"`, `""`, 1), dn),
-		"unknown expect key":    doc(strings.Replace(ip, `"parse_fail": 0,`, `"parse_fail": 0, "x": 1,`, 1), dn),
-		"missing expect key":    doc(strings.Replace(ip, `"suppressed": false, `, ``, 1), dn),
-		"bad placeholder name":  doc(strings.Replace(ip, `"placeholder": ""}}`, `"placeholder": "x"}}`, 1), dn),
-		"out and out_hex":       doc(strings.Replace(ip, `"out": "1.2.3.4\n",`, `"out": "1.2.3.4\n", "out_hex": "ff",`, 1), dn),
-		"detail unknown key":    doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 1, "line": "a", "raw": "a", "x": 1}]`, 1), dn),
-		"detail line_no 0":      doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 0, "line": "a", "raw": "a"}]`, 1), dn),
-		"detail order":          doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 2, "line": "a", "raw": "a"}, {"line_no": 1, "line": "a", "raw": "a"}]`, 1), dn),
-		"detail hex is UTF-8":   doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 1, "line": {"hex": "61"}, "raw": "a"}]`, 1), dn),
-		"unknown dnsbl config":  doc(ip, strings.Replace(dn, `"custom": false,`, `"custom": false, "x": true,`, 1)),
-		"dnsbl flag not a bool": doc(ip, strings.Replace(dn, `"lenient": true`, `"lenient": 1`, 1)),
-		"dnsbl ip not unique":   doc(ip, strings.Replace(dn, `"ip4": []`, `"ip4": ["1.2.3.4", "1.2.3.4"]`, 1)),
-		"dnsbl missing stop":    doc(ip, strings.Replace(dn, `"stop": false, `, ``, 1)),
-		"repeat count 0":        doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input_parts": [{"repeat": "a", "count": 0}],`, 1), dn),
-		"parts with input":      doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input": "a", "input_parts": ["a"],`, 1), dn),
-		"data after the file":   doc(ip, dn) + ` {}`,
+		"unknown top key":            strings.Replace(doc(ip, dn), `"schema": 1`, `"schema": 1, "x": 1`, 1),
+		"schema 2":                   strings.Replace(doc(ip, dn), `"schema": 1`, `"schema": 2`, 1),
+		"missing schema":             strings.Replace(doc(ip, dn), `"schema": 1, `, ``, 1),
+		"empty dnsbl list":           doc(ip, ""),
+		"duplicate id":               doc(ip, strings.Replace(dn, `"id": "b"`, `"id": "a"`, 1)),
+		"empty description":          doc(strings.Replace(ip, `"description": "d"`, `"description": ""`, 1), dn),
+		"unknown case key":           doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input": "1.2.3.4\n", "x": 1,`, 1), dn),
+		"input and input_hex":        doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input": "1.2.3.4\n", "input_hex": "ff",`, 1), dn),
+		"input_hex is UTF-8":         doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input_hex": "61",`, 1), dn),
+		"upper-case hex":             doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input_hex": "FF",`, 1), dn),
+		"no input":                   doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, ``, 1), dn),
+		"unknown config key":         doc(strings.Replace(ip, `"custom": false,`, `"custom": false, "x": 1,`, 1), dn),
+		"bad vtype":                  doc(strings.Replace(ip, `"_v4"`, `"_v5"`, 1), dn),
+		"bad floor":                  doc(strings.Replace(ip, `"cidr_floor_v4": "Disabled"`, `"cidr_floor_v4": "x"`, 1), dn),
+		"empty placeholder":          doc(strings.Replace(ip, `"127.1.7.7"`, `""`, 1), dn),
+		"unknown expect key":         doc(strings.Replace(ip, `"parse_fail": 0,`, `"parse_fail": 0, "x": 1,`, 1), dn),
+		"missing expect key":         doc(strings.Replace(ip, `"suppressed": false, `, ``, 1), dn),
+		"bad placeholder name":       doc(strings.Replace(ip, `"placeholder": ""}}`, `"placeholder": "x"}}`, 1), dn),
+		"out and out_hex":            doc(strings.Replace(ip, `"out": "1.2.3.4\n",`, `"out": "1.2.3.4\n", "out_hex": "ff",`, 1), dn),
+		"detail unknown key":         doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 1, "line": "a", "raw": "a", "x": 1}]`, 1), dn),
+		"detail line_no 0":           doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 0, "line": "a", "raw": "a"}]`, 1), dn),
+		"detail order":               doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 2, "line": "a", "raw": "a"}, {"line_no": 1, "line": "a", "raw": "a"}]`, 1), dn),
+		"detail hex is UTF-8":        doc(strings.Replace(ip, `"details": []`, `"details": [{"line_no": 1, "line": {"hex": "61"}, "raw": "a"}]`, 1), dn),
+		"unknown dnsbl config":       doc(ip, strings.Replace(dn, `"custom": false,`, `"custom": false, "x": true,`, 1)),
+		"dnsbl flag not a bool":      doc(ip, strings.Replace(dn, `"lenient": true`, `"lenient": 1`, 1)),
+		"dnsbl ip not unique":        doc(ip, strings.Replace(dn, `"ip4": []`, `"ip4": ["1.2.3.4", "1.2.3.4"]`, 1)),
+		"dnsbl missing stop":         doc(ip, strings.Replace(dn, `"stop": false, `, ``, 1)),
+		"dnsbl missing messages":     doc(ip, strings.Replace(dn, `, "messages": []`, ``, 1)),
+		"dnsbl messages not a list":  doc(ip, strings.Replace(dn, `"messages": []`, `"messages": "x"`, 1)),
+		"dnsbl message hex is UTF-8": doc(ip, strings.Replace(dn, `"messages": []`, `"messages": [{"hex": "61"}]`, 1)),
+		"normalize false":            doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input": "1.2.3.4\n", "normalize": false,`, 1), dn),
+		"normalize not a bool":       doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input": "1.2.3.4\n", "normalize": 1,`, 1), dn),
+		"repeat count 0":             doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input_parts": [{"repeat": "a", "count": 0}],`, 1), dn),
+		"parts with input":           doc(strings.Replace(ip, `"input": "1.2.3.4\n",`, `"input": "a", "input_parts": ["a"],`, 1), dn),
+		"data after the file":        doc(ip, dn) + ` {}`,
 	}
 	for name, text := range bad {
 		if _, _, err := loadFeedCorpus([]byte(text)); err == nil {

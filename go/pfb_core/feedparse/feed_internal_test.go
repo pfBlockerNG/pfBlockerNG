@@ -1,6 +1,7 @@
 package feedparse
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 )
@@ -43,7 +44,11 @@ func TestAppendRowMatchesJSONEncode(t *testing.T) {
 			abp  bool
 			want string
 		}{{true, c.abp}, {false, c.domain}} {
-			if got := hex.EncodeToString(appendRow(nil, DNSBLRow{ABP: kind.abp, Text: string(text)})); got != kind.want {
+			var b bytes.Buffer
+			if err := newRowEncoder(&b)(DNSBLRow{ABP: kind.abp, Text: string(text)}); err != nil {
+				t.Fatal(err)
+			}
+			if got := hex.EncodeToString(b.Bytes()); got != kind.want {
 				t.Errorf("%s (abp=%v): row %s, want %s", c.name, kind.abp, got, kind.want)
 			}
 		}
