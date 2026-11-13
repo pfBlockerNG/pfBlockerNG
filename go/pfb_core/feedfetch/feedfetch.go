@@ -46,6 +46,12 @@ type Fetcher struct {
 	RootCAs    *x509.CertPool // nil: the system roots
 	RsyncBin   string         // the rsync executable
 	RetryDelay time.Duration  // pause between attempts; zero is pfb_download()'s 5 s
+
+	// Whois only.
+	Lookup    func(ctx context.Context, network, host string) ([]netip.Addr, error) // one family's addresses ("ip4" or "ip6"); nil is the system resolver
+	Now       func() time.Time                                                      // the batch clock; nil is time.Now
+	ASNCSV    string                                                                // the IPinfo asn.csv the AS entries are read from
+	EnsureASN func(ctx context.Context)                                             // the first-use asn.csv download; nil leaves a missing file missing
 }
 
 // Request is one feed's source as the Outpost translated it.
