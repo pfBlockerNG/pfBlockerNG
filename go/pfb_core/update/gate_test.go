@@ -255,15 +255,15 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := g.View(old.Next, 0)
-	if v.Log != "" || v.Next != 0 {
-		t.Errorf("View(%d) after the second Start = log %q next %d, want the truncated log read from 0", old.Next, v.Log, v.Next)
+	if v.Log != "" || v.Next == old.Next {
+		t.Errorf("View(%d) after the second Start = log %q next %d, want the truncated log read from its start, under a cursor of the new Update", old.Next, v.Log, v.Next)
 	}
 	if u := v.Update; !v.Running || u == nil || u.Trigger != "apply" || u.Scope != "" || u.Result != "" || u.FinishedAt != nil {
 		t.Errorf("the status after the second Start = %s, want a running apply Update", jsonOf(t, v))
 	}
 	h.write(t, "new\n")
-	if v = g.View(old.Next, 0); v.Log != "new\n" || v.Next != 4 {
-		t.Errorf("View(%d) = log %q next %d, want the new log from 0, not from the stale offset", old.Next, v.Log, v.Next)
+	if v = g.View(old.Next, 0); v.Log != "new\n" || g.View(v.Next, 0).Log != "" {
+		t.Errorf("View(%d) = log %q next %d, want the new log from its start, then nothing from the cursor it returned", old.Next, v.Log, v.Next)
 	}
 	h.finish(t, nil)
 }
