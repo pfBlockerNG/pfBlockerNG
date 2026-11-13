@@ -42,12 +42,13 @@ type Result struct {
 // RunFunc runs one Update, writing its progress to log (a regular file, opened for append, truncated at Start).
 type RunFunc func(ctx context.Context, req Request, log *os.File) (Result, error)
 
-// View is the state of the current or the last Update, and a chunk of its log.
+// View is the state of the current or the last Update, and a chunk of its log. Next is a JSON string: a cursor passes 2^53,
+// which a browser or a PHP float cannot hold exactly, at generation 8192.
 type View struct {
 	Running bool    `json:"running"`
 	Update  *Status `json:"update"`
 	Log     string  `json:"log"`
-	Next    int64   `json:"next"`
+	Next    int64   `json:"next,string"`
 }
 
 // Status is an Update's own record: it is set at Start and completed when the Update ends.

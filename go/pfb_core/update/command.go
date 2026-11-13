@@ -19,15 +19,14 @@ const (
 	protocolVersion = 1
 	maxResult       = 1 << 20 // the bytes of result the program may report
 	defaultCap      = 4 * time.Hour
-	waitDelay       = time.Second // how long a descendant holding the program's stdin may keep Run waiting
 )
 
 var killGrace = 5 * time.Second // how long the program's whole group has to end on TERM, and again after KILL, before Run goes on
 
 // Command runs the update program at Path once per Update: stdin is {"version":1,<Request>}, stdout and stderr are the log, and
-// fd 3 is the result {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool}; all are
-// regular files, never pipes (a daemon an Update restarts would hold one open). The program's group gets TERM when ctx ends or
-// Cap (0: 4 hours) passes, and KILL if a member is left after 5 s; a program that exits by itself leaves its group alone.
+// fd 3 is the result {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool}; all four
+// are regular files, never pipes (a daemon an Update restarts would hold one open). The program's group gets TERM when ctx ends
+// or Cap (0: 4 hours) passes, and KILL if a member is left after 5 s; a program that has exited leaves its group alone.
 type Command struct {
 	Path string
 	Cap  time.Duration
@@ -49,20 +48,31 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	if err != nil {
 		return Result{}, err
 	}
-	fd3, err := os.CreateTemp(filepath.Dir(log.Name()), ".result-*")
+	dir := filepath.Dir(log.Name())
+	in, rmIn, err := scratch(dir, ".request-*")
 	if err != nil {
 		return Result{}, err
 	}
-	defer func() { _ = fd3.Close(); _ = os.Remove(fd3.Name()) }()
+	defer rmIn()
+	if _, err = in.Write(body); err == nil {
+		_, err = in.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	fd3, rmResult, err := scratch(dir, ".result-*")
+	if err != nil {
+		return Result{}, err
+	}
+	defer rmResult()
 
 	limit := c.limit()
 	ctx, cancel := context.WithTimeoutCause(ctx, limit, fmt.Errorf("it ran past its %s cap", limit))
 	defer cancel()
 	cmd := exec.Command(c.Path)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(body), log, log
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
 	cmd.ExtraFiles = []*os.File{fd3}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = waitDelay
 	if err := cmd.Start(); err != nil {
 		return Result{}, err
 	}
@@ -72,7 +82,12 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 		case <-exited:
 			killed <- false
 		case <-ctx.Done():
-			group := -cmd.Process.Pid
+			pid := cmd.Process.Pid
+			if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+				killed <- false // the program has exited and been reaped: what it left running is not Run's to kill
+				return
+			}
+			group := -pid
 			_ = syscall.Kill(group, syscall.SIGTERM)
 			if !groupGone(group, killGrace) {
 				_ = syscall.Kill(group, syscall.SIGKILL)
@@ -86,13 +101,20 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	switch wasKilled := <-killed; {
 	case wasKilled:
 		err = fmt.Errorf("the update program was killed: %w", context.Cause(ctx))
-	case errors.Is(err, exec.ErrWaitDelay):
-		err = nil // exit 0, and a descendant still holds the stdin pipe
 	case err != nil:
 		err = fmt.Errorf("the update program failed: %w", err)
 	}
 	res, resErr := readResult(fd3)
 	return res, cmp.Or(err, resErr)
+}
+
+// scratch is a temp file in dir, with the func that closes and removes it.
+func scratch(dir, pattern string) (*os.File, func(), error) {
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, func() { _ = f.Close(); _ = os.Remove(f.Name()) }, nil
 }
 
 // groupGone reports whether the process group has no member within grace, polling every 10 ms (docs/misc/external-process-waits.md).
