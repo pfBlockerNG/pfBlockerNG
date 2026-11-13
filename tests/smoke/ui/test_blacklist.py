@@ -53,9 +53,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
+from .render_oracle import input_errors_block, rejection_verdict
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
+    import requests
+
     from .webui import WebUI
 
 pytestmark = pytest.mark.ui_e2e
@@ -66,6 +69,10 @@ CFG_ROOT = "installedpackages/pfblockerngblacklist"
 CFG_ENABLE = f"{CFG_ROOT}/blacklist_enable"
 CFG_LANG = f"{CFG_ROOT}/blacklist_lang"
 CFG_LOGGING = f"{CFG_ROOT}/blacklist_logging"
+CFG_FREQ = f"{CFG_ROOT}/blacklist_freq"
+
+# The input error a save refused for a held config lock renders (issue #3980).
+REFUSAL = "another save of the pfSense configuration is in progress"
 
 # The single live provider on the smoke image (ut1_global_usage). shallalist is
 # dropped by the page, and ut1 has no REG: line -> no username/password fields.
@@ -124,7 +131,7 @@ def _restore_scalar(vm: helpers.SmokeVM, path: str, value: str, existed: bool) -
     assert _config_path_exists(vm, path) is existed, f"failed to restore {path!r} presence"
 
 
-def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TIMEOUT) -> None:
+def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TIMEOUT) -> requests.Response:
     """POST a FULLY-CONTROLLED payload to the blacklist page (token added here).
 
     Bypasses the form-scrape ``webui.post`` so the caller owns the EXACT field set
@@ -132,7 +139,8 @@ def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TI
     asserting. The ``__csrf_magic`` token is fetched from a current GET and
     prepended; the caller supplies everything else (``save`` is included only when
     the SAVE path is wanted -- the auto-submit path omits it deliberately). The
-    response body is NOT the oracle: callers re-read config.xml.
+    response body is NOT the oracle (callers re-read config.xml); it is returned for a
+    test that pins a refusal's input error.
     """
     token = _csrf_token(webui)
     payload = {"__csrf_magic": token, **data}
@@ -144,6 +152,7 @@ def _direct_post(webui: WebUI, data: dict[str, str], *, timeout: float = SAVE_TI
         allow_redirects=True,
     )
     assert not looks_like_login_page(resp.text), "blacklist POST returned the login form (session lost)"
+    return resp
 
 
 def _save_payload(**fields: str) -> dict[str, str]:
@@ -402,3 +411,32 @@ def test_blacklist_lang_autosubmit_persists_without_save(
         assert got == "EN", f"bogus blacklist_lang should coerce to default 'EN', got {got!r}"
     finally:
         _restore_scalar(vm, CFG_LANG, original, original_present)
+
+
+# --------------------------------------------------------------------------- #
+# 5) A held pfSense config lock refuses the save (issue #3980).
+#    Core's settings adapter writes this section under the same lock, so the
+#    page saves from a fresh read under it; a lock that stays taken writes
+#    nothing and renders an input error.
+# --------------------------------------------------------------------------- #
+
+
+def test_blacklist_save_refuses_config_lock_without_changing_stored_settings(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Given a stored schedule, a save while another writer holds the config lock is refused and leaves it unchanged."""
+    vm = smoke_vm
+    existed = _config_path_exists(vm, CFG_FREQ)
+    original = helpers.config_get(vm, CFG_FREQ)
+    try:
+        _direct_post(webui, _save_payload(blacklist_freq="EveryDay"))
+        assert helpers.config_get(vm, CFG_FREQ) == "EveryDay", "before-state: the schedule must be stored"
+        with helpers.config_lock_held(vm):
+            resp = _direct_post(webui, _save_payload(blacklist_freq="Weekly"))
+        verdict = rejection_verdict(input_errors_block(resp.text), REFUSAL)
+        assert verdict is None, verdict
+        got = helpers.config_get(vm, CFG_FREQ)
+        assert got == "EveryDay", f"a refused save must not change the stored schedule, got {got!r}"
+    finally:
+        _restore_scalar(vm, CFG_FREQ, original, existed)
