@@ -593,7 +593,7 @@ if ($_POST) {
 			if (is_array($_POST[$s_option])) {
 				$_POST[$s_option] = $s_default;
 			}
-			elseif (!array_key_exists($_POST[$s_option], ${"options_$s_option"})) {
+			elseif (!array_key_exists($_POST[$s_option] ?? '', ${"options_$s_option"})) {
 				$_POST[$s_option] = $s_default;
 			}
 		}
@@ -612,7 +612,7 @@ if ($_POST) {
 					}
 				}
 			}
-			elseif (!array_key_exists($_POST[$s_option], ${"options_$s_option"})) {
+			elseif (!array_key_exists($_POST[$s_option] ?? '', ${"options_$s_option"})) {
 				$_POST[$s_option] = $s_default;
 			}
 		}
