@@ -77,8 +77,9 @@ def test_php_gets_the_version_reply(core_vm: SmokeVM) -> None:
 
 
 def test_pfb_core_holds_no_network_socket(core_vm: SmokeVM) -> None:
-    # Before: the Unix listener is pfb-core's (the process this test inspects is the right one)
-    unix = core_vm.ssh("/usr/bin/sockstat -u -l", timeout=30)
+    # Before: the Unix listener is pfb-core's (the process this test inspects is the right one). FreeBSD 16 cuts the
+    # local address at 21 columns unless -w widens it, so the path would read /var/run/pfb_core/api
+    unix = core_vm.ssh("/usr/bin/sockstat -u -l -w", timeout=30)
     assert any("pfb-core" in line and SOCKET in line for line in unix.stdout.splitlines()), (
         f"pfb-core does not hold {SOCKET}:\n{unix.stdout}"
     )
