@@ -446,7 +446,7 @@ pfb-dns ticket decides it.
 | What | Where |
 |---|---|
 | Binary | `/usr/local/pkg/pfblockerng/core/bin/freebsd-amd64/pfb-core`, `.../freebsd-arm64/pfb-core` (static, `CGO_ENABLED=0`; built by `scripts/build-pfb-dns.py`) |
-| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd` and `--update-cmd` |
+| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd`, `--update-cmd` and `--zoneinfo /etc/localtime` (the host's zone, which the scheduler reads local time in) |
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
 | Socket | `/var/run/pfb_core/api.sock` |
@@ -545,10 +545,13 @@ not reported: the feeds Core reserved stay pending and are planned again), logs 
 `conflict`, reported as "An Update is running." The live view polls `?ajax=update[&after=<cursor>]` once a second:
 `pfb_update_view_response()` relays `GetUpdate` as `{running, done, log, next, update}` (`after` only as the string of decimal digits
 it is; anything else is dropped), and the poller stops when `done` and the log is drained. A changed `update.startedAt` clears
-the viewed log and drops the cursor. The status line is `GetUpdate.running`, and the Schedule section is `GetSchedule`
-(`pfb_update_schedule_view()`): Feed groups from `feeds`, Extras from `extras["extra:dcc"]`, DNSBL Category from
-`extras["extra:bl"]`, "Core is not answering" in each row when Core gives no schedule. Pinned by `UpdateViewResponseTest`,
-`UpdateScheduleRowTest` and `UpdatePageCoreTest`.
+the viewed log and drops the cursor; a Core that restarted answers `update` null, which leaves what is shown as it is. The status
+line is `GetUpdate.running` (`pfb_update_running()`), and the Schedule section is `GetSchedule` (`pfb_update_schedule_view()`): Feed
+groups from `feeds`, Extras from `extras["extra:dcc"]`, DNSBL Category from `extras["extra:bl"]`. A row says "Core is not answering"
+(the transport's reason on hover) only when no HTTP reply came, and "Core cannot give the schedule: <Core's message>" when Core
+answered with an error. Every call of the page is bounded by `PFB_CORE_PAGE_TIMEOUT` (5 s, not `pfb_core_call()`'s 30 s), so a wedged
+Core does not hold a php-fpm worker. Pinned by `UpdateViewResponseTest`, `UpdateScheduleRowTest`, `UpdateCoreCallBoundsTest` and
+`UpdatePageCoreTest`.
 
 The tick (`pfblockerng_tick()`) keeps the Outpost's duties and asks Core for the two Updates only the Outpost can tell are due:
 `StartUpdate` of `apply` for a pending change inside the apply window (outside it, the tick logs that it is deferred and the apply

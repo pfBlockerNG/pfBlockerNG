@@ -230,8 +230,8 @@ final class PfbCoreServiceTest extends TestCase
 			},
 			$text
 		);
-		// The settings adapter script, which Core runs, is the one host path an argument may name
-		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh'], '', $script),
+		// The settings adapter and update scripts, which Core runs, and the host's zone file, which it reads, are the host paths an argument may name
+		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '--zoneinfo /etc/localtime'], '', $script),
 			"the rc script names a host path the test did not redirect:\n{$script}");
 		file_put_contents("{$this->dir}/run.sh", $script);
 		$state = "{$this->dir}/state";
@@ -314,7 +314,7 @@ final class PfbCoreServiceTest extends TestCase
 		// When the service starts
 		[$status, $out] = $this->rc('start');
 
-		// Then daemon(8) supervises this machine's binary, restarting it, with the package log, the API socket, Core's state directory and the settings adapter
+		// Then daemon(8) supervises this machine's binary, restarting it, with the package log, the API socket, Core's state directory, the settings adapter, the update program and the host's zone (issue #3941: the scheduler reads local time)
 		$this->assertSame(0, $status, $out);
 		$this->assertSame([
 			'-r', '-R', '5', '-t', 'pfb_core',
@@ -323,6 +323,7 @@ final class PfbCoreServiceTest extends TestCase
 			'--state-dir', $GLOBALS['pfb']['core_state'],
 			'--settings-backend-cmd', '/usr/local/pkg/pfblockerng/pfb_core_settings.sh',
 			'--update-cmd', '/usr/local/pkg/pfblockerng/pfb_core_update.sh',
+			'--zoneinfo', '/etc/localtime',
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}

@@ -225,6 +225,8 @@ final class CoreUpdateServeTest extends TestCase
 			'a feed id of another family' => [$ok + ['feeds' => ['geoip:x']]],
 			'a feed id naming an extra' => [$ok + ['feeds' => ['extra:dcc']]],
 			'a duplicate feed id'       => [$ok + ['feeds' => [self::FEED, self::FEED]]],
+			'feeds as an object'        => [$ok + ['feeds' => ['a' => self::FEED]]],
+			'extras as an object'       => [$ok + ['extras' => ['a' => 'extra:dcc']]],
 			'extras that are no list'   => [$ok + ['extras' => 'extra:dcc']],
 			'an extra other than dcc/bl' => [$ok + ['extras' => ['extra:foo']]],
 			'an extra without its prefix' => [$ok + ['extras' => ['dcc']]],
@@ -591,6 +593,22 @@ final class CoreUpdateServeTest extends TestCase
 
 		$this->assertSame([$expected], $this->calls);
 		$this->assertSame(0, $run['exit'], $run['out']);
+	}
+
+	/**
+	 * A manual Update reports what the Outpost saw of GeoIP like any other: Core's Extras plan uses the last readiness reported, so a
+	 * manual Update that ran while a generation swap was in progress must not leave Core believing it is ready.
+	 */
+	public function testAManualUpdateReportsTheGeoipReadinessItSaw(): void
+	{
+		$ready = $this->serve(self::req('manual', ['force' => 'parse']));
+		$this->assertTrue($ready['result']['geoipReady'], 'a ready GeoIP is reported ready');
+
+		file_put_contents("{$this->dir}/cc/.pfb_generation_swapping", 'interrupted');
+		$swapping = $this->serve(self::req('manual', ['force' => 'parse']));
+
+		$this->assertFalse($swapping['result']['geoipReady'], 'a generation swap in progress is reported not ready');
+		$this->assertSame(0, $swapping['exit'], 'a manual Update is not refused because of it: the operator asked for it');
 	}
 
 	public function testAFailedManualUpdateExitsNonZero(): void

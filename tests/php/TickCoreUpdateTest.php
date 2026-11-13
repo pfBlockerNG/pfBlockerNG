@@ -246,6 +246,37 @@ final class TickCoreUpdateTest extends TestCase
 		$this->assertFileDoesNotExist("{$this->dir}/spawns");
 	}
 
+	/**
+	 * The tick judges Core's answer by the same rule as the Update page (pfb_update_core_failure()): only a 200 with a reply object
+	 * started the Update. An HTTP 200 whose body is no JSON object is Core's answer gone wrong, not an Update that started.
+	 */
+	public function testAReplyThatIsNoJsonObjectIsALoggedNoticeNotAnUpdateThatStarted(): void
+	{
+		pfb_mark_pending_changes();
+		$this->answer = ['status' => 200, 'body' => NULL, 'error' => 'the Core API reply is not a JSON object'];
+
+		$this->tick();
+
+		$this->assertSame(['apply'], $this->started());
+		$logged = array_values(array_filter($GLOBALS['pfb_test_logger_calls'], static fn (array $c): bool => str_contains($c['message'], 'the Core API reply is not a JSON object')));
+		$this->assertCount(1, $logged, 'the reason is logged once');
+		$this->assertSame(LOG_NOTICE, $logged[0]['priority']);
+		$this->assertStringContainsString('nothing was run', $logged[0]['message']);
+		$this->assertNotContains('Tick: asked Core to start the apply Update.', $this->logged(), 'an answer that is no answer started nothing');
+	}
+
+	public function testARefusalWithNoMessageNamesTheHttpStatus(): void
+	{
+		pfb_mark_pending_changes();
+		$this->answer = ['status' => 500, 'body' => [], 'error' => NULL];
+
+		$this->tick();
+
+		$logged = array_values(array_filter($GLOBALS['pfb_test_logger_calls'], static fn (array $c): bool => str_contains($c['message'], 'the Core API answered 500')));
+		$this->assertCount(1, $logged);
+		$this->assertSame(LOG_NOTICE, $logged[0]['priority']);
+	}
+
 	public function testTheTickTouchesNeitherTheScheduleStateNorTheScheduleCacheAndStillRunsItsOwnDuties(): void
 	{
 		// Given a group a scheduler would plan, and no state and no cache anywhere

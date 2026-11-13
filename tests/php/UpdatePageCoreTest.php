@@ -46,7 +46,7 @@ final class UpdatePageCoreTest extends TestCase
 	{
 		$page = self::code('pfblockerng_update.php');
 
-		$this->assertStringContainsString("'GetUpdate'", $page, 'the status line is GetUpdate.running');
+		$this->assertStringContainsString('pfb_update_running(', $page, 'the status line is GetUpdate.running');
 		$this->assertStringContainsString('pfb_update_schedule_view(', $page, 'the Schedule section is GetSchedule');
 	}
 

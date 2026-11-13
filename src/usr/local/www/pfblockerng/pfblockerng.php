@@ -269,7 +269,7 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 	// Script Arguments
 	$pfb_deferred_by = NULL;
 	switch($argv[1]) {
-		case 'cron':		// Sync 'cron'
+		case 'cron':		// Sync 'cron' -- issue #3941: Core names the feeds a scheduled Update checks (the core_update verb); no feed is named here, so this retries only the `*.fail` feeds; kept for the smoke harness and by hand
 			logger(LOG_NOTICE, localize_text('Starting cron process.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			$pfb_completed = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $pfb_deferred_by);
 			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);

@@ -5412,7 +5412,7 @@ function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $t
  * Publish validated schedule JSON through a same-directory staging rename.
  *
  * @param string $path Target JSON path.
- * @param array|callable $document Document or lazy read-modify-write producer.
+ * @param array|callable $document Document or lazy read-modify-write producer, run under the lock (NULL: nothing to change, the target is left as it is and the publish succeeds).
  * @param callable $validator Validation callback for the staged decoded document.
  * @param array $io Test-only failure switches and pre-document callback.
  * @param float $timeout_s Bounded sidecar-lock budget.
@@ -5439,6 +5439,9 @@ function pfb_schedule_atomic_json_publish(
 		}
 		if (is_callable($document)) {
 			$document = $document();
+			if ($document === NULL) {
+				return TRUE;	// the callable found nothing to change under the lock: the target stays as it is
+			}
 		}
 		if (!is_array($document)) {
 			return FALSE;
@@ -5615,26 +5618,41 @@ function pfb_due_ledger_write_entry(
 /**
  * Drop what the PHP scheduler kept in the due ledger (issue #3941): Core owns the schedule now. The Extras' entries, the
  * cache stamp and the `cron` entry's times go; the `cron` entry stays only as the Outpost's pending-apply flag, and
- * `ss_refresh` and `apply_reconcile` are untouched. A ledger with nothing to drop is not rewritten.
+ * `ss_refresh` and `apply_reconcile` are untouched. A ledger with nothing to drop (or none, or none that reads) is not rewritten.
+ *
+ * What stays is decided on the ledger as it is under the ledger's lock, the one the tick, a page save and an HA receive take to
+ * set a pending apply or an entry: a read before the lock could publish away what a writer committed in between.
+ *
+ * @param array<string, mixed> $io the publisher's test seams (pfb_schedule_atomic_json_publish())
  */
-function pfb_due_ledger_retire_schedule(string $ledger_dir): bool
+function pfb_due_ledger_retire_schedule(string $ledger_dir, array $io = [], float $timeout_s = 5.0): bool
 {
 	$path = $ledger_dir . '/pfb_due_ledger.json';
-	$document = is_file($path) ? json_decode((string) @file_get_contents($path), TRUE) : NULL;
-	if (!is_array($document)) {
+	if (!is_file($path)) {
 		return TRUE;
 	}
-	$kept = $document;
-	unset($kept['_meta'], $kept['extra:dcc'], $kept['extra:bl']);
-	if (isset($kept['cron'])) {
-		if (($kept['cron']['pending_apply'] ?? FALSE) === TRUE) {
-			$kept['cron'] = ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE];
-		} else {
-			unset($kept['cron']);
-		}
-	}
-	return $kept === $document
-		|| pfb_schedule_atomic_json_publish($path, $kept, static fn (mixed $value): bool => pfb_due_ledger_document_valid($value));
+	return pfb_schedule_atomic_json_publish(
+		$path,
+		static function () use ($path): ?array {
+			$document = json_decode((string) @file_get_contents($path), TRUE);
+			if (!is_array($document)) {
+				return NULL;
+			}
+			$kept = $document;
+			unset($kept['_meta'], $kept['extra:dcc'], $kept['extra:bl']);
+			if (isset($kept['cron'])) {
+				if (($kept['cron']['pending_apply'] ?? FALSE) === TRUE) {
+					$kept['cron'] = ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE];
+				} else {
+					unset($kept['cron']);
+				}
+			}
+			return $kept === $document ? NULL : $kept;
+		},
+		static fn (mixed $value): bool => pfb_due_ledger_document_valid($value),
+		$io,
+		$timeout_s
+	);
 }
 
 /** Build the strict, secret-free schedule image consumed by the tick planner. */
@@ -6448,13 +6466,12 @@ function pfblockerng_tick(
 	$in_win = pfb_quiet_hours_in_window($now, (string) PfbConfig::read('gen/pfb_quiet_hours'));
 	$start = static function (string $trigger) use ($core_call): bool {
 		$answer = $core_call('StartUpdate', ['requestId' => bin2hex(random_bytes(8)), 'trigger' => $trigger]);
-		if ($answer['status'] === 200) {
+		$reason = pfb_update_core_failure($answer);
+		if ($reason === NULL) {
 			logger(LOG_NOTICE, localize_text("Tick: asked Core to start the {$trigger} Update."), LOG_PREFIX_PKG_PFBLOCKERNG);
 			return TRUE;
 		}
-		$code = (string) ($answer['body']['error']['code'] ?? '');
-		$reason = $answer['error'] ?? (string) ($answer['body']['error']['message'] ?? "the Core API answered {$answer['status']}");
-		if ($code === 'conflict') {
+		if (($answer['body']['error']['code'] ?? NULL) === 'conflict') {
 			logger(LOG_INFO, localize_text("Tick: the {$trigger} Update was skipped: {$reason}."), LOG_PREFIX_PKG_PFBLOCKERNG);
 		} else {
 			logger(LOG_NOTICE, localize_text("Tick: pfBlockerNG Core did not start the {$trigger} Update: {$reason}; nothing was run."), LOG_PREFIX_PKG_PFBLOCKERNG);
@@ -6664,7 +6681,7 @@ function pfb_core_update_request(string $stdin): array
 	};
 	$ids = static function (string $field, callable $valid) use ($request): array {
 		$list = $request[$field] ?? [];
-		if (!is_array($list) || !array_is_list($list) || count($list) !== count(array_unique($list, SORT_REGULAR))) {
+		if (!is_array($list) || count($list) !== count(array_unique($list, SORT_REGULAR))) {
 			throw new InvalidArgumentException("{$field} is not a list of distinct ids");
 		}
 		foreach ($list as $id) {

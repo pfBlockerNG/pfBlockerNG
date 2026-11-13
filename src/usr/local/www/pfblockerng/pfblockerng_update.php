@@ -160,9 +160,7 @@ $status = 'Next schedule check:'
 	. 'Feed groups update at their own <strong>Update Frequency</strong>.';
 
 // Ask Core whether an Update runs (captured once: reused by the status line AND the auto-tail decision below).
-$pfb_update_answer = pfb_core_call('GetUpdate', []);
-$pfb_task_running = pfb_update_core_failure($pfb_update_answer) === NULL
-	&& ($pfb_update_answer['body']['running'] ?? FALSE) === TRUE;
+$pfb_task_running = pfb_update_running('pfb_core_call');
 if ($pfb_task_running) {
 	$status = '<span style="color: red;">&emsp;&emsp;'
 		. 'An update is running.'
@@ -195,12 +193,14 @@ function pfb_ledger_entry_html(array $entry): string {
 }
 
 /**
- * Format one Schedule row from Core's answer: its entry, "Not scheduled" when Core has none, or "Core is not answering" (the
- * reason on hover) when Core gave no schedule.
+ * Format one Schedule row from Core's answer: its entry, or "Not scheduled" when Core has none. When Core gave no schedule the row
+ * says why: "Core is not answering" (the transport's reason on hover) when no reply came at all, else Core's own message, as Core
+ * is up and refused. Both are escaped.
  */
-function pfb_schedule_entry_html(?string $error, ?array $entry): string {
+function pfb_schedule_entry_html(?string $error, ?array $entry, bool $unreachable = FALSE): string {
 	if ($error !== NULL) {
-		return '<em title="' . htmlspecialchars($error, ENT_QUOTES) . '">Core is not answering</em>';
+		$text = htmlspecialchars($error, ENT_QUOTES);
+		return $unreachable ? "<em title=\"{$text}\">Core is not answering</em>" : "<em>Core cannot give the schedule: {$text}</em>";
 	}
 	return $entry === NULL ? '<em>Not scheduled</em>' : pfb_ledger_entry_html($entry);
 }
@@ -212,7 +212,7 @@ function pfb_schedule_entry_html(?string $error, ?array $entry): string {
  * category selected. When the feature is off, "Not scheduled" reads as if a scheduled job is missing, so report WHY it is not
  * scheduled instead.
  */
-function pfb_dnsbl_category_schedule_html(array $pfb, ?array $entry, ?string $error = NULL): string {
+function pfb_dnsbl_category_schedule_html(array $pfb, ?array $entry, ?string $error = NULL, bool $unreachable = FALSE): string {
 	$bl = $pfb['blconfig'] ?? array();
 	if (($pfb['enable'] ?? PfbToggle::Off) !== PfbToggle::On ||
 	    empty($bl['blacklist_enable']) || $bl['blacklist_enable'] === 'Disable') {
@@ -223,7 +223,7 @@ function pfb_dnsbl_category_schedule_html(array $pfb, ?array $entry, ?string $er
 	$selected = !empty($bl['blacklist_selected']) ? array_flip(explode(',', $bl['blacklist_selected'])) : array();
 	foreach (($bl['item'] ?? array()) as $item) {
 		if (isset($selected[$item['xml']]) && !empty($item['selected'])) {
-			return pfb_schedule_entry_html($error, $entry);	// active — show Core's schedule
+			return pfb_schedule_entry_html($error, $entry, $unreachable);	// active — show Core's schedule
 		}
 	}
 	return '<em>None selected</em>';
@@ -340,15 +340,15 @@ $section->addInput(new Form_StaticText(
 ));
 $section->addInput(new Form_StaticText(
 	'Feed groups',
-	pfb_schedule_entry_html($pfb_schedule['error'], $pfb_schedule['feeds'])
+	pfb_schedule_entry_html($pfb_schedule['error'], $pfb_schedule['feeds'], $pfb_schedule['unreachable'])
 ));
 $section->addInput(new Form_StaticText(
 	'Extras (MaxMind, ASN, TOP1M)',
-	pfb_schedule_entry_html($pfb_schedule['error'], $pfb_schedule['dcc'])
+	pfb_schedule_entry_html($pfb_schedule['error'], $pfb_schedule['dcc'], $pfb_schedule['unreachable'])
 ));
 $section->addInput(new Form_StaticText(
 	'DNSBL Category',
-	pfb_dnsbl_category_schedule_html($pfb, $pfb_schedule['bl'], $pfb_schedule['error'])
+	pfb_dnsbl_category_schedule_html($pfb, $pfb_schedule['bl'], $pfb_schedule['error'], $pfb_schedule['unreachable'])
 ));
 $form->add($section);
 
@@ -474,7 +474,7 @@ events.push(function(){
 				if (!r) { return; }
 				if (r.error) { stop(errorStatus + r.error); return; }
 				var at = r.update ? r.update.startedAt : null;
-				if (startedAt !== null && at !== startedAt) {
+				if (at !== null && startedAt !== null && at !== startedAt) {
 					// Another Update, or a restarted Core whose cursor may match this one's: start a clean log and
 					// read the Update again from its start (a cursor is not valid across either).
 					out.value = '';
@@ -483,7 +483,9 @@ events.push(function(){
 					setTimeout(poll, 0);
 					return;
 				}
-				startedAt = at;
+				// A Core that restarted has no Update yet (update null): what is shown stays, and the Update followed
+				// stays the one whose startedAt a later Update is compared with.
+				if (at !== null) { startedAt = at; }
 				if (r.log) {
 					var atBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) <= 16;
 					out.value += r.log;

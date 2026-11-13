@@ -1017,6 +1017,18 @@ final class MetricsWriteTest extends TestCase
 		$this->assertTrue($s['source_up']['schedule_state']);
 	}
 
+	/** A time the renderer would print as a malformed sample (a string, a float) never reaches it. */
+	public function testCollectDropsALastSuccessfulCheckThatIsNoIntegerTime(): void
+	{
+		$s = pfb_metrics_collect(static fn (): array => self::coreAnswers([
+			'scheduled' => TRUE, 'feeds' => NULL, 'extras' => [],
+			'lastSuccessfulCheck' => ['ipv4:A_v4' => 1700000000, 'ipv4:B_v4' => '1700000000', 'ipv4:C_v4' => 1.5, 'ipv4:D_v4' => NULL, 'ipv4:E_v4' => TRUE],
+		]));
+
+		$this->assertSame(['ipv4:A_v4' => 1700000000], $s['feed_success']);
+		$this->assertTrue($s['source_up']['schedule_state']);
+	}
+
 	public function testCollectIgnoresTheRetiredPhpScheduleStateFile(): void
 	{
 		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_schedule_state.json", json_encode(['schema' => 1, 'items' => [

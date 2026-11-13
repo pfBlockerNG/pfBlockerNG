@@ -2390,6 +2390,10 @@ job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
 and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 
+Since issue #3941 the tick no longer dispatches the feed pass (Core does, through the `core_update` verb), and the `cron` verb
+(`pfblockerng.php cron`, `pfblockerng_sync_cron()`) is not a scheduler entry point any more: no feed is named, so it checks only
+the feeds with a `*.fail` retry marker (and applies what that changed). It stays for the smoke harness (the feed-pass lock tests) and for running that retry by hand.
+
 **Metrics export cron (#3522):** a separate crontab entry, `* * * * * root /usr/bin/timeout -s TERM
 -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`, exists only while
 pfBlockerNG's master enable and the General tab's **Metrics export** option are both on.
@@ -2533,7 +2537,8 @@ whose body is unchanged are still skipped. **Both** — also clears `.xxhash128`
 so every re-fetched feed re-ingests regardless of content. The log is polled, not streamed: the client calls
 `?ajax=update[&after=<cursor>]` once a second, which relays `GetUpdate` (`pfb_update_view_response()`); the cursor is Core's opaque
 `next` string, and `update.startedAt` changing starts a clean log. A read-only **Schedule** view is Core's `GetSchedule`
-(last-run / next-due per job; "Core is not answering" in each row when it gives none); a tidied update-log pane. No raw verb
+(last-run / next-due per job; "Core is not answering" in a row when no reply came, Core's own message when it answered with an
+error); a tidied update-log pane. No raw verb
 strings in the UI.
 
 One registered `PfbConfig` knob remains (ADR-29), with a safe default and **no GUI control** — set

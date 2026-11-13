@@ -528,30 +528,49 @@ def _wait_for_marker(page: Page, marker: str) -> None:
         ) from exc
 
 
+# Core's cursor passes 2**53 (it is generation << 40 | offset, from the 8193rd Update of a Core): the first value a JS
+# Number cannot hold exactly. The fake's cursors start here, so a poller that parses ``next`` as a number sends back
+# a neighbour of the cursor it was given, and the exact-string assertions fail.
+CURSOR_BASE = 9_007_199_254_740_993
+CURSOR_GENERATION = 1 << 40
+
+
 class _FakeCore:
     """Core's GetUpdate as the Update page's poll endpoint relays it, under the test's control (issue #3941).
 
     The page's poller is the code under test, so the server side is replaced at the network edge: every
-    ``?ajax=update`` is answered from this object, with Core's cursor semantics -- ``next`` is an opaque string, an
-    ``after`` that is not the one this Update handed out reads from the start. ``requests`` records the ``after``
-    of each poll (None: none sent), which is how the cursor round trip is asserted.
+    ``?ajax=update`` is answered from this object, with Core's cursor semantics -- ``next`` is an opaque decimal
+    string beyond 2**53 (CURSOR_BASE + the log's length), an ``after`` that is not one this Update handed out reads
+    from the start. ``requests`` records the ``after`` of each poll (None: none sent), which is how the cursor round
+    trip is asserted.
     """
 
     def __init__(self) -> None:
         self.log = ""
         self.running = True
         self.started_at = 1_700_000_000
+        self.base = CURSOR_BASE
         self.error: str | None = None
+        self.restarted = False
         self.requests: list[str | None] = []
+
+    def cursor(self, offset: int | None = None) -> str:
+        """The cursor of an offset into the current Update's log (the end of it by default)."""
+        return str(self.base + (len(self.log) if offset is None else offset))
 
     def append(self, text: str) -> None:
         self.log += text
 
     def new_update(self, log: str) -> None:
-        """A new Update (or a restarted Core): another startedAt and a log that starts again."""
+        """A new Update: another startedAt, another generation (its cursors differ) and a log that starts again."""
         self.started_at += 1
+        self.base += CURSOR_GENERATION
         self.log = log
         self.running = True
+
+    def restart(self) -> None:
+        """A restarted Core: it has run no Update yet, so it answers update null, running false and no log."""
+        self.restarted = True
 
     def handle(self, route: Route) -> None:
         after = parse_qs(urlsplit(route.request.url).query).get("after", [None])[0]
@@ -565,13 +584,16 @@ class _FakeCore:
                 "next": "0",
                 "update": None,
             }
+        elif self.restarted:
+            body = {"running": False, "done": True, "log": "", "next": "0", "update": None}
         else:
-            start = int(after) if after is not None and after.isdigit() and int(after) <= len(self.log) else 0
+            known = after is not None and after.isdigit() and self.base <= int(after) <= self.base + len(self.log)
+            start = int(after) - self.base if known and after is not None else 0
             body = {
                 "running": self.running,
                 "done": not self.running,
                 "log": self.log[start:],
-                "next": str(len(self.log)),
+                "next": self.cursor(),
                 "update": {"trigger": "manual", "scope": "dnsbl", "force": "none", "startedAt": self.started_at},
             }
         route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
@@ -676,10 +698,10 @@ def test_update_poller_hands_the_cursor_back_and_stops_once_the_log_is_drained(
     """The poller sends Core's ``next`` back as ``after`` unchanged, and stops when Update is done and the log drained.
 
     Scenario:
-      Given Core's last Update has ended and left a four-byte log,
+      Given Core's last Update has ended and left a four-byte log, its cursor beyond 2**53,
       When the View button wires the poller,
       Then the first poll carries no cursor, the log appears, and the next poll carries exactly the ``next`` the
-           first reply gave (a string, not re-derived by the page);
+           first reply gave: a decimal string beyond 2**53, which a number parse would round to a neighbour;
       And once that poll finds nothing more the status says the viewer is idle, and no further poll is made.
     """
     page = browser_page
@@ -691,9 +713,11 @@ def test_update_poller_hands_the_cursor_back_and_stops_once_the_log_is_drained(
     _wait_for_status(page, "Log viewer idle.")
 
     assert page.locator('textarea[name="pfb_output"]').input_value() == "a\nb\n"
-    assert core.requests == [None, "4"], (
-        f"expected a first poll without a cursor then the cursor 'next' gave, got {core.requests!r}"
+    assert core.requests == [None, core.cursor()], (
+        f"expected a first poll without a cursor then the cursor 'next' gave, exactly as the string it is "
+        f"(a number parse would send a neighbour of {core.cursor()} beyond 2**53), got {core.requests!r}"
     )
+    assert int(core.cursor()) > 2**53, "the fake's cursor must exceed what a JS Number holds exactly"
     with pytest.raises(sync_api.TimeoutError):  # absence, asserted only after the drain barrier above
         page.wait_for_request(lambda r: "ajax=update" in r.url, timeout=2_500)
 
@@ -723,6 +747,32 @@ def test_update_poller_clears_the_log_when_a_new_update_starts(browser_page: Pag
     assert out == "new-update-line-1\n", f"the new Update's log must replace the old one, the box holds {out!r}"
     assert None in core.requests[polls_before:], (
         f"the page must re-read the new Update from its start: {core.requests!r}"
+    )
+
+
+@pytest.mark.ui_browser
+def test_update_poller_keeps_the_log_when_core_restarts_mid_view(browser_page: Page, webui: WebUI) -> None:
+    """A Core that restarted (it answers update null) does not wipe what the viewer shows.
+
+    Scenario:
+      Given the viewer follows a running Update and shows its lines,
+      When Core restarts (the next reply is update null, running false, no log),
+      Then the viewer goes idle with the old Update's lines still in the box: only a new Update with a
+           different startedAt clears it (test_update_poller_clears_the_log_when_a_new_update_starts).
+    """
+    page = browser_page
+    core = _FakeCore()
+    core.append("before-restart-line-1\nbefore-restart-line-2\n")
+
+    _follow_with(page, webui, core)
+    _wait_for_marker(page, "before-restart-line-2")
+
+    core.restart()
+    _wait_for_status(page, "Log viewer idle.")
+
+    out = page.locator('textarea[name="pfb_output"]').input_value()
+    assert out == "before-restart-line-1\nbefore-restart-line-2\n", (
+        f"a Core with no Update yet must not clear what was shown, the box holds {out!r}"
     )
 
 

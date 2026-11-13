@@ -192,7 +192,8 @@ function pfb_lint_response(array $server, array $post, callable $allowed, callab
 
 /**
  * Why a call to Core gave no usable answer, as one line: the transport's error, else Core's own `code: message`; NULL when it
- * answered 200 with a reply object. For the Update page (issue #3941), which relays Core's answers to a person.
+ * answered 200 with a reply object. For the Update page (issue #3941), which relays Core's answers to a person, and the tick.
+ * Whether Core was reached at all is `status === 0` (no HTTP reply came): a Core that answered with an error is up.
  *
  * @param array{status: int, body: ?array, error: ?string} $answer pfb_core_call()'s answer
  */
@@ -210,13 +211,25 @@ function pfb_update_core_failure(array $answer): ?string {
 }
 
 /**
+ * Whether Core reports an Update running (issue #3941): the Update page's status line. A Core that does not answer, or answers with
+ * an error, is not running one. The call is bounded by PFB_CORE_PAGE_TIMEOUT, like every call of the page.
+ *
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ */
+function pfb_update_running(callable $call): bool {
+	$answer = $call('GetUpdate', [], NULL, PFB_CORE_PAGE_TIMEOUT);
+	return pfb_update_core_failure($answer) === NULL && ($answer['body']['running'] ?? FALSE) === TRUE;
+}
+
+/**
  * The Update page's `?ajax=update` poll (issue #3941): one GetUpdate relayed as the poller's JSON, `{running, done, log, next,
  * update}` with `done` the negation of `running`. `after` is Core's opaque cursor, the `next` of an earlier reply: only a string
  * of decimal digits that fits 63 bits goes to Core, as that string (a number would be refused); anything else is dropped and the
- * view reads from the start. Core not answering is `{error, running: false, done: true}`, so the poller stops.
+ * view reads from the start. Core not answering is `{error, running: false, done: true}`, so the poller stops. The call is bounded
+ * by PFB_CORE_PAGE_TIMEOUT.
  *
  * @param array<string, mixed> $query $_GET
- * @param callable(string, array): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
  * @return array{headers: list<string>, body: string}
  */
 function pfb_update_view_response(array $query, callable $call): array {
@@ -225,7 +238,7 @@ function pfb_update_view_response(array $query, callable $call): array {
 	if (is_string($after) && ctype_digit($after) && (strlen($after) < 19 || (strlen($after) === 19 && strcmp($after, '9223372036854775807') <= 0))) {
 		$params['after'] = $after;
 	}
-	$answer = $call('GetUpdate', $params);
+	$answer = $call('GetUpdate', $params, NULL, PFB_CORE_PAGE_TIMEOUT);
 	$failure = pfb_update_core_failure($answer);
 	if ($failure !== NULL) {
 		$payload = ['error' => $failure, 'running' => FALSE, 'done' => TRUE, 'log' => '', 'next' => '0', 'update' => NULL];
@@ -249,14 +262,15 @@ function pfb_update_view_response(array $query, callable $call): array {
 /**
  * Run Now, Force and the Wizard reload (issue #3941): ask Core for a `manual` Update of $scope with $force, and say what came of
  * it. An Update already running is Core's `conflict`; the page then views the one that runs. $scope and $force are allow-listed
- * here, before the call: an unknown value falls back to `both` / `none`, so what the page was sent never reaches Core.
+ * here, before the call: an unknown value falls back to `both` / `none`, so what the page was sent never reaches Core. The call is
+ * bounded by PFB_CORE_PAGE_TIMEOUT.
  *
- * @param callable(string, array): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
  */
 function pfb_update_start(string $scope, string $force, callable $call): string {
 	$scope = in_array($scope, ['ip', 'dnsbl', 'both'], TRUE) ? $scope : 'both';
 	$force = in_array($force, ['none', 'parse', 'download', 'both'], TRUE) ? $force : 'none';
-	$answer = $call('StartUpdate', ['requestId' => bin2hex(random_bytes(16)), 'trigger' => 'manual', 'scope' => $scope, 'force' => $force]);
+	$answer = $call('StartUpdate', ['requestId' => bin2hex(random_bytes(16)), 'trigger' => 'manual', 'scope' => $scope, 'force' => $force], NULL, PFB_CORE_PAGE_TIMEOUT);
 	$failure = pfb_update_core_failure($answer);
 	if ($failure === NULL) {
 		return sprintf(gettext('Running: scope=%s force=%s'), $scope, $force);
@@ -270,14 +284,15 @@ function pfb_update_start(string $scope, string $force, callable $call): string 
 /**
  * The Update page's Schedule section (issue #3941): Core's GetSchedule as the section's rows take it. `feeds`, `dcc` and `bl` are
  * `['last_run' => int, 'next_due' => int]` (no `last_run` when the job never ran) or NULL when Core schedules none; `error` is why
- * Core did not give the schedule, else NULL.
+ * Core did not give the schedule, else NULL, and `unreachable` says whether no HTTP reply came at all (Core down) or Core answered
+ * with an error (up: its message is the reason). The call is bounded by PFB_CORE_PAGE_TIMEOUT.
  *
- * @param callable(string, array): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
- * @return array{error: ?string, feeds: ?array<string, int>, dcc: ?array<string, int>, bl: ?array<string, int>}
+ * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ * @return array{error: ?string, unreachable: bool, feeds: ?array<string, int>, dcc: ?array<string, int>, bl: ?array<string, int>}
  */
 function pfb_update_schedule_view(callable $call): array {
-	$answer = $call('GetSchedule', []);
-	$view = ['error' => pfb_update_core_failure($answer), 'feeds' => NULL, 'dcc' => NULL, 'bl' => NULL];
+	$answer = $call('GetSchedule', [], NULL, PFB_CORE_PAGE_TIMEOUT);
+	$view = ['error' => pfb_update_core_failure($answer), 'unreachable' => $answer['status'] === 0, 'feeds' => NULL, 'dcc' => NULL, 'bl' => NULL];
 	if ($view['error'] !== NULL) {
 		return $view;
 	}
@@ -4184,6 +4199,9 @@ const PFB_DNS_CONFIG_LOCK = 'pfb_dns_config';
 const PFB_DNS_CONFIG_LOCK_WAIT = 10;
 // The Core dry run of a settings save (pfb_core_settings_validate()) runs under that lock: this plus a second for the save's own read and write stays below the wait.
 const PFB_CORE_VALIDATE_TIMEOUT = 3;
+// The Update page's calls to Core (the poll, Run Now, the status line, the Schedule section): a request holds a php-fpm worker while it
+// waits, and the poll comes once a second, so a wedged Core must not hold one for pfb_core_call()'s default 30 s.
+const PFB_CORE_PAGE_TIMEOUT = 5;
 // Overridable before load (a unit test must not touch the appliance's rc.d), like the Unbound start budgets above;
 // the wait is the seconds an activation gives the proxy to become READY, the Unbound startup budget (30 s) with no
 // setting of its own: pfb_dns_proxy_await_ready().
@@ -4616,7 +4634,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	# Anything the daemon runs that starts this service again must take the lock
 	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --zoneinfo /etc/localtime </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"

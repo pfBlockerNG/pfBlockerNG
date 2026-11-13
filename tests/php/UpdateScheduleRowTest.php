@@ -42,28 +42,47 @@ final class UpdateScheduleRowTest extends TestCase
 
 	public function testACoreThatDidNotAnswerIsSaidSoWithItsReasonOnHover(): void
 	{
-		$html = pfb_schedule_entry_html('the Core API did not answer: Failed to connect', NULL);
+		$html = pfb_schedule_entry_html('the Core API did not answer: Failed to connect', NULL, TRUE);
 
 		$this->assertSame('<em title="the Core API did not answer: Failed to connect">Core is not answering</em>', $html);
 	}
 
-	public function testACoreErrorIsEscapedAndWinsOverAnEntry(): void
+	public function testATransportFailureIsEscapedAndWinsOverAnEntry(): void
 	{
-		$html = pfb_schedule_entry_html('unavailable: "<b>x</b>"', ['last_run' => 1, 'next_due' => 2]);
+		$html = pfb_schedule_entry_html('the Core API did not answer: "<b>x</b>"', ['last_run' => 1, 'next_due' => 2], TRUE);
 
-		$this->assertSame('<em title="unavailable: &quot;&lt;b&gt;x&lt;/b&gt;&quot;">Core is not answering</em>', $html);
+		$this->assertSame('<em title="the Core API did not answer: &quot;&lt;b&gt;x&lt;/b&gt;&quot;">Core is not answering</em>', $html);
+	}
+
+	/**
+	 * Core answered and refused the schedule (not initialized, or a value the schedule refuses): it is up, so the row says what Core
+	 * said instead of calling it down (issue #3941 review: a reachable Core must not read "not answering").
+	 */
+	public function testACoreThatAnsweredWithAnErrorShowsItsMessageAndIsNotCalledDown(): void
+	{
+		$html = pfb_schedule_entry_html('unavailable: the settings are not initialized', NULL);
+
+		$this->assertSame('<em>Core cannot give the schedule: unavailable: the settings are not initialized</em>', $html);
+		$this->assertStringNotContainsString('not answering', $html);
+	}
+
+	public function testACoreErrorMessageIsEscapedAndWinsOverAnEntry(): void
+	{
+		$html = pfb_schedule_entry_html('unavailable: "<b>x</b>"', ['last_run' => 1, 'next_due' => 2], FALSE);
+
+		$this->assertSame('<em>Core cannot give the schedule: unavailable: &quot;&lt;b&gt;x&lt;/b&gt;&quot;</em>', $html);
 	}
 
 	/** @param array<string, mixed> $blconfig */
-	private static function category(array $blconfig, ?array $entry, ?string $error = NULL): string
+	private static function category(array $blconfig, ?array $entry, ?string $error = NULL, bool $unreachable = FALSE): string
 	{
-		return pfb_dnsbl_category_schedule_html(['enable' => PfbToggle::On, 'blconfig' => $blconfig], $entry, $error);
+		return pfb_dnsbl_category_schedule_html(['enable' => PfbToggle::On, 'blconfig' => $blconfig], $entry, $error, $unreachable);
 	}
 
 	public function testTheCategoryRowSaysDisabledWhenTheFeatureIsOffWhateverCoreSays(): void
 	{
 		$this->assertSame('<em>Disabled</em>', self::category(['blacklist_enable' => 'Disable'], ['next_due' => 5]));
-		$this->assertSame('<em>Disabled</em>', self::category([], NULL, 'the Core API did not answer: x'));
+		$this->assertSame('<em>Disabled</em>', self::category([], NULL, 'the Core API did not answer: x', TRUE));
 	}
 
 	public function testTheCategoryRowSaysNoneSelectedWhenNoCategoryIsSelected(): void
@@ -80,7 +99,8 @@ final class UpdateScheduleRowTest extends TestCase
 
 		$this->assertSame('Last: <strong>—</strong>&emsp;Next: <strong>2025-01-02 03:00:00</strong>', self::category($blconfig, ['next_due' => $next]));
 		$this->assertSame('<em>Not scheduled</em>', self::category($blconfig, NULL));
-		$this->assertStringContainsString('Core is not answering', self::category($blconfig, NULL, 'down'));
+		$this->assertStringContainsString('Core is not answering', self::category($blconfig, NULL, 'down', TRUE));
+		$this->assertStringContainsString('Core cannot give the schedule: unavailable: not ready', self::category($blconfig, NULL, 'unavailable: not ready'));
 	}
 
 	public function testTheCategoryRowSaysDisabledWhenPfBlockerNgIsOff(): void
