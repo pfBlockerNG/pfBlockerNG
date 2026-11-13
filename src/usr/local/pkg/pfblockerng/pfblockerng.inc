@@ -4828,9 +4828,11 @@ function pfb_core_revision_key(): string {
 
 /**
  * The system proxy as Core's three fields (issue #3975), as pfb_global() builds the cURL proxy: nothing unless the proxy URL is set (empty() also
- * for "0"), the port added when set (else cURL's default, 1080), user and password only when both are set. Only what Core's http://host:port
- * can say is projected: a host name or an IP address, optionally behind a hand-edited http://. A proxy URL that is anything else (userinfo, a path,
- * another scheme, a line break) or a port that is none is not passed on, whole: the proxy is then not projected.
+ * for "0"), the port as curl_setopt() reads the stored string (a number, else 0, so a service name pfSense's is_port() accepts is 0 too) and 0 is
+ * cURL's default, 1080, user and password only when both are set. Only what Core's http://host:port can say is projected: a host name (letters,
+ * digits, "-", "_" and "." as pfSense's is_fqdn() takes them) or an IP address, optionally behind a hand-edited http://. A proxy URL that is
+ * anything else (userinfo, a path, another scheme, a line break) or a port curl_setopt() refuses (negative, beyond 65535) is not passed on,
+ * whole: the proxy is then not projected.
  *
  * @return array{proxyUrl: string, proxyUser: string, proxyPassword: string}
  */
@@ -4843,22 +4845,21 @@ function pfb_core_proxy_settings(): array {
 	if ($unset($host)) {
 		return $none;
 	}
-	if (preg_match('/^(?:http:\/\/)?([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.?)$/Di', $host, $name) === 1) {
+	if (preg_match('/^(?:http:\/\/)?([A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_])?\.?)$/Di', $host, $name) === 1) {
 		$host = $name[1];
 	} elseif (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== FALSE) {
 		$host = "[{$host}]";
 	} else {
 		return $none;
 	}
-	if ($unset($port)) {
-		$port = '1080';
-	} elseif (!ctype_digit($port) || (int) $port < 1 || (int) $port > 65535) {
+	$port = (int) $port ?: 1080;
+	if ($port < 1 || $port > 65535) {
 		return $none;
 	}
 	$user = $stored('proxyuser');
 	$password = $stored('proxypass');
 	$auth = !$unset($user) && !$unset($password);
-	return ['proxyUrl' => 'http://' . $host . ':' . (int) $port, 'proxyUser' => $auth ? mb_scrub($user, 'UTF-8') : '', 'proxyPassword' => $auth ? mb_scrub($password, 'UTF-8') : ''];
+	return ['proxyUrl' => "http://{$host}:{$port}", 'proxyUser' => $auth ? $user : '', 'proxyPassword' => $auth ? $password : ''];
 }
 
 /** Whether $address is one Core may list as the box's own: an IP address, not unspecified, link-local or an IPv4-mapped IPv6 one. */

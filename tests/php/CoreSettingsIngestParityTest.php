@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/ConfigXmlDiskTrait.php';
+require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -26,6 +27,7 @@ use PHPUnit\Framework\TestCase;
 final class CoreSettingsIngestParityTest extends TestCase
 {
 	use ConfigXmlDiskTrait;
+	use PfbNoPhpWarningTrait;
 
 	private const FIXTURE = __DIR__ . '/../core/fixtures/settings_ingest_parity.json';
 	private const GLOBALS_SEEDED = ['pfb_test_configured_ip_addresses', 'pfb_test_configured_ipv6', 'pfb_test_configured_ips'];
@@ -272,6 +274,49 @@ final class CoreSettingsIngestParityTest extends TestCase
 
 		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
 		$this->assertStringContainsString('ingest', $reply['error']['message'] ?? '', 'the refusal names the projections a write holds');
+	}
+
+	/** @return array<string, array{0: mixed}> */
+	public static function notAnObject(): array
+	{
+		return ['a string' => ['x'], 'null' => [NULL], 'an int' => [7], 'a bool' => [FALSE]];
+	}
+
+	#[DataProvider('notAnObject')]
+	public function testAWriteWhoseIngestIsNotAnObjectIsMalformedNotAFatalError(mixed $ingest): void
+	{
+		$this->configXmlOnDisk();
+
+		$reply = $this->writeIngest(static fn(array $current): mixed => $ingest);
+
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertStringContainsString('ingest', $reply['error']['message'] ?? '', 'the refusal names the projections a write holds');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'nothing is written');
+	}
+
+	public function testAWriteThatLeavesAnIngestFieldOutIsRefusedNamingIt(): void
+	{
+		$this->configXmlOnDisk();
+
+		$reply = $this->assertNoPhpWarning(fn(): array => $this->writeIngest(static function (array $ingest): array {
+			unset($ingest['proxyUrl']);
+			return $ingest;
+		}));
+
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertSame([['field' => 'ingest.proxyUrl', 'message' => 'read-only: config.xml and the platform own it']], $reply['error']['fieldErrors'] ?? NULL, 'exactly the field left out');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'nothing is written');
+	}
+
+	public function testAWriteThatAddsAnIngestFieldCoreDoesNotKnowIsRefusedNamingIt(): void
+	{
+		$this->configXmlOnDisk();
+
+		$reply = $this->assertNoPhpWarning(fn(): array => $this->writeIngest(static fn(array $ingest): array => $ingest + ['bogus' => TRUE]));
+
+		$this->assertSame('invalid_argument', $reply['error']['code'] ?? NULL, json_encode($reply));
+		$this->assertSame([['field' => 'ingest.bogus', 'message' => 'no such field']], $reply['error']['fieldErrors'] ?? NULL, 'exactly the field added');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'], 'nothing is written');
 	}
 
 	public function testTheRevisionMovesWhenASelfAddressOrTheProxyChanges(): void

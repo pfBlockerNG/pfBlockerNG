@@ -60,7 +60,8 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
 
   A projection may carry `readOnly: true` (issue #3975): Core only reads it, from its backend. `InitializeSettings`,
   `SaveSettings` and `ValidateSettings` refuse a change set that names it, with any content (also `{}` and `null`):
-  `invalid_argument`, one field error naming the projection (`changes.ingest`), and nothing of the change set is applied.
+  `invalid_argument`, one field error naming the projection (`changes.ingest`, or `settings.ingest` for `InitializeSettings`, whose argument is
+  `settings`), and nothing of the change set is applied.
   `InitializeSettings` gives it its defaults. Only [`ingest`](#projection-ingest) is read-only.
 - **Revision and generations.** The configuration *revision* is the optimistic lock. It comes from the backend and is
   compared only for equality. A projection's *generation* is derived from its value as a read shows it (53 bits of the
@@ -309,12 +310,15 @@ once and reads again, and the Update's start reads the backend again ([Update an
   server's address, IPv4 then IPv6 (`get_configured_ip_addresses()`, `get_configured_ipv6_addresses()`), each once. Never
   listed, though PHP would call them the box's own: `0.0.0.0`, `::`, link-local addresses, an IPv4-mapped IPv6 address and any
   address with a zone. Core adds the loopbacks.
-- **Proxy.** As `pfb_global()` builds the cURL proxy: nothing unless `proxyurl` is set (`"0"` counts as unset); `proxyport`
-  when set, else 1080, the port libcurl dials for a proxy without one ([`CURLOPT_PROXYPORT`](https://curl.se/libcurl/c/CURLOPT_PROXYPORT.html)); user and password only when both are set, as PHP authenticates only then. The URL
-  is `http://` and the host name or IP address (an IPv6 address in brackets); a hand-edited `http://` prefix is accepted. A
-  proxy URL that is anything else (user:password@, a path, another scheme, a line break) or a port that is not 1 to 65535 is
-  not passed to Core, whole: the proxy is then not projected, and Core reaches feeds directly. cURL's proxy never applied to
-  rsync or to local files.
+- **Proxy.** As `pfb_global()` builds the cURL proxy: nothing unless `proxyurl` is set (`"0"` counts as unset); `proxyport` as PHP hands
+  it to cURL ([`CURLOPT_PROXYPORT`](https://curl.se/libcurl/c/CURLOPT_PROXYPORT.html) is a number: `3128abc` is 3128; `00`, `abc`
+  and a service name pfSense's `is_port()` accepts, `http-alt` or `squid`, are 0), where unset or 0 is 1080, the port libcurl dials for
+  a proxy without one (probed: `http-alt` reaches 1080, not the service's 8080), so Core dials what PHP dials; user and password only
+  when both are set, as PHP authenticates only then. The URL is `http://` and the host name (letters, digits, `-`, `_` and `.`, as
+  pfSense's `is_fqdn()` takes them) or IP address (an IPv6 address in brackets); a hand-edited `http://` prefix is accepted. A
+  proxy URL that is anything else (user:password@, a path, another scheme, a line break) or a port `curl_setopt()` refuses (negative,
+  above 65535) is not passed to Core, whole: the proxy is then not projected, and Core reaches feeds directly. cURL's proxy never
+  applied to rsync or to local files.
 - **Core refuses what it reads.** `proxyUrl` must be `http://host:port` (port 1 to 65535, no userinfo, path, query or control
   character); a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an
   address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).

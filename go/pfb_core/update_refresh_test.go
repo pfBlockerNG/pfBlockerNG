@@ -120,6 +120,27 @@ func TestAFailedReadAtUpdateStartKeepsTheValuesIsLoggedOncePerOutageAndTheUpdate
 	}
 }
 
+// A read cut short because the Update was cancelled is no outage of the backend: it is not logged, and does not use up the line
+// the next failed read gets.
+func TestAReadFailingUnderACancelledUpdateIsNotLoggedAsAnOutage(t *testing.T) {
+	st, _ := loadScripted(t, readStep{user: "before"}, readStep{err: errors.New("config.xml is locked")})
+	inner := &recordingRun{t: t, st: st}
+	var logged []string
+	run := refreshingRun(st, inner.run, func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) })
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	run(cancelled, update.Request{Trigger: "manual"}, nil)
+	if len(logged) != 0 {
+		t.Fatalf("a read failing under a cancelled Update logged %q, want nothing", logged)
+	}
+	run(t.Context(), update.Request{Trigger: "manual"}, nil)
+
+	if len(logged) != 1 || !strings.Contains(logged[0], "config.xml is locked") {
+		t.Errorf("the next failed read logged %q, want its one line: the cancelled one did not use it up", logged)
+	}
+}
+
 // The Update the scheduler or a client starts through Core is the wrapped one: the adapter is run once more, before the program.
 func TestAnUpdateStartedThroughCoreReadsTheSettingsBackendFirst(t *testing.T) {
 	holdQuarters(t)
