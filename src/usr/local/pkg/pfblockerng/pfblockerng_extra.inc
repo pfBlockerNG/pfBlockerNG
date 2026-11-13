@@ -6714,14 +6714,20 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 			pfb_logger("\nCore Update request refused: {$e->getMessage()}\n", 2);
 			return 2;
 		}
-		try {
-			$status = pfb_core_update_run($request, $result, $seams);
-		} catch (Throwable $e) {
-			pfb_logger("\nCore Update failed: {$e->getMessage()}\n", 2);
-			$status = 1;
+		if ($request['trigger'] === 'scheduled' && pfb_cron_disabled()) {
+			// The sentinel suppresses scheduled work only: an empty result leaves Core's feeds pending, and the exit is "try later"
+			pfb_logger("\nCore Update: the scheduled Update is skipped: " . pfb_cron_disable_path() . " disables scheduled work.\n", 1);
+			$status = PFB_EXIT_LOCKED;
+		} else {
+			try {
+				$status = pfb_core_update_run($request, $result, $seams);
+			} catch (Throwable $e) {
+				pfb_logger("\nCore Update failed: {$e->getMessage()}\n", 2);
+				$status = 1;
+			}
+			$result['outcomes'] += $pfb['scheduled_outcomes'];
+			$result['geoipReady'] ??= pfb_geoip_generation_ready();
 		}
-		$result['outcomes'] += $pfb['scheduled_outcomes'];
-		$result['geoipReady'] ??= pfb_geoip_generation_ready();
 		$json = json_encode([
 			'version' => 1, 'outcomes' => (object) $result['outcomes'], 'attempted' => $result['attempted'],
 			'geoipReady' => $result['geoipReady'],
