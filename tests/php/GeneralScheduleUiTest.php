@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
  * Issue #2308 General-page schedule controller contract.
  *
  * The pure validator is deliberately exercised off-appliance; source pins cover the
- * page's visible controls and save/cache ordering without executing webConfigurator.
+ * page's visible controls and save ordering without executing webConfigurator.
  */
 final class GeneralScheduleUiTest extends TestCase
 {
@@ -81,95 +81,23 @@ final class GeneralScheduleUiTest extends TestCase
 		foreach (["'pfb_interval'", "'pfb_min'", "'pfb_hour'", "'pfb_dailystart'"] as $needle) {
 			$this->assertStringNotContainsString($needle, $source, "retired General control remains: {$needle}");
 		}
-		// issue #2855: the warning names the failing stage instead of asking for a bug report.
-		$this->assertStringContainsString(
-			"print_info_box(sprintf(gettext('Settings were saved, but schedule-cache generation failed: %s.",
-			$source
-		);
 	}
 
-	public function testSaveWritesConfigBeforeRefreshingScheduleCacheAndRedirectsOnFailure(): void
+	/** Issue #3941: Core owns the schedule, so a save writes config, tells Core, syncs the package and redirects with no cache hand-off. */
+	public function testSaveWritesConfigThenTellsCoreAndRedirectsPlainly(): void
 	{
 		$source = php_strip_whitespace(self::GENERAL_PAGE);
 		$save = strpos($source, 'if (isset($_POST[\'save\'])) {');
 		$this->assertNotFalse($save);
 		$write = strpos($source, 'PfbConfig::writeSection(', $save);
-		// issue #2855: the refresh moved inside pfb_schedule_cache_stage(), which reports
-		// which check failed. The ordering guarantee is unchanged, so follow the call.
-		$cache = strpos($source, 'pfb_schedule_cache_stage(', $save);
-		$redirect = strpos($source, 'schcache=failed', $save);
+		$notice = strpos($source, 'pfb_core_settings_changed(NULL, TRUE)', $save);
 		$this->assertNotFalse($write);
-		$this->assertNotFalse($cache, 'save must refresh the derived schedule cache');
-		$this->assertNotFalse($redirect, 'cache failure must be visible after redirect');
-		$this->assertLessThan($cache, $write, 'config must be persisted before cache publication');
-	}
-
-	public function testCandidateFailureSelectsVisibleFailureRedirect(): void
-	{
-		$model = pfb_schedule_runtime_model([
-			'pfb_scheduled_feed_updates' => '',
-			'pfb_schedule_weekday' => '7',
-			'pfb_schedule_hour' => '0',
-			'pfb_schedule_minute' => '0',
-		], ['ipv4' => [], 'ipv6' => [], 'dnsbl' => []]);
-		$this->assertNotNull($model);
-		$candidate = sys_get_temp_dir() . '/pfb_schedule_candidate_' . uniqid('', TRUE);
-		mkdir($candidate, 0700, TRUE);
-
-		try {
-			$this->assertFalse(pfb_schedule_cache_refresh(
-				$model,
-				['schema' => 1, 'items' => []],
-				time(),
-				new DateTimeZone('UTC'),
-				$candidate,
-				['fail_rename' => TRUE]
-			));
-			$this->assertSame('/pfblockerng/pfblockerng_general.php?schcache=failed',
-				pfb_general_schedule_save_redirect(FALSE));
-			$this->assertSame('/pfblockerng/pfblockerng_general.php',
-				pfb_general_schedule_save_redirect(TRUE));
-		} finally {
-			@unlink($candidate . '/pfb_due_ledger.json');
-			@unlink($candidate . '/pfb_due_ledger.json.lock');
-			@rmdir($candidate);
-		}
-		$this->assertStringContainsString('pfb_general_schedule_save_redirect( $cache_ok,',
-			php_strip_whitespace(self::GENERAL_PAGE));
-	}
-
-	public function testSaveStagesCandidateWithoutPublishingActiveCache(): void
-	{
-		$source = php_strip_whitespace(self::GENERAL_PAGE);
-		$save = strpos($source, 'if (isset($_POST[\'save\'])) {');
-		$this->assertNotFalse($save);
-		$cache = strpos($source, 'pfb_schedule_cache_stage(', $save);
-		$this->assertNotFalse($cache);
-		$window = substr($source, $save, strpos($source, '$pfb[\'save\']', $cache) - $save);
-		$this->assertStringContainsString('sys_get_temp_dir()', $window);
-		$this->assertStringContainsString('$pfb[\'schedule_state_dir\'] ?? \'/usr/local/etc\'', $window,
-			'candidate validation must use the same durable state directory as tick and apply');
-		// The page must never hand the stage helper a $pfb-rooted directory: that is the
-		// ACTIVE cache, and a settings save only ever stages a disposable candidate.
-		$this->assertStringNotContainsString('$runtime_timezone, $pfb', $window,
-			'the save must stage into a temporary directory, never the active cache');
-		$this->assertStringNotContainsString('pfb_schedule_cache_refresh(', $window,
-			'the page must not publish directly; the stage helper owns the publication');
+		$this->assertNotFalse($notice, 'Core must be told of the saved settings');
+		$this->assertLessThan($notice, $write, 'config must be persisted before Core is told');
+		$this->assertStringContainsString("header('Location: /pfblockerng/pfblockerng_general.php');", $source);
 		$this->assertStringContainsString('$pfb[\'save\'] = TRUE; sync_package_pfblockerng();', $source);
 		$this->assertMatchesRegularExpression('/pfblockerng_configure_tick_cron\(\s*\$pfb\[\'enable\'\]\s*===\s*PfbToggle::On,\s*\$pfb\[\'log\'\]\s*\)/', php_strip_whitespace(self::APPLY),
 			'settings-save sync installs the tick cron only: no schedule cache is regenerated or replaced (issue #3941)');
-	}
-
-	public function testSaveRemovesEveryDisposableCandidateArtifact(): void
-	{
-		$source = php_strip_whitespace(self::GENERAL_PAGE);
-		$this->assertMatchesRegularExpression(
-			'/foreach\s*\(scandir\(\$candidate_dir\)\s*\?:\s*\[\]\s+as\s+\$candidate_artifact\)\s*\{\s*'
-			. 'if\s*\(\$candidate_artifact\s*!==\s*\x27\.\x27\s*&&\s*\$candidate_artifact\s*!==\s*\x27\.\.\x27\)\s*\{\s*'
-			. '@unlink\("\{\$candidate_dir\}\/\{\$candidate_artifact\}"\);/',
-			$source,
-			'Candidate cleanup must not assume the publisher created only two filenames.'
-		);
 	}
 
 	public function testAuthorizationRemainsGatewayBound(): void

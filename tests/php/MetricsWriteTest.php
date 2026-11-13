@@ -994,16 +994,38 @@ final class MetricsWriteTest extends TestCase
 		);
 	}
 
-	public function testCollectMapsScheduleStateToFeedSuccess(): void
+	/** @return array{status: int, body: ?array, error: ?string} a fake Core's answer */
+	private static function coreAnswers(?array $body, ?string $error = NULL): array
+	{
+		return ['status' => $body === NULL ? 0 : 200, 'body' => $body, 'error' => $error];
+	}
+
+	/** Issue #3941: the per-feed last success is Core's (GetSchedule `lastSuccessfulCheck`), not a PHP state file's. */
+	public function testCollectMapsCoresLastSuccessfulChecksToFeedSuccess(): void
+	{
+		$asked = [];
+		$s = pfb_metrics_collect(static function (string $method, array $params = []) use (&$asked): array {
+			$asked[] = $method;
+			return self::coreAnswers([
+				'scheduled' => TRUE, 'feeds' => NULL, 'extras' => [],
+				'lastSuccessfulCheck' => ['dnsbl:DNSBL_Ads' => 1700000000, 'extra:dcc' => 1700000100],
+			]);
+		});
+
+		$this->assertSame(['GetSchedule'], $asked);
+		$this->assertSame(['dnsbl:DNSBL_Ads' => 1700000000, 'extra:dcc' => 1700000100], $s['feed_success']);
+		$this->assertTrue($s['source_up']['schedule_state']);
+	}
+
+	public function testCollectIgnoresTheRetiredPhpScheduleStateFile(): void
 	{
 		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_schedule_state.json", json_encode(['schema' => 1, 'items' => [
 			'dnsbl:DNSBL_Ads' => ['last_successful_check' => 1700000000],
-			'extra:dcc' => ['pending_occurrence' => 3],
 		]]));
 
-		$s = pfb_metrics_collect();
+		$s = pfb_metrics_collect(static fn (): array => self::coreAnswers(['scheduled' => TRUE, 'feeds' => NULL, 'extras' => [], 'lastSuccessfulCheck' => []]));
 
-		$this->assertSame(['dnsbl:DNSBL_Ads' => 1700000000], $s['feed_success']);
+		$this->assertSame([], $s['feed_success'], 'a file the cutover retired is not a source');
 		$this->assertTrue($s['source_up']['schedule_state']);
 	}
 
@@ -1159,13 +1181,29 @@ final class MetricsWriteTest extends TestCase
 		$this->assertFalse($s['source_up']['pass_status']);
 	}
 
-	public function testCorruptScheduleStateReadsAsNullAndSourceDown(): void
+	public function testACoreThatDoesNotAnswerReadsAsNullAndSourceDown(): void
 	{
-		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_schedule_state.json", 'not json');
-
-		$s = pfb_metrics_collect();
+		$s = pfb_metrics_collect(static fn (): array => self::coreAnswers(NULL, 'the Core API did not answer: Failed to connect'));
 
 		$this->assertNull($s['feed_success']);
+		$this->assertFalse($s['source_up']['schedule_state']);
+	}
+
+	public function testACoreThatRefusesTheScheduleReadsAsNullAndSourceDown(): void
+	{
+		$s = pfb_metrics_collect(static fn (): array => [
+			'status' => 503, 'body' => ['error' => ['code' => 'unavailable', 'message' => 'the settings are not initialized']], 'error' => NULL,
+		]);
+
+		$this->assertNull($s['feed_success']);
+		$this->assertFalse($s['source_up']['schedule_state']);
+	}
+
+	public function testAScheduleWithoutTheLastSuccessfulCheckMapReadsAsSourceDown(): void
+	{
+		$s = pfb_metrics_collect(static fn (): array => self::coreAnswers(['scheduled' => TRUE, 'feeds' => NULL, 'extras' => []]));
+
+		$this->assertNull($s['feed_success'], 'an older Core that lacks the map cannot be told from one with no success: it is down');
 		$this->assertFalse($s['source_up']['schedule_state']);
 	}
 

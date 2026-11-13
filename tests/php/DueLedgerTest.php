@@ -832,10 +832,9 @@ final class DueLedgerTest extends TestCase
 	/**
 	 * Neither branch of set_pending advances last_run.
 	 *
-	 * The live smoke test (test_update_runnow_does_not_publish_schedule_cache) holds one
-	 * fact across a Run Now: cron.last_run never advances. Everything else in the ledger
-	 * is rewritten by the pass tail's own pfb_schedule_cache_refresh_locked(), so it is
-	 * not the tick's to own. set_pending is on the deferral path a Run Now can reach, and
+	 * cron.last_run never advances across a Run Now (issue #3941: the schedule itself is Core's,
+	 * and the `cron` entry stays only as the Outpost's pending-apply flag). set_pending is on
+	 * the deferral path a Run Now can reach, and
 	 * it has two branches -- marking an existing entry, and creating a placeholder when
 	 * the job has none. Both must leave last_run where it was.
 	 *
@@ -852,8 +851,8 @@ final class DueLedgerTest extends TestCase
 			'cron'      => ['last_run' => 1000, 'next_due' => 2000, 'jitter' => 7],
 			'extra:dcc' => ['last_run' => 3000, 'next_due' => 4000, 'jitter' => 11],
 		];
-		$this->assertTrue(pfb_due_ledger_write_cache($entries, $hash, $this->dir),
-			'the fixture cache must publish');
+		// a ledger that still carries the retired PHP schedule cache's stamp (issue #3941 retires it, but an upgrade may meet one)
+		file_put_contents($this->dir . '/pfb_due_ledger.json', json_encode(['_meta' => ['schema' => 1, 'config_hash' => $hash]] + $entries));
 		$before = json_decode((string)file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 
 		$this->assertTrue(pfb_due_ledger_set_pending('cron', $this->dir),

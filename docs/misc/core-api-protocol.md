@@ -316,10 +316,11 @@ one it followed drops its cursor and calls without `after`.
 ### GetSchedule
 
 Takes no parameters; the reply is computed from the settings and the scheduler's state at the call:
-`{"scheduled": bool, "feeds": {"lastRun", "nextDue"} or null, "extras": {"extra:dcc": {...}, "extra:bl": {...}}}`. `scheduled`
-is the General switch for scheduled feed updates. `feeds` is the feeds' entry, `null` when scheduled updates are off or no
-feed is or will be due. `extras` holds the Extras that are enabled and will be due. A time is Unix seconds, `lastRun` 0 when
-never run. When the model cannot be built (the settings are not initialized, or hold a value the schedule refuses) the call is
+`{"scheduled": bool, "feeds": {"lastRun", "nextDue"} or null, "extras": {"extra:dcc": {...}, "extra:bl": {...}}, "lastSuccessfulCheck":
+{id: time}}`. `scheduled` is the General switch for scheduled feed updates. `feeds` is the feeds' entry, `null` when scheduled
+updates are off or no feed is or will be due. `extras` holds the Extras that are enabled and will be due. A time is Unix seconds,
+`lastRun` 0 when never run. `lastSuccessfulCheck` is always an object: the time of the last successful check of every item (a feed
+id or an Extra) that has had one, `{}` when none has; it is the metrics export's `pfblockerng_feed_last_success_timestamp_seconds`. When the model cannot be built (the settings are not initialized, or hold a value the schedule refuses) the call is
 `unavailable` with the reason.
 
 ### Update command
@@ -522,6 +523,16 @@ Core does not start (a page save, an HA receive); a lock that is held defers the
 serves, `pfb_logger()` mirrors to stdout, which is Core's `update.log`, and a hook's output is appended to the same file; the
 `pfblockerng_run.log` is not opened. The result goes to fd 3, the exit status is 0 on success and 1 on a failed Extra, pass or
 apply. Pinned by `CoreUpdateServeTest`.
+
+**The Update page** (`pfblockerng_update.php`) is Core's client. Run Now, Force and the Wizard reload call `pfb_update_start()`: a
+`StartUpdate` of `manual` with the page's scope and force (allow-listed before the call), and an Update that already runs is
+`conflict`, reported as "An Update is running." The live view polls `?ajax=update[&after=<cursor>]` once a second:
+`pfb_update_view_response()` relays `GetUpdate` as `{running, done, log, next, update}` (`after` only as the string of decimal digits
+it is; anything else is dropped), and the poller stops when `done` and the log is drained. A changed `update.startedAt` clears
+the viewed log and drops the cursor. The status line is `GetUpdate.running`, and the Schedule section is `GetSchedule`
+(`pfb_update_schedule_view()`): Feed groups from `feeds`, Extras from `extras["extra:dcc"]`, DNSBL Category from
+`extras["extra:bl"]`, "Core is not answering" in each row when Core gives no schedule. Pinned by `UpdateViewResponseTest`,
+`UpdateScheduleRowTest` and `UpdatePageCoreTest`.
 
 The tick (`pfblockerng_tick()`) keeps the Outpost's duties and asks Core for the two Updates only the Outpost can tell are due:
 `StartUpdate` of `apply` for a pending change inside the apply window (outside it, the tick logs that it is deferred and the apply

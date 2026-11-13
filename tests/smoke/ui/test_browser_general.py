@@ -345,25 +345,13 @@ def test_quarter_hour_scheduling_controls_and_apply_window(
         assert "Schedule minute is invalid" in rejected.text
         assert helpers.config_get(smoke_vm, paths["pfb_schedule_minute"]) == "30"
 
-        # issue #2855: the warning names the stage that failed, and an unrecognised stage
-        # token falls back to the generic label instead of reaching the page.
+        # issue #3941: Core owns the schedule, so a save builds no PHP schedule-cache candidate and the
+        # page has no schcache/schstage hand-off: a stale bookmark carrying them renders no warning.
         _open(page, webui, GENERAL_PAGE + "?schcache=failed&schstage=config")
-        expect(
-            page.get_by_text(
-                "schedule-cache generation failed: the saved schedule configuration was rejected",
-                exact=False,
-            )
-        ).to_be_visible(timeout=JS_TIMEOUT_MS)
-
-        _open(page, webui, GENERAL_PAGE + "?schcache=failed&schstage=not-a-stage")
+        expect(page.locator('input[name="pfb_scheduled_feed_updates"]')).to_be_visible(timeout=JS_TIMEOUT_MS)
         # Scoped to THIS message, never to ``.alert-warning`` alone: the pending-changes
         # banner is also an alert-warning and may be set.
-        warning = page.locator(".alert-warning:has-text('schedule-cache generation failed')")
-        expect(warning).to_contain_text("the failing stage was not recorded", timeout=JS_TIMEOUT_MS)
-        # The stage token must not reach the reader. Asserted against the warning's text, not
-        # the document: pfSense's Form defaults its action to REQUEST_URI, so the query string
-        # is echoed into the form tag and page.content() would match there.
-        assert "not-a-stage" not in warning.inner_text()
+        expect(page.locator(".alert-warning:has-text('schedule-cache generation failed')")).to_have_count(0)
 
         # Master Off suppresses scheduled work only; schedule and enabled window remain editable.
         window_toggle.check()

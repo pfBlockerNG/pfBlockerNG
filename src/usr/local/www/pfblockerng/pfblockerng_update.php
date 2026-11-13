@@ -38,22 +38,21 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
-// AJAX live-log tail: the terminal poller fetches this URL with ?ajax=tail&offset=N and appends
-// the returned bytes (replacing the old blocking inline-<script> stream that parked the request
-// and left the page -- and its nav menu -- half-loaded). Must run before any head/HTML output.
-if (($_GET['ajax'] ?? '') === 'tail') {
-	// Release the PHP session write-lock immediately: this poll only READS files + isvalidpid,
-	// it never writes the session. guiconfig.inc holds an EXCLUSIVE per-session lock for the whole
-	// request, so without this every 1s poll serialises behind any other same-session request
-	// (other tabs, nav background requests, the dispatching POST). During a long no-output gap --
-	// e.g. an HAProxy graceful-restart drain in an update hook -- one such blocked poll leaves the
-	// client's in-flight guard stuck and freezes the live tail until a manual reload.
+// AJAX view of the one Update: the poller fetches ?ajax=update[&after=<cursor>] and appends the returned log. The reply is
+// Core's GetUpdate (issue #3941); `after` is the `next` of the previous reply, passed back as the string it is. Must run
+// before any head/HTML output.
+if (($_GET['ajax'] ?? '') === 'update') {
+	// Release the PHP session write-lock immediately: this poll only READS from Core, it never writes the session.
+	// guiconfig.inc holds an EXCLUSIVE per-session lock for the whole request, so without this every 1s poll serialises
+	// behind any other same-session request (other tabs, nav background requests, the dispatching POST). During a long
+	// no-output gap -- e.g. an HAProxy graceful-restart drain in an update hook -- one such blocked poll leaves the
+	// client's in-flight guard stuck and freezes the live view until a manual reload.
 	session_write_close();
-	$pfb_tail_response = pfb_update_tail_response($_GET, 'pfb_log_tail_payload');
-	foreach ($pfb_tail_response['headers'] as $pfb_tail_header) {
-		header($pfb_tail_header);
+	$pfb_view_response = pfb_update_view_response($_GET, 'pfb_core_call');
+	foreach ($pfb_view_response['headers'] as $pfb_view_header) {
+		header($pfb_view_header);
 	}
-	print($pfb_tail_response['body']);
+	print($pfb_view_response['body']);
 	exit;
 }
 
@@ -66,88 +65,6 @@ function pfbupdate_status($status) {
 	print("\n</script>");
 	/* ensure that contents are written out */
 	ob_flush();
-}
-
-
-// TRUE when a pfBlockerNG feed task (cron/update/trigger/tick/forcecheck) is already running.
-// The active-process guard used by the Run Now dispatchers and the status line; delegates to
-// pfb_feed_task_running() (pfblockerng.inc).
-function pfb_active_task_running(): bool {
-	return pfb_feed_task_running();
-}
-
-// Dispatch pfb_trigger via the explicit API. The page returns immediately; the client polls
-// ?ajax=tail. The next locked tick rebuilds its derived schedule cache from config and state.
-function pfb_runnow(string $scope, bool $force): void {
-	global $pfb;
-
-	// Check for any active pfBlockerNG process before dispatching.
-	if (pfb_active_task_running()) {
-		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
-		return;
-	}
-
-	if (!file_exists("{$pfb['log']}")) {
-		touch("{$pfb['log']}");
-	}
-
-	$trigger     = $force ? 'force' : 'manual';
-	$force_val   = $force ? 'true'  : 'false';
-	$scope_esc   = escapeshellarg($scope);
-	$trigger_esc = escapeshellarg($trigger);
-
-	pfbupdate_status(gettext("Running: scope={$scope} force={$force_val}"));
-
-	pfb_logger("\n [ Run Now - scope={$scope} force={$force_val} trigger={$trigger} ]\n", 1);
-
-	// Launch detached under daemon(8) with a pidfile so the livetail can track THIS
-	// dispatched process by pid (isvalidpid) rather than a ps-pattern guess. daemon writes
-	// the child pid to $pidfile and removes it on exit; mwexec_bg keeps the robust detach.
-	$pidfile = '/var/run/pfb_runnow.pid';
-	@unlink($pidfile);
-	@file_put_contents($pfb['runlog'], '');	// fresh per-run log for the live viewer to tail
-	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
-		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope={$scope_esc} force={$force_val} trigger={$trigger_esc} >> {$pfb['runlog']} 2>&1");
-
-	// The page no longer blocks tailing here: it returns immediately (so foot.inc loads and the
-	// nav menu works) and the client polls ?ajax=tail for the live log, keyed on $pidfile.
-
-}
-
-// Dispatch the on-demand detector (forcecheck verb) via mwexec_bg, stream log output,
-// and update the due ledger — same active-process guard and livetail as pfb_runnow().
-// The child clears validators only after acquiring scheduler locks.
-function pfb_runnow_forcecheck(string $scope, bool $clear_hashes = FALSE): void {
-	global $pfb;
-
-	// Active-process guard — TOCTOU backstop; the POST handler also pre-checks before
-	// clearing any sidecars (so a skipped run never leaves the box primed for a re-fetch).
-	if (pfb_active_task_running()) {
-		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
-		return;
-	}
-
-	if (!file_exists("{$pfb['log']}")) {
-		touch("{$pfb['log']}");
-	}
-
-	$scope_esc = escapeshellarg($scope);
-	$hashes_val = $clear_hashes ? 'true' : 'false';
-
-	pfbupdate_status(gettext("Running: scope={$scope} force=download/both (on-demand detector)"));
-
-	pfb_logger("\n [ Force check - scope={$scope} ]\n", 1);
-
-	// Launch detached under daemon(8) with a pidfile — see pfb_runnow(); the livetail
-	// tracks this dispatched process by pid (isvalidpid), not a ps-pattern.
-	$pidfile = '/var/run/pfb_runnow.pid';
-	@unlink($pidfile);
-	@file_put_contents($pfb['runlog'], '');	// fresh per-run log for the live viewer to tail
-	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
-		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} hashes={$hashes_val} >> {$pfb['runlog']} 2>&1");
-
-	// Page returns immediately; the client polls ?ajax=tail for the live log (see pfb_runnow).
-
 }
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'));
@@ -169,10 +86,13 @@ if (isset($_GET) && isset($_GET['wizard']) && $_GET['wizard'] == 'reload') {
 	$pfb_wizard                = TRUE;
 }
 
-// Validate user-supplied scope; default to 'both' for unexpected input.
+// Validate user-supplied scope and force mode; default to 'both' / 'none' for unexpected input.
 $pfb_allowed_scopes = array('ip', 'dnsbl', 'both');
 if (isset($pconfig['pfb_scope']) && !in_array($pconfig['pfb_scope'], $pfb_allowed_scopes, TRUE)) {
 	$pconfig['pfb_scope'] = 'both';
+}
+if (isset($pconfig['pfb_force_mode']) && !in_array($pconfig['pfb_force_mode'], array('none', 'parse', 'download', 'both'), TRUE)) {
+	$pconfig['pfb_force_mode'] = 'none';
 }
 
 // Define default Alerts Tab href link (Top row)
@@ -239,9 +159,10 @@ $status = 'Next schedule check:'
 	. "&emsp;<strong>{$cronreal}</strong>&emsp;(in <strong><span style=\"color: red;\">{$nextcron}</span></strong>). "
 	. 'Feed groups update at their own <strong>Update Frequency</strong>.';
 
-// Query for any active pfBlockerNG task (captured once: reused by the status line AND the
-// auto-tail decision below).
-$pfb_task_running = pfb_active_task_running();
+// Ask Core whether an Update runs (captured once: reused by the status line AND the auto-tail decision below).
+$pfb_update_answer = pfb_core_call('GetUpdate', []);
+$pfb_task_running = pfb_update_core_failure($pfb_update_answer) === NULL
+	&& ($pfb_update_answer['body']['running'] ?? FALSE) === TRUE;
 if ($pfb_task_running) {
 	$status = '<span style="color: red;">&emsp;&emsp;'
 		. 'An update is running.'
@@ -253,62 +174,56 @@ if ($pfb_task_running) {
 $pfb_auto_tail = pfb_update_autotail($pfb_task_running, isset($pconfig['run']), isset($_POST['log_view']));
 $status .= '<br />&emsp;<small><span style="color: red;">Refresh to update current status and time remaining.</span></small>';
 
-// Whether the client should poll the live-log tail (?ajax=tail) once the page has rendered. TRUE
+// Whether the client should poll the Update view (?ajax=update) once the page has rendered. TRUE
 // when an update is already in progress (auto-tail); also set TRUE by the View button and the Run
 // Now dispatch below. A plain visit with no active run leaves it FALSE (empty box, per #666).
 $pfb_poll        = $pfb_auto_tail;
 $pfb_poll_status = $pfb_auto_tail ? gettext('Update in progress — tailing the live log...') : '';
 
-// Read the due-ledger entries for the Schedule view (read-only at page load).
-$ledger_cron = pfb_due_ledger_read_entry('cron', $pfb['dbdir']);
-$ledger_dcc  = pfb_due_ledger_read_entry('extra:dcc', $pfb['dbdir']);
-$ledger_bl   = pfb_due_ledger_read_entry('extra:bl', $pfb['dbdir']);
-$schedule_state = pfb_schedule_state_read((string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc'));
-if (is_array($schedule_state)) {
-	foreach (['extra:dcc' => &$ledger_dcc, 'extra:bl' => &$ledger_bl] as $id => &$entry) {
-		$item = $schedule_state['items'][$id] ?? NULL;
-		if (is_array($item) && (isset($item['last_successful_check']) || isset($item['last_completed_occurrence']))) {
-			$entry ??= [];
-			$entry['last_run'] = $item['last_successful_check'] ?? $item['last_completed_occurrence'];
-		}
-	}
-	unset($entry);
-}
+// The Schedule view is Core's (issue #3941): the scheduler and its state live there.
+$pfb_schedule = pfb_update_schedule_view('pfb_core_call');
 
 /**
- * Format a ledger entry as "Last: YYYY-MM-DD HH:MM  Next: YYYY-MM-DD HH:MM"
- * or "Not yet run" when the entry is absent.
+ * Format a schedule entry as "Last: YYYY-MM-DD HH:MM:SS  Next: YYYY-MM-DD HH:MM:SS"; "—" stands for a time the entry lacks.
+ *
+ * @param array{last_run?: int, next_due?: int} $entry
  */
-function pfb_ledger_entry_html(?array $entry): string {
-	if ($entry === NULL) {
-		return '<em>Not yet run</em>';
-	}
+function pfb_ledger_entry_html(array $entry): string {
 	$last = isset($entry['last_run']) ? date('Y-m-d H:i:s', (int)$entry['last_run']) : '—';
 	$next = isset($entry['next_due']) ? date('Y-m-d H:i:s', (int)$entry['next_due']) : '—';
 	return "Last: <strong>{$last}</strong>&emsp;Next: <strong>{$next}</strong>";
 }
 
 /**
+ * Format one Schedule row from Core's answer: its entry, "Not scheduled" when Core has none, or "Core is not answering" (the
+ * reason on hover) when Core gave no schedule.
+ */
+function pfb_schedule_entry_html(?string $error, ?array $entry): string {
+	if ($error !== NULL) {
+		return '<em title="' . htmlspecialchars($error, ENT_QUOTES) . '">Core is not answering</em>';
+	}
+	return $entry === NULL ? '<em>Not scheduled</em>' : pfb_ledger_entry_html($entry);
+}
+
+/**
  * Format the DNSBL Category ('bl') schedule row.
  *
- * Unlike the feed/extras jobs, the category job only runs (and so only ever records a
- * ledger entry) when the DNSBL Category feature is enabled with at least one category
- * selected — the exact gate the tick dispatcher applies before dispatching 'bl'. When the
- * feature is off, a bare "Not yet run" reads as if a scheduled job is stuck, so report WHY
- * it is not scheduled instead.
+ * Unlike the feed/extras jobs, the category job is only scheduled when the DNSBL Category feature is enabled with at least one
+ * category selected. When the feature is off, "Not scheduled" reads as if a scheduled job is missing, so report WHY it is not
+ * scheduled instead.
  */
-function pfb_dnsbl_category_schedule_html(array $pfb, ?array $entry): string {
+function pfb_dnsbl_category_schedule_html(array $pfb, ?array $entry, ?string $error = NULL): string {
 	$bl = $pfb['blconfig'] ?? array();
 	if (($pfb['enable'] ?? PfbToggle::Off) !== PfbToggle::On ||
 	    empty($bl['blacklist_enable']) || $bl['blacklist_enable'] === 'Disable') {
 		return '<em>Disabled</em>';
 	}
-	// Enabled — but is any category actually selected? (Mirrors the tick's bl_str build:
-	// an item counts only when it is in blacklist_selected AND flagged selected.)
+	// Enabled — but is any category actually selected? An item counts only when it is in
+	// blacklist_selected AND flagged selected.
 	$selected = !empty($bl['blacklist_selected']) ? array_flip(explode(',', $bl['blacklist_selected'])) : array();
 	foreach (($bl['item'] ?? array()) as $item) {
 		if (isset($selected[$item['xml']]) && !empty($item['selected'])) {
-			return pfb_ledger_entry_html($entry);	// active — show the real schedule
+			return pfb_schedule_entry_html($error, $entry);	// active — show Core's schedule
 		}
 	}
 	return '<em>None selected</em>';
@@ -425,15 +340,15 @@ $section->addInput(new Form_StaticText(
 ));
 $section->addInput(new Form_StaticText(
 	'Feed groups',
-	pfb_ledger_entry_html($ledger_cron)
+	pfb_schedule_entry_html($pfb_schedule['error'], $pfb_schedule['feeds'])
 ));
 $section->addInput(new Form_StaticText(
 	'Extras (MaxMind, ASN, TOP1M)',
-	pfb_ledger_entry_html($ledger_dcc)
+	pfb_schedule_entry_html($pfb_schedule['error'], $pfb_schedule['dcc'])
 ));
 $section->addInput(new Form_StaticText(
 	'DNSBL Category',
-	pfb_dnsbl_category_schedule_html($pfb, $ledger_bl)
+	pfb_dnsbl_category_schedule_html($pfb, $pfb_schedule['bl'], $pfb_schedule['error'])
 ));
 $form->add($section);
 
@@ -460,42 +375,19 @@ $form->add($section);
 print($form);
 
 // View / End-View button: start (or stop) the client-side live-log poll. 'End View' text means
-// the viewer is now active (the toggle flipped it above); 'View' means it was just ended.
-if (isset($pconfig['log_view'])) {
-	if ($pconfig['log_view'] !== 'View') {
-		$pfb_poll        = TRUE;
-		$pfb_poll_status = gettext("Log Viewing in progress.    ** Press 'END VIEW' to Exit ** ");
-	} else {
-		// End View — leave $pfb_poll as-is (an in-progress update still auto-tails).
-		clearstatcache(FALSE, $pfb['runlog']);
-	}
+// the viewer is now active (the toggle flipped it above); 'View' means it was just ended, and an
+// in-progress update still auto-tails.
+if (isset($pconfig['log_view']) && $pconfig['log_view'] !== 'View') {
+	$pfb_poll        = TRUE;
+	$pfb_poll_status = gettext("Log Viewing in progress.    ** Press 'END VIEW' to Exit ** ");
 }
 
-// Run Now handler — dispatches pfb_trigger or forcecheck depending on force mode.
+// Run Now handler (and the Wizard reload): ask Core for a manual Update of the scope with the force mode.
+// An Update that already runs is reported, and the poller views it.
 if ($pfb['enable'] === PfbToggle::On && isset($pconfig['run']) &&
     isset($pconfig['pfb_scope']) && !empty($pconfig['pfb_scope'])) {
-	// A Run Now (or a skip that finds a task already running) tails the live log via the poller.
-	$pfb_poll   = TRUE;
-	$scope      = in_array($pconfig['pfb_scope'], $pfb_allowed_scopes, TRUE) ? $pconfig['pfb_scope'] : 'both';
-	$force_mode = $pconfig['pfb_force_mode'] ?? 'none';
-	if (!in_array($force_mode, array('none', 'parse', 'download', 'both'), TRUE)) {
-		$force_mode = 'none';
-	}
-	if ($force_mode === 'download' || $force_mode === 'both') {
-		// Pre-check the active-task guard BEFORE clearing any sidecars: if a run is already
-		// in progress, clearing them here (then skipping the dispatch) would leave the box
-		// primed for an unrequested re-fetch on the next scheduled tick.
-		if (pfb_active_task_running()) {
-			pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
-		} else {
-			// Clear the scoped conditional-GET sidecars, then run the detector on-demand so it
-			// re-fetches (200) and re-ingests changed feeds (Both also clears the hash => all).
-			pfb_runnow_forcecheck($scope, $force_mode === 'both');
-		}
-	} else {
-		// none -> plain pass; parse -> reuse=on (reparse cached, no download).
-		pfb_runnow($scope, $force_mode === 'parse');
-	}
+	$pfb_poll = TRUE;
+	pfbupdate_status(pfb_update_start($pconfig['pfb_scope'], $pconfig['pfb_force_mode'] ?? 'none', 'pfb_core_call'));
 
 	if ($pfb_wizard) {
 
@@ -549,47 +441,62 @@ events.push(function(){
 	// post-reload state) and left the reloaded page scrolled down. Match View: no page scroll.
 
 <?php if ($pfb_poll): ?>
-	// Live-log tail. The page has fully rendered (foot.inc ran, so the nav menu works); the log
-	// streams in by polling ?ajax=tail and appending the new bytes, instead of the old blocking
-	// inline-<script> stream that parked the request. Sticky auto-follow: re-pin to the bottom
-	// only when the user is already at the bottom, so scrolling up to read is not yanked back.
+	// Live view of the Update. The page has fully rendered (foot.inc ran, so the nav menu works); the log
+	// streams in by polling ?ajax=update, which relays Core's GetUpdate, and appending the returned log.
+	// Sticky auto-follow: re-pin to the bottom only when the user is already at the bottom, so scrolling
+	// up to read is not yanked back.
 	(function() {
 		var out     = document.forms[0].pfb_output;
 		var stat    = document.forms[0].pfb_status;
-		var offset  = null;
+		var after     = null;   // Core's cursor: the `next` of the last reply, sent back as the string it is
+		var startedAt = null;   // update.startedAt of the Update being followed
 		var timer   = null;
-		var pending = false;   // at most one poll in flight -- guards against overlapping requests
-		var done    = false;   // (mobile resume / catch-up ticks) both reading the same offset
+		var pending = false;    // at most one poll in flight -- guards against overlapping requests
+		var done    = false;    // (mobile resume / catch-up ticks) both reading the same cursor
 		var initStatus = <?=pfb_js_string($pfb_poll_status);?>;
 		var doneStatus = <?=pfb_js_string(gettext('Log viewer idle.'));?>;
+		var errorStatus = <?=pfb_js_string(gettext('The Update view stopped: '));?>;
 		if (initStatus) { stat.value = initStatus; }
+		function stop(text) {
+			done = true;
+			if (timer) { clearInterval(timer); timer = null; }
+			stat.value = text;
+		}
 		function poll() {
 			if (pending || done) { return; }   // skip the tick while a request is outstanding
 			pending = true;
-			var url = '/pfblockerng/pfblockerng_update.php?ajax=tail' + (offset !== null ? '&offset=' + offset : '');
+			var url = '/pfblockerng/pfblockerng_update.php?ajax=update' + (after !== null ? '&after=' + encodeURIComponent(after) : '');
 			// timeout: a poll normally returns in ms; if one ever blocks, abort at 5s so .always()
-			// clears the in-flight guard and the next tick retries (the offset only advances on a
+			// clears the in-flight guard and the next tick retries (the cursor only advances on a
 			// successful .done, so a retry re-reads the same range -- no data lost). Without it, a
-			// single blocked poll would freeze the tail until a manual reload.
+			// single blocked poll would freeze the view until a manual reload.
 			$.ajax({ url: url, type: 'GET', dataType: 'json', cache: false, timeout: 5000 }).done(function(r) {
 				if (!r) { return; }
-				if (r.data) {
+				if (r.error) { stop(errorStatus + r.error); return; }
+				var at = r.update ? r.update.startedAt : null;
+				if (startedAt !== null && at !== startedAt) {
+					// Another Update, or a restarted Core whose cursor may match this one's: start a clean log and
+					// read the Update again from its start (a cursor is not valid across either).
+					out.value = '';
+					after = null;
+					startedAt = at;
+					setTimeout(poll, 0);
+					return;
+				}
+				startedAt = at;
+				if (r.log) {
 					var atBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) <= 16;
-					out.value += r.data;
+					out.value += r.log;
 					if (atBottom) { out.scrollTop = out.scrollHeight; }
 				}
-				if (typeof r.offset !== 'undefined') { offset = r.offset; }
-				if (r.done) {
-					done = true;
-					if (timer) { clearInterval(timer); timer = null; }
-					stat.value = doneStatus;
-				}
+				after = r.next;
+				if (r.done && r.log === '') { stop(doneStatus); }
 			}).always(function() { pending = false; });
 		}
 		poll();
 		timer = setInterval(poll, 1000);
 		// Mobile browsers suspend timers when the tab is backgrounded; re-poll once on return so
-		// the tail catches up from its stored offset (the in-flight guard prevents a double read).
+		// the view catches up from its stored cursor (the in-flight guard prevents a double read).
 		document.addEventListener('visibilitychange', function() {
 			if (!document.hidden && !done) { poll(); }
 		});

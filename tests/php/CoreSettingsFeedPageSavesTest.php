@@ -92,7 +92,7 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 		$group = ['aliasname' => 'Spam', 'action' => 'Deny_Inbound', 'cron' => 'Never'];
 		return [
 			'the Groups editor saves a group' => [self::EDIT,
-				'$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";', '$runtime_model = pfb_schedule_runtime_config();',
+				'$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";', 'pfb_mark_pending_changes();',
 				['type' => 'IPv4', 'name' => 'Spam'], 'pfBlockerNG: Saved [ Type:IPv4, Name:Spam ] configuration'],
 			'the group list removes an empty entry' => [self::LIST,
 				"// Remove any empty '<config></config>' XML tags", 'if (!empty($action) && isset($gtype) && isset($rowid)) {',

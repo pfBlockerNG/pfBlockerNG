@@ -15,7 +15,7 @@ use PHPUnit\Framework\TestCase;
  * it authorises the bare page but 403s any "?query" variant. A delegated
  * operator who holds only the pfBlockerNG privilege (admins bypass privs) is
  * therefore locked out of every query-string surface -- Feeds sub-tabs
- * (?type=), the Update live-log tail (?ajax=tail), the SafeSearch save banner
+ * (?type=), the Update live-log poll (?ajax=update), the SafeSearch save banner
  * (?savemsg=), and the General wizard hand-off (?wizard=). The wizard itself
  * runs at /wizard.php?xml=..., so the old "wizards/pfblockerng_wizard.xml"
  * entry never matched at all.
@@ -134,7 +134,7 @@ final class PrivPageMatchesTest extends TestCase
 			'safesearch (bare)'   => ['/pfblockerng/pfblockerng_safesearch.php'],
 			// Query-string surfaces: 403 before the fix, authorised after.
 			'general wizard hand-off' => ['/pfblockerng/pfblockerng_general.php?wizard=1'],
-			'update live-log tail'    => ['/pfblockerng/pfblockerng_update.php?ajax=tail'],
+			'update live-log poll'    => ['/pfblockerng/pfblockerng_update.php?ajax=update'],
 			'feeds type sub-tab'      => ['/pfblockerng/pfblockerng_feeds.php?type=IPv4'],
 			'safesearch save banner'  => ['/pfblockerng/pfblockerng_safesearch.php?savemsg=Saved'],
 			// The wizard runs at /wizard.php?xml=..., not /wizards/...xml.

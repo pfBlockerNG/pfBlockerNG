@@ -8,6 +8,13 @@ supersede earlier global-weekday and jitter assumptions. The resolution in
 [Decide whether to expose 15- and 30-minute per-feed schedules](https://github.com/pfBlockerNG/pfBlockerNG/issues/2094)
 supersedes that ticket's earlier sub-hourly examples.
 
+> **Amendment (issue #3941).** Core owns the scheduler now: it plans at every quarter hour, keeps the pending occurrences and
+> outcomes in its own state file and starts every Update (`docs/misc/core-api-protocol.md`, "Update and schedule"). The PHP
+> due-ledger schedule cache, the schedule state file and the save-time candidate check described below are retired, with the
+> "schedule-cache generation failed" warning of the General and feed-group pages. A save validates its schedule fields on the page
+> and Core reads the saved settings through the settings adapter; the Update page shows Core's schedule, and says so when Core
+> gives none. The vocabulary, cadences and slots of this specification are unchanged.
+
 ## Goal
 
 Replace the legacy global feed interval and scattered schedule phase controls with one visible
