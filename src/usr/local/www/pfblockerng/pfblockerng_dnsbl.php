@@ -1030,19 +1030,22 @@ if ($_POST) {
 				if (!$input_errors) {
 					$pfb_written = write_config('[pfBlockerNG] save DNSBL settings');
 				}
+				// Under the lock, so two saves cannot leave the served block page out of step with config.xml
+				if ($pfb_written !== FALSE && $pfb_written !== -1) {
+					if ($pfb_top1m_identity_changed) {
+						pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
+					}
+					if ($pfb_top1m_reprocess) {
+						touch("{$pfb['dbdir']}/top-1m.update");
+					}
+					if ($pfb_dnsbl_page_copy) {
+						@copy("{$pfb['dnsbl_www']}/{$pfb['dconfig']['dnsbl_webpage']}", "{$pfb['dnsbl_www']}/dnsbl_active.php");
+					}
+				}
 			} finally {
 				unlock($pfb_config_lock);
 			}
 			if ($pfb_written !== FALSE && $pfb_written !== -1) {
-				if ($pfb_top1m_identity_changed) {
-					pfb_top1m_invalidate_baseline("{$pfb['dbdir']}/top-1m.csv.zip");
-				}
-				if ($pfb_top1m_reprocess) {
-					touch("{$pfb['dbdir']}/top-1m.update");
-				}
-				if ($pfb_dnsbl_page_copy) {
-					@copy("{$pfb['dnsbl_www']}/{$pfb['dconfig']['dnsbl_webpage']}", "{$pfb['dnsbl_www']}/dnsbl_active.php");
-				}
 				pfb_mark_pending_changes();	// applies on the next Update, not on save
 				pfb_core_settings_changed(NULL, TRUE);	// outside the lock (a slow Core must not hold it); a failure never undoes the save
 				header('Location: /pfblockerng/pfblockerng_dnsbl.php');
