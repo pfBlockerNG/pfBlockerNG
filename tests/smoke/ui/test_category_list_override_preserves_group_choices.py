@@ -173,7 +173,14 @@ def test_category_list_legacy_bulk_save_migrates_and_preserves_non_vip_choice(
             )
 
             # An UNCHANGED bulk Save (both rows' rendered values, in ONE postdata payload).
-            postdata = urlencode({"logging-0": selected_row0, "logging-1": selected_row1})
+            postdata = urlencode(
+                {
+                    "aliasname-0": _LEGACY_ROW_ALIAS,
+                    "aliasname-1": _EXPLICIT_ROW_ALIAS,
+                    "logging-0": selected_row0,
+                    "logging-1": selected_row1,
+                }
+            )
             _ajax_post(
                 webui,
                 {"act": "update", "type": "dnsbl", "rowid": "0", "postdata": postdata},
@@ -238,7 +245,14 @@ def test_category_list_override_bulk_save_preserves_explicit_and_default_group_c
         # Simulate an UNCHANGED bulk Save: re-post EXACTLY what the page itself
         # just rendered as selected (mirrors a real browser's unedited submit --
         # not an injected "correct" answer, so this reproduces the actual bug).
-        postdata = urlencode({"logging-0": selected_row0, "logging-1": selected_row1})
+        postdata = urlencode(
+            {
+                "aliasname-0": "pfb3288explicit",
+                "aliasname-1": "pfb3288default",
+                "logging-0": selected_row0,
+                "logging-1": selected_row1,
+            }
+        )
         _ajax_post(
             webui,
             {"act": "update", "type": "dnsbl", "rowid": "0", "postdata": postdata},

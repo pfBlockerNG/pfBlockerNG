@@ -1,9 +1,11 @@
-"""Issue #3945: Groups saves and deletes refuse a held config lock; a delete refuses another group."""
+"""Issue #3945: Groups saves and deletes refuse a held config lock; deletes and bulk updates refuse another group."""
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import TYPE_CHECKING
+from urllib.parse import urlencode
 
 import pytest
 
@@ -94,5 +96,95 @@ def test_group_delete_refuses_a_name_that_is_not_the_group_at_the_row(smoke_vm: 
         _ajax_post(webui, {"act": "del", "type": "ipv4", "rowid": "0", "aliasname": names[0]}, page=IPV4_PAGE)
         stored = [helpers.config_get(vm, f"{IPV4_LISTS}/{i}/aliasname") for i in range(3)]
         assert stored == [names[1], names[2], ""], f"naming the group at the row must delete it: {stored}"
+    finally:
+        _restore_lists(vm, snapshot)
+
+
+def _three_groups(vm: helpers.SmokeVM) -> list[str]:
+    """Seed three IPv4 groups [a, b, c] (action Deny_Inbound each) at rows 0-2; return their names."""
+    tag = uuid.uuid4().hex[:8]
+    names = [f"lk{tag}{suffix}" for suffix in "abc"]
+    _seed_three_rows(vm, IPV4_LISTS, "ipv4", names)
+    stored = [helpers.config_get(vm, f"{IPV4_LISTS}/{i}/aliasname") for i in range(3)]
+    assert stored == names, f"before-state: the three groups must be stored in order: {stored}"
+    return names
+
+
+def _update(webui: WebUI, postdata: dict[str, str], ids: str | None = None) -> list[str]:
+    """POST the list page's bulk update; return what its AJAX error channel printed (none = accepted)."""
+    data = {"act": "update", "type": "ipv4", "rowid": "0", "postdata": urlencode(postdata)}
+    if ids is not None:
+        data["ids"] = ids
+    body = _ajax_post(webui, data, page=IPV4_PAGE)
+    return json.loads(body) if body else []
+
+
+def test_group_update_refuses_a_row_named_as_another_group(smoke_vm: helpers.SmokeVM, webui: WebUI) -> None:
+    """A bulk update that posts another group's name for a row changes nothing; its own name applies it.
+
+    Given: three stored groups, row 0 on Deny_Inbound
+    When:  row 0's action is changed under the name of row 1 (a page that showed row 1 there)
+    Then:  the error channel says the group changed and row 0 keeps its action; under its own name the change applies
+    """
+    vm = smoke_vm
+    action = f"{IPV4_LISTS}/0/action"
+    snapshot = _snapshot_lists(vm)
+    try:
+        names = _three_groups(vm)
+        assert helpers.config_get(vm, action) == "Deny_Inbound", "before-state: row 0 is on Deny_Inbound"
+
+        errors = _update(webui, {"aliasname-0": names[1], "action-0": "Deny_Outbound"})
+        assert any("changed by another save" in error for error in errors), (
+            f"the update must say the group changed: {errors}"
+        )
+        assert helpers.config_get(vm, action) == "Deny_Inbound", "a refused update must change nothing"
+
+        errors = _update(webui, {"aliasname-0": names[0], "action-0": "Deny_Outbound"})
+        assert errors == [], f"naming the group at the row must apply the change: {errors}"
+        assert helpers.config_get(vm, action) == "Deny_Outbound", "the named update must change the row"
+    finally:
+        _restore_lists(vm, snapshot)
+
+
+def test_group_update_refuses_a_row_posted_without_its_group_name(smoke_vm: helpers.SmokeVM, webui: WebUI) -> None:
+    """A bulk update that changes a row without naming its group is refused and changes nothing."""
+    vm = smoke_vm
+    action = f"{IPV4_LISTS}/0/action"
+    snapshot = _snapshot_lists(vm)
+    try:
+        _three_groups(vm)
+        errors = _update(webui, {"action-0": "Deny_Outbound"})
+        assert any("without its group name" in error for error in errors), f"the update must ask for the name: {errors}"
+        assert helpers.config_get(vm, action) == "Deny_Inbound", "an unnamed update must change nothing"
+    finally:
+        _restore_lists(vm, snapshot)
+
+
+def test_group_reorder_refuses_names_that_are_not_the_groups_at_the_rows(
+    smoke_vm: helpers.SmokeVM, webui: WebUI
+) -> None:
+    """A reorder posted under rotated names changes no order; under the right names it applies.
+
+    Given: groups [a, b, c]
+    When:  ids[]=r2&ids[]=r0&ids[]=r1 is posted with the names of rows 0-2 given as [b, c, a]
+    Then:  the order is still [a, b, c]; with the names [a, b, c] it becomes [c, a, b]
+    """
+    vm = smoke_vm
+    snapshot = _snapshot_lists(vm)
+    ids = "ids[]=r2&ids[]=r0&ids[]=r1"
+    try:
+        names = _three_groups(vm)
+        rotated = {f"aliasname-{i}": names[(i + 1) % 3] for i in range(3)}
+        errors = _update(webui, rotated, ids)
+        assert any("changed by another save" in error for error in errors), (
+            f"the reorder must say the groups changed: {errors}"
+        )
+        stored = [helpers.config_get(vm, f"{IPV4_LISTS}/{i}/aliasname") for i in range(3)]
+        assert stored == names, f"a refused reorder must change no order: {stored}"
+
+        errors = _update(webui, {f"aliasname-{i}": name for i, name in enumerate(names)}, ids)
+        assert errors == [], f"the right names must apply the reorder: {errors}"
+        stored = [helpers.config_get(vm, f"{IPV4_LISTS}/{i}/aliasname") for i in range(3)]
+        assert stored == [names[2], names[0], names[1]], f"the named reorder must persist: {stored}"
     finally:
         _restore_lists(vm, snapshot)

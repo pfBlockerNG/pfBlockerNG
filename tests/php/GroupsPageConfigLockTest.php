@@ -22,6 +22,9 @@ require_once __DIR__ . '/support/ProcessRunner.php';
  *   - the row at the posted index must still be the group the request meant: the editor compares it with the row its request loaded,
  *     the delete with the group name the list page posts. Another group at that index (the first group was deleted since) is never
  *     overwritten or deleted;
+ *   - the list's bulk update posts, with every row it changes or reorders, the name of the group the page showed there (aliasname-N, a
+ *     GeoIP row's continent); a row posted without its name, or under a name that is not the group at that index now, refuses the
+ *     whole update on the AJAX error channel and nothing is written;
  *   - the sync-status ledger of a removed or renamed group is closed only after the write was made.
  *
  * Each case runs the pages' real code in a child process (support/GroupsPageWorker.php), because the pages end with exit().
@@ -399,7 +402,7 @@ final class GroupsPageConfigLockTest extends TestCase
 
 	public function testAFieldUpdateIsAppliedToTheFreshConfigAndKeepsWhatCoreWroteSince(): void
 	{
-		$result = $this->worker('list', 'interleave', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '1', 'postdata' => 'action-1=Disabled&cron-1=Weekly']]);
+		$result = $this->worker('list', 'interleave', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '1', 'postdata' => 'aliasname-1=Bravo&action-1=Disabled&cron-1=Weekly']]);
 		$this->assertSame('unbound', self::group($result['before'], 'Bravo')['action'], 'before-state: Bravo is enabled');
 
 		$bravo = self::group($result['disk'], 'Bravo');
@@ -414,7 +417,7 @@ final class GroupsPageConfigLockTest extends TestCase
 
 	public function testAReorderIsAppliedToTheFreshConfigAndKeepsTheGroupCoreAppendedSince(): void
 	{
-		$result = $this->worker('list', 'interleave', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'ids' => 'ids[0]=r1&ids[1]=r0']]);
+		$result = $this->worker('list', 'interleave', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'ids' => 'ids[0]=r1&ids[1]=r0', 'postdata' => 'aliasname-0=Alpha&aliasname-1=Bravo']]);
 		$this->assertSame(['Alpha', 'Bravo'], self::names($result['before']), 'before-state: the order as the page read it');
 
 		$this->assertSame(['Bravo', 'Alpha', 'Charlie'], self::names($result['disk']), 'the posted order, then the group the page did not know');
@@ -426,7 +429,7 @@ final class GroupsPageConfigLockTest extends TestCase
 	public function testAGeoipFieldUpdateReadsTheContinentsFromTheFreshConfig(): void
 	{
 		// Given Africa (row 1) updated while Core patched Europe's schedule since the request read config.xml
-		$result = $this->worker('list', 'interleave', ['type' => 'geoip', 'post' => ['act' => 'update', 'type' => 'geoip', 'rowid' => '1', 'postdata' => 'action-1=Deny_Inbound']]);
+		$result = $this->worker('list', 'interleave', ['type' => 'geoip', 'post' => ['act' => 'update', 'type' => 'geoip', 'rowid' => '1', 'postdata' => 'aliasname-1=Africa&action-1=Deny_Inbound']]);
 		$this->assertSame('Never', $result['before']['installedpackages']['pfblockerngeurope']['config'][0]['cron'], 'before-state: the request read Europe at Never');
 
 		$this->assertSame('Deny_Inbound', $result['disk']['installedpackages']['pfblockerngafrica']['config'][0]['action'], 'the posted action is saved');
@@ -438,8 +441,8 @@ final class GroupsPageConfigLockTest extends TestCase
 	public static function updates(): array
 	{
 		return [
-			'a field change' => [['postdata' => 'action-1=Disabled']],
-			'a reorder' => [['ids' => 'ids[0]=r1&ids[1]=r0']],
+			'a field change' => [['postdata' => 'aliasname-1=Bravo&action-1=Disabled']],
+			'a reorder' => [['ids' => 'ids[0]=r1&ids[1]=r0', 'postdata' => 'aliasname-0=Alpha&aliasname-1=Bravo']],
 		];
 	}
 
@@ -472,15 +475,137 @@ final class GroupsPageConfigLockTest extends TestCase
 		$errors = json_decode($result['output'], TRUE);
 		$this->assertIsArray($errors, "the AJAX error channel is a JSON array: {$result['output']}");
 		$this->assertNotSame([], $errors);
+		$this->assertStringContainsString('changed by another save', (string) ($errors[0] ?? ''), 'it says the group is not there any more');
 		$this->assertSame([], $result['writes']);
 		$this->assertSame(['Alpha'], self::names($result['disk']));
 		$this->assertFalse($result['lockHeld']);
 	}
 
+	/** @return list<string> what the AJAX error channel printed */
+	private function ajaxErrors(array $result): array
+	{
+		$errors = json_decode($result['output'], TRUE);
+		$this->assertIsArray($errors, "the AJAX error channel is a JSON array: {$result['output']}");
+		return array_map('strval', $errors);
+	}
+
+	/** @return array<string, array{array<string, string>}> an update that posts no group name for the rows it changes or reorders */
+	public static function unnamedUpdates(): array
+	{
+		return [
+			'a field change' => [['postdata' => 'action-1=Disabled']],
+			'a cron change' => [['postdata' => 'cron-1=Weekly']],
+			'a reorder' => [['ids' => 'ids[0]=r1&ids[1]=r0']],
+			'a reorder whose postdata names only one row' => [['ids' => 'ids[0]=r1&ids[1]=r0', 'postdata' => 'aliasname-1=Bravo']],
+		];
+	}
+
+	/** @param array<string, string> $post */
+	#[DataProvider('unnamedUpdates')]
+	public function testAnUpdateThatPostsNoGroupNameForARowItChangesIsRefused(array $post): void
+	{
+		$result = $this->worker('list', 'plain', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '0'] + $post]);
+
+		$errors = $this->ajaxErrors($result);
+		$this->assertStringContainsString('without its group name', $errors[0] ?? '');
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['before'], $result['disk'], 'nothing is saved');
+		$this->assertFalse($result['pendingMarked']);
+		$this->assertNull($result['settingsFailed'], 'Core is not told');
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testAnUpdateOfRowZeroNeverChangesTheGroupThatTookItsPlaceWhenTheFirstGroupWasDeleted(): void
+	{
+		// Given Alpha, row 0 when the page was shown, deleted by another save during the locked refresh: Bravo is row 0 now
+		$result = $this->worker('list', 'first_deleted', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '0', 'postdata' => 'action-0=Disabled']]);
+		$this->assertSame(['Alpha', 'Bravo'], self::names($result['before']), 'before-state: the request read Alpha at row 0');
+		$this->assertSame(['Bravo'], self::names($result['diskBefore']), 'before-state: on disk row 0 is Bravo');
+		$this->assertSame('unbound', self::group($result['diskBefore'], 'Bravo')['action'], 'before-state: Bravo is enabled');
+
+		// Then the update is refused and Bravo is still enabled
+		$this->assertNotSame([], $this->ajaxErrors($result));
+		$this->assertSame([], $result['writes']);
+		$this->assertSame('unbound', self::group($result['disk'], 'Bravo')['action'], 'Bravo is not disabled by a change meant for Alpha');
+		$this->assertSame($result['diskBefore'], $result['disk']);
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	/** @return array<string, array{array<string, string>}> updates that name the groups the page showed: Alpha at row 0, Bravo at row 1 */
+	public static function namedUpdates(): array
+	{
+		return [
+			'a field change of row 0' => [['postdata' => 'aliasname-0=Alpha&action-0=Disabled']],
+			'a field change of both rows' => [['postdata' => 'aliasname-0=Alpha&aliasname-1=Bravo&action-0=Disabled&action-1=Disabled']],
+			'a reorder' => [['ids' => 'ids[0]=r1&ids[1]=r0', 'postdata' => 'aliasname-0=Alpha&aliasname-1=Bravo']],
+		];
+	}
+
+	/** @param array<string, string> $post */
+	#[DataProvider('namedUpdates')]
+	public function testAnUpdateNamingAGroupAnotherSaveDeletedIsRefusedAndChangesNothing(array $post): void
+	{
+		// Given Alpha deleted on disk since the page was shown: Bravo is row 0 now, and there is no row 1
+		$result = $this->worker('list', 'first_deleted', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '0'] + $post]);
+		$this->assertSame(['Bravo'], self::names($result['diskBefore']), 'before-state: on disk row 0 is Bravo');
+
+		$errors = $this->ajaxErrors($result);
+		$this->assertStringContainsString('changed by another save', $errors[0] ?? '', 'the AJAX error channel says the page is out of date');
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['diskBefore'], $result['disk'], 'nothing is saved: Bravo keeps its action and its place');
+		$this->assertFalse($result['pendingMarked']);
+		$this->assertNull($result['settingsFailed'], 'Core is not told');
+		$this->assertSame(['try_lock', 'read', 'unlock'], self::eventNames($result));
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	/** @return array<string, array{array<string, string>, string}> the update, and what the AJAX error channel says */
+	public static function misnamedUpdates(): array
+	{
+		return [
+			'a field change under the other group\'s name' => [['postdata' => 'aliasname-0=Bravo&aliasname-1=Alpha&action-1=Disabled'], 'changed by another save'],
+			'a reorder under swapped names' => [['ids' => 'ids[0]=r1&ids[1]=r0', 'postdata' => 'aliasname-0=Bravo&aliasname-1=Alpha'], 'changed by another save'],
+			'a name that is not a string' => [['postdata' => 'aliasname-1[]=Bravo&action-1=Disabled'], 'without its group name'],
+		];
+	}
+
+	/** @param array<string, string> $post */
+	#[DataProvider('misnamedUpdates')]
+	public function testAnUpdateWhoseNamesAreNotTheGroupsAtTheirRowsIsRefused(array $post, string $says): void
+	{
+		$result = $this->worker('list', 'plain', ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '0'] + $post]);
+
+		$this->assertStringContainsString($says, $this->ajaxErrors($result)[0] ?? '');
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['before'], $result['disk'], 'nothing is saved');
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testAGeoipUpdateNamingAnotherContinentThanTheRowIsRefused(): void
+	{
+		// Given Africa at row 1, posted under Europe's name
+		$result = $this->worker('list', 'plain', ['type' => 'geoip', 'post' => ['act' => 'update', 'type' => 'geoip', 'rowid' => '1', 'postdata' => 'aliasname-1=Europe&action-1=Deny_Inbound']]);
+
+		$errors = $this->ajaxErrors($result);
+		$this->assertStringContainsString('changed by another save', $errors[0] ?? '');
+		$this->assertSame([], $result['writes']);
+		$this->assertSame('Disabled', $result['disk']['installedpackages']['pfblockerngafrica']['config'][0]['action'], 'Africa keeps its action');
+		$this->assertFalse($result['lockHeld']);
+	}
+
+	public function testAGeoipUpdateWithoutTheContinentNameIsRefused(): void
+	{
+		$result = $this->worker('list', 'plain', ['type' => 'geoip', 'post' => ['act' => 'update', 'type' => 'geoip', 'rowid' => '1', 'postdata' => 'action-1=Deny_Inbound']]);
+
+		$this->assertStringContainsString('without its group name', $this->ajaxErrors($result)[0] ?? '');
+		$this->assertSame([], $result['writes']);
+		$this->assertSame($result['before'], $result['disk']);
+	}
+
 	#[DataProvider('refusedWrites')]
 	public function testAnUpdateWhoseWriteFailsSaysSoAndTellsCoreNothing(string $scenario): void
 	{
-		$result = $this->worker('list', $scenario, ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '1', 'postdata' => 'action-1=Disabled']]);
+		$result = $this->worker('list', $scenario, ['post' => ['act' => 'update', 'type' => 'dnsbl', 'rowid' => '1', 'postdata' => 'aliasname-1=Bravo&action-1=Disabled']]);
 
 		$errors = json_decode($result['output'], TRUE);
 		$this->assertIsArray($errors, "the AJAX error channel is a JSON array: {$result['output']}");
