@@ -1,6 +1,15 @@
 {
 	"schema": 1,
 	"projections": ["feeds/ipv4", "feeds/ipv6", "feeds/dnsbl"],
+	"scriptNames": [
+		{"name": ".", "valid": false},
+		{"name": "..", "valid": false},
+		{"name": "-x", "valid": false},
+		{"name": ".-x", "valid": true},
+		{"name": "..x", "valid": true},
+		{"name": " -x", "valid": true},
+		{"name": "\u200b-x", "valid": false}
+	],
 	"cases": [
 		{
 			"id": "ipv4-stored-full",

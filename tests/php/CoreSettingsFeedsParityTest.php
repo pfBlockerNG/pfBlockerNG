@@ -13,6 +13,7 @@ use PHPUnit\Framework\TestCase;
  *     not project), and the adapter's own write validation accepts what the read answered.
  *   - A `posted` case is a Groups editor save: the page's own validation, run as shipped, decides `valid`, and the adapter's write
  *     validation gives the same verdict on the case's `input` filled with the native defaults.
+ *   - A `scriptNames` entry is a preScript/postScript name with the verdict both the adapter and Core give it (issue #3961).
  */
 #[CoversFunction('pfb_core_settings_backend')]
 #[CoversFunction('pfb_core_settings_request_refusal')]
@@ -82,6 +83,29 @@ final class CoreSettingsFeedsParityTest extends TestCase
 		}
 		foreach (self::PROJECTIONS as $projection) {
 			$this->assertArrayHasKey('stored', $seen[$projection] ?? [], "{$projection} has a stored case");
+		}
+	}
+
+	/** @return array<string, array{0: string, 1: bool}> */
+	public static function scriptNames(): array
+	{
+		$doc = json_decode((string) file_get_contents(self::FIXTURE), TRUE, 512, JSON_THROW_ON_ERROR);
+		$names = [];
+		foreach ($doc['scriptNames'] as $script) {
+			$names[json_encode($script['name'])] = [$script['name'], $script['valid']];
+		}
+		return $names;
+	}
+
+	/** A hostile script name gets the fixture's verdict from the adapter, in every projection, as preScript and as postScript. */
+	#[DataProvider('scriptNames')]
+	public function testTheAdapterGivesTheFixturesVerdictOnAScriptName(string $name, bool $valid): void
+	{
+		$this->assertSame($valid, pfb_core_script_name_valid($name), json_encode($name));
+		foreach (self::PROJECTIONS as $projection) {
+			foreach (['preScript', 'postScript'] as $field) {
+				$this->assertAdapterVerdict($valid, $projection, self::filled(['name' => 'G', $field => $name], $projection), "{$field} " . json_encode($name));
+			}
 		}
 	}
 
