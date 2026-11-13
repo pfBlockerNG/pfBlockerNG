@@ -11,7 +11,12 @@ import (
 	"unicode/utf8"
 )
 
-const defaultMax = 64 << 10 // the bytes of log a View returns when asked for none in particular
+const (
+	defaultMax = 64 << 10 // the bytes of log a View returns when asked for none in particular
+	offsetBits = 40       // a cursor is the Update's generation above the log offset in its low bits
+	offsetMask = 1<<offsetBits - 1
+	genMask    = 1<<(63-offsetBits) - 1
+)
 
 var (
 	ErrRunning = errors.New("an Update is running")
@@ -65,6 +70,7 @@ type Gate struct {
 
 	mu      sync.Mutex // everything below, and the log's truncation
 	status  *Status    // replaced when the Update ends, never changed in place: View hands it out
+	gen     int64      // the number of Starts before the current Update: its cursors differ from every earlier Update's
 	cancel  context.CancelFunc
 	stopped bool
 }
@@ -91,6 +97,9 @@ func (g *Gate) Start(req Request) error {
 	if err != nil {
 		g.admit.Unlock()
 		return fmt.Errorf("the Update log cannot be opened: %w", err)
+	}
+	if g.status != nil {
+		g.gen = (g.gen + 1) & genMask
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	g.cancel = cancel
@@ -120,31 +129,37 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Reque
 }
 
 // View: Running; Update (nil until the first Start of this process; the last one stays readable after it finishes);
-// Log: the log bytes from offset after, at most max bytes (max<=0: 64 KiB); Next: after + len(Log).
-// after < 0 or beyond the file size reads from 0 (the log was truncated by a new Update).
+// Log: the log bytes from the cursor after (0: the start), at most max bytes (max<=0: 64 KiB); Next: the cursor after Log.
+// A cursor is opaque. One from another Update, a negative one or one past the log's end reads from the start.
 func (g *Gate) View(after int64, max int) View {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	v := View{Update: g.status}
 	if g.status != nil {
 		v.Running = g.status.FinishedAt == nil
-		v.Log, v.Next = g.readLog(after, max)
+		v.Log, v.Next = g.readLog(after, max, v.Running)
 	}
 	return v
 }
 
-// readLog is the log from after, which is bounded to limit bytes and never ends inside a rune, so the next View starts on one.
-func (g *Gate) readLog(after int64, limit int) (string, int64) {
+// readLog is the log from the cursor, bounded to limit bytes and never ending inside a rune that is whole in the log, so the
+// next read starts on one. A rune cut at the end of a running Update's log waits for its rest; once it ends, nothing waits.
+func (g *Gate) readLog(cursor int64, limit int, running bool) (string, int64) {
+	gen := g.gen << offsetBits
+	var after int64
+	if cursor >= 0 && cursor&^offsetMask == gen {
+		after = cursor & offsetMask
+	}
 	f, err := os.Open(g.logPath)
 	if err != nil {
-		return "", 0
+		return "", gen
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return "", 0
+		return "", gen
 	}
-	if after < 0 || after > info.Size() {
+	if after > info.Size() {
 		after = 0
 	}
 	if limit <= 0 {
@@ -153,18 +168,29 @@ func (g *Gate) readLog(after int64, limit int) (string, int64) {
 	buf := make([]byte, min(info.Size()-after, int64(limit)))
 	n, err := f.ReadAt(buf, after)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", after
+		return "", gen | after
 	}
 	buf = buf[:n]
-	for i := max(0, len(buf)-utf8.UTFMax+1); i < len(buf); i++ {
-		if utf8.RuneStart(buf[i]) && !utf8.FullRune(buf[i:]) {
-			if i > 0 { // a bound inside the very first rune still has to advance
-				buf = buf[:i]
-			}
-			break
+	atEnd := after+int64(n) >= info.Size()
+	if i := partialRune(buf); i >= 0 && (running || !atEnd) {
+		switch {
+		case i > 0:
+			buf = buf[:i]
+		case atEnd:
+			return "", gen | after
+		} // else the bound is inside the very first rune: advance anyway
+	}
+	return string(buf), gen | (after + int64(len(buf)))
+}
+
+// partialRune is where the incomplete rune that ends b starts, or -1.
+func partialRune(b []byte) int {
+	for i := max(0, len(b)-utf8.UTFMax+1); i < len(b); i++ {
+		if utf8.RuneStart(b[i]) && !utf8.FullRune(b[i:]) {
+			return i
 		}
 	}
-	return string(buf), after + int64(len(buf))
+	return -1
 }
 
 // Stop cancels a running Update's context and waits for it to finish; later Starts return ErrStopped.
