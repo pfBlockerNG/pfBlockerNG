@@ -143,15 +143,6 @@ final class TimestampCosmeticNormalizationTest extends TestCase
 		);
 	}
 
-	/**
-	 * Branch coverage: the "never run" (NULL entry) path is untouched by this
-	 * phase's change -- still the plain placeholder, no timestamp involved at all.
-	 */
-	public function testScheduleDisplayNullEntryStillShowsNotYetRun(): void
-	{
-		$this->assertSame('<em>Not yet run</em>', pfb_ledger_entry_html(null));
-	}
-
 	// -----------------------------------------------------------------------
 	// www/index.php:101 -- HTTP Expires header, explicitly OUT OF SCOPE (§1.8)
 	// -----------------------------------------------------------------------

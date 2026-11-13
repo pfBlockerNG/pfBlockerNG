@@ -4,16 +4,16 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/TickExtrasOrderingTest.php';
+require_once __DIR__ . '/CoreUpdateServeTest.php';
 require_once __DIR__ . '/Issue1840SuppUpdateNullPostinstallTest.php';
 
 final class Issue1840SuppUpdateNullPostinstallAbsentGlobalIsolationTest extends TestCase
 {
-	public function testTickExtrasRestoresAbsentGlobalG(): void
+	public function testCoreUpdateServeRestoresAbsentGlobalG(): void
 	{
 		$this->assertRestoresAbsentGlobalG(
-			new TickExtrasOrderingTest('testDueExtrasRunDccThenBlThenFeedAndIgnoreApplyWindow'),
-			"TickExtrasOrderingTest::tearDown() must leave absent \$GLOBALS['g'] absent"
+			new CoreUpdateServeTest('testScheduledExtrasRunDccThenBlAndAreReportedAsSuccessfulOutcomes'),
+			"CoreUpdateServeTest::tearDown() must leave absent \$GLOBALS['g'] absent"
 		);
 	}
 

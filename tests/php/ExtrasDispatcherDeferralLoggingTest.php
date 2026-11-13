@@ -166,32 +166,6 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		}
 	}
 
-	public function testScheduleCacheAcquisitionErrorNamesTheGuardInTheMainLog(): void
-	{
-		$this->assertTrue(stream_wrapper_register('pfbschedulecachelockerror', PfbFailingFlockStream::class));
-		$dbdir = $GLOBALS['pfb']['dbdir'];
-		try {
-			$GLOBALS['pfb']['dbdir'] = 'pfbschedulecachelockerror://state';
-
-			$this->assertFalse(pfb_schedule_cache_regenerate(),
-				'an unacquirable feed-pass lock must refuse schedule cache regeneration');
-			$this->assertStringContainsString(
-				'Schedule cache regeneration skipped: the feed pass lock could not be acquired.',
-				$this->mainLog(),
-				'the acquisition error must name schedule cache regeneration in the main log'
-			);
-			$this->assertStringNotContainsString('another pfBlockerNG feed pass is running', $this->mainLog(),
-				'an acquisition error must not claim another pass is running');
-			$this->assertFalse(is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL),
-				'the refused regeneration must release its dispatcher lock');
-			$this->assertFalse(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL),
-				'the refused regeneration must not leave a feed-pass lock');
-		} finally {
-			$GLOBALS['pfb']['dbdir'] = $dbdir;
-			stream_wrapper_unregister('pfbschedulecachelockerror');
-		}
-	}
-
 	/**
 	 * Scenario: the deferral line must not graft onto a half-written log line.
 	 *   Given the main log ends mid-line (a previous writer's partial write)

@@ -79,17 +79,9 @@ require {$extra};
 	\$v6 => [],
 	\$dns => [],
 ], static fn (): int => 0);
-\$model = [
-	'default' => ['weekday' => 7, 'hour' => 6, 'minute' => 45],
-	'entries' => [
-		'extra:dcc' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL],
-	],
-];
-\$extras = pfb_schedule_extra_plan(\$model, ['schema' => 1, 'items' => []], strtotime('2026-01-07 07:00:00 UTC'), new DateTimeZone('UTC'));
 \$runtime = pfb_schedule_runtime_config();
 echo json_encode([
 	'group' => \$migrated[\$v4][0],
-	'extras_due' => \$extras['due'],
 	'blacklist_enabled' => \$runtime['entries']['extra:bl']['enabled'] ?? NULL,
 ], JSON_THROW_ON_ERROR);
 PHP;
@@ -142,7 +134,6 @@ PHP;
 		$this->assertSame('6', $group['schedule_hour']);
 		$this->assertSame('45', $group['schedule_minute']);
 		$this->assertArrayNotHasKey('dow', $group);
-		$this->assertSame(['extra:dcc'], $output['extras_due']);
 		$this->assertTrue($output['blacklist_enabled']);
 	}
 

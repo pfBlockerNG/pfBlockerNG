@@ -1,10 +1,16 @@
 # Schedule evaluation parity corpus
 
-Language-neutral record of how today's scheduler decides what runs (issue #3938, map #3813). Two runners replay every
-case and must agree with it:
+Language-neutral record of how the scheduler decides what runs (issue #3938, map #3813). Two runners replayed every case
+and had to agree with it; since the cutover (#3941) Core owns the scheduler, its state and its Extras plan, and only some of
+the PHP functions remain:
 
-- Go: `go/pfb_core/schedule/corpus_test.go` (the Core package).
-- PHP (the old path): `tests/php/ScheduleCorpusTest.php`, through the production functions themselves.
+- Go: `go/pfb_core/schedule/corpus_test.go` (the Core package). The authority for every section, and the only runner of
+  `next_occurrence`, `plan`, `extra_plan`, `next_due`, `state_valid`, `set_pending` and `record_outcome`.
+- PHP: `tests/php/ScheduleCorpusTest.php`, through the production functions themselves, for the sections whose function is
+  still there: `quiet_hours`, `model` and `blacklist`. It skips the seven retired sections (`RETIRED` in that test).
+
+A retired section stays in the file: its cases are the frozen record of what the PHP function answered, and Go replays them
+alone. A change to one of them is a change to Core's behavior, decided in the Go runner.
 
 The expectations were produced by the old path (PHP 8.4 reading the host's system tz database, `timezone_version_get()`
 `0.system`) and then reviewed row by row; they are frozen.
@@ -21,7 +27,8 @@ The expectations were produced by the old path (PHP 8.4 reading the host's syste
 - Object key order is not part of an answer; list order is.
 - An entry is `{id, cadence, enabled, override}`; `override` is null or a schedule `{weekday, hour, minute}`. An id is
   `ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`, `extra:dcc` or `extra:bl`.
-- A state (`state`, and a state `expect`) is the `items` object of `pfb_schedule_state.json`: id to
+- A state (`state`, and a state `expect`) is the `items` object of the schedule state file (`pfb_schedule_state.json` in the
+  old path, `schedule_state.json` in Core's state directory; the schema is the same): id to
   `{last_successful_check, last_completed_occurrence, completion_outcome, pending_occurrence, pending_attempted}`, each
   field optional.
 
@@ -29,14 +36,14 @@ The expectations were produced by the old path (PHP 8.4 reading the host's syste
 
 | Section | Old path | Inputs | `expect` |
 |---|---|---|---|
-| `next_occurrence` | `pfb_schedule_next_occurrence()` | `timezone`, `cadence`, `weekday`, `hour`, `minute`, `reference` | the first occurrence strictly after `reference`, null (`Never`), or `"invalid"` |
-| `plan` | `pfb_schedule_plan()` | `timezone`, `default` schedule, `now`, `groups` (entries, each with an optional `last_completed_occurrence`) | `{due, next_due, occurrences}`: due ids in group order, the earliest next occurrence of an eligible group (or null), and each due id's latest occurrence |
-| `extra_plan` | `pfb_schedule_extra_plan()` | `timezone`, `default`, `now`, `entries` (the Extras), `state`, `cache` (null, or id to `{next_due}`), `geoip_ready` | `{due, occurrences}` |
-| `next_due` | `pfb_schedule_cache_refresh()` into an empty ledger directory | `timezone`, `scheduled`, `default`, `now`, `entries`, `state` | the ledger entries it writes, `cron`, `extra:dcc`, `extra:bl`, each `{last_run, next_due, jitter}` |
+| `next_occurrence` | `pfb_schedule_next_occurrence()` (removed, #3941) | `timezone`, `cadence`, `weekday`, `hour`, `minute`, `reference` | the first occurrence strictly after `reference`, null (`Never`), or `"invalid"` |
+| `plan` | `pfb_schedule_plan()` (removed, #3941) | `timezone`, `default` schedule, `now`, `groups` (entries, each with an optional `last_completed_occurrence`) | `{due, next_due, occurrences}`: due ids in group order, the earliest next occurrence of an eligible group (or null), and each due id's latest occurrence |
+| `extra_plan` | `pfb_schedule_extra_plan()` (removed, #3941) | `timezone`, `default`, `now`, `entries` (the Extras), `state`, `cache` (null, or id to `{next_due}`), `geoip_ready` | `{due, occurrences}` |
+| `next_due` | `pfb_schedule_cache_refresh()` into an empty ledger directory (removed, #3941) | `timezone`, `scheduled`, `default`, `now`, `entries`, `state` | the ledger entries it writes, `cron`, `extra:dcc`, `extra:bl`, each `{last_run, next_due, jitter}` |
 | `quiet_hours` | `pfb_quiet_hours_in_window()` | `timezone` (the system zone), `now`, `window` | true: apply now; false: defer |
-| `state_valid` | `pfb_schedule_state_read()` | `input`, the file's text | whether the file is a valid state |
-| `set_pending` | `pfb_schedule_state_set_pending()` | `state`, `occurrences` (id to occurrence) | the state written, or `"rejected"` |
-| `record_outcome` | `pfb_schedule_state_record_outcome()` | `state`, `item` (an id), `outcome` (`success`, `retry-cap-reached`), `now`, `expected_occurrence` (null or an occurrence) | the state written, or `"rejected"` |
+| `state_valid` | `pfb_schedule_state_read()` (removed, #3941) | `input`, the file's text | whether the file is a valid state |
+| `set_pending` | `pfb_schedule_state_set_pending()` (removed, #3941) | `state`, `occurrences` (id to occurrence) | the state written, or `"rejected"` |
+| `record_outcome` | `pfb_schedule_state_record_outcome()` (removed, #3941) | `state`, `item` (an id), `outcome` (`success`, `retry-cap-reached`), `now`, `expected_occurrence` (null or an occurrence) | the state written, or `"rejected"` |
 | `model` | `pfb_schedule_runtime_model()` | `general` (the General settings), `sections` (`ipv4`, `ipv6`, `dnsbl` group lists as config.xml holds them), `extras` (null, or `{dcc, bl: {enabled, cadence}}`) | `{scheduled, default, entries, config_hash}` with entries in config order, or `{reject}` with the logged reason |
 | `blacklist` | `pfb_schedule_runtime_config()`, the `extra:bl` it derives | `blacklist`, the Blacklist section | `{enabled, cadence}`, or `{reject}` with the logged reason |
 
@@ -67,15 +74,16 @@ The expectations were produced by the old path (PHP 8.4 reading the host's syste
 `tick.json` pins the two steps of `pfblockerng_tick()` that Core takes over besides the schedule evaluation above
 (issue #3941). It follows the common rules above (same ids, entries, state shape and strictness); the expectations were
 produced by running the tick's inline code before it became those functions (PHP 8.4), then reviewed row by row. The
-sections, in this order, are `feed_plan` and `reserve`; the runners:
+sections, in this order, are `feed_plan` and `reserve`. There is one runner:
 
-- Go: `go/pfb_core/schedule/tick_corpus_test.go`, on the same loader as `corpus_test.go`.
-- PHP: `tests/php/ScheduleTickCorpusTest.php`, through the functions the tick itself calls.
+- Go: `go/pfb_core/schedule/tick_corpus_test.go`, on the same loader as `corpus_test.go`. It is the authority: the PHP runner
+  (`ScheduleTickCorpusTest`) and the functions it called (`pfb_schedule_feed_plan()`, `pfb_schedule_reserve()`) went with the
+  cutover, when the tick stopped planning and reserving.
 
 | Section | Old path | Inputs | `expect` |
 |---|---|---|---|
-| `feed_plan` | `pfb_schedule_feed_plan()` | `timezone`, `scheduled`, `default`, `now`, `entries` (feeds and Extras), `state` | `{due, occurrences}` |
-| `reserve` | `pfb_schedule_reserve()` | `state`, `occurrences` (id to occurrence) | the state written, or `"rejected"` |
+| `feed_plan` | `pfb_schedule_feed_plan()` (removed, #3941) | `timezone`, `scheduled`, `default`, `now`, `entries` (feeds and Extras), `state` | `{due, occurrences}` |
+| `reserve` | `pfb_schedule_reserve()` (removed, #3941) | `state`, `occurrences` (id to occurrence) | the state written, or `"rejected"` |
 
 - `feed_plan` plans the entries that are not `extra:*`, only when `scheduled`, with `last_completed_occurrence` alone as
   the cursor: a pending occurrence, attempted or not, never counts as completed (unlike the ledger's `next_due` above). The
@@ -83,5 +91,5 @@ sections, in this order, are `feed_plan` and `reserve`; the runners:
 - `reserve` is `set_pending` and a raise in one state update: an item whose pending occurrence is absent or older takes the planned
   one and loses its `pending_attempted`; an equal or newer one is kept. An occurrence not after the item's completed one
   is `"rejected"`, as are a bad id, a negative occurrence and an existing state that is not valid. Occurrence 0 is valid.
-- A rejected call writes nothing, the valid ids of the call included: Go returns no state, and the PHP runner asserts that
-  the state file is byte-for-byte unchanged.
+- A rejected call writes nothing, the valid ids of the call included: Go returns no state. (The PHP runner also asserted
+  that the state file was byte-for-byte unchanged.)

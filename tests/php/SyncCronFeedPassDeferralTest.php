@@ -56,25 +56,20 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 	}
 
 	#[DataProvider('lockProvider')]
-	public function testLockLossLeavesScheduleStateAndCacheUntouched(
+	public function testLockLossLeavesTheLedgerUntouchedAndReportsNoOutcome(
 		string $lock,
 		string $expectedReason
 	): void {
 		$stateDir = "{$this->dbdir}/state";
 		mkdir($stateDir, 0755, TRUE);
 		$GLOBALS['pfb']['schedule_state_dir'] = $stateDir;
+		unset($GLOBALS['pfb']['scheduled_outcomes']);
 		$lockPath = $lock === 'dispatcher'
 			? "{$stateDir}/pfb_schedule_dispatch.lock"
 			: "{$this->dbdir}/pfb_feed_pass.lock";
 		$this->lockFp = fopen($lockPath, 'c');
 		$this->assertNotFalse($this->lockFp, "test setup: failed to open {$lock} lock");
 		$this->assertTrue(flock($this->lockFp, LOCK_EX), "test setup: failed to hold {$lock} lock");
-		$state = [
-			'schema' => 1,
-			'items' => ['ipv4:feed_v4' => ['pending_occurrence' => 123]],
-		];
-		$this->assertTrue(pfb_schedule_state_write($state, $stateDir));
-
 		$nextDue = time() + 3600;
 		pfb_due_ledger_write_entry('cron', [
 			'last_run' => time() - 3600,
@@ -83,17 +78,16 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		], $this->dbdir);
 
 		$beforeLedger = file_get_contents("{$this->dbdir}/pfb_due_ledger.json");
-		$beforeState = file_get_contents("{$stateDir}/pfb_schedule_state.json");
 
 		$deferredBy = NULL;
-		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
+		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy, ['ipv4:feed_v4']);
 		$this->assertTrue($result, 'scheduled deferral must retain the established TRUE internal return');
 		$this->assertSame($expectedReason, $deferredBy);
 
 		$this->assertSame($beforeLedger, file_get_contents("{$this->dbdir}/pfb_due_ledger.json"),
-			"lost {$lock} must not mutate the runtime cache");
-		$this->assertSame($beforeState, file_get_contents("{$stateDir}/pfb_schedule_state.json"),
-			"lost {$lock} must leave the durable occurrence reserved for the next tick");
+			"lost {$lock} must not mutate the ledger");
+		$this->assertArrayNotHasKey('scheduled_outcomes', $GLOBALS['pfb'],
+			"lost {$lock} must report no outcome: the feed stays pending in Core");
 	}
 
 	public function testPendingTop1mChangeDoesNotApplyOutsideWindowOnNoUpdatePass(): void
@@ -115,8 +109,6 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		config_set_path('installedpackages/pfblockerngblacklist', [
 			'blacklist_selected' => '', 'blacklist_freq' => 'Never', 'item' => [],
 		]);
-		$this->assertTrue(pfb_schedule_state_write(['schema' => 1, 'items' => []], $this->dbdir));
-
 		$this->assertTrue(pfblockerng_sync_cron(FALSE, 'both', TRUE));
 		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dbdir),
 			'A TOP1M change must stay pending when the no-update feed tail runs outside the apply window.');

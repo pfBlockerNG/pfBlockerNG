@@ -2390,6 +2390,10 @@ job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
 and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 
+Since issue #3941 the tick no longer dispatches the feed pass (Core does, through the `core_update` verb), and the `cron` verb
+(`pfblockerng.php cron`, `pfblockerng_sync_cron()`) is not a scheduler entry point any more: no feed is named, so it checks only
+the feeds with a `*.fail` retry marker (and applies what that changed). It stays for the smoke harness (the feed-pass lock tests) and for running that retry by hand.
+
 **Metrics export cron (#3522):** a separate crontab entry, `* * * * * root /usr/bin/timeout -s TERM
 -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`, exists only while
 pfBlockerNG's master enable and the General tab's **Metrics export** option are both on.
@@ -2482,6 +2486,14 @@ per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helper
   **once** on the next tick (`mark_ran` advances `next_due` past now, so no double-run).
 - **Corrupt/partial ledger ⇒ treated as absent** (fail-safe due).
 
+**Core owns the schedule (issue #3941).** The ledger no longer holds the schedule: the feeds' and Extras'
+cadence, their pending occurrences and outcomes live in Core (`schedule_state.json`, `docs/misc/core-api-protocol.md`
+"Update and schedule"), and Core starts every Update through the `core_update` verb (`pfb_core_update_serve()`).
+`pfb_due_ledger.json` keeps only the Outpost's entries: `ss_refresh`, `apply_reconcile` and the `cron` entry's
+`pending_apply` flag. The tick (`pfblockerng_tick()`) reads no schedule state or cache; it asks Core for an `apply`
+(pending change inside the apply window) or a `retry` (a `*.fail` marker of an enabled feed, an absent DNSBL manifest).
+Every install and upgrade drops the PHP state file and the retired ledger entries once (`pfb_core_service()`).
+
 The ledger rides issue #468's persist/restore set (added to `pfb_aliastables('update')`'s backup),
 so a **clean** reboot keeps the schedule; only a true RAM-disk wipe falls back to due-now-jittered.
 A missing aliastables archive (when any of its files exists), or a missing DNSBL cache archive (when
@@ -2514,16 +2526,20 @@ midnight-wrapping ranges.
 
 ### Operator surface — the Update page & the knobs
 
-The **Update page** (`www/pfblockerng/pfblockerng_update.php`) is rebuilt on the API: an explicit
+The **Update page** (`www/pfblockerng/pfblockerng_update.php`) starts and views the one Update through Core (issue #3941): an explicit
 **Run Scope** selector (`pfb_scope`: ip/dnsbl/both) + a **Force** radio group (`pfb_force_mode`:
-none/parse/download/both) feeding one **Run now**. **None** — plain detector-respecting pass via
-`pfb_trigger`. **Parse** — reparse cached lists without re-downloading (`force=true`). **Download**
-— clear `.etag`/`.lastmod` sidecars for in-scope feeds, then run the per-feed detector
-on-demand (bypassing the hour-gate) via the `forcecheck` verb so every feed is re-fetched; feeds
+none/parse/download/both) feeding one **Run now**, which is `StartUpdate {trigger: manual, scope, force}`
+(`pfb_update_start()`). An Update already running is Core's `conflict`: the page says "An Update is running." and views it. The
+Outpost's `core_update` verb runs the request: **None** — plain detector-respecting pass. **Parse** — reparse cached lists without
+re-downloading. **Download** — clear `.etag`/`.lastmod` sidecars for in-scope feeds, then run the per-feed detector
+on-demand (bypassing the hour-gate) so every feed is re-fetched; feeds
 whose body is unchanged are still skipped. **Both** — also clears `.xxhash128`/`.md5` hash sidecars
-so every re-fetched feed re-ingests regardless of content. A read-only **Schedule** view is sourced
-from the ledger (last-run / next-due per job); a tidied update-log pane. No raw verb strings in
-the UI.
+so every re-fetched feed re-ingests regardless of content. The log is polled, not streamed: the client calls
+`?ajax=update[&after=<cursor>]` once a second, which relays `GetUpdate` (`pfb_update_view_response()`); the cursor is Core's opaque
+`next` string, and `update.startedAt` changing starts a clean log. A read-only **Schedule** view is Core's `GetSchedule`
+(last-run / next-due per job; "Core is not answering" in a row when no reply came, Core's own message when it answered with an
+error); a tidied update-log pane. No raw verb
+strings in the UI.
 
 One registered `PfbConfig` knob remains (ADR-29), with a safe default and **no GUI control** — set
 via config/CLI for advanced tuning:

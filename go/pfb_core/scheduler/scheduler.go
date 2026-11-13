@@ -27,6 +27,10 @@ const (
 // extraOrder is the order the PHP tick ran the Extras in, whatever order they are due in.
 var extraOrder = []string{extraPrefix + "dcc", extraPrefix + "bl"}
 
+// ErrModel marks an error that means the schedule model cannot be built from the settings (Config.Model failed): a caller tells
+// it from the gate's refusal, which is update.ErrRunning or update.ErrStopped. The model's own error is wrapped with it.
+var ErrModel = errors.New("the schedule model cannot be built")
+
 var (
 	scopes = []string{"ip", "dnsbl", "both"}
 	forces = []string{"none", "parse", "download", "both"}
@@ -34,11 +38,14 @@ var (
 
 // Config: Model returns the current model (built from the settings elsewhere), called without the scheduler's lock and
 // possibly by several goroutines at once; StatePath is the file the scheduler owns; Loc is the zone the schedule is read in
-// (nil: time.Local); Now is the clock (nil: time.Now); Logf is the logger (nil: discard).
+// (nil: time.Local), unless Zone, which is called once per evaluation and per View (before the scheduler's lock, as Model is),
+// returns one: so that a change of the host's time zone is read without a restart. Now is the clock (nil: time.Now); Logf is
+// the logger (nil: discard).
 type Config struct {
 	Model     func() (schedule.Model, error)
 	StatePath string
 	Loc       *time.Location
+	Zone      func() *time.Location
 	Now       func() time.Time
 	Logf      func(format string, args ...any)
 }
@@ -87,6 +94,16 @@ func (s *Scheduler) Bind(start func(update.Request) error) {
 	s.start = start
 }
 
+// zone is the zone of this evaluation or view: Zone's, else Loc.
+func (s *Scheduler) zone() *time.Location {
+	if s.cfg.Zone != nil {
+		if loc := s.cfg.Zone(); loc != nil {
+			return loc
+		}
+	}
+	return s.cfg.Loc
+}
+
 // Tick is one quarter-hour evaluation. It starts nothing and writes nothing when nothing is due, and an Update already
 // running skips it without an error.
 func (s *Scheduler) Tick() error {
@@ -103,18 +120,19 @@ func (s *Scheduler) evaluate(trigger string, force bool) error {
 	m, err := cfg.Model() // before the lock: it needs none of the state, and a slow read must not hold up Done
 	if err != nil {
 		cfg.Logf("scheduler: the schedule model is unavailable, nothing started: %v", err)
-		return err
+		return fmt.Errorf("%w: %w", ErrModel, err)
 	}
+	loc := s.zone()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := cfg.Now().Unix()
 	// The cache is recomputed first, as the PHP tick refreshed its own before planning.
 	nextDue := map[string]int64{}
-	for id, e := range schedule.CacheEntries(m, s.st, now, cfg.Loc) {
+	for id, e := range schedule.CacheEntries(m, s.st, now, loc) {
 		nextDue[id] = e.NextDue
 	}
-	extraDue, extraOcc := schedule.ExtraPlan(m, s.st, now, cfg.Loc, nextDue, s.geoipReady)
-	occ := schedule.FeedPlan(m, s.st, now, cfg.Loc).Occurrences
+	extraDue, extraOcc := schedule.ExtraPlan(m, s.st, now, loc, nextDue, s.geoipReady)
+	occ := schedule.FeedPlan(m, s.st, now, loc).Occurrences
 	maps.Copy(occ, extraOcc) // an Extra wins a clash, as PHP's array union does
 	st, err := schedule.Reserve(s.st, occ)
 	if err != nil {
@@ -186,6 +204,10 @@ func (s *Scheduler) Start(trigger, scope, force string) error {
 func (s *Scheduler) Done(req update.Request, res update.Result, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if errors.Is(err, update.ErrDeferred) { // it ran nothing: what it reported, if anything, is not recorded
+		s.cfg.Logf("scheduler: the %s Update was deferred by the update program; nothing is recorded", req.Trigger)
+		return
+	}
 	if err != nil {
 		s.cfg.Logf("scheduler: the %s Update failed: %v", req.Trigger, err)
 	}
@@ -217,23 +239,31 @@ type Entry struct {
 	NextDue int64 `json:"nextDue"`
 }
 
-// View is what GetSchedule answers: the feeds' entry (nil when none is or will be due) and the Extras' by id.
+// View is what GetSchedule answers: the feeds' entry (nil when none is or will be due), the Extras' by id, and the time of
+// the last successful check of every item that has had one (the metrics export's per-feed gauge).
 type View struct {
-	Scheduled bool             `json:"scheduled"`
-	Feeds     *Entry           `json:"feeds"`
-	Extras    map[string]Entry `json:"extras"`
+	Scheduled           bool             `json:"scheduled"`
+	Feeds               *Entry           `json:"feeds"`
+	Extras              map[string]Entry `json:"extras"`
+	LastSuccessfulCheck map[string]int64 `json:"lastSuccessfulCheck"`
 }
 
 // View computes the schedule view now from the model and the state.
 func (s *Scheduler) View() (View, error) {
 	m, err := s.cfg.Model() // before the lock, as in evaluate
 	if err != nil {
-		return View{}, err
+		return View{}, fmt.Errorf("%w: %w", ErrModel, err)
 	}
+	loc := s.zone()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v := View{Scheduled: m.Scheduled, Extras: map[string]Entry{}}
-	for id, e := range schedule.CacheEntries(m, s.st, s.cfg.Now().Unix(), s.cfg.Loc) {
+	v := View{Scheduled: m.Scheduled, Extras: map[string]Entry{}, LastSuccessfulCheck: map[string]int64{}}
+	for id, it := range s.st {
+		if it.LastSuccessfulCheck != nil {
+			v.LastSuccessfulCheck[id] = *it.LastSuccessfulCheck
+		}
+	}
+	for id, e := range schedule.CacheEntries(m, s.st, s.cfg.Now().Unix(), loc) {
 		if id == cronKey {
 			v.Feeds = &Entry{e.LastRun, e.NextDue}
 		} else {

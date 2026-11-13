@@ -1376,9 +1376,8 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         and writes the .xxhash128 sidecar for the .orig);
         and ``dom_new`` is NOT on any feed (resolves via stub sentinel, not blocked);
       When the feed source is edited in-place to add ``dom_new`` (content changes, so the
-        xxh128 hash differs from the sidecar baseline), pfb_reuse is OFF and
-        pfb_dailystart matches the current guest hour (so the EveryDay feed is due),
-        and the ``cron`` verb is run (NOT ``force_dnsbl_refetch``);
+        xxh128 hash differs from the sidecar baseline), pfb_reuse is OFF
+        and the scheduled Update is run (NOT ``force_dnsbl_refetch``);
       Then ``dom_new`` becomes BLOCKED (detector re-ingested the edited feed),
         ``dom_old`` stays BLOCKED, and the main log gained a header-scoped
         "Downloading update" line for this feed during the cron run.
@@ -1417,8 +1416,8 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # detection is hash-based, not mtime-based (ADR-42 Phase 2).
         h.write_local_feed(deployed_vm, "smoke_cronchg.txt", dom_old + "\n" + dom_new + "\n")
 
-        # Pin pfb_reuse=off and dailystart=now (just before cron to dodge hour-rollover race).
-        h.pin_cron_due(deployed_vm)
+        # Pin pfb_reuse=off.
+        h.disable_feed_reuse(deployed_vm)
 
         # Capture baselines BEFORE the cron run: the per-feed header line (proves the detector
         # actually evaluated THIS feed) and the re-ingest marker.
@@ -1426,15 +1425,14 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
         # WHEN — run the genuine cron path (NOT force_dnsbl_refetch — that is the shortcut).
-        h.reload(deployed_vm, "cron")
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
 
-        # THEN (fast guard) — the cron actually evaluated this feed. If the EveryDay feed was not
-        # due (e.g. the wall-clock hour rolled over between pin_cron_due and the cron), no
-        # detector line appears; fail HERE with a clear reason instead of a 120s probe timeout.
+        # THEN (fast guard) — the scheduled Update actually evaluated this feed. If it was not
+        # checked, no detector line appears; fail HERE with a clear reason instead of a 120s probe timeout.
         hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
         assert hdr_after > hdr_before, (
             f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — the "
-            f"EveryDay feed was not due (hour rollover?), so this run proves nothing; re-run"
+            f"feed was not checked, so this run proves nothing"
         )
 
         # THEN — dom_new becomes blocked (cron re-ingested the edited feed).
@@ -1481,8 +1479,8 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
     Scenario (BDD):
       Given the feed contains ``dom`` (initial ingest blocks it and writes the .xxhash128
         sidecar for the .orig);
-      When no content change is made to the source, pfb_reuse is OFF and pfb_dailystart
-        matches the current guest hour, and the ``cron`` verb runs;
+      When no content change is made to the source, pfb_reuse is OFF
+        and the scheduled Update runs;
       Then the detector logs a new "Update not required" verdict (hash matches sidecar),
         no "Downloading update" line appears for this header, and ``dom`` remains blocked.
     """
@@ -1507,8 +1505,8 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # No content change — source bytes == .orig bytes → hash matches sidecar.
         # No mtime manipulation is needed: detection is hash-based (ADR-42 Phase 2).
 
-        # Pin pfb_reuse=off and dailystart=now.
-        pinned_hour = h.pin_cron_due(deployed_vm)
+        # Pin pfb_reuse=off.
+        h.disable_feed_reuse(deployed_vm)
 
         # Capture baselines BEFORE cron. With an unchanged feed the cron takes the noupdates
         # path (sync feed-loop skipped), so the reliable positive signal is the DETECTOR verdict
@@ -1517,19 +1515,7 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
         # WHEN — cron.
-        h.reload(deployed_vm, "cron")
-
-        # THEN (fast guard) — the guest hour must still match the pinned hour. Unlike the
-        # changed-feed sibling (test_cron_detects_changed_local_feed), this unchanged/noupdates
-        # path logs no "[ header ]" marker to fast-guard on, so guard on the wall clock itself:
-        # a rollover between pin_cron_due and this cron means the EveryDay feed was never due,
-        # and the "no re-ingest" assertions below would prove nothing about the change detector.
-        hour_after = h.guest_hour(deployed_vm)
-        assert hour_after == pinned_hour, (
-            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron "
-            f"({hour_after}) — the EveryDay feed was not due this run; this proves nothing "
-            f"about the change detector, re-run"
-        )
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
 
         # THEN — no new "Downloading update" (reuse held — feed not re-ingested).
         dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -1581,8 +1567,8 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
       Given the feed contains ``dom`` (initial ingest blocks it and writes the .xxhash128
         sidecar; ``.orig`` bytes == source bytes);
       When the source mtime is bumped LATER than ``.orig`` WITHOUT changing content
-        (``touch -r`` + ``touch -A``), pfb_reuse is OFF and pfb_dailystart matches the
-        guest hour, and the ``cron`` verb runs;
+        (``touch -r`` + ``touch -A``), pfb_reuse is OFF
+        and the scheduled Update runs;
       Then the detector logs a new "Update not required" verdict (hash matches sidecar),
         no "Downloading update" line appears for this header, and ``dom`` remains blocked.
     """
@@ -1609,25 +1595,13 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
         orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
         _bump_feed_mtime(deployed_vm, feed_path, orig_path, advance="0200")
 
-        # Pin pfb_reuse=off and dailystart=now (just before cron).
-        pinned_hour = h.pin_cron_due(deployed_vm)
+        # Pin pfb_reuse=off.
+        h.disable_feed_reuse(deployed_vm)
         notreq_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
         # WHEN — cron (the genuine detector path).
-        h.reload(deployed_vm, "cron")
-
-        # THEN (fast guard) — the guest hour must still match the pinned hour. This
-        # unchanged-content path (like its `test_cron_skips_unchanged_local_feed` sibling) logs
-        # no "[ header ]" marker to fast-guard on, so guard on the wall clock itself: a rollover
-        # between pin_cron_due and this cron means the EveryDay feed was never due, and the
-        # "Update not required" assertion below would prove nothing about the change detector.
-        hour_after = h.guest_hour(deployed_vm)
-        assert hour_after == pinned_hour, (
-            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron "
-            f"({hour_after}) — the EveryDay feed was not due this run; this proves nothing "
-            f"about the change detector, re-run"
-        )
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
 
         # THEN — hash confirms no content change: "Update not required" appeared, no download.
         # (ADR-42 Phase 2: the old "mtime changed, content identical" marker no longer exists;
@@ -1681,8 +1655,8 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
         and ``dom_new`` is NOT blocked;
       When the source is rewritten with DIFFERENT content (add ``dom_new``) AND the source
         mtime is forced EQUAL to the ``.orig`` mtime (``touch -r`` — simulates same-second
-        write), pfb_reuse is OFF and pfb_dailystart matches the guest hour, and the ``cron``
-        verb is run;
+        write), pfb_reuse is OFF
+        and the scheduled Update is run;
       Then ``dom_new`` becomes BLOCKED (detector re-ingested despite equal mtime),
         ``dom_old`` stays BLOCKED, and a new "Downloading update" line appears for this header.
     """
@@ -1720,14 +1694,14 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
         # Force source mtime = orig mtime — the defining condition for the blind spot.
         _bump_feed_mtime(deployed_vm, feed_path, orig_path)  # touch -r: source mtime := orig mtime
 
-        # Pin pfb_reuse=off and dailystart=now.
-        h.pin_cron_due(deployed_vm)
+        # Pin pfb_reuse=off.
+        h.disable_feed_reuse(deployed_vm)
 
         hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
         # WHEN — cron (genuine detector path).
-        h.reload(deployed_vm, "cron")
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
 
         # Fast guard: cron actually evaluated this feed.
         hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
@@ -1815,8 +1789,8 @@ def test_cron_304_skips_unchanged_remote_feed(
     Scenario (BDD):
       Given the remote DNSBL feed is loaded (Force Update writes .orig + .xxhash128 + .etag);
         ``dom`` is VIP-blocked;
-      When feed content is UNCHANGED (same ETag on the server), pfb_reuse is OFF and
-        pfb_dailystart matches now, and the ``cron`` verb is run;
+      When feed content is UNCHANGED (same ETag on the server), pfb_reuse is OFF
+        and the scheduled Update is run;
       Then the detector logs "304 not modified", does NOT log "Downloading update",
         and ``dom`` remains blocked.
     """
@@ -1845,7 +1819,7 @@ def test_cron_304_skips_unchanged_remote_feed(
 
         # The cron detector prefixes the verdict with the feed header, so the marker
         # below is scoped by header and verdict.
-        h.pin_cron_due(deployed_vm)
+        h.disable_feed_reuse(deployed_vm)
         not_mod_marker = h.detector_status_marker(header, "( 304 not modified )")
         not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -1857,14 +1831,7 @@ def test_cron_304_skips_unchanged_remote_feed(
         # the marker appears (the #572 fix aligned the read base to {header}.orig), capped so
         # a genuine failure still surfaces.
         for _pass in range(4):
-            # issue #2489: pin_cron_due() reserves a ONE-SHOT pending occurrence, which the
-            # first pass consumes. Without re-arming, passes 2..4 return at "No Updates
-            # required." before reaching pfb_update_check(), so the validator this loop
-            # depends on is stored and never read. The production tick reserves each
-            # scheduled occurrence the same way, one per pass.
-            if _pass:
-                h.pin_cron_due(deployed_vm)
-            h.reload(deployed_vm, "cron")
+            h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
             if h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker) > not_mod_before:
                 break
 
@@ -1913,8 +1880,8 @@ def test_cron_200_reingest_changed_remote_feed(
     Scenario (BDD):
       Given the remote DNSBL feed is loaded (``dom_old`` blocked; .etag=etag_v1);
         ``dom_new`` is NOT blocked;
-      When the feed body is updated + ETag bumped to etag_v2, pfb_reuse is OFF and
-        pfb_dailystart matches now, and the ``cron`` verb runs;
+      When the feed body is updated + ETag bumped to etag_v2, pfb_reuse is OFF
+        and the scheduled Update runs;
       Then the detector logs "content changed" + "Downloading update",
         ``dom_new`` becomes VIP-blocked, and ``dom_old`` remains blocked.
     """
@@ -1946,7 +1913,7 @@ def test_cron_200_reingest_changed_remote_feed(
         # WHEN — update body + bump ETag on the server.
         mock_feeds.set_content(feed_name, dom_old + "\n" + dom_new + "\n", etag=etag_v2)
 
-        h.pin_cron_due(deployed_vm)
+        h.disable_feed_reuse(deployed_vm)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
         # "[ header ] ( content changed )" is the Phase-3 hash-compare verdict itself (not
         # merely its re-ingest side effect), header-scoped by #811 — the docstring's RED
@@ -1956,7 +1923,7 @@ def test_cron_200_reingest_changed_remote_feed(
         chg_marker = h.detector_status_marker(header, "( content changed )")
         chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
 
-        h.reload(deployed_vm, "cron")
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
 
         # THEN — "Downloading update" appeared (feed was re-ingested).
         dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -2011,8 +1978,8 @@ def test_cron_no_validator_download_hash_decides(
     Scenario (BDD):
       Given the remote DNSBL feed is loaded with NO validator at all (server emits neither
         ETag nor Last-Modified); ``dom`` is VIP-blocked;
-      When feed content is UNCHANGED, pfb_reuse is OFF, pfb_dailystart matches now,
-        and the ``cron`` verb runs;
+      When feed content is UNCHANGED, pfb_reuse is OFF
+        and the scheduled Update runs;
       Then the detector downloads the full body, logs "content unchanged",
         does NOT log "Downloading update", and ``dom`` remains blocked.
     """
@@ -2042,12 +2009,12 @@ def test_cron_no_validator_download_hash_decides(
         # Feed unchanged; no If-None-Match will be sent (no stored ETag). #811 header-scopes
         # the "( content unchanged )" verdict line, so the marker below proves BOTH the
         # verdict and that THIS feed's header was evaluated.
-        h.pin_cron_due(deployed_vm)
+        h.disable_feed_reuse(deployed_vm)
         not_unch_marker = h.detector_status_marker(header, "( content unchanged )")
         not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
-        h.reload(deployed_vm, "cron")
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
 
         # THEN — "[ header ] ( content unchanged )" appeared (full download + hash comparison
         # taken for THIS feed).
@@ -2096,8 +2063,8 @@ def test_cron_spurious_200_same_bytes_no_reingest(
 
     Scenario (BDD):
       Given the remote IP feed is loaded (``member_ip`` is in the pf table); server has no ETag;
-      When feed bytes are UNCHANGED, pfb_reuse is OFF, pfb_dailystart matches now,
-        and the ``cron`` verb runs (server returns plain 200 — no If-None-Match sent);
+      When feed bytes are UNCHANGED, pfb_reuse is OFF
+        and the scheduled Update runs (server returns plain 200 — no If-None-Match sent);
       Then the detector logs "content unchanged", does NOT log "Downloading update",
         and the pf table still contains ``member_ip``.
     """
@@ -2126,13 +2093,13 @@ def test_cron_spurious_200_same_bytes_no_reingest(
             # Pin cron due (inside CaseContext so config is active). #811 header-scopes the
             # "( content unchanged )" verdict, so the marker below proves both the verdict
             # and that THIS feed's marker (aliasname_family) was the one evaluated.
-            h.pin_cron_due(deployed_vm)
+            h.disable_feed_reuse(deployed_vm)
             not_unch_marker = h.detector_status_marker(feed_marker, "( content unchanged )")
             not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
             dl_before = _feed_log_count(deployed_vm, feed_marker, "Downloading update")
 
             # WHEN — cron; server returns 200 (no ETag → no If-None-Match → plain 200).
-            h.reload(deployed_vm, "cron")
+            h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
             h.apply_filter_sync(deployed_vm)
 
             # THEN — "[ feed_marker ] ( content unchanged )" appeared (spurious 200 detected
@@ -2191,7 +2158,7 @@ def test_cron_lastmod_304_skips_unchanged_feed(
       Given the remote DNSBL feed is loaded with NO ETag (server does not emit one);
         ``dom`` is VIP-blocked;
       When feed content is UNCHANGED, the server honours If-Modified-Since with a real 304,
-        pfb_reuse is OFF, pfb_dailystart matches now, and the ``cron`` verb runs;
+        pfb_reuse is OFF, and the scheduled Update runs;
       Then the detector logs "304 not modified", does NOT log "Downloading update",
         and ``dom`` remains blocked.
     """
@@ -2223,7 +2190,7 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         # Feed unchanged; the stored Last-Modified validator still matches. #811 header-scopes
         # the "( 304 not modified )" verdict line itself, so the marker below is scoped by
         # header AND verdict — no separate global count + "fast guard" needed.
-        h.pin_cron_due(deployed_vm)
+        h.disable_feed_reuse(deployed_vm)
         not_mod_marker = h.detector_status_marker(header, "( 304 not modified )")
         not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -2233,14 +2200,7 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         # ingest above. Run cron until the marker appears, capped so a genuine failure still
         # surfaces.
         for _pass in range(4):
-            # issue #2489: pin_cron_due() reserves a ONE-SHOT pending occurrence, which the
-            # first pass consumes. Without re-arming, passes 2..4 return at "No Updates
-            # required." before reaching pfb_update_check(), so the validator this loop
-            # depends on is stored and never read. The production tick reserves each
-            # scheduled occurrence the same way, one per pass.
-            if _pass:
-                h.pin_cron_due(deployed_vm)
-            h.reload(deployed_vm, "cron")
+            h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
             if h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker) > not_mod_before:
                 break
 
@@ -5014,8 +4974,8 @@ def test_ip_feed_turning_comment_only_clears_stale_entries(deployed_vm: SmokeVM,
         chg_marker = h.detector_status_marker(f"{spec.aliasname}_{spec.family}", "( content changed )")
         chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
         mock_feeds.set_content(feed_name, comment_only)
-        h.pin_cron_due(deployed_vm)
-        h.reload(deployed_vm, "cron")
+        h.disable_feed_reuse(deployed_vm)
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
         h.apply_filter_sync(deployed_vm)
         chg_after = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
         assert chg_after >= chg_before + 1, (

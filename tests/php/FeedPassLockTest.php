@@ -9,8 +9,8 @@ use PHPUnit\Framework\TestCase;
  * issue #1175 — cross-process, non-blocking feed-pass mutual exclusion.
  *
  * Functions under test: pfb_feed_pass_acquire(), pfb_feed_pass_release(),
- * pfb_feed_pass_busy() in pfblockerng.inc -- siblings of pfb_feed_task_running()
- * and pfb_update_pass_running() (ps-scan guards), but flock-based and exclusive
+ * pfb_feed_pass_busy() in pfblockerng.inc -- siblings of pfb_update_pass_running()
+ * (a ps-scan guard), but flock-based and exclusive
  * rather than advisory-by-process-list. Lock file: "{dbdir}/pfb_feed_pass.lock".
  *
  * flock(2) semantics this suite relies on: a lock belongs to the OPEN FILE
@@ -90,23 +90,6 @@ final class FeedPassLockTest extends TestCase
 	private function lockPath(): string
 	{
 		return "{$this->dbdir}/pfb_feed_pass.lock";
-	}
-
-	public function testNestedScheduleCacheRegenerationPreservesOuterFeedLock(): void
-	{
-		$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
-		$this->assertTrue(pfb_schedule_dispatch_begin());
-		$this->assertTrue(pfb_feed_pass_acquire());
-		$dispatchOuter = $GLOBALS['pfb_schedule_dispatch_lock'];
-		$outer = $GLOBALS['pfb_feed_pass_lock'];
-
-		pfb_schedule_cache_regenerate();
-
-		$this->assertSame($dispatchOuter, $GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL);
-		$this->assertTrue(is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL));
-		$this->assertSame($outer, $GLOBALS['pfb_feed_pass_lock'] ?? NULL);
-		$this->assertTrue(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL));
-		pfb_schedule_dispatch_release();
 	}
 
 	public function testStandaloneExtrasProcessHoldsDispatcherAndFeedLocks(): void

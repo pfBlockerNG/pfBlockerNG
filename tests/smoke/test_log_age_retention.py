@@ -22,8 +22,8 @@ feature is purely log-file + config I/O, not DNSBL — mirrors the retired ADR-3
 
 Driven via the ``tick`` verb (``pfblockerng_tick()`` -> ``pfb_log_mgmt()``, the only
 path that runs log maintenance, and only on an IDLE tick — see
-``pfb_update_pass_running()`` in ``pfblockerng.inc``). The ``deployed_vm`` fixture
-primes every scheduled item as completed so its next occurrence is in the future.
+``pfb_update_pass_running()`` in ``pfblockerng.inc``). The tick starts nothing of its own accord
+(Core plans the scheduled Updates, issue #3941), so no priming of a schedule is needed.
 """
 
 from __future__ import annotations
@@ -47,8 +47,6 @@ pytestmark = pytest.mark.smoke
 
 PFB_LOGDIR = "/var/log/pfblockerng"
 PFB_DBDIR = "/var/db/pfblockerng"
-
-_PFB_EXTRA_INC = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 # Host-side (non-chrooted) PHP-written CSV log; timestamp at CSV field 0.
 LOG_IP_BLOCKLOG = f"{PFB_LOGDIR}/ip_block.log"
@@ -75,15 +73,13 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     infrastructure, only ``enable_cb=on`` (so the tick body executes) and every tick in
     this module being idle-only, so ``pfb_log_mgmt()`` runs on every ``tick`` call below.
 
-    The helper marks every configured schedule identity completed at the current instant,
-    publishes the matching runtime cache, and writes a future-dated cron entry.
-    The next tick is therefore maintenance-only without relying on retired cron knobs.
+    A tick only asks Core for an Update when an apply is pending or a feed asks for a retry;
+    this module arranges neither, so its ticks are maintenance-only.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     _set_enable_cb(smoke_vm)
-    _prime_idle_schedule(smoke_vm)
     smoke_vm.ssh("/bin/mkdir", "-p", PFB_LOGDIR, timeout=30)
     smoke_vm.ssh("/bin/mkdir", "-p", PFB_DBDIR, timeout=30)
     try:
@@ -119,43 +115,6 @@ def _set_enable_cb(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     result = h.php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"_set_enable_cb failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-
-
-def _prime_idle_schedule(vm: SmokeVM, *, timeout: float = 60.0) -> None:
-    """Publish completed schedule state and a matching future runtime cache."""
-    snippet = (
-        f"require_once('{_PFB_EXTRA_INC}');"
-        # issue #2492: guard, do not require pfblockerng.inc — see the measured
-        # comparison at helpers.py pin_cron_due. Nothing here needs $pfb beyond
-        # schedule_state_dir, which uses the same production fallback below.
-        # Latent (#2495): pfb_schedule_runtime_config() reaches pfb_filter()/
-        # PFB_FILTER_CSV (pfblockerng.inc-only) once blacklist_selected is populated.
-        "if (function_exists('pfb_global')) { pfb_global(); }"
-        "$now = time();"
-        "$state_dir = $pfb['schedule_state_dir'] ?? '/usr/local/etc';"
-        "$model = pfb_schedule_runtime_config();"
-        "$state = array('schema' => 1, 'items' => array());"
-        "foreach (($model['entries'] ?? array()) as $id => $entry) {"
-        "  if (!empty($entry['enabled'])) {"
-        "    $state['items'][$id] = array("
-        "      'last_successful_check' => $now,"
-        "      'last_completed_occurrence' => $now,"
-        "      'completion_outcome' => 'success'"
-        "    );"
-        "  }"
-        "}"
-        "$ok = $model !== NULL && pfb_schedule_state_write($state, $state_dir)"
-        f" && pfb_schedule_cache_refresh($model, $state, $now, "
-        f"new DateTimeZone(date_default_timezone_get()), {h._php_str(PFB_DBDIR)});"
-        "$ok = $ok && pfb_due_ledger_write_entry('cron', "
-        "array('last_run' => $now, 'next_due' => $now + 86400, 'jitter' => 0), "
-        f"{h._php_str(PFB_DBDIR)});"
-        "if (!$ok) { exit(1); }"
-        "echo 'OK';"
-    )
-    result = h.php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"_prime_idle_schedule failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def _set_log_max_days(vm: SmokeVM, values: dict[str, str], *, timeout: float = 60.0) -> None:

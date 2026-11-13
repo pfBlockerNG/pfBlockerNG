@@ -160,14 +160,14 @@ Prometheus text format (`\\`, `\"`, `\n`).
 | `pfblockerng_dnsbl_blocked_queries_total` | counter | `group`, `origin`, `qtype`, known `transport`, `listener_ip`, `listener_interface`; opt-in `client_ip` | Historical group aggregate plus separately owned custom/built-in counters in `pfb_py_dnsbl.sqlite` |
 | `pfblockerng_dnsbl_group_entries` | gauge | `group` | `dnsbl.entries`; rows marked `disabled` are omitted |
 | `pfblockerng_dnsbl_resolver_queries_total` | counter | `qtype`, known `transport`, `listener_ip`, `listener_interface`; opt-in `client_ip` | Resolver aggregate (`totalqueries + queries`) and query breakdowns in `pfb_py_resolver.sqlite` |
-| `pfblockerng_feed_last_success_timestamp_seconds` | gauge | `feed` | `last_successful_check` per item in `pfb_schedule_state.json`; `feed` is the schedule item ID (for example `ipv4:Alias_v4`, `dnsbl:Group`) |
+| `pfblockerng_feed_last_success_timestamp_seconds` | gauge | `feed` | `lastSuccessfulCheck` per item in Core's `GetSchedule` (issue #3941); `feed` is the schedule item ID (for example `ipv4:Alias_v4`, `dnsbl:Group`) |
 | `pfblockerng_feed_failing` | gauge (1) | `facility`, `feed`, `stage` | open entries in `pfb_sync_status.json` (PHP) and `/var/unbound/pfb_py_status.json` (Python); present only while a failure is open |
 | `pfblockerng_update_last_start_timestamp_seconds` | gauge | none | `pfb_pass_status.json` `last_start` |
 | `pfblockerng_update_last_end_timestamp_seconds` | gauge | none | `pfb_pass_status.json` `last_end` |
 | `pfblockerng_metrics_source_up` | gauge | `source` | 1 when that source was collected, 0 when it failed |
 
-`source` values: `pfctl`, `pf_rules`, `dnsbl_db`, `resolver_db`, `schedule_state`,
-`sync_status`, `py_sync_status`, `pass_status`.
+`source` values: `pfctl`, `pf_rules`, `dnsbl_db`, `resolver_db`, `schedule_state` (Core's `GetSchedule`: 0 when Core does not
+answer), `sync_status`, `py_sync_status`, `pass_status`.
 
 Semantics operators rely on:
 

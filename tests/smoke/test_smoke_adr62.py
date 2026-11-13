@@ -470,13 +470,8 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
         # A Force-DNSBL reload cannot exercise that fork — it sets
         # reuse_dnsbl='on' and re-parses the '.orig' download cache instead of
         # honouring the staged '.txt'.
-        pinned_hour = h.pin_cron_due(deployed_vm)
-        h.reload(deployed_vm, "cron")
-        hour_now = h.guest_hour(deployed_vm)
-        assert hour_now == pinned_hour, (
-            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron ({hour_now}) — "
-            f"the EveryDay feeds were never due, this run proves nothing; re-run"
-        )
+        h.disable_feed_reuse(deployed_vm)
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec), h.feed_id("dnsbl", sib_header)])
 
         h.flush_unbound_name(deployed_vm, reused_domain)
         ans_reused = h.dns_probe_client_until(client_vm, reused_domain, h.is_vip)
@@ -592,13 +587,8 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
         h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", f",{domain_csv},,1,{header},{header}\n{domain_bare}\n")
         h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
 
-        pinned_hour = h.pin_cron_due(deployed_vm)
-        h.reload(deployed_vm, "cron")
-        hour_now = h.guest_hour(deployed_vm)
-        assert hour_now == pinned_hour, (
-            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron ({hour_now}) — "
-            f"the EveryDay feeds were never due, this run proves nothing; re-run"
-        )
+        h.disable_feed_reuse(deployed_vm)
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec), h.feed_id("dnsbl", sib_header)])
 
         rebuild_after = _feed_log_count(deployed_vm, header, "Rebuild")
         assert rebuild_after > rebuild_before, (
@@ -693,13 +683,8 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
         h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", stale_txt)
         h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
 
-        pinned_hour = h.pin_cron_due(deployed_vm)
-        h.reload(deployed_vm, "cron")
-        hour_now = h.guest_hour(deployed_vm)
-        assert hour_now == pinned_hour, (
-            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron ({hour_now}) — "
-            f"the EveryDay feeds were never due, this run proves nothing; re-run"
-        )
+        h.disable_feed_reuse(deployed_vm)
+        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec), h.feed_id("dnsbl", sib_header)])
 
         rebuild_after = _feed_log_count(deployed_vm, header, "Rebuild")
         assert rebuild_after > rebuild_before, (

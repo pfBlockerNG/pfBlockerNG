@@ -44,6 +44,7 @@ import contextlib
 import functools
 import hashlib
 import ipaddress
+import json
 import math
 import os
 import re
@@ -1228,52 +1229,156 @@ def _php_kv_array(data: dict[str, str]) -> str:
     return f"array({items})"
 
 
-def pin_cron_due(vm: SmokeVM) -> int:
-    """Reserve every configured feed group for a direct ``cron`` smoke invocation.
-
-    The production tick normally creates these durable reservations. Feed detector smoke
-    tests invoke ``cron`` directly, so reserve the same stable IDs through the package state
-    API and disable reuse. The returned guest hour preserves existing diagnostics.
-    """
-    sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
+def disable_feed_reuse(vm: SmokeVM) -> None:
+    """Turn ``pfb_reuse`` off, so a feed pass runs the change detector instead of reusing the last download."""
     snippet = (
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        # issue #2492: pfb_global() lives in pfblockerng.inc, which extra.inc does not
-        # require, so a bare call is fatal here. Guard rather than requiring
-        # pfblockerng.inc: that was measured to break the loaded config (see #2492).
-        # Nothing below needs $pfb — schedule_state_dir has no assigner and every
-        # consumer shares the `?? '/usr/local/etc'` fallback used below.
-        "if (function_exists('pfb_global')) { pfb_global(); }\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"
-        "$g['pfb_scheduled_feed_updates'] = 'on';\n"
-        "$hour = date('G');\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
-        "write_config('pfBlockerNG smoke: reserve scheduled feeds');\n"
-        "$model = pfb_schedule_runtime_config();\n"
-        "$state_dir = $pfb['schedule_state_dir'] ?? '/usr/local/etc';\n"
-        "$state = pfb_schedule_state_read($state_dir) ?? array('schema' => 1, 'items' => array());\n"
-        "$occurrences = array();\n"
-        "foreach (($model['entries'] ?? array()) as $id => $entry) {\n"
-        "    if (strpos($id, 'extra:') !== 0 && !empty($entry['enabled']) && !empty($entry['has_active_rows'])) {\n"
-        "        $completed = $state['items'][$id]['last_completed_occurrence'] ?? 0;\n"
-        "        $occurrences[$id] = max(time(), $completed + 1);\n"
-        "    }\n"
-        "}\n"
-        "if ($model === NULL || $occurrences === array()\n"
-        "    || !pfb_schedule_state_set_pending($occurrences, $state_dir)) {\n"
-        "    exit(1);\n"
-        "}\n"
-        f"echo 'OK' . '{sentinel_open}' . $hour . '{sentinel_close}';"
+        "write_config('pfBlockerNG smoke: feed reuse off');\n"
+        "echo 'OK';"
     )
     res = php_eval(vm, snippet)
-    if res.returncode != 0 or "OK" not in res.stdout or sentinel_open not in res.stdout:
-        raise RuntimeError(f"pin_cron_due failed: rc={res.returncode} {res.stderr!r} {res.stdout!r}")
-    raw = res.stdout.split(sentinel_open, 1)[1].split(sentinel_close, 1)[0]
+    if res.returncode != 0 or "OK" not in res.stdout:
+        raise RuntimeError(f"disable_feed_reuse failed: rc={res.returncode} {res.stderr!r} {res.stdout!r}")
+
+
+def feed_id(family: str, header: str) -> str:
+    """The schedule id of a feed row (``pfb_schedule_feed_id()``): family (dnsbl, ipv4, ipv6) and header.
+
+    An IP row's id carries the family suffix the feed pass appends to the configured header
+    (``smoketick`` -> ``ipv4:smoketick_v4``).
+    """
+    if family == "dnsbl":
+        return f"dnsbl:{header}"
+    if family in ("ipv4", "ipv6"):
+        return f"{family}:{header}_v{family[-1]}"
+    raise ValueError(f"feed_id family must be dnsbl/ipv4/ipv6, got {family!r}")
+
+
+def case_feed_id(spec: DnsblCase | IpCase) -> str:
+    """The schedule id of a matrix case's feed row."""
+    if isinstance(spec, DnsblCase):
+        return feed_id("dnsbl", spec.header)
+    return feed_id(f"ipv{spec.family[-1]}", spec.header)
+
+
+# issue #3941: the program Core runs once per Update (pfblockerng.inc ``core_update`` behind this wrapper): one JSON
+# request on stdin, the progress on stdout, the result on fd 3 (docs/misc/core-api-protocol.md, "Update command").
+CORE_UPDATE_CMD = "/usr/local/pkg/pfblockerng/pfb_core_update.sh"
+CORE_UPDATE_RESULT = "/tmp/pfb_smoke_core_update_result.json"
+CORE_STATE_DIR = "/usr/local/etc/pfb_core"
+_CORE_OPEN, _CORE_CLOSE = "<<<CORE>>>", "<<<CORE-END>>>"
+
+
+def core_update_command(
+    trigger: str,
+    *,
+    scope: str = "both",
+    force: str = "none",
+    feeds: Sequence[str] = (),
+    extras: Sequence[str] = (),
+) -> str:
+    """The sh command line that runs the Update program once with this request, as Core does (result file on fd 3)."""
+    request: dict[str, Any] = {"version": 1, "trigger": trigger, "scope": scope, "force": force}
+    if feeds:
+        request["feeds"] = list(feeds)
+    if extras:
+        request["extras"] = list(extras)
+    return f"printf %s {shlex.quote(json.dumps(request))} | {CORE_UPDATE_CMD} 3>{CORE_UPDATE_RESULT}"
+
+
+def core_calls(
+    vm: SmokeVM, calls: Sequence[tuple[str, dict[str, Any] | None]], *, timeout: float = 60.0
+) -> list[dict[str, Any]]:
+    """Several Core API calls in ONE on-box process, in order: each reply as ``pfb_core_call()`` gives it.
+
+    ``{"status": int, "body": dict | None, "error": str | None}``. A ``StartUpdate`` without a ``requestId`` gets a
+    fresh one. One process matters when the calls must follow each other within milliseconds (a second
+    ``StartUpdate`` while the first runs).
+    """
+    lines = []
+    for method, params in calls:
+        body = dict(params or {})
+        if method == "StartUpdate":
+            body.setdefault("requestId", uuid.uuid4().hex)
+        lines.append(f"$r[] = pfb_core_call({_php_str(method)}, json_decode({_php_str(json.dumps(body))}, TRUE));")
+    result = php_eval(
+        vm,
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n$r = array();\n"
+        + "\n".join(lines)
+        + f"\necho {_php_str(_CORE_OPEN)} . json_encode($r) . {_php_str(_CORE_CLOSE)};",
+        timeout=timeout,
+    )
+    out = result.stdout
+    if _CORE_OPEN not in out or _CORE_CLOSE not in out:
+        raise RuntimeError(f"core_calls: no reply printed: rc={result.returncode} {out!r} {result.stderr!r}")
+    replies: list[dict[str, Any]] = json.loads(out.split(_CORE_OPEN, 1)[1].split(_CORE_CLOSE, 1)[0])
+    return replies
+
+
+def core_call(vm: SmokeVM, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One Core API call from the box (:func:`core_calls`)."""
+    return core_calls(vm, [(method, params)])[0]
+
+
+def tell_core_the_settings_changed(vm: SmokeVM) -> None:
+    """A page save's notice, run by hand: Core reads config.xml again (feed groups and schedule included)."""
+    pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();"
+    reason = _php_read_scalar(vm, pre, "var_export(pfb_core_settings_changed(NULL, TRUE), TRUE)")
+    if reason != "NULL":
+        raise RuntimeError(f"Core was not told that the settings changed: {reason}")
+
+
+@contextlib.contextmanager
+def scheduled_updates_on(vm: SmokeVM) -> Iterator[None]:
+    """Scheduled feed updates ON and told to Core; restored, and told again, after.
+
+    Core plans a feed only while they are on, and the Outpost asks for a retry only then.
+    """
+    path = f"{CFG_GLOBAL}/pfb_scheduled_feed_updates"
+    state = config_get_state(vm, path)
+    config_set(vm, path, "on")
     try:
-        return int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"pin_cron_due: could not parse pinned hour from {res.stdout!r}") from exc
+        tell_core_the_settings_changed(vm)
+        yield
+    finally:
+        config_restore_state(vm, path, state)
+        tell_core_the_settings_changed(vm)
+
+
+def core_update_view(vm: SmokeVM, after: str | None = None) -> dict[str, Any]:
+    """``GetUpdate``'s body: ``running``, ``update``, ``log`` and ``next`` (the cursor is an opaque string)."""
+    reply = core_call(vm, "GetUpdate", {} if after is None else {"after": after})
+    if reply["status"] != 200:
+        raise RuntimeError(f"GetUpdate did not answer 200: {reply}")
+    body: dict[str, Any] = reply["body"]
+    return body
+
+
+def core_update_log(vm: SmokeVM) -> str:
+    """The whole log of the last Update, read the way a client follows it: each call passes the last ``next`` back."""
+    log, after = "", None
+    while True:
+        view = core_update_view(vm, after)
+        if not view["log"]:
+            return log
+        log, after = log + view["log"], view["next"]
+
+
+def await_core_update_end(vm: SmokeVM, *, before: dict[str, Any] | None, watchdog: float = 600.0) -> dict[str, Any]:
+    """Block until an Update newer than ``before`` (the ``update`` of an earlier view) has ended; returns that view.
+
+    The watchdog only salvages a stuck run: it is never an assertion about how long an Update takes.
+    """
+    deadline = time.monotonic() + watchdog
+    while True:
+        view = core_update_view(vm)
+        if not view["running"] and view["update"] is not None and view["update"] != before:
+            return view
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"STUCK: no Update newer than {before} ended within {watchdog:.0f}s; last view: {view}")
+        time.sleep(1)
 
 
 def guest_hour(vm: SmokeVM) -> int:
@@ -3666,6 +3771,7 @@ def reload(
     wait_unbound: bool = True,
     timeout: float = 600.0,
     retry_deferred: float = 0.0,
+    feeds: Sequence[str] = (),
 ) -> None:
     """Run a pfBlockerNG reload via the PHP CLI.
 
@@ -3673,8 +3779,10 @@ def reload(
     ``update`` (scope=both force=false trigger=cron — full update, respects change detector),
     ``updateip`` (scope=ip force=true trigger=force — IP-side force reload),
     ``updatednsbl`` (scope=dnsbl force=true trigger=force — DNSBL-side force reload),
-    ``cron`` (the legacy feed-cron pass via ``pfblockerng_sync_cron()`` — since PR #790 this
-    verb no longer runs the log-maintenance trim), or ``tick`` (the scheduled tick via
+    ``scheduled`` (a quarter-hour Update Core asks the Update program for, with the ``feeds`` ids
+    it is asked to check -- :func:`feed_id`; Core decides what is due, so a pass checks exactly the
+    feeds named, issue #3941; sent as trigger ``retry``, which runs the same pass but, unlike ``scheduled``, is not
+    deferred by the harness's ``.pfb_cron_disable`` sentinel), or ``tick`` (the scheduled tick via
     ``pfblockerng_tick()`` — the only path that runs ``pfb_log_mgmt()``, and only on an IDLE
     tick: skipped when this tick dispatches an update pass or one from an earlier tick is
     still running, see ``pfb_update_pass_running()`` in ``pfblockerng.inc``).
@@ -3714,12 +3822,20 @@ def reload(
     (naming the attempts and the time spent): for a caller whose first pass can land inside core's own package
     restart (``rc.start_packages``). A retry that happened is printed with its attempt count and elapsed seconds.
     """
-    if scope not in _SCOPE_TO_PFBTRIGGER and scope not in ("cron", "tick"):
-        raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron/tick, got {scope!r}")
+    if scope not in _SCOPE_TO_PFBTRIGGER and scope not in ("scheduled", "tick"):
+        raise ValueError(f"reload scope must be update/updateip/updatednsbl/scheduled/tick, got {scope!r}")
+    if (scope == "scheduled") != bool(feeds):
+        raise ValueError(
+            f"reload({scope!r}): feeds name what a scheduled Update checks and nothing else takes them: {list(feeds)!r}"
+        )
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
     argv: tuple[str, ...]
-    if scope in ("cron", "tick"):
+    if scope == "scheduled":
+        # The harness keeps .pfb_cron_disable set and the verb defers trigger `scheduled` under it (rc 75);
+        # `retry` runs the same pass.
+        argv = (core_update_command("retry", feeds=feeds),)
+    elif scope == "tick":
         argv = (PHP_BIN, PFB_CLI, scope)
     else:
         s, f, t = _SCOPE_TO_PFBTRIGGER[scope]
@@ -4682,8 +4798,10 @@ def wait_boot_complete(
     )
 
 
-# Mirrors the Update page's active-task guard (pfblockerng_update.php pfb_active_task_running).
-_PFB_TASK_RE = re.compile(r"pfblockerng[.]php\s+(cron-tick|cron|update|pfb_trigger|tick|forcecheck)")
+# Mirrors pfb_update_pass_running() (pfblockerng.inc): a CLI pass, a tick, or the Update Core runs (issue #3941).
+_PFB_TASK_RE = re.compile(
+    r"pfblockerng[.](?:php\s+(?:cron-tick|cron|update|pfb_trigger|tick|forcecheck)|inc\s+core_update)"
+)
 
 
 def wait_no_active_pfb_task(vm: SmokeVM, *, timeout: float = 90.0, delay: float = 1.0) -> None:

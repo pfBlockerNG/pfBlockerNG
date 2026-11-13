@@ -7,8 +7,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * pfb_update_pass_running — the tick's "is an update pass dispatching/running right now"
- * guard (issue #573 review finding, PR #790). Deliberately narrower than the sibling
- * pfb_feed_task_running(): it EXCLUDES 'tick' (the only caller IS the tick, which would
+ * guard (issue #573 review finding, PR #790). Deliberately not every pfBlockerNG verb:
+ * it EXCLUDES 'tick' (the only caller IS the tick, which would
  * always see itself in `ps` and permanently close its own gate) and INCLUDES 'dcc'/'bl'
  * (both append to $pfb['extraslog'] for potentially minutes, so a dispatched/running dcc
  * or bl pass must also hold pfblockerng_tick()'s log-maintenance gate closed).
@@ -68,6 +68,15 @@ final class PfbUpdatePassRunningTest extends TestCase
 	public function testBlLineIsRunning(): void
 	{
 		$this->assertTrue(pfb_update_pass_running($this->psLine('bl')));
+	}
+
+	/** Issue #3941: an Update Core runs is the `core_update` verb of pfblockerng.inc, which holds the gate closed as the CLI verbs do. */
+	public function testACoreUpdateLineIsRunning(): void
+	{
+		$line = ['  1234  -  Is    0:00.12 /usr/local/bin/php -d display_errors=stderr -f /usr/local/pkg/pfblockerng/pfblockerng.inc core_update'];
+
+		$this->assertTrue(pfb_update_pass_running($line));
+		$this->assertFalse(pfb_update_pass_running(['  1234  -  Is    0:00.12 /usr/local/bin/php -f /usr/local/pkg/pfblockerng/pfblockerng.inc core_settings']), 'the settings adapter is no update');
 	}
 
 	/**

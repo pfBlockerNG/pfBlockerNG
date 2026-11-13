@@ -963,20 +963,13 @@ if ($_POST && isset($_POST['save'])) {
 			$input_errors[] = 'Groups: the configuration could not be written, so these settings were not saved. Save again in a moment.';
 		} else {
 			pfb_core_settings_changed(NULL, TRUE);	// outside the lock: a slow Core must not hold it
-			$runtime_model = pfb_schedule_runtime_config();
-			$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
-			$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();
-			// issue #2888: name which check failed, as the General page does; the helper logs it.
-			$cache_stage = pfb_schedule_cache_candidate_stage($runtime_model, $runtime_state, $runtime_timezone);
-			$cache_ok = $cache_stage === '';
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			// issue #1014/#1019/#2060: a rename closes the OLD alias's alias-pass-managed ledger entries (download, script)
 			// so it does not orphan them; issue #3945: only once the write is made, never for a save that was refused.
 			if ($pfb_old_aliasname !== '' && $pfb_old_aliasname !== ($_POST['aliasname'] ?: '')) {
 				pfb_sync_status_close_removed_alias($gtype, $pfb_old_aliasname, $pfb['dbdir']);
 			}
-			$failure = $cache_ok ? '' : '&schcache=failed&schstage=' . $cache_stage;
-			header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}{$failure}");
+			header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}");
 			exit;
 		}
 	}
@@ -1129,13 +1122,6 @@ if (isset($savemsg)) {
 if (isset($_REQUEST['savemsg']) && is_string($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);
 	print_info_box($savemsg);
-}
-
-if (($_GET['schcache'] ?? '') === 'failed') {
-	print_info_box(sprintf(gettext('Settings remain saved, but schedule-cache candidate generation failed: %s. '
-		. 'The system log records the detail under pfBlockerNG. Manual updates remain available.'),
-		pfb_schedule_cache_stage_label(is_string($_GET['schstage'] ?? NULL) ? $_GET['schstage'] : '')),
-		'warning');
 }
 
 $form = new Form("Save {$type} Settings");

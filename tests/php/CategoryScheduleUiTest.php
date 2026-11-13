@@ -257,31 +257,26 @@ final class CategoryScheduleUiTest extends TestCase
 		$this->assertStringContainsString("\$gtype == 'ipv4' || \$gtype == 'ipv6'", $source);
 		$this->assertStringContainsString("\$gtype == 'dnsbl'", $source);
 		$this->assertStringContainsString('disabled', $source);
-		$this->assertStringContainsString('schcache=failed', $source);
-		$this->assertStringContainsString('settings remain saved', strtolower($source));
-		$this->assertStringContainsString('manual updates', strtolower($source));
 	}
 
-	public function testSavePersistsBeforeCandidateAndNeverPublishesActiveCache(): void
+	/** Issue #3941: Core owns the schedule, so a save writes config, tells Core and redirects with no cache hand-off. */
+	public function testSavePersistsThenTellsCoreAndRedirectsWithNoCacheHandoff(): void
 	{
 		$source = php_strip_whitespace(self::PAGE);
 		$save = strpos($source, 'if ($_POST && isset($_POST[\'save\']))');
 		$this->assertNotFalse($save);
 		$write = strpos($source, 'write_config(', $save);
-		$candidate = strpos($source, 'pfb_schedule_cache_candidate_stage(', $save);
+		$notice = strpos($source, 'pfb_core_settings_changed(NULL, TRUE)', $save);
 		$pending = strpos($source, 'pfb_mark_pending_changes()', $save);
 		$this->assertNotFalse($write);
-		$this->assertNotFalse($candidate);
+		$this->assertNotFalse($notice, 'Core must be told of the saved settings');
 		$this->assertNotFalse($pending);
-		$this->assertLessThan($candidate, $write);
-		$this->assertLessThan($pending, $candidate);
-		$controller = substr($source, $candidate, strpos($source, 'exit;', $candidate) - $candidate);
-		$this->assertStringContainsString(
-			"\$failure = \$cache_ok ? '' : '&schcache=failed&schstage=' . \$cache_stage;", $controller,
-			'the failure redirect must carry which stage failed (issue #2888)');
+		$this->assertLessThan($notice, $write);
+		$this->assertLessThan($pending, $notice);
+		$controller = substr($source, $notice, strpos($source, 'exit;', $notice) - $notice);
+		$this->assertStringContainsString('&savemsg={$savemsg}");', $controller, 'the redirect carries the save message and nothing else');
 		$this->assertStringNotContainsString('config_set_path(', $controller);
 		$this->assertStringNotContainsString('config_del_path(', $controller);
-		$this->assertStringNotContainsString('pfb_schedule_cache_refresh(', $controller);
 	}
 
 	public function testInvalidOverrideCannotReachConfigWrite(): void
@@ -324,117 +319,4 @@ final class CategoryScheduleUiTest extends TestCase
 		$this->assertStringContainsString("\$_POST['state-' . substr((string) \$pfb_schedule_key, 4)] ?? ''", $source);
 	}
 
-	public function testCandidateFailureIsNonDestructiveAndWarningNamesWorkaround(): void
-	{
-		$model = pfb_schedule_runtime_model([
-			'pfb_scheduled_feed_updates' => '',
-			'pfb_schedule_weekday' => '7',
-			'pfb_schedule_hour' => '0',
-			'pfb_schedule_minute' => '0',
-		], ['ipv4' => [], 'ipv6' => [], 'dnsbl' => []]);
-		$this->assertNotNull($model);
-		$state = ['schema' => 1, 'items' => []];
-		$active = sys_get_temp_dir() . '/pfb_active_' . bin2hex(random_bytes(4));
-		mkdir($active, 0700, TRUE);
-		$sentinel = '{"active":"must remain byte-identical"}';
-		file_put_contents($active . '/pfb_due_ledger.json', $sentinel);
-		$before = file_get_contents($active . '/pfb_due_ledger.json');
-		try {
-			[$ok, $seen, $left] = $this->validateInPrivateTemp($model, $state, 'UTC', ['fail_rename' => TRUE]);
-			$this->assertFalse($ok);
-			$this->assertSame($before, file_get_contents($active . '/pfb_due_ledger.json'));
-			$this->assertCount(1, $seen, 'the candidate must be staged in the private temp dir');
-			$this->assertSame([], $left, 'a failed candidate must leave no temporary artifact');
-		} finally {
-			@unlink($active . '/pfb_due_ledger.json');
-			@rmdir($active);
-		}
-		$source = strtolower(php_strip_whitespace(self::PAGE));
-		$this->assertStringContainsString('settings remain saved', $source);
-		$this->assertStringContainsString('candidate generation failed: %s', $source,
-			'the warning must name the failing stage (issue #2888)');
-		$this->assertStringContainsString('manual updates remain available', $source);
-		$this->assertStringNotContainsString('likely a package bug', $source);
-	}
-
-	public function testCandidateSuccessUsesPrivateDirectoryAndRejectsInvalidTimezoneWithoutWarning(): void
-	{
-		$model = pfb_schedule_runtime_model([
-			'pfb_scheduled_feed_updates' => '', 'pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '0', 'pfb_schedule_minute' => '0',
-		], ['ipv4' => [], 'ipv6' => [], 'dnsbl' => []]);
-		$this->assertNotNull($model);
-		$active = sys_get_temp_dir() . '/pfb_active_' . bin2hex(random_bytes(4));
-		mkdir($active, 0700, TRUE);
-		$sentinel = '{"active":"must remain byte-identical"}';
-		file_put_contents($active . '/pfb_due_ledger.json', $sentinel);
-		set_error_handler(static function (): bool { throw new RuntimeException('unexpected warning'); });
-		try {
-			[$ok, $seen, $left] = $this->validateInPrivateTemp($model, ['schema' => 1, 'items' => []], 'UTC', ['active_dir' => $active]);
-			$this->assertTrue($ok);
-		} finally {
-			restore_error_handler();
-		}
-		$this->assertSame($sentinel, file_get_contents($active . '/pfb_due_ledger.json'));
-		$this->assertCount(1, $seen, 'the candidate must be staged in the private temp dir');
-		$this->assertSame([], $left, 'a successful candidate must leave no temporary artifact');
-		$warnings = [];
-		set_error_handler(static function (int $severity, string $message) use (&$warnings): bool { $warnings[] = $message; return TRUE; });
-		try {
-			$this->assertFalse(pfb_schedule_cache_candidate_validate($model, ['schema' => 1, 'items' => []], ['bad'], time()));
-		} finally {
-			restore_error_handler();
-		}
-		$this->assertSame([], $warnings);
-		@unlink($active . '/pfb_due_ledger.json');
-		@rmdir($active);
-	}
-
-	public function testCandidateExtremeStateReturnsFalseWithoutLeakingTemporaryArtifacts(): void
-	{
-		$group = ['action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'schedule_override' => '', 'schedule_weekday' => '1', 'schedule_hour' => '4', 'schedule_minute' => '30', 'row' => [['header' => 'feed', 'url' => 'https://192.0.2.1/feed', 'state' => 'Enabled']]];
-		$model = pfb_schedule_runtime_model(
-			['pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '2', 'pfb_schedule_minute' => '15'],
-			['ipv4' => [$group], 'ipv6' => [], 'dnsbl' => []]
-		);
-		$this->assertNotNull($model);
-		$state = ['schema' => 1, 'items' => ['ipv4:feed_v4' => [
-			'last_completed_occurrence' => PHP_INT_MAX,
-			'completion_outcome' => 'success',
-		]]];
-		$this->assertTrue(pfb_schedule_state_valid($state));
-		// Staging into temp_dir is proven by the two rows above; this row pins cleanup.
-		$private = sys_get_temp_dir() . '/pfbschedui_' . bin2hex(random_bytes(6));
-		mkdir($private, 0700);
-		try {
-			$this->assertFalse(pfb_schedule_cache_candidate_validate($model, $state, 'UTC', time(), ['temp_dir' => $private]));
-			$this->assertSame([], array_values(array_diff(scandir($private) ?: [], ['.', '..'])),
-				'an extreme-state candidate must leave no temporary artifact');
-		} finally {
-			rmdir_recursive($private);
-		}
-	}
-
-	/**
-	 * Issue #3352: run the candidate validator against a temp dir only this test owns, so a
-	 * concurrent suite's candidates in the shared system temp dir cannot enter the listing.
-	 *
-	 * @return array{0: bool, 1: list<string>, 2: list<string>} result, candidates present
-	 *         when the cache document was built, entries left after the call
-	 */
-	private function validateInPrivateTemp(?array $model, array $state, mixed $timezone, array $io): array
-	{
-		$private = sys_get_temp_dir() . '/pfbschedui_' . bin2hex(random_bytes(6));
-		mkdir($private, 0700);
-		$seen = [];
-		$io['temp_dir'] = $private;
-		$io['before_document'] = static function () use ($private, &$seen): void {
-			$seen = glob($private . '/pfb_sched_*') ?: [];
-		};
-		try {
-			$ok = pfb_schedule_cache_candidate_validate($model, $state, $timezone, time(), $io);
-			return [$ok, $seen, array_values(array_diff(scandir($private) ?: [], ['.', '..']))];
-		} finally {
-			rmdir_recursive($private);
-		}
-	}
 }

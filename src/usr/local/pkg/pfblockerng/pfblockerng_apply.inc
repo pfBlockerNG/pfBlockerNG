@@ -2791,10 +2791,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											unlink_if_exists("{$pfbfolder}/{$header}.fail");
 											$downloaded_fresh = TRUE;
 											if (!empty($pfb['scheduled_runtime_cron'])) {
-												pfb_schedule_state_record_outcome(
-													"dnsbl:{$header}", PfbScheduleTerminalResult::Success,
-													(string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc')
-												);
+												pfb_schedule_outcome_record("dnsbl:{$header}", PfbScheduleTerminalResult::Success);
 											}
 										}
 									}
@@ -4270,10 +4267,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										unlink_if_exists("{$pfbfolder}/{$header}.fail");
 										$downloaded_fresh = TRUE;
 										if (!empty($pfb['scheduled_runtime_cron'])) {
-											pfb_schedule_state_record_outcome(
-												"{$scheduled_family}:{$header}", PfbScheduleTerminalResult::Success,
-												(string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc')
-											);
+											pfb_schedule_outcome_record("{$scheduled_family}:{$header}", PfbScheduleTerminalResult::Success);
 										}
 										pfb_logger('.', 1);
 									}
@@ -5440,9 +5434,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// are out of scope (ADR-30 territory) and remain as separate jobs below.
 	pfblockerng_configure_tick_cron(
 		$pfb['enable'] === PfbToggle::On,
-		$pfb['log'],
-		NULL,
-		FALSE
+		$pfb['log']
 	);
 
 	pfb_metrics_configure_cron(
@@ -5593,10 +5585,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			$reason = $pfb_accounting_pending ? 'DNSBL accounting or reload not confirmed; pending changes kept'
 				: 'firewall reload not confirmed; pending changes kept';
 			pfb_sync_apply_record('failed', $reason, $pfb['dbdir'], FALSE, $pfb_pass_started);
-		}
-
-		if ($pfb['enable'] === PfbToggle::On) {
-			pfb_schedule_cache_refresh_locked();
 		}
 	}
 

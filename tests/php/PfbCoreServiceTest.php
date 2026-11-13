@@ -178,6 +178,7 @@ final class PfbCoreServiceTest extends TestCase
 			'core_socket'         => "{$this->dir}/run/pfb_core/api.sock",
 			'core_state'          => "{$this->dir}/db/pfb_core",
 			'dbdir'               => "{$this->dir}/dbdir",
+			'schedule_state_dir'  => "{$this->dir}/etc",
 			'core_log'            => "{$this->dir}/log/core.log",
 			'core_pidfile'        => "{$this->dir}/run/pfb_core.pid",
 			'core_daemon_pidfile' => "{$this->dir}/run/pfb_core_daemon.pid",
@@ -229,8 +230,8 @@ final class PfbCoreServiceTest extends TestCase
 			},
 			$text
 		);
-		// The settings adapter script, which Core runs, is the one host path an argument may name
-		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh'], '', $script),
+		// The settings adapter and update scripts, which Core runs, and the host's zone file, which it reads, are the host paths an argument may name
+		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '--zoneinfo /etc/localtime'], '', $script),
 			"the rc script names a host path the test did not redirect:\n{$script}");
 		file_put_contents("{$this->dir}/run.sh", $script);
 		$state = "{$this->dir}/state";
@@ -313,7 +314,7 @@ final class PfbCoreServiceTest extends TestCase
 		// When the service starts
 		[$status, $out] = $this->rc('start');
 
-		// Then daemon(8) supervises this machine's binary, restarting it, with the package log, the API socket, Core's state directory and the settings adapter
+		// Then daemon(8) supervises this machine's binary, restarting it, with the package log, the API socket, Core's state directory, the settings adapter, the update program and the host's zone (issue #3941: the scheduler reads local time)
 		$this->assertSame(0, $status, $out);
 		$this->assertSame([
 			'-r', '-R', '5', '-t', 'pfb_core',
@@ -321,6 +322,8 @@ final class PfbCoreServiceTest extends TestCase
 			"{$this->dir}/core/bin/{$target}/pfb-core", '--socket', $GLOBALS['pfb']['core_socket'],
 			'--state-dir', $GLOBALS['pfb']['core_state'],
 			'--settings-backend-cmd', '/usr/local/pkg/pfblockerng/pfb_core_settings.sh',
+			'--update-cmd', '/usr/local/pkg/pfblockerng/pfb_core_update.sh',
+			'--zoneinfo', '/etc/localtime',
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}
@@ -719,6 +722,53 @@ final class PfbCoreServiceTest extends TestCase
 		foreach ($keep as $file) {
 			$this->assertFileExists($file);
 		}
+	}
+
+	public function testGeneratingTheServiceRetiresThePhpSchedulerStateAndKeepsTheOutpostsLedgerEntries(): void
+	{
+		// Given the PHP scheduler's state file (and its lock), and a due ledger holding its schedule entries beside the Outpost's own
+		$stateDir = $GLOBALS['pfb']['schedule_state_dir'];
+		$this->assertTrue(mkdir($stateDir, 0700, TRUE));
+		$this->assertTrue(is_dir($GLOBALS['pfb']['dbdir']) || mkdir($GLOBALS['pfb']['dbdir'], 0700, TRUE));
+		file_put_contents("{$stateDir}/pfb_schedule_state.json", '{"schema":1,"items":{}}');
+		file_put_contents("{$stateDir}/pfb_schedule_state.json.lock", '');
+		file_put_contents("{$stateDir}/pfb_schedule_dispatch.lock", '');
+		$entry = static fn (array $more = []): array => ['last_run' => 5, 'next_due' => 9, 'jitter' => 0] + $more;
+		file_put_contents("{$GLOBALS['pfb']['dbdir']}/pfb_due_ledger.json", json_encode(
+			['_meta' => ['schema' => 1, 'config_hash' => str_repeat('a', 64)]] + [
+				'cron' => $entry(['pending_apply' => TRUE]), 'extra:dcc' => $entry(), 'extra:bl' => $entry(),
+				'ss_refresh' => $entry(), 'apply_reconcile' => $entry(),
+			]
+		));
+
+		// When the service is generated (every install and upgrade does)
+		pfb_core_service("{$this->dir}/core");
+
+		// Then the state file is gone, the lock of the Outpost's own entry points stays, and the ledger keeps only the Outpost's
+		$this->assertFileDoesNotExist("{$stateDir}/pfb_schedule_state.json");
+		$this->assertFileDoesNotExist("{$stateDir}/pfb_schedule_state.json.lock");
+		$this->assertFileExists("{$stateDir}/pfb_schedule_dispatch.lock");
+		$ledger = json_decode((string) file_get_contents("{$GLOBALS['pfb']['dbdir']}/pfb_due_ledger.json"), TRUE);
+		$this->assertSame(['cron', 'ss_refresh', 'apply_reconcile'], array_keys($ledger));
+		$this->assertSame(['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE], $ledger['cron'], 'the pending apply flag is the Outpost\'s');
+		$this->assertSame($entry(), $ledger['ss_refresh']);
+		$this->assertSame($entry(), $ledger['apply_reconcile']);
+	}
+
+	public function testRetiringAnUnflaggedCronEntryRemovesItAndRetiringTwiceChangesNothing(): void
+	{
+		$this->assertTrue(is_dir($GLOBALS['pfb']['dbdir']) || mkdir($GLOBALS['pfb']['dbdir'], 0700, TRUE));
+		$this->assertTrue(is_dir($GLOBALS['pfb']['schedule_state_dir']) || mkdir($GLOBALS['pfb']['schedule_state_dir'], 0700, TRUE));
+		$entry = ['last_run' => 5, 'next_due' => 9, 'jitter' => 0];
+		$this->assertTrue(pfb_due_ledger_write_entry('cron', $entry, $GLOBALS['pfb']['dbdir']));
+		$this->assertTrue(pfb_due_ledger_write_entry('ss_refresh', $entry, $GLOBALS['pfb']['dbdir']));
+
+		pfb_core_service("{$this->dir}/core");
+		$once = (string) file_get_contents("{$GLOBALS['pfb']['dbdir']}/pfb_due_ledger.json");
+		pfb_core_service("{$this->dir}/core");
+
+		$this->assertSame(['ss_refresh'], array_keys(json_decode($once, TRUE)));
+		$this->assertSame($once, (string) file_get_contents("{$GLOBALS['pfb']['dbdir']}/pfb_due_ledger.json"), 'a ledger with nothing left to retire is not rewritten');
 	}
 
 	public function testTheServiceIsRegisteredWithPfSense(): void
