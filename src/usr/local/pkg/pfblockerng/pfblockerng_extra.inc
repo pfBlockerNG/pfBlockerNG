@@ -6301,6 +6301,30 @@ function pfb_schedule_state_set_pending(
 	);
 }
 
+/** Reserve the planned occurrences: pending where an item has none, then raised over an older pending one. */
+function pfb_schedule_reserve(array $occurrences, string $state_dir, array $io = []): bool
+{
+	if ($occurrences === []) {
+		return TRUE;
+	}
+	return pfb_schedule_state_set_pending($occurrences, $state_dir, $io)
+		&& pfb_schedule_state_update(
+			static function (array $state) use ($occurrences): array {
+				foreach ($occurrences as $id => $occurrence) {
+					$item = $state['items'][$id] ?? [];
+					if (($item['pending_occurrence'] ?? -1) < $occurrence) {
+						$item['pending_occurrence'] = $occurrence;
+						unset($item['pending_attempted']);
+						$state['items'][$id] = $item;
+					}
+				}
+				return $state;
+			},
+			$state_dir,
+			$io
+		);
+}
+
 /** Stable feed identity shared by scheduler and synchronous apply loops. */
 function pfb_schedule_feed_id(string $family, string $header): ?string
 {
@@ -7065,6 +7089,27 @@ function pfb_schedule_extra_plan(array $model, array $state, int $now, DateTimeZ
 	return ['due' => array_keys($due), 'occurrences' => $plan['occurrences']];
 }
 
+/** Feeds due at their latest occurrence after the one they completed; unlike the cache, a pending occurrence never counts. */
+function pfb_schedule_feed_plan(array $model, array $state, int $now, DateTimeZone $timezone): array
+{
+	if (!$model['scheduled']) {
+		return ['due' => [], 'occurrences' => []];
+	}
+	$groups = array_filter(
+		$model['entries'],
+		static fn (mixed $_entry, string $id): bool => !str_starts_with($id, 'extra:'),
+		ARRAY_FILTER_USE_BOTH
+	);
+	foreach ($groups as $id => &$entry) {
+		$item = $state['items'][$id] ?? NULL;
+		if (is_array($item) && array_key_exists('last_completed_occurrence', $item)) {
+			$entry['last_completed_occurrence'] = $item['last_completed_occurrence'];
+		}
+	}
+	unset($entry);
+	return pfb_schedule_plan($groups, $model['default'], NULL, $now, $timezone);
+}
+
 /** Foreground production runner used while the dispatch lock is held. */
 function pfb_schedule_extra_run(string $job, string $argument = '', bool &$changed = FALSE): bool
 {
@@ -7463,44 +7508,13 @@ function pfblockerng_tick(
 				}
 
 				$extra_plan = pfb_schedule_extra_plan($runtime_model, $runtime_state, $now, $timezone, $runtime_cache);
-				$groups = array_filter(
-					$runtime_model['entries'],
-					static fn (mixed $_entry, string $id): bool => !str_starts_with($id, 'extra:'),
-					ARRAY_FILTER_USE_BOTH
-				);
-				foreach ($groups as $id => &$entry) {
-					$item = $runtime_state['items'][$id] ?? NULL;
-					if (is_array($item) && array_key_exists('last_completed_occurrence', $item)) {
-						$entry['last_completed_occurrence'] = $item['last_completed_occurrence'];
-					}
-				}
-				unset($entry);
-				$feed_plan = $runtime_model['scheduled']
-					? pfb_schedule_plan($groups, $runtime_model['default'], NULL, $now, $timezone)
-					: ['due' => [], 'occurrences' => []];
+				$feed_plan = pfb_schedule_feed_plan($runtime_model, $runtime_state, $now, $timezone);
 				$occurrences = $extra_plan['occurrences'] + $feed_plan['occurrences'];
-				$state_published = $occurrences === [] || pfb_schedule_state_set_pending(
+				$state_published = pfb_schedule_reserve(
 					$occurrences,
 					$state_dir,
 					is_array($pfb['schedule_state_io'] ?? NULL) ? $pfb['schedule_state_io'] : []
 				);
-				if ($state_published && $occurrences !== []) {
-					$state_published = pfb_schedule_state_update(
-						static function (array $state) use ($occurrences): array {
-							foreach ($occurrences as $id => $occurrence) {
-								$item = $state['items'][$id] ?? [];
-								if (($item['pending_occurrence'] ?? -1) < $occurrence) {
-									$item['pending_occurrence'] = $occurrence;
-									unset($item['pending_attempted']);
-									$state['items'][$id] = $item;
-								}
-							}
-							return $state;
-						},
-						$state_dir,
-						is_array($pfb['schedule_state_io'] ?? NULL) ? $pfb['schedule_state_io'] : []
-					);
-				}
 				$runtime_state = $state_published ? pfb_schedule_state_read($state_dir) : NULL;
 				if (!is_array($runtime_state)) {
 					logger(LOG_NOTICE, localize_text('Tick: scheduled work reservation failed; pass suppressed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
@@ -7580,8 +7594,9 @@ function pfblockerng_tick(
 				$runtime_state = pfb_schedule_state_read($state_dir);
 				$feed_due = FALSE;
 				if (is_array($runtime_state) && $runtime_model['scheduled']) {
-					foreach ($groups as $id => $entry) {
-						if ($entry['enabled'] && array_key_exists('pending_occurrence', $runtime_state['items'][$id] ?? [])) {
+					foreach ($runtime_model['entries'] as $id => $entry) {
+						if (!str_starts_with($id, 'extra:') && $entry['enabled']
+							&& array_key_exists('pending_occurrence', $runtime_state['items'][$id] ?? [])) {
 							$feed_due = TRUE;
 							break;
 						}

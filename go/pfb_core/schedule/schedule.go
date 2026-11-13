@@ -234,6 +234,21 @@ func ExtraPlan(m Model, st State, now int64, loc *time.Location, cache map[strin
 	return due, plan.Occurrences
 }
 
+// FeedPlan is the tick's plan over the feeds (every entry but the Extras): nothing unless scheduled updates are on, and
+// what a feed completed is its only cursor, so a pending occurrence, attempted or not, never counts as done.
+func FeedPlan(m Model, st State, now int64, loc *time.Location) PlanResult {
+	if !m.Scheduled {
+		return PlanResult{Occurrences: map[string]int64{}}
+	}
+	var groups []Group
+	for _, e := range m.Entries {
+		if !strings.HasPrefix(e.ID, extraPrefix) {
+			groups = append(groups, Group{Entry: e, LastCompleted: cursor(st[e.ID], false)})
+		}
+	}
+	return Plan(groups, m.Default, now, loc)
+}
+
 // CacheEntries returns the ledger entries a refresh computes for an empty ledger: "cron" when scheduled and something is
 // or will be due, and "extra:dcc" / "extra:bl" when enabled and they have a next due. shortcut: the model's hash/validity
 // check and the merge with an existing ledger stay in PHP; a malformed schedule (PHP throws) yields no entry.
