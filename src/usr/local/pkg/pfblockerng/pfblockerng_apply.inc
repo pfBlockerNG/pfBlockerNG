@@ -135,6 +135,47 @@ function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_num
 }
 
 /**
+ * The IP download loop's parse of one feed: every line of the stream $in through pfb_ip_parse_line_replay(). The parser's
+ * notices go to the main log and each detailed failure to the parse-error log ($pfb['ip_parse_err']), line by line as the
+ * feed is read. Returns the entries ('ip_data', one per line), whether Suppression dropped valid IPv6 entries and the
+ * count of failed lines.
+ *
+ * @param resource $in
+ * @return array{ip_data:string,ip_suppressed:bool,parse_fail:int}
+ */
+function pfb_ip_parse_feed($in, string $header, array $list, string $pftype, bool $custom, string $pfbcidr,
+    string $pfbcidr_v6, array $pfb): array {
+	$ip_data = '';		// IPs collected from feed
+	$ip_suppressed = FALSE;	// TRUE when suppression dropped otherwise-valid IPv6 entries
+	$parse_fail = 0;	// Failed parsed lines from feed
+	$ip_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
+	while (($line = @fgets($in)) !== FALSE) {
+		$replayed_line = pfb_ip_parse_line_replay($line, [
+			'vtype'         => $list['vtype'],
+			'pftype'        => $pftype,
+			'custom'        => $custom,
+			'cidr_floor_v4' => $pfbcidr,
+			'cidr_floor_v6' => $pfbcidr_v6,
+			'suppression'   => $pfb['supp'],
+			'range'         => $pfb['range'],
+			'ipv4'          => $pfb['ipv4'],
+			'ipv6'          => $pfb['ipv6'],
+		], $ip_lineno, $ip_data, $ip_suppressed, $parse_fail);
+		$ip_lineno    = $replayed_line['line_number'];
+		$line         = $replayed_line['line'];
+		$ip_suppressed = $replayed_line['ip_suppressed'];
+		$parse_fail   = $replayed_line['parse_fail'];
+		foreach ($replayed_line['messages'] as $message) {
+			pfb_logger($message, 1);
+		}
+		if ($replayed_line['detailed_parse_fail']) {
+			pfb_parse_fail_log($header, $line, $replayed_line['raw_line'], $pfb['ip_parse_err'], $ip_lineno, TRUE);
+		}
+	}
+	return ['ip_data' => $ip_data, 'ip_suppressed' => $ip_suppressed, 'parse_fail' => $parse_fail];
+}
+
+/**
  * The IPv4 and IPv6 Suppression CIDR Limit in effect for one row of $list (issue #3413): the list's own numeric IPv4
  * limit, else the IP tab's global one; IPv6 is global only. A GeoIP row ignores the global limits but keeps an
  * explicit own IPv4 limit. Anything that is not numeric is 'Disabled'.
@@ -476,6 +517,40 @@ function pfb_dnsbl_parse_line(string $line, int $lineno, array &$state, array $c
 
 	// For the DNSBL decider, save domain and Logging type
 	return ['row' => pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, strtolower($line)), 'stop' => FALSE];
+}
+
+/**
+ * The DNSBL download loop's parse of one feed: every line of the stream $in through pfb_dnsbl_parse_line(), its rows
+ * written to the stream $out (the feed's '.bk'). The hpHosts end marker ends the feed. The IPs found, `updateip` and the
+ * strict-scheme skip count accumulate in $state; failures are logged by the line parser. Returns the rows written and
+ * whether the feed ended at the marker.
+ *
+ * @param resource $in
+ * @param resource $out
+ * @param array{csv_type:string,csv_parser:bool,run_once:bool,rev_format:bool,ip4:list<string>,ip6:list<string>,scheme_skipped:int,updateip:bool} $state
+ * @param array{header:string,custom:bool,dnsbl_ip:bool,lenient:bool,parse_err:string} $ctx
+ * @return array{rows:int,stop:bool}
+ */
+function pfb_dnsbl_parse_feed($in, $out, array &$state, array $ctx): array {
+	$lineno = 0;	// issue #1004: per-line counter for the parse-error detail sink
+	$rows = 0;
+	while (($line = @fgets($in)) !== FALSE) {
+
+		// issue #1004: incremented every iteration, regardless of outcome
+		$lineno++;
+
+		$parsed = pfb_dnsbl_parse_line($line, $lineno, $state, $ctx);
+		// Exit (hpHosts) when end of domain names found.
+		if ($parsed['stop']) {
+			return ['rows' => $rows, 'stop' => TRUE];
+		}
+		if ($parsed['row'] !== NULL) {
+			// For the DNSBL decider, save domain and Logging type
+			@fwrite($out, $parsed['row']);
+			$rows++;
+		}
+	}
+	return ['rows' => $rows, 'stop' => FALSE];
 }
 
 /** @return array{count:int,loggable:bool} */
@@ -2865,27 +2940,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									'lenient'   => $pfb['dnsbl_lenient'] === PfbToggle::On,
 									'parse_err' => $pfb['dnsbl_parse_err'],
 								];
-								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
 									if (($dhandle = @fopen("{$pfbfolder}/{$header}.bk", 'w')) !== FALSE) {
-										while (($line = @fgets($fhandle)) !== FALSE) {
-
-											// issue #1004: incremented every iteration, regardless of outcome
-											$dnsbl_lineno++;
-
-											$parsed = pfb_dnsbl_parse_line($line, $dnsbl_lineno, $pfb_dnsbl_state, $pfb_dnsbl_ctx);
-											// Exit (hpHosts) when end of domain names found.
-											if ($parsed['stop']) {
-												break;
-											}
-											if ($parsed['row'] !== NULL) {
-												// For the DNSBL decider, save domain and Logging type
-												$domain_data = $parsed['row'];
-												@fwrite($dhandle, $domain_data);
-											}
-										}
+										$domain_data = pfb_dnsbl_parse_feed($fhandle, $dhandle, $pfb_dnsbl_state, $pfb_dnsbl_ctx)['rows'];
 									}
 									if ($dhandle) {
 										@fclose($dhandle);
@@ -4295,7 +4354,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							$ip_data = '';		// IPs collected from feed
 							$ip_suppressed = FALSE;	// TRUE when suppression dropped otherwise-valid IPv6 entries
 							$parse_fail = 0;	// Failed parsed lines from feed
-							$ip_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
 							pfb_logger('.', 1);
 
 							// Set 'auto' format for all lists, except for lists that require 'regex' parsing.
@@ -4362,30 +4420,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 
 								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
-									while (($line = @fgets($fhandle)) !== FALSE) {
-										$replayed_line = pfb_ip_parse_line_replay($line, [
-											'vtype'         => $list['vtype'],
-											'pftype'        => $pftype,
-											'custom'        => $custom,
-											'cidr_floor_v4' => $pfbcidr,
-											'cidr_floor_v6' => $pfbcidr_v6,
-											'suppression'   => $pfb['supp'],
-											'range'         => $pfb['range'],
-											'ipv4'          => $pfb['ipv4'],
-											'ipv6'          => $pfb['ipv6'],
-										], $ip_lineno, $ip_data, $ip_suppressed, $parse_fail);
-										$ip_lineno    = $replayed_line['line_number'];
-										$line         = $replayed_line['line'];
-										$ip_suppressed = $replayed_line['ip_suppressed'];
-										$parse_fail   = $replayed_line['parse_fail'];
-										foreach ($replayed_line['messages'] as $message) {
-											pfb_logger($message, 1);
-										}
-										if ($replayed_line['detailed_parse_fail']) {
-											pfb_parse_fail_log($header, $line, $replayed_line['raw_line'], $pfb['ip_parse_err'], $ip_lineno, TRUE);
-										}
+									['ip_data' => $ip_data, 'ip_suppressed' => $ip_suppressed, 'parse_fail' => $parse_fail] =
+									    pfb_ip_parse_feed($fhandle, $header, $list, $pftype, $custom, $pfbcidr, $pfbcidr_v6, $pfb);
 								}
-							}
 							if ($fhandle) {
 								@fclose($fhandle);
 							}
