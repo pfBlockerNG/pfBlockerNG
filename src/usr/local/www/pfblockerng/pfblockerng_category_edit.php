@@ -822,12 +822,13 @@ if ($_POST && isset($_POST['save'])) {
 
 	if (!$input_errors) {
 		// issue #3945: Core writes these groups under this lock; never write back the request's stale config.xml.
-		// The row at this index must still be the group this request loaded (or still free, for a new one).
-		$pfb_saved_name = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname");
+		// issue #3955: the row at this index must still be the group this form loaded ('' for a new one: a row that is still free).
+		// Compared as posted, never sanitized: it names a stored value.
+		$pfb_loaded_name = $_POST['aliasname_loaded'] ?? NULL;
 		$pfb_config_lock = pfb_dns_config_lock();
 		if ($pfb_config_lock === NULL) {
 			$input_errors[] = 'Groups: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
-		} elseif ($pfb_saved_name !== config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname")) {
+		} elseif (!is_string($pfb_loaded_name) || $pfb_loaded_name !== config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '')) {
 			unlock($pfb_config_lock);
 			$input_errors[] = 'Groups: this group was changed by another save, so these settings were not saved. Reload the Groups page.';
 		}
@@ -1071,6 +1072,11 @@ else {
 	$pconfig['custom']			= base64_decode($rowdata[$rowid]['custom'] ?? '');
 }
 
+// issue #3955: the group as this form loads it ('' for a new one); a form shown again after an error keeps the name it was posted with.
+if (!isset($pconfig['aliasname_loaded'])) {
+	$pconfig['aliasname_loaded'] = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '');
+}
+
 if (!pfb_group_action_valid($pconfig['action'] ?? NULL, $gtype)) {
 	$pconfig['action'] = 'Disabled';
 }
@@ -1138,6 +1144,7 @@ $form->addGlobal(new Form_Input('type', 'type', 'hidden', "{$gtype}"));
 $form->addGlobal(new Form_Input('rowid', 'rowid', 'hidden', "{$rowid}"));
 $form->addGlobal(new Form_Input('act', 'act', 'hidden', "{$action}"));
 $form->addGlobal(new Form_Input('id', 'id', 'hidden', "{$id}"));
+$form->addGlobal(new Form_Input('aliasname_loaded', 'aliasname_loaded', 'hidden', $pconfig['aliasname_loaded']));
 
 // Build 'Shortcut Links' section
 $section = new Form_Section('Info');

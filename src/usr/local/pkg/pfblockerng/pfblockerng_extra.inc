@@ -3550,6 +3550,18 @@ function pfb_group_action_valid(mixed $action, string $gtype): bool {
 }
 
 /**
+ * issue #3955: the row index an `ids` entry of the Groups list names. The list posts `rN` and nothing else: any other value (`1`,
+ * `r1r`, `rr1`, `r`, `r-1`, `r1 `, an array) is NULL, so the reorder and the identity check below read rows the same way.
+ */
+function pfb_category_ids_row(mixed $token): ?int {
+	if (!is_string($token) || !str_starts_with($token, 'r')) {
+		return NULL;
+	}
+	$digits = substr($token, 1);
+	return ctype_digit($digits) ? (int) $digits : NULL;
+}
+
+/**
  * issue #3945: the Groups list's bulk update names, for every row it changes or reorders, the group the page showed there
  * ('aliasname-N' in postdata). The row index alone can be another group once the update has re-read config.xml under the config
  * lock (the group shown there was deleted since), so a row that carries no name, or a name that is not the group stored at that
@@ -3557,7 +3569,7 @@ function pfb_group_action_valid(mixed $action, string $gtype): bool {
  * not judged.
  *
  * @param array<mixed> $post_data parsed `postdata`: 'action-N', 'cron-N', 'logging-N' / 'aliaslog-N' fields, 'aliasname-N' names
- * @param array<mixed> $post_ids  parsed `ids`: ['ids' => [position => 'rN']]
+ * @param array<mixed> $post_ids  parsed `ids`: ['ids' => [position => 'rN']]; an entry that is not `rN` is not a row here: the reorder refuses it
  * @param array<mixed> $rowdata   the groups as stored now, by row index
  * @return list<string> one error per such row, in row order
  */
@@ -3570,8 +3582,9 @@ function pfb_category_update_identity_errors(array $post_data, array $post_ids, 
 		}
 	}
 	foreach (is_array($post_ids['ids'] ?? NULL) ? $post_ids['ids'] : array() as $position) {
-		if (is_string($position) && str_starts_with($position, 'r') && ctype_digit(substr($position, 1))) {
-			$rows[(int) substr($position, 1)] = TRUE;
+		$row = pfb_category_ids_row($position);
+		if ($row !== NULL) {
+			$rows[$row] = TRUE;
 		}
 	}
 	ksort($rows);

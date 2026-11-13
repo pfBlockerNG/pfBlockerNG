@@ -355,12 +355,12 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 								$input_errors[] = "IDS Failed " . htmlspecialchars($key);
 							}
 
-							$temp_value = pfb_filter(str_replace('r', '', $value), PFB_FILTER_NUM, 'Category');
-							if (!empty($temp_value) || $value == 'r0') {
-								$rowid = $temp_value ?: 0;
-							} else {
-								$input_errors[] = "IDS Failed Rowid: " . htmlspecialchars($value);
+							$pfb_ids_row = pfb_category_ids_row($value);	// issue #3955: the parse the identity check reads rows with
+							if ($pfb_ids_row === NULL) {
+								$input_errors[] = "IDS Failed Rowid: " . htmlspecialchars(is_string($value) ? $value : 'not a string');
+								continue;
 							}
+							$rowid = $pfb_ids_row;
 
 							if (!isset($rowdata[$rowid])) {
 								$input_errors[] = "IDS Failed Rowid: group not found: " . htmlspecialchars($value);
