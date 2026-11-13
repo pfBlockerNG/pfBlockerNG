@@ -516,7 +516,8 @@ run runs under the DNS config lock, which other saves wait for at most `PFB_DNS_
 page's own checks decide. A save's other side effects wait for the written config too: DNS > DNSBL invalidates the TOP1M
 baseline, requests the TOP1M rebuild and replaces the served block page only after `write_config()` succeeded. After
 a written save they call `pfb_core_settings_changed(NULL, TRUE)` (`SettingsChanged`); the tick calls it unforced (compare,
-then notify). A save works while Core is down. A failed notice is logged once per outage and kept in
+then notify). The Groups pages and the DNSBL Category (Blacklist) page notify the same way after their written saves, pinned
+by `CoreSettingsFeedPageSavesTest`. A save works while Core is down. A failed notice is logged once per outage and kept in
 `/var/db/pfblockerng/core_settings_failed` until one succeeds; DNS General shows it as a notice. Pinned by
 `CoreSettingsBackendTest`, `CoreSettingsChangedTest`, `CoreSettingsPageSavesTest` and `CoreSettingsValidateTimeoutTest`.
 

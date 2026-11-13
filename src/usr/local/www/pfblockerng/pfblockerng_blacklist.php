@@ -293,7 +293,10 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 	// preserves the original "no errors were recorded" semantics.
 	if ($config_mod && empty($input_errors)) {
 
-		write_config('[ pfBlockerNG ] save DNSBL Category settings');
+		$pfb_written = write_config('[ pfBlockerNG ] save DNSBL Category settings');
+		if ($pfb_written !== FALSE && $pfb_written !== -1) {
+			pfb_core_settings_changed(NULL, TRUE);	// Core's scheduler reads these fields; a failure never undoes the save
+		}
 		pfb_mark_pending_changes();	// applies on the next Update, not on save
 		if ($savemsg) {
 			header("Location: /pfblockerng/pfblockerng_blacklist.php?savemsg={$savemsg}");

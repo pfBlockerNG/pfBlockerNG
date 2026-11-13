@@ -1,4 +1,4 @@
-"""Tier-A ``ui_render`` coverage for issue #3937: a group save or delete reaches Core, or says it did not.
+"""Tier-A ``ui_render`` coverage for issues #3937 and #3968: a group or Blacklist save reaches Core, or says it did not.
 
 Core reads the IP and DNSBL groups through its settings adapter; the Groups editor and the group list tell Core once
 their write succeeded. With Core serving, a Groups editor save leaves Core at the revision config.xml projects, holding
@@ -9,6 +9,7 @@ Core's own answer and config.xml read back over SSH, never the HTTP body.
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,7 @@ import pytest
 from .. import helpers
 from ..test_smoke_core_api import CORE_RC, await_core_up, config_revision, core_dns, php_json, run_tick, tell_core
 from .render_oracle import PhpErrorLogGuard, evaluate_render
+from .test_blacklist import BLACKLIST_PAGE, CFG_ROOT, _direct_post, _save_payload
 from .test_category import CATEGORY_PAGE, IPV4_LISTS, _ajax_post, _restore_lists, _seed_single_ipv4_row, _snapshot_lists
 from .test_category_edit import CFG_DNSBL, _del_rowid, _dnsbl_payload, _free_rowid, _post_form
 from .test_dns_general_core_push import NOTICE, _core_in_step
@@ -126,3 +128,42 @@ def test_a_group_delete_with_core_stopped_is_written_and_says_core_does_not_have
             assert NOTICE not in _render(vm, webui), "Core holds the settings: the notice must be gone"
         finally:
             _restore_lists(vm, snap)
+
+
+def test_a_blacklist_save_with_core_serving_leaves_core_at_the_revision_config_xml_projects(
+    smoke_vm: SmokeVM, webui: WebUI, core_serving: None
+) -> None:
+    """Core reads a Blacklist save at once, not at the next tick: its scheduler plans ``extra:bl`` from these fields.
+
+    Given: Core serving at config.xml's revision
+    When:  the Blacklist page saves a new update frequency
+    Then:  config.xml holds it, and Core is at config.xml's new revision
+    """
+    vm = smoke_vm
+    snapshot = php_json(vm, f"config_get_path('{CFG_ROOT}', [])")
+    freq = "Weekly" if helpers.config_get(vm, f"{CFG_ROOT}/blacklist_freq") == "EveryDay" else "EveryDay"
+    with _core_in_step(vm):
+        try:
+            tell_core(vm)
+            before = config_revision(vm)
+            assert _core_revision(vm) == before, "before-state: Core must be at config.xml's revision"
+
+            guard = PhpErrorLogGuard(vm)
+            guard.snapshot()
+            _direct_post(webui, _save_payload(blacklist_freq=freq))
+            response = webui.get(BLACKLIST_PAGE)
+            rendered = evaluate_render(BLACKLIST_PAGE, response.status_code, response.text, ("DNSBL Category",))
+            assert rendered.ok, f"Blacklist page GET: {rendered.detail}"
+            guard.assert_no_growth()
+
+            assert helpers.config_get(vm, f"{CFG_ROOT}/blacklist_freq") == freq, "the save must be written"
+            after = config_revision(vm)
+            assert after != before, "the save moved the revision"
+            assert _core_revision(vm) == after, "Core must have read the save: it is at config.xml's revision"
+        finally:
+            restored = helpers.php_eval(
+                vm,
+                f"config_set_path('{CFG_ROOT}', json_decode({helpers._php_str(json.dumps(snapshot))}, true));\n"
+                "write_config('pfBlockerNG smoke: restore the Blacklist settings');\necho 'OK';",
+            )
+            assert restored.returncode == 0 and "OK" in restored.stdout, f"restore failed: {restored.stdout}"
