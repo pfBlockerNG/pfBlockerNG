@@ -3,7 +3,7 @@
 // tests/feedfetch/fixtures/parity. Every refusal keeps the published copy (last-known-good).
 //
 // A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", its validators ".orig.etag" and
-// ".orig.lastmod", the SHA-1 of the raw bytes it was published from ".orig.sha1", a changed probe's body ".probe"
+// ".orig.lastmod", the xxh128 of the raw bytes it was published from ".orig.xxhash128", a changed probe's body ".probe"
 // (the next ingest publishes it instead of fetching again), and the staged body ".raw", which never outlives a call.
 package feedfetch
 
@@ -179,10 +179,6 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	if _, err := os.Stat(published); err != nil {
 		return Result{OK: true, Decision: Changed}
 	}
-	// A previous version's SHA-256 baseline is none: re-ingest, whatever a validator or the bytes say (#3914).
-	if legacyDigest(feed) {
-		return Result{OK: true, Decision: Changed}
-	}
 	switch src.kind {
 	case kindRsync, kindSelfHosted:
 		return Result{OK: true, Decision: Changed}
@@ -202,10 +198,11 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 		res.OK, res.Decision = true, Unchanged
 	case t.reason == "" && t.status == 200:
 		digest, err := fileDigest(part)
-		baseline, _ := os.ReadFile(feed.path(".orig.sha1"))
+		algo, baseline := readBaseline(feed)
 		writeValidators(feed, t.etag, t.lastMod)
 		res.OK, res.Decision = true, Changed
-		if err == nil && len(baseline) > 0 && digest == string(baseline) {
+		// An md5 baseline cannot confirm unchanged (pfb_update_check): it re-ingests once and the ingest replaces it.
+		if err == nil && algo == "xxhash128" && digest == baseline {
 			res.Decision = Unchanged
 		}
 	default:

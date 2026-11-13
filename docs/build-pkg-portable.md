@@ -304,11 +304,14 @@ marker is ever published, and the activation's readiness wait fails with the Res
 
 **pfb-core** (issue #3841, the Core API daemon). A source that also carries `go/pfb_core` gets it
 built the same way, by the same helper, into `freebsd-<arch>/pfb-core` beside `pfb-dns`; the helper
-records it under `pfb_core`. Core may require `golang.org/x/net` and `golang.org/x/text` at exactly the
-versions the gateway's `go.mod` requires; the helper builds it from a scratch copy whose `vendor/` is cut from
-the gateway's (those modules' packages, licenses and `modules.txt` sections), so the go recipe's vendor tree
-stays the gateway's only. Any other `require`, a `replace`, a `vendor/` of Core's own, or a package the
-gateway's vendor tree lacks fails the build. A recipe
+records it under `pfb_core`. Core may require `golang.org/x/net`, `golang.org/x/sys` and `golang.org/x/text` at
+exactly the versions the gateway's `go.mod` requires; the helper builds it from a scratch copy whose `vendor/` is cut
+from the gateway's (those modules' packages, licenses and `modules.txt` sections). Core's one own module,
+`github.com/pfBlockerNG/xxh3` (#3925), which the gateway does not use, is added to that `vendor/` from the module
+cache (`go mod download`, checked against `go.sum`), or under `--vendored` from `go/pfb_core/vendor/<module>`, where
+the go recipe's one Core `GH_TUPLE` entry unpacks it; the builder checks that entry against Core's `go.mod`. Any other
+`require`, a `replace`, any other `vendor/` of Core's own, or a package the gateway's vendor tree lacks fails the
+build. A recipe
 without `do-build` has the builder stage it at `/usr/local/pkg/pfblockerng/core/bin/freebsd-<arch>/pfb-core`,
 mode `0555`. The go recipe ships it only when the port's `do-install` installs it and its
 `NO_ARCH_IGNORE` names it (pfBlockerNG/FreeBSD-ports, nightly); its `do-build` builds it either way. The rc script `pfb_core.sh` picks
@@ -375,7 +378,8 @@ line carries `go/`) has these parts:
   binaries stripped already; `INSTALL_PROGRAM` must not rewrite the bytes `do-build` checked).
 - `GH_TUPLE`: one entry per module the gateway vendors, each unpacked to
   `../go/pfb_dns_gateway/vendor/<module path>` (the module sits beside `src/`, which is
-  `WRKSRC`).
+  `WRKSRC`), plus one per module Core vendors itself (`github.com/pfBlockerNG/xxh3`, #3925),
+  unpacked to `../go/pfb_core/vendor/<module path>` at the tag Core's `go.mod` requires.
 - `files/modules.txt`: Go's own `vendor/modules.txt` for that tree. GH_TUPLE alone does
   not build, because Go 1.23 and later refuse a vendor tree without it.
 - `do-build`, exactly this one line (its continuation lines are indented with tabs in the
@@ -399,7 +403,9 @@ teach the builder), refuses a source tree that already carries `dns_proxy/bin`, 
 attested source with its own copy of `build-pfb-dns.py` (never the source's), with the same
 `--modules-txt` and the leg's FreeBSD major. Before any Go runs it checks that `GH_TUPLE`,
 `GL_TUPLE` and `files/modules.txt` name the same modules at the same versions: every entry
-unpacks under `../go/pfb_dns_gateway/vendor/`, `=>` replace lines and pseudo-versions (which no
+unpacks under `../go/pfb_dns_gateway/vendor/` except Core's own modules (`_CORE_OWN_MODULES`), whose
+`GH_TUPLE` entries under `../go/pfb_core/vendor/` must be exactly those Core's `go.mod` requires, at
+its versions; `=>` replace lines and pseudo-versions (which no
 tag can name) are refused, and so are a tuple without a `modules.txt` line and the reverse. Two
 narrow exceptions, both allowlists in the builder (`_GITLAB_MODULE_HOSTS`,
 `_PSEUDO_VERSION_MODULES`; changing either is an owner decision):

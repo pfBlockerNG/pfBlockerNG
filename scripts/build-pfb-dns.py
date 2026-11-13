@@ -27,11 +27,14 @@
 # stdout: one JSON object, {"go": "go1.x.y", "freebsd_major": N, "modules_txt_sha256": "<hex>" or
 # null when the module vendors nothing, "targets": {"freebsd-amd64": {"goarch", "path", "sha256",
 # "size", "freebsd_abi_note"}, ...}, "pfb_core": the same per target for pfb-core, {} for a tree without
-# go/pfb_core}. --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net and
-# golang.org/x/text, at the versions the gateway's go.mod requires, and nothing else: it is built from a scratch
-# copy of its module whose vendor/ is cut from the gateway's (those modules' packages and licenses, and their
-# vendor/modules.txt sections). Any other `require`, a `replace`, or a vendor/ of Core's own exits 1, as does a
-# package Core imports that the gateway's vendor/ lacks. Everything else goes to stderr.
+# go/pfb_core}. --modules-txt and --vendored concern the gateway. Core may require golang.org/x/net, x/sys and x/text,
+# at the versions the gateway's go.mod requires, and github.com/pfBlockerNG/xxh3 (which the gateway does not carry) at
+# any version, and nothing else: it is built from a scratch copy of its module whose vendor/ is cut from the gateway's
+# (those modules' packages and licenses, and their vendor/modules.txt sections) plus xxh3's root package, from
+# `go mod download` (go.sum verifies it) or, with --vendored, from go/pfb_core/vendor/github.com/pfBlockerNG/xxh3 (a
+# ports recipe's GH_TUPLE extraction), the only thing a Core vendor/ may then hold. Any other `require`, a `replace`, or
+# any other vendor/ of Core's own exits 1, as does a package Core imports that the vendor trees lack. Everything else
+# goes to stderr.
 # Exit 1, with every output it wrote removed (a modules.txt installed into a --vendored tree stays: it is
 # that tree's state), when Go is missing or older than go.mod requires, a compile fails, or an output
 # fails a check: ELF64 little-endian, OS/ABI FreeBSD, ET_EXEC, the architecture's e_machine; static
@@ -67,9 +70,11 @@ MODULE = Path("go") / "pfb_dns_gateway"
 BINARY = "pfb-dns"
 CORE_MODULE = Path("go") / "pfb_core"
 CORE_BINARY = "pfb-core"
-# Core's only allowed dependencies, at the versions the gateway's go.mod requires: the ports recipe's vendor tree is the
+# Core's allowed dependencies, at the versions the gateway's go.mod requires: the ports recipe's vendor tree is the
 # gateway's, so Core's vendor/ is cut from it.
-CORE_MODULES = ("golang.org/x/net", "golang.org/x/text")
+CORE_MODULES = ("golang.org/x/net", "golang.org/x/sys", "golang.org/x/text")
+# Modules Core vendors itself, at any version, because the gateway does not carry them: the xxh3 fork (issue #3925).
+CORE_OWN_MODULES = ("github.com/pfBlockerNG/xxh3",)
 # The files Go copies from a module's root into vendor/ beside its packages.
 _LICENSE_PREFIXES = (
     "AUTHORS",
@@ -123,7 +128,7 @@ def _run_go(go: str, args: list[str], module: Path, goarch: str, what: str) -> s
     except OSError as exc:
         raise BuildError(f"{what}: cannot run Go toolchain {go!r}: {exc}") from None
     if result.returncode != 0:
-        raise BuildError(f"{what} failed ({go} {' '.join(args)}):\n{result.stderr.strip()}")
+        raise BuildError(f"{what} failed ({go} {' '.join(args)}):\n{result.stderr.strip() or result.stdout.strip()}")
     return result.stdout.strip()
 
 
@@ -259,24 +264,58 @@ def _parse_go_mod(path: Path) -> tuple[list[tuple[str, str]], bool]:
     return requires, replaced
 
 
-def _check_core_module(core: Path, gateway: Path) -> list[str]:
-    """The modules Core requires, once they are CORE_MODULES at the gateway's versions, with no replace or vendor/."""
-    if (core / "vendor").exists():
-        raise BuildError(f"{CORE_MODULE}/vendor/ is refused: Core's vendor/ is cut from the gateway's")
+def _stray_vendor_entries(vendor: Path) -> list[str]:
+    """What ``vendor`` holds besides the directories of CORE_OWN_MODULES (and the directories on the way to them)."""
+    own = [Path(module) for module in CORE_OWN_MODULES]
+    stray: list[str] = []
+
+    def walk(directory: Path) -> None:
+        for entry in sorted(directory.iterdir()):
+            relative = entry.relative_to(vendor)
+            if entry.is_dir() and relative in own:
+                continue
+            if entry.is_dir() and any(relative in module.parents for module in own):
+                walk(entry)
+            else:
+                stray.append(relative.as_posix())
+
+    walk(vendor)
+    return stray
+
+
+def _check_core_module(core: Path, gateway: Path, *, vendored: bool) -> dict[str, str]:
+    """The (module, version) Core requires, once each is a CORE_MODULES at the gateway's version or a CORE_OWN_MODULES,
+    with no replace and no vendor/ (--vendored: none beyond the own modules' directories)."""
+    vendor = core / "vendor"
+    if vendor.exists():
+        if not vendored:
+            raise BuildError(
+                f"{CORE_MODULE}/vendor/ is refused: Core's vendor/ is cut from the gateway's "
+                f"(--vendored allows only the directories of {', '.join(CORE_OWN_MODULES)} there)"
+            )
+        stray = _stray_vendor_entries(vendor) if vendor.is_dir() else [vendor.name]
+        if stray:
+            raise BuildError(
+                f"{CORE_MODULE}/vendor/ may hold only the directories of {', '.join(CORE_OWN_MODULES)}: "
+                f"{', '.join(stray)}"
+            )
     requires, replaced = _parse_go_mod(core / "go.mod")
     if replaced:
         raise BuildError(f"{CORE_MODULE}/go.mod has a replace, which the gateway's vendor tree cannot honour")
     gateway_requires, _ = _parse_go_mod(gateway / "go.mod")
     for module, version in requires:
+        if module in CORE_OWN_MODULES:
+            continue
         if module not in CORE_MODULES:
-            raise BuildError(f"{CORE_MODULE} requires {module}; Core may require only {' and '.join(CORE_MODULES)}")
+            allowed = ", ".join((*CORE_MODULES, *CORE_OWN_MODULES))
+            raise BuildError(f"{CORE_MODULE} requires {module}; Core may require only {allowed}")
         have = sorted({v for m, v in gateway_requires if m == module})
         if version not in have:
             raise BuildError(
                 f"{CORE_MODULE} requires {module} {version}, but the gateway requires "
                 f"{', '.join(have) or 'no version of it'}"
             )
-    return list(dict.fromkeys(module for module, _ in requires))
+    return dict(requires)
 
 
 def _copy_files(src: Path, dst: Path, wanted: Callable[[str], bool] = lambda _name: True) -> None:
@@ -289,8 +328,43 @@ def _copy_files(src: Path, dst: Path, wanted: Callable[[str], bool] = lambda _na
             shutil.copy2(entry, dst / entry.name)
 
 
-def _vendor_core(core: Path, modules: list[str], gateway_vendor: Path, scratch: Path) -> Path:
-    """A copy of ``core`` whose vendor/ is ``modules`` as the gateway vendors them: packages, licenses, modules.txt."""
+def _vendor_own(go: str, core: Path, copy: Path, module: str, version: str, *, vendored: bool) -> list[str]:
+    """Vendor an own module's root package into ``copy``'s vendor/ as `go mod vendor` would; its modules.txt lines.
+
+    The module's tree is Core's vendor/<module> with --vendored, else the download of module@version, which go.sum
+    must pin (`go mod download` would otherwise add the sum, to the scratch copy)."""
+    if vendored:
+        tree = core / "vendor" / module
+        if not tree.is_dir():
+            raise BuildError(f"{CORE_MODULE} requires {module}, but {CORE_MODULE}/vendor/{module}/ is missing")
+    else:
+        args = ["mod", "download", "-json", f"{module}@{version}"]
+        got = json.loads(_run_go(go, args, copy, "amd64", f"go mod download {module}"))
+        sums = core / "go.sum"
+        pinned = f"{module} {version} {got['Sum']}"
+        if not sums.is_file() or pinned not in sums.read_text(encoding="utf-8").splitlines():
+            raise BuildError(f"{CORE_MODULE}/go.sum does not pin the download of {module} {version} (`{pinned}`)")
+        tree = Path(got["Dir"])
+    go_mod = tree / "go.mod"
+    text = go_mod.read_text(encoding="utf-8") if go_mod.is_file() else ""
+    named = re.search(r"^module\s+(\S+)", text, re.MULTILINE)
+    if not named or named.group(1) != module:
+        raise BuildError(f"{go_mod} does not name `module {module}`")
+    directive = re.search(r"^go (\S+)$", text, re.MULTILINE)
+    if not directive:
+        raise BuildError(f"{go_mod} has no go directive")
+    # shortcut: a root .go file tagged `//go:build ignore` is copied (Go's vendor drops it), upgrade if one appears
+    _copy_files(
+        tree, copy / "vendor" / module, lambda name: not name.endswith("_test.go") and name not in ("go.mod", "go.sum")
+    )
+    return [f"# {module} {version}", f"## explicit; go {directive.group(1)}", module]
+
+
+def _vendor_core(
+    go: str, core: Path, requires: dict[str, str], gateway_vendor: Path, scratch: Path, *, vendored: bool
+) -> Path:
+    """A copy of ``core`` whose vendor/ is what `go mod vendor` would write for it: its CORE_MODULES as the gateway
+    vendors them (packages, licenses, modules.txt sections) and its CORE_OWN_MODULES from their own trees."""
     modules_txt = gateway_vendor / "modules.txt"
     if not modules_txt.is_file():
         raise BuildError(
@@ -302,22 +376,28 @@ def _vendor_core(core: Path, modules: list[str], gateway_vendor: Path, scratch: 
         if line.startswith("# "):
             lines = sections.setdefault(line[2:].split()[0], [])
         lines.append(line)
-    for module in modules:
+    shared = [module for module in requires if module in CORE_MODULES]
+    for module in shared:
         if module not in sections:
             raise BuildError(
                 f"the gateway's vendor/modules.txt has no section for {module}, which {CORE_MODULE} requires"
             )
     copy = scratch / CORE_MODULE.name
-    shutil.copytree(core, copy)
+    shutil.copytree(core, copy, ignore=lambda src, names: ["vendor"] if src == os.fspath(core) else [])
     vendor = copy / "vendor"
-    kept: list[str] = []
-    for module in (m for m in sections if m in modules):
-        kept += sections[module]
+    kept: dict[str, list[str]] = {}
+    for module in shared:
+        kept[module] = sections[module]
         if (gateway_vendor / module).is_dir():  # a module whose packages the gateway does not use has no directory
             _copy_files(gateway_vendor / module, vendor / module, lambda name: name.startswith(_LICENSE_PREFIXES))
         for package in (line for line in sections[module] if line and not line.startswith("#")):
             _copy_files(gateway_vendor / package, vendor / package)
-    (vendor / "modules.txt").write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")
+    for module in (module for module in requires if module in CORE_OWN_MODULES):
+        kept[module] = _vendor_own(go, core, copy, module, requires[module], vendored=vendored)
+    # sorted by module path, as `go mod vendor` writes it
+    (vendor / "modules.txt").write_text(
+        "".join(f"{line}\n" for module in sorted(kept) for line in kept[module]), encoding="utf-8"
+    )
     return copy
 
 
@@ -366,7 +446,7 @@ def build_pfb_dns(
     for built in (module, core) if has_core else (module,):
         if out_dir.is_relative_to(built.resolve()):
             raise BuildError(f"--out-dir {out_dir} is inside the module being built")
-    core_modules = _check_core_module(core, module) if has_core else []
+    core_modules = _check_core_module(core, module, vendored=vendored) if has_core else {}
     stamp = int((module / "go.mod").stat().st_mtime)
     core_stamp = int((core / "go.mod").stat().st_mtime) if has_core else 0
     targets: dict[str, dict[str, object]] = {}
@@ -376,7 +456,9 @@ def build_pfb_dns(
     try:
         tree = module if vendored else _vendor_copy(go, module, scratch)
         modules_sha256 = _settle_modules_txt(tree, wanted, install=vendored)
-        core_tree = _vendor_core(core, core_modules, tree / "vendor", scratch) if core_modules else core
+        core_tree = (
+            _vendor_core(go, core, core_modules, tree / "vendor", scratch, vendored=vendored) if core_modules else core
+        )
         version = _run_go(go, ["env", "GOVERSION"], tree, "amd64", "reading the Go version")
         for target, (goarch, machine) in TARGETS.items():
             builds = [(tree, BINARY, stamp, targets)]
