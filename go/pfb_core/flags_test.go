@@ -29,3 +29,14 @@ func TestUsageNamesTheUpdateCmdFlag(t *testing.T) {
 		t.Errorf("the usage text does not name --update-cmd: %q", stderr.String())
 	}
 }
+
+// --zoneinfo is how Core is told where the host keeps its time zone: the usage line names it.
+func TestUsageNamesTheZoneinfoFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := run(context.Background(), nil, &stderr); code != 2 {
+		t.Fatalf("run without flags = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "--zoneinfo PATH") {
+		t.Errorf("the usage text does not name --zoneinfo: %q", stderr.String())
+	}
+}

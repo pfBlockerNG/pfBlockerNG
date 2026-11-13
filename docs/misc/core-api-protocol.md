@@ -38,7 +38,7 @@ The method names and shapes are transport-neutral (map #3813, accepted proposal)
 | `SettingsChanged` | none | what `GetSettings` answers: Core read its backend again |
 | `StartUpdate` | `requestId`, `trigger`: `manual` (`scope`, `force`), `apply` or `retry` | `{}` once the Update is admitted; `conflict` while one runs |
 | `GetUpdate` | `after` (optional cursor, a decimal string; default: the start) | `{"running", "update", "log", "next"}`: the current or last Update and a chunk of its log; `next` is a string |
-| `GetSchedule` | none | `{"scheduled", "feeds", "extras"}`: when the scheduled Updates last ran and are next due |
+| `GetSchedule` | none | `{"scheduled", "feeds", "extras", "lastSuccessfulCheck"}`: when the scheduled Updates last ran and are next due, and each item's last successful check |
 
 `GetVersion` is also the health check: a `200` with `status` `serving` means Core takes requests.
 
@@ -264,10 +264,13 @@ layer relays these calls from its authenticated pages; Core is never exposed to 
   queued. A `scheduled` trigger that finds it taken is skipped (its occurrences stay unreserved, so the next quarter hour
   plans them again); a `StartUpdate` gets `conflict` ("an Update is running") and can read the running Update with
   `GetUpdate`.
-- **Scheduler.** At every quarter-hour boundary (a Unix time that is a multiple of 900 s, read in the host's time zone)
-  Core plans what is due from `settings/schedule` and the `settings/feeds/*` projections as they are then (a save or
-  `SettingsChanged` refreshes them), reserves the occurrences and starts a `scheduled` Update with the feeds and Extras
-  (`extra:dcc`, `extra:bl`) that are due. Nothing due starts nothing.
+- **Scheduler.** At every quarter-hour boundary (a Unix time that is a multiple of 900 s) Core reads the schedule in the
+  host's time zone, which `--zoneinfo PATH` names as a time zone file (TZif) that Core reads again at every evaluation and at
+  every `GetSchedule`, so a change of the host's zone applies at the next one without a restart. Without the flag, or when the
+  file is missing or damaged, it is the process's local zone (logged once per outage). Core plans what is due from
+  `settings/schedule` and the `settings/feeds/*` projections as they are then (a save or `SettingsChanged` refreshes them),
+  reserves the occurrences and starts a `scheduled` Update with the feeds and Extras (`extra:dcc`, `extra:bl`) that are due.
+  Nothing due starts nothing.
 - **Restarts.** Core starts idle. The pending occurrences and outcomes are kept in `schedule_state.json`; a missing or
   unusable file starts empty and the next quarter hour plans what is due. The Update, its log and its result are in
   memory and in `update.log`, which a new Update starts again: nothing of an Update survives a restart. A stop while an
@@ -300,7 +303,7 @@ number, `"-1"`, `"abc"`, `"1.5"`, `""`), is `invalid_argument` with a field erro
 | Field | Value |
 |---|---|
 | `running` | `true` while an Update runs, explicitly `false` otherwise |
-| `update` | `null` until this Core's first Update; else `{"trigger", "scope", "force", "startedAt", "finishedAt", "result"}`: `startedAt` and `finishedAt` in Unix seconds, `finishedAt` and `result` only once it ended, `result` `success` (the program exited 0 and its result, if any, was usable) or `failed` |
+| `update` | `null` until this Core's first Update; else `{"trigger", "scope", "force", "startedAt", "finishedAt", "result"}`: `startedAt` and `finishedAt` in Unix seconds, `finishedAt` and `result` only once it ended, `result` `success` (the program exited 0 and its result, if any, was usable), `skipped` (the program deferred it: exit status 75) or `failed` |
 | `log` | the log's bytes from the cursor, at most 64 KiB, never ending inside a UTF-8 character; `""` before the first Update |
 | `next` | the cursor after `log`, a JSON string: pass it as `after` in the next call; `"0"` before the first Update |
 
@@ -336,7 +339,11 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 - **fd 3:** a second regular file, for the result: `{"version": 1, "outcomes": {id: "success"|"retry-cap-reached"},
   "attempted": [ids], "geoipReady": bool}`. Nothing written is nothing reported. Anything else that is not exactly one such
   object of at most 1 MiB fails the Update and records nothing.
-- **Exit status:** 0 is success. A non-zero exit fails the Update, and a valid result it wrote still counts.
+- **Exit status:** 0 is success. A non-zero exit fails the Update, and a valid result it wrote still counts. **75** means the
+  program deferred the Update (a lock held, the schedule switched off): the Update ends with the result `skipped`, not
+  `failed`, whatever the program wrote on fd 3 is not recorded (no outcome, no attempt, no GeoIP readiness), and the
+  reserved occurrences stay pending for the next quarter hour. A skipped Update truncates the previous Update's log like any
+  other, and its own log holds what the program printed before it deferred.
 - **Process group and bounds:** the program runs in its own process group. The group is killed (TERM, then KILL after 5 s)
   at a hard cap of 4 hours, when the Update is cancelled and when Core stops; never when the program exits by itself, so a
   daemon it started keeps running.

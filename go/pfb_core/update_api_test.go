@@ -19,7 +19,7 @@ import (
 
 // fakeUpdate is a #!/bin/sh program standing in for the Outpost's update program (--update-cmd). It keeps its last stdin
 // request, its pid and one line per run in its directory, writes a line to the log, waits until the file "release" exists,
-// reports the file "result" (when there is one) on fd 3 and exits 0.
+// reports the file "result" (when there is one) on fd 3 and exits with the status in the file "status" (0 without one).
 type fakeUpdate struct {
 	t    *testing.T
 	dir  string
@@ -37,7 +37,7 @@ echo "update program started"
 while [ ! -e "$D/release" ]; do sleep 0.05; done
 if [ -f "$D/result" ]; then cat "$D/result" >&3; fi
 echo "update program done"
-exit 0
+exit $(cat "$D/status" 2>/dev/null || echo 0)
 `
 	if err := os.WriteFile(f.path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -48,6 +48,14 @@ exit 0
 func (f *fakeUpdate) release() {
 	f.t.Helper()
 	if err := os.WriteFile(filepath.Join(f.dir, "release"), nil, 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// exit makes the program end with status.
+func (f *fakeUpdate) exit(status int) {
+	f.t.Helper()
+	if err := os.WriteFile(filepath.Join(f.dir, "status"), []byte(strconv.Itoa(status)), 0o600); err != nil {
 		f.t.Fatal(err)
 	}
 }
