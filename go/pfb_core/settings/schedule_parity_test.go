@@ -59,6 +59,40 @@ func scheduleChanges(t *testing.T, value json.RawMessage) map[string]map[string]
 	return map[string]map[string]json.RawMessage{"schedule": fields}
 }
 
+func scheduleWithProviderTitles(t *testing.T, config, schedule json.RawMessage) json.RawMessage {
+	t.Helper()
+	var stored struct {
+		Blacklist struct {
+			Items []struct {
+				ID    string `json:"xml"`
+				Title string `json:"title"`
+			} `json:"item"`
+		} `json:"blacklist"`
+	}
+	if err := json.Unmarshal(config, &stored); err != nil {
+		t.Fatal(err)
+	}
+	titles := make(map[string]string, len(stored.Blacklist.Items))
+	for _, item := range stored.Blacklist.Items {
+		titles[item.ID] = item.Title
+	}
+	var result map[string]any
+	if err := json.Unmarshal(schedule, &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range result["categoryProviders"].([]any) {
+		provider := item.(map[string]any)
+		if title, ok := titles[provider["id"].(string)]; ok {
+			provider["title"] = title
+		}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtureCase(t *testing.T) {
 	for _, c := range loadScheduleFixture(t).Cases {
 		t.Run(c.ID, func(t *testing.T) {
@@ -66,11 +100,12 @@ func TestTheScheduleProjectionAcceptsAndReadsBackWhatTheAdapterReadsOnEveryFixtu
 			if _, err := st.Initialize(t.Context(), nil); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := st.Save(t.Context(), 1, scheduleChanges(t, c.Schedule)); err != nil {
+			value := scheduleWithProviderTitles(t, c.Config, c.Schedule)
+			if _, err := st.Save(t.Context(), 1, scheduleChanges(t, value)); err != nil {
 				t.Fatalf("%s\nCore refuses what the adapter reads: %v", c.Description, err)
 			}
 			var want map[string]any
-			if err := json.Unmarshal(c.Schedule, &want); err != nil {
+			if err := json.Unmarshal(value, &want); err != nil {
 				t.Fatal(err)
 			}
 			if have := jsonOf(t, projection(t, get(t, st, "schedule"), "schedule").Value); have != jsonOf(t, want) {

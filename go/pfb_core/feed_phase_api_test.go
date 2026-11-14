@@ -75,3 +75,39 @@ func TestFeedPhaseAcceptsCurrentApplyUpdateToken(t *testing.T) {
 	f.release()
 	c.waitFinished("apply")
 }
+
+func TestFeedPhaseAcceptsConfiguredBlacklistCategoryIDs(t *testing.T) {
+	c, f := startUpdateCore(t)
+	t.Cleanup(f.release)
+	wantJSON(t, c.post("StartUpdate", `{"requestId":"feed-phase-blacklist","trigger":"manual"}`), 200, `{}`)
+	var request struct {
+		Token string `json:"token"`
+	}
+	waitFor(t, func() bool {
+		if _, err := os.Stat(f.dir + "/req"); err != nil {
+			return false
+		}
+		return json.Unmarshal([]byte(f.request()), &request) == nil && len(request.Token) == 64
+	})
+
+	valid := `{"requestId":"valid-blacklist","token":"` + request.Token +
+		`","phase":"dnsbl","feeds":["blacklist:work:adult"],"force":"none"}`
+	got := c.post("FeedPhase", valid)
+	if got.status != 200 || !strings.Contains(string(got.body), `"blacklist:work:adult"`) {
+		t.Fatalf("FeedPhase rejected a configured blacklist category: %d %s", got.status, got.body)
+	}
+	for i, id := range []string{
+		"blacklist:../work:adult",
+		"blacklist:/tmp:adult",
+		"blacklist:work:../adult",
+		"blacklist:work:/etc",
+	} {
+		body := `{"requestId":"bad-blacklist-` + string(rune('a'+i)) + `","token":"` + request.Token +
+			`","phase":"dnsbl","feeds":[` + `"` + id + `"` + `],"force":"none"}`
+		if got := c.post("FeedPhase", body); got.status == 200 {
+			t.Fatalf("FeedPhase accepted unsafe blacklist ID %q: %s", id, got.body)
+		}
+	}
+	f.release()
+	c.waitFinished("manual")
+}
