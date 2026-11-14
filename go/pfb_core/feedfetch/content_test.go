@@ -11,6 +11,8 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -258,7 +260,8 @@ func TestACommaAtTheEdgeOfACopyChunkIsTransformedWhole(t *testing.T) {
 }
 
 func TestClassifyAnswersTheLabelsTheGatesNeed(t *testing.T) {
-	ustar := append(bytes.Repeat([]byte("a"), 257), "ustar\x0000"...)
+	at257 := func(s string) []byte { return append(bytes.Repeat([]byte("a"), 257), s...) }
+	ustar := at257("ustar\x0000")
 	cases := []struct {
 		name string
 		head []byte
@@ -273,10 +276,16 @@ func TestClassifyAnswersTheLabelsTheGatesNeed(t *testing.T) {
 		{"html after a utf-8 bom", []byte("\xef\xbb\xbf<html>"), false, "text/html"},
 		{"gzip", []byte{0x1f, 0x8b, 8, 0}, false, "application/gzip"},
 		{"bzip2", []byte("BZh91AY&SY"), false, "application/x-bzip2"},
+		{"bzip2 of the smallest block size", []byte("BZh11AY&SY"), false, "application/x-bzip2"},
 		{"bzip2 needs a block size", []byte("BZhost\n"), false, "text/plain"},
+		{"bzip2 has no block size 0", []byte("BZh0"), false, "text/plain"},
 		{"zip", []byte("PK\x03\x04\x14\x00"), false, "application/zip"},
 		{"empty zip", []byte("PK\x05\x06\x00\x00"), false, "application/zip"},
 		{"tar", ustar, false, "application/x-tar"},
+		{"posix tar magic ending the head", at257("ustar\x00"), false, "application/x-tar"},
+		{"gnu tar", at257("ustar  \x00"), false, "application/x-tar"},
+		{"ustar without the nul of the magic is text", at257("ustar"), false, "text/plain"},
+		{"ustar followed by text is text", at257("ustar.example\n"), false, "text/plain"},
 		{"utf-16le bom", []byte("\xff\xfe1\x00"), false, "text/plain"},
 		{"utf-16be bom", []byte("\xfe\xff\x001"), false, "text/plain"},
 		{"utf-32le bom", []byte("\xff\xfe\x00\x001\x00\x00\x00"), false, "text/plain"},
@@ -376,5 +385,67 @@ func TestAFailedPublicationLeavesNoExtractionBehind(t *testing.T) {
 	res := f.Ingest(context.Background(), feed, localRequest(t, src, gzipOf(t, []byte("1.2.3.4\n"))))
 	if res.OK || len(strays(t, feed, false)) != 0 {
 		t.Fatalf("a publication that cannot rename must fail clean: %+v, strays %v", res, strays(t, feed, false))
+	}
+}
+
+// Every extraction, not only a gzip's, stops when its context ends part-way through it.
+func TestACancelledContextStopsEveryExtractionInProgress(t *testing.T) {
+	bzip2, err := base64.StdEncoding.DecodeString("QlpoOTFBWSZTWdGErXsAAAIBgEAAAEAgACEAggsXckU4UJDRhK17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("x"), 100)
+	bodies := map[string][]byte{
+		"bzip2": bzip2, "zip": zipOf(t, string(payload)), "tar": tarOf(t, payload), "tar.gz": gzipOf(t, tarOf(t, payload)),
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			f, feed, src := seededFeed(t)
+			res := f.Ingest(stagedCtx{context.Background(), feed.Dir}, feed, localRequest(t, src, body))
+			if res.OK || res.Reason != context.Canceled.Error() || published(t, feed) != oldCopy || len(strays(t, feed, false)) != 0 {
+				t.Fatalf("an extraction must end with its context: %+v, published %q, strays %v", res, published(t, feed), strays(t, feed, false))
+			}
+		})
+	}
+}
+
+// A context that ended during the verdict refuses for itself, not for the feed: an octet stream whose recovery probes
+// were cut short is not known to hold no archive.
+func TestAContextThatEndedDuringTheVerdictIsNoMimeRefusal(t *testing.T) {
+	f, feed, src := seededFeed(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res := f.Ingest(ctx, feed, localRequest(t, src, bytes.Repeat([]byte{0, 1, 2, 3}, 64)))
+	if res.OK || res.Reason != context.Canceled.Error() || res.Stage != "" || res.Detected != "" || published(t, feed) != oldCopy {
+		t.Fatalf("the refusal must be the context's: %+v, published %q", res, published(t, feed))
+	}
+}
+
+// An octet stream is tried as a zip before it is tried as a tar (ADR-45's order: zip, gzip, bzip2, tar). A tar without
+// the ustar magic (version 7), which no magic number names, whose one member is a zip, is both: it is the zip.
+func TestTheRecoveryOfAnOctetStreamTriesZipBeforeTar(t *testing.T) {
+	inner := zipOf(t, "1.2.3.4\n")
+	body := tarOf(t, inner)
+	hdr := body[:512]
+	clear(hdr[257:265]) // no magic and no version: a version 7 header
+	copy(hdr[148:156], "        ")
+	sum := 0
+	for _, c := range hdr {
+		sum += int(c)
+	}
+	copy(hdr[148:156], fmt.Sprintf("%06o\x00 ", sum))
+	tr := tar.NewReader(bytes.NewReader(body))
+	if _, err := tr.Next(); err != nil {
+		t.Fatalf("the fixture must read as a tar: %v", err)
+	}
+	if member, err := io.ReadAll(tr); err != nil || !bytes.Equal(member, inner) {
+		t.Fatalf("the fixture's member must be the zip: %v", err)
+	}
+	if got := feedfetch.Classify(body, false); got != "application/octet-stream" {
+		t.Fatalf("the fixture must be an octet stream, not %q", got)
+	}
+	f, feed, src := seededFeed(t)
+	if res := f.Ingest(context.Background(), feed, localRequest(t, src, body)); !res.OK || published(t, feed) != "1.2.3.4\n" {
+		t.Fatalf("the zip must win: %+v, published %q", res, published(t, feed))
 	}
 }

@@ -1,0 +1,60 @@
+{
+ "schema": 1,
+ "description": "libmagic difference: a text body opening with \"BZh\" and no block size is text: Core publishes it; the old path (libmagic application/x-bzip2 for any \"BZh\") refuses it at the structural test.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "BZhost.example\n1.2.3.4\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "BZhost.example\n1.2.3.4\n",
+    "digest": "24d5d2068e4a391d68f3f2b8b4448a8f",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000
+   },
+   "old_expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "structural",
+    "reason": "probe_failed",
+    "detected": "application/x-bzip2 FEED.raw",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}
