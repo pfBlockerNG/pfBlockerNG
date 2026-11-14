@@ -97,6 +97,16 @@ Per-run pidfile answers "is process **I** launched alive?" — cannot answer "is
 
 Test that launches work **over SSH** and waits inline hangs on backgrounded child via sshd *own* channel-EOF wait — conflates SSH-channel wait with process stall you test (failure becomes indistinguishable from bug). Launch work **detached** (`nohup … >> log 2>&1 </dev/null &`) and poll on-disk log / markers, so only thing under observation is process behaviour itself.
 
+## Testing: cap every agent run's memory and wall time
+
+Every test an agent runs outside CI (suites, `scripts/agent/run-gates.sh`, mutation runners and probes) runs under a memory and wall-time cap, so a runaway dies in its own cgroup instead of taking the host down:
+
+```sh
+systemd-run --scope -q -p MemoryMax=6G -p MemorySwapMax=0 timeout -k 10 <secs> <command>
+```
+
+A mutant that raises or removes a size ceiling keeps the cap: that mutant is exactly the run that publishes gigabytes (2026-11-14 OOM, `docs/history/incidents.md`). Never `chmod` or `chown` a shared directory such as `/tmp` recursively; a test run as another user gets a private `mktemp -d` directory.
+
 ## See also
 
 - `pfb_run_hooks()` (`--foreground` + temp-file capture) in `src/usr/local/pkg/pfblockerng/pfblockerng.inc` — landed in PR #634.

@@ -48,6 +48,28 @@ rules). Swept from `CLAUDE.md` and `docs/misc/workflow-reference.md` in Stage 1 
   timeouts raise loudly (`.agents/context/lang-python.md`).
 - **the `tick` smoke-module bug** — a module-scoped baseline masqueraded as per-test
   isolation → autouse reset fixtures that fail loudly (`testing.md`).
+- **2026-11-14 00:09:27 UTC ai-dev OOM (#3989, PR #3990)** — a review mutation runner raised
+  the feedfetch extraction ceiling (`maxExtract` ×2) and ran `go test` with no memory or
+  time cap. The over-ceiling corpus row published 2 GiB, and `corpus_test.go` read it back
+  whole, with `json.MarshalIndent` escaping every NUL six-fold. The kernel killed
+  `feedfetch.test` at ~38.4 GiB anon RSS, and ompweb-host went with it. Fix: the corpus
+  runners compare at most 1 MiB, with a size and SHA-256 stand-in above that (PR #3990).
+  Rule: agent-run tests, mutation runners and probes run under a memory and wall-time cap,
+  and a ceiling mutant keeps it (`docs/misc/external-process-waits.md`).
+  - **Contributing cause:** ompweb-host could not restart from 00:10:29 to ~00:24 ("Host
+    control directory must have private 700 permissions"), because its
+    `/tmp/ompweb-host-0-*` directories were 777. Those modes came from andaru session
+    `01a1afb5-1b5f-717e-9f76-e11e34ad8c4e`. At 2026-11-13T11:39:04Z, while preparing
+    nobody-user Go tests, it ran `chmod -R a+rwX /tmp 2>/dev/null` (toolCallId
+    `toolu_01Xsy2YdC8H8YEAUEdNDnHDd`), and at 11:44:44Z it acknowledged the change as
+    accidental.
+  - **Repair (2026-11-14, owner-approved):** go-w on the entries changed in that window;
+    `ompweb-host-0-*` directories set to 700 and their sockets to 600; `.X11-unix` and
+    `.ICE-unix` back to 1777; `tmux-0` to 700. Files that were originally 600 stay 644,
+    because their original modes are unknown.
+  - Rule: never `chmod` or `chown` a shared directory such as `/tmp` recursively. Tests
+    that run as another user get a private `mktemp -d` directory
+    (`docs/misc/external-process-waits.md`).
 
 ## Review and landing
 
