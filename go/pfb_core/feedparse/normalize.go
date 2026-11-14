@@ -210,20 +210,24 @@ func normalizeStream(src io.Reader, out normalizeOutput) error {
 		if tail == 0 {
 			return nil
 		}
-		if err := flushOutput(); err != nil {
-			return err
-		}
-		if err := w.Flush(); err != nil {
-			return err
-		}
 		written -= tail
-		if err := out.Truncate(written); err != nil {
-			return err
+		if tail <= int64(outputLen) {
+			outputLen -= int(tail)
+		} else {
+			if err := flushOutput(); err != nil {
+				return err
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			if err := out.Truncate(written); err != nil {
+				return err
+			}
+			if _, err := out.Seek(0, io.SeekEnd); err != nil {
+				return err
+			}
+			w.Reset(out)
 		}
-		if _, err := out.Seek(0, io.SeekEnd); err != nil {
-			return err
-		}
-		w.Reset(out)
 		tail = 0
 		if tailStartValid {
 			lastByte = tailStartByte
