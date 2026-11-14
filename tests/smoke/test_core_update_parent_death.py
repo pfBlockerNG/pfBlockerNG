@@ -4,9 +4,9 @@
 ``go/pfb_core/update``'s ``TestTheProgramDiesWithACoreThatIsKilled`` and
 ``TestTheProgramsChildDiesWithACoreThatIsKilled`` prove it on Linux: the test binary turns itself into a Core running
 one Update (``exec sleep 300``; a program that starts ``sleep 300`` and waits), is SIGKILLed, and the program, and the
-child it started, must be gone. This runs those same tests, built for the box, on a real pfSense box, with the Update
-watcher's other FreeBSD paths: a TERM-ignoring and a TERM-handling child when Core dies, a HUP inside the group,
-program signal deaths and exit statuses, and cancellation after a successful exit without killing its daemons.
+child it started, must be gone. This runs the Update and shared process lifetime suites, built for the box, on a
+real pfSense box: a TERM-ignoring and a TERM-handling child when Core dies, a HUP inside the group, program signal
+deaths and exit statuses, and cancellation after a successful exit without killing its daemons.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
 
@@ -15,8 +15,10 @@ DESELECTED from the default ``python -m pytest``. Run it on the pool::
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -31,8 +33,7 @@ from .test_smoke_dns_gateway import (  # noqa: F401 -- pytest fixture re-export
 pytestmark = [pytest.mark.smoke, pytest.mark.timeout(900)]
 
 GO_DIR = Path(__file__).resolve().parents[2] / "go" / "pfb_core"
-GUEST_BINARY = "/root/pfb_smoke_update.test"
-TESTS = (
+UPDATE_TESTS = (
     "TestTheProgramDiesWithACoreThatIsKilled",
     "TestTheProgramsChildDiesWithACoreThatIsKilled",
     "TestAChildIgnoringTermIsKilledWhenCoreIsKilled",
@@ -41,57 +42,84 @@ TESTS = (
     "TestASignalEndsRunAsItEndedTheProgram",
     "TestANonZeroExitIsAnErrorNamingTheStatusAndStillReturnsAValidResult",
     "TestAnExitOf75IsErrDeferredAndReportsNothing",
-    "TestAContextEndingWhileTheSupervisorOutlivesTheProgramLeavesTheGroupAndTheSuccess",
     "TestAContextEndingAfterTheProgramExitedLeavesItsDescendantsAndTheSuccess",
     "TestAValidResultOnFd3IsReturned",
     "TestANormalExitLeavesAChildOfTheProgramRunning",
     "TestAGrandchildHoldingTheLogAndTheResultFdDoesNotDelayRun",
-    "TestAContextEndingWithTheWatcherStoppedAfterTheProgramExitedPreservesItsDaemon",
     "TestTheUpdateProgramIsCoresOwnChildInTheWatchdogsGroup",
     "TestAnUnexpectedWatchdogDeathEndsTheUnprotectedUpdateAndItsChildren",
-    "TestCoresDeathBeforeCompletionCleansTheGroupButAfterRunLeavesItsDaemon",
     "TestAProgramThatCannotStartReturnsAnErrorWithoutLeavingAWatchdog",
+    "TestEveryTerminalProgramResultCommitsCompletionWithoutKillingItsDaemon",
+    "TestUnexpectedWatchdogDeathIsTheCauseOfPromptGroupCleanup",
+    "TestAStartFailureLeavesNoUnwaitedOwnedChildAndProcessInspectionMustWork",
+)
+PROCESS_TESTS = (
+    "TestRunPreservesTerminalStatusAndAttachedDescendants",
+    "TestRunKeepsStartErrorAndAlreadyCancelledCause",
+    "TestLateCancellationUsesActualExitBeforeReap",
+    "TestCancellationCleansAnIgnoringChildAndPreservesWaitStatus",
+    "TestUnexpectedWatchdogDeathCleansTheGroup",
     "TestTheWatchdogAcknowledgesReadinessWithItsOwnProcessGroupEstablished",
     "TestAStoppedWatchdogsAcknowledgementTimeoutLeavesTheSuccessfulProgramsDaemon",
     "TestAWatchdogThatCannotReportReadinessExitsInsteadOfWaitingForCompletion",
-    "TestEveryTerminalProgramResultCommitsCompletionWithoutKillingItsDaemon",
     "TestADeadWatchdogKeepsItsGroupIdentityUntilCleanupCanNoLongerSignalIt",
-    "TestUnexpectedWatchdogDeathIsTheCauseOfPromptGroupCleanup",
-    "TestAStartFailureLeavesNoUnwaitedOwnedChildAndProcessInspectionMustWork",
+    "TestUnrelatedHUPDoesNotAbandonTheGroup",
+    "TestCoreDeathCleansTheProgram",
+    "TestRunLeavesCallerDescriptorsAndPipeHoldingDescendantAlone",
+    "TestAContextEndingAfterTheProgramExitedButBeforeItsReapLeavesTheGroupAndTheSuccess",
+    "TestAContextEndingWhileTheSupervisorOutlivesTheProgramLeavesTheGroupAndTheSuccess",
+    "TestAContextEndingWithTheWatcherStoppedAfterTheProgramExitedPreservesItsDaemon",
+    "TestCoresDeathBeforeCompletionCleansTheGroupButAfterRunLeavesItsDaemon",
     "TestWatchdogDeathCleanupFinishesBeforeTheIndependentSalvageContextFires",
+)
+LIFETIME_SUITES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("./update", UPDATE_TESTS),
+    ("./internal/process", PROCESS_TESTS),
 )
 
 
 # FreeBSD /dev/fd paths do not report descriptor types; the fstat case checks the actual files.
 @pytest.mark.parametrize(
-    "tests",
-    [TESTS, ("TestTheProgramReceivesFourRegularFilesByFstatAndReportsItsResult",)],
+    "suites",
+    [LIFETIME_SUITES, (("./update", ("TestTheProgramReceivesFourRegularFilesByFstatAndReportsItsResult",)),)],
     ids=["lifetime", "fstat"],
 )
 def test_the_update_program_dies_with_a_core_that_is_killed(
     smoke_vm: SmokeVM,
     go_toolchain: GoToolchain,  # noqa: F811 -- the fixture imported above
     tmp_path: Path,
-    tests: tuple[str, ...],
+    suites: tuple[tuple[str, tuple[str, ...]], ...],
 ) -> None:
     """Prove the Update's group/lifetime or descriptor contracts on real FreeBSD."""
-    binary = tmp_path / "update.test"
-    built = subprocess.run(
-        [str(go_toolchain.go), "test", "-c", "-o", str(binary), "./update"],
-        cwd=GO_DIR,
-        env={**go_toolchain.env, "GOOS": "freebsd", "GOARCH": _goarch(smoke_vm, "pfSense")},
-        capture_output=True,
-        text=True,
-        timeout=900,
-        check=False,
-    )
-    assert built.returncode == 0, f"go test -c ./update for FreeBSD failed:\n{built.stdout}\n{built.stderr}"
-    _upload(smoke_vm, binary, GUEST_BINARY, "root:wheel")
-    try:
-        run = smoke_vm.ssh(f"{GUEST_BINARY} -test.v -test.count=1 -test.run '^({'|'.join(tests)})$'", timeout=180)
-    finally:
-        smoke_vm.ssh(f"rm -f {GUEST_BINARY}")
-    print(run.stdout)
-    assert run.returncode == 0, f"the test failed on the box: rc={run.returncode}\n{run.stdout}\n{run.stderr}"
-    for test in tests:
-        assert f"--- PASS: {test}" in run.stdout, f"{test} did not run:\n{run.stdout}"
+    goarch = _goarch(smoke_vm, "pfSense")
+    for package, tests in suites:
+        binary = tmp_path / f"{Path(package).name}.test"
+        built = subprocess.run(
+            [str(go_toolchain.go), "test", "-c", "-o", str(binary), package],
+            cwd=GO_DIR,
+            env={**go_toolchain.env, "GOOS": "freebsd", "GOARCH": goarch},
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
+        )
+        print(built.stdout)
+        print(built.stderr)
+        assert built.returncode == 0, f"go test -c {package} for FreeBSD failed:\n{built.stdout}\n{built.stderr}"
+        guest_binary = f"/root/pfb_smoke_{Path(package).name}_{uuid4().hex}.test"
+        try:
+            _upload(smoke_vm, binary, guest_binary, "root:wheel")
+            run = smoke_vm.ssh(
+                f"{guest_binary} -test.v -test.count=1 -test.timeout=150s -test.run '^({'|'.join(tests)})$'",
+                timeout=180,
+            )
+            print(run.stdout)
+            print(run.stderr)
+            assert run.returncode == 0, f"{package} failed on the box: rc={run.returncode}\n{run.stdout}\n{run.stderr}"
+            for test in tests:
+                assert re.search(rf"^--- PASS: {re.escape(test)} \(", run.stdout, re.MULTILINE), (
+                    f"{package}: {test} did not pass:\n{run.stdout}"
+                )
+            assert run.stdout.rstrip().splitlines()[-1:] == ["PASS"], f"{package} lacks final PASS:\n{run.stdout}"
+        finally:
+            smoke_vm.ssh(f"rm -f {guest_binary} {guest_binary}.new", timeout=30)

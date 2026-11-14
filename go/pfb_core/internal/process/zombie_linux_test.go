@@ -1,4 +1,4 @@
-package update
+package process_test
 
 import (
 	"syscall"

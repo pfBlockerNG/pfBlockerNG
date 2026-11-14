@@ -11,8 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/process"
 )
 
 const (
@@ -25,12 +26,6 @@ const (
 // killGrace is how long the program's whole group has to end on TERM, and again after KILL, before Run goes on. It ends a second
 // (the rc script's poll) before the rc script KILLs Core 5 s after its TERM, so Core's KILL reaches the group first (issue #4003).
 var killGrace = 3 * time.Second
-
-// leaderExited reports whether the program has exited, when the context ends; replaced only by tests.
-var leaderExited = exitedUnreaped
-
-// reap waits for the program and reaps it; replaced only by tests, to hold the window between its exit and its reap open.
-var reap = (*exec.Cmd).Wait
 
 // Command runs the update program at Path once per Update: stdin is {"version":1,<Request>}, stdout and stderr are the log, and
 // fd 3 is the result, lines of {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool};
@@ -80,55 +75,22 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	limit := c.limit()
 	ctx, cancel := context.WithTimeoutCause(ctx, limit, fmt.Errorf("it ran past its %s cap", limit))
 	defer cancel()
-	watcher, err := startWatchdog(ctx)
-	if err != nil {
-		return Result{}, err
-	}
 	cmd := exec.Command(c.Path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
 	cmd.ExtraFiles = []*os.File{fd3}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: watcher.cmd.Process.Pid}
-	select {
-	case <-watcher.exited:
-		_ = watcher.retire(false)
-		return Result{}, errors.New("the update watchdog exited before the program started")
-	default:
+	outcome := process.Run(ctx, cmd, process.Policy{Grace: killGrace})
+	watchErr := outcome.WatchdogErr
+	if watchErr != nil {
+		watchErr = fmt.Errorf("the update %w", watchErr)
 	}
-	if err := ctx.Err(); err != nil {
-		return Result{}, errors.Join(context.Cause(ctx), watcher.retire(false))
+	if cmd.Process == nil {
+		return Result{}, errors.Join(outcome.CommandErr, watchErr)
 	}
-	if err := cmd.Start(); err != nil {
-		return Result{}, errors.Join(err, watcher.retire(false))
+	err = outcome.CommandErr
+	var killed error
+	if outcome.Interrupted != nil {
+		killed = fmt.Errorf("the update %w", outcome.Interrupted)
 	}
-	exited, decision := make(chan struct{}), make(chan error, 1)
-	go func() {
-		var cause error
-		select {
-		case <-exited:
-			decision <- nil
-			return
-		case <-ctx.Done():
-			cause = fmt.Errorf("the update program was killed: %w", context.Cause(ctx))
-		case <-watcher.exited:
-			cause = errors.New("the update watchdog exited while the program was running")
-		}
-		if leaderExited(cmd.Process.Pid) || exitedUnreaped(cmd.Process.Pid) {
-			decision <- nil // an exited program's descendants are no longer cancellation's to kill
-			return
-		}
-		group := -watcher.cmd.Process.Pid
-		_ = syscall.Kill(group, syscall.SIGTERM)
-		if !groupGone(group, killGrace) {
-			_ = syscall.Kill(group, syscall.SIGKILL)
-			_ = watcher.reap()
-			groupGone(group, killGrace)
-		}
-		decision <- cause
-	}()
-	err = reap(cmd)
-	close(exited)
-	killed := <-decision
-	watchErr := watcher.retire(killed != nil)
 	switch {
 	case killed != nil:
 		err = killed
@@ -158,18 +120,6 @@ func scratch(dir, pattern string) (*os.File, func(), error) {
 		return nil, nil, err
 	}
 	return f, func() { _ = f.Close(); _ = os.Remove(f.Name()) }, nil
-}
-
-// groupGone reports whether the process group has no member within grace, polling every 10 ms (docs/misc/external-process-waits.md).
-func groupGone(group int, grace time.Duration) bool {
-	for deadline := time.Now().Add(grace); ; time.Sleep(10 * time.Millisecond) {
-		if errors.Is(syscall.Kill(group, 0), syscall.ESRCH) {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-	}
 }
 
 // readResult is what the program wrote to f: nothing, or result lines, each exactly one JSON object of protocol version 1. The

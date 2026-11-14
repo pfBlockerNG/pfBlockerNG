@@ -14,20 +14,6 @@ import (
 	"time"
 )
 
-func TestADeadWatchdogKeepsItsGroupIdentityUntilCleanupCanNoLongerSignalIt(t *testing.T) {
-	w, err := startWatchdog(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = w.retire(false) })
-	if err := w.cmd.Process.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	recv(t, w.exited, "the watchdog's death was never observed")
-	// An unreaped group-leader pid cannot be reused for an unrelated process group.
-	awaitZombie(t, w.cmd.Process.Pid)
-}
-
 func TestUnexpectedWatchdogDeathIsTheCauseOfPromptGroupCleanup(t *testing.T) {
 	c, dir := program(t, `sleep 60 >/dev/null 2>&1 </dev/null &
 echo $! > "$D/child"

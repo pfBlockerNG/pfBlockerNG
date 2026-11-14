@@ -1,6 +1,6 @@
 //go:build linux || freebsd
 
-package update
+package process_test
 
 import (
 	"context"
@@ -13,11 +13,13 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/process"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
 // A stopped watcher cannot publish an exit notification: cancellation must inspect the program itself.
 func TestAContextEndingWithTheWatcherStoppedAfterTheProgramExitedPreservesItsDaemon(t *testing.T) {
-	setKillGrace(t, 100*time.Millisecond)
 	c, dir := program(t, `printf '{"version":1,"attempted":["ipv4:a_v4"]}\n' >&3
 sleep 60 >/dev/null 2>&1 </dev/null &
 echo $! > "$D/child"
@@ -27,17 +29,17 @@ exit 0`)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	actualChecked := make(chan struct{})
-	oldExited, oldReap := leaderExited, reap
-	t.Cleanup(func() { leaderExited, reap = oldExited, oldReap })
+	oldExited, oldReap := *process.LeaderExited, *process.Reap
+	t.Cleanup(func() { *process.LeaderExited, *process.Reap = oldExited, oldReap })
 	var leader int
-	leaderExited = func(pid int) bool {
+	*process.LeaderExited = func(pid int) bool {
 		ended := oldExited(pid)
 		if pid == leader && ended {
 			close(actualChecked)
 		}
 		return ended
 	}
-	reap = func(cmd *exec.Cmd) error {
+	*process.Reap = func(cmd *exec.Cmd) error {
 		awaitFile(t, filepath.Join(dir, "leader"))
 		raw, err := os.ReadFile(filepath.Join(dir, "leader"))
 		if err != nil {
@@ -84,8 +86,8 @@ exit 0`)
 		_ = syscall.Kill(group, syscall.SIGCONT)
 		return cmd.Wait()
 	}
-	res, err := c.Run(ctx, Request{}, newLog(t))
-	if err != nil || !reflect.DeepEqual(res, Result{Attempted: []string{"ipv4:a_v4"}}) {
+	res, err := c.Run(ctx, update.Request{}, newLog(t))
+	if err != nil || !reflect.DeepEqual(res, update.Result{Attempted: []string{"ipv4:a_v4"}}) {
 		t.Errorf("Run() = %+v, %v; want the successful result after the program exited with its watcher stopped", res, err)
 	}
 	if child := recordedPid(t, dir); exited(child) {
