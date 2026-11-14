@@ -60,6 +60,7 @@ TESTS = (
     "TestADeadWatchdogKeepsItsGroupIdentityUntilCleanupCanNoLongerSignalIt",
     "TestUnexpectedWatchdogDeathIsTheCauseOfPromptGroupCleanup",
     "TestAStartFailureLeavesNoUnwaitedOwnedChildAndProcessInspectionMustWork",
+    "TestWatchdogDeathCleanupFinishesBeforeTheIndependentSalvageContextFires",
 )
 
 
