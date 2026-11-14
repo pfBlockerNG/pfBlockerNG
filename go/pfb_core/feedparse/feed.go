@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 )
@@ -54,9 +55,9 @@ type IPFeed struct {
 }
 
 // ParseIPFeed is pfb_ip_parse_feed() and the empty-feed block after it, over the whole feed r: every entry goes to out, one
-// per line, and so does the placeholder when there is no entry (ph is the Placeholder IP Address setting). Lines are read as
-// fgets() reads them; the parser's notices and the parse-error records go to sink as they come. A feed that cannot be read to
-// its end or written whole is an error and no placeholder: the caller keeps its last known-good list, and what out received
+// per line, and so does the placeholder when there is no entry (ph is the Placeholder IP Address setting). Lines up to 1 MiB follow
+// fgets(); a longer one is skipped to its newline and recorded as a parse failure. Notices and parse-error records go to the sink as read.
+// A feed that cannot be read to its end or written whole is an error and no placeholder: the caller keeps its last known-good list, and what out received
 // until then is partial, so the caller writes to a temporary file and renames it once there is no error.
 //
 // content is the empty-feed probe, the caller's: CountContent of the file the old path probes, the raw .orig, or the staged
@@ -67,8 +68,13 @@ func ParseIPFeed(r io.Reader, cfg IPConfig, ph string, content int, out io.Write
 	var feed IPFeed
 	lineNo := 0
 	w := bufio.NewWriter(out)
-	err := eachLine(r, func(line string) error {
+	err := eachLine(r, func(line string, overlong, _ bool) error {
 		lineNo++
+		if overlong {
+			feed.ParseFail++
+			sink.fail(FailRecord{LineNo: lineNo, Line: "line over 1 MiB", Raw: "line over 1 MiB"})
+			return nil
+		}
 		l := ParseIPLine(line, cfg)
 		for _, entry := range l.Entries {
 			w.WriteString(entry)
@@ -116,15 +122,22 @@ func CountContent(path string) int {
 		return NoProbe
 	}
 	defer f.Close()
-	n, size := 0, 0
-	err = eachLine(f, func(line string) error {
-		size += len(line)
+	n, hasBytes := 0, false
+	err = eachLine(f, func(line string, overlong, content bool) error {
+		if overlong {
+			hasBytes = true
+			if content {
+				n++
+			}
+			return nil
+		}
+		hasBytes = hasBytes || len(line) > 0
 		if isContentLine(line) {
 			n++
 		}
 		return nil
 	})
-	if err != nil || size == 0 {
+	if err != nil || !hasBytes {
 		return NoProbe
 	}
 	return n
@@ -149,10 +162,45 @@ type DNSBLFeed struct {
 
 var errFeedEnd = errors.New("end of feed")
 
+func canonicalDNSBLPrefix(ip string) (netip.Prefix, bool) {
+	if strings.IndexByte(ip, '/') >= 0 {
+		prefix, err := netip.ParsePrefix(ip)
+		if err != nil || prefix.Addr().Zone() != "" {
+			return netip.Prefix{}, false
+		}
+		var buf [64]byte
+		if !sameBytesString(prefix.AppendTo(buf[:0]), ip) {
+			return netip.Prefix{}, false
+		}
+		return prefix, true
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Zone() != "" {
+		return netip.Prefix{}, false
+	}
+	var buf [64]byte
+	if !sameBytesString(addr.AppendTo(buf[:0]), ip) {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(addr, addr.BitLen()), true
+}
+
+func sameBytesString(b []byte, s string) bool {
+	if len(b) != len(s) {
+		return false
+	}
+	for i := range b {
+		if s[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // ParseDNSBLFeed is pfb_dnsbl_parse_feed() and the IP de-duplication after it, over the whole feed r: every row goes to out as
 // an NDJSON line (pfb_dnsbl_ndjson_emit_row()), the hpHosts end marker ends the feed, and the parser's notices and the
-// parse-error records go to sink as they come. A feed that cannot be read to its end or written whole is an error, and what out
-// received until then is partial.
+// parse-error records go to the sink as they come. A line over 1 MiB is skipped and recorded as a parse failure. A feed that cannot
+// be read to its end or written whole is an error, and what out received until then is partial.
 //
 // The notices are those the old path logs from its line parser: an IP literal decoded, an IDN converted and a /0 CIDR clamped to
 // its single host. Its ABP IPv4 regex expansion has a fourth, for a thrown Throwable that only its test seam can raise; Core's
@@ -160,21 +208,50 @@ var errFeedEnd = errors.New("end of feed")
 func ParseDNSBLFeed(r io.Reader, cfg DNSBLConfig, out io.Writer, sink Sink) (DNSBLFeed, error) {
 	var feed DNSBLFeed
 	p := NewDNSBLParser(cfg)
-	seen := map[string]bool{}
+	seen4 := make(map[[5]byte]struct{})
+	seen6 := make(map[[17]byte]struct{})
+	seenStr := make(map[string]struct{})
 	w := bufio.NewWriter(out)
 	emit := newRowEncoder(w)
 	lineNo := 0
-	// array_unique(): the first of equal strings stays, in order; the two families cannot share a string.
+	// Compact keys keep canonical addresses small; non-canonical forms retain PHP's exact-string identity.
 	collect := func(dst *[]string, ips []string) {
 		for _, ip := range ips {
-			if !seen[ip] {
-				seen[ip] = true
+			prefix, canonical := canonicalDNSBLPrefix(ip)
+			if !canonical {
+				if _, exists := seenStr[ip]; exists {
+					continue
+				}
+				seenStr[ip] = struct{}{}
 				*dst = append(*dst, ip)
+				continue
 			}
+			addr := prefix.Addr()
+			if addr.Is4() {
+				bytes := addr.As4()
+				key := [5]byte{byte(prefix.Bits()), bytes[0], bytes[1], bytes[2], bytes[3]}
+				if _, exists := seen4[key]; exists {
+					continue
+				}
+				seen4[key] = struct{}{}
+			} else {
+				bytes := addr.As16()
+				key := [17]byte{byte(prefix.Bits())}
+				copy(key[1:], bytes[:])
+				if _, exists := seen6[key]; exists {
+					continue
+				}
+				seen6[key] = struct{}{}
+			}
+			*dst = append(*dst, ip)
 		}
 	}
-	err := eachLine(r, func(line string) error {
+	err := eachLine(r, func(line string, overlong, _ bool) error {
 		lineNo++
+		if overlong {
+			sink.fail(FailRecord{LineNo: lineNo, Line: "line over 1 MiB", Raw: "line over 1 MiB"})
+			return nil
+		}
 		l := p.Line(line)
 		for _, msg := range l.Messages {
 			sink.message(msg)
@@ -219,23 +296,59 @@ func newRowEncoder(w io.Writer) func(DNSBLRow) error {
 	}
 }
 
-// eachLine calls f with every line of r as fgets() reads it: split at LF only (a lone CR is no line end), the LF kept, a last
-// line without one kept, whatever the length. A read error ends the read before the unfinished line is used.
-func eachLine(r io.Reader, f func(line string) error) error {
+const maxFeedLineBytes = 1 << 20
+
+// eachLine bounds stored lines at 1 MiB including LF, drains longer lines, and calls f once per line. A read error discards the
+// unfinished line, as fgets()'s caller does.
+func eachLine(r io.Reader, f func(line string, overlong, content bool) error) error {
 	br := bufio.NewReaderSize(r, 64<<10)
+	line := make([]byte, 0, 64<<10)
+	var first, second byte
+	haveFirst, haveSecond, overlong := false, false, false
 	for {
-		line, err := br.ReadString('\n')
-		if err != nil && err != io.EOF {
+		part, err := br.ReadSlice('\n')
+		if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
 			return err
 		}
-		if line != "" {
-			if ferr := f(line); ferr != nil {
+		for _, c := range part {
+			if c == '\n' {
+				break
+			}
+			if !haveFirst {
+				if c == ' ' || c == '\t' || c == '\v' || c == '\f' || c == '\r' {
+					continue
+				}
+				first, haveFirst = c, true
+				if c != '/' {
+					break
+				}
+			} else if first == '/' && !haveSecond {
+				second, haveSecond = c, true
+				break
+			}
+		}
+		if !overlong {
+			if len(part) > maxFeedLineBytes-len(line) {
+				overlong, line = true, nil
+			} else {
+				line = append(line, part...)
+			}
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if len(line) > 0 || overlong {
+			content := haveFirst && first != '#' && first != ';' && first != '!' && !(first == '/' && haveSecond && second == '/')
+			if ferr := f(string(line), overlong, content); ferr != nil {
 				return ferr
 			}
 		}
 		if err == io.EOF {
 			return nil
 		}
+		line = line[:0]
+		first, second = 0, 0
+		haveFirst, haveSecond, overlong = false, false, false
 	}
 }
 

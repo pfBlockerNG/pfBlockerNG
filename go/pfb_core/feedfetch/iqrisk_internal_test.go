@@ -5,8 +5,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -163,5 +168,52 @@ func TestXLSXSharedStringsPastTheCeilingAreRefused(t *testing.T) {
 	want := "xlsx extraction failed (script exit 153) -- output exceeded the extraction size ceiling"
 	if res.OK || res.Reason != want || string(published) != "old\n" {
 		t.Fatalf("shared strings past the ceiling must be refused (want %q), keeping last-known-good: %+v, published %q", want, res, published)
+	}
+}
+
+func TestXLSXDistinctAddressHeapAndOutput(t *testing.T) {
+	const (
+		addresses     = 500_000
+		maxHeapGrowth = 16 << 20
+	)
+	var shared strings.Builder
+	shared.Grow(addresses * 14)
+	expected := make([]string, addresses+1)
+	for i := range addresses {
+		ip := fmt.Sprintf("10.%d.%d.%d", (i>>16)&255, (i>>8)&255, i&255)
+		expected[i] = ip
+		shared.WriteString(ip)
+		shared.WriteByte(' ')
+	}
+	expected[addresses] = "010.0.0.1"
+	shared.WriteString("010.0.0.1 ")
+	sort.Strings(expected)
+	f, feed, req := xlsxIngest(t, xlsxWithSharedStrings(t, shared.String()))
+	raw := strings.TrimPrefix(req.URL, "file://")
+
+	runtime.GC()
+	oldGC := debug.SetGCPercent(-1)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	staged, runErr := f.xlsx(context.Background(), feed, raw)
+	runtime.ReadMemStats(&after)
+	debug.SetGCPercent(oldGC)
+	runtime.GC()
+	growth := after.HeapAlloc - before.HeapAlloc
+	t.Logf("HeapAlloc growth: %d bytes", growth)
+	if runErr != nil {
+		t.Fatalf("xlsx: %v", runErr)
+	}
+	if growth > maxHeapGrowth {
+		t.Errorf("heap grew by %d bytes for %d distinct addresses, want at most %d", growth, addresses, maxHeapGrowth)
+	}
+
+	got, err := os.ReadFile(staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte(strings.Join(expected, "\n") + "\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("xlsx output differs from LC_ALL=C lexical sort: got %d bytes, want %d", len(got), len(want))
 	}
 }
