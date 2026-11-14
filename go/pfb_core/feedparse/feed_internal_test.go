@@ -3,6 +3,10 @@ package feedparse
 import (
 	"bytes"
 	"encoding/hex"
+	"io"
+	"runtime"
+	"runtime/debug"
+	"strings"
 	"testing"
 )
 
@@ -53,4 +57,109 @@ func TestAppendRowMatchesJSONEncode(t *testing.T) {
 			}
 		}
 	}
+}
+
+type repeatedByteReader struct {
+	value     byte
+	remaining  int64
+}
+
+func (r *repeatedByteReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if int64(n) > r.remaining {
+		n = int(r.remaining)
+	}
+	for i := range p[:n] {
+		p[i] = r.value
+	}
+	r.remaining -= int64(n)
+	return n, nil
+}
+
+func heapGrowth(t *testing.T, run func()) uint64 {
+	t.Helper()
+	runtime.GC()
+	old := debug.SetGCPercent(-1)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	run()
+	runtime.ReadMemStats(&after)
+	debug.SetGCPercent(old)
+	runtime.GC()
+	return after.HeapAlloc - before.HeapAlloc
+}
+
+func TestFeedLineCeilingSkipsAndBoundsLargeLines(t *testing.T) {
+	const (
+		largeLineBytes = 256 << 20
+		maxHeapGrowth  = 8 << 20
+	)
+	t.Run("IP", func(t *testing.T) {
+		in := io.MultiReader(
+			strings.NewReader("1.2.3.4\n"),
+			&repeatedByteReader{value: 'x', remaining: largeLineBytes},
+			strings.NewReader("\n5.6.7.8\n"),
+		)
+		var out bytes.Buffer
+		var fails []FailRecord
+		var got IPFeed
+		var err error
+		growth := heapGrowth(t, func() {
+			got, err = ParseIPFeed(in, IPConfig{VType: "_v4", PFType: "auto", FloorV4: "Disabled", FloorV6: "Disabled"}, "127.1.7.7", NoProbe, &out, Sink{
+				Fail: func(rec FailRecord) { fails = append(fails, rec) },
+			})
+		})
+		t.Logf("HeapAlloc growth: %d bytes", growth)
+		if err != nil {
+			t.Fatalf("ParseIPFeed failed the feed: %v", err)
+		}
+		if got.Entries != 2 || got.ParseFail != 1 {
+			t.Errorf("IP result = %+v, want two entries and one oversized-line parse failure", got)
+		}
+		if want := "1.2.3.4\n5.6.7.8\n"; out.String() != want {
+			t.Errorf("IP output = %q, want both surrounding lines %q", out.String(), want)
+		}
+		if len(fails) != 1 || fails[0] != (FailRecord{LineNo: 2, Line: "line over 1 MiB", Raw: "line over 1 MiB"}) {
+			t.Errorf("IP failures = %+v, want one bounded oversized-line record", fails)
+		}
+		if growth > maxHeapGrowth {
+			t.Errorf("heap grew by %d bytes for one 256 MiB line, want at most %d", growth, maxHeapGrowth)
+		}
+	})
+	t.Run("DNSBL", func(t *testing.T) {
+		in := io.MultiReader(
+			strings.NewReader("||before.example.com^\n||"),
+			&repeatedByteReader{value: 'x', remaining: largeLineBytes},
+			strings.NewReader("^\n||after.example.com^\n"),
+		)
+		var out bytes.Buffer
+		var fails []FailRecord
+		var got DNSBLFeed
+		var err error
+		growth := heapGrowth(t, func() {
+			got, err = ParseDNSBLFeed(in, DNSBLConfig{Lenient: true}, &out, Sink{
+				Fail: func(rec FailRecord) { fails = append(fails, rec) },
+			})
+		})
+		t.Logf("HeapAlloc growth: %d bytes", growth)
+		if err != nil {
+			t.Fatalf("ParseDNSBLFeed failed the feed: %v", err)
+		}
+		if got.Rows != 2 {
+			t.Errorf("DNSBL rows = %d, want the two lines surrounding the oversized one", got.Rows)
+		}
+		want := []byte("[\"a\",\"||before.example.com^\"]\n[\"a\",\"||after.example.com^\"]\n")
+		if !bytes.Equal(out.Bytes(), want) {
+			t.Errorf("DNSBL output = %d bytes, want only the two surrounding rows (%d bytes)", out.Len(), len(want))
+		}
+		if len(fails) != 1 || fails[0] != (FailRecord{LineNo: 2, Line: "line over 1 MiB", Raw: "line over 1 MiB"}) {
+			t.Errorf("DNSBL failures = %+v, want one bounded oversized-line record", fails)
+		}
+		if growth > maxHeapGrowth {
+			t.Errorf("heap grew by %d bytes for one 256 MiB line, want at most %d", growth, maxHeapGrowth)
+		}
+	})
 }
