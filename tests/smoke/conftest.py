@@ -314,6 +314,58 @@ class SmokeVM:
                 check=False,
             )
 
+    @contextlib.contextmanager
+    def scheduled_feedphase(self) -> Iterator[None]:
+        """Owner-authorized exception for the isolated, disposable scheduled acceptance leg."""
+        if os.environ.get("SMOKE_SCHEDULED_EXCEPTION") != "allow":
+            raise RuntimeError("scheduled feedphase requires SMOKE_SCHEDULED_EXCEPTION=allow")
+        if not self.vm_pid or not self.log_path:
+            raise RuntimeError("scheduled feedphase requires a disposable VM identity")
+
+        def cron_running() -> bool:
+            status = self.ssh("service cron onestatus")
+            output = status.stdout.strip()
+            if not status.stderr.strip():
+                if status.returncode == 0 and re.fullmatch(r"cron is running as pid [1-9][0-9]*\.", output):
+                    return True
+                if status.returncode == 1 and output == "cron is not running.":
+                    return False
+            raise RuntimeError(f"cron status preflight failed: {status}")
+
+        originally_running = cron_running()
+        if originally_running:
+            stopped = self.ssh("service cron onestop")
+            if stopped.returncode != 0:
+                raise RuntimeError(f"cron stop failed: {stopped}")
+            if cron_running():
+                raise RuntimeError("cron is still running after onestop")
+        print(f"scheduled_feedphase: cron verified stopped; originally_running={originally_running}", flush=True)
+        try:
+            # The ordinary SSH guard stays active; only this fixed internal command is admitted.
+            command = "/bin/rm -f /var/db/pfblockerng/.pfb_cron_disable"
+            with timed(_ssh_timing_label((command,)), min_seconds=step_min_seconds()):
+                removed = subprocess.run(
+                    self.ssh_argv(command), capture_output=True, text=True, timeout=60.0, check=False
+                )
+            if removed.returncode != 0:
+                raise RuntimeError(f"scheduled sentinel removal failed: {removed}")
+            yield
+        finally:
+            restored = self.ssh("/usr/bin/touch /var/db/pfblockerng/.pfb_cron_disable")
+            if restored.returncode != 0:
+                raise RuntimeError(f"scheduled sentinel restoration failed; cron remains stopped: {restored}")
+            exists = self.ssh("test -f /var/db/pfblockerng/.pfb_cron_disable")
+            if exists.returncode != 0:
+                raise RuntimeError(f"scheduled sentinel restoration not verified; cron remains stopped: {exists}")
+            print("scheduled_feedphase: sentinel restored and verified before cron restoration", flush=True)
+            if originally_running:
+                started = self.ssh("service cron onestart")
+                if started.returncode != 0:
+                    raise RuntimeError(f"cron restoration failed: {started}")
+            if cron_running() != originally_running:
+                raise RuntimeError(f"cron restoration state differs from originally_running={originally_running}")
+            print(f"scheduled_feedphase: cron restored; running={originally_running}", flush=True)
+
 
 # --------------------------------------------------------------------------- #
 # Image pull (oras) — ref is a PARAMETER (env), never hardcoded
@@ -1132,6 +1184,8 @@ class _MockFeedServer:
     def __init__(self, root: Path) -> None:
         self._root = root
         self._registered: dict[str, bytes] = {}
+        self._status: dict[str, int] = {}
+        self._responses: dict[str, list[int]] = {}
         # ADR-42 Phase 3: per-name ETag map (opaque string). A name with no entry
         # in this map serves no ETag (simulates a server that does not support
         # conditional requests).
@@ -1148,6 +1202,8 @@ class _MockFeedServer:
         self._content_encoding_gzip: set[str] = set()
         self._lock = threading.Lock()
         registered = self._registered
+        status_map = self._status
+        responses = self._responses
         etag_map = self._etag_map
         no_lastmod = self._no_lastmod
         ims_304 = self._ims_304
@@ -1161,9 +1217,17 @@ class _MockFeedServer:
                 with lock:
                     body = registered.get(name)
                     etag = etag_map.get(name)
+                    status = status_map.get(name)
                     emit_lastmod = name not in no_lastmod
                     honour_ims = name in ims_304
                     label_gzip_encoded = name in content_encoding_gzip
+                if status is not None:
+                    with lock:
+                        responses.setdefault(name, []).append(status)
+                    self.send_response(status)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if body is None:
                     super().do_GET()
                     return
@@ -1174,6 +1238,8 @@ class _MockFeedServer:
                 if etag is not None:
                     client_etag = self.headers.get("If-None-Match", "")
                     if client_etag.strip() == etag:
+                        with lock:
+                            responses.setdefault(name, []).append(304)
                         self.send_response(304)
                         self.send_header("ETag", etag)
                         self.end_headers()
@@ -1187,10 +1253,14 @@ class _MockFeedServer:
                     if ims_dt is not None:
                         resource_dt = datetime.fromtimestamp(_MOCK_LAST_MODIFIED_EPOCH, tz=timezone.utc)
                         if resource_dt <= ims_dt:
+                            with lock:
+                                responses.setdefault(name, []).append(304)
                             self.send_response(304)
                             self.send_header("Last-Modified", _MOCK_LAST_MODIFIED_HTTPDATE)
                             self.end_headers()
                             return
+                with lock:
+                    responses.setdefault(name, []).append(200)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(body)))
@@ -1218,6 +1288,17 @@ class _MockFeedServer:
     @property
     def port(self) -> int:
         return self._httpd.server_address[1]
+
+    def statuses(self, name: str) -> list[int]:
+        with self._lock:
+            return list(self._responses.get(name, ()))
+
+    def set_status(self, name: str, status: int | None) -> None:
+        with self._lock:
+            if status is None:
+                self._status.pop(name, None)
+            else:
+                self._status[name] = status
 
     def start(self) -> None:
         self._thread.start()
