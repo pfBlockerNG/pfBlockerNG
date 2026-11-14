@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "FTP probes use matching MDTM and SIZE to avoid RETR; the PHP path still fails the probe.",
+ "description": "Matching MDTM and SIZE sidecars decide FTP Unchanged without RETR; PHP still fails at the MDTM response.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",

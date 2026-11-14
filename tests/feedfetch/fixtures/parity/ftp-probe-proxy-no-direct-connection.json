@@ -1,0 +1,44 @@
+{
+ "schema": 1,
+ "description": "A proxied FTP probe is an HTTP request to the proxy and must not open a direct FTP connection.",
+ "hosts": {
+  "feed.example": ["127.0.0.1", "203.0.113.5"],
+  "rdr.example": ["127.0.0.1", "203.0.113.6"]
+ },
+ "servers": [{"name": "ftp", "kind": "ftp"}],
+ "proxy": {"server": "proxy"},
+ "seed": {
+  "published": "feed one\n",
+  "lastmod": 1760000000,
+  "size": 9,
+  "digest": "880b4f7332ef14083066ffeee3a25dca"
+ },
+ "files": {"ftp": {"/list.txt": {"body": "feed two\n", "mdtm": 1760000001}}},
+ "steps": [{
+  "op": "probe",
+  "url": "ftp://feed.example:{port:ftp}/list.txt",
+  "expect": {
+   "ok": false,
+   "decision": "failed",
+   "published": "feed one\n",
+   "digest": "880b4f7332ef14083066ffeee3a25dca",
+   "lastmod": 1760000000,
+   "size": 9,
+   "reason": "400 Bad Request",
+   "requests": [
+    {"server": "proxy", "method": "GET", "target": "ftp://feed.example:{port:ftp}/list.txt"}
+   ]
+  },
+  "old_expect": {
+   "ok": false,
+   "decision": "failed",
+   "published": "feed one\n",
+   "digest": "880b4f7332ef14083066ffeee3a25dca",
+   "lastmod": 1760000000,
+   "size": 9,
+   "requests": [
+    {"server": "proxy", "method": "GET", "target": "ftp://feed.example:{port:ftp}/list.txt"}
+   ]
+  }
+ }]
+}

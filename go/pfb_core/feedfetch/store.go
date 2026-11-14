@@ -18,43 +18,58 @@ type validators struct {
 type ftpMetadata struct {
 	lastMod time.Time
 	size    int64
-	hasTime bool
-	hasSize bool
+}
+
+func ftpMetadataFor(t transfer) ftpMetadata {
+	return ftpMetadata{lastMod: t.lastMod, size: t.size}
+}
+
+func ftpTime(unix int64) time.Time {
+	if unix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
 }
 
 func readFTPMetadata(feed Feed) ftpMetadata {
+	return readFTPMetadataAt(feed.path(".orig"))
+}
+
+func readFTPMetadataAt(base string) ftpMetadata {
 	var m ftpMetadata
-	if b, err := os.ReadFile(feed.path(".orig.lastmod")); err == nil {
-		if n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && n > 0 {
-			m.lastMod, m.hasTime = time.Unix(n, 0), true
+	if b, err := os.ReadFile(base + ".lastmod"); err == nil {
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil {
+			m.lastMod = ftpTime(n)
 		}
 	}
-	if b, err := os.ReadFile(feed.path(".orig.size")); err == nil {
-		if n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && n >= 0 {
-			m.size, m.hasSize = n, true
+	if b, err := os.ReadFile(base + ".size"); err == nil {
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && n > 0 {
+			m.size = n
 		}
 	}
 	return m
 }
 
+func writeSidecarAtomically(path, value string) {
+	tmp := path + ".part"
+	if err := os.WriteFile(tmp, []byte(value), 0o600); err != nil {
+		os.Remove(tmp)
+		return
+	}
+	if os.Rename(tmp, path) != nil {
+		os.Remove(tmp)
+	}
+}
+
 func writeFTPMetadataAt(base string, m ftpMetadata) {
 	lastMod, size := base+".lastmod", base+".size"
-	if m.hasTime && m.lastMod.Unix() > 0 {
-		os.WriteFile(lastMod, []byte(strconv.FormatInt(m.lastMod.Unix(), 10)), 0o600)
-	} else {
-		os.Remove(lastMod)
+	os.Remove(lastMod)
+	os.Remove(size)
+	if !m.lastMod.IsZero() {
+		writeSidecarAtomically(lastMod, strconv.FormatInt(m.lastMod.Unix(), 10))
 	}
-	if !m.hasSize {
-		os.Remove(size)
-		return
-	}
-	tmp := size + ".part"
-	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(m.size, 10)), 0o600); err != nil {
-		os.Remove(tmp)
-		return
-	}
-	if os.Rename(tmp, size) != nil {
-		os.Remove(tmp)
+	if m.size > 0 {
+		writeSidecarAtomically(size, strconv.FormatInt(m.size, 10))
 	}
 }
 
