@@ -445,8 +445,9 @@ A change to `go.mod` or `go.sum` needs a paired FreeBSD-ports PR that updates `G
 `files/modules.txt` of every recipe that tracks that source: nightly for `devel`, edge for its
 release line. Until both repositories agree the builder fails closed, nightly included.
 A devel PR that changes a `go/**/go.mod`, a `go.sum` or a gateway `.go` file runs
-`ports-modules-txt.yml`, which fails
-until the nightly recipe's `files/modules.txt` equals the PR's `go mod vendor` output (#4007).
+`ports-modules-txt.yml`, which fails until the nightly recipe's `files/modules.txt` equals the PR's
+`go mod vendor` output and its tuples pass the builder's tuple check against the PR's
+`go/pfb_core/go.mod` (`scripts/check_nightly_core_tuples.py`, #4007).
 `release-published.yml` bumps only `PORTVERSION` (and re-pins the edge port's own tarball in its
 `distinfo`), so a release whose
 `go.mod` differs from the edge recipe fails at build time, before anything is published.
