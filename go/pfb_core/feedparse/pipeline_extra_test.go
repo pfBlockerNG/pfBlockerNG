@@ -135,12 +135,12 @@ func TestNormalizeFileSidecarWriteFailureDoesNotServeStaleNorm(t *testing.T) {
 	}
 }
 
-func TestNormalizeFileRemovesOrphanedTemp(t *testing.T) {
+func TestNormalizeFileReusesOrphanedPerFeedTemp(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "feed.orig"), []byte("a.example.com\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	orphan := filepath.Join(dir, ".pfbnorm_interrupted")
+	orphan := filepath.Join(dir, "feed.norm.tmp")
 	if err := os.WriteFile(orphan, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestNormalizeFileRemovesOrphanedTemp(t *testing.T) {
 		t.Fatalf("NormalizeFile = %+v, want normalized feed", got)
 	}
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
-		t.Errorf("orphaned temporary stat error = %v, want it removed", err)
+		t.Errorf("per-feed temporary stat error = %v, want it renamed away", err)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 	"github.com/pfBlockerNG/xxh3"
@@ -34,13 +33,6 @@ func NormalizeFile(dir, name string) NormResult {
 	srcBase := filepath.Join(dir, name+".norm.src")
 	fallback := NormResult{Path: orig, Changed: true}
 
-	if entries, err := os.ReadDir(dir); err == nil {
-		for _, entry := range entries {
-			if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), ".pfbnorm_") {
-				_ = os.Remove(filepath.Join(dir, entry.Name()))
-			}
-		}
-	}
 
 	srcDigest, err := digest.File(orig)
 	if err != nil {
@@ -59,7 +51,8 @@ func NormalizeFile(dir, name string) NormResult {
 	if err != nil {
 		return fallback
 	}
-	tmp, err := os.CreateTemp(dir, ".pfbnorm_*") // beside the target: a rename across filesystems is not atomic
+	tmpPath := norm + ".tmp"
+	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600) // beside the target: a rename across filesystems is not atomic
 	if err != nil {
 		source.Close()
 		return fallback
