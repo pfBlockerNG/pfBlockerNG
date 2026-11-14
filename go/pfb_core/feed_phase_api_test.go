@@ -75,3 +75,30 @@ func TestFeedPhaseAcceptsCurrentApplyUpdateToken(t *testing.T) {
 	f.release()
 	c.waitFinished("apply")
 }
+
+func TestFeedPhaseAllowsParseOverrideDuringApply(t *testing.T) {
+	c, f := startUpdateCore(t)
+	t.Cleanup(f.release)
+	wantJSON(t, c.post("StartUpdate", `{"requestId":"feed-phase-apply-parse","trigger":"apply"}`), 200, `{}`)
+	var request struct {
+		Token string `json:"token"`
+	}
+	waitFor(t, func() bool {
+		if _, err := os.Stat(f.dir + "/req"); err != nil {
+			return false
+		}
+		return json.Unmarshal([]byte(f.request()), &request) == nil && len(request.Token) == 64
+	})
+
+	parse := c.post("FeedPhase", `{"requestId":"apply-parse","token":"`+request.Token+`","phase":"ip","feeds":[],"force":"parse"}`)
+	if parse.status != 200 {
+		t.Fatalf("FeedPhase parse override during apply = %d %s, want 200", parse.status, parse.body)
+	}
+	sameJSON(t, string(parse.body), `{"results":[]}`)
+	download := c.post("FeedPhase", `{"requestId":"apply-download","token":"`+request.Token+`","phase":"ip","feeds":[],"force":"download"}`)
+	if download.status != 400 {
+		t.Fatalf("FeedPhase download override during apply = %d %s, want 400", download.status, download.body)
+	}
+	f.release()
+	c.waitFinished("apply")
+}
