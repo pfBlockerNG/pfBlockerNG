@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"os"
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -164,13 +163,21 @@ func (in *normalizeInput) nextUTF16Unit() (uint16, bool, error) {
 	return in.order.Uint16(pair[:]), false, nil
 }
 
+type normalizeOutput interface {
+	io.Writer
+	Truncate(int64) error
+	Seek(int64, int) (int64, error)
+}
+
 // normalizeStream mirrors Normalize without holding either the source or result in memory.
-func normalizeStream(src io.Reader, out *os.File) error {
+func normalizeStream(src io.Reader, out normalizeOutput) error {
 	in := newNormalizeInput(src)
 	w := bufio.NewWriterSize(out, 64<<10)
 	var output [64 << 10]byte
 	outputLen := 0
 	written, tail := int64(0), int64(0)
+	var lastByte, tailStartByte byte
+	tailStartValid := false
 	flushOutput := func() error {
 		if outputLen == 0 {
 			return nil
@@ -191,6 +198,9 @@ func normalizeStream(src io.Reader, out *os.File) error {
 			}
 			n := copy(output[outputLen:], p)
 			outputLen += n
+			if n > 0 {
+				lastByte = p[n-1]
+			}
 			written += int64(n)
 			p = p[n:]
 		}
@@ -215,6 +225,10 @@ func normalizeStream(src io.Reader, out *os.File) error {
 		}
 		w.Reset(out)
 		tail = 0
+		if tailStartValid {
+			lastByte = tailStartByte
+		}
+		tailStartValid = false
 		return nil
 	}
 	for {
@@ -236,6 +250,10 @@ func normalizeStream(src io.Reader, out *os.File) error {
 		}
 		if unicode.IsSpace(r) && r != 0x85 {
 			if kept(r) {
+				if tail == 0 {
+					tailStartByte = lastByte
+					tailStartValid = written > 0
+				}
 				if err := write(raw[:size]); err != nil {
 					return err
 				}
@@ -243,7 +261,7 @@ func normalizeStream(src io.Reader, out *os.File) error {
 			}
 			continue
 		}
-		tail = 0
+		tail, tailStartValid = 0, false
 		if kept(r) {
 			if err := write(raw[:size]); err != nil {
 				return err
@@ -259,18 +277,12 @@ func normalizeStream(src io.Reader, out *os.File) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	if written > 0 {
-		var last [1]byte
-		if _, err := out.ReadAt(last[:], written-1); err != nil {
+	if written > 0 && lastByte != '\n' {
+		if err := write([]byte{'\n'}); err != nil {
 			return err
 		}
-		if last[0] != '\n' {
-			if err := write([]byte{'\n'}); err != nil {
-				return err
-			}
-			if err := flushOutput(); err != nil {
-				return err
-			}
+		if err := flushOutput(); err != nil {
+			return err
 		}
 	}
 	return w.Flush()
