@@ -148,3 +148,20 @@ func TestXLSXCopyAndScanAnswerToTheirContext(t *testing.T) {
 		})
 	}
 }
+
+// The shared strings are decompressed under the per-file ceiling too: a small workbook whose shared strings inflate
+// past it is refused with the ceiling's text, not read on.
+func TestXLSXSharedStringsPastTheCeilingAreRefused(t *testing.T) {
+	shared := bytes.Repeat([]byte("192.0.2.1 "), 8192) // 80 KiB, compresses to well under the ceiling
+	f, feed, req := xlsxIngest(t, xlsxWithSharedStrings(t, string(shared)))
+	f.extractMax = 16 << 10
+	res := f.Ingest(context.Background(), feed, req)
+	published, err := os.ReadFile(feed.path(".orig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "xlsx extraction failed (script exit 153) -- output exceeded the extraction size ceiling"
+	if res.OK || res.Reason != want || string(published) != "old\n" {
+		t.Fatalf("shared strings past the ceiling must be refused (want %q), keeping last-known-good: %+v, published %q", want, res, published)
+	}
+}
