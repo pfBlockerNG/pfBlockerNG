@@ -53,7 +53,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .render_oracle import input_errors_block, rejection_verdict
+from .render_oracle import PhpErrorLogGuard, input_errors_block, rejection_verdict
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
@@ -440,3 +440,38 @@ def test_blacklist_save_refuses_config_lock_without_changing_stored_settings(
         assert got == "EveryDay", f"a refused save must not change the stored schedule, got {got!r}"
     finally:
         _restore_scalar(vm, CFG_FREQ, original, existed)
+
+
+def test_blacklist_malformed_post_is_input_error_and_saves_nothing(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #4000: a crafted array for a single select, or a nested category list, is an input error, not a 500.
+
+    Given ut1's stored selection ``adult``, a save posting ``blacklist_enable[]`` and ``blacklist_ut1[1][]`` comes back
+    with both input errors, logs no PHP error, and leaves the stored selection unchanged.
+    """
+    vm = smoke_vm
+    cat_field = f"blacklist_{PROVIDER_XML}"
+    original = _provider_selected(vm)
+    try:
+        _direct_post(webui, _save_payload(**{f"{cat_field}[]": VALID_CATEGORY}))
+        assert _provider_selected(vm) == VALID_CATEGORY, "before-state: ut1's selection must be stored"
+        guard = PhpErrorLogGuard(vm)
+        guard.snapshot()
+        payload = _save_payload(**{f"{cat_field}[0]": VALID_CATEGORY, f"{cat_field}[1][]": "x"})
+        payload["blacklist_enable[]"] = payload.pop("blacklist_enable")
+        resp = _direct_post(webui, payload)
+        assert resp.status_code == 200, (
+            f"a crafted POST must re-render with an input error, got HTTP {resp.status_code}"
+        )
+        errors = input_errors_block(resp.text) or ""
+        for field in ("blacklist_enable", cat_field):
+            assert f"the {field} selection is invalid" in errors, (
+                f"{field} must be refused with an input error: {errors!r}"
+            )
+        guard.assert_no_growth()
+        got = _provider_selected(vm)
+        assert got == VALID_CATEGORY, f"a refused save must not change ut1's selection, got {got!r}"
+    finally:
+        _direct_post(webui, _save_payload(**({f"{cat_field}[]": original} if original else {})))

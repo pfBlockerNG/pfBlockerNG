@@ -124,4 +124,19 @@ final class AlertsSelectOptionDefaultsTest extends TestCase
 		$this->assertSame('', $result['post']['pfbblockstat']);
 		$this->assertSame('', $result['post']['pfbdnsblstat']);
 	}
+
+	/**
+	 * A crafted list nesting a list (pfbblockstat[0][]=x), after a valid entry or not, is not an option: the select falls back to its
+	 * default like any invalid entry; array_key_exists() threw a TypeError (a 500) on it (issue #4000).
+	 */
+	public function testANestedListFallsBackToTheDefault(): void
+	{
+		foreach ([[['x']], ['ipchart', ['x']]] as $value) {
+			$result = self::validateSelects(['save' => '1', 'pfbblockstat' => $value, 'pfbdnsblstat' => $value]);
+
+			$this->assertSame([], $result['diagnostics'], json_encode($value));
+			$this->assertSame('', $result['post']['pfbblockstat'], json_encode($value));
+			$this->assertSame('', $result['post']['pfbdnsblstat'], json_encode($value));
+		}
+	}
 }

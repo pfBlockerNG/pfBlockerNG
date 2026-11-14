@@ -2396,6 +2396,25 @@ def test_reports_save_with_reply_logging_off_defaults_the_omitted_reply_controls
             helpers.config_restore_state(smoke_vm, path, prior)
 
 
+@pytest.mark.ui_e2e
+def test_reports_save_with_a_nested_stat_select_entry_stores_the_default(smoke_vm: SmokeVM, webui: WebUI) -> None:
+    """issue #4000: a crafted nested entry in a stat multi-select (``pfbblockstat[1][]``) is not an option: the save
+    stores the declared empty default instead of failing the page, and logs no PHP error. Seeded non-empty first."""
+    path_cfg = f"{_AGLOBAL}/pfbblockstat"
+    prior = helpers.config_get_state(smoke_vm, path_cfg)
+    try:
+        _set_scalar_or_absent(smoke_vm, path_cfg, "ipchart")
+        assert helpers.config_get_state(smoke_vm, path_cfg) == (True, "ipchart"), "before state: ipchart not stored"
+        guard = PhpErrorLogGuard(smoke_vm)
+        guard.snapshot()
+        response = webui.post("/pfblockerng/pfblockerng_alerts.php", {"pfbblockstat[1][]": "x"})
+        assert response.status_code == 200, f"a crafted POST must not fail the page, got HTTP {response.status_code}"
+        guard.assert_no_growth()
+        assert helpers.config_get_state(smoke_vm, path_cfg) == (True, ""), "a nested entry must store the default"
+    finally:
+        helpers.config_restore_state(smoke_vm, path_cfg, prior)
+
+
 _DNS_LISTENER_FIELDS = (
     "pfb_dns_interface",
     "pfb_dns_dot",
