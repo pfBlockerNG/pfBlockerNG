@@ -162,7 +162,8 @@ func (g *Gate) boundLog(ctx context.Context, log *os.File, done chan<- struct{})
 }
 
 // trimLog keeps the newest whole lines of the first size bytes of log, at most maxLog/2 of them.
-// shortcut: what the program appends between the read and the truncation is lost; fine for a log already past maxLog.
+// shortcut: what the program appends between the read and the truncation is lost, and what it appends between the truncation
+// and the write lands before the kept lines (pfb_log_mgmt()'s trim has the same window); fine for a log already past maxLog.
 func (g *Gate) trimLog(log *os.File, size int64) {
 	r, err := os.Open(g.logPath)
 	if err != nil {
