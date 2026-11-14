@@ -46,3 +46,41 @@ func TestFlexDowngradesOnlyAfterAFirstVerifiedAttemptFails(t *testing.T) {
 			res, conns.Load(), served.Load())
 	}
 }
+
+// Flex reacts only to a certificate failure of the FIRST attempt ($retries == 1 in PHP). A first attempt that fails
+// another way (the connection is dropped before the handshake) leaves every later attempt verified, so an untrusted
+// certificate on attempts two and three fails the feed instead of being accepted unverified.
+func TestFlexDoesNotDowngradeAfterAFirstAttemptThatFailedForAnotherReason(t *testing.T) {
+	var conns, served atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served.Add(1)
+		io.WriteString(w, "tls\n")
+	}))
+	srv.Listener = dropFirst{Listener: srv.Listener, conns: &conns}
+	srv.StartTLS()
+	defer srv.Close()
+
+	f, feed := fetcherFor(t)
+	res := f.Ingest(context.Background(), feed, feedfetch.Request{
+		URL: "https://feed.example:" + port(t, srv.URL) + "/list", Timeout: 10 * time.Second, Flex: true})
+	if res.OK || res.Reason != "curl_incomplete" || conns.Load() != 3 || served.Load() != 0 {
+		t.Fatalf("a dropped first attempt must not enable flex: want a refusal after 3 connections and none served, "+
+			"got %+v, connections %d, served %d", res, conns.Load(), served.Load())
+	}
+}
+
+// dropFirst closes the first connection it accepts before any TLS byte is exchanged, and counts every connection.
+type dropFirst struct {
+	net.Listener
+	conns *atomic.Int32
+}
+
+func (l dropFirst) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil || l.conns.Add(1) > 1 {
+			return c, err
+		}
+		c.Close()
+	}
+}
