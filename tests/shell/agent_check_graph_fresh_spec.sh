@@ -30,6 +30,9 @@ Describe 'check-graph-fresh.sh'
 #!/bin/sh
 printf 'update:%s:hashseed=%s\n' "${2:-}" "${PYTHONHASHSEED:-unset}" >> "$GRAPHIFY_LOG"
 [ "${1:-}" = update ] || exit 9
+if [ "${GRAPHIFY_STUB_REQUIRE_FULL:-0}" = 1 ] && [ "${3:-}" != --force ]; then
+  GRAPHIFY_STUB_GRAPH='incremental phantom nodes'
+fi
 [ -z "${GRAPHIFY_STUB_GRAPH:-}" ] || printf '%s\n' "$GRAPHIFY_STUB_GRAPH" > "$2/graphify-out/graph.json"
 [ -z "${GRAPHIFY_STUB_SIGNAL:-}" ] || kill -s "$GRAPHIFY_STUB_SIGNAL" "$PPID"
 exit "${GRAPHIFY_RC:-0}"
@@ -51,7 +54,7 @@ GRAPHIFY
   }
   cleanup() {
     rm -rf "$fixture"
-    unset GRAPHIFY_LOG GRAPHIFY_STUB_GRAPH GRAPHIFY_STUB_SIGNAL GRAPHIFY_RC TMPDIR
+    unset GRAPHIFY_LOG GRAPHIFY_STUB_GRAPH GRAPHIFY_STUB_SIGNAL GRAPHIFY_RC GRAPHIFY_STUB_REQUIRE_FULL TMPDIR
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'
@@ -59,6 +62,24 @@ GRAPHIFY
   # Anything the checker left behind: scratch entries, and its worktree lock.
   leftovers() { ls -A "$scratch"; [ ! -e "$lock" ] || echo "$lock"; }
   graph_status() { git_fixture -C "$worktree" status --porcelain -- graphify-out; }
+
+  It 'checks the canonical full graph instead of cached incremental phantom nodes'
+    export GRAPHIFY_STUB_GRAPH='committed graph' GRAPHIFY_STUB_REQUIRE_FULL=1
+    When run sh "$script_abs" "$worktree"
+    The status should equal 0
+    The stderr should include 'graph is fresh'
+    The contents of file "$graph" should equal 'committed graph'
+    The result of function leftovers should equal ''
+  End
+
+  It 'refreshes from the canonical full graph rather than saving incremental phantom nodes'
+    export GRAPHIFY_STUB_GRAPH='committed graph' GRAPHIFY_STUB_REQUIRE_FULL=1
+    When run sh "$script_abs" --refresh "$worktree"
+    The status should equal 0
+    The stderr should include 'refreshed (unchanged)'
+    The contents of file "$graph" should equal 'committed graph'
+    The result of function leftovers should equal ''
+  End
 
   It 'reports a fresh graph under a seeded rebuild of the spaced root and leaves nothing behind'
     export GRAPHIFY_STUB_GRAPH='committed graph'

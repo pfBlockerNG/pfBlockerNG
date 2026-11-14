@@ -190,31 +190,48 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	 */
 	public function testEachFamilyBindsFailureContinueAndCloseOnce(): void
 	{
-		$source       = php_strip_whitespace(self::APPLY);
-		$dnsbl_cont   = $this->applyScope($source, 'if ($pfb_row_script_pre && is_file("{$pfb_row_script_pre}")) {', "pfb_download_ledger_close_if_clean('dnsbl',");
-		$dnsbl_close  = $this->applyScope($source, "pfb_download_ledger_close_if_clean('dnsbl',", "if (\$pfb['aliasupdate']) {");
-		$ip_cont      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', "pfb_download_ledger_close_if_clean('ip',");
-		$ip_close     = $this->applyScope($source, "pfb_download_ledger_close_if_clean('ip',", 'unlink_if_exists("{$pfb[\'dbdir\']}/geoip.update");');
+		$source = php_strip_whitespace(self::APPLY);
+		foreach (['dnsbl', 'ip'] as $family) {
+			$start = 'if (!$pfb_' . $family . '_phase_skipped && $phase_required';
+			$end = "pfb_download_ledger_close_if_clean('{$family}',";
+			$call = "pfb_{$family}_script_failure_continue(";
+			$scope = $this->applyScope($source, $start, $end);
+			$this->assertSame(1, substr_count($scope, $call), "{$family} failure ownership stays in its row loop");
+			$this->assertStringContainsString(
+				'if ($stage === \'script\' || !empty($feed_error[\'preScriptFailed\'])) { ' . $call,
+				$scope
+			);
+			$this->assertStringContainsString('$pfb_script_state,', $scope);
+			$this->assertStringContainsString('continue; } $disposition =', $scope,
+				"{$family} failed Core results must leave the row before publication");
 
-		$this->assertSame(1, substr_count($dnsbl_cont, 'pfb_dnsbl_script_failure_continue($alias,'), 'DNSBL failure continue must stay in its loop');
-		$this->assertSame(1, substr_count($dnsbl_close, 'pfb_dnsbl_script_failure_close($alias,'), 'DNSBL failure close must stay at alias-pass end');
-		$this->assertSame(1, substr_count($ip_cont, 'pfb_ip_script_failure_continue($alias,'), 'IP failure continue must stay in its loop');
-		$this->assertSame(1, substr_count($ip_close, 'pfb_ip_script_failure_close($alias,'), 'IP failure close must stay at alias-pass end');
+			$from = strpos($source, $start);
+			$this->assertNotFalse($from);
+			$prefix = substr($source, 0, $from);
+			$begin = strrpos($prefix, '$pfb_script_state = [\'failed\' => FALSE];');
+			$this->assertNotFalse($begin, "{$family} alias pass starts with clean script state");
+			$pass = substr($source, $begin, $from - $begin) . $scope;
+			$this->assertSame(1, substr_count($pass, '$pfb_script_state ='),
+				"{$family} rows must not reset an earlier failure");
+			$this->assertStringContainsString("foreach", substr($prefix, $begin),
+				"{$family} script state must begin before the row loop");
 
-		foreach ([
-			['if ($pfb_row_script_pre && is_file("{$pfb_row_script_pre}")) {', "pfb_download_ledger_close_if_clean('dnsbl',", 'pfb_dnsbl_script_failure_continue($alias,'],
-			["pfb_download_ledger_close_if_clean('dnsbl',", "if (\$pfb['aliasupdate']) {", 'pfb_dnsbl_script_failure_close($alias,'],
-			['if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', "pfb_download_ledger_close_if_clean('ip',", 'pfb_ip_script_failure_continue($alias,'],
-			["pfb_download_ledger_close_if_clean('ip',", 'unlink_if_exists("{$pfb[\'dbdir\']}/geoip.update");', 'pfb_ip_script_failure_close($alias,'],
-		] as [$start, $end, $needle]) {
-			$removed = 0;
-			$mutant = str_replace($needle, '', $source, $removed);
-			$this->assertSame(1, $removed, "mutation fixture must remove {$needle} once");
-			$endPos = strpos($mutant, $end);
-			$this->assertNotFalse($endPos, "mutation fixture must retain {$end}");
-			$mutant = substr_replace($mutant, $needle, $endPos + strlen($end), 0);
-			$mutantScope = $this->applyScope($mutant, $start, $end);
-			$this->assertSame(0, substr_count($mutantScope, $needle), "a {$needle} relocation after its loop boundary must fail the scope pin");
+			$closeEnd = $family === 'dnsbl' ? "if (\$pfb['aliasupdate']) {"
+				: 'unlink_if_exists("{$pfb[\'dbdir\']}/geoip.update");';
+			$close = "pfb_{$family}_script_failure_close(\$alias, \$pfb['dbdir'], \$pfb_script_state);";
+			$this->assertSame(1, substr_count($this->applyScope($source, $end, $closeEnd), $close),
+				"{$family} closes once at alias-pass end using accumulated state");
+			$this->assertSame(1, substr_count($source, $close));
+
+			foreach ([[$start, $end, $call . ' $alias,'], [$end, $closeEnd, $close]] as [$left, $right, $needle]) {
+				$mutant = str_replace($needle, '', $source, $removed);
+				$this->assertSame(1, $removed);
+				$boundary = strpos($mutant, $right);
+				$this->assertNotFalse($boundary);
+				$mutant = substr_replace($mutant, $needle, $boundary + strlen($right), 0);
+				$this->assertSame(0, substr_count($this->applyScope($mutant, $left, $right), $needle),
+					"relocating {$needle} beyond its ownership boundary must fail");
+			}
 		}
 	}
 
@@ -481,8 +498,62 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 			strpos($ip_post, 'if ($pfb_post_staged) {'),
 			'the IP staging guard must precede script execution'
 		);
-		$this->assertSame(1,
-			substr_count($source, 'if ($pfb_post_staged && file_exists("{$file_dwn}.orig.post")) {'),
-			'a failed restore-point copy must not make a stale path eligible for restoration');
+		$this->assertIpRestorePaths($source);
+	}
+
+	private function assertIpRestorePaths(string $source): void
+	{
+		$publication = 'if ($has_data && !pfb_core_feed_artifact_copy(';
+		$cleanup = 'unlink_if_exists("{$pfbfolder}/{$header}.update");';
+		$guard = 'if ($pfb_post_staged && file_exists("{$file_dwn}.orig.post")) {';
+		$restore = $guard . ' @rename("{$file_dwn}.orig.post", "{$file_dwn}.orig"); }';
+		$staging = $this->applyScope($source, '$pfb_post_staged = FALSE;', $publication);
+		$this->assertSame(1, substr_count($staging, '$pfb_post_staged = pfb_list_post_script_stage('),
+			'each row must reset stale staging state before attempting its own restore-point copy');
+
+		$failed = $this->applyScope($source, $publication, 'if ($has_data) {');
+		$this->assertStringContainsString(
+			"pfb_download_ledger_failure('ip', \$alias, \$header, \$pfb['dbdir']); " . $restore . ' continue;',
+			$failed,
+			'publication failure must record failure and consume only a freshly staged restore point before leaving');
+		$this->assertSame(1, substr_count($failed, $guard));
+		$this->assertStringNotContainsString($cleanup, $failed,
+			'publication failure must retain retry markers');
+
+		$normal = $this->applyScope($source, 'if ($has_data) {', "pfb_download_ledger_close_if_clean('ip',");
+		$this->assertStringContainsString(
+			$cleanup . ' unlink_if_exists("{$pfbfolder}/{$header}.fail");',
+			$normal,
+			'only the completed row clears its retry markers');
+		$this->assertSame(1, substr_count($normal, $restore),
+			'normal completion consumes only a freshly staged restore point');
+		$this->assertLessThan(strpos($normal, $restore), strpos($normal, $cleanup),
+			'normal marker cleanup precedes restoration');
+	}
+
+	public function testRestorePinsRejectStaleAndSkippedRecoveryFixtures(): void
+	{
+		$source = php_strip_whitespace(self::APPLY);
+		$guard = 'if ($pfb_post_staged && file_exists("{$file_dwn}.orig.post")) {';
+		foreach (['publication failure' => 0, 'normal completion' => 1] as $path => $index) {
+			$positions = [];
+			$offset = 0;
+			while (($position = strpos($source, $guard, $offset)) !== FALSE) {
+				$positions[] = $position;
+				$offset = $position + strlen($guard);
+			}
+			$this->assertCount(2, $positions, 'fixture must find both independently pinned recovery paths');
+			foreach (['stale restore' => 'if (file_exists("{$file_dwn}.orig.post")) {',
+				'skipped restore' => 'if (FALSE) {'] as $fault => $replacement) {
+				$mutant = substr_replace($source, $replacement, $positions[$index], strlen($guard));
+				$rejected = FALSE;
+				try {
+					$this->assertIpRestorePaths($mutant);
+				} catch (\PHPUnit\Framework\AssertionFailedError) {
+					$rejected = TRUE;
+				}
+				$this->assertTrue($rejected, "{$path}: {$fault} must fail the recovery assertions");
+			}
+		}
 	}
 }
