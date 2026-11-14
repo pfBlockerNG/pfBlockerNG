@@ -3,14 +3,16 @@ name: Ports recipe modules
 # The Nightly package is built from devel by the recipe on pfBlockerNG/FreeBSD-ports
 # `pfblockerng/use-github`, which unpacks GH_TUPLE/GL_TUPLE into go/pfb_dns_gateway/vendor and
 # requires its files/modules.txt to equal `go mod vendor`'s byte for byte. A devel PR that moves a
-# Go module requirement therefore needs a follow-up ports change; #3987 merged without one and only
-# the next nightly noticed (fixed by FreeBSD-ports#22). This check names that follow-up on the PR (#4007).
+# Go module requirement, or makes the gateway import another package of one, therefore needs a
+# follow-up ports change; #3987 merged without one and only the next nightly noticed (fixed by
+# FreeBSD-ports#22). This check names that follow-up on the PR (#4007).
 on:
   pull_request:
     branches: [devel]
     paths:
       - 'go/**/go.mod'
       - 'go/**/go.sum'
+      - 'go/pfb_dns_gateway/**/*.go'
       - '.github/workflows/ports-modules-txt.yml'
       - 'tests/fixtures/ports_modules_txt/**'
 
