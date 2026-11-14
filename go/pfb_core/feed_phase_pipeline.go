@@ -129,13 +129,7 @@ func (p *feedPhaseRunner) runFeed(ctx context.Context, spec phaseFeed, force str
 			if err != nil {
 				return failedFeed(spec.id, "settings", "feed_source_invalid")
 			}
-			probeRequired := force == "none"
-			if !request.Rsync {
-				if source, err := url.Parse(request.URL); err == nil && strings.EqualFold(source.Scheme, "ftp") {
-					probeRequired = false
-				}
-			}
-			if probeRequired {
+			if force == "none" {
 				probe := fetcher.Probe(ctx, feed, request)
 				switch {
 				case !probe.OK || probe.Decision == feedfetch.Failed:
@@ -159,10 +153,8 @@ func (p *feedPhaseRunner) runFeed(ctx context.Context, spec phaseFeed, force str
 				if err != nil {
 					return failedFeed(spec.id, "fetch", "baseline_backup_failed")
 				}
-				if force != "none" {
-					if err := clearForcedState(feed, force); err != nil {
-						return failedFeed(spec.id, "fetch", "feed_force_prepare_failed")
-					}
+				if err := clearForcedState(feed, force); err != nil {
+					return failedFeed(spec.id, "fetch", "feed_force_prepare_failed")
 				}
 				ingested := fetcher.Ingest(ctx, feed, request)
 				if !ingested.OK {
