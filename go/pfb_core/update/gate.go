@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,8 +13,10 @@ import (
 )
 
 const (
-	defaultMax = 64 << 10 // the bytes of log a View returns when asked for none in particular
-	offsetBits = 40       // a cursor is the Update's generation above the log offset in its low bits
+	defaultMax = 64 << 10    // the bytes of log a View returns when asked for none in particular
+	maxLog     = 8 << 20     // the bytes a running Update's log may hold before it keeps only its newest half (boundLog)
+	logCheck   = time.Second // how often a running Update's log is held to maxLog
+	offsetBits = 40          // a cursor is the Update's generation above the log offset in its low bits
 	offsetMask = 1<<offsetBits - 1
 	genMask    = 1<<(63-offsetBits) - 1
 )
@@ -75,7 +78,7 @@ type Gate struct {
 
 	mu      sync.Mutex // everything below, and the log's truncation
 	status  *Status    // replaced when the Update ends, never changed in place: View hands it out
-	gen     int64      // the number of Starts before the current Update: its cursors differ from every earlier Update's
+	gen     int64      // bumped by every Start but the first and by every trim of the log: a cursor from before reads from the start
 	cancel  context.CancelFunc
 	stopped bool
 }
@@ -114,9 +117,12 @@ func (g *Gate) Start(req Request) error {
 }
 
 func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Request, log *os.File) {
+	bounded := make(chan struct{})
+	go g.boundLog(ctx, log, bounded)
 	res, err := g.run(ctx, req, log)
 	finished := time.Now().Unix()
 	cancel()
+	<-bounded
 	_ = log.Close()
 	if g.done != nil {
 		g.done(req, res, err)
@@ -134,6 +140,49 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Reque
 	g.status = &ended
 	g.admit.Unlock() // under mu: no Start can see the gate free while the status still says running
 	g.mu.Unlock()
+}
+
+// boundLog holds the running Update's log to maxLog until ctx ends (issue #4003: it is on the root filesystem, and an Update may
+// print for hours). A log past it keeps its newest whole lines, at most half of maxLog, in place, as pfb_log_mgmt() trims the
+// package's other logs.
+func (g *Gate) boundLog(ctx context.Context, log *os.File, done chan<- struct{}) {
+	defer close(done)
+	tick := time.NewTicker(logCheck)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		if info, err := log.Stat(); err == nil && info.Size() > maxLog {
+			g.trimLog(log, info.Size())
+		}
+	}
+}
+
+// trimLog keeps the newest whole lines of the first size bytes of log, at most maxLog/2 of them.
+// shortcut: what the program appends between the read and the truncation is lost, and what it appends between the truncation
+// and the write lands before the kept lines (pfb_log_mgmt()'s trim has the same window); fine for a log already past maxLog.
+func (g *Gate) trimLog(log *os.File, size int64) {
+	r, err := os.Open(g.logPath)
+	if err != nil {
+		return
+	}
+	defer r.Close()
+	tail := make([]byte, maxLog/2)
+	if _, err := r.ReadAt(tail, size-int64(len(tail))); err != nil {
+		return
+	}
+	if i := bytes.IndexByte(tail, '\n'); i >= 0 {
+		tail = tail[i+1:]
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if log.Truncate(0) == nil {
+		_, _ = log.Write(tail)
+		g.gen = (g.gen + 1) & genMask
+	}
 }
 
 // View: Running; Update (nil until the first Start of this process; the last one stays readable after it finishes);

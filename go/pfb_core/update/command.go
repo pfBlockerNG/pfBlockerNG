@@ -22,7 +22,9 @@ const (
 	deferredStatus  = 75 // EX_TEMPFAIL: the program chose not to run now (a lock held, the schedule switched off)
 )
 
-var killGrace = 5 * time.Second // how long the program's whole group has to end on TERM, and again after KILL, before Run goes on
+// killGrace is how long the program's whole group has to end on TERM, and again after KILL, before Run goes on. It ends a second
+// (the rc script's poll) before the rc script KILLs Core 5 s after its TERM, so Core's KILL reaches the group first (issue #4003).
+var killGrace = 3 * time.Second
 
 // leaderExited reports whether the program has exited, when the context ends; replaced only by tests.
 var leaderExited = exitedUnreaped
@@ -33,7 +35,8 @@ var reap = (*exec.Cmd).Wait
 // Command runs the update program at Path once per Update: stdin is {"version":1,<Request>}, stdout and stderr are the log, and
 // fd 3 is the result, lines of {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool};
 // all four are regular files, never pipes (a daemon an Update restarts would hold one open). The program's group gets TERM when
-// ctx ends or Cap (0: 4 hours) passes, and KILL if a member is left after 5 s; a program that has exited leaves its group alone.
+// ctx ends or Cap (0: 4 hours) passes, and KILL if a member is left after 3 s; a program that has exited leaves its group alone.
+// Core owns the program directly; a re-executed watchdog kills its group if Core dies before committing completion.
 type Command struct {
 	Path string
 	Cap  time.Duration
@@ -77,43 +80,67 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	limit := c.limit()
 	ctx, cancel := context.WithTimeoutCause(ctx, limit, fmt.Errorf("it ran past its %s cap", limit))
 	defer cancel()
+	watcher, err := startWatchdog(ctx)
+	if err != nil {
+		return Result{}, err
+	}
 	cmd := exec.Command(c.Path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
 	cmd.ExtraFiles = []*os.File{fd3}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		return Result{}, err
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: watcher.cmd.Process.Pid}
+	select {
+	case <-watcher.exited:
+		_ = watcher.retire(false)
+		return Result{}, errors.New("the update watchdog exited before the program started")
+	default:
 	}
-	exited, killed := make(chan struct{}), make(chan bool, 1)
+	if err := ctx.Err(); err != nil {
+		return Result{}, errors.Join(context.Cause(ctx), watcher.retire(false))
+	}
+	if err := cmd.Start(); err != nil {
+		return Result{}, errors.Join(err, watcher.retire(false))
+	}
+	exited, decision := make(chan struct{}), make(chan error, 1)
 	go func() {
+		var cause error
 		select {
 		case <-exited:
-			killed <- false
+			decision <- nil
+			return
 		case <-ctx.Done():
-			pid := cmd.Process.Pid
-			if leaderExited(pid) {
-				killed <- false // the program has exited, reaped or not: what it left running is not Run's to kill
-				return
-			}
-			group := -pid
-			_ = syscall.Kill(group, syscall.SIGTERM)
-			if !groupGone(group, killGrace) {
-				_ = syscall.Kill(group, syscall.SIGKILL)
-				groupGone(group, killGrace) // KILL only queues: a member leaves the group once it has exited and been reaped
-			}
-			killed <- true
+			cause = fmt.Errorf("the update program was killed: %w", context.Cause(ctx))
+		case <-watcher.exited:
+			cause = errors.New("the update watchdog exited while the program was running")
 		}
+		if leaderExited(cmd.Process.Pid) || exitedUnreaped(cmd.Process.Pid) {
+			decision <- nil // an exited program's descendants are no longer cancellation's to kill
+			return
+		}
+		group := -watcher.cmd.Process.Pid
+		_ = syscall.Kill(group, syscall.SIGTERM)
+		if !groupGone(group, killGrace) {
+			_ = syscall.Kill(group, syscall.SIGKILL)
+			_ = watcher.reap()
+			groupGone(group, killGrace)
+		}
+		decision <- cause
 	}()
 	err = reap(cmd)
 	close(exited)
-	switch wasKilled := <-killed; {
-	case wasKilled:
-		err = fmt.Errorf("the update program was killed: %w", context.Cause(ctx))
+	killed := <-decision
+	watchErr := watcher.retire(killed != nil)
+	switch {
+	case killed != nil:
+		err = killed
 	case isDeferral(err):
+		if watchErr != nil {
+			return Result{}, watchErr
+		}
 		return Result{}, fmt.Errorf("the update program deferred the Update (exit status %d): %w", deferredStatus, ErrDeferred)
 	case err != nil:
 		err = fmt.Errorf("the update program failed: %w", err)
 	}
+	err = cmp.Or(err, watchErr)
 	res, resErr := readResult(fd3)
 	return res, cmp.Or(err, resErr)
 }

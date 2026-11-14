@@ -408,7 +408,10 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
   Update names what to run; a `manual` one runs its scope.
 - **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
-  restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it.
+  restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it. While it runs, the log is
+  checked once a second: past 8 MiB it keeps only its newest whole lines, at most 4 MiB, in place, and a cursor from before
+  reads it from the start. Lines printed during the trim may be lost or land before the kept ones; output of the last second
+  of an Update is not trimmed.
 - **fd 3:** a second regular file, for the result: lines, each one JSON object `{"version": 1, "outcomes": {id:
   "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field but `version`
   optional. The program writes each outcome as it finishes, so its death loses no finished check. Core adds the lines up:
@@ -421,18 +424,27 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   `failed`, whatever the program wrote on fd 3 is not recorded (no outcome, no attempt, no GeoIP readiness), and the
   reserved occurrences stay pending for the next quarter hour. A skipped Update truncates the previous Update's log like any
   other, and its own log holds what the program printed before it deferred.
-- **Process group and bounds:** the program runs in its own process group. The group is killed (TERM, then KILL after 5 s)
-  at a hard cap of 4 hours, when the Update is cancelled and when Core stops; never when the program exits by itself, so a
-  daemon it started keeps running.
+- **Process group and bounds:** Core is the program's direct parent and receives its actual exit status or signal; no
+  intermediary mirrors it. A separate watchdog (Core's own binary re-run, not the rc script's `daemon(8)` supervisor)
+  leads the Update's process group, which the program joins. The watchdog's private readiness and completion pipes are
+  never inherited by the program; the program's stdin, stdout, stderr and result fd 3 are regular files.
+  Core kills the group (TERM, then KILL after 3 s) at a hard cap of 4 hours, when the Update is cancelled and when Core
+  stops, but only while the actual program is still running. Cancellation after the program exits preserves its result
+  and any daemons it started, even if the watchdog has not yet observed completion.
+  Unless Core deliberately initiated group cleanup, it sends the watchdog a completion byte for every terminal program
+  result (success, error or signal) and waits for the watchdog's acknowledgement and exit before the run returns.
+  The watchdog cleans up the group only if Core dies before that completion commit, using TERM, then KILL after 3 s.
+  **Crash-window limit:** Core dying before the completion byte is acknowledged is an interrupted Update: group cleanup
+  can kill intentional descendants even if the program has already exited. Normal program completion leaves them running.
 
 Core then records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically): each
 feed's outcome, the attempted ids that stay pending, and the GeoIP readiness the program saw (`true` until the first report).
 The Extras plan uses the last readiness reported. The cutover imports configuration only, so a Core that finds no state file
 starts empty.
 
-**Stopping.** TERM or INT during an Update cancels it: the program's group gets TERM, and KILL 5 s later if it is still there,
-and Core stops after that. A program that ignores TERM keeps Core's stop past the rc script's 5 s before KILL. The Update is
-not resumed: the next Core starts idle and the scheduler plans from its state file.
+**Stopping.** TERM or INT during an Update cancels it: the program's group gets TERM, and KILL 3 s later if it is still there,
+and Core stops after that. The 3 s end a second before the rc script's KILL of Core at 5 s, so a program that ignores TERM
+gets Core's KILL first. The Update is not resumed: the next Core starts idle and the scheduler plans from its state file.
 
 ## Errors
 
@@ -535,7 +547,7 @@ pfb-dns ticket decides it.
   a failure. An unknown machine is a failure.
 - **Stop** sends TERM to the supervisor and to pfb-core, then KILL at 5 s. It signals a process only while its pidfile names it
   and its command line is pfb_core's, so a reused pid is never signalled. pfb-core first ends a running Update (the
-  program's process group gets TERM, and KILL 5 s later), then finishes the requests in flight (up to
+  program's process group gets TERM, and KILL 3 s later), then finishes the requests in flight (up to
   3 s) and removes its socket. A process still running at 7 s fails the stop, keeps the pidfiles and fails a start or
   restart over it.
 - **Package lifecycle.** The install and every upgrade regenerate the script and restart the service. pfSense starts it at
