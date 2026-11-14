@@ -91,3 +91,19 @@ def test_dnsbl_save_nested_multiselect_values_are_input_errors(smoke_vm: SmokeVM
         assert helpers.config_get_state(smoke_vm, _ALLOW_INT) == (True, "lan"), "the refused save wrote the config"
     finally:
         helpers.config_restore_state(smoke_vm, _ALLOW_INT, original)
+
+
+def test_dnsbl_save_port_posted_as_array_is_an_input_error(smoke_vm: SmokeVM, webui: WebUI) -> None:
+    """issue #4000: a crafted ``pfb_dnsport[]`` gets the page's input error and logs no PHP error.
+
+    pfSense's ``is_port()`` handed the array to ``getservbyname()``, which threw ``TypeError`` (a 500).
+    """
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+    response = webui.post(DNSBL_PAGE, {"pfb_dnsport[]": "8081"}, allow_redirects=False)
+    assert response.status_code == 200, f"invalid POST must re-render, not redirect: {response.status_code}"
+    errors = input_errors_block(response.text) or ""
+    assert "DNSBL Port is invalid!" in errors, (
+        f"an array port must be refused with an input error: {response.text[-4000:]}"
+    )
+    guard.assert_no_growth()

@@ -1605,6 +1605,31 @@ def test_safesearch_youtube_select_three_branches_and_bogus(
         webui.post(SAFESEARCH_PAGE, {"safesearch_youtube": "Disable"}, timeout=SAVE_TIMEOUT)
 
 
+def test_safesearch_nested_select_post_coerces_to_disable(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #4000: a crafted nested array for ``safesearch_enable`` is stored as 'Disable', not a 500 or an array.
+
+    Given 'Enable' stored, a save posting ``safesearch_enable[0][]`` re-renders, logs no PHP error, stores 'Disable'.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngsafesearch/safesearch_enable"
+    try:
+        assert _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_enable": "Enable"}, cfg) == "Enable", (
+            "before-state: 'Enable' must be stored"
+        )
+        guard = PhpErrorLogGuard(vm)
+        guard.snapshot()
+        resp = webui.post(SAFESEARCH_PAGE, {"safesearch_enable[0][]": "x"}, timeout=SAVE_TIMEOUT)
+        assert resp.status_code == 200, f"a crafted POST must not fail the page, got HTTP {resp.status_code}"
+        guard.assert_no_growth()
+        got = helpers.config_get(vm, cfg)
+        assert got == "Disable", f"a nested safesearch_enable must coerce to 'Disable', got {got!r}"
+    finally:
+        webui.post(SAFESEARCH_PAGE, {"safesearch_enable": "Disable"}, timeout=SAVE_TIMEOUT)
+
+
 def test_safesearch_doh_select_valid_needs_list_and_bogus_coerces(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
