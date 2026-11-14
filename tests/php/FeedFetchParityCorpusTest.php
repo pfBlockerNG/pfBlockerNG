@@ -227,10 +227,10 @@ final class FeedFetchParityCorpusTest extends TestCase
 				$actual['ok'] = $decision !== 'failed';
 				$actual['decision'] = $decision;
 			}
-			$actual['published'] = is_file("{$base}.orig") ? file_get_contents("{$base}.orig") : NULL;
-			$actual['etag'] = is_file("{$base}.orig.etag") ? file_get_contents("{$base}.orig.etag") : NULL;
+			$actual['published'] = self::stateFile("{$base}.orig");
+			$actual['etag'] = self::stateFile("{$base}.orig.etag");
 			$actual['lastmod'] = is_file("{$base}.orig.lastmod") ? (int) file_get_contents("{$base}.orig.lastmod") : NULL;
-			$actual['digest'] = is_file("{$base}.orig.xxhash128") ? file_get_contents("{$base}.orig.xxhash128") : NULL;
+			$actual['digest'] = self::stateFile("{$base}.orig.xxhash128");
 			$actual['requests'] = $this->requests();
 			$actual['staged'] = is_file("{$base}.raw") && filesize("{$base}.raw") > 0;
 			$argv = is_file("{$this->tools}/rsync.argv") ? file("{$this->tools}/rsync.argv", FILE_IGNORE_NEW_LINES) : NULL;
@@ -265,6 +265,20 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$seed['lastmod'] = $actual['lastmod'];
 			$seed['digest'] = $actual['digest'];
 		}
+	}
+
+	/**
+	 * A feed file as compared, NULL when absent. Over 1 MiB it becomes its size and SHA-256 (#3989): a ceiling
+	 * regression still fails the comparison without holding the file.
+	 */
+	public static function stateFile(string $path): ?string
+	{
+		if (!is_file($path)) {
+			return NULL;
+		}
+		$size = (int) filesize($path);
+		return $size <= (1 << 20) ? (string) file_get_contents($path) :
+			sprintf('<%d bytes, sha256 %s>', $size, hash_file('sha256', $path));
 	}
 
 	private function seedLocal(array $files, array $links): void

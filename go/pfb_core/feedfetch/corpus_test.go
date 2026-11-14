@@ -54,6 +54,7 @@ package feedfetch_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -493,7 +494,7 @@ func runScenario(t *testing.T, file string) {
 		if !reflect.DeepEqual(got, want) {
 			gj, _ := json.MarshalIndent(got, "", " ")
 			wj, _ := json.MarshalIndent(want, "", " ")
-			t.Fatalf("%s\nwant %s\n got %s\n(result %+v)", label, wj, gj, res)
+			t.Fatalf("%s\nwant %s\n got %s\n(result %+v)", label, wj[:min(len(wj), readCap)], gj[:min(len(gj), readCap)], res)
 		}
 		prevETag, prevLastMod, prevDigest = got["etag"], got["lastmod"], got["digest"]
 	}
@@ -522,12 +523,30 @@ func stagedLeftover(t *testing.T, dir, name string) string {
 	return ""
 }
 
+// readCap bounds what a step reads back (#3989): a larger file becomes its size and SHA-256, so a ceiling regression
+// still fails the comparison without holding the file.
+const readCap = 1 << 20
+
 func readOrNil(p string) any {
-	b, err := os.ReadFile(p)
+	f, err := os.Open(p)
 	if err != nil {
 		return nil
 	}
-	return string(b)
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, readCap+1))
+	if err != nil {
+		return fmt.Sprintf("<read error: %v>", err)
+	}
+	if len(b) <= readCap {
+		return string(b)
+	}
+	h := sha256.New()
+	h.Write(b)
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return fmt.Sprintf("<read error: %v>", err)
+	}
+	return fmt.Sprintf("<%d bytes, sha256 %x>", int64(len(b))+n, h.Sum(nil))
 }
 
 func nilOr(s *string) any {
