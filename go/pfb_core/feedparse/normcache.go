@@ -3,6 +3,7 @@ package feedparse
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
@@ -29,6 +30,14 @@ func NormalizeFile(dir, name string) NormResult {
 	orig, norm := filepath.Join(dir, name+".orig"), filepath.Join(dir, name+".norm")
 	srcBase := filepath.Join(dir, name+".norm.src")
 	fallback := NormResult{Path: orig, Changed: true}
+
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, entry := range entries {
+			if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), ".pfbnorm_") {
+				_ = os.Remove(filepath.Join(dir, entry.Name()))
+			}
+		}
+	}
 
 	// The digest is of the bytes about to be converted: a .orig replaced meanwhile reads as stale on the next pass, never as fresh.
 	src, err := os.ReadFile(orig)
@@ -60,10 +69,21 @@ func NormalizeFile(dir, name string) NormResult {
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}
-	if werr != nil || os.Rename(tmp.Name(), norm) != nil {
+	if werr != nil {
 		os.Remove(tmp.Name())
 		return fallback
 	}
-	os.WriteFile(srcBase+"."+digest.XXH128, []byte(srcDigest), 0o644)
+	sidecar := srcBase + "." + digest.XXH128
+	if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+		os.Remove(tmp.Name())
+		return fallback
+	}
+	if err := os.Rename(tmp.Name(), norm); err != nil {
+		os.Remove(tmp.Name())
+		return fallback
+	}
+	if err := os.WriteFile(sidecar, []byte(srcDigest), 0o644); err != nil {
+		return fallback
+	}
 	return NormResult{Path: norm, Changed: !(hadBaseline && digest.Bytes(out) == prev), Normalized: true}
 }

@@ -5,6 +5,8 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -58,6 +60,148 @@ func TestNormalizeFileFailureFallsBackToTheRawOrig(t *testing.T) {
 	}
 	if strings.Join(names, ",") != "feed.norm,feed.orig" {
 		t.Errorf("the directory holds %v, want only feed.norm and feed.orig", names)
+	}
+}
+
+func TestNormalizeFileSidecarWriteFailureDoesNotServeStaleNorm(t *testing.T) {
+	const helper = "PFB_TEST_NORMCACHE_PERMISSION_HELPER"
+	if os.Getenv(helper) == "1" {
+		dir := os.Getenv("PFB_TEST_NORMCACHE_DIR")
+		orig, norm := filepath.Join(dir, "feed.orig"), filepath.Join(dir, "feed.norm")
+		if err := os.WriteFile(orig, []byte("b.example.com\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := NormalizeFile(dir, "feed"), (NormResult{Path: orig, Changed: true}); got != want {
+			t.Errorf("B with an unwritable source sidecar = %+v, want raw fallback %+v", got, want)
+		}
+		if err := os.WriteFile(orig, []byte("a.example.com\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := NormalizeFile(dir, "feed"), (NormResult{Path: norm, Normalized: true}); got != want {
+			t.Fatalf("A after B with an unwritable source sidecar = %+v, want cached A %+v", got, want)
+		}
+		if got, err := os.ReadFile(norm); err != nil || string(got) != "a.example.com\n" {
+			t.Errorf("A cache hit served %q, %v; want A, never B", got, err)
+		}
+		return
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("permission probe needs a root parent to make the sidecar unwritable to its child")
+	}
+
+	dir := t.TempDir()
+	orig, norm := filepath.Join(dir, "feed.orig"), filepath.Join(dir, "feed.norm")
+	if err := os.WriteFile(orig, []byte("a.example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := NormalizeFile(dir, "feed"); !got.Normalized {
+		t.Fatalf("initial A normalization = %+v", got)
+	}
+	sidecar := filepath.Join(dir, "feed.norm.src.xxhash128")
+	if err := os.Chmod(sidecar, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(orig, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(orig, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(norm, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if runtime.GOOS != "linux" {
+		t.Skip("permission probe uses Linux unprivileged credentials")
+	}
+	src, err := os.Open(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/proc/self/fd/3", "-test.run=^TestNormalizeFileSidecarWriteFailureDoesNotServeStaleNorm$")
+	cmd.ExtraFiles = []*os.File{src}
+	cmd.Env = append(os.Environ(), helper+"=1", "PFB_TEST_NORMCACHE_DIR="+dir)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534}}
+	out, cmdErr := cmd.CombinedOutput()
+	srcErr := src.Close()
+	if cmdErr != nil || srcErr != nil {
+		t.Fatalf("unprivileged A→B→A probe: child=%v close=%v\n%s", cmdErr, srcErr, out)
+	}
+}
+
+func TestNormalizeFileRemovesOrphanedTemp(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "feed.orig"), []byte("a.example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(dir, ".pfbnorm_interrupted")
+	if err := os.WriteFile(orphan, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := NormalizeFile(dir, "feed"); !got.Normalized {
+		t.Fatalf("NormalizeFile = %+v, want normalized feed", got)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("orphaned temporary stat error = %v, want it removed", err)
+	}
+}
+
+func TestNormalizeFileFailsWhenSidecarWriteFails(t *testing.T) {
+	const helper = "PFB_TEST_NORMCACHE_FSIZE_HELPER"
+	if os.Getenv(helper) == "1" {
+		signal.Ignore(syscall.SIGXFSZ)
+		limit := syscall.Rlimit{Cur: 31, Max: 31}
+		if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+			t.Fatal(err)
+		}
+		dir := os.Getenv("PFB_TEST_NORMCACHE_DIR")
+		orig, norm := filepath.Join(dir, "feed.orig"), filepath.Join(dir, "feed.norm")
+		if err := os.WriteFile(orig, []byte("b.example.com\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := NormalizeFile(dir, "feed"), (NormResult{Path: orig, Changed: true}); got != want {
+			t.Errorf("B when the source-sidecar write fails = %+v, want raw fallback %+v", got, want)
+		}
+		if err := os.WriteFile(orig, []byte("a.example.com\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := NormalizeFile(dir, "feed"), (NormResult{Path: orig, Changed: true}); got != want {
+			t.Errorf("A after a failed B sidecar write = %+v, want raw fallback %+v", got, want)
+		}
+		if got, err := os.ReadFile(norm); err != nil || string(got) != "a.example.com\n" {
+			t.Errorf("the .norm after failed sidecar writes = %q, %v; want A, never stale B", got, err)
+		}
+		return
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("file-size limit probe uses Linux SIGXFSZ")
+	}
+
+	dir := t.TempDir()
+	orig := filepath.Join(dir, "feed.orig")
+	if err := os.WriteFile(orig, []byte("a.example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := NormalizeFile(dir, "feed"); !got.Normalized {
+		t.Fatalf("initial A normalization = %+v", got)
+	}
+	src, err := os.Open(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/proc/self/fd/3", "-test.run=^TestNormalizeFileFailsWhenSidecarWriteFails$")
+	cmd.ExtraFiles = []*os.File{src}
+	cmd.Env = append(os.Environ(), helper+"=1", "PFB_TEST_NORMCACHE_DIR="+dir)
+	out, cmdErr := cmd.CombinedOutput()
+	srcErr := src.Close()
+	if cmdErr != nil || srcErr != nil {
+		t.Fatalf("A→B→A with a failed sidecar write: child=%v close=%v\n%s", cmdErr, srcErr, out)
 	}
 }
 
