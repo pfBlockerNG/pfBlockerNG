@@ -902,7 +902,8 @@ if ($_POST && isset($_POST['save'])) {
 				config_set_path("installedpackages/{$conf_type}/config/{$rowid}/filter_top1m", pfb_filter($_POST['filter_top1m'], PFB_FILTER_ON_OFF, 'Category_edit'));
 			}
 
-			// Set flag to update CustomList on the next update pass
+			// Set flag to update CustomList on the next update pass (issue #3999: once the save is written, below)
+			$pfb_custom_marker = '';
 			// foreign key: installedpackages/{conf_type} list structure not in registry
 			// issue #1768: no default -> config_get_path() returns NULL on a fresh row -> base64_decode(NULL) deprecation.
 			if (base64_decode(config_get_path("installedpackages/{$conf_type}/config/{$rowid}/custom", '')) != $_POST['custom']) {
@@ -913,7 +914,7 @@ if ($_POST && isset($_POST['save'])) {
 				// issue #1080: an action with no list folder (Disabled) leaves the
 				// detail array empty; an unguarded touch() landed the flag at "/".
 				if (!empty($pfbarr['folder'])) {
-					touch("{$pfbarr['folder']}/{$aname}_custom{$suffix}.update");
+					$pfb_custom_marker = "{$pfbarr['folder']}/{$aname}_custom{$suffix}.update";
 				}
 			}
 
@@ -956,6 +957,9 @@ if ($_POST && isset($_POST['save'])) {
 			$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";
 			$pfb_written = write_config("pfBlockerNG: {$savemsg}");
 			$pfb_write_failed = pfb_dns_config_write_failed($pfb_written);
+			if (!$pfb_write_failed && $pfb_custom_marker !== '') {
+				touch($pfb_custom_marker);
+			}
 		} finally {
 			unlock($pfb_config_lock);
 		}
