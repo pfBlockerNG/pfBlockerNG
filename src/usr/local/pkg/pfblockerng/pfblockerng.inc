@@ -260,17 +260,41 @@ function pfb_update_view_response(array $query, callable $call): array {
 }
 
 /**
- * Run Now, Force and the Wizard reload (issue #3941): ask Core for a `manual` Update of $scope with $force, and say what came of
- * it. An Update already running is Core's `conflict`; the page then views the one that runs. $scope and $force are allow-listed
- * here, before the call: an unknown value falls back to `both` / `none`, so what the page was sent never reaches Core. The call is
- * bounded by PFB_CORE_PAGE_TIMEOUT.
+ * Ask Core to start an Update. Only manual requests carry scope/force; save and lifecycle callers use apply.
  *
  * @param callable(string, array, ?string, int): array{status: int, body: ?array, error: ?string} $call pfb_core_call()
+ */
+function pfb_core_update_start(string $trigger, callable $call, ?string $scope = NULL, ?string $force = NULL): array {
+	$params = ['requestId' => bin2hex(random_bytes(16)), 'trigger' => $trigger];
+	if ($trigger === 'manual') {
+		$params['scope'] = in_array($scope, ['ip', 'dnsbl', 'both'], TRUE) ? $scope : 'both';
+		$params['force'] = in_array($force, ['none', 'parse', 'download', 'both'], TRUE) ? $force : 'none';
+	}
+	return $call('StartUpdate', $params, NULL, PFB_CORE_PAGE_TIMEOUT);
+}
+
+/**
+ * A save-mode sync preserves package reconciliation without running feed loops; Core owns the subsequent apply.
+ */
+function pfb_update_apply_after_save(?callable $call = NULL): bool {
+	$answer = pfb_core_update_start('apply', $call ?? 'pfb_core_call');
+	$failure = pfb_update_core_failure($answer);
+	if ($failure === NULL) {
+		return TRUE;
+	}
+	pfb_mark_pending_changes();	// Core can be restarting or busy; the next tick retries the apply.
+	logger(LOG_NOTICE, localize_text("Core did not start the saved-settings apply: {$failure}; pending apply recorded."),
+		LOG_PREFIX_PKG_PFBLOCKERNG);
+	return FALSE;
+}
+
+/**
+ * Run Now, Force and the Wizard reload: ask Core for a manual Update and describe its response.
  */
 function pfb_update_start(string $scope, string $force, callable $call): string {
 	$scope = in_array($scope, ['ip', 'dnsbl', 'both'], TRUE) ? $scope : 'both';
 	$force = in_array($force, ['none', 'parse', 'download', 'both'], TRUE) ? $force : 'none';
-	$answer = $call('StartUpdate', ['requestId' => bin2hex(random_bytes(16)), 'trigger' => 'manual', 'scope' => $scope, 'force' => $force], NULL, PFB_CORE_PAGE_TIMEOUT);
+	$answer = pfb_core_update_start('manual', $call, $scope, $force);
 	$failure = pfb_update_core_failure($answer);
 	if ($failure === NULL) {
 		return sprintf(gettext('Running: scope=%s force=%s'), $scope, $force);
