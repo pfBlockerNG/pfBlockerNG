@@ -99,8 +99,10 @@ type Feed struct{ Dir, Name string }
 
 func (f Feed) path(suffix string) string { return filepath.Join(f.Dir, f.Name+suffix) }
 
-// valid holds the name to a word, as pfb_update_check() holds the feed header (PFB_FILTER_WORD).
-func (f Feed) valid() bool { return f.Name != "" && allIn(f.Name, wordChars) }
+// valid keeps feed artifacts inside Feed.Dir while allowing dots in Blacklist categories.
+func (f Feed) valid() bool {
+	return f.Name != "" && f.Name != "." && f.Name != ".." && allIn(f.Name, wordChars+".")
+}
 
 // Decision is a probe's verdict; the zero Decision is Failed, so an unset verdict fails closed.
 type Decision int

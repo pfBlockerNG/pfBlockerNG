@@ -256,6 +256,7 @@ projections, keyed by `feeds/ipv4`, `feeds/ipv6` and `feeds/dnsbl`.
 | Provider field | Type, default |
 |---|---|
 | `id` (key) | string `[A-Za-z0-9_-]+`, not `0`: the item's `xml` |
+| `title` | string, `""`: read-only projection of the item's title |
 | `selected` | bool, `false`: id in `blacklist_selected` |
 | `categories` | string `[A-Za-z0-9_,.-]*`, `""`: the item's `selected` CSV |
 
@@ -472,6 +473,9 @@ ASCII word (`[A-Za-z0-9_]+`). A custom group uses `custom:dnsbl:<group>`, `custo
 the group is the same kind of word. The synthetic DNSBL-IP rows are `synthetic:ipv4:DNSBLIP_v4` and
 `synthetic:ipv6:DNSBLIP_v6`. The DNSBL phase accepts regular and custom DNSBL IDs; the IP phase accepts regular and custom
 IPv4/IPv6 IDs plus the synthetic IDs.
+Blacklist categories use `blacklist:<provider-id>:<category>` in the DNSBL phase only. Provider IDs match `[A-Za-z0-9_-]+`; categories match `[A-Za-z0-9_.-]+`; neither component may be empty, `.` or `..`, or contain a separator. Core resolves the provider and exact category from `schedule.categoryProviders`; an unknown pair returns a failed result with reason `unknown_category` without changing existing artifacts.
+
+Core reads the source beneath `--feed-blacklist-dir` at `<provider-id>/<provider-id>_<category-with-dashes-replaced-by-underscores>`. It accepts only a regular file contained in that provider directory and within feedfetch's size limit. The DNSBL baseline and parse artifacts use the same header as a regular DNSBL feed: `<provider-title>_<category-with-dashes-replaced-by-underscores>`, with `.orig`, `.parsed.ndjson`, `.parsed.v4.ip` and `.parsed.v6.ip` suffixes.
 The Update program calls DNSBL first, builds DNSBLIP, then calls the IP phase. The method deadline is 4 hours.
 FTP sources skip `Probe` and are ingested directly; feedfetch's FTP probe is unsupported, so each such phase reports a change.
 Before requesting the IP phase, the Outpost must run its existing `asn_shell scheduled` step when any named feed has format
@@ -583,7 +587,7 @@ pfb-dns ticket decides it.
 |---|---|
 | Binary | `/usr/local/pkg/pfblockerng/core/bin/freebsd-amd64/pfb-core`, `.../freebsd-arm64/pfb-core` (static, `CGO_ENABLED=0`; built by `scripts/build-pfb-dns.py`) |
 | rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd`, `--update-cmd`, `--zoneinfo /etc/localtime` (the host's zone, which the scheduler reads local time in) and the feed phase's flags below |
-| Feed phase flags | `--feed-local-dir` once per folder a `file://` feed may sit directly in: the 14 of `pfb_filter()`'s local-path rule (`/var/db/pfblockerng` and its `deny`, `permit`, `match`, `native`, `original`, `dnsbl`, `dnsblorig`, `ET`, `ut1` and `shallalist` folders, `/usr/local/www`, `/usr/local/share/GeoIP`, `…/GeoIP/cc`) and the real path of the database folder (resolved when the script is generated, when it exists); `--script-dir` twice, in search order (`/usr/local/pkg/pfblockerng/list_scripts`, then `/usr/local/pkg/pfblockerng`); `--rsync-bin /usr/local/bin/rsync`; `--user-agent` the cURL user agent of the package, `pfSense/pfBlockerNG cURL download agent-<unique id>`, as one quoted argument without the line break an id may end with. Each value is `escapeshellarg()`-quoted; Core refuses a relative path and a user agent with a control character as a usage error (exit status 2) |
+| Feed phase flags | `--feed-local-dir` once per folder a `file://` feed may sit directly in: the 14 of `pfb_filter()`'s local-path rule (`/var/db/pfblockerng` and its `deny`, `permit`, `match`, `native`, `original`, `dnsbl`, `dnsblorig`, `ET`, `ut1` and `shallalist` folders, `/usr/local/www`, `/usr/local/share/GeoIP`, `…/GeoIP/cc`) and the real path of the database folder; `--feed-blacklist-dir` for downloaded Blacklist category sources; `--feed-db-dir` for synthetic DNSBLIP sources; `--script-dir` twice, in search order (`/usr/local/pkg/pfblockerng/list_scripts`, then `/usr/local/pkg/pfblockerng`); `--rsync-bin /usr/local/bin/rsync`; `--user-agent` the package cURL user agent. Each value is one argument. |
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
 | Socket | `/var/run/pfb_core/api.sock` |

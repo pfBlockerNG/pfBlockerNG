@@ -106,6 +106,7 @@ func TestFeedPhaseAllowsParseOverrideDuringApply(t *testing.T) {
 func TestFeedPhaseAcceptsConfiguredBlacklistCategoryIDs(t *testing.T) {
 	c, f := startUpdateCore(t)
 	t.Cleanup(f.release)
+	c.initialize()
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"feed-phase-blacklist","trigger":"manual"}`), 200, `{}`)
 	var request struct {
 		Token string `json:"token"`
@@ -118,9 +119,9 @@ func TestFeedPhaseAcceptsConfiguredBlacklistCategoryIDs(t *testing.T) {
 	})
 
 	valid := `{"requestId":"valid-blacklist","token":"` + request.Token +
-		`","phase":"dnsbl","feeds":["blacklist:work:adult"],"force":"none"}`
+		`","phase":"dnsbl","feeds":["blacklist:prov:cat1"],"force":"none"}`
 	got := c.post("FeedPhase", valid)
-	if got.status != 200 || !strings.Contains(string(got.body), `"blacklist:work:adult"`) {
+	if got.status != 200 || !strings.Contains(string(got.body), `"blacklist:prov:cat1"`) || !strings.Contains(string(got.body), `"reason":"feed_directory_missing"`) {
 		t.Fatalf("FeedPhase rejected a configured blacklist category: %d %s", got.status, got.body)
 	}
 	for i, id := range []string{

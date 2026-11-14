@@ -115,7 +115,7 @@ final class CoreSettingsScheduleParityTest extends TestCase
 			}
 		}
 		foreach ($expectedSchedule['categoryProviders'] as &$provider) {
-			$provider['title'] = $providerTitles[$provider['id']] ?? '';
+			$provider = ['id' => $provider['id'], 'title' => $providerTitles[$provider['id']] ?? '', 'selected' => $provider['selected'], 'categories' => $provider['categories']];
 		}
 		unset($provider);
 		$this->assertSame($expectedSchedule, $reply['settings']['schedule'] ?? NULL, "{$case['id']}: the schedule projection");
