@@ -5956,11 +5956,17 @@ function pfb_schedule_feed_selected(string $family, string $header): bool
 	return $id !== NULL && isset($pfb['scheduled_selected_ids'][$id]);
 }
 
-/** Report a feed's terminal source check to the Update that runs it (issue #3941): Core records it from the result file. The first one stands. */
+/**
+ * Report a feed's or an Extra's terminal check to the Update that runs it (issue #3941): Core records it from the result. The
+ * first one stands, and it is on fd 3 at once, so the Update's death loses no check that finished (issue #4002).
+ */
 function pfb_schedule_outcome_record(string $id, PfbScheduleTerminalResult $outcome): void
 {
 	global $pfb;
-	$pfb['scheduled_outcomes'][$id] ??= $outcome->value;
+	if (!isset($pfb['scheduled_outcomes'][$id])) {
+		$pfb['scheduled_outcomes'][$id] = $outcome->value;
+		pfb_core_update_report(['outcomes' => [$id => $outcome->value]]);	// a failed write is retried by the whole result at the end
+	}
 }
 
 /** Acquire the scheduler dispatcher lock, reusing this process's existing hold. */
@@ -6713,9 +6719,10 @@ function pfb_core_update_request(string $stdin): array
  *                     are named or the Outpost's own files ask for one (pfb_core_update_retry_due()), and the apply of a changed dcc
  *   apply             the pending apply: its ledger flag cleared first, the flag and marker kept when the apply fails
  *   manual            the scope, with the force the operator asked for (Run Now, Force Check)
- * The result on $resultPath is {"version":1,"outcomes":{id: outcome},"attempted":[ids],"geoipReady":bool}: each feed's terminal
- * check and each Extra that ran; the Extras that failed or that the Outpost skipped are `attempted`. Feeds a pass did not reach
- * get no outcome: they stay pending in Core.
+ * The result on $resultPath is lines of {"version":1,"outcomes":{id: outcome},"attempted":[ids],"geoipReady":bool}: each feed's
+ * terminal check and each Extra that succeeded is a line of its own as it finishes (pfb_schedule_outcome_record()), and the last
+ * line is the whole result; the Extras that failed or that the Outpost skipped are `attempted`. Feeds a pass did not reach get
+ * no outcome: they stay pending in Core.
  *
  * @param array<string, callable> $seams test seams: `extra` (pfb_schedule_extra_run()), `cron` (pfblockerng_sync_cron()) and
  *   `sync` (sync_package_pfblockerng())
@@ -6725,7 +6732,7 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 	global $pfb;
 	$pfb['core_update'] = TRUE;
 	$pfb['scheduled_outcomes'] = [];
-	$result = ['outcomes' => [], 'attempted' => [], 'geoipReady' => NULL];
+	$result = ['attempted' => [], 'geoipReady' => NULL];
 	try {
 		try {
 			$request = pfb_core_update_request($stdin);
@@ -6733,6 +6740,7 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 			pfb_logger("\nCore Update request refused: {$e->getMessage()}\n", 2);
 			return 2;
 		}
+		$pfb['core_update_result'] = @fopen($resultPath, 'wb');
 		if ($request['trigger'] === 'scheduled' && pfb_cron_disabled()) {
 			// The sentinel suppresses scheduled work only: an empty result leaves Core's feeds pending, and the exit is "try later"
 			pfb_logger("\nCore Update: the scheduled Update is skipped: " . pfb_cron_disable_path() . " disables scheduled work.\n", 1);
@@ -6744,25 +6752,28 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 				pfb_logger("\nCore Update failed: {$e->getMessage()}\n", 2);
 				$status = 1;
 			}
-			$result['outcomes'] += $pfb['scheduled_outcomes'];
 			$result['geoipReady'] ??= pfb_geoip_generation_ready();
 		}
-		$json = json_encode([
-			'version' => 1, 'outcomes' => (object) $result['outcomes'], 'attempted' => $result['attempted'],
-			'geoipReady' => $result['geoipReady'],
-		]);
-		$out = @fopen($resultPath, 'wb');
-		if ($json === FALSE || $out === FALSE || fwrite($out, $json) !== strlen($json)) {
+		if (!pfb_core_update_report(['outcomes' => (object) $pfb['scheduled_outcomes']] + $result)) {
 			pfb_logger("\nCore Update: the result could not be written to {$resultPath}\n", 2);
 			$status = $status ?: 1;
 		}
-		if (is_resource($out)) {
-			fclose($out);
-		}
 		return $status;
 	} finally {
-		unset($pfb['core_update']);
+		if (is_resource($pfb['core_update_result'] ?? NULL)) {
+			fclose($pfb['core_update_result']);
+		}
+		unset($pfb['core_update'], $pfb['core_update_result']);
 	}
+}
+
+/** Append one result line to the Update's fd 3; FALSE when it is not written whole or no Update is served. */
+function pfb_core_update_report(array $result): bool
+{
+	global $pfb;
+	$out = $pfb['core_update_result'] ?? NULL;
+	$json = json_encode(['version' => 1] + $result);
+	return is_resource($out) && $json !== FALSE && fwrite($out, "{$json}\n") === strlen($json) + 1;
 }
 
 /**
@@ -6771,7 +6782,7 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
  * does not start (a page save, an HA receive). A manual Update leaves them to the passes it calls.
  *
  * @param array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>} $request
- * @param array{outcomes: array<string, string>, attempted: list<string>, geoipReady: ?bool} $result
+ * @param array{attempted: list<string>, geoipReady: ?bool} $result
  */
 function pfb_core_update_run(array $request, array &$result, array $seams): int
 {
@@ -6890,7 +6901,7 @@ function pfb_core_update_scheduled(array $request, array &$result, array $seams)
 			logger(LOG_WARNING, localize_text("Scheduled Extra failed [ {$id} ]: {$error->getMessage()}"), LOG_PREFIX_PKG_PFBLOCKERNG);
 		}
 		if ($done) {
-			$result['outcomes'][$id] = 'success';
+			pfb_schedule_outcome_record($id, PfbScheduleTerminalResult::Success);
 		} else {
 			$result['attempted'][] = $id;
 			$ok = FALSE;
