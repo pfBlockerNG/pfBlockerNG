@@ -1702,6 +1702,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// Collect pfSense interface order
 	$ifaces = pfb_build_if_list(TRUE, FALSE);
 
+	$pfb['base_rule'] = array();	// no inbound or outbound interface selected: the auto rules start from no base rule
 	foreach (array('inbound', 'outbound') as $type) {
 		$pfb["{$type}_interfaces"] = $pfb["{$type}_floating"] = array();
 
@@ -4909,7 +4910,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 						// Add '[s]' to Alias descriptions (Bypass States removal feature)
 						$adescr = "pfBlockerNG {$pfbdescr} Alias";
-						if ($list['stateremoval'] == 'disabled') {
+						if (($list['stateremoval'] ?? '') == 'disabled') {	// a wizard-made list has no stateremoval
 							$adescr = "pfBlockerNG {$pfbdescr} Alias [s]";
 						}
 
