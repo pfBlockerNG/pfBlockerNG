@@ -114,6 +114,177 @@ function pfb_core_feed_artifact_copy(string $source, string $target, string $app
 	return TRUE;
 }
 
+function pfb_dnsbl_feed_phase_id(array $list, array $row, string $header): ?string
+{
+	if (isset($row['feed_phase_id'])) {
+		$id = $row['feed_phase_id'];
+	} elseif (isset($row['custom'])) {
+		$group = $list['aliasname'] ?? NULL;
+		if (!is_string($group) || preg_match('/\A[A-Za-z0-9_]+\z/', $group) !== 1) {
+			return NULL;
+		}
+		$id = "custom:dnsbl:{$group}";
+	} else {
+		$id = pfb_schedule_feed_id('dnsbl', $header);
+	}
+	return is_string($id) && strlen($id) <= 64 && preg_match('/\A[A-Za-z0-9:_-]+\z/', $id) === 1 ? $id : NULL;
+}
+
+function pfb_dnsbl_feed_phase_ids(array $lists, callable $include): array
+{
+	$ids = [];
+	foreach ($lists as $list) {
+		if (!is_array($list) || ($list['action'] ?? '') === 'Disabled' || !is_array($list['row'] ?? NULL)) {
+			continue;
+		}
+		foreach ($list['row'] as $row) {
+			if (!is_array($row) || empty($row['url']) || ($row['state'] ?? 'Disabled') === 'Disabled') {
+				continue;
+			}
+			$header = pfb_filter((string) ($row['header'] ?? ''), PFB_FILTER_WORD, 'DNSBL - Processes');
+			if (empty($header)) {
+				continue;
+			}
+			$id = pfb_dnsbl_feed_phase_id($list, $row, $header);
+			if ($id !== NULL && $include($list, $row, $header, $id)) {
+				$ids[] = $id;
+			}
+		}
+	}
+	return $ids;
+}
+
+/** @param list<string> $orderedIds @param list<string> $parseIds @return list<array{feeds:list<string>,force:string}> */
+function pfb_core_feed_phase_request_groups(array $orderedIds, array $parseIds, string $updateForce): array
+{
+	$parseSet = array_fill_keys($parseIds, TRUE);
+	$normal = $parse = [];
+	$first = NULL;
+	foreach ($orderedIds as $id) {
+		if (isset($parseSet[$id])) {
+			$parse[] = $id;
+			$first ??= 'parse';
+		} else {
+			$normal[] = $id;
+			$first ??= 'normal';
+		}
+	}
+	$groups = [];
+	if ($first === 'parse') {
+		if ($parse !== []) {
+			$groups[] = ['feeds' => $parse, 'force' => 'parse'];
+		}
+		if ($normal !== []) {
+			$groups[] = ['feeds' => $normal, 'force' => $updateForce];
+		}
+	} else {
+		if ($normal !== []) {
+			$groups[] = ['feeds' => $normal, 'force' => $updateForce];
+		}
+		if ($parse !== []) {
+			$groups[] = ['feeds' => $parse, 'force' => 'parse'];
+		}
+	}
+	return $groups;
+}
+
+/**
+ * @param list<array{feeds:list<string>,force:string}> $groups
+ * @param callable(string, array, ?string, int): array{status:int, body:?array, error:?string}|null $call
+ * @return array<string,array<string,mixed>>
+ */
+function pfb_core_feed_phase_groups(string $phase, string $token, array $groups, ?callable $call = NULL): array
+{
+	$results = [];
+	foreach ($groups as $group) {
+		foreach (pfb_core_feed_phase($token, $phase, $group['feeds'], $group['force'], $call) as $result) {
+			$results[$result['id']] = $result;
+		}
+	}
+	return $results;
+}
+
+function pfb_dnsbl_feed_phase_copy_artifacts(array $result, string $origdir, string $folder, string $header): bool
+{
+	if (!in_array($result['disposition'] ?? NULL, ['changed', 'unchanged', 'reparsed'], TRUE)) {
+		return FALSE;
+	}
+	$ndjson = "{$origdir}/{$header}.parsed.ndjson";
+	$ipv4 = "{$origdir}/{$header}.parsed.v4.ip";
+	$ipv6 = "{$origdir}/{$header}.parsed.v6.ip";
+	if (!is_file($ndjson) || !is_file($ipv4) || !is_file($ipv6)) {
+		return FALSE;
+	}
+	$ipv4Size = @filesize($ipv4);
+	$ipv6Size = @filesize($ipv6);
+	if (!is_int($ipv4Size) || !is_int($ipv6Size)
+		|| !pfb_core_feed_artifact_copy($ndjson, "{$folder}/{$header}.bk")) {
+		return FALSE;
+	}
+	foreach (['v4' => [$ipv4, $ipv4Size], 'v6' => [$ipv6, $ipv6Size]] as $family => [$source, $size]) {
+		$target = "{$folder}/{$header}_{$family}.ip";
+		if ($size === 0) {
+			unlink_if_exists($target);
+		} elseif (!pfb_core_feed_artifact_copy($source, $target)) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+
+
+
+function pfb_ip_feed_phase_id(array $list, array $row, string $header): ?string
+{
+	$vtype = (string) ($list['vtype'] ?? '');
+	if (!pfb_valid_vtype($vtype)) {
+		return NULL;
+	}
+	$family = $vtype === '_v4' ? 'ipv4' : 'ipv6';
+	if (isset($list['dnsblip'])) {
+		$id = "synthetic:{$family}:DNSBLIP{$vtype}";
+	} elseif (isset($row['custom'])) {
+		$group = $list['aliasname'] ?? NULL;
+		if (!is_string($group) || preg_match('/\A[A-Za-z0-9_]+\z/', $group) !== 1) {
+			return NULL;
+		}
+		$id = "custom:{$family}:{$group}";
+	} else {
+		$id = pfb_schedule_feed_id($family, $header);
+	}
+	return is_string($id) && strlen($id) <= 64 && preg_match('/\A[A-Za-z0-9:_-]+\z/', $id) === 1 ? $id : NULL;
+}
+
+function pfb_ip_feed_phase_ids(array $lists, callable $include): array
+{
+	$ids = [];
+	foreach ($lists as $list) {
+		if (!is_array($list) || ($list['action'] ?? '') === 'Disabled' || !is_array($list['row'] ?? NULL)) {
+			continue;
+		}
+		$vtype = (string) ($list['vtype'] ?? '');
+		if (!pfb_valid_vtype($vtype)) {
+			continue;
+		}
+		foreach ($list['row'] as $row) {
+			if (!is_array($row) || empty($row['url']) || ($row['state'] ?? 'Disabled') === 'Disabled'
+				|| pfb_reserved_header_skip_active(isset($list['dnsblip']), $row['header'] ?? '')) {
+				continue;
+			}
+			$header = pfb_filter((string) ($row['header'] ?? '') . $vtype,
+				PFB_FILTER_WORD, 'Download and Collect IPv4/IPv6 lists');
+			if (empty($header)) {
+				continue;
+			}
+			$id = pfb_ip_feed_phase_id($list, $row, $header);
+			if ($id !== NULL && $include($list, $row, $header, $id)) {
+				$ids[] = $id;
+			}
+		}
+	}
+	return $ids;
+}
 /** @return array{range:string,ipv4:string,ipv6:string} */
 function pfb_ip_regex_config(): array {
 	return [
@@ -2529,13 +2700,16 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						foreach ($categories as $category) {
 
 							// Replace dash to underscore in Header name
+							// Preserve the provider's raw category token in Core's stable ID.
+							$category_id = $category;
 							$category = str_replace('-', '_', $category);
 
 							if (!empty($category)) {
 								$list['row'][] = array(	'format'	=> 'auto',
 											'state'		=> 'Enabled',
 											'url'		=> "{$pfb['dbdir']}/{$type}/{$type}_{$category}",
-											'header'	=> "{$item['title']}_{$category}"
+											'header'	=> "{$item['title']}_{$category}",
+											'feed_phase_id' => "blacklist:{$type}:{$category_id}"
 											);
 
 								// If update available set Update flag for each selected Category
@@ -2638,6 +2812,50 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				}
 			}
 
+			$pfb_dnsbl_phase_skipped = !empty($pfb['save'])
+				|| !in_array($pfb['feed_phase_scope'] ?? 'both', ['both', 'dnsbl'], TRUE);
+			$pfb_dnsbl_phase_results = [];
+			if (!$pfb_dnsbl_phase_skipped) {
+				$pfb_dnsbl_stale_ids = [];
+				$pfb_dnsbl_phase_ids = pfb_dnsbl_feed_phase_ids($lists,
+					static function (array $list, array $row, string $header, string $id) use (&$pfb_dnsbl_stale_ids): bool {
+						global $pfb, $pfbarr;
+						pfb_determine_list_detail($list['action'], $header, 'pfblockerngdnsblsettings', '0');
+						$folder = $pfbarr['folder'];
+						$txt = "{$folder}/{$header}.txt";
+						$txt_exists = file_exists($txt);
+						$staging_current = $txt_exists
+							&& pfb_dnsbl_staging_is_current_generation(pfb_dnsbl_staging_first_line($txt));
+						$update = file_exists("{$folder}/{$header}.update");
+						$failed = file_exists("{$folder}/{$header}.fail");
+						$stale = !$staging_current && pfb_dnsbl_verbatim_reuse_active(
+							$txt_exists, $update, $failed, ($pfbarr['reuse'] ?? '') === '', TRUE);
+						$apply = ($pfb['feed_phase_trigger'] ?? '') === 'apply';
+						$selected = !$apply && (empty($pfb['scheduled_runtime_cron'])
+							|| isset($pfb['scheduled_selected_ids'][$id]));
+						if ($stale) {
+							$pfb_dnsbl_stale_ids[] = $id;
+						}
+						if ($apply) {
+							return $stale;
+						}
+						return $selected || ($txt_exists && ($stale || $update || $failed));
+					});
+				if ($pfb_dnsbl_phase_ids !== []) {
+					$pfb_dnsbl_phase_groups = pfb_core_feed_phase_request_groups(
+						$pfb_dnsbl_phase_ids,
+						$pfb_dnsbl_stale_ids,
+						(string) ($pfb['feed_phase_force'] ?? 'none')
+					);
+					$pfb_dnsbl_phase_results = pfb_core_feed_phase_groups(
+						'dnsbl',
+						(string) ($pfb['feed_phase_token'] ?? ''),
+						$pfb_dnsbl_phase_groups
+					);
+				}
+			}
+
+
 			// issue #1494: the empty-header skip message below reads $logtab before
 			// its per-row assignment when the very first row hits that branch.
 			$logtab = '';
@@ -2672,461 +2890,205 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					// config with no srcint field warning-free.
 					$srcint = $list['srcint'] ?? '' ?: FALSE;
 
-					// DNSBL Advanced Tunable - (Pre/Post Script processing) — issue #1926:
-					// pickers were saved but never executed; mirrors the IP loop.
-					$pfb_dnsbl_script_pre  = FALSE;
+					// Feed pre-scripts run in Core; PHP keeps only the downstream post-script.
 					$pfb_dnsbl_script_post = FALSE;
-					if (!empty($list['script_pre'])) {
-						$pfb_dnsbl_script_pre = pfb_resolve_list_script($list['script_pre']);
-					}
 					if (!empty($list['script_post'])) {
 						$pfb_dnsbl_script_post = pfb_resolve_list_script($list['script_post']);
 					}
-					foreach ($list['row'] as $key => $row) {
-						$pfb_row_script_pre  = $pfb_dnsbl_script_pre;
-						$pfb_row_script_post = $pfb_dnsbl_script_post;
-						if (!empty($row['url']) && $row['state'] != 'Disabled') {
-
-							// Empty header field validation check
-							$header		= pfb_filter($row['header'], PFB_FILTER_WORD, 'DNSBL - Processes');
-							if (empty($header)) {
-								$log = "\n[ {$row['url']} ]{$logtab} Header Field cannot be empty. *Skipping* \n";
-								pfb_logger("{$log}", 2);
-								continue;
-							}
-							$header_esc	= escapeshellarg($header);
-
-							$domain_data	= '';		// List of Domains found in feed
-
-							// If row is a custom_list, set flag.
-							if (isset($row['custom'])) {
-								$custom = TRUE;
+					foreach ($list['row'] as $row) {
+						if (empty($row['url']) || ($row['state'] ?? 'Disabled') === 'Disabled') {
+							continue;
+						}
+						$header = pfb_filter((string) ($row['header'] ?? ''), PFB_FILTER_WORD, 'DNSBL - Processes');
+						if (empty($header)) {
+							pfb_logger("\n[ {$row['url']} ]{$logtab} Header Field cannot be empty. *Skipping* \n", 2);
+							continue;
+						}
+						$custom = isset($row['custom']);
+						$mode = (($row['action'] ?? '') === 'Permit') ? 'permit' : 'deny';
+						$effective = pfb_dnsbl_effective_logging(
+							$list['logging'] ?? NULL,
+							$pfb['dnsbl_global_log'],
+							$pfb['dnsbl_global_mode'],
+							$pfb['dnsbl_policy_legacy']
+						);
+						$logging_type = pfb_dnsbl_mechanism_flag($effective);
+						pfb_determine_list_detail($list['action'], $header, 'pfblockerngdnsblsettings', '0');
+						$pfbfolder = $pfbarr['folder'];
+						$pfborig = $pfbarr['orig'];
+						$pfbreuse = $pfbarr['reuse'];
+						$logtab = $pfbarr['logtab'];
+						$txt = "{$pfbfolder}/{$header}.txt";
+						$txt_exists = file_exists($txt);
+						$feed_id = pfb_dnsbl_feed_phase_id($list, $row, $header);
+						if ($feed_id === NULL) {
+							pfb_logger("\n[ {$header} ]{$logtab} Invalid Core FeedPhase ID. *Skipping*\n", 2);
+							continue;
+						}
+						$apply = ($pfb['feed_phase_trigger'] ?? '') === 'apply';
+						$scheduled_selected = !$apply && (empty($pfb['scheduled_runtime_cron'])
+							|| isset($pfb['scheduled_selected_ids'][$feed_id]));
+						if (!$scheduled_selected && !$txt_exists) {
+							continue;
+						}
+						$staging_current_generation = $txt_exists
+							&& pfb_dnsbl_staging_is_current_generation(pfb_dnsbl_staging_first_line($txt));
+						$stale_generation_rebuild = !$staging_current_generation && pfb_dnsbl_verbatim_reuse_active(
+							$txt_exists,
+							file_exists("{$pfbfolder}/{$header}.update"),
+							file_exists("{$pfbfolder}/{$header}.fail"),
+							$pfbreuse === '',
+							TRUE
+						);
+						$phase_required = $apply
+							? $stale_generation_rebuild
+							: ($scheduled_selected || $stale_generation_rebuild
+								|| file_exists("{$pfbfolder}/{$header}.update")
+								|| file_exists("{$pfbfolder}/{$header}.fail"));
+						$feed_result = $pfb_dnsbl_phase_results[$feed_id] ?? NULL;
+						if ($pfb_dnsbl_phase_skipped && !$txt_exists) {
+							continue;
+						}
+						if (!$pfb_dnsbl_phase_skipped && $phase_required
+							&& (!is_array($feed_result) || ($feed_result['disposition'] ?? '') === 'failed')) {
+							$feed_error = is_array($feed_result)
+								? $feed_result
+								: ['stage' => 'core', 'reason' => 'core_response_invalid', 'preScriptFailed' => FALSE];
+							$stage = (string) ($feed_error['stage'] ?? 'core');
+							$reason = (string) ($feed_error['reason'] ?? 'core_response_invalid');
+							$message = "[ {$alias} - {$header} ] FeedPhase FAIL [{$stage}: {$reason}]";
+							if ($stage === 'script' || !empty($feed_error['preScriptFailed'])) {
+								pfb_dnsbl_script_failure_continue(
+									$alias,
+									$message,
+									$pfb['dbdir'],
+									"{$pfbfolder}/{$header}.update",
+									$pfb_script_state,
+									$staging_current_generation,
+									$txt,
+									static function () use (&$lists_dnsbl_all, &$pfb_py_feeds, &$alias_cnt,
+										$row, $header, $alias, $logging_type, $custom, $mode, $filter_top1m, $pfbfolder): void {
+										$lists_dnsbl_all[] = "{$row['header']}.txt";
+										$pfb_py_feeds[] = pfb_feed_manifest_row(
+											$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m);
+										$alias_cnt = pfb_dnsbl_alias_count_script_failure("{$pfbfolder}/{$header}.txt", $alias_cnt);
+									}
+								);
 							} else {
-								$custom = FALSE;
+								@touch("{$pfbfolder}/{$header}.fail");
+								$pfb_dl_failed = TRUE;
+								pfb_logger("\n{$message}\n", 2);
+								pfb_download_ledger_failure('dnsbl', $alias, $header, $pfb['dbdir']);
 							}
+							continue;
+						}
 
-							// ADR-31: per-row action → manifest mode.
-							// 'action' is a dynamic per-row key (like 'custom') — read
-							// directly; default/absent ⇒ 'Deny' (deny path, byte-identical).
-							// Config storage freeze (ADR-28): only 'Permit'/'Deny' are stored;
-							// absent is treated as 'Deny'.
-							$mode = (($row['action'] ?? '') === 'Permit') ? 'permit' : 'deny';
-
-							// issue #3288: resolve the group's effective mechanism ONCE --
-							// Default/group-Default live-inherits the global mechanism,
-							// Override always does, otherwise the group's own explicit
-							// choice; $legacy live-projects a still-legacy box's historical
-							// VIP markers so effective behaviour never depends on migration
-							// timing (replaces the old unconditional-override precedence).
-							$effective = pfb_dnsbl_effective_logging(
-								$list['logging'] ?? NULL,
-								$pfb['dnsbl_global_log'],
-								$pfb['dnsbl_global_mode'],
-								$pfb['dnsbl_policy_legacy']
-							);
-
-							// issue #3291: single mapping shared with the built-in manifest flag
-							// (pfb_dnsbl_mechanism_flag) -- no second policy model.
-							$logging_type	= pfb_dnsbl_mechanism_flag($effective);
-
-							// Determine 'list' details (return array $pfbarr)
-							pfb_determine_list_detail($list['action'], $header, 'pfblockerngdnsblsettings', '0');
-							$pfbadv		= $pfbarr['adv'];
-							$pfbfolder	= $pfbarr['folder'];
-							$pfborig	= $pfbarr['orig'];
-							$pfbreuse	= $pfbarr['reuse'];
-							$logtab		= $pfbarr['logtab'];
-
-							$txt_exists	= file_exists("{$pfbfolder}/{$header}.txt");
-							$scheduled_selected = pfb_schedule_feed_selected('dnsbl', $header);
-							if (!$scheduled_selected && !$txt_exists) {
-								continue;
-							}
-							$reuse_unset	= $pfbreuse == '';
-							$staging_current_generation = pfb_dnsbl_staging_is_current_generation(
-								pfb_dnsbl_staging_first_line("{$pfbfolder}/{$header}.txt"));
-							if (!$scheduled_selected) {
-								$pfb_row_script_pre = $pfb_row_script_post = FALSE;
-								$staging_current_generation = TRUE;
-							}
-
-							// issue #1960/#1278: a configured pre/post script re-runs its transform
-							// every pass, but the Hold contract ("download once, never again") is
-							// protected ONLY by this fast path -- so the script term may push a row
-							// off it solely when a local '.orig' baseline exists to reparse (routes
-							// to the existing local-reuse branch below, never the network). No
-							// baseline -> stay on the fast path; no Hold-specific branch anywhere.
-							// (the #1083 stale-generation re-call below is a DIFFERENT question
-							// and stays deliberately ungated -- see the comment there).
-							$pfb_dnsbl_verbatim_reuse = pfb_dnsbl_verbatim_reuse_active(
-								$txt_exists,
-								$scheduled_selected && file_exists("{$pfbfolder}/{$header}.update"),
-								$scheduled_selected && file_exists("{$pfbfolder}/{$header}.fail"),
-								$reuse_unset,
-								$staging_current_generation);
-							$pfb_dnsbl_reuse_decision = pfb_dnsbl_script_reuse_decision(
-								$pfb_dnsbl_verbatim_reuse, $pfb_row_script_pre, $pfb_row_script_post,
-								"{$pfborig}/{$header}.orig");
-							$pfb_dnsbl_user_script = $pfb_dnsbl_reuse_decision['has_user_script'];
-							$pfb_dnsbl_script_reparse = $pfb_dnsbl_reuse_decision['reparse'];
-
-							if ($pfb_dnsbl_reuse_decision['verbatim']) {
-
-
-								if ($row['state'] == 'Hold') {
-									$log = "\n[ {$header} ]{$logtab} static hold.";
-								} else {
-									$log = "\n[ {$header} ]{$logtab} exists.";
-								}
-								pfb_logger("{$log}", 1);
-
-								// Collect existing list stats
-								$lists_dnsbl_all[]	= "{$row['header']}.txt";
-								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
-								// ADR-31: pass $mode derived from per-row 'action' (above).
-								$pfb_py_feeds[]		= pfb_feed_manifest_row(
-									$header, $alias, $logging_type,
-									$custom ? 'user' : 'feed',
-									$mode, $filter_top1m);
-								// issue #1162/#1261: pfb_count_lines() returns NULL on a read
-								// failure -- 0 preserves the exec()-era fallback.
-								$alias_cnt		= pfb_dnsbl_alias_count_verbatim("{$pfbfolder}/{$header}.txt", $alias_cnt);
-							}
-							else {
-								// #1083/#1960: this branch is entered when the fast-path check above
-								// is FALSE -- either the FILE-STATE conditions rejected verbatim reuse
-								// (staging generation, txt/update/fail existence, reuse toggle), OR
-								// they all held but $pfb_dnsbl_script_reparse pushed the row off the
-								// fast path (a configured script with a local '.orig' baseline to
-								// reparse). Rebuild via the same reparse-from-.orig machinery a Reload
-								// uses, never a network refetch when .orig is available.
-								// issue #1960: this re-call is deliberately NOT gated by
-								// $pfb_dnsbl_user_script/$pfb_dnsbl_script_reparse -- it answers a
-								// DIFFERENT question than the fast path above ("among the file-state
-								// conditions, was stale staging generation the ONLY reason reuse was
-								// rejected?"). A stale-generation .txt with a configured script still
-								// re-runs its pre-script on this cheaper reparse (the
-								// normalize/reuse-skip call below is FALSE anyway here, since
-								// $downloaded_fresh is FALSE); gating this call would only force an
-								// unneeded network refetch for that case, silently changing #1083's
-								// Rebuild / pfb_dnsbl_hold_stale_rebuild_skip /
-								// pfb_dnsbl_stale_rebuild_converge_txt behaviour that nobody asked for.
-								$stale_generation_rebuild = !$staging_current_generation &&
-									pfb_dnsbl_verbatim_reuse_active(
-										$txt_exists,
-										file_exists("{$pfbfolder}/{$header}.update"),
-										file_exists("{$pfbfolder}/{$header}.fail"),
-										$reuse_unset,
-										TRUE);
-								// issue #1278: OR in the script-reparse route so a scripted row with
-								// a local '.orig' baseline reuses it (Reload, never a network
-								// refetch); a Hold row with no baseline never reaches this branch at
-								// all (see the fast path above).
-								$pfbreuse_effective = $pfbreuse == 'on' || $stale_generation_rebuild ||
-									$pfb_dnsbl_script_reparse;
-
-								if ($stale_generation_rebuild) {
-									$log = "\n[ {$header} ]{$logtab} Rebuild";
-								} elseif ($pfbreuse_effective && file_exists("{$pfborig}/{$header}.orig")) {
-									$log = "\n[ {$header} ]{$logtab} Reload";
-								} else {
-									$log = "\n[ {$header} ]{$logtab} Downloading update";
-								}
-								pfb_logger("{$log}", 1);
-								$file_dwn = "{$pfborig}/{$header}";
-								$orig_content_stale = FALSE;
-								$downloaded_fresh = FALSE;
-
-								// issue #1278: Hold means "download once, never again" -- skip the network
-								// fallback entirely and retry next pass; staging stays untouched.
-								if (pfb_dnsbl_hold_stale_rebuild_skip($stale_generation_rebuild, $row['state'] == 'Hold', file_exists("{$file_dwn}.orig"))) {
-									pfb_logger(" -- Hold: staying held, no baseline to reparse.\n", 1);
-									continue;
-								}
-
-								if (!$custom) {
-									pfb_logger(' .', 1);
-
-									// Allow cURL SSL downgrade 'Flex' if user configured.
-									$pflex = FALSE;
-									if ($row['state'] == 'Flex') {
-										$pflex = TRUE;
-									}
-
-									// Determine if list needs to be downloaded or reuse previously downloaded file.
-									if ($pfbreuse_effective && file_exists("{$file_dwn}.orig")) {
-										// File exists/reuse
-										pfb_logger(' completed .', 1);
-									} else {
-										// Download file
-										if (!(pfb_download(new PfbDownloadRequest(
-											listUrl: $row['url'],
-											downloadPath: $file_dwn,
-											flex: $pflex,
-											header: $header,
-											format: $row['format'],
-											logType: 1,
-											versionType: '',
-											timeout: 300,
-											type: '',
-											username: '',
-											password: '',
-											sourceInterface: $srcint,
-											extraHeaders: array(),
-										))->success)) {
-
-											// Determine reason for download failure
-											pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], '');
-											// ADR-61: keyed on $alias (pfB_/DNSBL_-prefixed), not $header --
-											// the widget's deep-link match needs that prefix (issue #998).
-											// issue #1048: close moves to once-per-alias-pass below, so a
-											// sibling feed's success can never mask this failure.
-											$pfb_dl_failed = TRUE;
-											pfb_download_ledger_failure('dnsbl', $alias, $header, $pfb['dbdir']);
-
-											// Utilize previously download file (If 'fail' marker exists)
-											if (file_exists("{$pfbfolder}/{$header}.fail") &&
-											    file_exists("{$file_dwn}.orig")) {
-												pfb_logger("\n  Restoring previously downloaded file\n ", 2);
-												$orig_content_stale = TRUE;
-											} else {
-												continue;
-											}
-										}
-										else {
-											// Clear any previous download fail marker
-											unlink_if_exists("{$pfbfolder}/{$header}.fail");
-											$downloaded_fresh = TRUE;
-											if (!empty($pfb['scheduled_runtime_cron'])) {
-												pfb_schedule_outcome_record("dnsbl:{$header}", PfbScheduleTerminalResult::Success);
-											}
-										}
-									}
-								}
-								else {
-									// Collect custom list data.
-									$custom_list = pfb_text_area_decode($row['custom'], FALSE, TRUE, TRUE);
-									@file_put_contents("{$file_dwn}.orig", $custom_list, LOCK_EX);
-									unset($custom_list);
-								}
-
-								// issue #1797: normalize once per file; the parse below reads .norm
-								// (raw .orig on normalize failure). A fresh download whose NORMALIZED
-								// content is byte-identical to the previous pass reuses the staged
-								// '.txt' the same way the verbatim-reuse branch does.
-								$pfb_norm = pfb_feed_normalize("{$file_dwn}.orig");
-								if (pfb_dnsbl_norm_reuse_skip($downloaded_fresh, (bool) $custom, $orig_content_stale,
-								    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $staging_current_generation,
-								    $pfb_dnsbl_user_script)) {
-									pfb_logger("\n[ {$header} ]{$logtab} unchanged after normalization.", 1);
-									$lists_dnsbl_all[]	= "{$row['header']}.txt";
-									// ADR-31: same manifest-row shape as the verbatim-reuse branch above.
-									$pfb_py_feeds[]		= pfb_feed_manifest_row(
-										$header, $alias, $logging_type,
-										$custom ? 'user' : 'feed',
-										$mode, $filter_top1m);
-									$alias_cnt		= pfb_dnsbl_alias_count_norm_skip("{$pfbfolder}/{$header}.txt", $alias_cnt);
+						$disposition = is_array($feed_result) ? $feed_result['disposition'] : 'unchanged';
+						if ($disposition === 'held' && !$txt_exists) {
+							continue;
+						}
+						$rebuild = !$pfb_dnsbl_phase_skipped && $disposition !== 'held'
+							&& (in_array($disposition, ['changed', 'reparsed'], TRUE)
+								|| !$txt_exists || $stale_generation_rebuild);
+						if (!$rebuild) {
+							if ($disposition === 'held') {
+								pfb_logger("\n[ {$header} ]{$logtab} static hold.", 1);
+								unlink_if_exists("{$pfbfolder}/{$header}.fail");
+							} else {
+								pfb_logger("\n[ {$header} ]{$logtab} exists.", 1);
+								if ($phase_required) {
 									unlink_if_exists("{$pfbfolder}/{$header}.update");
-									continue;
-								}
-
-								// issue #1926: DNSBL pre-script runs on a staged copy of the
-								// normalized output (#1925 shape); a failed transform keeps the
-								// last known-good staging and the '.update' marker for retry.
-								$pfb_parse_path = $pfb_norm['path'];
-								$pfb_staged_path = NULL;
-								if ($pfb_row_script_pre && is_file("{$pfb_row_script_pre}")) {
-									pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
-									$pfb_pre = pfb_list_pre_script_run($pfb_norm['path'], "{$file_dwn}.pre",
-									    $pfb_row_script_pre, $list['script_pre'], $header,
-									    escapeshellarg("{$file_dwn}.pre") . " dnsbl {$elog}");
-									if (!$pfb_pre['ok']) {
-										// issue #1958: pre-script failure genuinely served last-known-good --
-										// mark it in the ledger (distinct 'script' stage, never 'download') and
-										// retry the transform on the next ordinary pass via the '.update' marker.
-										pfb_dnsbl_script_failure_continue($alias,
-										    "[ {$alias} - {$header} ] Pre-script FAIL - serving last known-good",
-										    $pfb['dbdir'], "{$pfbfolder}/{$header}.update", $pfb_script_state,
-										    $staging_current_generation, "{$pfbfolder}/{$header}.txt",
-										    static function () use (&$lists_dnsbl_all, &$pfb_py_feeds, &$alias_cnt,
-										        $row, $header, $alias, $logging_type, $custom, $mode, $filter_top1m, $pfbfolder): void {
-										        $lists_dnsbl_all[] = "{$row['header']}.txt";
-										        $pfb_py_feeds[] = pfb_feed_manifest_row(
-										            $header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m);
-										        $alias_cnt = pfb_dnsbl_alias_count_script_failure("{$pfbfolder}/{$header}.txt", $alias_cnt);
-										    });
-										continue;
-									}
-									$pfb_parse_path = $pfb_pre['path'];
-									$pfb_staged_path = $pfb_pre['path'];
-								}
-
-								$ip_cnt = $ip_cnt6 = 0;
-								$ip_decision = ['count' => 0, 'loggable' => FALSE];
-								$ip6_decision = ['count' => 0, 'loggable' => FALSE];
-								$pfb_dnsbl_state = pfb_dnsbl_parse_state();	// CSV detection, reverse format, IPs found, ADR-22 strict scheme skips
-								$pfb_dnsbl_ctx = [
-									'header'    => $header,
-									'custom'    => (bool) $custom,
-									'dnsbl_ip'  => $pfb['dnsbl_ip'] != 'Disabled',
-									'lenient'   => $pfb['dnsbl_lenient'] === PfbToggle::On,
-									'parse_err' => $pfb['dnsbl_parse_err'],
-								];
-
-								// Parse downloaded file for Domain names
-								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
-									if (($dhandle = @fopen("{$pfbfolder}/{$header}.bk", 'w')) !== FALSE) {
-										$domain_data = pfb_dnsbl_parse_feed($fhandle, $dhandle, $pfb_dnsbl_state, $pfb_dnsbl_ctx)['rows'];
-									}
-									if ($dhandle) {
-										@fclose($dhandle);
-									}
-								}
-								if ($fhandle) {
-									@fclose($fhandle);
-								}
-								$domain_data_ip = $pfb_dnsbl_state['ip4'];
-								$domain_data_ip6 = $pfb_dnsbl_state['ip6'];
-								if ($pfb_dnsbl_state['updateip']) {
-									$pfb['updateip'] = TRUE;
-								}
-								// issue #1926: the staged pre-script copy is transient -- parsed above.
-								pfb_list_script_cleanup_staged($pfb_parse_path, $pfb_staged_path, "{$file_dwn}.pre");
-
-								// Close the "Reload . completed ." progress line with its trailing dot
-								// BEFORE the strict-parsing WARNING below, else the warning's own
-								// leading/trailing newlines strand this dot on its own line.
-								if (!empty($domain_data)) {
-									pfb_logger(".\n", 1);
-								}
-
-								// ADR-22: one WARNING per feed summarising strict-mode skips (silent
-								// when none -- lenient never increments the counter).
-								pfb_dnsbl_scheme_skip_warn($pfb_dnsbl_state['scheme_skipped'], $header);
-
-								// issue #1926: DNSBL post-script runs on a throwaway copy of the
-								// download — nothing downstream re-parses it (same observable as
-								// the IP loop, which discards post-script edits via restore).
-								if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {
-									pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
-									if (pfb_list_post_script_stage("{$file_dwn}.orig", "{$file_dwn}.post", 'dnsbl', $alias,
-									    "[ {$alias} - {$header} ] Post-script input staging unavailable",
-									    $pfb['dbdir'], state: $pfb_script_state)) {
-										$pfb_post_status = pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
-										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
-										unlink_if_exists("{$file_dwn}.post");
-										// issue #2059: 'script' stage, never 'download' -- the feed refreshed.
-										pfb_list_post_script_failure_record($pfb_post_status, 'dnsbl', $alias,
-										    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
-										    $pfb['dbdir'], $pfb_script_state);
-									} else {
-										pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its input; skipping\n", 2);
-									}
-								}
-
-								// Remove duplicates and save any IPs found in domain feed
-								if (!empty($domain_data_ip)) {
-									$domain_data_ip = implode("\n", array_unique($domain_data_ip)) . "\n";
-									@file_put_contents("{$pfbfolder}/{$header}_v4.ip", $domain_data_ip, LOCK_EX);
-									// issue #1261: display/log-gate only -- NULL (read failure) -> 0.
-									$ip_decision = pfb_dnsbl_ipv4_count_decision("{$pfbfolder}/{$header}_v4.ip");
-									$ip_cnt = $ip_decision['count'];
-								}
-								else {
-									// Remove previous IP feed
-									unlink_if_exists("{$pfbfolder}/{$header}_v4.ip");
-								}
-
-								// Remove duplicates and save any IPv6 IPs found in domain feed
-								if (!empty($domain_data_ip6)) {
-									$domain_data_ip6 = implode("\n", array_unique($domain_data_ip6)) . "\n";
-									@file_put_contents("{$pfbfolder}/{$header}_v6.ip", $domain_data_ip6, LOCK_EX);
-									// issue #1261: display/log-gate only -- NULL (read failure) -> 0.
-									$ip6_decision = pfb_dnsbl_ipv6_count_decision("{$pfbfolder}/{$header}_v6.ip");
-									$ip_cnt6 = $ip6_decision['count'];
-								}
-								else {
-									// Remove previous IPv6 feed
-									unlink_if_exists("{$pfbfolder}/{$header}_v6.ip");
-								}
-
-								// Validate feed with Unbound-checkconf
-								if (!empty($domain_data)) {
-									$conf  = "server:\n";
-									$conf .= "chroot: {$pfb['dnsbldir']}\n";
-									$conf .= "username: \"unbound\"\n";
-									$conf .= "directory: \"{$pfb['dnsbldir']}\"\n";
-									$conf .= "pidfile: \"/var/run/unbound.pid\"\n";
-									$conf .= "server:include: {$pfbfolder}/{$header}.bk";
-									@file_put_contents("{$pfb['dnsbldir']}/check.conf", $conf, LOCK_EX);
-
-									// ADR-06: The build-time De-Duplication / user-whitelist /
-									// TOP1M removal passes (dnsbl_scrub) are DROPPED. The decider's
-									// dict load dedups keys for free, the user whitelist + TOP1M
-									// are applied at QUERY TIME via the whiteDB, and redundant
-									// subdomains are matched by their parent zone -- so no
-									// build-time list pruning is performed here anymore.
-
-									if ($ip_decision['loggable']) {
-										pfb_logger("  IPv4 count={$ip_cnt}\n", 1);
-									}
-									if ($ip6_decision['loggable']) {
-										pfb_logger("  IPv6 count={$ip_cnt6}\n", 1);
-									}
-
-									$result = array('unbound-checkconf: no errors');
-									unlink_if_exists("{$pfb['dnsbldir']}/check.conf");
-								}
-								else {
-									$log = "\n No Domains Found! Ensure only domain based Feeds are used for DNSBL!\n";
-									pfb_logger("{$log}", 1);
-
-									// Copy downloaded file to /tmp for debugging
-									$ts = date('Y-m-d', time());
-									@copy("{$file_dwn}.orig", "/tmp/Error_{$header}_{$ts}.orig");
-
-									unlink_if_exists("{$pfbfolder}/{$header}.bk");
-									// issue #1083: converge a stale-generation rebuild that
-									// found zero domains -- else the pre-NDJSON '.txt' survives and
-									// the guard re-triggers 'Rebuild' every subsequent pass.
-									pfb_dnsbl_stale_rebuild_converge_txt($stale_generation_rebuild, "{$pfbfolder}/{$header}.txt");
-									$result = array('unbound-checkconf: no errors');
-								}
-
-								// If parse error found, use previously downloaded file if available
-
-
-								// Save DNSBL feed info for next steps
-								$pfb['domain_update']	= $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
-								$lists_dnsbl_all[]	= "{$row['header']}.txt";
-								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
-								// ADR-31: pass $mode derived from per-row 'action' (above).
-								$pfb_py_feeds[]		= pfb_feed_manifest_row(
-									$header, $alias, $logging_type,
-									$custom ? 'user' : 'feed',
-									$mode, $filter_top1m);
-
-								// Rename newly downloaded file to final location
-								if (file_exists("{$pfbfolder}/{$header}.bk")) {
-									@rename("{$pfbfolder}/{$header}.bk", "{$pfbfolder}/{$header}.txt");
-								}
-
-								// Create empty placeholder file
-								if (!file_exists("{$pfbfolder}/{$header}.txt")) {
-									touch("{$pfbfolder}/{$header}.txt");
-								}
-
-								// issue #1162/#1261: pfb_count_lines() returns NULL on a read
-								// failure -- 0 preserves the exec()-era fallback.
-								$alias_cnt	= pfb_dnsbl_alias_count_rebuild("{$pfbfolder}/{$header}.txt", $alias_cnt);
-
-								// Remove update file indicator -- skip if this row fell through to
-								// the stale-.orig download-failure fallback, else a pending rebuild
-								// is stranded like #1002 but via the download-failure path. (#1031)
-								if (pfb_dnsbl_update_marker_clear_active($orig_content_stale)) {
-									unlink_if_exists("{$pfbfolder}/{$header}.update");
+									unlink_if_exists("{$pfbfolder}/{$header}.fail");
 								}
 							}
+							$lists_dnsbl_all[] = "{$row['header']}.txt";
+							$pfb_py_feeds[] = pfb_feed_manifest_row(
+								$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m);
+							$alias_cnt = pfb_dnsbl_alias_count_verbatim($txt, $alias_cnt);
+							if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected) {
+								pfb_schedule_outcome_record($feed_id, PfbScheduleTerminalResult::Success);
+							}
+							continue;
+						}
+
+						if (!is_array($feed_result)
+							|| !pfb_dnsbl_feed_phase_copy_artifacts($feed_result, $pfborig, $pfbfolder, $header)) {
+							$pfb_dl_failed = TRUE;
+							@touch("{$pfbfolder}/{$header}.fail");
+							pfb_logger("\n[ {$header} ]{$logtab} FeedPhase artifact publication failed.\n", 2);
+							pfb_download_ledger_failure('dnsbl', $alias, $header, $pfb['dbdir']);
+							continue;
+						}
+
+						pfb_logger("\n[ {$header} ]{$logtab} FeedPhase {$disposition}.", 1);
+						$file_dwn = "{$pfborig}/{$header}";
+						$ip_cnt = $feed_result['ipv4Count'];
+						$ip_cnt6 = $feed_result['ipv6Count'];
+						$ip_decision = ['count' => $ip_cnt, 'loggable' => $ip_cnt > 0];
+						$ip6_decision = ['count' => $ip_cnt6, 'loggable' => $ip_cnt6 > 0];
+						if ($feed_result['updateIP']) {
+							$pfb['updateip'] = TRUE;
+						}
+						pfb_dnsbl_scheme_skip_warn($feed_result['schemeSkipped'], $header);
+
+						$pfb_row_script_post = $pfb_dnsbl_script_post;
+						if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {
+							pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
+							if (pfb_list_post_script_stage("{$file_dwn}.orig", "{$file_dwn}.post", 'dnsbl', $alias,
+								"[ {$alias} - {$header} ] Post-script input staging unavailable",
+								$pfb['dbdir'], state: $pfb_script_state)) {
+								$pfb_post_status = pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
+									escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
+								unlink_if_exists("{$file_dwn}.post");
+								pfb_list_post_script_failure_record($pfb_post_status, 'dnsbl', $alias,
+									"[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
+									$pfb['dbdir'], $pfb_script_state);
+							} else {
+								pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its input; skipping\n", 2);
+							}
+						}
+
+						if ($feed_result['dnsblRows'] > 0) {
+							$conf  = "server:\n";
+							$conf .= "chroot: {$pfb['dnsbldir']}\n";
+							$conf .= "username: \"unbound\"\n";
+							$conf .= "directory: \"{$pfb['dnsbldir']}\"\n";
+							$conf .= "pidfile: \"/var/run/unbound.pid\"\n";
+							$conf .= "server:include: {$pfbfolder}/{$header}.bk";
+							@file_put_contents("{$pfb['dnsbldir']}/check.conf", $conf, LOCK_EX);
+							if ($ip_decision['loggable']) {
+								pfb_logger("  IPv4 count={$ip_cnt}\n", 1);
+							}
+							if ($ip6_decision['loggable']) {
+								pfb_logger("  IPv6 count={$ip_cnt6}\n", 1);
+							}
+							$result = array('unbound-checkconf: no errors');
+							unlink_if_exists("{$pfb['dnsbldir']}/check.conf");
+						} else {
+							pfb_logger("\n No Domains Found! Ensure only domain based Feeds are used for DNSBL!\n", 1);
+							$ts = date('Y-m-d', time());
+							@copy("{$file_dwn}.orig", "/tmp/Error_{$header}_{$ts}.orig");
+							unlink_if_exists("{$pfbfolder}/{$header}.bk");
+							pfb_dnsbl_stale_rebuild_converge_txt(
+								$stale_generation_rebuild, "{$pfbfolder}/{$header}.txt");
+							$result = array('unbound-checkconf: no errors');
+						}
+
+						$pfb['domain_update'] = $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
+						$lists_dnsbl_all[] = "{$row['header']}.txt";
+						$pfb_py_feeds[] = pfb_feed_manifest_row(
+							$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m);
+						if (file_exists("{$pfbfolder}/{$header}.bk")) {
+							@rename("{$pfbfolder}/{$header}.bk", $txt);
+						}
+						if (!file_exists($txt)) {
+							touch($txt);
+						}
+						$alias_cnt = pfb_dnsbl_alias_count_rebuild($txt, $alias_cnt);
+						unlink_if_exists("{$pfbfolder}/{$header}.update");
+						unlink_if_exists("{$pfbfolder}/{$header}.fail");
+						if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected) {
+							pfb_schedule_outcome_record($feed_id, PfbScheduleTerminalResult::Success);
 						}
 					}
 
@@ -4068,7 +4030,76 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			}
 		}
 
+		$pfb_ip_phase_skipped = !empty($pfb['save'])
+			|| !in_array($pfb['feed_phase_scope'] ?? 'both', ['both', 'ip'], TRUE);
+		$pfb_ip_phase_results = [];
+		if (!$pfb_ip_phase_skipped) {
+			$pfb_ip_parse_ids = [];
+			$pfb_asn_requested = FALSE;
+			$pfb_ip_phase_ids = pfb_ip_feed_phase_ids($lists,
+				static function (array $list, array $row, string $header, string $id) use (&$pfb_ip_parse_ids, &$pfb_asn_requested): bool {
+					global $pfb, $pfbarr;
+					$is_dnsblip = isset($list['dnsblip']);
+					$family = $list['vtype'] === '_v4' ? 'ipv4' : 'ipv6';
+					$apply = ($pfb['feed_phase_trigger'] ?? '') === 'apply';
+					$selected = !$apply && (pfb_schedule_feed_selected($family, $header)
+						|| isset($pfb['scheduled_selected_ids'][$id]));
+					$list_type = $is_dnsblip
+						? 'pfblockerngdnsblsettings'
+						: pfb_list_section_for_vtype($list['vtype']);
+					pfb_determine_list_detail($list['action'], $header, $list_type, $list['key']);
+					$folder = $pfbarr['folder'];
+					$orig = $pfbarr['orig'];
+					$txt_exists = file_exists("{$folder}/{$header}.txt");
+					$update = file_exists("{$folder}/{$header}.update");
+					$failed = file_exists("{$folder}/{$header}.fail");
+					$verbatim_reuse = $txt_exists && (!$selected || !$update) && (!$selected || !$failed)
+						&& $pfbarr['reuse'] === '';
+					$script_active = $selected
+						&& (!empty($list['script_pre']) || !empty($list['script_post']));
+					$script_reparse = pfb_list_script_reparse_active(
+						$verbatim_reuse, $script_active, file_exists("{$orig}/{$header}.orig"));
+					$reuse_on = $pfbarr['reuse'] === 'on' || $script_reparse;
+					$orig_exists_if_reused = $reuse_on && file_exists("{$orig}/{$header}.orig");
+					$parse_only = pfb_ip_reuse_skip_active($reuse_on, $orig_exists_if_reused, $is_dnsblip);
+					$geoip_updated = ($row['format'] ?? '') === 'geoip' && file_exists("{$pfb['dbdir']}/geoip.update");
+					$asn_updated = ($row['format'] ?? '') === 'asn' && file_exists("{$pfb['dbdir']}/asn.update");
+					$include = $apply ? $parse_only : ($selected || $parse_only || $geoip_updated || $asn_updated);
+					if (!$include) {
+						return FALSE;
+					}
+					if ($parse_only) {
+						$pfb_ip_parse_ids[] = $id;
+					}
+					if (in_array($row['format'] ?? '', ['asn', 'whois'], TRUE)
+						|| ($list['whois_convert'] ?? '') === 'on') {
+						$pfb_asn_requested = TRUE;
+					}
+					return TRUE;
+				});
+			if ($pfb_asn_requested && !file_exists(rtrim((string) $pfb['geoipshare'], '/') . '/asn.csv')) {
+				pfb_logger("\nDownloading IPinfo ASN database...\n", 1);
+				$pfb_asn_output = [];
+				pfb_reentry_exec('asn_shell', ['scheduled'], NULL, $pfb_asn_output);
+				foreach ($pfb_asn_output as $line) {
+					pfb_logger("{$line}\n", 1);
+				}
+			}
+			if ($pfb_ip_phase_ids !== []) {
+				$pfb_ip_phase_groups = pfb_core_feed_phase_request_groups(
+					$pfb_ip_phase_ids,
+					$pfb_ip_parse_ids,
+					(string) ($pfb['feed_phase_force'] ?? 'none')
+				);
+				$pfb_ip_phase_results = pfb_core_feed_phase_groups(
+					'ip',
+					(string) ($pfb['feed_phase_token'] ?? ''),
+					$pfb_ip_phase_groups
+				);
+			}
+		}
 		$maxmind_run_once = $asn_run_once = TRUE;
+
 		foreach	($lists	as $list) {
 			if ($runonce_v4 && $list['vtype'] == '_v4') {
 				$runonce_v4 = FALSE;
@@ -4138,20 +4169,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 							$asn_run_once = FALSE;
 						}
-
-						// IPv4 / IPv6 Advanced Tunables: Suppression CIDR Limit (issue #760 §3, #3413)
-						[$pfbcidr, $pfbcidr_v6] = pfb_list_cidr_floors($list, (string) $row['format'], $pfb['supp_cidr'], $pfb['supp_cidr_v6']);
-
-						// cURL Source Interface (sets CURLOPT_INTERFACE)
-						$srcint = $list['srcint'] ?: FALSE;
-
-						// IP v4/6 Advanced Tunable - (Pre/Post Script processing)
-						// list_scripts/ first, legacy package root as upgrade fallback.
-						$pfb_script_pre  = FALSE;
 						$pfb_script_post = FALSE;
-						if (isset($list['script_pre']) && !empty($list['script_pre'])) {
-							$pfb_script_pre = pfb_resolve_list_script($list['script_pre']);
-						}
 						if (isset($list['script_post']) && !empty($list['script_post'])) {
 							$pfb_script_post = pfb_resolve_list_script($list['script_post']);
 						}
@@ -4171,12 +4189,21 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$pfbreuse	= $pfbarr['reuse'];
 						$logtab		= $pfbarr['logtab'];
 						$scheduled_family = $list['vtype'] === '_v4' ? 'ipv4' : 'ipv6';
-						$scheduled_selected = pfb_schedule_feed_selected($scheduled_family, $header);
+						$feed_id = pfb_ip_feed_phase_id($list, $row, $header);
+						if ($feed_id === NULL) {
+							pfb_logger("\n[ {$header} ]{$logtab} Invalid Core FeedPhase ID. *Skipping*\n", 2);
+							continue;
+						}
+						$apply = ($pfb['feed_phase_trigger'] ?? '') === 'apply';
+						$scheduled_selected = !$apply && (
+							pfb_schedule_feed_selected($scheduled_family, $header)
+							|| isset($pfb['scheduled_selected_ids'][$feed_id])
+						);
 						if (!$scheduled_selected && !file_exists("{$pfbfolder}/{$header}.txt")) {
 							continue;
 						}
 						if (!$scheduled_selected) {
-							$pfb_script_pre = $pfb_script_post = FALSE;
+							$pfb_script_post = FALSE;
 						}
 
 						// Collect active alias list (Used for pfctl update when 'Reputation' is enabled.
@@ -4190,286 +4217,115 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							touch("{$pfbfolder}/{$header}.update");
 						}
 
-						// issue #1960/#1278: a configured pre/post script re-runs its transform
-						// every pass, but the Hold contract ("download once, never again") is
-						// protected ONLY by this fast path -- so the script term may push a row
-						// off it solely when a local '.orig' baseline exists to reparse (routes
-						// to the existing local-reuse branch below, never the network). No
-						// baseline -> stay on the fast path; no Hold-specific branch anywhere.
-						$pfb_ip_verbatim_reuse = file_exists("{$pfbfolder}/{$header}.txt") &&
-						    (!$scheduled_selected || !file_exists("{$pfbfolder}/{$header}.update")) &&
-						    (!$scheduled_selected || !file_exists("{$pfbfolder}/{$header}.fail")) &&
-						    $pfbreuse == '';
-						$pfb_ip_reuse_decision = pfb_ip_script_reuse_decision(
-						    $pfb_ip_verbatim_reuse, $pfb_script_pre, $pfb_script_post,
-						    "{$pfborig}/{$header}.orig");
-						$pfb_user_script = $pfb_ip_reuse_decision['has_user_script'];
-						$pfb_script_reparse = $pfb_ip_reuse_decision['reparse'];
+						$txt = "{$pfbfolder}/{$header}.txt";
+						$file_dwn = "{$pfborig}/{$header}";
+						$txt_exists = file_exists($txt);
+						$update = file_exists("{$pfbfolder}/{$header}.update");
+						$failed = file_exists("{$pfbfolder}/{$header}.fail");
+						$verbatim_reuse = $txt_exists && (!$scheduled_selected || !$update)
+							&& (!$scheduled_selected || !$failed) && $pfbreuse === '';
+						$script_active = $scheduled_selected
+							&& (!empty($list['script_pre']) || !empty($list['script_post']));
+						$script_reparse = pfb_list_script_reparse_active(
+							$verbatim_reuse, $script_active, file_exists("{$file_dwn}.orig"));
+						$pfbreuse_on = $pfbreuse === 'on' || $script_reparse;
+						$orig_exists_if_reused = $pfbreuse_on && file_exists("{$file_dwn}.orig");
+						$parse_only = pfb_ip_reuse_skip_active(
+							$pfbreuse_on, $orig_exists_if_reused, isset($list['dnsblip']));
+						$geoip_updated = ($row['format'] ?? '') === 'geoip' && file_exists("{$pfb['dbdir']}/geoip.update");
+						$asn_updated = ($row['format'] ?? '') === 'asn' && file_exists("{$pfb['dbdir']}/asn.update");
+						$phase_required = $apply
+							? $parse_only
+							: ($scheduled_selected || $parse_only || $geoip_updated || $asn_updated);
+						$feed_result = $pfb_ip_phase_results[$feed_id] ?? NULL;
 
-						if ($pfb_ip_reuse_decision['verbatim']) {
-
-							if ($row['state'] == 'Hold') {
-								$log = "\n[ {$header} ]{$logtab} static hold.";
-							} else {
-								$log = "\n[ {$header} ]{$logtab} exists.";
-							}
-							pfb_logger("{$log}", 1);
+						if ($pfb_ip_phase_skipped && !$txt_exists) {
+							continue;
 						}
-						else {
-							// Short-circuit: skip the stat() below when reuse is off (ADR-28);
-							// FALSE here is truth-functionally identical since the callee ANDs $reuse_on anyway.
-							// issue #1278: OR in the script-reparse route -- a scripted row with a
-							// local '.orig' baseline reuses it (never a network refetch); a Hold row
-							// with no baseline never reaches this branch (see the fast path above).
-							$pfbreuse_on = $pfbreuse == 'on' || $pfb_script_reparse;
-							$orig_exists_if_reused = $pfbreuse_on && file_exists("{$pfborig}/{$header}.orig");
-							if (pfb_ip_reuse_skip_active($pfbreuse_on, $orig_exists_if_reused, isset($list['dnsblip']))) {
-								$log = "\n[ {$header} ]{$logtab} Reload";
+						if (!$pfb_ip_phase_skipped && $phase_required
+							&& (!is_array($feed_result) || ($feed_result['disposition'] ?? '') === 'failed')) {
+							$feed_error = is_array($feed_result)
+								? $feed_result
+								: ['stage' => 'core', 'reason' => 'core_response_invalid', 'preScriptFailed' => FALSE];
+							$stage = (string) ($feed_error['stage'] ?? 'core');
+							$reason = (string) ($feed_error['reason'] ?? 'core_response_invalid');
+							$message = "[ {$alias} - {$header} ] FeedPhase FAIL [{$stage}: {$reason}]";
+							if ($stage === 'script' || !empty($feed_error['preScriptFailed'])) {
+								pfb_ip_script_failure_continue(
+									$alias, $message, $pfb['dbdir'], "{$pfbfolder}/{$header}.update",
+									$pfb_script_state, FALSE, $txt);
 							} else {
-								$log = "\n[ {$header} ]{$logtab} Downloading update";
-							}
-							pfb_logger("{$log}", 1);
-							$file_dwn = "{$pfborig}/{$header}";
-							$orig_content_stale = FALSE;
-							$downloaded_fresh = FALSE;
-
-							// Force 'Alias Native' setting to any Alias with 'Advanced Inbound/Outbound -Invert src/dst' settings.
-							// This will bypass Deduplication and Reputation features.
-							if ($pfbarr['aaddrnot_in'] == 'on' || $pfbarr['aaddrnot_out'] == 'on') {
-								pfb_logger("Using Alias Native\n", 1);
-							}
-
-							if (!$custom) {
-								pfb_logger(' .', 1);
-
-								// Allow cURL SSL downgrade 'Flex' if user configured.
-								$pflex = FALSE;
-								if ($row['state'] == 'Flex') {
-									$pflex = TRUE;
-								}
-
-								// Adjust 'geoip' format to GeoIP path location
-								if ($row['format'] == 'geoip') {
-									if (strpos($row['url'], ' ') !== FALSE) {
-										$row['url'] = strstr($row['url'], ' ', TRUE);
-									}
-									if (!empty(pfb_filter($row['url'], PFB_FILTER_WORD, 'Adjust geoip format to GeoIP path location'))) {
-										$row['url'] = "/usr/local/share/GeoIP/cc/{$row['url']}{$list['vtype']}.txt";
-									} else {
-										$row['url'] = '';
-									}
-								}
-
-								// Remove 'whois' source field description
-								elseif ($row['format'] == 'asn') {
-									if (strpos($row['url'], ' ') !== FALSE) {
-										$row['url'] = strstr($row['url'], ' ', TRUE);
-									}
-								}
-
-								// Determine if	list needs to be downloaded or reuse previously downloaded file.
-								$orig_exists_if_reused = $pfbreuse_on && file_exists("{$file_dwn}.orig");
-								if (pfb_ip_reuse_skip_active($pfbreuse_on, $orig_exists_if_reused, isset($list['dnsblip']))) {
-									// File exists/reuse
-
-									// Process Emerging Threats IQRisk if required
-								if (strpos($row['url'], 'iprepdata.txt') !== FALSE) {
-									// issue #2776: record whether a leftover .raw existed BEFORE the
-									// pipeline call -- the supported pure-reuse path (no .raw) also
-									// returns FALSE, so only a leftover .raw may fail the pass.
-									$et_raw_exists = file_exists("{$file_dwn}.raw");
-									$et_pipeline_ok = pfb_apply_gunzip_orig_pipeline(
-										"{$file_dwn}.raw", "{$file_dwn}.orig",
-										static function (string $orig) use ($pfb, $header_esc, $elog, &$et_status): void {
-											// issue #2776: the reuse arm reads processet()'s exit status too --
-											// the gated shape issue #2683 gave pfb_download()'s et arm, with the
-											// same extraction ceiling riding along via pfb_extract_cmd().
-											exec(pfb_extract_cmd("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}"), $et_output, $et_status);
-										}
-									);
-									// issue #2776 (CodeRabbit round 2): a leftover .raw whose staged
-									// gunzip publish fails never runs the consumer above, so $et_status
-									// keeps its initial 0 -- escalate that staging failure first, the
-									// same way the exit-status gate below escalates a failed processet().
-									if ($et_raw_exists && !$et_pipeline_ok) {
-										pfb_logger("\n[ {$header} ] ET reuse staging failed ({$file_dwn}.raw publish skipped, pfB_Match_ET_* not refreshed)", 2);
-										$pfb_dl_failed = TRUE;
-										pfb_download_ledger_failure('ip', $alias, $header, $pfb['dbdir']);
-									}
-									// issue #2776: an aborted reuse pass must not read as completed -- the
-									// pfB_Match_ET_* publications it should have refreshed stay stale, so
-									// escalate the way the download arm's failure above already does.
-									elseif (!pfb_download_extraction_succeeded($et_status)) {
-										pfb_logger("\n[ {$header} ] ET processet failed on reuse (script exit {$et_status})" . pfb_extract_cap_note($et_status), 2);
-										$pfb_dl_failed = TRUE;
-										pfb_download_ledger_failure('ip', $alias, $header, $pfb['dbdir']);
-									}
-								}
-								}
-								else {
-									// Download list
-									if (!(pfb_download(new PfbDownloadRequest(
-										listUrl: $row['url'],
-										downloadPath: $file_dwn,
-										flex: $pflex,
-										header: $header,
-										format: $row['format'],
-										logType: 1,
-										versionType: $list['vtype'],
-										timeout: 300,
-										type: '',
-										username: '',
-										password: '',
-										sourceInterface: $srcint,
-										extraHeaders: array(),
-									))->success)) {
-
-										// Determine reason for download failure
-										pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], $list['vtype']);
-										// ADR-61: sync-status ledger, mirrors the download-fail log above. Keyed on
-										// $alias (the pfB_*-prefixed table name), not $header (the per-row label,
-										// never prefixed) -- the widget's deep-link recognition matches on the
-										// pfB_/DNSBL_ prefix, so keying on $header would leave every entry unlinked.
-										// issue #1048: close moves to once-per-alias-pass below, so a
-										// sibling feed's success can never mask this failure.
-										$pfb_dl_failed = TRUE;
-											pfb_download_ledger_failure('ip', $alias, $header, $pfb['dbdir']);
-
-										// Utilize previously download file (If 'fail' marker exists)
-										if (file_exists("{$pfbfolder}/{$header}.fail") &&
-										    file_exists("{$file_dwn}.orig")) {
-											pfb_logger("\n  Restoring previously downloaded file contents...", 2);
-											$orig_content_stale = TRUE;
-										}
-										else {
-											if ($pfbadv) {
-												// Script to Remove failed lists from masterfile
-												exec("{$pfb['script']} remove x x x {$header_esc} {$elog}");
-												// issue #1084: drop the stale recompute snapshot too;
-												// repcheck so the recompute pass rebuilds without it.
-												pfb_ip_recompute_forget_header($header, $pfb['snapdir'], $pfb['origdir']);
-												$pfb['repcheck'] = TRUE;
-											}
-											continue;
-										}
-									}
-									else {
-										// Clear any previous download fail marker
-										unlink_if_exists("{$pfbfolder}/{$header}.fail");
-										$downloaded_fresh = TRUE;
-										if (!empty($pfb['scheduled_runtime_cron'])) {
-											pfb_schedule_outcome_record("{$scheduled_family}:{$header}", PfbScheduleTerminalResult::Success);
-										}
-										pfb_logger('.', 1);
-									}
-								}
-								pfb_logger(' completed .', 1);
-							}
-							else {
-								if ($list['whois_convert'] == 'on') {
-									// Process Domain/AS based custom list
-									$custom_list = str_replace("\n", ',', pfb_text_area_decode($list['custom'], FALSE, TRUE, TRUE));
-									if (!empty(pfb_filter($custom_list, PFB_FILTER_CSV_WHOIS, 'Process Domain/AS based custom list'))) {
-										exec("{$pfb['script']} whoisconvert {$header_esc} {$list['vtype']} {$custom_list} {$elog}");
-									} else {
-										pfb_logger("\nFailed to process customlist [AS/Whois convert | " . htmlspecialchars($custom_list) . " ]", 1);
-									}
-								}
-								else {
-									// Process IP based custom list
-									$custom_list = pfb_text_area_decode($list['custom'], FALSE, TRUE, FALSE);
-									@file_put_contents("{$file_dwn}.orig", $custom_list, LOCK_EX);
-								}
-								pfb_logger(' . completed .', 1);
-							}
-
-							$ip_data = '';		// IPs collected from feed
-							$ip_suppressed = FALSE;	// TRUE when suppression dropped otherwise-valid IPv6 entries
-							$parse_fail = 0;	// Failed parsed lines from feed
-							pfb_logger('.', 1);
-
-							// Set 'auto' format for all lists, except for lists that require 'regex' parsing.
-							if ($row['format'] == 'regex') {
-								$pftype = 'regex';
-							}
-							else {
-								$url = pathinfo($row['url']);
-
-								// Strip any text after '?'
-								if (strpos($url['extension'], '?') !== FALSE) {
-									$url['extension'] = strstr($url['extension'], '?', TRUE);
-								}
-
-								// Determine if list is an IBlock list
-								if (strpos($url['dirname'], 'iblocklist') !== FALSE) {
-									$url['extension'] = 'iblock';
-								}
-
-								// Use 'regex' IP parser for non-standard IP lists.
-								if (in_array($url['extension'], array('html', 'htm', 'php', 'aspx', 'cgi', 'csv', 'rules', ''))) {
-									$pftype = 'regex';
-								} else {
-									$pftype = 'auto';
+								@touch("{$pfbfolder}/{$header}.fail");
+								$pfb_dl_failed = TRUE;
+								pfb_logger("\n{$message}\n", 2);
+								pfb_download_ledger_failure('ip', $alias, $header, $pfb['dbdir']);
+								if (!file_exists("{$file_dwn}.orig") && $pfbadv) {
+									exec("{$pfb['script']} remove x x x {$header_esc} {$elog}");
+									pfb_ip_recompute_forget_header($header, $pfb['snapdir'], $pfb['origdir']);
+									$pfb['repcheck'] = TRUE;
 								}
 							}
+							continue;
+						}
 
-							// issue #1925: normalize once per file; the parse below reads .norm
-							// (raw .orig on normalize failure). A fresh download whose NORMALIZED
-							// content is byte-identical to the previous pass keeps the staged
-							// '.txt' untouched; any pre-script (below) runs on a staged copy of
-							// this normalized output, never on the raw download.
-							$pfb_norm = pfb_feed_normalize("{$file_dwn}.orig");
-							if (pfb_ip_norm_reuse_skip($downloaded_fresh, (bool) $custom, $orig_content_stale,
-							    $pfb_norm['changed'], file_exists("{$pfbfolder}/{$header}.txt"), $pfb_user_script,
-							    $pfbreuse_on, isset($list['dnsblip']))) {
-								pfb_logger("\n[ {$header} ]{$logtab} unchanged after normalization.\n", 1);
-								unlink_if_exists("{$pfbfolder}/{$header}.update");
-								continue;
-							}
-
-							// issue #1925: the pre-script runs on a staged copy of the
-							// normalized output -- '.orig' and '.norm' stay untouched; a
-							// failed transform keeps the last known-good staged list.
-							$pfb_parse_path = $pfb_norm['path'];
-							$pfb_staged_path = NULL;
-							if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {
-								pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
-								$pfb_pre = pfb_list_pre_script_run($pfb_norm['path'], "{$file_dwn}.pre",
-								    $pfb_script_pre, $list['script_pre'], $header,
-								    escapeshellarg("{$file_dwn}.pre") . " {$list['vtype']} {$elog}");
-								if (!$pfb_pre['ok']) {
-									// issue #1958: pre-script failure genuinely served last-known-good --
-									// mark it in the ledger (distinct 'script' stage, never 'download') and
-									// retry the transform on the next ordinary pass via the '.update' marker.
-									pfb_ip_script_failure_continue($alias,
-									    "[ {$alias} - {$header} ] Pre-script FAIL - serving last known-good",
-									    $pfb['dbdir'], "{$pfbfolder}/{$header}.update", $pfb_script_state,
-									    FALSE, "{$pfbfolder}/{$header}.txt");
-									continue;
+						$disposition = is_array($feed_result) ? $feed_result['disposition'] : 'unchanged';
+						if ($disposition === 'held' && !$txt_exists) {
+							continue;
+						}
+						$rebuild = !$pfb_ip_phase_skipped && $disposition !== 'held'
+							&& (in_array($disposition, ['changed', 'reparsed'], TRUE)
+								|| !$txt_exists || $parse_only);
+						if (!$rebuild) {
+							if ($disposition === 'held') {
+								pfb_logger("\n[ {$header} ]{$logtab} static hold.", 1);
+								unlink_if_exists("{$pfbfolder}/{$header}.fail");
+							} else {
+								pfb_logger("\n[ {$header} ]{$logtab} exists.", 1);
+								if ($phase_required) {
+									unlink_if_exists("{$pfbfolder}/{$header}.update");
+									unlink_if_exists("{$pfbfolder}/{$header}.fail");
 								}
-								$pfb_parse_path = $pfb_pre['path'];
-								$pfb_staged_path = $pfb_pre['path'];
 							}
-
-								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
-									['ip_data' => $ip_data, 'ip_suppressed' => $ip_suppressed, 'parse_fail' => $parse_fail] =
-									    pfb_ip_parse_feed($fhandle, $header, $list, $pftype, $custom, $pfbcidr, $pfbcidr_v6, $pfb);
-								}
-							if ($fhandle) {
-								@fclose($fhandle);
+							if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected) {
+								$outcome_id = isset($pfb['scheduled_selected_ids'][$feed_id])
+									? $feed_id : "{$scheduled_family}:{$header}";
+								pfb_schedule_outcome_record($outcome_id, PfbScheduleTerminalResult::Success);
 							}
+							continue;
+						}
 
-							// One summary line per feed with the final count (mirrors the DNSBL
-							// strict-scheme WARNING) -- was previously one spammed line PER failed
-							// line, e.g. "[!] Parse Errors [ 1 ]" through "[ 967 ]" for a single feed.
-							// Names the feed: this is logtype 2 (also written to the error log,
-							// which has no surrounding "[ header ] Reload..." context of its own).
-							// Leading \n: closes the unterminated "Reload . completed .." progress
-							// line above (a rarely-configured per-list Pre Script tunable can print
-							// its own newline-terminated line first instead -- one harmless extra
-							// blank line in that case, not a rejoin).
-							pfb_ip_parse_fail_warn($parse_fail, $header);
-							pfb_logger("\n", 1);
+						if (!is_array($feed_result)) {
+							$pfb_dl_failed = TRUE;
+							@touch("{$pfbfolder}/{$header}.fail");
+							pfb_logger("\n[ {$header} ]{$logtab} FeedPhase artifact missing.\n", 2);
+							pfb_download_ledger_failure('ip', $alias, $header, $pfb['dbdir']);
+							continue;
+						}
+						pfb_logger("\n[ {$header} ]{$logtab} FeedPhase {$disposition}.", 1);
+						$parsed_file = "{$file_dwn}.parsed.ip";
+						$parsed_size = @filesize($parsed_file);
+						if (!is_file($parsed_file) || !is_int($parsed_size)) {
+							$pfb_dl_failed = TRUE;
+							@touch("{$pfbfolder}/{$header}.fail");
+							pfb_logger("\n[ {$header} ]{$logtab} FeedPhase artifact publication failed.\n", 2);
+							pfb_download_ledger_failure('ip', $alias, $header, $pfb['dbdir']);
+							continue;
+						}
+						$placeholder = '';
+						if ($feed_result['placeholder'] !== '') {
+							$p_ip = $list['vtype'] === '_v6' ? "::{$pfb['ip_ph']}" : $pfb['ip_ph'];
+							$placeholder = "{$p_ip}\n";
+							if ($feed_result['placeholder'] === 'suppressed') {
+								pfb_logger("  All IPv6 entries suppressed, adding '{$p_ip}' to avoid stale alias contents.\n", 1);
+							} else {
+								pfb_logger("  Empty file, Adding '{$p_ip}' to avoid download failure.\n", 1);
+							}
+						}
+						$has_data = $parsed_size > 0 || $placeholder !== '';
+						$parse_fail = $feed_result['parseFailures'] + $feed_result['mappedDrops'];
+						$ip_suppressed = $feed_result['suppressed'];
+						pfb_ip_parse_fail_warn($parse_fail, $header);
+						pfb_logger("\n", 1);
 
 							// IP v4/6 Advanced Tunable - (Post Script processing)
 							$pfb_post_staged = FALSE;
@@ -4498,43 +4354,17 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								}
 							}
 
-							// Check to see if list actually failed download or has no IPs listed.
-							// issue #1925: probe the content the parse consumed -- a pre-script
-							// synthesizes or reduces entries, so the raw download's emptiness is
-							// not the feed's (post-script-only feeds still probe '.orig'). Custom
-							// rows skip the probe but still discard their transient staged copy.
-							$file_chk = pfb_ip_script_probe_staged(
-								$custom, $pfb_parse_path, $pfb_staged_path,
-								static function (string $parse_path) use ($pfb, $pfb_norm, $file_dwn): string {
-										$pfb_probe = ($parse_path === $pfb_norm['path']) ? "{$file_dwn}.orig" : $parse_path;
-										if (file_exists($pfb_probe) && @filesize($pfb_probe) > 0) {
-											return pfb_ip_feed_content_count($pfb['grep'], $pfb_probe);
-										}
-										return '';
-									}, "{$file_dwn}.pre");
-
-							if (!$custom && $file_chk == 0 && pfb_is_empty($ip_data)) {
-									if ($list['vtype'] == '_v6') {
-										$p_ip = "::{$pfb['ip_ph']}";
-									} else {
-										$p_ip = $pfb['ip_ph'];
-									}
-
-									$ip_data	= "{$p_ip}\n";
-									$log		= "  Empty file, Adding '{$p_ip}' to avoid download failure.\n";
-									pfb_logger("{$log}", 1);
+							if ($has_data && !pfb_core_feed_artifact_copy($parsed_file, $txt, $placeholder)) {
+								$pfb_dl_failed = TRUE;
+								@touch("{$pfbfolder}/{$header}.fail");
+								pfb_logger("\n[ {$header} ]{$logtab} FeedPhase artifact publication failed.\n", 2);
+								pfb_download_ledger_failure('ip', $alias, $header, $pfb['dbdir']);
+								if ($pfb_post_staged && file_exists("{$file_dwn}.orig.post")) {
+									@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
+								}
+								continue;
 							}
-							// All parsed IPv6 entries were suppressed; replace the list with the IPv6
-							// placeholder so stale (previously-loaded) entries are not left in the alias.
-							if (empty($ip_data) && $ip_suppressed && $list['vtype'] == '_v6') {
-								$p_ip     = "::{$pfb['ip_ph']}";
-								$ip_data  = "{$p_ip}\n";
-								pfb_logger("  All IPv6 entries suppressed, adding '{$p_ip}' to avoid stale alias contents.\n", 1);
-							}
-
-							if (!empty($ip_data)) {
-								// Save List to '.txt' format in appropriate folder
-								@file_put_contents("{$pfbfolder}/{$header}.txt", "{$ip_data}", LOCK_EX);
+							if ($has_data) {
 
 								// Call 'shell script' functions (Deny Actions only)
 								if ($pfbadv && $list['vtype'] == '_v4') {
@@ -4590,20 +4420,18 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								}
 								pfb_logger("{$log}", 1);
 							}
-							unset($ip_data);
-
-							// Remove update file indicator -- skip if this row fell through to the
-							// stale-.orig download-failure fallback, else a pending rebuild is
-							// stranded like #1002 but via the download-failure path. (#1022)
-							if (pfb_ip_update_marker_clear_active($orig_content_stale)) {
-								unlink_if_exists("{$pfbfolder}/{$header}.update");
+							unlink_if_exists("{$pfbfolder}/{$header}.update");
+							unlink_if_exists("{$pfbfolder}/{$header}.fail");
+							if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected) {
+								$outcome_id = isset($pfb['scheduled_selected_ids'][$feed_id])
+									? $feed_id : "{$scheduled_family}:{$header}";
+								pfb_schedule_outcome_record($outcome_id, PfbScheduleTerminalResult::Success);
 							}
 
 							// Restore Original Downloaded file after Post Script function
 							if ($pfb_post_staged && file_exists("{$file_dwn}.orig.post")) {
 								@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
 							}
-						}
 					}
 				}
 
