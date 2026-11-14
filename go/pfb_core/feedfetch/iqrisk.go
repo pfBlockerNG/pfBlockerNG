@@ -267,7 +267,7 @@ func (f *Fetcher) xlsx(ctx context.Context, feed Feed, raw string) (string, erro
 	defer src.Close()
 	// shortcut: 10M distinct addresses, when a larger workbook must match PHP's disk-backed sort -u.
 	found := map[string]bool{}
-	if err := scanIPv4(ctxReader{ctx, src}, func(ip string) error {
+	if err := scanIPv4(&capReader{r: ctxReader{ctx, src}, left: limit}, func(ip string) error {
 		if _, exists := found[ip]; exists {
 			return nil
 		}

@@ -142,6 +142,20 @@ func (c *capWriter) Write(p []byte) (int, error) {
 	return c.w.Write(p)
 }
 
+// capReader is capWriter for a stream read rather than written: past left bytes it fails with errCeiling.
+type capReader struct {
+	r    io.Reader
+	left int64 // bytes it may still read
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if c.left -= int64(n); c.left < 0 {
+		return 0, errCeiling
+	}
+	return n, err
+}
+
 // commaWriter is `sed 's/,[[:space:]]/; /g' | tr ',' '\n'`, the zip workaround for lists that keep their entries on one
 // line (SFS, hpHosts): a comma and the one white-space byte after it become "; ", any other comma a newline. sed works a
 // line at a time, so a comma before a newline is a plain comma; shortcut: white space is ASCII (sed's locale may add more).
