@@ -745,8 +745,10 @@ def test_sync_ports_refuses_a_port_without_portversion(tmp_path: Path) -> None:
 
 
 _EDGE_DISTINFO = "net/pfSense-pkg-pfBlockerNG-edge/distinfo"
-_EDGE_B3_DISTFILE = "pfSense-pkg-pfBlockerNG-edge/pfBlockerNG-pfBlockerNG-v4.0.0.b3_GH0.tar.gz"
-_EDGE_B4_DISTFILE = "pfSense-pkg-pfBlockerNG-edge/pfBlockerNG-pfBlockerNG-v4.0.0.b4_GH0.tar.gz"
+# bsd.sites.mk: GH_TAGNAME (v${PORTVERSION}) differs from DISTVERSIONFULL, so the port's own distfile is
+# <account>-<project>-<DISTVERSIONFULL>-<tag>_GH0.tar.gz.
+_EDGE_B3_DISTFILE = "pfSense-pkg-pfBlockerNG-edge/pfBlockerNG-pfBlockerNG-4.0.0.b3-v4.0.0.b3_GH0.tar.gz"
+_EDGE_B4_DISTFILE = "pfSense-pkg-pfBlockerNG-edge/pfBlockerNG-pfBlockerNG-4.0.0.b4-v4.0.0.b4_GH0.tar.gz"
 _EDGE_SYS_DISTFILE = "pfSense-pkg-pfBlockerNG-edge/golang-sys-v0.47.0_GH0.tar.gz"
 _EDGE_B3_DISTINFO = (
     "TIMESTAMP = 1700000000\n"
@@ -755,17 +757,32 @@ _EDGE_B3_DISTINFO = (
     f"SHA256 ({_EDGE_SYS_DISTFILE}) = {'b' * 64}\n"
     f"SIZE ({_EDGE_SYS_DISTFILE}) = 200\n"
 )
-# Stands in for codeload: logs its argv and writes the "served" tarball to its -o path.
+# Stands in for codeload: logs its argv and writes the "served" tarball to its -o path. With CODELOAD_404 set it
+# answers like real curl on an HTTP 404: exit 22 under -f/--fail, else the error page as the body and exit 0.
 _FAKE_CURL = """#!/bin/sh
 printf '%s\\n' "$*" >> "$CURL_LOG"
 out=
-while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+fail=
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2" ;; --fail) fail=1 ;; --*) ;; -*f*) fail=1 ;; esac
+  shift
+done
+if [ -n "${CODELOAD_404:-}" ]; then
+  [ -z "$fail" ] || exit 22
+  printf '404: Not Found' > "$out"
+  exit 0
+fi
 cp "$SERVED_TARBALL" "$out"
 """
 
 
 def _run_port_sync_push(
-    tmp_path: Path, channel: str, port_dir: str, portversion: str, distinfo: str | None
+    tmp_path: Path,
+    channel: str,
+    port_dir: str,
+    portversion: str,
+    distinfo: str | None,
+    codeload_404: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, bytes]:
     """Run the REAL bump step, commit and push included, on a fixture fork whose port sits at 4.0.0.b3.
 
@@ -805,6 +822,7 @@ def _run_port_sync_push(
         PORTVERSION=portversion,
         CURL_LOG=str(curl_log),
         SERVED_TARBALL=str(tmp_path / "served.tar.gz"),
+        **({"CODELOAD_404": "1"} if codeload_404 else {}),
     )
     result = subprocess.run(  # noqa: S603
         ["sh", "-c", "set -eu\n" + script], cwd=fork, env=env, capture_output=True, text=True
@@ -858,15 +876,33 @@ def test_sync_ports_rerun_leaves_the_edge_distinfo_and_fork_untouched(tmp_path: 
     assert _pushed(origin, _EDGE_DISTINFO) == _EDGE_B3_DISTINFO
 
 
-def test_sync_ports_refuses_a_distinfo_that_does_not_pin_the_old_tarball(tmp_path: Path) -> None:
-    """A distinfo pinning some other tarball is out of step with its Makefile: fail loud, push nothing."""
-    stale = _EDGE_B3_DISTINFO.replace("v4.0.0.b3_GH0", "v4.0.0.b2_GH0")
-    result, origin, _curl_log, _served = _run_port_sync_push(
+@pytest.mark.parametrize(
+    "stale",
+    [
+        pytest.param(_EDGE_B3_DISTINFO.replace("4.0.0.b3", "4.0.0.b2"), id="pins-another-version"),
+        pytest.param(_EDGE_B3_DISTINFO.replace(f"SIZE ({_EDGE_B3_DISTFILE}) = 100\n", ""), id="no-size-line"),
+    ],
+)
+def test_sync_ports_refuses_a_distinfo_that_does_not_pin_the_old_tarball(tmp_path: Path, stale: str) -> None:
+    """A distinfo out of step with its Makefile (another version, or half an entry): fail loud, push nothing."""
+    result, origin, curl_log, _served = _run_port_sync_push(
         tmp_path, "edge", "net/pfSense-pkg-pfBlockerNG-edge", "4.0.0.b4", stale
     )
     assert result.returncode != 0, result.stdout + result.stderr
     assert f"pins no {_EDGE_B3_DISTFILE}" in result.stdout, result.stdout
+    assert not curl_log.exists(), curl_log.read_text()
     assert _pushed(origin, _EDGE_DISTINFO) == stale
+    assert "PORTVERSION=\t4.0.0.b3\n" in _pushed(origin, _EDGE_MAKEFILE)
+
+
+def test_sync_ports_pushes_nothing_when_codeload_fails(tmp_path: Path) -> None:
+    """An HTTP error from codeload must fail the step, never be hashed and pinned as the edge tarball."""
+    result, origin, curl_log, _served = _run_port_sync_push(
+        tmp_path, "edge", "net/pfSense-pkg-pfBlockerNG-edge", "4.0.0.b4", _EDGE_B3_DISTINFO, codeload_404=True
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert curl_log.read_text().count("\n") == 1, curl_log.read_text()
+    assert _pushed(origin, _EDGE_DISTINFO) == _EDGE_B3_DISTINFO
     assert "PORTVERSION=\t4.0.0.b3\n" in _pushed(origin, _EDGE_MAKEFILE)
 
 

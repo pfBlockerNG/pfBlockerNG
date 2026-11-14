@@ -118,8 +118,10 @@ def test_the_red_canary_stops_the_job_when_the_3987_pair_no_longer_differs(tmp_p
     assert log == "", log  # nothing fetched or vendored: the canary runs first
 
 
-def test_the_check_runs_on_devel_prs_that_change_a_go_module_requirement() -> None:
+def test_the_check_runs_on_devel_prs_that_can_change_go_mod_vendor_output() -> None:
+    """modules.txt follows go.mod/go.sum and also the gateway's imports: a new import of another package of an
+    already-required module adds its line with go.mod and go.sum untouched."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     trigger = workflow[True]["pull_request"]  # PyYAML (YAML 1.1) reads the `on:` key as True
     assert trigger["branches"] == ["devel"], trigger
-    assert {"go/**/go.mod", "go/**/go.sum"} <= set(trigger["paths"]), trigger
+    assert {"go/**/go.mod", "go/**/go.sum", "go/pfb_dns_gateway/**/*.go"} <= set(trigger["paths"]), trigger

@@ -346,10 +346,13 @@ jobs:
             # A port with a distinfo (edge, #4007) also pins its own tarball, whose name and bytes follow
             # the tag: re-pin it as codeload serves it to `make fetch`, or `make checksum` fails on the bump.
             if [ -f "$DISTINFO" ]; then
-              OLD_DIST="${PORT_PATH##*/}/pfBlockerNG-pfBlockerNG-v${OLD_PORTVERSION}_GH0.tar.gz"
-              NEW_DIST="${PORT_PATH##*/}/pfBlockerNG-pfBlockerNG-v${PORTVERSION}_GH0.tar.gz"
-              grep -qF "SHA256 (${OLD_DIST}) = " "$DISTINFO" || {
-                echo "::error::${DISTINFO} pins no ${OLD_DIST}"; exit 1; }
+              # bsd.sites.mk names it <account>-<project>-<DISTVERSIONFULL>-<GH_TAGNAME>_GH0.tar.gz.
+              OLD_DIST="${PORT_PATH##*/}/pfBlockerNG-pfBlockerNG-${OLD_PORTVERSION}-v${OLD_PORTVERSION}_GH0.tar.gz"
+              NEW_DIST="${PORT_PATH##*/}/pfBlockerNG-pfBlockerNG-${PORTVERSION}-v${PORTVERSION}_GH0.tar.gz"
+              if ! grep -qF "SHA256 (${OLD_DIST}) = " "$DISTINFO" || ! grep -qF "SIZE (${OLD_DIST}) = " "$DISTINFO"; then
+                echo "::error::${DISTINFO} pins no ${OLD_DIST}"
+                exit 1
+              fi
               TARBALL="$(mktemp)"
               curl -fsSL --retry 3 -o "$TARBALL" \
                 "https://codeload.github.com/pfBlockerNG/pfBlockerNG/tar.gz/v${PORTVERSION}?dummy=/"
