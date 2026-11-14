@@ -103,7 +103,6 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	pathgrepcidr="/usr/local/bin/grepcidr"
 	pathaggregate="/usr/local/bin/iprange"
 	pathgeoip="/usr/local/bin/mmdblookup"
-	pathhost=/usr/bin/host
 	pathtimeout=/usr/bin/timeout
 	pathtar=/usr/bin/tar
 	pathpfctl=/sbin/pfctl
@@ -1785,183 +1784,6 @@ pfb_reentry() {
 }
 
 
-# Function to convert Domains/ASs to its respective IP addresses
-whoisconvert() {
-
-	vtype="${max}"
-	# One entry per line so the loop below can iterate via a here-doc + `read`
-	# instead of an unquoted `for` over the value (which would re-split each
-	# entry on IFS).
-	custom_list="$(echo "${dedup}" | tr ',' '\n')"
-
-	if [ "${vtype}" = '_v4' ]; then
-		_type=A
-	else
-		_type=AAAA
-	fi
-	# issue #2877: bound the TOTAL elapsed time of one batch. Issue #2015 bounded
-	# each Domain lookup at 30 seconds, but the batch itself iterates every
-	# configured entry, so the two synchronous PHP launch sites could wait an
-	# unbounded 30s x Domain rows (plus the first-use ASN re-entry). The deadline
-	# is checked BEFORE each entry and the per-entry timeout is clipped to the
-	# time left, so the batch ends within the budget plus one lookup's kill
-	# grace; no Domain/AS ordering can bypass it. The nested ASN re-entry keeps
-	# pfb_reentry()'s own #2016 bound -- nothing is routed around that seam.
-	# Same degradation discipline as pfb_reentry(): start AT the default and
-	# take an override only once it is proven positive-integral, so no input can
-	# produce an empty or non-numeric duration (issue #2488's degradation class).
-	_whoisbatch_budget=1800
-	case "${whoisbatchtimeout:-}" in
-	''|*[!0-9]*) : ;;
-	*)
-		_whoisbatch_n=${whoisbatchtimeout}
-		while [ "${_whoisbatch_n}" != "${_whoisbatch_n#0}" ] && [ "${#_whoisbatch_n}" -gt 1 ]; do
-			_whoisbatch_n=${_whoisbatch_n#0}
-		done
-		[ "${_whoisbatch_n}" -gt 0 ] 2>/dev/null && _whoisbatch_budget=${_whoisbatch_n}
-		;;
-	esac
-
-	_whoisbatch_start="$(date +%s)"
-	_whoisbatch_expired=false
-
-	# Backup previous orig file
-	if [ -e "${pfborig}${alias}.orig" ]; then
-		mv "${pfborig}${alias}.orig" "${pfborig}${alias}.bk"
-	fi
-
-	echo
-	# ${found} ACCUMULATES across the loop: it is initialised false here and only
-	# ever set true on a successful entry, NEVER reset false inside the loop. So
-	# after the loop found=true iff AT LEAST ONE entry resolved (keep the data
-	# collected from the successful entries) and false iff nothing did (restore
-	# the .bk). Resetting it per-iteration would make it reflect only the LAST
-	# entry, discarding good data from earlier entries when the last one fails
-	# (issue #714).
-	found=false
-
-	# Iterate via a here-doc so the loop body stays in THIS shell (it sets the
-	# ${found} flag the restore logic below reads); skip blank entries.
-	while IFS= read -r host; do
-		[ -z "${host}" ] && continue
-		# issue #2877: whole-batch deadline, checked before each entry so no
-		# Domain/AS ordering can bypass the total budget.
-		_whoisbatch_left=$(( _whoisbatch_budget - $(date +%s) + _whoisbatch_start ))
-		if [ "${_whoisbatch_left}" -le 0 ]; then
-			_whoisbatch_expired=true
-			break
-		fi
-		# Determine if host is a Domain or an AS: a domain contains a dot.
-		case "${host}" in
-		*.*)
-			printf '  Collecting host IP: %s' "${host}"
-			# Capture the lookup output + its OWN exit code first (a pipe's $?
-			# would reflect sed's status, not host's, hiding a failed lookup) --
-			# then keep only the "has (IPv6) address" lines so a failure message
-			# (e.g. "Host x not found: 3(NXDOMAIN)") can never be captured as
-			# data (issue #714). Mirrors the ASN branch below.
-			# issue #2877: clip this lookup to the batch deadline (the deadline
-			# check above guarantees at least 1 second is left), else #2015's 30s.
-			_whoisbatch_tmo=30
-			if [ "${_whoisbatch_left}" -lt 30 ]; then
-				_whoisbatch_tmo="${_whoisbatch_left}"
-			fi
-			hostout="$("${pathtimeout}" -s TERM -k 5 "${_whoisbatch_tmo}" "${pathhost}" -t "${_type}" "${host}")"
-			hostrc=$?
-			if [ "${hostrc}" -eq 0 ]; then
-				hostips="$(echo "${hostout}" | grep -E 'has( IPv6)? address' | sed 's/^.* //')"
-			else
-				hostips=''
-			fi
-
-			if [ -n "${hostips}" ]; then
-				found=true
-				echo "### Domain: ${host} ###" >> "${pfborig}${alias}.orig"
-				echo "${hostips}" >> "${pfborig}${alias}.orig"
-				echo "... completed"
-			else
-				printf "... Failed to resolve host [ %s ]" "${host}"
-				touch "${pfborig}${alias}.fail"
-			fi
-			;;
-		*)
-			asnok=false
-			# Download IPinfo asn databases on first use.
-			if [ ! -f "${pathasncsv}" ]; then
-				printf 'Downloading [ IPinfo databases ] [ %s ]' "${now}"
-				pfb_reentry asn_shell scheduled
-				printf "... completed"
-			fi
-
-			# Exit if asn.csv is not found
-			if [ ! -f "${pathasncsv}" ]; then
-				log="Database ASN [ asn.csv ] not found. Register for IPinfo Token."
-				echo "${log}" | tee -a "${errorlog}"
-			else
-				asn="$(echo "${host}" | tr -d 'AaSs')"
-				printf '  Collecting ASN: AS%s' "${asn}"
-				# An AS number is digits only; drop anything else so the value
-				# spliced into the grep below is a literal, not a live pattern.
-				case "${asn}" in
-					''|*[!0-9]*)
-						printf "... Invalid ASN [ %s ]" "${host}"
-						touch "${pfborig}${alias}.fail"
-						continue
-						;;
-				esac
-				grep -F ",AS${asn}," "${pathasncsv}" | cut -d ',' -f1-2 | tr ',' '-' > "${pfborig}${alias}.wk"
-
-				# Collect only IPv4 or IPv6 for THIS entry, appending like the
-				# domain branch (issue #1075: a `>` here truncated .orig, so each
-				# ASN entry clobbered everything collected before it). grep exits
-				# 0 iff it appended at least one line.
-				if [ "${vtype}" = '_v4' ]; then
-					grep -v ':' "${pfborig}${alias}.wk" >> "${pfborig}${alias}.orig" && asnok=true
-				else
-					grep -v '\.' "${pfborig}${alias}.wk" >> "${pfborig}${alias}.orig" && asnok=true
-				fi
-			fi
-
-			if [ "${asnok}" = true ]; then
-				found=true
-			else
-				printf "... Failed to collect ASN"
-				touch "${pfborig}${alias}.fail"
-			fi
-			rm -f "${pfborig}${alias}.wk"
-			;;
-		esac
-	done <<EOF
-${custom_list}
-EOF
-
-	# issue #2877: explicit partial-state policy. Entries that resolved before
-	# the deadline are KEPT (the ${found} append semantics above); the skipped
-	# remainder is a visible failure named for the operator -- never a silent
-	# publish of a partial list or a silent erase of the collected prefix.
-	if [ "${_whoisbatch_expired}" = true ]; then
-		log="WHOIS batch [ ${alias} ] TIMED OUT after ${_whoisbatch_budget}s total; remaining Domain/AS entries skipped"
-		echo "${log}" | tee -a "${errorlog}"
-		touch "${pfborig}${alias}.fail"
-	fi
-
-	# Restore previous orig file
-	if [ "${found}" = false ]; then
-		if [ -e "${pfborig}${alias}.bk" ]; then
-			echo "... Restoring previous data"
-			mv "${pfborig}${alias}.bk" "${pfborig}${alias}.orig"
-		else
-			echo "... Creating empty file"
-			echo > "${pfborig}${alias}.orig"
-		fi
-	else
-		if [ -e "${pfborig}${alias}.bk" ]; then
-			rm -f "${pfborig}${alias}.bk"
-		fi
-	fi
-}
-
-
 # Function to convert IP to ASN
 iptoasn() {
 
@@ -2651,9 +2473,6 @@ case "${1}" in
 		pfb_ensure_tmpdir
 		pfb_recompute "$@"
 		exitnow "$?"
-		;;
-	whoisconvert)
-		whoisconvert
 		;;
 	iptoasn)
 		iptoasn
