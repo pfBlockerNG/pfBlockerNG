@@ -199,7 +199,7 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate, feeds *feedPha
 				return nil, newError(codeInvalidArgument, "the FeedPhase request is not valid", bad...)
 			}
 			result, err := gate.WithFeedPhase(ctx, p.Token, func(ctx context.Context, req update.Request, log *os.File) (any, error) {
-				if p.Force != req.Force {
+				if p.Force != req.Force && p.Force != "parse" {
 					return nil, newError(codeInvalidArgument, "force must match the running Update", fieldError{Field: "force", Message: "does not match the Update"})
 				}
 				if !updatePhaseAllowed(req, p.Phase) {
