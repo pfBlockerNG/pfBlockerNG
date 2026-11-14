@@ -4765,6 +4765,109 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 }
 
 /**
+ * Run one authenticated Core feed phase and fail closed for every requested feed when its reply is unusable.
+ *
+ * @param list<string> $feedIds
+ * @param callable(string, array, ?string, int): array{status:int, body:?array, error:?string}|null $call
+ * @return list<array<string, mixed>>
+ */
+function pfb_core_feed_phase(string $token, string $phase, array $feedIds, string $force, ?callable $call = NULL): array {
+	global $pfb;
+	$failure = static fn(string $reason): array => array_map(
+		static fn(string $id): array => [
+			'id' => $id, 'disposition' => 'failed', 'stage' => 'core', 'reason' => $reason,
+			'entries' => 0, 'parseFailures' => 0, 'suppressed' => FALSE, 'mappedDrops' => 0,
+			'dnsblRows' => 0, 'ipv4Count' => 0, 'ipv6Count' => 0, 'updateIP' => FALSE,
+			'schemeSkipped' => 0, 'hpHostsStop' => FALSE, 'placeholder' => '',
+			'preScriptFailed' => FALSE, 'sourceChanged' => FALSE, 'normalizedChanged' => FALSE,
+		],
+		$feedIds
+	);
+	if ($feedIds === []) {
+		return [];
+	}
+	if (!array_is_list($feedIds) || count($feedIds) > 1024
+		|| !in_array($phase, ['dnsbl', 'ip'], TRUE)
+		|| !in_array($force, ['none', 'parse', 'download', 'both'], TRUE)
+		|| preg_match('/\A[a-f0-9]{64}\z/', $token) !== 1
+		|| count($feedIds) !== count(array_unique($feedIds))) {
+		return $failure('core_request_invalid');
+	}
+	foreach ($feedIds as $id) {
+		if (!is_string($id) || preg_match('/\A[A-Za-z0-9:_]{1,64}\z/', $id) !== 1) {
+			return $failure('core_request_invalid');
+		}
+	}
+	if (($phase === 'dnsbl' && ($pfb['reuse_dnsbl'] ?? '') === 'on')
+		|| ($phase === 'ip' && ($pfb['reuse'] ?? '') === 'on')) {
+		$force = 'parse';
+	}
+
+	try {
+		$params = [
+			'requestId' => bin2hex(random_bytes(16)),
+			'token' => $token,
+			'phase' => $phase,
+			'feeds' => $feedIds,
+			'force' => $force,
+		];
+		$answer = ($call ?? 'pfb_core_call')('FeedPhase', $params, NULL, 14400);
+	} catch (Throwable) {
+		return $failure('core_transport_failed');
+	}
+	if (!is_array($answer) || ($answer['status'] ?? NULL) !== 200) {
+		return $failure(($answer['status'] ?? 0) === 0 ? 'core_transport_failed' : 'core_response_invalid');
+	}
+	$body = $answer['body'] ?? NULL;
+	if (($answer['error'] ?? NULL) !== NULL || !is_array($body)) {
+		return $failure('core_response_invalid');
+	}
+	$bodyFields = array_keys($body);
+	sort($bodyFields);
+	if ($bodyFields !== ['results'] || !is_array($body['results']) || !array_is_list($body['results'])
+		|| count($body['results']) !== count($feedIds)) {
+		return $failure('core_response_invalid');
+	}
+
+	$resultFields = [
+		'id', 'disposition', 'stage', 'reason', 'entries', 'parseFailures', 'suppressed', 'mappedDrops',
+		'dnsblRows', 'ipv4Count', 'ipv6Count', 'updateIP', 'schemeSkipped', 'hpHostsStop', 'placeholder',
+		'preScriptFailed', 'sourceChanged', 'normalizedChanged',
+	];
+	sort($resultFields);
+	$counts = ['entries', 'parseFailures', 'mappedDrops', 'dnsblRows', 'ipv4Count', 'ipv6Count', 'schemeSkipped'];
+	$booleans = ['suppressed', 'updateIP', 'hpHostsStop', 'preScriptFailed', 'sourceChanged', 'normalizedChanged'];
+	foreach ($body['results'] as $index => $result) {
+		if (!is_array($result)) {
+			return $failure('core_response_invalid');
+		}
+		$fields = array_keys($result);
+		sort($fields);
+		if ($fields !== $resultFields
+			|| !is_string($result['id']) || $result['id'] !== $feedIds[$index]
+			|| !in_array($result['disposition'], ['changed', 'unchanged', 'failed', 'held', 'reparsed'], TRUE)
+			|| !in_array($result['stage'], ['', 'settings', 'probe', 'fetch', 'whois', 'normalize', 'script', 'parse', 'publish'], TRUE)
+			|| !is_string($result['reason']) || strlen($result['reason']) > 64
+			|| preg_match('/\A[\x20-\x7E]*\z/', $result['reason']) !== 1
+			|| str_contains($result['reason'], '/') || str_contains($result['reason'], '\\')
+			|| !in_array($result['placeholder'], ['', 'empty', 'suppressed'], TRUE)) {
+			return $failure('core_response_invalid');
+		}
+		foreach ($counts as $field) {
+			if (!is_int($result[$field]) || $result[$field] < 0) {
+				return $failure('core_response_invalid');
+			}
+		}
+		foreach ($booleans as $field) {
+			if (!is_bool($result[$field])) {
+				return $failure('core_response_invalid');
+			}
+		}
+	}
+	return $body['results'];
+}
+
+/**
  * Core's native `settings/dns` fields (docs/misc/core-api-protocol.md, issue #3913), from config.xml: each value is what
  * pfb_unbound_python_ini() writes for it, so the in-memory config of a page that has not saved yet answers too.
  *
