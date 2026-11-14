@@ -12742,16 +12742,13 @@ function pfb_req_to_hook_trigger($trigger) {
 /*
  * Return the deprecation warning string for a legacy verb string, or '' if not deprecated.
  *
- * ADR-43: 'update', 'updateip', 'updatednsbl' and the CLI 'cron' adapter are deprecated.
- * Callers should use StartUpdate through pfb_trigger_request() or the Core API.
- * Removal is scheduled for a future major release.
+ * ADR-43: 'update', 'updateip' and 'updatednsbl' are deprecated as sync_package_pfblockerng() string arguments.
+ * Callers should use the explicit request array instead. Removal is scheduled for a future major release.
  *
- * Called from sync_package_pfblockerng() normalization and the CLI adapters before they
- * route the request to Core.
+ * Called from sync_package_pfblockerng()'s string-path normalization for the deprecated adapters.
  */
 function pfb_verb_deprecation_warning($verb) {
 	static $map = [
-		'cron'        => 'pfb_trigger scope=both force=false trigger=cron',
 		'update'      => 'scope=both force=false trigger=manual',
 		'updateip'    => 'scope=ip force=true trigger=force',
 		'updatednsbl' => 'scope=dnsbl force=true trigger=force',
