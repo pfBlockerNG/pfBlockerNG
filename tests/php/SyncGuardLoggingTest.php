@@ -8,12 +8,10 @@ require_once __DIR__ . '/DeferralLockHarnessTrait.php';
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #2496: sync_package_pfblockerng()'s silent precondition guards must log.
+ * Issue #2496: sync_package_pfblockerng()'s silent precondition guards must log for save-mode reconciliation.
  *
- * pfblockerng.php:255 is `exit(pfblockerng_sync_cron() ? 0 : 1)`, so a FALSE from
- * sync_package_pfblockerng() surfaces as rc=1 with empty stdout AND stderr. Three of
- * its four early guards return FALSE without writing anything anywhere, which made a
- * 13-test smoke failure undiagnosable until the guards were hand-instrumented:
+ * #3977 routes feed-pass CLI verbs through Core, but General save and package resync still use sync's save-only
+ * configuration, service and cron reconciliation. These guards must name failures when those non-feed effects run.
  *
  *   pfblockerng_apply.inc  pfb_schedule_dispatch_begin() FALSE   — silent
  *   pfblockerng_apply.inc  pfb_stage_publish_dir_recover() FALSE — silent

@@ -598,53 +598,38 @@ PHP;
 		}
 	}
 
-	public function testExtractedDispatchSeamRunsExistingCronCommand(): void
+	public function testExtractedDispatchStartsCoreApplyOnce(): void
 	{
-		$dispatch_log = "{$this->dir}/dispatch.log";
-		$dispatch_fifo = "{$this->dir}/dispatch.fifo";
-		$signal = $this->openDispatchSignal($dispatch_fifo);
-		$fake_php = $this->dispatchFixture('fake-php', $dispatch_log, $dispatch_fifo);
-
+		$calls = [];
+		$core = static function (string $method, array $params, ?string $socket, int $timeout) use (&$calls): array {
+			$calls[] = [$method, $params, $socket, $timeout];
+			return ['status' => 200, 'body' => [], 'error' => NULL];
+		};
 		$saved_argv = $GLOBALS['argv'];
-		$had_php = array_key_exists('php', $GLOBALS['pfb']);
-		$saved_php = $GLOBALS['pfb']['php'] ?? NULL;
-		$had_runlog = array_key_exists('runlog', $GLOBALS['pfb']);
-		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? NULL;
-		$had_changed = array_key_exists('top1m_changed', $GLOBALS['pfb']);
 		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? NULL;
-		$had_done = array_key_exists('top1m_dispatch_done', $GLOBALS['pfb']);
 		$saved_done = $GLOBALS['pfb']['top1m_dispatch_done'] ?? NULL;
 		try {
 			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc'];
-			$GLOBALS['pfb']['php'] = $fake_php;
-			$GLOBALS['pfb']['runlog'] = '/dev/null';
 			$GLOBALS['pfb']['top1m_changed'] = TRUE;
 			unset($GLOBALS['pfb']['top1m_dispatch_done']);
 
-			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE));
-			$this->awaitDispatch($signal);
-			$lines = file($dispatch_log, FILE_IGNORE_NEW_LINES);
-			$this->assertIsArray($lines);
-			$this->assertCount(1, $lines);
-			$this->assertStringContainsString('pfb_trigger scope=dnsbl force=false trigger=cron', $lines[0]);
+			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE, TRUE, $core));
+			$this->assertFalse(pfb_top1m_dispatch_if_changed(TRUE, TRUE, $core));
+			$this->assertCount(1, $calls);
+			$this->assertSame('StartUpdate', $calls[0][0]);
+			$this->assertSame('apply', $calls[0][1]['trigger']);
+			$this->assertArrayNotHasKey('scope', $calls[0][1]);
+			$this->assertArrayNotHasKey('force', $calls[0][1]);
+			$this->assertNull($calls[0][2]);
+			$this->assertSame(PFB_CORE_PAGE_TIMEOUT, $calls[0][3]);
 		} finally {
 			$GLOBALS['argv'] = $saved_argv;
-			if (!$had_php) {
-				unset($GLOBALS['pfb']['php']);
-			} else {
-				$GLOBALS['pfb']['php'] = $saved_php;
-			}
-			if (!$had_runlog) {
-				unset($GLOBALS['pfb']['runlog']);
-			} else {
-				$GLOBALS['pfb']['runlog'] = $saved_runlog;
-			}
-			if (!$had_changed) {
+			if ($saved_changed === NULL) {
 				unset($GLOBALS['pfb']['top1m_changed']);
 			} else {
 				$GLOBALS['pfb']['top1m_changed'] = $saved_changed;
 			}
-			if (!$had_done) {
+			if ($saved_done === NULL) {
 				unset($GLOBALS['pfb']['top1m_dispatch_done']);
 			} else {
 				$GLOBALS['pfb']['top1m_dispatch_done'] = $saved_done;
@@ -654,56 +639,36 @@ PHP;
 
 	public function testDispatchSuppressesFailedAndUnchangedButRunsChangedOnce(): void
 	{
-		$dispatch_log = "{$this->dir}/dispatch-matrix.log";
-		$dispatch_fifo = "{$this->dir}/dispatch-matrix.fifo";
-		$signal = $this->openDispatchSignal($dispatch_fifo);
-		$fake_php = $this->dispatchFixture('fake-php-matrix', $dispatch_log, $dispatch_fifo);
-
+		$calls = [];
+		$core = static function (string $method, array $params, ?string $socket, int $timeout) use (&$calls): array {
+			$calls[] = [$method, $params, $socket, $timeout];
+			return ['status' => 200, 'body' => [], 'error' => NULL];
+		};
 		$saved_argv = $GLOBALS['argv'];
-		$had_php = array_key_exists('php', $GLOBALS['pfb']);
-		$saved_php = $GLOBALS['pfb']['php'] ?? NULL;
-		$had_runlog = array_key_exists('runlog', $GLOBALS['pfb']);
-		$saved_runlog = $GLOBALS['pfb']['runlog'] ?? NULL;
-		$had_changed = array_key_exists('top1m_changed', $GLOBALS['pfb']);
 		$saved_changed = $GLOBALS['pfb']['top1m_changed'] ?? NULL;
-		$had_done = array_key_exists('top1m_dispatch_done', $GLOBALS['pfb']);
 		$saved_done = $GLOBALS['pfb']['top1m_dispatch_done'] ?? NULL;
 		try {
 			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc'];
-			$GLOBALS['pfb']['php'] = $fake_php;
-			$GLOBALS['pfb']['runlog'] = '/dev/null';
 			$GLOBALS['pfb']['top1m_changed'] = FALSE;
 			unset($GLOBALS['pfb']['top1m_dispatch_done']);
 
-			$this->assertFalse(pfb_top1m_dispatch_if_changed(TRUE), 'unchanged TOP1M must not dispatch');
-			$this->assertFalse(pfb_top1m_dispatch_if_changed(FALSE), 'failed extras pass must not dispatch without a TOP1M change');
-			$this->assertFileDoesNotExist($dispatch_log);
+			$this->assertFalse(pfb_top1m_dispatch_if_changed(TRUE, TRUE, $core), 'unchanged TOP1M must not dispatch');
+			$this->assertFalse(pfb_top1m_dispatch_if_changed(FALSE, TRUE, $core), 'failed extras pass must not dispatch without a TOP1M change');
+			$this->assertSame([], $calls);
 
 			$GLOBALS['pfb']['top1m_changed'] = TRUE;
-			$this->assertTrue(pfb_top1m_dispatch_if_changed(FALSE), 'TOP1M change must dispatch despite unrelated extras failure');
-			$this->assertFalse(pfb_top1m_dispatch_if_changed(FALSE), 'the same TOP1M change must not dispatch twice');
-			$this->awaitDispatch($signal);
-			$lines = file($dispatch_log, FILE_IGNORE_NEW_LINES);
-			$this->assertIsArray($lines);
-			$this->assertCount(1, $lines, 'changed TOP1M must dispatch exactly once');
+			$this->assertTrue(pfb_top1m_dispatch_if_changed(FALSE, TRUE, $core), 'TOP1M change must dispatch despite unrelated extras failure');
+			$this->assertFalse(pfb_top1m_dispatch_if_changed(FALSE, TRUE, $core), 'the same TOP1M change must not dispatch twice');
+			$this->assertCount(1, $calls, 'changed TOP1M must ask Core exactly once');
+			$this->assertSame(['StartUpdate', 'apply'], [$calls[0][0], $calls[0][1]['trigger']]);
 		} finally {
 			$GLOBALS['argv'] = $saved_argv;
-			if (!$had_php) {
-				unset($GLOBALS['pfb']['php']);
-			} else {
-				$GLOBALS['pfb']['php'] = $saved_php;
-			}
-			if (!$had_runlog) {
-				unset($GLOBALS['pfb']['runlog']);
-			} else {
-				$GLOBALS['pfb']['runlog'] = $saved_runlog;
-			}
-			if (!$had_changed) {
+			if ($saved_changed === NULL) {
 				unset($GLOBALS['pfb']['top1m_changed']);
 			} else {
 				$GLOBALS['pfb']['top1m_changed'] = $saved_changed;
 			}
-			if (!$had_done) {
+			if ($saved_done === NULL) {
 				unset($GLOBALS['pfb']['top1m_dispatch_done']);
 			} else {
 				$GLOBALS['pfb']['top1m_dispatch_done'] = $saved_done;

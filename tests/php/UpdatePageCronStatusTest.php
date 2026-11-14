@@ -5,9 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * The Update page's cron-status line and the CLI verbs it no longer dispatches (issue #3941). Run Now is Core's now
- * (UpdateViewResponseTest, UpdatePageCoreTest); what stays here is the tick's status line, which the page still computes, and
- * the exit-status contract of the verbs the Outpost and the smoke harness still run.
+ * The Update page's cron-status line and Core-owned CLI feed requests (issues #3941 and #3977).
  */
 final class UpdatePageCronStatusTest extends TestCase
 {
@@ -72,12 +70,13 @@ final class UpdatePageCronStatusTest extends TestCase
 		$this->assertSame('--', $nextcron);
 	}
 
-	public function testDetachedCliVerbsPropagateLockedProcessFailure(): void
+	public function testLegacyCliVerbsStartCoreUpdatesInsteadOfThePhpPass(): void
 	{
 		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
-		$this->assertStringContainsString('$pfb_completed = sync_package_pfblockerng(', $source);
-		$this->assertStringContainsString('$pfb_completed = pfblockerng_sync_cron(', $source);
-		$this->assertStringContainsString('pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);', $source);
+		$this->assertStringContainsString('pfb_core_update_start(', $source);
+		$this->assertStringNotContainsString('$pfb_completed = sync_package_pfblockerng(', $source);
+		$this->assertStringNotContainsString('$pfb_completed = pfblockerng_sync_cron(', $source);
+		$this->assertStringNotContainsString('pfb_cli_feed_pass_exit(', $source);
 	}
 
 	public function testForceValidatorsAreClearedOnlyInsideTheLockedChild(): void
