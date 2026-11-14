@@ -36,7 +36,7 @@ var reap = (*exec.Cmd).Wait
 // fd 3 is the result, lines of {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool};
 // all four are regular files, never pipes (a daemon an Update restarts would hold one open). The program's group gets TERM when
 // ctx ends or Cap (0: 4 hours) passes, and KILL if a member is left after 3 s; a program that has exited leaves its group alone.
-// The program itself gets KILL when Core dies.
+// The program runs under a supervisor, this binary re-run (supervise), which kills the whole group when Core dies.
 type Command struct {
 	Path string
 	Cap  time.Duration
@@ -80,7 +80,11 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	limit := c.limit()
 	ctx, cancel := context.WithTimeoutCause(ctx, limit, fmt.Errorf("it ran past its %s cap", limit))
 	defer cancel()
-	cmd := exec.Command(c.Path)
+	self, err := os.Executable()
+	if err != nil {
+		return Result{}, fmt.Errorf("the update supervisor cannot be found: %w", err)
+	}
+	cmd := exec.Command(self, superviseArg, c.Path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
 	cmd.ExtraFiles = []*os.File{fd3}
 	cmd.SysProcAttr = procAttr()
