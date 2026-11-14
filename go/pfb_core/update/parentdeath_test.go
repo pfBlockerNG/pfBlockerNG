@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -27,6 +28,9 @@ func TestMain(m *testing.M) {
 // A Core killed outright (SIGKILL, the OOM killer, a crash) takes its Update's program with it (issue #4003): nothing is left
 // to record what the program reports, and the Core the supervisor starts next must not find it still running.
 func TestTheProgramDiesWithACoreThatIsKilled(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "freebsd" {
+		t.Skipf("%s has no parent-death signal (procattr_other.go)", runtime.GOOS)
+	}
 	_, dir := program(t, `echo $$ > "$D/child"; echo up > "$D/up"; exec sleep 300`)
 	core := exec.Command(os.Args[0], "-test.run=^$")
 	core.Env = append(os.Environ(), coreDirEnv+"="+dir)

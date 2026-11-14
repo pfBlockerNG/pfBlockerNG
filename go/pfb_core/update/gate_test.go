@@ -307,8 +307,8 @@ func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
 	if newest := fmt.Sprintf("line %06d %s\nthe end\n", lines-1, strings.Repeat("x", 20)); !strings.HasSuffix(v.Log, newest) {
 		t.Errorf("the trimmed log ends with %q, want the newest lines %q", v.Log[max(0, len(v.Log)-80):], newest)
 	}
-	if len(v.Log) > b.Len()/2 {
-		t.Errorf("the trimmed log holds %d bytes, want at most half of the %d written", len(v.Log), b.Len())
+	if limit := maxLog/2 + len("the end\n"); len(v.Log) > limit {
+		t.Errorf("the trimmed log holds %d bytes, want at most %d: the newest lines of at most 4 MiB, then the line after the trim", len(v.Log), limit)
 	}
 	if old := g.View(early.Next, 64<<10); old.Log != g.View(0, 64<<10).Log {
 		t.Errorf("View(%d), a cursor from before the trim, reads %.40q, want the trimmed log from its start", early.Next, old.Log)
