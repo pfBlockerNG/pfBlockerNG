@@ -417,11 +417,12 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 - **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
   restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it.
 - **fd 3:** a second regular file, for the result: lines, each one JSON object `{"version": 1, "outcomes": {id:
-  "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field optional. The program
-  writes each outcome as it finishes, so its death loses no finished check. Core adds the lines up: every line's outcomes (the
-  first for an id stands), every line's attempted ids, and the last GeoIP readiness reported. Nothing written is nothing
-  reported. A last line that is not such an object (the program died writing it) is dropped and fails the Update; any other
-  line that is not, or more than 1 MiB in all, fails the Update and records nothing.
+  "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field but `version`
+  optional. The program writes each outcome as it finishes, so its death loses no finished check. Core adds the lines up:
+  every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness of the last line that has
+  them. Nothing written is nothing reported. A last line with no newline that is not such an object (the program died writing
+  it) is dropped and fails the Update; any other line that is not, or more than 1 MiB in all, fails the Update and records
+  nothing.
 - **Exit status:** 0 is success. A non-zero exit fails the Update, and a valid result it wrote still counts. **75** means the
   program deferred the Update (a lock held, the schedule switched off): the Update ends with the result `skipped`, not
   `failed`, whatever the program wrote on fd 3 is not recorded (no outcome, no attempt, no GeoIP readiness), and the

@@ -146,9 +146,9 @@ func groupGone(group int, grace time.Duration) bool {
 }
 
 // readResult is what the program wrote to f: nothing, or result lines, each exactly one JSON object of protocol version 1. The
-// lines add up: every line's outcomes (the first for an id stands), every line's attempted ids, and the last GeoIP readiness
-// reported. A bad last line (one the program's death cut short) leaves the lines before it, with the error; any other error
-// returns a zero Result.
+// lines add up: every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness of the last line
+// that has them. A bad unterminated last line (one the program's death cut short) leaves the lines before it, with the error;
+// any other error returns a zero Result.
 func readResult(f *os.File) (Result, error) {
 	b, err := io.ReadAll(io.NewSectionReader(f, 0, maxResult+1))
 	switch {
@@ -179,10 +179,8 @@ func readResult(f *os.File) (Result, error) {
 				}
 			}
 		}
-		if res.Attempted == nil {
+		if r.Attempted != nil {
 			res.Attempted = r.Attempted
-		} else {
-			res.Attempted = append(res.Attempted, r.Attempted...)
 		}
 		res.GeoIPReady = cmp.Or(r.GeoIPReady, res.GeoIPReady)
 	}

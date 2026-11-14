@@ -491,6 +491,17 @@ final class CoreUpdateServeTest extends TestCase
 		$this->assertStringContainsString('disk full', $run['out']);
 	}
 
+	public function testAnExtraThatSucceededIsOnFdThreeBeforeTheFeedPassRuns(): void
+	{
+		// Given a feed pass that reads the result file the moment it starts (issue #4002: a death in the pass must not lose the Extra)
+		$seen = NULL;
+		$seams = $this->seams(onCron: function () use (&$seen): void { $seen = file_get_contents("{$this->dir}/result.json"); });
+
+		$this->serve(self::req('scheduled', ['feeds' => [self::FEED], 'extras' => ['extra:dcc']]), $seams);
+
+		$this->assertSame('{"version":1,"outcomes":{"extra:dcc":"success"}}' . "\n", $seen);
+	}
+
 	public function testTheExtrasThePassAndTheApplyRunWhileBothLocksAreHeld(): void
 	{
 		// Given a probe that reports whether another handle finds a lock taken (the entry points Core does not start would find it so)
