@@ -285,8 +285,8 @@ sleep 60`)
 	}
 }
 
-// The lines of a result add up: every line's outcomes (the first for an id stands), every line's attempted ids, and the last
-// GeoIP readiness reported. A complete line that is not a result fails the whole result.
+// The lines of a result add up: every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness
+// of the last line that has them. A complete line that is not a result fails the whole result.
 func TestResultLinesAddUp(t *testing.T) {
 	yes, no := true, false
 	for _, c := range []struct {
@@ -300,7 +300,10 @@ func TestResultLinesAddUp(t *testing.T) {
 			Result{Outcomes: map[string]string{"ipv4:a_v4": "success", "extra:dcc": "success"}, Attempted: []string{"extra:bl"}, GeoIPReady: &yes}, ""},
 		{"a readiness reported once stays", "{\"version\":1,\"geoipReady\":false}\n{\"version\":1,\"attempted\":[\"extra:bl\"]}\n",
 			Result{Attempted: []string{"extra:bl"}, GeoIPReady: &no}, ""},
+		{"the attempted ids of the last line that has them", "{\"version\":1,\"attempted\":[\"extra:dcc\"]}\n{\"version\":1,\"attempted\":[\"extra:bl\"]}\n{\"version\":1}\n",
+			Result{Attempted: []string{"extra:bl"}}, ""},
 		{"a bad line amid good ones", "{\"version\":1,\"outcomes\":{\"ipv4:a_v4\":\"success\"}}\nhello\n{\"version\":1}\n", Result{}, "not one JSON object"},
+		{"a bad last line that is whole", "{\"version\":1,\"outcomes\":{\"ipv4:a_v4\":\"success\"}}\nhello\n", Result{}, "not one JSON object"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			res, err := runCmd(t, withResult(t, c.payload, 0), Request{Trigger: "manual"}, newLog(t))
