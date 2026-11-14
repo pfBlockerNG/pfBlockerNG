@@ -92,7 +92,7 @@ func publish(feed Feed, body, digest string, lastMod time.Time) error {
 	if err := os.Rename(body, published); err != nil {
 		return errors.New("published copy could not be replaced")
 	}
-	os.WriteFile(feed.path(".orig.xxhash128"), []byte(sum), 0o600)
+	os.WriteFile(feed.path(".orig.xxhash128"), []byte(digest), 0o600)
 	if !lastMod.IsZero() {
 		os.Chtimes(published, lastMod, lastMod)
 	}

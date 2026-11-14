@@ -228,7 +228,7 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		defer os.Remove(body) // an extraction whose publication failed
 	}
 	// The digest is of the wire bytes (#713): body itself for a text feed, before it is finished; the archive otherwise.
-	digest, err := fileDigest(staged)
+	sum, err := digest.File(staged)
 	if err != nil {
 		return Result{Status: t.status, Reason: "staged body could not be read"}
 	}
@@ -249,7 +249,7 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		defer os.Remove(et)
 		body = et
 	}
-	if err := publish(feed, body, digest, t.lastMod); err != nil {
+	if err := publish(feed, body, sum, t.lastMod); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
 	}
 	keepRaw = archive
