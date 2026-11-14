@@ -7,9 +7,9 @@
   records an outcome (what the #2308 ledger tests held for the PHP tick);
 * the tick no longer writes the PHP scheduler's state file: Core owns the schedule, and ``GetSchedule`` shows the feed
   group the box has.
-* a manual and a retry Update (what a quarter-hour run plans; the harness's `.pfb_cron_disable` defers trigger
-  `scheduled`) run Core's FeedPhase: the Update log names each feed ID and its disposition for every feed type
-  (DNSBL, IPv4, IPv6, custom groups, the synthetic DNSBL-IP rows), checked against the requests the local server saw;
+* a manual Update runs Core's FeedPhase for every feed type (DNSBL, IPv4, IPv6, custom groups and synthetic DNSBL-IP
+  rows); a retry Update checks the regular feeds through the same planning path, not the scheduler's `scheduled`
+  trigger, which the harness's retained `.pfb_cron_disable` defers;
 * a 304 leaves the original, parsed and action files unrewritten; a failed transfer leaves the last-good ones and the
   `.fail` marker, and a retry after the source recovers publishes the new feed.
 
@@ -214,12 +214,12 @@ def _run_manual_update(vm: SmokeVM, scope: str = "both") -> str:
 
 
 def _snapshot(vm: SmokeVM, paths: list[str]) -> dict[str, tuple[bytes, str]]:
-    """Each file's bytes and its inode, mtime and size: a rewrite (even of equal bytes) changes the stat."""
+    """Each file's bytes, inode, high-resolution modification/change times and size."""
     out = {}
     for path in paths:
         raw = vm.ssh("cat", path)
         assert raw.returncode == 0, f"cannot read Core artifact {path}: {raw.stderr}"
-        stat = vm.ssh("stat", "-f", "%i %m %z", path)
+        stat = vm.ssh("stat", "-f", "%i %.9Fm %.9Fc %z", path)
         assert stat.returncode == 0, f"cannot stat Core artifact {path}: {stat.stderr}"
         out[path] = (raw.stdout.encode(), stat.stdout.strip())
     return out
@@ -276,6 +276,19 @@ def _configure_every_feed_type(vm: SmokeVM, mock_feeds: Any, tag: str) -> tuple[
             h.CFG_IP_V6_LISTS: (alias["v6"], "2001:db8::77\r\n"),
         },
     )
+    provider, title = f"cu{tag}cat", f"Core{tag}"
+    category_source = f"{DB}/{provider}/{provider}_test_cat"
+    seeded = h.php_eval(
+        vm,
+        f"mkdir({h._php_str(f'{DB}/{provider}')}, 0755, TRUE);"
+        f'file_put_contents({h._php_str(category_source)}, "blacklist.example.com\\n");'
+        "config_set_path('installedpackages/pfblockerngblacklist', array("
+        f"'blacklist_enable'=>'on','blacklist_selected'=>{h._php_str(provider)},"
+        f"'item'=>array(array('xml'=>{h._php_str(provider)},'title'=>{h._php_str(title)},"
+        f"'feed'=>{h._php_str(urls['dnsbl'])},'selected'=>'test-cat','size'=>'0'))));"
+        "write_config('pfBlockerNG smoke: Core category parsing'); echo 'OK';",
+    )
+    assert seeded.returncode == 0 and "OK" in seeded.stdout, f"category setup failed: {seeded.stdout} {seeded.stderr}"
     h.tell_core_the_settings_changed(vm)
     regular = {
         f"dnsbl:{alias['dnsbl']}": mock["dnsbl"],
@@ -288,6 +301,7 @@ def _configure_every_feed_type(vm: SmokeVM, mock_feeds: Any, tag: str) -> tuple[
         f"custom:ipv6:{alias['v6']}",
         "synthetic:ipv4:DNSBLIP_v4",
         "synthetic:ipv6:DNSBLIP_v6",
+        f"blacklist:{provider}:test-cat",
     )
     return regular, own_less
 
@@ -308,9 +322,31 @@ def test_manual_update_logs_core_dispositions_for_every_feed_type(core_vm: Smoke
         seen = mock_feeds.statuses(mock)
         assert 200 in seen, f"{feed_id}: the local server was never fetched: {seen}"
 
+    ip_outputs = {
+        "cumanualv4_v4": b"198.51.100.44\n",
+        "cumanualv6_v6": b"2001:db8::44\n",
+        "cumanualv4_custom_v4": b"198.51.100.77\n",
+        "cumanualv6_custom_v6": b"2001:db8::77\n",
+        "DNSBLIP_v4": b"203.0.113.9\n",
+        "DNSBLIP_v6": b"2001:db8::9\n",
+    }
+    for stem, expected in ip_outputs.items():
+        paths = [f"{DB}/original/{stem}.parsed.ip", f"{DB}/deny/{stem}.txt"]
+        for path, (actual, _) in _snapshot(vm, paths).items():
+            assert actual == expected, f"{path}: parsed/consumed bytes {actual!r}, expected {expected!r}"
+    for stem, domain in (
+        ("cumanualdnsbl", "ads.example.com"),
+        ("cumanualdnsbl_custom", "custom.example.com"),
+        ("Coremanual_test_cat", "blacklist.example.com"),
+    ):
+        paths = [f"{DB}/dnsblorig/{stem}.parsed.ndjson", f"{DB}/dnsbl/{stem}.txt"]
+        for path, (actual, _) in _snapshot(vm, paths).items():
+            payloads = [json.loads(line)[1] for line in actual.splitlines()]
+            assert domain in payloads, f"{path}: expected parsed domain {domain!r}, got {payloads!r}"
+
 
 def test_retry_update_runs_core_feed_phase_for_every_regular_feed_type(core_vm: SmokeVM, mock_feeds: Any) -> None:
-    """A retry Update (the planned quarter-hour path) fetches the changed sources through Core and logs each ID.
+    """A retry Update fetches changed sources through Core and logs each regular feed ID; it is not a scheduled run.
 
     A `.fail` marker is what asks for a feed's retry; each source then serves a new body, so every disposition is
     `changed` and every one needs a fresh 200 from the local server.
@@ -351,7 +387,7 @@ def _arrange_one_feed(vm: SmokeVM, mock_feeds: Any, kind: str, tag: str) -> _One
         url = mock_feeds.register(mock, "ads.example.org\n")
         h.inject_dnsbl_lists(vm, [(h.DnsblCase(aliasname=header, header=header, feed_url=url), "Deny")])
         parsed = [f"{DB}/dnsblorig/{header}.parsed.{ext}" for ext in ("ndjson", "v4.ip", "v6.ip")]
-        files = [f"{DB}/dnsblorig/{header}.orig", *parsed]
+        files = [f"{DB}/dnsblorig/{header}.orig", *parsed, f"{DB}/dnsbl/{header}.txt"]
         feed = _OneFeed(mock, f"dnsbl:{header}", "dnsbl", files, parsed[0], f"{DB}/dnsbl/{header}.fail")
     else:
         url = mock_feeds.register(mock, "198.51.100.45\n")
@@ -401,26 +437,31 @@ def test_core_failed_transfer_keeps_last_good_files_and_retry_state_until_recove
     _run_manual_update(vm, feed.scope)
     before = _snapshot(vm, feed.files)
     seen = len(mock_feeds.statuses(feed.mock))
-    assert vm.ssh("touch", feed.fail_marker).returncode == 0, f"cannot mark {feed.feed_id} for retry"
+    absent = vm.ssh("test", "!", "-f", feed.fail_marker)
+    assert absent.returncode == 0, f"precondition: successful baseline left {feed.fail_marker}"
     mock_feeds.set_status(feed.mock, 503)
 
     with h.scheduled_updates_on(vm):
-        _, log = _run_update(vm, "retry")
+        _, log = _run_update(vm, "manual", feed.scope)
         failed = mock_feeds.statuses(feed.mock)[seen:]
         after = _snapshot(vm, feed.files)
         marker = vm.ssh("test", "-f", feed.fail_marker)
         schedule = h.core_call(vm, "GetSchedule")
+        ledger_result = vm.ssh("cat", "/usr/local/etc/pfb_core/schedule_state.json")
+        assert ledger_result.returncode == 0, f"cannot read Core outcome ledger: {ledger_result.stderr}"
+        ledger = json.loads(ledger_result.stdout)
 
         mock_feeds.set_status(feed.mock, None)
         mock_feeds.set_content(feed.mock, "ads2.example.org\n" if kind == "dnsbl" else "198.51.100.99\n")
         _, recovered_log = _run_update(vm, "retry")
         recovered = _snapshot(vm, feed.files)
 
-    assert failed and set(failed) == {503}, f"the retry must see only the failing source: {failed}"
+    assert failed and set(failed) == {503}, f"the Update must see only the failing source: {failed}"
     assert before == after, f"a failed transfer changed the last-good files: before={before!r} after={after!r}"
     assert marker.returncode == 0, "a failed transfer cleared the feed's .fail retry marker"
     assert schedule["status"] == 200, f"GetSchedule did not answer: {schedule}"
     assert feed.feed_id not in schedule["body"]["lastSuccessfulCheck"], "a failed transfer was recorded as a check"
+    assert "last_successful_check" not in ledger["items"].get(feed.feed_id, {}), f"failure closed ledger: {ledger}"
     _assert_feed_disposition(log, feed.feed_id, "failed")
     assert mock_feeds.statuses(feed.mock)[-1] == 200, "the retry after recovery never fetched the source"
     _assert_feed_disposition(recovered_log, feed.feed_id, "changed")

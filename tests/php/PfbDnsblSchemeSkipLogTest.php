@@ -6,23 +6,17 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-22 Phase 2 -- the call-site toggle resolution + the strict-mode skip logging.
+ * ADR-22 Phase 2 -- the call-site toggle resolution + the per-feed strict-mode skip summary.
  *
- * Scenario: a strict skip is recorded per-line AND summarised once per feed; lenient is
- * byte-identical to today (nothing skipped, no new log output).
  *   Background:
  *     - strict = (pfb_dnsbl_lenient !== 'on') -- the trivial single-toggle resolution.
- *     - pfb_dnsbl_scheme_line($line, $strict, $header, $oline, $lineno, $logfile, &$skipped):
- *       returns the kept host, or FALSE after recording a parse-error line (naming its
- *       source line number, issue #1004) + bumping the per-feed counter.
- *     - pfb_dnsbl_scheme_skip_warn($skipped, $header): one main-log WARNING when $skipped>0.
+ *     - pfb_dnsbl_scheme_skip_warn($skipped, $header): one main-log WARNING when $skipped>0; the per-line skip and
+ *       its parse-error row are Core's feed parse since #3977 (go/pfb_core/feedparse TestDNSBLCorpus).
  *
- * Real pfb_parse_fail_log()/pfb_logger() are exercised (the shipped code), pointed at temp
- * files so the side-effects are asserted -- not coverage theater. File I/O results are
- * asserted (no '@' suppression) so a setup/teardown failure cannot mask a false green, and
+ * Real pfb_logger() is exercised (the shipped code), pointed at temp files so the side-effects are asserted. File I/O
+ * results are asserted (no '@' suppression) so a setup/teardown failure cannot mask a false green, and
  * $GLOBALS['pfb']['log'] is saved/restored per test so the suite stays order-independent.
  */
-#[CoversFunction('pfb_dnsbl_scheme_line')]
 #[CoversFunction('pfb_dnsbl_scheme_skip_warn')]
 final class PfbDnsblSchemeSkipLogTest extends TestCase
 {
@@ -85,55 +79,6 @@ final class PfbDnsblSchemeSkipLogTest extends TestCase
 		// lenient ON (the migrated/legacy default) => permissive parsing.
 		$lenient = 'on';
 		$this->assertFalse($lenient !== 'on');
-	}
-
-	// --- Per-line skip + parse-error log (strict) vs silent passthrough (lenient). ---
-
-	public function testStrictSkipIsLogged(): void
-	{
-		$logfile = $this->mktemp('pfb_parse_err_');	// Given: an empty parse-error log.
-		$skipped = 0;
-
-		// When: a malformed line ('123://evil.com') is parsed in STRICT mode, at source line 7.
-		$result = pfb_dnsbl_scheme_line('123://evil.com', true, 'TestFeed', '123://evil.com', 7, $logfile, $skipped);
-
-		// Then: the line is rejected, the counter bumped, and a CSV parse-error row written
-		// ending in the offending line + its source line number (issue #1004).
-		$this->assertFalse($result);
-		$this->assertSame(1, $skipped);
-		$logged = $this->readFile($logfile);
-		$this->assertStringContainsString('TestFeed', $logged);
-		// issue #1004: newline-terminated row, lineno the final column.
-		$this->assertStringEndsWith(",123://evil.com,7\n", $logged);
-	}
-
-	public function testLenientEmitsNoNewLog(): void
-	{
-		$logfile = $this->mktemp('pfb_parse_err_');	// Given: an empty parse-error log.
-		$skipped = 0;
-
-		// When: the SAME malformed line is parsed in LENIENT mode.
-		$result = pfb_dnsbl_scheme_line('123://evil.com', false, 'TestFeed', '123://evil.com', 7, $logfile, $skipped);
-
-		// Then: it is kept (today's behaviour), nothing is counted, and the log stays empty
-		// -- byte-identical to today.
-		$this->assertSame('evil.com', $result);
-		$this->assertSame(0, $skipped);
-		$this->assertSame('', $this->readFile($logfile));
-	}
-
-	public function testValidSchemeLineKeptInStrictWithoutLogging(): void
-	{
-		// A valid scheme, no path: kept in strict too, nothing logged/counted (regression
-		// guard -- strict must not skip legitimate lines).
-		$logfile = $this->mktemp('pfb_parse_err_');
-		$skipped = 0;
-
-		$result = pfb_dnsbl_scheme_line('evil://evil.com', true, 'TestFeed', 'evil://evil.com', 3, $logfile, $skipped);
-
-		$this->assertSame('evil.com', $result);
-		$this->assertSame(0, $skipped);
-		$this->assertSame('', $this->readFile($logfile));
 	}
 
 	// --- Per-feed summary WARNING: once per feed, only when something was skipped. ---

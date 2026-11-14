@@ -41,7 +41,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'CategoryFeedsAliasTruncationRenderTest.php',
 		'CategoryPostdataInvalidPrefixGuardTest.php',
 		'DnsblCustomListWildcardValidationTest.php',
-		'DnsblFeedIdnWildcardTest.php',
 		'DnsblFreshPconfigTest.php',
 		'DnsblWildcardRowValidationTest.php',
 		'FeedsAltSelectedKeyTest.php',
@@ -97,11 +96,8 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'GeneralAllowlistEditorWiringTest.php',
 		'GeoipContinentCatStderrGuardTest.php',
 		'GeoipDocLinkTest.php',
-		'IpRegexBoundaryGuardTest.php',
-		'IpRegexPrefilterGuardTest.php',
 		'IpSuppressionEditorWiringTest.php',
 		'LintEndpointWiringTest.php',
-		'ListScriptReparseWiringTest.php',
 		'LogTimestampBaselineTest.php',
 		'PfbJsCacheBustingWiringTest.php',
 		'PythonTldWildcardIniEmitTest.php',
@@ -120,7 +116,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'AliasCntGrepCountGuardTest.php' => '#993 live sync/download/firewall orchestration',
 		'DnsblCustomRowStateEnabledInvariantTest.php' => '#993 live sync row synthesis dispatch',
 		'DnsblFeedCountWiringTest.php' => 'live DNSBL and Unbound service restart dispatch',
-		'DnsblIpCountGuardTest.php' => '#993 live sync/download/firewall orchestration',
 		'DnsblPlaintextSummaryRetirementTest.php' => 'inherently cross-file retired-code invariant',
 		'DnsblRegexHelpTextTest.php' => 'page render call lacks a help-text smoke assertion',
 		'DownloadExtractionExitCodeTest.php' => 'six live archive extraction bodies',
@@ -131,20 +126,16 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'GeoipPackageGenerationCoverageTest.php' => 'destructive package install dispatch',
 		'GeneralSyntaxHighlightToggleWiringTest.php' => 'config-backed page save dispatch',
 		'GroupActionWiringTest.php' => 'appliance config-backed page dispatch',
-		'GunzipTrailingNewlineWiringTest.php' => '#993 live download/apply orchestration',
 		'HookEditFileContainmentTest.php' => 'destructive page file operations and include boundary',
 		'InstallDnsblMoveRestartGuardTest.php' => 'destructive installer and live service restart',
 		'InstallPrePassWriteOrderTest.php' => 'destructive package installer lifecycle',
-		'IpParseLineWiringTest.php' => '#993 live sync/download/firewall orchestration',
 		'IpRecomputeOrderChangeTest.php' => '#993 live config-order recompute dispatch',
 		'IpRecomputeRanWiringTest.php' => '#993 live firewall and closing dispatch',
-		'ListScriptTransformRerunWiringTest.php' => '#993 two live sync feed loops',
-		'ListScriptExitStatusTest.php' => '#993 six live list-script loop dispatches',
+		'ListScriptExitStatusTest.php' => '#993 two live post-script loop dispatches',
 		'ListScriptFailureLedgerWiringTest.php' => '#993 four live failure-ledger loop dispatches',
 		'LogFormatConsumersTest.php' => 'live external-command and top-level page consumers',
 		'LogLinecountGuardTest.php' => 'top-level authenticated AJAX dispatch',
 		'LogNowTokenRetiredTest.php' => 'inherently whole-tree retired-code invariant',
-		'PfbFeedNormalizeTest.php' => '#993 two live sync parse loops',
 		'PfbSettingsFamilyPostInstallCaptureTest.php' => 'destructive package installer lifecycle',
 		'PfbSettingsFamilyTest.php' => 'destructive package uninstall lifecycle',
 		'PfbSyncStatusDnsblWritersTest.php' => '#993 live sync plus off-limits Alerts dispatch',
@@ -198,7 +189,7 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		$source = file_get_contents($sourcePath);
 		$this->assertIsString($source);
 		$rewritten = str_replace(
-			'// issue #1925: normalize once per file; the parse below reads .norm',
+			"// issue #2059: 'script' stage, never 'download' -- the feed refreshed.",
 			'// nearby production explanation rewritten without preserving its old words',
 			$source,
 			$count
@@ -211,12 +202,12 @@ final class SourceScanningWiringPolicyTest extends TestCase
 			$this->assertNotFalse(file_put_contents($temp, $rewritten));
 			$originalCode = php_strip_whitespace($sourcePath);
 			$rewrittenCode = php_strip_whitespace($temp);
-			$start = 'pfb_list_script_cleanup_staged(';
-			$end = 'if (!empty($domain_data)) {';
+			$start = 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {';
+			$end = 'if ($has_data && !pfb_core_feed_artifact_copy(';
 			$this->assertSame(
 				$this->sourceScope($originalCode, $start, $end),
 				$this->sourceScope($rewrittenCode, $start, $end),
-				'retained DNSBL staged-script pin must ignore nearby comment wording'
+				'retained IP post-script pin must ignore nearby comment wording'
 			);
 		} finally {
 			@unlink($temp);

@@ -476,7 +476,11 @@ IPv4/IPv6 IDs plus the synthetic IDs.
 Blacklist categories use `blacklist:<provider-id>:<category>` in the DNSBL phase only. Provider IDs match `[A-Za-z0-9_-]+`; categories match `[A-Za-z0-9_.-]+`; neither component may be empty, `.` or `..`, or contain a separator. Core resolves the provider and exact category from `schedule.categoryProviders`; an unknown pair returns a failed result with reason `unknown_category` without changing existing artifacts.
 
 Core reads the source beneath `--feed-blacklist-dir` at `<provider-id>/<provider-id>_<category-with-dashes-replaced-by-underscores>`. It accepts only a regular file contained in that provider directory and within feedfetch's size limit. The DNSBL baseline and parse artifacts use the same header as a regular DNSBL feed: `<provider-title>_<category-with-dashes-replaced-by-underscores>`, with `.orig`, `.parsed.ndjson`, `.parsed.v4.ip` and `.parsed.v6.ip` suffixes.
-The Update program calls DNSBL first, builds DNSBLIP, then calls the IP phase. The method deadline is 4 hours.
+Within the same Update and token, the program calls DNSBL first, builds DNSBLIP in PHP from Core's parsed sidecars, then
+calls the IP phase, including custom and synthetic DNSBLIP IDs. It retains the D→F locks and downstream apply ordering.
+The PHP feed parsers, Python normalizer and shell `whoisconvert` are removed; there is no PHP fallback on a failed
+FeedPhase call. Extras still use `pfb_download()` until #3978. The deprecated `cron` adapter and unchanged `cron-tick`
+remain. The method deadline is 4 hours.
 FTP sources skip `Probe` and are ingested directly; feedfetch's FTP probe is unsupported, so each such phase reports a change.
 Before requesting the IP phase, the Outpost must run its existing `asn_shell scheduled` step when any named feed has format
 `whois` or `asn`, or a named group uses `whoisConvert`, and `asn.csv` is missing. If it remains unavailable, Core returns a

@@ -4032,8 +4032,6 @@ function pfb_global() {
 					array_filter(explode(',', PfbConfig::read('gen/pfb_agg_types')))));
 
 	$pfb['supp']		= PfbConfig::read('ip/suppression');					// Enable Suppression (default on, issue #1907)
-	$pfb['supp_cidr']	= PfbConfig::read('ip/suppression_cidr');				// Global Suppression CIDR Limit, IPv4 (issue #3413)
-	$pfb['supp_cidr_v6']	= PfbConfig::read('ip/suppression_cidr_v6');				// Global Suppression CIDR Limit, IPv6
 	$pfb['cc']		= PfbConfig::read('ip/database_cc') === PfbToggle::On;	// Disable Country database CRON updates
 	$pfb['maxmind_locale']	= PfbConfig::read('ip/maxmind_locale');	// MaxMind Localized Language setting
 	$pfb['asn_reporting']	= PfbConfig::read('ip/asn_reporting');	// ASN Reporting
@@ -21994,8 +21992,8 @@ function pfb_log_feed_host_reject($list_url, $header, $logtype) {
 	// Only speak for the guard when the URL would have REACHED the guard: pfb_filter()
 	// rejects a disallowed scheme before ever consulting pfb_feed_host_allowed(), so a
 	// bad-scheme URL whose host happens to resolve internally must NOT be attributed to
-	// the SSRF guard. Mirror pfb_filter()'s scheme allow-list (the host::module rsync
-	// form has no scheme and is covered by pfb_download()'s own rsync gate instead).
+	// the SSRF guard. Mirror pfb_filter()'s scheme allow-list; the host::module rsync
+	// form has no scheme and pfb_download() refuses the retired feed-transfer format.
 	$entry_scheme = strtolower((string) (parse_url($list_url, PHP_URL_SCHEME) ?: ''));
 	if (!in_array($entry_scheme, array('http', 'https', 'rsync', 'ftp'), TRUE)) {
 		return;
@@ -22373,7 +22371,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			// $timeout bounds a stalled read, a body shorter than its Content-Length is a
 			// failed download, and only 200/221/226 succeed. Any refusal removes {file}.raw.
 			// A local feed does not redirect: a 3xx answer is refused on its status, never followed.
-			// $pfb['local_max_bytes'] is the test seam, mirroring $pfb['rsync_max_bytes'].
+			// $pfb['local_max_bytes'] is the test seam.
 			$local_ceiling = isset($GLOBALS['pfb']['local_max_bytes']) ? (int) $GLOBALS['pfb']['local_max_bytes'] : PFB_DOWNLOAD_MAX_BYTES;
 			unlink_if_exists("{$file_download}");	// a refusal at any point leaves no earlier .raw behind
 			// The timeout budget starts before the request. A degenerate value can never disable
@@ -22801,12 +22799,10 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 		}
 	}
 
-	// Probe mode for the cron detector (type='change_detect'): return response metadata
-	// (ADR-42 conditional-GET path), then return.
-	// A 304 means "not modified" — the server confirmed the feed unchanged; the
-	// caller (pfb_update_check detector) handles the 304 via pfb_conditional_get_decision.
-	// Any 200 means the body was downloaded to {file_dwn}.raw; the caller hashes it.
-	// Any other status means the probe failed; the caller fails-safe to re-ingest.
+	// Extras probe mode (type='change_detect') returns ADR-42 response metadata.
+	// A 304 means "not modified"; Extras uses pfb_conditional_get_decision().
+	// A 200 leaves the body at {file_dwn}.raw for the caller to hash.
+	// Other statuses fail-safe to re-ingest. Feed probing belongs to Core since #3977.
 	//
 	if ($type == 'change_detect') {
 		$probe_meta = array(
@@ -23666,9 +23662,8 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				@touch("{$orig_download}", $remote_stamp);
 			}
 
-			// ADR-42 / issue #713 bug 5: refresh the content-hash sidecar at every
-			// successful ingest so the change-detection probe's conditional-GET
-			// compare always land on the SAME domain of bytes the probe hashed.  The probe
+			// ADR-42 / issue #713 bug 5: keep the raw-byte content-hash sidecar current
+			// for the Extras conditional-GET comparison. The Extras probe
 			// (pfb_download(PfbDownloadRequest(type: 'change_detect'))) hashes the RAW
 			// fetched body (it returns before any decompression), so the persisted digest
 			// here must cover those same raw bytes too -- not the decompressed '.orig' --
@@ -25331,10 +25326,9 @@ function pfb_purge_probe_bodies() {
 	}
 }
 
-// ADR-42: map a probe ('change_detect' mode) download path to the feed's persisted
-// conditional-GET validator baseline.  The detector (pfb_update_check) persists the
-// ETag/Last-Modified sidecars at {header}.orig (pfb_validator_write on its $local_file),
-// but the probe is handed file_dwn = {header}.md5 so the probe body ({file_dwn}.raw =
+// ADR-42: map an Extras probe ('change_detect' mode) path to its persisted
+// conditional-GET validator baseline. Extras keeps ETag/Last-Modified sidecars at
+// {header}.orig, while file_dwn = {header}.md5 keeps the probe body ({file_dwn}.raw =
 // {header}.md5.raw) stays separate from the ingest body.  That `.md5` probe-infix must
 // NOT leak into the validator base, or the read targets a non-existent {header}.md5.orig
 // and the conditional GET never sends If-None-Match (the 304 fast-path stays dead).
@@ -25452,8 +25446,8 @@ function pfb_force_scope_dirs(string $scope, string $ip_origdir, string $dnsbl_o
 	return array($ip_origdir, $dnsbl_origdir);
 }
 
-// ADR-42: pure decision helper for the remote conditional-GET result, called by the detector
-// after pfb_download returns the probe response (contract: ADR-42 §2 #5/#6). 304 -> unchanged.
+// ADR-42: pure decision helper for the Extras conditional-GET result after
+// pfb_download returns probe metadata (contract: ADR-42 §2 #5/#6). 304 -> unchanged.
 // 200 with body_hash == persisted_hash -> unchanged (spurious 200). 200 with body_hash !=
 // persisted_hash -> changed. 200 with no persisted hash or body_hash FALSE -> changed
 // (fail-safe: no baseline to compare). Any other status -> changed (fail-safe, never a false

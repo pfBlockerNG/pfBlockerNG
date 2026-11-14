@@ -2315,12 +2315,12 @@ FreeBSD-ports RUN_DEPENDS so its presence is contractual, not incidental. PHP ne
 **Where it lives:** Core's FeedPhase (`go/pfb_core`) runs the detector and the download: `feedfetch` (the transfer, the
 content gates, the probe and the change decision, the Core translation of `pfb_download()` and `pfb_update_check()`;
 validators and digests in `store.go`), sequenced per feed by `feed_phase_pipeline.go`. PHP keeps `pfb_download()` for
-Extras and TOP1M, and the content-hash helpers beside it in `pfblockerng.inc`.
+Extras and TOP1M until #3978, and the content-hash helpers beside it in `pfblockerng.inc`.
 
 **Normalize layer (issue #1797)** — a second, *processing-level* change-detection point sits
 ABOVE the wire-byte sidecar: Core's `feedparse.NormalizeFile()` derives `{name}.norm` from
-`{name}.orig` on demand (iconv UTF-8 validity gate → charset_normalizer conversion only for
-invalid files → one `C.UTF-8 sed` control-strip + per-line rtrim), keyed by
+`{name}.orig` on demand (valid UTF-8 retained, BOM-marked UTF-16 decoded, other bytes kept without charset guessing;
+controls stripped and lines right-trimmed), keyed by
 `{name}.norm.src.xxhash128` (the xxh128 of the source `.orig`). Core's parse reads `.norm` (raw `.orig` on
 failure). On a `none` pass FeedPhase skips the reparse when `.norm` is unchanged (`feed_phase_pipeline.go`); a
 missing or legacy baseline reports changed, so a skip never rides on a sidecar that is gone. The wire-byte
@@ -2497,6 +2497,14 @@ cadence, their pending occurrences and outcomes live in Core (`schedule_state.js
 `pending_apply` flag. The tick (`pfblockerng_tick()`) reads no schedule state or cache; it asks Core for an `apply`
 (pending change inside the apply window) or a `retry` (a `*.fail` marker of an enabled feed, an absent DNSBL manifest).
 Every install and upgrade drops the PHP state file and the retired ledger entries once (`pfb_core_service()`).
+
+**Update feed phases (issue #3977).** The Update program retains the D→F locks and ordering. With the per-Update token
+read from stdin, it calls Core `FeedPhase` for DNSBL, assembles DNSBLIP from the returned IP sidecars in PHP, then calls
+the IP phase (including custom lists and synthetic DNSBLIP feeds). Core reads its own settings and secrets; PHP sends
+only the token, phase, ordered IDs and force mode, never URLs or credentials. PHP consumes Core's parsed artifacts and
+keeps the downstream post-scripts, aggregation, manifests and apply. A failed phase has no PHP fetch/parse fallback.
+The PHP feed parsers, Python normalizer and shell `whoisconvert` are removed; Core owns these stages. Extras still use
+`pfb_download()` until #3978. The deprecated `cron` adapter remains; `cron-tick` and its disable-sentinel behavior are unchanged.
 
 The ledger rides issue #468's persist/restore set (added to `pfb_aliastables('update')`'s backup),
 so a **clean** reboot keeps the schedule; only a true RAM-disk wipe falls back to due-now-jittered.

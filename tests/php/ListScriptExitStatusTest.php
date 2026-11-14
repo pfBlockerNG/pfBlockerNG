@@ -98,166 +98,20 @@ final class ListScriptExitStatusTest extends TestCase
 		$this->assertStringContainsString('TIMED OUT', $this->log('error.log'));
 	}
 
-	public function testSuccessfulPreScriptUsesStagedCopyAndLeavesNormalizedInput(): void
-	{
-		$norm   = "{$this->tmp}/feed.norm";
-		$staged = "{$this->tmp}/feed.pre";
-		$script = $this->makeScript('rewrite.sh', 'printf changed > "$1"');
-		file_put_contents($norm, 'original');
-
-		$result = pfb_list_pre_script_run($norm, $staged, $script, 'rewrite.sh', 'Feed', escapeshellarg($staged), '');
-
-		$this->assertTrue($result['ok']);
-		$this->assertSame($staged, $result['path']);
-		$this->assertSame('original', file_get_contents($norm));
-		$this->assertSame('changed', file_get_contents($staged));
-	}
-
-	public function testFailedPreScriptDiscardsStagedOutputAndKeepsNormalizedInput(): void
-	{
-		$norm   = "{$this->tmp}/feed.norm";
-		$staged = "{$this->tmp}/feed.pre";
-		$script = $this->makeScript('fail-rewrite.sh', 'printf bad > "$1"; exit 7');
-		file_put_contents($norm, 'original');
-
-		$result = pfb_list_pre_script_run($norm, $staged, $script, 'fail-rewrite.sh', 'Feed', escapeshellarg($staged), '');
-
-		$this->assertFalse($result['ok']);
-		$this->assertSame($norm, $result['path']);
-		$this->assertFileDoesNotExist($staged);
-		$this->assertSame('original', file_get_contents($norm));
-	}
-
-	public function testPreScriptWithMissingInputFailsWithoutProducingData(): void
-	{
-		$staged = "{$this->tmp}/feed.pre";
-		$script = $this->makeScript('unused.sh', 'exit 0');
-
-		$result = pfb_list_pre_script_run("{$this->tmp}/missing.norm", $staged, $script, 'unused.sh', 'Feed', escapeshellarg($staged), '');
-
-		$this->assertFalse($result['ok']);
-		$this->assertFileDoesNotExist($staged);
-	}
-
-	public function testDnsblSuccessfulPreScriptConsumesBeforeCleanup(): void
-	{
-		$staged = "{$this->tmp}/feed.pre";
-		file_put_contents($staged, 'dnsbl-data');
-		$events = [];
-
-		$result = pfb_dnsbl_script_consume_staged($staged, $staged, function (string $path) use (&$events): string {
-			$events[] = 'consume:' . file_get_contents($path);
-			return 'parsed';
-		});
-
-		$this->assertSame('parsed', $result);
-		$this->assertSame(['consume:dnsbl-data'], $events);
-		$this->assertFileDoesNotExist($staged);
-	}
-
-	public function testIpSuccessfulPreScriptConsumesBeforeCleanup(): void
-	{
-		$staged = "{$this->tmp}/feed.pre";
-		file_put_contents($staged, 'ip-data');
-		$events = [];
-
-		$result = pfb_ip_script_consume_staged($staged, $staged, function (string $path) use (&$events): string {
-			$events[] = 'consume:' . file_get_contents($path);
-			return 'probed';
-		});
-
-		$this->assertSame('probed', $result);
-		$this->assertSame(['consume:ip-data'], $events);
-		$this->assertFileDoesNotExist($staged);
-	}
-
-	public function testCustomIpFeedSkipsProbeButStillRemovesTheStagedCopy(): void
-	{
-		$staged = "{$this->tmp}/custom.pre";
-		file_put_contents($staged, 'custom-data');
-		$probes = 0;
-
-		$result = pfb_ip_script_probe_staged(TRUE, $staged, $staged, static function () use (&$probes): string {
-			$probes++;
-			return 'unexpected';
-		});
-
-		$this->assertNull($result);
-		$this->assertSame(0, $probes);
-		$this->assertFileDoesNotExist($staged);
-	}
-
-	public function testDnsblKnownPrePathIsRemovedWithoutAnActiveStagedCopy(): void
-	{
-		$norm  = "{$this->tmp}/feed.norm";
-		$known = "{$this->tmp}/feed.pre";
-		file_put_contents($known, 'stale-dnsbl-data');
-
-		$result = pfb_dnsbl_script_consume_staged(
-			$norm,
-			NULL,
-			static fn(string $path): string => $path,
-			$known
-		);
-
-		$this->assertSame($norm, $result);
-		$this->assertFileDoesNotExist($known,
-			'a processed DNSBL row must remove a stale known .pre path even without a pre-script stage');
-	}
-
-	public function testIpKnownPrePathIsRemovedWithoutAnActiveStagedCopy(): void
-	{
-		$norm  = "{$this->tmp}/feed.norm";
-		$known = "{$this->tmp}/feed.pre";
-		file_put_contents($known, 'stale-ip-data');
-
-		$result = pfb_ip_script_probe_staged(
-			FALSE,
-			$norm,
-			NULL,
-			static fn(string $path): string => $path,
-			$known
-		);
-
-		$this->assertSame($norm, $result);
-		$this->assertFileDoesNotExist($known,
-			'a processed IP row must remove a stale known .pre path even without a pre-script stage');
-	}
-
 	/**
 	 * #993: sync_package_pfblockerng() is a top-level appliance orchestration path that
 	 * downloads feeds and mutates firewall/service state, so it has no safe off-appliance
-	 * driver. php_strip_whitespace() makes these six route pins independent of comments.
+	 * driver. php_strip_whitespace() makes these route pins independent of comments. The pre-script runs in Core's
+	 * feed phase since #3977 (go/pfb_core/feedparse TestPreScriptCorpus); the post-script stays here.
 	 */
-	public function testEachFeedFamilyDispatchesEveryScriptStageOnce(): void
+	public function testEachFeedFamilyDispatchesItsPostScriptOnce(): void
 	{
-		$source      = php_strip_whitespace(self::APPLY);
-		$dnsbl_pre   = $this->applyScope($source, 'if ($pfb_row_script_pre && is_file("{$pfb_row_script_pre}")) {', 'pfb_dnsbl_script_failure_continue($alias,');
-		$dnsbl_loop  = 'if (($dhandle = @fopen("{$pfbfolder}/{$header}.bk", \'w\')) !== FALSE) {';
-		$dnsbl_end   = 'if (!empty($domain_data)) {';
-		$dnsbl_stage = $this->applyScope($source, $dnsbl_loop, $dnsbl_end);
-		$dnsbl_post  = $this->applyScope($source, 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {', 'if (!empty($domain_data_ip)) {');
-		$ip_pre      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', 'pfb_ip_script_failure_continue($alias,');
-		$ip_stage    = $this->applyScope($source, '$file_chk = pfb_ip_script_probe_staged(', 'if (!$custom && $file_chk == 0 && pfb_is_empty($ip_data)) {');
-		$ip_post     = $this->applyScope($source, 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {', '$file_chk = pfb_ip_script_probe_staged(');
+		$source     = php_strip_whitespace(self::APPLY);
+		$dnsbl_post = $this->applyScope($source, 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {', 'if ($feed_result[\'dnsblRows\'] > 0) {');
+		$ip_post    = $this->applyScope($source, 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {', 'if ($has_data && !pfb_core_feed_artifact_copy(');
 
-		$this->assertSame(1, substr_count($dnsbl_pre, 'pfb_list_pre_script_run($pfb_norm[\'path\']'), 'DNSBL pre-script dispatch must stay in its loop');
-		$dnsbl_cleanup = 'pfb_list_script_cleanup_staged($pfb_parse_path, $pfb_staged_path, "{$file_dwn}.pre");';
-		$this->assertSame(1, substr_count($dnsbl_stage, $dnsbl_cleanup), 'DNSBL staged input cleanup must stay in its loop');
-		$this->assertStringContainsString('"{$file_dwn}.pre"', $dnsbl_stage, 'DNSBL staged seam must receive its known cleanup path');
 		$this->assertSame(1, substr_count($dnsbl_post, 'pfb_list_script_exec($pfb_row_script_post, $list[\'script_post\'], \'post\''), 'DNSBL post-script dispatch must stay in its loop');
-		$this->assertSame(1, substr_count($ip_pre, 'pfb_list_pre_script_run($pfb_norm[\'path\']'), 'IP pre-script dispatch must stay in its loop');
-		$this->assertSame(1, substr_count($ip_stage, 'pfb_ip_script_probe_staged('), 'IP staged input must be probed once');
-		$this->assertStringContainsString('"{$file_dwn}.pre"', $ip_stage, 'IP staged seam must receive its known cleanup path');
 		$this->assertSame(1, substr_count($ip_post, 'pfb_list_script_exec($pfb_script_post, $list[\'script_post\'], \'post\''), 'IP post-script dispatch must stay in its loop');
-
-		$removed = 0;
-		$mutant = str_replace($dnsbl_cleanup, '', $source, $removed);
-		$this->assertSame(1, $removed, 'mutation fixture must remove the DNSBL cleanup call once');
-		$endPos = strpos($mutant, $dnsbl_end);
-		$this->assertNotFalse($endPos, 'mutation fixture must retain the DNSBL loop end anchor');
-		$mutant = substr_replace($mutant, $dnsbl_cleanup, $endPos + strlen($dnsbl_end), 0);
-		$mutantScope = $this->applyScope($mutant, $dnsbl_loop, $dnsbl_end);
-		$this->assertSame(0, substr_count($mutantScope, $dnsbl_cleanup), 'DNSBL cleanup relocated outside its loop must fail the route pin');
+		$this->assertSame(2, substr_count($source, 'pfb_list_script_exec('), 'only the two post-script sites run a list script');
 	}
 }

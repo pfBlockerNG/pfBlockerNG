@@ -304,8 +304,7 @@ final class DownloadSizeCeilingTest extends TestCase
 	public function test_every_extraction_exec_runs_under_the_ceiling(): void
 	{
 		$allowed = [
-			// Helper-script calls that post-process an ALREADY-extracted text feed.
-			'exec("{$pfb[\'script\']} whoisconvert {$header_esc} {$vtype} {$list_url_esc} {$elog}");',
+			// Helper-script call that post-processes an ALREADY-extracted text feed.
 			'exec("{$pfb[\'script\']} asn_table {$elog}");',
 			// Lists an archive; extracts nothing.
 			'exec("{$tar_bin} -tf {$file_dwn_esc}");',
@@ -316,11 +315,6 @@ final class DownloadSizeCeilingTest extends TestCase
 			// same exec(). Probed with a real over-ceiling tar appended to a wrapped
 			// call: the write was truncated at the ceiling anyway.
 			'exec(pfb_extract_cmd(',
-			// Issue #2876: the rsync transfer spawn routes through
-			// pfb_rsync_transfer_cmd(), which itself returns pfb_extract_cmd()'s
-			// output — so its ulimit prefix still bounds whatever follows in the
-			// same exec(), exactly the property this prefix exemption guards on.
-			'exec(pfb_rsync_transfer_cmd(',
 		];
 
 		// curl_exec() is not a shell call -- the lookbehind keeps it out.

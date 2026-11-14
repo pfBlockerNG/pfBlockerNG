@@ -12,7 +12,6 @@ use PHPUnit\Framework\TestCase;
  * real answer via pfb_is_blank()/an exact '' match.
  *
  * Each test pins the corrected observable behaviour of one call site:
- *   - pfb_is_blank_or_comment_line(): the literal line "0" is DATA, not blank.
  *   - pfb_validate_suppression_line(): a Unicode-whitespace-only line is a
  *     blank no-op, not an "invalid subnet" input error.
  *   - pfb_get_hooks(): a hook whose script is only Unicode whitespace has no
@@ -23,7 +22,6 @@ use PHPUnit\Framework\TestCase;
  *     Unicode whitespace carries no diagnostic — degrade to the no-diagnostic/
  *     launch-failed warning instead of surfacing a whitespace "error".
  */
-#[CoversFunction('pfb_is_blank_or_comment_line')]
 #[CoversFunction('pfb_validate_suppression_line')]
 #[CoversFunction('pfb_get_hooks')]
 #[CoversFunction('pfb_feed_redirect_target')]
@@ -60,46 +58,6 @@ final class Issue1787BlankEmptyCallSitesTest extends TestCase
 		chmod($path, 0700);
 		$this->fixtures[] = $path;
 		return $path;
-	}
-
-	// --- pfb_is_blank_or_comment_line ------------------------------------
-
-	public function testLiteralZeroLineIsNotBlank(): void
-	{
-		// The contract (and pfb_dnsbl_is_skippable_control_line, its ADR-62
-		// mirror) says blank detection is an exact '' match; empty('0') is TRUE,
-		// which silently drops a "0" feed line as blank (issue #1707 class).
-		$this->assertFalse(pfb_is_blank_or_comment_line('0'));
-		// The genuine blank/comment shapes still match.
-		$this->assertTrue(pfb_is_blank_or_comment_line(''));
-		$this->assertTrue(pfb_is_blank_or_comment_line('# comment'));
-	}
-
-	public function testBlankOrCommentLineStripsItsOwnWhitespace(): void
-	{
-		// The helper strips the line itself (Unicode class included), so a
-		// whitespace-only line is blank and a comment marker behind
-		// indentation — which the caller's ASCII trim() cannot remove when
-		// the whitespace is NBSP — is still a comment.
-		$this->assertTrue(pfb_is_blank_or_comment_line('   '));
-		$this->assertTrue(pfb_is_blank_or_comment_line(self::NBSP));
-		$this->assertTrue(pfb_is_blank_or_comment_line(self::NBSP . '# comment'));
-		$this->assertTrue(pfb_is_blank_or_comment_line(self::NBSP . '! ABP comment'));
-		// Data behind the same indentation is still data.
-		$this->assertFalse(pfb_is_blank_or_comment_line(self::NBSP . 'example.com'));
-	}
-
-	public function testSkippableControlLineStripsItsOwnWhitespace(): void
-	{
-		// Same self-stripping contract for the ADR-62 mirror: blank lines,
-		// indented '!'/'//' comments, and an ABP section marker with trailing
-		// whitespace are all control lines; a bracketed IPv6 literal and a
-		// domain stay data.
-		$this->assertTrue(pfb_dnsbl_is_skippable_control_line('   '));
-		$this->assertTrue(pfb_dnsbl_is_skippable_control_line(self::NBSP . '! ABP comment'));
-		$this->assertTrue(pfb_dnsbl_is_skippable_control_line('[Adblock Plus 2.0]' . self::NBSP));
-		$this->assertFalse(pfb_dnsbl_is_skippable_control_line(self::NBSP . '[2604:2dc0::]'));
-		$this->assertFalse(pfb_dnsbl_is_skippable_control_line(self::NBSP . 'example.com'));
 	}
 
 	// --- pfb_validate_suppression_line -----------------------------------

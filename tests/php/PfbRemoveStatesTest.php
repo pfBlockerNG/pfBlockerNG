@@ -26,8 +26,8 @@ use PHPUnit\Framework\TestCase;
  * Pinned behaviour (every branch, both sides):
  *   * #702 — regression pinning for a behaviour-PRESERVING cleanup. Contrary to
  *     the issue's crash claim, the removed fourth filter_var() term never
- *     fataled: 'FILTER_FLAG_NO_LOOPBACK_RANGE' names a REAL function defined in
- *     pfblockerng.inc (:7826, the legacy "fake filter flag" idiom), so
+ *     fataled: 'FILTER_FLAG_NO_LOOPBACK_RANGE' named a REAL function then defined in
+ *     pfblockerng.inc (the legacy "fake filter flag" idiom, removed in #3977), so
  *     FILTER_CALLBACK had a valid callable — and for any IPv6 input that
  *     callback returns the value (truthy), making the term a NO-OP on the v6
  *     branch (its 127/8 check is IPv4-only). These tests pin the v6 walk across

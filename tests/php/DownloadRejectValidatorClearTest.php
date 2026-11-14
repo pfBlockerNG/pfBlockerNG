@@ -6,7 +6,6 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc';
 require_once __DIR__ . '/support/HttpFixtureReadiness.php';
 
 /**
@@ -25,16 +24,17 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  * Three properties are pinned here, and they are a set — none of them is safe alone:
  *
  *   1. After a rejection no validator survives, so the next pass asks unconditionally,
- *      gets the body, and judges it again. Proven end to end over real cURL against a
- *      loopback origin that DOES answer 304 to the validator it issued, for the ETag axis
- *      and the Last-Modified axis, on the wire body and on an extracted payload.
+ *      gets the body, and judges it again.
  *   2. The previously served '.orig' stays byte-identical through every rejection — the
  *      issue #2660 / #2668 contract — and so does its '.orig.xxhash128' source-hash
  *      baseline, which still describes the LAST GOOD body and so still answers the
  *      spurious-200 compare correctly. Only the validators the detector promoted go.
- *   3. A healthy ingest is untouched: its validators survive and a later 304 still
- *      short-circuits the re-ingest. Clearing on success would turn every conditional
- *      GET back into a full download.
+ *   3. A healthy ingest is untouched: its validators survive.
+ *
+ * pfb_download() keeps these for the Extras; the detector-to-ingest round trips over a real
+ * origin (304 after a refusal, 304 after a healthy ingest) are Core's since #3977, pinned by
+ * the go/pfb_core/feedfetch parity corpus (TestParityCorpus: content-binary-junk and its
+ * siblings, probe-etag-304-unchanged).
  *
  * The feed host is a name the resolve double maps to loopback PLUS a public address, the
  * way DownloadSizeRefusalTest and DownloadRetryBodyResetTest already do it: a literal
@@ -60,11 +60,6 @@ final class DownloadRejectValidatorClearTest extends TestCase
 	private const BAD_ETAG = '"bad-v1"';
 
 	private const BAD_LASTMOD = 1700000000;
-
-	/** The validator a previous, accepted pass left behind. */
-	private const SEED_ETAG = '"good-v0"';
-
-	private const SEED_LASTMOD = 1600000000;
 
 	private const FEED_HOST = 'reject-validators.example';
 
@@ -162,140 +157,6 @@ final class DownloadRejectValidatorClearTest extends TestCase
 			}
 			rmdir($this->dir);
 		}
-	}
-
-	// ------------------------------------------------------------------
-	// 1. The issue's case, end to end: ETag axis, wire body
-	// ------------------------------------------------------------------
-
-	/**
-	 * Scenario: the detector promoted the rejected body's ETag.
-	 *   Given a '.orig' in service, and an origin serving a body the plain-text scan
-	 *         refuses, tagged ETag "bad-v1", that DOES answer 304 to If-None-Match: "bad-v1";
-	 *   And   a first detector pass that promotes that ETag (asserted, before-state)
-	 *         and an ingest that refuses the body at stage=plaintext;
-	 *   When  the next detector pass runs;
-	 *   Then  it asks the origin UNCONDITIONALLY, is handed the body, and reports the feed
-	 *         changed — so the ingest re-judges it — instead of reporting "not modified";
-	 *   And   the served '.orig' is byte-identical throughout.
-	 */
-	public function test_a_rejected_wire_body_cannot_hide_behind_its_own_etag(): void
-	{
-		$base = $this->seedPublication();
-		$this->serve($this->fixturePlain(self::HTML_ERROR), self::BAD_ETAG, 0);
-
-		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
-			'the first detector pass must complete');
-		$this->assertTrue((bool) $GLOBALS['pfb']['cron_update'],
-			'the first pass must find the changed body');
-		// Before-state: the promotion this issue is about really happened.
-		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.md5.raw.etag"),
-			'premise: the detector keeps the response ETag beside the probe body (#3911) until the ingest publishes it');
-
-		$this->assertFalse($this->ingest()->success, 'the refused body must fail the ingest');
-		$this->assertStringContainsString(
-			'stage=plaintext reason=html_error_page',
-			$this->log(),
-			'the ingest must refuse the body through the ADR-49 plain-text gate'
-		);
-		$this->assertSame(self::SERVED, file_get_contents("{$base}.orig"),
-			'a refused refresh must leave the previously served payload byte-identical');
-
-		$this->truncateRequests();
-		$GLOBALS['pfb']['cron_update'] = NULL;
-		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
-			'the second detector pass must complete');
-
-		$asked = $this->requests();
-		$this->assertCount(1, $asked, 'the second pass must make exactly one request');
-		$this->assertSame('', $asked[0]['inm'],
-			'the rejected body\'s ETag must not be offered back — that is what lets the origin 304');
-		$this->assertTrue((bool) $GLOBALS['pfb']['cron_update'],
-			'the second pass must re-fetch and re-judge, not report the feed unchanged');
-		$this->assertStringNotContainsString('( 304 not modified )', $this->log(),
-			'a rejected body must never be able to answer the next pass with 304');
-		$this->assertSame(self::SERVED, file_get_contents("{$base}.orig"),
-			'the served payload must still be byte-identical after the second pass');
-	}
-
-	// ------------------------------------------------------------------
-	// 2. The Last-Modified axis — an origin with no ETag at all
-	// ------------------------------------------------------------------
-
-	/**
-	 * Same scenario against an origin that issues only Last-Modified, so the conditional
-	 * GET rides CURLOPT_TIMECONDITION / If-Modified-Since. Clearing the ETag alone would
-	 * leave this axis hiding the rejected body exactly as before.
-	 */
-	public function test_a_rejected_wire_body_cannot_hide_behind_its_own_last_modified(): void
-	{
-		$base = $this->seedPublication();
-		$this->serve($this->fixturePlain(self::HTML_ERROR), '', self::BAD_LASTMOD);
-
-		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
-			'the first detector pass must complete');
-		$this->assertSame((string) self::BAD_LASTMOD, file_get_contents("{$base}.md5.raw.lastmod"),
-			'premise: the detector keeps the response Last-Modified beside the probe body (#3911) until the ingest publishes it');
-		$this->assertFileDoesNotExist("{$base}.orig.etag",
-			'premise: this origin issues no ETag, so only the Last-Modified axis is live');
-
-		$this->assertFalse($this->ingest()->success, 'the refused body must fail the ingest');
-		$this->assertStringContainsString('stage=plaintext reason=html_error_page', $this->log(),
-			'the ingest must refuse the body through the ADR-49 plain-text gate');
-
-		$this->truncateRequests();
-		$GLOBALS['pfb']['cron_update'] = NULL;
-		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
-			'the second detector pass must complete');
-
-		$asked = $this->requests();
-		$this->assertCount(1, $asked, 'the second pass must make exactly one request');
-		$this->assertSame('', $asked[0]['ims'],
-			'the rejected body\'s Last-Modified must not be offered back as If-Modified-Since');
-		$this->assertTrue((bool) $GLOBALS['pfb']['cron_update'],
-			'the second pass must re-fetch and re-judge, not report the feed unchanged');
-		$this->assertSame(self::SERVED, file_get_contents("{$base}.orig"),
-			'the served payload must stay byte-identical');
-	}
-
-	// ------------------------------------------------------------------
-	// 3. The extracted-payload gate (#2660), end to end
-	// ------------------------------------------------------------------
-
-	/**
-	 * The same end-to-end property for the gate that judges an archive feed's EXTRACTED
-	 * payload: the wire body is a well-formed gzip libmagic accepts, and only what comes
-	 * out of it is refused.
-	 */
-	public function test_a_rejected_extracted_payload_cannot_hide_behind_its_own_etag(): void
-	{
-		$base = $this->seedPublication();
-		$this->serve($this->fixtureGz(self::HTML_ERROR), self::BAD_ETAG, 0);
-
-		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
-			'the first detector pass must complete');
-		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.md5.raw.etag"),
-			'premise: the detector keeps the response ETag beside the probe body (#3911) until the ingest publishes it');
-
-		$this->assertFalse($this->ingest()->success, 'the refused payload must fail the ingest');
-		$this->assertStringContainsString(
-			'stage=plaintext reason=html_error_page detected=' . self::HEADER . '.orig',
-			$this->log(),
-			'the refusal must come from the extracted-payload gate, naming the staged .orig'
-		);
-		$this->assertSame(self::SERVED, file_get_contents("{$base}.orig"),
-			'a refused refresh must leave the previously served payload byte-identical');
-
-		$this->truncateRequests();
-		$GLOBALS['pfb']['cron_update'] = NULL;
-		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
-			'the second detector pass must complete');
-		$asked = $this->requests();
-		$this->assertCount(1, $asked, 'the second pass must make exactly one request');
-		$this->assertSame('', $asked[0]['inm'],
-			'the rejected payload\'s ETag must not be offered back');
-		$this->assertTrue((bool) $GLOBALS['pfb']['cron_update'],
-			'the second pass must re-fetch and re-judge the archive');
 	}
 
 	// ------------------------------------------------------------------
@@ -415,49 +276,6 @@ final class DownloadRejectValidatorClearTest extends TestCase
 				unset($GLOBALS['pfb']['curl_defaults'][CURLOPT_MAXFILESIZE_LARGE]);
 			}
 		}
-	}
-
-	// ------------------------------------------------------------------
-	// 6. The success path is untouched
-	// ------------------------------------------------------------------
-
-	/**
-	 * Scenario: the other side of the branch — a healthy ingest.
-	 *   Given an origin serving a healthy list tagged ETag "bad-v1" that answers 304 to it;
-	 *   When  the detector promotes the ETag and the ingest ACCEPTS the body;
-	 *   Then  the validator survives, and the next pass offers it and is told 304, so the
-	 *         re-ingest is correctly short-circuited.
-	 * Clearing on the success path too would turn every conditional GET back into a full
-	 * body download.
-	 */
-	public function test_a_healthy_ingest_keeps_its_validators_and_a_later_304_short_circuits(): void
-	{
-		$base = $this->seedPublication();
-		$this->serve($this->fixturePlain(self::HEALTHY), self::BAD_ETAG, 0);
-
-		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
-			'the first detector pass must complete');
-		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.md5.raw.etag"),
-			'premise: the detector keeps the response ETag beside the probe body (#3911)');
-
-		$this->assertTrue($this->ingest()->success, 'a healthy body must still ingest');
-		$this->assertSame(self::HEALTHY, file_get_contents("{$base}.orig"),
-			'the healthy body must be published');
-		$this->assertSame(self::BAD_ETAG, file_get_contents("{$base}.orig.etag"),
-			'an accepted body\'s validator must survive the ingest');
-
-		$this->truncateRequests();
-		$GLOBALS['pfb']['cron_update'] = NULL;
-		$this->assertSame(PfbScheduleTerminalResult::Success, $this->detect(),
-			'the second detector pass must complete');
-		$asked = $this->requests();
-		$this->assertCount(1, $asked, 'the second pass must make exactly one request');
-		$this->assertSame(self::BAD_ETAG, $asked[0]['inm'],
-			'the accepted body\'s validator must be offered back as If-None-Match');
-		$this->assertFalse((bool) $GLOBALS['pfb']['cron_update'],
-			'a 304 on an accepted body must still short-circuit the re-ingest');
-		$this->assertStringContainsString('( 304 not modified )', $this->log(),
-			'the short-circuit must be the ADR-42 304 path');
 	}
 
 	// ------------------------------------------------------------------
@@ -825,29 +643,9 @@ final class DownloadRejectValidatorClearTest extends TestCase
 		$this->assertNotFalse(file_put_contents("{$this->dir}/requests.log", ''));
 	}
 
-	/** @return array<int, array{inm: string, ims: string}> */
-	private function requests(): array
-	{
-		$raw = (string) @file_get_contents("{$this->dir}/requests.log");
-		$out = [];
-		foreach (explode("\n", $raw) as $line) {
-			if (trim($line) === '') {
-				continue;
-			}
-			$decoded = json_decode($line, TRUE);
-			$out[] = ['inm' => (string) ($decoded['inm'] ?? ''), 'ims' => (string) ($decoded['ims'] ?? '')];
-		}
-		return $out;
-	}
-
 	private function url(): string
 	{
 		return 'http://' . self::FEED_HOST . ":{$this->port}/feed";
-	}
-
-	private function detect(): ?PfbScheduleTerminalResult
-	{
-		return pfb_update_check(self::HEADER, $this->url(), $this->dir, $this->dir, FALSE, '', '');
 	}
 
 	private function ingest(): PfbDownloadResult

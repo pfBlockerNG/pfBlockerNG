@@ -299,3 +299,13 @@ branch**, and assert **before-state** in transition tests (per CLAUDE.md "Test c
 - **Definition of "meaningful":** every task above pins behaviour with assertions that fail on a
   real regression and cover both sides of each branch. Reject any test that executes code without a
   failable, intent-bearing assertion (CLAUDE.md).
+
+## 2026-11-14 amendment — Core feed cutover (#3977)
+
+The shell `whoisconvert` backlog above is historical: that function and the PHP feed parsers/normalizer are removed.
+Core's `feedfetch`/`feedparse` tests now pin those stages. The parse corpus appliance replay
+(`tests/smoke/test_smoke_feedparse_corpus.py`) runs the cross-compiled Core corpus tests, asserting `expect` bytes;
+`old_expect` rows remain a record of reviewed old-path divergences, not a second parser to run.
+`tests/smoke/test_core_update.py` covers manual FeedPhase dispositions, retry planning, HTTP 304 output reuse and failed
+transfer last-known-good/retry state. Genuine scheduler-triggered Update acceptance remains a separate live gate;
+the smoke harness's retained `.pfb_cron_disable` prevents treating retry coverage as scheduled coverage.

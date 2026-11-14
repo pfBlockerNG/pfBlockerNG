@@ -13,8 +13,8 @@
  *     util.inc CONTROL FLOW exactly: a bare ip2long() check for v4 (NO
  *     long2ip() round-trip); for v6 the "/" reject + link-local-only "%zone"
  *     strip + double-"::" reject, via filter_var() standing in for
- *     Net_IPv6::checkIPv6 (no PEAR off-appliance). pfb_filter (IP/IPV4) and
- *     pfb_dnsbl_abp_extract_ip depend on their precise accept/reject behaviour.
+ *     Net_IPv6::checkIPv6 (no PEAR off-appliance). pfb_filter (IP/IPV4)
+ *     depends on their precise accept/reject behaviour.
  *     NOTE on v4: PHP's ip2long() delegates to libc inet_pton(AF_INET), whose
  *     handling of leading-zero octets like '192.000.002.005' is
  *     PLATFORM-DEPENDENT. All three verdicts executed 2026-07-18 via

@@ -96,7 +96,7 @@ _BLOCKING_SHAPES: tuple[_Shape, ...] = (
         "$status = pfb_reentry_exec($job, $args, $pfb['extraslog']);",
     ),
     _Shape(
-        "site5-sh-whoisconvert-asn-shell",
+        "site5-sh-asn-shell",
         _SH,
         _SPAWN + " asn_shell scheduled",
         "pfb_reentry asn_shell scheduled",

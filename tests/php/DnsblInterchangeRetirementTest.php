@@ -68,7 +68,7 @@ final class DnsblInterchangeRetirementTest extends TestCase
 
 		file_put_contents(
 			"{$GLOBALS['pfb']['dnsbl_file']}.raw",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'sub.deep.example')
+			pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'sub.deep.example')
 		);
 
 		pfb_dnsbl_tld_stats_finalize([]);

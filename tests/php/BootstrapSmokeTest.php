@@ -20,8 +20,6 @@ final class BootstrapSmokeTest extends TestCase
 		foreach ([
 			'pfb_filter',
 			'pfb_text_area_decode',
-			'pfb_dnsbl_abp_extract_ip',
-			'sanitize_ipaddr',
 			'pfb_validate_domain_labels',
 			'pfb_strtolower',
 			'pfb_unbound_python_sources',

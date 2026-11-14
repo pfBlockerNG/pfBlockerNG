@@ -401,9 +401,9 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	{
 		$source      = php_strip_whitespace(self::APPLY);
 		$dnsbl_start = 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {';
-		$dnsbl_end   = 'if (!empty($domain_data_ip)) {';
+		$dnsbl_end   = 'if ($feed_result[\'dnsblRows\'] > 0) {';
 		$ip_start    = 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {';
-		$ip_end      = '$file_chk = pfb_ip_script_probe_staged(';
+		$ip_end      = 'if ($has_data && !pfb_core_feed_artifact_copy(';
 		$dnsbl_post  = $this->applyScope($source, $dnsbl_start, $dnsbl_end);
 		$ip_post     = $this->applyScope($source, $ip_start, $ip_end);
 
@@ -454,9 +454,9 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	{
 		$source      = php_strip_whitespace(self::APPLY);
 		$dnsbl_start = 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {';
-		$dnsbl_end   = 'if (!empty($domain_data_ip)) {';
+		$dnsbl_end   = 'if ($feed_result[\'dnsblRows\'] > 0) {';
 		$ip_start    = 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {';
-		$ip_end      = '$file_chk = pfb_ip_script_probe_staged(';
+		$ip_end      = 'if ($has_data && !pfb_core_feed_artifact_copy(';
 		$dnsbl_post  = $this->applyScope($source, $dnsbl_start, $dnsbl_end);
 		$ip_post     = $this->applyScope($source, $ip_start, $ip_end);
 
