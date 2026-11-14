@@ -95,7 +95,8 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 		return [
 			'the Groups editor saves a group' => [self::EDIT,
 				'$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";', 'pfb_mark_pending_changes();',
-				['type' => 'IPv4', 'name' => 'Spam'], 'pfBlockerNG: Saved [ Type:IPv4, Name:Spam ] configuration'],
+				// the save sets $pfb_custom_marker above the cut ('' = the custom list did not change)
+				['type' => 'IPv4', 'name' => 'Spam', 'pfb_custom_marker' => ''], 'pfBlockerNG: Saved [ Type:IPv4, Name:Spam ] configuration'],
 			'the group list removes an empty entry' => [self::LIST,
 				"// Remove any empty '<config></config>' XML tags", 'if (!empty($action) && isset($gtype) && isset($rowid)) {',
 				['rowdata' => [[], $group], 'rowdata_path' => self::V4], 'pfBlockerNG: Removed empty rowdata'],
