@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "Hostile: a zip with no members fails the structural test (unzip -t answers 1 for an empty archive) and is refused.",
+ "description": "Hostile: a zip with no members fails the structural test (unzip -t answers 1 for an empty archive) and is refused. Divergence (owner decision on #3973): the appliance's unzip (bsdunzip, libarchive) passes the structural test and PHP publishes what bsdtar extracts; Core refuses and keeps last-known-good (an archive with no members is no feed).",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -41,6 +41,23 @@
     ],
     "etag": null,
     "lastmod": null
+   },
+   "old_expect": {
+    "ok": true,
+    "published": "",
+    "stage": null,
+    "reason": null,
+    "detected": null,
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "raw_retained": true,
+    "digest": "1b7a91250276b18f082b150ad77bc0ff"
    }
   }
  ]
