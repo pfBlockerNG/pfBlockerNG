@@ -286,6 +286,36 @@ func TestAnFTPFeedIsFetchedThroughTheProxyAsAnHTTPRequest(t *testing.T) {
 		t.Fatalf("the proxy's answer over the ceiling must be refused: %+v, published %q", res, published(t, feed))
 	}
 }
+func TestFTPWithHTTPSOrSOCKSProxyRefusesBeforeSendingBasicInCleartext(t *testing.T) {
+	for _, scheme := range []string{"https", "socks5"} {
+		t.Run(scheme, func(t *testing.T) {
+			stub := newFTPStub(t, nil)
+			var proxyHits atomic.Int32
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				proxyHits.Add(1)
+				io.WriteString(w, "via proxy\n")
+			}))
+			defer proxy.Close()
+
+			f, feed := quickFetcher(t)
+			f.Proxy, _ = url.Parse(proxy.URL)
+			f.Proxy.Scheme = scheme
+			f.Proxy.User = url.UserPassword("proxy-user", "proxy-password")
+			old := []byte("last known good\n")
+			if err := os.WriteFile(filepath.Join(feed.Dir, "FEED.orig"), old, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			req := ftpFeed(stub, "/list.txt")
+			probe := f.Probe(context.Background(), feed, req)
+			ingest := f.Ingest(context.Background(), feed, req)
+			if probe.OK || probe.Reason != "proxy_unusable" || ingest.OK || ingest.Reason != "proxy_unusable" ||
+				proxyHits.Load() != 0 || stub.hits.Load() != 0 || published(t, feed) != string(old) {
+				t.Fatalf("%s proxy on FTP must fail before dial or publish: probe %+v, ingest %+v, proxy hits %d, FTP hits %d, copy %q",
+					scheme, probe, ingest, proxyHits.Load(), stub.hits.Load(), published(t, feed))
+			}
+		})
+	}
+}
 
 // A self-hosted ftp URL at the web root is fetched by the ftp client (PHP reads it with its ftp stream wrapper); one in a
 // subdirectory is refused before any connection, as PHP refuses it.

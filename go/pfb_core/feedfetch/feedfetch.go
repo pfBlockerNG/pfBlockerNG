@@ -58,11 +58,12 @@ type Policy struct {
 // Fetcher holds what is shared by every feed of a run.
 type Fetcher struct {
 	Policy
-	Proxy      *url.URL       // forward proxy, credentials in its userinfo
-	UserAgent  string         // empty: Go's default
-	RootCAs    *x509.CertPool // nil: the system roots
-	RsyncBin   string         // the rsync executable
-	RetryDelay time.Duration  // pause between attempts; zero is pfb_download()'s 5 s
+	Proxy         *url.URL       // forward proxy, credentials in its userinfo
+	ProxyUnusable bool           // the configured proxy cannot be used for this remote feed; never bypass it
+	UserAgent     string         // empty: Go's default
+	RootCAs       *x509.CertPool // nil: the system roots
+	RsyncBin      string         // the rsync executable
+	RetryDelay    time.Duration  // pause between attempts; zero is pfb_download()'s 5 s
 	// FreeBytes is the space the process may still write in dir; ok is false when it cannot tell, which is no shortfall
 	// (pfb_extract_space_shortfall). Nil reads the file system.
 	FreeBytes func(dir string) (free uint64, ok bool)
@@ -128,6 +129,12 @@ type Result struct {
 }
 
 func fail(reason string) Result { return Result{Reason: reason} }
+func (f *Fetcher) proxyUnusableFor(src *source) bool {
+	if src.kind != kindRemote {
+		return false
+	}
+	return f.ProxyUnusable || (src.ftp != nil && f.Proxy != nil && f.Proxy.Scheme != "http")
+}
 
 // statusReason is pfb_download()'s log text for a final status it does not accept: its status table's "<code> <text>",
 // else "Unknown Failure Code [<code>]".
@@ -185,6 +192,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	src, reason := f.entry(ctx, req)
 	if src == nil {
 		return fail(reason)
+	}
+	if f.proxyUnusableFor(src) {
+		return fail("proxy_unusable")
 	}
 	staged, probe, published := feed.path(".raw"), feed.path(".probe"), feed.path(".orig")
 	keepRaw := false // an archive's success leaves the staged archive: the digest is of it, and ET reuses it (A35)
@@ -277,6 +287,9 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	if src == nil {
 		return Result{Decision: Failed, Reason: reason}
 	}
+	if f.proxyUnusableFor(src) {
+		return Result{Decision: Failed, Reason: "proxy_unusable"}
+	}
 	published := feed.path(".orig")
 	if _, err := os.Stat(published); err != nil {
 		return Result{OK: true, Decision: Changed}
@@ -344,6 +357,6 @@ func (f *Fetcher) fetch(ctx context.Context, src *source, req Request, dst strin
 	if src.ftp != nil && f.Proxy == nil {
 		return f.fetchFTP(ctx, src, req, dst) // no conditional GET exists for ftp: the probe's cond is not sent
 	}
-	// Through a proxy an ftp feed is an HTTP request to it (ftpViaProxy), as cURL makes it.
+	// An FTP feed through an HTTP proxy is an absolute-form GET (ftpViaProxy), as cURL makes it.
 	return f.fetchHTTP(ctx, src, req, dst, cond)
 }
