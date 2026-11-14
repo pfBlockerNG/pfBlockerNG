@@ -64,10 +64,16 @@ TESTS = (
 )
 
 
+@pytest.mark.parametrize(
+    "tests",
+    [TESTS, ("TestTheProgramReceivesFourRegularFilesByFstatAndReportsItsResult",)],
+    ids=["lifetime", "fstat"],
+)
 def test_the_update_program_dies_with_a_core_that_is_killed(
     smoke_vm: SmokeVM,
     go_toolchain: GoToolchain,  # noqa: F811 -- the fixture imported above
     tmp_path: Path,
+    tests: tuple[str, ...],
 ) -> None:
     """Red when: the program a SIGKILLed Core ran, or a child it started, keeps running on FreeBSD."""
     binary = tmp_path / "update.test"
@@ -83,9 +89,10 @@ def test_the_update_program_dies_with_a_core_that_is_killed(
     assert built.returncode == 0, f"go test -c ./update for FreeBSD failed:\n{built.stdout}\n{built.stderr}"
     _upload(smoke_vm, binary, GUEST_BINARY, "root:wheel")
     try:
-        run = smoke_vm.ssh(f"{GUEST_BINARY} -test.v -test.count=1 -test.run '^({'|'.join(TESTS)})$'", timeout=180)
+        run = smoke_vm.ssh(f"{GUEST_BINARY} -test.v -test.count=1 -test.run '^({'|'.join(tests)})$'", timeout=180)
     finally:
         smoke_vm.ssh(f"rm -f {GUEST_BINARY}")
+    print(run.stdout)
     assert run.returncode == 0, f"the test failed on the box: rc={run.returncode}\n{run.stdout}\n{run.stderr}"
-    for test in TESTS:
+    for test in tests:
         assert f"--- PASS: {test}" in run.stdout, f"{test} did not run:\n{run.stdout}"
