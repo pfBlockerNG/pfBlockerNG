@@ -30,14 +30,23 @@ type ftpTarget struct {
 	file       string
 }
 
-// ftpTargetOf refuses what this client does not do the way libcurl does, before any connection: a ;type= suffix (an
-// ASCII or listing transfer), a URL that names no file (libcurl lists the directory), and control bytes in the login
-// or the path (an injected command; libcurl itself sends a feed's username as given).
+// ftpTargetOf refuses what this client does not do the way libcurl does, before any connection: a ;type= suffix other
+// than ;type=i (an ASCII or listing transfer), a URL that names no file (libcurl lists the directory), and control bytes
+// in the login or the path (an injected command; libcurl itself sends a feed's username as given).
 func ftpTargetOf(req Request, r rawURL) (*ftpTarget, string) {
-	if strings.Contains(strings.ToLower(r.path), ";type=") {
-		return nil, "feed ftp URL has a type suffix"
+	raw := r.path
+	if strings.Contains(strings.ToLower(raw), ";type=") {
+		// libcurl reads the suffix off the path; "i" is the binary transfer this client makes anyway.
+		cut, ok := strings.CutSuffix(raw, ";type=i")
+		if !ok {
+			cut, ok = strings.CutSuffix(raw, ";type=I")
+		}
+		if !ok || strings.Contains(strings.ToLower(cut), ";type=") {
+			return nil, "feed ftp URL has a type suffix"
+		}
+		raw = cut
 	}
-	path, ok := ftpDecode(ftpDedot(r.path))
+	path, ok := ftpDecode(ftpDedot(raw))
 	if !ok {
 		return nil, "feed ftp path contains a control character"
 	}
@@ -49,8 +58,9 @@ func ftpTargetOf(req Request, r rawURL) (*ftpTarget, string) {
 		if strings.ContainsAny(req.Username+req.Password, "\r\n") {
 			return nil, badLogin
 		}
-		t.user, t.pass = req.Username, req.Password
-	case len(r.userinfo) > 1:
+		// CURLOPT_USERPWD "username:password" is cut at its first colon, one in the username included.
+		t.user, t.pass, _ = strings.Cut(req.Username+":"+req.Password, ":")
+	case r.userinfo != "": // "@" alone is an empty login, not none
 		if t.user, ok = ftpDecode(urlUser); ok {
 			t.pass, ok = ftpDecode(urlPass)
 		}
@@ -104,10 +114,11 @@ func ftpDecode(s string) (string, bool) {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if c == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
-			n, _ := strconv.ParseUint(s[i+1:i+3], 16, 8)
-			c = byte(n)
-			i += 2
+		if c == '%' && i+2 < len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+3], 16, 8); err == nil {
+				c = byte(n)
+				i += 2
+			}
 		}
 		if c < 0x20 {
 			return "", false
@@ -117,17 +128,10 @@ func ftpDecode(s string) (string, bool) {
 	return b.String(), true
 }
 
-func isHex(c byte) bool {
-	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
-}
-
-// fetchFTP is pfb_download()'s cURL path for ftp://: the control connection is pinned to the vetted address, the data
-// connection goes to that same address whatever the server names, and the transfer gets three attempts with the body
-// reset between them.
+// fetchFTP is pfb_download()'s cURL path for ftp:// without a proxy (through one it is an HTTP request: ftpViaProxy):
+// the control connection is pinned to the vetted address, the data connection goes to that same address whatever the
+// server names, and the transfer gets three attempts with the body reset between them.
 func (f *Fetcher) fetchFTP(ctx context.Context, src *source, req Request, dst string) transfer {
-	if f.Proxy != nil {
-		return transfer{reason: "ftp is not supported through a proxy"}
-	}
 	out, err := os.Create(dst)
 	if err != nil {
 		return transfer{reason: "download file could not be created"}
@@ -248,7 +252,10 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 		return transfer{}, err
 	}
 	if code == 213 && len(msg) >= 14 {
-		lastMod, _ = time.Parse("20060102150405", msg[:14]) // a reply that is no time is no timestamp
+		// A reply that is no time is no timestamp; one at or before the epoch neither (PHP applies only filetime > 0).
+		if when, perr := time.Parse("20060102150405", msg[:14]); perr == nil && when.Unix() > 0 {
+			lastMod = when
+		}
 	}
 
 	dataPort, err := passive(cmd)
@@ -256,7 +263,7 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 		return transfer{}, err
 	}
 	code, msg, err = cmd("TYPE I")
-	if err := fail(code, msg, err, code == 200); err != nil {
+	if err := fail(code, msg, err, code/100 == 2); err != nil {
 		return transfer{}, err
 	}
 	size := int64(-1)
@@ -264,7 +271,8 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 	if err := fail(code, msg, err, code != 550); err != nil {
 		return transfer{}, err
 	}
-	if n, perr := strconv.ParseInt(strings.TrimSpace(msg), 10, 64); code == 213 && perr == nil && n >= 0 {
+	// A SIZE of 0 is no size, as libcurl takes it: the body is read to its end.
+	if n, perr := strconv.ParseInt(strings.TrimSpace(msg), 10, 64); code == 213 && perr == nil && n > 0 {
 		size = n
 	}
 	limit := req.maxBytes()
@@ -305,18 +313,21 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 	return transfer{status: code, lastMod: lastMod}, nil
 }
 
-// passive opens the data port the way libcurl does, EPSV first and PASV when that is refused, and returns the port.
-// The address a PASV reply names is not read: the caller dials the control connection's peer.
+// passive opens the data port the way libcurl does, EPSV first and PASV when that is refused or names port 0, and
+// returns the port. The address a PASV reply names is not read: the caller dials the control connection's peer.
 func passive(cmd func(string, ...any) (int, string, error)) (int, error) {
 	code, msg, err := cmd("EPSV")
 	if err != nil {
 		return 0, err
 	}
 	if code == 229 {
-		if port, ok := epsvPort(msg); ok {
+		port, ok := epsvPort(msg)
+		if !ok {
+			return 0, &textproto.Error{Code: code, Msg: msg}
+		}
+		if port > 0 {
 			return port, nil
 		}
-		return 0, &textproto.Error{Code: code, Msg: msg}
 	}
 	if code, msg, err = cmd("PASV"); err != nil {
 		return 0, err
@@ -335,28 +346,34 @@ func epsvPort(msg string) (int, bool) {
 	}
 	digits, _, ok := strings.Cut(rest[3:], rest[:1])
 	port, err := strconv.Atoi(digits)
-	return port, ok && err == nil && port > 0 && port < 1<<16 && allIn(digits, "0123456789")
+	return port, ok && err == nil && port < 1<<16 && allIn(digits, "0123456789")
 }
 
-// pasvPort reads the six numbers libcurl reads from the first digit on, and returns the last two as the port.
+// pasvPort reads the six comma-separated numbers of at most 255 a PASV reply names, from the first place they start
+// (libcurl tries every digit in turn, one inside a number too), and returns the last two as the port.
 func pasvPort(msg string) (int, bool) {
-	i := strings.IndexAny(msg, "0123456789")
-	if i < 0 {
-		return 0, false
-	}
-	rest := msg[i:]
-	var n [6]int
-	for k := range n {
-		j := 0
-		for j < len(rest) && '0' <= rest[j] && rest[j] <= '9' {
-			j++
+next:
+	for i := range len(msg) {
+		rest := msg[i:]
+		var n [6]int
+		for k := range n {
+			if k > 0 {
+				if rest == "" || rest[0] != ',' {
+					continue next
+				}
+				rest = rest[1:]
+			}
+			j := 0
+			for j < len(rest) && '0' <= rest[j] && rest[j] <= '9' {
+				j++
+			}
+			v, err := strconv.Atoi(rest[:j])
+			if err != nil || v > 255 {
+				continue next
+			}
+			n[k], rest = v, rest[j:]
 		}
-		v, err := strconv.Atoi(rest[:j])
-		if err != nil || v > 255 || (k < 5 && (j == len(rest) || rest[j] != ',')) {
-			return 0, false
-		}
-		n[k] = v
-		rest = rest[min(j+1, len(rest)):]
+		return n[4]<<8 | n[5], true
 	}
-	return n[4]<<8 | n[5], true
+	return 0, false
 }

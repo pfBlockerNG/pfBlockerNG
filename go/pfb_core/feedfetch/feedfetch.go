@@ -264,8 +264,9 @@ func (f *Fetcher) fetch(ctx context.Context, src *source, req Request, dst strin
 	case kindSelfHosted:
 		return fetchSelfHosted(ctx, src, req, dst)
 	}
-	if src.ftp != nil {
+	if src.ftp != nil && f.Proxy == nil {
 		return f.fetchFTP(ctx, src, req, dst) // no conditional GET exists for ftp: the probe's cond is not sent
 	}
+	// Through a proxy an ftp feed is an HTTP request to it (ftpViaProxy), as cURL makes it.
 	return f.fetchHTTP(ctx, src, req, dst, cond)
 }

@@ -351,7 +351,8 @@ func (f *Fetcher) entry(ctx context.Context, req Request) (*source, string) {
 	switch {
 	case selfOnly && dir != "/":
 		return nil, ""
-	case selfOnly && src.kind == kindRemote:
+	// A self-hosted ftp URL stays remote: PHP reads it over ftp, and so does fetchFTP.
+	case selfOnly && src.kind == kindRemote && src.ftp == nil:
 		src.kind, src.self = kindSelfHosted, addrs // read from these addresses, never resolved again (#3911)
 	case !selfOnly && !f.NoFilter:
 		if _, _, reason := f.vet(ctx, src.host); reason != "" {

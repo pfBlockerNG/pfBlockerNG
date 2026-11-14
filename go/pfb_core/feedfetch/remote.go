@@ -1,9 +1,11 @@
 package feedfetch
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net"
@@ -194,8 +196,43 @@ func (f *Fetcher) transport(req Request, pin netip.Addr, flex bool) *http.Transp
 	}
 	if f.Proxy != nil {
 		tr.Proxy = http.ProxyURL(f.Proxy)
+		tr.RegisterProtocol("ftp", ftpViaProxy{proxy: f.Proxy, dialer: dialer})
 	}
 	return tr
+}
+
+// ftpViaProxy asks an HTTP proxy for an ftp URL as cURL does, which http.Transport will not: the absolute URL in a plain
+// GET (no CONNECT), the proxy's credentials as Basic. The answer is read as any HTTP answer.
+type ftpViaProxy struct {
+	proxy  *url.URL
+	dialer *net.Dialer
+}
+
+func (p ftpViaProxy) RoundTrip(r *http.Request) (*http.Response, error) {
+	// shortcut: a plain-HTTP proxy only (no TLS to the proxy), upgrade if an https:// proxy is ever configured.
+	addr := p.proxy.Host
+	if p.proxy.Port() == "" {
+		addr = net.JoinHostPort(p.proxy.Hostname(), "80")
+	}
+	c, err := p.dialer.DialContext(r.Context(), "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	context.AfterFunc(r.Context(), func() { c.Close() }) // attempt cancels its context once the body is read
+	r = r.Clone(r.Context())
+	if u := p.proxy.User; u != nil {
+		pw, _ := u.Password()
+		r.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(u.Username()+":"+pw)))
+	}
+	if err := r.WriteProxy(c); err != nil {
+		c.Close()
+		return nil, err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(c), r)
+	if err != nil {
+		c.Close()
+	}
+	return resp, err
 }
 
 // withUser gives target the feed URL's userinfo when keep is set and target has none: with the filter off cURL follows
