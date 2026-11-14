@@ -209,7 +209,7 @@ type ftpViaProxy struct {
 }
 
 func (p ftpViaProxy) RoundTrip(r *http.Request) (*http.Response, error) {
-	// shortcut: a plain-HTTP proxy only (no TLS to the proxy), upgrade if an https:// proxy is ever configured.
+	// This handler sends plain HTTP to the proxy; the caller refuses TLS and SOCKS proxy schemes before reaching it.
 	addr := p.proxy.Host
 	if p.proxy.Port() == "" {
 		addr = net.JoinHostPort(p.proxy.Hostname(), "80")

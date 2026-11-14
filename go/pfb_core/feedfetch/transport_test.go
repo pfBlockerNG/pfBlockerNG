@@ -139,6 +139,69 @@ func TestAnUnusableProxyRefusesRemoteProbeAndIngestWithoutDiallingDirectly(t *te
 		t.Errorf("last-known-good = %q, want %q", got, old)
 	}
 }
+func TestProxyUnusableGatesOnlyProxyUsingFeedKinds(t *testing.T) {
+	t.Run("self-hosted", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			io.WriteString(w, "self\n")
+		}))
+		defer srv.Close()
+		f, feed := quickFetcher(t)
+		f.ProxyUnusable = true
+		res := f.Ingest(context.Background(), feed, feedfetch.Request{URL: strings.TrimSuffix(srv.URL, "/") + "/index.php", Timeout: 10 * time.Second})
+		if !res.OK || published(t, feed) != "self\n" {
+			t.Fatalf("self-hosted feed does not use the system proxy: %+v, published %q", res, published(t, feed))
+		}
+	})
+
+	t.Run("local", func(t *testing.T) {
+		f, feed := quickFetcher(t)
+		f.ProxyUnusable = true
+		dir := t.TempDir()
+		f.Policy.LocalDirs = []string{dir}
+		path := filepath.Join(dir, "list.txt")
+		if err := os.WriteFile(path, []byte("local\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		res := f.Ingest(context.Background(), feed, feedfetch.Request{URL: "file://" + path})
+		if !res.OK || published(t, feed) != "local\n" {
+			t.Fatalf("local feed does not use the system proxy: %+v, published %q", res, published(t, feed))
+		}
+	})
+
+	t.Run("rsync", func(t *testing.T) {
+		tools := t.TempDir()
+		script := "#!/bin/sh\neval \"dst=\\${$#}\"\nprintf 'rsync\\n' >\"${dst}\"\n"
+		if err := os.WriteFile(filepath.Join(tools, "rsync"), []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		f, feed := quickFetcher(t)
+		f.ProxyUnusable = true
+		f.RsyncBin = filepath.Join(tools, "rsync")
+		res := f.Ingest(context.Background(), feed, feedfetch.Request{
+			URL: "rsync://feed.example/list.txt", Rsync: true, Timeout: 10 * time.Second})
+		if !res.OK || published(t, feed) != "rsync\n" {
+			t.Fatalf("rsync feed does not use the system proxy: %+v, published %q", res, published(t, feed))
+		}
+	})
+
+	t.Run("ftp", func(t *testing.T) {
+		stub := newFTPStub(t, nil)
+		f, feed := quickFetcher(t)
+		f.ProxyUnusable = true
+		old := []byte("last known good\n")
+		if err := os.WriteFile(filepath.Join(feed.Dir, "FEED.orig"), old, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		req := ftpFeed(stub, "/list.txt")
+		probe := f.Probe(context.Background(), feed, req)
+		ingest := f.Ingest(context.Background(), feed, req)
+		if probe.OK || probe.Reason != "proxy_unusable" || ingest.OK || ingest.Reason != "proxy_unusable" ||
+			stub.hits.Load() != 0 || published(t, feed) != string(old) {
+			t.Fatalf("FTP is gated with an unusable proxy: probe %+v, ingest %+v, %d direct connections, copy %q",
+				probe, ingest, stub.hits.Load(), published(t, feed))
+		}
+	})
+}
 
 func TestAnUndeclaredBodyOverTheCeilingIsRefused(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
