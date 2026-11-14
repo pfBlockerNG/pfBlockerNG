@@ -1,0 +1,84 @@
+name: Ports recipe modules
+
+# The Nightly package is built from devel by the recipe on pfBlockerNG/FreeBSD-ports
+# `pfblockerng/use-github`, which unpacks GH_TUPLE/GL_TUPLE into go/pfb_dns_gateway/vendor and
+# go/pfb_core/vendor. Its files/modules.txt must equal the gateway's `go mod vendor` byte for byte, and
+# its tuples under go/pfb_core/vendor must be the modules go/pfb_core requires beyond the gateway's.
+# A devel PR that moves a Go module requirement, or makes the gateway import another package of one,
+# therefore needs a follow-up ports change: #3987 (FreeBSD-ports#22) and #3929 (FreeBSD-ports#20)
+# merged without one first. This check names that follow-up on the PR (#4007).
+on:
+  pull_request:
+    branches: [devel]
+    paths:
+      - 'go/**/go.mod'
+      - 'go/**/go.sum'
+      - 'go/pfb_dns_gateway/**/*.go'
+      - '.github/workflows/ports-modules-txt.yml'
+      - 'scripts/check_nightly_core_tuples.py'
+      - 'tests/fixtures/ports_modules_txt/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ci-image:
+    # The Go toolchain the other Go gates use (#3852).
+    uses: ./.github/workflows/ci-image.yml
+    permissions:
+      contents: read
+      packages: write
+
+  nightly-modules-txt:
+    name: Nightly ports recipe matches devel's Go modules
+    runs-on: ubuntu-latest
+    needs: ci-image
+    container:
+      image: ${{ needs.ci-image.outputs.ci }}
+      options: --init
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          check_modules_txt() {  # $1 = the recipe's modules.txt, $2 = go mod vendor's
+            cmp -s "$1" "$2" && return 0
+            diff -u --label 'FreeBSD-ports nightly files/modules.txt' --label 'go mod vendor (go/pfb_dns_gateway)' "$1" "$2" || true
+            echo "::error::go/pfb_dns_gateway's go mod vendor no longer matches the Nightly ports recipe (diff above). Follow-up ports change needed: a pfBlockerNG/FreeBSD-ports PR against pfblockerng/use-github that sets net/pfSense-pkg-pfBlockerNG-nightly/files/modules.txt to this PR's go mod vendor output and moves the matching GH_TUPLE/GL_TUPLE entries in its Makefile (example: pfBlockerNG/FreeBSD-ports#22). This check passes once that change is on pfblockerng/use-github."
+            return 1
+          }
+          fetch_recipe() {  # $1 = path under the Nightly port, $2 = output file
+            # The contents API, not raw.githubusercontent.com: its CDN can serve a recipe minutes stale.
+            curl -fsSL --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github.raw' -o "$2" \
+              "https://api.github.com/repos/pfBlockerNG/FreeBSD-ports/contents/net/pfSense-pkg-pfBlockerNG-nightly/$1?ref=pfblockerng/use-github"
+          }
+          fixtures=tests/fixtures/ports_modules_txt
+          # Red canaries: #3987's drift (recipe at x/sys v0.49.0, devel vendoring v0.50.0) and #3929's
+          # (Core requiring pfBlockerNG/xxh3 before the recipe had its tuple) must each fail.
+          if check_modules_txt "$fixtures/issue3987/ports-nightly-modules.txt" "$fixtures/issue3987/go-mod-vendor-modules.txt" > /dev/null; then
+            echo "::error::red canary: the #3987 modules.txt drift passed the check"
+            exit 1
+          fi
+          if python3 scripts/check_nightly_core_tuples.py "$fixtures/issue3929/ports-nightly-Makefile-before-20" \
+            "$fixtures/issue3929/ports-nightly-modules.txt" "$fixtures/issue3929/source" > /dev/null; then
+            echo "::error::red canary: the #3929 pfb_core tuple drift passed the check"
+            exit 1
+          fi
+          work="$(mktemp -d)"
+          fetch_recipe files/modules.txt "$work/ports-modules.txt"
+          fetch_recipe Makefile "$work/ports-Makefile"
+          (cd go/pfb_dns_gateway && go mod vendor -o "$work/vendor")
+          check_modules_txt "$work/ports-modules.txt" "$work/vendor/modules.txt"
+          python3 scripts/check_nightly_core_tuples.py "$work/ports-Makefile" "$work/ports-modules.txt" .
