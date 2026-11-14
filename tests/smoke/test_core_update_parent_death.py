@@ -4,7 +4,9 @@
 ``go/pfb_core/update``'s ``TestTheProgramDiesWithACoreThatIsKilled`` and
 ``TestTheProgramsChildDiesWithACoreThatIsKilled`` prove it on Linux: the test binary turns itself into a Core running
 one Update (``exec sleep 300``; a program that starts ``sleep 300`` and waits), is SIGKILLed, and the program, and the
-child it started, must be gone. This runs those same tests, built for the box, on a real pfSense box.
+child it started, must be gone. This runs those same tests, built for the box, on a real pfSense box, with the Update
+watcher's other FreeBSD paths: a TERM-ignoring and a TERM-handling child when Core dies, a HUP inside the group, and the
+program's signal deaths and exit statuses as Core reads them (its ``WNOWAIT`` wait).
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
 
@@ -30,7 +32,16 @@ pytestmark = [pytest.mark.smoke, pytest.mark.timeout(900)]
 
 GO_DIR = Path(__file__).resolve().parents[2] / "go" / "pfb_core"
 GUEST_BINARY = "/root/pfb_smoke_update.test"
-TESTS = ("TestTheProgramDiesWithACoreThatIsKilled", "TestTheProgramsChildDiesWithACoreThatIsKilled")
+TESTS = (
+    "TestTheProgramDiesWithACoreThatIsKilled",
+    "TestTheProgramsChildDiesWithACoreThatIsKilled",
+    "TestAChildIgnoringTermIsKilledWhenCoreIsKilled",
+    "TestAChildHandlingTermGetsItsGraceWhenCoreIsKilled",
+    "TestAHangupInsideTheGroupIsNotTakenForCoresDeath",
+    "TestASignalEndsRunAsItEndedTheProgram",
+    "TestANonZeroExitIsAnErrorNamingTheStatusAndStillReturnsAValidResult",
+    "TestAnExitOf75IsErrDeferredAndReportsNothing",
+)
 
 
 def test_the_update_program_dies_with_a_core_that_is_killed(

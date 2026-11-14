@@ -4,6 +4,7 @@ package update
 
 import (
 	"os/exec"
+	"os/signal"
 	"syscall"
 )
 
@@ -17,3 +18,7 @@ func awaitExit(cmd *exec.Cmd) (int, syscall.Signal) {
 	}
 	return ws.ExitStatus(), 0
 }
+
+// defaultAction hands sig back to the Go runtime.
+// shortcut: the runtime's action differs from the default for some signals (SEGV, ABRT, PIPE); no system here runs Core.
+func defaultAction(sig syscall.Signal) { signal.Reset(sig) }

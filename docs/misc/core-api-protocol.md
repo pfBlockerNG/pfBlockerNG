@@ -424,14 +424,15 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   `failed`, whatever the program wrote on fd 3 is not recorded (no outcome, no attempt, no GeoIP readiness), and the
   reserved occurrences stay pending for the next quarter hour. A skipped Update truncates the previous Update's log like any
   other, and its own log holds what the program printed before it deferred.
-- **Process group and bounds:** the program runs under a supervisor, `pfb-core --update-supervise PATH` (Core's own binary
-  re-run; it dispatches before anything of Core starts and holds nothing but the program). The supervisor leads a process
-  group of its own, the Update's, runs the program in it with stdin, stdout, stderr and fd 3 passed through, and exits as
-  the program did: the same status, or the same signal. The group is killed (TERM, then KILL after 3 s) at a hard cap of
-  4 hours, when the Update is cancelled and when Core stops; never when the program exits by itself, so a daemon it
-  started keeps running. When Core dies, the kernel signals the supervisor (FreeBSD's `PROC_PDEATHSIG_CTL`, Linux's
-  parent-death signal), and it kills the whole group (TERM, then KILL after 3 s, itself included), so a Core killed
-  outright leaves nothing of its Update running.
+- **Process group and bounds:** the program runs under an Update watcher, `pfb-core --update-supervise PATH` (Core's own
+  binary re-run; it dispatches before anything of Core starts and holds nothing but the program; not the rc script's
+  `daemon(8)` supervisor). The watcher leads a process group of its own, the Update's, runs the program in it with stdin,
+  stdout, stderr and fd 3 passed through, and exits as the program did: the same status, or the same signal by its default
+  action. The group is killed (TERM, then KILL after 3 s) at a hard cap of 4 hours, when the Update is cancelled and when
+  Core stops; never when the program exits by itself, so a daemon it started keeps running. When Core dies, the kernel
+  sends the watcher HUP (FreeBSD's `PROC_PDEATHSIG_CTL`, Linux's parent-death signal); a HUP while Core still is its parent
+  came from inside the group and is ignored. The watcher then kills the whole group (TERM, then KILL after 3 s, itself
+  included), so a Core killed outright leaves nothing of its Update running.
 
 Core then records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically): each
 feed's outcome, the attempted ids that stay pending, and the GeoIP readiness the program saw (`true` until the first report).

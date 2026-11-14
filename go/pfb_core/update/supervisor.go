@@ -28,6 +28,7 @@ func init() {
 // supervise runs the program at path in its own process group and returns its exit status; a program a signal ended ends the
 // supervisor with the same signal. When Core dies first, the group gets TERM, KILL after killGrace, and the supervisor with it.
 func supervise(path string) int {
+	core := os.Getppid()
 	died := make(chan os.Signal, 1)
 	signal.Notify(died, coreDied)
 	// Core's TERM to the group is for the program: the supervisor stays to report how it ends. A caught signal is reset to its
@@ -44,20 +45,32 @@ func supervise(path string) int {
 	var code int
 	var sig syscall.Signal
 	go func() { code, sig = awaitExit(cmd); close(exited) }()
-	select {
-	case <-exited:
-		if sig != 0 { // the same end as the program's: Core reads the signal from the supervisor's status
-			signal.Reset(sig)
-			_ = syscall.Kill(os.Getpid(), sig)
-			time.Sleep(time.Second) // the signal ends the process here; one that cannot (SIGSTOP and the like) falls through
-			return 128 + int(sig)
+	for {
+		select {
+		case <-exited:
+			if sig != 0 { // the same end as the program's: Core reads the signal from the supervisor's status
+				dieBy(sig)
+				return 128 + int(sig) // a signal that cannot end a process (SIGSTOP and the like)
+			}
+			return code
+		case <-died:
+			if os.Getppid() == core { // a hangup sent inside the group, not Core's death: the program's business
+				continue
+			}
+			group := -syscall.Getpgrp()
+			_ = syscall.Kill(group, syscall.SIGTERM)
+			time.Sleep(killGrace)                    // every member gets the grace, as Core gives it
+			_ = syscall.Kill(group, syscall.SIGKILL) // the supervisor too: what TERM left of the group ends here
+			select {}
 		}
-		return code
-	case <-died:
-		group := -syscall.Getpgrp()
-		_ = syscall.Kill(group, syscall.SIGTERM)
-		time.Sleep(killGrace)                    // every member gets the grace, as Core gives it
-		_ = syscall.Kill(group, syscall.SIGKILL) // the supervisor too: what TERM left of the group ends here
-		select {}
 	}
+}
+
+// dieBy ends the supervisor with sig, by the signal's default action (the Go runtime's own handler would panic on SEGV, exit 2
+// on ABRT, ignore PIPE or USR1), with no core file.
+func dieBy(sig syscall.Signal) {
+	_ = syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{})
+	defaultAction(sig)
+	_ = syscall.Kill(os.Getpid(), sig)
+	time.Sleep(time.Second)
 }
