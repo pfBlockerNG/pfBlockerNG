@@ -15,10 +15,12 @@ final class FeedPhaseCallSitesTest extends TestCase
 	{
 		$source = file_get_contents(self::APPLY);
 		$this->assertIsString($source);
-		$this->assertSame(2, preg_match_all('/pfb_core_feed_phase\(/', $source));
-		$dnsbl = strpos($source, "pfb_core_feed_phase('dnsbl'");
+		$this->assertSame(2, preg_match_all('/pfb_core_feed_phase_groups\(\s*\'(?:dnsbl|ip)\'/', $source));
+		$dnsbl = preg_match('/pfb_core_feed_phase_groups\(\s*\'dnsbl\'/', $source, $dnsblMatch, PREG_OFFSET_CAPTURE) === 1
+			? $dnsblMatch[0][1] : FALSE;
 		$dnsblip = strpos($source, 'pfb_dnsblip_rebuild_check');
-		$ip = strpos($source, "pfb_core_feed_phase('ip'");
+		$ip = preg_match('/pfb_core_feed_phase_groups\(\s*\'ip\'/', $source, $ipMatch, PREG_OFFSET_CAPTURE) === 1
+			? $ipMatch[0][1] : FALSE;
 		$this->assertIsInt($dnsbl);
 		$this->assertIsInt($dnsblip);
 		$this->assertIsInt($ip);
@@ -33,11 +35,15 @@ final class FeedPhaseCallSitesTest extends TestCase
 		$this->assertIsString($apply);
 		$this->assertIsString($cron);
 		foreach ([
-			'pfb_download(', 'pfb_feed_normalize(', 'pfb_dnsbl_parse_feed(', 'pfb_dnsbl_parse_line(',
+			'pfb_feed_normalize(', 'pfb_dnsbl_parse_feed(', 'pfb_dnsbl_parse_line(',
 			'pfb_ip_parse_feed(', 'pfb_ip_parse_line(', 'pfb_list_pre_script_run(',
 		] as $symbol) {
 			$this->assertFalse(str_contains($apply, $symbol), "legacy feed path remains: {$symbol}");
 		}
+		$this->assertFalse(
+			str_contains($apply, 'pfb_download(new PfbDownloadRequest('),
+			'feed loops still download through the PHP client'
+		);
 		$this->assertFalse(str_contains($cron, 'pfb_download('), 'scheduled change detection still fetches in PHP');
 		$this->assertFalse(str_contains($cron, 'pfb_local_feed_changed('), 'scheduled change detection still hashes local feeds in PHP');
 	}
@@ -71,7 +77,8 @@ final class FeedPhaseCallSitesTest extends TestCase
 		$source = file_get_contents(self::APPLY);
 		$this->assertIsString($source);
 		$refresh = strpos($source, "pfb_reentry_exec('asn_shell', ['scheduled']");
-		$phase = strpos($source, "pfb_core_feed_phase('ip'");
+		$phase = preg_match('/pfb_core_feed_phase_groups\(\s*\'ip\'/', $source, $phaseMatch, PREG_OFFSET_CAPTURE) === 1
+			? $phaseMatch[0][1] : FALSE;
 		$this->assertIsInt($refresh);
 		$this->assertIsInt($phase);
 		$this->assertLessThan($phase, $refresh);
