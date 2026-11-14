@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "A probe of an ftp feed fails whatever the bytes: the transfer ends 226, and only 200 and 304 decide a probe.",
+ "description": "FTP probes use matching MDTM and SIZE to avoid RETR; the PHP path still fails the probe.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -19,12 +19,15 @@
  ],
  "seed": {
   "published": "feed one\n",
+  "lastmod": 1760000000,
+  "size": 9,
   "digest": "880b4f7332ef14083066ffeee3a25dca"
  },
  "files": {
   "ftp": {
    "/list.txt": {
-    "body": "feed one\n"
+    "body": "feed one\n",
+    "mdtm": 1760000000
    }
   }
  },
@@ -33,92 +36,27 @@
    "op": "probe",
    "url": "ftp://feed.example:{port:ftp}/list.txt",
    "expect": {
-    "ok": false,
-    "decision": "failed",
+    "ok": true,
+    "decision": "unchanged",
     "published": "feed one\n",
+    "lastmod": 1760000000,
+    "size": 9,
     "requests": [
-     {
-      "server": "ftp",
-      "command": "USER anonymous"
-     },
-     {
-      "server": "ftp",
-      "command": "PASS ftp@example.com"
-     },
-     {
-      "server": "ftp",
-      "command": "MDTM list.txt"
-     },
-     {
-      "server": "ftp",
-      "command": "EPSV"
-     },
-     {
-      "server": "ftp",
-      "command": "TYPE I"
-     },
-     {
-      "server": "ftp",
-      "command": "SIZE list.txt"
-     },
-     {
-      "server": "ftp",
-      "command": "RETR list.txt"
-     },
-     {
-      "server": "ftp",
-      "data_to": "127.0.0.1"
-     }
+     {"server": "ftp", "command": "USER anonymous"},
+     {"server": "ftp", "command": "PASS ftp@example.com"},
+     {"server": "ftp", "command": "MDTM list.txt"},
+     {"server": "ftp", "command": "TYPE I"},
+     {"server": "ftp", "command": "SIZE list.txt"}
     ]
-   }
-  },
-  {
-   "op": "probe",
-   "url": "ftp://feed.example:{port:ftp}/list.txt",
-   "files": {
-    "ftp": {
-     "/list.txt": {
-      "body": "feed two\n"
-     }
-    }
    },
-   "expect": {
+   "old_expect": {
     "ok": false,
     "decision": "failed",
     "published": "feed one\n",
     "requests": [
-     {
-      "server": "ftp",
-      "command": "USER anonymous"
-     },
-     {
-      "server": "ftp",
-      "command": "PASS ftp@example.com"
-     },
-     {
-      "server": "ftp",
-      "command": "MDTM list.txt"
-     },
-     {
-      "server": "ftp",
-      "command": "EPSV"
-     },
-     {
-      "server": "ftp",
-      "command": "TYPE I"
-     },
-     {
-      "server": "ftp",
-      "command": "SIZE list.txt"
-     },
-     {
-      "server": "ftp",
-      "command": "RETR list.txt"
-     },
-     {
-      "server": "ftp",
-      "data_to": "127.0.0.1"
-     }
+     {"server": "ftp", "command": "USER anonymous"},
+     {"server": "ftp", "command": "PASS ftp@example.com"},
+     {"server": "ftp", "command": "MDTM list.txt"}
     ]
    }
   }

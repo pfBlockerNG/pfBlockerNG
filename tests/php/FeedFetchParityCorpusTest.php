@@ -207,7 +207,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 		$base = "{$this->dir}/" . self::FEED;
 		$seed = $case['seed'] ?? [];
 		foreach (['published' => '.orig', 'etag' => '.orig.etag', 'lastmod' => '.orig.lastmod',
-			'digest' => '.orig.xxhash128'] as $key => $suffix) {
+			'digest' => '.orig.xxhash128', 'size' => '.orig.size'] as $key => $suffix) {
 			if (isset($seed[$key])) {
 				file_put_contents("{$base}{$suffix}", (string) $seed[$key]);
 			}
@@ -290,6 +290,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$actual['mtime'] = is_file("{$base}.orig") ? filemtime("{$base}.orig") : NULL;
 			$actual['etag'] = self::stateFile("{$base}.orig.etag");
 			$actual['lastmod'] = is_file("{$base}.orig.lastmod") ? (int) file_get_contents("{$base}.orig.lastmod") : NULL;
+			$actual['size'] = is_file("{$base}.orig.size") ? (int) file_get_contents("{$base}.orig.size") : NULL;
 			$actual['digest'] = self::stateFile("{$base}.orig.xxhash128");
 			$actual['requests'] = $this->requests();
 			$actual['raw_retained'] = is_file("{$base}.raw") && filesize("{$base}.raw") > 0;
@@ -327,8 +328,15 @@ final class FeedFetchParityCorpusTest extends TestCase
 			foreach (array_keys($want['requests']) as $n) {
 				ksort($want['requests'][$n]);
 			}
+			$sizeState = $actual['size'];
 			$want += ['etag' => $seed['etag'] ?? NULL, 'lastmod' => $seed['lastmod'] ?? NULL,
-				'digest' => $seed['digest'] ?? NULL, 'raw_retained' => FALSE, 'staged' => '', 'rsync_source' => NULL];
+				'digest' => $seed['digest'] ?? NULL, 'raw_retained' => FALSE, 'staged' => '',
+				'rsync_source' => NULL];
+			if (array_key_exists('size', $want)) {
+				$want += ['size' => $seed['size'] ?? NULL];
+			} else {
+				unset($actual['size']);
+			}
 			foreach (['reason', 'decision', 'stage', 'detected', 'et_split', 'et_match'] as $optional) {
 				if (!array_key_exists($optional, $want)) {
 					unset($actual[$optional]);
@@ -348,6 +356,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			// The next step's default validators are what this one left behind.
 			$seed['etag'] = $actual['etag'];
 			$seed['lastmod'] = $actual['lastmod'];
+			$seed['size'] = $sizeState;
 			$seed['digest'] = $actual['digest'];
 		}
 	}

@@ -71,8 +71,7 @@ func rsyncStandIn(t *testing.T) (bin, dir string) {
 	return bin, dir
 }
 
-// entryLookups is how often the entry gate asks the resolver: a probe with nothing published decides right after it,
-// before any transfer.
+// entryLookups counts resolver calls made by Probe's entry gate; FTP may then transfer when there is no baseline.
 func entryLookups(t *testing.T, req feedfetch.Request) int32 {
 	t.Helper()
 	f, feed := quickFetcher(t)
