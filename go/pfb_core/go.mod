@@ -1,6 +1,6 @@
 module github.com/pfBlockerNG/pfBlockerNG/go/pfb_core
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1
