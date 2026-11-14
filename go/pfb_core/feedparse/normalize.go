@@ -70,11 +70,16 @@ type normalizeInput struct {
 	pending    uint16
 	hasPending bool
 	done       bool
+	err        error // a read error the BOM probe's Peek returned and cleared
 }
 
 func newNormalizeInput(src io.Reader) *normalizeInput {
 	in := &normalizeInput{r: bufio.NewReaderSize(src, 64<<10), order: binary.LittleEndian}
-	if bom, _ := in.r.Peek(2); len(bom) == 2 {
+	bom, err := in.r.Peek(2)
+	if err != nil && err != io.EOF {
+		in.err = err
+	}
+	if len(bom) == 2 {
 		switch {
 		case bom[0] == 0xFF && bom[1] == 0xFE:
 			in.utf16 = true
@@ -90,6 +95,9 @@ func newNormalizeInput(src io.Reader) *normalizeInput {
 
 func (in *normalizeInput) next() (rune, [utf8.UTFMax]byte, int, error) {
 	var raw [utf8.UTFMax]byte
+	if in.err != nil {
+		return 0, raw, 0, in.err
+	}
 	if in.utf16 {
 		r, err := in.nextUTF16()
 		if err != nil {
@@ -98,6 +106,9 @@ func (in *normalizeInput) next() (rune, [utf8.UTFMax]byte, int, error) {
 		return r, raw, utf8.EncodeRune(raw[:], r), nil
 	}
 	part, err := in.r.Peek(utf8.UTFMax)
+	if err != nil && err != io.EOF {
+		return 0, raw, 0, err // Peek reports a read error once, with the bytes before it
+	}
 	if len(part) == 0 {
 		return 0, raw, 0, err
 	}
