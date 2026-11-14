@@ -632,7 +632,7 @@ func runScenario(t *testing.T, file string) {
 			wj, _ := json.MarshalIndent(want, "", " ")
 			t.Fatalf("%s\nwant %s\n got %s\n(result %+v)", label, wj[:min(len(wj), readCap)], gj[:min(len(gj), readCap)], res)
 		}
-	prevETag, prevLastMod, prevDigest, prevSize = got["etag"], got["lastmod"], got["digest"], actualSize
+		prevETag, prevLastMod, prevDigest, prevSize = got["etag"], got["lastmod"], got["digest"], actualSize
 	}
 }
 
