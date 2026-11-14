@@ -28,11 +28,13 @@ the suite AND-gates fails here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -740,6 +742,141 @@ def test_sync_ports_refuses_a_port_without_portversion(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "PORTVERSION not found" in result.stdout
     assert after == makefile
+
+
+_EDGE_DISTINFO = "net/pfSense-pkg-pfBlockerNG-edge/distinfo"
+_EDGE_B3_DISTFILE = "pfSense-pkg-pfBlockerNG-edge/pfBlockerNG-pfBlockerNG-v4.0.0.b3_GH0.tar.gz"
+_EDGE_B4_DISTFILE = "pfSense-pkg-pfBlockerNG-edge/pfBlockerNG-pfBlockerNG-v4.0.0.b4_GH0.tar.gz"
+_EDGE_SYS_DISTFILE = "pfSense-pkg-pfBlockerNG-edge/golang-sys-v0.47.0_GH0.tar.gz"
+_EDGE_B3_DISTINFO = (
+    "TIMESTAMP = 1700000000\n"
+    f"SHA256 ({_EDGE_B3_DISTFILE}) = {'a' * 64}\n"
+    f"SIZE ({_EDGE_B3_DISTFILE}) = 100\n"
+    f"SHA256 ({_EDGE_SYS_DISTFILE}) = {'b' * 64}\n"
+    f"SIZE ({_EDGE_SYS_DISTFILE}) = 200\n"
+)
+# Stands in for codeload: logs its argv and writes the "served" tarball to its -o path.
+_FAKE_CURL = """#!/bin/sh
+printf '%s\\n' "$*" >> "$CURL_LOG"
+out=
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+cp "$SERVED_TARBALL" "$out"
+"""
+
+
+def _run_port_sync_push(
+    tmp_path: Path, channel: str, port_dir: str, portversion: str, distinfo: str | None
+) -> tuple[subprocess.CompletedProcess[str], Path, Path, bytes]:
+    """Run the REAL bump step, commit and push included, on a fixture fork whose port sits at 4.0.0.b3.
+
+    Returns the result, the bare origin the step pushed to, the curl log, and the bytes the fake codeload served.
+    """
+    script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["sync-ports-fork"], "Bump PORTVERSION and push"))
+    env = scrubbed_git_env(drop_git_vars=True)
+    env.update(
+        GIT_AUTHOR_NAME="t",
+        GIT_AUTHOR_EMAIL="t@example.invalid",
+        GIT_COMMITTER_NAME="t",
+        GIT_COMMITTER_EMAIL="t@example.invalid",
+    )
+    origin, fork, bin_dir = tmp_path / "origin.git", tmp_path / "fork", tmp_path / "bin"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True, env=env)  # noqa: S607
+    subprocess.run(["git", "init", "-q", "-b", "pfblockerng/use-github", str(fork)], check=True, env=env)  # noqa: S607
+    (fork / port_dir).mkdir(parents=True)
+    (fork / port_dir / "Makefile").write_text(
+        f"PORTNAME=\t{port_dir.split('/')[1]}\nPORTVERSION=\t4.0.0.b3\nCATEGORIES=\tnet\n"
+    )
+    if distinfo is not None:
+        (fork / port_dir / "distinfo").write_text(distinfo)
+    for args in (["add", "-A"], ["commit", "-q", "-m", "base"], ["remote", "add", "origin", str(origin)]):
+        subprocess.run(["git", *args], cwd=fork, check=True, env=env)  # noqa: S607
+    subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=fork, check=True, env=env)  # noqa: S607
+    bin_dir.mkdir()
+    (bin_dir / "curl").write_text(_FAKE_CURL)
+    (bin_dir / "curl").chmod(0o755)
+    served = b"pfBlockerNG v4.0.0.b4 source tarball\n" * 1000
+    (tmp_path / "served.tar.gz").write_bytes(served)
+    curl_log = tmp_path / "curl.log"
+    env.update(
+        PATH=f"{bin_dir}:/usr/bin:/bin:/usr/local/bin",
+        SOURCE="release/4.0",
+        CHANNEL=channel,
+        TAG=f"v{portversion}",
+        PORTVERSION=portversion,
+        CURL_LOG=str(curl_log),
+        SERVED_TARBALL=str(tmp_path / "served.tar.gz"),
+    )
+    result = subprocess.run(  # noqa: S603
+        ["sh", "-c", "set -eu\n" + script], cwd=fork, env=env, capture_output=True, text=True
+    )
+    return result, origin, curl_log, served
+
+
+def _pushed(origin: Path, path: str) -> str:
+    return subprocess.run(  # noqa: S603
+        ["git", "--git-dir", str(origin), "show", f"pfblockerng/use-github:{path}"],  # noqa: S607
+        env=scrubbed_git_env(drop_git_vars=True),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def test_sync_ports_new_edge_version_repins_the_edge_tarball_in_distinfo(tmp_path: Path) -> None:
+    """Scenario (#4007): edge's distinfo pins its own GitHub tarball, whose name and bytes change with every tag.
+    Given the fork's edge port at 4.0.0.b3 with a distinfo pinning the b3 tarball and a vendored module,
+    When the release workflow publishes 4.0.0.b4,
+    Then the pushed distinfo pins the b4 tarball as codeload serves it, with a fresh TIMESTAMP, and the module entry
+    is untouched, so a real `make checksum` passes on the bumped port instead of failing on a stale entry."""
+    before = int(time.time())
+    result, origin, curl_log, served = _run_port_sync_push(
+        tmp_path, "edge", "net/pfSense-pkg-pfBlockerNG-edge", "4.0.0.b4", _EDGE_B3_DISTINFO
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PORTVERSION=\t4.0.0.b4\n" in _pushed(origin, _EDGE_MAKEFILE)
+    assert curl_log.read_text().count("\n") == 1, curl_log.read_text()
+    assert "https://codeload.github.com/pfBlockerNG/pfBlockerNG/tar.gz/v4.0.0.b4?dummy=/" in curl_log.read_text()
+    pushed = _pushed(origin, _EDGE_DISTINFO)
+    first, _, rest = pushed.partition("\n")
+    assert first.startswith("TIMESTAMP = "), pushed
+    assert before <= int(first.removeprefix("TIMESTAMP = ")) <= int(time.time()), pushed
+    assert rest == (
+        f"SHA256 ({_EDGE_B4_DISTFILE}) = {hashlib.sha256(served).hexdigest()}\n"
+        f"SIZE ({_EDGE_B4_DISTFILE}) = {len(served)}\n"
+        f"SHA256 ({_EDGE_SYS_DISTFILE}) = {'b' * 64}\n"
+        f"SIZE ({_EDGE_SYS_DISTFILE}) = 200\n"
+    ), pushed
+
+
+def test_sync_ports_rerun_leaves_the_edge_distinfo_and_fork_untouched(tmp_path: Path) -> None:
+    result, origin, curl_log, _served = _run_port_sync_push(
+        tmp_path, "edge", "net/pfSense-pkg-pfBlockerNG-edge", "4.0.0.b3", _EDGE_B3_DISTINFO
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "nothing to push" in result.stdout, result.stdout
+    assert not curl_log.exists(), curl_log.read_text()
+    assert _pushed(origin, _EDGE_DISTINFO) == _EDGE_B3_DISTINFO
+
+
+def test_sync_ports_refuses_a_distinfo_that_does_not_pin_the_old_tarball(tmp_path: Path) -> None:
+    """A distinfo pinning some other tarball is out of step with its Makefile: fail loud, push nothing."""
+    stale = _EDGE_B3_DISTINFO.replace("v4.0.0.b3_GH0", "v4.0.0.b2_GH0")
+    result, origin, _curl_log, _served = _run_port_sync_push(
+        tmp_path, "edge", "net/pfSense-pkg-pfBlockerNG-edge", "4.0.0.b4", stale
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert f"pins no {_EDGE_B3_DISTFILE}" in result.stdout, result.stdout
+    assert _pushed(origin, _EDGE_DISTINFO) == stale
+    assert "PORTVERSION=\t4.0.0.b3\n" in _pushed(origin, _EDGE_MAKEFILE)
+
+
+def test_sync_ports_bumps_a_port_without_distinfo_without_fetching(tmp_path: Path) -> None:
+    result, origin, curl_log, _served = _run_port_sync_push(
+        tmp_path, "testing", "net/pfSense-pkg-pfBlockerNG-testing", "4.0.0.b4", None
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not curl_log.exists(), curl_log.read_text()
+    assert "PORTVERSION=\t4.0.0.b4\n" in _pushed(origin, "net/pfSense-pkg-pfBlockerNG-testing/Makefile")
 
 
 def test_sync_ports_preserves_push_retry_contract() -> None:
