@@ -207,7 +207,8 @@ jobs:
   # Bump the matching port's PORTVERSION directly on our own fork's build-input branch
   # (pfblockerng/use-github) — the SAME branch every build reads — so the fork changes
   # only after the Release is actually published. Direct push: it is our branch, no PR.
-  # Only PORTVERSION moves here: a new version drops PORTREVISION, and republishing the
+  # Only PORTVERSION moves here (with, for a port carrying a distinfo, the pin of its own
+  # tarball): a new version drops PORTREVISION, and republishing the
   # version already on the fork (a rerun) changes nothing. PORTREVISION marks a recipe
   # change on the fork itself and is bumped by that fork commit, never by a release.
   sync-ports-fork:
@@ -242,7 +243,7 @@ jobs:
           ref: pfblockerng/use-github
           token: ${{ steps.ports-token.outputs.token }}
           persist-credentials: true   # need to push the PORTVERSION bump via the App token
-          # Minimal clone: the bump only edits the port Makefile(s), then commits + pushes.
+          # Minimal clone: the bump only edits the port Makefile(s) and distinfo, then commits + pushes.
           # Shallow (depth-1) + blobless + sparse to the bumped port dirs avoids cloning the
           # full ~1.3 GB ports tree. The commit is a fast-forward the remote accepts; the
           # push-reject rebase retry below reaches the racing tip via an on-demand fetch.
@@ -328,6 +329,7 @@ jobs:
           esac
           PORTS_LABEL="$PORT_PATH"
           MAKEFILE="${PORT_PATH}/Makefile"
+          DISTINFO="${PORT_PATH}/distinfo"
 
           # Update PORTVERSION only. GH_TAGNAME is `v${PORTVERSION}` in the Makefile,
           # so it self-resolves to the matching tag — the workflow never sets it.
@@ -341,9 +343,33 @@ jobs:
               -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
               -e "/^PORTREVISION=/d" \
               "$MAKEFILE"
+            # A port with a distinfo (edge, #4007) also pins its own tarball, whose name and bytes follow
+            # the tag: re-pin it as codeload serves it to `make fetch`, or `make checksum` fails on the bump.
+            if [ -f "$DISTINFO" ]; then
+              # bsd.sites.mk names it <account>-<project>-<DISTVERSIONFULL>-<GH_TAGNAME>_GH0.tar.gz.
+              OLD_DIST="${PORT_PATH##*/}/pfBlockerNG-pfBlockerNG-${OLD_PORTVERSION}-v${OLD_PORTVERSION}_GH0.tar.gz"
+              NEW_DIST="${PORT_PATH##*/}/pfBlockerNG-pfBlockerNG-${PORTVERSION}-v${PORTVERSION}_GH0.tar.gz"
+              if ! grep -qF "SHA256 (${OLD_DIST}) = " "$DISTINFO" || ! grep -qF "SIZE (${OLD_DIST}) = " "$DISTINFO"; then
+                echo "::error::${DISTINFO} pins no ${OLD_DIST}"
+                exit 1
+              fi
+              TARBALL="$(mktemp)"
+              curl -fsSL --retry 3 -o "$TARBALL" \
+                "https://codeload.github.com/pfBlockerNG/pfBlockerNG/tar.gz/v${PORTVERSION}?dummy=/"
+              SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+              SIZE="$(wc -c < "$TARBALL" | tr -d ' ')"
+              rm -f "$TARBALL"
+              awk -v old="$OLD_DIST" -v new="$NEW_DIST" -v sha="$SHA256" -v size="$SIZE" -v ts="$(date +%s)" '
+                /^TIMESTAMP = / { $0 = "TIMESTAMP = " ts }
+                index($0, "SHA256 (" old ") = ") == 1 { $0 = "SHA256 (" new ") = " sha }
+                index($0, "SIZE (" old ") = ") == 1 { $0 = "SIZE (" new ") = " size }
+                { print }' "$DISTINFO" > "$DISTINFO.new"
+              mv "$DISTINFO.new" "$DISTINFO"
+            fi
           fi
 
           git add "$MAKEFILE"
+          [ ! -f "$DISTINFO" ] || git add "$DISTINFO"
 
           # ONE atomic commit for every bumped port.
           if git diff --cached --quiet; then
