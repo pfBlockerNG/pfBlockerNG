@@ -780,7 +780,8 @@ if ($_POST) {
 
 		// The web server ports are required only while a block answers with the VIP; a value given must still be valid.
 		foreach (array('pfb_dnsport' => 'DNSBL Port', 'pfb_dnsport_ssl' => 'DNSBL SSL Port') as $port_key => $port_label) {
-			if (($pfb_vip_demand || ($_POST[$port_key] ?? '') !== '') && !is_port($_POST[$port_key] ?? '')) {
+			// issue #4000: a crafted array is invalid (is_port() hands it to getservbyname(), which throws)
+			if (!is_string($_POST[$port_key] ?? '') || ($pfb_vip_demand || ($_POST[$port_key] ?? '') !== '') && !is_port($_POST[$port_key] ?? '')) {
 				$input_errors[] = "{$port_label} is invalid!";
 			}
 		}

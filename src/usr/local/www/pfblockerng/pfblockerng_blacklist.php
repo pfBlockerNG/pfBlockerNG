@@ -159,6 +159,16 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 	$pfb_config_lock = NULL;
 	$pfb_write_failed = FALSE;
 
+	// issue #4000: a crafted array where one value is read, or a list nesting a list, is refused (the typed calls below throw on it)
+	$pfb_list_fields = array_fill_keys(preg_filter('/^/', 'blacklist_', array_keys($blacklist_types ?: [])), TRUE) + ['blacklist_selected' => TRUE];
+	foreach ($pfb_list_fields + ['blacklist_enable' => FALSE, 'blacklist_lang' => FALSE] as $pfb_field => $pfb_is_list) {
+		$pfb_value = $_POST[$pfb_field] ?? '';
+		if (!is_string($pfb_value) && !($pfb_is_list && is_array($pfb_value) && !array_filter($pfb_value, 'is_array'))) {
+			$input_errors[] = "DNSBL Category: the {$pfb_field} selection is invalid!";
+			$_POST[$pfb_field] = '';
+		}
+	}
+
 	// issue #3980: Core writes this section under this lock (pfb_core_settings_backend()), so a save is applied to config.xml read
 	// afresh under it and written under it, never to the request's stale copy. A POST that writes nothing takes no lock.
 	if (isset($_POST['blacklist_enable']) || isset($_POST['blacklist_lang']) || isset($_POST['save'])) {
@@ -291,7 +301,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 				foreach ($blacklist_types as $type => $setting) {
 					if (isset($_POST['blacklist_' . $type])) {
 						foreach (array('porn', 'adult', 'prime') as $cat) {
-							if (in_array($cat, $_POST['blacklist_' . $type])) {
+							if (in_array($cat, (array) $_POST['blacklist_' . $type])) {
 								$savemsg .= "{$type} category [ " . ucfirst($cat) . " ] enabled.BR";
 							}
 						}

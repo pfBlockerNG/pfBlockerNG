@@ -246,6 +246,42 @@ final class BlacklistPageConfigLockTest extends TestCase
 		$this->assertFalse($result['pendingMarked']);
 	}
 
+	// ----- a crafted request shape (issue #4000) -----
+
+	/** @return array<string, array{0: string, 1: string, 2: array<string, mixed>}> arm, refused field, posted fields */
+	public static function malformedPosts(): array
+	{
+		return [
+			'Enable posted as a list'          => ['save', 'blacklist_enable', ['blacklist_enable' => ['Enable']]],
+			'Enable auto-submit as a list'     => ['auto', 'blacklist_enable', ['blacklist_enable' => ['Enable']]],
+			'Language posted as a list'        => ['save', 'blacklist_lang', ['blacklist_lang' => ['DE']]],
+			'provider list with a nested list' => ['save', 'blacklist_selected', ['blacklist_selected' => ['ut1', ['x']]]],
+			'category list with a nested list' => ['save', 'blacklist_ut1', ['blacklist_ut1' => ['adult', ['x']]]],
+		];
+	}
+
+	/** A crafted array where the page reads one value, or a list nesting a list, is an input error, not a 500: nothing is saved and the lock is released. */
+	#[DataProvider('malformedPosts')]
+	public function testAMalformedPostIsAnInputErrorAndSavesNothing(string $arm, string $field, array $post): void
+	{
+		$result = $this->worker('plain', ['arm' => $arm, 'post' => $post]);
+
+		$this->assertRefused($result, "the {$field} selection is invalid");
+		$this->assertSame([], $result['writes'], 'nothing is written');
+	}
+
+	/** One category posted as a plain string (not a list) is a valid selection: it is saved and its large-category notice is shown. */
+	public function testACategoryPostedAsOneStringIsSavedWithItsNotice(): void
+	{
+		$result = $this->worker('plain', ['post' => ['blacklist_ut1' => 'adult']]);
+
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame([self::WRITE], $result['writes']);
+		$this->assertSame(['adult', 'ads'], array_column(self::blacklist($result['disk'])['item'], 'selected'));
+		$this->assertStringContainsString('ut1 category [ Adult ] enabled.', (string) $result['savemsg']);
+		$this->assertFalse($result['returned'], 'redirected as saved');
+	}
+
 	// ----- Core's notice -----
 
 	/** Start a Core stand-in on a socket that records into the timeline file; returns the socket. */

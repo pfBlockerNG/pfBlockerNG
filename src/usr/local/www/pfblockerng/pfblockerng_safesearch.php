@@ -49,15 +49,8 @@ if (isset($_POST['save'])) {
 					);
 
 	foreach ($select_options as $s_option => $s_default) {
-		if (is_array($_POST[$s_option])) {
-			foreach ($_POST[$s_option] as $post_option) {
-				if (!array_key_exists($post_option, ${"options_$s_option"})) {
-					$_POST[$s_option] = $s_default;
-					break;
-			}
-			}
-		}
-		elseif (!array_key_exists($_POST[$s_option], ${"options_$s_option"})) {
+		// issue #4000: both are single selects; an array, nested or not, is not an option (array_key_exists() throws on a nested one)
+		if (!is_string($_POST[$s_option] ?? NULL) || !array_key_exists($_POST[$s_option], ${"options_$s_option"})) {
 			$_POST[$s_option] = $s_default;
 		}
 	}
