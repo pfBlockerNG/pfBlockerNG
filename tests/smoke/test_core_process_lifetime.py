@@ -31,20 +31,38 @@ TESTS = (
 # Read sources only: backgrounding alone does not establish that a service detaches.
 SOURCE_AUDIT = r"""
 status=0
+captured='|'
 capture() {
     path=$1
+    case "$captured" in *"|$path|"*) return ;; esac
+    mode=${2:-COMPACT}
+    case "$path" in
+        /etc/rc.filter_configure_sync|/usr/sbin/service|*/service-utils*.inc) mode=FULL ;;
+    esac
     if [ ! -f "$path" ] || [ ! -r "$path" ]; then
         printf 'UNREADABLE REQUIRED SOURCE %s\n' "$path"
         status=1
         return
     fi
     digest=$(sha256 -q "$path") || { status=1; return; }
-    printf '\n=== SOURCE %s SHA256 %s ===\n' "$path" "$digest"
+    captured="${captured}${path}|"
+    printf '\n=== SOURCE %s SHA256 %s MODE %s ===\n' "$path" "$digest" "$mode"
     cat "$path" || status=1
     printf '\n=== END SOURCE ===\n'
 }
 capture /etc/rc.filter_configure_sync
 capture /usr/sbin/service
+found_mwexec=0
+for path in /etc/inc/*.inc; do
+    if [ -f "$path" ] && [ -r "$path" ] && \
+        grep -Eq '^[[:space:]]*function[[:space:]]+&?[[:space:]]*mwexec(_bg)?[[:space:]]*\(' "$path"; then
+        capture "$path" FULL
+        found_mwexec=1
+    fi
+done
+if [ "$found_mwexec" -ne 1 ]; then
+    printf 'MWEXEC DEFINITION SOURCE ABSENT: no matching global definition in readable /etc/inc/*.inc\n'
+fi
 capture /etc/inc/filter.inc
 for pattern in /etc/inc/*service*.inc /etc/inc/*unbound*.inc /etc/inc/*dhcp*.inc \
     /etc/inc/*radv*.inc /etc/inc/*router*.inc /etc/inc/*ra.inc \
@@ -85,18 +103,20 @@ def test_pre_script_group_lifetime_on_freebsd(
     )
     print(f"Native source audit evidence (not a behavioral check or detach conclusion): {evidence}")
     source = ""
+    full_source = False
     line_number = 0
     launch = re.compile(r"\b(function|exec|daemon|service|setsid|procctl|mwexec\w*|shell_exec|system|popen)\b|&\s*$")
     for line in audit.stdout.splitlines():
         if line.startswith("=== SOURCE "):
             source = line
+            full_source = line.endswith(" MODE FULL ===")
             line_number = 0
             print(line)
         elif line == "=== END SOURCE ===":
             source = ""
         elif source:
             line_number += 1
-            if launch.search(line):
+            if full_source or launch.search(line):
                 print(f"  {line_number}: {line}")
         elif line.strip():
             print(line)
