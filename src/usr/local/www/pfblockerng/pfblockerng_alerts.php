@@ -994,7 +994,7 @@ if (isset($_POST) && !empty($_POST)) {
 			$ext_dns 	= escapeshellarg("@{$pfb['extdns']}");
 			$drill_esc	= escapeshellarg($pfb['drill'] ?? '/usr/bin/drill');
 			$timeout_esc	= escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
-			// 30s DNS ceiling matches the established SafeSearch and whoisconvert lookups (#2014/#2015).
+			// 30s DNS ceiling matches the established SafeSearch lookups (#2014).
 			$cname_lookup_timeout = 30;
 			$cname_lookup_kill_grace = 5;
 			$cname_lookup_prefix = "{$g['tmp_path']}/pfb_alerts_cname_" . getmypid() . '_' . bin2hex(random_bytes(8));

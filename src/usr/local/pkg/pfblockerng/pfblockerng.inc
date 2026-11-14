@@ -695,7 +695,7 @@ define('PFB_FILTER_TOKEN', 22);
 define('PFB_DOWNLOAD_MAXREDIRS', 10);
 
 // issue #3975: where a file:// feed may sit (directly in one of these), where a group's pre and post scripts are looked up (first hit
-// wins) and the rsync a rsync feed is transferred with: pfb_filter(), pfb_resolve_list_script() and pfb_rsync_transfer_cmd() read them,
+// wins) and the rsync a rsync feed is transferred with: pfb_filter() and pfb_resolve_list_script() read them,
 // and the pfb-core rc script (pfb_core_service()) tells Core the same values by flag.
 const PFB_FEED_LOCAL_DIRS = [
 	'/var/db/pfblockerng/', '/var/db/pfblockerng/deny/', '/var/db/pfblockerng/permit/', '/var/db/pfblockerng/match/',
@@ -1653,163 +1653,6 @@ function pfb_ensure_trailing_newline(string $path): bool {
 	// Only a full 1-byte write counts as success -- else a failed append would
 	// report TRUE, masking the exact unterminated-file condition this exists to fix.
 	return $written !== FALSE && $written === 1;
-}
-
-
-/**
- * issue #1797: on-demand text normalization of a downloaded feed baseline.
- * {base}.orig -> {base}.norm, regenerated ONLY when {base}.norm is missing or
- * the recorded source digest ({base}.norm.src.xxhash128, the xxh128 of the
- * .orig the .norm was built FROM) no longer matches the current .orig -- so
- * custom-list re-synthesis, reload-without-refetch, user pre-script mutation
- * and a first upgrade (populated orig dir, zero .norm) all converge without a
- * download-time hook having to see them. Written tmp + atomic rename in the
- * same directory; the #1263 trailing-newline guarantee is re-applied (the sed
- * pass never adds one). The wire-byte ADR-42 sidecar ({base}.orig.xxhash128)
- * is a DIFFERENT, untouched artifact.
- *
- * Returns array{path:string, changed:bool, normalized:bool}:
- *   path       -- file the caller should parse: .norm, or .orig on any failure
- *                 (fallback: a feed must degrade to raw parsing, never to empty).
- *   changed    -- FALSE only when the normalized CONTENT is proven unchanged
- *                 against a recorded baseline (fresh sidecar match, or a
- *                 regeneration that produced byte-identical .norm). A missing/
- *                 corrupt baseline reports TRUE (fail-safe, ADR-42 semantics;
- *                 the Force clear-hashes sweep relies on this to defeat the
- *                 downstream-skip gate).
- *   normalized -- TRUE iff path points at a usable .norm.
- *
- * @return array{path:string, changed:bool, normalized:bool}
- */
-function pfb_feed_normalize(string $orig_path, ?string $interpreter = NULL): array {
-	$fallback = array('path' => $orig_path, 'changed' => TRUE, 'normalized' => FALSE);
-	if (!str_ends_with($orig_path, '.orig') || !file_exists($orig_path)) {
-		return $fallback;
-	}
-	$base      = substr($orig_path, 0, -strlen('.orig'));
-	$norm_path = "{$base}.norm";
-	$src_base  = "{$base}.norm.src";
-
-	// Hash the source BEFORE generating: a mid-run .orig replacement then reads
-	// as stale next pass and re-normalizes (fail-safe), never as falsely fresh.
-	$src_digest = pfb_content_hash($orig_path, TRUE);
-	if ($src_digest === FALSE) {
-		return $fallback;
-	}
-
-	$sidecar = pfb_hash_read($src_base);
-	if ($sidecar['algo'] === 'xxh128' && $sidecar['digest'] === $src_digest && file_exists($norm_path)) {
-		return array('path' => $norm_path, 'changed' => FALSE, 'normalized' => TRUE);
-	}
-
-	$prev_digest  = file_exists($norm_path) ? pfb_content_hash($norm_path, TRUE) : FALSE;
-	$had_baseline = ($sidecar['algo'] === 'xxh128' && $prev_digest !== FALSE);
-
-	// Exclusive-create the tmp IN the target directory: tempnam() silently
-	// falls back to the system tmp dir when the target is unwritable, and a
-	// cross-filesystem rename() is not atomic (or fails outright).
-	$tmp = dirname($norm_path) . '/.pfbnorm_' . getmypid() . '_' . bin2hex(random_bytes(4));
-	$th  = @fopen($tmp, 'x');
-	if ($th === FALSE) {
-		return $fallback;
-	}
-	fclose($th);
-
-	if (!pfb_feed_normalize_generate($orig_path, $tmp, $interpreter)) {
-		@unlink($tmp);
-		pfb_logger("\n[ pfb_feed_normalize ] normalization failed for {$orig_path} -- parsing the raw .orig\n", 2);
-		return $fallback;
-	}
-	pfb_ensure_trailing_newline($tmp);
-
-	$new_digest = pfb_content_hash($tmp, TRUE);
-	if ($new_digest === FALSE || !@rename($tmp, $norm_path)) {
-		@unlink($tmp);
-		return $fallback;
-	}
-	@file_put_contents("{$src_base}.xxhash128", $src_digest, LOCK_EX);
-
-	return array(
-		'path'       => $norm_path,
-		'changed'    => !($had_baseline && $new_digest === $prev_digest),
-		'normalized' => TRUE,
-	);
-}
-
-
-// issue #1797: the normalize pipeline body -- $src (.orig bytes) -> $dst (UTF-8,
-// control-stripped, per-line right-trimmed). Ordering is load-bearing:
-//   (b) whole-file iconv validity gate first -- a server-declared charset is
-//       NOT trusted over provable UTF-8 validity (a wrong ISO-8859-1 label on
-//       a UTF-8 body would double-encode it), and iconv -c can never be the
-//       converter (it DELETES undecodable bytes silently, no signal);
-//   (c) only an invalid file reaches the Python detector/converter
-//       (charset_normalizer whole-file detection + errors='replace' decode,
-//       U+FFFD replacements counted and logged as the wrong-guess signal);
-//       if conversion is unavailable the raw bytes fall through to (d) --
-//       sed passes invalid sequences through untouched while still stripping
-//       controls, graceful degradation rather than an empty feed;
-//   (d) one C.UTF-8 sed pass strips every non-printable except tab (Cc, Cf
-//       incl. BOM/ZWJ, C1, NUL, mid-line CR) and right-trims [[:space:]] runs
-//       per line -- interior tabs (hosts/TSV) and interior NBSP survive as
-//       data. Membership probed on CE 2.8 (FreeBSD 15) and Plus (FreeBSD 16).
-function pfb_feed_normalize_generate(string $src, string $dst, ?string $interpreter = NULL): bool {
-	$src_esc = escapeshellarg($src);
-	$dst_esc = escapeshellarg($dst);
-
-	$ret = 1;
-	exec("/usr/bin/iconv -f UTF-8 -t UTF-8 < {$src_esc} > /dev/null 2>&1", $unused_out, $ret);
-
-	$strip_src = $src;
-	$conv_tmp  = '';
-	if ($ret !== 0) {
-		$conv_tmp = "{$dst}.conv";
-		if (pfb_feed_convert_encoding($src, $conv_tmp, $interpreter)) {
-			$strip_src = $conv_tmp;
-		} else {
-			pfb_logger("\n[ pfb_feed_normalize ] encoding conversion unavailable for {$src} -- stripping raw bytes\n", 2);
-		}
-	}
-
-	$sed_expr = "s/[^[:print:]\t]+|[[:space:]]+\$//g";
-	$ret2 = 1;
-	exec('LC_ALL=C.UTF-8 /usr/bin/sed -E ' . escapeshellarg($sed_expr) . ' < ' .
-		escapeshellarg($strip_src) . " > {$dst_esc} 2>/dev/null", $unused_out2, $ret2);
-	if ($conv_tmp !== '') {
-		@unlink($conv_tmp);
-	}
-	return $ret2 === 0 && file_exists($dst);
-}
-
-
-// issue #1797: detect + convert a non-UTF-8 feed file to UTF-8 via
-// pfb_feed_normalize.py (charset_normalizer, a RUN_DEPENDS). The wrapper
-// resolves the interpreter on the appliance ($interpreter is a test seam).
-// U+FFFD replacements reported by the script are logged: a high
-// count means the detection was probably wrong, and silence here would be
-// silent data corruption.
-function pfb_feed_convert_encoding(string $src, string $dst, ?string $interpreter = NULL): bool {
-	$py = $interpreter ?? PFB_PYTHON_WRAPPER;
-	if ($py === '') {
-		return FALSE;
-	}
-	$script = __DIR__ . '/pfb_feed_normalize.py';
-	$out = array();
-	$ret = 1;
-	exec(escapeshellarg($py) . ' ' . escapeshellarg($script) . ' ' .
-		escapeshellarg($src) . ' ' . escapeshellarg($dst) . ' 2>&1', $out, $ret);
-	if ($ret !== 0 || !file_exists($dst)) {
-		pfb_logger("\n[ pfb_feed_normalize ] encoding detection failed for {$src}: " . implode(' | ', $out) . "\n", 2);
-		return FALSE;
-	}
-	$fields   = explode(' ', trim((string) end($out)));
-	$encoding = $fields[0] ?? '?';
-	$replaced = (int) ($fields[1] ?? 0);
-	pfb_logger("\n[ pfb_feed_normalize ] converted {$src} from '{$encoding}' to UTF-8\n", 1);
-	if ($replaced > 0) {
-		pfb_logger("[ pfb_feed_normalize ] {$replaced} undecodable byte sequence(s) replaced with U+FFFD in {$src} -- the detected encoding '{$encoding}' may be wrong\n", 2);
-	}
-	return TRUE;
 }
 
 
@@ -2897,117 +2740,6 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 	return FALSE;
 }
 
-// A scheme-less '<IP>/<digits>' line: NULL = not a CIDR, FALSE = reject (a valid address with a bad
-// mask, or a numeric network -- no '/', else a URL path -- that is not a canonical dotted quad),
-// else the range with an unpadded network and a canonical mask. Padded octets are decimal (IP-feed rule).
-function pfb_dnsbl_cidr(string $line): string|false|null {
-	if (!preg_match('#^(.+)/([0-9]+)$#D', $line, $cidr)) {
-		return NULL;
-	}
-	$net = pfb_ipv4_unpad($cidr[1]) ?? $cidr[1];
-	if (is_ipaddr($net) && is_subnet("{$net}/{$cidr[2]}")) {
-		return "{$net}/" . (int) $cidr[2];
-	}
-	if (is_ipaddr($net) || (!str_contains($net, '/') && pfb_ipv4_numeric_host($net) !== NULL)) {
-		return FALSE;
-	}
-	return NULL;
-}
-
-// Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
-// `if (!$lite)` branch. Order is load-bearing: scheme-less '<IP>/<digits>' (a CIDR, never a
-// host) handled first -> userinfo cut -> empty-scheme IP anchor ('://<ip>[:port][^]') -> authority
-// cut (strict mode keeps a numeric host's authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
-// ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. A valid CIDR is returned
-// whole (padded octets unpadded, mask canonicalised) for the IP sanitizers; a bad mask or
-// a non-canonical numeric network is a reject. Returns FALSE on any reject (CIDR, both
-// modes; pfb_dnsbl_scheme_line, strict) -- caller must skip the line.
-function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
-	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
-
-	$cidr = pfb_dnsbl_cidr($line);
-	if ($cidr === FALSE) {
-		pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
-		return FALSE;
-	}
-	if ($cidr !== NULL) {
-		return $cidr;
-	}
-
-	// RFC 3986 authority of a scheme-bearing line (a '://' found by pfb_dnsbl_scheme_pos()): the
-	// host follows the LAST '@' before the first '^' (unencoded '^' is illegal in userinfo, so an
-	// '@' in a '^$options' tail is option text); userinfo is dropped. A numeric host is the
-	// address a client dials whatever the path, so strict mode keeps its authority alone instead
-	// of rejecting the path. A bare 'name@x' row is unchanged.
-	$pos = pfb_dnsbl_scheme_pos($line);
-	if ($pos !== FALSE) {
-		$rest = substr($line, $pos + 3);
-		$alen = strcspn($rest, '/?#');
-		if (($at = strrpos(substr($rest, 0, min($alen, strcspn($rest, '^'))), '@')) !== FALSE) {
-			$rest = substr($rest, $at + 1);
-			$alen -= $at + 1;
-		}
-		// Empty-scheme IP anchor ('://1.2.3.4:443^'): port dropped, CIDR honoured, as the '||' anchor.
-		if ($pos === 0) {
-			$anchor = preg_replace('/\^(\$.*)?$/D', '', $rest);
-			// Three octets and a trailing dot ('5.8.67.') name that /24 (#3408), never a short-form fill.
-			$ip = pfb_dnsbl_anchor_ip(preg_match('/^[0-9]{1,3}(\.[0-9]{1,3}){2}\.$/D', $anchor) ? "{$anchor}0/24" : $anchor);
-			if ($ip === FALSE) {
-				pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
-				return FALSE;
-			}
-			if ($ip !== '') {
-				return $ip;
-			}
-		}
-		if ($strict && pfb_ipv4_numeric_host(pfb_strip_trailing_port(substr($rest, 0, $alen))) !== NULL) {
-			$rest = substr($rest, 0, $alen);
-		}
-		$line = substr($line, 0, $pos + 3) . $rest;
-	}
-
-	// ADR-22: strip the '<scheme>://' prefix. Lenient (toggle ON, the migrated/legacy
-	// default) keeps today's permissive strip; strict (toggle OFF, the new-install default)
-	// validates the scheme against RFC 3986 and rejects URL paths -- a rejected line is
-	// skipped, recorded per-line in the parse-error log, and counted for the once-per-feed
-	// summary WARNING below.
-	$line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline, $dnsbl_lineno, $parse_err,
-		$scheme_skipped);
-	if ($line === FALSE) {
-		return FALSE;
-	}
-
-	// If '/' character found, remove characters after '/'
-	if (strpos($line, '/') !== FALSE) {
-		$line = strstr($line, '/', TRUE);
-	}
-
-	// If '#' character found, remove characters after '#'
-	if (strpos($line, '#') !== FALSE) {
-		$line = strstr($line, '#', TRUE);
-	}
-
-	// If '?' character found, remove characters after '?'
-	if (strpos($line, '?') !== FALSE) {
-		$line = strstr($line, '?', TRUE);
-	}
-
-	// issue #1237: parse_url()'s scheme-less host:port heuristic (no '//' authority needed)
-	// mis-picked 'host;param:digits' as a hostname, keeping the ';param' remainder in it.
-	if (strpos($line, ';') !== FALSE) {
-		$line = strstr($line, ';', TRUE);
-	}
-
-	// Remove any Port numbers at end of line (IPv6-safe:
-	// never mangle a bare IPv6 literal's trailing hextet).
-	$line = pfb_strip_trailing_port($line);
-
-	// Issue #938: unwrap a bracketed IPv6 literal (e.g. a
-	// URI-style '[2604:2dc0::]') so the is_ipaddrv6($line)
-	// collection branch below recognises it.
-	return pfb_dnsbl_unbracket_ip6($line);
-}
-
 /**
  * DNSBL interchange rows are compact tagged arrays: ["d", domain] or ["a", raw].
  * The reader also accepts schema-v1 objects for upgrade compatibility.
@@ -3016,13 +2748,6 @@ enum PfbDnsblRowKind: string
 {
 	case Domain = 'd';
 	case Abp    = 'a';
-}
-
-function pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind $kind, string $payload): string {
-	return json_encode(
-		array($kind, $payload),
-		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
-	) . "\n";
 }
 
 function pfb_dnsbl_ndjson_parse_row(string $line): ?array {
@@ -3074,20 +2799,6 @@ function pfb_ip_reuse_skip_active(bool $reuse_on, bool $orig_exists, bool $is_dn
 	return $reuse_on && $orig_exists && !$is_dnsblip;
 }
 
-// A stale-.orig download-failure fallback never refreshed the row's content, so the
-// '.update' reprocess marker must survive it -- else a pending rebuild/refresh is
-// stranded exactly like #1002, but reached via the download-failure path. (#1022)
-function pfb_ip_update_marker_clear_active(bool $orig_content_stale): bool {
-	return !$orig_content_stale;
-}
-
-// A stale-.orig download-failure fallback in the DNSBL-domain loop (e.g. a Blacklist
-// category row's local-file re-read) never refreshed the row's content, so the
-// '.update' reprocess marker must survive it, same class as #1022. (#1031)
-function pfb_dnsbl_update_marker_clear_active(bool $orig_content_stale): bool {
-	return !$orig_content_stale;
-}
-
 // #1083: a field box upgrading with a pre-NDJSON staging .txt (a feed never
 // redownloaded since the flip) must not verbatim-reuse it -- every interchange
 // reader now expects NDJSON and would silently skip every old-dialect line. A
@@ -3128,35 +2839,6 @@ function pfb_dnsbl_verbatim_reuse_active(bool $txt_exists, bool $update_exists, 
 	return $txt_exists && !$update_exists && !$fail_exists && $reuse_unset && $staging_current_generation;
 }
 
-// issue #1797: skip the DNSBL reparse when a FRESH download normalized to
-// byte-identical content -- upstream churn that normalizes away (CRLF flips,
-// trailing whitespace, a BOM) rebuilds nothing. Deliberately narrow: only a
-// completed non-custom download qualifies (a Reload/Force pass must keep its
-// reparse-everything semantics; a custom list re-synthesizes per pass; a
-// stale-.orig download-failure fallback stays fail-safe like #1022/#1031),
-// and only onto a current-generation staged '.txt' (#1083). issue #1926: a
-// configured pre/post script never skips either -- its contract is a full
-// pass over the normalized output every run.
-function pfb_dnsbl_norm_reuse_skip(bool $downloaded_fresh, bool $custom, bool $orig_content_stale,
-	bool $norm_changed, bool $txt_exists, bool $staging_current_generation, bool $has_user_script): bool
-{
-	return $downloaded_fresh && !$custom && !$orig_content_stale && !$norm_changed &&
-		$txt_exists && $staging_current_generation && !$has_user_script;
-}
-
-// issue #1797: the IP-loop counterpart of pfb_dnsbl_norm_reuse_skip(). Feeds
-// carrying a user pre/post script never skip -- the scripts' contract is a
-// full pass over the downloaded file every run. issue #3726: DNSBLIP's local
-// copy reads as fresh even on a Reload/Force pass ($reuse_on), which regular
-// rows leave unfresh; it must reparse there or a changed Suppression CIDR Limit
-// never reaches pfB_DNSBLIP_v4.
-function pfb_ip_norm_reuse_skip(bool $downloaded_fresh, bool $custom, bool $orig_content_stale,
-	bool $norm_changed, bool $txt_exists, bool $has_user_script, bool $reuse_on, bool $is_dnsblip): bool
-{
-	return $downloaded_fresh && !$custom && !$orig_content_stale && !$norm_changed &&
-		$txt_exists && !$has_user_script && !($reuse_on && $is_dnsblip);
-}
-
 // issue #1083: a stale-generation rebuild ($stale_generation_rebuild, above) that
 // reparses '.orig' and finds ZERO domains must converge staging to empty -- else the
 // pre-NDJSON '.txt' is never touched, its stale lines are silently double-counted, and
@@ -3168,13 +2850,6 @@ function pfb_dnsbl_stale_rebuild_converge_txt(bool $stale_generation_rebuild, st
 	if ($stale_generation_rebuild) {
 		unlink_if_exists($txt_path);
 	}
-}
-
-// issue #1278: Hold means "download once, never again" (mirrors pfblockerng.php's
-// Hold bypass) -- a stale-generation rebuild (#1083) must never fall through to the
-// network when no '.orig' baseline survives to reparse locally.
-function pfb_dnsbl_hold_stale_rebuild_skip(bool $stale_generation_rebuild, bool $is_hold, bool $orig_exists): bool {
-	return $stale_generation_rebuild && $is_hold && !$orig_exists;
 }
 
 // TRUE iff $vip is a stored VIP id that pfSense no longer knows (get_configured_vip_interface() is NULL).
@@ -9698,7 +9373,7 @@ function pfb_log_trim_margin_pct($raw): int {
 
 // ADR-60 S2.1: where a log type's Y-m-d H:i:s timestamp lives in a line -- a
 // leading line-prefix for the free-text logs, else a fixed CSV field (verified
-// per writer: pfb_logger()/pfb_daemon_filterlog()/pfb_parse_fail_log()/dnsbl.log's
+// per writer: pfb_logger()/pfb_daemon_filterlog()/dnsbl.log's
 // python+PHP writers/pfb_unified_format_ip()'s comma-join).
 function pfb_log_age_field_mode(string $logtype): string {
 	switch ($logtype) {
@@ -10947,36 +10622,6 @@ function pfb_reentry_exec(string $verb, array $args = [], ?string $append_to = N
 		pfb_logger("\nNested pfblockerng.php [ {$verb} ] TIMED OUT after {$secs}s and was killed\n", 2);
 	}
 	return $status;
-}
-
-/*
- * issue #1925: stage the normalized feed for a pre-script and run it. Copies
- * $norm_path to $staged_path and hands the script the copy (in-place rewrite
- * contract unchanged), so neither '.orig' nor '.norm' is ever touched. Honours
- * the exit status (#1927): 'ok' FALSE on copy failure, non-zero exit, or the
- * script deleting its input -- the staged copy is removed and the caller keeps
- * its last known-good staging. On success 'path' is the staged copy to parse.
- */
-function pfb_list_pre_script_run(string $norm_path, string $staged_path, string $script_path,
-    string $script_name, string $header, string $args_tail, ?string $tmo_prefix = NULL): array {
-
-	if (!@copy($norm_path, $staged_path)) {
-		pfb_logger("\n[ {$header} ] pre-script '{$script_name}' could not stage its input; skipping\n", 2);
-		unlink_if_exists($staged_path);
-		return array('ok' => FALSE, 'path' => $norm_path);
-	}
-
-	if (pfb_list_script_exec($script_path, $script_name, 'pre', $header, $args_tail, $tmo_prefix) !== 0) {
-		unlink_if_exists($staged_path);
-		return array('ok' => FALSE, 'path' => $norm_path);
-	}
-
-	if (!file_exists($staged_path)) {
-		pfb_logger("\n[ {$header} ] pre-script '{$script_name}' deleted its staged input\n", 2);
-		return array('ok' => FALSE, 'path' => $norm_path);
-	}
-
-	return array('ok' => TRUE, 'path' => $staged_path);
 }
 
 /*
@@ -12924,19 +12569,6 @@ function pfb_ip_parse_fail_warn($parse_fail, $header) {
 }
 
 
-// issue #1408: the merged CSV parse-failure sink for DNSBL + IP per-line failures.
-// $keep_falsy_line: FALSE (DNSBL callers, default) coerces any falsy $line (incl.
-// '0') to 'null'; TRUE (the IP caller) coerces only the empty string.
-function pfb_parse_fail_log($header, $line, $oline, $logfile, $lineno = '', bool $keep_falsy_line = FALSE) {
-	$line = $keep_falsy_line ? ($line !== '' ? $line : 'null') : ($line ?: 'null');
-	// issue #1004: strip the raw fgets() line's trailing \n and terminate the row here,
-	// so the appended $lineno column can't split the record and empty field0 (ADR-60).
-	$oline = rtrim((string) $oline, "\r\n");
-	$now   = pfb_log_iso_timestamp();
-	$log   = "{$now},{$header},{$line},{$oline},{$lineno}\n";
-	@file_put_contents("{$logfile}", "{$log}", FILE_APPEND);
-}
-
 
 // Map an IP list's vtype ('_v4'/'_v6') to its config section. The download loop
 // runs AFTER the $ip_types collection loop, so $ip_type is left at its last value
@@ -12946,13 +12578,6 @@ function pfb_list_section_for_vtype(string $vtype): string {
 	return ($vtype === '_v6') ? 'pfblockernglistsv6' : 'pfblockernglistsv4';
 }
 
-
-// issue #993: opposite-family predicate extracted for unit coverage. A syntactically
-// valid address of the list's OTHER family is not a parse failure (mixed-family feeds).
-function pfb_ip_is_opposite_family(string $line, string $vtype): bool {
-	return ($vtype === '_v4' && str_contains($line, ':') && validate_ipv6($line)) ||
-		($vtype === '_v6' && !str_contains($line, ':') && validate_ipv4($line));
-}
 
 // Drop the Blacklist categories whose download Failed, matching by feed NAME in the
 // child's output line rather than the stdout-line index. pfblockerng_download_extras
@@ -16326,328 +15951,6 @@ function pfb_dnsbl_unlock_lines() {
 	return $out;
 }
 
-// The address of an ABP '||' / empty-scheme '://' anchor host: port dropped, CIDR honoured
-// (pfb_dnsbl_cidr), URI-bracketed IPv6 unwrapped (#938), padded octets decimal, any client-decoded
-// IPv4 spelling. Address or range string, FALSE for a numeric-shaped but invalid host or CIDR, else ''.
-function pfb_dnsbl_anchor_ip(string $host): string|false {
-	$host = pfb_strip_trailing_port($host);
-	$cidr = pfb_dnsbl_cidr($host);
-	if ($cidr !== NULL) {
-		return $cidr;
-	}
-	$host = pfb_dnsbl_unbracket_ip6($host);
-	$host = pfb_ipv4_unpad($host) ?? $host;
-	if (is_ipaddrv4($host) || is_ipaddrv6($host)) {
-		return $host;
-	}
-	// Only a bare host can be an IPv4 literal; '||example.com/ads/banner.1^' is a path rule.
-	$numeric = str_contains($host, '/') ? NULL : pfb_ipv4_numeric_host($host);
-	if ($numeric !== NULL) {
-		return $numeric['ip'] ?? FALSE;
-	}
-	return '';
-}
-
-// ADR-07: extract an IP from an ABP-anchored / hosts line for the DNSBL-IP
-// firewall pass (coexistence). The raw ABP line itself still flows to Python, which
-// SKIPS IP-valued anchors (parse_abp returns None) -- so IP -> firewall only,
-// domain/regex -> Python only (no double-handling, no leak; ADR-06 fact 7).
-// Recognises:
-//   ||1.2.3.4^            -> '1.2.3.4'   (ABP network anchor with an IP host)
-//   ||1.2.3.4^$options    -> '1.2.3.4'   (options stripped before the IP test)
-//   ||[2001:db8::1]^      -> '2001:db8::1' (URI-bracketed IPv6 anchor, unwrapped)
-//   <sink-ip> <ip>        -> the second token (hosts line whose target is an IP)
-//   ||0xC0A80164^         -> '192.168.1.100' (any IPv4 spelling a client decodes, WHATWG rules)
-//   ||1.2.3.4:8080^       -> '1.2.3.4'   (port dropped)
-//   ||10.0.0.0/8^         -> '10.0.0.0/8' (CIDR kept, FALSE on a bad mask)
-//   ||192.168.010.1^      -> '192.168.10.1' (padded octets are decimal)
-// Returns the IP string when the line carries one, FALSE for a numeric-shaped but invalid
-// '||' anchor ('||192.168.256.1^', to be logged, never passed to Python), else ''.
-function pfb_dnsbl_abp_extract_ip($line) {
-	$s = trim($line);
-	if ($s === '') {
-		return '';
-	}
-
-	// ABP network anchor: ||host^[$options]
-	if (str_starts_with($s, '||')) {
-		$rest	= substr($s, 2);
-		// Drop any $options modifier suffix.
-		if (($dpos = strpos($rest, '$')) !== FALSE) {
-			$rest = substr($rest, 0, $dpos);
-		}
-		// The host is the token before the ABP separator '^'.
-		$host = $rest;
-		if (($cpos = strpos($host, '^')) !== FALSE) {
-			$host = substr($host, 0, $cpos);
-		}
-		return pfb_dnsbl_anchor_ip(trim($host));
-	}
-
-	// hosts line: "<sink-ip> <target>" where the target is itself an IP. Gate on
-	// any whitespace (space OR tab) so tab-delimited hosts entries are not skipped;
-	// preg_split('/\s+/') already handles both.
-	if (preg_match('/\s/', $s)) {
-		$parts = preg_split('/\s+/', $s);
-		if (is_array($parts) && count($parts) >= 2 &&
-		    (is_ipaddrv4($parts[0]) || is_ipaddrv6($parts[0]))) {
-			$target = trim($parts[1]);
-			if (is_ipaddrv4($target) || is_ipaddrv6($target)) {
-				return $target;
-			}
-		}
-	}
-
-	return '';
-}
-
-// issue #3434: '/^A\.B\.C\.D$/' regex rule with one pattern per octet -> the exact merged CIDRs it matches, else [].
-// Parts use only digits, ?*+{},()|-, \d and digit-only [] classes, so the four 0..255 value sets compose exactly; max /16, 256 CIDRs.
-function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
-	if (strlen($line) > 514 || !str_starts_with($line, '/') || !str_ends_with($line, '$/')) {
-		return [];
-	}
-	$limit = ini_set('pcre.backtrack_limit', '10000');
-	$failed = FALSE;
-	set_error_handler(static function () use (&$failed): bool {
-		$failed = TRUE;
-		return TRUE;
-	});
-	try {
-		$inner = substr($line, 1, -2);
-		$anchored = str_starts_with($inner, '^');
-		if ($anchored) {
-			$inner = substr($inner, 1);
-		}
-		// An optional '(.*://)?' or '((w|w?)://)?' can only match empty against a dotted quad.
-		if (preg_match('~^\((?:\.\*|\([A-Za-z]+\??(?:\|[A-Za-z]+\??)*\))://\)\?~', $inner, $m)) {
-			$inner = substr($inner, strlen($m[0]));
-		}
-		$inner = (string) preg_replace('~\((?:\\\\?/|\[:/\])\.\*\)\?$~D', '', $inner, 1);
-
-		$parts = [];
-		$cur = '';
-		$depth = 0;
-		for ($i = 0, $n = strlen($inner); $i < $n; $i++) {
-			$c = $inner[$i];
-			if ($c === '\\') {
-				$token = substr($inner, $i++, 2);
-				if ($token === '\.' && $depth === 0) {
-					$parts[] = $cur;
-					$cur = '';
-				} else {
-					$cur .= $token;
-				}
-				continue;
-			}
-			if ($c === '(') {
-				$depth++;
-			} elseif ($c === ')') {
-				if (--$depth < 0) {
-					return [];
-				}
-			} elseif ($c === '|' && $depth === 0) {
-				return [];
-			}
-			$cur .= $c;
-		}
-		$parts[] = $cur;
-		if ($depth !== 0 || count($parts) !== 4) {
-			return [];
-		}
-		// Without '^' the first octet must be a literal 100-255: no longer octet can end in it.
-		if (!$anchored && !preg_match('/^(?:1\d\d|2[0-4]\d|25[0-5])$/D', $parts[0])) {
-			return [];
-		}
-		foreach ($parts as $part) {
-			if (!preg_match('/^(?:[\d?*+{},()|-]|\\\\d|\[(?:\d-\d|\\\\d|\d)+\])+$/D', $part) || str_contains($part, '(?') || str_contains($part, '{,}')) {
-				return [];
-			}
-			// Brace bounds stay within an octet's 3 digits.
-			foreach (preg_match_all('/\{[^}]*/', $part, $braces) ? $braces[0] : [] as $brace) {
-				if (preg_match_all('/\d+/', $brace, $nums) && max(array_map('intval', $nums[0])) > 3) {
-					return [];
-				}
-			}
-		}
-		// Test seam: forces an internal failure for a rule that passed every check above.
-		if (($GLOBALS['pfb_test_abp_regex_fault'] ?? NULL) instanceof \Throwable) {
-			throw $GLOBALS['pfb_test_abp_regex_fault'];
-		}
-
-		$sets = [];
-		foreach ($parts as $part) {
-			$hits = preg_grep('/^(?:' . $part . ')$/', range(0, 255));
-			if ($hits === FALSE || $hits === [] || preg_last_error() !== PREG_NO_ERROR) {
-				return [];
-			}
-			$sets[] = array_keys($hits);
-		}
-
-		$runs = [];
-		foreach ($sets[3] as $d) {
-			$last = count($runs) - 1;
-			if ($last >= 0 && $runs[$last][1] + 1 === $d) {
-				$runs[$last][1] = $d;
-			} else {
-				$runs[] = [$d, $d];
-			}
-		}
-		if (count($sets[0]) * count($sets[1]) * count($sets[2]) * count($runs) > 65536) {
-			return [];
-		}
-		$merged = [];
-		foreach ($sets[0] as $a) {
-			foreach ($sets[1] as $b) {
-				foreach ($sets[2] as $c) {
-					$base = ($a << 24) | ($b << 16) | ($c << 8);
-					foreach ($runs as [$start, $end]) {
-						$last = count($merged) - 1;
-						if ($last >= 0 && $merged[$last][1] + 1 === $base + $start) {
-							$merged[$last][1] = $base + $end;
-						} else {
-							$merged[] = [$base + $start, $base + $end];
-						}
-						if (count($merged) > 256) {
-							return [];
-						}
-					}
-				}
-			}
-		}
-
-		$cidrs = [];
-		foreach ($merged as [$start, $end]) {
-			foreach (ip_range_to_subnet_array(long2ip($start), long2ip($end)) as $cidr) {
-				if (count($cidrs) >= 256 || (int) substr($cidr, strpos($cidr, '/') + 1) < 16) {
-					return [];
-				}
-				$cidrs[] = $cidr;
-			}
-		}
-		return $failed ? [] : $cidrs;
-	} catch (\Throwable) {
-		try {
-			pfb_logger("\n  ABP IPv4 regex rule expansion failed in [ {$header} ]: " . substr($line, 0, 128), 1);
-		} catch (\Throwable) {
-		}
-		return [];
-	} finally {
-		restore_error_handler();
-		if (is_string($limit)) {
-			ini_set('pcre.backtrack_limit', $limit);
-		}
-	}
-}
-
-
-// Strip a trailing ":<port>" from a host:port feed line (e.g. 'evil.com:8080' ->
-// 'evil.com'), but NEVER from an IPv6 literal: an address like '2001:db8:5::7' ends
-// in ':<hextet>', so the naive /:[0-9]{1,5}$/ rewrite would mangle it into the
-// invalid '2001:db8:5:' -- is_ipaddrv6() then rejects it and the IP is dropped,
-// leaving pfB_DNSBLIP_v6 with only the '::<placeholder>' sentinel (the dual-stack
-// partition smoke regression, ex-issue #35). A valid IPv6 literal carries no
-// host:port, so guarding on is_ipaddrv6() is safe and leaves every non-v6 line
-// (domains, domain:port, IPv4, IPv4:port) stripped exactly as before.
-function pfb_strip_trailing_port($line) {
-	if (!is_ipaddrv6($line) && strpos($line, ':') !== FALSE) {
-		return preg_replace("/:[0-9]{1,5}$/", '', $line);
-	}
-	return $line;
-}
-
-
-// A '://' separates a scheme only when nothing before it is path, query or fragment: the
-// first '://' of a line whose prefix holds none of '/', '?', '#'. FALSE = no scheme separator
-// (an embedded URL such as '?u=http://x' is data of the path/query, not this line's scheme).
-function pfb_dnsbl_scheme_pos(string $line): int|false {
-	$pos = strpos($line, '://');
-	return ($pos !== FALSE && strcspn($line, '/?#') > $pos) ? $pos : FALSE;
-}
-
-
-// ADR-22: the non-lite scheme strip, gated on the 'pfb_dnsbl_lenient' toggle. No scheme
-// separator (pfb_dnsbl_scheme_pos) -> line unchanged. Empty scheme ('://<ip>[^[$opts]]', both
-// modes): an IPv4 literal or a bracketed IPv6 literal, with one trailing '^' or a '^$opts' tail
-// dropped (options are never scanned), returns the bare address; any other empty-scheme
-// remainder is FALSE in strict and returned as-is in lenient. $strict === FALSE (lenient, the
-// migrated/legacy default): strip through the separator (permissive: '123://evil.com',
-// mid-token schemes accepted). $strict === TRUE: the text before '://' must match the RFC 3986
-// scheme grammar; a single trailing '/' is normalised away, any other '/' is a real path ->
-// FALSE. FALSE tells the caller to skip + log the line (ADR §2.3/§2.4).
-function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|false {
-	$pos = pfb_dnsbl_scheme_pos($line);
-	if ($pos === FALSE) {
-		return $line;
-	}
-	$remainder = substr($line, $pos + 3);
-	if ($pos === 0) {
-		$cand = preg_replace('/\^(\$.*)?$/', '', $remainder);
-		$ip = pfb_dnsbl_unbracket_ip6($cand);
-		if ($ip !== $cand || is_ipaddrv4($ip)) {
-			return $ip;
-		}
-		return $strict ? FALSE : $remainder;
-	}
-	if ($strict) {
-		if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', substr($line, 0, $pos))) {
-			return FALSE;
-		}
-		// A single trailing '/' is the root path -- normalise it away.
-		if (str_ends_with($remainder, '/')) {
-			$remainder = substr($remainder, 0, -1);
-		}
-		// Any remaining '/' means an actual path is present -- reject.
-		if (strpos($remainder, '/') !== FALSE) {
-			return FALSE;
-		}
-	}
-	return $remainder;
-}
-
-
-// Issue #938: strip a leading UTF-8 BOM (EF BB BF) -- encoding metadata, not content,
-// the same class of noise pfb_text_sanity() strips up front. Left in place on a feed's
-// first line it defeats the str_starts_with($line, '#') comment check, so a BOM-led '# Title: ...'
-// header is treated as data and error-logged instead of skipped as a comment. Strips
-// exactly ONE BOM (a malformed doubled BOM keeps its second copy rather than looping).
-function pfb_dnsbl_strip_bom(string $line): string {
-	if (str_starts_with($line, "\xEF\xBB\xBF")) {
-		return substr($line, 3);
-	}
-	return $line;
-}
-
-
-// Per-line scrub for the DNSBL feed parse loop (issue #1797). CR is removed
-// EVERYWHERE (a lone CR embeds mid-row after fgets()); the trim charlist is
-// ASCII-only so a byte-wise trim can never slice a multi-byte character and
-// create invalid UTF-8. Unicode whitespace hygiene (trailing NBSP etc.) is
-// the whole-file normalize stage's job. Contract pinned by DnsblScrubLineTest.
-function pfb_dnsbl_scrub_line(string $line): string {
-	if (strpos($line, "\r") !== FALSE) {
-		$line = str_replace("\r", '', $line);
-	}
-	return trim($line, " \t\n\0\x0B");
-}
-
-
-// Issue #938: unwrap a bracketed IPv6 literal ('[2604:2dc0:100:4ed8::]' -> '2604:2dc0:100:4ed8::')
-// so the existing is_ipaddrv6($line) collection branch (feeding $domain_data_ip6) recognises it.
-// is_ipaddrv6() rejects the brackets outright and pfb_filter() rejects it as a domain, so today
-// every such line hits the DNSBL parse-error log on every feed update. Only a '[' ... ']' wrapper
-// around a VALID IPv6 literal is unwrapped; anything else ('[not-an-ip]', '[]', a bracketed IPv4
-// literal -- IPv4 is never bracket-legal here) is returned UNCHANGED and keeps flowing to domain
-// validation (and the parse-error log) exactly as before.
-function pfb_dnsbl_unbracket_ip6(string $line): string {
-	if (str_starts_with($line, '[') && str_ends_with($line, ']')) {
-		$inner = substr($line, 1, -1);
-		if (is_ipaddrv6($inner)) {
-			return $inner;
-		}
-	}
-	return $line;
-}
 
 
 // Decode a host the way the WHATWG URL parser (browsers) and libcurl do, so hex/octal/DWORD and
@@ -16725,18 +16028,6 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 	return array('ip' => long2ip($ip));
 }
 
-
-// A zero-padded all-decimal dotted quad ('192.168.010.1') read with the IP-feed rule (decimal, padded
-// zeros stripped) through pfb_sanitize_ipaddr(); NULL when the sanitized form is not a valid IPv4.
-function pfb_ipv4_unpad(string $host): ?string {
-	if (!preg_match('/^[0-9]+(\.[0-9]+){3}$/D', $host)) {
-		return NULL;
-	}
-	$address = pfb_sanitize_ipaddr($host, TRUE, 'Disabled', PfbToggle::Off)['address'];
-	return is_ipaddrv4($address) ? $address : NULL;
-}
-
-
 // The IPv4 address inside an IPv4-mapped IPv6 literal (::ffff:0:0/96), else NULL. A client
 // connecting to one sends an IPv4 packet, which no v6 table entry matches.
 function pfb_ipv4_from_mapped(string $ip): ?string {
@@ -16752,38 +16043,6 @@ function pfb_ipv4_from_mapped(string $ip): ?string {
 }
 
 
-// A blank line, or one led by a well-known full-line comment marker: '#' (hosts-style),
-// '!' (ABP/uBlock), '//' (C-style) -- the three conventions feeds in this ecosystem mix
-// together regardless of the list's own declared format. Callers whose '#' handling
-// carries side effects (hpHosts/Spamhaus/CSV-header sniffing in the DNSBL hosts-format
-// branch) check '#' themselves first and do not route it through here. The helper strips
-// the line itself (pfb_strip, Unicode class -- issue #1787), so indentation the caller's
-// ASCII trim() can't remove (NBSP et al.) never hides a marker; blank detection is
-// pfb_is_empty()'s exact '' match (empty() would eat the valid line "0").
-function pfb_is_blank_or_comment_line(string $line): bool {
-	$line = pfb_strip($line);
-	return pfb_is_empty($line) ||
-		str_starts_with($line, '#') ||
-		str_starts_with($line, '!') ||
-		str_starts_with($line, '//');
-}
-
-
-// ADR-22: per-line scheme parse for the non-lite download path. Returns the parsed host
-// string to keep, or FALSE when strict parsing rejected the line (invalid scheme or a URL
-// path). On rejection it records the line in the DNSBL parse-error log (the established
-// per-line sink) and increments the per-feed skip counter so the caller can emit one summary
-// WARNING (pfb_dnsbl_scheme_skip_warn) after the feed. In lenient mode it never rejects, so
-// the counter is untouched and no parse-error line is written -- byte-identical to today.
-function pfb_dnsbl_scheme_line(string $line, bool $strict, $header, $oline, $lineno, $logfile, &$skipped): string|false {
-	$stripped = pfb_dnsbl_strip_scheme($line, $strict);
-	if ($stripped === FALSE) {
-		pfb_parse_fail_log($header, $line, $oline, $logfile, $lineno);
-		$skipped++;
-		return FALSE;
-	}
-	return $stripped;
-}
 
 
 // ADR-22: the once-per-feed strict-parsing skip summary. A WARNING to the main pfBlockerNG
@@ -16797,279 +16056,7 @@ function pfb_dnsbl_scheme_skip_warn($skipped, $header) {
 }
 
 
-// issue #995: DNSBL '#'-marker classifier extracted for unit coverage. Flags are
-// report-only (never clear a caller's existing state) -- a plain '#' comment line
-// returns all-false/null and the caller must leave rev_format/csv_type untouched.
-function pfb_dnsbl_hash_line_classify(string $line): array {
-	if (str_contains($line, 'Append critical updates below')) {
-		return ['stop' => TRUE, 'rev_format' => FALSE, 'csv_type' => NULL, 'csv_parser' => FALSE];
-	}
-	$rev_format = str_contains($line, 'The Spamhaus Project Ltd');
-	$csv_type = ($line === '#family,type,url,status,first_seen,'
-			. 'first_active,last_active,last_update') ? 'h3x' : NULL;
-	return ['stop' => FALSE, 'rev_format' => $rev_format, 'csv_type' => $csv_type, 'csv_parser' => ($csv_type === 'h3x')];
-}
 
-
-// ADR-62: the shape shared by the 6 DNSBL IP-collection call sites (3 v4 + 3 v6
-// pairs). Asymmetric by design (kept, not flattened): v4 sanitizes $candidate_value
-// THEN validates the SANITIZED result; v6 validates $candidate_value RAW (never
-// sanitized) and appends it as-is; a CIDR ('a/N') differs: an IPv4-mapped /96../128 is
-// collected as its IPv4 range, any other v6 CIDR is sanitized, and a bare v6 stays raw.
-// $guard_value is the family-check target (equal to
-// $candidate_value at two sites; a distinct CSV column at the pon-feed CSV site).
-// $state['updateip'] and the no-row return differ per call site and stay there;
-// this returns TRUE iff an IP was appended.
-function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value, bool $custom, array &$domain_data_ip, array &$domain_data_ip6): bool {
-	$is_cidr = str_contains($candidate_value, '/');
-	// IPv4-mapped IPv6 is collected as its IPv4 address; a mapped CIDR /96../128 is the IPv4
-	// range of the remaining bits, while a shorter prefix spans more than IPv4 and stays v6.
-	if (is_ipaddrv6($guard_value) && validate_ipv6($candidate_value)) {
-		[$addr, $bits] = $is_cidr ? explode('/', $candidate_value, 2) : [$candidate_value, '128'];
-		if (($mapped = pfb_ipv4_from_mapped($addr)) !== NULL && (int) $bits >= 96) {
-			$guard_value = $mapped;
-			$candidate_value = $is_cidr ? $mapped . '/' . ((int) $bits - 96) : $mapped;
-		}
-	}
-	if (is_ipaddrv4($guard_value)) {
-		$parsed = sanitize_ipaddr($candidate_value, $custom, 'Disabled');
-		// NULL = dropped by suppression.
-		if ($parsed !== NULL && validate_ipv4($parsed)) {
-			$domain_data_ip[] = $parsed;
-			return TRUE;
-		}
-		return FALSE;
-	}
-	if (is_ipaddrv6($guard_value)) {
-		if (!validate_ipv6($candidate_value)) {
-			return FALSE;
-		}
-		// A bare v6 stays raw; a CIDR goes through the sanitizer (mask clamp, canonical form).
-		if ($is_cidr) {
-			$parsed = sanitize_ipaddr_v6($candidate_value, $custom, 'Disabled');
-			if ($parsed === NULL) {
-				return FALSE;
-			}
-			$candidate_value = $parsed;
-		}
-		$domain_data_ip6[] = $candidate_value;
-		return TRUE;
-	}
-	return FALSE;
-}
-
-
-// issue #1118: the 6-type upstream-CSV classify/extract switch, pulled pure out of
-// the download/parse loop's `if ($csv_parser) { ... }` block (mirrors
-// pfb_dnsbl_extract_host()'s sentinel-action pattern). $csv_parser=FALSE is a pure
-// passthrough (nothing ran in the original block either). Every `continue 2` site
-// becomes action='skip' -- pfb_dnsbl_parse_line()'s no-row return replaces it, same as the
-// fail-path (pfb_parse_fail_log() moved in here, mirroring pfb_dnsbl_scheme_line()'s
-// own logging inside pfb_dnsbl_extract_host()).
-function pfb_dnsbl_csv_extract(string $line, array $csvline, string $csv_type, bool $csv_parser,
-	bool $run_once, array $alienvault_types, bool $dnsbl_ip_enabled, bool $custom,
-	array &$domain_data_ip, array &$domain_data_ip6, string $header, string $oline,
-	int $dnsbl_lineno, string $parse_err): array {
-
-	$result = function (string $action, bool $ip_collected = FALSE) use (&$line, &$csv_type,
-		&$csv_parser, &$run_once): array {
-		return ['action' => $action, 'line' => $line, 'csv_type' => $csv_type,
-			'csv_parser' => $csv_parser, 'run_once' => $run_once, 'ip_collected' => $ip_collected];
-	};
-
-	if (!$csv_parser) {
-		return $result('use');
-	}
-
-	$csv_found = FALSE;
-	$csv_count = count($csvline);
-	$ip_collected = FALSE;
-
-	switch ($csv_type) {
-		case 'pt':
-			if ($csv_count == 8) {
-				if (strpos($csvline[1], ' ') !== FALSE) {
-					$line = str_replace(' ', '', $csvline[1]);
-				} else {
-					$line = $csvline[1];
-				}
-				$csv_found = TRUE;
-			}
-			break;
-		case 'bbc':
-			if ($csv_count == 4) {
-				$line		= $csvline[0];
-				$csv_found	= TRUE;
-			}
-			break;
-		case 'h3x':
-			if ($csv_count == 8) {
-				$line		= $csvline[2];
-				if (strpos($line, 'btc://') !== FALSE) {
-					return $result('skip');
-				}
-				$csv_found	= TRUE;
-			}
-			break;
-		case 'otx':
-			if ($csv_count == 3) {
-				if (isset($alienvault_types[$csvline[0]])) {
-					$line		= $csvline[1];
-					$csv_found	= TRUE;
-				} else {
-					return $result('skip');
-				}
-			}
-			break;
-		case 'pon':
-			if ($csv_count == 9) {
-				$line		= $csvline[2];
-				$csv_found	= TRUE;
-
-				// Collect additional IP csv entry (guard value is
-				// csvline[0], the collected value is line).
-				if ($dnsbl_ip_enabled &&
-				    pfb_dnsbl_collect_feed_ip($csvline[0], $line, $custom, $domain_data_ip, $domain_data_ip6)) {
-					$ip_collected = TRUE;
-				}
-			}
-			break;
-		case 'et':
-			if ($csv_count == 3) {
-				$line		= $csvline[0];
-				$csv_found	= TRUE;
-			}
-			break;
-		default:
-
-			// Parse Phishtank Feed
-			if (strpos($line, 'phish_id,url,'
-					. 'phish_detail_url') !== FALSE) {
-				$csv_type = 'pt';
-				return $result('skip');
-			}
-
-			// Parse Bambenek Consulting Feed (issue #1118: guard $csvline[3] -- the
-			// otx/et header lines that reach this sniff are only 3 columns).
-			elseif (strpos($csvline[3] ?? '', 'osint.'
-				. 'bambenekconsulting.com') !== FALSE) {
-				$csv_type	= 'bbc';
-				$line		= $csvline[0];
-				$csv_found	= TRUE;
-			}
-
-			// Parse Alienvault OTX pulse Feed
-			elseif ($line == 'Indicator type,Indicator,'
-					. 'Description') {
-				$csv_type	= 'otx';
-				return $result('skip');
-			}
-
-			// Parse Ponomocup Feed
-			elseif (strpos($csvline[0], 'timestamp') !== FALSE) {
-				$csv_type	= 'pon';
-				return $result('skip');
-			}
-
-			// Parse Proofpoint/ET IQRisk IPRep Feed
-			elseif ($line == 'domain, category, score') {
-				$csv_type	= 'et';
-				return $result('skip');
-			}
-
-			// Reset variables for CSV determination
-			else {
-				$csv_parser = $run_once = FALSE;
-			}
-			break;
-	}
-
-	// Record Failed CSV Parse event
-	if (!$csv_found || empty($csv_type)) {
-		pfb_parse_fail_log($header, '', $oline, $parse_err, $dnsbl_lineno);
-		return $result('skip');
-	}
-
-	return $result('use', $ip_collected);
-}
-
-
-// ADR-62 §2 Decision 4: the universal plain-path control-line skip. Mirrors
-// pfb_is_blank_or_comment_line's contract: the helper strips the line itself
-// (pfb_strip, Unicode class -- issue #1787; blank = pfb_is_empty()'s exact '' match,
-// so the line "0" is data). Deliberately excludes '#' -- pfb_dnsbl_hash_line_
-// classify() owns it (side effects). A bracketed IPv6 literal is an ADDRESS, never
-// skipped as an ABP section marker.
-function pfb_dnsbl_is_skippable_control_line(string $line): bool {
-	$line = pfb_strip($line);
-	if (pfb_is_empty($line) || str_starts_with($line, '!') || str_starts_with($line, '//')) {
-		return TRUE;
-	}
-	if (str_starts_with($line, '[') && str_ends_with($line, ']')) {
-		return pfb_dnsbl_unbracket_ip6($line) === $line;
-	}
-	return FALSE;
-}
-
-
-// ADR-62 §2 Decision 2: the per-line ABP-shape capture guard -- answers "should
-// Python's parse_abp() decide this line?", never parses it itself. Mirrors parse_abp()/
-// _dnsbl_parse_abp_regex()'s recognised shapes: '||'/'@@' anchors, a '/regex/' (optional
-// trailing '$options') block/allow rule, and the element-hiding marker family. A bare
-// domain line is deliberately FALSE (stays on the plain path, delta D1).
-// The element-hiding branch requires everything BEFORE the first marker to be an ABP
-// cosmetic domain-list prefix ([A-Za-z0-9._,~*-]; empty = generic rule) -- a mid-line
-// ' ## ' inline comment (hosts dialect), a '#'-led comment mentioning '##', or a CSV row
-// with a '#'-fragment URL is NOT a cosmetic rule and must keep its plain-path handling
-// (the '#'-classifier's side effects included). '//'-led lines are comments by feed
-// convention, never '/re/' regex rules. A leading ',' is never valid ABP syntax (empty
-// first cosmetic domain-list entry), excluded up front. Kept in lockstep with
-// _dnsbl_is_abp_rule_line().
-// issue #1792: deliberately does NOT self-strip (unlike the pfb_is_blank_or_comment_line
-// family) -- its single caller sits in the parse loop after the per-line scrub, and the
-// Python mirror is pinned row-for-row by the ADR-62 parity oracle; a one-sided strip
-// here would be drift the oracle exists to prevent.
-function pfb_dnsbl_is_abp_rule_line(string $line): bool {
-	// issue #1067: a leading comma is never valid ABP syntax (empty first cosmetic
-	// domain-list entry) -- excluded up front regardless of downstream encoding.
-	if (str_starts_with($line, ',')) {
-		return FALSE;
-	}
-	if (str_starts_with($line, '||') || str_starts_with($line, '@@')) {
-		return TRUE;
-	}
-	if (str_contains($line, '#')) {
-		$first = FALSE;
-		$marker_len = 0;
-		foreach (array('##', '#@#', '#?#', '#%#', '#$#') as $eh_marker) {
-			$pos = strpos($line, $eh_marker);
-			if ($pos !== FALSE && ($first === FALSE || $pos < $first)) {
-				$first = $pos;
-				$marker_len = strlen($eh_marker);
-			}
-		}
-		if ($first !== FALSE) {
-			if ($first === 0) {
-				// issue #1345: position-zero marker comments use Python's exact whitespace set.
-				$after = substr($line, $marker_len);
-				if ($after !== '' &&
-				    preg_match('/\A(?:[\x{0009}-\x{000D}\x{001C}-\x{001F}\x{0085}]|\p{Z})/u', mb_substr($after, 0, 1, 'UTF-8')) !== 1) {
-					return TRUE;
-				}
-			} elseif (strspn($line, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-') >= $first) {
-				return TRUE;
-			}
-		}
-	}
-	if (str_starts_with($line, '/') && !str_starts_with($line, '//')) {
-		if (str_ends_with($line, '/') && strlen($line) > 1) {
-			return TRUE;
-		}
-		$marker = strrpos($line, '/$');
-		return ($marker !== FALSE && $marker > 0);
-	}
-	return FALSE;
-}
 
 
 // ADR-10: atomically publish a file to the chroot (/var/unbound). The same-directory
@@ -21240,240 +20227,6 @@ function pfblockerng_top1m(?array $provider_override = NULL, array $stream_ops=a
 }
 
 
-// Function to remove any leading zeros in octets and to exclude private/reserved addresses.
-// A downloaded feed's explicit /0 is clamped to a single host and logged (issue #744);
-// a custom list's /0 is honored as written. Under Suppression, also drops documentation
-// (RFC 5737), multicast, CGN (RFC 6598), benchmarking (RFC 2544) and the deprecated 6to4
-// relay anycast space that PHP's filter flags leave routable (issue #760).
-function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
-	global $pfb;
-
-	$result = pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, $pfb['supp']);
-	foreach ($result['messages'] as $message) {
-		pfb_logger($message, 1);
-	}
-	return $result['address'];
-}
-
-// IPv6 sibling of sanitize_ipaddr(): logs the sanitizer's messages, returns the address or NULL.
-function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr) {
-	global $pfb;
-
-	$result = pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $pfb['supp']);
-	foreach ($result['messages'] as $message) {
-		pfb_logger($message, 1);
-	}
-	return $result['address'];
-}
-
-/**
- * Normalize one IPv4 entry without reading global state or emitting logs.
- *
- * @return array{address: ?string, messages: list<string>}
- */
-function pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array {
-	$messages = [];
-
-	$parts	= explode('/', $ipaddr, 3);
-	$subnet	= $parts[0];
-	// issue #1933: with more than one '/', $parts[1] is a URL path segment, not
-	// a mask — recover the bare host (the issue #1922 regex mask-guard outcome);
-	// discarding $parts[2..] read the first path segment as the prefix length.
-	$mask	= isset($parts[2]) ? '' : ($parts[1] ?? '');	// '' (not undef) when no CIDR
-
-	// An IPv4 prefix length must be 0..32; drop the line outright. A substring
-	// strip here (str_replace('32', '')) used to rewrite an invalid mask into a
-	// valid, far broader one (/132 -> /1 = half of IPv4) (issue #719).
-	if ($mask !== '' && (!ctype_digit($mask) || (int)$mask > 32)) {
-		return ['address' => NULL, 'messages' => $messages];
-	}
-
-	// An explicit /0 covers the entire IPv4 space and is never honored from a
-	// downloaded feed: clamp to a single host so the address itself stays
-	// blocked (issue #744). Custom-list entries are user-authored, so /0 is
-	// kept as written — except 0.x.x.x, rejected below (issue #1922).
-	if ($mask !== '' && (int)$mask === 0 && !$custom) {
-		// Unlike the v6 sibling, callers reach this before validate_ipv4(), so
-		// $ipaddr is raw feed text — strip control chars to keep the log clean.
-		$messages[] = "\n  Feed /0 CIDR clamped to single host: " . preg_replace('/[[:cntrl:]]/', '', $ipaddr);
-		$mask = '';
-	}
-	$iparr = explode('.', $subnet);
-
-	foreach ($iparr as $key => $octet) {
-		// Remove any leading zeros in octets
-		if ($octet == 0) {
-			$ip[$key] = 0;
-		} else {
-			$ip[$key] = ltrim($octet, '0');
-		}
-
-		if ($key == 3) {
-			// If mask is '24', force 4th octet to '0' (normalise to the
-			// network address). A bare IPv4 with no mask is treated as a
-			// single host (/32) - the trailing '.0' is a valid host, so it
-			// is NOT widened to a /24 (that silently over-blocks 255 extra
-			// addresses; a feed that means the network writes '.0/24').
-			if ($mask == 24 && $octet != 0) {
-				$ip[$key] = 0;
-			}
-		}
-	}
-
-	if ((int)$mask == 32) {
-		$mask = '';	// Strip '/32' mask (bare host)
-	}
-	$ip_final = implode('.', $ip);
-
-	// issue #1922: 0.x.x.x is "this network" (RFC 791) — never a valid entry
-	// under any mask, suppression setting, or list type. Previously gated on
-	// Suppression, which let a 0.0.0.0/0 reach a live WAN block table.
-	if ($ip[0] == 0 || empty($ip[0])) {
-		return ['address' => NULL, 'messages' => $messages];
-	}
-
-	// Exclude private/reserved IPs (bypass exclusion for custom lists)
-	if ($supp === PfbToggle::On && !$custom) {
-
-		// Remove 'loopback' IPs
-		if ($ip[0] == 127) {
-			return ['address' => NULL, 'messages' => $messages];
-		}
-
-		// Advanced IPv4 Tunable (Set CIDR Block size limit)
-		if ($pfbcidr != 'Disabled' && !empty($mask) && $mask < $pfbcidr) {
-			$messages[] = "\n  Suppression CIDR Limit: {$ip_final}/{$mask}";
-			$mask = '32';
-		}
-
-		if (!filter_var($ip_final, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== FALSE) {
-			return ['address' => NULL, 'messages' => $messages];
-		}
-
-		// FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE keep documentation (RFC 5737),
-		// multicast, CGN (RFC 6598), benchmarking (RFC 2544) and the deprecated
-		// 6to4 relay anycast prefix routable; explicit checks close that gap
-		// (issue #760). Judged on the address only, same as the filter above -
-		// the CIDR span is not inspected (issue #760 §4).
-		$long = ip2long($ip_final);
-		if ($long !== FALSE && (
-			($long & 0xffffff00) === 0xc0000200 ||	// 192.0.2.0/24 documentation
-			($long & 0xffffff00) === 0xc6336400 ||	// 198.51.100.0/24 documentation
-			($long & 0xffffff00) === 0xcb007100 ||	// 203.0.113.0/24 documentation
-			($long & 0xf0000000) === 0xe0000000 ||	// 224.0.0.0/4 multicast
-			($long & 0xffc00000) === 0x64400000 ||	// 100.64.0.0/10 CGN
-			($long & 0xfffe0000) === 0xc6120000 ||	// 198.18.0.0/15 benchmarking
-			($long & 0xffffff00) === 0xc0586300	// 192.88.99.0/24 6to4 relay anycast
-		)) {
-			return ['address' => NULL, 'messages' => $messages];
-		}
-	}
-
-	// '!== '' (not !empty()): empty('0') is TRUE, which silently collapsed a
-	// custom list's honored /0 to a bare host (issue #744).
-	if ($mask !== '') {
-		return ['address' => "{$ip_final}/{$mask}", 'messages' => $messages];
-	}
-	return ['address' => "{$ip_final}", 'messages' => $messages];
-}
-
-
-/**
- * Normalize one IPv6 entry without reading global state or emitting logs —
- * the IPv6 sibling of pfb_sanitize_ipaddr(). Excludes private/reserved/loopback
- * IPv6 from loaded block lists when Suppression is enabled ($supp); a feed's
- * explicit /0 clamps to a single host (issue #744). Also drops documentation
- * (RFC 3849), multicast, and the NAT64 prefix (RFC 6052), which PHP's filter
- * flags leave routable (issue #760) — explicit prefix checks so behaviour is
- * independent of PHP's patch level (RFC 6890 moved 2001:db8::/32 between
- * filter sets in 8.3.16/8.4.3). $pfbcidr: per-category Advanced "Suppression
- * CIDR Limit" floor (issue #760 §3). The returned address is the canonical
- * inet_ntop() form (issue #1084): textual variants of one address (case,
- * zero-run, leading zeros) collapse to one string, and an unparseable address
- * is dropped rather than passed through.
- *
- * @return array{address: ?string, messages: list<string>}
- */
-function pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, PfbToggle $supp): array {
-	$messages = [];
-
-	// Extract the address part (before '/' for a CIDR like 'fc00::/7')
-	$parts	= explode('/', $ipaddr);
-	$s_ip	= $parts[0];
-	$mask	= $parts[1] ?? '';
-
-	// issue #1084: single inet_pton() per address, reused by the suppression
-	// reserved-prefix checks below; an unparseable address drops the row. A %zone
-	// form is dropped explicitly first -- inet_pton()'s handling of it is
-	// platform-dependent (FreeBSD/glibc reject it, macOS strips the zone).
-	if (strpos($s_ip, '%') !== FALSE) {
-		return ['address' => NULL, 'messages' => $messages];
-	}
-	$bin = inet_pton($s_ip);
-	if ($bin === FALSE) {
-		return ['address' => NULL, 'messages' => $messages];
-	}
-
-	// An explicit /0 covers the entire IPv6 space and is never honored from a
-	// downloaded feed: clamp to a single host so the address itself stays
-	// blocked (issue #744). Custom-list entries are user-authored, so /0 is
-	// kept as written.
-	$mask_clamped = FALSE;
-	if ($mask !== '' && ctype_digit($mask) && (int)$mask === 0 && !$custom) {
-		$messages[] = "\n  Feed /0 CIDR clamped to single host: {$ipaddr}";
-		$mask_clamped = TRUE;
-	}
-
-	// issue #1922: '::' is never a valid entry under any mask, suppression
-	// setting, or list type — the IPv6 sibling of pfb_sanitize_ipaddr()'s
-	// unconditional 0.x.x.x reject.
-	if ($bin === str_repeat("\x00", 16)) {
-		return ['address' => NULL, 'messages' => $messages];
-	}
-
-	// Exclude private/reserved IPs (bypass exclusion for custom lists)
-	if ($supp === PfbToggle::On && !$custom) {
-
-		// Advanced IPv6 Tunable (Set CIDR Block size limit) (issue #760 §3).
-		// A /0 was already clamped above (mask stays '0', never > 0, so this
-		// guard never double-clamps it). All three feed call sites gate on
-		// validate_ipv6() BEFORE calling this function, so $mask is already
-		// 0-128 here; the ctype_digit()/range checks are defensive redundancy
-		// for any direct caller that skips that guard.
-		if ($pfbcidr != 'Disabled' && $mask !== '' && ctype_digit($mask) && (int)$mask > 0 && (int)$mask < (int)$pfbcidr) {
-			$messages[] = "\n  Suppression CIDR Limit: {$s_ip}/{$mask}";
-			$mask_clamped = TRUE;
-		}
-
-		// Drop ULA (fc00::/7), link-local (fe80::/10), loopback (::1),
-		// IPv4-mapped and the reserved set (mirrors inc:7118-7119).
-		if (!filter_var($s_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) ||
-		    !filter_var($s_ip, FILTER_CALLBACK, array('options' => 'FILTER_FLAG_NO_LOOPBACK_RANGE'))) {
-			return ['address' => NULL, 'messages' => $messages];
-		}
-
-		// The filter flags above keep documentation (2001:db8::/32), multicast
-		// (ff00::/8) and the NAT64 well-known prefix (64:ff9b::/96) routable;
-		// explicit prefix checks close that gap (issue #760). Judged on the
-		// address part only, same as the filter above -- the CIDR span is not
-		// inspected (issue #760 §4).
-		if (substr($bin, 0, 4) === "\x20\x01\x0d\xb8" ||					// 2001:db8::/32 documentation
-			substr($bin, 0, 1) === "\xff" ||								// ff00::/8 multicast
-			substr($bin, 0, 12) === "\x00\x64\xff\x9b" . str_repeat("\x00", 8)	// 64:ff9b::/96 NAT64
-		) {
-			return ['address' => NULL, 'messages' => $messages];
-		}
-	}
-
-	// issue #1084: canonical inet_ntop() form; mask re-appended only when
-	// neither clamp above dropped it.
-	if ($mask !== '' && !$mask_clamped) {
-		return ['address' => inet_ntop($bin) . '/' . $mask, 'messages' => $messages];
-	}
-	return ['address' => inet_ntop($bin), 'messages' => $messages];
-}
-
-
 // Validate IPv4 IP addresses
 function validate_ipv4($ipaddr) {
 	if (str_contains($ipaddr, "\0")) {
@@ -21506,13 +20259,6 @@ function pfb_ip_exact_entry_pattern($entry): ?string {
 	}
 
 	return '^' . str_replace('.', '\.', $entry) . '$';
-}
-
-
-// Function to check for loopback addresses (IPv4 range: 127.0.0.0/8, excluding IPv6)
-function FILTER_FLAG_NO_LOOPBACK_RANGE($value) {
-	// http://www.php.net/manual/en/filter.filters.flags.php
-	return filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? $value : (((ip2long($value) & 0xff000000) == 0x7f000000) ? FALSE : $value);
 }
 
 
@@ -23374,91 +22120,6 @@ function pfb_resolve_relative_url($ref, $base) {
 }
 
 
-// Rebuild an rsync feed source so it connects to the vetted IP instead of the
-// hostname (the guard's pinned address), keeping the module/path intact. Accepts
-// both rsync forms: 'host::module/path' -> 'IP::module/path', and
-// 'rsync://host/path' -> 'rsync://IP/path' (preserving an explicit port and any
-// user@ prefix). Returns '' when the form cannot be parsed to substitute the host
-// (caller fails closed). $ip must be a vetted IP literal.
-function pfb_rsync_pin_url($list_url, $ip) {
-
-	if (!is_string($list_url) || $list_url === '' || !is_string($ip) || $ip === '') {
-		return '';
-	}
-
-	// Bracket an IPv6 literal for the rsync:// (URL) form.
-	$ip_url = (strpos($ip, ':') !== FALSE) ? "[{$ip}]" : $ip;
-
-	// rsync://[user@]host[:port]/path
-	if (stripos($list_url, 'rsync://') === 0) {
-		$rest = substr($list_url, strlen('rsync://'));
-		// Split off the path (everything from the first '/').
-		$slash = strpos($rest, '/');
-		$authority = ($slash === FALSE) ? $rest : substr($rest, 0, $slash);
-		$path = ($slash === FALSE) ? '' : substr($rest, $slash);
-		if ($authority === '') {
-			return '';
-		}
-		// Preserve a 'user@' prefix; drop the host[:port], substitute the IP.
-		$at = strrpos($authority, '@');
-		$userpart = ($at === FALSE) ? '' : substr($authority, 0, $at + 1);
-		$hostport = ($at === FALSE) ? $authority : substr($authority, $at + 1);
-		// Carry over an explicit ':port' (last colon, but not inside an IPv6 [..]).
-		$port = '';
-		if ($hostport !== '' && $hostport[0] !== '[') {
-			$colon = strrpos($hostport, ':');
-			if ($colon !== FALSE) {
-				$port = substr($hostport, $colon);
-			}
-		}
-		return "rsync://{$userpart}{$ip_url}{$port}{$path}";
-	}
-
-	// [user@]host::module/path
-	if (strpos($list_url, '::') !== FALSE) {
-		list($hostpart, $module) = explode('::', $list_url, 2);
-		if ($hostpart === '') {
-			return '';
-		}
-		$at = strrpos($hostpart, '@');
-		$userpart = ($at === FALSE) ? '' : substr($hostpart, 0, $at + 1);
-		return "{$userpart}{$ip}::{$module}";
-	}
-
-	return '';
-}
-
-// Issue #2876: build the rsync feed-transfer spawn under a whole-transfer
-// wall-clock deadline. rsync's own --timeout is a maximum I/O timeout — it
-// fires only when NO data moves for that interval, so a peer that trickles one
-// byte per interval resets it forever and the exec() below would wait
-// unboundedly; the byte ceiling (#2667) bounds disk, not elapsed time. The
-// wrapper is timeout(1) in its DEFAULT (reaper) mode on purpose: rsync may
-// start remote-shell descendants, and a hung transfer must die as a whole tree
-// on expiry (docs/misc/external-process-waits.md "Choosing the mode") —
-// --foreground would kill only the direct child and orphan the rest, whose
-// inherited stdio could even hold exec()'s capture pipe open. The budget is
-// the SAME per-feed whole-transfer deadline the cURL path already applies to
-// the same download (CURLOPT_TIMEOUT, PfbDownloadRequest::$timeout; every
-// caller passes 300), so the two transports for one feed share one settled
-// product value — no new operator setting, floored at one second so a
-// degenerate value can never disable the bound. $pfb['timeout'] and
-// $pfb['rsync_bin'] are the established off-appliance injection points,
-// mirroring pfb_reentry_cmd()'s $pfb['timeout'] / $pfb['php']. $src/$dst
-// arrive unescaped and are escaped here, exactly once.
-function pfb_rsync_transfer_cmd(string $src, string $dst, int $blocks, int $budget): string {
-	global $pfb;
-
-	$timeout_esc = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
-	$rsync_esc   = escapeshellarg($pfb['rsync_bin'] ?? PFB_RSYNC_BIN);
-	$src_esc     = escapeshellarg($src);
-	$dst_esc     = escapeshellarg($dst);
-
-	return pfb_extract_cmd("{$timeout_esc} -s TERM -k " . PFB_HOOK_KILL_GRACE . ' ' .
-		max(1, $budget) . " {$rsync_esc} --timeout=5 {$src_esc} {$dst_esc}", $blocks);
-}
-
-
 // Issue #890: redact the query string and userinfo ('user:pass@') from a feed/download URL
 // before it is written to any log — either can carry a credential, and log files ship inside
 // pfSense support bundles. scheme/host/port/path are kept for diagnosability. A well-formed
@@ -23646,7 +22307,6 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 	$header = $request->header;
 	$format = $request->format;
 	$logtype = $request->logType;
-	$vtype = $request->versionType;
 	$timeout = $request->timeout;
 	$type = $request->type;
 	$username = $request->username;
@@ -23656,26 +22316,12 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 	$top1m_provider = ($type === 'top1m') ? pfb_top1m_active_provider() : array();
 	global $pfb;
 	$http_status = '';
-	$elog = ">> {$pfb['log']} 2>&1";
 	$tar_bin = escapeshellarg($pfb['tar'] ?? '/usr/bin/tar');
 
 	// Remove any leading/trailing whitespace
 	$list_url = trim($list_url);
 
-	// Re-evaluate URL
-	if ($format == 'whois') {
-		if (empty(pfb_filter($list_url, PFB_FILTER_DOMAIN, 'pfb_download'))) {
-			pfb_logger("\n Failed", 2);
-			return PfbDownloadResult::failure();
-		}
-	}
-	elseif ($format == 'asn') {
-		if (empty(pfb_filter($list_url, PFB_FILTER_ALNUM, 'pfb_download'))) {
-			pfb_logger("\n Failed", 2);
-			return PfbDownloadResult::failure();
-		}
-	}
-	elseif (!pfb_filter($list_url, PFB_FILTER_URL, 'pfb_download_failure')) {
+	if (!pfb_filter($list_url, PFB_FILTER_URL, 'pfb_download_failure')) {
 		// Issue #811: land the header-scoped, reason-bearing skip line in the main log
 		// when the feed-host guard is why entry vetting failed (pfb_filter's own reject
 		// line goes to error.log only). See pfb_log_feed_host_reject().
@@ -23708,100 +22354,10 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 		pfb_logger(' ( change check ) ', 1);
 	}
 
-	// Download RSYNC format
-	if ($format == 'rsync') {
-
-		// Apply the same resolve+reject guard before rsync (fail-closed; opt-out
-		// in General settings via 'pfb_feed_internal_filter'), then connect to the
-		// vetted IP rather than the hostname so the exec cannot re-resolve to a
-		// different address between the check and the connect. When the filter is
-		// disabled, skip the guard and pin entirely (pre-filter fetch behaviour).
-		$rsync_src = $list_url;
-		if (pfb_feed_filter_enabled()) {
-			if (strpos($list_url, '::') !== FALSE) {
-				$rsync_host = explode('::', $list_url, 2)[0];	// host::module form
-				// Strip an optional 'user@' prefix from the host component.
-				$at = strrpos($rsync_host, '@');
-				if ($at !== FALSE) {
-					$rsync_host = substr($rsync_host, $at + 1);
-				}
-			} else {
-				$rsync_host = parse_url($list_url, PHP_URL_HOST) ?: '';	// rsync://host/path form
-			}
-			$rsync_reason	= '';
-			$rsync_pinned	= '';
-			if (!pfb_feed_host_allowed($rsync_host, $rsync_reason, $rsync_pinned)) {
-				$log = "\n[ {$header} ] {$rsync_reason} \xe2\x80\x94 skipped\n";
-				pfb_logger("{$log}", "{$logtype}");
-				return PfbDownloadResult::failure();
-			}
-
-			// Pin the connection to the vetted IP (substitute it for the host in the
-			// rsync source). Fail closed if the source form can't be parsed to do so.
-			$rsync_src = pfb_rsync_pin_url($list_url, $rsync_pinned);
-			if ($rsync_src === '') {
-				$log = "\n[ {$header} ] feed host could not be pinned \xe2\x80\x94 skipped\n";
-				pfb_logger("{$log}", "{$logtype}");
-				return PfbDownloadResult::failure();
-			}
-		}
-
-		// issue #2667: bound the rsync ingest path, which writes the fetched body
-		// straight to {file}.raw and was bounded by neither #2658 ceiling. Two halves:
-		//  - kernel backstop: run rsync under pfb_extract_cmd()'s ulimit -f at TWICE
-		//    the ceiling. rsync writes through an atomic temp file and renames only on
-		//    a clean exit, so a body just over the ceiling must still land whole for
-		//    the named check below; the backstop bounds what can hit disk even beyond
-		//    that. Its kill surfaces as rsync's own nonzero exit ("File too large" on
-		//    openrsync, SIGXFSZ status on GNU) -- the existing nonzero-exit gate refuses.
-		//  - named refusal: a body that lands whole but over the ceiling is refused,
-		//    removed, and logged stage=size reason=rsync_too_large, so an operator can
-		//    tell "too large" from any other rsync failure on every platform.
-		// --max-size was rejected: probed, openrsync exits 0 silently when the SOURCE
-		// exceeds it (it bounds per-file transfer, not refusal), so it cannot be the
-		// bound alone. $pfb['rsync_max_bytes'] is the test seam, mirroring #2658's
-		// $pfb['curl_defaults'] ceiling seam.
-		$rsync_ceiling = isset($GLOBALS['pfb']['rsync_max_bytes']) ? (int) $GLOBALS['pfb']['rsync_max_bytes'] : PFB_DOWNLOAD_MAX_BYTES;
-		// exec() returns the command's LAST output line, not its exit status; the
-		// real return code rides in the third argument. Test that, so a normal
-		// rsync transfer (which prints progress/stats) is not mistaken for a failure.
-		// ulimit -f counts 512-byte blocks, so twice the ceiling is ceiling / 256;
-		// integer division keeps the bound exact for every ceiling (a float cast is
-		// undefined once 2 * ceiling leaves the integer range).
-		$rsync_blocks = intdiv($rsync_ceiling, 256);
-		// Issue #2876: the spawn runs under the bounded-wait seam (whole-transfer
-		// wall deadline; see pfb_rsync_transfer_cmd()) — rsync's --timeout=5 stays,
-		// bounding a silent peer, while the wrapper bounds a slow-progress one.
-		exec(pfb_rsync_transfer_cmd($rsync_src, "{$file_dwn}.raw", $rsync_blocks, $timeout), $rsync_output, $rsync_rc);
-		if ($rsync_rc === 0) {
-			clearstatcache(TRUE, "{$file_dwn}.raw");
-			$rsync_size = @filesize("{$file_dwn}.raw");
-			if ($rsync_size === FALSE || $rsync_size > $rsync_ceiling) {
-				pfb_validate_log($header, 'size', 'rsync_too_large', pfb_redact_url($list_url));
-				unlink_if_exists("{$file_dwn}.raw");
-				return PfbDownloadResult::failure();
-			}
-			$http_status = '200';
-		} elseif ($rsync_rc === 124) {
-			// Issue #2876: deadline expiry is its own named failure, in the same
-			// language as every other bounded spawn (timeout(1)'s status, whole
-			// transfer tree reaped): nothing the killed transfer wrote may
-			// survive, and the prior good publication is untouched by the
-			// failure return below.
-			pfb_logger("\n  RSYNC transfer TIMED OUT (killed); discarding its output\n", "{$logtype}");
-			unlink_if_exists("{$file_dwn}.raw");
-			return PfbDownloadResult::failure();
-		} else {
-			$rsync_msg = trim(implode(' ', $rsync_output));
-			$log = "\n  RSYNC Failed (exit {$rsync_rc})" . ($rsync_msg !== '' ? ": {$rsync_msg}" : '') . "...\n";
-			pfb_logger("{$log}", "{$logtype}");
-			return PfbDownloadResult::failure();
-		}
-	}
-	elseif ($format == 'whois' || $format == 'asn') {
-		// Convert a Domain name/AS into its respective IP addresses
-		exec("{$pfb['script']} whoisconvert {$header_esc} {$vtype} {$list_url_esc} {$elog}");
-		return PfbDownloadResult::success();
+	// Feed-only formats: Core's FeedPhase fetches rsync and WHOIS/ASN feeds (#3977); no Extras caller passes them.
+	if (in_array($format, ['rsync', 'whois', 'asn'], TRUE)) {
+		pfb_logger("\n[ {$header} ] format '{$format}' is fetched by Core, not pfb_download()\n", "{$logtype}");
+		return PfbDownloadResult::failure();
 	}
 	else {
 		// Determine if URL is a pfSense localfile
@@ -25111,9 +23667,9 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 
 			// ADR-42 / issue #713 bug 5: refresh the content-hash sidecar at every
-			// successful ingest so pfb_local_feed_changed() / the probe's conditional-GET
+			// successful ingest so the change-detection probe's conditional-GET
 			// compare always land on the SAME domain of bytes the probe hashed.  The probe
-			// (pfb_update_check -> pfb_download(PfbDownloadRequest(type: 'change_detect'))) hashes the RAW
+			// (pfb_download(PfbDownloadRequest(type: 'change_detect'))) hashes the RAW
 			// fetched body (it returns before any decompression), so the persisted digest
 			// here must cover those same raw bytes too -- not the decompressed '.orig' --
 			// or a compressed feed (gz/bz2/zip) never matches and re-ingests every cron.
@@ -26869,7 +25425,7 @@ function pfb_force_clear_validators(array $dirs, bool $clear_hashes): int {
 			}
 		}
 		// issue #1797: also clear the normalize-stage source-digest baselines so
-		// pfb_feed_normalize() fail-safes to 'changed' and the downstream norm-skip
+		// Core's normalize cache fail-safes to 'changed' and the downstream norm-skip
 		// gate cannot defeat a forced reprocess.
 		if ($clear_hashes) {
 			foreach (glob("{$dir}/*.norm.src.xxhash128") ?: array() as $sidecar) {
@@ -26982,51 +25538,6 @@ function pfb_top1m_persist_baseline($base, $raw_path) {
 
 function pfb_top1m_download_ledger_update($download_ok, $ledger_dir, $message = '') {
 	pfb_dnsbl_download_ledger_update((bool) $download_ok, 'top1m', (string) $message, $ledger_dir);
-}
-
-// Extract the local-feed change decision from pfb_update_check() as a named, off-appliance-
-// testable helper. Returns TRUE when the feed changed (re-ingest needed), FALSE when not;
-// never concludes "unchanged" on a read failure — fail-safe. Algorithm (ADR-42 content-hash
-// gate, mtime removed): either file absent -> changed (no baseline); else read the tagged
-// .orig sidecar (sentinel -> live-hash the .orig as baseline; 'md5'/'xxh128' -> sidecar digest
-// compared with the matching hash function); hash the source in the SAME algo; changed =
-// source_hash !== baseline. The sidecar is refreshed at ingest inside pfb_download(), so the
-// baseline is always the last-ingested .orig's hash — else it would go stale and falsely
-// report "changed" every cron after a real re-ingest.
-function pfb_local_feed_changed($source_path, $orig_path) {
-	if (!file_exists($source_path) || !file_exists($orig_path)) {
-		return TRUE;
-	}
-
-	$sidecar = pfb_hash_read($orig_path);
-
-	if ($sidecar['algo'] === 'changed') {
-		// No or corrupt sidecar — fall back to live-hashing the .orig as the baseline.
-		$baseline = pfb_content_hash($orig_path, TRUE);
-		if ($baseline === FALSE) {
-			return TRUE;
-		}
-		$src_hash = pfb_content_hash($source_path, TRUE);
-		if ($src_hash === FALSE) {
-			return TRUE;
-		}
-		return ($src_hash !== $baseline);
-	}
-
-	if ($sidecar['algo'] === 'md5') {
-		$src_hash = @md5_file($source_path);
-		if ($src_hash === FALSE) {
-			return TRUE;
-		}
-		return ($src_hash !== $sidecar['digest']);
-	}
-
-	// 'xxh128' — canonical path.
-	$src_hash = pfb_content_hash($source_path, TRUE);
-	if ($src_hash === FALSE) {
-		return TRUE;
-	}
-	return ($src_hash !== $sidecar['digest']);
 }
 
 // ADR-38 Amendment 1: keep the long-running filterlog daemon's view of the
@@ -28354,11 +26865,6 @@ function pfb_update_autotail(bool $task_running, bool $run_dispatch, bool $logvi
 
 function pfb_feed_pass_exit_code(bool $completed, ?string $deferred_by): int {
 	return $deferred_by !== NULL ? PFB_EXIT_LOCKED : ($completed ? 0 : 1);
-}
-
-function pfb_feed_pass_deferral_message(string $deferred_by): string {
-	$lock = $deferred_by === 'dispatcher-lock' ? 'dispatcher lock' : 'feed-pass lock';
-	return "pfBlockerNG feed pass deferred: {$lock} is held\n";
 }
 
 // issue #1175: cross-process mutual exclusion for a feed pass --
