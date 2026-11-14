@@ -6,6 +6,8 @@ test_core_update.py::test_a_manual_update_leaves_the_schedules_last_run_alone 50
 test_core_update.py::test_a_second_start_update_while_one_runs_gets_conflict 25.00
 test_core_update.py::test_start_update_runs_a_manual_update_and_it_ends_with_its_log 25.00
 test_core_update.py::test_the_tick_does_not_write_the_php_schedule_state 20.00
+test_core_update_parent_death.py 10.00
+test_core_update_parent_death.py::test_the_update_program_dies_with_a_core_that_is_killed 10.00
 test_dns_redirect.py 246.68
 test_dns_redirect.py::test_dns_redirect_answers_foreign_ipv6_resolver_query 25.39
 test_dns_redirect.py::test_dns_redirect_disable_removes_nat_and_filter_rules 3.85
