@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 	"github.com/pfBlockerNG/xxh3"
@@ -22,7 +23,8 @@ var openNormSource = func(path string) (io.ReadCloser, error) { return os.Open(p
 
 // NormalizeFile is the storage half of pfb_feed_normalize() for the feed name in dir, with the same conversion rules as Normalize:
 // the downloaded <name>.orig becomes <name>.norm, rebuilt only when <name>.norm is missing or <name>.norm.src.xxhash128 names
-// another .orig. The .norm is written beside its target and renamed into place.
+// another .orig. The .norm is written to <name>.norm.tmp beside its target and renamed into place; calls in one dir run one at a
+// time under an flock on the dir.
 //
 // The .orig is hashed and converted through bounded streams. The .norm and the sidecar are 0644, as the old path writes them, for a
 // pre-script that drops privileges.
@@ -35,6 +37,16 @@ func NormalizeFile(dir, name string) NormResult {
 	orig, norm := filepath.Join(dir, name+".orig"), filepath.Join(dir, name+".norm")
 	srcBase := filepath.Join(dir, name+".norm.src")
 	fallback := NormResult{Path: orig, Changed: true}
+
+	// Two calls for one feed would share <name>.norm.tmp and pair one call's .norm with the other's sidecar: one call per directory.
+	lock, err := os.Open(dir)
+	if err != nil {
+		return fallback
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fallback
+	}
 
 	srcDigest, err := digest.File(orig)
 	if err != nil {
