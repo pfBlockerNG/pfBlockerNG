@@ -10,5 +10,5 @@ func freeBytes(dir string) (uint64, bool) {
 	if syscall.Statfs(dir, &st) != nil {
 		return 0, false
 	}
-	return uint64(st.Bavail) * uint64(st.Bsize), true
+	return availableBytes(int64(st.Bavail), uint64(st.Bsize))
 }
