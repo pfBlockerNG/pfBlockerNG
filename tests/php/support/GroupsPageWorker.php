@@ -3,19 +3,23 @@
 declare(strict_types=1);
 
 /**
- * Child process for GroupsPageConfigLockTest (issue #3945): runs the Groups pages' real POST/GET code over the PHPUnit doubles,
+ * Child process for GroupsPageConfigLockTest (issue #3945) and BlacklistPageConfigLockTest (issue #3980): runs the Groups pages' and the
+ * DNSBL Category page's real POST/GET code over the PHPUnit doubles,
  * with another request's write (pfBlockerNG Core's settings adapter, shaped like pfb_core_feed_merge()) interleaved at the instant the
  * page reads config.xml afresh. The pages cannot be included whole: they render, and end in exit(). The code is cut out of the shipped
  * source by its anchors: the list page from `pfb_global();` to the render (its empty-row cleanup and the del/update actions), the editor
- * from its custom-list validation (the last check before the writes) to the end of the `save` branch.
+ * from its custom-list validation (the last check before the writes) to the end of the `save` branch, the DNSBL Category page from its
+ * `$_POST` branch to the render (its select option lists run as the page defines them; the providers it discovers from the package
+ * directory are two fixed ones, `ut1` and `other`, with the categories adult, ads and porn).
  *
- * argv: page (`list` | `edit`), scenario, result file, case (JSON, optional): `type` the group type (`dnsbl` | `ipv4` | `geoip`),
+ * argv: page (`list` | `edit` | `blacklist`), scenario, result file, case (JSON, optional): `type` the group type (`dnsbl` | `ipv4` | `geoip`),
  * `post`/`get` the request over the worker's defaults (the editor's save posts, as its form does, `aliasname_loaded`: the name of the group at `rowid`
  * in the config the request read, empty for a free row; a `post` value of null leaves that field out of the request), `emptyFirstRow` the stored list starts with an empty `<config></config>`,
  * `bravoName` the stored name of the second group when it is not Bravo (a name with markup characters: only for scenarios that leave it in place),
  * `ledger` TRUE (an open download entry for DNSBL_Bravo) or a list of group names with one in the sync-status ledger, `core.socket` the Core API socket the notice talks to
  * (default: none listens), `timeline` a file every lock/read/write event is appended to as {"event": ...} (a Core stand-in given the
- * same file as its record puts the notice on the same line of events).
+ * same file as its record puts the notice on the same line of events), and for `blacklist` `arm` (`save`, the default, posts the Save button
+ * with every field; `auto` posts the Enable select alone, as its auto-submit does; `post` still overrides either, null leaves a field out).
  *
  * Scenarios: `plain` (nothing else wrote), `interleave` (Core patched another group and appended a group after this request read
  * config.xml), `row_deleted` (the group this request addresses was removed on disk), `first_deleted` (the first group, Alpha, was
@@ -142,6 +146,12 @@ $GLOBALS['config'] = [];
 global $pfb;
 pfb_global();
 config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/global_log_mode', 'default');	// a migrated policy: the upgrade facade writes nothing
+if ($page === 'blacklist') {
+	config_set_path('installedpackages/pfblockerngblacklist', [
+		'blacklist_enable' => 'Disable', 'blacklist_lang' => 'EN', 'blacklist_selected' => '', 'blacklist_freq' => 'Never', 'blacklist_logging' => 'default',
+		'item' => [['xml' => 'ut1', 'title' => 'UT1', 'selected' => ''], ['xml' => 'other', 'title' => 'Other', 'selected' => '']],
+	]);
+}
 $tmp = $GLOBALS['pfb_test_tmp'];
 $pfb['pending_marker'] = "{$tmp}/pending";
 $pfb['dbdir'] = $tmp;
@@ -189,6 +199,9 @@ if ($type === 'geoip') {
 		$other['installedpackages'][$conf]['config'] = array_values(array_filter($patched, static fn (mixed $g): bool => $g !== []));
 	}
 }
+if ($page === 'blacklist' && $scenario === 'interleave') {
+	$other['installedpackages']['pfblockerngblacklist']['blacklist_freq'] = 'Weekly';	// the adapter patched the category schedule since this request read
+}
 foreach (($case['ledger'] ?? NULL) === TRUE ? ['Bravo'] : (array) ($case['ledger'] ?? []) as $ledgerName) {
 	pfb_sync_status_open('dnsbl', "DNSBL_{$ledgerName}", 'download', 'seeded', $tmp);
 }
@@ -231,6 +244,26 @@ if ($page === 'list') {
 	$_GET = $case['get'] ?? [];
 	$_POST = $case['post'] ?? [];
 	eval(groups_worker_between((string) file_get_contents($repo . '/src/usr/local/www/pfblockerng/pfblockerng_category.php'), "pfb_global();\n", "\$pgtype = 'IP';"));
+	$returned = TRUE;
+	return;
+}
+
+if ($page === 'blacklist') {
+	$source = (string) file_get_contents($repo . '/src/usr/local/www/pfblockerng/pfblockerng_blacklist.php');
+	eval(groups_worker_between($source, "// Select field options\n", "\n// Unconditional"));
+	$blacklist_types = [
+		'ut1'   => ['TITLE' => 'UT1', 'XML' => 'ut1', 'CATEGORIES' => ['adult', 'ads', 'porn']],
+		'other' => ['TITLE' => 'Other', 'XML' => 'other', 'CATEGORIES' => ['adult', 'ads', 'porn']],
+	];
+	$blacklist_options = ['ut1' => 'UT1', 'other' => 'Other'];
+	$pfb['bconfig'] = PfbConfig::readSection('installedpackages/pfblockerngblacklist');
+	$savemsg = '';
+	$_POST = ($case['arm'] ?? 'save') === 'auto' ? ['blacklist_enable' => 'Enable'] : [
+		'save' => 'Save', 'blacklist_enable' => 'Enable', 'blacklist_lang' => 'DE', 'blacklist_selected' => ['ut1'],
+		'blacklist_freq' => 'EveryDay', 'blacklist_logging' => 'default', 'blacklist_ut1' => ['adult'], 'blacklist_other' => ['ads'],
+	];
+	$_POST = array_filter(array_replace($_POST, $case['post'] ?? []), static fn (mixed $value): bool => $value !== NULL);
+	eval(groups_worker_between($source, "\$input_errors = array();\n\n", "\n\$pgtitle = "));
 	$returned = TRUE;
 	return;
 }

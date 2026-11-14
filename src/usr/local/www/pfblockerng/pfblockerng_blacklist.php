@@ -156,152 +156,173 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 	$a_list		= array();
 	$config_mod	= FALSE;
 
-	if (isset($_POST['blacklist_enable'])) {
-		if (!array_key_exists($_POST['blacklist_enable'], $options_blacklist_enable)) {
-			$_POST['blacklist_enable'] = 'Disable';
+	$pfb_config_lock = NULL;
+	$pfb_write_failed = FALSE;
+
+	// issue #3980: Core writes this section under this lock (pfb_core_settings_backend()), so a save is applied to config.xml read
+	// afresh under it and written under it, never to the request's stale copy. A POST that writes nothing takes no lock.
+	if (isset($_POST['blacklist_enable']) || isset($_POST['blacklist_lang']) || isset($_POST['save'])) {
+		$pfb_config_lock = pfb_dns_config_lock();
+		if ($pfb_config_lock === NULL) {
+			$input_errors[] = 'DNSBL Category: another save of the pfSense configuration is in progress, so these settings were not saved. Save again in a moment.';
 		}
-		$pfb['bconfig']['blacklist_enable'] = $_POST['blacklist_enable'];
-		// foreign key: pfblockerngblacklist not in registry; write directly
-		config_set_path('installedpackages/pfblockerngblacklist/blacklist_enable', $pfb['bconfig']['blacklist_enable']);
-		$config_mod = TRUE;
 	}
 
-	if (isset($_POST['blacklist_lang'])) {
-		if (!array_key_exists($_POST['blacklist_lang'], $options_blacklist_lang)) {
-			$_POST['blacklist_lang'] = 'EN';
-		}
-		$pfb['bconfig']['blacklist_lang'] = $_POST['blacklist_lang'];
-		// foreign key: pfblockerngblacklist not in registry; write directly
-		config_set_path('installedpackages/pfblockerngblacklist/blacklist_lang', $pfb['bconfig']['blacklist_lang']);
-		$config_mod = TRUE;
-	}
-
-	if (isset($_POST['save'])) {
-
-		// Validate Select field options
-		$select_options = array (	'blacklist_enable'	=> 'Disable',
-						'blacklist_lang'	=> 'EN',
-						'blacklist_freq'	=> 'Never',
-						'blacklist_logging'	=> 'default',
-						);
-
-		foreach ($select_options as $s_option => $s_default) {
-			if (is_array($_POST[$s_option])) {
-				$_POST[$s_option] = $s_default;
-			}
-			elseif (!array_key_exists($_POST[$s_option], ${"options_$s_option"})) {
-				$_POST[$s_option] = $s_default;
-			}
-		}
-
-		// Validate Select field (array) options
-		if (is_array($_POST['blacklist_selected'])) {
-			foreach ($_POST['blacklist_selected'] as $post_option) {
-				if (!array_key_exists($post_option, $blacklist_options)) {
-					$_POST['blacklist_selected'] = '';
-					break;
+	if ($pfb_config_lock !== NULL) {
+		try {
+			if (isset($_POST['blacklist_enable'])) {
+				if (!array_key_exists($_POST['blacklist_enable'], $options_blacklist_enable)) {
+					$_POST['blacklist_enable'] = 'Disable';
 				}
+				$pfb['bconfig']['blacklist_enable'] = $_POST['blacklist_enable'];
+				// foreign key: pfblockerngblacklist not in registry; write directly
+				config_set_path('installedpackages/pfblockerngblacklist/blacklist_enable', $pfb['bconfig']['blacklist_enable']);
+				$config_mod = TRUE;
 			}
-		}
-		elseif (!array_key_exists($_POST['blacklist_selected'], $blacklist_options)) {
-			$_POST['blacklist_selected'] = '';
-		}
 
-		// foreign keys: pfblockerngblacklist sub-keys not in registry; write directly
-		if (isset($_POST['blacklist_selected'])) {
-			$pfb['bconfig']['blacklist_selected']	= implode(',', (array)$_POST['blacklist_selected'])	?: '';
-			config_set_path('installedpackages/pfblockerngblacklist/blacklist_selected', $pfb['bconfig']['blacklist_selected']);
-		} else {
-			$pfb['bconfig']['blacklist_selected']	= '';
-			config_set_path('installedpackages/pfblockerngblacklist/blacklist_selected', $pfb['bconfig']['blacklist_selected']);
-		}
-		if (isset($_POST['blacklist_freq'])) {
-			$pfb['bconfig']['blacklist_freq']	= $_POST['blacklist_freq']				?: '';
-			config_set_path('installedpackages/pfblockerngblacklist/blacklist_freq', $pfb['bconfig']['blacklist_freq']);
-		}
-		if (isset($_POST['blacklist_logging'])) {
-			$pfb['bconfig']['blacklist_logging']	= $_POST['blacklist_logging']				?: '';
-			config_set_path('installedpackages/pfblockerngblacklist/blacklist_logging', $pfb['bconfig']['blacklist_logging']);
-		}
-
-		$config_mod = TRUE;
-		foreach ($blacklist_types as $type => $setting) {
-			$list = array();
-
-			foreach (array('TITLE', 'XML', 'FEED', 'SIZE') as $value) {
-				$lvalue = strtolower($value);	// Config variables must be in lowercase
-				if (isset($blacklist_types[$type][$value])) {
-					$list[$lvalue] = pfb_filter($blacklist_types[$type][$value], PFB_FILTER_HTML, 'Blacklist category');
+			if (isset($_POST['blacklist_lang'])) {
+				if (!array_key_exists($_POST['blacklist_lang'], $options_blacklist_lang)) {
+					$_POST['blacklist_lang'] = 'EN';
 				}
+				$pfb['bconfig']['blacklist_lang'] = $_POST['blacklist_lang'];
+				// foreign key: pfblockerngblacklist not in registry; write directly
+				config_set_path('installedpackages/pfblockerngblacklist/blacklist_lang', $pfb['bconfig']['blacklist_lang']);
+				$config_mod = TRUE;
 			}
 
-			// Validate List Category selections
-			$validate_categories =  array_flip($blacklist_types[$type]['CATEGORIES']);
-			if (is_array($_POST['blacklist_' . $type])) {
-				if (!empty($_POST['blacklist_' . $type])) {
-					foreach ($_POST['blacklist_' . $type] as $validate) {
-						if (!array_key_exists($validate, $validate_categories)) {
-							$input_errors[] = "[ {$validate} ] is not a valid Selection!";
+			if (isset($_POST['save'])) {
+
+				// Validate Select field options
+				$select_options = array (	'blacklist_enable'	=> 'Disable',
+								'blacklist_lang'	=> 'EN',
+								'blacklist_freq'	=> 'Never',
+								'blacklist_logging'	=> 'default',
+								);
+
+				foreach ($select_options as $s_option => $s_default) {
+					if (is_array($_POST[$s_option])) {
+						$_POST[$s_option] = $s_default;
+					}
+					elseif (!array_key_exists($_POST[$s_option], ${"options_$s_option"})) {
+						$_POST[$s_option] = $s_default;
+					}
+				}
+
+				// Validate Select field (array) options
+				if (is_array($_POST['blacklist_selected'])) {
+					foreach ($_POST['blacklist_selected'] as $post_option) {
+						if (!array_key_exists($post_option, $blacklist_options)) {
+							$_POST['blacklist_selected'] = '';
+							break;
 						}
 					}
 				}
-			}
-			else {
-				if (!empty($_POST['blacklist_' . $type]) && !array_key_exists($_POST['blacklist_' . $type], $validate_categories)) {
-					$input_errors[] = "[ {$_POST['blacklist_' . $type]} ] is not a valid Selection!";
+				elseif (!array_key_exists($_POST['blacklist_selected'], $blacklist_options)) {
+					$_POST['blacklist_selected'] = '';
 				}
-			}
-			$list['selected'] = implode(',', (array)$_POST['blacklist_' . $type]) ?: '';
 
-			if (isset($_POST['blacklist_' . $type . '_username'])) {
-				$list['username'] = pfb_filter($_POST['blacklist_' . $type . '_username'], PFB_FILTER_HTML, 'Blacklist category');
-			}
-
-			if (isset($_POST['blacklist_' . $type . '_password'])) {
-				if ($_POST['blacklist_' . $type . '_password'] == $_POST['blacklist_' . $type . '_password_confirm']) {
-					if ($_POST['blacklist_' . $type . '_password'] != DMYPWD) {
-						$list['password'] = pfb_filter($_POST['blacklist_' . $type . '_password'], PFB_FILTER_HTML, 'Blacklist category');
-					}
+				// foreign keys: pfblockerngblacklist sub-keys not in registry; write directly
+				if (isset($_POST['blacklist_selected'])) {
+					$pfb['bconfig']['blacklist_selected']	= implode(',', (array)$_POST['blacklist_selected'])	?: '';
+					config_set_path('installedpackages/pfblockerngblacklist/blacklist_selected', $pfb['bconfig']['blacklist_selected']);
 				} else {
-					$input_errors[] = "[ {$setting['TITLE']} ] The password does not match the confirm password!";
+					$pfb['bconfig']['blacklist_selected']	= '';
+					config_set_path('installedpackages/pfblockerngblacklist/blacklist_selected', $pfb['bconfig']['blacklist_selected']);
 				}
-			}
+				if (isset($_POST['blacklist_freq'])) {
+					$pfb['bconfig']['blacklist_freq']	= $_POST['blacklist_freq']				?: '';
+					config_set_path('installedpackages/pfblockerngblacklist/blacklist_freq', $pfb['bconfig']['blacklist_freq']);
+				}
+				if (isset($_POST['blacklist_logging'])) {
+					$pfb['bconfig']['blacklist_logging']	= $_POST['blacklist_logging']				?: '';
+					config_set_path('installedpackages/pfblockerngblacklist/blacklist_logging', $pfb['bconfig']['blacklist_logging']);
+				}
 
-			$a_list[] = $list;
-		}
-		$pfb['bconfig']['item'] = $a_list;
-		// foreign structure: pfblockerngblacklist/item is a dynamic per-type list blob, not in registry
-		config_set_path('installedpackages/pfblockerngblacklist/item', $pfb['bconfig']['item']);
+				$config_mod = TRUE;
+				foreach ($blacklist_types as $type => $setting) {
+					$list = array();
 
-		// Check for Large category selections and show savemsg
-		foreach ($blacklist_types as $type => $setting) {
-			if (isset($_POST['blacklist_' . $type])) {
-				foreach (array('porn', 'adult', 'prime') as $cat) {
-					if (in_array($cat, $_POST['blacklist_' . $type])) {
-						$savemsg .= "{$type} category [ " . ucfirst($cat) . " ] enabled.BR";
+					foreach (array('TITLE', 'XML', 'FEED', 'SIZE') as $value) {
+						$lvalue = strtolower($value);	// Config variables must be in lowercase
+						if (isset($blacklist_types[$type][$value])) {
+							$list[$lvalue] = pfb_filter($blacklist_types[$type][$value], PFB_FILTER_HTML, 'Blacklist category');
+						}
+					}
+
+					// Validate List Category selections
+					$validate_categories =  array_flip($blacklist_types[$type]['CATEGORIES']);
+					if (is_array($_POST['blacklist_' . $type])) {
+						if (!empty($_POST['blacklist_' . $type])) {
+							foreach ($_POST['blacklist_' . $type] as $validate) {
+								if (!array_key_exists($validate, $validate_categories)) {
+									$input_errors[] = "[ {$validate} ] is not a valid Selection!";
+								}
+							}
+						}
+					}
+					else {
+						if (!empty($_POST['blacklist_' . $type]) && !array_key_exists($_POST['blacklist_' . $type], $validate_categories)) {
+							$input_errors[] = "[ {$_POST['blacklist_' . $type]} ] is not a valid Selection!";
+						}
+					}
+					$list['selected'] = implode(',', (array)$_POST['blacklist_' . $type]) ?: '';
+
+					if (isset($_POST['blacklist_' . $type . '_username'])) {
+						$list['username'] = pfb_filter($_POST['blacklist_' . $type . '_username'], PFB_FILTER_HTML, 'Blacklist category');
+					}
+
+					if (isset($_POST['blacklist_' . $type . '_password'])) {
+						if ($_POST['blacklist_' . $type . '_password'] == $_POST['blacklist_' . $type . '_password_confirm']) {
+							if ($_POST['blacklist_' . $type . '_password'] != DMYPWD) {
+								$list['password'] = pfb_filter($_POST['blacklist_' . $type . '_password'], PFB_FILTER_HTML, 'Blacklist category');
+							}
+						} else {
+							$input_errors[] = "[ {$setting['TITLE']} ] The password does not match the confirm password!";
+						}
+					}
+
+					$a_list[] = $list;
+				}
+				$pfb['bconfig']['item'] = $a_list;
+				// foreign structure: pfblockerngblacklist/item is a dynamic per-type list blob, not in registry
+				config_set_path('installedpackages/pfblockerngblacklist/item', $pfb['bconfig']['item']);
+
+				// Check for Large category selections and show savemsg
+				foreach ($blacklist_types as $type => $setting) {
+					if (isset($_POST['blacklist_' . $type])) {
+						foreach (array('porn', 'adult', 'prime') as $cat) {
+							if (in_array($cat, $_POST['blacklist_' . $type])) {
+								$savemsg .= "{$type} category [ " . ucfirst($cat) . " ] enabled.BR";
+							}
+						}
 					}
 				}
+				if ($savemsg) {
+					$savemsg .= 'BR Large categories selected: these can use a lot of memory, especially with Wildcard Blocking on.';
+				}
 			}
-		}
-		if ($savemsg) {
-			$savemsg .= 'BR Large categories selected: these can use a lot of memory, especially with Wildcard Blocking on.';
-		}
-	}
 
-	// issue #1496: $input_errors is now unconditionally an array (see top-of-file
-	// init) -- isset() would always be TRUE and permanently block save; empty()
-	// preserves the original "no errors were recorded" semantics.
-	if ($config_mod && empty($input_errors)) {
-
-		$pfb_written = write_config('[ pfBlockerNG ] save DNSBL Category settings');
-		if ($pfb_written !== FALSE && $pfb_written !== -1) {
-			pfb_core_settings_changed(NULL, TRUE);	// Core's scheduler reads these fields; a failure never undoes the save
+			// issue #1496: $input_errors is now unconditionally an array (see top-of-file
+			// init) -- isset() would always be TRUE and permanently block save; empty()
+			// preserves the original "no errors were recorded" semantics.
+			if ($config_mod && empty($input_errors)) {
+				$pfb_written = write_config('[ pfBlockerNG ] save DNSBL Category settings');
+				$pfb_write_failed = pfb_dns_config_write_failed($pfb_written);
+			}
+		} finally {
+			unlock($pfb_config_lock);
 		}
-		pfb_mark_pending_changes();	// applies on the next Update, not on save
-		if ($savemsg) {
-			header("Location: /pfblockerng/pfblockerng_blacklist.php?savemsg={$savemsg}");
-		} else {
-			header('Location: /pfblockerng/pfblockerng_blacklist.php');
+		if ($pfb_write_failed) {
+			$input_errors[] = 'DNSBL Category: the configuration could not be written, so these settings were not saved. Save again in a moment.';
+		} elseif ($config_mod && empty($input_errors)) {
+			pfb_core_settings_changed(NULL, TRUE);	// outside the lock: a slow Core must not hold it; Core's scheduler reads these fields; a failure never undoes the save
+			pfb_mark_pending_changes();	// applies on the next Update, not on save
+			if ($savemsg) {
+				header("Location: /pfblockerng/pfblockerng_blacklist.php?savemsg={$savemsg}");
+			} else {
+				header('Location: /pfblockerng/pfblockerng_blacklist.php');
+			}
+			exit;
 		}
 	}
 }

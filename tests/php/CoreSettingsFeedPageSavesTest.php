@@ -106,7 +106,7 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 				'// Save postdata and Table re-ordering', "\n\t\t\t}\n\t}\n\texit;",
 				['input_errors' => [], 'type' => 'IPv4'], 'pfBlockerNG: Saved page order format/settings for [ IPv4 ]'],
 			'the Blacklist page saves' => [self::BLACKLIST,
-				'if ($config_mod && empty($input_errors)) {', "\t\tif (\$savemsg) {\n\t\t\theader(",
+				"\$pfb_written = write_config('[ pfBlockerNG ] save DNSBL Category settings');", 'if ($savemsg) {',
 				['config_mod' => TRUE], '[ pfBlockerNG ] save DNSBL Category settings'],
 		];
 	}
@@ -119,10 +119,8 @@ final class CoreSettingsFeedPageSavesTest extends TestCase
 		// The editor and update snippets now cross try/finally boundaries: supply their surrounding openers/closers.
 		if ($page === self::EDIT) {
 			$code = 'try {' . $code . "\n}";
-		} elseif (str_starts_with($start, '// Save postdata')) {
+		} elseif (str_starts_with($start, '// Save postdata') || $page === self::BLACKLIST) {
 			$code = 'try { if (TRUE) {' . $code . "\n}";
-		} elseif ($page === self::BLACKLIST) {
-			$code .= "\n}";	// the region ends inside the save's if, before its redirect
 		}
 		$lock = pfb_dns_config_lock();
 		$post = $_POST;
