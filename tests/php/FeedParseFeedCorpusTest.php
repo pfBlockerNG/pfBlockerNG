@@ -444,8 +444,11 @@ final class FeedParseFeedCorpusTest extends TestCase
 	private function withDiagnosticsAsErrors(callable $body): mixed
 	{
 		set_error_handler(static function (int $no, string $str): bool {
-			// A deprecation and a diagnostic the code itself silenced with @ are not results.
-			if (($no & (E_DEPRECATED | E_USER_DEPRECATED)) !== 0 || (error_reporting() & $no) === 0) {
+			// A deprecation and a diagnostic the code itself silenced with @ are not results. PHPUnit lowers error_reporting() to
+			// its unhandleable levels while a test runs, so "& $no" is 0 for every warning; only '@' leaves no bit outside PHP's
+			// insuppressible levels (issue #4001).
+			if (($no & (E_DEPRECATED | E_USER_DEPRECATED)) !== 0
+				|| (error_reporting() & ~(E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR)) === 0) {
 				return TRUE;
 			}
 			throw new RuntimeException("PHP diagnostic while replaying: {$str}");

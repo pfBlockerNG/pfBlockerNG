@@ -142,6 +142,27 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		return date('Y-m-d H:i:s', time());
 	}
 
+	/**
+	 * The PHP warnings $fn raised. An array stored as pfb_log_trim_margin_pct is read as a string by the gateway
+	 * (PfbConfig::read()): PHP's "Array to string conversion" warning is that read, expected, and the only one.
+	 *
+	 * @return list<string>
+	 */
+	private static function warningsDuring(callable $fn): array
+	{
+		$warnings = [];
+		set_error_handler(static function (int $no, string $str) use (&$warnings): bool {
+			$warnings[] = $str;
+			return TRUE;
+		}, E_WARNING);
+		try {
+			$fn();
+		} finally {
+			restore_error_handler();
+		}
+		return $warnings;
+	}
+
 	// -----------------------------------------------------------------------
 	// S2.5 coverage matrix -- log_max_log x log_max_days_log (type 'log', prefix mode)
 	// -----------------------------------------------------------------------
@@ -1196,13 +1217,14 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		$this->setLogCaps('log', '10', '0');
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct', ['50']);
 		$this->ensureLogDir();
-		pfb_global();
+		$warnings = self::warningsDuring(pfb_global(...));
 
 		$logPath = $this->logPath('log');
 		$content = "l0\nl1\nl2\nl3\nl4\n";
 		file_put_contents($logPath, $content);
 
-		pfb_log_mgmt();
+		$warnings = array_merge($warnings, self::warningsDuring(pfb_log_mgmt(...)));
+		$this->assertSame(['Array to string conversion'], array_values(array_unique($warnings)));
 
 		clearstatcache(TRUE, $logPath);
 		$this->assertSame($content, file_get_contents($logPath),
@@ -1279,7 +1301,7 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		$this->setLogCaps('dnslog', '10', '0');
 		config_set_path('installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct', ['50']);
 		$this->ensureLogDir();
-		pfb_global();
+		$warnings = self::warningsDuring(pfb_global(...));
 
 		$logPath = $this->logPath('dnslog');
 		$lines = [];
@@ -1289,7 +1311,8 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		$content = implode("\n", $lines) . "\n";
 		file_put_contents($logPath, $content);
 
-		pfb_log_mgmt();
+		$warnings = array_merge($warnings, self::warningsDuring(pfb_log_mgmt(...)));
+		$this->assertSame(['Array to string conversion'], array_values(array_unique($warnings)));
 
 		clearstatcache(TRUE, $logPath);
 		$this->assertSame($content, file_get_contents($logPath),

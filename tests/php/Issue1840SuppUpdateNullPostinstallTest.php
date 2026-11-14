@@ -180,7 +180,8 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 	 * suppression-body call (pfblockerng_apply.inc:3738 for '_v4', :3760 for '_v6')
 	 * with file_exists()+member_eligible both TRUE. The autorule fields (autoproto,
 	 * autonot, autoaddrnot, agateway, autoports, autoaddr -- each _in/_out) mirror
-	 * a real saved GUI row with every "Advanced" option left off.
+	 * a real saved row with every "Advanced" option left off; like a wizard-made list
+	 * it has aliaslog and no stateremoval.
 	 */
 	private function seedDenyList(string $vtype): void
 	{
@@ -191,6 +192,7 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 			[
 				'action'         => 'Deny_Both',
 				'aliasname'      => 'Issue1840',
+				'aliaslog'       => 'enabled',
 				'autoproto_in'   => '', 'autoproto_out'   => '',
 				'autonot_in'     => '', 'autonot_out'     => '',
 				'autoaddrnot_in' => '', 'autoaddrnot_out' => '',

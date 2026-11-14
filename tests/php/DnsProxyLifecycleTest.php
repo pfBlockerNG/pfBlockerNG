@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/DnsProxyCertificateFixtures.php';
 
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+require_once __DIR__ . '/SyncPrereqSeedTrait.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -36,6 +37,7 @@ use PHPUnit\Framework\TestCase;
 final class DnsProxyLifecycleTest extends TestCase
 {
 	use DnsProxyReadySeedTrait;
+	use SyncPrereqSeedTrait;
 
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 	private const MARKER = '# pfBlockerNG DNS proxy';
@@ -65,6 +67,7 @@ final class DnsProxyLifecycleTest extends TestCase
 			'errlog' => "{$this->tmp}/pfb.err",
 		]);
 		$GLOBALS['config'] = [];
+		$this->seedSyncPrereqs();	// a stopped removal's recovery runs pfb_global()
 		$GLOBALS['pfb_test_service_calls'] = [];
 		$GLOBALS['pfb_test_write_config_calls'] = [];
 		$GLOBALS['pfb_test_unbound_configure_calls'] = [];

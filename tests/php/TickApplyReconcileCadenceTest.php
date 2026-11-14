@@ -2,11 +2,15 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/SyncPrereqSeedTrait.php';
+
 use PHPUnit\Framework\TestCase;
 
 /** Regression reproduction for issue #2100: apply retries must obey their own ledger. */
 final class TickApplyReconcileCadenceTest extends TestCase
 {
+	use SyncPrereqSeedTrait;
+
 	private string $dir;
 	private array $originalPfb;
 	private array $originalConfig;
@@ -27,8 +31,13 @@ final class TickApplyReconcileCadenceTest extends TestCase
 			'errlog' => "{$this->dir}/error.log",
 			'runlog' => "{$this->dir}/run.log",
 			'extraslog' => "{$this->dir}/extras.log",
-		];
+			// What the apply's pfb_global(), pfb_log_mgmt() and certificate refresh read: kept inside the scratch directory
+			'folder_array' => [],
+			'dns_proxy_cert' => "{$this->dir}/tls.pem",
+			'dns_proxy_cert_legacy' => "{$this->dir}/legacy_cert.pem",
+		] + array_fill_keys(['ip_blocklog', 'ip_permitlog', 'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog'], "{$this->dir}/absent.log");
 		$GLOBALS['config'] = [];
+		$this->seedSyncPrereqs();
 		$gen = 'installedpackages/pfblockerng/config/0';
 		config_set_path("{$gen}/pfb_interval", 'Disabled');
 		config_set_path("{$gen}/pfb_quiet_hours", '');

@@ -25,6 +25,9 @@ final class TickSafeSearchFailureTest extends TestCase
 			'errlog'    => "{$this->dir}/error.log",
 			'runlog'    => "{$this->dir}/run.log",
 			'extraslog' => "{$this->dir}/extras.log",
+			// The tick's certificate refresh unlinks these: kept inside the scratch directory
+			'dns_proxy_cert' => "{$this->dir}/tls.pem",
+			'dns_proxy_cert_legacy' => "{$this->dir}/legacy_cert.pem",
 		];
 		$GLOBALS['config'] = [];
 
