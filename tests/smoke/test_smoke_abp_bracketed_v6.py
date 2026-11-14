@@ -1,12 +1,12 @@
 """Live-VM smoke: a bracketed IPv6 ABP anchor in a DNSBL feed lands in ``pfB_DNSBLIP_v6``.
 
 A client dials ``||[2001:db8::1]^`` as 2001:db8::1. With DNSBL IP enabled,
-``pfb_dnsbl_abp_extract_ip()`` unbrackets the ``||`` host and collects it into
+Core's DNSBL parser unbrackets the ``||`` host and collects it into
 ``pfB_DNSBLIP_v6``; the line is not staged for Python. Previously the brackets made
 ``is_ipaddrv6()`` reject it, so the line was staged as an ABP row that ``parse_abp()``
 silently dropped and the address was never firewalled.
 
-The address comes from the RFC 3849 documentation range. ``sanitize_ipaddr()`` drops that
+The address comes from the RFC 3849 documentation range. Core's IP parser drops that
 range only when IP Suppression is on (issue #760); ``deploy()`` pins Suppression off.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke`` in

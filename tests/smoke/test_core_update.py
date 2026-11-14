@@ -306,6 +306,7 @@ def _configure_every_feed_type(vm: SmokeVM, mock_feeds: Any, tag: str) -> tuple[
     return regular, own_less
 
 
+@pytest.mark.timeout(3 * UPDATE_WATCHDOG + 300)
 def test_manual_update_logs_core_dispositions_for_every_feed_type(core_vm: SmokeVM, mock_feeds: Any) -> None:
     """A Core manual Update logs each FeedPhase ID and its disposition for every feed type.
 
@@ -345,6 +346,7 @@ def test_manual_update_logs_core_dispositions_for_every_feed_type(core_vm: Smoke
             assert domain in payloads, f"{path}: expected parsed domain {domain!r}, got {payloads!r}"
 
 
+@pytest.mark.timeout(3 * UPDATE_WATCHDOG + 300)
 def test_retry_update_runs_core_feed_phase_for_every_regular_feed_type(core_vm: SmokeVM, mock_feeds: Any) -> None:
     """A retry Update fetches changed sources through Core and logs each regular feed ID; it is not a scheduled run.
 
@@ -399,6 +401,7 @@ def _arrange_one_feed(vm: SmokeVM, mock_feeds: Any, kind: str, tag: str) -> _One
     return feed
 
 
+@pytest.mark.timeout(3 * UPDATE_WATCHDOG + 300)
 @pytest.mark.parametrize("kind", ["ipv4", "dnsbl"])
 def test_core_http_304_keeps_original_parsed_and_action_files_unrewritten(
     core_vm: SmokeVM, mock_feeds: Any, kind: str
@@ -423,6 +426,7 @@ def test_core_http_304_keeps_original_parsed_and_action_files_unrewritten(
     _assert_feed_disposition(log2, feed.feed_id, "unchanged")
 
 
+@pytest.mark.timeout(3 * UPDATE_WATCHDOG + 300)
 @pytest.mark.parametrize("kind", ["ipv4", "dnsbl"])
 def test_core_failed_transfer_keeps_last_good_files_and_retry_state_until_recovery(
     core_vm: SmokeVM, mock_feeds: Any, kind: str

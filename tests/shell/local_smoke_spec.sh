@@ -346,6 +346,69 @@ FAKEEOF
     End
   End
 
+  Describe '--scheduled-exception'
+    BeforeEach 'clear_scheduled_exception'
+    clear_scheduled_exception() { unset SMOKE_SCHEDULED_EXCEPTION; }
+
+    It 'forwards the explicit allow flag for the single exact scheduled test'
+      When call run_and_diag --ref dummy --scheduled-exception allow --marker smoke --shards 1 \
+          --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include "--scheduled-exception 'allow'"
+      The output should include "--filter 'test_scheduled_update_runs_core_feedphase_for_every_feed_kind'"
+      The output should not include "--shard "
+    End
+
+    It 'does not mint or forward a scheduled exception without the flag'
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should not include '--scheduled-exception'
+      The output should not include 'SMOKE_SCHEDULED_EXCEPTION='
+    End
+
+    Parameters
+      'deny'
+      ''
+      'ALLOW'
+      'allow; exit 0'
+      '$(exit 0)'
+    End
+    It 'rejects a nonliteral allow value before leasing or transporting'
+      When call run_and_diag --ref dummy \
+          --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind \
+          --scheduled-exception "$1"
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+      The output should include 'scheduled-exception'
+    End
+
+    It 'rejects a missing option value before leasing'
+      When call run_and_diag --ref dummy \
+          --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind --scheduled-exception
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+      The output should include 'scheduled-exception'
+    End
+
+    Parameters
+      --marker repo --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      --marker 'smoke or repo' --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      --shards 2 --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      --marker smoke
+      --filter ''
+      --filter test_scheduled_update
+      --filter 'test_scheduled_update_runs_core_feedphase_for_every_feed_kind or test_other'
+    End
+    It 'rejects an exception outside the isolated scheduled selection before leasing'
+      When call run_and_diag --ref dummy --scheduled-exception allow "$@"
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+      The output should include 'scheduled-exception'
+    End
+  End
+
 End
 
 # issue #2780: a missing or abbreviated ref used to lease a box, then git fetch

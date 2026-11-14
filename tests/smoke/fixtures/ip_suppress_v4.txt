@@ -3,7 +3,7 @@
 # killstates/private-exclusion path would otherwise eat it) and, since issue
 # #760 (every test in this module runs with the global Suppression checkbox
 # ON), never RFC 5737/2544 documentation/benchmarking space either --
-# sanitize_ipaddr() now drops those unconditionally under Suppression, which
+# Core's IP parser drops those unconditionally under Suppression, which
 # would silently empty this fixture before it ever reached the pf table. Public,
 # non-reserved space instead (arbitrary RIPE-block octets, chosen only as inert
 # content -- never dialed, and never a harness-meaningful or well-known-resolver

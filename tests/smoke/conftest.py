@@ -314,6 +314,58 @@ class SmokeVM:
                 check=False,
             )
 
+    @contextlib.contextmanager
+    def scheduled_feedphase(self) -> Iterator[None]:
+        """Owner-authorized exception for the isolated, disposable scheduled acceptance leg."""
+        if os.environ.get("SMOKE_SCHEDULED_EXCEPTION") != "allow":
+            raise RuntimeError("scheduled feedphase requires SMOKE_SCHEDULED_EXCEPTION=allow")
+        if not self.vm_pid or not self.log_path:
+            raise RuntimeError("scheduled feedphase requires a disposable VM identity")
+
+        def cron_running() -> bool:
+            status = self.ssh("service cron onestatus")
+            output = status.stdout.strip()
+            if not status.stderr.strip():
+                if status.returncode == 0 and re.fullmatch(r"cron is running as pid [1-9][0-9]*\.", output):
+                    return True
+                if status.returncode == 1 and output == "cron is not running.":
+                    return False
+            raise RuntimeError(f"cron status preflight failed: {status}")
+
+        originally_running = cron_running()
+        if originally_running:
+            stopped = self.ssh("service cron onestop")
+            if stopped.returncode != 0:
+                raise RuntimeError(f"cron stop failed: {stopped}")
+            if cron_running():
+                raise RuntimeError("cron is still running after onestop")
+        print(f"scheduled_feedphase: cron verified stopped; originally_running={originally_running}", flush=True)
+        try:
+            # The ordinary SSH guard stays active; only this fixed internal command is admitted.
+            command = "/bin/rm -f /var/db/pfblockerng/.pfb_cron_disable"
+            with timed(_ssh_timing_label((command,)), min_seconds=step_min_seconds()):
+                removed = subprocess.run(
+                    self.ssh_argv(command), capture_output=True, text=True, timeout=60.0, check=False
+                )
+            if removed.returncode != 0:
+                raise RuntimeError(f"scheduled sentinel removal failed: {removed}")
+            yield
+        finally:
+            restored = self.ssh("/usr/bin/touch /var/db/pfblockerng/.pfb_cron_disable")
+            if restored.returncode != 0:
+                raise RuntimeError(f"scheduled sentinel restoration failed; cron remains stopped: {restored}")
+            exists = self.ssh("test -f /var/db/pfblockerng/.pfb_cron_disable")
+            if exists.returncode != 0:
+                raise RuntimeError(f"scheduled sentinel restoration not verified; cron remains stopped: {exists}")
+            print("scheduled_feedphase: sentinel restored and verified before cron restoration", flush=True)
+            if originally_running:
+                started = self.ssh("service cron onestart")
+                if started.returncode != 0:
+                    raise RuntimeError(f"cron restoration failed: {started}")
+            if cron_running() != originally_running:
+                raise RuntimeError(f"cron restoration state differs from originally_running={originally_running}")
+            print(f"scheduled_feedphase: cron restored; running={originally_running}", flush=True)
+
 
 # --------------------------------------------------------------------------- #
 # Image pull (oras) — ref is a PARAMETER (env), never hardcoded

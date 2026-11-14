@@ -1,7 +1,7 @@
 """Live-VM smoke: numeric URL hosts and IPv4-mapped IPv6 in an IP feed land in the IPv4 alias table.
 
 A client dials ``http://0300.0.02.04/x`` as 192.0.2.4, ``http://0xC6336409/x`` as 198.51.100.9
-and ``http://3405803790/x`` as 203.0.113.14 (WHATWG URL rules). ``pfb_ip_parse_line()`` decodes a
+and ``http://3405803790/x`` as 203.0.113.14 (WHATWG URL rules). Core's IP parser decodes a
 line that starts with ``scheme://`` and has such a host, drops its userinfo and port, and
 ``::ffff:c633:6405`` on a v4 list is its embedded IPv4. Previously the leading-zero host was read
 as decimal, the hex and DWORD hosts were dropped without a log line, and a userinfo decoy

@@ -15,6 +15,7 @@
 #   scripts/local-smoke.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR]
 #                          [--no-two-vm] [--shards N] [--git-remote URL|NAME]
 #                          [--pkgversion V] [--ports-repo R] [--ports-ref REF]
+#                          [--scheduled-exception allow]
 #
 # Required (env):
 #   PFB_BOXES   space-separated ssh targets, e.g. "root@10.0.0.23 root@10.0.0.24"
@@ -40,6 +41,8 @@
 #               fork/mirror whose ref is a different commit (issue #2754).
 #   --marker M  pytest -m marker (default: smoke); see also --filter
 #   --filter EXPR  pytest -k filter expression (optional)
+#   --scheduled-exception allow  only for marker smoke, one shard, and filter
+#               test_scheduled_update_runs_core_feedphase_for_every_feed_kind.
 #   --no-two-vm skip civm image pull and LAN-client tests
 #   --shards N  lease N boxes CONCURRENTLY, each running one module-level shard
 #               (issue #797; see scripts/run-smoke.sh --shard/--shard-total).
@@ -83,6 +86,7 @@
 # POSIX sh; quoted expansions; shellcheck clean.
 
 set -eu
+unset SMOKE_SCHEDULED_EXCEPTION
 
 usage() {
     # Self-terminating: print the header up to (not including) the Test-only
@@ -121,6 +125,7 @@ _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
 _SHARDS=1
+_SCHEDULED_EXCEPTION=""
 # issue #2497: which git remote the BOX fetches the ref (and ci-metadata) from.
 # Per-run, never box state: repointing each box's origin is persistent and invisible
 # in the artifacts, so a forgotten switch-back silently changes every later run.
@@ -136,6 +141,12 @@ while [ "$#" -gt 0 ]; do
         --ports-ref)  shift; _PORTS_REF="$1";  shift ;;
         --marker|-m) shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
+        --scheduled-exception)
+            if [ "${2:-}" != allow ]; then
+                printf 'local-smoke: --scheduled-exception requires literal allow\n' >&2
+                exit 2
+            fi
+            _SCHEDULED_EXCEPTION=allow; shift 2 ;;
         --no-two-vm) _NO_TWO_VM=1;        shift ;;
         --shards)   shift; _SHARDS="$1"; shift ;;
         --git-remote) shift; _GIT_REMOTE="$1"; shift ;;
@@ -145,6 +156,13 @@ while [ "$#" -gt 0 ]; do
         *)  break ;;
     esac
 done
+if [ "$_SCHEDULED_EXCEPTION" = allow ] && {
+    [ "$_MARKER" != smoke ] || [ "$_SHARDS" != 1 ] ||
+    [ "$_FILTER" != test_scheduled_update_runs_core_feedphase_for_every_feed_kind ];
+}; then
+    printf 'local-smoke: --scheduled-exception requires marker smoke, --shards 1, and the exact scheduled feedphase test filter\n' >&2
+    exit 2
+fi
 # An option-shaped --ports-ref would end up as a git argument on the box (sparse-clone-ports.sh
 # refuses it there too): refuse it here, before a box is leased.
 case "$_PORTS_REF" in
@@ -303,6 +321,9 @@ if [ -n "$_PORTS_REF" ]; then
 fi
 if [ -n "$_FILTER" ]; then
     _ob_flags="$_ob_flags --filter '$(_sq "$_FILTER")'"
+fi
+if [ "$_SCHEDULED_EXCEPTION" = allow ]; then
+    _ob_flags="$_ob_flags --scheduled-exception '$(_sq "$_SCHEDULED_EXCEPTION")'"
 fi
 if [ "$_NO_TWO_VM" -eq 1 ]; then
     _ob_flags="$_ob_flags --no-two-vm"

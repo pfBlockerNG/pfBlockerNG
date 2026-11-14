@@ -3,14 +3,14 @@
 A client dials ``||0xC0000204^``, ``0xc6.0x33.0x64.0x9`` and ``203.0.28942`` as the IPv4
 address it decodes under WHATWG URL rules (192.0.2.4, 198.51.100.9, 203.0.113.14). With
 DNSBL IP enabled, pfBlockerNG collects each one into ``pfB_DNSBLIP_v4``:
-``pfb_dnsbl_abp_extract_ip()`` decodes ``||`` anchors, and ``pfb_ipv4_numeric_host()`` decodes
+Core's DNSBL parser decodes ``||`` anchors and numeric hosts on
 plain lines. An ABP ``||ip:port^`` or empty-scheme ``://ip:port^`` anchor drops the port, a
 ``||net/mask^`` anchor is collected as a range, and padded octets are read as decimal, as on the
 plain path; a bad mask is a parse error. None of them is staged for Python. Previously the two
 anchors were staged as ABP rows that ``parse_abp()`` silently dropped, and the two plain
 spellings became domain rules that matched no real traffic.
 
-The addresses come from the RFC 5737/3849 documentation ranges. ``sanitize_ipaddr()`` drops
+The addresses come from the RFC 5737/3849 documentation ranges. Core's IP parser drops
 those ranges only when IP Suppression is on (issue #760); ``deploy()`` pins Suppression off.
 
 DESELECTED from the default ``python -m pytest``; select with ``-k ip_obfuscation``.
