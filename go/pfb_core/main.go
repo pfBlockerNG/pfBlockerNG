@@ -1,7 +1,7 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--feed-orig-dir PATH] [--dnsbl-orig-dir PATH] [--feed-db-dir PATH] [--feed-geoip-dir PATH] [--feed-asn-csv PATH] [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--feed-orig-dir PATH] [--dnsbl-orig-dir PATH] [--feed-db-dir PATH] [--feed-blacklist-dir PATH] [--feed-geoip-dir PATH] [--feed-asn-csv PATH] [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
 //	--state-dir DIR     Core's own storage (its lock core.lock, the settings store settings.json without
@@ -25,7 +25,8 @@
 //	--user-agent STRING what feed hosts are told Core is: no control character
 //	--feed-orig-dir PATH  the absolute IPv4/IPv6 feed baseline directory
 //	--dnsbl-orig-dir PATH the absolute DNSBL feed baseline directory
-//	--feed-db-dir PATH    the absolute package database directory for synthetic DNSBLIP sources
+//	--feed-db-dir PATH      the absolute package database directory for synthetic DNSBLIP sources
+//	--feed-blacklist-dir PATH the absolute package database directory for Blacklist category sources
 //	--feed-geoip-dir PATH the absolute local GeoIP country-feed directory
 //	--feed-asn-csv PATH   the absolute IPinfo ASN ranges file
 //	--allow-uid UID     the privileged caller's uid, read from the kernel's credential of each connection (default 0, root)
@@ -97,7 +98,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 2
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--feed-orig-dir PATH] [--dnsbl-orig-dir PATH] [--feed-db-dir PATH] [--feed-geoip-dir PATH] [--feed-asn-csv PATH] [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--feed-orig-dir PATH] [--dnsbl-orig-dir PATH] [--feed-db-dir PATH] [--feed-blacklist-dir PATH] [--feed-geoip-dir PATH] [--feed-asn-csv PATH] [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)

@@ -197,6 +197,9 @@ const httpStatusNotModified = 304
 func (p *feedPhaseRunner) feedRequest(spec phaseFeed, fetcher *feedfetch.Fetcher) (feedfetch.Request, error) {
 	source := spec.source
 	request := feedfetch.Request{Rsync: spec.format == "rsync", Flex: spec.state == "flex"}
+	if spec.localDir != "" {
+		fetcher.Policy.LocalDirs = addLocalDir(fetcher.Policy.LocalDirs, spec.localDir)
+	}
 	if source == "" && !spec.synthetic {
 		return request, errors.New("empty source")
 	}
@@ -471,7 +474,7 @@ func regularExists(path string) bool {
 }
 
 func clearForcedState(feed feedfetch.Feed, force string) error {
-	for _, suffix := range [...]string{".orig.etag", ".orig.lastmod", ".probe", ".probe.etag", ".probe.lastmod"} {
+	for _, suffix := range [...]string{".orig.etag", ".orig.lastmod", ".probe", ".probe.etag", ".probe.lastmod", ".probe.size"} {
 		if err := removeIfExists(feedPath(feed, suffix)); err != nil {
 			return err
 		}

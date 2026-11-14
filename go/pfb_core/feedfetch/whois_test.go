@@ -81,9 +81,9 @@ func TestWhoisCancelledRunKeepsThePublishedCopyAndLeavesNoMarker(t *testing.T) {
 	}
 }
 
-func TestWhoisRefusesAFeedNameThatIsNotAWord(t *testing.T) {
+func TestWhoisRefusesAnUnsafeFeedName(t *testing.T) {
 	f, feed, _ := whoisFixture(t)
-	for _, name := range []string{"", "../escape", "a/b", "a b", "a.b"} {
+	for _, name := range []string{"", "../escape", "a/b", "a b"} {
 		feed.Name = name
 		if res := f.Whois(context.Background(), feed, feedfetch.WhoisRequest{List: "a.example"}); res.Reason == "" {
 			t.Errorf("feed name %q accepted", name)
@@ -94,6 +94,21 @@ func TestWhoisRefusesAFeedNameThatIsNotAWord(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(feed.Dir); len(entries) != 0 {
 		t.Errorf("a refused name left files in the feed directory: %v", entries)
+	}
+}
+
+func TestWhoisAcceptsFeedNameWithDots(t *testing.T) {
+	f, feed, _ := whoisFixture(t)
+	feed.Name = "a.b"
+	f.Lookup = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("2001:4860:4860::8888")}, nil
+	}
+	got := f.Whois(context.Background(), feed, feedfetch.WhoisRequest{List: "example.org"})
+	if got.Reason != "" || !got.Found {
+		t.Fatalf("Whois with dotted feed name = %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(feed.Dir, "a.b.orig")); err != nil {
+		t.Fatalf("dotted feed baseline: %v", err)
 	}
 }
 

@@ -41,7 +41,7 @@ func TestBlacklistFeedPhaseIDsRejectPathComponents(t *testing.T) {
 func blacklistPhaseTestRunner(t *testing.T, sourceDir, origDir string) *feedPhaseRunner {
 	t.Helper()
 	provider, err := json.Marshal([]any{
-		map[string]any{"id": "work", "title": "Work", "selected": true, "categories": "adult"},
+		map[string]any{"id": "work", "title": "Work", "selected": true, "categories": "adult-category"},
 		map[string]any{"id": "ut2", "title": "UT2", "selected": true, "categories": "a.b_c"},
 	})
 	if err != nil {
@@ -88,32 +88,32 @@ func TestFeedPhaseParsesBlacklistCategoryWithConfiguredTitleAndLocalSource(t *te
 	if err := os.Mkdir(providerDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(providerDir, "work_adult")
+	source := filepath.Join(providerDir, "work_adult_category")
 	if err := os.WriteFile(source, []byte("example.com\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runner := blacklistPhaseTestRunner(t, sourceDir, origDir)
 	var updateLog strings.Builder
 
-	got, err := runner.run(context.Background(), "dnsbl", []string{"blacklist:work:adult"}, "none", &updateLog)
+	got, err := runner.run(context.Background(), "dnsbl", []string{"blacklist:work:adult-category"}, "none", &updateLog)
 	if err != nil || len(got) != 1 || got[0].Disposition != "changed" || got[0].DNSBLRows != 1 {
 		t.Fatalf("blacklist FeedPhase = %+v, %v; want changed with one DNSBL row", got, err)
 	}
-	baseline := filepath.Join(origDir, "Work_adult.orig")
-	parsed := filepath.Join(origDir, "Work_adult.parsed.ndjson")
+	baseline := filepath.Join(origDir, "Work_adult_category.orig")
+	parsed := filepath.Join(origDir, "Work_adult_category.parsed.ndjson")
 	if body, err := os.ReadFile(baseline); err != nil || string(body) != "example.com\n" {
 		t.Fatalf("blacklist baseline = %q, %v; want source bytes", body, err)
 	}
 	if body, err := os.ReadFile(parsed); err != nil || !strings.Contains(string(body), "example.com") {
-		t.Fatalf("blacklist artifact = %q, %v; want Work_adult NDJSON", body, err)
+		t.Fatalf("blacklist artifact = %q, %v; want Work_adult_category NDJSON", body, err)
 	}
 	for _, suffix := range []string{".parsed.v4.ip", ".parsed.v6.ip"} {
-		if _, err := os.Stat(filepath.Join(origDir, "Work_adult"+suffix)); err != nil {
+		if _, err := os.Stat(filepath.Join(origDir, "Work_adult_category"+suffix)); err != nil {
 			t.Fatalf("blacklist family artifact %s: %v", suffix, err)
 		}
 	}
 
-	got, err = runner.run(context.Background(), "dnsbl", []string{"blacklist:work:adult"}, "none", &updateLog)
+	got, err = runner.run(context.Background(), "dnsbl", []string{"blacklist:work:adult-category"}, "none", &updateLog)
 	if err != nil || len(got) != 1 || got[0].Disposition != "unchanged" {
 		t.Fatalf("unchanged blacklist FeedPhase = %+v, %v; want unchanged", got, err)
 	}
@@ -145,23 +145,62 @@ func TestFeedPhaseBlacklistCategoryPreservesDotsInSourceAndHeader(t *testing.T) 
 	}
 }
 
+func TestFeedPhaseUnknownBlacklistProviderOrCategoryKeepsLastKnownGood(t *testing.T) {
+	sourceDir, origDir := t.TempDir(), t.TempDir()
+	providerDir := filepath.Join(sourceDir, "ut2")
+	if err := os.Mkdir(providerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(providerDir, "ut2_a.b_c"), []byte("dot.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := blacklistPhaseTestRunner(t, sourceDir, origDir)
+	header := "UT2_a.b_c"
+	id := "blacklist:ut2:a.b_c"
+	if got, err := runner.run(context.Background(), "dnsbl", []string{id}, "none", &strings.Builder{}); err != nil ||
+		len(got) != 1 || got[0].Disposition != "changed" {
+		t.Fatalf("initial blacklist FeedPhase = %+v, %v", got, err)
+	}
+	paths := []string{header + ".orig", header + ".parsed.ndjson", header + ".parsed.v4.ip", header + ".parsed.v6.ip"}
+	before := make([][]byte, len(paths))
+	for i, name := range paths {
+		var err error
+		before[i], err = os.ReadFile(filepath.Join(origDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, unknown := range []string{"blacklist:missing:a.b_c", "blacklist:ut2:missing"} {
+		got, err := runner.run(context.Background(), "dnsbl", []string{unknown}, "none", &strings.Builder{})
+		if err != nil || len(got) != 1 || got[0].Disposition != "failed" || got[0].Reason != "unknown_category" {
+			t.Fatalf("unknown blacklist ID %q = %+v, %v; want unknown_category", unknown, got, err)
+		}
+		for i, name := range paths {
+			after, err := os.ReadFile(filepath.Join(origDir, name))
+			if err != nil || string(after) != string(before[i]) {
+				t.Fatalf("%s changed after unknown ID %q: %q -> %q (%v)", name, unknown, before[i], after, err)
+			}
+		}
+	}
+}
+
 func TestFeedPhaseMissingBlacklistSourceKeepsLastKnownGoodArtifacts(t *testing.T) {
 	sourceDir, origDir := t.TempDir(), t.TempDir()
 	providerDir := filepath.Join(sourceDir, "work")
 	if err := os.Mkdir(providerDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(providerDir, "work_adult")
+	source := filepath.Join(providerDir, "work_adult_category")
 	if err := os.WriteFile(source, []byte("example.com\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runner := blacklistPhaseTestRunner(t, sourceDir, origDir)
-	got, err := runner.run(context.Background(), "dnsbl", []string{"blacklist:work:adult"}, "none", &strings.Builder{})
+	got, err := runner.run(context.Background(), "dnsbl", []string{"blacklist:work:adult-category"}, "none", &strings.Builder{})
 	if err != nil || len(got) != 1 || got[0].Disposition != "changed" {
 		t.Fatalf("initial blacklist FeedPhase = %+v, %v", got, err)
 	}
-	baseline := filepath.Join(origDir, "Work_adult.orig")
-	parsed := filepath.Join(origDir, "Work_adult.parsed.ndjson")
+	baseline := filepath.Join(origDir, "Work_adult_category.orig")
+	parsed := filepath.Join(origDir, "Work_adult_category.parsed.ndjson")
 	beforeBaseline, err := os.ReadFile(baseline)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +213,7 @@ func TestFeedPhaseMissingBlacklistSourceKeepsLastKnownGoodArtifacts(t *testing.T
 		t.Fatal(err)
 	}
 
-	got, err = runner.run(context.Background(), "dnsbl", []string{"blacklist:work:adult"}, "none", &strings.Builder{})
+	got, err = runner.run(context.Background(), "dnsbl", []string{"blacklist:work:adult-category"}, "none", &strings.Builder{})
 	if err != nil || len(got) != 1 || got[0].Disposition != "failed" || got[0].Stage != "probe" || got[0].Reason == "" {
 		t.Fatalf("missing blacklist source = %+v, %v; want a named probe failure", got, err)
 	}

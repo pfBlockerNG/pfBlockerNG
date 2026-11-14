@@ -12,6 +12,7 @@ func scheduleProjection() Projection {
 	}, slotFields()...)
 	provider := []Field{
 		{Name: "id", Type: TypeString, Default: "", Pattern: `^[A-Za-z0-9_-]+$`, Reserved: []string{"0"}},
+		{Name: "title", Type: TypeString, Default: ""},
 		{Name: "selected", Type: TypeBool, Default: false},
 		{Name: "categories", Type: TypeString, Default: "", Pattern: `^[A-Za-z0-9_,.-]*$`}, // the provider's chosen categories, comma-separated
 	}
