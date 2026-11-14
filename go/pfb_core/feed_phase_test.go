@@ -259,6 +259,40 @@ func TestFeedPhaseHoldsDisabledBaselineAndWithoutBaseline(t *testing.T) {
 	}
 }
 
+func TestFeedPhaseParseWithoutBaselineIngestsThenParses(t *testing.T) {
+	var requests, conditional atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("If-None-Match") != "" {
+			conditional.Add(1)
+		}
+		w.Header().Set("ETag", `"new"`)
+		_, _ = w.Write([]byte("203.0.113.7\n"))
+	}))
+	defer server.Close()
+	runner := feedPhaseTestRunner(t, "ipv4", "enabled", "auto", server.URL+"/feed", "")
+	runner.fetcher.RetryDelay = time.Nanosecond
+
+	got, err := runner.run(context.Background(), "ip", []string{"ipv4:feed_v4"}, "parse", &strings.Builder{})
+	if err != nil || len(got) != 1 || got[0].Disposition != "changed" || got[0].Stage != "parse" ||
+		!got[0].SourceChanged || got[0].Entries != 1 {
+		t.Fatalf("FeedPhase(parse) without a baseline = %+v, %v; want fetched and parsed changed feed", got, err)
+	}
+	if requests.Load() != 1 || conditional.Load() != 0 {
+		t.Fatalf("FeedPhase(parse) without a baseline made %d requests (%d conditional), want one unconditional ingest",
+			requests.Load(), conditional.Load())
+	}
+	for path, want := range map[string]string{
+		filepath.Join(runner.flags.OrigDir, "feed_v4.orig"):      "203.0.113.7\n",
+		filepath.Join(runner.flags.OrigDir, "feed_v4.parsed.ip"): "203.0.113.7\n",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v; want %q", path, got, err, want)
+		}
+	}
+}
+
 func TestResolveListScriptMatchesOutpostContainmentCases(t *testing.T) {
 	root := t.TempDir()
 	primary, legacy, outside := filepath.Join(root, "list_scripts"), filepath.Join(root, "legacy"), filepath.Join(root, "outside")

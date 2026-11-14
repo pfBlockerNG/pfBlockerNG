@@ -53,7 +53,7 @@ func (p *feedPhaseRunner) runFeed(ctx context.Context, spec phaseFeed, force str
 	origPath := feedPath(feed, ".orig")
 	hasOrig := regularExists(origPath)
 	if force == "parse" && !hasOrig {
-		return failedFeed(spec.id, "probe", "baseline_missing")
+		force = "download"
 	}
 	if spec.state == "hold" && force != "parse" {
 		if !hasOrig || spec.preScript == "" {
