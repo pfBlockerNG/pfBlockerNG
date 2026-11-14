@@ -456,7 +456,7 @@ The required request shape is:
 | `token` | Required string of exactly 64 lowercase hexadecimal characters; the 32 random bytes Core added to this Update's stdin. |
 | `phase` | Required enum: `dnsbl` or `ip`. |
 | `feeds` | Required array of at most 1024 distinct IDs; each is at most 64 ASCII bytes. Unknown or wrong-phase IDs are rejected. |
-| `force` | Required enum matching this Update's force: `none`, `parse`, `download` or `both`. |
+| `force` | Required enum matching this Update's force: `none` probes (FTP ingests directly), `parse` reparses the baseline, `download` clears validators before ingest, and `both` also clears hashes. |
 
 Feed IDs use the scheduler's stable forms: `dnsbl:<header>`, `ipv4:<header>_v4`, `ipv6:<header>_v6`. The header is a non-empty
 ASCII word (`[A-Za-z0-9_]+`). A custom group uses `custom:dnsbl:<group>`, `custom:ipv4:<group>` or `custom:ipv6:<group>`, where
@@ -464,6 +464,7 @@ the group is the same kind of word. The synthetic DNSBL-IP rows are `synthetic:i
 `synthetic:ipv6:DNSBLIP_v6`. The DNSBL phase accepts regular and custom DNSBL IDs; the IP phase accepts regular and custom
 IPv4/IPv6 IDs plus the synthetic IDs.
 The Update program calls DNSBL first, builds DNSBLIP, then calls the IP phase. The method deadline is 4 hours.
+FTP sources skip `Probe` and are ingested directly; feedfetch's FTP probe is unsupported, so each such phase reports a change.
 Before requesting the IP phase, the Outpost must run its existing `asn_shell scheduled` step when any named feed has format
 `whois` or `asn`, or a named group uses `whoisConvert`, and `asn.csv` is missing. If it remains unavailable, Core returns a
 failed `whois` result with reason `asn_database_missing`; a WHOIS batch that resolves other entries keeps its partial publication.
@@ -476,7 +477,7 @@ result always has these fields:
 | `id` | The requested ID, a string of 1–64 ASCII bytes. |
 | `disposition` | `changed`, `unchanged`, `failed`, `held` or `reparsed`. |
 | `stage` | `""`, `settings`, `probe`, `fetch`, `whois`, `normalize`, `script`, `parse` or `publish`. |
-| `reason` | String of at most 64 ASCII bytes; empty or a Core-owned reason code, never caller data, a URL, credential or filesystem path. |
+| `reason` | At most 64 ASCII bytes; empty, a Core reason code or a feedfetch refusal/status reason, never a URL, credential, filesystem path or caller data. |
 | `entries`, `parseFailures`, `mappedDrops`, `dnsblRows`, `ipv4Count`, `ipv6Count`, `schemeSkipped` | Non-negative JSON integers; zero when not applicable. |
 | `suppressed`, `updateIP`, `hpHostsStop`, `preScriptFailed`, `sourceChanged`, `normalizedChanged` | JSON booleans. |
 | `placeholder` | `""`, `empty` or `suppressed`. For an IP result PHP supplies its configured placeholder IP when this is not empty. |

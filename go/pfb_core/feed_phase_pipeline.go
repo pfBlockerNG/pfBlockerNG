@@ -139,7 +139,7 @@ func (p *feedPhaseRunner) runFeed(ctx context.Context, spec phaseFeed, force str
 				probe := fetcher.Probe(ctx, feed, request)
 				switch {
 				case !probe.OK || probe.Decision == feedfetch.Failed:
-					return failedFeed(spec.id, "probe", "feed_probe_failed")
+					return failedFeed(spec.id, "probe", safeFeedfetchReason(probe.Reason, "feed_probe_failed", spec, fetcher))
 				case probe.Decision == feedfetch.Unchanged:
 					// NormalizeFile below decides whether the cached artifacts are reusable.
 				default:
@@ -150,7 +150,7 @@ func (p *feedPhaseRunner) runFeed(ctx context.Context, spec phaseFeed, force str
 					ingested := fetcher.Ingest(ctx, feed, request)
 					if !ingested.OK {
 						backup.keepAbsent(feedPath(feed, ".orig.etag"), feedPath(feed, ".orig.lastmod"))
-						return failedFeed(spec.id, "fetch", "feed_fetch_failed")
+						return failedFeed(spec.id, "fetch", safeFeedfetchReason(ingested.Reason, "feed_fetch_failed", spec, fetcher))
 					}
 					sourceChanged = ingested.Status != httpStatusNotModified
 				}
@@ -167,7 +167,7 @@ func (p *feedPhaseRunner) runFeed(ctx context.Context, spec phaseFeed, force str
 				ingested := fetcher.Ingest(ctx, feed, request)
 				if !ingested.OK {
 					backup.keepAbsent(feedPath(feed, ".orig.etag"), feedPath(feed, ".orig.lastmod"))
-					return failedFeed(spec.id, "fetch", "feed_fetch_failed")
+					return failedFeed(spec.id, "fetch", safeFeedfetchReason(ingested.Reason, "feed_fetch_failed", spec, fetcher))
 				}
 				sourceChanged = ingested.Status != httpStatusNotModified
 			}
@@ -226,6 +226,29 @@ func (p *feedPhaseRunner) feedRequest(spec phaseFeed, fetcher *feedfetch.Fetcher
 		request.BindAddr = address
 	}
 	return request, nil
+}
+
+func safeFeedfetchReason(reason, fallback string, spec phaseFeed, fetcher *feedfetch.Fetcher) string {
+	if len(reason) == 0 || len(reason) > 64 {
+		return fallback
+	}
+	for i := range reason {
+		if reason[i] < 0x20 || reason[i] > 0x7e || reason[i] == '/' || reason[i] == '\\' {
+			return fallback
+		}
+	}
+	username, password, _ := strings.Cut(spec.credentials, ":")
+	if username != "" && strings.Contains(reason, username) || password != "" && strings.Contains(reason, password) {
+		return fallback
+	}
+	if fetcher.Proxy != nil && fetcher.Proxy.User != nil {
+		username := fetcher.Proxy.User.Username()
+		password, _ := fetcher.Proxy.User.Password()
+		if username != "" && strings.Contains(reason, username) || password != "" && strings.Contains(reason, password) {
+			return fallback
+		}
+	}
+	return reason
 }
 
 func familySuffix(kind string) string {
