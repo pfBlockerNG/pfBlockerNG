@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -112,9 +113,9 @@ func scheduleModel(st *settings.Store) func() (schedule.Model, error) {
 	}
 }
 
-// updateMethods are the three Update and schedule methods over sched and gate (docs/misc/core-api-protocol.md, "Update and
+// updateMethods are the Update, feed phase and schedule methods over sched and gate (docs/misc/core-api-protocol.md, "Update and
 // schedule"). Without a scheduler (no --update-cmd) each answers unavailable.
-func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]method {
+func updateMethods(sched *scheduler.Scheduler, gate *update.Gate, feeds *feedPhaseRunner) map[string]method {
 	methods := map[string]method{
 		"StartUpdate": {mutating: true, call: func(_ context.Context, params []byte) (any, error) {
 			var p struct {
@@ -156,6 +157,64 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 				return nil, newError(codeUnavailable, err.Error())
 			}
 			return struct{}{}, err
+		}},
+		"FeedPhase": {mutating: true, timeout: feedPhaseTimeout, call: func(ctx context.Context, params []byte) (any, error) {
+			var p struct {
+				RequestID string    `json:"requestId"`
+				Token     string    `json:"token"`
+				Phase     string    `json:"phase"`
+				Feeds     *[]string `json:"feeds"`
+				Force     string    `json:"force"`
+			}
+			if err := decodeParams(params, &p); err != nil {
+				return nil, err
+			}
+			bad := []fieldError(nil)
+			if !validFeedPhaseToken(p.Token) {
+				bad = append(bad, fieldError{Field: "token", Message: "must be 64 lower-case hexadecimal characters"})
+			}
+			if p.Phase != "dnsbl" && p.Phase != "ip" {
+				bad = append(bad, fieldError{Field: "phase", Message: "must be dnsbl or ip"})
+			}
+			if !slices.Contains([]string{"none", "parse", "download", "both"}, p.Force) {
+				bad = append(bad, fieldError{Field: "force", Message: "must be none, parse, download or both"})
+			}
+			if p.Feeds == nil {
+				bad = append(bad, fieldError{Field: "feeds", Message: "required and must be a list"})
+			} else if len(*p.Feeds) > maxFeedPhaseFeeds {
+				bad = append(bad, fieldError{Field: "feeds", Message: fmt.Sprintf("must hold at most %d ids", maxFeedPhaseFeeds)})
+			} else {
+				seen := make(map[string]struct{}, len(*p.Feeds))
+				for i, id := range *p.Feeds {
+					if len(id) > maxFeedPhaseIDLength || !validFeedPhaseID(p.Phase, id) {
+						bad = append(bad, fieldError{Field: fmt.Sprintf("feeds[%d]", i), Message: "is not a valid id for this phase"})
+					}
+					if _, ok := seen[id]; ok {
+						bad = append(bad, fieldError{Field: fmt.Sprintf("feeds[%d]", i), Message: "duplicates an earlier feed id"})
+					}
+					seen[id] = struct{}{}
+				}
+			}
+			if bad != nil {
+				return nil, newError(codeInvalidArgument, "the FeedPhase request is not valid", bad...)
+			}
+			result, err := gate.WithFeedPhase(ctx, p.Token, func(ctx context.Context, req update.Request, log *os.File) (any, error) {
+				if p.Force != req.Force {
+					return nil, newError(codeInvalidArgument, "force must match the running Update", fieldError{Field: "force", Message: "does not match the Update"})
+				}
+				if !updatePhaseAllowed(req, p.Phase) {
+					return nil, newError(codeInvalidArgument, "the phase is outside the running Update scope", fieldError{Field: "phase", Message: "is outside the Update scope"})
+				}
+				results, err := feeds.run(ctx, p.Phase, *p.Feeds, p.Force, log)
+				if err != nil {
+					return nil, newError(codeUnavailable, "the feed phase could not read Core settings")
+				}
+				return FeedPhaseResponse{Results: results}, nil
+			})
+			if errors.Is(err, update.ErrFeedPhaseUnauthorized) {
+				return nil, newError(codeUnauthenticated, "FeedPhase needs the token of the running Update")
+			}
+			return result, err
 		}},
 		"GetUpdate": {call: func(_ context.Context, params []byte) (any, error) {
 			var p struct {

@@ -79,6 +79,7 @@ func newError(code, message string, fields ...fieldError) *apiError {
 // run at most once per requestId (replay.go).
 type method struct {
 	mutating bool
+	timeout  time.Duration // 0: defaultMethodTimeout
 	call     func(ctx context.Context, params []byte) (any, error)
 }
 
@@ -330,8 +331,18 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 		s.write(w, errorResponse(e))
 		return
 	}
+	timeout := m.timeout
+	if timeout <= 0 {
+		timeout = defaultMethodTimeout
+	}
+	if timeout > defaultWriteTimeout {
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(timeout + defaultWriteTimeout)); err != nil {
+			s.write(w, errorResponse(newError(codeInternal, "the method's write deadline could not be extended")))
+			return
+		}
+	}
 	if !m.mutating {
-		ctx, cancel := context.WithTimeout(r.Context(), defaultMethodTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		s.write(w, s.call(ctx, name, m, body))
 		return
@@ -343,7 +354,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	// A mutating method runs to its end even when its caller goes away: its result is what a retry of the requestId gets
 	run := func() response {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), defaultMethodTimeout)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
 		defer cancel()
 		return s.call(ctx, name, m, body)
 	}

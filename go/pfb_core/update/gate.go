@@ -2,6 +2,9 @@ package update
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +28,8 @@ var (
 	// ErrDeferred is what a RunFunc returns when the Update chose not to run now (Command.Run: the program's exit status 75): it
 	// is not a failure, and it reported nothing. The gate ends such an Update with the result "skipped".
 	ErrDeferred = errors.New("the Update was deferred")
+
+	ErrFeedPhaseUnauthorized = errors.New("FeedPhase needs the token of the running Update")
 )
 
 // Request is what an Update runs; the JSON is the program's stdin (with "version":1 added).
@@ -34,6 +39,7 @@ type Request struct {
 	Force   string   `json:"force,omitempty"` // "none", "parse", "download", "both"
 	Feeds   []string `json:"feeds,omitempty"`
 	Extras  []string `json:"extras,omitempty"`
+	Token   string   `json:"token,omitempty"`
 }
 
 // Result is what the program reports on fd 3.
@@ -73,11 +79,17 @@ type Gate struct {
 
 	admit sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
 
-	mu      sync.Mutex // everything below, and the log's truncation
-	status  *Status    // replaced when the Update ends, never changed in place: View hands it out
-	gen     int64      // the number of Starts before the current Update: its cursors differ from every earlier Update's
-	cancel  context.CancelFunc
-	stopped bool
+	mu          sync.Mutex // everything below, and the log's truncation
+	status      *Status    // replaced when the Update ends, never changed in place: View hands it out
+	gen         int64      // the number of Starts before the current Update: its cursors differ from every earlier Update's
+	cancel      context.CancelFunc
+	stopped     bool
+	phaseMu     sync.Mutex
+	activeToken string
+	activeReq   Request
+	activeCtx   context.Context
+	activeLog   *os.File
+	phaseOpen   bool
 }
 
 // New returns an idle Gate. Start creates logPath (0600) if it is missing; run executes an Update; done (may be nil) is
@@ -106,8 +118,16 @@ func (g *Gate) Start(req Request) error {
 	if g.status != nil {
 		g.gen = (g.gen + 1) & genMask
 	}
+	var token [32]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		log.Close()
+		g.admit.Unlock()
+		return fmt.Errorf("the Update token could not be generated: %w", err)
+	}
+	req.Token = hex.EncodeToString(token[:])
 	ctx, cancel := context.WithCancel(context.Background())
 	g.cancel = cancel
+	g.activeToken, g.activeReq, g.activeCtx, g.activeLog, g.phaseOpen = req.Token, req, ctx, log, true
 	g.status = &Status{Trigger: req.Trigger, Scope: req.Scope, Force: req.Force, StartedAt: time.Now().Unix()}
 	go g.execute(ctx, cancel, req, log)
 	return nil
@@ -115,9 +135,18 @@ func (g *Gate) Start(req Request) error {
 
 func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Request, log *os.File) {
 	res, err := g.run(ctx, req, log)
-	finished := time.Now().Unix()
+	g.mu.Lock()
+	g.phaseOpen = false
+	g.mu.Unlock()
 	cancel()
+	g.phaseMu.Lock()
+	defer g.phaseMu.Unlock()
+	g.mu.Lock()
+	g.activeToken, g.activeReq, g.activeCtx, g.activeLog = "", Request{}, nil, nil
+	g.mu.Unlock()
+	finished := time.Now().Unix()
 	_ = log.Close()
+	req.Token = ""
 	if g.done != nil {
 		g.done(req, res, err)
 	}
@@ -134,6 +163,24 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Reque
 	g.status = &ended
 	g.admit.Unlock() // under mu: no Start can see the gate free while the status still says running
 	g.mu.Unlock()
+}
+
+// WithFeedPhase authorizes one synchronous phase call while its Update program is still running.
+func (g *Gate) WithFeedPhase(ctx context.Context, token string, run func(context.Context, Request, *os.File) (any, error)) (any, error) {
+	g.phaseMu.Lock()
+	defer g.phaseMu.Unlock()
+	g.mu.Lock()
+	if !g.phaseOpen || len(token) != len(g.activeToken) || subtle.ConstantTimeCompare([]byte(token), []byte(g.activeToken)) != 1 {
+		g.mu.Unlock()
+		return nil, ErrFeedPhaseUnauthorized
+	}
+	updateCtx, req, log := g.activeCtx, g.activeReq, g.activeLog
+	g.mu.Unlock()
+	callCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(updateCtx, cancel)
+	defer stop()
+	defer cancel()
+	return run(callCtx, req, log)
 }
 
 // View: Running; Update (nil until the first Start of this process; the last one stays readable after it finishes);
