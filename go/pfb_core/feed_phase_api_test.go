@@ -51,3 +51,27 @@ func TestFeedPhaseRequiresTheCurrentUpdateToken(t *testing.T) {
 		t.Fatalf("FeedPhase with an ended Update's token succeeded: %s", got.body)
 	}
 }
+
+func TestFeedPhaseAcceptsCurrentApplyUpdateToken(t *testing.T) {
+	c, f := startUpdateCore(t)
+	t.Cleanup(f.release)
+	wantJSON(t, c.post("StartUpdate", `{"requestId":"feed-phase-apply","trigger":"apply"}`), 200, `{}`)
+	var request struct {
+		Token string `json:"token"`
+	}
+	waitFor(t, func() bool {
+		if _, err := os.Stat(f.dir + "/req"); err != nil {
+			return false
+		}
+		return json.Unmarshal([]byte(f.request()), &request) == nil && len(request.Token) == 64
+	})
+
+	body := `{"requestId":"apply-token","token":"` + request.Token + `","phase":"ip","feeds":[],"force":"none"}`
+	got := c.post("FeedPhase", body)
+	if got.status != 200 {
+		t.Fatalf("FeedPhase with the active apply token = %d %s, want 200", got.status, got.body)
+	}
+	sameJSON(t, string(got.body), `{"results":[]}`)
+	f.release()
+	c.waitFinished("apply")
+}
