@@ -178,20 +178,37 @@ final class TriggerAdaptersTest extends TestCase
 	/**
 	 * Non-deprecated verbs return '' (no warning).
 	 *
-	 * The strings 'cron', 'noupdates', '', and unknown verbs are NOT deprecated; they must
+	 * The strings 'noupdates', '', and unknown verbs are NOT deprecated; they must
 	 * return an empty string so sync_package_pfblockerng() skips the log call.
 	 *
-	 * RED before Phase 3: function undefined (fatal error).
+	 * `cron` is a separate deprecated CLI adapter and has its own warning assertion.
 	 */
 	public function testNonDeprecatedVerbsHaveNoWarningMessage(): void
 	{
-		foreach (['cron', 'noupdates', '', 'bogus', 'CRON', 'pfb_trigger'] as $verb) {
+		foreach (['noupdates', '', 'bogus', 'CRON', 'pfb_trigger'] as $verb) {
 			$msg = pfb_verb_deprecation_warning($verb);
 			$this->assertSame('', $msg,
 				"verb '{$verb}' must produce no deprecation warning\ngot: " . json_encode($msg));
 		}
 	}
 
+
+	public function testCronDeprecationWarningNamesItsCoreReplacementAndCliHelp(): void
+	{
+		$this->assertSame(
+			"DEPRECATED: pfblockerng verb 'cron' — use explicit request (pfb_trigger scope=both force=false trigger=cron); removal scheduled",
+			pfb_verb_deprecation_warning('cron')
+		);
+
+		$cli = file_get_contents(__DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php');
+		$this->assertIsString($cli);
+		$this->assertStringContainsString(
+			'DEPRECATED CLI verb: pfblockerng.php cron. Use pfb_trigger scope=both force=false trigger=cron.',
+			$cli
+		);
+		$this->assertStringContainsString('pfb_verb_deprecation_warning($argv[1])', $cli);
+		$this->assertStringContainsString('pfb_logger("{$pfb_deprecation_warning}\\n", 1);', $cli);
+	}
 	/**
 	 * Each deprecated verb warning mentions its canonical replacement args.
 	 *
@@ -201,6 +218,7 @@ final class TriggerAdaptersTest extends TestCase
 	public function testDeprecatedVerbWarningsMentionReplacementArgs(): void
 	{
 		$expected_hints = [
+			'cron'        => 'scope=both force=false trigger=cron',
 			'update'      => 'scope=both force=false trigger=manual',
 			'updateip'    => 'scope=ip force=true trigger=force',
 			'updatednsbl' => 'scope=dnsbl force=true trigger=force',
