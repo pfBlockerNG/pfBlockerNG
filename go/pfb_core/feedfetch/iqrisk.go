@@ -20,6 +20,7 @@ import (
 )
 
 var maxXLSXAddresses = 10_000_000
+
 const xlsxAddressChunk = 1 << 18
 
 var (
