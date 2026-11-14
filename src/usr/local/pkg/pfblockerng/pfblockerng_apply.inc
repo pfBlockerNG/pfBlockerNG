@@ -249,7 +249,7 @@ function pfb_ip_feed_phase_id(array $list, array $row, string $header): ?string
 		if (!is_string($group) || preg_match('/\A[A-Za-z0-9_]+\z/', $group) !== 1) {
 			return NULL;
 		}
-		$id = "custom:{$family}:{$group}";
+		$id = $vtype === '_v4' ? "custom:ipv4:{$group}" : "custom:ipv6:{$group}";
 	} else {
 		$id = pfb_schedule_feed_id($family, $header);
 	}
@@ -4303,7 +4303,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							continue;
 						}
 						pfb_logger("\n[ {$header} ]{$logtab} FeedPhase {$disposition}.", 1);
-						$parsed_file = "{$file_dwn}.parsed.ip";
+						$parsed_file = $list['vtype'] === '_v4'
+							? "{$pfborig}/{$row['header']}_v4.parsed.ip"
+							: "{$pfborig}/{$row['header']}_v6.parsed.ip";
 						$parsed_size = @filesize($parsed_file);
 						if (!is_file($parsed_file) || !is_int($parsed_size)) {
 							$pfb_dl_failed = TRUE;
