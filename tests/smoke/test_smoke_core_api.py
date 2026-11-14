@@ -12,6 +12,8 @@
   entry.
 * issue #3908: two ``start`` calls at once leave one supervisor, the one the daemon pidfile names, and Core answers
   afterwards: the start is serialized by a lock and returns once the pidfile names the supervisor;
+* issue #3982: the package's pfb-core and pfb-dns, every architecture's, carry Go build info naming the Go minor their
+  module's go.mod declares (x/net picks its IDNA tables by compiler, so the minor decides the Unicode version served);
 
 The module deploys the branch package once; its install starts the service, and the socket is awaited (bounded) before
 anything is asked of it.
@@ -21,9 +23,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import time
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -55,6 +59,35 @@ NOBODY_GROUP = 65534  # the group of the user `nobody`
 CORE_DAEMON_PID = "/var/run/pfb_core_daemon.pid"
 # The rc script's supervisor as pgrep -f finds it: by daemon(8)'s title, or by its command line until the title is set
 SUPERVISORS = r"{ /bin/pgrep -f '^daemon: pfb_core\[' ; /bin/pgrep -f '^/usr/sbin/daemon .*-t pfb_core ' ; }"
+ROOT = Path(__file__).resolve().parents[2]
+# issue #3982: each shipped Go binary, by the module it is built from; all architectures ship (the package is NO_ARCH)
+GO_BINARIES = {
+    f"/usr/local/pkg/pfblockerng/{directory}/bin/freebsd-{arch}/{name}": module
+    for directory, name, module in (("core", "pfb-core", "pfb_core"), ("dns_proxy", "pfb-dns", "pfb_dns_gateway"))
+    for arch in ("amd64", "arm64")
+}
+# Go's build info (debug/buildinfo), read on the box, which has no `go`: a 16-byte-aligned 14-byte magic, then pointer
+# size and flags; flag 2 (every Go since 1.18) puts the toolchain version and the module info inline from offset 32,
+# each a uvarint-length string, the module info between two 16-byte sentinels
+BUILDINFO_PHP = r"""
+$info = [];
+foreach (array_slice($argv, 1) as $path) {
+    $b = (string) @file_get_contents($path);
+    $magic = "\xff Go buildinf:";
+    for ($at = strpos($b, $magic); $at !== false && $at % 16; $at = strpos($b, $magic, $at + 1));
+    if ($at === false || !(ord($b[$at + 15]) & 2)) { $info[$path] = null; continue; }
+    $p = $at + 32;
+    $read = [];
+    for ($k = 0; $k < 2; $k++) {
+        for ($n = 0, $s = 0; ($c = ord($b[$p++])) & 0x80; $s += 7) { $n |= ($c & 0x7f) << $s; }
+        $n |= $c << $s;
+        $read[] = substr($b, $p, $n);
+        $p += $n;
+    }
+    $info[$path] = ['go' => $read[0], 'mod' => substr($read[1], 16, -16)];
+}
+echo json_encode($info, JSON_INVALID_UTF8_SUBSTITUTE);
+"""
 
 
 @pytest.fixture(scope="module")
@@ -467,3 +500,26 @@ def test_the_settings_adapter_reads_and_writes_as_core_runs_it(core_vm: SmokeVM)
     finally:
         h.config_restore_state(core_vm, HSTS, original)
         tell_core(core_vm)
+
+
+def declared_go_minor(module: str) -> str:
+    """The Go minor go/<module>/go.mod declares (its `go 1.N.P` directive), as a toolchain names it: go1.N."""
+    go_mod = (ROOT / "go" / module / "go.mod").read_text(encoding="utf-8")
+    directives = re.findall(r"^go (\S+)$", go_mod, re.MULTILINE)
+    assert len(directives) == 1, f"go/{module}/go.mod: go directives {directives}"
+    return "go" + ".".join(directives[0].split(".")[:2])
+
+
+def test_the_packaged_go_binaries_are_built_with_the_go_minor_their_module_declares(core_vm: SmokeVM) -> None:
+    """The binaries the install left, read on the box: a builder whose Go differs from the module's minor fails here."""
+    shown = core_vm.ssh(f"{PHP} -r {shlex.quote(BUILDINFO_PHP)} {' '.join(GO_BINARIES)}", timeout=120)
+    assert shown.returncode == 0, f"reading the build info: rc={shown.returncode}\n{shown.stdout}\n{shown.stderr}"
+    info = json.loads(shown.stdout)
+    for path in GO_BINARIES:
+        print(f"PFB_GO_BUILDINFO {path}: {info.get(path)}", flush=True)
+    wrong = {}
+    for path, module in GO_BINARIES.items():
+        built = (info.get(path) or {}).get("go", "no Go build info")
+        if built.split(".")[:2] != declared_go_minor(module).split("."):
+            wrong[path] = f"expected {declared_go_minor(module)} (go/{module}/go.mod), actual {built}"
+    assert wrong == {}, "binaries built with another Go minor:\n" + "\n".join(f"{p}: {w}" for p, w in wrong.items())
