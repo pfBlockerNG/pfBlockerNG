@@ -1,0 +1,46 @@
+{
+ "schema": 1,
+ "description": "D05: an address counts only as a whole word (grep -w): not after a letter or an underscore, not before one, not with a four-digit group.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list.zip": {
+    "body_b64": "UEsDBBQAAAAIAAAAIVCFIQ82QQEAADECAAAJAAAAbGlzdC54bHN4C/BmZhFhYGDgAGLFgMMvkn0NgSx9IBYG4mjn/LyS1LyS+JDKgtTiWL2K3JzNG9efOBuo4a2rde7M+c2hRleMA4I8znqf8z95xnt7KBdv4eWtAZu2b+ZcqeOhe237YyaGABQbmBg35KYBWQuBGCRakaNfnJFYlJoSXFKUmZdeDLIits+Tq8FAgGW/0RPGuT5C5h0fNR8dbH7A5Hbk+ewjzRqstTPaXhXe3XqmpK96xratojyqVu+dLJJ87snWaQQscvINv6/gvKaXVb1DMuqwRIS3qJGtZMqcHqGZOv0nHx3eH1bJdrZ6+steaVR3WTTJ/zIBsoyAmB/irvL8ouyk/PxsEnyteV7/lN+p8+ehHmdkEmHGHbgwsISRAXtQoxuAHnYIA5JwhCS6Cei+RJjwC9PPAd6sbCBJZiA8AHIh2J0AUEsBAhQDFAAAAAgAAAAhUIUhDzZBAQAAMQIAAAkAAAAAAAAAAAAAAKQBAAAAAGxpc3QueGxzeFBLBQYAAAAAAQABADcAAABoAQAAAAA="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list.zip",
+   "expect": {
+    "ok": true,
+    "published": "06.7.8.9\n11.22.33.44\n3.3.3.3\n4.4.4.4\n",
+    "digest": "de39611989be96d908c4e032c7500e18",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list.zip"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "raw_retained": true
+   }
+  }
+ ]
+}
