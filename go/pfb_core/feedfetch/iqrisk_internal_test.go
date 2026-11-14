@@ -69,6 +69,21 @@ func TestXLSXRefusesPastTheDistinctAddressLimit(t *testing.T) {
 	}
 }
 
+func TestXLSXCountsDuplicateAddressesOnceAtTheLimit(t *testing.T) {
+	previous := maxXLSXAddresses
+	maxXLSXAddresses = 2
+	t.Cleanup(func() { maxXLSXAddresses = previous })
+	f, feed, req := xlsxIngest(t, xlsxWithSharedStrings(t, "192.0.2.1 192.0.2.1 192.0.2.2"))
+	res := f.Ingest(context.Background(), feed, req)
+	published, err := os.ReadFile(feed.path(".orig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK || string(published) != "192.0.2.1\n192.0.2.2\n" {
+		t.Fatalf("duplicate addresses must count once at the distinct-address limit: %+v, published %q", res, published)
+	}
+}
+
 func TestXLSXChoosesTheSmallestWorkbookName(t *testing.T) {
 	z := zipMembers(t, zipMember{"xl/sharedStrings.xml", []byte("<sst><si><t>192.0.2.2</t></si></sst>")})
 	a := zipMembers(t, zipMember{"xl/sharedStrings.xml", []byte("<sst><si><t>192.0.2.1</t></si></sst>")})

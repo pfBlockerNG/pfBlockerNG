@@ -334,7 +334,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 					unset($actual[$optional]);
 				}
 			}
-			if !array_key_exists('mtime', $want) {
+			if (!array_key_exists('mtime', $want)) {
 				unset($actual['mtime']);
 			}
 			if (isset($want['et_split'])) {
@@ -460,6 +460,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 		$this->assertSame(1, preg_match('/^PORT (\d+)$/', $line, $m),
 			"ftp server {$name} did not announce its port: '{$line}' " . trim((string) @file_get_contents($stderr)));
 		$this->ports[$name] = (int) $m[1];
+	}
 	/** @return array{?string, ?string} stage and detected of the step's last "pfb_validate: REJECT" line. */
 	private function rejectLine(): array
 	{
