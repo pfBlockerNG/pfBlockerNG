@@ -1,0 +1,72 @@
+{
+ "schema": 1,
+ "description": "A URL with an empty userinfo ('ftp://@host/') logs in with an empty user and password, not anonymously.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "1.2.3.4\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://@feed.example:{port:ftp}/list.txt",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n",
+    "digest": "1918a4e48b28d03c421df940f5a6f667",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER "
+     },
+     {
+      "server": "ftp",
+      "command": "PASS "
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,73 @@
+{
+ "schema": 1,
+ "description": "A body of exactly the ceiling is kept.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "files": {
+  "ftp": {
+   "/big.txt": {
+    "body": "0123456789abcdef0123456789abcde\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/big.txt",
+   "ceiling": 32,
+   "expect": {
+    "ok": true,
+    "published": "0123456789abcdef0123456789abcde\n",
+    "digest": "38058a71928c232fe4bcb9f01fe123a6",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM big.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE big.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR big.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,72 @@
+{
+ "schema": 1,
+ "description": "An anonymous ftp feed is fetched with RETR: cURL logs in as anonymous, then asks MDTM, EPSV, TYPE I and SIZE.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "1.2.3.4\n5.6.7.8\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/list.txt",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n5.6.7.8\n",
+    "digest": "3a37adf6991862f9608d33aceb0fbd96",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  }
+ ]
+}

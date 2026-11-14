@@ -1,0 +1,119 @@
+{
+ "schema": 1,
+ "description": "A file the server does not have (550 at SIZE) fails every attempt, keeps the published copy and drops the validators.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "1.2.3.4\n5.6.7.8\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/gone.txt",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "curl_incomplete",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM gone.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE gone.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM gone.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE gone.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM gone.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE gone.txt"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

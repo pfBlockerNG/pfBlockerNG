@@ -1,0 +1,146 @@
+{
+ "schema": 1,
+ "description": "A 4xx reply after a complete transfer fails the attempt: it is made three times and nothing is published.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp",
+   "replies": {
+    "RETR_END": "426 transfer aborted"
+   }
+  }
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "1.2.3.4\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/list.txt",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "curl_incomplete",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     },
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     },
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

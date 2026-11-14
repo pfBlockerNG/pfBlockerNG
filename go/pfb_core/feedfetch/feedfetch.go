@@ -13,6 +13,8 @@ package feedfetch
 import (
 	"context"
 	"crypto/x509"
+	"fmt"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
@@ -61,7 +63,7 @@ type Fetcher struct {
 
 // Request is one feed's source as the Outpost translated it.
 type Request struct {
-	URL                string        // http(s)://, a self-hosted http URL, file://, or for Rsync rsync:// or host::module
+	URL                string        // http(s):// or ftp://, a self-hosted http URL, file://, or for Rsync rsync:// or host::module
 	Rsync              bool          // the feed's format is rsync
 	Username, Password string        // Basic credentials, sent to the feed's origin only
 	Headers            []string      // extra "Name: value" headers; an Authorization header is scoped like credentials
@@ -93,7 +95,8 @@ func (d Decision) String() string {
 }
 
 // Result is the outcome of Ingest or Probe. Reason names a refusal in pfb_download()'s words (a validation reason code
-// such as "download_too_large", or the skip text such as "too many redirects"); it may be empty on failure.
+// such as "download_too_large", the skip text such as "too many redirects", or the refused status); a failure always
+// carries one.
 type Result struct {
 	OK       bool
 	Decision Decision // Probe only
@@ -102,6 +105,15 @@ type Result struct {
 }
 
 func fail(reason string) Result { return Result{Reason: reason} }
+
+// statusReason is pfb_download()'s log text for a final status it does not accept: its status table's "<code> <text>",
+// else "Unknown Failure Code [<code>]".
+func statusReason(code int) string {
+	if text := http.StatusText(code); text != "" {
+		return fmt.Sprintf("%d %s", code, text)
+	}
+	return fmt.Sprintf("Unknown Failure Code [%d]", code)
+}
 
 func (r Request) maxBytes() int64 {
 	if r.MaxBytes > 0 {
@@ -174,10 +186,10 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		if _, err := os.Stat(published); err == nil {
 			return Result{OK: true, Status: 304}
 		}
-		return Result{Status: 304}
+		return Result{Status: 304, Reason: statusReason(304)}
 	}
 	if t.status != 200 && t.status != 221 && t.status != 226 {
-		return Result{Status: t.status}
+		return Result{Status: t.status, Reason: statusReason(t.status)}
 	}
 	if err := publish(feed, staged, t.lastMod); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
@@ -235,6 +247,9 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 		}
 	default:
 		res.Decision = Failed
+		if res.Reason == "" {
+			res.Reason = statusReason(t.status)
+		}
 	}
 	switch res.Decision {
 	case Unchanged:
@@ -264,5 +279,9 @@ func (f *Fetcher) fetch(ctx context.Context, src *source, req Request, dst strin
 	case kindSelfHosted:
 		return fetchSelfHosted(ctx, src, req, dst)
 	}
+	if src.ftp != nil && f.Proxy == nil {
+		return f.fetchFTP(ctx, src, req, dst) // no conditional GET exists for ftp: the probe's cond is not sent
+	}
+	// Through a proxy an ftp feed is an HTTP request to it (ftpViaProxy), as cURL makes it.
 	return f.fetchHTTP(ctx, src, req, dst, cond)
 }

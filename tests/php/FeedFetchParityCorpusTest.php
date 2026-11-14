@@ -16,11 +16,16 @@ require_once __DIR__ . '/support/FeedFetchCorpusNet.php';
  * against go/pfb_core/feedfetch (corpus_test.go there documents the schema); a case that passes here and fails there,
  * or the reverse, is a divergence.
  *
+ * An ftp server is declared in `servers` as an object {"name", "kind": "ftp", ...options} instead of a name: it is the
+ * Python server tests/feedfetch/fixtures/ftp_server.py (its header lists the options), driven by cURL here and by the
+ * Go client there. Its `files` table, {server: {path: file}}, sits beside `routes`, and a step may replace it the same way.
+ *
  * Logical outcome per step, mapped from this side's files and log:
  *   ok / decision   the PfbDownloadResult, or pfb_update_check()'s verdict (Success + cron_update = changed, Success
  *                   alone = unchanged, NULL = failed).
  *   published, etag, lastmod, digest   {feed}.orig, {feed}.orig.etag, {feed}.orig.lastmod, {feed}.orig.xxhash128
  *                   (null when absent).
+ *   mtime           the published copy's modification time in Unix seconds, checked only where the expectation names it.
  *   reason          the last "reason=<code>" or "[ FEED ] <text> — skipped" in the step's log.
  *   requests        what the servers recorded (the Host header too, kept only where the expectation names it);
  *                   rsync_source the stand-in's second-to-last argument.
@@ -51,6 +56,10 @@ final class FeedFetchParityCorpusTest extends TestCase
 	private string $tools = '';
 	/** @var array<string,resource> */
 	private array $servers = [];
+	/** @var array<string,resource> an ftp server's stdin: closing it ends the server */
+	private array $ftpStdin = [];
+	/** @var array<string,array> the ftp servers as the scenario declared them */
+	private array $ftpDecls = [];
 	/** @var array<string,int> */
 	private array $ports = [];
 	private array $savedGlobals = [];
@@ -109,6 +118,9 @@ final class FeedFetchParityCorpusTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		foreach ($this->ftpStdin as $stdin) {
+			fclose($stdin);
+		}
 		foreach ($this->servers as $server) {
 			proc_terminate($server);
 			proc_close($server);
@@ -166,8 +178,13 @@ final class FeedFetchParityCorpusTest extends TestCase
 		$this->ports['closed'] = (int) substr(strrchr((string) stream_socket_get_name($closed, FALSE), ':'), 1);
 		fclose($closed);
 		$pki = NULL;
+		$files = $case['files'] ?? [];
 		foreach ($case['servers'] ?? [] as $spec) {
 			$spec = is_string($spec) ? ['name' => $spec] : $spec;
+			if (($spec['kind'] ?? NULL) === 'ftp') {
+				$this->startFtpServer($spec, $files);
+				continue;
+			}
 			$tls = NULL;
 			if (($spec['tls'] ?? FALSE) === TRUE) {
 				$pki ??= pfb_test_corpus_pki("{$this->tools}/pki");
@@ -189,6 +206,8 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$label = basename($file) . " step {$i} ({$step['op']})";
 			$routes = $step['routes'] ?? $routes;
 			$this->writeRoutes($routes);
+			$files = $step['files'] ?? $files;
+			$this->writeFtpConfigs($files);
 			$this->seedLocal($step['local_files'] ?? [], []);
 			file_put_contents("{$this->tools}/requests.log", '');
 			file_put_contents($GLOBALS['pfb']['log'], '');
@@ -227,7 +246,9 @@ final class FeedFetchParityCorpusTest extends TestCase
 				$actual['ok'] = $decision !== 'failed';
 				$actual['decision'] = $decision;
 			}
+			clearstatcache();
 			$actual['published'] = self::stateFile("{$base}.orig");
+			$actual['mtime'] = is_file("{$base}.orig") ? filemtime("{$base}.orig") : NULL;
 			$actual['etag'] = self::stateFile("{$base}.orig.etag");
 			$actual['lastmod'] = is_file("{$base}.orig.lastmod") ? (int) file_get_contents("{$base}.orig.lastmod") : NULL;
 			$actual['digest'] = self::stateFile("{$base}.orig.xxhash128");
@@ -255,6 +276,9 @@ final class FeedFetchParityCorpusTest extends TestCase
 			}
 			if (!array_key_exists('decision', $want)) {
 				unset($actual['decision']);
+			}
+			if (!array_key_exists('mtime', $want)) {
+				unset($actual['mtime']);
 			}
 			ksort($want);
 			ksort($actual);
@@ -338,6 +362,44 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$found = end($m[1])[0];
 		}
 		return $found;
+	}
+
+	private function ftpConfigPath(string $name): string
+	{
+		return "{$this->tools}/{$name}.ftp.json";
+	}
+
+	private function writeFtpConfigs(array $files): void
+	{
+		foreach ($this->ftpDecls as $name => $decl) {
+			unset($decl['kind']);
+			file_put_contents($this->ftpConfigPath($name),
+				json_encode($decl + ['files' => $files[$name] ?? []], JSON_UNESCAPED_SLASHES));
+		}
+	}
+
+	/** The server prints "PORT <n>" once it listens, so there is nothing to poll or sleep for. */
+	private function startFtpServer(array $decl, array $files): void
+	{
+		$name = $decl['name'];
+		$this->ftpDecls[$name] = $decl;
+		$this->writeFtpConfigs($files);
+		$stderr = "{$this->tools}/{$name}.ftp.stderr";
+		$proc = proc_open(
+			['python3', __DIR__ . '/../feedfetch/fixtures/ftp_server.py', $this->ftpConfigPath($name), "{$this->tools}/requests.log"],
+			[0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', $stderr, 'w']],
+			$pipes,
+			$this->tools
+		);
+		$this->assertIsResource($proc);
+		$this->servers[$name] = $proc;
+		$this->ftpStdin[$name] = $pipes[0];
+		stream_set_timeout($pipes[1], 30);
+		$line = trim((string) fgets($pipes[1]));
+		fclose($pipes[1]);
+		$this->assertSame(1, preg_match('/^PORT (\d+)$/', $line, $m),
+			"ftp server {$name} did not announce its port: '{$line}' " . trim((string) @file_get_contents($stderr)));
+		$this->ports[$name] = (int) $m[1];
 	}
 
 	private function startServer(string $name, ?array $tls = NULL): void

@@ -1,0 +1,117 @@
+{
+ "schema": 1,
+ "description": "A failed probe names its refusal: an ftp probe ends 226, which only 200 and 304 decide, so Core says why in pfb_download()'s words (\"226 IM Used\", from its status table); PHP's log carries no reason= code.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "seed": {
+  "published": "feed one\n",
+  "digest": "880b4f7332ef14083066ffeee3a25dca"
+ },
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "feed one\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "ftp://feed.example:{port:ftp}/list.txt",
+   "expect": {
+    "ok": false,
+    "decision": "failed",
+    "published": "feed one\n",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ],
+    "reason": "226 IM Used"
+   },
+   "old_expect": {
+    "ok": false,
+    "decision": "failed",
+    "published": "feed one\n",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ],
+    "reason": null
+   }
+  }
+ ]
+}

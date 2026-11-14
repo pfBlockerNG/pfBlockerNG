@@ -1,0 +1,73 @@
+{
+ "schema": 1,
+ "description": "The transfer stops at the SIZE the server declared; bytes past it are not read.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp"
+  }
+ ],
+ "files": {
+  "ftp": {
+   "/lie.txt": {
+    "body": "0123456789\n",
+    "size": 3
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/lie.txt",
+   "expect": {
+    "ok": true,
+    "published": "012\n",
+    "digest": "93aec821685cebc18ed2b2f360965d90",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM lie.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE lie.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR lie.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  }
+ ]
+}

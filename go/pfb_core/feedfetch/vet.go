@@ -18,7 +18,7 @@ import (
 type sourceKind int
 
 const (
-	kindRemote     sourceKind = iota // http/https through the vetted, pinned transfer
+	kindRemote     sourceKind = iota // http(s) and ftp through the vetted, pinned transfer
 	kindSelfHosted                   // an http URL on the host itself, at the web root
 	kindLocal                        // a file directly in one of Policy.LocalDirs
 	kindRsync
@@ -33,6 +33,7 @@ type source struct {
 	path   string       // local: the resolved file; remote: the URL requested, host mapped; rsync: the source as configured
 	self   []netip.Addr // self-hosted: the addresses the host was classified self at
 	file   os.FileInfo  // local: the file that was checked
+	ftp    *ftpTarget   // ftp: the login, directories and file the URL asks for
 }
 
 var (
@@ -313,13 +314,19 @@ func (f *Fetcher) entry(ctx context.Context, req Request) (*source, string) {
 		switch {
 		case req.Rsync && r.scheme == "rsync":
 			src.kind = kindRsync
-		case req.Rsync || (r.scheme != "http" && r.scheme != "https"):
-			return nil, "" // ftp is not supported yet; rsync is a format, not a URL scheme
+		case req.Rsync || (r.scheme != "http" && r.scheme != "https" && r.scheme != "ftp"):
+			return nil, "" // rsync is a format, not a URL scheme
 		}
 		if r.host == "" {
 			return nil, ""
 		}
 		src.scheme, src.host, src.port, dir = r.scheme, r.host, r.portNum(), phpDirname(r.path)
+		if r.scheme == "ftp" {
+			var reason string
+			if src.ftp, reason = ftpTargetOf(req, r); reason != "" {
+				return nil, reason
+			}
+		}
 	}
 	mapped, reason := literalReason(src.host)
 	if reason != "" {
@@ -344,7 +351,8 @@ func (f *Fetcher) entry(ctx context.Context, req Request) (*source, string) {
 	switch {
 	case selfOnly && dir != "/":
 		return nil, ""
-	case selfOnly && src.kind == kindRemote:
+	// A self-hosted ftp URL stays remote: PHP reads it over ftp, and so does fetchFTP.
+	case selfOnly && src.kind == kindRemote && src.ftp == nil:
 		src.kind, src.self = kindSelfHosted, addrs // read from these addresses, never resolved again (#3911)
 	case !selfOnly && !f.NoFilter:
 		if _, _, reason := f.vet(ctx, src.host); reason != "" {
