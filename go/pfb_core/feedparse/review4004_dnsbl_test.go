@@ -61,3 +61,14 @@ func TestDNSBLKeepsSameBaseWithDifferentPrefixLengths(t *testing.T) {
 		t.Errorf("IPv4 prefixes = %q, want both masks %q", feed.IP4, want)
 	}
 }
+
+func TestDNSBLKeepsIPv6ZonesAndPrefixLengthsDistinct(t *testing.T) {
+	want := []string{"fe80::1%eth0", "fe80::1%eth1", "2001:db8::/32", "2001:db8::/48"}
+	feed, _, _, err := parseDNSBLReview(strings.Join(want, "\n") + "\n")
+	if err != nil {
+		t.Fatalf("ParseDNSBLFeed: %v", err)
+	}
+	if !sameStrings(feed.IP6, want) {
+		t.Errorf("IPv6 entries = %q, want every zone and mask kept %q", feed.IP6, want)
+	}
+}
