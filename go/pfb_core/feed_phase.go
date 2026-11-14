@@ -134,9 +134,6 @@ func validFeedWord(value string) bool {
 }
 
 func updatePhaseAllowed(req update.Request, phase string) bool {
-	if req.Trigger == "apply" {
-		return false
-	}
 	if req.Trigger != "manual" || req.Scope == "both" {
 		return true
 	}
