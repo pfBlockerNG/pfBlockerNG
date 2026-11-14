@@ -63,7 +63,7 @@ type Fetcher struct {
 	UserAgent     string         // empty: Go's default
 	RootCAs       *x509.CertPool // nil: the system roots
 	RsyncBin      string         // the executable rsync
-	RetryDelay    time.Duration // pause between attempts; zero is pfb_download()'s 5 s
+	RetryDelay    time.Duration  // pause between attempts; zero is pfb_download()'s 5 s
 	// FreeBytes is the space the process may still write in dir; ok is false when it cannot tell, which is no shortfall
 	// (pfb_extract_space_shortfall). Nil reads the file system.
 	FreeBytes func(dir string) (free uint64, ok bool)
