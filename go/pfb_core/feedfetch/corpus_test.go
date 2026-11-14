@@ -12,6 +12,9 @@ package feedfetch_test
 //	             listed fails the run). With the filter off, connections resolve names through the system resolver.
 //	filter       optional, default true: the feed-host internal-address filter.
 //	sanity       optional, default false: the opt-in plain-text sanity scan (ADR-49, gen/pfb_feed_sanity).
+//	et           optional {block, match}: the ET IQRisk Block and Match categories ("ET_Cnc,ET_Bot"; "x" is none) of a
+//	             feed whose URL holds "iprepdata.txt" (processet). The split goes to a directory of the run, the Match
+//	             addresses to a match file there.
 //	allowlist    optional [IP or CIDR]: internal-address exemptions.
 //	self         optional [IP]: the box's own configured addresses (127.0.0.1 and ::1 always are).
 //	servers      optional [server]: HTTP servers on 127.0.0.1; "{port:<name>}" expands to a server's port and
@@ -59,7 +62,9 @@ package feedfetch_test
 //	             of a validation refusal's "stage=.. reason=.. detected=.." line); raw_retained (default false: a
 //	             non-empty staged ".raw" survives the step, as an archive success leaves it); published_b64 or
 //	             published_size in place of published, for bytes that are not text or are too large to inline. Apart
-//	             from raw_retained, no non-empty staged body may survive a step.
+//	             from raw_retained, no non-empty staged body may survive a step. et_split ({file: content} of the
+//	             non-empty files of the ET split) and et_match (the match file, null when there is none): compared only
+//	             when named.
 //	  old_expect optional, the shape of expect: present only where Core differs from the old path on purpose. This runner
 //	             asserts expect and refuses an old_expect equal to it; the PHP runner asserts old_expect instead.
 
@@ -127,6 +132,8 @@ type expect struct {
 	RawRetained   bool                `json:"raw_retained"`
 	PublishedB64  *string             `json:"published_b64"`
 	PublishedSize *int64              `json:"published_size"`
+	ETSplit       map[string]string   `json:"et_split"`
+	ETMatch       json.RawMessage     `json:"et_match"`
 }
 
 type ftpFile struct {
@@ -164,13 +171,17 @@ type scenario struct {
 	Hosts       map[string][]string `json:"hosts"`
 	Filter      *bool               `json:"filter"`
 	Sanity      bool                `json:"sanity"`
-	Allowlist   []string            `json:"allowlist"`
-	Self        []string            `json:"self"`
-	Servers     []serverSpec        `json:"servers"`
-	Proxy       *proxySpec          `json:"proxy"`
-	Routes      routes              `json:"routes"`
-	Files       ftpFiles            `json:"files"`
-	Seed        *struct {
+	ET *struct {
+		Block string `json:"block"`
+		Match string `json:"match"`
+	} `json:"et"`
+	Allowlist []string            `json:"allowlist"`
+	Self      []string            `json:"self"`
+	Servers   []serverSpec        `json:"servers"`
+	Proxy     *proxySpec          `json:"proxy"`
+	Routes    routes              `json:"routes"`
+	Files     ftpFiles            `json:"files"`
+	Seed      *struct {
 		Published *string `json:"published"`
 		ETag      *string `json:"etag"`
 		LastMod   *int64  `json:"lastmod"`
@@ -293,7 +304,8 @@ func runScenario(t *testing.T, file string) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "feeds")
 	tools := filepath.Join(base, "tools")
-	for _, d := range []string{dir, tools} {
+	etDir, matchDir := filepath.Join(base, "ET"), filepath.Join(base, "match")
+	for _, d := range []string{dir, tools, etDir, matchDir} {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -459,10 +471,15 @@ func runScenario(t *testing.T, file string) {
 				return out, nil
 			},
 		},
-		Proxy:      systemProxy,
-		RsyncBin:   filepath.Join(tools, "rsync"),
-		RetryDelay: time.Millisecond, // the PHP side runs with curl_retry_sleep 0
-		Sanity:     sc.Sanity,
+		Proxy:       systemProxy,
+		RsyncBin:    filepath.Join(tools, "rsync"),
+		RetryDelay:  time.Millisecond, // the PHP side runs with curl_retry_sleep 0
+		Sanity:      sc.Sanity,
+		ETDir:       etDir,
+		ETMatchFile: filepath.Join(matchDir, "pfB_Match_ET_v4.txt"),
+	}
+	if sc.ET != nil {
+		f.ETBlock, f.ETMatch = etCategories(sc.ET.Block), etCategories(sc.ET.Match)
 	}
 	if pki != nil {
 		f.RootCAs = pki.pool
@@ -589,6 +606,12 @@ func runScenario(t *testing.T, file string) {
 		if st.Expect.Detected != nil {
 			got["detected"], want["detected"] = res.Detected, *st.Expect.Detected
 		}
+		if st.Expect.ETSplit != nil {
+			got["et_split"], want["et_split"] = nonEmptyFiles(t, etDir), st.Expect.ETSplit
+		}
+		if st.Expect.ETMatch != nil {
+			got["et_match"], want["et_match"] = readOrNil(f.ETMatchFile), rawOr(st.Expect.ETMatch, nil)
+		}
 		got["staged"], want["staged"] = stagedLeftover(t, dir, name), ""
 		if !reflect.DeepEqual(got, want) {
 			gj, _ := json.MarshalIndent(got, "", " ")
@@ -681,6 +704,29 @@ func stagedLeftover(t *testing.T, dir, name string) string {
 // readCap bounds what a step reads back (#3989): a larger file becomes its size and SHA-256, so a ceiling regression
 // still fails the comparison without holding the file.
 const readCap = 1 << 20
+
+// etCategories is the shell's "ET_Cnc,ET_Bot" category list; "x" is none.
+func etCategories(list string) []string {
+	if list == "x" || list == "" {
+		return nil
+	}
+	return strings.Split(list, ",")
+}
+
+// nonEmptyFiles is {name: content} of the non-empty files in dir, each read as readOrNil bounds it.
+func nonEmptyFiles(t *testing.T, dir string) map[string]string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, e := range entries {
+		if s, ok := readOrNil(filepath.Join(dir, e.Name())).(string); ok && s != "" {
+			out[e.Name()] = s
+		}
+	}
+	return out
+}
 
 // sizeOrNil is the size of the file at p, or nil when there is none.
 func sizeOrNil(p string) any {

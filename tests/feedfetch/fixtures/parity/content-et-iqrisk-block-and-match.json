@@ -1,0 +1,56 @@
+{
+ "schema": 1,
+ "description": "C: an ET IQRisk feed (its URL holds iprepdata.txt) is split by category; the Block categories are published in the order ls lists them (ET_Bot before ET_Cnc), the Match ones go to the match file; the digest is of the wire CSV.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "et": {
+  "block": "ET_Cnc,ET_Bot",
+  "match": "ET_Spam"
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/iprepdata.txt": {
+    "body": "192.0.2.10,1,127\n198.51.100.20,2,88\n203.0.113.30,3,50\n203.0.113.31,3,40\n192.0.2.11,1,1\n198.51.100.40,15,2\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/iprepdata.txt",
+   "expect": {
+    "ok": true,
+    "published": "198.51.100.20\n192.0.2.10\n192.0.2.11\n",
+    "digest": "0dd85c33197d54970407de0c14632bd0",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/iprepdata.txt"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "et_split": {
+     "ET_Cnc.txt": "192.0.2.10\n192.0.2.11\n",
+     "ET_Bot.txt": "198.51.100.20\n",
+     "ET_Spam.txt": "203.0.113.30\n203.0.113.31\n",
+     "ET_P2P.txt": "198.51.100.40\n"
+    },
+    "et_match": "203.0.113.30\n203.0.113.31\n"
+   }
+  }
+ ]
+}

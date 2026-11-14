@@ -49,6 +49,8 @@ require_once __DIR__ . '/support/FeedFetchCorpusNet.php';
  * Content gates (#3973): stage and detected are those of the step's last "pfb_validate: REJECT" line; raw_retained is a
  * non-empty {feed}.raw left behind (an archive success keeps it); a leftover ".pfbstage_*" file fails the step.
  * published_b64 stands for published when the bytes are not text, published_size when the body is too large to inline.
+ * ET IQRisk and xlsx run pfblockerng.sh's et and xlsx verbs for real, their pfSense paths pointed at this run's
+ * directories (as tests/shell's specs source the script); et_split and et_match are that split and match file.
  */
 #[CoversFunction('pfb_download')]
 #[CoversFunction('pfb_update_check')]
@@ -95,7 +97,8 @@ final class FeedFetchParityCorpusTest extends TestCase
 			}
 		}
 		foreach (['log', 'errlog', 'pnow', 'dbdir', 'mime_types', 'skipfeed', 'failed', 'runlog', 'runlog_active', 'config',
-			'curl_defaults', 'curl_retry_sleep', 'rsync_bin', 'rsync_max_bytes', 'local_max_bytes', 'cron_update'] as $k) {
+			'curl_defaults', 'curl_retry_sleep', 'rsync_bin', 'rsync_max_bytes', 'local_max_bytes', 'cron_update', 'script',
+			'etblock', 'etmatch'] as $k) {
 			if (array_key_exists($k, $GLOBALS['pfb'] ?? [])) {
 				$this->savedPfb[$k] = $GLOBALS['pfb'][$k];
 			}
@@ -118,6 +121,33 @@ final class FeedFetchParityCorpusTest extends TestCase
 		$GLOBALS['pfb']['rsync_bin'] = "{$this->tools}/rsync";
 		$this->assertTrue(copy(__DIR__ . '/../feedfetch/fixtures/fake-rsync.sh', "{$this->tools}/rsync"));
 		$this->assertTrue(chmod("{$this->tools}/rsync", 0700));
+		// pfblockerng.sh's et and xlsx verbs, run for real with their pfSense paths pointed at this run's directories.
+		$this->assertTrue(mkdir("{$this->tools}/ET") && mkdir("{$this->tools}/match"));
+		$this->assertNotFalse(file_put_contents("{$this->tools}/pfblockerng.sh", sprintf(<<<'SH'
+			#!/bin/sh
+			PFB_SOURCED=1
+			. %s
+			pfborig=%s
+			etdir=%s
+			pfbmatchgen=%s
+			errorlog=%s
+			pathtar=%s
+			now='2026-01-01 00:00:00'
+			ip_placeholder2='127\.1\.7\.7'
+			alias="$2"
+			etblock="$(echo "${8}" | sed 's/,/, /g')"
+			etmatch="$(echo "${9}" | sed 's/,/, /g')"
+			case "$1" in
+			et) pfb_ensure_tmpdir; processet; exitnow "$?" ;;
+			xlsx) pfb_ensure_tmpdir; processxlsx; exitnow "$?" ;;
+			esac
+			exit 99
+
+			SH, escapeshellarg((string) realpath(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.sh')),
+			escapeshellarg("{$this->dir}/"), escapeshellarg("{$this->tools}/ET"), escapeshellarg("{$this->tools}/match/"),
+			escapeshellarg("{$this->tools}/sh-error.log"), escapeshellarg(pfb_test_tar()))));
+		$this->assertTrue(chmod("{$this->tools}/pfblockerng.sh", 0700));
+		$GLOBALS['pfb']['script'] = "{$this->tools}/pfblockerng.sh";
 	}
 
 	protected function tearDown(): void
@@ -133,7 +163,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$GLOBALS['pfb'][$k] = $v;
 		}
 		foreach (['dbdir', 'log', 'errlog', 'pnow', 'skipfeed', 'failed', 'mime_types', 'config', 'curl_defaults', 'curl_retry_sleep',
-			'rsync_bin', 'rsync_max_bytes', 'local_max_bytes', 'cron_update'] as $k) {
+			'rsync_bin', 'rsync_max_bytes', 'local_max_bytes', 'cron_update', 'script', 'etblock', 'etmatch'] as $k) {
 			if (!array_key_exists($k, $this->savedPfb)) {
 				unset($GLOBALS['pfb'][$k]);
 			}
@@ -165,6 +195,8 @@ final class FeedFetchParityCorpusTest extends TestCase
 		if (isset($case['allowlist'])) {
 			PfbConfig::write('gen/pfb_feed_internal_allowlist', base64_encode(implode("\n", $case['allowlist'])));
 		}
+		$GLOBALS['pfb']['etblock'] = $case['et']['block'] ?? 'x';
+		$GLOBALS['pfb']['etmatch'] = $case['et']['match'] ?? 'x';
 		$GLOBALS['pfb_test_configured_ips'] = $case['self'] ?? [];
 		$GLOBALS['pfb_test_resolve_map'] = [];
 		foreach ($case['hosts'] as $host => $addrs) {
@@ -266,6 +298,14 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$actual['rsync_source'] = $argv === NULL ? NULL : $argv[count($argv) - 2];
 			$actual['reason'] = $this->reason();
 			[$actual['stage'], $actual['detected']] = $this->rejectLine();
+			$actual['et_split'] = [];
+			foreach (glob("{$this->tools}/ET/*") ?: [] as $split) {
+				if (filesize($split) > 0) {
+					$actual['et_split'][basename($split)] = self::stateFile($split);
+				}
+			}
+			$match = "{$this->tools}/match/pfB_Match_ET_v4.txt";
+			$actual['et_match'] = self::stateFile($match);
 
 			$want = $step['old_expect'] ?? $step['expect'];
 			$want['requests'] = array_map(fn (array $r): array => $this->expandRecord($r), $want['requests']);
@@ -289,13 +329,17 @@ final class FeedFetchParityCorpusTest extends TestCase
 			}
 			$want += ['etag' => $seed['etag'] ?? NULL, 'lastmod' => $seed['lastmod'] ?? NULL,
 				'digest' => $seed['digest'] ?? NULL, 'raw_retained' => FALSE, 'staged' => '', 'rsync_source' => NULL];
-			foreach (['reason', 'decision', 'stage', 'detected'] as $optional) {
+			foreach (['reason', 'decision', 'stage', 'detected', 'et_split', 'et_match'] as $optional) {
 				if (!array_key_exists($optional, $want)) {
 					unset($actual[$optional]);
 				}
 			}
-			if (!array_key_exists('mtime', $want)) {
+			if !array_key_exists('mtime', $want) {
 				unset($actual['mtime']);
+			}
+			if (isset($want['et_split'])) {
+				ksort($want['et_split']);
+				ksort($actual['et_split']);
 			}
 			ksort($want);
 			ksort($actual);

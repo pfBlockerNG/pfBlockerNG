@@ -1,0 +1,57 @@
+{
+ "schema": 1,
+ "description": "C: a gzip ET IQRisk feed is extracted before it is split; the digest is of the gzip and the staged archive stays.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "et": {
+  "block": "ET_Cnc,ET_Bot",
+  "match": "ET_Spam"
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/iprepdata.txt.gz": {
+    "body_b64": "H4sIAAAAAAAC/03MMQ7AMAhD0T1nsZANQSX3v1hdqUNGvvDTyWBkiBCUz9KZaPl2JRIzK1n+kSqKKDTvIpdNz35Hn3Mr23Ij1wvfWM2NagAAAA=="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/iprepdata.txt.gz",
+   "expect": {
+    "ok": true,
+    "published": "198.51.100.20\n192.0.2.10\n192.0.2.11\n",
+    "digest": "37cf7c84a565481ddae9cb9b7c73d7ba",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/iprepdata.txt.gz"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "raw_retained": true,
+    "et_split": {
+     "ET_Cnc.txt": "192.0.2.10\n192.0.2.11\n",
+     "ET_Bot.txt": "198.51.100.20\n",
+     "ET_Spam.txt": "203.0.113.30\n203.0.113.31\n",
+     "ET_P2P.txt": "198.51.100.40\n"
+    },
+    "et_match": "203.0.113.30\n203.0.113.31\n"
+   }
+  }
+ ]
+}
