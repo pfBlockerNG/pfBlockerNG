@@ -24,8 +24,7 @@
 function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $format, $vtype, $srcint=FALSE): ?PfbScheduleTerminalResult {
 	global $pfb;
 
-	$log = "[ {$header} ]\n";
-	pfb_logger("{$log}", 1);
+	pfb_logger("[ {$header} ]\n", 1);
 	$pfb['cron_update'] = FALSE;
 
 	if (empty(pfb_filter($header, PFB_FILTER_WORD, 'php'))) {
@@ -33,218 +32,47 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		return NULL;
 	}
 
-	// Re-evaluate URL
-	if ($format == 'whois' || $format == 'asn') {
-
+	if ($format === 'whois' || $format === 'asn') {
 		if (strpos($list_url, ' ') !== FALSE) {
 			$list_url = strstr($list_url, ' ', TRUE);
 		}
-
-		$pfb_filter_type = PFB_FILTER_ALNUM;
-		$pfb_filter_text = 'ASN';
-		if ($format == 'whois') {
-			$pfb_filter_type = PFB_FILTER_DOMAIN;
-			$pfb_filter_text = 'WHOIS';
-		}
-
-		if (empty(pfb_filter($list_url, $pfb_filter_type, 'php'))) {
-                        pfb_logger("\n Invalid {$pfb_filter_text}. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
+		$filter_type = $format === 'whois' ? PFB_FILTER_DOMAIN : PFB_FILTER_ALNUM;
+		$filter_name = $format === 'whois' ? 'WHOIS' : 'ASN';
+		if (empty(pfb_filter($list_url, $filter_type, 'php'))) {
+			pfb_logger("\n Invalid {$filter_name}. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 			return NULL;
 		}
-
-		$log = pfb_log_status_line('', '', 'Update found') . "\n";
-		pfb_logger("{$log}", 1);
-		$pfb['cron_update'] = TRUE;
-		$pfb['update_cron'] = TRUE;
-		touch("{$pfbfolder}/{$header}.update");
-		return PfbScheduleTerminalResult::Success;
-	}
-	elseif ($format == 'geoip') {
+	} elseif ($format === 'geoip') {
 		if (strpos($list_url, ' ') !== FALSE) {
 			$list_url = strstr($list_url, ' ', TRUE);
 		}
-		if (!empty(pfb_filter($list_url, PFB_FILTER_WORD, 'php'))) {
-			$list_url = "/usr/local/share/GeoIP/cc/{$list_url}{$vtype}.txt";
-		} else {
+		if (empty(pfb_filter($list_url, PFB_FILTER_WORD, 'php'))) {
 			pfb_logger("\n Invalid GEOIP. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 			return NULL;
 		}
-	}
-	elseif (!pfb_filter($list_url, PFB_FILTER_URL, 'php')) {
-		// Issue #811: in the update flow this reject fires BEFORE any download is
-		// scheduled, so pfb_download()'s entry/fetch gates never run — land the
-		// header-scoped feed-host skip line here too (no-op unless the guard is
-		// why vetting failed). The line below stays for non-guard rejects.
+		$list_url = "/usr/local/share/GeoIP/cc/{$list_url}{$vtype}.txt";
+	} elseif (!pfb_filter($list_url, PFB_FILTER_URL, 'php')) {
 		pfb_log_feed_host_reject($list_url, $header, 1);
 		pfb_logger("\n Invalid URL. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 		return NULL;
 	}
 
-	$list_url_esc	= escapeshellarg("{$list_url}");
-	$list_download	= trim("{$list_url_esc}", "'");
-
-	// Call function to get all previous download fails
 	pfb_failures();
-
-	if ($pfb['skipfeed'] != 0) {
-		// Determine if previous download fails have exceeded threshold.
-		if (($pfb['failed'][$header] ?? 0) >= $pfb['skipfeed']) {
-			$log = "  Max daily download failure attempts exceeded. Clear widget 'failed downloads' to reset.\n\n";
-			pfb_logger("{$log}", 1);
-			unlink_if_exists("{$pfbfolder}/{$header}.fail");
-			return PfbScheduleTerminalResult::RetryCapReached;
-		}
+	if ($pfb['skipfeed'] != 0 && ($pfb['failed'][$header] ?? 0) >= $pfb['skipfeed']) {
+		pfb_logger("  Max daily download failure attempts exceeded. Clear widget 'failed downloads' to reset.\n\n", 1);
+		unlink_if_exists("{$pfbfolder}/{$header}.fail");
+		return PfbScheduleTerminalResult::RetryCapReached;
 	}
 
-	// Attempt download, when a previous 'fail' file marker is found.
 	if (file_exists("{$pfbfolder}/{$header}.fail")) {
-		$log = pfb_log_status_line('', 'Previous download failed.', 'Re-attempt download') . "\n";
-		pfb_logger("{$log}", 1);
-		$pfb['update_cron'] = TRUE;
-		touch("{$pfbfolder}/{$header}.update");
-		return NULL;
-	}
-
-	// Check if List file doesn't exist or Format is 'whois'.
-	if (!file_exists("{$pfbfolder}/{$header}.txt") || $format == 'whois') {
-		$log = pfb_log_status_line('', '', 'Update found') . "\n";
-		pfb_logger("{$log}", 1);
-		$pfb['update_cron'] = TRUE;
-		return NULL;
-	}
-
-	$local_file = "{$pfborig}/{$header}.orig";
-
-	// Compare previously downloaded file timestamp with remote timestamp
-	if (file_exists($local_file)) {
-		if ($format == 'rsync') {
-			$log = pfb_log_status_line('', '( rsync )', 'Update found') . "\n";
-			pfb_logger("{$log}", 1);
-			$pfb['cron_update'] = TRUE;
-			$pfb['update_cron'] = TRUE;
-			touch("{$pfbfolder}/{$header}.update");
-			return PfbScheduleTerminalResult::Success;
-		}
-
-		// Determine if URL is a pfSense localfile
-		$localfile = FALSE;
-		if (pfb_filter($list_download, PFB_FILTER_URL, 'php', '', TRUE)) {
-			$localfile = TRUE;
-		}
-
-		if ($localfile) {
-			// ADR-42: local-file change detection delegated to pfb_local_feed_changed()
-			// (pfblockerng.inc) -- content-hash (xxh128) gate, mtime removed; pinned by
-			// FeedChangeHashHelpersTest.
-			$pfb['cron_update'] = pfb_local_feed_changed($list_download, $local_file);
-			if (!$pfb['cron_update']) {
-				$log = pfb_log_status_line($header, '( local feed unchanged )', 'Update not required') . "\n";
-				pfb_logger("{$log}", 1);
-				return PfbScheduleTerminalResult::Success;
-			}
-		}
-		else {
-			// ADR-42: replaces the HEAD+Last-Modified compare and whole-feed md5 fallback
-			// with a conditional GET via pfb_download() (probe mode, type='change_detect'),
-			// decided by pfb_conditional_get_decision() (decision matrix documented
-			// there). The SSRF guard + redirect revalidation loop stay intact because the
-			// probe goes through pfb_download(), not a bare curl_init().
-			$probe_result = pfb_download(new PfbDownloadRequest(
-				listUrl: "{$list_download}",
-				downloadPath: "{$pfborig}/{$header}.md5",
-				flex: $pflex,
-				header: $header,
-				format: '',
-				logType: 1,
-				versionType: '',
-				timeout: 300,
-				type: 'change_detect',
-				username: '',
-				password: '',
-				sourceInterface: $srcint,
-				extraHeaders: array(),
-			));
-
-			if (!$probe_result->success || $probe_result->responseMeta === NULL) {
-				// Probe failed entirely (connection error, bad URL, etc.) → fail-safe.
-				$log = "\n" . pfb_log_status_line('', 'Failed to probe feed for change detection!', 'Update skipped') . "\n";
-				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
-				touch("{$pfbfolder}/{$header}.fail");
-				pfb_logger("{$log}", 1);
-				return NULL;
-			}
-
-			$probe_meta = $probe_result->responseMeta;
-			$probe_status = $probe_meta['status'];
-
-			if ($probe_status === '304') {
-				// Server confirmed not-modified via conditional GET → no re-ingest needed.
-				$log = "\n" . pfb_log_status_line($header, '( 304 not modified )', 'Update not required') . "\n";
-				pfb_logger("{$log}", 1);
-				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
-				// Persist any refreshed validators from the 304 response.
-				pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
-				return PfbScheduleTerminalResult::Success;
-			}
-
-			if ($probe_status === '200') {
-				// Compute the body hash and compare against the persisted .orig hash.
-				$body_hash      = pfb_content_hash("{$pfborig}/{$header}.md5.raw", TRUE);
-				$persisted_sidecar = pfb_hash_read($local_file);
-				// A legacy .md5 sidecar (algo !== 'xxh128') collapses to '' intentionally:
-				// remote feeds do not carry a dual-hash .md5 baseline, so the first cron
-				// after upgrade cannot confirm "unchanged" and re-ingests once.  The next
-				// write lays down an .xxhash128 sidecar and subsequent runs go conditional.
-				$persisted_hash = ($persisted_sidecar['algo'] === 'xxh128') ? $persisted_sidecar['digest'] : '';
-
-				$changed = pfb_conditional_get_decision($probe_status, $body_hash, $persisted_hash);
-
-				if ($changed) {
-					$log = "\n" . pfb_log_status_line($header, '( content changed )', 'Update found') . "\n";
-					pfb_logger("{$log}", 1);
-					// #3911: these validators describe the probe body, not the published copy. They stay
-					// beside the body until the ingest publishes it (pfb_download), so a lost ingest cannot
-					// make the next probe a 304 over the stale copy.
-					unlink_if_exists("{$pfborig}/{$header}.md5.raw.etag");
-					unlink_if_exists("{$pfborig}/{$header}.md5.raw.lastmod");
-					pfb_validator_write("{$pfborig}/{$header}.md5.raw", $probe_meta['etag'], $probe_meta['lastmod']);
-					$pfb['cron_update'] = TRUE;
-					$pfb['update_cron'] = TRUE;
-					touch("{$pfbfolder}/{$header}.update");
-					return PfbScheduleTerminalResult::Success;
-				}
-				else {
-					$log = "\n" . pfb_log_status_line($header, '( content unchanged )', 'Update not required') . "\n";
-					pfb_logger("{$log}", 1);
-					unlink_if_exists("{$pfborig}/{$header}.md5.raw");
-					// Refresh validators even on a spurious 200 so the next run can
-					// go conditional (the server may start honouring ETags).
-					pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
-					return PfbScheduleTerminalResult::Success;
-				}
-			}
-
-			// Any other status → fail-safe: treat as changed, re-ingest.
-			$log = "\n" . pfb_log_status_line('', "Unexpected probe status [{$probe_status}]!", 'Update forced (fail-safe)') . "\n";
-			unlink_if_exists("{$pfborig}/{$header}.md5.raw");
-			pfb_logger("{$log}", 1);
-			$pfb['update_cron'] = TRUE;
-			touch("{$pfbfolder}/{$header}.update");
-			return NULL;
-		}
+		pfb_logger(pfb_log_status_line('', 'Previous download failed.', 'Re-attempt download') . "\n", 1);
 	} else {
-		$pfb['cron_update'] = TRUE;
+		pfb_logger(pfb_log_status_line('', '', 'Update check delegated to Core') . "\n", 1);
 	}
-
-	if ($pfb['cron_update']) {
-		// Trigger CRON process if updates are found.
-		$pfb['update_cron'] = TRUE;
-
-		$log = pfb_log_status_line('', '', 'Update found') . "\n";
-		pfb_logger("{$log}", 1);
-		touch("{$pfbfolder}/{$header}.update");
-	}
-	return $pfb['cron_update'] ? PfbScheduleTerminalResult::Success : NULL;
+	$pfb['cron_update'] = TRUE;
+	$pfb['update_cron'] = TRUE;
+	touch("{$pfbfolder}/{$header}.update");
+	return NULL;
 }
 
 
