@@ -1,4 +1,4 @@
-"""Tier B: real pfSense read-only users cannot save DNS General, its pfB-DNS settings or DNSBL.
+"""Tier B: real pfSense read-only users cannot save DNS General, its pfB-DNS settings, DNSBL or a DNSBL group.
 
 Reuse the scoped-operator account lifecycle: real auth.inc password/OS provisioning,
 real CSRF login, and user-config-readonly enforced by config.lib.inc::write_config().
@@ -14,7 +14,9 @@ import pytest
 
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render, input_errors_block
+from .test_category_edit import CFG_DNSBL, _del_rowid, _dnsbl_payload, _free_rowid, _post_form
 from .test_general_scoped_operator import _create_scoped_user, _delete_scoped_user
+from .test_sanitize_persist import _dnsbl_folder
 from .webui import WebUI, looks_like_login_page, scrape_form_fields
 
 if TYPE_CHECKING:
@@ -40,6 +42,42 @@ def _write_state(vm: SmokeVM) -> dict[str, str | None]:
         if line.startswith("PFB_READONLY_STATE:"):
             return json.loads(line.split(":", 1)[1])
     raise AssertionError(f"state probe did not finish: {result.stdout!r} {result.stderr!r}")
+
+
+def _grant_readonly(vm: SmokeVM, username: str) -> None:
+    """Give the scoped operator ``user-config-readonly``: pfSense's write_config() then refuses every save it makes."""
+    result = helpers.php_eval(
+        vm,
+        "require_once('auth.inc');\n"
+        "$found = FALSE;\n"
+        "foreach (config_get_path('system/user', []) as $i => $user) {\n"
+        f"    if ($user['name'] === {helpers._php_str(username)}) {{\n"
+        "        $user['priv'][] = 'user-config-readonly';\n"
+        "        config_set_path('system/user/' . $i, $user);\n"
+        "        local_user_set($user);\n"
+        "        $found = TRUE;\n"
+        "        break;\n"
+        "    }\n"
+        "}\n"
+        "if (!$found) { throw new RuntimeException('read-only user not found'); }\n"
+        "write_config('pfBlockerNG smoke: read-only DNS operator');\n"
+        "echo 'PFB_READONLY_USER:OK';",
+    )
+    assert "PFB_READONLY_USER:OK" in result.stdout, f"read-only privilege setup failed: {result.stdout!r}"
+
+
+def _operator_ui(deployed_vm: SmokeVM, webgui_protocol: str, username: str, password: str) -> WebUI:
+    """The operator's own logged-in webConfigurator session."""
+    scoped = WebUI(
+        host=deployed_vm.host,
+        port=deployed_vm.web_port,
+        username=username,
+        password=password,
+        scheme=webgui_protocol,
+        verify=webgui_protocol != "https",
+    )
+    scoped.login()
+    return scoped
 
 
 def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
@@ -93,38 +131,13 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
     try:
         _create_scoped_user(vm, username, password)
         created = True
-        result = helpers.php_eval(
-            vm,
-            "require_once('auth.inc');\n"
-            "$found = FALSE;\n"
-            "foreach (config_get_path('system/user', []) as $i => $user) {\n"
-            f"    if ($user['name'] === {helpers._php_str(username)}) {{\n"
-            "        $user['priv'][] = 'user-config-readonly';\n"
-            "        config_set_path('system/user/' . $i, $user);\n"
-            "        local_user_set($user);\n"
-            "        $found = TRUE;\n"
-            "        break;\n"
-            "    }\n"
-            "}\n"
-            "if (!$found) { throw new RuntimeException('read-only user not found'); }\n"
-            "write_config('pfBlockerNG smoke: read-only DNS operator');\n"
-            "echo 'PFB_READONLY_USER:OK';",
-        )
-        assert "PFB_READONLY_USER:OK" in result.stdout, f"read-only privilege setup failed: {result.stdout!r}"
+        _grant_readonly(vm, username)
         for path, value in seeded.items():
             helpers.config_set(vm, path, value)
         assert {path: helpers.config_get(vm, path) for path in seeded} == seeded, (
             "read-only fixture must start with valid DNS General and transport siblings"
         )
-        scoped = WebUI(
-            host=deployed_vm.host,
-            port=deployed_vm.web_port,
-            username=username,
-            password=password,
-            scheme=webgui_protocol,
-            verify=webgui_protocol != "https",
-        )
-        scoped.login()
+        scoped = _operator_ui(deployed_vm, webgui_protocol, username, password)
         guard = PhpErrorLogGuard(vm)
         guard.snapshot()
         general = "/pfblockerng/pfblockerng_dns_general.php"
@@ -166,5 +179,49 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
     finally:
         for path, state in originals.items():
             helpers.config_restore_state(vm, path, state)
+        if created:
+            _delete_scoped_user(vm, username, original_nextuid)
+
+
+def test_readonly_group_save_of_a_custom_list_requests_no_rebuild(
+    smoke_vm: SmokeVM, deployed_vm: SmokeVM, webgui_protocol: str, webui: WebUI
+) -> None:
+    """Issue #3999: the custom list's rebuild marker follows a written save only.
+
+    Given: a stored DNSBL group with no custom list, and an operator whose saves pfSense's write_config() refuses
+    When:  the operator saves the group with a custom list, then an administrator saves the same
+    Then:  the refused save leaves no rebuild marker and stores nothing; the written save stores the list and leaves it
+    """
+    vm = smoke_vm
+    username = f"pfbro{uuid.uuid4().hex[:10]}"
+    password = uuid.uuid4().hex
+    name = f"ro{uuid.uuid4().hex[:8]}"
+    marker = f"{_dnsbl_folder(vm)}/{name}_custom.update"
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    original_nextuid = helpers.config_get(vm, "system/nextuid")
+    created = False
+    try:
+        _post_form(webui, _dnsbl_payload(rowid, name))
+        assert helpers.config_get(vm, f"{CFG_DNSBL}/{rowid}/aliasname") == name, "before-state: the group is stored"
+        assert not helpers.hook_marker_exists(vm, marker), "before-state: no rebuild is requested"
+        _create_scoped_user(vm, username, password)
+        created = True
+        _grant_readonly(vm, username)
+        scoped = _operator_ui(deployed_vm, webgui_protocol, username, password)
+
+        _post_form(
+            scoped,
+            _dnsbl_payload(rowid, name, custom="example.com"),
+            expect_rejection="the configuration could not be written",
+        )
+        assert helpers.config_get(vm, f"{CFG_DNSBL}/{rowid}/custom") == "", "the refused save stores no custom list"
+        assert not helpers.hook_marker_exists(vm, marker), "a custom list that was never stored must not be rebuilt"
+
+        _post_form(webui, _dnsbl_payload(rowid, name, custom="example.com"))
+        assert helpers.config_get(vm, f"{CFG_DNSBL}/{rowid}/custom") != "", "the administrator's save stores the list"
+        assert helpers.hook_marker_exists(vm, marker), "and requests its rebuild"
+    finally:
+        vm.ssh("/bin/rm", "-f", marker)
+        _del_rowid(vm, CFG_DNSBL, rowid)
         if created:
             _delete_scoped_user(vm, username, original_nextuid)
