@@ -295,9 +295,10 @@ once and reads again, and the Update's start reads the backend again ([Update an
 | `feedHostFilter` | bool, `true` | `pfb_feed_filter_enabled()` |
 | `feedHostAllowlist` | list keyed by `cidr`, `[]`; item `{cidr: string}` | `pfb_feed_internal_allowlist()`: IP addresses and CIDRs, each once |
 | `selfAddresses` | list keyed by `address`, `[]`; item `{address: string}` | the addresses `pfb_ip_is_self()` accepts beyond `127.0.0.1` and `::1` |
-| `proxyUrl` | string `http://host:port` or `""`, `""` | System `proxyurl` and `proxyport` |
-| `proxyUser` | string, `""` | System `proxyuser` |
-| `proxyPassword` | secret string, `""` | System `proxypass` |
+| `proxyUrl` | string `scheme://host:port` (`http`, `https`, `socks5`, `socks5h`) or `""`; `""` | System `proxyurl` and `proxyport`; a host without a scheme means HTTP |
+| `proxyUser` | string, `""` | System `proxyuser`, or decoded proxy URL userinfo |
+| `proxyPassword` | secret string, `""` | System `proxypass`, or decoded proxy URL userinfo |
+| `proxyUnusable` | bool, `false` | A configured proxy that Core cannot represent; remote transfers refuse instead of bypassing it |
 
 - **Suppression limits.** A limit beyond what the IP page offers (hand-edited config.xml: 18, 8.5, `1e1`, negative) reads as
   0, as a group's own `suppressionCidr` reads a value out of its range; today's PHP applies such a number as typed. A limit
@@ -310,18 +311,10 @@ once and reads again, and the Update's start reads the backend again ([Update an
   server's address, IPv4 then IPv6 (`get_configured_ip_addresses()`, `get_configured_ipv6_addresses()`), each once. Never
   listed, though PHP would call them the box's own: `0.0.0.0`, `::`, link-local addresses, an IPv4-mapped IPv6 address and any
   address with a zone. Core adds the loopbacks.
-- **Proxy.** As `pfb_global()` builds the cURL proxy: nothing unless `proxyurl` is set (`"0"` counts as unset); `proxyport` as PHP hands
-  it to cURL ([`CURLOPT_PROXYPORT`](https://curl.se/libcurl/c/CURLOPT_PROXYPORT.html) is a number: `3128abc` is 3128; `00`, `abc`
-  and a service name pfSense's `is_port()` accepts, `http-alt` or `squid`, are 0), where unset or 0 is 1080, the port libcurl dials for
-  a proxy without one (probed: `http-alt` reaches 1080, not the service's 8080), so Core dials what PHP dials; user and password only
-  when both are set, as PHP authenticates only then. The URL is `http://` and the host name (letters, digits, `-`, `_` and `.`, as
-  pfSense's `is_fqdn()` takes them) or IP address (an IPv6 address in brackets); a hand-edited `http://` prefix is accepted. A
-  proxy URL that is anything else (user:password@, a path, another scheme, a line break) or a port `curl_setopt()` refuses (negative,
-  above 65535) is not passed to Core, whole: the proxy is then not projected, and Core reaches feeds directly. cURL's proxy never
-  applied to rsync or to local files.
-- **Core refuses what it reads.** `proxyUrl` must be `http://host:port` (port 1 to 65535, no userinfo, path, query or control
-  character); a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an
-  address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
+- **Proxy.** `pfb_global()` passes any nonempty `system/proxyurl` (`"0"` is empty in PHP) to `CURLOPT_PROXY`; cURL accepts HTTP, HTTPS, SOCKS4, SOCKS5, hostnames and IP literals. Core preserves HTTP/HTTPS and SOCKS5 (`socks5`/`socks5h`), including IPv6 literals, because its transport supports them; SOCKS4 and malformed hosts/URLs are `proxyUnusable`, not a missing proxy. Encoded URL userinfo is decoded into the in-process `proxyUser` and secret `proxyPassword`; explicit `proxyuser`/`proxypass` replace it only when both are nonempty.
+- `CURLOPT_PROXYPORT` receives `proxyport` only when PHP's `empty()` says it is set (`"0"` is unset); cURL reads numeric prefixes (`3128abc` → 3128), while `00`, `abc` and service names read as zero and use the proxy's default port 1080. A port outside 1–65535 is unusable to Core. With no port option, a URL's explicit port wins, otherwise the default is 1080. cURL's proxy is not applied to rsync or local files.
+- When `proxyUnusable` is true, feedfetch refuses remote transfers with reason `proxy_unusable` and keeps the last-known-good feed; it never retries by connecting directly. A configured-but-empty URL (`""` or `"0"`) means no proxy, as in PHP.
+- **Core refuses what it reads.** `proxyUrl` must use `http`, `https`, `socks5` or `socks5h` with a port from 1 to 65535 and no userinfo, path or query; a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
 
 Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it
 against today's readers (`pfb_global()`, `pfb_list_cidr_floors()`, `pfb_feed_internal_allowlist()`, `pfb_ip_is_self()`, the
