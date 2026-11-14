@@ -30,11 +30,12 @@ type WhoisRequest struct {
 
 // WhoisResult is the outcome of Whois.
 type WhoisResult struct {
-	Found    bool     // at least one entry resolved: the published copy holds this run's entries
-	Failed   bool     // the ".fail" marker was left: an entry failed or the batch ran out of time
-	Log      string   // what whoisconvert() prints to the update log
-	ErrorLog []string // the lines it also appends to error.log
-	Reason   string   // set when the run was abandoned or a file could not be written; the published copy is not half-written
+	Found      bool     // at least one entry resolved: the published copy holds this run's entries
+	Failed     bool     // the ".fail" marker was left: an entry failed or the batch ran out of time
+	ASNMissing bool     // an AS entry had no asn.csv after first-use provisioning
+	Log        string   // what whoisconvert() prints to the update log
+	ErrorLog   []string // the lines it also appends to error.log
+	Reason     string   // set when the run was abandoned or a file could not be written; the published copy is not half-written
 }
 
 // WhoisBudget is the whoisbatchtimeout override as whoisconvert() reads it: whole seconds, digits only (leading zeros
@@ -110,6 +111,7 @@ type whoisBatch struct {
 	log           strings.Builder
 	errorLog      []string
 	found, failed bool
+	asnMissing    bool
 }
 
 // errorLine is a line for both the update log and error.log.
@@ -155,6 +157,7 @@ func (b *whoisBatch) asn(entry string) {
 		b.log.WriteString("... completed")
 	}
 	if !regularFile(b.f.ASNCSV) {
+		b.asnMissing = true
 		b.errorLine(asnMissing)
 	} else {
 		// whoisconvert() deletes every A and S, wherever they stand (tr -d), before it asks for digits.
@@ -218,7 +221,7 @@ func asnRanges(path, number string, ipv6 bool) []string {
 
 // publish writes the batch's outcome: the failure marker, then the published copy (or the previous one back).
 func (b *whoisBatch) publish(feed Feed) WhoisResult {
-	res := WhoisResult{Found: b.found, Failed: b.failed, ErrorLog: b.errorLog}
+	res := WhoisResult{Found: b.found, Failed: b.failed, ASNMissing: b.asnMissing, ErrorLog: b.errorLog}
 	orig, bk := feed.path(".orig"), feed.path(".bk")
 	fail := func(reason string, err error) {
 		if res.Reason == "" {

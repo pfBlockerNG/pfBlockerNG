@@ -4587,8 +4587,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$state = escapeshellarg($pfb['core_state']);
 	$settingsCmd = escapeshellarg(PFB_CORE_SETTINGS_CMD);
 	$updateCmd = escapeshellarg(PFB_CORE_UPDATE_CMD);
-	// issue #3975: what Core's feed phase reads of this machine, each value one quoted argument; the user agent is the one cURL sends, without the
-	// line break a unique id may end with (Core refuses a user agent that holds one, and would not start)
+	// issue #3975/#3977: the folders a file:// feed may sit in, feed baselines, synthetic-feed input, list scripts, rsync, GeoIP sources and the IPinfo ASN database.
 	$feedFlags = '';
 	foreach (pfb_feed_local_dirs() as $folder) {
 		$feedFlags .= ' --feed-local-dir ' . escapeshellarg(rtrim($folder, '/'));
@@ -4596,6 +4595,12 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	foreach (PFB_LIST_SCRIPT_DIRS as $folder) {
 		$feedFlags .= ' --script-dir ' . escapeshellarg($folder);
 	}
+	$feedFlags .= ' --feed-orig-dir ' . escapeshellarg(rtrim($pfb['origdir'], '/'));
+	$feedFlags .= ' --dnsbl-orig-dir ' . escapeshellarg(rtrim($pfb['dnsorigdir'], '/'));
+	$feedDbDir = realpath($pfb['dbdir']);
+	$feedFlags .= ' --feed-db-dir ' . escapeshellarg($feedDbDir === FALSE ? rtrim($pfb['dbdir'], '/') : $feedDbDir);
+	$feedFlags .= ' --feed-geoip-dir ' . escapeshellarg(rtrim($pfb['ccdir'], '/'));
+	$feedFlags .= ' --feed-asn-csv ' . escapeshellarg(rtrim($pfb['geoipshare'], '/') . '/asn.csv');
 	$feedFlags .= ' --rsync-bin ' . escapeshellarg($pfb['rsync_bin'] ?? PFB_RSYNC_BIN);
 	$feedFlags .= ' --user-agent ' . escapeshellarg(trim((string) $pfb['curl_defaults'][CURLOPT_USERAGENT]));
 	$dir = escapeshellarg($coreDir);

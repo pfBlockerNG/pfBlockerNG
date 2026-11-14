@@ -48,9 +48,9 @@ const NoProbe = -1
 // IPFeed is what the IP loop keeps of one feed: the entry count, the failed lines, whether Suppression dropped valid IPv6
 // entries and the placeholder written instead of an empty result ("" for none).
 type IPFeed struct {
-	Entries, ParseFail int
-	Suppressed         bool
-	Placeholder        string
+	Entries, ParseFail, MappedDrops int
+	Suppressed                      bool
+	Placeholder                     string
 }
 
 // ParseIPFeed is pfb_ip_parse_feed() and the empty-feed block after it, over the whole feed r: every entry goes to out, one
@@ -79,6 +79,7 @@ func ParseIPFeed(r io.Reader, cfg IPConfig, ph string, content int, out io.Write
 		}
 		feed.Suppressed = feed.Suppressed || l.Suppressed
 		feed.ParseFail += l.ParseFail
+		feed.MappedDrops += l.MappedDrops
 		for _, msg := range l.Messages {
 			sink.message(msg)
 		}

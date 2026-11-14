@@ -262,6 +262,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 			os.Remove(published + v)
 			os.Rename(probe+v, published+v)
 		}
+	} else {
+		// Store response validators when present; a response without one leaves the previous value as PHP does.
+		writeValidators(feed, t.etag, t.lastMod)
 	}
 	return Result{OK: true, Status: t.status}
 }

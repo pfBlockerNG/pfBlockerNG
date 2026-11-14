@@ -6650,11 +6650,11 @@ function pfb_core_update_retry_due(?bool &$manifest = NULL): bool
 const PFB_CORE_UPDATE_MAX_REQUEST = 1048576;	// as Core takes a result back (1 MiB)
 
 /**
- * The request Core sent (docs/misc/core-api-protocol.md, "Update command"), validated: version 1, a trigger, a scope and a force
- * of the protocol's vocabulary, feed ids by pfb_schedule_feed_id()'s rules and the two Extras, each id once. Anything else is
- * refused: a request is data from another process and decides what runs as root.
+ * The request Core sent (docs/misc/core-api-protocol.md, "Update command"), validated: version 1, a trigger, a scope, a force,
+ * a 64-character lowercase hex token, feed ids by pfb_schedule_feed_id()'s rules and the two Extras, each id once. Anything
+ * else is refused: a request is data from another process and decides what runs as root.
  *
- * @return array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>}
+ * @return array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>, token: string}
  * @throws InvalidArgumentException the reason, when the request is refused
  */
 function pfb_core_update_request(string $stdin): array
@@ -6667,12 +6667,16 @@ function pfb_core_update_request(string $stdin): array
 		throw new InvalidArgumentException('the request is not one JSON object');
 	}
 	$request = (array) $object;
-	$unknown = array_diff(array_keys($request), ['version', 'trigger', 'scope', 'force', 'feeds', 'extras']);
+	$unknown = array_diff(array_keys($request), ['version', 'trigger', 'scope', 'force', 'feeds', 'extras', 'token']);
 	if ($unknown !== []) {
 		throw new InvalidArgumentException('the request has the unknown field ' . json_encode(reset($unknown)));
 	}
 	if (($request['version'] ?? NULL) !== 1) {
 		throw new InvalidArgumentException('the request is not of version 1');
+	}
+	$token = $request['token'] ?? NULL;
+	if (!is_string($token) || preg_match('/\A[a-f0-9]{64}\z/', $token) !== 1) {
+		throw new InvalidArgumentException('token must be 64 lowercase hexadecimal characters');
 	}
 	$choose = static function (string $field, array $allowed, ?string $default) use ($request): string {
 		$value = $request[$field] ?? $default;
@@ -6702,6 +6706,7 @@ function pfb_core_update_request(string $stdin): array
 			return pfb_schedule_feed_id($family, $header) === $id;
 		}),
 		'extras'  => $ids('extras', static fn (string $id): bool => in_array($id, ['extra:dcc', 'extra:bl'], TRUE)),
+		'token'   => $token,
 	];
 }
 
@@ -6770,7 +6775,7 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
  * and apply hold the dispatcher and feed-pass locks through all of it, as the tick did: they serialize the entry points Core
  * does not start (a page save, an HA receive). A manual Update leaves them to the passes it calls.
  *
- * @param array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>} $request
+ * @param array{trigger: string, scope: string, force: string, feeds: list<string>, extras: list<string>, token: string} $request
  * @param array{outcomes: array<string, string>, attempted: list<string>, geoipReady: ?bool} $result
  */
 function pfb_core_update_run(array $request, array &$result, array $seams): int

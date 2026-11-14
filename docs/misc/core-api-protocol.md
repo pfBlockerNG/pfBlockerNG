@@ -411,8 +411,9 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 `--update-cmd PATH` names the program that runs each Update; the path comes only from the flag. Core runs it once per Update:
 
 - **stdin:** one JSON object, `{"version": 1, "trigger": "scheduled|manual|apply|retry", "scope": "ip|dnsbl|both",
-  "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"]}`. `feeds` and `extras` are left out
-  when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
+  "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"], "token": "<64 lowercase hex characters>"}`.
+  `feeds` and `extras` are left out when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`).
+  The token is a fresh 32-byte random value encoded as lowercase hex for this Update; do not log it. A `scheduled` or `retry`
   Update names what to run; a `manual` one runs its scope.
 - **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
   restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it.
@@ -436,6 +437,55 @@ starts empty.
 **Stopping.** TERM or INT during an Update cancels it: the program's group gets TERM, and KILL 5 s later if it is still there,
 and Core stops after that. A program that ignores TERM keeps Core's stop past the rc script's 5 s before KILL. The Update is
 not resumed: the next Core starts idle and the scheduler plans from its state file.
+
+### FeedPhase
+
+While the Update program is running, it calls the Core API `FeedPhase` method to fetch, normalize, run the pre-script and parse
+the feeds named for that step. The program reads the token from stdin and passes it back; Core accepts it only during that
+Update. Peer-credential authentication still applies. The program sends no feed URL or credentials.
+
+The required request shape is:
+
+```json
+{"requestId":"phase-1","token":"<64 lowercase hex characters>","phase":"dnsbl","feeds":["dnsbl:example"],"force":"none"}
+```
+
+| Field | Type and bounds |
+|---|---|
+| `requestId` | Required mutating-method ID: 1–128 printable ASCII characters without spaces ([replay](#requestid-and-replay)). |
+| `token` | Required string of exactly 64 lowercase hexadecimal characters; the 32 random bytes Core added to this Update's stdin. |
+| `phase` | Required enum: `dnsbl` or `ip`. |
+| `feeds` | Required array of at most 1024 distinct IDs; each is at most 64 ASCII bytes. Unknown or wrong-phase IDs are rejected. |
+| `force` | Required enum matching this Update's force: `none`, `parse`, `download` or `both`. |
+
+Feed IDs use the scheduler's stable forms: `dnsbl:<header>`, `ipv4:<header>_v4`, `ipv6:<header>_v6`. The header is a non-empty
+ASCII word (`[A-Za-z0-9_]+`). A custom group uses `custom:dnsbl:<group>`, `custom:ipv4:<group>` or `custom:ipv6:<group>`, where
+the group is the same kind of word. The synthetic DNSBL-IP rows are `synthetic:ipv4:DNSBLIP_v4` and
+`synthetic:ipv6:DNSBLIP_v6`. The DNSBL phase accepts regular and custom DNSBL IDs; the IP phase accepts regular and custom
+IPv4/IPv6 IDs plus the synthetic IDs.
+The Update program calls DNSBL first, builds DNSBLIP, then calls the IP phase. The method deadline is 4 hours.
+Before requesting the IP phase, the Outpost must run its existing `asn_shell scheduled` step when any named feed has format
+`whois` or `asn`, or a named group uses `whoisConvert`, and `asn.csv` is missing. If it remains unavailable, Core returns a
+failed `whois` result with reason `asn_database_missing`; a WHOIS batch that resolves other entries keeps its partial publication.
+
+The response is `{"results":[...]}` in request order, with one result per ID (an empty request returns `{"results":[]}`). Every
+result always has these fields:
+
+| Field | Type and bounds |
+|---|---|
+| `id` | The requested ID, a string of 1–64 ASCII bytes. |
+| `disposition` | `changed`, `unchanged`, `failed`, `held` or `reparsed`. |
+| `stage` | `""`, `settings`, `probe`, `fetch`, `whois`, `normalize`, `script`, `parse` or `publish`. |
+| `reason` | String of at most 64 ASCII bytes; empty or a Core-owned reason code, never caller data, a URL, credential or filesystem path. |
+| `entries`, `parseFailures`, `mappedDrops`, `dnsblRows`, `ipv4Count`, `ipv6Count`, `schemeSkipped` | Non-negative JSON integers; zero when not applicable. |
+| `suppressed`, `updateIP`, `hpHostsStop`, `preScriptFailed`, `sourceChanged`, `normalizedChanged` | JSON booleans. |
+| `placeholder` | `""`, `empty` or `suppressed`. For an IP result PHP supplies its configured placeholder IP when this is not empty. |
+
+Core publishes successful parsed files beside their `.orig` baseline on the same filesystem: `<header>_v4.parsed.ip` or
+`<header>_v6.parsed.ip` for IP feeds; `<header>.parsed.ndjson`, `<header>.parsed.v4.ip` and `<header>.parsed.v6.ip` for DNSBL.
+Custom feeds insert `_custom` before the IP family suffix (or before `.parsed` for DNSBL); DNSBLIP uses its `DNSBLIP_v4` or
+`DNSBLIP_v6` header. DNSBL family files are written even when empty, so PHP can remove stale sidecars. A failed fetch, transform,
+parse or publication leaves the previous parsed artifacts intact. Results contain no credentials, source URLs or filesystem paths.
 
 ## Errors
 
@@ -461,7 +511,7 @@ Every error is the same envelope, with the HTTP status its code maps to:
 
 ## requestId and replay
 
-A mutating method (`InitializeSettings`, `SaveSettings`, `StartUpdate`) takes a `requestId` in its parameters: a string of 1 to
+A mutating method (`InitializeSettings`, `SaveSettings`, `StartUpdate`, `FeedPhase`) takes a `requestId` in its parameters: a string of 1 to
 128 printable ASCII characters without spaces. The method declares `requestId` in its own parameters, since unknown
 parameters are refused. The client makes one per logical operation (a UUID will do) and sends it
 again, with the byte-identical body, to resolve an unknown outcome such as a timeout.
