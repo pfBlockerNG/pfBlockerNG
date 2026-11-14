@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -83,6 +84,8 @@ def _run_check(
     for name, body in (("curl", _FAKE_CURL), ("go", _FAKE_GO)):
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(0o755)
+    # The job's `python3` is the ci image's; here it is the interpreter running this test, wherever that lives.
+    (bin_dir / "python3").symlink_to(sys.executable)
     log = tmp_path / "stub.log"
     result = subprocess.run(  # noqa: S603
         ["bash", "-e", "-c", _check_script()],  # noqa: S607 - Actions' default `run:` shell on ubuntu runners
