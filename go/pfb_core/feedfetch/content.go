@@ -38,10 +38,6 @@ var mimeAllowed = map[string]bool{
 	"application/x-gzip": true, mimeBzip2: true, mimeZip: true, mimeTar: true,
 }
 
-// boms are the byte order marks of UTF-16 and UTF-32 text; the 4-byte ones come first, as pfb_utf16_transcode_file()
-// tests them (FF FE 00 00 is a UTF-32LE mark before it is a UTF-16LE mark and a NUL).
-var boms = [][]byte{{0xff, 0xfe, 0, 0}, {0, 0, 0xfe, 0xff}, {0xff, 0xfe}, {0xfe, 0xff}}
-
 // classify is `file -b --mime-type` for the head of a body, as far as the gates need it: the magic numbers of the
 // containers the allow-list names, then text or binary. more tells that the body goes on past head.
 //
@@ -71,17 +67,19 @@ func classify(head []byte, more bool) string {
 }
 
 func isText(b []byte) bool {
-	for _, bom := range boms {
-		if bytes.HasPrefix(b, bom) {
-			return true
-		}
+	if _, ok := bomOf(b); ok {
+		return true
 	}
 	return bytes.IndexByte(b, 0) < 0
 }
 
 // htmlOpening is libmagic's "<!doctype html" / "<html" at the start, case-blind, after white space and a UTF-8 mark.
 func htmlOpening(b []byte) bool {
-	b = bytes.TrimLeft(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), " \t\r\n\v\f")
+	return htmlTag(bytes.TrimLeft(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), " \t\r\n\v\f"))
+}
+
+// htmlTag tells that b opens with "<!doctype html" or "<html", case-blind (stripos() === 0).
+func htmlTag(b []byte) bool {
 	for _, open := range [...]string{"<!doctype html", "<html"} {
 		if len(b) >= len(open) && bytes.EqualFold(b[:len(open)], []byte(open)) {
 			return true
@@ -142,9 +140,10 @@ func innerVerdict(r io.Reader) string {
 
 // gate runs the content gates on the staged ".raw" and returns the body to publish: the staged file itself for a text
 // feed, or an archive's extraction staged beside the published copy. A refusal is a Result (without a Status), the
-// extraction removed; ".raw" is the caller's. The order is pfb_download()'s: the verdict, room for the archive, its
-// structural test, the inner verdict of a gzip or bzip2, the extraction, and a zip's verdict on what it extracted. Every
-// step ends with the context's: PHP has no wall-clock bound on any of them.
+// extraction removed; ".raw" is the caller's. The order is pfb_download()'s: the verdict, the sanity scan of a text
+// body, room for the archive, its structural test, the inner verdict of a gzip or bzip2, the extraction, a zip's verdict
+// on what it extracted, and the sanity scan of the extraction. Every step ends with the context's: PHP has no
+// wall-clock bound on any of them.
 func (f *Fetcher) gate(ctx context.Context, feed Feed, raw string, lastMod time.Time) (string, *Result) {
 	// A refusal is the feed's fault unless the context ended the work: which of the two ended the work is what the error
 	// that stopped it says, and for the verdict (whose probes swallow theirs) what the context says.
@@ -167,6 +166,12 @@ func (f *Fetcher) gate(ctx context.Context, feed Feed, raw string, lastMod time.
 	switch mime {
 	case mimeGzip, mimeBzip2, mimeZip, mimeTar:
 	default:
+		// ADR-49, opt-in: text is scanned as served (pfb_download scans text/plain, text/html and the CSV types).
+		if f.Sanity && (mime == mimeText || mime == mimeHTML) {
+			if v := sane(raw); v != "" {
+				return refuse("plaintext", v, filepath.Base(raw))
+			}
+		}
 		return raw, nil
 	}
 	if !lastMod.IsZero() {
@@ -207,6 +212,13 @@ func (f *Fetcher) gate(ctx context.Context, feed Feed, raw string, lastMod time.
 		if _, detected, ok := verdict(ctx, body); !ok {
 			os.Remove(body)
 			return refuse("inner", "inner_mime_not_allowed", detected)
+		}
+	}
+	// #2660: an extraction is scanned whatever it holds, under the published copy's name.
+	if f.Sanity {
+		if v := sane(body); v != "" {
+			os.Remove(body)
+			return refuse("plaintext", v, filepath.Base(feed.path(".orig")))
 		}
 	}
 	return body, nil

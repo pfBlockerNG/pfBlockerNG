@@ -59,14 +59,16 @@ func dropDigests(feed Feed) error {
 	return nil
 }
 
-// publish makes body the published copy in one rename. The digest recorded is of wire, the raw bytes the transfer left
-// (the probe hashes raw bytes, #713): body itself for a text feed, the archive for an extraction, and it is taken before
-// a missing trailing newline is added to body (#1263).
+// publish makes body the published copy in one rename, finished as pfb_download_finalize_text() finishes it: the digest
+// recorded is of wire, the raw bytes the transfer left (the probe hashes raw bytes, #713): body itself for a text feed,
+// the archive for an extraction. Then UTF-16/32 text is transcoded to UTF-8 (#946), and a missing trailing newline is
+// added (#1263).
 func publish(feed Feed, body, wire string, lastMod time.Time) error {
 	digest, err := fileDigest(wire)
 	if err != nil {
 		return errors.New("staged body could not be read")
 	}
+	transcode(body)
 	f, err := os.OpenFile(body, os.O_RDWR, 0)
 	if err != nil {
 		return errors.New("staged body could not be read")

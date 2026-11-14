@@ -4,9 +4,10 @@
 // (last-known-good).
 //
 // After the transfer an ordinary feed passes the content gates (content.go, archive.go): the MIME verdict and its
-// allow-list, then for a gzip, bzip2, zip or tar the structural test, the inner verdict, the extraction (every member,
-// under a 2 GiB per-file ceiling, through the standard library alone) and the publication. Not yet here, and not part of
-// #3973's first part: the opt-in sanity scan and the UTF-16/32 transcode (ADR-49), ET IQRisk and xlsx, and Extras.
+// allow-list, the opt-in sanity scan of a text body (ADR-49, sanity.go), then for a gzip, bzip2, zip or tar the
+// structural test, the inner verdict, the extraction (every member, under a 2 GiB per-file ceiling, through the standard
+// library alone) and the sanity scan of what it extracted. The published copy is UTF-16/32 text transcoded to UTF-8, and
+// newline-terminated. Not yet here: ET IQRisk and xlsx, and Extras.
 //
 // A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", its validators ".orig.etag" and
 // ".orig.lastmod", the xxh128 of the raw bytes it was published from ".orig.xxhash128", a changed probe's body ".probe"
@@ -63,6 +64,7 @@ type Fetcher struct {
 	// FreeBytes is the space the process may still write in dir; ok is false when it cannot tell, which is no shortfall
 	// (pfb_extract_space_shortfall). Nil reads the file system.
 	FreeBytes func(dir string) (free uint64, ok bool)
+	Sanity    bool // ADR-49's opt-in plain-text sanity scan (gen/pfb_feed_sanity); off by default, as in PHP
 
 	// Whois only.
 	Lookup    func(ctx context.Context, network, host string) ([]netip.Addr, error) // one family's addresses ("ip4" or "ip6"); nil is the system resolver
