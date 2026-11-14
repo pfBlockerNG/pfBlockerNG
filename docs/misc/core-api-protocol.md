@@ -432,7 +432,9 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   Core stops; never when the program exits by itself, so a daemon it started keeps running. When Core dies, the kernel
   sends the watcher HUP (FreeBSD's `PROC_PDEATHSIG_CTL`, Linux's parent-death signal); a HUP while Core still is its parent
   came from inside the group and is ignored. The watcher then kills the whole group (TERM, then KILL after 3 s, itself
-  included), so a Core killed outright leaves nothing of its Update running.
+  included), so a Core killed outright leaves nothing of its Update running. Once the program has exited, the watcher writes
+  one byte to a pipe Core gave it as fd 4 (never passed on to the program), before it exits itself: a cancel in between finds
+  the program done and leaves the group alone, as it would without the watcher.
 
 Core then records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically): each
 feed's outcome, the attempted ids that stay pending, and the GeoIP readiness the program saw (`true` until the first report).
