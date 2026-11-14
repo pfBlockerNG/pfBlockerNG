@@ -48,6 +48,18 @@ TESTS = (
     "TestAValidResultOnFd3IsReturned",
     "TestANormalExitLeavesAChildOfTheProgramRunning",
     "TestAGrandchildHoldingTheLogAndTheResultFdDoesNotDelayRun",
+    "TestAContextEndingWithTheWatcherStoppedAfterTheProgramExitedPreservesItsDaemon",
+    "TestTheUpdateProgramIsCoresOwnChildInTheWatchdogsGroup",
+    "TestAnUnexpectedWatchdogDeathEndsTheUnprotectedUpdateAndItsChildren",
+    "TestCoresDeathBeforeCompletionCleansTheGroupButAfterRunLeavesItsDaemon",
+    "TestAProgramThatCannotStartReturnsAnErrorWithoutLeavingAWatchdog",
+    "TestTheWatchdogAcknowledgesReadinessWithItsOwnProcessGroupEstablished",
+    "TestAStoppedWatchdogsAcknowledgementTimeoutLeavesTheSuccessfulProgramsDaemon",
+    "TestAWatchdogThatCannotReportReadinessExitsInsteadOfWaitingForCompletion",
+    "TestEveryTerminalProgramResultCommitsCompletionWithoutKillingItsDaemon",
+    "TestADeadWatchdogKeepsItsGroupIdentityUntilCleanupCanNoLongerSignalIt",
+    "TestUnexpectedWatchdogDeathIsTheCauseOfPromptGroupCleanup",
+    "TestAStartFailureLeavesNoUnwaitedOwnedChildAndProcessInspectionMustWork",
 )
 
 

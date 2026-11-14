@@ -424,17 +424,18 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   `failed`, whatever the program wrote on fd 3 is not recorded (no outcome, no attempt, no GeoIP readiness), and the
   reserved occurrences stay pending for the next quarter hour. A skipped Update truncates the previous Update's log like any
   other, and its own log holds what the program printed before it deferred.
-- **Process group and bounds:** the program runs under an Update watcher, `pfb-core --update-supervise PATH` (Core's own
-  binary re-run; it dispatches before anything of Core starts and holds nothing but the program; not the rc script's
-  `daemon(8)` supervisor). The watcher leads a process group of its own, the Update's, runs the program in it with stdin,
-  stdout, stderr and fd 3 passed through, and exits as the program did: the same status, or the same signal by its default
-  action. The group is killed (TERM, then KILL after 3 s) at a hard cap of 4 hours, when the Update is cancelled and when
-  Core stops; never when the program exits by itself, so a daemon it started keeps running. When Core dies, the kernel
-  sends the watcher HUP (FreeBSD's `PROC_PDEATHSIG_CTL`, Linux's parent-death signal); a HUP while Core still is its parent
-  came from inside the group and is ignored. The watcher then kills the whole group (TERM, then KILL after 3 s, itself
-  included), so a Core killed outright leaves nothing of its Update running. Once the program has exited, the watcher writes
-  one byte to a pipe Core gave it as fd 4 (never passed on to the program), before it exits itself: a cancel in between finds
-  the program done and leaves the group alone, as it would without the watcher.
+- **Process group and bounds:** Core is the program's direct parent and receives its actual exit status or signal; no
+  intermediary mirrors it. A separate watchdog (Core's own binary re-run, not the rc script's `daemon(8)` supervisor)
+  leads the Update's process group, which the program joins. The watchdog's private readiness and completion pipes are
+  never inherited by the program; the program's stdin, stdout, stderr and result fd 3 are regular files.
+  Core kills the group (TERM, then KILL after 3 s) at a hard cap of 4 hours, when the Update is cancelled and when Core
+  stops, but only while the actual program is still running. Cancellation after the program exits preserves its result
+  and any daemons it started, even if the watchdog has not yet observed completion.
+  Unless Core deliberately initiated group cleanup, it sends the watchdog a completion byte for every terminal program
+  result (success, error or signal) and waits for the watchdog's acknowledgement and exit before the run returns.
+  The watchdog cleans up the group only if Core dies before that completion commit, using TERM, then KILL after 3 s.
+  **Crash-window limit:** Core dying before the completion byte is acknowledged is an interrupted Update: group cleanup
+  can kill intentional descendants even if the program has already exited. Normal program completion leaves them running.
 
 Core then records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically): each
 feed's outcome, the attempted ids that stay pending, and the GeoIP readiness the program saw (`true` until the first report).

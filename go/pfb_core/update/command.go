@@ -36,7 +36,7 @@ var reap = (*exec.Cmd).Wait
 // fd 3 is the result, lines of {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool};
 // all four are regular files, never pipes (a daemon an Update restarts would hold one open). The program's group gets TERM when
 // ctx ends or Cap (0: 4 hours) passes, and KILL if a member is left after 3 s; a program that has exited leaves its group alone.
-// The program runs under a supervisor, this binary re-run (supervise), which kills the whole group when Core dies.
+// Core owns the program directly; a re-executed watchdog kills its group if Core dies before committing completion.
 type Command struct {
 	Path string
 	Cap  time.Duration
@@ -80,61 +80,67 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	limit := c.limit()
 	ctx, cancel := context.WithTimeoutCause(ctx, limit, fmt.Errorf("it ran past its %s cap", limit))
 	defer cancel()
-	self, err := os.Executable()
-	if err != nil {
-		return Result{}, fmt.Errorf("the update supervisor cannot be found: %w", err)
-	}
-	// The supervisor writes a byte to fd 4 once the program has exited, before it exits itself: between the two only the byte
-	// tells Core the program is done (issue #4003)
-	ended, endedW, err := os.Pipe()
+	watcher, err := startWatchdog(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	defer ended.Close()
-	endedFd := int(ended.Fd()) // Fd makes it blocking: programEnded must never wait
-	if err := syscall.SetNonblock(endedFd, true); err != nil {
-		_ = endedW.Close()
-		return Result{}, err
-	}
-	cmd := exec.Command(self, superviseArg, c.Path)
+	cmd := exec.Command(c.Path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
-	cmd.ExtraFiles = []*os.File{fd3, endedW}
-	cmd.SysProcAttr = procAttr()
-	err = cmd.Start()
-	_ = endedW.Close()
-	if err != nil {
-		return Result{}, err
+	cmd.ExtraFiles = []*os.File{fd3}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: watcher.cmd.Process.Pid}
+	select {
+	case <-watcher.exited:
+		_ = watcher.retire(false)
+		return Result{}, errors.New("the update watchdog exited before the program started")
+	default:
 	}
-	exited, killed := make(chan struct{}), make(chan bool, 1)
+	if err := ctx.Err(); err != nil {
+		return Result{}, errors.Join(context.Cause(ctx), watcher.retire(false))
+	}
+	if err := cmd.Start(); err != nil {
+		return Result{}, errors.Join(err, watcher.retire(false))
+	}
+	exited, decision := make(chan struct{}), make(chan error, 1)
 	go func() {
+		var cause error
 		select {
 		case <-exited:
-			killed <- false
+			decision <- nil
+			return
 		case <-ctx.Done():
-			pid := cmd.Process.Pid
-			if leaderExited(pid) || programEnded(endedFd) {
-				killed <- false // the program has exited, reaped or not: what it left running is not Run's to kill
-				return
-			}
-			group := -pid
-			_ = syscall.Kill(group, syscall.SIGTERM)
-			if !groupGone(group, killGrace) {
-				_ = syscall.Kill(group, syscall.SIGKILL)
-				groupGone(group, killGrace) // KILL only queues: a member leaves the group once it has exited and been reaped
-			}
-			killed <- true
+			cause = fmt.Errorf("the update program was killed: %w", context.Cause(ctx))
+		case <-watcher.exited:
+			cause = errors.New("the update watchdog exited while the program was running")
 		}
+		if leaderExited(cmd.Process.Pid) || exitedUnreaped(cmd.Process.Pid) {
+			decision <- nil // an exited program's descendants are no longer cancellation's to kill
+			return
+		}
+		group := -watcher.cmd.Process.Pid
+		_ = syscall.Kill(group, syscall.SIGTERM)
+		if !groupGone(group, killGrace) {
+			_ = syscall.Kill(group, syscall.SIGKILL)
+			_ = watcher.reap()
+			groupGone(group, killGrace)
+		}
+		decision <- cause
 	}()
 	err = reap(cmd)
 	close(exited)
-	switch wasKilled := <-killed; {
-	case wasKilled:
-		err = fmt.Errorf("the update program was killed: %w", context.Cause(ctx))
+	killed := <-decision
+	watchErr := watcher.retire(killed != nil)
+	switch {
+	case killed != nil:
+		err = killed
 	case isDeferral(err):
+		if watchErr != nil {
+			return Result{}, watchErr
+		}
 		return Result{}, fmt.Errorf("the update program deferred the Update (exit status %d): %w", deferredStatus, ErrDeferred)
 	case err != nil:
 		err = fmt.Errorf("the update program failed: %w", err)
 	}
+	err = cmp.Or(err, watchErr)
 	res, resErr := readResult(fd3)
 	return res, cmp.Or(err, resErr)
 }
@@ -152,13 +158,6 @@ func scratch(dir, pattern string) (*os.File, func(), error) {
 		return nil, nil, err
 	}
 	return f, func() { _ = f.Close(); _ = os.Remove(f.Name()) }, nil
-}
-
-// programEnded reports whether the supervisor has written that the program exited, without waiting for it: ended is the pipe's
-// read end, made non-blocking, so an empty one is EAGAIN.
-func programEnded(ended int) bool {
-	n, _ := syscall.Read(ended, make([]byte, 1))
-	return n == 1
 }
 
 // groupGone reports whether the process group has no member within grace, polling every 10 ms (docs/misc/external-process-waits.md).

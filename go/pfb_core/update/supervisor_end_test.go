@@ -9,9 +9,7 @@ import (
 	"testing"
 )
 
-// A program a signal ended reads to Core exactly as it would without the supervisor between them (issue #4003): the same
-// "signal: ..." error, for the signals the Go runtime itself would catch, panic on or ignore too, and nothing of the supervisor
-// in the log. The supervisor never dumps core itself (the program's own core file is the one to read), so no "(core dumped)".
+// Core waits for its own program directly, preserving the signal and the program's own core-dump status.
 func TestASignalEndsRunAsItEndedTheProgram(t *testing.T) {
 	for _, sig := range []string{"KILL", "TERM", "INT", "HUP", "SEGV", "ABRT", "PIPE", "USR1"} {
 		t.Run(sig, func(t *testing.T) {
@@ -22,7 +20,7 @@ func TestASignalEndsRunAsItEndedTheProgram(t *testing.T) {
 			p, _ := program(t, `kill -`+sig+` $$`)
 			log := newLog(t)
 			_, err := runCmd(t, p, Request{Trigger: "manual"}, log)
-			wantErr := "the update program failed: " + strings.TrimSuffix(want.Error(), " (core dumped)")
+			wantErr := "the update program failed: " + want.Error()
 			if err == nil || err.Error() != wantErr {
 				t.Errorf("Run = %v, want %q, as the program ended", err, wantErr)
 			}

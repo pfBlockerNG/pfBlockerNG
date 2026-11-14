@@ -1,81 +1,167 @@
 package update
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 )
 
-// superviseArg, then the program's path, makes the binary that links this package (pfb-core, or this package's test binary)
-// the Update's supervisor (issue #4003). Command.Run starts it in a process group of its own, tied to Core by the
-// parent-death signal (procAttr); it runs the program in that same group, passing stdin, stdout, stderr and fd 3 through,
-// writes a byte to fd 4 once the program has exited, and exits as the program did. It holds nothing else: no settings, store,
-// socket or log.
+// superviseArg re-executes this binary as the Update's watchdog; fd 3 reports readiness and fd 4 receives completion.
 const superviseArg = "--update-supervise"
 
-// coreDied is the parent-death signal the supervisor gets when Core dies. Core itself only ever sends the group TERM and KILL.
 const coreDied = syscall.SIGHUP
 
-// init dispatches the supervisor before anything of pfb-core runs, as the first thing the binary does.
+// Completion acknowledgement has its own budget: a short TERM grace does not imply the watchdog can exit that fast.
+const watchdogAckTimeout = 3 * time.Second
+
 func init() {
-	if len(os.Args) == 3 && os.Args[1] == superviseArg {
-		os.Exit(supervise(os.Args[2]))
+	if len(os.Args) == 2 && os.Args[1] == superviseArg {
+		os.Exit(supervise())
 	}
 }
 
-// supervise runs the program at path in its own process group and returns its exit status; a program a signal ended ends the
-// supervisor with the same signal. When Core dies first, the group gets TERM, KILL after killGrace, and the supervisor with it.
-func supervise(path string) int {
-	core := os.Getppid()
-	died := make(chan os.Signal, 1)
-	signal.Notify(died, coreDied)
-	// Core's TERM to the group is for the program: the supervisor stays to report how it ends. A caught signal is reset to its
-	// default in the program (exec), unlike an ignored one.
-	signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
-	ended := os.NewFile(4, "ended")
-	syscall.CloseOnExec(4) // Core's alone: the program and what it starts never hold it
-	cmd := exec.Command(path)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.ExtraFiles = []*os.File{os.NewFile(3, "result")}
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "the update program cannot be started: %v\n", err)
-		return 127
+// The completion pipe belongs only to Core: its EOF, not a potentially unrelated HUP, proves Core abandoned the Update.
+func supervise() int {
+	signal.Notify(make(chan os.Signal, 1), coreDied, syscall.SIGTERM)
+	ready, completion := os.NewFile(3, "ready"), os.NewFile(4, "completion")
+	syscall.CloseOnExec(3)
+	syscall.CloseOnExec(4)
+	if _, err := ready.Write([]byte{1}); err != nil {
+		return 1
 	}
-	exited := make(chan struct{})
-	var code int
-	var sig syscall.Signal
-	go func() { code, sig = awaitExit(cmd); close(exited) }()
-	for {
-		select {
-		case <-exited:
-			// Before the supervisor's own exit: Core must not take the window between the two for a running program
-			_, _ = ended.Write([]byte{1})
-			if sig != 0 { // the same end as the program's: Core reads the signal from the supervisor's status
-				dieBy(sig)
-				return 128 + int(sig) // a signal that cannot end a process (SIGSTOP and the like)
+	_ = ready.Close()
+	var completed [1]byte
+	if _, err := io.ReadFull(completion, completed[:]); err == nil && completed[0] == 1 {
+		return 0
+	}
+	group := -syscall.Getpgrp()
+	_ = syscall.Kill(group, syscall.SIGTERM)
+	time.Sleep(killGrace)
+	_ = syscall.Kill(group, syscall.SIGKILL)
+	select {}
+}
+
+type watchdog struct {
+	cmd        *exec.Cmd
+	completion *os.File
+	exited     chan struct{}
+	err        error
+	reaped     bool
+}
+
+func startWatchdog(ctx context.Context) (*watchdog, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("the update watchdog cannot be found: %w", err)
+	}
+	ready, readyW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	defer ready.Close()
+	defer readyW.Close()
+	completion, completionW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	defer completion.Close()
+	w := &watchdog{cmd: exec.Command(self, superviseArg), completion: completionW, exited: make(chan struct{})}
+	w.cmd.ExtraFiles = []*os.File{readyW, completion}
+	w.cmd.SysProcAttr = procAttr()
+	if err := w.cmd.Start(); err != nil {
+		_ = completionW.Close()
+		return nil, err
+	}
+	_ = readyW.Close()
+	_ = completion.Close()
+	go func() {
+		if runtime.GOOS != "linux" && runtime.GOOS != "freebsd" {
+			// shortcut: other OSes lack the non-reaping query; only Linux and FreeBSD run Core.
+			w.err = w.cmd.Wait()
+			w.reaped = true
+		} else {
+			// Keep the group leader's identity reserved until Core has sent its last group signal.
+			for !exitedUnreaped(w.cmd.Process.Pid) {
+				time.Sleep(10 * time.Millisecond)
 			}
-			return code
-		case <-died:
-			if os.Getppid() == core { // a hangup sent inside the group, not Core's death: the program's business
-				continue
-			}
-			group := -syscall.Getpgrp()
-			_ = syscall.Kill(group, syscall.SIGTERM)
-			time.Sleep(killGrace)                    // every member gets the grace, as Core gives it
-			_ = syscall.Kill(group, syscall.SIGKILL) // the supervisor too: what TERM left of the group ends here
-			select {}
 		}
+		close(w.exited)
+	}()
+	readiness := make(chan error, 1)
+	go func() {
+		var b [1]byte
+		_, err := io.ReadFull(ready, b[:])
+		if err == nil && b[0] != 1 {
+			err = errors.New("invalid readiness byte")
+		}
+		readiness <- err
+	}()
+	select {
+	case err = <-readiness:
+		if err == nil {
+			select {
+			case <-w.exited:
+				err = errors.New("the update watchdog exited before the program started")
+			default:
+				return w, nil
+			}
+		}
+	case <-w.exited:
+		err = errors.New("the update watchdog exited before readiness")
+		_ = ready.Close()
+		<-readiness
+	case <-ctx.Done():
+		err = context.Cause(ctx)
+		_ = ready.Close()
+		<-readiness
 	}
+	_ = completionW.Close()
+	_ = w.cmd.Process.Kill()
+	_ = w.reap()
+	return nil, err
 }
 
-// dieBy ends the supervisor with sig, by the signal's default action (the Go runtime's own handler would panic on SEGV, exit 2
-// on ABRT, ignore PIPE or USR1), with no core file.
-func dieBy(sig syscall.Signal) {
-	noCoreDump()
-	defaultAction(sig)
-	_ = syscall.Kill(os.Getpid(), sig)
-	time.Sleep(time.Second)
+func (w *watchdog) reap() error {
+	<-w.exited
+	if !w.reaped {
+		w.err = w.cmd.Wait()
+		w.reaped = true
+	}
+	return w.err
+}
+
+// retire commits completion before acknowledging the watchdog's exit; a stuck watchdog never costs a successful daemon.
+func (w *watchdog) retire(cleanup bool) error {
+	var err error
+	if !cleanup {
+		_, err = w.completion.Write([]byte{1})
+	}
+	_ = w.completion.Close()
+	timer := time.NewTimer(watchdogAckTimeout)
+	defer timer.Stop()
+	select {
+	case <-w.exited:
+	case <-timer.C:
+		_ = w.cmd.Process.Kill()
+		_ = w.reap()
+		return errors.New("the update watchdog did not acknowledge completion")
+	}
+	_ = w.reap()
+	if cleanup {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("the update watchdog could not receive completion: %w", err)
+	}
+	if w.err != nil {
+		return fmt.Errorf("the update watchdog failed: %w", w.err)
+	}
+	return nil
 }
