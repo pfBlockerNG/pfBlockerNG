@@ -262,10 +262,8 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 
 	// Feed verbs start Core Updates; `cron`/`pfb_trigger trigger=cron` use apply; manual and force preserve scope/force.
 	// A refusal exits non-zero; saves and TOP1M record pending apply instead of falling back to a PHP feed pass.
+	// DEPRECATED CLI verb: pfblockerng.php cron. Use pfb_trigger scope=both force=false trigger=cron.
 	if (in_array($argv[1], ['cron', 'update', 'updateip', 'updatednsbl', 'pfb_trigger', 'forcecheck'], TRUE)) {
-		if ($argv[1] === 'cron') {
-			logger(LOG_NOTICE, localize_text('Starting cron process.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-		}
 		$pfb_update_request = match ($argv[1]) {
 			'cron' => ['trigger' => 'apply'],
 			'update' => ['trigger' => 'manual', 'scope' => 'both', 'force' => 'none'],
