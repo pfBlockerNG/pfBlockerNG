@@ -306,7 +306,8 @@ if ($_POST) {
 				$input_errors[] = $privacy_error . ' ' . gettext('No General settings were saved.');
 			} elseif (!$pfb_core_errors) {
 				$pfb['save'] = TRUE;
-				sync_package_pfblockerng();
+				sync_package_pfblockerng();	// save mode retains config, rc-script and cron reconciliation; feed loops stay disabled.
+				pfb_update_apply_after_save();
 				header('Location: /pfblockerng/pfblockerng_general.php');
 				exit;
 			}

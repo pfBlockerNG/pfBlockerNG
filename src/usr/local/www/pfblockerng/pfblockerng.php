@@ -66,12 +66,6 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');	// 'include fu
 global $g, $pfb;
 pfb_global();
 
-function pfb_cli_feed_pass_exit(bool $completed, ?string $deferred_by): never {
-	if ($deferred_by !== NULL) {
-		fwrite(STDERR, pfb_feed_pass_deferral_message($deferred_by));
-	}
-	exit(pfb_feed_pass_exit_code($completed, $deferred_by));
-}
 
 // Clear IP/DNSBL counters via CRON
 if (isset($argv[1])) {
@@ -266,24 +260,18 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 
 	$pfb['extras_update'] = FALSE;  // Flag when Extras (MaxMind/TOP1M) are updateded via cron job
 
-	// Script Arguments
-	$pfb_deferred_by = NULL;
-	switch($argv[1]) {
-		case 'cron':		// Sync 'cron' -- issue #3941: Core names the feeds a scheduled Update checks (the core_update verb); no feed is named here, so this retries only the `*.fail` feeds; kept for the smoke harness and by hand
-			logger(LOG_NOTICE, localize_text('Starting cron process.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			$pfb_completed = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $pfb_deferred_by);
-			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);
-		case 'updateip':	// Sync IP-only reload [DEPRECATED — use pfb_trigger scope=ip force=true trigger=force]
-		case 'updatednsbl':	// Sync DNSBL-only reload [DEPRECATED — use pfb_trigger scope=dnsbl force=true trigger=force]
-			$pfb_completed = sync_package_pfblockerng($argv[1], $pfb_deferred_by);
-			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);	// deprecation warning logged inside sync_package_pfblockerng
-		case 'update':		// Full update pass [DEPRECATED — use pfb_trigger scope=both force=false trigger=manual]
-			$pfb_completed = sync_package_pfblockerng('update', $pfb_deferred_by);
-			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);	// deprecation warning logged inside sync_package_pfblockerng
-		case 'pfb_trigger':	// ADR-43: explicit {scope, force, trigger} API
-			// Usage: pfblockerng.php pfb_trigger scope=<both|ip|dnsbl> force=<true|false> trigger=<cron|manual|force>
-			$pfb_tscope   = 'both';
-			$pfb_tforce   = FALSE;
+	// Feed verbs start Core Updates; manual and force requests preserve scope/force.
+	// A refusal exits non-zero; saves and TOP1M record pending apply instead of falling back to a PHP feed pass.
+	if (in_array($argv[1], ['update', 'updateip', 'updatednsbl', 'pfb_trigger', 'forcecheck'], TRUE)) {
+		$pfb_update_request = match ($argv[1]) {
+			'update' => ['trigger' => 'manual', 'scope' => 'both', 'force' => 'none'],
+			'updateip' => ['trigger' => 'manual', 'scope' => 'ip', 'force' => 'download'],
+			'updatednsbl' => ['trigger' => 'manual', 'scope' => 'dnsbl', 'force' => 'download'],
+			default => NULL,
+		};
+		if ($argv[1] === 'pfb_trigger') {
+			$pfb_tscope = 'both';
+			$pfb_tforce = FALSE;
 			$pfb_ttrigger = 'manual';
 			foreach (array_slice($argv, 2) as $pfb_targ) {
 				if (str_starts_with($pfb_targ, 'scope=')) {
@@ -294,25 +282,12 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 					$pfb_ttrigger = substr($pfb_targ, 8);
 				}
 			}
-			// Allow-list: reject unknown scope/trigger values (argv is user-controlled).
-			// Unknown scope → 'both' (full pass); unknown trigger → 'manual' (safe default).
-			if (!in_array($pfb_tscope, array('ip', 'dnsbl', 'both'), TRUE)) {
-				pfb_logger("pfb_trigger: unknown scope={$pfb_tscope} ignored — defaulting to 'both'\n", 1);
-				$pfb_tscope = 'both';
-			}
-			if (!in_array($pfb_ttrigger, array('cron', 'manual', 'force'), TRUE)) {
-				pfb_logger("pfb_trigger: unknown trigger={$pfb_ttrigger} ignored — defaulting to 'manual'\n", 1);
-				$pfb_ttrigger = 'manual';
-			}
-			$pfb_completed = sync_package_pfblockerng(
-				array('scope' => $pfb_tscope, 'force' => $pfb_tforce, 'trigger' => $pfb_ttrigger),
-				$pfb_deferred_by
-			);
-			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);
-		case 'forcecheck':	// On-demand detector: bypass hour-gate, run pfb_update_check for all in-scope feeds.
-			// Usage: pfblockerng.php forcecheck scope=<both|ip|dnsbl>
-			// Validators (and optionally hashes) must be cleared by the caller before dispatching
-			// this verb so the detector re-fetches and re-evaluates feed content.
+			$pfb_tscope = in_array($pfb_tscope, ['ip', 'dnsbl', 'both'], TRUE) ? $pfb_tscope : 'both';
+			$pfb_ttrigger = in_array($pfb_ttrigger, ['cron', 'manual', 'force'], TRUE) ? $pfb_ttrigger : 'manual';
+			$pfb_update_request = $pfb_ttrigger === 'cron'
+				? ['trigger' => 'apply']
+				: ['trigger' => 'manual', 'scope' => $pfb_tscope, 'force' => $pfb_tforce ? 'download' : 'none'];
+		} elseif ($argv[1] === 'forcecheck') {
 			$pfb_fcscope = 'both';
 			$pfb_fchashes = FALSE;
 			foreach (array_slice($argv, 2) as $pfb_fcarg) {
@@ -322,19 +297,31 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 					$pfb_fchashes = TRUE;
 				}
 			}
-			if (!in_array($pfb_fcscope, array('ip', 'dnsbl', 'both'), TRUE)) {
-				pfb_logger("forcecheck: unknown scope={$pfb_fcscope} ignored — defaulting to 'both'\n", 1);
-				$pfb_fcscope = 'both';
-			}
-			pfb_logger("\n [ Force check - scope={$pfb_fcscope} ]\n", 1);
-			$pfb_completed = pfblockerng_sync_cron(
-				TRUE,
-				$pfb_fcscope,
-				FALSE,
-				$pfb_fchashes,
-				$pfb_deferred_by
-			);
-			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);
+			$pfb_fcscope = in_array($pfb_fcscope, ['ip', 'dnsbl', 'both'], TRUE) ? $pfb_fcscope : 'both';
+			$pfb_update_request = [
+				'trigger' => 'manual',
+				'scope' => $pfb_fcscope,
+				'force' => $pfb_fchashes ? 'both' : 'download',
+			];
+		}
+		$pfb_deprecation_warning = pfb_verb_deprecation_warning($argv[1]);
+		if ($pfb_deprecation_warning !== '') {
+			pfb_logger("{$pfb_deprecation_warning}\n", 1);
+		}
+		$pfb_update_answer = pfb_core_update_start(
+			$pfb_update_request['trigger'],
+			'pfb_core_call',
+			$pfb_update_request['scope'] ?? NULL,
+			$pfb_update_request['force'] ?? NULL
+		);
+		$pfb_update_failure = pfb_update_core_failure($pfb_update_answer);
+		if ($pfb_update_failure !== NULL) {
+			fwrite(STDERR, "pfBlockerNG Core did not start the Update: {$pfb_update_failure}\n");
+			exit(1);
+		}
+		exit(0);
+	}
+	switch($argv[1]) {
 		case 'dc':		// Update Extras - MaxMind/TOP1M/ASN database files
 		case 'dcc':
 			$scheduled = ($argv[2] ?? '') === 'scheduled';
@@ -522,14 +509,19 @@ function pfb_top1m_detector_decision(
 	return pfb_top1m_probe_decision($probe_ok, $http_status, $body_hash, $persisted_hash);
 }
 
-function pfb_top1m_dispatch_if_changed($extras_ok, bool $dispatch = TRUE) {
+function pfb_top1m_dispatch_if_changed($extras_ok, bool $dispatch = TRUE, ?callable $core_call = NULL) {
 	global $argv, $pfb;
 	if (($argv[1] ?? '') !== 'dcc' || empty($pfb['top1m_changed']) || !empty($pfb['top1m_dispatch_done'])) {
 		return FALSE;
 	}
 	$pfb['top1m_dispatch_done'] = TRUE;
 	if ($dispatch) {
-		exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=dnsbl force=false trigger=cron >> {$pfb['runlog']} 2>&1 &");
+		$answer = pfb_core_update_start('apply', $core_call ?? 'pfb_core_call');
+		$failure = pfb_update_core_failure($answer);
+		if ($failure !== NULL) {
+			pfb_mark_pending_changes();	// Core may be restarting or running: the next tick retries this apply.
+			pfb_logger("\nTOP1M changed; Core did not start apply: {$failure}. Pending apply recorded.\n", 1);
+		}
 	}
 	return TRUE;
 }

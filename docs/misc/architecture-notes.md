@@ -2357,6 +2357,15 @@ emits one deprecation log line via `pfb_verb_deprecation_warning()`. The CLI exp
 `pfblockerng.php pfb_trigger scope=<…> force=<true|false> trigger=<…>`. HA-sync (`pfblockerng.xml`)
 and the smoke harness (`tests/smoke/helpers.py` `reload()`) call the new API directly.
 
+Issue #3977 closes the remaining PHP feed-pass entrances. The CLI `update`, `updateip` and `updatednsbl` verbs start Core `manual`
+Updates with `both/none`, `ip/download` and `dnsbl/download`; `forcecheck` starts a scoped `manual` Update with `download`, or
+`both` when `hashes=true`. `pfb_trigger` maps its `cron` trigger to Core `apply` and `manual`/`force` to scoped `manual` Updates.
+CLI refusals print Core's reason and exit non-zero.
+
+General save and package resync keep their save-mode `sync_package_pfblockerng()` reconciliation (including package configuration,
+service/rc-script and cron setup); save mode skips feed loops. They then ask Core for `apply`. If Core is restarting or already
+running an Update, the pending-change marker remains for the next tick. A changed TOP1M feed follows the same apply/pending rule.
+
 **Deprecated-verb migration map** (each old verb still works through an adapter; the deprecation
 line is logged for the three operator-facing verbs):
 
@@ -2381,18 +2390,11 @@ The four legacy cron families (`cron`/`dcc`/`bl`/`ss_refresh`) collapse to **one
 cron-only wrapper: it runs the tick unless `/var/db/pfblockerng/.pfb_cron_disable` exists, in which
 case it logs `[ Disabled by … ]` and dispatches nothing (issue #1204 — the smoke suite's scheduler
 off switch, installed before the package and never removed; the Update page reports the suppression).
-The direct `pfblockerng.php tick` verb is
-never gated. The tick carries **no**
-scheduling logic: it reads the due-ledger, dispatches each **due** job through the new API
-(`pfb_trigger scope=both force=false trigger=cron` for the feed pass), runs `ss_refresh` when its
-dedicated zero-jitter 900-second entry is due (cheap DNS re-resolution), then records each completed
-job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
-non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
-and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
-
-Since issue #3941 the tick no longer dispatches the feed pass (Core does, through the `core_update` verb), and the `cron` verb
-(`pfblockerng.php cron`, `pfblockerng_sync_cron()`) is not a scheduler entry point any more: no feed is named, so it checks only
-the feeds with a `*.fail` retry marker (and applies what that changed). It stays for the smoke harness (the feed-pass lock tests) and for running that retry by hand.
+The direct `pfblockerng.php tick` verb is never gated. The tick carries **no** scheduling logic: it reads the due-ledger and asks
+Core to start a `scheduled`, `retry` or `apply` Update for due work, runs `ss_refresh` when its dedicated zero-jitter 900-second
+entry is due (cheap DNS re-resolution), then records each completed job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
+non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`, and a pre-ADR-43 install's
+old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 
 **Metrics export cron (#3522):** a separate crontab entry, `* * * * * root /usr/bin/timeout -s TERM
 -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`, exists only while

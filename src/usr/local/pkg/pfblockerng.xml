@@ -109,7 +109,8 @@
 		<![CDATA[
 		global $pfb;
 		$pfb['save'] = TRUE;
-		sync_package_pfblockerng(array('scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'));
+		sync_package_pfblockerng(array('scope' => 'both', 'force' => FALSE, 'trigger' => 'manual')); // save mode retains lifecycle/cron reconciliation; feed loops stay disabled.
+		pfb_update_apply_after_save();
 		// issue #3216: the pass mirrors its progress to the pkg output and can end mid-line
 		// ("Restarting DNSBL Service") -- close it so pfSense's own framing ("done.", the
 		// menu/service rows) starts on its own line in the install/upgrade log.
