@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +44,23 @@ sleep 60`)
 	}
 	if !exited(pid) {
 		t.Errorf("the group member %d still runs after Run returned, want Run to wait until the group is gone", pid)
+	}
+}
+
+// Core's stop KILLs a group that ignores TERM before the rc script KILLs Core (issue #4003): a Core killed first leaves the group
+// running. The script looks once a second, so Core's TERM grace ends a whole second before the script's KILL.
+func TestTheTermGraceEndsBeforeTheRcScriptKillsCore(t *testing.T) {
+	inc, err := os.ReadFile("../../../src/usr/local/pkg/pfblockerng/pfblockerng.inc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`if \[ "\\\$\{waited\}" -ge ([0-9]+) \] && \[ "\\\$\{killed\}" -eq 0 \]`).FindSubmatch(inc)
+	if m == nil {
+		t.Fatal("the rc script's stop has no KILL step after TERM in pfblockerng.inc")
+	}
+	seconds, _ := strconv.Atoi(string(m[1]))
+	if rcKill := time.Duration(seconds) * time.Second; killGrace+time.Second > rcKill {
+		t.Errorf("Core KILLs a group ignoring TERM %v after TERM; the rc script KILLs Core %v after TERM, so Core's KILL may never come", killGrace, rcKill)
 	}
 }
 

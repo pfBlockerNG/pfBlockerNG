@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -264,6 +266,43 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 	h.write(t, "new\n")
 	if v = g.View(old.Next, 0); v.Log != "new\n" || g.View(v.Next, 0).Log != "" {
 		t.Errorf("View(%d) = log %q next %d, want the new log from its start, then nothing from the cursor it returned", old.Next, v.Log, v.Next)
+	}
+	h.finish(t, nil)
+}
+
+// A running Update's log past its bound keeps only its newest whole lines, as the package's other logs are trimmed (issue
+// #4003): it lives on the root filesystem, and an Update may print for hours.
+func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
+	h := newHold()
+	g := newGate(t, h.run, nil)
+	if err := g.Start(Request{Trigger: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	const lines = 360 << 10 // of 33 bytes: about 12 MB
+	var b strings.Builder
+	for i := range lines {
+		fmt.Fprintf(&b, "line %06d %s\n", i, strings.Repeat("x", 20))
+	}
+	h.write(t, b.String())
+
+	var v View
+	for deadline := time.Now().Add(stuck); ; time.Sleep(10 * time.Millisecond) {
+		if v = g.View(0, math.MaxInt32); len(v.Log) < b.Len() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the running Update's log still holds all %d bytes written, want it trimmed", len(v.Log))
+		}
+	}
+	h.write(t, "the end\n")
+
+	v = g.View(0, math.MaxInt32)
+	first, _, _ := strings.Cut(v.Log, "\n")
+	if !regexp.MustCompile(`^line [0-9]{6} x{20}$`).MatchString(first) {
+		t.Errorf("the trimmed log starts with %q, want a whole line", first)
+	}
+	if newest := fmt.Sprintf("line %06d %s\nthe end\n", lines-1, strings.Repeat("x", 20)); !strings.HasSuffix(v.Log, newest) {
+		t.Errorf("the trimmed log ends with %q, want the newest lines %q", v.Log[max(0, len(v.Log)-80):], newest)
 	}
 	h.finish(t, nil)
 }
