@@ -59,8 +59,8 @@ func classify(head []byte, more bool) string {
 		return mimeBzip2
 	case bytes.HasPrefix(head, []byte("PK\x03\x04")), bytes.HasPrefix(head, []byte("PK\x05\x06")): // an empty zip is its end record
 		return mimeZip
-	case len(head) >= 262 && string(head[257:262]) == "ustar":
-		return mimeTar
+	case len(head) > 257 && (bytes.HasPrefix(head[257:], []byte("ustar\x00")) || bytes.HasPrefix(head[257:], []byte("ustar  \x00"))):
+		return mimeTar // POSIX and GNU: the NUL keeps a text body that reads "ustar" there a text body
 	case isText(head):
 		if htmlOpening(head) {
 			return mimeHTML
@@ -119,7 +119,7 @@ func verdict(ctx context.Context, path string) (mime, detected string, ok bool) 
 	mime = classify(b, more)
 	if mime == mimeOctet {
 		for _, t := range [...]string{mimeZip, mimeGzip, mimeBzip2, mimeTar} {
-			if structural(ctx, t, path) == nil {
+			if structural(ctx, t, path, io.Discard) == nil {
 				return t, "", true
 			}
 		}
@@ -183,12 +183,12 @@ func (f *Fetcher) gate(ctx context.Context, feed Feed, raw string, lastMod time.
 			return refuse("size", "staging_space_low", feed.Dir)
 		}
 	}
-	if err := structural(ctx, mime, raw); err != nil {
+	if err := structural(ctx, mime, raw, io.Discard); err != nil {
 		return failed(err, "structural", "probe_failed", mime+" "+filepath.Base(raw))
 	}
 	tarInner := false
 	if mime == mimeGzip || mime == mimeBzip2 {
-		inner := innerType(mime, raw)
+		inner := innerType(ctx, mime, raw)
 		if !mimeAllowed[inner] {
 			return refuse("inner", "compressed_mime_not_allowed", inner+" rc=0")
 		}

@@ -28,7 +28,8 @@ const (
 var errCeiling = errors.New("extraction outgrew the per-file ceiling")
 
 // ctxReader ends a read once the context is done, so an extraction or a structural test stops with it (PHP has no
-// wall-clock bound on either).
+// wall-clock bound on either). It wraps what a decompressor yields, never what it reads: a bomb turns 4 KiB of bzip2
+// into hundreds of MiB, which a poll of the input lets run on past the context (a 4 GiB bomb by 16 s, #3973).
 type ctxReader struct {
 	ctx context.Context
 	r   io.Reader
@@ -41,25 +42,35 @@ func (c ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
+// inflate is the stream a gzip or bzip2 file holds, read under the context.
+func inflate(ctx context.Context, mime string, f io.Reader) (io.Reader, error) {
+	if mime == mimeBzip2 {
+		return ctxReader{ctx, bzip2.NewReader(f)}, nil
+	}
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	return ctxReader{ctx, zr}, nil
+}
+
 // structural is the structural test of an archive (unzip -t, gunzip -t, bzip2 -t, tar -tf): the whole of it is read, and the
 // checks each format carries (a gzip's CRC, a zip's central directory and member CRCs, a tar's header sums) must hold.
-// An archive with nothing in it fails, as unzip -t's exit status says.
-func structural(ctx context.Context, mime, path string) error {
+// An archive with nothing in it fails, as unzip -t's exit status says. What a gzip, bzip2 or zip member holds goes to out:
+// io.Discard, which a test replaces to count it.
+func structural(ctx context.Context, mime, path string, out io.Writer) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	switch mime {
-	case mimeGzip:
-		zr, err := gzip.NewReader(ctxReader{ctx, f})
+	case mimeGzip, mimeBzip2:
+		zr, err := inflate(ctx, mime, f)
 		if err != nil {
 			return err
 		}
-		_, err = io.Copy(io.Discard, zr)
-		return err
-	case mimeBzip2:
-		_, err := io.Copy(io.Discard, bzip2.NewReader(ctxReader{ctx, f}))
+		_, err = io.Copy(out, zr)
 		return err
 	case mimeZip:
 		zr, err := openZip(f)
@@ -74,7 +85,7 @@ func structural(ctx context.Context, mime, path string) error {
 			if err != nil {
 				return err
 			}
-			_, err = io.Copy(io.Discard, ctxReader{ctx, rc})
+			_, err = io.Copy(out, ctxReader{ctx, rc})
 			rc.Close()
 			if err != nil {
 				return err
@@ -169,16 +180,13 @@ func (c *commaWriter) flush() error {
 }
 
 // innerType is what `file -bZ --mime-type` says of a gzip or bzip2 body: the type of the stream it holds.
-func innerType(mime, path string) string {
+func innerType(ctx context.Context, mime, path string) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return mimeOctet
 	}
 	defer f.Close()
-	if mime == mimeBzip2 {
-		return innerVerdict(bzip2.NewReader(f))
-	}
-	zr, err := gzip.NewReader(f)
+	zr, err := inflate(ctx, mime, f)
 	if err != nil {
 		return mimeOctet
 	}
@@ -195,14 +203,12 @@ func extract(ctx context.Context, mime, path string, tarInner bool, w io.Writer)
 	defer f.Close()
 	var src io.Reader
 	switch mime {
-	case mimeGzip:
-		zr, err := gzip.NewReader(f)
+	case mimeGzip, mimeBzip2:
+		zr, err := inflate(ctx, mime, f)
 		if err != nil {
 			return err
 		}
 		src = zr
-	case mimeBzip2:
-		src = bzip2.NewReader(f)
 	case mimeZip:
 		zr, err := openZip(f)
 		if err != nil {
@@ -229,7 +235,7 @@ func extract(ctx context.Context, mime, path string, tarInner bool, w io.Writer)
 		tarInner = true
 	}
 	if !tarInner {
-		_, err = io.Copy(w, ctxReader{ctx, src})
+		_, err = io.Copy(w, src) // a gzip's or bzip2's, minding the context (inflate)
 		return err
 	}
 	tr := tar.NewReader(src)
