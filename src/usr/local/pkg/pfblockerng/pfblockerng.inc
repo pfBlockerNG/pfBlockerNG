@@ -4832,73 +4832,72 @@ function pfb_core_revision_key(): string {
  * @return array{proxyUrl: string, proxyUser: string, proxyPassword: string, proxyUnusable: bool}
  */
 function pfb_core_proxy_settings(): array {
-	$none = ['proxyUrl' => '', 'proxyUser' => '', 'proxyPassword' => '', 'proxyUnusable' => FALSE];
-	$unusable = ['proxyUrl' => '', 'proxyUser' => '', 'proxyPassword' => '', 'proxyUnusable' => TRUE];
-	$stored = static fn(string $key): string => is_scalar($value = config_get_path("system/{$key}")) ? (string) $value : '';
-	$unset = static fn(string $value): bool => $value === '' || $value === '0';
-	$proxy = $stored('proxyurl');
-	if ($unset($proxy)) {
-		return $none;
+	$empty = static fn(bool $unusable = FALSE): array => [
+		'proxyUrl'      => '',
+		'proxyUser'     => '',
+		'proxyPassword' => '',
+		'proxyUnusable' => $unusable,
+	];
+	$rawProxy = config_get_path('system/proxyurl');
+	if (empty($rawProxy)) {
+		return $empty();
 	}
+	if (!is_scalar($rawProxy)) {
+		return $empty(TRUE);
+	}
+	$proxy = (string) $rawProxy;
 	if (preg_match('/[\x00-\x20\x7F]/', $proxy) === 1) {
-		return $unusable;
+		return $empty(TRUE);
 	}
 
 	$scheme = 'http';
-	$rawHost = $proxy;
-	$urlPort = NULL;
-	$urlUser = $urlPassword = '';
 	if (preg_match('/^([A-Za-z][A-Za-z0-9+.-]*):\/\//', $proxy, $match) === 1) {
 		$scheme = strtolower($match[1]);
-		$parts = parse_url($proxy);
-		if ($parts === FALSE || (isset($parts['path']) && $parts['path'] !== '') || isset($parts['query']) || isset($parts['fragment'])) {
-			return $unusable;
-		}
-		$rawHost = $parts['host'] ?? '';
-		$urlPort = $parts['port'] ?? NULL;
-		$urlUser = rawurldecode($parts['user'] ?? '');
-		$urlPassword = rawurldecode($parts['pass'] ?? '');
-	} elseif (filter_var(trim($proxy, '[]'), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== FALSE) {
-		$rawHost = trim($proxy, '[]');
+		$url = $proxy;
+	} elseif (filter_var($proxy, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== FALSE) {
+		$url = "http://[{$proxy}]";
 	} else {
-		$parts = parse_url("http://{$proxy}");
-		if ($parts === FALSE || (isset($parts['path']) && $parts['path'] !== '') || isset($parts['query']) || isset($parts['fragment'])) {
-			return $unusable;
-		}
-		$rawHost = $parts['host'] ?? '';
-		$urlPort = $parts['port'] ?? NULL;
-		$urlUser = rawurldecode($parts['user'] ?? '');
-		$urlPassword = rawurldecode($parts['pass'] ?? '');
+		$url = "http://{$proxy}";
 	}
-
+	$parts = parse_url($url);
+	if ($parts === FALSE) {
+		return $empty(TRUE);
+	}
+	$rawHost = $parts['host'] ?? '';
+	if (str_starts_with($rawHost, '[') && str_ends_with($rawHost, ']')) {
+		$rawHost = substr($rawHost, 1, -1);
+	}
 	if (!in_array($scheme, ['http', 'https', 'socks5', 'socks5h'], TRUE)
 		|| (filter_var($rawHost, FILTER_VALIDATE_IP) === FALSE
 			&& preg_match('/^(?:[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_])?\.?)$/D', $rawHost) !== 1)) {
-		return $unusable;
+		return $empty(TRUE);
 	}
+
 	$host = str_contains($rawHost, ':') ? "[{$rawHost}]" : $rawHost;
-	$port = $stored('proxyport');
-	if (!$unset($port)) {
-		$port = (int) $port ?: 1080;
-		if ($port < 1 || $port > 65535) {
-			return $unusable;
-		}
+	$urlPort = $parts['port'] ?? NULL;
+	if ($urlPort !== NULL) {
+		$port = $urlPort;
 	} else {
-		$port = $urlPort ?? 1080;
-		if (!is_int($port) || $port < 1 || $port > 65535) {
-			return $unusable;
-		}
+		$storedPort = is_scalar($value = config_get_path('system/proxyport')) ? (string) $value : '';
+		$defaultPort = $scheme === 'https' ? 443 : 1080;
+		$port = $storedPort === '' || $storedPort === '0' ? $defaultPort : ((int) $storedPort ?: $defaultPort);
 	}
-	$user = $stored('proxyuser');
-	$password = $stored('proxypass');
-	if (!$unset($user) && !$unset($password)) {
-		$urlUser = $user;
-		$urlPassword = $password;
+	if (!is_int($port) || $port < 1 || $port > 65535) {
+		return $empty(TRUE);
+	}
+
+	$user = rawurldecode($parts['user'] ?? '');
+	$password = rawurldecode($parts['pass'] ?? '');
+	$configuredUser = is_scalar($value = config_get_path('system/proxyuser')) ? (string) $value : '';
+	$configuredPassword = is_scalar($value = config_get_path('system/proxypass')) ? (string) $value : '';
+	if ($configuredUser !== '' && $configuredUser !== '0' && $configuredPassword !== '' && $configuredPassword !== '0') {
+		$user = $configuredUser;
+		$password = $configuredPassword;
 	}
 	return [
 		'proxyUrl'      => "{$scheme}://{$host}:{$port}",
-		'proxyUser'     => $urlUser,
-		'proxyPassword' => $urlPassword,
+		'proxyUser'     => $user,
+		'proxyPassword' => $password,
 		'proxyUnusable' => FALSE,
 	];
 }

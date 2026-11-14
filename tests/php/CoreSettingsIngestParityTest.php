@@ -158,6 +158,10 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'proxy-none', 'proxy-host-and-port', 'proxy-host-port-user-and-password', 'proxy-user-without-password', 'proxy-url-with-userinfo', 'proxy-url-with-crlf',
 			'proxy-url-with-https-scheme', 'proxy-url-with-socks5-scheme', 'proxy-url-with-socks4-scheme', 'proxy-port-negative', 'proxy-port-beyond-65535',
 			'proxy-ipv6-host', 'proxy-port-zero-is-empty', 'proxy-port-leading-digits',
+			'proxy-url-port-beats-proxyport-http', 'proxy-url-port-beats-proxyport-socks5', 'proxy-https-default-port',
+			'proxy-ipv6-url-with-port', 'proxy-ipv6-url-without-port', 'proxy-ipv6-socks5h', 'proxy-ipv6-userinfo',
+			'proxy-explicit-credentials-override-userinfo', 'proxy-uppercase-scheme', 'proxy-host-whitespace', 'proxy-nonscalar-url',
+			'proxy-trailing-slash', 'proxy-path-is-ignored', 'proxy-query-is-ignored', 'proxy-fragment-is-ignored',
 			'self-interface-and-vip', 'self-link-local-excluded', 'self-hostile-addresses'] as $id) {
 			$this->assertContains($id, $ids, "the coverage matrix row {$id}");
 		}
