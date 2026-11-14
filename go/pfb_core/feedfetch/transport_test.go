@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,5 +152,34 @@ func TestAnRsyncTransferPastItsDeadlineIsKilledAndDiscarded(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(feed.Dir); len(entries) != 1 {
 		t.Fatalf("the killed transfer's output must be discarded: %v", entries)
+	}
+}
+
+func TestIngestPersistsResponseValidatorForNextProbe(t *testing.T) {
+	var requests, conditional atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("If-None-Match") != "" {
+			conditional.Add(1)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"first"`)
+		io.WriteString(w, "first\n")
+	}))
+	defer srv.Close()
+
+	f, feed := fetcherFor(t)
+	req := feedfetch.Request{URL: "http://feed.example:" + port(t, srv.URL) + "/list", Timeout: 10 * time.Second}
+	if res := f.Ingest(context.Background(), feed, req); !res.OK || published(t, feed) != "first\n" {
+		t.Fatalf("initial ingest = %+v, published %q", res, published(t, feed))
+	}
+	if etag, err := os.ReadFile(filepath.Join(feed.Dir, "FEED.orig.etag")); err != nil || string(etag) != `"first"` {
+		t.Fatalf("initial ingest ETag = %q (%v), want persisted next to the baseline", etag, err)
+	}
+	if res := f.Probe(context.Background(), feed, req); !res.OK || res.Decision != feedfetch.Unchanged ||
+		requests.Load() != 2 || conditional.Load() != 1 {
+		t.Fatalf("next probe = %+v after %d requests (%d conditional), want one conditional unchanged probe",
+			res, requests.Load(), conditional.Load())
 	}
 }

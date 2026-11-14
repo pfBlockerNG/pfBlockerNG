@@ -204,7 +204,7 @@ final class SyncPolicyApplyRecordTest extends TestCase
 	private function serveApply(bool $applies): int
 	{
 		return pfb_core_update_serve(
-			(string) json_encode(['version' => 1, 'trigger' => 'apply']),
+			(string) json_encode(['version' => 1, 'trigger' => 'apply', 'token' => str_repeat('a', 64)]),
 			"{$this->dir}/apply-result.json",
 			['sync' => static fn (): bool => $applies]
 		);

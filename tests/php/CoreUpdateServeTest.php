@@ -187,7 +187,14 @@ final class CoreUpdateServeTest extends TestCase
 	/** @return array<string, mixed> */
 	private static function req(string $trigger, array $more = []): array
 	{
-		return array_merge(['version' => 1, 'trigger' => $trigger, 'scope' => 'both', 'force' => 'none'], $more);
+		return array_merge(['version' => 1, 'trigger' => $trigger, 'scope' => 'both', 'force' => 'none', 'token' => str_repeat('a', 64)], $more);
+	}
+
+	public function testARequestAcceptsThePerUpdateToken(): void
+	{
+		$run = $this->serve(self::req('apply'));
+
+		$this->assertNotSame(2, $run['exit'], $run['out']);
 	}
 
 	// ----- 1. validation -----
@@ -231,6 +238,10 @@ final class CoreUpdateServeTest extends TestCase
 			'an extra other than dcc/bl' => [$ok + ['extras' => ['extra:foo']]],
 			'an extra without its prefix' => [$ok + ['extras' => ['dcc']]],
 			'a duplicate extra'         => [$ok + ['extras' => ['extra:dcc', 'extra:dcc']]],
+			'token is missing'             => [array_diff_key($ok, ['token' => 1])],
+			'token is not a string'         => [['token' => 42] + $ok],
+			'token has the wrong length'    => [['token' => str_repeat('a', 63)] + $ok],
+			'token is not hexadecimal'      => [['token' => str_repeat('g', 64)] + $ok],
 		];
 	}
 

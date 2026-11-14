@@ -194,6 +194,25 @@ func sameJSON(t *testing.T, got, want string) {
 	}
 }
 
+// sameUpdateRequest checks the per-run token, then compares the rest of stdin with want.
+func sameUpdateRequest(t *testing.T, got, want string) {
+	t.Helper()
+	var request map[string]any
+	if err := json.Unmarshal([]byte(got), &request); err != nil {
+		t.Fatalf("Update stdin is not JSON: %v", err)
+	}
+	token, ok := request["token"].(string)
+	if !ok || len(token) != 64 || strings.Trim(token, "0123456789abcdef") != "" {
+		t.Fatalf("Update stdin token = %q, want 64 lowercase hexadecimal characters", token)
+	}
+	delete(request, "token")
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, string(body), want)
+}
+
 // scheduleFixture initializes the settings with one hourly feed and a Blacklist provider with a category: the schedule model
 // has the feed, extra:dcc and extra:bl.
 const scheduleFixture = `{"requestId":"init","settings":{
@@ -229,7 +248,7 @@ func TestAManualUpdateRunsTheProgramAndGetUpdateShowsIt(t *testing.T) {
 		v.Update.StartedAt <= 0 || v.Update.FinishedAt != nil || v.Update.Result != "" {
 		t.Errorf("GetUpdate while it runs = %+v, want it running with its trigger, scope and force and no end", v)
 	}
-	sameJSON(t, f.request(), `{"version":1,"trigger":"manual","scope":"dnsbl","force":"parse"}`)
+	sameUpdateRequest(t, f.request(), `{"version":1,"trigger":"manual","scope":"dnsbl","force":"parse"}`)
 
 	f.release()
 	end := c.waitFinished("manual")
@@ -248,7 +267,7 @@ func TestAManualUpdateDefaultsToBothScopesAndNoForce(t *testing.T) {
 	if v := c.waitFinished("manual"); v.Update.Scope != "both" || v.Update.Force != "none" {
 		t.Errorf("GetUpdate = %+v, want scope both and force none", v)
 	}
-	sameJSON(t, f.request(), `{"version":1,"trigger":"manual","scope":"both","force":"none"}`)
+	sameUpdateRequest(t, f.request(), `{"version":1,"trigger":"manual","scope":"both","force":"none"}`)
 }
 
 func TestASecondStartWhileAnUpdateRunsIsAConflictAndARepeatedRequestIDReplays(t *testing.T) {
@@ -366,7 +385,7 @@ func TestApplyAndRetryRunWithTheRequestTheProgramReads(t *testing.T) {
 
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"a1","trigger":"apply"}`), http.StatusOK, `{}`)
 	c.waitFinished("apply")
-	sameJSON(t, f.request(), `{"version":1,"trigger":"apply","scope":"both","force":"none"}`)
+	sameUpdateRequest(t, f.request(), `{"version":1,"trigger":"apply","scope":"both","force":"none"}`)
 
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"r1","trigger":"retry"}`), http.StatusOK, `{}`)
 	c.waitFinished("retry")
