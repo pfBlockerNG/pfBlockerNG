@@ -197,6 +197,27 @@ final class GroupsPageConfigLockTest extends TestCase
 		$this->assertFalse($result['lockHeld']);
 	}
 
+	/** issue #3999: a DNSBL group's posted custom list, different from the stored (empty) one */
+	private const CUSTOM_EDIT = ['post' => ['action' => 'unbound', 'custom' => 'example.com']];
+
+	#[DataProvider('refusedWrites')]
+	public function testACustomListSaveWhoseWriteFailsRequestsNoRebuild(string $scenario): void
+	{
+		$result = $this->worker('edit', $scenario, self::CUSTOM_EDIT);
+
+		$this->assertStringContainsString('could not be written', $result['inputErrors'][0] ?? '', 'the save was not written');
+		$this->assertFalse($result['rebuildMarker'], 'a custom list that was never stored must not be rebuilt on the next pass');
+	}
+
+	public function testAWrittenCustomListSaveRequestsItsRebuildBeforeTheLockIsReleased(): void
+	{
+		$result = $this->worker('edit', 'plain', self::CUSTOM_EDIT);
+
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame(base64_encode('example.com'), $result['disk']['installedpackages']['pfblockerngdnsbl']['config'][1]['custom'], 'the custom list is stored');
+		$this->assertSame([TRUE], $result['rebuildMarkerAtUnlock'], 'and its rebuild is requested under the config lock');
+	}
+
 	public function testAGroupSaveWhoseWriteThrowsStillReleasesTheConfigLock(): void
 	{
 		$result = $this->worker('edit', 'write_throws');
