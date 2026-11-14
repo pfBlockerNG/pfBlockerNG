@@ -18,12 +18,13 @@ type DNSBLRow struct {
 }
 
 // DNSBLLine is what one feed line produced: the rows written, the IPs it added to the feed's IPv4 / IPv6 lists (before
-// the feed's de-duplication), the failure records (the logged line text), the strict-scheme skips it counts, and whether
-// it ended the feed.
+// the feed's de-duplication), the failure records (the logged line text), the notices it logged (an IP literal decoded, an IDN
+// converted, a /0 CIDR clamped), the strict-scheme skips it counts, and whether it ended the feed.
 type DNSBLLine struct {
 	Rows          []DNSBLRow
 	IP4, IP6      []string
 	Fail          []string
+	Messages      []string
 	SchemeSkipped int
 	Stop          bool
 }
@@ -70,7 +71,8 @@ func (p *DNSBLParser) collectFeedIP(guard, candidate string, out *DNSBLLine) boo
 		}
 	}
 	if isIPAddrV4(guard) {
-		parsed, ok, _ := sanitizeIPv4(candidate, p.cfg.Custom, "Disabled", p.cfg.Suppression)
+		parsed, ok, messages := sanitizeIPv4(candidate, p.cfg.Custom, "Disabled", p.cfg.Suppression)
+		out.Messages = append(out.Messages, messages...)
 		if ok && validateIPv4(parsed) {
 			out.IP4 = append(out.IP4, parsed)
 			return true
@@ -82,7 +84,8 @@ func (p *DNSBLParser) collectFeedIP(guard, candidate string, out *DNSBLLine) boo
 			return false
 		}
 		if isCIDR { // a bare v6 stays raw; a CIDR goes through the sanitizer
-			parsed, ok, _ := sanitizeIPv6(candidate, p.cfg.Custom, "Disabled", p.cfg.Suppression)
+			parsed, ok, messages := sanitizeIPv6(candidate, p.cfg.Custom, "Disabled", p.cfg.Suppression)
+			out.Messages = append(out.Messages, messages...)
 			if !ok {
 				return false
 			}
@@ -107,6 +110,9 @@ func (p *DNSBLParser) Line(raw string) DNSBLLine {
 			return out
 		}
 		if ip != "" {
+			if !strings.Contains(line, ip) {
+				out.Messages = append(out.Messages, "\n  IP literal decoded: [ "+line+" ] -> [ "+ip+" ]")
+			}
 			p.collectFeedIP(strBefore(ip, "/"), ip, &out)
 			return out
 		}
@@ -191,6 +197,7 @@ func (p *DNSBLParser) Line(raw string) DNSBLLine {
 			p.fail(&out, line)
 			return out
 		}
+		out.Messages = append(out.Messages, "\n  IP literal decoded: [ "+line+" ] -> [ "+ip+" ]")
 		line = ip
 	}
 
@@ -204,11 +211,13 @@ func (p *DNSBLParser) Line(raw string) DNSBLLine {
 
 	// Unicode domains become punycode, after the encoding is settled.
 	if !phpEmpty(line) && !ctypePrint(line) {
-		line = idnToASCIIWildcard(mbConvertToUTF8(line))
+		utf8 := mbConvertToUTF8(line)
+		line = idnToASCIIWildcard(utf8)
 		if phpEmpty(line) {
 			p.fail(&out, "")
 			return out
 		}
+		out.Messages = append(out.Messages, "\n  IDN converted: [ "+utf8+" ]\t [ "+line+" ]")
 	}
 
 	line = strings.Trim(line, ".")

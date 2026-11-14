@@ -1,17 +1,13 @@
 package feedfetch
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"errors"
-	"hash"
-	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/pfBlockerNG/xxh3"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
 )
 
 type validators struct {
@@ -52,25 +48,6 @@ func writeValidatorsAt(base, etag string, lastMod time.Time) {
 	}
 }
 
-// fileDigest is the file's xxh128, hex: what PHP's hash('xxh128') writes to ".orig.xxhash128".
-func fileDigest(path string) (string, error) { return hashFile(path, xxh3.New128()) }
-
-// md5Digest reads only a legacy ".orig.md5" baseline PHP wrote (pfb_local_feed_changed); nothing writes an md5.
-func md5Digest(path string) (string, error) { return hashFile(path, md5.New()) }
-
-func hashFile(path string, h hash.Hash) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	// Content-change detection only: the feed server controls the bytes, so collision resistance is no security property.
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // dropDigests removes the digest sidecars of the published copy, to be called before the copy is replaced: a digest that
 // outlived its copy would let a source holding the older bytes read as unchanged.
 func dropDigests(feed Feed) error {
@@ -85,7 +62,7 @@ func dropDigests(feed Feed) error {
 // publish makes the staged body the published copy in one rename: its raw-byte digest is recorded first (the probe
 // hashes raw bytes, #713), then a missing trailing newline is added (#1263).
 func publish(feed Feed, staged string, lastMod time.Time) error {
-	digest, err := fileDigest(staged)
+	sum, err := digest.File(staged)
 	if err != nil {
 		return errors.New("staged body could not be read")
 	}
@@ -111,45 +88,28 @@ func publish(feed Feed, staged string, lastMod time.Time) error {
 	if err := os.Rename(staged, published); err != nil {
 		return errors.New("published copy could not be replaced")
 	}
-	os.WriteFile(feed.path(".orig.xxhash128"), []byte(digest), 0o600)
+	os.WriteFile(feed.path(".orig.xxhash128"), []byte(sum), 0o600)
 	if !lastMod.IsZero() {
 		os.Chtimes(published, lastMod, lastMod)
 	}
 	return nil
 }
 
-// readBaseline is pfb_hash_read: ".orig.xxhash128", else a legacy ".orig.md5", named by its suffix. A missing,
-// unreadable or malformed sidecar is no baseline, and a bad xxh128 never falls back to the md5 behind it.
-func readBaseline(feed Feed) (algo, digest string) {
-	for _, a := range [...]string{"xxhash128", "md5"} {
-		b, err := os.ReadFile(feed.path(".orig." + a))
-		if os.IsNotExist(err) {
-			continue
-		}
-		digest = strings.Trim(string(b), " \t\n\r\x00\x0B")
-		if err != nil || len(digest) != 32 || !allIn(digest, "0123456789abcdef") {
-			return "", ""
-		}
-		return a, digest
-	}
-	return "", ""
-}
-
 // localDecision compares a local source with the published copy's digest (pfb_local_feed_changed); without a baseline
 // the published copy itself is hashed, and any read failure means changed.
 func localDecision(path string, feed Feed) Decision {
-	algo, baseline := readBaseline(feed)
-	digest := fileDigest
-	if algo == "md5" {
-		digest = md5Digest
+	algo, baseline := digest.Read(feed.path(".orig"))
+	sum := digest.File
+	if algo == digest.MD5 {
+		sum = digest.MD5File
 	}
 	if algo == "" {
 		var err error
-		if baseline, err = fileDigest(feed.path(".orig")); err != nil {
+		if baseline, err = digest.File(feed.path(".orig")); err != nil {
 			return Changed
 		}
 	}
-	if d, err := digest(path); err == nil && d == baseline {
+	if d, err := sum(path); err == nil && d == baseline {
 		return Unchanged
 	}
 	return Changed

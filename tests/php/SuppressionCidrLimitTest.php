@@ -21,6 +21,9 @@ use PHPUnit\Framework\TestCase;
  * and parse-config literal are eval-extracted from pfblockerng_apply.inc and every parse below runs
  * through them into the shared line parser (pfb_ip_parse_line_replay). A change to how the loop hands
  * the resolved limits or Suppression to the parser therefore fails these tests.
+ *
+ * Since #3976 the parse-config literal lives in pfb_ip_parse_feed(); the loop's call of it, which hands the two
+ * resolved limits over, is pinned by FeedParseCallSitesWiringTest.
  */
 #[CoversFunction('pfb_list_cidr_floors')]
 #[CoversFunction('pfb_global')]

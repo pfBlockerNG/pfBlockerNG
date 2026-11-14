@@ -224,8 +224,9 @@ func dnsblLoadCorpus(t *testing.T) []dnsblCorpusCase {
 	return out
 }
 
-// dnsblNorm makes nil and empty slices compare equal.
+// dnsblNorm makes nil and empty slices compare equal, and leaves the notices out: they are pinned per feed, in feed.json.
 func dnsblNorm(l DNSBLLine) DNSBLLine {
+	l.Messages = nil
 	if len(l.Rows) == 0 {
 		l.Rows = nil
 	}
