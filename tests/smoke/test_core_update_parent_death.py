@@ -5,8 +5,8 @@
 ``TestTheProgramsChildDiesWithACoreThatIsKilled`` prove it on Linux: the test binary turns itself into a Core running
 one Update (``exec sleep 300``; a program that starts ``sleep 300`` and waits), is SIGKILLed, and the program, and the
 child it started, must be gone. This runs those same tests, built for the box, on a real pfSense box, with the Update
-watcher's other FreeBSD paths: a TERM-ignoring and a TERM-handling child when Core dies, a HUP inside the group, and the
-program's signal deaths and exit statuses as Core reads them (its ``WNOWAIT`` wait).
+watcher's other FreeBSD paths: a TERM-ignoring and a TERM-handling child when Core dies, a HUP inside the group,
+program signal deaths and exit statuses, and cancellation after a successful exit without killing its daemons.
 
 DESELECTED from the default ``python -m pytest``. Run it on the pool::
 
@@ -41,6 +41,13 @@ TESTS = (
     "TestASignalEndsRunAsItEndedTheProgram",
     "TestANonZeroExitIsAnErrorNamingTheStatusAndStillReturnsAValidResult",
     "TestAnExitOf75IsErrDeferredAndReportsNothing",
+    "TestAContextEndingWhileTheSupervisorOutlivesTheProgramLeavesTheGroupAndTheSuccess",
+    "TestAContextEndingAfterTheProgramExitedLeavesItsDescendantsAndTheSuccess",
+    "TestTheProgramsStdinIsARegularFileNeverAPipe",
+    "TestStdoutStderrAndTheResultFdAreRegularFilesNeverPipes",
+    "TestAValidResultOnFd3IsReturned",
+    "TestANormalExitLeavesAChildOfTheProgramRunning",
+    "TestAGrandchildHoldingTheLogAndTheResultFdDoesNotDelayRun",
 )
 
 
