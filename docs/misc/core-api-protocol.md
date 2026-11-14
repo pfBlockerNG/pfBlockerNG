@@ -416,9 +416,13 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   Update names what to run; a `manual` one runs its scope.
 - **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
   restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it.
-- **fd 3:** a second regular file, for the result: `{"version": 1, "outcomes": {id: "success"|"retry-cap-reached"},
-  "attempted": [ids], "geoipReady": bool}`. Nothing written is nothing reported. Anything else that is not exactly one such
-  object of at most 1 MiB fails the Update and records nothing.
+- **fd 3:** a second regular file, for the result: lines, each one JSON object `{"version": 1, "outcomes": {id:
+  "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field but `version`
+  optional. The program writes each outcome as it finishes, so its death loses no finished check. Core adds the lines up:
+  every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness of the last line that has
+  them. Nothing written is nothing reported. A last line with no newline that is not such an object (the program died writing
+  it) is dropped and fails the Update; any other line that is not, or more than 1 MiB in all, fails the Update and records
+  nothing.
 - **Exit status:** 0 is success. A non-zero exit fails the Update, and a valid result it wrote still counts. **75** means the
   program deferred the Update (a lock held, the schedule switched off): the Update ends with the result `skipped`, not
   `failed`, whatever the program wrote on fd 3 is not recorded (no outcome, no attempt, no GeoIP readiness), and the
@@ -610,7 +614,8 @@ no other field; a refused request runs nothing, writes no result and exits 2) an
 `scheduled`, `retry` and `apply` hold the dispatcher and feed-pass locks for the whole Update, which serialize the entry points
 Core does not start (a page save, an HA receive); a lock that is held defers the Update (exit 75). Progress is stdout: while it
 serves, `pfb_logger()` mirrors to stdout, which is Core's `update.log`, and a hook's output is appended to the same file; the
-`pfblockerng_run.log` is not opened. The result goes to fd 3, the exit status is 0 on success and 1 on a failed Extra, pass or
+`pfblockerng_run.log` is not opened. The result goes to fd 3: a line for each feed's terminal check and each Extra that succeeded,
+written as it finishes, and the whole result as the last line. The exit status is 0 on success and 1 on a failed Extra, pass or
 apply. Pinned by `CoreUpdateServeTest`.
 
 The `.pfb_cron_disable` sentinel (`pfb_cron_disabled()`) suppresses scheduled work, and Core starts the scheduled Update by itself, so

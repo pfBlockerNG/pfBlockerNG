@@ -267,6 +267,56 @@ func TestANonZeroExitIsAnErrorNamingTheStatusAndStillReturnsAValidResult(t *test
 	}
 }
 
+// issue #4002: the program reports each outcome as a line of its own as it finishes, so a program that dies mid-pass still
+// reports what it finished; a last line its death cut short is dropped, with an error.
+func TestTheOutcomesOfAProgramKilledMidPassAreStillReturned(t *testing.T) {
+	p, _ := program(t, `printf '{"version":1,"outcomes":{"ipv4:a_v4":"success"}}\n' >&3
+printf '{"version":1,"outcomes":{"dnsbl:b":"retry-cap-reached"}}\n' >&3
+printf '{"version":1,"outc' >&3
+kill -TERM $$
+sleep 60`)
+	res, err := runCmd(t, p, Request{Trigger: "scheduled"}, newLog(t))
+	if err == nil || !strings.Contains(err.Error(), "signal: terminated") {
+		t.Errorf("Run = %v, want an error naming the TERM that ended the program", err)
+	}
+	want := Result{Outcomes: map[string]string{"ipv4:a_v4": "success", "dnsbl:b": "retry-cap-reached"}}
+	if !reflect.DeepEqual(res, want) {
+		t.Errorf("Run returned %s, want the two outcomes reported before the TERM, %s", jsonOf(t, res), jsonOf(t, want))
+	}
+}
+
+// The lines of a result add up: every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness
+// of the last line that has them. A complete line that is not a result fails the whole result.
+func TestResultLinesAddUp(t *testing.T) {
+	yes, no := true, false
+	for _, c := range []struct {
+		name, payload string
+		want          Result
+		err           string
+	}{
+		{"outcomes, then the whole result", "{\"version\":1,\"outcomes\":{\"ipv4:a_v4\":\"success\"}}\n" +
+			"{\"version\":1,\"geoipReady\":false}\n" +
+			"{\"version\":1,\"outcomes\":{\"ipv4:a_v4\":\"retry-cap-reached\",\"extra:dcc\":\"success\"},\"attempted\":[\"extra:bl\"],\"geoipReady\":true}\n",
+			Result{Outcomes: map[string]string{"ipv4:a_v4": "success", "extra:dcc": "success"}, Attempted: []string{"extra:bl"}, GeoIPReady: &yes}, ""},
+		{"a readiness reported once stays", "{\"version\":1,\"geoipReady\":false}\n{\"version\":1,\"attempted\":[\"extra:bl\"]}\n",
+			Result{Attempted: []string{"extra:bl"}, GeoIPReady: &no}, ""},
+		{"the attempted ids of the last line that has them", "{\"version\":1,\"attempted\":[\"extra:dcc\"]}\n{\"version\":1,\"attempted\":[\"extra:bl\"]}\n{\"version\":1}\n",
+			Result{Attempted: []string{"extra:bl"}}, ""},
+		{"a bad line amid good ones", "{\"version\":1,\"outcomes\":{\"ipv4:a_v4\":\"success\"}}\nhello\n{\"version\":1}\n", Result{}, "not one JSON object"},
+		{"a bad last line that is whole", "{\"version\":1,\"outcomes\":{\"ipv4:a_v4\":\"success\"}}\nhello\n", Result{}, "not one JSON object"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := runCmd(t, withResult(t, c.payload, 0), Request{Trigger: "manual"}, newLog(t))
+			if (c.err == "") != (err == nil) || err != nil && !strings.Contains(err.Error(), c.err) {
+				t.Errorf("Run = %v, want an error saying %q (none when empty)", err, c.err)
+			}
+			if !reflect.DeepEqual(res, c.want) {
+				t.Errorf("Run returned %s, want %s", jsonOf(t, res), jsonOf(t, c.want))
+			}
+		})
+	}
+}
+
 func TestTheCapKillsTheProgramAndItsWholeProcessGroup(t *testing.T) {
 	p, dir := program(t, `sleep 60 & echo $! > "$D/child"; wait`)
 	p.Cap = 500 * time.Millisecond
