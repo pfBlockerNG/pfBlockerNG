@@ -131,7 +131,7 @@ final class CoreUpdateCronDisableTest extends TestCase
 	/** @return array<string, mixed> */
 	private static function req(string $trigger, array $more = []): array
 	{
-		return array_merge(['version' => 1, 'trigger' => $trigger, 'scope' => 'both', 'force' => 'none'], $more);
+		return array_merge(['version' => 1, 'trigger' => $trigger, 'scope' => 'both', 'force' => 'none', 'token' => str_repeat('a', 64)], $more);
 	}
 
 	private function disableTheSchedule(): void

@@ -188,8 +188,12 @@ final class PfbCoreServiceTest extends TestCase
 			'core_socket'         => "{$this->dir}/run/pfb_core/api.sock",
 			'core_state'          => "{$this->dir}/db/pfb_core",
 			'dbdir'               => "{$this->dir}/dbdir",
-			'schedule_state_dir'  => "{$this->dir}/etc",
+			'origdir'             => "{$this->dir}/dbdir/original",
+			'dnsorigdir'          => "{$this->dir}/dbdir/dnsblorig",
+			'ccdir'               => '/usr/local/share/GeoIP/cc',
+			'geoipshare'          => '/usr/local/share/GeoIP',
 			'core_log'            => "{$this->dir}/log/core.log",
+			'schedule_state_dir'  => "{$this->dir}/etc",
 			'core_pidfile'        => "{$this->dir}/run/pfb_core.pid",
 			'core_daemon_pidfile' => "{$this->dir}/run/pfb_core_daemon.pid",
 			'core_lockfile'       => "{$this->dir}/run/pfb_core.lock",
@@ -240,10 +244,15 @@ final class PfbCoreServiceTest extends TestCase
 			},
 			$text
 		);
-		// The settings adapter and update scripts, which Core runs, the host's zone file, which it reads, and the feed phase's folders,
-		// scripts and rsync (issue #3975), which it is told, are the host paths an argument may name: longest first, as one holds another
-		$named = array_merge([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '--zoneinfo /etc/localtime', self::RSYNC],
-			self::LOCAL_DIRS, self::SCRIPT_DIRS);
+		// The adapter, update program, feed source/baseline/database folders, scripts, GeoIP data and rsync are the host paths
+		// this generated service may name: longest first, as one holds another.
+		$named = array_merge([
+			$this->dir, $GLOBALS['pfb']['origdir'], $GLOBALS['pfb']['dnsorigdir'],
+			(string) (realpath($GLOBALS['pfb']['dbdir']) ?: rtrim($GLOBALS['pfb']['dbdir'], '/')),
+			$GLOBALS['pfb']['ccdir'], $GLOBALS['pfb']['geoipshare'] . '/asn.csv',
+			'/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh',
+			'--zoneinfo /etc/localtime', self::RSYNC,
+		], self::LOCAL_DIRS, self::SCRIPT_DIRS);
 		usort($named, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
 		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace($named, '', $script),
 			"the rc script names a host path the test did not redirect:\n{$script}");
@@ -343,7 +352,7 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}
 
-	/** @param list<string> $dirs @return list<string> the flags of the feed phase (issue #3975) Core is started with */
+	/** @param list<string> $dirs @return list<string> Core's local-source, original, database, script, rsync and user-agent flags */
 	private function feedFlags(array $dirs = self::LOCAL_DIRS, string $userAgent = self::USER_AGENT): array
 	{
 		$flags = [];
@@ -353,7 +362,14 @@ final class PfbCoreServiceTest extends TestCase
 		foreach (self::SCRIPT_DIRS as $dir) {
 			array_push($flags, '--script-dir', $dir);
 		}
-		return [...$flags, '--rsync-bin', self::RSYNC, '--user-agent', $userAgent];
+		return [...$flags,
+			'--feed-orig-dir', $GLOBALS['pfb']['origdir'],
+			'--dnsbl-orig-dir', $GLOBALS['pfb']['dnsorigdir'],
+			'--feed-db-dir', (string) (realpath($GLOBALS['pfb']['dbdir']) ?: rtrim($GLOBALS['pfb']['dbdir'], '/')),
+			'--feed-geoip-dir', $GLOBALS['pfb']['ccdir'],
+			'--feed-asn-csv', $GLOBALS['pfb']['geoipshare'] . '/asn.csv',
+			'--rsync-bin', self::RSYNC, '--user-agent', $userAgent,
+		];
 	}
 
 	public function testStartTellsCoreTheFolderOfAFileFeedTheScriptFoldersRsyncAndTheUserAgentAndNamesTheDbdirByItsRealPath(): void
