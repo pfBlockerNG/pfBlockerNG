@@ -1,0 +1,123 @@
+{
+ "schema": 1,
+ "description": "A RETR that ends 250 instead of 226 is refused, as PHP refuses it (only 200, 221 and 226 succeed; its log says \"Unknown Failure Code [250]\"): the published copy is kept and the validators dropped, as for any failed status. Core names the refusal in the same words; PHP's log carries no reason= code.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp",
+   "replies": {
+    "RETR_END": "250 requested file action okay"
+   }
+  }
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "1.2.3.4\n5.6.7.8\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/list.txt",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "Unknown Failure Code [250]",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   },
+   "old_expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": null,
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER anonymous"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS ftp@example.com"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}
