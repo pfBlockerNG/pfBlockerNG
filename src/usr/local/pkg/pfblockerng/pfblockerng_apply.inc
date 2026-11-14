@@ -243,7 +243,7 @@ function pfb_ip_feed_phase_id(array $list, array $row, string $header): ?string
 	}
 	$family = $vtype === '_v4' ? 'ipv4' : 'ipv6';
 	if (isset($list['dnsblip'])) {
-		$id = "synthetic:{$family}:DNSBLIP{$vtype}";
+		$id = $vtype === '_v4' ? 'synthetic:ipv4:DNSBLIP_v4' : 'synthetic:ipv6:DNSBLIP_v6';
 	} elseif (isset($row['custom'])) {
 		$group = $list['aliasname'] ?? NULL;
 		if (!is_string($group) || preg_match('/\A[A-Za-z0-9_]+\z/', $group) !== 1) {
