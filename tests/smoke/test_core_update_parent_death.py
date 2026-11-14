@@ -43,8 +43,6 @@ TESTS = (
     "TestAnExitOf75IsErrDeferredAndReportsNothing",
     "TestAContextEndingWhileTheSupervisorOutlivesTheProgramLeavesTheGroupAndTheSuccess",
     "TestAContextEndingAfterTheProgramExitedLeavesItsDescendantsAndTheSuccess",
-    "TestTheProgramsStdinIsARegularFileNeverAPipe",
-    "TestStdoutStderrAndTheResultFdAreRegularFilesNeverPipes",
     "TestAValidResultOnFd3IsReturned",
     "TestANormalExitLeavesAChildOfTheProgramRunning",
     "TestAGrandchildHoldingTheLogAndTheResultFdDoesNotDelayRun",
@@ -64,6 +62,7 @@ TESTS = (
 )
 
 
+# FreeBSD /dev/fd paths do not report descriptor types; the fstat case checks the actual files.
 @pytest.mark.parametrize(
     "tests",
     [TESTS, ("TestTheProgramReceivesFourRegularFilesByFstatAndReportsItsResult",)],
@@ -75,7 +74,7 @@ def test_the_update_program_dies_with_a_core_that_is_killed(
     tmp_path: Path,
     tests: tuple[str, ...],
 ) -> None:
-    """Red when: the program a SIGKILLed Core ran, or a child it started, keeps running on FreeBSD."""
+    """Prove the Update's group/lifetime or descriptor contracts on real FreeBSD."""
     binary = tmp_path / "update.test"
     built = subprocess.run(
         [str(go_toolchain.go), "test", "-c", "-o", str(binary), "./update"],
