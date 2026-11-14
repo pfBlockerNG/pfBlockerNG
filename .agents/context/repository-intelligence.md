@@ -58,7 +58,8 @@ Load when: every agent session, from `AGENTS.md`.
   with the work that produced them; everything else under `graphify-out/` is ignored and
   regenerated locally.
   The tracked graph is an enforced invariant (issue #3139): on every commit it equals
-  `PYTHONHASHSEED=0 graphify update .` on that commit's tree. `.githooks/pre-commit`
+  `PYTHONHASHSEED=0 graphify update . --force` on that commit's tree; incremental builds
+  can retain orphan AST imports and are not canonical snapshots. `.githooks/pre-commit`
   runs `scripts/agent/check-graph-fresh.sh --refresh` and stages the result unless the
   staged set is only `graphify-out/graph.json` and/or `legacy/` (a memory record alone
   triggers it), so the commit that moves code moves the graph; `.githooks/pre-push`,

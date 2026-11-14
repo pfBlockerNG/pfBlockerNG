@@ -76,7 +76,8 @@ main() {
 	cp "$graph" "$saved" || exit 2
 	restore=1
 
-	PYTHONHASHSEED=0 "$graphify_bin" update "$root" >&2
+	# Incremental builds can retain orphan AST imports; the tracked graph is a full snapshot.
+	PYTHONHASHSEED=0 "$graphify_bin" update "$root" --force >&2
 	rc=$?
 	if [ "$rc" -ne 0 ]; then
 		echo "check-graph-fresh.sh: rebuild failed (graphify update exited $rc); graphify-out/graph.json restored" >&2
@@ -97,7 +98,7 @@ main() {
 		echo 'check-graph-fresh.sh: graph is fresh' >&2
 		exit 0
 	fi
-	echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree; run 'PYTHONHASHSEED=0 graphify update .' and commit graphify-out/graph.json" >&2
+	echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree; run 'PYTHONHASHSEED=0 graphify update . --force' and commit graphify-out/graph.json" >&2
 	exit 1
 }
 
