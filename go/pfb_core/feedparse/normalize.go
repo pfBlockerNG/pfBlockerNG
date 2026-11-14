@@ -65,12 +65,12 @@ func decodeUTF16(b []byte) []byte {
 }
 
 type normalizeInput struct {
-	r         *bufio.Reader
-	order     binary.ByteOrder
-	utf16     bool
-	pending   uint16
+	r          *bufio.Reader
+	order      binary.ByteOrder
+	utf16      bool
+	pending    uint16
 	hasPending bool
-	done      bool
+	done       bool
 }
 
 func newNormalizeInput(src io.Reader) *normalizeInput {

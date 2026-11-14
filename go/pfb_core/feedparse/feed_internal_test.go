@@ -61,7 +61,7 @@ func TestAppendRowMatchesJSONEncode(t *testing.T) {
 
 type repeatedByteReader struct {
 	value     byte
-	remaining  int64
+	remaining int64
 }
 
 func (r *repeatedByteReader) Read(p []byte) (int, error) {

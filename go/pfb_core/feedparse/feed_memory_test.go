@@ -68,8 +68,8 @@ func TestNormalizeFileBoundsHeapForLargeFeed(t *testing.T) {
 }
 
 type distinctIPv4Reader struct {
-	next, count        int
-	line               [16]byte
+	next, count         int
+	line                [16]byte
 	lineLen, lineOffset int
 }
 
@@ -105,8 +105,8 @@ func (r *distinctIPv4Reader) Read(p []byte) (int, error) {
 }
 
 type heapTrackingReader struct {
-	r      io.Reader
-	atEOF  uint64
+	r     io.Reader
+	atEOF uint64
 }
 
 func (r *heapTrackingReader) Read(p []byte) (int, error) {
