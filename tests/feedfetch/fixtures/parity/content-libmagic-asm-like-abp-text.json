@@ -1,0 +1,60 @@
+{
+ "schema": 1,
+ "description": "Row 22 (libmagic difference): an Adblock Plus list libmagic takes for assembler (text/x-asm, a \".text\" line) is text: Core publishes it; the old path refuses it unless the host is one of two named easylist hosts.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "! Title: Test\n.text\n||ads.example.com^\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "! Title: Test\n.text\n||ads.example.com^\n",
+    "digest": "5defaea737f0e79cec1f9e1b8b9e1df8",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000
+   },
+   "old_expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "mime",
+    "reason": "mime_not_allowed",
+    "detected": "text/x-asm rc=0",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

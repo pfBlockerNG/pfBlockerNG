@@ -1,0 +1,46 @@
+{
+ "schema": 1,
+ "description": "ADR-49, sanity on: a UTF-16LE list is scanned as the text it holds (its NUL bytes are its encoding), passes, and is transcoded.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "sanity": true,
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "//4xAC4AMgAuADMALgA0AAoANQAuADYALgA3AC4AOAAKAA=="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n5.6.7.8\n",
+    "digest": "861a0065bbc5397296463b2b09a001c1",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000
+   }
+  }
+ ]
+}

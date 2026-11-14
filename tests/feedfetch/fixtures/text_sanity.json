@@ -1,0 +1,162 @@
+[
+ {
+  "name": "a list",
+  "sample_b64": "MS4yLjMuNAo1LjYuNy44Cg==",
+  "verdict": null
+ },
+ {
+  "name": "empty",
+  "sample_b64": "",
+  "verdict": "below_min_content"
+ },
+ {
+  "name": "comments and blank lines",
+  "sample_b64": "IyBjCiEgZAoKIAkK",
+  "verdict": "below_min_content"
+ },
+ {
+  "name": "a comment after white space",
+  "sample_b64": "ICAjIGMK",
+  "verdict": "below_min_content"
+ },
+ {
+  "name": "a vertical tab is white space",
+  "sample_b64": "Cwo=",
+  "verdict": "below_min_content"
+ },
+ {
+  "name": "a form feed is not",
+  "sample_b64": "DAo=",
+  "verdict": null
+ },
+ {
+  "name": "a nul",
+  "sample_b64": "MS4yLjMuNAoACg==",
+  "verdict": "nul_bytes"
+ },
+ {
+  "name": "a nul wins over html",
+  "sample_b64": "PGh0bWw+AA==",
+  "verdict": "nul_bytes"
+ },
+ {
+  "name": "html",
+  "sample_b64": "PGh0bWw+PGJvZHk+Tm90IEZvdW5kPC9ib2R5PjwvaHRtbD4=",
+  "verdict": "html_error_page"
+ },
+ {
+  "name": "doctype in capitals after white space",
+  "sample_b64": "IA0KCTwhRE9DVFlQRSBIVE1MIFBVQkxJQz4KPHA+Z29uZTwvcD4K",
+  "verdict": "html_error_page"
+ },
+ {
+  "name": "html after a utf-8 mark",
+  "sample_b64": "77u/PGh0bWw+Z29uZTwvaHRtbD4K",
+  "verdict": "html_error_page"
+ },
+ {
+  "name": "a utf-8 mark before a comment",
+  "sample_b64": "77u/IyBjCg==",
+  "verdict": "below_min_content"
+ },
+ {
+  "name": "html after a form feed is not html",
+  "sample_b64": "DDxodG1sPmdvbmU8L2h0bWw+Cg==",
+  "verdict": null
+ },
+ {
+  "name": "html with an address in markup",
+  "sample_b64": "PGh0bWw+PHRkPjEwLjEuMi4zPC90ZD48L2h0bWw+Cg==",
+  "verdict": null
+ },
+ {
+  "name": "html with a cidr",
+  "sample_b64": "PGh0bWw+CjxwcmU+MTAuMC4wLjAvODwvcHJlPgo=",
+  "verdict": null
+ },
+ {
+  "name": "html with an ipv6 address",
+  "sample_b64": "PGh0bWw+Cjx0ZD4yMDAxOmRiODo6MTwvdGQ+Cg==",
+  "verdict": null
+ },
+ {
+  "name": "html with ::1",
+  "sample_b64": "PGh0bWw+Cjx0ZD46OjE8L3RkPgo=",
+  "verdict": null
+ },
+ {
+  "name": "html with four hex groups",
+  "sample_b64": "PGh0bWw+Cjx0ZD5kZWFkOmJlZWY6Y2FmZTpiYWJlPC90ZD4K",
+  "verdict": null
+ },
+ {
+  "name": "html with a css pseudo-element",
+  "sample_b64": "PGh0bWw+PHN0eWxlPmgxOjpiZWZvcmV7Y29udGVudDonJ308L3N0eWxlPgo8aDE+NDAzIDo6IEZvcmJpZGRlbjwvaDE+PC9odG1sPgo=",
+  "verdict": "html_error_page"
+ },
+ {
+  "name": "html with a clock time",
+  "sample_b64": "PGh0bWw+CjxwPmF0IDEyOjM0OjU2PC9wPgo=",
+  "verdict": "html_error_page"
+ },
+ {
+  "name": "html with a domain line",
+  "sample_b64": "PGh0bWw+CmV4YW1wbGUuY29tCjwvaHRtbD4K",
+  "verdict": null
+ },
+ {
+  "name": "html with an abp line",
+  "sample_b64": "PGh0bWw+Cnx8YWRzLmV4YW1wbGUuY29tXgo=",
+  "verdict": null
+ },
+ {
+  "name": "html with a wildcard fqdn line",
+  "sample_b64": "PGh0bWw+CiouZXhhbXBsZS5vcmcuCg==",
+  "verdict": null
+ },
+ {
+  "name": "html with a dtd url only",
+  "sample_b64": "PCFET0NUWVBFIGh0bWwgUFVCTElDICItLy9XM0MvL0RURCBIVE1MIDQuMDEvL0VOIiAiaHR0cDovL3d3dy53My5vcmcvVFIvaHRtbDQvc3RyaWN0LmR0ZCI+CjxodG1sPjxsaW5rIGhyZWY9ImZhdmljb24uaWNvIj48L2h0bWw+Cg==",
+  "verdict": "html_error_page"
+ },
+ {
+  "name": "html with a domain inside a line",
+  "sample_b64": "PGh0bWw+CjxhIGhyZWY9eD5leGFtcGxlLmNvbTwvYT4K",
+  "verdict": "html_error_page"
+ },
+ {
+  "name": "carriage returns end lines",
+  "sample_b64": "PGh0bWw+DTE5Mi4wLjIuMQ0=",
+  "verdict": null
+ },
+ {
+  "name": "latin-1 text",
+  "sample_b64": "Y2Fm6Qo=",
+  "verdict": null
+ },
+ {
+  "name": "utf-16le list",
+  "sample_b64": "//4xAC4AMgAuADMALgA0AAoA",
+  "verdict": null
+ },
+ {
+  "name": "utf-16le html",
+  "sample_b64": "//48AGgAdABtAGwAPgBnAG8AbgBlADwALwBoAHQAbQBsAD4ACgA=",
+  "verdict": "html_error_page"
+ },
+ {
+  "name": "utf-16le holding a nul",
+  "sample_b64": "//5hAAAAYgAKAA==",
+  "verdict": "nul_bytes"
+ },
+ {
+  "name": "utf-32be comments",
+  "sample_b64": "AAD+/wAAACMAAAAgAAAAYwAAAAo=",
+  "verdict": "below_min_content"
+ },
+ {
+  "name": "a carriage return alone ends a line",
+  "sample_b64": "PGh0bWw+DWV4YW1wbGUuY29tDQ==",
+  "verdict": null
+ }
+]

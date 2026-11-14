@@ -1,0 +1,48 @@
+{
+ "schema": 1,
+ "description": "ADR-49, sanity on: a body of comments and blank lines is refused as served (below_min_content).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "sanity": true,
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "# nothing is listed today\n! an ABP comment\n\n   \n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "plaintext",
+    "reason": "below_min_content",
+    "detected": "FEED.raw",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

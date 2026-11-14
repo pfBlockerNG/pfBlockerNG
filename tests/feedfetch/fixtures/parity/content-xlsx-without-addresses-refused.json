@@ -1,0 +1,45 @@
+{
+ "schema": 1,
+ "description": "D06: a workbook whose shared strings hold no IPv4 address is refused (#2682), keeping last-known-good.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list.zip": {
+    "body_b64": "UEsDBBQAAAAIAAAAIVDpzCtL/QAAAAUCAAAJAAAAbGlzdC54bHN4C/BmZhFhYGDgAGLFgMMvkn0NgSx9IBYG4mjn/LyS1LyS+JDKgtTiWL2K3JzNG9efOBuo4a2rde7M+c2hRleMA4I8znqf8z95xnt7KBdv4eWtAZu2b+ZcqeOhe237YyaGABQbpomnLLECsuyBGCRakaNfnJFYlJoSXFKUmZdejMMKoImaenqMQjPLzFTLKn9ydWpquq48epRLcqXrSrNfDpK1E6bYeQii2WXRJP/LBMgyAmJ+iF3l+UXZSfn52ST4RPO8/im/U+fPQz3DyCTCjDvAYGAJIwP24EM3AD08EAYk4QgddBPQfYkw4RymnwO8WdlAksxAeADkbrA7AVBLAQIUAxQAAAAIAAAAIVDpzCtL/QAAAAUCAAAJAAAAAAAAAAAAAACkAQAAAABsaXN0Lnhsc3hQSwUGAAAAAAEAAQA3AAAAJAEAAAAA"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list.zip",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "xlsx extraction failed (script exit 1)",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list.zip"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

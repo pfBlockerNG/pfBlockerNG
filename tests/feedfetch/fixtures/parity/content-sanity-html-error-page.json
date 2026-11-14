@@ -1,0 +1,48 @@
+{
+ "schema": 1,
+ "description": "ADR-49, sanity on: an HTML page with no address and no domain line is refused as served (stage plaintext), keeping last-known-good.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "sanity": true,
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "<!DOCTYPE html>\n<html><head><title>503 Service Unavailable</title></head>\n<body><h1>Service Unavailable</h1></body></html>\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "plaintext",
+    "reason": "html_error_page",
+    "detected": "FEED.raw",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

@@ -1,0 +1,46 @@
+{
+ "schema": 1,
+ "description": "A24: only the last listing line decides; a zip whose \".xlsx\" member is not its last is extracted as any zip.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list.zip": {
+    "body_b64": "UEsDBBQAAAAIAAAAIVBzSzozCgAAAAgAAAAJAAAAbGlzdC54bHN4M9Uz0zPXs+ACAFBLAwQUAAAACAAAACFQxN82DwoAAAAIAAAACgAAAHJlYWRtZS50eHQz1DPSM9Yz4QIAUEsBAhQDFAAAAAgAAAAhUHNLOjMKAAAACAAAAAkAAAAAAAAAAAAAAKQBAAAAAGxpc3QueGxzeFBLAQIUAxQAAAAIAAAAIVDE3zYPCgAAAAgAAAAKAAAAAAAAAAAAAACkATEAAAByZWFkbWUudHh0UEsFBgAAAAACAAIAbwAAAGMAAAAAAA=="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list.zip",
+   "expect": {
+    "ok": true,
+    "published": "5.6.7.8\n1.2.3.4\n",
+    "digest": "fbc8640bd0cff1d8b6b8ab16d1728351",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list.zip"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "raw_retained": true
+   }
+  }
+ ]
+}

@@ -1,0 +1,45 @@
+{
+ "schema": 1,
+ "description": "Libmagic agreement: libmagic takes ISO-8859-1 text for text/plain; Core takes any body without a NUL for text, so the feed is published as it is, as the PHP path does.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "Y2Fm6QoxLjIuMy40Cg=="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published_b64": "Y2Fm6QoxLjIuMy40Cg==",
+    "digest": "9b527e9510afe4059402e84f4eb79f62",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000
+   }
+  }
+ ]
+}

@@ -1,0 +1,17 @@
+{
+ "schema": 1,
+ "description": "Without a sanity key, an HTML body with no address is still published.",
+ "hosts": {"feed.example": ["127.0.0.1", "203.0.113.5"]},
+ "servers": ["origin"],
+ "routes": {"origin": {"/list": {"body": "<html><body>maintenance</body></html>\n"}}},
+ "steps": [{
+  "op": "ingest",
+  "url": "http://feed.example:{port:origin}/list",
+  "expect": {
+   "ok": true,
+   "published": "<html><body>maintenance</body></html>\n",
+   "digest": "35d3a474d72bbfb07ab81b6ac268373a",
+   "requests": [{"server": "origin", "path": "/list"}]
+  }
+ }]
+}

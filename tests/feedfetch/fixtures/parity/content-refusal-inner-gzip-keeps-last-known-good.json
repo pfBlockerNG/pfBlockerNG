@@ -1,0 +1,47 @@
+{
+ "schema": 1,
+ "description": "Row 18 (#2820): an inner refusal of a gzip keeps the published copy and its digest byte-identical and drops the stored validators, which are seeded before it.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/gz": {
+    "body_b64": "H4sIAAAAAAAC/2NgZGJmGMWjeBSPSAwAhZTQkwAEAAA="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/gz",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "inner",
+    "reason": "compressed_mime_not_allowed",
+    "detected": "application/octet-stream rc=0",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/gz"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

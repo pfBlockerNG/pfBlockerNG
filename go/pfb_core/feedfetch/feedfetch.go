@@ -1,10 +1,19 @@
 // Package feedfetch transfers feed sources and decides whether they changed: the Core translation of pfb_download()'s
-// transfer stage and pfb_update_check()'s change detection (map #3813, #3905), held to the parity corpus in
-// tests/feedfetch/fixtures/parity. Every refusal keeps the published copy (last-known-good).
+// transfer stage and post-transfer content gates and of pfb_update_check()'s change detection (map #3813, #3905, #3973),
+// held to the parity corpus in tests/feedfetch/fixtures/parity. Every refusal keeps the published copy
+// (last-known-good).
+//
+// After the transfer an ordinary feed passes the content gates (content.go, archive.go): the MIME verdict and its
+// allow-list, the opt-in sanity scan of a text body (ADR-49, sanity.go), then for a gzip, bzip2, zip or tar the
+// structural test, the inner verdict, the extraction (every member, under a 2 GiB per-file ceiling, through the standard
+// library alone) and the sanity scan of what it extracted; a zip whose last member is a workbook publishes the addresses
+// of its shared strings instead (xlsx, iqrisk.go). The published copy is UTF-16/32 text transcoded to UTF-8, and
+// newline-terminated; an ET IQRisk feed publishes its Block categories' addresses. Not yet here: Extras.
 //
 // A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", its validators ".orig.etag" and
 // ".orig.lastmod", the xxh128 of the raw bytes it was published from ".orig.xxhash128", a changed probe's body ".probe"
-// (the next ingest publishes it instead of fetching again), and the staged body ".raw", which never outlives a call.
+// (the next ingest publishes it instead of fetching again), and the staged body ".raw": consumed by a text feed's
+// publication, kept by an archive's (its digest is of those bytes, and ET reuses it), gone after any refusal.
 //
 // A whois or asn feed has no body to fetch: Whois resolves its Domain/AS list (the translation of whoisconvert(), #3974)
 // into the published copy "<name>.orig", and leaves "<name>.fail" when an entry failed or the batch ran out of time.
@@ -19,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
@@ -53,12 +63,22 @@ type Fetcher struct {
 	RootCAs    *x509.CertPool // nil: the system roots
 	RsyncBin   string         // the rsync executable
 	RetryDelay time.Duration  // pause between attempts; zero is pfb_download()'s 5 s
+	// FreeBytes is the space the process may still write in dir; ok is false when it cannot tell, which is no shortfall
+	// (pfb_extract_space_shortfall). Nil reads the file system.
+	FreeBytes func(dir string) (free uint64, ok bool)
+	Sanity    bool // ADR-49's opt-in plain-text sanity scan (gen/pfb_feed_sanity); off by default, as in PHP
+	// ET IQRisk, a feed whose URL holds "iprepdata.txt" (processet): its category split goes to ETDir, the addresses of
+	// the ETMatch categories to ETMatchFile, and those of the ETBlock categories are published. Empty selects none.
+	ETDir, ETMatchFile string
+	ETBlock, ETMatch   []string
 
 	// Whois only.
 	Lookup    func(ctx context.Context, network, host string) ([]netip.Addr, error) // one family's addresses ("ip4" or "ip6"); nil is the system resolver
 	Now       func() time.Time                                                      // the batch clock; nil is time.Now
 	ASNCSV    string                                                                // the IPinfo asn.csv the AS entries are read from
 	EnsureASN func(ctx context.Context)                                             // the first-use asn.csv download; nil leaves a missing file missing
+
+	extractMax int64 // test seam: the per-file ceiling of an extraction; zero is maxExtract
 }
 
 // Request is one feed's source as the Outpost translated it.
@@ -96,12 +116,15 @@ func (d Decision) String() string {
 
 // Result is the outcome of Ingest or Probe. Reason names a refusal in pfb_download()'s words (a validation reason code
 // such as "download_too_large", the skip text such as "too many redirects", or the refused status); a failure always
-// carries one.
+// carries one. Stage and Detected carry the rest of a validation refusal as pfb_validate_log() writes it ("stage=<stage> reason=<reason>
+// detected=<detail>"): empty for a refusal that is no validation line.
 type Result struct {
 	OK       bool
 	Decision Decision // Probe only
 	Status   int      // the final HTTP status, when there was one
 	Reason   string
+	Stage    string
+	Detected string
 }
 
 func fail(reason string) Result { return Result{Reason: reason} }
@@ -164,7 +187,12 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		return fail(reason)
 	}
 	staged, probe, published := feed.path(".raw"), feed.path(".probe"), feed.path(".orig")
-	defer os.Remove(staged)
+	keepRaw := false // an archive's success leaves the staged archive: the digest is of it, and ET reuses it (A35)
+	defer func() {
+		if !keepRaw {
+			os.Remove(staged)
+		}
+	}()
 	defer os.Remove(probe)
 
 	var t transfer
@@ -191,9 +219,43 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	if t.status != 200 && t.status != 221 && t.status != 226 {
 		return Result{Status: t.status, Reason: statusReason(t.status)}
 	}
-	if err := publish(feed, staged, t.lastMod); err != nil {
+	body, refusal := f.gate(ctx, feed, staged, t.lastMod)
+	if refusal != nil {
+		refusal.Status = t.status
+		return *refusal
+	}
+	if body != staged {
+		defer os.Remove(body) // an extraction whose publication failed
+	}
+	// The digest is of the wire bytes (#713): body itself for a text feed, before it is finished; the archive otherwise.
+	sum, err := digest.File(staged)
+	if err != nil {
+		return Result{Status: t.status, Reason: "staged body could not be read"}
+	}
+	if err := finish(body); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
 	}
+	archive := body != staged
+	if strings.Contains(req.URL, "iprepdata.txt") {
+		// ET IQRisk is split after the finish, as pfb_download() runs processet() on the finished copy. Its failure
+		// keeps last-known-good: the published copy is replaced only by the split's outcome.
+		et, err := f.iqrisk(ctx, feed, body)
+		if err != nil {
+			if ctxEnded(err) {
+				return Result{Status: t.status, Reason: err.Error()}
+			}
+			if err == errInvalidETConfiguration {
+				return Result{Status: t.status, Reason: err.Error()}
+			}
+			return Result{Status: t.status, Reason: "et processing failed (script exit 1)"}
+		}
+		defer os.Remove(et)
+		body = et
+	}
+	if err := publish(feed, body, sum, t.lastMod); err != nil {
+		return Result{Status: t.status, Reason: err.Error()}
+	}
+	keepRaw = archive
 	if fromProbe {
 		// The probe's validators describe the body just published (#3911).
 		for _, v := range [...]string{".etag", ".lastmod"} {

@@ -1,0 +1,68 @@
+{
+ "schema": 1,
+ "description": "Owner addendum, the reuse quirk (map #3905 H2): after a changed probe the ingest classifies the kept body by its file path, which has no host, so the old path cannot apply its easylist exemption and refuses the list it passes on a direct ingest. Core passes it.",
+ "hosts": {
+  "easylist.to": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "! Title: Test\n.text\n||ads.example.com^\n",
+    "etag": "\"v1\""
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://easylist.to:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "decision": "changed",
+    "published": "old\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "if_none_match": "\"v0\""
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": null
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://easylist.to:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "! Title: Test\n.text\n||ads.example.com^\n",
+    "digest": "5defaea737f0e79cec1f9e1b8b9e1df8",
+    "requests": [],
+    "etag": "\"v1\"",
+    "lastmod": null
+   },
+   "old_expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "mime",
+    "reason": "mime_not_allowed",
+    "detected": "text/x-asm rc=0",
+    "requests": [],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

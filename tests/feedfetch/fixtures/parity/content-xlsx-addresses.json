@@ -1,0 +1,46 @@
+{
+ "schema": 1,
+ "description": "D: a zip whose last member is a workbook publishes the IPv4 addresses of its shared strings (grep -oEw), sorted and unique; the digest is of the zip and the staged archive stays.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list.zip": {
+    "body_b64": "UEsDBBQAAAAIAAAAIVB9sKywiwEAAHMCAAAJAAAAbGlzdC54bHN4C/BmZhFhYGDgAGLFgMMvkn0NgSx9IBYG4mjn/LyS1LyS+JDKgtTiWL2K3JzNG9efOBuo4a2rde7M+c2hRleMA4I8znqf8z95xnt7KBdv4eWtAZu2b+ZcqeOhe237YyaGABQbAqxf7lkBZEkzMjCARCty9IszEotSU4JLijLz0otBVpT6e3MdMhC5U9314dqvWUe2mU1Ywn1Q+AWjF6/UCs5ZIa/e+mY7fjis02Z+eE9iim2MVZH59oS9wQcmMBmu++r+2o+L7/fdVUxCSY/7fJ/PDfxgwJi1d4Kiy6Vf91xZpRX2br5+Lye+nDOKbXXqlZ5HHGqbV6SaZW3Ws9i0yaltz4n9Z+wXbvafKuoXIRQ3RfNc3R+3vuwzG3+YzLqpyKTO09IXapK7rLO1gn3TFj97RlSfWTTJ/zIBsoyAmB/is/L8ouyk/PxsEsJN87z+Kb9T589Dg46RSYQZd/TAwBJGBuyRhW4AeugjDEjCERfoJqD7EmGCDSOGnwO8WdlAksxAeABIzwW7EwBQSwECFAMUAAAACAAAACFQfbCssIsBAABzAgAACQAAAAAAAAAAAAAApAEAAAAAbGlzdC54bHN4UEsFBgAAAAABAAEANwAAALIBAAAAAA=="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list.zip",
+   "expect": {
+    "ok": true,
+    "published": "010.001.000.099\n1.2.3.4\n10.0.0.1\n192.168.1.254\n8.8.8.8\n",
+    "digest": "841a3132dae13f2446fcaab7f29a2d24",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list.zip"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "raw_retained": true
+   }
+  }
+ ]
+}

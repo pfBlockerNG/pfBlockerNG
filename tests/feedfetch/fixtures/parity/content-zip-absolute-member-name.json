@@ -1,0 +1,38 @@
+{
+ "schema": 1,
+ "description": "Hostile: a zip member named with an absolute path: members stream to the output and no name reaches the file system, so the payload is published.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "UEsDBBQAAAAIAAAAIVDE3zYPCgAAAAgAAAANAAAAL2V0Yy9ldmlsLnR4dDPUM9Iz1jPhAgBQSwECFAMUAAAACAAAACFQxN82DwoAAAAIAAAADQAAAAAAAAAAAAAApAEAAAAAL2V0Yy9ldmlsLnR4dFBLBQYAAAAAAQABADsAAAA1AAAAAAA="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n",
+    "digest": "8d28c780951d1446019dab5ea33fbf8f",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "raw_retained": true
+   }
+  }
+ ]
+}

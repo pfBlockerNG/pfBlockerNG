@@ -1,0 +1,58 @@
+{
+ "schema": 1,
+ "description": "Row 19: a changed probe keeps the gzip body; the ingest that follows publishes its payload without a second request, and promotes the probe validators.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\""
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "H4sIAAAAAAAC/zPUM9Iz1jPhMtUz0zPXs+ACAHMCLsAQAAAA",
+    "etag": "\"v1\""
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "probe",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "decision": "changed",
+    "published": "old\n",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list",
+      "if_none_match": "\"v0\""
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": null
+   }
+  },
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n5.6.7.8\n",
+    "digest": "b7ee2c8df9e913bc28874a405e7802bd",
+    "requests": [],
+    "raw_retained": true,
+    "etag": "\"v1\"",
+    "lastmod": null
+   }
+  }
+ ]
+}

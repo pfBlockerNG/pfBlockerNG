@@ -1,0 +1,47 @@
+{
+ "schema": 1,
+ "description": "Row 10: a gzip that fails its structural test is refused before any extraction.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "H4sIAAAAAAAC/+3Wu20EMRAEUV/BHNjNf/6JCRC2ay4BeWvRqxFO+zjUx5/+aT/6O/Wcfs7+nOM553Ou59zPeZ7zpkMwRSWpNJWoUlWySlcJK2WnbP7WlJ2yU3bKTtkpO2Wn3FPuKXd+hpR7yj3lnnJPuafcUx4pj5RHyoNfOOWR8kh5pDxSHinPlGfKM+WZ8uSfl/JMeaY8U54pr5RXyivllfJKefFdpLxSXimvlHfKO+Wd8k55p7xT3nxyKe+Ud8on5ZPySfmkfFI+KZ+UD19zyiflm/JN+aZ8U74p35RvyjflC5SSApWGlQaWhpYGl4aXBpiGmAaZxowvjswokCWySJbJQlkqiyXRBUy5zDMDmwKn0Cl4Cp8CqBAqiAqj6nWxMAOmwqmAKqQKqsKqwCq0Cq4adXsxA7GCrDAr0Aq1gq1wK+AKuZp1RTIDvEKv4Cv8CsBCsCAsDAvEWnUPMwPHArKQLCgLywKz0Cw4C8/addkzA9LCtEAtVAvWwrWALWQL2jq1UZiBbsFb+BbAhXBBXBgXyIVy3VpbtbdYXDg3zo1z49w4N86Nc+PcOLdqOTID58a5cW6cG+fGuXHu2r+1gL82MDNqB9cSri1ca7j2cC1inBvnxrl7rXlm4Nw4N86Nc+PcODfOjXPj3KPeEszAuXFunBvnxvn7qnpfVe+r6n1Vva+q/31V/QIGH6UUxA4AAA=="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "structural",
+    "reason": "probe_failed",
+    "detected": "application/gzip FEED.raw",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

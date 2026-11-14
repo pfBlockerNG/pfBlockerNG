@@ -1,0 +1,38 @@
+{
+ "schema": 1,
+ "description": "Hostile: a gzip of a gzip: the inner gate sees a gzip (allowed), one level is extracted, and the inner gzip is published as it is (a trailing newline added).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "H4sIAAAAAAAC/5Pv5mAAAab/xleMLxlfM37IxHDkvhk/SBQAQFpdgBwAAAA="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published_b64": "H4sIAAAAAAAC/zPUM9Iz1jPhAgDE3zYPCAAAAAo=",
+    "digest": "b1896b4f9d4d29335b5450d6ecb21867",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "raw_retained": true
+   }
+  }
+ ]
+}

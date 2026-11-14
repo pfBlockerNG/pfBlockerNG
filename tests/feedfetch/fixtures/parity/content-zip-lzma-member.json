@@ -1,0 +1,59 @@
+{
+ "schema": 1,
+ "description": "A ZIP LZMA member is refused with probe_failed on PHP and Core. Divergence (owner decision on #3973): the appliance's unzip (bsdunzip, libarchive) passes the structural test and PHP publishes what bsdtar extracts; Core refuses and keeps last-known-good (Go's standard library has no LZMA decoder).",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n"
+ },
+ "routes": {
+  "origin": {
+   "/list.zip": {
+    "body_b64": "UEsDBD8AAgAOAIQUbl3E3zYPGwAAAAgAAAAFAAAAYS50eHQJBAUAXQAAgAAAGIuCqWCPiqgpG6oY//5/4ABQSwECPwM/AAIADgCEFG5dxN82DxsAAAAIAAAABQAAAAAAAAAAAAAAgAEAAAAAYS50eHRQSwUGAAAAAAEAAQAzAAAAPgAAAAAA"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list.zip",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "stage": "structural",
+    "reason": "probe_failed",
+    "detected": "application/zip FEED.raw",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list.zip"
+     }
+    ]
+   },
+   "old_expect": {
+    "ok": true,
+    "published": "1.2.3.4\n",
+    "stage": null,
+    "reason": null,
+    "detected": null,
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list.zip"
+     }
+    ],
+    "raw_retained": true,
+    "digest": "18fbdeeb052f9aa03d148e6f9c743928",
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

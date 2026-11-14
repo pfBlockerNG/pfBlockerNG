@@ -1,0 +1,46 @@
+{
+ "schema": 1,
+ "description": "D04: of several workbooks the first top-level one the glob *.[xX][lL][sS][xX] sorts (no dot file, none in a directory, any case) is read.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list.zip": {
+    "body_b64": "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"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list.zip",
+   "expect": {
+    "ok": true,
+    "published": "10.0.0.3\n",
+    "digest": "d3e77b10edd687cb6df895d8395daebe",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list.zip"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "raw_retained": true
+   }
+  }
+ ]
+}
