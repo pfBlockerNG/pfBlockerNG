@@ -270,8 +270,9 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 	h.finish(t, nil)
 }
 
-// A running Update's log past its bound keeps only its newest whole lines, as the package's other logs are trimmed (issue
-// #4003): it lives on the root filesystem, and an Update may print for hours.
+// A running Update's log past its bound keeps only its newest whole lines, at most half of what it held, as the package's other
+// logs are trimmed (issue #4003): it lives on the root filesystem, and an Update may print for hours. A cursor from before the
+// trim reads the log from its start.
 func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
 	h := newHold()
 	g := newGate(t, h.run, nil)
@@ -283,6 +284,8 @@ func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
 	for i := range lines {
 		fmt.Fprintf(&b, "line %06d %s\n", i, strings.Repeat("x", 20))
 	}
+	h.write(t, "the start\n")
+	early := g.View(0, 0)
 	h.write(t, b.String())
 
 	var v View
@@ -303,6 +306,12 @@ func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
 	}
 	if newest := fmt.Sprintf("line %06d %s\nthe end\n", lines-1, strings.Repeat("x", 20)); !strings.HasSuffix(v.Log, newest) {
 		t.Errorf("the trimmed log ends with %q, want the newest lines %q", v.Log[max(0, len(v.Log)-80):], newest)
+	}
+	if len(v.Log) > b.Len()/2 {
+		t.Errorf("the trimmed log holds %d bytes, want at most half of the %d written", len(v.Log), b.Len())
+	}
+	if old := g.View(early.Next, 64<<10); old.Log != g.View(0, 64<<10).Log {
+		t.Errorf("View(%d), a cursor from before the trim, reads %.40q, want the trimmed log from its start", early.Next, old.Log)
 	}
 	h.finish(t, nil)
 }

@@ -415,9 +415,10 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
   Update names what to run; a `manual` one runs its scope.
 - **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
-  restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it. While it runs, a log past
-  8 MiB keeps only its newest whole lines, at most 4 MiB, in place (checked once a second); a cursor from before reads it from
-  the start.
+  restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it. While it runs, the log is
+  checked once a second: past 8 MiB it keeps only its newest whole lines, at most 4 MiB, in place, and a cursor from before
+  reads it from the start. Lines printed during the trim may be lost or land before the kept ones; output of the last second
+  of an Update is not trimmed.
 - **fd 3:** a second regular file, for the result: `{"version": 1, "outcomes": {id: "success"|"retry-cap-reached"},
   "attempted": [ids], "geoipReady": bool}`. Nothing written is nothing reported. Anything else that is not exactly one such
   object of at most 1 MiB fails the Update and records nothing.
@@ -429,8 +430,8 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 - **Process group and bounds:** the program runs in its own process group. The group is killed (TERM, then KILL after 3 s)
   at a hard cap of 4 hours, when the Update is cancelled and when Core stops; never when the program exits by itself, so a
   daemon it started keeps running. The program itself gets KILL from the kernel when Core dies (FreeBSD's
-  `PROC_PDEATHSIG_CTL`, Linux's parent-death signal), so a Core killed outright leaves no program behind; a command the
-  program had started ends by itself.
+  `PROC_PDEATHSIG_CTL`, Linux's parent-death signal), so a Core killed outright leaves no program behind. A command the
+  program had started is not tied to Core: it keeps running until it ends.
 
 Core then records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically): each
 feed's outcome, the attempted ids that stay pending, and the GeoIP readiness the program saw (`true` until the first report).
