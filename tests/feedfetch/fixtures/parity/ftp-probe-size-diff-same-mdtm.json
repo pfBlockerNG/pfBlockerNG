@@ -1,0 +1,51 @@
+{
+ "schema": 1,
+ "description": "With MDTM unchanged but SIZE different from the stored baseline, Probe must RETR and hash before deciding Unchanged.",
+ "hosts": {
+  "feed.example": ["127.0.0.1", "203.0.113.5"],
+  "rdr.example": ["127.0.0.1", "203.0.113.6"]
+ },
+ "servers": [{"name": "ftp", "kind": "ftp"}],
+ "seed": {
+  "published": "feed one\n",
+  "lastmod": 1760000000,
+  "size": 8,
+  "digest": "880b4f7332ef14083066ffeee3a25dca"
+ },
+ "files": {"ftp": {"/list.txt": {"body": "feed one\n", "mdtm": 1760000000}}},
+ "steps": [{
+  "op": "probe",
+  "url": "ftp://feed.example:{port:ftp}/list.txt",
+  "expect": {
+   "ok": true,
+   "decision": "unchanged",
+   "published": "feed one\n",
+   "digest": "880b4f7332ef14083066ffeee3a25dca",
+   "lastmod": 1760000000,
+   "size": 9,
+   "requests": [
+    {"server": "ftp", "command": "USER anonymous"},
+    {"server": "ftp", "command": "PASS ftp@example.com"},
+    {"server": "ftp", "command": "MDTM list.txt"},
+    {"server": "ftp", "command": "TYPE I"},
+    {"server": "ftp", "command": "SIZE list.txt"},
+    {"server": "ftp", "command": "EPSV"},
+    {"server": "ftp", "command": "RETR list.txt"},
+    {"server": "ftp", "data_to": "127.0.0.1"}
+   ]
+  },
+  "old_expect": {
+   "ok": false,
+   "decision": "failed",
+   "published": "feed one\n",
+   "digest": "880b4f7332ef14083066ffeee3a25dca",
+   "lastmod": 1760000000,
+   "size": 8,
+   "requests": [
+    {"server": "ftp", "command": "USER anonymous"},
+    {"server": "ftp", "command": "PASS ftp@example.com"},
+    {"server": "ftp", "command": "MDTM list.txt"}
+   ]
+  }
+ }]
+}

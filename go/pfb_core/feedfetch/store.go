@@ -15,6 +15,64 @@ type validators struct {
 	lastMod time.Time
 }
 
+type ftpMetadata struct {
+	lastMod time.Time
+	size    int64
+}
+
+func ftpMetadataFor(t transfer) ftpMetadata {
+	return ftpMetadata{lastMod: t.lastMod, size: t.size}
+}
+
+func ftpTime(unix int64) time.Time {
+	if unix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
+}
+
+func readFTPMetadata(feed Feed) ftpMetadata {
+	return readFTPMetadataAt(feed.path(".orig"))
+}
+
+func readFTPMetadataAt(base string) ftpMetadata {
+	var m ftpMetadata
+	if b, err := os.ReadFile(base + ".lastmod"); err == nil {
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil {
+			m.lastMod = ftpTime(n)
+		}
+	}
+	if b, err := os.ReadFile(base + ".size"); err == nil {
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && n > 0 {
+			m.size = n
+		}
+	}
+	return m
+}
+
+func writeSidecarAtomically(path, value string) {
+	tmp := path + ".part"
+	if err := os.WriteFile(tmp, []byte(value), 0o600); err != nil {
+		os.Remove(tmp)
+		return
+	}
+	if os.Rename(tmp, path) != nil {
+		os.Remove(tmp)
+	}
+}
+
+func writeFTPMetadataAt(base string, m ftpMetadata) {
+	lastMod, size := base+".lastmod", base+".size"
+	os.Remove(lastMod)
+	os.Remove(size)
+	if !m.lastMod.IsZero() {
+		writeSidecarAtomically(lastMod, strconv.FormatInt(m.lastMod.Unix(), 10))
+	}
+	if m.size > 0 {
+		writeSidecarAtomically(size, strconv.FormatInt(m.size, 10))
+	}
+}
+
 // readValidators returns the stored ETag and Last-Modified (pfb_validator_read), or nil when neither is usable.
 func readValidators(feed Feed) *validators {
 	var v validators

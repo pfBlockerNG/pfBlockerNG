@@ -167,6 +167,20 @@ func TestAnFTPFeedIsFetchedFromTheStub(t *testing.T) {
 		t.Fatalf("the stub's file must be published with the 226 that ended the transfer: %+v, published %q", res, published(t, feed))
 	}
 }
+func TestFailedIngestDropsFTPSizeSidecar(t *testing.T) {
+	stub := newFTPStub(t, func(c net.Conn) { io.WriteString(c, "500 refused\r\n") })
+	f, feed := quickFetcher(t)
+	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".orig.size"), []byte("5"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := f.Ingest(context.Background(), feed, ftpFeed(stub, "/list.txt"))
+	if res.OK {
+		t.Fatalf("failed FTP ingest unexpectedly succeeded: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(feed.Dir, feed.Name+".orig.size")); !os.IsNotExist(err) {
+		t.Fatalf("failed ingest must drop the SIZE baseline, stat error %v", err)
+	}
+}
 
 // Both connections of a transfer leave from the source address the Outpost configured (CURLOPT_INTERFACE covers the
 // data connection too).

@@ -1,0 +1,28 @@
+{
+ "schema": 1,
+ "description": "A missing .orig is immediately Changed even when stale digest and FTP metadata sidecars remain; no download is needed.",
+ "hosts": {
+  "feed.example": ["127.0.0.1", "203.0.113.5"],
+  "rdr.example": ["127.0.0.1", "203.0.113.6"]
+ },
+ "servers": [{"name": "ftp", "kind": "ftp"}],
+ "seed": {
+  "lastmod": 1760000000,
+  "size": 9,
+  "digest": "880b4f7332ef14083066ffeee3a25dca"
+ },
+ "files": {"ftp": {"/list.txt": {"body": "feed one\n", "mdtm": 1760000000}}},
+ "steps": [{
+  "op": "probe",
+  "url": "ftp://feed.example:{port:ftp}/list.txt",
+  "expect": {
+   "ok": true,
+   "decision": "changed",
+   "published": null,
+   "digest": "880b4f7332ef14083066ffeee3a25dca",
+   "lastmod": 1760000000,
+   "size": 9,
+   "requests": []
+  }
+ }]
+}

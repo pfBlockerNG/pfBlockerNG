@@ -10,10 +10,10 @@
 // of its shared strings instead (xlsx, iqrisk.go). The published copy is UTF-16/32 text transcoded to UTF-8, and
 // newline-terminated; an ET IQRisk feed publishes its Block categories' addresses. Not yet here: Extras.
 //
-// A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", its validators ".orig.etag" and
-// ".orig.lastmod", the xxh128 of the raw bytes it was published from ".orig.xxhash128", a changed probe's body ".probe"
-// (the next ingest publishes it instead of fetching again), and the staged body ".raw": consumed by a text feed's
-// publication, kept by an archive's (its digest is of those bytes, and ET reuses it), gone after any refusal.
+// A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", validators ".orig.etag" and
+// ".orig.lastmod" (plus FTP's ".orig.size"), the xxh128 of the raw bytes it was published from ".orig.xxhash128", a
+// changed probe's body ".probe" (the next ingest publishes it instead of fetching again), and the staged body ".raw":
+// consumed by a text feed's publication, kept by an archive's (its digest is of those bytes, and ET reuses it), gone after any refusal.
 //
 // A whois or asn feed has no body to fetch: Whois resolves its Domain/AS list (the translation of whoisconvert(), #3974)
 // into the published copy "<name>.orig", and leaves "<name>.fail" when an entry failed or the batch ran out of time.
@@ -166,21 +166,23 @@ func (r Request) timeout() time.Duration {
 	return defaultTimeout
 }
 
-// transfer is what a fetch learned besides the body.
 type transfer struct {
-	status  int
-	etag    string
-	lastMod time.Time
-	reason  string
+	status    int
+	etag      string
+	lastMod   time.Time
+	size      int64
+	reason    string
+	unchanged bool
 }
 
-// Ingest fetches the feed and publishes it. A failure keeps the published copy and drops the stored validators, so a
-// refused body cannot hide behind a 304 on the next probe (#2820).
+// Ingest fetches and publishes the feed. A failure keeps the published copy and drops the stored validators, so a
+// refused body cannot hide behind a 304 or FTP metadata match on the next probe (#2820).
 func (f *Fetcher) Ingest(ctx context.Context, feed Feed, req Request) Result {
 	res := f.ingest(ctx, feed, req)
 	if !res.OK {
 		os.Remove(feed.path(".orig.etag"))
 		os.Remove(feed.path(".orig.lastmod"))
+		os.Remove(feed.path(".orig.size"))
 	}
 	return res
 }
@@ -268,17 +270,23 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	keepRaw = archive
 	if fromProbe {
 		// The probe's validators describe the body just published (#3911).
-		for _, v := range [...]string{".etag", ".lastmod"} {
+		for _, v := range [...]string{".etag", ".lastmod", ".size"} {
 			os.Remove(published + v)
 			os.Rename(probe+v, published+v)
 		}
+		if src.ftp != nil && f.Proxy == nil {
+			if lastMod := readFTPMetadata(feed).lastMod; !lastMod.IsZero() {
+				os.Chtimes(published, lastMod, lastMod)
+			}
+		}
+	} else if src.ftp != nil && f.Proxy == nil {
+		writeFTPMetadataAt(published, ftpMetadataFor(t))
 	}
 	return Result{OK: true, Status: t.status}
 }
 
-// Probe decides whether the feed changed since it was published (ADR-42): a conditional GET for a remote feed, the
-// content hash for a local file; a self-hosted URL and an rsync feed are always due. A changed remote body is kept for
-// the next Ingest.
+// Probe decides whether the feed changed since it was published: conditional GET for remote feeds, content hash for local
+// files, and MDTM/SIZE followed by a hash fallback for unproxied FTP. A changed remote body is kept for the next Ingest.
 func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	if !feed.valid() {
 		return Result{Decision: Failed, Reason: "invalid feed name"}
@@ -291,7 +299,8 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 		return Result{Decision: Failed, Reason: "proxy_unusable"}
 	}
 	published := feed.path(".orig")
-	if _, err := os.Stat(published); err != nil {
+	_, statErr := os.Stat(published)
+	if statErr != nil {
 		return Result{OK: true, Decision: Changed}
 	}
 	switch src.kind {
@@ -299,6 +308,9 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 		return Result{OK: true, Decision: Changed}
 	case kindLocal:
 		return Result{OK: true, Decision: localDecision(src.path, feed)}
+	}
+	if src.ftp != nil && f.Proxy == nil {
+		return f.probeFTP(ctx, feed, req, src)
 	}
 
 	// The body becomes ".probe", which the next Ingest publishes, only once the probe decided: a probe killed
@@ -344,6 +356,47 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	return res
 }
 
+func (f *Fetcher) probeFTP(ctx context.Context, feed Feed, req Request, src *source) Result {
+	part, probe := feed.path(".probe.part"), feed.path(".probe")
+	defer os.Remove(part)
+	baseline := readFTPMetadata(feed)
+	t := f.fetchFTP(ctx, src, req, part, &baseline)
+	metadataUnchanged := t.unchanged
+	res := Result{Status: t.status, Reason: t.reason}
+	if t.reason != "" {
+		res.Decision = Failed
+		return res
+	}
+	if t.status != 226 {
+		return Result{Status: t.status, Decision: Failed, Reason: statusReason(t.status)}
+	}
+	res.OK, res.Decision = true, Changed
+	if metadataUnchanged {
+		res.Decision = Unchanged
+	} else if sum, err := digest.File(part); err == nil {
+		algo, old := digest.Read(feed.path(".orig"))
+		if algo == digest.XXH128 && sum == old {
+			res.Decision = Unchanged
+		}
+	}
+	meta := ftpMetadataFor(t)
+	if res.Decision == Unchanged {
+		for _, suffix := range [...]string{"", ".etag", ".lastmod", ".size"} {
+			os.Remove(probe + suffix)
+		}
+		writeFTPMetadataAt(feed.path(".orig"), meta)
+		return res
+	}
+	for _, suffix := range [...]string{".etag", ".lastmod", ".size"} {
+		os.Remove(probe + suffix)
+	}
+	if err := os.Rename(part, probe); err != nil {
+		return Result{Status: t.status, Decision: Failed, Reason: "probe body could not be kept"}
+	}
+	writeFTPMetadataAt(probe, meta)
+	return res
+}
+
 // fetch transfers the source's body to dst; cond carries the probe's conditional-GET validators.
 func (f *Fetcher) fetch(ctx context.Context, src *source, req Request, dst string, cond *validators) transfer {
 	switch src.kind {
@@ -355,7 +408,7 @@ func (f *Fetcher) fetch(ctx context.Context, src *source, req Request, dst strin
 		return fetchSelfHosted(ctx, src, req, dst)
 	}
 	if src.ftp != nil && f.Proxy == nil {
-		return f.fetchFTP(ctx, src, req, dst) // no conditional GET exists for ftp: the probe's cond is not sent
+		return f.fetchFTP(ctx, src, req, dst, nil) // no conditional GET exists for ftp: the probe's cond is not sent
 	}
 	// An FTP feed through an HTTP proxy is an absolute-form GET (ftpViaProxy), as cURL makes it.
 	return f.fetchHTTP(ctx, src, req, dst, cond)
