@@ -50,3 +50,29 @@ func TestWriteValidatorsStripsLineBreaksFromTheETag(t *testing.T) {
 		t.Fatalf("an ETag of line breaks only left a sidecar behind: %v", err)
 	}
 }
+
+// A PASV reply is read as libcurl reads it: from the first digit at which six comma-separated numbers of at most 255
+// start, wherever that is in the text; a reply with no such run names no port.
+func TestPasvPortReadsTheFirstRunOfSixNumbers(t *testing.T) {
+	for msg, want := range map[string]int{
+		"Entering Passive Mode (127,0,0,1,4,1)": 4<<8 | 1,
+		"Mode 2 127,0,0,1,4,1":                  4<<8 | 1,
+		"(1) 127,0,0,1,4,1":                     4<<8 | 1,
+		"x 1,2 y 127,0,0,1,4,1":                 4<<8 | 1,
+		"(1127,0,0,1,4,1)":                      4<<8 | 1, // from inside a number, as libcurl tries every digit
+		"(127,000,0,1,4,1)":                     4<<8 | 1,
+		"(127,0,0,1,4)":                         -1,
+		"(127,0,0,1,256,1)":                     -1,
+		"(127,0,0,1,4,256)":                     -1,
+		"(127,0,0,1,ab,cd)":                     -1,
+		"Entering Passive Mode":                 -1,
+	} {
+		port, ok := pasvPort(msg)
+		if !ok {
+			port = -1
+		}
+		if port != want {
+			t.Errorf("pasvPort(%q) = %d, %v; want %d", msg, port, ok, want)
+		}
+	}
+}

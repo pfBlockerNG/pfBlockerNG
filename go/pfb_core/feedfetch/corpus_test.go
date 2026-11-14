@@ -22,7 +22,7 @@ package feedfetch_test
 //	             its handshake, as {server, tls: "connect"}: the attempts the fetcher made, whether or not the handshake
 //	             held. With plain_too the same port also serves plain http (the first byte decides, 0x16 being a TLS
 //	             handshake), so a redirect can change the scheme and nothing else.
-//	             {name, kind: "ftp", users, epsv, pasv_host, quirk} is an ftp server instead: the Python server
+//	             {name, kind: "ftp", users, epsv, pasv_host, replies, quirk} is an ftp server instead: the Python server
 //	             tests/feedfetch/fixtures/ftp_server.py, whose header documents the options. It records into the shared
 //	             request order {server, command} per command and {server, data_to} per data connection.
 //	proxy        optional {server, auth: {user, password}, requires: {user, password}}: the system proxy. server names

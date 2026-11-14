@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FTP server of the feed-transfer parity corpus (tests/feedfetch/fixtures/parity), loopback only.
+"""FTP server of the feed-transfer parity corpus (tests/feedfetch/fixtures/parity), on 127.0.0.1 only.
 
 Usage: ftp_server.py CONFIG LOG
 
@@ -9,8 +9,11 @@ Both corpus runners start it, read the one line "PORT <n>" it prints once it lis
     name        the server's name, copied into every record.
     users       null or absent: any login is accepted; else {user: password} and any other login gets 530.
     epsv        default true; false answers EPSV with 502, so a client falls back to PASV.
-    pasv_host   default 127.0.0.1: the address a PASV reply names (EPSV names none). The data listener accepts on every
-                address, so a client that dials the named one instead of the control host is recorded.
+    pasv_host   default 127.0.0.1: the address a PASV reply names (EPSV names none). The data listener is on 127.0.0.1
+                only, so a client that dials another named address finds nothing there and fails.
+    replies     {command: reply} replaces a command's reply with the text given (one line, "<code> <text>"): USER PASS
+                CWD TYPE SIZE MDTM EPSV PASV, and RETR_END, the reply after the data (default "226 transfer complete").
+                {port}, {hi} and {lo} in an EPSV or PASV reply are the data port and its two PASV octets.
     quirk       "" or one of: "overlong" (the 220 greeting is a single 1 MiB line), "multiline" (greeting, 331 and 226
                 replies are multi-line, with a continuation line that looks like a final one), "pasv_garbage" (the PASV
                 reply has a non-numeric field).
@@ -61,8 +64,10 @@ class Session:
     def send(self, *lines: str) -> None:
         self.conn.sendall(b"".join(line.encode() + b"\r\n" for line in lines))
 
-    def reply(self, code: int, text: str) -> None:
-        if self.cfg.get("quirk") == "multiline" and code in (220, 331, 226):
+    def reply(self, code: int, text: str, cmd: str | None = None) -> None:
+        if (custom := (self.cfg.get("replies") or {}).get(cmd)) is not None:
+            self.send(custom)
+        elif self.cfg.get("quirk") == "multiline" and code in (220, 331, 226):
             self.send(f"{code}-{text}", f" {code} is not the end of this reply", f"{code} {text}")
         else:
             self.send(f"{code} {text}")
@@ -101,23 +106,23 @@ class Session:
         users = self.cfg.get("users")
         if cmd == "USER":
             self.user = arg
-            self.reply(331, "password required")
+            self.reply(331, "password required", "USER")
         elif cmd == "PASS":
             if users is None or users.get(self.user) == arg:
-                self.reply(230, "logged in")
+                self.reply(230, "logged in", "PASS")
             else:
-                self.reply(530, "login incorrect")
+                self.reply(530, "login incorrect", "PASS")
         elif cmd == "PWD":
             self.reply(257, '"/" is the current directory')
         elif cmd == "CWD":
             target = posixpath.normpath(posixpath.join(self.cwd, arg))
             if any(p.startswith(target.rstrip("/") + "/") for p in self.cfg.get("files") or {}):
                 self.cwd = target
-                self.reply(250, "directory changed")
+                self.reply(250, "directory changed", "CWD")
             else:
                 self.reply(550, "no such directory")
         elif cmd == "TYPE":
-            self.reply(200, f"type set to {arg}")
+            self.reply(200, f"type set to {arg}", "TYPE")
         elif cmd in ("EPSV", "PASV"):
             return self.passive(cmd)
         elif cmd == "SIZE":
@@ -127,14 +132,14 @@ class Session:
             elif f.get("size") is False:
                 self.reply(502, "SIZE not implemented")
             else:
-                self.reply(213, str(f.get("size", len(f["body"].encode()))))
+                self.reply(213, str(f.get("size", len(f["body"].encode()))), "SIZE")
         elif cmd == "MDTM":
             f = self.file(arg)
             if f is None or "mdtm" not in f:
                 self.reply(550, "no modification time")
             else:
                 when = datetime.datetime.fromtimestamp(f["mdtm"], datetime.timezone.utc)
-                self.reply(213, when.strftime("%Y%m%d%H%M%S"))
+                self.reply(213, when.strftime("%Y%m%d%H%M%S"), "MDTM")
         elif cmd == "RETR":
             return self.retrieve(arg)
         else:
@@ -148,15 +153,17 @@ class Session:
         if self.data:
             self.data.close()
         self.data = socket.socket()
-        self.data.bind(("0.0.0.0", 0))
+        self.data.bind(("127.0.0.1", 0))
         self.data.listen(1)
         self.data.settimeout(SESSION_IDLE)
         port = self.data.getsockname()[1]
-        if cmd == "EPSV":
+        hi, lo = ("ab", "cd") if self.cfg.get("quirk") == "pasv_garbage" else (port >> 8, port & 255)
+        if (custom := (self.cfg.get("replies") or {}).get(cmd)) is not None:
+            self.send(custom.format(port=port, hi=hi, lo=lo))
+        elif cmd == "EPSV":
             self.send(f"229 Entering Extended Passive Mode (|||{port}|)")
         else:
             host = self.cfg.get("pasv_host", "127.0.0.1").replace(".", ",")
-            hi, lo = ("ab", "cd") if self.cfg.get("quirk") == "pasv_garbage" else (port >> 8, port & 255)
             self.send(f"227 Entering Passive Mode ({host},{hi},{lo})")
         return True
 
@@ -186,7 +193,7 @@ class Session:
         self.data = None
         if cut is not None:
             return False  # dropped mid-transfer: no 226, the control connection goes too
-        self.reply(226, "transfer complete")
+        self.reply(226, "transfer complete", "RETR_END")
         return True
 
 

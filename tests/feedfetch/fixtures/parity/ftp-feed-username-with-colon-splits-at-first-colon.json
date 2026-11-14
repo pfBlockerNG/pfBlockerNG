@@ -1,0 +1,77 @@
+{
+ "schema": 1,
+ "description": "The feed's credentials are cut at the first colon of 'username:password', as CURLOPT_USERPWD is: a colon in the username moves the rest into the password.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "ftp",
+   "kind": "ftp",
+   "users": {
+    "dom": "user:pw"
+   }
+  }
+ ],
+ "files": {
+  "ftp": {
+   "/list.txt": {
+    "body": "1.2.3.4\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "ftp://feed.example:{port:ftp}/list.txt",
+   "username": "dom:user",
+   "password": "pw",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n",
+    "digest": "1918a4e48b28d03c421df940f5a6f667",
+    "requests": [
+     {
+      "server": "ftp",
+      "command": "USER dom"
+     },
+     {
+      "server": "ftp",
+      "command": "PASS user:pw"
+     },
+     {
+      "server": "ftp",
+      "command": "MDTM list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "EPSV"
+     },
+     {
+      "server": "ftp",
+      "command": "TYPE I"
+     },
+     {
+      "server": "ftp",
+      "command": "SIZE list.txt"
+     },
+     {
+      "server": "ftp",
+      "command": "RETR list.txt"
+     },
+     {
+      "server": "ftp",
+      "data_to": "127.0.0.1"
+     }
+    ]
+   }
+  }
+ ]
+}

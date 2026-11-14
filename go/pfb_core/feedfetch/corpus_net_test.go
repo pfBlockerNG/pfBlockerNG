@@ -37,6 +37,7 @@ type serverSpec struct {
 	Users    map[string]string `json:"users,omitempty"`
 	Epsv     *bool             `json:"epsv,omitempty"`
 	PasvHost string            `json:"pasv_host,omitempty"`
+	Replies  map[string]string `json:"replies,omitempty"`
 	Quirk    string            `json:"quirk,omitempty"`
 }
 

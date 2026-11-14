@@ -1,17 +1,21 @@
 package feedfetch_test
 
 // What the ftp client does that the parity corpus cannot say: its source address (the corpus's Python server records
-// what it was sent, not who sent it), a transfer after the host turned private, a reply without end, a feed cURL would
-// handle differently on purpose (a proxy, a URL that names no file), and a cancelled context. The ftp rows of the corpus
-// are the proof for everything cURL does the same way.
+// what it was sent, not who sent it), a transfer after the host turned private, a reply without end, a self-hosted URL
+// (PHP reads that one by another route), a proxy (the corpus has no proxy fixture on the PHP side yet), an attempt that
+// changes between tries, a URL that names no file (cURL lists the directory, this client refuses), and a cancelled
+// context. The ftp rows of the corpus are the proof for everything cURL does the same way.
 
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"os"
@@ -29,11 +33,14 @@ import (
 
 // ftpStub is a one-file ftp server on 127.0.0.1 ("stub\n" for any RETR) that records where each connection came from.
 type ftpStub struct {
-	ln    net.Listener
-	hits  atomic.Int32   // control connections
-	greet func(net.Conn) // replaces the whole session when set
-	mu    sync.Mutex
-	from  []string // the source address of every control and data connection, in order of arrival
+	ln      net.Listener
+	hits    atomic.Int32                         // control connections
+	retrs   atomic.Int32                         // RETR commands
+	greet   func(net.Conn)                       // replaces the whole session when set
+	replies map[string]string                    // a command's reply line instead of the stub's own; {port}, {hi}, {lo} in EPSV and PASV
+	retr    func(n int) (body string, drop bool) // the data of the n-th RETR (from 1); drop ends both connections after it
+	mu      sync.Mutex
+	from    []string // the source address of every control and data connection, in order of arrival
 }
 
 func newFTPStub(t *testing.T, greet func(net.Conn)) *ftpStub {
@@ -89,39 +96,60 @@ func (s *ftpStub) session(c net.Conn) {
 	}()
 	io.WriteString(c, "220 stub\r\n")
 	in := bufio.NewReader(c)
+	reply := func(cmd, own string, port int) {
+		if custom, ok := s.replies[cmd]; ok {
+			own = custom
+		}
+		own = strings.NewReplacer("{port}", strconv.Itoa(port), "{hi}", strconv.Itoa(port>>8), "{lo}", strconv.Itoa(port&255)).Replace(own)
+		io.WriteString(c, own+"\r\n")
+	}
 	for {
 		line, err := in.ReadString('\n')
 		if err != nil {
 			return
 		}
 		cmd, _, _ := strings.Cut(strings.TrimSpace(line), " ")
-		switch strings.ToUpper(cmd) {
+		switch cmd = strings.ToUpper(cmd); cmd {
 		case "USER":
-			io.WriteString(c, "331 password\r\n")
+			reply(cmd, "331 password", 0)
 		case "PASS":
-			io.WriteString(c, "230 in\r\n")
-		case "EPSV":
+			reply(cmd, "230 in", 0)
+		case "EPSV", "PASV":
+			if data != nil {
+				data.Close()
+			}
 			if data, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
 				return
 			}
-			fmt.Fprintf(c, "229 Entering Extended Passive Mode (|||%d|)\r\n", data.Addr().(*net.TCPAddr).Port)
+			own := "229 Entering Extended Passive Mode (|||{port}|)"
+			if cmd == "PASV" {
+				own = "227 Entering Passive Mode (127,0,0,1,{hi},{lo})"
+			}
+			reply(cmd, own, data.Addr().(*net.TCPAddr).Port)
 		case "SIZE":
-			io.WriteString(c, "213 5\r\n")
+			reply(cmd, "213 5", 0)
 		case "RETR":
+			body, drop := "stub\n", false
+			if s.retr != nil {
+				body, drop = s.retr(int(s.retrs.Add(1)))
+			}
 			io.WriteString(c, "150 go\r\n")
 			dc, err := data.Accept()
 			if err != nil {
 				return
 			}
 			s.note(dc)
-			io.WriteString(dc, "stub\n")
+			io.WriteString(dc, body)
 			dc.Close()
-			io.WriteString(c, "226 done\r\n")
+			if drop {
+				return // no 226: the deferred close ends the control connection too
+			}
+			reply("RETR_END", "226 done", 0)
 		case "QUIT":
 			io.WriteString(c, "221 bye\r\n")
 			return
 		default: // TYPE, MDTM
-			io.WriteString(c, "200 ok\r\n")
+			reply(cmd, "200 ok", 0)
 		}
 	}
 }
@@ -215,29 +243,104 @@ func TestAnFTPReplyWithoutAnEndIsCutOff(t *testing.T) {
 	}
 }
 
-// cURL fetches ftp through an HTTP proxy by asking the proxy; the client here cannot, and must not go around it.
-func TestAnFTPFeedIsNotFetchedAroundTheProxy(t *testing.T) {
+// cURL fetches ftp through an HTTP proxy by asking the proxy for the ftp URL itself: an absolute-form GET, no CONNECT,
+// the proxy's credentials as for http and the feed's as Basic. The proxy's answer is an HTTP answer, retried and held to
+// the ceiling like one, and the ftp server is never dialled.
+func TestAnFTPFeedIsFetchedThroughTheProxyAsAnHTTPRequest(t *testing.T) {
 	stub := newFTPStub(t, nil)
+	var mu sync.Mutex
+	var seen []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.RequestURI+" "+r.Header.Get("Proxy-Authorization")+" "+r.Header.Get("Authorization"))
+		first := len(seen) == 1
+		mu.Unlock()
+		if first {
+			if c, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				c.Close() // no answer: the first attempt fails
+			}
+			return
+		}
+		io.WriteString(w, "via proxy\n")
+	}))
+	defer proxy.Close()
+
 	f, feed := quickFetcher(t)
-	f.Proxy, _ = url.Parse("http://127.0.0.1:1")
-	res := f.Ingest(context.Background(), feed, ftpFeed(stub, "/list.txt"))
-	if res.OK || res.Reason != "ftp is not supported through a proxy" || stub.hits.Load() != 0 {
-		t.Fatalf("an ftp feed under a proxy must be refused without a connection: %+v, %d connections", res, stub.hits.Load())
+	f.Proxy, _ = url.Parse(proxy.URL)
+	f.Proxy.User = url.UserPassword("puser", "ppass")
+	req := ftpFeed(stub, "/list.txt")
+	req.Username, req.Password = "u", "p"
+	res := f.Ingest(context.Background(), feed, req)
+	basic := func(s string) string { return "Basic " + base64.StdEncoding.EncodeToString([]byte(s)) }
+	line := "GET " + req.URL + " " + basic("puser:ppass") + " " + basic("u:p")
+	if !res.OK || res.Status != 200 || published(t, feed) != "via proxy\n" || fmt.Sprint(seen) != fmt.Sprint([]string{line, line}) ||
+		stub.hits.Load() != 0 {
+		t.Fatalf("the feed must come from the proxy on the second attempt: %+v, published %q, proxy saw %q, want twice %q, %d ftp connections",
+			res, published(t, feed), seen, line, stub.hits.Load())
+	}
+
+	f, feed = quickFetcher(t)
+	f.Proxy, _ = url.Parse(proxy.URL)
+	req.MaxBytes = 4
+	if res := f.Ingest(context.Background(), feed, req); res.OK || res.Reason != "download_too_large" || published(t, feed) != "<none>" {
+		t.Fatalf("the proxy's answer over the ceiling must be refused: %+v, published %q", res, published(t, feed))
 	}
 }
 
-// cURL lists a directory when the URL names no file; this client only retrieves files.
-func TestAnFTPURLThatNamesNoFileIsRefused(t *testing.T) {
+// A self-hosted ftp URL at the web root is fetched by the ftp client (PHP reads it with its ftp stream wrapper); one in a
+// subdirectory is refused before any connection, as PHP refuses it.
+func TestASelfHostedFTPFeedAtTheWebRootIsFetchedOverFTP(t *testing.T) {
 	stub := newFTPStub(t, nil)
-	for _, path := range []string{"", "/", "/dir/", "/dir/%2e%2e/", "/dir/.."} {
+	self := "ftp://127.0.0.1:" + strconv.Itoa(stub.ln.Addr().(*net.TCPAddr).Port)
+	f, feed := quickFetcher(t)
+	res := f.Ingest(context.Background(), feed, feedfetch.Request{URL: self + "/list.txt", Timeout: 10 * time.Second})
+	if !res.OK || res.Status != 226 || published(t, feed) != "stub\n" {
+		t.Fatalf("a self-hosted ftp feed at the web root must be fetched over ftp: %+v, published %q", res, published(t, feed))
+	}
+	f, feed = quickFetcher(t)
+	res = f.Ingest(context.Background(), feed, feedfetch.Request{URL: self + "/dir/list.txt", Timeout: 10 * time.Second})
+	if res.OK || stub.hits.Load() != 1 {
+		t.Fatalf("a self-hosted ftp feed in a subdirectory must be refused without a connection: %+v, %d connections in all (1 before)",
+			res, stub.hits.Load())
+	}
+}
+
+// A partial body from a failed attempt never reaches the published copy: the next attempt starts from an empty file
+// (#1072). The server knows no SIZE and the partial body is longer than the full one, so a missing truncate and a
+// missing rewind both show.
+func TestAnFTPRetryStartsFromAnEmptyBody(t *testing.T) {
+	stub := newFTPStub(t, nil)
+	stub.replies = map[string]string{"SIZE": "502 SIZE not implemented"}
+	stub.retr = func(n int) (string, bool) {
+		if n == 1 {
+			return strings.Repeat("P", 32), true
+		}
+		return "full\n", false
+	}
+	f, feed := quickFetcher(t)
+	res := f.Ingest(context.Background(), feed, ftpFeed(stub, "/list.txt"))
+	if !res.OK || stub.retrs.Load() != 2 || published(t, feed) != "full\n" {
+		t.Fatalf("the retry must publish exactly the full body: %+v after %d RETRs, published %q", res, stub.retrs.Load(), published(t, feed))
+	}
+}
+
+// An MDTM at or before the epoch is no modification time, as PHP skips a filetime that is not positive: the published
+// copy keeps the time it was written.
+func TestAnFTPModificationTimeAtOrBeforeTheEpochIsNotApplied(t *testing.T) {
+	for _, mdtm := range []string{"19700101000000", "19691231000000"} {
+		stub := newFTPStub(t, nil)
+		stub.replies = map[string]string{"MDTM": "213 " + mdtm}
 		f, feed := quickFetcher(t)
-		res := f.Ingest(context.Background(), feed, ftpFeed(stub, path))
-		if res.OK || res.Reason != "feed ftp URL names no file" || stub.hits.Load() != 0 {
-			t.Fatalf("the URL %q names no file and must be refused without a connection: %+v, %d connections", path, res, stub.hits.Load())
+		res := f.Ingest(context.Background(), feed, ftpFeed(stub, "/list.txt"))
+		info, err := os.Stat(filepath.Join(feed.Dir, feed.Name+".orig"))
+		if !res.OK || err != nil || info.ModTime().Unix() <= 0 {
+			t.Fatalf("MDTM %s must not become the published copy's time: %+v, stat %v, mtime %v", mdtm, res, err, info)
 		}
 	}
 }
 
+// The context ends a transfer that waits on a reply forever. A transfer that ignored it would hang: the watchdog fails
+// the test instead of letting it run into go test's own timeout (it guards a hang, it measures nothing).
 func TestACancelledContextEndsAnFTPTransfer(t *testing.T) {
 	accepted := make(chan struct{})
 	var once sync.Once
@@ -256,7 +359,26 @@ func TestACancelledContextEndsAnFTPTransfer(t *testing.T) {
 	f, feed := quickFetcher(t)
 	req := ftpFeed(stub, "/list.txt")
 	req.Timeout = time.Hour
-	if res := f.Ingest(ctx, feed, req); res.OK || published(t, feed) != "<none>" {
-		t.Fatalf("a transfer whose context ended must fail without publishing: %+v, published %q", res, published(t, feed))
+	done := make(chan feedfetch.Result, 1)
+	go func() { done <- f.Ingest(ctx, feed, req) }()
+	select {
+	case res := <-done:
+		if res.OK || published(t, feed) != "<none>" {
+			t.Fatalf("a transfer whose context ended must fail without publishing: %+v, published %q", res, published(t, feed))
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("the transfer did not end with its context")
+	}
+}
+
+// cURL lists a directory when the URL names no file; this client only retrieves files.
+func TestAnFTPURLThatNamesNoFileIsRefused(t *testing.T) {
+	stub := newFTPStub(t, nil)
+	for _, path := range []string{"", "/", "/dir/", "/dir/%2e%2e/", "/dir/.."} {
+		f, feed := quickFetcher(t)
+		res := f.Ingest(context.Background(), feed, ftpFeed(stub, path))
+		if res.OK || res.Reason != "feed ftp URL names no file" || stub.hits.Load() != 0 {
+			t.Fatalf("the URL %q names no file and must be refused without a connection: %+v, %d connections", path, res, stub.hits.Load())
+		}
 	}
 }
