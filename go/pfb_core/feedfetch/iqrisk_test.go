@@ -100,3 +100,42 @@ func TestAWorkbookPastTheCeilingIsRefused(t *testing.T) {
 		t.Fatalf("a workbook of exactly the ceiling must be read: %+v, published %q", res, published(t, feed))
 	}
 }
+
+func TestAnETFeedWithMissingSplitSettingsRefusesBeforeFilesystemChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*feedfetch.Fetcher)
+	}{
+		{"missing split directory", func(f *feedfetch.Fetcher) { f.ETDir = "" }},
+		{"missing match file", func(f *feedfetch.Fetcher) { f.ETMatch, f.ETMatchFile = []string{"ET_Spam"}, "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, feed, req := etFeed(t, "192.0.2.10,1,127\n")
+			tc.configure(f)
+			var sentinel string
+			if tc.name == "missing split directory" {
+				work := t.TempDir()
+				t.Chdir(work)
+				sentinel = filepath.Join(work, "ET_precious")
+			} else {
+				sentinel = filepath.Join(f.ETDir, "ET_Cnc.txt")
+			}
+			if err := os.WriteFile(sentinel, []byte("keep\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			res := f.Ingest(context.Background(), feed, req)
+			if b, err := os.ReadFile(sentinel); err != nil || string(b) != "keep\n" {
+				t.Fatalf("invalid ET settings must not touch the split directory: %q, %v", b, err)
+			}
+			if tc.name == "missing split directory" {
+				entries, err := os.ReadDir(".")
+				if err != nil || len(entries) != 1 || entries[0].Name() != "ET_precious" {
+					t.Fatalf("invalid ET settings must not create split files in the working directory: %v, %v", entries, err)
+				}
+			}
+			if res.OK || res.Reason != "invalid ET configuration" || published(t, feed) != oldCopy {
+				t.Fatalf("invalid ET settings must refuse as a configuration error and keep last-known-good: %+v, published %q", res, published(t, feed))
+			}
+		})
+	}
+}

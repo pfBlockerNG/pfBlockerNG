@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const (
@@ -128,5 +129,51 @@ func TestEveryStructuralProbeEndsWithAContextAlreadyDone(t *testing.T) {
 		if err := structural(ctx, b.mime, b.path, io.Discard); !errors.Is(err, context.Canceled) {
 			t.Errorf("%s: a done context must end the probe: %v", b.name, err)
 		}
+	}
+}
+
+func TestCompressedInnerProbeStopsWithItsContext(t *testing.T) {
+	var body bytes.Buffer
+	zw := gzip.NewWriter(&body)
+	if _, err := zw.Write([]byte("plain text\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := filepath.Join(t.TempDir(), "raw.gz")
+	if err := os.WriteFile(raw, body.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &cancelAtCheckContext{Context: base, cancel: cancel, at: 1}
+	if got := innerType(ctx, mimeGzip, raw); got != mimeEmptyInner || !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("the inner probe must stop with its context, got %q and %v", got, ctx.Err())
+	}
+
+	f, feed := &Fetcher{}, Feed{Dir: t.TempDir(), Name: "FEED"}
+	f.FreeBytes = func(string) (uint64, bool) { return 1 << 20, true }
+	base, cancel = context.WithCancel(context.Background())
+	ctx = &cancelAtCheckContext{Context: base, cancel: cancel, at: 3}
+	if _, refusal := f.gate(ctx, feed, raw, time.Time{}); refusal == nil || refusal.Reason != context.Canceled.Error() {
+		t.Fatalf("the inner-probe refusal must report the context reason: %+v (%d checks)", refusal, ctx.checks)
+	}
+	cancel()
+}
+
+func TestExtractedZipVerdictReportsItsContextReason(t *testing.T) {
+	inner := zipMembers(t, zipMember{"a.txt", []byte("1.2.3.4\n")})
+	payload := append([]byte{0}, inner...)
+	rawBody := zipMembers(t, zipMember{"inner.bin", payload})
+	raw := filepath.Join(t.TempDir(), "raw.zip")
+	if err := os.WriteFile(raw, rawBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, feed := &Fetcher{}, Feed{Dir: t.TempDir(), Name: "FEED"}
+	f.FreeBytes = func(string) (uint64, bool) { return 1 << 20, true }
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &cancelAtCheckContext{Context: base, cancel: cancel, at: 3}
+	if _, refusal := f.gate(ctx, feed, raw, time.Time{}); refusal == nil || refusal.Reason != context.Canceled.Error() {
+		t.Fatalf("the zip-inner verdict must report the context reason: %+v (%d checks)", refusal, ctx.checks)
 	}
 }

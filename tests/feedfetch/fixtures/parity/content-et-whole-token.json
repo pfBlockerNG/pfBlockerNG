@@ -1,0 +1,23 @@
+{
+ "schema": 1,
+ "description": "ET_P2P must not match ET_P2Pcnc as a substring in Block or Match settings.",
+ "hosts": {"feed.example": ["127.0.0.1", "203.0.113.5"]},
+ "et": {"block": "ET_P2Pcnc", "match": "ET_P2Pcnc"},
+ "servers": ["origin"],
+ "routes": {"origin": {"/iprepdata.txt": {"body": "192.0.2.15,15,1\n198.51.100.31,31,1\n"}}},
+ "steps": [{
+  "op": "ingest",
+  "url": "http://feed.example:{port:origin}/iprepdata.txt",
+  "expect": {
+   "ok": true,
+   "published": "198.51.100.31\n",
+   "digest": "f040f787e3746cc6673a646f97587ab6",
+   "requests": [{"server": "origin", "path": "/iprepdata.txt"}],
+   "et_split": {
+    "ET_P2P.txt": "192.0.2.15\n",
+    "ET_P2Pcnc.txt": "198.51.100.31\n"
+   },
+   "et_match": "198.51.100.31\n"
+  }
+ }]
+}

@@ -100,6 +100,16 @@
   "out_b64": "Pz8="
  },
  {
+  "name": "utf-16le high surrogate and cut unit",
+  "in_b64": "//4A23g=",
+  "out_b64": "Pz8="
+ },
+ {
+  "name": "utf-16le U+DB00 surrogate pair",
+  "in_b64": "//4A2wDc",
+  "out_b64": "85CAgA=="
+ },
+ {
   "name": "only a mark",
   "in_b64": "//4=",
   "out_b64": ""

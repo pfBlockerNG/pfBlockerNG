@@ -18,6 +18,8 @@ import (
 	"strings"
 )
 
+var maxXLSXAddresses = 10_000_000
+
 // etCategories are the ET IQRisk categories by number, named as processet() names the files it splits them into; ""
 // is a number ET does not use.
 var etCategories = [...]string{1: "ET_Cnc", "ET_Bot", "ET_Spam", "ET_Drop", "ET_Spywarecnc", "ET_Onlinegaming",

@@ -67,3 +67,32 @@ func TestTheDecodingIsTheSharedTables(t *testing.T) {
 		}
 	}
 }
+
+func TestSanityReadsExactly64KiB(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix string
+		start        int
+		want         string
+	}{
+		{"address ending at the last sample byte counts", "<html>  \n", 65529, ""},
+		{"address completed by the next byte does not count", "<html>   \n", 65530, "html_error_page"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(tc.prefix)
+			for len(body)+2 <= tc.start {
+				body = append(body, '#', '\n')
+			}
+			if len(body) != tc.start {
+				t.Fatalf("fixture prefix ended at %d, want address at %d", len(body), tc.start)
+			}
+			body = append(body, []byte("1.2.3.4")...)
+			path := t.TempDir() + "/body"
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := sane(path); got != tc.want {
+				t.Fatalf("sample-boundary verdict %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -265,42 +265,41 @@ func TestClassifyAnswersTheLabelsTheGatesNeed(t *testing.T) {
 	cases := []struct {
 		name string
 		head []byte
-		more bool
 		want string
 	}{
-		{"empty", nil, false, "inode/x-empty"},
-		{"text", []byte("1.2.3.4\n"), false, "text/plain"},
-		{"shebang script is text", []byte("#!/bin/sh\necho hi\n"), false, "text/plain"},
-		{"html", []byte("<!DOCTYPE html>\n<html>"), false, "text/html"},
-		{"html in capitals after white space", []byte(" \n\t<HTML>"), false, "text/html"},
-		{"html after a utf-8 bom", []byte("\xef\xbb\xbf<html>"), false, "text/html"},
-		{"gzip", []byte{0x1f, 0x8b, 8, 0}, false, "application/gzip"},
-		{"bzip2", []byte("BZh91AY&SY"), false, "application/x-bzip2"},
-		{"bzip2 of the smallest block size", []byte("BZh11AY&SY"), false, "application/x-bzip2"},
-		{"bzip2 needs a block size", []byte("BZhost\n"), false, "text/plain"},
-		{"bzip2 has no block size 0", []byte("BZh0"), false, "text/plain"},
-		{"zip", []byte("PK\x03\x04\x14\x00"), false, "application/zip"},
-		{"empty zip", []byte("PK\x05\x06\x00\x00"), false, "application/zip"},
-		{"tar", ustar, false, "application/x-tar"},
-		{"posix tar magic ending the head", at257("ustar\x00"), false, "application/x-tar"},
-		{"gnu tar", at257("ustar  \x00"), false, "application/x-tar"},
-		{"ustar without the nul of the magic is text", at257("ustar"), false, "text/plain"},
-		{"ustar followed by text is text", at257("ustar.example\n"), false, "text/plain"},
-		{"utf-16le bom", []byte("\xff\xfe1\x00"), false, "text/plain"},
-		{"utf-16be bom", []byte("\xfe\xff\x001"), false, "text/plain"},
-		{"utf-32le bom", []byte("\xff\xfe\x00\x001\x00\x00\x00"), false, "text/plain"},
-		{"utf-32be bom", []byte("\x00\x00\xfe\xff\x00\x00\x001"), false, "text/plain"},
-		{"a nul outside a bom encoding", []byte("a\x00b"), false, "application/octet-stream"},
-		{"binary", bytes.Repeat([]byte{0, 1, 2, 3}, 8), false, "application/octet-stream"},
-		{"latin-1 text", []byte("caf\xe9\n"), false, "text/plain"},
-		{"windows-1252 text", []byte("\x93quoted\x94 \x80 5\n"), false, "text/plain"},
-		{"a nul behind latin-1 text", []byte("caf\xe9\x00\n"), false, "application/octet-stream"},
-		{"utf-8", []byte("caf\u00e9\n"), false, "text/plain"},
-		{"a rune cut by the end of the sample", []byte("abc\xe2\x82"), true, "text/plain"},
-		{"a rune cut by the end of the body", []byte("abc\xe2\x82"), false, "text/plain"},
+		{"empty", nil, "inode/x-empty"},
+		{"text", []byte("1.2.3.4\n"), "text/plain"},
+		{"shebang script is text", []byte("#!/bin/sh\necho hi\n"), "text/plain"},
+		{"html", []byte("<!DOCTYPE html>\n<html>"), "text/html"},
+		{"html in capitals after white space", []byte(" \n\t<HTML>"), "text/html"},
+		{"html after a utf-8 bom", []byte("\xef\xbb\xbf<html>"), "text/html"},
+		{"gzip", []byte{0x1f, 0x8b, 8, 0}, "application/gzip"},
+		{"bzip2", []byte("BZh91AY&SY"), "application/x-bzip2"},
+		{"bzip2 of the smallest block size", []byte("BZh11AY&SY"), "application/x-bzip2"},
+		{"bzip2 needs a block size", []byte("BZhost\n"), "text/plain"},
+		{"bzip2 has no block size 0", []byte("BZh0"), "text/plain"},
+		{"zip", []byte("PK\x03\x04\x14\x00"), "application/zip"},
+		{"empty zip", []byte("PK\x05\x06\x00\x00"), "application/zip"},
+		{"tar", ustar, "application/x-tar"},
+		{"posix tar magic ending the head", at257("ustar\x00"), "application/x-tar"},
+		{"gnu tar", at257("ustar  \x00"), "application/x-tar"},
+		{"ustar without the nul of the magic is text", at257("ustar"), "text/plain"},
+		{"ustar followed by text is text", at257("ustar.example\n"), "text/plain"},
+		{"utf-16le bom", []byte("\xff\xfe1\x00"), "text/plain"},
+		{"utf-16be bom", []byte("\xfe\xff\x001"), "text/plain"},
+		{"utf-32le bom", []byte("\xff\xfe\x00\x001\x00\x00\x00"), "text/plain"},
+		{"utf-32be bom", []byte("\x00\x00\xfe\xff\x00\x00\x001"), "text/plain"},
+		{"a nul outside a bom encoding", []byte("a\x00b"), "application/octet-stream"},
+		{"binary", bytes.Repeat([]byte{0, 1, 2, 3}, 8), "application/octet-stream"},
+		{"latin-1 text", []byte("caf\xe9\n"), "text/plain"},
+		{"windows-1252 text", []byte("\x93quoted\x94 \x80 5\n"), "text/plain"},
+		{"a nul behind latin-1 text", []byte("caf\xe9\x00\n"), "application/octet-stream"},
+		{"utf-8", []byte("caf\u00e9\n"), "text/plain"},
+		{"a rune cut by the end of the sample", []byte("abc\xe2\x82"), "text/plain"},
+		{"a rune cut by the end of the body", []byte("abc\xe2\x82"), "text/plain"},
 	}
 	for _, c := range cases {
-		if got := feedfetch.Classify(c.head, c.more); got != c.want {
+		if got := feedfetch.Classify(c.head); got != c.want {
 			t.Errorf("%s: classified %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -454,11 +453,21 @@ func TestTheRecoveryOfAnOctetStreamTriesZipBeforeTar(t *testing.T) {
 	if member, err := io.ReadAll(tr); err != nil || !bytes.Equal(member, inner) {
 		t.Fatalf("the fixture's member must be the zip: %v", err)
 	}
-	if got := feedfetch.Classify(body, false); got != "application/octet-stream" {
+	if got := feedfetch.Classify(body); got != "application/octet-stream" {
 		t.Fatalf("the fixture must be an octet stream, not %q", got)
 	}
 	f, feed, src := seededFeed(t)
 	if res := f.Ingest(context.Background(), feed, localRequest(t, src, body)); !res.OK || published(t, feed) != "1.2.3.4\n" {
 		t.Fatalf("the zip must win: %+v, published %q", res, published(t, feed))
+	}
+}
+
+func TestMIMEProbeDoesNotStopAtOneKiB(t *testing.T) {
+	body := append(bytes.Repeat([]byte("a"), 1<<10), 0, 'x')
+	f, feed, src := seededFeed(t)
+	res := f.Ingest(context.Background(), feed, localRequest(t, src, body))
+	if res.OK || res.Stage != "mime" || res.Reason != "mime_not_allowed" ||
+		res.Detected != "application/octet-stream rc=0" || published(t, feed) != oldCopy {
+		t.Fatalf("the full sniff window must see the binary byte after 1 KiB: %+v, published %q", res, published(t, feed))
 	}
 }

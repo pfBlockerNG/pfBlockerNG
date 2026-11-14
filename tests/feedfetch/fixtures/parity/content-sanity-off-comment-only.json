@@ -1,0 +1,17 @@
+{
+ "schema": 1,
+ "description": "Without a sanity key, a comment-only body is still published.",
+ "hosts": {"feed.example": ["127.0.0.1", "203.0.113.5"]},
+ "servers": ["origin"],
+ "routes": {"origin": {"/list": {"body": "<!-- generated during build -->\n"}}},
+ "steps": [{
+  "op": "ingest",
+  "url": "http://feed.example:{port:origin}/list",
+  "expect": {
+   "ok": true,
+   "published": "<!-- generated during build -->\n",
+   "digest": "05cfc31ba0c0f6db52865ec755ae0895",
+   "requests": [{"server": "origin", "path": "/list"}]
+  }
+ }]
+}
