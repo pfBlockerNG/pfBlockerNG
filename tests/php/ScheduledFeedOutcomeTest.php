@@ -26,28 +26,28 @@ final class ScheduledFeedOutcomeTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
-	public function testSuccessfulUnchangedLocalSourceReturnsSuccessTerminal(): void
+	public function testLocalFeedChangeDetectionIsDeferredToCorePhase(): void
 	{
-		@mkdir($GLOBALS['pfb']['dbdir'], 0755, TRUE);
-		$source = $GLOBALS['pfb']['dbdir'] . '/scheduled-outcome-source-' . getmypid() . '.txt';
+		$dbdir = $GLOBALS['pfb']['dbdir'];
+		@mkdir($dbdir, 0755, TRUE);
+		$source = "{$dbdir}/scheduled-outcome-source-" . getmypid() . '.txt';
 		$orig = $this->dir . '/feed.orig';
 		$folder = $this->dir . '/folder';
 		mkdir($folder, 0755, TRUE);
 		file_put_contents($source, "1.2.3.4\n");
 		file_put_contents($orig, "1.2.3.4\n");
 		touch($folder . '/feed.txt');
+		$GLOBALS['pfb']['cron_update'] = FALSE;
+		$GLOBALS['pfb']['update_cron'] = FALSE;
 
-		$result = pfb_update_check(
-			'feed',
-			$source,
-			$folder,
-			$this->dir,
-			FALSE,
-			'',
-			'_v4'
-		);
+		$result = pfb_update_check('feed', $source, $folder, $this->dir, FALSE, '', '_v4');
 
-		$this->assertSame('success', $result?->value, 'unchanged local source must close a pending occurrence');
+		$this->assertNull($result, 'Core FeedPhase owns the local source change decision');
+		$this->assertTrue($GLOBALS['pfb']['cron_update']);
+		$this->assertTrue($GLOBALS['pfb']['update_cron']);
+		$this->assertFileExists($folder . '/feed.update');
+		$this->assertFalse(file_exists($folder . '/feed.fail'));
+		$this->assertFalse(file_exists($this->dir . '/feed.md5.raw'));
 		@unlink($source);
 	}
 
@@ -89,7 +89,7 @@ final class ScheduledFeedOutcomeTest extends TestCase
 		$this->assertArrayNotHasKey('scheduled_outcomes', $GLOBALS['pfb']);
 	}
 
-	public function testAlwaysRefreshFormatsReturnSuccessfulSourceOutcome(): void
+	public function testAlwaysRefreshFormatsDeferTheirOutcomeToCoreFeedPhase(): void
 	{
 		$folder = $this->dir . '/formats';
 		mkdir($folder);
@@ -101,28 +101,24 @@ final class ScheduledFeedOutcomeTest extends TestCase
 		$outcomes = [];
 		$updates = [];
 		$rowUpdates = [];
+		$markers = [];
 		foreach ([
 			['whois', 'whois', 'example.com'],
 			['asn', 'asn', 'AS64500'],
 			['sync', 'rsync', 'https://example.test/feed'],
 		] as [$header, $format, $url]) {
 			$GLOBALS['pfb']['update_cron'] = FALSE;
+			$GLOBALS['pfb']['cron_update'] = FALSE;
 			$result = pfb_update_check($header, $url, $folder, $this->dir, FALSE, $format, '_v4');
 			$outcomes[$format] = $result?->value;
 			$updates[$format] = $GLOBALS['pfb']['update_cron'];
 			$rowUpdates[$format] = $GLOBALS['pfb']['cron_update'];
+			$markers[$format] = file_exists("{$folder}/{$header}.update");
 		}
-		$this->assertSame(
-			['whois' => 'success', 'asn' => 'success', 'rsync' => 'success'],
-			$outcomes,
-			'always-refresh source selection must close each scheduled occurrence'
-		);
+		$this->assertSame(['whois' => NULL, 'asn' => NULL, 'rsync' => NULL], $outcomes);
 		$this->assertSame(['whois' => TRUE, 'asn' => TRUE, 'rsync' => TRUE], $updates);
-		$this->assertSame(
-			['whois' => TRUE, 'asn' => TRUE, 'rsync' => TRUE],
-			$rowUpdates,
-			'always-refresh paths must publish pending apply before completing their occurrence'
-		);
+		$this->assertSame(['whois' => TRUE, 'asn' => TRUE, 'rsync' => TRUE], $rowUpdates);
+		$this->assertSame(['whois' => TRUE, 'asn' => TRUE, 'rsync' => TRUE], $markers);
 	}
 
 	public function testDownstreamFailureDoesNotUndoSuccessfulSourceOutcome(): void

@@ -6746,6 +6746,10 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 			return 2;
 		}
 		$pfb['core_update_result'] = @fopen($resultPath, 'wb');
+		$pfb['feed_phase_token'] = $request['token'];
+		$pfb['feed_phase_force'] = $request['force'];
+		$pfb['feed_phase_trigger'] = $request['trigger'];
+		$pfb['feed_phase_scope'] = $request['scope'];
 		if ($request['trigger'] === 'scheduled' && pfb_cron_disabled()) {
 			// The sentinel suppresses scheduled work only: an empty result leaves Core's feeds pending, and the exit is "try later"
 			pfb_logger("\nCore Update: the scheduled Update is skipped: " . pfb_cron_disable_path() . " disables scheduled work.\n", 1);
@@ -6768,7 +6772,14 @@ function pfb_core_update_serve(string $stdin, string $resultPath = 'php://fd/3',
 		if (is_resource($pfb['core_update_result'] ?? NULL)) {
 			fclose($pfb['core_update_result']);
 		}
-		unset($pfb['core_update'], $pfb['core_update_result']);
+		unset(
+			$pfb['core_update'],
+			$pfb['core_update_result'],
+			$pfb['feed_phase_token'],
+			$pfb['feed_phase_force'],
+			$pfb['feed_phase_trigger'],
+			$pfb['feed_phase_scope']
+		);
 	}
 }
 

@@ -82,6 +82,38 @@ function pfb_download_ledger_close_if_clean(string $facility, string $alias, boo
 	}
 }
 
+function pfb_core_feed_artifact_copy(string $source, string $target, string $append = ''): bool {
+	if (!is_file($source)) {
+		return FALSE;
+	}
+	try {
+		$staged = dirname($target) . '/.' . basename($target) . '.' . bin2hex(random_bytes(8));
+	} catch (Throwable) {
+		return FALSE;
+	}
+	$handle = @fopen($staged, 'x');
+	if ($handle === FALSE) {
+		return FALSE;
+	}
+	fclose($handle);
+	if (!@copy($source, $staged)) {
+		@unlink($staged);
+		return FALSE;
+	}
+	if ($append !== '') {
+		$written = @file_put_contents($staged, $append, FILE_APPEND | LOCK_EX);
+		if ($written === FALSE || $written !== strlen($append)) {
+			@unlink($staged);
+			return FALSE;
+		}
+	}
+	if (!@chmod($staged, 0644) || !@rename($staged, $target)) {
+		@unlink($staged);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 /** @return array{range:string,ipv4:string,ipv6:string} */
 function pfb_ip_regex_config(): array {
 	return [
