@@ -1129,4 +1129,104 @@ STUBEOF
     The status should equal 1
     The stderr should include 'matches more than one BUILD row for runtime tuple selection'
   End
+  Describe '--scheduled-exception'
+    scheduled_cli_leg() {
+      unset SMOKE_SCHEDULED_EXCEPTION
+      prev_pkg_leg
+      SPARSE_CHANNEL_FILE="${WORK}/scheduled-ports"
+      BUILD_LEG_ARGV_LOG="${WORK}/scheduled-build"
+      SCHEDULED_RUN_LOG="${WORK}/scheduled-run"
+      export SPARSE_CHANNEL_FILE BUILD_LEG_ARGV_LOG SCHEDULED_RUN_LOG
+      cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$BUILD_LEG_ARGV_LOG"
+printf '%s\n' /tmp/fake-branch.pkg
+STUBEOF
+      cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+printf 'exception=%s\n' "${SMOKE_SCHEDULED_EXCEPTION-<unset>}" > "$SCHEDULED_RUN_LOG"
+printf 'arg=%s\n' "$@" >> "$SCHEDULED_RUN_LOG"
+STUBEOF
+    }
+    BeforeEach 'scheduled_cli_leg'
+
+    It 'mints exactly allow at the pytest entrypoint for the isolated scheduled selection'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm --scheduled-exception allow \
+          --marker smoke --shard 0 --shard-total 1 \
+          --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      The status should equal 0
+      The stderr should include 'running smoke'
+      The line 1 of contents of file "$SCHEDULED_RUN_LOG" should equal 'exception=allow'
+      The contents of file "$SCHEDULED_RUN_LOG" should include "$(printf 'arg=--marker\narg=smoke\n')"
+      The contents of file "$SCHEDULED_RUN_LOG" should include "$(printf 'arg=--filter\narg=test_scheduled_update_runs_core_feedphase_for_every_feed_kind\n')"
+      The contents of file "$SCHEDULED_RUN_LOG" should not include 'arg=--scheduled-exception'
+    End
+
+    It 'leaves the ordinary pytest environment unchanged without the flag'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm
+      The status should equal 0
+      The stderr should include 'running smoke'
+      The line 1 of contents of file "$SCHEDULED_RUN_LOG" should equal 'exception=<unset>'
+      The contents of file "$SCHEDULED_RUN_LOG" should not include 'arg=--scheduled-exception'
+    End
+
+    It 'does not inherit an ambient scheduled exception without the explicit flag'
+      SMOKE_SCHEDULED_EXCEPTION=allow
+      export SMOKE_SCHEDULED_EXCEPTION
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm
+      The status should equal 0
+      The stderr should include 'running smoke'
+      The line 1 of contents of file "$SCHEDULED_RUN_LOG" should equal 'exception=<unset>'
+    End
+
+    Parameters
+      'deny'
+      ''
+      'ALLOW'
+      'allow; exit 0'
+      '$(exit 0)'
+    End
+    It 'rejects a nonliteral allow value before ports, image transport, build or pytest'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm \
+          --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind \
+          --scheduled-exception "$1"
+      The status should not equal 0
+      The stderr should include 'scheduled-exception'
+      The file "$SPARSE_CHANNEL_FILE" should not be exist
+      The contents of file "$ORAS_ARGV_LOG" should equal ''
+      The file "$BUILD_LEG_ARGV_LOG" should not be exist
+      The file "$SCHEDULED_RUN_LOG" should not be exist
+    End
+
+    It 'rejects a missing option value before ports, image transport, build or pytest'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm \
+          --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind --scheduled-exception
+      The status should not equal 0
+      The stderr should include 'scheduled-exception'
+      The file "$SPARSE_CHANNEL_FILE" should not be exist
+      The contents of file "$ORAS_ARGV_LOG" should equal ''
+      The file "$BUILD_LEG_ARGV_LOG" should not be exist
+      The file "$SCHEDULED_RUN_LOG" should not be exist
+    End
+
+    Parameters
+      --marker repo --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      --marker 'smoke or repo' --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      --shard-total 2 --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      --shard 1 --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+      --marker smoke
+      --filter ''
+      --filter test_scheduled_update
+      --filter 'test_scheduled_update_runs_core_feedphase_for_every_feed_kind or test_other'
+    End
+    It 'rejects an exception outside the isolated scheduled selection before any expensive work'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm --scheduled-exception allow "$@"
+      The status should not equal 0
+      The stderr should not equal ''
+      The file "$SPARSE_CHANNEL_FILE" should not be exist
+      The contents of file "$ORAS_ARGV_LOG" should equal ''
+      The file "$BUILD_LEG_ARGV_LOG" should not be exist
+      The file "$SCHEDULED_RUN_LOG" should not be exist
+    End
+  End
 End

@@ -114,6 +114,10 @@ scripts/local-smoke.sh
 # Specific --filter (pytest -k expression rides as one quoted arg, no word-split):
 scripts/local-smoke.sh --filter "test_dns_redirect or test_killstates"
 
+# Explicitly authorized, isolated Core-scheduler proof only (#3977):
+scripts/local-smoke.sh --scheduled-exception allow \
+  --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+
 # Different marker (e.g. the reboot-persistence tier):
 scripts/local-smoke.sh --marker reboot
 
@@ -173,6 +177,14 @@ scripts/local-smoke.sh --ref origin/devel
 EXIT trap in `scripts/select-box.sh` releases lease automatically (Ctrl-C included).
 All images, ports, build, sysctl, pytest run ON box — orchestrator only provides
 bootstrap command string.
+
+`--scheduled-exception allow` admits only that exact filtered test, marker `smoke`
+and one shard on an exclusively leased disposable guest. Setup keeps
+`.pfb_cron_disable`; the test probes and stops guest cron before temporarily
+clearing the sentinel for a real Core-scheduled Update. Its `finally` restores and
+verifies the sentinel before cron/config restoration. Other smoke runs and the
+ordinary SSH guard retain the sentinel; an inherited environment variable does
+not grant the exception.
 
 ### Sharded runs (issue #797)
 
