@@ -255,6 +255,12 @@ function pfb_test_tar(): string
 	return $GLOBALS['pfb']['tar'] ?? '/usr/bin/tar';
 }
 
+// One staged DNSBL NDJSON row as Core's feed parse writes it (go/pfb_core/feedparse appendRow, #3977).
+function pfb_test_ndjson_row(PfbDnsblRowKind $kind, string $payload): string
+{
+	return json_encode([$kind, $payload], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) . "\n";
+}
+
 function pfb_test_preflight_path(string $root, string $path, string $label): string
 {
 	$root = rtrim($root, DIRECTORY_SEPARATOR) ?: DIRECTORY_SEPARATOR;

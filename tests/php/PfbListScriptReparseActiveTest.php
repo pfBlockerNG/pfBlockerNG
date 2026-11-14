@@ -12,8 +12,8 @@ use PHPUnit\Framework\TestCase;
  * script leave the fast path UNCONDITIONALLY, falling through to a real
  * network download every pass -- breaking issue #1278's "download once,
  * never again" Hold contract, which the fast path is the ONLY thing
- * protecting (the DNSBL loop's Hold-specific network skip,
- * pfb_dnsbl_hold_stale_rebuild_skip(), only fires on a stale-generation
+ * protecting (the DNSBL loop's former Hold-specific network skip
+ * only fired on a stale-generation
  * rebuild, not on a plain script-forced else-branch entry; the IP loop has
  * no Hold-specific network skip at all).
  *

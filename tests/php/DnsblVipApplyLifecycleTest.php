@@ -54,6 +54,8 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	private array $serviceEvents = [];
 	/** @var list<array{string,bool}> [write_config description, resolver reload already finished] */
 	private array $configWrites = [];
+	/** @var array<string,array<string,mixed>> */
+	private array $feedReplies = [];
 
 	protected function setUp(): void
 	{
@@ -134,6 +136,7 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			'unbound' => TRUE, 'install' => FALSE, 'served' => FALSE, 'up' => TRUE];
 		$dir = $this->dir;
 
+		$this->feedReplies = [];
 		$GLOBALS['pfb'] = array_merge(PFB_VIP_APPLY_PFB_BASELINE, [
 			'dbdir' => $dir, 'schedule_state_dir' => $dir, 'log' => "{$dir}/pfblockerng.log", 'errlog' => "{$dir}/error.log",
 			'runlog' => "{$dir}/run.log", 'denydir' => "{$dir}/deny", 'dnsbldir' => $dir, 'dnsbl_conf' => "{$dir}/lighty.conf",
@@ -145,6 +148,9 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 			// another run) under /var/unbound would decide that, and hand a test the state its own last run left
 			'unbound_py_wh' => "{$dir}/whitelist.txt", 'unbound_py_conf' => "{$dir}/module.ini",
 		]);
+		foreach (['dnsdir', 'dnsorigdir', 'aliasdir', 'origdir', 'snapdir'] as $path) {
+			$GLOBALS['pfb'][$path] = "{$dir}/{$path}";
+		}
 		$GLOBALS['config'] = [];
 		$GLOBALS['g']['varrun_path']          = $dir;
 		$GLOBALS['g']['unbound_chroot_path']  = '/var/unbound';
@@ -271,13 +277,86 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 
 	private function runPass(): bool
 	{
+		$started = $this->startFeedPhase();
 		// The restart branch link()s the real lighttpd binary, which the sandbox lacks.
 		set_error_handler(static fn (int $no, string $message): bool => str_starts_with($message, 'link('));
 		try {
 			return sync_package_pfblockerng();
 		} finally {
 			restore_error_handler();
+			pfb_core_call('Stop', [], $GLOBALS['pfb']['core_socket']);
+			$run = pfb_test_finish_process($started, 10.0);
+			$this->assertSame(0, $run['exit'], "FeedPhase stand-in failed: {$run['stderr']}");
 		}
+	}
+
+	/** @return array{0:resource,1:array<int,resource>,2:string} */
+	private function startFeedPhase(): array
+	{
+		foreach (['dnsdir', 'dnsorigdir', 'origdir'] as $path) {
+			if (!is_dir($GLOBALS['pfb'][$path])) {
+				$this->assertTrue(mkdir($GLOBALS['pfb'][$path], 0755, TRUE));
+			}
+		}
+		// The default row deliberately points at a refused connection; successful fixtures below seed Core's parsed outputs.
+		$replies = ['dnsbl:T1_a' => self::feedReply('dnsbl:T1_a', [
+			'disposition' => 'failed', 'stage' => 'fetch', 'reason' => 'connection_refused',
+		])];
+		foreach (config_get_path('installedpackages/pfblockerngdnsbl/config', []) as $list) {
+			if (isset($list['custom'])) {
+				$this->assertSame("blocked.example\n", base64_decode($list['custom']), 'seed an explicit Core artifact for a new custom fixture');
+				$header = $list['aliasname'] . '_custom';
+				$replies["custom:dnsbl:{$list['aliasname']}"] = $this->seedDnsblResult("custom:dnsbl:{$list['aliasname']}", $header, 'blocked.example');
+			}
+		}
+		$replies = array_replace($replies, $this->feedReplies);
+		$replyFile = "{$this->dir}/feed-replies.json";
+		$this->assertNotFalse(file_put_contents($replyFile, json_encode($replies, JSON_THROW_ON_ERROR)));
+		$GLOBALS['pfb']['feed_phase_token'] = str_repeat('a', 64);
+		$GLOBALS['pfb']['core_socket'] = "{$this->dir}/feed.sock";
+		$started = pfb_test_start_process([
+			PHP_BINARY, __DIR__ . '/support/CoreApiStandIn.php', $GLOBALS['pfb']['core_socket'],
+			"{$this->dir}/feed-requests", '200', '', $replyFile,
+		]);
+		$said = '';
+		$deadline = hrtime(TRUE) + 10_000_000_000;
+		while (!str_contains($said, "ready\n")) {
+			if (feof($started[1][1]) || hrtime(TRUE) > $deadline) {
+				$run = pfb_test_finish_process($started, 1.0);
+				$this->fail("FeedPhase stand-in did not listen: {$run['stderr']}");
+			}
+			$read = [$started[1][1]];
+			$write = $except = NULL;
+			stream_select($read, $write, $except, 0, 100_000);
+			$said .= (string) fread($started[1][1], 64);
+		}
+		return $started;
+	}
+
+	private static function feedReply(string $id, array $overrides = []): array
+	{
+		return array_replace([
+			'id' => $id, 'disposition' => 'changed', 'stage' => '', 'reason' => '',
+			'entries' => 0, 'parseFailures' => 0, 'suppressed' => FALSE, 'mappedDrops' => 0,
+			'dnsblRows' => 0, 'ipv4Count' => 0, 'ipv6Count' => 0, 'updateIP' => FALSE,
+			'schemeSkipped' => 0, 'hpHostsStop' => FALSE, 'placeholder' => '',
+			'preScriptFailed' => FALSE, 'sourceChanged' => TRUE, 'normalizedChanged' => TRUE,
+		], $overrides);
+	}
+
+	private function seedDnsblResult(string $id, string $header, string $domain, string $v4 = '', string $v6 = ''): array
+	{
+		$orig = $GLOBALS['pfb']['dnsorigdir'];
+		if (!is_dir($orig)) {
+			$this->assertTrue(mkdir($orig, 0755, TRUE));
+		}
+		$this->assertNotFalse(file_put_contents("{$orig}/{$header}.parsed.ndjson", pfb_test_ndjson_row(PfbDnsblRowKind::Domain, $domain)));
+		$this->assertNotFalse(file_put_contents("{$orig}/{$header}.parsed.v4.ip", $v4));
+		$this->assertNotFalse(file_put_contents("{$orig}/{$header}.parsed.v6.ip", $v6));
+		return self::feedReply($id, [
+			'entries' => 1, 'dnsblRows' => 1, 'ipv4Count' => $v4 === '' ? 0 : 1,
+			'ipv6Count' => $v6 === '' ? 0 : 1, 'updateIP' => $v4 !== '' || $v6 !== '',
+		]);
 	}
 
 	/** @return list<array<string,mixed>> */
@@ -1060,6 +1139,18 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->arrange(['save' => FALSE, 'demand' => FALSE] + $state);
 		PfbConfig::write('dnsbl/action', 'Deny_Both');
 		$this->publishTo(TRUE);
+		$this->feedReplies['dnsbl:T1_a'] = $this->seedDnsblResult(
+			'dnsbl:T1_a', 'T1_a', 'blocked.example', "198.51.100.7\n", "2001:db8::7\n"
+		);
+		foreach (['v4' => '198.51.100.7', 'v6' => '2001:db8::7'] as $family => $address) {
+			$orig = $GLOBALS['pfb']['origdir'];
+			if (!is_dir($orig)) {
+				$this->assertTrue(mkdir($orig, 0755, TRUE));
+			}
+			$this->assertNotFalse(file_put_contents("{$orig}/DNSBLIP_{$family}.parsed.ip", "{$address}\n"));
+			$id = $family === 'v4' ? 'synthetic:ipv4:DNSBLIP_v4' : 'synthetic:ipv6:DNSBLIP_v6';
+			$this->feedReplies[$id] = self::feedReply($id, ['entries' => 1]);
+		}
 	}
 
 	/** @return list<string> */
@@ -1264,6 +1355,9 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		file_put_contents($feed, "reservedprobe3539.example.com\n");
 		config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/0/url', $feed);
 		config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/0/header', 'DNSBLIP');
+		$this->feedReplies['dnsbl:DNSBLIP'] = $this->seedDnsblResult(
+			'dnsbl:DNSBLIP', 'DNSBLIP', 'reservedprobe3539.example.com'
+		);
 
 		// WHEN the apply pass runs
 		$this->runPass();

@@ -415,8 +415,11 @@ final class CoreUpdateServeTest extends TestCase
 			restore_error_handler();
 		}
 
-		// Then both terminal results are in the result, the unnamed feed was not checked, and no state file exists
-		$this->assertSame(['ipv4:ok_v4' => 'success', 'ipv4:capped_v4' => 'retry-cap-reached'], $run['result']['outcomes'], $run['out']);
+		// Then the capped feed's terminal result is in the result, the named feed is left to Core's feed phase (#3977: PHP
+		// no longer probes, so its outcome comes from the apply loop's FeedPhase result -- ScheduledFeedOutcomeTest -- and
+		// this pass, stopped by the boot guard, reports none), the unnamed feed was not checked, and no state file exists
+		$this->assertSame(['ipv4:capped_v4' => 'retry-cap-reached'], $run['result']['outcomes'], $run['out']);
+		$this->assertMatchesRegularExpression('/\[ ok_v4 \]\n\S+ \S+ +Update check delegated to Core\n/', $run['out']);
 		$this->assertStringNotContainsString('unnamed', $run['out'], 'the feed Core did not name is not checked');
 		$this->assertSame([], glob("{$this->dir}/state/pfb_schedule_state.json*") ?: [], 'the PHP state file is retired');
 		$this->assertFileDoesNotExist("{$this->dir}/state/pfb_schedule_state.json");

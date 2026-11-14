@@ -14,7 +14,8 @@ use PHPUnit\Framework\TestCase;
  * settings and the platform) as the parity fixture tests/core/fixtures/settings_ingest_parity.json; go/pfb_core/settings passes the
  * same file.
  *   - A case is a config.xml (and the addresses the box lists): `php` is what today's readers say of it (pfb_global(),
- *     pfb_list_cidr_floors(), pfb_feed_filter_enabled(), pfb_feed_internal_allowlist(), pfb_ip_is_self(), the cURL proxy options),
+ *     pfb_feed_filter_enabled(), pfb_feed_internal_allowlist(), pfb_ip_is_self(), the cURL proxy options; `floors` was
+ *     pfb_list_cidr_floors(), whose resolver moved to Core with the feed parse in #3977: only the projection pins it now),
  *     `ingest` (over the fixture's defaults) is what the settings adapter's read answers. Where PHP and Core differ (a value the
  *     page never offers, an entry Core's lists cannot hold) the case says why.
  *   - A refused row is a value Core refuses to read; the adapter's write refuses it too, naming the field: the projection is
@@ -184,14 +185,13 @@ final class CoreSettingsIngestParityTest extends TestCase
 		$curl = $pfb['curl_defaults'];
 		$seen = [
 			'supp'    => static fn(): bool => $pfb['supp'] === PfbToggle::On,
-			'floors'  => static fn(): array => pfb_list_cidr_floors([], 'auto', (string) $pfb['supp_cidr'], (string) $pfb['supp_cidr_v6']),
 			'dnsblIp' => static fn(): bool => pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL) !== 'Disabled',
 			'lenient' => static fn(): bool => $pfb['dnsbl_lenient'] === PfbToggle::On,
 			'filter'  => static fn(): bool => pfb_feed_filter_enabled(),
 			'allow'   => static fn(): array => pfb_feed_internal_allowlist(),
 			'proxy'   => static fn(): array => ['host' => $curl[CURLOPT_PROXY] ?? NULL, 'port' => $curl[CURLOPT_PROXYPORT] ?? NULL, 'userpwd' => $curl[CURLOPT_PROXYUSERPWD] ?? NULL],
 		];
-		foreach ($case['php'] as $key => $expected) {
+		foreach (array_diff_key($case['php'], ['floors' => TRUE]) as $key => $expected) {
 			if ($key === 'self') {
 				$probes = array_keys($expected);
 				$actual = array_combine($probes, array_map('pfb_ip_is_self', $probes));

@@ -50,10 +50,6 @@ final class FixtureSetupLifecycleTest extends TestCase
 				'GeoipPackageGenerationTest', 'testPackageUmbrellaGeneratesContinentAndReputationPagesAcrossStateTransitions',
 				['tmp'], FALSE,
 			],
-			'GunzipTrailingNewlineWiringTest' => [
-				'GunzipTrailingNewlineWiringTest', 'testGunzipPipelineTerminatesBeforeEtConsumer',
-				['dir'], TRUE,
-			],
 			'PfbResolveListScriptTest' => [
 				'PfbResolveListScriptTest', 'testContainedFileResolvesToPrimaryDir',
 				['dir1', 'dir2'], FALSE,

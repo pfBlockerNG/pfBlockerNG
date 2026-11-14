@@ -6,7 +6,7 @@
  * Flags any SINK -- an exec-family call, a json_encode() (the Python manifest
  * writer), or a dynamic filesystem-path build -- that appears inside a PFBL-01
  * in-scope function WITHOUT a preceding semantic-validation call (pfb_filter() /
- * pfb_sanitise_feed_header() / sanitize_ipaddr()) in the same function scope.
+ * pfb_sanitise_feed_header()) in the same function scope.
  * This is the "ADR-06/07/10/13 surfaces" gate from PFBL-01 Requirement 4: it does
  * not replace escapeshellarg() -- it enforces that the SEMANTIC layer is also
  * present, the dual-layer rule pfb_unbound_py_ccache_flush_cmds() already follows.
@@ -54,7 +54,6 @@ class RequirePfbFilterSniff implements Sniff
 	public $validatorFunctions = [
 		'pfb_filter',
 		'pfb_sanitise_feed_header',
-		'sanitize_ipaddr',
 		'pfb_hook_script_valid',
 	];
 

@@ -33,10 +33,10 @@ $GLOBALS['pfb']['unbound_py_rawdir'] = $root . '/pfb_py_raw';
 $GLOBALS['pfb']['unbound_py_sources'] = $root . '/pfb_py_sources.json';
 $GLOBALS['pfb']['unbound_py_top1m'] = $root . '/pfb_py_top1m.txt';
 file_put_contents($root . '/dnsbl/fixture.txt',
-    pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'offline.example') .
-    pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'www.offline.example') .
-    pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'deep.offline.example') .
-    pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'blocked.example'));
+    pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'offline.example') .
+    pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'www.offline.example') .
+    pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'deep.offline.example') .
+    pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'blocked.example'));
 $feeds = [pfb_feed_manifest_row('fixture', 'g', '1', 'feed', 'deny', 'on')];
 $result = pfb_unbound_python_sources($feeds, ['top1m_atomic' => [
     'chown' => static fn(string $file, string $owner): bool => TRUE,
@@ -182,10 +182,10 @@ $reprocess = pfb_top1m_reprocess_needed($dbdir);
 if ($reprocess) {
     pfblockerng_top1m();
     file_put_contents($dbdir . '/dnsbl/fixture.txt',
-        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'legacy.com') .
-        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'www.legacy.com') .
-        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'deep.legacy.com') .
-        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, 'blocked.example'));
+        pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'legacy.com') .
+        pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'www.legacy.com') .
+        pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'deep.legacy.com') .
+        pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'blocked.example'));
     $feeds = [pfb_feed_manifest_row('fixture', 'g', '1', 'feed', 'deny', 'on')];
     $published = pfb_unbound_python_sources($feeds, ['top1m_atomic' => [
         'chown' => static fn(string $file, string $owner): bool => TRUE,

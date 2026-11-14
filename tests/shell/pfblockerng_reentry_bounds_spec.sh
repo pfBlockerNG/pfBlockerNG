@@ -266,14 +266,7 @@ Describe 'every shell re-entry call site reaches the bounded seam (issue #2016)'
     make_fake_php
     make_timeout_recorder
 
-    # whoisconvert(): an ASN entry with asn.csv absent is the branch that re-enters.
-    pfborig="${work}/orig/"; mkdir -p "${pfborig}"
     alias='RouteList'
-    max='_v4'
-    dedup='AS64500'
-    pathasncsv="${work}/absent-asn.csv"
-    pathhost="${work}/host"
-    printf '#!/bin/sh\nexit 1\n' > "${pathhost}"; chmod +x "${pathhost}"
 
     # iptoasn() / reputation_depends(): mmdblookup present, its databases absent.
     pathgeoip="${work}/mmdblookup"
@@ -285,11 +278,6 @@ Describe 'every shell re-entry call site reaches the bounded seam (issue #2016)'
   BeforeAll 'pfb_source'
   Before 'setup'
   After 'cleanup'
-
-  It 'whoisconvert() fetches the IPinfo databases through the seam'
-    When call recorded_reentry_of whoisconvert
-    The output should equal 'asn_shell|scheduled|'
-  End
 
   It 'iptoasn() fetches the IPinfo databases through the seam'
     When call recorded_reentry_of iptoasn

@@ -10,26 +10,24 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
 require_once __DIR__ . '/support/FeedFetchCorpusNet.php';
 
 /**
- * The feed-transfer parity corpus (#3905) driven against today's PHP: every scenario under
- * tests/feedfetch/fixtures/parity runs through the real pfb_download() (an "ingest" step) and pfb_update_check() (a
- * "probe" step) against local `php -S` servers, a stand-in resolver and the shared stand-in rsync. The same files run
- * against go/pfb_core/feedfetch (corpus_test.go there documents the schema); a case that passes here and fails there,
- * or the reverse, is a divergence.
+ * The feed-transfer parity corpus (#3905) driven against today's PHP: every ingest scenario under
+ * tests/feedfetch/fixtures/parity runs through the real pfb_download() against local `php -S` servers and a stand-in
+ * resolver. The same files run against go/pfb_core/feedfetch (corpus_test.go there documents the schema); a case that
+ * passes here and fails there, or the reverse, is a divergence. A scenario with a "probe" step or an rsync transfer runs
+ * there only: change detection and rsync moved to Core's feed phase in #3977, and pfb_download() keeps the Extras' formats.
  *
  * An ftp server is declared in `servers` as an object {"name", "kind": "ftp", ...options} instead of a name: it is the
  * Python server tests/feedfetch/fixtures/ftp_server.py (its header lists the options), driven by cURL here and by the
  * Go client there. Its `files` table, {server: {path: file}}, sits beside `routes`, and a step may replace it the same way.
  *
  * Logical outcome per step, mapped from this side's files and log:
- *   ok / decision   the PfbDownloadResult, or pfb_update_check()'s verdict (Success + cron_update = changed, Success
- *                   alone = unchanged, NULL = failed).
+ *   ok              the PfbDownloadResult.
  *   published, etag, lastmod, digest   {feed}.orig, {feed}.orig.etag, {feed}.orig.lastmod, {feed}.orig.xxhash128
  *                   (null when absent).
  *   mtime           the published copy's modification time in Unix seconds, checked only where the expectation names it.
  *   reason          the last "reason=<code>", "[ FEED ] <text> — skipped" or "[pfb_download] <text>" (an extraction's
  *                   refusal) in the step's log.
- *   requests        what the servers recorded (the Host header too, kept only where the expectation names it);
- *                   rsync_source the stand-in's second-to-last argument.
+ *   requests        what the servers recorded (the Host header too, kept only where the expectation names it).
  *   old_expect      a step's optional override, present only where Core differs from this path on purpose (never equal
  *                   to expect, which the Go runner asserts); this runner asserts it in place of expect.
  * TLS and proxy (the schema of go/pfb_core/feedfetch/corpus_test.go):
@@ -44,8 +42,7 @@ require_once __DIR__ . '/support/FeedFetchCorpusNet.php';
  *                   is the system proxy's user and password. The proxy settings go through config
  *                   system/proxyurl|proxyport|proxyuser|proxypass and the real pfb_global(), which turns them into
  *                   $pfb['curl_defaults']; `requires` makes the proxy demand those Basic credentials (407 otherwise).
- *   step.flex       the feed's Flex flag (PfbDownloadRequest::$flex, pfb_update_check()'s $pflex).
- * Scheduler state that is not transfer behaviour is reset before a probe: the list file exists, no failure marker.
+ *   step.flex       the feed's Flex flag (PfbDownloadRequest::$flex).
  * Content gates (#3973): stage and detected are those of the step's last "pfb_validate: REJECT" line; raw_retained is a
  * non-empty {feed}.raw left behind (an archive success keeps it); a leftover ".pfbstage_*" file fails the step.
  * published_b64 stands for published when the bytes are not text, published_size when the body is too large to inline.
@@ -53,7 +50,6 @@ require_once __DIR__ . '/support/FeedFetchCorpusNet.php';
  * directories (as tests/shell's specs source the script); et_split and et_match are that split and match file.
  */
 #[CoversFunction('pfb_download')]
-#[CoversFunction('pfb_update_check')]
 final class FeedFetchParityCorpusTest extends TestCase
 {
 	private const FEED = 'FEED';
@@ -75,7 +71,10 @@ final class FeedFetchParityCorpusTest extends TestCase
 	{
 		$cases = [];
 		foreach (glob(__DIR__ . '/../feedfetch/fixtures/parity/*.json') ?: [] as $file) {
-			$cases[basename($file, '.json')] = [$file];
+			$steps = json_decode((string) file_get_contents($file), TRUE, 512, JSON_THROW_ON_ERROR)['steps'];
+			if (array_filter($steps, static fn (array $s): bool => $s['op'] !== 'ingest' || ($s['format'] ?? '') === 'rsync') === []) {
+				$cases[basename($file, '.json')] = [$file];
+			}
 		}
 		return $cases;
 	}
@@ -97,7 +96,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			}
 		}
 		foreach (['log', 'errlog', 'pnow', 'dbdir', 'mime_types', 'skipfeed', 'failed', 'runlog', 'runlog_active', 'config',
-			'curl_defaults', 'curl_retry_sleep', 'rsync_bin', 'rsync_max_bytes', 'local_max_bytes', 'cron_update', 'script',
+			'curl_defaults', 'curl_retry_sleep', 'local_max_bytes', 'script',
 			'etblock', 'etmatch'] as $k) {
 			if (array_key_exists($k, $GLOBALS['pfb'] ?? [])) {
 				$this->savedPfb[$k] = $GLOBALS['pfb'][$k];
@@ -118,9 +117,6 @@ final class FeedFetchParityCorpusTest extends TestCase
 		$GLOBALS['pfb']['failed'] = [];
 		$GLOBALS['pfb']['mime_types'] = $GLOBALS['pfb_shipped_mime_types'] ?? $GLOBALS['pfb']['mime_types'] ?? [];
 		$GLOBALS['pfb']['curl_retry_sleep'] = 0;
-		$GLOBALS['pfb']['rsync_bin'] = "{$this->tools}/rsync";
-		$this->assertTrue(copy(__DIR__ . '/../feedfetch/fixtures/fake-rsync.sh', "{$this->tools}/rsync"));
-		$this->assertTrue(chmod("{$this->tools}/rsync", 0700));
 		// pfblockerng.sh's et and xlsx verbs, run for real with their pfSense paths pointed at this run's directories.
 		$this->assertTrue(mkdir("{$this->tools}/ET") && mkdir("{$this->tools}/match"));
 		$this->assertNotFalse(file_put_contents("{$this->tools}/pfblockerng.sh", sprintf(<<<'SH'
@@ -163,7 +159,7 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$GLOBALS['pfb'][$k] = $v;
 		}
 		foreach (['dbdir', 'log', 'errlog', 'pnow', 'skipfeed', 'failed', 'mime_types', 'config', 'curl_defaults', 'curl_retry_sleep',
-			'rsync_bin', 'rsync_max_bytes', 'local_max_bytes', 'cron_update', 'script', 'etblock', 'etmatch'] as $k) {
+			'local_max_bytes', 'script', 'etblock', 'etmatch'] as $k) {
 			if (!array_key_exists($k, $this->savedPfb)) {
 				unset($GLOBALS['pfb'][$k]);
 			}
@@ -250,41 +246,26 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$this->seedLocal($step['local_files'] ?? [], []);
 			file_put_contents("{$this->tools}/requests.log", '');
 			file_put_contents($GLOBALS['pfb']['log'], '');
-			@unlink("{$this->tools}/rsync.argv");
-			file_put_contents("{$this->tools}/rsync.body", (string) ($step['rsync']['body'] ?? ''));
-			file_put_contents("{$this->tools}/rsync.exit", (string) ($step['rsync']['exit'] ?? 0));
 			$ceiling = $step['ceiling'] ?? PFB_DOWNLOAD_MAX_BYTES;
 			$GLOBALS['pfb']['curl_defaults'] = [CURLOPT_MAXFILESIZE_LARGE => $ceiling] + $curlDefaults;
-			$GLOBALS['pfb']['rsync_max_bytes'] = $ceiling;
 			$GLOBALS['pfb']['local_max_bytes'] = $ceiling;
 			$url = $this->expand($step['url']);
 			$format = $step['format'] ?? '';
 
-			$actual = [];
-			if ($step['op'] === 'ingest') {
-				$result = pfb_download(new PfbDownloadRequest(
-					listUrl: $url,
-					downloadPath: $base,
-					flex: $step['flex'] ?? FALSE,
-					header: self::FEED,
-					format: $format,
-					logType: 1,
-					timeout: 30,
-					type: '',
-					username: $step['username'] ?? '',
-					password: $step['password'] ?? '',
-					extraHeaders: $step['headers'] ?? [],
-				));
-				$actual['ok'] = $result->success;
-			} else {
-				touch("{$this->dir}/" . self::FEED . '.txt');
-				@unlink("{$this->dir}/" . self::FEED . '.fail');
-				$GLOBALS['pfb']['cron_update'] = FALSE;
-				$verdict = pfb_update_check(self::FEED, $url, $this->dir, $this->dir, $step['flex'] ?? FALSE, $format, '');
-				$decision = $verdict === NULL ? 'failed' : ($GLOBALS['pfb']['cron_update'] ? 'changed' : 'unchanged');
-				$actual['ok'] = $decision !== 'failed';
-				$actual['decision'] = $decision;
-			}
+			$result = pfb_download(new PfbDownloadRequest(
+				listUrl: $url,
+				downloadPath: $base,
+				flex: $step['flex'] ?? FALSE,
+				header: self::FEED,
+				format: $format,
+				logType: 1,
+				timeout: 30,
+				type: '',
+				username: $step['username'] ?? '',
+				password: $step['password'] ?? '',
+				extraHeaders: $step['headers'] ?? [],
+			));
+			$actual = ['ok' => $result->success];
 			clearstatcache();
 			$actual['published'] = self::stateFile("{$base}.orig");
 			$actual['mtime'] = is_file("{$base}.orig") ? filemtime("{$base}.orig") : NULL;
@@ -295,8 +276,6 @@ final class FeedFetchParityCorpusTest extends TestCase
 			$actual['requests'] = $this->requests();
 			$actual['raw_retained'] = is_file("{$base}.raw") && filesize("{$base}.raw") > 0;
 			$actual['staged'] = $this->stagedLeftover();
-			$argv = is_file("{$this->tools}/rsync.argv") ? file("{$this->tools}/rsync.argv", FILE_IGNORE_NEW_LINES) : NULL;
-			$actual['rsync_source'] = $argv === NULL ? NULL : $argv[count($argv) - 2];
 			$actual['reason'] = $this->reason();
 			[$actual['stage'], $actual['detected']] = $this->rejectLine();
 			$actual['et_split'] = [];
@@ -330,14 +309,13 @@ final class FeedFetchParityCorpusTest extends TestCase
 			}
 			$sizeState = $actual['size'];
 			$want += ['etag' => $seed['etag'] ?? NULL, 'lastmod' => $seed['lastmod'] ?? NULL,
-				'digest' => $seed['digest'] ?? NULL, 'raw_retained' => FALSE, 'staged' => '',
-				'rsync_source' => NULL];
+				'digest' => $seed['digest'] ?? NULL, 'raw_retained' => FALSE, 'staged' => ''];
 			if (array_key_exists('size', $want)) {
 				$want += ['size' => $seed['size'] ?? NULL];
 			} else {
 				unset($actual['size']);
 			}
-			foreach (['reason', 'decision', 'stage', 'detected', 'et_split', 'et_match'] as $optional) {
+			foreach (['reason', 'stage', 'detected', 'et_split', 'et_match'] as $optional) {
 				if (!array_key_exists($optional, $want)) {
 					unset($actual[$optional]);
 				}

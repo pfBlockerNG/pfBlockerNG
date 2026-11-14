@@ -3,7 +3,7 @@
 The corpus (go/pfb_core/feedparse/testdata/, schema in its README.md) is what Core produces line for line; PHP no longer
 parses feeds. The Go corpus runners are cross-compiled for the appliance (`go test -c`) and run there against a copy
 of the corpus, so the byte-exact expectations (`expect`; `old_expect` rows stay recorded in the corpus) are checked
-with FreeBSD's libc, filesystem and locale rather than the build host's.
+on FreeBSD rather than the build host. The runners use Core's pure-Go parser, not the retired PHP/ICU path.
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def test_core_parses_the_corpus_on_the_appliance(smoke_vm: SmokeVM, tmp_path: Pa
         report = f"rc={run.returncode}\n{run.stdout[-6000:]}\n{run.stderr[-2000:]}"
         assert run.returncode == 0, f"Core's corpus runners failed on the appliance:\n{report}"
         passed = set(re.findall(r"^--- PASS: (\w+) ", run.stdout, re.MULTILINE))
-        skipped = set(re.findall(r"^--- SKIP: (\w+) ", run.stdout, re.MULTILINE))
+        skipped = set(re.findall(r"^\s*--- SKIP: (\S+) ", run.stdout, re.MULTILINE))
         assert skipped == set(), f"corpus runners skipped on the appliance: {sorted(skipped)}\n{report}"
         assert set(CORPUS_TESTS) <= passed, f"corpus runners missing a PASS: {sorted(set(CORPUS_TESTS) - passed)}"
     finally:

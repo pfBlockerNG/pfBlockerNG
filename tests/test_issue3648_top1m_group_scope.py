@@ -47,7 +47,7 @@ $feeds = [];
 foreach (config_get_path('installedpackages/pfblockerngdnsbl/config', []) as $list) {
     $header = "{$list['aliasname']}Feed";
     file_put_contents("{$root}/dnsbl/{$header}.txt",
-        pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, strtolower($list['aliasname']) . '-listed.example'));
+        pfb_test_ndjson_row(PfbDnsblRowKind::Domain, strtolower($list['aliasname']) . '-listed.example'));
     $feeds[] = pfb_feed_manifest_row($header, "DNSBL_{$list['aliasname']}", '1', 'feed', 'deny',
         $list['filter_top1m'] ?? NULL);
 }

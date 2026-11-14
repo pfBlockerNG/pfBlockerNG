@@ -63,7 +63,7 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 	private function writeFeed(string $domain): void
 	{
 		file_put_contents("{$this->tmp}/dnsbl/feed1.txt",
-			pfb_dnsbl_ndjson_emit_row(PfbDnsblRowKind::Domain, $domain));
+			pfb_test_ndjson_row(PfbDnsblRowKind::Domain, $domain));
 	}
 
 	private function publish(array $publicationOps = []): array|false

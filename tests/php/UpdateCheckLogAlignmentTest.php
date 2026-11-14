@@ -17,11 +17,9 @@ require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_cron.in
  * Tabs are rejected outright because a tab's rendered width belongs to whatever displays the
  * log, so a column contract cannot be expressed with them at all.
  *
- * Coverage: every detector row whose branch is decidable from the filesystem is driven through
- * pfb_update_check() itself, and the change-detection probe row through pfb_download(). The
- * three conditional-GET parentheticals need a live origin (they are exercised end to end by
- * DownloadRejectValidatorClearTest and tests/smoke/test_smoke_feeds.py), so those are pinned
- * at the shared formatter instead.
+ * Coverage: the retry and Core-delegation rows run through pfb_update_check(), and the
+ * Extras transfer row through pfb_download(). Feed probing belongs to Core since #3977;
+ * the historical conditional-GET parentheticals remain formatter contracts here.
  */
 #[CoversFunction('pfb_update_check')]
 #[CoversFunction('pfb_log_status_line')]
@@ -107,74 +105,6 @@ final class UpdateCheckLogAlignmentTest extends TestCase
 			'verdict text must start in column ' . self::VERDICT_COL . ": '{$line}'");
 	}
 
-	/** A local feed whose bytes match the last-ingested .orig — the unchanged verdict. */
-	private function seedUnchangedLocalFeed(string $header): string
-	{
-		$source = "{$this->sandbox}/localfeed.txt";
-		$body   = "198.51.100.7\n";
-		$this->assertNotFalse(file_put_contents($source, $body), 'failed to write the local feed');
-		$this->assertNotFalse(file_put_contents("{$this->folder}/{$header}.txt", $body), 'failed to write the .txt');
-		$this->assertNotFalse(file_put_contents("{$this->orig}/{$header}.orig", $body), 'failed to write the .orig');
-		return $source;
-	}
-
-	/** @return list<array{string}> */
-	public static function headerLengths(): array
-	{
-		return [
-			'short'                => ['abc'],
-			'one under a tab stop' => [str_repeat('a', 11)],
-			'on a tab stop'        => [str_repeat('a', 12)],
-			'wide'                 => [str_repeat('a', 19)],
-			'wider'                => [str_repeat('a', 20)],
-			'near the field edge'  => [str_repeat('a', 27)],
-			'at the field edge'    => [str_repeat('a', 28)],
-		];
-	}
-
-	/**
-	 * Scenario: the reported defect — a header-bearing detector verdict.
-	 *
-	 * Given a local feed whose content matches its last-ingested copy
-	 * When the scheduled detector evaluates it under a feed header of any supported length
-	 * Then the verdict's status and verdict text sit in the log's two columns.
-	 */
-	#[DataProvider('headerLengths')]
-	public function testLocalFeedVerdictHoldsBothColumnsAtEveryHeaderLength(string $header): void
-	{
-		$source = $this->seedUnchangedLocalFeed($header);
-
-		pfb_update_check($header, $source, $this->folder, $this->orig, '', '', '_v4');
-
-		$this->assertRowColumns(
-			$this->rowContaining('( local feed unchanged )'),
-			'( local feed unchanged )',
-			'Update not required'
-		);
-	}
-
-	/**
-	 * A header wider than the header field cannot be padded into column 53, so it keeps
-	 * exactly one separating space — the rule issue #2989 set for the sync loop's rows.
-	 */
-	public function testHeaderWiderThanTheFieldKeepsOneSeparatingSpace(): void
-	{
-		$header = str_repeat('a', 29);
-		$source = $this->seedUnchangedLocalFeed($header);
-
-		pfb_update_check($header, $source, $this->folder, $this->orig, '', '', '_v4');
-
-		$this->assertStringContainsString("[ {$header} ] ( local feed unchanged )",
-			$this->rowContaining('( local feed unchanged )'));
-	}
-
-	public function testWhoisUpdateFoundHoldsTheVerdictColumn(): void
-	{
-		pfb_update_check('Whois_v4', 'example.com', $this->folder, $this->orig, '', 'whois', '_v4');
-
-		$this->assertRowColumns($this->rowContaining('Update found'), '', 'Update found');
-	}
-
 	public function testPreviousFailureRetryHoldsBothColumns(): void
 	{
 		$this->assertNotFalse(touch("{$this->folder}/Retry_v4.fail"), 'failed to write the fail marker');
@@ -188,30 +118,16 @@ final class UpdateCheckLogAlignmentTest extends TestCase
 		);
 	}
 
-	public function testMissingFeedFileUpdateFoundHoldsTheVerdictColumn(): void
+	/**
+	 * Since #3977 the detector no longer probes (Core's feed phase decides), so a feed with no failure marker logs the
+	 * delegation row; it holds the verdict column like every other detector row.
+	 */
+	public function testDelegatedUpdateCheckHoldsTheVerdictColumn(): void
 	{
 		pfb_update_check('Fresh_v4', 'http://203.0.113.10/list.txt', $this->folder, $this->orig, '', '', '_v4');
 
-		$this->assertRowColumns($this->rowContaining('Update found'), '', 'Update found');
-	}
-
-	public function testRsyncUpdateFoundHoldsBothColumns(): void
-	{
-		$this->assertNotFalse(file_put_contents("{$this->folder}/Rsync_v4.txt", "198.51.100.7\n"), 'failed to write the .txt');
-		$this->assertNotFalse(file_put_contents("{$this->orig}/Rsync_v4.orig", "198.51.100.7\n"), 'failed to write the .orig');
-
-		pfb_update_check('Rsync_v4', 'rsync://203.0.113.10/module', $this->folder, $this->orig, '', 'rsync', '_v4');
-
-		$this->assertRowColumns($this->rowContaining('( rsync )'), '( rsync )', 'Update found');
-	}
-
-	public function testMissingOriginalUpdateFoundHoldsTheVerdictColumn(): void
-	{
-		$this->assertNotFalse(file_put_contents("{$this->folder}/NoOrig_v4.txt", "198.51.100.7\n"), 'failed to write the .txt');
-
-		pfb_update_check('NoOrig_v4', 'http://203.0.113.10/list.txt', $this->folder, $this->orig, '', '', '_v4');
-
-		$this->assertRowColumns($this->rowContaining('Update found'), '', 'Update found');
+		$this->assertRowColumns($this->rowContaining('Update check delegated to Core'), '', 'Update check delegated to Core');
+		$this->assertFileExists("{$this->folder}/Fresh_v4.update", 'the delegated feed is marked for the feed phase');
 	}
 
 	/**

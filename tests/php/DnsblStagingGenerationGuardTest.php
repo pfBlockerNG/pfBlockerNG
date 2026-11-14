@@ -18,7 +18,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_staging_is_current_generation')]
 #[CoversFunction('pfb_dnsbl_staging_first_line')]
 #[CoversFunction('pfb_dnsbl_verbatim_reuse_active')]
-#[CoversFunction('pfb_dnsbl_hold_stale_rebuild_skip')]
 final class DnsblStagingGenerationGuardTest extends TestCase
 {
 	// --- pfb_dnsbl_staging_is_current_generation() ---------------------------------
@@ -298,61 +297,5 @@ final class DnsblStagingGenerationGuardTest extends TestCase
 		} finally {
 			unlink_if_exists($path);
 		}
-	}
-
-	// --- pfb_dnsbl_hold_stale_rebuild_skip() --- (issue #1278)
-
-	public function testStaleRebuildHoldNoOrigSkipsFetch(): void
-	{
-		// The bug scenario: Hold + stale-generation rebuild + no '.orig' baseline
-		// must skip, never fall through to pfb_download().
-		$result = pfb_dnsbl_hold_stale_rebuild_skip(TRUE, TRUE, FALSE);
-		$this->assertTrue($result, 'expected TRUE (skip), got ' . var_export($result, TRUE));
-	}
-
-	public function testStaleRebuildHoldWithOrigDoesNotSkip(): void
-	{
-		// '.orig' present -- the existing reparse-from-orig path already avoids
-		// the network; this guard must stay silent.
-		$result = pfb_dnsbl_hold_stale_rebuild_skip(TRUE, TRUE, TRUE);
-		$this->assertFalse($result, 'expected FALSE (no skip), got ' . var_export($result, TRUE));
-	}
-
-	public function testStaleRebuildNonHoldNoOrigDoesNotSkip(): void
-	{
-		$result = pfb_dnsbl_hold_stale_rebuild_skip(TRUE, FALSE, FALSE);
-		$this->assertFalse($result, 'expected FALSE (no skip), got ' . var_export($result, TRUE));
-	}
-
-	public function testStaleRebuildNonHoldWithOrigDoesNotSkip(): void
-	{
-		$result = pfb_dnsbl_hold_stale_rebuild_skip(TRUE, FALSE, TRUE);
-		$this->assertFalse($result, 'expected FALSE (no skip), got ' . var_export($result, TRUE));
-	}
-
-	public function testNoStaleRebuildHoldNoOrigDoesNotSkip(): void
-	{
-		// Not in the stale-generation-rebuild fork at all (plain Hold, current-
-		// generation staging) -- the verbatim-reuse fork already handles this.
-		$result = pfb_dnsbl_hold_stale_rebuild_skip(FALSE, TRUE, FALSE);
-		$this->assertFalse($result, 'expected FALSE (no skip), got ' . var_export($result, TRUE));
-	}
-
-	public function testNoStaleRebuildHoldWithOrigDoesNotSkip(): void
-	{
-		$result = pfb_dnsbl_hold_stale_rebuild_skip(FALSE, TRUE, TRUE);
-		$this->assertFalse($result, 'expected FALSE (no skip), got ' . var_export($result, TRUE));
-	}
-
-	public function testNoStaleRebuildNonHoldNoOrigDoesNotSkip(): void
-	{
-		$result = pfb_dnsbl_hold_stale_rebuild_skip(FALSE, FALSE, FALSE);
-		$this->assertFalse($result, 'expected FALSE (no skip), got ' . var_export($result, TRUE));
-	}
-
-	public function testNoStaleRebuildNonHoldWithOrigDoesNotSkip(): void
-	{
-		$result = pfb_dnsbl_hold_stale_rebuild_skip(FALSE, FALSE, TRUE);
-		$this->assertFalse($result, 'expected FALSE (no skip), got ' . var_export($result, TRUE));
 	}
 }

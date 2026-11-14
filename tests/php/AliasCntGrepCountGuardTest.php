@@ -37,7 +37,6 @@ final class AliasCntGrepCountGuardTest extends TestCase
 	{
 		return [
 			'verbatim reuse'    => ['pfb_dnsbl_alias_count_verbatim'],
-			'normalize skip'    => ['pfb_dnsbl_alias_count_norm_skip'],
 			'pre-script failure' => ['pfb_dnsbl_alias_count_script_failure'],
 			'rebuilt feed'      => ['pfb_dnsbl_alias_count_rebuild'],
 		];

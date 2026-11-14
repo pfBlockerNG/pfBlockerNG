@@ -11,7 +11,6 @@ use PHPUnit\Framework\TestCase;
  * behavior tests exercise that decision with each route's inputs.
  */
 #[CoversFunction('pfb_dnsbl_custom_row')]
-#[CoversFunction('pfb_dnsbl_hold_stale_rebuild_skip')]
 final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 {
 	public function testDnsblNormalizationRouteBuildsEnabledCustomRow(): void
@@ -105,20 +104,9 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 		);
 	}
 
-	public function testEnabledCustomRowNeverTriggersHoldStaleRebuildSkip(): void
+	public function testSynthesizedCustomRowIsNeverHold(): void
 	{
 		$customRow = pfb_dnsbl_custom_row('Some', 'example.com');
-		$isHold = $customRow['state'] == 'Hold';
-		$this->assertFalse($isHold, 'a synthesized custom row must never read as Hold');
-
-		foreach ([TRUE, FALSE] as $staleGenerationRebuild) {
-			foreach ([TRUE, FALSE] as $origExists) {
-				$this->assertFalse(
-					pfb_dnsbl_hold_stale_rebuild_skip($staleGenerationRebuild, $isHold, $origExists),
-					"a custom row (state=Enabled) must never trigger the Hold-skip guard "
-					. "(stale_rebuild={$staleGenerationRebuild}, orig_exists={$origExists})"
-				);
-			}
-		}
+		$this->assertNotSame('Hold', $customRow['state'], 'a synthesized custom row must never read as Hold');
 	}
 }
