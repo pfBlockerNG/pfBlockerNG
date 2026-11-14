@@ -3,6 +3,7 @@ package feedparse
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -120,19 +121,36 @@ func TestNormalizeFileSidecarWriteFailureDoesNotServeStaleNorm(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("permission probe uses Linux unprivileged credentials")
 	}
+	out, err := runNormcacheHelper("^TestNormalizeFileSidecarWriteFailureDoesNotServeStaleNorm$", helper, dir,
+		&syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534}})
+	if err != nil {
+		t.Fatalf("unprivileged A→B→A probe: %v\n%s", err, out)
+	}
+}
+
+// runNormcacheHelper re-runs this test binary as the helper for test, with the helper flag and dir in its environment, and
+// returns its combined output. A helper that outlives normcacheHelperTimeout is killed and reported with what it printed.
+func runNormcacheHelper(test, helper, dir string, attr *syscall.SysProcAttr) ([]byte, error) {
+	const normcacheHelperTimeout = 2 * time.Minute
 	src, err := os.Open(os.Args[0])
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	cmd := exec.Command("/proc/self/fd/3", "-test.run=^TestNormalizeFileSidecarWriteFailureDoesNotServeStaleNorm$")
+	ctx, cancel := context.WithTimeout(context.Background(), normcacheHelperTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/proc/self/fd/3", "-test.run="+test)
 	cmd.ExtraFiles = []*os.File{src}
 	cmd.Env = append(os.Environ(), helper+"=1", "PFB_TEST_NORMCACHE_DIR="+dir)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534}}
+	cmd.SysProcAttr = attr
 	out, cmdErr := cmd.CombinedOutput()
 	srcErr := src.Close()
-	if cmdErr != nil || srcErr != nil {
-		t.Fatalf("unprivileged A→B→A probe: child=%v close=%v\n%s", cmdErr, srcErr, out)
+	if ctx.Err() != nil {
+		return out, fmt.Errorf("helper timed out after %v: %w", normcacheHelperTimeout, ctx.Err())
 	}
+	if cmdErr != nil {
+		return out, fmt.Errorf("child=%w", cmdErr)
+	}
+	return out, srcErr
 }
 
 func TestNormalizeFileReusesOrphanedPerFeedTemp(t *testing.T) {
@@ -191,17 +209,9 @@ func TestNormalizeFileFailsWhenSidecarWriteFails(t *testing.T) {
 	if got := NormalizeFile(dir, "feed"); !got.Normalized {
 		t.Fatalf("initial A normalization = %+v", got)
 	}
-	src, err := os.Open(os.Args[0])
+	out, err := runNormcacheHelper("^TestNormalizeFileFailsWhenSidecarWriteFails$", helper, dir, nil)
 	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("/proc/self/fd/3", "-test.run=^TestNormalizeFileFailsWhenSidecarWriteFails$")
-	cmd.ExtraFiles = []*os.File{src}
-	cmd.Env = append(os.Environ(), helper+"=1", "PFB_TEST_NORMCACHE_DIR="+dir)
-	out, cmdErr := cmd.CombinedOutput()
-	srcErr := src.Close()
-	if cmdErr != nil || srcErr != nil {
-		t.Fatalf("A→B→A with a failed sidecar write: child=%v close=%v\n%s", cmdErr, srcErr, out)
+		t.Fatalf("A→B→A with a failed sidecar write: %v\n%s", err, out)
 	}
 }
 
