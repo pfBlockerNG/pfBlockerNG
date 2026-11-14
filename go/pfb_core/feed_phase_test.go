@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -35,6 +36,12 @@ func (b *feedPhaseTestBackend) Write(context.Context, uint64, map[string]map[str
 
 func feedPhaseTestRunner(t *testing.T, kind, state, format, source, credentials string, preScript ...string) *feedPhaseRunner {
 	t.Helper()
+	return feedPhaseTestRunnerWithIngest(t, nil, kind, state, format, source, credentials, preScript...)
+}
+
+// feedPhaseTestRunnerWithIngest is feedPhaseTestRunner with ingest fields added to or replacing the defaults.
+func feedPhaseTestRunnerWithIngest(t *testing.T, extraIngest map[string]json.RawMessage, kind, state, format, source, credentials string, preScript ...string) *feedPhaseRunner {
+	t.Helper()
 	groupAction := "Deny_Inbound"
 	if kind == "dnsbl" {
 		groupAction = "unbound"
@@ -52,16 +59,18 @@ func feedPhaseTestRunner(t *testing.T, kind, state, format, source, credentials 
 	if err != nil {
 		t.Fatal(err)
 	}
+	ingest := map[string]json.RawMessage{
+		"feedHostFilter":    json.RawMessage("true"),
+		"feedHostAllowlist": json.RawMessage(`[{"cidr":"127.0.0.1/32"}]`),
+		"dnsblIp":           json.RawMessage("true"),
+		"suppression":       json.RawMessage("false"),
+	}
+	maps.Copy(ingest, extraIngest)
 	store, err := settings.Load(&feedPhaseTestBackend{stored: settings.Stored{
 		Initialized: true, Revision: 1,
 		Projections: map[string]map[string]json.RawMessage{
 			"feeds/" + kind: {"groups": encoded},
-			"ingest": {
-				"feedHostFilter":    json.RawMessage("true"),
-				"feedHostAllowlist": json.RawMessage(`[{"cidr":"127.0.0.1/32"}]`),
-				"dnsblIp":           json.RawMessage("true"),
-				"suppression":       json.RawMessage("false"),
-			},
+			"ingest":        ingest,
 		},
 	}}, settings.Production())
 	if err != nil {
@@ -171,6 +180,39 @@ func TestFeedPhaseFailureKeepsLastGoodOriginalAndParsedArtifacts(t *testing.T) {
 	afterParsed, _ := os.ReadFile(parsed)
 	if string(afterOrig) != string(beforeOrig) || string(afterParsed) != string(beforeParsed) {
 		t.Fatalf("failed feed changed last-known-good artifacts: orig %q -> %q; parsed %q -> %q", beforeOrig, afterOrig, beforeParsed, afterParsed)
+	}
+}
+
+func TestFeedPhaseProxyUnusableRefusesWithoutDialingAndKeepsLastGood(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("203.0.113.9\n"))
+	}))
+	defer server.Close()
+	runner := feedPhaseTestRunnerWithIngest(t, map[string]json.RawMessage{"proxyUnusable": json.RawMessage("true")},
+		"ipv4", "enabled", "auto", server.URL+"/feed", "")
+	runner.fetcher.RetryDelay = time.Nanosecond
+	orig := filepath.Join(runner.flags.OrigDir, "feed_v4.orig")
+	parsed := filepath.Join(runner.flags.OrigDir, "feed_v4.parsed.ip")
+	for path, body := range map[string]string{orig: "203.0.113.1\n", parsed: "203.0.113.1\n"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, force := range []string{"none", "download"} {
+		got, err := runner.run(context.Background(), "ip", []string{"ipv4:feed_v4"}, force, &strings.Builder{})
+		if err != nil || len(got) != 1 || got[0].Disposition != "failed" || got[0].Reason != "proxy_unusable" {
+			t.Fatalf("FeedPhase(%q) with an unusable proxy = %+v, %v; want failed/proxy_unusable", force, got, err)
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("FeedPhase with an unusable proxy sent %d direct requests, want none", requests.Load())
+	}
+	for path, want := range map[string]string{orig: "203.0.113.1\n", parsed: "203.0.113.1\n"} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Fatalf("%s = %q (%v) after a proxy refusal, want last-known-good %q", filepath.Base(path), got, err, want)
+		}
 	}
 }
 
@@ -610,67 +652,74 @@ func feedPhaseFTP(t *testing.T, body string) (string, *atomic.Int32) {
 	t.Cleanup(func() { control.Close() })
 	retrieved := &atomic.Int32{}
 	go func() {
-		conn, err := control.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		reader := bufio.NewReader(conn)
-		_, _ = io.WriteString(conn, "220 feed phase fixture\r\n")
-		var data net.Listener
-		defer func() {
-			if data != nil {
-				data.Close()
-			}
-		}()
 		for {
-			line, err := reader.ReadString('\n')
+			conn, err := control.Accept()
 			if err != nil {
 				return
 			}
-			command, _, _ := strings.Cut(strings.TrimSpace(line), " ")
-			switch strings.ToUpper(command) {
-			case "USER":
-				_, _ = io.WriteString(conn, "331 password\r\n")
-			case "PASS":
-				_, _ = io.WriteString(conn, "230 logged in\r\n")
-			case "MDTM":
-				_, _ = io.WriteString(conn, "550 unavailable\r\n")
-			case "EPSV":
-				data, err = net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					return
-				}
-				port := data.Addr().(*net.TCPAddr).Port
-				_, _ = fmt.Fprintf(conn, "229 Entering Extended Passive Mode (|||%d|)\r\n", port)
-			case "TYPE":
-				_, _ = io.WriteString(conn, "200 type set\r\n")
-			case "SIZE":
-				_, _ = fmt.Fprintf(conn, "213 %d\r\n", len(body))
-			case "RETR":
-				retrieved.Add(1)
-				_, _ = io.WriteString(conn, "150 opening data connection\r\n")
-				dataConn, err := data.Accept()
-				if err != nil {
-					return
-				}
-				_, _ = io.WriteString(dataConn, body)
-				_ = dataConn.Close()
-				_ = data.Close()
-				data = nil
-				_, _ = io.WriteString(conn, "226 transfer complete\r\n")
-			case "QUIT":
-				_, _ = io.WriteString(conn, "221 goodbye\r\n")
-				return
-			default:
-				_, _ = io.WriteString(conn, "200 ok\r\n")
-			}
+			go feedPhaseFTPSession(conn, body, retrieved)
 		}
 	}()
 	return fmt.Sprintf("ftp://feed.example:%d/list.txt", control.Addr().(*net.TCPAddr).Port), retrieved
 }
 
-func TestFeedPhaseIngestsFTPWithoutUnsupportedProbe(t *testing.T) {
+// feedPhaseFTPSession serves one control connection with a fixed MDTM, so a stored MDTM+SIZE baseline matches.
+func feedPhaseFTPSession(conn net.Conn, body string, retrieved *atomic.Int32) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	_, _ = io.WriteString(conn, "220 feed phase fixture\r\n")
+	var data net.Listener
+	defer func() {
+		if data != nil {
+			data.Close()
+		}
+	}()
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		command, _, _ := strings.Cut(strings.TrimSpace(line), " ")
+		switch strings.ToUpper(command) {
+		case "USER":
+			_, _ = io.WriteString(conn, "331 password\r\n")
+		case "PASS":
+			_, _ = io.WriteString(conn, "230 logged in\r\n")
+		case "MDTM":
+			_, _ = io.WriteString(conn, "213 20260101000000\r\n")
+		case "EPSV":
+			data, err = net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				return
+			}
+			port := data.Addr().(*net.TCPAddr).Port
+			_, _ = fmt.Fprintf(conn, "229 Entering Extended Passive Mode (|||%d|)\r\n", port)
+		case "TYPE":
+			_, _ = io.WriteString(conn, "200 type set\r\n")
+		case "SIZE":
+			_, _ = fmt.Fprintf(conn, "213 %d\r\n", len(body))
+		case "RETR":
+			retrieved.Add(1)
+			_, _ = io.WriteString(conn, "150 opening data connection\r\n")
+			dataConn, err := data.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = io.WriteString(dataConn, body)
+			_ = dataConn.Close()
+			_ = data.Close()
+			data = nil
+			_, _ = io.WriteString(conn, "226 transfer complete\r\n")
+		case "QUIT":
+			_, _ = io.WriteString(conn, "221 goodbye\r\n")
+			return
+		default:
+			_, _ = io.WriteString(conn, "200 ok\r\n")
+		}
+	}
+}
+
+func TestFeedPhaseIngestsChangedFTPOnce(t *testing.T) {
 	source, retrieved := feedPhaseFTP(t, "203.0.113.42\n")
 	runner := feedPhaseTestRunner(t, "ipv4", "enabled", "auto", source, "")
 	runner.fetcher.RetryDelay = time.Nanosecond
@@ -686,5 +735,25 @@ func TestFeedPhaseIngestsFTPWithoutUnsupportedProbe(t *testing.T) {
 	parsed, err := os.ReadFile(filepath.Join(runner.flags.OrigDir, "feed_v4.parsed.ip"))
 	if err != nil || string(parsed) != "203.0.113.42\n" {
 		t.Fatalf("FTP parsed artifact = %q (%v)", parsed, err)
+	}
+}
+
+func TestFeedPhaseSkipsUnchangedFTPWithoutReingest(t *testing.T) {
+	source, retrieved := feedPhaseFTP(t, "203.0.113.42\n")
+	runner := feedPhaseTestRunner(t, "ipv4", "enabled", "auto", source, "")
+	runner.fetcher.RetryDelay = time.Nanosecond
+	call := func() FeedPhaseResult {
+		t.Helper()
+		got, err := runner.run(context.Background(), "ip", []string{"ipv4:feed_v4"}, "none", &strings.Builder{})
+		if err != nil || len(got) != 1 {
+			t.Fatalf("FTP FeedPhase = %+v, %v", got, err)
+		}
+		return got[0]
+	}
+	if got := call(); got.Disposition != "changed" || retrieved.Load() != 1 {
+		t.Fatalf("first FTP FeedPhase = %+v after %d RETR commands; want changed/one fetch", got, retrieved.Load())
+	}
+	if got := call(); got.Disposition != "unchanged" || got.SourceChanged || retrieved.Load() != 1 {
+		t.Fatalf("unchanged FTP FeedPhase = %+v after %d RETR commands; want unchanged by MDTM+SIZE without a fetch", got, retrieved.Load())
 	}
 }
