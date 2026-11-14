@@ -322,6 +322,19 @@ func TestAnExtractionIsPublishedWorldReadable(t *testing.T) {
 	}
 }
 
+// A transcoded extraction is published as readable as any extraction: the transcode keeps the mode it finds
+// (pfb_utf16_transcode_file restores it).
+func TestATranscodedExtractionIsPublishedWorldReadable(t *testing.T) {
+	f, feed, src := seededFeed(t)
+	utf16 := []byte("\xff\xfe1\x00.\x002\x00.\x003\x00.\x004\x00\n\x00")
+	if res := f.Ingest(context.Background(), feed, localRequest(t, src, gzipOf(t, utf16))); !res.OK || published(t, feed) != "1.2.3.4\n" {
+		t.Fatalf("%+v, published %q", res, published(t, feed))
+	}
+	if info, err := os.Stat(filepath.Join(feed.Dir, "FEED.orig")); err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("the published copy must be 0644: %v, %v", info, err)
+	}
+}
+
 // Member names never reach the file system, so a name that would leave its directory is no reason to refuse a zip or a
 // tar, whatever the standard library's insecure-path setting (a change of default must not turn into a refusal).
 func TestAnInsecureMemberNameIsNoFaultWhenTheStandardLibraryReportsIt(t *testing.T) {

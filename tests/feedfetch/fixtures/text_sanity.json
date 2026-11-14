@@ -153,5 +153,10 @@
   "name": "utf-32be comments",
   "sample_b64": "AAD+/wAAACMAAAAgAAAAYwAAAAo=",
   "verdict": "below_min_content"
+ },
+ {
+  "name": "a carriage return alone ends a line",
+  "sample_b64": "PGh0bWw+DWV4YW1wbGUuY29tDQ==",
+  "verdict": null
  }
 ]
