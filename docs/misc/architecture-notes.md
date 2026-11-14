@@ -2361,6 +2361,7 @@ Issue #3977 closes the remaining PHP feed-pass entrances. The CLI `update`, `upd
 Updates with `both/none`, `ip/download` and `dnsbl/download`; `forcecheck` starts a scoped `manual` Update with `download`, or
 `both` when `hashes=true`. `pfb_trigger` maps its `cron` trigger to Core `apply` and `manual`/`force` to scoped `manual` Updates.
 CLI refusals print Core's reason and exit non-zero.
+The legacy `cron` CLI verb also starts Core `apply`; Core handles eligible retries under the Update gate.
 
 General save and package resync keep their save-mode `sync_package_pfblockerng()` reconciliation (including package configuration,
 service/rc-script and cron setup); save mode skips feed loops. They then ask Core for `apply`. If Core is restarting or already
@@ -2395,6 +2396,8 @@ Core to start a `scheduled`, `retry` or `apply` Update for due work, runs `ss_re
 entry is due (cheap DNS re-resolution), then records each completed job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`, and a pre-ADR-43 install's
 old fleet jobs are removed on the next `sync_package_pfblockerng()`.
+Since #3977, `pfblockerng.php cron` asks Core for `apply`, so retries and pending feeds are handled under the Update gate rather
+than by a PHP feed pass.
 
 **Metrics export cron (#3522):** a separate crontab entry, `* * * * * root /usr/bin/timeout -s TERM
 -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`, exists only while

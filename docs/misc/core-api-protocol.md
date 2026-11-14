@@ -610,6 +610,7 @@ no other field; a refused request runs nothing, writes no result and exits 2) an
 Issue #3977 routes the scoped legacy CLI verbs through `StartUpdate` with `manual` scope/force requests. General-save and
 package-resync changes use `apply`. CLI refusals print Core's reason and exit non-zero; save/resync and TOP1M callers retain a
 pending-change marker when Core is unavailable or already running an Update.
+The legacy CLI `cron` verb also requests `apply`; Core owns feed selection and eligible retries under the same gate.
 `scheduled`, `retry` and `apply` hold the dispatcher and feed-pass locks for the whole Update, which serialize the entry points
 Core does not start (a page save, an HA receive); a lock that is held defers the Update (exit 75). Progress is stdout: while it
 serves, `pfb_logger()` mirrors to stdout, which is Core's `update.log`, and a hook's output is appended to the same file; the
