@@ -13,6 +13,8 @@ package feedfetch
 import (
 	"context"
 	"crypto/x509"
+	"fmt"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
@@ -93,7 +95,8 @@ func (d Decision) String() string {
 }
 
 // Result is the outcome of Ingest or Probe. Reason names a refusal in pfb_download()'s words (a validation reason code
-// such as "download_too_large", or the skip text such as "too many redirects"); it may be empty on failure.
+// such as "download_too_large", the skip text such as "too many redirects", or the refused status); a failure always
+// carries one.
 type Result struct {
 	OK       bool
 	Decision Decision // Probe only
@@ -102,6 +105,15 @@ type Result struct {
 }
 
 func fail(reason string) Result { return Result{Reason: reason} }
+
+// statusReason is pfb_download()'s log text for a final status it does not accept: its status table's "<code> <text>",
+// else "Unknown Failure Code [<code>]".
+func statusReason(code int) string {
+	if text := http.StatusText(code); text != "" {
+		return fmt.Sprintf("%d %s", code, text)
+	}
+	return fmt.Sprintf("Unknown Failure Code [%d]", code)
+}
 
 func (r Request) maxBytes() int64 {
 	if r.MaxBytes > 0 {
@@ -174,10 +186,10 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		if _, err := os.Stat(published); err == nil {
 			return Result{OK: true, Status: 304}
 		}
-		return Result{Status: 304}
+		return Result{Status: 304, Reason: statusReason(304)}
 	}
 	if t.status != 200 && t.status != 221 && t.status != 226 {
-		return Result{Status: t.status}
+		return Result{Status: t.status, Reason: statusReason(t.status)}
 	}
 	if err := publish(feed, staged, t.lastMod); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
@@ -235,6 +247,9 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 		}
 	default:
 		res.Decision = Failed
+		if res.Reason == "" {
+			res.Reason = statusReason(t.status)
+		}
 	}
 	switch res.Decision {
 	case Unchanged:
