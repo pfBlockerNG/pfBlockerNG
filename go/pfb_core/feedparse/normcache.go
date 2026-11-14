@@ -17,6 +17,9 @@ type NormResult struct {
 	Changed, Normalized bool
 }
 
+// openNormSource opens the .orig that NormalizeFile streams; tests replace it to inject read errors.
+var openNormSource = func(path string) (io.ReadCloser, error) { return os.Open(path) }
+
 // NormalizeFile is the storage half of pfb_feed_normalize() for the feed name in dir, with the same conversion rules as Normalize:
 // the downloaded <name>.orig becomes <name>.norm, rebuilt only when <name>.norm is missing or <name>.norm.src.xxhash128 names
 // another .orig. The .norm is written beside its target and renamed into place.
@@ -46,7 +49,7 @@ func NormalizeFile(dir, name string) NormResult {
 	prev, err := digest.File(norm)
 	hadBaseline := algo == digest.XXH128 && err == nil
 
-	source, err := os.Open(orig)
+	source, err := openNormSource(orig)
 	if err != nil {
 		return fallback
 	}
