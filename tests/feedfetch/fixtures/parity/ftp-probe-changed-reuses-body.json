@@ -65,6 +65,7 @@
     "digest": "3a37adf6991862f9608d33aceb0fbd96",
     "lastmod": 1760000001,
     "size": 16,
+    "mtime": 1760000001,
     "requests": []
    },
    "old_expect": {
@@ -73,6 +74,7 @@
     "digest": "3a37adf6991862f9608d33aceb0fbd96",
     "lastmod": 1760000000,
     "size": 9,
+    "mtime": 1760000001,
     "requests": [
      {"server": "ftp", "command": "USER anonymous"},
      {"server": "ftp", "command": "PASS ftp@example.com"},

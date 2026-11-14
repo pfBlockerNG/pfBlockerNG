@@ -215,25 +215,20 @@ func TestAnFTPHostThatTurnsPrivateAfterTheEntryGateIsRefusedAtTransferTime(t *te
 	// "localhost" resolves for the system too, so a transfer that skipped its own vet would reach the stub.
 	req := ftpFeed(stub, "/list.txt")
 	req.URL = strings.Replace(req.URL, "feed.example", "localhost", 1)
-	entry := entryLookups(t, req) - 1 // the calibration FTP probe also re-vets at transfer time
-	entryHits := stub.hits.Load()
-	if entryHits != 1 {
-		t.Fatalf("a probe without a published baseline must RETR once, got %d connections", entryHits)
-	}
+	entry := entryLookups(t, req)
 
 	stable, stableFeed := quickFetcher(t)
-	if res := stable.Ingest(context.Background(), stableFeed, req); !res.OK || stub.hits.Load() != entryHits+1 {
-		t.Fatalf("with a stable answer the feed must be fetched: %+v, %d connections after %d from the entry probe", res, stub.hits.Load(), entryHits)
+	if res := stable.Ingest(context.Background(), stableFeed, req); !res.OK || stub.hits.Load() != 1 {
+		t.Fatalf("with a stable answer the feed must be fetched: %+v, %d connections", res, stub.hits.Load())
 	}
 
-	before := stub.hits.Load()
 	f, feed := quickFetcher(t)
 	os.WriteFile(filepath.Join(feed.Dir, "FEED.orig"), []byte("old\n"), 0o600)
 	asked := rebindAfter(f, entry)
 	res := f.Ingest(context.Background(), feed, req)
-	if res.OK || res.Reason != nonPermitted || stub.hits.Load() != before || published(t, feed) != "old\n" || asked.Load() <= entry {
-		t.Fatalf("a rebound host must be refused at transfer time: %+v, %d connections in all (no new connection after %d), published %q, %d lookups (%d at entry)",
-			res, stub.hits.Load(), before, published(t, feed), asked.Load(), entry)
+	if res.OK || res.Reason != nonPermitted || stub.hits.Load() != 1 || published(t, feed) != "old\n" || asked.Load() <= entry {
+		t.Fatalf("a rebound host must be refused at transfer time: %+v, %d connections in all (1 before), published %q, %d lookups (%d at entry)",
+			res, stub.hits.Load(), published(t, feed), asked.Load(), entry)
 	}
 }
 

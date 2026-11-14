@@ -164,7 +164,6 @@ type transfer struct {
 	etag      string
 	lastMod   time.Time
 	size      int64
-	hasSize   bool
 	reason    string
 	unchanged bool
 }
@@ -265,8 +264,13 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 			os.Remove(published + v)
 			os.Rename(probe+v, published+v)
 		}
+		if src.ftp != nil && f.Proxy == nil {
+			if lastMod := readFTPMetadata(feed).lastMod; !lastMod.IsZero() {
+				os.Chtimes(published, lastMod, lastMod)
+			}
+		}
 	} else if src.ftp != nil && f.Proxy == nil {
-		writeFTPMetadataAt(published, ftpMetadata{lastMod: t.lastMod, size: t.size, hasTime: !t.lastMod.IsZero(), hasSize: t.hasSize})
+		writeFTPMetadataAt(published, ftpMetadataFor(t))
 	}
 	return Result{OK: true, Status: t.status}
 }
@@ -283,7 +287,7 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	}
 	published := feed.path(".orig")
 	_, statErr := os.Stat(published)
-	if statErr != nil && (src.ftp == nil || f.Proxy != nil) {
+	if statErr != nil {
 		return Result{OK: true, Decision: Changed}
 	}
 	switch src.kind {
@@ -343,14 +347,15 @@ func (f *Fetcher) probeFTP(ctx context.Context, feed Feed, req Request, src *sou
 	part, probe := feed.path(".probe.part"), feed.path(".probe")
 	defer os.Remove(part)
 	baseline := readFTPMetadata(feed)
-	if _, err := os.Stat(feed.path(".orig")); err != nil {
-		baseline = ftpMetadata{}
-	}
-	t, metadataUnchanged := f.fetchFTPProbe(ctx, src, req, part, baseline)
+	t := f.fetchFTP(ctx, src, req, part, &baseline)
+	metadataUnchanged := t.unchanged
 	res := Result{Status: t.status, Reason: t.reason}
 	if t.reason != "" {
 		res.Decision = Failed
 		return res
+	}
+	if t.status != 226 {
+		return Result{Status: t.status, Decision: Failed, Reason: statusReason(t.status)}
 	}
 	res.OK, res.Decision = true, Changed
 	if metadataUnchanged {
@@ -361,7 +366,7 @@ func (f *Fetcher) probeFTP(ctx context.Context, feed Feed, req Request, src *sou
 			res.Decision = Unchanged
 		}
 	}
-	meta := ftpMetadata{lastMod: t.lastMod, size: t.size, hasTime: !t.lastMod.IsZero(), hasSize: t.hasSize}
+	meta := ftpMetadataFor(t)
 	if res.Decision == Unchanged {
 		for _, suffix := range [...]string{"", ".etag", ".lastmod", ".size"} {
 			os.Remove(probe + suffix)
@@ -390,7 +395,7 @@ func (f *Fetcher) fetch(ctx context.Context, src *source, req Request, dst strin
 		return fetchSelfHosted(ctx, src, req, dst)
 	}
 	if src.ftp != nil && f.Proxy == nil {
-		return f.fetchFTP(ctx, src, req, dst) // no conditional GET exists for ftp: the probe's cond is not sent
+		return f.fetchFTP(ctx, src, req, dst, nil) // no conditional GET exists for ftp: the probe's cond is not sent
 	}
 	// Through a proxy an ftp feed is an HTTP request to it (ftpViaProxy), as cURL makes it.
 	return f.fetchHTTP(ctx, src, req, dst, cond)
