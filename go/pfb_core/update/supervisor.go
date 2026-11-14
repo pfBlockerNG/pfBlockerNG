@@ -69,7 +69,7 @@ func supervise(path string) int {
 // dieBy ends the supervisor with sig, by the signal's default action (the Go runtime's own handler would panic on SEGV, exit 2
 // on ABRT, ignore PIPE or USR1), with no core file.
 func dieBy(sig syscall.Signal) {
-	_ = syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{})
+	noCoreDump()
 	defaultAction(sig)
 	_ = syscall.Kill(os.Getpid(), sig)
 	time.Sleep(time.Second)

@@ -31,3 +31,6 @@ func defaultAction(sig syscall.Signal) {
 	var act [4]uint64
 	_, _, _ = syscall.RawSyscall(syscall.SYS_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act[0])), 0)
 }
+
+// noCoreDump keeps the supervisor's own death from dumping core (FreeBSD writes a core file only, which RLIMIT_CORE 0 stops).
+func noCoreDump() { _ = syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{}) }

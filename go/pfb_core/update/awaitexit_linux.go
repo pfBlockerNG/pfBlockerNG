@@ -39,3 +39,9 @@ func defaultAction(sig syscall.Signal) {
 	var act [4]uint64
 	_, _, _ = syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act[0])), 0, 8, 0, 0)
 }
+
+// noCoreDump keeps the supervisor's own death from dumping core: RLIMIT_CORE 0 does not stop a dump into a core_pattern pipe
+// (core(5); systemd-coredump, apport), an undumpable process never dumps.
+func noCoreDump() {
+	_, _, _ = syscall.RawSyscall(syscall.SYS_PRCTL, syscall.PR_SET_DUMPABLE, 0, 0)
+}

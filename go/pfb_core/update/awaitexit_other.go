@@ -22,3 +22,6 @@ func awaitExit(cmd *exec.Cmd) (int, syscall.Signal) {
 // defaultAction hands sig back to the Go runtime.
 // shortcut: the runtime's action differs from the default for some signals (SEGV, ABRT, PIPE); no system here runs Core.
 func defaultAction(sig syscall.Signal) { signal.Reset(sig) }
+
+// noCoreDump keeps the supervisor's own death from writing a core file.
+func noCoreDump() { _ = syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{}) }
