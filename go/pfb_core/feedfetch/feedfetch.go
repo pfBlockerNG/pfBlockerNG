@@ -58,11 +58,12 @@ type Policy struct {
 // Fetcher holds what is shared by every feed of a run.
 type Fetcher struct {
 	Policy
-	Proxy      *url.URL       // forward proxy, credentials in its userinfo
-	UserAgent  string         // empty: Go's default
-	RootCAs    *x509.CertPool // nil: the system roots
-	RsyncBin   string         // the rsync executable
-	RetryDelay time.Duration  // pause between attempts; zero is pfb_download()'s 5 s
+	Proxy         *url.URL       // forward proxy, credentials in its userinfo
+	ProxyUnusable bool           // the configured system proxy cannot be represented; never bypass it for remote feeds
+	UserAgent     string         // empty: Go's default
+	RootCAs       *x509.CertPool // nil: the system roots
+	RsyncBin      string         // the executable rsync
+	RetryDelay    time.Duration // pause between attempts; zero is pfb_download()'s 5 s
 	// FreeBytes is the space the process may still write in dir; ok is false when it cannot tell, which is no shortfall
 	// (pfb_extract_space_shortfall). Nil reads the file system.
 	FreeBytes func(dir string) (free uint64, ok bool)
@@ -186,6 +187,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	if src == nil {
 		return fail(reason)
 	}
+	if f.ProxyUnusable && (src.kind == kindRemote || src.kind == kindSelfHosted) {
+		return fail("proxy_unusable")
+	}
 	staged, probe, published := feed.path(".raw"), feed.path(".probe"), feed.path(".orig")
 	keepRaw := false // an archive's success leaves the staged archive: the digest is of it, and ET reuses it (A35)
 	defer func() {
@@ -276,6 +280,9 @@ func (f *Fetcher) Probe(ctx context.Context, feed Feed, req Request) Result {
 	src, reason := f.entry(ctx, req)
 	if src == nil {
 		return Result{Decision: Failed, Reason: reason}
+	}
+	if f.ProxyUnusable && (src.kind == kindRemote || src.kind == kindSelfHosted) {
+		return Result{Decision: Failed, Reason: "proxy_unusable"}
 	}
 	published := feed.path(".orig")
 	if _, err := os.Stat(published); err != nil {

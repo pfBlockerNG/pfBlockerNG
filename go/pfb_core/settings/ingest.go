@@ -26,6 +26,7 @@ func ingestProjection() Projection {
 		{Name: "proxyUrl", Type: TypeString, Default: "", Check: checkProxyURL},
 		{Name: "proxyUser", Type: TypeString, Default: ""},
 		{Name: "proxyPassword", Type: TypeString, Default: "", Secret: true},
+		{Name: "proxyUnusable", Type: TypeBool, Default: false},
 	}}
 }
 
@@ -54,18 +55,18 @@ func checkSelfAddress(item map[string]any) []FieldError {
 	return nil
 }
 
-// checkProxyURL holds the proxy to none or to http://host:port, a port of 1 to 65535: no userinfo (the credentials are their own
-// fields), path, query or control character.
+// checkProxyURL holds a proxy to none or to a supported scheme://host:port URL, with credentials in their own fields.
 func checkProxyURL(v map[string]any) []FieldError {
 	proxy := v["proxyUrl"].(string)
 	if proxy == "" {
 		return nil
 	}
-	if u, err := url.Parse(proxy); err == nil && u.Scheme == "http" && u.Hostname() != "" && u.User == nil && u.Path == "" &&
-		u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" {
+	u, err := url.Parse(proxy)
+	if err == nil && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "socks5" || u.Scheme == "socks5h") &&
+		u.Hostname() != "" && u.User == nil && u.Path == "" && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" {
 		if port, err := strconv.Atoi(u.Port()); err == nil && port >= 1 && port <= 65535 {
 			return nil
 		}
 	}
-	return []FieldError{{Field: "proxyUrl", Message: "must be http://host:port, a port from 1 to 65535, with no credentials, path or query"}}
+	return []FieldError{{Field: "proxyUrl", Message: "must use http, https, socks5 or socks5h with a port from 1 to 65535 and no credentials, path or query"}}
 }

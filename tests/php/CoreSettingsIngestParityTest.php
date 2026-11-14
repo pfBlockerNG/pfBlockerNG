@@ -156,6 +156,8 @@ final class CoreSettingsIngestParityTest extends TestCase
 			'dnsbl-ip-disabled', 'dnsbl-ip-deny-inbound', 'lenient-on', 'lenient-off', 'lenient-absent', 'filter-on', 'filter-off', 'filter-absent',
 			'allowlist-valid', 'allowlist-invalid-dropped', 'allowlist-base64-garbage', 'allowlist-spaces-and-blank-lines', 'allowlist-ipv6-zone',
 			'proxy-none', 'proxy-host-and-port', 'proxy-host-port-user-and-password', 'proxy-user-without-password', 'proxy-url-with-userinfo', 'proxy-url-with-crlf',
+			'proxy-url-with-https-scheme', 'proxy-url-with-socks5-scheme', 'proxy-url-with-socks4-scheme', 'proxy-port-negative', 'proxy-port-beyond-65535',
+			'proxy-ipv6-host', 'proxy-port-zero-is-empty', 'proxy-port-leading-digits',
 			'self-interface-and-vip', 'self-link-local-excluded', 'self-hostile-addresses'] as $id) {
 			$this->assertContains($id, $ids, "the coverage matrix row {$id}");
 		}
@@ -165,7 +167,7 @@ final class CoreSettingsIngestParityTest extends TestCase
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 		$this->assertSame(['suppression', 'suppressionCidrV4', 'suppressionCidrV6', 'dnsblIp', 'dnsblLenient', 'feedHostFilter', 'feedHostAllowlist', 'selfAddresses',
-			'proxyUrl', 'proxyUser', 'proxyPassword'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
+			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
 	}
 
 	/** @param array<string, mixed> $case */

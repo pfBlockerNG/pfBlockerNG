@@ -109,6 +109,36 @@ func TestTheSystemProxyCarriesTheRequestAndItsCredentials(t *testing.T) {
 			res, published(t, feed), seen, want)
 	}
 }
+func TestAnUnusableProxyRefusesRemoteProbeAndIngestWithoutDiallingDirectly(t *testing.T) {
+	hits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		io.WriteString(w, "new\n")
+	}))
+	defer target.Close()
+	f, feed := fetcherFor(t)
+	f.ProxyUnusable = true
+	old := []byte("last known good\n")
+	if err := os.WriteFile(filepath.Join(feed.Dir, "FEED.orig"), old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := feedfetch.Request{URL: "http://feed.example:" + port(t, target.URL) + "/", Timeout: 10 * time.Second}
+
+	for label, res := range map[string]feedfetch.Result{
+		"probe":  f.Probe(context.Background(), feed, req),
+		"ingest": f.Ingest(context.Background(), feed, req),
+	} {
+		if res.OK || res.Reason != "proxy_unusable" {
+			t.Errorf("%s = %+v, want failed with proxy_unusable", label, res)
+		}
+	}
+	if hits != 0 {
+		t.Errorf("unusable proxy dialled the feed directly %d times", hits)
+	}
+	if got := published(t, feed); got != string(old) {
+		t.Errorf("last-known-good = %q, want %q", got, old)
+	}
+}
 
 func TestAnUndeclaredBodyOverTheCeilingIsRefused(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

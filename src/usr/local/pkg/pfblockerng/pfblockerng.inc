@@ -4827,39 +4827,80 @@ function pfb_core_revision_key(): string {
 }
 
 /**
- * The system proxy as Core's three fields (issue #3975), as pfb_global() builds the cURL proxy: nothing unless the proxy URL is set (empty() also
- * for "0"), the port as curl_setopt() reads the stored string (a number, else 0, so a service name pfSense's is_port() accepts is 0 too) and 0 is
- * cURL's default, 1080, user and password only when both are set. Only what Core's http://host:port can say is projected: a host name (letters,
- * digits, "-", "_" and "." as pfSense's is_fqdn() takes them) or an IP address, optionally behind a hand-edited http://. A proxy URL that is
- * anything else (userinfo, a path, another scheme, a line break) or a port curl_setopt() refuses (negative, beyond 65535) is not passed on,
- * whole: the proxy is then not projected.
+ * The system proxy as Core's fields: values cURL uses are represented in Go or explicitly marked unusable.
  *
- * @return array{proxyUrl: string, proxyUser: string, proxyPassword: string}
+ * @return array{proxyUrl: string, proxyUser: string, proxyPassword: string, proxyUnusable: bool}
  */
 function pfb_core_proxy_settings(): array {
-	$none = ['proxyUrl' => '', 'proxyUser' => '', 'proxyPassword' => ''];
+	$none = ['proxyUrl' => '', 'proxyUser' => '', 'proxyPassword' => '', 'proxyUnusable' => FALSE];
+	$unusable = ['proxyUrl' => '', 'proxyUser' => '', 'proxyPassword' => '', 'proxyUnusable' => TRUE];
 	$stored = static fn(string $key): string => is_scalar($value = config_get_path("system/{$key}")) ? (string) $value : '';
 	$unset = static fn(string $value): bool => $value === '' || $value === '0';
-	$host = $stored('proxyurl');
-	$port = $stored('proxyport');
-	if ($unset($host)) {
+	$proxy = $stored('proxyurl');
+	if ($unset($proxy)) {
 		return $none;
 	}
-	if (preg_match('/^(?:http:\/\/)?([A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_])?\.?)$/Di', $host, $name) === 1) {
-		$host = $name[1];
-	} elseif (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== FALSE) {
-		$host = "[{$host}]";
+	if (preg_match('/[\x00-\x20\x7F]/', $proxy) === 1) {
+		return $unusable;
+	}
+
+	$scheme = 'http';
+	$rawHost = $proxy;
+	$urlPort = NULL;
+	$urlUser = $urlPassword = '';
+	if (preg_match('/^([A-Za-z][A-Za-z0-9+.-]*):\/\//', $proxy, $match) === 1) {
+		$scheme = strtolower($match[1]);
+		$parts = parse_url($proxy);
+		if ($parts === FALSE || (isset($parts['path']) && $parts['path'] !== '') || isset($parts['query']) || isset($parts['fragment'])) {
+			return $unusable;
+		}
+		$rawHost = $parts['host'] ?? '';
+		$urlPort = $parts['port'] ?? NULL;
+		$urlUser = rawurldecode($parts['user'] ?? '');
+		$urlPassword = rawurldecode($parts['pass'] ?? '');
+	} elseif (filter_var(trim($proxy, '[]'), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== FALSE) {
+		$rawHost = trim($proxy, '[]');
 	} else {
-		return $none;
+		$parts = parse_url("http://{$proxy}");
+		if ($parts === FALSE || (isset($parts['path']) && $parts['path'] !== '') || isset($parts['query']) || isset($parts['fragment'])) {
+			return $unusable;
+		}
+		$rawHost = $parts['host'] ?? '';
+		$urlPort = $parts['port'] ?? NULL;
+		$urlUser = rawurldecode($parts['user'] ?? '');
+		$urlPassword = rawurldecode($parts['pass'] ?? '');
 	}
-	$port = (int) $port ?: 1080;
-	if ($port < 1 || $port > 65535) {
-		return $none;
+
+	if (!in_array($scheme, ['http', 'https', 'socks5', 'socks5h'], TRUE)
+		|| (filter_var($rawHost, FILTER_VALIDATE_IP) === FALSE
+			&& preg_match('/^(?:[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_])?\.?)$/D', $rawHost) !== 1)) {
+		return $unusable;
+	}
+	$host = str_contains($rawHost, ':') ? "[{$rawHost}]" : $rawHost;
+	$port = $stored('proxyport');
+	if (!$unset($port)) {
+		$port = (int) $port ?: 1080;
+		if ($port < 1 || $port > 65535) {
+			return $unusable;
+		}
+	} else {
+		$port = $urlPort ?? 1080;
+		if (!is_int($port) || $port < 1 || $port > 65535) {
+			return $unusable;
+		}
 	}
 	$user = $stored('proxyuser');
 	$password = $stored('proxypass');
-	$auth = !$unset($user) && !$unset($password);
-	return ['proxyUrl' => "http://{$host}:{$port}", 'proxyUser' => $auth ? $user : '', 'proxyPassword' => $auth ? $password : ''];
+	if (!$unset($user) && !$unset($password)) {
+		$urlUser = $user;
+		$urlPassword = $password;
+	}
+	return [
+		'proxyUrl'      => "{$scheme}://{$host}:{$port}",
+		'proxyUser'     => $urlUser,
+		'proxyPassword' => $urlPassword,
+		'proxyUnusable' => FALSE,
+	];
 }
 
 /** Whether $address is one Core may list as the box's own: an IP address, not unspecified, link-local or an IPv4-mapped IPv6 one. */

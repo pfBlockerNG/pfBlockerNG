@@ -138,6 +138,28 @@ func TestAProxyPasswordIsShownAsPresenceOnlyWhileGetClearGivesTheValue(t *testin
 		t.Errorf("an empty proxyPassword is shown as %s, want {\"present\":false}", got)
 	}
 }
+func TestProxyUnusableIsAValidatedBoolean(t *testing.T) {
+	p := ingestProjection()
+	for _, tc := range []struct {
+		raw   string
+		want  bool
+		valid bool
+	}{
+		{raw: `false`, want: false, valid: true},
+		{raw: `true`, want: true, valid: true},
+		{raw: `"true"`},
+		{raw: `1`},
+	} {
+		got, errs := apply(p, defaults(p), map[string]json.RawMessage{"proxyUnusable": json.RawMessage(tc.raw)}, "ingest")
+		if tc.valid {
+			if len(errs) != 0 || got["proxyUnusable"] != tc.want {
+				t.Errorf("proxyUnusable=%s produced %v, %v; want %v", tc.raw, got["proxyUnusable"], errs, tc.want)
+			}
+		} else if len(errs) != 1 || errs[0].Field != "ingest.proxyUnusable" {
+			t.Errorf("proxyUnusable=%s errors = %v, want ingest.proxyUnusable", tc.raw, errs)
+		}
+	}
+}
 
 func TestGetClearGivesTheSecretsOfListItemsToo(t *testing.T) {
 	b := ingestBackend(t, nil)
