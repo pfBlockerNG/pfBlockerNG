@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from .. import helpers
+from ..test_smoke_core_api import await_core_up
 
 if TYPE_CHECKING:
     from ..conftest import SmokeVM
@@ -17,10 +18,10 @@ pytestmark = pytest.mark.ui_render
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 KEEP_SETTING = "installedpackages/pfblockerng/config/0/pfb_keep"
 PENDING_MARKER = "/usr/local/etc/pfb_pending_changes"
-UPDATE_START = "UPDATE PROCESS START"
-UPDATE_END = "UPDATE PROCESS ENDED"
+APPLY_PHASE = "===[  Aliastables / Rules  ]"
 SAVE_TIMEOUT = 300.0
 UPDATE_WATCHDOG = 600.0
+CORE_RC = "/usr/local/etc/rc.d/pfb_core.sh"
 
 
 def _pending_token(vm: SmokeVM) -> str | None:
@@ -31,41 +32,69 @@ def _pending_token(vm: SmokeVM) -> str | None:
     return result.stdout.strip()
 
 
-def test_general_save_uses_core_apply_without_an_inline_feed_pass(smoke_vm: SmokeVM, webui: WebUI) -> None:
-    """A save starts Core's apply (or leaves durable pending work), never a PHP feed pass in the request."""
+@pytest.mark.parametrize("core_available", [True, False], ids=["admitted", "unavailable"])
+def test_general_save_uses_core_apply_without_an_inline_feed_pass(
+    smoke_vm: SmokeVM, webui: WebUI, core_available: bool
+) -> None:
+    """A disabled save either completes one Core apply or retains pending work without an inline pass."""
     vm = smoke_vm
     before_view = helpers.core_update_view(vm)
     if before_view["running"]:
         before_view = helpers.await_core_update_end(vm, before=before_view["update"], watchdog=UPDATE_WATCHDOG)
     before_update: dict[str, Any] | None = before_view["update"]
     marker_before = _pending_token(vm)
-    start_lines_before = helpers.count_log_marker(vm, helpers.PFB_LOG, UPDATE_START)
-
+    package_log_before = helpers.read_log_file(vm, helpers.PFB_LOG)
     keep_state = helpers.config_get_state(vm, KEEP_SETTING)
-    keep_value = "on" if not keep_state[0] or keep_state[1] == "on" else ""
-    response = webui.post(GENERAL_PAGE, {"pfb_keep": keep_value}, timeout=SAVE_TIMEOUT)
-    assert "Sign In" not in response.text, "General save lost the authenticated UI session"
+    keep_value = "" if keep_state[0] and keep_state[1] == "on" else "on"
+    try:
+        if not core_available:
+            stopped = vm.ssh(CORE_RC, "stop", timeout=60)
+            assert stopped.returncode == 0, f"cannot stop Core for the unavailable scenario: {stopped}"
+            health = helpers.core_call(vm, "GetVersion")
+            assert health["status"] == 0 and health["error"], f"Core was not genuinely unavailable: {health}"
+        response = webui.post(GENERAL_PAGE, {"pfb_keep": keep_value, "enable_cb": ""}, timeout=SAVE_TIMEOUT)
+        assert "Sign In" not in response.text, "General save lost the authenticated UI session"
+        assert helpers.config_get(vm, KEEP_SETTING) == keep_value, "General save did not persist Keep"
+        assert helpers.config_get(vm, helpers.CFG_GLOBAL + "/enable_cb") != "on", (
+            "General save did not disable the package"
+        )
+        reply = helpers.core_call(vm, "GetUpdate")
+        if core_available:
+            assert reply["status"] == 200, f"Core became unavailable during the admitted scenario: {reply}"
+            after_view = reply["body"]
+            update = after_view["update"]
+            assert update is not None and update != before_update and update.get("trigger") == "apply", (
+                f"General save did not admit its Core apply: {after_view}"
+            )
+            if after_view["running"]:
+                after_view = helpers.await_core_update_end(vm, before=before_update, watchdog=UPDATE_WATCHDOG)
+            assert not after_view["running"] and after_view["update"]["result"] == "success", (
+                f"Core apply did not finish successfully: {after_view}"
+            )
+            assert after_view["update"]["trigger"] == "apply", f"Core ran a different Update: {after_view}"
+            update_log = helpers.core_update_log(vm)
+            assert update_log.count(APPLY_PHASE) == 1, f"Core's apply log lacks one rules phase: {update_log[-2000:]!r}"
+        else:
+            assert reply["status"] == 0 and reply["error"], (
+                f"Core unexpectedly served the unavailable scenario: {reply}"
+            )
+            marker_after = _pending_token(vm)
+            assert marker_after is not None and marker_after != marker_before, "General save lost its new pending token"
 
-    after_view = helpers.core_update_view(vm)
-    update = after_view["update"]
-    started_apply = update is not None and update != before_update and update.get("trigger") == "apply"
-    marker_after = _pending_token(vm)
-    assert started_apply or (marker_after is not None and marker_after != marker_before), (
-        f"General save neither started a Core apply nor recorded pending work: {after_view}"
-    )
-
-    if started_apply:
-        if after_view["running"]:
-            after_view = helpers.await_core_update_end(vm, before=before_update, watchdog=UPDATE_WATCHDOG)
-        assert after_view["update"]["trigger"] == "apply", f"Core did not run the saved-settings apply: {after_view}"
-        update_log = helpers.core_update_log(vm)
-        assert UPDATE_START in update_log and UPDATE_END in update_log, (
-            f"Core's apply log is incomplete: {update_log[-2000:]!r}"
+        package_log_after = helpers.read_log_file(vm, helpers.PFB_LOG)
+        assert package_log_after.startswith(package_log_before), "package log rotated or truncated during General save"
+        package_log_window = package_log_after[len(package_log_before) :]
+        phase_count = package_log_window.count(APPLY_PHASE)
+        expected = 1 if core_available else 0
+        assert phase_count == expected, (
+            f"General save rules phases={phase_count}, expected {expected}; inline/duplicate pass:\n"
+            f"{package_log_window[-2000:]}"
         )
-        assert helpers.count_log_marker(vm, helpers.PFB_LOG, UPDATE_START) - start_lines_before == 1, (
-            "General save must not run a second PHP feed pass inline; the only pass start belongs to Core's apply"
-        )
-    else:
-        assert helpers.count_log_marker(vm, helpers.PFB_LOG, UPDATE_START) == start_lines_before, (
-            "a Core-unavailable save must not fall back to an inline PHP feed pass"
-        )
+        if not core_available:
+            assert _pending_token(vm) == marker_after, "unavailable save did not retain its pending token"
+    finally:
+        if not core_available:
+            restored = vm.ssh(CORE_RC, "start", timeout=60)
+            assert restored.returncode == 0, f"cannot restore Core after the unavailable scenario: {restored}"
+            await_core_up(vm)
+            print("ui_core_availability: Core restored after unavailable scenario", flush=True)

@@ -22314,6 +22314,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 	$top1m_provider = ($type === 'top1m') ? pfb_top1m_active_provider() : array();
 	global $pfb;
 	$http_status = '';
+	$elog = ">> {$pfb['log']} 2>&1";
 	$tar_bin = escapeshellarg($pfb['tar'] ?? '/usr/bin/tar');
 
 	// Remove any leading/trailing whitespace

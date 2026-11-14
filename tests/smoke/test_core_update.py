@@ -19,6 +19,7 @@ tests/smoke/test_smoke_tick.py and test_smoke_apply_on_change.py hold the Update
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -29,7 +30,7 @@ from typing import Any, NamedTuple
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM
+from .conftest import GUEST_TO_HOST_ALIAS, SmokeVM
 from .test_smoke_core_api import await_core_up
 
 pytestmark = pytest.mark.smoke
@@ -244,11 +245,32 @@ def _add_ip_custom_lists(vm: SmokeVM, custom: dict[str, tuple[str, str]]) -> Non
     assert result.returncode == 0 and "OK" in result.stdout, f"custom IP lists not written: {result.stdout}"
 
 
+def _prepare_mock_feeds(vm: SmokeVM, *, dnsbl: bool) -> None:
+    """Allow only the mock origin through the enabled SSRF guard; realize DNSBL's VIP when needed."""
+    h.set_feed_internal_allowlist(vm, GUEST_TO_HOST_ALIAS)
+    allowlist = h.config_get(vm, h.CFG_GLOBAL + "/pfb_feed_internal_allowlist")
+    assert base64.b64decode(allowlist).decode() == GUEST_TO_HOST_ALIAS, f"unexpected mock allowlist: {allowlist!r}"
+    guard = h.config_get(vm, h.CFG_GLOBAL + "/pfb_feed_internal_filter")
+    assert guard == "on", f"the mock fixture must keep the internal-address filter ON: {guard!r}"
+    if dnsbl:
+        h.ensure_dnsbl_vip(vm)
+        h.wait_unbound_ready(vm)
+
+
+def _assert_dnsbl_prerequisites(vm: SmokeVM) -> None:
+    state = h.fwobj_state_snapshot(vm)
+    assert state.startswith("mode=enabled "), f"DNSBL prerequisites are not effective: {state}"
+    assert h.config_get(vm, h.dns_config_path("pfb_dns")) == "on", f"pfB-DNS is not enabled: {state}"
+    vip = h.dnsvip4_address(vm)
+    assert vip == h.DEFAULT_DNSBL_VIP4 and h.vip_alias_live(vm, vip), f"DNSBL VIP is not effective: {vip!r}; {state}"
+
+
 def _configure_every_feed_type(vm: SmokeVM, mock_feeds: Any, tag: str) -> tuple[dict[str, str], tuple[str, ...]]:
     """One DNSBL, one IPv4 and one IPv6 group, each with a custom list, and the DNSBL-IP rows they feed.
 
     Returns ``({feed ID: its mock feed name}, the IDs with no feed of their own: custom groups and synthetic rows)``.
     """
+    _prepare_mock_feeds(vm, dnsbl=True)
     kinds = ("dnsbl", "v4", "v6")
     mock = {k: f"core_update_{tag}_{k}" for k in kinds}
     alias = {k: f"cu{tag}{k}" for k in kinds}
@@ -269,6 +291,7 @@ def _configure_every_feed_type(vm: SmokeVM, mock_feeds: Any, tag: str) -> tuple[
     ip6 = h.IpCase(aliasname=alias["v6"], header=alias["v6"], feed_url=urls["v6"], family="v6")
     h.inject_dnsbl_lists(vm, [(dnsbl, "Deny")])
     h.inject_ip_lists(vm, [ip4, ip6])
+    _assert_dnsbl_prerequisites(vm)
     _add_ip_custom_lists(
         vm,
         {
@@ -384,10 +407,12 @@ class _OneFeed(NamedTuple):
 
 def _arrange_one_feed(vm: SmokeVM, mock_feeds: Any, kind: str, tag: str) -> _OneFeed:
     """One enabled feed of ``kind`` (``ipv4`` or ``dnsbl``) served by the local server; Core told of it."""
+    _prepare_mock_feeds(vm, dnsbl=kind == "dnsbl")
     mock, header = f"core_update_{tag}", f"coreupd{tag}"
     if kind == "dnsbl":
         url = mock_feeds.register(mock, "ads.example.org\n")
         h.inject_dnsbl_lists(vm, [(h.DnsblCase(aliasname=header, header=header, feed_url=url), "Deny")])
+        _assert_dnsbl_prerequisites(vm)
         parsed = [f"{DB}/dnsblorig/{header}.parsed.{ext}" for ext in ("ndjson", "v4.ip", "v6.ip")]
         files = [f"{DB}/dnsblorig/{header}.orig", *parsed, f"{DB}/dnsbl/{header}.txt"]
         feed = _OneFeed(mock, f"dnsbl:{header}", "dnsbl", files, parsed[0], f"{DB}/dnsbl/{header}.fail")
