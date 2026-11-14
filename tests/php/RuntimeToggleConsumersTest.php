@@ -208,9 +208,9 @@ final class RuntimeToggleConsumersTest extends TestCase
 		} elseif (str_starts_with($field, 'autonot')) {
 			$this->assertSame($enabled ? 'on' : '', $result['anot' . $direction]);
 		} elseif (str_starts_with($field, 'autoports')) {
-			$this->assertSame($enabled ? 'ports' . $direction : NULL, $result['aports' . $direction] ?? NULL);
+			$this->assertSame($enabled ? 'ports' . $direction : '', $result['aports' . $direction]);
 		} else {
-			$this->assertSame($enabled ? 'address' . $direction : NULL, $result['aaddr' . $direction] ?? NULL);
+			$this->assertSame($enabled ? 'address' . $direction : '', $result['aaddr' . $direction]);
 		}
 	}
 

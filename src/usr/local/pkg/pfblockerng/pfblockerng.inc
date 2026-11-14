@@ -12866,6 +12866,7 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 			$pfbarr['anot' . $dir]		= $toggle_enabled('autonot' . $dir) ? 'on' : '';
 			$pfbarr['aaddrnot' . $dir]	= $toggle_enabled('autoaddrnot' . $dir) ? 'on' : '';
 			$pfbarr['agateway' . $dir]	= $conf_value('agateway' . $dir);
+			$pfbarr['aports' . $dir]	= $pfbarr['aaddr' . $dir] = '';	// no alias selected, or it is empty: no port/destination match
 
 			foreach ($autotype as $akey => $atype) {
 				if ($toggle_enabled($akey . $dir)) {
