@@ -11,14 +11,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 )
 
 var maxXLSXAddresses = 10_000_000
+const xlsxAddressChunk = 1 << 18
 
 var (
 	errInvalidETConfiguration = errors.New("invalid ET configuration")
@@ -266,20 +268,39 @@ func (f *Fetcher) xlsx(ctx context.Context, feed Feed, raw string) (string, erro
 	}
 	defer src.Close()
 	// shortcut: 10M distinct addresses, when a larger workbook must match PHP's disk-backed sort -u.
-	found := map[string]bool{}
-	if err := scanIPv4(&capReader{r: ctxReader{ctx, src}, left: limit}, func(ip string) error {
-		if _, exists := found[ip]; exists {
+	chunkValues := make([]uint32, 0, xlsxAddressChunk)
+	chunkWidths := make([]uint8, 0, xlsxAddressChunk)
+	var addresses []uint32
+	var addressWidths []uint8
+	flush := func() error {
+		if len(chunkValues) == 0 {
 			return nil
 		}
-		if len(found) >= maxXLSXAddresses {
-			return errTooManyXLSXAddresses
+		sort.Sort(xlsxAddressSlice{values: chunkValues, widths: chunkWidths})
+		n := compactXLSXAddresses(chunkValues, chunkWidths)
+		chunkValues, chunkWidths = chunkValues[:n], chunkWidths[:n]
+		var err error
+		addresses, addressWidths, err = mergeXLSXAddresses(addresses, addressWidths, chunkValues, chunkWidths, maxXLSXAddresses)
+		if err != nil {
+			return err
 		}
-		found[ip] = true
+		chunkValues, chunkWidths = chunkValues[:0], chunkWidths[:0]
+		return nil
+	}
+	if err := scanIPv4(&capReader{r: ctxReader{ctx, src}, left: limit}, func(value uint32, widths uint8) error {
+		chunkValues = append(chunkValues, value)
+		chunkWidths = append(chunkWidths, widths)
+		if len(chunkValues) == cap(chunkValues) {
+			return flush()
+		}
 		return nil
 	}); err != nil {
 		return "", err
 	}
-	if len(found) == 0 {
+	if err := flush(); err != nil {
+		return "", err
+	}
+	if len(addresses) == 0 {
 		return "", errors.New("no address in the shared strings")
 	}
 	out, err := os.CreateTemp(feed.Dir, ".pfbstage_")
@@ -287,8 +308,14 @@ func (f *Fetcher) xlsx(ctx context.Context, feed Feed, raw string) (string, erro
 		return "", err
 	}
 	w := bufio.NewWriter(out)
-	for _, ip := range slices.Sorted(maps.Keys(found)) {
-		w.WriteString(ip + "\n")
+	var line [15]byte
+	for i, address := range addresses {
+		if _, err := w.Write(appendXLSXAddress(line[:0], address, addressWidths[i])); err != nil {
+			return finishStaged(out, err)
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return finishStaged(out, err)
+		}
 	}
 	return finishStaged(out, w.Flush())
 }
@@ -297,28 +324,195 @@ func (f *Fetcher) xlsx(ctx context.Context, feed Feed, raw string) (string, erro
 // every address standing as a whole word (no letter, digit or underscore on either side), left to right, each after
 // the last. A match lies in a run of digits and dots, whose dots cut it into groups: four groups that are octets, the
 // first one starting the run or following a dot, the last one ending the run or followed by a dot.
-func scanIPv4(r io.Reader, found func(string) error) error {
-	br := bufio.NewReader(r)
-	var groups []string // the groups of the run since its start, its last match, or the last three
-	wordBefore := false // a word character precedes the first of groups
-	cur, long := make([]byte, 0, 3), false
-	flush := func(last, wordAfter bool) error {
-		g := string(cur)
-		if long {
-			g = "long" // past three digits: no octet
+type octetSpelling struct {
+	digits [3]byte
+	width  uint8
+}
+
+type ipv4Group struct {
+	value  uint16
+	digits uint8
+}
+
+// Width codes preserve grep's exact octet spelling while the address values stay in uint32 slices.
+type xlsxAddressSlice struct {
+	values []uint32
+	widths []uint8
+}
+
+func (s xlsxAddressSlice) Len() int { return len(s.values) }
+
+func (s xlsxAddressSlice) Less(i, j int) bool {
+	return compareXLSXAddress(s.values[i], s.widths[i], s.values[j], s.widths[j]) < 0
+}
+
+func (s xlsxAddressSlice) Swap(i, j int) {
+	s.values[i], s.values[j] = s.values[j], s.values[i]
+	s.widths[i], s.widths[j] = s.widths[j], s.widths[i]
+}
+
+var xlsxOctetSpellings = makeXLSXOctetSpellings()
+
+func makeXLSXOctetSpellings() [256][3]octetSpelling {
+	var table [256][3]octetSpelling
+	for value := range table {
+		var digits [3]byte
+		text := strconv.AppendUint(digits[:0], uint64(value), 10)
+		for width := len(text); width <= 3; width++ {
+			spelling := &table[value][width-1]
+			spelling.width = uint8(width)
+			padding := width - len(text)
+			for i := 0; i < padding; i++ {
+				spelling.digits[i] = '0'
+			}
+			copy(spelling.digits[padding:width], text)
 		}
-		cur, long = cur[:0], false
-		groups = append(groups, g)
-		if len(groups) < 4 {
+	}
+	return table
+}
+
+func compareXLSXAddress(a uint32, aWidths uint8, b uint32, bWidths uint8) int {
+	for group := 0; group < 4; group++ {
+		shift := uint(24 - 8*group)
+		left := xlsxOctetSpellings[byte(a>>shift)][(aWidths>>uint(2*group))&3]
+		right := xlsxOctetSpellings[byte(b>>shift)][(bWidths>>uint(2*group))&3]
+		limit := left.width
+		if right.width < limit {
+			limit = right.width
+		}
+		for i := uint8(0); i < limit; i++ {
+			if left.digits[i] < right.digits[i] {
+				return -1
+			}
+			if left.digits[i] > right.digits[i] {
+				return 1
+			}
+		}
+		if left.width < right.width {
+			return -1
+		}
+		if left.width > right.width {
+			return 1
+		}
+	}
+	return 0
+}
+
+func appendXLSXAddress(dst []byte, value uint32, widths uint8) []byte {
+	for group := 0; group < 4; group++ {
+		if group > 0 {
+			dst = append(dst, '.')
+		}
+		shift := uint(24 - 8*group)
+		spelling := xlsxOctetSpellings[byte(value>>shift)][(widths>>uint(2*group))&3]
+		dst = append(dst, spelling.digits[:spelling.width]...)
+	}
+	return dst
+}
+
+func compactXLSXAddresses(values []uint32, widths []uint8) int {
+	if len(values) == 0 {
+		return 0
+	}
+	write := 0
+	for read := 1; read < len(values); read++ {
+		if compareXLSXAddress(values[write], widths[write], values[read], widths[read]) != 0 {
+			write++
+			values[write], widths[write] = values[read], widths[read]
+		}
+	}
+	return write + 1
+}
+
+func mergeXLSXAddresses(values []uint32, widths []uint8, chunkValues []uint32, chunkWidths []uint8, limit int) ([]uint32, []uint8, error) {
+	oldLen, total := len(values), len(values)+len(chunkValues)
+	if cap(values) < total {
+		grown := make([]uint32, oldLen, total)
+		copy(grown, values)
+		values = grown
+	}
+	if cap(widths) < total {
+		grown := make([]uint8, oldLen, total)
+		copy(grown, widths)
+		widths = grown
+	}
+	values, widths = values[:total], widths[:total]
+	i, j, k, written := oldLen-1, len(chunkValues)-1, total-1, 0
+	for i >= 0 || j >= 0 {
+		var value uint32
+		var width uint8
+		switch {
+		case i < 0:
+			value, width = chunkValues[j], chunkWidths[j]
+			j--
+		case j < 0:
+			value, width = values[i], widths[i]
+			i--
+		default:
+			switch cmp := compareXLSXAddress(values[i], widths[i], chunkValues[j], chunkWidths[j]); {
+			case cmp > 0:
+				value, width = values[i], widths[i]
+				i--
+			case cmp < 0:
+				value, width = chunkValues[j], chunkWidths[j]
+				j--
+			default:
+				value, width = values[i], widths[i]
+				i--
+				j--
+			}
+		}
+		if written >= limit {
+			return nil, nil, errTooManyXLSXAddresses
+		}
+		values[k], widths[k] = value, width
+		k--
+		written++
+	}
+	start := k + 1
+	copy(values[:written], values[start:total])
+	copy(widths[:written], widths[start:total])
+	return values[:written], widths[:written], nil
+}
+
+func scanIPv4(r io.Reader, found func(uint32, uint8) error) error {
+	br := bufio.NewReader(r)
+	var groups [4]ipv4Group
+	groupCount := 0
+	wordBefore := false // a word character precedes the first of groups
+	var cur [3]byte
+	curLen, long := 0, false
+	flush := func(last, wordAfter bool) error {
+		group := ipv4Group{value: 256}
+		if !long && curLen > 0 {
+			value := uint16(0)
+			for _, digit := range cur[:curLen] {
+				value = value*10 + uint16(digit-'0')
+			}
+			if curLen < 3 || value <= 255 {
+				group = ipv4Group{value: value, digits: uint8(curLen)}
+			}
+		}
+		curLen, long = 0, false
+		groups[groupCount] = group
+		groupCount++
+		if groupCount < 4 {
 			return nil
 		}
-		if !wordBefore && !(last && wordAfter) && octet(groups[0]) && octet(groups[1]) && octet(groups[2]) && octet(groups[3]) {
-			if err := found(strings.Join(groups, ".")); err != nil {
+		if !wordBefore && !(last && wordAfter) &&
+			groups[0].value < 256 && groups[1].value < 256 && groups[2].value < 256 && groups[3].value < 256 {
+			value := uint32(groups[0].value)<<24 | uint32(groups[1].value)<<16 | uint32(groups[2].value)<<8 | uint32(groups[3].value)
+			widths := groups[0].digits - 1 |
+				(groups[1].digits-1)<<2 |
+				(groups[2].digits-1)<<4 |
+				(groups[3].digits-1)<<6
+			if err := found(value, widths); err != nil {
 				return err
 			}
-			groups = groups[:0]
+			groupCount = 0
 		} else {
-			groups = groups[1:]
+			copy(groups[:3], groups[1:])
+			groupCount = 3
 		}
 		wordBefore = false // what comes next follows a dot
 		return nil
@@ -341,16 +535,17 @@ func scanIPv4(r io.Reader, found func(string) error) error {
 		switch {
 		case c >= '0' && c <= '9' || c == '.':
 			if !inRun {
-				inRun, wordBefore, groups = true, word(prev), groups[:0]
+				inRun, wordBefore, groupCount = true, word(prev), 0
 			}
 			if c == '.' {
 				if err := flush(false, false); err != nil {
 					return err
 				}
-			} else if len(cur) == 3 {
+			} else if curLen == len(cur) {
 				long = true
 			} else {
-				cur = append(cur, c)
+				cur[curLen] = c
+				curLen++
 			}
 		case inRun:
 			if err := flush(true, word(c)); err != nil {
@@ -363,14 +558,3 @@ func scanIPv4(r io.Reader, found func(string) error) error {
 }
 
 func word(c byte) bool { return c == '_' || c >= '0' && c <= '9' || c|0x20 >= 'a' && c|0x20 <= 'z' }
-
-// octet is (25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?) as a whole group.
-func octet(g string) bool {
-	switch len(g) {
-	case 1, 2:
-		return true
-	case 3:
-		return g[0] == '0' || g[0] == '1' || g[0] == '2' && (g[1] < '5' || g[1] == '5' && g[2] <= '5')
-	}
-	return false
-}
