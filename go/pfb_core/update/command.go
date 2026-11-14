@@ -84,11 +84,25 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	if err != nil {
 		return Result{}, fmt.Errorf("the update supervisor cannot be found: %w", err)
 	}
+	// The supervisor writes a byte to fd 4 once the program has exited, before it exits itself: between the two only the byte
+	// tells Core the program is done (issue #4003)
+	ended, endedW, err := os.Pipe()
+	if err != nil {
+		return Result{}, err
+	}
+	defer ended.Close()
+	endedFd := int(ended.Fd()) // Fd makes it blocking: programEnded must never wait
+	if err := syscall.SetNonblock(endedFd, true); err != nil {
+		_ = endedW.Close()
+		return Result{}, err
+	}
 	cmd := exec.Command(self, superviseArg, c.Path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
-	cmd.ExtraFiles = []*os.File{fd3}
+	cmd.ExtraFiles = []*os.File{fd3, endedW}
 	cmd.SysProcAttr = procAttr()
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	_ = endedW.Close()
+	if err != nil {
 		return Result{}, err
 	}
 	exited, killed := make(chan struct{}), make(chan bool, 1)
@@ -98,7 +112,7 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 			killed <- false
 		case <-ctx.Done():
 			pid := cmd.Process.Pid
-			if leaderExited(pid) {
+			if leaderExited(pid) || programEnded(endedFd) {
 				killed <- false // the program has exited, reaped or not: what it left running is not Run's to kill
 				return
 			}
@@ -138,6 +152,13 @@ func scratch(dir, pattern string) (*os.File, func(), error) {
 		return nil, nil, err
 	}
 	return f, func() { _ = f.Close(); _ = os.Remove(f.Name()) }, nil
+}
+
+// programEnded reports whether the supervisor has written that the program exited, without waiting for it: ended is the pipe's
+// read end, made non-blocking, so an empty one is EAGAIN.
+func programEnded(ended int) bool {
+	n, _ := syscall.Read(ended, make([]byte, 1))
+	return n == 1
 }
 
 // groupGone reports whether the process group has no member within grace, polling every 10 ms (docs/misc/external-process-waits.md).

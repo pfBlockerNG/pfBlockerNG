@@ -12,7 +12,8 @@ import (
 // superviseArg, then the program's path, makes the binary that links this package (pfb-core, or this package's test binary)
 // the Update's supervisor (issue #4003). Command.Run starts it in a process group of its own, tied to Core by the
 // parent-death signal (procAttr); it runs the program in that same group, passing stdin, stdout, stderr and fd 3 through,
-// and exits as the program did. It holds nothing else: no settings, store, socket or log.
+// writes a byte to fd 4 once the program has exited, and exits as the program did. It holds nothing else: no settings, store,
+// socket or log.
 const superviseArg = "--update-supervise"
 
 // coreDied is the parent-death signal the supervisor gets when Core dies. Core itself only ever sends the group TERM and KILL.
@@ -34,6 +35,8 @@ func supervise(path string) int {
 	// Core's TERM to the group is for the program: the supervisor stays to report how it ends. A caught signal is reset to its
 	// default in the program (exec), unlike an ignored one.
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
+	ended := os.NewFile(4, "ended")
+	syscall.CloseOnExec(4) // Core's alone: the program and what it starts never hold it
 	cmd := exec.Command(path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.ExtraFiles = []*os.File{os.NewFile(3, "result")}
@@ -48,6 +51,8 @@ func supervise(path string) int {
 	for {
 		select {
 		case <-exited:
+			// Before the supervisor's own exit: Core must not take the window between the two for a running program
+			_, _ = ended.Write([]byte{1})
 			if sig != 0 { // the same end as the program's: Core reads the signal from the supervisor's status
 				dieBy(sig)
 				return 128 + int(sig) // a signal that cannot end a process (SIGSTOP and the like)
