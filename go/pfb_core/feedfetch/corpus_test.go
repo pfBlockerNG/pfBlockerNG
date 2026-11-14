@@ -122,6 +122,7 @@ type expect struct {
 	Published     *string             `json:"published"`
 	ETag          json.RawMessage     `json:"etag"`
 	LastMod       json.RawMessage     `json:"lastmod"`
+	Size          json.RawMessage     `json:"size"`
 	Digest        json.RawMessage     `json:"digest"`
 	Requests      []map[string]string `json:"requests"`
 	Mtime         *int64              `json:"mtime"`
@@ -185,6 +186,7 @@ type scenario struct {
 		Published *string `json:"published"`
 		ETag      *string `json:"etag"`
 		LastMod   *int64  `json:"lastmod"`
+		Size      *int64  `json:"size"`
 		Digest    *string `json:"digest"`
 	} `json:"seed"`
 	LocalFiles    map[string]string `json:"local_files"`
@@ -435,7 +437,7 @@ func runScenario(t *testing.T, file string) {
 	const name = "FEED"
 	feed := feedfetch.Feed{Dir: dir, Name: name}
 	orig := filepath.Join(dir, name+".orig")
-	var prevETag, prevLastMod, prevDigest any
+	var prevETag, prevLastMod, prevDigest, prevSize any
 	if sc.Seed != nil {
 		if sc.Seed.Published != nil {
 			os.WriteFile(orig, []byte(*sc.Seed.Published), 0o600)
@@ -447,6 +449,10 @@ func runScenario(t *testing.T, file string) {
 		if sc.Seed.LastMod != nil {
 			os.WriteFile(orig+".lastmod", []byte(strconv.FormatInt(*sc.Seed.LastMod, 10)), 0o600)
 			prevLastMod = float64(*sc.Seed.LastMod)
+		}
+		if sc.Seed.Size != nil {
+			os.WriteFile(orig+".size", []byte(strconv.FormatInt(*sc.Seed.Size, 10)), 0o600)
+			prevSize = float64(*sc.Seed.Size)
 		}
 		if sc.Seed.Digest != nil {
 			os.WriteFile(orig+".xxhash128", []byte(*sc.Seed.Digest), 0o600)
@@ -568,6 +574,14 @@ func runScenario(t *testing.T, file string) {
 		}
 		want["etag"] = rawOr(exp.ETag, prevETag)
 		want["lastmod"] = rawOr(exp.LastMod, prevLastMod)
+		actualSize := any(nil)
+		if size := readOrNil(orig + ".size"); size != nil {
+			n, _ := strconv.ParseInt(size.(string), 10, 64)
+			actualSize = float64(n)
+		}
+		if exp.Size != nil {
+			got["size"], want["size"] = actualSize, rawOr(exp.Size, prevSize)
+		}
 		got["digest"], want["digest"] = readOrNil(orig+".xxhash128"), rawOr(exp.Digest, prevDigest)
 		gotReq := reqLog.read(t)
 		wantReq := []map[string]string{}
@@ -618,7 +632,7 @@ func runScenario(t *testing.T, file string) {
 			wj, _ := json.MarshalIndent(want, "", " ")
 			t.Fatalf("%s\nwant %s\n got %s\n(result %+v)", label, wj[:min(len(wj), readCap)], gj[:min(len(gj), readCap)], res)
 		}
-		prevETag, prevLastMod, prevDigest = got["etag"], got["lastmod"], got["digest"]
+	prevETag, prevLastMod, prevDigest, prevSize = got["etag"], got["lastmod"], got["digest"], actualSize
 	}
 }
 
@@ -683,7 +697,7 @@ func stagedLeftover(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	keep := map[string]bool{}
-	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.xxhash128", ".probe", ".probe.etag", ".probe.lastmod", ".raw"} {
+	for _, s := range []string{".orig", ".orig.etag", ".orig.lastmod", ".orig.size", ".orig.xxhash128", ".probe", ".probe.etag", ".probe.lastmod", ".probe.size", ".raw"} {
 		keep[name+s] = true
 	}
 	for _, e := range entries {

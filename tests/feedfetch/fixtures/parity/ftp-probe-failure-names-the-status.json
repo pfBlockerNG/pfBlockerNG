@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "A failed probe names its refusal: an ftp probe ends 226, which only 200 and 304 decide, so Core says why in pfb_download()'s words (\"226 IM Used\", from its status table); PHP's log carries no reason= code.",
+ "description": "Without an FTP metadata baseline, the probe falls back to a content hash and recognizes identical bytes; PHP still fails its FTP probe.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -33,44 +33,19 @@
    "op": "probe",
    "url": "ftp://feed.example:{port:ftp}/list.txt",
    "expect": {
-    "ok": false,
-    "decision": "failed",
+    "ok": true,
+    "decision": "unchanged",
     "published": "feed one\n",
     "requests": [
-     {
-      "server": "ftp",
-      "command": "USER anonymous"
-     },
-     {
-      "server": "ftp",
-      "command": "PASS ftp@example.com"
-     },
-     {
-      "server": "ftp",
-      "command": "MDTM list.txt"
-     },
-     {
-      "server": "ftp",
-      "command": "EPSV"
-     },
-     {
-      "server": "ftp",
-      "command": "TYPE I"
-     },
-     {
-      "server": "ftp",
-      "command": "SIZE list.txt"
-     },
-     {
-      "server": "ftp",
-      "command": "RETR list.txt"
-     },
-     {
-      "server": "ftp",
-      "data_to": "127.0.0.1"
-     }
-    ],
-    "reason": "226 IM Used"
+     {"server": "ftp", "command": "USER anonymous"},
+     {"server": "ftp", "command": "PASS ftp@example.com"},
+     {"server": "ftp", "command": "MDTM list.txt"},
+     {"server": "ftp", "command": "TYPE I"},
+     {"server": "ftp", "command": "SIZE list.txt"},
+     {"server": "ftp", "command": "EPSV"},
+     {"server": "ftp", "command": "RETR list.txt"},
+     {"server": "ftp", "data_to": "127.0.0.1"}
+    ]
    },
    "old_expect": {
     "ok": false,

@@ -132,9 +132,18 @@ func ftpDecode(s string) (string, bool) {
 // the control connection is pinned to the vetted address, the data connection goes to that same address whatever the
 // server names, and the transfer gets three attempts with the body reset between them.
 func (f *Fetcher) fetchFTP(ctx context.Context, src *source, req Request, dst string) transfer {
+	t, _ := f.fetchFTPMode(ctx, src, req, dst, nil)
+	return t
+}
+
+func (f *Fetcher) fetchFTPProbe(ctx context.Context, src *source, req Request, dst string, baseline ftpMetadata) (transfer, bool) {
+	return f.fetchFTPMode(ctx, src, req, dst, &baseline)
+}
+
+func (f *Fetcher) fetchFTPMode(ctx context.Context, src *source, req Request, dst string, baseline *ftpMetadata) (transfer, bool) {
 	out, err := os.Create(dst)
 	if err != nil {
-		return transfer{reason: "download file could not be created"}
+		return transfer{reason: "download file could not be created"}, false
 	}
 	defer out.Close()
 
@@ -142,7 +151,7 @@ func (f *Fetcher) fetchFTP(ctx context.Context, src *source, req Request, dst st
 	if !f.NoFilter {
 		var reason string
 		if pin, _, reason = f.vet(ctx, src.host); reason != "" {
-			return transfer{reason: reason}
+			return transfer{reason: reason}, false
 		}
 	}
 	host := src.host
@@ -152,15 +161,15 @@ func (f *Fetcher) fetchFTP(ctx context.Context, src *source, req Request, dst st
 	addr := net.JoinHostPort(host, strconv.Itoa(src.port))
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if err := out.Truncate(0); err != nil {
-			return transfer{reason: "download file could not be reset"}
+			return transfer{reason: "download file could not be reset"}, false
 		}
 		out.Seek(0, io.SeekStart)
-		t, err := ftpAttempt(ctx, req, src.ftp, addr, out)
+		t, err := ftpAttempt(ctx, req, src.ftp, addr, out, baseline)
 		if err == nil {
-			return t
+			return t, t.unchanged
 		}
 		if errors.Is(err, errTooLarge) {
-			return transfer{reason: "download_too_large"}
+			return transfer{reason: "download_too_large"}, false
 		}
 		if attempt < attempts {
 			select {
@@ -169,7 +178,7 @@ func (f *Fetcher) fetchFTP(ctx context.Context, src *source, req Request, dst st
 			}
 		}
 	}
-	return transfer{reason: "curl_incomplete"}
+	return transfer{reason: "curl_incomplete"}, false
 }
 
 // replyLimit lets a reply take at most maxReply bytes from the connection.
@@ -187,9 +196,9 @@ func (l *replyLimit) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// ftpAttempt makes one transfer in the command order libcurl uses: USER, PASS, CWD per directory, MDTM, EPSV (PASV when
-// refused), TYPE I, SIZE, RETR. The whole attempt is bound by the request's timeout and its context.
-func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out *os.File) (transfer, error) {
+// ftpAttempt logs in, reads MDTM and SIZE, and either returns a metadata match or retrieves the body. Ingest opens EPSV
+// before TYPE/SIZE; Probe checks metadata first and opens EPSV only when it needs RETR. Each attempt has the request timeout.
+func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out *os.File, baseline *ftpMetadata) (transfer, error) {
 	ctx, cancel := context.WithTimeout(ctx, req.timeout())
 	defer cancel()
 	dialer := &net.Dialer{Timeout: connectTimeout}
@@ -258,22 +267,38 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 		}
 	}
 
-	dataPort, err := passive(cmd)
-	if err != nil {
-		return transfer{}, err
+	dataPort := 0
+	if baseline == nil {
+		dataPort, err = passive(cmd)
+		if err != nil {
+			return transfer{}, err
+		}
 	}
 	code, msg, err = cmd("TYPE I")
 	if err := fail(code, msg, err, code/100 == 2); err != nil {
 		return transfer{}, err
 	}
-	size := int64(-1)
 	code, msg, err = cmd("SIZE %s", t.file)
+	if err != nil {
+		return transfer{}, err
+	}
 	if err := fail(code, msg, err, code != 550); err != nil {
 		return transfer{}, err
 	}
-	// A SIZE of 0 is no size, as libcurl takes it: the body is read to its end.
-	if n, perr := strconv.ParseInt(strings.TrimSpace(msg), 10, 64); code == 213 && perr == nil && n > 0 {
-		size = n
+	size, hasSize := int64(-1), false
+	if n, perr := strconv.ParseInt(strings.TrimSpace(msg), 10, 64); code == 213 && perr == nil && n >= 0 {
+		size, hasSize = n, true
+	}
+	if baseline != nil && baseline.hasTime && baseline.hasSize && !lastMod.IsZero() && hasSize &&
+		lastMod.Equal(baseline.lastMod) && size == baseline.size {
+		c.PrintfLine("QUIT")
+		return transfer{status: 226, lastMod: lastMod, size: size, hasSize: true, unchanged: true}, nil
+	}
+	if baseline != nil {
+		dataPort, err = passive(cmd)
+		if err != nil {
+			return transfer{}, err
+		}
 	}
 	limit := req.maxBytes()
 	if size > limit {
@@ -291,14 +316,14 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 		return transfer{}, err
 	}
 	want := limit + 1 // libcurl stops at the SIZE it was told, and has no other bound than the ceiling
-	if size >= 0 {
+	if size > 0 {
 		want = size
 	}
 	n, err := io.Copy(out, io.LimitReader(data, want))
-	if size < 0 && n > limit {
+	if size <= 0 && n > limit {
 		return transfer{}, errTooLarge
 	}
-	if err == nil && n < size {
+	if err == nil && size > 0 && n < size {
 		err = io.ErrUnexpectedEOF
 	}
 	if err != nil {
@@ -310,7 +335,7 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 		return transfer{}, err
 	}
 	c.PrintfLine("QUIT")
-	return transfer{status: code, lastMod: lastMod}, nil
+	return transfer{status: code, lastMod: lastMod, size: size, hasSize: hasSize}, nil
 }
 
 // passive opens the data port the way libcurl does, EPSV first and PASV when that is refused or names port 0, and

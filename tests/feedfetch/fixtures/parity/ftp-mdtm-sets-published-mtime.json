@@ -67,7 +67,27 @@
       "data_to": "127.0.0.1"
      }
     ],
-    "mtime": 1700000000
+    "mtime": 1700000000,
+    "lastmod": 1700000000,
+    "size": 16
+   },
+   "old_expect": {
+    "ok": true,
+    "published": "1.2.3.4\n5.6.7.8\n",
+    "digest": "3a37adf6991862f9608d33aceb0fbd96",
+    "lastmod": null,
+    "size": null,
+    "mtime": 1700000000,
+    "requests": [
+     {"server": "ftp", "command": "USER anonymous"},
+     {"server": "ftp", "command": "PASS ftp@example.com"},
+     {"server": "ftp", "command": "MDTM list.txt"},
+     {"server": "ftp", "command": "EPSV"},
+     {"server": "ftp", "command": "TYPE I"},
+     {"server": "ftp", "command": "SIZE list.txt"},
+     {"server": "ftp", "command": "RETR list.txt"},
+     {"server": "ftp", "data_to": "127.0.0.1"}
+    ]
    }
   }
  ]

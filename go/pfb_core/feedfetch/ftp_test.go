@@ -167,6 +167,21 @@ func TestAnFTPFeedIsFetchedFromTheStub(t *testing.T) {
 		t.Fatalf("the stub's file must be published with the 226 that ended the transfer: %+v, published %q", res, published(t, feed))
 	}
 }
+func TestFailedIngestDropsFTPSizeSidecar(t *testing.T) {
+	stub := newFTPStub(t, func(c net.Conn) { io.WriteString(c, "500 refused\r\n") })
+	f, feed := quickFetcher(t)
+	if err := os.WriteFile(filepath.Join(feed.Dir, feed.Name+".orig.size"), []byte("5"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := f.Ingest(context.Background(), feed, ftpFeed(stub, "/list.txt"))
+	if res.OK {
+		t.Fatalf("failed FTP ingest unexpectedly succeeded: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(feed.Dir, feed.Name+".orig.size")); !os.IsNotExist(err) {
+		t.Fatalf("failed ingest must drop the SIZE baseline, stat error %v", err)
+	}
+}
+
 
 // Both connections of a transfer leave from the source address the Outpost configured (CURLOPT_INTERFACE covers the
 // data connection too).
@@ -201,20 +216,25 @@ func TestAnFTPHostThatTurnsPrivateAfterTheEntryGateIsRefusedAtTransferTime(t *te
 	// "localhost" resolves for the system too, so a transfer that skipped its own vet would reach the stub.
 	req := ftpFeed(stub, "/list.txt")
 	req.URL = strings.Replace(req.URL, "feed.example", "localhost", 1)
-	entry := entryLookups(t, req)
-
-	stable, stableFeed := quickFetcher(t)
-	if res := stable.Ingest(context.Background(), stableFeed, req); !res.OK || stub.hits.Load() != 1 {
-		t.Fatalf("with a stable answer the feed must be fetched: %+v, %d connections", res, stub.hits.Load())
+	entry := entryLookups(t, req) - 1 // the calibration FTP probe also re-vets at transfer time
+	entryHits := stub.hits.Load()
+	if entryHits != 1 {
+		t.Fatalf("a probe without a published baseline must RETR once, got %d connections", entryHits)
 	}
 
+	stable, stableFeed := quickFetcher(t)
+	if res := stable.Ingest(context.Background(), stableFeed, req); !res.OK || stub.hits.Load() != entryHits+1 {
+		t.Fatalf("with a stable answer the feed must be fetched: %+v, %d connections after %d from the entry probe", res, stub.hits.Load(), entryHits)
+	}
+
+	before := stub.hits.Load()
 	f, feed := quickFetcher(t)
 	os.WriteFile(filepath.Join(feed.Dir, "FEED.orig"), []byte("old\n"), 0o600)
 	asked := rebindAfter(f, entry)
 	res := f.Ingest(context.Background(), feed, req)
-	if res.OK || res.Reason != nonPermitted || stub.hits.Load() != 1 || published(t, feed) != "old\n" || asked.Load() <= entry {
-		t.Fatalf("a rebound host must be refused at transfer time: %+v, %d connections in all (1 before), published %q, %d lookups (%d at entry)",
-			res, stub.hits.Load(), published(t, feed), asked.Load(), entry)
+	if res.OK || res.Reason != nonPermitted || stub.hits.Load() != before || published(t, feed) != "old\n" || asked.Load() <= entry {
+		t.Fatalf("a rebound host must be refused at transfer time: %+v, %d connections in all (no new connection after %d), published %q, %d lookups (%d at entry)",
+			res, stub.hits.Load(), before, published(t, feed), asked.Load(), entry)
 	}
 }
 
