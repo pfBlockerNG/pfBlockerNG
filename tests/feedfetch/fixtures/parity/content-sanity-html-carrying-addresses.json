@@ -1,0 +1,46 @@
+{
+ "schema": 1,
+ "description": "ADR-49, sanity on: an HTML page that carries an address is a feed, and is published as served.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "sanity": true,
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "<html><body><table>\n<tr><td>192.0.2.10</td></tr>\n</table></body></html>\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "<html><body><table>\n<tr><td>192.0.2.10</td></tr>\n</table></body></html>\n",
+    "digest": "45f7f9313e04c469405c0e121e635db0",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000
+   }
+  }
+ ]
+}

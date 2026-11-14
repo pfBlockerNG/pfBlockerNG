@@ -1,0 +1,45 @@
+{
+ "schema": 1,
+ "description": "A UTF-32LE body is published as UTF-8: its mark FF FE 00 00 is UTF-32LE's before it is UTF-16LE's.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "//4AADIAAAAwAAAAMwAAAC4AAAAwAAAALgAAADEAAAAxAAAAMwAAAC4AAAA3AAAACgAAAA=="
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "203.0.113.7\n",
+    "digest": "b25dc1a926013dd6d85f043880202694",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000
+   }
+  }
+ ]
+}

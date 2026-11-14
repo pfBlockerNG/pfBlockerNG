@@ -1,0 +1,107 @@
+[
+ {
+  "name": "no mark is left as it is",
+  "in_b64": "MS4yLjMuNAr/",
+  "out_b64": "MS4yLjMuNAr/"
+ },
+ {
+  "name": "utf-16le",
+  "in_b64": "//5hAOkACgA=",
+  "out_b64": "YcOpCg=="
+ },
+ {
+  "name": "utf-16be",
+  "in_b64": "/v8AYQDpAAo=",
+  "out_b64": "YcOpCg=="
+ },
+ {
+  "name": "utf-16le surrogate pair",
+  "in_b64": "//492ADe",
+  "out_b64": "8J+YgA=="
+ },
+ {
+  "name": "utf-16le lone high surrogate",
+  "in_b64": "//4A2EEA",
+  "out_b64": "P0E="
+ },
+ {
+  "name": "utf-16le high surrogate twice",
+  "in_b64": "//4A2D3YAN5BAA==",
+  "out_b64": "P/CfmIBB"
+ },
+ {
+  "name": "utf-16le lone low surrogate",
+  "in_b64": "//4A3EEA",
+  "out_b64": "P0E="
+ },
+ {
+  "name": "utf-16le high surrogate last",
+  "in_b64": "//5BAADY",
+  "out_b64": "QT8="
+ },
+ {
+  "name": "utf-16le high surrogate and a cut unit",
+  "in_b64": "//4A2Hg=",
+  "out_b64": "Pz8="
+ },
+ {
+  "name": "utf-16le cut unit",
+  "in_b64": "//4xAC4ACg==",
+  "out_b64": "MS4/"
+ },
+ {
+  "name": "utf-16le nul",
+  "in_b64": "//5BAAAA",
+  "out_b64": "QQA="
+ },
+ {
+  "name": "utf-16le second mark kept",
+  "in_b64": "//7//kEA",
+  "out_b64": "77u/QQ=="
+ },
+ {
+  "name": "utf-16le noncharacter",
+  "in_b64": "//7+/w==",
+  "out_b64": "77++"
+ },
+ {
+  "name": "utf-32le",
+  "in_b64": "//4AADEAAAAKAAAA",
+  "out_b64": "MQo="
+ },
+ {
+  "name": "utf-32be",
+  "in_b64": "AAD+/wAAADEAAAAK",
+  "out_b64": "MQo="
+ },
+ {
+  "name": "utf-32le past u+10ffff",
+  "in_b64": "//4AAAAAEQBBAAAA",
+  "out_b64": "P0E="
+ },
+ {
+  "name": "utf-32le u+10ffff",
+  "in_b64": "//4AAP//EAA=",
+  "out_b64": "9I+/vw=="
+ },
+ {
+  "name": "utf-32le surrogate",
+  "in_b64": "//4AAADYAAA=",
+  "out_b64": "Pw=="
+ },
+ {
+  "name": "utf-32le cut unit",
+  "in_b64": "//4AADEAAAAKAAA=",
+  "out_b64": "MT8="
+ },
+ {
+  "name": "utf-32be past every plane",
+  "in_b64": "AAD+//////9B",
+  "out_b64": "Pz8="
+ },
+ {
+  "name": "only a mark",
+  "in_b64": "//4=",
+  "out_b64": ""
+ }
+]

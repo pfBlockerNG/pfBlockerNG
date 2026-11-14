@@ -159,6 +159,9 @@ final class FeedFetchParityCorpusTest extends TestCase
 		if (($case['filter'] ?? TRUE) === FALSE) {
 			PfbConfig::write('gen/pfb_feed_internal_filter', PfbToggle::Off);
 		}
+		if (($case['sanity'] ?? FALSE) === TRUE) {
+			PfbConfig::write('gen/pfb_feed_sanity', PfbToggle::On);
+		}
 		if (isset($case['allowlist'])) {
 			PfbConfig::write('gen/pfb_feed_internal_allowlist', base64_encode(implode("\n", $case['allowlist'])));
 		}

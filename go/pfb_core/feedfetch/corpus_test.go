@@ -11,6 +11,7 @@ package feedfetch_test
 //	hosts        {name: [addresses]}: the resolver used for vetting and self-hosted classification (a name that is not
 //	             listed fails the run). With the filter off, connections resolve names through the system resolver.
 //	filter       optional, default true: the feed-host internal-address filter.
+//	sanity       optional, default false: the opt-in plain-text sanity scan (ADR-49, gen/pfb_feed_sanity).
 //	allowlist    optional [IP or CIDR]: internal-address exemptions.
 //	self         optional [IP]: the box's own configured addresses (127.0.0.1 and ::1 always are).
 //	servers      optional [server]: HTTP servers on 127.0.0.1; "{port:<name>}" expands to a server's port and
@@ -162,6 +163,7 @@ type scenario struct {
 	Description string              `json:"description"`
 	Hosts       map[string][]string `json:"hosts"`
 	Filter      *bool               `json:"filter"`
+	Sanity      bool                `json:"sanity"`
 	Allowlist   []string            `json:"allowlist"`
 	Self        []string            `json:"self"`
 	Servers     []serverSpec        `json:"servers"`
@@ -460,6 +462,7 @@ func runScenario(t *testing.T, file string) {
 		Proxy:      systemProxy,
 		RsyncBin:   filepath.Join(tools, "rsync"),
 		RetryDelay: time.Millisecond, // the PHP side runs with curl_retry_sleep 0
+		Sanity:     sc.Sanity,
 	}
 	if pki != nil {
 		f.RootCAs = pki.pool

@@ -1,0 +1,46 @@
+{
+ "schema": 1,
+ "description": "A gzip whose payload is UTF-16LE is extracted, then transcoded; the digest is of the gzip and the staged archive stays.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ]
+ },
+ "servers": [
+  "origin"
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000,
+  "digest": "21e62d6e4f1f39eeea112c60392ff825"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body_b64": "H4sIAAAAAAAC//v/z5BBj8EIiI2B2ISBi8EUSJsBsTkQWwD5ANhg06YiAAAA"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://feed.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "1.2.3.4\n5.6.7.8\n",
+    "digest": "948e795f662e03f7f50a04e0542f8b00",
+    "requests": [
+     {
+      "server": "origin",
+      "path": "/list"
+     }
+    ],
+    "etag": "\"v0\"",
+    "lastmod": 1700000000,
+    "raw_retained": true
+   }
+  }
+ ]
+}
