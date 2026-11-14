@@ -177,9 +177,9 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 			],
 			'categoryUpdates' => TRUE, 'categoryFrequency' => 'EveryDay',
 			'categoryProviders' => [
-				['id' => 'ut1', 'selected' => TRUE, 'categories' => 'adult'],
-				['id' => 'ut2', 'selected' => TRUE, 'categories' => 'phishing'],
-				['id' => 'ut3', 'selected' => FALSE, 'categories' => ''],
+				['id' => 'ut1', 'title' => 'UT1', 'selected' => TRUE, 'categories' => 'adult'],
+				['id' => 'ut2', 'title' => 'UT2', 'selected' => TRUE, 'categories' => 'phishing'],
+				['id' => 'ut3', 'title' => 'UT3', 'selected' => FALSE, 'categories' => ''],
 			],
 		], $read['settings']['schedule'], 'the Shallalist provider is not projected');
 		foreach ([['weekday', 4], ['scheduledUpdates', FALSE], ['categoryFrequency', 'Weekly']] as [$field, $value]) {
@@ -647,7 +647,7 @@ final class CoreSettingsScheduleBackendTest extends TestCase
 		$current = $this->read()['settings']['schedule'];
 		$value = $current;
 		$value['groups'][] = ['id' => 'ipv4/OnlyInCurrent', 'override' => FALSE, 'weekday' => 7, 'hour' => 0, 'minute' => 0];
-		$value['categoryProviders'][] = ['id' => 'only', 'selected' => FALSE, 'categories' => ''];
+		$value['categoryProviders'][] = ['id' => 'only', 'title' => 'Only', 'selected' => FALSE, 'categories' => ''];
 		$known = $current;
 		$known['groups'][] = $value['groups'][4];
 		$known['categoryProviders'][] = $value['categoryProviders'][3];

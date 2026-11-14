@@ -4622,6 +4622,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$feedFlags .= ' --feed-orig-dir ' . escapeshellarg(rtrim($pfb['origdir'], '/'));
 	$feedFlags .= ' --dnsbl-orig-dir ' . escapeshellarg(rtrim($pfb['dnsorigdir'], '/'));
 	$feedDbDir = realpath($pfb['dbdir']);
+	$feedFlags .= ' --feed-blacklist-dir ' . escapeshellarg($feedDbDir === FALSE ? rtrim($pfb['dbdir'], '/') : $feedDbDir);
 	$feedFlags .= ' --feed-db-dir ' . escapeshellarg($feedDbDir === FALSE ? rtrim($pfb['dbdir'], '/') : $feedDbDir);
 	$feedFlags .= ' --feed-geoip-dir ' . escapeshellarg(rtrim($pfb['ccdir'], '/'));
 	$feedFlags .= ' --feed-asn-csv ' . escapeshellarg(rtrim($pfb['geoipshare'], '/') . '/asn.csv');
@@ -5606,7 +5607,7 @@ function pfb_core_schedule_group_slots(mixed $section): array {
  * or holds a comma, that is Shallalist, has no feed, has categories outside [A-Za-z0-9_,.-], or repeats an id before it, is left out.
  *
  * @param array<mixed> $blacklist
- * @return array<int, array{id: string, selected: bool, categories: string}>
+ * @return array<int, array{id: string, title: string, selected: bool, categories: string}>
  */
 function pfb_core_schedule_providers(array $blacklist): array {
 	$csv = $blacklist['blacklist_selected'] ?? NULL;
@@ -5614,11 +5615,12 @@ function pfb_core_schedule_providers(array $blacklist): array {
 	$providers = $ids = [];
 	foreach (is_array($blacklist['item'] ?? NULL) ? $blacklist['item'] : [] as $n => $item) {
 		$id = is_array($item) ? ($item['xml'] ?? NULL) : NULL;
+		$title = is_array($item) ? ($item['title'] ?? NULL) : NULL;
 		$categories = is_array($item) ? ($item['selected'] ?? '') : NULL;
-		if (pfb_blacklist_identity_valid($id) && !str_contains($id, ',') && ($item['title'] ?? NULL) !== 'Shallalist' && is_string($item['feed'] ?? NULL)
+		if (pfb_blacklist_identity_valid($id) && !str_contains($id, ',') && $title !== 'Shallalist' && is_string($title) && is_string($item['feed'] ?? NULL)
 		    && $item['feed'] !== '' && is_string($categories) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $categories) === 1
 		    && !isset($ids[$id])) {
-			$providers[$n] = ['id' => $id, 'selected' => isset($chosen[$id]), 'categories' => $categories];
+			$providers[$n] = ['id' => $id, 'title' => $title, 'selected' => isset($chosen[$id]), 'categories' => $categories];
 			$ids[$id] = TRUE;
 		}
 	}
@@ -5684,11 +5686,12 @@ function pfb_core_schedule_faults(mixed $value, array $current): array {
 	$id = static fn(string $pattern): callable => static fn(mixed $v): ?string => is_string($v) && preg_match($pattern, $v) === 1 && $v !== '0' ? NULL : 'not a valid id';
 	$items = [
 		'groups'            => ['id' => $id('/^(?:ipv4|ipv6|dnsbl)\/[A-Za-z0-9_]+$/D'), 'override' => $bool] + $slot,
-		'categoryProviders' => ['id' => $id('/^[A-Za-z0-9_-]+$/D'), 'selected' => $bool,
+		'categoryProviders' => ['id' => $id('/^[A-Za-z0-9_-]+$/D'), 'title' => static fn(mixed $v): ?string => is_string($v) ? NULL : 'not a string', 'selected' => $bool,
 			'categories' => static fn(mixed $v): ?string => is_string($v) && preg_match('/^[A-Za-z0-9_,.-]*$/D', $v) === 1 ? NULL : 'holds a character outside A-Z a-z 0-9 _ , . -'],
 	];
 	foreach ($items as $field => $fields) {
 		$known = array_flip(array_column($current[$field], 'id'));
+		$currentById = array_column($current[$field], NULL, 'id');
 		$seen = [];
 		foreach (is_array($value[$field] ?? NULL) && array_is_list($value[$field]) ? $value[$field] : [] as $i => $item) {
 			$prefix = "schedule.{$field}[{$i}]";
@@ -5703,6 +5706,10 @@ function pfb_core_schedule_faults(mixed $value, array $current): array {
 				$faults[] = ['field' => "{$prefix}.id", 'message' => 'config.xml holds no such ' . ($field === 'groups' ? 'group' : 'provider') . ': Core cannot create one here'];
 			}
 			$seen[$item['id']] = TRUE;
+			if ($field === 'categoryProviders' && isset($currentById[$item['id']]) && array_key_exists('title', $item)
+			    && $item['title'] !== $currentById[$item['id']]['title']) {
+				$faults[] = ['field' => "{$prefix}.title", 'message' => 'read-only'];
+			}
 		}
 	}
 	return $faults;

@@ -352,7 +352,7 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}
 
-	/** @param list<string> $dirs @return list<string> Core's local-source, original, database, script, rsync and user-agent flags */
+	/** @param list<string> $dirs @return list<string> Core's local-source, original, blacklist, database, script, rsync and user-agent flags */
 	private function feedFlags(array $dirs = self::LOCAL_DIRS, string $userAgent = self::USER_AGENT): array
 	{
 		$flags = [];
@@ -365,6 +365,7 @@ final class PfbCoreServiceTest extends TestCase
 		return [...$flags,
 			'--feed-orig-dir', $GLOBALS['pfb']['origdir'],
 			'--dnsbl-orig-dir', $GLOBALS['pfb']['dnsorigdir'],
+			'--feed-blacklist-dir', (string) (realpath($GLOBALS['pfb']['dbdir']) ?: rtrim($GLOBALS['pfb']['dbdir'], '/')),
 			'--feed-db-dir', (string) (realpath($GLOBALS['pfb']['dbdir']) ?: rtrim($GLOBALS['pfb']['dbdir'], '/')),
 			'--feed-geoip-dir', $GLOBALS['pfb']['ccdir'],
 			'--feed-asn-csv', $GLOBALS['pfb']['geoipshare'] . '/asn.csv',

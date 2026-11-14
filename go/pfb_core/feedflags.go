@@ -14,6 +14,7 @@ type feedFlags struct {
 	ScriptDirs   []string // --script-dir, repeatable, in search order
 	OrigDir      string   // --feed-orig-dir: IPv4 and IPv6 feed baselines and parsed artifacts
 	DNSBLOrigDir string   // --dnsbl-orig-dir: DNSBL feed baselines and parsed artifacts
+	BlacklistDir string   // --feed-blacklist-dir: downloaded category sources
 	DBDir        string   // --feed-db-dir: the package database folder used by synthetic DNSBLIP feeds
 	GeoIPDir     string   // --feed-geoip-dir: local GeoIP country feed sources
 	ASNCSV       string   // --feed-asn-csv: IPinfo ASN ranges used by `asn` feeds
@@ -54,6 +55,7 @@ func addFeedFlags(fl *flag.FlagSet) *feedFlags {
 	repeated("script-dir", "a folder of list scripts, searched in the order given (repeatable)", &ff.ScriptDirs)
 	single("feed-orig-dir", "the IPv4 and IPv6 feed baselines", &ff.OrigDir)
 	single("dnsbl-orig-dir", "the DNSBL feed baselines", &ff.DNSBLOrigDir)
+	single("feed-blacklist-dir", "the Blacklist database directory", &ff.BlacklistDir)
 	single("feed-db-dir", "the package database directory", &ff.DBDir)
 	single("feed-geoip-dir", "the local GeoIP country-feed directory", &ff.GeoIPDir)
 	single("feed-asn-csv", "the local IPinfo ASN ranges file", &ff.ASNCSV)

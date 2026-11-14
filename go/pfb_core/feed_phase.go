@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -59,9 +60,10 @@ func newFeedPhaseRunner(store *settings.Store, flags feedFlags) *feedPhaseRunner
 }
 
 type feedPhaseID struct {
-	kind, header string
-	custom       bool
-	synthetic    bool
+	kind, header       string
+	provider, category string
+	custom             bool
+	synthetic          bool
 }
 
 func validFeedPhaseToken(token string) bool {
@@ -98,6 +100,11 @@ func parseFeedPhaseID(id string) (feedPhaseID, error) {
 		if validFeedWord(value) {
 			return feedPhaseID{kind: family, header: value}, nil
 		}
+	case "blacklist":
+		provider, category, ok := strings.Cut(value, ":")
+		if ok && !strings.Contains(category, ":") && validBlacklistPart(provider, false) && validBlacklistPart(category, true) {
+			return feedPhaseID{kind: "dnsbl", provider: provider, category: category}, nil
+		}
 	case "ipv4", "ipv6":
 		suffix := "_v4"
 		if family == "ipv6" {
@@ -120,6 +127,20 @@ func parseFeedPhaseID(id string) (feedPhaseID, error) {
 	return feedPhaseID{}, errors.New("invalid feed id")
 }
 
+func validBlacklistPart(value string, category bool) bool {
+	if value == "" || value == "." || value == ".." {
+		return false
+	}
+	for i := range value {
+		c := value[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+			(category && c == '.') {
+			continue
+		}
+		return false
+	}
+	return true
+}
 func validFeedWord(value string) bool {
 	if value == "" {
 		return false
@@ -163,6 +184,9 @@ func (p *feedPhaseRunner) run(ctx context.Context, phase string, ids []string, f
 			return nil, errors.New("invalid feed id")
 		}
 		projectionID := "feeds/" + parsed.kind
+		if parsed.provider != "" {
+			projectionID = "schedule"
+		}
 		projection, ok := projections[projectionID]
 		if !ok && !parsed.synthetic {
 			projection, err = p.store.GetClear(projectionID)
@@ -171,12 +195,25 @@ func (p *feedPhaseRunner) run(ctx context.Context, phase string, ids []string, f
 			}
 			projections[projectionID] = projection
 		}
-		spec, found := p.feedFor(parsed, id, projection, ingest)
+		var spec phaseFeed
+		var found bool
 		var result FeedPhaseResult
-		if !found {
-			result = failedFeed(id, "settings", "feed_not_found")
+		if parsed.provider != "" {
+			spec, found = p.blacklistFeedFor(parsed, id, projection)
+			if !found {
+				result = failedFeed(id, "settings", "unknown_category")
+			} else if p.flags.BlacklistDir == "" {
+				result = failedFeed(id, "settings", "feed_directory_missing")
+			} else {
+				result = p.runFeed(ctx, spec, force, fetcher, ingest, log)
+			}
 		} else {
-			result = p.runFeed(ctx, spec, force, fetcher, ingest, log)
+			spec, found = p.feedFor(parsed, id, projection, ingest)
+			if !found {
+				result = failedFeed(id, "settings", "feed_not_found")
+			} else {
+				result = p.runFeed(ctx, spec, force, fetcher, ingest, log)
+			}
 		}
 		if log != nil {
 			_, _ = fmt.Fprintf(log, "feed %s: %s\n", result.ID, result.Disposition)
@@ -224,7 +261,7 @@ func (p *feedPhaseRunner) fetcherFor(ingest map[string]any) (*feedfetch.Fetcher,
 
 type phaseFeed struct {
 	id, kind, name, header                    string
-	state, format, source                     string
+	state, format, source, localDir           string
 	credentials, bindAddress, preScript       string
 	groupAction, customText                   string
 	custom, synthetic, disabled, whoisConvert bool
@@ -273,6 +310,24 @@ func (p *feedPhaseRunner) feedFor(parsed feedPhaseID, id string, projection, ing
 				disabled:        stringSetting(group, "action") == "Disabled" || stringSetting(row, "state") == "disabled",
 				suppressionCidr: intSetting(group, "suppressionCidr"),
 			}, true
+		}
+	}
+	return phaseFeed{}, false
+}
+func (p *feedPhaseRunner) blacklistFeedFor(parsed feedPhaseID, id string, schedule map[string]any) (phaseFeed, bool) {
+	for _, provider := range listSetting(schedule, "categoryProviders") {
+		if stringSetting(provider, "id") != parsed.provider {
+			continue
+		}
+		for _, category := range strings.Split(stringSetting(provider, "categories"), ",") {
+			if category != parsed.category {
+				continue
+			}
+			sourceCategory := strings.ReplaceAll(parsed.category, "-", "_")
+			directory := filepath.Join(p.flags.BlacklistDir, parsed.provider)
+			header := stringSetting(provider, "title") + "_" + sourceCategory
+			return phaseFeed{id: id, kind: "dnsbl", name: header, header: header, state: "enabled", format: "auto",
+				source: fileFeedURL(filepath.Join(directory, parsed.provider+"_"+sourceCategory)), localDir: directory}, true
 		}
 	}
 	return phaseFeed{}, false

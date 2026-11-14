@@ -124,8 +124,20 @@ func TestFeedPhaseProbeReuseAndForceModes(t *testing.T) {
 	if got := call("parse"); got.Disposition != "reparsed" || requests.Load() != 2 {
 		t.Fatalf("parse force = %+v after %d HTTP requests, want reparsed without a request", got, requests.Load())
 	}
+	for suffix, body := range map[string]string{
+		".probe": "stale.example\n", ".probe.etag": `"stale"`, ".probe.lastmod": "yesterday", ".probe.size": "12",
+	} {
+		if err := os.WriteFile(filepath.Join(runner.flags.OrigDir, "feed_v4"+suffix), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if got := call("download"); got.Disposition != "changed" || requests.Load() != 3 || conditional.Load() != 1 {
 		t.Fatalf("download force = %+v after %d requests (%d conditional), want one unconditional fetch", got, requests.Load(), conditional.Load())
+	}
+	for _, suffix := range []string{".probe", ".probe.etag", ".probe.lastmod", ".probe.size"} {
+		if _, err := os.Stat(filepath.Join(runner.flags.OrigDir, "feed_v4"+suffix)); !os.IsNotExist(err) {
+			t.Errorf("forced download left %s: %v", suffix, err)
+		}
 	}
 	if got := call("both"); got.Disposition != "changed" || requests.Load() != 4 || conditional.Load() != 1 {
 		t.Fatalf("both force = %+v after %d requests (%d conditional), want one unconditional fetch", got, requests.Load(), conditional.Load())
