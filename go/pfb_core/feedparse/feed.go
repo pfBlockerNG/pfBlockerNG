@@ -162,6 +162,41 @@ type DNSBLFeed struct {
 
 var errFeedEnd = errors.New("end of feed")
 
+func canonicalDNSBLPrefix(ip string) (netip.Prefix, bool) {
+	if strings.IndexByte(ip, '/') >= 0 {
+		prefix, err := netip.ParsePrefix(ip)
+		if err != nil || prefix.Addr().Zone() != "" {
+			return netip.Prefix{}, false
+		}
+		var buf [64]byte
+		if !sameBytesString(prefix.AppendTo(buf[:0]), ip) {
+			return netip.Prefix{}, false
+		}
+		return prefix, true
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Zone() != "" {
+		return netip.Prefix{}, false
+	}
+	var buf [64]byte
+	if !sameBytesString(addr.AppendTo(buf[:0]), ip) {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(addr, addr.BitLen()), true
+}
+
+func sameBytesString(b []byte, s string) bool {
+	if len(b) != len(s) {
+		return false
+	}
+	for i := range b {
+		if s[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // ParseDNSBLFeed is pfb_dnsbl_parse_feed() and the IP de-duplication after it, over the whole feed r: every row goes to out as
 // an NDJSON line (pfb_dnsbl_ndjson_emit_row()), the hpHosts end marker ends the feed, and the parser's notices and the
 // parse-error records go to the sink as they come. A line over 1 MiB is skipped and recorded as a parse failure. A feed that cannot
@@ -175,42 +210,31 @@ func ParseDNSBLFeed(r io.Reader, cfg DNSBLConfig, out io.Writer, sink Sink) (DNS
 	p := NewDNSBLParser(cfg)
 	seen4 := make(map[[5]byte]struct{})
 	seen6 := make(map[[17]byte]struct{})
-	seenZone := make(map[netip.Prefix]struct{})
+	seenStr := make(map[string]struct{})
 	w := bufio.NewWriter(out)
 	emit := newRowEncoder(w)
 	lineNo := 0
-	// Compact keys keep array_unique()'s first-seen order without retaining address strings in the index.
-	collect := func(dst *[]string, ips []string) error {
+	// Compact keys keep canonical addresses small; non-canonical forms retain PHP's exact-string identity.
+	collect := func(dst *[]string, ips []string) {
 		for _, ip := range ips {
-			var prefix netip.Prefix
-			var err error
-			if strings.IndexByte(ip, '/') >= 0 {
-				prefix, err = netip.ParsePrefix(ip)
-			} else {
-				var addr netip.Addr
-				addr, err = netip.ParseAddr(ip)
-				if err == nil {
-					prefix = netip.PrefixFrom(addr, addr.BitLen())
-				}
-			}
-			if err != nil {
-				return err
-			}
-			addr := prefix.Addr()
-			switch {
-			case addr.Zone() != "":
-				if _, exists := seenZone[prefix]; exists {
+			prefix, canonical := canonicalDNSBLPrefix(ip)
+			if !canonical {
+				if _, exists := seenStr[ip]; exists {
 					continue
 				}
-				seenZone[prefix] = struct{}{}
-			case addr.Is4():
+				seenStr[ip] = struct{}{}
+				*dst = append(*dst, ip)
+				continue
+			}
+			addr := prefix.Addr()
+			if addr.Is4() {
 				bytes := addr.As4()
 				key := [5]byte{byte(prefix.Bits()), bytes[0], bytes[1], bytes[2], bytes[3]}
 				if _, exists := seen4[key]; exists {
 					continue
 				}
 				seen4[key] = struct{}{}
-			default:
+			} else {
 				bytes := addr.As16()
 				key := [17]byte{byte(prefix.Bits())}
 				copy(key[1:], bytes[:])
@@ -221,7 +245,6 @@ func ParseDNSBLFeed(r io.Reader, cfg DNSBLConfig, out io.Writer, sink Sink) (DNS
 			}
 			*dst = append(*dst, ip)
 		}
-		return nil
 	}
 	err := eachLine(r, func(line string, overlong, _ bool) error {
 		lineNo++
@@ -240,12 +263,8 @@ func ParseDNSBLFeed(r io.Reader, cfg DNSBLConfig, out io.Writer, sink Sink) (DNS
 		for _, f := range l.Fail {
 			sink.fail(FailRecord{LineNo: lineNo, Line: f, Raw: rawLine(line)})
 		}
-		if err := collect(&feed.IP4, l.IP4); err != nil {
-			return err
-		}
-		if err := collect(&feed.IP6, l.IP6); err != nil {
-			return err
-		}
+		collect(&feed.IP4, l.IP4)
+		collect(&feed.IP6, l.IP6)
 		feed.UpdateIP = feed.UpdateIP || len(l.IP4) > 0 || len(l.IP6) > 0
 		feed.SchemeSkipped += l.SchemeSkipped
 		for _, row := range l.Rows {
