@@ -33,7 +33,6 @@ func NormalizeFile(dir, name string) NormResult {
 	srcBase := filepath.Join(dir, name+".norm.src")
 	fallback := NormResult{Path: orig, Changed: true}
 
-
 	srcDigest, err := digest.File(orig)
 	if err != nil {
 		return fallback
@@ -67,7 +66,7 @@ func NormalizeFile(dir, name string) NormResult {
 	}
 	srcDigest = hex.EncodeToString(sourceHash.Sum(nil))
 	var werr error
-	if cerr := tmp.Chmod(0o644); werr == nil { // CreateTemp makes 0600
+	if cerr := tmp.Chmod(0o644); werr == nil { // The named temp starts at 0600.
 		werr = cerr
 	}
 	if serr := tmp.Sync(); werr == nil { // the .norm survives a power loss whole, not as an empty file behind a fresh sidecar

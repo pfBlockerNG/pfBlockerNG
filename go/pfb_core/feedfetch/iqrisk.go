@@ -321,10 +321,6 @@ func (f *Fetcher) xlsx(ctx context.Context, feed Feed, raw string) (string, erro
 	return finishStaged(out, w.Flush())
 }
 
-// scanIPv4 is `grep -aoEw` with processxlsx()'s pattern, (25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?) four times over dots:
-// every address standing as a whole word (no letter, digit or underscore on either side), left to right, each after
-// the last. A match lies in a run of digits and dots, whose dots cut it into groups: four groups that are octets, the
-// first one starting the run or following a dot, the last one ending the run or followed by a dot.
 type octetSpelling struct {
 	digits [3]byte
 	width  uint8
@@ -476,6 +472,10 @@ func mergeXLSXAddresses(values []uint32, widths []uint8, chunkValues []uint32, c
 	return values[:written], widths[:written], nil
 }
 
+// scanIPv4 is `grep -aoEw` with processxlsx()'s pattern, (25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?) four times over dots:
+// every address standing as a whole word (no letter, digit or underscore on either side), left to right, each after
+// the last. A match lies in a run of digits and dots, whose dots cut it into groups: four groups that are octets, the
+// first one starting the run or following a dot, the last one ending the run or followed by a dot.
 func scanIPv4(r io.Reader, found func(uint32, uint8) error) error {
 	br := bufio.NewReader(r)
 	var groups [4]ipv4Group

@@ -201,7 +201,7 @@ func sameBytesString(b []byte, s string) bool {
 // an NDJSON line (pfb_dnsbl_ndjson_emit_row()), the hpHosts end marker ends the feed, and the parser's notices and the
 // parse-error records go to the sink as they come. A line over 1 MiB is skipped and recorded as a parse failure. A feed that cannot
 // be read to its end or written whole is an error, and what out received until then is partial.
-
+//
 // The notices are those the old path logs from its line parser: an IP literal decoded, an IDN converted and a /0 CIDR clamped to
 // its single host. Its ABP IPv4 regex expansion has a fourth, for a thrown Throwable that only its test seam can raise; Core's
 // expansion cannot throw, so has none.
