@@ -115,15 +115,18 @@ func (c *cancelAtCheckContext) Err() error {
 }
 
 func TestXLSXCopyAndScanAnswerToTheirContext(t *testing.T) {
-	body := xlsxWithSharedStrings(t, "no addresses here")
 	for _, tc := range []struct {
 		name string
 		at   int
-	}{{"copy", 1}, {"scan", 2}} {
+		body []byte
+	}{
+		{"copy", 1, zipMembers(t, zipMember{"list.xlsx", zipMembers(t, zipMember{"xl/workbook.xml", []byte("x")})})},
+		{"scan", 2, xlsxWithSharedStrings(t, "no addresses here")},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			raw := filepath.Join(dir, "raw.zip")
-			if err := os.WriteFile(raw, body, 0o600); err != nil {
+			if err := os.WriteFile(raw, tc.body, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			base, cancel := context.WithCancel(context.Background())

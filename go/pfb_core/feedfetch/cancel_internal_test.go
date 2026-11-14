@@ -135,7 +135,7 @@ func TestEveryStructuralProbeEndsWithAContextAlreadyDone(t *testing.T) {
 func TestCompressedInnerProbeStopsWithItsContext(t *testing.T) {
 	var body bytes.Buffer
 	zw := gzip.NewWriter(&body)
-	if _, err := zw.Write([]byte("plain text\n")); err != nil {
+	if _, err := zw.Write([]byte{0}); err != nil {
 		t.Fatal(err)
 	}
 	if err := zw.Close(); err != nil {
