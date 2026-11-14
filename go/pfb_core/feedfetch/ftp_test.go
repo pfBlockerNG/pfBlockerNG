@@ -182,7 +182,6 @@ func TestFailedIngestDropsFTPSizeSidecar(t *testing.T) {
 	}
 }
 
-
 // Both connections of a transfer leave from the source address the Outpost configured (CURLOPT_INTERFACE covers the
 // data connection too).
 func TestTheFTPConnectionsLeaveFromTheBindAddress(t *testing.T) {
