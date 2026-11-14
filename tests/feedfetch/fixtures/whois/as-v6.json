@@ -1,0 +1,20 @@
+{
+ "schema": 1,
+ "description": "Row 6: the same AS on an IPv6 list keeps only the IPv6 range.",
+ "vtype": "_v6",
+ "list": "AS64500",
+ "hosts": {},
+ "asn_csv": "start_ip,end_ip,asn,name,domain\n203.0.113.64,203.0.113.127,AS64500,ExampleNet,example.net\n2001:db8::,2001:db8::ffff,AS64500,ExampleNet,example.net\n198.51.100.0,198.51.100.255,AS645001,PrefixNet,prefix.net\n198.51.100.0,198.51.100.63,AS6450,ShortNet,short.net\n203.0.113.200,203.0.113.255,AS64500,ExampleNet,example.net\n2001:db8:1::,2001:db8:1::ffff,AS64501,V6OnlyNet,v6only.net\n203.0.113.0,203.0.113.255,AS1,OneNet,one.net\n",
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "2001:db8::-2001:db8::ffff\n",
+  "found": true,
+  "fail": false,
+  "lookups": [],
+  "error_log": [],
+  "log": "\n  Collecting ASN: AS64500",
+  "log_includes": [
+   "  Collecting ASN: AS64500"
+  ]
+ }
+}

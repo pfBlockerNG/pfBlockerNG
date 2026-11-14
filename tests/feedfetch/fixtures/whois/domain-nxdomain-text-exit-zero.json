@@ -1,0 +1,24 @@
+{
+ "schema": 1,
+ "description": "Row 15: failure text on a lookup that exits 0 is never data; only 'has address' lines are kept.",
+ "vtype": "_v4",
+ "list": "nx.example",
+ "hosts": {
+  "nx.example": "nxdomain-exit0"
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "198.51.100.7\n",
+  "found": false,
+  "fail": true,
+  "lookups": [
+   "A nx.example"
+  ],
+  "error_log": [],
+  "log": "\n  Collecting host IP: nx.example... Failed to resolve host [ nx.example ]... Restoring previous data\n",
+  "log_includes": [
+   "Failed to resolve host [ nx.example ]",
+   "... Restoring previous data"
+  ]
+ }
+}

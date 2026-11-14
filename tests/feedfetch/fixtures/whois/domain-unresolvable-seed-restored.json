@@ -1,0 +1,24 @@
+{
+ "schema": 1,
+ "description": "Row 4: an unresolvable domain keeps the previous copy and leaves the failure marker.",
+ "vtype": "_v4",
+ "list": "nx.example",
+ "hosts": {
+  "nx.example": "nxdomain"
+ },
+ "seed": "203.0.113.9\n",
+ "expect": {
+  "orig": "203.0.113.9\n",
+  "found": false,
+  "fail": true,
+  "lookups": [
+   "A nx.example"
+  ],
+  "error_log": [],
+  "log": "\n  Collecting host IP: nx.example... Failed to resolve host [ nx.example ]... Restoring previous data\n",
+  "log_includes": [
+   "Failed to resolve host [ nx.example ]",
+   "... Restoring previous data"
+  ]
+ }
+}

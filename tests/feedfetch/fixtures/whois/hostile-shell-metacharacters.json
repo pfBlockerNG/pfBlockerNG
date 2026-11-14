@@ -1,0 +1,44 @@
+{
+ "schema": 1,
+ "description": "Hostile: shell metacharacters in a domain are looked up and written literally; nothing is executed or expanded.",
+ "vtype": "_v4",
+ "list": "$(touch pwned).example,`touch pwned`.example,a;touch pwned.example,a|b.example,a&b.example,*.example,a'b.example,a\"b.example,a b.example,a%s.example,$HOME.example",
+ "hosts": {
+  "$(touch pwned).example": [
+   "203.0.113.9"
+  ],
+  "`touch pwned`.example": "nxdomain",
+  "a;touch pwned.example": "nxdomain",
+  "a|b.example": "nxdomain",
+  "a&b.example": "nxdomain",
+  "*.example": "nxdomain",
+  "a'b.example": "nxdomain",
+  "a\"b.example": "nxdomain",
+  "a b.example": [
+   "203.0.113.10"
+  ],
+  "a%s.example": "nxdomain",
+  "$HOME.example": "nxdomain"
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: $(touch pwned).example ###\n203.0.113.9\n### Domain: a b.example ###\n203.0.113.10\n",
+  "found": true,
+  "fail": true,
+  "lookups": [
+   "A $(touch pwned).example",
+   "A `touch pwned`.example",
+   "A a;touch pwned.example",
+   "A a|b.example",
+   "A a&b.example",
+   "A *.example",
+   "A a'b.example",
+   "A a\"b.example",
+   "A a b.example",
+   "A a%s.example",
+   "A $HOME.example"
+  ],
+  "error_log": [],
+  "log": "\n  Collecting host IP: $(touch pwned).example... completed\n  Collecting host IP: `touch pwned`.example... Failed to resolve host [ `touch pwned`.example ]  Collecting host IP: a;touch pwned.example... Failed to resolve host [ a;touch pwned.example ]  Collecting host IP: a|b.example... Failed to resolve host [ a|b.example ]  Collecting host IP: a&b.example... Failed to resolve host [ a&b.example ]  Collecting host IP: *.example... Failed to resolve host [ *.example ]  Collecting host IP: a'b.example... Failed to resolve host [ a'b.example ]  Collecting host IP: a\"b.example... Failed to resolve host [ a\"b.example ]  Collecting host IP: a b.example... completed\n  Collecting host IP: a%s.example... Failed to resolve host [ a%s.example ]  Collecting host IP: $HOME.example... Failed to resolve host [ $HOME.example ]"
+ }
+}

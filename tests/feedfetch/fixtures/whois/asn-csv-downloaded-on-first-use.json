@@ -1,0 +1,21 @@
+{
+ "schema": 1,
+ "description": "Row 10: the first-use download makes asn.csv; the entry that asked and the next one both resolve from it (one download).",
+ "vtype": "_v6",
+ "list": "AS64500,AS64501",
+ "hosts": {},
+ "asn_csv_after_download": "start_ip,end_ip,asn,name,domain\n203.0.113.64,203.0.113.127,AS64500,ExampleNet,example.net\n2001:db8::,2001:db8::ffff,AS64500,ExampleNet,example.net\n198.51.100.0,198.51.100.255,AS645001,PrefixNet,prefix.net\n198.51.100.0,198.51.100.63,AS6450,ShortNet,short.net\n203.0.113.200,203.0.113.255,AS64500,ExampleNet,example.net\n2001:db8:1::,2001:db8:1::ffff,AS64501,V6OnlyNet,v6only.net\n203.0.113.0,203.0.113.255,AS1,OneNet,one.net\n",
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "2001:db8::-2001:db8::ffff\n2001:db8:1::-2001:db8:1::ffff\n",
+  "found": true,
+  "fail": false,
+  "lookups": [],
+  "downloads": 1,
+  "error_log": [],
+  "log": "\nDownloading [ IPinfo databases ] [ {now} ]... completed  Collecting ASN: AS64500  Collecting ASN: AS64501",
+  "log_includes": [
+   "Downloading [ IPinfo databases ]"
+  ]
+ }
+}

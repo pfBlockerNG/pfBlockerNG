@@ -5,6 +5,9 @@
 // A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", its validators ".orig.etag" and
 // ".orig.lastmod", the xxh128 of the raw bytes it was published from ".orig.xxhash128", a changed probe's body ".probe"
 // (the next ingest publishes it instead of fetching again), and the staged body ".raw", which never outlives a call.
+//
+// A whois or asn feed has no body to fetch: Whois resolves its Domain/AS list (the translation of whoisconvert(), #3974)
+// into the published copy "<name>.orig", and leaves "<name>.fail" when an entry failed or the batch ran out of time.
 package feedfetch
 
 import (
@@ -46,6 +49,12 @@ type Fetcher struct {
 	RootCAs    *x509.CertPool // nil: the system roots
 	RsyncBin   string         // the rsync executable
 	RetryDelay time.Duration  // pause between attempts; zero is pfb_download()'s 5 s
+
+	// Whois only.
+	Lookup    func(ctx context.Context, network, host string) ([]netip.Addr, error) // one family's addresses ("ip4" or "ip6"); nil is the system resolver
+	Now       func() time.Time                                                      // the batch clock; nil is time.Now
+	ASNCSV    string                                                                // the IPinfo asn.csv the AS entries are read from
+	EnsureASN func(ctx context.Context)                                             // the first-use asn.csv download; nil leaves a missing file missing
 }
 
 // Request is one feed's source as the Outpost translated it.

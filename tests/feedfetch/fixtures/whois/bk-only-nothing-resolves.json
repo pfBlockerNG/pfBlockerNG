@@ -1,0 +1,23 @@
+{
+ "schema": 1,
+ "description": "A backup left by an interrupted run is restored when there is no copy and nothing resolves.",
+ "vtype": "_v4",
+ "list": "nx.example",
+ "hosts": {
+  "nx.example": "nxdomain"
+ },
+ "seed_bk": "203.0.113.10\n",
+ "expect": {
+  "orig": "203.0.113.10\n",
+  "found": false,
+  "fail": true,
+  "lookups": [
+   "A nx.example"
+  ],
+  "error_log": [],
+  "log": "\n  Collecting host IP: nx.example... Failed to resolve host [ nx.example ]... Restoring previous data\n",
+  "log_includes": [
+   "... Restoring previous data"
+  ]
+ }
+}

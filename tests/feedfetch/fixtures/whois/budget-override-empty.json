@@ -1,0 +1,27 @@
+{
+ "schema": 1,
+ "description": "Row 14: whoisbatchtimeout '' (empty) is ignored: the lookup keeps the 30 s cap of the 1800 s default.",
+ "vtype": "_v4",
+ "list": "ok.example",
+ "whoisbatchtimeout": "",
+ "hosts": {
+  "ok.example": [
+   "203.0.113.5"
+  ]
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: ok.example ###\n203.0.113.5\n",
+  "found": true,
+  "fail": false,
+  "lookups": [
+   "A ok.example"
+  ],
+  "first_lookup_timeout": [
+   30,
+   30
+  ],
+  "error_log": [],
+  "log": "\n  Collecting host IP: ok.example... completed\n"
+ }
+}

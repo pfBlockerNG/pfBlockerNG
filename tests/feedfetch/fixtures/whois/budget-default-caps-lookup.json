@@ -1,0 +1,26 @@
+{
+ "schema": 1,
+ "description": "Row 14: with no override each lookup is capped at 30 s.",
+ "vtype": "_v4",
+ "list": "ok.example",
+ "hosts": {
+  "ok.example": [
+   "203.0.113.5"
+  ]
+ },
+ "seed": "198.51.100.7\n",
+ "expect": {
+  "orig": "### Domain: ok.example ###\n203.0.113.5\n",
+  "found": true,
+  "fail": false,
+  "lookups": [
+   "A ok.example"
+  ],
+  "first_lookup_timeout": [
+   30,
+   30
+  ],
+  "error_log": [],
+  "log": "\n  Collecting host IP: ok.example... completed\n"
+ }
+}
