@@ -195,9 +195,13 @@ final class TriggerAdaptersTest extends TestCase
 
 	public function testCronDeprecationWarningNamesItsCoreReplacementAndCliHelp(): void
 	{
-		$this->assertSame(
+		$this->assertSame('', pfb_verb_deprecation_warning('cron'));
+
+		$cli = file_get_contents(__DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php');
+		$this->assertIsString($cli);
+		$this->assertStringContainsString(
 			"DEPRECATED: pfblockerng verb 'cron' — use explicit request (pfb_trigger scope=both force=false trigger=cron); removal scheduled",
-			pfb_verb_deprecation_warning('cron')
+			$cli
 		);
 
 		$cli = file_get_contents(__DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php');
@@ -218,7 +222,6 @@ final class TriggerAdaptersTest extends TestCase
 	public function testDeprecatedVerbWarningsMentionReplacementArgs(): void
 	{
 		$expected_hints = [
-			'cron'        => 'scope=both force=false trigger=cron',
 			'update'      => 'scope=both force=false trigger=manual',
 			'updateip'    => 'scope=ip force=true trigger=force',
 			'updatednsbl' => 'scope=dnsbl force=true trigger=force',
