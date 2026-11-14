@@ -21,6 +21,7 @@ type IPLine struct {
 	Line              string
 	Suppressed        bool
 	ParseFail         int
+	MappedDrops       int
 	DetailedParseFail bool
 	Messages          []string
 }
@@ -34,6 +35,7 @@ func ParseIPLine(raw string, cfg IPConfig) IPLine {
 		head, _, _ := strings.Cut(entry, "/")
 		if _, mapped := ipv4FromMapped(head); cfg.VType == "_v6" && mapped {
 			out.ParseFail++
+			out.MappedDrops++
 			out.DetailedParseFail = true
 			continue
 		}

@@ -281,6 +281,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 		}
 	} else if src.ftp != nil && f.Proxy == nil {
 		writeFTPMetadataAt(published, ftpMetadataFor(t))
+	} else {
+		// Store response validators when present; a response without one leaves the previous value as PHP does.
+		writeValidators(feed, t.etag, t.lastMod)
 	}
 	return Result{OK: true, Status: t.status}
 }

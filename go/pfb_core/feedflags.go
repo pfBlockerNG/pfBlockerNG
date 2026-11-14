@@ -8,13 +8,17 @@ import (
 	"unicode"
 )
 
-// feedFlags is what the feed phase reads from the command line (issue #3975), as Core is told every path: by a flag. Nothing
-// uses it yet; the feed phase takes it from run.
+// feedFlags is what the feed phase reads from the command line, as Core is told every path by a flag.
 type feedFlags struct {
-	LocalDirs  []string // --feed-local-dir, repeatable: a file:// feed may sit directly in one of these (feedfetch.Policy.LocalDirs)
-	ScriptDirs []string // --script-dir, repeatable, in search order: where a group's pre and post scripts are looked up
-	RsyncBin   string   // --rsync-bin: the rsync program
-	UserAgent  string   // --user-agent: what a feed host is told Core is
+	LocalDirs    []string // --feed-local-dir, repeatable: a file:// feed may sit directly in one of these
+	ScriptDirs   []string // --script-dir, repeatable, in search order
+	OrigDir      string   // --feed-orig-dir: IPv4 and IPv6 feed baselines and parsed artifacts
+	DNSBLOrigDir string   // --dnsbl-orig-dir: DNSBL feed baselines and parsed artifacts
+	DBDir        string   // --feed-db-dir: the package database folder used by synthetic DNSBLIP feeds
+	GeoIPDir     string   // --feed-geoip-dir: local GeoIP country feed sources
+	ASNCSV       string   // --feed-asn-csv: IPinfo ASN ranges used by `asn` feeds
+	RsyncBin     string   // --rsync-bin: the rsync program
+	UserAgent    string   // --user-agent: what a feed host is told Core is
 }
 
 // addFeedFlags registers the feed phase's flags on fl and returns what a parse fills. A flag that is not valid refuses the
@@ -37,8 +41,22 @@ func addFeedFlags(fl *flag.FlagSet) *feedFlags {
 			return err
 		})
 	}
+	single := func(name, usage string, into *string) {
+		fl.Func(name, usage, func(v string) error {
+			path, err := absolute(v)
+			if err == nil {
+				*into = path
+			}
+			return err
+		})
+	}
 	repeated("feed-local-dir", "a folder a file:// feed may sit directly in (repeatable)", &ff.LocalDirs)
 	repeated("script-dir", "a folder of list scripts, searched in the order given (repeatable)", &ff.ScriptDirs)
+	single("feed-orig-dir", "the IPv4 and IPv6 feed baselines", &ff.OrigDir)
+	single("dnsbl-orig-dir", "the DNSBL feed baselines", &ff.DNSBLOrigDir)
+	single("feed-db-dir", "the package database directory", &ff.DBDir)
+	single("feed-geoip-dir", "the local GeoIP country-feed directory", &ff.GeoIPDir)
+	single("feed-asn-csv", "the local IPinfo ASN ranges file", &ff.ASNCSV)
 	fl.Func("rsync-bin", "the rsync program", func(v string) error {
 		bin, err := absolute(v)
 		if err == nil {
