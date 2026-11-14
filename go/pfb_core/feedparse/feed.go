@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 )
@@ -172,18 +173,55 @@ var errFeedEnd = errors.New("end of feed")
 func ParseDNSBLFeed(r io.Reader, cfg DNSBLConfig, out io.Writer, sink Sink) (DNSBLFeed, error) {
 	var feed DNSBLFeed
 	p := NewDNSBLParser(cfg)
-	seen := map[string]bool{}
+	seen4 := make(map[[5]byte]struct{})
+	seen6 := make(map[[17]byte]struct{})
+	seenZone := make(map[netip.Prefix]struct{})
 	w := bufio.NewWriter(out)
 	emit := newRowEncoder(w)
 	lineNo := 0
-	// array_unique(): the first of equal strings stays, in order; the two families cannot share a string.
-	collect := func(dst *[]string, ips []string) {
+	// Compact keys keep array_unique()'s first-seen order without retaining address strings in the index.
+	collect := func(dst *[]string, ips []string) error {
 		for _, ip := range ips {
-			if !seen[ip] {
-				seen[ip] = true
-				*dst = append(*dst, ip)
+			var prefix netip.Prefix
+			var err error
+			if strings.IndexByte(ip, '/') >= 0 {
+				prefix, err = netip.ParsePrefix(ip)
+			} else {
+				var addr netip.Addr
+				addr, err = netip.ParseAddr(ip)
+				if err == nil {
+					prefix = netip.PrefixFrom(addr, addr.BitLen())
+				}
 			}
+			if err != nil {
+				return err
+			}
+			addr := prefix.Addr()
+			switch {
+			case addr.Zone() != "":
+				if _, exists := seenZone[prefix]; exists {
+					continue
+				}
+				seenZone[prefix] = struct{}{}
+			case addr.Is4():
+				bytes := addr.As4()
+				key := [5]byte{byte(prefix.Bits()), bytes[0], bytes[1], bytes[2], bytes[3]}
+				if _, exists := seen4[key]; exists {
+					continue
+				}
+				seen4[key] = struct{}{}
+			default:
+				bytes := addr.As16()
+				key := [17]byte{byte(prefix.Bits())}
+				copy(key[1:], bytes[:])
+				if _, exists := seen6[key]; exists {
+					continue
+				}
+				seen6[key] = struct{}{}
+			}
+			*dst = append(*dst, ip)
 		}
+		return nil
 	}
 	err := eachLine(r, func(line string, overlong, _ bool) error {
 		lineNo++
@@ -202,8 +240,12 @@ func ParseDNSBLFeed(r io.Reader, cfg DNSBLConfig, out io.Writer, sink Sink) (DNS
 		for _, f := range l.Fail {
 			sink.fail(FailRecord{LineNo: lineNo, Line: f, Raw: rawLine(line)})
 		}
-		collect(&feed.IP4, l.IP4)
-		collect(&feed.IP6, l.IP6)
+		if err := collect(&feed.IP4, l.IP4); err != nil {
+			return err
+		}
+		if err := collect(&feed.IP6, l.IP6); err != nil {
+			return err
+		}
 		feed.UpdateIP = feed.UpdateIP || len(l.IP4) > 0 || len(l.IP6) > 0
 		feed.SchemeSkipped += l.SchemeSkipped
 		for _, row := range l.Rows {

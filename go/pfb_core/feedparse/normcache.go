@@ -1,11 +1,14 @@
 package feedparse
 
 import (
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
+	"github.com/pfBlockerNG/xxh3"
 )
 
 // NormResult is pfb_feed_normalize()'s answer: the file to parse, whether its content changed since the last pass and
@@ -15,12 +18,12 @@ type NormResult struct {
 	Changed, Normalized bool
 }
 
-// NormalizeFile is the storage half of pfb_feed_normalize() for the feed name in dir, with Normalize as the conversion: the
-// downloaded <name>.orig becomes <name>.norm, rebuilt only when <name>.norm is missing or <name>.norm.src.xxhash128 (the xxh128
-// of the .orig the .norm was built from) names another .orig. The .norm is written beside its target and renamed into place.
+// NormalizeFile is the storage half of pfb_feed_normalize() for the feed name in dir, with the same conversion rules as Normalize:
+// the downloaded <name>.orig becomes <name>.norm, rebuilt only when <name>.norm is missing or <name>.norm.src.xxhash128 names
+// another .orig. The .norm is written beside its target and renamed into place.
 //
-// The .orig is read whole: at the download ceiling (2 GiB) the peak is more than twice the feed, and about three times more for a
-// UTF-16 one. The .norm and the sidecar are 0644, as the old path writes them, for a pre-script that drops privileges.
+// The .orig is hashed and converted through bounded streams. The .norm and the sidecar are 0644, as the old path writes them, for a
+// pre-script that drops privileges.
 //
 // Path is the .norm, or the .orig on any failure: a feed degrades to raw parsing, never to an empty one. Changed is false only
 // when the normalized content is proven unchanged against a recorded baseline (a fresh sidecar, or a rebuild that is byte for
@@ -39,12 +42,10 @@ func NormalizeFile(dir, name string) NormResult {
 		}
 	}
 
-	// The digest is of the bytes about to be converted: a .orig replaced meanwhile reads as stale on the next pass, never as fresh.
-	src, err := os.ReadFile(orig)
+	srcDigest, err := digest.File(orig)
 	if err != nil {
 		return fallback
 	}
-	srcDigest := digest.Bytes(src)
 	algo, recorded := digest.Read(srcBase)
 	if algo == digest.XXH128 && recorded == srcDigest {
 		if _, err := os.Stat(norm); err == nil {
@@ -54,12 +55,25 @@ func NormalizeFile(dir, name string) NormResult {
 	prev, err := digest.File(norm)
 	hadBaseline := algo == digest.XXH128 && err == nil
 
-	out := Normalize(src)
-	tmp, err := os.CreateTemp(dir, ".pfbnorm_*") // beside the target: a rename across filesystems is not atomic
+	source, err := os.Open(orig)
 	if err != nil {
 		return fallback
 	}
-	_, werr := tmp.Write(out)
+	tmp, err := os.CreateTemp(dir, ".pfbnorm_*") // beside the target: a rename across filesystems is not atomic
+	if err != nil {
+		source.Close()
+		return fallback
+	}
+	sourceHash := xxh3.New128()
+	normErr := normalizeStream(io.TeeReader(source, sourceHash), tmp)
+	sourceErr := source.Close()
+	if normErr != nil || sourceErr != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return fallback
+	}
+	srcDigest = hex.EncodeToString(sourceHash.Sum(nil))
+	var werr error
 	if cerr := tmp.Chmod(0o644); werr == nil { // CreateTemp makes 0600
 		werr = cerr
 	}
@@ -73,6 +87,12 @@ func NormalizeFile(dir, name string) NormResult {
 		os.Remove(tmp.Name())
 		return fallback
 	}
+	outDigest, err := digest.File(tmp.Name())
+	if err != nil {
+		os.Remove(tmp.Name())
+		return fallback
+	}
+	changed := !(hadBaseline && outDigest == prev)
 	sidecar := srcBase + "." + digest.XXH128
 	if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
 		os.Remove(tmp.Name())
@@ -85,5 +105,5 @@ func NormalizeFile(dir, name string) NormResult {
 	if err := os.WriteFile(sidecar, []byte(srcDigest), 0o644); err != nil {
 		return fallback
 	}
-	return NormResult{Path: norm, Changed: !(hadBaseline && digest.Bytes(out) == prev), Normalized: true}
+	return NormResult{Path: norm, Changed: changed, Normalized: true}
 }
