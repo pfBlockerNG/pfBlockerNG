@@ -29,7 +29,8 @@ declare(strict_types=1);
  * (write_config answers FALSE), `write_failed` (answers -1), `write_throws` (exception).
  * The result holds the disk config after and before the request, the config the request read, lock/read/write events, the lock state after, the write_config()
  * descriptions, the input errors, `$savemsg`, what the page printed, whether control returned to render instead of exiting, the
- * pending-changes marker, the ledger's open entries before and after, and the record of a failed notice to Core.
+ * pending-changes marker, the ledger's open entries before and after, the record of a failed notice to Core, and whether DNSBL group
+ * Bravo's custom-list rebuild marker exists in the sandboxed DNSBL list directory, after the request and at each release of the lock.
  */
 
 $workerArgv = $argv;
@@ -60,6 +61,8 @@ register_shutdown_function(static function () use ($resultFile, &$disk, &$before
 		'returned'      => $returned,
 		'pendingMarked' => is_file($pfb['pending_marker'] ?? ''),
 		'ledgerBefore'  => $ledgerBefore,
+		'rebuildMarker' => is_file(($pfb['dnsdir'] ?? '') . '/Bravo_custom.update'),
+		'rebuildMarkerAtUnlock' => $GLOBALS['groups_worker_marker_at_unlock'] ?? [],
 		'ledger'        => array_map(static fn (array $entry): string => "{$entry['item']}/{$entry['stage']}", pfb_sync_status_list_open($pfb['dbdir'] ?? '')),
 		'settingsFailed' => ($failed = @file_get_contents($pfb['core_settings_failed'] ?? '')) === FALSE ? NULL : $failed,
 	], JSON_THROW_ON_ERROR));
@@ -161,6 +164,8 @@ $pfb['core_settings_failed'] = "{$tmp}/core_settings_failed";
 $pfb['log'] = "{$tmp}/pfblockerng.log";
 $pfb['errlog'] = "{$tmp}/error.log";
 $pfb['runlog'] = '';
+$pfb['dnsdir'] = "{$tmp}/dnsbl";
+mkdir($pfb['dnsdir'], 0700);
 
 if ($type === 'geoip') {
 	// GeoIP groups are the continents' own sections: Top Spammers is row 0, Africa row 1, Europe row 4
@@ -216,6 +221,9 @@ $diskBefore = $disk;
 $GLOBALS['pfb_test_config_read_hook'] = static function () use (&$disk): void {
 	$GLOBALS['pfb_test_lock_events'][] = ['read'];
 	$GLOBALS['config'] = $disk;
+};
+$GLOBALS['pfb_test_unlock_hook'] = static function () use ($pfb): void {
+	$GLOBALS['groups_worker_marker_at_unlock'][] = is_file("{$pfb['dnsdir']}/Bravo_custom.update");
 };
 if ($scenario === 'lock_taken') {
 	$GLOBALS['pfb_test_try_lock_fail'] = TRUE;

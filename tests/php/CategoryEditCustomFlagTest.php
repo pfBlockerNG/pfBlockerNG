@@ -11,12 +11,14 @@ use PHPUnit\Framework\TestCase;
  * "{$pfbarr['folder']}/{$aname}_custom{$suffix}.update" -- but an action with
  * no list folder (Disabled) leaves pfb_determine_list_detail()'s array empty,
  * so the flag landed at the FILESYSTEM ROOT ("/{$aname}_custom.update"; the
- * WebGUI runs as root, so the write succeeds). The touch is now guarded on a
- * non-empty folder.
+ * WebGUI runs as root, so the write succeeds). The flag is now set only for a
+ * non-empty folder; the page touches it once the save is written (issue #3999,
+ * GroupsPageConfigLockTest).
  *
  * Like WidgetSubmitPostGuardTest, the page carries top-level execution and
  * cannot be require()d off-appliance, so the REAL custom-flag block is
- * eval-extracted between its executable condition and following config write.
+ * eval-extracted between its executable condition and following config write;
+ * it returns the flag path it chose ('' for none).
  */
 final class CategoryEditCustomFlagTest extends TestCase
 {
@@ -39,8 +41,8 @@ final class CategoryEditCustomFlagTest extends TestCase
 
 		if (!function_exists('pfb_category_edit_oracle_customflag')) {
 			if (!preg_match(
-				'/(if \(base64_decode\(config_get_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/custom", \x27\x27\)\) != \$_POST\[\x27custom\x27\]\) \{'
-				. '.*?touch\([^;]+;\s*\}\s*\})'
+				'/(\$pfb_custom_marker = \x27\x27;\s*if \(base64_decode\(config_get_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/custom", \x27\x27\)\) != \$_POST\[\x27custom\x27\]\) \{'
+				. '.*?\.update";\s*\}\s*\})'
 				. '\s*config_set_path\("installedpackages\/\{\$conf_type\}\/config\/\{\$rowid\}\/custom", base64_encode/s',
 				$src,
 				$m
@@ -51,8 +53,8 @@ final class CategoryEditCustomFlagTest extends TestCase
 				throw new RuntimeException('test bootstrap: custom-flag executable boundary lost list-detail dispatch');
 			}
 			eval(
-				'function pfb_category_edit_oracle_customflag(string $conf_type, int $rowid, string $suffix): void {'
-				. ' global $pfb, $pfbarr; ' . $m[1] . ' }'
+				'function pfb_category_edit_oracle_customflag(string $conf_type, int $rowid, string $suffix): string {'
+				. ' global $pfb, $pfbarr; ' . $m[1] . ' return $pfb_custom_marker; }'
 			);
 		}
 	}
@@ -83,8 +85,6 @@ final class CategoryEditCustomFlagTest extends TestCase
 		} else {
 			$GLOBALS['config'] = $this->savedConfig;
 		}
-		// Sweep any stray root flag a pre-guard run under root may have written.
-		@unlink('/Cat1080_custom.update');
 		if ($this->workdir !== '' && is_dir($this->workdir)) {
 			foreach ((array) glob("{$this->workdir}/*") as $f) {
 				@unlink((string) $f);
@@ -93,7 +93,7 @@ final class CategoryEditCustomFlagTest extends TestCase
 		}
 	}
 
-	/** Run the extracted block, returning every PHP warning it raised. */
+	/** @return array{string, list<string>} the flag path the extracted block chose ('' for none) and every PHP warning it raised */
 	private function runFlagBlock(string $action, string $custom, string $suffix = ''): array
 	{
 		global $pfb;
@@ -119,32 +119,31 @@ final class CategoryEditCustomFlagTest extends TestCase
 			E_WARNING | E_NOTICE
 		);
 		try {
-			pfb_category_edit_oracle_customflag('pfblockerngdnsbl', 0, $suffix);
+			$marker = pfb_category_edit_oracle_customflag('pfblockerngdnsbl', 0, $suffix);
 		} finally {
 			restore_error_handler();
 		}
-		return $warnings;
+		return [$marker, $warnings];
 	}
 
-	public function testDisabledActionWritesNoRootFlagAndNoWarning(): void
+	public function testDisabledActionSetsNoFlagAndNoWarning(): void
 	{
 		// Given: no stored custom list, an incoming non-empty one, action Disabled
-		// (no list folder). Before the guard this touch()ed /Cat1080_custom.update
-		// (as root) or raised a touch() permission warning (as an unprivileged uid).
-		$warnings = $this->runFlagBlock('Disabled', "custom.example.com\n");
+		// (no list folder). Before the guard the flag was /Cat1080_custom.update.
+		[$marker, $warnings] = $this->runFlagBlock('Disabled', "custom.example.com\n");
 
-		$this->assertFileDoesNotExist('/Cat1080_custom.update', 'no flag may land at the filesystem root');
+		$this->assertSame('', $marker, 'no flag may land at the filesystem root');
 		$this->assertSame([], $warnings, 'the guarded skip must be silent');
 	}
 
-	public function testFolderedActionStillWritesTheUpdateFlag(): void
+	public function testFolderedActionStillSetsTheUpdateFlag(): void
 	{
-		// Behaviour-preserving pin: an action WITH a folder keeps writing the flag.
+		// Behaviour-preserving pin: an action WITH a folder keeps setting the flag.
 		global $pfb;
 		$pfb['dnsdir'] = $this->workdir;
-		$warnings = $this->runFlagBlock('unbound', "custom.example.com\n");
+		[$marker, $warnings] = $this->runFlagBlock('unbound', "custom.example.com\n");
 
-		$this->assertFileExists("{$this->workdir}/Cat1080_custom.update");
+		$this->assertSame("{$this->workdir}/Cat1080_custom.update", $marker);
 		$this->assertSame([], $warnings);
 	}
 
@@ -157,9 +156,9 @@ final class CategoryEditCustomFlagTest extends TestCase
 			'installedpackages/pfblockerngdnsbl/config/0/custom',
 			base64_encode("custom.example.com\n")
 		);
-		$warnings = $this->runFlagBlock('unbound', "custom.example.com\n");
+		[$marker, $warnings] = $this->runFlagBlock('unbound', "custom.example.com\n");
 
-		$this->assertFileDoesNotExist("{$this->workdir}/Cat1080_custom.update");
+		$this->assertSame('', $marker);
 		$this->assertSame([], $warnings);
 	}
 }
