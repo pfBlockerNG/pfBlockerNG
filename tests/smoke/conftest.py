@@ -1132,6 +1132,8 @@ class _MockFeedServer:
     def __init__(self, root: Path) -> None:
         self._root = root
         self._registered: dict[str, bytes] = {}
+        self._status: dict[str, int] = {}
+        self._responses: dict[str, list[int]] = {}
         # ADR-42 Phase 3: per-name ETag map (opaque string). A name with no entry
         # in this map serves no ETag (simulates a server that does not support
         # conditional requests).
@@ -1148,6 +1150,8 @@ class _MockFeedServer:
         self._content_encoding_gzip: set[str] = set()
         self._lock = threading.Lock()
         registered = self._registered
+        status_map = self._status
+        responses = self._responses
         etag_map = self._etag_map
         no_lastmod = self._no_lastmod
         ims_304 = self._ims_304
@@ -1161,9 +1165,17 @@ class _MockFeedServer:
                 with lock:
                     body = registered.get(name)
                     etag = etag_map.get(name)
+                    status = status_map.get(name)
                     emit_lastmod = name not in no_lastmod
                     honour_ims = name in ims_304
                     label_gzip_encoded = name in content_encoding_gzip
+                if status is not None:
+                    with lock:
+                        responses.setdefault(name, []).append(status)
+                    self.send_response(status)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if body is None:
                     super().do_GET()
                     return
@@ -1174,6 +1186,8 @@ class _MockFeedServer:
                 if etag is not None:
                     client_etag = self.headers.get("If-None-Match", "")
                     if client_etag.strip() == etag:
+                        with lock:
+                            responses.setdefault(name, []).append(304)
                         self.send_response(304)
                         self.send_header("ETag", etag)
                         self.end_headers()
@@ -1187,10 +1201,14 @@ class _MockFeedServer:
                     if ims_dt is not None:
                         resource_dt = datetime.fromtimestamp(_MOCK_LAST_MODIFIED_EPOCH, tz=timezone.utc)
                         if resource_dt <= ims_dt:
+                            with lock:
+                                responses.setdefault(name, []).append(304)
                             self.send_response(304)
                             self.send_header("Last-Modified", _MOCK_LAST_MODIFIED_HTTPDATE)
                             self.end_headers()
                             return
+                with lock:
+                    responses.setdefault(name, []).append(200)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(body)))
@@ -1218,6 +1236,17 @@ class _MockFeedServer:
     @property
     def port(self) -> int:
         return self._httpd.server_address[1]
+
+    def statuses(self, name: str) -> list[int]:
+        with self._lock:
+            return list(self._responses.get(name, ()))
+
+    def set_status(self, name: str, status: int | None) -> None:
+        with self._lock:
+            if status is None:
+                self._status.pop(name, None)
+            else:
+                self._status[name] = status
 
     def start(self) -> None:
         self._thread.start()

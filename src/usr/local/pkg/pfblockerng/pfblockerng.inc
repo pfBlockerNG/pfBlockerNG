@@ -4794,7 +4794,7 @@ function pfb_core_feed_phase(string $token, string $phase, array $feedIds, strin
 		return $failure('core_request_invalid');
 	}
 	foreach ($feedIds as $id) {
-		if (!is_string($id) || preg_match('/\A[A-Za-z0-9:_]{1,64}\z/', $id) !== 1) {
+		if (!is_string($id) || preg_match('/\A[A-Za-z0-9:_-]{1,64}\z/', $id) !== 1) {
 			return $failure('core_request_invalid');
 		}
 	}

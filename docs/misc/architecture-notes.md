@@ -2262,7 +2262,8 @@ digests; **no cross-language digest is ever produced or compared**:
 
 | Side | Algorithm | API |
 | --- | --- | --- |
-| PHP (detector + download) | `xxh128` | `hash('xxh128', …)` / `hash_file('xxh128', …)` |
+| Core FeedPhase (detector + download, `go/pfb_core`) | `xxh128` | the xxh128 of the raw bytes, through `go/pfb_core/internal/digest` (the Go xxh3 fork) |
+| PHP (`pfb_download()` for Extras and TOP1M) | `xxh128` | `hash('xxh128', …)` / `hash_file('xxh128', …)` |
 | POSIX shell | `xxh128` | `xxh128sum` (writes the `.xxhash128` extension) |
 | Python (`pfb_unbound.py`, removed in #3791) | `md5` | `hashlib.md5` — **policy only here; no Python code lands in ADR-42** (it ships with its first consumer, the deferred DNSBL structure-reuse ADR). `pfb_unbound.py` is stdlib-only + chrooted, and `hashlib` has no xxhash; `xxh128sum` would have to be copied into the jail. md5 is used only for Python's own self-comparisons. |
 
@@ -2299,7 +2300,7 @@ sidecar file next to `.orig`. **Fail-safe:** an unreadable/unknown tag is treate
 re-ingest". A **`200`** is hashed (xxh128 of the fetched bytes) against the persisted source hash
 and re-ingested **iff** the hash differs — so a spurious `200` (server ignored the validator) does
 **not** force a needless rebuild. Validators are persisted as `{base}.etag` / `{base}.lastmod`
-sidecars; the conditional request is sent only on the detector probe, so the sync ingest always
+sidecars; the conditional request is sent only on Core's FeedPhase probe, so the ingest that follows always
 receives the full body. **No path ever concludes "unchanged" on changed content; any ambiguity
 re-ingests.**
 
@@ -2311,25 +2312,23 @@ absolute-path var (per the shell standard for add-on binaries) **and** declare `
 FreeBSD-ports RUN_DEPENDS so its presence is contractual, not incidental. PHP needs no binary —
 `hash('xxh128')` is native.
 
-**Where it lives:** the detector + download (`pfblockerng.inc` `pfb_content_hash` / `pfb_hash_read`
-/ `pfb_hash_write` / `pfb_local_feed_changed` / `pfb_validator_read` / `pfb_validator_write` /
-`pfb_conditional_get_decision`; `pfb_download`) and `pfblockerng_cron.inc`
-(`pfb_update_check`; `pfblockerng_sync_cron`).
+**Where it lives:** Core's FeedPhase (`go/pfb_core`) runs the detector and the download: `feedfetch` (the transfer, the
+content gates, the probe and the change decision, the Core translation of `pfb_download()` and `pfb_update_check()`;
+validators and digests in `store.go`), sequenced per feed by `feed_phase_pipeline.go`. PHP keeps `pfb_download()` for
+Extras and TOP1M, and the content-hash helpers beside it in `pfblockerng.inc`.
 
 **Normalize layer (issue #1797)** — a second, *processing-level* change-detection point sits
-ABOVE the wire-byte sidecar: `pfb_feed_normalize()` derives `{header}.norm` from
-`{header}.orig` on demand (iconv UTF-8 validity gate → charset_normalizer conversion only for
+ABOVE the wire-byte sidecar: Core's `feedparse.NormalizeFile()` derives `{name}.norm` from
+`{name}.orig` on demand (iconv UTF-8 validity gate → charset_normalizer conversion only for
 invalid files → one `C.UTF-8 sed` control-strip + per-line rtrim), keyed by
-`{header}.norm.src.xxhash128` (the xxh128 of the source `.orig`). Both parse loops read
-`.norm` (raw `.orig` on failure), and a fresh download whose `.norm` is byte-identical skips
-the reparse (`pfb_dnsbl_norm_reuse_skip` / `pfb_ip_norm_reuse_skip`; the IP gate never skips
-DNSBLIP on a Reuse-on pass, whose local-copy "download" always reads fresh, so a changed
-Suppression CIDR Limit re-filters it — #3726). The wire-byte `.orig.xxhash128` sidecar and
-the #946 UTF-16 transcode are unchanged; the ADR-43 Force
-clear-hashes sweep also removes the `.norm.src` baselines so a forced pass always reprocesses.
-Off-appliance pinned by `tests/php/FeedChangeHashHelpersTest.php` +
-`tests/php/ConditionalGetHelpersTest.php`; the live `304`/ETag + same-second detection legs are
-ADR-04 smoke (`tests/smoke/test_smoke_feeds.py`).
+`{name}.norm.src.xxhash128` (the xxh128 of the source `.orig`). Core's parse reads `.norm` (raw `.orig` on
+failure). On a `none` pass FeedPhase skips the reparse when `.norm` is unchanged (`feed_phase_pipeline.go`); a
+missing or legacy baseline reports changed, so a skip never rides on a sidecar that is gone. The wire-byte
+`.orig.xxhash128` sidecar and the #946 UTF-16 transcode carry over unchanged. Pinned by
+`go/pfb_core/feedparse/normcache_corpus_test.go` (the `.norm` storage) and `go/pfb_core/feed_phase_test.go`
+(`TestFeedPhaseProbeReuseAndForceModes`); the PHP helpers stay pinned by `tests/php/FeedChangeHashHelpersTest.php` +
+`tests/php/ConditionalGetHelpersTest.php`, and the live `304`/ETag + same-second detection legs are ADR-04 smoke
+(`tests/smoke/test_smoke_feeds.py`).
 
 ## Scheduling, trigger API & the Update page (ADR-43)
 
@@ -2344,7 +2343,7 @@ The reload entrypoint `sync_package_pfblockerng()` now takes a `{scope, force, t
 
 - **`scope`** ∈ `ip` | `dnsbl` | `both` — which side reloads.
 - **`force`** ∈ bool — `TRUE` = always reparse (bypass the reuse gate); `FALSE` = respect ADR-42's
-  detector (an unchanged feed is reuse-cached, not reparsed — the #517-style "no change" pass).
+  detector, which runs in Core's FeedPhase (an unchanged feed is reuse-cached, not reparsed — the #517-style "no change" pass).
 - **`trigger`** ∈ `cron` | `manual` | `force` — the caller's identity, mapped to the ADR-12 hook env
   `PFB_TRIGGER` by `pfb_req_to_hook_trigger()`: `cron`→`cron`, `manual`→`update`, `force`→`force-reload`.
   It also carries two behavioural roles: `trigger=cron` (with `force=FALSE`) selects the cron-tick
@@ -2383,8 +2382,8 @@ case it logs `[ Disabled by … ]` and dispatches nothing (issue #1204 — the s
 off switch, installed before the package and never removed; the Update page reports the suppression).
 The direct `pfblockerng.php tick` verb is
 never gated. The tick carries **no**
-scheduling logic: it reads the due-ledger, dispatches each **due** job through the new API
-(`pfb_trigger scope=both force=false trigger=cron` for the feed pass), runs `ss_refresh` when its
+scheduling logic: it reads the due-ledger, dispatches each **due** job through the new API (the feed pass is not a
+tick dispatch since #3941: Core's Update runs it, see below), runs `ss_refresh` when its
 dedicated zero-jitter 900-second entry is due (cheap DNS re-resolution), then records each completed
 job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
@@ -2514,8 +2513,8 @@ migration**.
 
 ### Apply-on-change + quiet-hours window
 
-Because ADR-40/ADR-10 make apply cheap, a due job applies a detected change **immediately** — the
-tick dispatches the reload (`force=false`), the ADR-42 detector gates reparse, and ADR-40
+Because ADR-40/ADR-10 make apply cheap, a detected change applies **immediately**: Core's FeedPhase detector (ADR-42)
+gates reparse, and ADR-40
 (`pfb_alias_set_different` / `pfb_apply_alias_delta`) / ADR-10 (`pfb_reload_unbound` zero-downtime
 swap) gate apply. No change ⇒ no apply. The separate "when to apply" schedule is gone; the only
 batching control is an **optional quiet-hours window** (`pfb_quiet_hours`, default empty = apply
