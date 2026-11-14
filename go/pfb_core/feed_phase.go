@@ -241,6 +241,7 @@ func (p *feedPhaseRunner) fetcherFor(ingest map[string]any) (*feedfetch.Fetcher,
 	}
 	fetcher.Policy = policy
 	fetcher.UserAgent, fetcher.RsyncBin = p.flags.UserAgent, p.flags.RsyncBin
+	fetcher.ProxyUnusable = boolSetting(ingest, "proxyUnusable")
 	proxyText := stringSetting(ingest, "proxyUrl")
 	if proxyText == "" {
 		fetcher.Proxy = nil
