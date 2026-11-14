@@ -623,17 +623,11 @@ if ($_POST) {
 		}
 
 		// Validate DNSBL webserver block page
-		$dnsbl_webpage		= FALSE;
 		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
 		$dnsbl_webpage_file	= pfb_filter(basename($_POST['dnsbl_webpage'] ?? ''), PFB_FILTER_WORD_DOT, 'dnsbl', 'dnsbl_default.php');
 		if (file_exists("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}") &&
 		    @filesize("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}") > 0 &&
 		    pfb_filter(array("{$pfb['dnsbl_www']}/{$dnsbl_webpage_file}", 'text/html'), PFB_FILTER_FILE_MIME_COMPARE, 'dnsbl')) {
-
-			// Check if DNSBL Webpage has been changed.
-			if ($dnsbl_webpage_file != $pfb['dconfig']['dnsbl_webpage']) {
-				$dnsbl_webpage = TRUE;
-			}
 			$pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
 			// foreign key — out of ADR-29 gateway scope (dnsbl_webpage is out-of-scope; see CfgGatewayTest $out_of_scope)
 			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', $pfb['dconfig']['dnsbl_webpage']);
@@ -866,7 +860,9 @@ if ($_POST) {
 			if (pfb_dnsbl_policy_upgrade()) {
 				$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 			}
-			// The chosen block page is saved with the section below, never before: the facade above writes config.xml by itself
+			// The chosen block page is saved with the section below, never before: the facade above writes config.xml by itself.
+			// issue #3998: whether it changed is judged against this locked read, as another save may have served another page since.
+			$dnsbl_webpage = $dnsbl_webpage_file != ($pfb['dconfig']['dnsbl_webpage'] ?? '');
 			$pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
 
 			$pfb_top1m_settings_before = array(
