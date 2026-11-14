@@ -22,7 +22,9 @@ const (
 	deferredStatus  = 75 // EX_TEMPFAIL: the program chose not to run now (a lock held, the schedule switched off)
 )
 
-var killGrace = 5 * time.Second // how long the program's whole group has to end on TERM, and again after KILL, before Run goes on
+// killGrace is how long the program's whole group has to end on TERM, and again after KILL, before Run goes on. It ends a second
+// (the rc script's poll) before the rc script KILLs Core 5 s after its TERM, so Core's KILL reaches the group first (issue #4003).
+var killGrace = 3 * time.Second
 
 // leaderExited reports whether the program has exited, when the context ends; replaced only by tests.
 var leaderExited = exitedUnreaped
@@ -33,7 +35,8 @@ var reap = (*exec.Cmd).Wait
 // Command runs the update program at Path once per Update: stdin is {"version":1,<Request>}, stdout and stderr are the log, and
 // fd 3 is the result {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool}; all four
 // are regular files, never pipes (a daemon an Update restarts would hold one open). The program's group gets TERM when ctx ends
-// or Cap (0: 4 hours) passes, and KILL if a member is left after 5 s; a program that has exited leaves its group alone.
+// or Cap (0: 4 hours) passes, and KILL if a member is left after 3 s; a program that has exited leaves its group alone. The
+// program itself gets KILL when Core dies.
 type Command struct {
 	Path string
 	Cap  time.Duration
@@ -80,7 +83,7 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	cmd := exec.Command(c.Path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
 	cmd.ExtraFiles = []*os.File{fd3}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = procAttr()
 	if err := cmd.Start(); err != nil {
 		return Result{}, err
 	}
