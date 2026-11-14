@@ -32,6 +32,16 @@ final class PfbCoreServiceTest extends TestCase
 {
 	private const DOUBLES = ['daemon', 'logger', 'lockf', 'uname', 'pgrep', 'pkill', 'sleep'];
 
+	/** Issue #3975: the folders a file:// feed may sit directly in (pfb_filter()'s local-path rule), as Core's --feed-local-dir flags, without the trailing slash. */
+	private const LOCAL_DIRS = ['/var/db/pfblockerng', '/var/db/pfblockerng/deny', '/var/db/pfblockerng/permit', '/var/db/pfblockerng/match',
+		'/var/db/pfblockerng/native', '/var/db/pfblockerng/original', '/var/db/pfblockerng/dnsbl', '/var/db/pfblockerng/dnsblorig', '/var/db/pfblockerng/ET',
+		'/var/db/pfblockerng/ut1', '/var/db/pfblockerng/shallalist', '/usr/local/www', '/usr/local/share/GeoIP', '/usr/local/share/GeoIP/cc'];
+	/** The list scripts' folders in search order (pfb_resolve_list_script()), Core's --script-dir flags. */
+	private const SCRIPT_DIRS = ['/usr/local/pkg/pfblockerng/list_scripts', '/usr/local/pkg/pfblockerng'];
+	private const RSYNC = '/usr/local/bin/rsync';
+	/** The cURL user agent the package sends, with the unique id of the doubled pfSense. */
+	private const USER_AGENT = 'pfSense/pfBlockerNG cURL download agent-phpunit-0000000000000000';
+
 	/** One script under every command name the rc body uses; $0 picks the role. procs: pid|args|tick it dies at (empty: alive). */
 	private const DOUBLE = <<<'SH'
 		#!/bin/sh
@@ -230,8 +240,12 @@ final class PfbCoreServiceTest extends TestCase
 			},
 			$text
 		);
-		// The settings adapter and update scripts, which Core runs, and the host's zone file, which it reads, are the host paths an argument may name
-		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '--zoneinfo /etc/localtime'], '', $script),
+		// The settings adapter and update scripts, which Core runs, the host's zone file, which it reads, and the feed phase's folders,
+		// scripts and rsync (issue #3975), which it is told, are the host paths an argument may name: longest first, as one holds another
+		$named = array_merge([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '--zoneinfo /etc/localtime', self::RSYNC],
+			self::LOCAL_DIRS, self::SCRIPT_DIRS);
+		usort($named, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
+		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace($named, '', $script),
 			"the rc script names a host path the test did not redirect:\n{$script}");
 		file_put_contents("{$this->dir}/run.sh", $script);
 		$state = "{$this->dir}/state";
@@ -324,8 +338,59 @@ final class PfbCoreServiceTest extends TestCase
 			'--settings-backend-cmd', '/usr/local/pkg/pfblockerng/pfb_core_settings.sh',
 			'--update-cmd', '/usr/local/pkg/pfblockerng/pfb_core_update.sh',
 			'--zoneinfo', '/etc/localtime',
+			...$this->feedFlags(),
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
+	}
+
+	/** @param list<string> $dirs @return list<string> the flags of the feed phase (issue #3975) Core is started with */
+	private function feedFlags(array $dirs = self::LOCAL_DIRS, string $userAgent = self::USER_AGENT): array
+	{
+		$flags = [];
+		foreach ($dirs as $dir) {
+			array_push($flags, '--feed-local-dir', $dir);
+		}
+		foreach (self::SCRIPT_DIRS as $dir) {
+			array_push($flags, '--script-dir', $dir);
+		}
+		return [...$flags, '--rsync-bin', self::RSYNC, '--user-agent', $userAgent];
+	}
+
+	public function testStartTellsCoreTheFolderOfAFileFeedTheScriptFoldersRsyncAndTheUserAgentAndNamesTheDbdirByItsRealPath(): void
+	{
+		// Given the package's database folder is a link to the real folder (the rc script must name what realpath() resolves, as pfb_filter() compares)
+		$this->install('freebsd-amd64');
+		$this->assertTrue(mkdir("{$this->dir}/real_db", 0700));
+		$this->assertTrue(symlink("{$this->dir}/real_db", "{$this->dir}/dbdir"));
+		$this->arrange('amd64');
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then Core is told the fixed folders, then the real database folder, the two script folders, rsync and the user agent
+		$this->assertSame(0, $status, $out);
+		$argv = $this->lines('daemon.argv');
+		$first = array_search('--feed-local-dir', $argv, TRUE);
+		$this->assertIsInt($first, 'the daemon was given no --feed-local-dir: ' . implode(' ', $argv));
+		$this->assertSame($this->feedFlags([...self::LOCAL_DIRS, (string) realpath("{$this->dir}/real_db")]), array_slice($argv, $first),
+			'the feed flags: every value its own argument');
+	}
+
+	public function testTheUserAgentCoreIsToldHasNoLineBreak(): void
+	{
+		// Given a unique id the platform wrote with a trailing newline (Core refuses a user agent with a line break, so Core would not start)
+		$this->install('freebsd-amd64');
+		$GLOBALS['pfb']['curl_defaults'][CURLOPT_USERAGENT] = self::USER_AGENT . "\n";
+		$this->arrange('amd64');
+
+		// When the service starts
+		[$status, $out] = $this->rc('start');
+
+		// Then the user agent is the package's, whole, on one line: the daemon double writes each argument and a newline, so one that held a
+		// line break would leave a blank line that lines() skips; the raw file must end with the flag and the agent alone
+		$this->assertSame(0, $status, $out);
+		$raw = (string) file_get_contents("{$this->dir}/state/daemon.argv");
+		$this->assertStringEndsWith("\n--user-agent\n" . self::USER_AGENT . "\n", $raw, 'the user agent argument holds a line break');
 	}
 
 	public function testStartWithNoBinaryForThisMachineStartsNothingAndSaysSo(): void

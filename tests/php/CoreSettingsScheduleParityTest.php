@@ -146,7 +146,9 @@ final class CoreSettingsScheduleParityTest extends TestCase
 		$provider = ['selected' => FALSE, 'categories' => ''];
 		$schedule['groups'] = array_map(static fn(array $g): array => $g + $group, $schedule['groups']);
 		$schedule['categoryProviders'] = array_map(static fn(array $p): array => $p + $provider, $schedule['categoryProviders']);
-		$settings = ['dns' => pfb_core_dns_settings(), 'feeds/ipv4' => ['groups' => []], 'feeds/ipv6' => ['groups' => []], 'feeds/dnsbl' => ['groups' => []], 'schedule' => $schedule];
+		$ingest = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_ingest_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		$settings = ['dns' => pfb_core_dns_settings(), 'feeds/ipv4' => ['groups' => []], 'feeds/ipv6' => ['groups' => []], 'feeds/dnsbl' => ['groups' => []], 'schedule' => $schedule,
+			'ingest' => $ingest];
 
 		$refusal = pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => 1, 'settings' => $settings], static fn(): array => []);
 

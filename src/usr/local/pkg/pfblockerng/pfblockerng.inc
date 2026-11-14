@@ -670,6 +670,18 @@ define('PFB_FILTER_TOKEN', 22);
 // previous cURL CURLOPT_MAXREDIRS auto-follow cap.
 define('PFB_DOWNLOAD_MAXREDIRS', 10);
 
+// issue #3975: where a file:// feed may sit (directly in one of these), where a group's pre and post scripts are looked up (first hit
+// wins) and the rsync a rsync feed is transferred with: pfb_filter(), pfb_resolve_list_script() and pfb_rsync_transfer_cmd() read them,
+// and the pfb-core rc script (pfb_core_service()) tells Core the same values by flag.
+const PFB_FEED_LOCAL_DIRS = [
+	'/var/db/pfblockerng/', '/var/db/pfblockerng/deny/', '/var/db/pfblockerng/permit/', '/var/db/pfblockerng/match/',
+	'/var/db/pfblockerng/native/', '/var/db/pfblockerng/original/', '/var/db/pfblockerng/dnsbl/', '/var/db/pfblockerng/dnsblorig/',
+	'/var/db/pfblockerng/ET/', '/var/db/pfblockerng/ut1/', '/var/db/pfblockerng/shallalist/',
+	'/usr/local/www/', '/usr/local/share/GeoIP/', '/usr/local/share/GeoIP/cc/',
+];
+const PFB_LIST_SCRIPT_DIRS = ['/usr/local/pkg/pfblockerng/list_scripts', '/usr/local/pkg/pfblockerng'];
+const PFB_RSYNC_BIN = '/usr/local/bin/rsync';
+
 // Machine-detectable markers (the VIP 'descr') stamped on DNSBL sinkhole VIPs that
 // pfBlockerNG auto-creates and therefore owns (ADR-13). ONLY VIPs carrying one of
 // these markers are ever managed/deleted by the package; a manually-created VIP is
@@ -1900,6 +1912,23 @@ function pfb_strip_wildcard_marker(string $row, string $reference): string {
 }
 
 
+
+/**
+ * The folders a file:// feed may sit directly in (issue #3975): the fixed ones, then the real path of the database folder when it
+ * resolves. pfb_filter() holds a local feed's real path to them, and Core is told the same folders by flag.
+ *
+ * @return list<string> each with a trailing slash
+ */
+function pfb_feed_local_dirs(): array {
+	global $pfb;
+	$dirs = PFB_FEED_LOCAL_DIRS;
+	$dbdir = !empty($pfb['dbdir']) && is_string($pfb['dbdir']) ? realpath($pfb['dbdir']) : FALSE;
+	if ($dbdir !== FALSE) {
+		$dirs[] = rtrim($dbdir, '/') . '/';
+	}
+	return $dirs;
+}
+
 // Function to filter/sanitize user input.
 //
 // ADR-48: $reject_detail is an optional by-ref out-param for the PFB_FILTER_FILE_MIME /
@@ -2160,23 +2189,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 
 			// Local file path validation
 			else {
-				$allowed_path	= array(	'/var/db/pfblockerng/',
-									'/var/db/pfblockerng/deny/',
-									'/var/db/pfblockerng/permit/',
-									'/var/db/pfblockerng/match/',
-									'/var/db/pfblockerng/native/',
-									'/var/db/pfblockerng/original/',
-									'/var/db/pfblockerng/dnsbl/',
-									'/var/db/pfblockerng/dnsblorig/',
-									'/var/db/pfblockerng/ET/',
-									'/var/db/pfblockerng/ut1/',
-									'/var/db/pfblockerng/shallalist/',
-									'/usr/local/www/',
-									'/usr/local/share/GeoIP/',
-									'/usr/local/share/GeoIP/cc/' );
-				if (!empty($pfb['dbdir']) && is_string($pfb['dbdir']) && realpath($pfb['dbdir']) !== FALSE) {
-					$allowed_path[] = rtrim(realpath($pfb['dbdir']), '/') . '/';
-				}
+				$allowed_path = pfb_feed_local_dirs();
 
 				// Canonicalize before any membership test so a relative
 				// ('..') or redundant-separator path cannot escape an allowed
@@ -2603,7 +2616,7 @@ function pfb_resolve_list_script($name, $dirs = null) {
 		return FALSE;
 	}
 	if ($dirs === null) {
-		$dirs = array('/usr/local/pkg/pfblockerng/list_scripts', '/usr/local/pkg/pfblockerng');
+		$dirs = PFB_LIST_SCRIPT_DIRS;
 	}
 	foreach ($dirs as $dir) {
 		$real_dir = realpath($dir);
@@ -4552,7 +4565,8 @@ function pfb_core_state_teardown(PfbToggle $keep): void {
  * otherwise stops what is left (a survivor fails the start) and runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64,
  * by `uname -p`) under daemon(8), restarted 5 s after it exits, with its output in $pfb['core_log'], its API on $pfb['core_socket'], its
  * storage in $pfb['core_state'], its settings read and written through PFB_CORE_SETTINGS_CMD (issue #3924: the start pushes nothing) and its
- * Updates run by PFB_CORE_UPDATE_CMD (issue #3941).
+ * Updates run by PFB_CORE_UPDATE_CMD (issue #3941). Core is also told, by flag, what its feed phase needs of this machine (issue #3975): the folders
+ * a file:// feed may sit in (pfb_feed_local_dirs()), the list scripts' folders (PFB_LIST_SCRIPT_DIRS), rsync and the cURL user agent.
  * A daemon(8) that fails, or no supervisor named by its pidfile within 5 s, fails the start; the start returns once the supervisor is
  * confirmed, not once the API socket listens (a caller that needs the API handles pfb_core_call()'s status 0). No executable pfb-core
  * for this machine starts nothing and is not a failure (a package built without it); an unknown machine fails. Stop: TERM to the
@@ -4573,6 +4587,17 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$state = escapeshellarg($pfb['core_state']);
 	$settingsCmd = escapeshellarg(PFB_CORE_SETTINGS_CMD);
 	$updateCmd = escapeshellarg(PFB_CORE_UPDATE_CMD);
+	// issue #3975: what Core's feed phase reads of this machine, each value one quoted argument; the user agent is the one cURL sends, without the
+	// line break a unique id may end with (Core refuses a user agent that holds one, and would not start)
+	$feedFlags = '';
+	foreach (pfb_feed_local_dirs() as $folder) {
+		$feedFlags .= ' --feed-local-dir ' . escapeshellarg(rtrim($folder, '/'));
+	}
+	foreach (PFB_LIST_SCRIPT_DIRS as $folder) {
+		$feedFlags .= ' --script-dir ' . escapeshellarg($folder);
+	}
+	$feedFlags .= ' --rsync-bin ' . escapeshellarg($pfb['rsync_bin'] ?? PFB_RSYNC_BIN);
+	$feedFlags .= ' --user-agent ' . escapeshellarg(trim((string) $pfb['curl_defaults'][CURLOPT_USERAGENT]));
 	$dir = escapeshellarg($coreDir);
 	$lockfile = escapeshellarg($pfb['core_lockfile']);
 	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own command
@@ -4634,7 +4659,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	# Anything the daemon runs that starts this service again must take the lock
 	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --zoneinfo /etc/localtime </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --zoneinfo /etc/localtime{$feedFlags} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"
@@ -4802,8 +4827,114 @@ function pfb_core_revision_key(): string {
 }
 
 /**
+ * The system proxy as Core's three fields (issue #3975), as pfb_global() builds the cURL proxy: nothing unless the proxy URL is set (empty() also
+ * for "0"), the port as curl_setopt() reads the stored string (a number, else 0, so a service name pfSense's is_port() accepts is 0 too) and 0 is
+ * cURL's default, 1080, user and password only when both are set. Only what Core's http://host:port can say is projected: a host name (letters,
+ * digits, "-", "_" and "." as pfSense's is_fqdn() takes them) or an IP address, optionally behind a hand-edited http://. A proxy URL that is
+ * anything else (userinfo, a path, another scheme, a line break) or a port curl_setopt() refuses (negative, beyond 65535) is not passed on,
+ * whole: the proxy is then not projected.
+ *
+ * @return array{proxyUrl: string, proxyUser: string, proxyPassword: string}
+ */
+function pfb_core_proxy_settings(): array {
+	$none = ['proxyUrl' => '', 'proxyUser' => '', 'proxyPassword' => ''];
+	$stored = static fn(string $key): string => is_scalar($value = config_get_path("system/{$key}")) ? (string) $value : '';
+	$unset = static fn(string $value): bool => $value === '' || $value === '0';
+	$host = $stored('proxyurl');
+	$port = $stored('proxyport');
+	if ($unset($host)) {
+		return $none;
+	}
+	if (preg_match('/^(?:http:\/\/)?([A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_])?\.?)$/Di', $host, $name) === 1) {
+		$host = $name[1];
+	} elseif (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== FALSE) {
+		$host = "[{$host}]";
+	} else {
+		return $none;
+	}
+	$port = (int) $port ?: 1080;
+	if ($port < 1 || $port > 65535) {
+		return $none;
+	}
+	$user = $stored('proxyuser');
+	$password = $stored('proxypass');
+	$auth = !$unset($user) && !$unset($password);
+	return ['proxyUrl' => "http://{$host}:{$port}", 'proxyUser' => $auth ? $user : '', 'proxyPassword' => $auth ? $password : ''];
+}
+
+/** Whether $address is one Core may list as the box's own: an IP address, not unspecified, link-local or an IPv4-mapped IPv6 one. */
+function pfb_core_ingest_self_valid(string $address): bool {
+	$packed = filter_var($address, FILTER_VALIDATE_IP) === FALSE ? FALSE : inet_pton($address);
+	if ($packed === FALSE || trim($packed, "\0") === '') {
+		return FALSE;
+	}
+	return strlen($packed) === 4
+		? !str_starts_with($packed, "\xa9\xfe")
+		: !str_starts_with($packed, str_repeat("\0", 10) . "\xff\xff") && !(ord($packed[0]) === 0xfe && (ord($packed[1]) & 0xc0) === 0x80);
+}
+
+/** Whether $entry is an allowlist entry Core's list can hold: an IP address, or one with a prefix length of plain digits within its family, no zone. */
+function pfb_core_ingest_entry_valid(string $entry): bool {
+	[$address, $bits] = [...explode('/', $entry, 2), NULL];
+	$packed = filter_var($address, FILTER_VALIDATE_IP) === FALSE ? FALSE : inet_pton($address);
+	return $packed !== FALSE && ($bits === NULL || (preg_match('/^(?:0|[1-9][0-9]*)$/D', $bits) === 1 && (int) $bits <= strlen($packed) * 8));
+}
+
+/**
+ * Core's read-only `ingest` (issue #3975, docs/misc/core-api-protocol.md): the package settings and the platform facts its feed phase reads,
+ * as today's PHP reads them (tests/core/fixtures/settings_ingest_parity.json). `suppressionCidrV4` and `V6` are the IP page's global limits
+ * (0: Disabled), a value the page never offers reading as 0 as a group's own `suppressionCidr` does. The allowlist is what
+ * pfb_feed_internal_allowlist() returns less what Core's list cannot hold (a zone, a prefix length with a leading zero), each once. `selfAddresses`
+ * are the addresses pfb_ip_is_self() calls the box's own beyond the loopbacks, each once and without the ones Core refuses to list (unspecified,
+ * link-local, IPv4-mapped): the interfaces' addresses, the virtual IPs and the PPPoE server's, IPv4 then IPv6, as pfSense lists them.
+ *
+ * @return array<string, mixed> the 11 fields, in the protocol's order
+ */
+function pfb_core_ingest_settings(): array {
+	$on = static fn(string $key): bool => PfbConfig::read($key) === PfbToggle::On;
+	$limit = static function (string $key, int $max): int {
+		$stored = (string) PfbConfig::read($key);
+		return ctype_digit($stored) && (int) $stored >= 1 && (int) $stored <= $max ? (int) $stored : 0;
+	};
+	$listed = static fn(array $values, callable $valid): array => array_values(array_unique(array_filter(array_map('strval', $values), $valid)));
+	$self = $listed(array_merge(array_values(get_configured_ip_addresses()), array_values(get_configured_ipv6_addresses())), 'pfb_core_ingest_self_valid');
+	return [
+		'suppression'       => $on('ip/suppression'),
+		'suppressionCidrV4' => $limit('ip/suppression_cidr', 17),
+		'suppressionCidrV6' => $limit('ip/suppression_cidr_v6', 64),
+		'dnsblIp'           => pfb_dnsblip_action_value(PfbConfig::read('dnsbl/action')) !== 'Disabled',
+		'dnsblLenient'      => $on('dnsbl/pfb_dnsbl_lenient'),
+		'feedHostFilter'    => pfb_feed_filter_enabled(),
+		'feedHostAllowlist' => array_map(static fn(string $entry): array => ['cidr' => $entry], $listed(pfb_feed_internal_allowlist(), 'pfb_core_ingest_entry_valid')),
+		'selfAddresses'     => array_map(static fn(string $address): array => ['address' => $address], $self),
+	] + pfb_core_proxy_settings();
+}
+
+/**
+ * The faults of Core's value for `ingest` against $current (what config.xml and the platform project now): the projection is read-only, so
+ * every field must be what it is, no more and no fewer. Core never changes it and refuses a change before it asks, so a fault is a client
+ * that bypassed Core.
+ *
+ * @param array<mixed> $wanted
+ * @param array<string, mixed> $current
+ * @return list<array{field: string, message: string}>
+ */
+function pfb_core_ingest_faults(array $wanted, array $current): array {
+	$faults = [];
+	foreach (array_unique(array_merge(array_keys($current), array_keys($wanted))) as $name) {
+		if (!array_key_exists($name, $current)) {
+			$faults[] = ['field' => "ingest.{$name}", 'message' => 'no such field'];
+		} elseif (!array_key_exists($name, $wanted) || $wanted[$name] !== $current[$name]) {
+			$faults[] = ['field' => "ingest.{$name}", 'message' => 'read-only: config.xml and the platform own it'];
+		}
+	}
+	return $faults;
+}
+
+/**
  * Every projection Core reads through its settings adapter, in the protocol's order (issue #3937): `dns`, then each feed projection
- * as `groups`, config.xml's groups that project (pfb_core_feed_groups()) with their feeds, in config order, then `schedule` (issue #3941).
+ * as `groups`, config.xml's groups that project (pfb_core_feed_groups()) with their feeds, in config order, then `schedule` (issue #3941)
+ * and the read-only `ingest` (issue #3975).
  *
  * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
  * @return array<string, array<string, mixed>>
@@ -4819,6 +4950,7 @@ function pfb_core_settings(?callable $interfaces = NULL): array {
 		$settings[$projection] = ['groups' => $groups];
 	}
 	$settings['schedule'] = pfb_core_schedule_settings($settings);
+	$settings['ingest'] = pfb_core_ingest_settings();
 	return $settings;
 }
 
@@ -5523,7 +5655,8 @@ function pfb_core_settings_refusal(string $code, string $message, array $fieldEr
 /**
  * The refusal for a malformed settings adapter request, NULL for a well-formed one: nothing is locked or written before it passes.
  * A request holds exactly the keys of its op, and a write's `settings` exactly `dns` (the 17 fields, each of its native type and
- * range), the feed projections (pfb_core_feed_projection_faults(), issue #3937) and `schedule` (pfb_core_schedule_faults(), issue #3941).
+ * range), the feed projections (pfb_core_feed_projection_faults(), issue #3937), `schedule` (pfb_core_schedule_faults(), issue #3941) and
+ * `ingest` (an object here; pfb_core_settings_backend() holds it to what config.xml and the platform project, issue #3975).
  *
  * @param array<mixed> $request
  * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
@@ -5548,8 +5681,9 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 		return pfb_core_settings_refusal('invalid_argument', 'expectedRevision must be a non-negative integer', [['field' => 'expectedRevision', 'message' => 'must be a non-negative integer']]);
 	}
 	$settings = $request['settings'];
-	$projections = ['dns', ...array_keys(PFB_CORE_FEED_SECTIONS), 'schedule'];
-	if (!is_array($settings) || count($settings) !== count($projections) || array_diff($projections, array_keys($settings)) !== [] || !is_array($settings['dns'])) {
+	$projections = ['dns', ...array_keys(PFB_CORE_FEED_SECTIONS), 'schedule', 'ingest'];
+	if (!is_array($settings) || count($settings) !== count($projections) || array_diff($projections, array_keys($settings)) !== [] || !is_array($settings['dns'])
+	    || !is_array($settings['ingest'])) {
 		return pfb_core_settings_refusal('invalid_argument', 'settings must hold exactly ' . implode(', ', $projections));
 	}
 	$dns = $settings['dns'];
@@ -5589,7 +5723,7 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
  * values of every projection (pfb_core_settings()). `read` answers them with their revision. `write` stores what differs from
  * config.xml under the DNS config lock and with one write_config(): each changed `dns` field in its registered key, and each feed
  * projection merged into its section (pfb_core_feed_merge(), issue #3937) and `schedule` merged into its keys (pfb_core_schedule_merge(),
- * issue #3941). It refuses with `conflict` when config.xml is no longer
+ * issue #3941); `ingest` is never written (a write that changes it is `invalid_argument`, after the revision check: a stale Core gets `conflict`). It refuses with `conflict` when config.xml is no longer
  * at the revision Core read, and with `unavailable` when it could not change config.xml (a lock that stays taken, a refused
  * write_config(), a client-IP metrics privacy step that failed). A malformed request is `invalid_argument` and touches nothing.
  * Once the write is stored, each custom list it changed is flagged for a rebuild (pfb_core_custom_list_flag(), issue #3946). The
@@ -5630,6 +5764,11 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		$refusal = pfb_core_settings_request_refusal($request, $interfaces);
 		if ($refusal !== NULL) {
 			return $refusal;
+		}
+		// issue #3975: Core holds ingest as it read it, and the revision just matched, so a difference is a write of the read-only projection
+		$readOnly = pfb_core_ingest_faults($request['settings']['ingest'], $now['ingest']);
+		if ($readOnly !== []) {
+			return pfb_core_settings_refusal('invalid_argument', 'ingest is read-only: config.xml and the platform own it', $readOnly);
 		}
 		$current = pfb_core_dns_settings();
 		$changed = array_keys(array_filter($wanted, static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));
@@ -23134,7 +23273,7 @@ function pfb_rsync_transfer_cmd(string $src, string $dst, int $blocks, int $budg
 	global $pfb;
 
 	$timeout_esc = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
-	$rsync_esc   = escapeshellarg($pfb['rsync_bin'] ?? '/usr/local/bin/rsync');
+	$rsync_esc   = escapeshellarg($pfb['rsync_bin'] ?? PFB_RSYNC_BIN);
 	$src_esc     = escapeshellarg($src);
 	$dst_esc     = escapeshellarg($dst);
 

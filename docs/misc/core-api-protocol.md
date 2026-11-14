@@ -57,6 +57,12 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
   - for a `list`: `items`, the fields of each item (a JSON object), and `key`, the item field that identifies it,
     required and unique in the list. A list is set whole: an item missing from it goes, and an item's missing fields
     keep the values of the item with the same key (a secret the client cannot read survives), else take their defaults.
+
+  A projection may carry `readOnly: true` (issue #3975): Core only reads it, from its backend. `InitializeSettings`,
+  `SaveSettings` and `ValidateSettings` refuse a change set that names it, with any content (also `{}` and `null`):
+  `invalid_argument`, one field error naming the projection (`changes.ingest`, or `settings.ingest` for `InitializeSettings`, whose argument is
+  `settings`), and nothing of the change set is applied.
+  `InitializeSettings` gives it its defaults. Only [`ingest`](#projection-ingest) is read-only.
 - **Revision and generations.** The configuration *revision* is the optimistic lock. It comes from the backend and is
   compared only for equality. A projection's *generation* is derived from its value as a read shows it (53 bits of the
   SHA-256 of its JSON, secrets as their presence): it is never stored, stays equal across Core restarts while the value
@@ -76,6 +82,8 @@ Core's native settings (issue #3842). Core holds them in memory, loaded from a [
   call that the method's 25 s deadline cut off answers `internal` (logged) instead.
 - **No run.** A save starts no run.
 - **Secrets are write-only.** A read shows a secret field as `{"present": true|false}`, never its value, in list items too.
+  Code inside Core's process (the feed phase) reads a projection with its secrets in clear through `Store.GetClear`
+  (`go/pfb_core/settings`); no API method answers it, and a test pins that `GetSettings` still shows presence only.
 - **One Core per state directory.** Core holds an exclusive `flock` on `core.lock` in `--state-dir` while it runs, with
   either backend. A second `pfb-core` on the same directory does not start. With `--update-cmd` the directory also holds
   `schedule_state.json` and `update.log` ([Update command](#update-command)).
@@ -117,10 +125,13 @@ Protocol, version 1:
 
 | Request | Reply |
 |---|---|
-| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}}}` |
+| `{"version": 1, "op": "read"}` | `{"version": 1, "revision": N, "settings": {"dns": {...}, "feeds/ipv4": {...}, "feeds/ipv6": {...}, "feeds/dnsbl": {...}, "schedule": {...}, "ingest": {...}}}` |
 | `{"version": 1, "op": "write", "expectedRevision": N, "settings": {...every projection, every field}}` | `{"version": 1, "revision": M}` |
 
-A read carries secrets (feed credentials) to Core; only Core's API hides them.
+A read carries secrets (feed credentials, the proxy password) to Core; only Core's API hides them. A write carries `ingest`
+as Core read it; the adapter never writes it, and refuses (`invalid_argument`, field errors `ingest.<field>`) a write whose
+`ingest` differs from what config.xml and the platform project, after the revision check: a Core that read the box before
+an address or the proxy changed gets `conflict` and reads again.
 
 A refusal is `{"version": 1, "error": {"code", "message", "fieldErrors"}}`: `conflict` (the configuration is not at
 `expectedRevision`), `invalid_argument` (a malformed request or value; nothing written), `unavailable` (nothing was
@@ -266,6 +277,57 @@ read and PHP runtime model; `go/pfb_core/settings/schedule_parity_test.go` check
 `go/pfb_core/schedule/settings_test.go` compares the models, including `config_hash`. Rejected PHP models are recorded
 as `null`, separately from the valid defaulted projection.
 
+### Projection `ingest`
+
+What the feed phase (the Core translation of the download and parse stages, map #3813) reads of the package settings and of the
+platform it runs on (issue #3975), published as `settings/ingest`. It is **read-only** ([`readOnly`](#settings)): Core never
+changes it, the adapter never writes it, and a change set that names it is refused. A fact that is the box's own (an interface
+address, a VIP, the proxy) moves the revision when it changes, as `bindAddress` does; a Core that read before it gets `conflict`
+once and reads again, and the Update's start reads the backend again ([Update and schedule](#update-and-schedule)).
+
+| Field | Type, default | config.xml / platform (PHP reader) |
+|---|---|---|
+| `suppression` | bool, `true` | ip `suppression` is `on` (`$pfb['supp']`) |
+| `suppressionCidrV4` | int 0 to 17 (0: Disabled), `0` | ip `suppression_cidr`: plain digits 1 to 17, else 0 |
+| `suppressionCidrV6` | int 0 to 64 (0: Disabled), `0` | ip `suppression_cidr_v6`: plain digits 1 to 64, else 0 |
+| `dnsblIp` | bool, `false` | DNSBL `action` is valid and not `Disabled` (`pfb_dnsblip_action_value()`) |
+| `dnsblLenient` | bool, `false` | DNSBL `pfb_dnsbl_lenient` is `on` |
+| `feedHostFilter` | bool, `true` | `pfb_feed_filter_enabled()` |
+| `feedHostAllowlist` | list keyed by `cidr`, `[]`; item `{cidr: string}` | `pfb_feed_internal_allowlist()`: IP addresses and CIDRs, each once |
+| `selfAddresses` | list keyed by `address`, `[]`; item `{address: string}` | the addresses `pfb_ip_is_self()` accepts beyond `127.0.0.1` and `::1` |
+| `proxyUrl` | string `http://host:port` or `""`, `""` | System `proxyurl` and `proxyport` |
+| `proxyUser` | string, `""` | System `proxyuser` |
+| `proxyPassword` | secret string, `""` | System `proxypass` |
+
+- **Suppression limits.** A limit beyond what the IP page offers (hand-edited config.xml: 18, 8.5, `1e1`, negative) reads as
+  0, as a group's own `suppressionCidr` reads a value out of its range; today's PHP applies such a number as typed. A limit
+  applies only while `suppression` is on.
+- **Allowlist.** Split on whitespace and commas, base64 as General stores it, an entry that is no address or subnet dropped,
+  as PHP drops it. Core's list holds an address or a CIDR with no zone and no leading zero in the prefix length, each once, so
+  an entry PHP keeps and Core's list cannot hold (`fe80::1%em0`, `10.0.0.0/08`) is not listed. The list is read whether the
+  filter is on or off.
+- **Self addresses.** What pfSense lists as the box's own: interface addresses, virtual IPs (CARP and IP alias) and the PPPoE
+  server's address, IPv4 then IPv6 (`get_configured_ip_addresses()`, `get_configured_ipv6_addresses()`), each once. Never
+  listed, though PHP would call them the box's own: `0.0.0.0`, `::`, link-local addresses, an IPv4-mapped IPv6 address and any
+  address with a zone. Core adds the loopbacks.
+- **Proxy.** As `pfb_global()` builds the cURL proxy: nothing unless `proxyurl` is set (`"0"` counts as unset); `proxyport` as PHP hands
+  it to cURL ([`CURLOPT_PROXYPORT`](https://curl.se/libcurl/c/CURLOPT_PROXYPORT.html) is a number: `3128abc` is 3128; `00`, `abc`
+  and a service name pfSense's `is_port()` accepts, `http-alt` or `squid`, are 0), where unset or 0 is 1080, the port libcurl dials for
+  a proxy without one (probed: `http-alt` reaches 1080, not the service's 8080), so Core dials what PHP dials; user and password only
+  when both are set, as PHP authenticates only then. The URL is `http://` and the host name (letters, digits, `-`, `_` and `.`, as
+  pfSense's `is_fqdn()` takes them) or IP address (an IPv6 address in brackets); a hand-edited `http://` prefix is accepted. A
+  proxy URL that is anything else (user:password@, a path, another scheme, a line break) or a port `curl_setopt()` refuses (negative,
+  above 65535) is not passed to Core, whole: the proxy is then not projected, and Core reaches feeds directly. cURL's proxy never
+  applied to rsync or to local files.
+- **Core refuses what it reads.** `proxyUrl` must be `http://host:port` (port 1 to 65535, no userinfo, path, query or control
+  character); a listed self address an IP address that is not unspecified, link-local, IPv4-mapped or zoned; an allowlist entry an
+  address or a CIDR without a zone. A backend answer that breaks a rule fails the read ([Settings backends](#settings-backends)).
+
+Parity fixture: `tests/core/fixtures/settings_ingest_parity.json`. `CoreSettingsIngestParityTest` (PHPUnit) freezes it
+against today's readers (`pfb_global()`, `pfb_list_cidr_floors()`, `pfb_feed_internal_allowlist()`, `pfb_ip_is_self()`, the
+cURL proxy options) and the adapter. `go/pfb_core/settings/ingest_parity_test.go` runs Core against it, hostile rows
+included.
+
 ## Update and schedule
 
 Core runs the singleton Update and its quarter-hour scheduler (issue #3941, map #3813) when it starts with
@@ -285,6 +347,10 @@ layer relays these calls from its authenticated pages; Core is never exposed to 
   `settings/schedule` and the `settings/feeds/*` projections as they are then (a save or `SettingsChanged` refreshes them),
   reserves the occurrences and starts a `scheduled` Update with the feeds and Extras (`extra:dcc`, `extra:bl`) that are due.
   Nothing due starts nothing.
+- **Fresh facts at the start.** Before each Update's program runs, Core reads its settings backend again, as `SettingsChanged`
+  does (issue #3975): the interface addresses and the proxy of [`settings/ingest`](#projection-ingest) change outside Core, and
+  the Outpost's tick that tells Core is up to 15 minutes away. A failed read keeps the values in memory, is logged once per
+  outage, and the Update runs on them.
 - **Restarts.** Core starts idle. The pending occurrences and outcomes are kept in `schedule_state.json`; a missing or
   unusable file starts empty and the next quarter hour plans what is due. The Update, its log and its result are in
   memory and in `update.log`, which a new Update starts again: nothing of an Update survives a restart. A stop while an
@@ -456,7 +522,8 @@ pfb-dns ticket decides it.
 | What | Where |
 |---|---|
 | Binary | `/usr/local/pkg/pfblockerng/core/bin/freebsd-amd64/pfb-core`, `.../freebsd-arm64/pfb-core` (static, `CGO_ENABLED=0`; built by `scripts/build-pfb-dns.py`) |
-| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd`, `--update-cmd` and `--zoneinfo /etc/localtime` (the host's zone, which the scheduler reads local time in) |
+| rc script | `/usr/local/etc/rc.d/pfb_core.sh`, written by `pfb_core_service()`; pfSense service `pfb_core`; it starts pfb-core with `--settings-backend-cmd`, `--update-cmd`, `--zoneinfo /etc/localtime` (the host's zone, which the scheduler reads local time in) and the feed phase's flags below |
+| Feed phase flags | `--feed-local-dir` once per folder a `file://` feed may sit directly in: the 14 of `pfb_filter()`'s local-path rule (`/var/db/pfblockerng` and its `deny`, `permit`, `match`, `native`, `original`, `dnsbl`, `dnsblorig`, `ET`, `ut1` and `shallalist` folders, `/usr/local/www`, `/usr/local/share/GeoIP`, `…/GeoIP/cc`) and the real path of the database folder (resolved when the script is generated, when it exists); `--script-dir` twice, in search order (`/usr/local/pkg/pfblockerng/list_scripts`, then `/usr/local/pkg/pfblockerng`); `--rsync-bin /usr/local/bin/rsync`; `--user-agent` the cURL user agent of the package, `pfSense/pfBlockerNG cURL download agent-<unique id>`, as one quoted argument without the line break an id may end with. Each value is `escapeshellarg()`-quoted; Core refuses a relative path and a user agent with a control character as a usage error (exit status 2) |
 | Supervisor | `daemon(8) -r -R 5 -t pfb_core`, pidfiles `/var/run/pfb_core_daemon.pid` (supervisor) and `/var/run/pfb_core.pid` (pfb-core) |
 | Log | `/var/log/pfblockerng/core.log` (pfb-core's stderr, through `daemon -o`) |
 | Socket | `/var/run/pfb_core/api.sock` |
@@ -481,7 +548,7 @@ pfb-dns ticket decides it.
   `/usr/local/etc` and the schedule entries of `/var/db/pfblockerng/pfb_due_ledger.json` (`extra:dcc`, `extra:bl`, the cache
   stamp and the times of `cron`; its `pending_apply` flag, `ss_refresh` and `apply_reconcile` stay). With Keep Settings off, a removal also deletes the state
   directory once `pfb_core` is stopped (`pfb_core_state_teardown()`).
-- **Paths.** Core reads every path from a flag. It names no pfSense path and imports nothing but the standard library, its
+- **Paths.** Core reads every path from a flag (`--feed-local-dir`, `--script-dir` and `--rsync-bin` must be absolute: a relative one is a usage error). It names no pfSense path and imports nothing but the standard library, its
   own packages, `golang.org/x/net` and `golang.org/x/text` (the feed parser's UTS #46 conversion), `golang.org/x/sys` (CPU
   feature detection for xxh128), all pinned in `go.mod` to the versions of `go/pfb_dns_gateway`, and
   `github.com/pfBlockerNG/xxh3` (the feed content digest, xxh128 as PHP writes it; the pfBlockerNG fork of `zeebo/xxh3`,

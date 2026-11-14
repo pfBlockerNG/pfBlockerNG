@@ -206,7 +206,7 @@ func TestCoreServesTheAdaptersSettings(t *testing.T) {
 	f := newFakeAdapter(t, readReply(t, 5, map[string]any{"control": true, "decisionCacheMax": 500}))
 	c := startCore(t, scratchDir(t), "--settings-backend-cmd", f.path)
 	snap := snapshotOf(t, c.post("GetSettings", `{}`))
-	if !snap.Initialized || snap.Revision != 5 || len(snap.Projections) != 5 || snap.Projections[4].ResourceID != "settings/schedule" || snap.Projections[0].Value["control"] != true ||
+	if !snap.Initialized || snap.Revision != 5 || len(snap.Projections) != 6 || snap.Projections[4].ResourceID != "settings/schedule" || snap.Projections[5].ResourceID != "settings/ingest" || snap.Projections[0].Value["control"] != true ||
 		snap.Projections[0].Value["decisionCacheMax"] != float64(500) || snap.Projections[0].Value["replyLogging"] != true {
 		t.Errorf("GetSettings = %+v, want the adapter's revision 5, control on, cap 500 and the defaults", snap)
 	}
@@ -236,7 +236,7 @@ func TestSettingsChangedMakesCoreReadTheAdapterAgain(t *testing.T) {
 	c := startCore(t, scratchDir(t), "--settings-backend-cmd", f.path)
 	f.reply(readReply(t, 6, map[string]any{"idnMode": "on"}))
 	snap := snapshotOf(t, c.post("SettingsChanged", `{}`))
-	if !snap.Initialized || snap.Revision != 6 || len(snap.Projections) != 5 || snap.Projections[4].ResourceID != "settings/schedule" || snap.Projections[0].Value["idnMode"] != "on" {
+	if !snap.Initialized || snap.Revision != 6 || len(snap.Projections) != 6 || snap.Projections[4].ResourceID != "settings/schedule" || snap.Projections[5].ResourceID != "settings/ingest" || snap.Projections[0].Value["idnMode"] != "on" {
 		t.Errorf("SettingsChanged = %+v, want what the adapter now holds: revision 6, idnMode on", snap)
 	}
 	if got := snapshotOf(t, c.post("GetSettings", `{}`)); got.Revision != 6 || got.Projections[0].Value["idnMode"] != "on" {

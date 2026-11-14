@@ -17,18 +17,34 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
-// newUpdates builds Core's scheduler and its Update gate for --update-cmd: the program at path runs each Update (an empty
-// path: no scheduler, and both are nil). The scheduler's state and the Update's log live in stateDir. The schedule is read in
-// the zone of the file zoneinfo names (--zoneinfo; empty: the process's local zone).
+// newUpdates builds Core's scheduler and its Update gate for --update-cmd: the program at path runs each Update, after the
+// settings are read again (refreshingRun); an empty path: no scheduler, and both are nil. The scheduler's state and the Update's
+// log live in stateDir. The schedule is read in the zone of the file zoneinfo names (--zoneinfo; empty: the process's local zone).
 func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
 	if path == "" {
 		return nil, nil
 	}
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
 		Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
-	gate := update.New(filepath.Join(stateDir, "update.log"), (&update.Command{Path: path}).Run, sched.Done)
+	gate := update.New(filepath.Join(stateDir, "update.log"), refreshingRun(st, (&update.Command{Path: path}).Run, logf), sched.Done)
 	sched.Bind(gate.Start)
 	return sched, gate
+}
+
+// refreshingRun is run with the settings read again from their backend before each Update, as SettingsChanged reads them
+// (issue #3975): the interface addresses and the proxy change outside Core, and the Outpost's tick that tells Core is up to 15
+// minutes away. A failed read keeps the values in memory, is logged once per outage, and the Update runs on them.
+func refreshingRun(st *settings.Store, run update.RunFunc, logf func(string, ...any)) update.RunFunc {
+	var broken atomic.Bool
+	return func(ctx context.Context, req update.Request, log *os.File) (update.Result, error) {
+		switch _, err := st.Reload(ctx); {
+		case err == nil:
+			broken.Store(false)
+		case ctx.Err() == nil && broken.CompareAndSwap(false, true):
+			logf("the settings could not be read again before the Update, the values read last are used: %v", err)
+		}
+		return run(ctx, req, log)
+	}
 }
 
 // hostZone is the scheduler's zone for --zoneinfo path (nil without one): the time zone file at path, read at every call, so

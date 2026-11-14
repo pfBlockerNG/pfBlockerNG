@@ -155,6 +155,37 @@ func (s *Store) Get(ids []string) (Snapshot, error) {
 	return snap, nil
 }
 
+// GetClear is Get for one projection with every secret in clear, in list items too, for code inside Core's process (the feed
+// phase needs a feed's credentials and the proxy's password). No API method may answer it: the API shows secrets as their
+// presence only. The values are a copy the caller may change.
+func (s *Store) GetClear(id string) (map[string]any, error) {
+	if _, ok := s.projection(id); !ok {
+		return nil, &ValidationError{Fields: []FieldError{{Field: "projectionId", Message: "no such projection"}}}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.initialized {
+		return nil, &ConflictError{Message: "the settings are not initialized yet"}
+	}
+	return cloneValues(s.values[id]), nil
+}
+
+// cloneValues is values copied through its lists, so that nothing a caller changes reaches the store's own.
+func cloneValues(values map[string]any) map[string]any {
+	c := make(map[string]any, len(values))
+	for name, v := range values {
+		if list, ok := v.([]any); ok {
+			items := make([]any, len(list))
+			for i, item := range list {
+				items[i] = cloneValues(item.(map[string]any))
+			}
+			v = items
+		}
+		c[name] = v
+	}
+	return c
+}
+
 // show is a projection's values as a read shows them, every secret as its presence.
 func show(p Projection, values map[string]any) ProjectionValue {
 	value := hide(p.Fields, values)
@@ -215,7 +246,9 @@ func (s *Store) Initialize(ctx context.Context, settings map[string]map[string]j
 	values := make(map[string]map[string]any, len(s.schema.Projections))
 	var errs []FieldError
 	for _, p := range s.schema.Projections {
-		v, perr := apply(p, defaults(p), settings[p.ID], p.ID)
+		change, refused := changeFor(p, settings)
+		v, perr := apply(p, defaults(p), change, p.ID)
+		errs = append(errs, refused...)
 		errs = append(errs, perr...)
 		values[p.ID] = v
 	}
@@ -252,7 +285,9 @@ func (s *Store) Save(ctx context.Context, expected uint64, changes map[string]ma
 	values := make(map[string]map[string]any, len(s.schema.Projections))
 	var errs []FieldError
 	for _, p := range s.schema.Projections {
-		v, perr := apply(p, s.values[p.ID], changes[p.ID], p.ID)
+		change, refused := changeFor(p, changes)
+		v, perr := apply(p, s.values[p.ID], change, p.ID)
+		errs = append(errs, refused...)
 		errs = append(errs, perr...)
 		values[p.ID] = v
 	}
@@ -301,7 +336,9 @@ func (s *Store) Validate(changes map[string]map[string]json.RawMessage) error {
 		if s.initialized {
 			base = s.values[p.ID]
 		}
-		_, perr := apply(p, base, changes[p.ID], p.ID)
+		change, refused := changeFor(p, changes)
+		_, perr := apply(p, base, change, p.ID)
+		errs = append(errs, refused...)
 		errs = append(errs, perr...)
 	}
 	errs = append(errs, unknownProjections(s, changes)...)
@@ -309,6 +346,15 @@ func (s *Store) Validate(changes map[string]map[string]json.RawMessage) error {
 		return &ValidationError{Fields: errs}
 	}
 	return nil
+}
+
+// changeFor is the part of a change set that names p. A read-only projection may not be named, whatever the change holds (none,
+// null, valid or not): one field error says so, and nothing of it is applied.
+func changeFor(p Projection, set map[string]map[string]json.RawMessage) (map[string]json.RawMessage, []FieldError) {
+	if _, named := set[p.ID]; named && p.ReadOnly {
+		return nil, []FieldError{{Field: p.ID, Message: "is read-only: Core reads it from the platform and does not change it"}}
+	}
+	return set[p.ID], nil
 }
 
 func unknownProjections(s *Store, given map[string]map[string]json.RawMessage) []FieldError {
