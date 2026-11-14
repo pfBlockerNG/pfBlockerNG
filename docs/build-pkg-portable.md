@@ -435,13 +435,19 @@ Do this whenever `go/pfb_dns_gateway/go.mod` or `go.sum` changes:
    each subdirectory with `../go/pfb_dns_gateway/` (`vendor/<path>` becomes
    `../go/pfb_dns_gateway/vendor/<path>`).
 4. `cp "$VENDOR/modules.txt" <port>/files/modules.txt`
+5. Edge only: re-pin the changed tuples in its `distinfo` (`make makesum`, or the `SHA256` and
+   `SIZE` of each tarball fetched from its `GH_TUPLE` URL). Nightly carries no `distinfo`: its own
+   tarball is the local devel source, which no tag serves, so `make checksum` cannot run there.
 
 ### Paired-PR rule
 
 A change to `go.mod` or `go.sum` needs a paired FreeBSD-ports PR that updates `GH_TUPLE` and
 `files/modules.txt` of every recipe that tracks that source: nightly for `devel`, edge for its
 release line. Until both repositories agree the builder fails closed, nightly included.
-`release-published.yml` bumps only `PORTVERSION`, so a release whose
+A devel PR that changes a `go/**/go.mod` or `go.sum` runs `ports-modules-txt.yml`, which fails
+until the nightly recipe's `files/modules.txt` equals the PR's `go mod vendor` output (#4007).
+`release-published.yml` bumps only `PORTVERSION` (and re-pins the edge port's own tarball in its
+`distinfo`), so a release whose
 `go.mod` differs from the edge recipe fails at build time, before anything is published.
 Check the pair before either lands by dispatching the build with `ports_ref=<the ports PR branch>`.
 
