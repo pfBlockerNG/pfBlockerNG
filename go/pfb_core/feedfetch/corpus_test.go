@@ -13,9 +13,21 @@ package feedfetch_test
 //	filter       optional, default true: the feed-host internal-address filter.
 //	allowlist    optional [IP or CIDR]: internal-address exemptions.
 //	self         optional [IP]: the box's own configured addresses (127.0.0.1 and ::1 always are).
-//	servers      optional [name]: HTTP servers on 127.0.0.1; "{port:<name>}" expands to a server's port and
+//	servers      optional [server]: HTTP servers on 127.0.0.1; "{port:<name>}" expands to a server's port and
 //	             "{port:closed}" to a port nothing listens on. "{local}" is the feed directory, which is also the one
 //	             directory local file sources may sit in (a URL "{local}/x" is the local path; Core reads it as file://).
+//	             A server is a name or {name, tls: true, cert: "trusted"|"untrusted", plain_too}: HTTPS with a
+//	             certificate from a test CA made at test time (the feed fetcher trusts that CA, Fetcher.RootCAs);
+//	             "untrusted" is self-signed, not signed by it. Each TLS connection a server accepts is recorded, before
+//	             its handshake, as {server, tls: "connect"}: the attempts the fetcher made, whether or not the handshake
+//	             held. With plain_too the same port also serves plain http (the first byte decides, 0x16 being a TLS
+//	             handshake), so a redirect can change the scheme and nothing else.
+//	proxy        optional {server, auth: {user, password}, requires: {user, password}}: the system proxy. server names
+//	             a forward proxy the runner starts (tests/feedfetch/fixtures/net_fixture.py, run by both runners: an
+//	             absolute-form GET for http, CONNECT for https, to 127.0.0.1 at the target's port; "closed" is nothing
+//	             listening), auth the user and password the system proxy holds (Fetcher.Proxy's userinfo), requires the
+//	             Basic credentials the proxy demands (407 otherwise). The proxy records each request as {server: the
+//	             proxy's name, method, target, and proxy_authorization when one was sent} in the shared request order.
 //	routes       optional {server: {path: route}}, a step may replace it (the replacement stays for later steps).
 //	             route: status (default 200), location, body, etag, last_modified (Unix seconds), declared_length.
 //	             An unknown path is a 404 "missing\n". With etag the server answers 304 when If-None-Match equals it;
@@ -27,7 +39,8 @@ package feedfetch_test
 //	             local_files again before it runs.
 //	steps        [step], run in order against one feed:
 //	  op         "ingest" (download and publish) or "probe" (change detection).
-//	  url, format ("rsync" or absent), username, password, headers ["Name: value"], ceiling (bytes),
+//	  url, format ("rsync" or absent), username, password, headers ["Name: value"], ceiling (bytes), flex (the feed's
+//	  Flex flag, default false),
 //	  rsync      {exit, body}: the stand-in rsync (tests/feedfetch/fixtures/fake-rsync.sh) for this step.
 //	  expect     ok; decision (probe: changed|unchanged|failed); published (string or null); etag, lastmod, digest
 //	             (absent: unchanged by the step); requests [{server, path, and only the headers sent among authorization,
@@ -41,12 +54,15 @@ package feedfetch_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -99,6 +115,7 @@ type step struct {
 		Exit int    `json:"exit"`
 		Body string `json:"body"`
 	} `json:"rsync"`
+	Flex      bool    `json:"flex"`
 	Expect    expect  `json:"expect"`
 	OldExpect *expect `json:"old_expect"`
 }
@@ -110,7 +127,8 @@ type scenario struct {
 	Filter      *bool               `json:"filter"`
 	Allowlist   []string            `json:"allowlist"`
 	Self        []string            `json:"self"`
-	Servers     []string            `json:"servers"`
+	Servers     []serverSpec        `json:"servers"`
+	Proxy       *proxySpec          `json:"proxy"`
 	Routes      routes              `json:"routes"`
 	Seed        *struct {
 		Published *string `json:"published"`
@@ -125,9 +143,10 @@ type scenario struct {
 
 // corpusServer mirrors tests/php/support/FeedFetchCorpusRouter.php.
 type corpusServer struct {
+	t    testing.TB
 	name string
-	mu   *sync.Mutex
-	log  *[]map[string]string
+	mu   *sync.Mutex // guards tab
+	log  *requestLog
 	tab  *routes
 }
 
@@ -141,8 +160,8 @@ func (s corpusServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			rec[key] = v[0]
 		}
 	}
+	s.log.add(s.t, rec)
 	s.mu.Lock()
-	*s.log = append(*s.log, rec)
 	rt, ok := (*s.tab)[s.name][r.URL.Path]
 	s.mu.Unlock()
 	if !ok {
@@ -239,17 +258,55 @@ func runScenario(t *testing.T, file string) {
 	closed.Close()
 
 	var mu sync.Mutex
-	var requests []map[string]string
+	reqLog := &requestLog{path: filepath.Join(tools, "requests.log")}
 	table := routes{}
-	for _, name := range sc.Servers {
+	var pki *corpusPKI
+	for _, spec := range sc.Servers {
+		spec := spec
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
-		srv := &http.Server{Handler: corpusServer{name: name, mu: &mu, log: &requests, tab: &table}}
+		srv := &http.Server{
+			Handler:  corpusServer{t: t, name: spec.Name, mu: &mu, log: reqLog, tab: &table},
+			ErrorLog: log.New(io.Discard, "", 0), // a handshake the client aborts is the expected outcome of some scenarios
+		}
+		if spec.TLS {
+			if pki == nil {
+				made := newCorpusPKI(t)
+				pki = &made
+			}
+			cert, ok := pki.certs[spec.Cert]
+			if !ok {
+				t.Fatalf("server %s: cert must be trusted or untrusted, got %q", spec.Name, spec.Cert)
+			}
+			ln = tlsListener{
+				Listener: ln, cfg: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+				plainToo: spec.PlainToo,
+				connected: func() {
+					reqLog.add(t, map[string]string{"server": spec.Name, "tls": "connect"})
+				},
+			}
+		}
 		go srv.Serve(ln)
 		t.Cleanup(func() { srv.Close() })
-		ports[name] = strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+		ports[spec.Name] = strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	}
+	var systemProxy *url.URL
+	if sc.Proxy != nil {
+		port := ports["closed"]
+		if sc.Proxy.Server != "closed" {
+			args := []string{"proxy", "--name", sc.Proxy.Server, "--log", reqLog.path}
+			if r := sc.Proxy.Requires; r != nil {
+				args = append(args, "--user", r.User, "--password", r.Password)
+			}
+			port = startNetFixture(t, args...)
+			ports[sc.Proxy.Server] = port
+		}
+		systemProxy = &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", port)}
+		if a := sc.Proxy.Auth; a != nil {
+			systemProxy.User = url.UserPassword(a.User, a.Password)
+		}
 	}
 	placeholder := regexp.MustCompile(`\{port:([a-z]+)\}`)
 	expand := func(s string) string {
@@ -331,8 +388,12 @@ func runScenario(t *testing.T, file string) {
 				return out, nil
 			},
 		},
+		Proxy:      systemProxy,
 		RsyncBin:   filepath.Join(tools, "rsync"),
 		RetryDelay: time.Millisecond, // the PHP side runs with curl_retry_sleep 0
+	}
+	if pki != nil {
+		f.RootCAs = pki.pool
 	}
 	for _, a := range sc.Allowlist {
 		p, err := netip.ParsePrefix(a)
@@ -352,14 +413,13 @@ func runScenario(t *testing.T, file string) {
 		if st.OldExpect != nil && reflect.DeepEqual(*st.OldExpect, st.Expect) {
 			t.Fatalf("%s: old_expect equals expect; drop it", label)
 		}
+		exp := st.Expect
 		if st.Routes != nil {
 			current = st.Routes
 		}
 		setRoutes(current)
 		writeLocal(st.LocalFiles)
-		mu.Lock()
-		requests = nil
-		mu.Unlock()
+		reqLog.reset(t)
 		os.Remove(filepath.Join(tools, "rsync.argv"))
 		var body string
 		exit := 0
@@ -375,7 +435,7 @@ func runScenario(t *testing.T, file string) {
 		}
 		req := feedfetch.Request{
 			URL: url, Rsync: st.Format == "rsync", Username: st.Username, Password: st.Password,
-			Headers: st.Headers, Timeout: 30 * time.Second, MaxBytes: st.Ceiling,
+			Headers: st.Headers, Timeout: 30 * time.Second, MaxBytes: st.Ceiling, Flex: st.Flex,
 		}
 		var res feedfetch.Result
 		switch st.Op {
@@ -388,30 +448,25 @@ func runScenario(t *testing.T, file string) {
 		}
 
 		got := map[string]any{"ok": res.OK}
-		want := map[string]any{"ok": st.Expect.OK}
-		if st.Expect.Decision != nil {
+		want := map[string]any{"ok": exp.OK}
+		if exp.Decision != nil {
 			got["decision"] = res.Decision.String()
-			want["decision"] = *st.Expect.Decision
+			want["decision"] = *exp.Decision
 		}
 		got["published"] = readOrNil(orig)
-		want["published"] = nilOr(st.Expect.Published)
+		want["published"] = nilOr(exp.Published)
 		got["etag"] = readOrNil(orig + ".etag")
 		got["lastmod"] = nil
 		if lm := readOrNil(orig + ".lastmod"); lm != nil {
 			n, _ := strconv.ParseInt(lm.(string), 10, 64)
 			got["lastmod"] = float64(n)
 		}
-		want["etag"] = rawOr(st.Expect.ETag, prevETag)
-		want["lastmod"] = rawOr(st.Expect.LastMod, prevLastMod)
-		got["digest"], want["digest"] = readOrNil(orig+".xxhash128"), rawOr(st.Expect.Digest, prevDigest)
-		mu.Lock()
-		gotReq := append([]map[string]string{}, requests...)
-		mu.Unlock()
-		if gotReq == nil {
-			gotReq = []map[string]string{}
-		}
+		want["etag"] = rawOr(exp.ETag, prevETag)
+		want["lastmod"] = rawOr(exp.LastMod, prevLastMod)
+		got["digest"], want["digest"] = readOrNil(orig+".xxhash128"), rawOr(exp.Digest, prevDigest)
+		gotReq := reqLog.read(t)
 		wantReq := []map[string]string{}
-		for _, r := range st.Expect.Requests {
+		for _, r := range exp.Requests {
 			e := map[string]string{}
 			for k, v := range r {
 				e[k] = expand(v)
@@ -424,15 +479,15 @@ func runScenario(t *testing.T, file string) {
 			}
 		}
 		got["requests"], want["requests"] = gotReq, wantReq
-		got["rsync_source"], want["rsync_source"] = nil, nilOr(st.Expect.RsyncSource)
+		got["rsync_source"], want["rsync_source"] = nil, nilOr(exp.RsyncSource)
 		if argv, err := os.ReadFile(filepath.Join(tools, "rsync.argv")); err == nil {
 			args := strings.Split(strings.TrimSuffix(string(argv), "\n"), "\n")
 			if len(args) >= 2 {
 				got["rsync_source"] = args[len(args)-2]
 			}
 		}
-		if st.Expect.Reason != nil {
-			got["reason"], want["reason"] = res.Reason, *st.Expect.Reason
+		if exp.Reason != nil {
+			got["reason"], want["reason"] = res.Reason, *exp.Reason
 		}
 		got["staged"], want["staged"] = stagedLeftover(t, dir, name), ""
 		if !reflect.DeepEqual(got, want) {

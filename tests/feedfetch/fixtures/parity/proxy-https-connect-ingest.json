@@ -1,0 +1,58 @@
+{
+ "schema": 1,
+ "description": "An https feed goes through the system proxy as a CONNECT tunnel, verified end to end against the feed's own name.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "secure",
+   "tls": true,
+   "cert": "trusted"
+  }
+ ],
+ "proxy": {
+  "server": "proxy"
+ },
+ "routes": {
+  "secure": {
+   "/list": {
+    "body": "BODY\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "https://feed.example:{port:secure}/list",
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "digest": "f688192737a93ab01f03c9345b0ab795",
+    "requests": [
+     {
+      "server": "proxy",
+      "method": "CONNECT",
+      "target": "feed.example:{port:secure}"
+     },
+     {
+      "server": "secure",
+      "tls": "connect"
+     },
+     {
+      "server": "secure",
+      "path": "/list",
+      "host": "feed.example:{port:secure}"
+     }
+    ]
+   }
+  }
+ ]
+}

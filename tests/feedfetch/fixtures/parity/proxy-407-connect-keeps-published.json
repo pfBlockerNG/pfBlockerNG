@@ -1,0 +1,70 @@
+{
+ "schema": 1,
+ "description": "A CONNECT refused with 407 fails every attempt; the published copy is kept.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "secure",
+   "tls": true,
+   "cert": "trusted"
+  }
+ ],
+ "proxy": {
+  "server": "proxy",
+  "requires": {
+   "user": "puser",
+   "password": "ppass"
+  }
+ },
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "routes": {
+  "secure": {
+   "/list": {
+    "body": "BODY\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "https://feed.example:{port:secure}/list",
+   "expect": {
+    "ok": false,
+    "published": "old\n",
+    "reason": "curl_incomplete",
+    "requests": [
+     {
+      "server": "proxy",
+      "method": "CONNECT",
+      "target": "feed.example:{port:secure}"
+     },
+     {
+      "server": "proxy",
+      "method": "CONNECT",
+      "target": "feed.example:{port:secure}"
+     },
+     {
+      "server": "proxy",
+      "method": "CONNECT",
+      "target": "feed.example:{port:secure}"
+     }
+    ],
+    "etag": null,
+    "lastmod": null
+   }
+  }
+ ]
+}

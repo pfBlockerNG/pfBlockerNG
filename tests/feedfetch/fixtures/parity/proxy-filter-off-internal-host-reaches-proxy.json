@@ -1,0 +1,54 @@
+{
+ "schema": 1,
+ "description": "With the filter off no vetting happens: the proxy is asked for the internal host by name.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ],
+  "internal.example": [
+   "10.1.2.3"
+  ]
+ },
+ "filter": false,
+ "servers": [
+  "origin"
+ ],
+ "proxy": {
+  "server": "proxy"
+ },
+ "routes": {
+  "origin": {
+   "/list": {
+    "body": "BODY\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "http://internal.example:{port:origin}/list",
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "digest": "f688192737a93ab01f03c9345b0ab795",
+    "requests": [
+     {
+      "server": "proxy",
+      "method": "GET",
+      "target": "http://internal.example:{port:origin}/list"
+     },
+     {
+      "server": "origin",
+      "path": "/list",
+      "host": "internal.example:{port:origin}"
+     }
+    ]
+   }
+  }
+ ]
+}

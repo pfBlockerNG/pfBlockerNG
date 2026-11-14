@@ -1,0 +1,59 @@
+{
+ "schema": 1,
+ "description": "With Flex an untrusted certificate fails verification once, then the downgraded second attempt is served.",
+ "hosts": {
+  "feed.example": [
+   "127.0.0.1",
+   "203.0.113.5"
+  ],
+  "rdr.example": [
+   "127.0.0.1",
+   "203.0.113.6"
+  ]
+ },
+ "servers": [
+  {
+   "name": "secure",
+   "tls": true,
+   "cert": "untrusted"
+  }
+ ],
+ "seed": {
+  "published": "old\n",
+  "etag": "\"v0\"",
+  "lastmod": 1700000000
+ },
+ "routes": {
+  "secure": {
+   "/list": {
+    "body": "BODY\n"
+   }
+  }
+ },
+ "steps": [
+  {
+   "op": "ingest",
+   "url": "https://feed.example:{port:secure}/list",
+   "flex": true,
+   "expect": {
+    "ok": true,
+    "published": "BODY\n",
+    "digest": "f688192737a93ab01f03c9345b0ab795",
+    "requests": [
+     {
+      "server": "secure",
+      "tls": "connect"
+     },
+     {
+      "server": "secure",
+      "tls": "connect"
+     },
+     {
+      "server": "secure",
+      "path": "/list"
+     }
+    ]
+   }
+  }
+ ]
+}
