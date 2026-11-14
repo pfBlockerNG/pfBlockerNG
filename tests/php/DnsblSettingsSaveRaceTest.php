@@ -25,14 +25,18 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 	private const DNSBL = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	private const SAVED = 'installedpackages/pfblockerngdns/config/0/pfb_dns_saved';
 
-	/** @return array{disk:array,events:list<list<string>>,lockHeld:bool,inputErrors:list<string>} */
-	private function runScenario(string $scenario): array
+	/**
+	 * @param array<string, mixed> $case the worker's case
+	 * @return array{disk:array,events:list<list<string>>,lockHeld:bool,inputErrors:list<string>,effects:array}
+	 */
+	private function runScenario(string $scenario, array $case = []): array
 	{
 		$dir = sys_get_temp_dir() . '/pfb_dnsbl_save_race_' . bin2hex(random_bytes(6));
 		mkdir($dir, 0700, TRUE);
 		$result = "{$dir}/result.json";
 		try {
-			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . '/support/DnsblSaveWorker.php', $scenario, $result], 60.0);
+			$process = pfb_test_run_process([PHP_BINARY, __DIR__ . '/support/DnsblSaveWorker.php', $scenario, $result,
+				json_encode((object) $case, JSON_THROW_ON_ERROR)], 60.0);
 			$this->assertFileExists($result, "the worker reported nothing (exit {$process['exit']}): {$process['stderr']}");
 			return json_decode((string) file_get_contents($result), TRUE, 512, JSON_THROW_ON_ERROR);
 		} finally {
@@ -64,6 +68,18 @@ final class DnsblSettingsSaveRaceTest extends TestCase
 		$this->assertSame('', self::at($result['disk'], self::DNSBL . '/pfb_py_reply'), 'the user\'s Off for DNS Reply Logging stays Off');
 		$this->assertSame('lo0', self::at($result['disk'], 'unbound/active_interface'), 'the moved Resolver stays moved');
 		$this->assertNotEmpty(self::at($result['disk'], self::SAVED), 'and its snapshot is kept');
+	}
+
+	public function testASaveOfAnUnchangedBlockPageServesItWhenAnotherSaveChoseAnotherMeanwhile(): void
+	{
+		// Given a form loaded with the alternative block page stored, then another save stored and served the default one,
+		// and this save posts the alternative unchanged (issue #3998)
+		$result = $this->runScenario('interleave', ['webpageChanged' => FALSE, 'otherWebpage' => 'dnsbl_default.php', 'activePage' => 'DEFAULT PAGE']);
+
+		// Then the page config.xml names is the page DNSBL serves
+		$this->assertSame([], $result['inputErrors']);
+		$this->assertSame('dnsbl_alt.php', self::at($result['disk'], self::DNSBL . '/dnsbl_webpage'), 'the save stores the alternative page');
+		$this->assertSame('ALTERNATIVE PAGE', $result['effects']['after']['activePage'], 'so DNSBL must serve it, not the default the other save copied');
 	}
 
 	public function testASaveWritesTheEightPostedPolicyFieldsToDiskInTheirStoredForm(): void

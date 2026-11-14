@@ -19,8 +19,9 @@ declare(strict_types=1);
  * descriptions ("writes") and the record of a failed notice to Core the save left ("settingsFailed": the reason, or NULL).
  * "effects" holds the save's file side effects before and after it ran, in the sandbox: the TOP1M baseline files present
  * ("baseline"), the TOP1M rebuild marker ("updateMarker") and the blocked-page file DNSBL serves ("activePage": its content, or NULL
- * when there is none). The case's `webpageChanged` (default true) is whether the posted block page differs from the stored one;
- * `activePage` is the content seeded as the served block page (default "ACTIVE ORIGINAL", NULL for none). "effects.atUnlock" lists
+ * when there is none). The case's `webpageChanged` (default true) is whether the posted block page differs from the one stored when
+ * the request loaded the form; `otherWebpage` is the block page the `interleave` scenario's other save stored meanwhile (default:
+ * unchanged); `activePage` is the content seeded as the served block page (default "ACTIVE ORIGINAL", NULL for none). "effects.atUnlock" lists
  * the same state at each release of the DNS config lock. The case's `seed.migrated` (default true) is whether the stored DNSBL
  * policy is already migrated: when false the page's upgrade facade writes config.xml itself, mid-save.
  * The page's fresh read of config.xml under the lock gives back what is on disk: the block page chosen in the validation is in
@@ -117,7 +118,8 @@ $GLOBALS['config'] = [];
 (new DnsblSaveWorkerSeeder())->seed();
 config_set_path("{$dnsbl}/pfb_py_reply", 'on');
 config_set_path("{$dnsbl}/pfb_dnsport", '8081');
-config_set_path("{$dnsbl}/dnsbl_webpage", 'dnsbl_default.php');
+// The block page stored when this request loaded the form: the posted alternative unless the case says it changed
+config_set_path("{$dnsbl}/dnsbl_webpage", ($case['webpageChanged'] ?? TRUE) ? 'dnsbl_default.php' : 'dnsbl_alt.php');
 config_set_path('unbound/active_interface', 'lan');
 config_set_path('unbound/custom_options', base64_encode('do-ip6: no'));
 if ($case['seed']['migrated'] ?? TRUE) {
@@ -133,6 +135,10 @@ $other['installedpackages']['pfblockerngdns']['config'][0]['pfb_dns_saved'] = ba
 	'enablessl'        => ['present' => FALSE, 'value' => ''],
 	'custom_options'   => ['present' => TRUE, 'value' => base64_encode('do-ip6: no')],
 ]));
+if (isset($case['otherWebpage'])) {
+	// issue #3998: another save chose (and served) this block page after this request loaded the form
+	$other['installedpackages']['pfblockerngdnsblsettings']['config'][0]['dnsbl_webpage'] = $case['otherWebpage'];
+}
 
 global $pfb;
 pfb_global();
@@ -160,7 +166,7 @@ $effectsBefore = dnsbl_save_worker_effects();
 
 // The page's validation, as it leaves them for the save.
 $dnsbl_webpage_file = 'dnsbl_alt.php';
-$dnsbl_webpage = (bool) ($case['webpageChanged'] ?? TRUE);
+$dnsbl_webpage = $dnsbl_webpage_file != $pfb['dconfig']['dnsbl_webpage'];	// the validation compares with this request's copy
 $pfb['dconfig']['dnsbl_webpage'] = $dnsbl_webpage_file;
 $pfb_auto = FALSE;
 $pfb_top1m_token_post = '';
