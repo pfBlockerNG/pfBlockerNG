@@ -471,3 +471,20 @@ func TestMIMEProbeDoesNotStopAtOneKiB(t *testing.T) {
 		t.Fatalf("the full sniff window must see the binary byte after 1 KiB: %+v, published %q", res, published(t, feed))
 	}
 }
+
+// The MIME probe classifies exactly the first MiB: a NUL as its last byte makes the body binary, one byte later the
+// probe never sees it and the body is text to the MIME stage.
+func TestMIMEProbeWindowIsExactlyOneMiB(t *testing.T) {
+	for _, tc := range []struct {
+		at      int
+		refused bool
+	}{{1<<20 - 1, true}, {1 << 20, false}} {
+		body := bytes.Repeat([]byte("1.2.3.4\n"), (1<<20)/8+1)
+		body[tc.at] = 0
+		f, feed, src := seededFeed(t)
+		res := f.Ingest(context.Background(), feed, localRequest(t, src, body))
+		if mimeRefused := res.Stage == "mime"; mimeRefused != tc.refused {
+			t.Fatalf("a NUL at offset %d: want refused by the MIME stage %v, got %+v", tc.at, tc.refused, res)
+		}
+	}
+}

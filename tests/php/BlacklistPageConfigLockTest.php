@@ -235,6 +235,17 @@ final class BlacklistPageConfigLockTest extends TestCase
 		$this->assertSame([self::LOCK], $result['events'], 'only the bounded attempt: no read, no write');
 	}
 
+	public function testALanguageOnlyPostWritesUnderTheLock(): void
+	{
+		// Given a POST carrying the Language select alone (the form always sends Enable with it; a crafted request need not)
+		$result = $this->worker('plain', ['arm' => 'auto', 'post' => ['blacklist_enable' => NULL, 'blacklist_lang' => 'DE']]);
+
+		$this->assertSame('EN', self::blacklist($result['before'])['blacklist_lang'], 'before-state: the language is EN');
+		$this->assertSame(['try_lock', 'read', 'write', 'unlock'], self::eventNames($result), 'the write is made under the lock');
+		$this->assertSame([self::WRITE], $result['writes']);
+		$this->assertSame('DE', self::blacklist($result['disk'])['blacklist_lang'], 'the posted language is saved');
+	}
+
 	public function testARequestThatPostsNoneOfThePagesFieldsTakesNoLockAndWritesNothing(): void
 	{
 		$result = $this->worker('plain', ['arm' => 'auto', 'post' => ['blacklist_enable' => NULL, 'unrelated' => 'x']]);
