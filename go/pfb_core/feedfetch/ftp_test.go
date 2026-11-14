@@ -382,3 +382,22 @@ func TestAnFTPURLThatNamesNoFileIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// Every control byte is refused before a connection, not only a line feed: a lone CR (or a NUL) in the path, the URL
+// userinfo or the feed's own login ends a command line for some servers, so it must never reach USER/PASS/RETR.
+func TestAnFTPControlByteOtherThanALineFeedIsNeverSent(t *testing.T) {
+	stub := newFTPStub(t, nil)
+	host := strings.TrimPrefix(stub.url(""), "ftp://")
+	for _, tc := range []struct{ name, url, user, reason string }{
+		{"lone CR in the path", stub.url("/list.txt%0dDELE%20x"), "", "feed ftp path contains a control character"},
+		{"NUL in the path", stub.url("/list.txt%00"), "", "feed ftp path contains a control character"},
+		{"lone CR in the URL userinfo", "ftp://bob%0dDELE%20x:pw@" + host + "/list.txt", "", "feed ftp credentials contain a control character"},
+		{"lone CR in the feed username", stub.url("/list.txt"), "bob\rDELE x", "feed ftp credentials contain a control character"},
+	} {
+		f, feed := quickFetcher(t)
+		res := f.Ingest(context.Background(), feed, feedfetch.Request{URL: tc.url, Username: tc.user, Timeout: 10 * time.Second})
+		if res.OK || res.Reason != tc.reason || stub.hits.Load() != 0 {
+			t.Fatalf("%s: want refusal %q with no connection, got %+v after %d connections", tc.name, tc.reason, res, stub.hits.Load())
+		}
+	}
+}

@@ -509,3 +509,37 @@ func TestCredentialsAreNotSentOnToAnotherSchemeOfTheSameHostAndPort(t *testing.T
 			res, published(t, feed), seen, want)
 	}
 }
+
+// A host name is case-blind (PHP compares origins with strcasecmp): a redirect to the same host in other letter case
+// stays on the origin and keeps the credentials.
+func TestARedirectToTheOriginInOtherLetterCaseKeepsTheCredentials(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, fmt.Sprintf("%s %s authorization=%q", r.URL.Path, r.Host, r.Header.Get("Authorization")))
+		mu.Unlock()
+		if r.URL.Path == "/start" {
+			w.Header().Set("Location", "http://FEED.Example:"+strings.TrimPrefix(r.Host, "feed.example:")+"/next")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		io.WriteString(w, "case\n")
+	}))
+	defer srv.Close()
+	p := port(t, srv.URL)
+
+	f, feed := quickFetcher(t)
+	res := f.Ingest(context.Background(), feed, feedfetch.Request{
+		URL: "http://feed.example:" + p + "/start", Username: "user", Password: "secret", Timeout: 10 * time.Second})
+	want := []string{
+		`/start feed.example:` + p + ` authorization="Basic dXNlcjpzZWNyZXQ="`,
+		`/next FEED.Example:` + p + ` authorization="Basic dXNlcjpzZWNyZXQ="`,
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !res.OK || published(t, feed) != "case\n" || fmt.Sprint(seen) != fmt.Sprint(want) {
+		t.Fatalf("both hops are the origin and get the credentials: %+v, published %q, hops %q, want %q",
+			res, published(t, feed), seen, want)
+	}
+}
