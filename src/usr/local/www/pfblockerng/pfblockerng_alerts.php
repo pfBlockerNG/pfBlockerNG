@@ -584,7 +584,8 @@ if (isset($_POST) && !empty($_POST)) {
 
 			if (is_array($_POST[$s_option])) {
 				foreach ($_POST[$s_option] as $post_option) {
-					if (!array_key_exists($post_option, $query)) {
+					// issue #4000: a crafted nested list is not an option key (array_key_exists() throws on it)
+					if (!is_string($post_option) || !array_key_exists($post_option, $query)) {
 						$_POST[$s_option] = $s_default;
 						break;
 					}
