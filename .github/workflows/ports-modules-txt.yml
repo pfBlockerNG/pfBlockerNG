@@ -16,7 +16,6 @@ on:
       - 'go/pfb_dns_gateway/**/*.go'
       - '.github/workflows/ports-modules-txt.yml'
       - 'scripts/check_nightly_core_tuples.py'
-      - 'scripts/build-pkg-portable.py'
       - 'tests/fixtures/ports_modules_txt/**'
 
 permissions:
