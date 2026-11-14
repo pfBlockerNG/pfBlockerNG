@@ -146,6 +146,19 @@ def test_the_3929_core_drift_fails_the_devel_pr_naming_the_ports_follow_up(tmp_p
         assert named in error, error
 
 
+def test_a_pr_moving_cores_own_module_fails_against_the_unchanged_recipe(tmp_path: Path) -> None:
+    """Scenario: this PR's go/pfb_core/go.mod bumps xxh3 while the recipe (FreeBSD-ports#22) still names the old tag.
+    Then the check reads the PR tree's Core go.mod, not a fixture's, and fails naming both versions."""
+    bumped = tmp_path / "go.mod"
+    bumped.write_text(CORE_GO_MOD_AT_3929.read_text().replace("xxh3 v1.1.1-pfblockerng.1", "xxh3 v1.2.0-pfblockerng.1"))
+    result, _log, _tree = _run_check(tmp_path, modules=VENDOR_AT_3987, vendor=VENDOR_AT_3987, core_go_mod=bumped)
+    out = result.stdout + result.stderr
+    assert result.returncode != 0, out
+    error = _one_error(out)
+    assert "go.mod only: github.com/pfBlockerNG/xxh3 v1.2.0-pfblockerng.1" in error, error
+    assert "GH_TUPLE only: github.com/pfBlockerNG/xxh3 v1.1.1-pfblockerng.1" in error, error
+
+
 def test_a_recipe_matching_devel_passes_and_compares_the_live_branch(tmp_path: Path) -> None:
     """The recipe at FreeBSD-ports#22 against devel at #3987: modules.txt and Core's xxh3 tuple both agree."""
     result, log, tree = _run_check(tmp_path, modules=VENDOR_AT_3987, vendor=VENDOR_AT_3987)
