@@ -166,7 +166,7 @@ final class CoreUpdateCronDisableTest extends TestCase
 		$run = $this->serve(self::req('scheduled', ['feeds' => [self::FEED], 'extras' => ['extra:dcc', 'extra:bl']]));
 
 		$this->assertNotNull($run['raw'], 'the result file is written, so Core records the skip and not a failure to report');
-		$this->assertSame('{"version":1,"outcomes":{},"attempted":[],"geoipReady":null}', $run['raw'], 'no outcome, nothing attempted, GeoIP not reported');
+		$this->assertSame('{"version":1,"outcomes":{},"attempted":[],"geoipReady":null}' . "\n", $run['raw'], 'no outcome, nothing attempted, GeoIP not reported');
 	}
 
 	public function testTheSkipIsOneLineInTheProgressLogNamingTheSentinel(): void

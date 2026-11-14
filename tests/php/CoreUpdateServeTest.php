@@ -164,8 +164,8 @@ final class CoreUpdateServeTest extends TestCase
 	private array $failing = [];
 
 	/**
-	 * Serve one request. Returns the exit status, what was printed (the progress log) and the result file's decoded object (NULL
-	 * when none was written).
+	 * Serve one request. Returns the exit status, what was printed (the progress log) and the result file's last line, decoded:
+	 * the whole result (NULL when none was written).
 	 *
 	 * @param array<string, mixed>|string $request
 	 * @return array{exit: int, out: string, result: ?array, raw: ?string}
@@ -181,7 +181,8 @@ final class CoreUpdateServeTest extends TestCase
 			$out = (string) ob_get_clean();
 		}
 		$raw = is_file($resultPath) ? (string) file_get_contents($resultPath) : NULL;
-		return ['exit' => $exit, 'out' => $out, 'result' => $raw === NULL ? NULL : json_decode($raw, TRUE), 'raw' => $raw];
+		$lines = $raw === NULL ? [] : explode("\n", rtrim($raw, "\n"));
+		return ['exit' => $exit, 'out' => $out, 'result' => $raw === NULL ? NULL : json_decode((string) end($lines), TRUE), 'raw' => $raw];
 	}
 
 	/** @return array<string, mixed> */
@@ -691,7 +692,32 @@ final class CoreUpdateServeTest extends TestCase
 		// Then it exits 0, says what it did on stdout, and reports exactly one result object on fd 3
 		$this->assertSame(0, $run['exit'], $run['stdout'] . $run['stderr']);
 		$this->assertStringContainsString('Dispatching pending apply.', $run['stdout']);
-		$this->assertSame('{"version":1,"outcomes":{},"attempted":[],"geoipReady":true}', file_get_contents($result));
+		$this->assertSame('{"version":1,"outcomes":{},"attempted":[],"geoipReady":true}' . "\n", file_get_contents($result));
+	}
+
+	public function testAPassKilledByTermHasTheFeedsItFinishedReportedOnFdThree(): void
+	{
+		// Given a real process whose feed pass reports two terminal checks and then gets TERM, as a stop of Core sends it (issue #4002)
+		$in = "{$this->dir}/request";
+		$result = "{$this->dir}/fd3";
+		file_put_contents($in, (string) json_encode(self::req('manual', ['force' => 'download'])));
+		touch($result);
+		$command = [PHP_BINARY, __DIR__ . '/support/CoreUpdateWorker.php'];
+		$env = ['PFB_TEST_DIR' => $this->dir, 'PFB_TEST_TERM_IN_PASS' => '1'];
+		$process = proc_open($command, [0 => ['file', $in, 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w'], 3 => ['file', $result, 'w']], $pipes, NULL, $env);
+		$this->assertIsResource($process);
+		stream_set_blocking($pipes[1], FALSE);
+		stream_set_blocking($pipes[2], FALSE);
+
+		$run = pfb_test_finish_process([$process, $pipes, implode(' ', $command)], 60.0);
+
+		// Then the process died of the TERM, and fd 3 already holds both outcomes, a line each
+		$this->assertStringContainsString('the pass reported its feeds', $run['stdout'], 'before-state: the pass ran' . $run['stderr']);
+		$this->assertNotSame(0, $run['exit'], 'the TERM ended the process before it finished');
+		$this->assertSame(
+			'{"version":1,"outcomes":{"ipv4:feed_v4":"success"}}' . "\n" . '{"version":1,"outcomes":{"ipv4:other_v4":"retry-cap-reached"}}' . "\n",
+			file_get_contents($result),
+		);
 	}
 
 	// ----- the verb and its wrapper -----
