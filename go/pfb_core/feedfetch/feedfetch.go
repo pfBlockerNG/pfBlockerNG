@@ -6,8 +6,9 @@
 // After the transfer an ordinary feed passes the content gates (content.go, archive.go): the MIME verdict and its
 // allow-list, the opt-in sanity scan of a text body (ADR-49, sanity.go), then for a gzip, bzip2, zip or tar the
 // structural test, the inner verdict, the extraction (every member, under a 2 GiB per-file ceiling, through the standard
-// library alone) and the sanity scan of what it extracted. The published copy is UTF-16/32 text transcoded to UTF-8, and
-// newline-terminated. Not yet here: ET IQRisk and xlsx, and Extras.
+// library alone) and the sanity scan of what it extracted; a zip whose last member is a workbook publishes the addresses
+// of its shared strings instead (xlsx, iqrisk.go). The published copy is UTF-16/32 text transcoded to UTF-8, and
+// newline-terminated; an ET IQRisk feed publishes its Block categories' addresses. Not yet here: Extras.
 //
 // A feed's files live in Feed.Dir under Feed.Name: the published copy "<name>.orig", its validators ".orig.etag" and
 // ".orig.lastmod", the xxh128 of the raw bytes it was published from ".orig.xxhash128", a changed probe's body ".probe"
@@ -27,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/digest"
@@ -65,6 +67,10 @@ type Fetcher struct {
 	// (pfb_extract_space_shortfall). Nil reads the file system.
 	FreeBytes func(dir string) (free uint64, ok bool)
 	Sanity    bool // ADR-49's opt-in plain-text sanity scan (gen/pfb_feed_sanity); off by default, as in PHP
+	// ET IQRisk, a feed whose URL holds "iprepdata.txt" (processet): its category split goes to ETDir, the addresses of
+	// the ETMatch categories to ETMatchFile, and those of the ETBlock categories are published. Empty selects none.
+	ETDir, ETMatchFile string
+	ETBlock, ETMatch   []string
 
 	// Whois only.
 	Lookup    func(ctx context.Context, network, host string) ([]netip.Addr, error) // one family's addresses ("ip4" or "ip6"); nil is the system resolver
@@ -221,10 +227,32 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 	if body != staged {
 		defer os.Remove(body) // an extraction whose publication failed
 	}
-	if err := publish(feed, body, staged, t.lastMod); err != nil {
+	// The digest is of the wire bytes (#713): body itself for a text feed, before it is finished; the archive otherwise.
+	digest, err := fileDigest(staged)
+	if err != nil {
+		return Result{Status: t.status, Reason: "staged body could not be read"}
+	}
+	if err := finish(body); err != nil {
 		return Result{Status: t.status, Reason: err.Error()}
 	}
-	keepRaw = body != staged
+	archive := body != staged
+	if strings.Contains(req.URL, "iprepdata.txt") {
+		// ET IQRisk is split after the finish, as pfb_download() runs processet() on the finished copy. Its failure
+		// keeps last-known-good: the published copy is replaced only by the split's outcome.
+		et, err := f.iqrisk(ctx, feed, body)
+		if err != nil {
+			if ctxEnded(err) {
+				return Result{Status: t.status, Reason: err.Error()}
+			}
+			return Result{Status: t.status, Reason: "et processing failed (script exit 1)"}
+		}
+		defer os.Remove(et)
+		body = et
+	}
+	if err := publish(feed, body, digest, t.lastMod); err != nil {
+		return Result{Status: t.status, Reason: err.Error()}
+	}
+	keepRaw = archive
 	if fromProbe {
 		// The probe's validators describe the body just published (#3911).
 		for _, v := range [...]string{".etag", ".lastmod"} {

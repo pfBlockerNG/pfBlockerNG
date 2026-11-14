@@ -3,7 +3,6 @@ package feedfetch
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -191,6 +190,14 @@ func (f *Fetcher) gate(ctx context.Context, feed Feed, raw string, lastMod time.
 	if err := structural(ctx, mime, raw, io.Discard); err != nil {
 		return failed(err, "structural", "probe_failed", mime+" "+filepath.Base(raw))
 	}
+	if mime == mimeZip && isWorkbookZip(raw) {
+		// A workbook's list is the addresses of its shared strings (processxlsx), which no further gate refuses.
+		body, err := f.xlsx(ctx, feed, raw)
+		if err != nil {
+			return failed(err, "", extractionFailure("xlsx", err), "")
+		}
+		return body, nil
+	}
 	tarInner := false
 	if mime == mimeGzip || mime == mimeBzip2 {
 		inner := innerType(ctx, mime, raw)
@@ -201,11 +208,7 @@ func (f *Fetcher) gate(ctx context.Context, feed Feed, raw string, lastMod time.
 	}
 	body, err := f.stage(ctx, feed, mime, raw, tarInner)
 	if err != nil {
-		code := exitFailed
-		if errors.Is(err, errCeiling) {
-			code = exitCeiling
-		}
-		return failed(err, "", extractionFailure(mime, code), "")
+		return failed(err, "", extractionFailure(mime, err), "")
 	}
 	if mime == mimeZip {
 		// What the list holds is the extraction, not the archive (#808): it is gated as a body, staged (#2169).

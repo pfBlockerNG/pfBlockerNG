@@ -281,16 +281,23 @@ func ctxEnded(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-// extractionFailure is pfb_download()'s text for an extraction that failed with status code.
-func extractionFailure(mime string, code int) string {
+// extractionFailure is pfb_download()'s text for an extraction of what (an archive's MIME type, or "xlsx" for a
+// workbook) that err ended: status 153 (SIGXFSZ) for one that outgrew the ceiling, else 1.
+func extractionFailure(what string, err error) string {
+	code := exitFailed
+	if errors.Is(err, errCeiling) {
+		code = exitCeiling
+	}
 	var text string
-	switch mime {
+	switch what {
 	case mimeGzip:
 		text = fmt.Sprintf("gzip extraction failed (gunzip exit %d)", code)
 	case mimeBzip2:
 		text = fmt.Sprintf("bzip2 extraction failed (bzip2 exit %d)", code)
 	case mimeZip:
 		text = fmt.Sprintf("zip publish failed (tar exit %d)", code)
+	case "xlsx":
+		text = fmt.Sprintf("xlsx extraction failed (script exit %d)", code)
 	default:
 		text = fmt.Sprintf("tar extraction failed (tar exit %d)", code)
 	}

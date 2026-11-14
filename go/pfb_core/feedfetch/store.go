@@ -59,15 +59,10 @@ func dropDigests(feed Feed) error {
 	return nil
 }
 
-// publish makes body the published copy in one rename, finished as pfb_download_finalize_text() finishes it: the digest
-// recorded is of wire, the raw bytes the transfer left (the probe hashes raw bytes, #713): body itself for a text feed,
-// the archive for an extraction. Then UTF-16/32 text is transcoded to UTF-8 (#946), and a missing trailing newline is
-// added (#1263).
-func publish(feed Feed, body, wire string, lastMod time.Time) error {
-	digest, err := fileDigest(wire)
-	if err != nil {
-		return errors.New("staged body could not be read")
-	}
+// finish is pfb_download_finalize_text() on the staged body, once its digest is taken: UTF-16/32 text transcoded to
+// UTF-8 (#946), then a missing trailing newline added (#1263), and the body synced, so that the published copy survives
+// a power loss whole, not as an empty file.
+func finish(body string) error {
 	transcode(body)
 	f, err := os.OpenFile(body, os.O_RDWR, 0)
 	if err != nil {
@@ -80,10 +75,16 @@ func publish(feed Feed, body, wire string, lastMod time.Time) error {
 			_, werr = f.WriteAt([]byte("\n"), info.Size())
 		}
 	}
-	serr := f.Sync() // the published copy survives a power loss whole, not as an empty file
+	serr := f.Sync()
 	if err := f.Close(); err != nil || werr != nil || serr != nil {
 		return errors.New("staged body could not be written")
 	}
+	return nil
+}
+
+// publish makes body the published copy in one rename, with digest beside it: the xxh128 of the raw bytes the transfer
+// left, as the probe hashes them (#713).
+func publish(feed Feed, body, digest string, lastMod time.Time) error {
 	published := feed.path(".orig")
 	if err := dropDigests(feed); err != nil {
 		return err
