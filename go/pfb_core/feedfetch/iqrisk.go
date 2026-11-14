@@ -1,7 +1,7 @@
 package feedfetch
 
 // The two per-feed formats pfb_download() hands to pfblockerng.sh: ET IQRisk (processet(), a feed whose URL holds
-// "iprepdata.txt") and xlsx (processxlsx(), a zip whose last member is a workbook).
+// "iprepdata.txt") and xlsx (processxlsx(), a zip whose lexicographically smallest top-level workbook is used).
 
 import (
 	"archive/zip"
@@ -20,6 +20,11 @@ import (
 
 var maxXLSXAddresses = 10_000_000
 
+var (
+	errInvalidETConfiguration = errors.New("invalid ET configuration")
+	errTooManyXLSXAddresses   = errors.New("xlsx_too_many_addresses")
+)
+
 // etCategories are the ET IQRisk categories by number, named as processet() names the files it splits them into; ""
 // is a number ET does not use.
 var etCategories = [...]string{1: "ET_Cnc", "ET_Bot", "ET_Spam", "ET_Drop", "ET_Spywarecnc", "ET_Onlinegaming",
@@ -33,6 +38,9 @@ var etCategories = [...]string{1: "ET_Cnc", "ET_Bot", "ET_Spam", "ET_Drop", "ET_
 // ETMatchFile, and the ETBlock categories', in the order the split lists, staged beside the published copy. An empty
 // body has nothing to split and fails, as in processet().
 func (f *Fetcher) iqrisk(ctx context.Context, feed Feed, body string) (string, error) {
+	if f.ETDir == "" || (len(f.ETMatch) > 0 && f.ETMatchFile == "") {
+		return "", errInvalidETConfiguration
+	}
 	in, err := os.Open(body)
 	if err != nil {
 		return "", err
@@ -165,14 +173,7 @@ func appendRecords(w *bufio.Writer, name string) error {
 		return err
 	}
 	defer src.Close()
-	n, err := io.Copy(w, src)
-	last := []byte{'\n'}
-	if err == nil && n > 0 {
-		_, err = src.ReadAt(last, n-1)
-	}
-	if err == nil && last[0] != '\n' {
-		err = w.WriteByte('\n')
-	}
+	_, err = io.Copy(w, src)
 	return err
 }
 
@@ -264,10 +265,18 @@ func (f *Fetcher) xlsx(ctx context.Context, feed Feed, raw string) (string, erro
 		return "", err
 	}
 	defer src.Close()
-	// shortcut: the distinct addresses are held in memory where sort -u spills to disk; spill too if a workbook of
-	// millions of them ever appears.
+	// shortcut: 10M distinct addresses, when a larger workbook must match PHP's disk-backed sort -u.
 	found := map[string]bool{}
-	if err := scanIPv4(ctxReader{ctx, src}, func(ip string) { found[ip] = true }); err != nil {
+	if err := scanIPv4(ctxReader{ctx, src}, func(ip string) error {
+		if _, exists := found[ip]; exists {
+			return nil
+		}
+		if len(found) >= maxXLSXAddresses {
+			return errTooManyXLSXAddresses
+		}
+		found[ip] = true
+		return nil
+	}); err != nil {
 		return "", err
 	}
 	if len(found) == 0 {
@@ -288,12 +297,12 @@ func (f *Fetcher) xlsx(ctx context.Context, feed Feed, raw string) (string, erro
 // every address standing as a whole word (no letter, digit or underscore on either side), left to right, each after
 // the last. A match lies in a run of digits and dots, whose dots cut it into groups: four groups that are octets, the
 // first one starting the run or following a dot, the last one ending the run or followed by a dot.
-func scanIPv4(r io.Reader, found func(string)) error {
+func scanIPv4(r io.Reader, found func(string) error) error {
 	br := bufio.NewReader(r)
 	var groups []string // the groups of the run since its start, its last match, or the last three
 	wordBefore := false // a word character precedes the first of groups
 	cur, long := make([]byte, 0, 3), false
-	flush := func(last, wordAfter bool) {
+	flush := func(last, wordAfter bool) error {
 		g := string(cur)
 		if long {
 			g = "long" // past three digits: no octet
@@ -301,15 +310,18 @@ func scanIPv4(r io.Reader, found func(string)) error {
 		cur, long = cur[:0], false
 		groups = append(groups, g)
 		if len(groups) < 4 {
-			return
+			return nil
 		}
 		if !wordBefore && !(last && wordAfter) && octet(groups[0]) && octet(groups[1]) && octet(groups[2]) && octet(groups[3]) {
-			found(strings.Join(groups, "."))
+			if err := found(strings.Join(groups, ".")); err != nil {
+				return err
+			}
 			groups = groups[:0]
 		} else {
 			groups = groups[1:]
 		}
 		wordBefore = false // what comes next follows a dot
+		return nil
 	}
 	inRun := false
 	prev := byte(0)
@@ -317,7 +329,9 @@ func scanIPv4(r io.Reader, found func(string)) error {
 		c, err := br.ReadByte()
 		if err == io.EOF {
 			if inRun {
-				flush(true, false)
+				if err := flush(true, false); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
@@ -330,14 +344,18 @@ func scanIPv4(r io.Reader, found func(string)) error {
 				inRun, wordBefore, groups = true, word(prev), groups[:0]
 			}
 			if c == '.' {
-				flush(false, false)
+				if err := flush(false, false); err != nil {
+					return err
+				}
 			} else if len(cur) == 3 {
 				long = true
 			} else {
 				cur = append(cur, c)
 			}
 		case inRun:
-			flush(true, word(c))
+			if err := flush(true, word(c)); err != nil {
+				return err
+			}
 			inRun = false
 		}
 		prev = c

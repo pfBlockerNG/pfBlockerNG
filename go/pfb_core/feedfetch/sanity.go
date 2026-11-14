@@ -169,7 +169,7 @@ func decodeUnits(w io.Writer, r io.Reader, e encoding) error {
 				high = -1
 			}
 			bw.WriteByte('?')
-			break
+			return bw.Flush()
 		}
 		var c uint32
 		if e.width == 2 {

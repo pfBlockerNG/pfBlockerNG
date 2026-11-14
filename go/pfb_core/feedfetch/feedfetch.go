@@ -244,6 +244,9 @@ func (f *Fetcher) ingest(ctx context.Context, feed Feed, req Request) Result {
 			if ctxEnded(err) {
 				return Result{Status: t.status, Reason: err.Error()}
 			}
+			if err == errInvalidETConfiguration {
+				return Result{Status: t.status, Reason: err.Error()}
+			}
 			return Result{Status: t.status, Reason: "et processing failed (script exit 1)"}
 		}
 		defer os.Remove(et)

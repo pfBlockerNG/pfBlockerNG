@@ -25,6 +25,12 @@ const (
 	exitCeiling = 153 // SIGXFSZ (128 + 25): the writer that outgrew the ceiling
 )
 
+func init() {
+	zip.RegisterDecompressor(12, func(r io.Reader) io.ReadCloser {
+		return io.NopCloser(bzip2.NewReader(r))
+	})
+}
+
 var errCeiling = errors.New("extraction outgrew the per-file ceiling")
 
 // ctxReader ends a read once the context is done, so an extraction or a structural test stops with it (PHP has no
@@ -284,6 +290,9 @@ func ctxEnded(err error) bool {
 // extractionFailure is pfb_download()'s text for an extraction of what (an archive's MIME type, or "xlsx" for a
 // workbook) that err ended: status 153 (SIGXFSZ) for one that outgrew the ceiling, else 1.
 func extractionFailure(what string, err error) string {
+	if errors.Is(err, errTooManyXLSXAddresses) {
+		return err.Error()
+	}
 	code := exitFailed
 	if errors.Is(err, errCeiling) {
 		code = exitCeiling

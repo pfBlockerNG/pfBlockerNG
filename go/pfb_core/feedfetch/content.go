@@ -38,13 +38,13 @@ var mimeAllowed = map[string]bool{
 }
 
 // classify is `file -b --mime-type` for the head of a body, as far as the gates need it: the magic numbers of the
-// containers the allow-list names, then text or binary. more tells that the body goes on past head.
+// containers the allow-list names, then text or binary. `file` only needs a bounded prefix.
 //
 // Text is any body without a NUL, or UTF-16/32 behind its mark: a Latin-1 or Windows-1252 feed is text, as libmagic takes
 // it, and goes on to the parser's raw-byte path (#3906) instead of being refused here. Text takes the label of its
 // opening where a cheap rule gives libmagic's: text/html for an HTML opening, else text/plain. Every other body is
 // application/octet-stream, whatever libmagic would call it (a PDF, an executable).
-func classify(head []byte, more bool) string {
+func classify(head []byte) string {
 	switch {
 	case len(head) == 0:
 		return mimeEmptyFile
@@ -87,16 +87,11 @@ func htmlTag(b []byte) bool {
 	return false
 }
 
-// head reads the first sniffBytes of r; more tells that r may hold more. size is r's length when it is known, else -1:
-// a body that fits is read into a buffer one byte longer, so that filling it can only mean there is more.
-func head(r io.Reader, size int64) (b []byte, more bool) {
-	n := int64(sniffBytes)
-	if size >= 0 && size < n {
-		n = size + 1
-	}
-	b = make([]byte, n)
-	got, err := io.ReadFull(r, b)
-	return b[:got], err == nil
+// head reads the first sniffBytes of r; classification needs only that bounded prefix.
+func head(r io.Reader) []byte {
+	b := make([]byte, sniffBytes)
+	got, _ := io.ReadFull(r, b)
+	return b[:got]
 }
 
 // verdict is pfb_filter(FILE_MIME) on the staged body at path: its allow-listed type, or false with the detail
@@ -107,13 +102,9 @@ func verdict(ctx context.Context, path string) (mime, detected string, ok bool) 
 	if err != nil {
 		return "", "file-not-found rc=-1", false
 	}
-	size := int64(-1)
-	if info, err := f.Stat(); err == nil {
-		size = info.Size()
-	}
-	b, more := head(f, size)
+	b := head(f)
 	f.Close()
-	mime = classify(b, more)
+	mime = classify(b)
 	if mime == mimeOctet {
 		for _, t := range [...]string{mimeZip, mimeGzip, mimeBzip2, mimeTar} {
 			if structural(ctx, t, path, io.Discard) == nil {
@@ -130,11 +121,11 @@ func verdict(ctx context.Context, path string) (mime, detected string, ok bool) 
 // innerVerdict is `file -bZ --mime-type` for a gzip or bzip2 body: the type of what it holds, from the first bytes of the
 // decompressed stream. Nothing at all is application/x-empty, which the allow-list does not name.
 func innerVerdict(r io.Reader) string {
-	b, more := head(r, -1)
+	b := head(r)
 	if len(b) == 0 {
 		return mimeEmptyInner
 	}
-	return classify(b, more)
+	return classify(b)
 }
 
 // gate runs the content gates on the staged ".raw" and returns the body to publish: the staged file itself for a text
