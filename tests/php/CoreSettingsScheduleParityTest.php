@@ -107,7 +107,18 @@ final class CoreSettingsScheduleParityTest extends TestCase
 		$reply = pfb_core_settings_backend(['version' => 1, 'op' => 'read'], '/nonexistent', static fn(): array => []);
 
 		$this->assertArrayHasKey('settings', $reply, "{$case['id']}: the read answered " . json_encode($reply));
-		$this->assertSame($case['schedule'], $reply['settings']['schedule'] ?? NULL, "{$case['id']}: the schedule projection");
+		$expectedSchedule = $case['schedule'];
+		$providerTitles = [];
+		foreach ($case['config']['blacklist']['item'] ?? [] as $item) {
+			if (is_array($item) && is_string($item['xml'] ?? NULL) && is_string($item['title'] ?? NULL)) {
+				$providerTitles[$item['xml']] = $item['title'];
+			}
+		}
+		foreach ($expectedSchedule['categoryProviders'] as &$provider) {
+			$provider['title'] = $providerTitles[$provider['id']] ?? '';
+		}
+		unset($provider);
+		$this->assertSame($expectedSchedule, $reply['settings']['schedule'] ?? NULL, "{$case['id']}: the schedule projection");
 		$this->assertSame($case['feeds'], array_intersect_key($reply['settings'], $case['feeds']), "{$case['id']}: the feed projections the model is built from");
 		$this->assertSame([], $GLOBALS['pfb_test_lock_events'], 'a read takes no lock');
 		$this->assertNull(pfb_core_settings_request_refusal(['version' => 1, 'op' => 'write', 'expectedRevision' => $reply['revision'], 'settings' => $reply['settings']],
