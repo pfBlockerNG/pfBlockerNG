@@ -171,16 +171,16 @@ type scenario struct {
 	Hosts       map[string][]string `json:"hosts"`
 	Filter      *bool               `json:"filter"`
 	Sanity      bool                `json:"sanity"`
-	ET *struct {
+	ET          *struct {
 		Block string `json:"block"`
 		Match string `json:"match"`
 	} `json:"et"`
-	Allowlist []string            `json:"allowlist"`
-	Self      []string            `json:"self"`
-	Servers   []serverSpec        `json:"servers"`
-	Proxy     *proxySpec          `json:"proxy"`
-	Routes    routes              `json:"routes"`
-	Files     ftpFiles            `json:"files"`
+	Allowlist []string     `json:"allowlist"`
+	Self      []string     `json:"self"`
+	Servers   []serverSpec `json:"servers"`
+	Proxy     *proxySpec   `json:"proxy"`
+	Routes    routes       `json:"routes"`
+	Files     ftpFiles     `json:"files"`
 	Seed      *struct {
 		Published *string `json:"published"`
 		ETag      *string `json:"etag"`
