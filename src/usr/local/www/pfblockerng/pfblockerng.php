@@ -306,7 +306,9 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 				'force' => $pfb_fchashes ? 'both' : 'download',
 			];
 		}
-		$pfb_deprecation_warning = pfb_verb_deprecation_warning($argv[1]);
+		$pfb_deprecation_warning = $argv[1] === 'cron'
+			? "DEPRECATED: pfblockerng verb 'cron' — use explicit request (pfb_trigger scope=both force=false trigger=cron); removal scheduled"
+			: pfb_verb_deprecation_warning($argv[1]);
 		if ($pfb_deprecation_warning !== '') {
 			pfb_logger("{$pfb_deprecation_warning}\n", 1);
 		}
