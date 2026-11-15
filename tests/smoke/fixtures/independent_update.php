@@ -61,40 +61,50 @@ if ($mode === 'lock') {
 	exit(0);
 }
 if ($mode === 'update') {
-	require_once('/etc/inc/config.inc');
-	require_once('/etc/inc/util.inc');
-	$request = json_decode(stream_get_contents(STDIN), TRUE, 512, JSON_THROW_ON_ERROR);
-	$lock = fopen("$dir/transaction.lock", 'c');
-	demand(flock($lock, LOCK_EX | LOCK_NB), 'transaction lock already held');
-	file_put_contents("$dir/runs", "run\n", FILE_APPEND);
-	file_put_contents("$dir/update.pid", (string) getmypid());
-	echo "TRANSACTION_STARTED\n";
-	$family = trim(file_get_contents("$dir/family"));
-	$binary = '/usr/local/sbin/kea-dhcp' . $family;
-	putenv('KEA_PIDFILE_DIR=' . $dir);
-	putenv('KEA_LOCKFILE_DIR=' . $dir);
-	passthru(escapeshellarg($binary) . ' -t ' . escapeshellarg("$dir/kea.json") . ' 2>&1', $lintStatus);
-	demand($lintStatus === 0, 'private Kea configuration lint failed before launch');
-	// Exactly the native services.inc leaf and mwexec_bg launch; no setsid, daemon wrapper or descriptor surgery.
-	mwexec_bg(escapeshellarg($binary) . ' -c ' . escapeshellarg("$dir/kea.json"));
-	until(static function () use ($dir): bool {
-		try {
-			command("$dir/kea.sock", 'list-commands');
-			return TRUE;
-		} catch (Throwable) {
-			return FALSE;
-		}
-	}, 'private Kea readiness');
-	file_put_contents("$dir/ready", "ready\n");
-	until(static fn() => is_file("$dir/release"), 'transaction release', 90);
-	file_put_contents("$dir/applied", "settings transaction completed\n");
-	unlock($lock);
-	file_put_contents("$dir/unlocked", "normal explicit LOCK_UN completed\n");
-	$result = fopen('php://fd/3', 'w');
-	fwrite($result, json_encode(['version' => 1, 'attempted' => $request['feeds'] ?? [], 'outcomes' => (object) [], 'geoipReady' => TRUE]) . "\n");
-	fclose($result);
-	echo "TRANSACTION_FINISHED\n";
-	exit(0);
+	try {
+		require_once('/etc/inc/config.inc');
+		require_once('/etc/inc/util.inc');
+		$request = json_decode(stream_get_contents(STDIN), TRUE, 512, JSON_THROW_ON_ERROR);
+		$lock = fopen("$dir/transaction.lock", 'c');
+		demand(flock($lock, LOCK_EX | LOCK_NB), 'transaction lock already held');
+		file_put_contents("$dir/runs", "run\n", FILE_APPEND);
+		file_put_contents("$dir/update.pid", (string) getmypid());
+		echo "TRANSACTION_STARTED\n";
+		$family = trim(file_get_contents("$dir/family"));
+		$binary = '/usr/local/sbin/kea-dhcp' . $family;
+		putenv('KEA_PIDFILE_DIR=' . $dir);
+		putenv('KEA_LOCKFILE_DIR=' . $dir);
+		passthru(escapeshellarg($binary) . ' -t ' . escapeshellarg("$dir/kea.json") . ' 2>&1', $lintStatus);
+		printf("KEA_LINT_EXIT=%d\n", $lintStatus);
+		demand($lintStatus === 0, 'private Kea configuration lint failed before launch');
+		// Exactly the native services.inc leaf and mwexec_bg launch; no setsid, daemon wrapper or descriptor surgery.
+		echo "BEFORE_MWEXEC_BG\n";
+		$launchedPid = mwexec_bg(escapeshellarg($binary) . ' -c ' . escapeshellarg("$dir/kea.json"));
+		printf("AFTER_MWEXEC_BG_PID=%s\n", $launchedPid);
+		file_put_contents("$dir/launched.pid", (string) $launchedPid);
+		until(static function () use ($dir): bool {
+			try {
+				command("$dir/kea.sock", 'list-commands');
+				return TRUE;
+			} catch (Throwable $error) {
+				file_put_contents("$dir/readiness-error", $error->getMessage());
+				return FALSE;
+			}
+		}, 'private Kea readiness');
+		file_put_contents("$dir/ready", "ready\n");
+		until(static fn() => is_file("$dir/release"), 'transaction release', 90);
+		file_put_contents("$dir/applied", "settings transaction completed\n");
+		unlock($lock);
+		file_put_contents("$dir/unlocked", "normal explicit LOCK_UN completed\n");
+		$result = fopen('php://fd/3', 'w');
+		fwrite($result, json_encode(['version' => 1, 'attempted' => $request['feeds'] ?? [], 'outcomes' => (object) [], 'geoipReady' => TRUE]) . "\n");
+		fclose($result);
+		echo "TRANSACTION_FINISHED\n";
+		exit(0);
+	} catch (Throwable $error) {
+		fwrite(STDERR, 'UPDATE_EXCEPTION: ' . $error->getMessage() . "\n" . $error->getTraceAsString() . "\n");
+		exit(1);
+	}
 }
 
 demand($mode === 'control', 'unknown fixture mode');
@@ -172,6 +182,20 @@ try {
 } catch (Throwable $error) {
 	$failure = $error;
 	fwrite(STDERR, 'REGRESSION: ' . $error->getMessage() . "\n");
+	if (is_resource($core)) {
+		echo 'PRE_CLEANUP_CORE_STATUS=' . json_encode(proc_get_status($core)) . "\n";
+	}
+	foreach (['update.pid', 'launched.pid'] as $pidfile) {
+		$raw = trim((string) @file_get_contents("$dir/$pidfile"));
+		if (ctype_digit($raw) && (int) $raw > 1) {
+			echo "PRE_CLEANUP_PROCESS $pidfile=$raw alive=" . (posix_kill((int) $raw, 0) ? 'yes' : 'no') . "\n";
+			passthru('/bin/ps -p ' . $raw . ' -o pid,ppid,pgid,stat,wchan,args', $psStatus);
+			printf("PRE_CLEANUP_PS_EXIT=%d\n", $psStatus);
+		}
+	}
+	if (is_file("$dir/readiness-error")) {
+		echo 'PRE_CLEANUP_READINESS_ERROR=' . file_get_contents("$dir/readiness-error") . "\n";
+	}
 } finally {
 	file_put_contents("$dir/release", "cleanup\n");
 	if (is_resource($core)) {
@@ -179,7 +203,7 @@ try {
 		until(static fn() => !proc_get_status($core)['running'], 'cleanup Core stop');
 		proc_close($core);
 	}
-	if (is_file("$dir/kea.sock")) {
+	if (file_exists("$dir/kea.sock")) {
 		try {
 			command("$dir/kea.sock", 'shutdown');
 		} catch (Throwable $error) {
