@@ -1,9 +1,15 @@
 package update
 
 import (
+	"context"
+	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestAHeldDescriptorCannotWriteTheNextAdmission(t *testing.T) {
@@ -96,4 +102,248 @@ func TestSettledReceiptIsNotReapplied(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("settled receipt was applied %d times; receipt=%s", calls, strings.TrimSpace(body))
 	}
+}
+
+func TestOwnedWorkerCrashDoesNotContaminateTheNextAdmission(t *testing.T) {
+	p, dir := program(t, `echo ready > "$D/ready"; read _ < "$D/release"; echo OLDPHP; printf '%s\n' '{"version":1,"outcomes":{"ipv4:old_v4":"success"},"attempted":["ipv4:old_v4"]}' >&3; echo wrote > "$D/wrote"; read _ < "$D/release"; echo finished > "$D/finished"`)
+	if err := syscall.Mkfifo(filepath.Join(dir, "release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := os.OpenFile(filepath.Join(dir, "release"), os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = release.WriteString("write\nfinish\n"); _ = release.Close() })
+	log := independentLog(t)
+	cmd := startOwnedWorker(t, p.Path, log)
+	reaped := false
+	t.Cleanup(func() {
+		if !reaped && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	awaitFile(t, dir+"/ready")
+	oldLog, err := os.Open(log.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldLog.Close()
+	oldResult, err := os.Open(log.Name() + ".result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldResult.Close()
+	oldLogInfo, err := oldLog.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldResultInfo, err := oldResult.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("the killed worker returned a nil error")
+	}
+	reaped = true
+	calls := 0
+	if err := Recover(log.Name(), func(int64, map[string]int64, Result, error) error {
+		calls++
+		return nil
+	}); err != nil || calls != 0 {
+		t.Fatalf("unfinished empty result was applied: %v calls=%d", err, calls)
+	}
+	next, nextDir := program(t, `echo NEW; printf '%s\n' '{"version":1,"attempted":["ipv4:new_v4"]}' >&3; echo ran > "$D/ran"`)
+	done := make(chan struct{})
+	var nextErr error
+	g := New(log.Name(), nil, func(_ Request, _ Result, err error) {
+		nextErr = err
+		close(done)
+	})
+	g.Admit = next.Admit
+	g.Launch = func(ctx context.Context, lease *Admission, req Request, f *os.File) (Result, error) {
+		return lease.Launch(ctx, next, req, f)
+	}
+	if err := g.Start(Request{Trigger: "apply"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(g.Stop)
+	awaitFile(t, nextDir+"/ran")
+	recv(t, done, "next worker did not complete")
+	if nextErr != nil {
+		t.Fatal(nextErr)
+	}
+	freshLogInfo, err := os.Stat(log.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshResultInfo, err := os.Stat(log.Name() + ".result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(oldLogInfo, freshLogInfo) || os.SameFile(oldResultInfo, freshResultInfo) {
+		t.Fatal("the next admission reused an inode still held by the old program")
+	}
+	if _, err := release.WriteString("write\n"); err != nil {
+		t.Fatal(err)
+	}
+	awaitFile(t, dir+"/wrote")
+	body, err := os.ReadFile(log.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := os.ReadFile(log.Name() + ".result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "OLDPHP") || strings.Contains(string(result), "old_v4") {
+		t.Fatalf("the live program wrote the next admission: log=%q result=%q", body, result)
+	}
+	if !strings.Contains(string(result), "new_v4") {
+		t.Fatalf("the next admission lost its result: %q", result)
+	}
+	if _, err := oldLog.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	retiredLog, err := io.ReadAll(oldLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oldResult.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	retiredResult, err := io.ReadAll(oldResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(retiredLog), "OLDPHP") || !strings.Contains(string(retiredResult), "old_v4") {
+		t.Fatalf("the old program did not write its retired inodes: log=%q result=%q", retiredLog, retiredResult)
+	}
+	if _, err := release.WriteString("finish\n"); err != nil {
+		t.Fatal(err)
+	}
+	awaitFile(t, dir+"/finished")
+}
+
+func TestKilledWorkerSalvagesCompleteResultLinesWithoutClaimingSuccess(t *testing.T) {
+	p, dir := program(t, `printf '%s\n' '{"version":1,"outcomes":{"ipv4:complete_v4":"success"}}' >&3; printf '%s' '{"version":1,"outcomes":{"ipv4:unfinished_v4":' >&3; echo ready > "$D/ready"; read _ < "$D/release"; echo finished > "$D/finished"`)
+	if err := syscall.Mkfifo(filepath.Join(dir, "release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := os.OpenFile(filepath.Join(dir, "release"), os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = release.WriteString("finish\n"); _ = release.Close() })
+	log := independentLog(t)
+	cmd := startOwnedWorker(t, p.Path, log)
+	reaped := false
+	t.Cleanup(func() {
+		if !reaped && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	awaitFile(t, dir+"/ready")
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("the killed worker returned a nil error")
+	}
+	reaped = true
+
+	calls := 0
+	err = Recover(log.Name(), func(_ int64, _ map[string]int64, res Result, runErr error) error {
+		calls++
+		if runErr == nil {
+			t.Error("partial salvage reported whole Update success")
+		}
+		if len(res.Outcomes) != 1 || res.Outcomes["ipv4:complete_v4"] != "success" {
+			t.Errorf("salvage lost the complete line or counted the unfinished line: %+v", res)
+		}
+		return nil
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("Recover = %v, callbacks = %d; want one partial salvage", err, calls)
+	}
+	state, err := readWorkerState(log.Name() + ".status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.outcome(); err == nil {
+		t.Error("salvaged terminal claims whole success")
+	}
+	if state.ExitCode != nil || state.Signal != 0 {
+		t.Fatalf("salvage invented program disposition: exit=%v signal=%d", state.ExitCode, state.Signal)
+	}
+	if _, err := release.WriteString("finish\n"); err != nil {
+		t.Fatal(err)
+	}
+	awaitFile(t, dir+"/finished")
+}
+
+func startOwnedWorker(t *testing.T, programPath string, log *os.File) *exec.Cmd {
+	t.Helper()
+	lock, err := operationLock(log.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(validWorkerJSON(t), "/bin/true", programPath, 1)
+	if err := os.WriteFile(log.Name()+".request", []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(log.Name()+".status", []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request, err := os.Open(log.Name() + ".request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := os.OpenFile(log.Name()+".result", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, readyW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePipe, releaseW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(self, workerArg, log.Name())
+	cmd.Stdout, cmd.Stderr = log, log
+	cmd.ExtraFiles = []*os.File{request, lock, log, result, readyW, releasePipe}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	request.Close()
+	result.Close()
+	readyW.Close()
+	releasePipe.Close()
+	if err := ready.SetReadDeadline(time.Now().Add(stuck)); err != nil {
+		t.Fatal(err)
+	}
+	var ack [1]byte
+	if _, err := io.ReadFull(ready, ack[:]); err != nil || ack[0] != 1 {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("ownership ack = %v, %v", ack, err)
+	}
+	ready.Close()
+	if _, err := releaseW.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	releaseW.Close()
+	lock.Close()
+	return cmd
 }
