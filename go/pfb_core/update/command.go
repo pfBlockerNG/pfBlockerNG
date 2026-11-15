@@ -14,16 +14,14 @@ import (
 const (
 	protocolVersion = 1
 	maxResult       = 1 << 20 // the bytes of result the program may report
-	deferredStatus  = 75 // EX_TEMPFAIL: the program chose not to run now (a lock held, the schedule switched off)
+	deferredStatus  = 75      // EX_TEMPFAIL: the program chose not to run now (a lock held, the schedule switched off)
 )
-
 
 // Command runs the platform Update in an independent worker. Context cancellation stops observation, not a launched
 // settings transaction; downloads and scripts retain their own operation-level bounds.
 type Command struct {
 	Path string
 }
-
 
 // isDeferral reports whether err, from cmd.Wait, is the program's exit with status 75.
 func isDeferral(err error) bool {
@@ -39,7 +37,6 @@ func scratch(dir, pattern string) (*os.File, func(), error) {
 	}
 	return f, func() { _ = f.Close(); _ = os.Remove(f.Name()) }, nil
 }
-
 
 // readResult is what the program wrote to f: nothing, or result lines, each exactly one JSON object of protocol version 1. The
 // lines add up: every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness of the last line

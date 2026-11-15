@@ -390,7 +390,6 @@ func recv[T any](t *testing.T, ch <-chan T, what string) T {
 	}
 }
 
-
 func waitFIFOEOF(t *testing.T, f *os.File) {
 	t.Helper()
 	for deadline := time.Now().Add(stuck); ; time.Sleep(10 * time.Millisecond) {

@@ -52,4 +52,3 @@ func TestAProcessThatIsNotAChildIsExited(t *testing.T) {
 		t.Fatal("a process of someone else's was reported running")
 	}
 }
-

@@ -31,7 +31,10 @@ func TestInheritedDescriptorsDoNotKeepTheLifetimeLock(t *testing.T) {
 	}
 	log := independentLog(t)
 	ended := make(chan error, 1)
-	go func() { _, err := (&Command{Path: path}).Run(context.Background(), Request{Trigger: "apply"}, log); ended <- err }()
+	go func() {
+		_, err := (&Command{Path: path}).Run(context.Background(), Request{Trigger: "apply"}, log)
+		ended <- err
+	}()
 	awaitFile(t, filepath.Join(dir, "alive"))
 	pidText, err := os.ReadFile(filepath.Join(dir, "child"))
 	if err != nil {

@@ -20,6 +20,7 @@ const coreDied = syscall.SIGHUP
 
 // Completion acknowledgement has its own budget: a short TERM grace does not imply the watchdog can exit that fast.
 const watchdogAckTimeout = 3 * time.Second
+
 // coreDeathGrace is the TERM window before the parent-death watchdog escalates.
 const coreDeathGrace = 3 * time.Second
 

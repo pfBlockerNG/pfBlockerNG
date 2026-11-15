@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-
 func TestACanceledContextStartsNothingEvenWhenThePathIsMissing(t *testing.T) {
 	c := &Command{Path: filepath.Join(t.TempDir(), "absent")}
 	log := newLog(t)

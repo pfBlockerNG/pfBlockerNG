@@ -37,4 +37,3 @@ func TestAdmissionCursorGenerationWrapsAtMask(t *testing.T) {
 		t.Errorf("next admission LogGen = %d; want wrapped generation 0", admission.logGen)
 	}
 }
-

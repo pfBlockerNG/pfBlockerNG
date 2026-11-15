@@ -277,7 +277,6 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 	h.finish(t, nil)
 }
 
-
 func TestAViewBeforeAnyStartIsIdleWithNoUpdateAndNoLog(t *testing.T) {
 	dir := t.TempDir()
 	left := filepath.Join(dir, "update.log")

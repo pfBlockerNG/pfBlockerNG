@@ -18,4 +18,3 @@ func TestTheProgramsStdinIsARegularFileNeverAPipe(t *testing.T) {
 		t.Error("the program's stdin is not a regular file: a pipe makes Run wait for a descendant that keeps it open")
 	}
 }
-

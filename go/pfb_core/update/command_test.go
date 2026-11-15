@@ -121,7 +121,6 @@ func awaitFile(t *testing.T, path string) {
 	}
 }
 
-
 func TestTheProgramReadsTheRequestOnStdinAsOneVersion1Object(t *testing.T) {
 	var feeds []string
 	var wantFeeds []any
@@ -314,7 +313,6 @@ func TestResultLinesAddUp(t *testing.T) {
 		})
 	}
 }
-
 
 func TestACanceledContextStartsNothing(t *testing.T) {
 	p, dir := program(t, `echo ran > "$D/ran"`)

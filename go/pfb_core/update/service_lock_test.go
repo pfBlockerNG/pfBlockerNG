@@ -53,4 +53,3 @@ func TestLifetimeLockIsFreeWhileADetachedServiceStillLives(t *testing.T) {
 	release.Close()
 	awaitFile(t, filepath.Join(dir, "child"))
 }
-

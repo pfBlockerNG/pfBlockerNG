@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-
 func TestMain(m *testing.M) {
 	if os.Getenv("PFB_INHERIT_HELPER") == "1" {
 		f, err := os.OpenFile(os.Getenv("PFB_INHERIT_MARKER"), os.O_CREATE|os.O_WRONLY, 0o600)
@@ -34,4 +33,3 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
-

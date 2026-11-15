@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	defaultMax = 64 << 10    // the bytes of log a View returns when asked for none in particular
-	offsetBits = 40          // a cursor is the Update's generation above the log offset in its low bits
+	defaultMax = 64 << 10 // the bytes of log a View returns when asked for none in particular
+	offsetBits = 40       // a cursor is the Update's generation above the log offset in its low bits
 	offsetMask = 1<<offsetBits - 1
 	genMask    = 1<<(63-offsetBits) - 1
 )

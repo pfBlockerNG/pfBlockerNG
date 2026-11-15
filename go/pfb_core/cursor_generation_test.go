@@ -66,7 +66,6 @@ func waitCursorView(t *testing.T, c *runningCore, after, contains string) update
 	}
 }
 
-
 func generationFromCursor(t *testing.T, cursor string) int64 {
 	t.Helper()
 	value, err := strconv.ParseInt(cursor, 10, 64)
@@ -124,4 +123,3 @@ func TestWorkerLogGenerationAdvancesAcrossCoreRestart(t *testing.T) {
 		t.Errorf("program runs = %d; want exactly two admissions", n)
 	}
 }
-
