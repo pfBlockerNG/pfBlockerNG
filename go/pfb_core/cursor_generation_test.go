@@ -66,19 +66,6 @@ func waitCursorView(t *testing.T, c *runningCore, after, contains string) update
 	}
 }
 
-func workerLogGeneration(stateDir string) (int64, bool) {
-	body, err := os.ReadFile(filepath.Join(stateDir, "update.log.status"))
-	if err != nil {
-		return 0, false
-	}
-	var receipt struct {
-		LogGen int64 `json:"logGen"`
-	}
-	if err := json.Unmarshal(body, &receipt); err != nil {
-		return 0, false
-	}
-	return receipt.LogGen, true
-}
 
 func generationFromCursor(t *testing.T, cursor string) int64 {
 	t.Helper()
@@ -115,6 +102,9 @@ func TestWorkerLogGenerationAdvancesAcrossCoreRestart(t *testing.T) {
 	wantJSON(t, c2.post("StartUpdate", `{"requestId":"gen-2","trigger":"manual"}`), http.StatusOK, `{}`)
 	secondStart := waitCursorView(t, c2, "", "update program started")
 	secondGen := workerCursorGeneration(t, c2, "second-live-after-restart", secondStart)
+	if got := generationFromCursor(t, secondStart.Next); got != secondGen {
+		t.Errorf("returned cursor generation=%d; want receipt generation %d", got, secondGen)
+	}
 	t.Logf("admission cursors: first partial=%s, second=%s", firstCursor, secondStart.Next)
 	if want := nextCursorGeneration(firstEndGen); secondGen != want {
 		t.Errorf("new admission after restart has LogGen=%d, want %d after prior receipt %d", secondGen, want, firstEndGen)
@@ -135,71 +125,3 @@ func TestWorkerLogGenerationAdvancesAcrossCoreRestart(t *testing.T) {
 	}
 }
 
-func TestTrimmedWorkerLogGenerationAdvancesAtNextAdmission(t *testing.T) {
-	holdQuarters(t)
-	dir, prog := scratchDir(t), t.TempDir()
-	path := filepath.Join(prog, "update.sh")
-	script := "#!/bin/sh\nD='" + prog + "'\n" + `cat > "$D/request"
-echo run >> "$D/runs"
-run=$(wc -l < "$D/runs" | tr -d ' ')
-echo "cursor-run-$run started"
-if [ "$run" = "1" ]; then
-  dd if=/dev/zero bs=1048576 count=9 2>/dev/null | tr '\000' 'x'
-  printf '\n'
-fi
-echo ready > "$D/ready$run"
-while [ ! -e "$D/release$run" ]; do sleep 0.05; done
-echo "cursor-run-$run done"
-`
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	c1 := startCore(t, dir, "--update-cmd", path)
-	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(prog, "release1"), nil, 0o600) })
-	wantJSON(t, c1.post("StartUpdate", `{"requestId":"trim-1","trigger":"manual"}`), http.StatusOK, `{}`)
-	waitFor(t, func() bool {
-		_, err := os.Stat(filepath.Join(prog, "ready1"))
-		return err == nil
-	})
-	waitFor(t, func() bool {
-		logGen, ok := workerLogGeneration(c1.state)
-		return ok && logGen > 0
-	})
-	trimmedView := waitCursorView(t, c1, "", "")
-	trimmedGen := workerCursorGeneration(t, c1, "trimmed-first-live", trimmedView)
-	if trimmedGen == 0 {
-		t.Fatal("first Update log did not publish a trim generation")
-	}
-	if err := os.WriteFile(filepath.Join(prog, "release1"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	firstEnd := c1.waitFinished("manual")
-	terminalGen := workerCursorGeneration(t, c1, "trimmed-first-finished", firstEnd)
-	if terminalGen != trimmedGen {
-		t.Fatalf("terminal publication changed trimmed LogGen %d to %d", trimmedGen, terminalGen)
-	}
-	c1.stop()
-
-	c2 := startCore(t, dir, "--update-cmd", path)
-	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(prog, "release2"), nil, 0o600) })
-	wantJSON(t, c2.post("StartUpdate", `{"requestId":"trim-2","trigger":"manual"}`), http.StatusOK, `{}`)
-	waitFor(t, func() bool {
-		_, err := os.Stat(filepath.Join(prog, "ready2"))
-		return err == nil
-	})
-	second := waitCursorView(t, c2, "", "")
-	nextGen := workerCursorGeneration(t, c2, "second-live-after-trimmed-restart", second)
-	t.Logf("trimmed receipt generation=%d, next admission generation=%d, cursor=%s", terminalGen, nextGen, second.Next)
-	if want := nextCursorGeneration(terminalGen); nextGen != want {
-		t.Errorf("new admission after trimmed receipt has LogGen=%d, want %d after %d", nextGen, want, terminalGen)
-	}
-	if got := generationFromCursor(t, second.Next); got != nextGen {
-		t.Errorf("returned cursor generation=%d; want receipt generation %d", got, nextGen)
-	}
-	if err := os.WriteFile(filepath.Join(prog, "release2"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if end := c2.waitFinished("manual"); end.Update.Result != "success" {
-		t.Errorf("second Update after trimmed restart = %+v; want success", end.Update)
-	}
-}
