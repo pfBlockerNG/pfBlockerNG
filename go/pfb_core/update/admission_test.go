@@ -26,16 +26,39 @@ func TestAdmissionFailureNeverTruncatesExistingLog(t *testing.T) {
 	}
 }
 
-func TestAdmissionClosesItsLeaseAfterEveryFailure(t *testing.T) {
+func TestAdmissionRefusesOrphanArtifactsAndReleasesItsLease(t *testing.T) {
 	log := independentLog(t)
-	if err := os.Mkdir(log.Name()+".request", 0o700); err != nil {
+	request := log.Name() + ".request"
+	if err := os.Mkdir(request, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	marker := filepath.Join(request, "keep")
+	if err := os.WriteFile(marker, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Command{Path: "/bin/true"}).Admit(log.Name()); err == nil {
+		t.Fatal("orphan request artifact was admitted")
+	}
+	lock, err := operationLock(log.Name())
+	if err != nil {
+		t.Fatalf("refused admission retained lifetime lock: %v", err)
+	}
+	lock.Close()
+	if body, err := os.ReadFile(marker); err != nil || string(body) != "orphan" {
+		t.Fatalf("orphan artifact = %q, %v; want preserved", body, err)
+	}
+}
+
+func TestLaunchFailureAfterValidAdmissionReleasesItsLease(t *testing.T) {
+	log := independentLog(t)
 	lease, err := (&Command{Path: "/bin/true"}).Admit(log.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	request := log.Name() + ".request"
+	if err := os.Mkdir(request, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := lease.Launch(context.Background(), &Command{Path: "/bin/true"}, Request{Trigger: "apply"}, log); err == nil {
 		t.Fatal("request preparation unexpectedly launched")
 	}
@@ -45,6 +68,9 @@ func TestAdmissionClosesItsLeaseAfterEveryFailure(t *testing.T) {
 		t.Fatalf("failed launch retained lifetime lock: %v", err)
 	}
 	lock.Close()
+	if info, err := os.Stat(request); err != nil || !info.IsDir() {
+		t.Fatalf("launch obstruction changed: %v, %v", info, err)
+	}
 }
 
 func TestAdmissionLaunchTransfersOwnershipAndParentCloseDoesNotUnlock(t *testing.T) {
@@ -56,7 +82,10 @@ func TestAdmissionLaunchTransfersOwnershipAndParentCloseDoesNotUnlock(t *testing
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ended := make(chan error, 1)
-	go func() { _, err := lease.Launch(ctx, &Command{Path: p.Path}, Request{Trigger: "apply"}, log); ended <- err }()
+	go func() {
+		_, err := lease.Launch(ctx, &Command{Path: p.Path}, Request{Trigger: "apply"}, log)
+		ended <- err
+	}()
 	awaitFile(t, filepath.Join(dir, "ready"))
 	cancel()
 	if err := recv(t, ended, "observer never stopped"); !errors.Is(err, context.Canceled) {

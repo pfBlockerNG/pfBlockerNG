@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -115,7 +116,10 @@ func TestOwnedWorkerCrashDoesNotContaminateTheNextAdmission(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = release.WriteString("write\nfinish\n"); _ = release.Close() })
 	log := independentLog(t)
-	cmd := startOwnedWorker(t, p.Path, log)
+	cmd, err := startOwnedWorker(t, p.Path, log, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reaped := false
 	t.Cleanup(func() {
 		if !reaped && cmd.Process != nil {
@@ -239,7 +243,10 @@ func TestKilledWorkerSalvagesCompleteResultLinesWithoutClaimingSuccess(t *testin
 	}
 	t.Cleanup(func() { _, _ = release.WriteString("finish\n"); _ = release.Close() })
 	log := independentLog(t)
-	cmd := startOwnedWorker(t, p.Path, log)
+	cmd, err := startOwnedWorker(t, p.Path, log, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reaped := false
 	t.Cleanup(func() {
 		if !reaped && cmd.Process != nil {
@@ -286,7 +293,24 @@ func TestKilledWorkerSalvagesCompleteResultLinesWithoutClaimingSuccess(t *testin
 	awaitFile(t, dir+"/finished")
 }
 
-func startOwnedWorker(t *testing.T, programPath string, log *os.File) *exec.Cmd {
+func TestOwnedWorkerSetupFailureReapsDirectCommand(t *testing.T) {
+	p, dir := program(t, `echo ran > "$D/ran"`)
+	log := independentLog(t)
+	cmd, err := startOwnedWorker(t, p.Path, log, true)
+	if err == nil || cmd != nil {
+		t.Fatalf("closed release setup = cmd %v, error %v; want a reaped failure", cmd, err)
+	}
+	lock, err := operationLock(log.Name())
+	if err != nil {
+		t.Fatalf("setup failure retained worker lifetime lock: %v", err)
+	}
+	lock.Close()
+	if _, err := os.Stat(filepath.Join(dir, "ran")); !os.IsNotExist(err) {
+		t.Fatalf("setup failure launched the program: %v", err)
+	}
+}
+
+func startOwnedWorker(t *testing.T, programPath string, log *os.File, closeRelease bool) (*exec.Cmd, error) {
 	t.Helper()
 	lock, err := operationLock(log.Name())
 	if err != nil {
@@ -326,24 +350,36 @@ func startOwnedWorker(t *testing.T, programPath string, log *os.File) *exec.Cmd 
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	owned := true
+	defer func() {
+		if owned {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	}()
+	defer ready.Close()
+	defer releaseW.Close()
+	defer lock.Close()
 	request.Close()
 	result.Close()
 	readyW.Close()
 	releasePipe.Close()
 	if err := ready.SetReadDeadline(time.Now().Add(stuck)); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	var ack [1]byte
-	if _, err := io.ReadFull(ready, ack[:]); err != nil || ack[0] != 1 {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		t.Fatalf("ownership ack = %v, %v", ack, err)
+	if _, err := io.ReadFull(ready, ack[:]); err != nil {
+		return nil, fmt.Errorf("ownership ack = %v: %w", ack, err)
 	}
-	ready.Close()
+	if ack[0] != 1 {
+		return nil, fmt.Errorf("ownership ack = %v, want 1", ack)
+	}
+	if closeRelease {
+		_ = releaseW.Close()
+	}
 	if _, err := releaseW.Write([]byte{1}); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	releaseW.Close()
-	lock.Close()
-	return cmd
+	owned = false
+	return cmd, nil
 }
