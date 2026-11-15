@@ -132,7 +132,7 @@ def test_sol_wholepass_cadence_observations(core_vm: SmokeVM, mock_feeds: _MockF
             _set_registered_toggle(vm, key, on=on)
         effective = h.php_eval(
             vm,
-            "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');"
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
             "pfb_global();"
             "echo 'DCC_CONFIG_BEGIN'.json_encode(array("
             "'maxmind_key_empty'=>empty($pfb['maxmind_key']),"
