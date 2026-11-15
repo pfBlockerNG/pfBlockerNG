@@ -207,7 +207,23 @@ func (s *Scheduler) Start(trigger, scope, force string) error {
 	return s.admit(func() error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.launch(req, func() (map[string]int64, error) { return nil, nil })
+		return s.launch(req, func() (map[string]int64, error) {
+			if req.Trigger != "manual" {
+				return nil, nil
+			}
+			var snap map[string]int64
+			for id, it := range s.st {
+				ip := strings.HasPrefix(id, "ipv4:") || strings.HasPrefix(id, "ipv6:")
+				dnsbl := strings.HasPrefix(id, "dnsbl:")
+				if it.PendingOccurrence != nil && (req.Scope == "both" && (ip || dnsbl) || req.Scope == "ip" && ip || req.Scope == "dnsbl" && dnsbl) {
+					if snap == nil {
+						snap = map[string]int64{}
+					}
+					snap[id] = *it.PendingOccurrence
+				}
+			}
+			return snap, nil
+		})
 	})
 }
 
