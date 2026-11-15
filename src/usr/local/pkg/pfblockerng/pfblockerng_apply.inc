@@ -2908,7 +2908,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
 									$pfb_pre = pfb_list_pre_script_run($pfb_norm['path'], "{$file_dwn}.pre",
 									    $pfb_row_script_pre, $list['script_pre'], $header,
-									    escapeshellarg("{$file_dwn}.pre") . " dnsbl {$elog}");
+									    escapeshellarg("{$file_dwn}.pre") . " dnsbl");
 									if (!$pfb_pre['ok']) {
 										// issue #1958: pre-script failure genuinely served last-known-good --
 										// mark it in the ledger (distinct 'script' stage, never 'download') and
@@ -2982,7 +2982,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									    "[ {$alias} - {$header} ] Post-script input staging unavailable",
 									    $pfb['dbdir'], state: $pfb_script_state)) {
 										$pfb_post_status = pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
-										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
+										    escapeshellarg("{$file_dwn}.post") . " dnsbl");
 										unlink_if_exists("{$file_dwn}.post");
 										// issue #2059: 'script' stage, never 'download' -- the feed refreshed.
 										pfb_list_post_script_failure_record($pfb_post_status, 'dnsbl', $alias,
@@ -4405,7 +4405,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
 								$pfb_pre = pfb_list_pre_script_run($pfb_norm['path'], "{$file_dwn}.pre",
 								    $pfb_script_pre, $list['script_pre'], $header,
-								    escapeshellarg("{$file_dwn}.pre") . " {$list['vtype']} {$elog}");
+								    escapeshellarg("{$file_dwn}.pre") . " {$list['vtype']}");
 								if (!$pfb_pre['ok']) {
 									// issue #1958: pre-script failure genuinely served last-known-good --
 									// mark it in the ledger (distinct 'script' stage, never 'download') and
@@ -4450,7 +4450,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								    $pfb['dbdir'], state: $pfb_script_state);
 								if ($pfb_post_staged) {
 									$pfb_post_status = pfb_list_script_exec($pfb_script_post, $list['script_post'], 'post', $header,
-									    "{$file_org_esc} {$list['vtype']} {$elog}");
+									    "{$file_org_esc} {$list['vtype']}");
 									if ($pfb_post_status !== 0) {
 										// issue #1927: restore the download now so the empty-feed check
 										// below reads it, not the failed script's leftovers.

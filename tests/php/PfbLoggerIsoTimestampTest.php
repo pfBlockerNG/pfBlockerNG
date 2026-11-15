@@ -179,7 +179,7 @@ final class PfbLoggerIsoTimestampTest extends TestCase
 
 	/**
 	 * CodeRabbit on PR #1061 (issue #1054 follow-up): other writers append to
-	 * the SAME log file in-process (hook output via pfb_persist_hook_output()),
+	 * the SAME log file in-process (raw hook output through the capture fanout),
 	 * so the BOL decision must come from the file's real last byte at write
 	 * time -- never from remembered state a foreign append silently outdated.
 	 */

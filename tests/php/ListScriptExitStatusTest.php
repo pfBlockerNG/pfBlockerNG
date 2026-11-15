@@ -240,6 +240,24 @@ final class ListScriptExitStatusTest extends TestCase
 		$ip_pre      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', 'pfb_ip_script_failure_continue($alias,');
 		$ip_stage    = $this->applyScope($source, '$file_chk = pfb_ip_script_probe_staged(', 'if (!$custom && $file_chk == 0 && pfb_is_empty($ip_data)) {');
 		$ip_post     = $this->applyScope($source, 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {', '$file_chk = pfb_ip_script_probe_staged(');
+		$script_calls = [
+			[$dnsbl_pre, 'pfb_list_pre_script_run', '{$file_dwn}.pre', 'dnsbl'],
+			[$dnsbl_post, 'pfb_list_script_exec', '{$file_dwn}.post', 'dnsbl'],
+			[$ip_pre, 'pfb_list_pre_script_run', '{$file_dwn}.pre', '{$list[\'vtype\']}'],
+			[$ip_post, 'pfb_list_script_exec', '$file_org_esc', '{$list[\'vtype\']}'],
+		];
+		foreach ($script_calls as [$scope, $function, $data_arg, $type_arg]) {
+			$start = strpos($scope, $function . '(');
+			$this->assertNotFalse($start, "{$function} caller must remain in its feed loop");
+			$end = strpos($scope, ');', $start);
+			$this->assertNotFalse($end, "{$function} argument list must remain intact");
+			$call = substr($scope, $start, $end + 2 - $start);
+			$this->assertStringContainsString($data_arg, $call);
+			$this->assertStringContainsString($type_arg, $call);
+			$this->assertStringNotContainsString('$elog', $call, 'diagnostic routing belongs to the runner, not feed argv');
+			$this->assertStringNotContainsString('>>', $call, 'do not append a shell redirection to feed arguments');
+		}
+
 
 		$this->assertSame(1, substr_count($dnsbl_pre, 'pfb_list_pre_script_run($pfb_norm[\'path\']'), 'DNSBL pre-script dispatch must stay in its loop');
 		$dnsbl_cleanup = 'pfb_list_script_cleanup_staged($pfb_parse_path, $pfb_staged_path, "{$file_dwn}.pre");';

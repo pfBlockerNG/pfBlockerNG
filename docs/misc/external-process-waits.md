@@ -74,17 +74,22 @@ function polls `kill(-PGID, 0)` every 10 ms until the group is gone, for at most
 anyway (issue #3663). An expired start therefore returns at most two graces after its
 30-second deadline: the TERM grace, then this post-KILL wait.
 
-## Don't let a daemon hold the capture pipe
+## Don't let a daemon hold an output pipe
 
-PHP `exec()` / `$(command substitution)` read command stdout **to EOF**. Daemon the command spawned inherits command stdout/stderr, and while it lives pipe never reaches EOF — capture **blocks** even though command itself exited. (`timeout` reaper-wait above is *second*, independent way same hook hangs.)
+PHP `exec()` / `$(command substitution)` read command stdout **to EOF**. A daemon the command spawned can inherit stdout/stderr
+and keep a pipe open after the direct command exits, blocking capture. (`timeout` reaper-wait above is a second, independent
+way the same hook can hang.)
 
-Fix: send command output to **file**, read stdin from `/dev/null`:
+When output must be retained, give the child a regular file for stdout/stderr and `/dev/null` for stdin:
 
 ```text
 cmd > /tmp/somefile 2>&1 < /dev/null
 ```
 
-Spawned daemon then holds harmless regular-file fd, capture returns moment direct command exits. Read output back from file.
+The script-output runner uses one fresh private regular capture file per invocation. It polls the direct child, copies bounded
+raw chunks to the main log and the distinct viewer, then drains only the captured size at direct exit; it never waits for
+inherited-fd EOF. Complete bytes go to the main log. The viewer gets up to 1 MiB combined stdout/stderr per PHP script plus
+one notice only on overflow; later progress and invocations remain independent.
 
 ## Package-page visibility is the mirror image: stream to stdout, not just the log file
 
@@ -92,7 +97,12 @@ Same fd stray daemon must *not* hold is one pfSense **Software page reads** to s
 
 Fix (issue #690, widened by ADR-58): `pfb_logger()` **mirrors main-log lines (cases 1/2) to stdout** so the Software page streams live progress. Gate: `pfb_run_streams_to_stdout()` — mirror only when stdout is **real watched surface**: lifecycle callback (`$pfb['hook_lifecycle']`, pkg `| tee` pipe — original #690 case) **OR interactive terminal** (`pfb_stdout_is_terminal()` = `stream_isatty(php://stdout)`, ADR-58 addition, so hand-run pass streams too). Does **not** print when stdout is **log file logger already writes** — cron tick `>> log`, detached Run-Now `>> runlog`, nested extras dispatch (`dc`/`bls`/…) — neither tty nor lifecycle, printing there would double every line; nor for **web in-process caller** (settings-save that resyncs then `header('Location')`, where stdout is HTTP response). Core captures Update stdout/stderr in the dedicated transcript and `GetUpdate` reads only that transcript; the rotating main log remains separate. Unbound-stop wait logs keepalive dots through the same path, closing that silent gap. Visibility only: fd-detach, `--foreground`, redirect safety above untouched.
 
-**Update hook's own** stdout/stderr needs same treatment, but can't just be printed live through pipe: hook body redirected to log file precisely so daemon it starts can't hold capture pipe (above), so mirroring with `tee`/pipe would reintroduce hang. Instead, during lifecycle callback `pfb_run_hooks()` runs hook under `proc_open()` with stdout/stderr pointed at log **file** via descriptor spec (never pipe back to PHP — spawned daemon inherits only harmless file fd), tracks child with `proc_get_status()`, and **tails file to stdout with `pfb_log_tail_chunk()` while hook runs** — page shows `[ pfB Hook ] …` markers *and* hook real output streaming live between them, not one block after exit (issues #693/#883). Exit code (124 on timeout, else hook's own) comes off status; plain file read can't hang, so daemon-safety preserved. On non-lifecycle cron/manual/Run-Now path hook stays blocking `exec()`; Core's Update view polls `GetUpdate`'s transcript, not the rotating main log. `pfb_mirror_hook_output()` remains only as a `proc_open`-failure fallback.
+**Hook and list-script output** uses `pfb_script_output_exec()`: stdout and stderr share a fresh private regular capture file, not a
+pipe. The PHP status loop drains raw 8 KiB chunks to the main log and, when distinct, the viewer; it never waits for inherited-fd
+EOF and its cutoff is the capture size observed when the direct runner exits. A daemon that outlives a global hook cannot hold
+the runner open. Global hooks retain `timeout --foreground` so restarted services survive; list transforms retain default reaper
+mode so a hung transform tree is killed. During package lifecycle callbacks, hook bytes are also mirrored from the capture to
+stdout, preserving Software-page visibility without piping child output back to PHP.
 
 ## Following one specific dispatched process — pidfile, not a `ps` pattern or a log string
 

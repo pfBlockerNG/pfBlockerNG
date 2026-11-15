@@ -410,10 +410,14 @@ The worker receives this request on stdin and reports progress and results as fo
   "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"]}`. `feeds` and `extras` are left out
   when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
   Update names what to run; a `manual` one runs its scope.
-- **stdout and stderr:** the complete transcript, `update.log` in `--state-dir`: a regular file, never a pipe. `GetUpdate` reads this file;
-  the browser never tails the rotating main log. The worker appends without trimming or a size cap. A Core restart does not truncate it;
-  completion retains the latest transcript until a later admitted Update replaces the pathname. Admission succeeds before replacement, and
-  descriptors opened before replacement remain attached to the old inode; they cannot write into the new transcript.
+- **stdout and stderr:** the per-Update transcript, `update.log` in `--state-dir`: a regular file, never a pipe. `GetUpdate`
+  reads this file; the browser never tails the rotating main log. There is no whole-transcript cap or trimming. For PHP hook and
+  per-list script invocations, the transcript includes the first 1,048,576 combined stdout/stderr bytes and one notice only
+  when an additional byte exists; the remaining captured bytes are appended once to the main log. The allowance resets for
+  each invocation. Ordinary progress and later scripts remain visible; Go FeedPhase output is unchanged by this PHP-only rule.
+  A Core restart does not truncate the transcript; completion retains it until a later admitted Update replaces the pathname.
+  Admission succeeds before replacement, and descriptors opened before replacement remain attached to the old inode; they
+  cannot write into the new transcript.
 - **fd 3:** the worker's durable `update.log.result` file: result lines, each one JSON object `{"version": 1, "outcomes": {id:
   "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field but `version` optional. The
   program writes each outcome as it finishes. Complete lines are preserved for recovery; if the final unterminated line is invalid,
