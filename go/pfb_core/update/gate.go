@@ -72,6 +72,7 @@ type Status struct {
 type Gate struct {
 	logPath string
 	run     RunFunc
+	Admit   func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
 	done    func(Request, Result, error)
 
 	admit sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
@@ -101,7 +102,19 @@ func (g *Gate) Start(req Request) error {
 	if !g.admit.TryLock() {
 		return ErrRunning
 	}
+	var lease *Admission
+	var err error
+	if g.Admit != nil {
+		lease, err = g.Admit(g.logPath)
+		if err != nil {
+			g.admit.Unlock()
+			return err
+		}
+	}
 	log, err := os.OpenFile(g.logPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o600)
+	if lease != nil {
+		lease.Close() // shortcut: Run takes its own lease; the admit mutex still blocks a second Gate start
+	}
 	if err != nil {
 		g.admit.Unlock()
 		return fmt.Errorf("the Update log cannot be opened: %w", err)

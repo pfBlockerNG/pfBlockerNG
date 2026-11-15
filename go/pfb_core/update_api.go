@@ -26,7 +26,9 @@ func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(s
 	}
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
 		Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
-	gate := update.New(filepath.Join(stateDir, "update.log"), refreshingRun(st, (&update.Command{Path: path}).Run, logf), sched.Done)
+	command := &update.Command{Path: path}
+	gate := update.New(filepath.Join(stateDir, "update.log"), refreshingRun(st, command.Run, logf), sched.Done)
+	gate.Admit = command.Admit
 	sched.Bind(gate.Start)
 	return sched, gate
 }
