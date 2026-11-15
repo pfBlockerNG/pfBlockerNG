@@ -78,7 +78,7 @@ func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, e
 	cmd := exec.Command(c.Path)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
 	cmd.ExtraFiles = []*os.File{fd3}
-	outcome := process.Run(ctx, cmd, process.Policy{Grace: killGrace})
+	outcome := process.Run(ctx, cmd, process.Policy{Grace: killGrace, LeaveGroupOnExit: true})
 	watchErr := outcome.WatchdogErr
 	if watchErr != nil {
 		watchErr = fmt.Errorf("the update %w", watchErr)

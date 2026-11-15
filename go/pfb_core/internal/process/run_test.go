@@ -140,7 +140,7 @@ echo $! > "$D/child"
 `+end)
 			ctx, cancel := context.WithTimeout(context.Background(), stuck)
 			defer cancel()
-			out := Run(ctx, cmd, Policy{Grace: 100 * time.Millisecond})
+			out := Run(ctx, cmd, Policy{Grace: 100 * time.Millisecond, LeaveGroupOnExit: true})
 			if out.Interrupted != nil || out.WatchdogErr != nil {
 				t.Fatalf("ownership phases = %+v", out)
 			}
@@ -179,7 +179,7 @@ echo $! > "$D/child"
 func TestRunKeepsStartErrorAndAlreadyCancelledCause(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), stuck)
 	defer cancel()
-	out := Run(ctx, exec.Command(filepath.Join(t.TempDir(), "missing")), Policy{Grace: time.Millisecond})
+	out := Run(ctx, exec.Command(filepath.Join(t.TempDir(), "missing")), Policy{Grace: time.Millisecond, LeaveGroupOnExit: true})
 	if !errors.Is(out.CommandErr, os.ErrNotExist) || out.Interrupted != nil || out.WatchdogErr != nil {
 		t.Fatalf("missing executable = %+v", out)
 	}
@@ -191,7 +191,7 @@ func TestRunKeepsStartErrorAndAlreadyCancelledCause(t *testing.T) {
 	ended, stop := context.WithCancelCause(context.Background())
 	stop(cause)
 	cmd := exec.Command("/bin/sh", "-c", "exit 0")
-	out = Run(ended, cmd, Policy{Grace: time.Millisecond})
+	out = Run(ended, cmd, Policy{Grace: time.Millisecond, LeaveGroupOnExit: true})
 	if out.CommandErr != cause || out.Interrupted != nil || out.WatchdogErr != nil || cmd.Process != nil {
 		t.Errorf("already cancelled = %+v, process %v", out, cmd.Process)
 	}
@@ -216,7 +216,7 @@ exit 7`)
 		recv(t, decided, "cancellation never inspected the exited leader")
 		return c.Wait()
 	}
-	out := Run(ctx, cmd, Policy{Grace: 100 * time.Millisecond})
+	out := Run(ctx, cmd, Policy{Grace: 100 * time.Millisecond, LeaveGroupOnExit: true})
 	var status *exec.ExitError
 	if !errors.As(out.CommandErr, &status) || status.ExitCode() != 7 || out.Interrupted != nil || out.WatchdogErr != nil {
 		t.Errorf("late cancellation = %+v; want real exit 7 only", out)
@@ -251,7 +251,7 @@ wait`)
 	runCtx, stop := context.WithCancelCause(ctx)
 	defer stop(errors.New("fixture salvage"))
 	done := make(chan Outcome, 1)
-	go func() { done <- Run(runCtx, cmd, Policy{Grace: 100 * time.Millisecond}) }()
+	go func() { done <- Run(runCtx, cmd, Policy{Grace: 100 * time.Millisecond, LeaveGroupOnExit: true}) }()
 	awaitFile(t, filepath.Join(dir, "ready"))
 	child := ownedChild(t, dir)
 	t.Cleanup(func() {
@@ -287,7 +287,7 @@ kill -KILL "$(ps -o pgid= -p $$ | tr -d ' ')"
 wait`)
 	ctx, cancel := context.WithTimeout(context.Background(), stuck)
 	defer cancel()
-	out := Run(ctx, cmd, Policy{Grace: 100 * time.Millisecond})
+	out := Run(ctx, cmd, Policy{Grace: 100 * time.Millisecond, LeaveGroupOnExit: true})
 	if out.Interrupted == nil || out.Interrupted.Error() != "watchdog exited while the program was running" {
 		t.Errorf("unexpected watchdog death = %+v", out)
 	}
@@ -411,7 +411,7 @@ func TestMain(m *testing.M) {
 	if dir := os.Getenv(coreDirEnv); dir != "" {
 		cmd := exec.Command("/bin/sh", "-c", `echo $$ > "$D/child"; echo ready > "$D/ready"; exec sleep 60`)
 		cmd.Env = append(os.Environ(), "D="+dir)
-		out := Run(context.Background(), cmd, Policy{Grace: 100 * time.Millisecond})
+		out := Run(context.Background(), cmd, Policy{Grace: 100 * time.Millisecond, LeaveGroupOnExit: true})
 		fmt.Fprintln(os.Stderr, out)
 		os.Exit(1)
 	}
@@ -465,7 +465,7 @@ exit 0`)
 	cmd.ExtraFiles = []*os.File{result}
 	ctx, cancel := context.WithTimeout(context.Background(), stuck)
 	defer cancel()
-	out := Run(ctx, cmd, Policy{Grace: 100 * time.Millisecond})
+	out := Run(ctx, cmd, Policy{Grace: 100 * time.Millisecond, LeaveGroupOnExit: true})
 	if out.CommandErr != nil || out.Interrupted != nil || out.WatchdogErr != nil {
 		t.Fatalf("pipe-holding terminal outcome = %+v", out)
 	}

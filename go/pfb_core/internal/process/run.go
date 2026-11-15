@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// Policy sets the foreground process group's TERM and post-KILL grace.
+// Policy sets the foreground process group's grace and whether exited programs may leave descendants.
 type Policy struct {
-	Grace time.Duration
+	Grace            time.Duration
+	LeaveGroupOnExit bool
 }
 
 // Outcome keeps the direct command status separate from ownership failures.
@@ -27,7 +28,7 @@ var leaderExited = exitedUnreaped
 // reap waits for the actual program; replaced only by tests to hold its exit/reap window open.
 var reap = (*exec.Cmd).Wait
 
-// Run owns cmd's process group and watchdog, but leaves exited programs' descendants alone.
+// Run owns cmd's process group and watchdog until the selected exit policy is complete.
 // The caller supplies an unstarted command and owns its arguments, environment and IO.
 func Run(ctx context.Context, cmd *exec.Cmd, policy Policy) Outcome {
 	if ctx.Err() != nil {
@@ -48,14 +49,32 @@ func Run(ctx context.Context, cmd *exec.Cmd, policy Policy) Outcome {
 		return Outcome{CommandErr: context.Cause(ctx), WatchdogErr: watcher.retire(false)}
 	}
 	if err := cmd.Start(); err != nil {
+		if !policy.LeaveGroupOnExit {
+			// No program started, so only the owned watchdog needs to be stopped.
+			var watchErr error
+			if exitedUnreaped(watcher.cmd.Process.Pid) {
+				watchErr = errors.New("watchdog exited before the program started")
+			}
+			_ = watcher.cmd.Process.Kill()
+			_ = watcher.reap()
+			return Outcome{CommandErr: err, WatchdogErr: errors.Join(watchErr, watcher.retire(true))}
+		}
 		return Outcome{CommandErr: err, WatchdogErr: watcher.retire(false)}
 	}
-	exited, decision := make(chan struct{}), make(chan error, 1)
+	type cleanupDecision struct {
+		interrupted error
+		cleanup     bool
+	}
+	exited, decision := make(chan struct{}), make(chan cleanupDecision, 1)
 	go func() {
+		if !policy.LeaveGroupOnExit {
+			decision <- cleanupDecision{interrupted: strictCleanup(ctx, cmd, watcher, exited, policy.Grace), cleanup: true}
+			return
+		}
 		var cause error
 		select {
 		case <-exited:
-			decision <- nil
+			decision <- cleanupDecision{}
 			return
 		case <-ctx.Done():
 			cause = fmt.Errorf("program was killed: %w", context.Cause(ctx))
@@ -63,7 +82,7 @@ func Run(ctx context.Context, cmd *exec.Cmd, policy Policy) Outcome {
 			cause = errors.New("watchdog exited while the program was running")
 		}
 		if leaderExited(cmd.Process.Pid) || exitedUnreaped(cmd.Process.Pid) {
-			decision <- nil
+			decision <- cleanupDecision{}
 			return
 		}
 		group := -watcher.cmd.Process.Pid
@@ -73,13 +92,56 @@ func Run(ctx context.Context, cmd *exec.Cmd, policy Policy) Outcome {
 			_ = watcher.reap()
 			groupGone(group, policy.Grace)
 		}
-		decision <- cause
+		decision <- cleanupDecision{interrupted: cause, cleanup: true}
 	}()
 	commandErr := reap(cmd)
 	close(exited)
-	interrupted := <-decision
-	watchErr := watcher.retire(interrupted != nil)
-	return Outcome{CommandErr: commandErr, Interrupted: interrupted, WatchdogErr: watchErr}
+	result := <-decision
+	watchErr := watcher.retire(result.cleanup)
+	return Outcome{CommandErr: commandErr, Interrupted: result.interrupted, WatchdogErr: watchErr}
+}
+
+// strictCleanup observes kernel exit independently of Wait's descendant-held IO pipes.
+func strictCleanup(ctx context.Context, cmd *exec.Cmd, watcher *watchdog, exited <-chan struct{}, grace time.Duration) error {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	group := -watcher.cmd.Process.Pid
+	ctxDone, watchExited := ctx.Done(), watcher.exited
+	var cause error
+	var deadline time.Time
+	for {
+		// An unexpected owner exit is still a failure when the program has also exited.
+		if exitedUnreaped(watcher.cmd.Process.Pid) {
+			cause = errors.New("watchdog exited while the program was running")
+			watchExited = nil
+		}
+		if exitedUnreaped(cmd.Process.Pid) {
+			break
+		}
+		if cause != nil && deadline.IsZero() {
+			_ = syscall.Kill(group, syscall.SIGTERM)
+			deadline = time.Now().Add(grace)
+		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			break
+		}
+		select {
+		case <-tick.C:
+		case <-exited:
+		case <-watchExited:
+			cause = errors.New("watchdog exited while the program was running")
+			watchExited = nil
+		case <-ctxDone:
+			ctxDone = nil
+			if !exitedUnreaped(cmd.Process.Pid) && cause == nil {
+				cause = fmt.Errorf("program was killed: %w", context.Cause(ctx))
+			}
+		}
+	}
+	_ = syscall.Kill(group, syscall.SIGKILL)
+	_ = watcher.reap()
+	groupGone(group, grace)
+	return cause
 }
 
 // groupGone observes the group without reaping its identity-reserving watchdog.

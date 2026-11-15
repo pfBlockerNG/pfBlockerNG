@@ -92,7 +92,8 @@ def test_pre_script_group_lifetime_on_freebsd(
     go_toolchain: GoToolchain,  # noqa: F811 -- the fixture imported above
     tmp_path: Path,
 ) -> None:
-    """Audit actual service sources, then require all four real Go lifetime checks."""
+    """Deploy the branch package, audit actual sources, then require all four real Go lifetime checks."""
+    helpers.deploy(smoke_vm)
     audit = smoke_vm.ssh(SOURCE_AUDIT, timeout=60)
     helpers.DIAG_DIR.mkdir(parents=True, exist_ok=True)
     evidence = helpers.DIAG_DIR / f"prescript-native-source-{uuid4().hex}.txt"
