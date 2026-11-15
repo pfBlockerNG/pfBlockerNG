@@ -202,19 +202,45 @@ func (s workerState) outcome() (Result, error) {
 	}
 	return s.Result, nil
 }
+// Admission owns the operation lock until Close or a successful launch transfers it.
+type Admission struct {
+	lock *os.File
+}
 
-func (c *Command) runIndependent(ctx context.Context, req Request, log *os.File) (Result, error) {
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
+func (a *Admission) Close() error {
+	if a == nil || a.lock == nil {
+		return nil
 	}
-	lock, err := operationLock(log.Name())
+	return a.lock.Close()
+}
+
+func (c *Command) Admit(logPath string) (*Admission, error) {
+	lock, err := operationLock(logPath)
+	if err != nil {
+		return nil, err
+	}
+	a := &Admission{lock: lock}
+	if _, err := readWorkerState(logPath+".status"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		a.Close()
+		return nil, fmt.Errorf("cannot recover worker state: %w", err)
+	}
+	return a, nil
+}
+
+func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, error) {
+	a, err := c.Admit(log.Name())
 	if err != nil {
 		return Result{}, err
 	}
-	defer lock.Close() // Never LOCK_UN: the worker inherits this same open description.
-	if _, err := readWorkerState(log.Name()+".status"); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Result{}, fmt.Errorf("cannot recover worker state: %w", err)
+	defer a.Close()
+	return a.Launch(ctx, c, req, log)
+}
+
+func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os.File) (Result, error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
 	}
+	lock := a.lock
 	var nonce [32]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return Result{}, err
@@ -287,6 +313,7 @@ func (c *Command) runIndependent(ctx context.Context, req Request, log *os.File)
 	}
 	releaseW.Close()
 	lock.Close()
+	a.lock = nil
 	select {
 	case <-ctx.Done():
 		return Result{}, ctx.Err()

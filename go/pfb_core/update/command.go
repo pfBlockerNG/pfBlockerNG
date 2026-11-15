@@ -3,7 +3,6 @@ package update
 import (
 	"bytes"
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,12 +35,6 @@ type Command struct {
 	Path string
 }
 
-// Run returns the result the program reported (readResult), with the error of a failed run: a non-zero exit (the result still
-// counts when the program wrote a valid one), a kill, or a result line that is not exactly one object of the shape above. Exit
-// status 75 is not a failure: Run returns ErrDeferred and no result, whatever the program wrote on fd 3.
-func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, error) {
-	return c.runIndependent(ctx, req, log)
-}
 
 // isDeferral reports whether err, from cmd.Wait, is the program's exit with status 75.
 func isDeferral(err error) bool {
