@@ -414,6 +414,8 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   enabled state and schedule override, including groups with no regular feed rows. Existing regular IDs are unchanged.
   The token is a fresh 32-byte random value encoded as lowercase hex for this Update; do not log it. A `scheduled` or `retry`
   Update names what to run; a `manual` one runs its scope.
+  The `skipfeed` retry cap applies to download failures only. Custom parse or script failures retain their existing retry
+  behavior and are not capped by `skipfeed`.
 - **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
   restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it. While it runs, the log is
   checked once a second: past 8 MiB it keeps only its newest whole lines, at most 4 MiB, in place, and a cursor from before
