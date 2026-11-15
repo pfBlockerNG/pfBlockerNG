@@ -257,7 +257,7 @@ def test_sol_wholepass_cadence_observations(core_vm: SmokeVM, mock_feeds: _MockF
             for generation in (1, 2, 3)
         }
 
-        def operation(label: str, trigger: str) -> dict[str, Any]:
+        def operation(label: str, trigger: str, *, expect_sync: bool = True) -> dict[str, Any]:
             op: dict[str, Any] = {
                 "label": label,
                 "request": {
@@ -301,7 +301,11 @@ def test_sol_wholepass_cadence_observations(core_vm: SmokeVM, mock_feeds: _MockF
                 <= update["finishedAt"]
                 <= int(op["guestAfter"].split(":")[0])
             ), op
-            assert "UPDATE PROCESS START" in log and "UPDATE PROCESS ENDED" in log, log
+            if expect_sync:
+                assert "UPDATE PROCESS START" in log and "UPDATE PROCESS ENDED" in log, log
+            else:
+                assert "===[  Aliastables / Rules  ]" not in log, "a no-due retry performed an inline sync"
+                assert not any(line.startswith("feed ") for line in log.splitlines()), log
             assert h.core_update_view(vm)["update"] == update, "another Update replaced the observed record"
             return op
 
@@ -343,7 +347,7 @@ def test_sol_wholepass_cadence_observations(core_vm: SmokeVM, mock_feeds: _MockF
                 if row["cadence"] == "Never":
                     mock_feeds.set_content(row["mock"], _body(row["kind"], row["cadence"], 3))
             mock_feeds.set_content(archive_name, _blacklist_tar_gz(PROVIDER, CATEGORY, "wp-category-3.example.com"))
-            second = operation("retry-without-new-due-occurrence", "retry")
+            second = operation("retry-without-new-due-occurrence", "retry", expect_sync=False)
             assert baseline["guestBefore"].split(":")[1] == second["guestAfter"].split(":")[1], (
                 "crossed midnight: repeat on fresh guest"
             )
