@@ -69,10 +69,9 @@ final class AliasCntGrepCountGuardTest extends TestCase
 	}
 
 	/**
-	 * sync_package_pfblockerng() has no safe off-appliance driver (#993); it performs live
-	 * downloads, firewall changes, and service work. These four thin executable-code pins are
-	 * therefore retained only for outer dispatch. Comments/docblocks are stripped first; each
-	 * route's count behavior is executed above.
+	 * Keep outer dispatch pinned alongside the executable line-count cases above.
+	 * DnsblVipApplyLifecycleTest covers actual script/source failure retention;
+	 * those mutually exclusive paths share the same last-good count helper.
 	 */
 	public function testSyncPassDispatchesEveryDistinctAliasCountRoute(): void
 	{
@@ -83,7 +82,12 @@ final class AliasCntGrepCountGuardTest extends TestCase
 		$this->assertNotFalse($end);
 		$sync = substr($source, $start, $end + strlen('pfb_feed_pass_release();') - $start);
 		foreach (self::aliasSeams() as [$seam]) {
-			$this->assertSame(1, substr_count($sync, "{$seam}("), "sync pass must dispatch {$seam} exactly once");
+			$expected = $seam === 'pfb_dnsbl_alias_count_script_failure' ? 2 : 1;
+			$this->assertSame($expected, substr_count($sync, "{$seam}("), "unexpected dispatch count for {$seam}");
 		}
+		$this->assertSame(1, substr_count($sync, 'pfb_dnsbl_alias_count_script_failure("'),
+			'script failure must count its retained staging exactly once');
+		$this->assertSame(1, substr_count($sync, 'pfb_dnsbl_alias_count_script_failure($txt,'),
+			'source failure must count its retained staging exactly once');
 	}
 }
