@@ -72,6 +72,14 @@ def test_private_core_shows_live_php_script_output_cap(smoke_vm: SmokeVM) -> Non
             timeout=210,
         )
         diagnostics = (run.stdout + run.stderr)[-2000:]
+        if run.returncode != 0:
+            saved = smoke_vm.ssh(
+                f"if [ -f {directory}/control.error ]; then /usr/bin/tail -c 20000 {directory}/control.error; "
+                f"else for file in {directory}/core.log {directory}/update.error; do "
+                'if [ -f "$file" ]; then echo "=== $file"; /usr/bin/tail -c 4096 "$file"; fi; done; fi',
+                timeout=30,
+            )
+            diagnostics = (diagnostics + saved.stdout + saved.stderr)[-24000:]
         assert run.returncode == 0, f"native PHP output-cap proof failed:\n{diagnostics}"
         assert run.stdout.startswith("NATIVE_SCRIPT_OUTPUT_CAP_PASS "), diagnostics
     finally:

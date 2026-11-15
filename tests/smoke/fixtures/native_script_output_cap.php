@@ -45,6 +45,49 @@ function digest(string $bytes): string {
 	return 'bytes=' . strlen($bytes) . ' sha256=' . hash('sha256', $bytes);
 }
 
+function diagnostic_tail(string $path, int $limit): string {
+	if (!is_file($path)) {
+		return "{$path}: missing\n";
+	}
+	$file = fopen($path, 'rb');
+	if ($file === FALSE) {
+		return "{$path}: unreadable\n";
+	}
+	$info = fstat($file);
+	$size = is_array($info) ? (int) ($info['size'] ?? 0) : 0;
+	if ($size > $limit) {
+		fseek($file, -$limit, SEEK_END);
+	}
+	$tail = $size > 0 ? fread($file, min($size, $limit)) : '';
+	fclose($file);
+	$encoded = json_encode((string) $tail, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_SLASHES);
+	return sprintf("%s bytes=%d tail=%s\n", $path, $size, $encoded === FALSE ? '[unavailable]' : $encoded);
+}
+
+function diagnostic_digest(string $path): string {
+	if (!is_file($path)) {
+		return "{$path}: missing\n";
+	}
+	$size = filesize($path);
+	$hash = hash_file('sha256', $path);
+	return sprintf("%s bytes=%s sha256=%s\n", $path, $size === FALSE ? '?' : (string) $size,
+		$hash === FALSE ? 'unavailable' : $hash);
+}
+
+function report_fixture_failure(string $dir, string $kind, string $detail): void {
+	$encoded = json_encode(substr($detail, 0, 2048), JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_SLASHES);
+	$report = sprintf("NATIVE_FIXTURE_FAILURE %s: %s\n", $kind, $encoded === FALSE ? '[unavailable]' : $encoded);
+	$report .= diagnostic_tail("$dir/core.log", 4096);
+	$report .= diagnostic_tail("$dir/update.error", 4096);
+	$report .= diagnostic_tail("$dir/error.log", 4096);
+	$report .= diagnostic_digest("$dir/state/update.log");
+	$report .= diagnostic_digest("$dir/main.log");
+	if (file_put_contents("$dir/control.error", $report, FILE_APPEND) === FALSE) {
+		fwrite(STDERR, "NATIVE_FIXTURE_DIAGNOSTICS_WRITE_FAILED\n");
+	}
+	fwrite(STDERR, $report);
+}
+
 /** @return array{string, string} collected bytes and the next independent cursor */
 function collect_exact(string $dir, string $after, int $length, string $label): array {
 	$bytes = '';
@@ -107,6 +150,20 @@ function stop_core(mixed &$core): void {
 
 function update_mode(string $dir): void {
 	$result = 1;
+	register_shutdown_function(static function () use ($dir): void {
+		$error = error_get_last();
+		$fatal = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR];
+		if ($error === NULL || !in_array($error['type'], $fatal, TRUE)) {
+			return;
+		}
+		$detail = sprintf('type=%d at %s:%d: %s', $error['type'], $error['file'], $error['line'],
+			substr($error['message'], 0, 2048));
+		$line = "NATIVE_UPDATE_FATAL: {$detail}\n";
+		if (file_put_contents("$dir/update.error", $line, FILE_APPEND) === FALSE) {
+			fwrite(STDERR, "NATIVE_UPDATE_ERROR_WRITE_FAILED\n");
+		}
+		fwrite(STDERR, $line);
+	});
 	try {
 		$request = json_decode(stream_get_contents(STDIN), TRUE, 512, JSON_THROW_ON_ERROR);
 		demand(is_array($request), 'Core Update request is not an object');
@@ -136,8 +193,13 @@ function update_mode(string $dir): void {
 		fclose($fd);
 		$result = 0;
 	} catch (Throwable $error) {
-		file_put_contents("$dir/update.error", $error->getMessage());
-		fwrite(STDERR, 'NATIVE_UPDATE_EXCEPTION: ' . $error->getMessage() . "\n");
+		$detail = sprintf('%s at %s:%d: %s', get_class($error), $error->getFile(), $error->getLine(),
+			substr($error->getMessage(), 0, 2048));
+		$line = "NATIVE_UPDATE_EXCEPTION: {$detail}\n";
+		if (file_put_contents("$dir/update.error", $line, FILE_APPEND) === FALSE) {
+			fwrite(STDERR, "NATIVE_UPDATE_ERROR_WRITE_FAILED\n");
+		}
+		fwrite(STDERR, $line);
 	} finally {
 		file_put_contents("$dir/update.finished", "finished\n");
 	}
@@ -147,6 +209,16 @@ function update_mode(string $dir): void {
 function control_mode(string $self, string $binary, string $dir): void {
 	$core = NULL;
 	$started = FALSE;
+	$failure = NULL;
+	$successSummary = '';
+	register_shutdown_function(static function () use ($dir): void {
+		$error = error_get_last();
+		$fatal = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR];
+		if ($error !== NULL && in_array($error['type'], $fatal, TRUE)) {
+			report_fixture_failure($dir, 'control fatal', sprintf('%s at %s:%d: %s', $error['type'],
+				$error['file'], $error['line'], substr($error['message'], 0, 2048)));
+		}
+	});
 	$payload = str_repeat(PAYLOAD_BLOCK, PAYLOAD_REPEATS);
 	$combined = $payload . $payload;
 	$payloadPath = "$dir/payload.bin";
@@ -244,8 +316,12 @@ function control_mode(string $self, string $binary, string $dir): void {
 		[$afterRotation] = collect_complete($dir, $startCursor);
 		demand($afterRotation === $transcriptA, 'GetUpdate transcript changed after private main-log rotation');
 
-		printf("NATIVE_SCRIPT_OUTPUT_CAP_PASS live=%s transcript=%s main=%s result=%s\n",
+		$successSummary = sprintf("NATIVE_SCRIPT_OUTPUT_CAP_PASS live=%s transcript=%s main=%s result=%s\n",
 			digest($viewerA), digest($transcriptA), digest($combined), $completed['update']['result']);
+	} catch (Throwable $error) {
+		$failure = $error;
+		report_fixture_failure($dir, 'control', sprintf('%s at %s:%d: %s', get_class($error), $error->getFile(),
+			$error->getLine(), $error->getMessage()));
 	} finally {
 		$cleanupErrors = [];
 		if (file_put_contents("$dir/write.output", "cleanup\n") === FALSE) {
@@ -276,9 +352,17 @@ function control_mode(string $self, string $binary, string $dir): void {
 			$cleanupErrors[] = 'cannot mark the private directory safe to remove';
 		}
 		if ($cleanupErrors !== []) {
-			throw new RuntimeException('cleanup incomplete; private directory must be retained: ' . implode('; ', $cleanupErrors));
+			$failure = $failure ?? new RuntimeException(implode('; ', $cleanupErrors));
+			report_fixture_failure($dir, 'cleanup', implode('; ', $cleanupErrors));
+		}
+		if ($failure !== NULL) {
+			report_fixture_failure($dir, 'post-cleanup', $failure->getMessage());
 		}
 	}
+	if ($failure !== NULL) {
+		exit(1);
+	}
+	fwrite(STDOUT, $successSummary);
 }
 
 $mode = (string) ($argv[1] ?? '');
