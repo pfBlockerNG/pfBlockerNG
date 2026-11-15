@@ -31,7 +31,7 @@ from .test_smoke_feeds import _blacklist_tar_gz
 
 pytestmark = pytest.mark.smoke
 DB = "/var/db/pfblockerng"
-PROVIDER, TITLE, CATEGORY = "cwprobe", "WholePass", "test-cat"
+PROVIDER, TITLE, CATEGORY = "ut1", "UT1", "test-cat"
 BLACKLIST = "installedpackages/pfblockerngblacklist"
 ROOTS = {"ipv4": h.CFG_IP_V4_LISTS, "ipv6": h.CFG_IP_V6_LISTS, "dnsbl": h.CFG_DNSBL_LISTS}
 
