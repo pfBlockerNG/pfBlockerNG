@@ -87,9 +87,18 @@ function php_runtime_preflight(): string {
 	);
 }
 
+function fixture_marker_summary(string $dir): string {
+	$markers = [];
+	foreach (['hook.entered', 'hook.ready', 'hook.done', 'write.output', 'release', 'update.finished', 'cleanup.safe'] as $marker) {
+		$markers[] = $marker . '=' . (is_file("$dir/{$marker}") ? '1' : '0');
+	}
+	return implode(',', $markers);
+}
 function report_fixture_failure(string $dir, string $kind, string $detail): void {
 	$encoded = json_encode(substr($detail, 0, 2048), JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_SLASHES);
-	$report = sprintf("NATIVE_FIXTURE_FAILURE %s: %s\n", $kind, $encoded === FALSE ? '[unavailable]' : $encoded);
+	$report = sprintf("NATIVE_FIXTURE_FAILURE timestamp=%s phase=%s detail=%s\n",
+		gmdate('Y-m-d\TH:i:s\Z'), $kind, $encoded === FALSE ? '[unavailable]' : $encoded);
+	$report .= 'markers=' . fixture_marker_summary($dir) . "\n";
 	$report .= diagnostic_tail("$dir/controller.preflight", 1024);
 	$report .= diagnostic_tail("$dir/core.log", 4096);
 	$report .= diagnostic_tail("$dir/update.error", 4096);
@@ -102,17 +111,68 @@ function report_fixture_failure(string $dir, string $kind, string $detail): void
 	fwrite(STDERR, $report);
 }
 
+function hex_window(string $bytes, int $start, int $length): string {
+	$size = strlen($bytes);
+	$start = max(0, min($start, $size));
+	$length = max(0, min($length, $size - $start));
+	return bin2hex(substr($bytes, $start, $length));
+}
+
+function hook_terminal_diagnostic(string $bytes): string {
+	$position = strrpos($bytes, '[ pfB Hook ] pre native output cap');
+	if ($position === FALSE) {
+		return 'absent';
+	}
+	$end = strpos($bytes, "\n", $position);
+	$line = substr($bytes, $position, $end === FALSE ? 256 : min(256, $end - $position));
+	$state = match (TRUE) {
+		str_contains($line, ' TIMED OUT after ') => 'timeout',
+		str_contains($line, ' exited non-zero [ ') => 'nonzero',
+		str_contains($line, ' completed') => 'success',
+		default => 'other',
+	};
+	$encoded = json_encode($line, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_SLASHES);
+	return $state . ':' . ($encoded === FALSE ? '[unavailable]' : $encoded);
+}
+
+function viewer_boundary_diagnostics(string $dir, string $bytes, array $view, int $boundary, string $notice): string {
+	$noticeAt = strpos($bytes, $notice);
+	$update = json_encode($view['update'] ?? NULL, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_SLASHES);
+	return sprintf(
+		'phase=live-collect time=%s bytes=%d running=%s update=%s next=%s notice_count=%d notice_at=%s hook_terminal=%s markers=%s first_hex=%s cap_before_hex=%s cap_after_hex=%s notice_before_hex=%s notice_after_hex=%s last_hex=%s',
+		gmdate('Y-m-d\TH:i:s\Z'), strlen($bytes), ($view['running'] ?? FALSE) ? '1' : '0',
+		$update === FALSE ? '[unavailable]' : $update, (string) ($view['next'] ?? ''),
+		substr_count($bytes, $notice), $noticeAt === FALSE ? 'missing' : (string) $noticeAt,
+		hook_terminal_diagnostic($bytes), fixture_marker_summary($dir), hex_window($bytes, 0, 32),
+		hex_window($bytes, $boundary - 32, 32), hex_window($bytes, $boundary, 32),
+		$noticeAt === FALSE ? 'missing' : hex_window($bytes, $noticeAt - 32, 32),
+		$noticeAt === FALSE ? 'missing' : hex_window($bytes, $noticeAt + strlen($notice), 256),
+		hex_window($bytes, strlen($bytes) - 32, 32)
+	);
+}
+
 /** @return array{string, string} collected bytes and the next independent cursor */
 function collect_exact(string $dir, string $after, int $length, string $label): array {
 	$bytes = '';
+	$start = $after;
 	$next = $after;
+	$pages = 0;
 	$end = microtime(TRUE) + 45;
 	do {
 		$view = get_update($dir, $next);
+		$pages++;
 		$bytes .= (string) ($view['log'] ?? '');
 		$next = (string) ($view['next'] ?? '');
 		if (strlen($bytes) > $length) {
-			throw new RuntimeException("{$label} exceeded expected viewer bytes: " . digest($bytes));
+			$mask = (1 << 40) - 1;
+			$startOffset = ctype_digit($start) ? ((int) $start & $mask) : -1;
+			$nextOffset = ctype_digit($next) ? ((int) $next & $mask) : -1;
+			$advance = $startOffset >= 0 && $nextOffset >= $startOffset
+				? (string) ($nextOffset - $startOffset) : 'invalid';
+			$cursorDetail = sprintf('pages=%d cursor_start=%s cursor_end=%s cursor_advance=%s',
+				$pages, $start, $next, $advance);
+			throw new RuntimeException(sprintf('%s exceeded expected viewer bytes: %s %s %s', $label, digest($bytes),
+				$cursorDetail, viewer_boundary_diagnostics($dir, $bytes, $view, VIEWER_LIMIT, VIEWER_NOTICE)));
 		}
 		if (strlen($bytes) === $length) {
 			demand(($view['running'] ?? FALSE) === TRUE, "{$label} was not live at the output barrier");
@@ -120,7 +180,8 @@ function collect_exact(string $dir, string $after, int $length, string $label): 
 		}
 		usleep(20_000);
 	} while (microtime(TRUE) < $end);
-	throw new RuntimeException("{$label} output deadline: " . digest($bytes));
+	throw new RuntimeException("{$label} output deadline: " . digest($bytes) . ' ' .
+		viewer_boundary_diagnostics($dir, $bytes, $view, VIEWER_LIMIT, VIEWER_NOTICE));
 }
 
 /** @return array{string, array} complete transcript and final view */
