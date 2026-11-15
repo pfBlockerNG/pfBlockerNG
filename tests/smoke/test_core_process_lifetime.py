@@ -61,6 +61,7 @@ if [ "$found_mwexec" -ne 1 ]; then
     printf 'MWEXEC DEFINITION SOURCE ABSENT: no matching global definition in readable /etc/inc/*.inc\n'
 fi
 capture /etc/inc/filter.inc
+capture /etc/inc/syslog.inc
 for pattern in /etc/inc/*service*.inc /etc/inc/*unbound*.inc /etc/inc/*dhcp*.inc \
     /etc/inc/*radv*.inc /etc/inc/*router*.inc /etc/inc/*ra.inc \
     /usr/local/etc/rc.d/*unbound* /usr/local/etc/rc.d/*dhcp* /usr/local/etc/rc.d/*radv* \
