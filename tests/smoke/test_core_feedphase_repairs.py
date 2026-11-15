@@ -161,6 +161,18 @@ def _open_dnsbl_ledger(vm: SmokeVM) -> list[dict[str, Any]]:
     return json.loads(text)
 
 
+def _last_successful_checks(schedule: dict[str, Any]) -> dict[str, Any]:
+    body = schedule.get("body")
+    assert isinstance(body, dict), f"GetSchedule body must hold lastSuccessfulCheck: {schedule!r}"
+    assert "lastSuccessfulCheck" in body, f"GetSchedule body is missing lastSuccessfulCheck: {body!r}"
+    checks = body["lastSuccessfulCheck"]
+    if type(checks) is list:
+        assert checks == [], f"GetSchedule lastSuccessfulCheck must be a map, got {checks!r}"
+        return {}
+    assert isinstance(checks, dict), f"GetSchedule lastSuccessfulCheck must be a map, got {checks!r}"
+    return checks
+
+
 def _assert_first_dns_state(vm: SmokeVM, blocked: str, passed: str) -> None:
     h.flush_unbound_name(vm, blocked)
     h.flush_unbound_name(vm, passed)
@@ -450,7 +462,7 @@ def test_post_only_unchanged_reparse_runs_once_without_refetch_and_failure_stays
         _write_guest(vm, trace, "")
         schedule_before = h.core_call(vm, "GetSchedule")
         assert schedule_before["status"] == 200, schedule_before
-        successful_before = schedule_before["body"].get("lastSuccessfulCheck", {}).get(f"dnsbl:{header}")
+        successful_before = _last_successful_checks(schedule_before).get(f"dnsbl:{header}")
         with h.due_feed_group(vm, "dnsbl", alias):
             failed, _ = _run_update(vm, "retry")
         assert failed["result"] == "success", failed
@@ -459,6 +471,6 @@ def test_post_only_unchanged_reparse_runs_once_without_refetch_and_failure_stays
         assert any(row["item"] == f"DNSBL_{alias}" and row["stage"] == "script" for row in ledger), ledger
         schedule_after = h.core_call(vm, "GetSchedule")
         assert schedule_after["status"] == 200, schedule_after
-        assert schedule_after["body"].get("lastSuccessfulCheck", {}).get(f"dnsbl:{header}") == successful_before, (
+        assert _last_successful_checks(schedule_after).get(f"dnsbl:{header}") == successful_before, (
             f"post failure was reported as successful: before={schedule_before} after={schedule_after}"
         )
