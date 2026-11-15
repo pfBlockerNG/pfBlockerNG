@@ -10,6 +10,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from tests.smoke import test_core_feedphase_repairs as repairs
+from tests.smoke import test_core_ip_script_order as ip_repairs
 from tests.smoke.conftest import SmokeVM
 
 
@@ -67,7 +68,7 @@ def _messages(error: BaseException) -> str:
 
 
 def _run_context(fake: FakeVM, body: Callable[[list[str]], None]) -> None:
-    with repairs._restored_case(_vm(fake)) as (_token, owned):
+    with repairs._restored_case(_vm(fake)) as (_token, owned, _status_aliases):
         body(owned)
 
 
@@ -167,3 +168,124 @@ def test_second_source_write_failure_removes_first_registered_path(monkeypatch: 
 
     assert "remove-owned:/owned/source1" in events
     assert events[-1] == "remove-snapshot"
+
+
+def _patch_native_script_failure(
+    monkeypatch: MonkeyPatch,
+    events: list[str],
+    *,
+    status_failure: BaseException | None = None,
+) -> FakeVM:
+    fake = FakeVM(events)
+    _patch_cleanup(monkeypatch, events)
+    monkeypatch.setattr(repairs.uuid, "uuid4", lambda: repairs.uuid.UUID(int=0))
+    monkeypatch.setattr(repairs, "await_idle", lambda _vm: None)
+    monkeypatch.setattr(repairs, "_prepare_mock_feeds", lambda _vm, *, dnsbl: None)
+    monkeypatch.setattr(ip_repairs, "await_idle", lambda _vm: None)
+    monkeypatch.setattr(repairs.h, "unique_domain", lambda prefix: f"{prefix}.invalid")
+    monkeypatch.setattr(
+        repairs.h,
+        "write_local_feed",
+        lambda _vm, name, _body: f"/owned/{name}",
+    )
+    monkeypatch.setattr(repairs, "_write_guest", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ip_repairs, "_write_guest", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repairs, "_install_list_script", lambda _vm, _owned, name, _body: name)
+    monkeypatch.setattr(ip_repairs, "_install_list_script", lambda _vm, _owned, name, _body: name)
+    monkeypatch.setattr(repairs.h, "inject_dnsbl_lists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repairs.h, "inject_ip_lists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repairs, "_set_group_scripts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ip_repairs, "_set_ip_group_scripts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        repairs,
+        "_run_update",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(CleanupFailure("script-failure")),
+    )
+    monkeypatch.setattr(
+        ip_repairs,
+        "_run_update",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(CleanupFailure("script-failure")),
+    )
+
+    def status_php(_vm: SmokeVM, source: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert "pfb_sync_status_close_removed_alias" in source
+        events.append("status-cleanup:" + source)
+        if status_failure is not None:
+            raise status_failure
+        return subprocess.CompletedProcess([], 0, "OK", "")
+
+    monkeypatch.setattr(repairs.h, "php_eval", status_php)
+    return fake
+
+
+@pytest.mark.parametrize(
+    ("family", "expected_gtype", "expected_aliases"),
+    (
+        (
+            "dnsbl",
+            "dnsbl",
+            ("repairfirst000000000000", "repairsecond000000000000"),
+        ),
+        (
+            "ipv4",
+            "ipv4",
+            ("ipfirst000000000000", "ipsecond000000000000"),
+        ),
+    ),
+    ids=("dnsbl", "ipv4"),
+)
+def test_native_script_failure_closes_only_explicit_registered_status_aliases(
+    monkeypatch: MonkeyPatch,
+    family: str,
+    expected_gtype: str,
+    expected_aliases: tuple[str, str],
+) -> None:
+    events: list[str] = []
+    fake = _patch_native_script_failure(monkeypatch, events)
+
+    with pytest.raises(CleanupFailure, match="script-failure"):
+        if family == "dnsbl":
+            repairs.test_native_two_feed_scripts_preserve_per_feed_side_effect_order(
+                _vm(fake), "across-groups", "pre1\npost1\npre2\npost2\n"
+            )
+        else:
+            ip_repairs.test_native_ip_two_feed_scripts_preserve_cross_group_side_effect_order(
+                _vm(fake),
+                "v4",
+                "ipv4",
+                "_v4",
+                "198.51.100.200",
+                "198.51.100.201",
+                "198.51.100.202",
+            )
+
+    status = [event for event in events if event.startswith("status-cleanup:")]
+    assert len(status) == 1, events
+    assert expected_gtype in status[0]
+    for alias in expected_aliases:
+        assert alias in status[0]
+    assert "preexisting_unrelated" not in status[0]
+    assert events[-1] == "remove-snapshot"
+
+
+def test_status_cleanup_failure_remains_visible_and_does_not_skip_later_cleanup(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    fake = _patch_native_script_failure(
+        monkeypatch,
+        events,
+        status_failure=CleanupFailure("status-cleanup-failure"),
+    )
+
+    with pytest.raises(BaseException) as caught:
+        repairs.test_native_two_feed_scripts_preserve_per_feed_side_effect_order(
+            _vm(fake), "across-groups", "pre1\npost1\npre2\npost2\n"
+        )
+
+    messages = _messages(caught.value)
+    assert "script-failure" in messages
+    assert "status-cleanup-failure" in messages
+    assert any(event.startswith("status-cleanup:") for event in events)
+    assert any(event.startswith("restore:/tmp/pfb3977-") for event in events)
+    assert events[-2:] == ["refresh", "remove-snapshot"]
