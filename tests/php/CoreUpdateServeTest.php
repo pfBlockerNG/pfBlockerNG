@@ -200,11 +200,74 @@ final class CoreUpdateServeTest extends TestCase
 
 	// ----- 1. validation -----
 
+	/** @return iterable<string, array{string}> */
+	public static function customRequestIds(): iterable
+	{
+		foreach (['dnsbl' => 51, 'ipv4' => 52, 'ipv6' => 52] as $family => $limit) {
+			for ($length = 1; $length <= $limit; $length++) {
+				$id = "custom:{$family}:" . substr(str_repeat('aZ0_', 13), 0, $length);
+				yield "{$family}/{$length}" => [$id];
+			}
+		}
+		foreach (['dnsbl:Regular_1', 'ipv4:Regular_1_v4', 'ipv6:Regular_1_v6', 'blacklist:ut1:adult',
+			'blacklist:with-hyphen:under_score'] as $id) {
+			yield $id => [$id];
+		}
+	}
+
+	#[DataProvider('customRequestIds')]
+	public function testACustomRequestPreservesEveryProducerGroupLength(string $id): void
+	{
+		$request = self::req('scheduled', ['feeds' => [$id], 'extras' => ['extra:dcc', 'extra:bl']]);
+		$parsed = pfb_core_update_request((string) json_encode($request));
+		$this->assertSame([$id], $parsed['feeds']);
+		$this->assertSame(['extra:dcc', 'extra:bl'], $parsed['extras']);
+		$this->assertSame($request['token'], $parsed['token']);
+	}
+
+	public function testCustomRequestsReachTheServeSeamUnchangedAndRecordTerminalOutcomesUnderLocks(): void
+	{
+		$ids = ['custom:dnsbl:Group_1', 'custom:ipv4:Group_1', 'custom:ipv6:Group_1'];
+		$seen = [];
+		$seams = $this->seams();
+		$seams['cron'] = function (bool $force, string $scope, bool $pending, bool $hashes, ?string &$deferred, array $feeds) use (&$seen): bool {
+			$seen = $feeds;
+			foreach (["{$this->dir}/state/pfb_schedule_dispatch.lock", "{$this->dir}/pfb_feed_pass.lock"] as $path) {
+				$probe = fopen($path, 'c');
+				$this->assertIsResource($probe);
+				try {
+					$this->assertFalse(flock($probe, LOCK_EX | LOCK_NB), 'the serve workflow owns both locks');
+				} finally {
+					fclose($probe);
+				}
+			}
+			$this->assertSame(str_repeat('a', 64), $GLOBALS['pfb']['feed_phase_token']);
+			pfb_schedule_outcome_record($feeds[0], PfbScheduleTerminalResult::Success);
+			pfb_schedule_outcome_record($feeds[1], PfbScheduleTerminalResult::RetryCapReached);
+			return TRUE;
+		};
+
+		// This is a request/serve unit boundary, not a live Core token or FeedPhase execution.
+		$run = $this->serve(self::req('scheduled', ['feeds' => $ids]), $seams);
+
+		$this->assertSame(0, $run['exit'], $run['out']);
+		$this->assertSame($ids, $seen);
+		$this->assertSame([
+			'version' => 1,
+			'outcomes' => [$ids[0] => 'success', $ids[1] => 'retry-cap-reached'],
+			'attempted' => [],
+			'geoipReady' => TRUE,
+		], $run['result'], 'unreached custom feeds have no outcome');
+		$lines = explode("\n", rtrim((string) $run['raw'], "\n"));
+		$this->assertSame(['version' => 1, 'outcomes' => [$ids[0] => 'success']], json_decode($lines[0], TRUE));
+		$this->assertSame(['version' => 1, 'outcomes' => [$ids[1] => 'retry-cap-reached']], json_decode($lines[1], TRUE));
+	}
+
 	/** @return array<string, array{0: array<string, mixed>|string}> */
 	public static function refusedRequests(): array
 	{
 		$ok = self::req('apply');
-		return [
+		$requests = [
 			'not JSON'                  => ['{"version":'],
 			'nothing'                   => [''],
 			'two objects'               => [json_encode($ok) . json_encode($ok)],
@@ -243,7 +306,19 @@ final class CoreUpdateServeTest extends TestCase
 			'token is not a string'         => [['token' => 42] + $ok],
 			'token has the wrong length'    => [['token' => str_repeat('a', 63)] + $ok],
 			'token is not hexadecimal'      => [['token' => str_repeat('g', 64)] + $ok],
+			'a synthetic IPv4 request'     => [$ok + ['feeds' => ['synthetic:ipv4:DNSBLIP_v4']]],
+			'a synthetic IPv6 request'     => [$ok + ['feeds' => ['synthetic:ipv6:DNSBLIP_v6']]],
+			'a custom id without a family' => [$ok + ['feeds' => ['custom:Group']]],
+			'a custom id of another family' => [$ok + ['feeds' => ['custom:ipv5:Group']]],
+			'a custom id in Extras'        => [$ok + ['extras' => ['custom:dnsbl:Group']]],
 		];
+		foreach (['dnsbl' => 51, 'ipv4' => 52, 'ipv6' => 52] as $family => $limit) {
+			foreach (['empty' => '', 'hyphen' => 'bad-name', 'colon' => 'bad:name', 'slash' => 'bad/name',
+				'newline' => "bad\n", 'oversize' => str_repeat('a', $limit + 1)] as $label => $group) {
+				$requests["custom {$family}/{$label}"] = [$ok + ['feeds' => ["custom:{$family}:{$group}"]]];
+			}
+		}
+		return $requests;
 	}
 
 	/** @param array<string, mixed>|string $request */

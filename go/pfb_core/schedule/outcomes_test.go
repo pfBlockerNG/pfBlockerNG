@@ -4,6 +4,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -159,4 +160,60 @@ func TestRecordOutcomesRejectsEveryIdOfAnInvalidState(t *testing.T) {
 		t.Errorf("state = %v, want it unchanged: %v", gotState, wantState)
 	}
 	sameRejections(t, gotRejected, wantRejected)
+}
+
+func TestCustomTerminalOutcomes(t *testing.T) {
+	for _, family := range families {
+		for _, outcome := range []Outcome{Success, RetryCapReached} {
+			for _, batch := range []bool{false, true} {
+				id := "custom:" + family + ":A"
+				t.Run(id+"/"+string(outcome)+map[bool]string{false: "/single", true: "/batch"}[batch], func(t *testing.T) {
+					st, err := Reserve(State{}, map[string]int64{id: 100})
+					if err != nil {
+						t.Fatal(err)
+					}
+					var got State
+					if batch {
+						var rejected map[string]error
+						got, rejected = RecordOutcomes(st, map[string]Outcome{id: outcome}, 200)
+						if len(rejected) != 0 {
+							t.Fatalf("rejected=%v", rejected)
+						}
+					} else {
+						got, err = RecordOutcome(st, id, outcome, 200, new(int64(100)))
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					want := Item{LastCompletedOccurrence: new(int64(100)), CompletionOutcome: outcome}
+					if outcome == Success {
+						want.LastSuccessfulCheck = new(int64(200))
+					}
+					if !reflect.DeepEqual(got[id], want) || st[id].PendingOccurrence == nil {
+						t.Fatalf("got=%+v want=%+v input=%+v", got[id], want, st[id])
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCustomOutcomeIdentityBoundary(t *testing.T) {
+	for _, family := range families {
+		limit := 64 - len("custom:"+family+":")
+		id := "custom:" + family + ":" + strings.Repeat("A", limit)
+		if _, err := RecordOutcome(State{}, id, Success, 200, nil); err != nil {
+			t.Errorf("maximum producer ID rejected: %s: %v", id, err)
+		}
+	}
+	for _, id := range []string{"custom:ipv5:A", "custom:ipv4:", "custom:dnsbl:bad-name", "custom:ipv6:A:B",
+		"custom:dnsbl:A\n", "synthetic:ipv4:DNSBLIP_v4", "category:ut1:adult",
+		"custom:dnsbl:" + strings.Repeat("A", 52), "custom:ipv4:" + strings.Repeat("A", 53)} {
+		if _, err := RecordOutcome(State{}, id, Success, 200, nil); err == nil {
+			t.Errorf("invalid custom outcome accepted: %q", id)
+		}
+		if _, rejected := RecordOutcomes(State{}, map[string]Outcome{id: Success}, 200); len(rejected) != 1 {
+			t.Errorf("invalid batch custom outcome accepted: %q", id)
+		}
+	}
 }

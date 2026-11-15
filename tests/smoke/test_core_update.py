@@ -197,15 +197,46 @@ DB = "/var/db/pfblockerng"
 
 
 def _run_update(vm: SmokeVM, trigger: str = "manual", scope: str = "both") -> tuple[dict[str, Any], str]:
-    """One Update of ``trigger``, awaited: its final ``update`` record and its whole log."""
+    """Capture one admitted Update on the single-client, exclusively owned ``core_vm``.
+
+    The fixture must exclude competing admissions through the final drain. Status consistency is a fail-fast
+    check, not a general identity guarantee: different Updates can have identical second-resolution metadata.
+    """
     await_idle(vm)
-    before = h.core_update_view(vm)["update"]
     params = {"trigger": trigger, "scope": scope, "force": "none"} if trigger == "manual" else {"trigger": trigger}
     started = h.core_call(vm, "StartUpdate", params)
     assert started["status"] == 200, f"StartUpdate {params} was not admitted: {started}"
-    view = h.await_core_update_end(vm, before=before, watchdog=UPDATE_WATCHDOG)
-    update: dict[str, Any] = view["update"]
-    return update, h.core_update_log(vm)
+    expected = (trigger, scope if trigger == "manual" else "both", "none")
+    deadline = time.monotonic() + UPDATE_WATCHDOG
+    after: str | None = None
+    chunks: list[str] = []
+    admitted: dict[str, Any] | None = None
+    terminal: dict[str, Any] | None = None
+    while True:
+        view = h.core_update_view(vm, after, timeout=60.0)
+        update: dict[str, Any] = view["update"]
+        assert update is not None and tuple(update.get(k) for k in ("trigger", "scope", "force")) == expected, (
+            f"unexpected competing Update while capturing {params}: {view}"
+        )
+        if admitted is None:
+            admitted = update
+        assert all(update.get(k) == admitted.get(k) for k in ("trigger", "scope", "force", "startedAt")), (
+            f"Update was replaced while capturing {params}: first={admitted}, current={view}"
+        )
+        if terminal is not None:
+            assert not view["running"] and update == terminal, (
+                f"Update was replaced during its log drain: terminal={terminal}, current={view}"
+            )
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"STUCK: Update {params} did not finish draining within {UPDATE_WATCHDOG:.0f}s: {view}")
+        chunks.append(view["log"])
+        after = view["next"]
+        if not view["running"]:
+            terminal = update
+            if not view["log"]:
+                return update, "".join(chunks)
+        elif not view["log"]:
+            time.sleep(1)
 
 
 def _run_manual_update(vm: SmokeVM, scope: str = "both") -> str:

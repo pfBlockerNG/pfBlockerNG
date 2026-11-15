@@ -390,6 +390,184 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 	 * A full update pass, served web server, no group left (so no block answers with the VIP). The pass publishes the empty
 	 * manifest, or fails to when $publish is FALSE (the raw generation directory cannot be staged).
 	 */
+	public static function customOnlyScheduledRows(): array
+	{
+		$rows = [];
+		foreach (['dnsbl', 'ipv4', 'ipv6'] as $family) {
+			foreach (['success', 'quiet', 'failure-at-cap'] as $mode) {
+				$rows["{$family} {$mode}"] = [$family, $mode];
+			}
+		}
+		return $rows;
+	}
+
+	#[DataProvider('customOnlyScheduledRows')]
+	public function testCustomOnlyServeRunsRealCronAndSync(string $family, string $mode): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		$GLOBALS['pfb']['nativedir'] = "{$this->dir}/native";
+		mkdir($GLOBALS['pfb']['nativedir']);
+		$id = "custom:{$family}:Only";
+		$content = $family === 'dnsbl' ? "blocked.example\n" : ($family === 'ipv4' ? "192.0.2.2\n" : "2001:db8::2\n");
+		$type = $family === 'dnsbl' ? 'pfblockerngdnsbl' : ($family === 'ipv4' ? 'pfblockernglistsv4' : 'pfblockernglistsv6');
+		config_set_path("installedpackages/{$type}/config", [[
+			'aliasname' => 'Only', 'action' => $family === 'dnsbl' ? 'unbound' : 'Alias_Native',
+			'order' => 'default', 'logging' => 'disabled_log', 'cron' => 'EveryDay',
+			'custom' => base64_encode($content),
+		]]);
+		$header = 'Only_custom' . ($family === 'dnsbl' ? '' : ($family === 'ipv4' ? '_v4' : '_v6'));
+		$target = ($family === 'dnsbl' ? $GLOBALS['pfb']['dnsdir'] : $GLOBALS['pfb']['nativedir']) . "/{$header}.txt";
+		if ($family !== 'dnsbl') {
+			mkdir($GLOBALS['pfb']['origdir'], 0755, TRUE);
+			file_put_contents("{$GLOBALS['pfb']['origdir']}/{$header}.parsed.ip", $content);
+			$this->feedReplies[$id] = self::feedReply($id, ['entries' => 1, $family === 'ipv4' ? 'ipv4Count' : 'ipv6Count' => 1]);
+		}
+		if ($mode === 'quiet') {
+			$start = ((int) date('G') + 12) % 24;
+			PfbConfig::writeSystem('gen/pfb_quiet_hours', sprintf('%02d:00-%02d:01', $start, $start));
+			$this->assertFalse(pfb_quiet_hours_in_window(time(), (string) PfbConfig::read('gen/pfb_quiet_hours')));
+		}
+		if ($mode === 'failure-at-cap') {
+			PfbConfig::writeSystem('gen/skipfeed', '1');
+			$GLOBALS['pfb']['skipfeed'] = 1;
+			pfb_logger("\n\n [ pfB_Only - {$header} ] Download FAIL [ NOW ]\n", 2);
+			pfb_failures();
+			$this->assertSame(1, $GLOBALS['pfb']['failed'][$header] ?? 0, 'the real download-failure counter is already at its configured cap');
+			$this->feedReplies[$id] = self::feedReply($id, ['disposition' => 'failed', 'stage' => 'parse', 'reason' => 'invalid_content']);
+		}
+		$started = $this->startFeedPhase();
+		set_error_handler(static fn (int $no, string $message): bool => str_starts_with($message, 'link('));
+		ob_start();
+		try {
+			$status = pfb_core_update_serve(json_encode([
+				'version' => 1, 'trigger' => 'scheduled', 'token' => str_repeat('a', 64), 'feeds' => [$id],
+			], JSON_THROW_ON_ERROR), "{$this->dir}/result");
+			if ($mode === 'failure-at-cap') {
+				$this->assertFileExists(substr($target, 0, -4) . '.fail');
+				$status = pfb_core_update_serve(json_encode([
+					'version' => 1, 'trigger' => 'retry', 'token' => str_repeat('a', 64), 'feeds' => [$id],
+				], JSON_THROW_ON_ERROR), "{$this->dir}/result");
+			}
+		} finally {
+			ob_end_clean();
+			restore_error_handler();
+			pfb_core_call('Stop', [], $GLOBALS['pfb']['core_socket']);
+			$run = pfb_test_finish_process($started, 10.0);
+			$this->assertSame(0, $run['exit'], $run['stderr']);
+		}
+		$requests = (string) file_get_contents("{$this->dir}/feed-requests");
+		$lines = array_map(static fn (string $line): array => json_decode($line, TRUE, 512, JSON_THROW_ON_ERROR),
+			explode("\n", trim((string) file_get_contents("{$this->dir}/result"))));
+		$result = $lines[array_key_last($lines)];
+		$this->assertTrue($result['geoipReady'], $this->passLog());
+		if ($mode === 'quiet') {
+			$this->assertStringNotContainsString('POST /v1/FeedPhase ', $requests, 'custom-only work must respect the apply window');
+			$this->assertFileDoesNotExist($target);
+			$this->assertSame([], $result['outcomes']);
+			$this->assertTrue(pfb_pending_changes());
+			$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dir));
+		} elseif ($mode === 'failure-at-cap') {
+			$this->assertStringContainsString('"feeds":["' . $id . '"]', $requests);
+			$this->assertSame(2, substr_count($requests, '"feeds":["' . $id . '"]'), 'the explicit retry API retries a failed custom ID even at the download cap');
+			$this->assertSame([], $result['outcomes'], 'custom parse failures do not acquire a download retry-cap outcome');
+			$this->assertFileExists(substr($target, 0, -4) . '.fail');
+		} else {
+			$this->assertSame(0, $status, $this->passLog());
+			$this->assertStringContainsString('"feeds":["' . $id . '"]', $requests, $this->passLog());
+			$this->assertSame([$id => 'success'], $result['outcomes']);
+			$this->assertSame(['version' => 1, 'outcomes' => [$id => 'success']], $lines[0], 'the exact native ID streams as soon as its real consumer succeeds');
+			$this->assertStringContainsString(trim($content), (string) file_get_contents($target));
+		}
+	}
+
+	public static function pendingScopeRows(): array
+	{
+		return ['IP only' => ['ip'], 'DNSBL only' => ['dnsbl'], 'both' => ['both']];
+	}
+
+	#[DataProvider('pendingScopeRows')]
+	public function testScopedUpdatePreservesUncoveredCustomWork(string $scope): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		$GLOBALS['pfb']['nativedir'] = "{$this->dir}/native";
+		mkdir($GLOBALS['pfb']['nativedir']);
+		config_set_path('installedpackages/pfblockerngdnsbl/config', [[
+			'aliasname' => 'Kept', 'action' => 'unbound', 'order' => 'default',
+			'logging' => 'disabled_log', 'custom' => base64_encode("blocked.example\n"),
+		]]);
+		config_set_path('installedpackages/pfblockernglistsv4/config', [[
+			'aliasname' => 'Kept', 'action' => 'Alias_Native', 'order' => 'default',
+			'cron' => 'Never', 'row' => [], 'custom' => base64_encode("192.0.2.2\n"),
+		]]);
+		foreach (['dnsdir', 'dnsorigdir', 'origdir'] as $path) {
+			mkdir($GLOBALS['pfb'][$path], 0755, TRUE);
+		}
+		file_put_contents("{$GLOBALS['pfb']['origdir']}/Kept_custom_v4.parsed.ip", "192.0.2.2\n");
+		$this->feedReplies['custom:ipv4:Kept'] = self::feedReply('custom:ipv4:Kept', ['entries' => 1, 'ipv4Count' => 1]);
+		$dns = "{$GLOBALS['pfb']['dnsdir']}/Kept_custom";
+		$ip = "{$GLOBALS['pfb']['nativedir']}/Kept_custom_v4";
+		file_put_contents("{$dns}.txt", pfb_test_ndjson_row(PfbDnsblRowKind::Domain, 'old.example'));
+		file_put_contents("{$ip}.txt", "192.0.2.1\n");
+		$before = [];
+		foreach ([$dns, $ip] as $header) {
+			foreach (['update', 'fail'] as $flag) {
+				file_put_contents("{$header}.{$flag}", "pending {$flag}\n");
+			}
+			foreach (['txt', 'update', 'fail'] as $suffix) {
+				$before["{$header}.{$suffix}"] = file_get_contents("{$header}.{$suffix}");
+			}
+		}
+		$GLOBALS['pfb']['feed_phase_scope'] = $scope;
+		file_put_contents($GLOBALS['pfb']['pending_marker'], 'uncovered-token');
+		file_put_contents($GLOBALS['pfb']['pending_marker'] . '.applied', 'previous-token');
+		$this->assertTrue(pfb_due_ledger_set_pending('cron', $this->dir));
+		$this->assertTrue(pfb_pending_changes());
+		$this->assertTrue($this->runPass(), $this->passLog());
+		$requests = file_get_contents("{$this->dir}/feed-requests");
+		foreach ($scope === 'both' ? ['ip', 'dnsbl'] : [$scope] as $phase) {
+			$this->assertStringContainsString('"phase":"' . $phase . '"', $requests);
+			$this->assertStringContainsString($phase === 'ip' ? "192.0.2.2\n" : 'blocked.example',
+				file_get_contents(($phase === 'ip' ? $ip : $dns) . '.txt'), 'requested phase publishes its new custom content');
+		}
+		if ($scope === 'both') {
+			$this->assertFalse(pfb_pending_changes());
+			$this->assertFalse(pfb_due_ledger_is_pending('cron', $this->dir));
+			$this->assertSame('uncovered-token', file_get_contents($GLOBALS['pfb']['pending_marker'] . '.applied'));
+		} else {
+			$opposite = $scope === 'ip' ? $dns : $ip;
+			$this->assertStringNotContainsString('"phase":"' . ($scope === 'ip' ? 'dnsbl' : 'ip') . '"', $requests);
+			$expected = $actual = [];
+			foreach (['txt', 'update', 'fail'] as $suffix) {
+				$expected[$suffix] = $before["{$opposite}.{$suffix}"];
+				$actual[$suffix] = @file_get_contents("{$opposite}.{$suffix}");
+			}
+			$expected += ['pending' => TRUE, 'ledger' => TRUE, 'applied' => 'previous-token'];
+			$actual += ['pending' => pfb_pending_changes(), 'ledger' => pfb_due_ledger_is_pending('cron', $this->dir),
+				'applied' => file_get_contents($GLOBALS['pfb']['pending_marker'] . '.applied')];
+			$this->assertSame($expected, $actual, "{$scope} must preserve uncovered custom work");
+		}
+	}
+
+	public function testFullUpdateDoesNotSettleAMarkAfterItsSnapshot(): void
+	{
+		$this->arrangeFullPass(TRUE, TRUE);
+		file_put_contents($GLOBALS['pfb']['pending_marker'], 'snapshot-A');
+		$GLOBALS['pfb_test_config_read_hook'] = static function (): void {
+			file_put_contents($GLOBALS['pfb']['pending_marker'], 'late-B');
+		};
+		try {
+			$this->assertTrue($this->runPass(), $this->passLog());
+		} finally {
+			unset($GLOBALS['pfb_test_config_read_hook']);
+		}
+		$this->assertSame('late-B', file_get_contents($GLOBALS['pfb']['pending_marker']));
+		$this->assertSame('snapshot-A', file_get_contents($GLOBALS['pfb']['pending_marker'] . '.applied'));
+		$this->assertTrue(pfb_pending_changes());
+	}
+
 	private function arrangeFullPass(bool $up, bool $publish): void
 	{
 		$this->arrange(['save' => FALSE, 'served' => TRUE, 'demand' => FALSE, 'up' => $up]);

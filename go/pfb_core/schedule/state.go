@@ -35,7 +35,7 @@ var (
 	errOutcome = errors.New("schedule outcome rejected")
 	// PHP 8 is_numeric: optional surrounding whitespace, sign, digits[.digits] or .digits, exponent; never hex.
 	numericRe = regexp.MustCompile(`^[ \t\n\r\v\f]*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?[ \t\n\r\v\f]*$`)
-	feedIDRe  = regexp.MustCompile(`^(?:ipv4:[A-Za-z0-9_]+_v4|ipv6:[A-Za-z0-9_]+_v6|dnsbl:[A-Za-z0-9_]+|extra:(?:dcc|bl))$`)
+	feedIDRe  = regexp.MustCompile(`^(?:ipv4:[A-Za-z0-9_]+_v4|ipv6:[A-Za-z0-9_]+_v6|dnsbl:[A-Za-z0-9_]+|extra:(?:dcc|bl)|custom:(?:dnsbl:[A-Za-z0-9_]{1,51}|ipv[46]:[A-Za-z0-9_]{1,52}))$`)
 )
 
 func validOutcome(o Outcome) bool { return o == Success || o == RetryCapReached }

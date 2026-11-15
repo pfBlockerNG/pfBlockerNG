@@ -188,6 +188,14 @@ function pfblockerng_sync_cron(
 			if (!pfb_group_action_valid($list['action'] ?? NULL, $is_dnsbl ? 'dnsbl' : 'ipv4')) {
 				continue;
 			}
+			$family = $is_dnsbl ? 'dnsbl' : ($vtype === '_v4' ? 'ipv4' : 'ipv6');
+			$custom_id = "custom:{$family}:" . ($list['aliasname'] ?? '');
+			if ($list['action'] !== 'Disabled' && ($list['cron'] ?? 'Never') !== 'Never'
+				&& !empty($list['custom']) && strlen($custom_id) <= 64
+				&& preg_match('/\Acustom:(?:dnsbl|ipv[46]):[A-Za-z0-9_]+\z/', $custom_id) === 1
+				&& ($force_all || isset($pending_ids[$custom_id]))) {
+				$pfb['update_cron'] = TRUE;
+			}
 			if (isset($list['row']) && $list['action'] != 'Disabled' && $list['cron'] != 'Never') {
 				foreach ($list['row'] as $row) {
 					if (!empty($row['url']) && $row['state'] != 'Disabled') {

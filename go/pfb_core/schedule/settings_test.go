@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 // The schedule projection's parity fixture (issue #3941), tests/core/fixtures/settings_schedule_parity.json, frozen against
@@ -186,5 +188,163 @@ func TestModelFromSettingsNamesTheFirstBadSlotFieldEveryTime(t *testing.T) {
 		if _, err := ModelFromSettings(sched, feeds); err == nil || err.Error() != "schedule: groups[0].weekday is not a whole number" {
 			t.Fatalf("run %d: the group slot's fault = %v, want the weekday's", i, err)
 		}
+	}
+}
+
+func TestCustomParentCadenceModelAndPlan(t *testing.T) {
+	now := time.Date(2026, 11, 13, 10, 20, 0, 0, time.UTC).Unix()
+	occ := now - 20*60
+	for _, family := range families {
+		for _, regular := range []bool{false, true} {
+			for _, mode := range []string{"due", "Never", "notdue", "disabled", "updates-off", "empty", "zero", "blank", "override"} {
+				t.Run(family+"/"+mode+map[bool]string{false: "/custom-only", true: "/mixed"}[regular], func(t *testing.T) {
+					action := "Deny_Inbound"
+					if family == "dnsbl" {
+						action = "unbound"
+					}
+					sched := map[string]any{"scheduledUpdates": mode != "updates-off", "weekday": 5, "hour": 3, "minute": 0,
+						"groups": []any{}, "categoryUpdates": false, "categoryFrequency": "Never", "categoryProviders": []any{}}
+					group := map[string]any{"name": "A", "action": action, "updateFrequency": "01hour", "customList": "example.org\n", "feeds": []any{}}
+					if mode == "Never" {
+						group["updateFrequency"] = "Never"
+					}
+					if mode == "disabled" {
+						group["action"] = "Disabled"
+					}
+					switch mode {
+					case "empty":
+						group["customList"] = ""
+					case "zero":
+						group["customList"] = "0"
+					case "blank":
+						group["customList"] = " \n\t"
+					}
+					if mode == "override" {
+						sched["groups"] = []any{map[string]any{"id": family + "/A", "override": true, "weekday": 5, "hour": 3, "minute": 15}}
+					}
+					suffix := map[string]string{"ipv4": "_v4", "ipv6": "_v6"}[family]
+					if regular {
+						group["feeds"] = []any{map[string]any{"header": "F", "state": "enabled", "url": "https://example.org/f"}}
+					}
+					feeds := map[string]map[string]any{"feeds/ipv4": {"groups": []any{}}, "feeds/ipv6": {"groups": []any{}}, "feeds/dnsbl": {"groups": []any{}}}
+					feeds["feeds/"+family]["groups"] = []any{group}
+					m, err := ModelFromSettings(sched, feeds)
+					if err != nil {
+						t.Fatal(err)
+					}
+					custom := mode != "empty" && mode != "blank"
+					enabled := mode != "Never" && mode != "disabled" && mode != "updates-off"
+					var override *Schedule
+					if mode == "override" {
+						override = &Schedule{5, 3, 15}
+					}
+					want := []Entry{}
+					if regular {
+						want = append(want, Entry{ID: family + ":F" + suffix, Cadence: group["updateFrequency"].(string), Enabled: enabled, Override: override})
+					}
+					id := "custom:" + family + ":A"
+					if custom {
+						want = append(want, Entry{ID: id, Cadence: group["updateFrequency"].(string), Enabled: enabled, Override: override})
+					}
+					want = append(want, Entry{ID: "extra:dcc", Cadence: "EveryDay", Enabled: true}, Entry{ID: "extra:bl", Cadence: "EveryDay"})
+					if !reflect.DeepEqual(m.Entries, want) {
+						t.Fatalf("entries=%+v want=%+v", m.Entries, want)
+					}
+					st := State{}
+					if mode == "notdue" {
+						for _, e := range m.Entries {
+							st[e.ID] = Item{LastCompletedOccurrence: &occ, CompletionOutcome: Success}
+						}
+					}
+					plan := FeedPlan(m, st, now, time.UTC)
+					var due []string
+					if enabled && mode != "notdue" {
+						if regular {
+							due = append(due, family+":F"+suffix)
+						}
+						if custom {
+							due = append(due, id)
+						}
+					}
+					if !reflect.DeepEqual(plan.Due, due) {
+						t.Fatalf("due=%v want=%v", plan.Due, due)
+					}
+					if custom && enabled && mode != "notdue" {
+						wantOcc := occ
+						if override != nil {
+							wantOcc += 15 * 60
+						}
+						if plan.Occurrences[id] != wantOcc {
+							t.Fatalf("custom occurrence=%d want=%d", plan.Occurrences[id], wantOcc)
+						}
+						reserved, err := Reserve(st, plan.Occurrences)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if retry := FeedPlan(m, reserved, now, time.UTC); !reflect.DeepEqual(retry.Due, due) {
+							t.Fatalf("pending custom dropped from retry: %+v", retry)
+						}
+					}
+					t.Logf("model IDs=%v due=%v", m.Entries, plan.Due)
+				})
+			}
+		}
+	}
+}
+
+func TestCustomRuntimeModelIdentityBoundary(t *testing.T) {
+	for _, family := range families {
+		limit := 64 - len("custom:"+family+":")
+		for _, name := range []string{"A", strings.Repeat("A", limit), "", "bad-name", "bad:name", "bad/name", "bad\n", strings.Repeat("A", limit+1)} {
+			t.Run(family+"/"+name, func(t *testing.T) {
+				action := "Deny_Inbound"
+				if family == "dnsbl" {
+					action = "unbound"
+				}
+				general := map[string]any{"pfb_scheduled_feed_updates": "on", "pfb_schedule_weekday": "5", "pfb_schedule_hour": "3", "pfb_schedule_minute": "0"}
+				group := map[string]any{"aliasname": name, "action": action, "cron": "01hour", "custom": "x"}
+				sections := map[string]any{"ipv4": []any{}, "ipv6": []any{}, "dnsbl": []any{}}
+				sections[family] = []any{group}
+				m, err := RuntimeModel(general, sections, nil)
+				valid := name == "A" || len(name) == limit
+				if !valid {
+					if err == nil {
+						t.Fatalf("invalid custom name accepted: %+v", m)
+					}
+					return
+				}
+				if err != nil || len(m.Entries) != 1 || m.Entries[0].ID != "custom:"+family+":"+name {
+					t.Fatalf("custom entry=%+v err=%v", m, err)
+				}
+				sections[family] = []any{group, group}
+				if _, err := RuntimeModel(general, sections, nil); err == nil {
+					t.Fatal("duplicate custom ID accepted")
+				}
+			})
+		}
+	}
+	for _, family := range families {
+		general := map[string]any{"pfb_scheduled_feed_updates": "on", "pfb_schedule_weekday": "5", "pfb_schedule_hour": "3", "pfb_schedule_minute": "0"}
+		sections := map[string]any{"ipv4": []any{}, "ipv6": []any{}, "dnsbl": []any{}}
+		sections[family] = []any{map[string]any{"aliasname": "A", "action": "Disabled", "cron": "01hour", "custom": "0"}}
+		m, err := RuntimeModel(general, sections, nil)
+		if err != nil || len(m.Entries) != 0 {
+			t.Fatalf("raw config PHP-empty zero became custom: %+v err=%v", m, err)
+		}
+	}
+	// Identical names in different families occupy distinct namespaces; regular IDs remain distinct too.
+	general := map[string]any{"pfb_scheduled_feed_updates": "on", "pfb_schedule_weekday": "5", "pfb_schedule_hour": "3", "pfb_schedule_minute": "0"}
+	sections := map[string]any{}
+	for _, family := range families {
+		action := "Deny_Inbound"
+		if family == "dnsbl" {
+			action = "unbound"
+		}
+		sections[family] = []any{map[string]any{"aliasname": "A", "action": action, "cron": "01hour", "custom": "x",
+			"row": []any{map[string]any{"header": "A", "url": "u", "state": "Enabled"}}}}
+	}
+	m, err := RuntimeModel(general, sections, nil)
+	if err != nil || len(m.Entries) != 6 {
+		t.Fatalf("namespace collision: %+v err=%v", m, err)
 	}
 }

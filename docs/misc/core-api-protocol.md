@@ -406,7 +406,9 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 
 - **stdin:** one JSON object, `{"version": 1, "trigger": "scheduled|manual|apply|retry", "scope": "ip|dnsbl|both",
   "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"], "token": "<64 lowercase hex characters>"}`.
-  `feeds` and `extras` are left out when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`).
+  `feeds` and `extras` are left out when empty. Regular feed IDs are `ipv4:<header>_v4`, `ipv6:<header>_v6` and
+  `dnsbl:<header>`; custom inputs use `custom:<family>:<group>`. A custom input shares its parent group's cadence,
+  enabled state and schedule override, including groups with no regular feed rows. Existing regular IDs are unchanged.
   The token is a fresh 32-byte random value encoded as lowercase hex for this Update; do not log it. A `scheduled` or `retry`
   Update names what to run; a `manual` one runs its scope.
 - **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
@@ -466,7 +468,7 @@ The required request shape is:
 | `token` | Required string of exactly 64 lowercase hexadecimal characters; the 32 random bytes Core added to this Update's stdin. |
 | `phase` | Required enum: `dnsbl` or `ip`. |
 | `feeds` | Required array of at most 1024 distinct IDs; each is at most 64 ASCII bytes. Unknown or wrong-phase IDs are rejected. |
-| `force` | Required enum matching this Update's force: `none` probes (FTP ingests directly), `parse` reparses the baseline, `download` clears validators before ingest, and `both` also clears hashes. |
+| `force` | Required enum matching this Update's force: `none` probes, `parse` reparses the baseline, `download` clears validators before ingest, and `both` also clears hashes. |
 
 Feed IDs use the scheduler's stable forms: `dnsbl:<header>`, `ipv4:<header>_v4`, `ipv6:<header>_v6`. The header is a non-empty
 ASCII word (`[A-Za-z0-9_]+`). A custom group uses `custom:dnsbl:<group>`, `custom:ipv4:<group>` or `custom:ipv6:<group>`, where
@@ -481,7 +483,8 @@ calls the IP phase, including custom and synthetic DNSBLIP IDs. It retains the D
 The PHP feed parsers, Python normalizer and shell `whoisconvert` are removed; there is no PHP fallback on a failed
 FeedPhase call. Extras still use `pfb_download()` until #3978. The deprecated `cron` adapter and unchanged `cron-tick`
 remain. The method deadline is 4 hours.
-FTP sources skip `Probe` and are ingested directly; feedfetch's FTP probe is unsupported, so each such phase reports a change.
+FTP probes compare the server's modification time and size with the successful baseline. Missing or changed metadata falls
+back to a downloaded content hash; equal bytes remain unchanged, and changed bytes are ingested without a second transfer.
 Before requesting the IP phase, the Outpost must run its existing `asn_shell scheduled` step when any named feed has format
 `whois` or `asn`, or a named group uses `whoisConvert`, and `asn.csv` is missing. If it remains unavailable, Core returns a
 failed `whois` result with reason `asn_database_missing`; a WHOIS batch that resolves other entries keeps its partial publication.
@@ -678,6 +681,9 @@ no other field; a refused request runs nothing, writes no result and exits 2) an
 Issue #3977 routes the scoped legacy CLI verbs through `StartUpdate` with `manual` scope/force requests. General-save and
 package-resync changes use `apply`. CLI refusals print Core's reason and exit non-zero; save/resync and TOP1M callers retain a
 pending-change marker when Core is unavailable or already running an Update.
+A full-scope pass settles only the pending-marker version captured before its settings reload; a later mark remains pending.
+An IP-only or DNSBL-only pass retains global pending bookkeeping and the opposite phase's update/retry flags. A successful
+partial pass is not proof that all saved settings have taken effect.
 The deprecated CLI `cron` compatibility verb also requests `apply`; Core owns feed selection and eligible retries under the same gate.
 `scheduled`, `retry` and `apply` hold the dispatcher and feed-pass locks for the whole Update, which serialize the entry points
 Core does not start (a page save, an HA receive); a lock that is held defers the Update (exit 75). Progress is stdout: while it

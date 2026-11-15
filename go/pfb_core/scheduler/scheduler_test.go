@@ -452,3 +452,36 @@ func TestViewHasAnEmptyLastSuccessfulCheckObjectNotNullWhenNothingSucceeded(t *t
 		t.Errorf("view = %s, want lastSuccessfulCheck to be an empty object", got)
 	}
 }
+
+func TestCustomTickRetryAndDoneRoundTrip(t *testing.T) {
+	for _, family := range []string{"dnsbl", "ipv4", "ipv6"} {
+		for _, outcome := range []string{"success", "retry-cap-reached"} {
+			t.Run(family+"/"+outcome, func(t *testing.T) {
+				id := "custom:" + family + ":A"
+				f := newFixture(t, model(true, hourly(id)), "")
+				f.tick()
+				wantRequest(t, f.last(), "scheduled", []string{id}, nil)
+				wantItem(t, f.items(), id, schedule.Item{PendingOccurrence: new(occ10)})
+				f.s.Done(f.last(), update.Result{}, errors.New("interrupted before terminal result"))
+				if err := f.s.Start("retry", "both", "none"); err != nil {
+					t.Fatal(err)
+				}
+				wantRequest(t, f.last(), "retry", []string{id}, nil)
+				f.s.Done(f.last(), update.Result{Outcomes: map[string]string{id: outcome}}, nil)
+				want := schedule.Item{LastCompletedOccurrence: new(occ10), CompletionOutcome: schedule.Outcome(outcome)}
+				if outcome == "success" {
+					want.LastSuccessfulCheck = new(nowT.Unix())
+				}
+				wantItem(t, f.items(), id, want)
+				// Re-open the real written state, then verify this occurrence no longer runs.
+				f.s = New(f.config())
+				f.s.Bind(f.start)
+				before := len(f.requests())
+				f.tick()
+				if len(f.requests()) != before {
+					t.Fatal("completed custom occurrence requested again after state reload")
+				}
+			})
+		}
+	}
+}

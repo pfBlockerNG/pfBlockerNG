@@ -219,6 +219,18 @@ func RuntimeModel(general, sections map[string]any, extras *Extras) (Model, erro
 				seen[id] = true
 				entries = append(entries, Entry{ID: id, Cadence: cron, Enabled: enabled, Override: overrideSchedule})
 			}
+			if !phpEmpty(group["custom"]) {
+				name, _ := group["aliasname"].(string)
+				id := "custom:" + family + ":" + name
+				if !headerRe.MatchString(name) || len(id) > 64 {
+					return reject("%s: custom group name or feed id is invalid", label)
+				}
+				if seen[id] {
+					return reject("%s: duplicate feed id \"%s\"", label, id)
+				}
+				seen[id] = true
+				entries = append(entries, Entry{ID: id, Cadence: cron, Enabled: enabled, Override: overrideSchedule})
+			}
 		}
 	}
 	if extras != nil {
