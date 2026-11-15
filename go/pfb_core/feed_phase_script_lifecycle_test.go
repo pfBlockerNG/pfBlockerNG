@@ -31,6 +31,7 @@ func TestFeedPhaseScriptLifecycleThroughPHPApply(t *testing.T) {
 		{"pre and post across groups", "across-groups", 1, "pre1\npost1\npre2\npost2\n"},
 		{"post with script-free successors", "script-free-tail", 1, "post1\n"},
 		{"pre-only observes prior published action", "pre-only", 1, "pre1\npre2\n"},
+		{"failed pre has no terminal result", "pre-failure", 1, "pre1\n"},
 		{"post-only unchanged local orig", "post-only-retry", 2, "post1\n"},
 		{"post failure stays visible", "post-failure", 2, "post1\n"},
 		{"global no-op hooks still run", "no-op-hooks", 2, ""},
@@ -70,6 +71,9 @@ func TestFeedPhaseScriptLifecycleThroughPHPApply(t *testing.T) {
 			if tc.mode == "pre-only" {
 				pre += "if [ \"$n\" = 2 ] && grep -q current.example \"$LIFECYCLE_ROOT/action/one.txt\"; then printf 'current.example\\n' > \"$1\"; fi\n"
 			}
+			if tc.mode == "pre-failure" {
+				pre += "exit 7\n"
+			}
 			if tc.mode == "post-failure" {
 				post += "exit 7\n"
 			}
@@ -101,6 +105,8 @@ func TestFeedPhaseScriptLifecycleThroughPHPApply(t *testing.T) {
 				groups = []any{group("First", []any{row("one", "first.txt")}, false, true), group("Second", []any{row("two", "derived.txt"), row("three", "derived.txt")}, false, false)}
 			case "pre-only":
 				groups = []any{group("First", []any{row("one", "first.txt")}, true, false), group("Second", []any{row("two", "derived.txt")}, true, false)}
+			case "pre-failure":
+				groups = []any{group("First", []any{row("one", "first.txt")}, true, false)}
 			case "no-op-hooks":
 				groups = []any{group("First", []any{row("one", "first.txt")}, false, false)}
 			default:
@@ -155,6 +161,7 @@ func TestFeedPhaseScriptLifecycleThroughPHPApply(t *testing.T) {
 			var requests []struct {
 				Feeds []string
 				Force string
+				Rows  []FeedPhaseResult
 			}
 			server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 				var params struct {
@@ -167,17 +174,18 @@ func TestFeedPhaseScriptLifecycleThroughPHPApply(t *testing.T) {
 					http.Error(w, "unexpected phase request", 400)
 					return
 				}
-				mu.Lock()
-				requests = append(requests, struct {
-					Feeds []string
-					Force string
-				}{params.Feeds, params.Force})
-				mu.Unlock()
 				results, err := runner.run(ctx, params.Phase, params.Feeds, params.Force, nil)
 				if err != nil {
 					http.Error(w, err.Error(), 500)
 					return
 				}
+				mu.Lock()
+				requests = append(requests, struct {
+					Feeds []string
+					Force string
+					Rows  []FeedPhaseResult
+				}{params.Feeds, params.Force, results})
+				mu.Unlock()
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
 			})}
@@ -209,8 +217,16 @@ exec "$@"`
 			if !os.IsNotExist(beforeTarget) {
 				t.Fatal("fixture requires absent host resolver target; refusing to shadow an existing installation")
 			}
-			cmd := exec.CommandContext(ctx, "unshare", "-m", "sh", "-eu", "-c", mountScript, "sh", root, php, "-r", feedLifecyclePHP, repo, root, socket, runner.flags.DNSBLOrigDir, fmt.Sprint(tc.passes))
+			fd3, err := os.OpenFile(filepath.Join(root, "result.jsonl"), os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(ctx, "unshare", "-m", "sh", "-eu", "-c", mountScript, "sh", root, php, "-r", feedLifecyclePHP, repo, root, socket, runner.flags.DNSBLOrigDir, fmt.Sprint(tc.passes), tc.mode)
+			cmd.ExtraFiles = []*os.File{fd3}
 			out, runErr := cmd.CombinedOutput()
+			if err := fd3.Close(); err != nil {
+				t.Fatal(err)
+			}
 			afterNS, nsErr := os.Readlink("/proc/self/ns/mnt")
 			_, afterTarget := os.Stat("/usr/local/pkg/pfblockerng")
 			if nsErr != nil || beforeNS != afterNS || !os.IsNotExist(afterTarget) {
@@ -231,6 +247,7 @@ exec "$@"`
 			gotRequests := append([]struct {
 				Feeds []string
 				Force string
+				Rows  []FeedPhaseResult
 			}(nil), requests...)
 			mu.Unlock()
 			if tc.mode == "duplicate" {
@@ -241,7 +258,7 @@ exec "$@"`
 			}
 			if tc.passes == 2 {
 				wantForce := "parse"
-				if tc.mode == "no-op-hooks" {
+				if tc.mode == "no-op-hooks" || tc.mode == "post-failure" {
 					wantForce = "none"
 				}
 				if len(gotRequests) != 2 || gotRequests[1].Force != wantForce {
@@ -261,6 +278,9 @@ exec "$@"`
 					order = append(order, request.Feeds...)
 				}
 				want := []string{"dnsbl:one", "dnsbl:two"}
+				if tc.mode == "pre-failure" {
+					want = []string{"dnsbl:one"}
+				}
 				if tc.mode == "script-free-tail" {
 					want = append(want, "dnsbl:three")
 				}
@@ -278,6 +298,39 @@ exec "$@"`
 			if tc.mode == "post-failure" && !strings.Contains(string(out), "SCRIPT_FAILURE_OPEN") {
 				t.Errorf("post exit 7 silently closed script ledger: %s", out)
 			}
+			if tc.mode == "post-failure" {
+				first, err := os.ReadFile(filepath.Join(root, "fd3-0"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				second, err := os.ReadFile(filepath.Join(root, "fd3-1"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if lifecycleResultOutcomes(t, string(first))["dnsbl:one"] == "success" ||
+					lifecycleResultOutcomes(t, string(second))["dnsbl:one"] == "success" {
+					t.Errorf("failed DNSBL post emitted fd3 success: before=%q after=%q", first, second)
+				}
+				if string(second) != string(first) || len(gotRequests) != 2 ||
+					len(gotRequests[0].Rows) != 1 || gotRequests[0].Rows[0].Disposition != "changed" ||
+					len(gotRequests[1].Rows) != 1 || gotRequests[1].Rows[0].Disposition != "unchanged" {
+					t.Errorf("retry-marker post failure emitted an outcome or used wrong dispositions: results=%q requests=%+v", second, gotRequests)
+				}
+			}
+			if tc.mode == "pre-failure" {
+				result, err := os.ReadFile(filepath.Join(root, "fd3-0"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(gotRequests) != 1 || len(gotRequests[0].Rows) != 1 ||
+					gotRequests[0].Rows[0].Disposition != "failed" || gotRequests[0].Rows[0].Stage != "script" ||
+					!gotRequests[0].Rows[0].PreScriptFailed {
+					t.Errorf("failed DNSBL pre-script must remain a failed script result: %+v", gotRequests)
+				}
+				if len(result) != 0 || len(lifecycleResultOutcomes(t, string(result))) != 0 {
+					t.Errorf("failed DNSBL pre-script emitted a terminal fd3 outcome: %q", result)
+				}
+			}
 			if tc.mode == "post-only-retry" || tc.mode == "no-op-hooks" {
 				hookTrace, err := os.ReadFile(filepath.Join(root, "hooks.trace"))
 				if err != nil || string(hookTrace) != "pre\npost|0|0||\n" {
@@ -286,6 +339,28 @@ exec "$@"`
 			}
 		})
 	}
+}
+func lifecycleResultOutcomes(t *testing.T, raw string) map[string]string {
+	t.Helper()
+	outcomes := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		if line == "" {
+			continue
+		}
+		var report struct {
+			Version  int               `json:"version"`
+			Outcomes map[string]string `json:"outcomes"`
+		}
+		if err := json.Unmarshal([]byte(line), &report); err != nil || report.Version != 1 {
+			t.Fatalf("invalid fd3 result line %q: %v", line, err)
+		}
+		for id, outcome := range report.Outcomes {
+			if _, seen := outcomes[id]; !seen {
+				outcomes[id] = outcome
+			}
+		}
+	}
+	return outcomes
 }
 
 const feedLifecyclePHP = `
@@ -307,7 +382,18 @@ try {
     $GLOBALS['pfb']['core_socket'] = $args[3];
     $GLOBALS['pfb']['feed_phase_token'] = str_repeat('a', 64);
     $GLOBALS['pfb']['feed_phase_force'] = 'none';
-    config_set_path('installedpackages/pfblockerngdnsbl/config', json_decode(file_get_contents($args[2] . '/groups.json'), TRUE, 512, JSON_THROW_ON_ERROR));
+    $groups = json_decode(file_get_contents($args[2] . '/groups.json'), TRUE, 512, JSON_THROW_ON_ERROR);
+    config_set_path('installedpackages/pfblockerngdnsbl/config', $groups);
+    $GLOBALS['pfb']['feed_phase_trigger'] = 'retry';
+    $GLOBALS['pfb']['scheduled_runtime_cron'] = TRUE;
+    $GLOBALS['pfb']['scheduled_selected_ids'] = [];
+    foreach ($groups as $group) {
+        foreach ($group['row'] as $row) {
+            $GLOBALS['pfb']['scheduled_selected_ids']['dnsbl:' . $row['header']] = TRUE;
+        }
+    }
+    $GLOBALS['pfb']['core_update_result'] = fopen('php://fd/3', 'wb');
+    if (!is_resource($GLOBALS['pfb']['core_update_result'])) { throw new RuntimeException('fd3 result stream unavailable'); }
     config_set_path('installedpackages/pfblockerng/config/0/hooks/row', [
         ['enabled' => 'on', 'when' => 'pre', 'script' => 'hook_pre_lifecycle.sh'],
         ['enabled' => 'on', 'when' => 'post', 'script' => 'hook_post_lifecycle.sh'],
@@ -321,9 +407,16 @@ try {
     });
     try {
         for ($i = 0; $i < (int) $args[5]; $i++) {
+            if (($args[6] ?? '') === 'post-failure' && $i === 1) { touch($args[2] . '/action/one.update'); }
+            $GLOBALS['pfb']['scheduled_outcomes'] = [];
             file_put_contents($args[2] . '/trace', '');
             file_put_contents($args[2] . '/hooks.trace', '');
             if (!sync_package_pfblockerng()) { throw new RuntimeException('actual sync returned false'); }
+            fflush($GLOBALS['pfb']['core_update_result']);
+            $result = file_get_contents('/proc/self/fd/3');
+            if ($result === FALSE || file_put_contents($args[2] . '/fd3-' . $i, $result) === FALSE) {
+                throw new RuntimeException('fd3 result snapshot unavailable');
+            }
         }
     } finally { restore_error_handler(); }
     foreach (pfb_sync_status_list_open($GLOBALS['pfb']['dbdir'], 'dnsbl') as $entry) {

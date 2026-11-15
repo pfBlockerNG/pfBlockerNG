@@ -40,6 +40,7 @@ type applyLifecycleState struct {
 		Message  string `json:"message"`
 	} `json:"ledger"`
 	Outcomes map[string]string `json:"outcomes"`
+	Result    string            `json:"result"`
 	Log      string            `json:"log"`
 }
 
@@ -135,12 +136,197 @@ func TestFeedPhaseIPScriptLifecycleThroughPHPApply(t *testing.T) {
 						if _, success := got.states[1].Outcomes[family+":one_"+suffix]; success {
 							t.Errorf("failed pre-script emitted a successful refresh outcome: %+v", got.states[1].Outcomes)
 						}
+						if len(got.requests) != 2 || len(got.requests[1].Rows) != 1 ||
+							got.requests[1].Rows[0].Disposition != "failed" || got.requests[1].Rows[0].Stage != "script" {
+							t.Errorf("failed pre-script must remain a failed script result, not a terminal disposition: %+v", got.requests)
+						}
+						if got.states[1].Result != got.states[0].Result {
+							t.Errorf("failed pre-script added an fd3 terminal outcome: before=%q after=%q", got.states[0].Result, got.states[1].Result)
+						}
+					}
+					if row.mode == "post-failure" {
+						target := family + ":one_" + suffix
+						if len(got.requests) != 2 || len(got.requests[0].Rows) != 1 || len(got.requests[1].Rows) != 1 ||
+							got.requests[0].Rows[0].Disposition != "changed" || got.requests[1].Rows[0].Disposition != "reparsed" {
+							t.Errorf("post failure did not cover changed then reparsed dispositions: %+v", got.requests)
+						}
+						for pass, state := range got.states {
+							if outcome := lifecycleResultOutcomes(t, state.Result)[target]; outcome != "" {
+								t.Errorf("post-failed pass%d reported %s on fd3 for %s", pass, outcome, target)
+							}
+						}
 					}
 				}
 			})
 		}
 	}
 }
+func TestFeedPhaseDNSBLPostFailureSettlementThroughPHPApply(t *testing.T) {
+	for _, tc := range []struct {
+		mode        string
+		passes      int
+		failurePass int
+		disposition string
+	}{
+		{"dnsbl-post-failure-changed", 1, 0, "changed"},
+		{"dnsbl-post-failure-reparsed", 2, 1, "reparsed"},
+		{"dnsbl-post-failure-unchanged", 2, 1, "unchanged"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			got := runApplyLifecycleBoundary(t, applyLifecycleCase{"dnsbl", tc.mode, tc.passes})
+			target := "dnsbl:one"
+			request := got.requests[tc.failurePass]
+			if len(request.Rows) != 1 || request.Rows[0].Disposition != tc.disposition {
+				t.Fatalf("post failure FeedPhase result=%+v, want %s", request.Rows, tc.disposition)
+			}
+			if got.trace != "post1\n" {
+				t.Errorf("DNSBL post failure script trace=%q, want one real invocation", got.trace)
+			}
+			var open bool
+			for _, entry := range got.states[tc.failurePass].Ledger {
+				open = open || entry.Facility == "dnsbl" && entry.Item == "DNSBL_First" && entry.Stage == "script"
+			}
+			if !open {
+				t.Errorf("DNSBL post exit 7 did not leave its real script ledger open: %+v", got.states[tc.failurePass].Ledger)
+			}
+			if _, success := got.states[tc.failurePass].Outcomes[target]; success {
+				t.Errorf("post failure settled its DNSBL row: %+v", got.states[tc.failurePass].Outcomes)
+			}
+			if outcomes := lifecycleResultOutcomes(t, got.states[tc.failurePass].Result); tc.mode == "dnsbl-post-failure-changed" && outcomes[target] != "" {
+				t.Errorf("changed post failure emitted fd3 success: %q", got.states[tc.failurePass].Result)
+			}
+			if tc.mode != "dnsbl-post-failure-changed" {
+				if lifecycleResultOutcomes(t, got.states[0].Result)[target] != "success" {
+					t.Errorf("successful prior DNSBL post was not retained on fd3: %q", got.states[0].Result)
+				}
+				if got.states[tc.failurePass].Result != got.states[0].Result {
+					t.Errorf("failed DNSBL post appended a terminal outcome: before=%q after=%q", got.states[0].Result, got.states[tc.failurePass].Result)
+				}
+			}
+		})
+	}
+}
+
+func TestFeedPhasePostFailureSiblingOutcomesThroughPHPApply(t *testing.T) {
+	for _, family := range []string{"dnsbl", "ipv4", "ipv6"} {
+		for _, mode := range []string{
+			"sibling-failure-first", "sibling-success-first",
+			"different-alias-failure-first", "different-alias-success-first",
+		} {
+			t.Run(family+"/"+mode, func(t *testing.T) {
+				got := runApplyLifecycleBoundary(t, applyLifecycleCase{family, mode, 1})
+				target, sibling := family+":one", family+":two"
+				suffix := ""
+				if family != "dnsbl" {
+					suffix = map[string]string{"ipv4": "_v4", "ipv6": "_v6"}[family]
+					target, sibling = target+suffix, sibling+suffix
+				}
+				want := []string{target, sibling}
+				if strings.HasSuffix(mode, "success-first") {
+					want[0], want[1] = want[1], want[0]
+				}
+				var order []string
+				for _, request := range got.requests {
+					if len(request.Feeds) != 1 || len(request.Rows) != 1 || request.Rows[0].Disposition != "changed" {
+						t.Errorf("sibling pass did not complete as one changed feed at a time: %+v", got.requests)
+					}
+					order = append(order, request.Feeds...)
+				}
+				if !reflect.DeepEqual(order, want) {
+					t.Errorf("sibling execution order=%v, want %v", order, want)
+				}
+				outcomes := lifecycleResultOutcomes(t, got.states[0].Result)
+				if len(outcomes) != 1 || outcomes[sibling] != "success" {
+					t.Errorf("fd3 must retain only the successful sibling outcome: %q => %v", got.states[0].Result, outcomes)
+				}
+				if len(got.states[0].Outcomes) != 1 || got.states[0].Outcomes[sibling] != "success" {
+					t.Errorf("row-local post completion lost or added an internal outcome: %+v", got.states[0].Outcomes)
+				}
+				facility, item := "ip", "pfB_First"+suffix
+				if family == "dnsbl" {
+					facility, item = "dnsbl", "DNSBL_First"
+				}
+				var open bool
+				for _, entry := range got.states[0].Ledger {
+					open = open || entry.Facility == facility && entry.Item == item && entry.Stage == "script"
+				}
+				if !open {
+					t.Errorf("failed row did not keep its alias script ledger open: %+v", got.states[0].Ledger)
+				}
+			})
+		}
+	}
+}
+
+func TestFeedPhasePostScriptStagingFailureDoesNotSettle(t *testing.T) {
+	for _, family := range []string{"dnsbl", "ipv4", "ipv6"} {
+		t.Run(family, func(t *testing.T) {
+			got := runApplyLifecycleBoundary(t, applyLifecycleCase{family, "post-stage-failure", 1})
+			if got.trace != "" {
+				t.Errorf("post script ran after its input staging failed: %q", got.trace)
+			}
+			id, facility, item := family+":one", "ip", "pfB_First"
+			header, wantData := "one", "kept.example"
+			if family == "dnsbl" {
+				facility, item = "dnsbl", "DNSBL_First"
+			} else {
+				suffix := map[string]string{"ipv4": "_v4", "ipv6": "_v6"}[family]
+				id, item, header = id+suffix, item+suffix, "one"+suffix
+				if family == "ipv4" {
+					wantData = "192.0.2.2\n"
+				} else {
+					wantData = "2001:db8::2\n"
+				}
+			}
+			if len(got.requests) != 1 || len(got.requests[0].Rows) != 1 || got.requests[0].Rows[0].Disposition != "changed" {
+				t.Errorf("staging failure did not follow a changed feed result: %+v", got.requests)
+			}
+			if _, success := lifecycleResultOutcomes(t, got.states[0].Result)[id]; success {
+				t.Errorf("post staging failure emitted fd3 success: %q", got.states[0].Result)
+			}
+			if _, success := got.states[0].Outcomes[id]; success {
+				t.Errorf("post staging failure settled the row: %+v", got.states[0].Outcomes)
+			}
+			if !strings.Contains(got.states[0].Artifacts[header+".txt"], wantData) {
+				t.Errorf("post staging failure lost published feed data: %+v", got.states[0].Artifacts)
+			}
+			var open bool
+			for _, entry := range got.states[0].Ledger {
+				open = open || entry.Facility == facility && entry.Item == item && entry.Stage == "script"
+			}
+			if !open {
+				t.Errorf("post staging refusal did not leave a real script ledger failure: %+v", got.states[0].Ledger)
+			}
+		})
+	}
+}
+func TestFeedPhaseUnchangedWithoutPostStillSettles(t *testing.T) {
+	for _, family := range []string{"dnsbl", "ipv4", "ipv6"} {
+		t.Run(family, func(t *testing.T) {
+			got := runApplyLifecycleBoundary(t, applyLifecycleCase{family, "no-post-control", 2})
+			suffix := ""
+			if family != "dnsbl" {
+				suffix = map[string]string{"ipv4": "_v4", "ipv6": "_v6"}[family]
+			}
+			id := family + ":one" + suffix
+			if got.trace != "" {
+				t.Errorf("no-post control ran a per-list script: %q", got.trace)
+			}
+			if len(got.requests) != 2 || len(got.requests[0].Rows) != 1 || len(got.requests[1].Rows) != 1 ||
+				got.requests[0].Rows[0].Disposition != "changed" || got.requests[1].Rows[0].Disposition != "unchanged" {
+				t.Errorf("no-post control did not cover changed then unchanged: %+v", got.requests)
+				return
+			}
+			before, after := got.states[0].Result, got.states[1].Result
+			delta := strings.TrimPrefix(after, before)
+			if !strings.HasPrefix(after, before) || lifecycleResultOutcomes(t, delta)[id] != "success" ||
+				got.states[1].Outcomes[id] != "success" {
+				t.Errorf("unchanged no-post row did not settle successfully: before=%q after=%q outcomes=%+v", before, after, got.states[1].Outcomes)
+			}
+		})
+	}
+}
+
 
 func TestFeedPhaseIPSelectionValidatesBeforeASNPrerequisite(t *testing.T) {
 	for _, family := range []string{"ipv4", "ipv6"} {
@@ -279,11 +465,26 @@ func runApplyLifecycleBoundary(t *testing.T, tc applyLifecycleCase) applyLifecyc
 	if tc.family == "dnsbl" {
 		write(filepath.Join(root, "first.txt"), "kept.example\n192.0.2.1\n2001:db8::1\n")
 		write(filepath.Join(root, "next.txt"), "recovered.example\n192.0.2.2\n2001:db8::2\n")
-		post = "#!/bin/sh\n[ \"$#\" -eq 2 ] && [ -f \"$1\" ] && [ \"$2\" = dnsbl ] || exit 92\nprintf 'post1\\n' >> \"$LIFECYCLE_ROOT/trace\"\nif [ -f \"$LIFECYCLE_ROOT/armed\" ]; then\n cp \"$LIFECYCLE_ROOT/action/one.txt\" \"$LIFECYCLE_ROOT/busy-txt\" || exit 93\n mount --bind \"$LIFECYCLE_ROOT/busy-txt\" \"$LIFECYCLE_ROOT/action/one.txt\" || exit 94\n"
-		if tc.mode == "restore-refusal" {
-			post += " cp \"$LIFECYCLE_ROOT/action/one_v4.ip\" \"$LIFECYCLE_ROOT/busy-v4\" || exit 95\n mount --bind \"$LIFECYCLE_ROOT/busy-v4\" \"$LIFECYCLE_ROOT/action/one_v4.ip\" || exit 96\n"
+		if tc.mode == "txt-refusal" || tc.mode == "restore-refusal" {
+			post = "#!/bin/sh\n[ \"$#\" -eq 2 ] && [ -f \"$1\" ] && [ \"$2\" = dnsbl ] || exit 92\nprintf 'post1\\n' >> \"$LIFECYCLE_ROOT/trace\"\nif [ -f \"$LIFECYCLE_ROOT/armed\" ]; then\n cp \"$LIFECYCLE_ROOT/action/one.txt\" \"$LIFECYCLE_ROOT/busy-txt\" || exit 93\n mount --bind \"$LIFECYCLE_ROOT/busy-txt\" \"$LIFECYCLE_ROOT/action/one.txt\" || exit 94\n"
+			if tc.mode == "restore-refusal" {
+				post += " cp \"$LIFECYCLE_ROOT/action/one_v4.ip\" \"$LIFECYCLE_ROOT/busy-v4\" || exit 95\n mount --bind \"$LIFECYCLE_ROOT/busy-v4\" \"$LIFECYCLE_ROOT/action/one_v4.ip\" || exit 96\n"
+			}
+			post += " touch \"$LIFECYCLE_ROOT/obstruction-ready\" || exit 97\nelse\n touch \"$LIFECYCLE_ROOT/armed\"\nfi\n"
+		} else {
+			post = "#!/bin/sh\n[ \"$#\" -eq 2 ] && [ -f \"$1\" ] && [ \"$2\" = dnsbl ] || exit 92\nif [ -s \"$LIFECYCLE_ROOT/trace\" ]; then n=2; else n=1; fi\nprintf 'post%s\\n' \"$n\" >> \"$LIFECYCLE_ROOT/trace\"\n"
+			switch tc.mode {
+			case "dnsbl-post-failure-changed":
+				post += `case "$1" in */one.post) exit 7;; esac` + "\n"
+			case "dnsbl-post-failure-unchanged":
+				post += `if [ -f "$LIFECYCLE_ROOT/action/one.update" ]; then exit 7; fi` + "\n"
+			case "dnsbl-post-failure-reparsed":
+				post += `if [ -f "$LIFECYCLE_ROOT/fail-post" ]; then exit 7; fi` + "\n"
+			}
 		}
-		post += " touch \"$LIFECYCLE_ROOT/obstruction-ready\" || exit 97\nelse\n touch \"$LIFECYCLE_ROOT/armed\"\nfi\n"
+	}
+	if strings.HasPrefix(tc.mode, "sibling-") || strings.HasPrefix(tc.mode, "different-alias-") {
+		post += `case "$1" in */one*) exit 7;; esac` + "\n"
 	}
 	write(filepath.Join(scripts, "ip_pre_boundary.sh"), pre)
 	write(filepath.Join(scripts, "ip_post_boundary.sh"), post)
@@ -317,8 +518,18 @@ func runApplyLifecycleBoundary(t *testing.T, tc applyLifecycleCase) applyLifecyc
 		groups = []any{group("First", []any{row("one", "first.txt")}, false, true), group("Second", []any{row("two", "derived.txt"), row("three", "derived.txt")}, false, false)}
 	case "pre-only":
 		groups = []any{group("First", []any{row("one", "first.txt")}, true, false), group("Second", []any{row("two", "derived.txt")}, true, false)}
+	case "no-post-control":
+		groups = []any{group("First", []any{row("one", "first.txt")}, false, false)}
 	case "unchanged-pre-post", "pre-failure":
 		groups = []any{group("First", []any{row("one", "first.txt")}, true, true)}
+	case "sibling-failure-first":
+		groups = []any{group("First", []any{row("one", "first.txt"), row("two", "derived.txt")}, false, true)}
+	case "sibling-success-first":
+		groups = []any{group("First", []any{row("two", "derived.txt"), row("one", "first.txt")}, false, true)}
+	case "different-alias-failure-first":
+		groups = []any{group("First", []any{row("one", "first.txt")}, false, true), group("Second", []any{row("two", "derived.txt")}, false, true)}
+	case "different-alias-success-first":
+		groups = []any{group("Second", []any{row("two", "derived.txt")}, false, true), group("First", []any{row("one", "first.txt")}, false, true)}
 	case "invalid-duplicate", "invalid-late-force", "valid-asn-control":
 		asn := map[string]any{"header": "two", "state": "enabled", "format": "asn", "url": "AS64512"}
 		groups = []any{group("First", []any{row("one", "first.txt")}, true, true), group("Second", []any{asn}, false, false)}
@@ -346,6 +557,15 @@ func runApplyLifecycleBoundary(t *testing.T, tc applyLifecycleCase) applyLifecyc
 	runner.flags.OrigDir = orig
 	runner.flags.DNSBLOrigDir = orig
 	runner.flags.ASNCSV = filepath.Join(root, "geoip", "asn.csv")
+	if tc.mode == "post-stage-failure" {
+		staged := filepath.Join(orig, "one_"+suffix+".orig.post")
+		if tc.family == "dnsbl" {
+			staged = filepath.Join(orig, "one.post")
+		}
+		if err := os.Mkdir(staged, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv("LIFECYCLE_ROOT", root)
 	var phpGroups []any
 	var ids []string
@@ -390,7 +610,20 @@ func runApplyLifecycleBoundary(t *testing.T, tc applyLifecycleCase) applyLifecyc
 		}
 		driver = strings.Replace(driver, old, replacement, 1)
 	}
-	replace("    config_set_path('installedpackages/pfblockerngdnsbl/config', json_decode(file_get_contents($args[2] . '/groups.json'), TRUE, 512, JSON_THROW_ON_ERROR));", applyLifecycleFixturePHP)
+	replace(`    $GLOBALS['pfb']['feed_phase_force'] = 'none';
+    $groups = json_decode(file_get_contents($args[2] . '/groups.json'), TRUE, 512, JSON_THROW_ON_ERROR);
+    config_set_path('installedpackages/pfblockerngdnsbl/config', $groups);
+    $GLOBALS['pfb']['feed_phase_trigger'] = 'retry';
+    $GLOBALS['pfb']['scheduled_runtime_cron'] = TRUE;
+    $GLOBALS['pfb']['scheduled_selected_ids'] = [];
+    foreach ($groups as $group) {
+        foreach ($group['row'] as $row) {
+            $GLOBALS['pfb']['scheduled_selected_ids']['dnsbl:' . $row['header']] = TRUE;
+        }
+    }
+    $GLOBALS['pfb']['core_update_result'] = fopen('php://fd/3', 'wb');
+    if (!is_resource($GLOBALS['pfb']['core_update_result'])) { throw new RuntimeException('fd3 result stream unavailable'); }
+`, applyLifecycleFixturePHP)
 	replace("            file_put_contents($args[2] . '/trace', '');", "            $GLOBALS['pfb']['scheduled_outcomes'] = [];\n"+applyLifecycleNextPassPHP+"\n            file_put_contents($args[2] . '/trace', '');")
 	replace("            if (!sync_package_pfblockerng()) { throw new RuntimeException('actual sync returned false'); }", "            if (!sync_package_pfblockerng()) { throw new RuntimeException('actual sync returned false'); }\n"+applyLifecycleObservePHP)
 	driver = "define('PFB_REENTRY_SCRIPT', getenv('LIFECYCLE_ROOT') . '/reentry.php');\n" + driver
@@ -459,8 +692,16 @@ mount --bind "$1/local" /usr/local
 export PATH="$1/original-local/bin:$1/original-local/sbin:$PATH"
 shift
 exec "$@"`
+	fd3, err := os.OpenFile(filepath.Join(root, "result.jsonl"), os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.CommandContext(ctx, "unshare", "-m", "sh", "-eu", "-c", mountScript, "sh", root, php, "-r", driver, repo, root, filepath.Join(root, "core.sock"), orig, fmt.Sprint(tc.passes))
+	cmd.ExtraFiles = []*os.File{fd3}
 	out, runErr := cmd.CombinedOutput()
+	if err := fd3.Close(); err != nil {
+		t.Fatal(err)
+	}
 	afterNS, nsErr := os.Readlink("/proc/self/ns/mnt")
 	_, targetErr := os.Stat("/usr/local/pkg/pfblockerng")
 	if nsErr != nil || beforeNS != afterNS || !os.IsNotExist(targetErr) {
@@ -501,6 +742,10 @@ const applyLifecycleFixturePHP = `
     $GLOBALS['pfb']['geoipshare'] = $args[2] . '/geoip';
     $GLOBALS['pfb']['scheduled_runtime_cron'] = TRUE;
     $GLOBALS['pfb']['scheduled_selected_ids'] = array_fill_keys($boundary['ids'], TRUE);
+    $GLOBALS['pfb']['feed_phase_trigger'] = 'retry';
+    $GLOBALS['pfb']['feed_phase_force'] = 'none';
+    $GLOBALS['pfb']['core_update_result'] = fopen('php://fd/3', 'wb');
+    if (!is_resource($GLOBALS['pfb']['core_update_result'])) { throw new RuntimeException('fd3 result stream unavailable'); }
     if ($boundary['family'] === 'dnsbl') {
         config_set_path('installedpackages/pfblockerngdnsbl/config', $boundary['groups']);
         $GLOBALS['pfb']['feed_phase_scope'] = 'dnsbl';
@@ -520,9 +765,15 @@ const applyLifecycleFixturePHP = `
 `
 
 const applyLifecycleNextPassPHP = `
-            if ($i === 1 && $boundary['family'] === 'dnsbl') {
-                if (!copy($args[2] . '/next.txt', $args[2] . '/first.txt')) { throw new RuntimeException('could not advance real local source'); }
-                touch($args[2] . '/action/one.update');
+            if ($i === 1 && $boundary['family'] === 'dnsbl' && $boundary['mode'] !== 'no-post-control') {
+                if ($boundary['mode'] === 'dnsbl-post-failure-unchanged') {
+                    touch($args[2] . '/action/one.update');
+                } elseif ($boundary['mode'] === 'dnsbl-post-failure-reparsed') {
+                    touch($args[2] . '/fail-post');
+                } else {
+                    if (!copy($args[2] . '/next.txt', $args[2] . '/first.txt')) { throw new RuntimeException('could not advance real local source'); }
+                    touch($args[2] . '/action/one.update');
+                }
             }
 `
 
@@ -531,9 +782,13 @@ const applyLifecycleObservePHP = `
             foreach (glob($args[2] . '/action/*') ?: [] as $path) {
                 $artifacts[basename($path)] = is_file($path) ? file_get_contents($path) : 'DIRECTORY';
             }
+            fflush($GLOBALS['pfb']['core_update_result']);
+            $result = file_get_contents('/proc/self/fd/3');
+            if ($result === FALSE) { throw new RuntimeException('fd3 result snapshot unavailable'); }
             $state = ['artifacts' => (object) $artifacts,
                 'ledger' => pfb_sync_status_list_open($GLOBALS['pfb']['dbdir'], $boundary['family'] === 'dnsbl' ? 'dnsbl' : 'ip'),
                 'outcomes' => (object) ($GLOBALS['pfb']['scheduled_outcomes'] ?? []),
+                'result' => $result,
                 'log' => file_get_contents($GLOBALS['pfb']['log'])];
             file_put_contents($args[2] . '/state-' . $i . '.json', json_encode($state, JSON_THROW_ON_ERROR));
 `

@@ -2298,6 +2298,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						}
 						pfb_dnsbl_scheme_skip_warn($feed_result['schemeSkipped'], $header);
 
+						$pfb_row_post_complete = TRUE;
 						$pfb_row_script_post = $scheduled_selected ? $pfb_dnsbl_script_post : FALSE;
 						if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {
 							pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
@@ -2306,11 +2307,15 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$pfb['dbdir'], state: $pfb_script_state)) {
 								$pfb_post_status = pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
 									escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
+								if ($pfb_post_status !== 0) {
+									$pfb_row_post_complete = FALSE;
+								}
 								unlink_if_exists("{$file_dwn}.post");
 								pfb_list_post_script_failure_record($pfb_post_status, 'dnsbl', $alias,
 									"[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
 									$pfb['dbdir'], $pfb_script_state);
 							} else {
+								$pfb_row_post_complete = FALSE;
 								pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its input; skipping\n", 2);
 							}
 						}
@@ -2359,7 +2364,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$alias_cnt = pfb_dnsbl_alias_count_rebuild($txt, $alias_cnt);
 						unlink_if_exists("{$pfbfolder}/{$header}.update");
 						unlink_if_exists("{$pfbfolder}/{$header}.fail");
-						if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected) {
+						if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected && $pfb_row_post_complete) {
 							pfb_schedule_outcome_record($feed_id, PfbScheduleTerminalResult::Success);
 						}
 					}
@@ -3618,6 +3623,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						pfb_logger("\n", 1);
 
 							// IP v4/6 Advanced Tunable - (Post Script processing)
+							$pfb_row_post_complete = TRUE;
 							$pfb_post_staged = FALSE;
 							if ($pfb_script_post && is_file("{$pfb_script_post}")) {
 								pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
@@ -3629,6 +3635,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									$pfb_post_status = pfb_list_script_exec($pfb_script_post, $list['script_post'], 'post', $header,
 									    "{$file_org_esc} {$list['vtype']} {$elog}");
 									if ($pfb_post_status !== 0) {
+										$pfb_row_post_complete = FALSE;
 										// issue #1927: restore the download now so the empty-feed check
 										// below reads it, not the failed script's leftovers.
 										if (file_exists("{$file_dwn}.orig.post")) {
@@ -3640,6 +3647,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
 									    $pfb['dbdir'], $pfb_script_state);
 								} else {
+									$pfb_row_post_complete = FALSE;
 									pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its restore point; skipping\n", 2);
 								}
 							}
@@ -3712,7 +3720,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 							unlink_if_exists("{$pfbfolder}/{$header}.update");
 							unlink_if_exists("{$pfbfolder}/{$header}.fail");
-							if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected) {
+							if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected && $pfb_row_post_complete) {
 								$outcome_id = isset($pfb['scheduled_selected_ids'][$feed_id])
 									? $feed_id : "{$scheduled_family}:{$header}";
 								pfb_schedule_outcome_record($outcome_id, PfbScheduleTerminalResult::Success);

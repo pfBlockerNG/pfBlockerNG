@@ -423,8 +423,10 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
   of an Update is not trimmed.
 - **fd 3:** a second regular file, for the result: lines, each one JSON object `{"version": 1, "outcomes": {id:
   "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field but `version`
-  optional. The program writes each outcome as it finishes, so its death loses no finished check. Core adds the lines up:
-  every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness of the last line that has
+  optional. The program writes each outcome as it finishes, so the Update's death loses no finished check; a selected feed is not
+  finished until its configured per-list post-script succeeds, and a failed or unstageable post leaves that feed's outcome absent
+  and pending without affecting successful sibling outcomes or whole-program result semantics. Core adds the lines up: every
+  line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness of the last line that has
   them. Nothing written is nothing reported. A last line with no newline that is not such an object (the program died writing
   it) is dropped and fails the Update; any other line that is not, or more than 1 MiB in all, fails the Update and records
   nothing.
