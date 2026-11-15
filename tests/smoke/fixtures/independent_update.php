@@ -73,6 +73,8 @@ if ($mode === 'update') {
 	$binary = '/usr/local/sbin/kea-dhcp' . $family;
 	putenv('KEA_PIDFILE_DIR=' . $dir);
 	putenv('KEA_LOCKFILE_DIR=' . $dir);
+	passthru(escapeshellarg($binary) . ' -t ' . escapeshellarg("$dir/kea.json") . ' 2>&1', $lintStatus);
+	demand($lintStatus === 0, 'private Kea configuration lint failed before launch');
 	// Exactly the native services.inc leaf and mwexec_bg launch; no setsid, daemon wrapper or descriptor surgery.
 	mwexec_bg(escapeshellarg($binary) . ' -c ' . escapeshellarg("$dir/kea.json"));
 	until(static function () use ($dir): bool {
