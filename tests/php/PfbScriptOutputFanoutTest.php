@@ -8,11 +8,12 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_list_script_exec')]
 #[CoversFunction('pfb_run_hooks')]
 #[CoversFunction('pfb_script_output_exec')]
+#[CoversFunction('pfb_script_output_sanitize_chunk')]
 #[CoversFunction('pfb_stdout_close_line')]
 final class PfbScriptOutputFanoutTest extends TestCase
 {
-	private const VIEWER_LIMIT = 1_048_576;
-	private const VIEWER_NOTICE = "\n[ pfBlockerNG ] Script output limit (1 MiB) reached; remaining output is in the main log.\n";
+	private const VIEWER_LIMIT = 1_000_000;
+	private const VIEWER_NOTICE = "\n[ pfBlockerNG ] Script output limit (1,000,000 characters) reached; remaining output is in the main log.\n";
 
 	private string $tmp;
 	/** @var array<string, mixed> */
@@ -96,8 +97,8 @@ PHP);
 	{
 		$firstLength = intdiv($total, 3);
 		$middleLength = intdiv($total, 3);
-		$middleTail = "\0\xffERR";
-		$lastTail = "\0\xfftail" . chr(65 + $seed);
+		$middleTail = 'ERR';
+		$lastTail = 'tail' . chr(65 + $seed);
 		$lastLength = $total - $firstLength - $middleLength;
 		return [
 			str_repeat(chr(65 + $seed), $firstLength),
@@ -128,7 +129,7 @@ PHP);
 		return pfb_list_script_exec($script, basename($script), 'pre', 'Fanout fixture', $tail, $prefix);
 	}
 
-	public function testListOutputIsRawAndLimitedPerInvocationWhileProgressAndLaterRunsRemainVisible(): void
+	public function testListOutputIsSanitizedAndCharacterLimitedPerInvocationWhileProgressAndLaterRunsRemainVisible(): void
 	{
 		$script = $this->makeListOutputScript();
 		$captureFilesBefore = $this->captureFiles();
@@ -155,9 +156,9 @@ PHP);
 		$viewer = (string) file_get_contents($GLOBALS['pfb']['runlog']);
 		$this->assertSame($viewerPrefix, substr($viewer, 0, strlen($viewerPrefix)));
 		$this->assertSame(2, substr_count($viewer, self::VIEWER_NOTICE), 'each over-limit invocation gets one notice');
-		$this->assertStringNotContainsString(substr($payloads[2], -7), $viewer, 'bytes after the exact allowance stay out of the viewer');
+		$this->assertStringNotContainsString(substr($payloads[2], -7), $viewer, 'characters after the exact allowance stay out of the viewer');
 		foreach ($payloads as $payload) {
-			$this->assertSame(1, substr_count($main, $payload), 'the complete raw invocation is persisted once');
+			$this->assertSame(1, substr_count($main, $payload), 'the complete sanitized invocation is persisted once');
 		}
 		$this->assertSame(0, substr_count($main, self::VIEWER_NOTICE), 'the viewer notice is not duplicated into the main log');
 		$progress = strpos($viewer, 'ORDINARY_PROGRESS after overflow');
@@ -169,6 +170,67 @@ PHP);
 		$this->assertSame(self::VIEWER_NOTICE, substr($viewer, $later + self::VIEWER_LIMIT, strlen(self::VIEWER_NOTICE)));
 		$this->assertSame($captureFilesBefore, $this->captureFiles(), 'private captures are removed after final drain');
 	}
+
+	public function testMixedUnicodeCountsCodepointsAtTheExactViewerBoundary(): void
+	{
+		$pattern = "\u{00E9}\u{20AC}\u{1F4A9}e\u{0301}";
+		$this->assertSame(5, mb_strlen($pattern, 'UTF-8'));
+		$repetitions = intdiv(self::VIEWER_LIMIT, 5);
+		$expected = str_repeat($pattern, $repetitions);
+		$script = $this->makePhpScript('unicode-limit.php', '$payload = str_repeat('
+			. var_export($pattern, TRUE) . ', ' . $repetitions . '); fwrite(STDOUT, $payload);');
+
+		$this->assertSame(self::VIEWER_LIMIT, mb_strlen($expected, 'UTF-8'));
+
+		$this->assertSame(0, pfb_script_output_exec(escapeshellarg($script)));
+		$this->assertSame($expected, file_get_contents($GLOBALS['pfb']['log']));
+		$this->assertSame($expected, file_get_contents($GLOBALS['pfb']['runlog']));
+		$this->assertStringNotContainsString(self::VIEWER_NOTICE, (string) file_get_contents($GLOBALS['pfb']['runlog']));
+	}
+
+	public function testSanitizesUtf8ControlsMalformedBytesAndChunkBoundariesIdenticallyForBothSinks(): void
+	{
+		$first = str_repeat('P', 8190) . "\xf0\x9f";
+		$tail = "\x92\xa9\u{00E9}\u{20AC}e\u{0301}\n\t\r\n\x00\x1b\x7f\u{0085}\u{200e}\xe2\x28\xa1\xe2\x82";
+		$expected = str_repeat('P', 8190) . "\u{1F4A9}\u{00E9}\u{20AC}e\u{0301}\n\t"
+			. "\\x0D\n\\x00\\x1B\\x7F\\u{85}\\u{200E}\\xE2(\\xA1\\xE2\\x82";
+		$source = 'fwrite(STDOUT, base64_decode(' . var_export(base64_encode($first), TRUE) . ')); fflush(STDOUT); usleep(500000);'
+			. 'fwrite(STDERR, base64_decode(' . var_export(base64_encode($tail), TRUE) . '));';
+		$script = $this->makePhpScript('sanitize-output.php', $source);
+
+		$this->assertSame(0, pfb_script_output_exec(escapeshellarg($script)));
+		$this->assertSame($expected, file_get_contents($GLOBALS['pfb']['log']));
+		$this->assertSame($expected, file_get_contents($GLOBALS['pfb']['runlog']));
+	}
+
+	public function testEscapeTokenIsAtomicAtViewerCharacterBoundary(): void
+	{
+		$prefix = str_repeat('Q', self::VIEWER_LIMIT - 2);
+		$raw = $prefix . "\x1bZ";
+		$script = $this->makePhpScript('escape-limit.php',
+			'fwrite(STDOUT, base64_decode(' . var_export(base64_encode($raw), TRUE) . '));');
+
+		$this->assertSame(0, pfb_script_output_exec(escapeshellarg($script)));
+		$this->assertSame($prefix . "\\x1BZ", file_get_contents($GLOBALS['pfb']['log']));
+		$this->assertSame($prefix . self::VIEWER_NOTICE, file_get_contents($GLOBALS['pfb']['runlog']));
+	}
+
+	public function testUnicodeSanitizationIsStableAcrossSmallChunkPartitions(): void
+	{
+		$units = ["\u{00E9}", "\u{20AC}", "\u{1F4A9}"];
+		foreach (range(1, 8) as $chunkSize) {
+			foreach ($units as $unit) {
+				foreach ([$chunkSize - 3, $chunkSize - 2, $chunkSize - 1] as $offset) {
+					$prefix = str_repeat('A', max(0, $offset));
+					$raw = $prefix . $unit . "Z\xe2\x28\xa1\u{1F4A9}\xe2\x82";
+					$expected = $prefix . $unit . "Z\\xE2(\\xA1\u{1F4A9}\\xE2\\x82";
+					$this->assertSame($expected, $this->sanitizeInChunks($raw, $chunkSize),
+						"UTF-8 split failed: chunk={$chunkSize} offset={$offset} unit=" . bin2hex($unit));
+				}
+			}
+		}
+	}
+
 
 	public function testOutputWithoutDistinctViewerRemainsUnlimitedAndIsLoggedOnce(): void
 	{
@@ -184,9 +246,9 @@ PHP);
 		$this->assertStringNotContainsString(self::VIEWER_NOTICE, (string) file_get_contents($GLOBALS['pfb']['log']));
 	}
 
-	public function testLifecycleCaptureClosesUnterminatedBinaryStdoutBeforeFraming(): void
+	public function testLifecycleCaptureClosesUnterminatedStdoutBeforeFraming(): void
 	{
-		$raw = "lifecycle-raw\0\xff";
+		$raw = "lifecycle-visible-without-newline";
 		$source = 'fwrite(STDOUT, base64_decode(' . var_export(base64_encode($raw), TRUE) . '));';
 		$script = $this->makePhpScript('lifecycle-line.php', $source);
 		$captureFilesBefore = $this->captureFiles();
@@ -207,7 +269,7 @@ PHP);
 	public function testMainLogRotationDoesNotChangeViewerBytesOrLoseCapturedOutput(): void
 	{
 		$first = "rotation-first\n" . str_repeat('F', 16_384);
-		$second = "\0\xffrotation-second" . str_repeat('S', 16_384);
+		$second = "rotation-second" . str_repeat('S', 16_384);
 		$script = $this->makePhpScript('rotate-main.php', '$first = ' . var_export($first, TRUE) . ";\n"
 			. '$second = ' . var_export($second, TRUE) . ";\n"
 			. 'fwrite(STDOUT, $first); fflush(STDOUT); usleep(500000);' . "\n"
@@ -226,7 +288,7 @@ PHP);
 		if (!file_exists('/dev/full') || !is_writable('/dev/full')) {
 			$this->markTestSkipped('/dev/full is unavailable for a real write-failure proof');
 		}
-		$payload = "SINK_FAILURE_STDOUT\0SINK_FAILURE_STDERR\xff";
+		$payload = 'SINK_FAILURE_STDOUT|SINK_FAILURE_STDERR';
 		$script = $this->makePhpScript('sink-failure.php', 'fwrite(STDOUT, ' . var_export(substr($payload, 0, 20), TRUE) . ');'
 			. 'fwrite(STDERR, ' . var_export(substr($payload, 20), TRUE) . '); exit(7);');
 
@@ -285,7 +347,7 @@ PHP);
 		$lifecycle = "{$this->tmp}/hook-lifecycle";
 		$this->assertTrue(mkdir($lifecycle, 0700));
 		$this->assertTrue(mkdir("{$lifecycle}/hooks", 0700));
-		$lifecycleBytes = "LIFECYCLE_VISIBLE\0\xffwithout-newline";
+		$lifecycleBytes = 'LIFECYCLE_VISIBLE_without-newline';
 		$lifecyclePhp = 'fwrite(STDOUT, base64_decode(' . var_export(base64_encode($lifecycleBytes), TRUE) . '));';
 		$this->writeHookScript("{$lifecycle}/hooks", 'hook_pre_lifecycle.sh',
 			escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($lifecyclePhp));
@@ -306,7 +368,7 @@ PHP);
 	{
 		$prefix = "FDREG-{$label}\n";
 		$errorPrefix = "ERR-{$label}\n";
-		$tail = "\0\xffTAIL-{$label}";
+		$tail = "TAIL-{$label}";
 		$php = '$out = fstat(STDOUT); $err = fstat(STDERR); '
 			. '$regular = (($out["mode"] & 0170000) === 0100000) && (($err["mode"] & 0170000) === 0100000) && (($out["mode"] & 0777) === 0600) && (($err["mode"] & 0777) === 0600); '
 			. 'fwrite(STDOUT, $regular ? ' . var_export($prefix, TRUE) . ' : ' . var_export("FDNOTREG-{$label}\n", TRUE) . '); '
@@ -324,7 +386,7 @@ PHP);
 
 	private function hookOutputBytes(string $label): string
 	{
-		return "FDREG-{$label}\n" . str_repeat('A', 600000) . "ERR-{$label}\n" . str_repeat('B', 500000) . "\0\xffTAIL-{$label}";
+		return "FDREG-{$label}\n" . str_repeat('A', 600000) . "ERR-{$label}\n" . str_repeat('B', 500000) . "TAIL-{$label}";
 	}
 
 	private function assertHookViewerPrefix(string $viewer, string $output): void
@@ -404,6 +466,20 @@ PHP;
 			$this->killPidFile($pidfile);
 		}
 		return ['status' => $status, 'stdout' => (string) file_get_contents($stdout), 'elapsed' => $elapsed];
+	}
+
+	private function sanitizeInChunks(string $raw, int $chunkSize): string
+	{
+		$carry = '';
+		$out = '';
+		$emit = static function (string $text, int $characters, bool $atomic) use (&$out): void {
+			$out .= $text;
+		};
+		for ($offset = 0, $length = strlen($raw); $offset < $length; $offset += $chunkSize) {
+			pfb_script_output_sanitize_chunk(substr($raw, $offset, $chunkSize), $carry, FALSE, $emit);
+		}
+		pfb_script_output_sanitize_chunk('', $carry, TRUE, $emit);
+		return $out;
 	}
 
 	private function killPidFile(string $pidfile): void

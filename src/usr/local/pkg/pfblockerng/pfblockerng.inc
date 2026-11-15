@@ -10612,10 +10612,79 @@ function pfb_logger($log, $logtype) {
  * update pass. No die()/exit() here (library code).
  */
 
+
+/**
+ * Sanitize one bounded script-output read and emit complete safe text units.
+ *
+ * Nonfinal reads consume only complete units while at least four bytes remain. The actual
+ * unconsumed suffix is carried into the next read; final direct-runner drain escapes any
+ * incomplete UTF-8 bytes individually.
+ *
+ * @param callable(string, int, bool): void $emit text, displayed character count, atomic token
+ */
+function pfb_script_output_sanitize_chunk(string $chunk, string &$carry, bool $final, callable $emit): void {
+	$data = $carry . $chunk;
+	$carry = '';
+	$length = strlen($data);
+	$offset = 0;
+	$ascii_pattern = $final
+		? '/\G[\x20-\x7E\t\n]+/'
+		: '/\G[\x20-\x7E\t\n]+(?=[\s\S]{3})/s';
+
+	while ($offset < $length && ($final || $length - $offset >= 4)) {
+		if (preg_match($ascii_pattern, $data, $match, 0, $offset) === 1) {
+			$text = $match[0];
+			$characters = strlen($text);
+			$emit($text, $characters, FALSE);
+			$offset += $characters;
+			continue;
+		}
+
+		$window = substr($data, $offset, min(4, $length - $offset));
+		$units = mb_str_split($window, 1, 'UTF-8');
+		$unit = $units[0] ?? '';
+		if ($unit === '' || !mb_check_encoding($unit, 'UTF-8')) {
+			$text = sprintf('\\x%02X', ord($data[$offset]));
+			$emit($text, strlen($text), TRUE);
+			$offset++;
+			continue;
+		}
+
+		$codepoint = mb_ord($unit, 'UTF-8');
+		if ($codepoint === FALSE) {
+			$text = sprintf('\\x%02X', ord($data[$offset]));
+			$emit($text, strlen($text), TRUE);
+			$offset++;
+			continue;
+		}
+		if ($codepoint < 0x80) {
+			$text = sprintf('\\x%02X', $codepoint);
+			$characters = strlen($text);
+		} else {
+			$category = IntlChar::charType($codepoint);
+			if ($category === IntlChar::CHAR_CATEGORY_CONTROL_CHAR
+			    || $category === IntlChar::CHAR_CATEGORY_FORMAT_CHAR) {
+				$text = sprintf('\\u{%X}', $codepoint);
+				$characters = strlen($text);
+			} else {
+				$text = $unit;
+				$characters = 1;
+			}
+		}
+		$emit($text, $characters, TRUE);
+		$offset += strlen($unit);
+	}
+
+	if (!$final && $offset < $length) {
+		$carry = substr($data, $offset);
+	}
+}
+
 /*
- * Run one script with regular-file stdout/stderr, copying its captured bytes to the main log
- * and, when distinct, the live viewer. The direct runner's exit is the cutoff: descendants may
- * keep the capture fd, so drain only the size observed at exit and never wait for EOF.
+ * Run one script with regular-file stdout/stderr. Sanitize captured UTF-8 once, append the complete
+ * safe text to the main log and a character-limited prefix to a distinct viewer. The direct runner's
+ * exit is the cutoff: descendants may keep the capture fd, so drain only the size observed at exit
+ * and never wait for EOF.
  */
 function pfb_script_output_exec(string $command, bool $mirror_stdout = FALSE): int {
 	global $pfb;
@@ -10689,48 +10758,82 @@ function pfb_script_output_exec(string $command, bool $mirror_stdout = FALSE): i
 		}
 	};
 	$offset = 0;
-	$viewer_bytes = 0;
+	$utf8_carry = '';
+	$viewer_characters = 0;
 	$notice_written = FALSE;
-	$drain = static function (int $end) use (&$offset, &$viewer_bytes, &$notice_written, &$main_failed,
-	    &$viewer_failed, $reader, $main_log, $viewer_log, $mirror_stdout, $append, $report_write_failure,
-	    $report_capture_failure): void {
+	$drain = static function (int $end, bool $final = FALSE) use (&$offset, &$utf8_carry, &$viewer_characters,
+	    &$notice_written, &$main_failed, &$viewer_failed, $reader, $main_log, $viewer_log, $mirror_stdout,
+	    $append, $report_write_failure, $report_capture_failure): void {
+		$main_buffer = '';
+		$viewer_buffer = '';
+		$stdout_buffer = '';
+		$notice = "\n[ pfBlockerNG ] Script output limit (1,000,000 characters) reached; remaining output is in the main log.\n";
+		$emit = static function (string $text, int $characters, bool $atomic) use (
+		    &$main_buffer, &$viewer_buffer, &$stdout_buffer, &$viewer_characters, &$notice_written, &$viewer_failed,
+		    $viewer_log, $mirror_stdout, $notice): void {
+			$main_buffer .= $text;
+			if ($mirror_stdout) {
+				$stdout_buffer .= $text;
+			}
+			if ($viewer_log === '' || $viewer_failed || $notice_written) {
+				return;
+			}
+			$remaining = 1_000_000 - $viewer_characters;
+			if ($atomic) {
+				if ($characters <= $remaining) {
+					$viewer_buffer .= $text;
+					$viewer_characters += $characters;
+				} else {
+					$viewer_buffer .= $notice;
+					$notice_written = TRUE;
+				}
+				return;
+			}
+
+			$shown = min($characters, $remaining);
+			if ($shown > 0) {
+				$viewer_buffer .= ($shown === $characters) ? $text : substr($text, 0, $shown);
+				$viewer_characters += $shown;
+			}
+			if ($shown < $characters) {
+				$viewer_buffer .= $notice;
+				$notice_written = TRUE;
+			}
+		};
+		$flush = static function () use (&$main_buffer, &$viewer_buffer, &$stdout_buffer, &$main_failed,
+		    &$viewer_failed, $main_log, $viewer_log, $mirror_stdout, $append, $report_write_failure): void {
+			if ($mirror_stdout && $stdout_buffer !== '') {
+				print $stdout_buffer;
+				pfb_stdout_mid_line($stdout_buffer);
+			}
+			if (!$main_failed && $main_buffer !== '' && !$append($main_log, $main_buffer)) {
+				$main_failed = TRUE;
+				$report_write_failure('main log');
+			}
+			if ($viewer_log !== '' && !$viewer_failed && $viewer_buffer !== '' && !$append($viewer_log, $viewer_buffer)) {
+				$viewer_failed = TRUE;
+				$report_write_failure('viewer');
+			}
+			$main_buffer = '';
+			$viewer_buffer = '';
+			$stdout_buffer = '';
+		};
+
 		while ($offset < $end) {
 			$chunk = @fread($reader, min(8192, $end - $offset));
 			if ($chunk === FALSE || $chunk === '') {
 				$report_capture_failure();
-				return;
+				break;
 			}
 			$length = strlen($chunk);
-			if ($mirror_stdout) {
-				print $chunk;
-				pfb_stdout_mid_line($chunk);
-			}
-			if (!$main_failed && !$append($main_log, $chunk)) {
-				$main_failed = TRUE;
-				$report_write_failure('main log');
-			}
-			if ($viewer_log !== '' && !$viewer_failed) {
-				$shown = min($length, 1048576 - $viewer_bytes);
-				if ($shown > 0) {
-					$bytes = ($shown === $length) ? $chunk : substr($chunk, 0, $shown);
-					if ($append($viewer_log, $bytes)) {
-						$viewer_bytes += $shown;
-					} else {
-						$viewer_failed = TRUE;
-						$report_write_failure('viewer');
-					}
-				}
-				if ($shown < $length && !$notice_written && !$viewer_failed) {
-					$notice_written = TRUE;
-					$notice = "\n[ pfBlockerNG ] Script output limit (1 MiB) reached; remaining output is in the main log.\n";
-					if (!$append($viewer_log, $notice)) {
-						$viewer_failed = TRUE;
-						$report_write_failure('viewer');
-					}
-				}
-			}
+			pfb_script_output_sanitize_chunk($chunk, $utf8_carry, FALSE, $emit);
 			$offset += $length;
+			$flush();
 		}
+		if ($final) {
+			pfb_script_output_sanitize_chunk('', $utf8_carry, TRUE, $emit);
+		}
+		$flush();
 	};
 
 	$retval = -1;
@@ -10742,8 +10845,9 @@ function pfb_script_output_exec(string $command, bool $mirror_stdout = FALSE): i
 			$retval = (int) $status['exitcode'];
 			if ($size === FALSE) {
 				$report_capture_failure();
+				$drain($offset, TRUE);
 			} else {
-				$drain((int) $size);
+				$drain((int) $size, TRUE);
 			}
 			break;
 		}

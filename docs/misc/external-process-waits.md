@@ -86,10 +86,12 @@ When output must be retained, give the child a regular file for stdout/stderr an
 cmd > /tmp/somefile 2>&1 < /dev/null
 ```
 
-The script-output runner uses one fresh private regular capture file per invocation. It polls the direct child, copies bounded
-raw chunks to the main log and the distinct viewer, then drains only the captured size at direct exit; it never waits for
-inherited-fd EOF. Complete bytes go to the main log. The viewer gets up to 1 MiB combined stdout/stderr per PHP script plus
-one notice only on overflow; later progress and invocations remain independent.
+The script-output runner uses one fresh private regular capture file per invocation. Scripts MUST emit UTF-8 or compatible
+ASCII; output is not locale-detected or transcoded. Printable Unicode, LF and TAB stay unchanged. Other ASCII controls and
+DEL, malformed UTF-8 bytes, and CR (including the CR in CRLF) become uppercase `\xNN`; Unicode `Cc`/`Cf` becomes `\u{HEX}`.
+The full sanitized text goes to the main log and, when distinct, the viewer. The main log is uncapped; the viewer gets at
+most 1,000,000 sanitized Unicode code points from combined stdout/stderr. It gets one overflow notice only if more output
+exists. Later progress and invocations remain independent.
 
 ## Package-page visibility is the mirror image: stream to stdout, not just the log file
 
@@ -97,11 +99,12 @@ Same fd stray daemon must *not* hold is one pfSense **Software page reads** to s
 
 Fix (issue #690, widened by ADR-58): `pfb_logger()` **mirrors main-log lines (cases 1/2) to stdout** so the Software page streams live progress. Gate: `pfb_run_streams_to_stdout()` — mirror only when stdout is **real watched surface**: lifecycle callback (`$pfb['hook_lifecycle']`, pkg `| tee` pipe — original #690 case) **OR interactive terminal** (`pfb_stdout_is_terminal()` = `stream_isatty(php://stdout)`, ADR-58 addition, so hand-run pass streams too). Does **not** print when stdout is **log file logger already writes** — cron tick `>> log`, detached Run-Now `>> runlog`, nested extras dispatch (`dc`/`bls`/…) — neither tty nor lifecycle, printing there would double every line; nor for **web in-process caller** (settings-save that resyncs then `header('Location')`, where stdout is HTTP response). Core captures Update stdout/stderr in the dedicated transcript and `GetUpdate` reads only that transcript; the rotating main log remains separate. Unbound-stop wait logs keepalive dots through the same path, closing that silent gap. Visibility only: fd-detach, `--foreground`, redirect safety above untouched.
 
-**Hook and list-script output** uses `pfb_script_output_exec()`: stdout and stderr share a fresh private regular capture file, not a
-pipe. The PHP status loop drains raw 8 KiB chunks to the main log and, when distinct, the viewer; it never waits for inherited-fd
-EOF and its cutoff is the capture size observed when the direct runner exits. A daemon that outlives a global hook cannot hold
-the runner open. Global hooks retain `timeout --foreground` so restarted services survive; list transforms retain default reaper
-mode so a hung transform tree is killed. During package lifecycle callbacks, hook bytes are also mirrored from the capture to
+**Hook and list-script output** uses `pfb_script_output_exec()`: stdout and stderr share a fresh private regular capture file,
+not a pipe. The PHP status loop drains bounded chunks through the UTF-8 sanitizer and writes the full sanitized output to
+the main log plus a character-limited prefix to a distinct viewer. It never waits for inherited-fd EOF; the cutoff is the
+capture size observed when the direct runner exits. A daemon that outlives a global hook cannot hold the runner open. Global
+hooks retain `timeout --foreground` so restarted services survive; list transforms retain default reaper mode so a hung
+transform tree is killed. During package lifecycle callbacks, sanitized hook output is also mirrored from the capture to
 stdout, preserving Software-page visibility without piping child output back to PHP.
 
 ## Following one specific dispatched process — pidfile, not a `ps` pattern or a log string
