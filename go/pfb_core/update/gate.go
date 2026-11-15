@@ -71,17 +71,18 @@ type Status struct {
 
 // Gate admits one Update at a time.
 type Gate struct {
-	logPath string
-	run     RunFunc
-	Admit   func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
-	Launch  func(context.Context, *Admission, Request, *os.File) (Result, error)
-	done    func(Request, Result, error)
-	admit   sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
-	mu      sync.Mutex // everything below, and the log's truncation
-	status  *Status    // replaced when the Update ends, never changed in place: View hands it out
-	gen     int64      // bumped by every Start but the first and by every trim of the log: a cursor from before reads from the start
-	cancel  context.CancelFunc
-	stopped bool
+	logPath        string
+	run            RunFunc
+	Admit          func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
+	Launch         func(context.Context, *Admission, Request, *os.File) (Result, error)
+	done           func(Request, Result, error)
+	admit          sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
+	mu             sync.Mutex // everything below, and the log's truncation
+	status         *Status    // replaced when the Update ends, never changed in place: View hands it out
+	gen            int64      // bumped by every Start but the first and by every trim of the log: a cursor from before reads from the start
+	cancel         context.CancelFunc
+	stopped        bool
+	prepublication bool // this process admitted a worker whose initial status is not published yet
 }
 
 // New returns an idle Gate. Start creates logPath (0600) if it is missing; run executes an Update; done (may be nil) is
@@ -160,6 +161,14 @@ func (g *Gate) Start(req Request, commit func() (map[string]int64, error)) error
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	g.cancel = cancel
+	if lease != nil {
+		g.prepublication = true
+		lease.published = func() {
+			g.mu.Lock()
+			g.prepublication = false
+			g.mu.Unlock()
+		}
+	}
 	g.status = &Status{Trigger: req.Trigger, Scope: req.Scope, Force: req.Force, StartedAt: time.Now().Unix()}
 	go g.execute(ctx, cancel, lease, req, log)
 	return nil
@@ -193,6 +202,7 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, lease *Ad
 		outcome = "failed"
 	}
 	g.mu.Lock()
+	g.prepublication = false
 	ended := *g.status
 	ended.FinishedAt, ended.Result = &finished, outcome
 	g.status = &ended
@@ -272,16 +282,47 @@ func trimLog(log *os.File, size int64) bool {
 	return false
 }
 
-// View: Running; Update (nil until the first Start of this process; the last one stays readable after it finishes);
-// Log: the log bytes from the cursor after (0: the start), at most max bytes (max<=0: 64 KiB); Next: the cursor after Log.
-// A cursor is opaque. One from another Update, a negative one or one past the log's end reads from the start.
-func (g *Gate) View(after int64, max int) View {
+// View reports the locally running Update or the validated worker retained across a restart.
+func (g *Gate) View(after int64, max int) (View, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	v := View{Update: g.status}
-	if g.status != nil {
-		v.Running = g.status.FinishedAt == nil
-		v.Log, v.Next = g.readLog(after, max, v.Running)
+	if g.Admit == nil {
+		return g.viewLocked(g.status, g.status != nil && g.status.FinishedAt == nil, after, max), nil
+	}
+	observed, err := observeWorker(g.logPath)
+	if err != nil {
+		if g.prepublication && g.status != nil && g.status.FinishedAt == nil && errors.Is(err, os.ErrNotExist) {
+			return g.viewLocked(g.status, true, after, max), nil
+		}
+		return View{}, err
+	}
+	if observed.state == nil {
+		if g.status != nil {
+			return View{}, errors.New("the locally admitted Update has no worker status")
+		}
+		return View{}, nil
+	}
+	state := observed.state
+	status := &Status{Trigger: state.Request.Trigger, Scope: state.Request.Scope, Force: state.Request.Force, StartedAt: state.StartedAt}
+	if state.FinishedAt != nil {
+		status.FinishedAt = state.FinishedAt
+		_, runErr := state.outcome()
+		switch {
+		case errors.Is(runErr, ErrDeferred):
+			status.Result = "skipped"
+		case runErr != nil:
+			status.Result = "failed"
+		default:
+			status.Result = "success"
+		}
+	}
+	return g.viewLocked(status, observed.running, after, max), nil
+}
+
+func (g *Gate) viewLocked(status *Status, running bool, after int64, max int) View {
+	v := View{Running: running, Update: status}
+	if status != nil {
+		v.Log, v.Next = g.readLog(after, max, running)
 	}
 	return v
 }

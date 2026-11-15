@@ -11,6 +11,7 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/schedule"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
+
 const receiptNonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func writeReceipt(t *testing.T, logPath, body string) {
@@ -35,14 +36,14 @@ func TestRecoveredReceiptSettlesTheReservedOccurrenceOnce(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "update.log")
 	f.s.cfg.LogPath = logPath
 	writeReceipt(t, logPath, receipt(occ10))
-	if err := f.s.recover(); err != nil {
+	if err := f.s.Recover(); err != nil {
 		t.Fatal(err)
 	}
 	first, err := os.ReadFile(f.path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.recover(); err != nil {
+	if err := f.s.Recover(); err != nil {
 		t.Fatal(err)
 	}
 	second, err := os.ReadFile(f.path)
@@ -59,7 +60,7 @@ func TestOldReceiptDoesNotConsumeANewerPendingOccurrence(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "update.log")
 	f.s.cfg.LogPath = logPath
 	writeReceipt(t, logPath, receipt(occ10))
-	if err := f.s.recover(); err != nil {
+	if err := f.s.Recover(); err != nil {
 		t.Fatal(err)
 	}
 	finished := int64(50)
@@ -72,7 +73,7 @@ func TestScheduleWriteFailureDoesNotSettleTheReceipt(t *testing.T) {
 	f.s.cfg.LogPath = logPath
 	f.s.cfg.StatePath = t.TempDir()
 	writeReceipt(t, logPath, receipt(occ10))
-	if err := f.s.recover(); err == nil {
+	if err := f.s.Recover(); err == nil {
 		t.Fatal("a schedule write to a directory reported success")
 	}
 	if f.s.st[feedA].PendingOccurrence == nil || *f.s.st[feedA].PendingOccurrence != occ10 {

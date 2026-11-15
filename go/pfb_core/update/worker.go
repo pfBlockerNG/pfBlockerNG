@@ -41,6 +41,11 @@ type workerState struct {
 	Result      Result           `json:"result"`
 }
 
+type workerObservation struct {
+	state   *workerState
+	running bool
+}
+
 func init() {
 	if len(os.Args) == 3 && os.Args[1] == workerArg {
 		os.Exit(runWorker(os.Args[2]))
@@ -122,6 +127,53 @@ func readWorkerState(path string) (workerState, error) {
 	}
 	defer f.Close()
 	return decodeWorkerState(f)
+}
+
+func noWorkerState(logPath string) error {
+	for _, suffix := range []string{".request", ".result"} {
+		f, err := operationFile(logPath+suffix, syscall.O_RDONLY)
+		if err == nil {
+			f.Close()
+			return fmt.Errorf("%s exists without worker status", logPath+suffix)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+// observeWorker derives presentation from the validated receipt and lifetime lock without changing either.
+func observeWorker(logPath string) (workerObservation, error) {
+	lock, err := operationLock(logPath)
+	if errors.Is(err, ErrRunning) {
+		state, readErr := readWorkerState(logPath + ".status")
+		if readErr != nil {
+			return workerObservation{}, fmt.Errorf("the running Update has no usable worker status: %w", readErr)
+		}
+		if state.FinishedAt != nil {
+			return workerObservation{}, errors.New("the Update published completion before releasing its lifetime lock")
+		}
+		return workerObservation{state: &state, running: true}, nil
+	}
+	if err != nil {
+		return workerObservation{}, err
+	}
+	defer lock.Close()
+	state, err := readWorkerState(logPath + ".status")
+	if errors.Is(err, os.ErrNotExist) {
+		return workerObservation{}, noWorkerState(logPath)
+	}
+	if err != nil {
+		return workerObservation{}, err
+	}
+	if state.FinishedAt == nil {
+		return workerObservation{}, errors.New("the worker released its lifetime lock without publishing completion")
+	}
+	if !state.Settled {
+		return workerObservation{}, errors.New("the worker completion is waiting to be reconciled")
+	}
+	return workerObservation{state: &state}, nil
 }
 
 func decodeWorkerState(r io.Reader) (workerState, error) {
@@ -239,7 +291,17 @@ func salvageUnfinished(logPath string) error {
 func Recover(logPath string, apply func(int64, map[string]int64, Result, error) error) error {
 	lock, err := operationLock(logPath)
 	if errors.Is(err, ErrRunning) {
-		return nil
+		state, readErr := readWorkerState(logPath + ".status")
+		switch {
+		case errors.Is(readErr, os.ErrNotExist):
+			return nil
+		case readErr != nil:
+			return readErr
+		case state.FinishedAt != nil:
+			return ErrRecoveryRequired
+		default:
+			return nil
+		}
 	}
 	if err != nil {
 		return err
@@ -247,7 +309,7 @@ func Recover(logPath string, apply func(int64, map[string]int64, Result, error) 
 	defer lock.Close()
 	state, err := readWorkerState(logPath + ".status")
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return noWorkerState(logPath)
 	}
 	if err != nil {
 		return err
@@ -302,6 +364,7 @@ func (s workerState) outcome() (Result, error) {
 type Admission struct {
 	lock        *os.File
 	occurrences map[string]int64
+	published   func()
 }
 
 func (a *Admission) Close() error {
@@ -313,11 +376,27 @@ func (a *Admission) Close() error {
 
 func (c *Command) Admit(logPath string) (*Admission, error) {
 	lock, err := operationLock(logPath)
+	if errors.Is(err, ErrRunning) {
+		state, readErr := readWorkerState(logPath + ".status")
+		switch {
+		case errors.Is(readErr, os.ErrNotExist), readErr == nil && state.FinishedAt != nil:
+			return nil, ErrRecoveryRequired
+		case readErr != nil:
+			return nil, fmt.Errorf("cannot observe running worker state: %w", readErr)
+		default:
+			return nil, ErrRunning
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 	a := &Admission{lock: lock}
-	if _, err := readWorkerState(logPath + ".status"); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := readWorkerState(logPath + ".status"); errors.Is(err, os.ErrNotExist) {
+		if err := noWorkerState(logPath); err != nil {
+			a.Close()
+			return nil, fmt.Errorf("cannot recover worker state: %w", err)
+		}
+	} else if err != nil {
 		a.Close()
 		return nil, fmt.Errorf("cannot recover worker state: %w", err)
 	}
@@ -360,6 +439,9 @@ func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os
 	}
 	if err := writeWorkerState(log.Name()+".status", state); err != nil {
 		return Result{}, err
+	}
+	if a.published != nil {
+		a.published()
 	}
 	ready, readyW, err := os.Pipe()
 	if err != nil {

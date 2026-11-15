@@ -33,6 +33,17 @@ func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(s
 	sched.Bind(func(req update.Request, commit func() (map[string]int64, error)) error {
 		return gate.Start(req, commit)
 	})
+	err := sched.Recover()
+	if errors.Is(err, update.ErrRecoveryRequired) {
+		deadline := time.Now().Add(time.Second)
+		for errors.Is(err, update.ErrRecoveryRequired) && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+			err = sched.Recover()
+		}
+	}
+	if err != nil {
+		logf("the retained Update could not be reconciled at startup: %v", err)
+	}
 	var broken atomic.Bool
 	gate.Launch = func(ctx context.Context, lease *update.Admission, req update.Request, log *os.File) (update.Result, error) {
 		if _, err := st.Reload(ctx); err != nil && ctx.Err() == nil && broken.CompareAndSwap(false, true) {
@@ -90,8 +101,8 @@ func hostZone(path string, logf func(string, ...any)) func() *time.Location {
 // scheduled Update from starting under it (update_api_test.go).
 var quarterTimer func(time.Duration) <-chan time.Time
 
-// runUpdates starts the quarter-hour loop and returns the function that ends it: it stops the loop, then the Update
-// running, whose program's process group is killed (an Update stopped this way is not resumed). It may be called again.
+// runUpdates starts the quarter-hour loop and returns the function that stops scheduling and Update observation. An admitted
+// worker owns its transaction independently and is not canceled by this controller shutdown. The function may be called again.
 func runUpdates(ctx context.Context, sched *scheduler.Scheduler, gate *update.Gate) (stop func()) {
 	if sched == nil {
 		return func() {}
@@ -168,6 +179,8 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 				return nil, newError(codeConflict, err.Error())
 			case errors.Is(err, update.ErrStopped), errors.Is(err, scheduler.ErrModel):
 				return nil, newError(codeUnavailable, err.Error())
+			case err != nil:
+				return nil, newError(codeUnavailable, err.Error())
 			}
 			return struct{}{}, err
 		}},
@@ -186,7 +199,14 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 						fieldError{Field: "after", Message: "must be a string of decimal digits that fits 63 bits"})
 				}
 			}
-			return gate.View(after, 0), nil
+			if err := sched.Recover(); err != nil {
+				return nil, newError(codeUnavailable, err.Error())
+			}
+			view, err := gate.View(after, 0)
+			if err != nil {
+				return nil, newError(codeUnavailable, err.Error())
+			}
+			return view, nil
 		}},
 		"GetSchedule": {call: func(_ context.Context, params []byte) (any, error) {
 			if err := decodeParams(params, &struct{}{}); err != nil {

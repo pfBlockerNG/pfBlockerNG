@@ -23,7 +23,7 @@ func TestACursorOfAnEarlierUpdateReadsTheNewLogFromZeroEvenWhenTheNewLogIsLonger
 		t.Fatal(err)
 	}
 	settle(t, g)
-	old := g.View(0, 0)
+	old := mustView(t, g, 0, 0)
 	if old.Log != first {
 		t.Fatalf("the first Update's View = %s, want its log %q", jsonOf(t, old), first)
 	}
@@ -31,11 +31,11 @@ func TestACursorOfAnEarlierUpdateReadsTheNewLogFromZeroEvenWhenTheNewLogIsLonger
 		t.Fatal(err)
 	}
 	settle(t, g)
-	v := g.View(old.Next, 0)
+	v := mustView(t, g, old.Next, 0)
 	if v.Log != second {
 		t.Errorf("View with the first Update's cursor = %q, want the second Update's whole log %q", v.Log, second)
 	}
-	if again := g.View(v.Next, 0); again.Log != "" || again.Next != v.Next {
+	if again := mustView(t, g, v.Next, 0); again.Log != "" || again.Next != v.Next {
 		t.Errorf("View from the cursor the second Update's View returned = log %q next %d, want nothing new and the same cursor %d", again.Log, again.Next, v.Next)
 	}
 	if v.Next == old.Next {
@@ -51,22 +51,22 @@ func TestAViewHoldsBackARuneStillBeingWrittenAtTheEndOfARunningLog(t *testing.T)
 		t.Fatal(err)
 	}
 	h.write(t, "ab\xe2\x82") // the first two bytes of the euro sign
-	v := g.View(0, 0)
+	v := mustView(t, g, 0, 0)
 	if v.Log != "ab" {
 		t.Fatalf("View(0) = %q, want %q: the half written rune waits", v.Log, "ab")
 	}
 	h.write(t, "\xac!")
-	w := g.View(v.Next, 0)
+	w := mustView(t, g, v.Next, 0)
 	if w.Log != "\u20ac!" {
 		t.Fatalf("View after the rune was finished = %q, want %q", w.Log, "\u20ac!")
 	}
 	h.write(t, "\xf0\x9d") // the first two bytes of a rune that is all there is left to read
-	x := g.View(w.Next, 0)
+	x := mustView(t, g, w.Next, 0)
 	if x.Log != "" || x.Next != w.Next {
 		t.Errorf("View of a lone half written rune = log %q next %d, want nothing and the cursor kept at %d", x.Log, x.Next, w.Next)
 	}
 	h.write(t, "\x84\x9e")
-	if y := g.View(x.Next, 0); y.Log != "\U0001d11e" {
+	if y := mustView(t, g, x.Next, 0); y.Log != "\U0001d11e" {
 		t.Errorf("View after that rune was finished = %q, want %q", y.Log, "\U0001d11e")
 	}
 	h.finish(t, nil)
@@ -78,11 +78,11 @@ func TestAViewOfAFinishedLogDeliversATrailingHalfRuneAndReachesTheEnd(t *testing
 		t.Fatal(err)
 	}
 	settle(t, g)
-	v := g.View(0, 0)
+	v := mustView(t, g, 0, 0)
 	if v.Running || v.Log != "x\xe2" {
 		t.Fatalf("View of a finished log ending inside a rune = running %v log %q, want the whole log %q", v.Running, v.Log, "x\xe2")
 	}
-	if again := g.View(v.Next, 0); again.Log != "" || again.Next != v.Next {
+	if again := mustView(t, g, v.Next, 0); again.Log != "" || again.Next != v.Next {
 		t.Errorf("View from the end = log %q next %d, want nothing and the cursor kept at %d", again.Log, again.Next, v.Next)
 	}
 }
@@ -131,7 +131,7 @@ func TestAWriterHoldingAnEarlierUpdatesLogFdAppendsToTheNewLogWithoutAHole(t *te
 	if want := "second\nSTRAY\n"; string(raw) != want || bytes.IndexByte(raw, 0) >= 0 {
 		t.Errorf("the log = %q, want %q with no NUL: the stray write must append after the truncation", raw, want)
 	}
-	if v := g.View(0, 0); v.Log != "second\nSTRAY\n" {
+	if v := mustView(t, g, 0, 0); v.Log != "second\nSTRAY\n" {
 		t.Errorf("View(0) = %q, want %q", v.Log, "second\nSTRAY\n")
 	}
 }

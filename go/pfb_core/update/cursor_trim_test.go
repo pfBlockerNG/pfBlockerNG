@@ -18,7 +18,7 @@ func TestObserverCursorRestartsAfterWorkerTrim(t *testing.T) {
 	}
 	g := New(logPath, nil, nil)
 	g.status = &Status{Trigger: "apply", StartedAt: 1}
-	first := g.View(0, len(old))
+	first := mustView(t, g, 0, len(old))
 	if !strings.HasPrefix(first.Log, "old-line\n") || first.Next == 0 {
 		t.Fatalf("first view = %q next %d", first.Log, first.Next)
 	}
@@ -29,7 +29,7 @@ func TestObserverCursorRestartsAfterWorkerTrim(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte("newest\n"+strings.Repeat("x", len(old))), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	second := g.View(first.Next, len(old))
+	second := mustView(t, g, first.Next, len(old))
 	if strings.Contains(second.Log, "newest") {
 		return
 	}

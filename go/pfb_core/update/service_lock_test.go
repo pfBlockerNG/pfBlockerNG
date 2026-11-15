@@ -78,7 +78,7 @@ read release <&3`)
 	awaitFile(t, filepath.Join(dir, "ready"))
 	g := New(log.Name(), nil, nil)
 	g.status = &Status{Trigger: "apply", StartedAt: 1}
-	first := g.View(0, len("prefix-line\n"))
+	first := mustView(t, g, 0, len("prefix-line\n"))
 	deadline := time.NewTimer(8 * time.Second)
 	defer deadline.Stop()
 	tick := time.NewTicker(20 * time.Millisecond)
@@ -104,7 +104,7 @@ read release <&3`)
 			t.Fatalf("STUCK: the worker trim did not publish a log generation; log size %d", info.Size())
 		}
 	}
-	second := g.View(first.Next, len("prefix-line\n"))
+	second := mustView(t, g, first.Next, len("prefix-line\n"))
 	start, err := os.ReadFile(log.Name())
 	if err != nil {
 		t.Fatal(err)

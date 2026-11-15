@@ -103,6 +103,15 @@ func settle(t *testing.T, g *Gate) {
 	recv(t, free, "the Update never released the gate")
 }
 
+func mustView(t *testing.T, g *Gate, after int64, max int) View {
+	t.Helper()
+	v, err := g.View(after, max)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
 func TestStartAdmitsAnUpdateAndAViewReadsItWhileItHoldsTheGate(t *testing.T) {
 	h := newHold()
 	g := newGate(t, h.run, nil)
@@ -111,7 +120,7 @@ func TestStartAdmitsAnUpdateAndAViewReadsItWhileItHoldsTheGate(t *testing.T) {
 		t.Fatalf("Start on an idle gate = %v, want it admitted", err)
 	}
 	h.write(t, "one\n")
-	v := g.View(0, 0)
+	v := mustView(t, g, 0, 0)
 	if !v.Running || v.Update == nil {
 		t.Fatalf("View = %s, want a running Update", jsonOf(t, v))
 	}
@@ -129,7 +138,7 @@ func TestStartAdmitsAnUpdateAndAViewReadsItWhileItHoldsTheGate(t *testing.T) {
 		t.Errorf("View(0) = log %q next %d, want %q and 4", v.Log, v.Next, "one\n")
 	}
 	h.write(t, "two\n")
-	if v = g.View(v.Next, 0); v.Log != "two\n" || v.Next != 8 || !v.Running {
+	if v = mustView(t, g, v.Next, 0); v.Log != "two\n" || v.Next != 8 || !v.Running {
 		t.Errorf("View(4) = %s, want only the new line, next 8, still running", jsonOf(t, v))
 	}
 	h.finish(t, nil)
@@ -142,13 +151,13 @@ func TestAStartWhileAnUpdateRunsIsRefusedAtOnceAndLeavesItAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.write(t, "one\n")
-	before := g.View(0, 0)
+	before := mustView(t, g, 0, 0)
 	for _, req := range []Request{{Trigger: "scheduled"}, {Trigger: "manual", Scope: "both", Force: "both"}} {
 		if err := g.Start(req, nil); !errors.Is(err, ErrRunning) {
 			t.Errorf("Start(%+v) while an Update runs = %v, want ErrRunning", req, err)
 		}
 	}
-	if after := g.View(0, 0); !reflect.DeepEqual(after, before) {
+	if after := mustView(t, g, 0, 0); !reflect.DeepEqual(after, before) {
 		t.Errorf("the refused Starts changed the running Update:\n before %s\n after  %s", jsonOf(t, before), jsonOf(t, after))
 	}
 	h.finish(t, nil)
@@ -174,12 +183,12 @@ func TestAnUpdateEndsSuccessfulWhenRunReturnsNilAndFailedOtherwise(t *testing.T)
 				t.Fatal(err)
 			}
 			h.write(t, "x\n")
-			if v := g.View(0, 0); !v.Running || v.Update.FinishedAt != nil || v.Update.Result != "" {
+			if v := mustView(t, g, 0, 0); !v.Running || v.Update.FinishedAt != nil || v.Update.Result != "" {
 				t.Fatalf("before run returns, View = %s, want a running Update with no result", jsonOf(t, v))
 			}
 			h.finish(t, c.err)
 			settle(t, g)
-			v := g.View(0, 0)
+			v := mustView(t, g, 0, 0)
 			if v.Running || v.Update == nil || v.Update.Result != c.want || v.Update.FinishedAt == nil || *v.Update.FinishedAt < v.Update.StartedAt {
 				t.Fatalf("after run returns, View = %s, want not running, result %q and finishedAt set", jsonOf(t, v), c.want)
 			}
@@ -215,7 +224,7 @@ func TestDoneSeesTheOutcomeWhileTheGateIsStillHeld(t *testing.T) {
 			req := Request{Trigger: "apply", Feeds: []string{"ipv4:a_v4"}}
 			run := func(context.Context, Request, *os.File) (Result, error) { return want, c.err }
 			done := func(r Request, res Result, err error) {
-				got <- seen{r, res, err, g.Start(Request{Trigger: "manual"}, nil), g.View(0, 0).Running}
+				got <- seen{r, res, err, g.Start(Request{Trigger: "manual"}, nil), mustView(t, g, 0, 0).Running}
 			}
 			g = newGate(t, run, done)
 			if err := g.Start(req, nil); err != nil {
@@ -232,7 +241,7 @@ func TestDoneSeesTheOutcomeWhileTheGateIsStillHeld(t *testing.T) {
 			if !s.running {
 				t.Error("View inside done says the Update is not running, want it running until the gate is released")
 			}
-			if v := g.View(0, 0); v.Running || v.Update.FinishedAt == nil {
+			if v := mustView(t, g, 0, 0); v.Running || v.Update.FinishedAt == nil {
 				t.Errorf("after the gate is released, View = %s, want a finished Update", jsonOf(t, v))
 			}
 		})
@@ -249,14 +258,14 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 	h.write(t, first)
 	h.finish(t, nil)
 	settle(t, g)
-	old := g.View(0, 0)
+	old := mustView(t, g, 0, 0)
 	if old.Log != first || old.Next != int64(len(first)) || old.Update.Result != "success" {
 		t.Fatalf("the first Update's View = %s, want its whole log and a finished status", jsonOf(t, old))
 	}
 	if err := g.Start(Request{Trigger: "apply"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	v := g.View(old.Next, 0)
+	v := mustView(t, g, old.Next, 0)
 	if v.Log != "" || v.Next == old.Next {
 		t.Errorf("View(%d) after the second Start = log %q next %d, want the truncated log read from its start, under a cursor of the new Update", old.Next, v.Log, v.Next)
 	}
@@ -264,7 +273,7 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 		t.Errorf("the status after the second Start = %s, want a running apply Update", jsonOf(t, v))
 	}
 	h.write(t, "new\n")
-	if v = g.View(old.Next, 0); v.Log != "new\n" || g.View(v.Next, 0).Log != "" {
+	if v = mustView(t, g, old.Next, 0); v.Log != "new\n" || mustView(t, g, v.Next, 0).Log != "" {
 		t.Errorf("View(%d) = log %q next %d, want the new log from its start, then nothing from the cursor it returned", old.Next, v.Log, v.Next)
 	}
 	h.finish(t, nil)
@@ -285,12 +294,12 @@ func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
 		fmt.Fprintf(&b, "line %06d %s\n", i, strings.Repeat("x", 20))
 	}
 	h.write(t, "the start\n")
-	early := g.View(0, 0)
+	early := mustView(t, g, 0, 0)
 	h.write(t, b.String())
 
 	var v View
 	for deadline := time.Now().Add(stuck); ; time.Sleep(10 * time.Millisecond) {
-		if v = g.View(0, math.MaxInt32); len(v.Log) < b.Len() {
+		if v = mustView(t, g, 0, math.MaxInt32); len(v.Log) < b.Len() {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -299,7 +308,7 @@ func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
 	}
 	h.write(t, "the end\n")
 
-	v = g.View(0, math.MaxInt32)
+	v = mustView(t, g, 0, math.MaxInt32)
 	first, _, _ := strings.Cut(v.Log, "\n")
 	if !regexp.MustCompile(`^line [0-9]{6} x{20}$`).MatchString(first) {
 		t.Errorf("the trimmed log starts with %q, want a whole line", first)
@@ -310,7 +319,7 @@ func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
 	if limit := maxLog/2 + len("the end\n"); len(v.Log) > limit {
 		t.Errorf("the trimmed log holds %d bytes, want at most %d: the newest lines of at most 4 MiB, then the line after the trim", len(v.Log), limit)
 	}
-	if old := g.View(early.Next, 64<<10); old.Log != g.View(0, 64<<10).Log {
+	if old := mustView(t, g, early.Next, 64<<10); old.Log != mustView(t, g, 0, 64<<10).Log {
 		t.Errorf("View(%d), a cursor from before the trim, reads %.40q, want the trimmed log from its start", early.Next, old.Log)
 	}
 	h.finish(t, nil)
@@ -330,7 +339,7 @@ func TestAViewBeforeAnyStartIsIdleWithNoUpdateAndNoLog(t *testing.T) {
 			g := New(c.path, newHold().run, nil)
 			t.Cleanup(g.Stop)
 			for _, after := range []int64{0, 5, -1} {
-				v := g.View(after, 3)
+				v := mustView(t, g, after, 3)
 				if !reflect.DeepEqual(v, View{}) {
 					t.Errorf("View(%d) before any Start = %s, want an idle View with no Update and no log", after, jsonOf(t, v))
 				}
@@ -365,15 +374,15 @@ func TestAViewBoundsTheBytesAdvancesNextAndRestartsFromZeroOutOfRange(t *testing
 		{0, 0, "0123456789", 10, "max 0: the default bound"},
 		{3, -5, "3456789", 10, "a negative max: the default bound"},
 	} {
-		if v := g.View(c.after, c.max); v.Log != c.log || v.Next != c.next {
+		if v := mustView(t, g, c.after, c.max); v.Log != c.log || v.Next != c.next {
 			t.Errorf("View(%d, %d) [%s] = log %q next %d, want %q and %d", c.after, c.max, c.situation, v.Log, v.Next, c.log, c.next)
 		}
 	}
 	h.write(t, strings.Repeat("a", 70000))
-	if v := g.View(0, 0); len(v.Log) != 64<<10 || v.Next != 64<<10 {
+	if v := mustView(t, g, 0, 0); len(v.Log) != 64<<10 || v.Next != 64<<10 {
 		t.Errorf("View(0, 0) on a 70010 byte log = %d bytes next %d, want the default bound of 65536", len(v.Log), v.Next)
 	}
-	if v := g.View(0, math.MaxInt); len(v.Log) != 70010 || v.Next != 70010 {
+	if v := mustView(t, g, 0, math.MaxInt); len(v.Log) != 70010 || v.Next != 70010 {
 		t.Errorf("View(0, MaxInt) = %d bytes next %d, want the whole 70010 byte log", len(v.Log), v.Next)
 	}
 	h.finish(t, nil)
@@ -398,7 +407,7 @@ func TestAViewNeverSplitsARuneAcrossItsBound(t *testing.T) {
 		{6, 4, "\U0001d11e", 10},
 		{1, 1, "\xc3", 2}, // a bound inside the first rune must still advance
 	} {
-		if v := g.View(c.after, c.max); v.Log != c.log || v.Next != c.next {
+		if v := mustView(t, g, c.after, c.max); v.Log != c.log || v.Next != c.next {
 			t.Errorf("View(%d, %d) = log %q next %d, want %q and %d", c.after, c.max, v.Log, v.Next, c.log, c.next)
 		}
 	}
@@ -424,7 +433,7 @@ func TestStopCancelsTheRunningUpdateWaitsForItAndRefusesLaterStarts(t *testing.T
 	default:
 		t.Fatal("Stop returned before the Update had finished")
 	}
-	if v := g.View(0, 0); v.Running || v.Update.Result != "failed" || v.Update.FinishedAt == nil {
+	if v := mustView(t, g, 0, 0); v.Running || v.Update.Result != "failed" || v.Update.FinishedAt == nil {
 		t.Errorf("after Stop, View = %s, want a finished, failed Update", jsonOf(t, v))
 	}
 	if err := g.Start(Request{Trigger: "manual"}, nil); !errors.Is(err, ErrStopped) {
@@ -502,7 +511,7 @@ func TestAnUnwritableLogPathFailsStartAndLeavesTheGateFree(t *testing.T) {
 			t.Errorf("Start #%d with a log in a missing directory = %v, want the error of creating the log", attempt, err)
 		}
 	}
-	if v := g.View(0, 0); !reflect.DeepEqual(v, View{}) {
+	if v := mustView(t, g, 0, 0); !reflect.DeepEqual(v, View{}) {
 		t.Errorf("View after the failed Starts = %s, want an idle gate with no Update", jsonOf(t, v))
 	}
 	if n := h.runs.Load(); n != 0 {

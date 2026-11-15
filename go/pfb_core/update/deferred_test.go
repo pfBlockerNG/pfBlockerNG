@@ -43,7 +43,7 @@ func TestADeferredUpdateEndsSkippedAndDoneSeesTheDeferral(t *testing.T) {
 		t.Errorf("done was called with %v, want ErrDeferred", err)
 	}
 	settle(t, g)
-	v := g.View(0, 0)
+	v := mustView(t, g, 0, 0)
 	if v.Running || v.Update == nil || v.Update.Result != "skipped" || v.Update.FinishedAt == nil {
 		t.Errorf("View = %s, want a finished Update whose result is skipped", jsonOf(t, v))
 	}

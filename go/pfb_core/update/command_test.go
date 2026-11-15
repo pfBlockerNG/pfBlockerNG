@@ -417,7 +417,7 @@ func TestTheGateRunsTheCommandFromStartToTheRecordedResult(t *testing.T) {
 	if e.err != nil || !reflect.DeepEqual(e.res, want) {
 		t.Errorf("done got (%s, %v), want (%s, nil)", jsonOf(t, e.res), e.err, jsonOf(t, want))
 	}
-	v := g.View(0, 0)
+	v := mustView(t, g, 0, 0)
 	if v.Running || v.Update.Result != "success" || !strings.Contains(v.Log, `"trigger":"scheduled"`) || !strings.HasSuffix(v.Log, "working\n") {
 		t.Errorf("View = %s, want a successful Update whose log holds the program's stdin and output", jsonOf(t, v))
 	}

@@ -170,11 +170,21 @@ func (c *runningCore) waitLog(after string, text string) updateView {
 	return v
 }
 
-// waitFinished waits until the last Update is one of trigger that has ended.
+// waitFinished waits until the last Update is one of trigger that has ended. A terminal publication can precede worker unlock;
+// that observation is temporarily unavailable and the next poll reconciles it.
 func (c *runningCore) waitFinished(trigger string) updateView {
 	c.t.Helper()
 	var v updateView
-	waitFor(c.t, func() bool { v = c.getUpdate(""); return !v.Running && v.Update != nil && v.Update.Trigger == trigger })
+	waitFor(c.t, func() bool {
+		got := c.post("GetUpdate", `{}`)
+		if got.status == http.StatusServiceUnavailable {
+			return false
+		}
+		if got.status != http.StatusOK || json.Unmarshal(got.body, &v) != nil {
+			c.t.Fatalf("GetUpdate = %d %s", got.status, got.body)
+		}
+		return !v.Running && v.Update != nil && v.Update.Trigger == trigger
+	})
 	return v
 }
 

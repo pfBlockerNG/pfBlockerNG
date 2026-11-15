@@ -57,7 +57,7 @@ type Scheduler struct {
 	mu         sync.Mutex // everything below; held while start runs, so a result waits for its own reservation
 	st         schedule.State
 	geoipReady bool // the Outpost's last report; true until it makes one
-	start func(update.Request, func() (map[string]int64, error)) error
+	start      func(update.Request, func() (map[string]int64, error)) error
 }
 
 // New loads the state file: absent is an empty state; unreadable or invalid is logged and an empty state too, because the
@@ -228,26 +228,26 @@ func (s *Scheduler) Start(trigger, scope, force string) error {
 }
 
 func (s *Scheduler) admit(fn func() error) error {
-	if err := s.recover(); err != nil {
+	if err := s.Recover(); err != nil {
 		return err
 	}
 	err := fn()
 	if !errors.Is(err, update.ErrRecoveryRequired) {
 		return err
 	}
-	if err := s.recover(); err != nil {
+	if err := s.Recover(); err != nil {
 		return err
 	}
 	return fn()
 }
 
-func (s *Scheduler) recover() error {
+// Recover reconciles one retained worker completion outside the scheduler mutex.
+func (s *Scheduler) Recover() error {
 	if s.cfg.LogPath == "" {
 		return nil
 	}
 	return update.Recover(s.cfg.LogPath, s.reconcile)
 }
-
 
 func (s *Scheduler) reconcile(at int64, reserved map[string]int64, res update.Result, runErr error) error {
 	s.mu.Lock()
@@ -303,7 +303,7 @@ func (s *Scheduler) reconcile(at int64, reserved map[string]int64, res update.Re
 // its last_successful_check. The state is written once; a failed run's outcomes still count.
 func (s *Scheduler) Done(req update.Request, res update.Result, err error) {
 	if s.cfg.LogPath != "" {
-		if recErr := s.recover(); recErr != nil {
+		if recErr := s.Recover(); recErr != nil {
 			s.cfg.Logf("scheduler: the Update result was not recorded: %v", recErr)
 		}
 		return
