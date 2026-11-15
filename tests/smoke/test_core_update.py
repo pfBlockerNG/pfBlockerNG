@@ -259,8 +259,10 @@ def _snapshot(vm: SmokeVM, paths: list[str]) -> dict[str, tuple[bytes, str]]:
 
 def _assert_feed_disposition(log: str, feed_id: str, disposition: str) -> None:
     # The ID is matched whole: `ipv4:x_v4` must not be satisfied by the line of `custom:ipv4:x_v4`.
-    pattern = rf"(?<![A-Za-z0-9_:-]){re.escape(feed_id)}(?![A-Za-z0-9_:-])[^\n]*\b{disposition}\b"
-    assert re.search(pattern, log), f"Core Update log has no {feed_id} {disposition} result:\n{log[-4000:]}"
+    pattern = rf"^feed {re.escape(feed_id)}: {re.escape(disposition)}$"
+    assert re.search(pattern, log, re.MULTILINE), (
+        f"Core Update log has no {feed_id} {disposition} result:\n{log[-4000:]}"
+    )
 
 
 def _add_ip_custom_lists(vm: SmokeVM, custom: dict[str, tuple[str, str]]) -> None:

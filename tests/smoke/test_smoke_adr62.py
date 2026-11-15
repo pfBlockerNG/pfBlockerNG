@@ -45,7 +45,7 @@ import pytest
 
 from . import helpers as h
 from .conftest import STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
-from .test_core_update import _assert_feed_disposition, _run_update
+from .test_core_update import _assert_feed_disposition, _prepare_mock_feeds, _run_update
 
 pytestmark = pytest.mark.smoke
 
@@ -82,15 +82,15 @@ def _set_dnsbl_row_state(vm: SmokeVM, header: str, state: str, *, timeout: float
 def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
     """Deploy the branch .pkg once for the ADR-62 closing rows (mirrors the ABP module).
 
-    All feeds here are delivered via ``write_local_feed`` (no HTTP mock needed — Part
-    C's HTTP-fetch contract is proven elsewhere); egress is managed per-case by
-    ``CaseContext``. The DNSBL VIP is injected once (DNSBL force-disables itself
-    without one) and System DNS points at the controlled stub.
+    Local feeds cover the parser rows; recorded HTTP sources prove that Hold never
+    refetches its baseline. Only that mock origin is allowlisted, with the address
+    guard kept on. The DNSBL VIP is injected and System DNS points at the controlled
+    stub; ``CaseContext`` manages per-case egress.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
+    _prepare_mock_feeds(smoke_vm, dnsbl=True)
     h.use_system_dns_upstream(smoke_vm)
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
