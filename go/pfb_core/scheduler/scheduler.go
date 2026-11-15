@@ -166,6 +166,7 @@ func (s *Scheduler) evaluate(trigger string, force bool) error {
 		}
 	}
 	if err := s.launch(req); err != nil {
+		s.prepared, s.snap = nil, nil
 		if errors.Is(err, update.ErrRunning) {
 			cfg.Logf("scheduler: the %s Update was skipped: %v", trigger, err)
 		} else {
@@ -234,14 +235,16 @@ func (s *Scheduler) recover() error {
 // CommitAdmission writes the reservation before the worker is released. The caller holds s.mu.
 func (s *Scheduler) CommitAdmission() (map[string]int64, error) {
 	if s.prepared == nil {
-		return s.snap, nil
+		s.snap = nil
+		return nil, nil
 	}
-	if err := writeState(s.cfg.StatePath, s.prepared); err != nil {
+	prepared, snap := s.prepared, s.snap
+	s.prepared, s.snap = nil, nil
+	if err := writeState(s.cfg.StatePath, prepared); err != nil {
 		return nil, err
 	}
-	s.st = s.prepared
-	s.prepared = nil
-	return s.snap, nil
+	s.st = prepared
+	return snap, nil
 }
 
 func (s *Scheduler) reconcile(at int64, reserved map[string]int64, res update.Result, runErr error) error {

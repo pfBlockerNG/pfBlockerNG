@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -8,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/schedule"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
-
 const receiptNonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func writeReceipt(t *testing.T, logPath, body string) {
@@ -80,5 +81,25 @@ func TestScheduleWriteFailureDoesNotSettleTheReceipt(t *testing.T) {
 	body, err := os.ReadFile(logPath + ".status")
 	if err != nil || strings.Contains(string(body), `"settled":true`) {
 		t.Fatalf("receipt settled despite the schedule write failure: %s %v", body, err)
+	}
+}
+
+func TestRejectedRetryCannotLeakReservationIntoManualAdmission(t *testing.T) {
+	f := newFixture(t, allEntries(), stateText(map[string]string{feedA: pending(occ10)}))
+	f.s.Bind(func(update.Request) error { return update.ErrRunning })
+	if err := f.s.Start("retry", "", ""); !errors.Is(err, update.ErrRunning) {
+		t.Fatal(err)
+	}
+	later := occ10 + 900
+	f.s.st[feedA] = schedule.Item{PendingOccurrence: &later}
+	if err := writeState(f.path, f.s.st); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Bind(func(update.Request) error { _, err := f.s.CommitAdmission(); return err })
+	if err := f.s.Start("manual", "both", "none"); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.s.st[feedA].PendingOccurrence; p == nil || *p != later {
+		t.Fatalf("manual admission overwrote newer pending with stale rejected retry: %+v", f.s.st[feedA])
 	}
 }
