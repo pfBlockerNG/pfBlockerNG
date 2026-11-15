@@ -252,6 +252,9 @@ func Recover(logPath string, apply func(int64, map[string]int64, Result, error) 
 	if err != nil {
 		return err
 	}
+	if state.Settled {
+		return nil
+	}
 	if state.FinishedAt == nil {
 		if err := salvageUnfinished(logPath); err != nil {
 			return err
