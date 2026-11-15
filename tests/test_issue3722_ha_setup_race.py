@@ -8,6 +8,7 @@ live proof is the HA modules themselves (``tests/smoke/test_ha_policy_authority.
 from __future__ import annotations
 
 import importlib
+import json
 import math
 import subprocess
 import time
@@ -66,6 +67,11 @@ class _Guest(FakeNode):
         **kwargs: Any,
     ) -> None:
         super().__init__(name, **kwargs)
+        self.host = "127.0.0.1"
+        self.ssh_port = 2222 if name == "primary" else 2227
+        self.web_port = 8080 if name == "primary" else 8085
+        self.vm_pid = 123 if name == "primary" else 124
+        self.admitted = False
         self.deferrals = deferrals  # None: the lock never frees
         self.rc = rc
         self.pass_seconds, self.clock = pass_seconds, clock  # what one pass costs on the guest's clock
@@ -82,7 +88,35 @@ class _Guest(FakeNode):
         if self.deferrals is None or self.passes <= self.deferrals:
             self.files.add(MARKER)
             return subprocess.CompletedProcess(remote, self.rc, "", "Feed pass [ sync ] deferred - dispatcher lock\n")
+        self.admitted = True
+        if MARKER in self.files:
+            self.files.add(APPLIED)
         return subprocess.CompletedProcess(remote, 0, "", "")
+
+    def php(self, snippet: str) -> subprocess.CompletedProcess[str]:
+        value: object
+        if "$pending = @file_get_contents" in snippet:
+            value = ["saved" if MARKER in self.files else None, "saved" if APPLIED in self.files else None]
+        elif "pfb_dns_proxy_serving_ready()" in snippet:
+            value = {"enable_cb": "", "dnsbl": "", "pfb_dns": "", "serving": None}
+        else:
+            return super().php(snippet)
+        from tests.smoke import helpers
+
+        return subprocess.CompletedProcess(
+            [], 0, f"{helpers._CFG_VAL_OPEN}{json.dumps(value)}{helpers._CFG_VAL_CLOSE}", ""
+        )
+
+
+@pytest.fixture(autouse=True)
+def guest_api(monkeypatch: pytest.MonkeyPatch, hp: ModuleType) -> None:
+    def core_calls(vm: _Guest, calls: list[tuple[str, object]], **_kw: object) -> list[dict[str, object]]:
+        assert calls == [("GetUpdate", {})], calls
+        status = {"trigger": "manual", "scope": "both", "force": "none", "result": "success"} if vm.admitted else None
+        return [{"status": 200, "body": {"running": False, "update": status, "log": "", "next": "opaque"}}]
+
+    monkeypatch.setattr(hp.h, "core_calls", core_calls)
+    monkeypatch.setattr(hp.h, "php_eval", lambda vm, snippet, **_kw: vm.php(snippet))
 
 
 @pytest.fixture
@@ -118,7 +152,6 @@ def seams(hp: ModuleType, ha: ModuleType, monkeypatch: pytest.MonkeyPatch) -> No
         "ensure_dnsbl_vip",
         "set_dnsbl_enabled",
         "wait_unbound_ready",
-        "_require_pfb_dns_serving",
         "release_pfb_dns",
     ):
         monkeypatch.setattr(hp.h, name, lambda *_a, **_k: None)

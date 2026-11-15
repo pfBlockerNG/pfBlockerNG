@@ -293,6 +293,9 @@ once and reads again, and the Update's start reads the backend again ([Update an
 | `suppressionCidrV6` | int 0 to 64 (0: Disabled), `0` | ip `suppression_cidr_v6`: plain digits 1 to 64, else 0 |
 | `dnsblIp` | bool, `false` | DNSBL `action` is valid and not `Disabled` (`pfb_dnsblip_action_value()`) |
 | `dnsblLenient` | bool, `false` | DNSBL `pfb_dnsbl_lenient` is `on` |
+| `feedSanity` | bool, `false` | General `pfb_feed_sanity` is `on`; the existing wire/extracted-text sanity guard |
+| `etBlockCategories` | list keyed by `category`, `[]`; item `{category: string}` | Reputation `etblock` selections; empty or `x` means none |
+| `etMatchCategories` | list keyed by `category`, `[]`; item `{category: string}` | Reputation `etmatch` selections; empty or `x` means none |
 | `feedHostFilter` | bool, `true` | `pfb_feed_filter_enabled()` |
 | `feedHostAllowlist` | list keyed by `cidr`, `[]`; item `{cidr: string}` | `pfb_feed_internal_allowlist()`: IP addresses and CIDRs, each once |
 | `selfAddresses` | list keyed by `address`, `[]`; item `{address: string}` | the addresses `pfb_ip_is_self()` accepts beyond `127.0.0.1` and `::1` |
@@ -303,7 +306,7 @@ once and reads again, and the Update's start reads the backend again ([Update an
 
 - **Suppression limits.** A limit beyond what the IP page offers (hand-edited config.xml: 18, 8.5, `1e1`, negative) reads as
   0, as a group's own `suppressionCidr` reads a value out of its range; today's PHP applies such a number as typed. A limit
-  applies only while `suppression` is on.
+  applies only while `suppression` is on. GeoIP ignores the global floors but retains an explicit group IPv4 floor.
 - **Allowlist.** Split on whitespace and commas, base64 as General stores it, an entry that is no address or subnet dropped,
   as PHP drops it. Core's list holds an address or a CIDR with no zone and no leading zero in the prefix length, each once, so
   an entry PHP keeps and Core's list cannot hold (`fe80::1%em0`, `10.0.0.0/08`) is not listed. The list is read whether the
@@ -485,6 +488,9 @@ FeedPhase call. Extras still use `pfb_download()` until #3978. The deprecated `c
 remain. The method deadline is 4 hours.
 FTP probes compare the server's modification time and size with the successful baseline. Missing or changed metadata falls
 back to a downloaded content hash; equal bytes remain unchanged, and changed bytes are ingested without a second transfer.
+ET IQRisk uses the existing category splitter and trusted `--feed-db-dir` paths: `ET/` and
+`match/generated/pfB_Match_ET_v4.txt`. An explicit parse-only reuse reprocesses a retained gzip `.raw` without a transfer;
+without `.raw` it reparses the existing baseline. An ordinary unchanged probe does not reprocess the archive.
 Before requesting the IP phase, the Outpost must run its existing `asn_shell scheduled` step when any named feed has format
 `whois` or `asn`, or a named group uses `whoisConvert`, and `asn.csv` is missing. If it remains unavailable, Core returns a
 failed `whois` result with reason `asn_database_missing`; a WHOIS batch that resolves other entries keeps its partial publication.
@@ -501,6 +507,11 @@ result always has these fields:
 | `entries`, `parseFailures`, `mappedDrops`, `dnsblRows`, `ipv4Count`, `ipv6Count`, `schemeSkipped` | Non-negative JSON integers; zero when not applicable. |
 | `suppressed`, `updateIP`, `hpHostsStop`, `preScriptFailed`, `sourceChanged`, `normalizedChanged` | JSON booleans. |
 | `placeholder` | `""`, `empty` or `suppressed`. For an IP result PHP supplies its configured placeholder IP when this is not empty. |
+
+`mappedDrops` is a subset of `parseFailures`, not an additional error count. Change flags describe stages observed during
+this attempt; they do not confirm publication or live application. IP parsed artifacts contain only real addresses: PHP
+appends its configured placeholder when signaled. A failed DNSBL refresh retains current-generation last-good staging in
+the published manifest as well as retaining its files; the failed source remains pending rather than recording success.
 
 Core publishes successful parsed files beside their `.orig` baseline on the same filesystem: `<header>_v4.parsed.ip` or
 `<header>_v6.parsed.ip` for IP feeds; `<header>.parsed.ndjson`, `<header>.parsed.v4.ip` and `<header>.parsed.v6.ip` for DNSBL.

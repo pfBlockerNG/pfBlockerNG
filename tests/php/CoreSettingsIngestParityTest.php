@@ -172,7 +172,7 @@ final class CoreSettingsIngestParityTest extends TestCase
 			$this->assertContains($id, $refused, "the hostile row {$id}");
 		}
 		$this->assertSame(['suppression', 'suppressionCidrV4', 'suppressionCidrV6', 'dnsblIp', 'dnsblLenient', 'feedHostFilter', 'feedHostAllowlist', 'selfAddresses',
-			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
+			'proxyUrl', 'proxyUser', 'proxyPassword', 'proxyUnusable', 'feedSanity', 'etBlockCategories', 'etMatchCategories'], array_keys($doc['defaults']), 'the defaults name every field in the protocol order');
 	}
 
 	/** @param array<string, mixed> $case */

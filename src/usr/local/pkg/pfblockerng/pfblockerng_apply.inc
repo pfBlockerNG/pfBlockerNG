@@ -127,7 +127,8 @@ function pfb_dnsbl_feed_phase_id(array $list, array $row, string $header): ?stri
 	} else {
 		$id = pfb_schedule_feed_id('dnsbl', $header);
 	}
-	return is_string($id) && strlen($id) <= 64 && preg_match('/\A[A-Za-z0-9:_-]+\z/', $id) === 1 ? $id : NULL;
+	return is_string($id) && (pfb_blacklist_feed_id_valid($id)
+		|| (strlen($id) <= 64 && preg_match('/\A[A-Za-z0-9:_-]+\z/', $id) === 1)) ? $id : NULL;
 }
 
 function pfb_dnsbl_feed_phase_ids(array $lists, callable $include): array
@@ -141,7 +142,7 @@ function pfb_dnsbl_feed_phase_ids(array $lists, callable $include): array
 			if (!is_array($row) || empty($row['url']) || ($row['state'] ?? 'Disabled') === 'Disabled') {
 				continue;
 			}
-			$header = pfb_filter((string) ($row['header'] ?? ''), PFB_FILTER_WORD, 'DNSBL - Processes');
+			$header = pfb_dnsbl_row_header($row);
 			if (empty($header)) {
 				continue;
 			}
@@ -1855,6 +1856,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$update_flag	= "{$pfb['dbdir']}/{$feedname}/{$feedname}.update";
 
 						foreach ($categories as $category) {
+							if (!pfb_blacklist_feed_id_valid("blacklist:{$type}:{$category}")) {
+								continue;
+							}
 
 							// Replace dash to underscore in Header name
 							// Preserve the provider's raw category token in Core's stable ID.
@@ -2056,7 +2060,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						if (empty($row['url']) || ($row['state'] ?? 'Disabled') === 'Disabled') {
 							continue;
 						}
-						$header = pfb_filter((string) ($row['header'] ?? ''), PFB_FILTER_WORD, 'DNSBL - Processes');
+						$header = pfb_dnsbl_row_header($row);
 						if (empty($header)) {
 							pfb_logger("\n[ {$row['url']} ]{$logtab} Header Field cannot be empty. *Skipping* \n", 2);
 							continue;
@@ -2127,7 +2131,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										$row, $header, $alias, $logging_type, $custom, $mode, $filter_top1m, $pfbfolder): void {
 										$lists_dnsbl_all[] = "{$row['header']}.txt";
 										$pfb_py_feeds[] = pfb_feed_manifest_row(
-											$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m);
+											$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m)
+											+ ['feed_phase_id' => $row['feed_phase_id'] ?? ''];
 										$alias_cnt = pfb_dnsbl_alias_count_script_failure("{$pfbfolder}/{$header}.txt", $alias_cnt);
 									}
 								);
@@ -2136,6 +2141,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$pfb_dl_failed = TRUE;
 								pfb_logger("\n{$message}\n", 2);
 								pfb_download_ledger_failure('dnsbl', $alias, $header, $pfb['dbdir']);
+								if ($staging_current_generation) {
+									$lists_dnsbl_all[] = "{$row['header']}.txt";
+									$pfb_py_feeds[] = pfb_feed_manifest_row(
+										$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m)
+										+ ['feed_phase_id' => $row['feed_phase_id'] ?? ''];
+									$alias_cnt = pfb_dnsbl_alias_count_script_failure($txt, $alias_cnt);
+								}
 							}
 							continue;
 						}
@@ -2160,7 +2172,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 							$lists_dnsbl_all[] = "{$row['header']}.txt";
 							$pfb_py_feeds[] = pfb_feed_manifest_row(
-								$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m);
+								$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m)
+								+ ['feed_phase_id' => $row['feed_phase_id'] ?? ''];
 							$alias_cnt = pfb_dnsbl_alias_count_verbatim($txt, $alias_cnt);
 							if (!empty($pfb['scheduled_runtime_cron']) && $scheduled_selected) {
 								pfb_schedule_outcome_record($feed_id, PfbScheduleTerminalResult::Success);
@@ -2234,7 +2247,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$pfb['domain_update'] = $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
 						$lists_dnsbl_all[] = "{$row['header']}.txt";
 						$pfb_py_feeds[] = pfb_feed_manifest_row(
-							$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m);
+							$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m)
+							+ ['feed_phase_id' => $row['feed_phase_id'] ?? ''];
 						if (file_exists("{$pfbfolder}/{$header}.bk")) {
 							@rename("{$pfbfolder}/{$header}.bk", $txt);
 						}
@@ -3476,7 +3490,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 						}
 						$has_data = $parsed_size > 0 || $placeholder !== '';
-						$parse_fail = $feed_result['parseFailures'] + $feed_result['mappedDrops'];
+						$parse_fail = $feed_result['parseFailures'];
 						$ip_suppressed = $feed_result['suppressed'];
 						pfb_ip_parse_fail_warn($parse_fail, $header);
 						pfb_logger("\n", 1);

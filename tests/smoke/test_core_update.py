@@ -418,10 +418,11 @@ def test_retry_update_runs_core_feed_phase_for_every_regular_feed_type(core_vm: 
         folder = "dnsbl" if kind == "dnsbl" else "deny"
         assert vm.ssh("touch", f"{DB}/{folder}/{stem}.fail").returncode == 0, f"cannot mark {feed_id} for retry"
 
-    with h.scheduled_updates_on(vm):
+    dnsbl_group = next(feed_id.split(":", 1)[1] for feed_id in regular if feed_id.startswith("dnsbl:"))
+    with h.due_feed_group(vm, "dnsbl", dnsbl_group):
         update, log = _run_update(vm, "retry")
 
-    assert update["trigger"] == "retry", f"Core ran {update}"
+    assert (update["trigger"], update["result"]) == ("retry", "success"), f"Core ran {update}"
     for feed_id, mock in regular.items():
         _assert_feed_disposition(log, feed_id, "changed")
         assert 200 in mock_feeds.statuses(mock)[seen[mock] :], f"{feed_id}: retry never fetched the source"
@@ -493,15 +494,30 @@ def test_core_failed_transfer_keeps_last_good_files_and_retry_state_until_recove
     """
     vm = core_vm
     feed = _arrange_one_feed(vm, mock_feeds, kind, f"fail{kind}")
+    recovery_body = "198.51.100.99\n"
+    if kind == "dnsbl":
+        blocked = h.unique_domain("coreupdfail")
+        recovered_domain = h.unique_domain("coreupdrecovered")
+        mock_feeds.set_content(feed.mock, f"{blocked}\n")
+        recovery_body = f"{recovered_domain}\n"
     h.tell_core_the_settings_changed(vm)
     _run_manual_update(vm, feed.scope)
+    if kind == "dnsbl":
+        h.wait_unbound_ready(vm)
+        h._require_pfb_dns_serving(vm)
+        answer = h.dns_probe(vm, blocked)
+        assert h.is_vip(answer), f"baseline DNSBL feed is not live: {answer}"
+        manifest = vm.ssh("cat", "/var/unbound/pfb_py_sources.json")
+        assert manifest.returncode == 0, f"cannot read baseline DNSBL manifest: {manifest.stderr}"
+        baseline_rows = [row for row in json.loads(manifest.stdout)["feeds"] if row["feed"] == f"coreupdfail{kind}"]
+        assert len(baseline_rows) == 1, f"baseline DNSBL feed header is not published: {baseline_rows}"
     before = _snapshot(vm, feed.files)
     seen = len(mock_feeds.statuses(feed.mock))
     absent = vm.ssh("test", "!", "-f", feed.fail_marker)
     assert absent.returncode == 0, f"precondition: successful baseline left {feed.fail_marker}"
     mock_feeds.set_status(feed.mock, 503)
 
-    with h.scheduled_updates_on(vm):
+    with h.due_feed_group(vm, kind, f"coreupdfail{kind}"):
         _, log = _run_update(vm, "manual", feed.scope)
         failed = mock_feeds.statuses(feed.mock)[seen:]
         after = _snapshot(vm, feed.files)
@@ -510,12 +526,32 @@ def test_core_failed_transfer_keeps_last_good_files_and_retry_state_until_recove
         ledger_result = vm.ssh("cat", "/usr/local/etc/pfb_core/schedule_state.json")
         assert ledger_result.returncode == 0, f"cannot read Core outcome ledger: {ledger_result.stderr}"
         ledger = json.loads(ledger_result.stdout)
+        if kind == "dnsbl":
+            manifest = vm.ssh("cat", "/var/unbound/pfb_py_sources.json")
+            assert manifest.returncode == 0, f"cannot read failed-transfer DNSBL manifest: {manifest.stderr}"
+            retained_rows = [row for row in json.loads(manifest.stdout)["feeds"] if row["feed"] == f"coreupdfail{kind}"]
+            assert len(retained_rows) == 1, f"503 dropped/duplicated the published DNSBL feed header: {retained_rows}"
+            h.wait_unbound_ready(vm)
+            h._require_pfb_dns_serving(vm)
+            answer = h.dns_probe(vm, blocked)
+            assert h.is_vip(answer), f"503 removed the live DNSBL block before cache flush: {answer}"
+            h.flush_unbound_name(vm, blocked)
+            answer = h.dns_probe(vm, blocked)
+            assert h.is_vip(answer), f"503 removed the live DNSBL block after cache flush: {answer}"
 
         mock_feeds.set_status(feed.mock, None)
-        mock_feeds.set_content(feed.mock, "ads2.example.org\n" if kind == "dnsbl" else "198.51.100.99\n")
-        _, recovered_log = _run_update(vm, "retry")
+        mock_feeds.set_content(feed.mock, recovery_body)
+        recovered_update, recovered_log = _run_update(vm, "retry")
         recovered = _snapshot(vm, feed.files)
+        if kind == "dnsbl":
+            h.wait_unbound_ready(vm)
+            h._require_pfb_dns_serving(vm)
+            answer = h.dns_probe(vm, recovered_domain)
+            assert h.is_vip(answer), f"recovered DNSBL feed is not live: {answer}"
 
+    assert (recovered_update["trigger"], recovered_update["result"]) == ("retry", "success"), (
+        f"Core recovery ran {recovered_update}"
+    )
     assert failed and set(failed) == {503}, f"the Update must see only the failing source: {failed}"
     assert before == after, f"a failed transfer changed the last-good files: before={before!r} after={after!r}"
     assert marker.returncode == 0, "a failed transfer cleared the feed's .fail retry marker"

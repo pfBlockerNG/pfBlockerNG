@@ -184,15 +184,15 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	}
 
 	/**
-	 * #993: the apply monolith owns feed download and appliance side effects, so its loop
-	 * cannot be driven safely off-appliance. Pin each live failure binding in a route scope;
-	 * php_strip_whitespace() removes comments/docblocks from the source under test.
+	 * The real full-pass regressions in DnsblVipApplyLifecycleTest cover publication too.
+	 * Pin each live script failure binding in the failed-result arm, not the later
+	 * unchanged-result marker-cleanup guard; strip comments before matching.
 	 */
 	public function testEachFamilyBindsFailureContinueAndCloseOnce(): void
 	{
 		$source = php_strip_whitespace(self::APPLY);
 		foreach (['dnsbl', 'ip'] as $family) {
-			$start = 'if (!$pfb_' . $family . '_phase_skipped && $phase_required';
+			$start = 'if (!$pfb_' . $family . '_phase_skipped && $phase_required && (!is_array($feed_result)';
 			$end = "pfb_download_ledger_close_if_clean('{$family}',";
 			$call = "pfb_{$family}_script_failure_continue(";
 			$scope = $this->applyScope($source, $start, $end);

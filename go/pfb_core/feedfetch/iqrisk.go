@@ -36,6 +36,43 @@ var etCategories = [...]string{1: "ET_Cnc", "ET_Bot", "ET_Spam", "ET_Drop", "ET_
 	"ET_Abusedtld", "ET_Selfsignedssl", "ET_Blackhole", "ET_RAS", "ET_P2Pcnc", "", "ET_Parking", "ET_VPN", "ET_Exesource",
 	"", "ET_Mobilecnc", "ET_Mobilespyware", "ET_Skypenode", "ET_Bitcoin", "ET_DDosattack"}
 
+// ReprocessET refreshes category selections from a retained gzip .raw without fetching. A missing .raw is the
+// legacy pure-reuse no-op: the existing .orig cannot recover categories that its previous selection excluded.
+func (f *Fetcher) ReprocessET(ctx context.Context, feed Feed, req Request) Result {
+	if !feed.valid() || !strings.Contains(req.URL, "iprepdata.txt") {
+		return fail("invalid ET feed")
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err.Error())
+	}
+	raw := feed.path(".raw")
+	if _, err := os.Stat(raw); errors.Is(err, os.ErrNotExist) {
+		return Result{OK: true, Decision: Unchanged}
+	} else if err != nil {
+		return fail(err.Error())
+	}
+	body, err := f.stage(ctx, feed, mimeGzip, raw, false)
+	if err != nil {
+		return fail(extractionFailure(mimeGzip, err))
+	}
+	defer os.Remove(body)
+	if err := finish(body); err != nil {
+		return fail(err.Error())
+	}
+	selected, err := f.iqrisk(ctx, feed, body)
+	if err != nil {
+		return fail(err.Error())
+	}
+	defer os.Remove(selected)
+	if err := ctx.Err(); err != nil {
+		return fail(err.Error())
+	}
+	if err := os.Rename(selected, feed.path(".orig")); err != nil {
+		return fail(err.Error())
+	}
+	return Result{OK: true, Decision: Changed}
+}
+
 // iqrisk is processet() on the finished ET IQRisk CSV at body ("IP,category,score" rows): each category's addresses
 // are split into ETDir (the ET_* files of the former split removed first), the ETMatch categories' written to
 // ETMatchFile, and the ETBlock categories', in the order the split lists, staged beside the published copy. An empty
