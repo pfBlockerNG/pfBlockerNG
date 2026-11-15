@@ -5,16 +5,16 @@
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
 //	--state-dir DIR     Core's own storage (its lock core.lock, the settings store settings.json without
-//	                    --settings-backend-cmd, and with --update-cmd the scheduler's schedule_state.json and the Update's
-//	                    update.log): made 0700, the server's user's alone; one Core at a time may use it
+//	                    --settings-backend-cmd, and with --update-cmd the scheduler's schedule_state.json, Update log and
+//	                    private worker receipts): made 0700, the server's user's alone; one Core at a time may use it
 //	--settings-backend-cmd PATH
 //	                    keep the settings in the program at PATH instead of settings.json: Core runs it once per read or
 //	                    write of the settings, a JSON request on its stdin and its JSON reply on stdout (settings.AdapterBackend)
 //	--update-cmd PATH   run the quarter-hour scheduler and serve the singleton Update (StartUpdate, GetUpdate, GetSchedule): Core
-//	                    runs the program at PATH once per Update, its request on stdin, stdout and stderr in update.log and
-//	                    its result on fd 3 (update.Command). Without it those methods answer unavailable. A stop while an
-//	                    Update runs ends it (TERM to its process group, KILL after 5 s) and nothing is resumed. The program's
-//	                    exit status 75 means it deferred the Update: the result is skipped and nothing is recorded
+//	                    launches an independent worker per Update; the worker runs PATH with request on stdin, stdout/stderr in
+//	                    update.log and its result on fd 3. Without it those methods answer unavailable. Stopping Core ends
+//	                    scheduling and observation, not an admitted worker; a restarted Core observes or reconciles its receipt.
+//	                    Exit status 75 means the worker deferred the Update: its result is skipped and nothing is recorded
 //	--zoneinfo PATH     the host's time zone file (a TZif file): the scheduler reads the schedule in its zone, re-reading it at
 //	                    every evaluation, so a change of the host's zone applies without a restart. Without it, or when the file
 //	                    cannot be used (logged once), the process's local zone

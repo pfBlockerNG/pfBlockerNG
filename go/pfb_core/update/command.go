@@ -9,8 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"syscall"
-	"time"
 )
 
 const (
@@ -19,15 +17,6 @@ const (
 	deferredStatus  = 75 // EX_TEMPFAIL: the program chose not to run now (a lock held, the schedule switched off)
 )
 
-// killGrace is how long the program's whole group has to end on TERM, and again after KILL, before Run goes on. It ends a second
-// (the rc script's poll) before the rc script KILLs Core 5 s after its TERM, so Core's KILL reaches the group first (issue #4003).
-var killGrace = 3 * time.Second
-
-// leaderExited reports whether the program has exited, when the context ends; replaced only by tests.
-var leaderExited = exitedUnreaped
-
-// reap waits for the program and reaps it; replaced only by tests, to hold the window between its exit and its reap open.
-var reap = (*exec.Cmd).Wait
 
 // Command runs the platform Update in an independent worker. Context cancellation stops observation, not a launched
 // settings transaction; downloads and scripts retain their own operation-level bounds.
@@ -51,17 +40,6 @@ func scratch(dir, pattern string) (*os.File, func(), error) {
 	return f, func() { _ = f.Close(); _ = os.Remove(f.Name()) }, nil
 }
 
-// groupGone reports whether the process group has no member within grace, polling every 10 ms (docs/misc/external-process-waits.md).
-func groupGone(group int, grace time.Duration) bool {
-	for deadline := time.Now().Add(grace); ; time.Sleep(10 * time.Millisecond) {
-		if errors.Is(syscall.Kill(group, 0), syscall.ESRCH) {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-	}
-}
 
 // readResult is what the program wrote to f: nothing, or result lines, each exactly one JSON object of protocol version 1. The
 // lines add up: every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness of the last line

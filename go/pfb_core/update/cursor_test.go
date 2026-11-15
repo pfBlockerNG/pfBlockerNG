@@ -87,9 +87,9 @@ func TestAViewOfAFinishedLogDeliversATrailingHalfRuneAndReachesTheEnd(t *testing
 	}
 }
 
-// A daemon an Update started keeps the Update's log descriptor after the Update ends. A new Update truncates the log; the
-// stray write must then land at the new end (O_APPEND), not at the old offset past it, which would pad the log with NULs.
-func TestAWriterHoldingAnEarlierUpdatesLogFdAppendsToTheNewLogWithoutAHole(t *testing.T) {
+// An Update may leave a writer holding its log fd. A new admission replaces the inode so stale writes cannot alter the current
+// log or pad it with NULs; the old descriptor remains attached only to the previous inode.
+func TestAWriterHoldingAnEarlierUpdatesLogFdCannotChangeTheNewLog(t *testing.T) {
 	var stray *os.File
 	run := func(_ context.Context, req Request, log *os.File) (Result, error) {
 		if req.Trigger == "first" {
@@ -112,26 +112,40 @@ func TestAWriterHoldingAnEarlierUpdatesLogFdAppendsToTheNewLogWithoutAHole(t *te
 			_ = stray.Close()
 		}
 	})
-	for _, trigger := range []string{"first", "second"} {
-		if err := g.Start(Request{Trigger: trigger}, nil); err != nil {
-			t.Fatal(err)
-		}
-		settle(t, g)
+	if err := g.Start(Request{Trigger: "first"}, nil); err != nil {
+		t.Fatal(err)
 	}
-	if stray == nil {
-		t.Fatal("the first Update never kept its log descriptor")
+	settle(t, g)
+	oldInfo, err := stray.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Start(Request{Trigger: "second"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, g)
+	newInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(oldInfo, newInfo) {
+		t.Fatal("the new Update reused the earlier log inode")
 	}
 	if _, err := stray.WriteString("STRAY\n"); err != nil {
 		t.Fatal(err)
+	}
+	oldInfo, err = stray.Stat()
+	if err != nil || oldInfo.Size() != int64(len("the first Update's line\nSTRAY\n")) {
+		t.Errorf("the earlier log inode after its late write = %v, %v", oldInfo, err)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "second\nSTRAY\n"; string(raw) != want || bytes.IndexByte(raw, 0) >= 0 {
-		t.Errorf("the log = %q, want %q with no NUL: the stray write must append after the truncation", raw, want)
+	if want := "second\n"; string(raw) != want || bytes.IndexByte(raw, 0) >= 0 {
+		t.Errorf("the current log = %q, want %q with no NUL", raw, want)
 	}
-	if v := mustView(t, g, 0, 0); v.Log != "second\nSTRAY\n" {
-		t.Errorf("View(0) = %q, want %q", v.Log, "second\nSTRAY\n")
+	if v := mustView(t, g, 0, 0); v.Log != "second\n" || v.Next&offsetMask != int64(len("second\n")) {
+		t.Errorf("the current Update's view = %+v, want its whole log and end cursor", v)
 	}
 }

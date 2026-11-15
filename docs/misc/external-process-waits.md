@@ -35,6 +35,18 @@ In-tree, exactly that split:
 - **The boot hook's `dns_check`** (`pfb_upstream_observer_include.inc`, `timeout --foreground`, 360 s) confirms the proxy start and, when a stranger holds Unbound's loopback ports, moves Unbound's backend pair (issue #3848): that restarts Unbound and the gateway, daemons meant to survive the check, so `--foreground`; the reaper mode would take them down when the check exited. When the rc start refused for that stranger and left its marker, there is no start to confirm: `dns_check` then runs the update pass's own check (`pfb_dns_proxy_ensure_running()`), which moves Unbound to a free pair and starts the gateway, or keeps the gateway blocked with its notice when none is free. With no marker it never calls that check, so it cannot start a second gateway beside the rc start that is still launching one; a marker that appears while it waits ends the wait without a startup problem.
 - **`list_scripts` feed pre/post scripts** stay **default** — transform pipelines, hung `curl | jq` must die as whole tree on overrun, not orphaned. Feed script that starts a service is misuse: use **post-update hook** instead, where daemon case handled right.
 
+### Core's Go process lifetimes
+
+`internal/process.Run` is strict and is used only by the feed pre-script. The command remains Core's child in a watchdog-led
+process group. Normal leader exit kills attached descendants before return; cancellation or the 300-second limit sends TERM and
+KILLs a still-running leader after 5 seconds. Attached descendants are killed when the leader exits. A child that calls `setsid()`
+leaves that group. On Linux and FreeBSD, watchdog/Core death also cleans the transient group.
+
+The Update program instead runs in an independent worker protected by `update.log.lock` and private receipts. Core stop or death
+ends observation, not the transaction; a restarted Core observes a live worker or reconciles its completion. There is no
+whole-Update cap or process-group kill; each download or script keeps its operation-level bound. Scheduled maintenance is not
+present in this worktree: when #3996 integrates, it must use its own independent lane, not this strict runner or the Update lease.
+
 ### Mixed survivor + transient tree: supervise a process group
 
 Unbound startup needs both properties: the resolver that daemonizes successfully must

@@ -344,10 +344,12 @@ layer relays these calls from its authenticated pages; Core is never exposed to 
   does (issue #3975): the interface addresses and the proxy of [`settings/ingest`](#projection-ingest) change outside Core, and
   the Outpost's tick that tells Core is up to 15 minutes away. A failed read keeps the values in memory, is logged once per
   outage, and the Update runs on them.
-- **Restarts.** Core starts idle. The pending occurrences and outcomes are kept in `schedule_state.json`; a missing or
-  unusable file starts empty and the next quarter hour plans what is due. The Update, its log and its result are in
-  memory and in `update.log`, which a new Update starts again: nothing of an Update survives a restart. A stop while an
-  Update runs ends it, and the next Core starts fresh and resumes nothing.
+- **Restarts.** `schedule_state.json` retains settled outcomes and pending occurrences. Each admitted Update has an independent worker
+  holding the private `update.log.lock` flock and `update.log.request`, `.result` and `.status` receipts. Stopping or losing Core
+  stops scheduling and API observation, not that worker; its log continues and its result file remains until the next admission
+  replaces it. Startup and each `GetUpdate` reconcile a terminal receipt before returning status. A busy lock and valid status
+  identify the original live worker and prevent a duplicate. A malformed receipt makes the API unavailable, not idle. If a worker
+  dies before publishing completion, Core salvages complete result lines, records failure and does not rerun the transaction.
 
 ### StartUpdate
 
@@ -376,7 +378,7 @@ number, `"-1"`, `"abc"`, `"1.5"`, `""`), is `invalid_argument` with a field erro
 | Field | Value |
 |---|---|
 | `running` | `true` while an Update runs, explicitly `false` otherwise |
-| `update` | `null` until this Core's first Update; else `{"trigger", "scope", "force", "startedAt", "finishedAt", "result"}`: `startedAt` and `finishedAt` in Unix seconds, `finishedAt` and `result` only once it ended, `result` `success` (the program exited 0 and its result, if any, was usable), `skipped` (the program deferred it: exit status 75) or `failed` |
+| `update` | `null` until Core has a current Update or retained worker receipt; otherwise `{"trigger", "scope", "force", "startedAt", "finishedAt", "result"}` from that Update's status: times are Unix seconds, `finishedAt` and `result` appear only once it ended, `result` `success` (exit 0 and usable result), `skipped` (exit 75) or `failed` |
 | `log` | the log's bytes from the cursor, at most 64 KiB, never ending inside a UTF-8 character; `""` before the first Update |
 | `next` | the cursor after `log`, a JSON string: pass it as `after` in the next call; `"0"` before the first Update |
 
@@ -385,9 +387,9 @@ as `after`. The cursor names the Update it belongs to, so the first call after a
 log from its start: the client needs no other signal. A cursor of an earlier Update, or one past the log's end, reads from the
 start. It is a string because it exceeds 2^53, which a browser or a PHP float holds exactly, from the 8193rd Update of a Core.
 
-The cursor's Update is counted from this Core's start, so a cursor from before a restart can match the new Core's first
-Update and skip the start of its log. `update.startedAt` is the hint for that case only: a client that sees it differ from the
-one it followed drops its cursor and calls without `after`.
+The cursor generation is stored with worker status and remains valid for the same retained log across a Core restart. Before
+following a cursor after a new admission, clients should compare `update.startedAt` and drop `after` if it changed. `startedAt`
+has one-second precision and may not distinguish two Update admissions made in the same second.
 
 ### GetSchedule
 
@@ -401,50 +403,41 @@ id or an Extra) that has had one, `{}` when none has; it is the metrics export's
 
 ### Update command
 
-`--update-cmd PATH` names the program that runs each Update; the path comes only from the flag. Core runs it once per Update:
+`--update-cmd PATH` names the program an independent worker runs for each admitted Update; the path comes only from the flag.
+The worker receives this request on stdin and reports progress and results as follows:
 
 - **stdin:** one JSON object, `{"version": 1, "trigger": "scheduled|manual|apply|retry", "scope": "ip|dnsbl|both",
   "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"]}`. `feeds` and `extras` are left out
   when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
   Update names what to run; a `manual` one runs its scope.
-- **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file Core owns, never a pipe (an Update
-  restarts daemons, and one that inherited a pipe would hold it open). A new Update truncates it. While it runs, the log is
-  checked once a second: past 8 MiB it keeps only its newest whole lines, at most 4 MiB, in place, and a cursor from before
-  reads it from the start. Lines printed during the trim may be lost or land before the kept ones; output of the last second
-  of an Update is not trimmed.
-- **fd 3:** a second regular file, for the result: lines, each one JSON object `{"version": 1, "outcomes": {id:
-  "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field but `version`
-  optional. The program writes each outcome as it finishes, so its death loses no finished check. Core adds the lines up:
-  every line's outcomes (the first for an id stands), and the attempted ids and GeoIP readiness of the last line that has
-  them. Nothing written is nothing reported. A last line with no newline that is not such an object (the program died writing
-  it) is dropped and fails the Update; any other line that is not, or more than 1 MiB in all, fails the Update and records
-  nothing.
+- **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file, never a pipe. The worker keeps writing
+  after Core stops; a Core restart does not truncate it. A new Update truncates it. While the worker runs, the log is checked once a
+  second: past 8 MiB it keeps only its newest whole lines, at most 4 MiB, in place, and a cursor from before reads it from the start.
+  Lines printed during the trim may be lost or land before the kept ones; output of the last second of an Update is not trimmed.
+- **fd 3:** the worker's durable `update.log.result` file: result lines, each one JSON object `{"version": 1, "outcomes": {id:
+  "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field but `version` optional. The
+  program writes each outcome as it finishes. Complete lines are preserved for recovery; if the final unterminated line is invalid,
+  that line is dropped and the Update fails while earlier complete lines remain settleable. Any malformed complete line or more than
+  1 MiB in all fails validation without a usable result. The result file remains after the run and is replaced by the next admission.
 - **Exit status:** 0 is success. A non-zero exit fails the Update, and a valid result it wrote still counts. **75** means the
   program deferred the Update (a lock held, the schedule switched off): the Update ends with the result `skipped`, not
   `failed`, whatever the program wrote on fd 3 is not recorded (no outcome, no attempt, no GeoIP readiness), and the
   reserved occurrences stay pending for the next quarter hour. A skipped Update truncates the previous Update's log like any
   other, and its own log holds what the program printed before it deferred.
-- **Process group and bounds:** Core is the program's direct parent and receives its actual exit status or signal; no
-  intermediary mirrors it. A separate watchdog (Core's own binary re-run, not the rc script's `daemon(8)` supervisor)
-  leads the Update's process group, which the program joins. The watchdog's private readiness and completion pipes are
-  never inherited by the program; the program's stdin, stdout, stderr and result fd 3 are regular files.
-  Core kills the group (TERM, then KILL after 3 s) at a hard cap of 4 hours, when the Update is cancelled and when Core
-  stops, but only while the actual program is still running. Cancellation after the program exits preserves its result
-  and any daemons it started, even if the watchdog has not yet observed completion.
-  Unless Core deliberately initiated group cleanup, it sends the watchdog a completion byte for every terminal program
-  result (success, error or signal) and waits for the watchdog's acknowledgement and exit before the run returns.
-  The watchdog cleans up the group only if Core dies before that completion commit, using TERM, then KILL after 3 s.
-  **Crash-window limit:** Core dying before the completion byte is acknowledged is an interrupted Update: group cleanup
-  can kill intentional descendants even if the program has already exited. Normal program completion leaves them running.
+- **Worker lifetime and bounds:** Core admits one Update under the private `update.log.lock` flock, then the independent worker
+  owns the transaction, command and receipt. Stopping or losing Core does not signal the worker or its program; a restarted Core
+  observes the busy lock or reconciles the terminal receipt at startup and before `GetUpdate`. There is no whole-Update timeout or
+  Core-owned process-group kill. Downloads and scripts keep their operation-level bounds; a worker killed before completion is
+  recovered as failed from its complete result lines, never relaunched.
 
-Core then records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically): each
-feed's outcome, the attempted ids that stay pending, and the GeoIP readiness the program saw (`true` until the first report).
-The Extras plan uses the last readiness reported. The cutover imports configuration only, so a Core that finds no state file
-starts empty.
+The scheduler records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically), either
+when the worker reports completion or when a later Core reconciles its receipt: each feed's outcome, the attempted ids that stay
+pending, and the GeoIP readiness the program saw (`true` until the first report). The Extras plan uses the last readiness reported.
+The cutover imports configuration only, so a Core that finds no state file starts empty.
 
-**Stopping.** TERM or INT during an Update cancels it: the program's group gets TERM, and KILL 3 s later if it is still there,
-and Core stops after that. The 3 s end a second before the rc script's KILL of Core at 5 s, so a program that ignores TERM
-gets Core's KILL first. The Update is not resumed: the next Core starts idle and the scheduler plans from its state file.
+**Stopping.** TERM or INT stops scheduling and ends Core's Update observation; it does not signal an admitted worker or its program.
+The worker retains its lock, log and receipt until its transaction completes. A new Core observes a live worker or reconciles its
+terminal receipt; it does not relaunch the same transaction.
 
 ## Errors
 

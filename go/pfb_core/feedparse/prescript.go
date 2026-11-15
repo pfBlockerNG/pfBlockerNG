@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/process"
 )
 
 var (
@@ -40,8 +42,8 @@ const (
 // RunPreScript is pfb_list_pre_script_run(): a copy of norm is staged at staged and script is run on it, with args after the
 // staged path, so that neither the downloaded feed nor its .norm is touched. The script runs as the program named, never
 // through a shell, except that a file that is no executable format (no #! line) is run by /bin/sh, as execvp() does; its output
-// goes to log (nil discards it). It is held to 300 seconds: TERM to its whole process group at the limit or when ctx ends, KILL
-// if a member is left after 5 seconds. A script that has exited leaves its group alone.
+// goes to log (nil discards it). It runs for at most 300 seconds: TERM reaches its whole process group at the limit or when ctx
+// ends, and KILL follows after 5 seconds if the leader remains. Attached descendants are killed before the runner returns.
 //
 // script is a path: one without a '/' is refused (exit 127) instead of being looked up on PATH. Finding the list's script, and
 // containing it in the script directory (pfb_resolve_list_script()), is the caller's.
@@ -63,13 +65,14 @@ func RunPreScript(ctx context.Context, script, norm, staged string, log io.Write
 	ctx, cancel := context.WithTimeout(ctx, preScriptTimeout)
 	defer cancel()
 	argv := append([]string{staged}, args...)
-	err := runProcessGroup(ctx, log, script, argv)
-	if errors.Is(err, syscall.ENOEXEC) {
-		err = runProcessGroup(ctx, log, bourneShell, append([]string{script}, argv...))
+	outcome := runProcessGroup(ctx, log, script, argv)
+	if outcome.WatchdogErr == nil && errors.Is(outcome.CommandErr, syscall.ENOEXEC) {
+		outcome = runProcessGroup(ctx, log, bourneShell, append([]string{script}, argv...))
 	}
+	err := errors.Join(outcome.CommandErr, outcome.Interrupted, outcome.WatchdogErr)
 	var exit *exec.ExitError
 	switch {
-	case err == nil || errors.Is(err, exec.ErrWaitDelay):
+	case outcome.Interrupted == nil && outcome.WatchdogErr == nil && (outcome.CommandErr == nil || errors.Is(outcome.CommandErr, exec.ErrWaitDelay)):
 	case ctx.Err() != nil:
 		return failed(PreScriptTimeout, 0)
 	case errors.As(err, &exit):
@@ -89,23 +92,12 @@ func RunPreScript(ctx context.Context, script, norm, staged string, log io.Write
 	return PreScriptResult{OK: true, Path: staged}
 }
 
-// runProcessGroup runs name with args as the leader of a process group of its own, and ends the whole group when ctx does.
-func runProcessGroup(ctx context.Context, log io.Writer, name string, args []string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+// runProcessGroup delegates group ownership while retaining the pre-script's argv, log and IO-drain budget.
+func runProcessGroup(ctx context.Context, log io.Writer, name string, args []string) process.Outcome {
+	cmd := exec.Command(name, args...)
 	cmd.Stdout, cmd.Stderr = log, log
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var kill *time.Timer
-	cmd.Cancel = func() error {
-		group := -cmd.Process.Pid
-		kill = time.AfterFunc(preScriptGrace, func() { syscall.Kill(group, syscall.SIGKILL) })
-		return syscall.Kill(group, syscall.SIGTERM)
-	}
-	cmd.WaitDelay = preScriptGrace + time.Second // a descendant holding the output pipe open does not hold the run
-	err := cmd.Run()
-	if kill != nil {
-		kill.Stop() // the group is gone; never signal a reused pgid
-	}
-	return err
+	cmd.WaitDelay = preScriptGrace + time.Second // a detached descendant holding the output pipe open does not hold the run
+	return process.Run(ctx, cmd, preScriptGrace)
 }
 
 // Cleanup removes the staged copy once the feed is parsed (pfb_list_script_cleanup_staged()). A failed run has none.

@@ -17,9 +17,9 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
-// newUpdates builds Core's scheduler and its Update gate for --update-cmd: the program at path runs each Update, after the
-// settings are read again (refreshingRun); an empty path: no scheduler, and both are nil. The scheduler's state and the Update's
-// log live in stateDir. The schedule is read in the zone of the file zoneinfo names (--zoneinfo; empty: the process's local zone).
+// newUpdates builds Core's scheduler and Update gate for --update-cmd: after settings refresh, each admitted Update runs in an
+// independent worker at path. An empty path means no scheduler, and both are nil. Scheduler state, worker receipts and the
+// Update log live in stateDir. The schedule is read in the --zoneinfo zone (empty: the process's local zone).
 func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
 	if path == "" {
 		return nil, nil

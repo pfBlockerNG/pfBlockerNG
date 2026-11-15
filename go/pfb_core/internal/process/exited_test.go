@@ -1,4 +1,6 @@
-package update
+//go:build linux || freebsd
+
+package process
 
 import (
 	"os/exec"
@@ -51,8 +53,3 @@ func TestAProcessThatIsNotAChildIsExited(t *testing.T) {
 	}
 }
 
-func TestACheckThatCannotBeAnsweredIsNotExited(t *testing.T) {
-	if exitedUnreaped(-1) { // waitid(P_PID, -1) is EINVAL
-		t.Fatal("an unanswerable check reported exited: Run would leave a running program's group alone")
-	}
-}

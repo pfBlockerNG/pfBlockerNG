@@ -1,6 +1,6 @@
 //go:build !linux && !freebsd
 
-package update
+package process
 
 import (
 	"errors"
