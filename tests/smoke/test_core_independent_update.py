@@ -56,3 +56,24 @@ def test_core_independent_update(smoke_vm: SmokeVM, family: str, signal: str, re
     finally:
         cleanup = smoke_vm.ssh(f"rm -rf {directory}", timeout=30)
         assert cleanup.returncode == 0, cleanup.stderr
+
+
+def test_private_core_shows_live_php_script_output_cap(smoke_vm: SmokeVM) -> None:
+    """A private Core's API exposes the installed PHP hook/list runner's bounded live transcript."""
+    helpers.deploy(smoke_vm)
+    directory = f"/root/pfb-native-output-{uuid4().hex}"
+    fixture = Path(__file__).parent / "fixtures" / "native_script_output_cap.php"
+    created = smoke_vm.ssh(f"mkdir -m 700 {directory}", timeout=30)
+    assert created.returncode == 0, created.stderr
+    try:
+        _upload(smoke_vm, fixture, f"{directory}/fixture.php", "root:wheel")
+        run = smoke_vm.ssh(
+            f"/usr/local/bin/php {directory}/fixture.php control {CORE_BIN} {directory}",
+            timeout=210,
+        )
+        diagnostics = (run.stdout + run.stderr)[-2000:]
+        assert run.returncode == 0, f"native PHP output-cap proof failed:\n{diagnostics}"
+        assert run.stdout.startswith("NATIVE_SCRIPT_OUTPUT_CAP_PASS "), diagnostics
+    finally:
+        cleanup = smoke_vm.ssh(f"rm -rf {directory}", timeout=30)
+        assert cleanup.returncode == 0, cleanup.stderr
