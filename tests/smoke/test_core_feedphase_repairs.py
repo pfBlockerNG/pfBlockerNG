@@ -176,6 +176,13 @@ def test_dnsbl_publication_obstruction_retains_lkg_then_same_source_retry_publis
         _assert_first_dns_state(vm, old, new)
 
         mock_feeds.set_content(name, new + "\n", etag='"repair-v2"')
+        pending_update = f"{DB}/dnsbl/{header}.update"
+        assert vm.ssh("test", "!", "-e", pending_update).returncode == 0, pending_update
+        owned.append(pending_update)
+        h.force_dnsbl_refetch(vm, header)
+        assert vm.ssh("test", "-f", pending_update).returncode == 0, (
+            f"failed to establish owned publication-retry marker {pending_update}"
+        )
         obstruction = f"{DB}/dnsbl/{header}.bk"
         assert vm.ssh("test", "!", "-e", obstruction).returncode == 0, obstruction
         made = vm.ssh("/bin/mkdir", obstruction)
