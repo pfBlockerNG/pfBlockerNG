@@ -515,7 +515,11 @@ func runWorker(logPath string) int {
 	for fd := 3; fd <= 8; fd++ {
 		syscall.CloseOnExec(fd)
 	}
-	defer lock.Close()
+	defer func() {
+		if lock != nil {
+			_ = lock.Close()
+		}
+	}()
 	defer request.Close()
 	defer log.Close()
 	defer result.Close()
@@ -581,5 +585,7 @@ func runWorker(logPath string) int {
 		fmt.Fprintf(log, "worker completion could not be published: %v\n", err)
 		return 1
 	}
+	_ = lock.Close()
+	lock = nil
 	return 0
 }

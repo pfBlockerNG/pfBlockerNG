@@ -33,15 +33,7 @@ func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(s
 	sched.Bind(func(req update.Request, commit func() (map[string]int64, error)) error {
 		return gate.Start(req, commit)
 	})
-	err := sched.Recover()
-	if errors.Is(err, update.ErrRecoveryRequired) {
-		deadline := time.Now().Add(time.Second)
-		for errors.Is(err, update.ErrRecoveryRequired) && time.Now().Before(deadline) {
-			time.Sleep(time.Millisecond)
-			err = sched.Recover()
-		}
-	}
-	if err != nil {
+	if err := sched.Recover(); err != nil && !errors.Is(err, update.ErrRecoveryRequired) {
 		logf("the retained Update could not be reconciled at startup: %v", err)
 	}
 	var broken atomic.Bool

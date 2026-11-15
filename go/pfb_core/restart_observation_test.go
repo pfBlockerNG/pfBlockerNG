@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/schedule"
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
 type retainedWorkerStatus struct {
@@ -44,6 +46,23 @@ func waitRetainedTerminal(t *testing.T, path string) retainedWorkerStatus {
 		return err == nil && json.Unmarshal(body, &state) == nil && state.FinishedAt != nil
 	})
 	return state
+}
+
+func waitRetainedUnlock(t *testing.T, logPath string) {
+	t.Helper()
+	waitFor(t, func() bool {
+		lease, err := (&update.Command{}).Admit(logPath)
+		if errors.Is(err, update.ErrRunning) || errors.Is(err, update.ErrRecoveryRequired) {
+			return false
+		}
+		if err != nil {
+			t.Fatalf("waiting for retained worker unlock: %v", err)
+		}
+		if err := lease.Close(); err != nil {
+			t.Fatalf("closing retained worker test lease: %v", err)
+		}
+		return true
+	})
 }
 
 func readScheduleState(t *testing.T, path string) schedule.State {
@@ -122,6 +141,7 @@ func TestRestartReconcilesRetainedCompletionBeforeTheNextTick(t *testing.T) {
 	if terminal.Settled || terminal.FinishedAt == nil || terminal.ExitCode == nil || *terminal.ExitCode != 0 {
 		t.Fatalf("worker terminal before restart = %+v, want an unsettled exit-0 receipt", terminal)
 	}
+	waitRetainedUnlock(t, filepath.Join(c.state, "update.log"))
 
 	restart := startCore(t, filepath.Dir(c.state), "--update-cmd", f.path)
 	got := restart.post("GetUpdate", `{}`)
