@@ -106,6 +106,72 @@ if ($mode === 'update') {
 		exit(1);
 	}
 }
+if ($mode === 'diagnose') {
+	$family = $argv[3] ?? '4';
+	$binary = '/usr/local/sbin/kea-dhcp' . $family;
+	$config = ['interfaces-config' => ['interfaces' => []], 'subnet' . $family => [],
+		'lease-database' => ['type' => 'memfile', 'persist' => FALSE, 'lfc-interval' => 0],
+		'dhcp-ddns' => ['enable-updates' => FALSE],
+		'control-socket' => ['socket-type' => 'unix', 'socket-name' => "$dir/kea.sock"],
+		'loggers' => [['name' => 'kea-dhcp' . $family, 'output_options' => [['output' => "$dir/kea.log"]]]]];
+	if ($family === '6') {
+		$config['server-id'] = ['type' => 'EN', 'enterprise-id' => 2495, 'identifier' => '01020304', 'persist' => FALSE];
+		$config['data-directory'] = $dir;
+	}
+	file_put_contents("$dir/kea.json", json_encode(['Dhcp' . $family => $config], JSON_PRETTY_PRINT));
+	putenv('KEA_PIDFILE_DIR=' . $dir);
+	putenv('KEA_LOCKFILE_DIR=' . $dir);
+	$proc = proc_open([$binary, '-c', "$dir/kea.json"], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+	demand(is_resource($proc), 'foreground Kea spawn failed');
+	stream_set_blocking($pipes[1], FALSE);
+	stream_set_blocking($pipes[2], FALSE);
+	$stdout = $stderr = '';
+	$ready = FALSE;
+	$end = microtime(TRUE) + 12;
+	do {
+		$stdout .= (string) stream_get_contents($pipes[1]);
+		$stderr .= (string) stream_get_contents($pipes[2]);
+		$status = proc_get_status($proc);
+		if (!$status['running']) {
+			break;
+		}
+		if (file_exists("$dir/kea.sock")) {
+			$ready = TRUE;
+			break;
+		}
+		usleep(50000);
+	} while (microtime(TRUE) < $end);
+	if ($ready) {
+		try {
+			command("$dir/kea.sock", 'list-commands');
+			command("$dir/kea.sock", 'shutdown');
+			echo "FOREGROUND_CONTROL_READY\n";
+		} catch (Throwable $error) {
+			echo 'FOREGROUND_CONTROL_ERROR=' . $error->getMessage() . "\n";
+		}
+	}
+	$deadline = microtime(TRUE) + 5;
+	do {
+		$status = proc_get_status($proc);
+		if (!$status['running']) {
+			break;
+		}
+		usleep(50000);
+	} while (microtime(TRUE) < $deadline);
+	if ($status['running']) {
+		proc_terminate($proc, SIGKILL);
+		$status = proc_get_status($proc);
+	}
+	$stdout .= (string) stream_get_contents($pipes[1]);
+	$stderr .= (string) stream_get_contents($pipes[2]);
+	fclose($pipes[1]);
+	fclose($pipes[2]);
+	proc_close($proc);
+	printf("FOREGROUND_READY=%s\nFOREGROUND_EXIT=%s\nFOREGROUND_SIGNALED=%s\n", $ready ? 'yes' : 'no', var_export($status['exitcode'], TRUE), var_export($status['termsig'], TRUE));
+	echo "FOREGROUND_STDOUT\n{$stdout}\nFOREGROUND_STDERR\n{$stderr}\n";
+	exit(0);
+}
+
 
 demand($mode === 'control', 'unknown fixture mode');
 [$binary, $family, $signal, $restart] = array_slice($argv, 3);

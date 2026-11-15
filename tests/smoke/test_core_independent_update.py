@@ -56,3 +56,22 @@ def test_core_independent_update(smoke_vm: SmokeVM, family: str, signal: str, re
     finally:
         cleanup = smoke_vm.ssh(f"rm -rf {directory}", timeout=30)
         assert cleanup.returncode == 0, cleanup.stderr
+
+
+def test_native_kea_foreground_setup(smoke_vm: SmokeVM) -> None:
+    """SETUP DIAGNOSIS: foreground Kea with this fixture's private JSON and env. Not launcher RED."""
+    helpers.deploy(smoke_vm)
+    directory = f"/root/pfb-independent-{uuid4().hex}"
+    fixture = Path(__file__).parent / "fixtures" / "independent_update.php"
+    created = smoke_vm.ssh(f"mkdir -m 700 {directory}", timeout=30)
+    assert created.returncode == 0, created.stderr
+    try:
+        _upload(smoke_vm, fixture, f"{directory}/fixture.php", "root:wheel")
+        run = smoke_vm.ssh(f"/usr/local/bin/php {directory}/fixture.php diagnose {directory} 4", timeout=60)
+        print(run.stdout)
+        print(run.stderr)
+        assert "FOREGROUND_EXIT=" in run.stdout, run.stderr
+        assert run.returncode == 0, run.stderr
+    finally:
+        cleanup = smoke_vm.ssh(f"rm -rf {directory}", timeout=30)
+        assert cleanup.returncode == 0, cleanup.stderr
