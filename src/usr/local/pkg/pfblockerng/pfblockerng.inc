@@ -4492,7 +4492,7 @@ function pfb_core_feed_phase(string $token, string $phase, array $feedIds, strin
 		return $failure('core_request_invalid');
 	}
 	foreach ($feedIds as $id) {
-		if (!is_string($id) || preg_match('/\A[A-Za-z0-9:_-]{1,64}\z/', $id) !== 1) {
+		if (!is_string($id) || (preg_match('/\A[A-Za-z0-9:_-]{1,64}\z/', $id) !== 1 && !pfb_blacklist_feed_id_valid($id))) {
 			return $failure('core_request_invalid');
 		}
 	}
@@ -4734,7 +4734,7 @@ function pfb_core_ingest_entry_valid(string $entry): bool {
  * are the addresses pfb_ip_is_self() calls the box's own beyond the loopbacks, each once and without the ones Core refuses to list (unspecified,
  * link-local, IPv4-mapped): the interfaces' addresses, the virtual IPs and the PPPoE server's, IPv4 then IPv6, as pfSense lists them.
  *
- * @return array<string, mixed> the 11 fields, in the protocol's order
+ * @return array<string, mixed> the readonly ingest fields
  */
 function pfb_core_ingest_settings(): array {
 	$on = static fn(string $key): bool => PfbConfig::read($key) === PfbToggle::On;
@@ -4744,6 +4744,11 @@ function pfb_core_ingest_settings(): array {
 	};
 	$listed = static fn(array $values, callable $valid): array => array_values(array_unique(array_filter(array_map('strval', $values), $valid)));
 	$self = $listed(array_merge(array_values(get_configured_ip_addresses()), array_values(get_configured_ipv6_addresses())), 'pfb_core_ingest_self_valid');
+	$categories = static function (string $key): array {
+		$selected = explode(',', (string) config_get_path("installedpackages/pfblockerngreputation/config/0/{$key}", ''));
+		$selected = array_values(array_unique(array_filter($selected, static fn(string $category): bool => !in_array($category, ['', 'x', '0'], TRUE))));
+		return array_map(static fn(string $category): array => ['category' => $category], $selected);
+	};
 	return [
 		'suppression'       => $on('ip/suppression'),
 		'suppressionCidrV4' => $limit('ip/suppression_cidr', 17),
@@ -4753,7 +4758,11 @@ function pfb_core_ingest_settings(): array {
 		'feedHostFilter'    => pfb_feed_filter_enabled(),
 		'feedHostAllowlist' => array_map(static fn(string $entry): array => ['cidr' => $entry], $listed(pfb_feed_internal_allowlist(), 'pfb_core_ingest_entry_valid')),
 		'selfAddresses'     => array_map(static fn(string $address): array => ['address' => $address], $self),
-	] + pfb_core_proxy_settings();
+	] + pfb_core_proxy_settings() + [
+		'feedSanity'        => $on('gen/pfb_feed_sanity'),
+		'etBlockCategories' => $categories('etblock'),
+		'etMatchCategories' => $categories('etmatch'),
+	];
 }
 
 /**
@@ -16769,6 +16778,24 @@ function pfb_unbound_py_swap_fits_ram() {
 }
 
 
+// Only generated Blacklist categories may carry dots; never accept path components.
+function pfb_blacklist_feed_id_valid(string $id): bool {
+	return strlen($id) <= 64
+		&& preg_match('/\Ablacklist:[A-Za-z0-9_-]+:(?!\.{1,2}\z)[A-Za-z0-9_.-]+\z/', $id) === 1;
+}
+
+function pfb_dnsbl_row_header(array $row): string|false {
+	$header = (string) ($row['header'] ?? '');
+	$id = (string) ($row['feed_phase_id'] ?? '');
+	if (pfb_blacklist_feed_id_valid($id)) {
+		$category = str_replace('-', '_', explode(':', $id, 3)[2]);
+		$prefix = substr($header, 0, -strlen("_{$category}"));
+		return preg_match('/\A[A-Za-z0-9_]+\z/', $prefix) === 1
+			&& str_ends_with($header, "_{$category}") ? $header : FALSE;
+	}
+	return empty(pfb_filter($header, PFB_FILTER_WORD, 'DNSBL - Processes')) ? FALSE : $header;
+}
+
 // PFBL-01: validate a feed header / list label before it is used to derive a file
 // path or a manifest key. Returns the header UNCHANGED when it validates via
 // pfb_filter(PFB_FILTER_WORD); returns FALSE on rejection, after logging the
@@ -16909,7 +16936,9 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 
 		// PFBL-01: re-validate the header at this choke point, BEFORE it derives the
 		// source/raw paths or any manifest key (skip the row + log on failure).
-		if (pfb_sanitise_feed_header($header, 'pfb_unbound_python_sources') === FALSE) {
+		if (isset($feed['feed_phase_id'])
+			? pfb_dnsbl_row_header($feed) === FALSE
+			: pfb_sanitise_feed_header($header, 'pfb_unbound_python_sources') === FALSE) {
 			continue;
 		}
 

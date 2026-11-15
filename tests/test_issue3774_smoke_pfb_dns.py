@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,15 +25,21 @@ PFB_DNS_OFF = f"config_set_path('{PFB_DNS_PATH}', '');"
 LOG_TAIL = "dns_proxy.log tail marker line"
 
 
-class _Vm:
+class _Vm(helpers.SmokeVM):
     """Records every guest command in the shared event list, in call order."""
 
     def __init__(self, events: list[str]) -> None:
+        super().__init__(ssh_key_path="key", host="127.0.0.1", vm_pid=123)
+        self.admitted: tuple[str, str] | None = None
         self.events = events
 
-    def ssh(self, *argv: str, **_kw: object) -> SimpleNamespace:
+    def ssh(self, *argv: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
         self.events.append("ssh:" + " ".join(argv))
-        return SimpleNamespace(returncode=0, stdout=LOG_TAIL, stderr="")
+        if "pfb_trigger" in argv:
+            scope = next(arg.removeprefix("scope=") for arg in argv if arg.startswith("scope="))
+            force = "download" if "force=true" in argv else "none"
+            self.admitted = (scope, force)
+        return subprocess.CompletedProcess(argv, 0, LOG_TAIL, "")
 
 
 def _case(**kwargs: object) -> helpers.DnsblCase:
@@ -452,11 +459,25 @@ def _arrange_reload(
     state = {"enable_cb": enable_cb, "dnsbl": dnsbl, "pfb_dns": pfb_dns, "serving": serving}
 
     def php_eval(_vm: object, snippet: str, **_kw: object) -> SimpleNamespace:
+        if "$pending = @file_get_contents" in snippet:
+            events.append("pending_php_eval")
+            fenced = f"{helpers._CFG_VAL_OPEN}[null,null]{helpers._CFG_VAL_CLOSE}"
+            return SimpleNamespace(returncode=0, stdout=fenced, stderr="")
+        assert "pfb_dns_proxy_serving_ready()" in snippet, snippet
         events.append("php_eval")
         snippets.append(snippet)
         fenced = f"banner{helpers._CFG_VAL_OPEN}{json.dumps(state)}{helpers._CFG_VAL_CLOSE}"
         return SimpleNamespace(returncode=0, stdout=fenced, stderr="")
 
+    def core_calls(vm: _Vm, calls: list[tuple[str, object]], **_kw: object) -> list[dict[str, object]]:
+        assert calls == [("GetUpdate", {})], calls
+        status = None
+        if vm.admitted is not None:
+            scope, force = vm.admitted
+            status = {"trigger": "manual", "scope": scope, "force": force, "result": "success"}
+        return [{"status": 200, "body": {"running": False, "update": status, "log": "", "next": "opaque"}}]
+
+    monkeypatch.setattr(helpers, "core_calls", core_calls)
     monkeypatch.setattr(helpers, "php_eval", php_eval)
     monkeypatch.setattr(helpers, "wait_unbound_ready", lambda _vm, **_kw: events.append("wait_unbound_ready"))
     monkeypatch.setattr(helpers, "count_log_marker", lambda *_a, **_kw: 0)

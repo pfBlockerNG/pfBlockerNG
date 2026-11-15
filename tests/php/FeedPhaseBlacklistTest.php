@@ -219,6 +219,21 @@ final class FeedPhaseBlacklistTest extends TestCase
 		], JSON_THROW_ON_ERROR));
 	}
 
+	public function testCategoryDotsDoNotWidenRegularOrCustomIds(): void
+	{
+		foreach (['blacklist:ut2:.', 'blacklist:ut2:..', 'blacklist:ut2:a/b', 'blacklist:ut2:a\\b', 'dnsbl:a.b', 'custom:dnsbl:a.b'] as $id) {
+			try {
+				pfb_core_update_request(json_encode([
+					'version' => 1, 'trigger' => 'scheduled', 'token' => str_repeat('a', 64), 'feeds' => [$id],
+				], JSON_THROW_ON_ERROR));
+				$this->fail("accepted unsafe ID {$id}");
+			} catch (InvalidArgumentException) {
+				$this->assertTrue(TRUE);
+			}
+		}
+		$this->assertFalse(pfb_sanitise_feed_header('regular.dot'));
+	}
+
 	private static function feedPhaseResult(string $id): array
 	{
 		return [

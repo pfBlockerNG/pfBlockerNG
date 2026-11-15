@@ -257,6 +257,26 @@ func (p *feedPhaseRunner) fetcherFor(ingest map[string]any) (*feedfetch.Fetcher,
 		fetcher.Proxy = proxy
 	}
 	fetcher.ASNCSV = p.flags.ASNCSV
+	fetcher.Sanity = boolSetting(ingest, "feedSanity")
+	fetcher.ETBlock, fetcher.ETMatch = nil, nil
+	for _, row := range listSetting(ingest, "etBlockCategories") {
+		fetcher.ETBlock = append(fetcher.ETBlock, stringSetting(row, "category"))
+	}
+	for _, row := range listSetting(ingest, "etMatchCategories") {
+		fetcher.ETMatch = append(fetcher.ETMatch, stringSetting(row, "category"))
+	}
+	if fetcher.ETDir != "" && !filepath.IsAbs(fetcher.ETDir) ||
+		fetcher.ETMatchFile != "" && !filepath.IsAbs(fetcher.ETMatchFile) {
+		return nil, errors.New("invalid configured ET paths")
+	}
+	if filepath.IsAbs(p.flags.DBDir) {
+		if fetcher.ETDir == "" {
+			fetcher.ETDir = filepath.Join(p.flags.DBDir, "ET")
+		}
+		if fetcher.ETMatchFile == "" {
+			fetcher.ETMatchFile = filepath.Join(p.flags.DBDir, "match", "generated", "pfB_Match_ET_v4.txt")
+		}
+	}
 	return &fetcher, nil
 }
 

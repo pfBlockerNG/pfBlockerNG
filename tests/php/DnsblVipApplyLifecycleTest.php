@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/DnsProxyReadySeedTrait.php';
+require_once __DIR__ . '/support/ProcessRunner.php';
 
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -1682,5 +1683,146 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertSame('_vipauto4', config_get_path(self::DNSBL . '/pfb_dnsvip4'), 'control: the pass rewrote the stored VIP id');
 		config_set_path('installedpackages/pfblockerngsync/config/0/varsynconchanges', 'auto');
 		$this->assertSame([], pfblockerng_plugin_xmlrpc_send(), 'the aborted apply of a received policy must not hand pfSense HA sync a pfBlockerNG path');
+	}
+
+	public static function failedRefreshRows(): array
+	{
+		return ['alone' => [FALSE], 'successful sibling' => [TRUE]];
+	}
+
+	#[DataProvider('failedRefreshRows')]
+	public function testFailedRefreshRetainsLastGoodManifestAndRawMembership(bool $sibling): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		if ($sibling) {
+			$row = config_get_path('installedpackages/pfblockerngdnsbl/config/0/row/0');
+			$row['header'] = 'T1_b';
+			config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/1', $row);
+			$this->feedReplies['dnsbl:T1_b'] = $this->seedDnsblResult('dnsbl:T1_b', 'T1_b', 'sibling.example');
+		}
+		$this->feedReplies['dnsbl:T1_a'] = $this->seedDnsblResult('dnsbl:T1_a', 'T1_a', 'kept.example');
+		$this->assertTrue($this->runPass());
+		$txt = $GLOBALS['pfb']['dnsdir'] . '/T1_a.txt';
+		$before = (string) file_get_contents($txt);
+		$this->feedReplies['dnsbl:T1_a'] = self::feedReply('dnsbl:T1_a', [
+			'disposition' => 'failed', 'stage' => 'fetch', 'reason' => '503 Service Unavailable',
+		]);
+		$GLOBALS['pfb']['scheduled_runtime_cron'] = TRUE;
+		$GLOBALS['pfb']['scheduled_selected_ids'] = array_fill_keys($sibling ? ['dnsbl:T1_a', 'dnsbl:T1_b'] : ['dnsbl:T1_a'], TRUE);
+		$GLOBALS['pfb']['scheduled_outcomes'] = [];
+		$this->assertTrue($this->runPass());
+		$this->assertSame($sibling ? ['dnsbl:T1_b' => 'success'] : [], $GLOBALS['pfb']['scheduled_outcomes'],
+			'a retained last-good feed must not emit a successful refresh outcome');
+		$manifest = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
+		$this->assertContains('T1_a', array_column($manifest['feeds'], 'feed'));
+		$this->assertCount($sibling ? 2 : 1, $manifest['feeds']);
+		$this->assertSame($before, file_get_contents($txt));
+		$this->assertFileExists($GLOBALS['pfb']['dnsdir'] . '/T1_a.fail');
+		$this->assertNotEmpty(pfb_sync_status_list_open($this->dir, 'dnsbl'), 'the failed refresh remains pending in the real ledger');
+		$raw = implode("\n", array_map('file_get_contents', pfb_unbound_py_manifest_raw_paths($GLOBALS['pfb']['unbound_py_sources'])));
+		$this->assertStringContainsString('kept.example', $raw, 'published raw membership keeps blocking the last-good domain');
+		$this->feedReplies['dnsbl:T1_a'] = $this->seedDnsblResult('dnsbl:T1_a', 'T1_a', 'recovered.example');
+		$this->assertTrue($this->runPass());
+		$this->assertSame('success', $GLOBALS['pfb']['scheduled_outcomes']['dnsbl:T1_a'] ?? NULL);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['dnsdir'] . '/T1_a.fail');
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'), 'recovery clears the download failure ledger');
+		$this->assertStringContainsString('recovered.example', (string) file_get_contents($txt));
+		$this->assertStringNotContainsString('kept.example', (string) file_get_contents($txt));
+		$recovered = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
+		$this->assertContains('T1_a', array_column($recovered['feeds'], 'feed'));
+		$raw = implode("\n", array_map('file_get_contents', pfb_unbound_py_manifest_raw_paths($GLOBALS['pfb']['unbound_py_sources'])));
+		$this->assertStringContainsString('recovered.example', $raw);
+		$this->assertStringNotContainsString('kept.example', $raw);
+	}
+
+	public function testIpParseWarningCountsMappedDropsOnlyWithinTotalFailures(): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		$GLOBALS['pfb']['nativedir'] = "{$this->dir}/native";
+		mkdir($GLOBALS['pfb']['nativedir']);
+		mkdir($GLOBALS['pfb']['origdir'], 0755, TRUE);
+		config_set_path('installedpackages/pfblockernglistsv6/config', [[
+			'aliasname' => 'Invalid', 'action' => 'Alias_Native', 'order' => 'default',
+			'row' => [['url' => 'https://example.test/list', 'state' => 'Enabled', 'header' => 'Invalid', 'format' => 'auto']],
+		]]);
+		file_put_contents("{$GLOBALS['pfb']['origdir']}/Invalid_v6.parsed.ip", "2001:db8::2\n");
+		$this->feedReplies['ipv6:Invalid_v6'] = self::feedReply('ipv6:Invalid_v6', [
+			'entries' => 1, 'ipv6Count' => 1, 'parseFailures' => 2, 'mappedDrops' => 1,
+		]);
+		$this->assertTrue($this->runPass());
+		$this->assertStringContainsString('Parse Errors [ Invalid_v6 ]: 2', $this->passLog());
+		$this->assertStringNotContainsString('Parse Errors [ Invalid_v6 ]: 3', $this->passLog());
+	}
+
+	public function testDottedBlacklistCategoryTraversesBridgeAndManifestWithoutRenaming(): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		config_set_path('installedpackages/pfblockerngdnsbl/config', [[
+			'aliasname' => 'Regular', 'action' => 'unbound', 'order' => 'default', 'logging' => 'disabled_log',
+			'row' => [['url' => 'https://example.test/regular', 'state' => 'Enabled', 'header' => 'regular.dot', 'format' => 'auto']],
+		]]);
+		config_set_path('installedpackages/pfblockerngblacklist', [
+			'blacklist_enable' => 'Enable', 'blacklist_selected' => 'ut2',
+			'item' => [['xml' => 'ut2', 'title' => 'UT2', 'selected' => 'a.b_c,.,..,a/b,a\\b', 'feed' => 'https://example.test/categories']],
+		]);
+		$this->feedReplies['blacklist:ut2:a.b_c'] = $this->seedDnsblResult('blacklist:ut2:a.b_c', 'UT2_a.b_c', 'dotted.example');
+		$this->feedReplies['dnsbl:regulardot'] = self::feedReply('dnsbl:regulardot', [
+			'disposition' => 'failed', 'stage' => 'fetch', 'reason' => 'connection_refused',
+		]);
+		$this->assertSame(['blacklist:ut2:a.b_c'], pfb_core_update_request(json_encode([
+			'version' => 1, 'trigger' => 'scheduled', 'token' => str_repeat('a', 64), 'feeds' => ['blacklist:ut2:a.b_c'],
+		], JSON_THROW_ON_ERROR))['feeds']);
+		$this->assertTrue($this->runPass());
+		$this->assertStringContainsString('"blacklist:ut2:a.b_c"', (string) file_get_contents("{$this->dir}/feed-requests"));
+		$manifest = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE);
+		$this->assertSame(['UT2_a.b_c'], array_column($manifest['feeds'], 'feed'));
+		$raw = implode("\n", array_map('file_get_contents', pfb_unbound_py_manifest_raw_paths($GLOBALS['pfb']['unbound_py_sources'])));
+		$this->assertStringContainsString('dotted.example', $raw);
+	}
+
+	public static function ipPlaceholderRows(): array
+	{
+		$rows = [];
+		foreach (['ipv4', 'ipv6'] as $family) {
+			foreach (['empty', 'suppressed', 'address'] as $kind) {
+				$rows["{$family} {$kind}"] = [$family, $kind];
+			}
+		}
+		return $rows;
+	}
+
+	#[DataProvider('ipPlaceholderRows')]
+	public function testIpConsumerPublishesOnlyConfiguredPlaceholderOrRealAddress(string $family, string $kind): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		PfbConfig::writeSystem('ip/ip_placeholder', '198.51.100.254');
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		$GLOBALS['pfb']['nativedir'] = "{$this->dir}/native";
+		mkdir($GLOBALS['pfb']['nativedir']);
+		mkdir($GLOBALS['pfb']['origdir'], 0755, TRUE);
+		$v6 = $family === 'ipv6';
+		$suffix = $v6 ? 'v6' : 'v4';
+		$header = "Placeholder_{$suffix}";
+		$id = "{$family}:{$header}";
+		config_set_path('installedpackages/pfblockernglists' . ($v6 ? 'v6' : 'v4') . '/config', [[
+			'aliasname' => 'Placeholder', 'action' => 'Alias_Native', 'order' => 'default',
+			'row' => [['url' => 'https://example.test/list', 'state' => 'Enabled', 'header' => 'Placeholder', 'format' => 'auto']],
+		]]);
+		$address = $v6 ? "2001:db8::2\n" : "192.0.2.2\n";
+		$content = $kind === 'address' ? $address : '';
+		file_put_contents("{$GLOBALS['pfb']['origdir']}/{$header}.parsed.ip", $content);
+		$this->feedReplies[$id] = self::feedReply($id, [
+			'entries' => $kind === 'address' ? 1 : 0,
+			'placeholder' => $kind === 'address' ? '' : $kind,
+			'suppressed' => $kind === 'suppressed',
+		]);
+		$this->assertTrue($this->runPass());
+		$expected = $kind === 'address' ? $address : ($v6 ? "::198.51.100.254\n" : "198.51.100.254\n");
+		$this->assertSame($expected, file_get_contents("{$GLOBALS['pfb']['nativedir']}/{$header}.txt"));
 	}
 }

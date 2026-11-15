@@ -202,3 +202,45 @@ func TestGetClearHandsOutACopyAndRefusesWhatGetCannotAnswer(t *testing.T) {
 		t.Errorf("GetClear while uninitialized = %v, want a *ConflictError", err)
 	}
 }
+
+func TestIngestConstructorFieldsDefaultsAndReadOnly(t *testing.T) {
+	p := ingestProjection()
+	got := defaults(p)
+	for key, want := range map[string]string{"feedSanity": "false", "etBlockCategories": "[]", "etMatchCategories": "[]"} {
+		if jsonOf(t, got[key]) != want {
+			t.Errorf("%s default = %s, want %s", key, jsonOf(t, got[key]), want)
+		}
+	}
+	for _, body := range []string{`{"ingest":{"feedSanity":true}}`, `{"ingest":{"etBlockCategories":[{"category":"ET_Cnc"}]}}`, `{"ingest":{"etMatchCategories":[{"category":"ET_Bot"}]}}`} {
+		b := newRefreshBackend(1, map[string]map[string]any{"ingest": got})
+		st := storeOver(t, b)
+		_, err := st.Save(t.Context(), 1, changes(t, body))
+		var validation *ValidationError
+		if !errors.As(err, &validation) || len(validation.Fields) != 1 || validation.Fields[0].Field != "ingest" || b.writes != 0 {
+			t.Fatalf("readonly Save %s: %v; writes %d", body, err, b.writes)
+		}
+	}
+}
+
+func TestIngestConstructorCategoryListsAndSanity(t *testing.T) {
+	p := ingestProjection()
+	for _, key := range []string{"etBlockCategories", "etMatchCategories"} {
+		for _, raw := range []string{`[]`, `[{"category":"ET_Cnc"}]`, `[{"category":"ET_Cnc"},{"category":"ET_Bot"}]`} {
+			got, errs := apply(p, defaults(p), map[string]json.RawMessage{key: json.RawMessage(raw)}, "ingest")
+			if len(errs) != 0 || jsonOf(t, got[key]) != raw {
+				t.Errorf("%s=%s: value %s; errors %v", key, raw, jsonOf(t, got[key]), errs)
+			}
+		}
+		for _, raw := range []string{`["ET_Cnc"]`, `[{"category":12}]`, `[{"category":"ET_Cnc"},{"category":"ET_Cnc"}]`} {
+			if _, errs := apply(p, defaults(p), map[string]json.RawMessage{key: json.RawMessage(raw)}, "ingest"); len(errs) == 0 {
+				t.Errorf("%s accepted %s", key, raw)
+			}
+		}
+	}
+	for _, raw := range []string{"true", "false"} {
+		got, errs := apply(p, defaults(p), map[string]json.RawMessage{"feedSanity": json.RawMessage(raw)}, "ingest")
+		if len(errs) != 0 || jsonOf(t, got["feedSanity"]) != raw {
+			t.Errorf("feedSanity=%s: %v, %v", raw, got, errs)
+		}
+	}
+}

@@ -27,6 +27,11 @@ func ingestProjection() Projection {
 		{Name: "proxyUser", Type: TypeString, Default: ""},
 		{Name: "proxyPassword", Type: TypeString, Default: "", Secret: true},
 		{Name: "proxyUnusable", Type: TypeBool, Default: false},
+		{Name: "feedSanity", Type: TypeBool, Default: false},
+		{Name: "etBlockCategories", Type: TypeList, Default: []any{}, Key: "category",
+			Items: []Field{{Name: "category", Type: TypeString, Default: ""}}},
+		{Name: "etMatchCategories", Type: TypeList, Default: []any{}, Key: "category",
+			Items: []Field{{Name: "category", Type: TypeString, Default: ""}}},
 	}}
 }
 

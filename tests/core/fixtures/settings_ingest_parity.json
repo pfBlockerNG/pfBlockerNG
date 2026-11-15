@@ -1,8 +1,12 @@
 {
   "schema": 1,
   "projection": "ingest",
-  "defaults": {"suppression": true, "suppressionCidrV4": 0, "suppressionCidrV6": 0, "dnsblIp": false, "dnsblLenient": false, "feedHostFilter": true, "feedHostAllowlist": [], "selfAddresses": [], "proxyUrl": "", "proxyUser": "", "proxyPassword": "", "proxyUnusable": false},
+  "defaults": {"suppression": true, "suppressionCidrV4": 0, "suppressionCidrV6": 0, "dnsblIp": false, "dnsblLenient": false, "feedHostFilter": true, "feedHostAllowlist": [], "selfAddresses": [], "proxyUrl": "", "proxyUser": "", "proxyPassword": "", "proxyUnusable": false, "feedSanity": false, "etBlockCategories": [], "etMatchCategories": []},
   "cases": [
+    {"id":"sanity-on","description":"Existing General feed sanity toggle is on.","config":{"gen":{"pfb_feed_sanity":"on"}},"ingest":{"feedSanity":true},"php":{}},
+    {"id":"sanity-off","description":"Explicit empty feed sanity toggle is off.","config":{"gen":{"pfb_feed_sanity":""}},"ingest":{},"php":{}},
+    {"id":"et-selections","description":"Existing reputation CSV selections retain exact category identities, once each.","config":{"rep":{"etblock":"ET_Cnc,ET_P2P,ET_Cnc","etmatch":"ET_Bot,ET_P2Pcnc"}},"ingest":{"etBlockCategories":[{"category":"ET_Cnc"},{"category":"ET_P2P"}],"etMatchCategories":[{"category":"ET_Bot"},{"category":"ET_P2Pcnc"}]},"php":{}},
+    {"id":"et-legacy-none","description":"Legacy x, empty and zero selections mean none.","config":{"rep":{"etblock":"x,0,","etmatch":""}},"ingest":{},"php":{}},
     {"id":"defaults","description":"Nothing stored: suppression on with no CIDR limit, the DNSBL IP action off and strict, the feed-host filter on with an empty allowlist, no address of the box, no proxy.","config":{},"ingest":{},"php":{"supp":true,"floors":["Disabled","Disabled"],"dnsblIp":false,"lenient":false,"filter":true,"allow":[],"proxy":{"host":null,"port":null,"userpwd":null}}},
     {"id":"suppression-on","description":"ip suppression on.","config":{"ip":{"suppression":"on"}},"ingest":{},"php":{"supp":true}},
     {"id":"suppression-off","description":"ip suppression empty is an explicit Off.","config":{"ip":{"suppression":""}},"ingest":{"suppression":false},"php":{"supp":false}},

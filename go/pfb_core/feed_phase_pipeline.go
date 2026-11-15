@@ -168,6 +168,17 @@ func (p *feedPhaseRunner) runFeed(ctx context.Context, spec phaseFeed, force str
 	if ctx.Err() != nil {
 		return failedFeed(spec.id, "fetch", "cancelled")
 	}
+	if force == "parse" && hasOrig && spec.kind != "dnsbl" && !spec.custom && !spec.synthetic &&
+		strings.Contains(spec.source, "iprepdata.txt") {
+		backup, backupErr = snapshotPaths(feedStatePaths(feed))
+		if backupErr != nil {
+			return failedFeed(spec.id, "fetch", "baseline_backup_failed")
+		}
+		reprocessed := fetcher.ReprocessET(ctx, feed, feedfetch.Request{URL: spec.source})
+		if !reprocessed.OK {
+			return failedFeed(spec.id, "fetch", safeFeedfetchReason(reprocessed.Reason, "feed_reprocess_failed", spec, fetcher))
+		}
+	}
 	result.SourceChanged = sourceChanged
 	disposition := "changed"
 	if force == "parse" || force == "none" && !sourceChanged {
@@ -308,7 +319,11 @@ func (p *feedPhaseRunner) parseAndPublish(ctx context.Context, spec phaseFeed, f
 		if log != nil {
 			out = log
 		}
-		outcome := feedparse.RunPreScript(ctx, script, norm.Path, staged, out)
+		listType := familySuffix(spec.kind)
+		if spec.kind == "dnsbl" {
+			listType = "dnsbl"
+		}
+		outcome := feedparse.RunPreScript(ctx, script, norm.Path, staged, out, listType)
 		if !outcome.OK {
 			result.Disposition, result.Stage, result.Reason, result.PreScriptFailed = "failed", "script", "script_failed", true
 			return result
@@ -345,17 +360,17 @@ func (p *feedPhaseRunner) parseIP(ctx context.Context, spec phaseFeed, feed feed
 		return failedFeed(spec.id, "parse", "normalized_feed_unavailable")
 	}
 	defer input.Close()
-	floorV4 := intSetting(ingest, "suppressionCidrV4")
+	floorV4, floorV6 := intSetting(ingest, "suppressionCidrV4"), intSetting(ingest, "suppressionCidrV6")
+	if spec.format == "geoip" {
+		floorV4, floorV6 = 0, 0
+	}
 	if spec.kind == "ipv4" && spec.suppressionCidr > 0 {
 		floorV4 = spec.suppressionCidr
 	}
 	cfg := feedparse.IPConfig{
-		VType: familySuffix(spec.kind), PFType: "auto", Custom: spec.custom,
-		FloorV4: cidrFloor(floorV4), FloorV6: cidrFloor(intSetting(ingest, "suppressionCidrV6")),
+		VType: familySuffix(spec.kind), PFType: feedparse.IPParseType(spec.format, spec.source), Custom: spec.custom,
+		FloorV4: cidrFloor(floorV4), FloorV6: cidrFloor(floorV6),
 		Suppression: boolSetting(ingest, "suppression"),
-	}
-	if spec.format == "regex" {
-		cfg.PFType = "regex"
 	}
 	content := feedparse.CountContent(contentPath)
 	var parsed feedparse.IPFeed
@@ -368,6 +383,12 @@ func (p *feedPhaseRunner) parseIP(ctx context.Context, spec phaseFeed, feed feed
 		return failedFeed(spec.id, "parse", "ip_parse_failed")
 	}
 	defer os.Remove(staged)
+	if parsed.Placeholder != "" {
+		// PHP appends its configured placeholder; the staged artifact holds only real addresses.
+		if err := os.Truncate(staged, 0); err != nil {
+			return failedFeed(spec.id, "parse", "ip_parse_failed")
+		}
+	}
 	result.Disposition, result.Stage = disposition, "parse"
 	result.Entries, result.ParseFailures = parsed.Entries, parsed.ParseFail
 	result.Suppressed, result.MappedDrops, result.Placeholder = parsed.Suppressed, parsed.MappedDrops, parsed.Placeholder
