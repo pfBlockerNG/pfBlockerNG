@@ -252,7 +252,7 @@ func publishLogGen(path string) {
 	if err != nil {
 		return
 	}
-	state.LogGen++
+	state.LogGen = (state.LogGen + 1) & genMask
 	_ = writeWorkerState(path, state)
 }
 
@@ -363,6 +363,7 @@ func (s workerState) outcome() (Result, error) {
 // Admission owns the operation lock until Close or a successful launch transfers it.
 type Admission struct {
 	lock        *os.File
+	logGen      int64
 	occurrences map[string]int64
 	published   func()
 }
@@ -391,7 +392,8 @@ func (c *Command) Admit(logPath string) (*Admission, error) {
 		return nil, err
 	}
 	a := &Admission{lock: lock}
-	if _, err := readWorkerState(logPath + ".status"); errors.Is(err, os.ErrNotExist) {
+	state, err := readWorkerState(logPath + ".status")
+	if errors.Is(err, os.ErrNotExist) {
 		if err := noWorkerState(logPath); err != nil {
 			a.Close()
 			return nil, fmt.Errorf("cannot recover worker state: %w", err)
@@ -399,6 +401,8 @@ func (c *Command) Admit(logPath string) (*Admission, error) {
 	} else if err != nil {
 		a.Close()
 		return nil, fmt.Errorf("cannot recover worker state: %w", err)
+	} else {
+		a.logGen = (state.LogGen + 1) & genMask
 	}
 	return a, nil
 }
@@ -421,7 +425,10 @@ func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return Result{}, err
 	}
-	state := workerState{Version: workerVersion, Nonce: hex.EncodeToString(nonce[:]), Path: c.Path, Request: req, StartedAt: time.Now().Unix(), Occurrences: a.occurrences}
+	state := workerState{
+		Version: workerVersion, Nonce: hex.EncodeToString(nonce[:]), Path: c.Path, Request: req, StartedAt: time.Now().Unix(),
+		LogGen: a.logGen, Occurrences: a.occurrences,
+	}
 	if err := writeWorkerState(log.Name()+".request", state); err != nil {
 		return Result{}, err
 	}
