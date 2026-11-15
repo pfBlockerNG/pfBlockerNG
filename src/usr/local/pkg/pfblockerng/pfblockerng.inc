@@ -4603,7 +4603,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own command
 	// line; and pfb-core as daemon(8) runs it
 	$supervisor = escapeshellarg('^(daemon: pfb_core\[|/usr/sbin/daemon .*-t pfb_core )');
-	$child = escapeshellarg('^' . str_replace('.', '\.', $coreDir) . '/bin/freebsd-[a-z0-9]+/pfb-core( |$)');
+	$child = escapeshellarg('^' . str_replace('.', '\.', $coreDir) . '/bin/freebsd-[a-z0-9]+/pfb-core --socket( |$)');
 
 	// issue #3924: Core keeps no settings store any more (config.xml is the store); the earlier model's files go
 	foreach (['settings.json', 'settings.json.tmp', 'settings.lock'] as $retired) {
