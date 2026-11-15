@@ -59,7 +59,7 @@ def test_core_independent_update(smoke_vm: SmokeVM, family: str, signal: str, re
 
 
 def test_private_core_shows_live_php_script_output_cap(smoke_vm: SmokeVM) -> None:
-    """Diagnostic-only historical byte-cap route probe; not Unicode-cap acceptance."""
+    """The private Core HTTP viewer retains one sanitized UTF-8 script transcript."""
     helpers.deploy(smoke_vm)
     directory = f"/root/pfb-native-output-{uuid4().hex}"
     fixture = Path(__file__).parent / "fixtures" / "native_script_output_cap.php"
@@ -88,7 +88,7 @@ def test_private_core_shows_live_php_script_output_cap(smoke_vm: SmokeVM) -> Non
             )[-24000:]
         else:
             diagnostics = (preflight or "NATIVE_PHP_PREFLIGHT missing") + "\n" + diagnostics
-        assert run.returncode == 0, f"diagnostic native PHP output-cap probe failed:\n{diagnostics}"
+        assert run.returncode == 0, f"native PHP UTF-8 output-cap proof failed:\n{diagnostics}"
         assert preflight, diagnostics
         assert summary, diagnostics
     finally:

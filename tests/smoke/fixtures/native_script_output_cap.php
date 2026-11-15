@@ -1,9 +1,6 @@
 <?php
-const VIEWER_LIMIT = 1_048_576;
-const VIEWER_NOTICE = "\n[ pfBlockerNG ] Script output limit (1 MiB) reached; remaining output is in the main log.\n";
-const PAYLOAD_BLOCK = '0123456789abcdef';
-const PAYLOAD_REPEATS = 49_152;
-
+const VIEWER_LIMIT = 1_000_000;
+const VIEWER_NOTICE = "\n[ pfBlockerNG ] Script output limit (1,000,000 characters) reached; remaining output is in the main log.\n";
 function demand(bool $ok, string $why): void {
 	if (!$ok) {
 		throw new RuntimeException($why);
@@ -172,7 +169,7 @@ function collect_exact(string $dir, string $after, int $length, string $label): 
 			$cursorDetail = sprintf('pages=%d cursor_start=%s cursor_end=%s cursor_advance=%s',
 				$pages, $start, $next, $advance);
 			throw new RuntimeException(sprintf('%s exceeded expected viewer bytes: %s %s %s', $label, digest($bytes),
-				$cursorDetail, viewer_boundary_diagnostics($dir, $bytes, $view, VIEWER_LIMIT, VIEWER_NOTICE)));
+				$cursorDetail, viewer_boundary_diagnostics($dir, $bytes, $view, $length - strlen($notice), $notice)));
 		}
 		if (strlen($bytes) === $length) {
 			demand(($view['running'] ?? FALSE) === TRUE, "{$label} was not live at the output barrier");
@@ -181,7 +178,7 @@ function collect_exact(string $dir, string $after, int $length, string $label): 
 		usleep(20_000);
 	} while (microtime(TRUE) < $end);
 	throw new RuntimeException("{$label} output deadline: " . digest($bytes) . ' ' .
-		viewer_boundary_diagnostics($dir, $bytes, $view, VIEWER_LIMIT, VIEWER_NOTICE));
+		viewer_boundary_diagnostics($dir, $bytes, $view, $length - strlen($notice), $notice));
 }
 
 /** @return array{string, array} complete transcript and final view */
@@ -294,14 +291,25 @@ function control_mode(string $self, string $binary, string $dir): void {
 				$error['file'], $error['line'], substr($error['message'], 0, 2048)));
 		}
 	});
-	$payload = str_repeat(PAYLOAD_BLOCK, PAYLOAD_REPEATS);
-	$combined = $payload . $payload;
-	$payloadPath = "$dir/payload.bin";
+	$edgeTailRaw = "\u{00E9}\u{20AC}e\u{0301}\n\t\r\n\x00\x1b\x7f\u{0085}\u{200e}\xe2\x28\xa1";
+	$edgeExpected = str_repeat('P', 8190) . "\u{1F4A9}\u{00E9}\u{20AC}e\u{0301}\n\t"
+		. "\\x0D\n\\x00\\x1B\\x7F\\u{85}\\u{200E}\\xE2(\\xA1";
+	$padCharacters = VIEWER_LIMIT - mb_strlen($edgeExpected, 'UTF-8') - strlen('\\x1B');
+	$stdoutPayload = str_repeat('P', 8190) . "\xF0\x9F";
+	$stderrPayload = "\x92\xA9" . $edgeTailRaw . str_repeat("\u{20AC}", $padCharacters)
+		. "\x1B\x00OVERFLOW\r\n\xFF\xE2\x82";
+	$expectedPrefix = $edgeExpected . str_repeat("\u{20AC}", $padCharacters) . '\\x1B';
+	$expectedMain = $expectedPrefix . "\\x00OVERFLOW\\x0D\n\\xFF\\xE2\\x82";
+	$stdoutPath = "$dir/payload.stdout";
+	$stderrPath = "$dir/payload.stderr";
 	$mainPath = "$dir/main.log";
-
 	try {
-		demand(strlen($payload) === 786_432 && strlen($combined) > VIEWER_LIMIT, 'fixture payload size is invalid');
-		demand(file_put_contents($payloadPath, $payload) === strlen($payload), 'cannot write private payload');
+		demand($padCharacters > 0, 'fixture UTF-8 boundary payload is too large');
+		demand(mb_strlen($expectedPrefix, 'UTF-8') === VIEWER_LIMIT, 'expected sanitized prefix is not one million codepoints');
+		demand(mb_strlen($expectedMain, 'UTF-8') > VIEWER_LIMIT &&
+			strlen($stdoutPayload) + strlen($stderrPayload) > VIEWER_LIMIT, 'fixture does not overflow both output units');
+		demand(file_put_contents($stdoutPath, $stdoutPayload) === strlen($stdoutPayload), 'cannot write private stdout payload');
+		demand(file_put_contents($stderrPath, $stderrPayload) === strlen($stderrPayload), 'cannot write private stderr payload');
 		foreach (["$dir/run", "$dir/state", "$dir/hooks", "$dir/scripts"] as $path) {
 			demand(is_dir($path) || mkdir($path, 0700), "cannot create private path {$path}");
 		}
@@ -310,7 +318,7 @@ function control_mode(string $self, string $binary, string $dir): void {
 
 		$hook = "#!/bin/sh\nset -eu\n: > " . escapeshellarg("$dir/hook.entered") . "\n";
 		$hook .= 'while [ ! -e ' . escapeshellarg("$dir/write.output") . "; do sleep 0.05; done\n";
-		$hook .= '/bin/cat ' . escapeshellarg($payloadPath) . "\n/bin/cat " . escapeshellarg($payloadPath) . " >&2\n";
+		$hook .= '/bin/cat ' . escapeshellarg($stdoutPath) . "\n/bin/cat " . escapeshellarg($stderrPath) . " >&2\n";
 		$hook .= ': > ' . escapeshellarg("$dir/hook.ready") . "\n";
 		$hook .= 'while [ ! -e ' . escapeshellarg("$dir/release") . "; do sleep 0.05; done\n";
 		$hook .= ': > ' . escapeshellarg("$dir/hook.done") . "\n";
@@ -347,12 +355,12 @@ function control_mode(string $self, string $binary, string $dir): void {
 
 		demand(file_put_contents("$dir/write.output", "go\n") !== FALSE, 'cannot release output writer');
 		until(static fn() => is_file("$dir/hook.ready"), 'global hook wrote both output streams', 45);
-		$liveLength = VIEWER_LIMIT + strlen(VIEWER_NOTICE);
+		$expectedViewer = $expectedPrefix . VIEWER_NOTICE;
+		$liveLength = strlen($expectedViewer);
 		[$viewerA, $cursorA] = collect_exact($dir, $startCursor, $liveLength, 'viewer A');
 		[$viewerB] = collect_exact($dir, $startCursor, $liveLength, 'viewer B');
-		$expectedViewer = substr($combined, 0, VIEWER_LIMIT) . VIEWER_NOTICE;
-		demand($viewerA === $expectedViewer, 'viewer A cap mismatch: ' . digest($viewerA));
-		demand($viewerB === $expectedViewer, 'viewer B cap mismatch: ' . digest($viewerB));
+		demand($viewerA === $expectedViewer, 'viewer A sanitized character-cap mismatch: ' . digest($viewerA));
+		demand($viewerB === $expectedViewer, 'viewer B sanitized character-cap mismatch: ' . digest($viewerB));
 		demand($viewerA === $viewerB, 'independent live viewer positions differ');
 		demand(substr_count($viewerA, VIEWER_NOTICE) === 1, 'live viewer does not contain exactly one limit notice');
 		demand(is_file("$dir/hook.ready") && !is_file("$dir/hook.done") && !is_file("$dir/update.finished"),
@@ -378,13 +386,13 @@ function control_mode(string $self, string $binary, string $dir): void {
 
 		$main = file_get_contents($mainPath);
 		demand(is_string($main), 'private main log cannot be read');
-		$mainMatches = substr_count($main, $combined);
+		$mainMatches = substr_count($main, $expectedMain);
 		$progressMatches = substr_count($main, "NORMAL_PROGRESS_AFTER_HOOK\n");
 		$listMatches = substr_count($main, "SECOND_SCRIPT_VISIBLE\n");
-		demand($mainMatches === 1, 'private main log did not contain full hook output exactly once: matches=' . $mainMatches);
+		demand($mainMatches === 1, 'private main log did not contain full sanitized output exactly once: matches=' . $mainMatches);
 		demand($progressMatches === 1, 'private main log did not contain ordinary progress exactly once: matches=' . $progressMatches);
 		demand($listMatches === 1, 'private main log did not contain second-script output exactly once: matches=' . $listMatches);
-		demand(strlen($combined) > VIEWER_LIMIT, 'main-log check did not cross the viewer boundary');
+		demand(!str_contains($main, VIEWER_NOTICE), 'viewer-only notice appeared in the main log');
 
 		$rotated = "$dir/main.log.rotated";
 		demand(rename($mainPath, $rotated) && file_put_contents($mainPath, '') !== FALSE, 'cannot rotate private main sink');
@@ -392,7 +400,7 @@ function control_mode(string $self, string $binary, string $dir): void {
 		demand($afterRotation === $transcriptA, 'GetUpdate transcript changed after private main-log rotation');
 
 		$successSummary = sprintf("NATIVE_SCRIPT_OUTPUT_CAP_PASS live=%s transcript=%s main=%s result=%s\n",
-			digest($viewerA), digest($transcriptA), digest($combined), $completed['update']['result']);
+			digest($viewerA), digest($transcriptA), digest($expectedMain), $completed['update']['result']);
 	} catch (Throwable $error) {
 		$failure = $error;
 		report_fixture_failure($dir, 'control', sprintf('%s at %s:%d: %s', get_class($error), $error->getFile(),
