@@ -24,11 +24,16 @@ func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(s
 	if path == "" {
 		return nil, nil
 	}
+	logPath := filepath.Join(stateDir, "update.log")
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
-		Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
+		LogPath: logPath, Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
 	command := &update.Command{Path: path}
-	gate := update.New(filepath.Join(stateDir, "update.log"), nil, sched.Done)
+	gate := update.New(logPath, nil, sched.Done)
 	gate.Admit = command.Admit
+	sched.Bind(func(req update.Request) error {
+		gate.Commit = sched.CommitAdmission
+		return gate.Start(req)
+	})
 	var broken atomic.Bool
 	gate.Launch = func(ctx context.Context, lease *update.Admission, req update.Request, log *os.File) (update.Result, error) {
 		if _, err := st.Reload(ctx); err != nil && ctx.Err() == nil && broken.CompareAndSwap(false, true) {

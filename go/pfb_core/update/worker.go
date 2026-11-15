@@ -25,18 +25,20 @@ const maxWorkerState = 4 << 20 // request plus bounded result and private dispos
 
 // workerState is private to this binary; the nonce pairs admission and completion, never a PID.
 type workerState struct {
-	Version    int     `json:"version"`
-	Nonce      string  `json:"nonce"`
-	Path       string  `json:"path"`
-	Request    Request `json:"request"`
-	StartedAt  int64   `json:"startedAt"`
-	LogGen     int64   `json:"logGen,omitempty"`
-	FinishedAt *int64  `json:"finishedAt,omitempty"`
-	ExitCode   *int    `json:"exitCode,omitempty"`
-	Signal     int     `json:"signal,omitempty"`
-	CoreDumped bool    `json:"coreDumped,omitempty"`
-	Failure    string  `json:"failure,omitempty"`
-	Result     Result  `json:"result"`
+	Version     int              `json:"version"`
+	Nonce       string           `json:"nonce"`
+	Path        string           `json:"path"`
+	Request     Request          `json:"request"`
+	StartedAt   int64            `json:"startedAt"`
+	LogGen      int64            `json:"logGen,omitempty"`
+	Occurrences map[string]int64 `json:"occurrences,omitempty"`
+	Settled     bool             `json:"settled,omitempty"`
+	FinishedAt  *int64           `json:"finishedAt,omitempty"`
+	ExitCode    *int             `json:"exitCode,omitempty"`
+	Signal      int              `json:"signal,omitempty"`
+	CoreDumped  bool             `json:"coreDumped,omitempty"`
+	Failure     string           `json:"failure,omitempty"`
+	Result      Result           `json:"result"`
 }
 
 func init() {
@@ -134,7 +136,7 @@ func decodeWorkerState(r io.Reader) (workerState, error) {
 		}
 	}
 	if state.FinishedAt == nil {
-		if state.ExitCode != nil || state.Signal != 0 || state.CoreDumped || state.Failure != "" || len(state.Result.Outcomes) != 0 || len(state.Result.Attempted) != 0 || state.Result.GeoIPReady != nil {
+		if state.Settled || state.ExitCode != nil || state.Signal != 0 || state.CoreDumped || state.Failure != "" || len(state.Result.Outcomes) != 0 || len(state.Result.Attempted) != 0 || state.Result.GeoIPReady != nil {
 			return state, errors.New("the unfinished worker state contains a terminal result")
 		}
 	} else if *state.FinishedAt < state.StartedAt || state.Signal < 0 || state.Signal > 255 ||
@@ -186,6 +188,35 @@ func publishLogGen(path string) {
 	state.LogGen++
 	_ = writeWorkerState(path, state)
 }
+
+// Recover records one finished receipt. apply runs while the lifetime lock is held; a write error leaves the receipt unsettled.
+func Recover(logPath string, apply func(int64, map[string]int64, Result, error) error) error {
+	lock, err := operationLock(logPath)
+	if errors.Is(err, ErrRunning) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	state, err := readWorkerState(logPath + ".status")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if state.FinishedAt == nil || state.Settled {
+		return nil
+	}
+	res, runErr := state.outcome()
+	if err := apply(*state.FinishedAt, state.Occurrences, res, runErr); err != nil {
+		return err
+	}
+	state.Settled = true
+	return writeWorkerState(logPath+".status", state)
+}
+
 func (s workerState) outcome() (Result, error) {
 	if s.FinishedAt == nil {
 		return s.Result, errors.New("the worker was interrupted before publishing completion")
@@ -214,7 +245,8 @@ func (s workerState) outcome() (Result, error) {
 
 // Admission owns the operation lock until Close or a successful launch transfers it.
 type Admission struct {
-	lock *os.File
+	lock        *os.File
+	occurrences map[string]int64
 }
 
 func (a *Admission) Close() error {
@@ -255,7 +287,7 @@ func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return Result{}, err
 	}
-	state := workerState{Version: workerVersion, Nonce: hex.EncodeToString(nonce[:]), Path: c.Path, Request: req, StartedAt: time.Now().Unix()}
+	state := workerState{Version: workerVersion, Nonce: hex.EncodeToString(nonce[:]), Path: c.Path, Request: req, StartedAt: time.Now().Unix(), Occurrences: a.occurrences}
 	if err := writeWorkerState(log.Name()+".request", state); err != nil {
 		return Result{}, err
 	}

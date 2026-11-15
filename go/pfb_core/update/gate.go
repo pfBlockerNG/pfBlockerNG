@@ -24,7 +24,8 @@ const (
 var (
 	ErrRunning = errors.New("an Update is running")
 	ErrStopped = errors.New("Core is stopping")
-
+	// ErrRecoveryRequired means a finished worker receipt is not yet in the schedule. The caller records it and retries once.
+	ErrRecoveryRequired = errors.New("an Update result is waiting to be recorded")
 	// ErrDeferred is what a RunFunc returns when the Update chose not to run now (Command.Run: the program's exit status 75): it
 	// is not a failure, and it reported nothing. The gate ends such an Update with the result "skipped".
 	ErrDeferred = errors.New("the Update was deferred")
@@ -74,9 +75,9 @@ type Gate struct {
 	run     RunFunc
 	Admit   func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
 	Launch  func(context.Context, *Admission, Request, *os.File) (Result, error)
+	Commit  func() (map[string]int64, error) // nil except the scheduler, which already holds its lock
 	done    func(Request, Result, error)
 	admit   sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
-
 	mu      sync.Mutex // everything below, and the log's truncation
 	status  *Status    // replaced when the Update ends, never changed in place: View hands it out
 	gen     int64      // bumped by every Start but the first and by every trim of the log: a cursor from before reads from the start
@@ -109,6 +110,26 @@ func (g *Gate) Start(req Request) error {
 		if err != nil {
 			g.admit.Unlock()
 			return err
+		}
+	}
+	if receipt, readErr := readWorkerState(g.logPath + ".status"); readErr == nil && receipt.FinishedAt != nil && !receipt.Settled {
+		if lease != nil {
+			lease.Close()
+		}
+		g.admit.Unlock()
+		return ErrRecoveryRequired
+	}
+	if g.Commit != nil {
+		snap, err := g.Commit()
+		if err != nil {
+			if lease != nil {
+				lease.Close()
+			}
+			g.admit.Unlock()
+			return err
+		}
+		if lease != nil {
+			lease.occurrences = snap
 		}
 	}
 	log, err := os.OpenFile(g.logPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o600)
