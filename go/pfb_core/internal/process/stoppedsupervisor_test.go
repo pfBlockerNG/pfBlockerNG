@@ -59,7 +59,15 @@ exit 0`)
 			t.Fatalf("the program recorded an invalid pgid %q: %v", raw, err)
 		}
 		child := recordedPid(t, dir)
-		t.Cleanup(func() { _ = syscall.Kill(group, syscall.SIGCONT) })
+		resumed := false
+		resume := func() {
+			if resumed {
+				return
+			}
+			resumed = true
+			_ = syscall.Kill(group, syscall.SIGCONT)
+		}
+		t.Cleanup(resume)
 		for deadline := time.Now().Add(stuck); ; {
 			probe, stop := context.WithTimeout(context.Background(), time.Second)
 			state, err := exec.CommandContext(probe, "ps", "-o", "stat=", "-p", strconv.Itoa(leader)).Output()
@@ -88,7 +96,7 @@ exit 0`)
 				t.Fatal("STUCK: cancellation neither inspected the exited program nor ended its daemon")
 			}
 		}
-		_ = syscall.Kill(group, syscall.SIGCONT)
+		resume()
 		return cmd.Wait()
 	}
 	res, err := c.Run(ctx, update.Request{}, newLog(t))
