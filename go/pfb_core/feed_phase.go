@@ -53,6 +53,7 @@ type feedPhaseRunner struct {
 	store   *settings.Store
 	flags   feedFlags
 	fetcher *feedfetch.Fetcher
+	zone    func() *time.Location
 }
 
 func newFeedPhaseRunner(store *settings.Store, flags feedFlags) *feedPhaseRunner {

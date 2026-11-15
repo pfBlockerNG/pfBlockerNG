@@ -132,6 +132,111 @@ final class FeedPhaseClientTest extends TestCase
 		}
 	}
 
+	public static function orderedBatchSizes(): array
+	{
+		return ['empty' => [0], 'one' => [1], 'limit' => [1024], 'over limit' => [1025], 'three batches' => [2049]];
+	}
+
+	#[DataProvider('orderedBatchSizes')]
+	public function testGroupedPhaseKeepsEveryFeedInOrderWithinTheStrictLimit(int $count): void
+	{
+		$ids = $count === 0 ? [] : array_map(static fn (int $n): string => "dnsbl:feed_{$n}", range(1, $count));
+		$groups = pfb_core_feed_phase_request_groups($ids, [], 'none');
+		$calls = [];
+		$results = pfb_core_feed_phase_groups('dnsbl', str_repeat('a', 64), $groups,
+			static function (string $method, array $params) use (&$calls): array {
+				$calls[] = $params;
+				return ['status' => 200, 'body' => ['results' => array_map(self::feedPhaseResult(...), $params['feeds'])], 'error' => NULL];
+			});
+		$this->assertSame($ids, array_merge([], ...array_column($calls, 'feeds')), 'transport visits every feed exactly once in configured order');
+		$this->assertSame($ids, array_keys($results));
+		$this->assertCount((int) ceil($count / 1024), $calls);
+		foreach ($calls as $call) {
+			$this->assertLessThanOrEqual(1024, count($call['feeds']));
+			$this->assertSame('none', $call['force']);
+		}
+	}
+
+	public function testParseForceInterleavingStaysContiguousInsteadOfRegroupingFeeds(): void
+	{
+		$ids = ['dnsbl:one', 'dnsbl:two', 'dnsbl:three', 'dnsbl:four', 'dnsbl:five'];
+		$this->assertSame([
+			['feeds' => ['dnsbl:one'], 'force' => 'none'],
+			['feeds' => ['dnsbl:two', 'dnsbl:three'], 'force' => 'parse'],
+			['feeds' => ['dnsbl:four'], 'force' => 'none'],
+			['feeds' => ['dnsbl:five'], 'force' => 'parse'],
+		], pfb_core_feed_phase_request_groups($ids, ['dnsbl:two', 'dnsbl:three', 'dnsbl:five'], 'none'));
+	}
+
+	public static function invalidCompleteSets(): array
+	{
+		$valid = array_map(static fn (int $n): string => "dnsbl:feed_{$n}", range(1, 1024));
+		return [
+			'duplicate across chunk boundary' => [[...$valid, $valid[0]]],
+			'malformed after first complete chunk' => [[...$valid, 'dnsbl:bad/path']],
+			'ordinary dotted ID remains forbidden' => [[...$valid, 'dnsbl:bad.dot']],
+		];
+	}
+
+	#[DataProvider('invalidCompleteSets')]
+	public function testCompleteSetValidationRejectsBeforeAnyTransport(array $ids): void
+	{
+		$calls = [];
+		$groups = pfb_core_feed_phase_request_groups($ids, [], 'none');
+		$results = pfb_core_feed_phase_groups('dnsbl', str_repeat('a', 64), $groups,
+			static function (string $method, array $params) use (&$calls): array {
+				$calls[] = $params;
+				return ['status' => 200, 'body' => ['results' => array_map(self::feedPhaseResult(...), $params['feeds'])], 'error' => NULL];
+			});
+		$this->assertSame([], $calls, 'known invalid complete selection must not partially execute the first chunk');
+		$this->assertNotEmpty($results);
+		foreach ($results as $result) {
+			$this->assertSame('failed', $result['disposition']);
+			$this->assertSame('core_request_invalid', $result['reason']);
+		}
+	}
+
+	public function testDuplicateAcrossForceGroupsIsRejectedBeforeTransport(): void
+	{
+		$calls = 0;
+		$results = pfb_core_feed_phase_groups('dnsbl', str_repeat('a', 64), [
+			['feeds' => ['dnsbl:one'], 'force' => 'none'],
+			['feeds' => ['dnsbl:one'], 'force' => 'parse'],
+		], static function (string $method, array $params) use (&$calls): array {
+			$calls++;
+			return ['status' => 200, 'body' => ['results' => [self::feedPhaseResult('dnsbl:one')]], 'error' => NULL];
+		});
+		$this->assertSame(0, $calls);
+		$this->assertSame('core_request_invalid', $results['dnsbl:one']['reason']);
+	}
+
+	public function testInvalidLaterForceGroupDoesNotExecuteAnEarlierValidGroup(): void
+	{
+		$calls = 0;
+		$results = pfb_core_feed_phase_groups('dnsbl', str_repeat('a', 64), [
+			['feeds' => ['dnsbl:one'], 'force' => 'none'],
+			['feeds' => ['dnsbl:two'], 'force' => 'invalid'],
+		], static function (string $method, array $params) use (&$calls): array {
+			$calls++;
+			return ['status' => 200, 'body' => ['results' => array_map(self::feedPhaseResult(...), $params['feeds'])], 'error' => NULL];
+		});
+		$this->assertSame(0, $calls, 'validate the whole phase before any transport, not only the next request');
+		$this->assertEveryResultFailedAtCore(array_values($results), ['dnsbl:one', 'dnsbl:two'], 'core_request_invalid');
+	}
+
+	public function testStrictSingleRequestClientStillRejects1025Feeds(): void
+	{
+		$ids = array_map(static fn (int $n): string => "dnsbl:feed_{$n}", range(1, 1025));
+		$calls = 0;
+		$results = pfb_core_feed_phase(str_repeat('a', 64), 'dnsbl', $ids, 'none',
+			static function () use (&$calls): array {
+				$calls++;
+				return ['status' => 0, 'body' => NULL, 'error' => 'must not execute'];
+			});
+		$this->assertSame(0, $calls, 'batch outside the strict client instead of widening its protocol limit');
+		$this->assertEveryResultFailedAtCore($results, $ids, 'core_request_invalid');
+	}
+
 	private static function feedPhaseResult(string $id, array $overrides = []): array
 	{
 		return array_replace(array_fill_keys(self::RESULT_KEYS, 0), [

@@ -1,4 +1,4 @@
-"""Tier-A UI coverage for General save dispatching its feed apply through Core (#3977)."""
+"""General-save Core apply coverage, selected by both UI render and functional tiers (#3977)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from ..conftest import SmokeVM
     from .webui import WebUI
 
-pytestmark = pytest.mark.ui_render
+pytestmark = [pytest.mark.ui_render, pytest.mark.ui_e2e]
 
 GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 KEEP_SETTING = "installedpackages/pfblockerng/config/0/pfb_keep"

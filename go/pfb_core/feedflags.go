@@ -20,6 +20,9 @@ type feedFlags struct {
 	ASNCSV       string   // --feed-asn-csv: IPinfo ASN ranges used by `asn` feeds
 	RsyncBin     string   // --rsync-bin: the rsync program
 	UserAgent    string   // --user-agent: what a feed host is told Core is
+
+	IPParseLog    string // --feed-ip-parse-log: detailed IPv4/IPv6 parse failures
+	DNSBLParseLog string // --feed-dnsbl-parse-log: detailed DNSBL parse failures
 }
 
 // addFeedFlags registers the feed phase's flags on fl and returns what a parse fills. A flag that is not valid refuses the
@@ -55,6 +58,8 @@ func addFeedFlags(fl *flag.FlagSet) *feedFlags {
 	repeated("script-dir", "a folder of list scripts, searched in the order given (repeatable)", &ff.ScriptDirs)
 	single("feed-orig-dir", "the IPv4 and IPv6 feed baselines", &ff.OrigDir)
 	single("dnsbl-orig-dir", "the DNSBL feed baselines", &ff.DNSBLOrigDir)
+	single("feed-ip-parse-log", "the detailed IPv4 and IPv6 parse-error log (omitted: disabled)", &ff.IPParseLog)
+	single("feed-dnsbl-parse-log", "the detailed DNSBL parse-error log (omitted: disabled)", &ff.DNSBLParseLog)
 	single("feed-blacklist-dir", "the Blacklist database directory", &ff.BlacklistDir)
 	single("feed-db-dir", "the package database directory", &ff.DBDir)
 	single("feed-geoip-dir", "the local GeoIP country-feed directory", &ff.GeoIPDir)

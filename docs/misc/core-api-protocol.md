@@ -521,6 +521,23 @@ Custom feeds insert `_custom` before the IP family suffix (or before `.parsed` f
 `DNSBLIP_v6` header. DNSBL family files are written even when empty, so PHP can remove stale sidecars. A failed fetch, transform,
 parse or publication leaves the previous parsed artifacts intact. Results contain no credentials, source URLs or filesystem paths.
 
+Detailed parse failures are appended to the absolute paths supplied by `--feed-ip-parse-log` and
+`--feed-dnsbl-parse-log`. Rows retain the existing unquoted `timestamp,header,line,raw,line-number` format; timestamps use
+the current `--zoneinfo` zone, resolved once per feed. Core streams records through one append handle per feed without
+normalizing the parser's fields again. An append failure produces one progress warning for that feed without changing its
+parse result. Omitting a path disables that diagnostic file for an unconfigured Core; the package supplies both paths.
+
+PHP validates the complete selected ID set before dispatch. Script-free phases preserve configured order in contiguous
+same-force batches of at most 1024 feeds. If a selected feed has an active pre- or post-script, the phase instead completes
+each feed's Core work, PHP publication and post-script before starting the next feed, including script-free successors.
+Selected scripts with an existing baseline reparse locally even when source bytes are unchanged; Hold and selection rules
+still apply. Global hooks run once per pass, including no-op passes with zero change flags and empty changed lists.
+
+A failed DNSBL artifact publication retains valid current-generation active membership and pending failure markers.
+An unchanged retry consumes the ready parsed artifacts before clearing those markers or reporting success; local
+publication repair does not force a new download. Failed multi-artifact publication restores the previous set, and a
+failed restoration remains visible rather than being reported as success.
+
 ## Errors
 
 Every error is the same envelope, with the HTTP status its code maps to:

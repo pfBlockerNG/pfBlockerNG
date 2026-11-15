@@ -1736,6 +1736,126 @@ final class DnsblVipApplyLifecycleTest extends TestCase
 		$this->assertStringNotContainsString('kept.example', $raw);
 	}
 
+	#[DataProvider('failedRefreshRows')]
+	public function testPublicationFailureRetainsActiveLastGoodMembership(bool $sibling): void
+	{
+		$this->arrangePublicationRetry($sibling);
+		$this->assertTrue($this->runPass());
+		$this->assertSame($sibling ? ['dnsbl:T1_b' => 'success'] : [], $GLOBALS['pfb']['scheduled_outcomes']);
+		$manifest = json_decode((string) file_get_contents($GLOBALS['pfb']['unbound_py_sources']), TRUE, 512, JSON_THROW_ON_ERROR);
+		$this->assertContains('T1_a', array_column($manifest['feeds'], 'feed'), 'a refused publication must retain the active LKG manifest row');
+		$this->assertCount($sibling ? 2 : 1, $manifest['feeds']);
+		$raw = implode("\n", array_map('file_get_contents', pfb_unbound_py_manifest_raw_paths($GLOBALS['pfb']['unbound_py_sources'])));
+		$this->assertStringContainsString('kept.example', $raw, 'the real raw-manifest consumer must still see the last-good domain');
+		$this->assertStringNotContainsString('recovered.example', $raw);
+		$this->assertFileExists($GLOBALS['pfb']['dnsdir'] . '/T1_a.fail');
+		$this->assertFileExists($GLOBALS['pfb']['dnsdir'] . '/T1_a.update');
+		$this->assertNotEmpty(pfb_sync_status_list_open($this->dir, 'dnsbl'));
+	}
+
+	#[DataProvider('failedRefreshRows')]
+	public function testPublicationFailureThenUnchangedRetryConsumesReadyArtifacts(bool $sibling): void
+	{
+		$this->arrangePublicationRetry($sibling);
+		$this->assertTrue($this->runPass());
+		$folder = $GLOBALS['pfb']['dnsdir'];
+		$this->assertStringContainsString('kept.example', (string) file_get_contents("{$folder}/T1_a.txt"));
+		$this->assertFileExists("{$folder}/T1_a.fail");
+		$this->assertNotEmpty(pfb_sync_status_list_open($this->dir, 'dnsbl'));
+		$this->assertTrue(rmdir("{$folder}/T1_a.bk"), 'remove the real obstruction before attempting recovery');
+		// Exact final result of the real Go recovery producer: ready parsed artifacts, no source/normalize change.
+		$this->feedReplies['dnsbl:T1_a'] = self::feedReply('dnsbl:T1_a', [
+			'disposition' => 'unchanged', 'stage' => 'normalize', 'reason' => 'normalized_unchanged',
+			'sourceChanged' => FALSE, 'normalizedChanged' => FALSE,
+		]);
+		$GLOBALS['pfb']['scheduled_outcomes'] = [];
+		$this->assertTrue($this->runPass());
+		$this->assertStringContainsString('recovered.example', (string) file_get_contents("{$folder}/T1_a.txt"),
+			'unchanged retry must publish the ready artifact before reporting success');
+		$this->assertStringNotContainsString('kept.example', (string) file_get_contents("{$folder}/T1_a.txt"));
+		$raw = implode("\n", array_map('file_get_contents', pfb_unbound_py_manifest_raw_paths($GLOBALS['pfb']['unbound_py_sources'])));
+		$this->assertStringContainsString('recovered.example', $raw);
+		$this->assertStringNotContainsString('kept.example', $raw);
+		$this->assertSame('success', $GLOBALS['pfb']['scheduled_outcomes']['dnsbl:T1_a'] ?? NULL);
+		$this->assertFileDoesNotExist("{$folder}/T1_a.fail");
+		$this->assertFileDoesNotExist("{$folder}/T1_a.update");
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'));
+		preg_match_all('/\{"requestId":[^}]+\}/', (string) file_get_contents("{$this->dir}/feed-requests"), $requests);
+		$this->assertCount(3, $requests[0], 'initial publication, refused publication, unchanged recovery');
+		foreach (array_slice($requests[0], -2) as $request) {
+			$this->assertSame('none', json_decode($request, TRUE, 512, JSON_THROW_ON_ERROR)['force'], 'recovery must not force a network download');
+		}
+	}
+
+	private function arrangePublicationRetry(bool $sibling): void
+	{
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		if ($sibling) {
+			$row = config_get_path('installedpackages/pfblockerngdnsbl/config/0/row/0');
+			$row['header'] = 'T1_b';
+			config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/1', $row);
+			$this->feedReplies['dnsbl:T1_b'] = $this->seedDnsblResult('dnsbl:T1_b', 'T1_b', 'sibling.example');
+		}
+		$this->feedReplies['dnsbl:T1_a'] = $this->seedDnsblResult('dnsbl:T1_a', 'T1_a', 'kept.example');
+		$this->assertTrue($this->runPass());
+		$this->assertStringContainsString('kept.example', (string) file_get_contents($GLOBALS['pfb']['dnsdir'] . '/T1_a.txt'));
+		$this->feedReplies['dnsbl:T1_a'] = $this->seedDnsblResult('dnsbl:T1_a', 'T1_a', 'recovered.example');
+		$this->assertTrue(mkdir($GLOBALS['pfb']['dnsdir'] . '/T1_a.bk'), 'directory target refuses the real atomic rename, even under root');
+		touch($GLOBALS['pfb']['dnsdir'] . '/T1_a.update');
+		$GLOBALS['pfb']['feed_phase_force'] = 'none';
+		$GLOBALS['pfb']['scheduled_runtime_cron'] = TRUE;
+		$GLOBALS['pfb']['scheduled_selected_ids'] = array_fill_keys($sibling ? ['dnsbl:T1_a', 'dnsbl:T1_b'] : ['dnsbl:T1_a'], TRUE);
+		$GLOBALS['pfb']['scheduled_outcomes'] = [];
+	}
+
+	public static function selectedScriptParseCases(): array
+	{
+		return [
+			'selected post only' => ['', 'post.sh', TRUE, TRUE, 'Enabled', 'parse'],
+			'selected pre only' => ['pre.sh', '', TRUE, TRUE, 'Enabled', 'parse'],
+			'selected pre and post' => ['pre.sh', 'post.sh', TRUE, TRUE, 'Enabled', 'parse'],
+			'not selected' => ['', 'post.sh', FALSE, TRUE, 'Enabled', NULL],
+			'Hold without local orig' => ['', 'post.sh', TRUE, FALSE, 'Hold', 'none'],
+			'script free unchanged feed' => ['', '', TRUE, TRUE, 'Enabled', 'none'],
+		];
+	}
+
+	/** Component boundary: real PHP collector/consumer, Core reply stand-in; not proof that either script executes. */
+	#[DataProvider('selectedScriptParseCases')]
+	public function testSelectedScriptsReparseLocalOrigWithoutForcingDownload(
+		string $pre, string $post, bool $selected, bool $orig, string $state, ?string $force
+	): void {
+		$this->arrange(['save' => FALSE]);
+		$this->publishTo(TRUE);
+		$this->feedReplies['dnsbl:T1_a'] = $this->seedDnsblResult('dnsbl:T1_a', 'T1_a', 'kept.example');
+		$this->assertTrue($this->runPass());
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/script_pre', $pre);
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/script_post', $post);
+		config_set_path('installedpackages/pfblockerngdnsbl/config/0/row/0/state', $state);
+		if ($orig) {
+			file_put_contents($GLOBALS['pfb']['dnsorigdir'] . '/T1_a.orig', "kept.example\n");
+		}
+		$this->feedReplies['dnsbl:T1_a'] = self::feedReply('dnsbl:T1_a', [
+			'disposition' => $state === 'Hold' ? 'held' : 'unchanged',
+			'sourceChanged' => FALSE, 'normalizedChanged' => FALSE,
+		]);
+		$GLOBALS['pfb']['scheduled_runtime_cron'] = TRUE;
+		$GLOBALS['pfb']['scheduled_selected_ids'] = $selected ? ['dnsbl:T1_a' => TRUE] : [];
+		file_put_contents("{$this->dir}/feed-requests", '');
+		$this->assertTrue($this->runPass());
+		preg_match_all('/\{"requestId":[^}]+\}/', (string) file_get_contents("{$this->dir}/feed-requests"), $requests);
+		if ($force === NULL) {
+			$this->assertSame([], $requests[0], 'unselected current feed must not execute Core work or scripts');
+		} else {
+			$this->assertCount(1, $requests[0]);
+			$request = json_decode($requests[0][0], TRUE, 512, JSON_THROW_ON_ERROR);
+			$this->assertSame(['dnsbl:T1_a'], $request['feeds']);
+			$this->assertSame($force, $request['force'], 'selected pre OR post scripts reparse existing orig, never force download');
+		}
+		$this->assertStringContainsString('kept.example', (string) file_get_contents($GLOBALS['pfb']['dnsdir'] . '/T1_a.txt'));
+	}
+
 	public function testIpParseWarningCountsMappedDropsOnlyWithinTotalFailures(): void
 	{
 		$this->arrange(['save' => FALSE]);

@@ -1,7 +1,7 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--feed-orig-dir PATH] [--dnsbl-orig-dir PATH] [--feed-db-dir PATH] [--feed-blacklist-dir PATH] [--feed-geoip-dir PATH] [--feed-asn-csv PATH] [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--feed-orig-dir PATH] [--dnsbl-orig-dir PATH] [--feed-ip-parse-log PATH] [--feed-dnsbl-parse-log PATH] [--feed-db-dir PATH] [--feed-blacklist-dir PATH] [--feed-geoip-dir PATH] [--feed-asn-csv PATH] [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
 //	--state-dir DIR     Core's own storage (its lock core.lock, the settings store settings.json without
@@ -15,9 +15,9 @@
 //	                    its result on fd 3 (update.Command). Without it those methods answer unavailable. A stop while an
 //	                    Update runs ends it (TERM to its process group, KILL after 5 s) and nothing is resumed. The program's
 //	                    exit status 75 means it deferred the Update: the result is skipped and nothing is recorded
-//	--zoneinfo PATH     the host's time zone file (a TZif file): the scheduler reads the schedule in its zone, re-reading it at
-//	                    every evaluation, so a change of the host's zone applies without a restart. Without it, or when the file
-//	                    cannot be used (logged once), the process's local zone
+//	--zoneinfo PATH     the host's time zone file (a TZif file): used for schedules and detailed parse-error timestamps,
+//	                    re-read at each schedule evaluation and parsed feed, so zone changes apply without a restart.
+//	                    Without it, or when the file cannot be used (logged once), the process's local zone
 //	--feed-local-dir PATH
 //	                    an absolute folder a file:// feed may sit directly in; repeatable (issue #3975, the feed phase)
 //	--script-dir PATH   an absolute folder a group's pre and post scripts are looked up in; repeatable, searched in the order given
@@ -25,6 +25,8 @@
 //	--user-agent STRING what feed hosts are told Core is: no control character
 //	--feed-orig-dir PATH  the absolute IPv4/IPv6 feed baseline directory
 //	--dnsbl-orig-dir PATH the absolute DNSBL feed baseline directory
+//	--feed-ip-parse-log PATH the absolute detailed IPv4/IPv6 parse-error log; omitted disables detailed logging
+//	--feed-dnsbl-parse-log PATH the absolute detailed DNSBL parse-error log; omitted disables detailed logging
 //	--feed-db-dir PATH      the absolute package database directory for synthetic DNSBLIP sources
 //	--feed-blacklist-dir PATH the absolute package database directory for Blacklist category sources
 //	--feed-geoip-dir PATH the absolute local GeoIP country-feed directory
@@ -68,7 +70,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	stateDir := fl.String("state-dir", "", "Core's storage directory (required)")
 	backendCmd := fl.String("settings-backend-cmd", "", "keep the settings in this program instead of the state directory's file")
 	updateCmd := fl.String("update-cmd", "", "run the scheduler and the Updates through this program")
-	zoneinfo := fl.String("zoneinfo", "", "the host's time zone file the scheduler reads the schedule's zone from")
+	zoneinfo := fl.String("zoneinfo", "", "the host's time zone file for schedules and detailed parse-error timestamps")
 	feed := addFeedFlags(fl)
 	var allowUID uint32
 	fl.Func("allow-uid", "the privileged caller's uid (default 0)", func(v string) error {
@@ -98,7 +100,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 2
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--feed-orig-dir PATH] [--dnsbl-orig-dir PATH] [--feed-db-dir PATH] [--feed-blacklist-dir PATH] [--feed-geoip-dir PATH] [--feed-asn-csv PATH] [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--feed-orig-dir PATH] [--dnsbl-orig-dir PATH] [--feed-ip-parse-log PATH] [--feed-dnsbl-parse-log PATH] [--feed-db-dir PATH] [--feed-blacklist-dir PATH] [--feed-geoip-dir PATH] [--feed-asn-csv PATH] [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
@@ -128,7 +130,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	methods := productionMethods()
 	maps.Copy(methods, settingsMethods(store))
 	sched, gate := newUpdates(*updateCmd, *zoneinfo, *stateDir, store, logger.Printf) // nil without --update-cmd
-	maps.Copy(methods, updateMethods(sched, gate, newFeedPhaseRunner(store, *feed)))
+	feeds := newFeedPhaseRunner(store, *feed)
+	feeds.zone = hostZone(*zoneinfo, logger.Printf)
+	maps.Copy(methods, updateMethods(sched, gate, feeds))
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})
 	if err != nil {

@@ -192,6 +192,8 @@ final class PfbCoreServiceTest extends TestCase
 			'dnsorigdir'          => "{$this->dir}/dbdir/dnsblorig",
 			'ccdir'               => '/usr/local/share/GeoIP/cc',
 			'geoipshare'          => '/usr/local/share/GeoIP',
+			'ip_parse_err'        => "{$this->dir}/log/ip parse 'errors'.log",
+			'dnsbl_parse_err'     => "{$this->dir}/log/dnsbl parse 'errors'.log",
 			'core_log'            => "{$this->dir}/log/core.log",
 			'schedule_state_dir'  => "{$this->dir}/etc",
 			'core_pidfile'        => "{$this->dir}/run/pfb_core.pid",
@@ -369,6 +371,8 @@ final class PfbCoreServiceTest extends TestCase
 			'--feed-db-dir', (string) (realpath($GLOBALS['pfb']['dbdir']) ?: rtrim($GLOBALS['pfb']['dbdir'], '/')),
 			'--feed-geoip-dir', $GLOBALS['pfb']['ccdir'],
 			'--feed-asn-csv', $GLOBALS['pfb']['geoipshare'] . '/asn.csv',
+			'--feed-ip-parse-log', $GLOBALS['pfb']['ip_parse_err'],
+			'--feed-dnsbl-parse-log', $GLOBALS['pfb']['dnsbl_parse_err'],
 			'--rsync-bin', self::RSYNC, '--user-agent', $userAgent,
 		];
 	}
@@ -391,6 +395,22 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertIsInt($first, 'the daemon was given no --feed-local-dir: ' . implode(' ', $argv));
 		$this->assertSame($this->feedFlags([...self::LOCAL_DIRS, (string) realpath("{$this->dir}/real_db")]), array_slice($argv, $first),
 			'the feed flags: every value its own argument');
+	}
+
+	public function testConfiguredParseDiagnosticPathsReachDaemonAsSeparateQuotedArguments(): void
+	{
+		$this->install('freebsd-amd64');
+		$this->arrange();
+		[$status, $out] = $this->rc('start');
+		$this->assertSame(0, $status, $out);
+		$argv = $this->lines('daemon.argv');
+		foreach (['--feed-ip-parse-log' => 'ip_parse_err', '--feed-dnsbl-parse-log' => 'dnsbl_parse_err'] as $flag => $key) {
+			$index = array_search($flag, $argv, TRUE);
+			$this->assertIsInt($index, "configured diagnostic flag missing: {$flag}");
+			$this->assertSame($GLOBALS['pfb'][$key], $argv[$index + 1], 'spaces and apostrophes must survive shell evaluation');
+			$this->assertSame('/', $argv[$index + 1][0], 'Core must receive an absolute configured path');
+			$this->assertSame(1, count(array_keys($argv, $flag, TRUE)), 'each diagnostic sink is supplied exactly once');
+		}
 	}
 
 	public function testTheUserAgentCoreIsToldHasNoLineBreak(): void

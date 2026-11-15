@@ -4299,6 +4299,8 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$feedFlags .= ' --feed-db-dir ' . escapeshellarg($feedDbDir === FALSE ? rtrim($pfb['dbdir'], '/') : $feedDbDir);
 	$feedFlags .= ' --feed-geoip-dir ' . escapeshellarg(rtrim($pfb['ccdir'], '/'));
 	$feedFlags .= ' --feed-asn-csv ' . escapeshellarg(rtrim($pfb['geoipshare'], '/') . '/asn.csv');
+	$feedFlags .= ' --feed-ip-parse-log ' . escapeshellarg($pfb['ip_parse_err']);
+	$feedFlags .= ' --feed-dnsbl-parse-log ' . escapeshellarg($pfb['dnsbl_parse_err']);
 	$feedFlags .= ' --rsync-bin ' . escapeshellarg($pfb['rsync_bin'] ?? PFB_RSYNC_BIN);
 	$feedFlags .= ' --user-agent ' . escapeshellarg(trim((string) $pfb['curl_defaults'][CURLOPT_USERAGENT]));
 	$dir = escapeshellarg($coreDir);
@@ -4462,6 +4464,25 @@ function pfb_core_call(string $method, array $params = [], ?string $socket = NUL
 	return ['status' => $status, 'body' => $body, 'error' => NULL];
 }
 
+/** Complete-selection validation is shared by bounded requests and their ordered phase dispatcher. */
+function pfb_core_feed_phase_request_valid(string $token, string $phase, array $feedIds, string $force): bool {
+	if (!array_is_list($feedIds)
+		|| !in_array($phase, ['dnsbl', 'ip'], TRUE)
+		|| !in_array($force, ['none', 'parse', 'download', 'both'], TRUE)
+		|| preg_match('/\A[a-f0-9]{64}\z/', $token) !== 1) {
+		return FALSE;
+	}
+	$seen = [];
+	foreach ($feedIds as $id) {
+		if (!is_string($id) || isset($seen[$id])
+			|| (preg_match('/\A[A-Za-z0-9:_-]{1,64}\z/', $id) !== 1 && !pfb_blacklist_feed_id_valid($id))) {
+			return FALSE;
+		}
+		$seen[$id] = TRUE;
+	}
+	return TRUE;
+}
+
 /**
  * Run one authenticated Core feed phase and fail closed for every requested feed when its reply is unusable.
  *
@@ -4484,17 +4505,8 @@ function pfb_core_feed_phase(string $token, string $phase, array $feedIds, strin
 	if ($feedIds === []) {
 		return [];
 	}
-	if (!array_is_list($feedIds) || count($feedIds) > 1024
-		|| !in_array($phase, ['dnsbl', 'ip'], TRUE)
-		|| !in_array($force, ['none', 'parse', 'download', 'both'], TRUE)
-		|| preg_match('/\A[a-f0-9]{64}\z/', $token) !== 1
-		|| count($feedIds) !== count(array_unique($feedIds))) {
+	if (count($feedIds) > 1024 || !pfb_core_feed_phase_request_valid($token, $phase, $feedIds, $force)) {
 		return $failure('core_request_invalid');
-	}
-	foreach ($feedIds as $id) {
-		if (!is_string($id) || (preg_match('/\A[A-Za-z0-9:_-]{1,64}\z/', $id) !== 1 && !pfb_blacklist_feed_id_valid($id))) {
-			return $failure('core_request_invalid');
-		}
 	}
 	if (($phase === 'dnsbl' && ($pfb['reuse_dnsbl'] ?? '') === 'on')
 		|| ($phase === 'ip' && ($pfb['reuse'] ?? '') === 'on')) {

@@ -159,34 +159,29 @@ function pfb_dnsbl_feed_phase_ids(array $lists, callable $include): array
 function pfb_core_feed_phase_request_groups(array $orderedIds, array $parseIds, string $updateForce): array
 {
 	$parseSet = array_fill_keys($parseIds, TRUE);
-	$normal = $parse = [];
-	$first = NULL;
-	foreach ($orderedIds as $id) {
-		if (isset($parseSet[$id])) {
-			$parse[] = $id;
-			$first ??= 'parse';
-		} else {
-			$normal[] = $id;
-			$first ??= 'normal';
-		}
-	}
 	$groups = [];
-	if ($first === 'parse') {
-		if ($parse !== []) {
-			$groups[] = ['feeds' => $parse, 'force' => 'parse'];
-		}
-		if ($normal !== []) {
-			$groups[] = ['feeds' => $normal, 'force' => $updateForce];
-		}
-	} else {
-		if ($normal !== []) {
-			$groups[] = ['feeds' => $normal, 'force' => $updateForce];
-		}
-		if ($parse !== []) {
-			$groups[] = ['feeds' => $parse, 'force' => 'parse'];
+	foreach ($orderedIds as $id) {
+		$force = isset($parseSet[$id]) ? 'parse' : $updateForce;
+		$last = count($groups) - 1;
+		if ($last < 0 || $groups[$last]['force'] !== $force || count($groups[$last]['feeds']) === 1024) {
+			$groups[] = ['feeds' => [$id], 'force' => $force];
+		} else {
+			$groups[$last]['feeds'][] = $id;
 		}
 	}
 	return $groups;
+}
+
+function pfb_core_feed_phase_groups_valid(string $phase, string $token, array $groups): bool
+{
+	$ids = [];
+	foreach ($groups as $group) {
+		if (!pfb_core_feed_phase_request_valid($token, $phase, $group['feeds'], $group['force'])) {
+			return FALSE;
+		}
+		array_push($ids, ...$group['feeds']);
+	}
+	return pfb_core_feed_phase_request_valid($token, $phase, $ids, 'none');
 }
 
 /**
@@ -197,6 +192,12 @@ function pfb_core_feed_phase_request_groups(array $orderedIds, array $parseIds, 
 function pfb_core_feed_phase_groups(string $phase, string $token, array $groups, ?callable $call = NULL): array
 {
 	$results = [];
+	if (!pfb_core_feed_phase_groups_valid($phase, $token, $groups)) {
+		foreach (pfb_core_feed_phase('', $phase, array_merge([], ...array_column($groups, 'feeds')), 'none') as $result) {
+			$results[$result['id']] = $result;
+		}
+		return $results;
+	}
 	foreach ($groups as $group) {
 		foreach (pfb_core_feed_phase($token, $phase, $group['feeds'], $group['force'], $call) as $result) {
 			$results[$result['id']] = $result;
@@ -205,32 +206,88 @@ function pfb_core_feed_phase_groups(string $phase, string $token, array $groups,
 	return $results;
 }
 
-function pfb_dnsbl_feed_phase_copy_artifacts(array $result, string $origdir, string $folder, string $header): bool
+function pfb_dnsbl_feed_phase_copy_artifacts(array $result, string $origdir, string $folder, string $header,
+	?array &$restore = NULL): bool
 {
 	if (!in_array($result['disposition'] ?? NULL, ['changed', 'unchanged', 'reparsed'], TRUE)) {
 		return FALSE;
 	}
-	$ndjson = "{$origdir}/{$header}.parsed.ndjson";
-	$ipv4 = "{$origdir}/{$header}.parsed.v4.ip";
-	$ipv6 = "{$origdir}/{$header}.parsed.v6.ip";
-	if (!is_file($ndjson) || !is_file($ipv4) || !is_file($ipv6)) {
-		return FALSE;
+	$artifacts = ["{$folder}/{$header}.bk" => "{$origdir}/{$header}.parsed.ndjson"];
+	foreach (['v4', 'v6'] as $family) {
+		$source = "{$origdir}/{$header}.parsed.{$family}.ip";
+		$size = @filesize($source);
+		if (!is_file($source) || !is_int($size)) {
+			return FALSE;
+		}
+		$artifacts["{$folder}/{$header}_{$family}.ip"] = $size === 0 ? NULL : $source;
 	}
-	$ipv4Size = @filesize($ipv4);
-	$ipv6Size = @filesize($ipv6);
-	if (!is_int($ipv4Size) || !is_int($ipv6Size)
-		|| !pfb_core_feed_artifact_copy($ndjson, "{$folder}/{$header}.bk")) {
-		return FALSE;
-	}
-	foreach (['v4' => [$ipv4, $ipv4Size], 'v6' => [$ipv6, $ipv6Size]] as $family => [$source, $size]) {
-		$target = "{$folder}/{$header}_{$family}.ip";
-		if ($size === 0) {
-			unlink_if_exists($target);
-		} elseif (!pfb_core_feed_artifact_copy($source, $target)) {
+	foreach ($artifacts as $target => $source) {
+		if (($source !== NULL && !is_file($source)) || (file_exists($target) && !is_file($target))) {
 			return FALSE;
 		}
 	}
+	try {
+		$suffix = bin2hex(random_bytes(8));
+	} catch (Throwable) {
+		return FALSE;
+	}
+	$staged = $backups = [];
+	foreach ($artifacts as $target => $source) {
+		$backup = is_file($target) ? "{$target}.restore.{$suffix}" : NULL;
+		if ($backup !== NULL && !pfb_core_feed_artifact_copy($target, $backup)) {
+			pfb_dnsbl_feed_phase_artifacts_finish($backups, FALSE);
+			foreach ($staged as $path) {
+				unlink_if_exists($path);
+			}
+			return FALSE;
+		}
+		$backups[$target] = $backup;
+		if ($source !== NULL) {
+			$path = "{$target}.stage.{$suffix}";
+			if (!pfb_core_feed_artifact_copy($source, $path)) {
+				pfb_dnsbl_feed_phase_artifacts_finish($backups, FALSE);
+				foreach ($staged as $path) {
+					unlink_if_exists($path);
+				}
+				return FALSE;
+			}
+			$staged[$target] = $path;
+		}
+	}
+	foreach ($artifacts as $target => $source) {
+		$ok = $source === NULL ? (!file_exists($target) || @unlink($target)) : @rename($staged[$target], $target);
+		if (!$ok) {
+			if (!pfb_dnsbl_feed_phase_artifacts_finish($backups, TRUE)) {
+				@touch("{$folder}/{$header}.fail");
+				pfb_logger("\n[ {$header} ] FeedPhase artifact rollback failed; restore files retained.\n", 2);
+			}
+			foreach ($staged as $path) {
+				unlink_if_exists($path);
+			}
+			return FALSE;
+		}
+	}
+	if ($restore !== NULL) {
+		$restore = $backups;
+	} else {
+		pfb_dnsbl_feed_phase_artifacts_finish($backups, FALSE);
+	}
 	return TRUE;
+}
+
+/** Keep DNSBL sidecar restore points until the final staged TXT rename has succeeded. */
+function pfb_dnsbl_feed_phase_artifacts_finish(array $restore, bool $rollback): bool
+{
+	$ok = TRUE;
+	foreach ($restore as $target => $backup) {
+		if ($rollback) {
+			$restored = $backup === NULL ? (!file_exists($target) || @unlink($target)) : @rename($backup, $target);
+			$ok = $restored && $ok;
+		} elseif ($backup !== NULL) {
+			$ok = (!file_exists($backup) || @unlink($backup)) && $ok;
+		}
+	}
+	return $ok;
 }
 
 
@@ -1976,10 +2033,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			$pfb_dnsbl_phase_skipped = !empty($pfb['save'])
 				|| !in_array($pfb['feed_phase_scope'] ?? 'both', ['both', 'dnsbl'], TRUE);
 			$pfb_dnsbl_phase_results = [];
+			$pfb_dnsbl_phase_forces = [];
+			$pfb_dnsbl_phase_scripts = FALSE;
 			if (!$pfb_dnsbl_phase_skipped) {
 				$pfb_dnsbl_stale_ids = [];
 				$pfb_dnsbl_phase_ids = pfb_dnsbl_feed_phase_ids($lists,
-					static function (array $list, array $row, string $header, string $id) use (&$pfb_dnsbl_stale_ids): bool {
+					static function (array $list, array $row, string $header, string $id)
+						use (&$pfb_dnsbl_stale_ids, &$pfb_dnsbl_phase_scripts): bool {
 						global $pfb, $pfbarr;
 						pfb_determine_list_detail($list['action'], $header, 'pfblockerngdnsblsettings', '0');
 						$folder = $pfbarr['folder'];
@@ -1994,7 +2054,15 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$apply = ($pfb['feed_phase_trigger'] ?? '') === 'apply';
 						$selected = !$apply && (empty($pfb['scheduled_runtime_cron'])
 							|| isset($pfb['scheduled_selected_ids'][$id]));
-						if ($stale) {
+						$orig_exists = is_file("{$pfbarr['orig']}/{$header}.orig");
+						$script_active = $selected && (!empty($list['script_pre']) || !empty($list['script_post']));
+						if ($script_active && (($row['state'] ?? '') !== 'Hold' || $orig_exists)) {
+							$pfb_dnsbl_phase_scripts = TRUE;
+						}
+						$script_reparse = pfb_list_script_reparse_active(
+							$txt_exists && !$update && !$failed && ($pfbarr['reuse'] ?? '') === '',
+							$script_active, $orig_exists);
+						if ($stale || $script_reparse) {
 							$pfb_dnsbl_stale_ids[] = $id;
 						}
 						if ($apply) {
@@ -2008,11 +2076,17 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$pfb_dnsbl_stale_ids,
 						(string) ($pfb['feed_phase_force'] ?? 'none')
 					);
-					$pfb_dnsbl_phase_results = pfb_core_feed_phase_groups(
-						'dnsbl',
-						(string) ($pfb['feed_phase_token'] ?? ''),
-						$pfb_dnsbl_phase_groups
-					);
+					$phase_token = (string) ($pfb['feed_phase_token'] ?? '');
+					if ($pfb_dnsbl_phase_scripts && pfb_core_feed_phase_groups_valid('dnsbl', $phase_token, $pfb_dnsbl_phase_groups)) {
+						foreach ($pfb_dnsbl_phase_groups as $group) {
+							foreach ($group['feeds'] as $id) {
+								$pfb_dnsbl_phase_forces[$id] = $group['force'];
+							}
+						}
+					} else {
+						$pfb_dnsbl_phase_results = pfb_core_feed_phase_groups(
+							'dnsbl', $phase_token, $pfb_dnsbl_phase_groups);
+					}
 				}
 			}
 
@@ -2094,6 +2168,18 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						}
 						$staging_current_generation = $txt_exists
 							&& pfb_dnsbl_staging_is_current_generation(pfb_dnsbl_staging_first_line($txt));
+						$retain_current = static function () use (&$lists_dnsbl_all, &$pfb_py_feeds, &$alias_cnt,
+							$staging_current_generation, $row, $header, $alias, $logging_type,
+							$custom, $mode, $filter_top1m, $txt): void {
+							if (!$staging_current_generation) {
+								return;
+							}
+							$lists_dnsbl_all[] = "{$row['header']}.txt";
+							$pfb_py_feeds[] = pfb_feed_manifest_row(
+								$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m)
+								+ ['feed_phase_id' => $row['feed_phase_id'] ?? ''];
+							$alias_cnt = pfb_dnsbl_alias_count_script_failure($txt, $alias_cnt);
+						};
 						$stale_generation_rebuild = !$staging_current_generation && pfb_dnsbl_verbatim_reuse_active(
 							$txt_exists,
 							file_exists("{$pfbfolder}/{$header}.update"),
@@ -2106,6 +2192,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							: ($scheduled_selected || $stale_generation_rebuild
 								|| file_exists("{$pfbfolder}/{$header}.update")
 								|| file_exists("{$pfbfolder}/{$header}.fail"));
+						if (isset($pfb_dnsbl_phase_forces[$feed_id])) {
+							$pfb_dnsbl_phase_results[$feed_id] = pfb_core_feed_phase(
+								(string) ($pfb['feed_phase_token'] ?? ''), 'dnsbl', [$feed_id],
+								$pfb_dnsbl_phase_forces[$feed_id])[0];
+							unset($pfb_dnsbl_phase_forces[$feed_id]);
+						}
 						$feed_result = $pfb_dnsbl_phase_results[$feed_id] ?? NULL;
 						if ($pfb_dnsbl_phase_skipped && !$txt_exists) {
 							continue;
@@ -2127,27 +2219,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 									$pfb_script_state,
 									$staging_current_generation,
 									$txt,
-									static function () use (&$lists_dnsbl_all, &$pfb_py_feeds, &$alias_cnt,
-										$row, $header, $alias, $logging_type, $custom, $mode, $filter_top1m, $pfbfolder): void {
-										$lists_dnsbl_all[] = "{$row['header']}.txt";
-										$pfb_py_feeds[] = pfb_feed_manifest_row(
-											$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m)
-											+ ['feed_phase_id' => $row['feed_phase_id'] ?? ''];
-										$alias_cnt = pfb_dnsbl_alias_count_script_failure("{$pfbfolder}/{$header}.txt", $alias_cnt);
-									}
+									$retain_current
 								);
 							} else {
 								@touch("{$pfbfolder}/{$header}.fail");
 								$pfb_dl_failed = TRUE;
 								pfb_logger("\n{$message}\n", 2);
 								pfb_download_ledger_failure('dnsbl', $alias, $header, $pfb['dbdir']);
-								if ($staging_current_generation) {
-									$lists_dnsbl_all[] = "{$row['header']}.txt";
-									$pfb_py_feeds[] = pfb_feed_manifest_row(
-										$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m)
-										+ ['feed_phase_id' => $row['feed_phase_id'] ?? ''];
-									$alias_cnt = pfb_dnsbl_alias_count_script_failure($txt, $alias_cnt);
-								}
+								$retain_current();
 							}
 							continue;
 						}
@@ -2158,7 +2237,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						}
 						$rebuild = !$pfb_dnsbl_phase_skipped && $disposition !== 'held'
 							&& (in_array($disposition, ['changed', 'reparsed'], TRUE)
-								|| !$txt_exists || $stale_generation_rebuild);
+								|| !$txt_exists || $stale_generation_rebuild
+								|| file_exists("{$pfbfolder}/{$header}.fail")
+								|| file_exists("{$pfbfolder}/{$header}.update"));
 						if (!$rebuild) {
 							if ($disposition === 'held') {
 								pfb_logger("\n[ {$header} ]{$logtab} static hold.", 1);
@@ -2181,27 +2262,43 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							continue;
 						}
 
+						$artifact_restore = [];
+						$feed_changed = !$txt_exists
+							|| @hash_file('sha256', $txt) !== @hash_file('sha256', "{$pfborig}/{$header}.parsed.ndjson");
+						foreach (['v4', 'v6'] as $family) {
+							$source = "{$pfborig}/{$header}.parsed.{$family}.ip";
+							$target = "{$pfbfolder}/{$header}_{$family}.ip";
+							$feed_changed = $feed_changed || (is_file($target)
+								? @hash_file('sha256', $source) !== @hash_file('sha256', $target)
+								: @filesize($source) !== 0);
+						}
+						$dnsbl_rows = $disposition === 'unchanged'
+							? pfb_count_lines("{$pfborig}/{$header}.parsed.ndjson") : $feed_result['dnsblRows'];
 						if (!is_array($feed_result)
-							|| !pfb_dnsbl_feed_phase_copy_artifacts($feed_result, $pfborig, $pfbfolder, $header)) {
+							|| !is_int($dnsbl_rows)
+							|| !pfb_dnsbl_feed_phase_copy_artifacts($feed_result, $pfborig, $pfbfolder, $header, $artifact_restore)) {
 							$pfb_dl_failed = TRUE;
 							@touch("{$pfbfolder}/{$header}.fail");
 							pfb_logger("\n[ {$header} ]{$logtab} FeedPhase artifact publication failed.\n", 2);
 							pfb_download_ledger_failure('dnsbl', $alias, $header, $pfb['dbdir']);
+							$retain_current();
 							continue;
 						}
 
 						pfb_logger("\n[ {$header} ]{$logtab} FeedPhase {$disposition}.", 1);
 						$file_dwn = "{$pfborig}/{$header}";
-						$ip_cnt = $feed_result['ipv4Count'];
-						$ip_cnt6 = $feed_result['ipv6Count'];
+						$ip_cnt = $disposition === 'unchanged'
+							? (pfb_count_lines("{$pfborig}/{$header}.parsed.v4.ip") ?? 0) : $feed_result['ipv4Count'];
+						$ip_cnt6 = $disposition === 'unchanged'
+							? (pfb_count_lines("{$pfborig}/{$header}.parsed.v6.ip") ?? 0) : $feed_result['ipv6Count'];
 						$ip_decision = ['count' => $ip_cnt, 'loggable' => $ip_cnt > 0];
 						$ip6_decision = ['count' => $ip_cnt6, 'loggable' => $ip_cnt6 > 0];
-						if ($feed_result['updateIP']) {
+						if ($feed_result['updateIP'] || ($feed_changed && ($ip_cnt > 0 || $ip_cnt6 > 0))) {
 							$pfb['updateip'] = TRUE;
 						}
 						pfb_dnsbl_scheme_skip_warn($feed_result['schemeSkipped'], $header);
 
-						$pfb_row_script_post = $pfb_dnsbl_script_post;
+						$pfb_row_script_post = $scheduled_selected ? $pfb_dnsbl_script_post : FALSE;
 						if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {
 							pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
 							if (pfb_list_post_script_stage("{$file_dwn}.orig", "{$file_dwn}.post", 'dnsbl', $alias,
@@ -2218,7 +2315,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 						}
 
-						if ($feed_result['dnsblRows'] > 0) {
+						if ($dnsbl_rows > 0) {
 							$conf  = "server:\n";
 							$conf .= "chroot: {$pfb['dnsbldir']}\n";
 							$conf .= "username: \"unbound\"\n";
@@ -2238,23 +2335,27 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							pfb_logger("\n No Domains Found! Ensure only domain based Feeds are used for DNSBL!\n", 1);
 							$ts = date('Y-m-d', time());
 							@copy("{$file_dwn}.orig", "/tmp/Error_{$header}_{$ts}.orig");
-							unlink_if_exists("{$pfbfolder}/{$header}.bk");
-							pfb_dnsbl_stale_rebuild_converge_txt(
-								$stale_generation_rebuild, "{$pfbfolder}/{$header}.txt");
 							$result = array('unbound-checkconf: no errors');
 						}
 
-						$pfb['domain_update'] = $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
+						if (!@rename("{$pfbfolder}/{$header}.bk", $txt)) {
+							$restored = pfb_dnsbl_feed_phase_artifacts_finish($artifact_restore, TRUE);
+							$pfb_dl_failed = TRUE;
+							@touch("{$pfbfolder}/{$header}.fail");
+							pfb_logger("\n[ {$header} ]{$logtab} FeedPhase TXT publication failed"
+								. ($restored ? '.' : '; artifact rollback failed, restore files retained.') . "\n", 2);
+							pfb_download_ledger_failure('dnsbl', $alias, $header, $pfb['dbdir']);
+							$retain_current();
+							continue;
+						}
+						pfb_dnsbl_feed_phase_artifacts_finish($artifact_restore, FALSE);
+						if ($feed_changed) {
+							$pfb['domain_update'] = $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
+						}
 						$lists_dnsbl_all[] = "{$row['header']}.txt";
 						$pfb_py_feeds[] = pfb_feed_manifest_row(
 							$header, $alias, $logging_type, $custom ? 'user' : 'feed', $mode, $filter_top1m)
 							+ ['feed_phase_id' => $row['feed_phase_id'] ?? ''];
-						if (file_exists("{$pfbfolder}/{$header}.bk")) {
-							@rename("{$pfbfolder}/{$header}.bk", $txt);
-						}
-						if (!file_exists($txt)) {
-							touch($txt);
-						}
 						$alias_cnt = pfb_dnsbl_alias_count_rebuild($txt, $alias_cnt);
 						unlink_if_exists("{$pfbfolder}/{$header}.update");
 						unlink_if_exists("{$pfbfolder}/{$header}.fail");
@@ -2818,8 +2919,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// user_unlock. Captured BEFORE the reload: pfb_update_unbound() unlinks the file,
 	// so a post-reload file_exists() would always return false (issue #517).
 	$pfb_dnsbl_unlock_forced = file_exists($pfb['dnsbl_unlock']);
-	if (pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']), !empty($pfb_data_changed), !empty($pfbupdate),
-	    !empty($pfbpython), !empty($safesearch_update), !empty($pfb_dnsbl_unlock_forced))) {
+	$pfb_dnsbl_reload_requested = pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']),
+		!empty($pfb_data_changed), !empty($pfbupdate), !empty($pfbpython),
+		!empty($safesearch_update), !empty($pfb_dnsbl_unlock_forced));
+	if ($pfb_dnsbl_reload_requested) {
 
 		// Create backup of existing DNSBL Unbound database
 
@@ -3199,11 +3302,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		$pfb_ip_phase_skipped = !empty($pfb['save'])
 			|| !in_array($pfb['feed_phase_scope'] ?? 'both', ['both', 'ip'], TRUE);
 		$pfb_ip_phase_results = [];
+		$pfb_ip_phase_forces = [];
+		$pfb_ip_phase_scripts = FALSE;
 		if (!$pfb_ip_phase_skipped) {
 			$pfb_ip_parse_ids = [];
 			$pfb_asn_requested = FALSE;
 			$pfb_ip_phase_ids = pfb_ip_feed_phase_ids($lists,
-				static function (array $list, array $row, string $header, string $id) use (&$pfb_ip_parse_ids, &$pfb_asn_requested): bool {
+				static function (array $list, array $row, string $header, string $id)
+					use (&$pfb_ip_parse_ids, &$pfb_asn_requested, &$pfb_ip_phase_scripts): bool {
 					global $pfb, $pfbarr;
 					$is_dnsblip = isset($list['dnsblip']);
 					$family = $list['vtype'] === '_v4' ? 'ipv4' : 'ipv6';
@@ -3223,6 +3329,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						&& $pfbarr['reuse'] === '';
 					$script_active = $selected
 						&& (!empty($list['script_pre']) || !empty($list['script_post']));
+					if ($script_active && (($row['state'] ?? '') !== 'Hold' || is_file("{$orig}/{$header}.orig"))) {
+						$pfb_ip_phase_scripts = TRUE;
+					}
 					$script_reparse = pfb_list_script_reparse_active(
 						$verbatim_reuse, $script_active, file_exists("{$orig}/{$header}.orig"));
 					$reuse_on = $pfbarr['reuse'] === 'on' || $script_reparse;
@@ -3243,25 +3352,32 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					}
 					return TRUE;
 				});
-			if ($pfb_asn_requested && !file_exists(rtrim((string) $pfb['geoipshare'], '/') . '/asn.csv')) {
-				pfb_logger("\nDownloading IPinfo ASN database...\n", 1);
-				$pfb_asn_output = [];
-				pfb_reentry_exec('asn_shell', ['scheduled'], NULL, $pfb_asn_output);
-				foreach ($pfb_asn_output as $line) {
-					pfb_logger("{$line}\n", 1);
-				}
-			}
 			if ($pfb_ip_phase_ids !== []) {
 				$pfb_ip_phase_groups = pfb_core_feed_phase_request_groups(
 					$pfb_ip_phase_ids,
 					$pfb_ip_parse_ids,
 					(string) ($pfb['feed_phase_force'] ?? 'none')
 				);
-				$pfb_ip_phase_results = pfb_core_feed_phase_groups(
-					'ip',
-					(string) ($pfb['feed_phase_token'] ?? ''),
-					$pfb_ip_phase_groups
-				);
+				$phase_token = (string) ($pfb['feed_phase_token'] ?? '');
+				$phase_valid = pfb_core_feed_phase_groups_valid('ip', $phase_token, $pfb_ip_phase_groups);
+				if ($phase_valid && $pfb_asn_requested && !file_exists(rtrim((string) $pfb['geoipshare'], '/') . '/asn.csv')) {
+					pfb_logger("\nDownloading IPinfo ASN database...\n", 1);
+					$pfb_asn_output = [];
+					pfb_reentry_exec('asn_shell', ['scheduled'], NULL, $pfb_asn_output);
+					foreach ($pfb_asn_output as $line) {
+						pfb_logger("{$line}\n", 1);
+					}
+				}
+				if ($pfb_ip_phase_scripts && $phase_valid) {
+					foreach ($pfb_ip_phase_groups as $group) {
+						foreach ($group['feeds'] as $id) {
+							$pfb_ip_phase_forces[$id] = $group['force'];
+						}
+					}
+				} else {
+					$pfb_ip_phase_results = pfb_core_feed_phase_groups(
+						'ip', $phase_token, $pfb_ip_phase_groups);
+				}
 			}
 		}
 		$maxmind_run_once = $asn_run_once = TRUE;
@@ -3403,6 +3519,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						$phase_required = $apply
 							? $parse_only
 							: ($scheduled_selected || $parse_only || $geoip_updated || $asn_updated);
+						if (isset($pfb_ip_phase_forces[$feed_id])) {
+							$pfb_ip_phase_results[$feed_id] = pfb_core_feed_phase(
+								(string) ($pfb['feed_phase_token'] ?? ''), 'ip', [$feed_id],
+								$pfb_ip_phase_forces[$feed_id])[0];
+							unset($pfb_ip_phase_forces[$feed_id]);
+						}
 						$feed_result = $pfb_ip_phase_results[$feed_id] ?? NULL;
 
 						if ($pfb_ip_phase_skipped && !$txt_exists) {
@@ -4609,9 +4731,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	pfb_run_hooks('post', array(
 		'TRIGGER'		=> $pfb_hook_val,
 		'IP_CHANGED'		=> (!empty($pfb['filter_configure']) || !empty($pfb_ip_unlock_forced)) ? '1' : '0',
-		'DNSBL_CHANGED'		=> pfb_dnsbl_reload_needed(!empty($pfb['dnsbl_publish_failed']),
-						!empty($pfb_data_changed), !empty($pfbupdate), !empty($pfbpython),
-						!empty($safesearch_update), !empty($pfb_dnsbl_unlock_forced)) ? '1' : '0',
+		'DNSBL_CHANGED'		=> !empty($pfb_dnsbl_reload_requested) ? '1' : '0',
 		'STATUS'		=> 'ok',
 		'CHANGED_IP_ALIASES'	=> implode(' ', array_unique($pfb['changed_ip_aliases'])),
 		'CHANGED_DNSBL_GROUPS'	=> implode(' ', array_unique($pfb['changed_dnsbl_groups'])),

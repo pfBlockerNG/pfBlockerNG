@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedfetch"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/feedparse"
@@ -335,6 +336,16 @@ func (p *feedPhaseRunner) parseAndPublish(ctx context.Context, spec phaseFeed, f
 		result.Disposition, result.Stage, result.Reason = "failed", "parse", "cancelled"
 		return result
 	}
+	path := p.flags.IPParseLog
+	if spec.kind == "dnsbl" {
+		path = p.flags.DNSBLParseLog
+	}
+	loc := time.Local
+	if path != "" && p.zone != nil {
+		loc = p.zone()
+	}
+	diagnostics := feedParseLog{path: path, header: spec.header, id: spec.id, log: log, loc: loc}
+	defer diagnostics.close()
 	sink := feedparse.Sink{
 		Message: func(message string) {
 			if log != nil {
@@ -345,6 +356,7 @@ func (p *feedPhaseRunner) parseAndPublish(ctx context.Context, spec phaseFeed, f
 			if log != nil {
 				fmt.Fprintf(log, "feed %s: parse failure at line %d\n", spec.id, record.LineNo)
 			}
+			diagnostics.append(record)
 		},
 	}
 	if spec.kind == "dnsbl" {

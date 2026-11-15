@@ -564,3 +564,14 @@ def test_core_failed_transfer_keeps_last_good_files_and_retry_state_until_recove
     assert mock_feeds.statuses(feed.mock)[-1] == 200, "the retry after recovery never fetched the source"
     _assert_feed_disposition(recovered_log, feed.feed_id, "changed")
     assert recovered[feed.parsed] != before[feed.parsed], "the recovered source's parsed file was not published"
+    if kind == "ipv4":
+        expected = recovery_body.encode()
+        for path in feed.files:
+            actual = recovered[path][0]
+            assert actual == expected, f"{path}: recovered bytes {actual!r}, expected {expected!r}"
+        members = h.pfctl_table_members(vm, f"pfB_{feed.feed_id.removeprefix('ipv4:')}")
+        assert "198.51.100.99" in members, f"recovered IPv4 member is not live: {members}"
+        assert "198.51.100.45" not in members, f"recovery retained the old IPv4 member: {members}"
+        for marker_path in (feed.fail_marker, feed.fail_marker.removesuffix(".fail") + ".update"):
+            cleared = vm.ssh("test", "!", "-f", marker_path)
+            assert cleared.returncode == 0, f"recovery left retry marker {marker_path}: {cleared.stderr}"
