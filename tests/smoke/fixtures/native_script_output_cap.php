@@ -114,6 +114,8 @@ function stop_core(mixed &$core): void {
 function update_mode(string $dir): void {
 	$result = 1;
 	try {
+		$request = json_decode(stream_get_contents(STDIN), TRUE, 512, JSON_THROW_ON_ERROR);
+		demand(is_array($request), 'Core Update request is not an object');
 		require_once('/etc/inc/config.inc');
 		require_once('/etc/inc/util.inc');
 		if (!defined('PFB_HOOK_SCRIPT_DIR')) {
@@ -128,7 +130,7 @@ function update_mode(string $dir): void {
 			'script' => 'hook_pre_native.sh', 'when' => 'pre', 'enabled' => 'on', 'description' => 'native output cap', 'timeout' => '120',
 		]]]]]]]];
 
-		pfb_run_hooks('pre', ['TRIGGER' => 'manual']);
+		pfb_run_hooks('pre', ['TRIGGER' => (string) ($request['trigger'] ?? 'apply')]);
 		echo "NORMAL_PROGRESS_AFTER_HOOK\n";
 		fflush(STDOUT);
 		$status = pfb_list_script_exec("$dir/scripts/list_post_native.sh", 'list_post_native.sh', 'post',
