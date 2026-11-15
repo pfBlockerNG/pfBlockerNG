@@ -1263,29 +1263,8 @@ def case_feed_id(spec: DnsblCase | IpCase) -> str:
     return feed_id(f"ipv{spec.family[-1]}", spec.header)
 
 
-# issue #3941: the program Core runs once per Update (pfblockerng.inc ``core_update`` behind this wrapper): one JSON
-# request on stdin, the progress on stdout, the result on fd 3 (docs/misc/core-api-protocol.md, "Update command").
-CORE_UPDATE_CMD = "/usr/local/pkg/pfblockerng/pfb_core_update.sh"
-CORE_UPDATE_RESULT = "/tmp/pfb_smoke_core_update_result.json"
 CORE_STATE_DIR = "/usr/local/etc/pfb_core"
 _CORE_OPEN, _CORE_CLOSE = "<<<CORE>>>", "<<<CORE-END>>>"
-
-
-def core_update_command(
-    trigger: str,
-    *,
-    scope: str = "both",
-    force: str = "none",
-    feeds: Sequence[str] = (),
-    extras: Sequence[str] = (),
-) -> str:
-    """The sh command line that runs the Update program once with this request, as Core does (result file on fd 3)."""
-    request: dict[str, Any] = {"version": 1, "trigger": trigger, "scope": scope, "force": force}
-    if feeds:
-        request["feeds"] = list(feeds)
-    if extras:
-        request["extras"] = list(extras)
-    return f"printf %s {shlex.quote(json.dumps(request))} | {CORE_UPDATE_CMD} 3>{CORE_UPDATE_RESULT}"
 
 
 def core_calls(
@@ -1347,9 +1326,120 @@ def scheduled_updates_on(vm: SmokeVM) -> Iterator[None]:
         tell_core_the_settings_changed(vm)
 
 
-def core_update_view(vm: SmokeVM, after: str | None = None) -> dict[str, Any]:
+def guest_previous_date(vm: SmokeVM) -> str:
+    """Previous calendar date in the guest's configured timezone, not host time."""
+    try:
+        return _php_read_scalar(
+            vm,
+            "$tz = new DateTimeZone(config_get_path('system/timezone', 'UTC'));",
+            "(new DateTimeImmutable('now', $tz))->modify('-1 day')->format('Y-m-d')",
+        )
+    except Exception:
+        raise RuntimeError("Could not read the guest calendar date") from None
+
+
+@contextlib.contextmanager
+def due_feed_group(vm: SmokeVM, family: str, group: str, *, slot: int = 0, day: str | None = None) -> Iterator[None]:
+    """Make one existing group Weekly-due through settings; restore every touched leaf.
+
+    Slots are four real increasing past quarters on a fixed guest calendar day.
+    Callers isolate other groups with their ordinary clean fixture and prove the
+    actual update through Core; this context alone proves no update occurred.
+    """
+    roots = {"ipv4": CFG_IP_V4_LISTS, "ipv6": CFG_IP_V6_LISTS, "dnsbl": CFG_DNSBL_LISTS}
+    if family not in roots or not isinstance(group, str) or not group:
+        raise ValueError("Expected an existing feed family and group")
+    if type(slot) is not int or not 0 <= slot <= 3:
+        raise ValueError("Due feed slot must be 0..3")
+    if day is None:
+        day = guest_previous_date(vm)
+    if not isinstance(day, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) is None:
+        raise ValueError("Due feed day must be an ISO calendar date")
+    pre = (
+        "$tz = new DateTimeZone(config_get_path('system/timezone', 'UTC'));\n"
+        "$now = new DateTimeImmutable('now', $tz);\n"
+        f"$day = {_php_str(day)};\n"
+        "$slots = array();\n"
+        "for ($q = 0; $q < 96 && count($slots) < 4; $q++) {\n"
+        "  $text = sprintf('%s %02d:%02d:00', $day, intdiv($q, 4), ($q % 4) * 15);\n"
+        "  $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $text, $tz);\n"
+        "  if ($date !== FALSE && $date->format('Y-m-d H:i:s') === $text && $date < $now) {\n"
+        "    $slots[] = array($date->format('N'), (string) (int) $date->format('G'),\n"
+        "      (string) (int) $date->format('i'));\n"
+        "  }\n"
+        "}\n"
+        "$indices = array();\n"
+        f"foreach (config_get_path({_php_str(roots[family])}, array()) as $i => $row) {{\n"
+        f"  if (($row['aliasname'] ?? NULL) === {_php_str(group)}) {{ $indices[] = $i; }}\n"
+        "}\n"
+    )
+    try:
+        indices, slots = json.loads(_php_read_scalar(vm, pre, "json_encode(array($indices, $slots))"))
+    except Exception:
+        raise RuntimeError("Could not resolve due feed settings") from None
+    if len(indices) != 1:
+        raise ValueError("Due feed group must exist exactly once in its family")
+    if len(slots) != 4:
+        raise ValueError("Due feed day must contain four valid past quarter-hours")
+    root = f"{roots[family]}/{indices[0]}"
+    weekday, hour, minute = slots[slot]
+    target = {
+        f"{root}/cron": "Weekly",
+        f"{root}/schedule_override": "on",
+        f"{root}/schedule_weekday": weekday,
+        f"{root}/schedule_hour": hour,
+        f"{root}/schedule_minute": minute,
+    }
+    global_path = f"{CFG_GLOBAL}/pfb_scheduled_feed_updates"
+    credentials = {f"{CFG_IP_SETTINGS}/{key}": "" for key in ("maxmind_key", "maxmind_account", "asn_token")}
+    toggles = (
+        ("ip/database_cc", f"{CFG_IP_SETTINGS}/database_cc", "On"),
+        ("dnsbl/top1m_enable", f"{CFG_DNSBL_SETTINGS}/top1m_enable", "Off"),
+    )
+    paths = [*target, global_path, *credentials, *(path for _, path, _ in toggles)]
+    try:
+        states = [(path, config_get_state(vm, path)) for path in paths]
+    except Exception:
+        raise RuntimeError("Could not snapshot due feed settings") from None
+    try:
+        try:
+            config_set(vm, global_path, "on")
+            for path, value in credentials.items():
+                config_set(vm, path, value)
+            for key, _, value in toggles:
+                result = php_eval(
+                    vm,
+                    "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
+                    f"PfbConfig::writeSystem({_php_str(key)}, PfbToggle::{value});\n"
+                    "write_config('pfBlockerNG smoke: isolate due feed extras');\necho 'OK';",
+                )
+                if result.returncode != 0 or "OK" not in result.stdout:
+                    raise RuntimeError("Could not isolate due feed extras")
+            for path, value in target.items():
+                config_set(vm, path, value)
+            tell_core_the_settings_changed(vm)
+        except Exception:
+            # Config transport output can contain credentials, including during restore.
+            raise RuntimeError("Could not prepare due feed settings") from None
+        yield
+    finally:
+        failures = 0
+        for path, state in states:
+            try:
+                config_restore_state(vm, path, state)
+            except Exception:
+                failures += 1
+        try:
+            tell_core_the_settings_changed(vm)
+        except Exception:
+            failures += 1
+        if failures:
+            raise RuntimeError(f"Due feed settings restore failed in {failures} step(s)") from None
+
+
+def core_update_view(vm: SmokeVM, after: str | None = None, *, timeout: float = 60.0) -> dict[str, Any]:
     """``GetUpdate``'s body: ``running``, ``update``, ``log`` and ``next`` (the cursor is an opaque string)."""
-    reply = core_call(vm, "GetUpdate", {} if after is None else {"after": after})
+    reply = core_calls(vm, [("GetUpdate", {} if after is None else {"after": after})], timeout=timeout)[0]
     if reply["status"] != 200:
         raise RuntimeError(f"GetUpdate did not answer 200: {reply}")
     body: dict[str, Any] = reply["body"]
@@ -3720,18 +3810,81 @@ def _ip_inject_snippet(spec: IpCase) -> str:
 # --------------------------------------------------------------------------- #
 
 
-# ADR-43 Phase 3: maps the legacy reload() scope names to pfb_trigger args.
-# "update" preserves its pre-Phase-3 behavior (scope=both force=false trigger=cron,
-# same as the old pfblockerng.php 'update' → sync_package_pfblockerng('cron') path).
+# Ordinary update checks feeds; the old cron trigger now means saved-settings apply only.
 # Use reload_deprecated_verb() to exercise the deprecated verb strings themselves.
 _SCOPE_TO_PFBTRIGGER: dict[str, tuple[str, str, str]] = {
-    "update": ("both", "false", "cron"),
+    "update": ("both", "false", "manual"),
     "updateip": ("ip", "true", "force"),
     "updatednsbl": ("dnsbl", "true", "force"),
 }
 
 # Gap between re-runs of a deferred pass (reload(retry_deferred=...)): the lock has no readiness signal to wait on.
 RELOAD_RETRY_INTERVAL = 5.0
+
+
+def _reload_budget(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError("STUCK: reload timeout budget exhausted")
+    return remaining
+
+
+def _reload_preflight(vm: SmokeVM, deadline: float) -> None:
+    """Only the disposable pytest guest with one exclusive Update client is supported.
+
+    vm_pid and loopback prevent accidentally targeting an administrator's appliance.
+    This is not mutual exclusion: identical competing clients cannot be detected.
+    """
+    if vm.vm_pid is None or vm.host not in ("127.0.0.1", "::1", "localhost"):
+        raise RuntimeError("reload requires an owned loopback disposable VM and exclusive single-client execution")
+    view = core_update_view(vm, timeout=_reload_budget(deadline))
+    if view["running"]:
+        raise RuntimeError(f"reload exclusive fixture is busy: preexisting Update running: {view}")
+
+
+def _reload_pending_state(vm: SmokeVM, deadline: float) -> list[str | None]:
+    # Read only: pfb_pending_changes_token() would mutate an unversioned marker.
+    return json.loads(
+        _php_read_scalar(
+            vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc'); "
+            "$pending = @file_get_contents(pfb_pending_changes_marker()); "
+            "$applied = @file_get_contents(pfb_pending_changes_marker() . '.applied');",
+            "json_encode(array($pending === FALSE ? NULL : $pending, $applied === FALSE ? NULL : $applied))",
+            timeout=_reload_budget(deadline),
+        )
+    )
+
+
+def _reload_completion(vm: SmokeVM, scope: str, force: str, deadline: float) -> str:
+    # CLI admission synchronously starts the gate under the exclusive fixture precondition.
+    # Equal second-resolution statuses are valid; neither status inequality nor cursor bits identify requests.
+    while True:
+        view = core_update_view(vm, timeout=_reload_budget(deadline))
+        status = view["update"]
+        if status is None or any(
+            status.get(k) != v
+            for k, v in (
+                ("trigger", "manual"),
+                ("scope", scope),
+                ("force", force),
+            )
+        ):
+            raise RuntimeError(f"reload exclusive fixture observed unexpected Update: {view}")
+        if not view["running"]:
+            if status.get("result") not in ("success", "skipped"):
+                raise RuntimeError(f"reload Update failed: {view}")
+            return str(status["result"])
+        time.sleep(min(1.0, _reload_budget(deadline)))
+
+
+def _reload_require_settled(vm: SmokeVM, before: list[str | None], deadline: float) -> None:
+    if before[0] is not None:
+        after = _reload_pending_state(vm, deadline)
+        if (before[0] == "" and (not after[0] or after[0] != after[1])) or (
+            before[0] != "" and after != [before[0], before[0]]
+        ):
+            raise RuntimeError(f"reload pending saved version not settled: before={before!r}, after={after!r}")
 
 
 def _require_pfb_dns_serving(vm: SmokeVM) -> None:
@@ -3771,20 +3924,15 @@ def reload(
     wait_unbound: bool = True,
     timeout: float = 600.0,
     retry_deferred: float = 0.0,
-    feeds: Sequence[str] = (),
 ) -> None:
     """Run a pfBlockerNG reload via the PHP CLI.
 
     ``scope`` maps to an explicit trigger request (ADR-43 Phase 3, via ``pfb_trigger``):
-    ``update`` (scope=both force=false trigger=cron — full update, respects change detector),
+    ``update`` (scope=both force=false trigger=manual — full update, respects change detector),
     ``updateip`` (scope=ip force=true trigger=force — IP-side force reload),
     ``updatednsbl`` (scope=dnsbl force=true trigger=force — DNSBL-side force reload),
-    ``scheduled`` (a quarter-hour Update Core asks the Update program for, with the ``feeds`` ids
-    it is asked to check -- :func:`feed_id`; Core decides what is due, so a pass checks exactly the
-    feeds named, issue #3941; sent as trigger ``retry``, which runs the same pass but, unlike ``scheduled``, is not
-    deferred by the harness's ``.pfb_cron_disable`` sentinel), or ``tick`` (the scheduled tick via
-    ``pfblockerng_tick()`` — the only path that runs ``pfb_log_mgmt()``, and only on an IDLE
-    tick: skipped when this tick dispatches an update pass or one from an earlier tick is
+    or ``tick`` (the scheduled tick via ``pfblockerng_tick()`` — the only path that runs ``pfb_log_mgmt()``,
+    and only on an IDLE tick: skipped when this tick dispatches an update pass or one from an earlier tick is
     still running, see ``pfb_update_pass_running()`` in ``pfblockerng.inc``).
 
     READINESS depends on whether a restart is expected (ADR-10):
@@ -3822,20 +3970,18 @@ def reload(
     (naming the attempts and the time spent): for a caller whose first pass can land inside core's own package
     restart (``rc.start_packages``). A retry that happened is printed with its attempt count and elapsed seconds.
     """
-    if scope not in _SCOPE_TO_PFBTRIGGER and scope not in ("scheduled", "tick"):
-        raise ValueError(f"reload scope must be update/updateip/updatednsbl/scheduled/tick, got {scope!r}")
-    if (scope == "scheduled") != bool(feeds):
-        raise ValueError(
-            f"reload({scope!r}): feeds name what a scheduled Update checks and nothing else takes them: {list(feeds)!r}"
-        )
+    if scope not in _SCOPE_TO_PFBTRIGGER and scope != "tick":
+        raise ValueError(f"reload scope must be update/updateip/updatednsbl/tick, got {scope!r}")
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
+    ordinary = scope in _SCOPE_TO_PFBTRIGGER
+    pending: list[str | None] = [None, None]
+    if ordinary:
+        _reload_preflight(vm, deadline)
+        if scope == "update":
+            pending = _reload_pending_state(vm, deadline)
     argv: tuple[str, ...]
-    if scope == "scheduled":
-        # The harness keeps .pfb_cron_disable set and the verb defers trigger `scheduled` under it (rc 75);
-        # `retry` runs the same pass.
-        argv = (core_update_command("retry", feeds=feeds),)
-    elif scope == "tick":
+    if scope == "tick":
         argv = (PHP_BIN, PFB_CLI, scope)
     else:
         s, f, t = _SCOPE_TO_PFBTRIGGER[scope]
@@ -3844,16 +3990,26 @@ def reload(
     attempts = 1 + math.ceil(retry_deferred / RELOAD_RETRY_INTERVAL)
     started = time.monotonic()
     for attempt in range(1, attempts + 1):
-        result = vm.ssh(*argv, timeout=timeout)
-        if result.returncode != 75 or attempt == attempts or time.monotonic() - started >= retry_deferred:
+        if ordinary and attempt > 1:
+            _reload_preflight(vm, deadline)
+        result = vm.ssh(*argv, timeout=_reload_budget(deadline) if ordinary else timeout)
+        skipped = False
+        if ordinary and result.returncode == 0:
+            skipped = _reload_completion(vm, s, "download" if f == "true" else "none", deadline) == "skipped"
+        if (
+            (result.returncode != 75 and not skipped)
+            or attempt == attempts
+            or time.monotonic() - started >= retry_deferred
+        ):
             break
-        time.sleep(RELOAD_RETRY_INTERVAL)
+        time.sleep(min(RELOAD_RETRY_INTERVAL, _reload_budget(deadline)) if ordinary else RELOAD_RETRY_INTERVAL)
     waited = f"{time.monotonic() - started:.0f}s"
     if attempt > 1 and result.returncode != 75:
         print(f"reload({scope}): ran on attempt {attempt} after {waited} of rc=75 deferrals", flush=True)
-    if result.returncode == 75:
+    if result.returncode == 75 or skipped:
         gave_up = f" [gave up after {attempt} attempts in {waited}]" if attempt > 1 else ""
-        raise RuntimeError(f"reload({scope}) deferred (rc=75): {result.stderr.strip()}{gave_up}")
+        reason = result.stderr.strip() if result.returncode == 75 else "Update skipped"
+        raise RuntimeError(f"reload({scope}) deferred (rc=75): {reason}{gave_up}")
     if result.returncode != 0:
         # Report STDOUT too, not just stderr: pfBlockerNG writes a PHP fatal (e.g. an uncaught
         # TypeError that aborts the verb) to stdout, while stderr may only carry incidental noise
@@ -3862,12 +4018,21 @@ def reload(
         raise RuntimeError(
             f"reload({scope}) failed: rc={result.returncode} stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
         )
+    if ordinary:
+        _reload_require_settled(vm, pending, deadline)
     if data_path:
         # Forward the caller's remaining budget so a slow box honours `timeout` instead
         # of wait_zero_downtime_swap's shorter default.
-        wait_zero_downtime_swap(vm, since=swap_before, timeout=max(1.0, deadline - time.monotonic()))
+        wait_zero_downtime_swap(
+            vm,
+            since=swap_before,
+            timeout=_reload_budget(deadline) if ordinary else max(1.0, deadline - time.monotonic()),
+        )
     elif wait_unbound:
-        wait_unbound_ready(vm)
+        if ordinary:
+            wait_unbound_ready(vm, timeout=_reload_budget(deadline))
+        else:
+            wait_unbound_ready(vm)
     else:
         return  # a pf-level caller never probes DNS
     _require_pfb_dns_serving(vm)
@@ -3882,13 +4047,21 @@ def reload_deprecated_verb(vm: SmokeVM, verb: str, *, timeout: float = 600.0) ->
     """
     if verb not in ("update", "updateip", "updatednsbl"):
         raise ValueError(f"reload_deprecated_verb: expected a deprecated verb, got {verb!r}")
-    result = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=timeout)
+    deadline = time.monotonic() + timeout
+    _reload_preflight(vm, deadline)
+    pending: list[str | None] = _reload_pending_state(vm, deadline) if verb == "update" else [None, None]
+    result = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=_reload_budget(deadline))
     if result.returncode != 0:
         raise RuntimeError(
             f"reload_deprecated_verb({verb!r}) failed: rc={result.returncode} "
             f"stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
         )
-    wait_unbound_ready(vm)
+    scope, force, _trigger = _SCOPE_TO_PFBTRIGGER[verb]
+    outcome = _reload_completion(vm, scope, "download" if force == "true" else "none", deadline)
+    if outcome == "skipped":
+        raise RuntimeError(f"reload_deprecated_verb({verb!r}) Update skipped")
+    _reload_require_settled(vm, pending, deadline)
+    wait_unbound_ready(vm, timeout=_reload_budget(deadline))
 
 
 @timed_step("apply_filter_sync")

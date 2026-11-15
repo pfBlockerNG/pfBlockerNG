@@ -63,6 +63,7 @@ import pytest
 
 from . import helpers as h
 from .conftest import FIXTURES_DIR, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
+from .test_core_update import _assert_feed_disposition, _run_update, _snapshot
 
 pytestmark = pytest.mark.smoke
 
@@ -1327,19 +1328,6 @@ def test_dnswl_permit_feed_allow_overrides_block_feed(deployed_vm: SmokeVM, clie
 # --------------------------------------------------------------------------- #
 
 
-def _feed_log_count(vm: SmokeVM, header: str, phrase: str, *, timeout: float = 30.0) -> int:
-    """Count main-log lines for THIS feed (``[ <header> ]``) that also contain ``phrase``."""
-    cmd = (
-        f"/usr/bin/grep -F {shlex.quote(f'[ {header} ]')} {shlex.quote(h.PFB_LOG)} 2>/dev/null "
-        f"| /usr/bin/grep -Fc {shlex.quote(phrase)}"
-    )
-    res = vm.ssh(cmd, timeout=timeout)
-    try:
-        return int(res.stdout.strip())
-    except ValueError:
-        return 0
-
-
 def _bump_feed_mtime(
     vm: SmokeVM, feed_path: str, orig_path: str, *, advance: str | None = None, timeout: float = 30.0
 ) -> None:
@@ -1362,29 +1350,15 @@ def _bump_feed_mtime(
 
 @pytest.mark.timeout(600)
 def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """Issue #538 guard: the scheduled cron path detects an in-place local-feed edit and re-ingests it.
+    """Issue #538: due native work detects an in-place local-feed content change.
 
-    ADR-42 Phase 2: detection is now content-hash based (xxh128 sidecar), not mtime-based.
-    The feed edit writes different bytes; the hash differs → re-ingest regardless of mtime.
-    This pins the CHANGED branch of ``pfb_update_check`` (cron verb → hash change detected →
-    ``{header}.update`` touched → feed re-downloaded). It is the production path the #533
-    misdiagnosis missed, distinct from the Force/``force_dnsbl_refetch`` shortcut that all
-    other local-feed smoke tests use.
-
-    Scenario (BDD):
-      Given the feed contains only ``dom_old`` (initial ingest via Force Update blocks it,
-        and writes the .xxhash128 sidecar for the .orig);
-        and ``dom_new`` is NOT on any feed (resolves via stub sentinel, not blocked);
-      When the feed source is edited in-place to add ``dom_new`` (content changes, so the
-        xxh128 hash differs from the sidecar baseline), pfb_reuse is OFF
-        and the scheduled Update is run (NOT ``force_dnsbl_refetch``);
-      Then ``dom_new`` becomes BLOCKED (detector re-ingested the edited feed),
-        ``dom_old`` stays BLOCKED, and the main log gained a header-scoped
-        "Downloading update" line for this feed during the cron run.
+    Initial force ingest blocks only the old domain. With reuse off, a non-force retry
+    must report this feed changed, publish new original/action bytes, and block both
+    domains. The new domain resolves through the stub before the edit.
     """
     dom_old = h.unique_domain("cronchgold")
     dom_new = h.unique_domain("cronchgnew")
-    header = "smokecronchg"
+    header = f"crchg_{os.urandom(8).hex()}"
     feed_path: str | None = None
 
     try:
@@ -1393,7 +1367,7 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # GIVEN — write initial feed (dom_old only); ingest (a single updatednsbl creates the
         # .orig baseline + .xxhash128 sidecar + .txt and blocks dom_old).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronchg.txt", dom_old + "\n")
-        spec = h.DnsblCase(aliasname="smokecronchg", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname=header, feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
@@ -1419,21 +1393,14 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # Pin pfb_reuse=off.
         h.disable_feed_reuse(deployed_vm)
 
-        # Capture baselines BEFORE the cron run: the per-feed header line (proves the detector
-        # actually evaluated THIS feed) and the re-ingest marker.
-        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-
-        # WHEN — run the genuine cron path (NOT force_dnsbl_refetch — that is the shortcut).
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
-
-        # THEN (fast guard) — the scheduled Update actually evaluated this feed. If it was not
-        # checked, no detector line appears; fail HERE with a clear reason instead of a 120s probe timeout.
-        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-        assert hdr_after > hdr_before, (
-            f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — the "
-            f"feed was not checked, so this run proves nothing"
-        )
+        files = [f"{h.PFB_DBDIR}/dnsblorig/{header}.orig", f"{h.PFB_DBDIR}/dnsbl/{header}.txt"]
+        before = _snapshot(deployed_vm, files)
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+        assert update["result"] == "success", f"Update failed: {update}"
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "changed")
+        h.wait_unbound_ready(deployed_vm)
+        h._require_pfb_dns_serving(deployed_vm)
 
         # THEN — dom_new becomes blocked (cron re-ingested the edited feed).
         h.flush_unbound_name(deployed_vm, dom_new)
@@ -1445,12 +1412,9 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
         assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old} must remain VIP-blocked, got {ans_old_after}"
 
-        # Corroborate: detector fired — "Downloading update" count increased for this header.
-        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
-        assert dl_after > dl_before, (
-            f"Expected a new '[ {header} ] ... Downloading update' line in {h.PFB_LOG} "
-            f"after cron (before={dl_before}, after={dl_after}) — detector did not re-ingest"
-        )
+        after = _snapshot(deployed_vm, files)
+        assert after[files[0]][0] != before[files[0]][0], "changed source was not downloaded"
+        assert after[files[1]][0] != before[files[1]][0], "changed source was not rebuilt"
 
     finally:
         reset_exc = None
@@ -1466,26 +1430,14 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 
 @pytest.mark.timeout(600)
 def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """Issue #538 guard: an unchanged local feed on a cron run is NOT re-parsed.
+    """Issue #538: an unchanged local feed is checked without being re-ingested.
 
-    ADR-42 Phase 2: detection is now content-hash based (xxh128 sidecar).  The source bytes
-    are identical to the last-ingested .orig, so the hash matches the sidecar and the
-    detector takes the "Update not required" path without re-ingesting.
-
-    This pins the UNCHANGED branch of ``pfb_update_check``.  With nothing due, the cron
-    takes the ``noupdates`` path, which SKIPS the sync feed-loop entirely — so the reuse is
-    proven by the DETECTOR verdict ("Update not required"), NOT a sync-loop "exists" line.
-
-    Scenario (BDD):
-      Given the feed contains ``dom`` (initial ingest blocks it and writes the .xxhash128
-        sidecar for the .orig);
-      When no content change is made to the source, pfb_reuse is OFF
-        and the scheduled Update runs;
-      Then the detector logs a new "Update not required" verdict (hash matches sidecar),
-        no "Downloading update" line appears for this header, and ``dom`` remains blocked.
+    With reuse off and genuine due work, require a native per-ID unchanged result.
+    Original/action bytes and file identity/timestamps stay unchanged; the domain
+    remains blocked. Aggregate success alone cannot prove the feed was checked.
     """
     dom = h.unique_domain("cronunchg")
-    header = "smokecronunchg"
+    header = f"crunch_{os.urandom(8).hex()}"
     feed_path: str | None = None
 
     try:
@@ -1493,7 +1445,7 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 
         # GIVEN — write feed, ingest (a single updatednsbl creates the .orig + .xxhash128 sidecar).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronunchg.txt", dom + "\n")
-        spec = h.DnsblCase(aliasname="smokecronunchg", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname=header, feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
@@ -1508,28 +1460,15 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # Pin pfb_reuse=off.
         h.disable_feed_reuse(deployed_vm)
 
-        # Capture baselines BEFORE cron. With an unchanged feed the cron takes the noupdates
-        # path (sync feed-loop skipped), so the reliable positive signal is the DETECTOR verdict
-        # "Update not required" — emitted by pfb_update_check, which runs BEFORE that dispatch.
-        notreq_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
-        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-
-        # WHEN — cron.
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
-
-        # THEN — no new "Downloading update" (reuse held — feed not re-ingested).
-        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
-        assert dl_after == dl_before, (
-            f"Expected NO new '[ {header} ] ... Downloading update' after unchanged cron "
-            f"(before={dl_before}, after={dl_after}) — detector incorrectly re-ingested"
-        )
-
-        # THEN — the detector evaluated the due feed and saw no change (equal mtimes).
-        notreq_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
-        assert notreq_after > notreq_before, (
-            f"Expected a new 'Update not required' detector verdict after unchanged cron "
-            f"(before={notreq_before}, after={notreq_after}) — reuse path not confirmed"
-        )
+        files = [f"{h.PFB_DBDIR}/dnsblorig/{header}.orig", f"{h.PFB_DBDIR}/dnsbl/{header}.txt"]
+        before = _snapshot(deployed_vm, files)
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+        assert update["result"] == "success", f"Update failed: {update}"
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "unchanged")
+        h.wait_unbound_ready(deployed_vm)
+        h._require_pfb_dns_serving(deployed_vm)
+        assert _snapshot(deployed_vm, files) == before, "unchanged source was downloaded or rebuilt"
 
         # THEN — dom remains blocked (feed was not cleared).
         ans_after = h.dns_probe_client(client_vm, dom, "A")
@@ -1549,31 +1488,14 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 
 @pytest.mark.timeout(600)
 def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """Local feed change detection: a bumped mtime with IDENTICAL content is NOT re-ingested.
+    """A later local-source mtime with identical bytes must not trigger re-ingest.
 
-    ADR-42 Phase 2: the old mtime-then-md5 two-step is replaced by a pure content-hash gate
-    (xxh128 sidecar).  The source bytes are unchanged → the hash equals the sidecar → the
-    detector takes "Update not required" regardless of mtime.
-
-    The old "( mtime changed, content identical )" log marker no longer exists; the verdict
-    is now the same "Update not required" path used by the no-change case.
-
-    RED on pre-Phase-2 code: the old code compared mtimes first — if the mtime differed it
-    would fall through to md5 confirmation and emit "mtime changed, content identical", which
-    passed.  The same-second edge case (equal mtime, different content) was the blind spot.
-    GREEN after Phase 2: the single hash path catches both cases consistently.
-
-    Scenario (BDD):
-      Given the feed contains ``dom`` (initial ingest blocks it and writes the .xxhash128
-        sidecar; ``.orig`` bytes == source bytes);
-      When the source mtime is bumped LATER than ``.orig`` WITHOUT changing content
-        (``touch -r`` + ``touch -A``), pfb_reuse is OFF
-        and the scheduled Update runs;
-      Then the detector logs a new "Update not required" verdict (hash matches sidecar),
-        no "Downloading update" line appears for this header, and ``dom`` remains blocked.
+    Copy the original mtime onto the source and advance it by 120 seconds, without
+    changing its bytes. A due non-force retry must report this feed unchanged, leave
+    original/action files untouched, and keep the domain blocked.
     """
     dom = h.unique_domain("cronsame")
-    header = "smokecronsame"
+    header = f"crsame_{os.urandom(8).hex()}"
     feed_path: str | None = None
 
     try:
@@ -1581,7 +1503,7 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
 
         # GIVEN — write feed, ingest (updatednsbl creates the .orig + .xxhash128 sidecar).
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronsame.txt", dom + "\n")
-        spec = h.DnsblCase(aliasname="smokecronsame", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname=header, feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
@@ -1597,26 +1519,21 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
 
         # Pin pfb_reuse=off.
         h.disable_feed_reuse(deployed_vm)
-        notreq_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
-        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-
-        # WHEN — cron (the genuine detector path).
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
-
-        # THEN — hash confirms no content change: "Update not required" appeared, no download.
-        # (ADR-42 Phase 2: the old "mtime changed, content identical" marker no longer exists;
-        # both mtime-equal and mtime-bumped-same-content cases share the same "Update not
-        # required" path because the gate is purely hash-based.)
-        notreq_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
-        assert notreq_after > notreq_before, (
-            f"Expected a new 'Update not required' verdict after cron "
-            f"(before={notreq_before}, after={notreq_after}) — hash gate did not confirm unchanged content"
+        files = [f"{h.PFB_DBDIR}/dnsblorig/{header}.orig", f"{h.PFB_DBDIR}/dnsbl/{header}.txt"]
+        before = _snapshot(deployed_vm, files)
+        mtimes = deployed_vm.ssh("stat", "-f", "%m", feed_path, orig_path)
+        assert mtimes.returncode == 0, f"cannot stat source/original mtimes: {mtimes.stderr}"
+        source_mtime, orig_mtime = map(int, mtimes.stdout.split())
+        assert source_mtime == orig_mtime + 120, (
+            f"source mtime must be original +120 seconds before retry: {source_mtime=} {orig_mtime=}"
         )
-        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
-        assert dl_after == dl_before, (
-            f"Expected NO '[ {header} ] ... Downloading update' (content identical, hash unchanged) "
-            f"(before={dl_before}, after={dl_after}) — feed was wrongly re-ingested"
-        )
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+        assert update["result"] == "success", f"Update failed: {update}"
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "unchanged")
+        h.wait_unbound_ready(deployed_vm)
+        h._require_pfb_dns_serving(deployed_vm)
+        assert _snapshot(deployed_vm, files) == before, "unchanged source was downloaded or rebuilt"
 
         # THEN — dom remains blocked (feed not cleared).
         ans_after = h.dns_probe_client(client_vm, dom, "A")
@@ -1636,33 +1553,15 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
 
 @pytest.mark.timeout(600)
 def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """ADR-42 Phase 2: a same-second content change (mtime indistinguishable) is detected.
+    """ADR-42: changed bytes are detected even with exactly equal source/original mtimes.
 
-    This is the blind spot that ADR-42 Phase 2 closes.  The old mtime gate compared
-    whole-second timestamps: a content change written within the same second as the prior
-    ingest produced EQUAL mtimes → the old code concluded "unchanged" and missed the
-    re-ingest.  The new xxh128-sidecar gate compares bytes, so it catches the change even
-    when mtime is forced to be identical.
-
-    RED on pre-Phase-2 code: equal mtime → ``pfb_local_feed_changed`` returns FALSE →
-    cron logs "Update not required" → ``dom_new`` is never blocked (assertion fails).
-    GREEN after Phase 2: different bytes → different hash → "Update found" → re-ingest →
-    ``dom_new`` becomes blocked.
-
-    Scenario (BDD):
-      Given the feed contains only ``dom_old`` (initial ingest blocks it and writes the
-        .xxhash128 sidecar for the .orig);
-        and ``dom_new`` is NOT blocked;
-      When the source is rewritten with DIFFERENT content (add ``dom_new``) AND the source
-        mtime is forced EQUAL to the ``.orig`` mtime (``touch -r`` — simulates same-second
-        write), pfb_reuse is OFF
-        and the scheduled Update is run;
-      Then ``dom_new`` becomes BLOCKED (detector re-ingested despite equal mtime),
-        ``dom_old`` stays BLOCKED, and a new "Downloading update" line appears for this header.
+    After initial ingest, add the new domain and use touch -r to preserve equal mtimes.
+    A due non-force retry must report this feed changed, replace original/action bytes,
+    and block both domains. The new domain is unblocked before the edit.
     """
     dom_old = h.unique_domain("cronsamesold")
     dom_new = h.unique_domain("cronsamesnew")
-    header = "smokecronamess"
+    header = f"crsecs_{os.urandom(8).hex()}"
     feed_path: str | None = None
 
     try:
@@ -1670,7 +1569,7 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
 
         # GIVEN — write initial feed (dom_old only); ingest creates .orig + .xxhash128 sidecar.
         feed_path = h.write_local_feed(deployed_vm, "smoke_cronamess.txt", dom_old + "\n")
-        spec = h.DnsblCase(aliasname="smokecronamess", feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname=header, feed_url=feed_path, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
@@ -1697,18 +1596,20 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
         # Pin pfb_reuse=off.
         h.disable_feed_reuse(deployed_vm)
 
-        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-
-        # WHEN — cron (genuine detector path).
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
-
-        # Fast guard: cron actually evaluated this feed.
-        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-        assert hdr_after > hdr_before, (
-            f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — "
-            f"EveryDay feed not due (hour rollover?); re-run"
+        files = [f"{h.PFB_DBDIR}/dnsblorig/{header}.orig", f"{h.PFB_DBDIR}/dnsbl/{header}.txt"]
+        before = _snapshot(deployed_vm, files)
+        mtimes = deployed_vm.ssh("stat", "-f", "%m", feed_path, orig_path)
+        assert mtimes.returncode == 0, f"cannot stat source/original mtimes: {mtimes.stderr}"
+        source_mtime, orig_mtime = map(int, mtimes.stdout.split())
+        assert source_mtime == orig_mtime, (
+            f"source/original second timestamps must match before retry: {source_mtime=} {orig_mtime=}"
         )
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+        assert update["result"] == "success", f"Update failed: {update}"
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "changed")
+        h.wait_unbound_ready(deployed_vm)
+        h._require_pfb_dns_serving(deployed_vm)
 
         # THEN — dom_new becomes blocked (detector caught the same-second change).
         h.flush_unbound_name(deployed_vm, dom_new)
@@ -1720,12 +1621,9 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
         ans_old_after = h.dns_probe_client(client_vm, dom_old, "A")
         assert h.is_vip(ans_old_after), f"AFTER cron: {dom_old} must remain VIP-blocked, got {ans_old_after}"
 
-        # Corroborate: detector fired — "Downloading update" count increased.
-        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
-        assert dl_after > dl_before, (
-            f"Expected a new '[ {header} ] ... Downloading update' line (same-second change detected) "
-            f"(before={dl_before}, after={dl_after}) — hash gate did not trigger re-ingest"
-        )
+        after = _snapshot(deployed_vm, files)
+        assert after[files[0]][0] != before[files[0]][0], "changed source was not downloaded"
+        assert after[files[1]][0] != before[files[1]][0], "changed source was not rebuilt"
 
     finally:
         reset_exc = None
@@ -1777,25 +1675,15 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
 def test_cron_304_skips_unchanged_remote_feed(
     deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
-    """ADR-42 Phase 3 (a): 304 from a conditional GET skips re-ingest of an unchanged remote feed.
+    """An ETag conditional GET returning 304 must not re-ingest an unchanged DNSBL feed.
 
-    The primary Phase-3 win: the guest sends ``If-None-Match`` with the stored ETag; the
-    server returns 304 (no body); the detector logs "304 not modified" and skips re-ingest.
-
-    RED on pre-Phase-3 code: the old HEAD probe path logs "Remote timestamp: … Update not
-    required" — the "304 not modified" marker is the Phase-3 proof that the new code path
-    was taken; its absence would mean the old HEAD path is still running.
-
-    Scenario (BDD):
-      Given the remote DNSBL feed is loaded (Force Update writes .orig + .xxhash128 + .etag);
-        ``dom`` is VIP-blocked;
-      When feed content is UNCHANGED (same ETag on the server), pfb_reuse is OFF
-        and the scheduled Update is run;
-      Then the detector logs "304 not modified", does NOT log "Downloading update",
-        and ``dom`` remains blocked.
+    Keep one fresh feed identity across at most four genuine due checks, allowing the
+    validator to be stored then read. Require an actual mock 304 after the baseline,
+    native per-ID unchanged results, untouched original/action files, and continued
+    blocking. An empty retry or a same-body 200 alone cannot satisfy this case.
     """
     dom = h.unique_domain("p3304skip")
-    header = "smokep3304skip"
+    header = f"et304_{os.urandom(8).hex()}"
     etag = '"p3-etag-v1"'
     feed_name = "p3_304_skip.txt"
 
@@ -1808,7 +1696,7 @@ def test_cron_304_skips_unchanged_remote_feed(
         feed_url = mock_feeds.feed_url(feed_name)
 
         # GIVEN — inject + Force Update to establish the .orig baseline + ingest the body.
-        spec = h.DnsblCase(aliasname="smokep3304skip", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
@@ -1817,38 +1705,23 @@ def test_cron_304_skips_unchanged_remote_feed(
         ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
-        # The cron detector prefixes the verdict with the feed header, so the marker
-        # below is scoped by header and verdict.
         h.disable_feed_reuse(deployed_vm)
-        not_mod_marker = h.detector_status_marker(header, "( 304 not modified )")
-        not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
-        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-
-        # WHEN — the conditional-GET 304 needs the validator PERSISTED first, then READ on a
-        # later probe. The validator is written by the cron detector (pfb_update_check) on a
-        # 200, NOT by the updatednsbl Force ingest above, and only once a {header}.orig baseline
-        # exists — so the store-then-read can span a couple of cron passes. Run cron until
-        # the marker appears (the #572 fix aligned the read base to {header}.orig), capped so
-        # a genuine failure still surfaces.
+        files = [f"{h.PFB_DBDIR}/dnsblorig/{header}.orig", f"{h.PFB_DBDIR}/dnsbl/{header}.txt"]
+        before = _snapshot(deployed_vm, files)
+        seen = len(mock_feeds.statuses(feed_name))
+        day = h.guest_previous_date(deployed_vm)
         for _pass in range(4):
-            h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
-            if h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker) > not_mod_before:
+            with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname, slot=_pass, day=day):
+                update, native_log = _run_update(deployed_vm, "retry")
+            assert update["result"] == "success", f"Update failed: {update}"
+            _assert_feed_disposition(native_log, h.case_feed_id(spec), "unchanged")
+            h.wait_unbound_ready(deployed_vm)
+            h._require_pfb_dns_serving(deployed_vm)
+            if 304 in mock_feeds.statuses(feed_name)[seen:]:
                 break
-
-        # THEN — "[ header ] ( 304 not modified )" appeared within the cap (Phase-3 code-path
-        # proof, now also proving the SAME cron pass evaluated THIS feed's header).
-        not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
-        assert not_mod_after > not_mod_before, (
-            f"Expected {not_mod_marker!r} (Phase-3 conditional GET proof) within 4 cron "
-            f"passes (before={not_mod_before}, after={not_mod_after}) — 304 path not taken"
-        )
-
-        # THEN — no re-ingest.
-        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
-        assert dl_after == dl_before, (
-            f"Expected NO '[ {header} ] ... Downloading update' after 304 "
-            f"(before={dl_before}, after={dl_after}) — detector incorrectly re-ingested"
-        )
+        statuses = mock_feeds.statuses(feed_name)[seen:]
+        assert 304 in statuses, f"ETag never returned 304 within 4 passes: {statuses}"
+        assert _snapshot(deployed_vm, files) == before, "304 checks downloaded or rebuilt the feed"
 
         # THEN — dom remains blocked.
         ans_after = h.dns_probe_client(client_vm, dom, "A")
@@ -1868,26 +1741,15 @@ def test_cron_304_skips_unchanged_remote_feed(
 def test_cron_200_reingest_changed_remote_feed(
     deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
-    """ADR-42 Phase 3 (b): a changed remote feed (new ETag → 200) is re-ingested via hash compare.
+    """A changed remote body and ETag must be fetched and re-ingested.
 
-    The server bumps the ETag when the body changes; the guest's stored ETag no longer
-    matches → 200 with new body → body_hash != persisted_hash → re-ingest.
-
-    RED on a broken impl that only checks status (304/200) without the hash compare:
-    it would still re-ingest on 200, but the "content changed" marker proves the Phase-3
-    hash-comparison path is taken (not the old "md5 changed" path).
-
-    Scenario (BDD):
-      Given the remote DNSBL feed is loaded (``dom_old`` blocked; .etag=etag_v1);
-        ``dom_new`` is NOT blocked;
-      When the feed body is updated + ETag bumped to etag_v2, pfb_reuse is OFF
-        and the scheduled Update runs;
-      Then the detector logs "content changed" + "Downloading update",
-        ``dom_new`` becomes VIP-blocked, and ``dom_old`` remains blocked.
+    Require an actual post-baseline mock 200 plus this feed's native changed result,
+    changed original/action bytes, and both old/new domains blocked afterward.
+    The new domain is unblocked before the edit; a 200 alone is not a hash verdict.
     """
     dom_old = h.unique_domain("p3200old")
     dom_new = h.unique_domain("p3200new")
-    header = "smokep3200chg"
+    header = f"et200_{os.urandom(8).hex()}"
     etag_v1 = '"p3-etag-v1"'
     etag_v2 = '"p3-etag-v2"'
     feed_name = "p3_200_changed.txt"
@@ -1899,7 +1761,7 @@ def test_cron_200_reingest_changed_remote_feed(
         mock_feeds.enable_etag(feed_name, etag_v1)
         feed_url = mock_feeds.feed_url(feed_name)
 
-        spec = h.DnsblCase(aliasname="smokep3200chg", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
@@ -1914,30 +1776,20 @@ def test_cron_200_reingest_changed_remote_feed(
         mock_feeds.set_content(feed_name, dom_old + "\n" + dom_new + "\n", etag=etag_v2)
 
         h.disable_feed_reuse(deployed_vm)
-        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-        # "[ header ] ( content changed )" is the Phase-3 hash-compare verdict itself (not
-        # merely its re-ingest side effect), header-scoped by #811 — the docstring's RED
-        # premise (a status-only impl that skips the hash compare) would still log
-        # "Downloading update" without ever logging this, and a header-scoped count also
-        # proves THIS feed (not a sibling) was the one evaluated.
-        chg_marker = h.detector_status_marker(header, "( content changed )")
-        chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
-
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
-
-        # THEN — "Downloading update" appeared (feed was re-ingested).
-        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
-        assert dl_after > dl_before, (
-            f"Expected '[ {header} ] ... Downloading update' after changed-feed cron "
-            f"(before={dl_before}, after={dl_after}) — detector did not detect the change"
-        )
-
-        # THEN — the hash-compare verdict itself fired: "[ header ] ( content changed )".
-        chg_after = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
-        assert chg_after > chg_before, (
-            f"Expected {chg_marker!r} verdict after the ETag bump + body change "
-            f"(before={chg_before}, after={chg_after}) — hash-compare path not taken"
-        )
+        files = [f"{h.PFB_DBDIR}/dnsblorig/{header}.orig", f"{h.PFB_DBDIR}/dnsbl/{header}.txt"]
+        before = _snapshot(deployed_vm, files)
+        seen = len(mock_feeds.statuses(feed_name))
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+        assert update["result"] == "success", f"Update failed: {update}"
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "changed")
+        statuses = mock_feeds.statuses(feed_name)[seen:]
+        assert statuses and set(statuses) == {200}, f"expected a real full-body 200 probe: {statuses}"
+        h.wait_unbound_ready(deployed_vm)
+        h._require_pfb_dns_serving(deployed_vm)
+        after = _snapshot(deployed_vm, files)
+        assert after[files[0]][0] != before[files[0]][0], "changed body was not downloaded"
+        assert after[files[1]][0] != before[files[1]][0], "changed body was not rebuilt"
 
         # THEN — dom_new becomes blocked.
         h.flush_unbound_name(deployed_vm, dom_new)
@@ -1962,29 +1814,14 @@ def test_cron_200_reingest_changed_remote_feed(
 def test_cron_no_validator_download_hash_decides(
     deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
-    """ADR-42 Phase 3 (c): server with NO validator at all → download + hash decides (same bytes → no re-ingest).
+    """A server with neither ETag nor Last-Modified must use full-body hash comparison.
 
-    The mock is opted OUT of its default Last-Modified header via ``disable_lastmod()``, so
-    this feed genuinely emits no ETag AND no Last-Modified — the guest never stores a ``.etag``
-    or ``.lastmod`` sidecar for it, and every probe is an unconditional GET. The detector
-    downloads the full body and compares the xxh128 hash. Identical bytes → "content unchanged"
-    → no re-ingest. This proves the last-resort path never stalls even with zero validators to
-    fall back on — distinct from the sibling "spurious 200" case below, where a validator IS
-    stored but the server ignores the conditional request it produces.
-
-    RED on a broken impl that skips the download when no validator is stored: no
-    "content unchanged" marker would ever appear for a no-validator server feed.
-
-    Scenario (BDD):
-      Given the remote DNSBL feed is loaded with NO validator at all (server emits neither
-        ETag nor Last-Modified); ``dom`` is VIP-blocked;
-      When feed content is UNCHANGED, pfb_reuse is OFF
-        and the scheduled Update runs;
-      Then the detector downloads the full body, logs "content unchanged",
-        does NOT log "Downloading update", and ``dom`` remains blocked.
+    disable_lastmod keeps this distinct from the ignored-validator case. Require an
+    actual post-baseline 200 and this feed's native unchanged result, with untouched
+    original/action files and continued blocking. A skipped or empty retry must fail.
     """
     dom = h.unique_domain("p3noetag")
-    header = "smokep3noetag"
+    header = f"noval_{os.urandom(8).hex()}"
     feed_name = "p3_no_etag.txt"
 
     try:
@@ -1997,7 +1834,7 @@ def test_cron_no_validator_download_hash_decides(
         mock_feeds.disable_lastmod(feed_name)
         feed_url = mock_feeds.feed_url(feed_name)
 
-        spec = h.DnsblCase(aliasname="smokep3noetag", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
@@ -2006,30 +1843,19 @@ def test_cron_no_validator_download_hash_decides(
         ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
-        # Feed unchanged; no If-None-Match will be sent (no stored ETag). #811 header-scopes
-        # the "( content unchanged )" verdict line, so the marker below proves BOTH the
-        # verdict and that THIS feed's header was evaluated.
         h.disable_feed_reuse(deployed_vm)
-        not_unch_marker = h.detector_status_marker(header, "( content unchanged )")
-        not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
-        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
-
-        # THEN — "[ header ] ( content unchanged )" appeared (full download + hash comparison
-        # taken for THIS feed).
-        not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
-        assert not_unch_after > not_unch_before, (
-            f"Expected {not_unch_marker!r} log line after no-validator cron "
-            f"(before={not_unch_before}, after={not_unch_after}) — download+hash path not taken"
-        )
-
-        # THEN — no re-ingest (identical bytes).
-        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
-        assert dl_after == dl_before, (
-            f"Expected NO '[ {header} ] ... Downloading update' (same bytes) "
-            f"(before={dl_before}, after={dl_after}) — wrongly re-ingested"
-        )
+        files = [f"{h.PFB_DBDIR}/dnsblorig/{header}.orig", f"{h.PFB_DBDIR}/dnsbl/{header}.txt"]
+        before = _snapshot(deployed_vm, files)
+        seen = len(mock_feeds.statuses(feed_name))
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+        assert update["result"] == "success", f"Update failed: {update}"
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "unchanged")
+        statuses = mock_feeds.statuses(feed_name)[seen:]
+        assert statuses and set(statuses) == {200}, f"expected a real full-body 200 probe: {statuses}"
+        h.wait_unbound_ready(deployed_vm)
+        h._require_pfb_dns_serving(deployed_vm)
+        assert _snapshot(deployed_vm, files) == before, "same-body 200 downloaded or rebuilt the baseline"
 
         # THEN — dom remains blocked.
         ans_after = h.dns_probe_client(client_vm, dom, "A")
@@ -2049,28 +1875,16 @@ def test_cron_no_validator_download_hash_decides(
 def test_cron_spurious_200_same_bytes_no_reingest(
     deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
-    """ADR-42 Phase 3 (d) — §2 contract #5: a spurious 200 with identical bytes is NOT re-ingested.
+    """A spurious same-body 200 must not re-ingest an IP feed.
 
-    Unlike case (c), this feed keeps the mock's DEFAULT Last-Modified header (no
-    ``disable_lastmod()`` call), so the guest DOES store a ``.lastmod`` validator and DOES send
-    a conditional request on the next probe — the server just ignores it and always answers
-    200.  body_hash == persisted_hash → "content unchanged" → no re-ingest.  This proves
-    contract #5: the hash compare, not the raw status code, is what decides.
-
-    RED on a broken impl that treats every 200 as changed: it would log "Downloading update"
-    and re-ingest on every cron run — the "content unchanged" marker proves the hash
-    comparison is applied and wins over the raw status code.
-
-    Scenario (BDD):
-      Given the remote IP feed is loaded (``member_ip`` is in the pf table); server has no ETag;
-      When feed bytes are UNCHANGED, pfb_reuse is OFF
-        and the scheduled Update runs (server returns plain 200 — no If-None-Match sent);
-      Then the detector logs "content unchanged", does NOT log "Downloading update",
-        and the pf table still contains ``member_ip``.
+    Unlike the no-validator case, retain the mock's Last-Modified header: the server
+    ignores conditional requests. Require a real post-baseline 200, this feed's native
+    unchanged result, untouched original/action files, and preserved table membership.
+    This single pass does not assert that a conditional header was already sent.
     """
     member_ip = "198.51.100.1"
     feed_name = "p3_spurious_200.txt"
-    header = "smokep3spur200"
+    header = f"spur_{os.urandom(8).hex()}"
 
     try:
         h.unblock_egress()
@@ -2079,7 +1893,7 @@ def test_cron_spurious_200_same_bytes_no_reingest(
         mock_feeds.register(feed_name, member_ip + "\n")
         feed_url = mock_feeds.feed_url(feed_name)
 
-        spec = h.IpCase(aliasname="smokep3spur200", feed_url=feed_url, header=header, family="v4")
+        spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
         # pfBlockerNG logs IP-feed activity under the family-suffixed alias name
         # ([ <aliasname>_<family> ]), NOT the row header — so the per-feed log marker
         # is aliasname_family, not the bare header.
@@ -2090,32 +1904,21 @@ def test_cron_spurious_200_same_bytes_no_reingest(
                 f"BEFORE: {member_ip} must be in {spec.alias}: {members_before}"
             )
 
-            # Pin cron due (inside CaseContext so config is active). #811 header-scopes the
-            # "( content unchanged )" verdict, so the marker below proves both the verdict
-            # and that THIS feed's marker (aliasname_family) was the one evaluated.
             h.disable_feed_reuse(deployed_vm)
-            not_unch_marker = h.detector_status_marker(feed_marker, "( content unchanged )")
-            not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
-            dl_before = _feed_log_count(deployed_vm, feed_marker, "Downloading update")
-
-            # WHEN — cron; server returns 200 (no ETag → no If-None-Match → plain 200).
-            h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
+            files = [f"{h.PFB_DBDIR}/original/{feed_marker}.orig", f"{h.PFB_DBDIR}/deny/{feed_marker}.txt"]
+            before = _snapshot(deployed_vm, files)
+            seen = len(mock_feeds.statuses(feed_name))
+            with h.due_feed_group(deployed_vm, "ipv4", spec.aliasname):
+                update, native_log = _run_update(deployed_vm, "retry")
+            assert update["result"] == "success", f"Update failed: {update}"
+            _assert_feed_disposition(native_log, h.case_feed_id(spec), "unchanged")
+            statuses = mock_feeds.statuses(feed_name)[seen:]
+            assert statuses and set(statuses) == {200}, f"expected a real full-body 200 probe: {statuses}"
+            h.wait_unbound_ready(deployed_vm)
+            h._require_pfb_dns_serving(deployed_vm)
             h.apply_filter_sync(deployed_vm)
 
-            # THEN — "[ feed_marker ] ( content unchanged )" appeared (spurious 200 detected
-            # by hash, for THIS feed).
-            not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
-            assert not_unch_after > not_unch_before, (
-                f"Expected {not_unch_marker!r} after spurious-200 cron "
-                f"(before={not_unch_before}, after={not_unch_after}) — hash compare not applied"
-            )
-
-            # THEN — no re-ingest.
-            dl_after = _feed_log_count(deployed_vm, feed_marker, "Downloading update")
-            assert dl_after == dl_before, (
-                f"Expected NO '[ {feed_marker} ] ... Downloading update' (identical bytes) "
-                f"(before={dl_before}, after={dl_after}) — spurious 200 triggered wrong re-ingest"
-            )
+            assert _snapshot(deployed_vm, files) == before, "spurious 200 downloaded or rebuilt the baseline"
 
             # THEN — pf table still contains member_ip.
             members_after = h.pfctl_table_members(deployed_vm, spec.alias)
@@ -2137,33 +1940,15 @@ def test_cron_spurious_200_same_bytes_no_reingest(
 def test_cron_lastmod_304_skips_unchanged_feed(
     deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
-    """ADR-42 Phase 3 (e): a Last-Modified-driven 304 (no ETag) skips re-ingest via CURLOPT_TIMECONDITION.
+    """An If-Modified-Since 304, without an ETag, must skip re-ingest.
 
-    Case (a) already proves the ETag/If-None-Match half of the conditional-GET contract.  This
-    feed carries NO ETag, so once a ``.lastmod`` validator is stored, the detector's fallback
-    branch (``CURLOPT_TIMECONDITION`` / ``CURLOPT_TIMEVALUE`` — pfblockerng.inc ~8818-8821) is
-    what sends the conditional request; ``mock_feeds.enable_lastmod_304()`` makes the server
-    actually honour ``If-Modified-Since`` and answer 304, distinct from case (d) where a
-    Last-Modified validator exists but the server ignores it. Without this test, the
-    CURLOPT_TIMECONDITION branch could regress to always-200 and nothing would notice — every
-    other case either uses ETag or never reaches an actual 304.
-
-    RED on a broken/regressed CURLOPT_TIMECONDITION wire-up (e.g. the fallback branch silently
-    stops sending a conditional header, or the value sent isn't recognised by an IMS-aware
-    server): the mock's ``enable_lastmod_304()`` responder would never see a satisfying
-    If-Modified-Since, so it always answers 200 — no "304 not modified" marker would appear
-    within the cron-pass cap.
-
-    Scenario (BDD):
-      Given the remote DNSBL feed is loaded with NO ETag (server does not emit one);
-        ``dom`` is VIP-blocked;
-      When feed content is UNCHANGED, the server honours If-Modified-Since with a real 304,
-        pfb_reuse is OFF, and the scheduled Update runs;
-      Then the detector logs "304 not modified", does NOT log "Downloading update",
-        and ``dom`` remains blocked.
+    The IMS-aware mock must return a real 304 within the original four-check cap.
+    Keep the feed identity and guest calendar day fixed while advancing due slots.
+    Require native per-ID unchanged results, untouched original/action files, and
+    continued blocking. Always-200 cannot satisfy this no-ETag fallback case.
     """
     dom = h.unique_domain("p3lm304")
-    header = "smokep3lm304"
+    header = f"lm304_{os.urandom(8).hex()}"
     feed_name = "p3_lastmod_304.txt"
 
     try:
@@ -2178,7 +1963,7 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         feed_url = mock_feeds.feed_url(feed_name)
 
         # GIVEN — inject + Force Update to establish the .orig baseline + ingest the body.
-        spec = h.DnsblCase(aliasname="smokep3lm304", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
         h.inject(deployed_vm, spec)
         h.reload(deployed_vm, "updatednsbl")
 
@@ -2187,38 +1972,23 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
-        # Feed unchanged; the stored Last-Modified validator still matches. #811 header-scopes
-        # the "( 304 not modified )" verdict line itself, so the marker below is scoped by
-        # header AND verdict — no separate global count + "fast guard" needed.
         h.disable_feed_reuse(deployed_vm)
-        not_mod_marker = h.detector_status_marker(header, "( 304 not modified )")
-        not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
-        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-
-        # WHEN — same store-then-read span as case (a): the .lastmod validator is written by
-        # the cron detector (pfb_update_check) on its first 200, not by the updatednsbl Force
-        # ingest above. Run cron until the marker appears, capped so a genuine failure still
-        # surfaces.
+        files = [f"{h.PFB_DBDIR}/dnsblorig/{header}.orig", f"{h.PFB_DBDIR}/dnsbl/{header}.txt"]
+        before = _snapshot(deployed_vm, files)
+        seen = len(mock_feeds.statuses(feed_name))
+        day = h.guest_previous_date(deployed_vm)
         for _pass in range(4):
-            h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
-            if h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker) > not_mod_before:
+            with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname, slot=_pass, day=day):
+                update, native_log = _run_update(deployed_vm, "retry")
+            assert update["result"] == "success", f"Update failed: {update}"
+            _assert_feed_disposition(native_log, h.case_feed_id(spec), "unchanged")
+            h.wait_unbound_ready(deployed_vm)
+            h._require_pfb_dns_serving(deployed_vm)
+            if 304 in mock_feeds.statuses(feed_name)[seen:]:
                 break
-
-        # THEN — "[ header ] ( 304 not modified )" appeared within the cap
-        # (CURLOPT_TIMECONDITION proof, now also proving THIS feed's header was evaluated).
-        not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
-        assert not_mod_after > not_mod_before, (
-            f"Expected {not_mod_marker!r} (Last-Modified/CURLOPT_TIMECONDITION 304 proof) "
-            f"within 4 cron passes (before={not_mod_before}, after={not_mod_after}) — "
-            f"the no-ETag conditional-GET fallback did not reach a 304"
-        )
-
-        # THEN — no re-ingest.
-        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
-        assert dl_after == dl_before, (
-            f"Expected NO '[ {header} ] ... Downloading update' after 304 "
-            f"(before={dl_before}, after={dl_after}) — detector incorrectly re-ingested"
-        )
+        statuses = mock_feeds.statuses(feed_name)[seen:]
+        assert 304 in statuses, f"If-Modified-Since never returned 304 within 4 passes: {statuses}"
+        assert _snapshot(deployed_vm, files) == before, "304 checks downloaded or rebuilt the feed"
 
         # THEN — dom remains blocked.
         ans_after = h.dns_probe_client(client_vm, dom, "A")
@@ -4960,7 +4730,8 @@ def test_ip_feed_turning_comment_only_clears_stale_entries(deployed_vm: SmokeVM,
     )
     empty_marker = "Empty file, Adding"
     feed_url = mock_feeds.register(feed_name, f"{stale_host}\n")
-    spec = h.IpCase(aliasname="smokeip3457", feed_url=feed_url, header="smokeip3457", family="v4")
+    header = f"empty_{os.urandom(8).hex()}"
+    spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
 
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the feed was ever loaded"
 
@@ -4969,18 +4740,23 @@ def test_ip_feed_turning_comment_only_clears_stale_entries(deployed_vm: SmokeVM,
         assert h.member_present(members, stale_host), f"{stale_host} not in {spec.alias}: {members}"
         empty_before = h.count_log_marker(deployed_vm, h.PFB_LOG, empty_marker)
 
-        # The IP update/updateip verbs reuse the stored feed (no refetch); only the scheduled
-        # cron detector sees the changed body (the mock ignores If-Modified-Since -> plain 200 -> hash differs).
-        chg_marker = h.detector_status_marker(f"{spec.aliasname}_{spec.family}", "( content changed )")
-        chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
+        files = [f"{h.PFB_DBDIR}/original/{header}_v4.orig", f"{h.PFB_DBDIR}/deny/{header}_v4.txt"]
+        before = _snapshot(deployed_vm, files)
+        seen = len(mock_feeds.statuses(feed_name))
         mock_feeds.set_content(feed_name, comment_only)
         h.disable_feed_reuse(deployed_vm)
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec)])
+        with h.due_feed_group(deployed_vm, "ipv4", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+        assert update["result"] == "success", f"Update failed: {update}"
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "changed")
+        statuses = mock_feeds.statuses(feed_name)[seen:]
+        assert statuses and set(statuses) == {200}, f"comment-only body was not fetched: {statuses}"
+        h.wait_unbound_ready(deployed_vm)
+        h._require_pfb_dns_serving(deployed_vm)
         h.apply_filter_sync(deployed_vm)
-        chg_after = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
-        assert chg_after >= chg_before + 1, (
-            f"cron detector never logged {chg_marker!r} (before={chg_before}, after={chg_after})"
-        )
+        after = _snapshot(deployed_vm, files)
+        assert after[files[0]][0] != before[files[0]][0], "comment-only original was not published"
+        assert after[files[1]][0] != before[files[1]][0], "comment-only action file was not rebuilt"
 
         members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert not h.member_present(members, stale_host), (

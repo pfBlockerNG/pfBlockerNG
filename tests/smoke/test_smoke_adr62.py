@@ -38,32 +38,16 @@ the smoke deps; without them they skip cleanly.
 from __future__ import annotations
 
 import os
-import shlex
+import uuid
 from collections.abc import Iterator
 
 import pytest
 
 from . import helpers as h
-from .conftest import STUB_DNS_A, SmokeVM, _StubDnsServer
+from .conftest import STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
+from .test_core_update import _assert_feed_disposition, _run_update
 
 pytestmark = pytest.mark.smoke
-
-
-def _feed_log_count(vm: SmokeVM, header: str, phrase: str, *, timeout: float = 30.0) -> int:
-    """Count main-log lines for THIS feed (``[ <header> ]``) that also contain ``phrase``.
-
-    Mirrors ``test_smoke_feeds.py``'s private helper of the same name/shape (kept local
-    here rather than imported across test modules).
-    """
-    cmd = (
-        f"/usr/bin/grep -F {shlex.quote(f'[ {header} ]')} {shlex.quote(h.PFB_LOG)} 2>/dev/null "
-        f"| /usr/bin/grep -Fc {shlex.quote(phrase)}"
-    )
-    res = vm.ssh(cmd, timeout=timeout)
-    try:
-        return int(res.stdout.strip())
-    except ValueError:
-        return 0
 
 
 def _set_dnsbl_row_state(vm: SmokeVM, header: str, state: str, *, timeout: float = 30.0) -> None:
@@ -417,11 +401,11 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
     Then B is VIP-blocked (the staged NDJSON line was consumed as-is, never
       re-downloaded or re-parsed), A now RESOLVES again (its row exists only in
       the '.orig' download cache — reuse never touches it), X2 is VIP-blocked
-      (proof the pass genuinely ran), and no new 'Rebuild' log line appears for
-      the header (the generation guard accepted the staging as current).
+      (proof the pass genuinely ran), and the native main-row disposition is
+      unchanged (the generation guard accepted the staging as current).
     """
-    header = "adr62row7reuse"
-    sib_header = "adr62row7sib"
+    header = f"adr62r7{uuid.uuid4().hex[:16]}"
+    sib_header = f"{header}sib"
     loaded_domain = h.unique_domain("adr62r7base")
     reused_domain = h.unique_domain("adr62r7cur")
     sib1_domain = h.unique_domain("adr62r7sib1")
@@ -432,7 +416,7 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
     feed_url = h.write_local_feed(deployed_vm, feed_name, f"{loaded_domain}\n")
     sib_feed_url = h.write_local_feed(deployed_vm, sib_feed_name, f"{sib1_domain}\n")
     spec = h.DnsblCase(
-        aliasname="adr62row7reuse",
+        aliasname=header,
         feed_url=feed_url,
         header=header,
         mode=h.DnsblMode.VIP,
@@ -454,8 +438,6 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
                 f"baseline feed domain {name} still resolving after the initial load: {ans}"
             )
 
-        rebuild_before = _feed_log_count(deployed_vm, header, "Rebuild")
-
         # Overwrite the MAIN row's staging with a hand-written, CURRENT-generation
         # NDJSON domain row for a DIFFERENT domain — the exact byte shape
         # pfb_dnsbl_ndjson_emit_row() produces for a domain.
@@ -471,7 +453,13 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
         # reuse_dnsbl='on' and re-parses the '.orig' download cache instead of
         # honouring the staged '.txt'.
         h.disable_feed_reuse(deployed_vm)
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec), h.feed_id("dnsbl", sib_header)])
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+            assert update["result"] == "success", f"Update failed: {update}\n{native_log[-4000:]}"
+            h.wait_unbound_ready(deployed_vm)
+            h._require_pfb_dns_serving(deployed_vm)  # noqa: SLF001
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "unchanged")
+        _assert_feed_disposition(native_log, h.feed_id("dnsbl", sib_header), "changed")
 
         h.flush_unbound_name(deployed_vm, reused_domain)
         ans_reused = h.dns_probe_client_until(client_vm, reused_domain, h.is_vip)
@@ -494,10 +482,9 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
             f"exists only in the '.orig' cache, so reuse must never have re-parsed it: {ans_loaded_after}"
         )
 
-        rebuild_after = _feed_log_count(deployed_vm, header, "Rebuild")
-        assert rebuild_after == rebuild_before, (
-            f"unexpected 'Rebuild' log line for {header} (before={rebuild_before}, after={rebuild_after}) — "
-            f"current-generation NDJSON staging should have passed the #1083 generation guard"
+        staged = deployed_vm.ssh("cat", f"{h.PFB_DBDIR}/dnsbl/{header}.txt")
+        assert staged.returncode == 0 and staged.stdout == ndjson_line, (
+            f"current-generation staging was not reused byte-identically: {staged.stdout!r}"
         )
 
 
@@ -516,7 +503,9 @@ def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
 
 
 @pytest.mark.timeout(300)
-def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+def test_adr62_stale_generation_rebuild_hold_row_orig_present(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
     """#1083 stale-generation rebuild: a Hold row with a pre-#1083 '.txt' rebuilds from '.orig'.
 
     Given a Hold-state DNSBL row whose feed genuinely serves TWO domains (a
@@ -530,15 +519,15 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
       the DNSBL database at all; the Hold row's own state never triggers a
       redownload attempt for it — pfblockerng_sync_cron() bypasses it outright)
       and the staging-generation guard rejects the stale '.txt',
-    Then a NEW 'Rebuild' log line appears for the header, '.orig' is BYTE-
+    Then the native result is 'reparsed' for the header, '.orig' is BYTE-
       IDENTICAL before and after (the rebuild reparsed the existing download
       cache — it never refetched over the network), the rebuilt '.txt' starts
       with compact domain NDJSON, and BOTH domains are blocked — including the
       bare-domain line, proving the #1105 dropped-line class cannot recur once
       a stale staging file is rebuilt from '.orig' instead of reused verbatim.
     """
-    header = "adr62rebuilda"
-    sib_header = "adr62rebuildasib"
+    header = f"adr62ra{uuid.uuid4().hex[:16]}"
+    sib_header = f"{header}sib"
     domain_csv = h.unique_domain("adr62rbacsv")
     domain_bare = h.unique_domain("adr62rbabare")
     sib1_domain = h.unique_domain("adr62rbasib1")
@@ -546,10 +535,10 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
 
     feed_name = "smoke_adr62_rebuilda_feed.txt"
     sib_feed_name = "smoke_adr62_rebuilda_sibling.txt"
-    feed_url = h.write_local_feed(deployed_vm, feed_name, f"{domain_csv}\n{domain_bare}\n")
+    feed_url = mock_feeds.register(feed_name, f"{domain_csv}\n{domain_bare}\n")
     sib_feed_url = h.write_local_feed(deployed_vm, sib_feed_name, f"{sib1_domain}\n")
     spec = h.DnsblCase(
-        aliasname="adr62rebuilda",
+        aliasname=header,
         feed_url=feed_url,
         header=header,
         mode=h.DnsblMode.VIP,
@@ -580,7 +569,8 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
             f"test setup failed: genuine '.orig' not present at {orig_path}: {orig_before.stderr!r}"
         )
 
-        rebuild_before = _feed_log_count(deployed_vm, header, "Rebuild")
+        fetched_before = mock_feeds.statuses(feed_name)
+        assert 200 in fetched_before, f"baseline never fetched the Held row: {fetched_before}"
 
         # Simulate the pre-#1083 on-disk leftover: a 6-col CSV row plus a bare-
         # domain row (issue #1105's shape) for the SAME two domains '.orig' holds.
@@ -588,13 +578,14 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
         h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
 
         h.disable_feed_reuse(deployed_vm)
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec), h.feed_id("dnsbl", sib_header)])
-
-        rebuild_after = _feed_log_count(deployed_vm, header, "Rebuild")
-        assert rebuild_after > rebuild_before, (
-            f"expected a NEW 'Rebuild' log line for {header} (before={rebuild_before}, after={rebuild_after}) — "
-            f"the staging-generation guard should have rejected the old-dialect '.txt'"
-        )
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+            assert update["result"] == "success", f"Update failed: {update}\n{native_log[-4000:]}"
+            h.wait_unbound_ready(deployed_vm)
+            h._require_pfb_dns_serving(deployed_vm)  # noqa: SLF001
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "reparsed")
+        _assert_feed_disposition(native_log, h.feed_id("dnsbl", sib_header), "changed")
+        assert mock_feeds.statuses(feed_name) == fetched_before, "Held row refetched instead of locally reparsing"
 
         orig_after = deployed_vm.ssh("cat", orig_path)
         assert orig_after.returncode == 0 and orig_after.stdout == orig_before.stdout, (
@@ -622,7 +613,7 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: Smoke
 
 @pytest.mark.timeout(300)
 def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
-    deployed_vm: SmokeVM, client_vm: SmokeVM
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
     """#1083 stale-generation rebuild: Hold with no '.orig' preserves staging without refetch.
 
@@ -631,13 +622,13 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
       purged alongside a stale pre-#1083 '.txt').
     When the cron pass runs and the staging-generation guard rejects the stale
       '.txt' the same way,
-    Then a NEW 'Rebuild' plus 'Hold: staying held, no baseline to reparse' log
-      appears for the header, '.orig' remains absent, and the stale '.txt'
+    Then the native result is 'held' for the header, no HTTP request occurs,
+      '.orig' remains absent, and the stale '.txt'
       remains BYTE-IDENTICAL. The sibling still updates, proving the pass ran;
       the Held row never reaches outside for a missing baseline.
     """
-    header = "adr62rebuildb"
-    sib_header = "adr62rebuildbsib"
+    header = f"adr62rb{uuid.uuid4().hex[:16]}"
+    sib_header = f"{header}sib"
     domain_csv = h.unique_domain("adr62rbbcsv")
     domain_bare = h.unique_domain("adr62rbbbare")
     sib1_domain = h.unique_domain("adr62rbbsib1")
@@ -645,10 +636,10 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
 
     feed_name = "smoke_adr62_rebuildb_feed.txt"
     sib_feed_name = "smoke_adr62_rebuildb_sibling.txt"
-    feed_url = h.write_local_feed(deployed_vm, feed_name, f"{domain_csv}\n{domain_bare}\n")
+    feed_url = mock_feeds.register(feed_name, f"{domain_csv}\n{domain_bare}\n")
     sib_feed_url = h.write_local_feed(deployed_vm, sib_feed_name, f"{sib1_domain}\n")
     spec = h.DnsblCase(
-        aliasname="adr62rebuildb",
+        aliasname=header,
         feed_url=feed_url,
         header=header,
         mode=h.DnsblMode.VIP,
@@ -676,26 +667,22 @@ def test_adr62_stale_generation_rebuild_hold_row_orig_absent_preserves_staging(
         orig_gone = deployed_vm.ssh("/bin/test", "-e", orig_path)
         assert orig_gone.returncode != 0, f"test setup failed: '.orig' {orig_path} still present after rm"
 
-        rebuild_before = _feed_log_count(deployed_vm, header, "Rebuild")
-        hold_skip_before = _feed_log_count(deployed_vm, header, "Hold: staying held, no baseline to reparse")
+        fetched_before = mock_feeds.statuses(feed_name)
+        assert 200 in fetched_before, f"baseline never fetched the Held row: {fetched_before}"
 
         stale_txt = f",{domain_csv},,1,{header},{header}\n{domain_bare}\n"
         h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", stale_txt)
         h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
 
         h.disable_feed_reuse(deployed_vm)
-        h.reload(deployed_vm, "scheduled", feeds=[h.case_feed_id(spec), h.feed_id("dnsbl", sib_header)])
-
-        rebuild_after = _feed_log_count(deployed_vm, header, "Rebuild")
-        assert rebuild_after > rebuild_before, (
-            f"expected a NEW 'Rebuild' log line for {header} (before={rebuild_before}, after={rebuild_after})"
-        )
-
-        hold_skip_after = _feed_log_count(deployed_vm, header, "Hold: staying held, no baseline to reparse")
-        assert hold_skip_after > hold_skip_before, (
-            f"expected a NEW Hold missing-baseline skip for {header} "
-            f"(before={hold_skip_before}, after={hold_skip_after})"
-        )
+        with h.due_feed_group(deployed_vm, "dnsbl", spec.aliasname):
+            update, native_log = _run_update(deployed_vm, "retry")
+            assert update["result"] == "success", f"Update failed: {update}\n{native_log[-4000:]}"
+            h.wait_unbound_ready(deployed_vm)
+            h._require_pfb_dns_serving(deployed_vm)  # noqa: SLF001
+        _assert_feed_disposition(native_log, h.case_feed_id(spec), "held")
+        _assert_feed_disposition(native_log, h.feed_id("dnsbl", sib_header), "changed")
+        assert mock_feeds.statuses(feed_name) == fetched_before, "Held row with no baseline made an HTTP request"
 
         orig_now = deployed_vm.ssh("/bin/test", "-e", orig_path)
         assert orig_now.returncode != 0, (
