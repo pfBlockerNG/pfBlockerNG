@@ -24,7 +24,7 @@ var openNormSource = func(path string) (io.ReadCloser, error) { return os.Open(p
 // NormalizeFile is the storage half of pfb_feed_normalize() for the feed name in dir, with the same conversion rules as Normalize:
 // the downloaded <name>.orig becomes <name>.norm, rebuilt only when <name>.norm is missing or <name>.norm.src.xxhash128 names
 // another .orig. The .norm is written to <name>.norm.tmp beside its target and renamed into place; calls in one dir run one at a
-// time under an flock on the dir.
+// time under a nonblocking flock on the dir. Contention returns the raw .orig without touching the cache or temporary.
 //
 // The .orig is hashed and converted through bounded streams. The .norm and the sidecar are 0644, as the old path writes them, for a
 // pre-script that drops privileges.
@@ -44,7 +44,7 @@ func NormalizeFile(dir, name string) NormResult {
 		return fallback
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fallback
 	}
 
