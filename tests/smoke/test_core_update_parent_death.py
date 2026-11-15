@@ -80,6 +80,7 @@ PROCESS_TESTS = (
     "TestNativeReloadSurvivesUpdateCancellation",
     "TestNativeGeneratedTailPipelineSurvivesUpdateCancellation",
     "TestNativeGeneratedClogPipelineSurvivesUpdateCancellation",
+    "TestNativeKeaOwnershipDiscrimination",
 )
 LIFETIME_SUITES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("./update", UPDATE_TESTS),
@@ -120,7 +121,8 @@ def test_the_update_program_dies_with_a_core_that_is_killed(
         try:
             _upload(smoke_vm, binary, guest_binary, "root:wheel")
             run = smoke_vm.ssh(
-                f"{guest_binary} -test.v -test.count=1 -test.timeout=150s -test.run '^({'|'.join(tests)})$'",
+                f"PFB_NATIVE_KEA_PROBE=1 {guest_binary} -test.v -test.count=1 "
+                f"-test.timeout=150s -test.run '^({'|'.join(tests)})$'",
                 timeout=180,
             )
             print(run.stdout)

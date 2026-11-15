@@ -62,6 +62,18 @@ if [ "$found_mwexec" -ne 1 ]; then
 fi
 capture /etc/inc/filter.inc
 capture /etc/inc/syslog.inc
+capture /etc/inc/system.inc
+for path in /usr/local/bin/kea_run4 /usr/local/bin/kea_run6 \
+    /usr/local/bin/kea2unbound /usr/local/bin/kea2fib6 /usr/local/sbin/prefixes.php; do
+    if [ -f "$path" ]; then
+        case "$(file -b "$path")" in
+            *text*|*script*) capture "$path" ;;
+            *) printf 'BINARY HELPER SOURCE UNAVAILABLE %s\n' "$path" ;;
+        esac
+    else
+        printf 'OPTIONAL HELPER ABSENT %s\n' "$path"
+    fi
+done
 for pattern in /etc/inc/*service*.inc /etc/inc/*unbound*.inc /etc/inc/*dhcp*.inc \
     /etc/inc/*radv*.inc /etc/inc/*router*.inc /etc/inc/*ra.inc \
     /usr/local/etc/rc.d/*unbound* /usr/local/etc/rc.d/*dhcp* /usr/local/etc/rc.d/*radv* \
@@ -84,7 +96,8 @@ if [ "$found_service" -ne 1 ]; then
     printf 'REQUIRED service include discovery found no readable source\n'
     status=1
 fi
-for name in daemon radvd dhcpd dhcpleases6 kea-dhcp4 kea-dhcp6 unbound lighttpd filterlog filterdns xinetd syslogd; do
+for name in daemon radvd dhcpd dhcpleases dhcpleases6 kea-dhcp4 kea-dhcp6 kea2unbound kea2fib6 \
+    unbound lighttpd filterlog filterdns xinetd syslogd sshguard cron; do
     path=$(command -v "$name" 2>/dev/null)
     if [ -n "$path" ] && [ -f "$path" ]; then
         printf '\n=== BINARY %s ===\n' "$path"
