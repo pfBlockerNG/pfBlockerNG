@@ -32,16 +32,19 @@ LIST_SCRIPT_DIR = "/usr/local/pkg/pfblockerng/list_scripts"
 
 
 @contextlib.contextmanager
-def _restored_case(vm: SmokeVM) -> Generator[tuple[str, list[str]], None, None]:
+def _restored_case(
+    vm: SmokeVM,
+) -> Generator[tuple[str, list[str], list[tuple[str, str]]], None, None]:
     """Restore the exact starting config and remove only this case's unique guest paths."""
     token = uuid.uuid4().hex[:12]
     snapshot = f"/tmp/pfb3977-{token}-config.xml"
     saved = vm.ssh("/bin/cp", "-p", "/conf/config.xml", snapshot)
     assert saved.returncode == 0, f"cannot snapshot config: {saved}"
     owned: list[str] = []
+    status_aliases: list[tuple[str, str]] = []
     failures: list[BaseException] = []
     try:
-        yield token, owned
+        yield token, owned, status_aliases
     except BaseException as failure:
         failures.append(failure)
     finally:
@@ -50,6 +53,20 @@ def _restored_case(vm: SmokeVM) -> Generator[tuple[str, list[str]], None, None]:
                 removed = vm.ssh("/bin/rm", "-rf", *owned)
                 if removed.returncode != 0:
                     failures.append(RuntimeError(f"could not remove owned paths {owned!r}: {removed}"))
+            except BaseException as failure:
+                failures.append(failure)
+        if status_aliases:
+            try:
+                closes = "".join(
+                    f"pfb_sync_status_close_removed_alias({h._php_str(gtype)},{h._php_str(alias)},$pfb['dbdir']);"
+                    for gtype, alias in dict.fromkeys(status_aliases)
+                )
+                closed = h.php_eval(
+                    vm,
+                    f"require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');pfb_global();{closes}echo 'OK';",
+                )
+                if closed.returncode != 0 or "OK" not in closed.stdout:
+                    failures.append(RuntimeError(f"could not close owned sync status: {closed}"))
             except BaseException as failure:
                 failures.append(failure)
         try:
@@ -92,17 +109,24 @@ def _install_list_script(vm: SmokeVM, owned: list[str], name: str, body: str) ->
     return name
 
 
-def _set_group_scripts(vm: SmokeVM, scripts: dict[str, tuple[str, str]]) -> None:
+def _set_group_scripts(
+    vm: SmokeVM,
+    scripts: dict[str, tuple[str, str]],
+    orders: dict[str, str] | None = None,
+) -> None:
     rows = ",".join(
         f"{h._php_str(alias)}=>array({h._php_str(pre)},{h._php_str(post)})" for alias, (pre, post) in scripts.items()
     )
+    order_rows = ",".join(f"{h._php_str(alias)}=>{h._php_str(order)}" for alias, order in (orders or {}).items())
     result = h.php_eval(
         vm,
         "$wanted=array(" + rows + ");"
+        "$orders=array(" + order_rows + ");"
         f"$groups=config_get_path({h._php_str(h.CFG_DNSBL_LISTS)},array());"
         "foreach($groups as &$group){$name=(string)($group['aliasname']??'');"
         "if(isset($wanted[$name])){$group['script_pre']=$wanted[$name][0];"
-        "$group['script_post']=$wanted[$name][1];}}unset($group);"
+        "$group['script_post']=$wanted[$name][1];}"
+        "if(isset($orders[$name])){$group['order']=$orders[$name];}}unset($group);"
         f"config_set_path({h._php_str(h.CFG_DNSBL_LISTS)},$groups);"
         "write_config('pfBlockerNG smoke: native list scripts');echo 'OK';",
     )
@@ -152,7 +176,7 @@ def test_dnsbl_publication_obstruction_retains_lkg_then_same_source_retry_publis
 ) -> None:
     """A real ``feed.bk`` obstruction retains live LKG, then an unchanged retry consumes ready artifacts."""
     vm = core_vm
-    with _restored_case(vm) as (token, owned):
+    with _restored_case(vm) as (token, owned, status_aliases):
         await_idle(vm)
         _prepare_mock_feeds(vm, dnsbl=True)
         old = h.unique_domain(f"repair-old-{token}")
@@ -162,6 +186,7 @@ def test_dnsbl_publication_obstruction_retains_lkg_then_same_source_retry_publis
         alias = f"repairgrp{token}"
         url = mock_feeds.register(name, old + "\n")
         mock_feeds.enable_etag(name, '"repair-v1"')
+        status_aliases.append(("dnsbl", alias))
         h.inject_dnsbl_lists(vm, [(h.DnsblCase(aliasname=alias, header=header, feed_url=url), "Deny")])
         h.tell_core_the_settings_changed(vm)
 
@@ -243,7 +268,7 @@ def test_native_two_feed_scripts_preserve_per_feed_side_effect_order(
 ) -> None:
     """Feed 2 must parse bytes produced after feed 1's real post/publication boundary."""
     vm = core_vm
-    with _restored_case(vm) as (token, owned):
+    with _restored_case(vm) as (token, owned, status_aliases):
         await_idle(vm)
         _prepare_mock_feeds(vm, dnsbl=True)
         current = h.unique_domain(f"repair-current-{token}")
@@ -288,22 +313,36 @@ def test_native_two_feed_scripts_preserve_per_feed_side_effect_order(
             f"printf 'post%s\\n' \"$n\" >> {qtrace}\n"
             f"[ \"$n\" -ne 1 ] || printf '%s\\n' {shlex.quote(current)} > {qsource2}\n",
         )
+        pre1_name = f"dnsbl_pre_repair_{token}_first.sh"
+        pre2_name = f"dnsbl_pre_repair_{token}_second.sh"
+        if layout == "across-groups":
+            for label, group_pre in ((1, pre1_name), (2, pre2_name)):
+                _install_list_script(
+                    vm,
+                    owned,
+                    group_pre,
+                    '#!/bin/sh\nset -eu\n[ "$#" -eq 2 ] && [ -f "$1" ] && [ "$2" = dnsbl ] || exit 95\n'
+                    f"printf 'pre{label}\\n' >> {qtrace}\n",
+                )
 
         if layout == "same-group":
             first = h.DnsblCase(aliasname=a1, header=h1, feed_url=source1, extra_rows=[(h2, source2)])
+            status_aliases.append(("dnsbl", a1))
             h.inject_dnsbl_lists(vm, [(first, "Deny")])
             scripts = {a1: (pre_name, post_name)}
         else:
             first = h.DnsblCase(aliasname=a1, header=h1, feed_url=source1)
             second = h.DnsblCase(aliasname=a2, header=h2, feed_url=source2)
+            status_aliases.extend((("dnsbl", a1), ("dnsbl", a2)))
             h.inject_dnsbl_lists(vm, [(first, "Deny"), (second, "Deny")])
             if layout == "across-groups":
-                scripts = {a1: (pre_name, post_name), a2: (pre_name, post_name)}
+                scripts = {a1: (pre1_name, post_name), a2: (pre2_name, post_name)}
             elif layout == "script-free-successor":
                 scripts = {a1: ("", post_name), a2: ("", "")}
             else:
                 scripts = {a1: ("", post_name), a2: (pre_name, "")}
-        _set_group_scripts(vm, scripts)
+        orders = None if layout == "same-group" else {a1: "primary", a2: "default"}
+        _set_group_scripts(vm, scripts, orders)
 
         update, log = _run_update(vm, "manual", "dnsbl")
         assert update["result"] == "success", update
@@ -321,7 +360,7 @@ def test_post_only_unchanged_reparse_runs_once_without_refetch_and_failure_stays
 ) -> None:
     """Post-only local reparse and no-op hooks run once; a later post failure cannot report success."""
     vm = core_vm
-    with _restored_case(vm) as (token, owned):
+    with _restored_case(vm) as (token, owned, status_aliases):
         await_idle(vm)
         _prepare_mock_feeds(vm, dnsbl=True)
         domain = h.unique_domain(f"repair-post-{token}")
@@ -368,26 +407,37 @@ def test_post_only_unchanged_reparse_runs_once_without_refetch_and_failure_stays
                 },
             ],
         )
+        status_aliases.append(("dnsbl", alias))
         h.inject_dnsbl_lists(vm, [(h.DnsblCase(aliasname=alias, header=header, feed_url=url), "Deny")])
         _set_group_scripts(vm, {alias: ("", post_name)})
 
         baseline, _ = _run_update(vm, "manual", "dnsbl")
         assert baseline["result"] == "success", baseline
+        assert vm.ssh("cat", trace).stdout == "post\n", "baseline did not execute the selected valid post script"
         _write_guest(vm, trace, "")
         _write_guest(vm, hook_trace, "")
         before_http = list(mock_feeds.statuses(name))
         original_before = _snapshot(vm, [f"{DB}/dnsblorig/{header}.orig"])
 
         unchanged, unchanged_log = _run_update(vm, "manual", "dnsbl")
-        assert unchanged["result"] == "success", unchanged
-        _assert_feed_disposition(unchanged_log, f"dnsbl:{header}", "reparsed")
-        assert mock_feeds.statuses(name) == before_http, "local post-only reparse made a network request"
-        assert vm.ssh("cat", trace).stdout == "post\n", "post-only script did not run exactly once"
-        assert vm.ssh("cat", hook_trace).stdout == "pre\npost|0|0||\n", (
-            "no-op global hooks must run once with zero flags and empty changed lists"
+        after_http = list(mock_feeds.statuses(name))
+        post_trace = vm.ssh("cat", trace).stdout
+        hooks_after = vm.ssh("cat", hook_trace).stdout
+        original_after = _snapshot(vm, [f"{DB}/dnsblorig/{header}.orig"])
+        payload_after = _dnsbl_payloads(vm, header)
+        observed = (
+            f"http={after_http!r} post={post_trace!r} hooks={hooks_after!r} "
+            f"orig={original_after!r} payload={payload_after!r}"
         )
-        assert _snapshot(vm, [f"{DB}/dnsblorig/{header}.orig"]) == original_before
-        assert _dnsbl_payloads(vm, header) == [domain]
+        assert unchanged["result"] == "success", f"{unchanged}; {observed}"
+        assert after_http == before_http, f"local post-only reparse made a network request; {observed}"
+        assert post_trace == "post\n", f"post-only script did not run exactly once; {observed}"
+        _assert_feed_disposition(unchanged_log, f"dnsbl:{header}", "reparsed")
+        assert hooks_after == "pre\npost|0|0||\n", (
+            f"no-op global hooks must run once with zero flags and empty changed lists; {observed}"
+        )
+        assert original_after == original_before
+        assert payload_after == [domain]
         assert _open_dnsbl_ledger(vm) == []
 
         _write_guest(

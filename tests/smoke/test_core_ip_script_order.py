@@ -58,7 +58,7 @@ def test_native_ip_two_feed_scripts_preserve_cross_group_side_effect_order(
 ) -> None:
     """Feed 2 must parse the local source generated synchronously by feed 1 post."""
     vm = core_vm
-    with _restored_case(vm) as (token, owned):
+    with _restored_case(vm) as (token, owned, status_aliases):
         await_idle(vm)
         h1, h2 = f"ipone{token}", f"iptwo{token}"
         a1, a2 = f"ipfirst{token}", f"ipsecond{token}"
@@ -94,6 +94,7 @@ def test_native_ip_two_feed_scripts_preserve_cross_group_side_effect_order(
 
         first_case = h.IpCase(aliasname=a1, header=h1, feed_url=source1, family=family)
         second_case = h.IpCase(aliasname=a2, header=h2, feed_url=source2, family=family)
+        status_aliases.extend(((phase_family, a1), (phase_family, a2)))
         h.inject_ip_lists(vm, [first_case, second_case])
         root = h.CFG_IP_V4_LISTS if family == "v4" else h.CFG_IP_V6_LISTS
         _set_ip_group_scripts(vm, root, {a1: (pre_name, post_name), a2: (pre_name, post_name)})
