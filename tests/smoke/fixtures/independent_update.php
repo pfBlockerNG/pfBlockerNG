@@ -113,7 +113,7 @@ if ($mode === 'diagnose') {
 		'lease-database' => ['type' => 'memfile', 'persist' => FALSE, 'lfc-interval' => 0],
 		'dhcp-ddns' => ['enable-updates' => FALSE],
 		'control-socket' => ['socket-type' => 'unix', 'socket-name' => "$dir/kea.sock"],
-		'loggers' => [['name' => 'kea-dhcp' . $family, 'output_options' => [['output' => "$dir/kea.log"]]]]];
+		'loggers' => [['name' => 'kea-dhcp' . $family, 'severity' => 'INFO', 'output_options' => [['output' => "$dir/kea.log"]]]]];
 	if ($family === '6') {
 		$config['server-id'] = ['type' => 'EN', 'enterprise-id' => 2495, 'identifier' => '01020304', 'persist' => FALSE];
 		$config['data-directory'] = $dir;
@@ -186,7 +186,7 @@ try {
 		'lease-database' => ['type' => 'memfile', 'persist' => FALSE, 'lfc-interval' => 0],
 		'dhcp-ddns' => ['enable-updates' => FALSE],
 		'control-socket' => ['socket-type' => 'unix', 'socket-name' => "$dir/kea.sock"],
-		'loggers' => [['name' => 'kea-dhcp' . $family, 'output_options' => [['output' => "$dir/kea.log"]]]]];
+		'loggers' => [['name' => 'kea-dhcp' . $family, 'severity' => 'INFO', 'output_options' => [['output' => "$dir/kea.log"]]]]];
 	if ($family === '6') {
 		$config['server-id'] = ['type' => 'EN', 'enterprise-id' => 2495, 'identifier' => '01020304', 'persist' => FALSE];
 		$config['data-directory'] = $dir;
