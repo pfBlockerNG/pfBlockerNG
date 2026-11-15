@@ -85,9 +85,9 @@ type Gate struct {
 	prepublication bool // this process admitted a worker whose initial status is not published yet
 }
 
-// New returns an idle Gate. Start creates logPath (0600) if it is missing; run executes an Update; done (may be nil) is
-// called with the outcome after run returns and BEFORE the gate is released, so a scheduler can record outcomes before the
-// next Start. Calling Stop from done deadlocks.
+// New returns a Gate with no local admission. A worker-backed Gate observes any retained worker from its durable receipt. Start
+// creates logPath (0600) if missing; run executes a local Update; done (may be nil) is called after run returns and BEFORE the
+// gate is released, so a scheduler can record outcomes before the next Start. Calling Stop from done deadlocks.
 func New(logPath string, run RunFunc, done func(Request, Result, error)) *Gate {
 	return &Gate{logPath: logPath, run: run, done: done}
 }
@@ -303,6 +303,10 @@ func (g *Gate) View(after int64, max int) (View, error) {
 		return View{}, nil
 	}
 	state := observed.state
+	// Recovery may settle the receipt before this Gate's done callback releases its local admission.
+	if g.status != nil && g.status.FinishedAt == nil && state.FinishedAt != nil {
+		return g.viewLocked(g.status, true, after, max), nil
+	}
 	status := &Status{Trigger: state.Request.Trigger, Scope: state.Request.Scope, Force: state.Request.Force, StartedAt: state.StartedAt}
 	if state.FinishedAt != nil {
 		status.FinishedAt = state.FinishedAt

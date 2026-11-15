@@ -356,10 +356,38 @@ func TestACursorOfAnEarlierUpdateReadsTheNextUpdateFromItsStart(t *testing.T) {
 	f.release()
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"c1","trigger":"apply"}`), http.StatusOK, `{}`)
 	first := c.waitFinished("apply")
+	raw, err := os.ReadFile(filepath.Join(c.state, "update.log.status"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt struct {
+		FinishedAt *int64 `json:"finishedAt"`
+		Settled    bool   `json:"settled"`
+		LogGen     int64  `json:"logGen"`
+	}
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(c.state, "update.log.lock"), os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flockErr := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if flockErr == nil {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	}
+	_ = lock.Close()
+	t.Logf("after completed view: receipt finished=%v settled=%t LogGen=%d operation flock probe=%v",
+		receipt.FinishedAt, receipt.Settled, receipt.LogGen, flockErr)
 	if first.Log != "update program started\nupdate program done\n" {
 		t.Fatalf("the first Update's log = %q", first.Log)
 	}
-	wantJSON(t, c.post("StartUpdate", `{"requestId":"c2","trigger":"manual"}`), http.StatusOK, `{}`)
+	secondStart := c.post("StartUpdate", `{"requestId":"c2","trigger":"manual"}`)
+	if secondStart.status != http.StatusOK {
+		t.Fatalf("StartUpdate after completed GetUpdate = %d %s; prior receipt settled=%t, operation flock=%v",
+			secondStart.status, secondStart.body, receipt.Settled, flockErr)
+	}
+	sameJSON(t, string(secondStart.body), `{}`)
 	second := c.waitFinished("manual")
 	if second.Log != first.Log || second.Next == first.Next {
 		t.Fatalf("the second Update's view = %+v, want the same text under a cursor of its own (first %+v)", second, first)
@@ -484,17 +512,37 @@ func TestGetScheduleAnswersEachFeedsLastSuccessfulCheck(t *testing.T) {
 	}
 }
 
-func TestStoppingCoreDuringAnUpdateKillsTheProgram(t *testing.T) {
+func TestStoppingCoreEndsObservationButLeavesTheWorkerRunning(t *testing.T) {
 	c, f := startUpdateCore(t)
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"k1","trigger":"manual"}`), http.StatusOK, `{}`)
 	c.waitLog("", "update program started")
 	pid := f.pid()
 
 	if code := c.stop(); code != 0 {
-		t.Errorf("run = %d after the stop during an Update, want 0; stderr:\n%s", code, c.stderr.String())
+		t.Fatalf("run = %d after the stop during an Update, want 0; stderr:\n%s", code, c.stderr.String())
 	}
-	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Errorf("the update program (pid %d) is still there after Core returned: %v", pid, err)
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("the independent update program %d did not survive Core shutdown: %v", pid, err)
+	}
+	if n := f.runs(); n != 1 {
+		t.Fatalf("program starts after Core shutdown = %d; want one", n)
+	}
+	f.release()
+	var terminal struct {
+		FinishedAt *int64 `json:"finishedAt"`
+		ExitCode   *int   `json:"exitCode"`
+		Failure    string `json:"failure"`
+	}
+	status := filepath.Join(c.state, "update.log.status")
+	waitFor(t, func() bool {
+		b, err := os.ReadFile(status)
+		return err == nil && json.Unmarshal(b, &terminal) == nil && terminal.FinishedAt != nil
+	})
+	if terminal.ExitCode == nil || *terminal.ExitCode != 0 || terminal.Failure != "" {
+		t.Errorf("worker receipt after Core shutdown = %+v; want successful terminal status", terminal)
+	}
+	if n := f.runs(); n != 1 {
+		t.Errorf("program starts after worker completion = %d; want one", n)
 	}
 }
 
