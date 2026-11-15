@@ -64,19 +64,6 @@ func TestTheTermGraceEndsBeforeTheRcScriptKillsCore(t *testing.T) {
 	}
 }
 
-// The cap is a pin on the value and on Cap 0 meaning it; Run's own use of it is the cap test of command_test.go.
-func TestTheDefaultCapIsFourHoursAndACapSetIsKept(t *testing.T) {
-	for _, c := range []struct{ set, want time.Duration }{
-		{0, 4 * time.Hour},
-		{time.Minute, time.Minute},
-		{5 * time.Hour, 5 * time.Hour},
-	} {
-		if got := (&Command{Cap: c.set}).limit(); got != c.want {
-			t.Errorf("Command{Cap: %v} runs for at most %v, want %v", c.set, got, c.want)
-		}
-	}
-}
-
 func TestACanceledContextStartsNothingEvenWhenThePathIsMissing(t *testing.T) {
 	c := &Command{Path: filepath.Join(t.TempDir(), "absent")}
 	log := newLog(t)

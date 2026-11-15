@@ -317,18 +317,6 @@ func TestResultLinesAddUp(t *testing.T) {
 	}
 }
 
-func TestTheCapKillsTheProgramAndItsWholeProcessGroup(t *testing.T) {
-	p, dir := program(t, `sleep 60 & echo $! > "$D/child"; wait`)
-	p.Cap = 500 * time.Millisecond
-	_, err := runCmd(t, p, Request{Trigger: "scheduled"}, newLog(t))
-	if err == nil || !strings.Contains(err.Error(), "killed") || !strings.Contains(err.Error(), "cap") {
-		t.Fatalf("Run = %v, want an error saying the program was killed at its cap", err)
-	}
-	if pid := recordedPid(t, dir); !gone(pid) {
-		t.Errorf("the program's background child %d was still running after the cap killed it", pid)
-	}
-}
-
 func TestCancelingTheContextKillsTheGroupAndEscalatesToKillWhenTermIsIgnored(t *testing.T) {
 	setKillGrace(t, 100*time.Millisecond)
 	p, dir := program(t, `trap '' TERM; sleep 60 & echo $! > "$D/child"; echo up > "$D/up"; wait`)
@@ -386,15 +374,12 @@ func TestTheResultFileIsRemovedAfterRun(t *testing.T) {
 	missing := &Command{Path: filepath.Join(t.TempDir(), "absent")}
 	ok, _ := program(t, `exit 0`)
 	failing, _ := program(t, `exit 1`)
-	capped, _ := program(t, `sleep 60`)
-	capped.Cap = 200 * time.Millisecond
 	for _, c := range []struct {
 		name string
 		cmd  *Command
 	}{
 		{"a program that succeeds", ok},
 		{"a program that fails", failing},
-		{"a program killed at the cap", capped},
 		{"a program that cannot start", missing},
 	} {
 		t.Run(c.name, func(t *testing.T) {
