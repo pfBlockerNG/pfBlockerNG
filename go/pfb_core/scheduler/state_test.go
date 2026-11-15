@@ -48,7 +48,17 @@ func TestNewLoadsTheStateFileOrStartsEmpty(t *testing.T) {
 			if got := f.logText() != ""; got != c.wantLog {
 				t.Errorf("New logged = %v (%q), want %v", got, f.logText(), c.wantLog)
 			}
-			if err := f.s.Tick(); err != nil {
+			err := f.s.Tick()
+			if c.name == "a directory where the file should be" {
+				if err == nil {
+					t.Fatal("a directory state path admitted an Update")
+				}
+				if info, statErr := os.Stat(f.path); statErr != nil || !info.IsDir() {
+					t.Fatalf("failed prepare replaced the state directory: %v", statErr)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("Tick: %v", err)
 			}
 			if got := len(f.requests()) == 1; got != c.wantStart {
@@ -72,19 +82,14 @@ func TestAFailedWriteIsLoggedKeepsTheStateInMemoryAndTheNextWriteRetries(t *test
 		t.Fatalf("New logged for a missing state file: %q", f.logText())
 	}
 
-	f.tick() // reserves dcc's occurrence, and cannot write it
-	if n := len(f.requests()); n != 1 {
-		t.Fatalf("%d Updates requested, want 1", n)
+	if err := f.s.Tick(); err == nil || f.s.st[dcc].PendingOccurrence != nil {
+		t.Fatalf("missing state directory reserved an Update: %v %+v", err, f.s.st[dcc])
 	}
-	if f.logText() == "" {
-		t.Error("the failed write was not logged")
-	}
-	f.s.Done(f.last(), update.Result{Outcomes: map[string]string{dcc: "success"}}, nil) // cannot write either
-
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	f.s.Done(f.last(), update.Result{}, nil) // the next write persists the state that stayed in memory
+	f.tick()
+	f.s.Done(f.last(), update.Result{Outcomes: map[string]string{dcc: "success"}}, nil)
 
 	wantItem(t, f.items(), dcc, schedule.Item{
 		LastSuccessfulCheck: new(nowT.Unix()), LastCompletedOccurrence: new(occ03), CompletionOutcome: schedule.Success,

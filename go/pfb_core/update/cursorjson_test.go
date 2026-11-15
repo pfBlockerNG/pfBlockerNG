@@ -25,7 +25,7 @@ func TestACursorPastTwoToThe53IsAJSONStringThatRoundTripsExactly(t *testing.T) {
 func TestAGateAtGeneration8192HandsOutACursorPast2To53AsAString(t *testing.T) {
 	g := newGate(t, writes, nil)
 	g.gen = 8192 // 8192<<40 is 2^53: the first generation a float cannot tell its offsets apart in
-	if err := g.Start(Request{Trigger: "some log\n"}); err != nil {
+	if err := g.Start(Request{Trigger: "some log\n"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, g)

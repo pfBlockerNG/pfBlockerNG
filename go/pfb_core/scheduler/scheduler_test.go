@@ -246,7 +246,7 @@ func TestNilClockZoneAndLoggerFallBackToDefaults(t *testing.T) {
 		},
 		StatePath: t.TempDir() + "/schedule_state.json",
 	})
-	s.Bind(func(update.Request) error { return nil })
+	s.Bind(func(update.Request, func() (map[string]int64, error)) error { return nil })
 
 	if err := s.Tick(); err != nil {
 		t.Errorf("Tick: %v", err)

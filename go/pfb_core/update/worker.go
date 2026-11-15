@@ -100,6 +100,21 @@ func operationLock(logPath string) (*os.File, error) {
 	return lock, nil
 }
 
+// replaceRegular puts a new empty inode at path. A descriptor opened before the
+// replacement keeps the old inode, so a live program cannot write the next admission.
+func replaceRegular(path string) (*os.File, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), ".replace-*")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, err
+	}
+	return f, nil
+}
+
 func readWorkerState(path string) (workerState, error) {
 	f, err := operationFile(path, syscall.O_RDONLY)
 	if err != nil {
@@ -189,6 +204,37 @@ func publishLogGen(path string) {
 	_ = writeWorkerState(path, state)
 }
 
+func salvageUnfinished(logPath string) error {
+	state, err := readWorkerState(logPath + ".status")
+	if errors.Is(err, os.ErrNotExist) || err == nil && (state.FinishedAt != nil || state.Settled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	f, err := operationFile(logPath+".result", syscall.O_RDONLY)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	res, readErr := readResult(f)
+	if len(res.Outcomes) == 0 && len(res.Attempted) == 0 && res.GeoIPReady == nil {
+		return nil
+	}
+	state.Result = res
+	if readErr != nil {
+		state.Failure = readErr.Error()
+	} else {
+		state.Failure = "the worker was interrupted before publishing completion"
+	}
+	finished := time.Now().Unix()
+	state.FinishedAt = &finished
+	return writeWorkerState(logPath+".status", state)
+}
+
 // Recover records one finished receipt. apply runs while the lifetime lock is held; a write error leaves the receipt unsettled.
 func Recover(logPath string, apply func(int64, map[string]int64, Result, error) error) error {
 	lock, err := operationLock(logPath)
@@ -206,8 +252,14 @@ func Recover(logPath string, apply func(int64, map[string]int64, Result, error) 
 	if err != nil {
 		return err
 	}
-	if state.FinishedAt == nil || state.Settled {
-		return nil
+	if state.FinishedAt == nil {
+		if err := salvageUnfinished(logPath); err != nil {
+			return err
+		}
+		state, err = readWorkerState(logPath + ".status")
+		if err != nil || state.FinishedAt == nil || state.Settled {
+			return nil
+		}
 	}
 	res, runErr := state.outcome()
 	if err := apply(*state.FinishedAt, state.Occurrences, res, runErr); err != nil {
@@ -296,12 +348,8 @@ func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os
 		return Result{}, err
 	}
 	defer request.Close()
-	result, err := operationFile(log.Name()+".result", syscall.O_RDWR|syscall.O_CREAT)
+	result, err := replaceRegular(log.Name() + ".result")
 	if err != nil {
-		return Result{}, err
-	}
-	defer result.Close()
-	if err := result.Truncate(0); err != nil {
 		return Result{}, err
 	}
 	if err := result.Sync(); err != nil {

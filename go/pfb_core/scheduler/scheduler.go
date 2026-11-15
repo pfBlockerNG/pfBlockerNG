@@ -57,9 +57,7 @@ type Scheduler struct {
 	mu         sync.Mutex // everything below; held while start runs, so a result waits for its own reservation
 	st         schedule.State
 	geoipReady bool // the Outpost's last report; true until it makes one
-	start      func(update.Request) error
-	prepared   schedule.State
-	snap       map[string]int64
+	start func(update.Request, func() (map[string]int64, error)) error
 }
 
 // New loads the state file: absent is an empty state; unreadable or invalid is logged and an empty state too, because the
@@ -90,8 +88,8 @@ func New(c Config) *Scheduler {
 	return s
 }
 
-// Bind sets the gate Start uses; the gate must be created with s.Done as its done callback.
-func (s *Scheduler) Bind(start func(update.Request) error) {
+// Bind sets the gate Start uses. The function receives that admission's commit closure.
+func (s *Scheduler) Bind(start func(update.Request, func() (map[string]int64, error)) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.start = start
@@ -158,15 +156,19 @@ func (s *Scheduler) evaluate(trigger string, force bool) error {
 	if len(req.Feeds) == 0 && len(req.Extras) == 0 && !force {
 		return nil
 	}
-	s.prepared = st
-	s.snap = map[string]int64{}
+	snap := map[string]int64{}
 	for _, id := range append(append([]string{}, req.Feeds...), req.Extras...) {
 		if it := st[id]; it.PendingOccurrence != nil {
-			s.snap[id] = *it.PendingOccurrence
+			snap[id] = *it.PendingOccurrence
 		}
 	}
-	if err := s.launch(req); err != nil {
-		s.prepared, s.snap = nil, nil
+	if err := s.launch(req, func() (map[string]int64, error) {
+		if err := writeState(s.cfg.StatePath, st); err != nil {
+			return nil, err
+		}
+		s.st = st
+		return snap, nil
+	}); err != nil {
 		if errors.Is(err, update.ErrRunning) {
 			cfg.Logf("scheduler: the %s Update was skipped: %v", trigger, err)
 		} else {
@@ -174,17 +176,15 @@ func (s *Scheduler) evaluate(trigger string, force bool) error {
 		}
 		return err
 	}
-	s.st = st
-	s.save()
 	return nil
 }
 
-// launch passes req to the bound gate. The caller holds s.mu.
-func (s *Scheduler) launch(req update.Request) error {
+// launch passes req and this admission's commit closure to the bound gate. The caller holds s.mu.
+func (s *Scheduler) launch(req update.Request, commit func() (map[string]int64, error)) error {
 	if s.start == nil {
 		return errors.New("scheduler: no Update gate is bound")
 	}
-	return s.start(req)
+	return s.start(req, commit)
 }
 
 // Start asks for an Update. Trigger "manual" runs scope (ip, dnsbl or both) with force (none, parse, download or both);
@@ -207,7 +207,7 @@ func (s *Scheduler) Start(trigger, scope, force string) error {
 	return s.admit(func() error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.launch(req)
+		return s.launch(req, func() (map[string]int64, error) { return nil, nil })
 	})
 }
 
@@ -232,20 +232,6 @@ func (s *Scheduler) recover() error {
 	return update.Recover(s.cfg.LogPath, s.reconcile)
 }
 
-// CommitAdmission writes the reservation before the worker is released. The caller holds s.mu.
-func (s *Scheduler) CommitAdmission() (map[string]int64, error) {
-	if s.prepared == nil {
-		s.snap = nil
-		return nil, nil
-	}
-	prepared, snap := s.prepared, s.snap
-	s.prepared, s.snap = nil, nil
-	if err := writeState(s.cfg.StatePath, prepared); err != nil {
-		return nil, err
-	}
-	s.st = prepared
-	return snap, nil
-}
 
 func (s *Scheduler) reconcile(at int64, reserved map[string]int64, res update.Result, runErr error) error {
 	s.mu.Lock()

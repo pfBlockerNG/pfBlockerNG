@@ -24,7 +24,7 @@ func TestGateStartAdmitsBeforeTruncatingTheLog(t *testing.T) {
 	}, nil)
 	g.Admit = (&Command{Path: "/bin/true"}).Admit
 	t.Cleanup(g.Stop)
-	if err := g.Start(Request{Trigger: "apply"}); err == nil {
+	if err := g.Start(Request{Trigger: "apply"}, nil); err == nil {
 		t.Fatal("hostile worker state admitted a new Update")
 	}
 	body, err := os.ReadFile(logPath)

@@ -107,7 +107,7 @@ func TestStartAdmitsAnUpdateAndAViewReadsItWhileItHoldsTheGate(t *testing.T) {
 	h := newHold()
 	g := newGate(t, h.run, nil)
 	before := time.Now().Unix()
-	if err := g.Start(Request{Trigger: "manual", Scope: "ip", Force: "parse"}); err != nil {
+	if err := g.Start(Request{Trigger: "manual", Scope: "ip", Force: "parse"}, nil); err != nil {
 		t.Fatalf("Start on an idle gate = %v, want it admitted", err)
 	}
 	h.write(t, "one\n")
@@ -138,13 +138,13 @@ func TestStartAdmitsAnUpdateAndAViewReadsItWhileItHoldsTheGate(t *testing.T) {
 func TestAStartWhileAnUpdateRunsIsRefusedAtOnceAndLeavesItAlone(t *testing.T) {
 	h := newHold()
 	g := newGate(t, h.run, nil)
-	if err := g.Start(Request{Trigger: "manual", Scope: "dnsbl"}); err != nil {
+	if err := g.Start(Request{Trigger: "manual", Scope: "dnsbl"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.write(t, "one\n")
 	before := g.View(0, 0)
 	for _, req := range []Request{{Trigger: "scheduled"}, {Trigger: "manual", Scope: "both", Force: "both"}} {
-		if err := g.Start(req); !errors.Is(err, ErrRunning) {
+		if err := g.Start(req, nil); !errors.Is(err, ErrRunning) {
 			t.Errorf("Start(%+v) while an Update runs = %v, want ErrRunning", req, err)
 		}
 	}
@@ -170,7 +170,7 @@ func TestAnUpdateEndsSuccessfulWhenRunReturnsNilAndFailedOtherwise(t *testing.T)
 		t.Run(c.name, func(t *testing.T) {
 			h := newHold()
 			g := newGate(t, h.run, nil)
-			if err := g.Start(Request{Trigger: "retry"}); err != nil {
+			if err := g.Start(Request{Trigger: "retry"}, nil); err != nil {
 				t.Fatal(err)
 			}
 			h.write(t, "x\n")
@@ -215,10 +215,10 @@ func TestDoneSeesTheOutcomeWhileTheGateIsStillHeld(t *testing.T) {
 			req := Request{Trigger: "apply", Feeds: []string{"ipv4:a_v4"}}
 			run := func(context.Context, Request, *os.File) (Result, error) { return want, c.err }
 			done := func(r Request, res Result, err error) {
-				got <- seen{r, res, err, g.Start(Request{Trigger: "manual"}), g.View(0, 0).Running}
+				got <- seen{r, res, err, g.Start(Request{Trigger: "manual"}, nil), g.View(0, 0).Running}
 			}
 			g = newGate(t, run, done)
-			if err := g.Start(req); err != nil {
+			if err := g.Start(req, nil); err != nil {
 				t.Fatal(err)
 			}
 			s := recv(t, got, "done was never called")
@@ -243,7 +243,7 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 	const first = "first Update line\n"
 	h := newHold()
 	g := newGate(t, h.run, nil)
-	if err := g.Start(Request{Trigger: "manual", Scope: "ip"}); err != nil {
+	if err := g.Start(Request{Trigger: "manual", Scope: "ip"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.write(t, first)
@@ -253,7 +253,7 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 	if old.Log != first || old.Next != int64(len(first)) || old.Update.Result != "success" {
 		t.Fatalf("the first Update's View = %s, want its whole log and a finished status", jsonOf(t, old))
 	}
-	if err := g.Start(Request{Trigger: "apply"}); err != nil {
+	if err := g.Start(Request{Trigger: "apply"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	v := g.View(old.Next, 0)
@@ -276,7 +276,7 @@ func TestANewStartTruncatesTheLogAndReplacesTheStatus(t *testing.T) {
 func TestARunawayUpdateLogKeepsOnlyItsNewestWholeLines(t *testing.T) {
 	h := newHold()
 	g := newGate(t, h.run, nil)
-	if err := g.Start(Request{Trigger: "manual"}); err != nil {
+	if err := g.Start(Request{Trigger: "manual"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	const lines = 360 << 10 // of 33 bytes: about 12 MB
@@ -345,7 +345,7 @@ func TestAViewBeforeAnyStartIsIdleWithNoUpdateAndNoLog(t *testing.T) {
 func TestAViewBoundsTheBytesAdvancesNextAndRestartsFromZeroOutOfRange(t *testing.T) {
 	h := newHold()
 	g := newGate(t, h.run, nil)
-	if err := g.Start(Request{Trigger: "manual"}); err != nil {
+	if err := g.Start(Request{Trigger: "manual"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.write(t, "0123456789")
@@ -382,7 +382,7 @@ func TestAViewBoundsTheBytesAdvancesNextAndRestartsFromZeroOutOfRange(t *testing
 func TestAViewNeverSplitsARuneAcrossItsBound(t *testing.T) {
 	h := newHold()
 	g := newGate(t, h.run, nil)
-	if err := g.Start(Request{Trigger: "manual"}); err != nil {
+	if err := g.Start(Request{Trigger: "manual"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.write(t, "a\u00e9\u20ac\U0001d11e") // 1, 2, 3 and 4 bytes
@@ -409,7 +409,7 @@ func TestStopCancelsTheRunningUpdateWaitsForItAndRefusesLaterStarts(t *testing.T
 	h := newHold()
 	ended := make(chan error, 1)
 	g := newGate(t, h.run, func(_ Request, _ Result, err error) { ended <- err })
-	if err := g.Start(Request{Trigger: "manual"}); err != nil {
+	if err := g.Start(Request{Trigger: "manual"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.write(t, "x\n")
@@ -427,7 +427,7 @@ func TestStopCancelsTheRunningUpdateWaitsForItAndRefusesLaterStarts(t *testing.T
 	if v := g.View(0, 0); v.Running || v.Update.Result != "failed" || v.Update.FinishedAt == nil {
 		t.Errorf("after Stop, View = %s, want a finished, failed Update", jsonOf(t, v))
 	}
-	if err := g.Start(Request{Trigger: "manual"}); !errors.Is(err, ErrStopped) {
+	if err := g.Start(Request{Trigger: "manual"}, nil); !errors.Is(err, ErrStopped) {
 		t.Errorf("Start after Stop = %v, want ErrStopped", err)
 	}
 	again := make(chan struct{})
@@ -444,7 +444,7 @@ func TestStopOnAnIdleGateRefusesLaterStarts(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() { g.Stop(); close(stopped) }()
 	recv(t, stopped, "Stop on an idle gate never returned")
-	if err := g.Start(Request{Trigger: "manual"}); !errors.Is(err, ErrStopped) {
+	if err := g.Start(Request{Trigger: "manual"}, nil); !errors.Is(err, ErrStopped) {
 		t.Errorf("Start after Stop = %v, want ErrStopped", err)
 	}
 	if n := h.runs.Load(); n != 0 {
@@ -464,7 +464,7 @@ func TestConcurrentStartsAdmitExactlyOne(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-begin
-			errs <- g.Start(Request{Trigger: "manual"})
+			errs <- g.Start(Request{Trigger: "manual"}, nil)
 		}()
 	}
 	close(begin)
@@ -498,7 +498,7 @@ func TestAnUnwritableLogPathFailsStartAndLeavesTheGateFree(t *testing.T) {
 	g := New(filepath.Join(t.TempDir(), "missing", "update.log"), h.run, nil)
 	t.Cleanup(g.Stop)
 	for attempt := 1; attempt <= 2; attempt++ { // a second failure, not ErrRunning, proves the first released the gate
-		if err := g.Start(Request{Trigger: "manual"}); err == nil || errors.Is(err, ErrRunning) || errors.Is(err, ErrStopped) {
+		if err := g.Start(Request{Trigger: "manual"}, nil); err == nil || errors.Is(err, ErrRunning) || errors.Is(err, ErrStopped) {
 			t.Errorf("Start #%d with a log in a missing directory = %v, want the error of creating the log", attempt, err)
 		}
 	}

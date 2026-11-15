@@ -86,7 +86,7 @@ func TestScheduleWriteFailureDoesNotSettleTheReceipt(t *testing.T) {
 
 func TestRejectedRetryCannotLeakReservationIntoManualAdmission(t *testing.T) {
 	f := newFixture(t, allEntries(), stateText(map[string]string{feedA: pending(occ10)}))
-	f.s.Bind(func(update.Request) error { return update.ErrRunning })
+	f.s.Bind(func(update.Request, func() (map[string]int64, error)) error { return update.ErrRunning })
 	if err := f.s.Start("retry", "", ""); !errors.Is(err, update.ErrRunning) {
 		t.Fatal(err)
 	}
@@ -95,11 +95,77 @@ func TestRejectedRetryCannotLeakReservationIntoManualAdmission(t *testing.T) {
 	if err := writeState(f.path, f.s.st); err != nil {
 		t.Fatal(err)
 	}
-	f.s.Bind(func(update.Request) error { _, err := f.s.CommitAdmission(); return err })
+	f.s.Bind(func(_ update.Request, commit func() (map[string]int64, error)) error { _, err := commit(); return err })
 	if err := f.s.Start("manual", "both", "none"); err != nil {
 		t.Fatal(err)
 	}
 	if p := f.s.st[feedA].PendingOccurrence; p == nil || *p != later {
 		t.Fatalf("manual admission overwrote newer pending with stale rejected retry: %+v", f.s.st[feedA])
+	}
+}
+
+func TestPrepareFailureDoesNotLeakIntoManualAdmission(t *testing.T) {
+	f := newFixture(t, allEntries(), stateText(map[string]string{feedA: pending(occ10)}))
+	f.s.cfg.StatePath = t.TempDir()
+	f.s.Bind(func(_ update.Request, commit func() (map[string]int64, error)) error {
+		_, err := commit()
+		return err
+	})
+	if err := f.s.Start("retry", "", ""); err == nil {
+		t.Fatal("a directory state path reported a successful prepare")
+	}
+	later := occ10 + 900
+	f.s.st[feedA] = schedule.Item{PendingOccurrence: &later}
+	if err := f.s.Start("manual", "both", "none"); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.s.st[feedA].PendingOccurrence; p == nil || *p != later {
+		t.Fatalf("manual admission reused the failed prepare: %+v", f.s.st[feedA])
+	}
+}
+
+func TestSuccessfulAdmissionDoesNotLeakIntoManualAdmission(t *testing.T) {
+	f := newFixture(t, allEntries(), stateText(map[string]string{feedA: pending(occ10)}))
+	f.s.Bind(func(_ update.Request, commit func() (map[string]int64, error)) error {
+		_, err := commit()
+		return err
+	})
+	if err := f.s.Start("retry", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	later := occ10 + 900
+	f.s.st[feedA] = schedule.Item{PendingOccurrence: &later}
+	if err := writeState(f.path, f.s.st); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Start("manual", "both", "none"); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.s.st[feedA].PendingOccurrence; p == nil || *p != later {
+		t.Fatalf("manual admission reused the successful reservation: %+v", f.s.st[feedA])
+	}
+}
+
+func TestRecoveryRetryCommitsTheSecondAdmissionOnly(t *testing.T) {
+	f := newFixture(t, allEntries(), stateText(map[string]string{feedA: pending(occ10)}))
+	logPath := filepath.Join(t.TempDir(), "update.log")
+	f.s.cfg.LogPath = logPath
+	writeReceipt(t, logPath, receipt(occ10))
+	var rejected bool
+	var snap map[string]int64
+	f.s.Bind(func(_ update.Request, commit func() (map[string]int64, error)) error {
+		if !rejected {
+			rejected = true
+			return update.ErrRecoveryRequired
+		}
+		var err error
+		snap, err = commit()
+		return err
+	})
+	if err := f.s.Start("retry", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, reused := snap[feedA]; reused || f.s.st[feedA].PendingOccurrence != nil || f.s.st[feedA].LastCompletedOccurrence == nil {
+		t.Fatalf("second admission reused the rejected reservation: snap=%v state=%+v", snap, f.s.st[feedA])
 	}
 }

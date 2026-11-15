@@ -19,7 +19,7 @@ func writes(_ context.Context, req Request, log *os.File) (Result, error) {
 func TestACursorOfAnEarlierUpdateReadsTheNewLogFromZeroEvenWhenTheNewLogIsLonger(t *testing.T) {
 	const first, second = "short\n", "a second log, longer than the first one's whole length\n"
 	g := newGate(t, writes, nil)
-	if err := g.Start(Request{Trigger: first}); err != nil {
+	if err := g.Start(Request{Trigger: first}, nil); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, g)
@@ -27,7 +27,7 @@ func TestACursorOfAnEarlierUpdateReadsTheNewLogFromZeroEvenWhenTheNewLogIsLonger
 	if old.Log != first {
 		t.Fatalf("the first Update's View = %s, want its log %q", jsonOf(t, old), first)
 	}
-	if err := g.Start(Request{Trigger: second}); err != nil {
+	if err := g.Start(Request{Trigger: second}, nil); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, g)
@@ -47,7 +47,7 @@ func TestACursorOfAnEarlierUpdateReadsTheNewLogFromZeroEvenWhenTheNewLogIsLonger
 func TestAViewHoldsBackARuneStillBeingWrittenAtTheEndOfARunningLog(t *testing.T) {
 	h := newHold()
 	g := newGate(t, h.run, nil)
-	if err := g.Start(Request{Trigger: "manual"}); err != nil {
+	if err := g.Start(Request{Trigger: "manual"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.write(t, "ab\xe2\x82") // the first two bytes of the euro sign
@@ -74,7 +74,7 @@ func TestAViewHoldsBackARuneStillBeingWrittenAtTheEndOfARunningLog(t *testing.T)
 
 func TestAViewOfAFinishedLogDeliversATrailingHalfRuneAndReachesTheEnd(t *testing.T) {
 	g := newGate(t, writes, nil)
-	if err := g.Start(Request{Trigger: "x\xe2"}); err != nil {
+	if err := g.Start(Request{Trigger: "x\xe2"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, g)
@@ -113,7 +113,7 @@ func TestAWriterHoldingAnEarlierUpdatesLogFdAppendsToTheNewLogWithoutAHole(t *te
 		}
 	})
 	for _, trigger := range []string{"first", "second"} {
-		if err := g.Start(Request{Trigger: trigger}); err != nil {
+		if err := g.Start(Request{Trigger: trigger}, nil); err != nil {
 			t.Fatal(err)
 		}
 		settle(t, g)

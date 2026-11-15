@@ -4,7 +4,7 @@
 // Update the Outpost or a user asked for, and answers the schedule view. main.go runs it when Core starts with --update-cmd.
 //
 // The Scheduler and the gate refer to each other, so they are wired in two steps: create the Scheduler, create the gate
-// with s.Done as its done callback, then s.Bind(gate.Start). One mutex orders Tick, Start, Done and View; the gate calls
+// with s.Done as its done callback, then Bind passes each admission's commit closure to the gate. One mutex orders Tick, Start, Done and View; the gate calls
 // Done before it admits the next Update, so a result is recorded before the next evaluation.
 //
 // The state is schedule.State kept in memory and in one file, {"schema":1,"items":{...}}, replaced atomically after every

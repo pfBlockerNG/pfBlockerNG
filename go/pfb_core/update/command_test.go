@@ -408,7 +408,7 @@ func TestTheGateRunsTheCommandFromStartToTheRecordedResult(t *testing.T) {
 	}
 	got := make(chan ended, 1)
 	g := newGate(t, p.Run, func(_ Request, res Result, err error) { got <- ended{res, err} })
-	if err := g.Start(Request{Trigger: "scheduled", Feeds: []string{"ipv4:a_v4"}}); err != nil {
+	if err := g.Start(Request{Trigger: "scheduled", Feeds: []string{"ipv4:a_v4"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	e := recv(t, got, "done was never called")

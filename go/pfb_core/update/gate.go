@@ -75,7 +75,6 @@ type Gate struct {
 	run     RunFunc
 	Admit   func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
 	Launch  func(context.Context, *Admission, Request, *os.File) (Result, error)
-	Commit  func() (map[string]int64, error) // nil except the scheduler, which already holds its lock
 	done    func(Request, Result, error)
 	admit   sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
 	mu      sync.Mutex // everything below, and the log's truncation
@@ -92,9 +91,9 @@ func New(logPath string, run RunFunc, done func(Request, Result, error)) *Gate {
 	return &Gate{logPath: logPath, run: run, done: done}
 }
 
-// Start admits req (TryLock) or returns ErrRunning at once; on admission it truncates the log, records the status
-// (startedAt = time.Now().Unix()) and runs in a goroutine. It also refuses after Stop with ErrStopped.
-func (g *Gate) Start(req Request) error {
+// Start admits req (TryLock) or returns ErrRunning at once. commit, when set, runs once after the
+// admission lease is held and before the worker is released. It also refuses after Stop with ErrStopped.
+func (g *Gate) Start(req Request, commit func() (map[string]int64, error)) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.stopped {
@@ -112,6 +111,13 @@ func (g *Gate) Start(req Request) error {
 			return err
 		}
 	}
+	if err := salvageUnfinished(g.logPath); err != nil {
+		if lease != nil {
+			lease.Close()
+		}
+		g.admit.Unlock()
+		return err
+	}
 	if receipt, readErr := readWorkerState(g.logPath + ".status"); readErr == nil && receipt.FinishedAt != nil && !receipt.Settled {
 		if lease != nil {
 			lease.Close()
@@ -119,8 +125,8 @@ func (g *Gate) Start(req Request) error {
 		g.admit.Unlock()
 		return ErrRecoveryRequired
 	}
-	if g.Commit != nil {
-		snap, err := g.Commit()
+	if commit != nil {
+		snap, err := commit()
 		if err != nil {
 			if lease != nil {
 				lease.Close()
@@ -132,7 +138,16 @@ func (g *Gate) Start(req Request) error {
 			lease.occurrences = snap
 		}
 	}
-	log, err := os.OpenFile(g.logPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o600)
+	fresh, err := replaceRegular(g.logPath)
+	if err != nil {
+		if lease != nil {
+			lease.Close()
+		}
+		g.admit.Unlock()
+		return fmt.Errorf("the Update log cannot be opened: %w", err)
+	}
+	fresh.Close()
+	log, err := os.OpenFile(g.logPath, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		if lease != nil {
 			lease.Close()

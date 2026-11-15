@@ -30,9 +30,8 @@ func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(s
 	command := &update.Command{Path: path}
 	gate := update.New(logPath, nil, sched.Done)
 	gate.Admit = command.Admit
-	sched.Bind(func(req update.Request) error {
-		gate.Commit = sched.CommitAdmission
-		return gate.Start(req)
+	sched.Bind(func(req update.Request, commit func() (map[string]int64, error)) error {
+		return gate.Start(req, commit)
 	})
 	var broken atomic.Bool
 	gate.Launch = func(ctx context.Context, lease *update.Admission, req update.Request, log *os.File) (update.Result, error) {
