@@ -27,6 +27,7 @@ from .test_core_update import (
     await_idle,
 )
 from .test_core_update import core_vm as core_vm
+from .test_extras_dispatcher_deferral import _set_registered_toggle
 from .test_smoke_feeds import _blacklist_tar_gz
 
 pytestmark = pytest.mark.smoke
@@ -111,9 +112,46 @@ def test_sol_wholepass_cadence_observations(core_vm: SmokeVM, mock_feeds: _MockF
     archive_name = f"{PROVIDER}.tar.gz"
     names: list[str] = []
     paths: list[str] = []
+    raw_fields = {
+        f"{h.CFG_IP_SETTINGS}/maxmind_key": "",
+        f"{h.CFG_IP_SETTINGS}/maxmind_account": "",
+        f"{h.CFG_IP_SETTINGS}/asn_token": "",
+    }
+    toggles = (
+        ("ip/database_cc", f"{h.CFG_IP_SETTINGS}/database_cc", True),
+        ("dnsbl/top1m_enable", f"{h.CFG_DNSBL_SETTINGS}/top1m_enable", False),
+    )
+    originals = {path: h.config_get_state(vm, path) for path in (*raw_fields, *(t[1] for t in toggles))}
+    report["dccConfig"] = {"originalPresence": {path: state[0] for path, state in originals.items()}}
     try:
         await_idle(vm)
         _prepare_mock_feeds(vm, dnsbl=True)
+        for path, value in raw_fields.items():
+            h.config_set(vm, path, value)
+        for key, _path, on in toggles:
+            _set_registered_toggle(vm, key, on=on)
+        effective = h.php_eval(
+            vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');"
+            "pfb_global();"
+            "echo 'DCC_CONFIG_BEGIN'.json_encode(array("
+            "'maxmind_key_empty'=>empty($pfb['maxmind_key']),"
+            "'maxmind_account_empty'=>empty($pfb['maxmind_account']),"
+            "'asn_token_empty'=>empty($pfb['asn_token']),"
+            "'database_cc'=>$pfb['cc'],"
+            "'top1m_enable'=>$pfb['dnsbl_top1m'] === PfbToggle::On"
+            ")).'DCC_CONFIG_END';",
+        )
+        assert effective.returncode == 0, (effective.stdout, effective.stderr)
+        effective_config = json.loads(effective.stdout.split("DCC_CONFIG_BEGIN", 1)[1].split("DCC_CONFIG_END", 1)[0])
+        report["dccConfig"]["effective"] = effective_config
+        assert effective_config == {
+            "maxmind_key_empty": True,
+            "maxmind_account_empty": True,
+            "asn_token_empty": True,
+            "database_cc": True,
+            "top1m_enable": False,
+        }, "DCC is not eligible for a credential-less, conversion-free clean no-op"
         # Scheduling remains off during baseline; ordinary settings only, never clock/ledger edits.
         h.config_set(vm, f"{h.CFG_GLOBAL}/pfb_scheduled_feed_updates", "")
         h.tell_core_the_settings_changed(vm)
@@ -323,6 +361,15 @@ def test_sol_wholepass_cadence_observations(core_vm: SmokeVM, mock_feeds: _MockF
             report["observationCompleted"] = True
     except BaseException as error:
         report["error"] = f"{type(error).__name__}: {error}"
+        try:
+            extras_log = vm.ssh("cat", f"{h.PFB_LOGDIR}/extras.log", timeout=30)
+            report["failureExtrasLog"] = {
+                "returncode": extras_log.returncode,
+                "stdout": extras_log.stdout,
+                "stderr": extras_log.stderr,
+            }
+        except Exception as diagnostic_error:
+            report["failureExtrasLogError"] = f"{type(diagnostic_error).__name__}: {diagnostic_error}"
         raise
     finally:
         # This record closes BEFORE ordinary cleanup. Cleanup is never a comparison Update.
@@ -335,4 +382,19 @@ def test_sol_wholepass_cadence_observations(core_vm: SmokeVM, mock_feeds: _MockF
             h.reset(vm)
             report["cleanup"] = "ordinary h.reset completed after evidence closed"
         finally:
+            errors: list[Exception] = []
+            for path, state in originals.items():
+                try:
+                    h.config_restore_state(vm, path, state)
+                    assert h.config_get_state(vm, path) == state, f"raw config restore failed: {path}"
+                except Exception as error:
+                    errors.append(error)
+            try:
+                h.tell_core_the_settings_changed(vm)
+            except Exception as error:
+                errors.append(error)
+            report["dccConfig"]["restoreErrors"] = [str(error) for error in errors]
+            report["dccConfig"]["restored"] = not errors
             destination.write_text(json.dumps(report, indent=2) + "\n")
+            if errors:
+                raise ExceptionGroup("DCC fixture config restoration failed", errors)
