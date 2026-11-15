@@ -74,9 +74,23 @@ function diagnostic_digest(string $path): string {
 		$hash === FALSE ? 'unavailable' : $hash);
 }
 
+function php_runtime_preflight(): string {
+	return sprintf(
+		'NATIVE_PHP_PREFLIGHT php=%s mbstring=%s intl=%s mb_str_split=%s mb_check_encoding=%s mb_ord=%s IntlChar=%s',
+		PHP_VERSION,
+		extension_loaded('mbstring') ? 'yes' : 'no',
+		extension_loaded('intl') ? 'yes' : 'no',
+		function_exists('mb_str_split') ? 'yes' : 'no',
+		function_exists('mb_check_encoding') ? 'yes' : 'no',
+		function_exists('mb_ord') ? 'yes' : 'no',
+		class_exists('IntlChar', FALSE) ? 'yes' : 'no'
+	);
+}
+
 function report_fixture_failure(string $dir, string $kind, string $detail): void {
 	$encoded = json_encode(substr($detail, 0, 2048), JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_SLASHES);
 	$report = sprintf("NATIVE_FIXTURE_FAILURE %s: %s\n", $kind, $encoded === FALSE ? '[unavailable]' : $encoded);
+	$report .= diagnostic_tail("$dir/controller.preflight", 1024);
 	$report .= diagnostic_tail("$dir/core.log", 4096);
 	$report .= diagnostic_tail("$dir/update.error", 4096);
 	$report .= diagnostic_tail("$dir/error.log", 4096);
@@ -370,4 +384,11 @@ if ($mode === 'update') {
 	update_mode((string) ($argv[2] ?? ''));
 }
 demand($mode === 'control', 'unknown fixture mode');
+	$fixtureDir = (string) ($argv[3] ?? '');
+	$preflight = php_runtime_preflight();
+	fwrite(STDOUT, $preflight . "\n");
+	fflush(STDOUT);
+	if (file_put_contents("$fixtureDir/controller.preflight", $preflight . "\n") === FALSE) {
+		fwrite(STDERR, "NATIVE_PHP_PREFLIGHT_PERSIST_FAILED\n");
+	}
 control_mode((string) ($argv[0] ?? ''), (string) ($argv[2] ?? ''), (string) ($argv[3] ?? ''));
