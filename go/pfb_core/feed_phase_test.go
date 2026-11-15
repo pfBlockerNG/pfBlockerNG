@@ -529,11 +529,14 @@ func TestFeedPhaseCountsMappedDropsWithoutEmptyPlaceholder(t *testing.T) {
 	}
 }
 
-func customFeedPhaseTestRunner(t *testing.T, kind, content string) *feedPhaseRunner {
+func customFeedPhaseTestRunner(t *testing.T, kind, content string, disabled ...bool) *feedPhaseRunner {
 	t.Helper()
 	action := "Deny_Inbound"
 	if kind == "dnsbl" {
 		action = "unbound"
+	}
+	if len(disabled) != 0 && disabled[0] {
+		action = "Disabled"
 	}
 	group, err := json.Marshal([]any{map[string]any{
 		"name": "Test", "action": action, "customList": content, "feeds": []any{},
@@ -767,5 +770,41 @@ func TestFeedPhaseSkipsUnchangedFTPWithoutReingest(t *testing.T) {
 	}
 	if got := call(); got.Disposition != "unchanged" || got.SourceChanged || retrieved.Load() != 1 {
 		t.Fatalf("unchanged FTP FeedPhase = %+v after %d RETR commands; want unchanged by MDTM+SIZE without a fetch", got, retrieved.Load())
+	}
+}
+
+func TestFeedPhaseCustomPlainZeroLookup(t *testing.T) {
+	for _, kind := range []string{"dnsbl", "ipv4", "ipv6"} {
+		for _, tc := range []struct {
+			name, content string
+			disabled      bool
+		}{{"plain-zero", "0", false}, {"empty", "", false}, {"disabled-zero", "0", true}} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				runner := customFeedPhaseTestRunner(t, kind, tc.content, tc.disabled)
+				phase := "ip"
+				if kind == "dnsbl" {
+					phase = "dnsbl"
+				}
+				got, err := runner.run(context.Background(), phase, []string{"custom:" + kind + ":Test"}, "none", &strings.Builder{})
+				if err != nil || len(got) != 1 {
+					t.Fatalf("FeedPhase=%+v err=%v", got, err)
+				}
+				switch tc.name {
+				case "empty":
+					if got[0].Reason != "feed_not_found" {
+						t.Fatalf("empty custom resolved: %+v", got[0])
+					}
+				case "disabled-zero":
+					if got[0].Disposition != "held" || got[0].Reason != "disabled" {
+						t.Fatalf("disabled zero not held: %+v", got[0])
+					}
+				default:
+					if got[0].Stage == "settings" || got[0].Reason == "feed_not_found" {
+						t.Fatalf("plain zero lost at settings lookup: %+v", got[0])
+					}
+				}
+				t.Logf("actual FeedPhase result=%+v", got[0])
+			})
+		}
 	}
 }

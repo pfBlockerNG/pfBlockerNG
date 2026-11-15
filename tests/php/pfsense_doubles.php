@@ -1939,6 +1939,37 @@ function array_get_path(array &$arr, string $path, $default = null) {
 }
 }
 
+// pfSense util.inc array_init_path(): preserve arrays, replace scalar path nodes.
+if (!function_exists('array_init_path')) {
+function array_init_path(mixed &$arr, ?string $path) {
+	$value = [];
+	$vpath = explode('/', $path);
+	do {
+		$vkey = array_pop($vpath);
+	} while (isset($vkey) && (mb_strlen($vkey) == 0));
+	if (!is_array($arr)) {
+		$arr = $value;
+	}
+	if ($vkey == null) {
+		return true;
+	}
+	$el = &$arr;
+	foreach ($vpath as $key) {
+		if (mb_strlen($key) == 0) {
+			continue;
+		}
+		if (!array_key_exists($key, $el) || !is_array($el[$key])) {
+			$el[$key] = [];
+		}
+		$el = &$el[$key];
+	}
+	if (!array_key_exists($vkey, $el) || !is_array($el[$vkey])) {
+		$el[$vkey] = $value;
+	}
+	return true;
+}
+}
+
 if (!function_exists('array_set_path')) {
 function array_set_path(array &$arr, string $path, $value, $default = null) {
 	$vpath = explode('/', $path);

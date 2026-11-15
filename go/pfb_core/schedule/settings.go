@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // feedStates are the feeds projection's states as the config.xml rows spell them.
@@ -111,6 +112,9 @@ func groupsOf(projection map[string]any, family string, overrides map[string]map
 			return nil, fmt.Errorf("feeds/%s: groups[%d] is not a group", family, i)
 		}
 		group := map[string]any{"aliasname": g["name"], "action": g["action"], "cron": g["updateFrequency"], "schedule_override": ""}
+		custom, _ := g["customList"].(string)
+		// The projection is plain text, unlike config.xml's base64: plain "0" is nonempty input.
+		group["custom"] = strings.TrimSpace(custom) != ""
 		if name, ok := g["name"].(string); ok {
 			for k, v := range overrides[family+"/"+name] {
 				group[k] = v

@@ -288,7 +288,7 @@ func (p *feedPhaseRunner) feedFor(parsed feedPhaseID, id string, projection, ing
 				continue
 			}
 			customText := stringSetting(group, "customList")
-			if customText == "" || customText == "0" {
+			if customText == "" {
 				return phaseFeed{}, false
 			}
 			return phaseFeed{

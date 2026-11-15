@@ -2153,7 +2153,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								unlink_if_exists("{$pfbfolder}/{$header}.fail");
 							} else {
 								pfb_logger("\n[ {$header} ]{$logtab} exists.", 1);
-								if ($phase_required) {
+								if (!$pfb_dnsbl_phase_skipped && $phase_required) {
 									unlink_if_exists("{$pfbfolder}/{$header}.update");
 									unlink_if_exists("{$pfbfolder}/{$header}.fail");
 								}
@@ -3433,7 +3433,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								unlink_if_exists("{$pfbfolder}/{$header}.fail");
 							} else {
 								pfb_logger("\n[ {$header} ]{$logtab} exists.", 1);
-								if ($phase_required) {
+								if (!$pfb_ip_phase_skipped && $phase_required) {
 									unlink_if_exists("{$pfbfolder}/{$header}.update");
 									unlink_if_exists("{$pfbfolder}/{$header}.fail");
 								}
@@ -4608,12 +4608,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	// running up to its timeout, must precede it). The Update-page live tail now stops on
 	// the dispatched process exiting (its pidfile), not on this marker, but keeping the
 	// marker last preserves a clean end-of-run boundary in the log.
-	// A real Update pass (NOT a settings-save sync, $pfb['save']) has rebuilt from the current
-	// config, so the deferred-settings changes it saw at its start are now applied: settle the GUI
-	// "pending changes" mark it saw (a later mark survives) unless this pass's filter reload expired
-	// or failed to launch (firewall state unknown; the pending mark must survive so the next tick re-applies).
+	// Only a full-scope Update covers the global pending marker and ledger; partial passes retain them.
+	// A later mark or an unconfirmed reload must also remain pending.
 
-	if (!$pfb['save']) {
+	if (!$pfb['save'] && ($pfb['feed_phase_scope'] ?? 'both') === 'both') {
 		$pending_cleared = !$pfb_accounting_pending && (
 			!pfb_due_ledger_is_pending('cron', $pfb['dbdir'])
 			|| pfb_due_ledger_update_entry(

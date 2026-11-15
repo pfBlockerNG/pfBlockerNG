@@ -6710,6 +6710,7 @@ function pfb_core_update_request(string $stdin): array
 		'feeds'   => $ids('feeds', static function (string $id): bool {
 			[$family, $header] = explode(':', $id, 2) + [1 => ''];
 			return pfb_schedule_feed_id($family, $header) === $id
+				|| (strlen($id) <= 64 && preg_match('/\Acustom:(?:dnsbl|ipv[46]):[A-Za-z0-9_]+\z/', $id) === 1)
 				|| (strlen($id) <= 64 && preg_match('/\Ablacklist:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+\z/', $id) === 1);
 		}),
 		'extras'  => $ids('extras', static fn (string $id): bool => in_array($id, ['extra:dcc', 'extra:bl'], TRUE)),
