@@ -1,7 +1,6 @@
 package update
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,8 +13,6 @@ import (
 
 const (
 	defaultMax = 64 << 10    // the bytes of log a View returns when asked for none in particular
-	maxLog     = 8 << 20     // the bytes a running Update's log may hold before it keeps only its newest half (boundLog)
-	logCheck   = time.Second // how often a running Update's log is held to maxLog
 	offsetBits = 40          // a cursor is the Update's generation above the log offset in its low bits
 	offsetMask = 1<<offsetBits - 1
 	genMask    = 1<<(63-offsetBits) - 1
@@ -77,9 +74,9 @@ type Gate struct {
 	Launch         func(context.Context, *Admission, Request, *os.File) (Result, error)
 	done           func(Request, Result, error)
 	admit          sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
-	mu             sync.Mutex // everything below, and the log's truncation
+	mu             sync.Mutex // everything below
 	status         *Status    // replaced when the Update ends, never changed in place: View hands it out
-	gen            int64      // bumped by every Start but the first and by every trim of the log: a cursor from before reads from the start
+	gen            int64      // bumped by every Start but the first: a cursor from an earlier Update reads from the start
 	cancel         context.CancelFunc
 	stopped        bool
 	prepublication bool // this process admitted a worker whose initial status is not published yet
@@ -175,8 +172,6 @@ func (g *Gate) Start(req Request, commit func() (map[string]int64, error)) error
 }
 
 func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, lease *Admission, req Request, log *os.File) {
-	bounded := make(chan struct{})
-	go g.boundLog(ctx, log, bounded)
 	var res Result
 	var err error
 	if g.Launch != nil {
@@ -189,7 +184,6 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, lease *Ad
 	}
 	finished := time.Now().Unix()
 	cancel()
-	<-bounded
 	_ = log.Close()
 	if g.done != nil {
 		g.done(req, res, err)
@@ -208,78 +202,6 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, lease *Ad
 	g.status = &ended
 	g.admit.Unlock() // under mu: no Start can see the gate free while the status still says running
 	g.mu.Unlock()
-}
-
-// BoundLog periodically trims log above 8 MiB to its newest whole lines (at most 4 MiB). Call the returned function after the
-// writer exits, before closing log: it joins the periodic worker and bounds even output written during cancellation.
-func BoundLog(ctx context.Context, log *os.File) func() {
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		boundLog(ctx, log, func(log *os.File, size int64) { trimLog(log, size) })
-	}()
-	return func() {
-		cancel()
-		<-done
-		if info, err := log.Stat(); err == nil && info.Size() > maxLog {
-			trimLog(log, info.Size())
-		}
-	}
-}
-
-func (g *Gate) boundLog(ctx context.Context, log *os.File, done chan<- struct{}) {
-	defer close(done)
-	boundLog(ctx, log, g.trimLog)
-}
-
-// boundLog holds a running command's log to maxLog until ctx ends: the root filesystem must not fill while a command prints.
-// A log past it keeps its newest whole lines, at most half of maxLog, as pfb_log_mgmt() trims the package's other logs.
-func boundLog(ctx context.Context, log *os.File, trim func(*os.File, int64)) {
-	tick := time.NewTicker(logCheck)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-		if info, err := log.Stat(); err == nil && info.Size() > maxLog {
-			trim(log, info.Size())
-		}
-	}
-}
-
-func (g *Gate) trimLog(log *os.File, size int64) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if trimLog(log, size) {
-		g.gen = (g.gen + 1) & genMask
-	}
-}
-
-// trimLog keeps the newest whole lines of the first size bytes of log, at most maxLog/2 of them.
-// shortcut: what the program appends between the read and the truncation is lost, and what it appends between the truncation
-// and the write lands before the kept lines (pfb_log_mgmt()'s trim has the same window); fine for a log already past maxLog.
-func trimLog(log *os.File, size int64) bool {
-	r, err := os.Open(log.Name())
-	if err != nil {
-		return false
-	}
-	defer r.Close()
-	tail := make([]byte, maxLog/2)
-	if _, err := r.ReadAt(tail, size-int64(len(tail))); err != nil {
-		return false
-	}
-	if i := bytes.IndexByte(tail, '\n'); i >= 0 {
-		tail = tail[i+1:]
-	}
-	if log.Truncate(0) == nil {
-		_, _ = log.Write(tail)
-		publishLogGen(log.Name() + ".status")
-		return true
-	}
-	return false
 }
 
 // View reports the locally running Update or the validated worker retained across a restart.

@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -8,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 func TestWorkerPublicationFailureCannotReportSuccessOrRetainOwnership(t *testing.T) {
@@ -67,52 +67,54 @@ func TestWorkerPreparationFilesystemErrorsNeverLaunchProgram(t *testing.T) {
 	}
 }
 
-func TestWorkerPeriodicLogBoundRemainsOwnedAfterObserverLeaves(t *testing.T) {
+func TestWorkerTranscriptRemainsCompleteAfterObserverLeaves(t *testing.T) {
 	p, dir := program(t, `exec 4<> "$D/release"
+printf 'early-output\n'
 echo ready > "$D/ready"
 read release <&4
 dd if=/dev/zero bs=1048576 count=9 2>/dev/null
 printf '\nperiodic-newest\n'
+sleep 2
 echo burst > "$D/burst"
-read release <&4`)
-	// Reuse the same real FIFO protocol as the independent transaction fixture.
+read release <&4
+printf '{"version":1}\n' >&3`)
 	if err := syscall.Mkfifo(filepath.Join(dir, "release"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		f, err := os.OpenFile(filepath.Join(dir, "release"), os.O_WRONLY|syscall.O_NONBLOCK, 0o600)
+		if err == nil {
+			_, _ = f.WriteString("cleanup\ncleanup\n")
+			_ = f.Close()
+		}
+	})
 	log := independentLog(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	ended := make(chan error, 1)
 	go func() { _, err := p.Run(ctx, Request{Trigger: "apply"}, log); ended <- err }()
 	awaitFile(t, filepath.Join(dir, "ready"))
 	cancel()
-	_ = recv(t, ended, "observer did not stop")
-	releaseIndependent(t, dir)
-	awaitFile(t, filepath.Join(dir, "burst"))
-	deadline := time.NewTimer(stuck)
-	defer deadline.Stop()
-	tick := time.NewTicker(5 * time.Millisecond)
-	defer tick.Stop()
-	trimmed := false
-	for !trimmed {
-		info, err := log.Stat()
-		if err != nil {
-			t.Fatal(err)
-		}
-		trimmed = info.Size() <= maxLog/2
-		if !trimmed {
-			select {
-			case <-tick.C:
-			case <-deadline.C:
-				releaseIndependent(t, dir)
-				_ = awaitWorkerCompletion(t, log.Name())
-				t.Fatal("STUCK: orphaned running worker did not periodically bound its log")
-			}
-		}
+	if err := recv(t, ended, "observer did not stop"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v, want canceled observation", err)
 	}
 	releaseIndependent(t, dir)
-	_ = awaitWorkerCompletion(t, log.Name())
-	if body := logText(t, log); !strings.HasSuffix(body, "periodic-newest\n") {
-		t.Fatalf("periodic trim lost newest complete output: %q", body[max(0, len(body)-80):])
+	awaitFile(t, filepath.Join(dir, "burst"))
+	const block = 9 << 20
+	expected := append([]byte("early-output\n"), bytes.Repeat([]byte{0}, block)...)
+	expected = append(expected, []byte("\nperiodic-newest\n")...)
+	if body, err := os.ReadFile(log.Name()); err != nil || !bytes.Equal(body, expected) {
+		t.Fatalf("orphan worker transcript has %d bytes, %v; want complete %d-byte output", len(body), err, len(expected))
+	}
+	state, err := readWorkerState(log.Name() + ".status")
+	if err != nil || state.FinishedAt != nil || state.LogGen != 0 {
+		t.Fatalf("orphan worker receipt = %+v, %v; want unfinished generation 0", state, err)
+	}
+	releaseIndependent(t, dir)
+	state = awaitWorkerCompletion(t, log.Name())
+	if state.FinishedAt == nil {
+		t.Fatalf("worker completion = %+v; want a terminal receipt", state)
+	}
+	if body, err := os.ReadFile(log.Name()); err != nil || !bytes.Equal(body, expected) {
+		t.Fatalf("completed worker transcript has %d bytes, %v; want complete %d-byte output", len(body), err, len(expected))
 	}
 }

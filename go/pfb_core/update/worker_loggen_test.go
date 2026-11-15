@@ -38,21 +38,3 @@ func TestAdmissionCursorGenerationWrapsAtMask(t *testing.T) {
 	}
 }
 
-func TestTrimLogGenerationWrapsAtMask(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "update.log.status")
-	if err := writeWorkerState(path, workerStateWithLogGen(genMask)); err != nil {
-		t.Fatal(err)
-	}
-	publishLogGen(path)
-	state, err := readWorkerState(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.LogGen != 0 {
-		t.Errorf("trimmed log LogGen = %d; want wrapped generation 0", state.LogGen)
-	}
-}

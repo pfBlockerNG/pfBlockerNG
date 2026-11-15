@@ -247,15 +247,6 @@ func writeWorkerState(path string, state workerState) error {
 	return dir.Sync()
 }
 
-func publishLogGen(path string) {
-	state, err := readWorkerState(path)
-	if err != nil {
-		return
-	}
-	state.LogGen = (state.LogGen + 1) & genMask
-	_ = writeWorkerState(path, state)
-}
-
 func salvageUnfinished(logPath string) error {
 	state, err := readWorkerState(logPath + ".status")
 	if errors.Is(err, os.ErrNotExist) || err == nil && (state.FinishedAt != nil || state.Settled) {
@@ -560,9 +551,7 @@ func runWorker(logPath string) int {
 		cmd := exec.Command(state.Path)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
 		cmd.ExtraFiles = []*os.File{result}
-		finish := BoundLog(context.Background(), log)
 		err = cmd.Run()
-		finish()
 		if cmd.ProcessState != nil {
 			status := cmd.ProcessState.Sys().(syscall.WaitStatus)
 			if status.Signaled() {

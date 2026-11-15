@@ -379,7 +379,7 @@ number, `"-1"`, `"abc"`, `"1.5"`, `""`), is `invalid_argument` with a field erro
 |---|---|
 | `running` | `true` while an Update runs, explicitly `false` otherwise |
 | `update` | `null` until Core has a current Update or retained worker receipt; otherwise `{"trigger", "scope", "force", "startedAt", "finishedAt", "result"}` from that Update's status: times are Unix seconds, `finishedAt` and `result` appear only once it ended, `result` `success` (exit 0 and usable result), `skipped` (exit 75) or `failed` |
-| `log` | the log's bytes from the cursor, at most 64 KiB, never ending inside a UTF-8 character; `""` before the first Update |
+| `log` | the per-Update transcript's bytes from the cursor, at most 64 KiB, never ending inside a UTF-8 character; `""` before the first Update |
 | `next` | the cursor after `log`, a JSON string: pass it as `after` in the next call; `"0"` before the first Update |
 
 The last Update stays readable until the next one starts. A client follows an Update by calling again with the last `next`
@@ -410,10 +410,10 @@ The worker receives this request on stdin and reports progress and results as fo
   "force": "none|parse|download|both", "feeds": [ids], "extras": ["extra:dcc", "extra:bl"]}`. `feeds` and `extras` are left out
   when empty; a feed id is the schedule's (`ipv4:<header>_v4`, `ipv6:<header>_v6`, `dnsbl:<header>`). A `scheduled` or `retry`
   Update names what to run; a `manual` one runs its scope.
-- **stdout and stderr:** the progress log, `update.log` in `--state-dir`: a regular file, never a pipe. The worker keeps writing
-  after Core stops; a Core restart does not truncate it. A new Update truncates it. While the worker runs, the log is checked once a
-  second: past 8 MiB it keeps only its newest whole lines, at most 4 MiB, in place, and a cursor from before reads it from the start.
-  Lines printed during the trim may be lost or land before the kept ones; output of the last second of an Update is not trimmed.
+- **stdout and stderr:** the complete transcript, `update.log` in `--state-dir`: a regular file, never a pipe. `GetUpdate` reads this file;
+  the browser never tails the rotating main log. The worker appends without trimming or a size cap. A Core restart does not truncate it;
+  completion retains the latest transcript until a later admitted Update replaces the pathname. Admission succeeds before replacement, and
+  descriptors opened before replacement remain attached to the old inode; they cannot write into the new transcript.
 - **fd 3:** the worker's durable `update.log.result` file: result lines, each one JSON object `{"version": 1, "outcomes": {id:
   "success"|"retry-cap-reached"}, "attempted": [ids], "geoipReady": bool}` and a newline, every field but `version` optional. The
   program writes each outcome as it finishes. Complete lines are preserved for recovery; if the final unterminated line is invalid,
@@ -422,8 +422,8 @@ The worker receives this request on stdin and reports progress and results as fo
 - **Exit status:** 0 is success. A non-zero exit fails the Update, and a valid result it wrote still counts. **75** means the
   program deferred the Update (a lock held, the schedule switched off): the Update ends with the result `skipped`, not
   `failed`, whatever the program wrote on fd 3 is not recorded (no outcome, no attempt, no GeoIP readiness), and the
-  reserved occurrences stay pending for the next quarter hour. A skipped Update truncates the previous Update's log like any
-  other, and its own log holds what the program printed before it deferred.
+  reserved occurrences stay pending for the next quarter hour. A skipped Update replaces the previous transcript like any other, and its
+  own transcript holds what the program printed before it deferred.
 - **Worker lifetime and bounds:** Core admits one Update under the private `update.log.lock` flock, then the independent worker
   owns the transaction, command and receipt. Stopping or losing Core does not signal the worker or its program; a restarted Core
   observes the busy lock or reconciles the terminal receipt at startup and before `GetUpdate`. There is no whole-Update timeout or
