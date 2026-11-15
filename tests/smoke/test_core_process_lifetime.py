@@ -35,10 +35,7 @@ captured='|'
 capture() {
     path=$1
     case "$captured" in *"|$path|"*) return ;; esac
-    mode=${2:-COMPACT}
-    case "$path" in
-        /etc/rc.filter_configure_sync|/usr/sbin/service|*/service-utils*.inc) mode=FULL ;;
-    esac
+    mode=FULL
     if [ ! -f "$path" ] || [ ! -r "$path" ]; then
         printf 'UNREADABLE REQUIRED SOURCE %s\n' "$path"
         status=1
@@ -67,8 +64,11 @@ capture /etc/inc/filter.inc
 for pattern in /etc/inc/*service*.inc /etc/inc/*unbound*.inc /etc/inc/*dhcp*.inc \
     /etc/inc/*radv*.inc /etc/inc/*router*.inc /etc/inc/*ra.inc \
     /usr/local/etc/rc.d/*unbound* /usr/local/etc/rc.d/*dhcp* /usr/local/etc/rc.d/*radv* \
+    /usr/local/etc/rc.d/kea* /etc/rc.d/*kea* \
     /etc/rc.d/*unbound* /etc/rc.d/*dhcp* /etc/rc.d/*radv* \
-    /usr/local/etc/rc.d/pfb_*.sh /etc/rc.d/pfb_*.sh; do
+    /usr/local/etc/rc.d/*lighttpd* /usr/local/etc/rc.d/*filter* /usr/local/etc/rc.d/*xinetd* \
+    /etc/rc.d/*syslog* /usr/local/etc/rc.d/*syslog* \
+    /usr/local/etc/rc.d/pfb_* /etc/rc.d/pfb_*; do
     if [ -f "$pattern" ]; then
         capture "$pattern"
     else
@@ -83,6 +83,38 @@ if [ "$found_service" -ne 1 ]; then
     printf 'REQUIRED service include discovery found no readable source\n'
     status=1
 fi
+for name in daemon radvd dhcpd dhcpleases6 kea-dhcp4 kea-dhcp6 unbound lighttpd filterlog filterdns xinetd syslogd; do
+    path=$(command -v "$name" 2>/dev/null)
+    if [ -n "$path" ] && [ -f "$path" ]; then
+        printf '\n=== BINARY %s ===\n' "$path"
+        sha256 "$path" || status=1
+        file "$path" || status=1
+        pkg which "$path" 2>&1 || :
+    else
+        printf 'OPTIONAL BINARY ABSENT %s\n' "$name"
+    fi
+    for page in /usr/share/man/man8/"$name".8* /usr/local/share/man/man8/"$name".8*; do
+        [ -f "$page" ] || continue
+        printf '\n=== MANUAL %s ===\n' "$page"
+        case "$page" in
+            *.gz) gzip -cd "$page" || status=1 ;;
+            *) cat "$page" || status=1 ;;
+        esac
+        printf '\n=== END MANUAL ===\n'
+    done
+done
+printf '\n=== DAEMON USAGE (nonzero usage exit expected) ===\n'
+/usr/sbin/daemon -? 2>&1
+printf 'daemon usage exit=%s\n' "$?"
+for path in /var/unbound/unbound.conf /usr/local/etc/unbound/unbound.conf; do
+    if [ -f "$path" ] && [ -r "$path" ]; then
+        printf '\n=== UNBOUND DAEMON CONFIG %s ===\n' "$path"
+        sha256 "$path" || status=1
+        grep -nE '^[[:space:]]*(do-daemonize|include):' "$path" || :
+    else
+        printf 'OPTIONAL UNBOUND CONFIG ABSENT %s\n' "$path"
+    fi
+done
 exit "$status"
 """
 
@@ -122,6 +154,12 @@ def test_pre_script_group_lifetime_on_freebsd(
         elif line.strip():
             print(line)
     assert audit.returncode == 0, f"native source audit failed; full evidence: {evidence}\n{audit.stderr}"
+    for name in ("services.inc", "filter.inc", "unbound.inc"):
+        assert re.search(
+            rf"^=== SOURCE /etc/inc/{re.escape(name)} SHA256 [0-9a-f]{{64}} MODE FULL ===$",
+            audit.stdout,
+            re.MULTILINE,
+        ), f"{name} must retain multiline launcher arguments in stdout; full evidence: {evidence}"
 
     binary = tmp_path / "prescript.test"
     built = subprocess.run(

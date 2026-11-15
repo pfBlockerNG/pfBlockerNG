@@ -1191,9 +1191,11 @@ function pfb_filter_reload_exec(): int {
 		return -1;
 	}
 
+	$daemon = $pfb['daemon'] ?? '/usr/sbin/daemon';
+
 	$discard = array();
 	$retval  = 0;
-	if (exec(escapeshellarg($script) . ' > /dev/null 2>&1 < /dev/null &', $discard, $retval) === FALSE && $retval === 0) {
+	if (exec(escapeshellarg($daemon) . ' -f ' . escapeshellarg($script) . ' > /dev/null 2>&1 < /dev/null &', $discard, $retval) === FALSE && $retval === 0) {
 		// exec() itself failed to launch (fork/pipe).
 		$retval = -1;
 	}

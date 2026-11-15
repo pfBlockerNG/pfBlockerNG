@@ -45,17 +45,17 @@ final class FilterDaemonRedirectTest extends TestCase
 		$start = $this->startBody('pfb_filter.sh', 'pfb_filter_service');
 
 		// Then the backgrounded filter-log daemon is NOT a bare `... filterlog &` (which
-		// would inherit the caller's pipe), but a grouped pipeline whose outer std fds are
-		// redirected to /dev/null so the inherited descriptor is released (#662).
+		// would inherit the caller's pipe), but a daemon-wrapped pipeline whose outer
+		// std fds are redirected to /dev/null so the inherited descriptor is released (#662).
 		$this->assertStringNotContainsString(
 			"filterlog &\n",
 			$start,
 			'the filter-log daemon is still backgrounded with a bare "& " that inherits the caller pipe (#662)'
 		);
 		$this->assertStringContainsString(
-			'filterlog ; } >/dev/null 2>&1 </dev/null &',
+			"filterlog' >/dev/null 2>&1 </dev/null &",
 			$start,
-			'the filter-log daemon launch must detach its std fds (group + >/dev/null 2>&1 </dev/null) (#662)'
+			'the filter-log daemon launch must detach its std fds (>/dev/null 2>&1 </dev/null) (#662)'
 		);
 	}
 

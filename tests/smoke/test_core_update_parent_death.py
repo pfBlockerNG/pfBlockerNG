@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import pytest
 
+from . import helpers
 from .conftest import SmokeVM
 from .test_smoke_dns_gateway import (  # noqa: F401 -- pytest fixture re-export
     GoToolchain,
@@ -71,6 +72,14 @@ PROCESS_TESTS = (
     "TestAContextEndingWithTheWatcherStoppedAfterTheProgramExitedPreservesItsDaemon",
     "TestCoresDeathBeforeCompletionCleansTheGroupButAfterRunLeavesItsDaemon",
     "TestWatchdogDeathCleanupFinishesBeforeTheIndependentSalvageContextFires",
+    "TestStrictRunClosesDescendantHeldCaptureBeforeReapAndIODrain",
+    "TestExitedRecognizesAnUnreapedZombie",
+    "TestExitedRejectsUnavailablePS",
+    "TestUpdateFixtureExitedRecognizesAnUnreapedZombie",
+    "TestUpdateFixtureExitedRejectsUnavailablePS",
+    "TestNativeReloadSurvivesUpdateCancellation",
+    "TestNativeGeneratedTailPipelineSurvivesUpdateCancellation",
+    "TestNativeGeneratedClogPipelineSurvivesUpdateCancellation",
 )
 LIFETIME_SUITES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("./update", UPDATE_TESTS),
@@ -91,6 +100,7 @@ def test_the_update_program_dies_with_a_core_that_is_killed(
     suites: tuple[tuple[str, tuple[str, ...]], ...],
 ) -> None:
     """Prove the Update's group/lifetime or descriptor contracts on real FreeBSD."""
+    helpers.deploy(smoke_vm)
     goarch = _goarch(smoke_vm, "pfSense")
     for package, tests in suites:
         binary = tmp_path / f"{Path(package).name}.test"
@@ -122,4 +132,5 @@ def test_the_update_program_dies_with_a_core_that_is_killed(
                 )
             assert run.stdout.rstrip().splitlines()[-1:] == ["PASS"], f"{package} lacks final PASS:\n{run.stdout}"
         finally:
-            smoke_vm.ssh(f"rm -f {guest_binary} {guest_binary}.new", timeout=30)
+            cleanup = smoke_vm.ssh(f"rm -f {guest_binary} {guest_binary}.new", timeout=30)
+            assert cleanup.returncode == 0, f"removing owned guest binary/staging file failed: {cleanup.stderr}"

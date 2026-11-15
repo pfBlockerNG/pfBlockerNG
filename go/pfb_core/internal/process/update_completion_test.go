@@ -58,7 +58,7 @@ exit 0`)
 			t.Cleanup(func() { _ = core.Process.Kill(); _ = core.Wait() })
 			awaitFile(t, filepath.Join(dir, "boundary"))
 			child := recordedPid(t, dir)
-			if exited(child) {
+			if exited(t, child) {
 				t.Fatalf("before-state: daemon %d is not alive at the %s-completion boundary", child, mode)
 			}
 			if err := core.Process.Kill(); err != nil {
@@ -66,10 +66,10 @@ exit 0`)
 			}
 			_ = core.Wait()
 			if mode == "before" {
-				if !gone(child) {
+				if !gone(t, child) {
 					t.Errorf("daemon %d survived Core's death before completion was committed", child)
 				}
-			} else if exited(child) {
+			} else if exited(t, child) {
 				t.Errorf("daemon %d was killed by Core's death after Run completed", child)
 			}
 		})

@@ -169,7 +169,7 @@ echo $! > "$D/child"
 				t.Errorf("actual parent = %d; want Core %d", parent, os.Getpid())
 			}
 			child := ownedChild(t, dir)
-			if exited(child) {
+			if exited(t, child) {
 				t.Errorf("daemon %d was killed after %s", child, end)
 			}
 		})
@@ -221,7 +221,7 @@ exit 7`)
 	if !errors.As(out.CommandErr, &status) || status.ExitCode() != 7 || out.Interrupted != nil || out.WatchdogErr != nil {
 		t.Errorf("late cancellation = %+v; want real exit 7 only", out)
 	}
-	if child := ownedChild(t, dir); exited(child) {
+	if child := ownedChild(t, dir); exited(t, child) {
 		t.Errorf("late cancellation killed daemon %d", child)
 	}
 }
@@ -257,7 +257,7 @@ wait`)
 	t.Cleanup(func() {
 		// Cooperatively release the fixture if the assertion path aborts; bound salvage and retain owned-PID fallback.
 		_, _ = release.Write([]byte("release\n"))
-		if !gone(child) {
+		if !gone(t, child) {
 			_ = syscall.Kill(child, syscall.SIGKILL)
 		}
 	})
@@ -291,7 +291,7 @@ wait`)
 	if out.Interrupted == nil || out.Interrupted.Error() != "watchdog exited while the program was running" {
 		t.Errorf("unexpected watchdog death = %+v", out)
 	}
-	if child := ownedChild(t, dir); !gone(child) {
+	if child := ownedChild(t, dir); !gone(t, child) {
 		t.Errorf("watchdog death left child %d", child)
 	}
 }
@@ -384,24 +384,73 @@ func awaitZombie(t *testing.T, pid int) {
 	}
 }
 
-func exited(pid int) bool {
+func exited(t testing.TB, pid int) bool {
+	t.Helper()
 	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	state, err := exec.CommandContext(ctx, "ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
-	return err == nil && strings.HasPrefix(strings.TrimSpace(string(state)), "Z")
+	state, err := exec.CommandContext(ctx, "ps", "-o", "stat=", "-p", strconv.Itoa(pid)).CombinedOutput()
+	if err != nil || len(strings.TrimSpace(string(state))) == 0 {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return true
+		}
+		t.Fatalf("ENVIRONMENT: cannot inspect process %d with ps: state %q, %v", pid, state, err)
+	}
+	return strings.HasPrefix(strings.TrimSpace(string(state)), "Z")
 }
 
-func gone(pid int) bool {
+func gone(t testing.TB, pid int) bool {
+	t.Helper()
 	for deadline := time.Now().Add(stuck); ; time.Sleep(20 * time.Millisecond) {
-		if exited(pid) {
+		if exited(t, pid) {
 			return true
 		}
 		if time.Now().After(deadline) {
 			return false
 		}
+	}
+}
+
+func TestExitedRecognizesAnUnreapedZombie(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Wait() })
+	if !gone(t, cmd.Process.Pid) {
+		t.Fatalf("STUCK: child %d did not exit before reap", cmd.Process.Pid)
+	}
+	if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
+		t.Fatalf("child %d lost its unreaped identity: %v", cmd.Process.Pid, err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if !exited(t, cmd.Process.Pid) {
+		t.Fatalf("reaped child %d is still reported alive", cmd.Process.Pid)
+	}
+}
+
+func TestExitedRejectsUnavailablePS(t *testing.T) {
+	const childEnv = "PFB_TEST_PROCESS_FIXTURE_MISSING_PS"
+	if os.Getenv(childEnv) == "1" {
+		t.Setenv("PATH", t.TempDir())
+		exited(t, os.Getpid())
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), stuck)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestExitedRejectsUnavailablePS$")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil || err == nil || !strings.Contains(string(out), "ENVIRONMENT: cannot inspect process") {
+		t.Fatalf("missing ps inspection = %q, %v (context %v); want a fatal inspection diagnostic", out, err, ctx.Err())
 	}
 }
 
@@ -430,14 +479,14 @@ func TestCoreDeathCleansTheProgram(t *testing.T) {
 	t.Cleanup(func() { _ = core.Process.Kill(); _ = core.Wait() })
 	awaitFile(t, filepath.Join(dir, "ready"))
 	pid := ownedChild(t, dir)
-	if exited(pid) {
+	if exited(t, pid) {
 		t.Fatalf("program %d did not start live", pid)
 	}
 	if err := core.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
 	_ = core.Wait()
-	if !gone(pid) {
+	if !gone(t, pid) {
 		t.Errorf("program %d survived Core death", pid)
 	}
 }
@@ -470,7 +519,7 @@ exit 0`)
 		t.Fatalf("pipe-holding terminal outcome = %+v", out)
 	}
 	child := ownedChild(t, dir)
-	if exited(child) {
+	if exited(t, child) {
 		t.Errorf("pipe-holding intentional child %d did not survive", child)
 	}
 	if _, err := result.Seek(0, io.SeekStart); err != nil {

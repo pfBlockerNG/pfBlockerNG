@@ -5998,21 +5998,17 @@ function pfb_filter_service() {
 	if [ -e '/var/log/filter.log' ]; then
 		/usr/bin/logger -p daemon.info -t "\${filter_type}" "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] Firewall Filter Service started"
 
-		# Detach the daemon's std fds (#662): a backgrounded daemon that inherits the
-		# caller's pipe -- e.g. the package-manager capture pipe when start_service() runs
-		# during a package install/upgrade -- holds it open for its whole life, so pkg's
-		# streamed output never reaches EOF and the upgrade page's live log freezes. Group
-		# the pipeline and redirect its outer fds to /dev/null (stdin too); the internal
-		# tail->php_pfb pipe is unaffected, so only the inherited descriptor is released.
+		# Detach the whole pipeline from the caller's process group; redirect its outer
+		# std fds so it cannot hold the package-manager capture pipe open (#662).
 		if [ "\${filter_type}" == 'clog_pfb' ]; then
 			# clog_pfb is the pre-2.5 circular-log reader (below min CE 2.8); it reads
 			# only the filter.log clog. The DNSBL feature-log tail is tail_pfb-only.
-			{ /usr/local/sbin/clog_pfb -f /var/log/filter.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog ; } >/dev/null 2>&1 </dev/null &
+			/usr/sbin/daemon -f /bin/sh -c '/usr/local/sbin/clog_pfb -f /var/log/filter.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog' >/dev/null 2>&1 </dev/null &
 		else
 			# ADR-38 Amendment 1: one daemon also tails the DNSBL feature logs so it
 			# can write unified.log + emit DNSBL syslog host-side. -q suppresses tail's
 			# per-file "==> name <==" headers; -F retries files that don't exist yet.
-			{ /usr/bin/tail_pfb -q -n0 -F /var/log/filter.log /var/log/pfblockerng/dnsbl.log /var/log/pfblockerng/dns_reply.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog ; } >/dev/null 2>&1 </dev/null &
+			/usr/sbin/daemon -f /bin/sh -c '/usr/bin/tail_pfb -q -n0 -F /var/log/filter.log /var/log/pfblockerng/dnsbl.log /var/log/pfblockerng/dns_reply.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog' >/dev/null 2>&1 </dev/null &
 		fi
 	fi
 

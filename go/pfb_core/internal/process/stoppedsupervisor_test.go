@@ -23,8 +23,9 @@ func TestAContextEndingWithTheWatcherStoppedAfterTheProgramExitedPreservesItsDae
 	c, dir := program(t, `printf '{"version":1,"attempted":["ipv4:a_v4"]}\n' >&3
 sleep 60 >/dev/null 2>&1 </dev/null &
 echo $! > "$D/child"
-echo $$ > "$D/leader.tmp"; mv "$D/leader.tmp" "$D/leader"
-kill -STOP "$(ps -o pgid= -p $$ | tr -d ' ')"
+group=$(ps -o pgid= -p $$ | tr -d ' ') || exit 1
+printf '%s %s\n' "$$" "$group" > "$D/leader.tmp"; mv "$D/leader.tmp" "$D/leader"
+kill -STOP "$group"
 exit 0`)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -45,15 +46,19 @@ exit 0`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		leader, err = strconv.Atoi(strings.TrimSpace(string(raw)))
-		if err != nil {
+		identity := strings.Fields(string(raw))
+		if len(identity) != 2 {
+			t.Fatalf("the program recorded an invalid pid/pgid %q", raw)
+		}
+		leader, err = strconv.Atoi(identity[0])
+		if err != nil || leader <= 0 {
 			t.Fatalf("the program recorded an invalid pid %q: %v", raw, err)
 		}
-		child := recordedPid(t, dir)
-		group, err := syscall.Getpgid(leader)
-		if err != nil {
-			t.Fatal(err)
+		group, err := strconv.Atoi(identity[1])
+		if err != nil || group <= 0 {
+			t.Fatalf("the program recorded an invalid pgid %q: %v", raw, err)
 		}
+		child := recordedPid(t, dir)
 		t.Cleanup(func() { _ = syscall.Kill(group, syscall.SIGCONT) })
 		for deadline := time.Now().Add(stuck); ; {
 			probe, stop := context.WithTimeout(context.Background(), time.Second)
@@ -74,7 +79,7 @@ exit 0`)
 		watchdog := time.NewTimer(stuck)
 		defer watchdog.Stop()
 	waitDecision:
-		for !exited(child) {
+		for !exited(t, child) {
 			select {
 			case <-actualChecked:
 				break waitDecision
@@ -90,7 +95,7 @@ exit 0`)
 	if err != nil || !reflect.DeepEqual(res, update.Result{Attempted: []string{"ipv4:a_v4"}}) {
 		t.Errorf("Run() = %+v, %v; want the successful result after the program exited with its watcher stopped", res, err)
 	}
-	if child := recordedPid(t, dir); exited(child) {
+	if child := recordedPid(t, dir); exited(t, child) {
 		t.Errorf("the successful program's daemon %d was killed while its watcher was stopped", child)
 	}
 }

@@ -42,7 +42,7 @@ exit 0`)
 	if err != nil || !reflect.DeepEqual(res, update.Result{Attempted: []string{"ipv4:a_v4"}}) {
 		t.Errorf("Run() = %+v, %v; want the program's result and no error: it had exited before the context ended", res, err)
 	}
-	if pid := recordedPid(t, dir); exited(pid) {
+	if pid := recordedPid(t, dir); exited(t, pid) {
 		t.Errorf("the program's member %d was killed after the program had exited", pid)
 	}
 }

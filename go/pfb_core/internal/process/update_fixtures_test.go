@@ -3,10 +3,10 @@
 package process_test
 
 import (
-	"bytes"
+	"context"
 	"errors"
-	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -59,18 +59,28 @@ func recordedPid(t *testing.T, dir string) int {
 }
 
 // exited reports whether pid is no longer a live process; a zombie counts as exited (a bare container may not reap it).
-func exited(pid int) bool {
+func exited(t testing.TB, pid int) bool {
+	t.Helper()
 	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 		return true
 	}
-	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	return err == nil && bytes.HasPrefix(stat[bytes.LastIndexByte(stat, ')')+2:], []byte("Z"))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	state, err := exec.CommandContext(ctx, "ps", "-o", "stat=", "-p", strconv.Itoa(pid)).CombinedOutput()
+	if err != nil || len(strings.TrimSpace(string(state))) == 0 {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return true
+		}
+		t.Fatalf("ENVIRONMENT: cannot inspect process %d with ps: state %q, %v", pid, state, err)
+	}
+	return strings.HasPrefix(strings.TrimSpace(string(state)), "Z")
 }
 
 // gone waits for pid to exit, within the watchdog.
-func gone(pid int) bool {
+func gone(t testing.TB, pid int) bool {
+	t.Helper()
 	for deadline := time.Now().Add(stuck); ; time.Sleep(20 * time.Millisecond) {
-		if exited(pid) {
+		if exited(t, pid) {
 			return true
 		}
 		if time.Now().After(deadline) {
@@ -100,4 +110,45 @@ func recv[T any](t *testing.T, ch <-chan T, what string) (v T) {
 		t.Fatalf("STUCK: %s", what)
 	}
 	return v
+}
+
+func TestUpdateFixtureExitedRecognizesAnUnreapedZombie(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Wait() })
+	if !gone(t, cmd.Process.Pid) {
+		t.Fatalf("STUCK: child %d did not exit before reap", cmd.Process.Pid)
+	}
+	if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
+		t.Fatalf("child %d lost its unreaped identity: %v", cmd.Process.Pid, err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if !exited(t, cmd.Process.Pid) {
+		t.Fatalf("reaped child %d is still reported alive", cmd.Process.Pid)
+	}
+}
+
+func TestUpdateFixtureExitedRejectsUnavailablePS(t *testing.T) {
+	const childEnv = "PFB_TEST_UPDATE_FIXTURE_MISSING_PS"
+	if os.Getenv(childEnv) == "1" {
+		t.Setenv("PATH", t.TempDir())
+		exited(t, os.Getpid())
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), stuck)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestUpdateFixtureExitedRejectsUnavailablePS$")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil || err == nil || !strings.Contains(string(out), "ENVIRONMENT: cannot inspect process") {
+		t.Fatalf("missing ps inspection = %q, %v (context %v); want a fatal inspection diagnostic", out, err, ctx.Err())
+	}
 }

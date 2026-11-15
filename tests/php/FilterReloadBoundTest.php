@@ -15,7 +15,7 @@ use PHPUnit\Framework\TestCase;
  * non-executable script gate returns -1 and names itself in both logs. The
  * command is built inline (shape not observable), so these rows pin BEHAVIOR
  * with deterministic reload doubles in a temp dir, never the network or the
- * appliance; a detached leftover is pfSense's own domain, reaped by pidfile.
+ * appliance; owned long-lived doubles exit on a release file with a safety bound.
  */
 final class FilterReloadBoundTest extends TestCase
 {
@@ -37,21 +37,23 @@ final class FilterReloadBoundTest extends TestCase
 		$this->assertTrue(mkdir($this->tmp, 0700, TRUE));
 		$this->hadPfb      = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$daemon = "{$this->tmp}/daemon";
+		// Model daemon(8)'s session creation for every owned reload, never a host daemon.
+		file_put_contents($daemon, "#!/bin/sh\n[ \"\$1\" = '-f' ] && shift\nexec /usr/bin/setsid \"\$@\"\n");
+		chmod($daemon, 0755);
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 			'log'    => "{$this->tmp}/pfblockerng.log",
 			'errlog' => "{$this->tmp}/error.log",
+			'daemon' => $daemon,
 		]);
 	}
 
 	protected function tearDown(): void
 	{
-		// A detached double must never outlive the test -- reap it by its pidfile.
-		$pidfile = "{$this->tmp}/detached.pid";
-		if (is_file($pidfile)) {
-			$pid = trim((string) file_get_contents($pidfile));
-			if ($pid !== '') {
-				exec('kill ' . escapeshellarg($pid) . ' 2>/dev/null');
-			}
+		// Owned doubles stop cooperatively; never signal a PID that may have been recycled.
+		touch("{$this->tmp}/release");
+		if (is_file("{$this->tmp}/detached.pid")) {
+			$this->waitFor("{$this->tmp}/detached.done");
 		}
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->originalPfb;
@@ -143,16 +145,18 @@ final class FilterReloadBoundTest extends TestCase
 
 	public function testDetachedFireDoesNotWaitForASlowDouble(): void
 	{
-		// No-wait property, not a duration assertion: the double sleeps 30s, the
-		// launcher must be back well under that, leaving the sleeper to pfSense.
-		// The double records its own pid (pre-exec $$) so teardown can reap it.
+		// The double stays alive until release (with a 30s safety bound), not until launch returns.
 		$GLOBALS['pfb']['filter_configure_sync'] = $this->fakeReload(
-			'echo $$ > "$(dirname "$0")/detached.pid"' . "\n" . 'exec sleep 30'
+			'dir=$(dirname "$0"); echo $$ > "$dir/detached.pid"' . "\n"
+			. 'i=0; while [ ! -e "$dir/release" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done' . "\n"
+			. 'touch "$dir/detached.done"'
 		);
 
 		$started = microtime(TRUE);
 		$status  = pfb_filter_reload_exec();
 		$elapsed = microtime(TRUE) - $started;
+		$this->assertTrue($this->waitFor("{$this->tmp}/detached.pid"),
+			'the slow owned double must start before cooperative teardown');
 
 		$this->assertSame(0, $status, 'a detached fire returns the launch status, never the child outcome');
 		$this->assertLessThan(10.0, $elapsed, sprintf(
@@ -208,6 +212,7 @@ final class FilterReloadBoundTest extends TestCase
 				'log'                   => "{$this->tmp}/pfblockerng.log",
 				'errlog'                => "{$this->tmp}/error.log",
 				'filter_configure_sync' => $script,
+				'daemon'                => $GLOBALS['pfb']['daemon'],
 			], TRUE),
 		);
 		$proc = proc_open(
@@ -231,6 +236,22 @@ final class FilterReloadBoundTest extends TestCase
 			'the detached double must record what it saw on stdin');
 		$this->assertSame('closed', (string) file_get_contents($probe),
 			"the detached child must read EOF on stdin, never the launcher's own payload");
+	}
+
+	public function testActualReloadTargetHasASeparateProcessGroup(): void
+	{
+		$this->assertTrue(function_exists('posix_getpgrp'), 'PGID proof requires the POSIX extension');
+		$this->assertTrue(is_executable('/usr/bin/setsid'), 'the Linux daemon stand-in requires setsid');
+		$probe = "{$this->tmp}/reload.pgid";
+		$php = 'file_put_contents(' . var_export($probe, TRUE) . ', (string) posix_getpgrp());';
+		$GLOBALS['pfb']['filter_configure_sync'] = $this->fakeReload(
+			'exec ' . escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($php)
+		);
+
+		$this->assertSame(0, pfb_filter_reload_exec(), 'the owned reload target must launch');
+		$this->assertTrue($this->waitFor($probe), 'the actual reload target must execute, not a missing daemon');
+		$this->assertNotSame(posix_getpgrp(), (int) file_get_contents($probe),
+			'the actual reload target must escape the Update caller process group');
 	}
 
 	// ── The launch gate: the one failure we own ─────────────────────────────────

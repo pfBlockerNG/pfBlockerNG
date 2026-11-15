@@ -39,7 +39,7 @@ exit 0`)
 	if err != nil || !reflect.DeepEqual(res, update.Result{Attempted: []string{"ipv4:a_v4"}}) {
 		t.Fatalf("Run() = %+v, %v; want the program's result and no error: it had already exited", res, err)
 	}
-	if pid := recordedPid(t, dir); exited(pid) {
+	if pid := recordedPid(t, dir); exited(t, pid) {
 		t.Fatalf("the program's member %d was killed after the program had exited", pid)
 	}
 }
