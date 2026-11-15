@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -11,12 +12,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const workerArg = "--update-worker"
 const workerVersion = 1
+const maxWorkerState = 4 << 20 // request plus bounded result and private disposition
 
 // workerState is private to this binary; the nonce pairs admission and completion, never a PID.
 type workerState struct {
@@ -28,6 +33,7 @@ type workerState struct {
 	FinishedAt *int64  `json:"finishedAt,omitempty"`
 	ExitCode   *int    `json:"exitCode,omitempty"`
 	Signal     int     `json:"signal,omitempty"`
+	CoreDumped bool    `json:"coreDumped,omitempty"`
 	Failure    string  `json:"failure,omitempty"`
 	Result     Result  `json:"result"`
 }
@@ -102,7 +108,14 @@ func readWorkerState(path string) (workerState, error) {
 
 func decodeWorkerState(r io.Reader) (workerState, error) {
 	var state workerState
-	dec := json.NewDecoder(io.LimitReader(r, maxResult+1))
+	body, err := io.ReadAll(io.LimitReader(r, maxWorkerState+1))
+	if err != nil {
+		return state, err
+	}
+	if len(body) > maxWorkerState || !utf8.Valid(body) {
+		return state, errors.New("the worker state is oversized or not UTF-8")
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&state); err != nil {
 		return state, err
@@ -111,11 +124,23 @@ func decodeWorkerState(r io.Reader) (workerState, error) {
 		return state, errors.New("the worker state has trailing data")
 	}
 	nonce, err := hex.DecodeString(state.Nonce)
-	if err != nil || len(nonce) != 32 || hex.EncodeToString(nonce) != state.Nonce || state.Version != workerVersion || state.StartedAt <= 0 || state.Path == "" {
+	if err != nil || len(nonce) != 32 || hex.EncodeToString(nonce) != state.Nonce || state.Version != workerVersion || state.StartedAt <= 0 || state.Path == "" || strings.IndexFunc(state.Path, unicode.IsControl) >= 0 {
 		return state, errors.New("the worker state has an invalid identity or version")
 	}
-	if state.FinishedAt == nil && (state.ExitCode != nil || state.Signal != 0 || state.Failure != "") {
-		return state, errors.New("the unfinished worker state contains a terminal result")
+	for id, outcome := range state.Result.Outcomes {
+		if id == "" || outcome != "success" && outcome != "retry-cap-reached" {
+			return state, errors.New("the worker state contains an invalid outcome")
+		}
+	}
+	if state.FinishedAt == nil {
+		if state.ExitCode != nil || state.Signal != 0 || state.CoreDumped || state.Failure != "" || len(state.Result.Outcomes) != 0 || len(state.Result.Attempted) != 0 || state.Result.GeoIPReady != nil {
+			return state, errors.New("the unfinished worker state contains a terminal result")
+		}
+	} else if *state.FinishedAt < state.StartedAt || state.Signal < 0 || state.Signal > 255 ||
+		state.ExitCode != nil && (*state.ExitCode < 0 || *state.ExitCode > 255 || state.Signal != 0) ||
+		state.CoreDumped && state.Signal == 0 ||
+		state.ExitCode == nil && state.Signal == 0 && state.Failure == "" {
+		return state, errors.New("the worker state contains an inconsistent terminal disposition")
 	}
 	return state, nil
 }
@@ -159,17 +184,21 @@ func (s workerState) outcome() (Result, error) {
 	if s.ExitCode != nil && *s.ExitCode == deferredStatus {
 		return Result{}, ErrDeferred
 	}
+	if s.Signal != 0 {
+		dump := ""
+		if s.CoreDumped {
+			dump = " (core dumped)"
+		}
+		return s.Result, fmt.Errorf("the update program failed: signal: %s%s", syscall.Signal(s.Signal), dump)
+	}
+	if s.ExitCode != nil && *s.ExitCode != 0 {
+		return s.Result, fmt.Errorf("the update program failed: exit status %d", *s.ExitCode)
+	}
 	if s.Failure != "" {
 		return s.Result, errors.New(s.Failure)
 	}
-	if s.Signal != 0 {
-		return s.Result, fmt.Errorf("the update program failed: signal: %s", syscall.Signal(s.Signal))
-	}
 	if s.ExitCode == nil {
 		return s.Result, errors.New("the worker published no program exit status")
-	}
-	if *s.ExitCode != 0 {
-		return s.Result, fmt.Errorf("the update program failed: exit status %d", *s.ExitCode)
 	}
 	return s.Result, nil
 }
@@ -191,9 +220,6 @@ func (c *Command) runIndependent(ctx context.Context, req Request, log *os.File)
 		return Result{}, err
 	}
 	state := workerState{Version: workerVersion, Nonce: hex.EncodeToString(nonce[:]), Path: c.Path, Request: req, StartedAt: time.Now().Unix()}
-	if err := writeWorkerState(log.Name()+".status", state); err != nil {
-		return Result{}, err
-	}
 	if err := writeWorkerState(log.Name()+".request", state); err != nil {
 		return Result{}, err
 	}
@@ -208,6 +234,12 @@ func (c *Command) runIndependent(ctx context.Context, req Request, log *os.File)
 	}
 	defer result.Close()
 	if err := result.Truncate(0); err != nil {
+		return Result{}, err
+	}
+	if err := result.Sync(); err != nil {
+		return Result{}, err
+	}
+	if err := writeWorkerState(log.Name()+".status", state); err != nil {
 		return Result{}, err
 	}
 	ready, readyW, err := os.Pipe()
@@ -241,8 +273,11 @@ func (c *Command) runIndependent(ctx context.Context, req Request, log *os.File)
 		return Result{}, err
 	}
 	var ack [1]byte
-	if _, err := io.ReadFull(ready, ack[:]); err != nil || ack[0] != 1 {
+	if _, err := io.ReadFull(ready, ack[:]); err != nil {
 		return Result{}, fmt.Errorf("the worker did not acknowledge ownership: %w", err)
+	}
+	if ack[0] != 1 {
+		return Result{}, fmt.Errorf("the worker sent invalid ownership acknowledgement %d", ack[0])
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
@@ -319,6 +354,7 @@ func runWorker(logPath string) int {
 			status := cmd.ProcessState.Sys().(syscall.WaitStatus)
 			if status.Signaled() {
 				state.Signal = int(status.Signal())
+				state.CoreDumped = status.CoreDump()
 			} else {
 				exit := status.ExitStatus()
 				state.ExitCode = &exit
