@@ -30,6 +30,7 @@ type workerState struct {
 	Path       string  `json:"path"`
 	Request    Request `json:"request"`
 	StartedAt  int64   `json:"startedAt"`
+	LogGen     int64   `json:"logGen,omitempty"`
 	FinishedAt *int64  `json:"finishedAt,omitempty"`
 	ExitCode   *int    `json:"exitCode,omitempty"`
 	Signal     int     `json:"signal,omitempty"`
@@ -177,6 +178,14 @@ func writeWorkerState(path string, state workerState) error {
 	return dir.Sync()
 }
 
+func publishLogGen(path string) {
+	state, err := readWorkerState(path)
+	if err != nil {
+		return
+	}
+	state.LogGen++
+	_ = writeWorkerState(path, state)
+}
 func (s workerState) outcome() (Result, error) {
 	if s.FinishedAt == nil {
 		return s.Result, errors.New("the worker was interrupted before publishing completion")
@@ -202,6 +211,7 @@ func (s workerState) outcome() (Result, error) {
 	}
 	return s.Result, nil
 }
+
 // Admission owns the operation lock until Close or a successful launch transfers it.
 type Admission struct {
 	lock *os.File
@@ -220,7 +230,7 @@ func (c *Command) Admit(logPath string) (*Admission, error) {
 		return nil, err
 	}
 	a := &Admission{lock: lock}
-	if _, err := readWorkerState(logPath+".status"); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := readWorkerState(logPath + ".status"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		a.Close()
 		return nil, fmt.Errorf("cannot recover worker state: %w", err)
 	}
@@ -318,7 +328,7 @@ func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os
 	case <-ctx.Done():
 		return Result{}, ctx.Err()
 	case waitErr := <-done:
-		terminal, err := readWorkerState(log.Name()+".status")
+		terminal, err := readWorkerState(log.Name() + ".status")
 		if err != nil {
 			return Result{}, fmt.Errorf("the worker completion cannot be read: %w", err)
 		}
@@ -390,6 +400,9 @@ func runWorker(logPath string) int {
 			state.Failure = err.Error()
 		}
 		state.Result, err = readResult(result)
+		if published, readErr := readWorkerState(logPath + ".status"); readErr == nil {
+			state.LogGen = published.LogGen
+		}
 	}
 	if err != nil {
 		state.Failure = err.Error()

@@ -73,9 +73,9 @@ type Gate struct {
 	logPath string
 	run     RunFunc
 	Admit   func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
+	Launch  func(context.Context, *Admission, Request, *os.File) (Result, error)
 	done    func(Request, Result, error)
-
-	admit sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
+	admit   sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
 
 	mu      sync.Mutex // everything below, and the log's truncation
 	status  *Status    // replaced when the Update ends, never changed in place: View hands it out
@@ -112,10 +112,10 @@ func (g *Gate) Start(req Request) error {
 		}
 	}
 	log, err := os.OpenFile(g.logPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o600)
-	if lease != nil {
-		lease.Close() // shortcut: Run takes its own lease; the admit mutex still blocks a second Gate start
-	}
 	if err != nil {
+		if lease != nil {
+			lease.Close()
+		}
 		g.admit.Unlock()
 		return fmt.Errorf("the Update log cannot be opened: %w", err)
 	}
@@ -125,14 +125,23 @@ func (g *Gate) Start(req Request) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	g.cancel = cancel
 	g.status = &Status{Trigger: req.Trigger, Scope: req.Scope, Force: req.Force, StartedAt: time.Now().Unix()}
-	go g.execute(ctx, cancel, req, log)
+	go g.execute(ctx, cancel, lease, req, log)
 	return nil
 }
 
-func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Request, log *os.File) {
+func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, lease *Admission, req Request, log *os.File) {
 	bounded := make(chan struct{})
 	go g.boundLog(ctx, log, bounded)
-	res, err := g.run(ctx, req, log)
+	var res Result
+	var err error
+	if g.Launch != nil {
+		res, err = g.Launch(ctx, lease, req, log)
+	} else {
+		res, err = g.run(ctx, req, log)
+	}
+	if lease != nil {
+		lease.Close()
+	}
 	finished := time.Now().Unix()
 	cancel()
 	<-bounded
@@ -221,6 +230,7 @@ func trimLog(log *os.File, size int64) bool {
 	}
 	if log.Truncate(0) == nil {
 		_, _ = log.Write(tail)
+		publishLogGen(log.Name() + ".status")
 		return true
 	}
 	return false
@@ -244,6 +254,9 @@ func (g *Gate) View(after int64, max int) View {
 // next read starts on one. A rune cut at the end of a running Update's log waits for its rest; once it ends, nothing waits.
 func (g *Gate) readLog(cursor int64, limit int, running bool) (string, int64) {
 	gen := g.gen << offsetBits
+	if state, err := readWorkerState(g.logPath + ".status"); err == nil {
+		gen = state.LogGen << offsetBits
+	}
 	var after int64
 	if cursor >= 0 && cursor&^offsetMask == gen {
 		after = cursor & offsetMask

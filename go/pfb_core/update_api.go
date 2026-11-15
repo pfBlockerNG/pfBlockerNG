@@ -27,9 +27,17 @@ func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(s
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
 		Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
 	command := &update.Command{Path: path}
-	gate := update.New(filepath.Join(stateDir, "update.log"), refreshingRun(st, command.Run, logf), sched.Done)
+	gate := update.New(filepath.Join(stateDir, "update.log"), nil, sched.Done)
 	gate.Admit = command.Admit
-	sched.Bind(gate.Start)
+	var broken atomic.Bool
+	gate.Launch = func(ctx context.Context, lease *update.Admission, req update.Request, log *os.File) (update.Result, error) {
+		if _, err := st.Reload(ctx); err != nil && ctx.Err() == nil && broken.CompareAndSwap(false, true) {
+			logf("the settings could not be read again before the Update, the values read last are used: %v", err)
+		} else if err == nil {
+			broken.Store(false)
+		}
+		return lease.Launch(ctx, command, req, log)
+	}
 	return sched, gate
 }
 
