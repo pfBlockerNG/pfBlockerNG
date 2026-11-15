@@ -90,13 +90,7 @@ function start_core(string $binary, string $dir): mixed {
 		'--update-cmd', "$dir/update.sh", '--allow-uid', '0'],
 		[0 => ['file', '/dev/null', 'r'], 1 => ['file', "$dir/core.log", 'a'], 2 => ['file', "$dir/core.log", 'a']], $pipes);
 	demand(is_resource($core), 'private Core spawn failed');
-	try {
-		until(static fn() => api($dir, 'GetVersion')[0] === 200, 'private Core API readiness', 30);
-		return $core;
-	} catch (Throwable $error) {
-		stop_core($core);
-		throw $error;
-	}
+	return $core;
 }
 
 function stop_core(mixed &$core): void {
@@ -131,8 +125,7 @@ function update_mode(string $dir): void {
 		]]]]]]]];
 
 		pfb_run_hooks('pre', ['TRIGGER' => (string) ($request['trigger'] ?? 'apply')]);
-		echo "NORMAL_PROGRESS_AFTER_HOOK\n";
-		fflush(STDOUT);
+		pfb_logger("NORMAL_PROGRESS_AFTER_HOOK\n", 1);
 		$status = pfb_list_script_exec("$dir/scripts/list_post_native.sh", 'list_post_native.sh', 'post',
 			'NATIVE', '', NULL);
 		demand($status === 0, "list executor status={$status}");
@@ -185,6 +178,7 @@ function control_mode(string $self, string $binary, string $dir): void {
 			'cannot create private Update command');
 
 		$core = start_core($binary, $dir);
+		until(static fn() => api($dir, 'GetVersion')[0] === 200, 'private Core API readiness', 30);
 		[$status, , $error] = api($dir, 'InitializeSettings', ['requestId' => 'native-init', 'settings' => (object) []]);
 		demand($status === 200, "InitializeSettings status={$status} error={$error}");
 		[$status, , $error] = api($dir, 'StartUpdate', ['requestId' => bin2hex(random_bytes(16)), 'trigger' => 'apply']);
@@ -200,7 +194,9 @@ function control_mode(string $self, string $binary, string $dir): void {
 		}, 'global hook entry and live Update', 45);
 		$startCursor = (string) ($initial['next'] ?? '');
 		demand(ctype_digit($startCursor), 'GetUpdate did not return the starting cursor');
-		demand(($initial['log'] ?? '') === '', 'unexpected output before the hook barrier: ' . digest((string) ($initial['log'] ?? '')));
+		demand(str_contains((string) ($initial['log'] ?? ''),
+			'[ pfB Hook ] pre native output cap (hook_pre_native.sh, timeout 120s)'),
+			'GetUpdate did not expose the real global-hook header: ' . digest((string) ($initial['log'] ?? '')));
 
 		demand(file_put_contents("$dir/write.output", "go\n") !== FALSE, 'cannot release output writer');
 		until(static fn() => is_file("$dir/hook.ready"), 'global hook wrote both output streams', 45);
@@ -236,7 +232,11 @@ function control_mode(string $self, string $binary, string $dir): void {
 		$main = file_get_contents($mainPath);
 		demand(is_string($main), 'private main log cannot be read');
 		$mainMatches = substr_count($main, $combined);
-		demand($mainMatches === 1, 'private main log did not contain the full hook output exactly once: matches=' . $mainMatches);
+		$progressMatches = substr_count($main, "NORMAL_PROGRESS_AFTER_HOOK\n");
+		$listMatches = substr_count($main, "SECOND_SCRIPT_VISIBLE\n");
+		demand($mainMatches === 1, 'private main log did not contain full hook output exactly once: matches=' . $mainMatches);
+		demand($progressMatches === 1, 'private main log did not contain ordinary progress exactly once: matches=' . $progressMatches);
+		demand($listMatches === 1, 'private main log did not contain second-script output exactly once: matches=' . $listMatches);
 		demand(strlen($combined) > VIEWER_LIMIT, 'main-log check did not cross the viewer boundary');
 
 		$rotated = "$dir/main.log.rotated";
@@ -247,19 +247,36 @@ function control_mode(string $self, string $binary, string $dir): void {
 		printf("NATIVE_SCRIPT_OUTPUT_CAP_PASS live=%s transcript=%s main=%s result=%s\n",
 			digest($viewerA), digest($transcriptA), digest($combined), $completed['update']['result']);
 	} finally {
-		file_put_contents("$dir/write.output", "cleanup\n");
-		file_put_contents("$dir/release", "cleanup\n");
-		if (is_resource($core)) {
-			if ($started) {
-				try {
-					until(static function () use ($dir): bool {
-						[$status, $body] = api($dir, 'GetUpdate');
-						return is_file("$dir/update.finished") || ($status === 200 && is_array($body) && !($body['running'] ?? TRUE));
-					}, 'Update cleanup completion', 30);
-				} catch (Throwable) {
-				}
+		$cleanupErrors = [];
+		if (file_put_contents("$dir/write.output", "cleanup\n") === FALSE) {
+			$cleanupErrors[] = 'cannot release output writer';
+		}
+		if (file_put_contents("$dir/release", "cleanup\n") === FALSE) {
+			$cleanupErrors[] = 'cannot release global hook';
+		}
+		if ($started) {
+			try {
+				until(static function () use ($dir): array|false {
+					[$status, $body] = api($dir, 'GetUpdate');
+					return $status === 200 && is_array($body) && ($body['running'] ?? TRUE) === FALSE &&
+						is_array($body['update'] ?? NULL) && isset($body['update']['finishedAt']) ? $body : FALSE;
+				}, 'Update worker completion and lease release', 90);
+			} catch (Throwable $error) {
+				$cleanupErrors[] = 'Update worker completion: ' . $error->getMessage();
 			}
-			stop_core($core);
+		}
+		if (is_resource($core)) {
+			try {
+				stop_core($core);
+			} catch (Throwable $error) {
+				$cleanupErrors[] = 'private Core shutdown: ' . $error->getMessage();
+			}
+		}
+		if ($cleanupErrors === [] && file_put_contents("$dir/cleanup.safe", "safe\n") === FALSE) {
+			$cleanupErrors[] = 'cannot mark the private directory safe to remove';
+		}
+		if ($cleanupErrors !== []) {
+			throw new RuntimeException('cleanup incomplete; private directory must be retained: ' . implode('; ', $cleanupErrors));
 		}
 	}
 }

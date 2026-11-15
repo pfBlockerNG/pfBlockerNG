@@ -75,5 +75,9 @@ def test_private_core_shows_live_php_script_output_cap(smoke_vm: SmokeVM) -> Non
         assert run.returncode == 0, f"native PHP output-cap proof failed:\n{diagnostics}"
         assert run.stdout.startswith("NATIVE_SCRIPT_OUTPUT_CAP_PASS "), diagnostics
     finally:
+        cleanup_safe = smoke_vm.ssh(f"test -f {directory}/cleanup.safe", timeout=30)
+        assert cleanup_safe.returncode == 0, (
+            f"private Core worker completion/lease release was not proven; retained {directory}: {cleanup_safe.stderr}"
+        )
         cleanup = smoke_vm.ssh(f"rm -rf {directory}", timeout=30)
         assert cleanup.returncode == 0, cleanup.stderr
