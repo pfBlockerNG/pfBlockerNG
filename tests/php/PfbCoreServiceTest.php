@@ -473,6 +473,20 @@ final class PfbCoreServiceTest extends TestCase
 		$this->assertSame(['1001', '1002'], $this->livePids());
 	}
 
+	public function testStopNeverSignalsAnIndependentUpdateWorkerNamedByAStaleChildPidfile(): void
+	{
+		$this->install('freebsd-amd64');
+		$worker = "{$this->dir}/core/bin/freebsd-amd64/pfb-core --update-worker {$this->dir}/db/pfb_core/update.log";
+		$this->arrange('amd64', running: TRUE, childArgs: $worker);
+		file_put_contents("{$this->dir}/state/procs", "1001|/usr/sbin/cron|\n1002|{$worker}|\n");
+
+		[$status, $out] = $this->rc('stop');
+
+		$this->assertSame(0, $status, $out);
+		$this->assertSame([], $this->lines('events'), 'a stale controller pidfile signalled the independent worker');
+		$this->assertSame(['1001', '1002'], $this->livePids());
+	}
+
 	public function testStartRunsItselfUnderTheStartLockAndTheLockedRunTakesNoSecondLock(): void
 	{
 		// Given pfb-core is installed and nothing runs

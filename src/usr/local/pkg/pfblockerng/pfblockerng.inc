@@ -4603,7 +4603,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	// pgrep/pkill -f patterns (extended regular expressions): the supervisor, by daemon(8)'s title or, until it is set, by its own command
 	// line; and pfb-core as daemon(8) runs it
 	$supervisor = escapeshellarg('^(daemon: pfb_core\[|/usr/sbin/daemon .*-t pfb_core )');
-	$child = escapeshellarg('^' . str_replace('.', '\.', $coreDir) . '/bin/freebsd-[a-z0-9]+/pfb-core( |$)');
+	$child = escapeshellarg('^' . str_replace('.', '\.', $coreDir) . '/bin/freebsd-[a-z0-9]+/pfb-core --socket( |$)');
 
 	// issue #3924: Core keeps no settings store any more (config.xml is the store); the earlier model's files go
 	foreach (['settings.json', 'settings.json.tmp', 'settings.lock'] as $retired) {
@@ -10612,6 +10612,259 @@ function pfb_logger($log, $logtype) {
  * update pass. No die()/exit() here (library code).
  */
 
+
+/**
+ * Sanitize one bounded script-output read and emit complete safe text units.
+ *
+ * Nonfinal reads consume only complete units while at least four bytes remain. The actual
+ * unconsumed suffix is carried into the next read; final direct-runner drain escapes any
+ * incomplete UTF-8 bytes individually.
+ *
+ * @param callable(string, int, bool): void $emit text, displayed character count, atomic token
+ */
+function pfb_script_output_sanitize_chunk(string $chunk, string &$carry, bool $final, callable $emit): void {
+	$data = $carry . $chunk;
+	$carry = '';
+	$length = strlen($data);
+	$offset = 0;
+	$ascii_pattern = $final
+		? '/\G[\x20-\x7E\t\n]+/'
+		: '/\G[\x20-\x7E\t\n]+(?=[\s\S]{3})/s';
+
+	while ($offset < $length && ($final || $length - $offset >= 4)) {
+		if (preg_match($ascii_pattern, $data, $match, 0, $offset) === 1) {
+			$text = $match[0];
+			$characters = strlen($text);
+			$emit($text, $characters, FALSE);
+			$offset += $characters;
+			continue;
+		}
+
+		$window = substr($data, $offset, min(4, $length - $offset));
+		$units = mb_str_split($window, 1, 'UTF-8');
+		$unit = $units[0] ?? '';
+		if ($unit === '' || !mb_check_encoding($unit, 'UTF-8')) {
+			$text = sprintf('\\x%02X', ord($data[$offset]));
+			$emit($text, strlen($text), TRUE);
+			$offset++;
+			continue;
+		}
+
+		$codepoint = mb_ord($unit, 'UTF-8');
+		if ($codepoint === FALSE) {
+			$text = sprintf('\\x%02X', ord($data[$offset]));
+			$emit($text, strlen($text), TRUE);
+			$offset++;
+			continue;
+		}
+		if ($codepoint < 0x80) {
+			$text = sprintf('\\x%02X', $codepoint);
+			$characters = strlen($text);
+		} else {
+			$category = IntlChar::charType($codepoint);
+			if ($category === IntlChar::CHAR_CATEGORY_CONTROL_CHAR
+			    || $category === IntlChar::CHAR_CATEGORY_FORMAT_CHAR) {
+				$text = sprintf('\\u{%X}', $codepoint);
+				$characters = strlen($text);
+			} else {
+				$text = $unit;
+				$characters = 1;
+			}
+		}
+		$emit($text, $characters, TRUE);
+		$offset += strlen($unit);
+	}
+
+	if (!$final && $offset < $length) {
+		$carry = substr($data, $offset);
+	}
+}
+
+/*
+ * Run one script with regular-file stdout/stderr. Sanitize captured UTF-8 once, append the complete
+ * safe text to the main log and a character-limited prefix to a distinct viewer. The direct runner's
+ * exit is the cutoff: descendants may keep the capture fd, so drain only the size observed at exit
+ * and never wait for EOF.
+ */
+function pfb_script_output_exec(string $command, bool $mirror_stdout = FALSE): int {
+	global $pfb;
+
+	$main_log = (string) ($pfb['log'] ?? '');
+	$viewer_log = pfb_run_log_target();
+	if ($viewer_log === $main_log) {
+		$viewer_log = '';
+	}
+	$temp_dir = realpath(sys_get_temp_dir());
+	if ($temp_dir === FALSE) {
+		return -1;
+	}
+	$capture = @tempnam($temp_dir, 'pfb-script-output-');
+	if ($capture === FALSE || dirname($capture) !== $temp_dir) {
+		if (is_string($capture)) {
+			@unlink($capture);
+		}
+		return -1;
+	}
+	$reader = @fopen($capture, 'rb');
+	if ($reader === FALSE) {
+		@unlink($capture);
+		return -1;
+	}
+	$descriptors = array(
+		0 => array('file', '/dev/null', 'r'),
+		1 => array('file', $capture, 'a'),
+		2 => array('file', $capture, 'a'),
+	);
+	$pipes = array();
+	$proc = @proc_open($command, $descriptors, $pipes);
+	if (!is_resource($proc)) {
+		@fclose($reader);
+		@unlink($capture);
+		return -1;
+	}
+
+	$append = static function (string $path, string $data): bool {
+		$file = @fopen($path, 'ab');
+		if ($file === FALSE) {
+			return FALSE;
+		}
+		$length = strlen($data);
+		$offset = 0;
+		$ok = TRUE;
+		while ($offset < $length) {
+			$written = @fwrite($file, substr($data, $offset));
+			if ($written === FALSE || $written === 0) {
+				$ok = FALSE;
+				break;
+			}
+			$offset += $written;
+		}
+		if (!@fflush($file)) {
+			$ok = FALSE;
+		}
+		if (!@fclose($file)) {
+			$ok = FALSE;
+		}
+		return $ok && $offset === $length;
+	};
+	$report_write_failure = static function (string $sink): void {
+		pfb_logger("[ pfB Script Output ] Failed to write script output to {$sink}; child status is preserved\n", 6);
+	};
+	$main_failed = $viewer_failed = $capture_failed = FALSE;
+	$report_capture_failure = static function () use (&$capture_failed): void {
+		if (!$capture_failed) {
+			$capture_failed = TRUE;
+			pfb_logger("[ pfB Script Output ] Failed to read script output capture; child status is preserved\n", 6);
+		}
+	};
+	$offset = 0;
+	$utf8_carry = '';
+	$viewer_characters = 0;
+	$notice_written = FALSE;
+	$drain = static function (int $end, bool $final = FALSE) use (&$offset, &$utf8_carry, &$viewer_characters,
+	    &$notice_written, &$main_failed, &$viewer_failed, $reader, $main_log, $viewer_log, $mirror_stdout,
+	    $append, $report_write_failure, $report_capture_failure): void {
+		$main_buffer = '';
+		$viewer_buffer = '';
+		$stdout_buffer = '';
+		$notice = "\n[ pfBlockerNG ] Script output limit (1,000,000 characters) reached; remaining output is in the main log.\n";
+		$emit = static function (string $text, int $characters, bool $atomic) use (
+		    &$main_buffer, &$viewer_buffer, &$stdout_buffer, &$viewer_characters, &$notice_written, &$viewer_failed,
+		    $viewer_log, $mirror_stdout, $notice): void {
+			$main_buffer .= $text;
+			if ($mirror_stdout) {
+				$stdout_buffer .= $text;
+			}
+			if ($viewer_log === '' || $viewer_failed || $notice_written) {
+				return;
+			}
+			$remaining = 1_000_000 - $viewer_characters;
+			if ($atomic) {
+				if ($characters <= $remaining) {
+					$viewer_buffer .= $text;
+					$viewer_characters += $characters;
+				} else {
+					$viewer_buffer .= $notice;
+					$notice_written = TRUE;
+				}
+				return;
+			}
+
+			$shown = min($characters, $remaining);
+			if ($shown > 0) {
+				$viewer_buffer .= ($shown === $characters) ? $text : substr($text, 0, $shown);
+				$viewer_characters += $shown;
+			}
+			if ($shown < $characters) {
+				$viewer_buffer .= $notice;
+				$notice_written = TRUE;
+			}
+		};
+		$flush = static function () use (&$main_buffer, &$viewer_buffer, &$stdout_buffer, &$main_failed,
+		    &$viewer_failed, $main_log, $viewer_log, $mirror_stdout, $append, $report_write_failure): void {
+			if ($mirror_stdout && $stdout_buffer !== '') {
+				print $stdout_buffer;
+				pfb_stdout_mid_line($stdout_buffer);
+			}
+			if (!$main_failed && $main_buffer !== '' && !$append($main_log, $main_buffer)) {
+				$main_failed = TRUE;
+				$report_write_failure('main log');
+			}
+			if ($viewer_log !== '' && !$viewer_failed && $viewer_buffer !== '' && !$append($viewer_log, $viewer_buffer)) {
+				$viewer_failed = TRUE;
+				$report_write_failure('viewer');
+			}
+			$main_buffer = '';
+			$viewer_buffer = '';
+			$stdout_buffer = '';
+		};
+
+		while ($offset < $end) {
+			$chunk = @fread($reader, min(8192, $end - $offset));
+			if ($chunk === FALSE || $chunk === '') {
+				$report_capture_failure();
+				break;
+			}
+			$length = strlen($chunk);
+			pfb_script_output_sanitize_chunk($chunk, $utf8_carry, FALSE, $emit);
+			$offset += $length;
+			$flush();
+		}
+		if ($final) {
+			pfb_script_output_sanitize_chunk('', $utf8_carry, TRUE, $emit);
+		}
+		$flush();
+	};
+
+	$retval = -1;
+	while (TRUE) {
+		$status = proc_get_status($proc);
+		clearstatcache(TRUE, $capture);
+		$size = @filesize($capture);
+		if (!$status['running']) {
+			$retval = (int) $status['exitcode'];
+			if ($size === FALSE) {
+				$report_capture_failure();
+				$drain($offset, TRUE);
+			} else {
+				$drain((int) $size, TRUE);
+			}
+			break;
+		}
+		if ($size === FALSE) {
+			$report_capture_failure();
+		} else {
+			$drain((int) $size);
+		}
+		usleep(200000);
+	}
+	@proc_close($proc);
+	@fclose($reader);
+	@unlink($capture);
+	return $retval;
+}
+
+
 /*
  * issue #1927: run a per-feed list pre/post transform script and HONOUR its exit
  * status — a failed transform's leftovers are not feed data; the caller decides
@@ -10619,8 +10872,7 @@ function pfb_logger($log, $logtype) {
  * the error log, naming the stage, script, and feed. timeout(1) stays in default
  * (reaper) mode on purpose: a hung transform pipeline must die as a whole tree
  * (docs/misc/external-process-waits.md "Choosing the mode"). $tmo_prefix is
- * injectable for off-appliance tests. $args_tail (pre-escaped args + the log
- * redirect) is appended verbatim.
+ * injectable for off-appliance tests. $args_tail contains pre-escaped script args only.
  */
 function pfb_list_script_exec(string $script_path, string $script_name, string $stage,
     string $header, string $args_tail, ?string $tmo_prefix = NULL): int {
@@ -10629,14 +10881,7 @@ function pfb_list_script_exec(string $script_path, string $script_name, string $
 		$tmo_prefix = '/usr/bin/timeout -s TERM -k ' . PFB_HOOK_KILL_GRACE . ' ' . PFB_LIST_SCRIPT_TIMEOUT . ' ';
 	}
 
-	$discard = array();
-	$retval  = 0;
-	if (exec("{$tmo_prefix}" . escapeshellarg($script_path) . " {$args_tail}", $discard, $retval) === FALSE &&
-	    $retval === 0) {
-		// exec() itself failed to launch (fork/pipe): a script that never ran
-		// must never read as success.
-		$retval = -1;
-	}
+	$retval = pfb_script_output_exec("{$tmo_prefix}" . escapeshellarg($script_path) . " {$args_tail}");
 
 	if ($retval === 124) {
 		// No duration in the message: the budget lives inside $tmo_prefix, so a
@@ -12386,67 +12631,6 @@ function pfb_pkg_op_tears_down(string $op): bool {
 
 
 /*
- * #693 (follow-up to #690): mirror a completed hook's captured stdout/stderr to the
- * package-manager output during a pkg install/upgrade/uninstall.
- *
- * pfb_run_hooks() redirects each hook's stdout+stderr to a LOG FILE, never a pipe, so a hook that
- * (re)starts a daemon -- e.g. the documented HAProxy graceful reload -- cannot hold exec()'s
- * capture pipe open and hang the pass (#662). The cost: the hook's own output then lands only in
- * that file, so pfSense's Software page (which shows only STDOUT) frames the hook with its
- * "[ pfB Hook ] ..." markers but shows an empty body. While a lifecycle callback is active
- * ($pfb['hook_lifecycle'], set by the install command / pre-deinstall), print exactly the bytes
- * the hook just appended ($logfile from $offset to EOF) so the page shows what it did.
- *
- * The bytes are ALREADY in the log file (the shell append), so this only prints -- it never
- * re-logs. Reading a regular file cannot hang: a lingering daemon holds a harmless file fd, not
- * this reader. No-op outside a lifecycle callback (a normal cron/manual/Run-Now pass already
- * streams the hook body to the per-run log the Update-page tail reads).
- */
-function pfb_mirror_hook_output(string $logfile, int $offset): void {
-	global $pfb;
-
-	if (empty($pfb['hook_lifecycle']) || $logfile === '') {
-		return;
-	}
-	clearstatcache(TRUE, $logfile);
-	$end = @filesize($logfile);
-	if ($end === FALSE || $end <= $offset) {
-		return;
-	}
-	$body = @file_get_contents($logfile, FALSE, NULL, $offset, $end - $offset);
-	if (is_string($body) && $body !== '') {
-		print $body;
-		// issue #3216: raw hook output -- a hook whose last line is unterminated leaves the
-		// console mid-line, so the boundary must know about these bytes too.
-		pfb_stdout_mid_line($body);
-	}
-}
-
-
-/*
- * issue #973: restores ADR-12's persistence promise for the normal cron/manual/Run-Now pass --
- * copies the delta a hook wrote to runlog back into $pfb['log']. No-op when $logfile IS
- * $pfb['log'] already (outside a run) -- else this would duplicate its own tail into itself.
- */
-function pfb_persist_hook_output(string $logfile, int $offset): void {
-	global $pfb;
-
-	if ($logfile === '' || $logfile === $pfb['log']) {
-		return;
-	}
-	clearstatcache(TRUE, $logfile);
-	$end = @filesize($logfile);
-	if ($end === FALSE || $end <= $offset) {
-		return;
-	}
-	$body = @file_get_contents($logfile, FALSE, NULL, $offset, $end - $offset);
-	if (is_string($body) && $body !== '') {
-		@file_put_contents($pfb['log'], $body, FILE_APPEND);
-	}
-}
-
-
-/*
  * Run every enabled hook matching $when, in list order, as root.
  *
  * $ctx is a flat name => value map exported to each hook as PFB_* environment
@@ -12531,128 +12715,11 @@ function pfb_run_hooks($when, $ctx = array()) {
 		$header = "\n[ pfB Hook ] {$when} {$label} ({$script}, timeout {$timeout}s)\n";
 		pfb_logger($header, 1);
 
-		// Run the vetted script as root under timeout(1): SIGTERM at $timeout,
-		// SIGKILL after the grace period. The PFB_* context rides the env prefix
-		// (the script reads it from the environment). Shell scripts run via their own
-		// shebang + execute bit; Python scripts use the package wrapper.
-		//
-		// Two independent reasons a hook that (re)starts a daemon -- e.g. the documented
-		// HAProxy graceful-reload recipe -- would otherwise hang the WHOLE pass for the
-		// timeout budget and then falsely report TIMED OUT, though the hook's own work
-		// finished in milliseconds:
-		//
-		//   1. timeout(1) (FreeBSD, default mode) acquires a process REAPER
-		//      (procctl PROC_REAP_ACQUIRE) and does NOT exit when its direct child exits
-		//      -- it waits until EVERY descendant is gone (reap rs_children == 0), then on
-		//      the alarm signals the whole reaped tree. A daemon the hook spawned keeps it
-		//      waiting, so the budget elapses and the SIGTERM would even kill the
-		//      just-reloaded daemon. --foreground disables the reaper: timeout exits as
-		//      soon as the DIRECT hook process exits (a genuine overrun is still SIGTERM'd,
-		//      kill(child)), leaving any daemon reparented to init.
-		//   2. A spawned daemon inherits the hook's stdout/stderr. If those are exec()'s
-		//      capture pipe, exec() never reads EOF while the daemon lives. Redirecting to a
-		//      regular FILE (the pfB log, held harmlessly by the daemon) + stdin from /dev/null
-		//      decouples exec() from the daemon.
-		//
-		// Together, completion depends ONLY on the hook process exiting.
-		//
-		// Append straight to a REGULAR FILE (not a temp file flushed after exec(), and never a
-		// pipe/tee -- reason #2 above: a pipe the hook's spawned daemon inherits would hang exec()
-		// on missing EOF). During a run this is the per-run log the live tail reads ($pfb['runlog'],
-		// with pfb_logger() mirroring into the same file, so the hook's output and the surrounding
-		// "[ pfB Hook ] ..." markers interleave and stream AS the hook runs); outside a run it falls
-		// back to the cumulative log. (A rare lingering daemon could append a stray line later --
-		// cosmetic.)
-		$logtarget = pfb_run_log_target();
-		$logf = escapeshellarg($logtarget);
-		$cmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE .
-			" {$timeout} {$hookcmd} >> {$logf} 2>&1 < /dev/null";
-
-		// #693: the hook's own stdout/stderr goes to the log FILE above (never a pipe -- a hook
-		// that restarts a daemon would otherwise hang exec(), #662), so on the pkg Software page
-		// only the surrounding pfb_logger() markers show and the hook body is invisible. Record
-		// where the log ends BEFORE the hook runs so we can mirror exactly what it appends.
-		clearstatcache(TRUE, $logtarget);
-		$hook_log_offset = (int) (@filesize($logtarget) ?: 0);
-
-		$discard = array();
-		$retval  = 0;
-
-		if (empty($pfb['hook_lifecycle'])) {
-			// Normal cron/manual/Run-Now pass: unchanged synchronous exec(). The Update page's own
-			// AJAX tail already streams $logtarget (the per-run log) live, so no extra STREAMING
-			// mirror is needed here -- issue #973's pfb_persist_hook_output() below only persists.
-			exec($cmd, $discard, $retval);
-			pfb_persist_hook_output($logtarget, $hook_log_offset);
-		} else {
-			// pkg install/upgrade/uninstall (lifecycle callback): STREAM the hook's own output to
-			// the pkg Software page AS it runs, instead of one block after it exits.
-			// pfb_mirror_hook_output() (below) only closed the "arrives at all" gap (#693); this
-			// closes "arrives live". proc_open() runs the hook as a DIRECT child with its
-			// stdout/stderr pointed at the log FILE via the descriptor spec -- never a pipe back to
-			// PHP, so a hook that restarts a daemon inheriting fd 1 still can't hang us (#662), the
-			// daemon just holds a harmless file fd. We track the child with proc_get_status() (no
-			// daemon(8)/pidfile needed) and tail the file to stdout while it runs; the exit code
-			// (124 on timeout, else the hook's own) comes straight off the status.
-			$descriptors = array(
-				0 => array('file', '/dev/null', 'r'),
-				1 => array('file', $logtarget, 'a'),
-				2 => array('file', $logtarget, 'a'),
-			);
-			$proccmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " .
-				PFB_HOOK_KILL_GRACE . " {$timeout} {$hookcmd}";
-			$pipes = array();
-			$proc  = @proc_open($proccmd, $descriptors, $pipes);
-
-			if (!is_resource($proc)) {
-				// proc_open unavailable/failed -- never lose the hook run: fall back to the exact
-				// synchronous path, then mirror the captured body once.
-				exec($cmd, $discard, $retval);
-				pfb_mirror_hook_output($logtarget, $hook_log_offset);
-			} else {
-				// Tail the delta while the hook is alive, then drain the trailing partial line.
-				// The loop is bounded so a wedged status can't spin forever -- timeout(1) already
-				// kills the hook at $timeout + PFB_HOOK_KILL_GRACE, so a healthy child always reports
-				// exit well inside the cap; exhausting it means the child never reported dead.
-				$off     = $hook_log_offset;
-				$maxiter = (int) ceil(($timeout + PFB_HOOK_KILL_GRACE + 10) / 0.2);
-				$exited  = FALSE;
-				for ($i = 0; $i < $maxiter; $i++) {
-					$chunk = pfb_log_tail_chunk($logtarget, $off, FALSE);
-					if ($chunk['data'] !== '') {
-						print $chunk['data'];
-						pfb_stdout_mid_line($chunk['data']);	// issue #3216
-					}
-					$off = $chunk['offset'];
-					$st  = proc_get_status($proc);
-					if (!$st['running']) {
-						// First not-running read carries the real exit code (later reads/close give -1).
-						$retval = (int) $st['exitcode'];
-						$exited = TRUE;
-						break;
-					}
-					usleep(200000);
-				}
-				$chunk = pfb_log_tail_chunk($logtarget, $off, TRUE);
-				if ($chunk['data'] !== '') {
-					print $chunk['data'];
-					pfb_stdout_mid_line($chunk['data']);	// issue #3216
-				}
-				if (!$exited) {
-					// Cap exhausted with the child still "running" -- a pathologically wedged process.
-					// Don't let proc_close() block on it, and don't mis-log success: kill it and mark
-					// the status unknown (-1) so the branch below logs a failure, not "completed".
-					@proc_terminate($proc, 9);
-					$retval = -1;
-				}
-				proc_close($proc);
-			}
-
-			// issue #988: this branch streams to $logtarget same as the normal pass does --
-			// persist its delta into $pfb['log'] too (covers both the proc_open and the
-			// exec() fallback sub-paths above; no-op outside a run).
-			pfb_persist_hook_output($logtarget, $hook_log_offset);
-		}
+		// --foreground lets a restarted daemon outlive the hook; the regular-file capture keeps
+		// an inherited stdout/stderr descriptor from holding this pass open.
+		$proccmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " .
+			PFB_HOOK_KILL_GRACE . " {$timeout} {$hookcmd}";
+		$retval = pfb_script_output_exec($proccmd, !empty($pfb['hook_lifecycle']));
 
 		if ($retval === 124) {
 			pfb_logger("[ pfB Hook ] {$when} {$label} TIMED OUT after {$timeout}s (killed); continuing\n", 2);
@@ -28362,54 +28429,6 @@ function pfb_js_string(string $text): string {
 }
 
 
-// Read the next slice of a live log file, starting at byte $offset.
-// Returns ['data' => <new text>, 'offset' => <next byte offset to request>]. Whole lines only
-// by default — a trailing partial line is held back ($offset advances only past the last
-// newline) so a multibyte UTF-8 char is never split across two polls; pass $flush = TRUE on the
-// FINAL read to emit the trailing partial line too. $offset is a RAW byte position (the
-// returned data has CR stripped for display only, so the count is computed BEFORE stripping).
-// $offset past EOF (file truncated/rotated) resets to 0 so the tail re-reads from the new start.
-function pfb_log_tail_chunk(string $file, int $offset, bool $flush = FALSE): array {
-	clearstatcache(FALSE, $file);
-	$len = @filesize($file);
-	if ($len === FALSE) {
-		return ['data' => '', 'offset' => 0];	// no file yet
-	}
-	if ($offset < 0 || $offset > $len) {
-		$offset = 0;				// truncated/rotated -> restart
-	}
-	if ($offset === $len) {
-		return ['data' => '', 'offset' => $len];	// nothing new
-	}
-
-	$f = @fopen($file, 'rb');
-	if ($f === FALSE) {
-		return ['data' => '', 'offset' => $offset];
-	}
-	@fseek($f, $offset);
-	$raw = '';
-	while (!feof($f)) {
-		$buf = @fread($f, 8192);
-		if ($buf === FALSE) {
-			break;
-		}
-		$raw .= $buf;
-	}
-	@fclose($f);
-
-	if (!$flush) {
-		// Emit up to the last complete line; hold the trailing partial for the next poll.
-		$nl = strrpos($raw, "\n");
-		if ($nl === FALSE) {
-			return ['data' => '', 'offset' => $offset];
-		}
-		$raw = substr($raw, 0, $nl + 1);
-	}
-
-	return ['data' => str_replace("\r", '', $raw), 'offset' => $offset + strlen($raw)];
-}
-
-
 // Open the per-run log window for the live viewer: truncate the run log once and turn on the
 // pfb_logger() mirror (runlog_active). Guarded so the OUTERMOST entry point wins -- when
 // pfblockerng_sync_cron() (Force Check / cron tick) begins the window and later calls
@@ -28425,10 +28444,9 @@ function pfb_runlog_begin() {
 }
 
 
-// The regular file a run's raw output (dispatched-process stdout, hook-script output) should be
-// appended to: the per-run log WHILE a run is active (so the live tail streams it, interleaved
-// with pfb_logger()'s mirror), else the cumulative log. Never a pipe -- a hook's spawned daemon
-// inheriting a pipe would hang exec() on missing EOF (see pfb_run_hooks).
+// The regular file for raw script output that the live viewer reads: the per-run log while a
+// run is active, else the cumulative log. pfb_script_output_exec also appends captured bytes to
+// the main log when this target is distinct.
 function pfb_run_log_target(): string {
 	global $pfb;
 	// issue #3941: during an Update Core runs, Core's progress log (update.log, its STDOUT, opened O_APPEND): a hook's output lands in it

@@ -1,17 +1,9 @@
-"""ADR-12 / #693 — a hook's output must STREAM to the GUI while the hook runs, not
-appear as one block only after it exits.
+"""ADR-12 / #693 — hook output streams to the GUI while the hook is still running.
 
-``test_lifecycle_hook_visibility`` proves a hook's output ENDS UP in the GUI log; this
-proves it gets there PROGRESSIVELY. Today ``pfb_run_hooks()`` runs the hook to completion
-under a blocking ``exec()`` (its output redirected to a file so a spawned daemon can't hang
-the pass, #662) and only then mirrors the whole delta to stdout (``pfb_mirror_hook_output``)
-— so a slow hook (e.g. a 30 s HAProxy reload printing progress) shows BLANK on the pkg
-Software page the whole time, then dumps everything at the end.
-
-This pins the streaming contract without a browser: install a hook that prints LINE1, then
-BLOCKS on a test-controlled "proceed" file (a signal, not a sleep — deterministic), then
-prints LINE2. While the hook is still blocked, LINE1 must already be visible in the GUI-tailed
-log. RED against the block-behavior (LINE1 absent mid-hook); GREEN once the hook output streams.
+This installs a hook that prints LINE1, then blocks on a test-controlled proceed file, then
+prints LINE2. While the hook remains blocked, LINE1 must already be visible in the GUI log.
+The PHP runner gives stdout and stderr one regular capture file, drains it without waiting for
+inherited-fd EOF, and fans complete output to the main log plus the live viewer allowance.
 """
 
 from __future__ import annotations

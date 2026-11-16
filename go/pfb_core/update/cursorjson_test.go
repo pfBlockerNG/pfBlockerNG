@@ -25,11 +25,11 @@ func TestACursorPastTwoToThe53IsAJSONStringThatRoundTripsExactly(t *testing.T) {
 func TestAGateAtGeneration8192HandsOutACursorPast2To53AsAString(t *testing.T) {
 	g := newGate(t, writes, nil)
 	g.gen = 8192 // 8192<<40 is 2^53: the first generation a float cannot tell its offsets apart in
-	if err := g.Start(Request{Trigger: "some log\n"}); err != nil {
+	if err := g.Start(Request{Trigger: "some log\n"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, g)
-	v := g.View(0, 0)
+	v := mustView(t, g, 0, 0)
 	if v.Log != "some log\n" || v.Next <= 1<<53 {
 		t.Fatalf("View(0) = log %q next %d, want the log and a cursor past 2^53", v.Log, v.Next)
 	}
@@ -45,7 +45,7 @@ func TestAGateAtGeneration8192HandsOutACursorPast2To53AsAString(t *testing.T) {
 	if err != nil || cursor != v.Next {
 		t.Fatalf("next on the wire is %q, want the cursor %d exactly (%v)", s, v.Next, err)
 	}
-	if again := g.View(cursor, 0); again.Log != "" || again.Next != v.Next {
+	if again := mustView(t, g, cursor, 0); again.Log != "" || again.Next != v.Next {
 		t.Errorf("View from the cursor read back off the wire = log %q next %d, want nothing new and %d", again.Log, again.Next, v.Next)
 	}
 }

@@ -1,4 +1,4 @@
-package update
+package process
 
 import (
 	"syscall"

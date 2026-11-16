@@ -658,10 +658,8 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
     per-run log, so the marker is absent — the failing assertion, mirroring the missing live-view
     output.
 
-    Also proves (issue #988): the normal-pass branch's #973 persist call
-    (``pfb_persist_hook_output``) fires exactly ONCE for this hook into the PERSISTED
-    ``pfblockerng.log`` — a stray second call (a wrongly-placed lifecycle-branch persist
-    call sitting outside its own branch) would double the marker count there.
+    Also proves the main-log sink receives each hook byte once. The capture fanout writes
+    output to the main log while draining; there is no post-run persist copy to duplicate.
     """
     token = "stream"
     stream_marker = f"STREAM_{token}_MARK"
@@ -715,7 +713,14 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
             timeout=30.0,
             interval=1.0,
         )
-        assert not h.hook_marker_exists(deployed_vm, release_marker), "release event fired before stream marker"
+        h.wait_until(
+            lambda: (
+                stream_marker in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
+                and done_marker not in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
+            ),
+            timeout=10.0,
+            interval=0.2,
+        )
         runlog_now = deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
         assert stream_marker in runlog_now, (
             f"hook marker {stream_marker!r} did not reach the PER-RUN log while waiting for release "
@@ -734,8 +739,7 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         persisted_delta_done = -1
         try:
             h.wait_no_active_pfb_task(deployed_vm, timeout=40.0)
-            # issue #988: exactly ONE persisted copy per hook run — a duplicate here means
-            # pfb_persist_hook_output() double-fired on the normal-pass branch.
+            # Exactly one main-log copy per hook run; a second fanout route would duplicate it.
             persisted_delta = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker) - persisted_before
             persisted_delta_done = h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker) - persisted_before_done
         finally:
@@ -743,12 +747,12 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
             deployed_vm.ssh("/bin/rm", "-f", emitted_marker, release_marker)
         assert persisted_delta == 1, (
             f"hook marker {stream_marker!r} was persisted into {h.PFB_LOG} {persisted_delta} time(s) "
-            "for one hook run (expected exactly 1 — pfb_persist_hook_output double-fired):\n"
+            "for one hook run (expected exactly 1):\n"
             f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
         )
         assert persisted_delta_done == 1, (
             f"hook marker {done_marker!r} was persisted into {h.PFB_LOG} {persisted_delta_done} time(s) "
-            "for one hook run (expected exactly 1 — pfb_persist_hook_output double-fired):\n"
+            "for one hook run (expected exactly 1):\n"
             f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
         )
 

@@ -118,11 +118,19 @@ func (f *fixture) getModel() (schedule.Model, error) {
 	return f.model, f.modelErr
 }
 
-func (f *fixture) start(r update.Request) error {
+func (f *fixture) start(r update.Request, commit func() (map[string]int64, error)) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.attempts = append(f.attempts, r)
-	return f.startErr
+	err := f.startErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if commit == nil {
+		return nil
+	}
+	_, err = commit()
+	return err
 }
 
 func (f *fixture) logf(format string, args ...any) {

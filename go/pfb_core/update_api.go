@@ -17,17 +17,34 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
-// newUpdates builds Core's scheduler and its Update gate for --update-cmd: the program at path runs each Update, after the
-// settings are read again (refreshingRun); an empty path: no scheduler, and both are nil. The scheduler's state and the Update's
-// log live in stateDir. The schedule is read in the zone of the file zoneinfo names (--zoneinfo; empty: the process's local zone).
+// newUpdates builds Core's scheduler and Update gate for --update-cmd: after settings refresh, each admitted Update runs in an
+// independent worker at path. An empty path means no scheduler, and both are nil. Scheduler state, worker receipts and the
+// Update log live in stateDir. The schedule is read in the --zoneinfo zone (empty: the process's local zone).
 func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
 	if path == "" {
 		return nil, nil
 	}
+	logPath := filepath.Join(stateDir, "update.log")
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
-		Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
-	gate := update.New(filepath.Join(stateDir, "update.log"), refreshingRun(st, (&update.Command{Path: path}).Run, logf), sched.Done)
-	sched.Bind(gate.Start)
+		LogPath: logPath, Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
+	command := &update.Command{Path: path}
+	gate := update.New(logPath, nil, sched.Done)
+	gate.Admit = command.Admit
+	sched.Bind(func(req update.Request, commit func() (map[string]int64, error)) error {
+		return gate.Start(req, commit)
+	})
+	if err := sched.Recover(); err != nil && !errors.Is(err, update.ErrRecoveryRequired) {
+		logf("the retained Update could not be reconciled at startup: %v", err)
+	}
+	var broken atomic.Bool
+	gate.Launch = func(ctx context.Context, lease *update.Admission, req update.Request, log *os.File) (update.Result, error) {
+		if _, err := st.Reload(ctx); err != nil && ctx.Err() == nil && broken.CompareAndSwap(false, true) {
+			logf("the settings could not be read again before the Update, the values read last are used: %v", err)
+		} else if err == nil {
+			broken.Store(false)
+		}
+		return lease.Launch(ctx, command, req, log)
+	}
 	return sched, gate
 }
 
@@ -76,8 +93,8 @@ func hostZone(path string, logf func(string, ...any)) func() *time.Location {
 // scheduled Update from starting under it (update_api_test.go).
 var quarterTimer func(time.Duration) <-chan time.Time
 
-// runUpdates starts the quarter-hour loop and returns the function that ends it: it stops the loop, then the Update
-// running, whose program's process group is killed (an Update stopped this way is not resumed). It may be called again.
+// runUpdates starts the quarter-hour loop and returns the function that stops scheduling and Update observation. An admitted
+// worker owns its transaction independently and is not canceled by this controller shutdown. The function may be called again.
 func runUpdates(ctx context.Context, sched *scheduler.Scheduler, gate *update.Gate) (stop func()) {
 	if sched == nil {
 		return func() {}
@@ -154,6 +171,8 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 				return nil, newError(codeConflict, err.Error())
 			case errors.Is(err, update.ErrStopped), errors.Is(err, scheduler.ErrModel):
 				return nil, newError(codeUnavailable, err.Error())
+			case err != nil:
+				return nil, newError(codeUnavailable, err.Error())
 			}
 			return struct{}{}, err
 		}},
@@ -172,7 +191,14 @@ func updateMethods(sched *scheduler.Scheduler, gate *update.Gate) map[string]met
 						fieldError{Field: "after", Message: "must be a string of decimal digits that fits 63 bits"})
 				}
 			}
-			return gate.View(after, 0), nil
+			if err := sched.Recover(); err != nil {
+				return nil, newError(codeUnavailable, err.Error())
+			}
+			view, err := gate.View(after, 0)
+			if err != nil {
+				return nil, newError(codeUnavailable, err.Error())
+			}
+			return view, nil
 		}},
 		"GetSchedule": {call: func(_ context.Context, params []byte) (any, error) {
 			if err := decodeParams(params, &struct{}{}); err != nil {

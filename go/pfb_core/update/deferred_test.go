@@ -35,7 +35,7 @@ func TestADeferredUpdateEndsSkippedAndDoneSeesTheDeferral(t *testing.T) {
 	seen := make(chan error, 1)
 	h := newHold()
 	g := newGate(t, h.run, func(_ Request, _ Result, err error) { seen <- err })
-	if err := g.Start(Request{Trigger: "scheduled"}); err != nil {
+	if err := g.Start(Request{Trigger: "scheduled"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.finish(t, fmt.Errorf("the update program deferred: %w", ErrDeferred))
@@ -43,7 +43,7 @@ func TestADeferredUpdateEndsSkippedAndDoneSeesTheDeferral(t *testing.T) {
 		t.Errorf("done was called with %v, want ErrDeferred", err)
 	}
 	settle(t, g)
-	v := g.View(0, 0)
+	v := mustView(t, g, 0, 0)
 	if v.Running || v.Update == nil || v.Update.Result != "skipped" || v.Update.FinishedAt == nil {
 		t.Errorf("View = %s, want a finished Update whose result is skipped", jsonOf(t, v))
 	}

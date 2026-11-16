@@ -3,146 +3,24 @@ package update
 import (
 	"bytes"
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"syscall"
-	"time"
 )
 
 const (
 	protocolVersion = 1
 	maxResult       = 1 << 20 // the bytes of result the program may report
-	defaultCap      = 4 * time.Hour
-	deferredStatus  = 75 // EX_TEMPFAIL: the program chose not to run now (a lock held, the schedule switched off)
+	deferredStatus  = 75      // EX_TEMPFAIL: the program chose not to run now (a lock held, the schedule switched off)
 )
 
-// killGrace is how long the program's whole group has to end on TERM, and again after KILL, before Run goes on. It ends a second
-// (the rc script's poll) before the rc script KILLs Core 5 s after its TERM, so Core's KILL reaches the group first (issue #4003).
-var killGrace = 3 * time.Second
-
-// leaderExited reports whether the program has exited, when the context ends; replaced only by tests.
-var leaderExited = exitedUnreaped
-
-// reap waits for the program and reaps it; replaced only by tests, to hold the window between its exit and its reap open.
-var reap = (*exec.Cmd).Wait
-
-// Command runs the update program at Path once per Update: stdin is {"version":1,<Request>}, stdout and stderr are the log, and
-// fd 3 is the result, lines of {"version":1,"outcomes":{id:"success"|"retry-cap-reached"},"attempted":[ids],"geoipReady":bool};
-// all four are regular files, never pipes (a daemon an Update restarts would hold one open). The program's group gets TERM when
-// ctx ends or Cap (0: 4 hours) passes, and KILL if a member is left after 3 s; a program that has exited leaves its group alone.
-// Core owns the program directly; a re-executed watchdog kills its group if Core dies before committing completion.
+// Command runs the platform Update in an independent worker. Context cancellation stops observation, not a launched
+// settings transaction; downloads and scripts retain their own operation-level bounds.
 type Command struct {
 	Path string
-	Cap  time.Duration
-}
-
-// limit is how long the program may run: Cap, or four hours when Cap is 0.
-func (c *Command) limit() time.Duration { return cmp.Or(c.Cap, defaultCap) }
-
-// Run returns the result the program reported (readResult), with the error of a failed run: a non-zero exit (the result still
-// counts when the program wrote a valid one), a kill, or a result line that is not exactly one object of the shape above. Exit
-// status 75 is not a failure: Run returns ErrDeferred and no result, whatever the program wrote on fd 3.
-func (c *Command) Run(ctx context.Context, req Request, log *os.File) (Result, error) {
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-	body, err := json.Marshal(struct {
-		Version int `json:"version"`
-		Request
-	}{protocolVersion, req})
-	if err != nil {
-		return Result{}, err
-	}
-	dir := filepath.Dir(log.Name())
-	in, rmIn, err := scratch(dir, ".request-*")
-	if err != nil {
-		return Result{}, err
-	}
-	defer rmIn()
-	if _, err = in.Write(body); err == nil {
-		_, err = in.Seek(0, io.SeekStart)
-	}
-	if err != nil {
-		return Result{}, err
-	}
-	fd3, rmResult, err := scratch(dir, ".result-*")
-	if err != nil {
-		return Result{}, err
-	}
-	defer rmResult()
-
-	limit := c.limit()
-	ctx, cancel := context.WithTimeoutCause(ctx, limit, fmt.Errorf("it ran past its %s cap", limit))
-	defer cancel()
-	watcher, err := startWatchdog(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	cmd := exec.Command(c.Path)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
-	cmd.ExtraFiles = []*os.File{fd3}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: watcher.cmd.Process.Pid}
-	select {
-	case <-watcher.exited:
-		_ = watcher.retire(false)
-		return Result{}, errors.New("the update watchdog exited before the program started")
-	default:
-	}
-	if err := ctx.Err(); err != nil {
-		return Result{}, errors.Join(context.Cause(ctx), watcher.retire(false))
-	}
-	if err := cmd.Start(); err != nil {
-		return Result{}, errors.Join(err, watcher.retire(false))
-	}
-	exited, decision := make(chan struct{}), make(chan error, 1)
-	go func() {
-		var cause error
-		select {
-		case <-exited:
-			decision <- nil
-			return
-		case <-ctx.Done():
-			cause = fmt.Errorf("the update program was killed: %w", context.Cause(ctx))
-		case <-watcher.exited:
-			cause = errors.New("the update watchdog exited while the program was running")
-		}
-		if leaderExited(cmd.Process.Pid) || exitedUnreaped(cmd.Process.Pid) {
-			decision <- nil // an exited program's descendants are no longer cancellation's to kill
-			return
-		}
-		group := -watcher.cmd.Process.Pid
-		_ = syscall.Kill(group, syscall.SIGTERM)
-		if !groupGone(group, killGrace) {
-			_ = syscall.Kill(group, syscall.SIGKILL)
-			_ = watcher.reap()
-			groupGone(group, killGrace)
-		}
-		decision <- cause
-	}()
-	err = reap(cmd)
-	close(exited)
-	killed := <-decision
-	watchErr := watcher.retire(killed != nil)
-	switch {
-	case killed != nil:
-		err = killed
-	case isDeferral(err):
-		if watchErr != nil {
-			return Result{}, watchErr
-		}
-		return Result{}, fmt.Errorf("the update program deferred the Update (exit status %d): %w", deferredStatus, ErrDeferred)
-	case err != nil:
-		err = fmt.Errorf("the update program failed: %w", err)
-	}
-	err = cmp.Or(err, watchErr)
-	res, resErr := readResult(fd3)
-	return res, cmp.Or(err, resErr)
 }
 
 // isDeferral reports whether err, from cmd.Wait, is the program's exit with status 75.
@@ -158,18 +36,6 @@ func scratch(dir, pattern string) (*os.File, func(), error) {
 		return nil, nil, err
 	}
 	return f, func() { _ = f.Close(); _ = os.Remove(f.Name()) }, nil
-}
-
-// groupGone reports whether the process group has no member within grace, polling every 10 ms (docs/misc/external-process-waits.md).
-func groupGone(group int, grace time.Duration) bool {
-	for deadline := time.Now().Add(grace); ; time.Sleep(10 * time.Millisecond) {
-		if errors.Is(syscall.Kill(group, 0), syscall.ESRCH) {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-	}
 }
 
 // readResult is what the program wrote to f: nothing, or result lines, each exactly one JSON object of protocol version 1. The

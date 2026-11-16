@@ -1,7 +1,6 @@
 package update
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,10 +12,8 @@ import (
 )
 
 const (
-	defaultMax = 64 << 10    // the bytes of log a View returns when asked for none in particular
-	maxLog     = 8 << 20     // the bytes a running Update's log may hold before it keeps only its newest half (boundLog)
-	logCheck   = time.Second // how often a running Update's log is held to maxLog
-	offsetBits = 40          // a cursor is the Update's generation above the log offset in its low bits
+	defaultMax = 64 << 10 // the bytes of log a View returns when asked for none in particular
+	offsetBits = 40       // a cursor is the Update's generation above the log offset in its low bits
 	offsetMask = 1<<offsetBits - 1
 	genMask    = 1<<(63-offsetBits) - 1
 )
@@ -24,7 +21,8 @@ const (
 var (
 	ErrRunning = errors.New("an Update is running")
 	ErrStopped = errors.New("Core is stopping")
-
+	// ErrRecoveryRequired means a finished worker receipt is not yet in the schedule. The caller records it and retries once.
+	ErrRecoveryRequired = errors.New("an Update result is waiting to be recorded")
 	// ErrDeferred is what a RunFunc returns when the Update chose not to run now (Command.Run: the program's exit status 75): it
 	// is not a failure, and it reported nothing. The gate ends such an Update with the result "skipped".
 	ErrDeferred = errors.New("the Update was deferred")
@@ -70,29 +68,30 @@ type Status struct {
 
 // Gate admits one Update at a time.
 type Gate struct {
-	logPath string
-	run     RunFunc
-	done    func(Request, Result, error)
-
-	admit sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
-
-	mu      sync.Mutex // everything below, and the log's truncation
-	status  *Status    // replaced when the Update ends, never changed in place: View hands it out
-	gen     int64      // bumped by every Start but the first and by every trim of the log: a cursor from before reads from the start
-	cancel  context.CancelFunc
-	stopped bool
+	logPath        string
+	run            RunFunc
+	Admit          func(string) (*Admission, error) // nil only for a Gate whose run does not own a worker
+	Launch         func(context.Context, *Admission, Request, *os.File) (Result, error)
+	done           func(Request, Result, error)
+	admit          sync.Mutex // taken by Start's TryLock and released when the Update ends; nothing ever waits on it but Stop
+	mu             sync.Mutex // everything below
+	status         *Status    // replaced when the Update ends, never changed in place: View hands it out
+	gen            int64      // bumped by every Start but the first: a cursor from an earlier Update reads from the start
+	cancel         context.CancelFunc
+	stopped        bool
+	prepublication bool // this process admitted a worker whose initial status is not published yet
 }
 
-// New returns an idle Gate. Start creates logPath (0600) if it is missing; run executes an Update; done (may be nil) is
-// called with the outcome after run returns and BEFORE the gate is released, so a scheduler can record outcomes before the
-// next Start. Calling Stop from done deadlocks.
+// New returns a Gate with no local admission. A worker-backed Gate observes any retained worker from its durable receipt. Start
+// creates logPath (0600) if missing; run executes a local Update; done (may be nil) is called after run returns and BEFORE the
+// gate is released, so a scheduler can record outcomes before the next Start. Calling Stop from done deadlocks.
 func New(logPath string, run RunFunc, done func(Request, Result, error)) *Gate {
 	return &Gate{logPath: logPath, run: run, done: done}
 }
 
-// Start admits req (TryLock) or returns ErrRunning at once; on admission it truncates the log, records the status
-// (startedAt = time.Now().Unix()) and runs in a goroutine. It also refuses after Stop with ErrStopped.
-func (g *Gate) Start(req Request) error {
+// Start admits req (TryLock) or returns ErrRunning at once. commit, when set, runs once after the
+// admission lease is held and before the worker is released. It also refuses after Stop with ErrStopped.
+func (g *Gate) Start(req Request, commit func() (map[string]int64, error)) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.stopped {
@@ -101,8 +100,56 @@ func (g *Gate) Start(req Request) error {
 	if !g.admit.TryLock() {
 		return ErrRunning
 	}
-	log, err := os.OpenFile(g.logPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o600)
+	var lease *Admission
+	var err error
+	if g.Admit != nil {
+		lease, err = g.Admit(g.logPath)
+		if err != nil {
+			g.admit.Unlock()
+			return err
+		}
+	}
+	if err := salvageUnfinished(g.logPath); err != nil {
+		if lease != nil {
+			lease.Close()
+		}
+		g.admit.Unlock()
+		return err
+	}
+	if receipt, readErr := readWorkerState(g.logPath + ".status"); readErr == nil && receipt.FinishedAt != nil && !receipt.Settled {
+		if lease != nil {
+			lease.Close()
+		}
+		g.admit.Unlock()
+		return ErrRecoveryRequired
+	}
+	if commit != nil {
+		snap, err := commit()
+		if err != nil {
+			if lease != nil {
+				lease.Close()
+			}
+			g.admit.Unlock()
+			return err
+		}
+		if lease != nil {
+			lease.occurrences = snap
+		}
+	}
+	fresh, err := replaceRegular(g.logPath)
 	if err != nil {
+		if lease != nil {
+			lease.Close()
+		}
+		g.admit.Unlock()
+		return fmt.Errorf("the Update log cannot be opened: %w", err)
+	}
+	fresh.Close()
+	log, err := os.OpenFile(g.logPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		if lease != nil {
+			lease.Close()
+		}
 		g.admit.Unlock()
 		return fmt.Errorf("the Update log cannot be opened: %w", err)
 	}
@@ -111,18 +158,32 @@ func (g *Gate) Start(req Request) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	g.cancel = cancel
+	if lease != nil {
+		g.prepublication = true
+		lease.published = func() {
+			g.mu.Lock()
+			g.prepublication = false
+			g.mu.Unlock()
+		}
+	}
 	g.status = &Status{Trigger: req.Trigger, Scope: req.Scope, Force: req.Force, StartedAt: time.Now().Unix()}
-	go g.execute(ctx, cancel, req, log)
+	go g.execute(ctx, cancel, lease, req, log)
 	return nil
 }
 
-func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Request, log *os.File) {
-	bounded := make(chan struct{})
-	go g.boundLog(ctx, log, bounded)
-	res, err := g.run(ctx, req, log)
+func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, lease *Admission, req Request, log *os.File) {
+	var res Result
+	var err error
+	if g.Launch != nil {
+		res, err = g.Launch(ctx, lease, req, log)
+	} else {
+		res, err = g.run(ctx, req, log)
+	}
+	if lease != nil {
+		lease.Close()
+	}
 	finished := time.Now().Unix()
 	cancel()
-	<-bounded
 	_ = log.Close()
 	if g.done != nil {
 		g.done(req, res, err)
@@ -135,6 +196,7 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Reque
 		outcome = "failed"
 	}
 	g.mu.Lock()
+	g.prepublication = false
 	ended := *g.status
 	ended.FinishedAt, ended.Result = &finished, outcome
 	g.status = &ended
@@ -142,59 +204,52 @@ func (g *Gate) execute(ctx context.Context, cancel context.CancelFunc, req Reque
 	g.mu.Unlock()
 }
 
-// boundLog holds the running Update's log to maxLog until ctx ends (issue #4003: it is on the root filesystem, and an Update may
-// print for hours). A log past it keeps its newest whole lines, at most half of maxLog, in place, as pfb_log_mgmt() trims the
-// package's other logs.
-func (g *Gate) boundLog(ctx context.Context, log *os.File, done chan<- struct{}) {
-	defer close(done)
-	tick := time.NewTicker(logCheck)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-		if info, err := log.Stat(); err == nil && info.Size() > maxLog {
-			g.trimLog(log, info.Size())
-		}
+// View reports the locally running Update or the validated worker retained across a restart.
+func (g *Gate) View(after int64, max int) (View, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.Admit == nil {
+		return g.viewLocked(g.status, g.status != nil && g.status.FinishedAt == nil, after, max), nil
 	}
-}
-
-// trimLog keeps the newest whole lines of the first size bytes of log, at most maxLog/2 of them.
-// shortcut: what the program appends between the read and the truncation is lost, and what it appends between the truncation
-// and the write lands before the kept lines (pfb_log_mgmt()'s trim has the same window); fine for a log already past maxLog.
-func (g *Gate) trimLog(log *os.File, size int64) {
-	r, err := os.Open(g.logPath)
+	observed, err := observeWorker(g.logPath)
 	if err != nil {
-		return
+		if g.prepublication && g.status != nil && g.status.FinishedAt == nil &&
+			(errors.Is(err, os.ErrNotExist) || errors.Is(err, errLockedTerminal)) {
+			return g.viewLocked(g.status, true, after, max), nil
+		}
+		return View{}, err
 	}
-	defer r.Close()
-	tail := make([]byte, maxLog/2)
-	if _, err := r.ReadAt(tail, size-int64(len(tail))); err != nil {
-		return
+	if observed.state == nil {
+		if g.status != nil {
+			return View{}, errors.New("the locally admitted Update has no worker status")
+		}
+		return View{}, nil
 	}
-	if i := bytes.IndexByte(tail, '\n'); i >= 0 {
-		tail = tail[i+1:]
+	state := observed.state
+	// Recovery may settle the receipt before this Gate's done callback releases its local admission.
+	if g.status != nil && g.status.FinishedAt == nil && state.FinishedAt != nil {
+		return g.viewLocked(g.status, true, after, max), nil
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if log.Truncate(0) == nil {
-		_, _ = log.Write(tail)
-		g.gen = (g.gen + 1) & genMask
+	status := &Status{Trigger: state.Request.Trigger, Scope: state.Request.Scope, Force: state.Request.Force, StartedAt: state.StartedAt}
+	if state.FinishedAt != nil {
+		status.FinishedAt = state.FinishedAt
+		_, runErr := state.outcome()
+		switch {
+		case errors.Is(runErr, ErrDeferred):
+			status.Result = "skipped"
+		case runErr != nil:
+			status.Result = "failed"
+		default:
+			status.Result = "success"
+		}
 	}
+	return g.viewLocked(status, observed.running, after, max), nil
 }
 
-// View: Running; Update (nil until the first Start of this process; the last one stays readable after it finishes);
-// Log: the log bytes from the cursor after (0: the start), at most max bytes (max<=0: 64 KiB); Next: the cursor after Log.
-// A cursor is opaque. One from another Update, a negative one or one past the log's end reads from the start.
-func (g *Gate) View(after int64, max int) View {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	v := View{Update: g.status}
-	if g.status != nil {
-		v.Running = g.status.FinishedAt == nil
-		v.Log, v.Next = g.readLog(after, max, v.Running)
+func (g *Gate) viewLocked(status *Status, running bool, after int64, max int) View {
+	v := View{Running: running, Update: status}
+	if status != nil {
+		v.Log, v.Next = g.readLog(after, max, running)
 	}
 	return v
 }
@@ -203,6 +258,9 @@ func (g *Gate) View(after int64, max int) View {
 // next read starts on one. A rune cut at the end of a running Update's log waits for its rest; once it ends, nothing waits.
 func (g *Gate) readLog(cursor int64, limit int, running bool) (string, int64) {
 	gen := g.gen << offsetBits
+	if state, err := readWorkerState(g.logPath + ".status"); err == nil {
+		gen = state.LogGen << offsetBits
+	}
 	var after int64
 	if cursor >= 0 && cursor&^offsetMask == gen {
 		after = cursor & offsetMask

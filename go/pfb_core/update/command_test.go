@@ -43,7 +43,11 @@ func withResult(t *testing.T, payload string, status int) *Command {
 // newLog opens a progress log the way the Gate does: a file for appending.
 func newLog(t *testing.T) *os.File {
 	t.Helper()
-	f, err := os.OpenFile(filepath.Join(t.TempDir(), "update.log"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o600)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "update.log"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +64,7 @@ func logText(t *testing.T, log *os.File) string {
 	return string(b)
 }
 
-// runCmd runs c under the watchdog, which kills a hung program.
+// runCmd bounds the controller's observation; the independent worker is not killed when that context ends.
 func runCmd(t *testing.T, c *Command, req Request, log *os.File) (Result, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), stuck)
@@ -115,13 +119,6 @@ func awaitFile(t *testing.T, path string) {
 			t.Fatalf("STUCK: %s never appeared", path)
 		}
 	}
-}
-
-func setKillGrace(t *testing.T, d time.Duration) {
-	t.Helper()
-	old := killGrace
-	killGrace = d
-	t.Cleanup(func() { killGrace = old })
 }
 
 func TestTheProgramReadsTheRequestOnStdinAsOneVersion1Object(t *testing.T) {
@@ -317,38 +314,6 @@ func TestResultLinesAddUp(t *testing.T) {
 	}
 }
 
-func TestTheCapKillsTheProgramAndItsWholeProcessGroup(t *testing.T) {
-	p, dir := program(t, `sleep 60 & echo $! > "$D/child"; wait`)
-	p.Cap = 500 * time.Millisecond
-	_, err := runCmd(t, p, Request{Trigger: "scheduled"}, newLog(t))
-	if err == nil || !strings.Contains(err.Error(), "killed") || !strings.Contains(err.Error(), "cap") {
-		t.Fatalf("Run = %v, want an error saying the program was killed at its cap", err)
-	}
-	if pid := recordedPid(t, dir); !gone(pid) {
-		t.Errorf("the program's background child %d was still running after the cap killed it", pid)
-	}
-}
-
-func TestCancelingTheContextKillsTheGroupAndEscalatesToKillWhenTermIsIgnored(t *testing.T) {
-	setKillGrace(t, 100*time.Millisecond)
-	p, dir := program(t, `trap '' TERM; sleep 60 & echo $! > "$D/child"; echo up > "$D/up"; wait`)
-	log := newLog(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	ended := make(chan error, 1)
-	go func() { _, err := p.Run(ctx, Request{Trigger: "manual"}, log); ended <- err }()
-	awaitFile(t, filepath.Join(dir, "up"))
-	pid := recordedPid(t, dir)
-	cancel()
-	err := recv(t, ended, "Run never returned after its context was canceled: a program ignoring TERM was not killed")
-	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "killed") {
-		t.Errorf("Run = %v, want an error saying the program was killed, wrapping context.Canceled", err)
-	}
-	if !gone(pid) {
-		t.Errorf("the program's background child %d was still running after the cancel", pid)
-	}
-}
-
 func TestACanceledContextStartsNothing(t *testing.T) {
 	p, dir := program(t, `echo ran > "$D/ran"`)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -382,36 +347,43 @@ func TestAGrandchildHoldingTheLogAndTheResultFdDoesNotDelayRun(t *testing.T) {
 	}
 }
 
-func TestTheResultFileIsRemovedAfterRun(t *testing.T) {
-	missing := &Command{Path: filepath.Join(t.TempDir(), "absent")}
-	ok, _ := program(t, `exit 0`)
-	failing, _ := program(t, `exit 1`)
-	capped, _ := program(t, `sleep 60`)
-	capped.Cap = 200 * time.Millisecond
-	for _, c := range []struct {
-		name string
-		cmd  *Command
-	}{
-		{"a program that succeeds", ok},
-		{"a program that fails", failing},
-		{"a program killed at the cap", capped},
-		{"a program that cannot start", missing},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			log := newLog(t)
-			_, _ = runCmd(t, c.cmd, Request{Trigger: "manual"}, log)
-			entries, err := os.ReadDir(filepath.Dir(log.Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var names []string
-			for _, e := range entries {
-				names = append(names, e.Name())
-			}
-			if !reflect.DeepEqual(names, []string{"update.log"}) {
-				t.Errorf("the log's directory holds %v after Run, want only the log: the result file must be removed", names)
-			}
-		})
+func TestResultFilePersistsAndIsReplacedOnNextAdmission(t *testing.T) {
+	first, _ := program(t, `printf '{"version":1,"attempted":["ipv4:first"]}\n' >&3`)
+	second, _ := program(t, `printf '{"version":1,"attempted":["ipv4:second"]}\n' >&3`)
+	log := newLog(t)
+	if got, err := runCmd(t, first, Request{Trigger: "manual"}, log); err != nil || !reflect.DeepEqual(got, Result{Attempted: []string{"ipv4:first"}}) {
+		t.Fatalf("first Run = %+v, %v", got, err)
+	}
+	resultPath := log.Name() + ".result"
+	oldFile, err := os.Open(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldFile.Close()
+	oldInfo, err := oldFile.Stat()
+	if err != nil || !oldInfo.Mode().IsRegular() {
+		t.Fatalf("first result file = %v, %v; want a durable regular file", oldInfo, err)
+	}
+	if got, err := runCmd(t, second, Request{Trigger: "manual"}, log); err != nil || !reflect.DeepEqual(got, Result{Attempted: []string{"ipv4:second"}}) {
+		t.Fatalf("second Run = %+v, %v", got, err)
+	}
+	newInfo, err := os.Stat(resultPath)
+	if err != nil || !newInfo.Mode().IsRegular() {
+		t.Fatalf("second result file = %v, %v; want a durable regular file", newInfo, err)
+	}
+	if os.SameFile(oldInfo, newInfo) {
+		t.Error("the next admission reused the previous result inode")
+	}
+	oldBytes, err := io.ReadAll(oldFile)
+	if err != nil || string(oldBytes) != "{\"version\":1,\"attempted\":[\"ipv4:first\"]}\n" {
+		t.Errorf("previous result inode = %q, %v; want its first admission's bytes", oldBytes, err)
+	}
+	newBytes, err := os.ReadFile(resultPath)
+	if err != nil || string(newBytes) != "{\"version\":1,\"attempted\":[\"ipv4:second\"]}\n" {
+		t.Errorf("current result file = %q, %v; want the second admission's bytes", newBytes, err)
+	}
+	if _, err := os.Stat(log.Name() + ".status"); err != nil {
+		t.Errorf("durable worker status = %v", err)
 	}
 }
 
@@ -421,9 +393,11 @@ func TestTheGateRunsTheCommandFromStartToTheRecordedResult(t *testing.T) {
 		res Result
 		err error
 	}
+	log := newLog(t)
 	got := make(chan ended, 1)
-	g := newGate(t, p.Run, func(_ Request, res Result, err error) { got <- ended{res, err} })
-	if err := g.Start(Request{Trigger: "scheduled", Feeds: []string{"ipv4:a_v4"}}); err != nil {
+	g := New(log.Name(), p.Run, func(_ Request, res Result, err error) { got <- ended{res, err} })
+	t.Cleanup(g.Stop)
+	if err := g.Start(Request{Trigger: "scheduled", Feeds: []string{"ipv4:a_v4"}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	e := recv(t, got, "done was never called")
@@ -432,7 +406,7 @@ func TestTheGateRunsTheCommandFromStartToTheRecordedResult(t *testing.T) {
 	if e.err != nil || !reflect.DeepEqual(e.res, want) {
 		t.Errorf("done got (%s, %v), want (%s, nil)", jsonOf(t, e.res), e.err, jsonOf(t, want))
 	}
-	v := g.View(0, 0)
+	v := mustView(t, g, 0, 0)
 	if v.Running || v.Update.Result != "success" || !strings.Contains(v.Log, `"trigger":"scheduled"`) || !strings.HasSuffix(v.Log, "working\n") {
 		t.Errorf("View = %s, want a successful Update whose log holds the program's stdin and output", jsonOf(t, v))
 	}

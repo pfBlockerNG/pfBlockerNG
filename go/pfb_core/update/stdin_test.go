@@ -18,8 +18,8 @@ func TestAGrandchildHoldingStdinDoesNotHoldRunWithALargeRequest(t *testing.T) {
 	res, err := runCmd(t, p, Request{Trigger: "apply", Feeds: feeds}, newLog(t))
 	if err != nil {
 		hint := ""
-		if strings.Contains(err.Error(), "killed") {
-			hint = " (STUCK: the wait on the program's stdin never ended, and the watchdog killed the program)"
+		if strings.Contains(err.Error(), "deadline") {
+			hint = " (STUCK: worker observation reached its test deadline; cancellation does not kill the independent worker)"
 		}
 		t.Fatalf("Run = %v, want it back with no error once the program exited 0%s", err, hint)
 	}

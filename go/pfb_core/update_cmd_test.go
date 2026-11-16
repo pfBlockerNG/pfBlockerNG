@@ -165,37 +165,44 @@ func TestAnUpdateTheProgramDefersIsSkippedAndRecordsNothing(t *testing.T) {
 	}
 }
 
-// Stopping Core ends a running Update before the server goes: the program, told to stop, still sees the socket, and a client
-// asking in that moment is answered, never met by a closed socket.
-func TestStoppingCoreEndsTheRunningUpdateBeforeTheServerShutsDown(t *testing.T) {
+// Core shutdown removes its API socket but leaves the independently owned worker available to a restarted Core.
+func TestStoppingCoreLeavesWorkerForRestartedCore(t *testing.T) {
 	holdQuarters(t)
 	dir := scratchDir(t)
-	socket := filepath.Join(dir, "run", "api.sock") // where startCore puts it
-	prog := t.TempDir()
-	script := "#!/bin/sh\nD='" + prog + "'\nS='" + socket + "'\n" + `cat > "$D/req"
-trap 'if [ -S "$S" ]; then echo present > "$D/at_term"; else echo gone > "$D/at_term"; fi; exit 0' TERM
-echo "update program started"
-while :; do sleep 0.05; done
-`
-	path := filepath.Join(prog, "update.sh")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	c := startCore(t, dir, "--update-cmd", path)
+	f := newFakeUpdate(t)
+	c := startCore(t, dir, "--update-cmd", f.path)
+	t.Cleanup(f.release)
 	wantJSON(t, c.post("StartUpdate", `{"requestId":"s1","trigger":"manual"}`), http.StatusOK, `{}`)
-	c.waitLog("", "update program started")
+	first := c.waitLog("", "update program started")
+	if first.Update == nil {
+		t.Fatal("the running Update has no status")
+	}
 
 	if code := c.stop(); code != 0 {
-		t.Fatalf("run = %d after the stop, want 0; stderr:\n%s", code, c.stderr.String())
+		t.Fatalf("run = %d after Core shutdown, want 0; stderr:\n%s", code, c.stderr.String())
 	}
-	got, err := os.ReadFile(filepath.Join(prog, "at_term"))
-	if err != nil {
-		t.Fatalf("the program was never told to stop: %v", err)
-	}
-	if strings.TrimSpace(string(got)) != "present" {
-		t.Errorf("when the program was told to stop the socket was %q, want present: the Update must end before the server shuts down", got)
-	}
+	socket := filepath.Join(dir, "run", "api.sock")
 	if _, err := os.Lstat(socket); !os.IsNotExist(err) {
-		t.Errorf("the socket is still there after run returned: %v", err)
+		t.Fatalf("the API socket remains after Core shutdown: %v", err)
+	}
+
+	restarted := startCore(t, dir, "--update-cmd", f.path)
+	t.Cleanup(f.release)
+	live := restarted.getUpdate("")
+	if !live.Running || live.Update == nil || live.Update.Trigger != "manual" || live.Update.StartedAt != first.Update.StartedAt {
+		t.Fatalf("restarted GetUpdate = %+v; want the same live manual Update", live)
+	}
+	wantError(t, restarted.post("StartUpdate", `{"requestId":"s2","trigger":"apply"}`), http.StatusConflict, codeConflict)
+	if n := f.runs(); n != 1 {
+		t.Fatalf("program starts while the worker is live = %d; want one", n)
+	}
+
+	f.release()
+	ended := restarted.waitFinished("manual")
+	if ended.Update.Result != "success" || ended.Update.FinishedAt == nil {
+		t.Errorf("reconciled Update = %+v; want its successful terminal receipt", ended.Update)
+	}
+	if n := f.runs(); n != 1 {
+		t.Errorf("program starts after recovery = %d; want one", n)
 	}
 }

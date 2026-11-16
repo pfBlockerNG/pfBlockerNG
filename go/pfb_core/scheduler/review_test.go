@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 	"testing"
 
@@ -124,10 +123,11 @@ func TestAFailedWriteLeavesNoTemporaryFile(t *testing.T) {
 	f.s = New(f.config())
 	f.s.Bind(f.start)
 
-	f.tick() // reserves dcc and tries to write it
-
-	if !strings.Contains(f.logText(), "not written") {
-		t.Fatalf("the failed write was not logged: %q", f.logText())
+	if err := f.s.Tick(); err == nil {
+		t.Fatal("a directory state path admitted an Update")
+	}
+	if info, err := os.Stat(f.path); err != nil || !info.IsDir() {
+		t.Fatalf("failed prepare replaced the state directory: %v", err)
 	}
 	if strays := f.strays(); len(strays) != 0 {
 		t.Errorf("temporary files were left behind: %v", strays)

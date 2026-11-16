@@ -35,6 +35,18 @@ In-tree, exactly that split:
 - **The boot hook's `dns_check`** (`pfb_upstream_observer_include.inc`, `timeout --foreground`, 360 s) confirms the proxy start and, when a stranger holds Unbound's loopback ports, moves Unbound's backend pair (issue #3848): that restarts Unbound and the gateway, daemons meant to survive the check, so `--foreground`; the reaper mode would take them down when the check exited. When the rc start refused for that stranger and left its marker, there is no start to confirm: `dns_check` then runs the update pass's own check (`pfb_dns_proxy_ensure_running()`), which moves Unbound to a free pair and starts the gateway, or keeps the gateway blocked with its notice when none is free. With no marker it never calls that check, so it cannot start a second gateway beside the rc start that is still launching one; a marker that appears while it waits ends the wait without a startup problem.
 - **`list_scripts` feed pre/post scripts** stay **default** — transform pipelines, hung `curl | jq` must die as whole tree on overrun, not orphaned. Feed script that starts a service is misuse: use **post-update hook** instead, where daemon case handled right.
 
+### Core's Go process lifetimes
+
+`internal/process.Run` is strict and is used only by the feed pre-script. The command remains Core's child in a watchdog-led
+process group. Normal leader exit kills attached descendants before return; cancellation or the 300-second limit sends TERM and
+KILLs a still-running leader after 5 seconds. Attached descendants are killed when the leader exits. A child that calls `setsid()`
+leaves that group. On Linux and FreeBSD, watchdog/Core death also cleans the transient group.
+
+The Update program instead runs in an independent worker protected by `update.log.lock` and private receipts. Core stop or death
+ends observation, not the transaction; a restarted Core observes a live worker or reconciles its completion. There is no
+whole-Update cap or process-group kill; each download or script keeps its operation-level bound. Scheduled maintenance is not
+present in this worktree: when #3996 integrates, it must use its own independent lane, not this strict runner or the Update lease.
+
 ### Mixed survivor + transient tree: supervise a process group
 
 Unbound startup needs both properties: the resolver that daemonizes successfully must
@@ -62,25 +74,38 @@ function polls `kill(-PGID, 0)` every 10 ms until the group is gone, for at most
 anyway (issue #3663). An expired start therefore returns at most two graces after its
 30-second deadline: the TERM grace, then this post-KILL wait.
 
-## Don't let a daemon hold the capture pipe
+## Don't let a daemon hold an output pipe
 
-PHP `exec()` / `$(command substitution)` read command stdout **to EOF**. Daemon the command spawned inherits command stdout/stderr, and while it lives pipe never reaches EOF — capture **blocks** even though command itself exited. (`timeout` reaper-wait above is *second*, independent way same hook hangs.)
+PHP `exec()` / `$(command substitution)` read command stdout **to EOF**. A daemon the command spawned can inherit stdout/stderr
+and keep a pipe open after the direct command exits, blocking capture. (`timeout` reaper-wait above is a second, independent
+way the same hook can hang.)
 
-Fix: send command output to **file**, read stdin from `/dev/null`:
+When output must be retained, give the child a regular file for stdout/stderr and `/dev/null` for stdin:
 
 ```text
 cmd > /tmp/somefile 2>&1 < /dev/null
 ```
 
-Spawned daemon then holds harmless regular-file fd, capture returns moment direct command exits. Read output back from file.
+The script-output runner uses one fresh private regular capture file per invocation. Scripts MUST emit UTF-8 or compatible
+ASCII; output is not locale-detected or transcoded. Printable Unicode, LF and TAB stay unchanged. Other ASCII controls and
+DEL, malformed UTF-8 bytes, and CR (including the CR in CRLF) become uppercase `\xNN`; Unicode `Cc`/`Cf` becomes `\u{HEX}`.
+The full sanitized text goes to the main log and, when distinct, the viewer. The main log is uncapped; the viewer gets at
+most 1,000,000 sanitized Unicode code points from combined stdout/stderr. It gets one overflow notice only if more output
+exists. Later progress and invocations remain independent.
 
 ## Package-page visibility is the mirror image: stream to stdout, not just the log file
 
-Same fd stray daemon must *not* hold is one pfSense **Software page reads** to show install/upgrade/uninstall progress: **stdout**. Once Update/Uninstall buttons delegate to pfSense native `pkg_mgr_install.php`, that page shows only what package operation writes to stdout. But `pfb_logger()` writes whole sync pass to **log file** (and, during Run Now, per-run log the Update page AJAX viewer tails) — never stdout. So delegated page sits **silent** through (longstanding) disable/enable passes — worst case up-to-30 s `pfb_stop_start_unbound()` wait — looks like frozen/lost pipe even though nothing stuck (issue #690). **Visibility** gap, distinct from fd-hold hang above.
+Same fd stray daemon must *not* hold is one pfSense **Software page reads** to show install/upgrade/uninstall progress: **stdout**. After Update/Uninstall buttons delegate to native `pkg_mgr_install.php`, that page shows only package-operation stdout. Core's Update viewer instead polls `GetUpdate`, which reads the retained, complete `update.log` transcript; it never tails the rotating main log. That transcript is not the Software page stream, so silence there remains a separate **visibility** gap.
 
-Fix (issue #690, widened by ADR-58): `pfb_logger()` **mirrors main-log lines (cases 1/2) to stdout** so page streams live progress. Gate: `pfb_run_streams_to_stdout()` — mirror only when stdout is **real watched surface**: lifecycle callback (`$pfb['hook_lifecycle']`, pkg `| tee` pipe — original #690 case) **OR interactive terminal** (`pfb_stdout_is_terminal()` = `stream_isatty(php://stdout)`, ADR-58 addition, so hand-run pass streams too). Does **not** print when stdout is **log file logger already writes** — cron tick `>> log`, detached Run-Now `>> runlog`, nested extras dispatch (`dc`/`bls`/…) — neither tty nor lifecycle, printing there would double every line; nor for **web in-process caller** (settings-save that resyncs then `header('Location')`, where stdout is HTTP response). Per-run-log fwrite-mirror (populates run-log Update viewer tails, regardless of where stdout points) unchanged. Unbound-stop wait logs keepalive dots through same path, closing that silent gap. Visibility only: fd-detach, `--foreground`, redirect safety above untouched.
+Fix (issue #690, widened by ADR-58): `pfb_logger()` **mirrors main-log lines (cases 1/2) to stdout** so the Software page streams live progress. Gate: `pfb_run_streams_to_stdout()` — mirror only when stdout is **real watched surface**: lifecycle callback (`$pfb['hook_lifecycle']`, pkg `| tee` pipe — original #690 case) **OR interactive terminal** (`pfb_stdout_is_terminal()` = `stream_isatty(php://stdout)`, ADR-58 addition, so hand-run pass streams too). Does **not** print when stdout is **log file logger already writes** — cron tick `>> log`, detached Run-Now `>> runlog`, nested extras dispatch (`dc`/`bls`/…) — neither tty nor lifecycle, printing there would double every line; nor for **web in-process caller** (settings-save that resyncs then `header('Location')`, where stdout is HTTP response). Core captures Update stdout/stderr in the dedicated transcript and `GetUpdate` reads only that transcript; the rotating main log remains separate. Unbound-stop wait logs keepalive dots through the same path, closing that silent gap. Visibility only: fd-detach, `--foreground`, redirect safety above untouched.
 
-**Update hook's own** stdout/stderr needs same treatment, but can't just be printed live through pipe: hook body redirected to log file precisely so daemon it starts can't hold capture pipe (above), so mirroring with `tee`/pipe would reintroduce hang. Instead, during lifecycle callback `pfb_run_hooks()` runs hook under `proc_open()` with stdout/stderr pointed at log **file** via descriptor spec (never pipe back to PHP — spawned daemon inherits only harmless file fd), tracks child with `proc_get_status()`, and **tails file to stdout with `pfb_log_tail_chunk()` while hook runs** — page shows `[ pfB Hook ] …` markers *and* hook real output streaming live between them, not one block after exit (issues #693/#883). Exit code (124 on timeout, else hook's own) comes off status; plain file read can't hang, so daemon-safety preserved. On non-lifecycle cron/manual/Run-Now path hook stays blocking `exec()` (Update page AJAX viewer already tails per-run log); `pfb_mirror_hook_output()` remains only as `proc_open`-failure fallback.
+**Hook and list-script output** uses `pfb_script_output_exec()`: stdout and stderr share a fresh private regular capture file,
+not a pipe. The PHP status loop drains bounded chunks through the UTF-8 sanitizer and writes the full sanitized output to
+the main log plus a character-limited prefix to a distinct viewer. It never waits for inherited-fd EOF; the cutoff is the
+capture size observed when the direct runner exits. A daemon that outlives a global hook cannot hold the runner open. Global
+hooks retain `timeout --foreground` so restarted services survive; list transforms retain default reaper mode so a hung
+transform tree is killed. During package lifecycle callbacks, sanitized hook output is also mirrored from the capture to
+stdout, preserving Software-page visibility without piping child output back to PHP.
 
 ## Following one specific dispatched process — pidfile, not a `ps` pattern or a log string
 

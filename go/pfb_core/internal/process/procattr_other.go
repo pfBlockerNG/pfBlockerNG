@@ -1,8 +1,8 @@
 //go:build !linux && !freebsd
 
-package update
+package process
 
 import "syscall"
 
-// procAttr puts the supervisor in a process group of its own, the Update's; this system has no parent-death signal.
+// procAttr puts the watchdog in its own process group; this system has no parent-death signal.
 func procAttr() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setpgid: true} }

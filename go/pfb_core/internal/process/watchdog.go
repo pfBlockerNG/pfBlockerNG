@@ -1,4 +1,4 @@
-package update
+package process
 
 import (
 	"context"
@@ -13,13 +13,16 @@ import (
 	"time"
 )
 
-// superviseArg re-executes this binary as the Update's watchdog; fd 3 reports readiness and fd 4 receives completion.
-const superviseArg = "--update-supervise"
+// superviseArg re-executes this binary as the transient process watchdog; fd 3 reports readiness and fd 4 receives completion.
+const superviseArg = "--process-supervise"
 
 const coreDied = syscall.SIGHUP
 
 // Completion acknowledgement has its own budget: a short TERM grace does not imply the watchdog can exit that fast.
 const watchdogAckTimeout = 3 * time.Second
+
+// coreDeathGrace is the TERM window before the parent-death watchdog escalates.
+const coreDeathGrace = 3 * time.Second
 
 func init() {
 	if len(os.Args) == 2 && os.Args[1] == superviseArg {
@@ -27,7 +30,7 @@ func init() {
 	}
 }
 
-// The completion pipe belongs only to Core: its EOF, not a potentially unrelated HUP, proves Core abandoned the Update.
+// The completion pipe belongs only to Core: its EOF, not an unrelated HUP, proves Core abandoned the command.
 func supervise() int {
 	signal.Notify(make(chan os.Signal, 1), coreDied, syscall.SIGTERM)
 	ready, completion := os.NewFile(3, "ready"), os.NewFile(4, "completion")
@@ -43,7 +46,7 @@ func supervise() int {
 	}
 	group := -syscall.Getpgrp()
 	_ = syscall.Kill(group, syscall.SIGTERM)
-	time.Sleep(killGrace)
+	time.Sleep(coreDeathGrace)
 	_ = syscall.Kill(group, syscall.SIGKILL)
 	select {}
 }
@@ -59,7 +62,7 @@ type watchdog struct {
 func startWatchdog(ctx context.Context) (*watchdog, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("the update watchdog cannot be found: %w", err)
+		return nil, fmt.Errorf("the process watchdog cannot be found: %w", err)
 	}
 	ready, readyW, err := os.Pipe()
 	if err != nil {
@@ -108,13 +111,13 @@ func startWatchdog(ctx context.Context) (*watchdog, error) {
 		if err == nil {
 			select {
 			case <-w.exited:
-				err = errors.New("the update watchdog exited before the program started")
+				err = errors.New("the process watchdog exited before the command started")
 			default:
 				return w, nil
 			}
 		}
 	case <-w.exited:
-		err = errors.New("the update watchdog exited before readiness")
+		err = errors.New("the process watchdog exited before readiness")
 		_ = ready.Close()
 		<-readiness
 	case <-ctx.Done():
@@ -137,7 +140,7 @@ func (w *watchdog) reap() error {
 	return w.err
 }
 
-// retire commits completion before acknowledging the watchdog's exit; a stuck watchdog never costs a successful daemon.
+// retire commits completion before acknowledging the watchdog's exit; cleanup never reports a successful command.
 func (w *watchdog) retire(cleanup bool) error {
 	var err error
 	if !cleanup {
@@ -151,17 +154,17 @@ func (w *watchdog) retire(cleanup bool) error {
 	case <-timer.C:
 		_ = w.cmd.Process.Kill()
 		_ = w.reap()
-		return errors.New("the update watchdog did not acknowledge completion")
+		return errors.New("the process watchdog did not acknowledge completion")
 	}
 	_ = w.reap()
 	if cleanup {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("the update watchdog could not receive completion: %w", err)
+		return fmt.Errorf("the process watchdog could not receive completion: %w", err)
 	}
 	if w.err != nil {
-		return fmt.Errorf("the update watchdog failed: %w", w.err)
+		return fmt.Errorf("the process watchdog failed: %w", w.err)
 	}
 	return nil
 }
