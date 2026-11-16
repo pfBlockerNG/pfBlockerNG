@@ -85,6 +85,28 @@ func TestScheduleWriteFailureDoesNotSettleTheReceipt(t *testing.T) {
 	}
 }
 
+func TestUncapturedNumericSuccessIsNotStored(t *testing.T) {
+	f := newFixture(t, allEntries(), stateText(map[string]string{feedA: pending(occ10)}))
+	logPath := filepath.Join(t.TempDir(), "update.log")
+	f.s.cfg.LogPath = logPath
+	writeReceipt(t, logPath, `{"version":1,"nonce":"`+receiptNonce+`","path":"/bin/true","request":{"trigger":"scheduled"},"startedAt":1,"finishedAt":50,"exitCode":0,"occurrences":{"`+feedA+`":`+strconv.FormatInt(occ10, 10)+`},"result":{"outcomes":{"`+feedA+`":"success","123":"success"}}}`)
+	if err := f.s.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.items()["123"]; ok {
+		t.Fatal("an uncaptured numeric success was stored")
+	}
+	raw, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := schedule.ParseState(raw); err != nil {
+		t.Fatalf("stored schedule no longer validates: %v\n%s", err, raw)
+	}
+	finished, completed := int64(50), occ10
+	wantItem(t, f.items(), feedA, schedule.Item{LastSuccessfulCheck: &finished, LastCompletedOccurrence: &completed, CompletionOutcome: schedule.Success})
+}
+
 func TestRejectedRetryCannotLeakReservationIntoManualAdmission(t *testing.T) {
 	f := newFixture(t, allEntries(), stateText(map[string]string{feedA: pending(occ10)}))
 	f.s.Bind(func(update.Request, func() (map[string]int64, error)) error { return update.ErrRunning })

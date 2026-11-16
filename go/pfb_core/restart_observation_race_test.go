@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -179,10 +181,22 @@ func TestObservationRacingAdmissionNeverMutatesTheNewIdentity(t *testing.T) {
 
 	begin := make(chan struct{})
 	viewReply, startReply := make(chan reply, 1), make(chan reply, 1)
-	go func() { <-begin; viewReply <- restart.post("GetUpdate", `{}`) }()
+	post := func(method, body string) reply {
+		resp, err := restart.client.Post("http://pfb-core/v1/"+method, "application/json", strings.NewReader(body))
+		if err != nil {
+			return reply{body: []byte(err.Error())}
+		}
+		defer resp.Body.Close()
+		got, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return reply{status: resp.StatusCode, body: []byte(readErr.Error())}
+		}
+		return reply{status: resp.StatusCode, header: resp.Header, body: got}
+	}
+	go func() { <-begin; viewReply <- post("GetUpdate", `{}`) }()
 	go func() {
 		<-begin
-		startReply <- restart.post("StartUpdate", `{"requestId":"race-new","trigger":"apply"}`)
+		startReply <- post("StartUpdate", `{"requestId":"race-new","trigger":"apply"}`)
 	}()
 	close(begin)
 	view, started := <-viewReply, <-startReply

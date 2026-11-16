@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -38,12 +40,26 @@ func TestLifetimeLockIsFreeWhileADetachedServiceStillLives(t *testing.T) {
 		t.Fatalf("%v\n%s", err, logText(t, log))
 	}
 	awaitFile(t, filepath.Join(dir, "alive"))
+	pidText, err := os.ReadFile(filepath.Join(dir, "child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidText)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("detached service died before the lock check: %v", err)
+	}
 	lock, err := operationLock(log.Name())
 	if err != nil {
 		t.Fatalf("lifetime lock was not free while the detached service was still alive: %v", err)
 	}
 	lock.Close()
-	release, err := os.OpenFile(filepath.Join(dir, "hold"), os.O_RDWR, 0o600)
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("detached service died before the lock was observed free: %v", err)
+	}
+	release, err := os.OpenFile(filepath.Join(dir, "hold"), os.O_WRONLY|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}

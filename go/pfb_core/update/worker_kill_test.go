@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -307,6 +308,49 @@ func TestOwnedWorkerSetupFailureReapsDirectCommand(t *testing.T) {
 	lock.Close()
 	if _, err := os.Stat(filepath.Join(dir, "ran")); !os.IsNotExist(err) {
 		t.Fatalf("setup failure launched the program: %v", err)
+	}
+}
+
+func TestWorkerDeathKeepsExclusionUntilTheNativeProgramExits(t *testing.T) {
+	p, dir := program(t, `echo ready > "$D/ready"; echo once >> "$D/starts"; read _ < "$D/release"; echo finished > "$D/finished"`)
+	if err := syscall.Mkfifo(filepath.Join(dir, "release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := os.OpenFile(filepath.Join(dir, "release"), os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = release.WriteString("finish\n"); _ = release.Close() })
+	log := independentLog(t)
+	cmd, err := startOwnedWorker(t, p.Path, log, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	awaitFile(t, dir+"/ready")
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("the killed worker returned a nil error")
+	}
+	cmd.Process = nil
+	if _, err := operationLock(log.Name()); !errors.Is(err, ErrRunning) {
+		t.Fatalf("worker death released admission while the native program lived: %v", err)
+	}
+	second, secondDir := program(t, `echo second > "$D/second"`)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, runErr := second.Run(ctx, Request{Trigger: "apply"}, log); !errors.Is(runErr, ErrRunning) {
+		t.Fatalf("second admission = %v, want ErrRunning", runErr)
+	}
+	if _, err := os.Stat(filepath.Join(secondDir, "second")); !os.IsNotExist(err) {
+		t.Fatalf("a second native program started after worker death: %v", err)
 	}
 }
 

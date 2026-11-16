@@ -19,7 +19,10 @@ import (
 	"unicode/utf8"
 )
 
-const workerArg = "--update-worker"
+const (
+	workerArg = "--update-worker"
+	holdArg   = "--update-hold"
+)
 const workerVersion = 1
 const maxWorkerState = 4 << 20 // request plus bounded result and private disposition
 
@@ -46,9 +49,16 @@ type workerObservation struct {
 	running bool
 }
 
+// errLockedTerminal is a finished receipt still covered by the lifetime lock. During the next
+// admission's prepublication that receipt is the previous Update, not a protocol break.
+var errLockedTerminal = errors.New("the Update published completion before releasing its lifetime lock")
+
 func init() {
 	if len(os.Args) == 3 && os.Args[1] == workerArg {
 		os.Exit(runWorker(os.Args[2]))
+	}
+	if len(os.Args) == 3 && os.Args[1] == holdArg {
+		os.Exit(runHold(os.Args[2]))
 	}
 }
 
@@ -152,7 +162,7 @@ func observeWorker(logPath string) (workerObservation, error) {
 			return workerObservation{}, fmt.Errorf("the running Update has no usable worker status: %w", readErr)
 		}
 		if state.FinishedAt != nil {
-			return workerObservation{}, errors.New("the Update published completion before releasing its lifetime lock")
+			return workerObservation{}, errLockedTerminal
 		}
 		return workerObservation{state: &state, running: true}, nil
 	}
@@ -432,6 +442,7 @@ func (a *Admission) Launch(ctx context.Context, c *Command, req Request, log *os
 	if err != nil {
 		return Result{}, err
 	}
+	defer result.Close()
 	if err := result.Sync(); err != nil {
 		return Result{}, err
 	}
@@ -548,20 +559,8 @@ func runWorker(logPath string) int {
 		}
 	}
 	if err == nil {
-		cmd := exec.Command(state.Path)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
-		cmd.ExtraFiles = []*os.File{result}
-		err = cmd.Run()
-		if cmd.ProcessState != nil {
-			status := cmd.ProcessState.Sys().(syscall.WaitStatus)
-			if status.Signaled() {
-				state.Signal = int(status.Signal())
-				state.CoreDumped = status.CoreDump()
-			} else {
-				exit := status.ExitStatus()
-				state.ExitCode = &exit
-			}
-		} else if err != nil {
+		err = runNative(state.Path, lock, result, in, log, &state)
+		if err != nil {
 			state.Failure = err.Error()
 		}
 		state.Result, err = readResult(result)
@@ -583,5 +582,87 @@ func runWorker(logPath string) int {
 	}
 	_ = lock.Close()
 	lock = nil
+	return 0
+}
+
+// holdReport is the native program's wait status, written by the process that keeps the lifetime lock.
+type holdReport struct {
+	Exit   *int   `json:"exit,omitempty"`
+	Signal int    `json:"signal,omitempty"`
+	Core   bool   `json:"core,omitempty"`
+	Err    string `json:"err,omitempty"`
+}
+
+// runNative starts program and waits for it. A separate holder inherits the lifetime lock and
+// exits only after program does, so killing this worker does not admit another Update early.
+// The program itself must not receive the lock file (TestInheritedDescriptorsDoNotKeepTheLifetimeLock).
+func runNative(program string, lock, result, in, log *os.File, state *workerState) error {
+	statusR, statusW, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer statusR.Close()
+	self, err := os.Executable()
+	if err != nil {
+		statusW.Close()
+		return err
+	}
+	hold := exec.Command(self, holdArg, program)
+	hold.ExtraFiles = []*os.File{lock, result, in, log, statusW}
+	runErr := hold.Start()
+	statusW.Close()
+	if runErr != nil {
+		return runErr
+	}
+	runErr = hold.Wait()
+	var rep holdReport
+	decErr := json.NewDecoder(statusR).Decode(&rep)
+	if decErr != nil {
+		if runErr != nil {
+			return runErr
+		}
+		return fmt.Errorf("the program holder did not report an exit: %w", decErr)
+	}
+	switch {
+	case rep.Err != "":
+		state.Failure = rep.Err
+	case rep.Signal != 0:
+		state.Signal, state.CoreDumped = rep.Signal, rep.Core
+	case rep.Exit != nil:
+		exit := *rep.Exit
+		state.ExitCode = &exit
+	default:
+		state.Failure = "the program holder reported no exit status"
+	}
+	return nil
+}
+
+func runHold(program string) int {
+	lock, result := os.NewFile(3, "lock"), os.NewFile(4, "result")
+	in, log := os.NewFile(5, "stdin"), os.NewFile(6, "log")
+	statusW := os.NewFile(7, "status")
+	defer lock.Close()
+	defer result.Close()
+	defer in.Close()
+	defer log.Close()
+	defer statusW.Close()
+	cmd := exec.Command(program)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
+	cmd.ExtraFiles = []*os.File{result}
+	err := cmd.Run()
+	rep := holdReport{}
+	if cmd.ProcessState != nil {
+		status := cmd.ProcessState.Sys().(syscall.WaitStatus)
+		if status.Signaled() {
+			rep.Signal = int(status.Signal())
+			rep.Core = status.CoreDump()
+		} else {
+			exit := status.ExitStatus()
+			rep.Exit = &exit
+		}
+	} else if err != nil {
+		rep.Err = err.Error()
+	}
+	_ = json.NewEncoder(statusW).Encode(rep)
 	return 0
 }

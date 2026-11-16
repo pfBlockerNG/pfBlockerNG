@@ -273,6 +273,10 @@ func (s *Scheduler) reconcile(at int64, reserved map[string]int64, res update.Re
 			continue
 		}
 		if outcome == "success" {
+			if _, recErr := schedule.RecordOutcome(schedule.State{}, id, schedule.Success, at, nil); recErr != nil {
+				s.cfg.Logf("scheduler: the outcome %q of %q was rejected: %v", outcome, id, recErr)
+				continue
+			}
 			it.LastSuccessfulCheck = &at
 			next[id] = it
 		}

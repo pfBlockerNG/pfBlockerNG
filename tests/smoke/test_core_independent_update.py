@@ -7,6 +7,7 @@ control readiness and the installed native mwexec_bg/unlock implementation.
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from uuid import uuid4
 
@@ -54,6 +55,13 @@ def test_core_independent_update(smoke_vm: SmokeVM, family: str, signal: str, re
         assert f"INDEPENDENT_TRANSACTION_PASS family={family} signal={signal} restart={restart}" in run.stdout
         assert "OWNED_SERVICE_CLEANUP_COMPLETE" in run.stdout
     finally:
+        live = smoke_vm.ssh(
+            "ps -ax -o command= | grep -F " + shlex.quote(directory) + " | grep -v grep || true",
+            timeout=15,
+        )
+        assert live.returncode == 0 and not live.stdout.strip(), (
+            f"refusing to delete a live worker directory {directory}: {live.stdout}{live.stderr}"
+        )
         cleanup = smoke_vm.ssh(f"rm -rf {directory}", timeout=30)
         assert cleanup.returncode == 0, cleanup.stderr
 

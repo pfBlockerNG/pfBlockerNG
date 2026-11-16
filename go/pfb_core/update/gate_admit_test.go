@@ -74,3 +74,44 @@ func TestWorkerViewUsesLocalStatusOnlyBeforeFirstPublication(t *testing.T) {
 		t.Fatalf("malformed worker status used in-memory fallback: %+v", view)
 	}
 }
+
+func TestNextPrepublicationViewKeepsThePreviousTerminalReceipt(t *testing.T) {
+	log := independentLog(t)
+	finished, exitCode := int64(200), 0
+	if err := writeWorkerState(log.Name()+".status", workerState{
+		Version: workerVersion, Nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Path: "/bin/true", Request: Request{Trigger: "manual"}, StartedAt: 100,
+		FinishedAt: &finished, ExitCode: &exitCode, Settled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	g := New(log.Name(), nil, nil)
+	g.Admit = (&Command{Path: "/bin/true"}).Admit
+	g.Launch = func(context.Context, *Admission, Request, *os.File) (Result, error) {
+		close(entered)
+		<-release
+		return Result{}, errors.New("fixture stopped before publication")
+	}
+	releaseOnce := func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}
+	t.Cleanup(func() {
+		releaseOnce()
+		g.Stop()
+	})
+	if err := g.Start(Request{Trigger: "apply"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, entered, "next launch did not enter prepublication")
+	view, err := g.View(0, 0)
+	if err != nil || !view.Running || view.Update == nil || view.Update.Trigger != "apply" {
+		t.Fatalf("prepublication View with a previous receipt = %+v, %v", view, err)
+	}
+	releaseOnce()
+	settle(t, g)
+}

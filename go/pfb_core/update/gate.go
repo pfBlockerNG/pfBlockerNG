@@ -213,7 +213,8 @@ func (g *Gate) View(after int64, max int) (View, error) {
 	}
 	observed, err := observeWorker(g.logPath)
 	if err != nil {
-		if g.prepublication && g.status != nil && g.status.FinishedAt == nil && errors.Is(err, os.ErrNotExist) {
+		if g.prepublication && g.status != nil && g.status.FinishedAt == nil &&
+			(errors.Is(err, os.ErrNotExist) || errors.Is(err, errLockedTerminal)) {
 			return g.viewLocked(g.status, true, after, max), nil
 		}
 		return View{}, err

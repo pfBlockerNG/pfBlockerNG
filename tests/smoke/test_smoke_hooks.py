@@ -713,7 +713,14 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
             timeout=30.0,
             interval=1.0,
         )
-        assert not h.hook_marker_exists(deployed_vm, release_marker), "release event fired before stream marker"
+        h.wait_until(
+            lambda: (
+                stream_marker in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
+                and done_marker not in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
+            ),
+            timeout=10.0,
+            interval=0.2,
+        )
         runlog_now = deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
         assert stream_marker in runlog_now, (
             f"hook marker {stream_marker!r} did not reach the PER-RUN log while waiting for release "
