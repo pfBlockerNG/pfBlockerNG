@@ -45,7 +45,17 @@ func TestWorkerViewUsesLocalStatusOnlyBeforeFirstPublication(t *testing.T) {
 		<-release
 		return Result{}, errors.New("fixture stopped before publication")
 	}
-	t.Cleanup(g.Stop)
+	releaseOnce := func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}
+	t.Cleanup(func() {
+		releaseOnce()
+		g.Stop()
+	})
 	req := Request{Trigger: "manual", Scope: "ip", Force: "none"}
 	if err := g.Start(req, nil); err != nil {
 		t.Fatal(err)
@@ -63,7 +73,7 @@ func TestWorkerViewUsesLocalStatusOnlyBeforeFirstPublication(t *testing.T) {
 	if view, err := restarted.View(0, 0); err == nil {
 		t.Fatalf("restarted Gate used another process's in-memory fallback: %+v", view)
 	}
-	close(release)
+	releaseOnce()
 	settle(t, g)
 	if err := os.WriteFile(log.Name()+".status", []byte("{"), 0o600); err != nil {
 		t.Fatal(err)

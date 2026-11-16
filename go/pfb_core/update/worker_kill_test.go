@@ -162,9 +162,25 @@ func TestOwnedWorkerCrashDoesNotContaminateTheNextAdmission(t *testing.T) {
 		t.Fatalf("unfinished empty result was applied: %v calls=%d", err, calls)
 	}
 	next, nextDir := program(t, `echo NEW; printf '%s\n' '{"version":1,"attempted":["ipv4:new_v4"]}' >&3; echo ran > "$D/ran"`)
+	g := New(log.Name(), nil, nil)
+	g.Admit = next.Admit
+	if err := g.Start(Request{Trigger: "apply"}, nil); !errors.Is(err, ErrRunning) {
+		t.Fatalf("second admission while the native program lived = %v, want ErrRunning", err)
+	}
+	if _, err := os.Stat(filepath.Join(nextDir, "ran")); !os.IsNotExist(err) {
+		t.Fatalf("a second native program started while the first lived: %v", err)
+	}
+	if _, err := release.WriteString("write\nfinish\n"); err != nil {
+		t.Fatal(err)
+	}
+	awaitFile(t, dir+"/wrote")
+	awaitFile(t, dir+"/finished")
+	if err := Recover(log.Name(), func(int64, map[string]int64, Result, error) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan struct{})
 	var nextErr error
-	g := New(log.Name(), nil, func(_ Request, _ Result, err error) {
+	g = New(log.Name(), nil, func(_ Request, _ Result, err error) {
 		nextErr = err
 		close(done)
 	})
@@ -192,10 +208,6 @@ func TestOwnedWorkerCrashDoesNotContaminateTheNextAdmission(t *testing.T) {
 	if os.SameFile(oldLogInfo, freshLogInfo) || os.SameFile(oldResultInfo, freshResultInfo) {
 		t.Fatal("the next admission reused an inode still held by the old program")
 	}
-	if _, err := release.WriteString("write\n"); err != nil {
-		t.Fatal(err)
-	}
-	awaitFile(t, dir+"/wrote")
 	body, err := os.ReadFile(log.Name())
 	if err != nil {
 		t.Fatal(err)
@@ -227,10 +239,6 @@ func TestOwnedWorkerCrashDoesNotContaminateTheNextAdmission(t *testing.T) {
 	if !strings.Contains(string(retiredLog), "OLDPHP") || !strings.Contains(string(retiredResult), "old_v4") {
 		t.Fatalf("the old program did not write its retired inodes: log=%q result=%q", retiredLog, retiredResult)
 	}
-	if _, err := release.WriteString("finish\n"); err != nil {
-		t.Fatal(err)
-	}
-	awaitFile(t, dir+"/finished")
 }
 
 func TestKilledWorkerSalvagesCompleteResultLinesWithoutClaimingSuccess(t *testing.T) {
@@ -265,6 +273,17 @@ func TestKilledWorkerSalvagesCompleteResultLinesWithoutClaimingSuccess(t *testin
 	reaped = true
 
 	calls := 0
+	err = Recover(log.Name(), func(int64, map[string]int64, Result, error) error {
+		calls++
+		return nil
+	})
+	if err != nil || calls != 0 {
+		t.Fatalf("salvage ran while the native program held the lock: %v calls=%d", err, calls)
+	}
+	if _, err := release.WriteString("finish\n"); err != nil {
+		t.Fatal(err)
+	}
+	awaitFile(t, dir+"/finished")
 	err = Recover(log.Name(), func(_ int64, _ map[string]int64, res Result, runErr error) error {
 		calls++
 		if runErr == nil {
@@ -288,10 +307,6 @@ func TestKilledWorkerSalvagesCompleteResultLinesWithoutClaimingSuccess(t *testin
 	if state.ExitCode != nil || state.Signal != 0 {
 		t.Fatalf("salvage invented program disposition: exit=%v signal=%d", state.ExitCode, state.Signal)
 	}
-	if _, err := release.WriteString("finish\n"); err != nil {
-		t.Fatal(err)
-	}
-	awaitFile(t, dir+"/finished")
 }
 
 func TestOwnedWorkerSetupFailureReapsDirectCommand(t *testing.T) {
