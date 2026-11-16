@@ -215,6 +215,48 @@ PHP);
 		$this->assertSame($prefix . self::VIEWER_NOTICE, file_get_contents($GLOBALS['pfb']['runlog']));
 	}
 
+	public function testGeneratedEscapeTokensAreAtomicWhenViewerHasInsufficientSpaceAndAtExactFit(): void
+	{
+		$cases = [
+			['label' => 'unicode-short', 'prefix' => 'A', 'raw' => "\u{200E}", 'escaped' => "\\u{200E}", 'remaining' => 4, 'overflow' => TRUE],
+			['label' => 'byte-short', 'prefix' => 'B', 'raw' => "\xff", 'escaped' => "\\xFF", 'remaining' => 2, 'overflow' => TRUE],
+			['label' => 'unicode-exact', 'prefix' => 'C', 'raw' => "\u{200E}", 'escaped' => "\\u{200E}", 'remaining' => 8, 'overflow' => FALSE],
+			['label' => 'byte-exact', 'prefix' => 'D', 'raw' => "\xff", 'escaped' => "\\xFF", 'remaining' => 4, 'overflow' => FALSE],
+		];
+		$search_from = 0;
+		$notice_count = 0;
+		foreach ($cases as $case) {
+			$prefix = str_repeat($case['prefix'], self::VIEWER_LIMIT - $case['remaining']);
+			$expected = $prefix . $case['escaped'];
+			$source = 'fwrite(STDOUT, base64_decode(' . var_export(base64_encode($prefix . $case['raw']), TRUE) . '));';
+			$script = $this->makePhpScript("escape-{$case['label']}.php", $source);
+
+			$this->assertSame(0, pfb_script_output_exec(escapeshellarg($script)));
+			$main = (string) file_get_contents($GLOBALS['pfb']['log']);
+			$this->assertSame(1, substr_count($main, $expected), "main log must retain the complete {$case['label']} token");
+
+			$viewer = (string) file_get_contents($GLOBALS['pfb']['runlog']);
+			$viewer_start = strpos($viewer, $prefix, $search_from);
+			$this->assertNotFalse($viewer_start, "{$case['label']} prefix must reach the viewer");
+			$viewer_text = $case['overflow'] ? $prefix . self::VIEWER_NOTICE : $expected;
+			$this->assertSame($viewer_text, substr($viewer, $viewer_start, strlen($viewer_text)),
+				"viewer must emit {$case['label']} atomically");
+			$search_from = $viewer_start + strlen($viewer_text);
+			if ($case['overflow']) {
+				$notice_count++;
+				$progress = "TOKEN_BOUNDARY_PROGRESS {$case['label']}\n";
+				pfb_logger($progress, 1);
+				$viewer = (string) file_get_contents($GLOBALS['pfb']['runlog']);
+				$progress_at = strpos($viewer, $progress, $search_from);
+				$this->assertNotFalse($progress_at, "later progress must remain visible after {$case['label']} overflow");
+				$search_from = $progress_at + strlen($progress);
+			}
+			$this->assertSame($notice_count, substr_count($viewer, self::VIEWER_NOTICE));
+		}
+
+		$this->assertSame(0, substr_count((string) file_get_contents($GLOBALS['pfb']['log']), self::VIEWER_NOTICE));
+	}
+
 	public function testUnicodeSanitizationIsStableAcrossSmallChunkPartitions(): void
 	{
 		$units = ["\u{00E9}", "\u{20AC}", "\u{1F4A9}"];
