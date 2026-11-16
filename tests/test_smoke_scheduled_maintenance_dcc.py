@@ -57,7 +57,15 @@ class DccSetup:
         update_result: str = "success",
         previous_install_fails: bool = False,
         current_restore_fails: bool = False,
+        seed_fails: bool = False,
+        geoip_teardown_fails: bool = False,
+        unblock_fails: bool = False,
+        diagnostics_fails: bool = False,
+        worker_result: dict[str, Any] | None = None,
+        worker_request: dict[str, Any] | None = None,
+        worker_status: dict[str, Any] | None = None,
         missing_receipts: set[str] | None = None,
+        read_error_paths: set[str] | None = None,
         extras_delta: bytes | None = None,
     ) -> None:
         self.config: dict[str, str] = {}
@@ -68,19 +76,55 @@ class DccSetup:
         self.installed_package = "current"
         self.previous_install_fails = previous_install_fails
         self.current_restore_fails = current_restore_fails
+        self.seed_fails = seed_fails
+        self.geoip_teardown_fails = geoip_teardown_fails
+        self.unblock_fails = unblock_fails
+        self.diagnostics_fails = diagnostics_fails
+        self.worker_result = worker_result
+        self.worker_request = worker_request
+        self.worker_status = worker_status
+        self.events: list[str] = []
+        self.seed_state: dict[str, Any] | None = None
+        self.fixture_generator: Any = None
         self.phases: list[str] = []
         self.settings_notices = 0
         self.start_reply = {"status": 200, "body": [], "error": None}
         self.update_result = update_result
         self.missing_receipts = missing_receipts or set()
+        self.read_error_paths = read_error_paths or set()
         self.extras_before = b"existing extras\n"
         self.extras_delta = extras_delta if extras_delta is not None else b"DCC child stderr: download failed\n"
         self.public_update_log = "outer PHP update warning\n"
         self.public_log_reads = 0
         self.diagnostic_commands: list[str] = []
+        self.range_requests: list[tuple[str, int]] = []
         self.range_sizes: list[int] = []
         self.retry_started = False
-        request = {"trigger": "retry", "scope": "both", "force": "none", "extras": [DCC]}
+        request = dict(
+            self.worker_request
+            if self.worker_request is not None
+            else {"trigger": "retry", "scope": "both", "force": "none", "extras": [DCC]}
+        )
+        default_worker_result = (
+            {"outcomes": {DCC: "success"}, "attempted": [], "geoipReady": True}
+            if update_result == "success"
+            else {"outcomes": {}, "attempted": [DCC], "geoipReady": True}
+        )
+        worker_result = dict(self.worker_result if self.worker_result is not None else default_worker_result)
+        status_receipt = {
+            "version": 1,
+            "nonce": "a" * 64,
+            "path": "/usr/local/pkg/pfblockerng/pfb_core_update.sh",
+            "request": request,
+            "startedAt": NOW,
+            "logGen": 1,
+            "settled": True,
+            "finishedAt": NOW,
+            "exitCode": 0 if update_result == "success" else 1,
+            "result": worker_result,
+        }
+        if self.worker_status is not None:
+            status_receipt.update(self.worker_status)
         self.private_files = {
             UPDATE_REQUEST: (
                 json.dumps(
@@ -95,24 +139,8 @@ class DccSetup:
                 )
                 + "\n"
             ).encode(),
-            UPDATE_RESULT: (json.dumps({"version": 1, "attempted": [DCC], "geoipReady": True}) + "\n").encode(),
-            UPDATE_STATUS: (
-                json.dumps(
-                    {
-                        "version": 1,
-                        "nonce": "a" * 64,
-                        "path": "/usr/local/pkg/pfblockerng/pfb_core_update.sh",
-                        "request": request,
-                        "startedAt": NOW,
-                        "logGen": 1,
-                        "settled": True,
-                        "finishedAt": NOW,
-                        "exitCode": 1,
-                        "result": {"attempted": [DCC], "geoipReady": True},
-                    }
-                )
-                + "\n"
-            ).encode(),
+            UPDATE_RESULT: (json.dumps({"version": 1, **worker_result}) + "\n").encode(),
+            UPDATE_STATUS: (json.dumps(status_receipt) + "\n").encode(),
         }
         completed = after or schedule_reply(
             {DCC: dcc_entry(last_run=NOW + 5, next_due=NOW + 80_000)},
@@ -177,12 +205,15 @@ class DccSetup:
                 data = file_data(path)
                 if data is None:
                     return subprocess.CompletedProcess(argv, 1, "", f"missing diagnostic file: {path}\n")
+                if path in self.read_error_paths and "|" in tokens:
+                    return subprocess.CompletedProcess(argv, 1, "", f"diagnostic read failed: {path}\n")
                 if "|" not in tokens:
                     count = int(tokens[2])
                     return subprocess.CompletedProcess(argv, 0, data[-count:].decode("utf-8"), "")
                 offset = int(tokens[2].removeprefix("+")) - 1
                 head_index = tokens.index("head")
                 count = int(tokens[head_index + 2])
+                self.range_requests.append((path, count))
                 self.range_sizes.append(count)
                 selected = data[offset : offset + count]
                 if "base64" in tokens:
@@ -203,6 +234,7 @@ class DccSetup:
 
         def force_install(_vm: Any, pkg: Path) -> None:
             self.install_attempts.append(pkg.name)
+            self.events.append(f"install:{pkg.name}")
             self.installs.append(self.config.copy())
             if pkg.name == "previous.pkg":
                 self.installed_package = "previous"
@@ -220,8 +252,45 @@ class DccSetup:
                 return self.schedules.pop(0)
             if method == "StartUpdate":
                 self.retry_started = True
+                self.events.append("retry-start")
                 return self.start_reply
             pytest.fail(f"unexpected public Core method: {method}")
+
+        def reload(_vm: Any, scope: str, **_kwargs: Any) -> None:
+            self.events.append(f"reload:{scope}")
+
+        def tell_settings(_vm: Any) -> None:
+            self.settings_notices += 1
+            self.events.append("settings-refresh")
+
+        def await_core_up(_vm: Any) -> None:
+            self.events.append("core-ready")
+
+        def seed_geoip_dataset(_vm: Any, **_kwargs: Any) -> None:
+            self.seed_state = {
+                "installed_package": self.installed_package,
+                "install_attempts": self.install_attempts.copy(),
+                "settings_notices": self.settings_notices,
+                "events": self.events.copy(),
+            }
+            self.events.append("geoip-seed")
+            if self.seed_fails:
+                raise RuntimeError("GeoIP seed failed")
+
+        def teardown_geoip_dataset(_vm: Any, **_kwargs: Any) -> None:
+            self.events.append("geoip-teardown")
+            if self.geoip_teardown_fails:
+                raise RuntimeError("GeoIP teardown failed")
+
+        def unblock_egress() -> None:
+            self.events.append("egress-unblock")
+            if self.unblock_fails:
+                raise RuntimeError("egress unblock failed")
+
+        def collect_host_diagnostics(_vm: Any) -> None:
+            self.events.append("host-diagnostics")
+            if self.diagnostics_fails:
+                raise RuntimeError("host diagnostics failed")
 
         monkeypatch.setenv("SMOKE_PKG", "/tmp/current.pkg")
         monkeypatch.setenv("SMOKE_SCHEDULED_EXCEPTION", "allow")
@@ -238,15 +307,16 @@ class DccSetup:
             "collect_host_diagnostics",
         ):
             monkeypatch.setattr(h, name, lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(h, "reload", reload)
+        monkeypatch.setattr(h, "seed_geoip_dataset", seed_geoip_dataset)
+        monkeypatch.setattr(h, "teardown_geoip_dataset", teardown_geoip_dataset)
+        monkeypatch.setattr(h, "unblock_egress", unblock_egress)
+        monkeypatch.setattr(h, "collect_host_diagnostics", collect_host_diagnostics)
         monkeypatch.setattr(h, "unique_domain", lambda label: f"{label}.example")
         monkeypatch.setattr(h, "write_local_feed", lambda *_args, **_kwargs: "file:///local/feed")
         monkeypatch.setattr(h, "config_set", config_set)
         monkeypatch.setattr(h, "config_get", config_get)
-        monkeypatch.setattr(
-            h,
-            "tell_core_the_settings_changed",
-            lambda _vm: setattr(self, "settings_notices", self.settings_notices + 1),
-        )
+        monkeypatch.setattr(h, "tell_core_the_settings_changed", tell_settings)
         monkeypatch.setattr(h, "core_call", core_call)
         monkeypatch.setattr(h, "core_update_view", lambda _vm: {"update": None})
 
@@ -267,11 +337,12 @@ class DccSetup:
         monkeypatch.setattr(h, "is_vip", lambda _answer: True)
         monkeypatch.setattr(acceptance, "_assert_no_dispatch", lambda _vm, phase: self.phases.append(phase))
         monkeypatch.setattr(acceptance, "_force_install", force_install)
-        monkeypatch.setattr(acceptance, "await_core_up", lambda _vm: None)
+        monkeypatch.setattr(acceptance, "await_core_up", await_core_up)
 
     def run(self) -> tuple[Any, Any]:
         fixture = getattr(acceptance.maintenance_vm, "__wrapped__")
         generator = fixture(self.vm, object(), Path("/tmp/previous.pkg"))
+        self.fixture_generator = generator
         return generator, next(generator)
 
 
@@ -421,28 +492,6 @@ def test_failed_retry_diagnostics_capture_worker_receipts_and_child_stderr(
     assert setup.retry_started
 
 
-def test_failed_retry_captures_worker_receipts_and_child_stderr_before_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    setup = DccSetup(monkeypatch, update_result="failed")
-    with pytest.raises(AssertionError, match="retry Update failed") as raised:
-        setup.run()
-
-    message = str(raised.value)
-    for evidence in (
-        "update.log.request",
-        "update.log.result",
-        "update.log.status",
-        "extra:dcc",
-        "DCC child stderr: download failed",
-        "outer PHP update warning",
-    ):
-        assert evidence in message, evidence
-    assert setup.public_log_reads == 1
-    assert any(EXTRAS_LOG in command for command in setup.diagnostic_commands)
-    assert setup.retry_started
-
-
 def test_missing_worker_receipt_is_diagnostic_not_primary_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -467,3 +516,193 @@ def test_large_extras_delta_is_hashed_with_bounded_tail(monkeypatch: pytest.Monk
     assert "DCC-LARGE-TAIL" in message
     assert len(message) < 50_000
     assert setup.range_sizes and max(setup.range_sizes) <= DIAGNOSTIC_CHUNK
+
+
+def test_worker_receipt_diagnostics_read_in_bounded_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    setup = DccSetup(monkeypatch, update_result="failed")
+    with pytest.raises(AssertionError, match="retry Update failed"):
+        setup.run()
+
+    receipt_paths = {UPDATE_REQUEST, UPDATE_RESULT, UPDATE_STATUS}
+    receipt_reads = [(path, count) for path, count in setup.range_requests if path in receipt_paths]
+    assert {path for path, _count in receipt_reads} == receipt_paths
+    assert receipt_reads and max(count for _path, count in receipt_reads) <= DIAGNOSTIC_CHUNK
+
+
+def test_small_binary_receipt_diagnostic_preserves_exact_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    setup = DccSetup(monkeypatch)
+    payload = b"\x00\xffstatus\x80\xfe\n"
+    setup.private_files[UPDATE_RESULT] = payload
+
+    report = acceptance._diagnostic_file(setup.vm, "result", UPDATE_RESULT, 1024)
+
+    assert f"data={payload!r}" in report
+    assert setup.range_requests == [(UPDATE_RESULT, len(payload))]
+
+
+def test_oversized_receipt_diagnostic_uses_bounded_head_and_tail_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = DccSetup(monkeypatch)
+    limit = 32 * 1024
+    payload = bytes(index % 251 for index in range(limit + 70_000))
+    setup.private_files[UPDATE_REQUEST] = payload
+
+    report = acceptance._diagnostic_file(setup.vm, "request", UPDATE_REQUEST, limit)
+
+    head = payload[:DIAGNOSTIC_CHUNK]
+    tail = payload[-acceptance.DIAGNOSTIC_TAIL :]
+    assert f"bytes={len(payload)}" in report
+    assert hashlib.sha256(head).hexdigest() in report
+    assert hashlib.sha256(tail).hexdigest() in report
+    assert f"head_data={head!r}" in report
+    assert f"tail_data={tail!r}" in report
+    assert len(setup.range_requests) == 2
+    assert sum(count for _path, count in setup.range_requests) <= DIAGNOSTIC_CHUNK + acceptance.DIAGNOSTIC_TAIL
+    assert max(count for _path, count in setup.range_requests) <= DIAGNOSTIC_CHUNK
+    assert not any("sha256 -q" in command for command in setup.diagnostic_commands)
+
+
+def test_receipt_read_error_does_not_replace_retry_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    setup = DccSetup(monkeypatch, update_result="failed", read_error_paths={UPDATE_STATUS})
+    with pytest.raises(AssertionError, match="retry Update failed") as raised:
+        setup.run()
+
+    message = str(raised.value)
+    assert "update.log.status" in message and "diagnostic read failed" in message
+
+
+@pytest.mark.parametrize(
+    ("case", "worker_result", "worker_request", "worker_status", "missing_receipts"),
+    [
+        ("missing-outcome", {"outcomes": {}, "attempted": [], "geoipReady": True}, None, None, None),
+        (
+            "retry-cap",
+            {"outcomes": {DCC: "retry-cap-reached"}, "attempted": [], "geoipReady": True},
+            None,
+            None,
+            None,
+        ),
+        (
+            "other-outcome",
+            {"outcomes": {DCC: "success", BLACKLIST: "success"}, "attempted": [], "geoipReady": True},
+            None,
+            None,
+            None,
+        ),
+        (
+            "other-attempt",
+            {"outcomes": {DCC: "success"}, "attempted": [DCC, BLACKLIST], "geoipReady": True},
+            None,
+            None,
+            None,
+        ),
+        ("geoip-not-ready", {"outcomes": {DCC: "success"}, "attempted": [], "geoipReady": False}, None, None, None),
+        (
+            "other-request-extra",
+            None,
+            {"trigger": "retry", "scope": "both", "force": "none", "extras": [DCC, BLACKLIST]},
+            None,
+            None,
+        ),
+        ("unsettled", None, None, {"settled": False}, None),
+        ("worker-exit-failed", None, None, {"exitCode": 1}, None),
+        ("missing-status", None, None, None, {UPDATE_STATUS}),
+    ],
+)
+def test_retry_requires_exclusive_success_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    worker_result: dict[str, Any] | None,
+    worker_request: dict[str, Any] | None,
+    worker_status: dict[str, Any] | None,
+    missing_receipts: set[str] | None,
+) -> None:
+    setup = DccSetup(
+        monkeypatch,
+        worker_result=worker_result,
+        worker_request=worker_request,
+        worker_status=worker_status,
+        missing_receipts=missing_receipts,
+    )
+    try:
+        with pytest.raises(AssertionError, match="DCC retry receipt"):
+            setup.run()
+    finally:
+        if setup.fixture_generator is not None:
+            setup.fixture_generator.close()
+    assert setup.retry_started, case
+
+
+def test_success_receipt_requires_last_successful_check_advancement(monkeypatch: pytest.MonkeyPatch) -> None:
+    previous = NOW - 100
+    before = schedule_reply({DCC: dcc_entry(last_run=previous, next_due=NOW)}, {DCC: previous})
+    after = schedule_reply({DCC: dcc_entry(last_run=previous, next_due=NOW + 80_000)}, {DCC: previous})
+    setup = DccSetup(monkeypatch, before=before, after=after)
+
+    with pytest.raises(AssertionError, match="retry did not complete DCC successfully"):
+        setup.run()
+
+
+def test_geoip_seed_runs_after_current_install_refresh_and_before_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    setup = DccSetup(monkeypatch)
+    generator, yielded = setup.run()
+    try:
+        assert yielded is setup.vm
+        assert setup.seed_state is not None
+        assert setup.seed_state["installed_package"] == "current"
+        assert setup.seed_state["install_attempts"] == ["previous.pkg", "current.pkg"]
+        assert setup.seed_state["settings_notices"] >= 1
+        events = setup.seed_state["events"]
+        current_install = max(index for index, event in enumerate(events) if event == "install:current.pkg")
+        current_reload = max(index for index, event in enumerate(events) if event == "reload:update")
+        assert current_install < current_reload < events.index("settings-refresh") < events.index("core-ready")
+        assert setup.events.index("geoip-seed") < setup.events.index("retry-start")
+        assert setup.retry_started
+    finally:
+        generator.close()
+    assert setup.events.index("geoip-seed") < setup.events.index("geoip-teardown")
+
+
+def test_geoip_seed_failure_blocks_retry_and_runs_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    setup = DccSetup(monkeypatch, seed_fails=True, geoip_teardown_fails=True)
+    try:
+        with pytest.raises(ExceptionGroup) as raised:
+            setup.run()
+    finally:
+        if setup.fixture_generator is not None:
+            setup.fixture_generator.close()
+
+    assert [str(error) for error in raised.value.exceptions] == ["GeoIP seed failed", "GeoIP teardown failed"]
+    assert not setup.retry_started
+    assert setup.events.index("geoip-seed") < setup.events.index("geoip-teardown")
+
+
+def test_geoip_teardown_failure_is_visible_after_successful_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    setup = DccSetup(monkeypatch, geoip_teardown_fails=True)
+    generator, _yielded = setup.run()
+
+    with pytest.raises(ExceptionGroup) as raised:
+        next(generator)
+
+    assert [str(error) for error in raised.value.exceptions] == ["GeoIP teardown failed"]
+    assert setup.retry_started
+
+
+def test_geoip_cleanup_groups_every_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    setup = DccSetup(
+        monkeypatch,
+        geoip_teardown_fails=True,
+        unblock_fails=True,
+        diagnostics_fails=True,
+    )
+    generator, _yielded = setup.run()
+
+    with pytest.raises(ExceptionGroup) as raised:
+        next(generator)
+
+    assert [str(error) for error in raised.value.exceptions] == [
+        "GeoIP teardown failed",
+        "egress unblock failed",
+        "host diagnostics failed",
+    ]

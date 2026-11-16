@@ -141,17 +141,72 @@ def _diagnostic_file(vm: SmokeVM, name: str, path: str, limit: int) -> str:
         return f"{label}: missing/unavailable: {error}"
     inode, size = state
     if size <= limit:
-        result, error = _diagnostic_command(vm, f"head -c {limit + 1} {shlex.quote(path)}")
-        if error is not None or result is None:
+        data, error = _read_diagnostic_range(vm, path, 0, size)
+        if error is not None or data is None:
             return f"{label}: read unavailable: {error}"
-        data = result.stdout.encode("utf-8")
-        if len(data) <= limit:
-            return f"{label} inode={inode} bytes={len(data)} sha256={hashlib.sha256(data).hexdigest()} data={data!r}"
-    digest, hash_error = _diagnostic_command(vm, f"sha256 -q {shlex.quote(path)}")
-    tail, tail_error = _diagnostic_command(vm, f"tail -c 4096 {shlex.quote(path)}")
-    digest_text = digest.stdout.strip() if digest is not None else f"unavailable: {hash_error}"
-    tail_text = tail.stdout if tail is not None else f"unavailable: {tail_error}"
-    return f"{label} inode={inode} bytes={size} sha256={digest_text} bounded_tail={tail_text!r}"
+        return f"{label} inode={inode} bytes={size} sha256={hashlib.sha256(data).hexdigest()} data={data!r}"
+
+    head_length = min(size, DIAGNOSTIC_CHUNK)
+    head, head_error = _read_diagnostic_range(vm, path, 0, head_length)
+    tail_length = min(size, DIAGNOSTIC_TAIL)
+    tail, tail_error = _read_diagnostic_range(vm, path, size - tail_length, tail_length)
+    head_hash = hashlib.sha256(head).hexdigest() if head is not None else f"unavailable: {head_error}"
+    tail_hash = hashlib.sha256(tail).hexdigest() if tail is not None else f"unavailable: {tail_error}"
+    head_data = repr(head) if head is not None else f"unavailable: {head_error}"
+    tail_data = repr(tail) if tail is not None else f"unavailable: {tail_error}"
+    return (
+        f"{label} inode={inode} bytes={size} "
+        f"head_sample_bytes={head_length} head_sha256={head_hash} head_data={head_data} "
+        f"tail_sample_bytes={tail_length} tail_sha256={tail_hash} tail_data={tail_data}"
+    )
+
+
+def _read_worker_receipt(vm: SmokeVM, name: str) -> dict[str, Any]:
+    for receipt_name, path, limit in UPDATE_RECEIPTS:
+        if receipt_name == name:
+            break
+    else:
+        raise AssertionError(f"unknown DCC retry receipt {name!r}")
+
+    state, error = _diagnostic_file_state(vm, path)
+    if state is None:
+        raise AssertionError(f"DCC retry receipt {name} {path} unavailable: {error}")
+    _, size = state
+    if size > limit:
+        raise AssertionError(f"DCC retry receipt {name} {path} exceeds {limit} bytes: {size}")
+    data, error = _read_diagnostic_range(vm, path, 0, size)
+    if error is not None or data is None:
+        raise AssertionError(f"DCC retry receipt {name} {path} read failed: {error}")
+    try:
+        receipt = json.loads(data)
+    except ValueError as error:
+        raise AssertionError(f"DCC retry receipt {name} {path} is invalid JSON: {error}") from error
+    if not isinstance(receipt, dict):
+        raise AssertionError(f"DCC retry receipt {name} {path} is not an object")
+    return receipt
+
+
+def _assert_dcc_retry_receipts(vm: SmokeVM) -> None:
+    request = _read_worker_receipt(vm, "request")
+    result = _read_worker_receipt(vm, "result")
+    status = _read_worker_receipt(vm, "status")
+    expected_request = {"trigger": "retry", "scope": "both", "force": "none", "extras": [DCC_ID]}
+    expected_result = {"outcomes": {DCC_ID: "success"}, "attempted": [], "geoipReady": True}
+
+    assert request.get("version") == 1 and request.get("request") == expected_request, (
+        f"DCC retry receipt request is not DCC-only: {request!r}"
+    )
+    assert all(status.get(field) == request.get(field) for field in ("version", "nonce", "path", "startedAt")), (
+        f"DCC retry receipt request/status identity mismatch: request={request!r}, status={status!r}"
+    )
+    assert status.get("request") == expected_request, f"DCC retry receipt status request is not DCC-only: {status!r}"
+    assert status.get("settled") is True and type(status.get("finishedAt")) is int and status["finishedAt"] > 0, (
+        f"DCC retry receipt worker status is not settled: {status!r}"
+    )
+    assert status.get("exitCode") == 0, f"DCC retry receipt worker did not exit successfully: {status!r}"
+    assert result == {"version": 1, **expected_result} and status.get("result") == expected_result, (
+        f"DCC retry receipt result is not exactly a successful DCC outcome: result={result!r}, status={status!r}"
+    )
 
 
 def _extras_log_delta(vm: SmokeVM, before: tuple[int, int] | None, before_error: str | None) -> str:
@@ -226,6 +281,7 @@ def _complete_due_dcc(vm: SmokeVM) -> int:
         assert retry_succeeded, (
             f"retry Update failed: start={started!r}, end={ended!r}, schedule={schedule!r}; diagnostics:\n{diagnostics}"
         )
+    _assert_dcc_retry_receipts(vm)
     after_dcc, after_checks, after = _schedule_view(vm, "after-DCC-retry")
     successful = after_checks.get(DCC_ID)
     assert successful is not None and (previous is None or successful > previous) and after_dcc["lastRun"] > 0, (
@@ -365,30 +421,60 @@ def maintenance_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer, prev_pkg: Path) 
     _assert_no_dispatch(vm, "enabled-apply")
     h.set_pfb_keep(vm, True)
     current_pkg = Path(os.environ["SMOKE_PKG"])
-    _install_package_transition(vm, prev_pkg, current_pkg, hour)
-    _assert_no_dispatch(vm, "enabled-upgrade")
-    h.reload(vm, "update")
-    h.tell_core_the_settings_changed(vm)
-    _assert_no_dispatch(vm, "repeated-enabled-apply")
-    await_core_up(vm)
-    process = vm.ssh("ps ax -o command")
-    assert process.returncode == 0, process.stderr
-    assert any(
-        "pfb_core" in line and "--maintenance-cmd /usr/local/pkg/pfblockerng/pfb_core_maintenance.sh" in line
-        for line in process.stdout.splitlines()
-    ), f"installed Core is not wired to real maintenance: {process.stdout}"
-    dcc_success = _complete_due_dcc(vm)
-    h.wait_unbound_ready(vm)
-    # First answer is authoritative: never retry toward the expected DNS value.
-    answer = h.dns_probe(vm, blocked, "A", attempts=1)
-    assert h.is_vip(answer), f"DNSBL gate failed before cadence acceptance: {answer}"
-    _assert_dcc_window_safe(vm, dcc_success)
-    try:
-        yield vm
-    finally:
+    geoip_cleanup_registered = False
+    setup_error: Exception | None = None
+    cleanup_errors: list[Exception] = []
+
+    def cleanup(action: Any) -> None:
+        try:
+            action()
+        except Exception as error:
+            cleanup_errors.append(error)
+
+    def require_sentinel() -> None:
         assert vm.ssh("test", "-f", SENTINEL).returncode == 0, "unsafe cleanup: sentinel absent"
-        h.unblock_egress()
-        h.collect_host_diagnostics(vm)
+
+    try:
+        _install_package_transition(vm, prev_pkg, current_pkg, hour)
+        _assert_no_dispatch(vm, "enabled-upgrade")
+        h.reload(vm, "update")
+        h.tell_core_the_settings_changed(vm)
+        _assert_no_dispatch(vm, "repeated-enabled-apply")
+        await_core_up(vm)
+        process = vm.ssh("ps ax -o command")
+        assert process.returncode == 0, process.stderr
+        assert any(
+            "pfb_core" in line and "--maintenance-cmd /usr/local/pkg/pfblockerng/pfb_core_maintenance.sh" in line
+            for line in process.stdout.splitlines()
+        ), f"installed Core is not wired to real maintenance: {process.stdout}"
+        # Register before seeding: teardown is idempotent if the helper fails mid-copy.
+        geoip_cleanup_registered = True
+        h.seed_geoip_dataset(vm)
+        dcc_success = _complete_due_dcc(vm)
+        h.wait_unbound_ready(vm)
+        # First answer is authoritative: never retry toward the expected DNS value.
+        answer = h.dns_probe(vm, blocked, "A", attempts=1)
+        assert h.is_vip(answer), f"DNSBL gate failed before cadence acceptance: {answer}"
+        _assert_dcc_window_safe(vm, dcc_success)
+        yield vm
+    except Exception as error:
+        setup_error = error
+    finally:
+        cleanup(require_sentinel)
+        if geoip_cleanup_registered:
+            cleanup(lambda: h.teardown_geoip_dataset(vm))
+        cleanup(h.unblock_egress)
+        cleanup(lambda: h.collect_host_diagnostics(vm))
+        if cleanup_errors:
+            errors = ([setup_error] if setup_error is not None else []) + cleanup_errors
+            message = (
+                "maintenance setup and cleanup failed"
+                if setup_error is not None
+                else "maintenance fixture cleanup failed"
+            )
+            raise ExceptionGroup(message, errors)
+    if setup_error is not None:
+        raise setup_error
 
 
 def _row(vm: SmokeVM, source: str) -> str:
