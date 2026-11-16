@@ -73,7 +73,7 @@ function pfb_cli_feed_pass_exit(bool $completed, ?string $deferred_by): never {
 	exit(pfb_feed_pass_exit_code($completed, $deferred_by));
 }
 
-// Clear IP/DNSBL counters via CRON
+// Clear IP/DNSBL counters by hand (Core runs the day-change lane through the core_counters verb)
 if (isset($argv[1])) {
 	if ($argv[1] == 'clearip') {
 		pfBlockerNG_clearip();
@@ -117,7 +117,7 @@ if (isset($argv[1])) {
 		pfblockerng_tick();
 		exit;
 	}
-	// issue #1204: cron-only verb the installed crontab entry calls. A present
+	// issue #1204: scheduled-dispatch verb (no crontab entry runs it now). A present
 	// .pfb_cron_disable sentinel suppresses just this scheduled dispatch -- the
 	// direct 'tick' verb above stays fully live regardless.
 	elseif ($argv[1] == 'cron-tick') {
@@ -152,7 +152,7 @@ if (isset($argv[1])) {
 		echo "DNSBL control command [ {$cmd} ] queued (seq {$seq})\n";
 		exit;
 	}
-	// #3522: publishes pfblockerng.prom for node_exporter; the one-minute cron entry runs this verb.
+	// #3522: publishes pfblockerng.prom for node_exporter; Core runs this verb every minute through pfb_core_metrics.sh.
 	elseif ($argv[1] == 'metrics') {
 		pfb_metrics_write();
 		exit;

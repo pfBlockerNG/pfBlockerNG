@@ -9,10 +9,10 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Core owns the quarter-hour dispatch: install, upgrade and every apply retire
- * only the old pfBlockerNG dispatch jobs, regardless of package enablement.
- * The hidden sentinel remains presence-only for Core's scheduled maintenance.
+ * Core owns every schedule (issue #3996): install, upgrade and every apply retire the pfBlockerNG crontab entries and install none,
+ * regardless of package enablement. The hidden sentinel remains presence-only for Core's scheduled maintenance.
  */
+#[CoversFunction('pfblockerng_retire_cron_jobs')]
 #[CoversFunction('pfb_cron_disable_path')]
 #[CoversFunction('pfb_cron_disabled')]
 final class TickCronInstallTest extends TestCase
@@ -53,11 +53,7 @@ final class TickCronInstallTest extends TestCase
 	private function applyRegistration(bool $enabled): void
 	{
 		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', $enabled ? 'on' : '');
-		$code = pfb_test_page_region(
-			'src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc',
-			"\t#\tDefine/Apply CRON Jobs",
-			"\tpfb_metrics_configure_cron("
-		);
+		$code = pfb_test_page_statement('src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc', '/^\tpfblockerng_retire_cron_jobs\(\);/m');
 		pfb_test_page_eval($code, ['pfb' => [
 			'enable' => PfbConfig::read('gen/enable_cb'),
 			'log' => self::LOG,
@@ -65,19 +61,28 @@ final class TickCronInstallTest extends TestCase
 	}
 
 	#[DataProvider('registrationStates')]
-	public function testEveryApplyRetiresDispatchWithoutInstallingAndKeepsSiblingJobs(bool $enabled, string $log): void
+	public function testEveryApplyRetiresEveryPackageEntryWithoutInstallingAndKeepsSiblingJobs(bool $enabled, string $log): void
 	{
 		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', $enabled ? 'on' : '');
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_metrics_export', 'on');
+		config_set_path('installedpackages/pfblockerngglobal/widget-clearip', 'daily');
+		config_set_path('installedpackages/pfblockerngglobal/widget-cleardnsbl', 'weekly');
 		$prefix = '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php ';
 		$retired = [];
 		foreach (['cron', 'tick', 'cron-tick', 'dcc', 'ss_refresh', 'bl'] as $verb) {
 			$retired[] = $prefix . $verb . ' >> ' . $log . ' 2>&1';
 		}
-		$kept = [$prefix . 'metrics', $prefix . 'clearip', $prefix . 'cleardnsbl', '/usr/sbin/newsyslog'];
+		foreach (['clearip', 'cleardnsbl'] as $verb) {
+			foreach (['', "'"] as $quote) {
+				$retired[] = $prefix . $quote . $verb . $quote . ' >/dev/null 2>&1';
+			}
+		}
+		$retired[] = '/usr/bin/timeout -s TERM -k 5 50 ' . $prefix . 'metrics >> /dev/null 2>&1';
+		$kept = ['/usr/sbin/newsyslog', '/usr/local/bin/php /usr/local/www/otherpackage.php clearip-cache'];
 		foreach (array_merge($retired, $kept) as $idx => $command) {
 			$this->seedCronItem($idx, $command);
 		}
-		$this->assertSame(array_merge($retired, $kept), $this->cronCommands(), 'before: every obsolete dispatch and sibling job');
+		$this->assertSame(array_merge($retired, $kept), $this->cronCommands(), 'before: every package entry and the sibling jobs');
 		$installs = [];
 		$GLOBALS['pfb_test_install_cron_hook'] = static function (string $command, bool $active) use (&$installs): void {
 			if ($active) {
@@ -86,13 +91,24 @@ final class TickCronInstallTest extends TestCase
 		};
 		try {
 			$this->applyRegistration($enabled);
-			$this->assertSame($kept, $this->cronCommands(), 'first apply removes dispatch but no sibling job');
+			$this->assertSame($kept, $this->cronCommands(), 'the first apply removes every package entry and no sibling job');
 			$this->applyRegistration($enabled);
-			$this->assertSame($kept, $this->cronCommands(), 'repeat apply never reinstalls dispatch');
-			$this->assertSame([], $installs, 'no transient competing registration is allowed');
+			$this->assertSame($kept, $this->cronCommands(), 'a repeat apply installs nothing');
+			$this->assertSame([], $installs, 'no entry is ever installed, not even transiently');
 		} finally {
 			unset($GLOBALS['pfb_test_install_cron_hook']);
 		}
+	}
+
+	/** The metrics lock is released inside pfb_metrics_configure_export(): the retirement (install_cron_job() can start cron, which would inherit a held lock) must come after it. */
+	public function testTheApplyPassRetiresOnlyAfterTheMetricsExportIsConfigured(): void
+	{
+		$source = php_strip_whitespace(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$export = strpos($source, 'pfb_metrics_configure_export(');
+		$retire = strpos($source, 'pfblockerng_retire_cron_jobs();');
+		$this->assertNotFalse($export);
+		$this->assertNotFalse($retire);
+		$this->assertLessThan($retire, $export);
 	}
 
 	public static function registrationStates(): array

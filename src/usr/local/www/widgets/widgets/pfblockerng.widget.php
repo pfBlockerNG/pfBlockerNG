@@ -123,45 +123,7 @@ if ($_POST) {
 			config_set_path('installedpackages/pfblockerngglobal/widget-maxheight', $pfb['wglobal']['widget-maxheight']);
 		}
 
-		// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
-		foreach (array( 'clearip', 'cleardnsbl') as $type) {
-			$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {$type} >/dev/null 2>&1";
-			if (isset($pfb['wglobal']['widget-' . $type])) {
-				if ($pfb['wglobal']['widget-' . $type] != 'never') {
-
-					$pfb_day = '*';
-					if ($pfb['wglobal']['widget-' . $type] == 'weekly') {
-						$pfb_day = '7';
-					}
-
-					// Remove unreferenced 'daily' or 'weekly' cron job
-					$pfb_other = ($pfb_day == '*') ? '7' : '*';
-					if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_other)) {
-						install_cron_job("pfblockerng.php {$type}", FALSE);
-					}
-
-					if (!pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_day)) {
-						install_cron_job($pfb_cmd, TRUE, '0', '0', '*', '*', $pfb_day, 'root');
-					}
-				}
-				else {
-					if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '*')) {
-						install_cron_job("pfblockerng.php {$type}", FALSE);
-					}
-					if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '7')) {
-						install_cron_job("pfblockerng.php {$type}", FALSE);
-					}
-				}
-			}
-			else {
-				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '*')) {
-					install_cron_job("pfblockerng.php {$type}", FALSE);
-				}
-				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '7')) {
-					install_cron_job("pfblockerng.php {$type}", FALSE);
-				}
-			}
-		}
+		// Core clears each counter at the cadence stored above; no crontab entry is involved.
 
 		// Remove old settings
 		if (isset($pfb['wglobal']['widget-maxpivot'])) {

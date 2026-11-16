@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/PageStatementLoader.php';
+
 use PHPUnit\Framework\TestCase;
 
 /**
- * The Update page's cron-status line and the CLI verbs it no longer dispatches (issue #3941). Run Now is Core's now
- * (UpdateViewResponseTest, UpdatePageCoreTest); what stays here is the tick's status line, which the page still computes, and
+ * The Update page's schedule-status line and the CLI verbs it no longer dispatches (issue #3941). Run Now is Core's now
+ * (UpdateViewResponseTest, UpdatePageCoreTest); what stays here is the status line, which the page still computes, and
  * the exit-status contract of the verbs the Outpost and the smoke harness still run.
  */
 final class UpdatePageCronStatusTest extends TestCase
@@ -24,10 +26,6 @@ final class UpdatePageCronStatusTest extends TestCase
 		mkdir($this->dir, 0755, TRUE);
 		$GLOBALS['pfb']['dbdir'] = $this->dir;
 		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
-		config_set_path('cron/item', [[
-			'command' => '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick',
-			'minute' => '*/15',
-		]]);
 	}
 
 	protected function tearDown(): void
@@ -40,36 +38,57 @@ final class UpdatePageCronStatusTest extends TestCase
 		@rmdir($this->dir);
 	}
 
-	public function testHealthyCronTickIsNotReportedMissingWithoutSuppression(): void
+	/** Core schedules the tick (issue #3996): no crontab entry exists to probe, so an enabled package is never reported as missing one. */
+	private function statusVariables(PfbToggle $enable): array
 	{
 		$pfb = $GLOBALS['pfb'];
-		$pfb['enable'] = PfbToggle::On;
-		$command = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$pfb['log']} 2>&1";
-		config_set_path('cron/item', [[
-			'command' => $command,
-			'minute' => '*/15',
-			'hour' => '*',
-			'mday' => '*',
-			'wday' => '*',
-		]]);
-		$this->assertFalse(pfb_cron_disabled());
-		$this->assertTrue(pfblockerng_cron_exists($command, '*/15', '*', '*', '*'));
-
+		$pfb['enable'] = $enable;
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_update.php');
 		$this->assertIsString($source);
 		$start = strpos($source, '$pfb_tick_min = 15;');
-		$end = strpos($source, "\n\$status = ", $start);
+		$end = strpos($source, "\n\$status = ", (int) $start);
 		$this->assertNotFalse($start);
 		$this->assertNotFalse($end);
-		eval(substr($source, $start, $end - $start));
+		$scope = pfb_test_page_eval(substr($source, $start, $end - $start), ['pfb' => $pfb]);
+		return ['cronreal' => $scope['cronreal'], 'nextcron' => $scope['nextcron']];
+	}
 
-		$this->assertStringNotContainsString('Missing cron task', $cronreal);
-		$this->assertNotSame('--', $nextcron);
+	public function testAnEnabledPackageWithNoCrontabEntryShowsTheNextTickNotAMissingTask(): void
+	{
+		$this->assertSame([], config_get_path('cron/item', []), 'before: the crontab holds no pfBlockerNG entry');
+		$this->assertFalse(pfb_cron_disabled());
 
-		config_set_path('cron/item', []);
-		eval(substr($source, $start, $end - $start));
-		$this->assertSame(' [ Missing cron task ]', $cronreal);
-		$this->assertSame('--', $nextcron);
+		$status = $this->statusVariables(PfbToggle::On);
+
+		$this->assertMatchesRegularExpression('/^\d\d:\d\d$/', $status['cronreal'], 'the next quarter-hour boundary');
+		$this->assertMatchesRegularExpression('/^\d\d:\d\d:\d\d$/', $status['nextcron']);
+	}
+
+	public function testTheCronDisableSentinelStillOutranksAnEnabledPackage(): void
+	{
+		touch(pfb_cron_disable_path());
+
+		$status = $this->statusVariables(PfbToggle::On);
+
+		$this->assertSame(' [ Disabled by ' . pfb_cron_disable_path() . ' ]', $status['cronreal']);
+		$this->assertSame('--', $status['nextcron']);
+	}
+
+	public function testADisabledPackageShowsDisabled(): void
+	{
+		$this->assertFalse(pfb_cron_disabled());
+
+		$status = $this->statusVariables(PfbToggle::Off);
+
+		$this->assertSame(' [ Disabled ]', $status['cronreal']);
+		$this->assertSame('--', $status['nextcron']);
+	}
+
+	public function testThePageNoLongerProbesTheCrontab(): void
+	{
+		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_update.php');
+		$this->assertStringNotContainsString('Missing cron task', $source);
+		$this->assertStringNotContainsString('cron_exists', $source);
 	}
 
 	public function testDetachedCliVerbsPropagateLockedProcessFailure(): void

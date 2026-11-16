@@ -210,9 +210,8 @@ not permission to execute or certify an unsafe maintenance runner.
 
 The flag requires literal `allow`, marker `smoke`, one shard (on-box index 0), and
 that exact filter. Inherited `SMOKE_SCHEDULED_EXCEPTION` is discarded. Package
-install, enabled apply and upgrade retain the sentinel and must leave no dispatch
-job (`pfblockerng.php cron-tick`, `tick` or `cron`) in config or root crontab.
-Metrics and counter jobs are unaffected.
+install, enabled apply and upgrade retain the sentinel and must leave no pfBlockerNG
+crontab entry in config or root crontab: Core runs the tick, the metrics export and the counter clearing.
 
 `SmokeVM.scheduled_maintenance()` refuses a nonowned guest, unreadable job state,
 a competing dispatcher or stopped system cron. It never stops, starts, signals or

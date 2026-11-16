@@ -5466,51 +5466,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	#	Define/Apply CRON Jobs		#
 	#########################################
 
-	// Core owns the quarter-hour tick; metrics and counter jobs stay with cron.
-	pfblockerng_configure_tick_cron();
-
-	pfb_metrics_configure_cron(
+	pfb_metrics_configure_export(
 		$pfb['enable'] === PfbToggle::On && PfbConfig::read('gen/pfb_metrics_export') === PfbToggle::On
 	);
 
-	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
-	foreach (array( 'clearip', 'cleardnsbl') as $type) {
-		$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {$type} >/dev/null 2>&1";
-		if (config_get_path("installedpackages/pfblockerngglobal/widget-{$type}") !== null) {
-			if (config_get_path("installedpackages/pfblockerngglobal/widget-{$type}") != 'never') {
-				$pfb_day = '*';
-				if (config_get_path("installedpackages/pfblockerngglobal/widget-{$type}") == 'weekly') {
-					$pfb_day = '7';
-				}
-
-				// Remove unreferenced 'daily' or 'weekly' cron job
-				$pfb_other = ($pfb_day == '*') ? '7' : '*';
-				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_other)) {
-					install_cron_job("pfblockerng.php {$type}", FALSE);
-				}
-
-				if (!pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_day)) {
-					install_cron_job($pfb_cmd, TRUE, '0', '0', '*', '*', $pfb_day, 'root');
-				}
-			}
-			else {
-				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '*')) {
-					install_cron_job("pfblockerng.php {$type}", FALSE);
-			}
-				if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '7')) {
-					install_cron_job("pfblockerng.php {$type}", FALSE);
-				}
-			}
-		}
-		else {
-			if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '*')) {
-				install_cron_job("pfblockerng.php {$type}", FALSE);
-			}
-			if (pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', '7')) {
-				install_cron_job("pfblockerng.php {$type}", FALSE);
-			}
-		}
-	}
+	// Core runs every schedule; this pass only retires the crontab entries earlier versions installed, after the metrics lock is released.
+	pfblockerng_retire_cron_jobs();
 
 	#################################
 	#	FINAL REPORTING		#

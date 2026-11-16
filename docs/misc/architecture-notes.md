@@ -2376,58 +2376,64 @@ window. `PFB_TRIGGER` values are unchanged across the migration, so the ADR-12 h
 
 ### One trigger-tick + the due-ledger
 
-The four legacy cron families (`cron`/`dcc`/`bl`/`ss_refresh`) collapse to **one** crontab entry —
-`*/15 … pfblockerng.php cron-tick` (fixed every **15 min**). `cron-tick` is the
-cron-only wrapper: it runs the tick unless `/var/db/pfblockerng/.pfb_cron_disable` exists, in which
-case it logs `[ Disabled by … ]` and dispatches nothing (issue #1204 — the smoke suite's scheduler
-off switch, installed before the package and never removed; the Update page reports the suppression).
-The direct `pfblockerng.php tick` verb is
-never gated. The tick carries **no**
+The four legacy cron families (`cron`/`dcc`/`bl`/`ss_refresh`) collapse to **one** fixed quarter-hour tick. Since issue #3996 pfBlockerNG
+installs **no crontab entry at all**: Core runs the tick (`--maintenance-cmd`, `pfb_core_maintenance.sh`, the `core_maintenance` verb) and
+the two other lanes below. The tick runs unless `/var/db/pfblockerng/.pfb_cron_disable` exists (issue #1204 — the smoke suite's scheduler
+off switch, installed before the package and never removed; the Update page reports the suppression) or the package is disabled; the
+`pfblockerng.php cron-tick` verb is that same gate by hand. The direct `pfblockerng.php tick` verb is never gated. The tick carries **no**
 scheduling logic: it reads the due-ledger, dispatches each **due** job through the new API
 (`pfb_trigger scope=both force=false trigger=cron` for the feed pass), runs `ss_refresh` when its
 dedicated zero-jitter 900-second entry is due (cheap DNS re-resolution), then records each completed
-job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
-non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
-and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
+job's next due slot. Install, upgrade, every `sync_package_pfblockerng()` pass and the deinstall call
+`pfblockerng_retire_cron_jobs()`, which removes every crontab entry an earlier version installed (the tick, the old fleet jobs, `metrics`,
+`clearip`/`cleardnsbl`, quoted forms included) and installs none; non-pfB cron jobs are left untouched.
 
 Since issue #3941 the tick no longer dispatches the feed pass (Core does, through the `core_update` verb), and the `cron` verb
 (`pfblockerng.php cron`, `pfblockerng_sync_cron()`) is not a scheduler entry point any more: no feed is named, so it checks only
 the feeds with a `*.fail` retry marker (and applies what that changed). It stays for the smoke harness (the feed-pass lock tests) and for running that retry by hand.
 
-**Metrics export cron (#3522):** a separate crontab entry, `* * * * * root /usr/bin/timeout -s TERM
--k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`, exists only while
-pfBlockerNG's master enable and the General tab's **Metrics export** option are both on.
-`pfb_metrics_configure_cron()` installs it idempotently from `sync_package_pfblockerng()`, and
-removes it together with `/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package
-deinstall. Both directions take an exclusive lock on `pfb_metrics.lock` around the `pfb_metrics_enabled`
-sentinel and the published files only, and release it before the cron entry changes
-(`install_cron_job()` can start cron, which would inherit a held lock and block every publish);
+**Metrics export lane (#3522, #3996):** Core runs `--metrics-cmd` (`pfb_core_metrics.sh`) every minute: the wrapper exits at once
+unless the `pfb_metrics_enabled` sentinel exists, then runs `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php
+/usr/local/www/pfblockerng/pfblockerng.php metrics`. The sentinel exists only while pfBlockerNG's master enable and the General tab's
+**Metrics export** option are both on, so it is what schedules the export: a sentinel removed by hand stops the export until the next
+sync pass recreates it. `pfb_metrics_configure_export()` creates it from `sync_package_pfblockerng()`, and removes it together with
+`/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package deinstall; it touches no crontab. Both directions take an exclusive
+lock on `pfb_metrics.lock` around the sentinel and the published files only, and release it on return, before the cron retirement
+that follows (`install_cron_job()` can start cron, which would inherit a held lock and block every publish);
 `pfb_metrics_write()` renders outside the lock and `pfb_metrics_publish()` publishes under it only
 while the sentinel exists and the settings this process loaded still turn the export on, so a run that
 began before a disable cannot recreate the file after it. A sentinel that outlives a stored disable
-(a sync pass that returned before reconciling the cron) is removed by the next publish, which logs once
+(a sync pass that returned before reconciling the export) is removed by the next publish, which logs once
 and publishes nothing. A publish and an enable wait at most 10 s for the lock (the enable then goes
 ahead, as touching the sentinel races with nothing); a disable, and so deinstall, waits for it however
 long, because a publisher that already passed its sentinel check would otherwise rename its file in
 after the removal. The wait is bounded: the holder keeps the lock only around the temp-file sweep, the
-sentinel check and the rename, and the cron's KILL at 55 s releases it.
+sentinel check and the rename, and the wrapper's KILL at 55 s releases it.
 The sentinel, the lock, the two outage markers (`pfb_metrics_dir_missing`,
 `pfb_metrics_sentinel_missing`) and `pfb_pass_status.json` live in `/usr/local/etc` (`$pfb['metrics_*']`,
 `$pfb['pass_status']`), like the pending-changes marker and for the same reason: `$pfb['dbdir']` is
-RAM-disked on `use_mfs_tmpvar` while the cron entry survives a reboot in `config.xml`. A publish that
+RAM-disked on `use_mfs_tmpvar`, which would otherwise wipe the sentinel at every boot. A publish that
 finds the sentinel missing with the option and master enable both on logs once and publishes nothing;
 it never recreates the sentinel, which would undo a disable. The `metrics` verb deliberately runs
 regardless of `.pfb_cron_disable`: it is read-only observability, not a scheduled download. It
 publishes `pfblockerng.prom` (temp file, `chmod 0644`, `rename()`; stale `.pfbmetrics_*` temp files
 older than 300 s are swept first) and refuses a textfile directory that is a symlink: a missing or
 linked node_exporter textfile directory logs once per outage through `pfb_metrics_dir_missing`, and the
-marker stays until a publish succeeds or the cron entry is removed. `timeout -k 5 50` stops a hung run
+marker stays until a publish succeeds or the export is turned off. `timeout -k 5 50` stops a hung run
 from piling up behind the next minute's, KILLing one that ignores TERM. A source that fails or throws is
 reported through `pfblockerng_metrics_source_up` and never stops the file from being published. With
 DNSBL off the DNSBL databases are not read. Aggregated aliases are never exported, whatever the
 widget's "Show Aggregated Aliases" setting. Update-pass timing (`pfb_pass_status.json`) counts Update
 passes only, never settings-save passes (`$pfb['save']`); a pass deferred by a MaxMind failure
 records its end, so `last_start > last_end` means a hung or killed pass.
+
+**Counter lane (#3996):** Core runs `--counters-cmd` (`pfb_core_counters.sh`) at the first minute of each local day with argument `daily`,
+and with `daily weekly` on Sundays (the cron entries it replaces used weekday `7`). The `core_counters` verb
+(`pfb_core_counters()`) refuses, with exit status 2 and nothing cleared, no argument or any argument other than exactly `daily` or `weekly`;
+otherwise it clears each counter whose stored widget cadence (`widget-clearip`, `widget-cleardnsbl`, unregistered keys read through
+`PfbConfig::readSection()`) is one of the arguments, exactly what the `pfblockerng.php clearip` and `cleardnsbl` verbs do, which still work
+by hand. `never`, an absent or any other stored value clears nothing. As with the cron entries, neither the master enable nor
+`.pfb_cron_disable` gates it, and a Core that was down at the day change does not catch up.
 
 **Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process
 flock (`pfb_feed_pass.lock` under `$pfb['dbdir']`; helpers `pfb_feed_pass_*` in

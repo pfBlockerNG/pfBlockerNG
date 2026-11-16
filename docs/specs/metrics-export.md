@@ -22,7 +22,7 @@ node_exporter package serves. pfBlockerNG opens no listener of its own.
 - Collection is read-only. In particular, the DNSBL and resolver SQLite files are
   opened with `SQLITE3_OPEN_READONLY`, not through `pfb_open_sqlite()`, because that
   helper can create, repair, or drop tables.
-- Language: PHP only, no appliance Python, matching the rest of the package's cron
+- Language: PHP only, no appliance Python, matching the rest of the package's scheduled
   entry points.
 - DNS counters may label known receiving IPs and address-owner interfaces. Client IP labels are a separate,
   explicit opt-in, off by default (#3757). Other metrics carry no per-client/IP labels; no metric uses hostnames
@@ -74,27 +74,28 @@ the existing explicit statistics clear remains the reset mechanism, with no arbi
 
 - New CLI verb `php /usr/local/www/pfblockerng/pfblockerng.php metrics` runs
   `pfb_metrics_write()`.
-- While pfBlockerNG's master enable and the option are both on, a cron entry runs that
-  verb every minute (`* * * * *`), installed with `install_cron_job()`. The command is
+- Core runs the program `/usr/local/pkg/pfblockerng/pfb_core_metrics.sh` (`--metrics-cmd`) every minute, and no crontab entry
+  exists (#3996). The wrapper exits at once while the sentinel `/usr/local/etc/pfb_metrics_enabled` is absent; otherwise it runs
   `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`,
   which sends TERM at 50 seconds and KILL 5 seconds later, so a hung source cannot pile
-  up runs even if it ignores TERM. The one-minute cadence matches node_exporter's own
-  `interface-collector.py`.
-- Turning the option off, or turning pfBlockerNG's master enable off, removes the cron
-  entry and deletes `pfblockerng.prom`. Package deinstall does the same.
-- The metrics cron deliberately runs regardless of `.pfb_cron_disable`: that switch
+  up runs even if it ignores TERM. Core skips a minute while the previous run is alive. The one-minute cadence matches
+  node_exporter's own `interface-collector.py`.
+- The sentinel exists only while pfBlockerNG's master enable and the option are both on, so it is what schedules the export:
+  a sentinel removed by hand stops the export until the next sync pass recreates it.
+- Turning the option off, or turning pfBlockerNG's master enable off, removes the sentinel
+  and deletes `pfblockerng.prom`. Package deinstall does the same.
+- The metrics lane deliberately runs regardless of `.pfb_cron_disable`: that switch
   stops the scheduled download dispatch, and the metrics verb is read-only observability.
 - The enable state lives in `/usr/local/etc`, not the pfBlockerNG db directory: `/var` is
-  a RAM disk on installs with `use_mfs_tmpvar`, wiped at boot, while the cron entry
-  survives in `config.xml`. A sentinel in `/var` would stop the export silently after
+  a RAM disk on installs with `use_mfs_tmpvar`, wiped at boot. A sentinel in `/var` would stop the export silently after
   every reboot until a full sync pass ran. The files are `pfb_metrics_enabled` (the
   sentinel), `pfb_metrics.lock`, `pfb_metrics_dir_missing` and
   `pfb_metrics_sentinel_missing` (outage markers), and `pfb_pass_status.json` (see
   below). Deinstall removes them all, with or without keep-settings.
 - Enable and disable take an exclusive lock on `pfb_metrics.lock` around the files only:
   enabling creates the sentinel, and disabling removes the sentinel, `pfblockerng.prom`
-  and both markers. The lock is released before the cron entry is installed or removed,
-  because `install_cron_job()` can start cron, which would inherit a held lock and block
+  and both markers. The lock is released on return, before the sync pass, install and deinstall
+  retire the legacy crontab entries, because `install_cron_job()` can start cron, which would inherit a held lock and block
   every publish. `pfb_metrics_write()` collects and renders outside the lock, then takes
   the same lock and publishes only while the sentinel exists and the settings still turn
   the export on, so a run that began before a disable cannot recreate the file after it.
@@ -102,9 +103,9 @@ the existing explicit statistics clear remains the reset mechanism, with no arbi
   the lock. An enable waits at most 10 seconds and then goes ahead without it, because
   touching the sentinel races with nothing. A disable waits for the lock however long:
   going ahead without it would let a publisher that already passed its sentinel check
-  rename its file in after the removal, leaving a stale file exposed once the cron entry
-  is gone. The wait is bounded because a publisher holds the lock only around the temp
-  file sweep, the sentinel check and the rename, and the cron's KILL at 55 seconds
+  rename its file in after the removal, leaving a stale file exposed once the export
+  is off. The wait is bounded because a publisher holds the lock only around the temp
+  file sweep, the sentinel check and the rename, and the wrapper's KILL at 55 seconds
   releases it.
 - A publish that finds the sentinel missing while pfBlockerNG's master enable and the
   option are both on in the configuration the process loaded at start logs once per
@@ -114,11 +115,12 @@ the existing explicit statistics clear remains the reset mechanism, with no arbi
 - A publish that finds the sentinel present while the loaded configuration turns the
   export off (the option off, or the master enable off) publishes nothing, removes the
   stale sentinel under the lock and logs that once. A sync pass that returned before it
-  reconciled the cron entry (a lock or recovery gate) can leave the sentinel behind after
-  a stored disable; the configuration decides, not the leftover. The cron process loads
+  reconciled the export (a lock or recovery gate) can leave the sentinel behind after
+  a stored disable; the configuration decides, not the leftover. The metrics process loads
   the configuration fresh every minute, so the read is current.
-- The cron state is reconciled wherever pfBlockerNG already reconciles its other cron
-  entries on save and install. No separate daemon is added.
+- The sentinel is reconciled wherever pfBlockerNG already reconciles its other state on save and install, and
+  those passes remove every legacy pfBlockerNG crontab entry (`pfblockerng_retire_cron_jobs()`), the every-minute `metrics` entry
+  of earlier versions included. No separate daemon is added.
 - If `/var/tmp/node_exporter` does not exist (node_exporter disabled or never started),
   the verb logs once to the pfBlockerNG error log and exits without writing. A directory
   that is a symbolic link is refused the same way (logged once, no publish): `/var/tmp`
@@ -246,7 +248,7 @@ leaves behind.
 
 1. With **Metrics export** on, `pfblockerng.prom` appears within one minute and the
    Prometheus Python client's text parser accepts it (checked in the smoke suite).
-2. With the option off, the cron entry is absent and `pfblockerng.prom` does not exist.
+2. With the option off, the sentinel is absent and `pfblockerng.prom` does not exist.
    Toggling on and then off returns the box to that state.
 3. Without node_exporter installed, the General tab shows the checkbox disabled, the red
    notice, and the working install link. A POST of `on` is refused with an input error
@@ -275,8 +277,7 @@ Each behavior is proven red-before-green per `.agents/policy/testing.md`:
   the failure test puts a directory at the target so `rename()` fails even as root; no
   temp file survives either way).
 - PHPUnit: config registry entry, toggle round-trip, the save rejecting `on` without the
-  package, and cron install/removal on toggle (including that enable and disable keep the
-  sentinel in step with the cron entry), the state files living outside the RAM-disked
+  package, sentinel creation/removal on toggle with no crontab call, the state files living outside the RAM-disked
   `/var` and the export still publishing after that directory is wiped, a missing
   sentinel logging once per outage and publishing nothing, and a symlinked textfile
   directory being refused at publish and at disable.
@@ -286,8 +287,7 @@ Each behavior is proven red-before-green per `.agents/policy/testing.md`:
   while another run holds the lock; a disable waits out a publish in flight and removes
   what it wrote even when the disable's budget is short; an enable goes ahead when the
   lock is wedged; a stale sentinel under a stored disable (option off, or master off)
-  publishes nothing and is removed; the lock is free while the
-  cron entry is installed or removed.
+  publishes nothing and is removed; enabling and disabling the export never call `install_cron_job()`.
 - PHPUnit: source health: a throwing source is down while the others still publish; a
   non-zero `pfctl` exit is down even with output; a damaged, empty, absent, or locked
   `pfb_sync_status.json` and a corrupt resolver database each read as specified;

@@ -990,49 +990,10 @@ if ($ufound) {
 	update_status(" no changes required ... done.\n");
 }
 
-// Validate widget pfBlockerNG clear [ dnsbl/IP ] counter CRON jobs
-update_status(" Validating Widget cron settings...");
-$ufound = FALSE;
-
-// widget-clearip / widget-cleardnsbl are unregistered keys in pfblockerngglobal; read via section.
-$pfb_global_cfg = PfbConfig::readSection('installedpackages/pfblockerngglobal');
-foreach (array('clearip', 'cleardnsbl') as $type) {
-	$pfb_widget_val = $pfb_global_cfg["widget-{$type}"] ?? NULL;
-	if ($pfb_widget_val !== NULL) {
-
-		// Remove incorrect cron entries
-		$pfb_cmd_esc = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php '{$type}' >/dev/null 2>&1";
-		if (pfblockerng_cron_exists($pfb_cmd_esc, '0', '0', '*', '*')) {
-			$ufound = TRUE;
-			install_cron_job("pfblockerng.php '{$type}'", FALSE);
-		}
-		if (pfblockerng_cron_exists($pfb_cmd_esc, '0', '0', '*', '7')) {
-			$ufound = TRUE;
-			install_cron_job("pfblockerng.php '{$type}'", FALSE);
-		}
-
-		// Add correct cron entry, if enabled
-		if ($pfb_widget_val != 'never') {
-
-			$pfb_day = '*';
-			if ($pfb_widget_val == 'weekly') {
-				$pfb_day = '7';
-			}
-
-			$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {$type} >/dev/null 2>&1";
-			if (!pfblockerng_cron_exists($pfb_cmd, '0', '0', '*', $pfb_day)) {
-				$ufound = TRUE;
-				install_cron_job($pfb_cmd, TRUE, '0', '0', '*', '*', $pfb_day, 'root');
-			}
-		}
-	}
-}
-
-if ($ufound) {
-	update_status(" saving new changes ... done.\n");
-} else {
-	update_status(" no changes required ... done.\n");
-}
+// Core schedules every job: retire the cron entries earlier versions installed
+update_status(" Retiring legacy cron jobs...");
+pfblockerng_retire_cron_jobs();
+update_status(" done.\n");
 
 // issue #1921: the ONE registry-driven pass -- rename, grandfather-map, and seed, in
 // that branch order per key -- over every PFB_SECTIONS section. This MUST stay after

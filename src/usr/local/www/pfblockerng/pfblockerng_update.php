@@ -117,9 +117,8 @@ $tab_array_sub = pfb_edit_hooks_tabs('run');
 display_top_tabs($tab_array_sub, TRUE);
 pfb_print_pending_changes_box(TRUE);
 
-// ADR-43: the scheduler is a single fixed */15 cron tick,
-// installed iff pfBlockerNG is enabled (the feed `interval` only gates the feed job *inside* the
-// tick, not the tick itself). So the "Next schedule check" tracks the tick boundary; the
+// ADR-43: the scheduler is a single fixed quarter-hour tick that Core runs while pfBlockerNG is enabled (the feed `interval`
+// only gates the feed job *inside* the tick, not the tick itself). So the "Next schedule check" tracks the tick boundary; the
 // per-feed cadence lives in the Schedule view below.
 $pfb_tick_min = 15;
 
@@ -136,21 +135,12 @@ if ($pfb['enable'] === PfbToggle::On) {
 	$nextcron	= "{$hour_final}:{$min_final}:{$sec_final}";
 }
 
-// Probe for the exact cron-tick signature install_cron_job() registers in pfblockerng.inc, so
-// an installed cron-tick is not misreported as "[ Missing cron task ]".
-$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$pfb['log']} 2>&1";
-
-// issue #1204: the suppression sentinel outranks the enabled/missing-cron checks below, so a
+// issue #1204: the suppression sentinel outranks the enabled check below, so a
 // stray .pfb_cron_disable file is always visible even on an otherwise-healthy schedule.
 if (pfb_cron_disabled()) {
 	$cronreal = ' [ Disabled by ' . pfb_cron_disable_path() . ' ]';
 	$nextcron = '--';
-} elseif ($pfb['enable'] === PfbToggle::On) {
-	if (!pfblockerng_cron_exists($pfb_cmd, '*/' . $pfb_tick_min, '*', '*', '*')) {
-		$cronreal = ' [ Missing cron task ]';
-		$nextcron = '--';
-	}
-} else {
+} elseif ($pfb['enable'] !== PfbToggle::On) {
 	$cronreal = ' [ Disabled ]';
 	$nextcron = '--';
 }

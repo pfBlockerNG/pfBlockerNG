@@ -4279,6 +4279,15 @@ const PFB_CORE_SETTINGS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_settings.sh';
 // issue #3941: the program Core runs once per Update (--update-cmd): the `core_update` verb behind a sh wrapper (pfb_core_update_serve(), pfblockerng_extra.inc)
 const PFB_CORE_UPDATE_CMD = '/usr/local/pkg/pfblockerng/pfb_core_update.sh';
 const PFB_CORE_MAINTENANCE_CMD = '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh';
+// issue #3996: the every-minute metrics export and the day-change counter clearing Core runs (--metrics-cmd, --counters-cmd); the package installs no crontab entry
+const PFB_CORE_METRICS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh';
+const PFB_CORE_COUNTERS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_counters.sh';
+// Every crontab command an earlier version installed, as the substring install_cron_job() matches on (issue #3996).
+const PFB_LEGACY_CRON_NEEDLES = [
+	'pfblockerng.php cron-tick', 'pfblockerng.php tick', 'pfblockerng.php cron ', 'pfblockerng.php dcc', 'pfblockerng.php ss_refresh',
+	'pfblockerng.php bl', 'pfblockerng.php metrics', 'pfblockerng.php clearip', 'pfblockerng.php cleardnsbl',
+	"pfblockerng.php 'clearip'", "pfblockerng.php 'cleardnsbl'",
+];
 // The adapter reads at most this many bytes of request from stdin
 const PFB_CORE_SETTINGS_MAX_REQUEST = 33554432;	// 32 MiB, as Core takes a reply: the feed projections carry custom lists
 // issue #3927: the adapter's metrics waits, so the waits it chooses on a client-IP change (DNS config lock, metrics lock, three passes
@@ -4566,7 +4575,8 @@ function pfb_core_state_teardown(PfbToggle $keep): void {
  * otherwise stops what is left (a survivor fails the start) and runs this machine's pfb-core ($coreDir/bin/freebsd-amd64 or freebsd-arm64,
  * by `uname -p`) under daemon(8), restarted 5 s after it exits, with its output in $pfb['core_log'], its API on $pfb['core_socket'], its
  * storage in $pfb['core_state'], its settings read and written through PFB_CORE_SETTINGS_CMD (issue #3924: the start pushes nothing) and its
- * Updates run by PFB_CORE_UPDATE_CMD (issue #3941). Core is also told, by flag, what its feed phase needs of this machine (issue #3975): the folders
+ * Updates run by PFB_CORE_UPDATE_CMD (issue #3941), its quarter-hour maintenance by PFB_CORE_MAINTENANCE_CMD, its every-minute metrics export
+ * by PFB_CORE_METRICS_CMD and its counter clearing at each local day change by PFB_CORE_COUNTERS_CMD (issue #3996). Core is also told, by flag, what its feed phase needs of this machine (issue #3975): the folders
  * a file:// feed may sit in (pfb_feed_local_dirs()), the list scripts' folders (PFB_LIST_SCRIPT_DIRS), rsync and the cURL user agent.
  * A daemon(8) that fails, or no supervisor named by its pidfile within 5 s, fails the start; the start returns once the supervisor is
  * confirmed, not once the API socket listens (a caller that needs the API handles pfb_core_call()'s status 0). No executable pfb-core
@@ -4589,6 +4599,8 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$settingsCmd = escapeshellarg(PFB_CORE_SETTINGS_CMD);
 	$updateCmd = escapeshellarg(PFB_CORE_UPDATE_CMD);
 	$maintenanceCmd = escapeshellarg(PFB_CORE_MAINTENANCE_CMD);
+	$metricsCmd = escapeshellarg(PFB_CORE_METRICS_CMD);
+	$countersCmd = escapeshellarg(PFB_CORE_COUNTERS_CMD);
 	// issue #3975: what Core's feed phase reads of this machine, each value one quoted argument; the user agent is the one cURL sends, without the
 	// line break a unique id may end with (Core refuses a user agent that holds one, and would not start)
 	$feedFlags = '';
@@ -4661,7 +4673,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	# Anything the daemon runs that starts this service again must take the lock
 	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --zoneinfo /etc/localtime{$feedFlags} </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --metrics-cmd {$metricsCmd} --counters-cmd {$countersCmd} --zoneinfo /etc/localtime{$feedFlags} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"
@@ -13922,16 +13934,14 @@ function pfb_metrics_write(string $dir = '/var/tmp/node_exporter'): bool {
 	return pfb_metrics_publish(pfb_metrics_render($snapshot), $dir, 10.0, $snapshot['client_policy_epochs']);
 }
 
-// Runs the verb every minute while the option is on; turning it off removes the entry and the published file.
-// The lock covers the sentinel and the published files only, and is released before the cron entry changes: install_cron_job()
-// can start cron, which would inherit the lock fd and block every publish.
+// The sentinel is what makes Core's every-minute lane (pfb_core_metrics.sh) run the verb: an enable creates it, a disable removes it and the published file.
+// The lock covers the sentinel and the published files only, and is released on return: the cron retirement that follows (install_cron_job()
+// can start cron, which would inherit the lock fd and block every publish) must run after it.
 // $lock_wait_s bounds only an enable: an enable that cannot get the lock goes ahead, as touching the sentinel races with nothing.
-// A disable waits past the cron's KILL at 55 s: it must not run past a publisher that already passed its sentinel check, which
+// A disable waits past the lane's KILL at 55 s: it must not run past a publisher that already passed its sentinel check, which
 // would rename its file in after the removal, and no live metrics run can still hold the lock once that wait has run out.
-function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_exporter', float $lock_wait_s = 10.0): void {
+function pfb_metrics_configure_export(bool $enabled, string $dir = '/var/tmp/node_exporter', float $lock_wait_s = 10.0): void {
 	global $pfb;
-	// TERM at 50 s, KILL 5 s later: a run that ignores TERM still dies before it can pile up behind the next minute's.
-	$pfb_metrics_cmd = '/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics >> /dev/null 2>&1';
 	$sentinel = $pfb['metrics_enabled'];
 	$lock = pfb_metrics_lock($enabled ? $lock_wait_s : 60.0);
 	try {
@@ -13952,11 +13962,6 @@ function pfb_metrics_configure_cron(bool $enabled, string $dir = '/var/tmp/node_
 		}
 	}
 
-	if (!$enabled) {
-		install_cron_job('pfblockerng.php metrics', FALSE);
-	} elseif (!pfblockerng_cron_exists($pfb_metrics_cmd, '*', '*', '*', '*')) {
-		install_cron_job($pfb_metrics_cmd, TRUE, '*', '*', '*', '*', '*', 'root');
-	}
 }
 
 /**
@@ -15164,43 +15169,24 @@ function pfb_apply_alias_delta(
 
 // ---------------------------------------------------------------------------
 
-// Determine if cron task requires updating
-function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_wday) {
-	foreach (config_get_path('cron/item', []) as $item) {
-		if (strpos($item['command'], $pfb_cmd) !== FALSE) {
-			if ($item['command'] != $pfb_cmd) {
-				return FALSE;
+// Core runs every pfBlockerNG schedule (issue #3996): install, upgrade, every sync and the removal retire what earlier versions put in the crontab, and install nothing.
+function pfblockerng_retire_cron_jobs(): void {
+	foreach (PFB_LEGACY_CRON_NEEDLES as $needle) {
+		// install_cron_job() removes only the first entry holding the needle; a daily and a weekly clear entry may both exist
+		for ($entries = count(config_get_path('cron/item', [])); $entries > 0; $entries--) {
+			$found = FALSE;
+			foreach (config_get_path('cron/item', []) as $item) {
+				if (strpos((string) ($item['command'] ?? ''), $needle) !== FALSE) {
+					$found = TRUE;
+					break;
+				}
 			}
-			if ($item['minute'] != $pfb_min) {
-				return FALSE;
+			if (!$found) {
+				break;
 			}
-			if ($item['mday'] != $pfb_mday) {
-				return FALSE;
-			}
-			if ($item['wday'] != $pfb_wday) {
-				return FALSE;
-			}
-			if ($pfb_hour == 'random' && $item['hour'] != '') {
-				// MaxMind/Blacklist hour is randomized. Skip comparison.
-				return TRUE;
-			}
-			if ($item['hour'] != $pfb_hour) {
-				return FALSE;
-			}
-			return TRUE;
+			install_cron_job($needle, FALSE);
 		}
 	}
-	return FALSE;
-}
-
-// Core owns scheduled dispatch; each apply retires only the obsolete tick jobs.
-function pfblockerng_configure_tick_cron(): void {
-	install_cron_job('pfblockerng.php cron-tick', FALSE);
-	install_cron_job('pfblockerng.php tick', FALSE);
-	install_cron_job('pfblockerng.php cron ', FALSE);
-	install_cron_job('pfblockerng.php dcc', FALSE);
-	install_cron_job('pfblockerng.php ss_refresh', FALSE);
-	install_cron_job('pfblockerng.php bl', FALSE);
 }
 
 
@@ -29067,6 +29053,38 @@ require_once __DIR__ . '/pfblockerng_apply.inc';
 require_once __DIR__ . '/pfblockerng_cron.inc';
 require_once __DIR__ . '/pfblockerng_geoip.inc';
 
+/**
+ * Core's counter lane (issue #3996): clears each counter whose stored widget cadence is one of $cadences, `daily` and, on Sundays, `weekly`.
+ * `never`, an absent or any other stored value clears nothing; neither the master switch nor .pfb_cron_disable gates it (the cron entries it
+ * replaces had neither). widget-clearip and widget-cleardnsbl are unregistered keys: read through the section, as the install script does.
+ *
+ * @param list<string> $cadences
+ * @return int 0, or 2 with nothing cleared when no cadence is given or any is not `daily` or `weekly`
+ */
+function pfb_core_counters(array $cadences): int {
+	foreach ($cadences as $cadence) {
+		if ($cadence !== 'daily' && $cadence !== 'weekly') {
+			fwrite(STDERR, "Core counters: every argument must be daily or weekly.\n");
+			return 2;
+		}
+	}
+	if ($cadences === []) {
+		fwrite(STDERR, "Core counters: give daily, weekly or both.\n");
+		return 2;
+	}
+	$stored = PfbConfig::readSection('installedpackages/pfblockerngglobal');
+	foreach (['clearip', 'cleardnsbl'] as $type) {
+		if (!in_array($stored["widget-{$type}"] ?? NULL, $cadences, TRUE)) {
+			continue;
+		}
+		if ($type === 'clearip') {
+			pfBlockerNG_clearip();
+		}
+		pfBlockerNG_clearsqlite($type);
+	}
+	return 0;
+}
+
 // issue #3941: the update program Core runs once per Update (--update-cmd, behind pfb_core_update.sh): the request on stdin, the progress on stdout,
 // the result on fd 3. It runs after the requires above: the pass it serves lives in them.
 if (isset($argv[1]) && $argv[1] == 'core_update') {
@@ -29086,6 +29104,11 @@ if (isset($argv[1]) && $argv[1] == 'core_maintenance') {
 	}
 	pfblockerng_tick();
 	exit(0);
+}
+// Core's counter lane at each local day change: argv is `daily`, plus `weekly` on Sundays.
+if (isset($argv[1]) && $argv[1] == 'core_counters') {
+	pfb_global();
+	exit(pfb_core_counters(array_slice($argv, 2)));
 }
 
 // Remove owned firewall objects (VIP, NAT, filter rules) BEFORE the config reference data is
@@ -29255,7 +29278,8 @@ function pfblockerng_php_pre_deinstall_command(): bool {
 	// aliasarchive (zst + legacy bz2) already removed above (co-located with the aliastables boot-hook teardown).
 	unlink_if_exists("{$pfb['dnsbl_info']}");
 	unlink_if_exists("{$pfb['dnsbl_resolver']}");
-	pfb_metrics_configure_cron(FALSE);
+	pfb_metrics_configure_export(FALSE);
+	pfblockerng_retire_cron_jobs();
 	// Outside dbdir like the pending-changes marker, so the keep=off sweep below never reaches them.
 	unlink_if_exists($pfb['metrics_lock']);
 	unlink_if_exists($pfb['pass_status']);

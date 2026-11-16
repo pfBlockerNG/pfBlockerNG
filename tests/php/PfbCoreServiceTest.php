@@ -242,7 +242,7 @@ final class PfbCoreServiceTest extends TestCase
 		);
 		// The settings adapter and update scripts, which Core runs, the host's zone file, which it reads, and the feed phase's folders,
 		// scripts and rsync (issue #3975), which it is told, are the host paths an argument may name: longest first, as one holds another
-		$named = array_merge([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh', '--zoneinfo /etc/localtime', self::RSYNC],
+		$named = array_merge([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh', '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh', '/usr/local/pkg/pfblockerng/pfb_core_counters.sh', '--zoneinfo /etc/localtime', self::RSYNC],
 			self::LOCAL_DIRS, self::SCRIPT_DIRS);
 		usort($named, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
 		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace($named, '', $script),
@@ -338,6 +338,8 @@ final class PfbCoreServiceTest extends TestCase
 			'--settings-backend-cmd', '/usr/local/pkg/pfblockerng/pfb_core_settings.sh',
 			'--update-cmd', '/usr/local/pkg/pfblockerng/pfb_core_update.sh',
 			'--maintenance-cmd', '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh',
+			'--metrics-cmd', '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh',
+			'--counters-cmd', '/usr/local/pkg/pfblockerng/pfb_core_counters.sh',
 			'--zoneinfo', '/etc/localtime',
 			...$this->feedFlags(),
 		], $this->lines('daemon.argv'));
@@ -363,6 +365,22 @@ final class PfbCoreServiceTest extends TestCase
 		$idx = array_search('--maintenance-cmd', $args, TRUE);
 		$this->assertNotFalse($idx, 'the real producer must name the maintenance program');
 		$this->assertSame('/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh', $args[$idx + 1]);
+		foreach (['--metrics-cmd' => 'pfb_core_metrics.sh', '--counters-cmd' => 'pfb_core_counters.sh'] as $flag => $script) {
+			$idx = array_search($flag, $args, TRUE);
+			$this->assertNotFalse($idx, "the real producer must name {$flag}");
+			$this->assertSame("/usr/local/pkg/pfblockerng/{$script}", $args[$idx + 1]);
+		}
+	}
+
+
+	public function testTheServiceFileNamesTheMetricsAndCountersPrograms(): void
+	{
+		$this->install('freebsd-amd64');
+
+		pfb_core_service("{$this->dir}/core");
+
+		$text = (string) file_get_contents("{$this->dir}/rc/pfb_core.sh");
+		$this->assertStringContainsString("--maintenance-cmd '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh' --metrics-cmd '/usr/local/pkg/pfblockerng/pfb_core_metrics.sh' --counters-cmd '/usr/local/pkg/pfblockerng/pfb_core_counters.sh' --zoneinfo", $text);
 	}
 
 

@@ -295,10 +295,10 @@ _ALLOWLIST_ROWS: tuple[_AllowRow, ...] = (
         '\t\t\t$widget_clear_cmd = "' + _SPAWN + ' {$type} >/dev/null 2>&1";',
     ),
     _AllowRow(
-        "pfblockerng.inc/$pfb_metrics_cmd",
-        _INC,
-        "\t$pfb_metrics_cmd = '/usr/bin/timeout -s TERM -k 5 50 " + _SPAWN + " metrics >> /dev/null 2>&1';",
-        "\t$metrics_cmd = '/usr/bin/timeout -s TERM -k 5 50 " + _SPAWN + " metrics >> /dev/null 2>&1';",
+        "pfb_core_metrics.sh/exec timeout",
+        f"{_PKG}/pfb_core_metrics.sh",
+        "exec /usr/bin/timeout -s TERM -k 5 50 " + _SPAWN + " metrics",
+        "exec " + _SPAWN + " metrics",
     ),
 )
 

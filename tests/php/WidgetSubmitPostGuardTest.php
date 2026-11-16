@@ -66,6 +66,17 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		])));
 	}
 
+	/** Issue #3996: Core clears the counters at the cadence this save stores, so the save installs no crontab entry. */
+	public function testSavingCounterCadencesInstallsNoCronEntry(): void
+	{
+		$result = $this->runWidget(['pfb_submit' => 'save', 'pfb_clearip' => 'daily', 'pfb_cleardnsbl' => 'weekly']);
+
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertSame('daily', $result['state']['widget-clearip'] ?? NULL, 'before: the cadence is stored');
+		$this->assertSame('weekly', $result['state']['widget-cleardnsbl'] ?? NULL);
+		$this->assertStringNotContainsString('CRON-INSTALL', $result['stderr'], 'the save must not install a cron entry');
+	}
+
 	/** @return array<string,array{bool,bool}> */
 	public static function obsoleteQueryCases(): array
 	{
@@ -169,6 +180,11 @@ require {$root} . '/tests/php/bootstrap.php';
 \$_GET = [];
 \$_POST = {$postCode};
 \$_SERVER = ['HTTP_SEC_FETCH_SITE' => 'same-origin'];
+\$GLOBALS['pfb_test_install_cron_hook'] = static function (string \$command, bool \$active): void {
+	if (\$active) {
+		fwrite(STDERR, 'CRON-INSTALL ' . \$command . "\\n");
+	}
+};
 \$widgetname = 'pfblockerng';
 \$shim = {$baseCode} . '/pfb_widget_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
 if (!mkdir(\$shim, 0700, TRUE)) {

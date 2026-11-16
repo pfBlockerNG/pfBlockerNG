@@ -98,9 +98,9 @@ _ALLOWLIST: tuple[_Exempt, ...] = (
         "crontab command string for the widget clear jobs; never executed here.",
     ),
     _Exempt(
-        "src/usr/local/pkg/pfblockerng/pfblockerng.inc",
-        "$pfb_metrics_cmd =",
-        "crontab command string for the metrics cron (timeout-bounded); never executed by this process.",
+        "src/usr/local/pkg/pfblockerng/pfb_core_metrics.sh",
+        "exec /usr/bin/timeout -s TERM -k 5 50 ",
+        "Core's metrics lane: the wrapper bounds the verb itself (TERM at 50 s, KILL 5 s later).",
     ),
 )
 

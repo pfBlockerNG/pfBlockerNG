@@ -1829,8 +1829,8 @@ if (!class_exists('Net_IPv6')) {
 
 // --- services.inc cron doubles (issue #1204) ---
 //
-// pfblockerng_configure_tick_cron() (pfblockerng.inc) drives install_cron_job() to
-// install/remove the scheduled tick and tear down legacy verb entries. Faithful to
+// pfblockerng_retire_cron_jobs() (pfblockerng.inc) drives install_cron_job() to
+// remove every legacy package entry (the package installs none). Faithful to
 // the real services.inc control flow: the FIRST cron/item whose command SUBSTRING-
 // matches $command (strstr, not equality) is "the" entry; $active=true installs or
 // overwrites it (appends when none matched); $active=false removes it. The removal
