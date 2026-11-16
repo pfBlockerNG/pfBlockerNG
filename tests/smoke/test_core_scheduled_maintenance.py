@@ -7,6 +7,8 @@ Other duty branches remain covered by the real PHP suite, not claimed here.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
@@ -40,10 +42,22 @@ SCHEDULE_HOUR = f"{h.CFG_GLOBAL}/pfb_schedule_hour"
 SCHEDULE_MINUTE = f"{h.CFG_GLOBAL}/pfb_schedule_minute"
 DCC_ID = "extra:dcc"
 WINDOW_BOUND_SECONDS = 2160
+EXTRAS_LOG = f"{h.PFB_LOGDIR}/extras.log"
+DIAGNOSTIC_CHUNK = 16_384
+DIAGNOSTIC_SMALL_EXTRAS = 64 * 1024
+DIAGNOSTIC_TAIL = 16 * 1024
+DIAGNOSTIC_TIMEOUT = 10
+UPDATE_RECEIPTS = (
+    ("request", f"{h.CORE_STATE_DIR}/update.log.request", 4 * 1024 * 1024),
+    ("result", f"{h.CORE_STATE_DIR}/update.log.result", 1 * 1024 * 1024),
+    ("status", f"{h.CORE_STATE_DIR}/update.log.status", 4 * 1024 * 1024),
+)
 
 
-def _schedule_view(vm: SmokeVM, phase: str) -> tuple[dict[str, int], dict[str, int], dict[str, Any]]:
-    reply = h.core_call(vm, "GetSchedule", {})
+def _schedule_view(
+    vm: SmokeVM, phase: str, reply: dict[str, Any] | None = None
+) -> tuple[dict[str, int], dict[str, int], dict[str, Any]]:
+    reply = h.core_call(vm, "GetSchedule", {}) if reply is None else reply
     assert reply["status"] == 200, f"{phase}: GetSchedule failed: {reply}"
     body = reply["body"]
     assert isinstance(body, dict), f"{phase}: malformed GetSchedule body: {reply}"
@@ -64,6 +78,121 @@ def _schedule_view(vm: SmokeVM, phase: str) -> tuple[dict[str, int], dict[str, i
     return dcc, checks, reply
 
 
+def _diagnostic_command(vm: SmokeVM, command: str) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
+    try:
+        result = vm.ssh(command, timeout=DIAGNOSTIC_TIMEOUT)
+    except Exception as error:
+        return None, f"{type(error).__name__}: {error}"
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "no command output"
+        return None, f"rc={result.returncode}: {detail}"
+    return result, None
+
+
+def _diagnostic_file_state(vm: SmokeVM, path: str) -> tuple[tuple[int, int] | None, str | None]:
+    result, error = _diagnostic_command(vm, f"stat -f '%i %z' {shlex.quote(path)}")
+    if error is not None or result is None:
+        return None, error
+    fields = result.stdout.split()
+    if len(fields) != 2 or not all(field.isdigit() for field in fields):
+        return None, f"malformed stat response: {result.stdout!r}"
+    return (int(fields[0]), int(fields[1])), None
+
+
+def _read_diagnostic_range(vm: SmokeVM, path: str, offset: int, length: int) -> tuple[bytes | None, str | None]:
+    data = bytearray()
+    for start in range(0, length, DIAGNOSTIC_CHUNK):
+        count = min(DIAGNOSTIC_CHUNK, length - start)
+        command = f"tail -c +{offset + start + 1} {shlex.quote(path)} | head -c {count} | base64"
+        result, error = _diagnostic_command(vm, command)
+        if error is not None or result is None:
+            return None, error
+        try:
+            block = base64.b64decode(result.stdout)
+        except ValueError as error:
+            return None, f"base64 decode failed: {error}"
+        if len(block) != count:
+            return None, f"short diagnostic read: expected {count} bytes, got {len(block)}"
+        data.extend(block)
+    return bytes(data), None
+
+
+def _hash_diagnostic_range(
+    vm: SmokeVM, path: str, offset: int, length: int
+) -> tuple[str | None, bytes | None, str | None]:
+    digest = hashlib.sha256()
+    tail = bytearray()
+    for start in range(0, length, DIAGNOSTIC_CHUNK):
+        count = min(DIAGNOSTIC_CHUNK, length - start)
+        data, error = _read_diagnostic_range(vm, path, offset + start, count)
+        if error is not None or data is None:
+            return None, None, error
+        digest.update(data)
+        tail.extend(data)
+        if len(tail) > DIAGNOSTIC_TAIL:
+            del tail[:-DIAGNOSTIC_TAIL]
+    return digest.hexdigest(), bytes(tail), None
+
+
+def _diagnostic_file(vm: SmokeVM, name: str, path: str, limit: int) -> str:
+    label = f"{name} {path}"
+    state, error = _diagnostic_file_state(vm, path)
+    if state is None:
+        return f"{label}: missing/unavailable: {error}"
+    inode, size = state
+    if size <= limit:
+        result, error = _diagnostic_command(vm, f"head -c {limit + 1} {shlex.quote(path)}")
+        if error is not None or result is None:
+            return f"{label}: read unavailable: {error}"
+        data = result.stdout.encode("utf-8")
+        if len(data) <= limit:
+            return f"{label} inode={inode} bytes={len(data)} sha256={hashlib.sha256(data).hexdigest()} data={data!r}"
+    digest, hash_error = _diagnostic_command(vm, f"sha256 -q {shlex.quote(path)}")
+    tail, tail_error = _diagnostic_command(vm, f"tail -c 4096 {shlex.quote(path)}")
+    digest_text = digest.stdout.strip() if digest is not None else f"unavailable: {hash_error}"
+    tail_text = tail.stdout if tail is not None else f"unavailable: {tail_error}"
+    return f"{label} inode={inode} bytes={size} sha256={digest_text} bounded_tail={tail_text!r}"
+
+
+def _extras_log_delta(vm: SmokeVM, before: tuple[int, int] | None, before_error: str | None) -> str:
+    after, error = _diagnostic_file_state(vm, EXTRAS_LOG)
+    if after is None:
+        return f"extras.log unavailable after retry: {error}; before={before!r} {before_error!r}"
+    inode, size = after
+    if before is not None and before[0] == inode and size >= before[1]:
+        offset, length, mode = before[1], size - before[1], "append"
+    else:
+        offset, length = 0, size
+        mode = "new-or-replaced"
+    if length <= DIAGNOSTIC_SMALL_EXTRAS:
+        data, read_error = _read_diagnostic_range(vm, EXTRAS_LOG, offset, length)
+        if read_error is not None or data is None:
+            return f"extras.log {mode} bytes={length} read unavailable: {read_error}"
+        return f"extras.log {mode} bytes={length} sha256={hashlib.sha256(data).hexdigest()} data={data!r}"
+    digest_text, tail, capture_error = _hash_diagnostic_range(vm, EXTRAS_LOG, offset, length)
+    tail_text = repr(tail) if tail is not None else f"unavailable: {capture_error}"
+    digest_text = digest_text if digest_text is not None else f"unavailable: {capture_error}"
+    return f"extras.log {mode} bytes={length} sha256={digest_text} bounded_tail={tail_text}"
+
+
+def _retry_failure_diagnostics(vm: SmokeVM, extras_before: tuple[tuple[int, int] | None, str | None]) -> str:
+    parts: list[str] = []
+    try:
+        parts.append(f"GetUpdate log={h.core_update_log(vm)!r}")
+    except Exception as error:
+        parts.append(f"GetUpdate log unavailable: {type(error).__name__}: {error}")
+    for name, path, limit in UPDATE_RECEIPTS:
+        try:
+            parts.append(_diagnostic_file(vm, name, path, limit))
+        except Exception as error:
+            parts.append(f"{name} {path}: capture raised {type(error).__name__}: {error}")
+    try:
+        parts.append(_extras_log_delta(vm, *extras_before))
+    except Exception as error:
+        parts.append(f"extras.log capture raised {type(error).__name__}: {error}")
+    return "\n".join(parts)
+
+
 def _complete_due_dcc(vm: SmokeVM) -> int:
     dcc, checks, reply = _schedule_view(vm, "before-DCC-setup")
     previous = checks.get(DCC_ID)
@@ -75,16 +204,29 @@ def _complete_due_dcc(vm: SmokeVM) -> int:
         return previous
 
     before = h.core_update_view(vm)["update"]
+    extras_before = _diagnostic_file_state(vm, EXTRAS_LOG)
     started = h.core_call(vm, "StartUpdate", {"trigger": "retry"})
     assert started["status"] == 200 and not started["body"], f"public StartUpdate retry was not admitted: {started}"
     ended = h.await_core_update_end(vm, before=before)
-    after_dcc, after_checks, after = _schedule_view(vm, "after-DCC-retry")
     update = ended.get("update")
-    assert (
+    retry_succeeded = (
         ended.get("running") is False
         and isinstance(update, dict)
         and (update.get("trigger") == "retry" and update.get("result") == "success")
-    ), f"retry Update failed: start={started!r}, end={ended!r}, schedule={after!r}"
+    )
+    if not retry_succeeded:
+        try:
+            diagnostics = _retry_failure_diagnostics(vm, extras_before)
+        except Exception as error:
+            diagnostics = f"diagnostic capture failed: {type(error).__name__}: {error}"
+        try:
+            schedule = h.core_call(vm, "GetSchedule", {})
+        except Exception as error:
+            schedule = {"capture_error": f"{type(error).__name__}: {error}"}
+        assert retry_succeeded, (
+            f"retry Update failed: start={started!r}, end={ended!r}, schedule={schedule!r}; diagnostics:\n{diagnostics}"
+        )
+    after_dcc, after_checks, after = _schedule_view(vm, "after-DCC-retry")
     successful = after_checks.get(DCC_ID)
     assert successful is not None and (previous is None or successful > previous) and after_dcc["lastRun"] > 0, (
         f"retry did not complete DCC successfully: prior={previous!r}, schedule={after!r}"
