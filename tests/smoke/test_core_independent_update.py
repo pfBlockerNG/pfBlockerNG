@@ -56,3 +56,45 @@ def test_core_independent_update(smoke_vm: SmokeVM, family: str, signal: str, re
     finally:
         cleanup = smoke_vm.ssh(f"rm -rf {directory}", timeout=30)
         assert cleanup.returncode == 0, cleanup.stderr
+
+
+def test_private_core_shows_live_php_script_output_cap(smoke_vm: SmokeVM) -> None:
+    """The private Core HTTP viewer retains one sanitized UTF-8 script transcript."""
+    helpers.deploy(smoke_vm)
+    directory = f"/root/pfb-native-output-{uuid4().hex}"
+    fixture = Path(__file__).parent / "fixtures" / "native_script_output_cap.php"
+    created = smoke_vm.ssh(f"mkdir -m 700 {directory}", timeout=30)
+    assert created.returncode == 0, created.stderr
+    try:
+        _upload(smoke_vm, fixture, f"{directory}/fixture.php", "root:wheel")
+        run = smoke_vm.ssh(
+            f"/usr/local/bin/php {directory}/fixture.php control {CORE_BIN} {directory}",
+            timeout=210,
+        )
+        preflight = next((line for line in run.stdout.splitlines() if line.startswith("NATIVE_PHP_PREFLIGHT ")), "")
+        summary = next(
+            (line for line in run.stdout.splitlines() if line.startswith("NATIVE_SCRIPT_OUTPUT_CAP_PASS ")), ""
+        )
+        diagnostics = (run.stdout + run.stderr)[-2000:]
+        if run.returncode != 0:
+            saved = smoke_vm.ssh(
+                f"if [ -f {directory}/control.error ]; then /usr/bin/tail -c 20000 {directory}/control.error; "
+                f"else for file in {directory}/controller.preflight {directory}/core.log {directory}/update.error; do "
+                'if [ -f "$file" ]; then echo "=== $file"; /usr/bin/tail -c 4096 "$file"; fi; done; fi',
+                timeout=30,
+            )
+            diagnostics = (
+                (preflight or "NATIVE_PHP_PREFLIGHT missing") + "\n" + diagnostics + saved.stdout + saved.stderr
+            )[-24000:]
+        else:
+            diagnostics = (preflight or "NATIVE_PHP_PREFLIGHT missing") + "\n" + diagnostics
+        assert run.returncode == 0, f"native PHP UTF-8 output-cap proof failed:\n{diagnostics}"
+        assert preflight, diagnostics
+        assert summary, diagnostics
+    finally:
+        cleanup_safe = smoke_vm.ssh(f"test -f {directory}/cleanup.safe", timeout=30)
+        assert cleanup_safe.returncode == 0, (
+            f"private Core worker completion/lease release was not proven; retained {directory}: {cleanup_safe.stderr}"
+        )
+        cleanup = smoke_vm.ssh(f"rm -rf {directory}", timeout=30)
+        assert cleanup.returncode == 0, cleanup.stderr
