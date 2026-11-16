@@ -64,6 +64,7 @@ class DccSetup:
         worker_result: dict[str, Any] | None = None,
         worker_request: dict[str, Any] | None = None,
         worker_status: dict[str, Any] | None = None,
+        result_payload: bytes | None = None,
         missing_receipts: set[str] | None = None,
         read_error_paths: set[str] | None = None,
         extras_delta: bytes | None = None,
@@ -83,6 +84,7 @@ class DccSetup:
         self.worker_result = worker_result
         self.worker_request = worker_request
         self.worker_status = worker_status
+        self.result_payload = result_payload
         self.events: list[str] = []
         self.seed_state: dict[str, Any] | None = None
         self.fixture_generator: Any = None
@@ -139,7 +141,11 @@ class DccSetup:
                 )
                 + "\n"
             ).encode(),
-            UPDATE_RESULT: (json.dumps({"version": 1, **worker_result}) + "\n").encode(),
+            UPDATE_RESULT: (
+                self.result_payload
+                if self.result_payload is not None
+                else (json.dumps({"version": 1, **worker_result}) + "\n").encode()
+            ),
             UPDATE_STATUS: (json.dumps(status_receipt) + "\n").encode(),
         }
         completed = after or schedule_reply(
@@ -706,3 +712,74 @@ def test_geoip_cleanup_groups_every_failure(monkeypatch: pytest.MonkeyPatch) -> 
         "egress unblock failed",
         "host diagnostics failed",
     ]
+
+
+def _jsonl_payload(*lines: dict[str, Any] | str) -> bytes:
+    return ("\n".join(line if isinstance(line, str) else json.dumps(line) for line in lines) + "\n").encode()
+
+
+def test_incremental_and_final_success_result_records_are_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    final = {"version": 1, "outcomes": {DCC: "success"}, "attempted": [], "geoipReady": True}
+    payload = _jsonl_payload({"version": 1, "outcomes": {DCC: "success"}}, final)
+    setup = DccSetup(monkeypatch, result_payload=payload)
+    generator, yielded = setup.run()
+    try:
+        assert yielded is setup.vm
+        assert setup.retry_started
+    finally:
+        generator.close()
+
+
+def test_single_line_aggregate_result_remains_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    final = {"version": 1, "outcomes": {DCC: "success"}, "attempted": [], "geoipReady": True}
+    setup = DccSetup(monkeypatch, result_payload=_jsonl_payload({"version": 1, **final}))
+    generator, yielded = setup.run()
+    try:
+        assert yielded is setup.vm
+        assert setup.retry_started
+    finally:
+        generator.close()
+
+
+@pytest.mark.parametrize(
+    ("case", "payload"),
+    [
+        (
+            "malformed-middle",
+            _jsonl_payload(
+                {"version": 1, "outcomes": {DCC: "success"}},
+                "{not-json",
+                {"version": 1, "outcomes": {DCC: "success"}, "attempted": [], "geoipReady": True},
+            ),
+        ),
+        (
+            "trailing-garbage",
+            _jsonl_payload(
+                {"version": 1, "outcomes": {DCC: "success"}, "attempted": [], "geoipReady": True},
+                "garbage",
+            ),
+        ),
+        (
+            "wrong-version",
+            _jsonl_payload(
+                {"version": 2, "outcomes": {DCC: "success"}},
+                {"version": 1, "outcomes": {DCC: "success"}, "attempted": [], "geoipReady": True},
+            ),
+        ),
+        (
+            "contradicting-outcome",
+            _jsonl_payload(
+                {"version": 1, "outcomes": {DCC: "retry-cap-reached"}},
+                {"version": 1, "outcomes": {DCC: "success"}, "attempted": [], "geoipReady": True},
+            ),
+        ),
+        ("missing-final-aggregate", _jsonl_payload({"version": 1, "outcomes": {DCC: "success"}})),
+        ("empty-result", b"\n \n"),
+    ],
+)
+def test_jsonl_result_rejects_bad_prefix_or_missing_aggregate(
+    monkeypatch: pytest.MonkeyPatch, case: str, payload: bytes
+) -> None:
+    setup = DccSetup(monkeypatch, result_payload=payload)
+    with pytest.raises(AssertionError, match="DCC retry receipt result"):
+        setup.run()

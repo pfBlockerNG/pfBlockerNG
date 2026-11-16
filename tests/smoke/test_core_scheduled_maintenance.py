@@ -161,7 +161,7 @@ def _diagnostic_file(vm: SmokeVM, name: str, path: str, limit: int) -> str:
     )
 
 
-def _read_worker_receipt(vm: SmokeVM, name: str) -> dict[str, Any]:
+def _read_worker_file(vm: SmokeVM, name: str) -> bytes:
     for receipt_name, path, limit in UPDATE_RECEIPTS:
         if receipt_name == name:
             break
@@ -177,18 +177,89 @@ def _read_worker_receipt(vm: SmokeVM, name: str) -> dict[str, Any]:
     data, error = _read_diagnostic_range(vm, path, 0, size)
     if error is not None or data is None:
         raise AssertionError(f"DCC retry receipt {name} {path} read failed: {error}")
+    return data
+
+
+def _read_worker_receipt(vm: SmokeVM, name: str) -> dict[str, Any]:
+    data = _read_worker_file(vm, name)
     try:
         receipt = json.loads(data)
     except ValueError as error:
-        raise AssertionError(f"DCC retry receipt {name} {path} is invalid JSON: {error}") from error
+        raise AssertionError(f"DCC retry receipt {name} is invalid JSON: {error}") from error
     if not isinstance(receipt, dict):
-        raise AssertionError(f"DCC retry receipt {name} {path} is not an object")
+        raise AssertionError(f"DCC retry receipt {name} is not an object")
     return receipt
+
+
+def _read_worker_result(vm: SmokeVM) -> dict[str, Any]:
+    data = _read_worker_file(vm, "result")
+    records: list[dict[str, Any]] = []
+    merged_outcomes: dict[str, str] = {}
+    seen_attempted: list[str] | None = None
+    seen_geoip_ready: bool | None = None
+    allowed = {"version", "outcomes", "attempted", "geoipReady"}
+
+    # PHP emits incremental outcomes and a final aggregate; identical repeats are valid, contradictions are not.
+    for line_number, line in enumerate(data.split(b"\n"), 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError as error:
+            raise AssertionError(f"DCC retry receipt result line {line_number} is invalid JSON: {error}") from error
+        if not isinstance(record, dict):
+            raise AssertionError(f"DCC retry receipt result line {line_number} is not an object")
+        if type(record.get("version")) is not int or record["version"] != 1:
+            raise AssertionError(f"DCC retry receipt result line {line_number} has an unsupported version")
+        if set(record) - allowed:
+            raise AssertionError(f"DCC retry receipt result line {line_number} has unknown fields")
+
+        outcomes = record.get("outcomes")
+        if outcomes is not None:
+            if not isinstance(outcomes, dict) or any(
+                type(outcome) is not str or outcome not in ("success", "retry-cap-reached")
+                for outcome in outcomes.values()
+            ):
+                raise AssertionError(f"DCC retry receipt result line {line_number} has invalid outcomes")
+            for item, outcome in outcomes.items():
+                if item in merged_outcomes and merged_outcomes[item] != outcome:
+                    raise AssertionError(f"DCC retry receipt result line {line_number} contradicts outcome {item!r}")
+                merged_outcomes[item] = outcome
+
+        attempted = record.get("attempted")
+        if attempted is not None:
+            if not isinstance(attempted, list) or any(type(item) is not str for item in attempted):
+                raise AssertionError(f"DCC retry receipt result line {line_number} has invalid attempted ids")
+            if seen_attempted is not None and seen_attempted != attempted:
+                raise AssertionError(f"DCC retry receipt result line {line_number} contradicts attempted ids")
+            seen_attempted = attempted
+
+        geoip_ready = record.get("geoipReady")
+        if geoip_ready is not None:
+            if type(geoip_ready) is not bool:
+                raise AssertionError(f"DCC retry receipt result line {line_number} has invalid GeoIP readiness")
+            if seen_geoip_ready is not None and seen_geoip_ready != geoip_ready:
+                raise AssertionError(f"DCC retry receipt result line {line_number} contradicts GeoIP readiness")
+            seen_geoip_ready = geoip_ready
+        records.append(record)
+
+    if not records:
+        raise AssertionError("DCC retry receipt result has no nonempty records")
+    final = records[-1]
+    if not all(field in final and final[field] is not None for field in ("outcomes", "attempted", "geoipReady")):
+        raise AssertionError("DCC retry receipt result has no complete final aggregate")
+    if (
+        merged_outcomes != final["outcomes"]
+        or seen_attempted != final["attempted"]
+        or seen_geoip_ready != final["geoipReady"]
+    ):
+        raise AssertionError("DCC retry receipt result incremental records contradict the final aggregate")
+    return final
 
 
 def _assert_dcc_retry_receipts(vm: SmokeVM) -> None:
     request = _read_worker_receipt(vm, "request")
-    result = _read_worker_receipt(vm, "result")
+    result = _read_worker_result(vm)
     status = _read_worker_receipt(vm, "status")
     expected_request = {"trigger": "retry", "scope": "both", "force": "none", "extras": [DCC_ID]}
     expected_result = {"outcomes": {DCC_ID: "success"}, "attempted": [], "geoipReady": True}
