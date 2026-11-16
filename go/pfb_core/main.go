@@ -1,7 +1,7 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
 //	--state-dir DIR     Core's own storage: core.lock and, without --settings-backend-cmd, settings.json; --update-cmd adds
@@ -18,6 +18,11 @@
 //	--maintenance-cmd PATH
 //	                    optional quarter-hour Outpost command in an independent maintenance worker; it uses maintenance.log
 //	                    and separate receipts/lock. Core shutdown ends observation, not an admitted maintenance transaction.
+//	--metrics-cmd PATH  optional program Core starts, with no arguments, at every Unix minute boundary
+//	--counters-cmd PATH optional program Core starts at the first minute boundary of each local calendar day (--zoneinfo's
+//	                    zone) with the cadences due as arguments: "daily", plus "weekly" on a Sunday. Both are started and
+//	                    observed, never signalled: a run still alive skips the boundary, output is discarded, a failure is logged
+//	                    once per outage, and a Core stop leaves a running program alone
 //	--zoneinfo PATH     the host's time zone file (a TZif file): the scheduler reads the schedule in its zone, re-reading it at
 //	                    every evaluation, so a change of the host's zone applies without a restart. Without it, or when the file
 //	                    cannot be used (logged once), the process's local zone
@@ -72,14 +77,10 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	stateDir := fl.String("state-dir", "", "Core's storage directory (required)")
 	backendCmd := fl.String("settings-backend-cmd", "", "keep the settings in this program instead of the state directory's file")
 	updateCmd := fl.String("update-cmd", "", "run the scheduler and the Updates through this program")
-	var maintenanceCmd string
-	fl.Func("maintenance-cmd", "run independent quarter-hour maintenance through this program", func(v string) error {
-		if i := strings.IndexFunc(v, unicode.IsControl); i >= 0 {
-			return fmt.Errorf("holds a control character at byte %d", i)
-		}
-		maintenanceCmd = v
-		return nil
-	})
+	var maintenanceCmd, metricsCmd, countersCmd string
+	fl.Func("maintenance-cmd", "run independent quarter-hour maintenance through this program", programFlag(&maintenanceCmd))
+	fl.Func("metrics-cmd", "start this program at every minute boundary", programFlag(&metricsCmd))
+	fl.Func("counters-cmd", "start this program at the first minute boundary of each local day, with the cadences due", programFlag(&countersCmd))
 	zoneinfo := fl.String("zoneinfo", "", "the host's time zone file the scheduler reads the schedule's zone from")
 	feed := addFeedFlags(fl)
 	var resourceDir string
@@ -118,7 +119,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 2
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--metrics-cmd PATH] [--counters-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
@@ -165,6 +166,15 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	logger.Printf("serving API %s on %s for uid %d, clients %v", apiVersion, *socket, allowUID, clients)
 	stopUpdates := runUpdates(ctx, sched, gate)
 	defer stopUpdates()
+	if metricsCmd != "" || countersCmd != "" {
+		clock := make(chan struct{})
+		go func() {
+			runClock(ctx, clockNow, clockAfter, hostZone(*zoneinfo, logger.Printf),
+				&lane{name: "metrics", path: metricsCmd, logf: logger.Printf}, &lane{name: "counters", path: countersCmd, logf: logger.Printf})
+			close(clock)
+		}()
+		defer func() { <-clock }() // ctx ends it before run returns; running children are left alone
+	}
 	select {
 	case err := <-served:
 		logger.Printf("stopped serving: %v", err)
@@ -180,6 +190,17 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	<-served
 	logger.Printf("stopped")
 	return 0
+}
+
+// programFlag is the flag.Func setter of an optional program path (empty: off) that may hold no control character.
+func programFlag(dst *string) func(string) error {
+	return func(v string) error {
+		if i := strings.IndexFunc(v, unicode.IsControl); i >= 0 {
+			return fmt.Errorf("holds a control character at byte %d", i)
+		}
+		*dst = v
+		return nil
+	}
 }
 
 // lockStateDir takes core.lock in dir for the life of the process, whichever backend Core reads: two Cores on one state

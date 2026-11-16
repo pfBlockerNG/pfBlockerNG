@@ -440,6 +440,9 @@ The worker receives this request on stdin and reports progress and results as fo
   Core shutdown ends observation but the worker keeps its lock and can finish; a restarted Core cannot start a duplicate. Update and maintenance use different locks and can overlap.
   The wrapper returns 75 while pfBlockerNG is disabled or `.pfb_cron_disable` is present; Core treats that and `ErrRunning` as benign skips and logs other failures.
   Maintenance has no whole-program timeout; bounds belong to the invoked operations.
+- **Timed lanes.** With `--metrics-cmd PATH`, Core starts PATH with no arguments at every Unix minute boundary; with `--counters-cmd PATH`, it starts PATH at the first minute boundary of each new local day in the `--zoneinfo` zone, with `daily`, plus `weekly` when that day is a Sunday.
+  A lane whose previous run is still alive skips the boundary rather than queueing it. Core only starts and observes: it never signals the program, a Core stop leaves a running one alone, and its output is discarded.
+  A failure to start or a non-zero exit is logged once per outage. The bound of a run belongs to the program Core is given.
 
 The scheduler records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically), either
 when the worker reports completion or when a later Core reconciles its receipt: each feed's outcome, the attempted ids that stay

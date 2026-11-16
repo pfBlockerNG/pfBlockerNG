@@ -65,3 +65,40 @@ func TestMaintenanceCmdAcceptsEmptyAndRejectsControlCharacters(t *testing.T) {
 		}
 	}
 }
+
+// --metrics-cmd and --counters-cmd are the minute and day lanes of Core's clock: the usage line names both.
+func TestUsageNamesTheClockLaneFlags(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := run(context.Background(), nil, &stderr); code != 2 {
+		t.Fatalf("run without flags = %d, want 2", code)
+	}
+	for _, flag := range []string{"--metrics-cmd PATH", "--counters-cmd PATH"} {
+		if !strings.Contains(stderr.String(), flag) {
+			t.Errorf("the usage text does not name %s: %q", flag, stderr.String())
+		}
+	}
+}
+
+// A clock lane path is optional (empty: lane off) and is never run through a shell, so only a control character, which no
+// path of the program Core is given can hold, is a usage error, naming the byte it was found at.
+func TestMetricsAndCountersCmdAcceptEmptyAndRejectControlCharacters(t *testing.T) {
+	cases := []struct {
+		value string
+		at    string // the byte offset the message names; empty when the value is accepted
+	}{
+		{"", ""}, {"/tmp/x y;$(z)", ""}, {"a\nb", "1"}, {"a\x00b", "1"}, {"a\tb", "1"}, {"a\x7fb", "1"}, {"\x1bab", "0"},
+	}
+	for _, flag := range []string{"--metrics-cmd", "--counters-cmd"} {
+		for _, c := range cases {
+			var stderr bytes.Buffer
+			// Without --socket and --state-dir an accepted value still ends in the usage error 2, after flag parsing.
+			if code := run(context.Background(), []string{flag, c.value}, &stderr); code != 2 {
+				t.Errorf("run %s %q = %d, want 2", flag, c.value, code)
+			}
+			want := "holds a control character at byte " + c.at
+			if got := strings.Contains(stderr.String(), want); got != (c.at != "") {
+				t.Errorf("run %s %q: stderr contains %q = %t, want %t; stderr %q", flag, c.value, want, got, c.at != "", stderr.String())
+			}
+		}
+	}
+}
