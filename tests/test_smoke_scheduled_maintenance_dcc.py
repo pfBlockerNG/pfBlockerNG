@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -17,6 +21,12 @@ BLACKLIST = "extra:bl"
 HOUR = f"{h.CFG_GLOBAL}/pfb_schedule_hour"
 MINUTE = f"{h.CFG_GLOBAL}/pfb_schedule_minute"
 BLACKLIST_ENABLE = "installedpackages/pfblockerngblacklist/blacklist_enable"
+
+UPDATE_REQUEST = f"{h.CORE_STATE_DIR}/update.log.request"
+UPDATE_RESULT = f"{h.CORE_STATE_DIR}/update.log.result"
+UPDATE_STATUS = f"{h.CORE_STATE_DIR}/update.log.status"
+EXTRAS_LOG = f"{h.PFB_LOGDIR}/extras.log"
+DIAGNOSTIC_CHUNK = 16_384
 
 
 def schedule_reply(extras: dict[str, Any], successful: Any) -> dict[str, Any]:
@@ -47,6 +57,8 @@ class DccSetup:
         update_result: str = "success",
         previous_install_fails: bool = False,
         current_restore_fails: bool = False,
+        missing_receipts: set[str] | None = None,
+        extras_delta: bytes | None = None,
     ) -> None:
         self.config: dict[str, str] = {}
         self.installs: list[dict[str, str]] = []
@@ -60,6 +72,48 @@ class DccSetup:
         self.settings_notices = 0
         self.start_reply = {"status": 200, "body": [], "error": None}
         self.update_result = update_result
+        self.missing_receipts = missing_receipts or set()
+        self.extras_before = b"existing extras\n"
+        self.extras_delta = extras_delta if extras_delta is not None else b"DCC child stderr: download failed\n"
+        self.public_update_log = "outer PHP update warning\n"
+        self.public_log_reads = 0
+        self.diagnostic_commands: list[str] = []
+        self.range_sizes: list[int] = []
+        self.retry_started = False
+        request = {"trigger": "retry", "scope": "both", "force": "none", "extras": [DCC]}
+        self.private_files = {
+            UPDATE_REQUEST: (
+                json.dumps(
+                    {
+                        "version": 1,
+                        "nonce": "a" * 64,
+                        "path": "/usr/local/pkg/pfblockerng/pfb_core_update.sh",
+                        "request": request,
+                        "startedAt": NOW,
+                        "logGen": 1,
+                    }
+                )
+                + "\n"
+            ).encode(),
+            UPDATE_RESULT: (json.dumps({"version": 1, "attempted": [DCC], "geoipReady": True}) + "\n").encode(),
+            UPDATE_STATUS: (
+                json.dumps(
+                    {
+                        "version": 1,
+                        "nonce": "a" * 64,
+                        "path": "/usr/local/pkg/pfblockerng/pfb_core_update.sh",
+                        "request": request,
+                        "startedAt": NOW,
+                        "logGen": 1,
+                        "settled": True,
+                        "finishedAt": NOW,
+                        "exitCode": 1,
+                        "result": {"attempted": [DCC], "geoipReady": True},
+                    }
+                )
+                + "\n"
+            ).encode(),
+        }
         completed = after or schedule_reply(
             {DCC: dcc_entry(last_run=NOW + 5, next_due=NOW + 80_000)},
             {DCC: NOW + 5} if successful is None else successful,
@@ -85,7 +139,58 @@ class DccSetup:
                 )
             if argv == ("test", "-f", acceptance.SENTINEL):
                 return subprocess.CompletedProcess(argv, 0, "", "")
-            pytest.fail(f"unapproved fake guest command: {argv!r}")
+            if len(argv) != 1:
+                pytest.fail(f"unapproved fake guest command: {argv!r}")
+
+            command = argv[0]
+            self.diagnostic_commands.append(command)
+            tokens = shlex.split(command)
+
+            def file_data(path: str) -> bytes | None:
+                if path in self.missing_receipts:
+                    return None
+                if path == EXTRAS_LOG:
+                    return self.extras_before + (self.extras_delta if self.retry_started else b"")
+                return self.private_files.get(path)
+
+            if tokens[0] == "stat":
+                path = tokens[-1]
+                data = file_data(path)
+                if data is None:
+                    return subprocess.CompletedProcess(argv, 1, "", f"missing diagnostic file: {path}\n")
+                inode = 7001 if path == EXTRAS_LOG else 7002
+                return subprocess.CompletedProcess(argv, 0, f"{inode} {len(data)}\n", "")
+            if tokens[0] == "head":
+                limit, path = int(tokens[2]), tokens[3]
+                data = file_data(path)
+                if data is None:
+                    return subprocess.CompletedProcess(argv, 1, "", f"missing diagnostic file: {path}\n")
+                return subprocess.CompletedProcess(argv, 0, data[:limit].decode("utf-8"), "")
+            if tokens[0] == "sha256":
+                path = tokens[-1]
+                data = file_data(path)
+                if data is None:
+                    return subprocess.CompletedProcess(argv, 1, "", f"missing diagnostic file: {path}\n")
+                return subprocess.CompletedProcess(argv, 0, hashlib.sha256(data).hexdigest() + "\n", "")
+            if tokens[0] == "tail":
+                path = tokens[3] if "|" not in tokens else tokens[3]
+                data = file_data(path)
+                if data is None:
+                    return subprocess.CompletedProcess(argv, 1, "", f"missing diagnostic file: {path}\n")
+                if "|" not in tokens:
+                    count = int(tokens[2])
+                    return subprocess.CompletedProcess(argv, 0, data[-count:].decode("utf-8"), "")
+                offset = int(tokens[2].removeprefix("+")) - 1
+                head_index = tokens.index("head")
+                count = int(tokens[head_index + 2])
+                self.range_sizes.append(count)
+                selected = data[offset : offset + count]
+                if "base64" in tokens:
+                    output = base64.b64encode(selected).decode("ascii") + "\n"
+                else:
+                    output = hashlib.sha256(selected).hexdigest() + "\n"
+                return subprocess.CompletedProcess(argv, 0, output, "")
+            pytest.fail(f"unapproved fake guest diagnostic command: {command!r}")
 
         self.ssh = ssh
 
@@ -114,6 +219,7 @@ class DccSetup:
             if method == "GetSchedule":
                 return self.schedules.pop(0)
             if method == "StartUpdate":
+                self.retry_started = True
                 return self.start_reply
             pytest.fail(f"unexpected public Core method: {method}")
 
@@ -143,6 +249,12 @@ class DccSetup:
         )
         monkeypatch.setattr(h, "core_call", core_call)
         monkeypatch.setattr(h, "core_update_view", lambda _vm: {"update": None})
+
+        def core_update_log(_vm: Any) -> str:
+            self.public_log_reads += 1
+            return self.public_update_log
+
+        monkeypatch.setattr(h, "core_update_log", core_update_log)
         monkeypatch.setattr(
             h,
             "await_core_update_end",
@@ -285,3 +397,73 @@ def test_current_restore_failure_reports_primary_and_cleanup_errors(
         "current package restoration failed",
     ]
     assert setup.install_attempts == ["previous.pkg", "current.pkg"]
+
+
+def test_failed_retry_diagnostics_capture_worker_receipts_and_child_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = DccSetup(monkeypatch, update_result="failed")
+    with pytest.raises(AssertionError, match="retry Update failed") as raised:
+        setup.run()
+
+    message = str(raised.value)
+    for evidence in (
+        "update.log.request",
+        "update.log.result",
+        "update.log.status",
+        "extra:dcc",
+        "DCC child stderr: download failed",
+        "outer PHP update warning",
+    ):
+        assert evidence in message, evidence
+    assert setup.public_log_reads == 1
+    assert any(EXTRAS_LOG in command for command in setup.diagnostic_commands)
+    assert setup.retry_started
+
+
+def test_failed_retry_captures_worker_receipts_and_child_stderr_before_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = DccSetup(monkeypatch, update_result="failed")
+    with pytest.raises(AssertionError, match="retry Update failed") as raised:
+        setup.run()
+
+    message = str(raised.value)
+    for evidence in (
+        "update.log.request",
+        "update.log.result",
+        "update.log.status",
+        "extra:dcc",
+        "DCC child stderr: download failed",
+        "outer PHP update warning",
+    ):
+        assert evidence in message, evidence
+    assert setup.public_log_reads == 1
+    assert any(EXTRAS_LOG in command for command in setup.diagnostic_commands)
+    assert setup.retry_started
+
+
+def test_missing_worker_receipt_is_diagnostic_not_primary_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = DccSetup(monkeypatch, update_result="failed", missing_receipts={UPDATE_STATUS})
+    with pytest.raises(AssertionError, match="retry Update failed") as raised:
+        setup.run()
+
+    message = str(raised.value)
+    assert "update.log.status" in message and "missing diagnostic file" in message
+    assert "DCC child stderr: download failed" in message
+
+
+def test_large_extras_delta_is_hashed_with_bounded_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+    delta = b"x" * 70_000 + b"DCC-LARGE-TAIL"
+    setup = DccSetup(monkeypatch, update_result="failed", extras_delta=delta)
+    with pytest.raises(AssertionError, match="retry Update failed") as raised:
+        setup.run()
+
+    message = str(raised.value)
+    assert str(len(delta)) in message
+    assert hashlib.sha256(delta).hexdigest() in message
+    assert "DCC-LARGE-TAIL" in message
+    assert len(message) < 50_000
+    assert setup.range_sizes and max(setup.range_sizes) <= DIAGNOSTIC_CHUNK
