@@ -45,11 +45,17 @@ class DccSetup:
         after: dict[str, Any] | None = None,
         successful: Any = None,
         update_result: str = "success",
+        previous_install_fails: bool = False,
+        current_restore_fails: bool = False,
     ) -> None:
         self.config: dict[str, str] = {}
         self.installs: list[dict[str, str]] = []
         self.config_reads: list[tuple[int, str]] = []
         self.core_calls: list[tuple[str, dict[str, Any]]] = []
+        self.install_attempts: list[str] = []
+        self.installed_package = "current"
+        self.previous_install_fails = previous_install_fails
+        self.current_restore_fails = current_restore_fails
         self.phases: list[str] = []
         self.settings_notices = 0
         self.start_reply = {"status": 200, "body": [], "error": None}
@@ -67,7 +73,7 @@ class DccSetup:
 
         def ssh(*argv: str, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             if argv == ("date", "-v+23H", "-v0M", "+%H"):
-                return subprocess.CompletedProcess(argv, 0, "10\n", "")
+                return subprocess.CompletedProcess(argv, 0, "04\n", "")
             if argv == ("date", "+%s"):
                 return subprocess.CompletedProcess(argv, 0, f"{NOW}\n", "")
             if argv == ("ps ax -o command",):
@@ -90,8 +96,18 @@ class DccSetup:
             self.config_reads.append((len(self.installs), path))
             return self.config.get(path, "")
 
-        def force_install(_vm: Any, _pkg: Path) -> None:
+        def force_install(_vm: Any, pkg: Path) -> None:
+            self.install_attempts.append(pkg.name)
             self.installs.append(self.config.copy())
+            if pkg.name == "previous.pkg":
+                self.installed_package = "previous"
+                if self.previous_install_fails:
+                    raise RuntimeError("previous package install failed after partial replacement")
+            elif self.current_restore_fails:
+                self.installed_package = "partial-current"
+                raise RuntimeError("current package restoration failed")
+            else:
+                self.installed_package = "current"
 
         def core_call(_vm: Any, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
             self.core_calls.append((method, dict(params or {})))
@@ -147,15 +163,15 @@ class DccSetup:
         return generator, next(generator)
 
 
-def test_dcc_setup_uses_supported_schedule_and_public_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dcc_setup_canonicalizes_the_guest_hour_and_uses_public_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     setup = DccSetup(monkeypatch)
     generator, yielded = setup.run()
     try:
         assert yielded is setup.vm
-        assert setup.config[HOUR] == "10" and setup.config[MINUTE] == "0"
+        assert setup.config[HOUR] == "4" and setup.config[MINUTE] == "0"
         assert setup.config[f"{h.CFG_GLOBAL}/pfb_scheduled_feed_updates"] == ""
         assert setup.config[BLACKLIST_ENABLE] == "Disable"
-        assert [snapshot[HOUR] for snapshot in setup.installs] == ["10", "10"]
+        assert [snapshot[HOUR] for snapshot in setup.installs] == ["4", "4"]
         assert [snapshot[MINUTE] for snapshot in setup.installs] == ["0", "0"]
         assert [(n, key) for n, key in setup.config_reads if key in (HOUR, MINUTE)] == [
             (1, HOUR),
@@ -242,3 +258,30 @@ def test_naturally_completed_dcc_needs_no_private_reset(monkeypatch: pytest.Monk
         assert not any(method == "StartUpdate" for method, _params in setup.core_calls)
     finally:
         generator.close()
+
+
+def test_partial_previous_install_failure_still_restores_current_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = DccSetup(monkeypatch, previous_install_fails=True)
+    with pytest.raises(RuntimeError, match="previous package install failed after partial replacement"):
+        setup.run()
+    assert setup.install_attempts == ["previous.pkg", "current.pkg"]
+    assert setup.installed_package == "current"
+
+
+def test_current_restore_failure_reports_primary_and_cleanup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = DccSetup(
+        monkeypatch,
+        previous_install_fails=True,
+        current_restore_fails=True,
+    )
+    with pytest.raises(ExceptionGroup) as raised:
+        setup.run()
+    assert [str(error) for error in raised.value.exceptions] == [
+        "previous package install failed after partial replacement",
+        "current package restoration failed",
+    ]
+    assert setup.install_attempts == ["previous.pkg", "current.pkg"]

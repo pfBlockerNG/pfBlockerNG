@@ -110,7 +110,7 @@ def _schedule_hour_far_from_window(vm: SmokeVM) -> str:
     )
     hour = result.stdout.strip()
     assert 0 <= int(hour) <= 23, f"invalid guest local hour {hour!r}"
-    return hour
+    return str(int(hour))
 
 
 def _epoch(vm: SmokeVM, phase: str) -> int:
@@ -178,6 +178,25 @@ def _force_install(vm: SmokeVM, pkg: Path) -> None:
         assert removed.returncode == 0, removed.stderr
 
 
+def _install_package_transition(vm: SmokeVM, previous: Path, current: Path, hour: str) -> None:
+    try:
+        _force_install(vm, previous)
+        assert h.config_get(vm, SCHEDULE_HOUR) == hour, "previous forced install changed the daily schedule hour"
+        assert h.config_get(vm, SCHEDULE_MINUTE) == "0", "previous forced install changed the daily schedule minute"
+        _force_install(vm, current)
+        assert h.config_get(vm, SCHEDULE_HOUR) == hour, "current forced install changed the daily schedule hour"
+        assert h.config_get(vm, SCHEDULE_MINUTE) == "0", "current forced install changed the daily schedule minute"
+    except Exception as primary:
+        try:
+            _force_install(vm, current)
+        except Exception as restoration:
+            raise ExceptionGroup(
+                "package transition failed and restoring the current package also failed",
+                [primary, restoration],
+            ) from None
+        raise
+
+
 @pytest.fixture(scope="module")
 def maintenance_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer, prev_pkg: Path) -> Iterator[SmokeVM]:
     del stub_dns  # starts the real hermetic DNS boundary before install
@@ -203,12 +222,8 @@ def maintenance_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer, prev_pkg: Path) 
     h.reload(vm, "update")
     _assert_no_dispatch(vm, "enabled-apply")
     h.set_pfb_keep(vm, True)
-    _force_install(vm, prev_pkg)
-    assert h.config_get(vm, SCHEDULE_HOUR) == hour, "previous forced install changed the daily schedule hour"
-    assert h.config_get(vm, SCHEDULE_MINUTE) == "0", "previous forced install changed the daily schedule minute"
-    _force_install(vm, Path(os.environ["SMOKE_PKG"]))
-    assert h.config_get(vm, SCHEDULE_HOUR) == hour, "current forced install changed the daily schedule hour"
-    assert h.config_get(vm, SCHEDULE_MINUTE) == "0", "current forced install changed the daily schedule minute"
+    current_pkg = Path(os.environ["SMOKE_PKG"])
+    _install_package_transition(vm, prev_pkg, current_pkg, hour)
     _assert_no_dispatch(vm, "enabled-upgrade")
     h.reload(vm, "update")
     h.tell_core_the_settings_changed(vm)
