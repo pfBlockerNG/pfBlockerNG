@@ -345,7 +345,21 @@ class SmokeVM:
             return result.stdout
 
         def no_dispatch_jobs() -> None:
-            crontab = checked("/usr/bin/crontab -l")
+            crontab_result = self.ssh("/usr/bin/crontab -l", timeout=30.0)
+            if crontab_result.returncode == 0:
+                crontab = crontab_result.stdout
+            elif (
+                crontab_result.returncode == 1
+                and crontab_result.stdout == ""
+                and crontab_result.stderr == "crontab: no crontab for root\n"
+            ):
+                crontab = ""
+            else:
+                raise RuntimeError(
+                    "scheduled maintenance safety probe failed: /usr/bin/crontab -l: "
+                    f"rc={crontab_result.returncode} stdout={crontab_result.stdout!r} "
+                    f"stderr={crontab_result.stderr!r}"
+                )
             generated_crontab = checked("/bin/cat /etc/crontab")
             try:
                 commands = json.loads(checked(config_command))

@@ -18,6 +18,7 @@ RESTORE = f"/usr/bin/touch {SENTINEL}"
 EXISTS = f"test -f {SENTINEL}"
 ABSENT = f"test ! -f {SENTINEL}"
 CRONTAB = "/usr/bin/crontab -l"
+NO_ROOT_CRONTAB = "crontab: no crontab for root\n"
 GENERATED_CRONTAB = "/bin/cat /etc/crontab"
 # The config probe emits only JSON (not the pfSsh.php startup banner).
 CONFIG = "/usr/local/bin/php -r " + shlex.quote(
@@ -34,6 +35,8 @@ class Guest:
         self.pid = 31415
         self.config: list[str] = []
         self.crontab = "*/5 * * * * /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics\n"
+        self.crontab_returncode = 0
+        self.crontab_stderr = ""
         self.generated_crontab = "*/5 * * * * root /usr/libexec/atrun\n"
         self.calls: list[str] = []
         self.fail: str | None = None
@@ -59,7 +62,9 @@ class Guest:
             rc = 0 if self.running else 1
             out = f"cron is running as pid {self.pid}.\n" if self.running else "cron is not running.\n"
         elif command == CRONTAB:
+            rc = self.crontab_returncode
             out = self.crontab
+            err = self.crontab_stderr
         elif command == GENERATED_CRONTAB:
             out = self.generated_crontab
         elif command == CONFIG:
@@ -184,6 +189,44 @@ def test_unreadable_preflight_refused(guest: Guest, command: str) -> None:
     assert guest.sentinel and REMOVE not in guest.calls and guest.running
 
 
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr", "benign"),
+    [
+        (1, "", NO_ROOT_CRONTAB, True),
+        (1, "root job\n", NO_ROOT_CRONTAB, False),
+        (2, "", NO_ROOT_CRONTAB, False),
+        (1, "", "crontab: no crontab for nobody\n", False),
+        (1, "", "permission denied\n", False),
+    ],
+)
+def test_only_exact_root_crontab_absence_is_benign(
+    guest: Guest, returncode: int, stdout: str, stderr: str, benign: bool
+) -> None:
+    guest.crontab = stdout
+    guest.crontab_returncode = returncode
+    guest.crontab_stderr = stderr
+    before = (guest.config[:], guest.crontab, guest.generated_crontab, guest.pid, guest.running)
+
+    if not benign:
+        with pytest.raises(RuntimeError):
+            with guest.vm.scheduled_maintenance():
+                pytest.fail("noncanonical no-crontab result was admitted")
+        assert guest.sentinel and guest.running and REMOVE not in guest.calls
+        assert (guest.config, guest.crontab, guest.generated_crontab, guest.pid, guest.running) == before
+        return
+
+    with guest.vm.scheduled_maintenance():
+        assert not guest.sentinel and guest.running
+    assert guest.sentinel and guest.running
+    assert (guest.config, guest.crontab, guest.generated_crontab, guest.pid, guest.running) == before
+    assert guest.calls.count(CRONTAB) >= 2
+    assert guest.calls.count(GENERATED_CRONTAB) >= 2
+    assert guest.calls.count(CONFIG) >= 2
+    assert guest.calls.count(STATUS) >= 2
+    assert ABSENT in guest.calls and RESTORE in guest.calls
+    assert EXISTS in guest.calls[guest.calls.index(RESTORE) + 1 :]
+
+
 def test_remove_failure_restores_without_yield(guest: Guest) -> None:
     guest.fail = REMOVE
     with pytest.raises(RuntimeError):
@@ -202,7 +245,26 @@ def test_body_failure_restores_before_outer_config_cleanup(guest: Guest, error: 
         finally:
             assert guest.sentinel, "configuration cleanup would run without sentinel"
             assert EXISTS in guest.calls[guest.calls.index(RESTORE) + 1 :]
+    assert STATUS in guest.calls[guest.calls.index(RESTORE) + 1 :]
     assert caught.value is error and guest.running
+
+
+@pytest.mark.parametrize("error", [AssertionError("body failed"), ValueError("body failed")])
+def test_no_root_crontab_body_failure_still_restores_and_checks_identity(guest: Guest, error: Exception) -> None:
+    guest.crontab = ""
+    guest.crontab_returncode = 1
+    guest.crontab_stderr = NO_ROOT_CRONTAB
+
+    with pytest.raises(type(error), match="body failed"):
+        with guest.vm.scheduled_maintenance():
+            raise error
+
+    restored_at = guest.calls.index(RESTORE)
+    assert guest.sentinel and guest.running
+    assert EXISTS in guest.calls[restored_at + 1 :]
+    assert STATUS in guest.calls[restored_at + 1 :]
+    assert guest.calls.count(GENERATED_CRONTAB) >= 2
+    assert guest.calls.count(CONFIG) >= 2
 
 
 @pytest.mark.parametrize("ineffective", [False, True])
