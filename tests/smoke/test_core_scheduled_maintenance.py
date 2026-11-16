@@ -47,8 +47,16 @@ def _epoch(vm: SmokeVM, phase: str) -> int:
 
 def _assert_no_dispatch(vm: SmokeVM, phase: str) -> None:
     result = vm.ssh("/usr/bin/crontab", "-l")
-    assert result.returncode == 0, f"{phase}: unreadable root crontab: {result}"
-    assert not DISPATCH.search(result.stdout), f"{phase}: competing root job: {result.stdout}"
+    if result.returncode == 0:
+        root_crontab = result.stdout
+    elif result.returncode == 1 and result.stdout == "" and result.stderr == "crontab: no crontab for root\n":
+        # FreeBSD crontab(1) uses this exact ENOENT result when root has no per-user tab.
+        root_crontab = ""
+    else:
+        raise AssertionError(f"{phase}: unreadable root crontab: {result}")
+
+    effective = vm.ssh("/bin/cat", "/etc/crontab")
+    assert effective.returncode == 0, f"{phase}: unreadable effective crontab: {effective}"
     commands = h._php_read_scalar(
         vm,
         "",
@@ -56,8 +64,14 @@ def _assert_no_dispatch(vm: SmokeVM, phase: str) -> None:
     )
     parsed = json.loads(commands)
     assert isinstance(parsed, list) and all(isinstance(command, str) for command in parsed), commands
-    assert not any(DISPATCH.search(command) for command in parsed), (
-        f"{phase}: competing config registration: {commands}"
+    active_lines = [
+        line
+        for source in (root_crontab, effective.stdout)
+        for line in source.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    assert not any(DISPATCH.search(command) for command in [*parsed, *active_lines]), (
+        f"{phase}: competing config/effective dispatch job: {commands}"
     )
     assert vm.ssh("test", "-f", SENTINEL).returncode == 0, f"{phase}: sentinel missing"
 
