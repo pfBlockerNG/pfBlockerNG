@@ -8,6 +8,7 @@
 #   smoke-on-box.sh [--ref REF] [--abi ABI] [--channel C] [--marker M] [--filter EXPR]
 #                   [--ports-repo R] [--ports-ref REF] [--no-two-vm]
 #                   [--shard I] [--shard-total N]
+#                   [--scheduled-exception allow]
 #
 # FLAGS:
 #   --ref REF        git ref to check out (default: current HEAD)
@@ -27,6 +28,8 @@
 #                    operator may stamp any identity. Ignored on other channels.
 #   --marker M       pytest -m marker (default: smoke)
 #   --filter EXPR    pytest -k filter expr (default: none)
+#   --scheduled-exception allow  only for marker smoke, shard 0/1, and filter
+#                    test_core_scheduled_maintenance_preserves_tick_duties.
 #   --no-two-vm      skip civm image pull and set NO_TWO_VM=1
 #   --shard I        0-based shard index, forwarded to run-smoke.sh (default: 0;
 #                     issue #797)
@@ -83,6 +86,7 @@
 # POSIX sh; shellcheck clean; all expansions quoted.
 
 set -eu
+unset SMOKE_SCHEDULED_EXCEPTION
 
 # ── Defaults ──────────────────────────────────────────────────────────────── #
 _REF=""        # resolved below (HEAD) if not given
@@ -93,6 +97,7 @@ _PORTS_REF="pfblockerng/use-github"      # branch or commit SHA; overridden by -
 _PKGVERSION="${PFB_NIGHTLY_PKGVERSION:-}"
 _MARKER="smoke"
 _FILTER=""
+_SCHEDULED_EXCEPTION=""
 _NO_TWO_VM=0
 _SHARD=0       # 0-based shard index, forwarded to run-smoke.sh (issue #797)
 _SHARD_TOTAL=1 # N=1 = no sharding (default)
@@ -148,12 +153,25 @@ while [ "$#" -gt 0 ]; do
         --pkgversion) shift; _PKGVERSION="$1"; shift ;;
         --marker)   shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
+        --scheduled-exception)
+            if [ "${2:-}" != allow ]; then
+                printf 'smoke-on-box: --scheduled-exception requires literal allow\n' >&2
+                exit 2
+            fi
+            _SCHEDULED_EXCEPTION=allow; shift 2 ;;
         --no-two-vm) _NO_TWO_VM=1;       shift ;;
         --shard)       shift; _SHARD="$1";       shift ;;
         --shard-total) shift; _SHARD_TOTAL="$1"; shift ;;
         *) printf 'smoke-on-box: unknown argument: %s\n' "$1" >&2; exit 1 ;;
     esac
 done
+if [ "$_SCHEDULED_EXCEPTION" = allow ] && {
+    [ "$_MARKER" != smoke ] || [ "$_SHARD" != 0 ] || [ "$_SHARD_TOTAL" != 1 ] ||
+    [ "$_FILTER" != test_core_scheduled_maintenance_preserves_tick_duties ]
+}; then
+    printf 'smoke-on-box: --scheduled-exception requires marker smoke, shard 0/1, and the exact maintenance test filter\n' >&2
+    exit 2
+fi
 
 # ── Step 1: the ref is already resolved ────────────────────────────────────── #
 # The caller (local-smoke.sh's bootstrap, via select-box.sh) fetches the requested ref and
@@ -578,6 +596,9 @@ set -- --paths "$_PATHS" --marker "$_MARKER" --timeout "$_TIMEOUT"
 [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
 [ "$_SHARD" != "0" ] && set -- "$@" --shard "$_SHARD"
 [ "$_SHARD_TOTAL" != "1" ] && set -- "$@" --shard-total "$_SHARD_TOTAL"
+if [ "$_SCHEDULED_EXCEPTION" = allow ]; then
+    export SMOKE_SCHEDULED_EXCEPTION=allow
+fi
 if [ "$_GO_PROVIDED" -eq 0 ]; then
     exec sh scripts/run-smoke.sh "$@"
 fi

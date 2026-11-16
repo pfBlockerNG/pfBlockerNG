@@ -1,12 +1,12 @@
 // pfb-core, the pfBlockerNG Core daemon (map #3813): the platform-neutral business logic behind a versioned HTTP+JSON API
 // that the co-located pfSense layer (PHP, native curl) calls over a Unix socket. docs/misc/core-api-protocol.md is the contract.
 //
-//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
+//	pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]
 //
 //	--socket PATH       the API's Unix socket: its directory is made 0700 and the socket 0600, the server's user's alone
-//	--state-dir DIR     Core's own storage (its lock core.lock, the settings store settings.json without
-//	                    --settings-backend-cmd, and with --update-cmd the scheduler's schedule_state.json, Update log and
-//	                    private worker receipts): made 0700, the server's user's alone; one Core at a time may use it
+//	--state-dir DIR     Core's own storage: core.lock and, without --settings-backend-cmd, settings.json; --update-cmd adds
+//	                    schedule_state.json, update.log and Update receipts; --maintenance-cmd adds maintenance.log and its
+//	                    private receipts. The directory is made 0700 and is the server user's alone.
 //	--settings-backend-cmd PATH
 //	                    keep the settings in the program at PATH instead of settings.json: Core runs it once per read or
 //	                    write of the settings, a JSON request on its stdin and its JSON reply on stdout (settings.AdapterBackend)
@@ -15,6 +15,9 @@
 //	                    update.log and its result on fd 3. Without it those methods answer unavailable. Stopping Core ends
 //	                    scheduling and observation, not an admitted worker; a restarted Core observes or reconciles its receipt.
 //	                    Exit status 75 means the worker deferred the Update: its result is skipped and nothing is recorded
+//	--maintenance-cmd PATH
+//	                    optional quarter-hour Outpost command in an independent maintenance worker; it uses maintenance.log
+//	                    and separate receipts/lock. Core shutdown ends observation, not an admitted maintenance transaction.
 //	--zoneinfo PATH     the host's time zone file (a TZif file): the scheduler reads the schedule in its zone, re-reading it at
 //	                    every evaluation, so a change of the host's zone applies without a restart. Without it, or when the file
 //	                    cannot be used (logged once), the process's local zone
@@ -32,7 +35,8 @@
 //	                    not root can connect; who is served is still decided by uid
 //
 // Every path Core uses arrives as a flag: Core names no pfSense path (boundary_test.go). Log lines go to stderr; the rc
-// script points it at the package log. TERM or INT stops it: requests in flight finish (up to 3 s) and the socket is removed.
+// script points it at the package log. TERM or INT stops scheduling and observation without signaling admitted workers;
+// in-flight API requests finish (up to 3 s) and the socket is removed.
 //
 // Exit status: 0 after a clean stop, 1 when it cannot serve (including settings it cannot read at start), 2 for a usage error.
 package main
@@ -50,8 +54,10 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/resources"
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/settings"
@@ -66,6 +72,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	stateDir := fl.String("state-dir", "", "Core's storage directory (required)")
 	backendCmd := fl.String("settings-backend-cmd", "", "keep the settings in this program instead of the state directory's file")
 	updateCmd := fl.String("update-cmd", "", "run the scheduler and the Updates through this program")
+	var maintenanceCmd string
+	fl.Func("maintenance-cmd", "run independent quarter-hour maintenance through this program", func(v string) error {
+		if i := strings.IndexFunc(v, unicode.IsControl); i >= 0 {
+			return fmt.Errorf("holds a control character at byte %d", i)
+		}
+		maintenanceCmd = v
+		return nil
+	})
 	zoneinfo := fl.String("zoneinfo", "", "the host's time zone file the scheduler reads the schedule's zone from")
 	feed := addFeedFlags(fl)
 	var resourceDir string
@@ -104,7 +118,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		return 2
 	}
 	if *socket == "" || *stateDir == "" || fl.NArg() != 0 {
-		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
+		fmt.Fprintln(stderr, "pfb-core: usage: pfb-core --socket PATH --state-dir DIR [--settings-backend-cmd PATH] [--update-cmd PATH] [--maintenance-cmd PATH] [--zoneinfo PATH] [--resource-dir PATH] [--feed-local-dir PATH]... [--script-dir PATH]... [--rsync-bin PATH] [--user-agent STRING] [--allow-uid UID] [--client-uid UID]... [--socket-group GID]")
 		return 2
 	}
 	logger := log.New(stderr, "pfb_core: ", log.LstdFlags)
@@ -138,7 +152,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		resourceStore = resources.Open(resourceDir)
 	}
 	maps.Copy(methods, resourceMethods(resourceStore))
-	sched, gate := newUpdates(*updateCmd, *zoneinfo, *stateDir, store, logger.Printf) // nil without --update-cmd
+	sched, gate := newUpdates(*updateCmd, maintenanceCmd, *zoneinfo, *stateDir, store, logger.Printf) // nil without --update-cmd
 	maps.Copy(methods, updateMethods(sched, gate))
 	srv, err := listen(options{socket: *socket, allowUID: allowUID, clientUIDs: clients, socketGroup: group, groupSet: groupSet,
 		methods: methods, logf: logger.Printf})

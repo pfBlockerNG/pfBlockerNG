@@ -24,6 +24,7 @@ Update, and SafeSearch, apply reconciliation and log maintenance run in the tick
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Iterator
 from typing import Literal
@@ -290,23 +291,9 @@ def _read_pfb_tick_cron_items(vm: SmokeVM) -> list[str]:
 
 @pytest.mark.smoke
 @pytest.mark.tick
-@pytest.mark.timeout(180)  # two foreground sync passes (master switch off, then on)
-def test_tick_cron_entry_installed(deployed_vm: SmokeVM) -> None:
-    """The installed scheduled-tick cron entry is the #1204 cron-tick verb.
-
-    Guards pfblockerng_configure_tick_cron's trailing-space teardown needle
-    ('pfblockerng.php cron ', not the bare 'pfblockerng.php cron'): the bare needle
-    substring-matches the just-installed 'cron-tick' command too, so
-    install_cron_job() would delete it on every sync pass, leaving NO tick cron
-    installed at all.
-
-    Scenario:
-        Background: pfBlockerNG's master switch driven OFF then synced (before-state).
-            Given no tick-family cron/item entry exists,
-            When the master switch is turned ON and a sync pass runs,
-            Then EXACTLY ONE tick-family cron/item entry exists, its command is the
-                cron-tick verb, and no legacy 'pfblockerng.php tick >>' entry survives.
-    """
+@pytest.mark.timeout(240)  # disabled, enabled and repeated enabled apply
+def test_tick_cron_entry_retired(deployed_vm: SmokeVM) -> None:
+    """Enabled saves retire dispatch cron registrations; Core owns maintenance."""
     vm = deployed_vm
     # deployed_vm is module-scoped: restore the master switch to whatever this module
     # was left in, never to a hardcoded state (the later tests here need it enabled).
@@ -321,12 +308,14 @@ def test_tick_cron_entry_installed(deployed_vm: SmokeVM) -> None:
 
         h.set_package_enabled(vm, True)
         h.reload(vm, "update")
-        after = _read_pfb_tick_cron_items(vm)
-        assert len(after) == 1, f"after: expected exactly one tick-family cron/item entry, found {len(after)}: {after}"
-        assert _CRON_TICK_NEEDLE in after[0], f"the installed entry must be the cron-tick verb; got {after[0]!r}"
-        assert "pfblockerng.php tick >>" not in after[0], (
-            f"the legacy 'pfblockerng.php tick' entry must not survive; got {after[0]!r}"
+        assert _read_pfb_tick_cron_items(vm) == [], "enabled apply reinstalled a retired tick job"
+        crontab = vm.ssh("/usr/bin/crontab", "-l")
+        assert crontab.returncode == 0, f"cannot inspect root crontab: {crontab.stderr}"
+        assert not re.search(r"pfblockerng\.php\s+(?:cron-tick|tick|cron)(?:\s|$)", crontab.stdout), (
+            f"enabled apply left a competing dispatch job: {crontab.stdout}"
         )
+        h.reload(vm, "update")
+        assert _read_pfb_tick_cron_items(vm) == [], "repeated enabled save reinstalled a tick job"
     finally:
         h.config_set(vm, _ENABLE_CB_CFG, original_enabled)
         h.reload(vm, "update")

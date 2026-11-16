@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/schedule"
@@ -40,15 +41,17 @@ var (
 // possibly by several goroutines at once; StatePath is the file the scheduler owns; Loc is the zone the schedule is read in
 // (nil: time.Local), unless Zone, which is called once per evaluation and per View (before the scheduler's lock, as Model is),
 // returns one: so that a change of the host's time zone is read without a restart. Now is the clock (nil: time.Now); Logf is
-// the logger (nil: discard).
+// the logger (nil: discard). Maintenance is optional quarter-hour work independent of feed admission and settlement; it must
+// return when its context ends. Run never overlaps it and joins it on cancellation.
 type Config struct {
-	Model     func() (schedule.Model, error)
-	StatePath string
-	LogPath   string // the Update log whose receipt recovery reads; empty in tests that do not recover
-	Loc       *time.Location
-	Zone      func() *time.Location
-	Now       func() time.Time
-	Logf      func(format string, args ...any)
+	Model       func() (schedule.Model, error)
+	StatePath   string
+	LogPath     string // the Update log whose receipt recovery reads; empty in tests that do not recover
+	Loc         *time.Location
+	Zone        func() *time.Location
+	Now         func() time.Time
+	Logf        func(format string, args ...any)
+	Maintenance func(context.Context) error
 }
 
 type Scheduler struct {
@@ -383,11 +386,35 @@ func (s *Scheduler) View() (View, error) {
 	return v, nil
 }
 
-// Run calls Tick at every quarter-hour boundary (a Unix time that is a multiple of 900 s) until ctx is done. after is the
-// timer (nil: time.After). A failed Tick has logged itself, and the next boundary comes anyway.
+// Run calls Tick and signals optional maintenance at every Unix quarter-hour boundary until ctx is done. after is the timer
+// (nil: time.After). A busy maintenance callback is skipped, never queued; feeds do not wait for it. Cancellation joins its observer.
 func (s *Scheduler) Run(ctx context.Context, after func(time.Duration) <-chan time.Time) {
 	if after == nil {
 		after = time.After
+	}
+	var maintenance chan struct{}
+	var busy atomic.Bool
+	if s.cfg.Maintenance != nil {
+		maintenance = make(chan struct{}, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-maintenance:
+					if ctx.Err() != nil {
+						return
+					}
+					if err := s.cfg.Maintenance(ctx); err != nil {
+						s.cfg.Logf("scheduler: maintenance failed: %v", err)
+					}
+					busy.Store(false)
+				}
+			}
+		}()
+		defer func() { <-done }()
 	}
 	for {
 		now := s.cfg.Now()
@@ -396,6 +423,9 @@ func (s *Scheduler) Run(ctx context.Context, after func(time.Duration) <-chan ti
 		case <-ctx.Done():
 			return
 		case <-after(boundary.Sub(now)):
+			if maintenance != nil && busy.CompareAndSwap(false, true) {
+				maintenance <- struct{}{}
+			}
 			_ = s.Tick()
 		}
 	}

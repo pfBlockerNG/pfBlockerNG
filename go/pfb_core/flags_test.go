@@ -40,3 +40,28 @@ func TestUsageNamesTheZoneinfoFlag(t *testing.T) {
 		t.Errorf("the usage text does not name --zoneinfo: %q", stderr.String())
 	}
 }
+
+func TestUsageNamesTheMaintenanceCmdFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := run(context.Background(), nil, &stderr); code != 2 {
+		t.Fatalf("run without flags = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "--maintenance-cmd PATH") {
+		t.Errorf("the usage text does not name --maintenance-cmd: %q", stderr.String())
+	}
+}
+
+func TestMaintenanceCmdAcceptsEmptyAndRejectsControlCharacters(t *testing.T) {
+	for _, value := range []string{"", "bad\npath", "bad\tpath", "bad\x00path"} {
+		var stderr bytes.Buffer
+		if code := run(context.Background(), []string{"--maintenance-cmd", value}, &stderr); code != 2 {
+			t.Errorf("run with maintenance path %q = %d, want usage error 2", value, code)
+		}
+		if value == "" && strings.Contains(stderr.String(), "control character") {
+			t.Errorf("empty optional maintenance path was rejected: %q", stderr.String())
+		}
+		if value != "" && !strings.Contains(stderr.String(), "control character") {
+			t.Errorf("control character was not rejected before state creation: %q", stderr.String())
+		}
+	}
+}

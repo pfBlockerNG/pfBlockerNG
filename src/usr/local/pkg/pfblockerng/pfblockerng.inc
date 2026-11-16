@@ -4278,6 +4278,7 @@ const PFB_CORE_API_VERSION = 'v1';
 const PFB_CORE_SETTINGS_CMD = '/usr/local/pkg/pfblockerng/pfb_core_settings.sh';
 // issue #3941: the program Core runs once per Update (--update-cmd): the `core_update` verb behind a sh wrapper (pfb_core_update_serve(), pfblockerng_extra.inc)
 const PFB_CORE_UPDATE_CMD = '/usr/local/pkg/pfblockerng/pfb_core_update.sh';
+const PFB_CORE_MAINTENANCE_CMD = '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh';
 // The adapter reads at most this many bytes of request from stdin
 const PFB_CORE_SETTINGS_MAX_REQUEST = 33554432;	// 32 MiB, as Core takes a reply: the feed projections carry custom lists
 // issue #3927: the adapter's metrics waits, so the waits it chooses on a client-IP change (DNS config lock, metrics lock, three passes
@@ -4587,6 +4588,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	$state = escapeshellarg($pfb['core_state']);
 	$settingsCmd = escapeshellarg(PFB_CORE_SETTINGS_CMD);
 	$updateCmd = escapeshellarg(PFB_CORE_UPDATE_CMD);
+	$maintenanceCmd = escapeshellarg(PFB_CORE_MAINTENANCE_CMD);
 	// issue #3975: what Core's feed phase reads of this machine, each value one quoted argument; the user agent is the one cURL sends, without the
 	// line break a unique id may end with (Core refuses a user agent that holds one, and would not start)
 	$feedFlags = '';
@@ -4659,7 +4661,7 @@ function pfb_core_service(string $coreDir = PFB_CORE_DIR): void {
 	# Anything the daemon runs that starts this service again must take the lock
 	unset PFB_CORE_START_LOCKED
 	# Detach std fds (#662): the caller's pipe (the package-manager capture during an install) must not stay open in the daemon
-	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --zoneinfo /etc/localtime{$feedFlags} </dev/null >/dev/null 2>&1
+	/usr/sbin/daemon -r -R 5 -t pfb_core -P {$daemonpid} -p {$childpid} -o {$log} "\${binary}" --socket {$socket} --state-dir {$state} --settings-backend-cmd {$settingsCmd} --update-cmd {$updateCmd} --maintenance-cmd {$maintenanceCmd} --zoneinfo /etc/localtime{$feedFlags} </dev/null >/dev/null 2>&1
 	daemonstatus="\$?"
 	if [ "\${daemonstatus}" -ne 0 ]; then
 		/usr/bin/logger -p daemon.err -t pfb_core "ERROR [{$prefix}] Core API: daemon(8) failed with status \${daemonstatus} - not started"
@@ -15191,26 +15193,10 @@ function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_
 	return FALSE;
 }
 
-// issue #1204: extracted from sync_package_pfblockerng() so PHPUnit can pin the
-// tick cron's install/teardown behaviour without driving the whole sync pass.
-function pfblockerng_configure_tick_cron(bool $enabled, string $log): void {
-	$pfb_tick_min = '*/15';
-	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$log} 2>&1";
-
-	if ($enabled) {
-		if (!pfblockerng_cron_exists($pfb_tick_cmd, $pfb_tick_min, '*', '*', '*')) {
-			install_cron_job('pfblockerng.php cron-tick', FALSE);	// remove stale cron-tick (interval changed)
-			install_cron_job('pfblockerng.php tick', FALSE);	// remove legacy pre-#1204 entry
-			install_cron_job($pfb_tick_cmd, TRUE, $pfb_tick_min, '*', '*', '*', '*', 'root');
-		}
-	}
-	else {
-		install_cron_job('pfblockerng.php cron-tick', FALSE);
-		install_cron_job('pfblockerng.php tick', FALSE);
-	}
-
-	// issue #1204: trailing space -- a bare 'pfblockerng.php cron' needle substring-matches
-	// 'pfblockerng.php cron-tick' and would delete the just-installed entry every sync.
+// Core owns scheduled dispatch; each apply retires only the obsolete tick jobs.
+function pfblockerng_configure_tick_cron(): void {
+	install_cron_job('pfblockerng.php cron-tick', FALSE);
+	install_cron_job('pfblockerng.php tick', FALSE);
 	install_cron_job('pfblockerng.php cron ', FALSE);
 	install_cron_job('pfblockerng.php dcc', FALSE);
 	install_cron_job('pfblockerng.php ss_refresh', FALSE);
@@ -29086,6 +29072,20 @@ require_once __DIR__ . '/pfblockerng_geoip.inc';
 if (isset($argv[1]) && $argv[1] == 'core_update') {
 	pfb_global();
 	exit(pfb_core_update_serve((string) stream_get_contents(STDIN, PFB_CORE_UPDATE_MAX_REQUEST + 1)));
+}
+// Core's scheduled maintenance has no request or fd 3 result: every guarded deferral is the real EX_TEMPFAIL status 75.
+if (isset($argv[1]) && $argv[1] == 'core_maintenance') {
+	pfb_global();
+	if (PfbConfig::read('gen/enable_cb') !== PfbToggle::On) {
+		fwrite(STDERR, "Core maintenance skipped: pfBlockerNG is disabled.\n");
+		exit(75);
+	}
+	if (pfb_cron_disabled()) {
+		fwrite(STDERR, "Core maintenance skipped: " . pfb_cron_disable_path() . " is present.\n");
+		exit(75);
+	}
+	pfblockerng_tick();
+	exit(0);
 }
 
 // Remove owned firewall objects (VIP, NAT, filter rules) BEFORE the config reference data is

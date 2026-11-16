@@ -499,6 +499,7 @@ STUBEOF
   # tool that lives in /usr/bin: this example hides the tool by dropping every PATH entry
   # carrying it, and on Linux /bin symlinks to /usr/bin, so that would take `sh` with it
   # and the run would fail on a missing shell instead of on the preflight.
+  Context 'required-tool parameter rows'
   Parameters
     uv
     iptables
@@ -548,6 +549,7 @@ STUBEOF
     The status should equal 2
     The stderr should include 'missing required tools on this box'
     The stderr should include "$1"
+  End
   End
 
   It 'refuses a symlinked venv root without clearing its target'
@@ -1128,5 +1130,106 @@ STUBEOF
     When run sh "$SCRIPT" --ref HEAD --abi FreeBSD:16:amd64 --no-two-vm
     The status should equal 1
     The stderr should include 'matches more than one BUILD row for runtime tuple selection'
+  End
+  Describe '--scheduled-exception maintenance opt-in'
+    scheduled_cli_leg() {
+      unset SMOKE_SCHEDULED_EXCEPTION
+      prev_pkg_leg
+      SPARSE_CHANNEL_FILE="${WORK}/scheduled-ports"
+      BUILD_LEG_ARGV_LOG="${WORK}/scheduled-build"
+      SCHEDULED_RUN_LOG="${WORK}/scheduled-run"
+      export SPARSE_CHANNEL_FILE BUILD_LEG_ARGV_LOG SCHEDULED_RUN_LOG
+      cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$BUILD_LEG_ARGV_LOG"
+printf '%s\n' /tmp/fake-branch.pkg
+STUBEOF
+      cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+printf 'exception=%s\n' "${SMOKE_SCHEDULED_EXCEPTION-<unset>}" > "$SCHEDULED_RUN_LOG"
+printf 'arg=%s\n' "$@" >> "$SCHEDULED_RUN_LOG"
+STUBEOF
+    }
+    BeforeEach 'scheduled_cli_leg'
+
+    It 'mints allow at pytest only for the exact single-shard maintenance case'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm --scheduled-exception allow \
+          --marker smoke --shard 0 --shard-total 1 \
+          --filter test_core_scheduled_maintenance_preserves_tick_duties
+      The status should equal 0
+      The stderr should include 'running smoke'
+      The line 1 of contents of file "$SCHEDULED_RUN_LOG" should equal 'exception=allow'
+      The contents of file "$SCHEDULED_RUN_LOG" should include "$(printf 'arg=--marker\narg=smoke\n')"
+      The contents of file "$SCHEDULED_RUN_LOG" should include "$(printf 'arg=--filter\narg=test_core_scheduled_maintenance_preserves_tick_duties\n')"
+      The contents of file "$SCHEDULED_RUN_LOG" should not include 'arg=--scheduled-exception'
+    End
+
+    It 'scrubs inherited allow when the CLI flag is absent'
+      SMOKE_SCHEDULED_EXCEPTION=allow
+      export SMOKE_SCHEDULED_EXCEPTION
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm
+      The status should equal 0
+      The stderr should include 'running smoke'
+      The line 1 of contents of file "$SCHEDULED_RUN_LOG" should equal 'exception=<unset>'
+    End
+
+    It 'does not mint allow in an ordinary run'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm
+      The status should equal 0
+      The stderr should include 'running smoke'
+      The line 1 of contents of file "$SCHEDULED_RUN_LOG" should equal 'exception=<unset>'
+    End
+
+    Context 'nonliteral authorization parameter rows'
+    Parameters
+      deny
+      ''
+      ALLOW
+      'allow; exit 0'
+      '$(exit 0)'
+    End
+    It 'rejects nonliteral allow before ports, image transport, build or pytest'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm --scheduled-exception "$1" \
+          --filter test_core_scheduled_maintenance_preserves_tick_duties
+      The status should not equal 0
+      The stderr should include 'scheduled-exception'
+      The file "$SPARSE_CHANNEL_FILE" should not be exist
+      The contents of file "$ORAS_ARGV_LOG" should equal ''
+      The file "$BUILD_LEG_ARGV_LOG" should not be exist
+      The file "$SCHEDULED_RUN_LOG" should not be exist
+    End
+    End
+
+    It 'rejects a missing authorization value before expensive work'
+      When run sh "$SCRIPT" --ref HEAD --scheduled-exception
+      The status should not equal 0
+      The stderr should include 'scheduled-exception'
+      The file "$SPARSE_CHANNEL_FILE" should not be exist
+      The contents of file "$ORAS_ARGV_LOG" should equal ''
+      The file "$SCHEDULED_RUN_LOG" should not be exist
+    End
+
+    Context 'broader and unrelated selection rows'
+    Parameters
+      --marker repo --filter test_core_scheduled_maintenance_preserves_tick_duties
+      --marker 'smoke or repo' --filter test_core_scheduled_maintenance_preserves_tick_duties
+      --shard-total 2 --filter test_core_scheduled_maintenance_preserves_tick_duties
+      --shard 1 --filter test_core_scheduled_maintenance_preserves_tick_duties
+      --marker smoke
+      --filter ''
+      --filter test_core_scheduled_maintenance
+      --filter 'test_core_scheduled_maintenance_preserves_tick_duties or test_other'
+      --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+    End
+    It 'rejects broader and unrelated selections before any expensive work'
+      When run sh "$SCRIPT" --ref HEAD --no-two-vm --scheduled-exception allow "$@"
+      The status should not equal 0
+      The stderr should include 'scheduled-exception'
+      The file "$SPARSE_CHANNEL_FILE" should not be exist
+      The contents of file "$ORAS_ARGV_LOG" should equal ''
+      The file "$BUILD_LEG_ARGV_LOG" should not be exist
+      The file "$SCHEDULED_RUN_LOG" should not be exist
+    End
+    End
   End
 End

@@ -5466,14 +5466,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	#	Define/Apply CRON Jobs		#
 	#########################################
 
-	// ADR-43: one fixed 15-minute trigger-tick replaces the cron/dcc/ss_refresh/bl fleet.
-	// A single */15 cron entry fires; the tick reads the due-ledger
-	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
-	// are out of scope (ADR-30 territory) and remain as separate jobs below.
-	pfblockerng_configure_tick_cron(
-		$pfb['enable'] === PfbToggle::On,
-		$pfb['log']
-	);
+	// Core owns the quarter-hour tick; metrics and counter jobs stay with cron.
+	pfblockerng_configure_tick_cron();
 
 	pfb_metrics_configure_cron(
 		$pfb['enable'] === PfbToggle::On && PfbConfig::read('gen/pfb_metrics_export') === PfbToggle::On

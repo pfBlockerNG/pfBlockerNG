@@ -435,6 +435,12 @@ The worker receives this request on stdin and reports progress and results as fo
   Core-owned process-group kill. Downloads and scripts keep their operation-level bounds; a worker killed before completion is
   recovered as failed from its complete result lines, never relaunched.
 
+- **Scheduled maintenance.** With `--maintenance-cmd PATH`, each quarter-hour boundary admits a separate maintenance worker; a busy lane skips rather than queues.
+  It uses `maintenance.log` and its own `maintenance.log.lock`, `.request`, `.result` and `.status` receipts, never the Update lease or `Scheduler.Done`.
+  Core shutdown ends observation but the worker keeps its lock and can finish; a restarted Core cannot start a duplicate. Update and maintenance use different locks and can overlap.
+  The wrapper returns 75 while pfBlockerNG is disabled or `.pfb_cron_disable` is present; Core treats that and `ErrRunning` as benign skips and logs other failures.
+  Maintenance has no whole-program timeout; bounds belong to the invoked operations.
+
 The scheduler records the result in `schedule_state.json` (0600, `{"schema": 1, "items": {...}}`, replaced atomically), either
 when the worker reports completion or when a later Core reconciles its receipt: each feed's outcome, the attempted ids that stay
 pending, and the GeoIP readiness the program saw (`true` until the first report). The Extras plan uses the last readiness reported.

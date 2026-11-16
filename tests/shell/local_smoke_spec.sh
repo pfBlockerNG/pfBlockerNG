@@ -39,6 +39,7 @@ Describe 'local-smoke.sh --shards'
 #!/bin/sh
 _call_file="$(mktemp "${CALLS_DIR}/call.XXXXXX")"
 printf '%s\n' "$*" > "$_call_file"
+printf 'exception=%s\n' "${SMOKE_SCHEDULED_EXCEPTION-<unset>}" >> "$_call_file"
 _shard_idx="$(printf '%s' "$*" | sed -n "s/.*--shard '\([0-9]*\)'.*/\1/p")"
 if [ -n "$_shard_idx" ] && [ -f "${WORK}/fail-${_shard_idx}" ]; then
     exit 1
@@ -346,6 +347,74 @@ FAKEEOF
     End
   End
 
+  Describe '--scheduled-exception maintenance opt-in'
+    clear_scheduled_exception() { unset SMOKE_SCHEDULED_EXCEPTION; }
+    BeforeEach 'clear_scheduled_exception'
+
+    It 'forwards literal allow only for the exact maintenance case'
+      When call run_and_diag --ref dummy --scheduled-exception allow --marker smoke --shards 1 \
+          --filter test_core_scheduled_maintenance_preserves_tick_duties
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include "--scheduled-exception 'allow'"
+      The output should include "--filter 'test_core_scheduled_maintenance_preserves_tick_duties'"
+      The output should not include "--shard "
+    End
+
+    It 'does not forward an inherited opt-in without the flag'
+      inherited_exception() { SMOKE_SCHEDULED_EXCEPTION=allow; export SMOKE_SCHEDULED_EXCEPTION; }
+      BeforeCall 'inherited_exception'
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should not include '--scheduled-exception'
+      The output should not include 'SMOKE_SCHEDULED_EXCEPTION='
+      The output should include 'exception=<unset>'
+    End
+
+    Context 'nonliteral authorization parameter rows'
+    Parameters
+      deny
+      ''
+      ALLOW
+      'allow; exit 0'
+      '$(exit 0)'
+    End
+    It 'rejects nonliteral authorization before leasing'
+      When call run_and_diag --ref dummy --scheduled-exception "$1" \
+          --filter test_core_scheduled_maintenance_preserves_tick_duties
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+      The output should include 'scheduled-exception'
+    End
+    End
+
+    It 'rejects a missing authorization value before leasing'
+      When call run_and_diag --ref dummy --scheduled-exception
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+      The output should include 'scheduled-exception'
+    End
+
+    Context 'broader and unrelated selection rows'
+    Parameters
+      --marker repo --filter test_core_scheduled_maintenance_preserves_tick_duties
+      --marker 'smoke or repo' --filter test_core_scheduled_maintenance_preserves_tick_duties
+      --shards 2 --filter test_core_scheduled_maintenance_preserves_tick_duties
+      --marker smoke
+      --filter ''
+      --filter test_core_scheduled_maintenance
+      --filter 'test_core_scheduled_maintenance_preserves_tick_duties or test_other'
+      --filter test_scheduled_update_runs_core_feedphase_for_every_feed_kind
+    End
+    It 'rejects every broader or unrelated selection before leasing'
+      When call run_and_diag --ref dummy --scheduled-exception allow "$@"
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+      The output should include 'scheduled-exception'
+    End
+    End
+  End
 End
 
 # issue #2780: a missing or abbreviated ref used to lease a box, then git fetch

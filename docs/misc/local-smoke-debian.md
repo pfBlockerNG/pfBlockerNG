@@ -194,6 +194,39 @@ tests collected) would fail that shard spuriously. `N` should stay at or under f
 `PFB_BOXES` pool; oversized `N` just makes excess shards fail loudly on
 `select-box.sh`'s own pool-exhaustion path rather than pre-counting pool.
 
+### Isolated scheduled-maintenance acceptance
+
+Ordinary smoke retains `.pfb_cron_disable` and drives explicit `tick` controls.
+Only the owner-approved production-cadence case accepts a bounded exception:
+
+```sh
+scripts/local-smoke.sh --scheduled-exception allow --marker smoke --shards 1 \
+  --filter test_core_scheduled_maintenance_preserves_tick_duties
+```
+
+Use the configured disposable `PFB_BOXES` pool. Native execution remains held until
+the operation-lifetime integration is explicitly released; adding the harness is
+not permission to execute or certify an unsafe maintenance runner.
+
+The flag requires literal `allow`, marker `smoke`, one shard (on-box index 0), and
+that exact filter. Inherited `SMOKE_SCHEDULED_EXCEPTION` is discarded. Package
+install, enabled apply and upgrade retain the sentinel and must leave no dispatch
+job (`pfblockerng.php cron-tick`, `tick` or `cron`) in config or root crontab.
+Metrics and counter jobs are unaffected.
+
+`SmokeVM.scheduled_maintenance()` refuses a nonowned guest, unreadable job state,
+a competing dispatcher or stopped system cron. It never stops, starts, signals or
+reconfigures cron and never deletes a job. Only its fixed internal sentinel-removal
+command is admitted; ordinary SSH remains guarded. On every exit it restores and
+verifies the sentinel **before caller configuration cleanup**, rechecks dispatch
+absence, and requires the same running cron identity.
+
+The case observes real guest quarter-hour boundaries (up to 15 minutes each),
+records guest timestamps and has a 2100-second body cap. Manual tick is only a
+compatibility control, never scheduled proof. SafeSearch CSV effects and the
+Outpost duty ledger are observable evidence; unexercised native duty effects must
+be reported separately, not inferred from timer or ledger activity alone.
+
 ### How it works
 
 1. `local-smoke.sh` leases one box from `PFB_BOXES` via `select-box.sh -- <bootstrap>`.

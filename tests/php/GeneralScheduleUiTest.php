@@ -96,8 +96,8 @@ final class GeneralScheduleUiTest extends TestCase
 		$this->assertLessThan($notice, $write, 'config must be persisted before Core is told');
 		$this->assertStringContainsString("header('Location: /pfblockerng/pfblockerng_general.php');", $source);
 		$this->assertStringContainsString('$pfb[\'save\'] = TRUE; sync_package_pfblockerng();', $source);
-		$this->assertMatchesRegularExpression('/pfblockerng_configure_tick_cron\(\s*\$pfb\[\'enable\'\]\s*===\s*PfbToggle::On,\s*\$pfb\[\'log\'\]\s*\)/', php_strip_whitespace(self::APPLY),
-			'settings-save sync installs the tick cron only: no schedule cache is regenerated or replaced (issue #3941)');
+		$this->assertMatchesRegularExpression('/pfblockerng_configure_tick_cron\(\s*\)/', php_strip_whitespace(self::APPLY),
+			'settings-save sync unconditionally retires the legacy tick cron: Core alone owns scheduled dispatch');
 	}
 
 	public function testAuthorizationRemainsGatewayBound(): void

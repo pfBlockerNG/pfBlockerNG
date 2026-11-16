@@ -2,30 +2,22 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/PageStatementLoader.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfblockerng_configure_tick_cron() (issue #1204): the ADR-43 scheduled-tick cron
- * install/teardown now installs the cron-tick verb (not tick), so the crontab
- * entry is gateable by pfb_cron_disabled() without touching the direct tick verb.
- * Also covers the migration-teardown strstr regression: 'pfblockerng.php cron'
- * must NOT substring-match the just-installed 'pfblockerng.php cron-tick' entry.
- *
- * pfb_cron_disable_path()/pfb_cron_disabled(): the hidden dbdir sentinel that
- * suppresses the scheduled dispatch (house pattern: PFB_SOFTWARE_PANEL_OVERRIDE /
- * pfb_software_panel_override()). Presence-only -- content is never read; every
- * hostile-input class from CLAUDE.md's coverage matrix gets its own assertion.
+ * Core owns the quarter-hour dispatch: install, upgrade and every apply retire
+ * only the old pfBlockerNG dispatch jobs, regardless of package enablement.
+ * The hidden sentinel remains presence-only for Core's scheduled maintenance.
  */
-#[CoversFunction('pfblockerng_configure_tick_cron')]
 #[CoversFunction('pfb_cron_disable_path')]
 #[CoversFunction('pfb_cron_disabled')]
 final class TickCronInstallTest extends TestCase
 {
 	private const LOG = '/var/log/pfblockerng/pfblockerng.log';
-	private const CRON_TICK_CMD = '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> ' . self::LOG . ' 2>&1';
-	private const LEGACY_TICK_CMD = '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> ' . self::LOG . ' 2>&1';
 
 	/** @var string Per-test temp dir for the cron-disable sentinel tests. */
 	private string $tmp;
@@ -58,101 +50,66 @@ final class TickCronInstallTest extends TestCase
 		]);
 	}
 
-	// --- pfblockerng_configure_tick_cron() ------------------------------------
+	private function applyRegistration(bool $enabled): void
+	{
+		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', $enabled ? 'on' : '');
+		$code = pfb_test_page_region(
+			'src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc',
+			"\t#\tDefine/Apply CRON Jobs",
+			"\tpfb_metrics_configure_cron("
+		);
+		pfb_test_page_eval($code, ['pfb' => [
+			'enable' => PfbConfig::read('gen/enable_cb'),
+			'log' => self::LOG,
+		]]);
+	}
 
-	public function testEnableInstallsCronTickCommand(): void
+	#[DataProvider('registrationStates')]
+	public function testEveryApplyRetiresDispatchWithoutInstallingAndKeepsSiblingJobs(bool $enabled, string $log): void
+	{
+		config_set_path('installedpackages/pfblockerng/config/0/enable_cb', $enabled ? 'on' : '');
+		$prefix = '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php ';
+		$retired = [];
+		foreach (['cron', 'tick', 'cron-tick', 'dcc', 'ss_refresh', 'bl'] as $verb) {
+			$retired[] = $prefix . $verb . ' >> ' . $log . ' 2>&1';
+		}
+		$kept = [$prefix . 'metrics', $prefix . 'clearip', $prefix . 'cleardnsbl', '/usr/sbin/newsyslog'];
+		foreach (array_merge($retired, $kept) as $idx => $command) {
+			$this->seedCronItem($idx, $command);
+		}
+		$this->assertSame(array_merge($retired, $kept), $this->cronCommands(), 'before: every obsolete dispatch and sibling job');
+		$installs = [];
+		$GLOBALS['pfb_test_install_cron_hook'] = static function (string $command, bool $active) use (&$installs): void {
+			if ($active) {
+				$installs[] = $command;
+			}
+		};
+		try {
+			$this->applyRegistration($enabled);
+			$this->assertSame($kept, $this->cronCommands(), 'first apply removes dispatch but no sibling job');
+			$this->applyRegistration($enabled);
+			$this->assertSame($kept, $this->cronCommands(), 'repeat apply never reinstalls dispatch');
+			$this->assertSame([], $installs, 'no transient competing registration is allowed');
+		} finally {
+			unset($GLOBALS['pfb_test_install_cron_hook']);
+		}
+	}
+
+	public static function registrationStates(): array
+	{
+		return [
+			'enabled current commands' => [TRUE, self::LOG],
+			'enabled old log commands' => [TRUE, '/var/log/old-pfblockerng.log'],
+			'disabled current commands' => [FALSE, self::LOG],
+			'disabled old log commands' => [FALSE, '/var/log/old-pfblockerng.log'],
+		];
+	}
+
+	public function testFreshEnabledInstallRegistersNoDispatch(): void
 	{
 		$this->assertSame([], $this->cronCommands());
-
-		pfblockerng_configure_tick_cron(TRUE, self::LOG);
-
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
-	}
-
-	public function testEnableRemovesStaleCronTickBeforeReinstall(): void
-	{
-		$this->seedCronItem(0, self::CRON_TICK_CMD, '*/30');
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
-		$this->assertSame('*/30', config_get_path('cron/item/0/minute'), 'before: the stale interval is in place');
-
-		pfblockerng_configure_tick_cron(TRUE, self::LOG);
-
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
-		$this->assertSame('*/15', config_get_path('cron/item/0/minute'), 'after: the entry carries the fixed interval');
-	}
-
-	public function testEnableReplacesACronTickEntryWhoseCommandChanged(): void
-	{
-		// The stale-cron-tick removal earns its keep here: install_cron_job() overwrites an
-		// entry its own command substring-matches, but a stored cron-tick command that DIFFERS
-		// (e.g. a log path change) is not matched by the new command -- without the removal it
-		// would linger beside the fresh entry.
-		$stale = '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> /var/log/old-pfblockerng.log 2>&1';
-		$this->seedCronItem(0, $stale, '*/15');
-		$this->assertSame([$stale], $this->cronCommands());
-
-		pfblockerng_configure_tick_cron(TRUE, self::LOG);
-
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands(), 'the stale-command entry must not linger beside the fresh one');
-	}
-
-	public function testEnableUpgradesLegacyTickEntryToCronTick(): void
-	{
-		// Upgrade case: a pre-#1204 build left a bare 'tick' entry. It must be
-		// replaced -- exactly ONE entry remains, and it is cron-tick.
-		$this->seedCronItem(0, self::LEGACY_TICK_CMD, '*/15');
-		$this->assertSame([self::LEGACY_TICK_CMD], $this->cronCommands());
-
-		pfblockerng_configure_tick_cron(TRUE, self::LOG);
-
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
-	}
-
-	public function testDisableRemovesCronTickEntry(): void
-	{
-		$this->seedCronItem(0, self::CRON_TICK_CMD, '*/15');
-
-		pfblockerng_configure_tick_cron(FALSE, self::LOG);
-
+		$this->applyRegistration(TRUE);
 		$this->assertSame([], $this->cronCommands());
-	}
-
-	public function testDisableRemovesLegacyTickEntry(): void
-	{
-		// A box that upgraded straight into 'disabled' must still lose its old tick entry.
-		$this->seedCronItem(0, self::LEGACY_TICK_CMD, '*/15');
-
-		pfblockerng_configure_tick_cron(FALSE, self::LOG);
-
-		$this->assertSame([], $this->cronCommands());
-	}
-
-	public function testMigrationTeardownRemovesLegacyCronButSparesCronTick(): void
-	{
-		// strstr regression (issue #1204): the bare 'pfblockerng.php cron' needle must NOT
-		// substring-match 'pfblockerng.php cron-tick' and delete the just-installed entry.
-		// The SECOND call is what discriminates: on the first pass the legacy entry absorbs
-		// install_cron_job()'s first-match-wins removal, so only a steady-state resync (no
-		// legacy entry left to absorb it) exposes a too-loose needle.
-		$this->seedCronItem(0, '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> ' . self::LOG . ' 2>&1', '0');
-
-		pfblockerng_configure_tick_cron(TRUE, self::LOG);
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands(), 'first sync: legacy cron removed, cron-tick installed');
-
-		pfblockerng_configure_tick_cron(TRUE, self::LOG);
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands(), 'steady-state resync: the cron-tick entry must survive the migration teardown');
-	}
-
-	public function testMigrationTeardownRemovesLegacyDccSsRefreshBlAndCronTickSurvives(): void
-	{
-		$this->seedCronItem(0, '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dcc >> ' . self::LOG . ' 2>&1', '0');
-		$this->seedCronItem(1, '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php ss_refresh >> ' . self::LOG . ' 2>&1', '0');
-		$this->seedCronItem(2, '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl >> ' . self::LOG . ' 2>&1', '0');
-		$this->assertCount(3, $this->cronCommands());
-
-		pfblockerng_configure_tick_cron(TRUE, self::LOG);
-
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
 	}
 
 	// --- pfb_cron_disable_path() / pfb_cron_disabled() ------------------------

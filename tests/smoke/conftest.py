@@ -36,6 +36,7 @@ hardcoded).
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import shlex
@@ -300,7 +301,7 @@ class SmokeVM:
     def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
         """Run a command on the guest over SSH and capture its output."""
         sh_command = remote[0] if len(remote) == 1 else shlex.join(remote)
-        # NEVER REMOVE THIS GUARD: scheduled pfBlockerNG ticks must remain disabled for every smoke test.
+        # NEVER REMOVE THIS GUARD: ordinary SSH cannot remove the scheduled-duty sentinel.
         if "/var/db/pfblockerng/.pfb_cron_disable" in sh_command and re.search(r"\b(?:rm|unlink)\b", sh_command):
             raise RuntimeError("scheduled ticks must stay disabled throughout every smoke run")
         # issue #605: time each guest command, but emit only the heavy ones (>=1s) so the
@@ -313,6 +314,78 @@ class SmokeVM:
                 timeout=timeout,
                 check=False,
             )
+
+    @contextlib.contextmanager
+    def scheduled_maintenance(self) -> Iterator[None]:
+        """Bound one explicitly opted-in, isolated production maintenance window.
+
+        Never control cron or remove jobs: an existing dispatcher is a refusal.
+        The sentinel is restored and verified before the caller's config cleanup.
+        """
+        if os.environ.get("SMOKE_SCHEDULED_EXCEPTION") != "allow":
+            raise RuntimeError("scheduled maintenance requires explicit --scheduled-exception allow")
+        if self.host != "127.0.0.1" or not self.vm_pid or not self.log_path:
+            raise RuntimeError("scheduled maintenance requires an owned disposable loopback VM")
+
+        sentinel = "/var/db/pfblockerng/.pfb_cron_disable"
+        status_command = "service cron onestatus"
+        config_command = "/usr/local/bin/php -r " + shlex.quote(
+            "require_once('/etc/inc/config.inc');"
+            "echo json_encode(array_column(config_get_path('cron/item', array()), 'command'));"
+        )
+        dispatch = re.compile(r"pfblockerng\.php\s+(?:cron-tick|tick|cron)(?:\s|$)")
+
+        def checked(command: str) -> str:
+            result = self.ssh(command, timeout=30.0)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"scheduled maintenance safety probe failed: {command}: "
+                    f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+                )
+            return result.stdout
+
+        def no_dispatch_jobs() -> None:
+            crontab = checked("/usr/bin/crontab -l")
+            generated_crontab = checked("/bin/cat /etc/crontab")
+            try:
+                commands = json.loads(checked(config_command))
+            except (ValueError, TypeError) as exc:
+                raise RuntimeError("scheduled maintenance cannot read cron configuration") from exc
+            if not isinstance(commands, list) or any(not isinstance(command, str) for command in commands):
+                raise RuntimeError("scheduled maintenance cron configuration is not a command list")
+            active_lines = [
+                line
+                for source in (crontab, generated_crontab)
+                for line in source.splitlines()
+                if not line.lstrip().startswith("#")
+            ]
+            if any(dispatch.search(command) for command in [*commands, *active_lines]):
+                raise RuntimeError("scheduled maintenance refuses a competing pfBlockerNG dispatch job")
+
+        checked(f"test -f {sentinel}")
+        original_cron = checked(status_command)
+        if re.fullmatch(r"cron is running as pid [1-9][0-9]*\.\s*", original_cron) is None:
+            raise RuntimeError(f"scheduled maintenance cannot verify running system cron: {original_cron!r}")
+        no_dispatch_jobs()
+        try:
+            # Only this fixed command bypasses ordinary SSH's immutable sentinel guard.
+            removed = subprocess.run(
+                self.ssh_argv(f"/bin/rm -f {sentinel}"),
+                capture_output=True,
+                text=True,
+                timeout=30.0,
+                check=False,
+            )
+            if removed.returncode != 0:
+                raise RuntimeError(f"scheduled maintenance sentinel removal failed: {removed.stderr!r}")
+            checked(f"test ! -f {sentinel}")
+            yield
+        finally:
+            checked(f"/usr/bin/touch {sentinel}")
+            checked(f"test -f {sentinel}")
+            no_dispatch_jobs()
+            if checked(status_command) != original_cron:
+                raise RuntimeError("system cron identity changed during scheduled maintenance")
 
 
 # --------------------------------------------------------------------------- #

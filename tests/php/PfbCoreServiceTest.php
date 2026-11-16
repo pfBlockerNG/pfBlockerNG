@@ -242,7 +242,7 @@ final class PfbCoreServiceTest extends TestCase
 		);
 		// The settings adapter and update scripts, which Core runs, the host's zone file, which it reads, and the feed phase's folders,
 		// scripts and rsync (issue #3975), which it is told, are the host paths an argument may name: longest first, as one holds another
-		$named = array_merge([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '--zoneinfo /etc/localtime', self::RSYNC],
+		$named = array_merge([$this->dir, '/usr/local/pkg/pfblockerng/pfb_core_settings.sh', '/usr/local/pkg/pfblockerng/pfb_core_update.sh', '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh', '--zoneinfo /etc/localtime', self::RSYNC],
 			self::LOCAL_DIRS, self::SCRIPT_DIRS);
 		usort($named, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
 		$this->assertDoesNotMatchRegularExpression('~(?<![\w.\-])/(?:var|usr|etc)/~', str_replace($named, '', $script),
@@ -337,11 +337,34 @@ final class PfbCoreServiceTest extends TestCase
 			'--state-dir', $GLOBALS['pfb']['core_state'],
 			'--settings-backend-cmd', '/usr/local/pkg/pfblockerng/pfb_core_settings.sh',
 			'--update-cmd', '/usr/local/pkg/pfblockerng/pfb_core_update.sh',
+			'--maintenance-cmd', '/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh',
 			'--zoneinfo', '/etc/localtime',
 			...$this->feedFlags(),
 		], $this->lines('daemon.argv'));
 		$this->assertSame(['0 1 2 '], $this->lines('fds'), 'the daemon inherited a descriptor of the caller (stdio must be /dev/null)');
 	}
+
+	public function testMaintenanceProducerPreservesQuotedRuntimePathsAndSupervisorIdentity(): void
+	{
+		$this->install('freebsd-amd64');
+		$GLOBALS['pfb']['core_socket'] = "{$this->dir}/run/api space's.sock";
+		$GLOBALS['pfb']['core_state'] = "{$this->dir}/state space's";
+		$GLOBALS['pfb']['core_log'] = "{$this->dir}/log/core space's.log";
+		$this->arrange();
+		[$status, $out] = $this->rc('start');
+		$this->assertSame(0, $status, $out);
+		$args = $this->lines('daemon.argv');
+		$this->assertSame(['-r', '-R', '5', '-t', 'pfb_core'], array_slice($args, 0, 5));
+		foreach (['--socket' => 'core_socket', '--state-dir' => 'core_state', '-o' => 'core_log'] as $flag => $key) {
+			$idx = array_search($flag, $args, TRUE);
+			$this->assertNotFalse($idx, $flag);
+			$this->assertSame($GLOBALS['pfb'][$key], $args[$idx + 1], $flag . ' must remain one argument');
+		}
+		$idx = array_search('--maintenance-cmd', $args, TRUE);
+		$this->assertNotFalse($idx, 'the real producer must name the maintenance program');
+		$this->assertSame('/usr/local/pkg/pfblockerng/pfb_core_maintenance.sh', $args[$idx + 1]);
+	}
+
 
 	/** @param list<string> $dirs @return list<string> the flags of the feed phase (issue #3975) Core is started with */
 	private function feedFlags(array $dirs = self::LOCAL_DIRS, string $userAgent = self::USER_AGENT): array

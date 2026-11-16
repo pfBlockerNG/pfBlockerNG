@@ -17,16 +17,16 @@ import (
 	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/update"
 )
 
-// newUpdates builds Core's scheduler and Update gate for --update-cmd: after settings refresh, each admitted Update runs in an
-// independent worker at path. An empty path means no scheduler, and both are nil. Scheduler state, worker receipts and the
-// Update log live in stateDir. The schedule is read in the --zoneinfo zone (empty: the process's local zone).
-func newUpdates(path, zoneinfo, stateDir string, st *settings.Store, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
+// newUpdates builds Core's scheduler and Update gate for --update-cmd. An empty path means no scheduler, and both are nil.
+// The optional maintenance command owns a distinct worker lane and fixed maintenance.log receipts in stateDir; the Update log,
+// scheduler state and Update receipts remain independent. The schedule is read in the --zoneinfo zone (empty: the local zone).
+func newUpdates(path, maintenancePath, zoneinfo, stateDir string, st *settings.Store, logf func(string, ...any)) (*scheduler.Scheduler, *update.Gate) {
 	if path == "" {
 		return nil, nil
 	}
 	logPath := filepath.Join(stateDir, "update.log")
 	sched := scheduler.New(scheduler.Config{Model: scheduleModel(st), StatePath: filepath.Join(stateDir, "schedule_state.json"),
-		LogPath: logPath, Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf})
+		LogPath: logPath, Loc: time.Local, Zone: hostZone(zoneinfo, logf), Logf: logf, Maintenance: maintenance(maintenancePath, stateDir)})
 	command := &update.Command{Path: path}
 	gate := update.New(logPath, nil, sched.Done)
 	gate.Admit = command.Admit
