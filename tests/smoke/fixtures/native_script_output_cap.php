@@ -149,14 +149,15 @@ function viewer_boundary_diagnostics(string $dir, string $bytes, array $view, in
 }
 
 /** @return array{string, string} collected bytes and the next independent cursor */
-function collect_exact(string $dir, string $after, int $length, string $label): array {
+function collect_exact(string $dir, string $after, int $length, string $label, ?callable $fetch = NULL): array {
 	$bytes = '';
 	$start = $after;
 	$next = $after;
 	$pages = 0;
+	$notice = VIEWER_NOTICE;
 	$end = microtime(TRUE) + 45;
 	do {
-		$view = get_update($dir, $next);
+		$view = $fetch === NULL ? get_update($dir, $next) : $fetch($dir, $next);
 		$pages++;
 		$bytes .= (string) ($view['log'] ?? '');
 		$next = (string) ($view['next'] ?? '');
@@ -200,6 +201,34 @@ function collect_complete(string $dir, string $after): array {
 	throw new RuntimeException('completed transcript deadline: ' . digest($bytes));
 }
 
+
+function diagnostic_probe_mode(): void {
+	$dir = sys_get_temp_dir() . '/pfb-boundary-probe-' . bin2hex(random_bytes(4));
+	$log = str_repeat('A', VIEWER_LIMIT) . VIEWER_NOTICE . 'TAIL';
+	$after = '123';
+	$view = ['running' => TRUE, 'update' => ['trigger' => 'apply', 'startedAt' => 1],
+		'next' => (string) ((int) $after + strlen($log)), 'log' => $log];
+	$fetch = static function (string $path, string $cursor) use ($after, $view): array {
+		demand($cursor === $after, 'diagnostic probe cursor changed unexpectedly');
+		return $view;
+	};
+	$length = VIEWER_LIMIT + strlen(VIEWER_NOTICE);
+	try {
+		collect_exact($dir, $after, $length, 'diagnostic probe', $fetch);
+	} catch (RuntimeException $error) {
+		$detail = $error->getMessage();
+		demand(str_contains($detail, 'pages=1'), 'diagnostic probe did not report page count');
+		demand(str_contains($detail, 'cursor_advance=' . strlen($log)), 'diagnostic probe cursor span is missing');
+		demand(str_contains($detail, 'phase=live-collect'), 'diagnostic probe phase is missing');
+		demand(str_contains($detail, 'running=1'), 'diagnostic probe running state is missing');
+		demand(str_contains($detail, 'notice_count=1'), 'diagnostic probe notice count is wrong');
+		demand(str_contains($detail, 'notice_at=' . VIEWER_LIMIT), 'diagnostic probe notice offset is wrong');
+		demand(str_contains($detail, 'notice_after_hex=5441494c'), 'diagnostic probe trailing window is missing');
+		printf("LOCAL_BOUNDARY_DIAGNOSTIC_PASS %s\n", digest($log));
+		return;
+	}
+	throw new RuntimeException('diagnostic probe did not reject its intentional extra page byte');
+}
 function start_core(string $binary, string $dir): mixed {
 	$core = proc_open([$binary, '--socket', "$dir/run/api.sock", '--state-dir', "$dir/state",
 		'--update-cmd', "$dir/update.sh", '--allow-uid', '0'],
@@ -317,10 +346,10 @@ function control_mode(string $self, string $binary, string $dir): void {
 		file_put_contents("$dir/error.log", '');
 
 		$hook = "#!/bin/sh\nset -eu\n: > " . escapeshellarg("$dir/hook.entered") . "\n";
-		$hook .= 'while [ ! -e ' . escapeshellarg("$dir/write.output") . "; do sleep 0.05; done\n";
+		$hook .= 'while [ ! -e ' . escapeshellarg("$dir/write.output") . " ]; do sleep 0.05; done\n";
 		$hook .= '/bin/cat ' . escapeshellarg($stdoutPath) . "\n/bin/cat " . escapeshellarg($stderrPath) . " >&2\n";
 		$hook .= ': > ' . escapeshellarg("$dir/hook.ready") . "\n";
-		$hook .= 'while [ ! -e ' . escapeshellarg("$dir/release") . "; do sleep 0.05; done\n";
+		$hook .= 'while [ ! -e ' . escapeshellarg("$dir/release") . " ]; do sleep 0.05; done\n";
 		$hook .= ': > ' . escapeshellarg("$dir/hook.done") . "\n";
 		$hookPath = "$dir/hooks/hook_pre_native.sh";
 		demand(file_put_contents($hookPath, $hook) === strlen($hook) && chmod($hookPath, 0700), 'cannot create private global hook');
@@ -451,6 +480,10 @@ function control_mode(string $self, string $binary, string $dir): void {
 $mode = (string) ($argv[1] ?? '');
 if ($mode === 'update') {
 	update_mode((string) ($argv[2] ?? ''));
+}
+if ($mode === 'diagnostic-probe') {
+	diagnostic_probe_mode();
+	exit(0);
 }
 demand($mode === 'control', 'unknown fixture mode');
 	$fixtureDir = (string) ($argv[3] ?? '');
