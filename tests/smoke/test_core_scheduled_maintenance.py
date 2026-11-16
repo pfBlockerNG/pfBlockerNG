@@ -15,6 +15,7 @@ import subprocess
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -35,6 +36,81 @@ CLI = "/usr/local/www/pfblockerng/pfblockerng.php"
 DISPATCH = re.compile(r"pfblockerng\.php\s+(?:cron-tick|tick|cron)(?:\s|$)")
 DUTIES = ("ss_refresh", "apply_reconcile")
 MARKER = "SafeSearch CNAME fallback IPs refreshed"
+SCHEDULE_HOUR = f"{h.CFG_GLOBAL}/pfb_schedule_hour"
+SCHEDULE_MINUTE = f"{h.CFG_GLOBAL}/pfb_schedule_minute"
+DCC_ID = "extra:dcc"
+WINDOW_BOUND_SECONDS = 2160
+
+
+def _schedule_view(vm: SmokeVM, phase: str) -> tuple[dict[str, int], dict[str, int], dict[str, Any]]:
+    reply = h.core_call(vm, "GetSchedule", {})
+    assert reply["status"] == 200, f"{phase}: GetSchedule failed: {reply}"
+    body = reply["body"]
+    assert isinstance(body, dict), f"{phase}: malformed GetSchedule body: {reply}"
+    assert body.get("scheduled") is False and body.get("feeds") is None, f"{phase}: feeds remain eligible: {reply}"
+    extras = body.get("extras")
+    assert isinstance(extras, dict) and set(extras) == {DCC_ID}, f"{phase}: enabled extras are not DCC-only: {reply}"
+    dcc = extras[DCC_ID]
+    assert isinstance(dcc, dict) and type(dcc.get("lastRun")) is int and type(dcc.get("nextDue")) is int, (
+        f"{phase}: malformed DCC schedule entry: {reply}"
+    )
+    checks = body.get("lastSuccessfulCheck")
+    if type(checks) is list:
+        assert checks == [], f"{phase}: malformed empty lastSuccessfulCheck: {reply}"
+        checks = {}
+    assert isinstance(checks, dict) and all(
+        isinstance(item, str) and type(stamp) is int and stamp > 0 for item, stamp in checks.items()
+    ), f"{phase}: malformed lastSuccessfulCheck: {reply}"
+    return dcc, checks, reply
+
+
+def _complete_due_dcc(vm: SmokeVM) -> int:
+    dcc, checks, reply = _schedule_view(vm, "before-DCC-setup")
+    previous = checks.get(DCC_ID)
+    now = _epoch(vm, "before-DCC-setup")
+    if previous is not None and dcc["lastRun"] > 0 and dcc["nextDue"] > now:
+        assert dcc["nextDue"] > now + WINDOW_BOUND_SECONDS, (
+            f"DCC nextDue is not outside the full bounded window: {reply}"
+        )
+        return previous
+
+    before = h.core_update_view(vm)["update"]
+    started = h.core_call(vm, "StartUpdate", {"trigger": "retry"})
+    assert started["status"] == 200 and not started["body"], f"public StartUpdate retry was not admitted: {started}"
+    ended = h.await_core_update_end(vm, before=before)
+    after_dcc, after_checks, after = _schedule_view(vm, "after-DCC-retry")
+    update = ended.get("update")
+    assert (
+        ended.get("running") is False
+        and isinstance(update, dict)
+        and (update.get("trigger") == "retry" and update.get("result") == "success")
+    ), f"retry Update failed: start={started!r}, end={ended!r}, schedule={after!r}"
+    successful = after_checks.get(DCC_ID)
+    assert successful is not None and (previous is None or successful > previous) and after_dcc["lastRun"] > 0, (
+        f"retry did not complete DCC successfully: prior={previous!r}, schedule={after!r}"
+    )
+    return successful
+
+
+def _assert_dcc_window_safe(vm: SmokeVM, successful: int) -> None:
+    dcc, checks, reply = _schedule_view(vm, "immediately-before-yield")
+    now = _epoch(vm, "immediately-before-yield")
+    assert checks.get(DCC_ID, 0) >= successful and dcc["lastRun"] > 0, (
+        f"DCC has no retained terminal success: expected at least {successful}, schedule={reply!r}"
+    )
+    assert dcc["nextDue"] > now + WINDOW_BOUND_SECONDS, (
+        f"DCC nextDue is not outside the full bounded window: now={now}, schedule={reply!r}"
+    )
+
+
+def _schedule_hour_far_from_window(vm: SmokeVM) -> str:
+    result = vm.ssh("date", "-v+23H", "-v0M", "+%H")
+    assert result.returncode == 0 and result.stdout.strip().isdigit(), (
+        f"could not derive a future local daily schedule slot: {result}"
+    )
+    hour = result.stdout.strip()
+    assert 0 <= int(hour) <= 23, f"invalid guest local hour {hour!r}"
+    return hour
 
 
 def _epoch(vm: SmokeVM, phase: str) -> int:
@@ -118,16 +194,24 @@ def maintenance_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer, prev_pkg: Path) 
     feed = h.write_local_feed(vm, "smoke_maintenance.txt", blocked + "\n")
     h.inject(vm, h.DnsblCase(aliasname="smokemaint", header="smokemaint", feed_url=feed, mode=h.DnsblMode.VIP))
     h.set_package_enabled(vm, True)
-    # Ordinary supported settings: no feed or Extra may explain the duty effects.
+    # Supported settings isolate feeds/blacklist and keep DCC's next daily slot outside this test.
     h.config_set(vm, f"{h.CFG_GLOBAL}/pfb_scheduled_feed_updates", "")
     h.config_set(vm, "installedpackages/pfblockerngblacklist/blacklist_enable", "Disable")
+    hour = _schedule_hour_far_from_window(vm)
+    h.config_set(vm, SCHEDULE_HOUR, hour)
+    h.config_set(vm, SCHEDULE_MINUTE, "0")
     h.reload(vm, "update")
     _assert_no_dispatch(vm, "enabled-apply")
     h.set_pfb_keep(vm, True)
     _force_install(vm, prev_pkg)
+    assert h.config_get(vm, SCHEDULE_HOUR) == hour, "previous forced install changed the daily schedule hour"
+    assert h.config_get(vm, SCHEDULE_MINUTE) == "0", "previous forced install changed the daily schedule minute"
     _force_install(vm, Path(os.environ["SMOKE_PKG"]))
+    assert h.config_get(vm, SCHEDULE_HOUR) == hour, "current forced install changed the daily schedule hour"
+    assert h.config_get(vm, SCHEDULE_MINUTE) == "0", "current forced install changed the daily schedule minute"
     _assert_no_dispatch(vm, "enabled-upgrade")
     h.reload(vm, "update")
+    h.tell_core_the_settings_changed(vm)
     _assert_no_dispatch(vm, "repeated-enabled-apply")
     await_core_up(vm)
     process = vm.ssh("ps ax -o command")
@@ -136,14 +220,12 @@ def maintenance_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer, prev_pkg: Path) 
         "pfb_core" in line and "--maintenance-cmd /usr/local/pkg/pfblockerng/pfb_core_maintenance.sh" in line
         for line in process.stdout.splitlines()
     ), f"installed Core is not wired to real maintenance: {process.stdout}"
-    schedule = h.core_call(vm, "GetSchedule")
-    assert schedule["status"] == 200, schedule
-    assert schedule["body"]["scheduled"] is False, schedule
-    assert schedule["body"]["feeds"] is None and schedule["body"]["extras"] == {}, schedule
+    dcc_success = _complete_due_dcc(vm)
     h.wait_unbound_ready(vm)
     # First answer is authoritative: never retry toward the expected DNS value.
     answer = h.dns_probe(vm, blocked, "A", attempts=1)
     assert h.is_vip(answer), f"DNSBL gate failed before cadence acceptance: {answer}"
+    _assert_dcc_window_safe(vm, dcc_success)
     try:
         yield vm
     finally:
