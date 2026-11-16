@@ -783,3 +783,27 @@ def test_jsonl_result_rejects_bad_prefix_or_missing_aggregate(
     setup = DccSetup(monkeypatch, result_payload=payload)
     with pytest.raises(AssertionError, match="DCC retry receipt result"):
         setup.run()
+
+
+def test_anchored_ledger_accepts_observed_non_epoch_aligned_due() -> None:
+    before = {"last_run": 900, "next_due": 1001, "jitter": 0}
+    current = {"last_run": 1301, "next_due": 1901, "jitter": 0}
+
+    acceptance._assert_duty_ledger_advance("ss_refresh", before, current)
+
+
+@pytest.mark.parametrize(
+    ("case", "current"),
+    [
+        ("last-run-before-due", {"last_run": 1000, "next_due": 1901, "jitter": 0}),
+        ("late-catchup", {"last_run": 1901, "next_due": 2801, "jitter": 0}),
+        ("last-run-plus-interval", {"last_run": 1301, "next_due": 2201, "jitter": 0}),
+        ("wrong-interval", {"last_run": 1301, "next_due": 1900, "jitter": 0}),
+        ("next-due-not-future", {"last_run": 1301, "next_due": 1300, "jitter": 0}),
+        ("nonzero-jitter", {"last_run": 1301, "next_due": 1901, "jitter": 1}),
+    ],
+)
+def test_anchored_ledger_rejects_phase_or_interval_errors(case: str, current: dict[str, int]) -> None:
+    before = {"last_run": 900, "next_due": 1001, "jitter": 0}
+    with pytest.raises(AssertionError):
+        acceptance._assert_duty_ledger_advance("ss_refresh", before, current)

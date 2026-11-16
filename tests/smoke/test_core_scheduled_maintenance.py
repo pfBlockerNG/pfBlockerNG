@@ -372,6 +372,17 @@ def _assert_dcc_window_safe(vm: SmokeVM, successful: int) -> None:
     )
 
 
+def _assert_duty_ledger_advance(job: str, previous: dict[str, int], current: dict[str, int]) -> None:
+    previous_due = previous["next_due"]
+    last_run = current["last_run"]
+    next_due = current["next_due"]
+    assert previous_due <= last_run, (job, previous_due, current)
+    assert last_run - previous_due < 900, (job, previous_due, current)
+    assert next_due == previous_due + 900, (job, previous_due, current)
+    assert next_due > last_run, (job, previous_due, current)
+    assert current["jitter"] == 0, (job, current)
+
+
 def _schedule_hour_far_from_window(vm: SmokeVM) -> str:
     result = vm.ssh("date", "-v+23H", "-v0M", "+%H")
     assert result.returncode == 0 and result.stdout.strip().isdigit(), (
@@ -611,8 +622,7 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
             assert h.count_log_marker(vm, h.PFB_LOG, MARKER) > marker_before
             for job in DUTIES:
                 assert started <= after[job]["last_run"] <= ended, (job, after[job], started, ended)
-                assert after[job]["next_due"] > after[job]["last_run"]
-                assert after[job]["next_due"] % 900 == 0, (job, after[job])
+                _assert_duty_ledger_advance(job, before[job], after[job])
             assert h.core_update_view(vm)["update"] == last_update, "maintenance minted a public Update"
         _assert_no_dispatch(vm, "after-scheduled-window")
     finally:
