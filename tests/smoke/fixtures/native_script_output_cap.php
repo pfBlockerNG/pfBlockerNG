@@ -19,17 +19,27 @@ function until(callable $probe, string $why, float $seconds = 30): mixed {
 	throw new RuntimeException('deadline: ' . $why);
 }
 
-function api(string $dir, string $method, array $body = []): array {
+function api(string $dir, string $method, array $body = [], int $timeout = 3): array {
 	$curl = curl_init('http://localhost/v1/' . $method);
 	curl_setopt_array($curl, [CURLOPT_UNIX_SOCKET_PATH => "$dir/run/api.sock", CURLOPT_POST => TRUE,
 		CURLOPT_POSTFIELDS => json_encode($body ?: (object) [], JSON_THROW_ON_ERROR),
-		CURLOPT_HTTPHEADER => ['Content-Type: application/json'], CURLOPT_RETURNTRANSFER => TRUE, CURLOPT_TIMEOUT => 3]);
+		CURLOPT_HTTPHEADER => ['Content-Type: application/json'], CURLOPT_RETURNTRANSFER => TRUE, CURLOPT_TIMEOUT => $timeout]);
 	$text = curl_exec($curl);
 	$status = curl_getinfo($curl, CURLINFO_HTTP_CODE);
 	$error = curl_error($curl);
 	curl_close($curl);
 	$decoded = is_string($text) ? json_decode($text, TRUE) : NULL;
 	return [$status, is_array($decoded) ? $decoded : NULL, $error];
+}
+
+function submit_update_start(string $dir, array $requestBody, bool &$attempted, bool &$accepted,
+	?callable $request = NULL): array {
+	$request ??= static fn(string $method, array $body, int $timeout): array =>
+		api($dir, $method, $body, $timeout);
+	$attempted = TRUE;
+	[$status, $body, $error] = $request('StartUpdate', $requestBody, 3);
+	$accepted = $status === 200;
+	return [$status, $body, $error];
 }
 
 function get_update(string $dir, ?string $after = NULL): array {
@@ -249,6 +259,131 @@ function stop_core(mixed &$core): void {
 	$core = NULL;
 }
 
+/**
+ * Replay an uncertain StartUpdate before stopping Core or marking its private tree safe.
+ *
+ * @param array<string, mixed> $startRequest
+ * @param list<string> $cleanupErrors
+ */
+function cleanup_private_core(string $dir, bool $attempted, bool $accepted, array $startRequest,
+	array &$cleanupErrors, callable $stop, ?callable $request = NULL, float $seconds = 90): void {
+	$request ??= static fn(string $method, array $body, int $timeout): array =>
+		api($dir, $method, $body, $timeout);
+	$updateSettled = !$attempted;
+	if ($attempted) {
+		try {
+			if (!$accepted) {
+				[$status, $body, $error] = $request('StartUpdate', $startRequest, 60);
+				demand($status === 200 && is_array($body), "StartUpdate replay status={$status} error={$error}");
+			}
+			until(static function () use ($request): array|false {
+				[$status, $body] = $request('GetUpdate', [], 3);
+				return $status === 200 && is_array($body) && ($body['running'] ?? TRUE) === FALSE &&
+					is_array($body['update'] ?? NULL) && isset($body['update']['finishedAt']) ? $body : FALSE;
+			}, 'Update worker completion and lease release', $seconds);
+			$updateSettled = TRUE;
+		} catch (Throwable $error) {
+			$cleanupErrors[] = 'Update worker completion: ' . $error->getMessage();
+		}
+	}
+	if ($updateSettled) {
+		try {
+			$stop();
+		} catch (Throwable $error) {
+			$cleanupErrors[] = 'private Core shutdown: ' . $error->getMessage();
+		}
+	}
+	if ($cleanupErrors === [] && file_put_contents("$dir/cleanup.safe", "safe\n") === FALSE) {
+		$cleanupErrors[] = 'cannot mark the private directory safe to remove';
+	}
+}
+
+function cleanup_probe_mode(): void {
+	$scenarios = ['accepted-timeout', 'not-accepted-replay', 'api-unavailable', 'conflict'];
+	foreach ($scenarios as $scenario) {
+		$dir = sys_get_temp_dir() . '/pfb-update-cleanup-probe-' . bin2hex(random_bytes(4));
+		demand(mkdir($dir, 0700), 'cannot create local cleanup-probe directory');
+		try {
+			$startRequest = ['requestId' => 'cleanup-probe-' . bin2hex(random_bytes(4)), 'trigger' => 'apply'];
+			$attempted = FALSE;
+			$accepted = FALSE;
+			$acceptedAtServer = FALSE;
+			$startCalls = [];
+			$getCalls = 0;
+			$terminal = FALSE;
+			$stopCalls = 0;
+			$request = static function (string $method, array $body, int $timeout) use (
+				$scenario, $startRequest, $dir, &$attempted, &$acceptedAtServer, &$startCalls, &$getCalls, &$terminal
+			): array {
+				if ($method === 'StartUpdate') {
+					demand($attempted, 'StartUpdate was called before the attempt flag was set');
+					$startCalls[] = ['body' => $body, 'timeout' => $timeout];
+					if (count($startCalls) === 1) {
+						if (in_array($scenario, ['accepted-timeout', 'api-unavailable'], TRUE)) {
+							$acceptedAtServer = TRUE;
+						}
+						return [0, NULL, 'simulated response timeout'];
+					}
+					demand(count($startCalls) === 2, 'StartUpdate was replayed more than once');
+					demand($body === $startRequest, 'StartUpdate replay changed its request body');
+					if ($scenario === 'api-unavailable') {
+						return [0, NULL, 'simulated API unavailable'];
+					}
+					if ($scenario === 'conflict') {
+						return [409, ['error' => ['code' => 'conflict']], 'simulated conflict'];
+					}
+					if ($scenario === 'not-accepted-replay') {
+						$acceptedAtServer = TRUE;
+					}
+					return $acceptedAtServer ? [200, ['accepted' => TRUE], ''] : [409, NULL, 'not accepted'];
+				}
+				if ($method === 'GetUpdate') {
+					$getCalls++;
+					if (!$acceptedAtServer) {
+						return [503, NULL, 'no accepted update'];
+					}
+					if ($scenario === 'accepted-timeout' && $getCalls === 1) {
+						demand(!is_file("$dir/cleanup.safe"), 'cleanup became safe while the worker was running');
+						return [200, ['running' => TRUE,
+							'update' => ['trigger' => 'apply', 'startedAt' => 1], 'next' => '0', 'log' => ''], ''];
+					}
+					$terminal = TRUE;
+					return [200, ['running' => FALSE,
+						'update' => ['trigger' => 'apply', 'startedAt' => 1, 'finishedAt' => 2, 'result' => 'success'],
+						'next' => '0', 'log' => ''], ''];
+				}
+				return [404, NULL, 'unknown cleanup-probe method'];
+			};
+			[$status] = submit_update_start($dir, $startRequest, $attempted, $accepted, $request);
+			demand($status === 0 && $attempted && !$accepted, "{$scenario}: response was not ambiguous");
+			$cleanupErrors = [];
+			$stop = static function () use ($scenario, $dir, &$terminal, &$stopCalls): void {
+				demand(!is_file("$dir/cleanup.safe"), 'cleanup marker preceded Core shutdown');
+				if (in_array($scenario, ['accepted-timeout', 'not-accepted-replay'], TRUE)) {
+					demand($terminal, 'Core shutdown preceded terminal Update status');
+				}
+				$stopCalls++;
+			};
+			cleanup_private_core($dir, $attempted, $accepted, $startRequest, $cleanupErrors, $stop, $request);
+			$shouldBeSafe = in_array($scenario, ['accepted-timeout', 'not-accepted-replay'], TRUE);
+			demand(is_file("$dir/cleanup.safe") === $shouldBeSafe, "{$scenario}: cleanup-safe marker state is wrong");
+			demand(($cleanupErrors === []) === $shouldBeSafe, "{$scenario}: cleanup error state is wrong");
+			demand($stopCalls === ($shouldBeSafe ? 1 : 0), "{$scenario}: Core shutdown state is wrong");
+			demand(count($startCalls) === 2, "{$scenario}: StartUpdate replay count is wrong");
+			demand($startCalls[0] === ['body' => $startRequest, 'timeout' => 3], "{$scenario}: initial request changed");
+			demand($startCalls[1] === ['body' => $startRequest, 'timeout' => 60], "{$scenario}: replay request changed");
+			demand($getCalls === ($scenario === 'accepted-timeout' ? 2 : ($scenario === 'not-accepted-replay' ? 1 : 0)),
+				"{$scenario}: GetUpdate call count is wrong");
+		} finally {
+			if (is_file("$dir/cleanup.safe")) {
+				unlink("$dir/cleanup.safe");
+			}
+			rmdir($dir);
+		}
+	}
+	printf("LOCAL_UPDATE_CLEANUP_PROBE_PASS scenarios=%d\n", count($scenarios));
+}
+
 function update_mode(string $dir): void {
 	$result = 1;
 	register_shutdown_function(static function () use ($dir): void {
@@ -309,7 +444,9 @@ function update_mode(string $dir): void {
 
 function control_mode(string $self, string $binary, string $dir): void {
 	$core = NULL;
-	$started = FALSE;
+	$updateAttempted = FALSE;
+	$updateAccepted = FALSE;
+	$startRequest = [];
 	$failure = NULL;
 	$successSummary = '';
 	register_shutdown_function(static function () use ($dir): void {
@@ -365,9 +502,9 @@ function control_mode(string $self, string $binary, string $dir): void {
 		until(static fn() => api($dir, 'GetVersion')[0] === 200, 'private Core API readiness', 30);
 		[$status, , $error] = api($dir, 'InitializeSettings', ['requestId' => 'native-init', 'settings' => (object) []]);
 		demand($status === 200, "InitializeSettings status={$status} error={$error}");
-		[$status, , $error] = api($dir, 'StartUpdate', ['requestId' => bin2hex(random_bytes(16)), 'trigger' => 'apply']);
+		$startRequest = ['requestId' => bin2hex(random_bytes(16)), 'trigger' => 'apply'];
+		[$status, , $error] = submit_update_start($dir, $startRequest, $updateAttempted, $updateAccepted);
 		demand($status === 200, "StartUpdate status={$status} error={$error}");
-		$started = TRUE;
 
 		$initial = until(static function () use ($dir): array|false {
 			if (!is_file("$dir/hook.entered")) {
@@ -442,27 +579,18 @@ function control_mode(string $self, string $binary, string $dir): void {
 		if (file_put_contents("$dir/release", "cleanup\n") === FALSE) {
 			$cleanupErrors[] = 'cannot release global hook';
 		}
-		if ($started) {
-			try {
-				until(static function () use ($dir): array|false {
-					[$status, $body] = api($dir, 'GetUpdate');
-					return $status === 200 && is_array($body) && ($body['running'] ?? TRUE) === FALSE &&
-						is_array($body['update'] ?? NULL) && isset($body['update']['finishedAt']) ? $body : FALSE;
-				}, 'Update worker completion and lease release', 90);
-			} catch (Throwable $error) {
-				$cleanupErrors[] = 'Update worker completion: ' . $error->getMessage();
+		cleanup_private_core(
+			$dir,
+			$updateAttempted,
+			$updateAccepted,
+			$startRequest,
+			$cleanupErrors,
+			static function () use (&$core): void {
+				if (is_resource($core)) {
+					stop_core($core);
+				}
 			}
-		}
-		if (is_resource($core)) {
-			try {
-				stop_core($core);
-			} catch (Throwable $error) {
-				$cleanupErrors[] = 'private Core shutdown: ' . $error->getMessage();
-			}
-		}
-		if ($cleanupErrors === [] && file_put_contents("$dir/cleanup.safe", "safe\n") === FALSE) {
-			$cleanupErrors[] = 'cannot mark the private directory safe to remove';
-		}
+		);
 		if ($cleanupErrors !== []) {
 			$failure = $failure ?? new RuntimeException(implode('; ', $cleanupErrors));
 			report_fixture_failure($dir, 'cleanup', implode('; ', $cleanupErrors));
@@ -478,6 +606,10 @@ function control_mode(string $self, string $binary, string $dir): void {
 }
 
 $mode = (string) ($argv[1] ?? '');
+if ($mode === 'cleanup-probe') {
+	cleanup_probe_mode();
+	exit(0);
+}
 if ($mode === 'update') {
 	update_mode((string) ($argv[2] ?? ''));
 }
