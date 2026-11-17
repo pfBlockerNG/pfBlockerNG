@@ -632,6 +632,11 @@ func TestIdenticalPublishHealsALostBody(t *testing.T) {
 	lose := map[string]func(t *testing.T, p string){
 		"deleted":   func(t *testing.T, p string) { os.Remove(p) },
 		"truncated": func(t *testing.T, p string) { os.Truncate(p, 3) },
+		"same size, one byte changed": func(t *testing.T, p string) {
+			if err := os.WriteFile(p, []byte("10\n29\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
 	}
 	for name, f := range lose {
 		t.Run(name, func(t *testing.T) {

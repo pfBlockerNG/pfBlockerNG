@@ -174,8 +174,8 @@ func (s *Store) Publish(id string, members []string, metadata map[string]any) (u
 		return 0, fmt.Errorf("%w: %q generation space is exhausted", ErrUnavailable, id)
 	}
 	if e != nil && e.Current.Digest == dg && bytes.Equal(e.Current.Metadata, meta) {
-		// The index says a body is there that is not: write it back under the same generation, index untouched.
-		if fi, err := os.Lstat(s.bodyPath(id, e.Current.Generation)); err != nil || !fi.Mode().IsRegular() || fi.Size() != e.Current.Length {
+		// The body the index names is lost or damaged: write it back under the same generation, index untouched.
+		if _, err := s.readBody(id, e.Current); err != nil {
 			path := s.bodyPath(id, e.Current.Generation)
 			if err := writeTmp(path, body); err != nil {
 				return 0, err
