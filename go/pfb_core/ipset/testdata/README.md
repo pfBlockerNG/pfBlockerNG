@@ -125,7 +125,86 @@ a pass only when listed; `set` gives its new text (the first pass uses the feed'
 
 ## Frozen run
 
-Not frozen yet: the cases carry no `expect`, so the replay reports every case as unfrozen and writes `ipset_corpus_actual.json`.
+The expectations were frozen from the lab run named below, on a pfSense VM of the smoke suite (QEMU guest, `FreeBSD:15:amd64`
+package ABI), with the versions the replay itself records on the guest at the start of every run (`versions` block of
+`ipset_corpus_actual.json`):
+
+| Item | Value |
+| --- | --- |
+| pfSense (`/etc/version`) | `2.8.1-RELEASE` |
+| FreeBSD (`uname -r`) | `15.0-CURRENT` |
+| PHP (`php -v`) | `PHP 8.3.19 (cli) (built: Sep  9 2025 15:55:19) (NTS)` |
+| `pkg info iprange grepcidr` | `iprange-1.0.4_2`, `grepcidr-2.0_1` |
+| `iprange --version` | `iprange 1.0.4` |
+| `grepcidr -V` | `grepcidr 2.0` |
+
+The same replay on a Debian 13 development host (`iprange 1.0.4`, `grepcidr 2.0`, PHP 8.4 with the PHPUnit doubles of the
+pfSense functions) gave byte-identical results for all 416 cases frozen first, which is evidence that the answers do not
+depend on the FreeBSD base system, on DNS (hostnames are `.invalid`) or on timing. Core must still reproduce the appliance's
+answer, not Debian's. `iprange` and `grepcidr` versions are the oracle: a case that changes with another version is an
+escalation, not a tolerance.
+
+Replay cost on the VM: the whole harness takes under three minutes; the heaviest cases (2,000,000 members) take 5 to 18 s each.
+Peak PHP memory of `pfb_suppress_file_v6()` is about 1.1 GB for 2,000,000 members (measured on a development host), so
+`supp6_large_2m_members` runs last.
+
+The corpus covers every cell of the coverage matrix of issue #4033 except the n/a ones below. Two sizes differ from the issue's
+wording: the legacy `pmax` verb is not run on 2,000,000 members (it greps every offender /24 against every deny file, quadratic
+in the member count), and the 10,000-hole suppression cases use `/32` holes spaced 1597 apart and 10,000 adjacent holes.
+
+## Behaviours Core must reproduce on purpose
+
+Each is today's result, pinned by the named case; none is a recommendation.
+
+- `iprange` writes a host as a bare address, never `/32` (`agg_host_spellings`, `agg_exact_union_hosts`); it merges contiguous
+  rows and swallows contained ones (`agg_contained`); output is sorted numerically.
+- `iprange` on bad tokens: a hostname is dropped (no DNS answer for `.invalid`, `agg_h_name`), `1.2.3.4/33` is dropped
+  (`agg_h_pfx33`), a leading-zero octet is read as octal (`010.1.1.1` becomes `8.1.1.1`, `agg_h_leading0`), host bits are cleared
+  (`1.2.3.4/24` becomes `1.2.3.0/24`, `agg_h_hostbits`), `a-b` ranges and dotted netmasks are accepted (`agg_h_range`,
+  `agg_h_netmask`), CRLF, blanks and `#` comments are accepted (`agg_crlf`, `agg_blank_and_comment`), IPv6 text is mangled
+  (`agg_v6_text`). The exit status was 0 in every case, so the "iprange failed, file untouched" path was never reached.
+- The v4 `suppress` verb filters strictly before `iprange`: a bare host in the suppression list is dropped and logged
+  (`supp4_bare_host_in_list`), CRLF makes every list token and every member row malformed (`supp4_crlf_list`,
+  `supp4_crlf_members`), a trailing comment makes a token malformed (`supp4_malformed_list_tokens`), and member rows outside
+  digits, dots and one `/mask` are dropped and counted, never resolved (`supp4_malformed_members`).
+- `pfb_suppress_file_v6()` is laxer and normalises: it trims CR and blanks (`supp6_crlf_both`), rewrites every surviving member
+  through `ip_range_to_subnet_array()` so a bare host becomes `/128` and duplicates stay (`supp6_no_overlap_normalises`,
+  `supp6_unsorted_dups_no_nl`), and its log messages carry no newline, so they weld into one line (`supp6_malformed_tokens`). A
+  missing suppression file is `FALSE` with the member file untouched (`supp6_missing_suppression_file`).
+- A fully suppressed set is an empty file in both families, not the placeholder (`supp4_hole_equal`, `supp6_hole_equal`,
+  `pipe_all_suppressed_v4`, `pipe_all_suppressed_v6`); the placeholder only appears when `closing` refills the deny file.
+- `grepcidr -vf` (recompute dedup) compares numerically, not textually: an IPv6 host spelled differently in a later feed is pruned
+  (`rec_v6_spellings_across_feeds`), a pattern with host bits covers its whole network (`rec_h_hostbits_dedup_on`), and a
+  later feed's `/24` survives an earlier `/25` or host (`rec_own_host_then_cidr`, `rec_own_partial_cover_kept`). `0.0.0.0/0` and
+  `::/0` are kept in their own file but kept out of the cumulative pattern stream (`rec_total_range_first`, `rec_v6_total_range`).
+- The offender scan splits each row at the first three `.`-separated fields, so a CIDR row counts as a member of its first three
+  octets (`rec_pmax_cidr_rows_count`, `pmax_cidr_rows_count`); the placeholder's `/24` never counts
+  (`rec_pmax_placeholder_prefix`); `pfB_`-prefixed aliases never count and are never diverted (`rec_pmax_pfB_excluded`,
+  `rec_dmax_pfB_excluded`); the legacy `pmax` verb skips `pfB*.txt` and `*_v6.txt` (`pmax_v6_files_untouched`).
+- The collapsed `/24` of a shared offender belongs to the highest-priority alias (`rec_pmax_window_owner`); a reputation
+  collapse widens to addresses no feed listed (`rec_pmax_widen_not_exact`), unlike `cidr_aggregate` (`agg_exact_union_hosts`).
+- dMax country handling: the cc list is matched as a substring (`rec_dmax_cc_substring`); the consolidated exempt file is gated on
+  `ccwhite=match` alone (`rec_dmax_exempt_match_ccblack_only`, `rec_dmax_exempt_match_both`); a missing GeoIP keeps the previous
+  match artifacts (`rec_dmax_geoip_unavailable`) while a working GeoIP reconciles them away (`rec_dmax_stale_match_removed`).
+  The per-feed `_rep` verb never writes `pfB_Match_Rep_<alias>.txt` for `ccblack=match` (its temp file is moved before it is
+  filled, `pre_rep_ccblack_match`), and writes the `ccwhite=match` file only when the dedup token is empty
+  (`pre_rep_exempt_match_dedup_off` against `pre_rep_exempt_match_dedup_on`); recompute writes both
+  (`rec_dmax_matchdup`).
+- `closing` writes the v4 placeholder spelling (`127.1.7.7`) into an empty `_v6` deny file
+  (`clos_empty_v6_file_placeholder_spelling`); sanity counts exclude the placeholder (`clos_placeholder_rows_excluded`).
+- `remove` deletes by `header*` glob, so a sibling whose name starts with the header goes too (`rm_prefix_glob_overmatch`), while
+  its masterfile match is anchored (`rm_suffix_alias_not_overmatched`); a path-like header is refused (`rm_traversal_header`).
+- The canonical set drops `#` lines and empty lines only: a CR stays part of the row, whitespace-only rows stay members, and a feed
+  without a final newline welds onto the next feed's first row (`canon_crlf`, `canon_comments_blank`,
+  `canon_weld_without_newline`); the order is byte order (`canon_byte_order_not_numeric`).
+- DNSBLIP concatenation adds no record terminator (`dnsblip_unterminated_weld`), reads sources in byte order of the file name
+  (`dnsblip_order_bytes`), and builds an empty file, not the placeholder, from an empty source (`dnsblip_empty_source`); only "no
+  source at all" writes the placeholder, `::`-prefixed for v6 (`dnsblip_v6_empty_placeholder`).
+- Uber union: a member holding only the placeholder or only comments is dropped, an empty member is kept
+  (`union_placeholder_only_dropped_v4`, `union_placeholder_only_dropped_v6`, `union_comment_only_dropped`); with CIDR Aggregation
+  on the union is `sort -u` of the raw rows, tokens included (`union_collapsed_on_v4`, `union_h_leading0_on`); with it off the v4
+  union goes through `iprange` and hostile tokens are cleaned (`union_h_leading0_off`); v6 is `sort -u` either way
+  (`union_collapsed_off_v6`); an empty union is an empty aggregate and a `#` consumer line (`union_all_dropped_is_empty`).
 
 ## Cells that are not groups today
 
