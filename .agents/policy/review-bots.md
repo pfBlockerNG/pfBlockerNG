@@ -13,7 +13,7 @@ reached" notice appears, or you are dispatching the CLI-in-CI workflow.
   we already believe is mergeable. Predicting the free window was not
   worth the machinery it cost, and it is retired (owner, 2026-08-17).
 
-Composes with [`landing.md`](landing.md) (triage, leg review, merge gate),
+Composes with [`landing.md`](landing.md) (triage, adversarial review, merge gate),
 [`waits.md`](waits.md) (no orphaned waits), and `.coderabbit.yaml`.
 
 ## Fixed floors
@@ -29,7 +29,7 @@ Composes with [`landing.md`](landing.md) (triage, leg review, merge gate),
   worth a slot.
 - CodeRabbit stays **advisory**: the `CodeRabbit` check never blocks
   `wait-checks.sh` and never blocks merge.
-- The adversarial leg review is still mandatory and still runs first.
+- The adversarial review is still mandatory and still runs first, before the PR opens.
   CodeRabbit does not replace it, and it does not replace CodeRabbit.
 - A quota notice is not a review. A SHA whose only CodeRabbit engagement
   is a quota notice is **unreviewed by CodeRabbit**; do not report it as
@@ -78,8 +78,8 @@ Composes with [`landing.md`](landing.md) (triage, leg review, merge gate),
      update the matcher when a real duration exists, otherwise report the
      unclassifiable notice/error and stop.
    - **NOACK / NOTPRESENT / TIMEOUT** → re-ask **once** with a fresh
-     window. Still silent → CodeRabbit is unavailable; the legs
-     carry the review step. Never a second silent-nudge.
+     window. Still silent → CodeRabbit is unavailable; the adversarial
+     review carries the review step. Never a second silent-nudge.
    - **DECLINE** (the PR base is not the default branch) — post one comment
      asking for a full review (`@ coderabbitai trigger full review and tell me
      when you are finished`), then re-arm finished-only with `--since` now.
@@ -100,7 +100,7 @@ Composes with [`landing.md`](landing.md) (triage, leg review, merge gate),
 
 5. Merge never waits on the CodeRabbit check, but it does follow this
    path before claiming CodeRabbit reviewed the head. If the path ends in
-   a recorded miss, the leg review may land the PR and the SHA stays on the
+   a recorded miss, the adversarial review may land the PR and the SHA stays on the
    unreviewed-by-CodeRabbit list.
 
 Every quota notice still gets one line on the PR audit saying what spent
@@ -115,7 +115,7 @@ second on-request review bot. It reads the shared rules through the `AGENTS.md`
 
 - **Available** only once this repository shows a Codex review or reaction, or the
   owner confirms it in conversation. Otherwise skip it and say so in the audit comment.
-- **Same floors as CodeRabbit:** advisory, never blocks merge, never replaces the legs.
+- **Same floors as CodeRabbit:** advisory, never blocks merge, never replaces the adversarial review.
   Codex settings keep **Automatic review** off; reviews spend the owner's ChatGPT quota.
   Settings: <https://chatgpt.com/codex/cloud/settings/code-review> (the
   `app.chatgpt.com` link in OpenAI's docs does not sign in).
@@ -125,7 +125,7 @@ second on-request review bot. It reads the shared rules through the `AGENTS.md`
 - **Wait** with `wait-reviewer.sh --handle chatgpt-codex-connector --until finished
   --since <now>`. FINISHED means any new bot comment, so read it: a usage-limit notice
   is not a review. Record Codex unavailable for that head and do not re-ask. NOTPRESENT
-  or TIMEOUT → unavailable; the legs carry the review.
+  or TIMEOUT → unavailable; the adversarial review carries it.
 - Triage its findings per [`landing.md`](landing.md). Never ask Codex to fix them:
   fixes go through the normal APPLY path.
 
@@ -133,7 +133,7 @@ second on-request review bot. It reads the shared rules through the `AGENTS.md`
 
 Only the **repo owner**, in conversation, may spend a slot anyway or name
 another reviewer. No labels. Agents never invent a substitute, and
-the leg review still runs. CLI-in-CI is #2436:
+the adversarial review still runs. CLI-in-CI is #2436:
 `.github/workflows/coderabbit-cli.yml` is **dispatch-only** (not on push)
 so it cannot walk the PR Fair Usage band by itself. It needs the secret
 `CODERABBIT_API_KEY` (Agentic key), and its findings are file-level.

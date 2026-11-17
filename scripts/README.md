@@ -7,7 +7,7 @@ none of this ships in the release archive (which contains only `src/`).
 
 | Script | Use |
 | --- | --- |
-| [`agent/check-agent-config-parity.sh`](agent/check-agent-config-parity.sh) | Verify bidirectional Claude/Codex skill and workflow parity, resolvable adapter references, and Codex role models against `.agents/model-tiers.conf`. The pre-commit hook runs it for staged agent-configuration changes; shellspec pins the real inventory for CI. |
+| [`agent/check-agent-config-parity.sh`](agent/check-agent-config-parity.sh) | Verify bidirectional Claude/Codex skill and workflow parity, and resolvable adapter references. The pre-commit hook runs it for staged agent-configuration changes; shellspec pins the real inventory for CI. |
 
 ## Release channel contract
 

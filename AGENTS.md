@@ -10,7 +10,7 @@ all at once. Shared behavior change land there, never in vendor copy.
 
 These rules, plus active client settings and lifecycle hooks, = default way of
 working for **every repository in the `pfBlockerNG` GitHub organization**; repo-local
-canonical-policy rule win for that repo only. *How we work* (principles, delegation,
+canonical-policy rule win for that repo only. *How we work* (principles,
 worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
 (DNSBL pipeline, smoke suites, pkg repo, language specifics) do not.
 
@@ -82,8 +82,8 @@ Graphify routing; per-worktree `.codegraph/` invariants).
 
 | Task touches | Read first |
 | ------------ | ---------- |
-| delegating any step; validating a handoff | `.agents/policy/delegation.md` |
-| a ticket / fresh-session execution (orchestrator spawns) | `.agents/policy/workflow.md` (roles: `agent-roles.md`) |
+| running canonical gates; `scripts/agent/` ops | `.agents/policy/delegation.md` |
+| a ticket / fresh-session execution | `.agents/policy/workflow.md` (roles: `agent-roles.md`) |
 | waiting on anything external | `.agents/policy/waits.md` |
 | committing, branching, worktrees, attribution | `.agents/policy/git.md` |
 | maintenance branches, sessions/remote/resume | `.agents/policy/sessions.md` |
@@ -105,10 +105,7 @@ Graphify routing; per-worktree `.codegraph/` invariants).
 | PSL / TLD Allow / HSTS / TOP1M refresh | `docs/misc/<public-suffix-list\|tld-lists\|hsts-preload-list\|top1m-providers>.md` |
 | docs-only change; min-CE version bump | `git.md` dev-only classes; `docs/misc/version-bump-runbook.md` (stubs: `scripts/update-pfsense-stubs.py`) |
 
-Delegation shape: substantial coding work planned/gated by **top tier**, implemented by
-**small-tier** sub-agents, every step gated by an independent small-tier verifier via
-brief → handoff → gate contract (full text: `.agents/policy/delegation.md`). New
-implementation-plan ADRs stopped (wayfinder map #1383).
+New implementation-plan ADRs stopped (wayfinder map #1383).
 
 Test law (five principles, full text in `testing.md`): red-before/green-after test-first
 proof · every change ships with its tests · no coverage theater · front-end changes need
@@ -129,7 +126,7 @@ pfBlockerNG/
 │   ├── ADR_RESULTS/      # Root-level legacy ADR gate/handoff artifacts
 │   ├── archive/          # Completed one-shot tooling
 │   └── benchmarks/       # Frozen benchmark harnesses
-├── .agents/               # policy/ + context/ + repo-owned skills/ + model-tiers.conf
+├── .agents/               # policy/ + context/ + repo-owned skills/
 ├── docs/misc/             # Dev-only notes: architecture-notes, runbooks; docs/history/ = incidents
 ├── scripts/               # Dev tooling: deploy.sh, setup-hooks.sh, policy checkers, agent/ ops
 └── stubs/                 # pfsense/ (PHPStan/IDE) + python/ (unboundmodule) — not shipped

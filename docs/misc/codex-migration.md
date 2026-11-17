@@ -13,7 +13,7 @@ fresh-session policy replaced workflow-era orchestration.
 | --- | --- | --- | --- |
 | Repository policy | `AGENTS.md` + `.agents/policy/` + `.agents/context/` | `CLAUDE.md` is the thin `@AGENTS.md` adapter | Loads `AGENTS.md` natively |
 | Task procedures (skills) | `.agents/skills/*/SKILL.md` | `.claude/skills/*` symlinks onto the canonical dirs | Direct discovery (`$name`) |
-| Specialist roles | `.agents/policy/agent-roles.md` + `.agents/model-tiers.conf` | Claude agents (`claude-fable-5-1` / `claude-opus-4-8` / `claude-sonnet-5`) | Role TOMLs in `.codex/agents/` (`gpt-5.6-sol` / `-terra` / `-luna`) |
+| Specialist roles | `.agents/policy/agent-roles.md` | Claude agents in `.claude/agents/` | Role TOMLs in `.codex/agents/` |
 | Lifecycle enforcement | Shared `.githooks/` + repository scripts | `.claude/settings.json` | `.codex/hooks.json` + `.codex/config.toml` |
 
 `AGENTS.md` stays vendor-neutral: its "Vendor adapters" section is short pointer
@@ -32,8 +32,7 @@ guarantee: `.claude/skills/<name>` must resolve to canonical
 `.agents/skills/<name>`. Textual-adapter branch (same-name `SKILL.md`
 whose `../../../` reference must resolve to its exact source) exists only for
 mid-migration non-symlink entry. Checker also rejects stale entry whose
-counterpart was deleted or renamed, and validates shared
-`.agents/model-tiers.conf` tier mapping.
+counterpart was deleted or renamed.
 
 Only sync boundary: editing canonical policy or skill
 body needs no adapter change; adding or renaming skill needs only the
@@ -46,8 +45,7 @@ symlink; provider-specific runtime change stays in that provider's adapter.
 | `CLAUDE.md` adapter | native `AGENTS.md` + `.agents/context/codex-adapter.md` | Same canonical bootstrap; Codex's vendor adapter is `.agents/context/codex-adapter.md`, mirroring `CLAUDE.md`. |
 | `.claude/skills/*` symlinks | `.agents/skills/*` | One shared detailed procedure per skill. |
 | `.claude/workflows/*.js` | *(retired 2026-07-17, #1431)* | Superseded by the fresh-session policy: `.agents/policy/workflow.md` + `landing.md`; every client uses fresh native sub-agents. |
-| Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
-| Planner/implementer/analyst/verifier | `planner`, `implementer`, small/top `analyst`, and `adversarial-reviewer` plus top/mid reviewer variants | Project-scoped custom agents pin the corresponding Codex model tier without changing the canonical output contract. |
+| Planner/implementer/analyst/reviewer | `planner`, `implementer`, `analyst`, `adversarial-reviewer` | Project-scoped custom agents; the session's model runs them. |
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |
 | Session activation | `.codex/hooks.json` | Runs branch synchronization on startup/resume/clear/compact. |
 
@@ -85,9 +83,6 @@ worktree coherent (preferably committed) before closing CLI, then
   failure against the base.
 - **`pyright-lsp` plugin:** Codex does not use Claude plugin protocol.
   Repository Python gates stay authoritative.
-- **Provider model identifiers:** procedures use top / mid / small tiers;
-  `.agents/model-tiers.conf` maps them explicitly instead of treating one
-  provider's model alias as portable.
 
 ## Activation and verification
 

@@ -10,30 +10,17 @@
 ## Principles (fixed by the map)
 
 - GitHub Issues and PRs = durable execution state. Session transcripts disposable.
-- One bounded ticket per work agent (wayfinder research fan-out excepted). The
-  orchestrator may be given a list; it dispatches one work agent per ticket.
-- No worker inherits parent transcript. Workers get task packet.
-- Explorer, implementer, reviewer run fresh bounded contexts. Reviewer independent and
-  read-only.
+- Reviewer runs in fresh context, independent and read-only.
 - Mechanical gates and CI mandatory. Extra verification risk-triggered.
 - Compaction near = checkpoint and terminate. Correctness-critical work never continues
   through compaction.
 - No committed plan or handoff ledger duplicates GitHub state.
 
-## Orchestrator session
-
-When the owner names a GitHub issue to execute ("work on #N", a list, or equivalent),
-the receiving top-level session is **orchestrator** (every client): spawn one work agent
-per ticket with a complete task packet (this file). It does not implement.
-Owner override, that item only: "implement here" / "no spawn". Small one-step
-fixes and review-fix APPLY stay with the work agent (no second spawn). Named
-GitHub issues still go through a work agent even when they are
-docs/config/settings/skills. The work agent runs [`landing.md`](landing.md)'s
-four independent legs and lands.
+## Maintenance targets
 
 For a maintenance target, complete
 [`sessions.md`'s policy delivery](sessions.md#maintenance-branch-policy-delivery)
-before dispatch. The work agent receives a readable pinned policy source separately
+before work starts. The session working the ticket reads a pinned policy source separately
 from its code worktree; branch-local policy discovery is not assumed.
 
 ## Artifacts and schemas
@@ -75,8 +62,8 @@ Conditional fields, mandatory when applicable:
 - **Coverage matrix** — sibling axes enumerated from source (grep/matrix output, never
   memory) whenever change touches anything with siblings.
 - **Hostile-input rows** — any new or changed parser, regex, or input guard.
-- **Risk triggers** — when present, name extra verification they require (see Model
-  escalation and risk triggers).
+- **Risk triggers** — when present, name extra verification they require (see Risk
+  triggers).
 - **Maintenance policy source** — the policy/code source block and resolved reading
   paths required by [`sessions.md`](sessions.md#maintenance-branch-policy-delivery).
 
@@ -110,9 +97,11 @@ test policy — never reasoned through.
 
 ### Review
 
-Every code PR gets independent adversarial review in fresh read-only context using
-client's native reviewer surface, plus mechanical gates and CI. Reviewer never edits.
-Findings return as PR review comments. Loop limits below. Landing mechanics — review
+Every code change set gets one independent adversarial review, covering all four
+[`landing.md`](landing.md) lenses, in fresh read-only context using client's native
+reviewer surface, once before its PR opens — not per change or commit — plus mechanical
+gates and CI. Reviewer never edits. On the PR, Codex, CodeRabbit, any other bot, and
+contributors' comments are triaged the same way. Loop limits below. Landing mechanics — review
 sources, reviewer contract, CI waits, and signed linear landing — specified in [`landing.md`](landing.md).
   CodeRabbit is not automatic — it is asked for once, when the PR is ready to land
   ([`review-bots.md`](review-bots.md)).
@@ -150,13 +139,8 @@ labels — no bulk migration. Clear one when a transition you perform would have
 Worker may move its claimed ticket between agent states. Never cancels without human.
 Never overrides human-set `needs-info`/`ready-for-human` routing.
 
-## Model escalation and risk triggers
+## Risk triggers
 
-- Tiers from `.agents/model-tiers.conf` (top/mid/small). Default: top/mid plans, gates,
-  reviews; small implements bounded steps.
-- Mid-ticket escalation to higher tier needs documented evidence **in the ticket**: failed
-  executed attempt, falsified packet premise, or cross-cutting design surfaced mid-step.
-  "Feels hard" not evidence.
 - Separate verifier or reproducer session risk-triggered, never default. Triggers:
   new/changed parser, guard, or security surface; privilege or config-schema change;
   **developer-host privilege** — `sudo`, `dpkg-divert`, replacing `/usr/bin/*` on the
@@ -167,9 +151,9 @@ Never overrides human-set `needs-info`/`ready-for-human` routing.
 
 ## Retry and fix-loop limits (defaults, amendable by pilot evidence)
 
-- Implementer: max 2 executed attempts per step. Second failure checkpoints and escalates,
+- Implementation: max 2 executed attempts per step. Second failure checkpoints and escalates,
   citing both runs.
-- Review fix loop: continues only while latest round has blocking finding. All-nitpick or
+- Pre-PR review fix loop: continues only while latest round has blocking finding. All-nitpick or
   clean round closes it. Hard cap 3 fix rounds, then checkpoint + `ready-for-human`.
 - CI: same failure cause twice after fix attempt = stop, checkpoint, route
   `ready-for-human` or tracking issue. Never open-ended CI round-trips.
@@ -202,8 +186,7 @@ Never overrides human-set `needs-info`/`ready-for-human` routing.
 
 - Across tickets: allowed — claim discipline, one worktree/branch per ticket, never touch
   another claim's branch or PR.
-- Same ticket: never two sessions. Sub-agents inside the one session fine: fresh bounded
-  contexts with packet-scoped briefs.
+- Same ticket: never two sessions. Sub-agents inside the one session fine.
 
 ## Vendor mapping
 
@@ -214,7 +197,6 @@ parity check are [#1387](https://github.com/pfBlockerNG/pfBlockerNG/issues/1387)
 
 ## Acceptance
 
-A fresh top-level session named an issue is orchestrator: it spawns a work agent
-from bootstrap routing plus the packet. That work agent completes or checkpoints;
-a later work agent continues from the checkpoint alone. Map's pilots validate this
+A fresh session named an issue works it from bootstrap routing plus the packet. It
+completes or checkpoints; a later session continues from the checkpoint alone. Map's pilots validate this
 contract before any superseded flow retires.

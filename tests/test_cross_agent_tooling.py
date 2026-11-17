@@ -237,30 +237,11 @@ def test_omp_adapter_and_client_detection() -> None:
         "in-session first. Before any fix edit, list at least two hypotheses and run a discriminating probe. "
         "No self-exemption from a MUST without quoted user authorization. Every behavior change requires an "
         "unchanged test executed red before the production edit and green afterward. Every change ships with tests "
-        "whose assertions fail on regression; no coverage theater. Substantial coding work is planned and gated by "
-        "the top tier, implemented by small-tier sub-agents, and every step is gated by an independent small-tier "
-        "verifier through the brief → handoff → gate contract. Read an entire GitHub issue, including comments, "
+        "whose assertions fail on regression; no coverage theater. Read an entire GitHub issue, including comments, "
         "before working it."
     )
-    expected_rules = f"# pfBlockerNG session invariants\n\n{discipline} See `.agents/policy/delegation.md`.\n"
+    expected_rules = f"# pfBlockerNG session invariants\n\n{discipline}\n"
     assert rules == expected_rules
-
-
-def test_named_tickets_are_orchestrator_sessions() -> None:
-    bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    assert "orchestrator spawns" in bootstrap, "bootstrap routing must name orchestrator ticket pickup"
-    workflow = (ROOT / ".agents/policy/workflow.md").read_text(encoding="utf-8")
-    for contract in (
-        "## Orchestrator session",
-        "spawn one work agent",
-        "four independent",
-        "implement here",
-    ):
-        assert contract in workflow, f"orchestrator contract lost {contract}"
-    delegation = (ROOT / ".agents/policy/delegation.md").read_text(encoding="utf-8")
-    assert "orchestrator per workflow.md" in delegation, (
-        "delegation still tells the analyzing session to implement named tickets"
-    )
 
 
 def test_repository_intelligence_initializes_each_worktree_directly() -> None:
@@ -424,15 +405,7 @@ def test_omp_language_servers_route_php_include_files() -> None:
     assert f'"intelephense.environment.phpVersion": "{php_version}"' in vscode
 
 
-def test_copilot_roles_are_pinned_and_defined() -> None:
-    tiers = dict(
-        line.split("=", 1)
-        for line in (ROOT / ".agents/model-tiers.conf").read_text(encoding="utf-8").splitlines()
-        if "=" in line and not line.startswith("#")
-    )
-    for tier in ("TOP_COPILOT", "MID_COPILOT", "SMALL_COPILOT"):
-        assert tiers.get(tier), f"{tier} is unpinned"
-
+def test_copilot_roles_mirror_codex_roles() -> None:
     agents = {path.name for path in (ROOT / ".github/agents").glob("*.agent.md")}
     codex_agents = {path.stem for path in (ROOT / ".codex/agents").glob("*.toml")}
     assert {f"{name}.agent.md" for name in codex_agents} == agents, "Copilot role coverage diverges from Codex"

@@ -20,7 +20,7 @@ Do NOT review, inspect, or comment on any of the following paths or patterns. Tr
   - `legacy/**` (historical ADR corpus, benchmarks, and legacy tools)
   - `**/*.md` (all Markdown files across the repository, including `.agents/`, `.claude/`, `.github/`, and root `.md` files, unless the pull request is explicitly scoped to documentation or policy changes)
 - **Agent configuration and runtime definitions:**
-  - `.agents/**` (agent policies, context notes, and model configurations)
+  - `.agents/**` (agent policies and context notes)
   - `.claude/**`, `.codex/**`, `.github/agents/**`, `.github/instructions/**`
 - **Vendored and dependency assets:**
   - `vendor/**`, `node_modules/**`, `**/node_modules/**`
@@ -47,6 +47,6 @@ Focus exclusively on production code (`src/**`), test files (`tests/**`), and CI
 ## Copilot-only surfaces
 
 - Skills discovered from `.agents/skills/` (canonical) and `.claude/skills/` symlinks onto it — no Copilot-specific copy exists or should be created.
-- Custom agents live in `.github/agents/*.agent.md`, tiered per `.agents/model-tiers.conf`.
+- Custom agents live in `.github/agents/*.agent.md`.
 - `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through `COPILOT_CLI`, which CLI exports into every shell it spawns. Never unset to dodge guard it trips.
 - Copilot adds no commit or public-body attribution. Configured user identity remains authoritative.

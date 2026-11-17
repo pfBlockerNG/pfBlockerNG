@@ -3,7 +3,7 @@
 Every violation class is paired with the nearest clean sibling (the valid
 fixture tree), so a green run proves the checker discriminates rather than
 always firing (or never firing). The checker validates SEMANTIC fields —
-tier vocabulary, mutation boundaries, binding targets, model pins — so the
+mutation boundaries, binding targets, contract fields — so the
 fixtures vary exactly one semantic aspect per test while wording stays free.
 
 The conditional trigger (--staged / --diff run the full validation iff a role
@@ -31,30 +31,17 @@ _spec.loader.exec_module(car)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-_TIERS_TEXT = (
-    "TOP_CLAUDE=claude-top-x\n"
-    "TOP_CODEX=codex-top\n"
-    "TOP_COPILOT=copilot-top\n"
-    "MID_CLAUDE=claude-mid-x\n"
-    "MID_CODEX=codex-mid\n"
-    "MID_COPILOT=copilot-mid\n"
-    "SMALL_CLAUDE=claude-small-x\n"
-    "SMALL_CODEX=codex-small\n"
-    "SMALL_COPILOT=copilot-small\n"
-)
-
 _HEADER_ROWS = (
-    "| Role | Tiers | Mutation | Independent | Claude bindings | Codex bindings | Copilot bindings |",
-    "| ---- | ----- | -------- | ----------- | --------------- | -------------- | ---------------- |",
+    "| Role | Mutation | Independent | Claude bindings | Codex bindings | Copilot bindings |",
+    "| ---- | -------- | ----------- | --------------- | -------------- | ---------------- |",
 )
 
 _ROWS = (
-    "| builder | small | workspace-write | no | workflow:build | agent:builder | agent:builder |",
-    "| checker | small+top | read-only | yes | workflow:check | agent:checker, agent:checker-top "
-    "| agent:checker, agent:checker-top |",
-    "| lander | small | workspace-write | no | skill:land | skill:land | skill:land |",
-    "| steward | top | read-only | no | session | session | session |",
-    "| keeper | small | workspace-write | no | policy:flow.md | policy:flow.md | policy:flow.md |",
+    "| builder | workspace-write | no | session | agent:builder | agent:builder |",
+    "| checker | read-only | yes | agent:checker | agent:checker | agent:checker |",
+    "| lander | workspace-write | no | skill:land | skill:land | skill:land |",
+    "| steward | read-only | no | session | session | session |",
+    "| keeper | workspace-write | no | policy:flow.md | policy:flow.md | policy:flow.md |",
 )
 _ROLE_NAMES = ("builder", "checker", "lander", "steward", "keeper")
 
@@ -70,12 +57,12 @@ def _doc(rows: tuple[str, ...] = _ROWS, sections: tuple[str, ...] = _ROLE_NAMES)
     return f"# roles\n\n<!-- role-registry:begin -->\n{table}\n<!-- role-registry:end -->\n\n{body}"
 
 
-def _toml(model: str, sandbox: str) -> str:
-    return f'name = "x"\nmodel = "{model}"\nsandbox_mode = "{sandbox}"\n'
+def _toml(sandbox: str) -> str:
+    return f'name = "x"\nsandbox_mode = "{sandbox}"\n'
 
 
-def _agent_md(model: str, mutation: str) -> str:
-    return f"---\nname: x\ndescription: fixture\nmodel: {model}\n---\n\n<!-- mutation: {mutation} -->\n\nbody\n"
+def _agent_md(mutation: str, description: str = "fixture") -> str:
+    return f"---\nname: x\ndescription: {description}\n---\n\n<!-- mutation: {mutation} -->\n\nbody\n"
 
 
 def _write(path: Path, text: str) -> None:
@@ -87,38 +74,20 @@ def make_tree(
     root: Path,
     *,
     doc: str | None = None,
-    tiers: str = _TIERS_TEXT,
-    build_js: str = "agent(p, { model: 'claude-small-x' })\n",
-    check_js: str | None = "a 'claude-small-x' b \"claude-top-x\"\n",
     builder_toml: str | None = None,
     checker_toml: str | None = None,
-    checker_top_toml: str | None = None,
+    checker_claude_md: str | None = None,
     builder_agent_md: str | None = None,
     checker_agent_md: str | None = None,
-    checker_top_agent_md: str | None = None,
 ) -> Path:
-    _write(root / ".agents/model-tiers.conf", tiers)
     _write(root / ".agents/policy/agent-roles.md", doc if doc is not None else _doc())
     _write(root / ".agents/skills/land/SKILL.md", "# land\n")
     _write(root / ".agents/policy/flow.md", "# flow\n")
-    _write(root / ".claude/workflows/build.js", build_js)
-    if check_js is not None:
-        _write(root / ".claude/workflows/check.js", check_js)
-    _write(root / ".codex/agents/builder.toml", builder_toml or _toml("codex-small", "workspace-write"))
-    _write(root / ".codex/agents/checker.toml", checker_toml or _toml("codex-small", "read-only"))
-    _write(root / ".codex/agents/checker-top.toml", checker_top_toml or _toml("codex-top", "read-only"))
-    _write(
-        root / ".github/agents/builder.agent.md",
-        builder_agent_md or _agent_md("copilot-small", "workspace-write"),
-    )
-    _write(
-        root / ".github/agents/checker.agent.md",
-        checker_agent_md or _agent_md("copilot-small", "read-only"),
-    )
-    _write(
-        root / ".github/agents/checker-top.agent.md",
-        checker_top_agent_md or _agent_md("copilot-top", "read-only"),
-    )
+    _write(root / ".claude/agents/checker.md", checker_claude_md or _agent_md("read-only"))
+    _write(root / ".codex/agents/builder.toml", builder_toml or _toml("workspace-write"))
+    _write(root / ".codex/agents/checker.toml", checker_toml or _toml("read-only"))
+    _write(root / ".github/agents/builder.agent.md", builder_agent_md or _agent_md("workspace-write"))
+    _write(root / ".github/agents/checker.agent.md", checker_agent_md or _agent_md("read-only"))
     return root
 
 
@@ -143,16 +112,16 @@ def test_valid_fixture_is_clean(tmp_path: Path) -> None:
 
 def test_copilot_agent_unterminated_front_matter_rejected(tmp_path: Path) -> None:
     # An unclosed `---` block is malformed, not "flat fields to EOF": parsing it
-    # leniently would let a truncated agent file satisfy the model/mutation
+    # leniently would let a truncated agent file satisfy the description/mutation
     # checks with values that Copilot itself never reads.
-    make_tree(tmp_path, builder_agent_md="---\nname: x\nmodel: copilot-small\n\nbody\n")
+    make_tree(tmp_path, builder_agent_md="---\nname: x\ndescription: d\n\nbody\n")
     _assert_flags(_problems(tmp_path), "missing YAML front matter")
 
 
 def test_live_repository_registry_is_consistent() -> None:
     count, problems = car.validate(_REPO_ROOT)
     assert problems == []
-    assert count >= 7  # explorer/planner/implementer/verifier/reviewer/publisher/coordinator
+    assert count >= 6  # explorer/planner/implementer/reviewer/publisher/coordinator
 
 
 # One workflow gates both agent-config checkers (issue #2473). The parity guard is
@@ -161,7 +130,7 @@ def test_live_repository_registry_is_consistent() -> None:
 _PARITY_GUARD = "scripts/agent/check-agent-config-parity.sh"
 _WORKFLOW = ".github/workflows/agent-config.yml"
 # The workflow gates its own definition too: editing a trigger or a step re-runs both.
-_PARITY_EXTRA_TRIGGERS = {".claude/skills/**", _PARITY_GUARD, _WORKFLOW}
+_PARITY_EXTRA_TRIGGERS = {".claude/skills/**", ".claude/workflows/**", _PARITY_GUARD, _WORKFLOW}
 
 
 def _workflow_text() -> str:
@@ -228,22 +197,16 @@ def test_registry_header_drift(tmp_path: Path) -> None:
     _assert_flags(_problems(tmp_path), "registry header must be")
 
 
+def test_registry_retired_tiers_column_rejected(tmp_path: Path) -> None:
+    doc = _doc().replace("| Role | Mutation |", "| Role | Tiers | Mutation |")
+    make_tree(tmp_path, doc=doc)
+    _assert_flags(_problems(tmp_path), "registry header must be")
+
+
 def test_registry_row_column_count(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| stub | small | read-only |")
+    rows = (*_ROWS, "| stub | read-only | no |")
     make_tree(tmp_path, doc=_doc(rows=rows))
     _assert_flags(_problems(tmp_path), "columns")
-
-
-def test_unknown_tier_token(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| giant | huge | read-only | no | session | session | session |")
-    make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "giant")))
-    _assert_flags(_problems(tmp_path), "Tiers must be distinct")
-
-
-def test_duplicate_tier_token(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| twice | small+small | read-only | no | session | session | session |")
-    make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "twice")))
-    _assert_flags(_problems(tmp_path), "Tiers must be distinct")
 
 
 def test_duplicate_role(tmp_path: Path) -> None:
@@ -253,188 +216,55 @@ def test_duplicate_role(tmp_path: Path) -> None:
 
 
 def test_invalid_role_id(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| Builder2! | small | read-only | no | session | session | session |")
+    rows = (*_ROWS, "| Builder2! | read-only | no | session | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows))
     _assert_flags(_problems(tmp_path), "invalid role id")
 
 
 def test_bad_mutation_value(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| muta | small | writable | no | session | session | session |")
+    rows = (*_ROWS, "| muta | writable | no | session | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "muta")))
     _assert_flags(_problems(tmp_path), "Mutation must be one of")
 
 
 def test_bad_independent_value(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| indy | small | read-only | maybe | session | session | session |")
+    rows = (*_ROWS, "| indy | read-only | maybe | session | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "indy")))
     _assert_flags(_problems(tmp_path), "Independent must be yes/no")
 
 
 def test_claude_disallowed_kind_rejected(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| xrole | small | read-only | no | container:builder | session | session |")
+    rows = (*_ROWS, "| xrole | read-only | no | container:builder | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "xrole")))
     _assert_flags(_problems(tmp_path), "Claude binding 'container:builder'")
 
 
-def _claude_agent_md(
-    model: str,
-    mutation: str = "read-only",
-    name: str = "x",
-    description: str = "test agent",
-    effort: str | None = "medium",
-) -> str:
-    effort_line = "" if effort is None else f"effort: {effort}\n"
-    return (
-        f"---\nname: {name}\ndescription: {description}\nmodel: {model}\n{effort_line}---\n\n"
-        f"<!-- mutation: {mutation} -->\n"
-    )
-
-
-def test_claude_agent_valid_binding(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small+top | read-only | yes | agent:checker, agent:checker-top "
-        "| agent:checker, agent:checker-top | agent:checker, agent:checker-top |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-small-x"))
-    _write(tmp_path / ".claude/agents/checker-top.md", _claude_agent_md("claude-top-x"))
-    assert _problems(tmp_path) == []
-
-
-def test_claude_agent_file_missing(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small | read-only | yes | agent:missing-agent | agent:checker | agent:checker |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _assert_flags(_problems(tmp_path), "missing Claude agent .claude/agents/missing-agent.md")
-
-
-def test_claude_agent_missing_front_matter(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _write(tmp_path / ".claude/agents/checker.md", "# No front matter\n")
-    _assert_flags(_problems(tmp_path), ".claude/agents/checker.md: missing YAML front matter")
-
-
-def test_claude_agent_missing_description(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _write(tmp_path / ".claude/agents/checker.md", "---\nname: x\nmodel: claude-small-x\n---\n")
-    _assert_flags(_problems(tmp_path), ".claude/agents/checker.md: front matter has no description")
-
-
-def test_claude_agent_model_wrong_tier(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-top-x"))
-    _assert_flags(_problems(tmp_path), ".claude/agents/checker.md model 'claude-top-x' is not a Claude model")
-
-
-def test_claude_agent_primary_tier_uncovered(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | top+small | read-only | yes | agent:checker | agent:checker, agent:checker-top "
-        "| agent:checker, agent:checker-top |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-small-x"))
-    _assert_flags(_problems(tmp_path), "no Claude agent binding runs its primary tier 'top'")
-
-
-def test_claude_agent_mutation_mismatch(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-small-x", mutation="workspace-write"))
-    _assert_flags(
-        _problems(tmp_path), ".claude/agents/checker.md mutation marker 'workspace-write' != role Mutation 'read-only'"
-    )
-
-
-def test_orphan_claude_agent(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-small-x"))
-    _write(tmp_path / ".claude/agents/stray.md", _claude_agent_md("claude-small-x"))
-    _assert_flags(_problems(tmp_path), "stray.md: Claude agent not claimed by any registry row")
-
-
-def test_missing_claude_agents_dir_when_claimed(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    _assert_flags(_problems(tmp_path), "missing directory: .claude/agents")
-
-
-def test_claude_agent_quoted_front_matter_values_parsed(tmp_path: Path) -> None:
-    rows = (
-        _ROWS[0],
-        "| checker | small+top | read-only | yes | agent:checker, agent:checker-top "
-        "| agent:checker, agent:checker-top | agent:checker, agent:checker-top |",
-        *_ROWS[2:],
-    )
-    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
-    content = (
-        '---\nname: "x"\ndescription: \'test agent\'\nmodel: "claude-small-x"\neffort: "medium"\n---\n\n'
-        "<!-- mutation: read-only -->\n"
-    )
-    _write(tmp_path / ".claude/agents/checker.md", content)
-    _write(tmp_path / ".claude/agents/checker-top.md", _claude_agent_md("claude-top-x"))
-    assert _problems(tmp_path) == []
+def test_claude_workflow_kind_rejected(tmp_path: Path) -> None:
+    rows = (*_ROWS, "| xrole | read-only | no | workflow:build | session | session |")
+    make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "xrole")))
+    _assert_flags(_problems(tmp_path), "Claude binding 'workflow:build'")
 
 
 def test_codex_workflow_kind_rejected(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| yrole | small | read-only | no | session | workflow:build | session |")
+    rows = (*_ROWS, "| yrole | read-only | no | session | workflow:build | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "yrole")))
     _assert_flags(_problems(tmp_path), "Codex binding 'workflow:build'")
 
 
 def test_empty_binding_cell(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| zrole | small | read-only | no |  | session | session |")
+    rows = (*_ROWS, "| zrole | read-only | no |  | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "zrole")))
     _assert_flags(_problems(tmp_path), "empty Claude binding")
 
 
-# --------------------------------------------------------------------------- #
-# Tier vocabulary (.agents/model-tiers.conf)
-# --------------------------------------------------------------------------- #
-
-
 def test_session_binding_with_target_rejected(tmp_path: Path) -> None:
-    rows = _ROWS[:3] + ("| steward | top | read-only | no | session:evil | session | session |",) + _ROWS[4:]
+    rows = _ROWS[:3] + ("| steward | read-only | no | session:evil | session | session |",) + _ROWS[4:]
     make_tree(tmp_path, doc=_doc(rows=rows))
     _assert_flags(_problems(tmp_path), "Claude binding 'session:evil'")
 
 
 def test_registry_blank_row_rejected(tmp_path: Path) -> None:
-    make_tree(tmp_path, doc=_doc(rows=(*_ROWS, "|  |  |  |  |  |  |  |")))
+    make_tree(tmp_path, doc=_doc(rows=(*_ROWS, "|  |  |  |  |  |  |")))
     _assert_flags(_problems(tmp_path), "invalid role id")
 
 
@@ -447,43 +277,8 @@ def test_doc_not_utf8_clean_error(tmp_path: Path) -> None:
     assert "registry markers missing" in result.stderr
 
 
-def test_tiers_not_utf8_clean_error(tmp_path: Path) -> None:
-    make_tree(tmp_path)
-    (tmp_path / ".agents/model-tiers.conf").write_text(_TIERS_TEXT, encoding="utf-16")
-    result = _cli(tmp_path, "--all")
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "Traceback" not in result.stderr
-    assert "tier key" in result.stderr
-
-
-def test_tiers_missing_key(tmp_path: Path) -> None:
-    make_tree(tmp_path, tiers=_TIERS_TEXT.replace("MID_CODEX=codex-mid\n", ""))
-    _assert_flags(_problems(tmp_path), "missing tier key: MID_CODEX")
-
-
-def test_tiers_missing_file(tmp_path: Path) -> None:
-    make_tree(tmp_path)
-    (tmp_path / ".agents/model-tiers.conf").unlink()
-    _assert_flags(_problems(tmp_path), "missing tier vocabulary")
-
-
-def test_tiers_duplicate_key(tmp_path: Path) -> None:
-    make_tree(tmp_path, tiers=_TIERS_TEXT + "TOP_CLAUDE=claude-other\n")
-    _assert_flags(_problems(tmp_path), "duplicate tier key: TOP_CLAUDE")
-
-
-def test_tiers_unknown_key(tmp_path: Path) -> None:
-    make_tree(tmp_path, tiers=_TIERS_TEXT + "HUGE_CLAUDE=claude-huge\n")
-    _assert_flags(_problems(tmp_path), "unknown tier key: HUGE_CLAUDE")
-
-
-def test_tiers_invalid_line(tmp_path: Path) -> None:
-    make_tree(tmp_path, tiers=_TIERS_TEXT + "SMALL_CODEX\n")
-    _assert_flags(_problems(tmp_path), "invalid tier assignment")
-
-
 # --------------------------------------------------------------------------- #
-# Contract sections (the eight semantic fields per role)
+# Contract sections (the seven semantic fields per role)
 # --------------------------------------------------------------------------- #
 
 
@@ -493,49 +288,78 @@ def test_missing_role_section(tmp_path: Path) -> None:
 
 
 def test_section_missing_field(tmp_path: Path) -> None:
-    doc = _doc().replace("- **Tier intent:** x\n\n### checker", "\n### checker", 1)
+    doc = _doc().replace("- **Independence:** x\n\n### checker", "\n### checker", 1)
     make_tree(tmp_path, doc=doc)
-    _assert_flags(_problems(tmp_path), "section '### builder' missing field '**Tier intent:**'")
+    _assert_flags(_problems(tmp_path), "section '### builder' missing field '**Independence:**'")
 
 
 # --------------------------------------------------------------------------- #
-# Claude workflow bindings (model pins vs declared tiers)
+# Claude and Copilot agent bindings (front matter + mutation marker)
 # --------------------------------------------------------------------------- #
 
 
-def test_workflow_file_missing(tmp_path: Path) -> None:
+def test_claude_agent_file_missing(tmp_path: Path) -> None:
     make_tree(tmp_path)
-    (tmp_path / ".claude/workflows/build.js").unlink()
-    _assert_flags(_problems(tmp_path), "missing Claude workflow .claude/workflows/build.js")
+    (tmp_path / ".claude/agents/checker.md").unlink()
+    _assert_flags(_problems(tmp_path), "missing Claude agent .claude/agents/checker.md")
 
 
-def test_workflow_pin_outside_role_tiers(tmp_path: Path) -> None:
-    make_tree(tmp_path, build_js="m 'claude-small-x'\nx 'claude-top-x'\n")
-    _assert_flags(_problems(tmp_path), "pins 'claude-top-x' (top tier), outside tier(s) small")
+def test_claude_agent_missing_front_matter(tmp_path: Path) -> None:
+    make_tree(tmp_path, checker_claude_md="# No front matter\n")
+    _assert_flags(_problems(tmp_path), ".claude/agents/checker.md: missing YAML front matter")
 
 
-def test_workflow_pin_unknown_model(tmp_path: Path) -> None:
-    make_tree(tmp_path, build_js="m 'claude-small-x'\nx 'claude-weird-9'\n")
-    _assert_flags(_problems(tmp_path), "pins 'claude-weird-9', which is not in")
+def test_claude_agent_missing_description(tmp_path: Path) -> None:
+    make_tree(tmp_path, checker_claude_md="---\nname: x\n---\n\n<!-- mutation: read-only -->\n")
+    _assert_flags(_problems(tmp_path), ".claude/agents/checker.md: front matter has no description")
 
 
-def test_workflow_missing_primary_pin(tmp_path: Path) -> None:
-    make_tree(tmp_path, build_js="no pins here\n")
-    _assert_flags(_problems(tmp_path), "never pins role 'builder' primary tier 'small'")
+def test_claude_agent_mutation_mismatch(tmp_path: Path) -> None:
+    make_tree(tmp_path, checker_claude_md=_agent_md("workspace-write"))
+    _assert_flags(
+        _problems(tmp_path), ".claude/agents/checker.md mutation marker 'workspace-write' != role Mutation 'read-only'"
+    )
 
 
-def test_workflow_escape_line_exempt(tmp_path: Path) -> None:
-    make_tree(tmp_path, build_js="m 'claude-small-x'\n// roles-ok: fallback note 'claude-top-x'\n")
+def test_claude_agent_quoted_front_matter_values_parsed(tmp_path: Path) -> None:
+    content = "---\nname: \"x\"\ndescription: 'test agent'\n---\n\n<!-- mutation: read-only -->\n"
+    make_tree(tmp_path, checker_claude_md=content)
     assert _problems(tmp_path) == []
 
 
-def test_workflow_mid_string_mention_not_a_pin(tmp_path: Path) -> None:
-    make_tree(tmp_path, build_js="m 'claude-small-x'\nconst t = 'pass claude-top-x when told'\n")
-    assert _problems(tmp_path) == []
+def test_claude_agent_quoted_empty_description_rejected(tmp_path: Path) -> None:
+    make_tree(tmp_path, checker_claude_md="---\nname: x\ndescription: ''\n---\n\n<!-- mutation: read-only -->\n")
+    _assert_flags(_problems(tmp_path), ".claude/agents/checker.md: front matter has no description")
+
+
+def test_orphan_claude_agent(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    _write(tmp_path / ".claude/agents/stray.md", _agent_md("read-only"))
+    _assert_flags(_problems(tmp_path), "stray.md: Claude agent not claimed by any registry row")
+
+
+def test_copilot_agent_file_missing(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    (tmp_path / ".github/agents/builder.agent.md").unlink()
+    _assert_flags(_problems(tmp_path), "missing Copilot agent .github/agents/builder.agent.md")
+
+
+def test_copilot_agent_mutation_mismatch(tmp_path: Path) -> None:
+    make_tree(tmp_path, builder_agent_md=_agent_md("read-only"))
+    _assert_flags(
+        _problems(tmp_path),
+        ".github/agents/builder.agent.md mutation marker 'read-only' != role Mutation 'workspace-write'",
+    )
+
+
+def test_orphan_copilot_agent(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    _write(tmp_path / ".github/agents/stray.agent.md", _agent_md("read-only"))
+    _assert_flags(_problems(tmp_path), "stray.agent.md: Copilot role not claimed by any registry row")
 
 
 # --------------------------------------------------------------------------- #
-# Codex agent bindings (model tier + sandbox/mutation)
+# Codex agent bindings (sandbox/mutation)
 # --------------------------------------------------------------------------- #
 
 
@@ -545,70 +369,27 @@ def test_codex_agent_file_missing(tmp_path: Path) -> None:
     _assert_flags(_problems(tmp_path), "missing Codex agent .codex/agents/builder.toml")
 
 
-def test_codex_model_wrong_tier(tmp_path: Path) -> None:
-    make_tree(tmp_path, builder_toml=_toml("codex-top", "workspace-write"))
-    _assert_flags(_problems(tmp_path), "builder.toml model 'codex-top' is not a Codex model")
-
-
-def test_codex_model_missing_key(tmp_path: Path) -> None:
-    make_tree(tmp_path, builder_toml='name = "x"\nsandbox_mode = "workspace-write"\n')
-    _assert_flags(_problems(tmp_path), "builder.toml model None is not a Codex model")
-
-
 def test_codex_sandbox_mismatch(tmp_path: Path) -> None:
-    make_tree(tmp_path, builder_toml=_toml("codex-small", "read-only"))
+    make_tree(tmp_path, builder_toml=_toml("read-only"))
     _assert_flags(_problems(tmp_path), "sandbox_mode 'read-only' != role Mutation 'workspace-write'")
 
 
+def test_codex_sandbox_missing(tmp_path: Path) -> None:
+    make_tree(tmp_path, builder_toml='name = "x"\n')
+    _assert_flags(_problems(tmp_path), "sandbox_mode None != role Mutation 'workspace-write'")
+
+
 def test_codex_toml_unparsable(tmp_path: Path) -> None:
-    make_tree(tmp_path, builder_toml="model = codex-small oops\n")
+    make_tree(tmp_path, builder_toml="sandbox_mode = read-only oops\n")
     _assert_flags(_problems(tmp_path), "unparsable TOML")
 
 
-def test_codex_primary_tier_uncovered(tmp_path: Path) -> None:
-    # Both checker agents on the top model: legal tiers, but nobody runs the
-    # small primary — the drift the coverage rule exists to catch.
-    make_tree(tmp_path, checker_toml=_toml("codex-top", "read-only"))
-    _assert_flags(_problems(tmp_path), "role 'checker': no Codex agent binding runs its primary tier 'small'")
-
-
 def test_codex_conflicting_mutation_roles(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| auditor | small | read-only | yes | workflow:check | agent:builder | agent:builder |")
-    make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "auditor")))
-    _assert_flags(_problems(tmp_path), "bound by roles with conflicting Mutation")
-
-
-def test_codex_luna_reviewer_rejects_xhigh(tmp_path: Path) -> None:
-    rows = tuple(row.replace("| checker |", "| reviewer |") for row in _ROWS)
-    sections = tuple("reviewer" if name == "checker" else name for name in _ROLE_NAMES)
-    make_tree(
-        tmp_path,
-        doc=_doc(rows=rows, sections=sections),
-        checker_toml=(
-            'name = "x"\nmodel = "codex-small"\nmodel_reasoning_effort = "xhigh"\nsandbox_mode = "read-only"\n'
-        ),
-        checker_top_toml=(
-            'name = "x"\nmodel = "codex-top"\nmodel_reasoning_effort = "medium"\nsandbox_mode = "read-only"\n'
-        ),
-    )
-    _assert_flags(
-        _problems(tmp_path),
-        "checker.toml model_reasoning_effort 'xhigh' != required 'high' for Codex reviewer/verifier role(s) reviewer",
-    )
-
-
-def test_shared_bindings_use_each_roles_tier_intersection(tmp_path: Path) -> None:
-    rows = (
-        *_ROWS,
-        "| auditor | small | read-only | yes | workflow:check "
-        "| agent:checker, agent:checker-top | agent:checker, agent:checker-top |",
-    )
+    rows = (*_ROWS, "| auditor | read-only | yes | session | agent:builder | agent:builder |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "auditor")))
     problems = _problems(tmp_path)
-    _assert_flags(problems, ".claude/workflows/check.js pins 'claude-top-x' (top tier), outside tier(s) small")
-    _assert_flags(problems, ".codex/agents/checker-top.toml model 'codex-top' is not a Codex model")
-    _assert_flags(problems, ".github/agents/checker-top.agent.md model 'copilot-top' is not a Copilot model")
-    assert len(problems) == 3, problems
+    _assert_flags(problems, ".codex/agents/builder.toml is bound by roles with conflicting Mutation")
+    _assert_flags(problems, ".github/agents/builder.agent.md is bound by roles with conflicting Mutation")
 
 
 # --------------------------------------------------------------------------- #
@@ -623,35 +404,31 @@ def test_skill_binding_missing(tmp_path: Path) -> None:
 
 
 def test_policy_binding_missing(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| scribe | small | read-only | no | policy:missing.md | session | session |")
+    rows = (*_ROWS, "| scribe | read-only | no | policy:missing.md | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "scribe")))
     _assert_flags(_problems(tmp_path), "policy binding 'missing.md' has no")
 
 
 def test_orphan_codex_agent(tmp_path: Path) -> None:
     make_tree(tmp_path)
-    _write(tmp_path / ".codex/agents/stray.toml", _toml("codex-small", "read-only"))
+    _write(tmp_path / ".codex/agents/stray.toml", _toml("read-only"))
     _assert_flags(_problems(tmp_path), "stray.toml: Codex role not claimed by any registry row")
 
 
-def test_unclaimed_claude_workflow(tmp_path: Path) -> None:
-    make_tree(tmp_path)
-    _write(tmp_path / ".claude/workflows/stray.js", "x\n")
-    _assert_flags(_problems(tmp_path), "stray.js: Claude workflow not claimed by any registry row")
-
-
 def test_missing_vendor_dir_ok_when_side_unclaimed(tmp_path: Path) -> None:
-    """A registry with no workflow bindings tolerates an absent .claude/workflows (issue #1431)."""
-    rows = tuple(row.replace("workflow:build", "session").replace("workflow:check", "session") for row in _ROWS)
+    rows = tuple(
+        row.replace("| agent:checker | agent:checker | agent:checker |", "| session | agent:checker | agent:checker |")
+        for row in _ROWS
+    )
     make_tree(tmp_path, doc=_doc(rows=rows))
-    shutil.rmtree(tmp_path / ".claude/workflows")
+    shutil.rmtree(tmp_path / ".claude/agents")
     assert _problems(tmp_path) == []
 
 
 def test_missing_vendor_dir_flagged_when_side_claimed(tmp_path: Path) -> None:
     make_tree(tmp_path)
-    shutil.rmtree(tmp_path / ".claude/workflows")
-    _assert_flags(_problems(tmp_path), "missing directory: .claude/workflows")
+    shutil.rmtree(tmp_path / ".claude/agents")
+    _assert_flags(_problems(tmp_path), "missing directory: .claude/agents")
 
 
 # --------------------------------------------------------------------------- #
@@ -661,15 +438,16 @@ def test_missing_vendor_dir_flagged_when_side_claimed(tmp_path: Path) -> None:
 
 def test_touches_role_surface_unit() -> None:
     assert car.touches_role_surface([".codex/agents/planner.toml"])
-    assert car.touches_role_surface([".claude/workflows/phase-step.js"])
-    assert car.touches_role_surface([".agents/model-tiers.conf"])
+    assert car.touches_role_surface([".claude/agents/adversarial-reviewer.md"])
+    assert car.touches_role_surface([".github/agents/planner.agent.md"])
+    assert car.touches_role_surface([".agents/skills/release/SKILL.md"])
     assert car.touches_role_surface([".agents/policy/agent-roles.md"])
     assert car.touches_role_surface([".agents/policy/flow.md"])
     assert car.touches_role_surface(["scripts/check_agent_roles.py"])
     assert not car.touches_role_surface(["src/usr/local/pkg/pfblockerng/pfblockerng.inc", "README.md"])
     assert not car.touches_role_surface([])
     # Exact-file trigger, not a lookalike sibling file.
-    assert not car.touches_role_surface([".agents/model-tiers.conf.bak"])
+    assert not car.touches_role_surface(["scripts/check_agent_roles.py.bak"])
 
 
 def _git(root: Path, *args: str) -> None:
@@ -710,8 +488,8 @@ def test_cli_staged_skips_unrelated_change(tmp_path: Path) -> None:
 
 def test_cli_staged_validates_clean_role_surface_change(tmp_path: Path) -> None:
     root = _git_tree(tmp_path)
-    _write(root / ".agents/model-tiers.conf", _TIERS_TEXT + "# comment\n")
-    _git(root, "add", ".agents/model-tiers.conf")
+    _write(root / ".agents/policy/agent-roles.md", _doc() + "\nextra prose\n")
+    _git(root, "add", ".agents/policy/agent-roles.md")
     result = _cli(root, "--staged")
     assert result.returncode == 0, result.stderr
     assert "consistent" in result.stdout
@@ -719,12 +497,12 @@ def test_cli_staged_validates_clean_role_surface_change(tmp_path: Path) -> None:
 
 def test_cli_staged_red_on_drift(tmp_path: Path) -> None:
     root = _git_tree(tmp_path)
-    _write(root / ".codex/agents/builder.toml", _toml("codex-top", "workspace-write"))
+    _write(root / ".codex/agents/builder.toml", _toml("read-only"))
     _git(root, "add", ".codex/agents/builder.toml")
     result = _cli(root, "--staged")
     assert result.returncode == 1, result.stdout + result.stderr
     assert "Agent role-family drift detected" in result.stderr
-    assert "builder.toml model 'codex-top'" in result.stderr
+    assert "builder.toml sandbox_mode 'read-only'" in result.stderr
 
 
 def test_cli_staged_red_on_deleted_policy_binding(tmp_path: Path) -> None:
@@ -747,47 +525,18 @@ def test_cli_diff_skips_unrelated_change(tmp_path: Path) -> None:
 
 def test_cli_diff_red_on_drift(tmp_path: Path) -> None:
     root = _git_tree(tmp_path)
-    _write(root / ".codex/agents/checker.toml", _toml("codex-mid", "read-only"))
+    _write(root / ".claude/agents/checker.md", _agent_md("workspace-write"))
     _git(root, "add", "-A")
-    _git(root, "commit", "-q", "-m", "retier", "--no-verify")
+    _git(root, "commit", "-q", "-m", "drift", "--no-verify")
     result = _cli(root, "--diff", "HEAD~1")
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "checker.toml model 'codex-mid'" in result.stderr
+    assert "checker.md mutation marker 'workspace-write'" in result.stderr
 
 
 def test_cli_all_green_and_exit_codes(tmp_path: Path) -> None:
     result = _cli(make_tree(tmp_path), "--all")
     assert result.returncode == 0, result.stderr
     assert "consistent (5 roles)" in result.stdout
-
-
-def test_cli_escape_requires_colon_and_reason(tmp_path: Path) -> None:
-    valid = (
-        "roles-ok: reason",
-        "roles-ok:\t  reason",
-        "roles-ok: []{}()$.*+?",
-        f"roles-ok: {'x' * 4096}",
-        "roles-ok: \ufffd",
-    )
-    malformed = (
-        "roles-ok",
-        "roles-ok:",
-        "roles-ok:   ",
-        "roles-ok reason",
-        "roles-ok - reason",
-        "xroles-ok: reason",
-        "roles-ok-extra: reason",
-        "Roles-OK: reason",
-        "roles-ok:\n// reason",
-    )
-    for marker in valid:
-        make_tree(tmp_path, build_js=f"m 'claude-small-x'\nm 'claude-top-x' // {marker}\n")
-        result = _cli(tmp_path, "--all")
-        assert result.returncode == 0, f"valid marker {marker!r}: {result.stdout}{result.stderr}"
-    for marker in malformed:
-        make_tree(tmp_path, build_js=f"m 'claude-small-x'\nm 'claude-top-x' // {marker}\n")
-        result = _cli(tmp_path, "--all")
-        assert result.returncode == 1, f"malformed marker {marker!r}: {result.stdout}{result.stderr}"
 
 
 def test_cli_usage_error_exit_2(tmp_path: Path) -> None:

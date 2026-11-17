@@ -1,6 +1,6 @@
 # Ubiquitous Language
 
-Domains: pfBlockerNG's Core/Outpost architecture (map #3813), and agent reasoning-effort and model-selection configuration (Claude Code, Codex, and GitHub Copilot in this repository).
+Domains: pfBlockerNG's Core/Outpost architecture (map #3813), and agent reasoning-effort configuration (Claude Code, Codex, and GitHub Copilot in this repository).
 
 ## Core and Outpost
 
@@ -24,12 +24,11 @@ step of an Update.
 - An **Update** runs entirely in the **Core Updater**; the **Outpost** takes part only through the **Settings backend** read and the **Outpost apply**.
 - A download, parse or policy decision in Outpost code is a defect against map #3813, not a design choice.
 
-## Effort and model selection
+## Effort
 
 | Term             | Definition                                                                                                          | Aliases to avoid                  |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | **Effort level** | The per-request reasoning-depth knob an agent runs at (`low`–`max`; Claude `effortLevel`, Codex `model_reasoning_effort`) | Reasoning effort, effort knob     |
-| **Model tier**   | The capability class (top / mid / small) that selects *which model* runs, mapped per provider in `.agents/model-tiers.conf` | Model level, reasoning tier, high/medium/low tier |
 
 ## Configuration layers
 
@@ -48,7 +47,6 @@ Ordered highest precedence first.
 
 - An **Environment override** outranks a **Session override**, which outranks the **Repo default**.
 - A **Per-agent pin** sets the **Effort level** for exactly one subagent, regardless of the **Repo default**.
-- A **Model tier** selects the model only; the **Effort level** is always set independently of it.
 - The **Repo default** and a **Per-agent pin** are committed and shared; an **Environment override** and the **User layer** are machine-local.
 
 ## Example dialogue
@@ -60,13 +58,8 @@ Ordered highest precedence first.
 > **Dev:** "If I delete it, do the Codex reviewer subagents drop below `xhigh`?"
 >
 > **Domain expert:** "No. Each reviewer carries a **Per-agent pin** in its own TOML, so it keeps its **Effort level** no matter what the session does."
->
-> **Dev:** "And running the review on the high **Model tier** — does that raise the effort too?"
->
-> **Domain expert:** "No. The **Model tier** only picks which model runs; its **Effort level** is set separately."
 
 ## Flagged ambiguities
 
-- **"high"** *(resolved 2026-07-16, PR #1411)* — previously named both a **Model tier** and an **Effort level** value. The tier scale was renamed to **top / mid / small** (disjoint from the effort enum), so "high" now always means an effort value. Old forms (high/medium/low tier, "low reasoning") are aliases to avoid.
 - **"settings"** was used for both shell environment and settings files ("environment and/or settings"). Use **Environment override** for exported variables and name the concrete layer (**Repo default**, **User layer**) for files.
 - **"default"** is overloaded: an exported variable is often described as a "default effort" even though it has the *highest* precedence — that is an **Environment override**, not a default. Reserve "default" for the lowest-precedence fallback a layer supplies (**Repo default**).

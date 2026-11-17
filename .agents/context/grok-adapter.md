@@ -12,7 +12,7 @@ Grok translate canonical nouns mechanically:
 | Canonical / Claude surface | Grok surface |
 | --- | --- |
 | `/name` or `.claude/skills/name` | `/name` from `.agents/skills/name` (same source — Grok scan `.agents/skills/`, `.claude/skills/`, `.grok/skills/`, dedupe by skill name). |
-| `Agent` / planner / implementer / verifier | Grok `spawn_subagent` (`general-purpose`, `explore`, `plan` — the three built-in types on 1.0.4, 2026-08-15). No in-repo `.grok/agents/` tree; roles + tier bindings in `.agents/policy/agent-roles.md` stay Claude/Codex/Copilot. Independent landing review still required — spawn a fresh `general-purpose` reviewer. |
+| `Agent` / planner / implementer / reviewer | Grok `spawn_subagent` (`general-purpose`, `explore`, `plan` — the three built-in types on 1.0.4, 2026-08-15). No in-repo `.grok/agents/` tree; role bindings in `.agents/policy/agent-roles.md` stay Claude/Codex/Copilot. Independent landing review still required — spawn a fresh `general-purpose` reviewer. |
 | `AskUserQuestion` | Ask in conversation; use Grok's structured question tool when available. |
 | Background `run_in_background: true` | Harness-tracked background command; never shell `&`. |
 | Commit and public attribution | None. Commits use the configured user identity; public bodies contain no agent/model/client footer. |

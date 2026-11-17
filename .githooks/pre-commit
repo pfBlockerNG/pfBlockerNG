@@ -139,7 +139,7 @@ staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
 staged_yaml=0; staged_has '\.ya?ml$'    && staged_yaml=1
 staged_agentcfg=0
 printf '%s\n' "$staged_all" | grep -qE \
-	'^(AGENTS\.md|CLAUDE\.md|docs/misc/codex-migration\.md|\.claude/(skills|workflows)/|\.agents/(skills/|context/|model-tiers\.conf$)|\.codex/|\.github/agents/|\.github/copilot-instructions\.md|scripts/agent/check-agent-config-parity\.sh|tests/shell/agent_config_parity_spec\.sh)' \
+	'^(AGENTS\.md|CLAUDE\.md|docs/misc/codex-migration\.md|\.claude/(skills|workflows)/|\.agents/(skills/|context/)|\.codex/|\.github/agents/|\.github/copilot-instructions\.md|scripts/agent/check-agent-config-parity\.sh|tests/shell/agent_config_parity_spec\.sh)' \
 	&& staged_agentcfg=1
 
 # The detailed policy/procedures have one canonical source. Codex files are
@@ -148,7 +148,7 @@ if [ "$staged_agentcfg" = 1 ]; then
 	if exempted scripts/agent/check-agent-config-parity.sh; then
 		exempt 'agent-config parity'
 	else
-		step 'agent-config parity (shared sources, adapters, and model tiers)'
+		step 'agent-config parity (shared sources and adapters)'
 		sh scripts/agent/check-agent-config-parity.sh || failed 'agent-config parity'
 	fi
 fi
@@ -346,8 +346,8 @@ fi
 # --- Agent role-family parity (issue #1387): the shared role registry
 #     (.agents/policy/agent-roles.md) vs both vendors' role definitions. The
 #     checker self-scopes: it validates iff the staged diff touches a role
-#     surface (.agents/policy/, model-tiers.conf, .codex/agents/,
-#     .claude/workflows/, .agents/skills/); otherwise it reports the skip. ---
+#     surface (.agents/policy/, .codex/agents/, .github/agents/,
+#     .claude/agents/, .agents/skills/); otherwise it reports the skip. ---
 if exempted scripts/check_agent_roles.py; then
 	exempt agent-roles
 elif [ -n "$py_bin" ]; then

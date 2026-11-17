@@ -46,8 +46,8 @@ in `~/.config/worktrunk/config.toml`. `wt remove` deletes only branches it verif
 integrated; landing observes the foreground result.
 
 **Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes, both taking
-a SHA — an isolated tree at commit X (e.g. one review leg re-running a red half without
-disturbing the worktree the other legs read). Needs git (history, diffing, committing) →
+a SHA — an isolated tree at commit X (e.g. a reviewer re-running a red half without
+disturbing the worktree others read). Needs git (history, diffing, committing) →
 a throwaway worktree, `wt --yes switch --create <branch> --base <sha>`, `wt remove` when
 the lane ends. Read-only → `git archive <sha> | tar -x -C "$SCRATCH"`: no `.git`, so it
 cannot commit, share refs, or touch the repository. Prefer the extraction unless the
