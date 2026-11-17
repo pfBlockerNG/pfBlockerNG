@@ -145,8 +145,8 @@ answer, not Debian's. `iprange` and `grepcidr` versions are the oracle: a case t
 escalation, not a tolerance.
 
 Replay cost on the VM: the whole harness takes under three minutes; the heaviest cases (2,000,000 members) take 5 to 18 s each.
-Peak PHP memory of `pfb_suppress_file_v6()` is about 1.1 GB for 2,000,000 members (measured on a development host), so
-`supp6_large_2m_members` runs last.
+`supp6_large_2m_members` (2,000,000 IPv6 members) took 72 s on the VM; `pfb_suppress_file_v6()` peaks near 1.1 GB of PHP memory
+there (measured on a development host), so that case runs last and a memory failure would leave every earlier result.
 
 The corpus covers every cell of the coverage matrix of issue #4033 except the n/a ones below. Two sizes differ from the issue's
 wording: the legacy `pmax` verb is not run on 2,000,000 members (it greps every offender /24 against every deny file, quadratic

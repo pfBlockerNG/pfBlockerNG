@@ -17510,6 +17510,15 @@
       }
      ]
     }
+   },
+   "expect": {
+    "ok": true,
+    "members": {
+     "count": 1999990,
+     "sha256": "7f085c36b28b32bf37300cb830944b8a957309eab5ec607b28c7bba5cdbb52fc"
+    },
+    "log": [],
+    "leftover_tmp": false
    }
   }
  ]
