@@ -19,7 +19,7 @@ const emfileDirEnv = "PFB_RESOURCES_EMFILE_DIR"
 func TestEMFILEChild(t *testing.T) {
 	dir := os.Getenv(emfileDirEnv)
 	if dir == "" {
-		t.Skip("child of TestWriterReadErrorDeletesNothing")
+		return
 	}
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {

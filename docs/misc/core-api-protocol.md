@@ -472,8 +472,8 @@ strings it was given and sends them back. A generation is a string because it ca
 | Item | When | Keys |
 |---|---|---|
 | `{"kind": "unchanged"}` | the cursor's generation is the current one and its digest matches | `kind`, `generation` |
-| `{"kind": "delta"}` | the store holds the cursor's generation with that digest | `kind`, `generation`, `from` (the cursor's generation), `add`, `remove`, `digest`, `entries`, `metadata` |
-| `{"kind": "full"}` | there is no cursor, the store does not hold the cursor's generation, or the digest differs | `kind`, `generation`, `members`, `digest`, `entries`, `metadata` |
+| `{"kind": "delta"}` | the store holds the cursor's generation with that digest: it is the applied baseline, the only generation kept besides the current one | `kind`, `generation`, `from` (the cursor's generation), `add`, `remove`, `digest`, `entries`, `metadata` |
+| `{"kind": "full"}` | there is no cursor, the store does not hold the cursor's generation (it is neither the current one nor the applied baseline), or the digest differs | `kind`, `generation`, `members`, `digest`, `entries`, `metadata` |
 | `{"error": {"code": "not_found", ...}}` | the store has no such resource: never published, removed, or the store directory or its index does not exist | `error` |
 | `{"error": {"code": "unavailable", ...}}` | the store cannot serve it: its index cannot be read, or its body is missing, not a regular file, or fails verification | `error` |
 

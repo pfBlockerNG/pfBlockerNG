@@ -27,7 +27,7 @@ var (
 func TestCrashChild(t *testing.T) {
 	want := os.Getenv(crashStepEnv)
 	if want == "" {
-		t.Skip("child of TestKilledPublishLeavesAWholeBody")
+		return
 	}
 	step = func(name string) {
 		if name == want {

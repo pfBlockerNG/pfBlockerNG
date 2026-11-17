@@ -66,7 +66,7 @@ func (r *resRig) digest(id string) string {
 }
 
 // call posts GetResources with the cursors (id to raw JSON cursor) and returns the reply's "resources" object, error
-// messages replaced by "msg" (their wording is not the contract; that one is present is).
+// messages replaced by "msg" (the contract is that a message is present, not its wording).
 func (r *resRig) call(req map[string]string) map[string]any {
 	r.t.Helper()
 	raw := map[string]json.RawMessage{}
