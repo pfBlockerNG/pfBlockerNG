@@ -31,7 +31,7 @@ REAL_DOCUMENTS = [
     pytest.param(
         "src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php",
         "// A usable validator always runs",
-        "// Validate DNSBL VIP address",
+        "// Validate Adv. firewall rule 'Protocol' setting",
         id="php-source",
     ),
 ]

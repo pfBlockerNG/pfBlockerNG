@@ -19,8 +19,8 @@ path is already pinned off-appliance by
 loading a feed-regex here would silently swap which code path this module
 exercises and leave the fast path unprobed live.
 
-This module drives the shared mechanism through all four concrete values
-(``enabled``/``disabled_log``/``nxdomain_log``/``nodata_log``) and asserts every
+This module drives the shared mechanism through four concrete values
+(``nxdomain``/``disabled_log``/``nxdomain_log``/``nodata_log``; issue #4053 removed ``enabled``) and asserts every
 built-in tracks it, on a REAL pfSense VM. Three built-ins get their own test
 instead of sharing the main settings write:
 
@@ -39,7 +39,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 
@@ -84,13 +84,10 @@ def _nodata_soa_ok(client_vm: SmokeVM, vm: SmokeVM, domain: str) -> tuple[bool, 
 def _probe_row(client_vm: SmokeVM, vm: SmokeVM, domain: str, expected_shape: str) -> tuple[bool, str]:
     """Probe ``domain`` and report whether it matches ``expected_shape``.
 
-    ``expected_shape`` is one of ``"vip"``/``"null"``/``"nxdomain"``/``"nodata"``.
+    ``expected_shape`` is one of ``"null"``/``"nxdomain"``/``"nodata"``.
     Returns ``(matched, actual_description)`` — never raises, so callers can
     collect every row's verdict before asserting (issue #3334 review F3).
     """
-    if expected_shape == "vip":
-        a = h.dns_probe_client(client_vm, domain, "A")
-        return h.is_null_ip(a), str(a)
     if expected_shape == "null":
         a = h.dns_probe_client(client_vm, domain, "A")
         aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
@@ -108,15 +105,10 @@ def _probe_row(client_vm: SmokeVM, vm: SmokeVM, domain: str, expected_shape: str
 
 @dataclass
 class _Row:
-    """One built-in's probe domain, plus any PHASE-NUMBER -> shape overrides.
-
-    The override is for the HSTS row only: it matches the phase's default
-    shape everywhere except phase 1, where HSTS forces VIP (flag '1') to NULL.
-    """
+    """One built-in's probe domain."""
 
     name: str
     domain: str
-    phase_shape_override: dict[int, str] = field(default_factory=dict)
 
 
 def _assert_all_rows_match_phase(
@@ -135,10 +127,9 @@ def _assert_all_rows_match_phase(
     """
     mismatches: list[str] = []
     for row in rows:
-        expected = row.phase_shape_override.get(phase_num, default_shape)
-        matched, actual = _probe_row(client_vm, vm, row.domain, expected)
+        matched, actual = _probe_row(client_vm, vm, row.domain, default_shape)
         if not matched:
-            mismatches.append(f"{row.name}: expected {expected!r}, got: {actual}")
+            mismatches.append(f"{row.name}: expected {default_shape!r}, got: {actual}")
     assert not mismatches, (
         f"phase{phase_num} ({default_shape!r} mechanism) — {len(mismatches)} row(s) mismatched:\n"
         + "\n".join(mismatches)
@@ -288,7 +279,7 @@ def _tld_label(prefix: str) -> str:
     ``invalid``/``localhost``/``onion``/``home.arpa``) and not a real registered
     TLD (a fresh uuid4 hex suffix collides with nothing) — so Unbound's built-in
     ``local-zone``s cannot shadow it before DNSBL. Confirmed live: if it were
-    shadowed, phase 1 below (expects VIP) would observe Unbound's own NXDOMAIN/
+    shadowed, phase 2 below (expects the null answer) would observe Unbound's own NXDOMAIN/
     NODATA instead and fail loudly, rather than silently passing for the wrong
     reason."""
     return f"{prefix}{uuid.uuid4().hex}"
@@ -306,17 +297,16 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
     blocks all track the shared DNSBL mechanism, across its four concrete
     values, exactly like an ordinary per-list block would.
 
-    Phase 1 (``enabled``, flag '1'): every built-in -> VIP. The HSTS-preload
-      regex-blocked name is forced to NULL (HSTS converts VIP only).
-    Phase 2 (``disabled_log``, flag '0'): every built-in -> NULL.
+    Phase 1 (``nxdomain``): every built-in -> NXDOMAIN, no records.
+    Phase 2 (``disabled_log``): every built-in -> NULL, the HSTS-preload name too.
     Phase 3 (``nxdomain_log``, flag '3'): every built-in -> NXDOMAIN, no
       records. The HSTS-preload name is STILL NXDOMAIN — HSTS never turns an
-      NXDOMAIN block into an address (the override only fires for flag '1').
+      NXDOMAIN block into an address.
     Phase 4 (``nodata_log``, flag '5'): every built-in -> NOERROR ANSWER=0
       AUTHORITY=1 SOA.
 
     Each phase probes EVERY row and asserts once (issue #3334 review F3): a
-    RED run's single failure message lists every built-in still hardcoding VIP,
+    RED run's single failure message lists every built-in still hardcoding its answer,
     not just the first one the old per-row loop happened to hit.
     """
     regex_domain = h.unique_domain("bir")
@@ -337,7 +327,7 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
         _Row("regex", regex_domain),
         _Row("all-idn", idn_domain),
         _Row("tld-blacklist", blacklist_domain),
-        _Row("hsts-regex", hsts_domain, phase_shape_override={1: "null"}),
+        _Row("hsts-regex", hsts_domain),
     ]
 
     h.add_hsts_name(deployed_vm, hsts_domain)
@@ -349,7 +339,7 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
             regex_patterns=regex_patterns,
             tld_blacklist=blacklist_tld,
             global_log_mode="default",
-            global_log="enabled",
+            global_log="nxdomain",
         )
         # Verify the key semantics this module relies on before trusting the DNS
         # shape below to attribute a failure correctly.
@@ -360,9 +350,9 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
         h.reload(deployed_vm, "updatednsbl")
         h.assert_hsts_loaded(deployed_vm, hsts_domain)
 
-        # ---- Phase 1: enabled (flag '1') -> VIP; HSTS regex name -> NULL ----
+        # ---- Phase 1: nxdomain -> NXDOMAIN ----
         with _hermetic_probe():
-            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "vip")
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "nxdomain")
 
         # ---- Phase 2: disabled_log (flag '0') -> NULL. Swap-freshness observation ----
         # (not asserted either way — the answer change below is the load-bearing proof).
@@ -405,7 +395,7 @@ def test_dnsbl_builtin_mechanism_tld_allow(deployed_vm: SmokeVM, client_vm: Smok
 
     TLD Allow is configured to allow ONLY ``com`` (gTLD list); a query for a
     ``.net`` name (not on the allow list) is blocked by the synthetic
-    ``TLD_Allow`` entry, which — before #3291 — always answered VIP regardless
+    ``TLD_Allow`` entry, which — before #3291 — always answered the VIP regardless
     of the operator's configured mechanism.
     """
     allow_domain = f"pfballow-{uuid.uuid4().hex}.net"
@@ -418,7 +408,7 @@ def test_dnsbl_builtin_mechanism_tld_allow(deployed_vm: SmokeVM, client_vm: Smok
             deployed_vm,
             group=(inert_alias, inert_alias, inert_feed),
             global_log_mode="default",
-            global_log="enabled",
+            global_log="nxdomain",
         )
         # Verify the key semantics this test relies on: 'tld_allow' + the gTLD
         # list are the ONLY fields that arm _tld_allow_blocks (pfb_unbound.py).
@@ -427,7 +417,7 @@ def test_dnsbl_builtin_mechanism_tld_allow(deployed_vm: SmokeVM, client_vm: Smok
         h.reload(deployed_vm, "updatednsbl")
 
         with _hermetic_probe():
-            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "vip")
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "nxdomain")
 
         _set_global_mechanism(deployed_vm, mode="default", mechanism="disabled_log")
         h.reload(deployed_vm, "updatednsbl")
@@ -475,7 +465,7 @@ def test_dnsbl_builtin_mechanism_confusable_idn(deployed_vm: SmokeVM, client_vm:
             deployed_vm,
             group=(inert_alias, inert_alias, inert_feed),
             global_log_mode="default",
-            global_log="enabled",
+            global_log="nxdomain",
         )
         # Verify the key semantics this test relies on before trusting the DNS
         # shape below to attribute a failure correctly.
@@ -486,7 +476,7 @@ def test_dnsbl_builtin_mechanism_confusable_idn(deployed_vm: SmokeVM, client_vm:
         # The name is shared with test_smoke_matrix; flush any answer an earlier module cached.
         h.flush_unbound_name(deployed_vm, CONFUSABLE_MALICIOUS_DOMAIN)
         with _hermetic_probe():
-            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "vip")
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "nxdomain")
 
         _set_global_mechanism(deployed_vm, mode="default", mechanism="disabled_log")
         h.reload(deployed_vm, "updatednsbl")

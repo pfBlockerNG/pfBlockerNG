@@ -1712,20 +1712,12 @@ def set_control_records(
 
 
 # --------------------------------------------------------------------------- #
-# ADR-13 auto-VIP ("Create VIPs automatically") — live introspection helpers
+# Package-owned VIP markers — live introspection helpers
 # --------------------------------------------------------------------------- #
 
-# The descr marker the package stamps on an auto-created v4 sinkhole VIP and the
-# first candidate address pfb_pick_free_dnsbl_vip() returns. Mirror the PHP
-# constants (PFB_AUTO_VIP_DESCR_V4) / fixed candidate list in pfblockerng.inc
-# (issue #473): Class B 172.16.53.1, then Class C 192.168.53.1, then Class A
-# 10.53.53.1. This two-VM topology uses 192.168.89.0/24 (WAN) + 192.168.1.0/24
-# (LAN) and no 172.16/12, so the first candidate 172.16.53.1 is free and is the
-# one auto-create picks — distinct from the matrix's MANUAL VIP at 10.10.10.1
-# (DEFAULT_DNSBL_VIP4), so the two coexist and the auto-VIP case runs on the same
-# VM without disturbing the manual-VIP matrix.
+# The descr marker an earlier version stamped on its auto-created v4 DNSBL VIP (PFB_AUTO_VIP_DESCR_V4); the
+# upgrade cleanup (issue #4053) removes that VIP.
 AUTO_VIP_DESCR_V4 = "pfB_AUTO_VIP_v4"
-AUTO_VIP_IP4 = "172.16.53.1"
 
 
 def pfb_cron_entries(vm: SmokeVM) -> list[str]:
@@ -2182,12 +2174,10 @@ def marked_vip_subnet(vm: SmokeVM, descr: str = AUTO_VIP_DESCR_V4, *, timeout: f
 def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
     """On-box DNSBL-mode inputs + pfB-owned firewall objects, for failure diagnostics.
 
-    Reports the resolved DNSBL ``mode`` and the five inputs that decide whether
-    ``pfb_manage_dnsbl_vip`` / ``pfb_create_dnsbl`` create the auto-VIP and DNSBL
-    NAT (pfblockerng.inc:12542 mode gate; :3834 NAT iface gate), plus the live
+    Reports the resolved DNSBL ``mode`` and its three inputs, plus the live
     ``virtualip/vip`` and pfB-owned ``nat/rule`` rows. Embed in a 'setup failed'
     / before-state assertion message so a red leg shows WHY an object was (not)
-    created instead of asserting a bare boolean.
+    removed instead of asserting a bare boolean.
     """
     pre = (
         f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
@@ -2197,9 +2187,7 @@ def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
         "$unb = config_path_enabled('unbound') ? 'on' : '';\n"
         "$mode = ($enable === 'on' && $dnsbl === 'on' && $unb === 'on') ? 'enabled' : 'disabled';\n"
         "$out = 'mode=' . $mode . ' enable_cb=' . $enable . ' pfb_dnsbl=' . $dnsbl"
-        " . ' unbound=' . $unb . ' pfb_dnsvip_auto=' . ($d['pfb_dnsvip_auto'] ?? '')"
-        " . ' dnsbl_interface=' . ($d['dnsbl_interface'] ?? 'lo0')"
-        " . ' pfb_dnsvip4=' . ($d['pfb_dnsvip4'] ?? '') . \"\\nVIPs:\";\n"
+        " . ' unbound=' . $unb . \"\\nVIPs:\";\n"
         "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
         "  $out .= ' [' . ($v['descr'] ?? '') . '@' . ($v['subnet'] ?? '') . '/' . ($v['interface'] ?? '') . ']';\n"
         "}\n"
@@ -2215,24 +2203,6 @@ def fwobj_state_snapshot(vm: SmokeVM, *, timeout: float = 60.0) -> str:
         # Best-effort: a probe failure must never replace the real assertion
         # error with a RuntimeError raised from the failure-message path.
         return f"fwobj_state_snapshot_error={exc!r}"
-
-
-def vip_alias_live(vm: SmokeVM, ip: str, iface: str = "lo0", *, timeout: float = 30.0) -> bool:
-    """True iff ``ip`` is a live alias on ``iface`` per ``ifconfig`` (the realized VIP).
-
-    Matches the address as a whole ``inet``/``inet6`` token, NOT a bare substring:
-    ``ip in stdout`` would prefix-false-positive (e.g. ``10.10.10.53`` reported live
-    because the iface carries ``10.10.10.530`` or ``110.10.10.53``). ``ifconfig``
-    prints ``inet <ip> netmask ...`` / ``inet6 <ip> prefixlen ...``, so an exact
-    token right after ``inet``/``inet6`` is the address itself.
-    """
-    result = vm.ssh("/sbin/ifconfig", iface, timeout=timeout)
-    for line in result.stdout.splitlines():
-        toks = line.split()
-        for i, tok in enumerate(toks[:-1]):
-            if tok in ("inet", "inet6") and toks[i + 1] == ip:
-                return True
-    return False
 
 
 def set_feed_internal_allowlist(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> None:
@@ -3945,10 +3915,10 @@ def restore_pfb_config_baseline(vm: SmokeVM, *, snapshot_path: str, timeout: flo
 
     :func:`reset_pfb_baseline` WIPES pfBlockerNG config to empty — correct for the
     module-scoped SMOKE tier, where the next module's ``deployed_vm`` re-establishes
-    whatever infrastructure (VIP, ports, ...) it needs. The UI tier is ONE session: a
-    wipe deleted the DNSBL VIP and ports (removed by issue #4053) with nothing left in the session to re-provision them,
-    so every LATER ``pfblockerng_dnsbl.php``/SafeSearch save runs ``pfb_validate_vips``
-    against a VIP-less config and gets rejected — 23 functional-leg tests failed this
+    whatever infrastructure it needs. The UI tier is ONE session: a wipe deleted the
+    infrastructure (then the DNSBL VIP and ports, removed by issue #4053) with nothing
+    left in the session to re-provision it, so every LATER DNSBL/SafeSearch save
+    was rejected — 23 functional-leg tests failed this
     way in ui-tests.yml run 28900064099, all reading back ``''`` after the FIRST
     dirty-path reset (that run's one browser-leg failure was the unrelated,
     pre-existing issue #964 vocabulary bug, fixed separately). So the UI tier's

@@ -176,10 +176,9 @@ def _write_representative_config(vm: SmokeVM) -> None:
     """Plant the DNSBL-section canary fields into config.xml.
 
     MUST run AFTER the last harness write to the DNSBL-settings section
-    (``ensure_dnsbl_vip`` / ``inject``; ``reload`` itself writes no settings but
+    (``inject``; ``reload`` itself writes no settings but
     rides with them in the arrange block): ``inject`` REPLACES that
-    section keeping only the VIP/port infrastructure keys
-    (``helpers._dnsbl_settings_replace_php``, per-case isolation by design), so a
+    section (``helpers._dnsbl_settings_replace_php``, per-case isolation by design), so a
     canary planted before it is silently destroyed by the harness itself and the
     preservation assert then blames the pkg transition — the exact false positive
     that kept repo-install red daily from 2026-06-26 (issue #820). This helper's
@@ -317,7 +316,7 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
             f"expected lower build {low_version!r} installed, got {pkg_installed_version(repo_vm)!r}"
         )
 
-        # Set up the DNSBL feed and ensure_dnsbl_vip so the DNS probe can run,
+        # Set up the DNSBL feed so the DNS probe can run,
         # and make DNSBL live — BEFORE planting the canaries: inject REPLACES the
         # DNSBL-settings section (per-case isolation), so every harness settings
         # write must precede the canary plant or it destroys the canaries and the

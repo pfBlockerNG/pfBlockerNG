@@ -175,7 +175,7 @@ def _dnsbl_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, st
         "schedule_minute": "0",
         "sort": "sort",
         "order": "default",
-        "logging": "enabled",
+        "logging": "disabled_log",
         "filter_top1m": "",
         "srcint": "",
         "script_pre": "",
@@ -224,7 +224,7 @@ def test_dnsbl_alias_full_save_persists_key_nodes(
         # AFTER: the key alias nodes landed in config.xml.
         assert helpers.config_get(vm, f"{base}/aliasname") == aliasname, "aliasname not persisted by the save"
         assert helpers.config_get(vm, f"{base}/action") == "unbound", "action not persisted by the save"
-        assert helpers.config_get(vm, f"{base}/logging") == "enabled", "logging not persisted by the save"
+        assert helpers.config_get(vm, f"{base}/logging") == "disabled_log", "logging not persisted by the save"
         assert helpers.config_get(vm, f"{base}/row/0/state") == "Disabled", "source row state not persisted"
     finally:
         _del_rowid(vm, CFG_DNSBL, rowid)
@@ -558,14 +558,12 @@ def test_dnsbl_logging_select_valid_and_bogus_coerces_to_default(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """``logging`` stores each of its FIVE valid keys, and a bogus value coerces to the default.
+    """``logging`` stores its valid keys, and a bogus value coerces to the default.
 
-    ``$options_logging`` (category_edit.php:442-446) has FIVE keys: enabled,
-    disabled_log, disabled, nxdomain_log, nxdomain. The select-coercion loop
-    replaces a non-key value with ``$select_options['logging']`` -- which is the
-    literal ``'Enabled'`` (capital E; NOT itself a key of ``$options_logging``),
-    and the save SUCCEEDS storing that default. Branch coverage: drive all FIVE
-    valid keys in turn, then a bogus 'bogus' that coerces to 'Enabled'. Transition:
+    The select-coercion loop replaces a non-key value with ``$select_options['logging']``
+    -- for an existing group ``'disabled_log'`` (issue #4053: never the retired VIP
+    marker) -- and the save SUCCEEDS storing that default. Branch coverage: drive the
+    valid keys in turn, then a bogus 'bogus' that coerces to 'disabled_log'. Transition:
     each step asserts the value differs before it is driven.
     """
     vm = smoke_vm
@@ -573,18 +571,18 @@ def test_dnsbl_logging_select_valid_and_bogus_coerces_to_default(
     base = f"{CFG_DNSBL}/{rowid}"
     cfg = f"{base}/logging"
     try:
-        # Create the alias with logging=enabled.
-        _post_form(webui, _dnsbl_payload(rowid, "smokelog", logging="enabled"))
-        assert helpers.config_get(vm, cfg) == "enabled", "logging not stored as 'enabled'"
-        # The remaining four valid keys, each a real transition from the previous value.
-        for key in ("disabled_log", "disabled", "nxdomain_log", "nxdomain"):
+        # Create the alias with logging=disabled_log.
+        _post_form(webui, _dnsbl_payload(rowid, "smokelog", logging="disabled_log"))
+        assert helpers.config_get(vm, cfg) == "disabled_log", "logging not stored as 'disabled_log'"
+        # The remaining valid keys, each a real transition from the previous value.
+        for key in ("disabled", "nxdomain_log", "nxdomain", "nodata_log", "nodata"):
             _post_form(webui, _dnsbl_payload(rowid, "smokelog", logging=key))
             got = helpers.config_get(vm, cfg)
             assert got == key, f"logging not stored as {key!r}, got {got!r}"
-        # BOGUS -> coerced to the default 'Enabled' (save SUCCEEDS, value != bogus).
+        # BOGUS -> coerced to the default 'disabled_log' (save SUCCEEDS, value != bogus).
         _post_form(webui, _dnsbl_payload(rowid, "smokelog", logging="bogus"))
         got = helpers.config_get(vm, cfg)
-        assert got == "Enabled", f"bogus logging should coerce to default 'Enabled', got {got!r}"
+        assert got == "disabled_log", f"bogus logging should coerce to default 'disabled_log', got {got!r}"
     finally:
         _del_rowid(vm, CFG_DNSBL, rowid)
 

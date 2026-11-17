@@ -204,20 +204,10 @@ def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
     ``pkg add`` resolves RUN_DEPENDS from the baked image offline (ADR-04), so no
     egress is required.
 
-    Also establishes the DNSBL sinkhole VIP (:func:`~tests.smoke.helpers.ensure_dnsbl_vip`)
-    here, once: unlike the module-scoped SMOKE tier (each module's ``deployed_vm``
-    re-establishes its own infra), the UI tier is ONE session, so the VIP/ports are
-    part of THIS tier's baseline -- every ``pfblockerng_dnsbl.php``/SafeSearch save
-    runs ``pfb_validate_vips``, and once per-test isolation RESTORES config
-    (:func:`_ui_pfb_isolation`) there is no later re-provisioning step to add it back
-    (issue #810). ``ensure_dnsbl_vip`` is idempotent on its fixed uniqid, so the
-    tests that also call it directly (e.g. ``dnsbl_vip_ready``) stay digest-clean.
-
     issue #1219/#1228: also seeds MaxMind's official test corpus (CSVs + the binary mmdb)
     and runs the credential-free `ugc` conversion verb here
     (:func:`~tests.smoke.helpers.seed_geoip_dataset`) so the GeoIP continent pages exist
-    for the whole session's PAGE_TABLE sweep -- same one-time-per-session shape as the VIP
-    above.
+    for the whole session's PAGE_TABLE sweep, once per session.
     """
     from .. import helpers
 
@@ -333,10 +323,10 @@ def webui(deployed_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_proto
 # so the common path costs exactly one extra `cat /conf/config.xml`.
 #
 # The dirty path RESTORES to the session baseline (a guest-side config.xml
-# snapshot), not `reset_pfb_baseline`'s wipe-to-empty: a wipe deletes the DNSBL
-# VIP `deployed_vm` established, and the UI tier -- ONE session -- has no later
-# re-provisioning step to add it back, so every subsequent DNSBL/SafeSearch save
-# was rejected by `pfb_validate_vips` (ui-tests.yml run 28900064099, issue #810).
+# snapshot), not `reset_pfb_baseline`'s wipe-to-empty: a wipe deletes what
+# `deployed_vm` established, and the UI tier -- ONE session -- has no later
+# re-provisioning step to add it back (ui-tests.yml run 28900064099, issue #810,
+# when that was the DNSBL VIP that issue #4053 removed).
 # --------------------------------------------------------------------------- #
 
 # Guest-side path for the session-baseline config.xml snapshot (issue #810) --
@@ -353,7 +343,7 @@ def _ui_config_baseline(webui: WebUI, smoke_vm: SmokeVM) -> dict[str, str]:
     Depending on ``webui`` (not ``deployed_vm``) is REQUIRED and deliberate: it
     guarantees the snapshot is taken AFTER login + ``_dismiss_pfblockerng_wizard``
     (itself a config write -- ``pfb_wizard_skip``) AND after ``deployed_vm``
-    established the DNSBL VIP, so the baseline already includes both. The guest-side
+    set the box up, so the baseline already includes both. The guest-side
     copy to :data:`UI_CONFIG_SNAPSHOT` IS the restore artifact
     :func:`~tests.smoke.helpers.restore_pfb_config_baseline` copies back on the dirty
     path -- taken back-to-back with the digest, no writer running in between, so the
@@ -394,12 +384,12 @@ def _ui_pfb_isolation(request: pytest.FixtureRequest) -> Iterator[None]:
 
     RESTORE, not `reset_pfb_baseline`'s wipe-to-empty: the SMOKE tier's module-scoped
     ``deployed_vm`` re-establishes any infra a wipe drops, but this tier is ONE
-    session -- a wipe deletes ``pfb_dnsvip4``/ports with nothing left to re-add them,
-    so every LATER DNSBL/SafeSearch save fails ``pfb_validate_vips`` (the failure
+    session -- a wipe deletes the session's infrastructure with nothing left to re-add it
+    (then the DNSBL VIP and ports, removed by issue #4053; the failure
     class ui-tests.yml run 28900064099 hit: 23 functional-leg tests failed reading
     back ``''`` after the first dirty-path wipe; its one browser-leg failure was
     the unrelated pre-existing issue #964 bug, fixed separately). Restoring the
-    :data:`UI_CONFIG_SNAPSHOT` guest-side snapshot -- taken once, post-VIP, at session
+    :data:`UI_CONFIG_SNAPSHOT` guest-side snapshot -- taken once, after setup, at session
     start -- puts the box back exactly where the session began instead.
 
     A false POSITIVE (reads dirty when the test actually self-restored) is

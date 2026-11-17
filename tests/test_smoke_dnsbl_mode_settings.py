@@ -3,8 +3,9 @@
 Since #3291/#3332 (c35bfa8e/390dbeba), built-in DNSBL blocks (regex, IDN, TLD
 Allow, TLD Blacklist) inherit ``dnsbl/global_log`` instead of hardcoding VIP.
 ``helpers._dnsbl_mode_settings`` previously ignored its ``mode`` argument and
-always wrote Null Blocking (``global_log='disabled_log'``) -- so every VIP/NXDOMAIN
-matrix case's built-in hits answered 0.0.0.0 regardless of the case's own mode.
+always wrote Null Blocking (``global_log='disabled_log'``) -- so every NXDOMAIN
+matrix case's built-in hits answered 0.0.0.0 regardless of the case's own mode. Issue #4053
+removed the VIP mode.
 This pin is pure (no VM): it targets the snippet-builder mapping directly.
 """
 
@@ -18,7 +19,7 @@ from tests.smoke import helpers
 @pytest.mark.parametrize(
     ("mode", "expected_global_log"),
     [
-        (helpers.DnsblMode.VIP, "enabled"),
+        (helpers.DnsblMode.NULL_LOG, "disabled_log"),
         (helpers.DnsblMode.NXDOMAIN, "nxdomain_log"),
         (helpers.DnsblMode.NULL, "disabled_log"),
     ],

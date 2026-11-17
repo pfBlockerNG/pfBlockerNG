@@ -1,10 +1,7 @@
 """ADR-04 Phase 5 — the first landed smoke matrix (a THIN vertical slice).
 
 This is NOT the broad knob space (SafeSearch/TLD/GeoIP/full-AAAA are out of scope,
-ADR §2). The one knob added beyond the original thin slice is the **HSTS VIP→null
-override** (``test_dnsbl_hsts_*``): an HSTS-preload name on a VIP-mode list blocks
-NULL, not the VIP — a load-bearing default branch (``pfb_hsts``) the rest of the
-matrix deliberately avoids. It is the minimum that proves the Phase-4 harness asserts
+ADR §2). It is the minimum that proves the Phase-4 harness asserts
 REAL pfBlockerNG behaviour end-to-end on BOTH paths — the IP path (``pfctl``
 alias table + rule) and the DNS path (``dig`` rcode/record shape) — hermetically
 (mock feeds + baked Unbound ``local-data`` only) and guarded against false-green.
@@ -24,8 +21,8 @@ against source, not guessed):
   (``pfb_unbound.py:evaluate_domain``) looks the name up in ``dataDB`` EXACTLY.
   The response shape is:
 
-  - ``logging='enabled'`` → ``logging_type='1'`` → ``null_blocking=False``
-    → NOERROR + A = DNSBL VIP (``pfb_dnsvip4``). (**VIP** shape.)
+  - ``logging='disabled_log'`` (the default, and every retired VIP marker since
+    issue #4053) → ``logging_type='2'`` → NOERROR + A = ``0.0.0.0``. (**NULL** shape.)
   - ``logging='disabled'`` → ``logging_type='2'`` → ``null_blocking=True``
     → NOERROR + A = ``0.0.0.0`` / AAAA = ``::0``. (**NULL** shape.)
   - ``logging='nxdomain_log'`` → ``logging_type='3'`` → ``operate()`` returns a
@@ -43,12 +40,10 @@ against source, not guessed):
   Two domain constraints, both load-bearing (see ``helpers.unique_domain``):
   test names must NOT use RFC 6761 TLDs (``.test`` / ``.example`` / …) — DNSBL runs in
   the pfB-DNS decider, which answers a LISTED name there before Unbound is asked
-  (listed ``.test`` / ``.example`` / ``.invalid`` names get the VIP), but
+  (listed ``.test`` / ``.example`` / ``.invalid`` names get the null answer), but
   an UNLISTED name (a not-blocked probe) under ``.test`` / ``.invalid`` reaches
   Unbound's built-in ``local-zone`` and is answered NXDOMAIN, not by the stub upstream
-  — and must NOT be HSTS-preload — with HSTS on
-  (the default ``pfb_hsts``), a preload domain's VIP block is forced to NULL. A random
-  ``uuid-*.com`` satisfies both.
+  — and must NOT be HSTS-preload. A random ``uuid-*.com`` satisfies both.
 * WHITELIST (``suppression``): ``whitelist_check_domain`` short-circuits before
   any block shape, so a suppressed name resolves via its control ``local-data``.
 * DNSBL-IP dual-stack (``action != 'Disabled'``): IP literals in the DNSBL feed
@@ -107,16 +102,13 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     # DNSBL reload changes (incl. whether it drops custom access-control).
     h.snapshot_unbound_conf(smoke_vm)
     h.snap_state(smoke_vm, "deployed")
-    # DNSBL force-disables itself without a VIP (pfb_validate_vips); by default
-    # pfBlockerNG does NOT auto-create one (pfb_dnsvip_auto OFF; pfb_manage_dnsbl_vip
-    # auto-creates it when ON — ADR-13). The image does NOT bake one, so inject the
-    # lo0 sinkhole VIP once for the matrix. dns_probe queries on-box (drill
-    # @127.0.0.1) — no localhost exemption — so no WAN/ACL plumbing is needed.
+    # dns_probe queries on-box (drill @127.0.0.1) — no localhost exemption — so no
+    # WAN/ACL plumbing is needed.
     # Point pfSense at the controlled mock via its System-DNS path BEFORE any per-test
     # unbound-config snapshot (test_dnsbl_unbound_config_immutable), so the forwarding
     # config is part of the baseline and the DNSBL reload still adds only python.
     h.use_system_dns_upstream(smoke_vm)
-    h.snap_state(smoke_vm, "vip")
+    h.snap_state(smoke_vm, "upstream")
     h.assert_link_health(client_vm, smoke_vm, control_name=h.unique_domain())
     try:
         yield smoke_vm
@@ -227,8 +219,7 @@ def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockF
     reload's. The baseline is therefore taken AFTER pfB-DNS has moved the Resolver
     and BEFORE the DNSBL reload. From there pfBlockerNG is allowed exactly ONE
     class of change to Unbound's configuration: adding python-module directives
-    (``module-config``, ``python-script``, pfBlockerNG managed ``include`` lines,
-    plus the DNSBL VIP ``interface:`` entry).  No other configuration —
+    (``module-config``, ``python-script``, pfBlockerNG managed ``include`` lines).  No other configuration —
     access-control, forward-zones, host entries, server tuning — may be removed or
     altered.
 
@@ -291,12 +282,12 @@ def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockF
         raise ExceptionGroup("restoring the Resolver fixtures failed", errors)
 
 
-def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """Python-mode exact block: NOERROR + VIP for the listed domain; subdomain passes.
+def test_dnsbl_python_exact_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Python-mode exact block: NOERROR + 0.0.0.0 for the listed domain; subdomain passes.
 
     Verified on the live box: the manifest build loads the feed into ``dataDB``
     as EXACT entries.  ``evaluate_domain`` looks the name up in ``dataDB`` EXACTLY
-    — ``logging='enabled'`` → ``null_blocking=False`` → NOERROR + A = DNSBL VIP.
+    — the default ``logging`` → NOERROR + A = ``0.0.0.0``.
     A subdomain is NOT in ``dataDB`` and resolves normally (exact, not wildcard).
     Probed on-box (``drill @127.0.0.1``); python-mode has no localhost exemption,
     so the block shows there. Domain is a unique non-RFC-6761 ``.com`` so no
@@ -349,10 +340,10 @@ def _raw_drill(vm: SmokeVM, name: str, rtype: str) -> str:
     return result.stdout
 
 
-def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_dnsbl_https_svcb_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Issue #3222: null-blocked HTTPS/SVCB is RFC 2308 Type-2 NODATA (SOA), not empty NOERROR.
 
-    Control: the listed name's A query is the VIP sinkhole, so DNSBL python-mode
+    Control: the listed name's A query is the null answer, so DNSBL python-mode
     is armed. Then the same name is queried as HTTPS, TYPE64, and MX
     from both the LAN client (``dig``, the iOS-like path) and on-box
     (``drill @127.0.0.1``).
@@ -484,45 +475,6 @@ def test_dnsbl_selected_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mod
                 assert rr_has_type(raw, "SOA"), f"{mode} {rtype} expected an authority SOA:\n{raw}"
 
 
-def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """HSTS override: a VIP-mode block on an HSTS-preload name is forced to NULL.
-
-    The load-bearing branch the rest of the matrix deliberately avoids. For a
-    ``logging='enabled'`` (VIP, ``log_type == '1'``) list, ``evaluate_domain``
-    sets ``null_blocking=False`` (→ VIP) ONLY when the name is NOT in HSTS; an
-    HSTS-preload name keeps ``null_blocking=True`` → NULL (``0.0.0.0`` / ``::0``).
-    HSTS is on by default (``pfb_hsts`` → ini ``python_hsts``); we set it
-    explicitly. Rationale: a browser refuses the plaintext VIP sinkhole for an
-    HSTS host, so NULL is the correct block.
-
-    Self-contained: we pin a unique ``.com`` into the shipped HSTS source
-    (``add_hsts_name`` → ``SHIPPED_HSTS_FILE``) rather than depend on the preload list.
-    ``dnsbl_cache_stage()`` ``cp -f`` propagates it into the chroot on the reload, which
-    the module re-reads hstsDB WITH our name. Paired with
-    ``test_dnsbl_hsts_disabled_keeps_vip`` (same name, same VIP list, HSTS off →
-    VIP) to prove this is the override, not an always-null path.
-    """
-    domain = h.unique_domain("hstsnull")
-    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_hsts.txt", f"{domain}\n")
-    spec = h.DnsblCase(
-        aliasname="smokehsts",
-        feed_url=feed_url,
-        header="smokehsts",
-        hsts=True,  # pfb_hsts on — the override under test
-    )
-    with h.CaseContext(deployed_vm, spec):
-        # hstsDB after enter = shipped list (no our name). Pin it, reload so the
-        # module re-reads, and confirm it is in the effective set before probing.
-        h.add_hsts_name(deployed_vm, domain)
-        h.reload(deployed_vm, "updatednsbl")
-        h.assert_hsts_loaded(deployed_vm, domain)
-        a = h.dns_probe_client(client_vm, domain, "A")
-        assert h.is_null_ip(a), f"HSTS override should force A=0.0.0.0, got {a} (VIP leak?)"
-        assert not h.is_null_ip(a), f"HSTS-preload VIP-list block must NOT be the VIP {h.NULL_IP4}: {a}"
-        aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
-        assert h.is_null_ip(aaaa, null_ip="::0"), f"{domain} AAAA expected ::0, got {aaaa}"
-
-
 # IDN homoglyph protection — Confusable mode (ADR-08). The block comes from the
 # matcher's TR39 mixed-script analyzer (pfb_unbound.py classify_idn), NOT a feed
 # entry — the feed below is one innocuous filler so the DNSBL list/alias is real and
@@ -538,7 +490,7 @@ def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
     matcher decodes each ``xn--`` label, runs the TR39 analyzer per-label, and:
       * ``xn--pple-43d`` (аpple — Cyrillic U+0430 + Latin) is a confusable Latin+
         Cyrillic mix → MALICIOUS → blocked as feed ``Homoglyph`` (log_type '1',
-        not HSTS) → NOERROR + the DNSBL VIP.
+        not HSTS) → NOERROR + ``0.0.0.0``.
       * ``xn--mnchen-3ya`` (münchen — single-script Latin) is legit → NO IDN action,
         so it resolves via the controlled stub upstream (the before-state: green
         proves the analyzer is the cause of the block, not an always-block path).
@@ -565,7 +517,7 @@ def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
         legit_ans = h.dns_probe_client(client_vm, legit, "A")
         assert h.resolves_to(legit_ans, STUB_DNS_A), f"legit IDN {legit} should resolve via stub, got {legit_ans}"
         assert not h.is_null_ip(legit_ans), f"legit IDN {legit} must NOT be blocked (FALSE POSITIVE): {legit_ans}"
-        # The confusable homograph blocks with the DNSBL VIP.
+        # The confusable homograph blocks with the null answer.
         blocked = h.dns_probe_client(client_vm, homoglyph, "A")
         assert h.is_null_ip(blocked), f"homoglyph {homoglyph} (Latin+Cyrillic) expected {h.NULL_IP4}, got {blocked}"
 
@@ -1454,29 +1406,11 @@ def _is_v4_literal(member: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# 3b) DNSBL auto-VIP (ADR-13) — create on enable, remove on disable
-# --------------------------------------------------------------------------- #
-
-
-# A user's IP-alias VIP, with a description, at auto-create's first candidate (issue #3565).
-OCCUPIER_VIP = {
-    "mode": "ipalias",
-    "interface": h.SMOKE_VIP_IFACE,
-    "type": "single",
-    "subnet": h.AUTO_VIP_IP4,
-    "subnet_bits": "32",
-    "descr": "smoke 3565 web server",
-    "uniqid": "pfbsmoke3565",
-}
-AUTO_VIP_SECOND_IP4 = "192.168.53.1"
-
-
-# --------------------------------------------------------------------------- #
 # 4) FALSE-GREEN GUARD — a deliberately-wrong expectation MUST go red
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(strict=True, reason="deliberately-wrong expectation: a real VIP block is NOT a pass")
+@pytest.mark.xfail(strict=True, reason="deliberately-wrong expectation: a real block is NOT a pass")
 def test_false_green_guard_vm(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """STRICT-xfail guard: assert a real block RESOLVES — it must NOT.
 
@@ -1497,7 +1431,7 @@ def test_false_green_guard_vm(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fee
     )
     with h.CaseContext(deployed_vm, spec):
         answer = h.dns_probe_client(client_vm, domain, "A")
-        # WRONG on purpose: a VIP block does not resolve to a pass IP.
+        # WRONG on purpose: a block does not resolve to a pass IP.
         assert h.resolves_to(answer, "198.51.100.250"), "expected (wrongly) to resolve — must fail"
 
 

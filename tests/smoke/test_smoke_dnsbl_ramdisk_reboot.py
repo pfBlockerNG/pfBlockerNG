@@ -82,7 +82,7 @@ def _sinkholes(vm: SmokeVM, domain: str) -> bool:
 
 @pytest.fixture(scope="module")
 def dnsbl_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
-    """Deploy the branch .pkg with DNSBL infra (sinkhole VIP + system upstream), once."""
+    """Deploy the branch .pkg with DNSBL infra (system upstream), once."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)

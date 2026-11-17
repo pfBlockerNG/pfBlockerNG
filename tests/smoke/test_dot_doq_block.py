@@ -93,8 +93,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     """Deploy the branch .pkg once for the dot_doq_block module.
 
     Egress stays OPEN across reloads: ``pkg add`` pulls RUN_DEPENDS from the
-    pfSense repo. ``ensure_dnsbl_vip`` gives DNSBL a sinkhole VIP (required for
-    the package to accept a reload). ``use_system_dns_upstream`` points Unbound
+    pfSense repo. ``use_system_dns_upstream`` points Unbound
     at the runner-side mock so the DNSBL update path completes cleanly.
     """
     if not os.environ.get("SMOKE_PKG"):
@@ -1232,7 +1231,7 @@ def test_dot_block_master_disable_removes_rules_despite_toggle_on(deployed_vm: S
         And pfctl -sr shows no port-853 block rule.
 
       Note: the DoT toggle (dnsbl_dot_block) remains ON throughout; the removal is caused
-      solely by the master switch, proving the $mode-coupling in pfb_create_dnsbl.
+      solely by the master switch, proving the $mode-coupling in the apply.
     """
     vm = deployed_vm
     iface = primary_iface

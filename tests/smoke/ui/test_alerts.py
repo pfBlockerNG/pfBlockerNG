@@ -226,9 +226,9 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
 
     True transition lifecycle (CLAUDE.md before/after + the lock/unlock example):
 
-    * SETUP: a local DNSBL feed lists ``domain`` (VIP mode) with DNSBL enabled and a
-      valid sinkhole VIP, then a full Force Update mounts it.
-    * BEFORE: ``domain`` is VIP-BLOCKED (the deterministic local block shape, the
+    * SETUP: a local DNSBL feed lists ``domain`` with DNSBL enabled, then a full
+      Force Update mounts it.
+    * BEFORE: ``domain`` is BLOCKED (the deterministic local block shape, the
       authoritative first answer after the restart-class reload).
     * UNLOCK via the form (``dnsbl_remove=unlock``): the handler toggles the unlock
       store, patches the manifest's ``user_unlock``, and applies the generation; blocked

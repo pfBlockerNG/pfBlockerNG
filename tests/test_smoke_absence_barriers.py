@@ -37,7 +37,7 @@ def _upstream_case(monkeypatch: pytest.MonkeyPatch, method: Callable[..., None])
                     f"DNSBL-python, Upstream_Block, qname={_subject}, barrier={name}",
                 )
             )
-            return h.DnsAnswer(rcode="NOERROR", records=[h.DEFAULT_DNSBL_VIP4])
+            return h.DnsAnswer(rcode="NOERROR", records=[h.NULL_IP4])
         if stub.rcode == "NXDOMAIN":
             return h.DnsAnswer(rcode="NXDOMAIN", records=[])
         return h.DnsAnswer(rcode="NOERROR", records=[h.STUB_DNS_A])
@@ -104,7 +104,7 @@ def _syslog_case(
             events.append(f"act=dnsbl qname={subject} qip={vm._pfb_civm_ip}")
             events.append(f"act=dnsbl qname={name} qip={vm._pfb_civm_ip}")
         counts[name] = counts.get(name, 0) + 1
-        return h.DnsAnswer(rcode="NOERROR", records=[h.DEFAULT_DNSBL_VIP4])
+        return h.DnsAnswer(rcode="NOERROR", records=[h.NULL_IP4])
 
     def count_marker(_: object, _path: str, marker: str, **_kwargs: Any) -> int:
         return counts.get(marker, 0)
@@ -112,7 +112,7 @@ def _syslog_case(
     monkeypatch.setattr(syslog.h, "dns_probe_client", probe)
     monkeypatch.setattr(syslog.h, "flush_unbound_name", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(syslog.h, "count_log_marker", count_marker)
-    monkeypatch.setattr(syslog.h, "is_vip", lambda answer: True)
+    monkeypatch.setattr(syslog.h, "is_null_ip", lambda answer: True)
     monkeypatch.setattr(syslog.h, "config_get", lambda *_args, **_kwargs: "")
     monkeypatch.setattr(syslog, "_set_syslog_enabled", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -181,7 +181,7 @@ def _syslog_drain_order_case(monkeypatch: pytest.MonkeyPatch, method: Callable[.
         probes.append(name)
         if enabled[0]:
             events.append(f"act=dnsbl qname={name} qip={vm._pfb_civm_ip}")
-        return h.DnsAnswer(rcode="NOERROR", records=[h.DEFAULT_DNSBL_VIP4])
+        return h.DnsAnswer(rcode="NOERROR", records=[h.NULL_IP4])
 
     def wait_unified(_: object, domain: str, **_kwargs: Any) -> str:
         unified_waits.append(domain)
@@ -190,7 +190,7 @@ def _syslog_drain_order_case(monkeypatch: pytest.MonkeyPatch, method: Callable[.
     monkeypatch.setattr(syslog.h, "dns_probe_client", probe)
     monkeypatch.setattr(syslog.h, "flush_unbound_name", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(syslog.h, "count_log_marker", lambda *_args, **_kwargs: len(probes))
-    monkeypatch.setattr(syslog.h, "is_vip", lambda answer: True)
+    monkeypatch.setattr(syslog.h, "is_null_ip", lambda answer: True)
     monkeypatch.setattr(syslog, "_set_syslog_enabled", lambda _vm, *, on, **_kwargs: enabled.__setitem__(0, on))
     monkeypatch.setattr(syslog, "_pfb_event_lines", lambda *_args, **_kwargs: list(events))
     monkeypatch.setattr(syslog, "_pfb_event_history_lines", lambda *_args, **_kwargs: list(events), raising=False)

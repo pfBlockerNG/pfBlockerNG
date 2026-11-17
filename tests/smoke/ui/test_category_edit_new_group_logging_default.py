@@ -4,9 +4,9 @@ copy-in-at-creation default). Exercise manual/catalog creation, and prove
 existing groups' own choices -- both a concrete explicit mechanism AND an
 already-'default' choice -- survive the new-group-default gate untouched.
 
-Legacy-spelling VIP fallback (absent/''/'Enabled') is a two-parameter read
+Legacy-spelling fallback (absent/''/'Enabled', the retired VIP marker) is a two-parameter read
 projection, not a single unconditional rule: core ``pfb_dnsbl_group_logging
-(mixed $stored, bool $legacy = FALSE)`` maps a normalized VIP to literal
+(mixed $stored, bool $legacy = FALSE)`` maps a legacy marker to literal
 'default' ONLY when the caller passes ``$legacy = $pfb['dnsbl_policy_legacy']``.
 That cache field is NOT bare ``dnsbl/global_log_mode`` absence (a genuinely
 fresh, never-configured install also has the key absent but is not
@@ -22,9 +22,9 @@ real settings, plus seeded groups). Two distinct scenarios follow:
 
 * Marker PRESENT (an ordinary, already-migrated system) with a raw legacy
   byte drifting back into ONE group (a foreign write, not a real migration
-  gap): ``$legacy`` is FALSE for that read, so the byte still normalises to
-  'enabled', never 'default'. Covered by
-  ``test_existing_dnsbl_alias_legacy_spelling_renders_and_resaves_as_vip``.
+  gap): ``$legacy`` is FALSE for that read, so the byte normalises to
+  'disabled_log' (issue #4053: the VIP response is removed), never 'default'. Covered by
+  ``test_existing_dnsbl_alias_legacy_spelling_renders_and_resaves_as_null_logging``.
 * Marker ABSENT (a genuinely un-migrated / restored-without-reinstall
   system): ``$legacy`` is TRUE, so a raw legacy group PROJECTS as 'default'
   on GET (read-only -- it does not write). A VALID category_edit.php Save
@@ -32,19 +32,19 @@ real settings, plus seeded groups). Two distinct scenarios follow:
   cross-section writes, and category_edit.php IS a call site -- Core's
   earlier "per-row Save can't touch global_log_mode so it can't run the
   facade" argument was a page-ownership objection, not a structural one, and
-  does not hold: WITHOUT this, a group whose owner explicitly selects VIP
+  does not hold: WITHOUT this, a group whose owner explicitly selects a mechanism
   while still legacy stays projected back to 'default' on the next GET
   (legacy flag never flipped) and a later real migration would silently
-  RECONVERT that already-explicit choice, violating the "explicit VIP choice
+  RECONVERT that already-explicit choice, violating the "explicit choice
   is never reconverted" idempotency guarantee) runs the facade FIRST
   (persisting the marker + the old no-override grandfather values) and THEN
   writes the submitted current-schema choice -- ordering that holds whether
   the submitted choice is the rendered 'default' or an explicit concrete
   mechanism. Covered by
   ``test_legacy_group_unchanged_save_migrates_marker_and_persists_default_token``
-  and, for the specific counterexample (an explicit VIP choice as the FIRST
+  and, for the specific counterexample (an explicit choice as the FIRST
   save while still legacy, then re-verified on a fresh GET),
-  ``test_legacy_group_explicit_vip_save_migrates_marker_and_survives_next_get``.
+  ``test_legacy_group_explicit_save_migrates_marker_and_survives_next_get``.
 """
 
 from __future__ import annotations
@@ -85,13 +85,12 @@ POST_TIMEOUT = 120.0
 _ADD_DNSBL_PAGE = f"{CATEGORY_PAGE}?type=dnsbl&act=add&atype=StevenBlack_ADs"
 _ADDGROUP_DNSBL_PAGE = f"{CATEGORY_PAGE}?type=dnsbl&act=addgroup&atype=ADs_Basic"
 
-# The eight valid, non-inherited-by-migration explicit choices a group's OWN
-# 'logging' select can carry: the seven concrete mechanisms PLUS 'default'
+# The seven valid, non-inherited-by-migration explicit choices a group's OWN
+# 'logging' select can carry: the six concrete mechanisms PLUS 'default'
 # itself (a group can explicitly (re-)select Default; that choice round-trips
 # exactly like any other -- it must never be coerced away on an unrelated resave).
 _EXPLICIT_CHOICES = (
     "default",
-    "enabled",
     "disabled_log",
     "disabled",
     "nxdomain_log",
@@ -223,7 +222,7 @@ def test_add_new_dnsbl_alias_renders_default_selected(webui: WebUI, smoke_vm: he
         assert _logging_selected(resp.text, "default"), (
             "a brand-new DNSBL alias must render Logging/Blocking Mode = 'default' selected (issue #3288)"
         )
-        assert not _logging_selected(resp.text, "enabled")
+        assert not _logging_selected(resp.text, "disabled_log")
         assert not _logging_selected(resp.text, "disabled_log"), "must not linger on issue #3285's superseded default"
 
 
@@ -238,7 +237,7 @@ def test_addgroup_new_dnsbl_alias_renders_default_selected(webui: WebUI, smoke_v
         assert _logging_selected(resp.text, "default"), (
             "a brand-new DNSBL alias (addgroup/Feeds tab) must render 'default' selected (issue #3288)"
         )
-        assert not _logging_selected(resp.text, "enabled")
+        assert not _logging_selected(resp.text, "disabled_log")
         assert not _logging_selected(resp.text, "disabled_log")
 
 
@@ -255,7 +254,7 @@ def test_manual_new_dnsbl_group_renders_default_selected(webui: WebUI, smoke_vm:
     assert _logging_selected(resp.text, "default"), (
         "a manually-created (no act=add/addgroup) brand-new DNSBL group must default to 'default' too"
     )
-    assert not _logging_selected(resp.text, "enabled")
+    assert not _logging_selected(resp.text, "disabled_log")
     assert not _logging_selected(resp.text, "disabled_log")
 
 
@@ -282,7 +281,7 @@ def test_add_new_dnsbl_alias_full_save_persists_default(webui: WebUI, smoke_vm: 
     rowid = _free_rowid(vm, CFG_DNSBL)
     base = f"{CFG_DNSBL}/{rowid}"
     try:
-        with _dnsbl_policy(vm, mode="default", mechanism="enabled"):
+        with _dnsbl_policy(vm, mode="default", mechanism="disabled_log"):
             response = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
             assert response.ok and not looks_like_login_page(response.text), "new-group GET failed"
             selected = scrape_form_fields(response.text)["logging"]
@@ -326,7 +325,7 @@ def test_existing_dnsbl_alias_preserves_explicit_choice_on_get_and_resave(
     rowid = _free_rowid(vm, CFG_DNSBL)
     base = f"{CFG_DNSBL}/{rowid}"
     try:
-        with _dnsbl_policy(vm, mode="default", mechanism="enabled"):
+        with _dnsbl_policy(vm, mode="default", mechanism="disabled_log"):
             _post_form(webui, _dnsbl_payload(rowid, f"smoke3288{choice}", logging=choice))
             assert helpers.config_get(vm, f"{base}/logging") == choice
 
@@ -344,28 +343,30 @@ def test_existing_dnsbl_alias_preserves_explicit_choice_on_get_and_resave(
 
 @pytest.mark.ui_e2e
 @pytest.mark.parametrize("spelling", ["absent", "", "Enabled"], ids=["absent-key", "empty-string", "capital-Enabled"])
-def test_existing_dnsbl_alias_legacy_spelling_renders_and_resaves_as_vip(
+def test_existing_dnsbl_alias_legacy_spelling_renders_and_resaves_as_null_logging(
     webui: WebUI, smoke_vm: helpers.SmokeVM, spelling: str
 ) -> None:
     """Every legacy "no real choice recorded" spelling (a genuinely absent
     key, a stored empty string, or the pre-existing capitalised 'Enabled'
-    literal the save fallback itself can write) must still resolve to the
-    VIP webserver default on GET, and re-saving unchanged must persist the
-    canonical 'enabled' -- never silently pick up the new-group 'default'
+    literal the save fallback itself can write) must resolve to Null Blocking
+    (logging) on GET (issue #4053), and re-saving unchanged must persist the
+    canonical 'disabled_log' -- never silently pick up the new-group 'default'
     token meant only for brand-new aliases. This runs under
     ``_dnsbl_policy``'s marker-PRESENT (already-migrated) system state --
     ``$pfb['dnsbl_policy_legacy']`` is FALSE here, so
     ``pfb_dnsbl_group_logging()`` never applies the legacy-projection
     dimension: a drifted raw byte on an already-migrated system is NOT the
     same thing as a genuinely-legacy system's group (see
-    ``test_legacy_group_get_projects_default_save_persists_per_row_explicit_vip_stays_explicit``
+    ``test_legacy_group_unchanged_save_migrates_marker_and_persists_default_token``
     for that marker-ABSENT scenario)."""
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_DNSBL)
     base = f"{CFG_DNSBL}/{rowid}"
     try:
-        with _dnsbl_policy(vm, mode="default", mechanism="enabled"):
-            _post_form(webui, _dnsbl_payload(rowid, f"smoke3288legacy{_alias_suffix_for(spelling)}", logging="enabled"))
+        with _dnsbl_policy(vm, mode="default", mechanism="disabled_log"):
+            _post_form(
+                webui, _dnsbl_payload(rowid, f"smoke3288legacy{_alias_suffix_for(spelling)}", logging="disabled_log")
+            )
             if spelling == "absent":
                 result = helpers.php_eval(
                     vm,
@@ -380,20 +381,15 @@ def test_existing_dnsbl_alias_legacy_spelling_renders_and_resaves_as_vip(
 
             reload = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
             assert not looks_like_login_page(reload.text), "reload GET returned the login form"
-            # None of these three spellings is a valid <option value>, so pfSense's
-            # Form_Select marks none of them 'selected' explicitly -- the EFFECTIVE
-            # value is the select's own first-declared option (browser/page default),
-            # which scrape_form_fields resolves identically (its docstring: "the
-            # selected option's value, or the first option's when none is marked").
             # This reads ONE field's effective value; it is never used to build a POST.
             effective = scrape_form_fields(reload.text).get("logging")
-            assert effective == "enabled", (
-                f"legacy spelling {spelling!r} must resolve to the VIP webserver default, got {effective!r}"
+            assert effective == "disabled_log", (
+                f"legacy spelling {spelling!r} must resolve to Null Blocking (logging), got {effective!r}"
             )
 
             _post_form(webui, _dnsbl_payload(rowid, f"smoke3288legacy{_alias_suffix_for(spelling)}", logging=effective))
-            assert helpers.config_get(vm, f"{base}/logging") == "enabled", (
-                "re-saving a legacy-spelling alias unchanged must persist the canonical 'enabled', never 'default'"
+            assert helpers.config_get(vm, f"{base}/logging") == "disabled_log", (
+                "re-saving a legacy-spelling alias unchanged must persist 'disabled_log', never 'default'"
             )
     finally:
         _del_rowid(vm, CFG_DNSBL, rowid)
@@ -415,13 +411,13 @@ def test_legacy_group_unchanged_save_migrates_marker_and_persists_default_token(
        through the app.
     2. GET is READ-ONLY (config byte-identical before/after, including the
        system-wide marker) and PROJECTS 'default' selected --
-       pfb_dnsbl_group_logging($stored, legacy: TRUE) maps the normalized VIP
+       pfb_dnsbl_group_logging($stored, legacy: TRUE) maps the legacy marker
        to 'default' for render only.
     3. An UNCHANGED Save (re-submitting exactly what rendered) runs the
        facade: dnsbl/global_log_mode becomes 'default' and dnsbl/global_log
-       becomes 'enabled' (the old no-override grandfather rule) BEFORE the
+       becomes 'disabled_log' (the no-override grandfather rule since issue #4053) BEFORE the
        submitted current-schema choice ('default') is written for THIS group.
-    4. A LATER explicit VIP re-selection persists literally 'enabled' -- POST
+    4. A LATER explicit re-selection persists literally 'nxdomain' -- POST
        validation never applies the legacy flag, so a deliberate choice is
        never silently coerced back to 'default'.
     """
@@ -439,10 +435,10 @@ def test_legacy_group_unchanged_save_migrates_marker_and_persists_default_token(
             reload = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
             assert not looks_like_login_page(reload.text), "reload GET returned the login form"
             assert _logging_selected(reload.text, "default"), (
-                "a genuinely legacy (marker-absent) VIP-equivalent group must render 'default' selected"
+                "a genuinely legacy (marker-absent) group must render 'default' selected"
             )
-            assert not _logging_selected(reload.text, "enabled"), (
-                "a legacy system must PROJECT 'default', never still show the raw VIP normalization"
+            assert not _logging_selected(reload.text, "disabled_log"), (
+                "a legacy system must PROJECT 'default', never still show the raw normalization"
             )
             assert helpers.config_get_state(vm, f"{base}/logging") == logging_before, "a GET must never mutate config"
             assert helpers.config_get_state(vm, GLOBAL_LOG_MODE_CFG) == mode_before, "a GET must never migrate"
@@ -456,17 +452,17 @@ def test_legacy_group_unchanged_save_migrates_marker_and_persists_default_token(
                 "a valid category_edit.php Save on a legacy no-override system must run the "
                 "upgrade facade -> Default policy"
             )
-            assert helpers.config_get(vm, GLOBAL_LOG_CFG) == "enabled", (
-                "a valid Save on a legacy no-override system must migrate the shared mechanism to VIP ('enabled')"
+            assert helpers.config_get(vm, GLOBAL_LOG_CFG) == "disabled_log", (
+                "a valid Save on a legacy no-override system must migrate the shared mechanism to 'disabled_log'"
             )
             assert helpers.config_get(vm, f"{base}/logging") == "default", (
                 "the facade-then-write ordering must land the submitted 'default' choice for this group"
             )
 
-            # (4) A LATER explicit VIP re-selection stays explicit -- no re-projection on POST.
-            _post_form(webui, _dnsbl_payload(rowid, aliasname, logging="enabled"))
-            assert helpers.config_get(vm, f"{base}/logging") == "enabled", (
-                "an explicit VIP re-selection through the current-schema form must persist literally, "
+            # (4) A LATER explicit re-selection stays explicit -- no re-projection on POST.
+            _post_form(webui, _dnsbl_payload(rowid, aliasname, logging="nxdomain"))
+            assert helpers.config_get(vm, f"{base}/logging") == "nxdomain", (
+                "an explicit re-selection through the current-schema form must persist literally, "
                 "never silently coerced back to 'default' by the (by-now-irrelevant) legacy projection"
             )
         finally:
@@ -474,28 +470,28 @@ def test_legacy_group_unchanged_save_migrates_marker_and_persists_default_token(
 
 
 @pytest.mark.ui_e2e
-def test_legacy_group_explicit_vip_save_migrates_marker_and_survives_next_get(
+def test_legacy_group_explicit_save_migrates_marker_and_survives_next_get(
     webui: WebUI, smoke_vm: helpers.SmokeVM
 ) -> None:
     """Main's counterexample, proven directly: WITHOUT the facade running on
     the group's own explicit-choice Save, the legacy flag would stay TRUE
-    after the user picks VIP, so the NEXT GET would project that fresh
+    after the user picks a mechanism, so the NEXT GET would project that fresh
     explicit choice back to 'default' (as if it had never been made) and a
     later real migration would silently RECONVERT it -- violating "an
-    explicit VIP choice is never reconverted". The discriminating case is the
-    FIRST save on a still-legacy group being the EXPLICIT VIP choice itself
+    explicit choice is never reconverted". The discriminating case is the
+    FIRST save on a still-legacy group being the EXPLICIT choice itself
     (not preceded by an 'unchanged/default' save, unlike the sibling test).
 
     1. A raw legacy group is seeded WITHOUT going through the app; system
        stays legacy (marker absent) through the seed.
-    2. The group's FIRST-EVER Save is an EXPLICIT 'enabled' (null) choice --
+    2. The group's FIRST-EVER Save is an EXPLICIT 'nxdomain' choice --
        skipping any 'default' round-trip entirely.
     3. Assert immediately: the facade ran (marker now 'default', shared
-       mechanism now 'enabled' -- the grandfather values) AND the group's own
-       'logging' is the just-submitted 'enabled', not overwritten by the
-       facade's "convert legacy VIP groups to default" migration rule (the
+       mechanism now 'disabled_log' -- the grandfather values) AND the group's own
+       'logging' is the just-submitted 'nxdomain', not overwritten by the
+       facade's "convert legacy groups to default" migration rule (the
        submitted current-schema choice is written AFTER the facade run).
-    4. A FRESH, SEPARATE GET of the same group must STILL render 'enabled'
+    4. A FRESH, SEPARATE GET of the same group must STILL render 'nxdomain'
        selected -- proving the marker flip actually took effect (no residual
        legacy projection re-masking the user's explicit choice as 'Default').
     """
@@ -507,32 +503,32 @@ def test_legacy_group_explicit_vip_save_migrates_marker_and_survives_next_get(
         try:
             _seed_raw_legacy_dnsbl_group(vm, rowid, aliasname)
 
-            # (2) The FIRST save on this still-legacy group is the explicit VIP choice.
-            _post_form(webui, _dnsbl_payload(rowid, aliasname, logging="enabled"))
+            # (2) The FIRST save on this still-legacy group is the explicit choice.
+            _post_form(webui, _dnsbl_payload(rowid, aliasname, logging="nxdomain"))
 
             # (3) The facade ran, and the explicit choice was preserved (written AFTER it).
             assert helpers.config_get(vm, GLOBAL_LOG_MODE_CFG) == "default", (
-                "an explicit VIP Save on a still-legacy group must ALSO run the upgrade facade -> Default policy "
+                "an explicit Save on a still-legacy group must ALSO run the upgrade facade -> Default policy "
                 "(otherwise the legacy flag never flips and the next GET mis-projects this exact choice)"
             )
-            assert helpers.config_get(vm, GLOBAL_LOG_CFG) == "enabled", (
-                "the facade must persist the old no-override grandfather shared mechanism ('enabled')"
+            assert helpers.config_get(vm, GLOBAL_LOG_CFG) == "disabled_log", (
+                "the facade must persist the no-override grandfather shared mechanism ('disabled_log')"
             )
-            assert helpers.config_get(vm, f"{base}/logging") == "enabled", (
-                "the group's own explicit 'enabled' choice must survive the facade run -- the facade's "
-                "'convert legacy VIP groups to default' rule must not clobber the choice being submitted "
+            assert helpers.config_get(vm, f"{base}/logging") == "nxdomain", (
+                "the group's own explicit 'nxdomain' choice must survive the facade run -- the facade's "
+                "'convert legacy groups to default' rule must not clobber the choice being submitted "
                 "in this very request"
             )
 
             # (4) A FRESH GET still renders the explicit choice -- the marker flip stuck.
             reload = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
             assert not looks_like_login_page(reload.text), "reload GET returned the login form"
-            assert _logging_selected(reload.text, "enabled"), (
-                "a fresh GET after the explicit VIP save must still render 'enabled' selected -- if the marker "
+            assert _logging_selected(reload.text, "nxdomain"), (
+                "a fresh GET after the explicit save must still render 'nxdomain' selected -- if the marker "
                 "never flipped, the (by-now-stale) legacy projection would wrongly re-render this as 'default'"
             )
             assert not _logging_selected(reload.text, "default"), (
-                "the explicit VIP choice must not be visually reverted to 'default' on the next GET"
+                "the explicit choice must not be visually reverted to 'default' on the next GET"
             )
         finally:
             _del_rowid(vm, CFG_DNSBL, rowid)
@@ -542,7 +538,7 @@ def test_legacy_group_explicit_vip_save_migrates_marker_and_survives_next_get(
 def test_catalog_feed_append_preserves_existing_group_mode(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
     """Adding a feed to an existing group must not apply the new-group default."""
     vm = smoke_vm
-    with _alias_name_parked(vm, CFG_DNSBL, "ADs_Basic"), _dnsbl_policy(vm, mode="default", mechanism="enabled"):
+    with _alias_name_parked(vm, CFG_DNSBL, "ADs_Basic"), _dnsbl_policy(vm, mode="default", mechanism="disabled_log"):
         rowid = _free_rowid(vm, CFG_DNSBL)
         try:
             _post_form(webui, _dnsbl_payload(rowid, "ADs_Basic", logging="nxdomain_log"))
@@ -575,7 +571,7 @@ def test_addgroup_form_carries_no_loaded_name_and_its_save_is_accepted(webui: We
     assert loaded == "", f"the addgroup form must carry no loaded name, not the catalog's alias name: {loaded!r}"
 
     name = f"smoke3955add{uuid.uuid4().hex[:8]}"
-    with _dnsbl_policy(vm, mode="default", mechanism="enabled"):
+    with _dnsbl_policy(vm, mode="default", mechanism="disabled_log"):
         try:
             _post_form(
                 webui,
@@ -597,7 +593,7 @@ def test_catalog_feed_add_form_carries_the_existing_groups_name_and_its_save_is_
     Then:  the form edits that group's row and carries its stored name, and the save is accepted
     """
     vm = smoke_vm
-    with _alias_name_parked(vm, CFG_DNSBL, "ADs_Basic"), _dnsbl_policy(vm, mode="default", mechanism="enabled"):
+    with _alias_name_parked(vm, CFG_DNSBL, "ADs_Basic"), _dnsbl_policy(vm, mode="default", mechanism="disabled_log"):
         rowid = _free_rowid(vm, CFG_DNSBL)
         try:
             _post_form(webui, _dnsbl_payload(rowid, "ADs_Basic", logging="nxdomain_log"))

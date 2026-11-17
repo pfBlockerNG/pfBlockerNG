@@ -310,7 +310,7 @@ def test_category_update_rejects_cross_group_and_array_actions(
             "aliasname": "pfbactdns",
             "action": "unbound",
             "cron": "Never",
-            "logging": "enabled",
+            "logging": "disabled_log",
             "description": "pfBlockerNG smoke DNSBL action row",
         }
         feed = {"header": "pfbactdns", "url": f"{helpers.PFB_DBDIR}/pfbactdns", "state": "Enabled", "format": "auto"}

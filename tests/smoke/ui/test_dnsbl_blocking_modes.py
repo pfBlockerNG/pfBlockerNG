@@ -37,8 +37,8 @@ CATEGORY_EDIT_DNSBL_PAGE = "/pfblockerng/pfblockerng_category_edit.php?type=dnsb
 GLOBAL_LOG_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/global_log"
 GLOBAL_LOG_MODE_CFG = "installedpackages/pfblockerngdnsblsettings/config/0/global_log_mode"
 
-# The seven concrete mechanisms (issue #3288 keeps this vocabulary unchanged).
-_CONCRETE_MECHANISMS = ("enabled", "disabled_log", "disabled", "nxdomain_log", "nxdomain", "nodata_log", "nodata")
+# The six concrete mechanisms (issue #3288's vocabulary; issue #4053 removed the WebServer/VIP `enabled`).
+_CONCRETE_MECHANISMS = ("disabled_log", "disabled", "nxdomain_log", "nxdomain", "nodata_log", "nodata")
 
 POST_TIMEOUT = 120.0
 
@@ -72,17 +72,17 @@ def _selected_value(select_block: str) -> str | None:
 
 
 @pytest.mark.ui_render
-def test_global_log_select_exposes_only_the_seven_concrete_mechanisms(webui: WebUI) -> None:
+def test_global_log_select_exposes_only_the_six_concrete_mechanisms(webui: WebUI) -> None:
     """issue #3288: ``global_log`` is now ALWAYS a concrete mechanism -- the empty
     'No Global mode' no-override token is GONE (split into the new
     ``global_log_mode`` Default/Override selector below)."""
     resp = webui.get(DNSBL_PAGE)
-    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL page: {result.detail}"
 
     values = _option_values(_select_block(resp.text, "global_log"))
     assert values == set(_CONCRETE_MECHANISMS), (
-        f"global_log select must expose exactly the seven concrete mechanisms, got {sorted(values)!r}"
+        f"global_log select must expose exactly the six concrete mechanisms, got {sorted(values)!r}"
     )
 
 
@@ -90,7 +90,7 @@ def test_global_log_select_exposes_only_the_seven_concrete_mechanisms(webui: Web
 def test_global_log_mode_select_exposes_default_and_override(webui: WebUI) -> None:
     """issue #3288: the new Default/Override application selector."""
     resp = webui.get(DNSBL_PAGE)
-    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL page: {result.detail}"
 
     values = _option_values(_select_block(resp.text, "global_log_mode"))
@@ -100,10 +100,10 @@ def test_global_log_mode_select_exposes_default_and_override(webui: WebUI) -> No
 
 
 @pytest.mark.ui_render
-def test_category_edit_logging_select_exposes_default_and_seven_concrete(webui: WebUI) -> None:
+def test_category_edit_logging_select_exposes_default_and_six_concrete(webui: WebUI) -> None:
     """issue #3288: the per-group Logging/Blocking Mode select gains the new
     'default' token (live inheritance of the global mechanism) alongside the
-    seven concrete mechanisms; it must never carry the removed empty
+    six concrete mechanisms; it must never carry the removed empty
     no-override value (a group cannot defer to itself)."""
     resp = webui.get(CATEGORY_EDIT_DNSBL_PAGE)
     result = evaluate_render(CATEGORY_EDIT_DNSBL_PAGE, resp.status_code, resp.text, ("Override Default Schedule",))
@@ -111,7 +111,7 @@ def test_category_edit_logging_select_exposes_default_and_seven_concrete(webui: 
 
     values = _option_values(_select_block(resp.text, "logging"))
     assert values == {"default", *_CONCRETE_MECHANISMS}, (
-        f"logging select must expose 'default' plus the seven concrete mechanisms, got {sorted(values)!r}"
+        f"logging select must expose 'default' plus the six concrete mechanisms, got {sorted(values)!r}"
     )
 
 
@@ -141,10 +141,10 @@ def test_global_log_mode_persists_and_renders_selected(webui: WebUI, smoke_vm: h
 
 
 @pytest.mark.ui_e2e
-def test_global_log_always_concrete_persists_across_all_seven_and_renders_selected(
+def test_global_log_always_concrete_persists_across_all_six_and_renders_selected(
     webui: WebUI, smoke_vm: helpers.SmokeVM
 ) -> None:
-    """issue #3288: global_log now always holds ONE of the seven concrete
+    """issue #3288: global_log now always holds ONE of the six concrete
     mechanisms (never the removed empty no-override token). Extends the
     #3243/#3285 NODATA-only coverage to the full vocabulary now that '' is no
     longer a legal stored value for this field."""
@@ -167,7 +167,7 @@ def test_global_log_always_concrete_persists_across_all_seven_and_renders_select
 @pytest.mark.ui_e2e
 def test_category_edit_logging_nodata_tokens_persist(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
     """POSTing logging=nodata_log/nodata on a DNSBL group is ACCEPTED (not coerced
-    to the 'Enabled' select-options default), mirroring the existing FIVE-key
+    to the select-options default), mirroring the existing
     coverage in test_category_edit.test_dnsbl_logging_select_valid_and_bogus_coerces_to_default."""
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_DNSBL)
@@ -202,7 +202,7 @@ def test_changing_global_mechanism_never_touches_group_stored_values(webui: WebU
             mode_original = helpers.config_get_state(vm, GLOBAL_LOG_MODE_CFG)
             mechanism_original = helpers.config_get_state(vm, GLOBAL_LOG_CFG)
             try:
-                for mode, mechanism in (("override", "nodata_log"), ("default", "disabled"), ("override", "enabled")):
+                for mode, mechanism in (("override", "nodata_log"), ("default", "disabled"), ("override", "nxdomain")):
                     resp = webui.post(
                         DNSBL_PAGE, {"global_log_mode": mode, "global_log": mechanism}, timeout=POST_TIMEOUT
                     )
@@ -241,7 +241,7 @@ def test_dnsbl_page_renders_registered_defaults_when_absent(webui: WebUI, smoke_
         )
         assert result.returncode == 0 and "OK" in result.stdout, "fresh DNSBL setup failed"
         resp = webui.get(DNSBL_PAGE)
-        rendered = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+        rendered = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Group Policy",))
         assert rendered.ok, f"fresh DNSBL page failed to render: {rendered.detail}"
         assert _selected_value(_select_block(resp.text, "global_log")) == "disabled_log"
         assert _selected_value(_select_block(resp.text, "global_log_mode")) == "default"
@@ -260,7 +260,7 @@ def test_dnsbl_page_legacy_prefill_get_and_unchanged_save_migrates_groups(
     "a call site in your DNSBL settings page's Save handler, invoked BEFORE it
     persists the posted global_log/global_log_mode -- closes a gap where an
     ordinary Global Save on a restored/legacy box would mark the box migrated
-    without ever converting its VIP groups").
+    without ever converting its legacy groups").
 
     On a genuinely legacy, established "old no-global-override" system
     (dnsbl/global_log_mode absent, dnsbl/global_log present-but-empty -- an
@@ -269,12 +269,12 @@ def test_dnsbl_page_legacy_prefill_get_and_unchanged_save_migrates_groups(
     test_dnsbl_page_renders_registered_defaults_when_absent):
 
     1. GET must PREFILL the grandfathered EFFECTIVE values -- global_log=
-       'enabled', global_log_mode='default' -- pinning the user's VIP prefill,
+       'disabled_log' (issue #4053: no longer the VIP), global_log_mode='default',
        not blank/absent selects. This is READ-ONLY: the raw config stays
        byte-identical (marker absent, global_log still present-empty).
     2. An UNCHANGED Save (re-submitting exactly the prefilled/rendered form)
        runs the facade FIRST: it persists global_log_mode='default' and
-       global_log='enabled' AND converts an untouched raw-legacy DNSBL group
+       global_log='disabled_log' AND converts an untouched raw-legacy DNSBL group
        to the 'default' token -- proving the facade reaches every group, not
        just the two fields this page itself edits.
     """
@@ -289,11 +289,10 @@ def test_dnsbl_page_legacy_prefill_get_and_unchanged_save_migrates_groups(
             mode_before = helpers.config_get_state(vm, GLOBAL_LOG_MODE_CFG)
             mechanism_before = helpers.config_get_state(vm, GLOBAL_LOG_CFG)
             resp = webui.get(DNSBL_PAGE)
-            result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+            result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Group Policy",))
             assert result.ok, f"Tier-A render oracle failed for the DNSBL page: {result.detail}"
-            assert _selected_value(_select_block(resp.text, "global_log")) == "enabled", (
-                "a legacy no-override system must PREFILL global_log='enabled' (the grandfather VIP value), "
-                "not the plain fresh-install registry default"
+            assert _selected_value(_select_block(resp.text, "global_log")) == "disabled_log", (
+                "a legacy no-override system must PREFILL global_log='disabled_log' (issue #4053: never the VIP)"
             )
             assert _selected_value(_select_block(resp.text, "global_log_mode")) == "default", (
                 "a legacy no-override system must PREFILL global_log_mode='default'"
@@ -308,8 +307,8 @@ def test_dnsbl_page_legacy_prefill_get_and_unchanged_save_migrates_groups(
             assert helpers.config_get(vm, GLOBAL_LOG_MODE_CFG) == "default", (
                 "the unchanged Save must persist the prefilled global_log_mode='default'"
             )
-            assert helpers.config_get(vm, GLOBAL_LOG_CFG) == "enabled", (
-                "the unchanged Save must persist the prefilled global_log='enabled'"
+            assert helpers.config_get(vm, GLOBAL_LOG_CFG) == "disabled_log", (
+                "the unchanged Save must persist the prefilled global_log='disabled_log'"
             )
             assert helpers.config_get(vm, f"{base}/logging") == "default", (
                 "the facade must reach and convert an untouched raw-legacy DNSBL group to 'default', "
@@ -320,12 +319,11 @@ def test_dnsbl_page_legacy_prefill_get_and_unchanged_save_migrates_groups(
 
 
 # --------------------------------------------------------------------------- #
-# Issue #3539 -- the WebServer/VIP response is deprecated on every surface that
-# names it, and the Blacklist category joins the Default/Override policy.
+# Issue #4053 -- the WebServer/VIP response is removed from every surface that
+# offered it; the Blacklist category keeps the Default/Override policy (#3539).
 # --------------------------------------------------------------------------- #
 
-# Labels the deprecation must NOT touch (the contract keeps the other six exact).
-_UNCHANGED_MECHANISM_LABELS = {
+_MECHANISM_LABELS = {
     "disabled_log": "Null Blocking (logging)",
     "disabled": "Null Blocking (no logging)",
     "nxdomain_log": "NXDOMAIN (logging)",
@@ -334,7 +332,6 @@ _UNCHANGED_MECHANISM_LABELS = {
     "nodata": "NODATA (no logging)",
 }
 _OPTION_RE = re.compile(r"<option\b([^>]*)>(.*?)</option>", re.IGNORECASE | re.DOTALL)
-_VIP_BULLET_RE = re.compile(r"<strong>[^<]*WebServer/VIP[^<]*</strong>")
 _WIZARD_DNSBL_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=3"
 ALERTS_DNSBL_STAT_PAGE = "/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat"
 DNSBL_LOG = "/var/log/pfblockerng/dnsbl.log"
@@ -350,149 +347,75 @@ def _option_labels(select_block: str) -> dict[str, str]:
     return labels
 
 
-def _assert_vip_label_deprecated(select_block: str, where: str) -> None:
-    """`enabled` names the VIP response as deprecated; the other six labels are exact."""
+def _assert_no_vip_choice(select_block: str, where: str) -> None:
+    """No `enabled` option, and the six remaining labels are exact."""
     labels = _option_labels(select_block)
-    enabled = labels.get("enabled", "")
-    assert "deprecated" in enabled.lower() and "VIP" in enabled, (
-        f"{where}: the 'enabled' option must name the WebServer/VIP response as deprecated, got {enabled!r}"
-    )
-    for token, expected in _UNCHANGED_MECHANISM_LABELS.items():
+    assert "enabled" not in labels, f"{where}: still offers the removed WebServer/VIP option: {labels!r}"
+    for token, expected in _MECHANISM_LABELS.items():
         assert labels.get(token) == expected, (
             f"{where}: the {token!r} label must stay {expected!r}, got {labels.get(token)!r}"
         )
 
 
-def _assert_vip_bullets_deprecated(body: str, where: str) -> None:
-    """Every help bullet that names `<strong>...WebServer/VIP...</strong>` carries the notice."""
-    bullets = []
-    for match in _VIP_BULLET_RE.finditer(body):
-        tail = body[match.start() :]
-        end = re.search(r"&#8226|</div>", tail[1:])
-        bullets.append(tail if end is None else tail[: end.start() + 1])
-    assert bullets, f"{where}: no WebServer/VIP help bullet rendered -- the page lost its mechanism help"
-    for bullet in bullets:
-        assert "deprecated" in bullet.lower(), (
-            f"{where}: a WebServer/VIP help bullet lacks the deprecation notice: {bullet[:300]!r}"
-        )
-
-
-def _panel_html(body: str, title: str) -> str:
-    """The rendered panel headed ``title``, including its collapse affordance."""
-    for match in re.finditer(re.escape(title), body):
-        if "panel-title" in body[max(0, match.start() - 200) : match.start()]:
-            following = re.search(r'<div class="panel panel-default"', body[match.end() :])
-            stop = len(body) if following is None else match.end() + following.start()
-            start = body.rfind('<div class="panel panel-default"', 0, match.start())
-            assert start >= 0, f"no outer panel before heading {title!r}"
-            return body[start:stop]
-    raise AssertionError(f"no panel headed {title!r} in the rendered page")
-
-
 @pytest.mark.ui_render
-def test_dnsbl_page_global_log_vip_label_is_deprecated(webui: WebUI) -> None:
-    """issue #3539: the DNSBL page's global mechanism select labels the VIP response deprecated."""
+def test_dnsbl_page_offers_no_vip_mechanism_or_webserver_section(webui: WebUI) -> None:
+    """issue #4053: the DNSBL page has no VIP choice, no VIP help and no web server settings."""
     resp = webui.get(DNSBL_PAGE)
-    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL page: {result.detail}"
-    _assert_vip_label_deprecated(_select_block(resp.text, "global_log"), "DNSBL page global_log")
+    _assert_no_vip_choice(_select_block(resp.text, "global_log"), "DNSBL page global_log")
+    assert "WebServer/VIP" not in resp.text, "the DNSBL page still names the WebServer/VIP response"
+    assert "DNSBL Webserver Configuration" not in resp.text, "the web server section is still rendered"
+    for name in ("dnsbl_interface", "pfb_dnsvip4", "pfb_dnsvip6", "pfb_dnsport", "dnsbl_webpage", "pfb_dnsvip_auto"):
+        assert f'name="{name}"' not in resp.text, f"the DNSBL page still renders the {name} field"
 
 
 @pytest.mark.ui_render
-def test_dnsbl_page_webserver_section_and_mechanism_help_announce_deprecation(webui: WebUI) -> None:
-    """issue #3539: the `DNSBL Webserver Configuration` section and every mechanism-help
-    WebServer/VIP bullet carry the deprecation notice."""
-    resp = webui.get(DNSBL_PAGE)
-    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-    assert result.ok, f"Tier-A render oracle failed for the DNSBL page: {result.detail}"
-    section = _panel_html(resp.text, "DNSBL Webserver Configuration")
-    assert "deprecated" in section.lower(), (
-        "the DNSBL Webserver Configuration section must announce that the WebServer/VIP response is deprecated"
-    )
-    _assert_vip_bullets_deprecated(resp.text, "DNSBL page mechanism help")
-
-
-@pytest.mark.ui_render
-def test_dnsbl_webserver_panel_defaults_closed_but_retains_controls(webui: WebUI) -> None:
-    """The deprecated webserver stays reachable without occupying the initial view."""
-    resp = webui.get(DNSBL_PAGE)
-    result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-    assert result.ok, f"Tier-A render oracle failed for the DNSBL page: {result.detail}"
-    section = _panel_html(resp.text, "DNSBL Webserver Configuration")
-    body = re.search(r'<div\b[^>]*\bclass="([^"]*\bpanel-body\b[^"]*)"', section)
-    assert body is not None, "the rendered webserver panel must retain its body"
-    classes = body.group(1).split()
-    assert "collapse" in classes and "in" not in classes, (
-        f"webserver panel must initially be collapsible and closed, got body classes {classes!r}"
-    )
-    assert re.search(
-        r'<a\b(?=[^>]*data-toggle="collapse")(?=[^>]*href="#dnsbl_webserver_panel-body")[^>]*>', section
-    ), "the webserver heading must offer a collapse link targeting its body"
-    assert 'id="dnsbl_webserver_panel-body"' in section, "the webserver collapse target must be rendered"
-    assert "deprecated" in section.lower(), "the closed panel must retain its deprecation notice"
-    for name in ("dnsbl_interface", "pfb_dnsvip4", "dnsbl_webpage"):
-        _select_block(section, name)
-
-
-@pytest.mark.ui_render
-def test_category_edit_logging_vip_label_and_help_are_deprecated(webui: WebUI) -> None:
-    """issue #3539: the group editor's select label and help bullet name the VIP response deprecated."""
+def test_category_edit_logging_offers_no_vip_choice(webui: WebUI) -> None:
+    """issue #4053: the group editor's select and help no longer name the VIP response."""
     resp = webui.get(CATEGORY_EDIT_DNSBL_PAGE)
     result = evaluate_render(CATEGORY_EDIT_DNSBL_PAGE, resp.status_code, resp.text, ("Override Default Schedule",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL category-edit page: {result.detail}"
-    _assert_vip_label_deprecated(_select_block(resp.text, "logging"), "category-edit logging")
-    _assert_vip_bullets_deprecated(resp.text, "category-edit mechanism help")
+    _assert_no_vip_choice(_select_block(resp.text, "logging"), "category-edit logging")
+    assert "WebServer/VIP" not in resp.text, "the group editor still names the WebServer/VIP response"
 
 
 @pytest.mark.ui_render
-def test_blacklist_logging_select_exposes_default_and_seven_concrete_in_order(webui: WebUI) -> None:
-    """issue #3539 D2: the Blacklist tab's Logging select is Default + the seven mechanisms
-    (resolver order), with the VIP label deprecated and the other six unchanged."""
+def test_blacklist_logging_select_exposes_default_and_six_concrete_in_order(webui: WebUI) -> None:
+    """issue #3539 D2 / #4053: the Blacklist tab's Logging select is Default + the six mechanisms
+    (resolver order), with no VIP choice."""
     resp = webui.get(BLACKLIST_PAGE)
     result = evaluate_render(BLACKLIST_PAGE, resp.status_code, resp.text, ("DNSBL Category",))
     assert result.ok, f"Tier-A render oracle failed for the Blacklist page: {result.detail}"
     block = _select_block(resp.text, "blacklist_logging")
     values = _OPTION_VALUE_RE.findall(block)
     assert values == ["default", *_CONCRETE_MECHANISMS], (
-        f"blacklist_logging must offer Default then the seven mechanisms in resolver order, got {values!r}"
+        f"blacklist_logging must offer Default then the six mechanisms in resolver order, got {values!r}"
     )
-    _assert_vip_label_deprecated(block, "Blacklist blacklist_logging")
+    _assert_no_vip_choice(block, "Blacklist blacklist_logging")
 
 
 @pytest.mark.ui_render
-def test_wizard_dnsbl_step_announces_vip_deprecation(webui: WebUI) -> None:
-    """issue #3539: the setup wizard's DNSBL VIP step says the VIP response is deprecated."""
+def test_wizard_dnsbl_step_names_no_vip(webui: WebUI) -> None:
+    """issue #4053: the setup wizard's DNSBL step no longer mentions the WebServer/VIP response."""
     resp = webui.get(_WIZARD_DNSBL_STEP)
     result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL settings",))
     assert result.ok, f"wizard DNSBL-step render oracle failed: {result.detail}"
-    body = resp.text
-    # Scope to the step's own text: from its title (after <body>) to the end of the form, so
-    # unrelated page chrome can never satisfy the deprecation check.
-    start = body.find("DNSBL settings", max(body.lower().find("<body"), 0))
-    assert start != -1, "wizard DNSBL step title not found in the rendered body"
-    end = body.find("</form>", start)
-    step = body[start : end if end != -1 else len(body)]
-    assert "deprecated" in step.lower(), "the wizard DNSBL VIP step must announce the WebServer/VIP deprecation"
+    assert "WebServer/VIP" not in resp.text, "the wizard DNSBL step still names the WebServer/VIP response"
 
 
 @pytest.fixture
 def _seeded_unknown_agent_rows(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
-    """Append two dnsbl.log rows with no blocking-type: one EMPTY agent field (alerts.php:1821
-    unknown-feed message) and one literal `Unknown` (alerts.php:5042). Restores every config
-    value, the injected VIP and its lo0 alias, and removes ONLY the rows it appended."""
+    """Append two dnsbl.log rows with no blocking-type: one EMPTY agent field and one literal
+    `Unknown`. Restores the DNSBL toggle and removes ONLY the rows it appended."""
     vm = smoke_vm
-    settings = "installedpackages/pfblockerngdnsblsettings/config/0"
-    keys = [f"{settings}/{key}" for key in ("pfb_dnsbl", "pfb_dnsvip4", "pfb_dnsport", "pfb_dnsport_ssl")]
-    prior_keys = {key: helpers.config_get_state(vm, key) for key in keys}
-    prior_vips = _snapshot_node(vm, "virtualip/vip")
-    vip4 = helpers.NULL_IP4
-    alias_before = vm.ssh(f"/sbin/ifconfig {helpers.SMOKE_VIP_IFACE}", timeout=15)
-    alias_was_present = f"inet {vip4} " in alias_before.stdout
+    toggle = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl"
+    prior = helpers.config_get_state(vm, toggle)
 
-    domains = (helpers.unique_domain("pfb3539a"), helpers.unique_domain("pfb3539b"))
+    domains = (helpers.unique_domain("pfb4053a"), helpers.unique_domain("pfb4053b"))
     # dnsbl.log CSV: l_type,ts,domain,src_ip,agent,block_mode,group,final_domain,feed,dup,qtype
     lines = "".join(
-        f"DNSBL-python,2030-01-15 09:00:0{n},{dom},127.0.0.1,{agent},DNSBL_TLD,G3539,{dom},F3539,+,A\n"
+        f"DNSBL-python,2030-01-15 09:00:0{n},{dom},127.0.0.1,{agent},DNSBL_TLD,G4053,{dom},F4053,+,A\n"
         for n, (dom, agent) in enumerate(zip(domains, ("", "Unknown"), strict=True), 5)
     )
     try:
@@ -508,53 +431,46 @@ def _seeded_unknown_agent_rows(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
     finally:
         # Drop only our rows (by their unique domains); never truncate, live rows may follow ours.
         patterns = " ".join(f"-e {dom}" for dom in domains)
-        tmp = f"{DNSBL_LOG}.pfb3539.tmp"
+        tmp = f"{DNSBL_LOG}.pfb4053.tmp"
         vm.ssh(
             f"{{ grep -vF {patterns} {DNSBL_LOG} || true; }} > {tmp} && cat {tmp} > {DNSBL_LOG}; rm -f {tmp}",
             timeout=30,
         )
         leftover = vm.ssh(f"grep -cF {patterns} {DNSBL_LOG} || true", timeout=15)
-        for key, state in prior_keys.items():
-            helpers.config_restore_state(vm, key, state)
-        _restore_node(vm, "virtualip/vip", prior_vips)
-        if not alias_was_present:
-            vm.ssh(f"/sbin/ifconfig {helpers.SMOKE_VIP_IFACE} -alias {vip4}", timeout=15)
+        helpers.config_restore_state(vm, toggle, prior)
         assert leftover.stdout.strip() == "0", f"fixture rows were not removed from {DNSBL_LOG}: {leftover.stdout!r}"
 
 
 @pytest.mark.ui_render
-def test_alerts_dnsbl_stat_unknown_blocking_type_rows_use_the_deprecated_label(
+def test_alerts_dnsbl_stat_unknown_blocking_type_rows_are_labelled_unknown(
     webui: WebUI, _seeded_unknown_agent_rows: None
 ) -> None:
-    """issue #3539: both Alerts paths that print the WebServer/VIP label (the empty-agent
-    unknown message and the literal `Unknown` row) render the deprecated shared label."""
+    """issue #4053: rows without a blocking type are `Unknown`, never the removed WebServer/VIP label."""
     resp = webui.get(ALERTS_DNSBL_STAT_PAGE)
     result = evaluate_render(ALERTS_DNSBL_STAT_PAGE, resp.status_code, resp.text, ("Alert Settings",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL stats page: {result.detail}"
     # Since #2cdd83fe10 the stats panels arrive progressively as JSON, not in the plain page.
     body = "".join(panel["html"] for panel in _stats_data(webui, "dnsbl_stat")["panels"])
-    labels = re.findall(r"DNSBL Web ?Server/VIP[^<\"']*", body, re.IGNORECASE)
-    # Fixture sanity: both seeded rows must surface the label, or the assertion below is vacuous.
-    assert len(labels) >= 2, f"the two seeded unknown-agent rows did not both render the VIP label: {labels!r}"
-    stale = [label for label in labels if "deprecated" not in label.lower()]
-    assert not stale, f"Alerts renders the WebServer/VIP label without the deprecation notice: {stale!r}"
+    assert not re.search(r"Web ?Server/VIP", body, re.IGNORECASE), "Alerts still renders the WebServer/VIP label"
+    assert "Unknown" in body, "the seeded rows without a blocking type did not render as Unknown"
 
 
 @pytest.mark.ui_e2e
-def test_category_list_logging_vip_label_is_deprecated(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """issue #3539: the DNSBL category list's per-group Logging select labels the VIP response
-    deprecated (Default policy, so only the `default` label is annotated)."""
+def test_category_list_logging_offers_no_vip_choice(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """issue #4053: the DNSBL category list's per-group Logging select has no VIP choice."""
     vm = smoke_vm
     dnsbl_snap = _snapshot_node(vm, DNSBL_GROUPS)
     mode_state = helpers.config_get_state(vm, GLOBAL_LOG_MODE_CFG)
     mechanism_state = helpers.config_get_state(vm, GLOBAL_LOG_CFG)
     try:
-        _seed_three_rows(vm, DNSBL_GROUPS, "dnsbl", ["pfb3539label"])
+        _seed_three_rows(vm, DNSBL_GROUPS, "dnsbl", ["pfb4053label"])
         helpers.config_set(vm, GLOBAL_LOG_MODE_CFG, "default")
         helpers.config_set(vm, GLOBAL_LOG_CFG, "nodata_log")
         resp = webui.get(_page_url("dnsbl"))
         assert not looks_like_login_page(resp.text), "category GET returned the login form (session lost)"
-        _assert_vip_label_deprecated(_select_block(resp.text, "logging-0"), "category list logging-0")
+        assert "enabled" not in _option_labels(_select_block(resp.text, "logging-0")), (
+            "the category list still offers the removed WebServer/VIP option"
+        )
     finally:
         helpers.config_restore_state(vm, GLOBAL_LOG_MODE_CFG, mode_state)
         helpers.config_restore_state(vm, GLOBAL_LOG_CFG, mechanism_state)
@@ -562,11 +478,11 @@ def test_category_list_logging_vip_label_is_deprecated(webui: WebUI, smoke_vm: h
 
 
 @pytest.mark.ui_e2e
-def test_blacklist_logging_prefills_default_when_absent_and_keeps_explicit_enabled(
+def test_blacklist_logging_prefills_default_when_absent_and_reads_a_stored_vip_as_null_logging(
     webui: WebUI, smoke_vm: helpers.SmokeVM
 ) -> None:
-    """issue #3539 D2: an absent stored value renders Default selected (new configs inherit the
-    global mechanism); an explicit stored `enabled` (released behavior) stays selected."""
+    """issue #3539 D2 / #4053: an absent stored value renders Default selected; a stored `enabled`
+    (the removed VIP response) renders Null Blocking (logging) selected."""
     vm = smoke_vm
     existed = _config_path_exists(vm, CFG_LOGGING)
     original = helpers.config_get(vm, CFG_LOGGING)
@@ -582,7 +498,7 @@ def test_blacklist_logging_prefills_default_when_absent_and_keeps_explicit_enabl
 
         helpers.config_set(vm, CFG_LOGGING, "enabled")
         selected = _selected_value(_select_block(webui.get(BLACKLIST_PAGE).text, "blacklist_logging"))
-        assert selected == "enabled", f"an explicit stored 'enabled' must stay selected, got {selected!r}"
+        assert selected == "disabled_log", f"a stored 'enabled' must render 'disabled_log' selected, got {selected!r}"
     finally:
         _restore_scalar(vm, CFG_LOGGING, original, existed)
 

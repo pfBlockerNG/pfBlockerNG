@@ -86,6 +86,14 @@ final class DnsblMechanismSurfaceTest extends TestCase
 		$this->assertSame(['default' => 'Default'] + pfb_dnsbl_mechanism_labels(), $scope['options_logging']);
 	}
 
+	/** Issue #4053: an existing group's bogus logging value falls back to Null Blocking (logging), never the VIP marker. */
+	public function testGroupEditorLoggingFallbackIsNullBlockingForAnExistingGroup(): void
+	{
+		$statement = pfb_test_page_statement(self::CATEGORY_EDIT_PAGE, '/\$pfb_logging_default\s*=/');
+		$this->assertSame('disabled_log', pfb_test_page_eval($statement, ['pfb_row_is_fresh' => FALSE])['pfb_logging_default']);
+		$this->assertSame('default', pfb_test_page_eval($statement, ['pfb_row_is_fresh' => TRUE])['pfb_logging_default']);
+	}
+
 	public function testGroupEditorLoggingHelpEmbedsTheSharedHelp(): void
 	{
 		$scope = pfb_test_page_eval(pfb_test_page_statement(self::CATEGORY_EDIT_PAGE, '/\$log_text\s*=/'), []);

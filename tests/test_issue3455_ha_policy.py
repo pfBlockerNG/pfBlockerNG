@@ -155,8 +155,8 @@ def test_any_other_addition_is_reported(hp: ModuleType, path: str, value: str) -
 
 
 def test_every_credential_leaf_is_seeded_with_its_own_sentinel_per_node(hp: ModuleType) -> None:
-    a = hp.node_local_leaves("A", vip_uniqid="u")
-    b = hp.node_local_leaves("B", vip_uniqid="u")
+    a = hp.node_local_leaves("A")
+    b = hp.node_local_leaves("B")
 
     assert set(hp.CREDENTIAL_SCALARS) == {"maxmind_account", "maxmind_key", "asn_token", "top1m_token"}
     for name, path in hp.CREDENTIAL_SCALARS.items():
@@ -165,8 +165,8 @@ def test_every_credential_leaf_is_seeded_with_its_own_sentinel_per_node(hp: Modu
 
 
 def test_every_seeded_leaf_both_nodes_hold_differs_between_them(hp: ModuleType) -> None:
-    a = hp.node_local_leaves("A", vip_uniqid="u")
-    b = hp.node_local_leaves("B", vip_uniqid="u")
+    a = hp.node_local_leaves("A")
+    b = hp.node_local_leaves("B")
 
     same = [path for path in a if path in b and a[path] == b[path]]
 
@@ -177,19 +177,15 @@ def test_client_identity_metrics_seeds_opposite_node_local_privacy_choices(hp: M
     path = f"{hp.GEN}/pfb_metrics_client_ip"
 
     assert path in _registry_local_paths()
-    assert hp.node_local_leaves("A", vip_uniqid="u")[path] == "on"
-    assert hp.node_local_leaves("B", vip_uniqid="u")[path] == ""
+    assert hp.node_local_leaves("A")[path] == "on"
+    assert hp.node_local_leaves("B")[path] == ""
     assert path not in hp.UNSEEDED_LOCAL_KEYS
     assert path not in hp.BASELINE_POLICY_LEAVES
 
 
 def test_every_sync_local_registry_key_is_seeded_on_a_node_or_excluded_with_its_reason(hp: ModuleType) -> None:
     registry = _registry_local_paths()
-    seeded = (
-        set(hp.node_local_leaves("A", vip_uniqid="u"))
-        | set(hp.node_local_leaves("B", vip_uniqid="u"))
-        | set(hp.GATEWAY_LEAVES)
-    )
+    seeded = set(hp.node_local_leaves("A")) | set(hp.node_local_leaves("B")) | set(hp.GATEWAY_LEAVES)
     excluded = set(hp.UNSEEDED_LOCAL_KEYS)
 
     missing = sorted(registry - seeded - excluded)
@@ -199,19 +195,19 @@ def test_every_sync_local_registry_key_is_seeded_on_a_node_or_excluded_with_its_
     assert all(reason.strip() for reason in hp.UNSEEDED_LOCAL_KEYS.values()), "an excluded key has no reason"
 
 
-def test_every_seeded_registry_key_holds_a_value_on_both_nodes_except_the_dnsbl_vip_reference(hp: ModuleType) -> None:
+def test_every_seeded_registry_key_holds_a_value_on_both_nodes(hp: ModuleType) -> None:
     registry = _registry_local_paths()
-    a = set(hp.node_local_leaves("A", vip_uniqid="u")) & registry
-    b = set(hp.node_local_leaves("B", vip_uniqid="u")) & registry
+    a = set(hp.node_local_leaves("A")) & registry
+    b = set(hp.node_local_leaves("B")) & registry
 
-    assert a ^ b == {f"{hp.DNSBL}/pfb_dnsvip4"}, f"seeded on one node only: {sorted(a ^ b)}"
+    assert a == b, f"seeded on one node only: {sorted(a ^ b)}"
 
 
 def test_the_seeded_numeric_leaves_are_digits_and_in_range(hp: ModuleType) -> None:
     """A seed the package clamps or ignores proves nothing about "B kept its own": each must read back as seeded."""
-    numeric = ("log_max_", "pfb_log_trim_margin_pct", "pfb_alias_delta_batch", "pfb_dnsport", "pfb_py_cache_max")
+    numeric = ("log_max_", "pfb_log_trim_margin_pct", "pfb_alias_delta_batch", "pfb_py_cache_max")
     for tag in ("A", "B"):
-        leaves = hp.node_local_leaves(tag, vip_uniqid="u")
+        leaves = hp.node_local_leaves(tag)
         for path, value in leaves.items():
             if path.rsplit("/", 1)[1].startswith(numeric):
                 assert isinstance(value, str) and value.isdigit(), f"{tag} {path}: expected digits, got {value!r}"
@@ -221,16 +217,9 @@ def test_the_seeded_numeric_leaves_are_digits_and_in_range(hp: ModuleType) -> No
         )
 
 
-def test_only_node_b_carries_the_dnsbl_vip_reference_with_its_own_uniqid(hp: ModuleType) -> None:
-    path = f"{hp.DNSBL}/pfb_dnsvip4"
-
-    assert hp.node_local_leaves("B", vip_uniqid="pfbhaB3455")[path] == "_vippfbhaB3455"
-    assert path not in hp.node_local_leaves("A", vip_uniqid="pfbhaB3455")
-
-
 def test_the_hook_row_is_disabled_so_it_can_never_run(hp: ModuleType) -> None:
     for tag in ("A", "B"):
-        (row,) = hp.node_local_leaves(tag, vip_uniqid="u")[f"{hp.GEN}/hooks/row"]
+        (row,) = hp.node_local_leaves(tag)[f"{hp.GEN}/hooks/row"]
         assert row["enabled"] == "", f"{tag}'s seeded hook would run: {row!r}"
 
 
@@ -242,7 +231,7 @@ def test_group_local_values_differ_per_node_and_cover_every_row_local_leaf(hp: M
 
 
 def test_the_baseline_policy_leaves_are_not_local_seeds(hp: ModuleType) -> None:
-    locals_ = set(hp.node_local_leaves("A", vip_uniqid="u")) | set(hp.node_local_leaves("B", vip_uniqid="u"))
+    locals_ = set(hp.node_local_leaves("A")) | set(hp.node_local_leaves("B"))
 
     assert set(hp.BASELINE_POLICY_LEAVES).isdisjoint(locals_)
 
@@ -272,11 +261,11 @@ def test_the_baseline_names_every_sync_local_key_it_does_not_seed_and_why(
     monkeypatch.setattr(hp, "seed_node", lambda *_a: None)
     monkeypatch.setattr(hp, "php_write", lambda *_a, **_k: None)
     monkeypatch.setattr(hp, "wait_filter_idle", lambda _vm: None)
-    monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda *_a: None)
+    monkeypatch.setattr(hp, "assert_dnsbl_on", lambda *_a: None)
     monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "/mark")
     monkeypatch.setattr(hp, "set_leaves", lambda *_a, **_k: None)
     monkeypatch.setattr(hp, "copy_policy", lambda *_a: None)
-    for fn in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled", "reload"):
+    for fn in ("inject_ip_lists", "set_dnsbl_enabled", "reload"):
         monkeypatch.setattr(hp.h, fn, lambda *_a, **_k: None)
     monkeypatch.setattr(hp.h, "pfb_config_digest", lambda _vm: "d")
     vm = SimpleNamespace(ssh=lambda *_a, **_k: _done())
@@ -1050,22 +1039,16 @@ def test_add_deny_group_stores_a_ready_made_group_as_given(hp: ModuleType, monke
 # --------------------------------------------------------------------------- #
 
 
-def test_assert_dnsbl_vip_names_what_a_stale_write_undid(hp: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-    state = {"uniqids": ["pfbhaB3455"], "ref": "_vippfbhaB3455", "dnsbl": "on"}
-    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: dict(state))
-    hp.assert_dnsbl_vip(object(), "secondary", "pfbhaB3455")
+def test_assert_dnsbl_on_names_what_a_stale_write_undid(hp: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "on")
+    hp.assert_dnsbl_on(object(), "secondary")
 
-    for broken, message in (
-        ({"uniqids": []}, "not among its virtual IPs"),
-        ({"ref": "_vipother"}, "pfb_dnsvip4"),
-        ({"dnsbl": ""}, "pfb_dnsbl"),
-    ):
-        monkeypatch.setattr(hp, "php_json", lambda *_a, _b=broken, **_k: {**state, **_b})
-        with pytest.raises(AssertionError, match=message):
-            hp.assert_dnsbl_vip(object(), "secondary", "pfbhaB3455")
+    monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "")
+    with pytest.raises(AssertionError, match="pfb_dnsbl"):
+        hp.assert_dnsbl_on(object(), "secondary")
 
 
-def test_reset_pair_clears_the_pending_mark_before_it_waits_and_checks_each_vip(
+def test_reset_pair_clears_the_pending_mark_before_it_waits_and_checks_each_node(
     hp: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     log: list[str] = []
@@ -1083,7 +1066,7 @@ def test_reset_pair_clears_the_pending_mark_before_it_waits_and_checks_each_vip(
     monkeypatch.setattr(hp, "clear_sync_state", lambda vm: log.append(f"{vm.name}:clear"))
     monkeypatch.setattr(hp, "clear_sshguard", lambda vm: None)
     monkeypatch.setattr(hp, "in_flight", lambda vm: [])
-    monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda vm, name, uniqid: log.append(f"{vm.name}:vip={uniqid}"))
+    monkeypatch.setattr(hp, "assert_dnsbl_on", lambda vm, name: log.append(f"{vm.name}:dnsbl"))
     monkeypatch.setattr(hp.h, "apply_filter_sync", lambda vm: None)
     monkeypatch.setattr(hp.h, "pfb_config_digest", lambda vm: {"A": "dA", "B": "dB"}[vm.name])
 
@@ -1095,8 +1078,8 @@ def test_reset_pair_clears_the_pending_mark_before_it_waits_and_checks_each_vip(
         < b_steps.index("B:settle")
         < next(i for i, line in enumerate(b_steps) if "cp -p" in line)
     )
-    assert log.index("B:vip=pfbhaB3455") < log.index("A:rm -f /mark"), "B first, as ha_pair restores"
-    assert "A:vip=pfbsmokevip" in log
+    assert log.index("B:dnsbl") < log.index("A:rm -f /mark"), "B first, as ha_pair restores"
+    assert "A:dnsbl" in log
 
 
 def test_reset_pair_fails_loudly_when_the_restore_does_not_take(
@@ -1133,7 +1116,7 @@ def _reset_rig(
     monkeypatch.setattr(hp, "clear_sync_state", lambda vm: None)
     monkeypatch.setattr(hp, "clear_sshguard", lambda vm: None)
     monkeypatch.setattr(hp, "in_flight", lambda vm: [])
-    monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda vm, name, uniqid: log.append(f"{vm.name}:vip={uniqid}"))
+    monkeypatch.setattr(hp, "assert_dnsbl_on", lambda vm, name: log.append(f"{vm.name}:dnsbl"))
     monkeypatch.setattr(hp.h, "apply_filter_sync", lambda vm: None)
     monkeypatch.setattr(hp.h, "pfb_config_digest", lambda vm: digests[vm.name])
     return pair, hp.Baseline("gw", {"primary": "dA", "secondary": "dB"}, "/mark"), log
@@ -1148,7 +1131,7 @@ def test_reset_pair_still_restores_node_a_when_node_b_does_not_take(
         hp.reset_pair(pair, baseline)
 
     assert any(line.startswith("A:cp -p") for line in log), f"A was never restored after B failed: {log}"
-    assert "A:vip=pfbsmokevip" in log, f"A's VIP was never checked after B failed: {log}"
+    assert "A:dnsbl" in log, f"A was never checked after B failed: {log}"
     assert "secondary: baseline restore did not take: config digest moved != baseline dB" in str(err.value)
     assert "primary" not in str(err.value), f"A restored fine, yet the failure names it: {err.value}"
 
@@ -1164,7 +1147,7 @@ def test_reset_pair_raises_every_failing_node_together(hp: ModuleType, monkeypat
     assert "primary: baseline restore did not take: config digest movedA" in text
 
 
-def test_arrange_baseline_takes_core_sync_off_a_first_and_checks_both_vips_before_it_snapshots(
+def test_arrange_baseline_takes_core_sync_off_a_first_and_checks_both_nodes_before_it_snapshots(
     hp: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     log: list[str] = []
@@ -1182,12 +1165,11 @@ def test_arrange_baseline_takes_core_sync_off_a_first_and_checks_both_vips_befor
     monkeypatch.setattr(hp, "gateway_name", lambda _vm: "gw")
     monkeypatch.setattr(hp, "write_feed", lambda *_a: "")
     monkeypatch.setattr(hp, "seed_node", lambda vm, tag, gw: log.append(f"{vm.name}:seed"))
-    monkeypatch.setattr(hp, "php_write", lambda vm, *_a, **_k: log.append(f"{vm.name}:vipwrite"))
     monkeypatch.setattr(hp, "wait_filter_idle", lambda vm: None)
-    monkeypatch.setattr(hp, "assert_dnsbl_vip", lambda vm, name, uniqid: log.append(f"{vm.name}:vip={uniqid}"))
+    monkeypatch.setattr(hp, "assert_dnsbl_on", lambda vm, name: log.append(f"{vm.name}:dnsbl"))
     monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "/mark")
     monkeypatch.setattr(hp, "copy_policy", lambda src, dst: log.append(f"{src.name}->{dst.name}:copy"))
-    for fn in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled"):
+    for fn in ("inject_ip_lists", "set_dnsbl_enabled"):
         monkeypatch.setattr(hp.h, fn, lambda vm, *_a, **_k: log.append(f"{vm.name}:h"))
     monkeypatch.setattr(hp.h, "reload", lambda vm, *_a, **_k: log.append(f"{vm.name}:reload"))
     monkeypatch.setattr(hp.h, "pfb_config_digest", lambda vm: f"digest-{vm.name}")
@@ -1196,7 +1178,7 @@ def test_arrange_baseline_takes_core_sync_off_a_first_and_checks_both_vips_befor
 
     assert log[:2] == ["A:set ['hasync']", "A:settle"], f"core sync must be off before anything else: {log[:4]}"
     first_snapshot = next(i for i, line in enumerate(log) if "cp -p" in line)
-    assert log.index("A:vip=pfbsmokevip") < first_snapshot and log.index("B:vip=pfbhaB3455") < first_snapshot
+    assert log.index("A:dnsbl") < first_snapshot and log.index("B:dnsbl") < first_snapshot
     last_reload = max(i for i, line in enumerate(log) if line.endswith(":reload"))
     assert last_reload < log.index("A->B:copy") < first_snapshot, (
         f"B must hold A's policy once both passes are done and before the baseline is snapshotted: {log}"

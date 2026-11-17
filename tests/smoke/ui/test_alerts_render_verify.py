@@ -768,8 +768,7 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
         ):
             orig_sizes[path] = _ensure_log(vm, path)
 
-        # DNSBL panel requires a configured sinkhole VIP and enabled toggle.
-        # Configure VIP before enabling DNSBL.
+        # DNSBL panel requires the enabled toggle.
         helpers.set_dnsbl_enabled(vm, True)
 
         error_log_guard.snapshot()

@@ -146,7 +146,7 @@ def test_readonly_dns_forms_refuse_save_and_redisplay_submitted_values(
             (general, ("pfB-DNS Settings",), "pfb_dns", "on", "", ("save", "save")),
             (
                 "/pfblockerng/pfblockerng_dnsbl.php",
-                ("DNSBL Webserver Configuration",),
+                ("DNSBL Group Policy",),
                 "pfb_py_cache_max",
                 "10000",
                 "777",

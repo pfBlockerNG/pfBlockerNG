@@ -93,10 +93,6 @@ def dnsbl_demand_config(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
             "pfb_idn": "",
             "tld_allow": "",
             "tld_wildcard": "",
-            "pfb_dnsvip_auto": "",
-            "dnsbl_interface": helpers.SMOKE_VIP_IFACE,
-            "pfb_dnsport": "8081",
-            "pfb_dnsport_ssl": "8443",
         }.items():
             seed += f"config_set_path({helpers._php_str(f'{CFG_DNSBL}/{key}')}, {helpers._php_str(value)});"
         result = helpers.php_eval(smoke_vm, seed + "write_config('smoke: widget no-demand setup'); echo 'OK';")
@@ -429,14 +425,14 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
     )
     assert "DNSBL is Active on vip:" not in body, "no-demand status regained a VIP after Python close"
 
-    # A real built-in block now demands the VIP; the same live row must name its address and ports.
+    # issue #4053: a real built-in block names no VIP or port either, whatever the stored mechanism says.
     helpers.config_set(vm, f"{CFG_DNSBL}/global_log", "enabled")
     helpers.config_set(vm, f"{CFG_DNSBL}/pfb_regex", "on")
     helpers.config_set(vm, f"{CFG_DNSBL}/pfb_regex_list", base64.b64encode(b"pfb3539inert\n").decode("ascii"))
     helpers.reload(vm, "updatednsbl")
     body = _widget_body(webui)
-    expected = f"DNSBL is Active on vip: {helpers.NULL_IP4} ports: 8081 & 8443"
-    assert _dnsblstatus_marker(ICON_GREEN, expected) in body, f"demanded VIP/port status missing: {expected!r}"
+    assert _dnsblstatus_marker(ICON_GREEN, "DNSBL is Active.") in body, "a built-in block lost the green status"
+    assert "DNSBL is Active on vip:" not in body, "a built-in block brought the VIP status back"
 
 
 # --------------------------------------------------------------------------- #

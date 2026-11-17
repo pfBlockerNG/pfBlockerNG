@@ -89,9 +89,9 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     """Deploy the branch .pkg once for the hook module (mirrors the matrix fixture).
 
     Egress stays OPEN here and across every reload: the update path the hooks fire
-    from needs a working resolver/network (``pfb_create_dnsbl`` rebuilds DNSBL, and
-    a dark egress deadlocks the guest). ``ensure_dnsbl_vip`` + ``use_system_dns_upstream``
-    give DNSBL a sinkhole VIP and a reachable upstream so a DNSBL build actually does
+    from needs a working resolver/network (the update rebuilds DNSBL, and
+    a dark egress deadlocks the guest). ``use_system_dns_upstream``
+    gives DNSBL a reachable upstream so a DNSBL build actually does
     real work — required for ``PFB_DNSBL_CHANGED=1`` to be observable. Hooks are
     cleared up front AND on teardown so no stray hook bleeds into another module's
     reloads. The session VM is torn down at end of run, so collect a full guest

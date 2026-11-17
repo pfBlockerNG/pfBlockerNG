@@ -21,8 +21,8 @@ size in teardown, loud assertion that the restore took):
   And   the code-point-short value renders complete without an ellipsis
   And   each truncated value's multibyte character survives whole
 
-``?view=unified`` needs no config precondition (no ``pfb_dnsbl`` toggle, no
-sinkhole VIP): the Unified loop reads only ``unified.log``, and its
+``?view=unified`` needs no config precondition (no ``pfb_dnsbl`` toggle): the
+Unified loop reads only ``unified.log``, and its
 ``$pfbunicnt`` render cap defaults to 200 (pfblockerng_alerts.php, `case
 'unified'`). The IP row's logged Feed Name (site 9, ``$fields[15]``) is
 written into the row UNCONDITIONALLY from the raw CSV value regardless of

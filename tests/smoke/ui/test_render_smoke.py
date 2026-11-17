@@ -19,10 +19,9 @@ chrome. The GeoIP/Reputation per-continent pages ``pfblockerng_geoip.inc`` WRITE
 when invoked by the ``pfblockerng.php`` CLI dispatcher via its credential-free,
 network-free `ugc` verb are generated after MaxMind's public test corpus is seeded
 (:func:`~tests.smoke.helpers.seed_geoip_dataset`, wired into
-:data:`~tests.smoke.ui.conftest.deployed_vm`) and included in the table below. Only
-the DNSBL-VIP sinkhole pages (served by a separate lighttpd, unreachable from this
-authenticated session) are recorded in :data:`EXCLUDED_FROM_TIER_A` with the reason
-and the access note for Phase 5, NOT silently dropped.
+:data:`~tests.smoke.ui.conftest.deployed_vm`) and included in the table below. A page
+that cannot render hermetically is recorded in :data:`EXCLUDED_FROM_TIER_A` with the
+reason and the access note for Phase 5, NOT silently dropped.
 """
 
 from __future__ import annotations
@@ -122,7 +121,7 @@ PAGE_TABLE: tuple[Page, ...] = (
         "dnsbl",
         "/pfblockerng/pfblockerng_dnsbl.php",
         (
-            "DNSBL Webserver Configuration",
+            "DNSBL Group Policy",
             "DNS Caching",
             "Public-suffix handling",
             "TLD Allow list",
@@ -131,7 +130,6 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Permit Firewall Rules",
             "Interface(s)",
             "no-AAAA",
-            "pfb_dnsbl_nonat",  # issue-#381 NAT opt-out checkbox (name= attr in rendered HTML)
             "pfB_DNSBLIP_v4",  # DNSBL IPs help text names the real alias (was stale 'pfB_DNSBL_IP')
             # issue #1669 slice C: the vendored CodeMirror 6 bundle include -- proves the
             # pfb_regex_list live-highlighting asset is wired on the page. Present because
@@ -424,31 +422,8 @@ class ExcludedPage:
 # issue #1219: the GeoIP continent + Reputation pages moved OUT of this table and INTO
 # PAGE_TABLE above -- `ugc` (the local CSV-conversion verb) needs no MaxMind credential or
 # network access, so seeding synthetic CSVs makes them hermetically renderable after all.
-EXCLUDED_FROM_TIER_A: tuple[ExcludedPage, ...] = (
-    ExcludedPage(
-        name="dnsbl_vip_sinkhole_pages",
-        path="/index.php and /dnsbl_default.php under www/ (DNSBL VIP webserver)",
-        reason=(
-            "www/index.php + dnsbl_default.php are served by the DNSBL sinkhole lighttpd on the "
-            "DNSBL VIP, NOT the main webConfigurator: no guiconfig auth, and index.php exit()s "
-            "unless HTTP_HOST is a valid hostname and REQUEST_URI=='/' (otherwise it returns a "
-            "1x1 GIF). dnsbl_default.php is a template INCLUDED by dnsbl_active.php, never served "
-            "standalone. The authenticated session on :8080 cannot reach them. issue #1013: the "
-            "sinkhole listens on ports 80/443, NOT the configured dnsbl_port/dnsbl_port_ssl "
-            "(8081/8443 by default) -- those are the NAT local-port pfb_create_lighttpd() binds "
-            "127.0.0.1 to on a real interface (pfblockerng.inc:5459-5460); on lo0 (this harness's "
-            "VIP mode) NAT is skipped entirely (pfb_dnsbl_nat_enabled()) and lighttpd binds the "
-            "VIP directly on 80/443 -- either way the externally-reachable port is 80/443."
-        ),
-        access_note=(
-            "Phase 5: fetch the VIP sinkhole directly -- http://<DNSBL_VIP>/ (port 80, NOT the "
-            "configured dnsbl_port) with a Host header set to a blocked hostname and REQUEST_URI "
-            "'/' to get the DNSBL-Full block page; the marker is 'Site blocked via DNSBL' "
-            "(dnsbl_default.php <title>). No webConfigurator login."
-        ),
-        markers=("Site blocked via DNSBL",),
-    ),
-)
+# issue #4053: the DNSBL block-page web server (the last exclusion) is removed.
+EXCLUDED_FROM_TIER_A: tuple[ExcludedPage, ...] = ()
 
 
 @pytest.fixture(scope="module")
@@ -1435,7 +1410,7 @@ def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: Php
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1459,7 +1434,7 @@ def test_dnsbl_control_fields_render(webui: WebUI, php_error_log_guard: PhpError
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1492,7 +1467,7 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1564,7 +1539,7 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     assert "select the type and Save, then run an Update" in body, (
@@ -1589,7 +1564,7 @@ def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: 
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1613,7 +1588,7 @@ def test_dnsbl_redir_exception_and_fill_fields_render(webui: WebUI, php_error_lo
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1656,7 +1631,7 @@ def test_dnsbl_doh_list_select_is_bounded_scrollable(webui: WebUI, php_error_log
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     # The field still renders (a pfSense multi-select renders its name as "<field>[]").
@@ -1684,7 +1659,7 @@ def test_dnsbl_encrypted_dns_sections_order(webui: WebUI, php_error_log_guard: P
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     doh_pos = body.find(">DNS over HTTPS/TLS/QUIC<")
@@ -1722,7 +1697,7 @@ def test_dnsbl_group_policy_section_renders_above_dns_redirect(
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     gp_pos = body.find("Python_Group_Policy")
@@ -1747,7 +1722,7 @@ def test_dnsbl_group_policy_help_states_cidr_support_and_bypass_caveat(
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     assert "No Subnets allowed" not in body, "the Group Policy help still says subnets are not allowed"
@@ -1779,7 +1754,7 @@ def test_dnsbl_page_renders_tld_pickers(webui: WebUI, php_error_log_guard: PhpEr
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     # Each picker is a pfSense multi-select (Form_Select(..., TRUE)), so its name renders
@@ -1831,12 +1806,6 @@ def test_alerts_unified_log_colour_fields_render(
     plus its light-only help asymmetry (``'(Resolver only)'`` — the light help text differs from
     the dark help text only for this one row) — so a regression in the loop rewrite (a dropped
     row, a missing gate, or a lost help-text override) is caught at the render tier.
-
-    The config toggle alone is NOT enough: pfb_global force-disables the runtime
-    ``$pfb['dnsbl']`` ("DNSBL disabled: no VIP configured", pfblockerng.inc) when
-    ``pfb_validate_vips`` finds no sinkhole VIP, and the page's colour-field gate reads that
-    downgraded value — so without a VIP the gated ``unireply2`` row never renders and this
-    test fails on a bare image. Seed the VIP first (idempotent, the standard harness fixture).
     """
     original = helpers.config_get(smoke_vm, CFG_PFB_DNSBL)
     original_pfb_dns = helpers.config_get(smoke_vm, helpers.dns_config_path("pfb_dns"))
@@ -2118,7 +2087,7 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
     """DNSBL page exposes the default-off full-cache trade-off without PHP diagnostics."""
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL cache-flush render oracle failed: {result.detail}"
     assert 'name="pfb_cache_flush"' in resp.text, "DNSBL page is missing the cache-flush checkbox"
     assert "When disabled, cached allowed answers remain until their DNS TTL expires" in resp.text, (
@@ -2446,7 +2415,7 @@ def test_dnsbl_page_has_no_dns_proxy_checkbox(webui: WebUI, php_error_log_guard:
     page's tab bar links DNS General and no longer links the retired pfB-DNS page."""
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     for gone in ('name="pfb_dns_proxy"', 'name="pfb_dns"', "Experimental", 'name="pfb_py_reply"', *_DNS_LISTENER_NAMES):
         assert gone not in resp.text, f"the DNSBL page still carries {gone!r}"
@@ -3065,7 +3034,7 @@ def test_pfb_dns_page_leaves_the_doh_listener_unchecked_while_its_interface_is_a
 _ISSUE1907_TOGGLE_PAGES = (
     (
         "/pfblockerng/pfblockerng_dnsbl.php",
-        "DNSBL Webserver Configuration",
+        "DNSBL Group Policy",
         (("pfb_hsts", "installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts"),),
     ),
     (
@@ -3753,8 +3722,7 @@ def test_wizard_schedule_producer_is_canonical() -> None:
     assert "$add['dow']" not in source
 
 
-# ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
-# toggle. Core wizard.php renders ONE step per GET, indexed by a 0-based `stepid` (verified
+# The setup wizard's DNSBL step. Core wizard.php renders ONE step per GET, indexed by a 0-based `stepid` (verified
 # against pfSense upstream wizard.php: `$stepid` defaults to "0" and indexes $pkg['step']
 # directly). The DNSBL step is the 4th <step> (<id>4</id>, "DNSBL settings")
 # in pfblockerng_wizard.xml -> stepid=3. The wizard is NOT in PAGE_TABLE (a core-rendered
@@ -3831,59 +3799,17 @@ def test_wizard_components_step_columns_sit_in_rows(webui: WebUI, php_error_log_
     )
 
 
-def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """ADR-23: the wizard DNSBL step renders the Auto VIP (pfb_dnsvip_auto) checkbox cleanly.
+def test_wizard_dnsbl_step_renders_without_the_vip(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """Issue #4053: the wizard DNSBL step renders cleanly and offers no DNSBL VIP or web server port.
 
-    The setup wizard exposes ADR-13's auto-create toggle on its DNSBL step so a first-run
-    user need not pre-create a sinkhole VIP — a render regression that drops/breaks the field
-    (or the wizard step itself) must fail here, not only in the maintainer on-box check. A
-    direct authenticated GET renders the step regardless of the first-run dismissal the
-    `webui` fixture performs (dismissal only suppresses general.php's auto-launch redirect,
-    not wizard.php itself).
-
-    Asserts the step passes the clean-render oracle (200, no PHP diagnostic, the step-title
-    Form_Section marker present, not the login form) AND — from three independent wizard.php
-    render paths — that the field's POST name (`pfb_dnsvip_auto`) and its 'Auto VIP' displayname
-    label are present. The IPv4/IPv6
-    manual selectors carry the new "manual mode only" note, asserted too so the mode framing
-    that pairs with the checkbox is pinned. `php_error_log_guard` enrolls this GET in the
-    module-level no-growth sweep.
-    """
-    resp = webui.get(_WIZARD_DNSBL_STEP)
-    result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL settings",))
-    assert result.ok, f"wizard DNSBL-step render oracle failed: {result.detail}"
-    body = resp.text
-    for needle in (
-        "pfb_dnsvip_auto",  # the checkbox field's POST name (input name/id)
-        "Auto VIP",  # the <displayname> label
-        "manual mode only",  # the pfb_dnsvip4/6 selectors' new mode-dependency note
-    ):
-        assert needle in body, f"wizard DNSBL step is missing the Auto VIP marker {needle!r}"
-    # issue #2869: the step must not name the sweep pool ADR-13 retired -- an admin who
-    # reads it goes looking for an address pfb_dnsbl_vip_candidates() never returns.
-    # Scoped to the retired claim, not to "10.10.": the harness provisions a manual VIP at
-    # NULL_IP4 (10.10.10.1) which the step's VIP dropdown legitimately lists.
-    for retired in ("10.10.X.53", "10.10.x.53", "fd00:X::53"):
-        assert retired not in body, f"wizard DNSBL step still advertises the retired {retired} pool"
-
-
-def test_wizard_dnsbl_step_describes_ha_auto_vip(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """Issue #3540: the wizard DNSBL step says a Policy-scope secondary follows the primary's Auto VIP address.
-
-    Given: the DNSBL step of the setup wizard (stepid=3)
-    When:  it is fetched through an authenticated session
-    Then:  it renders cleanly, carries the HA sentence about the address the primary chose, and no longer
-           claims auto-created VIPs are not HA/CARP aware
-
-    Red when: the step still tells an operator on a CARP/HA cluster to configure the VIP manually.
     `php_error_log_guard` enrolls this GET in the module-level no-growth sweep.
     """
     resp = webui.get(_WIZARD_DNSBL_STEP)
     result = evaluate_render(_WIZARD_DNSBL_STEP, resp.status_code, resp.text, ("DNSBL settings",))
     assert result.ok, f"wizard DNSBL-step render oracle failed: {result.detail}"
     body = resp.text
-    assert "address the primary chose" in body, "wizard DNSBL step is missing the HA Auto VIP sentence"
-    assert "not HA/CARP aware" not in body, "wizard DNSBL step still says auto-created VIPs are not HA/CARP aware"
+    for retired in ("pfb_dnsvip_auto", "Auto VIP", "pfb_dnsvip4", "pfb_dnsvip6", "pfb_dnsport"):
+        assert retired not in body, f"wizard DNSBL step still renders {retired!r}"
 
 
 def test_general_wizard_disable_get_is_state_free(
@@ -4617,8 +4543,8 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     the widget. The non-servable pfblockerng.php CLI dispatcher is excluded. The
     9 GeoIP continent/category pages + Reputation
     (all WRITTEN by pfblockerng_geoip.inc via `ugc`) are ALSO covered now that a seeded
-    synthetic dataset makes them hermetically renderable -- only the DNSBL-VIP
-    sinkhole pages remain a recorded exclusion.
+    synthetic dataset makes them hermetically renderable. The DNSBL-VIP sinkhole
+    pages, the last recorded exclusion, are removed (issue #4053).
     """
     covered_paths = {p.path.split("?", 1)[0] for p in PAGE_TABLE}
     # 15 distinct main .php files are render-smoked here (pfblockerng.php is never
@@ -4661,10 +4587,9 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     }
     missing_geoip = expected_geoip - covered_paths
     assert not missing_geoip, f"Tier-A page table is missing GeoIP page(s): {sorted(missing_geoip)}"
-    # Only the DNSBL-VIP sinkhole pages remain a recorded (non-hermetic) exclusion.
     excluded_names = {e.name for e in EXCLUDED_FROM_TIER_A}
     assert "geoip_continent_views" not in excluded_names
-    assert "dnsbl_vip_sinkhole_pages" in excluded_names
+    assert "dnsbl_vip_sinkhole_pages" not in excluded_names
 
 
 def test_blacklist_download_name_keys_on_provider_id() -> None:
@@ -4882,14 +4807,14 @@ def test_pending_changes_banner_tracks_the_marker(
         # Given a clean state — banner ABSENT, page still renders cleanly.
         smoke_vm.ssh("rm", "-f", _PENDING_MARKER)
         resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
+        result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Group Policy",))
         assert result.ok, f"DNSBL render oracle failed (clean state): {result.detail}"
         assert not _pending_banners(resp.text), "pending-changes banner must be ABSENT when there is no marker file"
 
         # When settings have changed but no Update has run — banner SHOWS, with its link.
         smoke_vm.ssh("touch", _PENDING_MARKER)
         resp2 = webui.get(path)
-        result2 = evaluate_render(path, resp2.status_code, resp2.text, ("DNSBL Webserver Configuration",))
+        result2 = evaluate_render(path, resp2.status_code, resp2.text, ("DNSBL Group Policy",))
         assert result2.ok, f"DNSBL render oracle failed (pending state): {result2.detail}"
         banners = _pending_banners(resp2.text)
         assert len(banners) == 1, f"pending-changes banner must SHOW once when the marker exists; found {banners!r}"

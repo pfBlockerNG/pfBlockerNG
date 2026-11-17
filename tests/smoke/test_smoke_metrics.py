@@ -564,7 +564,6 @@ def _accounting_apply_state(vm: SmokeVM) -> dict[str, object]:
         f"require_once('{_PKG}'); pfb_global();"
         "$state = array('retry' => @file_get_contents($pfb['dnsbl_file'] . '.reload'),"
         "'pending' => pfb_pending_changes(), 'converged' => pfb_dnsbl_converged(),"
-        "'vip_conf' => is_file($pfb['dnsbl_conf']), 'vip_service' => is_service_running('pfb_dnsbl'),"
         "'generation' => pfb_unbound_py_marker_generation($pfb['dnsbldir'] . '/pfb_py_reload'),"
         "'applied' => pfb_unbound_py_marker_generation($pfb['dnsbldir'] . '/pfb_py_reload.applied'),"
         "'fingerprint' => pfb_dnsbl_reload_fingerprint($pfb));"
@@ -717,7 +716,6 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         assert {group: _blocks(enabled, group) for group in groups} == wanted, enabled
 
         prior_apply = _accounting_apply_state(vm)
-        assert prior_apply["vip_conf"] and prior_apply["vip_service"], prior_apply
         null_b = h.DnsblCase(aliasname=aliases[1], header=aliases[1], mode=h.DnsblMode.NULL, feed_url=specs[1].feed_url)
         _php_ok(
             vm,
@@ -734,14 +732,13 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
             assert failed.returncode == 1, f"accounting failure must fail the apply: {failed.stdout}\n{failed.stderr}"
             failed_apply = _accounting_apply_state(vm)
             assert failed_apply["retry"] == "accounting" and failed_apply["pending"], failed_apply
-            assert failed_apply["vip_conf"] and failed_apply["vip_service"], failed_apply
             assert (failed_apply["generation"], failed_apply["applied"]) == (
                 prior_apply["generation"],
                 prior_apply["applied"],
             ), failed_apply
             assert _epochs(vm) == epochs, "failed reconciliation changed authority"
             answer, raw = _ask(gw.client, "udp", held)
-            assert h.is_null_ip(answer), f"the old generation must still serve its VIP: {answer}\n{raw}"
+            assert h.is_null_ip(answer), f"the old generation must still serve its block: {answer}\n{raw}"
             wanted[groups[0]]["A", "UDP"] = 1
             _wait_blocks(vm, wanted)
             _show_dns_prom(vm, "accounting-failure-old-generation-held")
@@ -760,7 +757,6 @@ def test_dns_dimensions_and_group_lifecycle(gw: Gateway, gateway_on: State, stub
         assert recovered_apply["fingerprint"] == failed_apply["fingerprint"], (failed_apply, recovered_apply)
         assert recovered_apply["retry"] is False and not recovered_apply["pending"], recovered_apply
         assert recovered_apply["converged"], recovered_apply
-        assert not recovered_apply["vip_conf"] and not recovered_apply["vip_service"], recovered_apply
         deleted = _export(vm)
         _show_dns_prom(vm, "accounting-recovered-identical-generation")
         assert (groups[0], "custom") not in _epochs(vm), "deleted A still has an incarnation"

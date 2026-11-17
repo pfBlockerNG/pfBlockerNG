@@ -8,7 +8,7 @@ unresolvable until a manual filter reload.
 
 Root cause (code, current ``devel``): ``sync_package_pfblockerng()`` short-circuits
 on the boot path (``is_platform_booting()``, ``pfblockerng.inc:9952``) — it recreates
-only the DNSBL VIP/NAT/webserver and returns, so it does NOT rebuild the IP/GeoIP
+only the DNSBL state and returns, so it does NOT rebuild the IP/GeoIP
 alias tables and does NOT call ``filter_configure()``. The only boot-time alias
 handling is the ``earlyshellcmd`` running ``pfblockerng.sh aliastables``, which
 restores from the archive for RAMDISK/``md`` installs only (``pfblockerng.sh:202``).
@@ -86,8 +86,8 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     """Deploy the branch .pkg once for the reboot module.
 
     Egress stays OPEN across reloads: the ``update`` path also builds DNSBL
-    (``pfb_create_dnsbl``) and a dark egress deadlocks the guest. ``ensure_dnsbl_vip``
-    + ``use_system_dns_upstream`` give DNSBL a sinkhole VIP and a reachable upstream so
+    and a dark egress deadlocks the guest. ``use_system_dns_upstream`` gives DNSBL a
+    reachable upstream so
     a full ``update`` completes cleanly. The session VM is torn down at end of run, so
     a full guest snapshot is collected on teardown.
     """

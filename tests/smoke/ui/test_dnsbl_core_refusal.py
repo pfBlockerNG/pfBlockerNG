@@ -1,10 +1,8 @@
 """Tier-A ``ui_render`` coverage for issue #3922: a DNS > DNSBL save that Core refuses changes nothing.
 
 The page asks Core's dry run (ValidateSettings) before it writes config.xml. A refusal is shown as an input error and
-nothing is saved, which includes the file side effects of the save: the block page DNSBL serves
-(``dnsbl_active.php``) is replaced only once config.xml was written. The oracle is the box, read back over SSH, never
-the HTTP body: the served page's digest and the digest of config.xml, before and after a save that picks another block
-page.
+nothing is saved. The oracle is the box, read back over SSH, never the HTTP body: the digest of config.xml, before and
+after a save that changes a setting. (Issue #4053 removed the block page, the save's former file side effect.)
 
 Core is made to refuse by stopping the ``pfb_core`` rc service and serving a PHP stand-in on its socket, run with the
 appliance's PHP (the box's checkout carries ``tests/smoke`` and not ``tests/php``, so the script is written here). Core
@@ -38,13 +36,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_render
 
 DNSBL_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
-WWW = "/usr/local/www/pfblockerng/www"
-ACTIVE = f"{WWW}/dnsbl_active.php"
-BLOCK_PAGE_CFG = f"{helpers.CFG_DNSBL_SETTINGS}/dnsbl_webpage"
-OTHER_PAGE = "dnsbl_smoke3922.php"
-OTHER_PAGE_HTML = (
-    "<!DOCTYPE html>\n<html><body>smoke #3922: a block page the refused save must not serve</body></html>\n"
-)
+CACHE_MAX_CFG = f"{helpers.CFG_DNSBL_SETTINGS}/pfb_py_cache_max"
 STAND_IN = "/tmp/pfb_core_stand_in_3922.php"
 STAND_IN_RECORD = "/tmp/pfb_core_stand_in_3922.requests"
 STAND_IN_OUT = "/tmp/pfb_core_stand_in_3922.out"
@@ -109,34 +101,6 @@ def _put(vm: SmokeVM, path: str, content: str) -> None:
     assert put.returncode == 0, f"writing {path} failed: rc={put.returncode} {put.stderr!r}"
 
 
-def _digest(vm: SmokeVM, path: str) -> str:
-    """SHA-256 of a guest file; an unreadable file fails, so a missing one never compares equal to another."""
-    result = vm.ssh("sha256", "-q", path)
-    assert result.returncode == 0 and result.stdout.strip(), (
-        f"cannot digest {path}: {result.returncode} {result.stderr!r}"
-    )
-    return result.stdout.strip()
-
-
-@contextlib.contextmanager
-def _other_block_page(vm: SmokeVM) -> Iterator[None]:
-    """A second block page, offered by DNSBL's page list; the files and the stored choice are restored."""
-    other = f"{WWW}/{OTHER_PAGE}"
-    backup = f"{ACTIVE}.smoke3922"
-    chosen = helpers.config_get_state(vm, BLOCK_PAGE_CFG)
-    saved = vm.ssh(f"test -f {ACTIVE} && cp -p {ACTIVE} {backup}")
-    try:
-        _put(vm, other, OTHER_PAGE_HTML)
-        yield
-    finally:
-        # A save that wrongly stored the page must not leave config.xml naming a file that is deleted here
-        if helpers.config_get_state(vm, BLOCK_PAGE_CFG) != chosen:
-            helpers.config_restore_state(vm, BLOCK_PAGE_CFG, chosen)
-        vm.ssh(f"rm -f {other}")
-        if saved.returncode == 0:
-            vm.ssh(f"mv -f {backup} {ACTIVE}")
-
-
 @contextlib.contextmanager
 def _refusing_core(vm: SmokeVM) -> Iterator[None]:
     """Core stopped, its socket served by a stand-in that refuses every dry run; Core serving again after."""
@@ -163,27 +127,22 @@ def _refusing_core(vm: SmokeVM) -> Iterator[None]:
             )
 
 
-def test_a_dnsbl_save_that_core_refuses_leaves_the_served_block_page_and_config_xml_untouched(
-    smoke_vm: SmokeVM, webui: WebUI
-) -> None:
-    """The block page a refused save picked is not served, and nothing is written.
+def test_a_dnsbl_save_that_core_refuses_leaves_config_xml_untouched(smoke_vm: SmokeVM, webui: WebUI) -> None:
+    """A refused save writes nothing.
 
-    Given: another block page is offered, and Core refuses the dry run of every save
-    When:  DNS > DNSBL is saved with the other block page chosen
-    Then:  the page shows Core's refusal, the served block page is byte-identical and config.xml is unchanged
+    Given: Core refuses the dry run of every save
+    When:  DNS > DNSBL is saved with a changed decision cache cap
+    Then:  the page shows Core's refusal and config.xml is unchanged
     """
     vm = smoke_vm
-    with _other_block_page(vm), _refusing_core(vm):
-        served_before = _digest(vm, ACTIVE)
-        chosen_digest = _digest(vm, f"{WWW}/{OTHER_PAGE}")
-        assert chosen_digest != served_before, "before-state: the chosen page must differ from the served one"
+    with _refusing_core(vm):
+        assert helpers.config_get(vm, CACHE_MAX_CFG) != "3922", "before-state: the posted cap must be a change"
         config_before = helpers.pfb_config_digest(vm)
 
-        saved = webui.post(DNSBL_PAGE, {"dnsbl_webpage": OTHER_PAGE}, allow_redirects=False, timeout=SAVE_TIMEOUT)
+        saved = webui.post(DNSBL_PAGE, {"pfb_py_cache_max": "3922"}, allow_redirects=False, timeout=SAVE_TIMEOUT)
 
         errors = _errors_text(saved.text)
         assert errors != NO_INPUT_ERRORS and REFUSED in errors, f"the save must show Core's refusal, not: {errors}"
         requests = vm.ssh(f"cat {STAND_IN_RECORD}").stdout
         assert "POST /v1/ValidateSettings " in requests, f"the page's dry run never reached the stand-in: {requests!r}"
-        assert _digest(vm, ACTIVE) == served_before, "the refused save replaced the served block page"
         assert helpers.pfb_config_digest(vm) == config_before, "the refused save changed config.xml"

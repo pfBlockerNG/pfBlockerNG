@@ -7,9 +7,7 @@ against the LIVE webConfigurator on the ADR-04 smoke VM, reusing the Phase-1
 authenticated session (the ``PHPSESSID`` cookie the ``browser_context`` fixture
 injects, so the browser never logs in a second time).
 
-``test_browser.py`` already covers the ADR-13 ``#pfb_dnsvip_auto`` ->
-``#pfb_dnsvip4``/``#pfb_dnsvip6`` *disable* handler (``enable_dnsvip_auto``);
-this file covers the OTHER inline handlers, each gating a separate collapsible
+This file covers the DNSBL page's inline handlers, each gating a separate collapsible
 section by ``.show()``/``.hide()`` on the section's OUTER panel div (whose id is
 the second ``Form_Section`` constructor arg). The JS under test is READ-ONLY
 reference (no ``src/`` change); the exact selectors/behaviours are taken from the
@@ -50,10 +48,6 @@ review (ADR §2 "Screenshots (A1)" -- artifacts, NOT asserted pixel baselines).
 still POSTs). The two PSL *feed-policy* selects live in ``dnsbl_suffix`` and
 must stay visible regardless of ``#tld_allow`` / ``#tld_wildcard`` (issue #2371).
 
-DEFERRED (noted in the report): ``enable_ports`` (gated by the
-``#dnsbl_interface`` select, whose non-``lo0`` options depend on the VM's live
-interfaces), and the auto-VIP OPTION-INJECTION half of ``enable_dnsvip_auto``.
-
 Playwright is imported lazily via ``pytest.importorskip`` (in ``conftest`` and
 here) so importing/collecting this module does not hard-error when Playwright is
 absent.
@@ -77,7 +71,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import BrowserContext, Locator, Page
+    from playwright.sync_api import Locator, Page
 
     from .webui import WebUI
 
@@ -503,85 +497,6 @@ def test_idn_mode_select_gates_confusable_subtoggles(
 _IN_CLASS = re.compile(r"(^|\s)in(\s|$)")
 
 
-def test_dnsbl_webserver_defaults_closed_and_expands_without_changing_settings(
-    browser_context: BrowserContext,
-    webui: WebUI,
-    screenshot_dir: Path,
-) -> None:
-    """A fresh view hides the deprecated controls, but local and global toggles reveal them."""
-    browser = browser_context.browser
-    assert browser is not None, "the authenticated browser context must belong to a browser"
-    state = browser_context.storage_state()
-    state["origins"] = []
-    context = browser.new_context(
-        ignore_https_errors=webui.base_url.startswith("https://"),
-        storage_state=state,
-    )
-    try:
-        page = context.new_page()
-        _open(page, webui, DNSBL_PAGE)
-        heading = page.locator(".panel-heading").filter(has_text="DNSBL Webserver Configuration")
-        expect(heading).to_be_visible(timeout=JS_TIMEOUT_MS)
-        panel = heading.locator("..")
-        body = panel.locator(".panel-body")
-        expect(body).to_be_attached(timeout=JS_TIMEOUT_MS)
-        _shot(page, screenshot_dir, "dnsbl_webserver_before_closed")
-        expect(body).to_be_hidden(timeout=JS_TIMEOUT_MS)
-
-        toggle = heading.locator('a[data-toggle="collapse"]')
-        expect(toggle).to_have_attribute("href", "#dnsbl_webserver_panel-body")
-        expect(body).to_have_attribute("id", "dnsbl_webserver_panel-body")
-        controls = panel.locator("input, select")
-        before = controls.evaluate_all(
-            "els => els.map(el => [el.name, el.value, el.checked, "
-            "el.tagName === 'SELECT' ? Array.from(el.selectedOptions, opt => opt.value) : null])"
-        )
-        interface = panel.locator("#dnsbl_interface")
-        webpage = panel.locator("#dnsbl_webpage")
-        notice = panel.get_by_text("The DNSBL WebServer/VIP response is deprecated:", exact=False)
-        # Bootstrap ignores a toggle while the previous one is still animating, so each click waits for it to settle.
-        animating = re.compile(r"\bcollapsing\b")
-
-        toggle.click()
-        expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(panel.locator("label").get_by_text("Web Server Interface", exact=True)).to_be_visible(
-            timeout=JS_TIMEOUT_MS
-        )
-        expect(interface).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(interface).to_be_enabled(timeout=JS_TIMEOUT_MS)
-        expect(webpage).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(webpage).to_be_enabled(timeout=JS_TIMEOUT_MS)
-        expect(panel.locator("#pfb_dnsvip_auto")).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(notice).to_be_visible(timeout=JS_TIMEOUT_MS)
-        _shot(page, screenshot_dir, "dnsbl_webserver_after_expanded")
-
-        expect(body).not_to_have_class(animating, timeout=JS_TIMEOUT_MS)
-        toggle.click()
-        expect(body).to_be_hidden(timeout=JS_TIMEOUT_MS)
-        _shot(page, screenshot_dir, "dnsbl_webserver_after_collapsed")
-        expand_all = page.locator("#pfb_expand_all")
-        expect(expand_all).to_have_text("Expand all", timeout=JS_TIMEOUT_MS)
-        expect(body).not_to_have_class(animating, timeout=JS_TIMEOUT_MS)
-        expand_all.click()
-        expect(expand_all).to_have_text("Collapse all", timeout=JS_TIMEOUT_MS)
-        expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(interface).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(notice).to_be_visible(timeout=JS_TIMEOUT_MS)
-        _shot(page, screenshot_dir, "dnsbl_webserver_expand_all")
-        expect(body).not_to_have_class(animating, timeout=JS_TIMEOUT_MS)
-        expand_all.click()
-        expect(body).to_be_hidden(timeout=JS_TIMEOUT_MS)
-        expect(expand_all).to_have_text("Expand all", timeout=JS_TIMEOUT_MS)
-        _shot(page, screenshot_dir, "dnsbl_webserver_collapse_all")
-        after = controls.evaluate_all(
-            "els => els.map(el => [el.name, el.value, el.checked, "
-            "el.tagName === 'SELECT' ? Array.from(el.selectedOptions, opt => opt.value) : null])"
-        )
-        assert after == before, f"collapse toggles changed control values: before={before!r}, after={after!r}"
-    finally:
-        context.close()
-
-
 def test_expand_all_opens_then_collapses_every_form_panel(
     browser_page: Page,
     webui: WebUI,
@@ -632,22 +547,10 @@ _CFG_LENIENT = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_le
 _DNSBL_POST_TIMEOUT = 120.0
 
 
-@pytest.fixture(scope="module")
-def dnsbl_vip_ready_browser(smoke_vm: helpers.SmokeVM) -> None:
-    """Ensure the DNSBL sinkhole VIP exists so the DNSBL settings page save validates.
-
-    The DNSBL settings save always runs ``pfb_validate_vips`` (manual mode) before
-    writing config.  Without a valid VIP the save fails with an input error and
-    config.xml is never written — any gateway assertion would false-fail.
-    Module-scoped so it runs once per collection of this module.
-    """
-
-
 def test_gateway_dnsbl_lenient_save_roundtrip(
     browser_page: Page,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready_browser: None,
     screenshot_dir: Path,
 ) -> None:
     """pfb_dnsbl_lenient round-trips through the DNSBL page and the gateway.
@@ -748,7 +651,6 @@ def test_gateway_dnsbl_feed_suffix_policy_save_roundtrip(
     browser_page: Page,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready_browser: None,
     screenshot_dir: Path,
 ) -> None:
     """pfb_psl_feed_private_policy / pfb_psl_feed_icann_policy round-trip through the
@@ -1200,7 +1102,6 @@ def test_global_log_mode_selector_visible_usable_with_label(
     browser_page: Page,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
-    dnsbl_vip_ready_browser: None,
     screenshot_dir: Path,
 ) -> None:
     """The new Global Application Mode select is a structural UI addition --

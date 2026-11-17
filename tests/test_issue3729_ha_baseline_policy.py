@@ -57,9 +57,9 @@ def _arrange(hp: ModuleType, monkeypatch: pytest.MonkeyPatch, a: dict[str, Any],
     nodes = _Nodes(hp, a, b)
     monkeypatch.setattr(hp, "set_leaves", nodes.set_leaves)
     monkeypatch.setattr(hp, "node_state", nodes.node_state)
-    for name in ("settle", "write_feed", "seed_node", "php_write", "wait_filter_idle", "assert_dnsbl_vip"):
+    for name in ("settle", "write_feed", "seed_node", "php_write", "wait_filter_idle", "assert_dnsbl_on"):
         monkeypatch.setattr(hp, name, lambda *_a, **_k: None)
-    for name in ("inject_ip_lists", "ensure_dnsbl_vip", "set_dnsbl_enabled", "reload"):
+    for name in ("inject_ip_lists", "set_dnsbl_enabled", "reload"):
         monkeypatch.setattr(hp.h, name, lambda *_a, **_k: None)
     monkeypatch.setattr(hp, "gateway_name", lambda _vm: "WAN_DHCP")
     monkeypatch.setattr(hp, "php_json", lambda *_a, **_k: "/usr/local/etc/pfb_pending_changes")

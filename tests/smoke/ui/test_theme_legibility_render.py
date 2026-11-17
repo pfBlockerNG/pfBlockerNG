@@ -18,7 +18,7 @@ pytestmark = pytest.mark.ui_render
 
 # Path -> a marker the page emits only when it actually rendered.
 _LIST_PAGES: dict[str, str] = {
-    "/pfblockerng/pfblockerng_dnsbl.php": "DNSBL Webserver Configuration",
+    "/pfblockerng/pfblockerng_dnsbl.php": "DNSBL Group Policy",
     "/pfblockerng/pfblockerng_ip.php": "IP Configuration",
     "/pfblockerng/pfblockerng_log.php": "Log/File Browser selections",
     "/pfblockerng/pfblockerng_edit_hooks.php": "Load an Existing Hook Script",

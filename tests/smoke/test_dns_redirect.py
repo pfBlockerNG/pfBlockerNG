@@ -101,8 +101,7 @@ def deployed_vm(  # noqa: ARG001
     no LAN assigned; DNS redirect tests create LAN-scoped NAT/VIP rules).
 
     Egress stays OPEN across reloads: ``pkg add`` pulls RUN_DEPENDS from the
-    pfSense repo. ``ensure_dnsbl_vip`` gives DNSBL a sinkhole VIP (required for
-    the package to accept a reload). ``use_system_dns_upstream`` points Unbound
+    pfSense repo. ``use_system_dns_upstream`` points Unbound
     at the runner-side mock so the DNSBL update path completes cleanly.
     """
     if not os.environ.get("SMOKE_PKG"):
@@ -1091,7 +1090,7 @@ def test_dns_redirect_master_disable_removes_rules_despite_toggle_on(deployed_vm
 
       Note: the redirect TOGGLE (dnsbl_redir) remains ON throughout; the removal is caused
       solely by the master switch, proving the $mode-coupling in pfblockerng_php_pre_deinstall
-      and pfb_create_dnsbl (devel: DNS-redirect/DoT rules coupled to $mode==='enabled').
+      and the apply (DNS-redirect/DoT rules coupled to $mode==='enabled').
     """
     vm = deployed_vm
     iface = primary_iface
@@ -1391,7 +1390,7 @@ _RESOLVER_KEYS = tuple(f"unbound/{key}" for key in MOVED_KEYS)
 
 
 def _answers_listed_name_with_vip(vm: SmokeVM, domain: str) -> bool:
-    """On the box: does pfB-DNS, asked at 127.0.0.1, answer an A query for the listed ``domain`` with the DNSBL VIP?"""
+    """On the box: does pfB-DNS, asked at 127.0.0.1, answer an A query for the listed ``domain`` with 0.0.0.0?"""
     result = vm.ssh(f"{h.DRILL_BIN} {domain} A @127.0.0.1", timeout=30.0)
     return h.is_null_ip(h._parse_drill(result.stdout, "A"))
 
