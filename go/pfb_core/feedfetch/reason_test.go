@@ -13,7 +13,7 @@ import (
 // An ingest that fails says why: a status pfb_download() does not accept is named in its words, a 304 included when
 // there is no published copy to keep.
 func TestAFailedIngestAlwaysNamesItsReason(t *testing.T) {
-	for status, want := range map[int]string{404: "404 Not Found", 304: "304 Not Modified", 299: "Unknown Failure Code [299]"} {
+	for status, want := range map[int]string{404: "404 Not Found", 304: "304 Not Modified", 299: "Unknown Failure Code [299]", 250: "Unknown Failure Code [250]"} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
 		f, feed := fetcherFor(t)
 		res := f.Ingest(context.Background(), feed, feedfetch.Request{

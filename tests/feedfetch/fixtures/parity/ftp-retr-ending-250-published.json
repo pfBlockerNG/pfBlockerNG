@@ -111,9 +111,7 @@
       "server": "ftp",
       "data_to": "127.0.0.1"
      }
-    ],
-    "etag": null,
-    "lastmod": null
+    ]
    }
   }
  ]

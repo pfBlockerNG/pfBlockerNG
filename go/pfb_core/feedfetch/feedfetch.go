@@ -122,7 +122,7 @@ func (d Decision) String() string {
 type Result struct {
 	OK       bool
 	Decision Decision // Probe only
-	Status   int      // the final HTTP status, when there was one
+	Status   int      // the final HTTP status, when there was one; 226 for a completed FTP transfer
 	Reason   string
 	Stage    string
 	Detected string

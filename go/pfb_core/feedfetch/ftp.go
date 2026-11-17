@@ -323,7 +323,7 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 		return transfer{}, err
 	}
 	c.PrintfLine("QUIT")
-	// #3995: a 250 closes a complete transfer as cURL sees it, so it is answered as the 226 it stands for.
+	// #3995: cURL takes a closing 250 as a complete transfer; the guard above admits only 226 and 250, so 226 stands for both.
 	return transfer{status: 226, lastMod: lastMod, size: size}, nil
 }
 
