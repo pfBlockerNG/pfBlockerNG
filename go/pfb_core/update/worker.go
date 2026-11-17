@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/pfBlockerNG/pfBlockerNG/go/pfb_core/internal/process"
 )
 
 const (
@@ -649,7 +651,7 @@ func runHold(program string) int {
 	cmd := exec.Command(program)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, log, log
 	cmd.ExtraFiles = []*os.File{result}
-	err := cmd.Run()
+	err := process.RunIndependent(cmd)
 	rep := holdReport{}
 	if cmd.ProcessState != nil {
 		status := cmd.ProcessState.Sys().(syscall.WaitStatus)

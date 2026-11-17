@@ -153,11 +153,62 @@ exit 0`)
 	}
 }
 
+// The Update's apply program may leave attached services running, so the independent policy must not kill them.
+func TestRunIndependentLeavesAnAttachedChildRunningAndKeepsTheExitStatus(t *testing.T) {
+	dir := t.TempDir()
+	alivePath, readyPath, releasePath := filepath.Join(dir, "alive"), filepath.Join(dir, "ready"), filepath.Join(dir, "release")
+	for _, path := range []string{alivePath, readyPath, releasePath} {
+		if err := syscall.Mkfifo(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alive, err := os.OpenFile(alivePath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = alive.Close() })
+	release, err := os.OpenFile(releasePath, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = release.Close() })
+	ready, err := os.OpenFile(readyPath, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ready.Close() })
+	t.Cleanup(func() {
+		_, _ = release.Write([]byte("release\n"))
+		waitFIFOEOF(t, alive)
+	})
+	cmd := exec.Command("/bin/sh", "-c", `( exec 9> "$ALIVE"; echo ready > "$READY"; read -r line < "$RELEASE" ) &
+read -r line < "$READY"
+exit 7`)
+	cmd.Env = append(os.Environ(), "ALIVE="+alivePath, "READY="+readyPath, "RELEASE="+releasePath)
+	err = RunIndependent(cmd)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 {
+		t.Fatalf("RunIndependent error = %v; want *exec.ExitError with code 7", err)
+	}
+	var b [1]byte
+	if n, err := syscall.Read(int(alive.Fd()), b[:]); !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("attached child at RunIndependent return = %d, %v; want EAGAIN (still running): attached child was killed by the independent policy", n, err)
+	}
+	if _, err := release.Write([]byte("release\n")); err != nil {
+		t.Fatal(err)
+	}
+	waitFIFOEOF(t, alive)
+}
+
 func TestRunCancellationAllowsCooperativeTermGrace(t *testing.T) {
 	dir := t.TempDir()
+	// sh defers a trap until its foreground command ends, so the leader idles in wait, which a trapped signal interrupts.
+	if err := syscall.Mkfifo(filepath.Join(dir, "idle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("/bin/sh", "-c", `trap 'echo handled > "$D/handled"; while [ ! -e "$D/release" ]; do sleep 0.01; done; exit 0' TERM
 echo ready > "$D/ready"
-while :; do sleep 60; done`)
+while :; do ( read -r line < "$D/idle" ) & wait $!; done`)
 	cmd.Env = append(os.Environ(), "D="+dir)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Outcome, 1)

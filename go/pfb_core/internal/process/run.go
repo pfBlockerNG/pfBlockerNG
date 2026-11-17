@@ -19,7 +19,7 @@ type Outcome struct {
 // reap waits for the command; tests hold its exit/reap window open.
 var reap = (*exec.Cmd).Wait
 
-// Run owns cmd's process group until its leader and every attached descendant are gone.
+// Run is the strict policy: it owns cmd's process group until its leader and every attached descendant are gone.
 func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) Outcome {
 	if ctx.Err() != nil {
 		return Outcome{CommandErr: context.Cause(ctx)}
@@ -56,6 +56,10 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) Outcome {
 	watchErr := watcher.retire(true)
 	return Outcome{CommandErr: commandErr, Interrupted: interrupted, WatchdogErr: watchErr}
 }
+
+// RunIndependent starts cmd and reaps it without owning its lifetime: nothing here signals the program or its descendants,
+// so the Update's settings apply and the services it starts outlive whoever asked for it (issue #4022).
+func RunIndependent(cmd *exec.Cmd) error { return cmd.Run() }
 
 // strictCleanup observes kernel exit independently of Wait's descendant-held IO pipes.
 func strictCleanup(ctx context.Context, cmd *exec.Cmd, watcher *watchdog, exited <-chan struct{}, grace time.Duration) error {

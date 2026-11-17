@@ -37,15 +37,94 @@ In-tree, exactly that split:
 
 ### Core's Go process lifetimes
 
-`internal/process.Run` is strict and is used only by the feed pre-script. The command remains Core's child in a watchdog-led
-process group. Normal leader exit kills attached descendants before return; cancellation or the 300-second limit sends TERM and
-KILLs a still-running leader after 5 seconds. Attached descendants are killed when the leader exits. A child that calls `setsid()`
-leaves that group. On Linux and FreeBSD, watchdog/Core death also cleans the transient group.
+`internal/process` provides two entry points, and each one encodes a separate lifetime policy. `Run` is the strict policy, and `RunIndependent` is the independent policy.
 
-The Update program instead runs in an independent worker protected by `update.log.lock` and private receipts. Core stop or death
+| Entry point | Caller | Leader still running | After the leader exits | Owner (Core) dies |
+| --- | --- | --- | --- | --- |
+| `Run` (strict) | The feed pre-script (`feedparse.RunPreScript`). No production path calls it yet: the Go Update pipeline will run user scripts and external programs through it. | The command is Core's direct child in a watchdog-led process group. On cancellation or the pre-script's 300-second limit, the group receives TERM. If the leader is still running 5 seconds later, the whole group is KILLed. | The remaining attached group is KILLed before `Run` returns. A child that calls `setsid()` leaves the group and survives. | On Linux and FreeBSD, the watchdog cleans up the group. |
+| `RunIndependent` (independent) | The Update's apply program (the holder in `update/worker.go`). | The runner starts the program, waits for it, and returns its real exit status. It never signals the program or its descendants. | The runner returns the status and signals nothing, so descendants keep running. | Core stop, crash or restart ends observation, not the transaction. |
+
+The Update program runs in an independent worker protected by `update.log.lock` and private receipts. Core stop or death
 ends observation, not the transaction; a restarted Core observes a live worker or reconciles its completion. There is no
 whole-Update cap or process-group kill; each download or script keeps its operation-level bound. Scheduled maintenance is not
 present in this worktree: when #3996 integrates, it must use its own independent lane, not this strict runner or the Update lease.
+
+#### User scripts
+
+- Finish feed transforms and all writes to staged data **synchronously**, before returning.
+- `&` and `nohup` do **not** detach a process from its process group. `setsid()` or a daemonizing `daemon(8)` launch establishes
+  independent session or group ownership.
+- Redirect stdio yourself when detaching (see "Don't let a daemon hold an output pipe").
+- For an intentional long-lived service, use the **post-update hook** and the service's real daemonizing rc interface, not a
+  transform script that backgrounds a process.
+
+PHP's legacy `list_scripts` default-mode `timeout` reaper still captures detached descendants (see the reaper section above);
+use the post-update hook.
+
+#### Services the Update's apply can start
+
+Nothing signals the apply's process group any more (PR #4025, issue #4022), so a service that remains in that group is not killed
+by Core stop, crash or cancellation. This includes native Kea DHCPv4 and DHCPv6 (started by pfSense `mwexec_bg()`, which does not
+leave the group), the firewall reload and the filter-log pipeline. The detach status below still determines what a strict caller
+would kill.
+
+The rows below are installed pfSense 2.8.1-RELEASE source and manual findings, plus the controlled native observations named after
+the table. They are not a blanket runtime qualification of every service.
+
+Core's `pfb_core_update.sh` execs PHP's `core_update` entry, whose
+`pfb_core_update_run()` reaches `sync_package_pfblockerng()` directly or through the
+scheduled pass. Package functions below live in `pfblockerng.inc` or
+`pfblockerng_apply.inc`; native functions refer to the captured installed includes.
+Conditional starts are in scope even when the source-capture guest did not enable them.
+
+| Reachable leaf / entry | Actual wrapper and target mode | Source-level conclusion / remaining qualification |
+| --- | --- | --- |
+| `pfb-core` | Generated `pfb_core.sh`: `daemon -r -R 5 -t pfb_core -P … -p … -o … pfb-core …`, redirected stdio | Install calls `restart_service('pfb_core')`; aborted-removal recovery starts it only if absent. An ordinary Update does not restart its owning Core. Explicit daemon wrapper, not a service-runtime proof. |
+| `pfb-dns` | `pfb_dns_proxy_ensure_running()` / Resolver move → generated `pfb_dns_proxy.sh`: `daemon -r -R 5 -t pfb_dns_proxy -P … -p … -o …` → gateway wrapper/exec; redirected stdio and closed extra descriptors | Explicit daemon wrapper. The Unbound include's background start and `dns_check` are additional routes to the same rc interface, not independent service owners. |
+| DNSBL lighttpd | Generated `pfb_dnsbl.sh`: `lighttpd_pfb -f /var/unbound/pfb_dnsbl_lighty.conf`, redirected stdio | Installed lighttpd 1.4.76 manual says default daemonizes; `-D` disables it and is absent. Package install and DNSBL rebuild create `lighttpd_pfb` with `link('/usr/local/sbin/lighttpd', …)`; the renamed path has not been separately native-hashed. Mode/source identity evidence, not observed binary ownership. |
+| Unbound supervisor | `pfb_stop_start_unbound()` gives the PHP launcher a verified new PGID, then runs `/usr/local/sbin/unbound -c /var/unbound/unbound.conf` | The launcher group is explicit; group cleanup is not itself daemon detachment. Installed config says `do-daemonize: yes`; installed Unbound 1.24.2 manual identifies `-d` as no-fork, absent here. |
+| Unbound direct configuration | Listener-advertisement changes and Resolver moves → `services_unbound_configure(TRUE/FALSE)` → `sync_unbound_service()` → `do_as_unbound_user('start')` → `unbound -c …` | Same native target mode, without the package startup supervisor. `TRUE` also configures DHCP; both enabled-Resolver paths call `system_dhcpleases_configure()`, which returns immediately for Kea and conditionally starts the ISC lease monitor below. |
+| `pfb_filter` readers and PHP consumer | `start_service()` / `restart_service()` → generated `pfb_filter.sh`: `{ tail_pfb … \| php_pfb … filterlog ; } >/dev/null 2>&1 </dev/null &` (legacy `clog_pfb` alternative) | Backgrounded brace group with outer stdio redirected; not detached, so the whole pipeline stays in the caller's process group. Not killed by Core: nothing signals the apply's group. |
+| Firewall reload | `pfb_filter_reload_exec()` runs `/etc/rc.filter_configure_sync > /dev/null 2>&1 < /dev/null &` through PHP `exec()` | Backgrounded with stdio redirected, not detached: it stays in the caller's process group (a controlled target through the actual helper retained the caller's PGID on pfSense 2.8.1). Not killed by Core: nothing signals the apply's group. The reload can finish after the Update. |
+| Native `filterlog` | Reload → `filter_pflog_start()` → `mwexec('filterlog -i pflog0 -p /var/run/filterlog.pid')` when absent | Installed package is 0.1_10. Matching official ports source calls `daemon(0, 0)` unless offline `-P` is supplied; actual argv has no `-P`. |
+| Native `filterdns` | Reload → `filter_configure_sync()` → `filterdns -p … -i <interval> -c /var/etc/filterdns.conf -d 1`, or HUP if already running | Installed 2.2 matches official ports source: `-d` sets verbosity; `-f` sets foreground. With no `-f`, `main()` calls `daemon(0, 0)`. Source evidence, not a native runtime claim. |
+| Native `xinetd` and on-demand children | Reload → NAT generation → `xinetd -syslog daemon -f /var/etc/xinetd.conf -pidfile /var/run/xinetd.pid`, or HUP | Installed 2.3.15_3 manual says `-dontfork` stays attached; it is absent. Generated services can later launch `nc` reflection helpers and `tftp-proxy`; these are xinetd descendants, not directly Update-launched daemons. |
+| After-filter user command / plugin tree | Reload writes `/tmp/commands.txt`, runs `mwexec('sh /tmp/commands.txt &')`, and invokes `/usr/local/pkg/pf/` plugins | Arbitrary configured commands cannot be enumerated as fixed leaves. `&` does not detach them from their caller group; they stay in the reload's process group. No promise that every user command self-daemonizes. |
+| ISC DHCPv4 / DHCPv6 | Listener changes → `services_dhcpd_configure()` → native `dhcpd [-6] -user dhcpd -group _dhcp -chroot … -cf /etc/dhcp[d/v6].conf -pf … <interfaces>` through `mwexec()` | Installed ISC 4.4.3P1_5 manual identifies `-f` / `-d` as foreground; neither is supplied. Native rc.d scripts are not the actual launch route here. |
+| `radvd` | Same DHCP configure path → `services_radvd_configure()` → `radvd -p … -C /var/etc/radvd.conf -m syslog`, or HUP | Installed 2.20 manual says `-n` prevents daemonization; absent here. Native rc.d script is not this launch route. |
+| `dhcpleases6` and prefix callback | ISC DHCPv6 configure → `dhcpleases6 -c "/usr/local/bin/php-cgi -f /usr/local/sbin/prefixes.php" -l …/dhcpd6.leases` through `mwexec()` | Installed 0.1_3 has no captured manual. Matching official ports source calls `closefrom(3); daemon(0, 0)` before initial and later `system(command)` callbacks. Installed `prefixes.php` adds/deletes routes through `/sbin/route` helpers and reads DHCP logs through a cat/decompression command; it starts no additional service daemon. |
+| Kea DHCPv4 / DHCPv6 | Same DHCP configure dispatcher → `mwexec_bg('kea-dhcp4 -c /usr/local/etc/kea/kea-dhcp4.conf')` / corresponding `kea-dhcp6` | Stays in the caller's process group: installed 2.6.2 binaries launched with private, port-free configurations retained the caller's PGID (native observation). The native launch is only `nohup … &`. Not a violation since #4025: nothing signals that group, and its native matrix shows both servers surviving Core TERM and SIGKILL. |
+| Kea hook helpers | Asynchronous `libdhcp_run_script` hooks invoke installed `kea_run4/6`, which run executable scripts from the first matching `/conf` or `/cf/conf` family script directory through `/bin/sh` | Generated `kea2unbound … sync` queries Kea and uses transient `unbound-control` commands (`get_option pidfile`, `list_local_data`, `reload`, `local_datas`, `local_datas_remove`); it does not start Unbound. `kea2fib6 … sync` queries Kea and uses route add/delete helpers. These supplied scripts do not detach or start another daemon; arbitrary custom scripts remain an open-ended command tree. |
+| `cron` | Reload's `filter_tdr_install_cron()` (when schedule entry changes) → `configure_cron()` → `cron -s` if absent, otherwise HUP | Era-matched FreeBSD 15-CURRENT source calls `daemon(1, 0)` unless `-n` or debug flags suppress it; `-s` only enables DST handling. Those suppressing flags are absent from installed source argv. Upstream source qualification, not installed-binary provenance or runtime proof. |
+| `dhcpleases` | Enabled Unbound configuration → `system_dhcpleases_configure()` → `dhcpleases -l …/dhcpd.leases -d <domain> -p /var/run/unbound.pid -u /var/unbound/dhcpleases_entries.conf -h /etc/hosts` | Installed definition returns for Kea, and starts only for enabled DHCP plus Resolver/Forwarder lease registration. Matching official 0.5_1 source: `-d` is the domain, `-f` selects foreground (absent), default calls `daemon(0, 0)`. Without `-c`, it updates files and HUPs the existing DNS PID; it does not launch a DNS daemon. |
+| `syslogd`, `sshguard` | Update's missing syslog-drop-in gate → `system_syslogd_start(TRUE)`; a missing syslog PID converts HUP into `mwexec_bg('syslogd …')`. Local logging enabled → `daemon -R 60 -P /var/run/daemon_sshguard.pid -t sshguard /usr/local/sbin/sshguard -i /var/run/sshguard.pid` | Both are reachable independently of DHCP configuration. Full installed `syslog.inc` proves the fallback and explicit sshguard wrapper. Era-matched FreeBSD 15-CURRENT syslogd source uses `waitdaemon(30)` → `fork()` → child `setsid()` unless `-F` or `-d` is supplied; neither is in installed source argv. Upstream mode evidence, not installed-binary provenance or runtime proof; nohup itself is not detachment. |
+
+Audit evidence: native run `local-100037-1794709124-6edd2459a6710f59` (full installed includes,
+generated rc scripts, target hashes and available manuals). Matching primary source:
+[dhcpleases6 0.1_3](https://github.com/pfsense/FreeBSD-ports/tree/084b4ad9f65198720720f84d04eeed7c441ed49c/sysutils/dhcpleases6)
+and [filterlog 0.1_10](https://github.com/pfsense/FreeBSD-ports/tree/2169affb228d3b5cb8f2ab9a7cdce298d1dbdf65/sysutils/filterlog),
+[filterdns 2.2](https://github.com/pfsense/FreeBSD-ports/tree/0184d70244ece30e0c1c5224f3b881adc7183fe1/net/filterdns).
+These version matches do not prove byte-identical builds. Public pfSense master
+**2.9-dev** is not a substitute for installed **2.8.1** source.
+
+Additional installed source and controlled-probe evidence: run `local-100031-1794710724-b1d6e97c3d8727f9`.
+The controlled Kea observations
+use the real installed binaries with private PID/control/log paths and no DHCP interfaces;
+they establish that Kea stays in its caller's process group, not a test of the live DHCP service configuration.
+[Matching dhcpleases 0.5_1 source](https://github.com/pfsense/FreeBSD-ports/tree/084b4ad9f65198720720f84d04eeed7c441ed49c/sysutils/dhcpleases)
+supplies the lease monitor's missing installed manual evidence.
+
+For base-system targets, [cron source](https://github.com/freebsd/freebsd-src/blob/fe590ffe40f49fe09d8275fbf29f0d46c5b99dc7/usr.sbin/cron/cron/cron.c)
+and [syslogd source](https://github.com/freebsd/freebsd-src/blob/47785e6a39cdcbf4eb7d02c381a53916774ed991/usr.sbin/syslogd/syslogd.c)
+are upstream `main` revisions predating the captured image's 2025-08-28 kernel build,
+when it identified as FreeBSD 15-CURRENT. The image's private
+pfSense build revision is not available in the public fork; these citations establish
+version-appropriate upstream mechanisms, not exact installed build provenance.
+
+Transient helpers are not service daemons: feed transform stages (`curl`, `jq`,
+`iprange`), `unbound-control` under `chroot`, readiness probes (`sockstat`, `pgrep`),
+lock/wait helpers (`lockf`, `sleep`), and bounded nested PHP/shell passes should finish
+with their owning operation. Settings-adapter (`settings/adapter.go`) and rsync (`feedfetch/rsync_unix.go`) launchers keep their own process-group kill; they are outside #4020.
 
 ### Mixed survivor + transient tree: supervise a process group
 
