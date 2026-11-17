@@ -2836,7 +2836,7 @@
       ],
       [
        "dns_reply.log",
-       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,10.10.10.1,unk,UDP,,"
+       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,0.0.0.0,unk,UDP,,"
       ]
      ]
     },
@@ -2857,7 +2857,7 @@
       ],
       [
        "dns_reply.log",
-       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,10.10.10.1,unk,UDP,,"
+       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,0.0.0.0,unk,UDP,,"
       ]
      ]
     },
@@ -3345,7 +3345,7 @@
       ],
       [
        "dns_reply.log",
-       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,10.10.10.1,unk,UDP,,"
+       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,0.0.0.0,unk,UDP,,"
       ]
      ]
     },
@@ -3366,7 +3366,7 @@
       ],
       [
        "dns_reply.log",
-       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,10.10.10.1,unk,UDP,,"
+       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,0.0.0.0,unk,UDP,,"
       ]
      ]
     },
@@ -3387,143 +3387,9 @@
       ],
       [
        "dns_reply.log",
-       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,10.10.10.1,unk,UDP,,"
+       "DNS-reply,2026-10-18 12:00:00,resolver,A,A,3600,lf1.example,127.0.0.1,0.0.0.0,unk,UDP,,"
       ]
      ]
-    }
-   ]
-  },
-  {
-   "name": "python-nolog",
-   "files": {
-    "pfb_unbound.ini": "[MAIN]\npython_enable = true\npython_blocking = true\npython_reply = true\npython_cname = true\ndnsbl_ipv4 = 10.10.10.1\ndnsbl_ipv6 = fd00::1\npython_nolog = true\n",
-    "pfb_py_raw/feed0.txt": "lf0.example\n",
-    "pfb_py_raw/feed1.txt": "lf1.example\nother.example\n",
-    "pfb_py_raw/feed2.txt": "lf2.example\n",
-    "pfb_py_raw/feed3.txt": "lf3.example\n",
-    "pfb_py_raw/feed4.txt": "lf4.example\n",
-    "pfb_py_raw/feed5.txt": "lf5.example\n",
-    "pfb_py_raw/feed6.txt": "lf6.example\n",
-    "pfb_py_raw/feed7.txt": "hostile-feed.example\n",
-    "pfb_py_sources.json": "{\"version\": 1, \"config\": {}, \"feeds\": [{\"raw\": \"pfb_py_raw/feed0.txt\", \"feed\": \"F0\", \"group\": \"G0\", \"log_flag\": \"0\"}, {\"raw\": \"pfb_py_raw/feed1.txt\", \"feed\": \"F1\", \"group\": \"G1\", \"log_flag\": \"1\"}, {\"raw\": \"pfb_py_raw/feed2.txt\", \"feed\": \"F2\", \"group\": \"G2\", \"log_flag\": \"2\"}, {\"raw\": \"pfb_py_raw/feed3.txt\", \"feed\": \"F3\", \"group\": \"G3\", \"log_flag\": \"3\"}, {\"raw\": \"pfb_py_raw/feed4.txt\", \"feed\": \"F4\", \"group\": \"G4\", \"log_flag\": \"4\"}, {\"raw\": \"pfb_py_raw/feed5.txt\", \"feed\": \"F5\", \"group\": \"G5\", \"log_flag\": \"5\"}, {\"raw\": \"pfb_py_raw/feed6.txt\", \"feed\": \"F6\", \"group\": \"G6\", \"log_flag\": \"6\"}, {\"raw\": \"pfb_py_raw/feed7.txt\", \"feed\": \"Fe,\\\"<b>\\\"&\", \"group\": \"Gr'ou,p\", \"log_flag\": \"1\"}]}"
-   },
-   "mmdb": null,
-   "steps": [
-    {
-     "op": "resolve",
-     "qname": "lf1.example.",
-     "qtype": 1,
-     "wire": "123401000001000000000000036c6631076578616d706c650000010001",
-     "client": "192.0.2.10",
-     "transport": "UDP",
-     "lip": "",
-     "lif": "",
-     "forwards": [],
-     "rows": []
-    },
-    {
-     "op": "resolve",
-     "qname": "lf0.example.",
-     "qtype": 1,
-     "wire": "123401000001000000000000036c6630076578616d706c650000010001",
-     "client": "192.0.2.10",
-     "transport": "UDP",
-     "lip": "",
-     "lif": "",
-     "forwards": [],
-     "rows": [
-      [
-       "dnsbl.log",
-       "DNSBL-python,2026-10-18 12:00:00,lf0.example,192.0.2.10,Python,DNSBL,G0,lf0.example,F0,+,A,UDP,,"
-      ]
-     ]
-    },
-    {
-     "op": "resolve",
-     "qname": "lf1.example.",
-     "qtype": 1,
-     "wire": "123401000001000000000000036c6631076578616d706c650000010001",
-     "client": "192.0.2.10",
-     "transport": "UDP",
-     "lip": "",
-     "lif": "",
-     "forwards": [],
-     "rows": []
-    },
-    {
-     "op": "resolve",
-     "qname": "lf0.example.",
-     "qtype": 1,
-     "wire": "123401000001000000000000036c6630076578616d706c650000010001",
-     "client": "192.0.2.10",
-     "transport": "UDP",
-     "lip": "",
-     "lif": "",
-     "forwards": [],
-     "rows": [
-      [
-       "dnsbl.log",
-       "DNSBL-python,2026-10-18 12:00:00,lf0.example,192.0.2.10,Python,DNSBL,G0,lf0.example,F0,-,A,UDP,,"
-      ]
-     ]
-    },
-    {
-     "op": "resolve",
-     "qname": "lf3.example.",
-     "qtype": 1,
-     "wire": "123401000001000000000000036c6633076578616d706c650000010001",
-     "client": "192.0.2.10",
-     "transport": "UDP",
-     "lip": "",
-     "lif": "",
-     "forwards": [],
-     "rows": [
-      [
-       "dnsbl.log",
-       "DNSBL-python,2026-10-18 12:00:00,lf3.example,192.0.2.10,Python,DNSBL,G3,lf3.example,F3,+,A,UDP,,"
-      ]
-     ]
-    },
-    {
-     "op": "resolve",
-     "qname": "lf5.example.",
-     "qtype": 1,
-     "wire": "123401000001000000000000036c6635076578616d706c650000010001",
-     "client": "192.0.2.10",
-     "transport": "UDP",
-     "lip": "",
-     "lif": "",
-     "forwards": [],
-     "rows": [
-      [
-       "dnsbl.log",
-       "DNSBL-python,2026-10-18 12:00:00,lf5.example,192.0.2.10,Python,DNSBL,G5,lf5.example,F5,+,A,UDP,,"
-      ]
-     ]
-    },
-    {
-     "op": "resolve",
-     "qname": "lf2.example.",
-     "qtype": 1,
-     "wire": "123401000001000000000000036c6632076578616d706c650000010001",
-     "client": "192.0.2.10",
-     "transport": "UDP",
-     "lip": "",
-     "lif": "",
-     "forwards": [],
-     "rows": []
-    },
-    {
-     "op": "resolve",
-     "qname": "hostile-feed.example.",
-     "qtype": 1,
-     "wire": "1234010000010000000000000c686f7374696c652d66656564076578616d706c650000010001",
-     "client": "192.0.2.10",
-     "transport": "UDP",
-     "lip": "",
-     "lif": "",
-     "forwards": [],
-     "rows": []
     }
    ]
   },

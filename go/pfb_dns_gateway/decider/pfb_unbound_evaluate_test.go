@@ -134,12 +134,12 @@ func TestEvaluateDomainDecisionArms(t *testing.T) {
 	q := "exact-hit.uuid1001.com"
 	evCheck(t, "A1 dataDB exact hit blocks and attributes", evEval(q, "com", false, evCfgAll(),
 		matcherContainers{dataDB: map[string]*blockEntry{q: evBlk("1", 0, PRIO_FEED_BLOCK)}, feedGroupIndexDB: evFG}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "DNSBL", pType: "Python", feed: "TestFeed", group: "TestGroup", bEval: q, groupOwner: "TestGroup", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "TestFeed", group: "TestGroup", bEval: q, groupOwner: "TestGroup", groupOrigin: "custom"})
 
 	parent, child := "zone-parent.uuid1002.net", "deep.sub.zone-parent.uuid1002.net"
 	evCheck(t, "A2 zoneDB suffix hit blocks the subdomain, attributed to the parent", evEval(child, "net", false, evCfgAll(),
 		matcherContainers{zoneDB: map[string]*blockEntry{parent: evBlk("1", 0, PRIO_FEED_BLOCK)}, feedGroupIndexDB: evFG}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "TLD", pType: "Python", feed: "TestFeed", group: "TestGroup", bEval: parent, groupOwner: "TestGroup", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "TLD", pType: "Python", feed: "TestFeed", group: "TestGroup", bEval: parent, groupOwner: "TestGroup", groupOrigin: "custom"})
 
 	q = "regex-hit-42.uuid1003.org"
 	evCheck(t, "A3 feed block-regex hit blocks and attributes", evEval(q, "org", false, evCfgAll(),
@@ -186,8 +186,8 @@ func TestEvaluateDomainAllowBlockPrecedence(t *testing.T) {
 	q = "important-wins.uuid1008.org"
 	got = evEval(q, "org", false, cfg, matcherContainers{
 		dataDB: map[string]*blockEntry{q: evBlk("1", 0, PRIO_FEED_BLOCK_IMPORTANT)}, whiteDB: map[string]whiteEntry{q: evWhite(false, false, PRIO_FEED_ALLOW)}, feedGroupIndexDB: evFG})
-	if !got.isFound || got.inWhitelist || got.nullBlocking {
-		t.Errorf("A8 important block band 3 beats allow band 2: got isFound=%v inWhitelist=%v nullBlocking=%v, want true false false", got.isFound, got.inWhitelist, got.nullBlocking)
+	if !got.isFound || got.inWhitelist || !got.nullBlocking {
+		t.Errorf("A8 important block band 3 beats allow band 2: got isFound=%v inWhitelist=%v nullBlocking=%v, want true false true", got.isFound, got.inWhitelist, got.nullBlocking)
 	}
 }
 
@@ -274,8 +274,8 @@ func TestEvaluateDomainTldAllow(t *testing.T) {
 
 	cfg := tldCfg(true, "com", "net")
 	cfg.builtinLogFlag = "1"
-	evCheck(t, "A3 the frozen shape of a TLD-Allow block (VIP flag)", evEval("uuid-a3f0.org", "org", false, cfg, matcherContainers{}),
-		blocked("uuid-a3f0.org", func(d *dd) { d.logType, d.nullBlocking = "1", false }))
+	evCheck(t, "A3 the frozen shape of a TLD-Allow block (flag 1 answers null since issue #4053)", evEval("uuid-a3f0.org", "org", false, cfg, matcherContainers{}),
+		blocked("uuid-a3f0.org", func(d *dd) { d.logType = "1" }))
 	evCheck(t, "A3 the default builtin log flag is Null Blocking", evEval("uuid-a3f0.org", "org", false, tldCfg(true, "com", "net"), matcherContainers{}),
 		blocked("uuid-a3f0.org", nil))
 
@@ -294,15 +294,6 @@ func TestEvaluateDomainTldAllow(t *testing.T) {
 		t.Errorf("A7 a TLD-Allow block on a CNAME chain: got isFound=%v bType=%q, want true Python_CNAME", got.isFound, got.bType)
 	}
 
-	// A8: the VIP address is exempt; the control query on the same cfg blocks.
-	for _, vip := range []struct{ control, vip string }{{"uuid-vip.1", "10.10.10.1"}, {"uuid-vip6.1", "::1"}} {
-		if got := evEval(vip.control, "1", false, cfg, matcherContainers{}); !got.isFound || got.feed != "TLD_Allow" {
-			t.Errorf("A8 control %q: got %+v, want a TLD_Allow block", vip.control, *got)
-		}
-		if got := evEval(vip.vip, "1", false, cfg, matcherContainers{}); got.isFound {
-			t.Errorf("A8 the VIP query %q is exempt: isFound = true", vip.vip)
-		}
-	}
 	if got := evEval("uuid-a9f0.org", "", false, cfg, matcherContainers{}); got.isFound {
 		t.Errorf("A9 an empty tld is a no-op: isFound = true")
 	}
@@ -334,7 +325,7 @@ func TestEvaluateDomainTldAllow(t *testing.T) {
 	}{
 		{"3", func(d *dd) { d.logType, d.nxdomain = "3", true }},
 		{"5", func(d *dd) { d.logType = "5" }},
-		{"1", func(d *dd) { d.logType, d.nullBlocking = "1", false }},
+		{"1", func(d *dd) { d.logType = "1" }},
 	} {
 		cfg := tldCfg(true, "com")
 		cfg.builtinLogFlag = row.flag
@@ -384,8 +375,8 @@ func TestEvaluateDomainFastPath(t *testing.T) {
 	cfg := evCfg()
 	cfg.dataDB = true
 	got := evEval("evil.com", "com", false, cfg, matcherContainers{dataDB: map[string]*blockEntry{"evil.com": evBlk("1", 0, PRIO_FEED_BLOCK)}})
-	if !got.isFound || got.inWhitelist || got.nullBlocking {
-		t.Errorf("block no allow: got isFound=%v inWhitelist=%v nullBlocking=%v, want true false false", got.isFound, got.inWhitelist, got.nullBlocking)
+	if !got.isFound || got.inWhitelist || !got.nullBlocking {
+		t.Errorf("block no allow: got isFound=%v inWhitelist=%v nullBlocking=%v, want true false true", got.isFound, got.inWhitelist, got.nullBlocking)
 	}
 
 	cfg.whiteDB = true
@@ -405,8 +396,8 @@ func TestEvaluateDomainFastPath(t *testing.T) {
 	cfg.dataDB, cfg.allowRegexDB = true, true
 	got = evEval("evil.com", "com", false, cfg, matcherContainers{
 		dataDB: map[string]*blockEntry{"evil.com": evBlk("1", 0, PRIO_FEED_BLOCK)}, allowRegexDB: evRegexDB(evRx("r", "evil", PRIO_FEED_ALLOW))})
-	if got.inWhitelist || got.nullBlocking {
-		t.Errorf("fast path does not consult allow-regex: got inWhitelist=%v nullBlocking=%v, want false false", got.inWhitelist, got.nullBlocking)
+	if got.inWhitelist || !got.nullBlocking {
+		t.Errorf("fast path does not consult allow-regex: got inWhitelist=%v nullBlocking=%v, want false true", got.inWhitelist, got.nullBlocking)
 	}
 }
 
@@ -511,7 +502,7 @@ func TestEvaluateDomainWinningEntryAttribution(t *testing.T) {
 		dataDB:           map[string]*blockEntry{"evil.com": evBlk("2", 7, PRIO_FEED_BLOCK)},
 		regexDB:          evRegexDB(evRx("Regex_1", "evil", PRIO_USER_BLOCK)),
 		feedGroupIndexDB: map[int]feedGroup{7: {"FeedA", "GroupA"}}}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "Python", pType: "Python", feed: "Regex_1", group: "DNSBL_Regex", bEval: "evil.com"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "Python", pType: "Python", feed: "Regex_1", group: "DNSBL_Regex", bEval: "evil.com"})
 
 	cfg = evCfg()
 	cfg.dataDB, cfg.zoneDB, cfg.importantRules = true, true, true
@@ -519,7 +510,7 @@ func TestEvaluateDomainWinningEntryAttribution(t *testing.T) {
 		dataDB:           map[string]*blockEntry{"sub.evil.com": evBlk("2", 1, PRIO_FEED_BLOCK)},
 		zoneDB:           map[string]*blockEntry{"evil.com": evBlk("1", 2, PRIO_FEED_BLOCK_IMPORTANT)},
 		feedGroupIndexDB: map[int]feedGroup{1: {"DataFeed", "DataGroup"}, 2: {"ZoneFeed", "ZoneGroup"}}}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "TLD", pType: "Python", feed: "ZoneFeed", group: "ZoneGroup", bEval: "evil.com", groupOwner: "ZoneGroup", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "TLD", pType: "Python", feed: "ZoneFeed", group: "ZoneGroup", bEval: "evil.com", groupOwner: "ZoneGroup", groupOrigin: "custom"})
 
 	cfg = evCfg()
 	cfg.dataDB, cfg.regexDB, cfg.importantRules = true, true, true
@@ -527,7 +518,7 @@ func TestEvaluateDomainWinningEntryAttribution(t *testing.T) {
 		dataDB:           map[string]*blockEntry{"evil.com": evBlk("1", 3, PRIO_USER_BLOCK)},
 		regexDB:          evRegexDB(evRx("Regex_1", "evil", PRIO_USER_BLOCK)),
 		feedGroupIndexDB: map[int]feedGroup{3: {"UserFeed", "Custom_List"}}}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "DNSBL", pType: "Python", feed: "UserFeed", group: "Custom_List", bEval: "evil.com", groupOwner: "Custom_List", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "UserFeed", group: "Custom_List", bEval: "evil.com", groupOwner: "Custom_List", groupOrigin: "custom"})
 
 	cfg.whiteDB = true
 	got := evEval("evil.com", "com", false, cfg, matcherContainers{
@@ -545,7 +536,7 @@ func TestEvaluateDomainWidenedPayload(t *testing.T) {
 	cfg := evCfg()
 	cfg.dataDB = true
 	got := evEval("evil.com", "com", false, cfg, matcherContainers{dataDB: map[string]*blockEntry{"evil.com": {log: "1", index: 0, band: PRIO_FEED_BLOCK}}})
-	if !got.isFound || got.nullBlocking {
+	if !got.isFound || !got.nullBlocking {
 		t.Errorf("a payload without the important key still blocks: got isFound=%v nullBlocking=%v", got.isFound, got.nullBlocking)
 	}
 	for _, important := range []bool{false, true} {
@@ -692,13 +683,13 @@ func TestEvaluateDomainOracleRows(t *testing.T) {
 	zone.groupOwner, zone.hasGroupOwner, zone.groupOrigin, zone.hasGroupOrigin = "Owner", true, "builtin", true
 	evCheck(t, "R2 a zone entry's group_owner/origin win over the defaults", evEval("a.evil.com", "com", false,
 		cfgOf(func(c *evaluateConfig) { c.zoneDB = true }), matcherContainers{zoneDB: map[string]*blockEntry{"evil.com": zone}, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "TLD", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "Owner", groupOrigin: "builtin"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "TLD", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "Owner", groupOrigin: "builtin"})
 	evCheck(t, "R2b data entry: group_owner is the group, origin custom", evEval("evil.com", "com", false, cfgOf(data),
 		matcherContainers{dataDB: dataEvil, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
 	evCheck(t, "R2c an unknown feed index is Unknown / Unknown", evEval("evil.com", "com", false, cfgOf(data),
 		matcherContainers{dataDB: map[string]*blockEntry{"evil.com": evBlk("1", 99, PRIO_FEED_BLOCK)}, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "DNSBL", pType: "Python", feed: "Unknown", group: "Unknown", bEval: "evil.com", groupOwner: "Unknown", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "Unknown", group: "Unknown", bEval: "evil.com", groupOwner: "Unknown", groupOrigin: "custom"})
 
 	zoneHi := evBlk("1", 2, PRIO_FEED_BLOCK_IMPORTANT)
 	zoneHi.groupOwner, zoneHi.hasGroupOwner, zoneHi.groupOrigin, zoneHi.hasGroupOrigin = "ZO", true, "builtin", true
@@ -708,17 +699,17 @@ func TestEvaluateDomainOracleRows(t *testing.T) {
 		}),
 		matcherContainers{dataDB: map[string]*blockEntry{"evil.com": evBlk("2", 1, PRIO_FEED_BLOCK)},
 			regexDB: evRegexDB(evRule{name: "R#0", pattern: "evil", band: 5, owner: "GO", origin: "GOr"}), feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "Python", pType: "Python", feed: "R#0", group: "DNSBL_Regex", bEval: "evil.com", groupOwner: "GO", groupOrigin: "GOr"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "Python", pType: "Python", feed: "R#0", group: "DNSBL_Regex", bEval: "evil.com", groupOwner: "GO", groupOrigin: "GOr"})
 	evCheck(t, "R3b the band re-scan re-attributes to a zone with its group fields", evEval("sub.evil.com", "com", false,
 		cfgOf(func(c *evaluateConfig) { c.dataDB, c.zoneDB, c.importantRules = true, true, true }),
 		matcherContainers{dataDB: map[string]*blockEntry{"sub.evil.com": evBlk("2", 1, PRIO_FEED_BLOCK)}, zoneDB: map[string]*blockEntry{"evil.com": zoneHi}, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "TLD", pType: "Python", feed: "ZoneFeed", group: "ZoneGroup", bEval: "evil.com", groupOwner: "ZO", groupOrigin: "builtin"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "TLD", pType: "Python", feed: "ZoneFeed", group: "ZoneGroup", bEval: "evil.com", groupOwner: "ZO", groupOrigin: "builtin"})
 
 	// R4: a CNAME target is also judged by the name the client asked for.
 	numeric := cfgOf(func(c *evaluateConfig) { c.dataDB, c.whiteDB, c.importantRules = true, true, true })
 	target := map[string]*blockEntry{"target.net": evBlk("1", 1, PRIO_FEED_BLOCK)}
 	white := map[string]whiteEntry{"orig.com": evWhite(false, false, 2)}
-	blockedTarget := dd{isFound: true, nullBlocking: false, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "target.net", groupOwner: "GroupA", groupOrigin: "custom"}
+	blockedTarget := dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "target.net", groupOwner: "GroupA", groupOrigin: "custom"}
 	allowedTarget := blockedTarget
 	allowedTarget.inWhitelist, allowedTarget.nullBlocking = true, true
 	evCheck(t, "R4a numeric path, cname: the original name's allow wins", evaluateDomain("target.net", "orig.com", "net", true, numeric,
@@ -740,7 +731,7 @@ func TestEvaluateDomainOracleRows(t *testing.T) {
 		matcherContainers{dataDB: dataEvil, hstsDB: hstsEvil, whiteDB: map[string]whiteEntry{"evil.com": evLegacyWhite(true)}, feedGroupIndexDB: fg}),
 		dd{isFound: true, inWhitelist: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
 	evCheck(t, "R6e python_hsts off", evEval("evil.com", "com", false, cfgOf(data), matcherContainers{dataDB: dataEvil, hstsDB: hstsEvil, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
 
 	for _, row := range []struct {
 		log  string
@@ -776,17 +767,15 @@ func TestEvaluateDomainOracleRows(t *testing.T) {
 	// R10, R11: the first-hit order (data, zone, TLD-Allow, IDN, user regex, feed regex).
 	evCheck(t, "R10 data before zone", evEval("evil.com", "com", false, cfgOf(func(c *evaluateConfig) { c.dataDB, c.zoneDB = true, true }),
 		matcherContainers{dataDB: dataEvil, zoneDB: map[string]*blockEntry{"evil.com": evBlk("1", 2, PRIO_FEED_BLOCK)}, feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
 	evCheck(t, "R11 data before regex", evEval("evil.com", "com", false, cfgOf(func(c *evaluateConfig) { c.dataDB, c.regexDB = true, true }),
 		matcherContainers{dataDB: dataEvil, regexDB: evRegexDB(evRx("R", "evil", 1)), feedGroupIndexDB: fg}),
-		dd{isFound: true, nullBlocking: false, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
+		dd{isFound: true, nullBlocking: true, logType: "1", bType: "DNSBL", pType: "Python", feed: "FeedA", group: "GroupA", bEval: "evil.com", groupOwner: "GroupA", groupOrigin: "custom"})
 	regexCfg := cfgOf(func(c *evaluateConfig) { c.regexDB = true })
 	evCheck(t, "R11b an empty query name skips the regex arm", evEval("", "", false, regexCfg, matcherContainers{regexDB: evRegexDB(evRx("R", "", 1))}), evNone)
 	evCheck(t, "R11c a regex without the case-insensitive flag is case-sensitive", evEval("EVIL.com", "com", false, regexCfg, matcherContainers{regexDB: evRegexDB(evRx("R", "evil", 1))}), evNone)
 	evCheck(t, "R11d the case-insensitive flag matches the query as given", evEval("EVIL.com", "com", false, regexCfg, matcherContainers{regexDB: evRegexDB(evRx("R", "(?i)evil", 1))}),
 		dd{isFound: true, nullBlocking: true, logType: "0", bType: "Python", pType: "Python", feed: "R", group: "DNSBL_Regex", bEval: "EVIL.com"})
-	// R12: the VIP query is exempt from TLD-Allow.
-	evCheck(t, "R12 the VIP query is exempt", evEval("10.10.10.1", "1", false, cfgOf(func(c *evaluateConfig) { c.tldAllow, c.tldAllowList = true, []string{"com"} }), matcherContainers{}), evNone)
 }
 
 // test_adr07_user_regex_containers.py TestUserRegexIsEvaluatedFirst (the evaluate_domain rows).

@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	ssVIP4       = []byte{10, 10, 10, 1}
+	ssNull4      = []byte{0, 0, 0, 0} // issue #4053: every DNSBL block answers null
 	ssTargetA    = []byte{192, 0, 2, 88}
 	ssTargetAAAA = netip.MustParseAddr("2001:db8::88").AsSlice()
 	// EDNS Client Subnet: 192.0.2.0/24
@@ -403,7 +403,7 @@ func TestOtherQueryTypesForASafeSearchNameAreRelayedUntouched(t *testing.T) {
 // The module's CNAME validation runs on the chased message, as it does behind the real iterator.
 func TestATargetTheDnsblBlocksGetsTheBlockAnswerForTheSafeSearchName(t *testing.T) {
 	reply := ssResolve(t, ssBoot(t), ssQuery(t, "trap.example.", dnswire.TYPE_A, ssQ{}), ssForward(t, paritycorpus.NewFakeUnbound(ssZone()), nil), "Unknown")
-	ssWantAnswers(t, "trap", reply, ssRR{"trap.example.", dnswire.TYPE_A, string(ssVIP4)})
+	ssWantAnswers(t, "trap", reply, ssRR{"trap.example.", dnswire.TYPE_A, string(ssNull4)})
 }
 
 // Only the target's answer records reach the module: not its flags, authority or additional section.
