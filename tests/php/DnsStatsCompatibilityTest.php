@@ -37,7 +37,7 @@ final class DnsStatsCompatibilityTest extends TestCase
 			$rows[] = ['DNSBL', '2030-01-15 09:00:00', 'localhost', '192.0.2.1', 'Python', 'DNSBL', 'group', 'not.eval', $value];
 		}
 		[$result] = DnsStatsAggregationTest::aggregate('dnsbl_stat', DnsStatsAggregationTest::csv($rows));
-		$this->assertSame([0 => 1, pfb_dnsbl_mechanism_labels()['enabled'] => 1], $result['dnsbl_stat']['dnsblfeed']);
+		$this->assertSame([0 => 1, 'Unknown' => 1], $result['dnsbl_stat']['dnsblfeed']);	// issue #4053: no block page, so no VIP label
 		$this->assertSame(['Python' => 4], $result['dnsbl_stat']['dnsblagent']);
 		$this->assertSame([], $result['dnsbl_stat']['dnsblevald']);
 		$this->assertSame([], $result['dnsbl_stat']['dnsbltld']);

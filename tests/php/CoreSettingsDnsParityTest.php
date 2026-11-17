@@ -31,7 +31,6 @@ final class CoreSettingsDnsParityTest extends TestCase
 		'idnBlockMalicious'     => 'python_idn_block_malicious',
 		'idnEscalateSuspicious' => 'python_idn_escalate_suspicious',
 		'decisionCacheMax'      => 'decisiondb_max',
-		'logViaWebserver'       => 'python_nolog',
 		'cnameValidation'       => 'python_cname',
 		'control'               => 'python_control',
 		'controlLegacy'         => 'python_control_legacy',

@@ -198,9 +198,9 @@ final class DnsblBlockingModesTest extends TestCase
 
 		$this->assertFalse($policy['legacy'], 'a present policy key must not reactivate legacy projection');
 		$this->assertSame(PfbDnsblGlobalMode::Default, $policy['mode']);
-		$this->assertSame('enabled', pfb_dnsbl_effective_logging(
-			'enabled', $policy['mechanism'], $policy['mode'], $policy['legacy']
-		), 'invalid current policy must not force an explicit VIP group onto the global null mechanism');
+		$this->assertSame('nxdomain', pfb_dnsbl_effective_logging(
+			'nxdomain', $policy['mechanism'], $policy['mode'], $policy['legacy']
+		), 'invalid current policy must not force an explicit group onto the global null mechanism');
 	}
 
 	public function testLegacyZeroStringDoesNotActivateAnOverride(): void

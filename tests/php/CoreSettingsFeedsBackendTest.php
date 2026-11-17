@@ -424,8 +424,8 @@ final class CoreSettingsFeedsBackendTest extends TestCase
 		usort($settings['schedule']['groups'], static fn(array $a, array $b): int => array_search(explode('/', $a['id'])[0], ['ipv4', 'ipv6', 'dnsbl'], TRUE)
 			<=> array_search(explode('/', $b['id'])[0], ['ipv4', 'ipv6', 'dnsbl'], TRUE));
 		if ($projection === 'feeds/dnsbl') {
-			// policy/dnsbl lists the groups of feeds/dnsbl with the logging the Outpost derives (a stored section with no mode: the VIP response)
-			$settings['policy/dnsbl']['groups'][] = ['name' => $group['name'], 'logging' => 'enabled', 'primary' => FALSE, 'top1mFilter' => FALSE];
+			// policy/dnsbl lists the groups of feeds/dnsbl with the logging the Outpost derives (issue #4053: a stored VIP marker reads as Null Blocking (logging))
+			$settings['policy/dnsbl']['groups'][] = ['name' => $group['name'], 'logging' => 'disabled_log', 'primary' => FALSE, 'top1mFilter' => FALSE];
 		}
 		$this->assertSame($settings, $this->read()['settings']);
 	}

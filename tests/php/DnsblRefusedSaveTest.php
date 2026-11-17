@@ -27,9 +27,9 @@ final class DnsblRefusedSaveTest extends TestCase
 			$result = json_decode((string) file_get_contents($resultFile), TRUE, 512, JSON_THROW_ON_ERROR);
 			$this->assertNotSame([], $result['inputErrors'], 'a refused write is a save error');
 			$this->assertTrue($result['returned'], 'the page renders the errors, rather than exiting through its redirect');
-			$this->assertSame('8082', $result['postedPort'], 'the form re-displays the submitted port');
-			$this->assertSame('8081', $result['disk']['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_dnsport'],
-				'config.xml retains the original port');
+			$this->assertSame('777', $result['postedCacheMax'], 'the form re-displays the submitted decision cache cap');
+			$this->assertSame('10000', $result['disk']['installedpackages']['pfblockerngdnsblsettings']['config'][0]['pfb_py_cache_max'],
+				'config.xml retains the original cap');
 			$this->assertFalse($result['pendingMarked'], 'a refused save marks no pending changes');
 			$this->assertFalse($result['lockHeld'], 'the lock is released');
 		} finally {

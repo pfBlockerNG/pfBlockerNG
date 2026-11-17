@@ -474,7 +474,7 @@ PHP;
 			'pfb_py_block'              => 'on',
 			'pfb_control_legacy_seeded' => 'on',
 			'global_log_mode'           => 'default',
-			'global_log'                => 'enabled',
+			'global_log'                => 'disabled_log',
 		]);
 		// issue #3770: the pfB-DNS enable migration's run-once marker, for the same reason.
 		config_set_path('installedpackages/pfblockerngdns/config/0', ['pfb_dns_dnsbl_migrated' => 'on']);

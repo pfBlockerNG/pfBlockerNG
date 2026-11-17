@@ -290,10 +290,4 @@ final class DnsListenVipTest extends TestCase
 	}
 
 	public static function badV6Ports(): array { return [['0'], ['65536'], ['bad']]; }
-
-	public function testDnsblCandidatesUseDotOneWithoutMigratingMarkedVips(): void
-	{
-		$this->assertSame(['172.16.53.1', '192.168.53.1', '10.53.53.1'], pfb_dnsbl_vip_candidates(AF_INET));
-		$this->assertSame(['fd00:53:53:53:53:53:53:1'], pfb_dnsbl_vip_candidates(AF_INET6));
-	}
 }
