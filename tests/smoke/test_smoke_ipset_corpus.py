@@ -937,6 +937,36 @@ def test_corpus_is_well_formed() -> None:
     assert {c["op"] for c in doc["cases"]} == set(OPS), "every group needs cases"
 
 
+def test_comparison_keeps_each_list_to_its_own_rule() -> None:
+    """Scenario: results that differ only in the order of a deny file agree; any other difference is reported.
+
+    A deny file is a multiset, a canonical set is ordered, the passes of a pipeline keep their order, and a file may
+    carry any name: only the harness's own timing key is left out.
+    """
+    one = {"canonical": {"A_v4": ["1.1.1.1", "2.2.2.2"]}, "deny_final": {"A_v4.txt": ["2.2.2.2", "1.1.1.1"]}}
+    two = {"canonical": {"A_v4": ["3.3.3.3"]}, "deny_final": {"A_v4.txt": ["3.3.3.3"]}}
+    want = {"passes": [one, two]}
+    assert diff(want, {"passes": [dict(one), dict(two)]}) == [], "equal results must agree"
+
+    deny_reordered = {"passes": [{**one, "deny_final": {"A_v4.txt": ["1.1.1.1", "2.2.2.2"]}}, two]}
+    assert diff(want, deny_reordered) == [], "a deny file inside a pass is a multiset"
+
+    set_reordered = {"passes": [{**one, "canonical": {"A_v4": ["2.2.2.2", "1.1.1.1"]}}, two]}
+    assert diff(want, set_reordered) == [
+        "/passes[0]/canonical/A_v4: lists differ in order: expected 2 rows, actual 2; "
+        "only in expected [], only in actual []"
+    ], "a canonical set inside a pass is ordered"
+
+    assert diff(want, {"passes": [two, one]}) != [], "the passes keep their order"
+
+    assert diff(_scrub({"deny": {}, "_seconds": 1.0}), _scrub({"deny": {}, "_seconds": 2.0})) == [], (
+        "timing is left out"
+    )
+    assert diff(_scrub({"deny": {}}), _scrub({"deny": {"_orphan.txt": ["9.9.9.9"]}})) == [
+        "/deny/_orphan.txt: unexpected in actual: ['9.9.9.9']"
+    ], "an unexpected file is reported whatever its name"
+
+
 @pytest.mark.parametrize("op", OPS)
 def test_group_matches_the_appliance(op: str, results: dict[str, Any]) -> None:
     cases = [c for c in corpus()["cases"] if c["op"] == op]
