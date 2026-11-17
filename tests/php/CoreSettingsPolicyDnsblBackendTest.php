@@ -411,7 +411,7 @@ final class CoreSettingsPolicyDnsblBackendTest extends TestCase
 		return [
 			'the count'         => [['top1mCount' => 5000], TRUE],
 			'the switch'        => [['top1m' => TRUE], TRUE],
-			'the inclusions'    => [['top1mInclusions' => [['tld' => 'com'], ['tld' => 'net']]], TRUE],
+			'the inclusions'    => [['top1mInclusions' => [['tld' => 'com'], ['tld' => 'org']]], TRUE],	// stored: com,net
 			'the regex switch'  => [['regex' => TRUE], FALSE],
 			'the SafeSearch'    => [['safeSearch' => TRUE], FALSE],
 		];
