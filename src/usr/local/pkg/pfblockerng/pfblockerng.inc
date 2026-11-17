@@ -4966,30 +4966,50 @@ function pfb_core_ingest_settings(): array {
 }
 
 /**
- * The faults of Core's value for `ingest` against $current (what config.xml and the platform project now): the projection is read-only, so
- * every field must be what it is, no more and no fewer. Core never changes it and refuses a change before it asks, so a fault is a client
- * that bypassed Core.
+ * The faults of Core's value for a read-only projection (`ingest`, `maintenance`) against $current (what config.xml and the platform project
+ * now): every field must be what it is, no more and no fewer. Core never changes it and refuses a change before it asks, so a fault is a
+ * client that bypassed Core.
  *
  * @param array<mixed> $wanted
  * @param array<string, mixed> $current
  * @return list<array{field: string, message: string}>
  */
-function pfb_core_ingest_faults(array $wanted, array $current): array {
+function pfb_core_ingest_faults(array $wanted, array $current, string $projection = 'ingest'): array {
 	$faults = [];
 	foreach (array_unique(array_merge(array_keys($current), array_keys($wanted))) as $name) {
 		if (!array_key_exists($name, $current)) {
-			$faults[] = ['field' => "ingest.{$name}", 'message' => 'no such field'];
+			$faults[] = ['field' => "{$projection}.{$name}", 'message' => 'no such field'];
 		} elseif (!array_key_exists($name, $wanted) || $wanted[$name] !== $current[$name]) {
-			$faults[] = ['field' => "ingest.{$name}", 'message' => 'read-only: config.xml and the platform own it'];
+			$faults[] = ['field' => "{$projection}.{$name}", 'message' => 'read-only: config.xml and the platform own it'];
 		}
 	}
 	return $faults;
 }
 
 /**
+ * Core's read-only `maintenance` (issue #3996, docs/misc/core-api-protocol.md): what Core needs to decide its three timed lanes. The
+ * Outpost only reports: `enabled` is General `enable_cb`, `scheduledWorkDisabled` the cron-disable sentinel's presence, `metricsExport` the
+ * General option, and the two cadences the dashboard widget's stored `widget-clearip` / `widget-cleardnsbl` (unregistered keys, read through
+ * the section), anything but `daily` and `weekly` reading `never` (tests/core/fixtures/settings_maintenance_parity.json).
+ *
+ * @return array<string, mixed> the 5 fields, in the protocol's order
+ */
+function pfb_core_maintenance_settings(): array {
+	$stored = PfbConfig::readSection('installedpackages/pfblockerngglobal');
+	$cadence = static fn(string $key): string => in_array($stored[$key] ?? NULL, ['daily', 'weekly'], TRUE) ? $stored[$key] : 'never';
+	return [
+		'enabled'               => PfbConfig::read('gen/enable_cb') === PfbToggle::On,
+		'scheduledWorkDisabled' => pfb_cron_disabled(),
+		'metricsExport'         => PfbConfig::read('gen/pfb_metrics_export') === PfbToggle::On,
+		'clearIpCounters'       => $cadence('widget-clearip'),
+		'clearDnsblCounters'    => $cadence('widget-cleardnsbl'),
+	];
+}
+
+/**
  * Every projection Core reads through its settings adapter, in the protocol's order (issue #3937): `dns`, then each feed projection
  * as `groups`, config.xml's groups that project (pfb_core_feed_groups()) with their feeds, in config order, then `schedule` (issue #3941)
- * and the read-only `ingest` (issue #3975).
+ * and the read-only `ingest` (issue #3975) and `maintenance` (issue #3996).
  *
  * @param ?callable(): array<string, string> $interfaces realif => IPv4 address; pfb_core_interface_addresses() by default (a test seam)
  * @return array<string, array<string, mixed>>
@@ -5006,6 +5026,7 @@ function pfb_core_settings(?callable $interfaces = NULL): array {
 	}
 	$settings['schedule'] = pfb_core_schedule_settings($settings);
 	$settings['ingest'] = pfb_core_ingest_settings();
+	$settings['maintenance'] = pfb_core_maintenance_settings();
 	return $settings;
 }
 
@@ -5736,9 +5757,9 @@ function pfb_core_settings_request_refusal(array $request, ?callable $interfaces
 		return pfb_core_settings_refusal('invalid_argument', 'expectedRevision must be a non-negative integer', [['field' => 'expectedRevision', 'message' => 'must be a non-negative integer']]);
 	}
 	$settings = $request['settings'];
-	$projections = ['dns', ...array_keys(PFB_CORE_FEED_SECTIONS), 'schedule', 'ingest'];
+	$projections = ['dns', ...array_keys(PFB_CORE_FEED_SECTIONS), 'schedule', 'ingest', 'maintenance'];
 	if (!is_array($settings) || count($settings) !== count($projections) || array_diff($projections, array_keys($settings)) !== [] || !is_array($settings['dns'])
-	    || !is_array($settings['ingest'])) {
+	    || !is_array($settings['ingest']) || !is_array($settings['maintenance'])) {
 		return pfb_core_settings_refusal('invalid_argument', 'settings must hold exactly ' . implode(', ', $projections));
 	}
 	$dns = $settings['dns'];
@@ -5824,6 +5845,10 @@ function pfb_core_settings_backend(array $request, string $metricsDir = '/var/tm
 		$readOnly = pfb_core_ingest_faults($request['settings']['ingest'], $now['ingest']);
 		if ($readOnly !== []) {
 			return pfb_core_settings_refusal('invalid_argument', 'ingest is read-only: config.xml and the platform own it', $readOnly);
+		}
+		$readOnly = pfb_core_ingest_faults($request['settings']['maintenance'], $now['maintenance'], 'maintenance');
+		if ($readOnly !== []) {
+			return pfb_core_settings_refusal('invalid_argument', 'maintenance is read-only: config.xml and the platform own it', $readOnly);
 		}
 		$current = pfb_core_dns_settings();
 		$changed = array_keys(array_filter($wanted, static fn(mixed $value, string $field): bool => $value !== $current[$field], ARRAY_FILTER_USE_BOTH));

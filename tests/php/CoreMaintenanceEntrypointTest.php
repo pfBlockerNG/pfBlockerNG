@@ -83,66 +83,31 @@ final class CoreMaintenanceEntrypointTest extends TestCase
 		return ['empty' => [''], 'off is still present' => ['off'], 'binary' => ["\x00\xff"], 'oversized' => [str_repeat('x', 65536)]];
 	}
 
+	/** Core decides from `maintenance.scheduledWorkDisabled`; a verb Core did run does its work, whatever the sentinel holds. */
 	#[DataProvider('sentinelContents')]
-	public function testSentinelSuppressesEveryDutyAfterNormalInitialization(string $content): void
+	public function testTheVerbRunsTheTickWithTheSentinelPresent(string $content): void
 	{
-		$sentinel = "{$this->dir}/db/pfblockerng/.pfb_cron_disable";
-		file_put_contents($sentinel, $content);
-		$run = $this->runVerb('core_maintenance');
-		$this->assertSame(75, $run['exit'], $run['stdout'] . $run['stderr']);
-		$this->assertStringContainsString('.pfb_cron_disable', $run['stdout'] . $run['stderr']);
-		$this->assertFileExists("{$this->dir}/initialized", 'normal context must initialize before the sentinel guard');
-		$this->assertFileDoesNotExist("{$this->dir}/settings-failed", 'not even the settings notice runs');
-		$this->assertFileDoesNotExist("{$this->dir}/db/pfblockerng/pfb_due_ledger.json", 'no SafeSearch or reconciliation duties');
-		$this->assertSame('pending apply', file_get_contents("{$this->dir}/pending"));
-		$this->assertSame([], json_decode((string) file_get_contents("{$this->dir}/notices.json"), TRUE), 'no tick notifications or Update requests');
-		$this->assertNoTickEffects();
+		file_put_contents("{$this->dir}/db/pfblockerng/.pfb_cron_disable", $content);
+		$this->assertRealTickDuties($this->runVerb('core_maintenance'));
 	}
 
-	private function assertNoTickEffects(): void
-	{
-		$this->assertFileExists("{$this->dir}/initialized", 'normal context initializes before either maintenance gate');
-		$this->assertFileDoesNotExist("{$this->dir}/settings-failed", 'no settings notice');
-		$this->assertFileDoesNotExist("{$this->dir}/db/pfblockerng/pfb_due_ledger.json", 'no refresh or reconciliation ledger writes');
-		$this->assertFileDoesNotExist("{$this->dir}/db/pfblockerng/pfb_ss_refresh.lock");
-		$this->assertFileDoesNotExist("{$this->dir}/db/pfblockerng/pfb_apply_reconcile.lock");
-		$this->assertSame([], json_decode((string) file_get_contents("{$this->dir}/notices.json"), TRUE), 'no recovery, retry or apply notices');
-		$this->assertSame(['services' => [], 'exec' => [], 'background' => []],
-			json_decode((string) file_get_contents("{$this->dir}/boundaries.json"), TRUE), 'no recovery or external duty execution');
-		$this->assertSame("maintenance log must remain unchanged\n",
-			file_get_contents("{$this->dir}/log/pfblockerng/pfblockerng.log"), 'no log maintenance effects');
-	}
-
-	public static function guardedStates(): array
+	public static function disabledStates(): array
 	{
 		return [
-			'disabled absent sentinel pending apply' => [FALSE, FALSE, TRUE],
-			'disabled absent sentinel failed feed' => [FALSE, FALSE, FALSE],
-			'disabled present sentinel pending apply' => [FALSE, TRUE, TRUE],
-			'disabled present sentinel failed feed' => [FALSE, TRUE, FALSE],
-			'enabled present sentinel failed feed' => [TRUE, TRUE, FALSE],
+			'package disabled' => [FALSE, FALSE],
+			'package disabled, sentinel present' => [FALSE, TRUE],
+			'package enabled, sentinel present' => [TRUE, TRUE],
 		];
 	}
 
-	#[DataProvider('guardedStates')]
-	public function testDisabledPackageOrSentinelPreventsEveryTickDuty(bool $enabled, bool $sentinel, bool $pending): void
+	/** Core does not call the verb while the package is off or the sentinel is present; if something does, it runs the tick and exits 0. */
+	#[DataProvider('disabledStates')]
+	public function testTheVerbRunsTheTickAndExitsZeroWhateverTheGatesSay(bool $enabled, bool $sentinel): void
 	{
 		if ($sentinel) {
 			touch("{$this->dir}/db/pfblockerng/.pfb_cron_disable");
 		}
-		if (!$pending) {
-			unlink("{$this->dir}/pending");
-			mkdir("{$this->dir}/db/pfblockerng/deny");
-			touch("{$this->dir}/db/pfblockerng/deny/maintenance_v4.fail");
-		}
-		$run = $this->runVerb('core_maintenance', $enabled);
-		$this->assertSame(75, $run['exit'], $run['stdout'] . $run['stderr']);
-		$this->assertNoTickEffects();
-		if ($pending) {
-			$this->assertSame('pending apply', file_get_contents("{$this->dir}/pending"), 'disabled maintenance does not consume pending apply');
-		} else {
-			$this->assertFileExists("{$this->dir}/db/pfblockerng/deny/maintenance_v4.fail", 'disabled maintenance does not consume retry');
-		}
+		$this->assertRealTickDuties($this->runVerb('core_maintenance', $enabled));
 	}
 
 	public function testDirectTickRemainsLiveWhenPackageIsDisabled(): void
@@ -150,7 +115,7 @@ final class CoreMaintenanceEntrypointTest extends TestCase
 		$this->assertRealTickDuties($this->runVerb('direct-tick', FALSE));
 	}
 
-	public function testEnabledMaintenanceWithoutSentinelStillAttemptsAFailedFeedRetry(): void
+	public function testMaintenanceStillAttemptsAFailedFeedRetry(): void
 	{
 		unlink("{$this->dir}/pending");
 		mkdir("{$this->dir}/db/pfblockerng/deny");
@@ -161,8 +126,15 @@ final class CoreMaintenanceEntrypointTest extends TestCase
 			(string) file_get_contents("{$this->dir}/notices.json"), 'failed-feed fixture really reaches retry admission');
 		$this->assertFileExists("{$this->dir}/db/pfblockerng/deny/maintenance_v4.fail", 'failed retry admission retains work');
 		$this->assertFileExists("{$this->dir}/settings-failed");
-		$this->assertNotNull(pfb_due_ledger_read_entry('ss_refresh', "{$this->dir}/db/pfblockerng"));
-		$this->assertNotNull(pfb_due_ledger_read_entry('apply_reconcile', "{$this->dir}/db/pfblockerng"));
+		$this->assertDutyLocksTaken();
+	}
+
+	/** The tick opened the bounded lock of each of its two duties: SafeSearch refresh and apply reconciliation both ran. */
+	private function assertDutyLocksTaken(): void
+	{
+		foreach (['pfb_ss_refresh.lock', 'pfb_apply_reconcile.lock'] as $lock) {
+			$this->assertFileExists("{$this->dir}/db/pfblockerng/{$lock}", "real tick reached {$lock}");
+		}
 	}
 
 	private function assertRealTickDuties(array $run): void
@@ -171,11 +143,8 @@ final class CoreMaintenanceEntrypointTest extends TestCase
 		$this->assertSame(0, $run['exit'], $run['stdout'] . $run['stderr']);
 		$this->assertFileExists("{$this->dir}/initialized");
 		$this->assertFileExists("{$this->dir}/settings-failed", 'the real tick attempted its Core settings notice');
-		foreach (['ss_refresh', 'apply_reconcile'] as $job) {
-			$entry = pfb_due_ledger_read_entry($job, "{$this->dir}/db/pfblockerng");
-			$this->assertNotNull($entry, "real tick ran {$job}");
-			$this->assertSame(900, $entry['next_due'] - $entry['last_run'], $job);
-		}
+		$this->assertDutyLocksTaken();
+		$this->assertFileDoesNotExist("{$this->dir}/db/pfblockerng/pfb_due_ledger.json", 'the tick keeps no SafeSearch or reconciliation ledger entry');
 		$notices = (string) file_get_contents("{$this->dir}/notices.json");
 		$this->assertStringContainsString('did not start the apply Update', $notices, 'tick-shaped fixture has a real pending apply');
 		$this->assertSame('pending apply', file_get_contents("{$this->dir}/pending"), 'failed admission retains pending work');

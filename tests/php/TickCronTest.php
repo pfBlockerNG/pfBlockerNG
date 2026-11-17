@@ -5,24 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-43 Phase 4 — Due-ledger trigger-tick helpers.
- *
- * Tests the two pure helpers added in Phase 4:
- *   pfb_tick_seed(): string
- *   pfb_tick_due_jobs(int $now, string $seed, string $dbdir,
- *                     int $cron_interval, int $bl_interval): array<string,bool>
- *
- * These functions are defined in pfblockerng_extra.inc (alongside the Phase-2
- * ledger library) and are injectable (clock + seed) so tests are deterministic.
- *
- * Coverage mandate (every branch):
- *   pfb_tick_seed:    returns a non-empty string; identical across calls.
- *   pfb_tick_due_jobs absent ledger:   all fixed jobs due (fail-safe).
- *   pfb_tick_due_jobs future next_due: no fixed jobs due.
- *   pfb_tick_due_jobs past next_due:   due fixed jobs only for past entries (catch-up).
- *
- * Red→green evidence (pre-change, calling these functions caused
- * "Call to undefined function pfb_tick_seed()" / "pfb_tick_due_jobs()").
+ * ADR-43 Phase 4 — due-ledger writers and the quarter-hour boundary helper. Core decides when the tick runs (issue #3996), so the
+ * tick keeps no due-ledger entry of its own; the ledger library stays for the feed cron's pending-apply flag and the extras.
  *
  * Fixed constants (pre-computed, stable across all runs):
  *   seed='test-seed', job='dcc', jitter_max=82800 (23*3600) ⇒ 78279
@@ -43,7 +27,7 @@ final class TickCronTest extends TestCase
 	/** Daily interval in seconds. */
 	private const DAILY = 86400;
 
-	/** 23-hour jitter_max used by pfb_tick_due_jobs() for dcc/bl. */
+	/** 23-hour jitter_max for dcc/bl. */
 	private const JITTER_MAX = 82800;
 
 	/** Pre-computed seeded_jitter('dcc', SEED, 82800) = 78279. */
@@ -67,150 +51,6 @@ final class TickCronTest extends TestCase
 	protected function tearDown(): void
 	{
 		rmdir_recursive($this->dir);
-	}
-
-	// -----------------------------------------------------------------------
-	// pfb_tick_seed — pure, no I/O.
-	// -----------------------------------------------------------------------
-
-	/**
-	 * pfb_tick_seed returns a non-empty string.
-	 *
-	 * Scenario:
-	 *   When pfb_tick_seed() is called.
-	 *   Then a non-empty string is returned.
-	 */
-	public function testTickSeedIsNonEmpty(): void
-	{
-		$seed = pfb_tick_seed();
-
-		$this->assertIsString($seed,   'pfb_tick_seed() must return a string');
-		$this->assertNotEmpty($seed,   'pfb_tick_seed() must return a non-empty string');
-	}
-
-	/**
-	 * pfb_tick_seed returns the same value on repeated calls (stable per install).
-	 *
-	 * Scenario:
-	 *   When pfb_tick_seed() is called twice.
-	 *   Then both calls return the same value.
-	 */
-	public function testTickSeedIsStable(): void
-	{
-		$s1 = pfb_tick_seed();
-		$s2 = pfb_tick_seed();
-
-		$this->assertSame($s1, $s2, 'pfb_tick_seed() must return the same value on every call');
-	}
-
-	// -----------------------------------------------------------------------
-	// pfb_tick_due_jobs — absent ledger ⇒ all jobs due (fail-safe).
-	// -----------------------------------------------------------------------
-
-	/**
-	 * All fixed jobs are due when the ledger is absent (first boot / wiped).
-	 *
-	 * Scenario:
-	 *   Background: ledger absent (dir is empty).
-	 *     Given an empty ledger directory.
-	 *     When pfb_tick_due_jobs($now, $seed, $dir, $cron_interval, $bl_interval).
-	 *     Then cron, ss_refresh, and apply_reconcile are all TRUE (fail-safe: run now).
-	 */
-	public function testAllDueWhenLedgerAbsent(): void
-	{
-		$due = pfb_tick_due_jobs(self::NOW, self::SEED, $this->dir, self::DAILY, self::DAILY);
-
-		$this->assertTrue($due['cron'],
-			"cron: expected TRUE (absent ledger => due-now), got FALSE;\n"
-			. "  now=" . self::NOW . " dir={$this->dir}");
-		$this->assertTrue($due['ss_refresh'],
-			"ss_refresh: expected TRUE (absent ledger => due-now), got FALSE;\n"
-			. "  now=" . self::NOW . " dir={$this->dir}");
-		$this->assertTrue($due['apply_reconcile'],
-			"apply_reconcile: expected TRUE (absent ledger => due-now), got FALSE;\n"
-			. "  now=" . self::NOW . " dir={$this->dir}");
-	}
-
-	// -----------------------------------------------------------------------
-	// pfb_tick_due_jobs — future next_due ⇒ no jobs due.
-	// -----------------------------------------------------------------------
-
-	/**
-	 * No jobs are due when all ledger entries have next_due in the future.
-	 *
-	 * Scenario:
-	 *   Background: all jobs have next_due = now + 1 hour.
-	 *     Given ledger entries with next_due > now for cron, ss_refresh, and apply_reconcile.
-	 *     When pfb_tick_due_jobs($now, ...).
-	 *     Then cron, ss_refresh, and apply_reconcile are all FALSE (not yet due).
-	 */
-	public function testNoneDueWhenAllFuture(): void
-	{
-		$future = self::NOW + 3600;
-		foreach (['cron', 'ss_refresh', 'apply_reconcile'] as $job) {
-			pfb_due_ledger_write_entry($job, [
-				'last_run' => self::NOW - self::DAILY,
-				'next_due' => $future,
-				'jitter'   => 0,
-			], $this->dir);
-		}
-
-		$due = pfb_tick_due_jobs(self::NOW, self::SEED, $this->dir, self::DAILY, self::DAILY);
-
-		$this->assertFalse($due['cron'],
-			"cron: expected FALSE (next_due in future), got TRUE;\n"
-			. "  now=" . self::NOW . " next_due={$future}");
-		$this->assertFalse($due['ss_refresh'],
-			"ss_refresh: expected FALSE (next_due in future), got TRUE;\n"
-			. "  now=" . self::NOW . " next_due={$future}");
-		$this->assertFalse($due['apply_reconcile'],
-			"apply_reconcile: expected FALSE (next_due in future), got TRUE;\n"
-			. "  now=" . self::NOW . " next_due={$future}");
-	}
-
-	// -----------------------------------------------------------------------
-	// pfb_tick_due_jobs — catch-up: only past next_due is due.
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Only cron is due when its next_due is in the past; other fixed jobs are in the future.
-	 *
-	 * Scenario:
-	 *   Background: cron is overdue; other fixed jobs are not yet due.
-	 *     Given cron.next_due = now - 1 (past); ss_refresh/apply_reconcile.next_due = now + 1h (future).
-	 *     When pfb_tick_due_jobs($now, ...).
-	 *     Then cron = TRUE, ss_refresh = FALSE, apply_reconcile = FALSE (catch-up for cron only).
-	 */
-	public function testOnlyCronDueWhenOnlyCronPast(): void
-	{
-		// cron is overdue.
-		pfb_due_ledger_write_entry('cron', [
-			'last_run' => self::NOW - self::DAILY - 1,
-			'next_due' => self::NOW - 1,
-			'jitter'   => 0,
-		], $this->dir);
-
-		// Other fixed jobs are not yet due.
-		$future = self::NOW + 3600;
-		foreach (['ss_refresh', 'apply_reconcile'] as $job) {
-			pfb_due_ledger_write_entry($job, [
-				'last_run' => self::NOW - self::DAILY,
-				'next_due' => $future,
-				'jitter'   => 0,
-			], $this->dir);
-		}
-
-		$due = pfb_tick_due_jobs(self::NOW, self::SEED, $this->dir, self::DAILY, self::DAILY);
-
-		$this->assertTrue($due['cron'],
-			"cron: expected TRUE (next_due in past = catch-up), got FALSE;\n"
-			. "  now=" . self::NOW . " next_due=" . (self::NOW - 1));
-		$this->assertFalse($due['ss_refresh'],
-			"ss_refresh: expected FALSE (next_due in future), got TRUE;\n"
-			. "  now=" . self::NOW . " next_due={$future}");
-		$this->assertFalse($due['apply_reconcile'],
-			"apply_reconcile: expected FALSE (next_due in future), got TRUE;\n"
-			. "  now=" . self::NOW . " next_due={$future}");
 	}
 
 	// -----------------------------------------------------------------------

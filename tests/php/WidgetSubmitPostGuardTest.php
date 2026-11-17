@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/ProcessRunner.php';
+
 use PHPUnit\Framework\TestCase;
 
 /** Issue #1064 — exercise the shipped widget submit branch, not its source text. */
@@ -77,6 +79,47 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		$this->assertStringNotContainsString('CRON-INSTALL', $result['stderr'], 'the save must not install a cron entry');
 	}
 
+	/** Issue #3996: Core decides the counters from the cadences the save stores, so the save tells Core once, after write_config(). */
+	public function testSavingCounterCadencesTellsCoreOnceAfterTheStore(): void
+	{
+		$dir = sys_get_temp_dir() . '/pfb_widget_core_' . bin2hex(random_bytes(6));
+		$this->assertTrue(mkdir($dir, 0700));
+		$this->bases[] = $dir;
+		$standIn = pfb_test_start_process([PHP_BINARY, __DIR__ . '/support/CoreSettingsStandIn.php', "{$dir}/api.sock", "{$dir}/requests",
+			json_encode(['SettingsChanged' => [200, ['initialized' => TRUE, 'revision' => 4, 'projections' => []]]], JSON_THROW_ON_ERROR)]);
+		try {
+			for ($out = ''; !str_contains($out, 'ready'); usleep(1000)) {
+				$out .= (string) stream_get_contents($standIn[1][1]);
+			}
+
+			$result = $this->runWidget(['pfb_submit' => 'save', 'pfb_clearip' => 'daily', 'pfb_cleardnsbl' => 'weekly'], [], "{$dir}/api.sock", "{$dir}/requests");
+		} finally {
+			proc_terminate($standIn[0]);
+			fclose($standIn[1][1]);
+			fclose($standIn[1][2]);
+			proc_close($standIn[0]);
+		}
+
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$methods = array_map(static fn(string $line): string => json_decode($line, TRUE)['method'], file("{$dir}/requests", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []);
+		$this->assertSame(['write_config', 'SettingsChanged'], $methods, 'the save is stored, then Core is told, once');
+	}
+
+	/** A Core that does not answer never undoes the save: the cadences stay stored and the failure is left for the notice's marker. */
+	public function testACoreThatDoesNotAnswerNeverUndoesTheSave(): void
+	{
+		$dir = sys_get_temp_dir() . '/pfb_widget_core_' . bin2hex(random_bytes(6));
+		$this->assertTrue(mkdir($dir, 0700));
+		$this->bases[] = $dir;
+
+		$result = $this->runWidget(['pfb_submit' => 'save', 'pfb_clearip' => 'daily', 'pfb_cleardnsbl' => 'weekly'], [], "{$dir}/none.sock", "{$dir}/requests");
+
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertSame('daily', $result['config']['widget-clearip'] ?? NULL);
+		$this->assertSame('weekly', $result['config']['widget-cleardnsbl'] ?? NULL);
+		$this->assertFileExists("{$dir}/none.sock.failed", 'the unanswered notice is kept for DNS General to show');
+	}
+
 	/** @return array<string,array{bool,bool}> */
 	public static function obsoleteQueryCases(): array
 	{
@@ -150,12 +193,14 @@ final class WidgetSubmitPostGuardTest extends TestCase
 	}
 
 	/** @return array{status:int,stderr:string,state:array<string,mixed>,config:array<string,mixed>,residue:list<string>,shim:string,base:string} */
-	private function runWidget(array $post, array $initial = []): array
+	private function runWidget(array $post, array $initial = [], ?string $socket = NULL, ?string $record = NULL): array
 	{
 		$root = var_export(self::ROOT, TRUE);
 		$widget = var_export(self::WIDGET, TRUE);
 		$postCode = var_export($post, TRUE);
 		$initialCode = var_export($initial, TRUE);
+		$socketCode = var_export($socket, TRUE);
+		$recordCode = var_export($record, TRUE);
 		// The child names its shim under a base directory the PARENT owns. The sibling
 		// classes instead glob sys_get_temp_dir() and filter by the child's PID from
 		// proc_get_status(); that works, but the glob sees every concurrent class's shims,
@@ -206,6 +251,14 @@ register_shutdown_function(static function () use (\$shim): void {
 	echo "\\n__PFB_CONFIG__" . json_encode(\$GLOBALS['config']['installedpackages']['pfblockerngglobal'] ?? []);
 	echo "\\n__PFB_STATE__" . json_encode(\$GLOBALS['pfb']['wglobal'] ?? []);
 });
+if ({$socketCode} !== NULL) {
+	// Core stand-in: its socket, and the order of the page's own write_config() among the requests it records
+	\$GLOBALS['pfb']['core_socket'] = {$socketCode};
+	\$GLOBALS['pfb']['core_settings_failed'] = {$socketCode} . '.failed';
+	\$GLOBALS['pfb_test_write_config_hook'] = static function (string \$description): void {
+		file_put_contents({$recordCode}, json_encode(['method' => 'write_config', 'body' => NULL]) . "\\n", FILE_APPEND | LOCK_EX);
+	};
+}
 require {$widget};
 PHP;
 		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];

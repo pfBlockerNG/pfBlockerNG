@@ -66,13 +66,13 @@ final class TickSafeSearchFailureTest extends TestCase
 
 		$this->assertSame(0, $calls, 'lock-open failure must not call SafeSearch');
 		$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
-			'lock-open failure must not advance ss_refresh ledger');
+			'lock-open failure writes no ss_refresh ledger entry');
 		$this->assertStringContainsString('SafeSearch lock open failed', $this->errorLog());
 
 		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
 
-		$this->assertSame(1, $calls, 'SafeSearch must retry after lock-open failure');
-		$this->assertFutureReservation();
+		$this->assertSame(1, $calls, 'SafeSearch runs again on the next tick after a lock-open failure');
+		$this->assertNoLedgerEntry();
 	}
 
 	public function testLockTimeoutLogsAndRetriesAfterRelease(): void
@@ -116,7 +116,7 @@ final class TickSafeSearchFailureTest extends TestCase
 
 			$this->assertSame(0, $calls, 'lock timeout must not call SafeSearch');
 			$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
-				'lock timeout must not advance ss_refresh ledger');
+				'lock timeout writes no ss_refresh ledger entry');
 			$this->assertStringContainsString('SafeSearch lock timed out', $this->errorLog());
 		} finally {
 			// Always release and reap the holder, including when any post-fork
@@ -131,7 +131,7 @@ final class TickSafeSearchFailureTest extends TestCase
 		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
 
 		$this->assertSame(1, $calls, 'SafeSearch must retry after the lock is released');
-		$this->assertFutureReservation();
+		$this->assertNoLedgerEntry();
 	}
 
 	public function testNonTimeoutAcquireFailureLeavesMemoryHandleReusable(): void
@@ -150,7 +150,7 @@ final class TickSafeSearchFailureTest extends TestCase
 
 		$this->assertSame(0, $calls, 'non-timeout acquire failure must not call SafeSearch');
 		$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
-			'non-timeout acquire failure must not advance ss_refresh ledger');
+			'non-timeout acquire failure writes no ss_refresh ledger entry');
 		$this->assertStringContainsString('SafeSearch lock acquire failed', $this->errorLog());
 		$this->assertIsResource($handle, 'lock opener handle must remain owned by the caller');
 		$this->assertSame(1, fwrite($handle, 'x'), 'failed acquire must not close the opener handle');
@@ -159,7 +159,7 @@ final class TickSafeSearchFailureTest extends TestCase
 		pfblockerng_tick(['pfblockerng.php dcc'], $refresh, core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
 
 		$this->assertSame(1, $calls, 'SafeSearch must retry after non-timeout acquire failure');
-		$this->assertFutureReservation();
+		$this->assertNoLedgerEntry();
 	}
 
 	public function testRefreshThrowLeavesDueAndNextTickRunsOnce(): void
@@ -180,7 +180,7 @@ final class TickSafeSearchFailureTest extends TestCase
 
 		$this->assertTrue($thrown, 'first SafeSearch refresh must throw in this scenario');
 		$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir),
-			'a failed SafeSearch refresh must remain due for retry');
+			'a failed SafeSearch refresh writes no ledger entry');
 		$successes = 0;
 		$retry = static function () use (&$successes): void {
 			$successes++;
@@ -188,7 +188,7 @@ final class TickSafeSearchFailureTest extends TestCase
 		pfblockerng_tick(['pfblockerng.php dcc'], $retry, core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
 
 		$this->assertSame(1, $successes, 'next tick must run exactly one retry after a thrown refresh');
-		$this->assertFutureReservation();
+		$this->assertNoLedgerEntry();
 	}
 
 	private function errorLog(): string
@@ -196,11 +196,9 @@ final class TickSafeSearchFailureTest extends TestCase
 		return (string) @file_get_contents($GLOBALS['pfb']['errlog']);
 	}
 
-	private function assertFutureReservation(): void
+	private function assertNoLedgerEntry(): void
 	{
-		$entry = pfb_due_ledger_read_entry('ss_refresh', $this->dir);
-		$this->assertNotNull($entry, 'successful SafeSearch refresh must write its ledger entry');
-		$this->assertGreaterThan(time(), $entry['next_due'], 'successful SafeSearch refresh must schedule a future slot');
+		$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $this->dir), 'the tick keeps no ss_refresh ledger entry');
 	}
 
 	private function waitForPath(string $path, float $timeout): void

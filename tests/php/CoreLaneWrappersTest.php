@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/** The metrics and counters wrappers Core execs (issue #3996): their shipped bytes, and the one value they share with the package. */
+/** The metrics and counters wrappers Core execs (issue #3996): their shipped bytes. Neither decides anything. */
 final class CoreLaneWrappersTest extends TestCase
 {
 	private const PKG = __DIR__ . '/../../src/usr/local/pkg/pfblockerng';
@@ -18,14 +18,13 @@ final class CoreLaneWrappersTest extends TestCase
 		return file($path, FILE_IGNORE_NEW_LINES) ?: [];
 	}
 
-	public function testMetricsWrapperTestsTheSentinelThePackageCreates(): void
+	public function testMetricsWrapperExecsTheBoundedVerbAndDecidesNothing(): void
 	{
 		$lines = $this->lines('pfb_core_metrics.sh');
 		$this->assertSame('#!/bin/sh', $lines[0]);
 		$this->assertStringStartsWith('# ', $lines[1]);
-		$this->assertSame("[ -e {$GLOBALS['pfb']['metrics_enabled']} ] || exit 0", $lines[2], 'the wrapper and pfb_metrics_configure_export() must name the same sentinel');
-		$this->assertSame('exec /usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics', $lines[3]);
-		$this->assertCount(4, $lines);
+		$this->assertSame('exec /usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics', $lines[2], 'Core decides when to call it: no sentinel test');
+		$this->assertCount(3, $lines);
 	}
 
 	public function testCountersWrapperExecsOnlyTheCountersVerbWithItsArguments(): void

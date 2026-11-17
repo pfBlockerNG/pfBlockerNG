@@ -218,11 +218,7 @@ final class TickApplyReconciliationTest extends TestCase
 
 	private function assertApplyReservation(): void
 	{
-		$entry = pfb_due_ledger_read_entry('apply_reconcile', $this->dir);
-		$this->assertNotNull($entry, 'completed reconciliation must reserve apply_reconcile');
-		$this->assertSame(0, $entry['jitter'], 'apply_reconcile must have zero jitter');
-		$this->assertSame(900, $entry['next_due'] - $entry['last_run'], 'apply_reconcile cadence must be exactly 900 seconds');
-		$this->assertGreaterThan(time(), $entry['next_due'], 'completed reconciliation must reserve a future slot');
+		$this->assertNull(pfb_due_ledger_read_entry('apply_reconcile', $this->dir), 'the tick keeps no apply_reconcile ledger entry');
 	}
 
 	private function writeSentinel(int $gen): void

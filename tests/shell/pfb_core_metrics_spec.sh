@@ -26,18 +26,22 @@ STUB
     dash "$work/wrapper.sh" ignored-argument
   }
 
-  It 'does nothing and succeeds while the export is off'
+  expected_argv() {
+    printf '%s\n' "$work/timeout" '-s' 'TERM' '-k' '5' '50' '/usr/local/bin/php' '/usr/local/www/pfblockerng/pfblockerng.php' 'metrics'
+  }
+
+  It 'runs the metrics verb under the 50 s timeout when the enabled marker is absent: Core decided to call it'
     When call run_wrapper
-    The status should equal 0
-    The output should equal ''
+    The status should equal 7
+    The output should equal "$(expected_argv)"
     The stderr should equal ''
   End
 
-  It 'runs the metrics verb under the 50 s timeout while the export is on'
+  It 'runs the same command when the enabled marker exists'
     true > "$work/sentinel"
     When call run_wrapper
     The status should equal 7
-    The output should equal "$(printf '%s\n' "$work/timeout" '-s' 'TERM' '-k' '5' '50' '/usr/local/bin/php' '/usr/local/www/pfblockerng/pfblockerng.php' 'metrics')"
+    The output should equal "$(expected_argv)"
     The stderr should equal ''
   End
 

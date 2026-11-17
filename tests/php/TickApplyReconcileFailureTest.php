@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/** Issue #2100: apply_reconcile failures stay due and overlapping ticks run once. */
+/** Issues #2100, #3996: every tick reconciles under a bounded lock; a failure is retried by the next tick and overlapping ticks never reconcile at once. */
 final class TickApplyReconcileFailureTest extends TestCase
 {
 	private string $dir;
@@ -54,7 +54,7 @@ final class TickApplyReconcileFailureTest extends TestCase
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
 		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		$now = time();
-		foreach (['cron', 'dcc', 'bl', 'ss_refresh'] as $job) {
+		foreach (['cron', 'dcc', 'bl'] as $job) {
 			pfb_due_ledger_write_entry($job, [
 				'last_run' => $now - 3600,
 				'next_due' => $now + 3600,
@@ -78,79 +78,56 @@ final class TickApplyReconcileFailureTest extends TestCase
 		@rmdir($this->dir);
 	}
 
-	private function seedApply(int $nextDue): void
-	{
-		pfb_due_ledger_write_entry('apply_reconcile', [
-			'last_run' => $nextDue - 900,
-			'next_due' => $nextDue,
-			'jitter' => 0,
-		], $this->dir);
-	}
-
 	private function tick(?callable $worker = NULL, ?callable $opener = NULL, float $timeout = 5.0): void
 	{
 		pfblockerng_tick(NULL, NULL, NULL, 5.0, $worker, $opener, $timeout);
 	}
 
-	public function testDueAttemptMarksAnchoredFutureSlotAndRunsOnce(): void
+	public function testEveryTickRunsTheWorkerAndKeepsNoLedgerEntry(): void
 	{
-		$priorDue = time() - 100;
-		$this->seedApply($priorDue);
+		$calls = 0;
+		$worker = static function () use (&$calls): void {
+			$calls++;
+		};
+		$this->tick($worker);
+		$this->tick($worker);
+
+		$this->assertSame(2, $calls, 'two ticks less than 900 s apart both reconcile');
+		$this->assertNull(pfb_due_ledger_read_entry('apply_reconcile', $this->dir), 'the tick keeps no apply_reconcile ledger entry');
+	}
+
+	public function testALeftoverFutureLedgerEntryDoesNotSuppressTheWorker(): void
+	{
+		$next = time() + 3600;
+		pfb_due_ledger_write_entry('apply_reconcile', ['last_run' => $next - 900, 'next_due' => $next, 'jitter' => 0], $this->dir);
 		$calls = 0;
 		$this->tick(static function () use (&$calls): void {
 			$calls++;
 		});
 
 		$this->assertSame(1, $calls);
-		$entry = pfb_due_ledger_read_entry('apply_reconcile', $this->dir);
-		$this->assertSame($priorDue + 900, $entry['next_due'], 'apply_reconcile must use anchored 900-second cadence');
-		$this->tick(static function () use (&$calls): void {
-			$calls++;
-		});
-		$this->assertSame(1, $calls, 'future reservation must suppress the next tick');
+		$this->assertSame($next, pfb_due_ledger_read_entry('apply_reconcile', $this->dir)['next_due'], 'the leftover entry is not rewritten');
 	}
 
-	public function testCompletedProductionScanWithNoOpenEntriesAdvancesLedger(): void
+	public function testCompletedProductionScanWithNoOpenEntriesKeepsNoLedgerEntry(): void
 	{
 		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'production scan precondition must have no open status rows');
-		$this->seedApply(time() - 2700);
 		$this->tick();
-		$entry = pfb_due_ledger_read_entry('apply_reconcile', $this->dir);
-		$this->assertNotNull($entry, 'completed production scan must reserve apply_reconcile');
-		$this->assertSame(0, $entry['jitter'], 'apply_reconcile must have zero jitter');
-		$this->assertSame(900, $entry['next_due'] - $entry['last_run'], 'apply_reconcile cadence must be exactly 900 seconds');
-		$this->assertGreaterThan(time(), $entry['next_due'], 'completed production scan must reserve a future slot');
+		$this->assertNull(pfb_due_ledger_read_entry('apply_reconcile', $this->dir), 'the tick keeps no apply_reconcile ledger entry');
 	}
 
-	public function testMultiIntervalOverdueRunsOnceAndCatchesUpFromNow(): void
+	public function testLockOpenFalseAndNonResourceSkipAndRetryOnTheNextTick(): void
 	{
-		$this->seedApply(time() - 2700);
-		$calls = 0;
-		$this->tick(static function () use (&$calls): void {
-			$calls++;
-		});
-		$entry = pfb_due_ledger_read_entry('apply_reconcile', $this->dir);
-		$this->assertSame(1, $calls, 'multiple missed intervals must not burst');
-		$this->assertGreaterThan(time(), $entry['next_due'], 'catch-up reservation must be future-dated');
-		$this->assertSame(900, $entry['next_due'] - $entry['last_run'], 'apply cadence remains exactly 900 seconds');
-	}
-
-	public function testLockOpenFalseAndNonResourceLeaveDueAndRetryable(): void
-	{
-		$priorDue = time() - 1;
-		$this->seedApply($priorDue);
 		$calls = 0;
 		$this->tick(static function () use (&$calls): void {
 			$calls++;
 		}, static fn(string $path): mixed => FALSE);
 		$this->assertSame(0, $calls);
-		$this->assertSame($priorDue, pfb_due_ledger_read_entry('apply_reconcile', $this->dir)['next_due']);
 
 		$this->tick(static function () use (&$calls): void {
 			$calls++;
 		}, static fn(string $path): mixed => 'not-a-resource');
 		$this->assertSame(0, $calls);
-		$this->assertSame($priorDue, pfb_due_ledger_read_entry('apply_reconcile', $this->dir)['next_due']);
 
 		$this->tick(static function () use (&$calls): void {
 			$calls++;
@@ -158,10 +135,8 @@ final class TickApplyReconcileFailureTest extends TestCase
 		$this->assertSame(1, $calls, 'a cleared opener failure must retry on the next tick');
 	}
 
-	public function testAcquireFailureDoesNotCloseInjectedHandleOrAdvance(): void
+	public function testAcquireFailureDoesNotCloseInjectedHandle(): void
 	{
-		$priorDue = time() - 1;
-		$this->seedApply($priorDue);
 		$handle = NULL;
 		$opener = static function () use (&$handle): mixed {
 			$handle = fopen('php://memory', 'r+');
@@ -172,19 +147,16 @@ final class TickApplyReconcileFailureTest extends TestCase
 			$calls++;
 		}, $opener, 0.0);
 		$this->assertSame(0, $calls);
-		$this->assertSame($priorDue, pfb_due_ledger_read_entry('apply_reconcile', $this->dir)['next_due']);
 		$this->assertIsResource($handle);
 		$this->assertSame(1, fwrite($handle, 'x'), 'caller-owned handle must remain open');
 		fclose($handle);
 	}
 
-	public function testLockContentionTimeoutLeavesDueAndRetriesAfterRelease(): void
+	public function testLockContentionTimeoutSkipsAndRetriesAfterRelease(): void
 	{
 		if (!function_exists('pcntl_fork')) {
 			$this->markTestSkipped('pcntl_fork() unavailable; timeout proof needs a lock holder process.');
 		}
-		$priorDue = time() - 1;
-		$this->seedApply($priorDue);
 		$lockPath = "{$this->dir}/pfb_apply_reconcile.lock";
 		$marker = "{$this->dir}/holder-ready";
 		$release = "{$this->dir}/holder-release";
@@ -220,7 +192,6 @@ final class TickApplyReconcileFailureTest extends TestCase
 				$calls++;
 			}, $opener, 0.01);
 			$this->assertSame(0, $calls, 'contention timeout must not run reconciliation');
-			$this->assertSame($priorDue, pfb_due_ledger_read_entry('apply_reconcile', $this->dir)['next_due']);
 			$this->assertStringContainsString('apply reconciliation lock timed out',
 				(string) @file_get_contents($GLOBALS['pfb']['errlog']));
 		} finally {
@@ -237,32 +208,27 @@ final class TickApplyReconcileFailureTest extends TestCase
 			$calls++;
 		});
 		$this->assertSame(1, $calls, 'released lock must allow one retry');
-		$this->assertGreaterThan(time(), pfb_due_ledger_read_entry('apply_reconcile', $this->dir)['next_due']);
 	}
 
-	public function testThrownWorkerStaysDueAndNextTickRetries(): void
+	public function testThrownWorkerIsContainedAndNextTickRetries(): void
 	{
-		$priorDue = time() - 1;
-		$this->seedApply($priorDue);
 		$calls = 0;
 		$this->tick(static function () use (&$calls): void {
 			$calls++;
 			throw new RuntimeException('reconcile failed');
 		});
 		$this->assertSame(1, $calls);
-		$this->assertSame($priorDue, pfb_due_ledger_read_entry('apply_reconcile', $this->dir)['next_due']);
 		$this->tick(static function () use (&$calls): void {
 			$calls++;
 		});
 		$this->assertSame(2, $calls);
 	}
 
-	public function testOverlappingTicksRunOneApplyReconciliation(): void
+	public function testOverlappingTicksNeverReconcileAtOnce(): void
 	{
 		if (!function_exists('pcntl_fork')) {
 			$this->markTestSkipped('pcntl_fork() unavailable; overlap proof needs separate processes.');
 		}
-		$this->seedApply(time() - 1);
 		$ready = "{$this->dir}/ready";
 		$go = "{$this->dir}/go";
 		$openerStarted = "{$this->dir}/opener-started";
@@ -292,7 +258,9 @@ final class TickApplyReconcileFailureTest extends TestCase
 							return fopen($path, 'c');
 						};
 						$this->tick(static function () use ($calls): void {
-							file_put_contents($calls, "1\n", FILE_APPEND | LOCK_EX);
+							file_put_contents($calls, "start\n", FILE_APPEND | LOCK_EX);
+							usleep(50000);
+							file_put_contents($calls, "end\n", FILE_APPEND | LOCK_EX);
 						}, $opener);
 						exit(0);
 					} catch (Throwable $e) {
@@ -306,7 +274,7 @@ final class TickApplyReconcileFailureTest extends TestCase
 				'overlap workers did not reach ready barrier; lines=' . $this->lineCount($ready));
 			touch($go);
 			$this->assertTrue($this->waitForLineCount($openerStarted, 2, 3.0),
-				'both workers must pass the outer due check and reach opener; lines=' . $this->lineCount($openerStarted));
+				'both workers must reach the lock opener; lines=' . $this->lineCount($openerStarted));
 			touch($openersRelease);
 		} finally {
 			touch($go);
@@ -320,7 +288,7 @@ final class TickApplyReconcileFailureTest extends TestCase
 		}
 		$this->assertSame([], $workerFailures, implode("\n", $workerFailures));
 		$lines = is_file($calls) ? array_values(array_filter(explode("\n", (string) file_get_contents($calls)), 'strlen')) : [];
-		$this->assertCount(1, $lines, 'in-lock due recheck must allow one overlapping reconciliation');
+		$this->assertSame(['start', 'end', 'start', 'end'], $lines, 'both ticks reconcile, one after the other under the lock');
 	}
 
 	private function waitForPath(string $path, float $timeout): void

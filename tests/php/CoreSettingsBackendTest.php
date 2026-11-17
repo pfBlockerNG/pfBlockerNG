@@ -155,11 +155,12 @@ final class CoreSettingsBackendTest extends TestCase
 		};
 	}
 
-	/** @return array<string, mixed> every projection the adapter answers: $dns, and the feed, schedule and ingest projections of a config.xml with no group (issue #3975: nothing stored, nothing of the box listed) */
+	/** @return array<string, mixed> every projection the adapter answers: $dns, and the feed, schedule, ingest and maintenance projections of a config.xml with no group (issue #3975: nothing stored, nothing of the box listed) */
 	private static function settings(array $dns): array
 	{
 		$ingest = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_ingest_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
-		return ['dns' => $dns] + self::FEEDS + ['schedule' => self::SCHEDULE, 'ingest' => $ingest];
+		$maintenance = json_decode((string) file_get_contents(__DIR__ . '/../core/fixtures/settings_maintenance_parity.json'), TRUE, 512, JSON_THROW_ON_ERROR)['defaults'];
+		return ['dns' => $dns] + self::FEEDS + ['schedule' => self::SCHEDULE, 'ingest' => $ingest, 'maintenance' => $maintenance];
 	}
 
 	/** @return array<string, mixed> */

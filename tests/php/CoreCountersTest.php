@@ -8,9 +8,10 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Core runs the counter lane at each local day change (issue #3996): `core_counters daily` every day, `core_counters daily weekly` on
- * Sundays. Each case runs the real verb in a php process; only pfctl and the two SQLite files are the sandbox's. A counter is cleared when
- * its stored widget cadence is one of the arguments, whatever the master switch and the cron-disable sentinel say.
+ * Core runs the counter lane at each local day change with the verbs due as arguments (issue #3996): `core_counters clearip`,
+ * `cleardnsbl`, or both in that order. The verb decides nothing: it clears what it is asked, whatever the stored widget cadence, the
+ * master switch and the cron-disable sentinel say; Core read those through the `maintenance` projection. Each case runs the real verb in
+ * a php process; only pfctl and the SQLite file are the sandbox's. A trigger on the `lastclear` row logs which counter was cleared, in order.
  */
 final class CoreCountersTest extends TestCase
 {
@@ -27,6 +28,9 @@ final class CoreCountersTest extends TestCase
 		$db = new SQLite3("{$this->dir}/resolver.sqlite");
 		$db->exec('CREATE TABLE lastclear ( row INTEGER, lastipclear TEXT, lastdnsblclear TEXT )');
 		$db->exec("INSERT INTO lastclear (row, lastipclear, lastdnsblclear) VALUES (0, 'Unknown', 'Unknown')");
+		$db->exec('CREATE TABLE cleared ( n INTEGER PRIMARY KEY AUTOINCREMENT, what TEXT )');
+		$db->exec("CREATE TRIGGER ip_cleared AFTER UPDATE OF lastipclear ON lastclear BEGIN INSERT INTO cleared (what) VALUES ('clearip'); END");
+		$db->exec("CREATE TRIGGER dnsbl_cleared AFTER UPDATE OF lastdnsblclear ON lastclear BEGIN INSERT INTO cleared (what) VALUES ('cleardnsbl'); END");
 		$db->close();
 	}
 
@@ -55,79 +59,96 @@ final class CoreCountersTest extends TestCase
 		return $run;
 	}
 
-	/** @return array{ip: int, dnsbl: int} how often each counter was cleared: pfctl runs, and whether the DNSBL stamp moved (0 or 1) */
+	/** @return array{pfctl: int, order: list<string>} how often pfctl zeroed the counters, and which counters were stamped cleared, in order */
 	private function cleared(): array
 	{
 		$pfctl = is_file("{$this->dir}/pfctl.log") ? file("{$this->dir}/pfctl.log", FILE_IGNORE_NEW_LINES) : [];
 		$this->assertSame(array_fill(0, count($pfctl), '-z'), $pfctl, 'pfctl is only ever asked to zero the counters');
 		$db = new SQLite3("{$this->dir}/resolver.sqlite");
-		$row = $db->querySingle('SELECT lastipclear, lastdnsblclear FROM lastclear WHERE row = 0', TRUE);
+		$order = [];
+		$rows = $db->query('SELECT what FROM cleared ORDER BY n');
+		while (($row = $rows->fetchArray(SQLITE3_NUM)) !== FALSE) {
+			$order[] = $row[0];
+		}
 		$db->close();
-		return ['ip' => count($pfctl) + ($row['lastipclear'] !== 'Unknown' ? 100 : 0), 'dnsbl' => $row['lastdnsblclear'] !== 'Unknown' ? 1 : 0];
+		return ['pfctl' => count($pfctl), 'order' => $order];
 	}
 
-	public static function cadenceTable(): array
+	public static function verbTable(): array
 	{
-		$ip = ['ip' => 101, 'dnsbl' => 0];
-		$dnsbl = ['ip' => 0, 'dnsbl' => 1];
-		$both = ['ip' => 101, 'dnsbl' => 1];
-		$none = ['ip' => 0, 'dnsbl' => 0];
+		$nothing = ['pfctl' => 0, 'order' => []];
 		return [
-			'daily/weekly at the daily change clears only the IP counters' => ['daily', 'weekly', ['daily'], $ip],
-			'daily/weekly on Sunday clears both' => ['daily', 'weekly', ['daily', 'weekly'], $both],
-			'weekly/weekly at a daily change clears nothing' => ['weekly', 'weekly', ['daily'], $none],
-			'weekly/weekly on Sunday clears both' => ['weekly', 'weekly', ['daily', 'weekly'], $both],
-			'never/never on Sunday clears nothing' => ['never', 'never', ['daily', 'weekly'], $none],
-			'absent/absent clears nothing' => [NULL, NULL, ['daily', 'weekly'], $none],
-			'daily/daily at a weekly-only call clears nothing' => ['daily', 'daily', ['weekly'], $none],
-			'never/daily clears only the DNSBL counters' => ['never', 'daily', ['daily'], $dnsbl],
-			'daily asked twice clears each counter once' => ['daily', 'daily', ['daily', 'daily'], $both],
-			'Daily is not a cadence' => ['Daily', 'Weekly', ['daily', 'weekly'], $none],
-			'the integer 1 is not a cadence' => [1, 1, ['daily', 'weekly'], $none],
-			'the string 1 is not a cadence' => ['1', '1', ['daily', 'weekly'], $none],
-			'an array is not a cadence' => [['daily'], ['weekly'], ['daily', 'weekly'], $none],
-			'an empty value is not a cadence' => ['', '', ['daily', 'weekly'], $none],
+			'clearip' => [['clearip'], ['pfctl' => 1, 'order' => ['clearip']]],
+			'cleardnsbl' => [['cleardnsbl'], ['pfctl' => 0, 'order' => ['cleardnsbl']]],
+			'both in the order Core sends them' => [['clearip', 'cleardnsbl'], ['pfctl' => 1, 'order' => ['clearip', 'cleardnsbl']]],
+			'both, the other way round, still clearip first' => [['cleardnsbl', 'clearip'], ['pfctl' => 1, 'order' => ['clearip', 'cleardnsbl']]],
+			'clearip twice clears it once' => [['clearip', 'clearip'], ['pfctl' => 1, 'order' => ['clearip']]],
+			'both twice clear each once' => [['clearip', 'cleardnsbl', 'cleardnsbl', 'clearip'], ['pfctl' => 1, 'order' => ['clearip', 'cleardnsbl']]],
 		];
 	}
 
-	/** @param array{ip: int, dnsbl: int} $expected */
-	#[DataProvider('cadenceTable')]
-	public function testEachCounterClearsOnlyWhenItsStoredCadenceIsAmongTheArguments(mixed $clearip, mixed $cleardnsbl, array $args, array $expected): void
+	public static function storedWidgetValues(): array
 	{
-		$widgets = array_filter(['clearip' => $clearip, 'cleardnsbl' => $cleardnsbl], static fn (mixed $v): bool => $v !== NULL);
-		$this->assertSame(['ip' => 0, 'dnsbl' => 0], $this->cleared(), 'before: nothing has been cleared');
+		return [
+			'never' => ['never'], 'daily' => ['daily'], 'weekly' => ['weekly'], 'garbage' => ['Daily'], 'a number' => [1], 'an array' => [['daily']], 'empty' => [''],
+		];
+	}
 
-		$run = $this->runVerb($widgets, $args);
+	/**
+	 * What is cleared depends on the verbs alone: the stored cadence, `never` and garbage included, never stops a clear Core asked for.
+	 *
+	 * @param list<string> $args
+	 * @param array{pfctl: int, order: list<string>} $expected
+	 */
+	#[DataProvider('verbTable')]
+	public function testTheVerbsCoreSendsDecideWhatIsCleared(array $args, array $expected): void
+	{
+		foreach (self::storedWidgetValues() as $label => [$stored]) {
+			$this->tearDown();
+			$this->setUp();
+			$this->assertSame(['pfctl' => 0, 'order' => []], $this->cleared(), 'before: nothing has been cleared');
+
+			$run = $this->runVerb(['clearip' => $stored, 'cleardnsbl' => $stored], $args);
+
+			$this->assertSame(0, $run['exit'], "{$label}: " . $run['stdout'] . $run['stderr']);
+			$this->assertSame($expected, $this->cleared(), "stored value: {$label}");
+		}
+	}
+
+	public function testNoStoredWidgetValueAtAllStillClears(): void
+	{
+		$run = $this->runVerb([], ['clearip', 'cleardnsbl']);
 
 		$this->assertSame(0, $run['exit'], $run['stdout'] . $run['stderr']);
-		$this->assertSame($expected, $this->cleared(), json_encode([$clearip, $cleardnsbl, $args]));
+		$this->assertSame(['pfctl' => 1, 'order' => ['clearip', 'cleardnsbl']], $this->cleared());
 	}
 
 	public function testTheMasterSwitchOffStillClears(): void
 	{
-		$run = $this->runVerb(['clearip' => 'daily', 'cleardnsbl' => 'daily'], ['daily'], FALSE);
+		$run = $this->runVerb(['clearip' => 'never', 'cleardnsbl' => 'never'], ['clearip', 'cleardnsbl'], FALSE);
 		$this->assertSame(0, $run['exit'], $run['stdout'] . $run['stderr']);
-		$this->assertSame(['ip' => 101, 'dnsbl' => 1], $this->cleared(), 'the cron entries these replace had no master-enable gate');
+		$this->assertSame(['pfctl' => 1, 'order' => ['clearip', 'cleardnsbl']], $this->cleared(), 'Core asked: the verb makes no enable decision');
 	}
 
 	public function testTheCronDisableSentinelStillClears(): void
 	{
 		touch("{$this->dir}/db/pfblockerng/.pfb_cron_disable");
-		$run = $this->runVerb(['clearip' => 'daily', 'cleardnsbl' => 'daily'], ['daily']);
+		$run = $this->runVerb([], ['clearip', 'cleardnsbl']);
 		$this->assertSame(0, $run['exit'], $run['stdout'] . $run['stderr']);
-		$this->assertSame(['ip' => 101, 'dnsbl' => 1], $this->cleared(), 'the cron entries these replace had no .pfb_cron_disable gate');
+		$this->assertSame(['pfctl' => 1, 'order' => ['clearip', 'cleardnsbl']], $this->cleared(), 'Core asked: the verb makes no sentinel decision');
 	}
 
 	public static function invalidArguments(): array
 	{
 		return [
 			'no argument' => [[]],
-			'monthly' => [['monthly']],
-			'a valid pair and a third invalid' => [['daily', 'weekly', 'monthly']],
-			'uppercase' => [['DAILY']],
+			'daily' => [['daily']],
+			'weekly' => [['weekly']],
+			'a valid verb and a cadence' => [['clearip', 'daily']],
+			'uppercase' => [['CLEARIP']],
 			'the empty string' => [['']],
-			'a shell metacharacter payload' => [['daily;rm -rf /']],
-			'one valid then the empty string' => [['daily', '']],
+			'a valid verb then the empty string' => [['clearip', '']],
+			'a shell metacharacter payload' => [['clearip;rm -rf /']],
 			'a mebibyte argument' => [[str_repeat('x', 1048576)]],
 		];
 	}
@@ -142,6 +163,6 @@ final class CoreCountersTest extends TestCase
 		$this->assertSame('', $run['stdout']);
 		$this->assertCount(1, array_filter(explode("\n", $run['stderr'])), 'one diagnostic line: ' . substr($run['stderr'], 0, 300));
 		$this->assertLessThan(300, strlen($run['stderr']), 'the diagnostic does not echo the argument');
-		$this->assertSame(['ip' => 0, 'dnsbl' => 0], $this->cleared(), 'nothing is cleared when any argument is invalid');
+		$this->assertSame(['pfctl' => 0, 'order' => []], $this->cleared(), 'nothing is cleared when any argument is invalid');
 	}
 }

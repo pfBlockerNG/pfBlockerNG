@@ -24,23 +24,23 @@ PHP
     dash "$work/wrapper.sh" "$@"
   }
 
-  It 'execs the counters verb with one cadence verbatim'
-    When call run_wrapper daily
+  It 'execs the counters verb with one verb verbatim'
+    When call run_wrapper clearip
     The status should equal 3
-    The output should equal "$(printf '%s\n' '-d' 'display_errors=stderr' '-f' '/usr/local/pkg/pfblockerng/pfblockerng.inc' 'core_counters' 'daily')"
+    The output should equal "$(printf '%s\n' '-d' 'display_errors=stderr' '-f' '/usr/local/pkg/pfblockerng/pfblockerng.inc' 'core_counters' 'clearip')"
     The stderr should equal ''
   End
 
-  It 'forwards two cadences verbatim and in order'
-    When call run_wrapper daily weekly
+  It 'forwards two verbs verbatim and in order'
+    When call run_wrapper clearip cleardnsbl
     The status should equal 3
-    The output should equal "$(printf '%s\n' '-d' 'display_errors=stderr' '-f' '/usr/local/pkg/pfblockerng/pfblockerng.inc' 'core_counters' 'daily' 'weekly')"
+    The output should equal "$(printf '%s\n' '-d' 'display_errors=stderr' '-f' '/usr/local/pkg/pfblockerng/pfblockerng.inc' 'core_counters' 'clearip' 'cleardnsbl')"
   End
 
   It 'does not split or reinterpret a hostile argument'
-    When call run_wrapper 'daily;rm -rf /' ''
+    When call run_wrapper 'clearip;rm -rf /' ''
     The status should equal 3
-    The output should equal "$(printf '%s\n' '-d' 'display_errors=stderr' '-f' '/usr/local/pkg/pfblockerng/pfblockerng.inc' 'core_counters' 'daily;rm -rf /' '')"
+    The output should equal "$(printf '%s\n' '-d' 'display_errors=stderr' '-f' '/usr/local/pkg/pfblockerng/pfblockerng.inc' 'core_counters' 'clearip;rm -rf /' '')"
   End
 
   It 'is executable and passes the syntax check'

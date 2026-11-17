@@ -6,7 +6,7 @@ require_once __DIR__ . '/SyncPrereqSeedTrait.php';
 
 use PHPUnit\Framework\TestCase;
 
-/** Regression reproduction for issue #2100: apply retries must obey their own ledger. */
+/** Issues #2100, #3996: every tick retries open apply failures; Core, not an Outpost ledger, decides how often the tick runs. */
 final class TickApplyReconcileCadenceTest extends TestCase
 {
 	use SyncPrereqSeedTrait;
@@ -42,7 +42,7 @@ final class TickApplyReconcileCadenceTest extends TestCase
 		config_set_path("{$gen}/pfb_interval", 'Disabled');
 		config_set_path("{$gen}/pfb_quiet_hours", '');
 		$now = time();
-		foreach (['cron', 'dcc', 'bl', 'ss_refresh'] as $job) {
+		foreach (['cron', 'dcc', 'bl'] as $job) {
 			pfb_due_ledger_write_entry($job, [
 				'last_run' => $now - 3600,
 				'next_due' => $now + 3600,
@@ -64,7 +64,7 @@ final class TickApplyReconcileCadenceTest extends TestCase
 		@rmdir($this->dir);
 	}
 
-	public function testFutureApplyReconcileEntrySuppressesRetry(): void
+	public function testTwoTicksLessThan900SecondsApartBothRetryAndKeepNoLedgerEntry(): void
 	{
 		$counter = tempnam(sys_get_temp_dir(), 'pfb_tick_apply_counter_');
 		$this->tmpfiles[] = $counter;
@@ -72,22 +72,23 @@ final class TickApplyReconcileCadenceTest extends TestCase
 		$mock = tempnam(sys_get_temp_dir(), 'pfb_tick_apply_mock_');
 		$this->tmpfiles[] = $mock;
 		$counterArg = escapeshellarg($counter);
-		file_put_contents($mock, "#!/bin/sh\necho x >> {$counterArg}\nexit 1\n");
+		file_put_contents($mock, "#!/bin/sh
+echo x >> {$counterArg}
+exit 1
+");
 		chmod($mock, 0755);
 		$GLOBALS['pfb']['pfctl'] = $mock;
-		file_put_contents("{$this->dir}/pfB_Test_v4.txt", "10.0.0.1\n");
+		file_put_contents("{$this->dir}/pfB_Test_v4.txt", "10.0.0.1
+");
 		pfb_sync_status_open('ip', 'pfB_Test_v4', 'apply', 'seeded failure', $this->dir);
-		$now = time();
-		pfb_due_ledger_write_entry('apply_reconcile', [
-			'last_run' => $now - 900,
-			'next_due' => $now + 3600,
-			'jitter' => 0,
-		], $this->dir);
+		$next = time() + 3600;
+		pfb_due_ledger_write_entry('apply_reconcile', ['last_run' => $next - 900, 'next_due' => $next, 'jitter' => 0], $this->dir);
+		$tick = static fn () => pfblockerng_tick(core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
 
-		pfblockerng_tick(core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
+		$tick();
+		$tick();
 
-		$this->assertFileDoesNotExist($counter, 'future apply_reconcile entry must suppress the retry');
-		$entry = pfb_due_ledger_read_entry('apply_reconcile', $this->dir);
-		$this->assertSame($now + 3600, $entry['next_due']);
+		$this->assertSame(2, count(file($counter, FILE_IGNORE_NEW_LINES)), 'each tick retries the open apply failure, a leftover future entry notwithstanding');
+		$this->assertSame($next, pfb_due_ledger_read_entry('apply_reconcile', $this->dir)['next_due'], 'the leftover entry is not rewritten');
 	}
 }

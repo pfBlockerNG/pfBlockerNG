@@ -408,9 +408,6 @@ final class TickEntrypointTest extends TestCase
 		// pfb_log_mgmt(): cap 'log' to 3 lines; every other type stays at the
 		// registry default (20000) -> no-op trim, keeping the test single-purpose.
 		config_set_path("{$gen}/log_max_log", '3');
-		// Apply reconciliation has an independent cadence; keep it idle unless a
-		// test explicitly seeds that job due.
-		$this->seedFutureLedgerEntry('apply_reconcile', time());
 	}
 
 	/**
@@ -426,7 +423,7 @@ final class TickEntrypointTest extends TestCase
 		], $GLOBALS['pfb']['dbdir']);
 	}
 
-	/** Seed an idle tick with only the SafeSearch ledger state under test due. */
+	/** Seed an idle tick: only the SafeSearch refresh under test runs. */
 	private function prepareSafeSearchTick(): int
 	{
 		$this->seedTickPrereqs('Disabled');
@@ -702,32 +699,27 @@ final class TickEntrypointTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// issue #2089 — SafeSearch refresh is its own zero-jitter 900-second job.
+	// issue #3996 — Core decides when the tick runs; every tick refreshes SafeSearch, with no ledger of its own.
 	// -----------------------------------------------------------------------
 
-	/** An absent SafeSearch entry runs once and seeds a zero-jitter 900-second slot. */
-	public function testSafeSearchAbsentEntryRunsOnceAndSeedsCadence(): void
+	/** Two ticks less than 900 s apart both refresh SafeSearch, and the tick neither reads nor writes a ledger entry for it. */
+	public function testSafeSearchRunsOnEveryTickAndKeepsNoLedgerEntry(): void
 	{
-		$now = $this->prepareSafeSearchTick();
+		$this->prepareSafeSearchTick();
 		$calls = 0;
 		$refresh = static function () use (&$calls): void {
 			$calls++;
 		};
 
 		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
+		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
 
-		$this->assertSame(1, $calls, 'absent ss_refresh entry must invoke SafeSearch exactly once');
-		$entry = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($entry, 'due SafeSearch tick must create its ledger entry');
-		$this->assertSame(0, $entry['jitter'], 'ss_refresh cadence must have zero jitter');
-		$this->assertSame(900, $entry['next_due'] - $entry['last_run'],
-			'ss_refresh next_due must be exactly 900 seconds after last_run');
-		$this->assertGreaterThan($now, $entry['next_due'],
-			'ss_refresh next_due must be in the future after its first run');
+		$this->assertSame(2, $calls, 'each tick refreshes SafeSearch');
+		$this->assertNull(pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']), 'the tick writes no ss_refresh entry');
 	}
 
-	/** A future SafeSearch entry does not call or rewrite the observer/ledger. */
-	public function testSafeSearchFutureEntryDoesNotRunOrChangeLedger(): void
+	/** An entry an earlier version left in the ledger neither suppresses the refresh nor is rewritten. */
+	public function testALeftoverSafeSearchLedgerEntryIsIgnored(): void
 	{
 		$now = $this->prepareSafeSearchTick();
 		$this->seedFutureLedgerEntry('ss_refresh', $now);
@@ -739,62 +731,11 @@ final class TickEntrypointTest extends TestCase
 
 		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
 
-		$this->assertSame(0, $calls, 'future ss_refresh entry must not invoke SafeSearch');
-		$after = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
-		$this->assertSame($before, $after, 'future ss_refresh entry must remain unchanged');
+		$this->assertSame(1, $calls, 'a future entry does not suppress the refresh');
+		$this->assertSame($before, pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']), 'the leftover entry is not rewritten');
 	}
 
-	/** A slightly overdue SafeSearch entry advances from its prior slot, not wall clock. */
-	public function testSafeSearchSlightlyOverdueEntryReanchorsFromPriorSlot(): void
-	{
-		$now = $this->prepareSafeSearchTick();
-		$oldNextDue = $now - 10;
-		pfb_due_ledger_write_entry('ss_refresh', [
-			'last_run' => $oldNextDue - 900,
-			'next_due' => $oldNextDue,
-			'jitter'   => 0,
-		], $GLOBALS['pfb']['dbdir']);
-		$calls = 0;
-		$refresh = static function () use (&$calls): void {
-			$calls++;
-		};
-
-		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
-
-		$this->assertSame(1, $calls, 'overdue ss_refresh entry must invoke SafeSearch once');
-		$entry = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($entry, 'overdue ss_refresh entry must remain present');
-		$this->assertSame($oldNextDue + 900, $entry['next_due'],
-			'slightly overdue ss_refresh must advance from prior next_due exactly 900 seconds');
-	}
-
-	/** A multi-interval overdue SafeSearch entry runs once and catches up past now. */
-	public function testSafeSearchMultiIntervalOverdueEntryDoesNotBurst(): void
-	{
-		$now = $this->prepareSafeSearchTick();
-		$oldNextDue = $now - 1800;
-		pfb_due_ledger_write_entry('ss_refresh', [
-			'last_run' => $oldNextDue - 900,
-			'next_due' => $oldNextDue,
-			'jitter'   => 0,
-		], $GLOBALS['pfb']['dbdir']);
-		$calls = 0;
-		$refresh = static function () use (&$calls): void {
-			$calls++;
-		};
-
-		pfblockerng_tick($this->suiteWorkerPsLines(), $refresh);
-
-		$this->assertSame(1, $calls, 'multi-interval overdue ss_refresh must not replay missed slots');
-		$entry = pfb_due_ledger_read_entry('ss_refresh', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($entry, 'overdue ss_refresh entry must remain present');
-		$this->assertSame(900, $entry['next_due'] - $entry['last_run'],
-			'multi-interval catch-up must write one 900-second cadence slot');
-		$this->assertGreaterThan($now, $entry['next_due'],
-			'multi-interval catch-up must advance ss_refresh next_due past now');
-	}
-
-	// -----------------------------------------------------------------------
+		// -----------------------------------------------------------------------
 	// issue #1769 — the pfb_update_pass_running() half of the log-maintenance
 	// gate was SILENT on skip: a stray process matching the ps-scan regex closed the
 	// gate with zero trace, which cost a live-tier diagnosis (the smoke suite's
