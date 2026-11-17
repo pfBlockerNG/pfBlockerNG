@@ -223,8 +223,8 @@ absence, and requires the same running cron identity.
 The case observes real guest quarter-hour boundaries (up to 15 minutes each),
 records guest timestamps and has a 2100-second body cap. Manual tick is only a
 compatibility control, never scheduled proof. SafeSearch CSV effects and the
-Outpost duty ledger are observable evidence; unexercised native duty effects must
-be reported separately, not inferred from timer or ledger activity alone.
+Outpost's duty locks (`pfb_ss_refresh.lock`, `pfb_apply_reconcile.lock`) are observable evidence; the tick keeps no duty ledger (issue #3996); unexercised native
+duty effects must be reported separately, not inferred from timer activity alone.
 
 ### How it works
 

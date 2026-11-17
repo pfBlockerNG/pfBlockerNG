@@ -2377,14 +2377,16 @@ window. `PFB_TRIGGER` values are unchanged across the migration, so the ADR-12 h
 ### One trigger-tick + the due-ledger
 
 The four legacy cron families (`cron`/`dcc`/`bl`/`ss_refresh`) collapse to **one** fixed quarter-hour tick. Since issue #3996 pfBlockerNG
-installs **no crontab entry at all**: Core runs the tick (`--maintenance-cmd`, `pfb_core_maintenance.sh`, the `core_maintenance` verb) and
-the two other lanes below. The tick runs unless `/var/db/pfblockerng/.pfb_cron_disable` exists (issue #1204 — the smoke suite's scheduler
-off switch, installed before the package and never removed; the Update page reports the suppression) or the package is disabled; the
-`pfblockerng.php cron-tick` verb is that same gate by hand. The direct `pfblockerng.php tick` verb is never gated. The tick carries **no**
-scheduling logic: it reads the due-ledger, dispatches each **due** job through the new API
-(`pfb_trigger scope=both force=false trigger=cron` for the feed pass), runs `ss_refresh` when its
-dedicated zero-jitter 900-second entry is due (cheap DNS re-resolution), then records each completed
-job's next due slot. Install, upgrade, every `sync_package_pfblockerng()` pass and the deinstall call
+installs **no crontab entry at all**. PHP is the Outpost bridge to pfSense and decides nothing about when its work runs: Core (the whole Go
+side, `pfb-core`: the API process and the Updater) reads the read-only `maintenance` projection the settings adapter answers
+(`pfb_core_maintenance_settings()`: master enable, the sentinel's presence, the metrics option, the two counter cadences) and calls
+three programs. It runs the tick (`--maintenance-cmd`, `pfb_core_maintenance.sh`, the `core_maintenance` verb) every quarter hour while
+the package is enabled and `/var/db/pfblockerng/.pfb_cron_disable` (issue #1204 — the smoke suite's scheduler off switch, installed before
+the package and never removed; the Update page reports the suppression) is absent; the verb itself has no gate. The by-hand
+`pfblockerng.php cron-tick` verb keeps its own sentinel check, and the direct `tick` verb is never gated. The tick carries **no**
+scheduling logic and keeps no due-ledger entry of its own: every tick does the Outpost's work (the pfB-DNS and certificate upkeep, the
+notice to Core of a changed configuration, the SafeSearch re-resolution and the apply-stage reconciliation, each under its own bounded
+lock, and log maintenance) and asks Core for the Updates it needs. Install, upgrade, every `sync_package_pfblockerng()` pass and the deinstall call
 `pfblockerng_retire_cron_jobs()`, which removes every crontab entry an earlier version installed (the tick, the old fleet jobs, `metrics`,
 `clearip`/`cleardnsbl`, quoted forms included) and installs none; non-pfB cron jobs are left untouched.
 
@@ -2392,11 +2394,11 @@ Since issue #3941 the tick no longer dispatches the feed pass (Core does, throug
 (`pfblockerng.php cron`, `pfblockerng_sync_cron()`) is not a scheduler entry point any more: no feed is named, so it checks only
 the feeds with a `*.fail` retry marker (and applies what that changed). It stays for the smoke harness (the feed-pass lock tests) and for running that retry by hand.
 
-**Metrics export lane (#3522, #3996):** Core runs `--metrics-cmd` (`pfb_core_metrics.sh`) every minute: the wrapper exits at once
-unless the `pfb_metrics_enabled` sentinel exists, then runs `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php
-/usr/local/www/pfblockerng/pfblockerng.php metrics`. The sentinel exists only while pfBlockerNG's master enable and the General tab's
-**Metrics export** option are both on, so it is what schedules the export: a sentinel removed by hand stops the export until the next
-sync pass recreates it. `pfb_metrics_configure_export()` creates it from `sync_package_pfblockerng()`, and removes it together with
+**Metrics export lane (#3522, #3996):** Core runs `--metrics-cmd` (`pfb_core_metrics.sh`) every minute while `maintenance.enabled` and
+`maintenance.metricsExport` are both on; the wrapper runs `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php
+/usr/local/www/pfblockerng/pfblockerng.php metrics` and tests nothing. The `pfb_metrics_enabled` sentinel is only the publish guard
+inside the Outpost (below), not a schedule: a sentinel removed by hand makes each run log once and publish nothing until the next sync pass
+recreates it. `pfb_metrics_configure_export()` creates it from `sync_package_pfblockerng()`, and removes it together with
 `/var/tmp/node_exporter/pfblockerng.prom` otherwise and on package deinstall; it touches no crontab. Both directions take an exclusive
 lock on `pfb_metrics.lock` around the sentinel and the published files only, and release it on return, before the cron retirement
 that follows (`install_cron_job()` can start cron, which would inherit a held lock and block every publish);
@@ -2427,12 +2429,12 @@ widget's "Show Aggregated Aliases" setting. Update-pass timing (`pfb_pass_status
 passes only, never settings-save passes (`$pfb['save']`); a pass deferred by a MaxMind failure
 records its end, so `last_start > last_end` means a hung or killed pass.
 
-**Counter lane (#3996):** Core runs `--counters-cmd` (`pfb_core_counters.sh`) at the first minute of each local day with argument `daily`,
-and with `daily weekly` on Sundays (the cron entries it replaces used weekday `7`). The `core_counters` verb
-(`pfb_core_counters()`) refuses, with exit status 2 and nothing cleared, no argument or any argument other than exactly `daily` or `weekly`;
-otherwise it clears each counter whose stored widget cadence (`widget-clearip`, `widget-cleardnsbl`, unregistered keys read through
-`PfbConfig::readSection()`) is one of the arguments, exactly what the `pfblockerng.php clearip` and `cleardnsbl` verbs do, which still work
-by hand. `never`, an absent or any other stored value clears nothing. As with the cron entries, neither the master enable nor
+**Counter lane (#3996):** Core runs `--counters-cmd` (`pfb_core_counters.sh`) at the first minute of each local day, with the verbs due as
+arguments: `clearip` when `maintenance.clearIpCounters` is `daily` (or `weekly` on a Sunday), then `cleardnsbl` likewise; none due starts
+nothing. The `core_counters` verb (`pfb_core_counters()`) refuses, with exit status 2 and nothing cleared, no argument or any argument other
+than exactly `clearip` or `cleardnsbl`; otherwise it clears each named counter once, `clearip` first, exactly what the
+`pfblockerng.php clearip` and `cleardnsbl` verbs do (which still work by hand). It reads no setting: Core made the cadence decision from
+the widget's stored `widget-clearip` / `widget-cleardnsbl`, which the widget's save tells Core of at once. Neither the master enable nor
 `.pfb_cron_disable` gates it, and a Core that was down at the day change does not catch up.
 
 **Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process
@@ -2482,7 +2484,7 @@ lines (`Package uninstall proceeding WITHOUT the feed-pass lock`).
 
 **The due-ledger** is a single JSON sidecar `pfb_due_ledger.json` under `$pfb['dbdir']`, one entry
 per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helpers in
-`pfblockerng_extra.inc` (`pfb_due_ledger_*`); the tick wrapper `pfb_tick_due_jobs()` decides due-ness:
+`pfblockerng_extra.inc` (`pfb_due_ledger_*`); since issue #3996 the tick consults none of it for its own duties, and the feed cron's pending-apply flag and the Extras use it:
 
 - **Absent entry ⇒ due-now-but-jittered.** A wiped ledger (the issue-#468 MFS-RAM-disk reboot path)
   makes every job due, but each picks up a **stable seeded jitter** (`crc32(seed ':' job_key) % max + 1`,
@@ -2495,8 +2497,8 @@ per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helper
 **Core owns the schedule (issue #3941).** The ledger no longer holds the schedule: the feeds' and Extras'
 cadence, their pending occurrences and outcomes live in Core (`schedule_state.json`, `docs/misc/core-api-protocol.md`
 "Update and schedule"), and Core starts every Update through the `core_update` verb (`pfb_core_update_serve()`).
-`pfb_due_ledger.json` keeps only the Outpost's entries: `ss_refresh`, `apply_reconcile` and the `cron` entry's
-`pending_apply` flag. The tick (`pfblockerng_tick()`) reads no schedule state or cache; it asks Core for an `apply`
+`pfb_due_ledger.json` keeps only the Outpost's own: the `cron` entry's `pending_apply` flag (`ss_refresh` and `apply_reconcile`
+entries an earlier version wrote stay and are ignored since issue #3996). The tick (`pfblockerng_tick()`) reads no schedule state or cache; it asks Core for an `apply`
 (pending change inside the apply window) or a `retry` (a `*.fail` marker of an enabled feed, an absent DNSBL manifest).
 Every install and upgrade drops the PHP state file and the retired ledger entries once (`pfb_core_service()`).
 
@@ -2618,12 +2620,11 @@ next success. Open is idempotent-by-key: opening an already-open key refreshes
 
 ### Tick-driven reconciliation — apply stage only
 
-`pfblockerng_tick()` gains an independent `apply_reconcile` due-ledger job with a fixed
-zero-jitter **900-second** interval, placed after conditional SafeSearch handling and before the
-log-maintenance tail. It takes `pfb_apply_reconcile.lock`, rechecks due-ness under the bounded
-exclusive lock, runs one reconciliation scan, and marks the anchored next slot only after that
-scan completes. It never sets `$dispatched`, so it does not interact with the log-trim race
-guard. A lock/open failure or thrown scan remains due for the next scheduled attempt. The scan handles every
+`pfblockerng_tick()` runs one apply reconciliation on every tick (issue #3996: Core decides how often the tick runs, and the tick keeps no
+ledger entry of its own), placed after SafeSearch handling and before the
+log-maintenance tail. It takes `pfb_apply_reconcile.lock` under a bounded exclusive wait and runs one reconciliation scan.
+It never sets `$dispatched`, so it does not interact with the log-trim race
+guard. A lock/open failure or thrown scan is retried by the next tick. The scan handles every
 open `stage=apply` entry:
 
 - **IP:** re-applies the already-persisted mirror directly — `pfb_pfctl_table_op($item,
@@ -2642,11 +2643,11 @@ genuinely stuck — heavier than this mechanism's own "no network I/O, no feed r
 Consequence: a **genuinely** stuck DNSBL apply condition (Unbound fully down, a real conf/build
 failure) does **not** self-heal via the reconciliation job alone — it stays open/yellow until an operator's own
 Force Reload/Update pass (which does run the full restart path) or Unbound's own recovery
-resolves it. A stuck IP `pfctl` condition, by contrast, self-heals within one reconciliation interval —
+resolves it. A stuck IP `pfctl` condition, by contrast, self-heals within one tick —
 the two facilities are not symmetric on this specific point, by design.
 
 Retry is unbounded and uncounted — no attempt-count field, no backoff timer, per direct
-instruction (a genuinely un-fixable condition retries forever at the 900-second reconciliation cadence; cheap
+instruction (a genuinely un-fixable condition retries forever, once per tick; cheap
 per-attempt, accepted as fine). Download/parse-stage entries are never touched by this step —
 those failures stay ledger-visible but retry only at their normal fetch/parse cadence.
 

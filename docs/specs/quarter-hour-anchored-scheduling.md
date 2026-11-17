@@ -49,7 +49,7 @@ scheduling model.
 - Existing manual update, Force Update/Reload, Hold, Never, disabled group, disabled row,
   package-disabled, feed-pass lock, cache-regeneration, and pending-apply contracts remain unless
   this specification explicitly changes them.
-- SafeSearch and apply reconciliation retain their fixed zero-jitter 900-second ledger cadences.
+- SafeSearch and apply reconciliation run on every tick, with no ledger entry of their own (issue #3996): Core decides when the tick runs.
   Log maintenance remains on each eligible idle tick.
 - Registered General fields use `PfbConfig`; dynamic IPv4, IPv6, and DNSBL feed-group fields
   remain foreign section data. No direct registered-path access or second config gateway is

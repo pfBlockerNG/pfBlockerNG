@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/** issue #2089: overlapping ticks must serialize SafeSearch refresh work. */
+/** Issues #2089, #3996: overlapping ticks serialize SafeSearch refresh work under its lock; each tick refreshes, one after the other. */
 final class TickSafeSearchReservationTest extends TestCase
 {
 	private string $dir;
@@ -48,10 +48,9 @@ final class TickSafeSearchReservationTest extends TestCase
 	}
 
 	/**
-	 * Two real tick processes overlap their refresh callbacks. Before the lock/recheck,
-	 * both callbacks run; after it, only the winner runs and the loser observes not-due.
+	 * Two real tick processes overlap their refresh callbacks: the lock lets one in at a time, and both ticks refresh.
 	 */
-	public function testOverlappingTicksRunOneSafeSearchRefresh(): void
+	public function testOverlappingTicksRefreshSafeSearchOneAfterTheOther(): void
 	{
 		if (!function_exists('pcntl_fork')) {
 			$this->markTestSkipped('pcntl_fork() unavailable; overlapping tick reproduction requires real processes.');
@@ -87,11 +86,12 @@ final class TickSafeSearchReservationTest extends TestCase
 						return $handle;
 					};
 					$refresh = static function () use ($callsPath, $releasePath): void {
-						file_put_contents($callsPath, getmypid() . "\n", FILE_APPEND | LOCK_EX);
+						file_put_contents($callsPath, "start\n", FILE_APPEND | LOCK_EX);
 						$deadline = microtime(TRUE) + 3.0;
 						while (!is_file($releasePath) && microtime(TRUE) < $deadline) {
 							usleep(1000);
 						}
+						file_put_contents($callsPath, "end\n", FILE_APPEND | LOCK_EX);
 					};
 					pfblockerng_tick(['pfblockerng.php dcc'], $refresh, $opener, core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
 					exit(0);
@@ -111,8 +111,7 @@ final class TickSafeSearchReservationTest extends TestCase
 			$this->assertTrue($this->waitForLineCount($startedPath, 2, 3.0),
 				'overlap workers did not both reach started barrier; lines=' . $this->lineCount($startedPath));
 			touch($openersReleasePath);
-			// Both workers reached the overlap barrier. One callback is the expected
-			// winner; the second worker either waits on the lock or races the old code.
+			// Both workers reached the overlap barrier: the first callback holds the lock, the second waits for it.
 			$this->assertTrue($this->waitForLineCount($callsPath, 1, 3.0),
 				'no SafeSearch callback reached overlap; lines=' . $this->lineCount($callsPath));
 		} finally {
@@ -135,8 +134,7 @@ final class TickSafeSearchReservationTest extends TestCase
 		$calls = is_file($callsPath)
 			? array_values(array_filter(explode("\n", (string) file_get_contents($callsPath)), 'strlen'))
 			: [];
-		$this->assertCount(1, $calls,
-			'overlapping ticks must invoke SafeSearch once after the in-lock due recheck; calls=' . var_export($calls, TRUE));
+		$this->assertSame(['start', 'end', 'start', 'end'], $calls, 'both ticks refresh, never at the same time');
 	}
 
 	private function waitForPath(string $path, float $timeout): void

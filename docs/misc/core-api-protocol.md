@@ -621,8 +621,8 @@ pfb-dns ticket decides it.
 | State (`--state-dir`) | `/usr/local/etc/pfb_core` (0700): Core's data and its lock, never settings; with `--update-cmd` also `schedule_state.json` and `update.log`; outside `/var`, so it survives a RAM-disk reboot |
 | Settings backend | `/usr/local/pkg/pfblockerng/pfb_core_settings.sh` (`--settings-backend-cmd`): `config.xml` through PHP |
 | Update program | `/usr/local/pkg/pfblockerng/pfb_core_update.sh` (`--update-cmd`): the `core_update` verb of `pfblockerng.inc` |
-| Metrics program | `/usr/local/pkg/pfblockerng/pfb_core_metrics.sh` (`--metrics-cmd`): exits at once while `/usr/local/etc/pfb_metrics_enabled` is absent, else runs the `metrics` verb under `timeout -s TERM -k 5 50` |
-| Counters program | `/usr/local/pkg/pfblockerng/pfb_core_counters.sh` (`--counters-cmd`): the `core_counters` verb of `pfblockerng.inc`, argument `daily` or `daily weekly` |
+| Metrics program | `/usr/local/pkg/pfblockerng/pfb_core_metrics.sh` (`--metrics-cmd`): runs the `metrics` verb under `timeout -s TERM -k 5 50`; it tests nothing, Core decides |
+| Counters program | `/usr/local/pkg/pfblockerng/pfb_core_counters.sh` (`--counters-cmd`): the `core_counters` verb of `pfblockerng.inc`, argument `clearip`, `cleardnsbl` or both |
 
 - **Start** and **Stop** run under one lock (`lockf -k -t 20 /var/run/pfb_core.lock`; status 75 when another start or
   stop holds it). **Start** keeps a pfb_core supervisor that already runs. Otherwise it runs this machine's binary (picked by `uname -p`), and it

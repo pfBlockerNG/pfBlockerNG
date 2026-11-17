@@ -123,8 +123,6 @@ if ($_POST) {
 			config_set_path('installedpackages/pfblockerngglobal/widget-maxheight', $pfb['wglobal']['widget-maxheight']);
 		}
 
-		// Core clears each counter at the cadence stored above; no crontab entry is involved.
-
 		// Remove old settings
 		if (isset($pfb['wglobal']['widget-maxpivot'])) {
 			unset($pfb['wglobal']['widget-maxpivot']);
@@ -136,6 +134,7 @@ if ($_POST) {
 		config_del_path('installedpackages/pfblockerngglobal/widget-dnsblquery');
 
 		write_config('pfBlockerNG: Saved Widget customizations via Dashboard');
+		pfb_core_settings_changed(NULL, TRUE);	// Core decides the counter lane from these cadences; outside any lock, and a failure never undoes the save
 		header("Location: /");
 		exit(0);
 	}

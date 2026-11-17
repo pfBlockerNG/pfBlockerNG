@@ -234,6 +234,7 @@ final class TickApplyReconcileFailureTest extends TestCase
 		$openerStarted = "{$this->dir}/opener-started";
 		$openersRelease = "{$this->dir}/openers-release";
 		$calls = "{$this->dir}/calls";
+		$finish = "{$this->dir}/finish";
 		$pids = [];
 		$workerFailures = [];
 		try {
@@ -257,9 +258,10 @@ final class TickApplyReconcileFailureTest extends TestCase
 							}
 							return fopen($path, 'c');
 						};
-						$this->tick(static function () use ($calls): void {
+						$this->tick(static function () use ($calls, $finish): void {
 							file_put_contents($calls, "start\n", FILE_APPEND | LOCK_EX);
-							usleep(50000);
+							for ($deadline = microtime(TRUE) + 3.0; !is_file($finish) && microtime(TRUE) < $deadline; usleep(1000)) {
+							}
 							file_put_contents($calls, "end\n", FILE_APPEND | LOCK_EX);
 						}, $opener);
 						exit(0);
@@ -276,9 +278,11 @@ final class TickApplyReconcileFailureTest extends TestCase
 			$this->assertTrue($this->waitForLineCount($openerStarted, 2, 3.0),
 				'both workers must reach the lock opener; lines=' . $this->lineCount($openerStarted));
 			touch($openersRelease);
+			$this->assertTrue($this->waitForLineCount($calls, 1, 3.0), 'no reconciliation started; lines=' . $this->lineCount($calls));
 		} finally {
 			touch($go);
 			touch($openersRelease);
+			touch($finish);
 			foreach ($pids as $pid) {
 				pcntl_waitpid($pid, $status);
 				if (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {

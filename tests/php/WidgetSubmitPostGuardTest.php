@@ -88,8 +88,10 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		$standIn = pfb_test_start_process([PHP_BINARY, __DIR__ . '/support/CoreSettingsStandIn.php', "{$dir}/api.sock", "{$dir}/requests",
 			json_encode(['SettingsChanged' => [200, ['initialized' => TRUE, 'revision' => 4, 'projections' => []]]], JSON_THROW_ON_ERROR)]);
 		try {
+			$deadline = hrtime(TRUE) + 10_000_000_000;
 			for ($out = ''; !str_contains($out, 'ready'); usleep(1000)) {
 				$out .= (string) stream_get_contents($standIn[1][1]);
+				$this->assertLessThan($deadline, hrtime(TRUE), 'the Core stand-in never listened');
 			}
 
 			$result = $this->runWidget(['pfb_submit' => 'save', 'pfb_clearip' => 'daily', 'pfb_cleardnsbl' => 'weekly'], [], "{$dir}/api.sock", "{$dir}/requests");

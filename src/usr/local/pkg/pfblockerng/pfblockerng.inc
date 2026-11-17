@@ -29080,33 +29080,30 @@ require_once __DIR__ . '/pfblockerng_cron.inc';
 require_once __DIR__ . '/pfblockerng_geoip.inc';
 
 /**
- * Core's counter lane (issue #3996): clears each counter whose stored widget cadence is one of $cadences, `daily` and, on Sundays, `weekly`.
- * `never`, an absent or any other stored value clears nothing; neither the master switch nor .pfb_cron_disable gates it (the cron entries it
- * replaces had neither). widget-clearip and widget-cleardnsbl are unregistered keys: read through the section, as the install script does.
+ * Core's counter lane (issue #3996): clears the counters Core names, `clearip` and `cleardnsbl`, each at most once and in that order. Core
+ * decided from the `maintenance` projection which are due, so this reads no setting and gates on neither the master switch nor the
+ * cron-disable sentinel.
  *
- * @param list<string> $cadences
- * @return int 0, or 2 with nothing cleared when no cadence is given or any is not `daily` or `weekly`
+ * @param list<string> $verbs
+ * @return int 0, or 2 with nothing cleared when no verb is given or any is not `clearip` or `cleardnsbl`
  */
-function pfb_core_counters(array $cadences): int {
-	foreach ($cadences as $cadence) {
-		if ($cadence !== 'daily' && $cadence !== 'weekly') {
-			fwrite(STDERR, "Core counters: every argument must be daily or weekly.\n");
+function pfb_core_counters(array $verbs): int {
+	foreach ($verbs as $verb) {
+		if ($verb !== 'clearip' && $verb !== 'cleardnsbl') {
+			fwrite(STDERR, "Core counters: every argument must be clearip or cleardnsbl.\n");
 			return 2;
 		}
 	}
-	if ($cadences === []) {
-		fwrite(STDERR, "Core counters: give daily, weekly or both.\n");
+	if ($verbs === []) {
+		fwrite(STDERR, "Core counters: give clearip, cleardnsbl or both.\n");
 		return 2;
 	}
-	$stored = PfbConfig::readSection('installedpackages/pfblockerngglobal');
-	foreach (['clearip', 'cleardnsbl'] as $type) {
-		if (!in_array($stored["widget-{$type}"] ?? NULL, $cadences, TRUE)) {
-			continue;
-		}
-		if ($type === 'clearip') {
-			pfBlockerNG_clearip();
-		}
-		pfBlockerNG_clearsqlite($type);
+	if (in_array('clearip', $verbs, TRUE)) {
+		pfBlockerNG_clearip();
+		pfBlockerNG_clearsqlite('clearip');
+	}
+	if (in_array('cleardnsbl', $verbs, TRUE)) {
+		pfBlockerNG_clearsqlite('cleardnsbl');
 	}
 	return 0;
 }
@@ -29117,21 +29114,13 @@ if (isset($argv[1]) && $argv[1] == 'core_update') {
 	pfb_global();
 	exit(pfb_core_update_serve((string) stream_get_contents(STDIN, PFB_CORE_UPDATE_MAX_REQUEST + 1)));
 }
-// Core's scheduled maintenance has no request or fd 3 result: every guarded deferral is the real EX_TEMPFAIL status 75.
+// Core calls the quarter-hour maintenance only while the package is on and the cron-disable sentinel is absent (`maintenance` projection): it has no gate and no request or fd 3 result.
 if (isset($argv[1]) && $argv[1] == 'core_maintenance') {
 	pfb_global();
-	if (PfbConfig::read('gen/enable_cb') !== PfbToggle::On) {
-		fwrite(STDERR, "Core maintenance skipped: pfBlockerNG is disabled.\n");
-		exit(75);
-	}
-	if (pfb_cron_disabled()) {
-		fwrite(STDERR, "Core maintenance skipped: " . pfb_cron_disable_path() . " is present.\n");
-		exit(75);
-	}
 	pfblockerng_tick();
 	exit(0);
 }
-// Core's counter lane at each local day change: argv is `daily`, plus `weekly` on Sundays.
+// Core's counter lane at a local day change: argv is the counters due, `clearip` and/or `cleardnsbl`.
 if (isset($argv[1]) && $argv[1] == 'core_counters') {
 	pfb_global();
 	exit(pfb_core_counters(array_slice($argv, 2)));

@@ -74,16 +74,17 @@ the existing explicit statistics clear remains the reset mechanism, with no arbi
 
 - New CLI verb `php /usr/local/www/pfblockerng/pfblockerng.php metrics` runs
   `pfb_metrics_write()`.
-- Core runs the program `/usr/local/pkg/pfblockerng/pfb_core_metrics.sh` (`--metrics-cmd`) every minute, and no crontab entry
-  exists (#3996). The wrapper exits at once while the sentinel `/usr/local/etc/pfb_metrics_enabled` is absent; otherwise it runs
-  `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`,
+- Core runs the program `/usr/local/pkg/pfblockerng/pfb_core_metrics.sh` (`--metrics-cmd`) every minute while the `maintenance` projection
+  says `enabled` and `metricsExport` (pfBlockerNG's master enable and the option), and no crontab entry exists (#3996). The wrapper tests
+  nothing and runs `/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics`,
   which sends TERM at 50 seconds and KILL 5 seconds later, so a hung source cannot pile
   up runs even if it ignores TERM. Core skips a minute while the previous run is alive. The one-minute cadence matches
   node_exporter's own `interface-collector.py`.
-- The sentinel exists only while pfBlockerNG's master enable and the option are both on, so it is what schedules the export:
-  a sentinel removed by hand stops the export until the next sync pass recreates it.
+- The sentinel `/usr/local/etc/pfb_metrics_enabled` is only the publish guard inside the Outpost (it is what lets a publish that began
+  before a disable not recreate the file), not a schedule: Core decides from the projection. A sentinel removed by hand makes each run log once
+  and publish nothing until the next sync pass recreates it.
 - Turning the option off, or turning pfBlockerNG's master enable off, removes the sentinel
-  and deletes `pfblockerng.prom`. Package deinstall does the same.
+  and deletes `pfblockerng.prom`; Core stops calling the program at its next read of the projection. Package deinstall does the same.
 - The metrics lane deliberately runs regardless of `.pfb_cron_disable`: that switch
   stops the scheduled download dispatch, and the metrics verb is read-only observability.
 - The enable state lives in `/usr/local/etc`, not the pfBlockerNG db directory: `/var` is

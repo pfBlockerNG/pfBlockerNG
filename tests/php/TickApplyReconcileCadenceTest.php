@@ -83,7 +83,7 @@ exit 1
 		pfb_sync_status_open('ip', 'pfB_Test_v4', 'apply', 'seeded failure', $this->dir);
 		$next = time() + 3600;
 		pfb_due_ledger_write_entry('apply_reconcile', ['last_run' => $next - 900, 'next_due' => $next, 'jitter' => 0], $this->dir);
-		$tick = static fn () => pfblockerng_tick(core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
+		$tick = static fn () => pfblockerng_tick(ss_refresh: static fn(): bool => TRUE, core_settings: static fn(): ?string => NULL, core_call: static fn(): array => ['status' => 0, 'body' => NULL, 'error' => 'no Core in this test']);
 
 		$tick();
 		$tick();
