@@ -211,8 +211,8 @@ func addrOf(v uint32) netip.Addr {
 }
 
 // CIDRAggregate is the cidr_aggregate verb: the exact CIDR union of the rows of members, as iprange writes it (numerically
-// sorted, a host without "/32", contained and adjacent rows merged). iprange's reading of a bad token is reproduced, not
-// rejected.
+// sorted, a host without "/32", contained and adjacent rows merged). iprange's reading of the bad tokens the corpus holds is
+// reproduced, not rejected; a mask of mixed digits and other characters is not followed.
 func CIDRAggregate(members string) []string {
 	var s addrSet
 	eachLine(members, func(line string) {

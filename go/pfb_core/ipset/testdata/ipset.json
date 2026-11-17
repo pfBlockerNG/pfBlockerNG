@@ -17520,6 +17520,828 @@
     "log": [],
     "leftover_tmp": false
    }
+  },
+  {
+   "id": "rec_later_h_rows_v4",
+   "description": "Hostile rows in a LATER feed (dedup on): the earlier feed's rows are grepcidr patterns, and grepcidr -v drops a row with no readable address (a name, a comment, a blank, a leading-zero octet, text glued to the address), reads an address anywhere on the row, and keeps an unreadable prefix length's address.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "10.0.0.0/8\n203.0.113.7\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "host.invalid\n# comment\n\n2001:db8::1\n::1\n010.1.1.1\n1.2.3.4\n10.1.1.1\nfoo 10.2.2.2\nfoo 1.2.3.5\n1.2.3.6x\n1.2.3.7 tail\n::ffff:1.2.3.8\n::ffff:10.3.3.3\nfe80::1%em0\n1.2.3.9/33\n10.4.4.4/33\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v4.txt": [
+      "10.0.0.0/8",
+      "203.0.113.7"
+     ],
+     "Y_v4.txt": [
+      "1.2.3.4",
+      "1.2.3.7 tail",
+      "1.2.3.9/33",
+      "::ffff:1.2.3.8",
+      "foo 1.2.3.5"
+     ]
+    },
+    "master": [
+     "X_v4 10.0.0.0/8",
+     "X_v4 203.0.113.7",
+     "Y_v4 1.2.3.4",
+     "Y_v4 1.2.3.7 tail",
+     "Y_v4 1.2.3.9/33",
+     "Y_v4 ::ffff:1.2.3.8",
+     "Y_v4 foo 1.2.3.5"
+    ],
+    "mastercat": [
+     "10.0.0.0/8",
+     "203.0.113.7",
+     "1.2.3.4",
+     "1.2.3.7",
+     "1.2.3.9/33",
+     "::ffff:1.2.3.8",
+     "foo"
+    ],
+    "counts": [
+     "X_v4 2",
+     "Y_v4 5"
+    ],
+    "match": {},
+    "processed": 2,
+    "log": []
+   }
+  },
+  {
+   "id": "rec_later_range_rows_v4",
+   "description": "a-b rows in a later feed (dedup on): grepcidr reads both ends of the row as addresses; the row goes when either end is under an earlier row.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "10.0.0.0/24\n192.0.2.5\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "10.0.0.1-10.0.0.9\n10.0.0.250-10.0.1.5\n10.0.1.1-10.0.0.9\n1.2.3.4-1.2.3.9\n192.0.2.1-192.0.2.9\n1.2.3.4 - 192.0.2.5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v4.txt": [
+      "10.0.0.0/24",
+      "192.0.2.5"
+     ],
+     "Y_v4.txt": [
+      "1.2.3.4-1.2.3.9",
+      "192.0.2.1-192.0.2.9"
+     ]
+    },
+    "master": [
+     "X_v4 10.0.0.0/24",
+     "X_v4 192.0.2.5",
+     "Y_v4 1.2.3.4-1.2.3.9",
+     "Y_v4 192.0.2.1-192.0.2.9"
+    ],
+    "mastercat": [
+     "10.0.0.0/24",
+     "192.0.2.5",
+     "1.2.3.4-1.2.3.9",
+     "192.0.2.1-192.0.2.9"
+    ],
+    "counts": [
+     "X_v4 2",
+     "Y_v4 2"
+    ],
+    "match": {},
+    "processed": 2,
+    "log": []
+   }
+  },
+  {
+   "id": "rec_later_pattern_spellings_v4",
+   "description": "Odd rows in the EARLIER feed as grepcidr patterns (dedup on): a leading-zero octet is decimal there, a prefix over 32 and a name are no pattern, host bits cover the network, an a-b row covers its hosts, text after an address is ignored.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "010.9.9.9\n1.2.3.4/33\n198.51.100.7/24\n5.5.5.1-5.5.5.9\n# c\nname.invalid\n1.1.1.1 tail\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "10.9.9.9\n8.9.9.9\n1.2.3.4\n198.51.100.200\n5.5.5.5\n5.5.5.10\n1.1.1.1\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v4.txt": [
+      "# c",
+      "010.9.9.9",
+      "1.1.1.1 tail",
+      "1.2.3.4/33",
+      "198.51.100.7/24",
+      "5.5.5.1-5.5.5.9",
+      "name.invalid"
+     ],
+     "Y_v4.txt": [
+      "1.2.3.4",
+      "5.5.5.10",
+      "8.9.9.9"
+     ]
+    },
+    "master": [
+     "X_v4 # c",
+     "X_v4 010.9.9.9",
+     "X_v4 1.1.1.1 tail",
+     "X_v4 1.2.3.4/33",
+     "X_v4 198.51.100.7/24",
+     "X_v4 5.5.5.1-5.5.5.9",
+     "X_v4 name.invalid",
+     "Y_v4 1.2.3.4",
+     "Y_v4 5.5.5.10",
+     "Y_v4 8.9.9.9"
+    ],
+    "mastercat": [
+     "#",
+     "010.9.9.9",
+     "1.1.1.1",
+     "1.2.3.4/33",
+     "198.51.100.7/24",
+     "5.5.5.1-5.5.5.9",
+     "name.invalid",
+     "1.2.3.4",
+     "5.5.5.10",
+     "8.9.9.9"
+    ],
+    "counts": [
+     "X_v4 7",
+     "Y_v4 3"
+    ],
+    "match": {},
+    "processed": 2,
+    "log": []
+   }
+  },
+  {
+   "id": "rec_later_other_family_only_v4",
+   "description": "The earlier feed holds only an IPv6 row (dedup on): grepcidr then reads no IPv4 address at all, so every IPv4 row of the later feed goes, hosts and CIDRs alike.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "2001:db8::/32\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "1.2.3.0/24\n1.2.3.4\n2001:db8::5\n2001:db9::5\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v4.txt": [
+      "2001:db8::/32"
+     ],
+     "Y_v4.txt": [
+      "2001:db9::5"
+     ]
+    },
+    "master": [
+     "X_v4 2001:db8::/32",
+     "Y_v4 2001:db9::5"
+    ],
+    "mastercat": [
+     "2001:db8::/32",
+     "2001:db9::5"
+    ],
+    "counts": [
+     "X_v4 1",
+     "Y_v4 1"
+    ],
+    "match": {},
+    "processed": 2,
+    "log": []
+   }
+  },
+  {
+   "id": "rec_later_cidr_keep_mode_v4",
+   "description": "CIDR rows in a later feed (dedup on): a /24 with no earlier network at least as wide skips grepcidr entirely, so even a name with a /24 survives; a /26 is tested against the earlier /25 only.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.2.3.0/25\n9.9.9.9\n"
+     },
+     {
+      "name": "Y_v4",
+      "text": "1.2.3.0/24\nname.invalid/24\n1.2.3.64/26\n1.2.3.200/26\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v4.txt": [
+      "1.2.3.0/25",
+      "9.9.9.9"
+     ],
+     "Y_v4.txt": [
+      "1.2.3.0/24",
+      "1.2.3.200/26",
+      "name.invalid/24"
+     ]
+    },
+    "master": [
+     "X_v4 1.2.3.0/25",
+     "X_v4 9.9.9.9",
+     "Y_v4 1.2.3.0/24",
+     "Y_v4 1.2.3.200/26",
+     "Y_v4 name.invalid/24"
+    ],
+    "mastercat": [
+     "1.2.3.0/25",
+     "9.9.9.9",
+     "1.2.3.0/24",
+     "1.2.3.200/26",
+     "name.invalid/24"
+    ],
+    "counts": [
+     "X_v4 2",
+     "Y_v4 3"
+    ],
+    "match": {},
+    "processed": 2,
+    "log": []
+   }
+  },
+  {
+   "id": "rec_v6_later_h_rows",
+   "description": "Hostile rows in a later IPv6 feed (dedup on): no readable IPv6 address means the row goes (a name, a comment, an IPv4 row, '::' and '::/0', which carry no hint grepcidr scans for); other spellings are compared numerically.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8::/32\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "host.invalid\n# c\n1.2.3.4\n2001:db8::1\n2001:db9::1\n::\n::1\n::/0\nfe80::1%em0\n2001:db9::2 tail\nx 2001:db9::3\n2001:DB9::4\n2001:db9:0:0:0:0:0:5\n::ffff:1.2.3.4\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v6.txt": [
+      "2001:db8::/32"
+     ],
+     "Y_v6.txt": [
+      "2001:DB9::4",
+      "2001:db9:0:0:0:0:0:5",
+      "2001:db9::1",
+      "2001:db9::2 tail",
+      "::/0",
+      "::1",
+      "::ffff:1.2.3.4",
+      "fe80::1%em0",
+      "x 2001:db9::3"
+     ]
+    },
+    "master": [
+     "X_v6 2001:db8::/32",
+     "Y_v6 2001:DB9::4",
+     "Y_v6 2001:db9:0:0:0:0:0:5",
+     "Y_v6 2001:db9::1",
+     "Y_v6 2001:db9::2 tail",
+     "Y_v6 ::/0",
+     "Y_v6 ::1",
+     "Y_v6 ::ffff:1.2.3.4",
+     "Y_v6 fe80::1%em0",
+     "Y_v6 x 2001:db9::3"
+    ],
+    "mastercat": [
+     "2001:db8::/32",
+     "2001:DB9::4",
+     "2001:db9:0:0:0:0:0:5",
+     "2001:db9::1",
+     "2001:db9::2",
+     "::/0",
+     "::1",
+     "::ffff:1.2.3.4",
+     "fe80::1%em0",
+     "x"
+    ],
+    "counts": [
+     "X_v6 1",
+     "Y_v6 9"
+    ],
+    "match": {},
+    "processed": 2,
+    "log": [
+     "recompute [ v6 ]: dropped total-range row(s) from [ Y_v6 ] before cumulative dedup (a 0.0.0.0/0 or ::/0 pattern would empty every lower-priority alias)"
+    ]
+   }
+  },
+  {
+   "id": "rec_v6_v4_placeholder_first",
+   "description": "An IPv6 pass whose first feed holds the IPv4-spelled placeholder closing wrote (dedup on): the only pattern is IPv4, so grepcidr reads IPv4 addresses only and every pure IPv6 row of the later feed goes.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "127.1.7.7\n"
+     },
+     {
+      "name": "Y_v6",
+      "text": "2001:db8::1\n::ffff:1.2.3.4\n1.2.3.4\n127.1.7.7\n2001:db8::/32\n"
+     }
+    ],
+    "dedup": "on",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v6.txt": [
+      "127.1.7.7"
+     ],
+     "Y_v6.txt": [
+      "1.2.3.4",
+      "::ffff:1.2.3.4"
+     ]
+    },
+    "master": [
+     "X_v6 127.1.7.7",
+     "Y_v6 1.2.3.4",
+     "Y_v6 ::ffff:1.2.3.4"
+    ],
+    "mastercat": [
+     "127.1.7.7",
+     "1.2.3.4",
+     "::ffff:1.2.3.4"
+    ],
+    "counts": [
+     "X_v6 1",
+     "Y_v6 2"
+    ],
+    "match": {},
+    "processed": 2,
+    "log": []
+   }
+  },
+  {
+   "id": "rec_dedup_off_master_untouched_v4",
+   "description": "Dedup off: the masterfile is not rewritten, this family's stale rows included.",
+   "op": "recompute",
+   "family": "v4",
+   "input": {
+    "members": [
+     {
+      "name": "X_v4",
+      "text": "1.1.1.1\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null,
+    "master": {
+     "text": "X_v4 9.9.9.9\nY_v6 2001:db8::1\n"
+    }
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v4.txt": [
+      "1.1.1.1"
+     ]
+    },
+    "master": [
+     "X_v4 9.9.9.9",
+     "Y_v6 2001:db8::1"
+    ],
+    "mastercat": [],
+    "counts": [
+     "X_v4 1"
+    ],
+    "match": {},
+    "processed": 1,
+    "log": []
+   }
+  },
+  {
+   "id": "rec_dedup_off_master_untouched_v6",
+   "description": "Dedup off, IPv6 pass: the masterfile is not rewritten, this family's stale rows included.",
+   "op": "recompute",
+   "family": "v6",
+   "input": {
+    "members": [
+     {
+      "name": "X_v6",
+      "text": "2001:db8::1\n"
+     }
+    ],
+    "dedup": "off",
+    "repmode": "off",
+    "max": 0,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "off",
+    "geo": null,
+    "master": {
+     "text": "X_v6 2001:db8::9\nA_v4 1.1.1.1\n"
+    }
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "X_v6.txt": [
+      "2001:db8::1"
+     ]
+    },
+    "master": [
+     "X_v6 2001:db8::9",
+     "A_v4 1.1.1.1"
+    ],
+    "mastercat": [],
+    "counts": [
+     "X_v6 1"
+    ],
+    "match": {},
+    "processed": 1,
+    "log": []
+   }
+  },
+  {
+   "id": "supp4_master_alias_inside_sibling",
+   "description": "Dedup on, the alias has no masterfile row but its name sits inside a sibling's (Feed_v4 in XFeed_v4): the masterfile rewrite runs with nothing to remove.",
+   "op": "suppress",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "203.0.113.0/24\n"
+    },
+    "suppression": {
+     "text": "203.0.113.5/32\n"
+    },
+    "dedup": "on",
+    "master": {
+     "text": "XFeed_v4 198.51.100.1\nOther_v4 9.9.9.9\n"
+    }
+   },
+   "expect": {
+    "rc": 0,
+    "members": [
+     "203.0.113.0/30",
+     "203.0.113.4",
+     "203.0.113.6/31",
+     "203.0.113.8/29",
+     "203.0.113.16/28",
+     "203.0.113.32/27",
+     "203.0.113.64/26",
+     "203.0.113.128/25"
+    ],
+    "master": [
+     "Feed_v4 203.0.113.0/30",
+     "Feed_v4 203.0.113.4",
+     "Feed_v4 203.0.113.6/31",
+     "Feed_v4 203.0.113.8/29",
+     "Feed_v4 203.0.113.16/28",
+     "Feed_v4 203.0.113.32/27",
+     "Feed_v4 203.0.113.64/26",
+     "Feed_v4 203.0.113.128/25"
+    ],
+    "stats": [
+     1,
+     8,
+     8
+    ],
+    "log": []
+   }
+  },
+  {
+   "id": "supp6_malformed_crlf_token",
+   "description": "Malformed tokens in CRLF files: what the dropped-entry log names.",
+   "op": "suppress",
+   "family": "v6",
+   "input": {
+    "members": {
+     "text": "2001:db8::1\r\nnope\r\n2001:db8::/129\r\n"
+    },
+    "suppression": {
+     "text": "2001:db8::1/128\r\nbad\r\n"
+    }
+   },
+   "expect": {
+    "ok": true,
+    "members": [],
+    "log": [
+     "IPv6 Suppression: dropping malformed entry [ nope ]IPv6 Suppression: dropping malformed entry [ 2001:db8::/129 ]IPv6 Suppression: dropping malformed entry [ bad ]"
+    ],
+    "leftover_tmp": false
+   }
+  },
+  {
+   "id": "pre_255_non_octet_key",
+   "description": "_255 with more than 253 rows under a key that is not an octet prefix (x.y.z): nothing can be collapsed.",
+   "op": "preprocess",
+   "family": "v4",
+   "input": {
+    "members": {
+     "text": "x.y.z.1\nx.y.z.2\nx.y.z.3\nx.y.z.4\nx.y.z.5\nx.y.z.6\nx.y.z.7\nx.y.z.8\nx.y.z.9\nx.y.z.10\nx.y.z.11\nx.y.z.12\nx.y.z.13\nx.y.z.14\nx.y.z.15\nx.y.z.16\nx.y.z.17\nx.y.z.18\nx.y.z.19\nx.y.z.20\nx.y.z.21\nx.y.z.22\nx.y.z.23\nx.y.z.24\nx.y.z.25\nx.y.z.26\nx.y.z.27\nx.y.z.28\nx.y.z.29\nx.y.z.30\nx.y.z.31\nx.y.z.32\nx.y.z.33\nx.y.z.34\nx.y.z.35\nx.y.z.36\nx.y.z.37\nx.y.z.38\nx.y.z.39\nx.y.z.40\nx.y.z.41\nx.y.z.42\nx.y.z.43\nx.y.z.44\nx.y.z.45\nx.y.z.46\nx.y.z.47\nx.y.z.48\nx.y.z.49\nx.y.z.50\nx.y.z.51\nx.y.z.52\nx.y.z.53\nx.y.z.54\nx.y.z.55\nx.y.z.56\nx.y.z.57\nx.y.z.58\nx.y.z.59\nx.y.z.60\nx.y.z.61\nx.y.z.62\nx.y.z.63\nx.y.z.64\nx.y.z.65\nx.y.z.66\nx.y.z.67\nx.y.z.68\nx.y.z.69\nx.y.z.70\nx.y.z.71\nx.y.z.72\nx.y.z.73\nx.y.z.74\nx.y.z.75\nx.y.z.76\nx.y.z.77\nx.y.z.78\nx.y.z.79\nx.y.z.80\nx.y.z.81\nx.y.z.82\nx.y.z.83\nx.y.z.84\nx.y.z.85\nx.y.z.86\nx.y.z.87\nx.y.z.88\nx.y.z.89\nx.y.z.90\nx.y.z.91\nx.y.z.92\nx.y.z.93\nx.y.z.94\nx.y.z.95\nx.y.z.96\nx.y.z.97\nx.y.z.98\nx.y.z.99\nx.y.z.100\nx.y.z.101\nx.y.z.102\nx.y.z.103\nx.y.z.104\nx.y.z.105\nx.y.z.106\nx.y.z.107\nx.y.z.108\nx.y.z.109\nx.y.z.110\nx.y.z.111\nx.y.z.112\nx.y.z.113\nx.y.z.114\nx.y.z.115\nx.y.z.116\nx.y.z.117\nx.y.z.118\nx.y.z.119\nx.y.z.120\nx.y.z.121\nx.y.z.122\nx.y.z.123\nx.y.z.124\nx.y.z.125\nx.y.z.126\nx.y.z.127\nx.y.z.128\nx.y.z.129\nx.y.z.130\nx.y.z.131\nx.y.z.132\nx.y.z.133\nx.y.z.134\nx.y.z.135\nx.y.z.136\nx.y.z.137\nx.y.z.138\nx.y.z.139\nx.y.z.140\nx.y.z.141\nx.y.z.142\nx.y.z.143\nx.y.z.144\nx.y.z.145\nx.y.z.146\nx.y.z.147\nx.y.z.148\nx.y.z.149\nx.y.z.150\nx.y.z.151\nx.y.z.152\nx.y.z.153\nx.y.z.154\nx.y.z.155\nx.y.z.156\nx.y.z.157\nx.y.z.158\nx.y.z.159\nx.y.z.160\nx.y.z.161\nx.y.z.162\nx.y.z.163\nx.y.z.164\nx.y.z.165\nx.y.z.166\nx.y.z.167\nx.y.z.168\nx.y.z.169\nx.y.z.170\nx.y.z.171\nx.y.z.172\nx.y.z.173\nx.y.z.174\nx.y.z.175\nx.y.z.176\nx.y.z.177\nx.y.z.178\nx.y.z.179\nx.y.z.180\nx.y.z.181\nx.y.z.182\nx.y.z.183\nx.y.z.184\nx.y.z.185\nx.y.z.186\nx.y.z.187\nx.y.z.188\nx.y.z.189\nx.y.z.190\nx.y.z.191\nx.y.z.192\nx.y.z.193\nx.y.z.194\nx.y.z.195\nx.y.z.196\nx.y.z.197\nx.y.z.198\nx.y.z.199\nx.y.z.200\nx.y.z.201\nx.y.z.202\nx.y.z.203\nx.y.z.204\nx.y.z.205\nx.y.z.206\nx.y.z.207\nx.y.z.208\nx.y.z.209\nx.y.z.210\nx.y.z.211\nx.y.z.212\nx.y.z.213\nx.y.z.214\nx.y.z.215\nx.y.z.216\nx.y.z.217\nx.y.z.218\nx.y.z.219\nx.y.z.220\nx.y.z.221\nx.y.z.222\nx.y.z.223\nx.y.z.224\nx.y.z.225\nx.y.z.226\nx.y.z.227\nx.y.z.228\nx.y.z.229\nx.y.z.230\nx.y.z.231\nx.y.z.232\nx.y.z.233\nx.y.z.234\nx.y.z.235\nx.y.z.236\nx.y.z.237\nx.y.z.238\nx.y.z.239\nx.y.z.240\nx.y.z.241\nx.y.z.242\nx.y.z.243\nx.y.z.244\nx.y.z.245\nx.y.z.246\nx.y.z.247\nx.y.z.248\nx.y.z.249\nx.y.z.250\nx.y.z.251\nx.y.z.252\nx.y.z.253\nx.y.z.254\n192.0.2.1\n"
+    },
+    "dup": true,
+    "agg": false,
+    "rep": false,
+    "max": 3,
+    "drep": true,
+    "cc": "CN",
+    "ccwhite": "off",
+    "ccblack": "block",
+    "geo": null
+   },
+   "expect": {
+    "args": "_255",
+    "ran": true,
+    "rc": 0,
+    "members": [],
+    "match_rep": null,
+    "log": []
+   }
+  },
+  {
+   "id": "pmax_master_no_matching_row",
+   "description": "Legacy pMax with a masterfile that holds no row of the offender /24.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "1.2.3.1\n1.2.3.2\n"
+     }
+    },
+    "max": 1,
+    "geo": {},
+    "master": {
+     "text": "B_v4 9.9.9.9\n"
+    }
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "A_v4.txt": [
+      "1.2.3.0/24"
+     ]
+    },
+    "master": [
+     "A_v4 1.2.3.0/24"
+    ],
+    "mastercat": [
+     "1.2.3.0/24"
+    ],
+    "log": []
+   }
+  },
+  {
+   "id": "pmax_v6_file_with_v4_rows",
+   "description": "Legacy pMax skips a _v6 file even when it holds IPv4 rows over the threshold.",
+   "op": "pmax",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v6": {
+      "text": "203.0.113.1\n203.0.113.2\n203.0.113.3\n203.0.113.4\n"
+     },
+     "B_v4": {
+      "text": "192.0.2.1\n"
+     }
+    },
+    "max": 3,
+    "geo": {},
+    "master": {
+     "text": "B_v4 192.0.2.1\n"
+    }
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "A_v6.txt": [
+      "203.0.113.1",
+      "203.0.113.2",
+      "203.0.113.3",
+      "203.0.113.4"
+     ],
+     "B_v4.txt": [
+      "192.0.2.1"
+     ]
+    },
+    "master": [
+     "B_v4 192.0.2.1"
+    ],
+    "mastercat": [],
+    "log": []
+   }
+  },
+  {
+   "id": "clos_blank_line_file_not_refilled",
+   "description": "A deny file holding one blank line is not empty: closing refills only a file of size 0.",
+   "op": "closing",
+   "family": "v4",
+   "input": {
+    "deny": {
+     "A_v4": {
+      "text": "\n"
+     },
+     "B_v4": {
+      "text": "1.1.1.1\n"
+     }
+    },
+    "dedup": "on",
+    "master": {
+     "text": "B_v4 1.1.1.1\n"
+    }
+   },
+   "expect": {
+    "rc": 0,
+    "deny": {
+     "A_v4.txt": [
+      ""
+     ],
+     "B_v4.txt": [
+      "1.1.1.1"
+     ]
+    },
+    "master": [
+     "B_v4 1.1.1.1"
+    ],
+    "sanity": {
+     "original": "0",
+     "final": "1",
+     "verdict": "FAILED",
+     "masterfile_count": "1",
+     "deny_count": "2",
+     "uniq_master": [],
+     "uniq_deny": [],
+     "empty_lists": []
+    },
+    "log": []
+   }
+  },
+  {
+   "id": "pipe_agg_on_v6_feed_untouched",
+   "description": "CIDR Aggregation on, dedup and reputation off: only the IPv4 feed is preprocessed; the IPv6 feed's parsed text is its deny file.",
+   "op": "pipeline",
+   "family": "v4",
+   "input": {
+    "switches": {
+     "dup": false,
+     "agg": true,
+     "rep": false,
+     "drep": false,
+     "prep": false,
+     "supp": false,
+     "dmax": 3,
+     "pmax": 3,
+     "cc": "CN",
+     "ccwhite": "off",
+     "ccblack": "block",
+     "geo": null
+    },
+    "feeds": [
+     {
+      "name": "A_v6",
+      "alias": "AliasA",
+      "text": "2001:db8::2\n2001:db8::1\n"
+     },
+     {
+      "name": "A_v4",
+      "alias": "AliasA",
+      "text": "1.1.1.1\n1.1.1.0\n"
+     }
+    ],
+    "passes": [
+     {
+      "changed": [
+       "A_v6",
+       "A_v4"
+      ]
+     }
+    ],
+    "suppression": {},
+    "agg_types": []
+   },
+   "expect": {
+    "passes": [
+     {
+      "matrix": {
+       "invoke_v4": false,
+       "invoke_v6": false,
+       "dedup": "off",
+       "repmode": "off",
+       "legacy_pmax_followup": false
+      },
+      "ran": {
+       "v4": false,
+       "v6": false
+      },
+      "canonical": {
+       "AliasA_v4": [
+        "1.1.1.0/31"
+       ],
+       "AliasA_v6": [
+        "2001:db8::1",
+        "2001:db8::2"
+       ]
+      },
+      "aggregate": [],
+      "closing": null,
+      "deny_final": {
+       "A_v4.txt": [
+        "1.1.1.0/31"
+       ],
+       "A_v6.txt": [
+        "2001:db8::2",
+        "2001:db8::1"
+       ]
+      }
+     }
+    ]
+   }
   }
  ]
 }

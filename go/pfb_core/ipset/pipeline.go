@@ -160,15 +160,10 @@ func (p *Pipeline) Pass(changed []string, set map[string]string) PassOut {
 			if !strings.HasSuffix(f.Name, "_"+string(family)) {
 				continue
 			}
-			// A feed with no snapshot is seeded from its live deny file; one with neither is left out.
-			if _, ok := p.snap[f.Name]; !ok {
-				live, ok := p.deny[f.Name]
-				if !ok {
-					continue
-				}
-				p.snap[f.Name] = live
+			// A feed that never changed has no snapshot and no deny file, and is left out.
+			if snap, ok := p.snap[f.Name]; ok {
+				in.Feeds = append(in.Feeds, Feed{f.Name, snap})
 			}
-			in.Feeds = append(in.Feeds, Feed{f.Name, p.snap[f.Name]})
 		}
 		rec := Recompute(in)
 		p.store(rec.Lists)
@@ -197,7 +192,9 @@ func (p *Pipeline) Pass(changed []string, set map[string]string) PassOut {
 				continue
 			}
 			key := f.Alias + "_" + string(family)
-			out.Canonical[key] = append(out.Canonical[key], []string{}...)
+			if out.Canonical[key] == nil {
+				out.Canonical[key] = []string{}
+			}
 			if !ok {
 				continue
 			}

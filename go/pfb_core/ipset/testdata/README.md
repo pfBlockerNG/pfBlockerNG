@@ -5,7 +5,7 @@ map #3813, slice 4 of `docs/specs/go-updater-pipeline.md`). Two runners replay e
 
 - The appliance replay: `tests/smoke/test_smoke_ipset_corpus.py`, through the installed package's own `pfblockerng.sh` and
   PHP functions on a real pfSense box. This is the oracle: every `expect` is its output.
-- Go: the `ipset` package's corpus test (a later step of #4033) replays the same file against Core.
+- Go: the `ipset` package's corpus test (`corpus_test.go`, `corpus_groups_test.go`) replays the same file against Core.
 
 `ipset.json` holds every case. The expectations were produced by the appliance and then reviewed row by row; they are
 frozen. A one-member difference is a failure, never a tolerance.
@@ -146,6 +146,9 @@ depend on the FreeBSD base system, on DNS (hostnames are `.invalid`) or on timin
 answer, not Debian's. `iprange` and `grepcidr` versions are the oracle: a case that changes with another version is an
 escalation, not a tolerance.
 
+Sixteen cases were added after review and frozen from lab run `local-100032-1794929801-69289bb42e6475fb` on the same versions;
+in that run the 417 earlier results were byte-identical to their frozen expectations.
+
 Replay cost on the VM: the whole harness takes under three minutes; the heaviest cases (2,000,000 members) take 5 to 18 s each.
 `supp6_large_2m_members` (2,000,000 IPv6 members) took 72 s on the VM; `pfb_suppress_file_v6()` peaks near 1.1 GB of PHP memory
 there (measured on a development host), so that case runs last and a memory failure would leave every earlier result.
@@ -179,6 +182,23 @@ Each is today's result, pinned by the named case; none is a recommendation.
   (`rec_v6_spellings_across_feeds`), a pattern with host bits covers its whole network (`rec_h_hostbits_dedup_on`), and a
   later feed's `/24` survives an earlier `/25` or host (`rec_own_host_then_cidr`, `rec_own_partial_cover_kept`). `0.0.0.0/0` and
   `::/0` are kept in their own file but kept out of the cumulative pattern stream (`rec_total_range_first`, `rec_v6_total_range`).
+- In a later feed the dedup hands rows to `grepcidr -vf`, which prints a row only when it reads an address on it and no earlier
+  row holds that address. So a row with no readable address goes (a name, a comment, a blank, a leading-zero octet, text glued
+  to the address: `rec_later_h_rows_v4`, `rec_v6_later_h_rows`); an address is read anywhere on the row, and each end of an
+  `a-b` row counts (`rec_later_range_rows_v4`); a family is read only when an earlier row of that family exists, so an IPv6
+  pass led by the IPv4-spelled placeholder loses every pure IPv6 row (`rec_v6_v4_placeholder_first`,
+  `rec_later_other_family_only_v4`). As patterns, earlier rows are read differently: a leading-zero octet is decimal, a prefix
+  over the family's length and a name are no pattern, an `a-b` row covers its hosts (`rec_later_pattern_spellings_v4`). A CIDR
+  row is tested only against earlier rows of its family at least as wide; with none it is kept unread, name and all
+  (`rec_later_cidr_keep_mode_v4`).
+- Three removals run through `awk 'FNR==NR{a[$0];next}!($0 in a)'`, which prints nothing when its first file is empty. So `_255`
+  empties the feed when the only over-full keys are not octet prefixes (`pre_255_non_octet_key`); the `suppress` masterfile
+  rewrite empties the masterfile when the alias has no row of its own but its name sits inside a sibling's
+  (`supp4_master_alias_inside_sibling`); and the legacy `pmax` verb empties it when it holds no row of an offender /24
+  (`pmax_master_no_matching_row`). Core reproduces all three; the defect is tracked in issue #4050.
+- A verb that does not rewrite the masterfile leaves its category file alone: `recompute` with dedup off
+  (`rec_dedup_off_master_untouched_v4`, `rec_dedup_off_master_untouched_v6`) and `pmax` with no /24 over the threshold
+  (`pmax_v6_file_with_v4_rows`).
 - The offender scan splits each row at the first three `.`-separated fields, so a CIDR row counts as a member of its first three
   octets (`rec_pmax_cidr_rows_count`, `pmax_cidr_rows_count`); the placeholder's `/24` never counts
   (`rec_pmax_placeholder_prefix`); `pfB_`-prefixed aliases never count and are never diverted (`rec_pmax_pfB_excluded`,
@@ -224,7 +244,8 @@ Each is today's result, pinned by the named case; none is a recommendation.
 
 To refreeze after an intended change of the oracle (never to make a failing case pass):
 
-1. Run the replay on a lab box: `scripts/local-smoke.sh --ref "$(git rev-parse HEAD)" --filter ipset_corpus --no-two-vm`. It
+1. Run the replay on a lab box: `scripts/local-smoke.sh --ref "$(git rev-parse HEAD)" --filter ipset_corpus --no-two-vm` (add
+   `--ports-ref <branch>` while a paired FreeBSD-ports change is unmerged). It
    writes `ipset_corpus_actual.json` into the run's diagnostics directory on the box.
 2. Fetch it with `scp`, then, with a copy of this directory's `ipset.json` and the actual file:
 
@@ -281,7 +302,7 @@ every member list it records as a digest. Every `rc` must be 0 or null: no Go fu
 | `preprocess` | `log` | presentation | the GeoIP-missing line is a script message; its effect is in `members` |
 | `recompute` | `deny` | asserted | every feed's rows; files not in the member list keep their pre-seeded rows |
 | `recompute` | `master` | asserted | `RecomputeOut.Master`, both families |
-| `recompute` | `mastercat` | asserted | `MasterCat` of the returned masterfile |
+| `recompute` | `mastercat` | asserted | `MasterCat` of the returned masterfile with dedup on; with dedup off the verb rewrites neither file, and the corpus never seeds this one, so it is empty |
 | `recompute` | `counts` | asserted | derived: `<feed> <rows>` per feed, in member order |
 | `recompute` | `match` | asserted | the match folder: pre-seeded files, minus `DropRep` and `DropExempt`, plus the lists written |
 | `recompute` | `processed` | asserted | derived: the number of feeds the pass returned |
@@ -289,7 +310,7 @@ every member list it records as a digest. Every `rc` must be 0 or null: no Go fu
 | `recompute` | `log` | asserted | containment only: the missing-snapshot lines must name the runner's own fallback decision; the rest is script text |
 | `pmax` | `deny` | asserted | every deny feed's rows, untouched ones included |
 | `pmax` | `master` | asserted | `PMaxOut.Master` |
-| `pmax` | `mastercat` | asserted | `MasterCat` of the returned masterfile |
+| `pmax` | `mastercat` | asserted | `MasterCat` of the returned masterfile when `Applied`; else the verb rewrites neither file and the unseeded one is empty |
 | `pmax` | `rc` | presentation | exit status; the runner requires 0 or null |
 | `pmax` | `log` | presentation | error-log text of IO failures; empty in every case |
 | `suppress/v4` | `members` | asserted | the remainder rows |

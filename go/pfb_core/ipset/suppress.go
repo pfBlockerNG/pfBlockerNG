@@ -67,9 +67,7 @@ func suppressV4(in SuppressIn) Suppressed {
 	if in.Holes == nil {
 		return out
 	}
-	holes := textRows(*in.Holes)
-	slices.Sort(holes)
-	holes = slices.Compact(holes)
+	holes := sortUniq(textRows(*in.Holes))
 	for _, h := range holes {
 		out.Applied = out.Applied || h != ""
 	}
@@ -100,13 +98,12 @@ func suppressV4(in SuppressIn) Suppressed {
 	if !in.Dedup || !slices.ContainsFunc(in.Master, func(r string) bool { return strings.Contains(r, in.Alias) }) {
 		return out
 	}
-	// The masterfile rows of the alias are the ones starting with "alias" and a blank; the survivors replace them.
-	out.Master = out.Master[:0]
-	for _, r := range in.Master {
-		if rest, ok := strings.CutPrefix(r, in.Alias); !ok || rest == "" || !isSpace(rest[0]) {
-			out.Master = append(out.Master, r)
-		}
-	}
+	// The masterfile rows of the alias are the ones starting with "alias" and a blank; the survivors replace them. An alias
+	// named only inside another's rows has none, and the masterfile is then emptied first.
+	out.Master = minus(in.Master, func(r string) bool {
+		rest, ok := strings.CutPrefix(r, in.Alias)
+		return ok && rest != "" && isSpace(rest[0])
+	})
 	for _, r := range out.Members {
 		out.Master = append(out.Master, in.Alias+" "+r)
 	}
@@ -158,7 +155,9 @@ func suppressV6(in SuppressIn) Suppressed {
 		bits int
 	}
 	var entries []entry
+	// PHP's file() drops a CRLF line end whole, so a dropped token is named without its CR.
 	for _, row := range textRows(in.Members) {
+		row = strings.TrimSuffix(row, "\r")
 		switch r, bits, ok, valid := v6Range(row); {
 		case !valid:
 			out.BadMembers = append(out.BadMembers, row)
@@ -168,6 +167,7 @@ func suppressV6(in SuppressIn) Suppressed {
 	}
 	var holes addrSet
 	for _, row := range textRows(*in.Holes) {
+		row = strings.TrimSuffix(row, "\r")
 		switch r, _, ok, valid := v6Range(row); {
 		case !valid:
 			out.BadHoles = append(out.BadHoles, row)

@@ -865,8 +865,8 @@ func TestCorpusRouting(t *testing.T) {
 			t.Errorf("op %s has no case", op)
 		}
 	}
-	if len(doc.Cases) != 417 {
-		t.Errorf("the corpus holds %d cases, expected 417", len(doc.Cases))
+	if len(doc.Cases) != 433 {
+		t.Errorf("the corpus holds %d cases, expected 433", len(doc.Cases))
 	}
 }
 

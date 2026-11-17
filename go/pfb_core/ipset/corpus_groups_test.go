@@ -418,7 +418,7 @@ func runRecompute(t *testing.T, c *corpusCase) {
 	}
 	e.dir("deny").check(t, "deny", deny, false)
 	e.list("master").check(t, "master", got.Master, false)
-	e.list("mastercat").check(t, "mastercat", MasterCat(got.Master), false)
+	e.list("mastercat").check(t, "mastercat", catIf(in.dedup, got.Master), false)
 	e.list("counts").check(t, "counts", counts, true)
 	if want := e.num("processed"); want != len(got.Lists) {
 		t.Errorf("processed: expected %d, actual %d", want, len(got.Lists))
@@ -484,8 +484,17 @@ func runPMax(t *testing.T, c *corpusCase) {
 	rcOK(t, e)
 	e.dir("deny").check(t, "deny", folder(got.Lists, ".txt"), false)
 	e.list("master").check(t, "master", got.Master, false)
-	e.list("mastercat").check(t, "mastercat", MasterCat(got.Master), false)
+	e.list("mastercat").check(t, "mastercat", catIf(got.Applied, got.Master), false)
 	e.must(t)
+}
+
+// catIf is the category file after a verb: cut from the masterfile it rewrote, else the file as the corpus left it, which never
+// seeds one.
+func catIf(rewritten bool, master []string) []string {
+	if rewritten {
+		return MasterCat(master)
+	}
+	return []string{}
 }
 
 // ---- suppress ----

@@ -42,8 +42,7 @@ func Union(family Family, collapsed bool, placeholder string, members []Feed) Un
 		out.Kept = append(out.Kept, m.Name)
 		eachLine(m.Text, func(l string) { rows = append(rows, l) })
 	}
-	slices.Sort(rows)
-	rows = slices.Compact(rows)
+	rows = sortUniq(rows)
 	out.Before = len(rows)
 	switch {
 	case len(rows) == 0:
@@ -52,7 +51,7 @@ func Union(family Family, collapsed bool, placeholder string, members []Feed) Un
 	default:
 		out.Aggregate = CIDRAggregate(strings.Join(rows, "\n"))
 	}
-	if out.Consumer = out.Aggregate; len(out.Aggregate) == 0 {
+	if out.Consumer = slices.Clone(out.Aggregate); len(out.Aggregate) == 0 {
 		out.Consumer = []string{"#"}
 	}
 	return out
