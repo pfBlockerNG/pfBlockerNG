@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "A RETR that ends 250 instead of 226 is refused, as PHP refuses it (only 200, 221 and 226 succeed; its log says \"Unknown Failure Code [250]\"): the published copy is kept and the validators dropped, as for any failed status. Core names the refusal in the same words; PHP's log carries no reason= code.",
+ "description": "A RETR that ends 250 instead of 226 is a complete transfer and is published, as cURL treats it (owner decision, #3995): the published copy is replaced. PHP refuses it, since only 200, 221 and 226 succeed (its log says \"Unknown Failure Code [250]\"), keeps the published copy and drops the validators; its log carries no reason= code.",
  "hosts": {
   "feed.example": [
    "127.0.0.1",
@@ -21,9 +21,7 @@
   }
  ],
  "seed": {
-  "published": "old\n",
-  "etag": "\"v0\"",
-  "lastmod": 1700000000
+  "published": "old\n"
  },
  "files": {
   "ftp": {
@@ -37,9 +35,9 @@
    "op": "ingest",
    "url": "ftp://feed.example:{port:ftp}/list.txt",
    "expect": {
-    "ok": false,
-    "published": "old\n",
-    "reason": "Unknown Failure Code [250]",
+    "ok": true,
+    "published": "1.2.3.4\n5.6.7.8\n",
+    "digest": "3a37adf6991862f9608d33aceb0fbd96",
     "requests": [
      {
       "server": "ftp",
@@ -74,8 +72,7 @@
       "data_to": "127.0.0.1"
      }
     ],
-    "etag": null,
-    "lastmod": null
+    "size": 16
    },
    "old_expect": {
     "ok": false,

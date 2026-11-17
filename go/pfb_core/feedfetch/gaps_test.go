@@ -338,6 +338,19 @@ func TestStatus221And226ArePublished(t *testing.T) {
 	}
 }
 
+// A 250 closes an FTP transfer only (#3995): as an HTTP status it is still unknown to pfb_download and refused.
+func TestAnHTTP250AnswerIsRefused(t *testing.T) {
+	url, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(250)
+		io.WriteString(w, "ftp-style\n")
+	})
+	f, feed := quickFetcher(t)
+	res := f.Ingest(context.Background(), feed, feedfetch.Request{URL: "http://feed.example:" + port(t, url) + "/list", Timeout: 10 * time.Second})
+	if res.OK || res.Status != 250 || res.Reason != "Unknown Failure Code [250]" {
+		t.Fatalf("an HTTP 250 answer must be refused as an unknown status: %+v", res)
+	}
+}
+
 // The request leaves from the source address the Outpost configured.
 func TestTheRequestLeavesFromTheBindAddress(t *testing.T) {
 	probe, err := net.Listen("tcp", "127.0.0.2:0")

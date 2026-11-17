@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "description": "A probe RETR ending in 250 is refused like Ingest; it must not mark the feed changed or replace the published copy.",
+ "description": "A probe RETR ending in 250 is a complete transfer, as an ingest sees it (#3995): the feed is changed and the published copy stays until the ingest replaces it.",
  "hosts": {
   "feed.example": ["127.0.0.1", "203.0.113.5"],
   "rdr.example": ["127.0.0.1", "203.0.113.6"]
@@ -23,13 +23,12 @@
   "op": "probe",
   "url": "ftp://feed.example:{port:ftp}/list.txt",
   "expect": {
-   "ok": false,
-   "decision": "failed",
+   "ok": true,
+   "decision": "changed",
    "published": "feed one\n",
    "digest": "880b4f7332ef14083066ffeee3a25dca",
    "lastmod": 1760000000,
    "size": 9,
-   "reason": "Unknown Failure Code [250]",
    "requests": [
     {"server": "ftp", "command": "USER anonymous"},
     {"server": "ftp", "command": "PASS ftp@example.com"},

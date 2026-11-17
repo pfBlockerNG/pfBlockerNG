@@ -323,7 +323,8 @@ func ftpAttempt(ctx context.Context, req Request, t *ftpTarget, addr string, out
 		return transfer{}, err
 	}
 	c.PrintfLine("QUIT")
-	return transfer{status: code, lastMod: lastMod, size: size}, nil
+	// #3995: a 250 closes a complete transfer as cURL sees it, so it is answered as the 226 it stands for.
+	return transfer{status: 226, lastMod: lastMod, size: size}, nil
 }
 
 // passive opens the data port the way libcurl does, EPSV first and PASV when that is refused or names port 0, and
