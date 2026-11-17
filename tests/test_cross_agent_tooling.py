@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import collections
 import hashlib
 import json
 import shutil
@@ -253,33 +252,10 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "work-branch.sh --worktree",
         "scripts/agent/init-worktree-tools.sh",
         "scripts/agent/ensure-codegraph.sh",
-        # issue #3091: the initializer never rewrites the tracked graph.
-        "It never runs `graphify update`",
-        # The initializer no longer builds the first graph: the routing document
-        # must direct that judgement call to a `/graphify` run instead.
-        "prints a notice and builds nothing",
-        "`/graphify` run",
         "serena project index",
         "OMP_CLI",
         "PI_CLI",
-        "graphify-out/graph.json",
-        "source_file",
-        "src/` is production",
-        "tests/` is",
-        "harness/test",
-        "stubs/` is shim/support",
-        "graph.json` is tracked",
-        "records under `graphify-out/memory/` are tracked",
-        # The query-outcome feedback loop (issue #2823).
-        "graphify save-result",
-        "graphify reflect",
-        "--outcome useful|dead_end|corrected",
-        "`useful` when the returned subgraph answered",
-        "`dead_end` when another surface answered it",
-        "`corrected` when the graph answered and was wrong",
-        "A dead end MUST carry `--correction`",
-        "reflections/LESSONS.md",
-        # Graphify-first holds for code structure ONLY.
+        # CodeGraph's first call is for code structure ONLY; grep first for the rest.
         "grep first",
         "reference counts",
         "tool wiring",
@@ -291,58 +267,6 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     ):
         assert contract in flat, f"direct worktree initialization routing lost {contract}"
 
-    folded_routing = flat.casefold()
-    for obsolete in (
-        "ignored and untracked",
-        "graphify-refresh-required",
-        "graphify-store.py",
-        ".git/graphify-store.lock",
-        "temporary detached builder",
-        "graphify cluster-only",
-        "cluster-only",
-        "then runs `graphify update <root>`",
-    ):
-        assert obsolete not in folded_routing, f"obsolete Graphify store/refresh recipe remains: {obsolete}"
-    assert "graphify-out/views" not in routing
-    assert "update_graphify_views.py" not in routing
-
-    attrs_text = (ROOT / ".gitattributes").read_text(encoding="utf-8")
-    assert attrs_text.strip(), ".gitattributes must not be empty"
-    attrs = attrs_text.splitlines()
-    # linguist-generated collapses GitHub's web diff and language stats; -diff
-    # suppresses local git diff and patch output (issue #3161); merge=graphify
-    # still union-merges. All three attributes must ride on the row.
-    graphify_attribute = "graphify-out/graph.json merge=graphify linguist-generated=true -diff"
-    assert attrs.count(graphify_attribute) == 1, f"expected exact .gitattributes row: {graphify_attribute}"
-    # The root graph plus the query-outcome records are tracked (issue #2823). Records are
-    # named per query and accumulate, so the durable contract is the SET of allowed
-    # prefixes: it fails on a dropped graph and on a newly tracked generated artifact.
-    tracked = subprocess.run(
-        ["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True
-    ).stdout.split()
-    assert "graphify-out/graph.json" in tracked, "the root graph must stay tracked"
-    strays = [
-        path for path in tracked if path != "graphify-out/graph.json" and not path.startswith("graphify-out/memory/")
-    ]
-    assert strays == [], f"generated Graphify output must stay ignored: {strays}"
-    root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    # The pair, in order: ignore the directory's contents, then re-include only the
-    # tracked graph. Either line alone gets the tracking wrong, and so does a later
-    # duplicate of the ignore -- git takes the LAST matching rule, while index()
-    # reports the first, so the count is asserted before the order.
-    assert root_ignore.count("graphify-out/*") == 1, "generated Graphify output must remain ignored, once"
-    assert root_ignore.count("!graphify-out/graph.json") == 1, "the tracked root graph must be re-included, once"
-    assert root_ignore.index("graphify-out/*") < root_ignore.index("!graphify-out/graph.json"), (
-        "the re-include must follow the ignore, or the graph is not tracked"
-    )
-    for obsolete_path in ("scripts/agent/graphify-store.py", "tests/test_graphify_store.py"):
-        assert not (ROOT / obsolete_path).exists(), f"obsolete Graphify store path returned: {obsolete_path}"
-
-
-def test_markdownlint_excludes_generated_graphify_reports() -> None:
-    config = (ROOT / ".markdownlint-cli2.jsonc").read_text(encoding="utf-8")
-    assert '"!graphify-out/**"' in config
-
 
 def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> None:
     local_ignore = (ROOT / ".codegraph/.gitignore").read_text(encoding="utf-8").splitlines()
@@ -350,32 +274,6 @@ def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> N
     assert "!.gitignore" in local_ignore
     root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".codegraph/" not in root_ignore, "root ignore would hide CodeGraph's own tracked contract"
-
-
-def test_graphify_memory_records_are_tracked_by_a_directory_reinclude() -> None:
-    # issue #2823: `!graphify-out/memory/**` silently fails. `graphify-out/*` matches the
-    # memory directory itself and git never descends into it, so every record stays
-    # ignored while the ignore file reads as though they are tracked.
-    lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert lines.count("!graphify-out/memory/") == 1, "re-include the directory, exactly once"
-    assert "!graphify-out/memory/**" not in lines, "a contents glob leaves every record ignored"
-    # gitignore takes the LAST matching rule, so the re-include must follow the ignore.
-    assert lines.index("graphify-out/*") < lines.index("!graphify-out/memory/")
-
-    def ignored(path: str) -> bool:
-        # Only 0 and 1 are verdicts; a symlinked memory/ exits 128.
-        probe = subprocess.run(
-            ["git", "check-ignore", "-q", path], cwd=ROOT, capture_output=True, text=True, check=False
-        )
-        assert probe.returncode in (0, 1), f"git could not classify {path}: {probe.stderr.strip()}"
-        return probe.returncode == 0
-
-    assert not ignored("graphify-out/memory/query_20260101_000000_probe.md"), "records must be trackable"
-    assert ignored("graphify-out/GRAPH_REPORT.md"), "the re-include must not un-ignore the rest"
-    assert ignored("graphify-out/reflections/LESSONS.md"), "the aggregate is derivable, so it stays local"
-
-    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
-    assert "graphify-out/memory/** linguist-documentation" in attributes, "records are prose, not code"
 
 
 def test_omp_language_servers_route_php_include_files() -> None:
@@ -457,120 +355,3 @@ def test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag() -> None:
 
     assert findings() == 0, "semgrep gained .inc support; the documented flag is now misleading"
     assert findings("--scan-unknown-extensions") > 0, "the documented semgrep flag does not work"
-
-
-def test_graphify_install_uses_pypi_floor_without_local_patch() -> None:
-    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"graphifyy[leiden]>=' in pyproject, "pyproject.toml must declare the Graphify PyPI floor dependency"
-
-    installer_path = "scripts/agent/ensure-graphify.sh"
-    installer = (ROOT / installer_path).read_text(encoding="utf-8")
-    assert 'uv tool install --upgrade "$graphify_spec"' in installer, (
-        "the shared Graphify installer lost dynamic pyproject.toml extraction"
-    )
-    resolver = (ROOT / "scripts/agent/resolve-graphify.sh").read_text(encoding="utf-8")
-    quote_probe = (
-        '"$_graphify_interpreter" -I -c \'import shlex, sys; print(shlex.quote(sys.argv[1]))\' "$_graphify_interpreter"'
-    )
-    assert quote_probe in resolver, "uv trampoline validation lost isolated POSIX quoting by its owning interpreter"
-    assert "eval" not in resolver, "Graphify launcher validation must not evaluate launcher text"
-
-    callers = {
-        "scripts/setup-hooks.sh": 'sh "$script_dir/agent/ensure-graphify.sh" "$root"',
-        "scripts/agent/ensure-graphify-merge-driver.sh": 'sh "$(dirname "$0")/ensure-graphify.sh" "$root"',
-        "scripts/agent/setup-agent-tools.sh": '(cd "$root" && sh "$setup_hooks")',
-    }
-    for caller, invocation in callers.items():
-        source = (ROOT / caller).read_text(encoding="utf-8")
-        assert invocation in source, f"{caller} lost mandatory Graphify install reachability"
-        assert "graphifyy" not in source, f"{caller} duplicates the shared Graphify installation convention"
-
-    agent_setup = (ROOT / "scripts/agent/setup-agent-tools.sh").read_text(encoding="utf-8")
-    assert 'sh "$ensure_graphify" "$root"' not in agent_setup, "agent setup duplicates canonical Graphify setup"
-
-    rc = (ROOT / ".graphifyrc").read_text(encoding="utf-8").splitlines()
-    assert "language.inc=php" in rc, ".graphifyrc must declare the PHP include override"
-
-    routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
-    for contract in (
-        "scripts/agent/ensure-graphify.sh",
-        "scripts/setup-hooks.sh",
-        ".githooks/pre-commit",
-        "Graphify-Labs/graphify#3075",
-        "Graphify-Labs/graphify#3310",
-        "pyproject.toml",
-        "language.inc=php",
-        "include-node floor",
-    ):
-        assert contract in routing, f"repository-intelligence routing lost: {contract}"
-
-
-def test_root_graph_freshness_is_enforced_at_commit_and_push() -> None:
-    # issue #3139: the tracked root graph equals `PYTHONHASHSEED=0 graphify update .`
-    # on its tree. The commit that moves code moves the graph (pre-commit rebuilds
-    # and stages it), and a push, the gate runner, and CI refuse a stale one. The
-    # detached post-commit/post-checkout rebuilds this supersedes are gone, and the
-    # merge-driver registration no longer runs `graphify hook install`, which would
-    # recreate them under core.hooksPath.
-    checker_path = "scripts/agent/check-graph-fresh.sh"
-    checker = (ROOT / checker_path).read_text(encoding="utf-8")
-    assert 'PYTHONHASHSEED=0 "$graphify_bin" update "$root"' in checker, "the rebuild must be seeded"
-    assert "resolve_graphify_launcher" in checker, "the rebuild must go through the shared launcher resolver"
-
-    pre_commit = (ROOT / ".githooks/pre-commit").read_text(encoding="utf-8")
-    assert f"sh {checker_path} --refresh" in pre_commit, "pre-commit lost the in-place rebuild"
-    assert "git add -- graphify-out/graph.json" in pre_commit, "pre-commit lost staging the rebuilt graph"
-    assert f"exempted {checker_path}" in pre_commit, "release lines opt out only through .githooks-exempt"
-    pre_push = (ROOT / ".githooks/pre-push").read_text(encoding="utf-8")
-    assert f'"${{ROOT}}/{checker_path}"' in pre_push, "pre-push lost the graph gate"
-    for retired in (".githooks/post-commit", ".githooks/post-checkout"):
-        assert not (ROOT / retired).exists(), f"{retired} is superseded by the synchronous pre-commit rebuild"
-
-    driver = (ROOT / "scripts/agent/ensure-graphify-merge-driver.sh").read_text(encoding="utf-8")
-    assert "hook install" not in driver, "graphify hook install recreates the retired hooks under core.hooksPath"
-    assert 'config merge.graphify.driver "$driver"' in driver, "the merge driver must be registered directly"
-    setup_hooks = (ROOT / "scripts/setup-hooks.sh").read_text(encoding="utf-8")
-    assert "graphify hook" not in setup_hooks, (
-        "Graphify CLI commit-hook writer recreates the retired hooks under core.hooksPath"
-    )
-    assert "graphify-hook-start" in setup_hooks, "setup-hooks.sh must strip leftover Graphify commit hooks"
-
-    routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
-    for contract in (
-        f"`{checker_path} --refresh`",
-        "`PYTHONHASHSEED=0 graphify update .`",
-        "refuse a stale graph",
-        "no `post-commit` or `post-checkout` hook",
-        "registers `merge.graphify.driver` with `git config`",
-    ):
-        assert contract in routing, f"repository-intelligence routing lost: {contract}"
-    for obsolete in ("post-commit rebuild", "runs `graphify hook install`", "after a hook or incremental update"):
-        assert obsolete not in routing, f"retired Graphify mechanism still documented: {obsolete}"
-
-    git_policy = (ROOT / ".agents/policy/git.md").read_text(encoding="utf-8")
-    for contract in (f"`{checker_path} --refresh`", "refuses a push whose `graphify-out/graph.json`"):
-        assert contract in git_policy, f"git policy hook inventory lost: {contract}"
-
-
-def test_tracked_graph_carries_the_php_include_corpus() -> None:
-    # A Graphify without the packaged `.graphifyrc` override parses all 21 `.inc` files with
-    # the Pascal extractor: extraction still succeeds, so the only visible symptom is a
-    # collapsed node count -- 30 across the corpus instead of roughly 755 (issue #2810).
-    # The floor catches an unattended package regression that silently drops the override.
-    graph = json.loads((ROOT / "graphify-out/graph.json").read_text(encoding="utf-8"))
-    include_files = collections.Counter(
-        str(node["source_file"]) for node in graph["nodes"] if str(node.get("source_file", "")).endswith(".inc")
-    )
-    total = sum(include_files.values())
-    # Size alone is satisfied by ONE large include: pfblockerng.inc carries 482 of the
-    # 767 nodes, so a graph holding only that file clears any total-node floor. Breadth
-    # is the discriminating half -- a file parsed as Pascal still contributes its own
-    # file node, so the honest signal is how many includes contribute symbols BESIDES
-    # that node: 9 of 21 with the package override, 3 without it.
-    with_symbols = sorted(path for path, nodes in include_files.items() if nodes > 1)
-    assert total > 400 and len(with_symbols) >= 6, (
-        f"{total} graph nodes from {len(include_files)} .inc files, and only "
-        f"{len(with_symbols)} of them contribute symbols beyond their own file node "
-        f"({', '.join(with_symbols) or 'none'}): the tracked graph is missing the PHP "
-        "include corpus that the packaged .graphifyrc language override restores"
-    )

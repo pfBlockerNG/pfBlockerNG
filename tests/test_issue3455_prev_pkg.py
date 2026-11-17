@@ -240,7 +240,7 @@ def test_the_pinned_commit_is_written_in_exactly_one_tracked_non_doc_file() -> N
     """smoke-on-box.sh and the workflow call the script; neither carries the SHA."""
     ref = _pinned_ref()
     found = subprocess.run(
-        ["git", "-C", str(ROOT), "grep", "--untracked", "-l", "-F", ref, "--", ".", ":!docs", ":!graphify-out"],
+        ["git", "-C", str(ROOT), "grep", "--untracked", "-l", "-F", ref, "--", ".", ":!docs"],
         capture_output=True,
         text=True,
         check=False,

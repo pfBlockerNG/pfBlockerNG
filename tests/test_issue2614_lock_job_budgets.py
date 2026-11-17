@@ -360,7 +360,7 @@ def test_which_roots_hold_kernel_lock_acquires() -> None:
     directions.
 
     `scripts` and `tests/shell` hold none today: the `lockf -k 9` / `flock 9` this issue
-    names lived in `scripts/agent/work-branch.sh` and was retired with the Graphify store.
+    names lived in `scripts/agent/work-branch.sh` and has since been retired.
     Reintroducing a lock there flips `scripts` to bearing and pulls the shellspec jobs
     into the gate -- which is the regression class the issue is about, so it must be a
     visible diff either way.

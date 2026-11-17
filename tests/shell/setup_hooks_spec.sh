@@ -1,6 +1,5 @@
 #shellcheck shell=sh
-# setup-hooks.sh installs Graphify at or above the PyPI floor before activating hooks, then bootstraps
-# CodeGraph for the main checkout when available.
+# setup-hooks.sh activates tracked hooks, then bootstraps CodeGraph for the main checkout when available.
 
 Describe 'setup-hooks.sh contributor bootstrap'
   script_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/setup-hooks.sh"
@@ -18,34 +17,10 @@ Describe 'setup-hooks.sh contributor bootstrap'
         commit -q --allow-empty -m init || return 1
     stubdir="$fixture/bin"; mkdir -p "$stubdir"
     codegraph_log="$fixture/codegraph.log"
-    install_log="$fixture/install.log"
-    graphify_log="$fixture/graphify.log"
-    true > "$graphify_log"
     missing_codegraph_path="$fixture/no-codegraph"; mkdir -p "$missing_codegraph_path"
-    missing_uv_path="$fixture/no-uv"; mkdir -p "$missing_uv_path"
     for tool in awk basename cat chmod dirname git grep mkdir mv rm sed sh tr; do
       ln -s "$(command -v "$tool")" "$missing_codegraph_path/$tool"
-      ln -s "$(command -v "$tool")" "$missing_uv_path/$tool"
     done
-    cat > "$stubdir/uv" <<'UV'
-#!/bin/sh
-case "$*" in
-  'tool install --upgrade graphifyy[leiden]'*)
-    printf '%s\n' "$*" >> "$INSTALL_LOG"
-    if [ -n "${UV_TOOL_BIN_FIXTURE:-}" ]; then
-      mkdir -p "$UV_TOOL_BIN_FIXTURE"
-      printf '%s\n' '#!/bin/sh' 'printf %s\\n "$*" >> "$GRAPHIFY_LOG"' 'exit 0' > "$UV_TOOL_BIN_FIXTURE/graphify"
-      chmod +x "$UV_TOOL_BIN_FIXTURE/graphify"
-    fi
-    ;;
-  'tool dir --bin')
-    [ -n "${UV_TOOL_BIN_FIXTURE:-}" ] || exit 9
-    printf '%s\n' "$UV_TOOL_BIN_FIXTURE"
-    ;;
-  *) exit 9 ;;
-esac
-UV
-    ln -s "$stubdir/uv" "$missing_codegraph_path/uv"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
 case "$1" in
@@ -60,10 +35,8 @@ case "$1" in
   *) exit 9 ;;
 esac
 CODEGRAPH
-    chmod +x "$stubdir/uv" "$stubdir/codegraph"
-    uv_tool_bin_fixture="$fixture/default uv tool bin"
-    export CODEGRAPH_LOG="$codegraph_log" INSTALL_LOG="$install_log" \
-      GRAPHIFY_LOG="$graphify_log" UV_TOOL_BIN_FIXTURE="$uv_tool_bin_fixture"
+    chmod +x "$stubdir/codegraph"
+    export CODEGRAPH_LOG="$codegraph_log"
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
@@ -76,7 +49,6 @@ CODEGRAPH
     The output should include 'core.hooksPath set to: .githooks'
     The stderr should include 'Initializing CodeGraph'
     The contents of file "$codegraph_log" should equal "init $primary"
-    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden]>='
     Assert [ -f "$primary/.codegraph/codegraph.db" ]
   End
 
@@ -84,34 +56,13 @@ CODEGRAPH
     When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
     The status should equal 0
     The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden]>='
     The file "$codegraph_log" should not be exist
-  End
-
-  It 'resolves a fresh uv launcher when its bin directory is absent from PATH'
-    uv_tool_bin="$fixture/uv tool bin"
-    When run env \
-      PATH="$missing_codegraph_path" \
-      UV_TOOL_BIN_FIXTURE="$uv_tool_bin" \
-      sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
-    The status should equal 0
-    The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden]>='
-    The value "$(git_fixture -C "$primary" config --get core.hooksPath)" should equal '.githooks'
-  End
-
-  It 'fails before activating hooks when uv is unavailable'
-    When run env PATH="$missing_uv_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
-    The status should equal 4
-    The stderr should include 'TOOL-MISSING: uv'
-    The value "$(git_fixture -C "$primary" config --get core.hooksPath 2>/dev/null || true)" should equal ''
-    The file "$install_log" should not be exist
   End
 
   It 'still activates Git hooks when the git root and helper checkout have no pyproject.toml'
     # release-published.yml runs setup-hooks.sh from a scripts-only sparse
-    # checkout of pfBlockerNG while CWD is the FreeBSD-ports fork. Graphify
-    # cannot install without pyproject.toml; hook activation still must.
+    # checkout of pfBlockerNG while CWD is the FreeBSD-ports fork. CodeGraph
+    # cannot bootstrap without pyproject.toml; hook activation still must.
     foreign="$fixture/ports"
     helper="$foreign/pfblockerng-src"
     git_fixture init -q "$foreign" || return 1
@@ -123,85 +74,7 @@ CODEGRAPH
     The status should equal 0
     The output should include 'core.hooksPath set to: .githooks'
     The value "$(git_fixture -C "$foreign" config --get core.hooksPath)" should equal '.githooks'
-    The file "$install_log" should not be exist
+    The file "$codegraph_log" should not be exist
   End
 
-  It 'removes leftover Graphify post-commit and post-checkout without running graphify hook install (issue #3139)'
-    # graphify hook install writes those names into core.hooksPath and, when
-    # hooksPath was unset, into .git/hooks. setup must strip the Graphify
-    # blocks itself: `graphify hook uninstall` also drops merge.graphify.driver.
-    mkdir -p "$primary/.git/hooks"
-    printf '%s\n' '#!/bin/sh' '# graphify-hook-start' 'echo leftover-commit' '# graphify-hook-end' > "$primary/.git/hooks/post-commit"
-    printf '%s\n' '#!/bin/sh' '# graphify-checkout-hook-start' 'echo leftover-checkout' '# graphify-checkout-hook-end' > "$primary/.git/hooks/post-checkout"
-    printf '%s\n' '#!/bin/sh' '# graphify-hook-start' 'echo hooksPath-commit' '# graphify-hook-end' > "$primary/.githooks/post-commit"
-    chmod +x "$primary/.git/hooks/post-commit" "$primary/.git/hooks/post-checkout" "$primary/.githooks/post-commit"
-    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
-    The status should equal 0
-    The output should include 'core.hooksPath set to: .githooks'
-    The path "$primary/.git/hooks/post-commit" should not be exist
-    The path "$primary/.git/hooks/post-checkout" should not be exist
-    The path "$primary/.githooks/post-commit" should not be exist
-    The path "$primary/.githooks/pre-commit" should be exist
-    The contents of file "$graphify_log" should not include 'hook install'
-    The contents of file "$graphify_log" should not include 'hook uninstall'
-    The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden]>='
-  End
-
-  It 'leaves a Graphify start marker without its end marker untouched'
-    mkdir -p "$primary/.git/hooks"
-    printf '%s\n' '#!/bin/sh' 'echo keep-me' '# graphify-hook-start' 'echo truncated' > "$primary/.git/hooks/post-commit"
-    chmod +x "$primary/.git/hooks/post-commit"
-    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
-    The status should equal 0
-    The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$primary/.git/hooks/post-commit" should include 'echo keep-me'
-    The contents of file "$primary/.git/hooks/post-commit" should include 'echo truncated'
-  End
-
-  It 'leaves a start marker after an earlier end marker untouched'
-    mkdir -p "$primary/.git/hooks"
-    printf '%s\n' '#!/bin/sh' 'echo keep-me' '# graphify-hook-end' 'echo after-end' '# graphify-hook-start' 'echo dangling-start' > "$primary/.git/hooks/post-commit"
-    chmod +x "$primary/.git/hooks/post-commit"
-    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
-    The status should equal 0
-    The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$primary/.git/hooks/post-commit" should include 'echo dangling-start'
-    The contents of file "$primary/.git/hooks/post-commit" should include 'echo after-end'
-  End
-
-  It 'keeps execute permission on a retained mixed post-commit hook'
-    mkdir -p "$primary/.git/hooks"
-    printf '%s\n' '#!/bin/sh' 'echo custom' '# graphify-hook-start' 'echo g' '# graphify-hook-end' > "$primary/.git/hooks/post-commit"
-    chmod +x "$primary/.git/hooks/post-commit"
-    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
-    The status should equal 0
-    The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$primary/.git/hooks/post-commit" should include 'echo custom'
-    The contents of file "$primary/.git/hooks/post-commit" should not include 'echo g'
-    The path "$primary/.git/hooks/post-commit" should be executable
-  End
-
-  It 'keeps custom text after a complete Graphify block and a dangling start'
-    mkdir -p "$primary/.git/hooks"
-    printf '%s\n' '#!/bin/sh' 'echo keep-me' '# graphify-hook-start' 'echo g' '# graphify-hook-end' '# graphify-hook-start' 'echo dangling-after-complete' > "$primary/.git/hooks/post-commit"
-    chmod +x "$primary/.git/hooks/post-commit"
-    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
-    The status should equal 0
-    The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$primary/.git/hooks/post-commit" should include 'echo keep-me'
-    The contents of file "$primary/.git/hooks/post-commit" should include 'echo dangling-after-complete'
-    The contents of file "$primary/.git/hooks/post-commit" should not include 'echo g'
-  End
-
-  It 'keeps a later hashbang line after stripping a complete Graphify block'
-    mkdir -p "$primary/.git/hooks"
-    printf '%s\n' '#!/bin/sh' '# graphify-hook-start' 'echo g' '# graphify-hook-end' '#!keep-me-hashbang-line' > "$primary/.git/hooks/post-commit"
-    chmod +x "$primary/.git/hooks/post-commit"
-    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
-    The status should equal 0
-    The output should include 'core.hooksPath set to: .githooks'
-    The path "$primary/.git/hooks/post-commit" should be exist
-    The contents of file "$primary/.git/hooks/post-commit" should include '#!keep-me-hashbang-line'
-    The contents of file "$primary/.git/hooks/post-commit" should not include 'echo g'
-  End
 End

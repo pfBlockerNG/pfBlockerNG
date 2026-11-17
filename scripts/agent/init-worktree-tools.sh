@@ -21,11 +21,6 @@ main() {
 	}
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 	sh "$(dirname "$0")/ensure-codegraph.sh" "$root" || exit $?
-	# Never `graphify update` here: it rewrites the tracked graph wholesale, so a fresh
-	# cut was born dirty and `wt remove` refused it (issue #3091). The FIRST graph's
-	# scope is a judgement call, deferred to an AI-assisted `/graphify` run.
-	[ -f "$root/graphify-out/graph.json" ] ||
-		echo "No Graphify root graph in $root; run /graphify in your AI assistant to build one." >&2
 
 	case "${OMP_CLI:-}${PI_CLI:-}" in
 		'') ;;

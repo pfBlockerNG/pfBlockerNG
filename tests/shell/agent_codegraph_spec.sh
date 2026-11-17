@@ -104,33 +104,14 @@ case "$1" in
   *) exit 9 ;;
 esac
 CODEGRAPH
-    graphify_package="$fixture/toolvenv/package/graphify"
-    mkdir -p "$graphify_package"
-    interpreter="$fixture/toolvenv/bin/python3"
-    mkdir -p "$fixture/toolvenv/bin"
-    cat > "$interpreter" <<'INTERPRETER'
-#!/bin/sh
-case "$*" in
-  *os.path.dirname*) printf '%s\n' "$CODEGRAPH_GRAPHIFY_PACKAGE"; exit 0 ;;
-  *activate_language_overrides*) exit 0 ;;
-esac
-exec sh "$@"
-INTERPRETER
-    chmod +x "$interpreter"
-    printf '#!%s\n' "$interpreter" > "$stubdir/graphify"
-    cat >> "$stubdir/graphify" <<'GRAPHIFY'
-[ "$#" -eq 3 ] && [ "$1" = extract ] && [ "$3" = --code-only ] || exit 9
-mkdir -p "$2/graphify-out"
-true > "$2/graphify-out/graph.json"
-GRAPHIFY
     cat > "$stubdir/serena" <<'SERENA'
 #!/bin/sh
 [ "$#" -eq 3 ] && [ "$1" = project ] && [ "$2" = index ] || exit 9
 exit 0
 SERENA
     make_wt_stub "$stubdir"
-    chmod +x "$stubdir/codegraph" "$stubdir/graphify" "$stubdir/serena"
-    export CODEGRAPH_LOG="$codegraph_log" CODEGRAPH_GRAPHIFY_PACKAGE="$graphify_package"
+    chmod +x "$stubdir/codegraph" "$stubdir/serena"
+    export CODEGRAPH_LOG="$codegraph_log"
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }

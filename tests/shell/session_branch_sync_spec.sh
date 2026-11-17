@@ -89,8 +89,8 @@ End
 
 # Untracked files never conflict with a fast-forward or rebase unless the incoming
 # commits write the same path, so they must not count as tree dirt: a session that
-# only queried Graphify leaves untracked graphify-out/memory/ records behind, and a
-# hook that refused to sync over them would stall every later session on that clone.
+# only leaves untracked scratch records behind must not stall every later sync on
+# that clone.
 Describe 'session-branch-sync base branch with untracked files'
   hook="${PFB_ROOT}/.claude/hooks/session-branch-sync.sh"
 
@@ -114,9 +114,9 @@ Describe 'session-branch-sync base branch with untracked files'
     git_fixture clone -q --branch devel "file://$remote" "$session"
 
     printf 'base-2\n' >> "$seed/base.txt"
-    mkdir -p "$seed/graphify-out/memory"
-    printf 'upstream\n' > "$seed/graphify-out/memory/collide.md"
-    git_fixture -C "$seed" add base.txt graphify-out/memory/collide.md
+    mkdir -p "$seed/scratch/records"
+    printf 'upstream\n' > "$seed/scratch/records/collide.md"
+    git_fixture -C "$seed" add base.txt scratch/records/collide.md
     git_fixture -C "$seed" commit -q -m base-2
     git_fixture -C "$seed" push -q origin devel
     git_fixture -C "$session" fetch -q origin devel
@@ -129,14 +129,14 @@ Describe 'session-branch-sync base branch with untracked files'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'fast-forwards over an untracked memory record'
+  It 'fast-forwards over an untracked scratch record'
     sync_untracked() {
-      mkdir -p "$session/graphify-out/memory"
-      printf 'local\n' > "$session/graphify-out/memory/query_local.md"
+      mkdir -p "$session/scratch/records"
+      printf 'local\n' > "$session/scratch/records/query_local.md"
       cd "$session" || return 1
       sh "$hook" \
         && [ "$(git_fixture rev-parse HEAD)" = "$(git_fixture rev-parse origin/devel)" ] \
-        && [ "$(cat graphify-out/memory/query_local.md)" = local ]
+        && [ "$(cat scratch/records/query_local.md)" = local ]
     }
     When run sync_untracked
     The status should equal 0
@@ -157,12 +157,12 @@ Describe 'session-branch-sync base branch with untracked files'
 
   It 'reports a fast-forward blocked by a colliding untracked file'
     sync_collide() {
-      mkdir -p "$session/graphify-out/memory"
-      printf 'local\n' > "$session/graphify-out/memory/collide.md"
+      mkdir -p "$session/scratch/records"
+      printf 'local\n' > "$session/scratch/records/collide.md"
       cd "$session" || return 1
       sh "$hook" \
         && [ "$(git_fixture rev-list --count HEAD..origin/devel)" -eq 1 ] \
-        && [ "$(cat graphify-out/memory/collide.md)" = local ]
+        && [ "$(cat scratch/records/collide.md)" = local ]
     }
     When run sync_collide
     The status should equal 0
@@ -200,9 +200,9 @@ Describe 'session-branch-sync session branch with untracked files'
     git_fixture -C "$session" commit -q -m topic
 
     printf 'base-2\n' >> "$seed/base.txt"
-    mkdir -p "$seed/graphify-out/memory"
-    printf 'upstream\n' > "$seed/graphify-out/memory/collide.md"
-    git_fixture -C "$seed" add base.txt graphify-out/memory/collide.md
+    mkdir -p "$seed/scratch/records"
+    printf 'upstream\n' > "$seed/scratch/records/collide.md"
+    git_fixture -C "$seed" add base.txt scratch/records/collide.md
     git_fixture -C "$seed" commit -q -m base-2
     git_fixture -C "$seed" push -q origin devel
     git_fixture -C "$session" fetch -q origin devel
@@ -215,15 +215,15 @@ Describe 'session-branch-sync session branch with untracked files'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'rebases over an untracked memory record'
+  It 'rebases over an untracked scratch record'
     sync_untracked() {
-      mkdir -p "$session/graphify-out/memory"
-      printf 'local\n' > "$session/graphify-out/memory/query_local.md"
+      mkdir -p "$session/scratch/records"
+      printf 'local\n' > "$session/scratch/records/query_local.md"
       cd "$session" || return 1
       sh "$hook" \
         && git_fixture merge-base --is-ancestor origin/devel HEAD \
         && [ "$(git_fixture log -1 --format=%s)" = topic ] \
-        && [ "$(cat graphify-out/memory/query_local.md)" = local ]
+        && [ "$(cat scratch/records/query_local.md)" = local ]
     }
     When run sync_untracked
     The status should equal 0
@@ -232,13 +232,13 @@ Describe 'session-branch-sync session branch with untracked files'
 
   It 'reports a rebase that could not start over a colliding untracked file'
     sync_collide() {
-      mkdir -p "$session/graphify-out/memory"
-      printf 'local\n' > "$session/graphify-out/memory/collide.md"
+      mkdir -p "$session/scratch/records"
+      printf 'local\n' > "$session/scratch/records/collide.md"
       cd "$session" || return 1
       sh "$hook" \
         && [ "$(git_fixture rev-list --count HEAD..origin/devel)" -eq 1 ] \
         && [ "$(git_fixture log -1 --format=%s)" = topic ] \
-        && [ "$(cat graphify-out/memory/collide.md)" = local ]
+        && [ "$(cat scratch/records/collide.md)" = local ]
     }
     When run sync_collide
     The status should equal 0

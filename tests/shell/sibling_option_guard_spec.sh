@@ -1142,7 +1142,7 @@ Describe 'run-gates.sh accepts an explicit empty option value (real git, unstubb
     # would exit 2 before --plan. Empty must still be accepted.
     When run run_gates_in_root --worktree '' --diff HEAD --plan
     The status should equal 0
-    The stdout should include 'check-graph-fresh.sh'
+    The stdout should include 'check_coverage_pairing.py'
     The stderr should not include 'usage: run-gates.sh'
     The stderr should not include 'requires an argument'
   End

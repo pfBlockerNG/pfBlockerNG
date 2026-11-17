@@ -16,7 +16,6 @@ suite that parses an artifact the diff changes runs regardless of its language.
 
 | Touched | Gates (all must pass) |
 | ------- | --------------------- |
-| Any diff (always-on) | `sh scripts/agent/check-graph-fresh.sh` — rebuilds `graphify-out/graph.json` (`PYTHONHASHSEED=0`, resolved Graphify launcher) and FAILS when the committed file differs: the commit that moves code moves the graph. Missing Graphify ⇒ FAIL, never SKIP. Fix: `PYTHONHASHSEED=0 graphify update .` + commit |
 | Python (`*.py`) | `python3 -m pytest` · `ruff check .` · `ruff format --check .` · `mypy tests/` |
 | PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `composer phpstan` · `composer phpcs -- --standard=phpcs.xml.dist src/` |
 | Shell (`*.sh`) | `sh -n` · `shellcheck` (only `src/`, `scripts/`, `.claude/hooks/` — the scope `.githooks/pre-commit` + CI use; `tests/` shellspec specs trip SC2034 false-positives) · ShellSpec (next row) |

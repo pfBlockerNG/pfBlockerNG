@@ -10,7 +10,7 @@
 #               with '/' replaced by '-'>; a relative --path anchors below that sibling
 #               root, while an absolute --path stays exact). An existing branch or path
 #               gets a `-<epoch>` suffix (collision rule). Every created worktree
-#               initializes CodeGraph, Graphify, and enabled Serena tools.
+#               initializes CodeGraph and enabled Serena tools.
 #               Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
 #   --claim     with `issue … --worktree`: assign an UNCLAIMED issue to the caller
