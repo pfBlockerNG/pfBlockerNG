@@ -61,6 +61,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
 # ---------------------------------------------------------------------------
 
 LEDGER_PATH = "/var/db/pfblockerng/pfb_due_ledger.json"
+_SS_LOCK = "/var/db/pfblockerng/pfb_ss_refresh.lock"
 _PHP = "/usr/local/bin/php"
 _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 # The ledger lives at $pfb['dbdir']/pfb_due_ledger.json (dbdir = /var/db/pfblockerng).
@@ -272,8 +273,8 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         And the actual clock is NOT in "00:00-00:01" (asserted).
       When tick fires.
       Then pending_apply IS set (deferred).
-      And the previously-absent 'ss_refresh' ledger row APPEARS (positive control: the tick
-          genuinely ran its due-jobs pass),
+      And the previously-absent 'pfb_ss_refresh.lock' file APPEARS (positive control: the tick
+          genuinely ran its duties; it keeps no ledger row any more),
       And Core's last Update is unchanged (no `apply` was asked for) and the UPDATE PROCESS marker
           count is UNCHANGED (the apply did not run).
 
@@ -294,15 +295,14 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         pytest.skip(f"VM clock {vm_hm} is inside the 1-minute exclusion window; re-run after 00:01")
 
     _set_quiet_hours(vm, "00:00-00:01")  # 1-min window in the dead of night
-    # Wipe the ledger BEFORE seeding so the 'ss_refresh' row is provably absent — that absence
-    # arms the positive control below (an absent row is due on the next tick).
-    result = vm.ssh("rm", "-f", LEDGER_PATH)
+    # Wipe the ledger BEFORE seeding, and the SafeSearch duty lock so its absence arms the
+    # positive control below (every tick opens that lock; it is the evidence the tick ran).
+    result = vm.ssh("rm", "-f", LEDGER_PATH, _SS_LOCK)
     assert result.returncode == 0, f"precondition: ledger wipe failed rc={result.returncode} {result.stderr!r}"
     _seed_pending_apply(vm)
     assert _is_pending(vm), "before tick: pending_apply must be set"
-    assert "ss_refresh" not in _read_ledger(vm), (
-        f"precondition: 'ss_refresh' row must be absent so its appearance can prove the tick ran; "
-        f"ledger={_read_ledger(vm)}"
+    assert vm.ssh("test", "-f", _SS_LOCK).returncode != 0, (
+        f"precondition: {_SS_LOCK} must be absent so its appearance can prove the tick ran"
     )
     before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
     update_before = h.core_update_view(vm)["update"]
@@ -311,14 +311,14 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
 
     # Positive control FIRST: on its own, "marker unchanged + pending still set" cannot
     # distinguish "tick correctly deferred" from "tick never ran at all". The tick's own
-    # ss_refresh cadence (900s, window-independent — it runs after the dispatch section
-    # regardless of quiet-hours) writes its ledger row when the row is absent, so the row's
-    # appearance proves the tick genuinely ran. (The deferral branch's own LOG_INFO syslog
+    # SafeSearch duty (window-independent — it runs after the dispatch section regardless of
+    # quiet-hours) opens its lock file on every tick, so the file's appearance proves the tick
+    # genuinely ran. (The deferral branch's own LOG_INFO syslog
     # line is not reliably observable in system.log on the appliance, so it cannot serve as
     # the control here.)
-    assert "ss_refresh" in _read_ledger(vm), (
-        f"tick did not run its due-jobs pass — the absent 'ss_refresh' row was not written; "
-        f"cannot tell 'deferred correctly' from 'the tick itself never ran'; ledger={_read_ledger(vm)}"
+    assert vm.ssh("test", "-f", _SS_LOCK).returncode == 0, (
+        f"tick did not run its duties — the absent {_SS_LOCK} was not created; "
+        "cannot tell 'deferred correctly' from 'the tick itself never ran'"
     )
 
     assert _is_pending(vm), (

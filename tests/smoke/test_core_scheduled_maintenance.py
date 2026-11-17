@@ -1,8 +1,8 @@
 """#3996 real quarter-hour acceptance; no scheduler clock/state injection.
 
 Only the exact explicitly opted-in case may enter scheduled_maintenance.
-SafeSearch CSV effects and real 900-second duty ledgers are the live oracles.
-Other duty branches remain covered by the real PHP suite, not claimed here.
+SafeSearch CSV effects, the Outpost's duty lock files and Core's maintenance receipts are the live
+oracles (the tick keeps no duty ledger). Other duty branches remain covered by the real PHP suite.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import os
 import re
 import shlex
 import subprocess
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -26,7 +25,6 @@ from .conftest import SmokeVM, _StubDnsServer
 from .test_smoke_core_api import await_core_up
 from .test_smoke_tick import (
     _drain_pending_apply,
-    _read_ledger,
     _remove_ss_row,
     _reset_ss_extdns,
     _seed_ss_refresh_positive_control,
@@ -35,13 +33,13 @@ from .test_smoke_tick import (
 SENTINEL = "/var/db/pfblockerng/.pfb_cron_disable"
 PHP = "/usr/local/bin/php"
 CLI = "/usr/local/www/pfblockerng/pfblockerng.php"
-DISPATCH = re.compile(r"pfblockerng\.php\s+(?:cron-tick|tick|cron)(?:\s|$)")
-DUTIES = ("ss_refresh", "apply_reconcile")
+DUTY_LOCKS = (f"{h.PFB_DBDIR}/pfb_ss_refresh.lock", f"{h.PFB_DBDIR}/pfb_apply_reconcile.lock")
+MAINTENANCE_RECEIPT = f"{h.CORE_STATE_DIR}/maintenance.log.result"
 MARKER = "SafeSearch CNAME fallback IPs refreshed"
 SCHEDULE_HOUR = f"{h.CFG_GLOBAL}/pfb_schedule_hour"
 SCHEDULE_MINUTE = f"{h.CFG_GLOBAL}/pfb_schedule_minute"
 DCC_ID = "extra:dcc"
-WINDOW_BOUND_SECONDS = 2160
+WINDOW_BOUND_SECONDS = 3360  # the 3300 s body cap of the three-boundary case, plus a minute
 EXTRAS_LOG = f"{h.PFB_LOGDIR}/extras.log"
 DIAGNOSTIC_CHUNK = 16_384
 DIAGNOSTIC_SMALL_EXTRAS = 64 * 1024
@@ -372,15 +370,20 @@ def _assert_dcc_window_safe(vm: SmokeVM, successful: int) -> None:
     )
 
 
-def _assert_duty_ledger_advance(job: str, previous: dict[str, int], current: dict[str, int]) -> None:
-    previous_due = previous["next_due"]
-    last_run = current["last_run"]
-    next_due = current["next_due"]
-    assert previous_due <= last_run, (job, previous_due, current)
-    assert last_run - previous_due < 900, (job, previous_due, current)
-    assert next_due == previous_due + 900, (job, previous_due, current)
-    assert next_due > last_run, (job, previous_due, current)
-    assert current["jitter"] == 0, (job, current)
+def next_quarter_hour(epoch: int) -> int:
+    """First Unix quarter-hour boundary strictly after ``epoch``."""
+    return (epoch // 900 + 1) * 900
+
+
+def _receipt_signature(vm: SmokeVM) -> str:
+    """Identity of Core's last maintenance receipt (inode, size, mtime), or ``absent``."""
+    result = vm.ssh("stat", "-f", "%i %z %m", MAINTENANCE_RECEIPT)
+    return result.stdout.strip() if result.returncode == 0 else "absent"
+
+
+def _duty_locks(vm: SmokeVM) -> list[str]:
+    """Duty lock files that exist; the tick opens them with ``c`` on every run."""
+    return [path for path in DUTY_LOCKS if vm.ssh("test", "-f", path).returncode == 0]
 
 
 def _schedule_hour_far_from_window(vm: SmokeVM) -> str:
@@ -402,33 +405,7 @@ def _epoch(vm: SmokeVM, phase: str) -> int:
 
 
 def _assert_no_dispatch(vm: SmokeVM, phase: str) -> None:
-    result = vm.ssh("/usr/bin/crontab", "-l")
-    if result.returncode == 0:
-        root_crontab = result.stdout
-    elif result.returncode == 1 and result.stdout == "" and result.stderr == "crontab: no crontab for root\n":
-        # FreeBSD crontab(1) uses this exact ENOENT result when root has no per-user tab.
-        root_crontab = ""
-    else:
-        raise AssertionError(f"{phase}: unreadable root crontab: {result}")
-
-    effective = vm.ssh("/bin/cat", "/etc/crontab")
-    assert effective.returncode == 0, f"{phase}: unreadable effective crontab: {effective}"
-    commands = h._php_read_scalar(
-        vm,
-        "",
-        "json_encode(array_column(config_get_path('cron/item', array()), 'command'))",
-    )
-    parsed = json.loads(commands)
-    assert isinstance(parsed, list) and all(isinstance(command, str) for command in parsed), commands
-    active_lines = [
-        line
-        for source in (root_crontab, effective.stdout)
-        for line in source.splitlines()
-        if not line.lstrip().startswith("#")
-    ]
-    assert not any(DISPATCH.search(command) for command in [*parsed, *active_lines]), (
-        f"{phase}: competing config/effective dispatch job: {commands}"
-    )
+    h.assert_no_pfb_cron_entry(vm, phase)
     assert vm.ssh("test", "-f", SENTINEL).returncode == 0, f"{phase}: sentinel missing"
 
 
@@ -569,8 +546,14 @@ def _row(vm: SmokeVM, source: str) -> str:
 
 @pytest.mark.smoke
 @pytest.mark.tick
-@pytest.mark.timeout(2100)
+@pytest.mark.timeout(3300)
 def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
+    """Core, with no crontab entry anywhere, runs the quarter-hour maintenance (#3996).
+
+    Three observed quarter-hour boundaries of the guest clock: sentinel present (Core starts nothing),
+    sentinel absent (Core runs the tick: duty locks, a new maintenance receipt, the SafeSearch effect),
+    package disabled with the sentinel absent (Core starts nothing).
+    """
     vm = maintenance_vm
     h.block_egress()
     target = h.unique_domain("maintenancetarget")
@@ -578,56 +561,65 @@ def test_core_scheduled_maintenance_preserves_tick_duties(maintenance_vm: SmokeV
     answer = h.dns_probe(vm, target, "A", attempts=1)
     assert h.resolves_to(answer, h.SS_TARGET_A), f"first target DNS answer failed: {answer}"
     _drain_pending_apply(vm)
-    # Only the Outpost's PHP duty ledger is reset, as in test_smoke_tick.
-    # Core's scheduler state and clock are never written.
-    cleared = vm.ssh("rm", "-f", "/var/db/pfblockerng/pfb_due_ledger.json")
-    assert cleared.returncode == 0, cleared.stderr
     source = _seed_ss_refresh_positive_control(vm, target, h.SS_BAKED_A)
+    enabled_original = h.config_get(vm, "installedpackages/pfblockerng/config/0/enable_cb")
     try:
         # Direct tick is a manual control ONLY, never scheduled proof.
         direct = vm.ssh(PHP, CLI, "tick", timeout=180)
         assert direct.returncode == 0, direct.stdout + direct.stderr
         assert h.SS_TARGET_A in _row(vm, source), "manual tick was incorrectly sentinel-gated"
+        assert _duty_locks(vm) == list(DUTY_LOCKS), "the tick left no duty lock evidence"
         _remove_ss_row(vm, source)
         source = _seed_ss_refresh_positive_control(vm, target, h.SS_BAKED_A)
-        before = _read_ledger(vm)
-        assert all(job in before for job in DUTIES), before
+        cleared = vm.ssh("rm", "-f", *DUTY_LOCKS)
+        assert cleared.returncode == 0, cleared.stderr
+        receipt_before = _receipt_signature(vm)
         assert h.SS_BAKED_A in _row(vm, source)
         marker_before = h.count_log_marker(vm, h.PFB_LOG, MARKER)
         last_update = h.core_update_view(vm)["update"]
-        # Observe an actual production timer boundary with the sentinel STILL PRESENT.
+
+        def assert_core_started_nothing(phase: str) -> None:
+            assert _duty_locks(vm) == [], f"{phase}: a maintenance worker ran (duty locks exist)"
+            assert _receipt_signature(vm) == receipt_before, f"{phase}: Core started a maintenance worker"
+            assert h.SS_BAKED_A in _row(vm, source), f"{phase}: SafeSearch duty ran"
+            assert h.count_log_marker(vm, h.PFB_LOG, MARKER) == marker_before, f"{phase}: SafeSearch marker grew"
+            assert h.core_update_view(vm)["update"] == last_update, f"{phase}: maintenance minted an Update"
+            _assert_no_dispatch(vm, phase)
+
+        # Observe an actual production quarter-hour boundary with the sentinel STILL PRESENT.
         guarded_start = _epoch(vm, "sentinel-present-start")
-        guarded_end = (guarded_start // 900 + 1) * 900 + 30
-        deadline = time.monotonic() + 960
-        while _epoch(vm, "sentinel-present-poll") < guarded_end:
-            assert time.monotonic() < deadline, "guest clock did not cross guarded quarter-hour"
-            time.sleep(5)
-        assert _read_ledger(vm) == before, "sentinel-present maintenance changed duty ledger"
-        assert h.SS_BAKED_A in _row(vm, source), "sentinel-present maintenance performed SafeSearch duty"
-        assert h.count_log_marker(vm, h.PFB_LOG, MARKER) == marker_before
-        assert h.core_update_view(vm)["update"] == last_update, "guarded maintenance created an Update"
-        _assert_no_dispatch(vm, "before-scheduled-window")
+        h.wait_guest_epoch(vm, next_quarter_hour(guarded_start) + 30, cap=960)
+        _epoch(vm, "sentinel-present-end")
+        assert_core_started_nothing("sentinel-present")
         with vm.scheduled_maintenance():
             started = _epoch(vm, "scheduled-window-start")
-            deadline = time.monotonic() + 990
-            while True:
-                after = _read_ledger(vm)
-                if all(after.get(job, {}).get("last_run", 0) > before[job]["last_run"] for job in DUTIES):
-                    break
-                assert time.monotonic() < deadline, f"real Core quarter-hour did not advance duties: {after}"
-                time.sleep(5)
+            assert h.wait_until(
+                lambda: _receipt_signature(vm) != receipt_before and _duty_locks(vm) == list(DUTY_LOCKS),
+                timeout=990,
+                interval=5,
+            ), "Core's quarter-hour never ran the maintenance (no new receipt and duty locks)"
             ended = _epoch(vm, "scheduled-window-end")
             assert ended // 900 > started // 900, "effect appeared before an actual production boundary"
-            assert h.SS_TARGET_A in _row(vm, source), "ledger advanced without real SafeSearch CSV effect"
+            assert h.SS_TARGET_A in _row(vm, source), "maintenance ran without the real SafeSearch CSV effect"
             assert h.count_log_marker(vm, h.PFB_LOG, MARKER) > marker_before
-            for job in DUTIES:
-                assert started <= after[job]["last_run"] <= ended, (job, after[job], started, ended)
-                _assert_duty_ledger_advance(job, before[job], after[job])
             assert h.core_update_view(vm)["update"] == last_update, "maintenance minted a public Update"
+            _assert_no_dispatch(vm, "scheduled-window")
+            # A disabled package: Core still reads the settings every boundary and starts nothing.
+            h.set_package_enabled(vm, False)
+            vm.ssh("rm", "-f", *DUTY_LOCKS)
+            _remove_ss_row(vm, source)
+            source = _seed_ss_refresh_positive_control(vm, target, h.SS_BAKED_A)
+            receipt_before = _receipt_signature(vm)
+            marker_before = h.count_log_marker(vm, h.PFB_LOG, MARKER)
+            disabled_start = _epoch(vm, "package-disabled-start")
+            h.wait_guest_epoch(vm, next_quarter_hour(disabled_start) + 30, cap=960)
+            _epoch(vm, "package-disabled-end")
+            assert_core_started_nothing("package-disabled")
         _assert_no_dispatch(vm, "after-scheduled-window")
     finally:
         # Context finally MUST have restored+verified sentinel before any config cleanup.
         assert vm.ssh("test", "-f", SENTINEL).returncode == 0, "refusing unsafe configuration cleanup"
+        h.config_set(vm, "installedpackages/pfblockerng/config/0/enable_cb", enabled_original)
         _remove_ss_row(vm, source)
         _reset_ss_extdns(vm)
         stub_dns.clear_cname()

@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Any, Concatenate, NamedTuple, ParamSpec
 
 from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
+from . import cron_entries
 from .conftest import (
     DEFAULT_BOOT_TIMEOUT,
     FIXTURES_DIR,
@@ -1879,6 +1880,43 @@ def set_dnsbl_vip6(vm: SmokeVM, present: bool, *, ip6: str = DNSBL_VIP6, timeout
 # VM without disturbing the manual-VIP matrix.
 AUTO_VIP_DESCR_V4 = "pfB_AUTO_VIP_v4"
 AUTO_VIP_IP4 = "172.16.53.1"
+
+
+def pfb_cron_entries(vm: SmokeVM) -> list[str]:
+    """Every pfBlockerNG entry in root's crontab, /etc/crontab and config.xml ``cron/item`` (issue #3996).
+
+    Core runs every pfBlockerNG schedule, so the expected answer is ``[]`` after any install,
+    upgrade, sync or settings save.
+    """
+    root = vm.ssh("/usr/bin/crontab", "-l")
+    try:
+        root_text = cron_entries.root_crontab_text(root.returncode, root.stdout, root.stderr)
+    except RuntimeError as exc:
+        raise AssertionError(str(exc)) from exc
+    effective = vm.ssh("/bin/cat", "/etc/crontab")
+    assert effective.returncode == 0, f"unreadable effective crontab: {effective}"
+    raw = _php_read_scalar(vm, "", "json_encode(array_column(config_get_path('cron/item', array()), 'command'))")
+    commands = json.loads(raw)
+    assert isinstance(commands, list) and all(isinstance(c, str) for c in commands), raw
+    return cron_entries.find_entries([root_text, effective.stdout], commands)
+
+
+def assert_no_pfb_cron_entry(vm: SmokeVM, phase: str) -> None:
+    found = pfb_cron_entries(vm)
+    assert not found, f"{phase}: competing pfBlockerNG cron entry (Core runs every schedule): {found}"
+
+
+def wait_guest_epoch(vm: SmokeVM, target: int, *, cap: float, interval: float = 2.0) -> int:
+    """Poll the guest clock until it reaches ``target`` (observing a lane's schedule); ``cap`` only fails a hung run."""
+    deadline = time.monotonic() + cap
+    while True:
+        result = vm.ssh("date", "+%s")
+        assert result.returncode == 0 and result.stdout.strip().isdigit(), result
+        now = int(result.stdout.strip())
+        if now >= target:
+            return now
+        assert time.monotonic() < deadline, f"guest clock did not reach {target} within {cap}s (now {now})"
+        time.sleep(min(interval, max(0.2, (target - now) / 2)))
 
 
 def _php_read_scalar(vm: SmokeVM, pre: str, expr: str, *, timeout: float = 60.0) -> str:

@@ -5,11 +5,11 @@ Prometheus parser. The receiving-endpoint matrix pins exact labels and sums
 without introducing a dependency on the upstream node_exporter service.
 
 Tests:
-    test_metrics_toggle_installs_cron_and_publishes   — cron line + a parseable, complete file
+    test_metrics_core_publishes_with_no_cron_entry    — Core republishes each minute, no crontab entry
     test_metrics_pass_status_after_update_pass        — a real update pass records start/end
     test_metrics_pass_status_ignores_a_settings_save_pass — a settings-save pass leaves the pass times alone
-    test_metrics_master_disable_removes_cron_and_file — master switch off tears the export down
-    test_metrics_toggle_off_removes_cron_and_file     — option off tears the export down
+    test_metrics_master_disable_removes_file          — master switch off tears the export down, nothing recreates it
+    test_metrics_toggle_off_removes_file              — option off tears the export down, nothing recreates it
     test_metrics_verb_publishes_nothing_while_disabled — the verb leaves no file while the option is off
     test_metrics_verb_ignores_a_stale_sentinel_while_the_option_is_off — a leftover sentinel cannot outvote a disable
     test_metrics_dir_missing_logs_once                — a missing textfile dir logs once, exits 0
@@ -69,9 +69,7 @@ if TYPE_CHECKING:
 _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 _TEXTFILE_DIR = "/var/tmp/node_exporter"
 _PROM = f"{_TEXTFILE_DIR}/pfblockerng.prom"
-_CRONTAB = "/etc/crontab"
-_CRON_NEEDLE = "pfblockerng.php metrics"
-_CRON_COMMAND = "/usr/bin/timeout -s TERM -k 5 50 /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics"
+_MINUTE_CAP = 150.0  # a hung-run cap for one guest minute boundary plus Core's run; never an expected wait
 _SENTINEL = "/usr/local/etc/pfb_metrics_enabled"
 _ERROR_LOG = f"{h.PFB_LOGDIR}/error.log"
 _ERROR_MARKER = "Metrics export:"
@@ -148,21 +146,26 @@ def _set_export(vm: SmokeVM, on: bool) -> None:
 
 
 def _sync(vm: SmokeVM) -> None:
-    """Run a sync pass, which reconciles the metrics cron entry (wait for no resolver: pf-level asserts only)."""
+    """Run a sync pass, which reconciles the metrics export (wait for no resolver: pf-level asserts only)."""
     h.reload(vm, "update", wait_unbound=False)
 
 
 def _run_verb(vm: SmokeVM) -> None:
-    """Run the metrics verb exactly as the cron entry does, minus the timeout wrapper."""
+    """Run the metrics verb by hand, as Core's metrics lane does (content checks only; never lane proof)."""
     result = vm.ssh(h.PHP_BIN, h.PFB_CLI, "metrics")
     assert result.returncode == 0, f"metrics verb failed: rc={result.returncode} {result.stdout!r} {result.stderr!r}"
 
 
-def _cron_lines(vm: SmokeVM) -> list[str]:
-    """Every /etc/crontab line carrying the metrics verb."""
-    result = vm.ssh("/usr/bin/grep", "-F", _CRON_NEEDLE, _CRONTAB)
-    assert result.returncode in (0, 1), f"grep {_CRONTAB} failed: rc={result.returncode} {result.stderr!r}"
-    return result.stdout.splitlines()
+def _prom_stamp(vm: SmokeVM) -> str:
+    """Identity of the published file (inode, mtime, ctime), or ``absent``; Core's republish changes it."""
+    result = vm.ssh("/usr/bin/stat", "-f", "%i %m %c", _PROM)
+    return result.stdout.strip() if result.returncode == 0 else "absent"
+
+
+def _across_next_minute_boundary(vm: SmokeVM) -> None:
+    """Poll the guest clock past the next minute boundary (plus 3 s for Core's run to settle)."""
+    now = _guest_epoch(vm)
+    h.wait_guest_epoch(vm, (now // 60 + 1) * 60 + 3, cap=_MINUTE_CAP, interval=1.0)
 
 
 def _exists(vm: SmokeVM, path: str) -> bool:
@@ -194,29 +197,38 @@ def _pass_times(vm: SmokeVM) -> tuple[float, float]:
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(300)
-def test_metrics_toggle_installs_cron_and_publishes(deployed_vm: SmokeVM) -> None:
-    """Enabling the option installs one bounded every-minute cron line and the verb publishes a valid file.
+@pytest.mark.timeout(420)
+def test_metrics_core_publishes_with_no_cron_entry(deployed_vm: SmokeVM) -> None:
+    """Core republishes the export at every minute boundary with no crontab entry; the file is valid (#3996).
 
     Scenario:
-        Given the option is on and a sync pass has run,
-        Then /etc/crontab carries exactly one metrics line: minute '*', run as root, hard-bounded by timeout -k 5 50;
-        When the verb runs,
+        Given the option is on, a sync pass has run and the harness sentinel .pfb_cron_disable is present,
+        Then root's crontab, /etc/crontab and config.xml hold no pfBlockerNG entry;
+        When the published file is removed and nobody runs the verb,
+        Then Core publishes it again at the next guest minute boundary (the sentinel does not stop it),
+        And  Core replaces it again at the following boundary (its stamp advances);
+        When the verb runs by hand for the content checks,
         Then pfblockerng.prom exists with mode 0644, parses cleanly, carries pfblockerng_info (non-empty
             version), pfblockerng_metrics_source_up 1 for all eight sources (a source absent because its
             feature is off is up), and pfblockerng_ip_table_entries for the feed's pfB table with the
             count pfctl reports; and no temp file is left behind.
     """
     vm = deployed_vm
+    assert _exists(vm, h.PFB_CRON_DISABLE_PATH), "precondition: the harness sentinel must be present"
     _set_export(vm, True)
     _sync(vm)
+    h.assert_no_pfb_cron_entry(vm, "metrics export on")
 
-    lines = _cron_lines(vm)
-    assert len(lines) == 1, f"expected exactly one metrics cron line, found {lines!r}"
-    minute, hour, mday, month, wday, who, command = lines[0].split(None, 6)
-    assert (minute, hour, mday, month, wday) == ("*",) * 5, f"metrics cron must run every minute: {lines[0]!r}"
-    assert who == "root", f"metrics cron must run as root: {lines[0]!r}"
-    assert command.startswith(_CRON_COMMAND), f"metrics cron must be hard-bounded by timeout -k 5 50: {lines[0]!r}"
+    removed = vm.ssh("/bin/rm", "-f", _PROM)
+    assert removed.returncode == 0, f"could not remove {_PROM}: {removed.stderr!r}"
+    assert h.wait_until(lambda: _exists(vm, _PROM), timeout=_MINUTE_CAP, interval=1.0), (
+        "Core never republished the export at a minute boundary"
+    )
+    first = _prom_stamp(vm)
+    assert h.wait_until(lambda: _prom_stamp(vm) != first, timeout=_MINUTE_CAP, interval=1.0), (
+        f"Core did not publish the export again at the next minute boundary (stamp stayed {first})"
+    )
+    h.assert_no_pfb_cron_entry(vm, "after Core published")
 
     _run_verb(vm)
 
@@ -308,50 +320,52 @@ def test_metrics_pass_status_ignores_a_settings_save_pass(deployed_vm: SmokeVM) 
 
 @pytest.mark.smoke
 @pytest.mark.timeout(420)
-def test_metrics_master_disable_removes_cron_and_file(deployed_vm: SmokeVM) -> None:
-    """Turning pfBlockerNG's master switch off removes the metrics cron line and the published file.
+def test_metrics_master_disable_removes_file(deployed_vm: SmokeVM) -> None:
+    """Turning pfBlockerNG's master switch off removes the published file, and Core does not publish it again.
 
     Scenario:
-        Given the option is on, the cron line is installed and the file is published,
+        Given the option is on and the file is published,
         When the master switch is turned off and a sync pass runs,
-        Then no metrics cron line and no pfblockerng.prom remain.
+        Then no pfblockerng.prom remains, also after the next guest minute boundary.
     """
     vm = deployed_vm
     _set_export(vm, True)
     _sync(vm)
     _run_verb(vm)
-    assert len(_cron_lines(vm)) == 1, "precondition: the metrics cron line must be installed"
     assert _exists(vm, _PROM), "precondition: the file must be published"
     try:
         h.set_package_enabled(vm, False)
         _sync(vm)
-        assert _cron_lines(vm) == [], "the metrics cron line must be removed while pfBlockerNG is disabled"
         assert not _exists(vm, _PROM), "pfblockerng.prom must be removed while pfBlockerNG is disabled"
+        _across_next_minute_boundary(vm)
+        assert not _exists(vm, _PROM), "Core republished pfblockerng.prom while pfBlockerNG is disabled"
+        h.assert_no_pfb_cron_entry(vm, "master switch off")
     finally:
         h.set_package_enabled(vm, True)
 
 
 @pytest.mark.smoke
 @pytest.mark.timeout(420)
-def test_metrics_toggle_off_removes_cron_and_file(deployed_vm: SmokeVM) -> None:
-    """Turning the option off removes the metrics cron line and the published file.
+def test_metrics_toggle_off_removes_file(deployed_vm: SmokeVM) -> None:
+    """Turning the option off removes the published file, and Core does not publish it again.
 
     Scenario:
-        Given the option is on, the cron line is installed and the file is published,
+        Given the option is on and the file is published,
         When the option is turned off and a sync pass runs,
-        Then no metrics cron line and no pfblockerng.prom remain.
+        Then no pfblockerng.prom remains, also after the next guest minute boundary.
     """
     vm = deployed_vm
     _set_export(vm, True)
     _sync(vm)
     _run_verb(vm)
-    assert len(_cron_lines(vm)) == 1, "precondition: the metrics cron line must be installed"
     assert _exists(vm, _PROM), "precondition: the file must be published"
 
     _set_export(vm, False)
     _sync(vm)
-    assert _cron_lines(vm) == [], "the metrics cron line must be removed when the option is off"
     assert not _exists(vm, _PROM), "pfblockerng.prom must be removed when the option is off"
+    _across_next_minute_boundary(vm)
+    assert not _exists(vm, _PROM), "Core republished pfblockerng.prom while the option is off"
+    h.assert_no_pfb_cron_entry(vm, "option off")
 
 
 @pytest.mark.smoke
@@ -360,12 +374,12 @@ def test_metrics_verb_publishes_nothing_while_disabled(deployed_vm: SmokeVM) -> 
     """The verb never publishes while the option is off, so a run that outlives a disable leaves no file.
 
     Scenario:
-        Given the option is off (no cron line, no enabled sentinel) and the textfile directory exists,
+        Given the option is off (no enabled sentinel) and the textfile directory exists,
         When the verb runs,
         Then it exits 0 and neither pfblockerng.prom nor a temp file is created.
     """
     vm = deployed_vm
-    assert _cron_lines(vm) == [], "precondition: the option must be off"
+    assert not _exists(vm, _PROM), "precondition: the option must be off"
     assert not _exists(vm, _SENTINEL), "precondition: the enabled sentinel must be absent"
 
     _run_verb(vm)
@@ -386,7 +400,7 @@ def test_metrics_verb_ignores_a_stale_sentinel_while_the_option_is_off(deployed_
         Then it exits 0, publishes nothing, and removes the stale sentinel.
     """
     vm = deployed_vm
-    assert _cron_lines(vm) == [], "precondition: the option must be off"
+    assert not _exists(vm, _PROM), "precondition: the option must be off"
     touched = vm.ssh("/usr/bin/touch", _SENTINEL)
     assert touched.returncode == 0, f"could not create {_SENTINEL}: {touched.stderr!r}"
 
@@ -403,7 +417,7 @@ def test_metrics_verb_ignores_a_stale_sentinel_while_the_option_is_off(deployed_
 def test_metrics_dir_missing_logs_once(deployed_vm: SmokeVM) -> None:
     """A missing textfile directory is logged once per outage and never fatal.
 
-    No sync pass runs, so no cron line is installed and no minute run can add a log line of its own to the
+    No sync pass runs, so Core's metrics lane is not told about the option and cannot add a log line of its own to the
     count: the option is turned on in the configuration and the enabled sentinel is created directly.
 
     Scenario:
@@ -413,7 +427,7 @@ def test_metrics_dir_missing_logs_once(deployed_vm: SmokeVM) -> None:
             gains exactly one 'Metrics export:' line.
     """
     vm = deployed_vm
-    assert _cron_lines(vm) == [], "precondition: no cron line, so no cron run touches the log"
+    assert not _exists(vm, _PROM), "precondition: the export is off, so no Core run touches the log"
     _set_export(vm, True)
     touched = vm.ssh("/usr/bin/touch", _SENTINEL)
     assert touched.returncode == 0, f"could not create {_SENTINEL}: {touched.stderr!r}"

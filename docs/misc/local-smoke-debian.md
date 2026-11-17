@@ -204,9 +204,10 @@ scripts/local-smoke.sh --scheduled-exception allow --marker smoke --shards 1 \
   --filter test_core_scheduled_maintenance_preserves_tick_duties
 ```
 
-Use the configured disposable `PFB_BOXES` pool. Native execution remains held until
-the operation-lifetime integration is explicitly released; adding the harness is
-not permission to execute or certify an unsafe maintenance runner.
+Use the configured disposable `PFB_BOXES` pool. Native runs follow the independent
+worker model of #4025 (Core starts the maintenance worker, the Outpost does no
+scheduling); this document records no further release of the operation-lifetime
+integration hold, and the harness is not permission to certify an unsafe runner.
 
 The flag requires literal `allow`, marker `smoke`, one shard (on-box index 0), and
 that exact filter. Inherited `SMOKE_SCHEDULED_EXCEPTION` is discarded. Package
@@ -220,11 +221,22 @@ command is admitted; ordinary SSH remains guarded. On every exit it restores and
 verifies the sentinel **before caller configuration cleanup**, rechecks dispatch
 absence, and requires the same running cron identity.
 
-The case observes real guest quarter-hour boundaries (up to 15 minutes each),
-records guest timestamps and has a 2100-second body cap. Manual tick is only a
-compatibility control, never scheduled proof. SafeSearch CSV effects and the
-Outpost's duty locks (`pfb_ss_refresh.lock`, `pfb_apply_reconcile.lock`) are observable evidence; the tick keeps no duty ledger (issue #3996); unexercised native
-duty effects must be reported separately, not inferred from timer activity alone.
+The case observes three real guest quarter-hour boundaries (up to 15 minutes each, polled
+against the guest clock), records guest timestamps and has a 3300-second body cap: sentinel
+present (Core starts no maintenance worker), sentinel absent (Core runs the tick) and package
+disabled (Core starts nothing). Manual tick is only a compatibility control, never scheduled
+proof. The evidence is the SafeSearch CSV effect, the Outpost's duty lock files
+(`pfb_ss_refresh.lock`, `pfb_apply_reconcile.lock`, removed before each window) and a new
+`maintenance.log.result` receipt in Core's state dir; the tick keeps no duty ledger (see
+issue #3996). Unexercised native duty effects must be reported separately, not inferred from timer
+activity alone.
+
+The other two lanes need no exception: the metrics lane (`test_smoke_metrics.py`) and the
+counters lane (`test_smoke_counters_lane.py`, which steps the guest clock and restores it in a
+`finally`) ignore `.pfb_cron_disable`. `test_smoke_no_cron_entry.py` and
+`ui/test_no_cron_entry_widget.py` assert that no pfBlockerNG entry (`pfblockerng.php` or
+`pfb_core_`) exists in root's crontab, `/etc/crontab` or config.xml `cron/item` after install,
+upgrade, sync and a widget save.
 
 ### How it works
 

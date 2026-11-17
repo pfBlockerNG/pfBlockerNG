@@ -157,7 +157,7 @@ class DccSetup:
             completed,
             completed,
         ]
-        self.vm = self
+        self.vm: Any = self  # duck-typed stand-in for SmokeVM
 
         def ssh(*argv: str, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             if argv == ("date", "-v+23H", "-v0M", "+%H"):
@@ -785,25 +785,9 @@ def test_jsonl_result_rejects_bad_prefix_or_missing_aggregate(
         setup.run()
 
 
-def test_anchored_ledger_accepts_observed_non_epoch_aligned_due() -> None:
-    before = {"last_run": 900, "next_due": 1001, "jitter": 0}
-    current = {"last_run": 1301, "next_due": 1901, "jitter": 0}
-
-    acceptance._assert_duty_ledger_advance("ss_refresh", before, current)
-
-
 @pytest.mark.parametrize(
-    ("case", "current"),
-    [
-        ("last-run-before-due", {"last_run": 1000, "next_due": 1901, "jitter": 0}),
-        ("late-catchup", {"last_run": 1901, "next_due": 2801, "jitter": 0}),
-        ("last-run-plus-interval", {"last_run": 1301, "next_due": 2201, "jitter": 0}),
-        ("wrong-interval", {"last_run": 1301, "next_due": 1900, "jitter": 0}),
-        ("next-due-not-future", {"last_run": 1301, "next_due": 1300, "jitter": 0}),
-        ("nonzero-jitter", {"last_run": 1301, "next_due": 1901, "jitter": 1}),
-    ],
+    ("epoch", "boundary"),
+    [(0, 900), (899, 900), (900, 1800), (1_700_000_001, 1_700_000_100)],
 )
-def test_anchored_ledger_rejects_phase_or_interval_errors(case: str, current: dict[str, int]) -> None:
-    before = {"last_run": 900, "next_due": 1001, "jitter": 0}
-    with pytest.raises(AssertionError):
-        acceptance._assert_duty_ledger_advance("ss_refresh", before, current)
+def test_next_quarter_hour_is_the_first_boundary_strictly_after(epoch: int, boundary: int) -> None:
+    assert acceptance.next_quarter_hour(epoch) == boundary

@@ -58,7 +58,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
-from . import stub_responses
+from . import cron_entries, stub_responses
 from ._matrix import own_variant
 
 if TYPE_CHECKING:
@@ -333,7 +333,6 @@ class SmokeVM:
             "require_once('/etc/inc/config.inc');"
             "echo json_encode(array_column(config_get_path('cron/item', array()), 'command'));"
         )
-        dispatch = re.compile(r"pfblockerng\.php\s+(?:cron-tick|tick|cron)(?:\s|$)")
 
         def checked(command: str) -> str:
             result = self.ssh(command, timeout=30.0)
@@ -346,20 +345,12 @@ class SmokeVM:
 
         def no_dispatch_jobs() -> None:
             crontab_result = self.ssh("/usr/bin/crontab -l", timeout=30.0)
-            if crontab_result.returncode == 0:
-                crontab = crontab_result.stdout
-            elif (
-                crontab_result.returncode == 1
-                and crontab_result.stdout == ""
-                and crontab_result.stderr == "crontab: no crontab for root\n"
-            ):
-                crontab = ""
-            else:
-                raise RuntimeError(
-                    "scheduled maintenance safety probe failed: /usr/bin/crontab -l: "
-                    f"rc={crontab_result.returncode} stdout={crontab_result.stdout!r} "
-                    f"stderr={crontab_result.stderr!r}"
+            try:
+                crontab = cron_entries.root_crontab_text(
+                    crontab_result.returncode, crontab_result.stdout, crontab_result.stderr
                 )
+            except RuntimeError as exc:
+                raise RuntimeError(f"scheduled maintenance safety probe failed: /usr/bin/crontab -l: {exc}") from exc
             generated_crontab = checked("/bin/cat /etc/crontab")
             try:
                 commands = json.loads(checked(config_command))
@@ -367,14 +358,9 @@ class SmokeVM:
                 raise RuntimeError("scheduled maintenance cannot read cron configuration") from exc
             if not isinstance(commands, list) or any(not isinstance(command, str) for command in commands):
                 raise RuntimeError("scheduled maintenance cron configuration is not a command list")
-            active_lines = [
-                line
-                for source in (crontab, generated_crontab)
-                for line in source.splitlines()
-                if not line.lstrip().startswith("#")
-            ]
-            if any(dispatch.search(command) for command in [*commands, *active_lines]):
-                raise RuntimeError("scheduled maintenance refuses a competing pfBlockerNG dispatch job")
+            # Core runs every pfBlockerNG schedule: ANY entry of ours is a competing dispatcher.
+            if cron_entries.find_entries([crontab, generated_crontab], commands):
+                raise RuntimeError("scheduled maintenance refuses a competing pfBlockerNG cron entry")
 
         checked(f"test -f {sentinel}")
         original_cron = checked(status_command)

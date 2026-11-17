@@ -2417,24 +2417,22 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
 _ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
 
 
-def test_update_page_cron_status_reports_permanent_suppression_with_tick_installed(
+def test_update_page_cron_status_reports_permanent_suppression_with_no_cron_entry(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Cron Status reports permanent smoke suppression with the fixed tick installed.
+    """Cron Status reports the smoke suppression, never "Missing cron task", with no crontab entry.
 
-    ADR-43 installs one fixed ``*/15`` cron tick whenever pfBlockerNG is enabled.
-    Issue #1204 added the harness's always-on ``.pfb_cron_disable`` sentinel. The
-    no-sentinel healthy-cron status is pinned off-appliance by
-    UpdateRunNowScheduleOwnershipTest.
+    Core runs the quarter-hour tick while pfBlockerNG is enabled (issue #3996), so the
+    package installs no crontab entry and the Update page no longer looks for one.
+    Issue #1204 added the harness's always-on ``.pfb_cron_disable`` sentinel.
 
     Scenario:
-      Given pfBlockerNG is enabled and a full reload has installed the cron-tick cron,
-      And /etc/crontab actually contains the ``pfblockerng.php cron-tick`` entry
-        (precondition, so "not Missing" is meaningful and not a false pass from a
-        disabled box),
+      Given pfBlockerNG is enabled and a full reload has run,
+      And root's crontab, /etc/crontab and config.xml hold no pfBlockerNG entry
+        (precondition: the box really has none, so the absence of "Missing" is the new behaviour),
       When the Update page is rendered,
-      Then the Cron Status reports the permanent smoke suppression.
+      Then the Cron Status reports the permanent smoke suppression and never ``[ Missing cron task ]``.
 
     """
     vm = smoke_vm
@@ -2443,20 +2441,13 @@ def test_update_page_cron_status_reports_permanent_suppression_with_tick_install
     if original_enabled != "on":
         helpers.set_package_enabled(vm, True)
     try:
-        # Install/refresh the cron-tick cron via a full reload (no feeds configured => no egress).
         helpers.reload(vm, "update")
-
-        # PRECONDITION (effective state, not the HTTP body): the cron-tick IS in the crontab.
-        crontab = vm.ssh("/usr/bin/grep", "pfblockerng.php cron-tick", "/etc/crontab")
-        assert crontab.returncode == 0 and "cron-tick" in crontab.stdout, (
-            "cron-tick cron absent from /etc/crontab after an enabled reload "
-            f"(rc={crontab.returncode} stdout={crontab.stdout!r}) — "
-            "cannot assert the page reports a scheduled tick"
-        )
+        helpers.assert_no_pfb_cron_entry(vm, "enabled reload")
 
         body = webui.get(UPDATE_PAGE).text
         assert not looks_like_login_page(body), "Update page GET returned the login form (session lost)"
         assert f"[ Disabled by {flag} ]" in body, "Cron Status must report the permanent smoke suppression"
+        assert "Missing cron task" not in body, "the Update page still looks for a crontab entry Core replaced"
     finally:
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)

@@ -34,7 +34,7 @@ class Guest:
         self.running = True
         self.pid = 31415
         self.config: list[str] = []
-        self.crontab = "*/5 * * * * /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics\n"
+        self.crontab = "*/5 * * * * /usr/local/bin/php /usr/local/www/otherpackage.php tick\n"
         self.crontab_returncode = 0
         self.crontab_stderr = ""
         self.generated_crontab = "*/5 * * * * root /usr/libexec/atrun\n"
@@ -76,7 +76,7 @@ class Guest:
         elif command == REMOVE:
             assert self.sentinel and self.running
             assert STATUS in self.calls and CRONTAB in self.calls and CONFIG in self.calls
-            assert not self.config or all("metrics" in row or "clear" in row for row in self.config)
+            assert all("pfblockerng" not in row and "pfb_core_" not in row for row in self.config)
             if not self.ineffective_remove:
                 self.sentinel = False
         elif command == RESTORE:
@@ -125,10 +125,15 @@ def test_ordinary_ssh_guard_stays_closed_with_optin(guest: Guest, remote: tuple[
     assert guest.calls == [] and guest.sentinel
 
 
-@pytest.mark.parametrize("verb", ["cron-tick", "tick", "cron"])
+PFB_COMMANDS = [
+    f"/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {verb} >> /var/log/pfb.log 2>&1"
+    for verb in ("cron-tick", "tick", "cron", "metrics", "clearip", "cleardnsbl")
+] + ["/usr/local/pkg/pfblockerng/pfb_core_metrics.sh"]
+
+
+@pytest.mark.parametrize("command", PFB_COMMANDS)
 @pytest.mark.parametrize("source", ["config", "crontab", "generated"])
-def test_competing_dispatch_job_refused_without_deletion(guest: Guest, verb: str, source: str) -> None:
-    command = f"/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {verb} >> /var/log/pfb.log 2>&1"
+def test_any_pfblockerng_job_refused_without_deletion(guest: Guest, command: str, source: str) -> None:
     if source == "config":
         guest.config = [command]
     elif source == "crontab":
@@ -145,11 +150,8 @@ def test_competing_dispatch_job_refused_without_deletion(guest: Guest, verb: str
     assert (guest.config, guest.crontab, guest.generated_crontab) == before
 
 
-def test_metrics_and_counter_siblings_allow_real_context(guest: Guest) -> None:
-    guest.config = [
-        f"/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php {verb}"
-        for verb in ("metrics", "clearip", "cleardnsbl")
-    ]
+def test_unrelated_jobs_allow_real_context(guest: Guest) -> None:
+    guest.config = ["/usr/local/bin/php /usr/local/www/otherpackage.php tick"]
     before = (guest.config[:], guest.crontab, guest.pid)
     with guest.vm.scheduled_maintenance():
         assert not guest.sentinel and guest.running
@@ -344,9 +346,7 @@ def test_benign_effective_crontab_is_read_and_never_mutated(guest: Guest) -> Non
     guest.generated_crontab = (
         "SHELL=/bin/sh\n"
         "*/5 * * * * root /usr/libexec/atrun\n"
-        "*/5 * * * * root /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php metrics\n"
-        "0 0 * * * root /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php clearip\n"
-        "0 0 * * * root /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cleardnsbl\n"
+        "*/5 * * * * root /usr/local/bin/php /usr/local/www/otherpackage.php tick\n"
         "# */15 * * * * root php /usr/local/www/pfblockerng/pfblockerng.php cron-tick\n"
     )
     before = guest.generated_crontab

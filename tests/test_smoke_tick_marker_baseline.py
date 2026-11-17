@@ -98,7 +98,7 @@ def _reboot_ledger_fixture(
     monkeypatch: pytest.MonkeyPatch,
     *,
     preserve_probe: bool = True,
-    own_row: bool = True,
+    own_row: bool = False,
     derived_cache: bool = False,
 ) -> tuple[dict[str, Any], tick.SmokeVM]:
     state: dict[str, Any] = {"archive": None, "ledger": {}, "sentinel": False, "tick_calls": 0}
@@ -148,7 +148,9 @@ def _reboot_ledger_fixture(
     return state, VM("")
 
 
-def test_reboot_ledger_oracle_accepts_file_persistence_with_the_ticks_own_row(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reboot_ledger_oracle_accepts_file_persistence_when_the_tick_keeps_no_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     state, vm = _reboot_ledger_fixture(monkeypatch)
 
     tick.test_tick_reboot_persists_ledger(vm)
@@ -164,10 +166,10 @@ def test_reboot_ledger_oracle_rejects_lost_persistence_probe(monkeypatch: pytest
         tick.test_tick_reboot_persists_ledger(vm)
 
 
-def test_reboot_ledger_oracle_rejects_a_tick_that_wrote_no_row_of_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
-    _state, vm = _reboot_ledger_fixture(monkeypatch, own_row=False)
+def test_reboot_ledger_oracle_rejects_a_tick_that_keeps_a_retired_duty_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    _state, vm = _reboot_ledger_fixture(monkeypatch, own_row=True)
 
-    with pytest.raises(AssertionError, match="did not write its own 'ss_refresh' row"):
+    with pytest.raises(AssertionError, match="retired"):
         tick.test_tick_reboot_persists_ledger(vm)
 
 

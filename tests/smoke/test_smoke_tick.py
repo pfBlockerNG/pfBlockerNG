@@ -24,7 +24,6 @@ Update, and SafeSearch, apply reconciliation and log maintenance run in the tick
 
 import json
 import os
-import re
 import subprocess
 from collections.abc import Iterator
 from typing import Literal
@@ -246,42 +245,24 @@ def _reset_ss_extdns(vm: SmokeVM) -> None:
         raise RuntimeError(f"_reset_ss_extdns failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-# issue #1204: needles distinguishing the two possible installed cron commands.
-# 'pfblockerng.php tick' does NOT substring-match '...cron-tick' (a hyphen sits where
-# the legacy needle expects a space) -- mirrors pfblockerng_configure_tick_cron's own
-# trailing-space needle rationale (pfblockerng.inc).
-_CRON_TICK_NEEDLE = "pfblockerng.php cron-tick"
-_LEGACY_TICK_NEEDLE = "pfblockerng.php tick"
 _ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
+_DUTY_LOCKS = (f"{h.PFB_DBDIR}/pfb_ss_refresh.lock", f"{h.PFB_DBDIR}/pfb_apply_reconcile.lock")
+# The tick keeps no due-ledger row of its own any more (issue #3996): Core decides when it runs.
+_RETIRED_TICK_ROWS = ("ss_refresh", "apply_reconcile", "_meta")
 
 
-# pfSsh.php prints a startup banner on stdout, so a snippet that READS a value must
-# delimit it (helpers.php_eval's contract; same idiom as helpers.config_get).
-_CRON_JSON_OPEN = "<<<PFBCRON>>>"
-_CRON_JSON_CLOSE = "<<<ENDPFBCRON>>>"
+def _duty_locks_present(vm: SmokeVM) -> list[str]:
+    """The duty lock files the tick opens on every run (evidence that it ran)."""
+    return [path for path in _DUTY_LOCKS if vm.ssh("test", "-f", path).returncode == 0]
 
 
-def _read_pfb_tick_cron_items(vm: SmokeVM) -> list[str]:
-    """Return the 'command' string of every config.xml cron/item naming the
-    tick-family verb (the current cron-tick, or the legacy bare tick)."""
-    snippet = (
-        "$out = array();\n"
-        "foreach (config_get_path('cron/item', array()) as $i) {\n"
-        "    $cmd = $i['command'] ?? '';\n"
-        f"    if (strpos($cmd, {h._php_str(_CRON_TICK_NEEDLE)}) !== FALSE"
-        f" || strpos($cmd, {h._php_str(_LEGACY_TICK_NEEDLE)}) !== FALSE) {{ $out[] = $cmd; }}\n"
-        "}\n"
-        f"echo {h._php_str(_CRON_JSON_OPEN)} . json_encode($out) . {h._php_str(_CRON_JSON_CLOSE)};"
-    )
-    result = h.php_eval(vm, snippet)
-    if result.returncode != 0:
-        raise RuntimeError(f"_read_pfb_tick_cron_items failed: rc={result.returncode} {result.stderr!r}")
-    out = result.stdout
-    start = out.find(_CRON_JSON_OPEN)
-    end = out.find(_CRON_JSON_CLOSE)
-    if start == -1 or end == -1:
-        raise RuntimeError(f"_read_pfb_tick_cron_items: no delimited value in pfSsh.php output: {out!r}")
-    return json.loads(out[start + len(_CRON_JSON_OPEN) : end])
+def _clear_duty_locks(vm: SmokeVM) -> None:
+    result = vm.ssh("rm", "-f", *_DUTY_LOCKS)
+    assert result.returncode == 0 and _duty_locks_present(vm) == [], f"duty lock removal failed: {result}"
+
+
+def _tick_rows(ledger: dict) -> list[str]:
+    return sorted(k for k in ledger if k in _RETIRED_TICK_ROWS or k.startswith("extra:"))
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +274,7 @@ def _read_pfb_tick_cron_items(vm: SmokeVM) -> list[str]:
 @pytest.mark.tick
 @pytest.mark.timeout(240)  # disabled, enabled and repeated enabled apply
 def test_tick_cron_entry_retired(deployed_vm: SmokeVM) -> None:
-    """Enabled saves retire dispatch cron registrations; Core owns maintenance."""
+    """Saves leave no pfBlockerNG entry in root crontab, /etc/crontab or config.xml; Core owns every schedule."""
     vm = deployed_vm
     # deployed_vm is module-scoped: restore the master switch to whatever this module
     # was left in, never to a hardcoded state (the later tests here need it enabled).
@@ -301,21 +282,13 @@ def test_tick_cron_entry_retired(deployed_vm: SmokeVM) -> None:
     try:
         h.set_package_enabled(vm, False)
         h.reload(vm, "update")
-        before = _read_pfb_tick_cron_items(vm)
-        assert before == [], (
-            f"before: no tick-family cron/item entry should exist while pfBlockerNG is disabled; found {before}"
-        )
+        h.assert_no_pfb_cron_entry(vm, "disabled apply")
 
         h.set_package_enabled(vm, True)
         h.reload(vm, "update")
-        assert _read_pfb_tick_cron_items(vm) == [], "enabled apply reinstalled a retired tick job"
-        crontab = vm.ssh("/usr/bin/crontab", "-l")
-        assert crontab.returncode == 0, f"cannot inspect root crontab: {crontab.stderr}"
-        assert not re.search(r"pfblockerng\.php\s+(?:cron-tick|tick|cron)(?:\s|$)", crontab.stdout), (
-            f"enabled apply left a competing dispatch job: {crontab.stdout}"
-        )
+        h.assert_no_pfb_cron_entry(vm, "enabled apply")
         h.reload(vm, "update")
-        assert _read_pfb_tick_cron_items(vm) == [], "repeated enabled save reinstalled a tick job"
+        h.assert_no_pfb_cron_entry(vm, "repeated enabled apply")
     finally:
         h.config_set(vm, _ENABLE_CB_CFG, original_enabled)
         h.reload(vm, "update")
@@ -328,28 +301,21 @@ def test_cron_tick_respects_disable_flag(deployed_vm: SmokeVM) -> None:
     """The cron-tick verb honours the harness's .pfb_cron_disable sentinel.
 
     Scenario:
-        Background: the 'ss_refresh' ledger entry is due (next_due in the past): a tick that ran
-            would dispatch it and move the entry.
+        Background: the tick's duty lock files are absent: a tick that ran would open (create) them.
             Given the harness flag PRESENT (deploy()'s default state),
             When 'pfblockerng.php cron-tick' runs,
-            Then it prints the disabled banner and the ledger 'ss_refresh' entry is
-                UNCHANGED (no dispatch).
+            Then it prints the disabled banner and creates no duty lock file (no dispatch).
         Direct tick execution is proved separately without ever disarming the suite.
     """
     vm = deployed_vm
     flag = h.PFB_CRON_DISABLE_PATH
     assert vm.ssh("test", "-f", flag).returncode == 0, f"precondition: deploy() must have written {flag}"
 
-    now_ts = int(vm.ssh("date +%s").stdout.strip())
-    _write_ledger_entry(vm, "ss_refresh", now_ts - 90000, now_ts - 1)
-    before = _read_ledger(vm)
+    _clear_duty_locks(vm)
     result = _run_tick(vm, "cron-tick")
     assert result.returncode == 0, f"cron-tick rc={result.returncode} stderr={result.stderr!r}"
     assert f"[ Disabled by {flag} ]" in result.stdout, f"cron-tick must print disabled banner; got {result.stdout!r}"
-    after = _read_ledger(vm)
-    assert after.get("ss_refresh") == before.get("ss_refresh"), (
-        f"cron-tick must not dispatch: before={before.get('ss_refresh')} after={after.get('ss_refresh')}"
-    )
+    assert _duty_locks_present(vm) == [], "cron-tick must not dispatch: a duty lock file was created"
 
 
 @pytest.mark.smoke
@@ -360,28 +326,24 @@ def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM) -> None:
 
     Scenario:
         Background: the harness flag is PRESENT (its normal, always-on state during
-            the suite) and the built-in 'ss_refresh' ledger entry is due.
+            the suite) and the tick's duty lock files are absent.
             When 'pfblockerng.php tick' runs directly,
-            Then it dispatches the due job (ledger 'ss_refresh' next_due advances) and
+            Then it runs its duties (both lock files are created) and
                 prints no '[ Disabled by ... ]' banner.
     """
     vm = deployed_vm
     flag = h.PFB_CRON_DISABLE_PATH
     assert vm.ssh("test", "-f", flag).returncode == 0, f"precondition: {flag} must be present for this test"
 
-    now_ts = int(vm.ssh("date +%s").stdout.strip())
-    _write_ledger_entry(vm, "ss_refresh", now_ts - 90000, now_ts - 1)
-
+    _clear_duty_locks(vm)
     result = _run_tick(vm)
     assert result.returncode == 0, f"tick rc={result.returncode} stderr={result.stderr!r}"
     assert "[ Disabled by" not in result.stdout, (
         f"the direct 'tick' verb must never print the cron-tick disabled banner; got {result.stdout!r}"
     )
-    assert h.wait_until(
-        lambda: _read_ledger(vm).get("ss_refresh", {}).get("next_due", 0) > now_ts,
-        timeout=30,
-        interval=2,
-    ), f"the direct 'tick' verb must dispatch a due job regardless of the flag; ledger={_read_ledger(vm)}"
+    assert _duty_locks_present(vm) == list(_DUTY_LOCKS), (
+        "the direct 'tick' verb must run its duties regardless of the flag; duty locks missing"
+    )
 
 
 @pytest.mark.smoke
@@ -436,7 +398,7 @@ def test_tick_starts_no_update_when_nothing_asks(deployed_vm: SmokeVM, stub_dns:
     """With no apply pending and no failed feed a tick asks Core for nothing, yet genuinely ran (issue #582 control).
 
     "No Update started" cannot tell a tick that skipped correctly from a tick that never ran. The positive
-    control: an absent ss_refresh ledger entry is due on this first tick, so a SafeSearch CNAME row seeded with a
+    control: every tick refreshes SafeSearch (Core decides when it runs), so a SafeSearch CNAME row seeded with a
     STALE baked IP and a resolver (the 'pfbextdns' setting) pointed at the hermetic stub DNS makes THIS tick's
     ss_refresh deterministically detect a change and log its own marker.
 
@@ -489,40 +451,31 @@ def test_tick_starts_no_update_when_nothing_asks(deployed_vm: SmokeVM, stub_dns:
 
 @pytest.mark.smoke
 @pytest.mark.tick
-def test_tick_wiped_ledger_rebuilds_only_its_own_rows(deployed_vm: SmokeVM) -> None:
-    """After the ledger is wiped, the tick regrows the rows it owns and none of the retired schedule ones (issue #3941).
+def test_tick_wiped_ledger_regrows_no_duty_rows(deployed_vm: SmokeVM) -> None:
+    """After a ledger wipe the tick keeps no ledger row of its own: its duty locks are the evidence (issue #3996).
 
-    Core owns the schedule now, so the ledger holds only the Outpost's own: 'ss_refresh' and 'apply_reconcile'
-    (each its own 900 s cadence) and, while an apply waits, the 'cron' pending flag. The PHP scheduler's derived
-    cache ('_meta', one 'extra:*' row per Extra) is gone: a tick that wrote it again is the regression.
+    Core owns every schedule, so a tick does its SafeSearch refresh and apply reconciliation each time it is run
+    and records nothing in the due ledger. The PHP scheduler's derived cache ('_meta', one 'extra:*' row per Extra)
+    and the retired 'ss_refresh' / 'apply_reconcile' rows must not come back.
 
     Scenario:
-        Background: pfBlockerNG installed with the module's smoketick feed group configured.
-            Given the ledger file is deleted (RAM-disk reboot simulation).
-            When pfblockerng.php tick runs.
-            Then 'ss_refresh' and 'apply_reconcile' rows are present with a future next_due,
-            And  no '_meta' stamp and no 'extra:dcc' / 'extra:bl' row exists.
+        Given the ledger file and the duty lock files are deleted (RAM-disk reboot simulation).
+        When pfblockerng.php tick runs.
+        Then both duty lock files exist (the duties ran),
+        And  the ledger holds no 'ss_refresh', 'apply_reconcile', '_meta' or 'extra:*' row.
     """
     vm = deployed_vm
-    now_ts = int(vm.ssh("date +%s").stdout.strip())
-
-    # Wipe the ledger — verify it took, else a stale document would satisfy the assertions below.
     wipe = vm.ssh("rm", "-f", LEDGER_PATH)
     assert wipe.returncode == 0, f"precondition: ledger wipe failed rc={wipe.returncode} {wipe.stderr!r}"
     assert _read_ledger(vm) == {}, f"precondition: ledger must be empty before the tick; ledger={_read_ledger(vm)}"
+    _clear_duty_locks(vm)
 
-    _run_tick(vm)
+    result = _run_tick(vm)
+    assert result.returncode == 0, f"tick rc={result.returncode} stderr={result.stderr!r}"
 
-    assert h.wait_until(
-        lambda: {"ss_refresh", "apply_reconcile"} <= _read_ledger(vm).keys(),
-        timeout=30,
-        interval=2,
-    ), f"'ss_refresh'/'apply_reconcile' rows missing after wiped-ledger tick; ledger={_read_ledger(vm)}"
+    assert _duty_locks_present(vm) == list(_DUTY_LOCKS), "the tick left no duty lock evidence"
     ledger = _read_ledger(vm)
-    for job in ("ss_refresh", "apply_reconcile"):
-        assert ledger[job]["next_due"] > now_ts, f"{job} next_due must be in the future; ledger={ledger}"
-    retired = sorted(k for k in ledger if k == "_meta" or k.startswith("extra:"))
-    assert retired == [], f"the tick wrote the PHP scheduler's derived cache again: {retired}; ledger={ledger}"
+    assert _tick_rows(ledger) == [], f"the tick wrote retired ledger rows again: {_tick_rows(ledger)}; ledger={ledger}"
 
 
 @pytest.fixture
@@ -600,7 +553,7 @@ def mfs_var(deployed_vm: SmokeVM, request: pytest.FixtureRequest) -> Iterator[Sm
 # same as boot_reload's fixture reboots — so the body still contains exactly ONE reboot.
 @pytest.mark.timeout(300)
 def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
-    """MFS /var restores the ledger file, and a later tick keeps its unrelated rows while it regrows its own.
+    """MFS /var restores the ledger file, and a later tick keeps its unrelated rows and writes none of the retired ones.
 
     Scenario:
         Background: pfBlockerNG installed with MFS /var engaged (the ``mfs_var`` fixture).
@@ -610,8 +563,8 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
         Then the /var sentinel is gone (MFS actually engaged this reboot),
         And  the persistence probe is restored from the archive.
         When a real post-reboot tick runs.
-        Then the persistence probe remains byte-identical and the tick's own 'ss_refresh' row appears
-        (the tick ran against the restored ledger), with no retired schedule row beside them.
+        Then the persistence probe remains byte-identical and the tick wrote no retired row
+        ('ss_refresh', 'apply_reconcile', '_meta', 'extra:*') beside it.
     """
     vm = mfs_var
 
@@ -672,6 +625,8 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
     assert after.get(_REBOOT_LEDGER_PROBE) == persistence_probe, (
         f"persistence probe changed by the post-reboot tick; expected={persistence_probe} ledger={after}"
     )
-    assert "ss_refresh" in after, f"the post-reboot tick did not write its own 'ss_refresh' row; ledger={after}"
-    retired = sorted(k for k in after if k == "_meta" or k.startswith("extra:"))
-    assert retired == [], f"the post-reboot tick wrote the PHP scheduler's derived cache: {retired}; ledger={after}"
+    retired = _tick_rows(after)
+    assert retired == [], (
+        f"the post-reboot tick wrote retired ledger rows again (derived cache or old duty rows): {retired}; "
+        f"ledger={after}"
+    )
